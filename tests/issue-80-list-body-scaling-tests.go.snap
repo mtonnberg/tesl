@@ -154,16 +154,23 @@ func TestTeslApi0(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line issue-80-list-body-scaling-tests.tesl:66
 		resp := teslrt.ApiRequest(Issue80Server, "POST", "/api/refs", "{\"refs\":[\"alpha\",\"beta\",\"gamma\"]}", nil, nil)
 		_ = resp
 //line issue-80-list-body-scaling-tests.tesl:67
 		if !(teslrt.StatusOk(resp.Status)) {
+//line issue-80-list-body-scaling-tests.tesl:67
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line issue-80-list-body-scaling-tests.tesl:68
 		if !teslrt.JsonEqual(resp.Body, teslrt.JsonParseBody("[{\"text\":\"alpha\"},{\"text\":\"beta\"},{\"text\":\"gamma\"}]").JsonRaw()) {
+//line issue-80-list-body-scaling-tests.tesl:68
 			teslT.Fatal("Tesl expectation failed")
 		}
 		{
@@ -172,6 +179,7 @@ func TestTeslApi0(teslT *testing.T) {
 			_ = bad
 //line issue-80-list-body-scaling-tests.tesl:75
 			if !(teslrt.StatusClientError(bad.Status)) {
+//line issue-80-list-body-scaling-tests.tesl:75
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}

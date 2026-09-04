@@ -46,9 +46,9 @@ This document uses three status words:
 
 Unless stated otherwise, examples use intended `.tesl` syntax. Known implementation divergences are collected near the end of the document.
 
-The `.tesl` frontend is the primary user-facing language. The underlying Racket DSL is an elaboration target and runtime substrate, not the main public surface.
+The `.tesl` frontend is the primary user-facing language. The compiler emits a self-contained Go module (the program plus a vendored copy of the `teslrt` runtime); the generated Go is an artefact a reviewer can read, not a second public surface.
 
-Important implementation note on guarantees: when this specification says that proof verification or the declared-context capability check is enforced at compile time, that is literal — the compiler is the sole contract for those, with no runtime re-check behind them. A separate set of checks remains as **core runtime semantics** (not a removable safety net): the ambient capability-grant check (a "Missing capabilities" error if a required capability is not granted at runtime), handler parameter type validation, handler return type/shape validation, and the existential-witness escape check. These run because they are part of how the runtime executes a request at its boundaries, not as defense in depth that duplicates a compile-time guarantee.
+Important implementation note on guarantees: when this specification says that proof verification or the declared-context capability check is enforced at compile time, that is literal — the compiler is the sole contract for those, with no runtime re-check behind them. Proofs, facts and capabilities are **erased** by the Go emitter: a `check` function returns a plain `teslrt.Check[T]`, a proof-annotated record is a plain struct, and a `requires [...]` list leaves no trace in the generated program. The Go runtime therefore performs no "Missing capabilities" check and no existential-witness escape check at run time (both were dynamic checks of the retired Racket substrate). What the runtime does enforce, because it is part of how a request is executed at its boundary, is handler parameter decoding/validation (codecs, `check` functions, captures) and handler response encoding. Soundness of everything else rests on the compiler and on the two storage backends agreeing (see §11.9).
 
 ## 2. Product goals (non-normative, but guiding)
 **Scope:** the product-level pitch — who Tesl is for and why it exists — lives in the
@@ -903,7 +903,7 @@ test "rejects duplicate emails" with database AppDb {
 }
 ```
 
-Run tests with `thsl --test file.tesl`.
+Run tests with `tesl test file.tesl`.
 
 #### API tests
 
@@ -1068,7 +1068,9 @@ A `queue` is a **folded record** assigned with `=`. It pairs each job type with 
                   | "initialDelay" ":" <integer>
 ```
 
-A `queue` declaration creates a background job queue backed by the named `database`. Each `Job <JobType> <workerFn> (<dead-slot>)` entry folds a `record` type together with its normal worker function and an optional dead-letter worker (`(Something deadFn)` or `(Nothing)`). The compiler generates the `tesl_jobs` table schema automatically.
+A `queue` declaration creates a background job queue backed by the named `database`. Each `Job <JobType> <workerFn> (<dead-slot>)` entry folds a `record` type together with its normal worker function and an optional dead-letter worker (`(Something deadFn)` or `(Nothing)`).
+
+> **Durability (2026-09-02).** On a Postgres-backed database a `queue` is durable and shared: jobs are rows in `<schema>.tesl_jobs`, claimed with `FOR UPDATE SKIP LOCKED`, so any number of server instances work one queue; `enqueue` runs on the surrounding transaction; a failed job's `next_attempt_at` follows the declared `backoff`; a job whose instance died mid-run is reclaimed after the visibility timeout (`TESL_QUEUE_VISIBILITY_TIMEOUT_MS`, default 10 min). The same holds for the `email` outbox (`tesl_email_outbox`), the `cache` (`tesl_cache`, `UNLOGGED`) and SSE pub/sub (`tesl_pubsub_outbox` + `LISTEN`/`NOTIFY` fan-out to every instance). On a Memory-backed database all four stay in the process's memory: that is the development and test store. Workers are woken by `NOTIFY tesl_queue` from any instance over one shared LISTEN connection per process, with a 5 s fallback poll; the stale-claim sweep runs once a minute per process.
 
 `retry` configures how failed worker jobs are retried. `maxAttempts: 1` (the default) means no retries. With `backoff: Exponential` and `initialDelay: N` the delay between retries doubles: N, 2N, 4N, … seconds. With `backoff: Fixed` the delay is always `initialDelay`.
 
@@ -1941,6 +1943,10 @@ In queries, `Maybe` fields require a `case` expression or the `isAssignedTo` / h
 | newtype over another built-in (e.g. `newtype UserId = String`) | column type of the base | NOT NULL |
 | Any ADT | `JSONB` | NOT NULL |
 | `Maybe T` | column type of `T` (e.g. `Maybe Int` → `NUMERIC`, `Maybe <ADT>` → `JSONB`) | NULL |
+
+> **Maybe columns compare as values (2026-09-02).** `p.field == x` and `p.field != x` on a `Maybe` column are emitted as `IS NOT DISTINCT FROM` / `IS DISTINCT FROM`, so `Nothing == Nothing` is true and `Nothing == Something v` is false on PostgreSQL exactly as on the Memory store. A query's row binder may not shadow a name already in scope (a parameter, a local or a function); the compiler refuses it, because the two backends would otherwise read the two names differently. Two module names that fold to one Go package name (`FooBar`, `Foobar`, `Foo_bar`) are refused for the same reason: one module's code would silently replace the other's.
+>
+> **Memory store limits.** `transaction { }` on the Memory store rolls back by restoring the touched tables to their state before the block, so a concurrent request's rows committed to the same table during the block are undone with it; and `selectOne` without `order` returns the first row in insertion order on Memory and in heap order on PostgreSQL. The Memory store is a development and test store; a served program with concurrent writers should be Postgres-backed.
 
 `Int` maps to `NUMERIC`, **not** `BIGINT`: `Int` is arbitrary-precision (unbounded), and `NUMERIC` stores any magnitude losslessly, so an `Int` of any size round-trips through the database with no truncation (NT-07). A newtype *over* `Int` maps to the same `NUMERIC` — a plain integer column is one consistent type regardless of whether it is a bare `Int` or a nominal newtype. `PosixMillis` is the one deliberate exception: it is a distinct 64-bit millis-timestamp type and maps to compact `BIGINT`. For a bounded integer column that must fit a JavaScript number (< 2^53) or a compact `int4`, use `Int32` (`INTEGER`); a linter warning steers wire/storage `Int` fields toward `Int32`. To store any of these under a different SQL type, use an explicit `@db(...)` annotation.
 
@@ -4137,7 +4143,7 @@ handler get fetchExternalUser(id: String) -> HttpResponse requires [httpClient] 
 |---|---|---|
 | `TESL_HTTP_CONNECT_TIMEOUT_MS` | `10000` | Reaching the host (TCP + TLS). |
 | `TESL_HTTP_TIMEOUT_MS` | `30000` | The whole response: send, status line, headers, body. |
-| `TESL_HTTP_STREAM_IDLE_TIMEOUT_MS` | `60000` | Streaming (SSE) responses only: the maximum *gap* between bytes, never a total — a healthy event stream is long-lived by design. |
+| *(SSE streams)* | `30s` per write | Streaming (SSE) responses are not bounded by a total deadline — a healthy event stream is long-lived by design. Each write (event or heartbeat) has a 30 s deadline so a client that stops reading is disconnected. Not configurable. |
 
 **Testing outbound calls.** `Tesl.ApiTest` provides a test-scoped double so handlers and workers that call out are testable without a network — including the failure branches (upstream 500, malformed body, refused connection, timeout). See §11.14.
 
@@ -4515,9 +4521,9 @@ All three are minted **only** by those functions. A hand-written `fn f(p) -> Pas
 
 **Not provided, deliberately:** general `encrypt`/`decrypt`, raw AES/ChaCha, cipher modes, MD5, SHA-1, any parameter knob, and key custody (envelope encryption, KMS integration, rotation infrastructure — that is platform infrastructure, not language surface; Tesl's job is to accept a key as a value).
 
-**Native dependency.** `Tesl.Crypto` loads **libsodium** through the FFI. It is declared in `flake.nix` (so both the dev shell and an installed `nix profile install` resolve it by absolute store path via `$TESL_LIBSODIUM`) and installed in both `tesl build` Docker images. Resolution is *lazy*: requiring the module does not touch the library. A missing library produces an actionable install hint, and both properties are ratcheted by `tests/cli-portability.sh`.
+**Dependency.** `Tesl.Crypto` is implemented on Go's standard library (`crypto/*`) plus `golang.org/x/crypto/argon2` for password hashing; the emitted module pins and checksums that one dependency in its `go.mod`/`go.sum`. There is no native library and no `TESL_LIBSODIUM`.
 
-See `example/learn/lesson64-password-storage.tesl` and `tests/crypto-runtime-tests.rkt`.
+See `example/learn/lesson64-password-storage.tesl` and `runtime/go/teslrt/password_test.go`.
 
 ### 21.8 `Tesl.Http` — the session cookie
 **Implemented.**
@@ -4752,9 +4758,13 @@ The `editor/vscode-tesl` extension contributes a `debuggers` entry in `package.j
 `tesl run --debug <file.tesl>` starts the app with live checkpoints (the same
 emitted code — the `thsl-src!` gate is read at Racket expansion time) and a
 loopback-only control channel under `<project>/.tesl-stuff/` (`debug.sock`, or
-`debug.port` for the TCP fallback). Debuggers then attach to the RUNNING
-process — the app keeps serving across attach/detach, and breakpoints can be
-re-armed without a relaunch:
+`debug.port` plus an owner-only `debug.token` for the TCP fallback — loopback is
+shared by every local user, so a TCP client's first message must be a
+`handshake` carrying that per-launch token or the connection is closed).
+Debuggers then attach to the RUNNING process — the app keeps serving across
+attach/detach, several clients may share one session (the debugger detaches
+only when the last one leaves), and breakpoints can be re-armed without a
+relaunch:
 
 - **VSCode/VSCodium**: the `Attach to running app (tesl run --debug)` launch
   configuration (`request: "attach"`, `project: "${workspaceFolder}"`).

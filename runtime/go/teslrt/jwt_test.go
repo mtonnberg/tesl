@@ -359,3 +359,35 @@ func tokenLifetime(t *testing.T, token JwtToken) int64 {
 	}
 	return claims.ExpiresAt - claims.IssuedAt
 }
+
+// A signature has ONE spelling. Flipping a padding bit in the final base64url character
+// changes the token TEXT while a lenient decoder still reads the same 32 bytes — so anything
+// keyed on the string (a denylist, a dedup key, an audit trail) could be sidestepped by an
+// equivalent spelling. Strict decoding refuses the re-spelling; the canonical token still
+// verifies, and so does the padded spelling another implementation may emit.
+func TestNonCanonicalSignatureEncodingIsRejected(t *testing.T) {
+	key := testKey("canon-key")
+	token := JwtSign(claimsOf("sub", "u"), key)
+	if result := JwtVerify(token, key); !result.OK() {
+		t.Fatalf("the canonical token did not verify: %s", result.Message())
+	}
+	header, payload, signature := segmentsOf(t, token.Value)
+	respelled := JwtToken{Value: header + "." + payload + "." + nonCanonicalLastChar(t, signature)}
+	if respelled.Value == token.Value {
+		t.Fatal("the re-spelling did not change the token text")
+	}
+	if result := JwtVerify(respelled, key); result.OK() {
+		t.Fatal("a non-canonical signature spelling verified: the token has two texts")
+	} else if result.Message() != "Invalid JWT signature" {
+		t.Fatalf("rejection = %q, want a signature rejection, not a trap or a format error", result.Message())
+	}
+	// The padded spelling is a harmless deviation and stays accepted.
+	padded := JwtToken{Value: header + "." + payload + "." + signature + strings.Repeat("=", (4-len(signature)%4)%4)}
+	if result := JwtVerify(padded, key); !result.OK() {
+		t.Fatalf("a padded signature stopped verifying: %s", result.Message())
+	}
+	// And the payload decoder is strict the same way: `JWT.decode` refuses the re-spelling.
+	if raw, ok := decodeBase64URL(nonCanonicalLastChar(t, signature)); ok {
+		t.Fatalf("decodeBase64URL accepted a non-canonical spelling: %x", raw)
+	}
+}

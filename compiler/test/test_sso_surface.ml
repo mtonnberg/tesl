@@ -215,6 +215,14 @@ let t_health_probe_path_is_set () =
 (* OQ17/#50.1: the contentSecurityPolicy clause sets the server default CSP. *)
 let t_content_security_policy_is_set () =
   should_emit "SetContentSecurityPolicy.*default-src"
+    (server_prog "contentSecurityPolicy \"default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self'\"")
+
+let t_content_security_policy_rejects_unsafe_literal () =
+  should_fail "insecure contentSecurityPolicy"
+    (server_prog "contentSecurityPolicy \"default-src *; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self'\"")
+
+let t_content_security_policy_requires_baseline () =
+  should_fail "missing required directive"
     (server_prog "contentSecurityPolicy \"default-src 'self'\"")
 
 (* A server program with extra top-level fn definitions [defs] and a server-block
@@ -492,6 +500,10 @@ let () =
       test_case "no trustedProxies clause emits none" `Quick t_no_trusted_proxies_sets_none;
       test_case "healthProbePath sets the exempt path" `Quick t_health_probe_path_is_set;
       test_case "contentSecurityPolicy sets the server default CSP" `Quick t_content_security_policy_is_set;
+      test_case "contentSecurityPolicy rejects unsafe sources" `Quick
+        t_content_security_policy_rejects_unsafe_literal;
+      test_case "contentSecurityPolicy requires the security baseline" `Quick
+        t_content_security_policy_requires_baseline;
     ];
     "sso-clause", [
       test_case "a well-formed sso clause validates" `Quick t_sso_clause_validates;

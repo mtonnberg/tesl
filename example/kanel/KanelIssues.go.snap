@@ -748,12 +748,19 @@ func CreateProjectHandler(session teslmodkanelauth.KanelSession, orgId string, r
 //line KanelIssues.tesl:295
 						projectId := teslrt.GeneratePrefixedId("proj")
 						_ = projectId
-						{
+//line KanelIssues.tesl:296
+						var teslCommitted teslmodkanelmodels.Project
+						teslrt.WithMemoryTransaction(func() {
+							teslCommitted = func() teslmodkanelmodels.Project {
+								{
 //line KanelIssues.tesl:297
-							_ = teslrt.TableInsert(teslmodkanelmodels.ProjectMembershipTable, "ProjectMembership", teslmodkanelmodels.ProjectMembership{Id: memberId, ProjectId: projectId, UserId: session.UserId, JoinedAt: teslrt.NowMillis()}, func(teslRow, teslNew teslmodkanelmodels.ProjectMembership) bool { return (teslRow.Id == teslNew.Id) })
+									_ = teslrt.TableInsert(teslmodkanelmodels.ProjectMembershipTable, "ProjectMembership", teslmodkanelmodels.ProjectMembership{Id: memberId, ProjectId: projectId, UserId: session.UserId, JoinedAt: teslrt.NowMillis()}, func(teslRow, teslNew teslmodkanelmodels.ProjectMembership) bool { return (teslRow.Id == teslNew.Id) })
 //line KanelIssues.tesl:303
-							return teslrt.TableInsert(teslmodkanelmodels.ProjectTable, "Project", teslmodkanelmodels.Project{Id: projectId, OrgId: orgId, Name: projName, Description: projDesc, Archived: false, CreatedAt: teslrt.NowMillis()}, func(teslRow, teslNew teslmodkanelmodels.Project) bool { return (teslRow.Id == teslNew.Id) })
-						}
+									return teslrt.TableInsert(teslmodkanelmodels.ProjectTable, "Project", teslmodkanelmodels.Project{Id: projectId, OrgId: orgId, Name: projName, Description: projDesc, Archived: false, CreatedAt: teslrt.NowMillis()}, func(teslRow, teslNew teslmodkanelmodels.Project) bool { return (teslRow.Id == teslNew.Id) })
+								}
+							}()
+						})
+						return teslCommitted
 					}
 				}
 			}
@@ -1034,15 +1041,22 @@ func UpdateIssueStatusHandler(session teslmodkanelauth.KanelSession, orgId strin
 //line KanelIssues.tesl:456
 									_closerId := teslrt.MustCheckRequest(CheckCanClose(session.UserId, issueId, orgId))
 									_ = _closerId
+//line KanelIssues.tesl:457
+									var teslCommitted teslmodkanelmodels.Issue
+									teslrt.WithMemoryTransaction(func() {
+										teslCommitted = func() teslmodkanelmodels.Issue {
 //line KanelIssues.tesl:458
-									return teslrt.TableUpdateReturnOne(teslmodkanelmodels.IssueTable, func(i teslmodkanelmodels.Issue) bool {
-										return (i.Id == issueId)
-									}, func(i teslmodkanelmodels.Issue) teslmodkanelmodels.Issue {
-										teslNext := i
-										teslNext.Status = newStatus
-										teslNext.UpdatedAt = teslrt.NowMillis()
-										return teslNext
+											return teslrt.TableUpdateReturnOne(teslmodkanelmodels.IssueTable, func(i teslmodkanelmodels.Issue) bool {
+												return (i.Id == issueId)
+											}, func(i teslmodkanelmodels.Issue) teslmodkanelmodels.Issue {
+												teslNext := i
+												teslNext.Status = newStatus
+												teslNext.UpdatedAt = teslrt.NowMillis()
+												return teslNext
+											})
+										}()
 									})
+									return teslCommitted
 								}
 							case teslmodkanelmodels.IssueStatusBacklog:
 //line KanelIssues.tesl:469

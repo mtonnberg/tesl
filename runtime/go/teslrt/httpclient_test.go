@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -274,4 +275,182 @@ func TestSsrfRefusalReadsAsARefusal(t *testing.T) {
 		}
 	}()
 	_ = HttpGet(upstream.URL, noHeaders())
+}
+
+// ── Redirects ─────────────────────────────────────────────────────────────────
+
+// redirectTo is a bare 3xx: Location plus status, without http.Redirect's request-relative
+// URL resolution (these targets are absolute).
+func redirectTo(w http.ResponseWriter, location string, status int) {
+	w.Header().Set("Location", location)
+	w.WriteHeader(status)
+}
+
+// A second loopback server standing in for "another host": it records whether anything
+// reached it and what `X-Api-Key` it saw. Its URL is re-spelled with `localhost` so the
+// redirect target differs from the first server in HOSTNAME, not only in port.
+func otherHost(t *testing.T) (*httptest.Server, string, *atomic.Int32, *atomic.Value) {
+	t.Helper()
+	var hits atomic.Int32
+	var apiKey atomic.Value
+	apiKey.Store("")
+	second := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		apiKey.Store(r.Header.Get("X-Api-Key"))
+		w.WriteHeader(200)
+	}))
+	t.Cleanup(second.Close)
+	return second, "http://localhost" + strings.TrimPrefix(second.URL, "http://127.0.0.1"), &hits, &apiKey
+}
+
+// Go strips `Authorization` and `Cookie` on a domain change but forwards every other header,
+// so `HttpClient.secretHeader "X-Api-Key" k` followed a 302 to whatever host it named. The
+// call now fails before the second host is dialled, and the key never leaves the origin it
+// was attached for.
+func TestRedirectWithSecretHeadersToAnotherHostIsRefused(t *testing.T) {
+	_, otherURL, hits, apiKey := otherHost(t)
+	first := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		redirectTo(w, otherURL+"/leak", http.StatusFound)
+	}))
+	defer first.Close()
+
+	message := trapMessage(t, func() {
+		_ = HttpGet(first.URL, []Tuple2[string, string]{
+			HttpSecretHeader("X-Api-Key", MakeSecret("sk-live-apikey")),
+			header("Accept", "application/json"),
+		})
+	})
+	if !strings.HasPrefix(message, "HttpClient: refused redirect to "+otherURL+"/leak") ||
+		!strings.Contains(message, "secret headers (X-Api-Key)") {
+		t.Fatalf("trap = %q", message)
+	}
+	if strings.Contains(message, "sk-live-apikey") {
+		t.Fatalf("the trap disclosed the secret: %q", message)
+	}
+	if hits.Load() != 0 || apiKey.Load() != "" {
+		t.Fatalf("the other host was reached (%d hits) and saw X-Api-Key=%q", hits.Load(), apiKey.Load())
+	}
+}
+
+// The same rule for `HttpClient.bearer`, and a POST: the method does not matter, the secret
+// does.
+func TestRedirectWithBearerToAnotherHostIsRefused(t *testing.T) {
+	_, otherURL, hits, _ := otherHost(t)
+	first := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		redirectTo(w, otherURL+"/", http.StatusTemporaryRedirect)
+	}))
+	defer first.Close()
+	message := trapMessage(t, func() {
+		_ = HttpPost(first.URL, []Tuple2[string, string]{HttpBearer(MakeSecret("tok"))}, "body")
+	})
+	if !strings.Contains(message, "refused redirect") || !strings.Contains(message, "(Authorization)") {
+		t.Fatalf("trap = %q", message)
+	}
+	if hits.Load() != 0 {
+		t.Fatal("the other host was reached")
+	}
+}
+
+// Without secret headers a cross-host redirect is ordinary web behaviour and is followed;
+// and WITH them a same-origin redirect is followed too, credential intact — the rule is about
+// where a secret may travel, not about redirects as such.
+func TestRedirectWithoutSecretsIsFollowedAndSameOriginKeepsThem(t *testing.T) {
+	_, otherURL, hits, _ := otherHost(t)
+	var seenAuthorization atomic.Value
+	seenAuthorization.Store("")
+	var origin *httptest.Server
+	origin = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/away":
+			redirectTo(w, otherURL+"/", http.StatusFound)
+		case "/start":
+			redirectTo(w, origin.URL+"/final", http.StatusFound)
+		default:
+			seenAuthorization.Store(r.Header.Get("Authorization"))
+			_, _ = w.Write([]byte("final"))
+		}
+	}))
+	defer origin.Close()
+
+	if status, _ := HttpGet(origin.URL+"/away", noHeaders()).Status.Int64(); status != 200 || hits.Load() != 1 {
+		t.Fatalf("a secret-free cross-host redirect was not followed: status %d, %d hits", status, hits.Load())
+	}
+	response := HttpGet(origin.URL+"/start", []Tuple2[string, string]{HttpBearer(MakeSecret("tok"))})
+	if response.Body != "final" {
+		t.Fatalf("a same-origin redirect was not followed: body %q", response.Body)
+	}
+	if seenAuthorization.Load() != "Bearer tok" {
+		t.Fatalf("the credential did not survive a same-origin redirect: %q", seenAuthorization.Load())
+	}
+}
+
+// Go never refuses a scheme downgrade on its own; a bearer token would travel in cleartext on
+// the second hop. The TLS half runs against a self-signed httptest certificate, which is what
+// the loopback-only development escape exists for.
+func TestRedirectFromHttpsToHttpIsRefused(t *testing.T) {
+	plain := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(200)
+	}))
+	defer plain.Close()
+	var plainHits atomic.Int32
+	plainCounting := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		plainHits.Add(1)
+		w.WriteHeader(200)
+	}))
+	defer plainCounting.Close()
+	secure := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		redirectTo(w, plainCounting.URL+"/downgraded", http.StatusFound)
+	}))
+	defer secure.Close()
+	t.Setenv("TESL_HTTP_TLS_INSECURE_DEV", "1")
+
+	message := trapMessage(t, func() { _ = HttpGet(secure.URL, noHeaders()) })
+	if !strings.HasPrefix(message, "HttpClient: refused redirect from "+secure.URL) ||
+		!strings.Contains(message, "not downgraded to http") {
+		t.Fatalf("trap = %q", message)
+	}
+	if plainHits.Load() != 0 {
+		t.Fatal("the http target of an https redirect was reached")
+	}
+	// Control: the escape itself works, so the refusal above was the policy's and not a
+	// certificate failure.
+	if status, _ := HttpGet(plain.URL, noHeaders()).Status.Int64(); status != 200 {
+		t.Fatalf("plain control status = %d", status)
+	}
+}
+
+// Five hops, not Go's ten: the sixth redirect is refused, and the message says so.
+func TestRedirectsAreCappedAtFive(t *testing.T) {
+	var hits atomic.Int32
+	var loop *httptest.Server
+	loop = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		redirectTo(w, loop.URL+r.URL.Path+"x", http.StatusFound)
+	}))
+	defer loop.Close()
+	message := trapMessage(t, func() { _ = HttpGet(loop.URL+"/", noHeaders()) })
+	if !strings.Contains(message, "refused redirect") || !strings.Contains(message, "more than 5 redirects") {
+		t.Fatalf("trap = %q", message)
+	}
+	// The first request plus the five redirects that were followed.
+	if hits.Load() != 6 {
+		t.Fatalf("server saw %d requests, want 6", hits.Load())
+	}
+}
+
+// The SSO legs' policy: a 3xx is the RESPONSE, not an instruction. The redirect target is
+// never requested, and the caller sees the 3xx status to judge as a failed leg.
+func TestRedirectRefusedPolicyHandsBackTheRedirectItself(t *testing.T) {
+	_, otherURL, hits, _ := otherHost(t)
+	first := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		redirectTo(w, otherURL+"/", http.StatusFound)
+	}))
+	defer first.Close()
+	response := httpRequestPolicy("GET", first.URL, noHeaders(), nil, redirectRefused)
+	if status, _ := response.Status.Int64(); status != 302 {
+		t.Fatalf("status = %s, want the 302 itself", response.Status.String())
+	}
+	if hits.Load() != 0 {
+		t.Fatal("the redirect target was requested under redirectRefused")
+	}
 }

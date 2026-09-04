@@ -325,6 +325,7 @@ _tesl_dast() {
       --spec) spec="${2:?tesl dast: --spec requires a file}"; shift 2 ;;
       --report-dir) report_dir="${2:?tesl dast: --report-dir requires a directory}"; shift 2 ;;
       --scanner) scanner="${2:?tesl dast: --scanner requires a scanner name}"; shift 2 ;;
+      --zap-port) zap_port="${2:?tesl dast: --zap-port requires a port}"; shift 2 ;;
       --active) active=1; shift ;;
       --allow-remote) allow_remote=1; shift ;;
       --authorization-env) auth_env="${2:?tesl dast: --authorization-env requires an environment variable}"; shift 2 ;;
@@ -339,6 +340,7 @@ Options:
   --spec FILE               Use an existing OpenAPI file instead of generating one
   --report-dir DIR          Output directory (default: .tesl-stuff/dast)
   --scanner zap              Scanner backend (default: zap)
+  --zap-port PORT            ZAP proxy port (default: TESL_ZAP_PORT or 8090)
   --active                  Enable active checks (otherwise passive baseline only)
   --allow-remote            Permit --active against a non-loopback target
   --authorization-env NAME  Inject Authorization header from an environment variable
@@ -419,7 +421,15 @@ EOF
   local root
   if [ -n "$file" ]; then root="$(_tesl_project_root "$file")"; else root="$PWD"; fi
   report_dir="${report_dir:-$root/.tesl-stuff/dast}"
+  case "$report_dir" in
+    /*) ;;
+    *) report_dir="$PWD/$report_dir" ;;
+  esac
   mkdir -p "$report_dir" || { echo "tesl dast: cannot create report directory: $report_dir" >&2; return 1; }
+  report_dir="$(_tesl_abspath "$report_dir")" || {
+    echo "tesl dast: cannot resolve report directory: $report_dir" >&2
+    return 1
+  }
 
   work="$(_tesl_mktemp_dir)" || { echo "tesl dast: cannot create temporary workspace" >&2; return 1; }
   cleanup() { trap - RETURN; rm -rf "$work"; }
@@ -435,7 +445,8 @@ EOF
     }
   fi
 
-  local target_q include_q spec_q report_q auth_job active_job auth_ref zap_bin
+  local target_q include_q spec_q report_q auth_job active_job auth_ref zap_bin zap_port
+  zap_port="${TESL_ZAP_PORT:-8090}"
   target_q="$(_tesl_yaml_quote "$target")"
   include_q="$(_tesl_yaml_quote "$target/.*")"
   spec_q="$(_tesl_yaml_quote "$spec")"
@@ -499,6 +510,15 @@ $active_job  - type: report
 EOF
 
   zap_bin="${TESL_ZAP:-zap}"
+  case "$zap_port" in
+    ''|*[!0-9]*|0) echo "tesl dast: ZAP port must be a positive number" >&2; return 2 ;;
+  esac
+  # A local app commonly listens on 8090 (and the target may use any port), so do not
+  # let ZAP fail before scanning merely because its default proxy port is occupied.
+  while [ "$zap_port" -lt 65535 ] && (exec 3<>"/dev/tcp/127.0.0.1/$zap_port") 2>/dev/null; do
+    exec 3>&-
+    zap_port=$((zap_port + 1))
+  done
   if [ ! -x "$zap_bin" ]; then zap_bin="$(command -v "$zap_bin" 2>/dev/null || true)"; fi
   [ -n "$zap_bin" ] && [ -x "$zap_bin" ] || {
     echo "tesl dast: ZAP not found; install the Nix profile or set TESL_ZAP" >&2
@@ -510,7 +530,7 @@ EOF
   # the generated specification and report files.
   # Keep scanner state isolated. The Nix wrapper seeds a writable, versioned
   # config under $HOME/.ZAP before ZAP opens the directory.
-  HOME="$work/home" "$zap_bin" -dir "$work/home/.ZAP" -silent -cmd -autorun "$plan"
+  HOME="$work/home" "$zap_bin" -dir "$work/home/.ZAP" -port "$zap_port" -silent -cmd -autorun "$plan"
 }
 
 # ── tesl.toml manifest reader (mirrors scripts/tesl-manifest.sh) ───────────
@@ -1603,7 +1623,7 @@ case "$CMD" in
     STUFF_ROOT="$ROOT/.tesl-stuff"
     removed=0
     for path in "$BUILD_ROOT" "$ROOT/.tesl-stuff/go-build" \
-                "$ROOT/.tesl-stuff/debug.sock" "$ROOT/.tesl-stuff/debug.port" \
+                "$ROOT/.tesl-stuff/debug.sock" "$ROOT/.tesl-stuff/debug.port" "$ROOT/.tesl-stuff/debug.token" \
                 "$ROOT/.tesl-stuff"/tesl.* "$ROOT/.tesl-stuff"/go-emit-*; do
       [ -e "$path" ] || [ -L "$path" ] || continue
       rm -rf "$path"

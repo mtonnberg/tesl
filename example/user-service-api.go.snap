@@ -37,6 +37,7 @@ golang.org/x/text v0.41.0/go.mod h1:jvf1O8ajNzZqhSrQBPbutR/EB83Cc0CFrezNQIwbb5M=
 package teslmoduserserviceapi
 
 import (
+	"errors"
 	"github.com/jackc/pgx/v5"
 	"net/http"
 	"tesl.generated/teslmoduserserviceapi/internal/teslrt"
@@ -82,11 +83,8 @@ type User struct {
 	CreatedAt    teslrt.PosixMillis
 }
 
-//line user-service-api.tesl:151
-var UserProfileCacheStore = teslrt.NewCache[User](3600)
-
 //line user-service-api.tesl:166
-var UserServiceMailOutbox = teslrt.NewOutbox(teslrt.SmtpSettings{
+var UserServiceMailOutbox = teslrt.NewOutboxOn(UserDatabaseDatabase, teslrt.SmtpSettings{
 	Host:     teslrt.EnvString("SMTP_HOST", ""),
 	Port:     587,
 	Username: teslrt.EnvString("SMTP_USER", ""),
@@ -448,8 +446,10 @@ func updateProfile(userId string, body UpdateProfileRequest) User {
 								teslNext := u
 								teslNext.Bio = body.Bio
 								return teslNext
-							}, teslrt.PgSql("update \"user_service\".\"users\" set \"bio\" = $1 where \"id\" = $2 returning \"id\", \"username\", \"email_address\", \"password_hash\", \"bio\", \"avatar_url\", \"created_at\"", func() []any {
+							}, teslrt.PgSqlProbed("update \"user_service\".\"users\" set \"bio\" = $1 where \"id\" = $2 and (select count(*) from \"user_service\".\"users\" where \"id\" = $2) = 1 returning \"id\", \"username\", \"email_address\", \"password_hash\", \"bio\", \"avatar_url\", \"created_at\"", func() []any {
 								return []any{body.Bio, userId}
+							}, "select count(*) from \"user_service\".\"users\" where \"id\" = $1", func() []any {
+								return []any{userId}
 							}), teslScanUser, teslrt.UniqueIndexOf(
 								"User",
 								[]string{"email_address"},
@@ -657,6 +657,68 @@ func EncodeAuthResponseJSON(teslValue AuthResponse) any {
 	}
 }
 
+// DecodeUserJSON is the DERIVED decoder for a record with no `codec` block: the type is the
+// whole contract, exactly as it is on the Legacy runtime's generic decode.
+func DecodeUserJSON(teslJSON any) teslrt.Check[User] {
+	teslFields, teslShapeErr := teslrt.DecodeObjectShape(teslJSON, "User", []string{"id", "username", "emailAddress", "passwordHash", "bio", "avatarUrl", "createdAt"})
+	if teslShapeErr != nil {
+		return teslrt.RejectShape[User](teslShapeErr.Error())
+	}
+	teslFieldId, teslErrId := teslrt.DecodeStringValue(teslFields["id"])
+	if teslErrId != nil {
+		return teslrt.RejectShape[User](teslErrId.Error())
+	}
+	teslFieldUsername, teslErrUsername := teslrt.DecodeStringValue(teslFields["username"])
+	if teslErrUsername != nil {
+		return teslrt.RejectShape[User](teslErrUsername.Error())
+	}
+	teslFieldEmailAddress, teslErrEmailAddress := teslrt.DecodeStringValue(teslFields["emailAddress"])
+	if teslErrEmailAddress != nil {
+		return teslrt.RejectShape[User](teslErrEmailAddress.Error())
+	}
+	teslFieldPasswordHash, teslErrPasswordHash := teslrt.DecodeStringValue(teslFields["passwordHash"])
+	if teslErrPasswordHash != nil {
+		return teslrt.RejectShape[User](teslErrPasswordHash.Error())
+	}
+	teslFieldBio, teslErrBio := teslrt.DecodeStringValue(teslFields["bio"])
+	if teslErrBio != nil {
+		return teslrt.RejectShape[User](teslErrBio.Error())
+	}
+	teslFieldAvatarUrl, teslErrAvatarUrl := teslrt.DecodeStringValue(teslFields["avatarUrl"])
+	if teslErrAvatarUrl != nil {
+		return teslrt.RejectShape[User](teslErrAvatarUrl.Error())
+	}
+	teslFieldCreatedAt, teslErrCreatedAt := func(teslRaw any) (teslrt.PosixMillis, error) {
+		teslBase, teslErr := teslrt.DecodeIntValue(teslRaw)
+		if teslErr != nil {
+			return teslrt.PosixMillis{}, teslErr
+		}
+		return teslrt.PosixMillis{Value: teslBase}, nil
+	}(teslFields["createdAt"])
+	if teslErrCreatedAt != nil {
+		return teslrt.RejectShape[User](teslErrCreatedAt.Error())
+	}
+	return teslrt.Accept(User{Id: teslFieldId, Username: teslFieldUsername, EmailAddress: teslFieldEmailAddress, PasswordHash: teslFieldPasswordHash, Bio: teslFieldBio, AvatarUrl: teslFieldAvatarUrl, CreatedAt: teslFieldCreatedAt})
+}
+
+//line user-service-api.tesl:151
+func teslCacheEncodeUserProfileCache(teslValue User) any {
+	return teslEncode4(teslValue)
+}
+
+func teslCacheDecodeUserProfileCache(teslRaw any) (User, error) {
+	return func(teslRaw any) (User, error) {
+		teslNested := DecodeUserJSON(teslRaw)
+		if !teslNested.OK() {
+			return User{}, errors.New(teslNested.Message())
+		}
+		teslValue, _ := teslNested.Value()
+		return teslValue, nil
+	}(teslRaw)
+}
+
+var UserProfileCacheStore = teslrt.NewCacheOn[User](UserDatabaseDatabase, "UserProfileCache", 3600, teslCacheEncodeUserProfileCache, teslCacheDecodeUserProfileCache)
+
 var UserServer = teslrt.Server{
 	Routes: []teslrt.Route{
 		{Method: "POST", Path: "/register", Endpoint: "register"},
@@ -857,6 +919,11 @@ func TestTesl0(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line user-service-api.tesl:550
 		v4 := "550e8400-e29b-41d4-a716-446655440000"
@@ -864,6 +931,7 @@ func TestTesl0(teslT *testing.T) {
 		teslLeft1 := teslrt.MustCheck(teslrt.UUIDValidate(v4))
 //line user-service-api.tesl:551
 		if teslLeft1 != v4 {
+//line user-service-api.tesl:551
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -877,6 +945,11 @@ func TestTesl1(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line user-service-api.tesl:555
 		v7 := "018e7a30-a1b2-7c3d-8e4f-123456789abc"
@@ -884,6 +957,7 @@ func TestTesl1(teslT *testing.T) {
 		teslLeft2 := teslrt.MustCheck(teslrt.UUIDValidate(v7))
 //line user-service-api.tesl:556
 		if teslLeft2 != v7 {
+//line user-service-api.tesl:556
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -897,6 +971,11 @@ func TestTesl2(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line user-service-api.tesl:561
 		v4 := "550e8400-e29b-41d4-a716-446655440000"
@@ -907,6 +986,7 @@ func TestTesl2(teslT *testing.T) {
 			_ = result
 //line user-service-api.tesl:563
 			if result != v4 {
+//line user-service-api.tesl:563
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -921,6 +1001,11 @@ func TestTesl3(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line user-service-api.tesl:567
 		v7 := "018e7a30-a1b2-7c3d-8e4f-123456789abc"
@@ -931,6 +1016,7 @@ func TestTesl3(teslT *testing.T) {
 			_ = result
 //line user-service-api.tesl:569
 			if result != v7 {
+//line user-service-api.tesl:569
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -945,6 +1031,11 @@ func TestTesl4(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line user-service-api.tesl:574
 		raw := "eyJhbGciOiJIUzI1NiJ9.payload.sig"
@@ -956,6 +1047,7 @@ func TestTesl4(teslT *testing.T) {
 			teslLeft5 := token.Value
 //line user-service-api.tesl:576
 			if teslLeft5 != raw {
+//line user-service-api.tesl:576
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -970,6 +1062,11 @@ func TestTesl5(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line user-service-api.tesl:584
 		key := "my-signing-key"
@@ -988,10 +1085,12 @@ func TestTesl5(teslT *testing.T) {
 					_ = other
 //line user-service-api.tesl:588
 					if !teslrt.SecretEqual(a.Value, b.Value) {
+//line user-service-api.tesl:588
 						teslT.Fatal("Tesl expectation failed")
 					}
 //line user-service-api.tesl:589
 					if teslrt.SecretEqual(a.Value, other.Value) {
+//line user-service-api.tesl:589
 						teslT.Fatal("Tesl expectation failed")
 					}
 				}
@@ -1008,6 +1107,11 @@ func TestTesl6(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line user-service-api.tesl:595
 		t1 := teslrt.JwtToken{Value: "a.b.c"}
@@ -1018,6 +1122,7 @@ func TestTesl6(teslT *testing.T) {
 			_ = t2
 //line user-service-api.tesl:597
 			if t1.Value == t2.Value {
+//line user-service-api.tesl:597
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -1032,6 +1137,11 @@ func TestTesl7(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line user-service-api.tesl:602
 		addr := "alice@example.com"
@@ -1042,6 +1152,7 @@ func TestTesl7(teslT *testing.T) {
 			_ = result
 //line user-service-api.tesl:604
 			if result != addr {
+//line user-service-api.tesl:604
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -1056,6 +1167,11 @@ func TestTesl8(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line user-service-api.tesl:608
 		name := "al"
@@ -1066,6 +1182,7 @@ func TestTesl8(teslT *testing.T) {
 			_ = result
 //line user-service-api.tesl:610
 			if result != name {
+//line user-service-api.tesl:610
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -1080,6 +1197,11 @@ func TestTesl9(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line user-service-api.tesl:614
 		pwd := "secure42"
@@ -1090,6 +1212,7 @@ func TestTesl9(teslT *testing.T) {
 			_ = result
 //line user-service-api.tesl:616
 			if result != pwd {
+//line user-service-api.tesl:616
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -1107,12 +1230,18 @@ func TestTeslApi0(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line user-service-api.tesl:629
 		resp := teslrt.ApiRequest(UserServer, "POST", "/register", "{\"username\":\"alice\",\"email\":\"alice@example.com\",\"password\":\"securepass\"}", nil, nil)
 		_ = resp
 //line user-service-api.tesl:634
 		if !(teslrt.StatusOk(resp.Status)) {
+//line user-service-api.tesl:634
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -1129,6 +1258,11 @@ func TestTeslApi1(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line user-service-api.tesl:637
 //line user-service-api.tesl:639
 	_ = teslrt.DbInsert(UserDatabaseDatabase, UserTable, "User", User{Id: "alice-id", Username: "alice", EmailAddress: "alice@example.com", PasswordHash: "hash:securepass", Bio: "", AvatarUrl: "", CreatedAt: teslrt.NowMillis()}, func(teslRow, teslNew User) bool { return (teslRow.Id == teslNew.Id) }, "insert into \"user_service\".\"users\" (\"id\", \"username\", \"email_address\", \"password_hash\", \"bio\", \"avatar_url\", \"created_at\") values ($1, $2, $3, $4, $5, $6, $7)", func(teslRow User) []any {
@@ -1150,6 +1284,7 @@ func TestTeslApi1(teslT *testing.T) {
 		_ = resp
 //line user-service-api.tesl:645
 		if !(teslrt.StatusOk(resp.Status)) {
+//line user-service-api.tesl:645
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -1166,12 +1301,18 @@ func TestTeslApi2(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line user-service-api.tesl:649
 		resp := teslrt.ApiRequest(UserServer, "POST", "/forgot-password", "{\"email\":\"alice@example.com\"}", nil, nil)
 		_ = resp
 //line user-service-api.tesl:652
 		if !(teslrt.StatusOk(resp.Status)) {
+//line user-service-api.tesl:652
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -1188,12 +1329,18 @@ func TestTeslApi3(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line user-service-api.tesl:657
 		resp := teslrt.ApiRequest(UserServer, "GET", "/me", "", nil, nil)
 		_ = resp
 //line user-service-api.tesl:658
 		if !(teslrt.StatusClientError(resp.Status)) {
+//line user-service-api.tesl:658
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -1210,12 +1357,18 @@ func TestTeslApi4(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line user-service-api.tesl:662
 		resp := teslrt.ApiRequest(UserServer, "PUT", "/me", "{\"bio\":\"Hello world\"}", nil, nil)
 		_ = resp
 //line user-service-api.tesl:663
 		if !(teslrt.StatusClientError(resp.Status)) {
+//line user-service-api.tesl:663
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -1232,12 +1385,18 @@ func TestTeslApi5(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line user-service-api.tesl:668
 		resp := teslrt.ApiRequest(UserServer, "POST", "/register", "{\"username\":\"bob\",\"email\":\"not-an-email\",\"password\":\"securepass\"}", nil, nil)
 		_ = resp
 //line user-service-api.tesl:673
 		if !(teslrt.StatusClientError(resp.Status)) {
+//line user-service-api.tesl:673
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -1254,12 +1413,18 @@ func TestTeslApi6(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line user-service-api.tesl:677
 		resp := teslrt.ApiRequest(UserServer, "POST", "/register", "{\"username\":\"bob\",\"email\":\"bob@example.com\",\"password\":\"short\"}", nil, nil)
 		_ = resp
 //line user-service-api.tesl:682
 		if !(teslrt.StatusClientError(resp.Status)) {
+//line user-service-api.tesl:682
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -1276,12 +1441,18 @@ func TestTeslApi7(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line user-service-api.tesl:686
 		resp := teslrt.ApiRequest(UserServer, "POST", "/register", "{\"username\":\"x\",\"email\":\"x@example.com\",\"password\":\"securepass\"}", nil, nil)
 		_ = resp
 //line user-service-api.tesl:691
 		if !(teslrt.StatusClientError(resp.Status)) {
+//line user-service-api.tesl:691
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -1298,12 +1469,18 @@ func TestTeslApi8(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line user-service-api.tesl:695
 		resp := teslrt.ApiRequest(UserServer, "POST", "/login", "{\"email\":\"alice@example.com\"}", nil, nil)
 		_ = resp
 //line user-service-api.tesl:698
 		if !(teslrt.StatusClientError(resp.Status)) {
+//line user-service-api.tesl:698
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}

@@ -353,18 +353,25 @@ func CreateInvoiceHandler(session teslmodkanelauth.KanelSession, orgId string, r
 //line KanelBilling.tesl:79
 						invoiceId := teslrt.GeneratePrefixedId("inv")
 						_ = invoiceId
-						{
+//line KanelBilling.tesl:80
+						var teslCommitted teslmodkanelmodels.Invoice
+						teslrt.WithMemoryTransaction(func() {
+							teslCommitted = func() teslmodkanelmodels.Invoice {
+								{
 //line KanelBilling.tesl:82
-							_ = teslrt.TableUpdate(teslmodkanelmodels.TimeEntryTable, func(te teslmodkanelmodels.TimeEntry) bool {
-								return (te.OrgId == orgId) && (te.InvoiceId == "")
-							}, func(te teslmodkanelmodels.TimeEntry) teslmodkanelmodels.TimeEntry {
-								teslNext := te
-								teslNext.InvoiceId = invoiceId
-								return teslNext
-							})
+									_ = teslrt.TableUpdate(teslmodkanelmodels.TimeEntryTable, func(te teslmodkanelmodels.TimeEntry) bool {
+										return (te.OrgId == orgId) && (te.InvoiceId == "")
+									}, func(te teslmodkanelmodels.TimeEntry) teslmodkanelmodels.TimeEntry {
+										teslNext := te
+										teslNext.InvoiceId = invoiceId
+										return teslNext
+									})
 //line KanelBilling.tesl:85
-							return teslrt.TableInsert(teslmodkanelmodels.InvoiceTable, "Invoice", teslmodkanelmodels.Invoice{Id: invoiceId, OrgId: orgId, Status: teslmodkanelmodels.InvoiceStatus{Tag: teslmodkanelmodels.InvoiceStatusDraft}, TotalMinutes: totalMinutes, Notes: req.Notes, CreatedAt: teslrt.NowMillis(), ApprovedAt: teslrt.SecondsToPosix(teslrt.FromInt64(0))}, func(teslRow, teslNew teslmodkanelmodels.Invoice) bool { return (teslRow.Id == teslNew.Id) })
-						}
+									return teslrt.TableInsert(teslmodkanelmodels.InvoiceTable, "Invoice", teslmodkanelmodels.Invoice{Id: invoiceId, OrgId: orgId, Status: teslmodkanelmodels.InvoiceStatus{Tag: teslmodkanelmodels.InvoiceStatusDraft}, TotalMinutes: totalMinutes, Notes: req.Notes, CreatedAt: teslrt.NowMillis(), ApprovedAt: teslrt.SecondsToPosix(teslrt.FromInt64(0))}, func(teslRow, teslNew teslmodkanelmodels.Invoice) bool { return (teslRow.Id == teslNew.Id) })
+								}
+							}()
+						})
+						return teslCommitted
 					}
 				}
 			}

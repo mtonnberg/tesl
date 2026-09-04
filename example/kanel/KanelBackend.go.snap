@@ -304,6 +304,7 @@ func teslKeyLessString(teslX, teslY string) bool {
 package teslmodkanelbackend
 
 import (
+	"errors"
 	"net/http"
 	"tesl.generated/teslmodkanelbackend/internal/teslmodkanelauth"
 	"tesl.generated/teslmodkanelbackend/internal/teslmodkanelbilling"
@@ -372,10 +373,10 @@ func teslEqualUserNotificationEventNotificationFailed(teslLeft, teslRight UserNo
 }
 
 //line KanelBackend.tesl:170
-var KanelNotifyQueueQueue = teslrt.NewQueue("KanelNotifyQueue", 3)
+var KanelNotifyQueueQueue = teslrt.NewQueueOn(KanelDatabaseDatabase, "KanelNotifyQueue", 3, "exponential", 30)
 
 //line KanelBackend.tesl:187
-var UserNotificationsChannel = teslrt.NewSseChannel("UserNotifications")
+var UserNotificationsChannel = teslrt.NewSseChannelOn(KanelDatabaseDatabase, "UserNotifications")
 
 //line KanelBackend.tesl:147
 var KanelDatabaseDatabase = teslrt.NewDatabase(
@@ -536,16 +537,18 @@ func addCommentAndNotifyHandler(session teslmodkanelauth.KanelSession, orgId str
 											targetUser := teslScrut9.SomethingValue
 											_ = targetUser
 //line KanelBackend.tesl:416
-											return func() teslmodkanelmodels.IssueComment {
-												var teslCommitted teslmodkanelmodels.IssueComment
-												teslrt.WithTransaction(func() {
-													teslCommitted = (func() teslmodkanelmodels.IssueComment {
+											var teslCommitted teslmodkanelmodels.IssueComment
+											teslrt.WithTransaction(func() {
+												teslCommitted = func() teslmodkanelmodels.IssueComment {
+													{
+//line KanelBackend.tesl:417
 														_ = teslrt.EnqueueJob(KanelNotifyQueueQueue, KanelNotifyJob{RecipientUserId: targetUser.Id, RecipientEmail: targetUser.Email, Subject: "New comment on issue {issueId}", Body: "Comment from {session.displayName}: {commentBody}"})
+//line KanelBackend.tesl:418
 														return teslmodkanelissues.InsertCommentBody(commentId, userId, orgId, notDoneId, commentBody)
-													}())
-												})
-												return teslCommitted
-											}()
+													}
+												}()
+											})
+											return teslCommitted
 										default:
 											panic("unreachable: checker guarantees case exhaustiveness")
 										}
@@ -595,6 +598,49 @@ func Main() struct{} {
 		return teslBound
 	}()
 }
+
+// DecodeKanelNotifyJobJSON is the DERIVED decoder for a record with no `codec` block: the type is the
+// whole contract, exactly as it is on the Legacy runtime's generic decode.
+func DecodeKanelNotifyJobJSON(teslJSON any) teslrt.Check[KanelNotifyJob] {
+	teslFields, teslShapeErr := teslrt.DecodeObjectShape(teslJSON, "KanelNotifyJob", []string{"recipientUserId", "recipientEmail", "subject", "body"})
+	if teslShapeErr != nil {
+		return teslrt.RejectShape[KanelNotifyJob](teslShapeErr.Error())
+	}
+	teslFieldRecipientUserId, teslErrRecipientUserId := teslrt.DecodeStringValue(teslFields["recipientUserId"])
+	if teslErrRecipientUserId != nil {
+		return teslrt.RejectShape[KanelNotifyJob](teslErrRecipientUserId.Error())
+	}
+	teslFieldRecipientEmail, teslErrRecipientEmail := teslrt.DecodeStringValue(teslFields["recipientEmail"])
+	if teslErrRecipientEmail != nil {
+		return teslrt.RejectShape[KanelNotifyJob](teslErrRecipientEmail.Error())
+	}
+	teslFieldSubject, teslErrSubject := teslrt.DecodeStringValue(teslFields["subject"])
+	if teslErrSubject != nil {
+		return teslrt.RejectShape[KanelNotifyJob](teslErrSubject.Error())
+	}
+	teslFieldBody, teslErrBody := teslrt.DecodeStringValue(teslFields["body"])
+	if teslErrBody != nil {
+		return teslrt.RejectShape[KanelNotifyJob](teslErrBody.Error())
+	}
+	return teslrt.Accept(KanelNotifyJob{RecipientUserId: teslFieldRecipientUserId, RecipientEmail: teslFieldRecipientEmail, Subject: teslFieldSubject, Body: teslFieldBody})
+}
+
+var _ = teslrt.RegisterJobCodec(KanelNotifyQueueQueue, "KanelNotifyJob", func(teslJob any) any {
+	return teslEncode3(teslJob.(KanelNotifyJob))
+}, func(teslJSON any) (any, error) {
+	teslDecoded, teslErr := func(teslRaw any) (KanelNotifyJob, error) {
+		teslNested := DecodeKanelNotifyJobJSON(teslRaw)
+		if !teslNested.OK() {
+			return KanelNotifyJob{}, errors.New(teslNested.Message())
+		}
+		teslValue, _ := teslNested.Value()
+		return teslValue, nil
+	}(teslJSON)
+	if teslErr != nil {
+		return nil, teslErr
+	}
+	return teslDecoded, nil
+})
 
 var KanelServer = teslrt.Server{
 	Routes: []teslrt.Route{
@@ -647,7 +693,7 @@ var KanelServer = teslrt.Server{
 				return teslrt.Fail(teslDecoded.Status(), teslDecoded.Message())
 			}
 			teslBody, _ := teslDecoded.Value()
-			return teslrt.Response{Status: 200, Body: teslEncode5(teslmodkanelorg.RegisterHandler(teslBody))}
+			return teslrt.Response{Status: 200, Body: teslEncode6(teslmodkanelorg.RegisterHandler(teslBody))}
 		},
 		"loginHandler": func(teslScope *teslrt.RequestScope, teslRequest *http.Request) teslrt.Response {
 			_ = teslScope
@@ -693,7 +739,7 @@ var KanelServer = teslrt.Server{
 				return teslrt.Fail(teslDecoded.Status(), teslDecoded.Message())
 			}
 			teslBody, _ := teslDecoded.Value()
-			return teslrt.Response{Status: 200, Body: teslEncode6(teslmodkanelorg.CreateOrgHandler(session, teslBody))}
+			return teslrt.Response{Status: 200, Body: teslEncode7(teslmodkanelorg.CreateOrgHandler(session, teslBody))}
 		},
 		"listMyOrgsHandler": func(teslScope *teslrt.RequestScope, teslRequest *http.Request) teslrt.Response {
 			_ = teslScope
@@ -707,7 +753,7 @@ var KanelServer = teslrt.Server{
 				return teslrt.Fail(teslAuth.Status(), teslAuth.Message())
 			}
 			session, _ := teslAuth.Value()
-			return teslrt.Response{Status: 200, Body: teslEncode7(teslmodkanelorg.ListMyOrgsHandler(session))}
+			return teslrt.Response{Status: 200, Body: teslEncode8(teslmodkanelorg.ListMyOrgsHandler(session))}
 		},
 		"getOrgHandler": func(teslScope *teslrt.RequestScope, teslRequest *http.Request) teslrt.Response {
 			_ = teslScope
@@ -730,7 +776,7 @@ var KanelServer = teslrt.Server{
 				return teslrt.Fail(teslCapturedOrgId.Status(), teslCapturedOrgId.Message())
 			}
 			orgId, _ = teslCapturedOrgId.Value()
-			return teslrt.Response{Status: 200, Body: teslEncode6(teslmodkanelorg.GetOrgHandler(session, orgId))}
+			return teslrt.Response{Status: 200, Body: teslEncode7(teslmodkanelorg.GetOrgHandler(session, orgId))}
 		},
 		"listOrgMembersHandler": func(teslScope *teslrt.RequestScope, teslRequest *http.Request) teslrt.Response {
 			_ = teslScope
@@ -753,7 +799,7 @@ var KanelServer = teslrt.Server{
 				return teslrt.Fail(teslCapturedOrgId.Status(), teslCapturedOrgId.Message())
 			}
 			orgId, _ = teslCapturedOrgId.Value()
-			return teslrt.Response{Status: 200, Body: teslEncode9(teslmodkanelorg.ListOrgMembersHandler(session, orgId))}
+			return teslrt.Response{Status: 200, Body: teslEncode10(teslmodkanelorg.ListOrgMembersHandler(session, orgId))}
 		},
 		"inviteMemberHandler": func(teslScope *teslrt.RequestScope, teslRequest *http.Request) teslrt.Response {
 			_ = teslScope
@@ -788,7 +834,7 @@ var KanelServer = teslrt.Server{
 				return teslrt.Fail(teslDecoded.Status(), teslDecoded.Message())
 			}
 			teslBody, _ := teslDecoded.Value()
-			return teslrt.Response{Status: 200, Body: teslEncode8(teslmodkanelorg.InviteMemberHandler(session, orgId, teslBody))}
+			return teslrt.Response{Status: 200, Body: teslEncode9(teslmodkanelorg.InviteMemberHandler(session, orgId, teslBody))}
 		},
 		"changeMemberRoleHandler": func(teslScope *teslrt.RequestScope, teslRequest *http.Request) teslrt.Response {
 			_ = teslScope
@@ -832,7 +878,7 @@ var KanelServer = teslrt.Server{
 				return teslrt.Fail(teslDecoded.Status(), teslDecoded.Message())
 			}
 			teslBody, _ := teslDecoded.Value()
-			return teslrt.Response{Status: 200, Body: teslEncode8(teslmodkanelorg.ChangeMemberRoleHandler(session, orgId, targetUserId, teslBody))}
+			return teslrt.Response{Status: 200, Body: teslEncode9(teslmodkanelorg.ChangeMemberRoleHandler(session, orgId, targetUserId, teslBody))}
 		},
 		"removeMemberHandler": func(teslScope *teslrt.RequestScope, teslRequest *http.Request) teslrt.Response {
 			_ = teslScope
@@ -899,7 +945,7 @@ var KanelServer = teslrt.Server{
 				return teslrt.Fail(teslDecoded.Status(), teslDecoded.Message())
 			}
 			teslBody, _ := teslDecoded.Value()
-			return teslrt.Response{Status: 200, Body: teslEncode11(teslmodkanelissues.CreateProjectHandler(session, orgId, teslBody))}
+			return teslrt.Response{Status: 200, Body: teslEncode12(teslmodkanelissues.CreateProjectHandler(session, orgId, teslBody))}
 		},
 		"listProjectsHandler": func(teslScope *teslrt.RequestScope, teslRequest *http.Request) teslrt.Response {
 			_ = teslScope
@@ -922,7 +968,7 @@ var KanelServer = teslrt.Server{
 				return teslrt.Fail(teslCapturedOrgId.Status(), teslCapturedOrgId.Message())
 			}
 			orgId, _ = teslCapturedOrgId.Value()
-			return teslrt.Response{Status: 200, Body: teslEncode12(teslmodkanelissues.ListProjectsHandler(session, orgId))}
+			return teslrt.Response{Status: 200, Body: teslEncode13(teslmodkanelissues.ListProjectsHandler(session, orgId))}
 		},
 		"getProjectHandler": func(teslScope *teslrt.RequestScope, teslRequest *http.Request) teslrt.Response {
 			_ = teslScope
@@ -954,7 +1000,7 @@ var KanelServer = teslrt.Server{
 				return teslrt.Fail(teslCapturedProjectId.Status(), teslCapturedProjectId.Message())
 			}
 			projectId, _ = teslCapturedProjectId.Value()
-			return teslrt.Response{Status: 200, Body: teslEncode11(teslmodkanelissues.GetProjectHandler(session, orgId, projectId))}
+			return teslrt.Response{Status: 200, Body: teslEncode12(teslmodkanelissues.GetProjectHandler(session, orgId, projectId))}
 		},
 		"archiveProjectHandler": func(teslScope *teslrt.RequestScope, teslRequest *http.Request) teslrt.Response {
 			_ = teslScope
@@ -986,7 +1032,7 @@ var KanelServer = teslrt.Server{
 				return teslrt.Fail(teslCapturedProjectId.Status(), teslCapturedProjectId.Message())
 			}
 			projectId, _ = teslCapturedProjectId.Value()
-			return teslrt.Response{Status: 200, Body: teslEncode11(teslmodkanelissues.ArchiveProjectHandler(session, orgId, projectId))}
+			return teslrt.Response{Status: 200, Body: teslEncode12(teslmodkanelissues.ArchiveProjectHandler(session, orgId, projectId))}
 		},
 		"createIssueHandler": func(teslScope *teslrt.RequestScope, teslRequest *http.Request) teslrt.Response {
 			_ = teslScope
@@ -1030,7 +1076,7 @@ var KanelServer = teslrt.Server{
 				return teslrt.Fail(teslDecoded.Status(), teslDecoded.Message())
 			}
 			teslBody, _ := teslDecoded.Value()
-			return teslrt.Response{Status: 200, Body: teslEncode15(teslmodkanelissues.CreateIssueHandler(session, orgId, projectId, teslBody))}
+			return teslrt.Response{Status: 200, Body: teslEncode16(teslmodkanelissues.CreateIssueHandler(session, orgId, projectId, teslBody))}
 		},
 		"listIssuesHandler": func(teslScope *teslrt.RequestScope, teslRequest *http.Request) teslrt.Response {
 			_ = teslScope
@@ -1062,7 +1108,7 @@ var KanelServer = teslrt.Server{
 				return teslrt.Fail(teslCapturedProjectId.Status(), teslCapturedProjectId.Message())
 			}
 			projectId, _ = teslCapturedProjectId.Value()
-			return teslrt.Response{Status: 200, Body: teslEncode16(teslmodkanelissues.ListIssuesHandler(session, orgId, projectId))}
+			return teslrt.Response{Status: 200, Body: teslEncode17(teslmodkanelissues.ListIssuesHandler(session, orgId, projectId))}
 		},
 		"getIssueHandler": func(teslScope *teslrt.RequestScope, teslRequest *http.Request) teslrt.Response {
 			_ = teslScope
@@ -1094,7 +1140,7 @@ var KanelServer = teslrt.Server{
 				return teslrt.Fail(teslCapturedIssueId.Status(), teslCapturedIssueId.Message())
 			}
 			issueId, _ = teslCapturedIssueId.Value()
-			return teslrt.Response{Status: 200, Body: teslEncode15(teslmodkanelissues.GetIssueHandler(session, orgId, issueId))}
+			return teslrt.Response{Status: 200, Body: teslEncode16(teslmodkanelissues.GetIssueHandler(session, orgId, issueId))}
 		},
 		"updateIssueHandler": func(teslScope *teslrt.RequestScope, teslRequest *http.Request) teslrt.Response {
 			_ = teslScope
@@ -1138,7 +1184,7 @@ var KanelServer = teslrt.Server{
 				return teslrt.Fail(teslDecoded.Status(), teslDecoded.Message())
 			}
 			teslBody, _ := teslDecoded.Value()
-			return teslrt.Response{Status: 200, Body: teslEncode15(teslmodkanelissues.UpdateIssueHandler(session, orgId, issueId, teslBody))}
+			return teslrt.Response{Status: 200, Body: teslEncode16(teslmodkanelissues.UpdateIssueHandler(session, orgId, issueId, teslBody))}
 		},
 		"updateIssueStatusHandler": func(teslScope *teslrt.RequestScope, teslRequest *http.Request) teslrt.Response {
 			_ = teslScope
@@ -1182,7 +1228,7 @@ var KanelServer = teslrt.Server{
 				return teslrt.Fail(teslDecoded.Status(), teslDecoded.Message())
 			}
 			teslBody, _ := teslDecoded.Value()
-			return teslrt.Response{Status: 200, Body: teslEncode15(teslmodkanelissues.UpdateIssueStatusHandler(session, orgId, issueId, teslBody))}
+			return teslrt.Response{Status: 200, Body: teslEncode16(teslmodkanelissues.UpdateIssueStatusHandler(session, orgId, issueId, teslBody))}
 		},
 		"addCommentAndNotifyHandler": func(teslScope *teslrt.RequestScope, teslRequest *http.Request) teslrt.Response {
 			_ = teslScope
@@ -1226,7 +1272,7 @@ var KanelServer = teslrt.Server{
 				return teslrt.Fail(teslDecoded.Status(), teslDecoded.Message())
 			}
 			teslBody, _ := teslDecoded.Value()
-			return teslrt.Response{Status: 200, Body: teslEncode17(addCommentAndNotifyHandler(session, orgId, issueId, teslBody))}
+			return teslrt.Response{Status: 200, Body: teslEncode18(addCommentAndNotifyHandler(session, orgId, issueId, teslBody))}
 		},
 		"listCommentsHandler": func(teslScope *teslrt.RequestScope, teslRequest *http.Request) teslrt.Response {
 			_ = teslScope
@@ -1258,7 +1304,7 @@ var KanelServer = teslrt.Server{
 				return teslrt.Fail(teslCapturedIssueId.Status(), teslCapturedIssueId.Message())
 			}
 			issueId, _ = teslCapturedIssueId.Value()
-			return teslrt.Response{Status: 200, Body: teslEncode18(teslmodkanelissues.ListCommentsHandler(session, orgId, issueId))}
+			return teslrt.Response{Status: 200, Body: teslEncode19(teslmodkanelissues.ListCommentsHandler(session, orgId, issueId))}
 		},
 		"logTimeHandler": func(teslScope *teslrt.RequestScope, teslRequest *http.Request) teslrt.Response {
 			_ = teslScope
@@ -1302,7 +1348,7 @@ var KanelServer = teslrt.Server{
 				return teslrt.Fail(teslDecoded.Status(), teslDecoded.Message())
 			}
 			teslBody, _ := teslDecoded.Value()
-			return teslrt.Response{Status: 200, Body: teslEncode19(teslmodkanelissues.LogTimeHandler(session, orgId, issueId, teslBody))}
+			return teslrt.Response{Status: 200, Body: teslEncode20(teslmodkanelissues.LogTimeHandler(session, orgId, issueId, teslBody))}
 		},
 		"listTimeEntriesHandler": func(teslScope *teslrt.RequestScope, teslRequest *http.Request) teslrt.Response {
 			_ = teslScope
@@ -1334,7 +1380,7 @@ var KanelServer = teslrt.Server{
 				return teslrt.Fail(teslCapturedIssueId.Status(), teslCapturedIssueId.Message())
 			}
 			issueId, _ = teslCapturedIssueId.Value()
-			return teslrt.Response{Status: 200, Body: teslEncode20(teslmodkanelissues.ListTimeEntriesHandler(session, orgId, issueId))}
+			return teslrt.Response{Status: 200, Body: teslEncode21(teslmodkanelissues.ListTimeEntriesHandler(session, orgId, issueId))}
 		},
 		"createInvoiceHandler": func(teslScope *teslrt.RequestScope, teslRequest *http.Request) teslrt.Response {
 			_ = teslScope
@@ -1369,7 +1415,7 @@ var KanelServer = teslrt.Server{
 				return teslrt.Fail(teslDecoded.Status(), teslDecoded.Message())
 			}
 			teslBody, _ := teslDecoded.Value()
-			return teslrt.Response{Status: 200, Body: teslEncode22(teslmodkanelbilling.CreateInvoiceHandler(session, orgId, teslBody))}
+			return teslrt.Response{Status: 200, Body: teslEncode23(teslmodkanelbilling.CreateInvoiceHandler(session, orgId, teslBody))}
 		},
 		"listInvoicesHandler": func(teslScope *teslrt.RequestScope, teslRequest *http.Request) teslrt.Response {
 			_ = teslScope
@@ -1392,7 +1438,7 @@ var KanelServer = teslrt.Server{
 				return teslrt.Fail(teslCapturedOrgId.Status(), teslCapturedOrgId.Message())
 			}
 			orgId, _ = teslCapturedOrgId.Value()
-			return teslrt.Response{Status: 200, Body: teslEncode23(teslmodkanelbilling.ListInvoicesHandler(session, orgId))}
+			return teslrt.Response{Status: 200, Body: teslEncode24(teslmodkanelbilling.ListInvoicesHandler(session, orgId))}
 		},
 		"getInvoiceHandler": func(teslScope *teslrt.RequestScope, teslRequest *http.Request) teslrt.Response {
 			_ = teslScope
@@ -1424,7 +1470,7 @@ var KanelServer = teslrt.Server{
 				return teslrt.Fail(teslCapturedInvoiceId.Status(), teslCapturedInvoiceId.Message())
 			}
 			invoiceId, _ = teslCapturedInvoiceId.Value()
-			return teslrt.Response{Status: 200, Body: teslEncode22(teslmodkanelbilling.GetInvoiceHandler(session, orgId, invoiceId))}
+			return teslrt.Response{Status: 200, Body: teslEncode23(teslmodkanelbilling.GetInvoiceHandler(session, orgId, invoiceId))}
 		},
 		"approveInvoiceHandler": func(teslScope *teslrt.RequestScope, teslRequest *http.Request) teslrt.Response {
 			_ = teslScope
@@ -1456,7 +1502,7 @@ var KanelServer = teslrt.Server{
 				return teslrt.Fail(teslCapturedInvoiceId.Status(), teslCapturedInvoiceId.Message())
 			}
 			invoiceId, _ = teslCapturedInvoiceId.Value()
-			return teslrt.Response{Status: 200, Body: teslEncode22(teslmodkanelbilling.ApproveInvoiceHandler(session, orgId, invoiceId))}
+			return teslrt.Response{Status: 200, Body: teslEncode23(teslmodkanelbilling.ApproveInvoiceHandler(session, orgId, invoiceId))}
 		},
 		"markSentHandler": func(teslScope *teslrt.RequestScope, teslRequest *http.Request) teslrt.Response {
 			_ = teslScope
@@ -1488,7 +1534,7 @@ var KanelServer = teslrt.Server{
 				return teslrt.Fail(teslCapturedInvoiceId.Status(), teslCapturedInvoiceId.Message())
 			}
 			invoiceId, _ = teslCapturedInvoiceId.Value()
-			return teslrt.Response{Status: 200, Body: teslEncode22(teslmodkanelbilling.MarkSentHandler(session, orgId, invoiceId))}
+			return teslrt.Response{Status: 200, Body: teslEncode23(teslmodkanelbilling.MarkSentHandler(session, orgId, invoiceId))}
 		},
 		"markPaidHandler": func(teslScope *teslrt.RequestScope, teslRequest *http.Request) teslrt.Response {
 			_ = teslScope
@@ -1520,7 +1566,7 @@ var KanelServer = teslrt.Server{
 				return teslrt.Fail(teslCapturedInvoiceId.Status(), teslCapturedInvoiceId.Message())
 			}
 			invoiceId, _ = teslCapturedInvoiceId.Value()
-			return teslrt.Response{Status: 200, Body: teslEncode22(teslmodkanelbilling.MarkPaidHandler(session, orgId, invoiceId))}
+			return teslrt.Response{Status: 200, Body: teslEncode23(teslmodkanelbilling.MarkPaidHandler(session, orgId, invoiceId))}
 		},
 	},
 	Streams: map[string]teslrt.StreamFunc{
@@ -1549,32 +1595,42 @@ func teslEncode1(teslValue string) any {
 	return teslValue
 }
 
-func teslEncode10(teslValue bool) any {
-	return teslValue
-}
-
-func teslEncode11(teslValue teslmodkanelmodels.Project) any {
-	return map[string]any{
-		"id":          teslEncode1(teslValue.Id),
-		"orgId":       teslEncode1(teslValue.OrgId),
-		"name":        teslEncode1(teslValue.Name),
-		"description": teslEncode1(teslValue.Description),
-		"archived":    teslEncode10(teslValue.Archived),
-		"createdAt":   teslEncode4(teslValue.CreatedAt),
-	}
-}
-
-func teslEncode12(teslValue []teslmodkanelmodels.Project) any {
+func teslEncode10(teslValue []teslmodkanelmodels.OrgMembership) any {
 	return func() any {
 		teslOut := make([]any, len(teslValue))
 		for teslAt, teslItem := range teslValue {
-			teslOut[teslAt] = teslEncode11(teslItem)
+			teslOut[teslAt] = teslEncode9(teslItem)
 		}
 		return teslOut
 	}()
 }
 
-func teslEncode13(teslValue teslrt.Maybe[string]) any {
+func teslEncode11(teslValue bool) any {
+	return teslValue
+}
+
+func teslEncode12(teslValue teslmodkanelmodels.Project) any {
+	return map[string]any{
+		"id":          teslEncode1(teslValue.Id),
+		"orgId":       teslEncode1(teslValue.OrgId),
+		"name":        teslEncode1(teslValue.Name),
+		"description": teslEncode1(teslValue.Description),
+		"archived":    teslEncode11(teslValue.Archived),
+		"createdAt":   teslEncode5(teslValue.CreatedAt),
+	}
+}
+
+func teslEncode13(teslValue []teslmodkanelmodels.Project) any {
+	return func() any {
+		teslOut := make([]any, len(teslValue))
+		for teslAt, teslItem := range teslValue {
+			teslOut[teslAt] = teslEncode12(teslItem)
+		}
+		return teslOut
+	}()
+}
+
+func teslEncode14(teslValue teslrt.Maybe[string]) any {
 	return func() any {
 		switch teslValue.Tag {
 		case teslrt.MaybeNothing:
@@ -1588,21 +1644,21 @@ func teslEncode13(teslValue teslrt.Maybe[string]) any {
 	}()
 }
 
-func teslEncode14(teslValue teslrt.Maybe[teslrt.PosixMillis]) any {
+func teslEncode15(teslValue teslrt.Maybe[teslrt.PosixMillis]) any {
 	return func() any {
 		switch teslValue.Tag {
 		case teslrt.MaybeNothing:
 			return map[string]any{"tag": "Nothing"}
 		case teslrt.MaybeSomething:
 			return map[string]any{"tag": "Something", "fields": map[string]any{
-				"value": teslEncode4(teslValue.SomethingValue),
+				"value": teslEncode5(teslValue.SomethingValue),
 			}}
 		}
 		panic("unreachable: checker guarantees case exhaustiveness")
 	}()
 }
 
-func teslEncode15(teslValue teslmodkanelmodels.Issue) any {
+func teslEncode16(teslValue teslmodkanelmodels.Issue) any {
 	return map[string]any{
 		"id":          teslEncode1(teslValue.Id),
 		"projectId":   teslEncode1(teslValue.ProjectId),
@@ -1610,56 +1666,43 @@ func teslEncode15(teslValue teslmodkanelmodels.Issue) any {
 		"title":       teslEncode1(teslValue.Title),
 		"description": teslEncode1(teslValue.Description),
 		"status":      teslmodkanelmodels.EncodeIssueStatusJSON(teslValue.Status),
-		"assigneeId":  teslEncode13(teslValue.AssigneeId),
+		"assigneeId":  teslEncode14(teslValue.AssigneeId),
 		"reporterId":  teslEncode1(teslValue.ReporterId),
-		"estimate":    teslEncode3(teslValue.Estimate),
-		"dueAt":       teslEncode14(teslValue.DueAt),
-		"createdAt":   teslEncode4(teslValue.CreatedAt),
-		"updatedAt":   teslEncode4(teslValue.UpdatedAt),
+		"estimate":    teslEncode4(teslValue.Estimate),
+		"dueAt":       teslEncode15(teslValue.DueAt),
+		"createdAt":   teslEncode5(teslValue.CreatedAt),
+		"updatedAt":   teslEncode5(teslValue.UpdatedAt),
 	}
 }
 
-func teslEncode16(teslValue []teslmodkanelmodels.Issue) any {
+func teslEncode17(teslValue []teslmodkanelmodels.Issue) any {
 	return func() any {
 		teslOut := make([]any, len(teslValue))
 		for teslAt, teslItem := range teslValue {
-			teslOut[teslAt] = teslEncode15(teslItem)
+			teslOut[teslAt] = teslEncode16(teslItem)
 		}
 		return teslOut
 	}()
 }
 
-func teslEncode17(teslValue teslmodkanelmodels.IssueComment) any {
+func teslEncode18(teslValue teslmodkanelmodels.IssueComment) any {
 	return map[string]any{
 		"id":        teslEncode1(teslValue.Id),
 		"issueId":   teslEncode1(teslValue.IssueId),
 		"authorId":  teslEncode1(teslValue.AuthorId),
 		"body":      teslEncode1(teslValue.Body),
-		"createdAt": teslEncode4(teslValue.CreatedAt),
+		"createdAt": teslEncode5(teslValue.CreatedAt),
 	}
 }
 
-func teslEncode18(teslValue []teslmodkanelmodels.IssueComment) any {
+func teslEncode19(teslValue []teslmodkanelmodels.IssueComment) any {
 	return func() any {
 		teslOut := make([]any, len(teslValue))
 		for teslAt, teslItem := range teslValue {
-			teslOut[teslAt] = teslEncode17(teslItem)
+			teslOut[teslAt] = teslEncode18(teslItem)
 		}
 		return teslOut
 	}()
-}
-
-func teslEncode19(teslValue teslmodkanelmodels.TimeEntry) any {
-	return map[string]any{
-		"id":          teslEncode1(teslValue.Id),
-		"issueId":     teslEncode1(teslValue.IssueId),
-		"userId":      teslEncode1(teslValue.UserId),
-		"orgId":       teslEncode1(teslValue.OrgId),
-		"minutes":     teslEncode3(teslValue.Minutes),
-		"description": teslEncode1(teslValue.Description),
-		"invoiceId":   teslEncode1(teslValue.InvoiceId),
-		"loggedAt":    teslEncode4(teslValue.LoggedAt),
-	}
 }
 
 func teslEncode2(teslValue UserNotificationEvent) any {
@@ -1680,17 +1723,30 @@ func teslEncode2(teslValue UserNotificationEvent) any {
 	}()
 }
 
-func teslEncode20(teslValue []teslmodkanelmodels.TimeEntry) any {
+func teslEncode20(teslValue teslmodkanelmodels.TimeEntry) any {
+	return map[string]any{
+		"id":          teslEncode1(teslValue.Id),
+		"issueId":     teslEncode1(teslValue.IssueId),
+		"userId":      teslEncode1(teslValue.UserId),
+		"orgId":       teslEncode1(teslValue.OrgId),
+		"minutes":     teslEncode4(teslValue.Minutes),
+		"description": teslEncode1(teslValue.Description),
+		"invoiceId":   teslEncode1(teslValue.InvoiceId),
+		"loggedAt":    teslEncode5(teslValue.LoggedAt),
+	}
+}
+
+func teslEncode21(teslValue []teslmodkanelmodels.TimeEntry) any {
 	return func() any {
 		teslOut := make([]any, len(teslValue))
 		for teslAt, teslItem := range teslValue {
-			teslOut[teslAt] = teslEncode19(teslItem)
+			teslOut[teslAt] = teslEncode20(teslItem)
 		}
 		return teslOut
 	}()
 }
 
-func teslEncode21(teslValue teslmodkanelmodels.InvoiceStatus) any {
+func teslEncode22(teslValue teslmodkanelmodels.InvoiceStatus) any {
 	return func() any {
 		switch teslValue.Tag {
 		case teslmodkanelmodels.InvoiceStatusDraft:
@@ -1708,83 +1764,82 @@ func teslEncode21(teslValue teslmodkanelmodels.InvoiceStatus) any {
 	}()
 }
 
-func teslEncode22(teslValue teslmodkanelmodels.Invoice) any {
+func teslEncode23(teslValue teslmodkanelmodels.Invoice) any {
 	return map[string]any{
 		"id":           teslEncode1(teslValue.Id),
 		"orgId":        teslEncode1(teslValue.OrgId),
-		"status":       teslEncode21(teslValue.Status),
-		"totalMinutes": teslEncode3(teslValue.TotalMinutes),
+		"status":       teslEncode22(teslValue.Status),
+		"totalMinutes": teslEncode4(teslValue.TotalMinutes),
 		"notes":        teslEncode1(teslValue.Notes),
-		"createdAt":    teslEncode4(teslValue.CreatedAt),
-		"approvedAt":   teslEncode4(teslValue.ApprovedAt),
+		"createdAt":    teslEncode5(teslValue.CreatedAt),
+		"approvedAt":   teslEncode5(teslValue.ApprovedAt),
 	}
 }
 
-func teslEncode23(teslValue []teslmodkanelmodels.Invoice) any {
+func teslEncode24(teslValue []teslmodkanelmodels.Invoice) any {
 	return func() any {
 		teslOut := make([]any, len(teslValue))
 		for teslAt, teslItem := range teslValue {
-			teslOut[teslAt] = teslEncode22(teslItem)
+			teslOut[teslAt] = teslEncode23(teslItem)
 		}
 		return teslOut
 	}()
 }
 
-func teslEncode3(teslValue teslrt.Int) any {
+func teslEncode3(teslValue KanelNotifyJob) any {
+	return map[string]any{
+		"recipientUserId": teslEncode1(teslValue.RecipientUserId),
+		"recipientEmail":  teslEncode1(teslValue.RecipientEmail),
+		"subject":         teslEncode1(teslValue.Subject),
+		"body":            teslEncode1(teslValue.Body),
+	}
+}
+
+func teslEncode4(teslValue teslrt.Int) any {
 	return teslValue
 }
 
-func teslEncode4(teslValue teslrt.PosixMillis) any {
-	return teslEncode3(teslValue.Value)
+func teslEncode5(teslValue teslrt.PosixMillis) any {
+	return teslEncode4(teslValue.Value)
 }
 
-func teslEncode5(teslValue teslmodkanelmodels.KanelUser) any {
+func teslEncode6(teslValue teslmodkanelmodels.KanelUser) any {
 	return map[string]any{
 		"id":           teslEncode1(teslValue.Id),
 		"email":        teslEncode1(teslValue.Email),
 		"passwordHash": teslEncode1(teslValue.PasswordHash),
 		"displayName":  teslEncode1(teslValue.DisplayName),
-		"createdAt":    teslEncode4(teslValue.CreatedAt),
+		"createdAt":    teslEncode5(teslValue.CreatedAt),
 	}
 }
 
-func teslEncode6(teslValue teslmodkanelmodels.Org) any {
+func teslEncode7(teslValue teslmodkanelmodels.Org) any {
 	return map[string]any{
 		"id":        teslEncode1(teslValue.Id),
 		"name":      teslEncode1(teslValue.Name),
 		"slug":      teslEncode1(teslValue.Slug),
-		"createdAt": teslEncode4(teslValue.CreatedAt),
+		"createdAt": teslEncode5(teslValue.CreatedAt),
 	}
 }
 
-func teslEncode7(teslValue []teslmodkanelmodels.Org) any {
+func teslEncode8(teslValue []teslmodkanelmodels.Org) any {
 	return func() any {
 		teslOut := make([]any, len(teslValue))
 		for teslAt, teslItem := range teslValue {
-			teslOut[teslAt] = teslEncode6(teslItem)
+			teslOut[teslAt] = teslEncode7(teslItem)
 		}
 		return teslOut
 	}()
 }
 
-func teslEncode8(teslValue teslmodkanelmodels.OrgMembership) any {
+func teslEncode9(teslValue teslmodkanelmodels.OrgMembership) any {
 	return map[string]any{
 		"id":       teslEncode1(teslValue.Id),
 		"orgId":    teslEncode1(teslValue.OrgId),
 		"userId":   teslEncode1(teslValue.UserId),
 		"role":     teslmodkanelmodels.EncodeOrgRoleJSON(teslValue.Role),
-		"joinedAt": teslEncode4(teslValue.JoinedAt),
+		"joinedAt": teslEncode5(teslValue.JoinedAt),
 	}
-}
-
-func teslEncode9(teslValue []teslmodkanelmodels.OrgMembership) any {
-	return func() any {
-		teslOut := make([]any, len(teslValue))
-		for teslAt, teslItem := range teslValue {
-			teslOut[teslAt] = teslEncode8(teslItem)
-		}
-		return teslOut
-	}()
 }
 
 func teslEqualString(teslX, teslY string) bool {
@@ -1817,15 +1872,6 @@ func TestMain(teslM *testing.M) {
 	os.Exit(testExitCode)
 }
 
-func teslEncode24(teslValue KanelNotifyJob) any {
-	return map[string]any{
-		"recipientUserId": teslEncode1(teslValue.RecipientUserId),
-		"recipientEmail":  teslEncode1(teslValue.RecipientEmail),
-		"subject":         teslEncode1(teslValue.Subject),
-		"body":            teslEncode1(teslValue.Body),
-	}
-}
-
 // api-test organizations require authentication
 //
 //line KanelBackend.tesl:453
@@ -1837,12 +1883,18 @@ func TestTeslApi0(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line KanelBackend.tesl:454
 		orgs := teslrt.ApiRequest(KanelServer, "GET", "/orgs", "", nil, nil)
 		_ = orgs
 //line KanelBackend.tesl:455
 		if !(teslrt.StatusClientError(orgs.Status)) {
+//line KanelBackend.tesl:455
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -1859,29 +1911,39 @@ func TestTeslApi1(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line KanelBackend.tesl:459
 		registered := teslrt.ApiRequest(KanelServer, "POST", "/auth/register", "{\"email\":\"alice@example.com\",\"password\":\"password123\",\"displayName\":\"Alice\"}", nil, nil)
 		_ = registered
 //line KanelBackend.tesl:460
 		if !(teslrt.StatusOk(registered.Status)) {
+//line KanelBackend.tesl:460
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line KanelBackend.tesl:461
 		if !(teslrt.JsonHasField("id", registered.Body)) {
+//line KanelBackend.tesl:461
 			teslT.Fatal("Tesl expectation failed")
 		}
 		teslLeft1 := teslrt.JsonAsString(teslrt.JsonFieldOf(registered.Body, "email"))
 //line KanelBackend.tesl:462
 		if teslLeft1 != "alice@example.com" {
+//line KanelBackend.tesl:462
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line KanelBackend.tesl:463
 		if !(teslrt.JsonContains("Alice", teslrt.JsonFieldOf(registered.Body, "displayName"))) {
+//line KanelBackend.tesl:463
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line KanelBackend.tesl:464
 		if !(teslrt.JsonIsNull(teslrt.JsonFieldOf(registered.Body, "session"))) {
+//line KanelBackend.tesl:464
 			teslT.Fatal("Tesl expectation failed")
 		}
 		{
@@ -1899,6 +1961,7 @@ func TestTeslApi1(teslT *testing.T) {
 					teslLeft2 := duplicate.Status
 //line KanelBackend.tesl:471
 					if !teslrt.Equal(teslLeft2, teslrt.FromInt64(409)) {
+//line KanelBackend.tesl:471
 						teslT.Fatal("Tesl expectation failed")
 					}
 					{
@@ -1907,6 +1970,7 @@ func TestTeslApi1(teslT *testing.T) {
 						_ = missingLogin
 //line KanelBackend.tesl:474
 						if !(teslrt.StatusClientError(missingLogin.Status)) {
+//line KanelBackend.tesl:474
 							teslT.Fatal("Tesl expectation failed")
 						}
 					}
@@ -1927,12 +1991,18 @@ func TestTeslApi2(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line KanelBackend.tesl:478
 		registered := teslrt.ApiRequest(KanelServer, "POST", "/auth/register", "{\"email\":\"bob@example.com\",\"password\":\"password123\",\"displayName\":\"Bob\"}", nil, nil)
 		_ = registered
 //line KanelBackend.tesl:479
 		if !(teslrt.StatusOk(registered.Status)) {
+//line KanelBackend.tesl:479
 			teslT.Fatal("Tesl expectation failed")
 		}
 		{
@@ -1945,10 +2015,12 @@ func TestTeslApi2(teslT *testing.T) {
 				_ = login
 //line KanelBackend.tesl:483
 				if !(teslrt.StatusOk(login.Status)) {
+//line KanelBackend.tesl:483
 					teslT.Fatal("Tesl expectation failed")
 				}
 //line KanelBackend.tesl:484
 				if !teslrt.JsonEqual(login.Body, registeredUserId) {
+//line KanelBackend.tesl:484
 					teslT.Fatal("Tesl expectation failed")
 				}
 				{
@@ -1961,18 +2033,22 @@ func TestTeslApi2(teslT *testing.T) {
 						_ = createdOrg
 //line KanelBackend.tesl:490
 						if !(teslrt.StatusOk(createdOrg.Status)) {
+//line KanelBackend.tesl:490
 							teslT.Fatal("Tesl expectation failed")
 						}
 //line KanelBackend.tesl:491
 						if !teslrt.JsonEqual(teslrt.JsonFieldOf(createdOrg.Body, "name"), "Acme Inc") {
+//line KanelBackend.tesl:491
 							teslT.Fatal("Tesl expectation failed")
 						}
 //line KanelBackend.tesl:492
 						if !(teslrt.JsonHasField("slug", createdOrg.Body)) {
+//line KanelBackend.tesl:492
 							teslT.Fatal("Tesl expectation failed")
 						}
 //line KanelBackend.tesl:493
 						if !(teslrt.JsonIsNull(teslrt.JsonFieldOf(createdOrg.Body, "owner"))) {
+//line KanelBackend.tesl:493
 							teslT.Fatal("Tesl expectation failed")
 						}
 						{
@@ -1993,10 +2069,12 @@ func TestTeslApi2(teslT *testing.T) {
 										_ = createdProject
 //line KanelBackend.tesl:502
 										if !(teslrt.StatusOk(createdProject.Status)) {
+//line KanelBackend.tesl:502
 											teslT.Fatal("Tesl expectation failed")
 										}
 //line KanelBackend.tesl:503
 										if !(teslrt.JsonHasField("archived", createdProject.Body)) {
+//line KanelBackend.tesl:503
 											teslT.Fatal("Tesl expectation failed")
 										}
 										{
@@ -2009,18 +2087,22 @@ func TestTeslApi2(teslT *testing.T) {
 												_ = orgs
 //line KanelBackend.tesl:507
 												if !(teslrt.StatusOk(orgs.Status)) {
+//line KanelBackend.tesl:507
 													teslT.Fatal("Tesl expectation failed")
 												}
 //line KanelBackend.tesl:508
 												if !(teslrt.JsonIsNotEmpty(orgs.Body)) {
+//line KanelBackend.tesl:508
 													teslT.Fatal("Tesl expectation failed")
 												}
 //line KanelBackend.tesl:509
 												if !(teslrt.JsonIncludesWhere(teslrt.JsonParseBody(teslrt.EncodeJSON(map[string]any{"id": teslEncode1(orgId), "slug": teslEncode1(orgSlug)})).JsonRaw(), orgs.Body)) {
+//line KanelBackend.tesl:509
 													teslT.Fatal("Tesl expectation failed")
 												}
 //line KanelBackend.tesl:510
 												if !(teslrt.JsonExcludesWhere(teslrt.JsonParseBody("{\"slug\":\"missing-org\"}").JsonRaw(), orgs.Body)) {
+//line KanelBackend.tesl:510
 													teslT.Fatal("Tesl expectation failed")
 												}
 												{
@@ -2029,15 +2111,18 @@ func TestTeslApi2(teslT *testing.T) {
 													_ = projects
 //line KanelBackend.tesl:513
 													if !(teslrt.StatusOk(projects.Status)) {
+//line KanelBackend.tesl:513
 														teslT.Fatal("Tesl expectation failed")
 													}
 //line KanelBackend.tesl:514
 													if !(teslrt.JsonHasLength(teslrt.FromInt64(1), projects.Body)) {
+//line KanelBackend.tesl:514
 														teslT.Fatal("Tesl expectation failed")
 													}
 													teslLeft3 := teslrt.JsonLength(projects.Body)
 //line KanelBackend.tesl:515
 													if !teslrt.Equal(teslLeft3, teslrt.FromInt64(1)) {
+//line KanelBackend.tesl:515
 														teslT.Fatal("Tesl expectation failed")
 													}
 													{
@@ -2046,6 +2131,7 @@ func TestTeslApi2(teslT *testing.T) {
 														_ = firstProject
 //line KanelBackend.tesl:517
 														if !teslrt.JsonEqual(teslrt.JsonFieldAt("id", firstProject), projectId) {
+//line KanelBackend.tesl:517
 															teslT.Fatal("Tesl expectation failed")
 														}
 														{
@@ -2054,6 +2140,7 @@ func TestTeslApi2(teslT *testing.T) {
 															_ = archived
 //line KanelBackend.tesl:519
 															if teslrt.JsonAsBool(archived) {
+//line KanelBackend.tesl:519
 																teslT.Fatal("Tesl expectation failed")
 															}
 															{
@@ -2062,6 +2149,7 @@ func TestTeslApi2(teslT *testing.T) {
 																_ = createdAt
 //line KanelBackend.tesl:521
 																if teslrt.Compare(teslrt.JsonAsInt(createdAt), teslrt.FromInt64(0)) < 0 {
+//line KanelBackend.tesl:521
 																	teslT.Fatal("Tesl expectation failed")
 																}
 																{
@@ -2070,6 +2158,7 @@ func TestTeslApi2(teslT *testing.T) {
 																	_ = fetched
 //line KanelBackend.tesl:524
 																	if !(teslrt.StatusOk(fetched.Status)) {
+//line KanelBackend.tesl:524
 																		teslT.Fatal("Tesl expectation failed")
 																	}
 																	{
@@ -2079,6 +2168,7 @@ func TestTeslApi2(teslT *testing.T) {
 																		teslLeft4 := teslrt.JsonAsString(fetchedSlug)
 //line KanelBackend.tesl:526
 																		if teslLeft4 != orgSlug {
+//line KanelBackend.tesl:526
 																			teslT.Fatal("Tesl expectation failed")
 																		}
 																	}
@@ -2111,6 +2201,11 @@ func TestTeslApi3(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line KanelBackend.tesl:529
 //line KanelBackend.tesl:531
 	_ = teslrt.TableInsert(teslmodkanelmodels.KanelUserTable, "KanelUser", teslmodkanelmodels.KanelUser{Id: "usr-seeded", Email: "seeded@example.com", PasswordHash: "password123", DisplayName: "Seeded Alice", CreatedAt: teslrt.SecondsToPosix(teslrt.FromInt64(0))}, func(teslRow, teslNew teslmodkanelmodels.KanelUser) bool { return (teslRow.Id == teslNew.Id) })
@@ -2132,10 +2227,12 @@ func TestTeslApi3(teslT *testing.T) {
 				_ = orgs
 //line KanelBackend.tesl:557
 				if !(teslrt.StatusOk(orgs.Status)) {
+//line KanelBackend.tesl:557
 					teslT.Fatal("Tesl expectation failed")
 				}
 //line KanelBackend.tesl:558
 				if !(teslrt.JsonHasLength(teslrt.FromInt64(1), orgs.Body)) {
+//line KanelBackend.tesl:558
 					teslT.Fatal("Tesl expectation failed")
 				}
 				{
@@ -2144,6 +2241,7 @@ func TestTeslApi3(teslT *testing.T) {
 					_ = firstOrg
 //line KanelBackend.tesl:560
 					if !teslrt.JsonEqual(teslrt.JsonFieldAt("slug", firstOrg), "seeded-org") {
+//line KanelBackend.tesl:560
 						teslT.Fatal("Tesl expectation failed")
 					}
 					{
@@ -2152,14 +2250,17 @@ func TestTeslApi3(teslT *testing.T) {
 						_ = fetched
 //line KanelBackend.tesl:563
 						if !(teslrt.StatusOk(fetched.Status)) {
+//line KanelBackend.tesl:563
 							teslT.Fatal("Tesl expectation failed")
 						}
 //line KanelBackend.tesl:564
 						if !teslrt.JsonEqual(teslrt.JsonFieldOf(fetched.Body, "name"), "Seeded Org") {
+//line KanelBackend.tesl:564
 							teslT.Fatal("Tesl expectation failed")
 						}
 //line KanelBackend.tesl:565
 						if !teslrt.JsonEqual(teslrt.JsonFieldOf(fetched.Body, "slug"), "seeded-org") {
+//line KanelBackend.tesl:565
 							teslT.Fatal("Tesl expectation failed")
 						}
 					}
@@ -2180,6 +2281,11 @@ func TestTeslApi4(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line KanelBackend.tesl:568
 //line KanelBackend.tesl:570
 	_ = teslrt.TableInsert(teslmodkanelmodels.KanelUserTable, "KanelUser", teslmodkanelmodels.KanelUser{Id: "usr-reporter", Email: "reporter@example.com", PasswordHash: "password123", DisplayName: "Reporter", CreatedAt: teslrt.SecondsToPosix(teslrt.FromInt64(0))}, func(teslRow, teslNew teslmodkanelmodels.KanelUser) bool { return (teslRow.Id == teslNew.Id) })
@@ -2222,11 +2328,13 @@ func TestTeslApi4(teslT *testing.T) {
 							_ = comment
 //line KanelBackend.tesl:637
 							if !(teslrt.StatusOk(comment.Status)) {
+//line KanelBackend.tesl:637
 								teslT.Fatal("Tesl expectation failed")
 							}
 							teslLeft5 := teslrt.PendingJobCount(KanelNotifyQueueQueue)
 //line KanelBackend.tesl:638
 							if !teslrt.Equal(teslLeft5, teslrt.FromInt64(1)) {
+//line KanelBackend.tesl:638
 								teslT.Fatal("Tesl expectation failed")
 							}
 							{
@@ -2259,20 +2367,24 @@ func TestTeslApi4(teslT *testing.T) {
 									teslLeft6 := job.RecipientUserId
 //line KanelBackend.tesl:642
 									if teslLeft6 != reporterId {
+//line KanelBackend.tesl:642
 										teslT.Fatal("Tesl expectation failed")
 									}
 									teslLeft7 := job.RecipientEmail
 //line KanelBackend.tesl:643
 									if teslLeft7 != "reporter@example.com" {
+//line KanelBackend.tesl:643
 										teslT.Fatal("Tesl expectation failed")
 									}
 //line KanelBackend.tesl:644
-									if !(teslrt.JsonHasField("body", teslrt.JsonValueOf(teslEncode24(job)))) {
+									if !(teslrt.JsonHasField("body", teslrt.JsonValueOf(teslEncode3(job)))) {
+//line KanelBackend.tesl:644
 										teslT.Fatal("Tesl expectation failed")
 									}
 									teslLeft8 := teslrt.PendingJobCount(KanelNotifyQueueQueue)
 //line KanelBackend.tesl:645
 									if !teslrt.Equal(teslLeft8, teslrt.FromInt64(0)) {
+//line KanelBackend.tesl:645
 										teslT.Fatal("Tesl expectation failed")
 									}
 									{
@@ -2281,10 +2393,12 @@ func TestTeslApi4(teslT *testing.T) {
 										_ = events
 //line KanelBackend.tesl:648
 										if !(teslrt.JsonIsNotEmpty(events)) {
+//line KanelBackend.tesl:648
 											teslT.Fatal("Tesl expectation failed")
 										}
 //line KanelBackend.tesl:649
 										if !(teslrt.JsonIncludesWhere(teslrt.JsonParseBody("{\"tag\":\"NotificationDelivered\",\"fields\":{\"recipientEmail\":\"reporter@example.com\"}}").JsonRaw(), events)) {
+//line KanelBackend.tesl:649
 											teslT.Fatal("Tesl expectation failed")
 										}
 									}
@@ -2309,6 +2423,11 @@ func TestTeslApi5(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line KanelBackend.tesl:652
 //line KanelBackend.tesl:654
 	_ = teslrt.TableInsert(teslmodkanelmodels.KanelUserTable, "KanelUser", teslmodkanelmodels.KanelUser{Id: "usr-blocked", Email: "blocked@example.com", PasswordHash: "password123", DisplayName: "Blocked Reporter", CreatedAt: teslrt.SecondsToPosix(teslrt.FromInt64(0))}, func(teslRow, teslNew teslmodkanelmodels.KanelUser) bool { return (teslRow.Id == teslNew.Id) })
@@ -2351,11 +2470,13 @@ func TestTeslApi5(teslT *testing.T) {
 							_ = comment
 //line KanelBackend.tesl:721
 							if !(teslrt.StatusOk(comment.Status)) {
+//line KanelBackend.tesl:721
 								teslT.Fatal("Tesl expectation failed")
 							}
 							teslLeft9 := teslrt.PendingJobCount(KanelNotifyQueueQueue)
 //line KanelBackend.tesl:722
 							if !teslrt.Equal(teslLeft9, teslrt.FromInt64(1)) {
+//line KanelBackend.tesl:722
 								teslT.Fatal("Tesl expectation failed")
 							}
 							{
@@ -2387,6 +2508,7 @@ func TestTeslApi5(teslT *testing.T) {
 									_ = firstError
 //line KanelBackend.tesl:726
 									if !(teslrt.JsonIsNotNull(teslrt.JsonValueOf(teslEncode1(firstError)))) {
+//line KanelBackend.tesl:726
 										teslT.Fatal("Tesl expectation failed")
 									}
 									{
@@ -2418,6 +2540,7 @@ func TestTeslApi5(teslT *testing.T) {
 											_ = secondError
 //line KanelBackend.tesl:730
 											if !(teslrt.JsonIsNotNull(teslrt.JsonValueOf(teslEncode1(secondError)))) {
+//line KanelBackend.tesl:730
 												teslT.Fatal("Tesl expectation failed")
 											}
 											{
@@ -2449,11 +2572,13 @@ func TestTeslApi5(teslT *testing.T) {
 													_ = thirdError
 //line KanelBackend.tesl:734
 													if !(teslrt.JsonIsNotNull(teslrt.JsonValueOf(teslEncode1(thirdError)))) {
+//line KanelBackend.tesl:734
 														teslT.Fatal("Tesl expectation failed")
 													}
 													teslLeft10 := teslrt.PendingJobCount(KanelNotifyQueueQueue)
 //line KanelBackend.tesl:735
 													if !teslrt.Equal(teslLeft10, teslrt.FromInt64(0)) {
+//line KanelBackend.tesl:735
 														teslT.Fatal("Tesl expectation failed")
 													}
 													{
@@ -2486,11 +2611,13 @@ func TestTeslApi5(teslT *testing.T) {
 															teslLeft11 := deadJob.RecipientUserId
 //line KanelBackend.tesl:739
 															if teslLeft11 != reporterId {
+//line KanelBackend.tesl:739
 																teslT.Fatal("Tesl expectation failed")
 															}
 															teslLeft12 := deadJob.RecipientEmail
 //line KanelBackend.tesl:740
 															if teslLeft12 != "blocked@example.com" {
+//line KanelBackend.tesl:740
 																teslT.Fatal("Tesl expectation failed")
 															}
 															{
@@ -2499,6 +2626,7 @@ func TestTeslApi5(teslT *testing.T) {
 																_ = events
 //line KanelBackend.tesl:745
 																if !(teslrt.JsonIncludesWhere(teslrt.JsonParseBody("{\"tag\":\"NotificationFailed\",\"fields\":{\"recipientEmail\":\"blocked@example.com\"}}").JsonRaw(), events)) {
+//line KanelBackend.tesl:745
 																	teslT.Fatal("Tesl expectation failed")
 																}
 															}
@@ -2529,6 +2657,11 @@ func TestTeslApi6(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line KanelBackend.tesl:748
 //line KanelBackend.tesl:750
 	_ = teslrt.TableInsert(teslmodkanelmodels.KanelUserTable, "KanelUser", teslmodkanelmodels.KanelUser{Id: "usr-status-test", Email: "statustest@example.com", PasswordHash: "password123", DisplayName: "Status Tester", CreatedAt: teslrt.SecondsToPosix(teslrt.FromInt64(0))}, func(teslRow, teslNew teslmodkanelmodels.KanelUser) bool { return (teslRow.Id == teslNew.Id) })
@@ -2558,10 +2691,12 @@ func TestTeslApi6(teslT *testing.T) {
 					_ = toTodo
 //line KanelBackend.tesl:802
 					if !(teslrt.StatusOk(toTodo.Status)) {
+//line KanelBackend.tesl:802
 						teslT.Fatal("Tesl expectation failed")
 					}
 //line KanelBackend.tesl:803
 					if !teslrt.JsonEqual(teslrt.JsonFieldOf(toTodo.Body, "status"), teslrt.JsonParseBody("{\"tag\":\"Todo\"}").JsonRaw()) {
+//line KanelBackend.tesl:803
 						teslT.Fatal("Tesl expectation failed")
 					}
 					{
@@ -2570,6 +2705,7 @@ func TestTeslApi6(teslT *testing.T) {
 						_ = toInProgress
 //line KanelBackend.tesl:809
 						if !(teslrt.StatusOk(toInProgress.Status)) {
+//line KanelBackend.tesl:809
 							teslT.Fatal("Tesl expectation failed")
 						}
 						{
@@ -2578,10 +2714,12 @@ func TestTeslApi6(teslT *testing.T) {
 							_ = toInReview
 //line KanelBackend.tesl:815
 							if !(teslrt.StatusOk(toInReview.Status)) {
+//line KanelBackend.tesl:815
 								teslT.Fatal("Tesl expectation failed")
 							}
 //line KanelBackend.tesl:816
 							if !teslrt.JsonEqual(teslrt.JsonFieldOf(toInReview.Body, "status"), teslrt.JsonParseBody("{\"tag\":\"InReview\"}").JsonRaw()) {
+//line KanelBackend.tesl:816
 								teslT.Fatal("Tesl expectation failed")
 							}
 							{
@@ -2590,6 +2728,7 @@ func TestTeslApi6(teslT *testing.T) {
 								_ = badTransition
 //line KanelBackend.tesl:822
 								if !(teslrt.StatusClientError(badTransition.Status)) {
+//line KanelBackend.tesl:822
 									teslT.Fatal("Tesl expectation failed")
 								}
 							}
@@ -2707,18 +2846,25 @@ func CreateInvoiceHandler(session teslmodkanelauth.KanelSession, orgId string, r
 //line KanelBilling.tesl:79
 						invoiceId := teslrt.GeneratePrefixedId("inv")
 						_ = invoiceId
-						{
+//line KanelBilling.tesl:80
+						var teslCommitted teslmodkanelmodels.Invoice
+						teslrt.WithMemoryTransaction(func() {
+							teslCommitted = func() teslmodkanelmodels.Invoice {
+								{
 //line KanelBilling.tesl:82
-							_ = teslrt.TableUpdate(teslmodkanelmodels.TimeEntryTable, func(te teslmodkanelmodels.TimeEntry) bool {
-								return (te.OrgId == orgId) && (te.InvoiceId == "")
-							}, func(te teslmodkanelmodels.TimeEntry) teslmodkanelmodels.TimeEntry {
-								teslNext := te
-								teslNext.InvoiceId = invoiceId
-								return teslNext
-							})
+									_ = teslrt.TableUpdate(teslmodkanelmodels.TimeEntryTable, func(te teslmodkanelmodels.TimeEntry) bool {
+										return (te.OrgId == orgId) && (te.InvoiceId == "")
+									}, func(te teslmodkanelmodels.TimeEntry) teslmodkanelmodels.TimeEntry {
+										teslNext := te
+										teslNext.InvoiceId = invoiceId
+										return teslNext
+									})
 //line KanelBilling.tesl:85
-							return teslrt.TableInsert(teslmodkanelmodels.InvoiceTable, "Invoice", teslmodkanelmodels.Invoice{Id: invoiceId, OrgId: orgId, Status: teslmodkanelmodels.InvoiceStatus{Tag: teslmodkanelmodels.InvoiceStatusDraft}, TotalMinutes: totalMinutes, Notes: req.Notes, CreatedAt: teslrt.NowMillis(), ApprovedAt: teslrt.SecondsToPosix(teslrt.FromInt64(0))}, func(teslRow, teslNew teslmodkanelmodels.Invoice) bool { return (teslRow.Id == teslNew.Id) })
-						}
+									return teslrt.TableInsert(teslmodkanelmodels.InvoiceTable, "Invoice", teslmodkanelmodels.Invoice{Id: invoiceId, OrgId: orgId, Status: teslmodkanelmodels.InvoiceStatus{Tag: teslmodkanelmodels.InvoiceStatusDraft}, TotalMinutes: totalMinutes, Notes: req.Notes, CreatedAt: teslrt.NowMillis(), ApprovedAt: teslrt.SecondsToPosix(teslrt.FromInt64(0))}, func(teslRow, teslNew teslmodkanelmodels.Invoice) bool { return (teslRow.Id == teslNew.Id) })
+								}
+							}()
+						})
+						return teslCommitted
 					}
 				}
 			}
@@ -3403,12 +3549,19 @@ func CreateProjectHandler(session teslmodkanelauth.KanelSession, orgId string, r
 //line KanelIssues.tesl:295
 						projectId := teslrt.GeneratePrefixedId("proj")
 						_ = projectId
-						{
+//line KanelIssues.tesl:296
+						var teslCommitted teslmodkanelmodels.Project
+						teslrt.WithMemoryTransaction(func() {
+							teslCommitted = func() teslmodkanelmodels.Project {
+								{
 //line KanelIssues.tesl:297
-							_ = teslrt.TableInsert(teslmodkanelmodels.ProjectMembershipTable, "ProjectMembership", teslmodkanelmodels.ProjectMembership{Id: memberId, ProjectId: projectId, UserId: session.UserId, JoinedAt: teslrt.NowMillis()}, func(teslRow, teslNew teslmodkanelmodels.ProjectMembership) bool { return (teslRow.Id == teslNew.Id) })
+									_ = teslrt.TableInsert(teslmodkanelmodels.ProjectMembershipTable, "ProjectMembership", teslmodkanelmodels.ProjectMembership{Id: memberId, ProjectId: projectId, UserId: session.UserId, JoinedAt: teslrt.NowMillis()}, func(teslRow, teslNew teslmodkanelmodels.ProjectMembership) bool { return (teslRow.Id == teslNew.Id) })
 //line KanelIssues.tesl:303
-							return teslrt.TableInsert(teslmodkanelmodels.ProjectTable, "Project", teslmodkanelmodels.Project{Id: projectId, OrgId: orgId, Name: projName, Description: projDesc, Archived: false, CreatedAt: teslrt.NowMillis()}, func(teslRow, teslNew teslmodkanelmodels.Project) bool { return (teslRow.Id == teslNew.Id) })
-						}
+									return teslrt.TableInsert(teslmodkanelmodels.ProjectTable, "Project", teslmodkanelmodels.Project{Id: projectId, OrgId: orgId, Name: projName, Description: projDesc, Archived: false, CreatedAt: teslrt.NowMillis()}, func(teslRow, teslNew teslmodkanelmodels.Project) bool { return (teslRow.Id == teslNew.Id) })
+								}
+							}()
+						})
+						return teslCommitted
 					}
 				}
 			}
@@ -3689,15 +3842,22 @@ func UpdateIssueStatusHandler(session teslmodkanelauth.KanelSession, orgId strin
 //line KanelIssues.tesl:456
 									_closerId := teslrt.MustCheckRequest(CheckCanClose(session.UserId, issueId, orgId))
 									_ = _closerId
+//line KanelIssues.tesl:457
+									var teslCommitted teslmodkanelmodels.Issue
+									teslrt.WithMemoryTransaction(func() {
+										teslCommitted = func() teslmodkanelmodels.Issue {
 //line KanelIssues.tesl:458
-									return teslrt.TableUpdateReturnOne(teslmodkanelmodels.IssueTable, func(i teslmodkanelmodels.Issue) bool {
-										return (i.Id == issueId)
-									}, func(i teslmodkanelmodels.Issue) teslmodkanelmodels.Issue {
-										teslNext := i
-										teslNext.Status = newStatus
-										teslNext.UpdatedAt = teslrt.NowMillis()
-										return teslNext
+											return teslrt.TableUpdateReturnOne(teslmodkanelmodels.IssueTable, func(i teslmodkanelmodels.Issue) bool {
+												return (i.Id == issueId)
+											}, func(i teslmodkanelmodels.Issue) teslmodkanelmodels.Issue {
+												teslNext := i
+												teslNext.Status = newStatus
+												teslNext.UpdatedAt = teslrt.NowMillis()
+												return teslNext
+											})
+										}()
 									})
+									return teslCommitted
 								}
 							case teslmodkanelmodels.IssueStatusBacklog:
 //line KanelIssues.tesl:469
@@ -4809,12 +4969,19 @@ func CreateOrgHandler(session teslmodkanelauth.KanelSession, req teslmodkanelmod
 //line KanelOrg.tesl:210
 								memberId := teslrt.GeneratePrefixedId("mem")
 								_ = memberId
-								{
+//line KanelOrg.tesl:211
+								var teslCommitted teslmodkanelmodels.Org
+								teslrt.WithMemoryTransaction(func() {
+									teslCommitted = func() teslmodkanelmodels.Org {
+										{
 //line KanelOrg.tesl:214
-									_ = teslrt.TableInsert(teslmodkanelmodels.OrgMembershipTable, "OrgMembership", teslmodkanelmodels.OrgMembership{Id: memberId, OrgId: orgId, UserId: session.UserId, Role: teslmodkanelmodels.OrgRole{Tag: teslmodkanelmodels.OrgRoleRoleAdmin}, JoinedAt: teslrt.NowMillis()}, func(teslRow, teslNew teslmodkanelmodels.OrgMembership) bool { return (teslRow.Id == teslNew.Id) })
+											_ = teslrt.TableInsert(teslmodkanelmodels.OrgMembershipTable, "OrgMembership", teslmodkanelmodels.OrgMembership{Id: memberId, OrgId: orgId, UserId: session.UserId, Role: teslmodkanelmodels.OrgRole{Tag: teslmodkanelmodels.OrgRoleRoleAdmin}, JoinedAt: teslrt.NowMillis()}, func(teslRow, teslNew teslmodkanelmodels.OrgMembership) bool { return (teslRow.Id == teslNew.Id) })
 //line KanelOrg.tesl:221
-									return teslrt.TableInsert(teslmodkanelmodels.OrgTable, "Org", teslmodkanelmodels.Org{Id: orgId, Name: orgName, Slug: slug, CreatedAt: teslrt.NowMillis()}, func(teslRow, teslNew teslmodkanelmodels.Org) bool { return (teslRow.Id == teslNew.Id) })
-								}
+											return teslrt.TableInsert(teslmodkanelmodels.OrgTable, "Org", teslmodkanelmodels.Org{Id: orgId, Name: orgName, Slug: slug, CreatedAt: teslrt.NowMillis()}, func(teslRow, teslNew teslmodkanelmodels.Org) bool { return (teslRow.Id == teslNew.Id) })
+										}
+									}()
+								})
+								return teslCommitted
 							}
 						}
 					default:

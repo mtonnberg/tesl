@@ -523,9 +523,15 @@ func TestTesl0(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft1 := p01_flow(teslrt.FromInt64(5))
 //line critical-review-51-tests.tesl:226
 	if !teslrt.Equal(teslLeft1, teslrt.FromInt64(5)) {
+//line critical-review-51-tests.tesl:226
 		teslT.Fatal("Tesl expectation failed")
 	}
 //line critical-review-51-tests.tesl:227
@@ -541,9 +547,15 @@ func TestTesl1(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft2 := p02_roundtrip(teslrt.FromInt64(7))
 //line critical-review-51-tests.tesl:231
 	if !teslrt.Equal(teslLeft2, teslrt.FromInt64(7)) {
+//line critical-review-51-tests.tesl:231
 		teslT.Fatal("Tesl expectation failed")
 	}
 //line critical-review-51-tests.tesl:232
@@ -559,9 +571,15 @@ func TestTesl2(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft3 := p03_multi_param(teslrt.FromInt64(1), teslrt.FromInt64(10), teslrt.FromInt64(5))
 //line critical-review-51-tests.tesl:236
 	if !teslrt.Equal(teslLeft3, teslrt.FromInt64(5)) {
+//line critical-review-51-tests.tesl:236
 		teslT.Fatal("Tesl expectation failed")
 	}
 //line critical-review-51-tests.tesl:237
@@ -577,14 +595,21 @@ func TestTesl3(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft4 := p04_attach_sugar(teslrt.FromInt64(3))
 //line critical-review-51-tests.tesl:241
 	if !teslrt.Equal(teslLeft4, teslrt.FromInt64(3)) {
+//line critical-review-51-tests.tesl:241
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft5 := p04_attach_sugar(teslrt.FromInt64(0))
 //line critical-review-51-tests.tesl:242
 	if !teslrt.Equal(teslLeft5, teslrt.FromInt64(0)) {
+//line critical-review-51-tests.tesl:242
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -596,9 +621,15 @@ func TestTesl4(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft6 := p05_forget_then_recheck(teslrt.FromInt64(8))
 //line critical-review-51-tests.tesl:246
 	if !teslrt.Equal(teslLeft6, teslrt.FromInt64(8)) {
+//line critical-review-51-tests.tesl:246
 		teslT.Fatal("Tesl expectation failed")
 	}
 //line critical-review-51-tests.tesl:247
@@ -614,9 +645,15 @@ func TestTesl5(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft7 := p06_composite(teslrt.FromInt64(4))
 //line critical-review-51-tests.tesl:251
 	if !teslrt.Equal(teslLeft7, teslrt.FromInt64(4)) {
+//line critical-review-51-tests.tesl:251
 		teslT.Fatal("Tesl expectation failed")
 	}
 //line critical-review-51-tests.tesl:252
@@ -636,9 +673,15 @@ func TestTesl6(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft8 := t01_tuple_as_list()
 //line critical-review-51-tests.tesl:257
 	if !teslrt.Equal(teslLeft8, teslrt.FromInt64(2)) {
+//line critical-review-51-tests.tesl:257
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -650,14 +693,21 @@ func TestTesl7(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft9 := t02_tree_size(MyTree[teslrt.Int]{Tag: MyTreeMkLeaf})
 //line critical-review-51-tests.tesl:261
 	if !teslrt.Equal(teslLeft9, teslrt.FromInt64(0)) {
+//line critical-review-51-tests.tesl:261
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft10 := t02_tree_size(MyTree[teslrt.Int]{Tag: MyTreeMkNode, MkNodeLeft: teslrt.Boxed(MyTree[teslrt.Int]{Tag: MyTreeMkLeaf}), MkNodeValue: teslrt.FromInt64(1), MkNodeRight: teslrt.Boxed(MyTree[teslrt.Int]{Tag: MyTreeMkLeaf})})
 //line critical-review-51-tests.tesl:262
 	if !teslrt.Equal(teslLeft10, teslrt.FromInt64(1)) {
+//line critical-review-51-tests.tesl:262
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -669,6 +719,11 @@ func TestTesl8(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line critical-review-51-tests.tesl:266
 		uid := UserId{Value: "u-1"}
@@ -676,6 +731,7 @@ func TestTesl8(teslT *testing.T) {
 		teslLeft11 := t03_unwrap(uid)
 //line critical-review-51-tests.tesl:267
 		if teslLeft11 != "u-1" {
+//line critical-review-51-tests.tesl:267
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -688,14 +744,21 @@ func TestTesl9(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft12 := c01_nested_paren(Wrapped{MkWrapInner: teslrt.Maybe[teslrt.Int]{Tag: teslrt.MaybeSomething, SomethingValue: teslrt.FromInt64(9)}})
 //line critical-review-51-tests.tesl:271
 	if !teslrt.Equal(teslLeft12, teslrt.FromInt64(9)) {
+//line critical-review-51-tests.tesl:271
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft13 := c01_nested_paren(Wrapped{MkWrapInner: teslrt.Maybe[teslrt.Int]{Tag: teslrt.MaybeNothing}})
 //line critical-review-51-tests.tesl:272
 	if !teslrt.Equal(teslLeft13, teslrt.FromInt64(0)) {
+//line critical-review-51-tests.tesl:272
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -707,19 +770,27 @@ func TestTesl10(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft14 := c02_where_guard(teslrt.Maybe[teslrt.Int]{Tag: teslrt.MaybeNothing})
 //line critical-review-51-tests.tesl:276
 	if !teslrt.Equal(teslLeft14, teslrt.FromInt64(0)) {
+//line critical-review-51-tests.tesl:276
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft15 := c02_where_guard(teslrt.Maybe[teslrt.Int]{Tag: teslrt.MaybeSomething, SomethingValue: teslrt.FromInt64(50)})
 //line critical-review-51-tests.tesl:277
 	if !teslrt.Equal(teslLeft15, teslrt.FromInt64(50)) {
+//line critical-review-51-tests.tesl:277
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft16 := c02_where_guard(teslrt.Maybe[teslrt.Int]{Tag: teslrt.MaybeSomething, SomethingValue: teslrt.FromInt64(1000)})
 //line critical-review-51-tests.tesl:278
 	if !teslrt.Equal(teslLeft16, teslrt.FromInt64(100)) {
+//line critical-review-51-tests.tesl:278
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -731,19 +802,27 @@ func TestTesl11(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft17 := n01_bare_nullary(teslrt.Maybe[teslrt.Maybe[teslrt.Int]]{Tag: teslrt.MaybeNothing})
 //line critical-review-51-tests.tesl:282
 	if !teslrt.Equal(teslLeft17, teslrt.FromInt64(0)) {
+//line critical-review-51-tests.tesl:282
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft18 := n01_bare_nullary(teslrt.Maybe[teslrt.Maybe[teslrt.Int]]{Tag: teslrt.MaybeSomething, SomethingValue: teslrt.Maybe[teslrt.Int]{Tag: teslrt.MaybeNothing}})
 //line critical-review-51-tests.tesl:283
 	if !teslrt.Equal(teslLeft18, teslrt.FromInt64(1)) {
+//line critical-review-51-tests.tesl:283
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft19 := n01_bare_nullary(teslrt.Maybe[teslrt.Maybe[teslrt.Int]]{Tag: teslrt.MaybeSomething, SomethingValue: teslrt.Maybe[teslrt.Int]{Tag: teslrt.MaybeSomething, SomethingValue: teslrt.FromInt64(42)}})
 //line critical-review-51-tests.tesl:284
 	if !teslrt.Equal(teslLeft19, teslrt.FromInt64(42)) {
+//line critical-review-51-tests.tesl:284
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -755,19 +834,27 @@ func TestTesl12(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft20 := n02_case_cmp(teslrt.FromInt64(5))
 //line critical-review-51-tests.tesl:288
 	if !teslrt.Equal(teslLeft20, teslrt.FromInt64(1)) {
+//line critical-review-51-tests.tesl:288
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft21 := n02_case_cmp(teslrt.FromInt64(0))
 //line critical-review-51-tests.tesl:289
 	if !teslrt.Equal(teslLeft21, teslrt.FromInt64(0)) {
+//line critical-review-51-tests.tesl:289
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft22 := n02_case_cmp(teslrt.Sub(teslrt.FromInt64(0), teslrt.FromInt64(3)))
 //line critical-review-51-tests.tesl:290
 	if !teslrt.Equal(teslLeft22, teslrt.FromInt64(0)) {
+//line critical-review-51-tests.tesl:290
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -779,19 +866,27 @@ func TestTesl13(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft23 := n03_case_conj(teslrt.FromInt64(1), teslrt.FromInt64(2))
 //line critical-review-51-tests.tesl:294
 	if !teslrt.Equal(teslLeft23, teslrt.FromInt64(1)) {
+//line critical-review-51-tests.tesl:294
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft24 := n03_case_conj(teslrt.FromInt64(0), teslrt.FromInt64(2))
 //line critical-review-51-tests.tesl:295
 	if !teslrt.Equal(teslLeft24, teslrt.FromInt64(0)) {
+//line critical-review-51-tests.tesl:295
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft25 := n03_case_conj(teslrt.FromInt64(1), teslrt.FromInt64(0))
 //line critical-review-51-tests.tesl:296
 	if !teslrt.Equal(teslLeft25, teslrt.FromInt64(0)) {
+//line critical-review-51-tests.tesl:296
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -803,14 +898,21 @@ func TestTesl14(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft26 := n04_case_arith(teslrt.FromInt64(0), teslrt.FromInt64(0))
 //line critical-review-51-tests.tesl:300
 	if !teslrt.Equal(teslLeft26, teslrt.FromInt64(100)) {
+//line critical-review-51-tests.tesl:300
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft27 := n04_case_arith(teslrt.FromInt64(1), teslrt.FromInt64(1))
 //line critical-review-51-tests.tesl:301
 	if !teslrt.Equal(teslLeft27, teslrt.FromInt64(0)) {
+//line critical-review-51-tests.tesl:301
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -822,6 +924,11 @@ func TestTesl15(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line critical-review-51-tests.tesl:305
 		origin := Point{X: teslrt.FromInt64(0), Y: teslrt.FromInt64(0)}
@@ -833,11 +940,13 @@ func TestTesl15(teslT *testing.T) {
 			teslLeft28 := moved.X
 //line critical-review-51-tests.tesl:307
 			if !teslrt.Equal(teslLeft28, teslrt.FromInt64(10)) {
+//line critical-review-51-tests.tesl:307
 				teslT.Fatal("Tesl expectation failed")
 			}
 			teslLeft29 := moved.Y
 //line critical-review-51-tests.tesl:308
 			if !teslrt.Equal(teslLeft29, teslrt.FromInt64(0)) {
+//line critical-review-51-tests.tesl:308
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -851,9 +960,15 @@ func TestTesl16(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft30 := n06_proof_free_alias(teslrt.FromInt64(5), teslrt.FromInt64(7))
 //line critical-review-51-tests.tesl:312
 	if !teslrt.Equal(teslLeft30, teslrt.FromInt64(12)) {
+//line critical-review-51-tests.tesl:312
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -865,9 +980,15 @@ func TestTesl17(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft31 := n07_forget_recheck_chain(teslrt.FromInt64(9))
 //line critical-review-51-tests.tesl:316
 	if !teslrt.Equal(teslLeft31, teslrt.FromInt64(9)) {
+//line critical-review-51-tests.tesl:316
 		teslT.Fatal("Tesl expectation failed")
 	}
 //line critical-review-51-tests.tesl:317
@@ -883,19 +1004,27 @@ func TestTesl18(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft32 := n09_int_case(teslrt.FromInt64(200))
 //line critical-review-51-tests.tesl:321
 	if teslLeft32 != "ok" {
+//line critical-review-51-tests.tesl:321
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft33 := n09_int_case(teslrt.FromInt64(404))
 //line critical-review-51-tests.tesl:322
 	if teslLeft33 != "not found" {
+//line critical-review-51-tests.tesl:322
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft34 := n09_int_case(teslrt.FromInt64(500))
 //line critical-review-51-tests.tesl:323
 	if teslLeft34 != "other" {
+//line critical-review-51-tests.tesl:323
 		teslT.Fatal("Tesl expectation failed")
 	}
 }

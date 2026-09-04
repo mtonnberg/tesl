@@ -22,6 +22,17 @@ const sseEventBufferLimit = 64
 // sseHeartbeatInterval is Racket's 10 seconds.
 const sseHeartbeatInterval = 10 * time.Second
 
+// sseWriteDeadline bounds ONE write to a stream, re-armed before every frame including the
+// heartbeat. The server's `WriteTimeout` is armed once per request and covers the whole
+// response — right for a JSON answer, wrong for a stream that lives for the connection: left in
+// place it cut every `sse` route at 60 s (the first heartbeat past the deadline failed), so each
+// browser EventSource reconnected once a minute and lost whatever was published in between. A
+// ROLLING deadline rather than none keeps the other half of what `WriteTimeout` was buying: a
+// client that stops reading is still disconnected instead of pinning a goroutine, a listener and
+// a 64-event buffer forever, because a single write that has not completed within this window
+// means the socket is stalled, not merely quiet.
+const sseWriteDeadline = 30 * time.Second
+
 func (channel *SseChannel) register(key string) *sseListener {
 	listener := &sseListener{events: make(chan any, sseEventBufferLimit)}
 	channel.mutex.Lock()
@@ -66,6 +77,12 @@ func (channel *SseChannel) unregister(key string, listener *sseListener) {
 // goes away, and it removes its listener on EVERY exit path — a listener that outlives its
 // connection is charged to every future publish.
 func SseStream(channel *SseChannel, key string) func(http.ResponseWriter, *http.Request) {
+	return sseStream(channel, key, sseWriteDeadline)
+}
+
+// sseStream is SseStream with the per-write deadline as a parameter, so a test can prove that a
+// stalled client is dropped without waiting out the production window.
+func sseStream(channel *SseChannel, key string, writeDeadline time.Duration) func(http.ResponseWriter, *http.Request) {
 	return func(writer http.ResponseWriter, request *http.Request) {
 		flusher, canFlush := writer.(http.Flusher)
 		if !canFlush {
@@ -82,8 +99,18 @@ func SseStream(channel *SseChannel, key string) func(http.ResponseWriter, *http.
 		listener := channel.register(key)
 		defer channel.unregister(key, listener)
 
+		// Rolled forward before EVERY write (see sseWriteDeadline); the controller reaches the
+		// connection through the writer's Unwrap chain. A writer that cannot carry a deadline
+		// (a test recorder) answers ErrNotSupported, which is no reason to refuse the stream —
+		// there is then no server timeout to outlive either.
+		controller := http.NewResponseController(writer)
+		armWrite := func() {
+			_ = controller.SetWriteDeadline(time.Now().Add(writeDeadline))
+		}
+
 		// An immediate comment so the browser fires onopen now rather than at the first
 		// heartbeat: with chunked encoding it opens on the first body chunk.
+		armWrite()
 		if _, err := writer.Write([]byte(": ok\n\n")); err != nil {
 			return
 		}
@@ -100,12 +127,14 @@ func SseStream(channel *SseChannel, key string) func(http.ResponseWriter, *http.
 					"channel": channel.name,
 					"payload": event,
 				}))
+				armWrite()
 				if _, err := writer.Write([]byte(body)); err != nil {
 					return
 				}
 				flusher.Flush()
 				Counter("tesl.sse.events.sent", FromInt64(1), sseChannelAttribute(channel.name))
 			case <-heartbeat.C:
+				armWrite()
 				if _, err := writer.Write([]byte(": heartbeat\n\n")); err != nil {
 					return
 				}

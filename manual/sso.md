@@ -100,12 +100,11 @@ flow's own network calls mean an `sso` server forces `main` to grant
   must name that origin (a Host-header attack otherwise mints links/cookies for
   another origin); this ONE path is exempt so a host-blind load-balancer probe
   still succeeds.
-- `contentSecurityPolicy "default-src 'self'; frame-ancestors 'none'"` — the
-  server default CSP for HTML responses (the SPA fallback + static HTML). Typed
-  in the program (a reviewer sees it), takes precedence over the `TESL_CSP` env,
-  and a handler that sets its own `Content-Security-Policy` header still wins per
-  response — that is the per-route form (e.g. an extension bundle route framable
-  by its host).
+- `contentSecurityPolicy "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self'"` — the
+  server default CSP for HTML responses (the SPA fallback + static HTML). The
+  compiler requires the isolation baseline and rejects wildcard, inline/eval,
+  and unrestricted data/blob/http(s) sources. The `TESL_CSP` environment
+  fallback is checked at runtime and fails closed to the same baseline.
 - `loginMethods [Sso] | [Sso, Password via <fn>] | [Sso, Machine]` — the **checked** promise that
   no code path mints a session cookie except the SSO callback.
 

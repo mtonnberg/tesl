@@ -68,6 +68,32 @@ let test_openapi_path () =
   assert (try ignore (Str.search_forward (Str.regexp_string "\"/todos/{todoId}\"") output 0); true
           with Not_found -> false)
 
+let test_openapi_includes_imported_types () =
+  let dir = Filename.temp_file "tesl-openapi-" "" in
+  Sys.remove dir;
+  Unix.mkdir dir 0o700;
+  let write name contents =
+    let channel = open_out (Filename.concat dir name) in
+    output_string channel contents;
+    close_out channel
+  in
+  write "Models.tesl"
+    "module Models exposing [User]\nimport Tesl.Prelude exposing [String]\nrecord User { name: String }\n";
+  write "Main.tesl"
+    "module Main exposing []\nimport Tesl.Prelude exposing [String]\nimport Models exposing [User]\napi Api { get \"/user\" -> User }\nserver S for Api { getUser }\n";
+  let source_file = Filename.concat dir "Main.tesl" in
+  let source = In_channel.with_open_text source_file In_channel.input_all in
+  (match Parser.parse_module source_file source with
+   | Err error -> failwith error.msg
+   | Ok module_form ->
+     let output = Emit_openapi.emit module_form ~server_name:"S" in
+     assert (try ignore (Str.search_forward (Str.regexp_string "\"User\"") output 0); true
+             with Not_found -> false));
+  Sys.remove (Filename.concat dir "Models.tesl");
+  Sys.remove source_file;
+  Unix.rmdir dir
+
 let () =
   test_sql_dispatch ();
-  test_openapi_path ()
+  test_openapi_path ();
+  test_openapi_includes_imported_types ()

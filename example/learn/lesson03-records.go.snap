@@ -104,6 +104,11 @@ func TestTesl0(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson03-records.tesl:85
 		rect := Rectangle{Origin: Point{X: teslrt.FromInt64(0), Y: teslrt.FromInt64(0)}, Width: teslrt.FromInt64(4), Height: teslrt.FromInt64(3)}
@@ -111,6 +116,7 @@ func TestTesl0(teslT *testing.T) {
 		teslLeft1 := Area(rect)
 //line lesson03-records.tesl:86
 		if !teslrt.Equal(teslLeft1, teslrt.FromInt64(12)) {
+//line lesson03-records.tesl:86
 			teslT.Fatal("Tesl expectation failed")
 		}
 		{
@@ -120,6 +126,7 @@ func TestTesl0(teslT *testing.T) {
 			teslLeft2 := Area(unit)
 //line lesson03-records.tesl:88
 			if !teslrt.Equal(teslLeft2, teslrt.FromInt64(1)) {
+//line lesson03-records.tesl:88
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -133,6 +140,11 @@ func TestTesl1(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson03-records.tesl:92
 		rect := Rectangle{Origin: Point{X: teslrt.FromInt64(0), Y: teslrt.FromInt64(0)}, Width: teslrt.FromInt64(4), Height: teslrt.FromInt64(3)}
@@ -140,6 +152,7 @@ func TestTesl1(teslT *testing.T) {
 		teslLeft3 := Perimeter(rect)
 //line lesson03-records.tesl:93
 		if !teslrt.Equal(teslLeft3, teslrt.FromInt64(14)) {
+//line lesson03-records.tesl:93
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -152,6 +165,11 @@ func TestTesl2(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson03-records.tesl:97
 		p := Point{X: teslrt.FromInt64(1), Y: teslrt.FromInt64(2)}
@@ -163,11 +181,13 @@ func TestTesl2(teslT *testing.T) {
 			teslLeft4 := moved.X
 //line lesson03-records.tesl:99
 			if !teslrt.Equal(teslLeft4, teslrt.FromInt64(4)) {
+//line lesson03-records.tesl:99
 				teslT.Fatal("Tesl expectation failed")
 			}
 			teslLeft5 := moved.Y
 //line lesson03-records.tesl:100
 			if !teslrt.Equal(teslLeft5, teslrt.FromInt64(6)) {
+//line lesson03-records.tesl:100
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -181,6 +201,11 @@ func TestTesl3(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson03-records.tesl:104
 		rect := Rectangle{Origin: Point{X: teslrt.FromInt64(0), Y: teslrt.FromInt64(0)}, Width: teslrt.FromInt64(3), Height: teslrt.FromInt64(2)}
@@ -192,16 +217,19 @@ func TestTesl3(teslT *testing.T) {
 			teslLeft6 := big.Width
 //line lesson03-records.tesl:106
 			if !teslrt.Equal(teslLeft6, teslrt.FromInt64(12)) {
+//line lesson03-records.tesl:106
 				teslT.Fatal("Tesl expectation failed")
 			}
 			teslLeft7 := big.Height
 //line lesson03-records.tesl:107
 			if !teslrt.Equal(teslLeft7, teslrt.FromInt64(8)) {
+//line lesson03-records.tesl:107
 				teslT.Fatal("Tesl expectation failed")
 			}
 			teslLeft8 := big.Origin.X
 //line lesson03-records.tesl:108
 			if !teslrt.Equal(teslLeft8, teslrt.FromInt64(0)) {
+//line lesson03-records.tesl:108
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -215,6 +243,11 @@ func TestTesl4(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson03-records.tesl:112
 		o := Origin()
@@ -222,11 +255,13 @@ func TestTesl4(teslT *testing.T) {
 		teslLeft9 := o.X
 //line lesson03-records.tesl:113
 		if !teslrt.Equal(teslLeft9, teslrt.FromInt64(0)) {
+//line lesson03-records.tesl:113
 			teslT.Fatal("Tesl expectation failed")
 		}
 		teslLeft10 := o.Y
 //line lesson03-records.tesl:114
 		if !teslrt.Equal(teslLeft10, teslrt.FromInt64(0)) {
+//line lesson03-records.tesl:114
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -239,6 +274,11 @@ func TestTesl5(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson03-records.tesl:120
 		p := Point{X: teslrt.FromInt64(3), Y: teslrt.FromInt64(7)}
@@ -250,11 +290,13 @@ func TestTesl5(teslT *testing.T) {
 			teslLeft11 := p2.X
 //line lesson03-records.tesl:122
 			if !teslrt.Equal(teslLeft11, teslrt.FromInt64(99)) {
+//line lesson03-records.tesl:122
 				teslT.Fatal("Tesl expectation failed")
 			}
 			teslLeft12 := p2.Y
 //line lesson03-records.tesl:123
 			if !teslrt.Equal(teslLeft12, teslrt.FromInt64(7)) {
+//line lesson03-records.tesl:123
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -268,6 +310,11 @@ func TestTesl6(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson03-records.tesl:127
 		p := Point{X: teslrt.FromInt64(10), Y: teslrt.FromInt64(20)}
@@ -279,11 +326,13 @@ func TestTesl6(teslT *testing.T) {
 			teslLeft13 := p2.X
 //line lesson03-records.tesl:129
 			if !teslrt.Equal(teslLeft13, teslrt.FromInt64(10)) {
+//line lesson03-records.tesl:129
 				teslT.Fatal("Tesl expectation failed")
 			}
 			teslLeft14 := p2.Y
 //line lesson03-records.tesl:130
 			if !teslrt.Equal(teslLeft14, teslrt.FromInt64(50)) {
+//line lesson03-records.tesl:130
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -297,6 +346,11 @@ func TestTesl7(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson03-records.tesl:134
 		p := Point{X: teslrt.FromInt64(1), Y: teslrt.FromInt64(2)}
@@ -308,11 +362,13 @@ func TestTesl7(teslT *testing.T) {
 			teslLeft15 := p.X
 //line lesson03-records.tesl:136
 			if !teslrt.Equal(teslLeft15, teslrt.FromInt64(1)) {
+//line lesson03-records.tesl:136
 				teslT.Fatal("Tesl expectation failed")
 			}
 			teslLeft16 := p.Y
 //line lesson03-records.tesl:137
 			if !teslrt.Equal(teslLeft16, teslrt.FromInt64(2)) {
+//line lesson03-records.tesl:137
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -326,6 +382,11 @@ func TestTesl8(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson03-records.tesl:141
 		r := Rectangle{Origin: Point{X: teslrt.FromInt64(0), Y: teslrt.FromInt64(0)}, Width: teslrt.FromInt64(10), Height: teslrt.FromInt64(5)}
@@ -337,16 +398,19 @@ func TestTesl8(teslT *testing.T) {
 			teslLeft17 := r2.Width
 //line lesson03-records.tesl:143
 			if !teslrt.Equal(teslLeft17, teslrt.FromInt64(20)) {
+//line lesson03-records.tesl:143
 				teslT.Fatal("Tesl expectation failed")
 			}
 			teslLeft18 := r2.Height
 //line lesson03-records.tesl:144
 			if !teslrt.Equal(teslLeft18, teslrt.FromInt64(8)) {
+//line lesson03-records.tesl:144
 				teslT.Fatal("Tesl expectation failed")
 			}
 			teslLeft19 := r2.Origin.X
 //line lesson03-records.tesl:145
 			if !teslrt.Equal(teslLeft19, teslrt.FromInt64(0)) {
+//line lesson03-records.tesl:145
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -360,6 +424,11 @@ func TestTesl9(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson03-records.tesl:149
 		p := Point{X: teslrt.FromInt64(0), Y: teslrt.FromInt64(0)}
@@ -375,11 +444,13 @@ func TestTesl9(teslT *testing.T) {
 				teslLeft20 := p2.X
 //line lesson03-records.tesl:152
 				if !teslrt.Equal(teslLeft20, teslrt.FromInt64(5)) {
+//line lesson03-records.tesl:152
 					teslT.Fatal("Tesl expectation failed")
 				}
 				teslLeft21 := p2.Y
 //line lesson03-records.tesl:153
 				if !teslrt.Equal(teslLeft21, teslrt.FromInt64(3)) {
+//line lesson03-records.tesl:153
 					teslT.Fatal("Tesl expectation failed")
 				}
 			}
@@ -394,6 +465,11 @@ func TestTesl10(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson03-records.tesl:157
 		r := Rectangle{Origin: Point{X: teslrt.FromInt64(2), Y: teslrt.FromInt64(3)}, Width: teslrt.FromInt64(10), Height: teslrt.FromInt64(5)}
@@ -405,21 +481,25 @@ func TestTesl10(teslT *testing.T) {
 			teslLeft22 := r2.Origin.X
 //line lesson03-records.tesl:159
 			if !teslrt.Equal(teslLeft22, teslrt.FromInt64(12)) {
+//line lesson03-records.tesl:159
 				teslT.Fatal("Tesl expectation failed")
 			}
 			teslLeft23 := r2.Origin.Y
 //line lesson03-records.tesl:160
 			if !teslrt.Equal(teslLeft23, teslrt.FromInt64(23)) {
+//line lesson03-records.tesl:160
 				teslT.Fatal("Tesl expectation failed")
 			}
 			teslLeft24 := r2.Width
 //line lesson03-records.tesl:161
 			if !teslrt.Equal(teslLeft24, teslrt.FromInt64(10)) {
+//line lesson03-records.tesl:161
 				teslT.Fatal("Tesl expectation failed")
 			}
 			teslLeft25 := r2.Height
 //line lesson03-records.tesl:162
 			if !teslrt.Equal(teslLeft25, teslrt.FromInt64(5)) {
+//line lesson03-records.tesl:162
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -433,6 +513,11 @@ func TestTesl11(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson03-records.tesl:166
 		r := Rectangle{Origin: Point{X: teslrt.FromInt64(7), Y: teslrt.FromInt64(9)}, Width: teslrt.FromInt64(4), Height: teslrt.FromInt64(4)}
@@ -444,16 +529,19 @@ func TestTesl11(teslT *testing.T) {
 			teslLeft26 := r2.Origin.X
 //line lesson03-records.tesl:168
 			if !teslrt.Equal(teslLeft26, teslrt.FromInt64(0)) {
+//line lesson03-records.tesl:168
 				teslT.Fatal("Tesl expectation failed")
 			}
 			teslLeft27 := r2.Origin.Y
 //line lesson03-records.tesl:169
 			if !teslrt.Equal(teslLeft27, teslrt.FromInt64(0)) {
+//line lesson03-records.tesl:169
 				teslT.Fatal("Tesl expectation failed")
 			}
 			teslLeft28 := r2.Width
 //line lesson03-records.tesl:170
 			if !teslrt.Equal(teslLeft28, teslrt.FromInt64(4)) {
+//line lesson03-records.tesl:170
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -467,6 +555,11 @@ func TestTesl12(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson03-records.tesl:174
 		r := Rectangle{Origin: Point{X: teslrt.FromInt64(0), Y: teslrt.FromInt64(0)}, Width: teslrt.FromInt64(16), Height: teslrt.FromInt64(9)}
@@ -478,11 +571,13 @@ func TestTesl12(teslT *testing.T) {
 			teslLeft29 := r2.Width
 //line lesson03-records.tesl:176
 			if !teslrt.Equal(teslLeft29, teslrt.FromInt64(9)) {
+//line lesson03-records.tesl:176
 				teslT.Fatal("Tesl expectation failed")
 			}
 			teslLeft30 := r2.Height
 //line lesson03-records.tesl:177
 			if !teslrt.Equal(teslLeft30, teslrt.FromInt64(16)) {
+//line lesson03-records.tesl:177
 				teslT.Fatal("Tesl expectation failed")
 			}
 			{
@@ -492,11 +587,13 @@ func TestTesl12(teslT *testing.T) {
 				teslLeft31 := r3.Width
 //line lesson03-records.tesl:179
 				if !teslrt.Equal(teslLeft31, teslrt.FromInt64(16)) {
+//line lesson03-records.tesl:179
 					teslT.Fatal("Tesl expectation failed")
 				}
 				teslLeft32 := r3.Height
 //line lesson03-records.tesl:180
 				if !teslrt.Equal(teslLeft32, teslrt.FromInt64(9)) {
+//line lesson03-records.tesl:180
 					teslT.Fatal("Tesl expectation failed")
 				}
 			}
@@ -511,6 +608,11 @@ func TestTesl13(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson03-records.tesl:184
 		r := Rectangle{Origin: Point{X: teslrt.FromInt64(0), Y: teslrt.FromInt64(0)}, Width: teslrt.FromInt64(5), Height: teslrt.FromInt64(3)}
@@ -522,11 +624,13 @@ func TestTesl13(teslT *testing.T) {
 			teslLeft33 := r2.Origin.X
 //line lesson03-records.tesl:186
 			if !teslrt.Equal(teslLeft33, teslrt.FromInt64(10)) {
+//line lesson03-records.tesl:186
 				teslT.Fatal("Tesl expectation failed")
 			}
 			teslLeft34 := r2.Origin.Y
 //line lesson03-records.tesl:187
 			if !teslrt.Equal(teslLeft34, teslrt.FromInt64(20)) {
+//line lesson03-records.tesl:187
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}

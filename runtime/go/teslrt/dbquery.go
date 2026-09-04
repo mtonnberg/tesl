@@ -28,6 +28,11 @@ type PgPlan struct {
 	// Args is nil for a statement with no placeholders.
 	Args    func() []any
 	Capture func(int)
+	// Probe is a second statement a dispatcher may run to EXPLAIN an empty result — for
+	// `updateAndReturnOne`, the `select count(*)` over the same predicate that tells "no row
+	// matched" from "more than one row matched". Empty for every other plan.
+	Probe     string
+	ProbeArgs func() []any
 }
 
 // PgSql is the constructor the emitter calls. A function rather than a struct literal because
@@ -35,6 +40,18 @@ type PgPlan struct {
 // nested multi-line value; a call with the argument thunk last is stable at every size.
 func PgSql(statement string, args func() []any) PgPlan {
 	return PgPlan{SQL: statement, Args: args}
+}
+
+// PgSqlProbed is `PgSql` plus the explaining probe (see PgPlan.Probe).
+func PgSqlProbed(statement string, args func() []any, probe string, probeArgs func() []any) PgPlan {
+	return PgPlan{SQL: statement, Args: args, Probe: probe, ProbeArgs: probeArgs}
+}
+
+func (plan PgPlan) probeArguments() []any {
+	if plan.ProbeArgs == nil {
+		return nil
+	}
+	return plan.ProbeArgs()
 }
 
 func (plan PgPlan) arguments() []any {
@@ -169,13 +186,35 @@ func DbUpdateReturnOne[Row any](database *Database, table *Table[Row], match fun
 	apply func(Row) Row, plan PgPlan, scan func(pgx.CollectableRow) (Row, error),
 	unique ...UniqueIndex[Row]) Row {
 	if connection := database.bound(); connection != nil {
-		updated := PgQueryPlan(connection, plan, scan)
+		updated := pgUpdateReturnOne(connection, plan, scan)
 		if len(updated) == 0 {
 			panic("updateAndReturnOne: no row matched")
 		}
 		return updated[0]
 	}
 	return TableUpdateReturnOne(table, match, apply, unique...)
+}
+
+// pgUpdateReturnOne runs the emitted `update … where <pred> and (select count(*) from …
+// where <pred>) = 1 returning …` statement. The count guard is what makes "one row" a
+// server-side guarantee: with two or more matches the statement updates NOTHING. A first
+// version selected the row by `ctid` through a scalar subquery, which raised
+// cardinality_violation for the ambiguous case but MISSED the row under contention — a
+// concurrent writer moves the row to a new ctid, and the outer TID scan keeps the statement's
+// snapshot, so an existing row answered "no row matched" (whitebox campaign, 2026-09-02).
+// The count form re-checks the predicate on the row's latest version instead. An empty
+// result is then explained by the plan's probe, so the ambiguous case still gets its own
+// trap — the same message the Memory table raises.
+func pgUpdateReturnOne[Row any](db *PostgresDB, plan PgPlan,
+	scan func(pgx.CollectableRow) (Row, error)) []Row {
+	updated := PgQueryPlan(db, plan, scan)
+	if len(updated) == 0 && plan.Probe != "" {
+		matched, exact := PgCount(db, plan.Probe, plan.probeArguments()).Int64()
+		if exact && matched > 1 {
+			panic(updateReturnOneAmbiguous)
+		}
+	}
+	return updated
 }
 
 // DbDelete is `delete`.

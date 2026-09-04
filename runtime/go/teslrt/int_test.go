@@ -9,6 +9,7 @@ import (
 	"sync"
 	"testing"
 	"testing/quick"
+	"time"
 	"unsafe"
 )
 
@@ -412,5 +413,95 @@ func TestIntLeafWrappers(t *testing.T) {
 			}
 		}()
 		MustPow(FromInt64(2), FromInt64(-1))
+	}()
+}
+
+// Int.pow with a request-controlled exponent used to pin a core for minutes
+// (3^200_000_000 took 47 s and 37 MB) before the handler's recover could run. The
+// bound is decided from the operands in constant time, so the refusal is immediate.
+func TestPowRefusesOversizedResultsQuickly(t *testing.T) {
+	t.Parallel()
+
+	started := time.Now()
+	_, err := Pow(FromInt64(3), FromInt64(200_000_000))
+	elapsed := time.Since(started)
+	if err != ErrPowTooLarge {
+		t.Fatalf("Pow(3, 2e8) error = %v, want ErrPowTooLarge", err)
+	}
+	if elapsed > 10*time.Millisecond {
+		t.Fatalf("Pow(3, 2e8) took %v; the bound must be decided without exponentiating", elapsed)
+	}
+	if !strings.Contains(err.Error(), "too large") || !strings.Contains(err.Error(), "1048576") {
+		t.Errorf("ErrPowTooLarge message should name the bound: %q", err.Error())
+	}
+
+	// The bound is on the RESULT size, not a numeric limit: everything below it still
+	// computes exactly. 2^(1<<19) sits exactly on the bound (2 bits * 2^19 = 2^20).
+	atBound, err := Pow(FromInt64(2), FromInt64(1<<19))
+	if err != nil {
+		t.Fatalf("Pow(2, 1<<19) error = %v", err)
+	}
+	if want := new(big.Int).Lsh(big.NewInt(1), 1<<19); atBound.String() != want.String() {
+		t.Error("Pow(2, 1<<19) does not match math/big")
+	}
+	if _, err := Pow(FromInt64(2), FromInt64(1<<19+1)); err != ErrPowTooLarge {
+		t.Errorf("Pow(2, 1<<19 + 1) error = %v, want ErrPowTooLarge (one past the bound)", err)
+	}
+	thousand, err := Pow(FromInt64(10), FromInt64(1000))
+	if err != nil {
+		t.Fatalf("Pow(10, 1000) error = %v", err)
+	}
+	if want := new(big.Int).Exp(big.NewInt(10), big.NewInt(1000), nil); thousand.String() != want.String() {
+		t.Error("Pow(10, 1000) does not match math/big")
+	}
+	negative, err := Pow(FromInt64(-3), FromInt64(7))
+	if err != nil || negative.String() != "-2187" {
+		t.Errorf("Pow(-3, 7) = %s, %v", negative.String(), err)
+	}
+
+	// |base| <= 1 is cheap for any exponent and never measured against the bound.
+	huge := MustParseDecimal("999999999999999999999999999999")
+	for _, row := range []struct {
+		base     int64
+		exponent Int
+		want     string
+	}{
+		{1, huge, "1"},
+		{0, huge, "0"},
+		{-1, huge, "-1"},
+		{-1, Add(huge, FromInt64(1)), "1"},
+		{0, Int{}, "1"},
+		{-1, Int{}, "1"},
+		{1, FromInt64(200_000_000), "1"},
+	} {
+		got, err := Pow(FromInt64(row.base), row.exponent)
+		if err != nil || got.String() != row.want {
+			t.Errorf("Pow(%d, %s) = %s, %v; want %s", row.base, row.exponent.String(), got.String(), err, row.want)
+		}
+	}
+
+	// An exponent that does not fit int64 is refused by the same rule, never converted.
+	if _, err := Pow(FromInt64(2), huge); err != ErrPowTooLarge {
+		t.Errorf("Pow(2, huge) error = %v, want ErrPowTooLarge", err)
+	}
+	if _, err := Pow(huge, huge); err != ErrPowTooLarge {
+		t.Errorf("Pow(huge, huge) error = %v, want ErrPowTooLarge", err)
+	}
+	if _, err := Pow(FromInt64(2), Neg(huge)); err != ErrNegativePower {
+		t.Errorf("Pow(2, -huge) error = %v, want ErrNegativePower (sign is checked first)", err)
+	}
+
+	// MustPow keeps the emitter's trap shape: a plain panic carrying the error text.
+	func() {
+		defer func() {
+			recovered := recover()
+			if recovered == nil {
+				t.Fatal("MustPow past the bound must panic")
+			}
+			if text, _ := recovered.(string); !strings.Contains(text, ErrPowTooLarge.Error()) {
+				t.Errorf("MustPow panic = %v, want the ErrPowTooLarge text", recovered)
+			}
+		}()
+		MustPow(FromInt64(3), FromInt64(200_000_000))
 	}()
 }

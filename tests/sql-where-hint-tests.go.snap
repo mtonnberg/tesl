@@ -76,6 +76,11 @@ func TestTesl0(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line sql-where-hint-tests.tesl:33
 		_ = teslrt.TableInsert(OrgWTable, "OrgW", OrgW{Id: "o1", Name: "acme"}, func(teslRow, teslNew OrgW) bool { return (teslRow.Id == teslNew.Id) })
@@ -99,6 +104,7 @@ func TestTesl0(teslT *testing.T) {
 					}
 				}
 			}()) {
+//line sql-where-hint-tests.tesl:35
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -112,6 +118,11 @@ func TestTesl1(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line sql-where-hint-tests.tesl:41
 		_ = teslrt.TableInsert(OrgWTable, "OrgW", OrgW{Id: "same", Name: "beta"}, func(teslRow, teslNew OrgW) bool { return (teslRow.Id == teslNew.Id) })
@@ -122,6 +133,7 @@ func TestTesl1(teslT *testing.T) {
 			teslLeft1 := countBoth(pr)
 //line sql-where-hint-tests.tesl:43
 			if !teslrt.Equal(teslLeft1, teslrt.FromInt64(1)) {
+//line sql-where-hint-tests.tesl:43
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -135,6 +147,11 @@ func TestTesl2(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line sql-where-hint-tests.tesl:47
 		pr := ProjW{Id: "px", Name: "no-such-org"}
@@ -153,6 +170,7 @@ func TestTesl2(teslT *testing.T) {
 				}
 			}
 		}()) {
+//line sql-where-hint-tests.tesl:48
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}

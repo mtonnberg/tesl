@@ -75,6 +75,24 @@ func FuzzIntArithmeticAgainstBig(f *testing.F) {
 			assertMatchesBig(t, quotient, new(big.Int).Quo(bigLeft, bigRight))
 			assertMatchesBig(t, remainder, new(big.Int).Rem(bigLeft, bigRight))
 		}
+		// Pow: every accepted power matches math/big, and a refusal happens exactly when
+		// bits(base)*exponent exceeds maxPowResultBits with |base| >= 2. An accepted result
+		// is at most maxPowResultBits wide, so the oracle stays cheap.
+		if right.Sign() >= 0 {
+			power, err := Pow(left, right)
+			bound := new(big.Int).Mul(big.NewInt(int64(bigLeft.BitLen())), bigRight)
+			overBound := bigLeft.BitLen() > 1 && bound.Cmp(big.NewInt(maxPowResultBits)) > 0
+			switch {
+			case err == nil && overBound:
+				t.Fatalf("Pow(%s, %s) computed a result past the bound", leftText, rightText)
+			case err == ErrPowTooLarge && !overBound:
+				t.Fatalf("Pow(%s, %s) refused a result within the bound", leftText, rightText)
+			case err == nil:
+				assertMatchesBig(t, power, new(big.Int).Exp(bigLeft, bigRight, nil))
+			case err != ErrPowTooLarge:
+				t.Fatal(err)
+			}
+		}
 	})
 }
 

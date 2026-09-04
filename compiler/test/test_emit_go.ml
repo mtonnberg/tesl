@@ -4153,7 +4153,7 @@ server ClauseServer for ClauseApi {
   sessionRevoked revoked
   listenAddress Loopback
   healthProbePath "/healthz"
-  contentSecurityPolicy "default-src 'self'"
+  contentSecurityPolicy "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self'"
   trustedProxies ["10.0.0.1"]
 }
 
@@ -4189,7 +4189,7 @@ let test_server_clauses_with_go () =
         "teslrt.SetPreviousSessionKey(teslrt.SecretPointer(teslrt.RequireSecret(\"GOCLAUSES_PREVIOUS_KEY\")))";
       "sessionRevoked", "teslrt.SetSessionRevokedHook(func(teslSubject string, teslIssuedAt int64) bool {";
       "healthProbePath", "teslrt.SetHealthProbePath(\"/healthz\")";
-       "contentSecurityPolicy", "teslrt.SetContentSecurityPolicy(\"default-src 'self'\")";
+       "contentSecurityPolicy", "teslrt.SetContentSecurityPolicy(\"default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self'\")";
        "trustedProxies", "[]string{\"10.0.0.1\"}" ];
   (* The hook is handed `iat` in SECONDS and the clause's fn takes a `PosixMillis`, so the
      adapter has to convert — a hook given milliseconds compares against the wrong epoch and

@@ -109,9 +109,15 @@ func TestTesl0(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft1 := Double(teslrt.FromInt64(5))
 //line lesson40-implicit-value-unwrapping.tesl:62
 	if !teslrt.Equal(teslLeft1, teslrt.FromInt64(10)) {
+//line lesson40-implicit-value-unwrapping.tesl:62
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -123,9 +129,15 @@ func TestTesl1(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft2 := add(teslrt.FromInt64(3), teslrt.FromInt64(4))
 //line lesson40-implicit-value-unwrapping.tesl:66
 	if !teslrt.Equal(teslLeft2, teslrt.FromInt64(7)) {
+//line lesson40-implicit-value-unwrapping.tesl:66
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -137,9 +149,15 @@ func TestTesl2(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft3 := multiply(teslrt.FromInt64(6), teslrt.FromInt64(7))
 //line lesson40-implicit-value-unwrapping.tesl:70
 	if !teslrt.Equal(teslLeft3, teslrt.FromInt64(42)) {
+//line lesson40-implicit-value-unwrapping.tesl:70
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -151,12 +169,19 @@ func TestTesl3(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line lesson40-implicit-value-unwrapping.tesl:74
 	if !(IsAdult(teslrt.FromInt64(18))) {
+//line lesson40-implicit-value-unwrapping.tesl:74
 		teslT.Fatal("Tesl expectation failed")
 	}
 //line lesson40-implicit-value-unwrapping.tesl:75
 	if IsAdult(teslrt.FromInt64(17)) {
+//line lesson40-implicit-value-unwrapping.tesl:75
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -168,12 +193,19 @@ func TestTesl4(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line lesson40-implicit-value-unwrapping.tesl:79
 	if !(isEqual(teslrt.FromInt64(3), teslrt.FromInt64(3))) {
+//line lesson40-implicit-value-unwrapping.tesl:79
 		teslT.Fatal("Tesl expectation failed")
 	}
 //line lesson40-implicit-value-unwrapping.tesl:80
 	if isEqual(teslrt.FromInt64(3), teslrt.FromInt64(4)) {
+//line lesson40-implicit-value-unwrapping.tesl:80
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -185,9 +217,15 @@ func TestTesl5(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft4 := Greet("Alice")
 //line lesson40-implicit-value-unwrapping.tesl:84
 	if teslLeft4 != "Hello, Alice!" {
+//line lesson40-implicit-value-unwrapping.tesl:84
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -199,9 +237,15 @@ func TestTesl6(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft5 := describe(teslrt.FromInt64(42))
 //line lesson40-implicit-value-unwrapping.tesl:88
 	if teslLeft5 != "The value is 42" {
+//line lesson40-implicit-value-unwrapping.tesl:88
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -213,14 +257,21 @@ func TestTesl7(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft6 := AbsVal(teslrt.FromInt64(5))
 //line lesson40-implicit-value-unwrapping.tesl:92
 	if !teslrt.Equal(teslLeft6, teslrt.FromInt64(5)) {
+//line lesson40-implicit-value-unwrapping.tesl:92
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft7 := AbsVal(teslrt.FromInt64(-3))
 //line lesson40-implicit-value-unwrapping.tesl:93
 	if !teslrt.Equal(teslLeft7, teslrt.FromInt64(3)) {
+//line lesson40-implicit-value-unwrapping.tesl:93
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -232,12 +283,19 @@ func TestTesl8(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line lesson40-implicit-value-unwrapping.tesl:97
 	if !(negate(false)) {
+//line lesson40-implicit-value-unwrapping.tesl:97
 		teslT.Fatal("Tesl expectation failed")
 	}
 //line lesson40-implicit-value-unwrapping.tesl:98
 	if negate(true) {
+//line lesson40-implicit-value-unwrapping.tesl:98
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -249,14 +307,21 @@ func TestTesl9(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft8 := Classify(true, teslrt.FromInt64(10), teslrt.FromInt64(20))
 //line lesson40-implicit-value-unwrapping.tesl:102
 	if !teslrt.Equal(teslLeft8, teslrt.FromInt64(10)) {
+//line lesson40-implicit-value-unwrapping.tesl:102
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft9 := Classify(false, teslrt.FromInt64(10), teslrt.FromInt64(20))
 //line lesson40-implicit-value-unwrapping.tesl:103
 	if !teslrt.Equal(teslLeft9, teslrt.FromInt64(20)) {
+//line lesson40-implicit-value-unwrapping.tesl:103
 		teslT.Fatal("Tesl expectation failed")
 	}
 }

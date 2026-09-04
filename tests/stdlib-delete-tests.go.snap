@@ -102,8 +102,14 @@ func TestTesl0(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line stdlib-delete-tests.tesl:45
 	if dropKey("a") {
+//line stdlib-delete-tests.tesl:45
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -115,8 +121,14 @@ func TestTesl1(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line stdlib-delete-tests.tesl:49
 	if dropElem(teslrt.FromInt64(7)) {
+//line stdlib-delete-tests.tesl:49
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -128,9 +140,15 @@ func TestTesl2(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft1 := rollInRange()
 //line stdlib-delete-tests.tesl:53
 	if !teslrt.Equal(teslLeft1, teslrt.FromInt64(5)) {
+//line stdlib-delete-tests.tesl:53
 		teslT.Fatal("Tesl expectation failed")
 	}
 }

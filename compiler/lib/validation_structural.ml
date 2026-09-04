@@ -26,6 +26,49 @@ let valid_public_origin (s : string) : bool =
       loopback && host_rest_ok rest
     end else false
 
+(* The HTML served by the runtime needs an explicit CSP baseline.  This is a
+   deliberately small parser: it does not try to implement the whole CSP
+   grammar, but rejects the source expressions that make the policy unsafe and
+   requires the directives that make the browser enforce the intended floor. *)
+let insecure_content_security_policy (policy : string) : string option =
+  let required = ["default-src"; "base-uri"; "object-src"; "frame-ancestors";
+                  "form-action"; "script-src"; "style-src"] in
+  let seen = Hashtbl.create 8 in
+  let forbidden = ["*"; "'unsafe-inline'"; "'unsafe-eval'"; "data:"; "blob:"; "http:"; "https:"] in
+  let words segment =
+    Str.split (Str.regexp "[ \t\r\n]+") (String.trim segment)
+    |> List.filter (fun word -> word <> "")
+  in
+  let bad = ref None in
+  List.iter (fun segment ->
+    match words segment with
+    | [] -> ()
+    | name :: sources ->
+      let name = String.lowercase_ascii name in
+      Hashtbl.replace seen name ();
+      if List.exists (fun source -> List.mem (String.lowercase_ascii source) forbidden) sources
+      then bad := Some "contains a wildcard, inline/eval execution, or unrestricted data/blob/http(s) source"
+  ) (String.split_on_char ';' policy);
+  match !bad with
+  | Some reason -> Some reason
+  | None ->
+    (match List.find_opt (fun name -> not (Hashtbl.mem seen name)) required with
+     | Some name -> Some (Printf.sprintf "is missing required directive `%s`" name)
+     | None -> None)
+
+let check_content_security_policy (decls : top_decl list) : validation_error list =
+  List.filter_map (function
+    | DServer server ->
+      (match server.content_security_policy with
+       | Some policy ->
+         (match insecure_content_security_policy policy with
+          | None -> None
+          | Some reason -> Some (make_error ~code:"SEC006" server.loc
+              (Printf.sprintf "server '%s' has an insecure contentSecurityPolicy: %s" server.name reason)))
+       | None -> None)
+    | _ -> None
+  ) decls
+
 (* build_field_proof_map now lives in Validation_common (shared via module_facts). *)
 
 let rec carried_proofs_of_expr
@@ -912,8 +955,34 @@ let check_upsert_conflict_target ?facts ?(extra_funcs=[]) (decls : top_decl list
   | [] -> []
   | _ ->
     let errors = ref [] in
+    let check_target loc entity_name conflict =
+      match entity_name with
+      | None -> ()
+      | Some en ->
+        (match List.find_opt (fun (e : entity_form) -> e.name = en) entities with
+         | None -> ()   (* unknown entity — reported by the entity/name passes *)
+         | Some ent ->
+           let is_pk = (conflict = [ ent.primary_key ]) in
+           let matches_unique =
+             List.exists (fun (ix : entity_index) ->
+                 ix.ix_unique && ix.ix_fields = conflict) ent.indexes
+           in
+           if conflict <> [] && not is_pk && not matches_unique then
+             errors := make_error loc
+               ~hint:(Printf.sprintf
+                 "add `unique index [%s]` to entity `%s`, or conflict on the primary key `%s`"
+                 (String.concat ", " conflict) en ent.primary_key)
+               (Printf.sprintf
+                 "`upsert %s … onConflict [%s]` needs a unique index on (%s): PostgreSQL cannot infer a conflict target without one and fails at runtime"
+                 en (String.concat ", " conflict) (String.concat ", " conflict))
+               :: !errors)
+    in
     let check_expr (e : expr) =
       Ast_visitor.iter (fun node ->
+          match node with
+          | ESqlQuery { query = QueryUpsert q; loc } ->
+            check_target loc (Some q.entity) q.conflict
+          | _ ->
           match collect_call_head_and_args [] node with
           (* The full spine, exactly as the emitter matches it.  A looser prefix
              match would also fire on every partial application inside the same
@@ -932,29 +1001,7 @@ let check_upsert_conflict_target ?facts ?(extra_funcs=[]) (decls : top_decl list
                   | EField { field; _ } -> Some field
                   | _ -> None) elems
             in
-            (match entity_name with
-             | None -> ()
-             | Some en ->
-               (match List.find_opt (fun (e : entity_form) -> e.name = en) entities with
-                | None -> ()   (* unknown entity — reported by the entity/name passes *)
-                | Some ent ->
-                  let is_pk = (conflict = [ ent.primary_key ]) in
-                  let matches_unique =
-                    List.exists (fun (ix : entity_index) ->
-                        ix.ix_unique && ix.ix_fields = conflict) ent.indexes
-                  in
-                  if conflict <> [] && not is_pk && not matches_unique then
-                    errors := make_error loc
-                      ~hint:(Printf.sprintf
-                        "add `unique index [%s]` to entity `%s`, or conflict on the \
-                         primary key `%s`"
-                        (String.concat ", " conflict) en ent.primary_key)
-                      (Printf.sprintf
-                        "`upsert %s … onConflict [%s]` needs a unique index on \
-                         (%s): PostgreSQL cannot infer a conflict target without \
-                         one and fails at runtime"
-                        en (String.concat ", " conflict) (String.concat ", " conflict))
-                      :: !errors))
+             check_target loc entity_name conflict
           | _ -> ()) e
     in
     List.iter (function
@@ -1359,20 +1406,24 @@ let check_capture_proof_via
                      | EstablishKind -> "establish" | MainKind -> "main"
                      | CheckKind -> "check" | AuthKind -> "auth")))
              | Some info ->
-               let covered = pred_names_of_return_spec info.fi_return in
-               let uncovered =
-                 List.filter (fun p -> not (List.mem p covered)) required_preds in
+               ignore required_preds;
+               let covered = proof_apps_of_return_spec info.fi_return in
+               let declared = proof_apps_of ~subject:cf.binding.name proof in
+               let uncovered = uncovered_proof_apps ~declared ~covered in
+               let show apps = String.concat ", "
+                   (List.map (fun app -> "`" ^ describe_proof_app app ^ "`") apps) in
                if uncovered = [] then None
                else
                  Some (make_error cf.binding.loc
                    ~hint:(Printf.sprintf
-                     "`via %s` establishes %s; use a check function that produces %s"
+                     "`via %s` establishes %s; use a check function that produces %s with the \
+                      same arguments (only the value's own name may differ)"
                      via_fn
-                     (if covered = [] then "no proof" else String.concat ", " covered)
-                     (String.concat ", " uncovered))
+                     (if covered = [] then "no proof" else show covered)
+                     (show uncovered))
                    (Printf.sprintf
                      "capture `%s` declares proof %s that is not established by `via %s`"
-                     cf.name (String.concat ", " uncovered) via_fn)))))
+                     cf.name (show uncovered) via_fn)))))
     | _ -> None
   ) decls
 
@@ -1419,20 +1470,24 @@ let check_auth_proof_via
                   (Printf.sprintf "endpoint `%s`: auth `via %s` is a %s, not a check/auth function"
                      ep.name via_fn (kind_label info.fi_kind)))
               | Some info ->
-                let covered = pred_names_of_return_spec info.fi_return in
-                let uncovered =
-                  List.filter (fun p -> not (List.mem p covered)) required_preds in
+                ignore required_preds;
+                let covered = proof_apps_of_return_spec info.fi_return in
+                let declared = proof_apps_of ~subject:a.binding.name proof in
+                let uncovered = uncovered_proof_apps ~declared ~covered in
+                let show apps = String.concat ", "
+                    (List.map (fun app -> "`" ^ describe_proof_app app ^ "`") apps) in
                 if uncovered = [] then None
                 else
                   Some (make_error a.binding.loc
                     ~hint:(Printf.sprintf
-                      "`via %s` establishes %s; use an auth function that produces %s"
+                      "`via %s` establishes %s; use an auth function that produces %s with the \
+                       same arguments (only the value's own name may differ)"
                       via_fn
-                      (if covered = [] then "no proof" else String.concat ", " covered)
-                      (String.concat ", " uncovered))
+                      (if covered = [] then "no proof" else show covered)
+                      (show uncovered))
                     (Printf.sprintf
                        "endpoint `%s` declares auth proof %s that is not established by `via %s`"
-                       ep.name (String.concat ", " uncovered) via_fn))))
+                       ep.name (show uncovered) via_fn))))
       ) api.endpoints
     | _ -> []
   ) decls

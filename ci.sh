@@ -643,11 +643,15 @@ if [ "$go_gate_fail" -eq 0 ]; then
       fi
       go test -count=1 ./... &&
       go test -race -count=1 ./... &&
-      go test ./teslrt -run '^$' -fuzz '^FuzzIntDecimalAndJSONRoundTrip$' -fuzztime="${TESL_GO_FUZZTIME:-3s}" &&
-      go test ./teslrt -run '^$' -fuzz '^FuzzIntArithmeticAgainstBig$' -fuzztime="${TESL_GO_FUZZTIME:-3s}" &&
-      go test ./teslrt -run '^$' -fuzz '^FuzzIntJSONInput$' -fuzztime="${TESL_GO_FUZZTIME:-3s}" &&
-      go test ./internal/protocol -run '^$' -fuzz '^FuzzReaderAcceptsWriterFrames$' -fuzztime="${TESL_GO_FUZZTIME:-3s}" &&
-      go test ./internal/protocol -run '^$' -fuzz '^FuzzUTF16PositionsNeverPanic$' -fuzztime="${TESL_GO_FUZZTIME:-3s}" &&
+      # Fuzz targets go through scripts/go-fuzz-target.sh: it retries ONLY the Go fuzz
+      # engine's own -fuzztime deadline race ("context deadline exceeded", no crasher
+      # written); a real finding still fails on the first run.  TESL_GO_FUZZTIME sets
+      # the budget per target (default 3s).
+      bash "$SCRIPT_DIR/scripts/go-fuzz-target.sh" ./teslrt FuzzIntDecimalAndJSONRoundTrip &&
+      bash "$SCRIPT_DIR/scripts/go-fuzz-target.sh" ./teslrt FuzzIntArithmeticAgainstBig &&
+      bash "$SCRIPT_DIR/scripts/go-fuzz-target.sh" ./teslrt FuzzIntJSONInput &&
+      bash "$SCRIPT_DIR/scripts/go-fuzz-target.sh" ./internal/protocol FuzzReaderAcceptsWriterFrames &&
+      bash "$SCRIPT_DIR/scripts/go-fuzz-target.sh" ./internal/protocol FuzzUTF16PositionsNeverPanic &&
       go vet ./... &&
       CGO_ENABLED=0 go build ./... &&
       staticcheck ./... &&
@@ -701,15 +705,23 @@ fi
 # snapshot, the Build phase just promoted a different version and the tracked
 # file is now dirty.  Fail so a stale embedded copy (out-of-date `tesl help`)
 # cannot ship.  Depends on the Build phase having run `dune build` first.
-phase_begin "Embedded-docs sync (embedded_docs.ml up to date)"
+phase_begin "Embedded sync (embedded_docs.ml + embedded_go_runtime.ml up to date)"
 if ! command -v git >/dev/null 2>&1 || ! git -C "$SCRIPT_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     printf "  %s⚠%s  git unavailable / not a work tree — skipping\n" "$C_YELLOW" "$C_RESET"
     phase_end SKIP
-elif git -C "$SCRIPT_DIR" diff --quiet -- compiler/lib/embedded_docs.ml; then
-    phase_end OK
-else
+elif ! git -C "$SCRIPT_DIR" diff --quiet -- compiler/lib/embedded_docs.ml; then
     printf "  %s✗%s  embedded_docs.ml is stale vs manual/ + example/ — run 'dune build' (it promotes the snapshot) and commit compiler/lib/embedded_docs.ml\n" "$C_RED" "$C_RESET"
     phase_end FAIL
+elif ! git -C "$SCRIPT_DIR" diff --quiet -- compiler/lib/go_runtime/embedded/embedded_go_runtime.ml; then
+    # The SAME rule for the Go runtime the compiler bakes into every emitted module
+    # (compiler/lib/go_runtime/embedded/embedded_go_runtime.ml, promoted from runtime/go/teslrt).  Phase 2a
+    # tests the SOURCE tree; users receive the EMBEDDED copy — so a stale copy here is a
+    # runtime fix that passed CI and did not ship.  test_embedded_go_runtime_seam.ml
+    # compares the two byte for byte as well; this is the belt to its braces.
+    printf "  %s✗%s  embedded_go_runtime.ml is stale vs runtime/go/teslrt — run 'dune build' (it promotes the snapshot) and commit compiler/lib/go_runtime/embedded/embedded_go_runtime.ml\n" "$C_RED" "$C_RESET"
+    phase_end FAIL
+else
+    phase_end OK
 fi
 
 # ══════════════════════════════════════════════════════════════════════════════

@@ -116,6 +116,12 @@ func (value JsonValue) JsonRaw() any { return value.raw }
 // sends is JSON — the SSO failure page is a fixed HTML document — and trapping here made
 // `expect resp.status == 401` fail on a response whose STATUS was exactly what the test
 // asked about.
+//
+// A body that STARTS like a JSON document (`{`, `[` or `"`) and then fails to parse is the
+// one case that traps, naming the body. That shape is never a legitimate text response — it is
+// a JSON producer that went wrong (a server that answered `{"value":+Inf}`, or a test's own
+// `body { … }` template with a typo) — and degrading it to a string turned the failure into
+// `resp.body.label` reading null three assertions later, with nothing pointing at the body.
 func JsonParseBody(body string) JsonValue {
 	trimmed := strings.TrimSpace(body)
 	if trimmed == "" {
@@ -123,9 +129,28 @@ func JsonParseBody(body string) JsonValue {
 	}
 	parsed, err := ParseJSON([]byte(trimmed))
 	if err != nil {
+		if looksLikeJSONDocument(trimmed) {
+			panic(fmt.Sprintf("api-test: the body starts like JSON but does not parse (%v): %s",
+				err, bodyPrefix(trimmed)))
+		}
 		return JsonOf(body)
 	}
 	return JsonOf(parsed)
+}
+
+func looksLikeJSONDocument(trimmed string) bool {
+	return strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "[") ||
+		strings.HasPrefix(trimmed, "\"")
+}
+
+// bodyPrefix is enough of a body to recognise it in a trap message, and no more: the body may
+// be a megabyte, and the message is for a test log.
+func bodyPrefix(body string) string {
+	const limit = 200
+	if len(body) <= limit {
+		return body
+	}
+	return body[:limit] + "…"
 }
 
 // JsonFieldOf is `value.field` inside an api-test: a missing key — or a field read on

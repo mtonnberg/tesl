@@ -171,6 +171,8 @@ both rows:
 | `tesl_playground.js` — parser, type checker, proof checker, validation, linter, all three emitters | **1 127 187 B** (1.07 MiB) | **359 603 B** (351 KiB) |
 | the same, plus `teslExplain` (`Error_codes.explain`) | 1 130 405 B | 360 602 B |
 | the same, plus one reference to `Embedded_docs` | 3 424 269 B (3.27 MiB) | 867 613 B (847 KiB) |
+| after the Go migration (#82), `Embedded_go_runtime` linked in through `Emit_go` | 2 369 713 B (2.26 MiB) | 719 817 B (703 KiB) |
+| the same, with the runtime as a virtual library and the empty implementation linked | **1 516 821 B** (1.45 MiB) | **481 815 B** (471 KiB) |
 
 Row 2 is the shipping artifact and is measured on a later snapshot of the compiler
 than row 1, so the +3 218 B between them is mostly ordinary compiler growth: the
@@ -179,6 +181,18 @@ building the same tree with and without it. The 2 MB ceiling is untouched.
 
 `build.sh` re-reports the first row on every build; prefer its output to this
 table if they disagree.
+
+**The embedded Go runtime is NOT free: `emit_go.ml` references it statically.**
+`compiler/lib/go_runtime/embedded/embedded_go_runtime.ml` is 860 KB of Go source as
+OCaml string literals, and `Emit_go.compile_module` (reachable from `Compile`, which
+the driver links) reads `Embedded_go_runtime.files`. The OCaml linker therefore
+includes the unit in every executable that links the compiler library, and
+`js_of_ocaml` cannot drop a list literal that module initialisation builds — the
+2.37 MB row above. The fix is a dune **virtual library** (`compiler/lib/go_runtime`):
+the interface is all the compiler depends on, `bin/main.exe` and the tests get the real
+snapshot as the default implementation, and `compiler/playground/dune` names
+`tesl_go_runtime_none` (`files = []`). The remaining growth over row 1 (+0.39 MB raw)
+is the Go emitter itself.
 
 **The embedded manual is free as long as nothing reaches for it.**
 `compiler/lib/embedded_docs.ml` is 2.3 MB of OCaml string literals, but the

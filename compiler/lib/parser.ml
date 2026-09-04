@@ -4224,9 +4224,18 @@ let parse_capture_form s =
           (match parse_proof_expr s with Ok p -> return (Some p) | Err _ -> return None)
         end else return None
       in
+      (* The binder is the LAST IDENTIFIER argument, not the last argument: a predicate
+         with a literal parameter (`CanAccess who "admin"`) used to make the binder the
+         literal, so the declared proof's subject was never the captured value — which is
+         also what let the via-coverage check compare the wrong argument. *)
+      let is_identifier arg =
+        String.length arg > 0 && arg.[0] >= 'a' && arg.[0] <= 'z' in
       let rec abbreviated_binding_name default = function
         | PredApp { args = []; _ } -> default
-        | PredApp { args; _ } -> List.hd (List.rev args)
+        | PredApp { args; _ } ->
+          (match List.filter is_identifier (List.rev args) with
+           | ident :: _ -> ident
+           | [] -> default)
         | PredAnd { left; right; _ } ->
           let right_name = abbreviated_binding_name default right in
           if right_name <> default then right_name
@@ -5071,12 +5080,11 @@ and parse_test_stmt_items s =
     let saved = s.allow_test_multiline_request_continuations in
     s.allow_test_multiline_request_continuations <- false;
     let result =
-      match parse_expr s with
-      | Ok e ->
-        let e = wrap_sql_expr e in
-        skip_newlines s;
-        (match peek s with
-         | INDENT ->
+       match parse_expr s with
+       | Ok e ->
+         skip_newlines s;
+         (match peek s with
+          | INDENT ->
            advance s;
            (match parse_stmt_seq s with
             | Ok body ->
@@ -5087,8 +5095,12 @@ and parse_test_stmt_items s =
                                      loc = expr_loc e } in
                let combined = wrap_sql_expr combined in
               return [TsExpr { e = combined; loc = expr_loc combined }]
-            | Err _ -> return [TsExpr { e; loc = expr_loc e }])
-         | _ -> return [TsExpr { e; loc = expr_loc e }])
+             | Err _ ->
+               let e = wrap_sql_expr e in
+               return [TsExpr { e; loc = expr_loc e }])
+          | _ ->
+            let e = wrap_sql_expr e in
+            return [TsExpr { e; loc = expr_loc e }])
       | Err _ -> return []
     in
     s.allow_test_multiline_request_continuations <- saved;

@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"math"
 	"math/big"
 	"sort"
 	"strings"
@@ -26,6 +28,13 @@ import (
 
 // ParseJSON parses a request body. A parse failure is the caller's to report, matching
 // the "Malformed JSON payload" 400 the Racket server produces.
+//
+// The body must be EXACTLY ONE JSON value. `json.Decoder` reads a stream, so on its own it
+// would accept `{"n":1} garbage` and `{"n":1}{"n":2}` and answer the first document — which
+// is not what Racket's `string->jsexpr` does (it rejects trailing content) and is the seam a
+// proxy or WAF that parsed the same bytes as "malformed" would disagree with the app across.
+// The check is a second Decode that must hit EOF: `decoder.More()` is not enough because it
+// answers false for a stray `}` as well as for the end of input.
 func ParseJSON(data []byte) (any, error) {
 	decoder := json.NewDecoder(strings.NewReader(string(data)))
 	decoder.UseNumber()
@@ -33,7 +42,39 @@ func ParseJSON(data []byte) (any, error) {
 	if err := decoder.Decode(&value); err != nil {
 		return nil, err
 	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		return nil, errors.New("unexpected content after the JSON value")
+	}
 	return value, nil
+}
+
+// maxJSONIntegerDigits bounds the decimal literal an `Int` field accepts. `big.Int.SetString`
+// is quadratic in the digit count, so a 1 MiB body of digits — inside the body cap — costs
+// about two seconds of CPU per request: an amplification vector rather than a hang, closed
+// by refusing the literal before the conversion starts. 4096 digits is ~13600 bits, far past
+// any quantity a program models as an Int.
+const maxJSONIntegerDigits = maxDecimalDigits
+
+// parseJSONInteger is the one place a JSON number becomes an `Int`, for the field and value
+// decoders alike. The messages name the SHAPE of what arrived and never echo it: a decode
+// error is answered to the client as the 400 body, and reflecting a 1 MiB submitted value
+// (in Go `map[...]` syntax, no less) back at it is noise at best.
+func parseJSONInteger(raw any) (Int, error) {
+	number, ok := raw.(json.Number)
+	if !ok {
+		return Int{}, fmt.Errorf("expected JSON integer, got %s", jsonTypeName(raw))
+	}
+	digits := number.String()
+	if len(digits) > maxJSONIntegerDigits {
+		return Int{}, fmt.Errorf("JSON integer has %d digits; at most %d are accepted",
+			len(digits), maxJSONIntegerDigits)
+	}
+	value, ok := new(big.Int).SetString(digits, 10)
+	if !ok {
+		return Int{}, errors.New("expected JSON integer, got a non-integer number")
+	}
+	return fromBig(value), nil
 }
 
 // jsonField returns the raw value at key. A missing field is an error rather than a
@@ -70,7 +111,7 @@ func DecodeStringField(object any, key string) (string, error) {
 	}
 	text, ok := raw.(string)
 	if !ok {
-		return "", fmt.Errorf("expected JSON string, got %v", raw)
+		return "", fmt.Errorf("expected JSON string, got %s", jsonTypeName(raw))
 	}
 	return text, nil
 }
@@ -82,16 +123,7 @@ func DecodeIntField(object any, key string) (Int, error) {
 	if err != nil {
 		return Int{}, err
 	}
-	number, ok := raw.(json.Number)
-	if !ok {
-		return Int{}, fmt.Errorf("expected JSON integer, got %v", raw)
-	}
-	digits := number.String()
-	value, ok := new(big.Int).SetString(digits, 10)
-	if !ok {
-		return Int{}, fmt.Errorf("expected JSON integer, got %v", digits)
-	}
-	return fromBig(value), nil
+	return parseJSONInteger(raw)
 }
 
 func DecodeBoolField(object any, key string) (bool, error) {
@@ -101,7 +133,7 @@ func DecodeBoolField(object any, key string) (bool, error) {
 	}
 	flag, ok := raw.(bool)
 	if !ok {
-		return false, fmt.Errorf("expected JSON boolean, got %v", raw)
+		return false, fmt.Errorf("expected JSON boolean, got %s", jsonTypeName(raw))
 	}
 	return flag, nil
 }
@@ -113,7 +145,7 @@ func DecodeFloatField(object any, key string) (float64, error) {
 	}
 	number, ok := raw.(json.Number)
 	if !ok {
-		return 0, fmt.Errorf("expected JSON number, got %v", raw)
+		return 0, fmt.Errorf("expected JSON number, got %s", jsonTypeName(raw))
 	}
 	return number.Float64()
 }
@@ -123,7 +155,7 @@ func DecodeFloatField(object any, key string) (float64, error) {
 func DecodeStringValue(raw any) (string, error) {
 	text, ok := raw.(string)
 	if !ok {
-		return "", fmt.Errorf("expected JSON string, got %v", raw)
+		return "", fmt.Errorf("expected JSON string, got %s", jsonTypeName(raw))
 	}
 	return text, nil
 }
@@ -201,6 +233,13 @@ func EncodeJSON(fields map[string]any) string {
 
 // EncodeJSONValue renders one value. `Int` is rendered from its decimal digits so a
 // bignum is not routed through a float, and a nested object keeps the sorted-key rule.
+//
+// A NON-FINITE Float TRAPS. JSON has no NaN or infinity, and `FormatFloat` — the display
+// formatter — spells them `NaN`/`+Inf`/`-Inf`, which a client's JSON parser rejects: a handler
+// answering `Float.exp 1000.0` would send a `200 application/json` whose body is not JSON.
+// Racket's `jsexpr->string` raises on `+inf.0`, and this is that raise; `writeResponse` turns
+// it into the sanitized 500 every other trap becomes. `null` was the alternative and is worse:
+// it would let the overflow pass as "no value" and be stored or summed downstream.
 func EncodeJSONValue(value any) string {
 	switch typed := value.(type) {
 	case Int:
@@ -214,6 +253,9 @@ func EncodeJSONValue(value any) string {
 		}
 		return "[" + strings.Join(parts, ",") + "]"
 	case float64:
+		if math.IsNaN(typed) || math.IsInf(typed, 0) {
+			panic("codec: a Float " + FormatFloat(typed) + " cannot be encoded as JSON")
+		}
 		return FormatFloat(typed)
 	default:
 		encoded, err := json.Marshal(typed)
@@ -233,7 +275,7 @@ func EncodeJSONValue(value any) string {
 func DecodeObjectShape(raw any, typeName string, expected []string) (map[string]any, error) {
 	fields, ok := raw.(map[string]any)
 	if !ok {
-		return nil, fmt.Errorf("expected record JSON for type %s, got %v", typeName, raw)
+		return nil, fmt.Errorf("expected record JSON for type %s, got %s", typeName, jsonTypeName(raw))
 	}
 	missing := make([]string, 0, len(expected))
 	for _, name := range expected {
@@ -279,21 +321,13 @@ func containsName(names []string, wanted string) bool {
 // already taken the object apart (and for a list element, which has no key at all).
 
 func DecodeIntValue(raw any) (Int, error) {
-	number, ok := raw.(json.Number)
-	if !ok {
-		return Int{}, fmt.Errorf("expected JSON integer, got %v", raw)
-	}
-	value, ok := new(big.Int).SetString(number.String(), 10)
-	if !ok {
-		return Int{}, fmt.Errorf("expected JSON integer, got %v", number.String())
-	}
-	return fromBig(value), nil
+	return parseJSONInteger(raw)
 }
 
 func DecodeBoolValue(raw any) (bool, error) {
 	flag, ok := raw.(bool)
 	if !ok {
-		return false, fmt.Errorf("expected JSON boolean, got %v", raw)
+		return false, fmt.Errorf("expected JSON boolean, got %s", jsonTypeName(raw))
 	}
 	return flag, nil
 }
@@ -301,7 +335,7 @@ func DecodeBoolValue(raw any) (bool, error) {
 func DecodeFloatValue(raw any) (float64, error) {
 	number, ok := raw.(json.Number)
 	if !ok {
-		return 0, fmt.Errorf("expected JSON number, got %v", raw)
+		return 0, fmt.Errorf("expected JSON number, got %s", jsonTypeName(raw))
 	}
 	return number.Float64()
 }
@@ -311,7 +345,7 @@ func DecodeFloatValue(raw any) (float64, error) {
 func DecodeListValue[Element any](raw any, element func(any) (Element, error)) ([]Element, error) {
 	items, ok := raw.([]any)
 	if !ok {
-		return nil, fmt.Errorf("expected JSON array, got %v", raw)
+		return nil, fmt.Errorf("expected JSON array, got %s", jsonTypeName(raw))
 	}
 	out := make([]Element, 0, len(items))
 	for _, item := range items {

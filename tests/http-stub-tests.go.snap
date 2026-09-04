@@ -168,6 +168,11 @@ func TestTesl0(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line http-stub-tests.tesl:74
 	_ = teslrt.StubHttp("GET", "https://rates.test/v1", teslrt.FromInt64(200), "{\"usd\": 110}")
 	{
@@ -177,11 +182,13 @@ func TestTesl0(teslT *testing.T) {
 		teslLeft1 := r.Status
 //line http-stub-tests.tesl:76
 		if !teslrt.Equal(teslLeft1, teslrt.FromInt64(200)) {
+//line http-stub-tests.tesl:76
 			teslT.Fatal("Tesl expectation failed")
 		}
 		teslLeft2 := r.Body
 //line http-stub-tests.tesl:77
 		if teslLeft2 != "{\"usd\": 110}" {
+//line http-stub-tests.tesl:77
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -195,6 +202,11 @@ func TestTesl1(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line http-stub-tests.tesl:81
 	_ = teslrt.StubHttp("GET", "https://rates.test/v1", teslrt.FromInt64(200), "get-answer")
 //line http-stub-tests.tesl:82
@@ -210,16 +222,19 @@ func TestTesl1(teslT *testing.T) {
 			teslLeft3 := g.Body
 //line http-stub-tests.tesl:85
 			if teslLeft3 != "get-answer" {
+//line http-stub-tests.tesl:85
 				teslT.Fatal("Tesl expectation failed")
 			}
 			teslLeft4 := p.Body
 //line http-stub-tests.tesl:86
 			if teslLeft4 != "post-answer" {
+//line http-stub-tests.tesl:86
 				teslT.Fatal("Tesl expectation failed")
 			}
 			teslLeft5 := p.Status
 //line http-stub-tests.tesl:87
 			if !teslrt.Equal(teslLeft5, teslrt.FromInt64(201)) {
+//line http-stub-tests.tesl:87
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -234,6 +249,11 @@ func TestTesl2(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line http-stub-tests.tesl:91
 	_ = teslrt.StubHttp("*", "https://rates.test/*", teslrt.FromInt64(200), "wildcard")
 	{
@@ -247,11 +267,13 @@ func TestTesl2(teslT *testing.T) {
 			teslLeft6 := a.Body
 //line http-stub-tests.tesl:94
 			if teslLeft6 != "wildcard" {
+//line http-stub-tests.tesl:94
 				teslT.Fatal("Tesl expectation failed")
 			}
 			teslLeft7 := b.Body
 //line http-stub-tests.tesl:95
 			if teslLeft7 != "wildcard" {
+//line http-stub-tests.tesl:95
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -266,6 +288,11 @@ func TestTesl3(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line http-stub-tests.tesl:99
 	_ = teslrt.StubHttp("GET", "https://rates.test/v1", teslrt.FromInt64(200), "specific")
 //line http-stub-tests.tesl:100
@@ -281,11 +308,13 @@ func TestTesl3(teslT *testing.T) {
 			teslLeft8 := a.Body
 //line http-stub-tests.tesl:103
 			if teslLeft8 != "specific" {
+//line http-stub-tests.tesl:103
 				teslT.Fatal("Tesl expectation failed")
 			}
 			teslLeft9 := b.Status
 //line http-stub-tests.tesl:104
 			if !teslrt.Equal(teslLeft9, teslrt.FromInt64(500)) {
+//line http-stub-tests.tesl:104
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -300,6 +329,11 @@ func TestTesl4(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line http-stub-tests.tesl:108
 	_ = teslrt.StubHttp("GET", "https://rates.test/v1", teslrt.FromInt64(200), "first")
 //line http-stub-tests.tesl:109
@@ -311,6 +345,7 @@ func TestTesl4(teslT *testing.T) {
 		teslLeft10 := r.Body
 //line http-stub-tests.tesl:111
 		if teslLeft10 != "second" {
+//line http-stub-tests.tesl:111
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -324,6 +359,11 @@ func TestTesl5(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line http-stub-tests.tesl:117
 	_ = teslrt.StubHttp("GET", "https://rates.test/v1", teslrt.FromInt64(500), "upstream exploded")
 	{
@@ -333,6 +373,7 @@ func TestTesl5(teslT *testing.T) {
 		teslLeft11 := r.Status
 //line http-stub-tests.tesl:119
 		if !teslrt.Equal(teslLeft11, teslrt.FromInt64(500)) {
+//line http-stub-tests.tesl:119
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -346,6 +387,11 @@ func TestTesl6(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line http-stub-tests.tesl:123
 	_ = teslrt.StubHttp("GET", "https://rates.test/v1", teslrt.FromInt64(200), "not json at all {")
 	{
@@ -355,10 +401,12 @@ func TestTesl6(teslT *testing.T) {
 		teslLeft12 := r.Status
 //line http-stub-tests.tesl:125
 		if !teslrt.Equal(teslLeft12, teslrt.FromInt64(200)) {
+//line http-stub-tests.tesl:125
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line http-stub-tests.tesl:126
 		if !(teslrt.StringContains(r.Body, "not json")) {
+//line http-stub-tests.tesl:126
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -372,6 +420,11 @@ func TestTesl7(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line http-stub-tests.tesl:130
 	_ = teslrt.StubHttpFailure("GET", "https://rates.test/v1", "connection refused")
 //line http-stub-tests.tesl:131
@@ -388,6 +441,11 @@ func TestTesl8(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line http-stub-tests.tesl:135
 	_ = teslrt.StubHttpTimeout("GET", "https://rates.test/v1")
 //line http-stub-tests.tesl:136
@@ -404,6 +462,11 @@ func TestTesl9(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line http-stub-tests.tesl:140
 	_ = teslrt.StubHttp("GET", "https://rates.test/v1", teslrt.FromInt64(200), "ok")
 //line http-stub-tests.tesl:141
@@ -420,6 +483,11 @@ func TestTesl10(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line http-stub-tests.tesl:147
 	_ = teslrt.StubHttp("*", "*", teslrt.FromInt64(200), "ok")
 	{
@@ -437,40 +505,48 @@ func TestTesl10(teslT *testing.T) {
 				teslLeft13 := a.Status
 //line http-stub-tests.tesl:151
 				if !teslrt.Equal(teslLeft13, teslrt.FromInt64(200)) {
+//line http-stub-tests.tesl:151
 					teslT.Fatal("Tesl expectation failed")
 				}
 				teslLeft14 := b.Status
 //line http-stub-tests.tesl:152
 				if !teslrt.Equal(teslLeft14, teslrt.FromInt64(200)) {
+//line http-stub-tests.tesl:152
 					teslT.Fatal("Tesl expectation failed")
 				}
 				teslLeft15 := c.Status
 //line http-stub-tests.tesl:153
 				if !teslrt.Equal(teslLeft15, teslrt.FromInt64(200)) {
+//line http-stub-tests.tesl:153
 					teslT.Fatal("Tesl expectation failed")
 				}
 //line http-stub-tests.tesl:154
 				if !(teslrt.HttpCalled("GET", "https://rates.test/v1")) {
+//line http-stub-tests.tesl:154
 					teslT.Fatal("Tesl expectation failed")
 				}
 				teslLeft16 := teslrt.HttpCallCount("GET", "https://rates.test/v1")
 //line http-stub-tests.tesl:155
 				if !teslrt.Equal(teslLeft16, teslrt.FromInt64(2)) {
+//line http-stub-tests.tesl:155
 					teslT.Fatal("Tesl expectation failed")
 				}
 				teslLeft17 := teslrt.HttpCallCount("POST", "https://rates.test/log")
 //line http-stub-tests.tesl:156
 				if !teslrt.Equal(teslLeft17, teslrt.FromInt64(1)) {
+//line http-stub-tests.tesl:156
 					teslT.Fatal("Tesl expectation failed")
 				}
 				teslLeft18 := teslrt.HttpCallCount("GET", "https://rates.test/log")
 //line http-stub-tests.tesl:157
 				if !teslrt.Equal(teslLeft18, teslrt.FromInt64(0)) {
+//line http-stub-tests.tesl:157
 					teslT.Fatal("Tesl expectation failed")
 				}
 				teslLeft19 := teslrt.HttpCallCount("*", "*")
 //line http-stub-tests.tesl:158
 				if !teslrt.Equal(teslLeft19, teslrt.FromInt64(3)) {
+//line http-stub-tests.tesl:158
 					teslT.Fatal("Tesl expectation failed")
 				}
 			}
@@ -486,6 +562,11 @@ func TestTesl11(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line http-stub-tests.tesl:162
 	_ = teslrt.StubHttp("POST", "https://rates.test/log", teslrt.FromInt64(202), "queued")
 	{
@@ -495,11 +576,13 @@ func TestTesl11(teslT *testing.T) {
 		teslLeft20 := r.Status
 //line http-stub-tests.tesl:164
 		if !teslrt.Equal(teslLeft20, teslrt.FromInt64(202)) {
+//line http-stub-tests.tesl:164
 			teslT.Fatal("Tesl expectation failed")
 		}
 		teslLeft21 := teslrt.HttpLastBody("POST", "https://rates.test/log")
 //line http-stub-tests.tesl:165
 		if teslLeft21 != "{\"event\": \"sync\"}" {
+//line http-stub-tests.tesl:165
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -513,6 +596,11 @@ func TestTesl12(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line http-stub-tests.tesl:169
 		target := "https://rates.test/computed"
@@ -526,11 +614,13 @@ func TestTesl12(teslT *testing.T) {
 			teslLeft22 := r.Body
 //line http-stub-tests.tesl:172
 			if teslLeft22 != "computed" {
+//line http-stub-tests.tesl:172
 				teslT.Fatal("Tesl expectation failed")
 			}
 			teslLeft23 := teslrt.HttpCallCount("GET", target)
 //line http-stub-tests.tesl:173
 			if !teslrt.Equal(teslLeft23, teslrt.FromInt64(1)) {
+//line http-stub-tests.tesl:173
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -545,6 +635,11 @@ func TestTesl13(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line http-stub-tests.tesl:177
 	_ = teslrt.StubHttp("GET", "https://rates.test/v1", teslrt.FromInt64(200), "ok")
 //line http-stub-tests.tesl:178
@@ -553,6 +648,7 @@ func TestTesl13(teslT *testing.T) {
 	})
 //line http-stub-tests.tesl:179
 	if !(teslrt.HttpCalled("GET", "https://elsewhere.test/v1")) {
+//line http-stub-tests.tesl:179
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -565,6 +661,11 @@ func TestTesl14(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line http-stub-tests.tesl:185
 	_ = teslrt.StubHttp("GET", "https://leak.test/v1", teslrt.FromInt64(200), "from 14a")
 	{
@@ -574,11 +675,13 @@ func TestTesl14(teslT *testing.T) {
 		teslLeft24 := r.Body
 //line http-stub-tests.tesl:187
 		if teslLeft24 != "from 14a" {
+//line http-stub-tests.tesl:187
 			teslT.Fatal("Tesl expectation failed")
 		}
 		teslLeft25 := teslrt.HttpCallCount("*", "*")
 //line http-stub-tests.tesl:188
 		if !teslrt.Equal(teslLeft25, teslrt.FromInt64(1)) {
+//line http-stub-tests.tesl:188
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -592,13 +695,20 @@ func TestTesl15(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft26 := teslrt.HttpCallCount("*", "*")
 //line http-stub-tests.tesl:192
 	if !teslrt.Equal(teslLeft26, teslrt.FromInt64(0)) {
+//line http-stub-tests.tesl:192
 		teslT.Fatal("Tesl expectation failed")
 	}
 //line http-stub-tests.tesl:193
 	if teslrt.HttpCalled("GET", "https://leak.test/v1") {
+//line http-stub-tests.tesl:193
 		teslT.Fatal("Tesl expectation failed")
 	}
 //line http-stub-tests.tesl:197
@@ -620,6 +730,11 @@ func TestTeslApi0(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line http-stub-tests.tesl:266
 	_ = teslrt.StubHttpTimeout("GET", "https://upstream.test/sync")
 	{
@@ -628,11 +743,13 @@ func TestTeslApi0(teslT *testing.T) {
 		_ = queued
 //line http-stub-tests.tesl:269
 		if !(teslrt.StatusOk(queued.Status)) {
+//line http-stub-tests.tesl:269
 			teslT.Fatal("Tesl expectation failed")
 		}
 		teslLeft27 := teslrt.PendingJobCount(SyncQueueQueue)
 //line http-stub-tests.tesl:270
 		if !teslrt.Equal(teslLeft27, teslrt.FromInt64(1)) {
+//line http-stub-tests.tesl:270
 			teslT.Fatal("Tesl expectation failed")
 		}
 		{
@@ -665,6 +782,7 @@ func TestTeslApi0(teslT *testing.T) {
 				teslLeft28 := teslrt.PendingJobCount(SyncQueueQueue)
 //line http-stub-tests.tesl:276
 				if !teslrt.Equal(teslLeft28, teslrt.FromInt64(1)) {
+//line http-stub-tests.tesl:276
 					teslT.Fatal("Tesl expectation failed")
 				}
 				{
@@ -697,16 +815,19 @@ func TestTeslApi0(teslT *testing.T) {
 						teslLeft29 := teslrt.PendingJobCount(SyncQueueQueue)
 //line http-stub-tests.tesl:281
 						if !teslrt.Equal(teslLeft29, teslrt.FromInt64(0)) {
+//line http-stub-tests.tesl:281
 							teslT.Fatal("Tesl expectation failed")
 						}
 						teslLeft30 := teslrt.ListLength(teslrt.DeadJobs(SyncQueueQueue))
 //line http-stub-tests.tesl:282
 						if !teslrt.Equal(teslLeft30, teslrt.FromInt64(1)) {
+//line http-stub-tests.tesl:282
 							teslT.Fatal("Tesl expectation failed")
 						}
 						teslLeft31 := teslrt.HttpCallCount("GET", "https://upstream.test/sync")
 //line http-stub-tests.tesl:285
 						if !teslrt.Equal(teslLeft31, teslrt.FromInt64(2)) {
+//line http-stub-tests.tesl:285
 							teslT.Fatal("Tesl expectation failed")
 						}
 					}
@@ -727,6 +848,11 @@ func TestTeslApi1(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line http-stub-tests.tesl:289
 	_ = teslrt.StubHttp("GET", "https://upstream.test/sync", teslrt.FromInt64(200), "ok")
 	{
@@ -735,6 +861,7 @@ func TestTeslApi1(teslT *testing.T) {
 		_ = queued
 //line http-stub-tests.tesl:292
 		if !(teslrt.StatusOk(queued.Status)) {
+//line http-stub-tests.tesl:292
 			teslT.Fatal("Tesl expectation failed")
 		}
 		{
@@ -763,16 +890,19 @@ func TestTeslApi1(teslT *testing.T) {
 			teslLeft32 := teslrt.PendingJobCount(SyncQueueQueue)
 //line http-stub-tests.tesl:295
 			if !teslrt.Equal(teslLeft32, teslrt.FromInt64(0)) {
+//line http-stub-tests.tesl:295
 				teslT.Fatal("Tesl expectation failed")
 			}
 			teslLeft33 := teslrt.ListLength(teslrt.DeadJobs(SyncQueueQueue))
 //line http-stub-tests.tesl:296
 			if !teslrt.Equal(teslLeft33, teslrt.FromInt64(0)) {
+//line http-stub-tests.tesl:296
 				teslT.Fatal("Tesl expectation failed")
 			}
 			teslLeft34 := teslrt.HttpCallCount("GET", "https://upstream.test/sync")
 //line http-stub-tests.tesl:297
 			if !teslrt.Equal(teslLeft34, teslrt.FromInt64(1)) {
+//line http-stub-tests.tesl:297
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}

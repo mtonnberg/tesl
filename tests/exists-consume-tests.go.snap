@@ -65,20 +65,28 @@ func TestTesl0(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line exists-consume-tests.tesl:37
 		tok := generateToken()
 		_ = tok
 //line exists-consume-tests.tesl:38
 		if teslrt.Compare(teslrt.StringLength(tok), teslrt.FromInt64(3)) <= 0 {
+//line exists-consume-tests.tesl:38
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line exists-consume-tests.tesl:39
 		if !(teslrt.StringStartsWith(tok, "tok")) {
+//line exists-consume-tests.tesl:39
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line exists-consume-tests.tesl:40
 		if ("wrapped:" + tok) == "wrapped:" {
+//line exists-consume-tests.tesl:40
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}

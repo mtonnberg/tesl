@@ -250,10 +250,12 @@ func exactCount(who string, count Int) int {
 	return int(value)
 }
 
-// maxAllocElements bounds a single constructed list. Not a language limit — the point
-// past which the allocation cannot succeed anyway, reported as a clear panic rather than
-// an out-of-memory kill.
-const maxAllocElements = 1 << 31
+// maxAllocElements bounds a single constructed list. Not a language limit — a
+// denial-of-service bound. exactCount checks it BEFORE any `make`, so a request-controlled
+// count is a recoverable panic (a sanitized 500 inside a handler) rather than an
+// uncatchable out-of-memory kill: 1<<26 Ints is 1 GiB, which the runtime can refuse
+// cleanly, whereas the previous 1<<31 was 32 GiB and died in the allocator.
+const maxAllocElements = 1 << 26
 
 // ListRange is start INCLUSIVE to end EXCLUSIVE, matching `for/list ([i (in-range …)])`
 // in tesl/list.rkt, and empty when start >= end.

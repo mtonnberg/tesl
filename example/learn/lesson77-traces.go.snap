@@ -103,9 +103,15 @@ func TestTesl0(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft1 := DescribeTrace("n-1")
 //line lesson77-traces.tesl:140
 	if teslLeft1 != "described n-1" {
+//line lesson77-traces.tesl:140
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -120,16 +126,23 @@ func TestTeslApi0(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson77-traces.tesl:144
 		r := teslrt.ApiRequest(TracesServer, "GET", "/note", "", nil, nil)
 		_ = r
 //line lesson77-traces.tesl:145
 		if !(teslrt.StatusOk(r.Status)) {
+//line lesson77-traces.tesl:145
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line lesson77-traces.tesl:146
 		if !teslrt.JsonEqual(r.Body, "described n-1") {
+//line lesson77-traces.tesl:146
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}

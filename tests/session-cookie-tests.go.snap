@@ -476,12 +476,18 @@ func TestTeslApi0(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line session-cookie-tests.tesl:232
 		resp := teslrt.ApiRequest(SessionServer, "POST", "/login", "{\"user\":\"alice\"}", nil, nil)
 		_ = resp
 //line session-cookie-tests.tesl:233
 		if !(teslrt.StatusOk(resp.Status)) {
+//line session-cookie-tests.tesl:233
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line session-cookie-tests.tesl:234
@@ -491,6 +497,7 @@ func TestTeslApi0(teslT *testing.T) {
 			case teslrt.MaybeNothing:
 //line session-cookie-tests.tesl:235
 				if true {
+//line session-cookie-tests.tesl:235
 					teslT.Fatal("Tesl expectation failed")
 				}
 			case teslrt.MaybeSomething:
@@ -498,26 +505,32 @@ func TestTeslApi0(teslT *testing.T) {
 				_ = line
 //line session-cookie-tests.tesl:240
 				if !(teslrt.StringContains(line, "__Host-session=")) {
+//line session-cookie-tests.tesl:240
 					teslT.Fatal("Tesl expectation failed")
 				}
 //line session-cookie-tests.tesl:241
 				if !(teslrt.StringContains(line, "Path=/")) {
+//line session-cookie-tests.tesl:241
 					teslT.Fatal("Tesl expectation failed")
 				}
 //line session-cookie-tests.tesl:242
 				if !(teslrt.StringContains(line, "HttpOnly")) {
+//line session-cookie-tests.tesl:242
 					teslT.Fatal("Tesl expectation failed")
 				}
 //line session-cookie-tests.tesl:243
 				if !(teslrt.StringContains(line, "Secure")) {
+//line session-cookie-tests.tesl:243
 					teslT.Fatal("Tesl expectation failed")
 				}
 //line session-cookie-tests.tesl:244
 				if !(teslrt.StringContains(line, "SameSite=Lax")) {
+//line session-cookie-tests.tesl:244
 					teslT.Fatal("Tesl expectation failed")
 				}
 //line session-cookie-tests.tesl:247
 				if !(teslrt.StringContains(line, "Max-Age=3600")) {
+//line session-cookie-tests.tesl:247
 					teslT.Fatal("Tesl expectation failed")
 				}
 			default:
@@ -537,6 +550,11 @@ func TestTeslApi1(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line session-cookie-tests.tesl:251
 		resp := teslrt.ApiRequest(SessionServer, "POST", "/login", "{\"user\":\"alice\"}", nil, nil)
@@ -548,6 +566,7 @@ func TestTeslApi1(teslT *testing.T) {
 			case teslrt.MaybeNothing:
 //line session-cookie-tests.tesl:253
 				if true {
+//line session-cookie-tests.tesl:253
 					teslT.Fatal("Tesl expectation failed")
 				}
 			case teslrt.MaybeSomething:
@@ -555,6 +574,7 @@ func TestTeslApi1(teslT *testing.T) {
 				_ = pair
 //line session-cookie-tests.tesl:254
 				if !(teslrt.StringContains(pair, "__Host-session=")) {
+//line session-cookie-tests.tesl:254
 					teslT.Fatal("Tesl expectation failed")
 				}
 			default:
@@ -574,12 +594,18 @@ func TestTeslApi2(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line session-cookie-tests.tesl:260
 		loginResp := teslrt.ApiRequest(SessionServer, "POST", "/login", "{\"user\":\"alice\"}", nil, nil)
 		_ = loginResp
 //line session-cookie-tests.tesl:261
 		if !(teslrt.StatusOk(loginResp.Status)) {
+//line session-cookie-tests.tesl:261
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line session-cookie-tests.tesl:262
@@ -589,6 +615,7 @@ func TestTeslApi2(teslT *testing.T) {
 			case teslrt.MaybeNothing:
 //line session-cookie-tests.tesl:263
 				if true {
+//line session-cookie-tests.tesl:263
 					teslT.Fatal("Tesl expectation failed")
 				}
 			case teslrt.MaybeSomething:
@@ -600,10 +627,12 @@ func TestTeslApi2(teslT *testing.T) {
 					_ = me
 //line session-cookie-tests.tesl:266
 					if !(teslrt.StatusOk(me.Status)) {
+//line session-cookie-tests.tesl:266
 						teslT.Fatal("Tesl expectation failed")
 					}
 //line session-cookie-tests.tesl:267
 					if !teslrt.JsonEqual(teslrt.JsonFieldOf(me.Body, "userId"), "alice") {
+//line session-cookie-tests.tesl:267
 						teslT.Fatal("Tesl expectation failed")
 					}
 				}
@@ -624,6 +653,11 @@ func TestTeslApi3(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line session-cookie-tests.tesl:271
 		me := teslrt.ApiRequest(SessionServer, "GET", "/whoami", "", nil, nil)
@@ -631,6 +665,7 @@ func TestTeslApi3(teslT *testing.T) {
 		teslLeft1 := me.Status
 //line session-cookie-tests.tesl:272
 		if !teslrt.Equal(teslLeft1, teslrt.FromInt64(401)) {
+//line session-cookie-tests.tesl:272
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -646,6 +681,11 @@ func TestTeslApi4(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line session-cookie-tests.tesl:277
 		me := teslrt.ApiRequest(SessionServer, "GET", "/whoami", "", []string{"__Host-session=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6ImRlYWRiZWVmZGVhZGJlZWYifQ.eyJzdWIiOiJhdHRhY2tlciJ9.not-a-valid-signature"}, nil)
@@ -653,6 +693,7 @@ func TestTeslApi4(teslT *testing.T) {
 		teslLeft2 := me.Status
 //line session-cookie-tests.tesl:278
 		if !teslrt.Equal(teslLeft2, teslrt.FromInt64(401)) {
+//line session-cookie-tests.tesl:278
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -668,12 +709,18 @@ func TestTeslApi5(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line session-cookie-tests.tesl:282
 		other := teslrt.ApiRequest(SessionServer, "POST", "/login-other-tenant", "{\"user\":\"mallory\"}", nil, nil)
 		_ = other
 //line session-cookie-tests.tesl:283
 		if !(teslrt.StatusOk(other.Status)) {
+//line session-cookie-tests.tesl:283
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line session-cookie-tests.tesl:284
@@ -683,6 +730,7 @@ func TestTeslApi5(teslT *testing.T) {
 			case teslrt.MaybeNothing:
 //line session-cookie-tests.tesl:285
 				if true {
+//line session-cookie-tests.tesl:285
 					teslT.Fatal("Tesl expectation failed")
 				}
 			case teslrt.MaybeSomething:
@@ -695,6 +743,7 @@ func TestTeslApi5(teslT *testing.T) {
 					teslLeft3 := me.Status
 //line session-cookie-tests.tesl:288
 					if !teslrt.Equal(teslLeft3, teslrt.FromInt64(401)) {
+//line session-cookie-tests.tesl:288
 						teslT.Fatal("Tesl expectation failed")
 					}
 				}
@@ -715,6 +764,11 @@ func TestTeslApi6(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line session-cookie-tests.tesl:294
 		resp := teslrt.ApiRequest(SessionServer, "POST", "/login-then-fail", "{\"user\":\"alice\"}", nil, nil)
@@ -722,6 +776,7 @@ func TestTeslApi6(teslT *testing.T) {
 		teslLeft4 := resp.Status
 //line session-cookie-tests.tesl:295
 		if !teslrt.Equal(teslLeft4, teslrt.FromInt64(403)) {
+//line session-cookie-tests.tesl:295
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line session-cookie-tests.tesl:296
@@ -731,6 +786,7 @@ func TestTeslApi6(teslT *testing.T) {
 			case teslrt.MaybeNothing:
 //line session-cookie-tests.tesl:297
 				if false {
+//line session-cookie-tests.tesl:297
 					teslT.Fatal("Tesl expectation failed")
 				}
 			case teslrt.MaybeSomething:
@@ -738,6 +794,7 @@ func TestTeslApi6(teslT *testing.T) {
 				_ = pair
 //line session-cookie-tests.tesl:298
 				if true {
+//line session-cookie-tests.tesl:298
 					teslT.Fatal("Tesl expectation failed")
 				}
 			default:
@@ -757,12 +814,18 @@ func TestTeslApi7(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line session-cookie-tests.tesl:304
 		resp := teslrt.ApiRequest(SessionServer, "POST", "/logout", "", nil, nil)
 		_ = resp
 //line session-cookie-tests.tesl:305
 		if !(teslrt.StatusOk(resp.Status)) {
+//line session-cookie-tests.tesl:305
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line session-cookie-tests.tesl:306
@@ -772,6 +835,7 @@ func TestTeslApi7(teslT *testing.T) {
 			case teslrt.MaybeNothing:
 //line session-cookie-tests.tesl:307
 				if true {
+//line session-cookie-tests.tesl:307
 					teslT.Fatal("Tesl expectation failed")
 				}
 			case teslrt.MaybeSomething:
@@ -779,10 +843,12 @@ func TestTeslApi7(teslT *testing.T) {
 				_ = line
 //line session-cookie-tests.tesl:309
 				if !(teslrt.StringContains(line, "__Host-session=;")) {
+//line session-cookie-tests.tesl:309
 					teslT.Fatal("Tesl expectation failed")
 				}
 //line session-cookie-tests.tesl:310
 				if !(teslrt.StringContains(line, "Max-Age=0")) {
+//line session-cookie-tests.tesl:310
 					teslT.Fatal("Tesl expectation failed")
 				}
 			default:
@@ -802,12 +868,18 @@ func TestTeslApi8(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line session-cookie-tests.tesl:321
 		first := teslrt.ApiRequest(SessionServer, "POST", "/login", "{\"user\":\"alice\"}", nil, nil)
 		_ = first
 //line session-cookie-tests.tesl:322
 		if !(teslrt.StatusOk(first.Status)) {
+//line session-cookie-tests.tesl:322
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line session-cookie-tests.tesl:325
@@ -817,6 +889,7 @@ func TestTeslApi8(teslT *testing.T) {
 			case teslrt.MaybeNothing:
 //line session-cookie-tests.tesl:326
 				if true {
+//line session-cookie-tests.tesl:326
 					teslT.Fatal("Tesl expectation failed")
 				}
 			case teslrt.MaybeSomething:
@@ -824,6 +897,7 @@ func TestTeslApi8(teslT *testing.T) {
 				_ = pair
 //line session-cookie-tests.tesl:327
 				if false {
+//line session-cookie-tests.tesl:327
 					teslT.Fatal("Tesl expectation failed")
 				}
 			default:
@@ -836,6 +910,7 @@ func TestTeslApi8(teslT *testing.T) {
 			_ = second
 //line session-cookie-tests.tesl:329
 			if !(teslrt.StatusOk(second.Status)) {
+//line session-cookie-tests.tesl:329
 				teslT.Fatal("Tesl expectation failed")
 			}
 //line session-cookie-tests.tesl:330
@@ -845,6 +920,7 @@ func TestTeslApi8(teslT *testing.T) {
 				case teslrt.MaybeNothing:
 //line session-cookie-tests.tesl:331
 					if false {
+//line session-cookie-tests.tesl:331
 						teslT.Fatal("Tesl expectation failed")
 					}
 				case teslrt.MaybeSomething:
@@ -852,6 +928,7 @@ func TestTeslApi8(teslT *testing.T) {
 					_ = pair
 //line session-cookie-tests.tesl:332
 					if true {
+//line session-cookie-tests.tesl:332
 						teslT.Fatal("Tesl expectation failed")
 					}
 				default:
@@ -872,12 +949,18 @@ func TestTeslApi9(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line session-cookie-tests.tesl:338
 		loginResp := teslrt.ApiRequest(SessionServer, "POST", "/login", "{\"user\":\"alice\"}", nil, nil)
 		_ = loginResp
 //line session-cookie-tests.tesl:339
 		if !(teslrt.StatusOk(loginResp.Status)) {
+//line session-cookie-tests.tesl:339
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line session-cookie-tests.tesl:340
@@ -887,6 +970,7 @@ func TestTeslApi9(teslT *testing.T) {
 			case teslrt.MaybeNothing:
 //line session-cookie-tests.tesl:341
 				if true {
+//line session-cookie-tests.tesl:341
 					teslT.Fatal("Tesl expectation failed")
 				}
 			case teslrt.MaybeSomething:
@@ -898,10 +982,12 @@ func TestTeslApi9(teslT *testing.T) {
 					_ = me
 //line session-cookie-tests.tesl:344
 					if !(teslrt.StatusOk(me.Status)) {
+//line session-cookie-tests.tesl:344
 						teslT.Fatal("Tesl expectation failed")
 					}
 //line session-cookie-tests.tesl:345
 					if !teslrt.JsonEqual(teslrt.JsonFieldOf(me.Body, "userId"), "alice") {
+//line session-cookie-tests.tesl:345
 						teslT.Fatal("Tesl expectation failed")
 					}
 //line session-cookie-tests.tesl:348
@@ -911,6 +997,7 @@ func TestTeslApi9(teslT *testing.T) {
 						case teslrt.MaybeNothing:
 //line session-cookie-tests.tesl:349
 							if true {
+//line session-cookie-tests.tesl:349
 								teslT.Fatal("Tesl expectation failed")
 							}
 						case teslrt.MaybeSomething:
@@ -918,6 +1005,7 @@ func TestTeslApi9(teslT *testing.T) {
 							_ = renewed
 //line session-cookie-tests.tesl:350
 							if !(teslrt.StringContains(renewed, "__Host-session=")) {
+//line session-cookie-tests.tesl:350
 								teslT.Fatal("Tesl expectation failed")
 							}
 						default:
@@ -942,6 +1030,11 @@ func TestTeslApi10(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line session-cookie-tests.tesl:356
 		loginResp := teslrt.ApiRequest(SessionServer, "POST", "/login", "{\"user\":\"alice\"}", nil, nil)
@@ -953,6 +1046,7 @@ func TestTeslApi10(teslT *testing.T) {
 			case teslrt.MaybeNothing:
 //line session-cookie-tests.tesl:358
 				if true {
+//line session-cookie-tests.tesl:358
 					teslT.Fatal("Tesl expectation failed")
 				}
 			case teslrt.MaybeSomething:
@@ -964,6 +1058,7 @@ func TestTeslApi10(teslT *testing.T) {
 					_ = first
 //line session-cookie-tests.tesl:361
 					if !(teslrt.StatusOk(first.Status)) {
+//line session-cookie-tests.tesl:361
 						teslT.Fatal("Tesl expectation failed")
 					}
 //line session-cookie-tests.tesl:362
@@ -973,6 +1068,7 @@ func TestTeslApi10(teslT *testing.T) {
 						case teslrt.MaybeNothing:
 //line session-cookie-tests.tesl:363
 							if true {
+//line session-cookie-tests.tesl:363
 								teslT.Fatal("Tesl expectation failed")
 							}
 						case teslrt.MaybeSomething:
@@ -984,10 +1080,12 @@ func TestTeslApi10(teslT *testing.T) {
 								_ = second
 //line session-cookie-tests.tesl:366
 								if !(teslrt.StatusOk(second.Status)) {
+//line session-cookie-tests.tesl:366
 									teslT.Fatal("Tesl expectation failed")
 								}
 //line session-cookie-tests.tesl:367
 								if !teslrt.JsonEqual(teslrt.JsonFieldOf(second.Body, "userId"), "alice") {
+//line session-cookie-tests.tesl:367
 									teslT.Fatal("Tesl expectation failed")
 								}
 							}
@@ -1013,6 +1111,11 @@ func TestTeslApi11(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line session-cookie-tests.tesl:373
 		loginResp := teslrt.ApiRequest(SessionServer, "POST", "/login", "{\"user\":\"alice\"}", nil, nil)
@@ -1024,6 +1127,7 @@ func TestTeslApi11(teslT *testing.T) {
 			case teslrt.MaybeNothing:
 //line session-cookie-tests.tesl:375
 				if true {
+//line session-cookie-tests.tesl:375
 					teslT.Fatal("Tesl expectation failed")
 				}
 			case teslrt.MaybeSomething:
@@ -1035,6 +1139,7 @@ func TestTeslApi11(teslT *testing.T) {
 					_ = me
 //line session-cookie-tests.tesl:378
 					if !(teslrt.StatusOk(me.Status)) {
+//line session-cookie-tests.tesl:378
 						teslT.Fatal("Tesl expectation failed")
 					}
 //line session-cookie-tests.tesl:379
@@ -1044,6 +1149,7 @@ func TestTeslApi11(teslT *testing.T) {
 						case teslrt.MaybeNothing:
 //line session-cookie-tests.tesl:380
 							if false {
+//line session-cookie-tests.tesl:380
 								teslT.Fatal("Tesl expectation failed")
 							}
 						case teslrt.MaybeSomething:
@@ -1051,6 +1157,7 @@ func TestTeslApi11(teslT *testing.T) {
 							_ = pair
 //line session-cookie-tests.tesl:381
 							if true {
+//line session-cookie-tests.tesl:381
 								teslT.Fatal("Tesl expectation failed")
 							}
 						default:
@@ -1075,6 +1182,11 @@ func TestTeslApi12(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line session-cookie-tests.tesl:387
 		me := teslrt.ApiRequest(SessionServer, "GET", "/whoami-sliding", "", []string{"__Host-session=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6ImRlYWRiZWVmZGVhZGJlZWYifQ.eyJzdWIiOiJhdHRhY2tlciJ9.not-a-valid-signature"}, nil)
@@ -1082,6 +1194,7 @@ func TestTeslApi12(teslT *testing.T) {
 		teslLeft5 := me.Status
 //line session-cookie-tests.tesl:388
 		if !teslrt.Equal(teslLeft5, teslrt.FromInt64(401)) {
+//line session-cookie-tests.tesl:388
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line session-cookie-tests.tesl:389
@@ -1091,6 +1204,7 @@ func TestTeslApi12(teslT *testing.T) {
 			case teslrt.MaybeNothing:
 //line session-cookie-tests.tesl:390
 				if false {
+//line session-cookie-tests.tesl:390
 					teslT.Fatal("Tesl expectation failed")
 				}
 			case teslrt.MaybeSomething:
@@ -1098,6 +1212,7 @@ func TestTeslApi12(teslT *testing.T) {
 				_ = pair
 //line session-cookie-tests.tesl:391
 				if true {
+//line session-cookie-tests.tesl:391
 					teslT.Fatal("Tesl expectation failed")
 				}
 			default:
@@ -1117,6 +1232,11 @@ func TestTeslApi13(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line session-cookie-tests.tesl:430
 		resp := teslrt.ApiRequest(LeakyServer, "GET", "/leaky", "", []string{"__Host-session=notavalidjwt"}, nil)
@@ -1124,10 +1244,12 @@ func TestTeslApi13(teslT *testing.T) {
 		teslLeft6 := resp.Status
 //line session-cookie-tests.tesl:431
 		if !teslrt.Equal(teslLeft6, teslrt.FromInt64(500)) {
+//line session-cookie-tests.tesl:431
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line session-cookie-tests.tesl:432
 		if !teslrt.JsonEqual(teslrt.JsonFieldOf(resp.Body, "error"), "Internal server error") {
+//line session-cookie-tests.tesl:432
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}

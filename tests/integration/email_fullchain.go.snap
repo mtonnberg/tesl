@@ -39,7 +39,7 @@ package teslmodfullchainemail
 import "tesl.generated/teslmodfullchainemail/internal/teslrt"
 
 //line email_fullchain.tesl:41
-var ChainEmailOutbox = teslrt.NewOutbox(teslrt.SmtpSettings{
+var ChainEmailOutbox = teslrt.NewOutboxOn(ChainDatabaseDatabase, teslrt.SmtpSettings{
 	Host:     teslrt.EnvString("SMTP_HOST", ""),
 	Port:     18025,
 	Username: "chain-sender@example.com",
@@ -90,10 +90,16 @@ func TestTesl0(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft1 := true
 	teslRight1 := true
 //line email_fullchain.tesl:63
 	if teslLeft1 != teslRight1 {
+//line email_fullchain.tesl:63
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -106,10 +112,16 @@ func TestTesl1(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft2 := true
 	teslRight2 := true
 //line email_fullchain.tesl:67
 	if teslLeft2 != teslRight2 {
+//line email_fullchain.tesl:67
 		teslT.Fatal("Tesl expectation failed")
 	}
 }

@@ -232,6 +232,11 @@ func TestTesl0(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson72-units.tesl:142
 		a := teslrt.LengthKilometers(float64(1))
@@ -242,24 +247,29 @@ func TestTesl0(teslT *testing.T) {
 			_ = b
 //line lesson72-units.tesl:144
 			if !teslrt.FloatEqual(a, b) {
+//line lesson72-units.tesl:144
 				teslT.Fatal("Tesl expectation failed")
 			}
 			teslLeft1 := teslrt.LengthInMeters(a)
 //line lesson72-units.tesl:145
 			if !teslrt.FloatEqual(teslLeft1, float64(1e+03)) {
+//line lesson72-units.tesl:145
 				teslT.Fatal("Tesl expectation failed")
 			}
 			teslLeft2 := teslrt.LengthInKilometers(teslrt.LengthMeters(float64(2.5e+03)))
 //line lesson72-units.tesl:146
 			if !teslrt.FloatEqual(teslLeft2, float64(2.5)) {
+//line lesson72-units.tesl:146
 				teslT.Fatal("Tesl expectation failed")
 			}
 //line lesson72-units.tesl:147
 			if !(ApproxEqual(teslrt.LengthInFeet(a), float64(3280.839895))) {
+//line lesson72-units.tesl:147
 				teslT.Fatal("Tesl expectation failed")
 			}
 //line lesson72-units.tesl:148
 			if !(ApproxEqual(teslrt.LengthInMeters(teslrt.LengthMiles(float64(1))), float64(1609.344))) {
+//line lesson72-units.tesl:148
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -274,12 +284,18 @@ func TestTesl1(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson72-units.tesl:182
 		top := teslrt.SpeedKilometersPerHour(float64(1.1e+02))
 		_ = top
 //line lesson72-units.tesl:183
 		if !(ApproxEqual(teslrt.SpeedInKilometersPerHour(top), float64(1.1e+02))) {
+//line lesson72-units.tesl:183
 			teslT.Fatal("Tesl expectation failed")
 		}
 		{
@@ -297,6 +313,7 @@ func TestTesl1(teslT *testing.T) {
 					teslLeft3 := teslrt.AreaInSquareMeters(a)
 //line lesson72-units.tesl:187
 					if !teslrt.FloatEqual(teslLeft3, float64(48)) {
+//line lesson72-units.tesl:187
 						teslT.Fatal("Tesl expectation failed")
 					}
 				}
@@ -313,12 +330,18 @@ func TestTesl2(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson72-units.tesl:191
 		trip := Trip{Distance: teslrt.LengthKilometers(float64(3e+01)), Duration: teslrt.DurationHours(float64(0.5))}
 		_ = trip
 //line lesson72-units.tesl:192
 		if !(ApproxEqual(teslrt.SpeedInKilometersPerHour(averageSpeed(trip)), float64(6e+01))) {
+//line lesson72-units.tesl:192
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -332,6 +355,11 @@ func TestTesl3(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson72-units.tesl:196
 		leg := Segment{Tag: SegmentDrive, DriveDist: teslrt.LengthMeters(float64(1e+02)), DriveSpeed: teslrt.SpeedMetersPerSecond(float64(2e+01))}
@@ -339,11 +367,13 @@ func TestTesl3(teslT *testing.T) {
 		teslLeft4 := teslrt.DurationInSeconds(segmentTime(leg))
 //line lesson72-units.tesl:197
 		if !teslrt.FloatEqual(teslLeft4, float64(5)) {
+//line lesson72-units.tesl:197
 			teslT.Fatal("Tesl expectation failed")
 		}
 		teslLeft5 := teslrt.DurationInSeconds(segmentTime(Segment{Tag: SegmentRest, RestPause: teslrt.DurationMinutes(float64(2))}))
 //line lesson72-units.tesl:198
 		if !teslrt.FloatEqual(teslLeft5, float64(1.2e+02)) {
+//line lesson72-units.tesl:198
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -357,6 +387,11 @@ func TestTesl4(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson72-units.tesl:202
 		legs := []float64{teslrt.LengthMeters(float64(4e+02)), teslrt.LengthKilometers(float64(0.6))}
@@ -364,6 +399,7 @@ func TestTesl4(teslT *testing.T) {
 		teslLeft6 := teslrt.LengthInMeters(teslrt.UnitsSum(legs))
 //line lesson72-units.tesl:203
 		if !teslrt.FloatEqual(teslLeft6, float64(1e+03)) {
+//line lesson72-units.tesl:203
 			teslT.Fatal("Tesl expectation failed")
 		}
 		{
@@ -386,6 +422,7 @@ func TestTesl4(teslT *testing.T) {
 					}
 				}
 			}()) {
+//line lesson72-units.tesl:205
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -400,26 +437,35 @@ func TestTesl5(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson72-units.tesl:225
 		mixed := (teslrt.LengthMeters(float64(1)) + teslrt.LengthFeet(float64(1)))
 		_ = mixed
 //line lesson72-units.tesl:226
 		if !(ApproxEqual(teslrt.LengthInMeters(mixed), float64(1.3048))) {
+//line lesson72-units.tesl:226
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line lesson72-units.tesl:227
 		if teslrt.LengthKilometers(float64(1)) <= teslrt.LengthFeet(float64(3e+03)) {
+//line lesson72-units.tesl:227
 			teslT.Fatal("Tesl expectation failed")
 		}
 		teslLeft7 := teslrt.LengthInMeters(TotalDistance([]float64{teslrt.LengthMeters(float64(4e+02)), teslrt.LengthKilometers(float64(0.6))}))
 //line lesson72-units.tesl:228
 		if !teslrt.FloatEqual(teslLeft7, float64(1e+03)) {
+//line lesson72-units.tesl:228
 			teslT.Fatal("Tesl expectation failed")
 		}
 		teslLeft8 := teslrt.LengthInMeters(LongestLeg(teslrt.LengthMeters(float64(3e+01)), teslrt.LengthFeet(float64(1e+02))))
 //line lesson72-units.tesl:230
 		if !teslrt.FloatEqual(teslLeft8, float64(30.48)) {
+//line lesson72-units.tesl:230
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -433,19 +479,27 @@ func TestTesl6(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft9 := teslrt.SpeedInMetersPerSecond(FinalSpeed(teslrt.AccelerationMetersPerSecondSquared(float64(2.5)), teslrt.DurationSeconds(float64(4))))
 //line lesson72-units.tesl:255
 	if !teslrt.FloatEqual(teslLeft9, float64(1e+01)) {
+//line lesson72-units.tesl:255
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft10 := teslrt.EnergyInJoules(KineticEnergy(teslrt.MassKilograms(float64(1.5e+03)), teslrt.SpeedMetersPerSecond(float64(2e+01))))
 //line lesson72-units.tesl:258
 	if !teslrt.FloatEqual(teslLeft10, float64(3e+05)) {
+//line lesson72-units.tesl:258
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft11 := teslrt.AreaInSquareMeters(RectangleArea(teslrt.LengthMeters(float64(12)), teslrt.LengthMeters(float64(4))))
 //line lesson72-units.tesl:260
 	if !teslrt.FloatEqual(teslLeft11, float64(48)) {
+//line lesson72-units.tesl:260
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -458,6 +512,11 @@ func TestTesl7(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson72-units.tesl:308
 		sprint := Pace(teslrt.LengthMeters(float64(1e+02)), teslrt.DurationSeconds(float64(8)))
@@ -465,20 +524,24 @@ func TestTesl7(teslT *testing.T) {
 		teslLeft12 := teslrt.SpeedInMetersPerSecond(sprint)
 //line lesson72-units.tesl:309
 		if !teslrt.FloatEqual(teslLeft12, float64(12.5)) {
+//line lesson72-units.tesl:309
 			teslT.Fatal("Tesl expectation failed")
 		}
 		teslLeft13 := teslrt.SpeedInKilometersPerHour(sprint)
 //line lesson72-units.tesl:310
 		if !teslrt.FloatEqual(teslLeft13, float64(45)) {
+//line lesson72-units.tesl:310
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line lesson72-units.tesl:311
 		if !(ApproxEqual(teslrt.SpeedInMilesPerHour(sprint), float64(27.961704))) {
+//line lesson72-units.tesl:311
 			teslT.Fatal("Tesl expectation failed")
 		}
 		teslLeft14 := LengthRatio(teslrt.LengthMeters(float64(6)), teslrt.LengthMeters(float64(3)))
 //line lesson72-units.tesl:312
 		if !teslrt.FloatEqual(teslLeft14, float64(2)) {
+//line lesson72-units.tesl:312
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -492,12 +555,18 @@ func TestTesl8(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson72-units.tesl:317
 		eta := DeliveryEta(teslrt.LengthKilometers(float64(3e+01)), teslrt.SpeedKilometersPerHour(float64(6e+01)))
 		_ = eta
 //line lesson72-units.tesl:318
 		if !(ApproxEqual(teslrt.DurationInMinutes(eta), float64(3e+01))) {
+//line lesson72-units.tesl:318
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -511,6 +580,11 @@ func TestTesl9(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson72-units.tesl:322
 		d := BrakingDistance(teslrt.SpeedMetersPerSecond(float64(3e+01)), teslrt.AccelerationMetersPerSecondSquared(float64(5)))
@@ -518,6 +592,7 @@ func TestTesl9(teslT *testing.T) {
 		teslLeft15 := teslrt.LengthInMeters(d)
 //line lesson72-units.tesl:323
 		if !teslrt.FloatEqual(teslLeft15, float64(9e+01)) {
+//line lesson72-units.tesl:323
 			teslT.Fatal("Tesl expectation failed")
 		}
 		{
@@ -526,6 +601,7 @@ func TestTesl9(teslT *testing.T) {
 			_ = dHighway
 //line lesson72-units.tesl:326
 			if dHighway >= teslrt.LengthMeters(float64(1e+02)) {
+//line lesson72-units.tesl:326
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -540,14 +616,21 @@ func TestTesl10(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft16 := teslrt.LengthInMeters(SideFromArea(teslrt.AreaSquareMeters(float64(49))))
 //line lesson72-units.tesl:341
 	if !teslrt.FloatEqual(teslLeft16, float64(7)) {
+//line lesson72-units.tesl:341
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft17 := teslrt.AreaInSquareMeters(teslrt.UnitsSquare(teslrt.LengthMeters(float64(9))))
 //line lesson72-units.tesl:342
 	if !teslrt.FloatEqual(teslLeft17, float64(81)) {
+//line lesson72-units.tesl:342
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -560,6 +643,11 @@ func TestTesl11(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson72-units.tesl:365
 		_ = teslrt.TableInsert(VehicleTable, "Vehicle", Vehicle{Id: "v1", TopSpeed: teslrt.SpeedKilometersPerHour(float64(1.1e+02))}, func(teslRow, teslNew Vehicle) bool { return (teslRow.Id == teslNew.Id) })
@@ -585,6 +673,7 @@ func TestTesl11(teslT *testing.T) {
 					}
 				}
 			}()) {
+//line lesson72-units.tesl:367
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -599,8 +688,14 @@ func TestTesl12(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line lesson72-units.tesl:381
 	if !(ApproxEqual(teslrt.TemperatureInFahrenheit(teslrt.TemperatureCelsius(float64(1e+02))), float64(212))) {
+//line lesson72-units.tesl:381
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -613,6 +708,11 @@ func TestTesl13(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson72-units.tesl:394
 		start := teslrt.SecondsToPosix(teslrt.FromInt64(1000))
@@ -624,21 +724,25 @@ func TestTesl13(teslT *testing.T) {
 			teslLeft18 := teslrt.PosixToSeconds(deadline)
 //line lesson72-units.tesl:396
 			if !teslrt.Equal(teslLeft18, teslrt.FromInt64(8200)) {
+//line lesson72-units.tesl:396
 				teslT.Fatal("Tesl expectation failed")
 			}
 			teslLeft19 := teslrt.DurationInSeconds(teslrt.TimeDiff(start, deadline))
 //line lesson72-units.tesl:397
 			if !teslrt.FloatEqual(teslLeft19, float64(7.2e+03)) {
+//line lesson72-units.tesl:397
 				teslT.Fatal("Tesl expectation failed")
 			}
 			teslLeft20 := teslrt.DurationInMinutes(teslrt.TimeDiff(start, deadline))
 //line lesson72-units.tesl:398
 			if !teslrt.FloatEqual(teslLeft20, float64(1.2e+02)) {
+//line lesson72-units.tesl:398
 				teslT.Fatal("Tesl expectation failed")
 			}
 			teslLeft21 := teslrt.DurationToMillis(teslrt.DurationHours(float64(2)))
 //line lesson72-units.tesl:399
 			if !teslrt.Equal(teslLeft21, teslrt.FromInt64(7200000)) {
+//line lesson72-units.tesl:399
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}

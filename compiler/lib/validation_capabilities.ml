@@ -576,7 +576,9 @@ let check_get_routes_do_not_mutate ?(cap_map=[]) ?(imported_func_caps=[])
   let reached_forbidden needed =
     let closure = expand needed in
     List.sort_uniq String.compare
-      (List.filter (fun c -> List.mem c closure) get_forbidden_caps) in
+      (List.filter (fun forbidden ->
+         List.exists (fun granted -> capability_covers forbidden granted) closure)
+         get_forbidden_caps) in
   let report ~loc ~handler ~reached ~subject ~whence =
     errors := make_error ~code:"SEC005" loc
       ~hint:(Printf.sprintf

@@ -220,19 +220,27 @@ func TestTesl0(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft1 := GetStatusClass(teslrt.FromInt64(200))
 //line httpclient-tests.tesl:141
 	if teslLeft1 != "success" {
+//line httpclient-tests.tesl:141
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft2 := GetStatusClass(teslrt.FromInt64(201))
 //line httpclient-tests.tesl:142
 	if teslLeft2 != "success" {
+//line httpclient-tests.tesl:142
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft3 := GetStatusClass(teslrt.FromInt64(204))
 //line httpclient-tests.tesl:143
 	if teslLeft3 != "success" {
+//line httpclient-tests.tesl:143
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -244,19 +252,27 @@ func TestTesl1(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft4 := GetStatusClass(teslrt.FromInt64(400))
 //line httpclient-tests.tesl:147
 	if teslLeft4 != "client-error" {
+//line httpclient-tests.tesl:147
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft5 := GetStatusClass(teslrt.FromInt64(404))
 //line httpclient-tests.tesl:148
 	if teslLeft5 != "client-error" {
+//line httpclient-tests.tesl:148
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft6 := GetStatusClass(teslrt.FromInt64(422))
 //line httpclient-tests.tesl:149
 	if teslLeft6 != "client-error" {
+//line httpclient-tests.tesl:149
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -268,14 +284,21 @@ func TestTesl2(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft7 := GetStatusClass(teslrt.FromInt64(500))
 //line httpclient-tests.tesl:153
 	if teslLeft7 != "server-error" {
+//line httpclient-tests.tesl:153
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft8 := GetStatusClass(teslrt.FromInt64(503))
 //line httpclient-tests.tesl:154
 	if teslLeft8 != "server-error" {
+//line httpclient-tests.tesl:154
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -287,14 +310,21 @@ func TestTesl3(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft9 := GetStatusClass(teslrt.FromInt64(100))
 //line httpclient-tests.tesl:158
 	if teslLeft9 != "other" {
+//line httpclient-tests.tesl:158
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft10 := GetStatusClass(teslrt.FromInt64(301))
 //line httpclient-tests.tesl:159
 	if teslLeft10 != "other" {
+//line httpclient-tests.tesl:159
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -306,19 +336,27 @@ func TestTesl4(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft11 := (BuildAuthHeader("Bearer abc")).Tuple2First
 //line httpclient-tests.tesl:163
 	if teslLeft11 != "Authorization" {
+//line httpclient-tests.tesl:163
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft12 := (BuildAuthHeader("Bearer abc")).Tuple2Second
 //line httpclient-tests.tesl:164
 	if teslLeft12 != "Bearer abc" {
+//line httpclient-tests.tesl:164
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft13 := (BuildAuthHeader("")).Tuple2Second
 //line httpclient-tests.tesl:165
 	if teslLeft13 != "" {
+//line httpclient-tests.tesl:165
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -330,10 +368,16 @@ func TestTesl5(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft14 := ExtractFirstHeader([]teslrt.Tuple2[string, string]{})
 	teslRight14 := teslrt.Maybe[string]{Tag: teslrt.MaybeNothing}
 //line httpclient-tests.tesl:169
 	if teslLeft14.Tag != teslRight14.Tag || (teslLeft14.Tag == teslrt.MaybeSomething && (teslLeft14.SomethingValue != teslRight14.SomethingValue)) {
+//line httpclient-tests.tesl:169
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -345,6 +389,11 @@ func TestTesl6(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line httpclient-tests.tesl:173
 		headers := []teslrt.Tuple2[string, string]{teslrt.Tuple2[string, string]{Tuple2First: "Content-Type", Tuple2Second: "application/json"}}
@@ -353,6 +402,7 @@ func TestTesl6(teslT *testing.T) {
 		teslRight15 := teslrt.Maybe[string]{Tag: teslrt.MaybeSomething, SomethingValue: "Content-Type"}
 //line httpclient-tests.tesl:174
 		if teslLeft15.Tag != teslRight15.Tag || (teslLeft15.Tag == teslrt.MaybeSomething && (teslLeft15.SomethingValue != teslRight15.SomethingValue)) {
+//line httpclient-tests.tesl:174
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -365,20 +415,28 @@ func TestTesl7(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line httpclient-tests.tesl:178
 		headers := []teslrt.Tuple2[string, string]{teslrt.Tuple2[string, string]{Tuple2First: "Authorization", Tuple2Second: "Bearer token"}, teslrt.Tuple2[string, string]{Tuple2First: "Accept", Tuple2Second: "application/json"}}
 		_ = headers
 //line httpclient-tests.tesl:179
 		if !(hasHeader("Authorization", headers)) {
+//line httpclient-tests.tesl:179
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line httpclient-tests.tesl:180
 		if !(hasHeader("Accept", headers)) {
+//line httpclient-tests.tesl:180
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line httpclient-tests.tesl:181
 		if hasHeader("X-Custom", headers) {
+//line httpclient-tests.tesl:181
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -391,12 +449,19 @@ func TestTesl8(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line httpclient-tests.tesl:185
 	if hasHeader("Authorization", []teslrt.Tuple2[string, string]{}) {
+//line httpclient-tests.tesl:185
 		teslT.Fatal("Tesl expectation failed")
 	}
 //line httpclient-tests.tesl:186
 	if hasHeader("Content-Type", []teslrt.Tuple2[string, string]{}) {
+//line httpclient-tests.tesl:186
 		teslT.Fatal("Tesl expectation failed")
 	}
 }

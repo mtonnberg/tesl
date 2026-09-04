@@ -3,6 +3,7 @@ package teslrt
 import (
 	"math"
 	"testing"
+	"time"
 )
 
 func intEqual(left, right Int) bool { return Equal(left, right) }
@@ -352,6 +353,33 @@ func TestListRepeat(t *testing.T) {
 		}()
 		ListRepeat("x", MustParseDecimal("99999999999999999999"))
 	}()
+}
+
+// The element cap must be a recoverable panic decided BEFORE `make`, not an out-of-memory
+// kill inside it: 1<<31 Ints was 32 GiB, which the allocator refuses fatally rather than
+// the runtime refusing cleanly. Both constructors share exactCount, so both are pinned.
+func TestListConstructorsRefuseOversizedCountsBeforeAllocating(t *testing.T) {
+	if maxAllocElements > 1<<26 {
+		t.Fatalf("maxAllocElements = %d; must stay small enough to refuse rather than OOM", maxAllocElements)
+	}
+	overCap := FromInt64(int64(maxAllocElements) + 1)
+	for name, build := range map[string]func(){
+		"List.repeat": func() { ListRepeat("x", overCap) },
+		"List.range":  func() { ListRange(FromInt64(0), overCap) },
+	} {
+		started := time.Now()
+		func() {
+			defer func() {
+				if recover() == nil {
+					t.Errorf("%s over the cap must panic", name)
+				}
+			}()
+			build()
+		}()
+		if elapsed := time.Since(started); elapsed > 10*time.Millisecond {
+			t.Errorf("%s over the cap took %v; the refusal must precede any allocation", name, elapsed)
+		}
+	}
 }
 
 func TestListConcat(t *testing.T) {

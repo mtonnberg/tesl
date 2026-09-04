@@ -312,6 +312,11 @@ func TestTeslApi0(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson80-testing-sso.tesl:208
 		resp := teslrt.ApiRequest(AppServer, "GET", "/me", "", nil, teslrt.DictToList(onHost()))
@@ -319,6 +324,7 @@ func TestTeslApi0(teslT *testing.T) {
 		teslLeft1 := resp.Status
 //line lesson80-testing-sso.tesl:209
 		if !teslrt.Equal(teslLeft1, teslrt.FromInt64(401)) {
+//line lesson80-testing-sso.tesl:209
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -335,16 +341,23 @@ func TestTeslApi1(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson80-testing-sso.tesl:213
 		resp := teslrt.ApiRequest(AppServer, "GET", "/me", "", []string{"__Host-session=" + mintSession("u-42")}, teslrt.DictToList(onHost()))
 		_ = resp
 //line lesson80-testing-sso.tesl:214
 		if !(teslrt.StatusOk(resp.Status)) {
+//line lesson80-testing-sso.tesl:214
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line lesson80-testing-sso.tesl:215
 		if !teslrt.JsonEqual(teslrt.JsonFieldOf(resp.Body, "userId"), "u-42") {
+//line lesson80-testing-sso.tesl:215
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -361,6 +374,11 @@ func TestTeslApi2(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson80-testing-sso.tesl:221
 		resp := teslrt.ApiRequest(AppServer, "GET", "/auth/github/login", "", nil, teslrt.DictToList(onHost()))
@@ -368,6 +386,7 @@ func TestTeslApi2(teslT *testing.T) {
 		teslLeft2 := resp.Status
 //line lesson80-testing-sso.tesl:222
 		if !teslrt.Equal(teslLeft2, teslrt.FromInt64(303)) {
+//line lesson80-testing-sso.tesl:222
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line lesson80-testing-sso.tesl:223
@@ -377,6 +396,7 @@ func TestTeslApi2(teslT *testing.T) {
 			case teslrt.MaybeNothing:
 //line lesson80-testing-sso.tesl:224
 				if true {
+//line lesson80-testing-sso.tesl:224
 					teslT.Fatal("Tesl expectation failed")
 				}
 			case teslrt.MaybeSomething:
@@ -384,10 +404,12 @@ func TestTeslApi2(teslT *testing.T) {
 				_ = location
 //line lesson80-testing-sso.tesl:226
 				if !(teslrt.StringContains(location, "https://github.com/login/oauth/authorize")) {
+//line lesson80-testing-sso.tesl:226
 					teslT.Fatal("Tesl expectation failed")
 				}
 //line lesson80-testing-sso.tesl:227
 				if !(teslrt.StringContains(location, "code_challenge_method=S256")) {
+//line lesson80-testing-sso.tesl:227
 					teslT.Fatal("Tesl expectation failed")
 				}
 			default:
@@ -408,6 +430,11 @@ func TestTeslApi3(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line lesson80-testing-sso.tesl:231
 	_ = teslrt.StubHttp("GET", "https://idp.example.test/.well-known/openid-configuration", teslrt.FromInt64(200), "{\"issuer\": \"https://idp.example.test\", \"authorization_endpoint\": \"https://idp.example.test/authorize\", \"token_endpoint\": \"https://idp.example.test/token\", \"jwks_uri\": \"https://idp.example.test/jwks\", \"code_challenge_methods_supported\": [\"S256\"]}")
 	{
@@ -417,10 +444,12 @@ func TestTeslApi3(teslT *testing.T) {
 		teslLeft3 := resp.Status
 //line lesson80-testing-sso.tesl:235
 		if !teslrt.Equal(teslLeft3, teslrt.FromInt64(303)) {
+//line lesson80-testing-sso.tesl:235
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line lesson80-testing-sso.tesl:236
 		if !(teslrt.HttpCalled("GET", "https://idp.example.test/.well-known/openid-configuration")) {
+//line lesson80-testing-sso.tesl:236
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line lesson80-testing-sso.tesl:237
@@ -430,6 +459,7 @@ func TestTeslApi3(teslT *testing.T) {
 			case teslrt.MaybeNothing:
 //line lesson80-testing-sso.tesl:238
 				if true {
+//line lesson80-testing-sso.tesl:238
 					teslT.Fatal("Tesl expectation failed")
 				}
 			case teslrt.MaybeSomething:
@@ -437,6 +467,7 @@ func TestTeslApi3(teslT *testing.T) {
 				_ = location
 //line lesson80-testing-sso.tesl:240
 				if !(teslrt.StringContains(location, "https://idp.example.test/authorize")) {
+//line lesson80-testing-sso.tesl:240
 					teslT.Fatal("Tesl expectation failed")
 				}
 			default:
@@ -457,6 +488,11 @@ func TestTeslApi4(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson80-testing-sso.tesl:246
 		loginResp := teslrt.ApiRequest(AppServer, "GET", "/auth/github/login", "", nil, teslrt.DictToList(onHost()))
@@ -485,6 +521,7 @@ func TestTeslApi4(teslT *testing.T) {
 				_ = state
 //line lesson80-testing-sso.tesl:251
 				if teslrt.Compare(teslrt.StringLength(state), teslrt.FromInt64(0)) <= 0 {
+//line lesson80-testing-sso.tesl:251
 					teslT.Fatal("Tesl expectation failed")
 				}
 				{
@@ -507,6 +544,7 @@ func TestTeslApi4(teslT *testing.T) {
 					_ = oauthCookie
 //line lesson80-testing-sso.tesl:256
 					if !(teslrt.StringContains(oauthCookie, "__Host-oauth=")) {
+//line lesson80-testing-sso.tesl:256
 						teslT.Fatal("Tesl expectation failed")
 					}
 //line lesson80-testing-sso.tesl:258
@@ -526,6 +564,7 @@ func TestTeslApi4(teslT *testing.T) {
 							teslLeft4 := cb.Status
 //line lesson80-testing-sso.tesl:267
 							if !teslrt.Equal(teslLeft4, teslrt.FromInt64(303)) {
+//line lesson80-testing-sso.tesl:267
 								teslT.Fatal("Tesl expectation failed")
 							}
 //line lesson80-testing-sso.tesl:269
@@ -535,6 +574,7 @@ func TestTeslApi4(teslT *testing.T) {
 								case teslrt.MaybeNothing:
 //line lesson80-testing-sso.tesl:270
 									if true {
+//line lesson80-testing-sso.tesl:270
 										teslT.Fatal("Tesl expectation failed")
 									}
 								case teslrt.MaybeSomething:
@@ -546,10 +586,12 @@ func TestTeslApi4(teslT *testing.T) {
 										_ = profileResp
 //line lesson80-testing-sso.tesl:273
 										if !(teslrt.StatusOk(profileResp.Status)) {
+//line lesson80-testing-sso.tesl:273
 											teslT.Fatal("Tesl expectation failed")
 										}
 //line lesson80-testing-sso.tesl:274
 										if !teslrt.JsonEqual(teslrt.JsonFieldOf(profileResp.Body, "userId"), "12345") {
+//line lesson80-testing-sso.tesl:274
 											teslT.Fatal("Tesl expectation failed")
 										}
 									}

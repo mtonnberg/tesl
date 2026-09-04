@@ -78,14 +78,22 @@ func TestDebugValueBoundsAndPanicRecovery(t *testing.T) {
 		t.Fatalf("bounded value = %#v", bounded)
 	}
 	debugger := NewDebugger()
-	debugger.Attach(func(event DebugEvent) { debugger.Continue() })
+	var frame DebugFrame
+	debugger.Attach(func(event DebugEvent) {
+		// The stop frame is readable while stopped; Continue drops it (request
+		// state must not outlive the stop), so capture it here.
+		frame, _ = debugger.Snapshot()
+		debugger.Continue()
+	})
 	debugger.Pause()
 	debugger.Checkpoint(DebugFrame{Location: SourceLocation{File: "x", Line: 1}, Locals: []DebugLocal{{
 		Name: "bad", Accessor: func() DebugValue { panic("hostile accessor") },
 	}}})
-	frame, _ := debugger.Snapshot()
 	if len(frame.Locals) != 1 || frame.Locals[0].Value.Display != "[unavailable]" {
 		t.Fatalf("panic recovery frame = %#v", frame)
+	}
+	if after, paused := debugger.Snapshot(); paused || len(after.Locals) != 0 {
+		t.Fatalf("frame retained after continue = %#v", after)
 	}
 }
 

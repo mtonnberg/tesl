@@ -59,7 +59,7 @@ func TestParseBreakpointAcceptsFileLineAndRejectsTheRest(t *testing.T) {
 func TestProjectEndpointPrefersSocketThenPortFile(t *testing.T) {
 	project := t.TempDir()
 	stuff := filepath.Join(project, ".tesl-stuff")
-	if _, _, err := projectEndpoint(project); err == nil {
+	if _, err := projectEndpoint(project); err == nil {
 		t.Fatal("empty project must not resolve an endpoint")
 	}
 	if err := os.MkdirAll(stuff, 0o755); err != nil {
@@ -69,17 +69,60 @@ func TestProjectEndpointPrefersSocketThenPortFile(t *testing.T) {
 	if err := os.WriteFile(port, []byte("51723\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	socket, tcp, err := projectEndpoint(project)
-	if err != nil || socket != "" || tcp != "127.0.0.1:51723" {
-		t.Fatalf("port discovery = %q,%q,%v", socket, tcp, err)
+	// A port file without its token file is an incomplete TCP endpoint: the
+	// runtime always writes both, so refusing here beats a confusing "unauthorized".
+	if _, err := projectEndpoint(project); err == nil || !strings.Contains(err.Error(), "debug.token") {
+		t.Fatalf("port without token = %v", err)
+	}
+	token := strings.Repeat("ab", 32)
+	if err := os.WriteFile(filepath.Join(stuff, "debug.token"), []byte(token+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	endpoint, err := projectEndpoint(project)
+	if err != nil || endpoint.Socket != "" || endpoint.Address != "127.0.0.1:51723" || endpoint.Token != token {
+		t.Fatalf("port discovery = %#v,%v", endpoint, err)
 	}
 	socketPath := filepath.Join(stuff, "debug.sock")
 	if err := os.WriteFile(socketPath, []byte(""), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	socket, tcp, err = projectEndpoint(project)
-	if err != nil || socket != socketPath || tcp != "" {
-		t.Fatalf("socket preference = %q,%q,%v", socket, tcp, err)
+	endpoint, err = projectEndpoint(project)
+	if err != nil || endpoint.Socket != socketPath || endpoint.Address != "" || endpoint.Token != "" {
+		t.Fatalf("socket preference = %#v,%v", endpoint, err)
+	}
+}
+
+// The TCP chain end to end: the runtime publishes debug.port + debug.token, the
+// tool discovers both from -project and the handshake is accepted; an explicit
+// -tcp without the token is refused by the endpoint.
+func TestRunDiscoversTCPPortAndTokenFromProject(t *testing.T) {
+	project := t.TempDir()
+	t.Setenv("TESL_DEBUG", "")
+	t.Setenv("TESL_DEBUG_SOCKET", "")
+	t.Setenv("TESL_DEBUG_TOKEN", "")
+	t.Setenv("TESL_DEBUG_PORT", "0")
+	t.Setenv("TESL_DEBUG_ROOT", project)
+	server, err := teslrt.StartDebugControlFromEnvironment()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if server == nil {
+		t.Fatal("TESL_DEBUG_PORT did not start a control server")
+	}
+	t.Cleanup(func() { _ = server.Close() })
+	stdout := &strings.Builder{}
+	if code := run([]string{"-project", project, "-operation", "ping"}, strings.NewReader(""), stdout); code != 0 {
+		t.Fatalf("ping via project discovery exit = %d", code)
+	}
+	if response := decode(t, stdout.String()); response["ok"] != true {
+		t.Fatalf("ping response = %#v", response)
+	}
+	if code := run([]string{"-tcp", server.Endpoint(), "-operation", "ping"}, strings.NewReader(""), &strings.Builder{}); code == 0 {
+		t.Fatal("explicit -tcp without -token must be refused by the endpoint")
+	}
+	stdout.Reset()
+	if code := run([]string{"-tcp", server.Endpoint(), "-token", server.Token(), "-operation", "ping"}, strings.NewReader(""), stdout); code != 0 {
+		t.Fatalf("ping with explicit token exit = %d", code)
 	}
 }
 

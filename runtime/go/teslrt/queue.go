@@ -1,9 +1,11 @@
 package teslrt
 
 import (
+	"container/heap"
 	"fmt"
 	"sort"
 	"sync"
+	"time"
 )
 
 // An in-memory job queue: the `backend: Memory` counterpart of tesl/queue.rkt's store.
@@ -15,15 +17,69 @@ import (
 //
 // A payload is held as `any` because one queue may carry several job types; the emitter
 // knows them statically and passes a dispatcher that type-switches.
+//
+// BOUND. The store is in-process memory, and an HTTP endpoint that enqueues is a path from
+// the network into it; a pending backlog past maxPendingJobs makes `enqueue` trap rather than
+// grow without limit. The trap is loud by design — a queue that full is a system that has
+// stopped keeping up, and dropping the job silently would hide exactly that.
+//
+// CLAIM. The oldest pending (or dead) job is found through a min-heap on the sequence number
+// rather than a scan of every job, so a claim is O(log n) against a large backlog instead of
+// O(n) per claim (quadratic to drain). The heaps are indexes over `jobs`; the map stays the
+// record, which is also what the debugger's domain dump reads.
 type Queue struct {
 	mutex       sync.Mutex
 	name        string
 	maxAttempts int
+	maxPending  int
 	nextSeq     int64
 	jobs        map[string]*queuedJob
+	pendingHeap seqHeap
+	deadHeap    seqHeap
+	pending     int
+	// backend is the DURABLE store, when the declaration names a Postgres-backed database
+	// (`NewQueueOn` in pgstores.go attaches it); nil for a Memory queue. Every public
+	// operation asks `durable()` first and falls through to the in-memory store above when
+	// the backend is absent OR its database is not bound — a `test` block without
+	// `with database` keeps running on memory, a served program bound by `main`'s App
+	// runs against the table.
+	backend queueBackend
+	// wake is the worker doorbell: a buffered(1) channel `Enqueue` (and, for a durable
+	// queue, the LISTEN loop on a `tesl_queue` notification from any instance) signals, and
+	// an idle worker waits on with a fallback timeout — so a job is picked up within the
+	// notification round trip rather than at the next poll, and an idle queue costs no
+	// polling. tesl/queue.rkt did the same with a semaphore fed by a LISTEN thread.
+	wake chan struct{}
+}
+
+// queueBackend is what a durable job store answers. The interface is deliberately the
+// in-memory store's own vocabulary (status strings, attempts, DeadJob values) so the
+// public functions below dispatch with one `if` and neither path grows a semantics of its
+// own. It names no driver type: this file ships with every program, the Postgres
+// implementation (pgstores.go) only with one that declares a Postgres database.
+type queueBackend interface {
+	// active reports whether the store's database is bound right now.
+	active() bool
+	enqueue(payload any) string
+	dequeue(status string) (id string, payload any, attempts int, found bool)
+	complete(id string)
+	fail(id string, attempts int)
+	count(status string) int
+	deadJobs(queue *Queue) []DeadJob
+	requeue(id string) bool
+	reset()
+}
+
+// durable answers the backend this call runs against, or nil for the in-memory path.
+func (queue *Queue) durable() queueBackend {
+	if backend := queue.backend; backend != nil && backend.active() {
+		return backend
+	}
+	return nil
 }
 
 type queuedJob struct {
+	id       string
 	payload  any
 	status   string // "pending" | "processing" | "dead"
 	attempts int
@@ -37,11 +93,74 @@ const (
 	jobDead       = "dead"
 )
 
+// maxPendingJobs bounds one Memory queue's pending backlog.
+const maxPendingJobs = 100000
+
+// seqHeap orders jobs by sequence number, oldest first. An entry is claimed lazily: a job
+// whose status no longer matches the heap it sits in (it was reset, or requeued out of the
+// dead letter) is skipped when it surfaces, which keeps every transition O(log n) with no
+// index bookkeeping.
+type seqHeap []*queuedJob
+
+func (h seqHeap) Len() int           { return len(h) }
+func (h seqHeap) Less(i, j int) bool { return h[i].seq < h[j].seq }
+func (h seqHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
+func (h *seqHeap) Push(x any)        { *h = append(*h, x.(*queuedJob)) }
+func (h *seqHeap) Pop() (popped any) {
+	old := *h
+	n := len(old)
+	popped = old[n-1]
+	// The vacated slot is not nil-ed: nilaway forbids a nil in a slice of `*queuedJob`, and
+	// the slot is overwritten by the next push (the backing array is bounded by the heap's
+	// high-water mark, which the queue's pending cap bounds in turn).
+	*h = old[:n-1]
+	return popped
+}
+func (h *seqHeap) push(job *queuedJob) { heap.Push(h, job) }
+
+// pop answers the oldest job still in `status` and still in the store, discarding stale
+// entries on the way.
+func (h *seqHeap) pop(jobs map[string]*queuedJob, status string) (*queuedJob, bool) {
+	for h.Len() > 0 {
+		job := heap.Pop(h).(*queuedJob)
+		if current, present := jobs[job.id]; present && current == job && job.status == status {
+			return job, true
+		}
+	}
+	return nil, false
+}
+
 func NewQueue(name string, maxAttempts int) *Queue {
 	if maxAttempts < 1 {
 		maxAttempts = 1
 	}
-	return &Queue{name: name, maxAttempts: maxAttempts, jobs: map[string]*queuedJob{}}
+	return &Queue{name: name, maxAttempts: maxAttempts, maxPending: maxPendingJobs,
+		jobs: map[string]*queuedJob{}, wake: make(chan struct{}, 1)}
+}
+
+// Wake rings the worker doorbell without blocking: a doorbell already rung stays rung once.
+func (queue *Queue) Wake() {
+	select {
+	case queue.wake <- struct{}{}:
+	default:
+	}
+}
+
+// waitForWork blocks an idle worker until the doorbell rings or `fallback` elapses — the
+// fallback is what catches a notification lost to a reconnecting LISTEN connection.
+func (queue *Queue) waitForWork(fallback time.Duration) {
+	timer := time.NewTimer(fallback)
+	defer timer.Stop()
+	select {
+	case <-queue.wake:
+	case <-timer.C:
+	}
+}
+
+// Queue metrics, named as tesl/queue.rkt named them so a dashboard survives the backend
+// change: a counter per enqueue and per outcome, and the worker's run time.
+func queueMetric(name, queue string, delta int64) {
+	Counter(name, FromInt64(delta), []Tuple2[string, string]{{Tuple2First: "tesl.queue", Tuple2Second: queue}})
 }
 
 // Enqueue stores a payload and answers the new job's id.
@@ -50,19 +169,44 @@ func NewQueue(name string, maxAttempts int) *Queue {
 // which let a committed job id collide with a fresh one (the same reasoning as the Racket
 // side's move off gensym).
 func Enqueue(queue *Queue, payload any) string {
+	queueMetric("tesl.queue.enqueued", queue.name, 1)
+	if backend := queue.durable(); backend != nil {
+		id := backend.enqueue(payload)
+		// Local workers wake now; workers on other instances wake on the NOTIFY the
+		// backend queued with the row (delivered when the enclosing transaction commits).
+		queue.Wake()
+		return id
+	}
 	queue.mutex.Lock()
 	defer queue.mutex.Unlock()
+	if queue.pending >= queue.maxPending {
+		panic(fmt.Sprintf("enqueue: queue %s is full — %d jobs are pending and the in-memory "+
+			"store is bounded at %d; workers are not keeping up with producers",
+			queue.name, queue.pending, queue.maxPending))
+	}
 	id := UUIDv7()
 	queue.nextSeq++
-	queue.jobs[id] = &queuedJob{payload: payload, status: jobPending, seq: queue.nextSeq}
+	job := &queuedJob{id: id, payload: payload, status: jobPending, seq: queue.nextSeq}
+	queue.jobs[id] = job
+	queue.pendingHeap.push(job)
+	queue.pending++
+	queue.Wake()
 	return id
 }
 
 func PendingJobCount(queue *Queue) Int {
-	return FromInt64(int64(queue.countWithStatus(jobPending)))
+	if backend := queue.durable(); backend != nil {
+		return FromInt64(int64(backend.count(jobPending)))
+	}
+	queue.mutex.Lock()
+	defer queue.mutex.Unlock()
+	return FromInt64(int64(queue.pending))
 }
 
 func DeadJobCount(queue *Queue) Int {
+	if backend := queue.durable(); backend != nil {
+		return FromInt64(int64(backend.count(jobDead)))
+	}
 	return FromInt64(int64(queue.countWithStatus(jobDead)))
 }
 
@@ -78,35 +222,29 @@ func (queue *Queue) countWithStatus(status string) int {
 	return matched
 }
 
-// dequeue claims the OLDEST job with `status`, marking it processing.
-//
-// The candidates carry their entry rather than being re-read from the map by id: a second
-// lookup would be a map read whose success only the surrounding lock explains, which is
-// exactly what nilaway (in the emitted-code gate) refuses to take on trust.
+// dequeue claims the OLDEST job with `status`, marking it processing. The heap hands back
+// the job itself, not an id to re-read from the map: a second lookup would be a map read
+// whose success only the surrounding lock explains, which is exactly what nilaway (in the
+// emitted-code gate) refuses to take on trust.
 func (queue *Queue) dequeue(status string) (string, any, int, bool) {
+	if backend := queue.durable(); backend != nil {
+		return backend.dequeue(status)
+	}
 	queue.mutex.Lock()
 	defer queue.mutex.Unlock()
-	type candidate struct {
-		id    string
-		entry *queuedJob
+	index := &queue.pendingHeap
+	if status == jobDead {
+		index = &queue.deadHeap
 	}
-	candidates := make([]candidate, 0, len(queue.jobs))
-	for id, job := range queue.jobs {
-		if job.status == status {
-			candidates = append(candidates, candidate{id: id, entry: job})
-		}
-	}
-	if len(candidates) == 0 {
+	job, found := index.pop(queue.jobs, status)
+	if !found {
 		return "", nil, 0, false
 	}
-	oldest := candidates[0]
-	for _, next := range candidates[1:] {
-		if next.entry.seq < oldest.entry.seq {
-			oldest = next
-		}
+	if status == jobPending {
+		queue.pending--
 	}
-	oldest.entry.status = jobProcessing
-	return oldest.id, oldest.entry.payload, oldest.entry.attempts, true
+	job.status = jobProcessing
+	return job.id, job.payload, job.attempts, true
 }
 
 // DeadJob is one entry in a queue's dead letter. It is OPAQUE to Tesl — `deadJobs` is typed
@@ -122,6 +260,9 @@ type DeadJob struct {
 // DeadJobs is the dead letter's contents, oldest first. The order is by enqueue sequence
 // rather than by map iteration, matching the PostgreSQL path's `order by created_at asc`.
 func DeadJobs(queue *Queue) []DeadJob {
+	if backend := queue.durable(); backend != nil {
+		return backend.deadJobs(queue)
+	}
 	queue.mutex.Lock()
 	defer queue.mutex.Unlock()
 	type entry struct {
@@ -146,9 +287,16 @@ func DeadJobs(queue *Queue) []DeadJob {
 // sequence counter is deliberately NOT reset: it only has to be monotonic, and a counter that
 // restarts is how job ids came to repeat once already.
 func ResetQueue(queue *Queue) {
+	if backend := queue.durable(); backend != nil {
+		backend.reset()
+		return
+	}
 	queue.mutex.Lock()
 	defer queue.mutex.Unlock()
 	queue.jobs = map[string]*queuedJob{}
+	queue.pendingHeap = nil
+	queue.deadHeap = nil
+	queue.pending = 0
 }
 
 // JobOutcome is what a worker run produced, for the `expectJobOk` style assertions.
@@ -163,18 +311,24 @@ type JobOutcome struct {
 // attempts reach maxAttempts — moves it to the dead letter. Identical to the Racket
 // in-memory path, including that a TRAP counts as a failed attempt rather than propagating.
 //
-// The retry BACKOFF delay is deliberately not simulated here: the in-memory Racket path
-// does not sleep either, and a test that had to wait for an exponential backoff would be a
-// slow test rather than a truthful one.
+// The retry BACKOFF delay is deliberately not simulated on the in-memory path: the in-memory
+// Racket path does not sleep either, and a test that had to wait for an exponential backoff
+// would be a slow test rather than a truthful one. The durable store applies it as the row's
+// `next_attempt_at` (pgstores.go), which the claim respects.
 func ProcessNextJob(queue *Queue, handler func(any) JobOutcome) JobOutcome {
 	id, payload, attempts, found := queue.dequeue(jobPending)
 	if !found {
 		return JobOutcome{}
 	}
+	started := time.Now()
 	outcome := runJob(handler, payload)
+	Histogram("tesl.queue.job.duration", time.Since(started).Seconds(),
+		[]Tuple2[string, string]{{Tuple2First: "tesl.queue", Tuple2Second: queue.name}})
 	if outcome.OK {
+		queueMetric("tesl.queue.completed", queue.name, 1)
 		queue.complete(id)
 	} else {
+		queueMetric("tesl.queue.failed", queue.name, 1)
 		queue.fail(id, attempts)
 	}
 	outcome.Ran = true
@@ -220,12 +374,20 @@ func runJob(handler func(any) JobOutcome, payload any) (outcome JobOutcome) {
 }
 
 func (queue *Queue) complete(id string) {
+	if backend := queue.durable(); backend != nil {
+		backend.complete(id)
+		return
+	}
 	queue.mutex.Lock()
 	defer queue.mutex.Unlock()
 	delete(queue.jobs, id)
 }
 
 func (queue *Queue) fail(id string, attempts int) {
+	if backend := queue.durable(); backend != nil {
+		backend.fail(id, attempts)
+		return
+	}
 	queue.mutex.Lock()
 	defer queue.mutex.Unlock()
 	job, found := queue.jobs[id]
@@ -235,8 +397,13 @@ func (queue *Queue) fail(id string, attempts int) {
 	job.attempts = attempts + 1
 	if job.attempts >= queue.maxAttempts {
 		job.status = jobDead
+		queue.deadHeap.push(job)
 	} else {
+		// The job keeps its sequence number, so a retry goes back to the FRONT of the
+		// line — the order the scan-based claim always had.
 		job.status = jobPending
+		queue.pendingHeap.push(job)
+		queue.pending++
 	}
 }
 
@@ -306,17 +473,27 @@ func EnqueueJob(queue *Queue, payload any) struct{} {
 // Requeue resets a dead job to pending with a fresh attempt count, so the workers pick it up
 // again. It answers whether the job was there to reset — a job the dead letter no longer holds
 // is `False` rather than a trap, which is Racket's answer for the same case.
+//
+// "There" means IN the dead letter: a job a dead-letter worker has already claimed is in
+// flight, and resetting it to pending would run it twice — once more by an ordinary worker,
+// while the dead-letter worker's completion then deleted whichever copy was left. So an
+// in-flight job answers `False` too: from the dead letter's point of view it has left.
 func Requeue(job DeadJob) bool {
 	if job.queue == nil {
 		return false
 	}
+	if backend := job.queue.durable(); backend != nil {
+		return backend.requeue(job.ID)
+	}
 	job.queue.mutex.Lock()
 	defer job.queue.mutex.Unlock()
 	found, present := job.queue.jobs[job.ID]
-	if !present {
+	if !present || found.status != jobDead {
 		return false
 	}
 	found.status = jobPending
 	found.attempts = 0
+	job.queue.pendingHeap.push(found)
+	job.queue.pending++
 	return true
 }

@@ -1,0 +1,49 @@
+module TransactionMemoryRollbackTests exposing []
+
+# `transaction { }` rolls back on a trap — on the Memory store too.  Until 2026-09-02 a
+# Memory-only module INLINED the block, so the first insert of a pair survived the second's
+# duplicate-key trap; on Postgres the whole block rolled back.  A test asserting atomicity
+# therefore passed on the store it ran on and meant nothing about production (language
+# review 2026-09-02, M9).  Rollback is by restore and single-process; see table.go.
+
+import Tesl.Prelude exposing [Bool(..), Int, String]
+import Tesl.DB exposing [dbRead, dbWrite]
+import Tesl.Database exposing [Database, DatabaseBackend, Memory]
+
+entity Ledger table "ledger" primaryKey id {
+  id: String
+  amount: Int
+}
+
+database TestDb = Database {
+  schema: "transaction_memory_rollback"
+  entities: [Ledger]
+  backend: Memory
+}
+
+fn countEntries() -> Int requires [dbRead] =
+  selectCount l from Ledger
+
+fn transferBoth() -> Int requires [dbWrite] =
+  transaction {
+    let _ = insert Ledger { id: "a", amount: 10 }
+    let _ = insert Ledger { id: "b", amount: 20 }
+    2
+  }
+
+fn transferThenTrap() -> Int requires [dbWrite] =
+  transaction {
+    let _ = insert Ledger { id: "a", amount: 10 }
+    let _ = insert Ledger { id: "a", amount: 99 }
+    2
+  }
+
+test "a committed transaction keeps every write" requires [dbRead, dbWrite] {
+  expect transferBoth () == 2
+  expect countEntries () == 2
+}
+
+test "a trap inside the block rolls back the writes before it" requires [dbRead, dbWrite] {
+  expectFail transferThenTrap ()
+  expect countEntries () == 0
+}

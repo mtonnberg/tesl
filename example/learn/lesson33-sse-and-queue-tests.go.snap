@@ -37,6 +37,7 @@ golang.org/x/text v0.41.0/go.mod h1:jvf1O8ajNzZqhSrQBPbutR/EB83Cc0CFrezNQIwbb5M=
 package teslmodlesson33sseandqueuetests
 
 import (
+	"errors"
 	"net/http"
 	"tesl.generated/teslmodlesson33sseandqueuetests/internal/teslrt"
 )
@@ -82,10 +83,10 @@ func teslEqualNoticeEventNoticeSent(teslLeft, teslRight NoticeEvent) bool {
 }
 
 //line lesson33-sse-and-queue-tests.tesl:89
-var Lesson33QueueQueue = teslrt.NewQueue("Lesson33Queue", 2)
+var Lesson33QueueQueue = teslrt.NewQueueOn(Lesson33DatabaseDatabase, "Lesson33Queue", 2, "linear", 1)
 
 //line lesson33-sse-and-queue-tests.tesl:99
-var Lesson33EventsChannel = teslrt.NewSseChannel("Lesson33Events")
+var Lesson33EventsChannel = teslrt.NewSseChannelOn(Lesson33DatabaseDatabase, "Lesson33Events")
 
 //line lesson33-sse-and-queue-tests.tesl:44
 var Lesson33DatabaseDatabase = teslrt.NewDatabase(
@@ -157,6 +158,41 @@ func DecodeSendNoticeRequestJSON(teslJSON any) teslrt.Check[SendNoticeRequest] {
 	return teslrt.Reject[SendNoticeRequest](400, "no decode alternative matched")
 }
 
+// DecodeNotifyJobJSON is the DERIVED decoder for a record with no `codec` block: the type is the
+// whole contract, exactly as it is on the Legacy runtime's generic decode.
+func DecodeNotifyJobJSON(teslJSON any) teslrt.Check[NotifyJob] {
+	teslFields, teslShapeErr := teslrt.DecodeObjectShape(teslJSON, "NotifyJob", []string{"userId", "message"})
+	if teslShapeErr != nil {
+		return teslrt.RejectShape[NotifyJob](teslShapeErr.Error())
+	}
+	teslFieldUserId, teslErrUserId := teslrt.DecodeStringValue(teslFields["userId"])
+	if teslErrUserId != nil {
+		return teslrt.RejectShape[NotifyJob](teslErrUserId.Error())
+	}
+	teslFieldMessage, teslErrMessage := teslrt.DecodeStringValue(teslFields["message"])
+	if teslErrMessage != nil {
+		return teslrt.RejectShape[NotifyJob](teslErrMessage.Error())
+	}
+	return teslrt.Accept(NotifyJob{UserId: teslFieldUserId, Message: teslFieldMessage})
+}
+
+var _ = teslrt.RegisterJobCodec(Lesson33QueueQueue, "NotifyJob", func(teslJob any) any {
+	return teslEncode3(teslJob.(NotifyJob))
+}, func(teslJSON any) (any, error) {
+	teslDecoded, teslErr := func(teslRaw any) (NotifyJob, error) {
+		teslNested := DecodeNotifyJobJSON(teslRaw)
+		if !teslNested.OK() {
+			return NotifyJob{}, errors.New(teslNested.Message())
+		}
+		teslValue, _ := teslNested.Value()
+		return teslValue, nil
+	}(teslJSON)
+	if teslErr != nil {
+		return nil, teslErr
+	}
+	return teslDecoded, nil
+})
+
 var Lesson33Server = teslrt.Server{
 	Routes: []teslrt.Route{
 		{Method: "POST", Path: "/send", Endpoint: "sendNotice"},
@@ -213,6 +249,13 @@ func teslEncode2(teslValue NoticeEvent) any {
 	}()
 }
 
+func teslEncode3(teslValue NotifyJob) any {
+	return map[string]any{
+		"userId":  teslEncode1(teslValue.UserId),
+		"message": teslEncode1(teslValue.Message),
+	}
+}
+
 // Declared in Tesl but not called within this module.  Tesl permits an unused
 // private declaration; Go's linters do not, so these references keep them.
 var (
@@ -248,6 +291,11 @@ func TestTeslApi0(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson33-sse-and-queue-tests.tesl:129
 		stream := teslrt.SubscribeStream(Lesson33Server, "/events/user-1", nil)
@@ -259,11 +307,13 @@ func TestTeslApi0(teslT *testing.T) {
 			_ = resp
 //line lesson33-sse-and-queue-tests.tesl:131
 			if !(teslrt.StatusOk(resp.Status)) {
+//line lesson33-sse-and-queue-tests.tesl:131
 				teslT.Fatal("Tesl expectation failed")
 			}
 			teslLeft1 := teslrt.PendingJobCount(Lesson33QueueQueue)
 //line lesson33-sse-and-queue-tests.tesl:133
 			if !teslrt.Equal(teslLeft1, teslrt.FromInt64(1)) {
+//line lesson33-sse-and-queue-tests.tesl:133
 				teslT.Fatal("Tesl expectation failed")
 			}
 			{
@@ -296,11 +346,13 @@ func TestTeslApi0(teslT *testing.T) {
 					teslLeft2 := job.UserId
 //line lesson33-sse-and-queue-tests.tesl:137
 					if teslLeft2 != "user-1" {
+//line lesson33-sse-and-queue-tests.tesl:137
 						teslT.Fatal("Tesl expectation failed")
 					}
 					teslLeft3 := teslrt.PendingJobCount(Lesson33QueueQueue)
 //line lesson33-sse-and-queue-tests.tesl:138
 					if !teslrt.Equal(teslLeft3, teslrt.FromInt64(0)) {
+//line lesson33-sse-and-queue-tests.tesl:138
 						teslT.Fatal("Tesl expectation failed")
 					}
 					{
@@ -309,10 +361,12 @@ func TestTeslApi0(teslT *testing.T) {
 						_ = events
 //line lesson33-sse-and-queue-tests.tesl:141
 						if !(teslrt.JsonIsNotEmpty(events)) {
+//line lesson33-sse-and-queue-tests.tesl:141
 							teslT.Fatal("Tesl expectation failed")
 						}
 //line lesson33-sse-and-queue-tests.tesl:142
 						if !(teslrt.JsonIncludesWhere(teslrt.JsonParseBody("{\"tag\":\"NoticeSent\",\"fields\":{\"message\":\"Hello from lesson33\"}}").JsonRaw(), events)) {
+//line lesson33-sse-and-queue-tests.tesl:142
 							teslT.Fatal("Tesl expectation failed")
 						}
 					}

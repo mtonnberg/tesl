@@ -55,6 +55,11 @@ func TestTesl0(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line multiparam_test.tesl:17
 		lo := teslrt.FromInt64(1)
@@ -74,6 +79,7 @@ func TestTesl0(teslT *testing.T) {
 					teslLeft1 := RequiresInBounds(lo, hi, x)
 //line multiparam_test.tesl:21
 					if teslLeft1 != "5 is in [1, 10]" {
+//line multiparam_test.tesl:21
 						teslT.Fatal("Tesl expectation failed")
 					}
 				}

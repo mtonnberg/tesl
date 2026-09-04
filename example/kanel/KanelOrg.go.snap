@@ -1158,12 +1158,19 @@ func CreateOrgHandler(session teslmodkanelauth.KanelSession, req teslmodkanelmod
 //line KanelOrg.tesl:210
 								memberId := teslrt.GeneratePrefixedId("mem")
 								_ = memberId
-								{
+//line KanelOrg.tesl:211
+								var teslCommitted teslmodkanelmodels.Org
+								teslrt.WithMemoryTransaction(func() {
+									teslCommitted = func() teslmodkanelmodels.Org {
+										{
 //line KanelOrg.tesl:214
-									_ = teslrt.TableInsert(teslmodkanelmodels.OrgMembershipTable, "OrgMembership", teslmodkanelmodels.OrgMembership{Id: memberId, OrgId: orgId, UserId: session.UserId, Role: teslmodkanelmodels.OrgRole{Tag: teslmodkanelmodels.OrgRoleRoleAdmin}, JoinedAt: teslrt.NowMillis()}, func(teslRow, teslNew teslmodkanelmodels.OrgMembership) bool { return (teslRow.Id == teslNew.Id) })
+											_ = teslrt.TableInsert(teslmodkanelmodels.OrgMembershipTable, "OrgMembership", teslmodkanelmodels.OrgMembership{Id: memberId, OrgId: orgId, UserId: session.UserId, Role: teslmodkanelmodels.OrgRole{Tag: teslmodkanelmodels.OrgRoleRoleAdmin}, JoinedAt: teslrt.NowMillis()}, func(teslRow, teslNew teslmodkanelmodels.OrgMembership) bool { return (teslRow.Id == teslNew.Id) })
 //line KanelOrg.tesl:221
-									return teslrt.TableInsert(teslmodkanelmodels.OrgTable, "Org", teslmodkanelmodels.Org{Id: orgId, Name: orgName, Slug: slug, CreatedAt: teslrt.NowMillis()}, func(teslRow, teslNew teslmodkanelmodels.Org) bool { return (teslRow.Id == teslNew.Id) })
-								}
+											return teslrt.TableInsert(teslmodkanelmodels.OrgTable, "Org", teslmodkanelmodels.Org{Id: orgId, Name: orgName, Slug: slug, CreatedAt: teslrt.NowMillis()}, func(teslRow, teslNew teslmodkanelmodels.Org) bool { return (teslRow.Id == teslNew.Id) })
+										}
+									}()
+								})
+								return teslCommitted
 							}
 						}
 					default:

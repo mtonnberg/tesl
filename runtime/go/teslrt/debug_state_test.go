@@ -1,6 +1,9 @@
 package teslrt
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestDebugRuntimeStateProviderAndSQLCapture(t *testing.T) {
 	remove := RegisterDebugDomainProvider(func() DebugDomainState {
@@ -63,6 +66,36 @@ func TestDebugSQLPreviewPreservesParameterBoundariesAndTableCase(t *testing.T) {
 	state := DebugRuntimeStateSnapshot()
 	if state.SQL == nil || state.SQL.Table != "MixedCase" || state.SQL.Preview != `select 'value-j', 'value-a' from "MixedCase"` {
 		t.Fatalf("SQL preview = %#v", state.SQL)
+	}
+	ClearDebugSQLCapture()
+}
+
+// The `--debug` SQL capture renders every bound parameter into `Params` and `Preview`. A
+// `secret` column's parameter used to be a bare plaintext string and appeared in both
+// (whitebox campaign, 2026-09-02); it now travels as a SecretParam and renders redacted.
+func TestDebugPgSqlRedactsSecretParameters(t *testing.T) {
+	ClearDebugSQLCapture()
+	plan := DebugPgSql(PgSql(`insert into creds ("id", "key") values ($1, $2)`, func() []any {
+		return []any{"k1", PgSecret(MakeSecret("api-key-SECRET-999"))}
+	}))
+	arguments := plan.arguments()
+	if len(arguments) != 2 {
+		t.Fatalf("arguments = %#v", arguments)
+	}
+	if value, err := arguments[1].(SecretParam).Value(); err != nil || value != "api-key-SECRET-999" {
+		t.Fatalf("the driver must still receive the plaintext, got %v %v", value, err)
+	}
+	state := DebugRuntimeStateSnapshot()
+	if state.SQL == nil {
+		t.Fatal("no SQL capture")
+	}
+	for _, text := range []string{state.SQL.Preview, state.SQL.Params[1].Display, state.SQL.Params[1].Type} {
+		if strings.Contains(text, "SECRET-999") {
+			t.Fatalf("the debug SQL capture rendered a secret parameter's plaintext: %#v", state.SQL)
+		}
+	}
+	if state.SQL.Params[1].Display != SecretRedaction {
+		t.Fatalf("secret parameter display = %q, want the redaction", state.SQL.Params[1].Display)
 	}
 	ClearDebugSQLCapture()
 }

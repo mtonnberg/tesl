@@ -127,20 +127,24 @@ let rec parse_select_tail binder where_field order limit offset group_by static_
        parse_select_tail binder where_field order limit offset group_by
          (static_clauses @ [SqlIsNotNull { field }]) joins rest
      | None -> None)
+  (* `inList` / `notInList` take a LIST LITERAL.  A non-literal operand used to be read as
+     an EMPTY member list, which both renderers turned into a constant predicate — `where
+     false` for `inList`, `where true` for `notInList` — so an exclusion filter over a
+     runtime list returned every row it was meant to exclude, silently, on both backends.
+     The shape now fails to parse (fail closed); `check_sql_list_membership_operands`
+     names the operand with a diagnostic before this is reached. *)
   | EVar { name = "where"; _ } :: EVar { name = "inList"; _ } :: field_expr :: list_expr :: rest ->
-    (match field_name_for_binder binder field_expr with
-     | Some field ->
-       let values = match list_expr with EList { elems; _ } -> elems | _ -> [] in
+    (match field_name_for_binder binder field_expr, list_expr with
+     | Some field, EList { elems; _ } ->
        parse_select_tail binder where_field order limit offset group_by
-         (static_clauses @ [SqlIn { field; values }]) joins rest
-     | None -> None)
+         (static_clauses @ [SqlIn { field; values = elems }]) joins rest
+     | _ -> None)
   | EVar { name = "where"; _ } :: EVar { name = "notInList"; _ } :: field_expr :: list_expr :: rest ->
-    (match field_name_for_binder binder field_expr with
-     | Some field ->
-       let values = match list_expr with EList { elems; _ } -> elems | _ -> [] in
+    (match field_name_for_binder binder field_expr, list_expr with
+     | Some field, EList { elems; _ } ->
        parse_select_tail binder where_field order limit offset group_by
-         (static_clauses @ [SqlNotIn { field; values }]) joins rest
-     | None -> None)
+         (static_clauses @ [SqlNotIn { field; values = elems }]) joins rest
+     | _ -> None)
   | EVar { name = "where"; _ } :: EVar { name = "like"; _ } :: field_expr :: pattern_expr :: rest ->
     (match field_name_for_binder binder field_expr with
      | Some field ->
@@ -261,6 +265,9 @@ let parse_insert_expr e =
   | _ -> None
 
 let parse_upsert_expr e =
+  match e with
+  | ESqlQuery { query = QueryUpsert q; _ } -> Some q
+  | _ ->
   (* upsert Entity { field: val, ... }
        onConflict [f1, f2]
        doUpdate   [f1, f2]
@@ -399,18 +406,15 @@ let rec collect_sql_clauses binder base_field_of_expr expr =
           (match base_field_of_expr field_expr with
            | Some field -> Some [SqlIsNotNull { field }]
            | None -> None))
+     (* Literal list only — see `parse_select_tail` for why a non-literal fails closed. *)
      | EVar { name = "inList"; _ }, [field_expr; list_expr] ->
-       (match field_name_for_binder binder field_expr with
-        | Some field ->
-          let values = match list_expr with EList { elems; _ } -> elems | _ -> [] in
-          Some [SqlIn { field; values }]
-        | None -> None)
+       (match field_name_for_binder binder field_expr, list_expr with
+        | Some field, EList { elems; _ } -> Some [SqlIn { field; values = elems }]
+        | _ -> None)
      | EVar { name = "notInList"; _ }, [field_expr; list_expr] ->
-       (match field_name_for_binder binder field_expr with
-        | Some field ->
-          let values = match list_expr with EList { elems; _ } -> elems | _ -> [] in
-          Some [SqlNotIn { field; values }]
-        | None -> None)
+       (match field_name_for_binder binder field_expr, list_expr with
+        | Some field, EList { elems; _ } -> Some [SqlNotIn { field; values = elems }]
+        | _ -> None)
      | EVar { name = "like"; _ }, [field_expr; pattern_expr] ->
        (match field_name_for_binder binder field_expr with
         | Some field -> Some [SqlLike { field; pattern = pattern_expr }]
@@ -451,6 +455,9 @@ let rec collect_sql_continuation_atoms acc = function
   | other -> (acc, other)
 
 let extract_select_query e =
+  match e with
+  | ESqlQuery { query = QuerySelect (seed, clauses); _ } -> Some (seed, clauses)
+  | _ ->
   let rec find_seed = function
     | EBinop { left; right; _ } ->
       (match find_seed left with

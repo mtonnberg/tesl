@@ -2,6 +2,9 @@ package teslrt
 
 import (
 	"bufio"
+	"crypto/rand"
+	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,12 +20,24 @@ import (
 const (
 	DebugProtocolVersion = 1
 	debugMaxControlLine  = 1 << 20
+	// DebugPortFile and DebugTokenFile are written under <root>/.tesl-stuff/ when
+	// the environment selects the loopback TCP fallback, so attach tooling can
+	// discover the endpoint AND prove it is allowed to drive it.
+	DebugPortFile  = "debug.port"
+	DebugTokenFile = "debug.token"
+	// DebugTokenEnv lets a launcher that already knows the port (it chose it) hand
+	// the child the token to require, instead of reading the token file back.
+	DebugTokenEnv   = "TESL_DEBUG_TOKEN" // #nosec G101 -- the NAME of the variable, not a credential.
+	debugTokenBytes = 32
 )
 
 type DebugControlRequest struct {
 	ID          string                `json:"id"`
 	Command     string                `json:"command"`
 	Breakpoints []DebugBreakpointSpec `json:"breakpoints,omitempty"`
+	// Token authenticates the handshake on a TCP endpoint. Unix endpoints are
+	// authenticated by the socket's file permissions and ignore it.
+	Token string `json:"token,omitempty"`
 }
 
 type DebugBreakpointSpec struct {
@@ -66,17 +81,25 @@ type debugConditionValue struct {
 }
 
 type DebugControlServer struct {
-	debugger       *Debugger
-	listener       net.Listener
-	path           string
-	done           chan struct{}
-	closed         chan struct{}
-	mutex          sync.Mutex
+	debugger *Debugger
+	listener net.Listener
+	path     string
+	done     chan struct{}
+	closed   chan struct{}
+	mutex    sync.Mutex
+	// clients holds only AUTHENTICATED connections: they receive stopped events and
+	// hold the debugger attached. pending holds connections that have not completed
+	// a handshake yet (TCP only); they receive nothing and are closed with the server.
 	clients        map[net.Conn]struct{}
+	pending        map[net.Conn]struct{}
 	configured     chan struct{}
 	configuredOnce sync.Once
 	write          sync.Mutex
-	detach         func()
+	// token is the hex credential a TCP client must present in its first message.
+	// Empty on Unix endpoints, where filesystem permissions are the credential.
+	token string
+	// files are the discovery files (port/token) this server wrote and removes on Close.
+	files []string
 }
 
 // StartDebugControl creates an owner-only Unix-domain endpoint and starts the
@@ -116,20 +139,69 @@ func (debugger *Debugger) StartDebugControl(path string) (*DebugControlServer, e
 		_ = os.Remove(path) // #nosec G703 -- remove only the socket just created.
 		return nil, fmt.Errorf("debug control: protect endpoint: %w", err)
 	}
-	return newDebugControlServer(debugger, listener, path), nil
+	return newDebugControlServer(debugger, listener, path, ""), nil
 }
 
 // StartDebugControlTCP provides the loopback fallback for platforms without
-// usable Unix sockets. Port zero asks the OS for an available port.
+// usable Unix sockets. Port zero asks the OS for an available port. Loopback is
+// shared by every local user, so the endpoint mints a fresh per-launch token
+// (see Token) and refuses every command until a client has presented it.
 func (debugger *Debugger) StartDebugControlTCP(port int) (*DebugControlServer, error) {
+	token, err := NewDebugToken()
+	if err != nil {
+		return nil, err
+	}
+	return debugger.StartDebugControlTCPWithToken(port, token)
+}
+
+// StartDebugControlTCPWithToken is StartDebugControlTCP with a caller-chosen
+// token — for a launcher that generated the credential itself and passes it to
+// the child through DebugTokenEnv. The token must be NewDebugToken-shaped.
+func (debugger *Debugger) StartDebugControlTCPWithToken(port int, token string) (*DebugControlServer, error) {
 	if port < 0 || port > 65535 {
 		return nil, errors.New("debug control: TCP port outside 0..65535")
+	}
+	if err := ValidateDebugToken(token); err != nil {
+		return nil, err
 	}
 	listener, err := net.Listen("tcp4", "127.0.0.1:"+strconv.Itoa(port))
 	if err != nil {
 		return nil, fmt.Errorf("debug control: listen on loopback: %w", err)
 	}
-	return newDebugControlServer(debugger, listener, ""), nil
+	server := newDebugControlServer(debugger, listener, "", token)
+	return server, nil
+}
+
+// NewDebugToken returns a fresh 32-byte crypto/rand credential, hex encoded.
+func NewDebugToken() (string, error) {
+	raw := make([]byte, debugTokenBytes)
+	if _, err := rand.Read(raw); err != nil {
+		return "", fmt.Errorf("debug control: generate token: %w", err)
+	}
+	return hex.EncodeToString(raw), nil
+}
+
+// ValidateDebugToken accepts exactly the shape NewDebugToken produces, so a
+// truncated or hand-typed credential is refused at startup rather than silently
+// weakening the endpoint.
+func ValidateDebugToken(token string) error {
+	raw, err := hex.DecodeString(token)
+	if err != nil || len(raw) != debugTokenBytes {
+		return errors.New("debug control: token must be 32 bytes, hex encoded")
+	}
+	return nil
+}
+
+// Token is the credential a TCP client must send as `token` in its handshake.
+// Empty for Unix endpoints.
+func (server *DebugControlServer) Token() string { return server.token }
+
+// Port is the bound TCP port, or zero for a Unix endpoint.
+func (server *DebugControlServer) Port() int {
+	if address, ok := server.listener.Addr().(*net.TCPAddr); ok {
+		return address.Port
+	}
+	return 0
 }
 
 // StartDebugControlFromEnvironment is the debug-build launch seam. It remains
@@ -145,17 +217,71 @@ func StartDebugControlFromEnvironment() (*DebugControlServer, error) {
 		if err != nil {
 			return nil, fmt.Errorf("debug control: invalid TESL_DEBUG_PORT: %w", err)
 		}
-		return DefaultDebugger.StartDebugControlTCP(value)
+		token := os.Getenv(DebugTokenEnv)
+		if token == "" {
+			if token, err = NewDebugToken(); err != nil {
+				return nil, err
+			}
+		}
+		server, err := DefaultDebugger.StartDebugControlTCPWithToken(value, token)
+		if err != nil {
+			return nil, err
+		}
+		// The TCP fallback has no socket file to discover, so publish the port and
+		// the credential beside where the Unix socket would live. Both are
+		// owner-only; the token file is what `-project` attach tooling reads.
+		if err := server.writeDiscoveryFiles(filepath.Join(debugRootFromEnvironment(), ".tesl-stuff")); err != nil {
+			_ = server.Close()
+			return nil, err
+		}
+		return server, nil
 	}
 	enabled := os.Getenv("TESL_DEBUG")
 	if enabled != "1" && enabled != "true" {
 		return nil, nil
 	}
-	root := os.Getenv("TESL_DEBUG_ROOT")
-	if root == "" {
-		root = "."
+	return DefaultDebugger.StartDebugControl(filepath.Join(debugRootFromEnvironment(), ".tesl-stuff", "debug.sock"))
+}
+
+func debugRootFromEnvironment() string {
+	if root := os.Getenv("TESL_DEBUG_ROOT"); root != "" {
+		return root
 	}
-	return DefaultDebugger.StartDebugControl(filepath.Join(root, ".tesl-stuff", "debug.sock"))
+	return "."
+}
+
+// writeDiscoveryFiles publishes DebugPortFile and DebugTokenFile under directory
+// with owner-only permissions. Pre-existing files are replaced, never followed:
+// a planted symlink must not redirect the credential.
+func (server *DebugControlServer) writeDiscoveryFiles(directory string) error {
+	if err := os.MkdirAll(directory, 0o700); err != nil { // #nosec G703 -- discovery directory is the configured debug root.
+		return fmt.Errorf("debug control: create discovery directory: %w", err)
+	}
+	entries := []struct{ name, contents string }{
+		{DebugPortFile, strconv.Itoa(server.Port()) + "\n"},
+		{DebugTokenFile, server.token + "\n"},
+	}
+	for _, entry := range entries {
+		path := filepath.Join(directory, entry.name)
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) { // #nosec G703 -- replace only the runtime's own discovery file.
+			return fmt.Errorf("debug control: replace %s: %w", entry.name, err)
+		}
+		file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600) // #nosec G304,G703 -- owner-only discovery file under the debug root.
+		if err != nil {
+			return fmt.Errorf("debug control: write %s: %w", entry.name, err)
+		}
+		server.mutex.Lock()
+		server.files = append(server.files, path)
+		server.mutex.Unlock()
+		_, writeErr := file.WriteString(entry.contents)
+		if closeErr := file.Close(); writeErr == nil {
+			writeErr = closeErr
+		}
+		if writeErr != nil {
+			return fmt.Errorf("debug control: write %s: %w", entry.name, writeErr)
+		}
+	}
+	return nil
 }
 
 // applyEnvPauseTimeout reads TESL_DEBUG_PAUSE_TIMEOUT_MS (milliseconds) into
@@ -169,7 +295,7 @@ func applyEnvPauseTimeout(debugger *Debugger) {
 	}
 }
 
-func newDebugControlServer(debugger *Debugger, listener net.Listener, path string) *DebugControlServer {
+func newDebugControlServer(debugger *Debugger, listener net.Listener, path, token string) *DebugControlServer {
 	server := &DebugControlServer{
 		debugger:   debugger,
 		listener:   listener,
@@ -177,9 +303,12 @@ func newDebugControlServer(debugger *Debugger, listener net.Listener, path strin
 		done:       make(chan struct{}),
 		closed:     make(chan struct{}),
 		clients:    make(map[net.Conn]struct{}),
+		pending:    make(map[net.Conn]struct{}),
 		configured: make(chan struct{}),
+		token:      token,
 	}
-	server.detach = debugger.Attach(server.broadcast)
+	// The debugger is attached per authenticated client (see admit/release), not
+	// here: an endpoint with no client must behave exactly like a release build.
 	go server.acceptLoop()
 	return server
 }
@@ -209,22 +338,76 @@ func (server *DebugControlServer) acceptLoop() {
 			continue
 		}
 		server.mutex.Lock()
-		server.clients[connection] = struct{}{}
+		server.pending[connection] = struct{}{}
 		server.mutex.Unlock()
 		go server.handleConnection(connection)
 	}
 }
 
+// admit promotes a connection to an authenticated client. The first client
+// attaches the debugger; later ones share the session.
+func (server *DebugControlServer) admit(connection net.Conn) {
+	server.mutex.Lock()
+	defer server.mutex.Unlock()
+	delete(server.pending, connection)
+	select {
+	case <-server.done:
+		// A handshake racing Close must not re-attach the debugger to a dead endpoint.
+		return
+	default:
+	}
+	if _, already := server.clients[connection]; already {
+		return
+	}
+	if len(server.clients) == 0 {
+		server.debugger.Attach(server.broadcast)
+	}
+	server.clients[connection] = struct{}{}
+}
+
+// release forgets a connection. Only the LAST authenticated client leaving
+// detaches the debugger: a lost client must never leave application goroutines
+// paused, but one client's exit must not end another client's session, and a
+// connection that never authenticated has no session to end.
+func (server *DebugControlServer) release(connection net.Conn) {
+	server.mutex.Lock()
+	defer server.mutex.Unlock()
+	delete(server.pending, connection)
+	if _, authenticated := server.clients[connection]; !authenticated {
+		return
+	}
+	delete(server.clients, connection)
+	if len(server.clients) == 0 {
+		server.debugger.Detach()
+	}
+}
+
+func (server *DebugControlServer) authenticates(request DebugControlRequest) bool {
+	if request.Command != "handshake" {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(request.Token), []byte(server.token)) == 1
+}
+
+func (server *DebugControlServer) reply(encoder *json.Encoder, response DebugControlResponse) error {
+	server.write.Lock()
+	defer server.write.Unlock()
+	return encoder.Encode(response)
+}
+
 func (server *DebugControlServer) handleConnection(connection net.Conn) {
 	defer func() {
-		// A lost control client must never leave application goroutines paused. Detach
-		// also clears the listener so a fresh client can establish a new session.
-		server.debugger.Detach()
-		server.mutex.Lock()
-		delete(server.clients, connection)
-		server.mutex.Unlock()
+		server.release(connection)
 		_ = connection.Close()
 	}()
+	// Unix endpoints are authenticated by the socket's owner-only permissions, so
+	// the connection is a client from its first byte (a handshake, if sent, is
+	// answered like any other command). TCP endpoints admit nothing before a
+	// handshake carrying the token.
+	authenticated := server.token == ""
+	if authenticated {
+		server.admit(connection)
+	}
 	scanner := bufio.NewScanner(connection)
 	scanner.Buffer(make([]byte, 4096), debugMaxControlLine)
 	encoder := json.NewEncoder(connection)
@@ -232,17 +415,27 @@ func (server *DebugControlServer) handleConnection(connection net.Conn) {
 		var request DebugControlRequest
 		decoder := json.NewDecoder(strings.NewReader(scanner.Text()))
 		decoder.DisallowUnknownFields()
-		if err := decoder.Decode(&request); err != nil || request.Command == "" {
-			_ = encoder.Encode(DebugControlResponse{ID: request.ID, Error: &DebugControlError{
+		decodeErr := decoder.Decode(&request)
+		if !authenticated {
+			if decodeErr != nil || !server.authenticates(request) {
+				// Closed at once: no session, no events, and nothing learned beyond
+				// "a credential is required". The compare is constant-time.
+				_ = server.reply(encoder, DebugControlResponse{ID: request.ID, Error: &DebugControlError{
+					Code: "unauthorized", Message: "first message must be a handshake carrying the endpoint token",
+				}})
+				return
+			}
+			authenticated = true
+			server.admit(connection)
+		}
+		if decodeErr != nil || request.Command == "" {
+			_ = server.reply(encoder, DebugControlResponse{ID: request.ID, Error: &DebugControlError{
 				Code: "invalid-request", Message: "invalid control request",
 			}})
 			continue
 		}
 		response, closeConnection := server.handleRequest(request)
-		server.write.Lock()
-		err := encoder.Encode(response)
-		server.write.Unlock()
-		if err != nil || closeConnection {
+		if err := server.reply(encoder, response); err != nil || closeConnection {
 			return
 		}
 	}
@@ -543,20 +736,35 @@ func (server *DebugControlServer) Close() error {
 	default:
 		close(server.done)
 	}
-	if server.detach != nil {
-		server.detach()
-	}
 	_ = server.listener.Close()
 	server.mutex.Lock()
+	if len(server.clients) > 0 {
+		server.debugger.Detach()
+	}
 	for client := range server.clients {
 		_ = client.Close()
 	}
+	for connection := range server.pending {
+		_ = connection.Close()
+	}
+	server.clients = make(map[net.Conn]struct{})
+	server.pending = make(map[net.Conn]struct{})
+	files := server.files
+	server.files = nil
 	server.mutex.Unlock()
 	<-server.closed
-	if server.path == "" {
-		return nil
+	var firstErr error
+	for _, file := range files {
+		if err := os.Remove(file); err != nil && !errors.Is(err, os.ErrNotExist) && firstErr == nil { // #nosec G703 -- remove only the discovery files this server wrote.
+			firstErr = err
+		}
 	}
-	return os.Remove(server.path)
+	if server.path != "" {
+		if err := os.Remove(server.path); err != nil && firstErr == nil { // #nosec G703 -- the socket this server created.
+			firstErr = err
+		}
+	}
+	return firstErr
 }
 
 func parseHitCondition(specification string) (func(int) bool, error) {

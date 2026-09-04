@@ -73,6 +73,11 @@ func TestTesl0(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson08-proof-transport.tesl:163
 		n1 := teslrt.FromInt64(0)
@@ -99,6 +104,7 @@ func TestTesl0(teslT *testing.T) {
 							_ = r3
 //line lesson08-proof-transport.tesl:169
 							if !teslrt.Equal(teslrt.FromInt64(1), teslrt.FromInt64(1)) {
+//line lesson08-proof-transport.tesl:169
 								teslT.Fatal("Tesl expectation failed")
 							}
 						}
@@ -116,6 +122,11 @@ func TestTesl1(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line lesson08-proof-transport.tesl:173
 	if (CheckAge(teslrt.FromInt64(-1))).OK() {
 		teslT.Fatal("expected Tesl check failure")
@@ -133,6 +144,11 @@ func TestTesl2(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson08-proof-transport.tesl:178
 		n := teslrt.FromInt64(30)
@@ -144,6 +160,7 @@ func TestTesl2(teslT *testing.T) {
 			teslLeft2 := Birthday(age)
 //line lesson08-proof-transport.tesl:180
 			if !teslrt.Equal(teslLeft2, teslrt.FromInt64(31)) {
+//line lesson08-proof-transport.tesl:180
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -157,6 +174,11 @@ func TestTesl3(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson08-proof-transport.tesl:184
 		n := teslrt.FromInt64(25)
@@ -168,6 +190,7 @@ func TestTesl3(teslT *testing.T) {
 			teslLeft3 := ShowAge(age)
 //line lesson08-proof-transport.tesl:186
 			if teslLeft3 != "age is 25" {
+//line lesson08-proof-transport.tesl:186
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}

@@ -147,3 +147,25 @@ func TestJsonContains(t *testing.T) {
 		t.Error("array membership")
 	}
 }
+
+// A body that starts like JSON and does not parse is a broken JSON producer — the server that
+// answered `{"value":+Inf}`, or a test's own template with a typo — and degrading it to a string
+// made the failure surface as `resp.body.label` reading null, with nothing pointing at the body.
+func TestJsonParseBodyTrapsOnABrokenJSONDocument(t *testing.T) {
+	mustPanic(t, `{"label":"x","value":+Inf}`, func() { JsonParseBody(`{"label":"x","value":+Inf}`) })
+	mustPanic(t, "does not parse", func() { JsonParseBody(`[1, 2,`) })
+	mustPanic(t, "does not parse", func() { JsonParseBody(`{"n":1} trailing`) })
+	// Text responses stay text: an HTML page and a plain-text error are inspected by status.
+	if got := JsonParseBody("<!doctype html><html>denied</html>"); !JsonIsNotNull(got) || JsonAsString(got) != "<!doctype html><html>denied</html>" {
+		t.Errorf("an HTML body must stay text, got %v", got.JsonRaw())
+	}
+	if got := JsonParseBody("Bad Request\n"); JsonAsString(got) != "Bad Request\n" {
+		t.Errorf("a plain-text body must stay text, got %v", got.JsonRaw())
+	}
+	if got := JsonParseBody("  "); !JsonIsNull(got) {
+		t.Error("an empty body is null")
+	}
+	if got := JsonParseBody(`{"ok":true}`); !JsonAsBool(JsonFieldOf(got, "ok")) {
+		t.Error("a valid body still parses")
+	}
+}

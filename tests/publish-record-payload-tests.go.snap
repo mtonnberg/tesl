@@ -194,6 +194,11 @@ func TestTeslApi0(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line publish-record-payload-tests.tesl:93
 		stream := teslrt.SubscribeStream(MainServer, "/events/user-1", nil)
@@ -205,6 +210,7 @@ func TestTeslApi0(teslT *testing.T) {
 			_ = resp
 //line publish-record-payload-tests.tesl:95
 			if !(teslrt.StatusOk(resp.Status)) {
+//line publish-record-payload-tests.tesl:95
 				teslT.Fatal("Tesl expectation failed")
 			}
 			{
@@ -213,10 +219,12 @@ func TestTeslApi0(teslT *testing.T) {
 				_ = events
 //line publish-record-payload-tests.tesl:97
 				if !(teslrt.JsonIsNotEmpty(events)) {
+//line publish-record-payload-tests.tesl:97
 					teslT.Fatal("Tesl expectation failed")
 				}
 //line publish-record-payload-tests.tesl:98
 				if !(teslrt.JsonIncludesWhere(teslrt.JsonParseBody("{\"message\":\"hello-record\"}").JsonRaw(), events)) {
+//line publish-record-payload-tests.tesl:98
 					teslT.Fatal("Tesl expectation failed")
 				}
 			}

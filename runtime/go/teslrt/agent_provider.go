@@ -3,16 +3,21 @@ package teslrt
 import (
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"strconv"
+	"strings"
+	"time"
 )
 
 // The real LLM providers.
 //
 // Each one is a translation layer and nothing more: it renders the normalised request
-// (agent.go) into a vendor's wire format, posts it through HttpPost — so the network is
-// gated by `httpClient`, judged by the SSRF containment, and interceptable by the same
-// `stubHttp` double every other outbound call is — and normalises the answer back. The
-// agent loop never learns which vendor it is talking to.
+// (agent.go) into a vendor's wire format, posts it through providerHTTPPost — the outbound
+// path of httpclient.go under the provider's own deadline, so the network is gated by
+// `httpClient`, judged by the SSRF containment, and interceptable by the same `stubHttp`
+// double every other outbound call is — and normalises the answer back. The agent loop
+// never learns which vendor it is talking to.
 //
 // TOKEN STREAMING is not implemented against a real provider yet. `converseStreaming` and
 // `agentRun` still publish every event they promise, in order, and a mock provider still
@@ -105,17 +110,165 @@ func providerMaxTokens(request LlmRequest) int64 {
 	return value
 }
 
+// ── The provider round-trip ──────────────────────────────────────────────────
+//
+// An LLM call is not an ordinary outbound call. A Messages API response of a few thousand
+// tokens routinely takes longer than TESL_HTTP_TIMEOUT_MS (30 s), and raising that knob for
+// the model would widen the deadline of every other egress in the program. So the provider
+// path has its own deadline, TESL_AI_TIMEOUT_MS (default 120000), and reaches the network
+// through the SAME pieces httpclient.go's verbs use — URL parsing, the CR/LF header guard,
+// the `stubHttp` double, the per-host transport that carries the SSRF egress judgement and
+// the TLS policy, and the response-body cap. Only the deadline differs; nothing about what
+// the call may reach does.
+//
+// A 429 or a 5xx is retried a bounded number of times with backoff: the API is stateless,
+// so a repeated request has no side effect, and a transient upstream fault should not end
+// a turn that already ran tools. A 4xx other than 429 is not retried — it is the request
+// that is wrong, and the same request will be wrong again.
+
+func aiTimeoutMs() int { return envPositiveInt("TESL_AI_TIMEOUT_MS", 120000) }
+
+// providerAttempts is the total number of tries for one round-trip: the first call and
+// two retries.
+const providerAttempts = 3
+
+// providerRetryBackoff is the pause before retry number `retry` (1-based). A variable so the
+// runtime's tests can run the retry path without sleeping through it.
+var providerRetryBackoff = func(retry int) time.Duration {
+	return time.Duration(retry) * 500 * time.Millisecond
+}
+
+// maxProviderErrorBytes bounds how much of an upstream error body is echoed into the trap.
+// The whole body — up to the 10 MiB response cap — went into logs, telemetry, and, when the
+// agent was itself a tool, back into another model's context.
+const maxProviderErrorBytes = 2048
+
 func providerPost(who, endpoint string, headers []Tuple2[string, string], body any) string {
 	encoded, err := json.Marshal(body)
 	if err != nil {
 		panic(who + ": request could not be encoded: " + err.Error())
 	}
-	response := HttpPost(endpoint, headers, string(encoded))
-	status, exact := response.Status.Int64()
-	if !exact || status >= 400 {
-		panic(fmt.Sprintf("%s: API error (HTTP %s): %s", who, response.Status.String(), response.Body))
+	for attempt := 1; ; attempt++ {
+		response := providerHTTPPost(who, endpoint, headers, string(encoded))
+		status, exact := response.Status.Int64()
+		if exact && status < 400 {
+			return response.Body
+		}
+		retryable := exact && (status == http.StatusTooManyRequests || status >= 500)
+		if retryable && attempt < providerAttempts {
+			time.Sleep(providerRetryBackoff(attempt))
+			continue
+		}
+		attempts := ""
+		if attempt > 1 {
+			attempts = fmt.Sprintf(" after %d attempts", attempt)
+		}
+		panic(fmt.Sprintf("%s: API error (HTTP %s)%s: %s", who, response.Status.String(), attempts,
+			providerErrorDetail(response.Body)))
 	}
-	return response.Body
+}
+
+// providerErrorDetail is what a failed call reports about the upstream body: the vendor's
+// own `error.message` when the body has one (every provider here wraps errors that way),
+// otherwise the body itself, cut to maxProviderErrorBytes.
+func providerErrorDetail(body string) string {
+	var envelope struct {
+		Error json.RawMessage `json:"error"`
+	}
+	if json.Unmarshal([]byte(body), &envelope) == nil && len(envelope.Error) > 0 {
+		var structured struct {
+			Message string `json:"message"`
+		}
+		if json.Unmarshal(envelope.Error, &structured) == nil && structured.Message != "" {
+			return truncateProviderText(structured.Message)
+		}
+		var plain string
+		if json.Unmarshal(envelope.Error, &plain) == nil && plain != "" {
+			return truncateProviderText(plain)
+		}
+	}
+	return truncateProviderText(body)
+}
+
+func truncateProviderText(text string) string {
+	if len(text) <= maxProviderErrorBytes {
+		return text
+	}
+	return text[:maxProviderErrorBytes] + fmt.Sprintf("… (%d bytes truncated)",
+		len(text)-maxProviderErrorBytes)
+}
+
+// providerHTTPPost is one POST to the provider under the AI deadline. It mirrors
+// httpRequest/httpRequestNetwork step for step so the two cannot drift in what they permit;
+// the one thing it does differently is the client timeout.
+func providerHTTPPost(who, endpoint string, headers []Tuple2[string, string], body string) HttpResponse {
+	parsed := parseOutboundURL(endpoint)
+	wire, secretHeaders := outboundHeaders(headers)
+	if answer, stubbed := stubbedProviderAnswer(who, endpoint, body); stubbed {
+		return answer
+	}
+	request, err := http.NewRequest(http.MethodPost, endpoint, strings.NewReader(body))
+	if err != nil {
+		panic(fmt.Sprintf("%s: HTTP POST to %s failed: %s", who, endpoint, err.Error()))
+	}
+	request.Header = wire
+	if telemetryTraceEnabled() && request.Header.Get("traceparent") == "" {
+		request.Header.Set("traceparent", "00-"+telemetryID(16)+"-"+telemetryID(8)+"-01")
+	}
+	client := &http.Client{
+		Transport: outboundTransport(parsed.Hostname()),
+		Timeout:   millisDuration(aiTimeoutMs()),
+		// A vendor endpoint is a fixed URL and the API key rides in its headers, so no
+		// redirect is followed at all — the same policy the SSO legs use.
+		CheckRedirect: redirectCheck(redirectRefused, parsed, secretHeaders),
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		// A connect timeout counts too: a vendor that cannot be reached and one that never
+		// finishes answering leave the turn in the same state, worth answering as `aborted`.
+		if isTimeout(err) {
+			panic(providerTimeout{who: who, millis: aiTimeoutMs()})
+		}
+		panic(who + ": " + strings.TrimPrefix(requestFailure(http.MethodPost, endpoint, err), "HttpClient: "))
+	}
+	if response == nil {
+		panic(fmt.Sprintf("%s: HTTP POST to %s failed: no response", who, endpoint))
+	}
+	defer func() { _ = response.Body.Close() }()
+	limit := httpMaxResponseBytes()
+	raw, err := io.ReadAll(io.LimitReader(response.Body, int64(limit)+1))
+	if err != nil {
+		if isTimeout(err) {
+			panic(providerTimeout{who: who, millis: aiTimeoutMs()})
+		}
+		panic(fmt.Sprintf("%s: HTTP POST to %s failed: %s", who, endpoint, err.Error()))
+	}
+	if len(raw) > limit {
+		panic(fmt.Sprintf("%s: response body exceeds the %d-byte cap", who, limit))
+	}
+	return HttpResponse{
+		Status:  FromInt64(int64(response.StatusCode)),
+		Body:    string(raw),
+		Headers: responseHeaders(response.Header),
+	}
+}
+
+// stubbedProviderAnswer consults the `stubHttp` table the way every outbound call does. A
+// `stubHttpTimeout` rule raises the transport's timeout message; here that is re-raised as
+// the provider timeout, so a test that stubs a slow model exercises the same `aborted` path
+// a real deadline drives.
+func stubbedProviderAnswer(who, endpoint, body string) (answer HttpResponse, stubbed bool) {
+	defer func() {
+		raised := recover()
+		if raised == nil {
+			return
+		}
+		if message, isText := raised.(string); isText && strings.Contains(message, " timed out after ") {
+			panic(providerTimeout{who: who, millis: aiTimeoutMs()})
+		}
+		panic(raised)
+	}()
+	return httpStubAnswer(http.MethodPost, endpoint, &body)
 }
 
 func providerDecode(who, body string, into any) {
@@ -209,7 +362,12 @@ func anthropicMessages(messages []AgentMessage) []anthropicMessage {
 					})
 				}
 			default:
-				panic("anthropic: unknown content block kind " + block.Kind)
+				// Unreachable for a validated transcript: validateTranscript (agent.go) admits
+				// only the three kinds above, at ConversationFrom and again at the top of
+				// runLoop, so a poisoned row is rejected there with a message — it used to
+				// trap HERE, on every later turn of that conversation. A block that somehow
+				// still has no wire form contributes nothing rather than ending the turn.
+				continue
 			}
 		}
 		rendered = append(rendered, anthropicMessage{Role: role, Content: blocks})
@@ -404,6 +562,20 @@ func openaiNormalize(decoded openaiResponse, request LlmRequest) LlmResponse {
 		text = choice.Message.Content
 		finish = choice.FinishReason
 		for _, call := range choice.Message.ToolCalls {
+			// Only a `function` call names one of OUR tools; any other type (a vendor's
+			// built-in tool, say) is nothing this loop declared and nothing it may dispatch.
+			// An absent type is tolerated: some OpenAI-compatible local servers omit it.
+			if call.Type != "" && call.Type != "function" {
+				continue
+			}
+			// The id is what the result is sent back under. With an empty one the tool
+			// would run, and the vendor would then reject the next round-trip — the side
+			// effect kept, the turn lost. Refusing before the dispatch is the fail-closed
+			// order.
+			if call.ID == "" {
+				panic("openai: tool call " + strconv.Quote(call.Function.Name) +
+					" has no id — the result could not be returned to the model")
+			}
 			arguments := call.Function.Arguments
 			if arguments == "" {
 				arguments = "{}"

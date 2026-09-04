@@ -37,6 +37,7 @@ golang.org/x/text v0.41.0/go.mod h1:jvf1O8ajNzZqhSrQBPbutR/EB83Cc0CFrezNQIwbb5M=
 package teslmodlesson74interoppatterns
 
 import (
+	"errors"
 	"github.com/jackc/pgx/v5"
 	"net/http"
 	"tesl.generated/teslmodlesson74interoppatterns/internal/teslrt"
@@ -69,7 +70,7 @@ type ThumbnailJob struct {
 }
 
 //line lesson74-interop-patterns.tesl:270
-var Lesson74QueueQueue = teslrt.NewQueue("Lesson74Queue", 3)
+var Lesson74QueueQueue = teslrt.NewQueueOn(Lesson74DatabaseDatabase, "Lesson74Queue", 3, "exponential", 60)
 
 //line lesson74-interop-patterns.tesl:79
 var DocumentTable = teslrt.NewTable[Document]()
@@ -298,6 +299,72 @@ func DecodeNewDocumentJSON(teslJSON any) teslrt.Check[NewDocument] {
 	return teslrt.Reject[NewDocument](400, "no decode alternative matched")
 }
 
+// DecodeSummariseDocumentJSON is the DERIVED decoder for a record with no `codec` block: the type is the
+// whole contract, exactly as it is on the Legacy runtime's generic decode.
+func DecodeSummariseDocumentJSON(teslJSON any) teslrt.Check[SummariseDocument] {
+	teslFields, teslShapeErr := teslrt.DecodeObjectShape(teslJSON, "SummariseDocument", []string{"docId", "ownerId"})
+	if teslShapeErr != nil {
+		return teslrt.RejectShape[SummariseDocument](teslShapeErr.Error())
+	}
+	teslFieldDocId, teslErrDocId := teslrt.DecodeStringValue(teslFields["docId"])
+	if teslErrDocId != nil {
+		return teslrt.RejectShape[SummariseDocument](teslErrDocId.Error())
+	}
+	teslFieldOwnerId, teslErrOwnerId := teslrt.DecodeStringValue(teslFields["ownerId"])
+	if teslErrOwnerId != nil {
+		return teslrt.RejectShape[SummariseDocument](teslErrOwnerId.Error())
+	}
+	return teslrt.Accept(SummariseDocument{DocId: teslFieldDocId, OwnerId: teslFieldOwnerId})
+}
+
+var _ = teslrt.RegisterJobCodec(Lesson74QueueQueue, "SummariseDocument", func(teslJob any) any {
+	return teslEncode2(teslJob.(SummariseDocument))
+}, func(teslJSON any) (any, error) {
+	teslDecoded, teslErr := func(teslRaw any) (SummariseDocument, error) {
+		teslNested := DecodeSummariseDocumentJSON(teslRaw)
+		if !teslNested.OK() {
+			return SummariseDocument{}, errors.New(teslNested.Message())
+		}
+		teslValue, _ := teslNested.Value()
+		return teslValue, nil
+	}(teslJSON)
+	if teslErr != nil {
+		return nil, teslErr
+	}
+	return teslDecoded, nil
+})
+
+// DecodeThumbnailJobJSON is the DERIVED decoder for a record with no `codec` block: the type is the
+// whole contract, exactly as it is on the Legacy runtime's generic decode.
+func DecodeThumbnailJobJSON(teslJSON any) teslrt.Check[ThumbnailJob] {
+	teslFields, teslShapeErr := teslrt.DecodeObjectShape(teslJSON, "ThumbnailJob", []string{"docId"})
+	if teslShapeErr != nil {
+		return teslrt.RejectShape[ThumbnailJob](teslShapeErr.Error())
+	}
+	teslFieldDocId, teslErrDocId := teslrt.DecodeStringValue(teslFields["docId"])
+	if teslErrDocId != nil {
+		return teslrt.RejectShape[ThumbnailJob](teslErrDocId.Error())
+	}
+	return teslrt.Accept(ThumbnailJob{DocId: teslFieldDocId})
+}
+
+var _ = teslrt.RegisterJobCodec(Lesson74QueueQueue, "ThumbnailJob", func(teslJob any) any {
+	return teslEncode3(teslJob.(ThumbnailJob))
+}, func(teslJSON any) (any, error) {
+	teslDecoded, teslErr := func(teslRaw any) (ThumbnailJob, error) {
+		teslNested := DecodeThumbnailJobJSON(teslRaw)
+		if !teslNested.OK() {
+			return ThumbnailJob{}, errors.New(teslNested.Message())
+		}
+		teslValue, _ := teslNested.Value()
+		return teslValue, nil
+	}(teslJSON)
+	if teslErr != nil {
+		return nil, teslErr
+	}
+	return teslDecoded, nil
+})
+
 var Lesson74Server = teslrt.Server{
 	Routes: []teslrt.Route{
 		{Method: "POST", Path: "/documents", Endpoint: "importDocument"},
@@ -323,7 +390,7 @@ var Lesson74Server = teslrt.Server{
 				return teslrt.Fail(teslDecoded.Status(), teslDecoded.Message())
 			}
 			teslBody, _ := teslDecoded.Value()
-			return teslrt.Response{Status: 200, Body: teslEncode4(importDocument(teslBody))}
+			return teslrt.Response{Status: 200, Body: teslEncode6(importDocument(teslBody))}
 		},
 		"exportDocuments": func(teslScope *teslrt.RequestScope, teslRequest *http.Request) teslrt.Response {
 			_ = teslScope
@@ -357,21 +424,34 @@ func teslEncode1(teslValue string) any {
 	return teslValue
 }
 
-func teslEncode2(teslValue teslrt.Int) any {
+func teslEncode2(teslValue SummariseDocument) any {
+	return map[string]any{
+		"docId":   teslEncode1(teslValue.DocId),
+		"ownerId": teslEncode1(teslValue.OwnerId),
+	}
+}
+
+func teslEncode3(teslValue ThumbnailJob) any {
+	return map[string]any{
+		"docId": teslEncode1(teslValue.DocId),
+	}
+}
+
+func teslEncode4(teslValue teslrt.Int) any {
 	return teslValue
 }
 
-func teslEncode3(teslValue teslrt.PosixMillis) any {
-	return teslEncode2(teslValue.Value)
+func teslEncode5(teslValue teslrt.PosixMillis) any {
+	return teslEncode4(teslValue.Value)
 }
 
-func teslEncode4(teslValue Document) any {
+func teslEncode6(teslValue Document) any {
 	return map[string]any{
 		"id":        teslEncode1(teslValue.Id),
 		"ownerId":   teslEncode1(teslValue.OwnerId),
 		"name":      teslEncode1(teslValue.Name),
 		"body":      teslEncode1(teslValue.Body),
-		"createdAt": teslEncode3(teslValue.CreatedAt),
+		"createdAt": teslEncode5(teslValue.CreatedAt),
 	}
 }
 
@@ -434,17 +514,24 @@ func TestTeslApi0(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson74-interop-patterns.tesl:313
 		resp := teslrt.ApiRequest(Lesson74Server, "POST", "/summaries", "{\"name\":\"report\",\"body\":\"hello\"}", nil, nil)
 		_ = resp
 //line lesson74-interop-patterns.tesl:314
 		if !(teslrt.StatusOk(resp.Status)) {
+//line lesson74-interop-patterns.tesl:314
 			teslT.Fatal("Tesl expectation failed")
 		}
 		teslLeft1 := teslrt.PendingJobCount(Lesson74QueueQueue)
 //line lesson74-interop-patterns.tesl:316
 		if !teslrt.Equal(teslLeft1, teslrt.FromInt64(1)) {
+//line lesson74-interop-patterns.tesl:316
 			teslT.Fatal("Tesl expectation failed")
 		}
 		{
@@ -479,11 +566,13 @@ func TestTeslApi0(teslT *testing.T) {
 				teslLeft2 := job.OwnerId
 //line lesson74-interop-patterns.tesl:320
 				if teslLeft2 != "demo-user" {
+//line lesson74-interop-patterns.tesl:320
 					teslT.Fatal("Tesl expectation failed")
 				}
 				teslLeft3 := teslrt.PendingJobCount(Lesson74QueueQueue)
 //line lesson74-interop-patterns.tesl:321
 				if !teslrt.Equal(teslLeft3, teslrt.FromInt64(0)) {
+//line lesson74-interop-patterns.tesl:321
 					teslT.Fatal("Tesl expectation failed")
 				}
 			}
@@ -502,12 +591,18 @@ func TestTeslApi1(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson74-interop-patterns.tesl:325
 		created := teslrt.ApiRequest(Lesson74Server, "POST", "/documents", "{\"name\":\"notes.txt\",\"body\":\"content\"}", nil, nil)
 		_ = created
 //line lesson74-interop-patterns.tesl:326
 		if !(teslrt.StatusOk(created.Status)) {
+//line lesson74-interop-patterns.tesl:326
 			teslT.Fatal("Tesl expectation failed")
 		}
 		{
@@ -516,6 +611,7 @@ func TestTeslApi1(teslT *testing.T) {
 			_ = exported
 //line lesson74-interop-patterns.tesl:329
 			if !(teslrt.StatusOk(exported.Status)) {
+//line lesson74-interop-patterns.tesl:329
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}

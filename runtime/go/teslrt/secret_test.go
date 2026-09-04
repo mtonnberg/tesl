@@ -14,11 +14,34 @@ func TestSecretRedactsEverywhere(t *testing.T) {
 	// formatting machinery: written literally, `fmt.Sprintf("%s", secret)` is a finding
 	// (S1025) whose suggested rewrite — call String() directly — deletes the thing under test.
 	formatted := func(verb string) string { return fmt.Sprintf(verb, secret) }
+	// Same reason for the containers: vet's printf check would (rightly, for an ordinary
+	// value) flag `%d` on a map, which is exactly the accidental print under test.
+	formattedAny := func(verb string, value any) string { return fmt.Sprintf(verb, value) }
 	for label, rendered := range map[string]string{
 		"%v":     formatted("%v"),
+		"%+v":    formatted("%+v"),
 		"%s":     formatted("%s"),
+		"%q":     formatted("%q"),
+		"%x":     formatted("%x"),
 		"%#v":    formatted("%#v"),
 		"Sprint": fmt.Sprint(secret),
+		// The non-string verbs: fmt consults Stringer for none of them, so before the type
+		// implemented Formatter each one fell back to struct printing and rendered
+		// `{%!d(string=hunter2)}` — the plaintext, inside a bad-verb marker.
+		"%d": formatted("%d"),
+		"%b": formatted("%b"),
+		"%o": formatted("%o"),
+		"%t": formatted("%t"),
+		"%f": formatted("%f"),
+		"%c": formatted("%c"),
+		"%d inside a struct": formattedAny("%d", struct {
+			Password SecretString
+		}{Password: secret}),
+		"%d on the stdlib Secret":  formattedAny("%d", Secret{Value: secret}),
+		"%d inside []any":          formattedAny("%d", []any{secret}),
+		"%d inside a map":          formattedAny("%d", map[string]SecretString{"k": secret}),
+		"%d through a pointer":     formattedAny("%d", &secret),
+		"%08d width and zero flag": formatted("%08d"),
 		"inside a struct": fmt.Sprintf("%v", struct {
 			Password SecretString
 		}{Password: secret}),

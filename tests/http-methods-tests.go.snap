@@ -293,16 +293,23 @@ func TestTeslApi0(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line http-methods-tests.tesl:128
 		created := teslrt.ApiRequest(WidgetServer, "POST", "/widgets", "{\"label\":\"first\"}", nil, nil)
 		_ = created
 //line http-methods-tests.tesl:129
 		if !(teslrt.StatusOk(created.Status)) {
+//line http-methods-tests.tesl:129
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line http-methods-tests.tesl:130
 		if !teslrt.JsonEqual(created.Body, "created") {
+//line http-methods-tests.tesl:130
 			teslT.Fatal("Tesl expectation failed")
 		}
 		{
@@ -311,10 +318,12 @@ func TestTeslApi0(teslT *testing.T) {
 			_ = read
 //line http-methods-tests.tesl:132
 			if !(teslrt.StatusOk(read.Status)) {
+//line http-methods-tests.tesl:132
 				teslT.Fatal("Tesl expectation failed")
 			}
 //line http-methods-tests.tesl:133
 			if !teslrt.JsonEqual(read.Body, "first/post") {
+//line http-methods-tests.tesl:133
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -332,12 +341,18 @@ func TestTeslApi1(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line http-methods-tests.tesl:137
 		resp := teslrt.ApiRequest(WidgetServer, "GET", "/widgets/never-created", "", nil, nil)
 		_ = resp
 //line http-methods-tests.tesl:138
 		if !(teslrt.StatusClientError(resp.Status)) {
+//line http-methods-tests.tesl:138
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -354,6 +369,11 @@ func TestTeslApi2(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line http-methods-tests.tesl:141
 //line http-methods-tests.tesl:143
 	_ = teslrt.TableInsert(WidgetTable, "Widget", Widget{Id: "w-put", Label: "before", Tag: "seed"}, func(teslRow, teslNew Widget) bool { return (teslRow.Id == teslNew.Id) })
@@ -363,10 +383,12 @@ func TestTeslApi2(teslT *testing.T) {
 		_ = replaced
 //line http-methods-tests.tesl:146
 		if !(teslrt.StatusOk(replaced.Status)) {
+//line http-methods-tests.tesl:146
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line http-methods-tests.tesl:147
 		if !teslrt.JsonEqual(replaced.Body, "replaced") {
+//line http-methods-tests.tesl:147
 			teslT.Fatal("Tesl expectation failed")
 		}
 		{
@@ -375,6 +397,7 @@ func TestTeslApi2(teslT *testing.T) {
 			_ = read
 //line http-methods-tests.tesl:149
 			if !teslrt.JsonEqual(read.Body, "after-put/put") {
+//line http-methods-tests.tesl:149
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -392,6 +415,11 @@ func TestTeslApi3(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line http-methods-tests.tesl:152
 //line http-methods-tests.tesl:154
 	_ = teslrt.TableInsert(WidgetTable, "Widget", Widget{Id: "w-patch", Label: "before", Tag: "seed"}, func(teslRow, teslNew Widget) bool { return (teslRow.Id == teslNew.Id) })
@@ -401,10 +429,12 @@ func TestTeslApi3(teslT *testing.T) {
 		_ = amended
 //line http-methods-tests.tesl:157
 		if !(teslrt.StatusOk(amended.Status)) {
+//line http-methods-tests.tesl:157
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line http-methods-tests.tesl:158
 		if !teslrt.JsonEqual(amended.Body, "amended") {
+//line http-methods-tests.tesl:158
 			teslT.Fatal("Tesl expectation failed")
 		}
 		{
@@ -413,6 +443,7 @@ func TestTeslApi3(teslT *testing.T) {
 			_ = read
 //line http-methods-tests.tesl:160
 			if !teslrt.JsonEqual(read.Body, "after-patch/patch") {
+//line http-methods-tests.tesl:160
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -430,6 +461,11 @@ func TestTeslApi4(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line http-methods-tests.tesl:163
 //line http-methods-tests.tesl:165
 	_ = teslrt.TableInsert(WidgetTable, "Widget", Widget{Id: "w-del", Label: "doomed", Tag: "seed"}, func(teslRow, teslNew Widget) bool { return (teslRow.Id == teslNew.Id) })
@@ -439,6 +475,7 @@ func TestTeslApi4(teslT *testing.T) {
 		_ = before
 //line http-methods-tests.tesl:168
 		if !(teslrt.StatusOk(before.Status)) {
+//line http-methods-tests.tesl:168
 			teslT.Fatal("Tesl expectation failed")
 		}
 		{
@@ -447,10 +484,12 @@ func TestTeslApi4(teslT *testing.T) {
 			_ = removed
 //line http-methods-tests.tesl:170
 			if !(teslrt.StatusOk(removed.Status)) {
+//line http-methods-tests.tesl:170
 				teslT.Fatal("Tesl expectation failed")
 			}
 //line http-methods-tests.tesl:171
 			if !teslrt.JsonEqual(removed.Body, "removed") {
+//line http-methods-tests.tesl:171
 				teslT.Fatal("Tesl expectation failed")
 			}
 			{
@@ -459,6 +498,7 @@ func TestTeslApi4(teslT *testing.T) {
 				_ = after
 //line http-methods-tests.tesl:173
 				if !(teslrt.StatusClientError(after.Status)) {
+//line http-methods-tests.tesl:173
 					teslT.Fatal("Tesl expectation failed")
 				}
 			}
@@ -477,6 +517,11 @@ func TestTeslApi5(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line http-methods-tests.tesl:181
 //line http-methods-tests.tesl:183
 	_ = teslrt.TableInsert(WidgetTable, "Widget", Widget{Id: "w-seq", Label: "v0", Tag: "seed"}, func(teslRow, teslNew Widget) bool { return (teslRow.Id == teslNew.Id) })
@@ -489,6 +534,7 @@ func TestTeslApi5(teslT *testing.T) {
 			_ = afterPut
 //line http-methods-tests.tesl:187
 			if !teslrt.JsonEqual(afterPut.Body, "v1/put") {
+//line http-methods-tests.tesl:187
 				teslT.Fatal("Tesl expectation failed")
 			}
 			{
@@ -500,6 +546,7 @@ func TestTeslApi5(teslT *testing.T) {
 					_ = afterPatch
 //line http-methods-tests.tesl:190
 					if !teslrt.JsonEqual(afterPatch.Body, "v2/patch") {
+//line http-methods-tests.tesl:190
 						teslT.Fatal("Tesl expectation failed")
 					}
 					{
@@ -511,6 +558,7 @@ func TestTeslApi5(teslT *testing.T) {
 							_ = afterPut2
 //line http-methods-tests.tesl:193
 							if !teslrt.JsonEqual(afterPut2.Body, "v3/put") {
+//line http-methods-tests.tesl:193
 								teslT.Fatal("Tesl expectation failed")
 							}
 						}
@@ -532,12 +580,18 @@ func TestTeslApi6(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line http-methods-tests.tesl:202
 		resp := teslrt.ApiRequest(WidgetServer, "DELETE", "/widgets", "", nil, nil)
 		_ = resp
 //line http-methods-tests.tesl:203
 		if !(teslrt.StatusClientError(resp.Status)) {
+//line http-methods-tests.tesl:203
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -554,6 +608,11 @@ func TestTeslApi7(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line http-methods-tests.tesl:206
 //line http-methods-tests.tesl:208
 	_ = teslrt.TableInsert(WidgetTable, "Widget", Widget{Id: "w-nopost", Label: "untouched", Tag: "seed"}, func(teslRow, teslNew Widget) bool { return (teslRow.Id == teslNew.Id) })
@@ -563,6 +622,7 @@ func TestTeslApi7(teslT *testing.T) {
 		_ = resp
 //line http-methods-tests.tesl:211
 		if !(teslrt.StatusClientError(resp.Status)) {
+//line http-methods-tests.tesl:211
 			teslT.Fatal("Tesl expectation failed")
 		}
 		{
@@ -571,6 +631,7 @@ func TestTeslApi7(teslT *testing.T) {
 			_ = read
 //line http-methods-tests.tesl:213
 			if !teslrt.JsonEqual(read.Body, "untouched/seed") {
+//line http-methods-tests.tesl:213
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}

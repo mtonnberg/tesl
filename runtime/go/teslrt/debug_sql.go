@@ -23,6 +23,9 @@ func DebugPgSql(plan PgPlan) PgPlan {
 		},
 	}
 	wrapped.Capture = func(rowCount int) { updateDebugSQLRowCount(rowCount) }
+	// The explaining probe rides along unchanged: it runs only on an empty result and is not
+	// the statement the capture describes.
+	wrapped.Probe, wrapped.ProbeArgs = plan.Probe, plan.ProbeArgs
 	return wrapped
 }
 

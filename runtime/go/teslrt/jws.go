@@ -27,8 +27,11 @@ import (
 // oldest JWS bypass there is. Their mere presence is a refusal — not "ignored".
 var nominatedHeaderKeys = []string{"jwk", "jku", "x5u", "x5c", "crit"}
 
+// base64URLBytes decodes a JWS segment or a JWK component. Strict for the same reason
+// jwt.go's decoder is: a signature must have ONE spelling, so a token string cannot be
+// re-encoded into an equivalent that a text-keyed control does not recognise.
 func base64URLBytes(text string) ([]byte, bool) {
-	decoded, err := base64.RawURLEncoding.DecodeString(strings.TrimRight(text, "="))
+	decoded, err := base64.RawURLEncoding.Strict().DecodeString(strings.TrimRight(text, "="))
 	if err != nil {
 		return nil, false
 	}

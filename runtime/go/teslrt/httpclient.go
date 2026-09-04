@@ -40,7 +40,11 @@ func millisDuration(millis int) time.Duration {
 //	deadlines             a hung upstream fails the call rather than pinning the caller —
 //	                      inside a worker that is the difference between a failed job (which
 //	                      retries and dead-letters) and a job that never finishes;
-//	a response-body cap   an unbounded read of a hostile response is a memory DoS.
+//	a response-body cap   an unbounded read of a hostile response is a memory DoS;
+//	a redirect policy     a 3xx is a fresh request to a location the UPSTREAM chose: no
+//	                      https→http downgrade, no carrying secret headers to another origin,
+//	                      at most five hops, and none at all for the SSO legs (see
+//	                      `redirectPolicy` below).
 //
 // When tracing is enabled, outbound calls receive a W3C traceparent header unless the caller
 // supplied one explicitly. This keeps propagation deterministic and prevents an upstream trace
@@ -127,10 +131,17 @@ func secretHeaderHandle(plaintext string) string {
 	return handle
 }
 
+// isSecretHeaderHandle recognises the handle SHAPE. It is what the redirect policy keys on:
+// a header whose value came through `bearer`/`secretHeader` is one the caller meant as a
+// credential, whatever its name.
+func isSecretHeaderHandle(value string) bool {
+	return strings.HasPrefix(value, SecretRedaction+"\x00")
+}
+
 // revealHeaderValue is THE unwrap point: a secret-header handle becomes plaintext here and
 // nowhere else. Anything that is not a handle is already the value it looks like.
 func revealHeaderValue(value string) string {
-	if !strings.HasPrefix(value, SecretRedaction+"\x00") {
+	if !isSecretHeaderHandle(value) {
 		return value
 	}
 	if plaintext, found := secretHeaderStore.Load(value); found {
@@ -180,14 +191,23 @@ func HttpDelete(target string, headers []Tuple2[string, string]) HttpResponse {
 }
 
 func httpRequest(method, target string, headers []Tuple2[string, string], body *string) HttpResponse {
+	return httpRequestPolicy(method, target, headers, body, redirectGuarded)
+}
+
+// httpRequestPolicy is the one path every outbound call takes — the four `HttpClient` verbs
+// with `redirectGuarded`, the SSO legs with `redirectRefused` — so the two differ in the
+// redirect rule and in NOTHING else: same URL validation, same header guard, same stubs.
+func httpRequestPolicy(method, target string, headers []Tuple2[string, string], body *string,
+	policy redirectPolicy) HttpResponse {
 	parsed := parseOutboundURL(target)
 	// The header guard runs BEFORE the test double is consulted, so a stubbed call is still a
 	// well-formed one and a header-injection bug cannot hide behind a stub.
-	wire := outboundHeaders(headers)
+	wire, secretHeaders := outboundHeaders(headers)
 	if answer, stubbed := httpStubAnswer(method, target, body); stubbed {
 		return answer
 	}
-	return httpRequestNetwork(method, target, parsed, wire, body)
+	return httpRequestNetwork(method, target, parsed, wire, body,
+		redirectCheck(policy, parsed, secretHeaders))
 }
 
 func parseOutboundURL(target string) *url.URL {
@@ -206,19 +226,91 @@ func parseOutboundURL(target string) *url.URL {
 
 // outboundHeaders checks every field and reveals the secret-carrying ones. A header list is
 // ordered and may repeat a name, so it becomes an http.Header by APPENDING rather than
-// setting — `Set` would drop all but the last of a repeated header.
-func outboundHeaders(headers []Tuple2[string, string]) http.Header {
+// setting — `Set` would drop all but the last of a repeated header. The second result names
+// the headers that were secret handles, for the redirect policy.
+func outboundHeaders(headers []Tuple2[string, string]) (http.Header, []string) {
 	wire := http.Header{}
+	var secretHeaders []string
 	for _, header := range headers {
-		name := requireHeaderFieldSafe("header name", header.Tuple2First)
+		canonical := http.CanonicalHeaderKey(requireHeaderFieldSafe("header name", header.Tuple2First))
+		if isSecretHeaderHandle(header.Tuple2Second) {
+			secretHeaders = append(secretHeaders, canonical)
+		}
 		value := requireHeaderFieldSafe("header value", revealHeaderValue(header.Tuple2Second))
-		wire[http.CanonicalHeaderKey(name)] = append(wire[http.CanonicalHeaderKey(name)], value)
+		wire[canonical] = append(wire[canonical], value)
 	}
-	return wire
+	return wire, secretHeaders
+}
+
+// ── Redirects ─────────────────────────────────────────────────────────────────
+//
+// A 3xx names a location the UPSTREAM chose, so following it is a fresh request to an
+// attacker-influenced URL. The dialer's egress check does run again on that hop (the
+// transport is shared), but three things it cannot see are decided here:
+//
+//	no downgrade        https→http is refused. A `Bearer` token or an API key would travel in
+//	                    cleartext on the second hop, and Go itself never refuses a downgrade.
+//	secrets stay home   a request carrying `HttpClient.bearer`/`secretHeader` values may not be
+//	                    redirected to another scheme or host. Go strips `Authorization` and
+//	                    `Cookie` when the DOMAIN changes but forwards every other header, so an
+//	                    `X-Api-Key` followed a 302 to whatever host it named. The whole call
+//	                    fails — a trap, like every other client failure — rather than quietly
+//	                    continuing without the header: a caller who attached a credential
+//	                    expects it sent, and a 401 from the wrong host would be a puzzle.
+//	a hop cap           five rather than Go's ten; a loop is a slow failure either way.
+//
+// `redirectRefused` is the SSO legs' policy: the 3xx IS the response (`http.ErrUseLastResponse`),
+// and a non-200 is a failed leg. A provider's token, discovery, JWKS or userinfo endpoint is
+// configured or discovered, never a location a response chose.
+type redirectPolicy int
+
+const (
+	redirectGuarded redirectPolicy = iota
+	redirectRefused
+)
+
+const maxRedirects = 5
+
+// redirectCheck builds the `http.Client.CheckRedirect` hook for one call. `original` is the
+// URL the caller asked for — the origin its secret headers were meant for — and
+// `secretHeaders` names the headers that came through a secret handle. Every refusal reads
+// "refused redirect", which `requestFailure` recognises as a refusal rather than a fault.
+func redirectCheck(policy redirectPolicy, original *url.URL,
+	secretHeaders []string) func(*http.Request, []*http.Request) error {
+	return func(next *http.Request, via []*http.Request) error {
+		if policy == redirectRefused {
+			return http.ErrUseLastResponse
+		}
+		if len(via) > maxRedirects {
+			return fmt.Errorf("refused redirect to %s: more than %d redirects", next.URL, maxRedirects)
+		}
+		if len(via) > 0 && via[len(via)-1].URL.Scheme == "https" && next.URL.Scheme != "https" {
+			return fmt.Errorf("refused redirect from %s to %s: an https request is not "+
+				"downgraded to http", via[len(via)-1].URL, next.URL)
+		}
+		sameOrigin := strings.EqualFold(next.URL.Scheme, original.Scheme) &&
+			strings.EqualFold(next.URL.Host, original.Host)
+		if sameOrigin {
+			return nil
+		}
+		if len(secretHeaders) > 0 {
+			return fmt.Errorf("refused redirect to %s: the request carries secret headers (%s) "+
+				"that must not leave %s://%s", next.URL, strings.Join(secretHeaders, ", "),
+				original.Scheme, original.Host)
+		}
+		// The transport's TLS config was computed for the ORIGINAL host. With the development
+		// escape engaged for a loopback host, a redirect elsewhere would carry the disabled
+		// verification along to a host the escape never covered.
+		if tlsInsecureDevEscape(original.Hostname()) {
+			return fmt.Errorf("refused redirect to %s: TESL_HTTP_TLS_INSECURE_DEV relaxes TLS "+
+				"verification for the loopback host %s only", next.URL, original.Hostname())
+		}
+		return nil
+	}
 }
 
 func httpRequestNetwork(method, target string, parsed *url.URL, wire http.Header,
-	body *string) HttpResponse {
+	body *string, checkRedirect func(*http.Request, []*http.Request) error) HttpResponse {
 	var reader io.Reader
 	if body != nil {
 		reader = strings.NewReader(*body)
@@ -234,10 +326,10 @@ func httpRequestNetwork(method, target string, parsed *url.URL, wire http.Header
 	client := &http.Client{
 		Transport: outboundTransport(parsed.Hostname()),
 		Timeout:   millisDuration(httpReadTimeoutMs()),
-		// A redirect is a fresh request to an attacker-influenced location, so it gets the
-		// same egress and TLS treatment as the first one — which it does, because the
-		// transport is shared. Nothing else is followed automatically beyond Go's default
-		// limit of 10.
+		// A redirect is a fresh request to an attacker-influenced location. The shared
+		// transport gives it the same egress treatment as the first hop; `redirectCheck`
+		// decides the rest — downgrade, origin change with secrets, hop cap, or none at all.
+		CheckRedirect: checkRedirect,
 	}
 	response, err := client.Do(request)
 	if err != nil {
@@ -279,6 +371,11 @@ func requestFailure(method, target string, err error) string {
 	// The egress refusal is raised by the dialer's Control hook, so it arrives buried in a
 	// dial error. It is a REFUSAL, not a transport fault, and reads as one.
 	if index := strings.Index(message, "SSRF: refused egress"); index >= 0 {
+		return "HttpClient: " + message[index:]
+	}
+	// Likewise a redirect the policy refused: `CheckRedirect` errors come back wrapped in the
+	// url.Error for the redirect TARGET, and the refusal is the message, not the target.
+	if index := strings.Index(message, "refused redirect"); index >= 0 {
 		return "HttpClient: " + message[index:]
 	}
 	if isTimeout(err) {

@@ -153,6 +153,11 @@ func TestTesl0(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson57-jwt.tesl:279
 		secret := lessonKey("lesson57-test-key")
@@ -163,6 +168,7 @@ func TestTesl0(teslT *testing.T) {
 			_ = token
 //line lesson57-jwt.tesl:281
 			if teslrt.Compare(teslrt.StringLength(token.Value), teslrt.FromInt64(36)) <= 0 {
+//line lesson57-jwt.tesl:281
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -176,6 +182,11 @@ func TestTesl1(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson57-jwt.tesl:285
 		raw := "eyJhbGciOiJIUzI1NiJ9.payload.sig"
@@ -187,6 +198,7 @@ func TestTesl1(teslT *testing.T) {
 			teslLeft1 := token.Value
 //line lesson57-jwt.tesl:287
 			if teslLeft1 != raw {
+//line lesson57-jwt.tesl:287
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -200,6 +212,11 @@ func TestTesl2(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson57-jwt.tesl:295
 		key := "my-signing-key-2025"
@@ -214,6 +231,7 @@ func TestTesl2(teslT *testing.T) {
 				_ = b
 //line lesson57-jwt.tesl:298
 				if !teslrt.SecretEqual(a.Value, b.Value) {
+//line lesson57-jwt.tesl:298
 					teslT.Fatal("Tesl expectation failed")
 				}
 				{
@@ -228,6 +246,7 @@ func TestTesl2(teslT *testing.T) {
 						teslRight3 := tb.Value
 //line lesson57-jwt.tesl:301
 						if teslLeft3 != teslRight3 {
+//line lesson57-jwt.tesl:301
 							teslT.Fatal("Tesl expectation failed")
 						}
 					}
@@ -244,6 +263,11 @@ func TestTesl3(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson57-jwt.tesl:305
 		s1 := lessonKey("key-alpha")
@@ -262,6 +286,7 @@ func TestTesl3(teslT *testing.T) {
 					_ = t2
 //line lesson57-jwt.tesl:309
 					if t1.Value == t2.Value {
+//line lesson57-jwt.tesl:309
 						teslT.Fatal("Tesl expectation failed")
 					}
 				}
@@ -277,6 +302,11 @@ func TestTesl4(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson57-jwt.tesl:313
 		secret := lessonKey("stable-key")
@@ -293,6 +323,7 @@ func TestTesl4(teslT *testing.T) {
 				teslRight4 := t2.Value
 //line lesson57-jwt.tesl:316
 				if teslLeft4 != teslRight4 {
+//line lesson57-jwt.tesl:316
 					teslT.Fatal("Tesl expectation failed")
 				}
 			}
@@ -307,6 +338,11 @@ func TestTesl5(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson57-jwt.tesl:320
 		secret := lessonKey("same-secret")
@@ -321,6 +357,7 @@ func TestTesl5(teslT *testing.T) {
 				_ = t2
 //line lesson57-jwt.tesl:323
 				if t1.Value == t2.Value {
+//line lesson57-jwt.tesl:323
 					teslT.Fatal("Tesl expectation failed")
 				}
 			}
@@ -335,6 +372,11 @@ func TestTesl6(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson57-jwt.tesl:327
 		secret := lessonKey("roundtrip-key")
@@ -349,6 +391,7 @@ func TestTesl6(teslT *testing.T) {
 				_ = result
 //line lesson57-jwt.tesl:330
 				if teslrt.Compare(teslrt.StringLength(result), teslrt.FromInt64(0)) <= 0 {
+//line lesson57-jwt.tesl:330
 					teslT.Fatal("Tesl expectation failed")
 				}
 			}
@@ -363,6 +406,11 @@ func TestTesl7(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson57-jwt.tesl:334
 		secret := lessonKey("decode-key")
@@ -377,6 +425,7 @@ func TestTesl7(teslT *testing.T) {
 				_ = result
 //line lesson57-jwt.tesl:337
 				if teslrt.Compare(teslrt.StringLength(result), teslrt.FromInt64(0)) <= 0 {
+//line lesson57-jwt.tesl:337
 					teslT.Fatal("Tesl expectation failed")
 				}
 			}
@@ -391,6 +440,11 @@ func TestTesl8(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson57-jwt.tesl:344
 		rawSecret := "wrap-test-key"
@@ -409,6 +463,7 @@ func TestTesl8(teslT *testing.T) {
 					_ = result
 //line lesson57-jwt.tesl:348
 					if teslrt.Compare(teslrt.StringLength(result), teslrt.FromInt64(0)) <= 0 {
+//line lesson57-jwt.tesl:348
 						teslT.Fatal("Tesl expectation failed")
 					}
 				}
@@ -424,6 +479,11 @@ func TestTesl9(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson57-jwt.tesl:352
 		secret := lessonKey("length-test")
@@ -438,6 +498,7 @@ func TestTesl9(teslT *testing.T) {
 				_ = long
 //line lesson57-jwt.tesl:355
 				if teslrt.Compare(teslrt.StringLength(long.Value), teslrt.StringLength(short.Value)) <= 0 {
+//line lesson57-jwt.tesl:355
 					teslT.Fatal("Tesl expectation failed")
 				}
 			}
@@ -452,6 +513,11 @@ func TestTesl10(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson57-jwt.tesl:359
 		longKey := "a-very-long-secret-key-that-is-at-least-64-characters-long-abcdefgh"
@@ -466,6 +532,7 @@ func TestTesl10(teslT *testing.T) {
 				_ = token
 //line lesson57-jwt.tesl:362
 				if teslrt.Compare(teslrt.StringLength(token.Value), teslrt.FromInt64(0)) <= 0 {
+//line lesson57-jwt.tesl:362
 					teslT.Fatal("Tesl expectation failed")
 				}
 			}
@@ -480,6 +547,11 @@ func TestTesl11(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson57-jwt.tesl:366
 		s1 := lessonKey("seq-key-1")
@@ -506,10 +578,12 @@ func TestTesl11(teslT *testing.T) {
 							_ = r2
 //line lesson57-jwt.tesl:372
 							if teslrt.Compare(teslrt.StringLength(r1), teslrt.FromInt64(0)) <= 0 {
+//line lesson57-jwt.tesl:372
 								teslT.Fatal("Tesl expectation failed")
 							}
 //line lesson57-jwt.tesl:373
 							if teslrt.Compare(teslrt.StringLength(r2), teslrt.FromInt64(0)) <= 0 {
+//line lesson57-jwt.tesl:373
 								teslT.Fatal("Tesl expectation failed")
 							}
 						}
@@ -527,6 +601,11 @@ func TestTesl12(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson57-jwt.tesl:380
 		a := lessonKey("kid-key-a")
@@ -537,15 +616,18 @@ func TestTesl12(teslT *testing.T) {
 			_ = b
 //line lesson57-jwt.tesl:382
 			if teslrt.KeyFingerprint(a) == teslrt.KeyFingerprint(b) {
+//line lesson57-jwt.tesl:382
 				teslT.Fatal("Tesl expectation failed")
 			}
 			teslLeft5 := teslrt.StringLength(teslrt.KeyFingerprint(a))
 //line lesson57-jwt.tesl:383
 			if !teslrt.Equal(teslLeft5, teslrt.FromInt64(16)) {
+//line lesson57-jwt.tesl:383
 				teslT.Fatal("Tesl expectation failed")
 			}
 //line lesson57-jwt.tesl:384
 			if (MakeLoginToken("user", a)).Value == (MakeLoginToken("user", b)).Value {
+//line lesson57-jwt.tesl:384
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}

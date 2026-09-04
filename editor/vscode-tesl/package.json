@@ -137,7 +137,11 @@
               },
               "port": {
                 "type": "number",
-                "description": "Explicit loopback TCP port of the attach endpoint (overrides project discovery)."
+                "description": "Explicit loopback TCP port of the attach endpoint (overrides project discovery). TCP endpoints require the token from <project>/.tesl-stuff/debug.token, read automatically when `project` is set."
+              },
+              "token": {
+                "type": "string",
+                "description": "Explicit hex token for a loopback TCP attach endpoint (overrides reading <project>/.tesl-stuff/debug.token)."
               },
               "program": {
                 "type": "string",

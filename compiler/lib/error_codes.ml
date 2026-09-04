@@ -526,6 +526,17 @@ let registry : entry list = [
        Move the mutation to a POST/PUT/PATCH/DELETE endpoint, or take the \
        write out of the GET handler. If you need a read-audit trail, record it \
        through telemetry, or accept the write on a POST.";
+     manual = Some "best-practices#security" };
+
+  { code = "SEC006"; category = Security;
+    title = "insecure server Content-Security-Policy";
+    explanation =
+      "A `contentSecurityPolicy` server clause is missing a required isolation \
+       directive or admits a wildcard, inline/eval execution, or unrestricted \
+       data/blob/http(s) source. The runtime-served HTML must use an explicit \
+       baseline so a browser cannot load or execute arbitrary content. Add \
+       `default-src`, `base-uri`, `object-src`, `frame-ancestors`, `form-action`, \
+       `script-src`, and `style-src`, and use explicit trusted sources only.";
     manual = Some "best-practices#security" };
 ]
 

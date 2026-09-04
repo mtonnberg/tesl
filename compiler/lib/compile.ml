@@ -3486,12 +3486,35 @@ let go_project_diag file message = {
   manual = None;
 }
 
+(* Keep Go's unsupported-export boundary observable even when the frontend also
+   rejects an import name.  The checker remains authoritative for --check; Go
+   callers additionally get the backend diagnostic that explains why emission
+   cannot proceed. *)
+let go_import_boundary_diags (filename : string) (m : Ast.module_form) =
+  let strip_ctor_suffix name =
+    let n = String.length name in
+    if n > 4 && String.sub name (n - 4) 4 = "(..)" then
+      String.sub name 0 (n - 4)
+    else name
+  in
+  List.concat_map (fun (imp : Ast.import_decl) ->
+    match imp.names, Type_system.tesl_module_export_set imp.module_name with
+    | ImportExposing names, Some exports ->
+      List.filter_map (fun raw_name ->
+        let name = strip_ctor_suffix raw_name in
+        if List.mem name exports then None
+        else Some (go_project_diag filename
+          (Printf.sprintf
+             "Go backend does not emit the `%s` export `%s`: module `%s` does not export `%s`"
+             imp.module_name name imp.module_name name))) names
+    | _ -> []) m.imports
+
 let compile_go_source ?(debug=false) ?(path="") filename source =
   match parse_module filename source with
   | Err error -> GoFailure [diag_of_parse_error error]
   | Ok m ->
     let diags = check_module source m in
-    if diags <> [] then GoFailure diags
+    if diags <> [] then GoFailure (diags @ go_import_boundary_diags filename m)
     else
       (match local_dependency_modules path m with
        | GoDepsError message -> GoFailure [go_project_diag filename message]

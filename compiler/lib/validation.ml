@@ -80,6 +80,7 @@ let check_module (m : module_form) : validation_error list =
   @ (TDatabase @: check_database_entities m)
   @ (TTesting @: check_api_test_structure m)
   @ (TTesting @: check_test_descriptions decls)
+  @ (TStructural @: check_content_security_policy decls)
   @ (TStructural @: check_server_completeness ~extra_funcs:imported_funcs decls)
   @ (TDatabase @: check_sql_field_names ~facts decls)
   @ (TCodec @: check_codec_target_types ~facts decls_with_imported_types)
@@ -140,6 +141,16 @@ let check_module (m : module_form) : validation_error list =
      `tesl --check` and to the editor, and a guard the Go backend would have had to
      reimplement.  Checked here so both backends inherit it. *)
   @ (TDatabase @: check_sql_patterns_recognised decls)
+  (* `inList`/`notInList` with a non-literal member list used to compile to a CONSTANT
+     predicate (`where true` / `where false`) on both backends — a silently inverted filter.
+     Refused here, with the operand named, before the query parser fails closed on it. *)
+  @ (TDatabase @: check_sql_list_membership_operands decls)
+  (* A `:param` route declared before a literal route at the same position makes the literal
+     one unreachable (first match wins), silently — and with the earlier endpoint's auth. *)
+  @ (TStructural @: check_route_shadowing decls)
+  (* A query binder that shadows a parameter/local/function reads differently on the two
+     backends (row field vs outer variable); refused before either renders it. *)
+  @ (TDatabase @: check_query_binder_shadowing decls)
   @ (TStructural @: check_cookies_field_access decls)
   @ (TNaming @: check_adt_variant_names decls)
   (* 2026-07-03 hole #8: reject `fact FromDb`/`fact ForAll`/… re-declarations of

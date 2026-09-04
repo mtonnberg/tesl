@@ -1,9 +1,11 @@
 package teslrt
 
 import (
+	"container/list"
 	"regexp"
 	"strconv"
 	"sync"
+	"unicode/utf8"
 )
 
 // `Tesl.Regex` — regular expressions over String.
@@ -31,35 +33,72 @@ func regexMaxInput() int {
 	return envPositiveInt("TESL_REGEX_MAX_INPUT_BYTES", 1048576)
 }
 
+// The compile cache is BOUNDED. The compiler only ever emits literal patterns, so a program's
+// working set is a handful of them — but a program that has shed Tesl, or a pattern built
+// from request data, could feed the cache an unbounded stream of distinct patterns, and an
+// unbounded map of compiled programs is a memory sink. An LRU of regexCacheCapacity entries
+// keeps every pattern a real program uses hot while a hostile stream only churns.
+const regexCacheCapacity = 256
+
 var (
 	regexCacheMutex sync.Mutex
-	regexCache      = map[string]*regexp.Regexp{}
+	regexCache      = map[string]*list.Element{}
+	regexCacheOrder = list.New() // front = most recently used
 )
+
+type regexCacheEntry struct {
+	pattern  string
+	compiled *regexp.Regexp
+}
 
 // RegexCompile compiles and memoises a pattern. A pattern that does not compile is a clean
 // trap naming it, not a raw error from the engine.
 func RegexCompile(who, pattern string) *regexp.Regexp {
 	regexCacheMutex.Lock()
-	compiled, cached := regexCache[pattern]
-	regexCacheMutex.Unlock()
-	if cached {
+	if element, cached := regexCache[pattern]; cached {
+		regexCacheOrder.MoveToFront(element)
+		compiled := element.Value.(regexCacheEntry).compiled
+		regexCacheMutex.Unlock()
 		return compiled
 	}
+	regexCacheMutex.Unlock()
 	compiled, err := regexp.Compile(pattern)
 	if err != nil {
 		panic(who + ": pattern " + strconv.Quote(pattern) + " does not compile: " + err.Error())
 	}
 	regexCacheMutex.Lock()
-	regexCache[pattern] = compiled
-	regexCacheMutex.Unlock()
+	defer regexCacheMutex.Unlock()
+	if element, cached := regexCache[pattern]; cached {
+		// Another goroutine compiled the same pattern between the two locks; keep one.
+		regexCacheOrder.MoveToFront(element)
+		return element.Value.(regexCacheEntry).compiled
+	}
+	for regexCacheOrder.Len() >= regexCacheCapacity {
+		oldest := regexCacheOrder.Back()
+		if oldest == nil {
+			break
+		}
+		delete(regexCache, oldest.Value.(regexCacheEntry).pattern)
+		regexCacheOrder.Remove(oldest)
+	}
+	regexCache[pattern] = regexCacheOrder.PushFront(regexCacheEntry{pattern: pattern, compiled: compiled})
 	return compiled
+}
+
+// regexCacheSize is the number of compiled patterns held, for the runtime's own tests.
+func regexCacheSize() int {
+	regexCacheMutex.Lock()
+	defer regexCacheMutex.Unlock()
+	return regexCacheOrder.Len()
 }
 
 func regexSubject(who, input string) string {
 	limit := regexMaxInput()
 	// Characters, not bytes, matching the Racket runtime's `string-length` — the two agree
-	// on where the line is for a subject that is not pure ASCII.
-	if length := len([]rune(input)); length > limit {
+	// on where the line is for a subject that is not pure ASCII. Counted in place: a
+	// `[]rune` conversion would allocate four bytes per character of a subject that may be
+	// a megabyte, just to measure it.
+	if length := utf8.RuneCountInString(input); length > limit {
 		panic(who + ": input of " + strconv.Itoa(length) + " characters exceeds the " +
 			strconv.Itoa(limit) + " character regex input limit" +
 			"\n  (raise TESL_REGEX_MAX_INPUT_BYTES if this is intentional)")

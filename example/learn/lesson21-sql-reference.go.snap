@@ -526,64 +526,78 @@ func FindProductsWithCategory(minAllowedPrice teslrt.Int) []Product {
 
 //line lesson21-sql-reference.tesl:527
 func CreateProductWithCategory(id string, name string, price teslrt.Int, catId string, catLabel string) Product {
-	{
+//line lesson21-sql-reference.tesl:535
+	var teslCommitted Product
+	teslrt.WithMemoryTransaction(func() {
+		teslCommitted = func() Product {
+			{
 //line lesson21-sql-reference.tesl:536
-		_ = teslrt.TableInsert(CategoryTable, "Category", Category{Id: catId, Label: catLabel, Active: true}, func(teslRow, teslNew Category) bool { return (teslRow.Id == teslNew.Id) })
+				_ = teslrt.TableInsert(CategoryTable, "Category", Category{Id: catId, Label: catLabel, Active: true}, func(teslRow, teslNew Category) bool { return (teslRow.Id == teslNew.Id) })
 //line lesson21-sql-reference.tesl:537
-		return teslrt.TableInsert(ProductTable, "Product", Product{Id: id, Name: name, Price: price, Category: catId, InStock: true}, func(teslRow, teslNew Product) bool { return (teslRow.Id == teslNew.Id) }, teslrt.UniqueIndexOf(
-			"Product",
-			[]string{"name"},
-			nil,
-			func(teslLeft, teslRight Product) bool {
-				return (teslLeft.Name == teslRight.Name)
-			},
-			func(teslRow Product) string {
-				return "(" + teslRow.Name + ")"
-			},
-		))
-	}
+				return teslrt.TableInsert(ProductTable, "Product", Product{Id: id, Name: name, Price: price, Category: catId, InStock: true}, func(teslRow, teslNew Product) bool { return (teslRow.Id == teslNew.Id) }, teslrt.UniqueIndexOf(
+					"Product",
+					[]string{"name"},
+					nil,
+					func(teslLeft, teslRight Product) bool {
+						return (teslLeft.Name == teslRight.Name)
+					},
+					func(teslRow Product) string {
+						return "(" + teslRow.Name + ")"
+					},
+				))
+			}
+		}()
+	})
+	return teslCommitted
 }
 
 //line lesson21-sql-reference.tesl:542
 func SwapStock(outId string, inId string) struct{} {
-	{
+//line lesson21-sql-reference.tesl:543
+	var teslCommitted struct{}
+	teslrt.WithMemoryTransaction(func() {
+		teslCommitted = func() struct{} {
+			{
 //line lesson21-sql-reference.tesl:544
-		_ = teslrt.TableUpdate(ProductTable, func(p Product) bool {
-			return (p.Id == outId)
-		}, func(p Product) Product {
-			teslNext := p
-			teslNext.InStock = false
-			return teslNext
-		}, teslrt.UniqueIndexOf(
-			"Product",
-			[]string{"name"},
-			nil,
-			func(teslLeft, teslRight Product) bool {
-				return (teslLeft.Name == teslRight.Name)
-			},
-			func(teslRow Product) string {
-				return "(" + teslRow.Name + ")"
-			},
-		))
+				_ = teslrt.TableUpdate(ProductTable, func(p Product) bool {
+					return (p.Id == outId)
+				}, func(p Product) Product {
+					teslNext := p
+					teslNext.InStock = false
+					return teslNext
+				}, teslrt.UniqueIndexOf(
+					"Product",
+					[]string{"name"},
+					nil,
+					func(teslLeft, teslRight Product) bool {
+						return (teslLeft.Name == teslRight.Name)
+					},
+					func(teslRow Product) string {
+						return "(" + teslRow.Name + ")"
+					},
+				))
 //line lesson21-sql-reference.tesl:547
-		return teslrt.TableUpdate(ProductTable, func(p Product) bool {
-			return (p.Id == inId)
-		}, func(p Product) Product {
-			teslNext := p
-			teslNext.InStock = true
-			return teslNext
-		}, teslrt.UniqueIndexOf(
-			"Product",
-			[]string{"name"},
-			nil,
-			func(teslLeft, teslRight Product) bool {
-				return (teslLeft.Name == teslRight.Name)
-			},
-			func(teslRow Product) string {
-				return "(" + teslRow.Name + ")"
-			},
-		))
-	}
+				return teslrt.TableUpdate(ProductTable, func(p Product) bool {
+					return (p.Id == inId)
+				}, func(p Product) Product {
+					teslNext := p
+					teslNext.InStock = true
+					return teslNext
+				}, teslrt.UniqueIndexOf(
+					"Product",
+					[]string{"name"},
+					nil,
+					func(teslLeft, teslRight Product) bool {
+						return (teslLeft.Name == teslRight.Name)
+					},
+					func(teslRow Product) string {
+						return "(" + teslRow.Name + ")"
+					},
+				))
+			}
+		}()
+	})
+	return teslCommitted
 }
 
 //line lesson21-sql-reference.tesl:762
@@ -649,6 +663,11 @@ func TestTesl0(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson21-sql-reference.tesl:573
 		_ = CreateProduct("p1", "Widget", teslrt.FromInt64(10), "tools")
@@ -659,16 +678,19 @@ func TestTesl0(teslT *testing.T) {
 			teslLeft1 := p.Name
 //line lesson21-sql-reference.tesl:575
 			if teslLeft1 != "Widget" {
+//line lesson21-sql-reference.tesl:575
 				teslT.Fatal("Tesl expectation failed")
 			}
 			teslLeft2 := p.Price
 //line lesson21-sql-reference.tesl:576
 			if !teslrt.Equal(teslLeft2, teslrt.FromInt64(10)) {
+//line lesson21-sql-reference.tesl:576
 				teslT.Fatal("Tesl expectation failed")
 			}
 			teslLeft3 := p.Category
 //line lesson21-sql-reference.tesl:577
 			if teslLeft3 != "tools" {
+//line lesson21-sql-reference.tesl:577
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -682,6 +704,11 @@ func TestTesl1(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson21-sql-reference.tesl:581
 		_ = CreateProduct("c1", "Hammer", teslrt.FromInt64(15), "tools")
@@ -697,6 +724,7 @@ func TestTesl1(teslT *testing.T) {
 					_ = results
 //line lesson21-sql-reference.tesl:585
 					if teslrt.ListEqualBy(results, []Product{}, teslEqualProduct) {
+//line lesson21-sql-reference.tesl:585
 						teslT.Fatal("Tesl expectation failed")
 					}
 				}
@@ -712,6 +740,11 @@ func TestTesl2(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson21-sql-reference.tesl:589
 		_ = CreateProduct("a1", "Cheap Tool", teslrt.FromInt64(5), "tools")
@@ -728,10 +761,12 @@ func TestTesl2(teslT *testing.T) {
 					_ = expensive
 //line lesson21-sql-reference.tesl:593
 					if teslrt.ListEqualBy(cheap, []Product{}, teslEqualProduct) {
+//line lesson21-sql-reference.tesl:593
 						teslT.Fatal("Tesl expectation failed")
 					}
 //line lesson21-sql-reference.tesl:594
 					if teslrt.ListEqualBy(expensive, []Product{}, teslEqualProduct) {
+//line lesson21-sql-reference.tesl:594
 						teslT.Fatal("Tesl expectation failed")
 					}
 				}
@@ -747,6 +782,11 @@ func TestTesl3(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson21-sql-reference.tesl:598
 		_ = CreateProduct("f1", "Alpha", teslrt.FromInt64(10), "alpha")
@@ -762,6 +802,7 @@ func TestTesl3(teslT *testing.T) {
 					_ = results
 //line lesson21-sql-reference.tesl:602
 					if teslrt.ListEqualBy(results, []Product{}, teslEqualProduct) {
+//line lesson21-sql-reference.tesl:602
 						teslT.Fatal("Tesl expectation failed")
 					}
 				}
@@ -777,6 +818,11 @@ func TestTesl4(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson21-sql-reference.tesl:606
 		_ = CreateProduct("u1", "Updatable", teslrt.FromInt64(100), "misc")
@@ -787,11 +833,13 @@ func TestTesl4(teslT *testing.T) {
 			teslLeft4 := updated.Price
 //line lesson21-sql-reference.tesl:608
 			if !teslrt.Equal(teslLeft4, teslrt.FromInt64(200)) {
+//line lesson21-sql-reference.tesl:608
 				teslT.Fatal("Tesl expectation failed")
 			}
 			teslLeft5 := updated.Category
 //line lesson21-sql-reference.tesl:609
 			if teslLeft5 != "recently-updated" {
+//line lesson21-sql-reference.tesl:609
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -805,6 +853,11 @@ func TestTesl5(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson21-sql-reference.tesl:613
 		_ = CreateProduct("us1", "Silent", teslrt.FromInt64(50), "misc")
@@ -818,6 +871,7 @@ func TestTesl5(teslT *testing.T) {
 				teslLeft6 := found.Price
 //line lesson21-sql-reference.tesl:616
 				if !teslrt.Equal(teslLeft6, teslrt.FromInt64(75)) {
+//line lesson21-sql-reference.tesl:616
 					teslT.Fatal("Tesl expectation failed")
 				}
 			}
@@ -832,6 +886,11 @@ func TestTesl6(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson21-sql-reference.tesl:620
 		_ = CreateProduct("d1", "Deletable", teslrt.FromInt64(5), "misc")
@@ -847,6 +906,7 @@ func TestTesl6(teslT *testing.T) {
 				teslRight7 := teslrt.Maybe[Product]{Tag: teslrt.MaybeNothing}
 //line lesson21-sql-reference.tesl:623
 				if result.Tag != teslRight7.Tag || (result.Tag == teslrt.MaybeSomething && ((result.SomethingValue.Id != teslRight7.SomethingValue.Id) || (result.SomethingValue.Name != teslRight7.SomethingValue.Name) || !teslrt.Equal(result.SomethingValue.Price, teslRight7.SomethingValue.Price) || (result.SomethingValue.Category != teslRight7.SomethingValue.Category) || (result.SomethingValue.InStock != teslRight7.SomethingValue.InStock))) {
+//line lesson21-sql-reference.tesl:623
 					teslT.Fatal("Tesl expectation failed")
 				}
 			}
@@ -861,12 +921,18 @@ func TestTesl7(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson21-sql-reference.tesl:627
 		result := RemoveProductWithResult("nonexistent-xyz")
 		_ = result
 //line lesson21-sql-reference.tesl:628
 		if !teslrt.Equal(result, teslrt.FromInt64(0)) {
+//line lesson21-sql-reference.tesl:628
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -879,6 +945,11 @@ func TestTesl8(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson21-sql-reference.tesl:632
 		_ = CreateProduct("dr1", "ToDelete", teslrt.FromInt64(5), "misc")
@@ -888,6 +959,7 @@ func TestTesl8(teslT *testing.T) {
 			_ = result
 //line lesson21-sql-reference.tesl:634
 			if !teslrt.Equal(result, teslrt.FromInt64(1)) {
+//line lesson21-sql-reference.tesl:634
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -901,6 +973,11 @@ func TestTesl9(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson21-sql-reference.tesl:638
 		_ = BatchCreate([]Product{Product{Id: "b1", Name: "Batch1", Price: teslrt.FromInt64(10), Category: "batch", InStock: true}, Product{Id: "b2", Name: "Batch2", Price: teslrt.FromInt64(20), Category: "batch", InStock: true}})
@@ -910,6 +987,7 @@ func TestTesl9(teslT *testing.T) {
 			_ = results
 //line lesson21-sql-reference.tesl:640
 			if teslrt.ListEqualBy(results, []Product{}, teslEqualProduct) {
+//line lesson21-sql-reference.tesl:640
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -923,6 +1001,11 @@ func TestTesl10(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson21-sql-reference.tesl:644
 		_ = CreateProduct("e1", "Pricey", teslrt.FromInt64(999), "luxury")
@@ -932,6 +1015,7 @@ func TestTesl10(teslT *testing.T) {
 			_ = results
 //line lesson21-sql-reference.tesl:646
 			if teslrt.ListEqualBy(results, []Product{}, teslEqualProduct) {
+//line lesson21-sql-reference.tesl:646
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -945,6 +1029,11 @@ func TestTesl11(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson21-sql-reference.tesl:650
 		_ = CreateProduct("br1", "Cheap", teslrt.FromInt64(5), "misc")
@@ -960,6 +1049,7 @@ func TestTesl11(teslT *testing.T) {
 					_ = results
 //line lesson21-sql-reference.tesl:654
 					if teslrt.ListEqualBy(results, []Product{}, teslEqualProduct) {
+//line lesson21-sql-reference.tesl:654
 						teslT.Fatal("Tesl expectation failed")
 					}
 				}
@@ -975,6 +1065,11 @@ func TestTesl12(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson21-sql-reference.tesl:658
 		_ = CreateProduct("bro1", "Budget", teslrt.FromInt64(15), "misc")
@@ -990,6 +1085,7 @@ func TestTesl12(teslT *testing.T) {
 					_ = results
 //line lesson21-sql-reference.tesl:662
 					if teslrt.ListEqualBy(results, []Product{}, teslEqualProduct) {
+//line lesson21-sql-reference.tesl:662
 						teslT.Fatal("Tesl expectation failed")
 					}
 				}
@@ -1005,6 +1101,11 @@ func TestTesl13(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson21-sql-reference.tesl:666
 		_ = UpsertProduct("up1", "NewProduct", teslrt.FromInt64(42))
@@ -1015,11 +1116,13 @@ func TestTesl13(teslT *testing.T) {
 			teslLeft10 := found.Name
 //line lesson21-sql-reference.tesl:668
 			if teslLeft10 != "NewProduct" {
+//line lesson21-sql-reference.tesl:668
 				teslT.Fatal("Tesl expectation failed")
 			}
 			teslLeft11 := found.Price
 //line lesson21-sql-reference.tesl:669
 			if !teslrt.Equal(teslLeft11, teslrt.FromInt64(42)) {
+//line lesson21-sql-reference.tesl:669
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -1033,6 +1136,11 @@ func TestTesl14(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson21-sql-reference.tesl:673
 		_ = UpsertProduct("up2", "Original", teslrt.FromInt64(10))
@@ -1046,11 +1154,13 @@ func TestTesl14(teslT *testing.T) {
 				teslLeft12 := found.Name
 //line lesson21-sql-reference.tesl:676
 				if teslLeft12 != "Updated" {
+//line lesson21-sql-reference.tesl:676
 					teslT.Fatal("Tesl expectation failed")
 				}
 				teslLeft13 := found.Price
 //line lesson21-sql-reference.tesl:677
 				if !teslrt.Equal(teslLeft13, teslrt.FromInt64(99)) {
+//line lesson21-sql-reference.tesl:677
 					teslT.Fatal("Tesl expectation failed")
 				}
 			}
@@ -1065,6 +1175,11 @@ func TestTesl15(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson21-sql-reference.tesl:681
 		_ = UpsertProductByName("un1", "UniqueName", teslrt.FromInt64(10))
@@ -1078,6 +1193,7 @@ func TestTesl15(teslT *testing.T) {
 				teslLeft14 := found.Price
 //line lesson21-sql-reference.tesl:686
 				if !teslrt.Equal(teslLeft14, teslrt.FromInt64(77)) {
+//line lesson21-sql-reference.tesl:686
 					teslT.Fatal("Tesl expectation failed")
 				}
 				{
@@ -1089,6 +1205,7 @@ func TestTesl15(teslT *testing.T) {
 					teslRight15 := []Product{}
 //line lesson21-sql-reference.tesl:688
 					if !teslrt.ListEqualBy(byOther, teslRight15, teslEqualProduct) {
+//line lesson21-sql-reference.tesl:688
 						teslT.Fatal("Tesl expectation failed")
 					}
 				}
@@ -1104,6 +1221,11 @@ func TestTesl16(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson21-sql-reference.tesl:692
 		_ = CreateProduct("lk1", "Widget Pro", teslrt.FromInt64(50), "tools")
@@ -1116,6 +1238,7 @@ func TestTesl16(teslT *testing.T) {
 				_ = results
 //line lesson21-sql-reference.tesl:695
 				if teslrt.ListEqualBy(results, []Product{}, teslEqualProduct) {
+//line lesson21-sql-reference.tesl:695
 					teslT.Fatal("Tesl expectation failed")
 				}
 			}
@@ -1130,6 +1253,11 @@ func TestTesl17(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson21-sql-reference.tesl:699
 		_ = CreateProduct("ilk1", "WidgetX", teslrt.FromInt64(50), "tools")
@@ -1139,6 +1267,7 @@ func TestTesl17(teslT *testing.T) {
 			_ = results
 //line lesson21-sql-reference.tesl:701
 			if teslrt.ListEqualBy(results, []Product{}, teslEqualProduct) {
+//line lesson21-sql-reference.tesl:701
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -1152,6 +1281,11 @@ func TestTesl18(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson21-sql-reference.tesl:705
 		_ = CreateProduct("cnt1", "CountMe1", teslrt.FromInt64(10), "count-test")
@@ -1164,6 +1298,7 @@ func TestTesl18(teslT *testing.T) {
 				_ = n
 //line lesson21-sql-reference.tesl:708
 				if teslrt.Compare(n, teslrt.FromInt64(0)) <= 0 {
+//line lesson21-sql-reference.tesl:708
 					teslT.Fatal("Tesl expectation failed")
 				}
 			}
@@ -1178,6 +1313,11 @@ func TestTesl19(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson21-sql-reference.tesl:712
 		_ = CreateProduct("sum1", "SumMe1", teslrt.FromInt64(10), "sum-test")
@@ -1190,6 +1330,7 @@ func TestTesl19(teslT *testing.T) {
 				_ = total
 //line lesson21-sql-reference.tesl:715
 				if teslrt.Compare(total, teslrt.FromInt64(0)) <= 0 {
+//line lesson21-sql-reference.tesl:715
 					teslT.Fatal("Tesl expectation failed")
 				}
 			}
@@ -1204,6 +1345,11 @@ func TestTesl20(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson21-sql-reference.tesl:719
 		_ = CreateProduct("is1", "Cheap In Stock", teslrt.FromInt64(5), "misc")
@@ -1216,6 +1362,7 @@ func TestTesl20(teslT *testing.T) {
 				_ = results
 //line lesson21-sql-reference.tesl:722
 				if teslrt.ListEqualBy(results, []Product{}, teslEqualProduct) {
+//line lesson21-sql-reference.tesl:722
 					teslT.Fatal("Tesl expectation failed")
 				}
 			}
@@ -1230,6 +1377,11 @@ func TestTesl21(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson21-sql-reference.tesl:726
 		_ = teslrt.TableInsert(CategoryTable, "Category", Category{Id: "tools", Label: "Tools", Active: true}, func(teslRow, teslNew Category) bool { return (teslRow.Id == teslNew.Id) })
@@ -1245,6 +1397,7 @@ func TestTesl21(teslT *testing.T) {
 					_ = results
 //line lesson21-sql-reference.tesl:735
 					if teslrt.ListEqualBy(results, []Product{}, teslEqualProduct) {
+//line lesson21-sql-reference.tesl:735
 						teslT.Fatal("Tesl expectation failed")
 					}
 				}
@@ -1260,6 +1413,11 @@ func TestTesl22(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson21-sql-reference.tesl:739
 		p := CreateProductWithCategory("txp1", "Transactional Widget", teslrt.FromInt64(30), "tx-cat", "TX Category")
@@ -1267,11 +1425,13 @@ func TestTesl22(teslT *testing.T) {
 		teslLeft16 := p.Name
 //line lesson21-sql-reference.tesl:740
 		if teslLeft16 != "Transactional Widget" {
+//line lesson21-sql-reference.tesl:740
 			teslT.Fatal("Tesl expectation failed")
 		}
 		teslLeft17 := p.Price
 //line lesson21-sql-reference.tesl:741
 		if !teslrt.Equal(teslLeft17, teslrt.FromInt64(30)) {
+//line lesson21-sql-reference.tesl:741
 			teslT.Fatal("Tesl expectation failed")
 		}
 		{
@@ -1282,6 +1442,7 @@ func TestTesl22(teslT *testing.T) {
 			_ = cats
 //line lesson21-sql-reference.tesl:744
 			if teslrt.ListEqualBy(cats, []Category{}, teslEqualCategory) {
+//line lesson21-sql-reference.tesl:744
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -1295,6 +1456,11 @@ func TestTesl23(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson21-sql-reference.tesl:748
 		_ = CreateProduct("swap1", "SwapOut", teslrt.FromInt64(10), "misc")
@@ -1318,10 +1484,12 @@ func TestTesl23(teslT *testing.T) {
 						_ = inRows
 //line lesson21-sql-reference.tesl:755
 						if teslrt.ListEqualBy(outRows, []Product{}, teslEqualProduct) {
+//line lesson21-sql-reference.tesl:755
 							teslT.Fatal("Tesl expectation failed")
 						}
 //line lesson21-sql-reference.tesl:756
 						if teslrt.ListEqualBy(inRows, []Product{}, teslEqualProduct) {
+//line lesson21-sql-reference.tesl:756
 							teslT.Fatal("Tesl expectation failed")
 						}
 					}
@@ -1338,6 +1506,11 @@ func TestTesl24(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson21-sql-reference.tesl:769
 		_ = seedTimeEntries()
@@ -1348,6 +1521,7 @@ func TestTesl24(teslT *testing.T) {
 			teslLeft18 := teslrt.ListLength(utcDays)
 //line lesson21-sql-reference.tesl:772
 			if !teslrt.Equal(teslLeft18, teslrt.FromInt64(2)) {
+//line lesson21-sql-reference.tesl:772
 				teslT.Fatal("Tesl expectation failed")
 			}
 			{
@@ -1357,6 +1531,7 @@ func TestTesl24(teslT *testing.T) {
 				teslLeft19 := teslrt.ListLength(sthlmDays)
 //line lesson21-sql-reference.tesl:776
 				if !teslrt.Equal(teslLeft19, teslrt.FromInt64(2)) {
+//line lesson21-sql-reference.tesl:776
 					teslT.Fatal("Tesl expectation failed")
 				}
 			}
@@ -1371,6 +1546,11 @@ func TestTesl25(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line lesson21-sql-reference.tesl:780
 	_ = teslrt.TableInsert(TimeEntryTable, "TimeEntry", TimeEntry{Id: "te4", OrgId: "acme2", Minutes: teslrt.FromInt64(10), StartedAt: teslrt.SecondsToPosix(teslrt.FromInt64(1772359200))}, func(teslRow, teslNew TimeEntry) bool { return (teslRow.Id == teslNew.Id) })
 //line lesson21-sql-reference.tesl:781
@@ -1386,6 +1566,7 @@ func TestTesl25(teslT *testing.T) {
 			teslLeft20 := teslrt.ListLength(rows)
 //line lesson21-sql-reference.tesl:785
 			if !teslrt.Equal(teslLeft20, teslrt.FromInt64(1)) {
+//line lesson21-sql-reference.tesl:785
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -1399,24 +1580,33 @@ func TestTesl26(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft21 := teslrt.TimeOffsetAt(teslrt.NamedZone("Europe/Stockholm"), teslrt.SecondsToPosix(teslrt.FromInt64(1767225600)))
 //line lesson21-sql-reference.tesl:790
 	if !teslrt.Equal(teslLeft21, teslrt.FromInt64(60)) {
+//line lesson21-sql-reference.tesl:790
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft22 := teslrt.TimeOffsetAt(teslrt.NamedZone("Europe/Stockholm"), teslrt.SecondsToPosix(teslrt.FromInt64(1750000000)))
 //line lesson21-sql-reference.tesl:791
 	if !teslrt.Equal(teslLeft22, teslrt.FromInt64(120)) {
+//line lesson21-sql-reference.tesl:791
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft23 := teslrt.TimeOffsetAt(teslrt.FixedOffsetZone(teslrt.FromInt64(330)), teslrt.SecondsToPosix(teslrt.FromInt64(0)))
 //line lesson21-sql-reference.tesl:792
 	if !teslrt.Equal(teslLeft23, teslrt.FromInt64(330)) {
+//line lesson21-sql-reference.tesl:792
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft24 := teslrt.TimeOffsetAt(teslrt.UtcZone(), teslrt.SecondsToPosix(teslrt.FromInt64(0)))
 //line lesson21-sql-reference.tesl:793
 	if !teslrt.Equal(teslLeft24, teslrt.FromInt64(0)) {
+//line lesson21-sql-reference.tesl:793
 		teslT.Fatal("Tesl expectation failed")
 	}
 }

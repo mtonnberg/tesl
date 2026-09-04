@@ -109,7 +109,7 @@ func teslEqualChatEventChunk(teslLeft, teslRight ChatEvent) bool {
 }
 
 //line ai-conversation-service.tesl:153
-var ChatStreamChannel = teslrt.NewSseChannel("ChatStream")
+var ChatStreamChannel = teslrt.NewSseChannelOn(ConversationDbDatabase, "ChatStream")
 
 //line ai-conversation-service.tesl:123
 var ConversationRecordTable = teslrt.NewTable[ConversationRecord]()
@@ -332,31 +332,32 @@ func saveConversation(requestUser Consumer, conversationId string, conv teslrt.C
 		json := teslrt.ConversationJSON(conv)
 		_ = json
 //line ai-conversation-service.tesl:235
-		return func() struct{} {
-			var teslCommitted struct{}
-			teslrt.WithTransaction(func() {
-				teslCommitted = (func() struct{} {
-					{
-						teslScrut5 := teslrt.DbSelectOne(ConversationDbDatabase, ConversationRecordTable, func(r ConversationRecord) bool {
-							return (r.Id == conversationId) && (r.OwnerId == requestUser.Id)
-						}, nil, teslrt.PgSql("select \"id\", \"owner_id\", \"transcript\" from \"ai_conversations\".\"ai_conversations\" where \"id\" = $1 and \"owner_id\" = $2 limit 1", func() []any {
-							return []any{conversationId, requestUser.Id}
-						}), teslScanConversationRecord)
-						switch teslScrut5.Tag {
-						case teslrt.MaybeSomething:
-							r := teslScrut5.SomethingValue
-							_ = r
-							return updateTranscript(requestUser, conversationId, json)
-						case teslrt.MaybeNothing:
-							return insertTranscript(requestUser, conversationId, json)
-						default:
-							panic("unreachable: checker guarantees case exhaustiveness")
-						}
+		var teslCommitted struct{}
+		teslrt.WithTransaction(func() {
+			teslCommitted = func() struct{} {
+//line ai-conversation-service.tesl:236
+				{
+					teslScrut4 := teslrt.DbSelectOne(ConversationDbDatabase, ConversationRecordTable, func(r ConversationRecord) bool {
+						return (r.Id == conversationId) && (r.OwnerId == requestUser.Id)
+					}, nil, teslrt.PgSql("select \"id\", \"owner_id\", \"transcript\" from \"ai_conversations\".\"ai_conversations\" where \"id\" = $1 and \"owner_id\" = $2 limit 1", func() []any {
+						return []any{conversationId, requestUser.Id}
+					}), teslScanConversationRecord)
+					switch teslScrut4.Tag {
+					case teslrt.MaybeSomething:
+						r := teslScrut4.SomethingValue
+						_ = r
+//line ai-conversation-service.tesl:237
+						return updateTranscript(requestUser, conversationId, json)
+					case teslrt.MaybeNothing:
+//line ai-conversation-service.tesl:238
+						return insertTranscript(requestUser, conversationId, json)
+					default:
+						panic("unreachable: checker guarantees case exhaustiveness")
 					}
-				}())
-			})
-			return teslCommitted
-		}()
+				}
+			}()
+		})
+		return teslCommitted
 	}
 }
 
@@ -595,6 +596,11 @@ func TestTesl0(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line ai-conversation-service.tesl:324
 		seed := []Order{Order{Id: "ord-1", Status: "shipped"}}
@@ -606,11 +612,13 @@ func TestTesl0(teslT *testing.T) {
 		teslLeft1 := LookupOrderStatus("ord-1")
 //line ai-conversation-service.tesl:326
 		if teslLeft1 != "shipped" {
+//line ai-conversation-service.tesl:326
 			teslT.Fatal("Tesl expectation failed")
 		}
 		teslLeft2 := LookupOrderStatus("ord-unknown")
 //line ai-conversation-service.tesl:327
 		if teslLeft2 != "no such order" {
+//line ai-conversation-service.tesl:327
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -624,6 +632,11 @@ func TestTesl1(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line ai-conversation-service.tesl:333
 		seed := []Order{Order{Id: "ord-2", Status: "delivered"}}
@@ -650,6 +663,7 @@ func TestTesl1(teslT *testing.T) {
 						_ = reply
 //line ai-conversation-service.tesl:339
 						if reply != "Order ord-2 has been delivered." {
+//line ai-conversation-service.tesl:339
 							teslT.Fatal("Tesl expectation failed")
 						}
 					}
@@ -667,6 +681,11 @@ func TestTesl2(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line ai-conversation-service.tesl:345
 		agent := teslrt.Agent{Provider: teslrt.MockProvider([]string{"Hi Alice.", "Sure \xe2\x80\x94 more."}), SystemPrompt: "sys", MaxTokens: teslrt.FromInt64(256), Tools: []teslrt.Tool{}}
@@ -681,6 +700,7 @@ func TestTesl2(teslT *testing.T) {
 				_ = r1
 //line ai-conversation-service.tesl:348
 				if r1 != "Hi Alice." {
+//line ai-conversation-service.tesl:348
 					teslT.Fatal("Tesl expectation failed")
 				}
 				{
@@ -689,6 +709,7 @@ func TestTesl2(teslT *testing.T) {
 					_ = r2
 //line ai-conversation-service.tesl:350
 					if r2 != "Sure \xe2\x80\x94 more." {
+//line ai-conversation-service.tesl:350
 						teslT.Fatal("Tesl expectation failed")
 					}
 				}
@@ -705,6 +726,11 @@ func TestTesl3(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line ai-conversation-service.tesl:356
 		agent := teslrt.Agent{Provider: teslrt.MockProvider([]string{"secret for alice"}), SystemPrompt: "sys", MaxTokens: teslrt.FromInt64(256), Tools: []teslrt.Tool{}}
@@ -727,6 +753,7 @@ func TestTesl3(teslT *testing.T) {
 						teslLeft6 := teslrt.ConversationLength(bobConv)
 //line ai-conversation-service.tesl:361
 						if !teslrt.Equal(teslLeft6, teslrt.FromInt64(0)) {
+//line ai-conversation-service.tesl:361
 							teslT.Fatal("Tesl expectation failed")
 						}
 					}

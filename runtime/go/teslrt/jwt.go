@@ -173,11 +173,17 @@ func base64URL(raw []byte) string { return base64.RawURLEncoding.EncodeToString(
 
 // decodeBase64URL accepts the padded spelling too: a token arrives from another implementation,
 // and padding is the commonest harmless deviation.
+//
+// Both decoders are STRICT: the trailing bits a final character carries beyond the payload
+// must be zero. Without that, one signature has several spellings — flip a padding bit in the
+// last character and the token STRING changes while the bytes it decodes to do not — so a
+// denylist, a dedup key or an audit trail keyed on the token text can be sidestepped by an
+// equivalent spelling. A canonical encoder (ours, and every conforming one) never emits them.
 func decodeBase64URL(text string) ([]byte, bool) {
-	if raw, err := base64.RawURLEncoding.DecodeString(text); err == nil {
+	if raw, err := base64.RawURLEncoding.Strict().DecodeString(text); err == nil {
 		return raw, true
 	}
-	raw, err := base64.URLEncoding.DecodeString(text)
+	raw, err := base64.URLEncoding.Strict().DecodeString(text)
 	return raw, err == nil
 }
 

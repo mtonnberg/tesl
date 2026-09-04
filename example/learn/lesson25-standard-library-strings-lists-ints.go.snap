@@ -469,22 +469,31 @@ func TestTesl0(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft1 := teslrt.StringLength("hello")
 //line lesson25-standard-library-strings-lists-ints.tesl:315
 	if !teslrt.Equal(teslLeft1, teslrt.FromInt64(5)) {
+//line lesson25-standard-library-strings-lists-ints.tesl:315
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft2 := teslrt.StringLength("")
 //line lesson25-standard-library-strings-lists-ints.tesl:316
 	if !teslrt.Equal(teslLeft2, teslrt.FromInt64(0)) {
+//line lesson25-standard-library-strings-lists-ints.tesl:316
 		teslT.Fatal("Tesl expectation failed")
 	}
 //line lesson25-standard-library-strings-lists-ints.tesl:317
 	if !(teslrt.StringIsEmpty("")) {
+//line lesson25-standard-library-strings-lists-ints.tesl:317
 		teslT.Fatal("Tesl expectation failed")
 	}
 //line lesson25-standard-library-strings-lists-ints.tesl:318
 	if teslrt.StringIsEmpty("x") {
+//line lesson25-standard-library-strings-lists-ints.tesl:318
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -496,12 +505,18 @@ func TestTesl1(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson25-standard-library-strings-lists-ints.tesl:322
 		t := teslrt.StringTrim("  hello  ")
 		_ = t
 //line lesson25-standard-library-strings-lists-ints.tesl:323
 		if teslrt.StringIsEmpty(t) {
+//line lesson25-standard-library-strings-lists-ints.tesl:323
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -514,28 +529,39 @@ func TestTesl2(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line lesson25-standard-library-strings-lists-ints.tesl:327
 	if !(teslrt.StringStartsWith("hello", "hel")) {
+//line lesson25-standard-library-strings-lists-ints.tesl:327
 		teslT.Fatal("Tesl expectation failed")
 	}
 //line lesson25-standard-library-strings-lists-ints.tesl:328
 	if teslrt.StringStartsWith("hello", "world") {
+//line lesson25-standard-library-strings-lists-ints.tesl:328
 		teslT.Fatal("Tesl expectation failed")
 	}
 //line lesson25-standard-library-strings-lists-ints.tesl:329
 	if !(teslrt.StringEndsWith("hello", "llo")) {
+//line lesson25-standard-library-strings-lists-ints.tesl:329
 		teslT.Fatal("Tesl expectation failed")
 	}
 //line lesson25-standard-library-strings-lists-ints.tesl:330
 	if teslrt.StringEndsWith("hello", "hel") {
+//line lesson25-standard-library-strings-lists-ints.tesl:330
 		teslT.Fatal("Tesl expectation failed")
 	}
 //line lesson25-standard-library-strings-lists-ints.tesl:331
 	if !(teslrt.StringContains("hello world", "world")) {
+//line lesson25-standard-library-strings-lists-ints.tesl:331
 		teslT.Fatal("Tesl expectation failed")
 	}
 //line lesson25-standard-library-strings-lists-ints.tesl:332
 	if teslrt.StringContains("hello world", "xyz") {
+//line lesson25-standard-library-strings-lists-ints.tesl:332
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -547,6 +573,11 @@ func TestTesl3(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson25-standard-library-strings-lists-ints.tesl:336
 		parts := teslrt.StringSplit("a,b,c", ",")
@@ -554,16 +585,19 @@ func TestTesl3(teslT *testing.T) {
 		teslLeft3 := teslrt.ListLength(parts)
 //line lesson25-standard-library-strings-lists-ints.tesl:337
 		if !teslrt.Equal(teslLeft3, teslrt.FromInt64(3)) {
+//line lesson25-standard-library-strings-lists-ints.tesl:337
 			teslT.Fatal("Tesl expectation failed")
 		}
 		teslLeft4 := teslrt.StringJoin([]string{"a", "b", "c"}, ",")
 //line lesson25-standard-library-strings-lists-ints.tesl:338
 		if teslLeft4 != "a,b,c" {
+//line lesson25-standard-library-strings-lists-ints.tesl:338
 			teslT.Fatal("Tesl expectation failed")
 		}
 		teslLeft5 := teslrt.StringJoin([]string{"x"}, "-")
 //line lesson25-standard-library-strings-lists-ints.tesl:339
 		if teslLeft5 != "x" {
+//line lesson25-standard-library-strings-lists-ints.tesl:339
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -576,19 +610,27 @@ func TestTesl4(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft6 := teslrt.StringPadLeft("42", teslrt.FromInt64(5), "0")
 //line lesson25-standard-library-strings-lists-ints.tesl:343
 	if teslLeft6 != "00042" {
+//line lesson25-standard-library-strings-lists-ints.tesl:343
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft7 := teslrt.StringPadRight("hi", teslrt.FromInt64(5), " ")
 //line lesson25-standard-library-strings-lists-ints.tesl:344
 	if teslLeft7 != "hi   " {
+//line lesson25-standard-library-strings-lists-ints.tesl:344
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft8 := teslrt.StringReplace("hello world", "world", "there")
 //line lesson25-standard-library-strings-lists-ints.tesl:345
 	if teslLeft8 != "hello there" {
+//line lesson25-standard-library-strings-lists-ints.tesl:345
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -600,22 +642,30 @@ func TestTesl5(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft9 := teslrt.StringToInt("42")
 	teslRight9 := teslrt.Maybe[teslrt.Int]{Tag: teslrt.MaybeSomething, SomethingValue: teslrt.FromInt64(42)}
 //line lesson25-standard-library-strings-lists-ints.tesl:349
 	if teslLeft9.Tag != teslRight9.Tag || (teslLeft9.Tag == teslrt.MaybeSomething && !teslrt.Equal(teslLeft9.SomethingValue, teslRight9.SomethingValue)) {
+//line lesson25-standard-library-strings-lists-ints.tesl:349
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft10 := teslrt.StringToInt("abc")
 	teslRight10 := teslrt.Maybe[teslrt.Int]{Tag: teslrt.MaybeNothing}
 //line lesson25-standard-library-strings-lists-ints.tesl:350
 	if teslLeft10.Tag != teslRight10.Tag || (teslLeft10.Tag == teslrt.MaybeSomething && !teslrt.Equal(teslLeft10.SomethingValue, teslRight10.SomethingValue)) {
+//line lesson25-standard-library-strings-lists-ints.tesl:350
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft11 := teslrt.StringToInt("-7")
 	teslRight11 := teslrt.Maybe[teslrt.Int]{Tag: teslrt.MaybeSomething, SomethingValue: teslrt.FromInt64(-7)}
 //line lesson25-standard-library-strings-lists-ints.tesl:351
 	if teslLeft11.Tag != teslRight11.Tag || (teslLeft11.Tag == teslrt.MaybeSomething && !teslrt.Equal(teslLeft11.SomethingValue, teslRight11.SomethingValue)) {
+//line lesson25-standard-library-strings-lists-ints.tesl:351
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -627,34 +677,45 @@ func TestTesl6(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft12 := teslrt.ListLength([]teslrt.Int{teslrt.FromInt64(1), teslrt.FromInt64(2), teslrt.FromInt64(3)})
 //line lesson25-standard-library-strings-lists-ints.tesl:355
 	if !teslrt.Equal(teslLeft12, teslrt.FromInt64(3)) {
+//line lesson25-standard-library-strings-lists-ints.tesl:355
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft13 := teslrt.ListLength([]teslrt.Int{})
 //line lesson25-standard-library-strings-lists-ints.tesl:356
 	if !teslrt.Equal(teslLeft13, teslrt.FromInt64(0)) {
+//line lesson25-standard-library-strings-lists-ints.tesl:356
 		teslT.Fatal("Tesl expectation failed")
 	}
 //line lesson25-standard-library-strings-lists-ints.tesl:357
 	if !(teslrt.ListIsEmpty([]teslrt.Int{})) {
+//line lesson25-standard-library-strings-lists-ints.tesl:357
 		teslT.Fatal("Tesl expectation failed")
 	}
 //line lesson25-standard-library-strings-lists-ints.tesl:358
 	if teslrt.ListIsEmpty([]teslrt.Int{teslrt.FromInt64(1)}) {
+//line lesson25-standard-library-strings-lists-ints.tesl:358
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft14 := teslrt.ListHead([]teslrt.Int{teslrt.FromInt64(10), teslrt.FromInt64(20)})
 	teslRight14 := teslrt.Maybe[teslrt.Int]{Tag: teslrt.MaybeSomething, SomethingValue: teslrt.FromInt64(10)}
 //line lesson25-standard-library-strings-lists-ints.tesl:359
 	if teslLeft14.Tag != teslRight14.Tag || (teslLeft14.Tag == teslrt.MaybeSomething && !teslrt.Equal(teslLeft14.SomethingValue, teslRight14.SomethingValue)) {
+//line lesson25-standard-library-strings-lists-ints.tesl:359
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft15 := teslrt.ListHead([]teslrt.Int{})
 	teslRight15 := teslrt.Maybe[teslrt.Int]{Tag: teslrt.MaybeNothing}
 //line lesson25-standard-library-strings-lists-ints.tesl:360
 	if teslLeft15.Tag != teslRight15.Tag || (teslLeft15.Tag == teslrt.MaybeSomething && !teslrt.Equal(teslLeft15.SomethingValue, teslRight15.SomethingValue)) {
+//line lesson25-standard-library-strings-lists-ints.tesl:360
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -666,6 +727,11 @@ func TestTesl7(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft16 := (func() []teslrt.Int {
 		teslSrc1 := []teslrt.Int{teslrt.FromInt64(1), teslrt.FromInt64(2), teslrt.FromInt64(3)}
 		teslOut1 := make([]teslrt.Int, len(teslSrc1))
@@ -677,6 +743,7 @@ func TestTesl7(teslT *testing.T) {
 	teslRight16 := []teslrt.Int{teslrt.FromInt64(2), teslrt.FromInt64(4), teslrt.FromInt64(6)}
 //line lesson25-standard-library-strings-lists-ints.tesl:364
 	if !teslrt.ListEqualBy(teslLeft16, teslRight16, teslEqualTeslrtInt) {
+//line lesson25-standard-library-strings-lists-ints.tesl:364
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft17 := (func() []teslrt.Int {
@@ -692,16 +759,19 @@ func TestTesl7(teslT *testing.T) {
 	teslRight17 := []teslrt.Int{teslrt.FromInt64(1), teslrt.FromInt64(2)}
 //line lesson25-standard-library-strings-lists-ints.tesl:365
 	if !teslrt.ListEqualBy(teslLeft17, teslRight17, teslEqualTeslrtInt) {
+//line lesson25-standard-library-strings-lists-ints.tesl:365
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft18 := teslrt.ListSum([]teslrt.Int{teslrt.FromInt64(1), teslrt.FromInt64(2), teslrt.FromInt64(3), teslrt.FromInt64(4)})
 //line lesson25-standard-library-strings-lists-ints.tesl:366
 	if !teslrt.Equal(teslLeft18, teslrt.FromInt64(10)) {
+//line lesson25-standard-library-strings-lists-ints.tesl:366
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft19 := teslrt.ListSum([]teslrt.Int{})
 //line lesson25-standard-library-strings-lists-ints.tesl:367
 	if !teslrt.Equal(teslLeft19, teslrt.FromInt64(0)) {
+//line lesson25-standard-library-strings-lists-ints.tesl:367
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -713,6 +783,11 @@ func TestTesl8(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson25-standard-library-strings-lists-ints.tesl:371
 		sorted := teslrt.ListSortBy([]teslrt.Int{teslrt.FromInt64(3), teslrt.FromInt64(1), teslrt.FromInt64(4), teslrt.FromInt64(1), teslrt.FromInt64(5)}, teslLessTeslrtInt)
@@ -721,11 +796,13 @@ func TestTesl8(teslT *testing.T) {
 		teslRight20 := teslrt.Maybe[teslrt.Int]{Tag: teslrt.MaybeSomething, SomethingValue: teslrt.FromInt64(1)}
 //line lesson25-standard-library-strings-lists-ints.tesl:372
 		if teslLeft20.Tag != teslRight20.Tag || (teslLeft20.Tag == teslrt.MaybeSomething && !teslrt.Equal(teslLeft20.SomethingValue, teslRight20.SomethingValue)) {
+//line lesson25-standard-library-strings-lists-ints.tesl:372
 			teslT.Fatal("Tesl expectation failed")
 		}
 		teslLeft21 := teslrt.ListLength(sorted)
 //line lesson25-standard-library-strings-lists-ints.tesl:373
 		if !teslrt.Equal(teslLeft21, teslrt.FromInt64(5)) {
+//line lesson25-standard-library-strings-lists-ints.tesl:373
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -738,15 +815,22 @@ func TestTesl9(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft22 := teslrt.ListRange(teslrt.FromInt64(1), teslrt.FromInt64(5))
 	teslRight22 := []teslrt.Int{teslrt.FromInt64(1), teslrt.FromInt64(2), teslrt.FromInt64(3), teslrt.FromInt64(4)}
 //line lesson25-standard-library-strings-lists-ints.tesl:377
 	if !teslrt.ListEqualBy(teslLeft22, teslRight22, teslEqualTeslrtInt) {
+//line lesson25-standard-library-strings-lists-ints.tesl:377
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft23 := teslrt.ListLength(teslrt.ListUniqueKeyed([]teslrt.Int{teslrt.FromInt64(1), teslrt.FromInt64(2), teslrt.FromInt64(1), teslrt.FromInt64(3), teslrt.FromInt64(2)}, teslKeyTeslrtInt))
 //line lesson25-standard-library-strings-lists-ints.tesl:378
 	if !teslrt.Equal(teslLeft23, teslrt.FromInt64(3)) {
+//line lesson25-standard-library-strings-lists-ints.tesl:378
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -758,39 +842,51 @@ func TestTesl10(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft24 := teslrt.Abs(teslrt.FromInt64(-5))
 //line lesson25-standard-library-strings-lists-ints.tesl:382
 	if !teslrt.Equal(teslLeft24, teslrt.FromInt64(5)) {
+//line lesson25-standard-library-strings-lists-ints.tesl:382
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft25 := teslrt.Abs(teslrt.FromInt64(5))
 //line lesson25-standard-library-strings-lists-ints.tesl:383
 	if !teslrt.Equal(teslLeft25, teslrt.FromInt64(5)) {
+//line lesson25-standard-library-strings-lists-ints.tesl:383
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft26 := teslrt.Min(teslrt.FromInt64(3), teslrt.FromInt64(7))
 //line lesson25-standard-library-strings-lists-ints.tesl:384
 	if !teslrt.Equal(teslLeft26, teslrt.FromInt64(3)) {
+//line lesson25-standard-library-strings-lists-ints.tesl:384
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft27 := teslrt.Max(teslrt.FromInt64(3), teslrt.FromInt64(7))
 //line lesson25-standard-library-strings-lists-ints.tesl:385
 	if !teslrt.Equal(teslLeft27, teslrt.FromInt64(7)) {
+//line lesson25-standard-library-strings-lists-ints.tesl:385
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft28 := teslrt.Clamp(teslrt.FromInt64(15), teslrt.FromInt64(0), teslrt.FromInt64(10))
 //line lesson25-standard-library-strings-lists-ints.tesl:386
 	if !teslrt.Equal(teslLeft28, teslrt.FromInt64(10)) {
+//line lesson25-standard-library-strings-lists-ints.tesl:386
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft29 := teslrt.Clamp(teslrt.FromInt64(-5), teslrt.FromInt64(0), teslrt.FromInt64(10))
 //line lesson25-standard-library-strings-lists-ints.tesl:387
 	if !teslrt.Equal(teslLeft29, teslrt.FromInt64(0)) {
+//line lesson25-standard-library-strings-lists-ints.tesl:387
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft30 := teslrt.Clamp(teslrt.FromInt64(5), teslrt.FromInt64(0), teslrt.FromInt64(10))
 //line lesson25-standard-library-strings-lists-ints.tesl:388
 	if !teslrt.Equal(teslLeft30, teslrt.FromInt64(5)) {
+//line lesson25-standard-library-strings-lists-ints.tesl:388
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -802,42 +898,55 @@ func TestTesl11(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft31 := teslrt.MustPow(teslrt.FromInt64(2), teslrt.FromInt64(10))
 //line lesson25-standard-library-strings-lists-ints.tesl:392
 	if !teslrt.Equal(teslLeft31, teslrt.FromInt64(1024)) {
+//line lesson25-standard-library-strings-lists-ints.tesl:392
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft32 := teslrt.MustPow(teslrt.FromInt64(3), teslrt.FromInt64(0))
 //line lesson25-standard-library-strings-lists-ints.tesl:393
 	if !teslrt.Equal(teslLeft32, teslrt.FromInt64(1)) {
+//line lesson25-standard-library-strings-lists-ints.tesl:393
 		teslT.Fatal("Tesl expectation failed")
 	}
 //line lesson25-standard-library-strings-lists-ints.tesl:394
 	if !(teslrt.IntIsEven(teslrt.FromInt64(4))) {
+//line lesson25-standard-library-strings-lists-ints.tesl:394
 		teslT.Fatal("Tesl expectation failed")
 	}
 //line lesson25-standard-library-strings-lists-ints.tesl:395
 	if teslrt.IntIsEven(teslrt.FromInt64(3)) {
+//line lesson25-standard-library-strings-lists-ints.tesl:395
 		teslT.Fatal("Tesl expectation failed")
 	}
 //line lesson25-standard-library-strings-lists-ints.tesl:396
 	if !(teslrt.IntIsOdd(teslrt.FromInt64(3))) {
+//line lesson25-standard-library-strings-lists-ints.tesl:396
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft33 := teslrt.IntSign(teslrt.FromInt64(5))
 //line lesson25-standard-library-strings-lists-ints.tesl:397
 	if !teslrt.Equal(teslLeft33, teslrt.FromInt64(1)) {
+//line lesson25-standard-library-strings-lists-ints.tesl:397
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft34 := teslrt.IntSign(teslrt.Neg(teslrt.FromInt64(5)))
 	teslRight34 := teslrt.Neg(teslrt.FromInt64(1))
 //line lesson25-standard-library-strings-lists-ints.tesl:398
 	if !teslrt.Equal(teslLeft34, teslRight34) {
+//line lesson25-standard-library-strings-lists-ints.tesl:398
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft35 := teslrt.IntSign(teslrt.FromInt64(0))
 //line lesson25-standard-library-strings-lists-ints.tesl:399
 	if !teslrt.Equal(teslLeft35, teslrt.FromInt64(0)) {
+//line lesson25-standard-library-strings-lists-ints.tesl:399
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -849,10 +958,16 @@ func TestTesl12(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft36 := SafeDivide(teslrt.FromInt64(10), teslrt.FromInt64(2))
 	teslRight36 := teslrt.Maybe[teslrt.Int]{Tag: teslrt.MaybeSomething, SomethingValue: teslrt.FromInt64(5)}
 //line lesson25-standard-library-strings-lists-ints.tesl:403
 	if teslLeft36.Tag != teslRight36.Tag || (teslLeft36.Tag == teslrt.MaybeSomething && !teslrt.Equal(teslLeft36.SomethingValue, teslRight36.SomethingValue)) {
+//line lesson25-standard-library-strings-lists-ints.tesl:403
 		teslT.Fatal("Tesl expectation failed")
 	}
 //line lesson25-standard-library-strings-lists-ints.tesl:404
@@ -863,6 +978,7 @@ func TestTesl12(teslT *testing.T) {
 	teslRight37 := teslrt.Maybe[teslrt.Int]{Tag: teslrt.MaybeSomething, SomethingValue: teslrt.FromInt64(2)}
 //line lesson25-standard-library-strings-lists-ints.tesl:405
 	if teslLeft37.Tag != teslRight37.Tag || (teslLeft37.Tag == teslrt.MaybeSomething && !teslrt.Equal(teslLeft37.SomethingValue, teslRight37.SomethingValue)) {
+//line lesson25-standard-library-strings-lists-ints.tesl:405
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -874,19 +990,27 @@ func TestTesl13(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft38 := CountWords("hello,world,foo")
 //line lesson25-standard-library-strings-lists-ints.tesl:409
 	if !teslrt.Equal(teslLeft38, teslrt.FromInt64(3)) {
+//line lesson25-standard-library-strings-lists-ints.tesl:409
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft39 := CountWords("a, b ,  c  ")
 //line lesson25-standard-library-strings-lists-ints.tesl:410
 	if !teslrt.Equal(teslLeft39, teslrt.FromInt64(3)) {
+//line lesson25-standard-library-strings-lists-ints.tesl:410
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft40 := CountWords("")
 //line lesson25-standard-library-strings-lists-ints.tesl:411
 	if !teslrt.Equal(teslLeft40, teslrt.FromInt64(0)) {
+//line lesson25-standard-library-strings-lists-ints.tesl:411
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -898,29 +1022,39 @@ func TestTesl14(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft41 := BuildPath("https://api.example.com", "users", "42")
 //line lesson25-standard-library-strings-lists-ints.tesl:415
 	if teslLeft41 != "https://api.example.com/users/42" {
+//line lesson25-standard-library-strings-lists-ints.tesl:415
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft42 := FormatRecord("name", "Alice")
 //line lesson25-standard-library-strings-lists-ints.tesl:416
 	if teslLeft42 != "name: Alice" {
+//line lesson25-standard-library-strings-lists-ints.tesl:416
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft43 := (("a" + "b") + "c")
 //line lesson25-standard-library-strings-lists-ints.tesl:418
 	if teslLeft43 != "abc" {
+//line lesson25-standard-library-strings-lists-ints.tesl:418
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft44 := ("" + "hello")
 //line lesson25-standard-library-strings-lists-ints.tesl:420
 	if teslLeft44 != "hello" {
+//line lesson25-standard-library-strings-lists-ints.tesl:420
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft45 := ("hello" + "")
 //line lesson25-standard-library-strings-lists-ints.tesl:421
 	if teslLeft45 != "hello" {
+//line lesson25-standard-library-strings-lists-ints.tesl:421
 		teslT.Fatal("Tesl expectation failed")
 	}
 }

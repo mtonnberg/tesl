@@ -10,7 +10,8 @@ import (
 // Address-range classification — the decision behind SSRF egress containment.
 //
 // The dangerous SSRF targets (cloud metadata at 169.254.169.254, RFC1918, CGNAT,
-// unique-local, link-local, 0.0.0.0/8) are refused for every outbound call, judged by the
+// unique-local, link-local, 0.0.0.0/8, and the IETF-reserved IPv4 blocks that are never
+// routed on the public Internet) are refused for every outbound call, judged by the
 // address actually CONNECTED TO rather than by the hostname: `evil.example.com` can resolve
 // to 127.0.0.1 or to the metadata address, so a name check decides nothing.
 //
@@ -34,40 +35,65 @@ const (
 	classPrivate
 	classCGNAT
 	classMulticast
+	classReserved
 )
 
 // classifyAddress parses a bare address (an IPv6 zone id is tolerated and dropped) and
-// answers its class along with whether it denotes an IPv4 address. An IPv4-mapped or
-// IPv4-compatible IPv6 spelling denotes the IPv4 address it embeds — that fold is the
-// classic bypass, so it happens before classification, never after.
+// answers its class along with whether it denotes an IPv4 address. An IPv6 spelling that
+// EMBEDS an IPv4 address (mapped, compatible, NAT64, 6to4) denotes that IPv4 address — the
+// fold is the classic bypass, so it happens before classification, never after.
 func classifyAddress(raw string) (addressClass, bool) {
+	class, v4 := classifyParsed(raw)
+	return class, v4 != nil
+}
+
+// classifyParsed is classifyAddress plus the IPv4 address the verdict was reached on (nil
+// for a native IPv6 address or an unparseable one), so the label functions below name the
+// block the FOLDED address falls in rather than re-parsing the spelling.
+func classifyParsed(raw string) (addressClass, net.IP) {
 	text := strings.ToLower(strings.TrimSpace(raw))
 	if zone := strings.IndexByte(text, '%'); zone >= 0 {
 		text = text[:zone]
 	}
 	address := net.ParseIP(text)
 	if address == nil {
-		return classInvalid, false
+		return classInvalid, nil
 	}
 	if v4 := embeddedIPv4(address); v4 != nil {
-		return ipv4Class(v4), true
+		return ipv4Class(v4), v4
 	}
 	if v4 := address.To4(); v4 != nil {
-		return ipv4Class(v4), true
+		return ipv4Class(v4), v4
 	}
-	return ipv6Class(address.To16()), false
+	return ipv6Class(address.To16()), nil
 }
 
 // embeddedIPv4 answers the IPv4 address an IPv6 literal embeds, or nil.
 //
-// `net.IP.To4` already folds the IPv4-mapped form (`::ffff:a.b.c.d`). The deprecated
-// IPv4-COMPATIBLE form (`::a.b.c.d`) it does not, and that form reaches the same host, so it
-// is folded here. `::` and `::1` are their own addresses and are NOT folded — otherwise the
-// IPv6 loopback would be classified through the 0.0.0.0/8 branch.
+// `net.IP.To4` already folds the IPv4-mapped form (`::ffff:a.b.c.d`). The others reach the
+// same IPv4 host through a translator or a tunnel, so a classifier that judged them as IPv6
+// (all "public") would let `64:ff9b::a9fe:a9fe` reach the metadata service on any host with
+// a NAT64 path:
+//
+//	::a.b.c.d            the deprecated IPv4-COMPATIBLE form (RFC 4291 §2.5.5.1);
+//	64:ff9b::/96         the NAT64 well-known prefix (RFC 6052 §2.1), IPv4 in the last 32 bits;
+//	64:ff9b:1::/48       the NAT64 local-use prefix (RFC 8215); translators carve /96s out of
+//	                     it, so the last 32 bits are the IPv4 address there too;
+//	2002::/16            6to4 (RFC 3056), IPv4 in bits 16..47.
+//
+// `::` and `::1` are their own addresses and are NOT folded — otherwise the IPv6 loopback
+// would be classified through the 0.0.0.0/8 branch.
 func embeddedIPv4(address net.IP) net.IP {
 	full := address.To16()
 	if full == nil || address.To4() != nil {
 		return nil
+	}
+	switch {
+	case full[0] == 0x20 && full[1] == 0x02:
+		return net.IPv4(full[2], full[3], full[4], full[5]).To4()
+	case prefixIs(full, 0x00, 0x64, 0xff, 0x9b, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00),
+		prefixIs(full, 0x00, 0x64, 0xff, 0x9b, 0x00, 0x01):
+		return net.IPv4(full[12], full[13], full[14], full[15]).To4()
 	}
 	for _, octet := range full[:12] {
 		if octet != 0 {
@@ -78,6 +104,18 @@ func embeddedIPv4(address net.IP) net.IP {
 		return nil
 	}
 	return net.IPv4(full[12], full[13], full[14], full[15]).To4()
+}
+
+func prefixIs(full net.IP, prefix ...byte) bool {
+	if len(full) < len(prefix) {
+		return false
+	}
+	for index, octet := range prefix {
+		if full[index] != octet {
+			return false
+		}
+	}
+	return true
 }
 
 func ipv4Class(v4 net.IP) addressClass {
@@ -99,8 +137,38 @@ func ipv4Class(v4 net.IP) addressClass {
 		return classCGNAT // 100.64.0.0/10
 	case first >= 224:
 		return classMulticast // 224.0.0.0/4 and the reserved space above it
+	case reservedIPv4Label(v4) != "":
+		// The IETF special-purpose blocks that are never routed publicly (RFC 6890). A name
+		// resolving into one is either misconfiguration or a probe for what answers there
+		// locally — 192.0.0.0/24 in particular is the IPv4 Service Continuity prefix some
+		// CLAT/DS-Lite hosts bind on-box.
+		return classReserved
 	default:
 		return classPublic
+	}
+}
+
+// reservedIPv4Label names the IETF-reserved block an address falls in, or "" for none.
+func reservedIPv4Label(v4 net.IP) string {
+	if len(v4) < 4 {
+		// classReserved is only ever paired with a folded IPv4, but the analyser cannot see
+		// that pairing across the call, and a nil here must be "no label", not a panic.
+		return ""
+	}
+	first, second, third := v4[0], v4[1], v4[2]
+	switch {
+	case first == 192 && second == 0 && third == 0:
+		return "reserved 192.0.0.0/24 (IETF protocol assignments)"
+	case first == 192 && second == 0 && third == 2:
+		return "documentation 192.0.2.0/24 (TEST-NET-1)"
+	case first == 198 && (second == 18 || second == 19):
+		return "benchmarking 198.18.0.0/15"
+	case first == 198 && second == 51 && third == 100:
+		return "documentation 198.51.100.0/24 (TEST-NET-2)"
+	case first == 203 && second == 0 && third == 113:
+		return "documentation 203.0.113.0/24 (TEST-NET-3)"
+	default:
+		return ""
 	}
 }
 
@@ -129,7 +197,8 @@ func ipv6Class(full net.IP) addressClass {
 // address is public and routable. The wording matches the Racket runtime's, so a refusal
 // reads the same on both backends.
 func IPForbiddenReason(address string) string {
-	class, isIPv4 := classifyAddress(address)
+	class, v4 := classifyParsed(address)
+	isIPv4 := v4 != nil
 	switch class {
 	case classPublic:
 		return ""
@@ -150,7 +219,7 @@ func IPForbiddenReason(address string) string {
 		return "IPv6 link-local fe80::/10"
 	case classPrivate:
 		if isIPv4 {
-			return rfc1918Label(address)
+			return rfc1918Label(v4)
 		}
 		return "IPv6 unique-local fc00::/7"
 	case classCGNAT:
@@ -160,6 +229,11 @@ func IPForbiddenReason(address string) string {
 			return "multicast/reserved >= 224.0.0.0"
 		}
 		return "IPv6 multicast ff00::/8"
+	case classReserved:
+		if label := reservedIPv4Label(v4); label != "" {
+			return label
+		}
+		return "unrecognized address form (fail-closed)"
 	case classInvalid:
 		return "unrecognized address form (fail-closed)"
 	}
@@ -168,17 +242,10 @@ func IPForbiddenReason(address string) string {
 	return "unrecognized address form (fail-closed)"
 }
 
-// rfc1918Label names the specific private block, so the refusal is actionable.
-func rfc1918Label(address string) string {
-	parsed := net.ParseIP(strings.TrimSpace(strings.ToLower(address)))
-	if parsed == nil {
-		return "a private range"
-	}
-	v4 := embeddedIPv4(parsed)
-	if v4 == nil {
-		v4 = parsed.To4()
-	}
-	if v4 == nil {
+// rfc1918Label names the specific private block, so the refusal is actionable. It takes the
+// FOLDED IPv4 address, so a NAT64 or 6to4 spelling of 10.0.0.1 is labelled as 10.0.0.0/8.
+func rfc1918Label(v4 net.IP) string {
+	if len(v4) != net.IPv4len {
 		return "a private range"
 	}
 	switch v4[0] {

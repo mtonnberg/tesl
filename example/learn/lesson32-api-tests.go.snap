@@ -226,20 +226,28 @@ func TestTeslApi0(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson32-api-tests.tesl:86
 		echoResp := teslrt.ApiRequest(Lesson32Server, "POST", "/echo", "{\"message\":\"hello from api-test\"}", nil, nil)
 		_ = echoResp
 //line lesson32-api-tests.tesl:87
 		if !(teslrt.StatusOk(echoResp.Status)) {
+//line lesson32-api-tests.tesl:87
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line lesson32-api-tests.tesl:88
 		if !teslrt.JsonEqual(teslrt.JsonFieldOf(echoResp.Body, "message"), "hello from api-test") {
+//line lesson32-api-tests.tesl:88
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line lesson32-api-tests.tesl:89
 		if !(teslrt.JsonIsNull(teslrt.JsonFieldOf(echoResp.Body, "missing"))) {
+//line lesson32-api-tests.tesl:89
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -256,6 +264,11 @@ func TestTeslApi1(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line lesson32-api-tests.tesl:92
 //line lesson32-api-tests.tesl:94
 	_ = teslrt.DbInsert(Lesson32DatabaseDatabase, NoteTable, "Note", Note{Id: "note-1", Title: "Seeded from setup"}, func(teslRow, teslNew Note) bool { return (teslRow.Id == teslNew.Id) }, "insert into \"lesson32\".\"notes\" (\"id\", \"title\") values ($1, $2)", func(teslRow Note) []any {
@@ -267,10 +280,12 @@ func TestTeslApi1(teslT *testing.T) {
 		_ = seeded
 //line lesson32-api-tests.tesl:98
 		if !(teslrt.StatusOk(seeded.Status)) {
+//line lesson32-api-tests.tesl:98
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line lesson32-api-tests.tesl:99
 		if !teslrt.JsonEqual(teslrt.JsonFieldOf(seeded.Body, "title"), "Seeded from setup") {
+//line lesson32-api-tests.tesl:99
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -287,6 +302,11 @@ func TestTeslApi2(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson32-api-tests.tesl:103
 		seeded := teslrt.ApiRequest(Lesson32Server, "GET", "/seeded-note", "", nil, nil)
@@ -294,6 +314,7 @@ func TestTeslApi2(teslT *testing.T) {
 		teslLeft1 := seeded.Status
 //line lesson32-api-tests.tesl:104
 		if !teslrt.Equal(teslLeft1, teslrt.FromInt64(404)) {
+//line lesson32-api-tests.tesl:104
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}

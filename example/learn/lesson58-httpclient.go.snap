@@ -122,24 +122,33 @@ func TestTesl0(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft1 := ClassifyStatusCode(teslrt.FromInt64(200))
 //line lesson58-httpclient.tesl:200
 	if teslLeft1 != "success" {
+//line lesson58-httpclient.tesl:200
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft2 := ClassifyStatusCode(teslrt.FromInt64(201))
 //line lesson58-httpclient.tesl:201
 	if teslLeft2 != "success" {
+//line lesson58-httpclient.tesl:201
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft3 := ClassifyStatusCode(teslrt.FromInt64(204))
 //line lesson58-httpclient.tesl:202
 	if teslLeft3 != "success" {
+//line lesson58-httpclient.tesl:202
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft4 := ClassifyStatusCode(teslrt.FromInt64(299))
 //line lesson58-httpclient.tesl:203
 	if teslLeft4 != "success" {
+//line lesson58-httpclient.tesl:203
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -152,24 +161,33 @@ func TestTesl1(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft5 := ClassifyStatusCode(teslrt.FromInt64(400))
 //line lesson58-httpclient.tesl:207
 	if teslLeft5 != "client-error" {
+//line lesson58-httpclient.tesl:207
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft6 := ClassifyStatusCode(teslrt.FromInt64(404))
 //line lesson58-httpclient.tesl:208
 	if teslLeft6 != "client-error" {
+//line lesson58-httpclient.tesl:208
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft7 := ClassifyStatusCode(teslrt.FromInt64(422))
 //line lesson58-httpclient.tesl:209
 	if teslLeft7 != "client-error" {
+//line lesson58-httpclient.tesl:209
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft8 := ClassifyStatusCode(teslrt.FromInt64(429))
 //line lesson58-httpclient.tesl:210
 	if teslLeft8 != "client-error" {
+//line lesson58-httpclient.tesl:210
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -182,19 +200,27 @@ func TestTesl2(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft9 := ClassifyStatusCode(teslrt.FromInt64(500))
 //line lesson58-httpclient.tesl:214
 	if teslLeft9 != "server-error" {
+//line lesson58-httpclient.tesl:214
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft10 := ClassifyStatusCode(teslrt.FromInt64(502))
 //line lesson58-httpclient.tesl:215
 	if teslLeft10 != "server-error" {
+//line lesson58-httpclient.tesl:215
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft11 := ClassifyStatusCode(teslrt.FromInt64(503))
 //line lesson58-httpclient.tesl:216
 	if teslLeft11 != "server-error" {
+//line lesson58-httpclient.tesl:216
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -207,19 +233,27 @@ func TestTesl3(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft12 := ClassifyStatusCode(teslrt.FromInt64(301))
 //line lesson58-httpclient.tesl:220
 	if teslLeft12 != "redirect-or-info" {
+//line lesson58-httpclient.tesl:220
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft13 := ClassifyStatusCode(teslrt.FromInt64(302))
 //line lesson58-httpclient.tesl:221
 	if teslLeft13 != "redirect-or-info" {
+//line lesson58-httpclient.tesl:221
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft14 := ClassifyStatusCode(teslrt.FromInt64(100))
 //line lesson58-httpclient.tesl:222
 	if teslLeft14 != "redirect-or-info" {
+//line lesson58-httpclient.tesl:222
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -232,28 +266,39 @@ func TestTesl4(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line lesson58-httpclient.tesl:226
 	if !(IsSuccessCode(teslrt.FromInt64(200))) {
+//line lesson58-httpclient.tesl:226
 		teslT.Fatal("Tesl expectation failed")
 	}
 //line lesson58-httpclient.tesl:227
 	if !(IsSuccessCode(teslrt.FromInt64(201))) {
+//line lesson58-httpclient.tesl:227
 		teslT.Fatal("Tesl expectation failed")
 	}
 //line lesson58-httpclient.tesl:228
 	if !(IsSuccessCode(teslrt.FromInt64(204))) {
+//line lesson58-httpclient.tesl:228
 		teslT.Fatal("Tesl expectation failed")
 	}
 //line lesson58-httpclient.tesl:229
 	if IsSuccessCode(teslrt.FromInt64(399)) {
+//line lesson58-httpclient.tesl:229
 		teslT.Fatal("Tesl expectation failed")
 	}
 //line lesson58-httpclient.tesl:230
 	if IsSuccessCode(teslrt.FromInt64(404)) {
+//line lesson58-httpclient.tesl:230
 		teslT.Fatal("Tesl expectation failed")
 	}
 //line lesson58-httpclient.tesl:231
 	if IsSuccessCode(teslrt.FromInt64(500)) {
+//line lesson58-httpclient.tesl:231
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -266,6 +311,11 @@ func TestTesl5(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson58-httpclient.tesl:235
 		h := BuildBearerHeader("mytoken123")
@@ -273,11 +323,13 @@ func TestTesl5(teslT *testing.T) {
 		teslLeft15 := h.Tuple2First
 //line lesson58-httpclient.tesl:236
 		if teslLeft15 != "Authorization" {
+//line lesson58-httpclient.tesl:236
 			teslT.Fatal("Tesl expectation failed")
 		}
 		teslLeft16 := h.Tuple2Second
 //line lesson58-httpclient.tesl:237
 		if teslLeft16 != "Bearer mytoken123" {
+//line lesson58-httpclient.tesl:237
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -291,6 +343,11 @@ func TestTesl6(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson58-httpclient.tesl:241
 		h := BuildBearerHeader("sk-abc123xyz")
@@ -298,6 +355,7 @@ func TestTesl6(teslT *testing.T) {
 		teslLeft17 := h.Tuple2Second
 //line lesson58-httpclient.tesl:242
 		if teslLeft17 != "Bearer sk-abc123xyz" {
+//line lesson58-httpclient.tesl:242
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -311,6 +369,11 @@ func TestTesl7(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line lesson58-httpclient.tesl:252
 	_ = teslrt.StubHttp("GET", "https://api.example.com/rates", teslrt.FromInt64(200), "{\"usd\": 110}")
 	{
@@ -320,19 +383,23 @@ func TestTesl7(teslT *testing.T) {
 		teslLeft18 := resp.Status
 //line lesson58-httpclient.tesl:254
 		if !teslrt.Equal(teslLeft18, teslrt.FromInt64(200)) {
+//line lesson58-httpclient.tesl:254
 			teslT.Fatal("Tesl expectation failed")
 		}
 		teslLeft19 := resp.Body
 //line lesson58-httpclient.tesl:255
 		if teslLeft19 != "{\"usd\": 110}" {
+//line lesson58-httpclient.tesl:255
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line lesson58-httpclient.tesl:256
 		if !(IsSuccessCode(resp.Status)) {
+//line lesson58-httpclient.tesl:256
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line lesson58-httpclient.tesl:257
 		if !(teslrt.HttpCalled("GET", "https://api.example.com/rates")) {
+//line lesson58-httpclient.tesl:257
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -346,6 +413,11 @@ func TestTesl8(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line lesson58-httpclient.tesl:261
 	_ = teslrt.StubHttp("POST", "https://api.example.com/events", teslrt.FromInt64(202), "{\"accepted\": True}")
 	{
@@ -355,16 +427,19 @@ func TestTesl8(teslT *testing.T) {
 		teslLeft20 := resp.Status
 //line lesson58-httpclient.tesl:263
 		if !teslrt.Equal(teslLeft20, teslrt.FromInt64(202)) {
+//line lesson58-httpclient.tesl:263
 			teslT.Fatal("Tesl expectation failed")
 		}
 		teslLeft21 := teslrt.HttpLastBody("POST", "https://api.example.com/events")
 //line lesson58-httpclient.tesl:264
 		if teslLeft21 != "{\"kind\": \"signup\"}" {
+//line lesson58-httpclient.tesl:264
 			teslT.Fatal("Tesl expectation failed")
 		}
 		teslLeft22 := teslrt.HttpCallCount("POST", "https://api.example.com/events")
 //line lesson58-httpclient.tesl:265
 		if !teslrt.Equal(teslLeft22, teslrt.FromInt64(1)) {
+//line lesson58-httpclient.tesl:265
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -378,6 +453,11 @@ func TestTesl9(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line lesson58-httpclient.tesl:269
 	_ = teslrt.StubHttp("GET", "https://api.example.com/rates", teslrt.FromInt64(500), "upstream exploded")
 	{
@@ -387,10 +467,12 @@ func TestTesl9(teslT *testing.T) {
 		teslLeft23 := ClassifyStatusCode(resp.Status)
 //line lesson58-httpclient.tesl:271
 		if teslLeft23 != "server-error" {
+//line lesson58-httpclient.tesl:271
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line lesson58-httpclient.tesl:272
 		if IsSuccessCode(resp.Status) {
+//line lesson58-httpclient.tesl:272
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -404,6 +486,11 @@ func TestTesl10(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line lesson58-httpclient.tesl:276
 	_ = teslrt.StubHttp("GET", "https://api.example.com/rates", teslrt.FromInt64(200), "<html>not json</html>")
 	{
@@ -413,10 +500,12 @@ func TestTesl10(teslT *testing.T) {
 		teslLeft24 := resp.Status
 //line lesson58-httpclient.tesl:278
 		if !teslrt.Equal(teslLeft24, teslrt.FromInt64(200)) {
+//line lesson58-httpclient.tesl:278
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line lesson58-httpclient.tesl:279
 		if !(teslrt.StringContains(resp.Body, "not json")) {
+//line lesson58-httpclient.tesl:279
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -430,6 +519,11 @@ func TestTesl11(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line lesson58-httpclient.tesl:283
 	_ = teslrt.StubHttpTimeout("GET", "https://api.example.com/slow")
 //line lesson58-httpclient.tesl:284
@@ -446,6 +540,11 @@ func TestTesl12(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line lesson58-httpclient.tesl:288
 	_ = teslrt.StubHttpFailure("GET", "https://api.example.com/down", "connection refused")
 //line lesson58-httpclient.tesl:289
@@ -462,6 +561,11 @@ func TestTesl13(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line lesson58-httpclient.tesl:293
 	_ = teslrt.StubHttp("GET", "https://api.example.com/me", teslrt.FromInt64(200), "{\"id\": \"u-1\"}")
 	{
@@ -471,11 +575,13 @@ func TestTesl13(teslT *testing.T) {
 		teslLeft25 := resp.Status
 //line lesson58-httpclient.tesl:295
 		if !teslrt.Equal(teslLeft25, teslrt.FromInt64(200)) {
+//line lesson58-httpclient.tesl:295
 			teslT.Fatal("Tesl expectation failed")
 		}
 		teslLeft26 := teslrt.HttpCallCount("GET", "https://api.example.com/me")
 //line lesson58-httpclient.tesl:296
 		if !teslrt.Equal(teslLeft26, teslrt.FromInt64(1)) {
+//line lesson58-httpclient.tesl:296
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}

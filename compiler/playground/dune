@@ -38,4 +38,7 @@
  ; The cost, stated: `dune build --profile release` now requires js_of_ocaml.
  ; Nothing in the repo does that today.
  (enabled_if (= %{profile} release))
- (libraries tesl_compiler_lib js_of_ocaml))
+ ; tesl_go_runtime_none: the EMPTY implementation of the embedded Go runtime (see
+ ; lib/go_runtime/dune).  The default implementation is the 860 KB source snapshot,
+ ; which would put the bundle past its 2 MB ceiling; the playground never emits Go.
+ (libraries tesl_compiler_lib tesl_go_runtime_none js_of_ocaml))

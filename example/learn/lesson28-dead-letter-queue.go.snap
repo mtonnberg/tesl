@@ -50,6 +50,7 @@ golang.org/x/text v0.41.0/go.mod h1:jvf1O8ajNzZqhSrQBPbutR/EB83Cc0CFrezNQIwbb5M=
 package teslmodlesson28deadletterqueue
 
 import (
+	"errors"
 	"net/http"
 	"tesl.generated/teslmodlesson28deadletterqueue/internal/teslrt"
 )
@@ -61,7 +62,7 @@ type SendNotif struct {
 }
 
 //line lesson28-dead-letter-queue.tesl:89
-var NotifQueueQueue = teslrt.NewQueue("NotifQueue", 3)
+var NotifQueueQueue = teslrt.NewQueueOn(FakeDbDatabase, "NotifQueue", 3, "exponential", 30)
 
 //line lesson28-dead-letter-queue.tesl:68
 var FakeDbDatabase = teslrt.NewDatabase(
@@ -124,6 +125,41 @@ func Main() struct{} {
 	}()
 }
 
+// DecodeSendNotifJSON is the DERIVED decoder for a record with no `codec` block: the type is the
+// whole contract, exactly as it is on the Legacy runtime's generic decode.
+func DecodeSendNotifJSON(teslJSON any) teslrt.Check[SendNotif] {
+	teslFields, teslShapeErr := teslrt.DecodeObjectShape(teslJSON, "SendNotif", []string{"userId", "message"})
+	if teslShapeErr != nil {
+		return teslrt.RejectShape[SendNotif](teslShapeErr.Error())
+	}
+	teslFieldUserId, teslErrUserId := teslrt.DecodeStringValue(teslFields["userId"])
+	if teslErrUserId != nil {
+		return teslrt.RejectShape[SendNotif](teslErrUserId.Error())
+	}
+	teslFieldMessage, teslErrMessage := teslrt.DecodeStringValue(teslFields["message"])
+	if teslErrMessage != nil {
+		return teslrt.RejectShape[SendNotif](teslErrMessage.Error())
+	}
+	return teslrt.Accept(SendNotif{UserId: teslFieldUserId, Message: teslFieldMessage})
+}
+
+var _ = teslrt.RegisterJobCodec(NotifQueueQueue, "SendNotif", func(teslJob any) any {
+	return teslEncode2(teslJob.(SendNotif))
+}, func(teslJSON any) (any, error) {
+	teslDecoded, teslErr := func(teslRaw any) (SendNotif, error) {
+		teslNested := DecodeSendNotifJSON(teslRaw)
+		if !teslNested.OK() {
+			return SendNotif{}, errors.New(teslNested.Message())
+		}
+		teslValue, _ := teslNested.Value()
+		return teslValue, nil
+	}(teslJSON)
+	if teslErr != nil {
+		return nil, teslErr
+	}
+	return teslDecoded, nil
+})
+
 var AppServer = teslrt.Server{
 	Routes: []teslrt.Route{
 		{Method: "GET", Path: "/health", Endpoint: "appRoot"},
@@ -139,6 +175,13 @@ var AppServer = teslrt.Server{
 
 func teslEncode1(teslValue string) any {
 	return teslValue
+}
+
+func teslEncode2(teslValue SendNotif) any {
+	return map[string]any{
+		"userId":  teslEncode1(teslValue.UserId),
+		"message": teslEncode1(teslValue.Message),
+	}
 }
 
 // Declared in Tesl but not called within this module.  Tesl permits an unused

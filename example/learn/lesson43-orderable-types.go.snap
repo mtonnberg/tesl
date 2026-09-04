@@ -168,6 +168,11 @@ func TestTesl0(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson43-orderable-types.tesl:194
 		lo := MakeScore(teslrt.FromInt64(0))
@@ -187,6 +192,7 @@ func TestTesl0(teslT *testing.T) {
 					teslLeft1 := ScoreToInt(s)
 //line lesson43-orderable-types.tesl:198
 					if !teslrt.Equal(teslLeft1, teslrt.FromInt64(50)) {
+//line lesson43-orderable-types.tesl:198
 						teslT.Fatal("Tesl expectation failed")
 					}
 				}
@@ -202,6 +208,11 @@ func TestTesl1(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson43-orderable-types.tesl:202
 		lo := MakeScore(teslrt.FromInt64(0))
@@ -221,6 +232,7 @@ func TestTesl1(teslT *testing.T) {
 					teslLeft2 := ScoreToInt(s)
 //line lesson43-orderable-types.tesl:206
 					if !teslrt.Equal(teslLeft2, teslrt.FromInt64(0)) {
+//line lesson43-orderable-types.tesl:206
 						teslT.Fatal("Tesl expectation failed")
 					}
 				}
@@ -236,6 +248,11 @@ func TestTesl2(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson43-orderable-types.tesl:210
 		lo := MakeScore(teslrt.FromInt64(0))
@@ -255,6 +272,7 @@ func TestTesl2(teslT *testing.T) {
 					teslLeft3 := ScoreToInt(s)
 //line lesson43-orderable-types.tesl:214
 					if !teslrt.Equal(teslLeft3, teslrt.FromInt64(100)) {
+//line lesson43-orderable-types.tesl:214
 						teslT.Fatal("Tesl expectation failed")
 					}
 				}
@@ -270,6 +288,11 @@ func TestTesl3(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson43-orderable-types.tesl:218
 		lo := MakeScore(teslrt.FromInt64(5))
@@ -297,11 +320,13 @@ func TestTesl3(teslT *testing.T) {
 							teslLeft4 := ScoreToInt(sLo)
 //line lesson43-orderable-types.tesl:224
 							if !teslrt.Equal(teslLeft4, teslrt.FromInt64(5)) {
+//line lesson43-orderable-types.tesl:224
 								teslT.Fatal("Tesl expectation failed")
 							}
 							teslLeft5 := ScoreToInt(sHi)
 //line lesson43-orderable-types.tesl:225
 							if !teslrt.Equal(teslLeft5, teslrt.FromInt64(10)) {
+//line lesson43-orderable-types.tesl:225
 								teslT.Fatal("Tesl expectation failed")
 							}
 						}
@@ -319,6 +344,11 @@ func TestTesl4(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson43-orderable-types.tesl:229
 		a := MakeRank(MakeScore(teslrt.FromInt64(3)))
@@ -338,11 +368,13 @@ func TestTesl4(teslT *testing.T) {
 					teslLeft6 := RankToInt(r1)
 //line lesson43-orderable-types.tesl:233
 					if !teslrt.Equal(teslLeft6, teslrt.FromInt64(7)) {
+//line lesson43-orderable-types.tesl:233
 						teslT.Fatal("Tesl expectation failed")
 					}
 					teslLeft7 := RankToInt(r2)
 //line lesson43-orderable-types.tesl:234
 					if !teslrt.Equal(teslLeft7, teslrt.FromInt64(7)) {
+//line lesson43-orderable-types.tesl:234
 						teslT.Fatal("Tesl expectation failed")
 					}
 				}
@@ -358,6 +390,11 @@ func TestTesl5(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson43-orderable-types.tesl:238
 		a := MakeRank(MakeScore(teslrt.FromInt64(5)))
@@ -373,6 +410,7 @@ func TestTesl5(teslT *testing.T) {
 				teslLeft8 := RankToInt(r)
 //line lesson43-orderable-types.tesl:241
 				if !teslrt.Equal(teslLeft8, teslrt.FromInt64(5)) {
+//line lesson43-orderable-types.tesl:241
 					teslT.Fatal("Tesl expectation failed")
 				}
 			}
@@ -387,6 +425,11 @@ func TestTesl6(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson43-orderable-types.tesl:245
 		p1 := MakePriority(teslrt.FromInt64(1))
@@ -406,11 +449,13 @@ func TestTesl6(teslT *testing.T) {
 					teslLeft9 := PriorityToInt(u1)
 //line lesson43-orderable-types.tesl:249
 					if !teslrt.Equal(teslLeft9, teslrt.FromInt64(1)) {
+//line lesson43-orderable-types.tesl:249
 						teslT.Fatal("Tesl expectation failed")
 					}
 					teslLeft10 := PriorityToInt(u2)
 //line lesson43-orderable-types.tesl:250
 					if !teslrt.Equal(teslLeft10, teslrt.FromInt64(1)) {
+//line lesson43-orderable-types.tesl:250
 						teslT.Fatal("Tesl expectation failed")
 					}
 				}
@@ -426,22 +471,30 @@ func TestTesl7(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft11 := SortedPair(teslrt.FromInt64(3), teslrt.FromInt64(7))
 	teslRight11 := []teslrt.Int{teslrt.FromInt64(3), teslrt.FromInt64(7)}
 //line lesson43-orderable-types.tesl:254
 	if !teslrt.ListEqualBy(teslLeft11, teslRight11, teslEqualTeslrtInt) {
+//line lesson43-orderable-types.tesl:254
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft12 := SortedPair(teslrt.FromInt64(7), teslrt.FromInt64(3))
 	teslRight12 := []teslrt.Int{teslrt.FromInt64(3), teslrt.FromInt64(7)}
 //line lesson43-orderable-types.tesl:255
 	if !teslrt.ListEqualBy(teslLeft12, teslRight12, teslEqualTeslrtInt) {
+//line lesson43-orderable-types.tesl:255
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft13 := SortedPair(teslrt.FromInt64(5), teslrt.FromInt64(5))
 	teslRight13 := []teslrt.Int{teslrt.FromInt64(5), teslrt.FromInt64(5)}
 //line lesson43-orderable-types.tesl:256
 	if !teslrt.ListEqualBy(teslLeft13, teslRight13, teslEqualTeslrtInt) {
+//line lesson43-orderable-types.tesl:256
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -453,16 +506,24 @@ func TestTesl8(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line lesson43-orderable-types.tesl:260
 	if !(IsAffordable(float64(9.99), float64(1e+01))) {
+//line lesson43-orderable-types.tesl:260
 		teslT.Fatal("Tesl expectation failed")
 	}
 //line lesson43-orderable-types.tesl:261
 	if !(IsAffordable(float64(1e+01), float64(1e+01))) {
+//line lesson43-orderable-types.tesl:261
 		teslT.Fatal("Tesl expectation failed")
 	}
 //line lesson43-orderable-types.tesl:262
 	if IsAffordable(float64(10.01), float64(1e+01)) {
+//line lesson43-orderable-types.tesl:262
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -474,6 +535,11 @@ func TestTesl9(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson43-orderable-types.tesl:266
 		earlier := teslrt.SecondsToPosix(teslrt.FromInt64(1000))
@@ -484,14 +550,17 @@ func TestTesl9(teslT *testing.T) {
 			_ = later
 //line lesson43-orderable-types.tesl:268
 			if !(CreatedBefore(earlier, later)) {
+//line lesson43-orderable-types.tesl:268
 				teslT.Fatal("Tesl expectation failed")
 			}
 //line lesson43-orderable-types.tesl:269
 			if CreatedBefore(later, earlier) {
+//line lesson43-orderable-types.tesl:269
 				teslT.Fatal("Tesl expectation failed")
 			}
 //line lesson43-orderable-types.tesl:270
 			if CreatedBefore(earlier, earlier) {
+//line lesson43-orderable-types.tesl:270
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}

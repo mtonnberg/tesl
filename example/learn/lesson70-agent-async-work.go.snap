@@ -37,6 +37,7 @@ golang.org/x/text v0.41.0/go.mod h1:jvf1O8ajNzZqhSrQBPbutR/EB83Cc0CFrezNQIwbb5M=
 package teslmodlesson70agentasyncwork
 
 import (
+	"errors"
 	"github.com/jackc/pgx/v5"
 	"net/http"
 	"tesl.generated/teslmodlesson70agentasyncwork/internal/teslrt"
@@ -94,10 +95,10 @@ func teslEqualChatEventChunk(teslLeft, teslRight ChatEvent) bool {
 }
 
 //line lesson70-agent-async-work.tesl:163
-var ReportQueueQueue = teslrt.NewQueue("ReportQueue", 1)
+var ReportQueueQueue = teslrt.NewQueueOn(ReportDbDatabase, "ReportQueue", 1, "exponential", 0)
 
 //line lesson70-agent-async-work.tesl:158
-var ChatStreamChannel = teslrt.NewSseChannel("ChatStream")
+var ChatStreamChannel = teslrt.NewSseChannelOn(ReportDbDatabase, "ChatStream")
 
 //line lesson70-agent-async-work.tesl:100
 var ConversationRecordTable = teslrt.NewTable[ConversationRecord]()
@@ -204,31 +205,32 @@ func saveConversation(conversationId string, conv teslrt.Conversation) struct{} 
 		json := teslrt.ConversationJSON(conv)
 		_ = json
 //line lesson70-agent-async-work.tesl:219
-		return func() struct{} {
-			var teslCommitted struct{}
-			teslrt.WithTransaction(func() {
-				teslCommitted = (func() struct{} {
-					{
-						teslScrut5 := teslrt.DbSelectOne(ReportDbDatabase, ConversationRecordTable, func(r ConversationRecord) bool {
-							return (r.Id == conversationId)
-						}, nil, teslrt.PgSql("select \"id\", \"transcript\" from \"lesson70\".\"report_conversations\" where \"id\" = $1 limit 1", func() []any {
-							return []any{conversationId}
-						}), teslScanConversationRecord)
-						switch teslScrut5.Tag {
-						case teslrt.MaybeSomething:
-							r := teslScrut5.SomethingValue
-							_ = r
-							return updateTranscript(conversationId, json)
-						case teslrt.MaybeNothing:
-							return insertTranscript(conversationId, json)
-						default:
-							panic("unreachable: checker guarantees case exhaustiveness")
-						}
+		var teslCommitted struct{}
+		teslrt.WithTransaction(func() {
+			teslCommitted = func() struct{} {
+//line lesson70-agent-async-work.tesl:220
+				{
+					teslScrut4 := teslrt.DbSelectOne(ReportDbDatabase, ConversationRecordTable, func(r ConversationRecord) bool {
+						return (r.Id == conversationId)
+					}, nil, teslrt.PgSql("select \"id\", \"transcript\" from \"lesson70\".\"report_conversations\" where \"id\" = $1 limit 1", func() []any {
+						return []any{conversationId}
+					}), teslScanConversationRecord)
+					switch teslScrut4.Tag {
+					case teslrt.MaybeSomething:
+						r := teslScrut4.SomethingValue
+						_ = r
+//line lesson70-agent-async-work.tesl:221
+						return updateTranscript(conversationId, json)
+					case teslrt.MaybeNothing:
+//line lesson70-agent-async-work.tesl:222
+						return insertTranscript(conversationId, json)
+					default:
+						panic("unreachable: checker guarantees case exhaustiveness")
 					}
-				}())
-			})
-			return teslCommitted
-		}()
+				}
+			}()
+		})
+		return teslCommitted
 	}
 }
 
@@ -423,6 +425,23 @@ func DecodeMessageRequestJSON(teslJSON any) teslrt.Check[MessageRequest] {
 	return teslrt.Reject[MessageRequest](400, "no decode alternative matched")
 }
 
+var _ = teslrt.RegisterJobCodec(ReportQueueQueue, "ReportJob", func(teslJob any) any {
+	return EncodeReportJobJSON(teslJob.(ReportJob))
+}, func(teslJSON any) (any, error) {
+	teslDecoded, teslErr := func(teslRaw any) (ReportJob, error) {
+		teslNested := DecodeReportJobJSON(teslRaw)
+		if !teslNested.OK() {
+			return ReportJob{}, errors.New(teslNested.Message())
+		}
+		teslValue, _ := teslNested.Value()
+		return teslValue, nil
+	}(teslJSON)
+	if teslErr != nil {
+		return nil, teslErr
+	}
+	return teslDecoded, nil
+})
+
 var ReportServer = teslrt.Server{
 	Routes: []teslrt.Route{
 		{Method: "POST", Path: "/chat", Endpoint: "sendMessage"},
@@ -537,17 +556,24 @@ func TestTeslApi0(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson70-agent-async-work.tesl:338
 		posted := teslrt.ApiRequest(ReportServer, "POST", "/chat", "{\"conversationId\":\"conv-1\",\"message\":\"generate my q3 sales report\"}", nil, nil)
 		_ = posted
 //line lesson70-agent-async-work.tesl:339
 		if !(teslrt.StatusOk(posted.Status)) {
+//line lesson70-agent-async-work.tesl:339
 			teslT.Fatal("Tesl expectation failed")
 		}
 		teslLeft1 := teslrt.PendingJobCount(ReportQueueQueue)
 //line lesson70-agent-async-work.tesl:341
 		if !teslrt.Equal(teslLeft1, teslrt.FromInt64(1)) {
+//line lesson70-agent-async-work.tesl:341
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -564,6 +590,11 @@ func TestTeslApi1(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson70-agent-async-work.tesl:349
 		stream := teslrt.SubscribeStream(ReportServer, "/chat/conv-1/events", nil)
@@ -575,11 +606,13 @@ func TestTeslApi1(teslT *testing.T) {
 			_ = posted
 //line lesson70-agent-async-work.tesl:351
 			if !(teslrt.StatusOk(posted.Status)) {
+//line lesson70-agent-async-work.tesl:351
 				teslT.Fatal("Tesl expectation failed")
 			}
 			teslLeft2 := teslrt.PendingJobCount(ReportQueueQueue)
 //line lesson70-agent-async-work.tesl:352
 			if !teslrt.Equal(teslLeft2, teslrt.FromInt64(1)) {
+//line lesson70-agent-async-work.tesl:352
 				teslT.Fatal("Tesl expectation failed")
 			}
 			{
@@ -612,11 +645,13 @@ func TestTeslApi1(teslT *testing.T) {
 					teslLeft3 := job.ConversationId
 //line lesson70-agent-async-work.tesl:357
 					if teslLeft3 != "conv-1" {
+//line lesson70-agent-async-work.tesl:357
 						teslT.Fatal("Tesl expectation failed")
 					}
 					teslLeft4 := teslrt.PendingJobCount(ReportQueueQueue)
 //line lesson70-agent-async-work.tesl:358
 					if !teslrt.Equal(teslLeft4, teslrt.FromInt64(0)) {
+//line lesson70-agent-async-work.tesl:358
 						teslT.Fatal("Tesl expectation failed")
 					}
 					{
@@ -625,14 +660,17 @@ func TestTeslApi1(teslT *testing.T) {
 						_ = events
 //line lesson70-agent-async-work.tesl:363
 						if !(teslrt.JsonHasLength(teslrt.FromInt64(2), events)) {
+//line lesson70-agent-async-work.tesl:363
 							teslT.Fatal("Tesl expectation failed")
 						}
 //line lesson70-agent-async-work.tesl:364
 						if !(teslrt.JsonIncludesWhere(teslrt.JsonParseBody("{\"tag\":\"Chunk\",\"fields\":{\"content\":\"report: Report [q3-sales]: 3 items, all healthy.\"}}").JsonRaw(), events)) {
+//line lesson70-agent-async-work.tesl:364
 							teslT.Fatal("Tesl expectation failed")
 						}
 //line lesson70-agent-async-work.tesl:365
 						if !(teslrt.JsonIncludesWhere(teslrt.JsonParseBody("{\"tag\":\"Chunk\",\"fields\":{\"content\":\"text: Your report is ready \xe2\x80\x94 I've posted it above.\"}}").JsonRaw(), events)) {
+//line lesson70-agent-async-work.tesl:365
 							teslT.Fatal("Tesl expectation failed")
 						}
 					}

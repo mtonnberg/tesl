@@ -2,6 +2,7 @@ package teslrt
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/big"
 	"os"
@@ -112,13 +113,13 @@ func OpenPostgres(config PostgresConfig, tables []PostgresTable) *PostgresDB {
 			// A process can declare several databases with the same connection
 			// configuration but different tables. Reusing the pool is correct, but
 			// the first declaration must not prevent later tables from bootstrapping.
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), pgLeaseTimeout())
 			db.bootstrap(ctx, tables)
 			cancel()
 			return db
 		}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), pgLeaseTimeout())
 	defer cancel()
 	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
 	if err != nil {
@@ -299,18 +300,64 @@ func (db *PostgresDB) executor() pgExecutor {
 	return db.pool
 }
 
+// ── The lease ─────────────────────────────────────────────────────────────────
+//
+// Every statement runs under ONE bound, the pool lease: the time a request may wait for a
+// connection from the pool plus the time its statement may then take. `TESL_PG_POOL_LEASE_TIMEOUT_MS`
+// sets it (default 10 s), as the spec documents; the bootstrap and the transaction's BEGIN and
+// COMMIT use the same bound, so there is one knob rather than a scattering of literals.
+//
+// When the bound is exceeded the request is answered 503 rather than 500. A saturated pool is
+// not a broken server: it is a full one, and `503` with "try again" is what tells a client (and
+// a load balancer) to do exactly that, where a 500 tells it to give up. `pgFailure` is where a
+// driver error becomes one or the other.
+
+const defaultPgLeaseTimeout = 10 * time.Second
+
+// pgLeaseTimeout reads the knob on every call rather than once, because it is cheap and a test
+// that sets the environment must not be answered from a cache made by an earlier test. A value
+// that is not a positive number is refused loudly: silently running with the default would hide
+// a misspelled deployment setting until the first saturation.
+func pgLeaseTimeout() time.Duration {
+	text := strings.TrimSpace(os.Getenv("TESL_PG_POOL_LEASE_TIMEOUT_MS"))
+	if text == "" {
+		return defaultPgLeaseTimeout
+	}
+	parsed, err := strconv.ParseInt(text, 10, 64)
+	if err != nil || parsed < 1 {
+		panic("database: TESL_PG_POOL_LEASE_TIMEOUT_MS must be a positive number of milliseconds, not " +
+			strconv.Quote(text))
+	}
+	return time.Duration(parsed) * time.Millisecond
+}
+
+// The rejection a lease that ran out becomes: `callHandler` maps a RequestRejection to the
+// response it names, so a saturated pool answers 503 instead of the generic 500 any other trap
+// becomes. The message is deliberately generic — it reaches the client.
+var pgDatabaseBusy = RequestRejection{Status: 503, Message: "database busy, try again"}
+
+// pgFailure is the panic value for a driver error: the lease running out (the pool never handed
+// over a connection in time, or the statement did not finish in time) is the 503 rejection, and
+// anything else keeps the driver's own text under `prefix`, for the operator log.
+func pgFailure(prefix string, err error) any {
+	if errors.Is(err, context.DeadlineExceeded) || pgconn.Timeout(err) {
+		return pgDatabaseBusy
+	}
+	return prefix + ": " + err.Error()
+}
+
 // PgQuery runs a select and scans every row through `scan`.
 func PgQuery[Row any](db *PostgresDB, statement string, arguments []any,
 	scan func(pgx.CollectableRow) (Row, error)) []Row {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), pgLeaseTimeout())
 	defer cancel()
 	rows, err := db.executor().Query(ctx, statement, arguments...)
 	if err != nil {
-		panic("database: " + err.Error())
+		panic(pgFailure("database", err))
 	}
 	collected, err := pgx.CollectRows(rows, scan)
 	if err != nil {
-		panic("database: " + err.Error())
+		panic(pgFailure("database", err))
 	}
 	return collected
 }
@@ -346,11 +393,11 @@ func PgQueryOnePlan[Row any](db *PostgresDB, plan PgPlan,
 
 // PgExec runs a statement that answers no rows, and reports how many it touched.
 func PgExec(db *PostgresDB, statement string, arguments []any) int64 {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), pgLeaseTimeout())
 	defer cancel()
 	tag, err := db.executor().Exec(ctx, statement, arguments...)
 	if err != nil {
-		panic("database: " + err.Error())
+		panic(pgFailure("database", err))
 	}
 	return tag.RowsAffected()
 }
@@ -365,12 +412,12 @@ func PgExecPlan(db *PostgresDB, plan PgPlan) int64 {
 
 // PgCount is `count … from …`: one row, one number.
 func PgCount(db *PostgresDB, statement string, arguments []any) Int {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), pgLeaseTimeout())
 	defer cancel()
 	row := db.executor().QueryRow(ctx, statement, arguments...)
 	var counted int64
 	if err := row.Scan(&counted); err != nil {
-		panic("database: " + err.Error())
+		panic(pgFailure("database", err))
 	}
 	return FromInt64(counted)
 }
@@ -389,11 +436,11 @@ func PgCountPlan(db *PostgresDB, plan PgPlan) Int {
 // because the column's type is the entity's rather than something this file can know.
 func PgScalar[Value any](db *PostgresDB, statement string, arguments []any,
 	scan func(pgx.Row) (Value, error)) Value {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), pgLeaseTimeout())
 	defer cancel()
 	value, err := scan(db.executor().QueryRow(ctx, statement, arguments...))
 	if err != nil {
-		panic("database: " + err.Error())
+		panic(pgFailure("database", err))
 	}
 	return value
 }
@@ -415,14 +462,14 @@ func PgScalarPlan[Value any](db *PostgresDB, plan PgPlan,
 // incompatible build, and it traps rather than decoding into a half-formed Money — Racket's
 // `money-stored-currency` takes the same line.
 func PgSumMoney(db *PostgresDB, statement string, arguments []any, entity, field string) Money {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), pgLeaseTimeout())
 	defer cancel()
 	var total pgtype.Numeric
 	var distinct int64
 	var witness *string
 	if err := db.executor().QueryRow(ctx, statement, arguments...).
 		Scan(&total, &distinct, &witness); err != nil {
-		panic("database: " + err.Error())
+		panic(pgFailure("database", err))
 	}
 	currency := Currency{}
 	if witness != nil {
@@ -434,7 +481,14 @@ func PgSumMoney(db *PostgresDB, statement string, arguments []any, entity, field
 		}
 		currency = known.SomethingValue
 	}
-	return MoneySumResult(entity, field, PgIntOf(total), currency, int(distinct))
+	// A SUM over no rows is NULL, and the row set being empty is what `MoneySumResult` refuses
+	// (by the distinct count); reading the NULL as zero here lets it say so rather than trapping
+	// on the column first.
+	minorUnits := FromInt64(0)
+	if total.Valid {
+		minorUnits = PgIntOf(total)
+	}
+	return MoneySumResult(entity, field, minorUnits, currency, int(distinct))
 }
 
 func PgSumMoneyPlan(db *PostgresDB, plan PgPlan, entity, field string) Money {
@@ -449,7 +503,7 @@ func PgSumMoneyPlan(db *PostgresDB, plan PgPlan, entity, field string) Money {
 // Postgres counterpart of `TableTruncate`, and it exists for the same reason: one test block's
 // rows must not be another's.
 func PgTruncate(db *PostgresDB, table string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), pgLeaseTimeout())
 	defer cancel()
 	if _, err := db.executor().Exec(ctx, "truncate table "+db.QualifiedTable(table)); err != nil {
 		// A table that does not exist yet is not an error here: a test may run before anything
@@ -477,10 +531,18 @@ func PgInt(value Int) pgtype.Numeric {
 	return pgtype.Numeric{Int: parsed, Exp: 0, Valid: true}
 }
 
-// PgIntOf reads a NUMERIC (or any integer column) back into an Int.
+// PgIntOf reads a NUMERIC (or any integer column) back into an Int — a NON-NULL one.
+//
+// A NULL traps. The emitted scanner reads a `Maybe Int` column into a `*pgtype.Numeric` and
+// hands only a non-nil carrier here (`MaybeOfPointer` skips the decode on NULL), a `selectSum`
+// is `coalesce(sum(…), 0)`, and `selectMax`/`selectMin` go through the same pointer carrier — so
+// the only way a NULL reaches this function is a column Tesl typed as plain `Int` holding one:
+// schema drift, or a row another tool wrote. Answering 0 there fabricated a balance; TEXT
+// columns already trapped on the same shape, and the two must agree.
 func PgIntOf(value pgtype.Numeric) Int {
 	if !value.Valid || value.Int == nil {
-		return FromInt64(0)
+		panic("database: a NUMERIC column holds NULL where Tesl expects an Int; " +
+			"declare the field as `Maybe Int` if the column may be NULL")
 	}
 	if value.Exp == 0 {
 		return fromBig(new(big.Int).Set(value.Int))

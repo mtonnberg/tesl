@@ -2,8 +2,12 @@ package teslrt
 
 import (
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // The providers post through HttpPost, so the ordinary outbound-HTTP double is what tests
@@ -325,5 +329,196 @@ func TestAnthropicToolSchemaTravelsVerbatim(t *testing.T) {
 	if !strings.Contains(HttpLastBody("POST", anthropicEndpoint), `"input_schema":`+schema) {
 		t.Fatalf("request body = %s, want the schema forwarded unchanged",
 			HttpLastBody("POST", anthropicEndpoint))
+	}
+}
+
+// ── Deadline, retry, and error hygiene ───────────────────────────────────────
+
+// noRetryBackoff runs the retry path without sleeping through it.
+func noRetryBackoff(t *testing.T) {
+	t.Helper()
+	previous := providerRetryBackoff
+	providerRetryBackoff = func(int) time.Duration { return 0 }
+	t.Cleanup(func() { providerRetryBackoff = previous })
+}
+
+// liveProvider is an OpenAI-wire server on loopback answering through `respond`, reached
+// over the real network path (loopback egress is permitted outside TESL_DEPLOYED).
+func liveProvider(t *testing.T, respond func(hit int64, writer http.ResponseWriter)) (*httptest.Server, *int64) {
+	t.Helper()
+	ResetHttpStubs() // an active, empty stub table lets the call through to the network
+	t.Cleanup(ResetHttpStubs)
+	var hits int64
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		respond(atomic.AddInt64(&hits, 1), writer)
+	}))
+	t.Cleanup(server.Close)
+	return server, &hits
+}
+
+const openaiOK = `{"choices":[{"message":{"content":"recovered"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`
+
+// A stubbed timeout is the provider timeout: the turn ends as `aborted` with the transcript so
+// far, not as a trap that loses it.
+func TestProviderTimeoutEndsTheTurnAsAborted(t *testing.T) {
+	ResetHttpStubs()
+	t.Cleanup(ResetHttpStubs)
+	StubHttpTimeout("POST", anthropicEndpoint)
+	agent := NewAgent(AnthropicProvider("key", "m"), "", FromInt64(8), nil)
+	turn := Converse(NewConversation(agent), "hi")
+	if got := ReplyStopReason(TurnReply(turn)); got != stopAborted {
+		t.Fatalf("stopReason = %q, want aborted", got)
+	}
+	if got := ConversationLength(TurnConversation(turn)).String(); got != "1" {
+		t.Fatalf("transcript length = %s, want the user turn kept", got)
+	}
+}
+
+// The provider deadline is TESL_AI_TIMEOUT_MS, not the generic HTTP one: with the AI knob at
+// 50 ms and the HTTP knob untouched (30 s), a 400 ms model call is aborted within the test.
+func TestProviderCallUsesTheAIDeadline(t *testing.T) {
+	t.Setenv("TESL_AI_TIMEOUT_MS", "50")
+	server, _ := liveProvider(t, func(_ int64, writer http.ResponseWriter) {
+		time.Sleep(400 * time.Millisecond)
+		_, _ = writer.Write([]byte(openaiOK))
+	})
+	agent := NewAgent(LocalProvider(server.URL, "m"), "", FromInt64(8), nil)
+	started := time.Now()
+	reply := AskReply(agent, "hi")
+	if ReplyStopReason(reply) != stopAborted {
+		t.Fatalf("stopReason = %q, want aborted", ReplyStopReason(reply))
+	}
+	if elapsed := time.Since(started); elapsed > 2*time.Second {
+		t.Fatalf("the call took %s; the AI deadline did not apply", elapsed)
+	}
+}
+
+// A 5xx or 429 is retried with backoff, up to providerAttempts in total; the API is stateless
+// so the repeat has no side effect.
+func TestProviderRetriesTransientFailuresThenSucceeds(t *testing.T) {
+	noRetryBackoff(t)
+	server, hits := liveProvider(t, func(hit int64, writer http.ResponseWriter) {
+		switch hit {
+		case 1:
+			writer.WriteHeader(http.StatusServiceUnavailable)
+		case 2:
+			writer.WriteHeader(http.StatusTooManyRequests)
+		default:
+			_, _ = writer.Write([]byte(openaiOK))
+		}
+	})
+	reply := Ask(NewAgent(LocalProvider(server.URL, "m"), "", FromInt64(8), nil), "hi")
+	if got := atomic.LoadInt64(hits); reply != "recovered" || got != 3 {
+		t.Fatalf("reply=%q hits=%d, want the third attempt's answer", reply, got)
+	}
+}
+
+func TestProviderGivesUpAfterBoundedRetries(t *testing.T) {
+	noRetryBackoff(t)
+	server, hits := liveProvider(t, func(_ int64, writer http.ResponseWriter) {
+		writer.WriteHeader(http.StatusTooManyRequests)
+		_, _ = writer.Write([]byte(`{"error":{"message":"rate limited","type":"rate_limit"}}`))
+	})
+	mustPanic(t, "openai: API error (HTTP 429) after 3 attempts: rate limited", func() {
+		Ask(NewAgent(LocalProvider(server.URL, "m"), "", FromInt64(8), nil), "hi")
+	})
+	if got := atomic.LoadInt64(hits); got != int64(providerAttempts) {
+		t.Fatalf("hits = %d, want %d", got, providerAttempts)
+	}
+}
+
+// A 4xx other than 429 is the REQUEST being wrong; repeating it would be wrong again.
+func TestProviderDoesNotRetryAClientError(t *testing.T) {
+	noRetryBackoff(t)
+	server, hits := liveProvider(t, func(_ int64, writer http.ResponseWriter) {
+		writer.WriteHeader(http.StatusBadRequest)
+		_, _ = writer.Write([]byte(`{"error":"bad request"}`))
+	})
+	mustPanic(t, "openai: API error (HTTP 400): bad request", func() {
+		Ask(NewAgent(LocalProvider(server.URL, "m"), "", FromInt64(8), nil), "hi")
+	})
+	if got := atomic.LoadInt64(hits); got != 1 {
+		t.Fatalf("hits = %d, want 1", got)
+	}
+}
+
+// The upstream body used to be echoed whole — up to the 10 MiB response cap — into logs and,
+// through a nested agent's is_error result, into another model's context.
+func TestProviderErrorDetailIsBoundedAndPrefersTheVendorMessage(t *testing.T) {
+	ResetHttpStubs()
+	t.Cleanup(ResetHttpStubs)
+	StubHttp("POST", anthropicEndpoint, FromInt64(401),
+		`{"error":{"type":"authentication_error","message":"invalid x-api-key"},"padding":"`+
+			strings.Repeat("z", 600000)+`"}`)
+	agent := NewAgent(AnthropicProvider("nope", "m"), "", FromInt64(8), nil)
+	defer func() {
+		message := panicMessage(recover())
+		if message != "anthropic: API error (HTTP 401): invalid x-api-key" {
+			t.Fatalf("trap = %.200q…", message)
+		}
+	}()
+	Ask(agent, "hi")
+}
+
+func TestProviderErrorBodyWithoutAVendorMessageIsTruncated(t *testing.T) {
+	ResetHttpStubs()
+	t.Cleanup(ResetHttpStubs)
+	body := "<html>" + strings.Repeat("x", 600000) + "</html>"
+	StubHttp("POST", anthropicEndpoint, FromInt64(403), body)
+	agent := NewAgent(AnthropicProvider("nope", "m"), "", FromInt64(8), nil)
+	defer func() {
+		message := panicMessage(recover())
+		marker := "(" + strconvItoa(len(body)-maxProviderErrorBytes) + " bytes truncated)"
+		if len(message) > maxProviderErrorBytes+128 || !strings.HasSuffix(message, marker) {
+			t.Fatalf("trap length %d: %.120q…", len(message), message)
+		}
+	}()
+	Ask(agent, "hi")
+}
+
+// ── OpenAI tool-call shapes ──────────────────────────────────────────────────
+
+// Only `function` calls name our tools; another type is never dispatched. An empty id is
+// refused BEFORE the dispatch, because the vendor rejects the result sent back under it.
+func TestOpenAISkipsNonFunctionCallsAndRefusesAnEmptyId(t *testing.T) {
+	dispatched := 0
+	tool := ToolOf("e", "e", `{"type":"object"}`,
+		func(argsJSON string) string { return argsJSON },
+		func(string) string { dispatched++; return "ran" })
+	stubProvider(t, openaiEndpoint, `{"choices":[{"message":{"content":"no tools for you",
+		"tool_calls":[{"id":"call_1","type":"custom","function":{"name":"e","arguments":"{}"}}]},
+		"finish_reason":"stop"}]}`)
+	reply := AskReply(NewAgent(OpenAIProvider("k", "m"), "", FromInt64(8), []Tool{tool}), "hi")
+	if dispatched != 0 || reply.Text != "no tools for you" {
+		t.Fatalf("dispatched=%d text=%q, want the custom call skipped", dispatched, reply.Text)
+	}
+	stubProvider(t, openaiEndpoint, `{"choices":[{"message":{"content":"",
+		"tool_calls":[{"id":"","type":"function","function":{"name":"e","arguments":"{}"}}]},
+		"finish_reason":"tool_calls"}]}`)
+	mustPanic(t, `openai: tool call "e" has no id`, func() {
+		AskReply(NewAgent(OpenAIProvider("k", "m"), "", FromInt64(8), []Tool{tool}), "hi")
+	})
+	if dispatched != 0 {
+		t.Fatalf("the tool ran %d time(s) before the empty id was refused", dispatched)
+	}
+}
+
+// A restored transcript round-trips through the Anthropic renderer: every kind the loop
+// writes has a wire form, and nothing else reaches the renderer.
+func TestRestoredTranscriptRendersForAnthropic(t *testing.T) {
+	tool := ToolOf("lookup", "looks up", `{"type":"object"}`,
+		func(argsJSON string) string { return argsJSON },
+		func(string) string { return "found it" })
+	mock := MockToolProvider([]LlmResponse{ToolUseStep("lookup", "toolu_1", `{"q":"x"}`), TextStep("ok")})
+	saved := ConversationJSON(TurnConversation(Converse(NewConversation(testAgent(mock, tool)), "find x")))
+
+	stubProvider(t, anthropicEndpoint, `{"content":[{"type":"text","text":"and more"}],"stop_reason":"end_turn","usage":{}}`)
+	restored := ConversationFrom(NewAgent(AnthropicProvider("k", "m"), "", FromInt64(8), []Tool{tool}), saved)
+	if got := ReplyText(TurnReply(Converse(restored, "go on"))); got != "and more" {
+		t.Fatalf("continued = %q", got)
+	}
+	messages, _ := sentBody(t, anthropicEndpoint)["messages"].([]any)
+	if len(messages) != 5 { // user, assistant(tool_use), user(tool_result), assistant(text), user
+		t.Fatalf("rendered %d messages: %v", len(messages), messages)
 	}
 }

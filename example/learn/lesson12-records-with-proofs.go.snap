@@ -229,6 +229,11 @@ func TestTesl0(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson12-records-with-proofs.tesl:125
 		s1 := "hello"
@@ -239,6 +244,7 @@ func TestTesl0(teslT *testing.T) {
 			_ = x
 //line lesson12-records-with-proofs.tesl:127
 			if x != "hello" {
+//line lesson12-records-with-proofs.tesl:127
 				teslT.Fatal("Tesl expectation failed")
 			}
 			{
@@ -251,6 +257,7 @@ func TestTesl0(teslT *testing.T) {
 					_ = y
 //line lesson12-records-with-proofs.tesl:130
 					if y != "a" {
+//line lesson12-records-with-proofs.tesl:130
 						teslT.Fatal("Tesl expectation failed")
 					}
 				}
@@ -266,6 +273,11 @@ func TestTesl1(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line lesson12-records-with-proofs.tesl:134
 	if (CheckSafeTitle("")).OK() {
 		teslT.Fatal("expected Tesl check failure")
@@ -279,6 +291,11 @@ func TestTesl2(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson12-records-with-proofs.tesl:138
 		s1 := ""
@@ -289,6 +306,7 @@ func TestTesl2(teslT *testing.T) {
 			_ = y
 //line lesson12-records-with-proofs.tesl:140
 			if y != "" {
+//line lesson12-records-with-proofs.tesl:140
 				teslT.Fatal("Tesl expectation failed")
 			}
 			{
@@ -301,6 +319,7 @@ func TestTesl2(teslT *testing.T) {
 					_ = x
 //line lesson12-records-with-proofs.tesl:143
 					if x != "hello" {
+//line lesson12-records-with-proofs.tesl:143
 						teslT.Fatal("Tesl expectation failed")
 					}
 				}
@@ -316,6 +335,11 @@ func TestTesl3(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson12-records-with-proofs.tesl:147
 		rawTitle := "My Title"
@@ -339,11 +363,13 @@ func TestTesl3(teslT *testing.T) {
 						teslLeft5 := msg.Title
 //line lesson12-records-with-proofs.tesl:152
 						if teslLeft5 != "My Title" {
+//line lesson12-records-with-proofs.tesl:152
 							teslT.Fatal("Tesl expectation failed")
 						}
 						teslLeft6 := msg.Body
 //line lesson12-records-with-proofs.tesl:153
 						if teslLeft6 != "Some body text" {
+//line lesson12-records-with-proofs.tesl:153
 							teslT.Fatal("Tesl expectation failed")
 						}
 					}
@@ -360,6 +386,11 @@ func TestTesl4(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson12-records-with-proofs.tesl:266
 		rawP := teslrt.FromInt64(10)
@@ -391,11 +422,13 @@ func TestTesl4(teslT *testing.T) {
 								teslLeft7 := order.Price
 //line lesson12-records-with-proofs.tesl:273
 								if !teslrt.Equal(teslLeft7, teslrt.FromInt64(10)) {
+//line lesson12-records-with-proofs.tesl:273
 									teslT.Fatal("Tesl expectation failed")
 								}
 								teslLeft8 := order.Quantity
 //line lesson12-records-with-proofs.tesl:274
 								if !teslrt.Equal(teslLeft8, teslrt.FromInt64(3)) {
+//line lesson12-records-with-proofs.tesl:274
 									teslT.Fatal("Tesl expectation failed")
 								}
 							}
@@ -414,6 +447,11 @@ func TestTesl5(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson12-records-with-proofs.tesl:280
 		rawP := teslrt.FromInt64(3)

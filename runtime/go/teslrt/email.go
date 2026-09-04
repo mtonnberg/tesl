@@ -3,8 +3,10 @@ package teslrt
 import (
 	"crypto/tls"
 	"fmt"
+	"net"
 	"net/smtp"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -60,6 +62,12 @@ const (
 )
 
 type EmailMessage struct {
+	// id is the message's identity inside its outbox — the counterpart of the
+	// `tesl_email_outbox` row id. The worker records THIS across the unlocked delivery
+	// window, never a slice index: a prune or a reset that runs while a message is on the
+	// wire rebuilds the slice, and an index taken before that points at a different message
+	// (or past the end) afterwards. Assigned by the outbox; zero means "not yet".
+	id       uint64
 	To       string
 	Subject  string
 	Body     EmailBody
@@ -84,13 +92,54 @@ type Outbox struct {
 	mutex    sync.Mutex
 	settings SmtpSettings
 	messages []EmailMessage
+	// nextID is the last id handed out; ids start at 1 so a zero is always "unassigned".
+	nextID uint64
 	// started guards the worker, so a `startEmailWorker` called twice runs one.
 	started bool
+	// deliver is what the worker calls per message — DeliverEmail in production. A seam
+	// rather than a direct call so the runtime's own tests can stand in a delivery that
+	// stalls or traps without a network.
+	deliver func(SmtpSettings, EmailMessage) error
+	// backend is the DURABLE outbox — the `tesl_email_outbox` table — when the declaration
+	// names a Postgres-backed database (`NewOutboxOn` in pgstores.go attaches it); nil
+	// otherwise. Each operation asks `durable()` and uses the in-memory slice above when the
+	// backend is absent or its database is not bound, so a `test` block without
+	// `with database` keeps the in-memory outbox and a served program gets the table.
+	backend outboxBackend
+}
+
+// outboxBackend is what a durable outbox answers. Like queueBackend it speaks this file's
+// vocabulary (EmailMessage values, an error per delivery) and names no driver type.
+type outboxBackend interface {
+	active() bool
+	// send stores a pending message. The CRLF check has already run.
+	send(message EmailMessage)
+	// claimDue takes up to `limit` due pending messages for THIS process, so two instances
+	// never deliver the same one; a claimed message another instance crashed on is released
+	// after a fixed window.
+	claimDue(limit int) []EmailMessage
+	// recordOutcome marks a claimed message sent, or counts a failed attempt with backoff
+	// and, at emailMaxAttempts, dead.
+	recordOutcome(message EmailMessage, err error)
+	messages() []EmailMessage
+	reset()
+	prune(keep time.Duration)
 }
 
 func NewOutbox(settings SmtpSettings) *Outbox {
-	return &Outbox{settings: settings}
+	return &Outbox{settings: settings, deliver: DeliverEmail}
 }
+
+// durable answers the backend this call runs against, or nil for the in-memory path.
+func (outbox *Outbox) durable() outboxBackend {
+	if backend := outbox.backend; backend != nil && backend.active() {
+		return backend
+	}
+	return nil
+}
+
+// emailClaimBatch is how many due messages one durable delivery pass claims at a time.
+const emailClaimBatch = 50
 
 // emailMaxAttempts and the backoff below are tesl/email.rkt's, so a message that fails on one
 // backend is retried on the same schedule by the other.
@@ -99,6 +148,24 @@ const emailMaxAttempts = 5
 func emailRetryDelay(attempts int) time.Duration {
 	return time.Duration(5*(1<<attempts)) * time.Minute
 }
+
+// emailPollInterval is how often the worker looks for due messages — Racket's 5 seconds.
+const emailPollInterval = 5 * time.Second
+
+// ── Deadlines ─────────────────────────────────────────────────────────────────
+//
+// The spec's rule is that EVERY outbound call has a deadline, so a hung upstream can never pin
+// a worker indefinitely. SMTP is an outbound call: a server that accepts the TCP connection and
+// never greets would otherwise block the (single) delivery goroutine forever, and with it every
+// message behind the stalled one. The knobs are the mail counterpart of the HTTP client's, with
+// the same defaults and the same shape (deployment tuning by environment variable, not a
+// per-call argument):
+//
+//	TESL_SMTP_CONNECT_TIMEOUT_MS   10000   reaching the host
+//	TESL_SMTP_TIMEOUT_MS           30000   the whole exchange: greeting through QUIT
+
+func smtpConnectTimeoutMs() int { return envPositiveInt("TESL_SMTP_CONNECT_TIMEOUT_MS", 10000) }
+func smtpTimeoutMs() int        { return envPositiveInt("TESL_SMTP_TIMEOUT_MS", 30000) }
 
 // HeaderFieldSafe reports whether a header-bound field may be used as it stands. A CR or LF in
 // a recipient or a subject would inject arbitrary RFC 2822 headers — Bcc exfiltration,
@@ -122,10 +189,18 @@ func SendEmail(outbox *Outbox, to, subject string, body EmailBody) struct{} {
 				" contains a CR/LF newline — header injection rejected")
 		}
 	}
+	if backend := outbox.durable(); backend != nil {
+		// The insert runs on the calling goroutine's open transaction when there is one
+		// (the executor picks it up), which is what makes `Email.send` atomic with the
+		// surrounding writes: a rolled-back handler leaves no row and sends no mail.
+		backend.send(EmailMessage{To: to, Subject: subject, Body: body, Status: EmailPending})
+		return struct{}{}
+	}
 	outbox.mutex.Lock()
 	defer outbox.mutex.Unlock()
+	outbox.nextID++
 	outbox.messages = append(outbox.messages, EmailMessage{
-		To: to, Subject: subject, Body: body, Status: EmailPending,
+		id: outbox.nextID, To: to, Subject: subject, Body: body, Status: EmailPending,
 	})
 	return struct{}{}
 }
@@ -143,23 +218,58 @@ func StartEmailWorker(outbox *Outbox) struct{} {
 	if already {
 		return struct{}{}
 	}
-	go func() {
-		for {
-			time.Sleep(5 * time.Second)
-			deliverPending(outbox)
-		}
-	}()
+	go runEmailWorker(outbox, emailPollInterval, nil)
 	go func() {
 		for {
 			time.Sleep(time.Hour)
-			PruneSentEmail(outbox, 24*time.Hour)
+			pruneSentEmailGuarded(outbox, 24*time.Hour)
 		}
 	}()
 	return struct{}{}
 }
 
+// runEmailWorker is the delivery loop: every `interval` it tries the due messages once, and
+// it keeps going whatever happens inside an iteration. A `stop` of nil never fires, which is
+// the production shape; the runtime's tests pass a channel so the loop can be ended.
+//
+// The recover is per ITERATION and it is what keeps a mail problem a mail problem. This loop
+// runs on its own goroutine, and a panic on a goroutine that nothing recovers is fatal for the
+// whole process — the HTTP server, the queue workers, everything — not just for the message
+// that tripped it. Delivery itself already converts a trap into a failed attempt (see
+// deliverPending); this outer guard is for anything else, and it reports rather than swallows,
+// so a loop that keeps trapping is visible in the log.
+func runEmailWorker(outbox *Outbox, interval time.Duration, stop <-chan struct{}) {
+	for {
+		select {
+		case <-stop:
+			return
+		case <-time.After(interval):
+		}
+		runEmailWorkerIteration(outbox)
+	}
+}
+
+func runEmailWorkerIteration(outbox *Outbox) {
+	defer func() {
+		if trap := recover(); trap != nil {
+			fmt.Fprintf(os.Stderr, "tesl: email worker recovered from a trap: %v\n", trap)
+		}
+	}()
+	deliverPending(outbox)
+}
+
 // deliverPending takes every message whose next attempt is due and tries it once.
+//
+// The lock is NOT held across delivery — a message on the wire must not stall `Email.send` in
+// a request handler — and that is why the due messages are remembered by id. Between the
+// unlock and the re-lock, PruneSentEmail or ResetOutbox may have rebuilt the slice; a message
+// that is no longer there has its result dropped, since there is nothing left to attribute it
+// to, and a message that has moved is found where it now is rather than where it was.
 func deliverPending(outbox *Outbox) {
+	if backend := outbox.durable(); backend != nil {
+		deliverClaimed(outbox, backend)
+		return
+	}
 	outbox.mutex.Lock()
 	if outbox.settings.Host == "" {
 		// No server configured — which is what an unset `SMTP_HOST` means. Messages STAY
@@ -168,24 +278,41 @@ func deliverPending(outbox *Outbox) {
 		outbox.mutex.Unlock()
 		return
 	}
-	due := []int{}
-	for index, message := range outbox.messages {
-		if message.Status == EmailPending && !time.Now().Before(message.NextAttemptAt) {
-			due = append(due, index)
+	pending := []EmailMessage{}
+	for index := range outbox.messages {
+		message := &outbox.messages[index]
+		if message.Status != EmailPending || time.Now().Before(message.NextAttemptAt) {
+			continue
 		}
+		if message.id == 0 {
+			// A message placed in the store without going through SendEmail (the runtime's
+			// own tests do this) still needs an identity to be found again by.
+			outbox.nextID++
+			message.id = outbox.nextID
+		}
+		pending = append(pending, *message)
 	}
 	settings := outbox.settings
-	pending := make([]EmailMessage, len(due))
-	for slot, index := range due {
-		pending[slot] = outbox.messages[index]
+	deliver := outbox.deliver
+	if deliver == nil {
+		deliver = DeliverEmail
 	}
 	outbox.mutex.Unlock()
 
-	for slot, message := range pending {
-		err := DeliverEmail(settings, message)
+	for _, message := range pending {
+		err := deliverOne(deliver, settings, message)
 		outbox.mutex.Lock()
-		index := due[slot]
-		record := &outbox.messages[index]
+		record := outbox.lookupLocked(message.id)
+		if record == nil {
+			// Pruned or reset while on the wire: no row to write the outcome to. The failure
+			// is still worth a line — it happened — but there is nothing to retry.
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "tesl: email delivery to %s failed (message no longer in the outbox): %v\n",
+					message.To, err)
+			}
+			outbox.mutex.Unlock()
+			continue
+		}
 		if err == nil {
 			record.Status = EmailSent
 			record.SentAt = time.Now()
@@ -203,6 +330,65 @@ func deliverPending(outbox *Outbox) {
 		}
 		outbox.mutex.Unlock()
 	}
+}
+
+// deliverClaimed is deliverPending against the durable outbox: only messages this process
+// has CLAIMED are delivered, so several instances polling one table never send the same mail
+// twice, and each outcome is written back to the row rather than to a slice. Batches are
+// claimed until one comes back short, which bounds a pass to the backlog that was due when
+// it started — a claimed message is invisible to the next claim, and a failed one is pushed
+// past `now()`, so the loop cannot revisit a message within one pass.
+func deliverClaimed(outbox *Outbox, backend outboxBackend) {
+	outbox.mutex.Lock()
+	settings := outbox.settings
+	deliver := outbox.deliver
+	outbox.mutex.Unlock()
+	if settings.Host == "" {
+		// Same rule as the in-memory path: no server configured means the messages wait.
+		return
+	}
+	if deliver == nil {
+		deliver = DeliverEmail
+	}
+	for {
+		claimed := backend.claimDue(emailClaimBatch)
+		for _, message := range claimed {
+			err := deliverOne(deliver, settings, message)
+			backend.recordOutcome(message, err)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "tesl: email delivery to %s failed (attempt %d): %v\n",
+					message.To, message.Attempts+1, err)
+			}
+		}
+		if len(claimed) < emailClaimBatch {
+			return
+		}
+	}
+}
+
+// lookupLocked finds the message with `id`, or nil when it is gone. Caller holds the mutex;
+// the pointer is into the slice and is only valid until the mutex is released.
+func (outbox *Outbox) lookupLocked(id uint64) *EmailMessage {
+	if id == 0 {
+		return nil
+	}
+	for index := range outbox.messages {
+		if outbox.messages[index].id == id {
+			return &outbox.messages[index]
+		}
+	}
+	return nil
+}
+
+// deliverOne runs one delivery and answers a trap as an ERROR, so a panicking delivery is a
+// failed attempt — counted, backed off, eventually dead — and not the end of the worker.
+func deliverOne(deliver func(SmtpSettings, EmailMessage) error, settings SmtpSettings, message EmailMessage) (err error) {
+	defer func() {
+		if trap := recover(); trap != nil {
+			err = fmt.Errorf("email delivery trapped: %v", trap)
+		}
+	}()
+	return deliver(settings, message)
 }
 
 // DeliverEmail sends ONE message over SMTP, building the same minimal RFC 2822 header the
@@ -226,10 +412,24 @@ func DeliverEmail(settings SmtpSettings, message EmailMessage) error {
 		"Subject: " + message.Subject + "\r\n" +
 		"MIME-Version: 1.0\r\n" +
 		"Content-Type: " + contentType + "\r\n"
-	address := fmt.Sprintf("%s:%d", settings.Host, settings.Port)
+	address := net.JoinHostPort(settings.Host, strconv.Itoa(settings.Port))
 
-	client, err := smtp.Dial(address)
+	// Not `smtp.Dial`: it has no deadline of any kind. The connection is dialed with the
+	// connect timeout and then given ONE absolute deadline for the whole exchange, so a server
+	// that accepts and never greets, or stalls halfway through DATA, hands back an i/o timeout
+	// error — which the worker treats like any other failed attempt. The deadline is on the
+	// raw connection, so it also covers the STARTTLS handshake layered over it.
+	conn, err := net.DialTimeout("tcp", address, millisDuration(smtpConnectTimeoutMs()))
 	if err != nil {
+		return err
+	}
+	if err := conn.SetDeadline(time.Now().Add(millisDuration(smtpTimeoutMs()))); err != nil {
+		_ = conn.Close()
+		return err
+	}
+	client, err := smtp.NewClient(conn, settings.Host)
+	if err != nil {
+		_ = conn.Close()
 		return err
 	}
 	defer func() { _ = client.Close() }()
@@ -277,7 +477,24 @@ func DeliverEmail(settings SmtpSettings, message EmailMessage) error {
 }
 
 // PruneSentEmail drops delivered messages older than `keep`.
+// pruneSentEmailGuarded is the background pruner's call: on a durable outbox the prune is a
+// statement, and a database that is unreachable at that moment must not unwind this
+// goroutine — an unrecovered panic here ended the whole process (the same class as the
+// queue worker's store failure). Reported, and retried an hour later.
+func pruneSentEmailGuarded(outbox *Outbox, keep time.Duration) {
+	defer func() {
+		if trap := recover(); trap != nil {
+			fmt.Fprintf(os.Stderr, "tesl: email pruner could not reach the outbox store: %v\n", trap)
+		}
+	}()
+	PruneSentEmail(outbox, keep)
+}
+
 func PruneSentEmail(outbox *Outbox, keep time.Duration) {
+	if backend := outbox.durable(); backend != nil {
+		backend.prune(keep)
+		return
+	}
 	outbox.mutex.Lock()
 	defer outbox.mutex.Unlock()
 	// A FRESH slice rather than `outbox.messages[:0]`: reusing the backing array aliases the
@@ -299,6 +516,9 @@ func PruneSentEmail(outbox *Outbox, keep time.Duration) {
 // and so the per-test reset can empty an outbox the way it empties a table.
 
 func OutboxMessages(outbox *Outbox) []EmailMessage {
+	if backend := outbox.durable(); backend != nil {
+		return backend.messages()
+	}
 	outbox.mutex.Lock()
 	defer outbox.mutex.Unlock()
 	out := make([]EmailMessage, len(outbox.messages))
@@ -307,6 +527,10 @@ func OutboxMessages(outbox *Outbox) []EmailMessage {
 }
 
 func ResetOutbox(outbox *Outbox) {
+	if backend := outbox.durable(); backend != nil {
+		backend.reset()
+		return
+	}
 	outbox.mutex.Lock()
 	defer outbox.mutex.Unlock()
 	// An EMPTY slice, not nil: the field is read by every other operation, and a nil there is

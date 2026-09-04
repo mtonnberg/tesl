@@ -203,6 +203,11 @@ func TestTesl0(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line sql-group-by-tests.tesl:107
 		t := teslrt.SecondsToPosix(teslrt.FromInt64(1700000000))
@@ -210,21 +215,25 @@ func TestTesl0(teslT *testing.T) {
 		teslLeft1 := teslrt.PosixToSeconds(teslrt.TimeTruncHour(teslrt.UtcZone(), t))
 //line sql-group-by-tests.tesl:108
 		if !teslrt.Equal(teslLeft1, teslrt.FromInt64(1699999200)) {
+//line sql-group-by-tests.tesl:108
 			teslT.Fatal("Tesl expectation failed")
 		}
 		teslLeft2 := teslrt.PosixToSeconds(teslrt.TimeTruncDay(teslrt.UtcZone(), t))
 //line sql-group-by-tests.tesl:109
 		if !teslrt.Equal(teslLeft2, teslrt.FromInt64(1699920000)) {
+//line sql-group-by-tests.tesl:109
 			teslT.Fatal("Tesl expectation failed")
 		}
 		teslLeft3 := teslrt.PosixToSeconds(teslrt.TimeTruncMonth(teslrt.UtcZone(), t))
 //line sql-group-by-tests.tesl:110
 		if !teslrt.Equal(teslLeft3, teslrt.FromInt64(1698796800)) {
+//line sql-group-by-tests.tesl:110
 			teslT.Fatal("Tesl expectation failed")
 		}
 		teslLeft4 := teslrt.PosixToSeconds(teslrt.TimeTruncYear(teslrt.UtcZone(), t))
 //line sql-group-by-tests.tesl:111
 		if !teslrt.Equal(teslLeft4, teslrt.FromInt64(1672531200)) {
+//line sql-group-by-tests.tesl:111
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -238,6 +247,11 @@ func TestTesl1(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line sql-group-by-tests.tesl:116
 		t := teslrt.SecondsToPosix(teslrt.FromInt64(1700000000))
@@ -245,6 +259,7 @@ func TestTesl1(teslT *testing.T) {
 		teslLeft5 := teslrt.PosixToSeconds(teslrt.TimeTruncWeek(teslrt.UtcZone(), t))
 //line sql-group-by-tests.tesl:117
 		if !teslrt.Equal(teslLeft5, teslrt.FromInt64(1699833600)) {
+//line sql-group-by-tests.tesl:117
 			teslT.Fatal("Tesl expectation failed")
 		}
 		{
@@ -255,6 +270,7 @@ func TestTesl1(teslT *testing.T) {
 			teslRight6 := teslrt.Sub(teslrt.FromInt64(0), teslrt.FromInt64(259200))
 //line sql-group-by-tests.tesl:120
 			if !teslrt.Equal(teslLeft6, teslRight6) {
+//line sql-group-by-tests.tesl:120
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -269,6 +285,11 @@ func TestTesl2(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line sql-group-by-tests.tesl:126
 		lateEvening := teslrt.SecondsToPosix(teslrt.FromInt64(1700004600))
@@ -276,11 +297,13 @@ func TestTesl2(teslT *testing.T) {
 		teslLeft7 := teslrt.PosixToSeconds(teslrt.TimeTruncDay(teslrt.FixedOffsetZone(teslrt.FromInt64(120)), lateEvening))
 //line sql-group-by-tests.tesl:127
 		if !teslrt.Equal(teslLeft7, teslrt.FromInt64(1699999200)) {
+//line sql-group-by-tests.tesl:127
 			teslT.Fatal("Tesl expectation failed")
 		}
 		teslLeft8 := teslrt.PosixToSeconds(teslrt.TimeTruncDay(teslrt.UtcZone(), lateEvening))
 //line sql-group-by-tests.tesl:129
 		if !teslrt.Equal(teslLeft8, teslrt.FromInt64(1699920000)) {
+//line sql-group-by-tests.tesl:129
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -294,6 +317,11 @@ func TestTesl3(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line sql-group-by-tests.tesl:135
 		winter := teslrt.SecondsToPosix(teslrt.FromInt64(1767225600))
@@ -305,11 +333,13 @@ func TestTesl3(teslT *testing.T) {
 			teslLeft9 := teslrt.TimeOffsetAt(teslrt.NamedZone("Europe/Stockholm"), winter)
 //line sql-group-by-tests.tesl:137
 			if !teslrt.Equal(teslLeft9, teslrt.FromInt64(60)) {
+//line sql-group-by-tests.tesl:137
 				teslT.Fatal("Tesl expectation failed")
 			}
 			teslLeft10 := teslrt.TimeOffsetAt(teslrt.NamedZone("Europe/Stockholm"), summer)
 //line sql-group-by-tests.tesl:138
 			if !teslrt.Equal(teslLeft10, teslrt.FromInt64(120)) {
+//line sql-group-by-tests.tesl:138
 				teslT.Fatal("Tesl expectation failed")
 			}
 			{
@@ -323,11 +353,13 @@ func TestTesl3(teslT *testing.T) {
 					teslLeft11 := teslrt.PosixToSeconds(teslrt.TimeTruncDay(teslrt.NamedZone("Europe/Stockholm"), early))
 //line sql-group-by-tests.tesl:143
 					if !teslrt.Equal(teslLeft11, teslrt.FromInt64(1774738800)) {
+//line sql-group-by-tests.tesl:143
 						teslT.Fatal("Tesl expectation failed")
 					}
 					teslLeft12 := teslrt.PosixToSeconds(teslrt.TimeTruncDay(teslrt.NamedZone("Europe/Stockholm"), later))
 //line sql-group-by-tests.tesl:144
 					if !teslrt.Equal(teslLeft12, teslrt.FromInt64(1774738800)) {
+//line sql-group-by-tests.tesl:144
 						teslT.Fatal("Tesl expectation failed")
 					}
 				}
@@ -344,6 +376,11 @@ func TestTesl4(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line sql-group-by-tests.tesl:148
 		leap := teslrt.SecondsToPosix(teslrt.FromInt64(1582934400))
@@ -351,16 +388,19 @@ func TestTesl4(teslT *testing.T) {
 		teslLeft13 := teslrt.PosixToSeconds(teslrt.TimeTruncDay(teslrt.UtcZone(), leap))
 //line sql-group-by-tests.tesl:149
 		if !teslrt.Equal(teslLeft13, teslrt.FromInt64(1582934400)) {
+//line sql-group-by-tests.tesl:149
 			teslT.Fatal("Tesl expectation failed")
 		}
 		teslLeft14 := teslrt.PosixToSeconds(teslrt.TimeTruncMonth(teslrt.UtcZone(), leap))
 //line sql-group-by-tests.tesl:150
 		if !teslrt.Equal(teslLeft14, teslrt.FromInt64(1580515200)) {
+//line sql-group-by-tests.tesl:150
 			teslT.Fatal("Tesl expectation failed")
 		}
 		teslLeft15 := teslrt.PosixToSeconds(teslrt.TimeTruncYear(teslrt.UtcZone(), leap))
 //line sql-group-by-tests.tesl:151
 		if !teslrt.Equal(teslLeft15, teslrt.FromInt64(1577836800)) {
+//line sql-group-by-tests.tesl:151
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -374,6 +414,11 @@ func TestTesl5(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line sql-group-by-tests.tesl:157
 		_ = seed()
@@ -384,16 +429,19 @@ func TestTesl5(teslT *testing.T) {
 			teslLeft16 := teslrt.ListLength(days)
 //line sql-group-by-tests.tesl:159
 			if !teslrt.Equal(teslLeft16, teslrt.FromInt64(3)) {
+//line sql-group-by-tests.tesl:159
 				teslT.Fatal("Tesl expectation failed")
 			}
 			teslLeft17 := firstKeySeconds(days)
 //line sql-group-by-tests.tesl:161
 			if !teslrt.Equal(teslLeft17, teslrt.FromInt64(1772323200)) {
+//line sql-group-by-tests.tesl:161
 				teslT.Fatal("Tesl expectation failed")
 			}
 			teslLeft18 := firstValue(days)
 //line sql-group-by-tests.tesl:162
 			if !teslrt.Equal(teslLeft18, teslrt.FromInt64(90)) {
+//line sql-group-by-tests.tesl:162
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -408,6 +456,11 @@ func TestTesl6(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line sql-group-by-tests.tesl:166
 		_ = seed()
@@ -418,16 +471,19 @@ func TestTesl6(teslT *testing.T) {
 			teslLeft19 := teslrt.ListLength(months)
 //line sql-group-by-tests.tesl:168
 			if !teslrt.Equal(teslLeft19, teslrt.FromInt64(2)) {
+//line sql-group-by-tests.tesl:168
 				teslT.Fatal("Tesl expectation failed")
 			}
 			teslLeft20 := firstKeySeconds(months)
 //line sql-group-by-tests.tesl:169
 			if !teslrt.Equal(teslLeft20, teslrt.FromInt64(1772323200)) {
+//line sql-group-by-tests.tesl:169
 				teslT.Fatal("Tesl expectation failed")
 			}
 			teslLeft21 := firstValue(months)
 //line sql-group-by-tests.tesl:170
 			if !teslrt.Equal(teslLeft21, teslrt.FromInt64(3)) {
+//line sql-group-by-tests.tesl:170
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -442,6 +498,11 @@ func TestTesl7(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line sql-group-by-tests.tesl:174
 		_ = seed()
@@ -452,11 +513,13 @@ func TestTesl7(teslT *testing.T) {
 			teslLeft22 := teslrt.ListLength(days)
 //line sql-group-by-tests.tesl:178
 			if !teslrt.Equal(teslLeft22, teslrt.FromInt64(3)) {
+//line sql-group-by-tests.tesl:178
 				teslT.Fatal("Tesl expectation failed")
 			}
 			teslLeft23 := firstValue(days)
 //line sql-group-by-tests.tesl:179
 			if !teslrt.Equal(teslLeft23, teslrt.FromInt64(60)) {
+//line sql-group-by-tests.tesl:179
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -471,6 +534,11 @@ func TestTesl8(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line sql-group-by-tests.tesl:183
 		_ = seed()
@@ -481,16 +549,19 @@ func TestTesl8(teslT *testing.T) {
 			teslLeft24 := teslrt.ListLength(orgs)
 //line sql-group-by-tests.tesl:185
 			if !teslrt.Equal(teslLeft24, teslrt.FromInt64(2)) {
+//line sql-group-by-tests.tesl:185
 				teslT.Fatal("Tesl expectation failed")
 			}
 			teslLeft25 := firstOrgKey(orgs)
 //line sql-group-by-tests.tesl:187
 			if teslLeft25 != "acme" {
+//line sql-group-by-tests.tesl:187
 				teslT.Fatal("Tesl expectation failed")
 			}
 			teslLeft26 := firstOrgValue(orgs)
 //line sql-group-by-tests.tesl:188
 			if !teslrt.Equal(teslLeft26, teslrt.FromInt64(4)) {
+//line sql-group-by-tests.tesl:188
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -505,6 +576,11 @@ func TestTesl9(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line sql-group-by-tests.tesl:192
 		_ = seed()
@@ -515,11 +591,13 @@ func TestTesl9(teslT *testing.T) {
 			teslLeft27 := teslrt.ListLength(days)
 //line sql-group-by-tests.tesl:196
 			if !teslrt.Equal(teslLeft27, teslrt.FromInt64(3)) {
+//line sql-group-by-tests.tesl:196
 				teslT.Fatal("Tesl expectation failed")
 			}
 			teslLeft28 := firstValue(days)
 //line sql-group-by-tests.tesl:197
 			if !teslrt.Equal(teslLeft28, teslrt.FromInt64(60)) {
+//line sql-group-by-tests.tesl:197
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}

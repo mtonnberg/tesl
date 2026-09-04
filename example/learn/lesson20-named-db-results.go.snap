@@ -168,6 +168,11 @@ func TestTesl0(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson20-named-db-results.tesl:171
 		t := SeedAndFetch("test-1")
@@ -175,11 +180,13 @@ func TestTesl0(teslT *testing.T) {
 		teslLeft1 := t.Title
 //line lesson20-named-db-results.tesl:174
 		if teslLeft1 != "task: test-1" {
+//line lesson20-named-db-results.tesl:174
 			teslT.Fatal("Tesl expectation failed")
 		}
 		teslLeft2 := t.Status
 //line lesson20-named-db-results.tesl:175
 		if teslLeft2 != "open" {
+//line lesson20-named-db-results.tesl:175
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -192,6 +199,11 @@ func TestTesl1(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson20-named-db-results.tesl:182
 		queryId := "test-proof"
@@ -203,6 +215,7 @@ func TestTesl1(teslT *testing.T) {
 			teslLeft3 := t.Title
 //line lesson20-named-db-results.tesl:184
 			if teslLeft3 != "task: test-proof" {
+//line lesson20-named-db-results.tesl:184
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -216,6 +229,11 @@ func TestTesl2(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson20-named-db-results.tesl:191
 		_ = SeedAndFetch("test-2")
@@ -225,6 +243,7 @@ func TestTesl2(teslT *testing.T) {
 			_ = result
 //line lesson20-named-db-results.tesl:193
 			if result != "task: test-2 status=open" {
+//line lesson20-named-db-results.tesl:193
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -238,12 +257,18 @@ func TestTesl3(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson20-named-db-results.tesl:197
 		result := SeedAndProcess("test-3")
 		_ = result
 //line lesson20-named-db-results.tesl:198
 		if result != "task: test-3 status=open" {
+//line lesson20-named-db-results.tesl:198
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}

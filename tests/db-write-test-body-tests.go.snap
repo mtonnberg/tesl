@@ -69,6 +69,11 @@ func TestTesl0(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line db-write-test-body-tests.tesl:38
 		seed := []Order{Order{Id: "o1", Status: "new"}}
@@ -78,6 +83,7 @@ func TestTesl0(teslT *testing.T) {
 		teslLeft1 := statusOf("o1")
 //line db-write-test-body-tests.tesl:40
 		if teslLeft1 != "new" {
+//line db-write-test-body-tests.tesl:40
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -91,6 +97,11 @@ func TestTesl1(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line db-write-test-body-tests.tesl:44
 		rows := []Order{Order{Id: "o3", Status: "new"}}
@@ -100,6 +111,7 @@ func TestTesl1(teslT *testing.T) {
 		teslLeft2 := statusOf("o3")
 //line db-write-test-body-tests.tesl:46
 		if teslLeft2 != "new" {
+//line db-write-test-body-tests.tesl:46
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line db-write-test-body-tests.tesl:47
@@ -113,6 +125,7 @@ func TestTesl1(teslT *testing.T) {
 		teslLeft3 := statusOf("o3")
 //line db-write-test-body-tests.tesl:50
 		if teslLeft3 != "shipped" {
+//line db-write-test-body-tests.tesl:50
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -126,6 +139,11 @@ func TestTesl2(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line db-write-test-body-tests.tesl:54
 		rows := []Order{Order{Id: "o4", Status: "new"}}
@@ -135,6 +153,7 @@ func TestTesl2(teslT *testing.T) {
 		teslLeft4 := statusOf("o4")
 //line db-write-test-body-tests.tesl:56
 		if teslLeft4 != "new" {
+//line db-write-test-body-tests.tesl:56
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line db-write-test-body-tests.tesl:57
@@ -144,6 +163,7 @@ func TestTesl2(teslT *testing.T) {
 		teslLeft5 := statusOf("o4")
 //line db-write-test-body-tests.tesl:58
 		if teslLeft5 != "no such order" {
+//line db-write-test-body-tests.tesl:58
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -157,6 +177,11 @@ func TestTesl3(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line db-write-test-body-tests.tesl:66
 		rows := []Order{Order{Id: "o5", Status: "new"}}
@@ -166,6 +191,7 @@ func TestTesl3(teslT *testing.T) {
 		teslLeft6 := statusOf("o5")
 //line db-write-test-body-tests.tesl:68
 		if teslLeft6 != "new" {
+//line db-write-test-body-tests.tesl:68
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line db-write-test-body-tests.tesl:69
@@ -175,6 +201,7 @@ func TestTesl3(teslT *testing.T) {
 		teslLeft7 := statusOf("o5")
 //line db-write-test-body-tests.tesl:71
 		if teslLeft7 != "no such order" {
+//line db-write-test-body-tests.tesl:71
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -188,6 +215,11 @@ func TestTesl4(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line db-write-test-body-tests.tesl:75
 		rows := []Order{Order{Id: "keep", Status: "us"}, Order{Id: "drop", Status: "eu"}}
@@ -201,11 +233,13 @@ func TestTesl4(teslT *testing.T) {
 		teslLeft8 := statusOf("drop")
 //line db-write-test-body-tests.tesl:79
 		if teslLeft8 != "no such order" {
+//line db-write-test-body-tests.tesl:79
 			teslT.Fatal("Tesl expectation failed")
 		}
 		teslLeft9 := statusOf("keep")
 //line db-write-test-body-tests.tesl:80
 		if teslLeft9 != "us" {
+//line db-write-test-body-tests.tesl:80
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}

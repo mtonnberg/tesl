@@ -914,17 +914,24 @@ func TestTesl0(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line machine-login-tests.tesl:612
 		_ = seedFixtures()
 		teslLeft1 := installationByStored(tokenAlphaWrite())
 //line machine-login-tests.tesl:616
 		if teslLeft1 != "" {
+//line machine-login-tests.tesl:616
 			teslT.Fatal("Tesl expectation failed")
 		}
 		teslLeft2 := installationByStored(teslrt.Fingerprint(tokenAlphaWrite()))
 //line machine-login-tests.tesl:619
 		if teslLeft2 != "install-a" {
+//line machine-login-tests.tesl:619
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -938,6 +945,11 @@ func TestTesl1(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line machine-login-tests.tesl:623
 		_ = seedFixtures()
@@ -948,6 +960,7 @@ func TestTesl1(teslT *testing.T) {
 			case teslrt.MaybeNothing:
 //line machine-login-tests.tesl:625
 				if true {
+//line machine-login-tests.tesl:625
 					teslT.Fatal("Tesl expectation failed")
 				}
 			case teslrt.MaybeSomething:
@@ -956,6 +969,7 @@ func TestTesl1(teslT *testing.T) {
 				teslLeft3 := installationForVerifiedTag("install-a", tag)
 //line machine-login-tests.tesl:629
 				if teslLeft3 != "org-alpha" {
+//line machine-login-tests.tesl:629
 					teslT.Fatal("Tesl expectation failed")
 				}
 //line machine-login-tests.tesl:633
@@ -977,18 +991,26 @@ func TestTesl2(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft4 := teslrt.Fingerprint(tokenAlphaWrite())
 	teslRight4 := teslrt.Fingerprint(tokenAlphaWrite())
 //line machine-login-tests.tesl:637
 	if teslLeft4 != teslRight4 {
+//line machine-login-tests.tesl:637
 		teslT.Fatal("Tesl expectation failed")
 	}
 //line machine-login-tests.tesl:638
 	if teslrt.Fingerprint(tokenAlphaWrite()) == teslrt.Fingerprint(tokenBetaWrite()) {
+//line machine-login-tests.tesl:638
 		teslT.Fatal("Tesl expectation failed")
 	}
 //line machine-login-tests.tesl:641
 	if teslrt.Fingerprint(tokenAlphaWrite()) == teslrt.Fingerprint((tokenAlphaWrite() + "x")) {
+//line machine-login-tests.tesl:641
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -1001,16 +1023,24 @@ func TestTesl3(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line machine-login-tests.tesl:645
 	if !(teslrt.ListMemberBy(Scope{Tag: ScopeWriteWidgets}, scopesOf("read,write"), teslEqualScope)) {
+//line machine-login-tests.tesl:645
 		teslT.Fatal("Tesl expectation failed")
 	}
 //line machine-login-tests.tesl:646
 	if teslrt.ListMemberBy(Scope{Tag: ScopeWriteWidgets}, scopesOf("read"), teslEqualScope) {
+//line machine-login-tests.tesl:646
 		teslT.Fatal("Tesl expectation failed")
 	}
 //line machine-login-tests.tesl:647
 	if !(teslrt.ListMemberBy(Scope{Tag: ScopeReadWidgets}, scopesOf("read"), teslEqualScope)) {
+//line machine-login-tests.tesl:647
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -1023,6 +1053,11 @@ func TestTesl4(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line machine-login-tests.tesl:651
 		token := hmacTokenFor(machineKey(), "install-a")
@@ -1031,6 +1066,7 @@ func TestTesl4(teslT *testing.T) {
 		teslRight5 := teslrt.Maybe[string]{Tag: teslrt.MaybeSomething, SomethingValue: "install-a"}
 //line machine-login-tests.tesl:652
 		if teslLeft5.Tag != teslRight5.Tag || (teslLeft5.Tag == teslrt.MaybeSomething && (teslLeft5.SomethingValue != teslRight5.SomethingValue)) {
+//line machine-login-tests.tesl:652
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line machine-login-tests.tesl:653
@@ -1040,6 +1076,7 @@ func TestTesl4(teslT *testing.T) {
 			case teslrt.MaybeNothing:
 //line machine-login-tests.tesl:654
 				if true {
+//line machine-login-tests.tesl:654
 					teslT.Fatal("Tesl expectation failed")
 				}
 			case teslrt.MaybeSomething:
@@ -1048,6 +1085,7 @@ func TestTesl4(teslT *testing.T) {
 				teslLeft6 := teslrt.StringLength(tag)
 //line machine-login-tests.tesl:655
 				if !teslrt.Equal(teslLeft6, teslrt.FromInt64(64)) {
+//line machine-login-tests.tesl:655
 					teslT.Fatal("Tesl expectation failed")
 				}
 			default:
@@ -1058,12 +1096,14 @@ func TestTesl4(teslT *testing.T) {
 		teslRight7 := teslrt.Maybe[string]{Tag: teslrt.MaybeNothing}
 //line machine-login-tests.tesl:657
 		if teslLeft7.Tag != teslRight7.Tag || (teslLeft7.Tag == teslrt.MaybeSomething && (teslLeft7.SomethingValue != teslRight7.SomethingValue)) {
+//line machine-login-tests.tesl:657
 			teslT.Fatal("Tesl expectation failed")
 		}
 		teslLeft8 := tokenInstallPart("install-a.tag.extra")
 		teslRight8 := teslrt.Maybe[string]{Tag: teslrt.MaybeNothing}
 //line machine-login-tests.tesl:658
 		if teslLeft8.Tag != teslRight8.Tag || (teslLeft8.Tag == teslrt.MaybeSomething && (teslLeft8.SomethingValue != teslRight8.SomethingValue)) {
+//line machine-login-tests.tesl:658
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -1077,6 +1117,11 @@ func TestTesl5(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line machine-login-tests.tesl:662
 		good := hmacTokenFor(machineKey(), "install-a")
@@ -1087,6 +1132,7 @@ func TestTesl5(teslT *testing.T) {
 			_ = forged
 //line machine-login-tests.tesl:664
 			if good == forged {
+//line machine-login-tests.tesl:664
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -1104,6 +1150,11 @@ func TestTeslApi0(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line machine-login-tests.tesl:671
 //line machine-login-tests.tesl:673
 	_ = seedFixtures()
@@ -1113,14 +1164,17 @@ func TestTeslApi0(teslT *testing.T) {
 		_ = r
 //line machine-login-tests.tesl:677
 		if !(teslrt.StatusOk(r.Status)) {
+//line machine-login-tests.tesl:677
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line machine-login-tests.tesl:678
 		if !teslrt.JsonEqual(teslrt.JsonFieldOf(r.Body, "install"), "install-a") {
+//line machine-login-tests.tesl:678
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line machine-login-tests.tesl:679
 		if !teslrt.JsonEqual(teslrt.JsonFieldOf(r.Body, "orgId"), "org-alpha") {
+//line machine-login-tests.tesl:679
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -1137,6 +1191,11 @@ func TestTeslApi1(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line machine-login-tests.tesl:682
 //line machine-login-tests.tesl:684
 	_ = seedFixtures()
@@ -1146,10 +1205,12 @@ func TestTeslApi1(teslT *testing.T) {
 		_ = lower
 //line machine-login-tests.tesl:690
 		if !(teslrt.StatusOk(lower.Status)) {
+//line machine-login-tests.tesl:690
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line machine-login-tests.tesl:691
 		if !teslrt.JsonEqual(teslrt.JsonFieldOf(lower.Body, "install"), "install-a") {
+//line machine-login-tests.tesl:691
 			teslT.Fatal("Tesl expectation failed")
 		}
 		{
@@ -1158,10 +1219,12 @@ func TestTeslApi1(teslT *testing.T) {
 			_ = shouty
 //line machine-login-tests.tesl:693
 			if !(teslrt.StatusOk(shouty.Status)) {
+//line machine-login-tests.tesl:693
 				teslT.Fatal("Tesl expectation failed")
 			}
 //line machine-login-tests.tesl:694
 			if !teslrt.JsonEqual(teslrt.JsonFieldOf(shouty.Body, "install"), "install-a") {
+//line machine-login-tests.tesl:694
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -1179,6 +1242,11 @@ func TestTeslApi2(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line machine-login-tests.tesl:697
 //line machine-login-tests.tesl:699
 	_ = seedFixtures()
@@ -1188,6 +1256,7 @@ func TestTeslApi2(teslT *testing.T) {
 		_ = a
 //line machine-login-tests.tesl:705
 		if !teslrt.JsonEqual(teslrt.JsonFieldOf(a.Body, "install"), "install-a") {
+//line machine-login-tests.tesl:705
 			teslT.Fatal("Tesl expectation failed")
 		}
 		{
@@ -1196,10 +1265,12 @@ func TestTeslApi2(teslT *testing.T) {
 			_ = b
 //line machine-login-tests.tesl:707
 			if !teslrt.JsonEqual(teslrt.JsonFieldOf(b.Body, "install"), "install-b") {
+//line machine-login-tests.tesl:707
 				teslT.Fatal("Tesl expectation failed")
 			}
 //line machine-login-tests.tesl:708
 			if !teslrt.JsonEqual(teslrt.JsonFieldOf(b.Body, "orgId"), "org-beta") {
+//line machine-login-tests.tesl:708
 				teslT.Fatal("Tesl expectation failed")
 			}
 			{
@@ -1208,6 +1279,7 @@ func TestTeslApi2(teslT *testing.T) {
 				_ = a2
 //line machine-login-tests.tesl:711
 				if !teslrt.JsonEqual(teslrt.JsonFieldOf(a2.Body, "install"), "install-a") {
+//line machine-login-tests.tesl:711
 					teslT.Fatal("Tesl expectation failed")
 				}
 			}
@@ -1226,6 +1298,11 @@ func TestTeslApi3(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line machine-login-tests.tesl:718
 //line machine-login-tests.tesl:720
 	_ = seedFixtures()
@@ -1236,6 +1313,7 @@ func TestTeslApi3(teslT *testing.T) {
 		teslLeft9 := r.Status
 //line machine-login-tests.tesl:724
 		if !teslrt.Equal(teslLeft9, teslrt.FromInt64(401)) {
+//line machine-login-tests.tesl:724
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -1252,6 +1330,11 @@ func TestTeslApi4(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line machine-login-tests.tesl:727
 //line machine-login-tests.tesl:729
 	_ = seedFixtures()
@@ -1262,6 +1345,7 @@ func TestTeslApi4(teslT *testing.T) {
 		teslLeft10 := r.Status
 //line machine-login-tests.tesl:733
 		if !teslrt.Equal(teslLeft10, teslrt.FromInt64(401)) {
+//line machine-login-tests.tesl:733
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -1278,6 +1362,11 @@ func TestTeslApi5(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line machine-login-tests.tesl:736
 //line machine-login-tests.tesl:738
 	_ = seedFixtures()
@@ -1288,6 +1377,7 @@ func TestTeslApi5(teslT *testing.T) {
 		teslLeft11 := r.Status
 //line machine-login-tests.tesl:744
 		if !teslrt.Equal(teslLeft11, teslrt.FromInt64(401)) {
+//line machine-login-tests.tesl:744
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -1304,6 +1394,11 @@ func TestTeslApi6(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line machine-login-tests.tesl:747
 //line machine-login-tests.tesl:749
 	_ = seedFixtures()
@@ -1314,6 +1409,7 @@ func TestTeslApi6(teslT *testing.T) {
 		teslLeft12 := basic.Status
 //line machine-login-tests.tesl:753
 		if !teslrt.Equal(teslLeft12, teslrt.FromInt64(401)) {
+//line machine-login-tests.tesl:753
 			teslT.Fatal("Tesl expectation failed")
 		}
 		{
@@ -1323,6 +1419,7 @@ func TestTeslApi6(teslT *testing.T) {
 			teslLeft13 := token.Status
 //line machine-login-tests.tesl:755
 			if !teslrt.Equal(teslLeft13, teslrt.FromInt64(401)) {
+//line machine-login-tests.tesl:755
 				teslT.Fatal("Tesl expectation failed")
 			}
 			{
@@ -1332,6 +1429,7 @@ func TestTeslApi6(teslT *testing.T) {
 				teslLeft14 := glued.Status
 //line machine-login-tests.tesl:758
 				if !teslrt.Equal(teslLeft14, teslrt.FromInt64(401)) {
+//line machine-login-tests.tesl:758
 					teslT.Fatal("Tesl expectation failed")
 				}
 			}
@@ -1350,6 +1448,11 @@ func TestTeslApi7(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line machine-login-tests.tesl:761
 //line machine-login-tests.tesl:763
 	_ = seedFixtures()
@@ -1360,6 +1463,7 @@ func TestTeslApi7(teslT *testing.T) {
 		teslLeft15 := r.Status
 //line machine-login-tests.tesl:767
 		if !teslrt.Equal(teslLeft15, teslrt.FromInt64(401)) {
+//line machine-login-tests.tesl:767
 			teslT.Fatal("Tesl expectation failed")
 		}
 		{
@@ -1369,6 +1473,7 @@ func TestTeslApi7(teslT *testing.T) {
 			teslLeft16 := justScheme.Status
 //line machine-login-tests.tesl:769
 			if !teslrt.Equal(teslLeft16, teslrt.FromInt64(401)) {
+//line machine-login-tests.tesl:769
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -1386,6 +1491,11 @@ func TestTeslApi8(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line machine-login-tests.tesl:772
 //line machine-login-tests.tesl:774
 	_ = seedFixtures()
@@ -1396,6 +1506,7 @@ func TestTeslApi8(teslT *testing.T) {
 		teslLeft17 := r.Status
 //line machine-login-tests.tesl:778
 		if !teslrt.Equal(teslLeft17, teslrt.FromInt64(401)) {
+//line machine-login-tests.tesl:778
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -1412,6 +1523,11 @@ func TestTeslApi9(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line machine-login-tests.tesl:781
 //line machine-login-tests.tesl:783
 	_ = seedFixtures()
@@ -1422,6 +1538,7 @@ func TestTeslApi9(teslT *testing.T) {
 		teslLeft18 := r.Status
 //line machine-login-tests.tesl:789
 		if !teslrt.Equal(teslLeft18, teslrt.FromInt64(401)) {
+//line machine-login-tests.tesl:789
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -1438,6 +1555,11 @@ func TestTeslApi10(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line machine-login-tests.tesl:792
 //line machine-login-tests.tesl:794
 	_ = seedFixtures()
@@ -1448,6 +1570,7 @@ func TestTeslApi10(teslT *testing.T) {
 		teslLeft19 := r.Status
 //line machine-login-tests.tesl:798
 		if !teslrt.Equal(teslLeft19, teslrt.FromInt64(401)) {
+//line machine-login-tests.tesl:798
 			teslT.Fatal("Tesl expectation failed")
 		}
 		{
@@ -1457,6 +1580,7 @@ func TestTeslApi10(teslT *testing.T) {
 			teslLeft20 := oneChar.Status
 //line machine-login-tests.tesl:800
 			if !teslrt.Equal(teslLeft20, teslrt.FromInt64(401)) {
+//line machine-login-tests.tesl:800
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -1474,6 +1598,11 @@ func TestTeslApi11(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line machine-login-tests.tesl:803
 //line machine-login-tests.tesl:805
 	_ = seedFixtures()
@@ -1484,6 +1613,7 @@ func TestTeslApi11(teslT *testing.T) {
 		teslLeft21 := space.Status
 //line machine-login-tests.tesl:811
 		if !teslrt.Equal(teslLeft21, teslrt.FromInt64(401)) {
+//line machine-login-tests.tesl:811
 			teslT.Fatal("Tesl expectation failed")
 		}
 		{
@@ -1493,6 +1623,7 @@ func TestTeslApi11(teslT *testing.T) {
 			teslLeft22 := extra.Status
 //line machine-login-tests.tesl:813
 			if !teslrt.Equal(teslLeft22, teslrt.FromInt64(401)) {
+//line machine-login-tests.tesl:813
 				teslT.Fatal("Tesl expectation failed")
 			}
 			{
@@ -1502,6 +1633,7 @@ func TestTeslApi11(teslT *testing.T) {
 				teslLeft23 := doubleSpace.Status
 //line machine-login-tests.tesl:815
 				if !teslrt.Equal(teslLeft23, teslrt.FromInt64(401)) {
+//line machine-login-tests.tesl:815
 					teslT.Fatal("Tesl expectation failed")
 				}
 			}
@@ -1520,6 +1652,11 @@ func TestTeslApi12(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line machine-login-tests.tesl:818
 //line machine-login-tests.tesl:820
 	_ = seedFixtures()
@@ -1530,6 +1667,7 @@ func TestTeslApi12(teslT *testing.T) {
 		teslLeft24 := r.Status
 //line machine-login-tests.tesl:827
 		if !teslrt.Equal(teslLeft24, teslrt.FromInt64(401)) {
+//line machine-login-tests.tesl:827
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -1546,6 +1684,11 @@ func TestTeslApi13(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line machine-login-tests.tesl:830
 //line machine-login-tests.tesl:832
 	_ = seedFixtures()
@@ -1555,6 +1698,7 @@ func TestTeslApi13(teslT *testing.T) {
 		_ = before
 //line machine-login-tests.tesl:837
 		if !(teslrt.StatusOk(before.Status)) {
+//line machine-login-tests.tesl:837
 			teslT.Fatal("Tesl expectation failed")
 		}
 		{
@@ -1567,6 +1711,7 @@ func TestTeslApi13(teslT *testing.T) {
 				teslLeft25 := after.Status
 //line machine-login-tests.tesl:844
 				if !teslrt.Equal(teslLeft25, teslrt.FromInt64(401)) {
+//line machine-login-tests.tesl:844
 					teslT.Fatal("Tesl expectation failed")
 				}
 			}
@@ -1585,6 +1730,11 @@ func TestTeslApi14(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line machine-login-tests.tesl:847
 //line machine-login-tests.tesl:849
 	_ = seedFixtures()
@@ -1595,6 +1745,7 @@ func TestTeslApi14(teslT *testing.T) {
 		teslLeft26 := bad.Status
 //line machine-login-tests.tesl:853
 		if !teslrt.Equal(teslLeft26, teslrt.FromInt64(401)) {
+//line machine-login-tests.tesl:853
 			teslT.Fatal("Tesl expectation failed")
 		}
 		{
@@ -1603,10 +1754,12 @@ func TestTeslApi14(teslT *testing.T) {
 			_ = good
 //line machine-login-tests.tesl:855
 			if !(teslrt.StatusOk(good.Status)) {
+//line machine-login-tests.tesl:855
 				teslT.Fatal("Tesl expectation failed")
 			}
 //line machine-login-tests.tesl:856
 			if !teslrt.JsonEqual(teslrt.JsonFieldOf(good.Body, "install"), "install-a") {
+//line machine-login-tests.tesl:856
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -1624,6 +1777,11 @@ func TestTeslApi15(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line machine-login-tests.tesl:863
 //line machine-login-tests.tesl:865
 	_ = seedFixtures()
@@ -1633,18 +1791,22 @@ func TestTeslApi15(teslT *testing.T) {
 		_ = alpha
 //line machine-login-tests.tesl:869
 		if !(teslrt.StatusOk(alpha.Status)) {
+//line machine-login-tests.tesl:869
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line machine-login-tests.tesl:870
 		if !teslrt.JsonEqual(teslrt.JsonFieldOf(alpha.Body, "orgId"), "org-alpha") {
+//line machine-login-tests.tesl:870
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line machine-login-tests.tesl:871
 		if !teslrt.JsonEqual(teslrt.JsonFieldOf(alpha.Body, "count"), "2") {
+//line machine-login-tests.tesl:871
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line machine-login-tests.tesl:872
 		if !teslrt.JsonEqual(teslrt.JsonFieldOf(alpha.Body, "names"), "alpha-one,alpha-two") {
+//line machine-login-tests.tesl:872
 			teslT.Fatal("Tesl expectation failed")
 		}
 		{
@@ -1653,18 +1815,22 @@ func TestTeslApi15(teslT *testing.T) {
 			_ = beta
 //line machine-login-tests.tesl:875
 			if !(teslrt.StatusOk(beta.Status)) {
+//line machine-login-tests.tesl:875
 				teslT.Fatal("Tesl expectation failed")
 			}
 //line machine-login-tests.tesl:876
 			if !teslrt.JsonEqual(teslrt.JsonFieldOf(beta.Body, "orgId"), "org-beta") {
+//line machine-login-tests.tesl:876
 				teslT.Fatal("Tesl expectation failed")
 			}
 //line machine-login-tests.tesl:877
 			if !teslrt.JsonEqual(teslrt.JsonFieldOf(beta.Body, "count"), "1") {
+//line machine-login-tests.tesl:877
 				teslT.Fatal("Tesl expectation failed")
 			}
 //line machine-login-tests.tesl:878
 			if !teslrt.JsonEqual(teslrt.JsonFieldOf(beta.Body, "names"), "beta-one") {
+//line machine-login-tests.tesl:878
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -1682,6 +1848,11 @@ func TestTeslApi16(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line machine-login-tests.tesl:881
 //line machine-login-tests.tesl:883
 	_ = seedFixtures()
@@ -1691,14 +1862,17 @@ func TestTeslApi16(teslT *testing.T) {
 		_ = r
 //line machine-login-tests.tesl:889
 		if !(teslrt.StatusOk(r.Status)) {
+//line machine-login-tests.tesl:889
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line machine-login-tests.tesl:890
 		if !teslrt.JsonEqual(teslrt.JsonFieldOf(r.Body, "orgId"), "org-alpha") {
+//line machine-login-tests.tesl:890
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line machine-login-tests.tesl:891
 		if !teslrt.JsonEqual(teslrt.JsonFieldOf(r.Body, "count"), "2") {
+//line machine-login-tests.tesl:891
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -1715,6 +1889,11 @@ func TestTeslApi17(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line machine-login-tests.tesl:894
 //line machine-login-tests.tesl:896
 	_ = seedFixtures()
@@ -1724,10 +1903,12 @@ func TestTeslApi17(teslT *testing.T) {
 		_ = created
 //line machine-login-tests.tesl:900
 		if !(teslrt.StatusOk(created.Status)) {
+//line machine-login-tests.tesl:900
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line machine-login-tests.tesl:901
 		if !teslrt.JsonEqual(teslrt.JsonFieldOf(created.Body, "orgId"), "org-alpha") {
+//line machine-login-tests.tesl:901
 			teslT.Fatal("Tesl expectation failed")
 		}
 		{
@@ -1736,10 +1917,12 @@ func TestTeslApi17(teslT *testing.T) {
 			_ = alpha
 //line machine-login-tests.tesl:905
 			if !teslrt.JsonEqual(teslrt.JsonFieldOf(alpha.Body, "count"), "3") {
+//line machine-login-tests.tesl:905
 				teslT.Fatal("Tesl expectation failed")
 			}
 //line machine-login-tests.tesl:906
 			if !(teslrt.StringContains(teslrt.JsonAsString(teslrt.JsonFieldOf(alpha.Body, "names")), "alpha-three")) {
+//line machine-login-tests.tesl:906
 				teslT.Fatal("Tesl expectation failed")
 			}
 			{
@@ -1748,10 +1931,12 @@ func TestTeslApi17(teslT *testing.T) {
 				_ = beta
 //line machine-login-tests.tesl:910
 				if !teslrt.JsonEqual(teslrt.JsonFieldOf(beta.Body, "count"), "1") {
+//line machine-login-tests.tesl:910
 					teslT.Fatal("Tesl expectation failed")
 				}
 //line machine-login-tests.tesl:911
 				if teslrt.StringContains(teslrt.JsonAsString(teslrt.JsonFieldOf(beta.Body, "names")), "alpha-three") {
+//line machine-login-tests.tesl:911
 					teslT.Fatal("Tesl expectation failed")
 				}
 			}
@@ -1770,6 +1955,11 @@ func TestTeslApi18(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line machine-login-tests.tesl:918
 //line machine-login-tests.tesl:920
 	_ = seedFixtures()
@@ -1779,14 +1969,17 @@ func TestTeslApi18(teslT *testing.T) {
 		_ = r
 //line machine-login-tests.tesl:924
 		if !(teslrt.StatusOk(r.Status)) {
+//line machine-login-tests.tesl:924
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line machine-login-tests.tesl:925
 		if !teslrt.JsonEqual(teslrt.JsonFieldOf(r.Body, "orgId"), "org-alpha") {
+//line machine-login-tests.tesl:925
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line machine-login-tests.tesl:926
 		if !teslrt.JsonEqual(teslrt.JsonFieldOf(r.Body, "count"), "2") {
+//line machine-login-tests.tesl:926
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -1803,6 +1996,11 @@ func TestTeslApi19(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line machine-login-tests.tesl:929
 //line machine-login-tests.tesl:931
 	_ = seedFixtures()
@@ -1813,6 +2011,7 @@ func TestTeslApi19(teslT *testing.T) {
 		teslLeft27 := r.Status
 //line machine-login-tests.tesl:937
 		if !teslrt.Equal(teslLeft27, teslrt.FromInt64(403)) {
+//line machine-login-tests.tesl:937
 			teslT.Fatal("Tesl expectation failed")
 		}
 		{
@@ -1821,10 +2020,12 @@ func TestTeslApi19(teslT *testing.T) {
 			_ = after
 //line machine-login-tests.tesl:942
 			if !teslrt.JsonEqual(teslrt.JsonFieldOf(after.Body, "count"), "2") {
+//line machine-login-tests.tesl:942
 				teslT.Fatal("Tesl expectation failed")
 			}
 //line machine-login-tests.tesl:943
 			if teslrt.StringContains(teslrt.JsonAsString(teslrt.JsonFieldOf(after.Body, "names")), "should-not-exist") {
+//line machine-login-tests.tesl:943
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -1842,6 +2043,11 @@ func TestTeslApi20(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line machine-login-tests.tesl:946
 //line machine-login-tests.tesl:948
 	_ = seedFixtures()
@@ -1851,10 +2057,12 @@ func TestTeslApi20(teslT *testing.T) {
 		_ = r
 //line machine-login-tests.tesl:954
 		if !(teslrt.StatusOk(r.Status)) {
+//line machine-login-tests.tesl:954
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line machine-login-tests.tesl:955
 		if !teslrt.JsonEqual(teslrt.JsonFieldOf(r.Body, "orgId"), "org-alpha") {
+//line machine-login-tests.tesl:955
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -1871,6 +2079,11 @@ func TestTeslApi21(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line machine-login-tests.tesl:958
 //line machine-login-tests.tesl:960
 	_ = seedFixtures()
@@ -1881,6 +2094,7 @@ func TestTeslApi21(teslT *testing.T) {
 		teslLeft28 := r.Status
 //line machine-login-tests.tesl:966
 		if !teslrt.Equal(teslLeft28, teslrt.FromInt64(401)) {
+//line machine-login-tests.tesl:966
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -1897,6 +2111,11 @@ func TestTeslApi22(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line machine-login-tests.tesl:973
 //line machine-login-tests.tesl:975
 	_ = seedFixtures()
@@ -1910,14 +2129,17 @@ func TestTeslApi22(teslT *testing.T) {
 			_ = r
 //line machine-login-tests.tesl:980
 			if !(teslrt.StatusOk(r.Status)) {
+//line machine-login-tests.tesl:980
 				teslT.Fatal("Tesl expectation failed")
 			}
 //line machine-login-tests.tesl:981
 			if !teslrt.JsonEqual(teslrt.JsonFieldOf(r.Body, "install"), "install-a") {
+//line machine-login-tests.tesl:981
 				teslT.Fatal("Tesl expectation failed")
 			}
 //line machine-login-tests.tesl:982
 			if !teslrt.JsonEqual(teslrt.JsonFieldOf(r.Body, "orgId"), "org-alpha") {
+//line machine-login-tests.tesl:982
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -1935,6 +2157,11 @@ func TestTeslApi23(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line machine-login-tests.tesl:985
 //line machine-login-tests.tesl:987
 	_ = seedFixtures()
@@ -1948,14 +2175,17 @@ func TestTeslApi23(teslT *testing.T) {
 			_ = r
 //line machine-login-tests.tesl:992
 			if !(teslrt.StatusOk(r.Status)) {
+//line machine-login-tests.tesl:992
 				teslT.Fatal("Tesl expectation failed")
 			}
 //line machine-login-tests.tesl:993
 			if !teslrt.JsonEqual(teslrt.JsonFieldOf(r.Body, "install"), "install-b") {
+//line machine-login-tests.tesl:993
 				teslT.Fatal("Tesl expectation failed")
 			}
 //line machine-login-tests.tesl:994
 			if !teslrt.JsonEqual(teslrt.JsonFieldOf(r.Body, "orgId"), "org-beta") {
+//line machine-login-tests.tesl:994
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -1973,6 +2203,11 @@ func TestTeslApi24(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line machine-login-tests.tesl:997
 //line machine-login-tests.tesl:999
 	_ = seedFixtures()
@@ -1987,6 +2222,7 @@ func TestTeslApi24(teslT *testing.T) {
 			case teslrt.MaybeNothing:
 //line machine-login-tests.tesl:1009
 				if true {
+//line machine-login-tests.tesl:1009
 					teslT.Fatal("Tesl expectation failed")
 				}
 			case teslrt.MaybeSomething:
@@ -2003,6 +2239,7 @@ func TestTeslApi24(teslT *testing.T) {
 						teslLeft29 := r.Status
 //line machine-login-tests.tesl:1013
 						if !teslrt.Equal(teslLeft29, teslrt.FromInt64(401)) {
+//line machine-login-tests.tesl:1013
 							teslT.Fatal("Tesl expectation failed")
 						}
 					}
@@ -2025,6 +2262,11 @@ func TestTeslApi25(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line machine-login-tests.tesl:1016
 //line machine-login-tests.tesl:1018
 	_ = seedFixtures()
@@ -2039,6 +2281,7 @@ func TestTeslApi25(teslT *testing.T) {
 			teslLeft30 := r.Status
 //line machine-login-tests.tesl:1023
 			if !teslrt.Equal(teslLeft30, teslrt.FromInt64(401)) {
+//line machine-login-tests.tesl:1023
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -2056,6 +2299,11 @@ func TestTeslApi26(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line machine-login-tests.tesl:1026
 //line machine-login-tests.tesl:1028
 	_ = seedFixtures()
@@ -2070,6 +2318,7 @@ func TestTeslApi26(teslT *testing.T) {
 			case teslrt.MaybeNothing:
 //line machine-login-tests.tesl:1033
 				if true {
+//line machine-login-tests.tesl:1033
 					teslT.Fatal("Tesl expectation failed")
 				}
 			case teslrt.MaybeSomething:
@@ -2086,6 +2335,7 @@ func TestTeslApi26(teslT *testing.T) {
 						teslLeft31 := r.Status
 //line machine-login-tests.tesl:1038
 						if !teslrt.Equal(teslLeft31, teslrt.FromInt64(401)) {
+//line machine-login-tests.tesl:1038
 							teslT.Fatal("Tesl expectation failed")
 						}
 					}
@@ -2108,6 +2358,11 @@ func TestTeslApi27(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line machine-login-tests.tesl:1041
 //line machine-login-tests.tesl:1043
 	_ = seedFixtures()
@@ -2118,6 +2373,7 @@ func TestTeslApi27(teslT *testing.T) {
 		teslLeft32 := r.Status
 //line machine-login-tests.tesl:1049
 		if !teslrt.Equal(teslLeft32, teslrt.FromInt64(401)) {
+//line machine-login-tests.tesl:1049
 			teslT.Fatal("Tesl expectation failed")
 		}
 		{
@@ -2127,6 +2383,7 @@ func TestTeslApi27(teslT *testing.T) {
 			teslLeft33 := empty.Status
 //line machine-login-tests.tesl:1051
 			if !teslrt.Equal(teslLeft33, teslrt.FromInt64(401)) {
+//line machine-login-tests.tesl:1051
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -2144,6 +2401,11 @@ func TestTeslApi28(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line machine-login-tests.tesl:1054
 //line machine-login-tests.tesl:1056
 	_ = seedFixtures()
@@ -2154,6 +2416,7 @@ func TestTeslApi28(teslT *testing.T) {
 		teslLeft34 := noDot.Status
 //line machine-login-tests.tesl:1060
 		if !teslrt.Equal(teslLeft34, teslrt.FromInt64(401)) {
+//line machine-login-tests.tesl:1060
 			teslT.Fatal("Tesl expectation failed")
 		}
 		{
@@ -2163,6 +2426,7 @@ func TestTeslApi28(teslT *testing.T) {
 			teslLeft35 := twoDots.Status
 //line machine-login-tests.tesl:1062
 			if !teslrt.Equal(teslLeft35, teslrt.FromInt64(401)) {
+//line machine-login-tests.tesl:1062
 				teslT.Fatal("Tesl expectation failed")
 			}
 			{
@@ -2172,6 +2436,7 @@ func TestTeslApi28(teslT *testing.T) {
 				teslLeft36 := onlyDot.Status
 //line machine-login-tests.tesl:1064
 				if !teslrt.Equal(teslLeft36, teslrt.FromInt64(401)) {
+//line machine-login-tests.tesl:1064
 					teslT.Fatal("Tesl expectation failed")
 				}
 			}
@@ -2190,6 +2455,11 @@ func TestTeslApi29(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line machine-login-tests.tesl:1067
 //line machine-login-tests.tesl:1069
 	_ = seedFixtures()
@@ -2204,6 +2474,7 @@ func TestTeslApi29(teslT *testing.T) {
 			teslLeft37 := r.Status
 //line machine-login-tests.tesl:1076
 			if !teslrt.Equal(teslLeft37, teslrt.FromInt64(401)) {
+//line machine-login-tests.tesl:1076
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -2221,6 +2492,11 @@ func TestTeslApi30(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line machine-login-tests.tesl:1079
 //line machine-login-tests.tesl:1081
 	_ = seedFixtures()
@@ -2235,6 +2511,7 @@ func TestTeslApi30(teslT *testing.T) {
 			teslLeft38 := r.Status
 //line machine-login-tests.tesl:1086
 			if !teslrt.Equal(teslLeft38, teslrt.FromInt64(401)) {
+//line machine-login-tests.tesl:1086
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -2252,6 +2529,11 @@ func TestTeslApi31(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line machine-login-tests.tesl:1089
 //line machine-login-tests.tesl:1091
 	_ = seedFixtures()
@@ -2262,6 +2544,7 @@ func TestTeslApi31(teslT *testing.T) {
 		teslLeft39 := storedOnHmac.Status
 //line machine-login-tests.tesl:1097
 		if !teslrt.Equal(teslLeft39, teslrt.FromInt64(401)) {
+//line machine-login-tests.tesl:1097
 			teslT.Fatal("Tesl expectation failed")
 		}
 		{
@@ -2271,6 +2554,7 @@ func TestTeslApi31(teslT *testing.T) {
 			teslLeft40 := hmacOnStored.Status
 //line machine-login-tests.tesl:1099
 			if !teslrt.Equal(teslLeft40, teslrt.FromInt64(401)) {
+//line machine-login-tests.tesl:1099
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -2288,6 +2572,11 @@ func TestTeslApi32(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line machine-login-tests.tesl:1106
 //line machine-login-tests.tesl:1108
 	_ = seedFixtures()
@@ -2297,6 +2586,7 @@ func TestTeslApi32(teslT *testing.T) {
 		_ = loginResp
 //line machine-login-tests.tesl:1112
 		if !(teslrt.StatusOk(loginResp.Status)) {
+//line machine-login-tests.tesl:1112
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line machine-login-tests.tesl:1113
@@ -2306,6 +2596,7 @@ func TestTeslApi32(teslT *testing.T) {
 			case teslrt.MaybeNothing:
 //line machine-login-tests.tesl:1114
 				if true {
+//line machine-login-tests.tesl:1114
 					teslT.Fatal("Tesl expectation failed")
 				}
 			case teslrt.MaybeSomething:
@@ -2318,6 +2609,7 @@ func TestTeslApi32(teslT *testing.T) {
 					teslLeft41 := r.Status
 //line machine-login-tests.tesl:1119
 					if !teslrt.Equal(teslLeft41, teslrt.FromInt64(401)) {
+//line machine-login-tests.tesl:1119
 						teslT.Fatal("Tesl expectation failed")
 					}
 				}
@@ -2339,6 +2631,11 @@ func TestTeslApi33(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line machine-login-tests.tesl:1122
 //line machine-login-tests.tesl:1124
 	_ = seedFixtures()
@@ -2349,6 +2646,7 @@ func TestTeslApi33(teslT *testing.T) {
 		teslLeft42 := r.Status
 //line machine-login-tests.tesl:1128
 		if !teslrt.Equal(teslLeft42, teslrt.FromInt64(401)) {
+//line machine-login-tests.tesl:1128
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -2365,6 +2663,11 @@ func TestTeslApi34(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line machine-login-tests.tesl:1131
 //line machine-login-tests.tesl:1133
 	_ = seedFixtures()
@@ -2379,6 +2682,7 @@ func TestTeslApi34(teslT *testing.T) {
 			case teslrt.MaybeNothing:
 //line machine-login-tests.tesl:1138
 				if true {
+//line machine-login-tests.tesl:1138
 					teslT.Fatal("Tesl expectation failed")
 				}
 			case teslrt.MaybeSomething:
@@ -2391,6 +2695,7 @@ func TestTeslApi34(teslT *testing.T) {
 					teslLeft43 := r.Status
 //line machine-login-tests.tesl:1143
 					if !teslrt.Equal(teslLeft43, teslrt.FromInt64(401)) {
+//line machine-login-tests.tesl:1143
 						teslT.Fatal("Tesl expectation failed")
 					}
 				}
@@ -2412,6 +2717,11 @@ func TestTeslApi35(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line machine-login-tests.tesl:1146
 //line machine-login-tests.tesl:1148
 	_ = seedFixtures()
@@ -2421,10 +2731,12 @@ func TestTeslApi35(teslT *testing.T) {
 		_ = r
 //line machine-login-tests.tesl:1152
 		if !(teslrt.StatusOk(r.Status)) {
+//line machine-login-tests.tesl:1152
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line machine-login-tests.tesl:1153
 		if !teslrt.JsonEqual(teslrt.JsonFieldOf(r.Body, "install"), "install-a") {
+//line machine-login-tests.tesl:1153
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -2441,6 +2753,11 @@ func TestTeslApi36(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line machine-login-tests.tesl:1156
 //line machine-login-tests.tesl:1158
 	_ = seedFixtures()
@@ -2450,6 +2767,7 @@ func TestTeslApi36(teslT *testing.T) {
 		_ = accepted
 //line machine-login-tests.tesl:1165
 		if !(teslrt.StatusOk(accepted.Status)) {
+//line machine-login-tests.tesl:1165
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line machine-login-tests.tesl:1166
@@ -2461,11 +2779,13 @@ func TestTeslApi36(teslT *testing.T) {
 				_ = pair
 //line machine-login-tests.tesl:1167
 				if true {
+//line machine-login-tests.tesl:1167
 					teslT.Fatal("Tesl expectation failed")
 				}
 			case teslrt.MaybeNothing:
 //line machine-login-tests.tesl:1168
 				if false {
+//line machine-login-tests.tesl:1168
 					teslT.Fatal("Tesl expectation failed")
 				}
 			default:
@@ -2479,6 +2799,7 @@ func TestTeslApi36(teslT *testing.T) {
 			teslLeft44 := refused.Status
 //line machine-login-tests.tesl:1171
 			if !teslrt.Equal(teslLeft44, teslrt.FromInt64(401)) {
+//line machine-login-tests.tesl:1171
 				teslT.Fatal("Tesl expectation failed")
 			}
 //line machine-login-tests.tesl:1172
@@ -2490,11 +2811,13 @@ func TestTeslApi36(teslT *testing.T) {
 					_ = pair
 //line machine-login-tests.tesl:1173
 					if true {
+//line machine-login-tests.tesl:1173
 						teslT.Fatal("Tesl expectation failed")
 					}
 				case teslrt.MaybeNothing:
 //line machine-login-tests.tesl:1174
 					if false {
+//line machine-login-tests.tesl:1174
 						teslT.Fatal("Tesl expectation failed")
 					}
 				default:
@@ -2516,6 +2839,11 @@ func TestTeslApi37(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line machine-login-tests.tesl:1177
 //line machine-login-tests.tesl:1179
 	_ = seedFixtures()
@@ -2525,6 +2853,7 @@ func TestTeslApi37(teslT *testing.T) {
 		_ = loginResp
 //line machine-login-tests.tesl:1186
 		if !(teslrt.StatusOk(loginResp.Status)) {
+//line machine-login-tests.tesl:1186
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line machine-login-tests.tesl:1187
@@ -2534,6 +2863,7 @@ func TestTeslApi37(teslT *testing.T) {
 			case teslrt.MaybeNothing:
 //line machine-login-tests.tesl:1188
 				if true {
+//line machine-login-tests.tesl:1188
 					teslT.Fatal("Tesl expectation failed")
 				}
 			case teslrt.MaybeSomething:
@@ -2545,10 +2875,12 @@ func TestTeslApi37(teslT *testing.T) {
 					_ = me
 //line machine-login-tests.tesl:1191
 					if !(teslrt.StatusOk(me.Status)) {
+//line machine-login-tests.tesl:1191
 						teslT.Fatal("Tesl expectation failed")
 					}
 //line machine-login-tests.tesl:1192
 					if !teslrt.JsonEqual(teslrt.JsonFieldOf(me.Body, "user"), "alice") {
+//line machine-login-tests.tesl:1192
 						teslT.Fatal("Tesl expectation failed")
 					}
 				}

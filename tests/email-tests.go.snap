@@ -39,7 +39,7 @@ package teslmodemailtests
 import "tesl.generated/teslmodemailtests/internal/teslrt"
 
 //line email-tests.tesl:31
-var AppEmailOutbox = teslrt.NewOutbox(teslrt.SmtpSettings{
+var AppEmailOutbox = teslrt.NewOutboxOn(TestDBDatabase, teslrt.SmtpSettings{
 	Host:     teslrt.EnvString("SMTP_HOST", ""),
 	Port:     587,
 	Username: teslrt.EnvString("SMTP_USER", ""),
@@ -48,7 +48,7 @@ var AppEmailOutbox = teslrt.NewOutbox(teslrt.SmtpSettings{
 })
 
 //line email-tests.tesl:42
-var MarketingEmailOutbox = teslrt.NewOutbox(teslrt.SmtpSettings{
+var MarketingEmailOutbox = teslrt.NewOutboxOn(TestDBDatabase, teslrt.SmtpSettings{
 	Host:     teslrt.EnvString("MKT_SMTP_HOST", ""),
 	Port:     465,
 	Username: teslrt.EnvString("MKT_SMTP_USER", ""),
@@ -57,7 +57,7 @@ var MarketingEmailOutbox = teslrt.NewOutbox(teslrt.SmtpSettings{
 })
 
 //line email-tests.tesl:53
-var NoTlsEmailOutbox = teslrt.NewOutbox(teslrt.SmtpSettings{
+var NoTlsEmailOutbox = teslrt.NewOutboxOn(TestDBDatabase, teslrt.SmtpSettings{
 	Host:     teslrt.EnvString("SMTP_HOST", ""),
 	Port:     25,
 	Username: teslrt.EnvString("SMTP_USER", ""),
@@ -165,10 +165,16 @@ func TestTesl0(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft1 := true
 	teslRight1 := true
 //line email-tests.tesl:115
 	if teslLeft1 != teslRight1 {
+//line email-tests.tesl:115
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -181,10 +187,16 @@ func TestTesl1(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft2 := true
 	teslRight2 := true
 //line email-tests.tesl:119
 	if teslLeft2 != teslRight2 {
+//line email-tests.tesl:119
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -197,10 +209,16 @@ func TestTesl2(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft3 := true
 	teslRight3 := true
 //line email-tests.tesl:123
 	if teslLeft3 != teslRight3 {
+//line email-tests.tesl:123
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -213,10 +231,16 @@ func TestTesl3(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft4 := true
 	teslRight4 := true
 //line email-tests.tesl:127
 	if teslLeft4 != teslRight4 {
+//line email-tests.tesl:127
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -229,10 +253,16 @@ func TestTesl4(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft5 := true
 	teslRight5 := true
 //line email-tests.tesl:131
 	if teslLeft5 != teslRight5 {
+//line email-tests.tesl:131
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -245,10 +275,16 @@ func TestTesl5(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft6 := true
 	teslRight6 := true
 //line email-tests.tesl:135
 	if teslLeft6 != teslRight6 {
+//line email-tests.tesl:135
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -261,10 +297,16 @@ func TestTesl6(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft7 := true
 	teslRight7 := true
 //line email-tests.tesl:139
 	if teslLeft7 != teslRight7 {
+//line email-tests.tesl:139
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -277,10 +319,16 @@ func TestTesl7(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft8 := true
 	teslRight8 := true
 //line email-tests.tesl:143
 	if teslLeft8 != teslRight8 {
+//line email-tests.tesl:143
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -293,10 +341,16 @@ func TestTesl8(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft9 := true
 	teslRight9 := true
 //line email-tests.tesl:147
 	if teslLeft9 != teslRight9 {
+//line email-tests.tesl:147
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -309,10 +363,16 @@ func TestTesl9(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft10 := true
 	teslRight10 := true
 //line email-tests.tesl:151
 	if teslLeft10 != teslRight10 {
+//line email-tests.tesl:151
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -325,10 +385,16 @@ func TestTesl10(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft11 := true
 	teslRight11 := true
 //line email-tests.tesl:155
 	if teslLeft11 != teslRight11 {
+//line email-tests.tesl:155
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -341,10 +407,16 @@ func TestTesl11(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft12 := true
 	teslRight12 := true
 //line email-tests.tesl:159
 	if teslLeft12 != teslRight12 {
+//line email-tests.tesl:159
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -357,10 +429,16 @@ func TestTesl12(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft13 := true
 	teslRight13 := true
 //line email-tests.tesl:163
 	if teslLeft13 != teslRight13 {
+//line email-tests.tesl:163
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -373,10 +451,16 @@ func TestTesl13(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft14 := true
 	teslRight14 := true
 //line email-tests.tesl:167
 	if teslLeft14 != teslRight14 {
+//line email-tests.tesl:167
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -389,10 +473,16 @@ func TestTesl14(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft15 := true
 	teslRight15 := true
 //line email-tests.tesl:171
 	if teslLeft15 != teslRight15 {
+//line email-tests.tesl:171
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -405,10 +495,16 @@ func TestTesl15(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft16 := true
 	teslRight16 := true
 //line email-tests.tesl:175
 	if teslLeft16 != teslRight16 {
+//line email-tests.tesl:175
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -421,10 +517,16 @@ func TestTesl16(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft17 := true
 	teslRight17 := true
 //line email-tests.tesl:179
 	if teslLeft17 != teslRight17 {
+//line email-tests.tesl:179
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -437,10 +539,16 @@ func TestTesl17(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft18 := true
 	teslRight18 := true
 //line email-tests.tesl:183
 	if teslLeft18 != teslRight18 {
+//line email-tests.tesl:183
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -453,10 +561,16 @@ func TestTesl18(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft19 := true
 	teslRight19 := true
 //line email-tests.tesl:187
 	if teslLeft19 != teslRight19 {
+//line email-tests.tesl:187
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -469,10 +583,16 @@ func TestTesl19(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft20 := true
 	teslRight20 := true
 //line email-tests.tesl:191
 	if teslLeft20 != teslRight20 {
+//line email-tests.tesl:191
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -485,10 +605,16 @@ func TestTesl20(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft21 := true
 	teslRight21 := true
 //line email-tests.tesl:195
 	if teslLeft21 != teslRight21 {
+//line email-tests.tesl:195
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -501,10 +627,16 @@ func TestTesl21(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft22 := true
 	teslRight22 := true
 //line email-tests.tesl:199
 	if teslLeft22 != teslRight22 {
+//line email-tests.tesl:199
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -517,10 +649,16 @@ func TestTesl22(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft23 := true
 	teslRight23 := true
 //line email-tests.tesl:203
 	if teslLeft23 != teslRight23 {
+//line email-tests.tesl:203
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -533,10 +671,16 @@ func TestTesl23(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft24 := true
 	teslRight24 := true
 //line email-tests.tesl:207
 	if teslLeft24 != teslRight24 {
+//line email-tests.tesl:207
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -549,10 +693,16 @@ func TestTesl24(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft25 := true
 	teslRight25 := true
 //line email-tests.tesl:211
 	if teslLeft25 != teslRight25 {
+//line email-tests.tesl:211
 		teslT.Fatal("Tesl expectation failed")
 	}
 }

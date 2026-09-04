@@ -50,6 +50,7 @@ golang.org/x/text v0.41.0/go.mod h1:jvf1O8ajNzZqhSrQBPbutR/EB83Cc0CFrezNQIwbb5M=
 package teslmodchatbackend
 
 import (
+	"errors"
 	"github.com/jackc/pgx/v5"
 	"net/http"
 	"tesl.generated/teslmodchatbackend/internal/teslrt"
@@ -196,10 +197,10 @@ func teslEqualRoomEventNotifyFailed(teslLeft, teslRight RoomEvent) bool {
 }
 
 //line chat-backend.tesl:179
-var NotificationQueueQueue = teslrt.NewQueue("NotificationQueue", 3)
+var NotificationQueueQueue = teslrt.NewQueueOn(ChatDatabaseDatabase, "NotificationQueue", 3, "exponential", 5)
 
 //line chat-backend.tesl:191
-var RoomMessagesChannel = teslrt.NewSseChannel("RoomMessages")
+var RoomMessagesChannel = teslrt.NewSseChannelOn(ChatDatabaseDatabase, "RoomMessages")
 
 //line chat-backend.tesl:137
 var ChatUserTable = teslrt.NewTable[ChatUser]()
@@ -408,19 +409,24 @@ func postMessage(session SessionUser, roomId string, req PostMessageRequest) Mes
 		msgId := teslrt.GeneratePrefixedId("msg")
 		_ = msgId
 //line chat-backend.tesl:277
-		return func() Message {
-			var teslCommitted Message
-			teslrt.WithTransaction(func() {
-				teslCommitted = (func() Message {
+		var teslCommitted Message
+		teslrt.WithTransaction(func() {
+			teslCommitted = func() Message {
+				{
+//line chat-backend.tesl:278
 					_ = teslrt.Publish(RoomMessagesChannel, roomId, teslEncode4(RoomEvent{Tag: RoomEventNewMessage, NewMessage: &RoomEventNewMessagePayload{MsgId: msgId, UserId: session.Id, Username: session.Username, Content: req.Content, CreatedAt: teslrt.NowMillis()}}))
-					_ = teslrt.EnqueueJob(NotificationQueueQueue, NotifyJob{SenderName: session.Username, RoomName: roomId, Content: req.Content})
-					return teslrt.DbInsert(ChatDatabaseDatabase, MessageTable, "Message", Message{Id: msgId, RoomId: roomId, UserId: session.Id, Username: session.Username, Content: req.Content, CreatedAt: teslrt.NowMillis()}, func(teslRow, teslNew Message) bool { return (teslRow.Id == teslNew.Id) }, "insert into \"chat\".\"messages\" (\"id\", \"room_id\", \"user_id\", \"username\", \"content\", \"created_at\") values ($1, $2, $3, $4, $5, $6)", func(teslRow Message) []any {
-						return []any{teslRow.Id, teslRow.RoomId, teslRow.UserId, teslRow.Username, teslRow.Content, teslrt.PgBigint(teslRow.CreatedAt.Value)}
-					})
-				}())
-			})
-			return teslCommitted
-		}()
+					{
+//line chat-backend.tesl:279
+						_ = teslrt.EnqueueJob(NotificationQueueQueue, NotifyJob{SenderName: session.Username, RoomName: roomId, Content: req.Content})
+//line chat-backend.tesl:280
+						return teslrt.DbInsert(ChatDatabaseDatabase, MessageTable, "Message", Message{Id: msgId, RoomId: roomId, UserId: session.Id, Username: session.Username, Content: req.Content, CreatedAt: teslrt.NowMillis()}, func(teslRow, teslNew Message) bool { return (teslRow.Id == teslNew.Id) }, "insert into \"chat\".\"messages\" (\"id\", \"room_id\", \"user_id\", \"username\", \"content\", \"created_at\") values ($1, $2, $3, $4, $5, $6)", func(teslRow Message) []any {
+							return []any{teslRow.Id, teslRow.RoomId, teslRow.UserId, teslRow.Username, teslRow.Content, teslrt.PgBigint(teslRow.CreatedAt.Value)}
+						})
+					}
+				}
+			}()
+		})
+		return teslCommitted
 	}
 }
 
@@ -588,6 +594,45 @@ func DecodePostMessageRequestJSON(teslJSON any) teslrt.Check[PostMessageRequest]
 	return teslrt.Reject[PostMessageRequest](400, "no decode alternative matched")
 }
 
+// DecodeNotifyJobJSON is the DERIVED decoder for a record with no `codec` block: the type is the
+// whole contract, exactly as it is on the Legacy runtime's generic decode.
+func DecodeNotifyJobJSON(teslJSON any) teslrt.Check[NotifyJob] {
+	teslFields, teslShapeErr := teslrt.DecodeObjectShape(teslJSON, "NotifyJob", []string{"senderName", "roomName", "content"})
+	if teslShapeErr != nil {
+		return teslrt.RejectShape[NotifyJob](teslShapeErr.Error())
+	}
+	teslFieldSenderName, teslErrSenderName := teslrt.DecodeStringValue(teslFields["senderName"])
+	if teslErrSenderName != nil {
+		return teslrt.RejectShape[NotifyJob](teslErrSenderName.Error())
+	}
+	teslFieldRoomName, teslErrRoomName := teslrt.DecodeStringValue(teslFields["roomName"])
+	if teslErrRoomName != nil {
+		return teslrt.RejectShape[NotifyJob](teslErrRoomName.Error())
+	}
+	teslFieldContent, teslErrContent := teslrt.DecodeStringValue(teslFields["content"])
+	if teslErrContent != nil {
+		return teslrt.RejectShape[NotifyJob](teslErrContent.Error())
+	}
+	return teslrt.Accept(NotifyJob{SenderName: teslFieldSenderName, RoomName: teslFieldRoomName, Content: teslFieldContent})
+}
+
+var _ = teslrt.RegisterJobCodec(NotificationQueueQueue, "NotifyJob", func(teslJob any) any {
+	return teslEncode5(teslJob.(NotifyJob))
+}, func(teslJSON any) (any, error) {
+	teslDecoded, teslErr := func(teslRaw any) (NotifyJob, error) {
+		teslNested := DecodeNotifyJobJSON(teslRaw)
+		if !teslNested.OK() {
+			return NotifyJob{}, errors.New(teslNested.Message())
+		}
+		teslValue, _ := teslNested.Value()
+		return teslValue, nil
+	}(teslJSON)
+	if teslErr != nil {
+		return nil, teslErr
+	}
+	return teslDecoded, nil
+})
+
 var ChatServer = teslrt.Server{
 	Routes: []teslrt.Route{
 		{Method: "POST", Path: "/users", Endpoint: "seedUser"},
@@ -617,7 +662,7 @@ var ChatServer = teslrt.Server{
 				return teslrt.Fail(teslDecoded.Status(), teslDecoded.Message())
 			}
 			teslBody, _ := teslDecoded.Value()
-			return teslrt.Response{Status: 200, Body: teslEncode5(seedUser(teslBody))}
+			return teslrt.Response{Status: 200, Body: teslEncode6(seedUser(teslBody))}
 		},
 		"login": func(teslScope *teslrt.RequestScope, teslRequest *http.Request) teslrt.Response {
 			_ = teslScope
@@ -637,7 +682,7 @@ var ChatServer = teslrt.Server{
 				return teslrt.Fail(teslDecoded.Status(), teslDecoded.Message())
 			}
 			teslBody, _ := teslDecoded.Value()
-			return teslrt.Response{Status: 200, Body: teslEncode5(login(teslBody))}
+			return teslrt.Response{Status: 200, Body: teslEncode6(login(teslBody))}
 		},
 		"listRooms": func(teslScope *teslrt.RequestScope, teslRequest *http.Request) teslrt.Response {
 			_ = teslScope
@@ -651,7 +696,7 @@ var ChatServer = teslrt.Server{
 				return teslrt.Fail(teslAuth.Status(), teslAuth.Message())
 			}
 			session, _ := teslAuth.Value()
-			return teslrt.Response{Status: 200, Body: teslEncode7(listRooms(session))}
+			return teslrt.Response{Status: 200, Body: teslEncode8(listRooms(session))}
 		},
 		"createRoom": func(teslScope *teslrt.RequestScope, teslRequest *http.Request) teslrt.Response {
 			_ = teslScope
@@ -677,7 +722,7 @@ var ChatServer = teslrt.Server{
 				return teslrt.Fail(teslDecoded.Status(), teslDecoded.Message())
 			}
 			teslBody, _ := teslDecoded.Value()
-			return teslrt.Response{Status: 200, Body: teslEncode6(createRoom(session, teslBody))}
+			return teslrt.Response{Status: 200, Body: teslEncode7(createRoom(session, teslBody))}
 		},
 		"getMessages": func(teslScope *teslrt.RequestScope, teslRequest *http.Request) teslrt.Response {
 			_ = teslScope
@@ -700,7 +745,7 @@ var ChatServer = teslrt.Server{
 				return teslrt.Fail(teslCapturedRoomId.Status(), teslCapturedRoomId.Message())
 			}
 			roomId, _ = teslCapturedRoomId.Value()
-			return teslrt.Response{Status: 200, Body: teslEncode9(getMessages(session, roomId))}
+			return teslrt.Response{Status: 200, Body: teslEncode10(getMessages(session, roomId))}
 		},
 		"postMessage": func(teslScope *teslrt.RequestScope, teslRequest *http.Request) teslrt.Response {
 			_ = teslScope
@@ -735,7 +780,7 @@ var ChatServer = teslrt.Server{
 				return teslrt.Fail(teslDecoded.Status(), teslDecoded.Message())
 			}
 			teslBody, _ := teslDecoded.Value()
-			return teslrt.Response{Status: 200, Body: teslEncode8(postMessage(session, roomId, teslBody))}
+			return teslrt.Response{Status: 200, Body: teslEncode9(postMessage(session, roomId, teslBody))}
 		},
 	},
 	Streams: map[string]teslrt.StreamFunc{
@@ -762,6 +807,16 @@ var ChatServer = teslrt.Server{
 
 func teslEncode1(teslValue string) any {
 	return teslValue
+}
+
+func teslEncode10(teslValue []Message) any {
+	return func() any {
+		teslOut := make([]any, len(teslValue))
+		for teslAt, teslItem := range teslValue {
+			teslOut[teslAt] = teslEncode9(teslItem)
+		}
+		return teslOut
+	}()
 }
 
 func teslEncode2(teslValue teslrt.Int) any {
@@ -798,14 +853,22 @@ func teslEncode4(teslValue RoomEvent) any {
 	}()
 }
 
-func teslEncode5(teslValue ChatUser) any {
+func teslEncode5(teslValue NotifyJob) any {
+	return map[string]any{
+		"senderName": teslEncode1(teslValue.SenderName),
+		"roomName":   teslEncode1(teslValue.RoomName),
+		"content":    teslEncode1(teslValue.Content),
+	}
+}
+
+func teslEncode6(teslValue ChatUser) any {
 	return map[string]any{
 		"id":       teslEncode1(teslValue.Id),
 		"username": teslEncode1(teslValue.Username),
 	}
 }
 
-func teslEncode6(teslValue Room) any {
+func teslEncode7(teslValue Room) any {
 	return map[string]any{
 		"id":        teslEncode1(teslValue.Id),
 		"name":      teslEncode1(teslValue.Name),
@@ -813,17 +876,17 @@ func teslEncode6(teslValue Room) any {
 	}
 }
 
-func teslEncode7(teslValue []Room) any {
+func teslEncode8(teslValue []Room) any {
 	return func() any {
 		teslOut := make([]any, len(teslValue))
 		for teslAt, teslItem := range teslValue {
-			teslOut[teslAt] = teslEncode6(teslItem)
+			teslOut[teslAt] = teslEncode7(teslItem)
 		}
 		return teslOut
 	}()
 }
 
-func teslEncode8(teslValue Message) any {
+func teslEncode9(teslValue Message) any {
 	return map[string]any{
 		"id":        teslEncode1(teslValue.Id),
 		"roomId":    teslEncode1(teslValue.RoomId),
@@ -832,16 +895,6 @@ func teslEncode8(teslValue Message) any {
 		"content":   teslEncode1(teslValue.Content),
 		"createdAt": teslEncode3(teslValue.CreatedAt),
 	}
-}
-
-func teslEncode9(teslValue []Message) any {
-	return func() any {
-		teslOut := make([]any, len(teslValue))
-		for teslAt, teslItem := range teslValue {
-			teslOut[teslAt] = teslEncode8(teslItem)
-		}
-		return teslOut
-	}()
 }
 
 func teslKeyLessString(teslX, teslY string) bool {
@@ -938,12 +991,18 @@ func TestTeslApi0(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line chat-backend.tesl:389
 		rooms := teslrt.ApiRequest(ChatServer, "GET", "/rooms", "", nil, nil)
 		_ = rooms
 //line chat-backend.tesl:390
 		if !(teslrt.StatusClientError(rooms.Status)) {
+//line chat-backend.tesl:390
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -960,20 +1019,28 @@ func TestTeslApi1(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line chat-backend.tesl:394
 		createdUser := teslrt.ApiRequest(ChatServer, "POST", "/users", "{\"username\":\"alice\"}", nil, nil)
 		_ = createdUser
 //line chat-backend.tesl:395
 		if !(teslrt.StatusOk(createdUser.Status)) {
+//line chat-backend.tesl:395
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line chat-backend.tesl:396
 		if !(teslrt.JsonHasField("id", createdUser.Body)) {
+//line chat-backend.tesl:396
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line chat-backend.tesl:397
 		if !teslrt.JsonEqual(teslrt.JsonFieldOf(createdUser.Body, "username"), "alice") {
+//line chat-backend.tesl:397
 			teslT.Fatal("Tesl expectation failed")
 		}
 		{
@@ -986,10 +1053,12 @@ func TestTeslApi1(teslT *testing.T) {
 				_ = createdRoom
 //line chat-backend.tesl:404
 				if !(teslrt.StatusOk(createdRoom.Status)) {
+//line chat-backend.tesl:404
 					teslT.Fatal("Tesl expectation failed")
 				}
 //line chat-backend.tesl:405
 				if !teslrt.JsonEqual(teslrt.JsonFieldOf(createdRoom.Body, "name"), "General") {
+//line chat-backend.tesl:405
 					teslT.Fatal("Tesl expectation failed")
 				}
 				{
@@ -1010,6 +1079,7 @@ func TestTeslApi1(teslT *testing.T) {
 								_ = posted
 //line chat-backend.tesl:414
 								if !(teslrt.StatusOk(posted.Status)) {
+//line chat-backend.tesl:414
 									teslT.Fatal("Tesl expectation failed")
 								}
 								{
@@ -1019,18 +1089,22 @@ func TestTeslApi1(teslT *testing.T) {
 									teslLeft1 := teslrt.JsonAsString(postedRoomId)
 //line chat-backend.tesl:416
 									if teslLeft1 != roomId {
+//line chat-backend.tesl:416
 										teslT.Fatal("Tesl expectation failed")
 									}
 //line chat-backend.tesl:417
 									if !teslrt.JsonEqual(teslrt.JsonFieldOf(posted.Body, "userId"), userId) {
+//line chat-backend.tesl:417
 										teslT.Fatal("Tesl expectation failed")
 									}
 //line chat-backend.tesl:418
 									if !teslrt.JsonEqual(teslrt.JsonFieldOf(posted.Body, "username"), "alice") {
+//line chat-backend.tesl:418
 										teslT.Fatal("Tesl expectation failed")
 									}
 //line chat-backend.tesl:419
 									if !teslrt.JsonEqual(teslrt.JsonFieldOf(posted.Body, "content"), "hello General") {
+//line chat-backend.tesl:419
 										teslT.Fatal("Tesl expectation failed")
 									}
 									{
@@ -1039,23 +1113,28 @@ func TestTeslApi1(teslT *testing.T) {
 										_ = rooms
 //line chat-backend.tesl:422
 										if !(teslrt.StatusOk(rooms.Status)) {
+//line chat-backend.tesl:422
 											teslT.Fatal("Tesl expectation failed")
 										}
 //line chat-backend.tesl:423
 										if !(teslrt.JsonIsNotEmpty(rooms.Body)) {
+//line chat-backend.tesl:423
 											teslT.Fatal("Tesl expectation failed")
 										}
 										teslLeft2 := teslrt.JsonLength(rooms.Body)
 //line chat-backend.tesl:424
 										if !teslrt.Equal(teslLeft2, teslrt.FromInt64(1)) {
+//line chat-backend.tesl:424
 											teslT.Fatal("Tesl expectation failed")
 										}
 //line chat-backend.tesl:425
 										if !(teslrt.JsonIncludesWhere(teslrt.JsonParseBody(teslrt.EncodeJSON(map[string]any{"id": teslEncode1(roomId), "name": teslEncode1(roomName)})).JsonRaw(), rooms.Body)) {
+//line chat-backend.tesl:425
 											teslT.Fatal("Tesl expectation failed")
 										}
 //line chat-backend.tesl:426
 										if !(teslrt.JsonExcludesWhere(teslrt.JsonParseBody("{\"name\":\"Random\"}").JsonRaw(), rooms.Body)) {
+//line chat-backend.tesl:426
 											teslT.Fatal("Tesl expectation failed")
 										}
 										{
@@ -1064,6 +1143,7 @@ func TestTeslApi1(teslT *testing.T) {
 											_ = firstRoom
 //line chat-backend.tesl:428
 											if !(teslrt.JsonHasField("createdAt", firstRoom)) {
+//line chat-backend.tesl:428
 												teslT.Fatal("Tesl expectation failed")
 											}
 											{
@@ -1072,6 +1152,7 @@ func TestTeslApi1(teslT *testing.T) {
 												_ = roomCreatedAt
 //line chat-backend.tesl:430
 												if teslrt.Compare(teslrt.JsonAsInt(roomCreatedAt), teslrt.FromInt64(0)) < 0 {
+//line chat-backend.tesl:430
 													teslT.Fatal("Tesl expectation failed")
 												}
 												{
@@ -1080,14 +1161,17 @@ func TestTeslApi1(teslT *testing.T) {
 													_ = messages
 //line chat-backend.tesl:433
 													if !(teslrt.StatusOk(messages.Status)) {
+//line chat-backend.tesl:433
 														teslT.Fatal("Tesl expectation failed")
 													}
 //line chat-backend.tesl:434
 													if !(teslrt.JsonHasLength(teslrt.FromInt64(1), messages.Body)) {
+//line chat-backend.tesl:434
 														teslT.Fatal("Tesl expectation failed")
 													}
 //line chat-backend.tesl:435
 													if !(teslrt.JsonIncludesWhere(teslrt.JsonParseBody(teslrt.EncodeJSON(map[string]any{"content": "hello General", "userId": teslEncode1(userId)})).JsonRaw(), messages.Body)) {
+//line chat-backend.tesl:435
 														teslT.Fatal("Tesl expectation failed")
 													}
 													{
@@ -1096,6 +1180,7 @@ func TestTeslApi1(teslT *testing.T) {
 														_ = firstMessage
 //line chat-backend.tesl:437
 														if !teslrt.JsonEqual(teslrt.JsonFieldAt("userId", firstMessage), userId) {
+//line chat-backend.tesl:437
 															teslT.Fatal("Tesl expectation failed")
 														}
 														{
@@ -1104,6 +1189,7 @@ func TestTeslApi1(teslT *testing.T) {
 															_ = firstContent
 //line chat-backend.tesl:439
 															if !(teslrt.JsonContains("General", firstContent)) {
+//line chat-backend.tesl:439
 																teslT.Fatal("Tesl expectation failed")
 															}
 														}
@@ -1133,6 +1219,11 @@ func TestTeslApi2(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line chat-backend.tesl:442
 //line chat-backend.tesl:444
 	_ = teslrt.DbInsert(ChatDatabaseDatabase, ChatUserTable, "ChatUser", ChatUser{Id: "usr-seeded", Username: "seeded-alice"}, func(teslRow, teslNew ChatUser) bool { return (teslRow.Id == teslNew.Id) }, "insert into \"chat\".\"users\" (\"id\", \"username\") values ($1, $2)", func(teslRow ChatUser) []any {
@@ -1160,10 +1251,12 @@ func TestTeslApi2(teslT *testing.T) {
 				_ = rooms
 //line chat-backend.tesl:460
 				if !(teslrt.StatusOk(rooms.Status)) {
+//line chat-backend.tesl:460
 					teslT.Fatal("Tesl expectation failed")
 				}
 //line chat-backend.tesl:461
 				if !(teslrt.JsonHasLength(teslrt.FromInt64(1), rooms.Body)) {
+//line chat-backend.tesl:461
 					teslT.Fatal("Tesl expectation failed")
 				}
 				{
@@ -1172,6 +1265,7 @@ func TestTeslApi2(teslT *testing.T) {
 					_ = firstRoom
 //line chat-backend.tesl:463
 					if !teslrt.JsonEqual(teslrt.JsonFieldAt("name", firstRoom), "Seeded room") {
+//line chat-backend.tesl:463
 						teslT.Fatal("Tesl expectation failed")
 					}
 					{
@@ -1180,10 +1274,12 @@ func TestTeslApi2(teslT *testing.T) {
 						_ = messages
 //line chat-backend.tesl:466
 						if !(teslrt.StatusOk(messages.Status)) {
+//line chat-backend.tesl:466
 							teslT.Fatal("Tesl expectation failed")
 						}
 //line chat-backend.tesl:467
 						if !(teslrt.JsonHasLength(teslrt.FromInt64(1), messages.Body)) {
+//line chat-backend.tesl:467
 							teslT.Fatal("Tesl expectation failed")
 						}
 						{
@@ -1192,10 +1288,12 @@ func TestTeslApi2(teslT *testing.T) {
 							_ = firstMessage
 //line chat-backend.tesl:469
 							if !teslrt.JsonEqual(teslrt.JsonFieldAt("username", firstMessage), "seeded-alice") {
+//line chat-backend.tesl:469
 								teslT.Fatal("Tesl expectation failed")
 							}
 //line chat-backend.tesl:470
 							if !teslrt.JsonEqual(teslrt.JsonFieldAt("content", firstMessage), "hello from seed") {
+//line chat-backend.tesl:470
 								teslT.Fatal("Tesl expectation failed")
 							}
 						}
@@ -1217,6 +1315,11 @@ func TestTeslApi3(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line chat-backend.tesl:473
 //line chat-backend.tesl:475
 	_ = teslrt.DbInsert(ChatDatabaseDatabase, ChatUserTable, "ChatUser", ChatUser{Id: "usr-alice", Username: "alice"}, func(teslRow, teslNew ChatUser) bool { return (teslRow.Id == teslNew.Id) }, "insert into \"chat\".\"users\" (\"id\", \"username\") values ($1, $2)", func(teslRow ChatUser) []any {
@@ -1253,11 +1356,13 @@ func TestTeslApi3(teslT *testing.T) {
 						_ = posted
 //line chat-backend.tesl:488
 						if !(teslrt.StatusOk(posted.Status)) {
+//line chat-backend.tesl:488
 							teslT.Fatal("Tesl expectation failed")
 						}
 						teslLeft3 := teslrt.PendingJobCount(NotificationQueueQueue)
 //line chat-backend.tesl:489
 						if !teslrt.Equal(teslLeft3, teslrt.FromInt64(1)) {
+//line chat-backend.tesl:489
 							teslT.Fatal("Tesl expectation failed")
 						}
 						{
@@ -1290,21 +1395,25 @@ func TestTeslApi3(teslT *testing.T) {
 								teslLeft4 := job.SenderName
 //line chat-backend.tesl:493
 								if teslLeft4 != "bob" {
+//line chat-backend.tesl:493
 									teslT.Fatal("Tesl expectation failed")
 								}
 								teslLeft5 := job.RoomName
 //line chat-backend.tesl:494
 								if teslLeft5 != roomId {
+//line chat-backend.tesl:494
 									teslT.Fatal("Tesl expectation failed")
 								}
 								teslLeft6 := job.Content
 //line chat-backend.tesl:495
 								if teslLeft6 != "Hello from Bob" {
+//line chat-backend.tesl:495
 									teslT.Fatal("Tesl expectation failed")
 								}
 								teslLeft7 := teslrt.PendingJobCount(NotificationQueueQueue)
 //line chat-backend.tesl:496
 								if !teslrt.Equal(teslLeft7, teslrt.FromInt64(0)) {
+//line chat-backend.tesl:496
 									teslT.Fatal("Tesl expectation failed")
 								}
 								{
@@ -1313,10 +1422,12 @@ func TestTeslApi3(teslT *testing.T) {
 									_ = events
 //line chat-backend.tesl:499
 									if !(teslrt.JsonIsNotEmpty(events)) {
+//line chat-backend.tesl:499
 										teslT.Fatal("Tesl expectation failed")
 									}
 //line chat-backend.tesl:500
 									if !(teslrt.JsonIncludesWhere(teslrt.JsonParseBody("{\"tag\":\"NewMessage\",\"fields\":{\"content\":\"Hello from Bob\",\"username\":\"bob\"}}").JsonRaw(), events)) {
+//line chat-backend.tesl:500
 										teslT.Fatal("Tesl expectation failed")
 									}
 								}
@@ -1340,6 +1451,11 @@ func TestTeslApi4(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line chat-backend.tesl:503
 //line chat-backend.tesl:505
 	_ = teslrt.DbInsert(ChatDatabaseDatabase, ChatUserTable, "ChatUser", ChatUser{Id: "usr-anna", Username: "anna"}, func(teslRow, teslNew ChatUser) bool { return (teslRow.Id == teslNew.Id) }, "insert into \"chat\".\"users\" (\"id\", \"username\") values ($1, $2)", func(teslRow ChatUser) []any {
@@ -1368,11 +1484,13 @@ func TestTeslApi4(teslT *testing.T) {
 					_ = posted
 //line chat-backend.tesl:516
 					if !(teslrt.StatusOk(posted.Status)) {
+//line chat-backend.tesl:516
 						teslT.Fatal("Tesl expectation failed")
 					}
 					teslLeft8 := teslrt.PendingJobCount(NotificationQueueQueue)
 //line chat-backend.tesl:517
 					if !teslrt.Equal(teslLeft8, teslrt.FromInt64(1)) {
+//line chat-backend.tesl:517
 						teslT.Fatal("Tesl expectation failed")
 					}
 					{
@@ -1404,6 +1522,7 @@ func TestTeslApi4(teslT *testing.T) {
 							_ = firstError
 //line chat-backend.tesl:521
 							if !(teslrt.JsonIsNotNull(teslrt.JsonValueOf(teslEncode1(firstError)))) {
+//line chat-backend.tesl:521
 								teslT.Fatal("Tesl expectation failed")
 							}
 							{
@@ -1435,6 +1554,7 @@ func TestTeslApi4(teslT *testing.T) {
 									_ = secondError
 //line chat-backend.tesl:525
 									if !(teslrt.JsonIsNotNull(teslrt.JsonValueOf(teslEncode1(secondError)))) {
+//line chat-backend.tesl:525
 										teslT.Fatal("Tesl expectation failed")
 									}
 									{
@@ -1466,11 +1586,13 @@ func TestTeslApi4(teslT *testing.T) {
 											_ = thirdError
 //line chat-backend.tesl:529
 											if !(teslrt.JsonIsNotNull(teslrt.JsonValueOf(teslEncode1(thirdError)))) {
+//line chat-backend.tesl:529
 												teslT.Fatal("Tesl expectation failed")
 											}
 											teslLeft9 := teslrt.PendingJobCount(NotificationQueueQueue)
 //line chat-backend.tesl:530
 											if !teslrt.Equal(teslLeft9, teslrt.FromInt64(0)) {
+//line chat-backend.tesl:530
 												teslT.Fatal("Tesl expectation failed")
 											}
 											{
@@ -1503,11 +1625,13 @@ func TestTeslApi4(teslT *testing.T) {
 													teslLeft10 := deadJob.SenderName
 //line chat-backend.tesl:534
 													if teslLeft10 != "anna" {
+//line chat-backend.tesl:534
 														teslT.Fatal("Tesl expectation failed")
 													}
 													teslLeft11 := deadJob.RoomName
 //line chat-backend.tesl:535
 													if teslLeft11 != roomId {
+//line chat-backend.tesl:535
 														teslT.Fatal("Tesl expectation failed")
 													}
 													{
@@ -1516,10 +1640,12 @@ func TestTeslApi4(teslT *testing.T) {
 														_ = events
 //line chat-backend.tesl:540
 														if !(teslrt.JsonIncludesWhere(teslrt.JsonParseBody("{\"tag\":\"NewMessage\",\"fields\":{\"content\":\"notify failure demo\"}}").JsonRaw(), events)) {
+//line chat-backend.tesl:540
 															teslT.Fatal("Tesl expectation failed")
 														}
 //line chat-backend.tesl:541
 														if !(teslrt.JsonIncludesWhere(teslrt.JsonParseBody(teslrt.EncodeJSON(map[string]any{"tag": "NotifyFailed", "fields": map[string]any{"senderName": "anna", "roomName": teslEncode1(roomId)}})).JsonRaw(), events)) {
+//line chat-backend.tesl:541
 															teslT.Fatal("Tesl expectation failed")
 														}
 													}

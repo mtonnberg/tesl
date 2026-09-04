@@ -91,12 +91,18 @@ func TestTesl0(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson65-pipe-operators.tesl:174
 		result := Double(teslrt.FromInt64(5))
 		_ = result
 //line lesson65-pipe-operators.tesl:175
 		if !teslrt.Equal(result, teslrt.FromInt64(10)) {
+//line lesson65-pipe-operators.tesl:175
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -109,12 +115,18 @@ func TestTesl1(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson65-pipe-operators.tesl:179
 		result := AddOne(Double(teslrt.FromInt64(3)))
 		_ = result
 //line lesson65-pipe-operators.tesl:180
 		if !teslrt.Equal(result, teslrt.FromInt64(7)) {
+//line lesson65-pipe-operators.tesl:180
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -127,12 +139,18 @@ func TestTesl2(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson65-pipe-operators.tesl:184
 		result := Double(AddOne(Double(teslrt.FromInt64(2))))
 		_ = result
 //line lesson65-pipe-operators.tesl:185
 		if !teslrt.Equal(result, teslrt.FromInt64(10)) {
+//line lesson65-pipe-operators.tesl:185
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -145,12 +163,18 @@ func TestTesl3(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson65-pipe-operators.tesl:189
 		result := Double(teslrt.FromInt64(5))
 		_ = result
 //line lesson65-pipe-operators.tesl:190
 		if !teslrt.Equal(result, teslrt.FromInt64(10)) {
+//line lesson65-pipe-operators.tesl:190
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -163,12 +187,18 @@ func TestTesl4(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson65-pipe-operators.tesl:194
 		result := AddOne(Double(teslrt.FromInt64(3)))
 		_ = result
 //line lesson65-pipe-operators.tesl:195
 		if !teslrt.Equal(result, teslrt.FromInt64(7)) {
+//line lesson65-pipe-operators.tesl:195
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -181,12 +211,18 @@ func TestTesl5(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson65-pipe-operators.tesl:199
 		result := Double(AddOne(Double(teslrt.FromInt64(2))))
 		_ = result
 //line lesson65-pipe-operators.tesl:200
 		if !teslrt.Equal(result, teslrt.FromInt64(10)) {
+//line lesson65-pipe-operators.tesl:200
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -199,12 +235,18 @@ func TestTesl6(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson65-pipe-operators.tesl:204
 		result := teslrt.StringLength("hello")
 		_ = result
 //line lesson65-pipe-operators.tesl:205
 		if !teslrt.Equal(result, teslrt.FromInt64(5)) {
+//line lesson65-pipe-operators.tesl:205
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -217,12 +259,18 @@ func TestTesl7(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson65-pipe-operators.tesl:209
 		result := teslrt.StringLength("hello")
 		_ = result
 //line lesson65-pipe-operators.tesl:210
 		if !teslrt.Equal(result, teslrt.FromInt64(5)) {
+//line lesson65-pipe-operators.tesl:210
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -235,19 +283,27 @@ func TestTesl8(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft9 := MeasureWord("  hi  ")
 //line lesson65-pipe-operators.tesl:214
 	if !teslrt.Equal(teslLeft9, teslrt.FromInt64(2)) {
+//line lesson65-pipe-operators.tesl:214
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft10 := MeasureWord("hello")
 //line lesson65-pipe-operators.tesl:215
 	if !teslrt.Equal(teslLeft10, teslrt.FromInt64(5)) {
+//line lesson65-pipe-operators.tesl:215
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft11 := MeasureWord("  ")
 //line lesson65-pipe-operators.tesl:216
 	if !teslrt.Equal(teslLeft11, teslrt.FromInt64(0)) {
+//line lesson65-pipe-operators.tesl:216
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -259,19 +315,27 @@ func TestTesl9(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft12 := ProcessWord("  hi  ")
 //line lesson65-pipe-operators.tesl:220
 	if !teslrt.Equal(teslLeft12, teslrt.FromInt64(2)) {
+//line lesson65-pipe-operators.tesl:220
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft13 := ProcessWord("hello")
 //line lesson65-pipe-operators.tesl:221
 	if !teslrt.Equal(teslLeft13, teslrt.FromInt64(5)) {
+//line lesson65-pipe-operators.tesl:221
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft14 := ProcessWord("  world  ")
 //line lesson65-pipe-operators.tesl:222
 	if !teslrt.Equal(teslLeft14, teslrt.FromInt64(5)) {
+//line lesson65-pipe-operators.tesl:222
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -283,19 +347,27 @@ func TestTesl10(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft15 := ProcessChain(teslrt.FromInt64(3))
 //line lesson65-pipe-operators.tesl:228
 	if !teslrt.Equal(teslLeft15, teslrt.FromInt64(14)) {
+//line lesson65-pipe-operators.tesl:228
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft16 := ProcessChain(teslrt.FromInt64(0))
 //line lesson65-pipe-operators.tesl:230
 	if !teslrt.Equal(teslLeft16, teslrt.FromInt64(2)) {
+//line lesson65-pipe-operators.tesl:230
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft17 := ProcessChain(teslrt.FromInt64(1))
 //line lesson65-pipe-operators.tesl:232
 	if !teslrt.Equal(teslLeft17, teslrt.FromInt64(6)) {
+//line lesson65-pipe-operators.tesl:232
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -307,6 +379,11 @@ func TestTesl11(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson65-pipe-operators.tesl:236
 		short := DescribeLength(teslrt.FromInt64(3))
@@ -321,14 +398,17 @@ func TestTesl11(teslT *testing.T) {
 				_ = long
 //line lesson65-pipe-operators.tesl:239
 				if short != "short" {
+//line lesson65-pipe-operators.tesl:239
 					teslT.Fatal("Tesl expectation failed")
 				}
 //line lesson65-pipe-operators.tesl:240
 				if medium != "medium" {
+//line lesson65-pipe-operators.tesl:240
 					teslT.Fatal("Tesl expectation failed")
 				}
 //line lesson65-pipe-operators.tesl:241
 				if long != "long" {
+//line lesson65-pipe-operators.tesl:241
 					teslT.Fatal("Tesl expectation failed")
 				}
 			}

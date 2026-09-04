@@ -957,8 +957,7 @@ test "a hung upstream fails the job rather than the worker" requires [webClient]
 - Once a block declares its first stub, an unmatched outbound call fails loudly
   instead of quietly hitting the real service
 - Outbound calls also have deployment-tunable deadlines
-  (`TESL_HTTP_CONNECT_TIMEOUT_MS`, `TESL_HTTP_TIMEOUT_MS`,
-  `TESL_HTTP_STREAM_IDLE_TIMEOUT_MS`), so a hung upstream fails the *job* and
+  (`TESL_HTTP_CONNECT_TIMEOUT_MS`, `TESL_HTTP_TIMEOUT_MS`), so a hung upstream fails the *job* and
   the normal retry / dead-letter machinery runs
 
 ### 5. SSE/PubSub Tests

@@ -186,6 +186,11 @@ func TestTesl0(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson69-agent-human-handoff.tesl:155
 		raw := User{Id: "alice", Role: "user"}
@@ -197,11 +202,13 @@ func TestTesl0(teslT *testing.T) {
 			teslLeft1 := teslrt.ListLength(agentRunnable(user))
 //line lesson69-agent-human-handoff.tesl:157
 			if !teslrt.Equal(teslLeft1, teslrt.FromInt64(1)) {
+//line lesson69-agent-human-handoff.tesl:157
 				teslT.Fatal("Tesl expectation failed")
 			}
 			teslLeft2 := teslrt.ListLength(humanOnly(user))
 //line lesson69-agent-human-handoff.tesl:158
 			if !teslrt.Equal(teslLeft2, teslrt.FromInt64(1)) {
+//line lesson69-agent-human-handoff.tesl:158
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -215,6 +222,11 @@ func TestTesl1(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson69-agent-human-handoff.tesl:165
 		raw := User{Id: "alice", Role: "user"}
@@ -234,11 +246,13 @@ func TestTesl1(teslT *testing.T) {
 					teslLeft3 := teslrt.ReplyText(teslrt.TurnReply(turn1))
 //line lesson69-agent-human-handoff.tesl:169
 					if teslLeft3 != "That needs an admin \xe2\x80\x94 I've put a Wipe button in front of you." {
+//line lesson69-agent-human-handoff.tesl:169
 						teslT.Fatal("Tesl expectation failed")
 					}
 					teslLeft4 := teslrt.ReplyToolCalls(teslrt.TurnReply(turn1))
 //line lesson69-agent-human-handoff.tesl:170
 					if !teslrt.Equal(teslLeft4, teslrt.FromInt64(1)) {
+//line lesson69-agent-human-handoff.tesl:170
 						teslT.Fatal("Tesl expectation failed")
 					}
 				}
@@ -254,6 +268,11 @@ func TestTesl2(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson69-agent-human-handoff.tesl:178
 		raw := User{Id: "alice", Role: "user"}
@@ -281,6 +300,7 @@ func TestTesl2(teslT *testing.T) {
 							teslLeft5 := teslrt.ReplyText(teslrt.TurnReply(turn2))
 //line lesson69-agent-human-handoff.tesl:185
 							if teslLeft5 != "Done \xe2\x80\x94 your notes were wiped." {
+//line lesson69-agent-human-handoff.tesl:185
 								teslT.Fatal("Tesl expectation failed")
 							}
 						}

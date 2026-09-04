@@ -172,16 +172,23 @@ func TestTeslApi0(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line proxy-binding-http-tests.tesl:132
 		r := teslrt.ApiRequest(EdgeServer, "GET", "/internal", "", nil, []teslrt.Tuple2[string, string]{{Tuple2First: "x-proxy-binding", Tuple2Second: "proxy-binding-http-tests-shared-secret"}})
 		_ = r
 //line proxy-binding-http-tests.tesl:133
 		if !(teslrt.StatusOk(r.Status)) {
+//line proxy-binding-http-tests.tesl:133
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line proxy-binding-http-tests.tesl:134
 		if !teslrt.JsonEqual(teslrt.JsonFieldOf(r.Body, "released"), "internal data released to a proxy-bound request") {
+//line proxy-binding-http-tests.tesl:134
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -197,16 +204,23 @@ func TestTeslApi1(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line proxy-binding-http-tests.tesl:140
 		r := teslrt.ApiRequest(EdgeServer, "GET", "/ping", "", nil, nil)
 		_ = r
 //line proxy-binding-http-tests.tesl:141
 		if !(teslrt.StatusOk(r.Status)) {
+//line proxy-binding-http-tests.tesl:141
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line proxy-binding-http-tests.tesl:142
 		if !teslrt.JsonEqual(teslrt.JsonFieldOf(r.Body, "alive"), true) {
+//line proxy-binding-http-tests.tesl:142
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -222,6 +236,11 @@ func TestTeslApi2(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line proxy-binding-http-tests.tesl:148
 		r := teslrt.ApiRequest(EdgeServer, "GET", "/internal", "", nil, nil)
@@ -229,6 +248,7 @@ func TestTeslApi2(teslT *testing.T) {
 		teslLeft1 := r.Status
 //line proxy-binding-http-tests.tesl:149
 		if !teslrt.Equal(teslLeft1, teslrt.FromInt64(401)) {
+//line proxy-binding-http-tests.tesl:149
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -244,6 +264,11 @@ func TestTeslApi3(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line proxy-binding-http-tests.tesl:153
 		r := teslrt.ApiRequest(EdgeServer, "GET", "/internal", "", nil, []teslrt.Tuple2[string, string]{{Tuple2First: "x-proxy-binding", Tuple2Second: ""}})
@@ -251,6 +276,7 @@ func TestTeslApi3(teslT *testing.T) {
 		teslLeft2 := r.Status
 //line proxy-binding-http-tests.tesl:154
 		if !teslrt.Equal(teslLeft2, teslrt.FromInt64(401)) {
+//line proxy-binding-http-tests.tesl:154
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -266,6 +292,11 @@ func TestTeslApi4(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line proxy-binding-http-tests.tesl:158
 		r := teslrt.ApiRequest(EdgeServer, "GET", "/internal", "", nil, []teslrt.Tuple2[string, string]{{Tuple2First: "x-proxy-binding", Tuple2Second: "not-the-shared-secret"}})
@@ -273,6 +304,7 @@ func TestTeslApi4(teslT *testing.T) {
 		teslLeft3 := r.Status
 //line proxy-binding-http-tests.tesl:159
 		if !teslrt.Equal(teslLeft3, teslrt.FromInt64(401)) {
+//line proxy-binding-http-tests.tesl:159
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -288,6 +320,11 @@ func TestTeslApi5(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line proxy-binding-http-tests.tesl:165
 		r := teslrt.ApiRequest(EdgeServer, "GET", "/internal", "", nil, []teslrt.Tuple2[string, string]{{Tuple2First: "x-proxy-binding", Tuple2Second: "proxy-binding-http-tests-shared-secreT"}})
@@ -295,6 +332,7 @@ func TestTeslApi5(teslT *testing.T) {
 		teslLeft4 := r.Status
 //line proxy-binding-http-tests.tesl:166
 		if !teslrt.Equal(teslLeft4, teslrt.FromInt64(401)) {
+//line proxy-binding-http-tests.tesl:166
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -310,6 +348,11 @@ func TestTeslApi6(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line proxy-binding-http-tests.tesl:170
 		r := teslrt.ApiRequest(EdgeServer, "GET", "/internal", "", nil, []teslrt.Tuple2[string, string]{{Tuple2First: "x-proxy-binding", Tuple2Second: "PROXY-BINDING-HTTP-TESTS-SHARED-SECRET"}})
@@ -317,6 +360,7 @@ func TestTeslApi6(teslT *testing.T) {
 		teslLeft5 := r.Status
 //line proxy-binding-http-tests.tesl:171
 		if !teslrt.Equal(teslLeft5, teslrt.FromInt64(401)) {
+//line proxy-binding-http-tests.tesl:171
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -332,6 +376,11 @@ func TestTeslApi7(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line proxy-binding-http-tests.tesl:177
 		short := teslrt.ApiRequest(EdgeServer, "GET", "/internal", "", nil, []teslrt.Tuple2[string, string]{{Tuple2First: "x-proxy-binding", Tuple2Second: "proxy-binding-http-tests-shared"}})
@@ -339,6 +388,7 @@ func TestTeslApi7(teslT *testing.T) {
 		teslLeft6 := short.Status
 //line proxy-binding-http-tests.tesl:178
 		if !teslrt.Equal(teslLeft6, teslrt.FromInt64(401)) {
+//line proxy-binding-http-tests.tesl:178
 			teslT.Fatal("Tesl expectation failed")
 		}
 		{
@@ -348,6 +398,7 @@ func TestTeslApi7(teslT *testing.T) {
 			teslLeft7 := long.Status
 //line proxy-binding-http-tests.tesl:180
 			if !teslrt.Equal(teslLeft7, teslrt.FromInt64(401)) {
+//line proxy-binding-http-tests.tesl:180
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -364,6 +415,11 @@ func TestTeslApi8(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line proxy-binding-http-tests.tesl:185
 		trailing := teslrt.ApiRequest(EdgeServer, "GET", "/internal", "", nil, []teslrt.Tuple2[string, string]{{Tuple2First: "x-proxy-binding", Tuple2Second: "proxy-binding-http-tests-shared-secret "}})
@@ -371,6 +427,7 @@ func TestTeslApi8(teslT *testing.T) {
 		teslLeft8 := trailing.Status
 //line proxy-binding-http-tests.tesl:186
 		if !teslrt.Equal(teslLeft8, teslrt.FromInt64(401)) {
+//line proxy-binding-http-tests.tesl:186
 			teslT.Fatal("Tesl expectation failed")
 		}
 		{
@@ -380,6 +437,7 @@ func TestTeslApi8(teslT *testing.T) {
 			teslLeft9 := leading.Status
 //line proxy-binding-http-tests.tesl:188
 			if !teslrt.Equal(teslLeft9, teslrt.FromInt64(401)) {
+//line proxy-binding-http-tests.tesl:188
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -396,6 +454,11 @@ func TestTeslApi9(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line proxy-binding-http-tests.tesl:194
 		r := teslrt.ApiRequest(EdgeServer, "GET", "/internal", "", nil, []teslrt.Tuple2[string, string]{{Tuple2First: "x-proxy-binding", Tuple2Second: "wrong"}})
@@ -403,10 +466,12 @@ func TestTeslApi9(teslT *testing.T) {
 		teslLeft10 := r.Status
 //line proxy-binding-http-tests.tesl:195
 		if !teslrt.Equal(teslLeft10, teslrt.FromInt64(401)) {
+//line proxy-binding-http-tests.tesl:195
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line proxy-binding-http-tests.tesl:197
 		if !teslrt.JsonEqual(teslrt.JsonFieldOf(r.Body, "error"), "proxy binding does not match") {
+//line proxy-binding-http-tests.tesl:197
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -422,6 +487,11 @@ func TestTeslApi10(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line proxy-binding-http-tests.tesl:203
 		r := teslrt.ApiRequest(EdgeServer, "GET", "/internal", "", []string{"__Host-session=anything"}, nil)
@@ -429,6 +499,7 @@ func TestTeslApi10(teslT *testing.T) {
 		teslLeft11 := r.Status
 //line proxy-binding-http-tests.tesl:204
 		if !teslrt.Equal(teslLeft11, teslrt.FromInt64(401)) {
+//line proxy-binding-http-tests.tesl:204
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -444,6 +515,11 @@ func TestTeslApi11(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line proxy-binding-http-tests.tesl:208
 		bad := teslrt.ApiRequest(EdgeServer, "GET", "/internal", "", nil, []teslrt.Tuple2[string, string]{{Tuple2First: "x-proxy-binding", Tuple2Second: "wrong"}})
@@ -451,6 +527,7 @@ func TestTeslApi11(teslT *testing.T) {
 		teslLeft12 := bad.Status
 //line proxy-binding-http-tests.tesl:209
 		if !teslrt.Equal(teslLeft12, teslrt.FromInt64(401)) {
+//line proxy-binding-http-tests.tesl:209
 			teslT.Fatal("Tesl expectation failed")
 		}
 		{
@@ -459,10 +536,12 @@ func TestTeslApi11(teslT *testing.T) {
 			_ = good
 //line proxy-binding-http-tests.tesl:211
 			if !(teslrt.StatusOk(good.Status)) {
+//line proxy-binding-http-tests.tesl:211
 				teslT.Fatal("Tesl expectation failed")
 			}
 //line proxy-binding-http-tests.tesl:212
 			if !teslrt.JsonEqual(teslrt.JsonFieldOf(good.Body, "released"), "internal data released to a proxy-bound request") {
+//line proxy-binding-http-tests.tesl:212
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}

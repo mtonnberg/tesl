@@ -383,6 +383,11 @@ func TestTesl0(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line server-tools-tests.tesl:179
 		rawUser := User{Id: "alice", Role: "user"}
@@ -394,6 +399,7 @@ func TestTesl0(teslT *testing.T) {
 			teslLeft1 := teslrt.ListLength(PlainTools(user))
 //line server-tools-tests.tesl:181
 			if !teslrt.Equal(teslLeft1, teslrt.FromInt64(4)) {
+//line server-tools-tests.tesl:181
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -407,6 +413,11 @@ func TestTesl1(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line server-tools-tests.tesl:187
 		rawAdmin := User{Id: "root", Role: "admin"}
@@ -418,6 +429,7 @@ func TestTesl1(teslT *testing.T) {
 			teslLeft2 := teslrt.ListLength(AdminTools(admin))
 //line server-tools-tests.tesl:189
 			if !teslrt.Equal(teslLeft2, teslrt.FromInt64(5)) {
+//line server-tools-tests.tesl:189
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -431,6 +443,11 @@ func TestTesl2(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line server-tools-tests.tesl:196
 		rawUser := User{Id: "alice", Role: "user"}
@@ -454,11 +471,13 @@ func TestTesl2(teslT *testing.T) {
 						teslLeft3 := teslrt.ReplyText(reply)
 //line server-tools-tests.tesl:201
 						if teslLeft3 != "Greeted you." {
+//line server-tools-tests.tesl:201
 							teslT.Fatal("Tesl expectation failed")
 						}
 						teslLeft4 := teslrt.ReplyToolCalls(reply)
 //line server-tools-tests.tesl:202
 						if !teslrt.Equal(teslLeft4, teslrt.FromInt64(1)) {
+//line server-tools-tests.tesl:202
 							teslT.Fatal("Tesl expectation failed")
 						}
 					}
@@ -475,6 +494,11 @@ func TestTesl3(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line server-tools-tests.tesl:208
 		rawUser := User{Id: "alice", Role: "user"}
@@ -498,11 +522,13 @@ func TestTesl3(teslT *testing.T) {
 						teslLeft5 := teslrt.ReplyText(reply)
 //line server-tools-tests.tesl:213
 						if teslLeft5 != "Saved your note." {
+//line server-tools-tests.tesl:213
 							teslT.Fatal("Tesl expectation failed")
 						}
 						teslLeft6 := teslrt.ReplyToolCalls(reply)
 //line server-tools-tests.tesl:214
 						if !teslrt.Equal(teslLeft6, teslrt.FromInt64(1)) {
+//line server-tools-tests.tesl:214
 							teslT.Fatal("Tesl expectation failed")
 						}
 					}
@@ -519,6 +545,11 @@ func TestTesl4(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line server-tools-tests.tesl:220
 		rawUser := User{Id: "alice", Role: "user"}
@@ -542,11 +573,13 @@ func TestTesl4(teslT *testing.T) {
 						teslLeft7 := teslrt.ReplyText(reply)
 //line server-tools-tests.tesl:225
 						if teslLeft7 != "Found it." {
+//line server-tools-tests.tesl:225
 							teslT.Fatal("Tesl expectation failed")
 						}
 						teslLeft8 := teslrt.ReplyToolCalls(reply)
 //line server-tools-tests.tesl:226
 						if !teslrt.Equal(teslLeft8, teslrt.FromInt64(1)) {
+//line server-tools-tests.tesl:226
 							teslT.Fatal("Tesl expectation failed")
 						}
 					}
@@ -563,6 +596,11 @@ func TestTesl5(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line server-tools-tests.tesl:232
 		rawUser := User{Id: "alice", Role: "user"}
@@ -586,11 +624,13 @@ func TestTesl5(teslT *testing.T) {
 						teslLeft9 := teslrt.ReplyText(reply)
 //line server-tools-tests.tesl:237
 						if teslLeft9 != "That note is too long." {
+//line server-tools-tests.tesl:237
 							teslT.Fatal("Tesl expectation failed")
 						}
 						teslLeft10 := teslrt.ReplyToolCalls(reply)
 //line server-tools-tests.tesl:238
 						if !teslrt.Equal(teslLeft10, teslrt.FromInt64(1)) {
+//line server-tools-tests.tesl:238
 							teslT.Fatal("Tesl expectation failed")
 						}
 					}
@@ -607,6 +647,11 @@ func TestTesl6(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line server-tools-tests.tesl:244
 		rawUser := User{Id: "blocked", Role: "user"}
@@ -630,11 +675,13 @@ func TestTesl6(teslT *testing.T) {
 						teslLeft11 := teslrt.ReplyText(reply)
 //line server-tools-tests.tesl:249
 						if teslLeft11 != "You are not allowed to do that." {
+//line server-tools-tests.tesl:249
 							teslT.Fatal("Tesl expectation failed")
 						}
 						teslLeft12 := teslrt.ReplyToolCalls(reply)
 //line server-tools-tests.tesl:250
 						if !teslrt.Equal(teslLeft12, teslrt.FromInt64(1)) {
+//line server-tools-tests.tesl:250
 							teslT.Fatal("Tesl expectation failed")
 						}
 					}
@@ -651,6 +698,11 @@ func TestTesl7(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line server-tools-tests.tesl:255
 		rawAdmin := User{Id: "root", Role: "admin"}
@@ -674,11 +726,13 @@ func TestTesl7(teslT *testing.T) {
 						teslLeft13 := teslrt.ReplyText(reply)
 //line server-tools-tests.tesl:260
 						if teslLeft13 != "Wiped." {
+//line server-tools-tests.tesl:260
 							teslT.Fatal("Tesl expectation failed")
 						}
 						teslLeft14 := teslrt.ReplyToolCalls(reply)
 //line server-tools-tests.tesl:261
 						if !teslrt.Equal(teslLeft14, teslrt.FromInt64(1)) {
+//line server-tools-tests.tesl:261
 							teslT.Fatal("Tesl expectation failed")
 						}
 					}

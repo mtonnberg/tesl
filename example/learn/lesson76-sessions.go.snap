@@ -276,12 +276,18 @@ func TestTeslApi0(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson76-sessions.tesl:336
 		resp := teslrt.ApiRequest(SessionServer, "POST", "/login", "{\"user\":\"alice\",\"password\":\"correct-horse\"}", nil, nil)
 		_ = resp
 //line lesson76-sessions.tesl:337
 		if !(teslrt.StatusOk(resp.Status)) {
+//line lesson76-sessions.tesl:337
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line lesson76-sessions.tesl:338
@@ -291,6 +297,7 @@ func TestTeslApi0(teslT *testing.T) {
 			case teslrt.MaybeNothing:
 //line lesson76-sessions.tesl:339
 				if true {
+//line lesson76-sessions.tesl:339
 					teslT.Fatal("Tesl expectation failed")
 				}
 			case teslrt.MaybeSomething:
@@ -298,26 +305,32 @@ func TestTeslApi0(teslT *testing.T) {
 				_ = line
 //line lesson76-sessions.tesl:341
 				if !(teslrt.StringContains(line, "__Host-session=")) {
+//line lesson76-sessions.tesl:341
 					teslT.Fatal("Tesl expectation failed")
 				}
 //line lesson76-sessions.tesl:342
 				if !(teslrt.StringContains(line, "Path=/")) {
+//line lesson76-sessions.tesl:342
 					teslT.Fatal("Tesl expectation failed")
 				}
 //line lesson76-sessions.tesl:343
 				if !(teslrt.StringContains(line, "HttpOnly")) {
+//line lesson76-sessions.tesl:343
 					teslT.Fatal("Tesl expectation failed")
 				}
 //line lesson76-sessions.tesl:344
 				if !(teslrt.StringContains(line, "Secure")) {
+//line lesson76-sessions.tesl:344
 					teslT.Fatal("Tesl expectation failed")
 				}
 //line lesson76-sessions.tesl:345
 				if !(teslrt.StringContains(line, "SameSite=Lax")) {
+//line lesson76-sessions.tesl:345
 					teslT.Fatal("Tesl expectation failed")
 				}
 //line lesson76-sessions.tesl:346
 				if !(teslrt.StringContains(line, "Max-Age=3600")) {
+//line lesson76-sessions.tesl:346
 					teslT.Fatal("Tesl expectation failed")
 				}
 			default:
@@ -337,12 +350,18 @@ func TestTeslApi1(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson76-sessions.tesl:350
 		loginResp := teslrt.ApiRequest(SessionServer, "POST", "/login", "{\"user\":\"alice\",\"password\":\"correct-horse\"}", nil, nil)
 		_ = loginResp
 //line lesson76-sessions.tesl:351
 		if !(teslrt.StatusOk(loginResp.Status)) {
+//line lesson76-sessions.tesl:351
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line lesson76-sessions.tesl:352
@@ -352,6 +371,7 @@ func TestTeslApi1(teslT *testing.T) {
 			case teslrt.MaybeNothing:
 //line lesson76-sessions.tesl:353
 				if true {
+//line lesson76-sessions.tesl:353
 					teslT.Fatal("Tesl expectation failed")
 				}
 			case teslrt.MaybeSomething:
@@ -363,10 +383,12 @@ func TestTeslApi1(teslT *testing.T) {
 					_ = me
 //line lesson76-sessions.tesl:356
 					if !(teslrt.StatusOk(me.Status)) {
+//line lesson76-sessions.tesl:356
 						teslT.Fatal("Tesl expectation failed")
 					}
 //line lesson76-sessions.tesl:357
 					if !teslrt.JsonEqual(teslrt.JsonFieldOf(me.Body, "userId"), "alice") {
+//line lesson76-sessions.tesl:357
 						teslT.Fatal("Tesl expectation failed")
 					}
 				}
@@ -387,6 +409,11 @@ func TestTeslApi2(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson76-sessions.tesl:361
 		me := teslrt.ApiRequest(SessionServer, "GET", "/me", "", nil, nil)
@@ -394,6 +421,7 @@ func TestTeslApi2(teslT *testing.T) {
 		teslLeft1 := me.Status
 //line lesson76-sessions.tesl:362
 		if !teslrt.Equal(teslLeft1, teslrt.FromInt64(401)) {
+//line lesson76-sessions.tesl:362
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -409,6 +437,11 @@ func TestTeslApi3(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson76-sessions.tesl:369
 		resp := teslrt.ApiRequest(SessionServer, "POST", "/login", "{\"user\":\"alice\",\"password\":\"short\"}", nil, nil)
@@ -416,6 +449,7 @@ func TestTeslApi3(teslT *testing.T) {
 		teslLeft2 := resp.Status
 //line lesson76-sessions.tesl:370
 		if !teslrt.Equal(teslLeft2, teslrt.FromInt64(401)) {
+//line lesson76-sessions.tesl:370
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line lesson76-sessions.tesl:371
@@ -425,6 +459,7 @@ func TestTeslApi3(teslT *testing.T) {
 			case teslrt.MaybeNothing:
 //line lesson76-sessions.tesl:372
 				if false {
+//line lesson76-sessions.tesl:372
 					teslT.Fatal("Tesl expectation failed")
 				}
 			case teslrt.MaybeSomething:
@@ -432,6 +467,7 @@ func TestTeslApi3(teslT *testing.T) {
 				_ = pair
 //line lesson76-sessions.tesl:373
 				if true {
+//line lesson76-sessions.tesl:373
 					teslT.Fatal("Tesl expectation failed")
 				}
 			default:
@@ -451,12 +487,18 @@ func TestTeslApi4(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson76-sessions.tesl:377
 		resp := teslrt.ApiRequest(SessionServer, "POST", "/logout", "", nil, nil)
 		_ = resp
 //line lesson76-sessions.tesl:378
 		if !(teslrt.StatusOk(resp.Status)) {
+//line lesson76-sessions.tesl:378
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line lesson76-sessions.tesl:379
@@ -466,6 +508,7 @@ func TestTeslApi4(teslT *testing.T) {
 			case teslrt.MaybeNothing:
 //line lesson76-sessions.tesl:380
 				if true {
+//line lesson76-sessions.tesl:380
 					teslT.Fatal("Tesl expectation failed")
 				}
 			case teslrt.MaybeSomething:
@@ -473,10 +516,12 @@ func TestTeslApi4(teslT *testing.T) {
 				_ = line
 //line lesson76-sessions.tesl:382
 				if !(teslrt.StringContains(line, "__Host-session=;")) {
+//line lesson76-sessions.tesl:382
 					teslT.Fatal("Tesl expectation failed")
 				}
 //line lesson76-sessions.tesl:383
 				if !(teslrt.StringContains(line, "Max-Age=0")) {
+//line lesson76-sessions.tesl:383
 					teslT.Fatal("Tesl expectation failed")
 				}
 			default:

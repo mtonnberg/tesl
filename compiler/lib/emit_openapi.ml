@@ -101,6 +101,55 @@ let schemas_for_decl = function
     Some (name, obj [field "oneOf" (array (List.map variant_schema variants))])
   | _ -> None
 
+let type_decl_name = function
+  | DRecord ({ name; _ } : record_form)
+  | DEntity ({ name; _ } : entity_form)
+  | DType (TypeAdt { name; _ })
+  | DType (TypeNewtype { name; _ }) -> Some name
+  | _ -> None
+
+(* OpenAPI components must include the transitive type declarations used by
+   route records.  A server module commonly imports handlers from one module
+   and their records from another, so the normal exposing filter is too narrow
+   for a self-contained wire schema.  Deduplication keeps local declarations
+   authoritative and prevents repeated JSON object keys. *)
+let imported_type_decls (m : module_form) : top_decl list =
+  let visited_modules = Hashtbl.create 16 in
+  let by_name = Hashtbl.create 32 in
+  let rec visit (source_file : string) (imports : import_decl list) =
+    List.iter (fun (imp : import_decl) ->
+      let is_tesl_module name =
+        String.length name >= 5 && String.sub name 0 5 = "Tesl."
+      in
+      if not (is_tesl_module imp.module_name) then
+        let path = Validation_common.resolve_local_import_path source_file imp.module_name in
+        if Sys.file_exists path && not (Hashtbl.mem visited_modules path) then begin
+          Hashtbl.add visited_modules path ();
+          let source = In_channel.with_open_text path In_channel.input_all in
+          match Parser.parse_module path source with
+          | Err _ -> ()
+          | Ok imported ->
+            List.iter (fun decl ->
+              match type_decl_name decl with
+              | Some name when not (Hashtbl.mem by_name name) -> Hashtbl.add by_name name decl
+              | _ -> ()) imported.decls;
+            visit imported.source_file imported.imports
+        end
+    ) imports
+  in
+  visit m.source_file m.imports;
+  Hashtbl.to_seq_values by_name |> List.of_seq
+
+let unique_type_decls (decls : top_decl list) : top_decl list =
+  let seen = Hashtbl.create 32 in
+  List.filter (fun decl ->
+    match type_decl_name decl with
+    | None -> false
+    | Some name ->
+      if Hashtbl.mem seen name then false
+      else (Hashtbl.add seen name (); true)
+  ) decls
+
 let rec response_schema (ep : Ir.ir_endpoint) =
   match ep.ire_return with
   | IRRetPlain ty -> schema_of_ir_type ty
@@ -179,7 +228,11 @@ let emit (m : module_form) ~(server_name : string) =
     (path, existing @ [field (method_name ep.ire_method) (operation_for_endpoint ep)])
       :: List.remove_assoc path acc
   ) [] endpoints in
-  let schemas = List.filter_map schemas_for_decl m.decls in
+  (* Route types may be imported from domain modules.  Keep the exported
+     specification self-contained, otherwise ZAP rejects every $ref even
+     though the checked program has the declarations in scope. *)
+  let declarations = unique_type_decls (m.decls @ imported_type_decls m) in
+  let schemas = List.filter_map schemas_for_decl declarations in
   let schema_json = List.map (fun (name, schema) -> field name schema) schemas in
   obj [field "openapi" (js "3.1.0");
        field "info" (obj [field "title" (js (m.module_name ^ " API"));

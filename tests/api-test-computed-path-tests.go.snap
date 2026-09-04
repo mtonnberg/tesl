@@ -221,16 +221,23 @@ func TestTeslApi0(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line api-test-computed-path-tests.tesl:122
 		r := teslrt.ApiRequest(PathServer, "GET", "/things/7", "", nil, nil)
 		_ = r
 //line api-test-computed-path-tests.tesl:123
 		if !(teslrt.StatusOk(r.Status)) {
+//line api-test-computed-path-tests.tesl:123
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line api-test-computed-path-tests.tesl:124
 		if !teslrt.JsonEqual(r.Body, "thing-7") {
+//line api-test-computed-path-tests.tesl:124
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -247,6 +254,11 @@ func TestTeslApi1(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line api-test-computed-path-tests.tesl:130
 		p := "/things/7"
@@ -257,10 +269,12 @@ func TestTeslApi1(teslT *testing.T) {
 			_ = r
 //line api-test-computed-path-tests.tesl:132
 			if !(teslrt.StatusOk(r.Status)) {
+//line api-test-computed-path-tests.tesl:132
 				teslT.Fatal("Tesl expectation failed")
 			}
 //line api-test-computed-path-tests.tesl:133
 			if !teslrt.JsonEqual(r.Body, "thing-7") {
+//line api-test-computed-path-tests.tesl:133
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -278,6 +292,11 @@ func TestTeslApi2(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line api-test-computed-path-tests.tesl:137
 		id := "42"
@@ -288,10 +307,12 @@ func TestTeslApi2(teslT *testing.T) {
 			_ = r
 //line api-test-computed-path-tests.tesl:139
 			if !(teslrt.StatusOk(r.Status)) {
+//line api-test-computed-path-tests.tesl:139
 				teslT.Fatal("Tesl expectation failed")
 			}
 //line api-test-computed-path-tests.tesl:140
 			if !teslrt.JsonEqual(r.Body, "thing-42") {
+//line api-test-computed-path-tests.tesl:140
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -309,6 +330,11 @@ func TestTeslApi3(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line api-test-computed-path-tests.tesl:144
 		id := "9"
@@ -319,10 +345,12 @@ func TestTeslApi3(teslT *testing.T) {
 			_ = r
 //line api-test-computed-path-tests.tesl:146
 			if !(teslrt.StatusOk(r.Status)) {
+//line api-test-computed-path-tests.tesl:146
 				teslT.Fatal("Tesl expectation failed")
 			}
 //line api-test-computed-path-tests.tesl:147
 			if !teslrt.JsonEqual(r.Body, "thing-9") {
+//line api-test-computed-path-tests.tesl:147
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -340,12 +368,18 @@ func TestTeslApi4(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line api-test-computed-path-tests.tesl:153
 		created := teslrt.ApiRequest(PathServer, "POST", "/things", "", nil, nil)
 		_ = created
 //line api-test-computed-path-tests.tesl:154
 		if !(teslrt.StatusOk(created.Status)) {
+//line api-test-computed-path-tests.tesl:154
 			teslT.Fatal("Tesl expectation failed")
 		}
 		{
@@ -354,10 +388,12 @@ func TestTeslApi4(teslT *testing.T) {
 			_ = r
 //line api-test-computed-path-tests.tesl:156
 			if !(teslrt.StatusOk(r.Status)) {
+//line api-test-computed-path-tests.tesl:156
 				teslT.Fatal("Tesl expectation failed")
 			}
 //line api-test-computed-path-tests.tesl:157
 			if !teslrt.JsonEqual(r.Body, "thing-generated-1") {
+//line api-test-computed-path-tests.tesl:157
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -375,6 +411,11 @@ func TestTeslApi5(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line api-test-computed-path-tests.tesl:163
 		created := teslrt.ApiRequest(PathServer, "POST", "/things", "", nil, nil)
@@ -389,10 +430,12 @@ func TestTeslApi5(teslT *testing.T) {
 				_ = r
 //line api-test-computed-path-tests.tesl:166
 				if !(teslrt.StatusOk(r.Status)) {
+//line api-test-computed-path-tests.tesl:166
 					teslT.Fatal("Tesl expectation failed")
 				}
 //line api-test-computed-path-tests.tesl:167
 				if !teslrt.JsonEqual(r.Body, "thing-generated-1") {
+//line api-test-computed-path-tests.tesl:167
 					teslT.Fatal("Tesl expectation failed")
 				}
 			}
@@ -411,16 +454,23 @@ func TestTeslApi6(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line api-test-computed-path-tests.tesl:173
 		r := teslrt.ApiRequest(PathServer, "GET", "/search?q=widgets", "", nil, nil)
 		_ = r
 //line api-test-computed-path-tests.tesl:174
 		if !(teslrt.StatusOk(r.Status)) {
+//line api-test-computed-path-tests.tesl:174
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line api-test-computed-path-tests.tesl:175
 		if !teslrt.JsonEqual(r.Body, "found-widgets") {
+//line api-test-computed-path-tests.tesl:175
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -437,6 +487,11 @@ func TestTeslApi7(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line api-test-computed-path-tests.tesl:179
 		p := "/search?q=widgets"
@@ -447,10 +502,12 @@ func TestTeslApi7(teslT *testing.T) {
 			_ = r
 //line api-test-computed-path-tests.tesl:181
 			if !(teslrt.StatusOk(r.Status)) {
+//line api-test-computed-path-tests.tesl:181
 				teslT.Fatal("Tesl expectation failed")
 			}
 //line api-test-computed-path-tests.tesl:182
 			if !teslrt.JsonEqual(r.Body, "found-widgets") {
+//line api-test-computed-path-tests.tesl:182
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -468,6 +525,11 @@ func TestTeslApi8(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line api-test-computed-path-tests.tesl:186
 		term := "gadgets"
@@ -478,10 +540,12 @@ func TestTeslApi8(teslT *testing.T) {
 			_ = r
 //line api-test-computed-path-tests.tesl:188
 			if !(teslrt.StatusOk(r.Status)) {
+//line api-test-computed-path-tests.tesl:188
 				teslT.Fatal("Tesl expectation failed")
 			}
 //line api-test-computed-path-tests.tesl:189
 			if !teslrt.JsonEqual(r.Body, "found-gadgets") {
+//line api-test-computed-path-tests.tesl:189
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -499,6 +563,11 @@ func TestTeslApi9(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line api-test-computed-path-tests.tesl:193
 		p := "/search"
@@ -509,6 +578,7 @@ func TestTeslApi9(teslT *testing.T) {
 			_ = r
 //line api-test-computed-path-tests.tesl:195
 			if !(teslrt.StatusClientError(r.Status)) {
+//line api-test-computed-path-tests.tesl:195
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -526,6 +596,11 @@ func TestTeslApi10(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line api-test-computed-path-tests.tesl:201
 		p := "/nope/nowhere"
@@ -537,6 +612,7 @@ func TestTeslApi10(teslT *testing.T) {
 			teslLeft1 := r.Status
 //line api-test-computed-path-tests.tesl:203
 			if !teslrt.Equal(teslLeft1, teslrt.FromInt64(404)) {
+//line api-test-computed-path-tests.tesl:203
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -554,6 +630,11 @@ func TestTeslApi11(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line api-test-computed-path-tests.tesl:209
 		p := "/things/7/"
@@ -564,10 +645,12 @@ func TestTeslApi11(teslT *testing.T) {
 			_ = r
 //line api-test-computed-path-tests.tesl:211
 			if !(teslrt.StatusOk(r.Status)) {
+//line api-test-computed-path-tests.tesl:211
 				teslT.Fatal("Tesl expectation failed")
 			}
 //line api-test-computed-path-tests.tesl:212
 			if !teslrt.JsonEqual(r.Body, "thing-7") {
+//line api-test-computed-path-tests.tesl:212
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -585,6 +668,11 @@ func TestTeslApi12(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line api-test-computed-path-tests.tesl:218
 		stream := teslrt.SubscribeStream(PathServer, "/events/topic-1", nil)
@@ -596,6 +684,7 @@ func TestTeslApi12(teslT *testing.T) {
 			_ = r
 //line api-test-computed-path-tests.tesl:220
 			if !(teslrt.StatusOk(r.Status)) {
+//line api-test-computed-path-tests.tesl:220
 				teslT.Fatal("Tesl expectation failed")
 			}
 			{
@@ -604,10 +693,12 @@ func TestTeslApi12(teslT *testing.T) {
 				_ = events
 //line api-test-computed-path-tests.tesl:222
 				if !(teslrt.JsonIsNotEmpty(events)) {
+//line api-test-computed-path-tests.tesl:222
 					teslT.Fatal("Tesl expectation failed")
 				}
 //line api-test-computed-path-tests.tesl:223
 				if !(teslrt.JsonIncludesWhere(teslrt.JsonParseBody("{\"message\":\"notice-topic-1\"}").JsonRaw(), events)) {
+//line api-test-computed-path-tests.tesl:223
 					teslT.Fatal("Tesl expectation failed")
 				}
 			}
@@ -626,6 +717,11 @@ func TestTeslApi13(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line api-test-computed-path-tests.tesl:227
 		topic := "topic-2"
@@ -641,6 +737,7 @@ func TestTeslApi13(teslT *testing.T) {
 				_ = r
 //line api-test-computed-path-tests.tesl:230
 				if !(teslrt.StatusOk(r.Status)) {
+//line api-test-computed-path-tests.tesl:230
 					teslT.Fatal("Tesl expectation failed")
 				}
 				{
@@ -649,10 +746,12 @@ func TestTeslApi13(teslT *testing.T) {
 					_ = events
 //line api-test-computed-path-tests.tesl:232
 					if !(teslrt.JsonIsNotEmpty(events)) {
+//line api-test-computed-path-tests.tesl:232
 						teslT.Fatal("Tesl expectation failed")
 					}
 //line api-test-computed-path-tests.tesl:233
 					if !(teslrt.JsonIncludesWhere(teslrt.JsonParseBody("{\"message\":\"notice-topic-2\"}").JsonRaw(), events)) {
+//line api-test-computed-path-tests.tesl:233
 						teslT.Fatal("Tesl expectation failed")
 					}
 				}

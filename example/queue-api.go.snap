@@ -50,6 +50,7 @@ golang.org/x/text v0.41.0/go.mod h1:jvf1O8ajNzZqhSrQBPbutR/EB83Cc0CFrezNQIwbb5M=
 package teslmodqueueapi
 
 import (
+	"errors"
 	"net/http"
 	"tesl.generated/teslmodqueueapi/internal/teslrt"
 )
@@ -62,7 +63,7 @@ type SendEmail struct {
 }
 
 //line queue-api.tesl:53
-var EmailQueueQueue = teslrt.NewQueue("EmailQueue", 3)
+var EmailQueueQueue = teslrt.NewQueueOn(MainDatabaseDatabase, "EmailQueue", 3, "exponential", 60)
 
 //line queue-api.tesl:33
 var MainDatabaseDatabase = teslrt.NewDatabase(
@@ -119,6 +120,45 @@ func Main() struct{} {
 	}()
 }
 
+// DecodeSendEmailJSON is the DERIVED decoder for a record with no `codec` block: the type is the
+// whole contract, exactly as it is on the Legacy runtime's generic decode.
+func DecodeSendEmailJSON(teslJSON any) teslrt.Check[SendEmail] {
+	teslFields, teslShapeErr := teslrt.DecodeObjectShape(teslJSON, "SendEmail", []string{"to", "subject", "body"})
+	if teslShapeErr != nil {
+		return teslrt.RejectShape[SendEmail](teslShapeErr.Error())
+	}
+	teslFieldTo, teslErrTo := teslrt.DecodeStringValue(teslFields["to"])
+	if teslErrTo != nil {
+		return teslrt.RejectShape[SendEmail](teslErrTo.Error())
+	}
+	teslFieldSubject, teslErrSubject := teslrt.DecodeStringValue(teslFields["subject"])
+	if teslErrSubject != nil {
+		return teslrt.RejectShape[SendEmail](teslErrSubject.Error())
+	}
+	teslFieldBody, teslErrBody := teslrt.DecodeStringValue(teslFields["body"])
+	if teslErrBody != nil {
+		return teslrt.RejectShape[SendEmail](teslErrBody.Error())
+	}
+	return teslrt.Accept(SendEmail{To: teslFieldTo, Subject: teslFieldSubject, Body: teslFieldBody})
+}
+
+var _ = teslrt.RegisterJobCodec(EmailQueueQueue, "SendEmail", func(teslJob any) any {
+	return teslEncode2(teslJob.(SendEmail))
+}, func(teslJSON any) (any, error) {
+	teslDecoded, teslErr := func(teslRaw any) (SendEmail, error) {
+		teslNested := DecodeSendEmailJSON(teslRaw)
+		if !teslNested.OK() {
+			return SendEmail{}, errors.New(teslNested.Message())
+		}
+		teslValue, _ := teslNested.Value()
+		return teslValue, nil
+	}(teslJSON)
+	if teslErr != nil {
+		return nil, teslErr
+	}
+	return teslDecoded, nil
+})
+
 var AppServer = teslrt.Server{
 	Routes: []teslrt.Route{
 		{Method: "GET", Path: "/health", Endpoint: "appRoot"},
@@ -134,6 +174,14 @@ var AppServer = teslrt.Server{
 
 func teslEncode1(teslValue string) any {
 	return teslValue
+}
+
+func teslEncode2(teslValue SendEmail) any {
+	return map[string]any{
+		"to":      teslEncode1(teslValue.To),
+		"subject": teslEncode1(teslValue.Subject),
+		"body":    teslEncode1(teslValue.Body),
+	}
 }
 
 // Declared in Tesl but not called within this module.  Tesl permits an unused

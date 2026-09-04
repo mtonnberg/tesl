@@ -196,6 +196,79 @@ let rec validate_field_accesses
   | ELambda { params; body; _ } ->
     let env' = List.map (fun (b : binding) -> (b.name, b.type_expr)) params @ env in
     validate_field_accesses env' funcs fields_by_type ctors body
+  | ESqlQuery { query; loc } ->
+    (* Canonical SQL nodes carry field names as strings rather than EField
+       expressions. Validate those names here, while still walking every
+       expression-valued SQL payload with the query binder in scope. *)
+    let field_error entity field =
+      match record_fields_of_type fields_by_type (mk_name_type entity) with
+      | Some fields when not (List.exists (fun (f : field_def) -> f.name = field) fields) ->
+        [ make_error loc
+            ~hint:(Printf.sprintf "valid fields: %s"
+              (String.concat ", " (List.map (fun (f : field_def) -> f.name) fields)))
+            (Printf.sprintf "unknown field `%s` on type `%s`" field entity) ]
+      | _ -> []
+    in
+    let rec clause_errors query_env entity = function
+      | SqlPred { field; value; _ } ->
+        field_error entity field
+        @ validate_field_accesses query_env funcs fields_by_type ctors value
+      | SqlOr clauses -> List.concat_map (clause_errors query_env entity) clauses
+      | SqlIsNull { field } | SqlIsNotNull { field } -> field_error entity field
+      | SqlIn { field; values } | SqlNotIn { field; values } ->
+        field_error entity field
+        @ List.concat_map (validate_field_accesses query_env funcs fields_by_type ctors) values
+      | SqlLike { field; pattern } | SqlILike { field; pattern } ->
+        field_error entity field
+        @ validate_field_accesses query_env funcs fields_by_type ctors pattern
+    in
+    let select_errors (seed : sql_select_seed) clauses =
+      let query_env = (seed.binder, mk_name_type seed.entity) :: env in
+      let direct =
+        (match seed.where_field with Some f -> field_error seed.entity f | None -> [])
+        @ (match seed.order with Some (f, _) -> field_error seed.entity f | None -> [])
+        @ List.concat_map (function
+            | GField f -> field_error seed.entity f
+            | GTimeTrunc (_, offset, field) ->
+              field_error seed.entity field
+              @ validate_field_accesses query_env funcs fields_by_type ctors offset)
+            seed.group_by
+        @ List.concat_map (fun (j : sql_join) ->
+            (match record_fields_of_type fields_by_type (mk_name_type j.join_entity) with
+             | None -> [ make_error loc
+                           (Printf.sprintf "unknown entity `%s` in innerJoin" j.join_entity) ]
+             | Some _ -> [])
+            @ field_error seed.entity j.main_field
+            @ field_error j.join_entity j.join_field) seed.joins
+      in
+      direct
+      @ List.concat_map (clause_errors query_env seed.entity)
+          (seed.static_clauses @ clauses)
+    in
+    (match query with
+     | QuerySelect (seed, clauses) -> select_errors seed clauses
+     | QueryDelete ((seed : sql_delete_seed), clauses) ->
+       let query_env = (seed.binder, mk_name_type seed.entity) :: env in
+       (match seed.where_field with Some f -> field_error seed.entity f | None -> [])
+       @ List.concat_map (clause_errors query_env seed.entity) clauses
+     | QueryUpdate (update : sql_update) ->
+       let query_env = (update.binder, mk_name_type update.entity) :: env in
+       List.concat_map (clause_errors query_env update.entity) update.clauses
+       @ List.concat_map (fun (field, value) ->
+           field_error update.entity field
+           @ validate_field_accesses query_env funcs fields_by_type ctors value)
+           update.updates
+     | QueryInsert insert ->
+       List.concat_map (fun (field, value) ->
+           field_error insert.entity field
+           @ validate_field_accesses env funcs fields_by_type ctors value)
+         insert.fields
+     | QueryUpsert upsert ->
+       List.concat_map (fun (field, value) ->
+           field_error upsert.entity field
+           @ validate_field_accesses env funcs fields_by_type ctors value)
+         upsert.fields
+     | QueryInsertMany _ -> [])
   (* EConstructor and EFail were NON-descending no-ops in the original walk
      (the leaf `ELit _ | EVar _ | EConstructor _ | EFail _ -> []` arm above
      already matched EConstructor/EFail), and EStartWorkers/EStartEmailWorker
@@ -333,7 +406,7 @@ let check_codec_proof_coverage ?facts ?(extra_funcs=[]) (decls : top_decl list) 
     | Some (name, fields) ->
       let field_proofs = List.filter_map (fun (f : field_def) ->
         match f.proof_ann with
-        | Some proof -> Some (f.name, List.sort_uniq String.compare (proof_predicates proof))
+        | Some proof -> Some (f.name, proof)
         | None -> None
       ) fields in
       if field_proofs = [] then None else Some (name, field_proofs)
@@ -351,7 +424,10 @@ let check_codec_proof_coverage ?facts ?(extra_funcs=[]) (decls : top_decl list) 
                 | DecodeField { field_name; via; loc; _ } ->
                   (match List.assoc_opt field_name field_requirements with
                    | None -> ()
-                   | Some required_preds ->
+                   | Some required_proof ->
+                     let required_preds =
+                       List.sort_uniq String.compare (proof_predicates required_proof) in
+                     let required_apps = proof_apps_of ~subject:field_name required_proof in
                      if via = [] then
                        errors := make_error loc
                          ~hint:(Printf.sprintf "add `via <checkFn>` so field '%s' is validated before decoding succeeds" field_name)
@@ -383,15 +459,22 @@ let check_codec_proof_coverage ?facts ?(extra_funcs=[]) (decls : top_decl list) 
                                  | AuthKind -> "auth"))
                              :: !errors
                          | Some info ->
-                           covered := pred_names_of_return_spec info.fi_return @ !covered
+                           covered := proof_apps_of_return_spec info.fi_return @ !covered
                        ) via;
-                       let covered = List.sort_uniq String.compare !covered in
-                       let uncovered = List.filter (fun pred -> not (List.mem pred covered)) required_preds in
+                       let uncovered = uncovered_proof_apps ~declared:required_apps ~covered:!covered in
                        if uncovered <> [] then
                          errors := make_error loc
-                           ~hint:(Printf.sprintf "via functions provided: %s" (String.concat ", " via))
-                           (Printf.sprintf "codec '%s': decoder field '%s' requires proof predicates %s that are not established by any `via` function"
-                              cf.name field_name (String.concat ", " uncovered))
+                           ~hint:(Printf.sprintf
+                                    "via functions provided: %s — they establish %s; a `via` must \
+                                     establish the declared proof with the SAME arguments (only the \
+                                     value's own name may differ)"
+                                    (String.concat ", " via)
+                                    (if !covered = [] then "no proof"
+                                     else String.concat ", "
+                                         (List.map (fun app -> "`" ^ describe_proof_app app ^ "`") !covered)))
+                           (Printf.sprintf "codec '%s': decoder field '%s' requires proof %s that is not established by any `via` function"
+                              cf.name field_name
+                              (String.concat ", " (List.map (fun app -> "`" ^ describe_proof_app app ^ "`") uncovered)))
                            :: !errors
                      end)
                 | DecodeDefault { field_name; loc; _ } ->
@@ -401,7 +484,9 @@ let check_codec_proof_coverage ?facts ?(extra_funcs=[]) (decls : top_decl list) 
                      unproven field.  Fail closed for such fields; non-proof
                      fields (no requirement) keep defaulting freely. *)
                   (match List.assoc_opt field_name field_requirements with
-                   | Some (_ :: _ as required_preds) ->
+                   | Some required_proof when proof_predicates required_proof <> [] ->
+                     let required_preds =
+                       List.sort_uniq String.compare (proof_predicates required_proof) in
                      errors := make_error loc
                        ~hint:(Printf.sprintf
                          "field '%s' carries a proof; decode it with `via <checkFn>` that establishes it, not from a default value"
@@ -410,7 +495,7 @@ let check_codec_proof_coverage ?facts ?(extra_funcs=[]) (decls : top_decl list) 
                          "codec '%s': decoder field '%s' requires proof predicates %s but is populated from a default value with no `via` validation"
                          cf.name field_name (String.concat ", " required_preds))
                        :: !errors
-                   | Some [] | None -> ())
+                   | Some _ | None -> ())
                 | DecodeCrossCheck _ -> ()
               ) alt
             ) alts))
@@ -597,4 +682,3 @@ let check_codec_field_types ?facts ?(extra_funcs=[]) (decls : top_decl list) : v
 
 
 (* ── 4. Call-site proof flow + 5. ForAll propagation ────────────────────── *)
-

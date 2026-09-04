@@ -50,6 +50,7 @@ golang.org/x/text v0.41.0/go.mod h1:jvf1O8ajNzZqhSrQBPbutR/EB83Cc0CFrezNQIwbb5M=
 package teslmodlesson31workerconcurrency
 
 import (
+	"errors"
 	"net/http"
 	"tesl.generated/teslmodlesson31workerconcurrency/internal/teslrt"
 )
@@ -62,7 +63,7 @@ type EmailJob struct {
 }
 
 //line lesson31-worker-concurrency.tesl:86
-var EmailQueueQueue = teslrt.NewQueue("EmailQueue", 3)
+var EmailQueueQueue = teslrt.NewQueueOn(EmailDatabaseDatabase, "EmailQueue", 3, "exponential", 10)
 
 //line lesson31-worker-concurrency.tesl:99
 var EmailDatabaseDatabase = teslrt.NewDatabase(
@@ -135,6 +136,45 @@ func Main() struct{} {
 	}()
 }
 
+// DecodeEmailJobJSON is the DERIVED decoder for a record with no `codec` block: the type is the
+// whole contract, exactly as it is on the Legacy runtime's generic decode.
+func DecodeEmailJobJSON(teslJSON any) teslrt.Check[EmailJob] {
+	teslFields, teslShapeErr := teslrt.DecodeObjectShape(teslJSON, "EmailJob", []string{"recipientId", "subject", "body"})
+	if teslShapeErr != nil {
+		return teslrt.RejectShape[EmailJob](teslShapeErr.Error())
+	}
+	teslFieldRecipientId, teslErrRecipientId := teslrt.DecodeStringValue(teslFields["recipientId"])
+	if teslErrRecipientId != nil {
+		return teslrt.RejectShape[EmailJob](teslErrRecipientId.Error())
+	}
+	teslFieldSubject, teslErrSubject := teslrt.DecodeStringValue(teslFields["subject"])
+	if teslErrSubject != nil {
+		return teslrt.RejectShape[EmailJob](teslErrSubject.Error())
+	}
+	teslFieldBody, teslErrBody := teslrt.DecodeStringValue(teslFields["body"])
+	if teslErrBody != nil {
+		return teslrt.RejectShape[EmailJob](teslErrBody.Error())
+	}
+	return teslrt.Accept(EmailJob{RecipientId: teslFieldRecipientId, Subject: teslFieldSubject, Body: teslFieldBody})
+}
+
+var _ = teslrt.RegisterJobCodec(EmailQueueQueue, "EmailJob", func(teslJob any) any {
+	return teslEncode2(teslJob.(EmailJob))
+}, func(teslJSON any) (any, error) {
+	teslDecoded, teslErr := func(teslRaw any) (EmailJob, error) {
+		teslNested := DecodeEmailJobJSON(teslRaw)
+		if !teslNested.OK() {
+			return EmailJob{}, errors.New(teslNested.Message())
+		}
+		teslValue, _ := teslNested.Value()
+		return teslValue, nil
+	}(teslJSON)
+	if teslErr != nil {
+		return nil, teslErr
+	}
+	return teslDecoded, nil
+})
+
 var ConcurrencyServer = teslrt.Server{
 	Routes: []teslrt.Route{
 		{Method: "POST", Path: "/send-welcome", Endpoint: "sendWelcomeEmail"},
@@ -150,6 +190,14 @@ var ConcurrencyServer = teslrt.Server{
 
 func teslEncode1(teslValue string) any {
 	return teslValue
+}
+
+func teslEncode2(teslValue EmailJob) any {
+	return map[string]any{
+		"recipientId": teslEncode1(teslValue.RecipientId),
+		"subject":     teslEncode1(teslValue.Subject),
+		"body":        teslEncode1(teslValue.Body),
+	}
 }
 
 // Declared in Tesl but not called within this module.  Tesl permits an unused

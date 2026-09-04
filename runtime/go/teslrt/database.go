@@ -1,13 +1,9 @@
 package teslrt
 
 import (
-	"bytes"
 	"context"
-	"runtime"
-	"strconv"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -130,29 +126,35 @@ func (database *Database) bound() *PostgresDB {
 // rather than silently running outside it.
 var openTransactions sync.Map // goroutine id -> pgx.Tx
 
-// WithTransaction is `transaction { … }`. Against the in-memory store it is the body and
-// nothing else — Racket's `call-with-queue-transaction` is `(thunk)` with no connection — and
-// against PostgreSQL it is a real BEGIN/COMMIT, rolled back if the body panics so a check
-// failure halfway through leaves nothing behind.
+// WithTransaction is `transaction { … }`: the body runs atomically with respect to a trap.
+// Against PostgreSQL it is a real BEGIN/COMMIT, rolled back if the body panics so a check
+// failure halfway through leaves nothing behind. Against the in-memory store it is the same
+// PROMISE kept a different way — see `WithMemoryTransaction` — because the spec says the
+// transaction rolls back on any exception and does not carve the Memory store out of that, and
+// `tesl test` runs on the Memory store: a test asserting atomicity has to observe the same
+// outcome production does.
 func WithTransaction(body func()) {
 	database := boundDatabase.Load()
 	connection := database.bound()
 	if connection == nil {
-		body()
+		WithMemoryTransaction(body)
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	defer cancel()
-	transaction, err := connection.pool.Begin(ctx)
+	// The lease bound applies to acquiring the connection and issuing BEGIN, not to the body:
+	// the body's own statements each run under their own lease (see the executors), and the
+	// commit gets a fresh bound below, so a transaction may legitimately outlive one lease.
+	beginCtx, cancelBegin := context.WithTimeout(context.Background(), pgLeaseTimeout())
+	defer cancelBegin()
+	transaction, err := connection.pool.Begin(beginCtx)
 	if err != nil {
-		panic("transaction: cannot begin: " + err.Error())
+		panic(pgFailure("transaction: cannot begin", err))
 	}
 	key := goroutineID()
 	if _, nested := openTransactions.Load(key); nested {
 		// Racket nests by starting a SAVEPOINT; until that is built, a nested block would
 		// silently commit the outer one at its own end, so it is refused here rather than
 		// answered with weaker atomicity than it claims.
-		_ = transaction.Rollback(ctx)
+		_ = transaction.Rollback(beginCtx)
 		panic("transaction: a transaction is already open on database " + database.Name)
 	}
 	openTransactions.Store(key, transaction)
@@ -160,33 +162,18 @@ func WithTransaction(body func()) {
 	defer func() {
 		openTransactions.Delete(key)
 		if !committed {
+			ctx, cancel := context.WithTimeout(context.Background(), pgLeaseTimeout())
+			defer cancel()
 			_ = transaction.Rollback(ctx)
 		}
 	}()
 	body()
-	if err := transaction.Commit(ctx); err != nil {
-		panic("transaction: cannot commit: " + err.Error())
+	commitCtx, cancelCommit := context.WithTimeout(context.Background(), pgLeaseTimeout())
+	defer cancelCommit()
+	if err := transaction.Commit(commitCtx); err != nil {
+		panic(pgFailure("transaction: cannot commit", err))
 	}
 	committed = true
-}
-
-// goroutineID reads the id out of the goroutine's own stack header, which is the only place
-// the runtime exposes it. The header's shape ("goroutine 17 [running]:") is fixed by
-// `runtime.Stack` itself; an unreadable one answers 0, which is a key like any other — every
-// goroutine that fails to parse would share one transaction, and none can, because the parse
-// cannot fail for a header this function is looking at.
-func goroutineID() uint64 {
-	var header [64]byte
-	written := runtime.Stack(header[:], false)
-	fields := bytes.Fields(header[:written])
-	if len(fields) < 2 {
-		return 0
-	}
-	id, err := strconv.ParseUint(string(fields[1]), 10, 64)
-	if err != nil {
-		return 0
-	}
-	return id
 }
 
 // currentTransaction is the open transaction for THIS goroutine, if any.

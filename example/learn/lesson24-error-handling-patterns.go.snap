@@ -156,6 +156,11 @@ func TestTesl0(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson24-error-handling-patterns.tesl:123
 		email := "user@example.com"
@@ -166,6 +171,7 @@ func TestTesl0(teslT *testing.T) {
 			_ = result
 //line lesson24-error-handling-patterns.tesl:125
 			if result != "user@example.com" {
+//line lesson24-error-handling-patterns.tesl:125
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -179,6 +185,11 @@ func TestTesl1(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson24-error-handling-patterns.tesl:129
 		email := "notanemail"
@@ -197,6 +208,11 @@ func TestTesl2(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson24-error-handling-patterns.tesl:134
 		age := teslrt.FromInt64(25)
@@ -207,6 +223,7 @@ func TestTesl2(teslT *testing.T) {
 			_ = result
 //line lesson24-error-handling-patterns.tesl:136
 			if !teslrt.Equal(result, teslrt.FromInt64(25)) {
+//line lesson24-error-handling-patterns.tesl:136
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -220,6 +237,11 @@ func TestTesl3(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson24-error-handling-patterns.tesl:140
 		age := teslrt.Neg(teslrt.FromInt64(1))
@@ -238,6 +260,11 @@ func TestTesl4(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson24-error-handling-patterns.tesl:145
 		age := teslrt.FromInt64(200)
@@ -256,6 +283,11 @@ func TestTesl5(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson24-error-handling-patterns.tesl:150
 		s := "notanumber"

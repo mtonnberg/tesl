@@ -19,7 +19,12 @@ func TestProcessTargetAttachesToTCPRuntime(t *testing.T) {
 	}
 	defer func() { _ = control.Close() }()
 	target := NewProcessTarget()
-	backend, err := target.AttachBackend(json.RawMessage(`{"address":"` + control.Endpoint() + `"}`))
+	// A TCP endpoint refuses a handshake without its token — including the
+	// attach adapter's own.
+	if _, err := target.AttachBackend(json.RawMessage(`{"address":"` + control.Endpoint() + `"}`)); err == nil {
+		t.Fatal("attach without token must be refused")
+	}
+	backend, err := target.AttachBackend(json.RawMessage(`{"address":"` + control.Endpoint() + `","token":"` + control.Token() + `"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -28,6 +33,85 @@ func TestProcessTargetAttachesToTCPRuntime(t *testing.T) {
 	}
 	if err := target.Close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// The editor's `port` + default `project` configuration: the token is read from
+// the project's token file when the attach arguments carry none.
+func TestProcessTargetAttachByPortReadsProjectToken(t *testing.T) {
+	control, err := teslrt.NewDebugger().StartDebugControlTCP(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = control.Close() }()
+	project := t.TempDir()
+	stuff := filepath.Join(project, ".tesl-stuff")
+	if err := os.MkdirAll(stuff, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stuff, teslrt.DebugTokenFile), []byte(control.Token()+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	target := NewProcessTarget()
+	arguments, _ := json.Marshal(processAttachArguments{Project: project, Port: control.Port()})
+	if _, err := target.AttachBackend(arguments); err != nil {
+		t.Fatal(err)
+	}
+	if err := target.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDiscoverProjectEndpointReadsTokenBesidePort(t *testing.T) {
+	project := t.TempDir()
+	stuff := filepath.Join(project, ".tesl-stuff")
+	if err := os.MkdirAll(stuff, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stuff, teslrt.DebugPortFile), []byte("4321\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DiscoverProjectEndpoint(project); err == nil || !strings.Contains(err.Error(), teslrt.DebugTokenFile) {
+		t.Fatalf("missing token file error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(stuff, teslrt.DebugTokenFile), []byte("not-hex\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DiscoverProjectEndpoint(project); err == nil {
+		t.Fatal("malformed token accepted")
+	}
+	token, err := teslrt.NewDebugToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stuff, teslrt.DebugTokenFile), []byte("  "+token+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	endpoint, err := DiscoverProjectEndpoint(project)
+	if err != nil || endpoint.Address != "127.0.0.1:4321" || endpoint.Token != token || endpoint.Socket != "" {
+		t.Fatalf("endpoint = %#v, %v", endpoint, err)
+	}
+}
+
+// A TCP launch mints the token in the launcher and passes it to the child
+// through the environment, so the launcher can dial as soon as the port opens.
+func TestLaunchEndpointTCPMintsTokenForChild(t *testing.T) {
+	endpoint, err := launchEndpoint(processLaunchArguments{DebugPort: 4567}, "/tmp/tesl-project")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if endpoint.address != "127.0.0.1:4567" || endpoint.token == "" {
+		t.Fatalf("endpoint = %#v", endpoint)
+	}
+	if err := teslrt.ValidateDebugToken(endpoint.token); err != nil {
+		t.Fatal(err)
+	}
+	if endpoint.environment[teslrt.DebugTokenEnv] != endpoint.token || endpoint.environment["TESL_DEBUG_PORT"] != "4567" {
+		t.Fatalf("environment = %#v", endpoint.environment)
+	}
+	other, err := launchEndpoint(processLaunchArguments{DebugAddress: "127.0.0.1:4568"}, "/tmp/tesl-project")
+	if err != nil || other.address != "127.0.0.1:4568" || other.token == endpoint.token {
+		t.Fatalf("address endpoint = %#v, %v", other, err)
 	}
 }
 

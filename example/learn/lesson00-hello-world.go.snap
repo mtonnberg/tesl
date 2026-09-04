@@ -49,14 +49,21 @@ func TestTesl0(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft1 := Greet("World")
 //line lesson00-hello-world.tesl:32
 	if teslLeft1 != "Hello, World!" {
+//line lesson00-hello-world.tesl:32
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft2 := Greet("Tesl")
 //line lesson00-hello-world.tesl:33
 	if teslLeft2 != "Hello, Tesl!" {
+//line lesson00-hello-world.tesl:33
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -68,9 +75,15 @@ func TestTesl1(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft3 := Add(teslrt.FromInt64(1), teslrt.FromInt64(2))
 //line lesson00-hello-world.tesl:37
 	if !teslrt.Equal(teslLeft3, teslrt.FromInt64(3)) {
+//line lesson00-hello-world.tesl:37
 		teslT.Fatal("Tesl expectation failed")
 	}
 	{
@@ -80,11 +93,13 @@ func TestTesl1(teslT *testing.T) {
 		teslLeft4 := Add(x, teslrt.FromInt64(0))
 //line lesson00-hello-world.tesl:39
 		if !teslrt.Equal(teslLeft4, teslrt.FromInt64(1)) {
+//line lesson00-hello-world.tesl:39
 			teslT.Fatal("Tesl expectation failed")
 		}
 		teslLeft5 := Add(teslrt.FromInt64(10), teslrt.FromInt64(-3))
 //line lesson00-hello-world.tesl:40
 		if !teslrt.Equal(teslLeft5, teslrt.FromInt64(7)) {
+//line lesson00-hello-world.tesl:40
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}

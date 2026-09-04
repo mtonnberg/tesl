@@ -517,8 +517,10 @@ func completeTodo(requestUser User, todoId string) Todo {
 					teslNext := todo
 					teslNext.Status = Status{Tag: StatusDone}
 					return teslNext
-				}, teslrt.PgSql("update \"todo_api\".\"todos\" set \"status\" = $1 where \"id\" = $2 returning \"id\", \"title\", \"owner_id\", \"status\", \"created_at\"", func() []any {
+				}, teslrt.PgSqlProbed("update \"todo_api\".\"todos\" set \"status\" = $1 where \"id\" = $2 and (select count(*) from \"todo_api\".\"todos\" where \"id\" = $2) = 1 returning \"id\", \"title\", \"owner_id\", \"status\", \"created_at\"", func() []any {
 					return []any{teslrt.EncodeJSONValue(teslEncode1(Status{Tag: StatusDone})), todoId}
+				}, "select count(*) from \"todo_api\".\"todos\" where \"id\" = $1", func() []any {
+					return []any{todoId}
 				}), teslScanTodo)
 			}
 			panic("unreachable: checker guarantees case exhaustiveness")

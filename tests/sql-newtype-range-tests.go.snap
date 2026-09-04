@@ -59,6 +59,11 @@ func TestTesl0(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line sql-newtype-range-tests.tesl:22
 		now := teslrt.NowMillis()
@@ -77,6 +82,7 @@ func TestTesl0(teslT *testing.T) {
 					teslLeft1 := inWindow(lo, hi)
 //line sql-newtype-range-tests.tesl:26
 					if !teslrt.Equal(teslLeft1, teslrt.FromInt64(1)) {
+//line sql-newtype-range-tests.tesl:26
 						teslT.Fatal("Tesl expectation failed")
 					}
 				}
@@ -92,6 +98,11 @@ func TestTesl1(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line sql-newtype-range-tests.tesl:30
 		now := teslrt.NowMillis()
@@ -110,6 +121,7 @@ func TestTesl1(teslT *testing.T) {
 					teslLeft2 := inWindow(lo, hi)
 //line sql-newtype-range-tests.tesl:34
 					if !teslrt.Equal(teslLeft2, teslrt.FromInt64(0)) {
+//line sql-newtype-range-tests.tesl:34
 						teslT.Fatal("Tesl expectation failed")
 					}
 				}

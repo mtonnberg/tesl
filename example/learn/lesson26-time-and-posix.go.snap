@@ -342,6 +342,11 @@ func TestTesl0(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson26-time-and-posix.tesl:318
 		base := teslrt.SecondsToPosix(teslrt.FromInt64(1000))
@@ -353,6 +358,7 @@ func TestTesl0(teslT *testing.T) {
 			teslLeft1 := AgeDescription(base, fiveMinLater)
 //line lesson26-time-and-posix.tesl:321
 			if teslLeft1 != "5m ago" {
+//line lesson26-time-and-posix.tesl:321
 				teslT.Fatal("Tesl expectation failed")
 			}
 			{
@@ -362,6 +368,7 @@ func TestTesl0(teslT *testing.T) {
 				teslLeft2 := AgeDescription(base, twoHrLater)
 //line lesson26-time-and-posix.tesl:324
 				if teslLeft2 != "2h ago" {
+//line lesson26-time-and-posix.tesl:324
 					teslT.Fatal("Tesl expectation failed")
 				}
 				{
@@ -371,6 +378,7 @@ func TestTesl0(teslT *testing.T) {
 					teslLeft3 := AgeDescription(base, almostNow)
 //line lesson26-time-and-posix.tesl:327
 					if teslLeft3 != "just now" {
+//line lesson26-time-and-posix.tesl:327
 						teslT.Fatal("Tesl expectation failed")
 					}
 				}
@@ -387,6 +395,11 @@ func TestTesl1(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson26-time-and-posix.tesl:331
 		nowTs := teslrt.SecondsToPosix(teslrt.FromInt64(1000))
@@ -401,10 +414,12 @@ func TestTesl1(teslT *testing.T) {
 				_ = old
 //line lesson26-time-and-posix.tesl:334
 				if !(CreatedRecently(recent, nowTs, teslrt.FromInt64(1000))) {
+//line lesson26-time-and-posix.tesl:334
 					teslT.Fatal("Tesl expectation failed")
 				}
 //line lesson26-time-and-posix.tesl:335
 				if CreatedRecently(old, nowTs, teslrt.FromInt64(1000)) {
+//line lesson26-time-and-posix.tesl:335
 					teslT.Fatal("Tesl expectation failed")
 				}
 			}
@@ -420,12 +435,18 @@ func TestTesl2(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson26-time-and-posix.tesl:340
 		formatted := FormatPublishedAt(teslrt.SecondsToPosix(teslrt.FromInt64(0)), "UTC")
 		_ = formatted
 //line lesson26-time-and-posix.tesl:341
 		if !(teslrt.StringStartsWith(formatted, "1970-01-01")) {
+//line lesson26-time-and-posix.tesl:341
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -439,6 +460,11 @@ func TestTesl3(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson26-time-and-posix.tesl:346
 		t1 := teslrt.SecondsToPosix(teslrt.FromInt64(1000))
@@ -450,11 +476,13 @@ func TestTesl3(teslT *testing.T) {
 			teslLeft4 := teslrt.DiffMs(t1, t2)
 //line lesson26-time-and-posix.tesl:348
 			if !teslrt.Equal(teslLeft4, teslrt.FromInt64(1500)) {
+//line lesson26-time-and-posix.tesl:348
 				teslT.Fatal("Tesl expectation failed")
 			}
 			teslLeft5 := teslrt.DiffMs(t1, teslrt.AddMs(t1, teslrt.FromInt64(500)))
 //line lesson26-time-and-posix.tesl:350
 			if !teslrt.Equal(teslLeft5, teslrt.FromInt64(500)) {
+//line lesson26-time-and-posix.tesl:350
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}

@@ -1,0 +1,64 @@
+module SqlUpdateReturnOneTests exposing []
+
+# `updateAndReturnOne` names ONE row.  The Memory backend used to update the FIRST matching
+# row while PostgreSQL updated EVERY matching row — a disagreement between the store `tesl
+# test` runs on and the store production runs on, invisible to any test.  Both backends now
+# refuse an ambiguous predicate before changing anything (language review 2026-09-02, H2).
+
+import Tesl.Prelude exposing [Bool(..), Int, String]
+import Tesl.DB exposing [dbRead, dbWrite]
+import Tesl.Database exposing [Database, DatabaseBackend, Memory]
+import Tesl.Maybe exposing [Maybe(..)]
+
+entity Product table "products" primaryKey id {
+  id: String
+  name: String
+  price: Int
+}
+
+# Named so each test block starts from an empty store (an entity outside every `database`
+# declaration shares one store across the file's test blocks).
+database TestDb = Database {
+  schema: "sql_update_return_one"
+  entities: [Product]
+  backend: Memory
+}
+
+fn renameProduct(id: String, name: String) -> Product requires [dbWrite] =
+  updateAndReturnOne p in Product
+    where p.id == id
+    set p.name = name
+
+fn repriceAll(price: Int, next: Int) -> Product requires [dbWrite] =
+  updateAndReturnOne p in Product
+    where p.price == price
+    set p.price = next
+
+fn findProduct(id: String) -> Maybe Product requires [dbRead] =
+  selectOne p from Product where p.id == id
+
+test "updateAndReturnOne on a unique predicate updates that row" requires [dbRead, dbWrite] {
+  let _ = insert Product { id: "a", name: "alpha", price: 10 }
+  let _ = insert Product { id: "b", name: "beta", price: 10 }
+  let renamed = renameProduct "a" "alpha II"
+  expect renamed.name == "alpha II"
+  expect (case findProduct "b" of
+    Something p -> p.name == "beta"
+    Nothing -> False)
+}
+
+test "updateAndReturnOne on a predicate matching two rows traps and changes nothing" requires [dbRead, dbWrite] {
+  let _ = insert Product { id: "a", name: "alpha", price: 10 }
+  let _ = insert Product { id: "b", name: "beta", price: 10 }
+  expectFail repriceAll 10 99
+  expect (case findProduct "a" of
+    Something p -> p.price == 10
+    Nothing -> False)
+  expect (case findProduct "b" of
+    Something p -> p.price == 10
+    Nothing -> False)
+}
+
+test "updateAndReturnOne on no matching row traps" requires [dbRead, dbWrite] {
+  expectFail renameProduct "missing" "x"
+}

@@ -265,6 +265,9 @@ func clientAddressOf(request *http.Request, trustedProxies []string) string {
 // SetSessionCookie is `Http.setSessionCookie`: the ONE blessed session transport. The name is
 // `__Host-`-prefixed so the browser enforces Secure, host-only and Path=/, and the lifetime
 // matches the token's own TTL — a cookie that outlived its token would only produce 401s.
+// The TTL is the `sessionPolicy` clause's (`sessionPolicySeconds`), the same number `JWT.sign`
+// stamps into `exp` and the SSO callback writes: under `ShortSession` a hard-coded 3600 kept
+// a dead 900-second token in the browser for 45 minutes, so the two session writers disagreed.
 //
 // There is no name parameter and no attribute parameter: every option here is a way to get it
 // wrong, and the fixed shape is what makes `Http.sessionToken` able to read it back.
@@ -281,7 +284,7 @@ func SetSessionCookie(scope *RequestScope, token JwtToken) struct{} {
 	}
 	scope.SetCookieHeader("Http.setSessionCookie",
 		fmt.Sprintf("%s=%s; %s; Max-Age=%d",
-			sessionCookieName, token.Value, sessionCookieAttributes, jwtTTLSeconds))
+			sessionCookieName, token.Value, sessionCookieAttributes, sessionPolicySeconds()))
 	return struct{}{}
 }
 

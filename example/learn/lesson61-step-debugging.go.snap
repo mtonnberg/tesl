@@ -100,6 +100,11 @@ func TestTesl0(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson61-step-debugging.tesl:173
 		n := teslrt.FromInt64(0)
@@ -110,6 +115,7 @@ func TestTesl0(teslT *testing.T) {
 			_ = result
 //line lesson61-step-debugging.tesl:175
 			if !teslrt.Equal(result, teslrt.FromInt64(0)) {
+//line lesson61-step-debugging.tesl:175
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -123,6 +129,11 @@ func TestTesl1(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson61-step-debugging.tesl:179
 		n := teslrt.FromInt64(100)
@@ -133,6 +144,7 @@ func TestTesl1(teslT *testing.T) {
 			_ = result
 //line lesson61-step-debugging.tesl:181
 			if !teslrt.Equal(result, teslrt.FromInt64(100)) {
+//line lesson61-step-debugging.tesl:181
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -146,6 +158,11 @@ func TestTesl2(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson61-step-debugging.tesl:185
 		n := teslrt.FromInt64(75)
@@ -156,6 +173,7 @@ func TestTesl2(teslT *testing.T) {
 			_ = result
 //line lesson61-step-debugging.tesl:187
 			if !teslrt.Equal(result, teslrt.FromInt64(75)) {
+//line lesson61-step-debugging.tesl:187
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -169,6 +187,11 @@ func TestTesl3(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson61-step-debugging.tesl:191
 		n := teslrt.Neg(teslrt.FromInt64(10))
@@ -197,6 +220,11 @@ func TestTesl4(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson61-step-debugging.tesl:198
 		n := teslrt.FromInt64(150)
@@ -215,9 +243,15 @@ func TestTesl5(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft4 := ComputeGrade(teslrt.FromInt64(95))
 //line lesson61-step-debugging.tesl:203
 	if teslLeft4 != "A" {
+//line lesson61-step-debugging.tesl:203
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -229,9 +263,15 @@ func TestTesl6(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft5 := ComputeGrade(teslrt.FromInt64(85))
 //line lesson61-step-debugging.tesl:207
 	if teslLeft5 != "B" {
+//line lesson61-step-debugging.tesl:207
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -243,9 +283,15 @@ func TestTesl7(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft6 := ComputeGrade(teslrt.FromInt64(75))
 //line lesson61-step-debugging.tesl:211
 	if teslLeft6 != "C" {
+//line lesson61-step-debugging.tesl:211
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -257,9 +303,15 @@ func TestTesl8(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft7 := ComputeGrade(teslrt.FromInt64(55))
 //line lesson61-step-debugging.tesl:215
 	if teslLeft7 != "F" {
+//line lesson61-step-debugging.tesl:215
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
