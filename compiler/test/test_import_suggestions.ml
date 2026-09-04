@@ -239,6 +239,26 @@ let test_unknown_name_without_candidate_is_plain () =
    | Some f ->
      Alcotest.failf "expected no fix, got %s" (Compile.fix_to_json (Some f)))
 
+(* Folder discovery must not follow attacker-controlled directory symlinks.
+   These self/mutual cycles made an unknown-name diagnostic recurse forever. *)
+let test_local_scan_ignores_directory_symlink_cycles () =
+  let dir = fresh_dir () in
+  let sub = Filename.concat dir "sub" in
+  Unix.mkdir sub 0o755;
+  Unix.symlink "." (Filename.concat sub "self");
+  Unix.symlink "right" (Filename.concat sub "left");
+  Unix.symlink "left" (Filename.concat sub "right");
+  let src = "\
+             module Main exposing [go]\n\
+             import Tesl.Prelude exposing [Int]\n\
+             \n\
+             fn go(x: Int) -> Int =\n\
+             \  frobnicateXyz x\n" in
+  let diags = check_at (Filename.concat dir "main.tesl") src in
+  let d = find_diag ~code:"T001" ~msg_sub:"unknown name: frobnicateXyz" diags in
+  Alcotest.(check string) "scan completed without a spurious suggestion"
+    "unknown name: frobnicateXyz" d.message
+
 (* ── #34: bare top-level constants across the module boundary ────────────── *)
 
 (* A literal-valued exported constant now binds in the importing module — with
@@ -458,6 +478,8 @@ let () =
         test_local_subdir_hint_no_fix;
       Alcotest.test_case "no candidate → plain error" `Quick
         test_unknown_name_without_candidate_is_plain;
+      Alcotest.test_case "directory symlink cycles are ignored" `Quick
+        test_local_scan_ignores_directory_symlink_cycles;
     ];
     "const-exports", [
       Alcotest.test_case "literal const binds across modules (#34)" `Quick
