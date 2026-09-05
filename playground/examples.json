@@ -12,21 +12,21 @@
     ]
   },
   {
-    "name": "A missing import \u00b7 try the quick fix",
+    "name": "A missing import · try the quick fix",
     "file": "missing-import.tesl",
     "errors": [
       "T001"
     ]
   },
   {
-    "name": "A database write \u00b7 explore permissions",
+    "name": "A database write · explore permissions",
     "file": "capability-missing.tesl",
     "errors": [
       "V001"
     ]
   },
   {
-    "name": "Hello HTTP \u00b7 run this server locally",
+    "name": "Hello HTTP · run this server locally",
     "file": "hello-server.tesl",
     "errors": [],
     "default": true
@@ -36,6 +36,10 @@
     "file": "capability-chain.tesl",
     "errors": [
       "V001"
+    ],
+    "repair": [
+      "requires [dbRead Note]",
+      "requires [dbWrite Note]"
     ]
   },
   {
@@ -43,6 +47,10 @@
     "file": "money-check.tesl",
     "errors": [
       "V001"
+    ],
+    "repair": [
+      "Money.add price shipping",
+      "let checked = check Money.requireSameCurrency price shipping\n  Money.add price checked"
     ]
   },
   {
@@ -51,6 +59,10 @@
     "errors": [
       "T001",
       "T001"
+    ],
+    "repair": [
+      "speed + elapsed",
+      "speed * elapsed"
     ]
   },
   {
@@ -100,6 +112,44 @@
     "repair": [
       "# Add an example for zero here.",
       "#> double 0\n#= 0"
+    ],
+    "run_tests": true
+  },
+  {
+    "file": "sql-fields.tesl",
+    "name": "Query the fields your entity declares",
+    "errors": [
+      "T001",
+      "V001",
+      "V001"
+    ],
+    "repair": [
+      "invoice.customerId == customer",
+      "invoice.customer == customer"
+    ],
+    "run_tests": true
+  },
+  {
+    "file": "sql-results.tesl",
+    "name": "Handle a query that finds no invoice",
+    "errors": [
+      "V001"
+    ],
+    "repair": [
+      "  case found of\n    Something invoice -> \"Invoice ${invoice.id} for ${invoice.customer}\"",
+      "  case found of\n    Nothing -> \"No invoice found\"\n    Something invoice -> \"Invoice ${invoice.id} for ${invoice.customer}\""
+    ],
+    "run_tests": true
+  },
+  {
+    "file": "sql-evidence.tesl",
+    "name": "Keep a fetched invoice tied to its id",
+    "errors": [
+      "V001"
+    ],
+    "repair": [
+      "  let invoice = fetchInvoice \"evidence-other\"",
+      "  let invoice = fetchInvoice id"
     ],
     "run_tests": true
   }

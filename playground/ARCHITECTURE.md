@@ -140,7 +140,7 @@ the source, selected example and highlight captured when opening the guide, or
 leave with the edited source. This is a source snapshot,
 not a preserved undo history. Shared links never start the guide automatically.
 
-The five chapters contain eleven bounded exercises. `Guide.elm` is the catalog for
+The six chapters contain fourteen bounded exercises. `Guide.elm` is the catalog for
 step IDs, order, chapter membership, examples, deep-link keys, suggested edits and
 test commands. Elm owns deep-link resolution and validation of stored exercise IDs;
 JavaScript storage effects operate on opaque IDs. Completion compares the accepted

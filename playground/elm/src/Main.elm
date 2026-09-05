@@ -448,6 +448,8 @@ diagnosticSummary diagnostic =
             capabilities = String.split "requiring [" diagnostic.message |> List.drop 1 |> List.head |> Maybe.map (String.split "]" >> List.head >> Maybe.withDefault "") |> Maybe.withDefault ""
         in
         "Missing capability: declare [" ++ capabilities ++ "] in the requires clause."
+    else if diagnostic.code == "V001" && String.contains "does not statically satisfy declared proof `FromDb" diagnostic.message then
+        "This row needs database evidence matching the requested id."
     else if diagnostic.code == "V001" && String.contains "does not statically satisfy declared proof" diagnostic.message then
         "This value needs a check before it can be used here."
     else
@@ -666,7 +668,8 @@ viewJourney model =
                     if step == 3 then String.fromInt (List.length model.journeyDone) ++ " of " ++ String.fromInt (List.length exerciseIds) ++ " steps completed"
                     else if checking then "Checking your edit…"
                     else if completed && currentComplete then
-                        if Guide.testCommand step /= Nothing then "★ Test added and compiler-checked · run it locally below" else "★ Step completed"
+                        if List.member step (chapterSteps 12) then "★ Query compiler-checked · run its tests locally below"
+                        else if Guide.testCommand step /= Nothing then "★ Test added and compiler-checked · run it locally below" else "★ Step completed"
                     else if completed then "★ Completed earlier; your star is saved."
                     else "Apply the suggested edit, or try your own change in the editor."
                 stepNumber = List.indexedMap Tuple.pair steps |> List.filter (\( _, index ) -> index == step) |> List.head |> Maybe.map (Tuple.first >> (+) 1) |> Maybe.withDefault 1
@@ -698,6 +701,20 @@ viewJourney model =
                         6 ->
                             [ p [] [ text "How far did you travel? Multiply speed by elapsed time; the compiler checks that the result is a length." ]
                             , diagram [ ( "Speed", "Speed has the dimension length divided by time. Unit constructors convert to the standard internal representation." ), ( "× Duration", "Multiplying by time cancels the time dimension. The compiler checks this relationship in the expression." ), ( "Length", "The result matches the declared return type. The dimension checks happen at compile time." ) ]
+                            ]
+                        12 ->
+                            [ p [] [ text "Query invoices for one customer. The query refers to customerId, but the entity declares customer. The compiler checks that field before any database is contacted." ]
+                            , diagram [ ( "Invoice fields", "The entity declaration supplies the query’s field names and types. Change a field and the compiler checks its uses." ), ( "where customer", "The predicate compares a declared String field with the customer parameter. Values become SQL parameters when the application runs." ), ( "List Invoice", "select returns a list of matching invoices. An empty list is a valid result. The tests check both a matching customer and an unknown one." ) ]
+                            , details [] [ summary [] [ text "What should I try next?" ], p [] [ text "After applying the edit, try comparing invoice.customer to 42. The compiler also checks the comparison’s types. Undo that experiment to return to the completed example." ] ]
+                            ]
+                        13 ->
+                            [ p [] [ text "Now fetch one invoice by id. The successful result becomes a label, but the case expression does not yet handle a query that finds nothing." ]
+                            , diagram [ ( "selectOne", "A query for one row returns Maybe, so the result can be Nothing or Something invoice." ), ( "Both outcomes", "The compiler checks case coverage. Add a Nothing branch for the missing-row outcome." ), ( "A label", "Both branches return String. The included tests exercise the found and missing cases when run locally." ) ]
+                            ]
+                        14 ->
+                            [ p [] [ text "A fetched row carries evidence of which id was requested. This caller fetches evidence-other but asks invoiceLabel to treat it as the requested id. The compiler catches the mismatch." ]
+                            , diagram [ ( "Requested id", "showInvoice receives the id the caller wants. Fetch that same id so the evidence matches." ), ( "Fetched invoice", "The ? return annotation ties FromDb evidence to the variable receiving the result. It tracks both the row and the query’s id." ), ( "invoiceLabel", "The signature requires evidence for this invoice and id. Evidence for another id cannot satisfy it. This establishes query identity; customer authorization is a separate rule." ) ]
+                            , details [] [ summary [] [ text "What should I review?" ], p [] [ text "Review the query and the evidence required by its consumers. The compiler checks that callers preserve that relationship. The local tests seed two invoices with different customers and check that the requested one is used." ] ]
                             ]
                         7 ->
                             [ p [] [ text "Use an ordinary test when you know the input and expected result. Add a lower-boundary case beside the existing in-range example." ]

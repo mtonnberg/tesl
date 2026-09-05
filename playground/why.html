@@ -26,7 +26,7 @@
 <p>Write queries using the fields in your entity declarations. The compiler checks field names and types, so a misspelled column or incompatible value is caught while you edit. Query results have types too: a single-row lookup returns a Maybe value, making the missing-row case explicit.</p>
 <p>The generated SQL uses parameters for values, and the debugger can show the statement and its bound parameters. You can inspect what reaches the database.</p>
 <p>Entity declarations connect the schema to your application’s types. Further migration tooling is in development; the <a href="https://github.com/mtonnberg/tesl/blob/main/manual/tour.md#schema-and-migrations">schema guide</a> describes what is available today.</p>
-<p><a href="https://github.com/mtonnberg/tesl/blob/main/example/learn/lesson18-database-sql-and-proofs.tesl">Explore typed queries and their results →</a></p></details>
+<p class="feature-action"><a class="btn" href="index.html?guide=sql">See it in action →</a></p></details>
 <details><summary><h2>Catch currency and unit mix-ups</h2></summary>
 <p>Money values carry a currency and use exact integer minor units. Physical quantities carry dimensions, so adding a length to a duration is a compiler error. These types make mistakes visible that would look like ordinary arithmetic on raw numbers.</p>
 <p><a href="https://github.com/mtonnberg/tesl/blob/main/example/learn/lesson71-money.tesl">Money example</a> · <a href="https://github.com/mtonnberg/tesl/blob/main/example/learn/lesson72-units.tesl">Units example</a></p><p class="feature-action"><a class="btn" href="index.html?guide=money">See it in action →</a> · <a href="index.html?guide=dimensions">Try dimensions too →</a></p></details>

@@ -463,8 +463,8 @@ test('Why Tesl links compiler features to live exercises and runtime features to
   await page.goto('/why.html');
   await expect(page.locator('.why-features > details')).toHaveCount(12);
   const links = await page.locator('.feature-action a').evaluateAll(nodes => nodes.map(a => a.getAttribute('href')));
-  expect(links).toHaveLength(8);
-  const expected = { customer: 'CustomerInvoiceUnchecked', capabilities: 'CapabilityChain', api: 'HelloServer', money: 'MoneyCheck', dimensions: 'UnitsCheck', runtime: 'HelloServer', compiler: 'MissingImport', tests: 'RegularTests' };
+  expect(links).toHaveLength(9);
+  const expected = { customer: 'CustomerInvoiceUnchecked', capabilities: 'CapabilityChain', api: 'HelloServer', money: 'MoneyCheck', dimensions: 'UnitsCheck', runtime: 'HelloServer', compiler: 'MissingImport', tests: 'RegularTests', sql: 'SqlFields' };
   await page.locator('.why-features summary').nth(1).click();
   await expect(page.locator('.why-features details').nth(1).getByRole('link', { name: 'See it in action →' })).toBeVisible();
   await page.screenshot({ path: test.info().outputPath('why-chapters.png') });
@@ -473,7 +473,7 @@ test('Why Tesl links compiler features to live exercises and runtime features to
     await expect(page.locator('#journey')).toBeVisible();
     const key = new URL(page.url()).searchParams.get('guide');
     const selectedChapter = await page.locator('#journey-chapter').inputValue();
-    expect(selectedChapter).toBe(({customer:'2',capabilities:'2',api:'0',money:'5',dimensions:'5',runtime:'3',compiler:'0',tests:'7'})[key]);
+    expect(selectedChapter).toBe(({customer:'2',capabilities:'2',api:'0',money:'5',dimensions:'5',runtime:'3',compiler:'0',tests:'7',sql:'12'})[key]);
     await expect(page.locator('#examples option:checked')).not.toHaveText('Shared source');
     await expect(page.locator('#src')).toHaveValue(new RegExp('^module ' + expected[key]));
   }
@@ -513,10 +513,10 @@ test('every exercise has an applicable edit and all six stars survive immediate 
     await page.locator('#journey-next').click();
     await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('tesl-playground-stars-v1') || '[]'))).toContain(step);
   }
-  await expect(page.locator('#journey-title')).toHaveText('Example tests');
+  await expect(page.locator('#journey-title')).toHaveText('Query declared fields');
   await page.locator('#journey-chapter').selectOption('3');
   await expect(page.locator('#journey-title')).toHaveText('Take it with you');
-  await expect(page.locator('#journey-progress')).toHaveText('6 of 11 steps completed');
+  await expect(page.locator('#journey-progress')).toHaveText('6 of 14 steps completed');
   await page.locator('.journey-options > summary').click();
   await expect(page.getByRole('link', {name: 'Suggest one in Discussions →'})).toHaveAttribute('href', 'https://github.com/mtonnberg/tesl/discussions');
   await page.locator('#journey-restore').click();
@@ -757,4 +757,44 @@ test('customer edits are visible before applying and capability errors name the 
   await page.locator('#journey-apply').click();
   await expect(page.locator('#status')).toHaveText('All checks passed');
   await expect(page.locator('#src')).toHaveValue(/check checkCustomer raw customer/);
+});
+
+
+test('SQL adventure checks queries, missing rows and evidence while preserving drafts and stars', async ({ page }) => {
+  await page.goto('/?guide=sql');
+  await expect(page.locator('#journey-chapter')).toHaveValue('12');
+  const steps = [
+    { id: 12, module: 'SqlFields', error: 'customerId', title: 'Query declared fields' },
+    { id: 13, module: 'SqlResults', error: 'non-exhaustive case', title: 'Handle a missing row' },
+    { id: 14, module: 'SqlEvidence', error: 'database evidence matching the requested id', title: 'Keep the requested row' }
+  ];
+  let repairedQuery;
+  for (const step of steps) {
+    await expect(page.locator('#journey-title')).toHaveText(step.title);
+    await expect(page.locator('#src')).toHaveValue(new RegExp('^module ' + step.module));
+    await expect(page.locator('#diags')).toContainText(step.error);
+    await expect(page.locator('#repair-' + step.id + ' pre')).toBeVisible();
+    await expect(page.locator('.testing-run')).toContainText('tesl test ' + step.module + '.tesl');
+    await page.locator('#journey-apply').click();
+    await expect(page.locator('#status')).toHaveText('All checks passed');
+    await expect(page.locator('#journey-progress')).toHaveText('★ Query compiler-checked · run its tests locally below');
+    if (step.id === 12) repairedQuery = await page.locator('#src').inputValue();
+    await page.locator('#journey-next').click();
+  }
+  await expect(page.locator('#journey-title')).toHaveText('Example tests');
+  await page.locator('#journey-chapter').selectOption('12');
+  await expect(page.locator('#src')).toHaveValue(repairedQuery);
+  await page.locator('#journey-close').click();
+  await page.locator('#journey-resume').click();
+  await expect(page.locator('#src')).toHaveValue(repairedQuery);
+  await page.reload();
+  await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('tesl-playground-stars-v1')).sort((a,b) => a-b))).toEqual([12,13,14]);
+  await page.goto('/?guide=sql-results');
+  await expect(page.locator('#journey-title')).toHaveText('Handle a missing row');
+  await page.goto('/?guide=sql-evidence');
+  await expect(page.locator('.diagnostic-guide')).toHaveText('This row needs database evidence matching the requested id.');
+  await page.setViewportSize({ width: 375, height: 812 });
+  await page.locator('#journey-title').scrollIntoViewIfNeeded();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(375);
+  await page.screenshot({ path: test.info().outputPath('sql-adventure-mobile.png') });
 });

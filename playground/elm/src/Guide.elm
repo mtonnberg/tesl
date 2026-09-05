@@ -7,7 +7,7 @@ type alias Repair = { before : String, after : String, why : String }
 type alias Step = { id : Int, chapter : Int, example : Int, key : String, title : String, repair : Repair, testCommand : Maybe String }
 
 chapters : List (Int, String)
-chapters = [(0, "Your first API"), (2, "Rules that travel with your code"), (5, "Money and measurements"), (7, "Testing your code"), (3, "Run it locally")]
+chapters = [(0, "Your first API"), (2, "Rules that travel with your code"), (5, "Money and measurements"), (12, "Query your data"), (7, "Testing your code"), (3, "Run it locally")]
 
 steps : List Step
 steps =
@@ -23,6 +23,12 @@ steps =
     { id = 5, chapter = 5, example = 6, key = "money", title = "Keep currencies apart", repair = { before = "  Money.add price shipping", after = "  let checked = check Money.requireSameCurrency price shipping\n  Money.add price checked", why = "Check that both amounts carry the same currency, then pass the checked amount to Money.add." }, testCommand = Nothing }
     ,
     { id = 6, chapter = 5, example = 7, key = "dimensions", title = "Check your dimensions", repair = { before = "  speed + elapsed", after = "  speed * elapsed", why = "Speed multiplied by time gives distance. Replace addition with multiplication." }, testCommand = Nothing }
+    ,
+    { id = 12, chapter = 12, example = 13, key = "sql", title = "Query declared fields", repair = { before = "invoice.customerId == customer", after = "invoice.customer == customer", why = "Invoice declares a field named customer. Use it in the query predicate; the result is a list of matching invoices." }, testCommand = Just "tesl test SqlFields.tesl" }
+    ,
+    { id = 13, chapter = 12, example = 14, key = "sql-results", title = "Handle a missing row", repair = { before = "  case found of\n    Something invoice -> \"Invoice ${invoice.id} for ${invoice.customer}\"", after = "  case found of\n    Nothing -> \"No invoice found\"\n    Something invoice -> \"Invoice ${invoice.id} for ${invoice.customer}\"", why = "selectOne can find no row. Add the Nothing branch so the function answers for both outcomes." }, testCommand = Just "tesl test SqlResults.tesl" }
+    ,
+    { id = 14, chapter = 12, example = 15, key = "sql-evidence", title = "Keep the requested row", repair = { before = "  let invoice = fetchInvoice \"evidence-other\"", after = "  let invoice = fetchInvoice id", why = "Fetch the id passed to showInvoice. The evidence attached to the returned invoice must match the id required by invoiceLabel." }, testCommand = Just "tesl test SqlEvidence.tesl" }
     ,
     { id = 7, chapter = 7, example = 8, key = "tests", title = "Example tests", repair = { before = "# Add a test for the lower boundary here.", after = "test \"below zero becomes zero\" {\n  expect clamp -3 == 0\n}", why = "Add a concrete input and expected result. This checks the lower boundary of clamp." }, testCommand = Just "tesl test RegularTests.tesl" }
     ,

@@ -52,14 +52,18 @@ with tempfile.TemporaryDirectory(prefix="tesl-playground-runtime-") as directory
                 os.killpg(server.pid, signal.SIGKILL)
                 server.wait()
 
-# Exercise both the displayed test examples and their suggested additions.
+# Exercise valid starters and all suggested repairs, including deliberately broken SQL examples.
 # These run in the local Go test harness, including a small bounded load test.
 with tempfile.TemporaryDirectory(prefix="tesl-playground-test-chapter-") as directory:
     for example in json.loads((repo / "playground/examples.json").read_text()):
         if not example.get("run_tests"):
             continue
         source = (repo / "example/playground" / example["file"]).read_text()
-        for variant, text in [("starter", source), ("exercise", source.replace(*example["repair"]))]:
+        variants = [] if example["errors"] else [("starter", source)]
+        before, after = example["repair"]
+        assert before and source.count(before) == 1, f"Ambiguous repair: {example['file']}"
+        variants.append(("exercise", source.replace(before, after)))
+        for variant, text in variants:
             work = Path(directory) / (example["file"] + "-" + variant)
             work.mkdir()
             module = re.search(r"^module (\w+)", text).group(1)
@@ -67,4 +71,4 @@ with tempfile.TemporaryDirectory(prefix="tesl-playground-test-chapter-") as dire
             target.write_text(text)
             subprocess.run([env["TESL_OCAML_COMPILER"], "agent-context", str(target)], env=env, check=True, timeout=30)
             subprocess.run(cli + ["test", target.name], cwd=work, env=env, check=True, timeout=120)
-            print(f"PASS testing chapter: {example['file']} ({variant})", flush=True)
+            print(f"PASS playground tests: {example['file']} ({variant})", flush=True)

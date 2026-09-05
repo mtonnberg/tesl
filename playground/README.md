@@ -343,10 +343,11 @@ flag, and the note it renders on `lessons.html`.
 
 ## Explore with a guide
 
-Five optional chapters sit beside the editor: Your first API, Rules that travel
-with your code, Money and measurements, Testing your code, and Run it locally.
-Eleven exercises cover greeting edits, imports, customer evidence, capabilities,
-currencies, dimensions, regular tests, doctests, fuzz/property tests, API tests and load tests. Each diagram node
+Six optional chapters sit beside the editor: Your first API, Rules that travel
+with your code, Money and measurements, Query your data, Testing your code, and Run it locally.
+Fourteen exercises cover greeting edits, imports, customer evidence, capabilities,
+currencies, dimensions, typed query fields, missing rows, database evidence, regular tests,
+doctests, fuzz/property tests, API tests and load tests. Each diagram node
 has a hover explanation and a native disclosure usable by keyboard or touch.
 
 Entering or selecting a step loads its matching source automatically. A per-step
@@ -402,3 +403,10 @@ not executed. Each step includes a `tesl test Module.tesl` command. The example
 runtime check runs all five starter files and their additions through the real
 CLI; load tests use a small local in-process workload. No remote scan or load is
 started by the playground.
+
+The SQL adventure (`?guide=sql`, `sql-results`, `sql-evidence`) uses three separate
+steps over the same Invoice entity. Each starter intentionally fails checking; its
+repair is compiled in both native and browser checks and executed by
+`scripts/playground-examples-runtime.py`. Database evidence identifies the queried
+row and key; it does not establish customer authorization. The browser does not
+connect to a database or execute the displayed tests.

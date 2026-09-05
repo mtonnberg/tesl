@@ -6,11 +6,6 @@ const compiler = process.env.TESL_OCAML_COMPILER || path.join(root, 'compiler/_b
 const env = { ...process.env, TESL_REPO_ROOT: root };
 require(path.join(dist, 'tesl_playground.js'));
 const examples = JSON.parse(fs.readFileSync(path.join(root, 'playground/examples.json')));
-const repairs = {
-  'capability-chain.tesl': ['requires [dbRead Note]', 'requires [dbWrite Note]'],
-  'money-check.tesl': ['Money.add price shipping', 'let checked = check Money.requireSameCurrency price shipping\n  Money.add price checked'],
-  'units-check.tesl': ['speed + elapsed', 'speed * elapsed']
-};
 const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'tesl-picker-check-'));
 try {
   for (const example of examples) {
@@ -27,8 +22,10 @@ try {
       assert.ok(retargeted.diagnostics.some(d => d.code === 'V001'), 'Customer evidence must not transfer to a different customer');
       assert.deepEqual(retargeted.go_files, []);
     }
-    const repair = repairs[example.file] || example.repair;
+    const repair = example.repair;
     if (repair) {
+      assert.ok(repair[0].length > 0, `${example.file}: repair must have a target`);
+      assert.equal(source.split(repair[0]).length - 1, 1, `${example.file}: repair target must occur exactly once`);
       const repaired = source.replace(...repair);
       const repairedPath = path.join(temporary, 'repaired', example.file);
       fs.mkdirSync(path.dirname(repairedPath), { recursive: true });
