@@ -1035,27 +1035,30 @@ let schema_module_relative_path module_name =
       Option.map (fun dirs -> String.concat "/" (dirs @ List.map module_name_to_kebab rest) ^ ".tesl") dirs
     | _ -> None
 
-let resolve_local_import_path source_file module_name =
+let resolve_local_import_path_with ~exists ~realpath source_file module_name =
   let dir = Filename.dirname source_file in
   let kebab_path = Filename.concat dir (module_name_to_kebab module_name ^ ".tesl") in
-  if Sys.file_exists kebab_path then kebab_path
+  if exists kebab_path then kebab_path
   else
     let pascal_path = Filename.concat dir (module_name ^ ".tesl") in
-    if Sys.file_exists pascal_path then pascal_path
+    if exists pascal_path then pascal_path
     else match schema_module_relative_path module_name with
       | None -> pascal_path
       | Some relative ->
         let rec search current =
           let candidate = Filename.concat current relative in
-          if Sys.file_exists candidate then candidate
-          else if List.exists (fun marker -> Sys.file_exists (Filename.concat current marker))
+          if exists candidate then candidate
+          else if List.exists (fun marker -> exists (Filename.concat current marker))
                     ["tesl.toml"; "tesl.json"; ".git"] then candidate
           else
             let parent = Filename.dirname current in
             if parent = current then Filename.concat dir relative
             else search parent
         in
-        search (try Unix.realpath dir with _ -> dir)
+        search (try realpath dir with _ -> dir)
+
+let resolve_local_import_path source_file module_name =
+  resolve_local_import_path_with ~exists:Source_input.exists ~realpath:Source_input.realpath source_file module_name
 
 (* ── Lifted-stdlib source resolution ──────────────────────────────────────────
    A subset of the [Tesl.*] standard library is written in Tesl itself: a bundled
@@ -1081,7 +1084,7 @@ let stdlib_repo_root () =
   | _ ->
     let rec find dir =
       let candidate = Filename.concat dir "compiler" in
-      if (try Sys.file_exists candidate && Sys.is_directory candidate with _ -> false)
+      if (try Source_input.exists candidate && Source_input.is_directory candidate with _ -> false)
       then dir
       else
         let parent = Filename.dirname dir in
@@ -1115,7 +1118,7 @@ let stdlib_source_directories () =
   | _ ->
     let executable = try Unix.realpath Sys.executable_name with _ -> Sys.executable_name in
     let installed = Filename.concat (Filename.dirname (Filename.dirname executable)) "share/tesl/stdlib" in
-    if Sys.file_exists installed then [installed]
+    if Source_input.exists installed then [installed]
     else
       let root = stdlib_repo_root () in
       [Filename.concat root "tesl";
@@ -1133,7 +1136,7 @@ let lifted_stdlib_source_path (module_name : string) : string option =
   | Some base ->
     let candidates = List.map (fun directory -> Filename.concat directory base)
       (stdlib_source_directories ()) in
-    List.find_opt Sys.file_exists candidates
+    List.find_opt Source_input.exists candidates
 
 (** Canonical spelling of a module path, for identity comparisons (import
     cycle/SCC detection).  [resolve_local_import_path] builds paths relative
@@ -1145,7 +1148,7 @@ let lifted_stdlib_source_path (module_name : string) : string option =
     file (unresolvable import) keeps its given spelling — callers report that
     separately. *)
 let canonical_import_path (p : string) : string =
-  try Unix.realpath p with _ -> p
+  try Source_input.realpath p with _ -> p
 
 (** Resolve an entity in a checked project graph to its declaring module. The
     ordinary scope/type checker validates visibility; this shared ownership lookup
@@ -1198,9 +1201,9 @@ let load_imported_ctor_info (m : module_form) : ctor_info =
     if is_tesl_module imp.module_name then []
     else
       let path = resolve_local_import_path m.source_file imp.module_name in
-      if not (Sys.file_exists path) then []
+      if not (Source_input.exists path) then []
       else
-        let source = In_channel.with_open_text path In_channel.input_all in
+        let source = Source_input.read_text path in
         (match Parser.parse_module path source with
          | Err _ -> []
          | Ok imported ->
@@ -1269,9 +1272,9 @@ let load_imported_type_decls (m : module_form) : top_decl list =
     if is_tesl_module imp.module_name then []
     else
       let path = resolve_local_import_path m.source_file imp.module_name in
-      if not (Sys.file_exists path) then []
+      if not (Source_input.exists path) then []
       else
-        let source = In_channel.with_open_text path In_channel.input_all in
+        let source = Source_input.read_text path in
         match Parser.parse_module path source with
         | Err _ -> []
         | Ok imported ->
@@ -1682,7 +1685,7 @@ let load_imported_func_info (m : module_form) : (string * func_info) list =
      return hands the caller nothing to require (issue #78).  Reading the source
      also means the two can never drift, which is the whole point of lifting. *)
   let lifted_func_infos (imp : import_decl) (path : string) : (string * func_info) list =
-    let source = In_channel.with_open_text path In_channel.input_all in
+    let source = Source_input.read_text path in
     match Parser.parse_module path source with
     | Err _ -> []
     | Ok imported ->
@@ -1748,9 +1751,9 @@ let load_imported_func_info (m : module_form) : (string * func_info) list =
       hardcoded @ lifted
     else
       let path = resolve_local_import_path m.source_file imp.module_name in
-      if not (Sys.file_exists path) then []
+      if not (Source_input.exists path) then []
       else
-        let source = In_channel.with_open_text path In_channel.input_all in
+        let source = Source_input.read_text path in
         match Parser.parse_module path source with
         | Err _ -> []
         | Ok imported ->
@@ -2170,9 +2173,9 @@ let rec load_imported_func_caps ?(visited : string list = []) (m : module_form)
     if is_tesl_module imp.module_name || List.mem imp.module_name visited then []
     else
       let path = resolve_local_import_path m.source_file imp.module_name in
-      if not (Sys.file_exists path) then []
+      if not (Source_input.exists path) then []
       else
-        let source = In_channel.with_open_text path In_channel.input_all in
+        let source = Source_input.read_text path in
         match Parser.parse_module path source with
         | Err _ -> []
         | Ok imported ->
@@ -2311,9 +2314,9 @@ let collect_imported_cache_caps (m : module_form) : (string * string list) list 
         if Hashtbl.mem visited canon then []
         else begin
           Hashtbl.replace visited canon ();
-          if not (Sys.file_exists path) then []
+          if not (Source_input.exists path) then []
           else
-            let source = In_channel.with_open_text path In_channel.input_all in
+            let source = Source_input.read_text path in
             match Parser.parse_module path source with
             | Err _ -> []
             | Ok imported ->
@@ -2349,9 +2352,9 @@ let load_imported_cap_map (m : module_form) : (string * string list) list =
          ) caps)
     else
       let path = resolve_local_import_path m.source_file imp.module_name in
-      if not (Sys.file_exists path) then []
+      if not (Source_input.exists path) then []
       else
-        let source = In_channel.with_open_text path In_channel.input_all in
+        let source = Source_input.read_text path in
         match Parser.parse_module path source with
         | Err _ -> []
         | Ok imported ->
@@ -2422,9 +2425,9 @@ let collect_import_parse_errors (m : module_form) : validation_error list =
     if is_tesl_module imp.module_name then None
     else
       let path = resolve_local_import_path m.source_file imp.module_name in
-      if not (Sys.file_exists path) then None
+      if not (Source_input.exists path) then None
       else
-        let source = In_channel.with_open_text path In_channel.input_all in
+        let source = Source_input.read_text path in
         match Parser.parse_module path source with
         | Ok _ -> None
         | Err e -> Some (make_error e.loc

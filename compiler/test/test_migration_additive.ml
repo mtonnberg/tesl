@@ -218,6 +218,54 @@ let nominal_optional () = with_project (fun root write ->
   ignore (refused "MIG016" (A.check covered ~defaults:[]));
   ignore (refused "MIG022" (A.check covered ~defaults:[default "optional" (A.Integer "1")])))
 
+let current_application_construction () = with_project (fun root write ->
+  let expose = replace "exposing []" "exposing [Note]" in
+  let source = expose source in
+  let edited = expose (prefix ^ table ~extra:"  archivedAt: Maybe String\n" ()) in
+  let before, after, _ = fixture root write source edited in
+  ignore (only (plans (coverage before after) []));
+  let application = {|module App exposing [makeNote]
+import Tesl.Prelude exposing [String]
+import Tesl.Maybe exposing [Maybe(..)]
+import NotesSchema.VCurrent exposing [Note]
+fn makeNote(id: String) -> Note = Note { id: id, value: 5, label: "label" }
+|} in
+  let app_path = write "app.tesl" application in
+  let diagnostics text =
+    (* Simulate distinct compiler requests over different dependency snapshots. *)
+    Query_cache.clear ();
+    Compile.check_source app_path text |> List.filter (fun (d : Compile.diagnostic) -> d.severity = "error") in
+  ignore (write "schema/notes/v-current.tesl" source);
+  let original_errors = diagnostics application in
+  if original_errors <> [] then fail (Compile.diagnostics_to_json original_errors);
+  ignore (write "schema/notes/v-current.tesl" edited);
+  let errors = diagnostics application in
+  check int "an additive migration does not fill an incomplete current literal" 1 (List.length errors);
+  let error = List.hd errors in
+  check string "ordinary construction diagnostic" "T001" error.code;
+  check string "the precise new field is required" "record `Note` is missing required field `archivedAt`" error.message;
+  let repaired = replace "label: \"label\" }" "label: \"label\", archivedAt: Nothing }" application ^ {|
+test "explicit current optional field runs" {
+  let note = makeNote "first"
+  expect note.id == "first"
+  expect note.archivedAt == Nothing
+}
+|} in
+  ignore (write "app.tesl" repaired);
+  check int "an explicit Nothing restores a complete current row" 0 (List.length (diagnostics repaired));
+  let artifacts = match Compile.compile_go_file app_path with
+    | Compile.GoSuccess artifacts -> artifacts
+    | Compile.GoFailure errors -> fail (Compile.diagnostics_to_json errors) in
+  List.iter (fun (a : Emit_go.artifact) -> ignore (write ("out/" ^ a.path) a.contents)) artifacts;
+  let log = Filename.concat root "go-test.log" in
+  let command = Printf.sprintf "cd %s && timeout 90s go test -timeout=60s -count=1 -v ./... > %s 2>&1"
+    (Filename.quote (Filename.concat root "out")) (Filename.quote log) in
+  let status = Sys.command command in
+  let output = In_channel.with_open_bin log In_channel.input_all in
+  if status <> 0 then fail output;
+  check bool "the generated constructor test actually ran" true
+    (Compile.string_contains output "--- PASS:"))
+
 let large_schema () = with_project (fun root write ->
   let tables = List.init 300 (fun i -> Printf.sprintf
     "entity E%d table \"table_%d\" primaryKey id { id: String, value: Int }\n" i i) |> String.concat "" in
@@ -244,5 +292,6 @@ let () = Alcotest.run "migration-additive" ["logical row adapters", [
   test_case "new optional JSONB needs no fabricated nested evidence" `Quick optional_semantic_types;
   test_case "rule ownership and other migration kinds" `Quick ownership_and_kind;
   test_case "structural Maybe lookalikes have no implicit default" `Quick nominal_optional;
+  test_case "migration adapters do not fill current application literals" `Quick current_application_construction;
   test_case "one changed entity among 300" `Quick large_schema;
 ]]

@@ -476,14 +476,14 @@ let imported_ctor_request_type_names (imp : import_decl) : string list =
     Used to detect conflicts when a local ADT reuses a stdlib constructor name,
     and to expand a `Type(..)` exposing list.
 
-    DERIVED from {!Type_system.stdlib_adt_ctor_groups} — the same table that
-    drives the emitter's require expansion and the constructor import gate — so
+    DERIVED from {!Type_system.stdlib_import_ctor_groups}, including contextual
+    declaration constructors as well as ordinary ADTs, so
     a new stdlib ADT cannot be registered in one of the three and forgotten in
     the others.  The type name is prepended to its own constructor list, which is
     the shape this table's consumers expect. *)
 let stdlib_adt_ctors : (string * (string * string list)) list =
   List.map (fun (m, ty, ctors) -> (m, (ty, ty :: ctors)))
-    Type_system.stdlib_adt_ctor_groups
+    Type_system.stdlib_import_ctor_groups
 
 let imported_plain_exposed_ctor_entries (m : module_form) : (string * string * string * loc) list =
   let is_tesl_module name =
@@ -526,9 +526,9 @@ let imported_plain_exposed_ctor_entries (m : module_form) : (string * string * s
       if requested_types = [] then []
       else
         let path = resolve_local_import_path m.source_file imp.module_name in
-        if not (Sys.file_exists path) then []
+        if not (Source_input.exists path) then []
         else
-          let source = In_channel.with_open_text path In_channel.input_all in
+          let source = Source_input.read_text path in
           match Parser.parse_module path source with
           | Err _ -> []
           | Ok imported ->
@@ -945,7 +945,7 @@ let check_local_imports_exist (m : module_form) : validation_error list =
       let dir    = Filename.dirname m.source_file in
       let kebab  = Filename.concat dir (module_name_to_kebab imp.module_name ^ ".tesl") in
       let pascal = Filename.concat dir (imp.module_name ^ ".tesl") in
-      if Sys.file_exists kebab_path then None
+      if Source_input.exists kebab_path then None
       else
         let hint =
           if kebab <> pascal then

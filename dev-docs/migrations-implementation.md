@@ -70,19 +70,111 @@ are included. Adoption, additive execution and the remaining lessons are pending
 
 ## Slices under development
 
-- The last complete compiler gate, before the sparse/additive slices below,
-  passes 197 suite groups, including the later
-  detached-Fact forwarding fix, aliases, branches and wrong-subject/bound refusals.
-  The generated Go regression calls the schema validator, forwards its detached
-  evidence through both branches, explicitly reattaches it and calls a consumer
-  requiring the fact. Valid values and rejected boundaries run. The CLI forwarding
-  reproducer has zero diagnostics. Manual coherence and documentation integrity
-  also pass. Neither feature-wide review is complete.
+- Refresh ownership now has precise source ranges and generated-node markers.
+  Thirteen syntax groups cover raw literal spellings, diagnostic-span overreach,
+  comments/separators, Unicode/tabs/CRLF, stale AST identities and overlapping edits.
+  Twelve provenance groups protect edited bodies, added comments and existing line
+  tails; matching annotations remain stable under formatting and target freezing.
+  The starter annotates its Same claims, with integration assertions before and
+  after finalization. The sparse checker now exposes checked requirements before
+  entry selection; its fifteen groups retain every stored occurrence and reject
+  invalid identity claims without placeholder entries. Entry refresh/merging and
+  its public commands remain pending. Focused syntax, provenance, sparse, additive,
+  declaration and generation suites pass. The fresh full compiler gate passes all
+  207 suite groups; manual coherence and documentation integrity also pass.
+- Revision starting now builds a checked, non-mutating source manifest: freeze
+  the complete current closure, retarget the existing migration and unshared
+  helpers, recreate its target seal, and create the next initially unchanged
+  migration. Fourteen regression groups cover successive revisions, private
+  records/codecs/facts, unsaved sources, preserved user tests/comments, selected
+  version drift, ABI refusal and concurrent creation. Review caught preexisting
+  equal frozen helpers omitted from the edit list; their bytes are now guarded as
+  inputs. A helper shared with completed history is refused if retargeting would
+  modify that history. Target resolution, refresh/provenance, migration-closure
+  freezing, actual build ABI identity, public CLI/editor commands and application
+  of the manifest remain pending. This preview is not a physical execution plan.
+  An independent JSON consumer materialized two successive previews in a disposable
+  project: every emitted file passed the real CLI's agent-context, disk hashes
+  matched, and the application database module stayed byte-identical. The fresh
+  full compiler gate for generation and manifests passes all 205 suite groups;
+  manual coherence and documentation integrity also pass.
+- The source edit manifest captures independent saved/source hashes, editor
+  versions, directory membership and import resolution. Twenty regression groups
+  cover missing versus empty paths, raw byte preservation through JSON, output
+  conflicts, private dependencies, stale documents, symlinks/special files, and
+  proposed versus saved imports. Review found that an existing dangling import
+  candidate can become resolvable without changing previously read files or their
+  parent membership; explicit import preconditions close that gap. The resolver
+  uses the same algorithm for disk and source views. A complete private schema
+  freeze is type-checked in the proposed view without writing its files. The
+  manifest's apply/recovery protocol and public transport remain pending.
+- Snapshot source seals and migration history headers now have separate integrity
+  and semantic checks. Fifteen seal regression groups cover complete private
+  closures, raw-byte edits, malformed/forged metadata, stale inputs, canonical paths,
+  same-ABI semantics and distinct ABI refusals. Twenty-one header groups check public
+  MIG001/MIG013 diagnostics, imported and unsaved headers, current versus frozen
+  changes, formatting and replacing the target seal at the next freeze. Direct
+  schema queries, application imports and private-only imports enforce the recorded
+  hashes, including malformed source, changed module names, missing roots and
+  non-regular files. Review found and closed gaps in direct-query coverage and
+  metadata path validation; imported declarations do not duplicate diagnostics or
+  re-read stale saved headers over unsaved edits. A decoded
+  header cannot skip type/proof checks or assert persisted database history. The
+  declaration result retains optional source-integrity evidence; mandatory sealed
+  history, public generator integration, build ABI identity and runtime checks remain pending.
+  Focused seal/header/source-view/declaration suites pass. The fresh full compiler
+  gate for these integrations passes all 203 suite groups. Manual coherence and
+  documentation integrity also pass. A real CLI probe caught an additional
+  parse-error path in agent-context that omitted integrity diagnostics; checking,
+  agent-context and Go emission now share that path and its regression assertions.
+- Read-only source views now reach import resolution, the full type/proof/validation
+  pipeline, migration inventories, history discovery and freeze proposals. Proposed
+  files and directories remain entirely in memory. Nineteen regression groups cover
+  raw bytes, nested/exceptional scopes, private dependencies, changed proof contracts
+  and fact producers, transitive effects, cycles, stale guards, filesystem aliases,
+  and differential checking against saved files. Review caught a symlink alias being
+  reported as a regular freeze target; source-view `kind` now retains `lstat`
+  semantics. A malformed imported-buffer test also exposed lexer failures being
+  attributed to the importer; the parser now preserves the actual failing file.
+  The public manifest CLI, document-version guards and editor apply/undo remain
+  pending. The full compiler gate for this integration passes all 201 suite groups;
+  manual coherence and documentation integrity also pass.
+- The initial contextual Migration declaration now reaches `Compile.check_source`
+  and the CLI. It validates adjacent checked schemas, private entity keys, sparse
+  coverage, Same and literal defaults; context-only constants have no runtime value
+  or exported binding. A real three-file CLI probe passes `agent-context`. Twenty
+  regression groups cover imports, source locations, unsaved migration buffers,
+  retained query state, complete-record defaults, formatting, pure helper execution
+  in generated Go, and refusal cases. Review exposed and fixed boolean literal
+  handling, `Entity(..)` emission, contextual field names being mistaken for effects,
+  missing migration roots and constructor import visibility. A subsequent review
+  caught nominal ADT constructors called True/False being mistaken for primitive
+  Bool defaults. Defaults now resolve their constructor ownership; local and imported
+  lookalikes refuse, while qualified-only imports do not shadow primitive literals.
+  Contextual import groups are also separate from ordinary runtime ADT groups, so
+  the existing constructor/exhaustiveness gates retain their full checks. The twenty
+  declaration groups and affected constructor/stdlib gates pass. The subsequent
+  complete compiler gate passes all 200 suite groups; manual coherence and
+  documentation integrity also pass. This is still source checking and logical adaptation: frozen seals,
+  persisted ABI identity, physical plans, execution and transformation forms remain
+  pending.
+- The shared frontend extraction passed all 199 compiler suite groups. Review
+  verified every moved definition byte-for-byte against the pre-refactor source.
+  `Frontend_check` now supplies the same type/proof/validation judgment to ordinary
+  compilation and schema inventories. The later contextual extension also passes its own complete gate (200 groups).
+- The complete compiler gate passes 199 suite groups with sparse coverage and
+  additive row projection included. Manual coherence and documentation integrity
+  pass. A subsequent review found the roadmap claiming that adding a Maybe field
+  requires no application edits; the CLI proves that an unchanged current record
+  literal instead gets T001 for the new field. The roadmap and manual now separate
+  migration adapters from current writes. The explicit-construction regression passes,
+  including its generated Go test. Neither feature-wide review is
+  complete.
 - The initial additive row projection now derives one value source per field
   from the inventories bound into sparse coverage. It handles new proof-free
   Maybe fields and exact primitive defaults, rejects changed existing contracts,
   field removals, table/primary-key changes and invented proofs, and keeps index
-  changes visible for later classification. Thirteen regression groups
+  changes visible for later classification. Fourteen regression groups
   pass, including cross-type defaults, arbitrary-precision integers, non-finite
   floats, JSONB containing facts, nominal optional-type refusals and one changed
   entity among 300. These are logical adapters,
@@ -96,23 +188,21 @@ are included. Adoption, additive execution and the remaining lessons are pending
   field proofs, private entity aliases, stale/duplicate identities, table/index
   changes and 300 independent occurrences. The affected inventory, equality,
   field/entity impact and history suites pass. This is the coverage checker;
-  contextual source elaboration, single-adapter checks and execution remain pending.
+  transformation source elaboration and execution remain pending.
 - The checked inventory now verifies compiler-local `Same` equality and proposes
   equal type/fact/codec pairs, including private declarations. Comparisons use the
   full canonical tree, preserve nominal identity and report the first differing
   dependency with both source locations. Fifteen regression groups cover private
   validators, added/removed producers, encoder and legacy-decoder changes,
   recursive/generic ADTs, source invariance, ABI/family refusals and retained editor
-  caches. This is the equality component, not the contextual Migration declaration
-  or permission to cast persisted proofs; adjacent revision and runtime ABI evidence
-  remain required.
+  caches. This is the equality component; it grants no permission to cast persisted
+  proofs. Runtime ABI evidence remains required.
 - Entity impact now covers complete owned tables as well as individual fields.
   Ten regression groups require table, primary-key and index changes to surface
   when every field remains equal, preserve private module identities, follow
   transitive proof/JSONB dependencies and keep 299 unaffected entities folded out
   when one of 300 changes. Additions/removals and empty schemas retain the same
-  ABI/family checks. Online classification and sparse Migration elaboration remain
-  pending.
+  ABI/family checks. Online classification remains pending.
 - Reviewing the equality boundary exposed a fact-ownership bypass: an application
   could establish a schema's multi-argument `Fact (InBounds 1 100 n)` and compile
   with zero diagnostics. The core ownership check now traverses the complete

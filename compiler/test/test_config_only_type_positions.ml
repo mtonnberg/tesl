@@ -331,6 +331,7 @@ let pre_refactor_literal =
     "SsoConnection"; "SsoSubjectKey"; "SsoIdentity";
     (* Phase 4: the SsoProvider type + its inline-lowered value constructors. *)
     "SsoProvider"; "Github"; "Google" ]
+  @ ["Migration"; "Entity"; "Rule"; "Same"; "Additive"; "New"; "Drop"; "Default"]
   @ Tz_zones.ctor_names
   @ Currencies.ctor_names
   @ List.map fst Units_catalog.aliases

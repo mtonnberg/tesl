@@ -644,11 +644,29 @@ codec or validation rules change, even though PostgreSQL still calls the column
 values. Retiring an old application does not establish that all its old JSON
 values have been rewritten.
 
-Keep storage-only changes in the schema and migration files. The application's
-handlers and API tests should stay the same when its behavior stays the same.
+When only the stored representation changes, keep the changes in the schema and
+migration files; application handlers and API tests can stay the same.
 Adding a derived field is different: the migration supplies its value for existing
 rows, and application writes must maintain it afterward. A backfill cannot make
 an unchanged update handler recompute a new derived value.
+An added optional entity field also needs an explicit `Nothing` (or another value)
+in current record literals and inserts. A migration adapter supplies values for
+existing rows and older writers; it does not make current Tesl records partial.
+
+Keep migration declarations small: name the changed entities, and let the compiler
+check that omitted entities are unchanged. An explicit `Same` must pass the
+compiler's semantic comparison. When a record and its codec share a name, that
+claim checks both; an unchanged record cannot conceal a changed codec. The current
+source checker covers additive declarations and literal defaults. The physical
+planner and executor are still under development.
+
+A recorded history header covers private schema helpers as well as entities.
+MIG001 means its current schema input changed; refreshing that revision is only
+appropriate before deployment. MIG013 identifies changed frozen source or invalid
+history metadata. Restore the recorded source and make a forward revision instead
+of rewriting deployed history. Changing compiler ABI is a separate check and does
+not by itself mean a frozen source file was edited. Header checks are implemented;
+the public generator and complete runtime history enforcement are still pending.
 
 ### Typed Queries
 

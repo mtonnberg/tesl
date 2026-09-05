@@ -1,4 +1,4 @@
-(** Saved-source discovery for a database's schema family. This collects complete
+(** Source-view discovery for a database's schema family. This collects complete
     checked schema inventories and consecutive migration source files; it does
     not elaborate Migration records, verify frozen hash headers, permit pruning,
     establish Same, or authorize a database transition. *)
@@ -28,7 +28,9 @@ type t
     All paths are canonical regular files within [project_root]. Migration roots
     and their transitive helpers are parsed and checked for schema-only ownership
     and pure declarations; their types and Migration records still need elaboration.
-    This is saved-source discovery, not an editor overlay. No writes. *)
+    Reads saved files by default or the active Source_input overlay, including
+    proposed revision roots and private dependencies. No writes. A preview's
+    inventories and input guards do not establish persisted history. *)
 val discover : compiler_abi:string -> project_root:string -> family:string ->
   (t, error) result
 
@@ -44,5 +46,15 @@ val source_inputs : t -> (string * string) list
 
 (** Recheck source bytes, regular canonical paths, and revision-root membership
     before deriving a preview from this inventory. This is not an atomic apply
-    lock and does not guard output paths or unsaved editor buffers. *)
+    lock and does not guard output paths or editor document versions. Guards are
+    checked against the active source view; a preview that differs from disk will
+    not verify after its overlay scope ends. *)
 val verify_unchanged : t -> (unit, error) result
+
+
+(** Complete checked schema chain, returning only the requested adjacent pair.
+    Migration records are not parsed here: the contextual checker uses its given
+    AST, including unsaved migration buffers. This does not validate migration
+    sources, provide frozen-history evidence, or grant execution authority. *)
+val adjacent_pair : compiler_abi:string -> project_root:string -> family:string ->
+  previous:string -> current:string -> (schema * schema, error) result

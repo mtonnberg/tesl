@@ -60,6 +60,7 @@ type t = {
   entities : entity_entry list;
 }
 
+let compiler_abi (inventory : t) = inventory.compiler_abi
 let module_names inventory = inventory.modules
 let root_module inventory = match inventory.scopes with
   | [scope] -> scope.family ^ "." ^ scope.revision
@@ -308,7 +309,7 @@ let load ~compiler_abi ~root_file =
     let sources = Hashtbl.create 16 in
     let read expected path =
       let path = Validation_common.canonical_import_path path in
-      let source = In_channel.with_open_bin path In_channel.input_all in
+      let source = Source_input.read path in
       let m = match Parser.parse_module path source with
         | Ok m -> m
         | Err e -> reject e.loc e.msg in
@@ -358,9 +359,9 @@ let load ~compiler_abi ~root_file =
       (* Reuse the public compiler judgment, including literal/complexity and
          cross-module checks. Type + proof checks alone are not its full gate.
          Every dependency body is checked by its own iteration here. *)
-      let diagnostics = Compile.check_module ~skip_dep_body:(fun _ -> true)
+      let diagnostics = Frontend_check.check_module ~skip_dep_body:(fun _ -> true)
         (Hashtbl.find sources m.source_file) m in
-      (match List.find_opt (fun (d : Compile.diagnostic) -> d.severity = "error") diagnostics with
+      (match List.find_opt (fun (d : Frontend_check.diagnostic) -> d.severity = "error") diagnostics with
        | Some error -> reject (Location.make_loc error.file error.start_line
            error.start_col error.end_line error.end_col) error.message
        | None -> ());
@@ -392,7 +393,7 @@ let load ~compiler_abi ~root_file =
     (* Validation and inference load imported interfaces themselves. Refuse a
        source change across these passes rather than publish mixed source state. *)
     Hashtbl.iter (fun path source ->
-      if In_channel.with_open_bin path In_channel.input_all <> source then
+      if Source_input.read path <> source then
         reject loc ("schema source changed during semantic inventory: " ^ path)) sources;
     (match Migration_ir.closure ~scopes ~definitions
         ~roots:(List.map (fun d -> d.key) definitions) with

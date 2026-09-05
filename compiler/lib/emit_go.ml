@@ -13204,6 +13204,12 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?(entity_bindings=[]) ?pro
          its backoff constructors), two capabilities, and the `FromQueue`/`FromDeadQueue`
          provenance proofs — which erase.  None of it needs a runtime binding: the store is
          the queue's own variable and the retry rule is baked into it. *)
+      | "Tesl.Migration" ->
+        List.iter (fun name ->
+          if not (List.mem name Migration_form.names || List.exists
+              (fun (owner,_) -> name = owner ^ "(..)") Migration_form.constructor_groups) then
+            unsupported import.loc "Go backend does not emit the `Tesl.Migration` export `%s`" name)
+          exposed
       | "Tesl.Queue" ->
         List.iter (fun name ->
           match name with

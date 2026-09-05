@@ -1,4 +1,5 @@
-(** A complete, checked schema inventory loaded from saved source files.
+(** A complete, checked schema inventory loaded from the current source view
+    (saved files by default; Source_input overlays during a preview).
     No caller-supplied declaration list can omit a private fact producer.
     This is semantic inventory construction, not history/adoption validation. *)
 type t
@@ -21,11 +22,13 @@ type field_change =
 val load : compiler_abi:string -> root_file:string ->
   (t, Migration_ir.error) result
 
+val compiler_abi : t -> string
 val module_names : t -> string list
 val root_module : t -> string
 
-(** Raw-byte SHA-256 preconditions for every saved source in the owned closure.
-    These are edit preconditions, not semantic identities or history evidence. *)
+(** Raw-byte SHA-256 preconditions for every source in the owned closure, including
+    overlaid buffers. Manifest application must separately guard saved bytes and
+    editor versions. These are not semantic identities or history evidence. *)
 val source_inputs : t -> (string * string) list
 
 type declaration_kind = Newtype | Adt | Record | Entity | Fact | Codec_declaration | Function

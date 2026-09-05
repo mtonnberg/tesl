@@ -21,7 +21,7 @@ let migration_family name =
   | _ -> None
 
 let read_module path =
-  try match Parser.parse_module path (In_channel.with_open_text path In_channel.input_all) with
+  try match Parser.parse_module path (Source_input.read_text path) with
     | Ok m -> Some m | Err _ -> None
   with Sys_error _ -> None
 
@@ -46,7 +46,12 @@ let check_contents ?(migration = false) (m : module_form) =
     | DDatabase d -> [forbidden d.loc "database declarations"]
     | DCapability c -> [forbidden c.loc "capability declarations"]
     | DConst c ->
-      if migration then
+      if migration && Migration_form.is_declaration m c then
+        (* Contextual field/schema references are not executable operations.
+           Migration_declaration checks every slot, including Default literals;
+           ordinary constants and row-function bodies retain the effect gate. *)
+        []
+      else if migration then
         let needed = collect_needed_capabilities ~func_caps ~param_caps:[] ~bound:[] c.value in
         if needed = [] then [] else [forbidden c.loc "effectful constants"]
       else [forbidden c.loc "application constants (use pure schema helper functions)"]

@@ -42,7 +42,7 @@
 let config_block_types : string list =
   [ "Database"; "PostgresConfig"; "Queue"; "QueueRetryStrategy";
     "QueueRetryConfig"; "Email"; "SmtpConfig"; "SseChannel"; "App"; "Job";
-    "Cache" ]
+    "Cache" ] @ Migration_form.names
 
 (** The checker-seeded config ADTs and their constructors
     (checker.ml [config_stdlib_seed]): `backend: Postgres (PostgresConfig

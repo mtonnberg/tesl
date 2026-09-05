@@ -114,14 +114,14 @@ let tesl_files_under (dir : string) ~(self : string) : string list =
   let rec go dir acc =
     if !count >= max_scanned_files then acc
     else
-      match (try Some (Sys.readdir dir) with Sys_error _ -> None) with
+      match (try Some (Source_input.readdir dir) with Sys_error _ -> None) with
       | None -> acc
       | Some entries ->
         Array.sort compare entries;
         let files, dirs =
           Array.to_list entries
           |> List.partition (fun e ->
-               not (try Sys.is_directory (Filename.concat dir e)
+               not (try Source_input.is_directory (Filename.concat dir e)
                     with Sys_error _ -> true))
         in
         let here =
@@ -156,17 +156,17 @@ type local_export = {
     their `Type(..)` import form).  Parse failures index nothing. *)
 let exports_of_file (path : string) : (string * local_export) list =
   let source =
-    try In_channel.with_open_bin path In_channel.input_all
+    try Source_input.read path
     with Sys_error _ | End_of_file -> ""
   in
   if source = "" then []
   else
     (* Discovery is optional. A malformed, unimported sibling must not replace
-       the importing module's real diagnostic. Lexer failures are exceptions,
-       unlike the parser's ordinary Err result; both mean no candidate here. *)
-    match (try Some (Parser.parse_module path source) with Failure _ -> None) with
-    | None | Some (Err _) -> []
-    | Some (Ok m) ->
+       the importing module's real diagnostic; both lexer and parser failures
+       mean no candidate here. *)
+    match Parser.parse_module path source with
+    | Err _ -> []
+    | Ok m ->
       let entry expose name =
         let opaque_const =
           List.exists (function
@@ -200,7 +200,7 @@ let build_local_index (m : module_form) : local_index =
   lazy begin
     (* Only scan next to a module that really lives on disk — synthetic
        filenames ("<test>", "") must not trigger a cwd-relative walk. *)
-    if not (Sys.file_exists m.source_file) then []
+    if not (Source_input.exists m.source_file) then []
     else begin
     let dir = Filename.dirname m.source_file in
     let prefix = dir ^ Filename.dir_sep in

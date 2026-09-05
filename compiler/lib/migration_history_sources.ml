@@ -34,13 +34,13 @@ let reject ?(kind=Invalid_layout) path message =
   raise (Invalid {kind; loc=Location.dummy_loc path; message})
 
 let require_regular path =
-  match Unix.lstat path with
-  | info when info.Unix.st_kind = Unix.S_REG && Unix.realpath path = path -> ()
+  match Source_input.kind path with
+  | Unix.S_REG when Source_input.realpath path = path -> ()
   | _ -> reject path "schema history inputs must be canonical regular files"
 
 let rec require_parent directory =
-  match Unix.lstat directory with
-  | info when info.Unix.st_kind = Unix.S_DIR && Unix.realpath directory = directory -> ()
+  match Source_input.kind directory with
+  | Unix.S_DIR when Source_input.realpath directory = directory -> ()
   | _ -> reject directory "schema history directory is not canonical"
   | exception Unix.Unix_error (Unix.ENOENT, _, _) ->
     require_parent (Filename.dirname directory)
@@ -59,9 +59,9 @@ let file_version path name =
     else Some (int_of_string digits)
 
 let scan ~optional directory =
-  match Unix.lstat directory with
-  | info when info.Unix.st_kind = Unix.S_DIR && Unix.realpath directory = directory ->
-    Sys.readdir directory |> Array.to_list |> List.filter_map (fun name ->
+  match Source_input.kind directory with
+  | Unix.S_DIR when Source_input.realpath directory = directory ->
+    Source_input.readdir directory |> Array.to_list |> List.filter_map (fun name ->
       let path = Filename.concat directory name in
       Option.map (fun version -> require_regular path; version, path) (file_version path name))
     |> List.sort compare
@@ -81,7 +81,7 @@ let protect anchor f =
 let check_inputs history =
   List.iter (fun (path, digest) ->
     require_regular path;
-    if Migration_hash.digest (In_channel.with_open_bin path In_channel.input_all) <> digest then
+    if Migration_hash.digest (Source_input.read path) <> digest then
       reject ~kind:Changed_source path "schema history source changed after it was read") history.source_inputs;
   List.iter (fun (source, name, expected) ->
     if Validation_common.resolve_local_import_path source name <> expected then
@@ -92,11 +92,11 @@ let check_inputs history =
 
 let verify_unchanged history = protect history.current.root_file (fun () -> check_inputs history)
 
-let discover ~compiler_abi ~project_root ~family =
+let inspect ~include_migrations ~compiler_abi ~project_root ~family =
   protect project_root (fun () ->
     if not (Migration_source.valid_family family) then
       reject project_root "invalid schema family";
-    let root = Unix.realpath project_root in
+    let root = Source_input.realpath project_root in
     let module_path name = match Validation_common.schema_module_relative_path name with
       | Some path -> Filename.concat root path
       | None -> reject root ("invalid history module " ^ name) in
@@ -129,7 +129,7 @@ let discover ~compiler_abi ~project_root ~family =
       | None ->
         let path = module_path name in
         require_regular path;
-        let contents = In_channel.with_open_bin path In_channel.input_all in
+        let contents = Source_input.read path in
         let m = match Parser.parse_module path contents with
           | Ok m -> m
           | Err error -> raise (Invalid {kind=Invalid_source; loc=error.loc; message=error.msg}) in
@@ -199,9 +199,9 @@ let discover ~compiler_abi ~project_root ~family =
       visit_migration name;
       let _, contents = read_module name in
       {version; path; contents; source_digest=Migration_hash.digest contents} in
-    let migrations = List.map (fun (version, path) -> read_migration version path) migration_files in
+    let migrations = if include_migrations then List.map (fun (version, path) -> read_migration version path) migration_files else [] in
     let find version = List.find_opt (fun (source : migration_source) -> source.version = version) migrations in
-    let completed_migrations = List.filter_map (fun (schema : schema) ->
+    let completed_migrations = if not include_migrations then [] else List.filter_map (fun (schema : schema) ->
       if schema.version = 1 then None
       else match find schema.version with
         | Some source -> Some source
@@ -213,3 +213,23 @@ let discover ~compiler_abi ~project_root ~family =
       revision_directories=[schema_dir, snapshots; migration_dir, migration_files]} in
     check_inputs history;
     history)
+
+
+let discover = inspect ~include_migrations:true
+
+(** Declaration diagnostics use the supplied migration AST (including an unsaved
+    editor buffer). They need the complete checked schema chain, not another parse
+    of the migration's saved bytes. Keep this result narrower than history: it
+    grants no authority about migration sources, seals, or their frozen closures. *)
+let adjacent_pair ~compiler_abi ~project_root ~family ~previous ~current =
+  match inspect ~include_migrations:false ~compiler_abi ~project_root ~family with
+  | Error error -> Error error
+  | Ok history ->
+    let root schema = Migration_inventory.root_module schema.inventory in
+    let find name = List.find_opt (fun schema -> root schema = name)
+      (history.frozen @ [history.current]) in
+    match find previous, find current with
+    | Some before, Some after when before.version + 1 = after.version &&
+        previous <> family ^ ".VCurrent" -> Ok (before,after)
+    | _ -> Error {kind=Invalid_layout;loc=Location.dummy_loc history.current.root_file;
+        message="Migration must bridge a frozen schema and its immediately following revision in the same saved schema history"}

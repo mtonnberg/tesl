@@ -138,7 +138,7 @@ let freeze_closure ~project_root ~family ~version =
   | None -> Error "invalid schema family"
   | Some _ ->
     try
-      let project_root = Unix.realpath project_root in
+      let project_root = Source_input.realpath project_root in
       let copies = ref [] in
       let visited = Hashtbl.create 16 in
       let rec visit name =
@@ -149,8 +149,9 @@ let freeze_closure ~project_root ~family ~version =
           let path = Filename.concat project_root relative in
           (* Family-owned inputs and outputs stay within their canonical layout;
              following a symlink must not turn a freeze into a copy of app code. *)
-          if Unix.realpath path <> path then failwith ("schema source is not at its canonical path: " ^ path);
-          let source = In_channel.with_open_bin path In_channel.input_all in
+          if Source_input.kind path <> Unix.S_REG then failwith ("schema source is not a regular file: " ^ path);
+          if Source_input.realpath path <> path then failwith ("schema source is not at its canonical path: " ^ path);
+          let source = Source_input.read path in
           let m = match Parser.parse_module path source with
             | Ok m -> m | Err e -> failwith (path ^ ": " ^ e.msg) in
           if m.module_name <> name then failwith
@@ -169,21 +170,21 @@ let freeze_closure ~project_root ~family ~version =
             | Some path -> path | None -> assert false in
           let target_path = Filename.concat project_root relative in
           let rec check_parent dir =
-            match Unix.lstat dir with
-            | info ->
-              if info.Unix.st_kind <> Unix.S_DIR || Unix.realpath dir <> dir then
+            match Source_input.kind dir with
+            | kind ->
+              if kind <> Unix.S_DIR || Source_input.realpath dir <> dir then
                 failwith ("frozen target has a noncanonical parent: " ^ dir)
             | exception Unix.Unix_error (Unix.ENOENT, _, _) ->
               check_parent (Filename.dirname dir)
           in
           check_parent (Filename.dirname target_path);
-          let exists = match Unix.lstat target_path with
-            | info when info.Unix.st_kind <> Unix.S_REG ->
+          let exists = match Source_input.kind target_path with
+            | kind when kind <> Unix.S_REG ->
               failwith ("frozen target is not a regular file: " ^ target_path)
             | _ -> true
             | exception Unix.Unix_error (Unix.ENOENT, _, _) -> false in
           if exists then begin
-            if In_channel.with_open_bin target_path In_channel.input_all <> contents then
+            if Source_input.read target_path <> contents then
               failwith ("refusing to overwrite existing frozen history: " ^ target_path)
           end else copies := { source_path = path; target_path;
             source_digest = Migration_hash.digest source; contents } :: !copies

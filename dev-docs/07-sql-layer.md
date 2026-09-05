@@ -229,8 +229,8 @@ exact entity coverage, including private paths and duplicate aliases. It preserv
 missing identities per stored occurrence: a `Same` for a JSONB record cannot hide
 an omitted pair for one of its nested facts or codecs. Its result certifies only
 coverage; `Additive` still needs a single-adapter check, and `Transform`/`Reset`
-still need their row-function/offline checks. The contextual source declaration,
-planner classification and execution integration are pending.
+still need their row-function/offline checks. Planner classification and execution
+integration are pending.
 `Migration_additive.check` consumes the exact inventories bound into that coverage
 result. It projects existing equal fields, new proof-free `Maybe` fields and
 same-typed primitive literal defaults. It refuses field removals, changed contracts,
@@ -239,7 +239,87 @@ The result contains logical value sources and preserves index-change obligations
 it is not SQL or permission to expand. Nominal/Money defaults still need contextual
 elaboration, and PostgreSQL assignments, physical column sets, index safety and
 admission remain additional checks.
-The source-history layer separately guards saved input bytes and import resolution.
+The source-history layer separately guards input bytes and import resolution.
+
+`Migration_declaration.check` now connects the initial `Migration` source form to
+these checks. `Migration_history_sources.adjacent_pair` loads the complete checked
+schema chain without rereading the migration body, so an unsaved migration buffer
+is checked against its actual text. The source checker validates root ownership,
+required fields, sparse entity keys, literal defaults and Same claims. One Same
+spelling covers all matching eligible namespaces, including a record and its
+same-named codec. Helpers use non-version-root module names; each `Migrate.V<n>`
+root requires its declaration. Contextual constants have no runtime value binding.
+
+`Migration_seal` captures the complete checked inventory's raw source digests and
+its compiler-bound semantic digest. Source verification checks the owned closure
+and canonical import resolution without running an old compiler. Semantic
+verification additionally requires the recorded ABI and reruns the full inventory
+judgment. These records are committed metadata, not authenticated database history.
+`Migration_header` stores predecessor and target seals, preserves surrounding
+source on replacement, and verifies that they match the declaration's adjacent
+roots. The contextual checker reports MIG001 for changed recorded VCurrent input
+and MIG013 for changed frozen input or malformed metadata. It receives the actual
+source text from the frontend, so unsaved header changes are not reread from disk.
+The declaration result explicitly retains optional source-integrity evidence;
+missing headers remain distinguishable from verified ones. A freeze must replace
+the target seal after rewriting code references: token rewriting ignores comments.
+
+`Source_input.with_overlays` supplies one read-only source view to import resolution,
+the type/proof/validation passes, inventories and history discovery. It supports
+new files and parent directories without creating them, so proposed frozen copies
+and unsaved private dependencies receive the complete compiler judgment. Scopes
+restore their inputs and invalidate semantic caches on normal or exceptional exit.
+Paths must be canonical `.tesl` files inside the project; symlinks, special files,
+duplicate entries and file/directory conflicts refuse. Input hashes describe that
+view. Manifest application still needs separate saved-byte and editor-version
+guards; the public manifest CLI and editor application flow remain pending.
+
+`Migration_manifest` captures saved bytes separately from the active source view,
+including read-only dependencies and open-document versions. Parent/discovery
+directory hashes and explicit import-resolution preconditions guard inputs that
+could change what the compiler reads. Source bytes use hexadecimal in the version-1
+JSON transport, preserving even non-UTF8 comments; editor application must check
+representability. Manifest construction and verification perform no source writes.
+Neither a manifest nor its hash establishes that its proposed source is correct.
+
+`Migration_generate.start` consumes a selected family and current version. It
+freezes the complete current closure, retargets the existing migration's code and
+unshared helpers, recreates its target seal, and emits the next initially unchanged
+Migration record. The entire proposal receives normal compiler checks in a source
+view before its manifest is returned. Equal preexisting frozen files are guarded
+even if they need no edit. Finalizing a recorded current target requires verifying
+its semantic seal with the actual same compiler ABI; supplying an old tag does not
+run an old compiler. A stale target selection or changed recorded current source
+refuses. Target resolution, refresh/provenance, migration-closure freezing, build
+ABI identity, public commands and manifest application are still required. This
+source operation does not authorize DDL, ABI recovery or persisted-proof transport.
+
+Generated Same claims now carry refresh ownership markers. `Migration_provenance`
+compares their role-normalized data AST fingerprints and protects edited bodies
+and added internal comments. `Migration_source_syntax` binds raw source, parsed AST
+identities and tokens in one immutable view. It reparses an addressed expression
+and measures the last consumed token, rather than treating broad diagnostic spans
+as edit ranges. Unsupported expressions and stale ASTs refuse editing. Source
+refresh still needs to select, merge and diagnose migration entries; the markers
+alone do not perform it. `Migration_sparse.requirements` provides complete checked
+stored-occurrence obligations before the generator selects entries, and
+`check_requirements` retains the same coverage judgment as `check`.
+
+`Parser.parse_module` reports lexer failures at the failing source file, including
+imported buffers. `Frontend_check` owns diagnostics, the type/proof/validation
+pipeline and dependency checks. `Compile` adds the migration judgment to the entry
+and imported modules; schema inventories use the same base checks without an emitter
+dependency. This avoids a weaker schema checking path or a compiler dependency cycle.
+Recorded source integrity also reaches direct schema queries and application
+imports, including private-only imports. The check derives revision ownership from
+canonical paths, so a renamed or malformed module header cannot hide an edited
+frozen input. Each reachable revision is checked once; migration declarations use
+their actual source buffer instead of re-reading a saved header. Direct and app
+queries anchor integrity errors in the queried file and retain the recorded header
+and changed dependency locations. Structured LSP related information remains pending.
+The current declaration result is still a logical adapter. A complete executable
+history must require seals on every edge and verify persisted ABI identity,
+transformation typing, physical planning and admission before a database transition.
 
 The following startup notes describe the legacy bootstrap, not the versioned
 migration executor being developed; delivery status is tracked in

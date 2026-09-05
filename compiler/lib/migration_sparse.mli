@@ -31,6 +31,16 @@ type entity =
       missing_identities : missing_identity list;
     }
 type t
+type requirements
+(** Verify the complete identity list and calculate every owned stored occurrence
+    before choosing migration entries. A generator can inspect this projection
+    without supplying fake Transform entries just to obtain the missing evidence.
+    Requirements are bound to the exact checked input inventories. *)
+val requirements : before:Migration_inventory.t -> after:Migration_inventory.t ->
+  identities:identity list -> loc:Location.loc -> (requirements,error list) result
+val requirement_entities : requirements -> (string * entity) list
+val check_requirements : requirements -> entries:entry list -> loc:Location.loc ->
+  (t,error list) result
 (** Every identity is freshly verified against these inventories. Duplicate
     identities and entity aliases are refused. Entry names may be unique short
     names, revision-relative owning paths, or actual fully qualified old/new entity

@@ -25,6 +25,7 @@ type 'a result = Ok of 'a | Err of parse_error
 type stream = {
   tokens : Lexer.full_token array;
   mutable pos : int;
+  mutable migration_record_keys : bool;
   filename : string;
   mutable allow_test_multiline_request_continuations : bool;
   (* Captures the pack proof from the last `(T ? P)` parsed in type position.
@@ -35,7 +36,7 @@ type stream = {
 }
 
 let make_stream filename tokens =
-  { tokens = Array.of_list tokens; pos = 0; filename;
+  { tokens = Array.of_list tokens; pos = 0; filename; migration_record_keys = false;
     allow_test_multiline_request_continuations = false;
     last_type_pack_proof = None }
 
@@ -2174,6 +2175,19 @@ and parse_app s =
        return (ESendEmail { email_name; to_; subject; body; loc })
      | _ -> err s "Email.send requires `to`, `subject`, and `body` fields")
   | fn ->
+  (* A Default rule's first argument is an entity field, including otherwise
+     contextual spellings such as `select`, `enqueue`, `ok` and `of`. Consume
+     that one binding token before ordinary expression parsing. Values and
+     malformed non-identifier arguments keep the normal expression grammar. *)
+  let* fn =
+    match fn with
+    | EConstructor {name="Default";args=[];loc} when s.migration_record_keys && peek2 s <> DOT ->
+      let field_loc = current_loc s in
+      (match try_parse s expect_ident with
+       | Ok (Some name) -> return (EConstructor {name="Default";
+           args=[EVar {name;loc=field_loc}];loc})
+       | Ok None | Err _ -> return fn)
+    | _ -> return fn in
   let rec loop in_test_request_continuation fn =
     (* ctor_multiline: true when the initial fn is a bare EConstructor.
        Enables indented argument continuation for multi-line constructor
@@ -2239,7 +2253,14 @@ and parse_app s =
       (match try_parse s (fun s ->
          let saved = s.pos in
          (* Parse an argument: use parse_postfix so x.field works as an arg *)
-         match parse_postfix s with
+         let argument =
+           if peek s = LBRACE && (match fn with
+               | EConstructor {name="Migration";args=[];_} -> true | _ -> false) then
+             let before = s.migration_record_keys in
+             Fun.protect ~finally:(fun () -> s.migration_record_keys <- before)
+               (fun () -> s.migration_record_keys <- true; parse_postfix s)
+           else parse_postfix s in
+         match argument with
          | Ok e ->
            let starts_statement = match e with
              | EVar { name; _ } -> is_statement_starter_ident name
@@ -2513,6 +2534,23 @@ and parse_record_literal s =
     if peek s = RBRACE then continue_ := false
     else begin
       match peek s with
+      | UIDENT first when s.migration_record_keys ->
+        advance s;
+        let name = ref first in
+        while peek s = DOT && (match peek2 s with UIDENT _ -> true | _ -> false) do
+          advance s;
+          (match peek s with UIDENT part -> advance s; name := !name ^ "." ^ part | _ -> ())
+        done;
+        if peek s <> COLON then continue_ := false
+        else begin
+          advance s;
+          match parse_expr s with
+          | Ok value ->
+            fields := (!name,value) :: !fields;
+            skip_layout s;
+            (match peek s with COMMA -> advance s; skip_layout s | _ -> ())
+          | Err _ -> continue_ := false
+        end
       | STRING fname | INTERP fname ->
         (* String key in JSON-style literal: { "fieldName": value } *)
         advance s;
@@ -5795,7 +5833,10 @@ let attach_doc_comments source decls =
       DFunc { fd with doc = doc_above fd.loc.start.line }
     | d -> d) decls
 
+let lexer_failure_prefix = "lexer failure: "
+
 let rec parse_module filename source =
+  try
   let tokens = Lexer.tokenize filename source in
   let s = make_stream filename tokens in
 
@@ -5823,6 +5864,8 @@ let rec parse_module filename source =
   let decls = attach_doc_comments source decls in
 
   return { module_name; exports; imports; decls = decls @ doctest_decls; source_file = filename }
+  with Failure message ->
+    Err { msg = lexer_failure_prefix ^ message; loc = dummy_loc filename; fix = None }
 
 and parse_module_header_body s =
   let* _ = (match peek s with

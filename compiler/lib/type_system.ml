@@ -1683,6 +1683,7 @@ let tesl_module_exports : (string * string list) list = [
       "Email.send"; "startEmailWorker";
       (* config-block types (typed config blocks) *)
       "Email"; "SmtpConfig" ] );
+  ( "Tesl.Migration", Migration_form.names );
   ( "Tesl.Database",
     [ "Database"; "DatabaseBackend"; "Postgres"; "Memory";
       "PostgresConfig"; "PostgresConnection";
@@ -1903,11 +1904,17 @@ let stdlib_adt_ctor_groups : (string * string * string list) list = [
       "Saturday"; "Sunday" ];
 ]
 
+(** Contextual constructors participate in import expansion but have no ordinary
+    value scheme, runtime representation, or pattern-exhaustiveness rows. Keep
+    that boundary explicit rather than pretending they are ordinary ADTs. *)
+let stdlib_import_ctor_groups = stdlib_adt_ctor_groups @
+  List.map (fun (name, ctors) -> "Tesl.Migration", name, ctors) Migration_form.constructor_groups
+
 (** Constructor → the ADT type that owns it, for the `Type(..)` exposing form.
     A constructor owned by two modules (Left/Right) has ONE owning type name. *)
 let stdlib_ctor_owner_type : (string * string) list =
   List.concat_map (fun (_m, ty, ctors) -> List.map (fun c -> (c, ty)) ctors)
-    stdlib_adt_ctor_groups
+    stdlib_import_ctor_groups
   |> List.sort_uniq compare
 
 (** Bare (dot-free, capital-initial) stdlib names usable in a VALUE position that
@@ -2065,7 +2072,7 @@ let tesl_known_module_names : string list = [
   "Tesl.UUID"; "Tesl.Set"; "Tesl.Env";
   "Tesl.Telemetry"; "Tesl.ApiTest"; "Tesl.Tuple"; "Tesl.Id";
   "Tesl.Queue"; "Tesl.Sse"; "Tesl.Logging";
-  "Tesl.JWT"; "Tesl.Cache"; "Tesl.Email"; "Tesl.Database"; "Tesl.SSE"; "Tesl.App"; "Tesl.Agent";
+  "Tesl.Migration"; "Tesl.JWT"; "Tesl.Cache"; "Tesl.Email"; "Tesl.Database"; "Tesl.SSE"; "Tesl.App"; "Tesl.Agent";
   (* Tesl.Sso: SSO / third-party-auth surface (roadmap/next/ensure_sso_works.md,
      Phase 3), backed by tesl/sso.rkt. *)
   "Tesl.Sso";

@@ -781,13 +781,15 @@ non-primitive definition refuses the closure. Building this inventory requires a
 checked modules in the ownership boundary, including private declarations; an export
 list is not an inventory of semantic dependencies.
 
-The saved-source inventory loader starts at a schema revision root and follows
+The source-view inventory loader starts at a schema revision root and follows
 every owned local import, including private modules, diamonds and cycles. It
 applies the ordinary compiler judgment to every member and checks storage
 identities across the whole schema before publishing an abstract inventory.
 Imported interfaces are refreshed for each load; a changed source file cannot
 borrow an earlier load's type information. Changes detected across the load's
-checking passes refuse the inventory.
+checking passes refuse the inventory. Compiler-internal read-only overlays may
+provide unsaved dependencies and proposed frozen files. They use the same import,
+type, proof and validation checks and create no source files or directories.
 
 An inventory result wraps its closure as
 `["compiler-semantics", compiler-abi, closure]`. Its builtin references identify
@@ -799,6 +801,105 @@ a per-type closure roots that declaration and its dependencies, including codecs
 of nested record/ADT fields. Thus an unchanged SQL `jsonb` column can have a
 different semantic closure. This loader does not yet implement historical
 manifest checks, the contextual `Same` rule or a cross-ABI data transition.
+
+**Snapshot source-seal format 1 (accepted design; generator integration pending).**
+A snapshot seal records the complete checked owned source closure independently
+of its compiler-bound semantic digest. Its comment block is:
+
+```text
+# tesl:snapshot-seal:v1 <schema-root> <compiler-abi-hex> <snapshot-sha256>
+# tesl:snapshot-source <owned-module> <source-sha256>
+...one source line per owned module, including the root...
+# tesl:snapshot-end
+```
+
+Tokens have one ASCII space between them. ABI bytes use lowercase hexadecimal;
+all SHA-256 digests use 64 lowercase hexadecimal digits. Source lines are sorted
+by their complete module names, with no duplicates, omissions or unowned entries.
+The root names exactly `FamilySchema.VCurrent` or a legal frozen revision. Sources
+must resolve to canonical regular files within that revision's ownership closure.
+Writers terminate each line with LF; readers also accept CRLF metadata.
+
+A source digest covers exact file bytes, including comments and line endings. The
+semantic digest uses the canonical Snapshot domain above, so it is insensitive to
+formatting and revision alpha-renaming. A freeze therefore preserves the semantic
+digest while recording the copied files' new byte digests. Source verification
+checks every recorded file, the complete import closure and canonical resolution;
+it does not require executing an older compiler. Semantic verification additionally
+requires the actual executing compiler ABI to equal the recorded ABI, applies the
+complete compiler judgment again and compares the resulting snapshot digest. An
+ABI mismatch is distinct from edited source. Supplying an old ABI label does not
+reconstruct old compiler semantics.
+
+These source records are not authenticated database history: editing the metadata
+and source together can change both. The persisted boot/execution checks provide
+the independent backstop. Neither a decoded seal nor verified source bytes grant
+authority to transport persisted proofs across ABIs, run DDL or prune history.
+Mandatory generated histories and runtime integration remain separate
+implementation steps.
+
+A migration history header encloses the predecessor and target snapshot seals in
+that order, using `# tesl:migration-history:v1`, `# tesl:migration-from`,
+`# tesl:migration-to` and the closing `# tesl:migration-history:end` comment lines.
+The header precedes the module declaration; ordinary leading comments are retained.
+Only one history header is allowed. Its roots must equal the Migration record's
+`from` and `to` references and describe adjacent revisions of one family. An edited
+recorded `VCurrent` source reports MIG001, while an edited recorded frozen source
+reports MIG013, including the changed private dependency's location. Malformed or
+incomplete metadata refuses instead of being treated as an absent header. Unsealed
+handwritten declarations still receive logical source checking during this initial
+implementation; an executable history plan must require seals for every edge.
+These integrity checks apply when checking the migration, a recorded schema file,
+or an application importing that schema. Unsaved source buffers participate in the
+same checks. A private-only import still checks the recorded revision root.
+
+**Source edit manifest format 1 (generator/application integration pending).**
+A manifest describes source operations, not executable database transitions. Its
+JSON object contains `version: 1`, `projectRoot`, `documents`, `inputs`,
+`directories`, `imports`, and `edits`. Paths are absolute canonical UTF-8 paths under one
+existing project. Each document has `path` and a signed 32-bit `version`. Each input
+has `path`, `sourceHash` and `diskHash`: SHA-256 of the complete source-view and
+saved bytes respectively, or null for absence. Directory entries carry the same
+two hashes over `tesl-directory-v1`, a NUL byte, sorted entry names separated by
+NUL, and a final NUL. An absent directory is null, distinct from an empty one.
+Every input/output parent and each explicit discovery directory is guarded.
+Each import precondition has `source`, `module`, `sourceResolved`, and
+`diskResolved`. It records separate resolution in the source view and on disk;
+each resolved path also gets a file precondition. Import guards are sorted by
+source path and module name. This detects resolution changes such as an existing
+dangling import candidate becoming available without changing the old dependency.
+
+Each edit has `path`, `beforeHex`, `afterHex` and `documentVersion`. Replacement
+bytes use lowercase hexadecimal so arbitrary source bytes survive JSON transport;
+the editor must separately check whether it can represent them. `beforeHex` is the
+source-view preimage, null for a new file. `documentVersion` is null for a closed
+file. Equal replacements are omitted but retain their input guards. File creations
+and replacements target `.tesl` files; duplicate outputs, symlinks, special files
+and file/directory conflicts refuse. Source hashes, saved hashes and document
+versions are separate preconditions: none substitutes for either of the others.
+The manifest identity is SHA-256 of its canonical compact JSON. Input, directory,
+document and edit lists are sorted by path. Manifest construction does not write
+files or establish that proposed programs compile; the generator must check the
+complete proposed source view, and application must recheck the preconditions.
+
+**Generated-node ownership format 1.** A generated migration data expression may
+end its line with `# @tesl-gen <id> <fingerprint>`, after any separating comma.
+The identity uses ASCII letters, digits, `_`, `-`, `.`, `:`, or `/`; the fingerprint
+is a lowercase SHA-256 digest. It encodes the location-independent data AST under
+the `migration-generated-node-v1` domain, with the old and new schema roots renamed
+to `@from` and `@to`. Freezing VCurrent therefore preserves the fingerprint.
+This is syntax ownership for refresh, not semantic equality, authenticated history,
+or permission to execute a migration. Type, proof and history checks still apply.
+
+Matching markers and unchanged supported data expressions remain generator-owned.
+Changed expressions, malformed or mismatched markers, unsupported syntax and
+new comments inside the expression are protected as user-owned. Comments outside
+the expression are never overwritten to place a marker. Literal `#` characters
+inside strings are not comments. Annotation is idempotent, preserves commas and
+line endings, and refuses duplicate identities or insertion points. Exact editing
+ranges come from the token stream and a matching reparse of the same source view;
+diagnostic spans must not be used as replacement ranges. An AST object from a
+different view cannot address the source, even if its text is identical.
 
 The field-impact projection has one location per declared entity field, including
 private entities in child modules. It uses the same typed lowering as the complete
@@ -838,8 +939,35 @@ reported separately. The generator's candidate list includes private equal pairs
 and excludes entities, functions, constructor aliases and unmatched nominal names.
 Candidates do not override a developer's decision to omit a `Same` entry.
 
-**Sparse migration coverage.** Before checking a row function or deriving a
-single adapter, the compiler checks the record's coverage against both complete
+**Contextual additive source declarations.** A canonical `FamilySchema.Migrate.V<n>`
+root contains exactly one `migration = Migration { ... }` declaration. Standalone
+pure functions and tests may live in helper modules of the same family. The initial
+`Tesl.Migration` vocabulary exposes `Migration`, `Entity(..)` (`Additive`, `New`,
+`Drop`), `Rule(..)` (`Default`), and `Same(..)`. These are contextual declarations,
+not runtime types or values. Their constants are absent from the ordinary value
+environment and are erased, including their runtime exports, before emission.
+
+`from`, `to`, `same`, and `entities` are required literal fields; `fixtures` may be
+absent or an empty list in this initial checker. Both schema roots must be imported
+directly. The complete checked saved schema chain determines adjacency and the
+target module's version; an unsaved migration buffer supplies its own declaration
+body. Entity keys may use uppercase or qualified owning names inside this folded
+record. Rule field references accept the entity's legal field names, including
+otherwise contextual spellings such as `select` and `ok`.
+
+`Same Old.Payload New.Payload` checks **every eligible namespace with that spelling**
+on both sides. For a record with a same-named codec, it verifies both declarations
+independently. This does not imply identities for differently named dependencies:
+contained facts and types still need their own claims. A changed codec therefore
+cannot hide behind the record's unchanged structure.
+
+This source judgment connects the sparse and additive checks below. It does not
+establish frozen seals, the persisted compiler execution ABI, physical plans,
+admission, transformations, or execution. Nonempty compatibility fixtures and
+transformation constructors still require their separate contextual judgments.
+
+**Internal sparse migration coverage.** Before checking a row function or deriving a
+single adapter, the coverage pass checks the record's coverage against both complete
 inventories. Entity identity is the owning module path relative to the schema
 revision plus the entity name. A short name is accepted only when it selects one
 identity in the union; an ambiguous short name must be qualified. A move to a
@@ -866,7 +994,7 @@ are equal: the omission deliberately requests revalidation. These rules check
 coverage only. They do not validate a row function, derive a column adapter,
 classify index safety, authorize DDL or introduce cross-version proof casts.
 
-**Single-adapter row projection.** After sparse coverage, the additive row
+**Internal single-adapter row projection.** After sparse coverage, the additive row
 checker consumes that exact pair of inventories and its normalized entries. It
 cannot combine a coverage result with unrelated or subsequently loaded schemas.
 Every old field must remain, with an equal complete field contract; table and
@@ -877,6 +1005,10 @@ receive a same-typed literal through `Default`. Defaults cannot target existing 
 nullable fields, have conflicting duplicate targets, or compute a value. A new
 field with a proof, a nominal constructor, or another type requires further rule
 elaboration; this initial projection does not silently erase its type or proof.
+
+This projection supplies values for old rows and writers. It does not alter the
+ordinary complete-record construction rule: a current entity literal must supply
+new fields explicitly, including `Nothing` for a new optional field.
 
 The projection returns logical row value sources, not SQL or a compatibility
 certificate. Index changes are retained as a separate obligation, including when

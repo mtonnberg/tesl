@@ -306,6 +306,21 @@ let diagnostic_registry () =
         (try ignore (Str.search_forward (Str.regexp_string code) index 0); true with Not_found -> false))
     ["MIG002";"MIG015";"MIG016";"MIG020";"MIG022";"MIG023";"MIG024"]
 
+let generator_requirements () = with_project (fun root write ->
+  let before,after,_ = fixture root write source in
+  let identities = all_same before after |> omit Migration_ir.Predicate "ValidText" in
+  let required = checked (S.requirements ~before ~after ~identities ~loc) in
+  let missing = S.requirement_entities required |> List.concat_map (function
+    | _,S.Paired pair -> pair.missing_identities | _ -> []) in
+  check (list string) "generator sees every occurrence before selecting rules" expected_occurrences
+    (List.map describe missing |> List.sort_uniq String.compare);
+  ignore (refused "MIG016" (S.check_requirements required ~entries:[] ~loc));
+  let covered = checked (S.check_requirements required ~entries:transforms ~loc) in
+  check int "unaffected table still folds" 1 (S.unchanged_count covered);
+  check int "entry selection retains all obligations" 5 (List.length (gaps covered));
+  let duplicate = List.hd identities :: identities in
+  ignore (refused "MIG024" (S.requirements ~before ~after ~identities:duplicate ~loc)))
+
 let () = Alcotest.run "migration-sparse" ["coverage and identity", [
   test_case "complete and unused identity coverage" `Quick complete_coverage;
   test_case "omitted nested fact cannot hide behind an enclosing Same" `Quick omitted_nested_fact;
@@ -321,4 +336,5 @@ let () = Alcotest.run "migration-sparse" ["coverage and identity", [
   test_case "direct and nested field facts coexist" `Quick direct_field_fact;
   test_case "300 independent stored occurrences and deterministic order" `Quick many_occurrences;
   test_case "migration diagnostics appear in the public registry" `Quick diagnostic_registry;
+  test_case "generator requirements precede entry selection" `Quick generator_requirements;
 ]]

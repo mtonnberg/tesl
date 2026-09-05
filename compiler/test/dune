@@ -368,3 +368,54 @@
  (name test_migration_additive)
  (modules test_migration_additive)
  (libraries tesl_compiler_lib alcotest str unix))
+
+; Public contextual source diagnostics and logical additive adapters.
+(test
+ (name test_migration_declaration)
+ (modules test_migration_declaration)
+ (libraries tesl_compiler_lib alcotest str unix))
+
+(test
+ (name test_source_input)
+ (modules test_source_input)
+ (libraries tesl_compiler_lib alcotest str unix))
+
+(test
+ (name test_migration_seal)
+ (modules test_migration_seal)
+ (libraries tesl_compiler_lib alcotest str unix))
+
+(test
+ (name test_migration_header)
+ (modules test_migration_header)
+ (libraries tesl_compiler_lib alcotest str unix))
+
+(test
+ (name test_migration_manifest)
+ (modules test_migration_manifest)
+ (libraries tesl_compiler_lib alcotest str unix))
+
+(test
+ (name test_migration_generate)
+ (modules test_migration_generate)
+ (libraries tesl_compiler_lib alcotest str unix))
+
+(test
+ (name test_migration_source_syntax)
+ (modules test_migration_source_syntax)
+ (libraries tesl_compiler_lib alcotest str unix))
+
+(test
+ (name test_migration_provenance)
+ (modules test_migration_provenance)
+ (libraries tesl_compiler_lib alcotest str unix))
+
+(test
+ (name test_migration_source_merge)
+ (modules test_migration_source_merge)
+ (libraries tesl_compiler_lib alcotest str unix))
+
+(test
+ (name test_migration_refresh)
+ (modules test_migration_refresh)
+ (libraries tesl_compiler_lib alcotest str unix))

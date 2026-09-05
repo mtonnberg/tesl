@@ -412,9 +412,23 @@ put the physical schema name in `PostgresConfig.namespace`, for example
 `namespace: "notes_app"`. It must be a nonempty static string. The `Database`
 declaration and connection settings remain in the application module.
 
-This form currently establishes ownership and generated table metadata. Migration
-history, automatic transformations and deployment coordination are still under
-development; selecting a migration namespace does not yet execute migrations.
+The compiler also checks additive `Migration { from, to, same, entities }`
+declarations imported from `Tesl.Migration`. Each `Migrate.V<n>` root owns one
+declaration; ordinary pure helpers and tests can use other module names in the
+same migration family. `Additive` derives values for new optional fields or fields
+with literal `Default` rules. `New` and `Drop` identify added and removed entities.
+An entity omitted from the record must be unchanged, including its stored proofs
+and codecs. `Same` asks the compiler to verify an identity; it cannot assert one.
+
+When a migration includes a recorded history header, the compiler checks every
+owned source file, including private helpers. A changed recorded `VCurrent`
+reports MIG001; a changed frozen file reports MIG013. A compiler ABI mismatch is
+separate from a source edit. These checks also work with unsaved migration headers.
+
+This currently checks source ownership, recorded source integrity and logical
+adapters and emits table metadata. Mandatory generated history, the physical planner, transformations and deployment
+coordination remain under development. Selecting a migration namespace or checking
+a declaration does not yet execute a database migration.
 
 [Lesson 82](../example/learn/lesson82-database-migrations.tesl) runs a complete
 notes HTTP app with this separation. Its schema owns the stored entity and title

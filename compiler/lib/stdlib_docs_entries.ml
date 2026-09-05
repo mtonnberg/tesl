@@ -1151,9 +1151,24 @@ let sso : entry list = [
     ~doc:"Builds the RP-initiated logout URL (OIDC RP-Initiated Logout 1.0) that ends the IdP's own browser session, not just the app's. Re-discovers the connection's `end_session_endpoint` on every call, so a rotated endpoint is always honored; requires `httpClient` since discovery is a live fetch. Raises if the provider does not advertise `end_session_endpoint` (plain OAuth2 providers such as GitHub/Discord never do). A `handler` typically returns this String and the frontend navigates to it after clearing its own session cookie.";
 ]
 
+let migration : entry list = [
+  e "Migration" ~m:"Tesl.Migration"
+    ~kind:(KType "Migration { from: schemaRef, to: schemaRef, same: List Same, entities: { EntityName: Entity }, fixtures: [] }")
+    ~doc:"A contextual declaration in FamilySchema.Migrate.V<n>. References and entity keys are compiler-checked against adjacent schema revisions. It is not a runtime type or value. The initial checker covers additive declarations; physical planning and execution are separate.";
+  e "Entity" ~m:"Tesl.Migration" ~aliases:["Additive";"New";"Drop"]
+    ~kind:(KType "Entity = Additive (List Rule) | New | Drop   # contextual")
+    ~doc:"One entry per changed entity. Additive derives a single row adapter; New and Drop name an added or removed table. An absent entity must be compiler-verified unchanged. These markers cannot be used as runtime values.";
+  e "Rule" ~m:"Tesl.Migration" ~aliases:["Default"]
+    ~kind:(KType "Rule = Default field literal   # contextual")
+    ~doc:"Default supplies the exact primitive literal for a new, non-optional, proof-free field. Optional new fields receive Nothing in the adapter; current application literals still name every field.";
+  e "Same" ~m:"Tesl.Migration"
+    ~kind:(KType "Same From.Declaration To.Declaration   # contextual")
+    ~doc:"The compiler verifies semantic equality for every eligible type, fact and codec with the named spelling. A record and its same-named codec are both checked. This claim cannot assert equality or cast persisted proofs.";
+]
+
 let entries : entry list =
   ambient @ prelude @ email @ maybe_result @ time @ civil_time
   @ int32 @ db @ either @ string_ @ regex @ url @ net @ list_ @ list_prim @ int_ @ float_
   @ dict @ set_ @ tuple @ money @ random_uuid_id_env @ json_codecs
   @ api_test @ jwt @ crypto @ cache @ database @ http @ http_client @ agent @ queue
-   @ telemetry @ sso
+   @ telemetry @ sso @ migration

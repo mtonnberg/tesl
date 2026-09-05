@@ -1191,9 +1191,9 @@ let load_imported_entity_names (m : module_form) : string list =
     if is_tesl_module imp.module_name then []
     else
       let path = resolve_local_import_path m.source_file imp.module_name in
-      if not (Sys.file_exists path) then []
+      if not (Source_input.exists path) then []
       else
-        let source = In_channel.with_open_text path In_channel.input_all in
+        let source = Source_input.read_text path in
         match Parser.parse_module path source with
         | Err _ -> []
         | Ok imported ->
@@ -1248,9 +1248,9 @@ let load_imported_server_names (m : module_form) : string list =
     if is_tesl_module imp.module_name then []
     else
       let path = resolve_local_import_path m.source_file imp.module_name in
-      if not (Sys.file_exists path) then []
+      if not (Source_input.exists path) then []
       else
-        let source = In_channel.with_open_text path In_channel.input_all in
+        let source = Source_input.read_text path in
         match Parser.parse_module path source with
         | Err _ -> []
         | Ok imported ->

@@ -911,9 +911,9 @@ let clear_import_parse_cache () =
     [result] is the parse outcome ([Ok]/[Err]) exactly as
     [Parser.parse_module] would return it for a fresh read. *)
 let parse_local_import_module (path : string) : module_form Parser.result option =
-  if not (Sys.file_exists path) then (Hashtbl.remove import_parse_cache path; None)
+  if not (Source_input.exists path) then (Hashtbl.remove import_parse_cache path; None)
   else
-    let source = In_channel.with_open_bin path In_channel.input_all in
+    let source = Source_input.read path in
     match Hashtbl.find_opt import_parse_cache path with
     | Some (previous, parsed) when previous = source -> Some parsed
     | _ ->
@@ -1147,7 +1147,7 @@ let load_imported_func_sigs (m : module_form) : (string * scheme) list =
               in
               (if include_plain then [ (fd.name, q_sch) ] else [])
               @ (if include_qualified then [ (qualified_name, q_sch) ] else [])
-            | DConst c when module_exports_name imported c.name ->
+            | DConst c when module_exports_name imported c.name && not (Migration_form.is_declaration imported c) ->
               (* #34: bind exported constants across the module boundary.  The
                  emitted Racket already `provide`s them; only the checker's
                  import env was missing the binding, so `import Lib exposing
@@ -5949,7 +5949,7 @@ let type_names_of_return_spec (rs : return_spec) : (string * Location.loc) list 
     never trades this error for a fresh not-in-scope one. *)
 let config_only_type_position_error ~(replacement_in_scope : string -> bool)
     (name : string) (loc : Location.loc) : type_error =
-  let config_block_usage = [
+  let config_block_usage = List.map (fun name -> name, "a contextual `Migration { … }` declaration") Migration_form.names @ [
     ("Database",           "a `database NAME = Database { … }` declaration");
     ("PostgresConfig",     "the `backend: Postgres (PostgresConfig { … })` field of a `database` declaration");
     ("Queue",              "a `queue NAME = Queue { … }` declaration");
@@ -6131,7 +6131,7 @@ let check_type_names_in_scope ~(suggest : string -> Import_suggest.suggestion op
       in
       (* Cycle guard on CANONICAL paths (the item-19 lesson: raw resolved
          spellings differ per importing module); the entry is pre-marked. *)
-      let canon p = try Unix.realpath p with _ -> p in
+      let canon p = try Source_input.realpath p with _ -> p in
       let visited : (string, unit) Hashtbl.t = Hashtbl.create 8 in
       Hashtbl.replace visited (canon m.source_file) ();
       let acc = ref (decls_of m) in
@@ -7523,7 +7523,7 @@ let check_module_with_metadata_uncached ?typed_nodes ?(source_lines = [||]) (m :
   (* re-activate THIS module's quantity aliases: loading an imported module
      above may have checked it and set its own (see activate note at entry) *)
   ignore (activate_units_aliases_for m);
-  let ctx = collect_func_sigs ctx m.decls in
+  let ctx = collect_func_sigs ctx (Migration_form.runtime_declarations m) in
   let ctx = {
     ctx with
     proof_returns = collect_proof_returns m.decls;
@@ -7959,6 +7959,7 @@ let check_module_with_metadata_uncached ?typed_nodes ?(source_lines = [||]) (m :
     match decl with
     | DFunc fd ->
       check_func_decl ~user_fn_names ctx fd
+    | DConst c when Migration_form.is_declaration m c -> ()
     | DConst c ->
       let ty = infer_expr ctx c.value in
       (* Update the env with the inferred type *)

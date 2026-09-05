@@ -55,7 +55,14 @@ let related_declaration side (d : declaration) = d.source_loc,
   side ^ " " ^ Migration_ir.namespace d.namespace ^ " " ^ d.qualified_name
 let related_entity side e = e.entity_loc, side ^ " entity " ^ e.entity_name
 
-let check ~before ~after ~(identities : identity list) ~(entries : entry list) ~loc =
+type requirements = {
+  projection : (string * entity) list;
+  verified : same list;
+  before_after : Migration_inventory.t * Migration_inventory.t;
+}
+let requirement_entities r = r.projection
+
+let requirements ~before ~after ~(identities : identity list) ~loc =
   (* Checks the family and ABI even for completely empty schemas. *)
   match entity_changes ~before ~after with
   | Error error -> Error [{code="MIG020";loc;message=error.message;related=[]}]
@@ -129,6 +136,14 @@ let check ~before ~after ~(identities : identity list) ~(entries : entry list) ~
       | Some old, None -> Removed old
       | None, Some fresh -> Added fresh
       | None, None -> assert false) names in
+    Ok {projection=covered;verified;before_after=(before,after)}
+
+let check_requirements requirements ~(entries : entry list) ~loc =
+    let before,after = requirements.before_after in
+    let covered = requirements.projection and verified = requirements.verified in
+    let names = List.map fst covered in
+    let errors = ref [] in
+    let report code loc message related = errors := {code;loc;message;related} :: !errors in
     let related = function
       | Added e -> [related_entity "current" e]
       | Removed e -> [related_entity "previous" e]
@@ -185,3 +200,8 @@ let check ~before ~after ~(identities : identity list) ~(entries : entry list) ~
     else Ok {entities=List.map snd covered; identities=verified;inventories=(before,after);
       entries=List.filter_map (fun name ->
         Option.map (fun (e : entry) -> name,e.kind) (Hashtbl.find_opt assigned name)) names}
+
+let check ~before ~after ~identities ~entries ~loc =
+  match requirements ~before ~after ~identities ~loc with
+  | Error errors -> Error errors
+  | Ok prepared -> check_requirements prepared ~entries ~loc

@@ -34,6 +34,7 @@ let layout () =
     "NotesSchema.VCurrent.Note", "schema/notes/v-current/note.tesl";
     "NotesSchema.V8.Shared.Types", "schema/notes/v8/shared/types.tesl";
     "NotesSchema.Migrate.V8", "migrations/notes/v8.tesl";
+    "NotesSchema.Migrate.V8Helpers", "migrations/notes/v8-helpers.tesl";
     "ShopSchema.Migrate.V10", "migrations/shop/v10.tesl";
     "NotesSchema.V2147483646", "schema/notes/v2147483646.tesl";
   ];
@@ -90,7 +91,7 @@ fn value(n: Int) -> Int = n
 fn make(n: Int) -> Count = Count n
 fn size(n: Count) -> Int = n.value
 |});
-  ignore (write "migrations/notes/v8.tesl" {|module NotesSchema.Migrate.V8 exposing [combined, separate, nested, oldChoice, newChoice, optionalChoice]
+  ignore (write "migrations/notes/v8-helpers.tesl" {|module NotesSchema.Migrate.V8Helpers exposing [combined, separate, nested, oldChoice, newChoice, optionalChoice]
 import Tesl.Prelude exposing [Int]
 import Tesl.Maybe exposing [Maybe(..)]
 import NotesSchema.V7
@@ -122,21 +123,21 @@ fn optionalChoice(choice: Maybe NotesSchema.V7.Choice) -> Int =
   let entry = write "migrations/notes/v8-tests.tesl" {|module NotesSchema.Migrate.V8Tests exposing [result]
 import Tesl.Prelude exposing [Int]
 import Tesl.Maybe exposing [Maybe(..)]
-import NotesSchema.Migrate.V8
+import NotesSchema.Migrate.V8Helpers
 import NotesSchema.V7
 import NotesSchema.VCurrent
-fn result(n: Int) -> Int = NotesSchema.Migrate.V8.combined n
+fn result(n: Int) -> Int = NotesSchema.Migrate.V8Helpers.combined n
 test "full schema import closure" {
   expect result 7 == 21
-  expect NotesSchema.Migrate.V8.separate 7 == 8
-  expect NotesSchema.Migrate.V8.nested 7 == 8
-  expect NotesSchema.Migrate.V8.oldChoice (NotesSchema.V7.Chosen (NotesSchema.V7.Count 17)) == 17
-  expect NotesSchema.Migrate.V8.oldChoice NotesSchema.V7.Empty == 0
-  expect NotesSchema.Migrate.V8.newChoice (NotesSchema.VCurrent.Chosen (NotesSchema.VCurrent.make 17)) == 2
-  expect NotesSchema.Migrate.V8.newChoice NotesSchema.VCurrent.Empty == 0
-  expect NotesSchema.Migrate.V8.optionalChoice (Something (NotesSchema.V7.Chosen (NotesSchema.V7.Count 17))) == 17
-  expect NotesSchema.Migrate.V8.optionalChoice (Something NotesSchema.V7.Empty) == 0
-  expect NotesSchema.Migrate.V8.optionalChoice Nothing == -1
+  expect NotesSchema.Migrate.V8Helpers.separate 7 == 8
+  expect NotesSchema.Migrate.V8Helpers.nested 7 == 8
+  expect NotesSchema.Migrate.V8Helpers.oldChoice (NotesSchema.V7.Chosen (NotesSchema.V7.Count 17)) == 17
+  expect NotesSchema.Migrate.V8Helpers.oldChoice NotesSchema.V7.Empty == 0
+  expect NotesSchema.Migrate.V8Helpers.newChoice (NotesSchema.VCurrent.Chosen (NotesSchema.VCurrent.make 17)) == 2
+  expect NotesSchema.Migrate.V8Helpers.newChoice NotesSchema.VCurrent.Empty == 0
+  expect NotesSchema.Migrate.V8Helpers.optionalChoice (Something (NotesSchema.V7.Chosen (NotesSchema.V7.Count 17))) == 17
+  expect NotesSchema.Migrate.V8Helpers.optionalChoice (Something NotesSchema.V7.Empty) == 0
+  expect NotesSchema.Migrate.V8Helpers.optionalChoice Nothing == -1
 }
 |} in
   match Compile.compile_go_file entry with
@@ -177,7 +178,7 @@ fn hidden(n: Int) -> Int = n
     "NotesSchema.V7", "schema/notes/v7.tesl";
     "NotesSchema.VCurrent", "schema/notes/v-current.tesl";
   ];
-  let entry_for body = write "migrations/notes/v8.tesl" ({|module NotesSchema.Migrate.V8 exposing []
+  let entry_for body = write "migrations/notes/v8-helpers.tesl" ({|module NotesSchema.Migrate.V8Helpers exposing []
 import Tesl.Prelude exposing [Int]
 import NotesSchema.V7
 import NotesSchema.VCurrent
@@ -310,8 +311,8 @@ fn pure(n: Int) -> Int = n
       String.starts_with ~prefix:"schema module `NotesSchema.VCurrent` may import only" d.message) diagnostics))
 
 let migration_contents () = with_project (fun _root write ->
-  let path = "migrations/notes/v8.tesl" in
-  let header = {|module NotesSchema.Migrate.V8 exposing [pure]
+  let path = "migrations/notes/v8-helpers.tesl" in
+  let header = {|module NotesSchema.Migrate.V8Helpers exposing [pure]
 import Tesl.Prelude exposing [String, Int, Unit]
 import Tesl.Database exposing [Database, Memory]
 import Tesl.Env exposing [envRead, requireEnv]
@@ -321,7 +322,7 @@ import Tesl.Env exposing [envRead, requireEnv]
     "test \"the migration keeps its pure regression beside the function\" { expect pure migrationFixture == 8 }\n" in
   let entry = write "app.tesl" {|module App exposing [result]
 import Tesl.Prelude exposing [Int]
-import NotesSchema.Migrate.V8 exposing [pure]
+import NotesSchema.Migrate.V8Helpers exposing [pure]
 fn result(n: Int) -> Int = pure n
 |} in
   let check source =
@@ -418,7 +419,7 @@ let historical_application_imports () = with_project (fun root write ->
          (Compile.check_file file)))) [
       "app.tesl", "App", "NotesSchema.VCurrent.Private.Entities";
       "schema/notes/v7.tesl", "NotesSchema.V7", "NotesSchema.V7.Private.Entities";
-      "migrations/notes/v8.tesl", "NotesSchema.Migrate.V8", "NotesSchema.V7.Private.Entities";
+      "migrations/notes/v8-helpers.tesl", "NotesSchema.Migrate.V8Helpers", "NotesSchema.V7.Private.Entities";
     ])
 
 let historical_import_fixes () = with_project (fun root write ->
@@ -979,11 +980,11 @@ let historical_index_ownership () = with_project (fun _root write ->
   let old = "schema/notes/v1.tesl" and current = "schema/notes/v-current.tesl" in
   ignore (write old (schema "V1" ""));
   ignore (write current (schema "VCurrent" ""));
-  let source = "module NotesSchema.Migrate.V2 exposing []\n" ^
+  let source = "module NotesSchema.Migrate.V2Helpers exposing []\n" ^
     "import Tesl.Prelude exposing [String]\nimport NotesSchema.V1\nimport NotesSchema.VCurrent\n" ^
     "fn oldTitle(note: NotesSchema.V1.Note) -> String = note.title\n" ^
     "fn newTitle(note: NotesSchema.VCurrent.Note) -> String = note.title\n" in
-  let path = write "migrations/notes/v2.tesl" source in
+  let path = write "migrations/notes/v2-helpers.tesl" source in
   let errors () = Compile.check_file path |> List.filter (fun (d : Compile.diagnostic) -> d.severity = "error") in
   let diagnostics = errors () in
   if diagnostics <> [] then failf "historical views acquired physical ownership: %s"

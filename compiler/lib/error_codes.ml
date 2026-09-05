@@ -175,6 +175,15 @@ let registry : entry list = [
        at the most relevant section for the kind of error.";
     manual = Some "best-practices#validation-patterns" };
 
+  { code = "MIG001"; category = Migration;
+    title = "current schema changed since migration generation";
+    explanation =
+      "The migration header records the complete target schema source closure. \
+       VCurrent or one of its private dependencies has changed. Refresh the \
+       revision if it has not been deployed, or start the next forward revision \
+       from the deployed source. The compiler cannot determine deployment state.";
+    manual = Some "best-practices#database-access" };
+
   { code = "MIG002"; category = Migration;
     title = "migration entity coverage is inconsistent";
     explanation =
@@ -183,6 +192,25 @@ let registry : entry list = [
        entity needs a modification entry. Unchanged entities must be absent. \
        Duplicate entries, unknown names and ambiguous private entity names are \
        errors; qualify an ambiguous name with its owning module path.";
+    manual = Some "best-practices#database-access" };
+
+  { code = "MIG003"; category = Migration;
+    title = "unresolved migration decision";
+    explanation =
+      "A contextual migration entity entry contains todo with a literal reason. \
+       Supply the required row rule or adapter before compiling. The compiler \
+       reports each hole separately and does not fabricate values or proofs. \
+       This placeholder has no runtime value and cannot make a migration executable.";
+    manual = Some "best-practices#database-access" };
+
+  { code = "MIG013"; category = Migration;
+    title = "recorded schema source or history metadata changed";
+    explanation =
+      "A migration header must contain both complete snapshot seals and match \
+       the migration's adjacent schema references. Frozen source files, including \
+       private helpers, must retain their recorded bytes and canonical paths. \
+       Restore the recorded source and make a forward revision; do not rewrite \
+       deployed history. A compiler ABI mismatch is a separate judgment.";
     manual = Some "best-practices#database-access" };
 
   { code = "MIG015"; category = Migration;
@@ -197,11 +225,12 @@ let registry : entry list = [
   { code = "MIG016"; category = Migration;
     title = "stored values require explicit identity or revalidation";
     explanation =
-      "A type, fact or codec reached from a stored field has no verified Same \
-       pair. Even an unchanged enclosing record cannot supply a missing nested \
-       identity. Additive cannot discharge this obligation. Supply a valid Same \
-       pair or a migration that revalidates the stored values. Deliberately \
-       deleting an equal pair requests revalidation.";
+      "An Additive entry needs a compatible value source for every field. \
+       Existing fields must retain their complete contracts and verified Same \
+       pairs for reached types, facts and codecs; an enclosing record cannot \
+       supply a missing nested identity. New fields need a valid default or \
+       optional value. Other changes require a typed row migration. Deleting \
+       an equal Same pair deliberately requests revalidation.";
     manual = Some "best-practices#database-access" };
 
   { code = "MIG020"; category = Migration;

@@ -1228,6 +1228,12 @@ violation is a MIG diagnostic in the table under "Diagnostics"):
 | `Same T U` | type references to same-kind declarations in `From` and `To` **whose canonical semantic-closure hashes are equal** (declaration, minting checks, helpers, codecs, frozen stdlib, primitive tags); `Same` is verified, never an assertion — a hand-written `Same` over differing closures is MIG024, which names the first differing node | MIG024 |
 | `Additive rules` | every change to `E` has a single derivable adapter given the rules | MIG016 |
 
+A record and its codec can share a declaration spelling. A source-level
+`Same From.Payload To.Payload` covers every eligible matching namespace with that
+spelling; the compiler verifies the type and codec independently. It cannot select
+only the unchanged type and conceal a changed codec. Differently named contained
+facts and types continue to require their own explicit Same claims.
+
 What is genuinely new *syntax* is small and listed in §1: module references as record
 values, entity names as record fields, bare column identifiers as values inside a
 `Rule` (which `index [orgId]` and `onConflict [id]` already do inside an entity
@@ -3825,8 +3831,14 @@ handler put updateContent(user: String ::: Authenticated user, noteId: String, b
 # handler get longNotes(...) = select note from Note where note.wordCount > 500
 ```
 
-**V8 → V9.** The module path and database declaration stay unchanged; no application
-edit is required for the additive `archivedAt` field unless code chooses to use it.
+**V8 → V9.** The module path, database declaration and read handlers stay unchanged.
+Current entity literals, including `createNote`'s insert, must explicitly supply
+`archivedAt: Nothing`: Tesl requires complete records, including optional fields.
+The migration's `Nothing` adapter supplies the value for existing rows and old
+writers; it does not fill missing fields in current application source. Tests and
+lessons must show this small write-construction edit. Representation-only JSONB
+changes can keep all application code byte-identical because the logical fields
+stay the same.
 The V7→V8 PR already committed **`migrations/notes/v8-contract.tesl`** before building
 V8: the reviewed authority to retire V7 and drop exactly `authorId`, `legacyRank`, the
 old index and the trigger. After the V8 roll drains V7, the default pipeline runs
