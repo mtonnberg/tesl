@@ -364,6 +364,29 @@ PostgreSQL per zone and unit.
 
 ### Schema and migrations
 
+Keep the database connection in the application module. Put entities, their types,
+facts, codecs, and pure validation helpers in the schema module; put queries,
+handlers, workers, and tests in application modules that import those entities.
+The application selects the database for imported entities too, so an entity
+module needs no connection settings or import back to the application.
+
+Schema families use names such as `NotesSchema.VCurrent` in
+`schema/notes/v-current.tesl`, with optional child modules under
+`schema/notes/v-current/`. Every schema module and its import closure obeys this
+boundary, including private declarations, even before an application binds it to
+a database. A handler, database declaration, effect, or test inside that closure
+is a compile error. Editor checks apply the same rule to unsaved schema buffers.
+
+Migration modules under `NotesSchema.Migrate.*` also keep application code and
+connections out. They allow pure migration records and fixture values; entity
+declarations stay in the schema they import.
+
+Keep one database binding for each schema family, including all its child modules.
+The compiler rejects splitting that family between connections, combining different
+families in one database, or binding a historical `V<n>` entity to a connection.
+Application bindings use `VCurrent`. These checks also run on new, unsaved
+application files.
+
 Tesl derives the database schema directly from your `entity` and `database` declarations. On first
 run it creates any missing tables automatically — no separate migration file needed to get started:
 
@@ -883,7 +906,26 @@ establish validPort(p: Int) -> Maybe (Fact (ValidPort p)) =
     Nothing
 ```
 
-When the value and its proof are produced together inside the function, use the `Maybe (v: T ::: P v)`
+An `establish` can also return the value together with its proof. This is useful for
+a migration check that should let its caller decide how to handle rejection:
+
+```tesl
+fact Positive (n: Int)
+
+establish tryPositive(n: Int) -> Maybe (value: Int ::: Positive value) =
+  if n > 0 then
+    Something (n ::: Positive n)
+  else
+    Nothing
+```
+
+Every successful branch must carry `Positive` on the returned value. `Nothing`
+means the caller must choose another path. The proof is erased; a successful
+result contains the ordinary `Int`. Use bare `:::` here; `ok` and `fail` belong to
+HTTP-shaped checks. The condition inside `establish` remains trusted code to review
+and test.
+
+When a function forwards a value and proof produced by another validator, use the `Maybe (v: T ::: P v)`
 form — the proof propagates automatically through `case`:
 
 ```tesl

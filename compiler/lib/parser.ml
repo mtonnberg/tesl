@@ -305,6 +305,18 @@ let parse_requires s =
     return []
 
 (** Try to parse something; backtrack on failure. *)
+let parse_module_path s =
+  (* One qualified name grammar for module names and constructor patterns. *)
+  let* first = expect_uident s in
+  let parts = ref [first] in
+  while peek s = DOT && (match peek2 s with UIDENT _ -> true | _ -> false) do
+    advance s;
+    (match peek s with
+     | UIDENT n -> advance s; parts := n :: !parts
+     | _ -> ())
+  done;
+  return (String.concat "." (List.rev !parts))
+
 let try_parse s f =
   let saved = s.pos in
   match f s with
@@ -1511,9 +1523,11 @@ and parse_pattern s =
       | NOTHING ->
         let lloc = current_loc s in
         advance s; [("value", PNullary { ctor = "Nothing"; loc = lloc })]
-      | UIDENT nested ->
+      | UIDENT _ ->
         let lloc = current_loc s in
-        advance s; [("value", PNullary { ctor = nested; loc = lloc })]
+        (match parse_module_path s with
+         | Ok nested -> [("value", PNullary { ctor = nested; loc = span lloc (current_loc s) })]
+         | Err _ -> [])
       | MINUS ->
         (* Negative integer literal: Something -1 *)
         let lloc = current_loc s in
@@ -1531,8 +1545,8 @@ and parse_pattern s =
     let loc = span loc0 (current_loc s) in
     if fields = [] then return (PNullary { ctor = "Something"; loc })
     else return (PCon { ctor = "Something"; fields; loc })
-  | UIDENT ctor ->
-    advance s;
+  | UIDENT _ ->
+    let* ctor = parse_module_path s in
     (* Collect labeled field bindings: FieldName or { field = var, ... } *)
     let fields = ref [] in
     let continue_ = ref true in
@@ -1585,11 +1599,14 @@ and parse_pattern s =
              (if peek s = RPAREN then advance s);
              fields := (Printf.sprintf "_pos%d" pos, sub_pat) :: !fields
            | Err _ -> continue_ := false)
-        | UIDENT nested_ctor ->
+        | UIDENT _ ->
           (* Bare UIDENT in field position: a nullary nested constructor *)
-          advance s;
+          let lloc = current_loc s in
           let pos = List.length !fields in
-          fields := (Printf.sprintf "_pos%d" pos, PNullary { ctor = nested_ctor; loc = current_loc s }) :: !fields
+          (match parse_module_path s with
+           | Ok nested_ctor ->
+             fields := (Printf.sprintf "_pos%d" pos, PNullary { ctor = nested_ctor; loc = span lloc (current_loc s) }) :: !fields
+           | Err _ -> continue_ := false)
         | NOTHING ->
           (* Bare Nothing in field position: nullary Maybe constructor *)
           advance s;
@@ -2413,8 +2430,16 @@ and parse_atom s =
     return (EVar { name = n; loc })
   | UIDENT n ->
     advance s;
+    (* A schema family may have several namespace segments. Keep the complete
+       uppercase path on the constructor; a following lowercase component is
+       still parsed by parse_postfix as qualified function access. *)
+    let name = ref n in
+    while peek s = DOT && (match peek2 s with UIDENT _ -> true | _ -> false) do
+      advance s;
+      (match peek s with UIDENT part -> advance s; name := !name ^ "." ^ part | _ -> ())
+    done;
     let loc = span loc0 (current_loc s) in
-    return (EConstructor { name = n; args = []; loc })
+    return (EConstructor { name = !name; args = []; loc })
   | LPAREN ->
     advance s;
     (* Check for unit () — zero-arg function call marker *)
@@ -5393,7 +5418,7 @@ let parse_const_form s =
 let parse_module_header s =
   skip_layout s;
   let* _ = expect s MODULE in
-  let* name = expect_uident s in
+  let* name = parse_module_path s in
   let* _ = expect s EXPOSING in
   let* items = parse_bracketed_list (fun s ->
     match token_as_ident (peek s) with
@@ -5469,18 +5494,6 @@ let rec parse_imports s acc =
     parse_imports s (decl :: acc)
   end else
     return (List.rev acc)
-
-and parse_module_path s =
-  (* Parse dotted module name like Tesl.Dict or just Foo *)
-  let* first = expect_uident s in
-  let parts = ref [first] in
-  while peek s = DOT && (match peek2 s with UIDENT _ -> true | _ -> false) do
-    advance s;
-    (match peek s with
-     | UIDENT n -> advance s; parts := n :: !parts
-     | _ -> ())
-  done;
-  return (String.concat "." (List.rev !parts))
 
 (** Parse all top-level declarations. *)
 let rec parse_top_decls s acc =
@@ -5815,7 +5828,7 @@ and parse_module_header_body s =
   let* _ = (match peek s with
     | MODULE  -> advance s; Ok ()
     | t -> err s (Printf.sprintf "expected `module` keyword, got %s" (tok_to_string t))) in
-  let* name = expect_uident s in
+  let* name = parse_module_path s in
   let* _ = expect s EXPOSING in
   let* items = parse_bracketed_list (fun s ->
     match token_as_ident (peek s) with

@@ -43,6 +43,31 @@ type Database struct {
 // where two databases are in scope.
 var boundDatabase atomic.Pointer[Database]
 
+// Application configuration owns connections. Query modules resolve the compiled
+// database identity at execution time, avoiding a Go import back-edge from a
+// handler or schema package to the application that imports it.
+var databaseIdentities sync.Map
+
+func RegisterDatabaseIdentity(identity string, database *Database) *Database {
+	if identity == "" || database == nil {
+		panic("database: invalid compiled identity")
+	}
+	previous, loaded := databaseIdentities.LoadOrStore(identity, database)
+	if loaded && previous != database {
+		panic("database: duplicate compiled identity " + identity)
+	}
+	return database
+}
+
+func ResolveDatabaseIdentity(identity string) *Database {
+	database, ok := databaseIdentities.Load(identity)
+	if !ok {
+		panic("database: unregistered compiled identity " + identity)
+	}
+	// Only RegisterDatabaseIdentity writes this private table.
+	return database.(*Database) //nolint:forcetypeassert
+}
+
 var databaseBindings = struct {
 	mutex sync.Mutex
 	cond  *sync.Cond
@@ -203,6 +228,7 @@ func WithTransaction(body func()) {
 	committed := false
 	defer func() {
 		openTransactions.Delete(key)
+		queueTransactionClaims.Delete(transaction)
 		if !committed {
 			ctx, cancel := context.WithTimeout(context.Background(), pgLeaseTimeout())
 			defer cancel()

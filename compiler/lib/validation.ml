@@ -78,6 +78,7 @@ let check_module (m : module_form) : validation_error list =
    @ (TStructural @: check_typed_config_blocks m)
   @ (TStructural @: check_app_wiring decls)
   @ (TDatabase @: check_database_entities m)
+  @ (TDatabase @: Migration_schema.check_databases m)
   @ (TTesting @: check_api_test_structure m)
   @ (TTesting @: check_test_descriptions decls)
   @ (TStructural @: check_content_security_policy decls)

@@ -919,6 +919,8 @@ let module_has_postgres_database () =
   | Some types ->
     Hashtbl.fold (fun _ (info : database_info) found -> found || info.db_backend = "postgres")
       types.databases false
+    || Hashtbl.fold (fun _ (info : entity_info) found -> found || info.ent_database <> None)
+         types.entities false
 
 (* The server an `api-test` block drives, while its statements are being emitted.  A
    request verb (`get "/path"`) only means something inside such a block, and this is what
@@ -1680,6 +1682,9 @@ let single_variant info =
   | _ -> None
 
 let find_variant info ctor =
+  let ctor = match String.rindex_opt ctor '.' with
+    | None -> ctor
+    | Some dot -> String.sub ctor (dot + 1) (String.length ctor - dot - 1) in
   List.find_opt (fun variant -> variant.var_ctor = ctor) info.adt_variants
 
 let rec substitute_type bindings ty =
@@ -2181,12 +2186,15 @@ let equality_refusal what ty =
   | None -> Printf.sprintf "Go backend cannot %s this type" what
 
 let record_info_of_signature signatures name =
+  let type_name = match String.rindex_opt name '.' with
+    | None -> name
+    | Some dot -> String.sub name (dot + 1) (String.length name - dot - 1) in
   match Hashtbl.find_opt signatures name with
   (* A record LITERAL is written with the TYPE's own name.  A capitalised function that
      merely ANSWERS a record — `FixedOffset 60` answers a `TimeZone` — parses as a
      constructor too, and reading it as a literal would demand `FixedOffset { … }` of a
      program that is already right. *)
-  | Some { result = TRecord info; _ } when info.rec_tesl_name = name -> Some info
+  | Some { result = TRecord info; _ } when info.rec_tesl_name = type_name -> Some info
   | _ -> None
 
 (* ─── SQL ──────────────────────────────────────────────────────────────────────
@@ -10142,7 +10150,7 @@ let runtime_file_gates : (string * string list) list = [
      the reason the HTTP half does: it pulls a third-party driver and its whole dependency
      chain into a binary that would otherwise require nothing. *)
    "postgres", [ "postgres.go"; "database.go"; "dbquery.go"; "debug_sql.go"; "pgstores.go";
-                 "pgpubsub.go" ];
+                 "pgpubsub.go"; "migration_boundary.go"; "migration_boundary_testbuild.go" ];
   (* `agent.go` ships only to a program that talks to a model.  Not a dependency argument —
      everything in it is standard library — but a runtime file a program has no use for is
      still surface a reader has to rule out, and the gate costs nothing. *)
@@ -10733,7 +10741,8 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
     let tables =
       Hashtbl.to_seq_values types.entities
       |> List.of_seq
-      |> List.sort (fun left right -> String.compare left.ent_tesl_name right.ent_tesl_name)
+      |> List.sort_uniq (fun left right -> compare
+           (left.ent_owner, left.ent_tesl_name) (right.ent_owner, right.ent_tesl_name))
       |> List.filter (fun (entity : entity_info) ->
            List.mem entity.ent_tesl_name database.db_entities)
       |> List.map (fun (entity : entity_info) ->
@@ -10779,7 +10788,9 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
          whose entities are declared in another module has none of them here. *)
       (match tables with
        | [] -> "[]teslrt.PostgresTable{}"
-       | _ -> Printf.sprintf "[]teslrt.PostgresTable{\n%s\t}" (String.concat "" tables)));
+       | _ -> Printf.sprintf "[]teslrt.PostgresTable{\n%s\t}" (String.concat "" tables));
+    Printf.bprintf body "\nvar _ = teslrt.RegisterDatabaseIdentity(%s, %s)\n"
+      (go_quote (database.db_owner ^ "." ^ database.db_tesl_name)) database.db_go_var);
   (* Module-level constants, in declaration order: each one's type settles as it is emitted, so
      a constant may be written in terms of an earlier one. *)
   List.iter (fun (c : const_form) ->
@@ -12694,7 +12705,11 @@ let test_source ?(debug=false) ?(imported_packages=[]) ?(api_tests=[]) ?(load_te
    Add-if-absent, never replace: a local declaration of the same name is this module's own,
    and an import must not silently take its place. *)
 let register_imported_types ~exposed types (exports : module_exports) =
-  let add table name info = if not (Hashtbl.mem table name) then Hashtbl.replace table name info in
+  let add table name info =
+    if not (Hashtbl.mem table name) then Hashtbl.replace table name info;
+    if not (String.contains name '.') then
+      Hashtbl.replace table (exports.ex_module ^ "." ^ name) info
+  in
   List.iter (fun name ->
     let base = match String.index_opt name '(' with
       | Some index -> String.sub name 0 index
@@ -12780,11 +12795,20 @@ let register_imported_module ~loc ~exposed types signatures (exports : module_ex
        | None -> false)) in
     copy_codec name;
     if base <> name then copy_codec base;
+    let register_signature signature =
+      Hashtbl.replace signatures name signature;
+      (* Keep the namespace as an explicit key. Stripping it at the call site
+         would make two frozen versions' same-named functions alias whichever
+         import was registered last. The frontend still checks export access. *)
+      let full_name = match unqualified name with
+        | Some _ -> name | None -> exports.ex_module ^ "." ^ name in
+      Hashtbl.replace signatures full_name signature
+    in
     let found_value = match Hashtbl.find_opt exports.ex_signatures name with
-      | Some signature -> Hashtbl.replace signatures name signature; true
+      | Some signature -> register_signature signature; true
       | None ->
         (match Option.bind (unqualified name) (Hashtbl.find_opt exports.ex_signatures) with
-         | Some signature -> Hashtbl.replace signatures name signature; true
+         | Some signature -> register_signature signature; true
          | None -> false)
     in
     (* A constructor of an exposed ADT is itself a signature entry. *)
@@ -12792,14 +12816,15 @@ let register_imported_module ~loc ~exposed types signatures (exports : module_ex
       Hashtbl.iter (fun ctor (signature : signature) ->
         match signature.result with
         | TAdt (info, _) when info.adt_tesl_name = base ->
-          Hashtbl.replace signatures ctor signature
+          Hashtbl.replace signatures ctor signature;
+          Hashtbl.replace signatures (exports.ex_module ^ "." ^ ctor) signature
         | _ -> ()) exports.ex_signatures;
     (* A name that is neither a type nor a value is a FACT: the frontend has already
        validated the import, and a fact has no runtime form to bring across. *)
     ignore (found_type, found_value, loc))
     exposed
 
-let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_form) =
+let compile_module ?(mode=Release) ?(dependencies=[]) ?(entity_bindings=[]) ?project_path (m : module_form) =
   try
     (* Debug adds only versioned runtime checkpoints. Release remains the same source path and
        contains no debug import or call. *)
@@ -13484,10 +13509,15 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
             then Some database else None)
           types.databases None
       in
+      let project_binding = List.assoc_opt (m.module_name ^ "." ^ e.name) entity_bindings in
+      let managing = match managing, project_binding with
+        | None, Some database when database.db_backend = "postgres" -> Some database
+        | other, _ -> other in
       (* Named by SOME database, whatever its backend: that is what decides whether a test
          block starts from an empty table (see `ent_in_database`). *)
       let declared = Hashtbl.fold (fun _ (database : database_info) found ->
-        found || List.mem e.name database.db_entities) types.databases false in
+        found || List.mem e.name database.db_entities) types.databases false
+        || project_binding <> None in
       Hashtbl.replace types.entities e.name {
         ent_tesl_name = e.name;
         ent_row = row;
@@ -14904,7 +14934,10 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
       }) types.records;
     (* Each constructor is its own signature entry: the surface syntax names the
        constructor, and the variant it belongs to is recovered from the result type. *)
-    Hashtbl.iter (fun _ info ->
+    Hashtbl.iter (fun name info ->
+      (* Qualified table entries alias the same ADT metadata. Their constructors
+         are registered from the owning module below, not emitted a second time. *)
+      if not (String.contains name '.') then
       List.iter (fun variant ->
         if Hashtbl.mem signatures variant.var_ctor then unsupported variant.var_loc
           "Go backend generated name collision for constructor `%s`" variant.var_ctor;
@@ -16052,6 +16085,35 @@ let compile_to_string ?(root_path = "") (m : module_form) =
    dependency emitted from.  That is what makes a type crossing the boundary the same
    type on both sides: `go_type` equality is structural, so a re-derived record would
    compare unequal to the original even when it describes the same Tesl declaration. *)
+let project_entity_bindings (modules : module_form list) =
+  let bindings = ref [] and errors = ref [] in
+  let resolve = Validation_common.resolve_project_entity modules in
+  List.iter (fun (m : module_form) -> List.iter (function
+    | DDatabase original ->
+      let d = Desugar.desugar_database_config original in
+      let backend = match String.lowercase_ascii d.backend with
+        | "" | "postgres" -> "postgres" | other -> other in
+      let identity = package_name m.module_name ^ "." ^ d.name in
+      let database = {
+        db_tesl_name = d.name; db_backend = backend; db_schema = d.schema;
+        db_entities = d.entities; db_config = d.postgres; db_loc = d.loc;
+        db_owner = "";
+        db_go_var = Printf.sprintf "teslrt.ResolveDatabaseIdentity(%s)" (go_quote identity);
+      } in
+      List.iter (fun entity -> match resolve m entity with
+        | [key] ->
+          (match List.assoc_opt key !bindings with
+           | None -> bindings := (key, database) :: !bindings
+           | Some previous -> errors := { loc = d.loc; message = Printf.sprintf
+               "entity `%s` belongs to two databases (`%s` and `%s`); connection configuration must have one owner"
+               key previous.db_tesl_name d.name } :: !errors)
+        | [] -> () (* The frontend reports an unknown entity at its source. *)
+        | _ -> errors := { loc = d.loc; message = Printf.sprintf
+            "database `%s` has an ambiguous entity `%s`; qualify its module" d.name entity } :: !errors)
+        d.entities
+    | _ -> ()) m.decls) modules;
+  if !errors = [] then Ok !bindings else Error (List.rev !errors)
+
 let compile_project ?(mode=Release) ~(entry : module_form) (modules : module_form list) =
   let project_path = "tesl.generated/" ^ package_name entry.module_name in
   let local_names = List.map (fun (m : module_form) -> m.module_name) modules in
@@ -16112,15 +16174,15 @@ let compile_project ?(mode=Release) ~(entry : module_form) (modules : module_for
         order (List.rev_append (List.map (fun (m : module_form) -> m.module_name) ready)
                  done_names) blocked (passes - 1)
   in
-  match order [] modules (List.length modules + 1) with
-  | Error errors -> Error errors
-  | Ok ordered_names ->
+  match project_entity_bindings modules, order [] modules (List.length modules + 1) with
+  | Error errors, _ | _, Error errors -> Error errors
+  | Ok entity_bindings, Ok ordered_names ->
     let ordered = List.filter_map (fun name ->
       List.find_opt (fun (m : module_form) -> m.module_name = name) modules) ordered_names in
     let rec emit acc exports = function
       | [] -> Ok (List.rev acc)
       | (m : module_form) :: rest ->
-        (match compile_module ~mode ~dependencies:exports ~project_path m with
+        (match compile_module ~mode ~dependencies:exports ~entity_bindings ~project_path m with
          | Error errors -> Error errors
          | Ok (artifacts, module_exports) ->
            emit (List.rev_append artifacts acc) (module_exports :: exports) rest)

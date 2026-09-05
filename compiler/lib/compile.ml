@@ -2955,7 +2955,7 @@ let cycle_unsafe_decl_reason (d : Ast.top_decl) : string option =
 let cross_module_diags ?(skip_dep_body : string -> bool = fun _ -> false)
     (m : Ast.module_form) : diagnostic list =
   let entry = m.Ast.source_file in
-  if entry = "" || entry = "<test>" || not (Sys.file_exists entry) then []
+  if entry = "" || entry = "<test>" then []
   else begin
     let mk_diag ~(source : string) (loc : Location.loc) message : diagnostic = {
       file       = loc.Location.file;
@@ -3103,6 +3103,9 @@ let cross_module_diags ?(skip_dep_body : string -> bool = fun _ -> false)
       ) im.Ast.imports
     in
     dfs entry_canon m [];
+    diags := List.rev_append
+      (List.map diag_of_validation_error
+         (Migration_schema.check_ownership (m :: List.rev !closure_mods))) !diags;
     (* ── Entrypoint-closure name-wired resolution (issue #41 class) ─────────
        Cache / email / publish / subscribe / enqueue sites resolve their NAME
        through the process-wide domain registry at runtime when the declaring

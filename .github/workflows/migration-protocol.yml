@@ -1,0 +1,77 @@
+name: Migration protocol matrix
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '23 2 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  model:
+    name: Admission and queue model checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25
+        with:
+          extra-conf: |
+            experimental-features = nix-command flakes
+      - name: Check finite models and required counterexamples
+        run: nix develop --command bash scripts/check-migration-models.sh
+  protocol:
+    name: PostgreSQL ${{ matrix.postgres }} protocol and race tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres: ${{ fromJSON(github.event_name == 'schedule' && '[14,15,16,17,18]' || '[14,18]') }}
+    services:
+      postgres:
+        image: postgres:${{ matrix.postgres }}
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 127.0.0.1:5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25
+        with:
+          extra-conf: |
+            experimental-features = nix-command flakes
+      - name: Execute protocol templates against the reference model
+        env:
+          TESL_MIGRATION_TEST_DSN: host=127.0.0.1 port=5432 user=postgres dbname=postgres
+          TESL_MIGRATION_TEST_POOLERS: '1'
+          TESL_MIGRATION_TEST_CLUSTER_CRASH: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && '1' || '0' }}
+          TESL_MIGRATION_TEST_TRACE_SCALE: ${{ github.event_name == 'schedule' && '8' || '1' }}
+          POSTGRES_MAJOR: ${{ matrix.postgres }}
+          TESL_MIGRATION_TEST_POSTGRES_MAJOR: ${{ matrix.postgres }}
+        run: |
+          if [ "$TESL_MIGRATION_TEST_CLUSTER_CRASH" = 1 ]; then
+            nixpkgs_rev="$(jq -r '.nodes.nixpkgs.locked.rev' flake.lock)"
+            cluster_toolchain="$(nix build --no-link --print-out-paths "github:NixOS/nixpkgs/$nixpkgs_rev#postgresql_$POSTGRES_MAJOR^out")"
+            test -x "$cluster_toolchain/bin/pg_ctl"
+            export TESL_MIGRATION_CLUSTER_BIN="$cluster_toolchain/bin"
+          fi
+          nix develop --command bash -c '
+            set -euo pipefail
+            if [ -n "${TESL_MIGRATION_CLUSTER_BIN:-}" ]; then
+              export PATH="$TESL_MIGRATION_CLUSTER_BIN:$PATH"
+            fi
+            export TESL_REPO_ROOT="$PWD"
+            (cd compiler && dune build)
+            cd runtime/go
+            go test -race -count=1 -timeout=180s -v ./internal/migrationtest
+          '

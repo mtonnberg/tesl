@@ -1,0 +1,415 @@
+{
+  "version": 1,
+  "scope": "implemented-harness-kernel",
+  "uncovered_scopes": [
+    "Complete invariant and transition inventory of all three normative roadmaps",
+    "Compiler, planner, manifest, CLI and editor invariants",
+    "Production installer and migration executors, bootstrap and control-format upgrades",
+    "Typed row-function semantics, persisted-proof ABI boundaries and Same",
+    "Versioned queue payload transformations, quarantine replay and external effects",
+    "Staged uniqueness, offline changes, catch-up and pruning",
+    "Pinned-environment performance acceptance"
+  ],
+  "invariants": {
+    "INV-ABI": "A migration's processing ABI cannot change after any batch, provisional work or committed target-generation application write; reprocessing uses a later version and fresh generation.",
+    "INV-ADDITIVE-READ": "Independently compiled old and new applications read the same logical rows across additive schema versions.",
+    "INV-ADDITIVE-WRITE": "An additive old-version write preserves columns owned by newer versions.",
+    "INV-ATOMIC-WRITE": "Competing application writes observe transaction boundaries and never publish a partial update.",
+    "INV-ATTEMPT": "Only the exact current live queue attempt may renew or publish an outcome; expired and dead claims are not silently revived.",
+    "INV-BOOT-LOCK": "Only the backend holding the non-expiring session boot lock performs install work; an expired observability lease cannot release that lock.",
+    "INV-CATALOG-DEFAULT": "An extra column default is benign only when its supported scalar type and recognized constant cannot execute code or reject an omitted-column insert; arbitrary casts, domains and computations are drift.",
+    "INV-CATALOG-EVIDENCE": "Catalog evidence includes behavior-affecting relation, column, constraint, index, trigger and policy properties; isolated property changes are distinguishable without catalog-row OIDs or raw DDL text.",
+    "INV-CATALOG-EXPRESSION": "Catalog expressions use one server deparser under an empty search path, with matching types and collations; comparison objects and settings do not survive the probe transaction.",
+    "INV-CATALOG-EXTRA-INDEX": "Nonunique indexes are not automatically harmless: expressions, predicates and plain-key width limits can reject old-valid writes; extra indexes require classification and an old-key domain proof.",
+    "INV-CLAIMANT": "Retirement waits for retiring claimants only; surviving claimants retain their attempt, status and lease when restamped.",
+    "INV-CLOCK": "Explicit model time is monotone and bounded arithmetic cannot wrap a lease into validity.",
+    "INV-CONTRACT": "Physical contract follows retirement and the compatibility switch, and an interrupted contract remains resumable.",
+    "INV-DDL-JOB": "An index statement and its final catalog verification hold the same backend's shared job lock and admitted version fence.",
+    "INV-DDL-TERMINAL": "Contract drains shared job locks and records terminal before destructive DDL; a stale worker cannot resurrect the job.",
+    "INV-DECODER": "Queue claims remain inside the admitted decoder window and never claim a future payload version.",
+    "INV-EXPAND": "Retirement's coordinator lock excludes a competing expansion.",
+    "INV-FENCE": "Every excluded writer is drained before retirement and cannot resume writing after its version is retired.",
+    "INV-FINAL": "Retirement commits only after every affected row is accepted at its target generation; accepted batches survive coordinator abort.",
+    "INV-FLOOR": "Admission and compatibility floors are ordered, monotone and consistent with committed lifecycle evidence.",
+    "INV-GENERATION": "Row generations advance one step at a time within the permanent smallint generation bound.",
+    "INV-HARNESS": "Interleavings identify actor and occurrence, reject ambiguous control input, and fail with bounded waits and useful state dumps.",
+    "INV-HISTORY": "Version identities and classifications are immutable, consecutive and complete; an equal retry remains transaction-safe.",
+    "INV-INDEX-BUILD": "The model distinguishes absent, active-invalid, abandoned-invalid and valid index catalog states.",
+    "INV-INDEX-IDENTITY": "An index job retains its declared semantic identity; a same-named different catalog object is not adopted.",
+    "INV-INDEX-READY": "Index readiness requires the exact expected valid catalog object, not a worker's recorded intention.",
+    "INV-INDEX-RECOVERY": "Recovery drops only an inactive invalid remnant and preserves an active or successfully completed build.",
+    "INV-INSTALL-ATOMIC": "Initial expansion publishes its lifecycle and admission singleton atomically; a database born at V9 never invents V8 history.",
+    "INV-INSTALL-CATALOG": "Initial install and additive expansion verify the selected catalog before recording expansion and preserve completed objects across recovery.",
+    "INV-INSTALL-TARGET": "The first lock holder persists an immutable initial target; a newer successor completes that target before expanding further.",
+    "INV-LEASE": "Scheduling lease tokens increase on takeover and stale executors cannot publish another holder's work.",
+    "INV-LIFECYCLE": "Only validated lifecycle edges append history and committed history agrees with the admission singleton.",
+    "INV-MATRIX": "A PostgreSQL matrix lane checks the connected server's actual major before constructing fixtures.",
+    "INV-PRIVILEGE": "Application and worker roles cannot bypass lifecycle guards by writing control tables or shadowing control functions.",
+    "INV-QUARANTINE": "Quarantine records a current rejection after coordinator abort; changed, accepted or deleted rows cannot retain stale evidence.",
+    "INV-QUEUE-FLOOR": "At floor commit no non-quarantined durable job remains below the new floor.",
+    "INV-READ": "A strict read buffers its query result and delivers only after successful admission and transaction commit, retaining table locks until then.",
+    "INV-REPAIR-EXECUTOR": "Serving repair chains may be compatible prefixes, but the final-pass executor carries every recorded amendment.",
+    "INV-REPAIR-HISTORY": "Repair chains are positive, bounded, gap-free and append-only without changing the migration's own identity.",
+    "INV-REPAIR-ORDER": "Recorded repairs run in sequence on a rejected row and stop at the first acceptance.",
+    "INV-REPAIR-SCOPE": "Repairs cannot reinterpret rows already accepted by the frozen transform or apply a stale row evaluation.",
+    "INV-ROW-REVISION": "The oracle distinguishes row revisions and refuses stale evaluations and revision overflow.",
+    "INV-SQL-CLASS": "Every normative-roadmap SQL fence explicitly declares whether it is executable, illustrative or a generated snapshot.",
+    "INV-SQL-SOURCE": "The documented bootstrap transaction and contract recipe are generated from the exact fixtures executed by the PostgreSQL tests.",
+    "INV-TOPOLOGY": "A lagged replica's local floor and catalog cannot authorize a strict application read across primary retirement.",
+    "INV-TRACEABILITY": "Every registered harness invariant and transition has a named test, every test names an invariant, and every model operation is inventoried.",
+    "INV-UNIQUE-WINDOW": "A failed ready-but-invalid unique index may already reject old-version writes; readiness and cleanup must use actual PostgreSQL catalog states.",
+    "INV-VERSION": "Schema versions are positive signed integers and cannot allocate the reserved boot-fence key.",
+    "INV-WINDOW": "A transforming expansion closes an additive epoch and respects the bounded compatibility window."
+  },
+  "transitions": {
+    "TR-ABI-BATCH": {
+      "statement": "Commit a batch or provisional pass with its processing ABI.",
+      "operations": [
+        "abi-batch",
+        "abi-provisional"
+      ]
+    },
+    "TR-ABI-SELECT": {
+      "statement": "Select an execution ABI before processing is locked.",
+      "operations": [
+        "abi-select"
+      ]
+    },
+    "TR-ABI-WRITE": {
+      "statement": "Commit a target-generation application value and its ABI evidence under the same admitted writer fence, independently of backfill counters.",
+      "operations": [
+        "abi-write"
+      ]
+    },
+    "TR-ADMIT": {
+      "statement": "Check the reader's version against the current admission floor.",
+      "operations": [
+        "read-deliver"
+      ]
+    },
+    "TR-BACKFILL": {
+      "statement": "Commit an accepted row at its next generation.",
+      "operations": [
+        "backfill"
+      ]
+    },
+    "TR-BOOT-CRASH": {
+      "statement": "Lose the boot backend and its lock while retaining committed install work.",
+      "operations": [
+        "boot-crash"
+      ]
+    },
+    "TR-BOOT-EXPAND": {
+      "statement": "Record a verified additive successor after completing the initial target.",
+      "operations": [
+        "boot-expand"
+      ]
+    },
+    "TR-BOOT-LOCK": {
+      "statement": "Acquire the non-expiring backend boot lock.",
+      "operations": [
+        "boot-lock"
+      ]
+    },
+    "TR-BOOT-RELEASE": {
+      "statement": "Release the backend's boot lock after verified install work.",
+      "operations": [
+        "boot-release"
+      ]
+    },
+    "TR-CATALOG-COMPARE": {
+      "statement": "Compare catalog expressions in temporary matching column contexts and classify extra-column defaults without evaluating computing expressions.",
+      "operations": []
+    },
+    "TR-CLAIM": {
+      "statement": "Claim a pending or expired processing job with a fresh attempt.",
+      "operations": [
+        "claim"
+      ]
+    },
+    "TR-COMPLETE": {
+      "statement": "Complete the exact live queue attempt.",
+      "operations": [
+        "complete"
+      ]
+    },
+    "TR-CONTRACT": {
+      "statement": "Record contract intent, switch compatibility, and finish physical work.",
+      "operations": [
+        "contract-begin",
+        "contract-end"
+      ]
+    },
+    "TR-CRASH": {
+      "statement": "Lose volatile locks and sessions while retaining committed work.",
+      "operations": [
+        "crash"
+      ]
+    },
+    "TR-DEAD": {
+      "statement": "Move the exact live queue attempt to the dead letter.",
+      "operations": [
+        "dead"
+      ]
+    },
+    "TR-ENQUEUE": {
+      "statement": "Enqueue a payload stamped with the admitted writer version.",
+      "operations": [
+        "enqueue"
+      ]
+    },
+    "TR-EXPAND": {
+      "statement": "Record the next immutable expansion or safely retry the current one.",
+      "operations": [
+        "expand"
+      ]
+    },
+    "TR-EXPIRY": {
+      "statement": "Advance explicit time through lease expiry.",
+      "operations": [
+        "tick"
+      ]
+    },
+    "TR-INDEX-BACKEND-DEATH": {
+      "statement": "Lose an index backend's locks and active statement.",
+      "operations": [
+        "index-backend-death"
+      ]
+    },
+    "TR-INDEX-CLEANUP": {
+      "statement": "Remove an inactive invalid remnant before rebuilding.",
+      "operations": [
+        "index-cleanup"
+      ]
+    },
+    "TR-INDEX-DROP": {
+      "statement": "Drop a terminal job's physical index, idempotently.",
+      "operations": [
+        "index-drop"
+      ]
+    },
+    "TR-INDEX-ENTER": {
+      "statement": "Acquire the shared DDL-job lock and recheck current ownership.",
+      "operations": [
+        "index-enter"
+      ]
+    },
+    "TR-INDEX-EXIT": {
+      "statement": "Release the shared job lock after statement completion and verification.",
+      "operations": [
+        "index-exit"
+      ]
+    },
+    "TR-INDEX-FAILURE": {
+      "statement": "An active concurrent build fails and leaves an invalid remnant.",
+      "operations": [
+        "index-failure"
+      ]
+    },
+    "TR-INDEX-PLAN": {
+      "statement": "Register an immutable index job identity.",
+      "operations": [
+        "index-plan"
+      ]
+    },
+    "TR-INDEX-START": {
+      "statement": "Start a concurrent build with the current scheduling token.",
+      "operations": [
+        "index-start"
+      ]
+    },
+    "TR-INDEX-SUCCESS": {
+      "statement": "The server completes a concurrent build, independently of lease expiry.",
+      "operations": [
+        "index-success"
+      ]
+    },
+    "TR-INDEX-TERMINAL": {
+      "statement": "Contract records terminal after all shared job holders drain.",
+      "operations": [
+        "index-terminal"
+      ]
+    },
+    "TR-INDEX-VERIFY": {
+      "statement": "Verify the actual catalog before publishing readiness.",
+      "operations": [
+        "index-verify"
+      ]
+    },
+    "TR-INSTALL-OBJECT": {
+      "statement": "Commit or verify one selected catalog object in a short transaction.",
+      "operations": [
+        "install-object"
+      ]
+    },
+    "TR-INSTALL-RECORD": {
+      "statement": "Atomically record complete initial history and admission, including equal retries.",
+      "operations": [
+        "install-record"
+      ]
+    },
+    "TR-INSTALL-SELECT": {
+      "statement": "Persist or observe the initial install target under the boot lock.",
+      "operations": [
+        "install-select"
+      ]
+    },
+    "TR-INVALIDATE": {
+      "statement": "An old writer invalidates derived generation and rejection evidence.",
+      "operations": [
+        "old-write"
+      ]
+    },
+    "TR-LEASE": {
+      "statement": "Acquire a scheduling lease or validate its current commit token.",
+      "operations": [
+        "lease-acquire",
+        "lease-commit"
+      ]
+    },
+    "TR-MATRIX-CONNECT": {
+      "statement": "Verify the actual server major for the selected matrix lane.",
+      "operations": []
+    },
+    "TR-QUARANTINE-REFRESH": {
+      "statement": "Re-read a rejected key after abort and update or clear quarantine.",
+      "operations": [
+        "quarantine-refresh"
+      ]
+    },
+    "TR-READ": {
+      "statement": "Execute and buffer a query before admission and delivery.",
+      "operations": [
+        "read-deliver"
+      ]
+    },
+    "TR-REJECT": {
+      "statement": "The frozen transform rejects a row below its target generation.",
+      "operations": [
+        "reject"
+      ]
+    },
+    "TR-RENEW": {
+      "statement": "Renew the exact live queue attempt under version admission.",
+      "operations": [
+        "renew"
+      ]
+    },
+    "TR-REPAIR": {
+      "statement": "Validate the public repair lifecycle edge independently of ordinary expansion.",
+      "operations": [
+        "repair-record"
+      ]
+    },
+    "TR-REPAIR-ADMIT": {
+      "statement": "Accept compatible repair prefixes for ordinary serving.",
+      "operations": [
+        "repair-admit"
+      ]
+    },
+    "TR-REPAIR-FINAL": {
+      "statement": "Require the complete recorded repair chain for final-pass execution.",
+      "operations": [
+        "repair-final"
+      ]
+    },
+    "TR-REPAIR-RECORD": {
+      "statement": "Append or idempotently retry an immutable repair identity.",
+      "operations": [
+        "repair-record"
+      ]
+    },
+    "TR-REPAIR-ROW": {
+      "statement": "Apply the next recorded repair only to a current rejected row.",
+      "operations": [
+        "repair-row"
+      ]
+    },
+    "TR-REPLAY": {
+      "statement": "Pause and resume physical WAL replay on an owned standby.",
+      "operations": []
+    },
+    "TR-RESTAMP": {
+      "statement": "Restamp old jobs before floor commit while preserving surviving claims.",
+      "operations": [
+        "restamp"
+      ]
+    },
+    "TR-RETIRE": {
+      "statement": "Drain retiring fences and atomically commit the floor after final passes.",
+      "operations": [
+        "retire-begin",
+        "retire-commit"
+      ]
+    },
+    "TR-RETRY": {
+      "statement": "Requeue the exact live attempt with its surviving schema stamp.",
+      "operations": [
+        "retry"
+      ]
+    },
+    "TR-ROW-ADD": {
+      "statement": "Register a source row owing one bounded generation step.",
+      "operations": [
+        "row-add"
+      ]
+    },
+    "TR-ROW-DELETE": {
+      "statement": "An admitted application deletes a row and its stale rejection evidence.",
+      "operations": [
+        "row-delete"
+      ]
+    },
+    "TR-SCHEDULE": {
+      "statement": "Register, pause, observe and release a named deterministic boundary.",
+      "operations": []
+    },
+    "TR-SQL-CLASSIFY": {
+      "statement": "Classify each complete normative-roadmap SQL fence before execution.",
+      "operations": []
+    },
+    "TR-SQL-DOCUMENT": {
+      "statement": "Render the executed control bootstrap fixture into the normative document without changing surrounding text.",
+      "operations": []
+    },
+    "TR-TRACEABILITY-CHECK": {
+      "statement": "Validate source metadata and regenerate the deterministic coverage map.",
+      "operations": []
+    },
+    "TR-WRITE": {
+      "statement": "Begin an admitted fenced writer and release it at transaction end.",
+      "operations": [
+        "write-begin",
+        "write-end"
+      ]
+    }
+  },
+  "test_layers": {
+    "blackbox_test.go": "compiled-postgres",
+    "bootstrap_model_test.go": "model",
+    "bootstrap_postgres_test.go": "postgres",
+    "catalog_evidence_test.go": "postgres",
+    "catalog_expression_test.go": "postgres",
+    "catalog_literal_test.go": "harness",
+    "cluster_test.go": "owned-cluster-nightly",
+    "contract_fixture_test.go": "postgres",
+    "contract_fixture_test.go#TestContractDocumentMatchesExecutedFixture": "harness",
+    "differential_test.go": "postgres",
+    "document_test.go": "harness",
+    "fixture_steps_test.go": "harness",
+    "index_model_test.go": "model",
+    "index_postgres_test.go": "postgres",
+    "interleave_test.go": "harness",
+    "lifecycle_test.go": "postgres",
+    "model_test.go": "model",
+    "pooler_test.go": "pooler",
+    "postgres_test.go": "postgres",
+    "process_test.go": "harness",
+    "quarantine_postgres_test.go": "postgres",
+    "quarantine_test.go": "model",
+    "read_ordering_test.go": "postgres",
+    "repair_test.go": "model",
+    "repair_test.go#TestPostgresRepairHistoryAgainstReferenceTraces": "postgres",
+    "traceability_test.go": "harness"
+  }
+}

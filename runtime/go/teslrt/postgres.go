@@ -401,6 +401,7 @@ func PgQuery[Row any](db *PostgresDB, statement string, arguments []any,
 	if err != nil {
 		panic(pgFailure("database", err))
 	}
+	migrationBoundary("query-complete")
 	return collected
 }
 
@@ -443,6 +444,7 @@ func PgExec(db *PostgresDB, statement string, arguments []any) int64 {
 	if err != nil {
 		panic(pgFailure("database", err))
 	}
+	migrationBoundary("write-complete")
 	return tag.RowsAffected()
 }
 

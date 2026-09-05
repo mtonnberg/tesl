@@ -89,6 +89,10 @@ type ctx = {
   errors   : type_error list ref;
   local_bindings : local_binding_info list ref;
   expr_types : expr_type_info list ref;
+  typed_nodes : (expr * ty * subst ref) list ref option;
+  (** Optional identity-based capture for canonical typed IR. Retain the actual
+      function/test substitution cell: each has its own inference context, and
+      source locations are not unique expression identities. *)
   field_accesses    : field_access_info list ref;
   bare_record_hints : (Location.loc * string) list ref;
   entity_binder_at : (Location.loc * string) list ref;
@@ -164,6 +168,7 @@ let make_ctx ?(source_lines = [||]) ~filename ~env () = {
   errors   = ref [];
   local_bindings = ref [];
   expr_types = ref [];
+  typed_nodes = None;
   field_accesses    = ref [];
   bare_record_hints = ref [];
   entity_binder_at = ref [];
@@ -920,6 +925,46 @@ let parse_local_import_module (path : string) : module_form Parser.result option
     Hashtbl.replace import_parse_cache path result;
     result
 
+let module_exports_name (m : module_form) name =
+  List.exists (function ExportName n | ExportAdt n -> n = name) m.exports
+
+let qualified_type_in_scope (m : module_form) name =
+  match String.rindex_opt name '.' with
+  | None -> false
+  | Some dot ->
+    let qualifier = String.sub name 0 dot in
+    let local_name = String.sub name (dot + 1) (String.length name - dot - 1) in
+    List.exists (fun (imp : import_decl) ->
+      imp.module_name = qualifier &&
+      match parse_local_import_module (resolve_local_import_path m.source_file qualifier) with
+      | None | Some (Err _) -> false
+      | Some (Ok imported) ->
+        module_exports_name imported local_name && List.exists (function
+          | DType (TypeAdt { name; _ }) | DType (TypeNewtype { name; _ })
+          | DRecord { name; _ } | DEntity { name; _ } | DFact { name; _ } -> name = local_name
+          | _ -> false) imported.decls) m.imports
+
+(* Qualified-only imports must retain each version's nominal identity, including
+   nested field and constructor types. Use the same substitution for signatures,
+   constructors and records so none can accidentally reconnect two versions. *)
+let qualify_imported_ty (imp : import_decl) (imported : module_form) =
+  let local_types = List.filter_map (function
+    | DType (TypeAdt { name; _ }) | DType (TypeNewtype { name; _ })
+    | DRecord { name; _ } | DEntity { name; _ } -> Some name
+    | _ -> None) imported.decls in
+  let explicitly_imported = match imp.names with
+    | ImportAll -> []
+    | ImportExposing names -> List.map (fun s ->
+        if Filename.check_suffix s "(..)" then String.sub s 0 (String.length s - 4)
+        else s) names in
+  let rec qualify = function
+    | TCon n when List.mem n local_types && not (List.mem n explicitly_imported) ->
+      TCon (imp.module_name ^ "." ^ n)
+    | TApp (f, a) -> TApp (qualify f, qualify a)
+    | TFun (a, b) -> TFun (qualify a, qualify b)
+    | other -> other
+  in qualify
+
 let load_imported_func_kinds (m : module_form) : (string * func_kind) list =
   let is_tesl_module name =
     String.length name >= 5 && String.sub name 0 5 = "Tesl."
@@ -963,7 +1008,7 @@ let load_imported_func_kinds (m : module_form) : (string * func_kind) list =
             | ImportExposing names -> Some (List.map strip_dotdot names)
           in
           List.concat_map (function
-            | DFunc fd ->
+            | DFunc fd when module_exports_name imported fd.name ->
               let qualified_name = qualifier ^ "." ^ fd.name in
               let requested_here names =
                 List.mem fd.name names || List.mem qualified_name names
@@ -1009,7 +1054,8 @@ let load_imported_func_decls (m : module_form) : (string * func_decl) list =
          | ImportExposing names ->
            List.filter_map (function
              | DFunc (fd : func_decl)
-               when fd.kind <> MainKind && List.mem fd.name names ->
+               when fd.kind <> MainKind && List.mem fd.name names
+                    && module_exports_name imported fd.name ->
                Some (fd.name, fd)
              | _ -> None
            ) imported.decls)
@@ -1018,21 +1064,6 @@ let load_imported_func_decls (m : module_form) : (string * func_decl) list =
 let load_imported_func_sigs (m : module_form) : (string * scheme) list =
   let is_tesl_module name =
     String.length name >= 5 && String.sub name 0 5 = "Tesl."
-  in
-  (** Qualify local type names that are NOT explicitly imported with the module name.
-      E.g. `Widget` from B becomes `B.Widget` only when Widget is NOT directly imported.
-      This enables `fn f(w: B.Widget)` to match `makeB`'s return type. *)
-  let qualify_ty mod_name local_type_names explicitly_imported =
-    let should_qualify n =
-      List.mem n local_type_names && not (List.mem n explicitly_imported)
-    in
-    let rec go = function
-      | TCon n when should_qualify n -> TCon (mod_name ^ "." ^ n)
-      | TApp (f, a) -> TApp (go f, go a)
-      | TFun (a, b) -> TFun (go a, go b)
-      | other -> other
-    in
-    go
   in
   (* Load the lifted-stdlib TYPE signatures for a module whose types now come
      from a bundled `.tesl` source instead of [stdlib_env] (the "type source of
@@ -1068,7 +1099,7 @@ let load_imported_func_sigs (m : module_form) : (string * scheme) list =
           | ImportExposing names -> Some (List.map strip_dotdot names)
         in
         List.concat_map (function
-          | DFunc fd ->
+          | DFunc fd when module_exports_name imported fd.name ->
             let dotted = short_mod ^ "." ^ fd.name in   (* e.g. "List.map" *)
             let sch = decl_scheme fd in
             let include_it = match requested with
@@ -1090,12 +1121,6 @@ let load_imported_func_sigs (m : module_form) : (string * scheme) list =
       | None | Some (Err _) -> []
       | Some (Ok imported) ->
         with_module_alias_activation imported @@ fun () ->
-          (* Collect locally-defined type names from the imported module *)
-          let local_types = List.concat_map (function
-            | DType (TypeAdt { name; _ }) | DType (TypeNewtype { name; _ })
-             | DRecord { name; _ } -> [name]
-            | _ -> []
-          ) imported.decls in
           let strip_dotdot s =
             let n = String.length s in
             if n > 4 && String.sub s (n-4) 4 = "(..)" then String.sub s 0 (n-4) else s
@@ -1104,13 +1129,9 @@ let load_imported_func_sigs (m : module_form) : (string * scheme) list =
             | ImportAll -> None
             | ImportExposing names -> Some (List.map strip_dotdot names)
           in
-          let explicitly_imported = match requested with
-            | None -> []
-            | Some names -> names
-          in
-          let qualify = qualify_ty imp.module_name local_types explicitly_imported in
+          let qualify = qualify_imported_ty imp imported in
           List.concat_map (function
-            | DFunc fd ->
+            | DFunc fd when module_exports_name imported fd.name ->
               let qualified_name = imp.module_name ^ "." ^ fd.name in
               let sch = decl_scheme fd in
               (* Qualify the scheme's type so local types appear as Module.Type *)
@@ -1125,7 +1146,7 @@ let load_imported_func_sigs (m : module_form) : (string * scheme) list =
               in
               (if include_plain then [ (fd.name, q_sch) ] else [])
               @ (if include_qualified then [ (qualified_name, q_sch) ] else [])
-            | DConst c ->
+            | DConst c when module_exports_name imported c.name ->
               (* #34: bind exported constants across the module boundary.  The
                  emitted Racket already `provide`s them; only the checker's
                  import env was missing the binding, so `import Lib exposing
@@ -1133,7 +1154,7 @@ let load_imported_func_sigs (m : module_form) : (string * scheme) list =
               (match shallow_const_ty c.value with
                | None -> []
                | Some ty ->
-                 let sch = mono ty in
+                 let sch = mono (qualify ty) in
                  let qualified_name = imp.module_name ^ "." ^ c.name in
                  let include_plain = match requested with
                    | Some names -> List.mem c.name names
@@ -1225,6 +1246,8 @@ let load_imported_ctors (m : module_form) : (string * (string * scheme)) list =
             | ImportExposing names -> Some names
           in
           List.concat_map (fun (adt_name, ctor_name, ctor_sch) ->
+            let qualify = qualify_imported_ty imp imported in
+            let ctor_sch = { ctor_sch with mono = qualify ctor_sch.mono } in
             let qualified_name = imp.module_name ^ "." ^ ctor_name in
             let requested_name = match requested with
               | Some names ->
@@ -1284,14 +1307,17 @@ let load_imported_records (m : module_form) : (string * record_def) list =
            access style. *)
         let qualify name = imp.module_name ^ "." ^ name in
         List.concat_map (function
-          | DRecord r ->
+          | DRecord r when module_exports_name imported r.name ->
             let rd = build_record_def r in
+            let rd = { rd with rd_fields = List.map (fun (n, ty) ->
+              n, qualify_imported_ty imp imported ty) rd.rd_fields } in
             (qualify r.name, rd) :: (if wants r.name then [(r.name, rd)] else [])
-          | DEntity e ->
+          | DEntity e when module_exports_name imported e.name ->
             let rd =
               { rd_name = e.name;
                 rd_fields =
-                  List.map (fun (f : field_def) -> (f.name, ty_of_type_expr f.type_expr))
+                  List.map (fun (f : field_def) -> (f.name,
+                    qualify_imported_ty imp imported (ty_of_type_expr f.type_expr)))
                     e.fields } in
             (qualify e.name, rd) :: (if wants e.name then [(e.name, rd)] else [])
           | _ -> []
@@ -1324,7 +1350,8 @@ let load_imported_codec_decode_types (m : module_form) : string list =
           | ImportExposing names -> List.mem name names
         in
         List.concat_map (function
-          | DCodec (cf : codec_form) when cf.from_json <> FromJsonForbidden ->
+          | DCodec (cf : codec_form) when cf.from_json <> FromJsonForbidden
+              && module_exports_name imported cf.type_name ->
             (imp.module_name ^ "." ^ cf.type_name)
             :: (if wants cf.type_name then [cf.type_name] else [])
           | _ -> []
@@ -4030,6 +4057,7 @@ let rec infer_expr ctx (e : expr) : ty =
   in
   let expr_meta = match binding_meta_of_expr ctx e with Some m -> m | None -> PlainBinding in
   record_expr_type_with_meta ctx (expr_loc e) inferred expr_meta;
+  Option.iter (fun nodes -> nodes := (e, inferred, ctx.subst) :: !nodes) ctx.typed_nodes;
   inferred
 
 (* Ambiguous-dot where-clause hint (issue #26/#27 follow-up): a lowered SQL
@@ -4646,8 +4674,10 @@ and bind_pattern_vars ctx scrut_ty (pat : pattern) : (string * scheme) list =
            List.concat_map (fun ((_, sub_pat), field_ty) ->
              fresh_sub_bindings sub_pat (apply !(ctx.subst) field_ty)
            ) (List.combine fields field_tys)
-         else
+         else begin
+           add_error ctx loc (Printf.sprintf "pattern `%s` expects %d fields but supplies %d" ctor n_tys n_fields);
            fresh_field_bindings fields
+         end
        | exception TypeMismatch _ ->
          add_unknown_name_error ctx loc ~what:"constructor" ctor;
          fresh_field_bindings fields)
@@ -4707,7 +4737,7 @@ and record_pattern_bindings ?(extra_meta = []) ctx loc (bindings : (string * sch
 
 (** Infer a statement sequence (for function bodies with multiple statements). *)
 let rec infer_stmt ctx (e : expr) : ty * ctx =
-  match e with
+  let result = match e with
   | ELet {
       name = "_";
       declared_type = _;
@@ -4784,6 +4814,12 @@ let rec infer_stmt ctx (e : expr) : ty * ctx =
     infer_stmt ctx' body
   | _ ->
     (infer_expr ctx e, ctx)
+  in
+  (match e with
+   | ELet _ | ELetProof _ ->
+     Option.iter (fun nodes -> nodes := (e, fst result, ctx.subst) :: !nodes) ctx.typed_nodes
+   | _ -> ());
+  result
 
 let call_target_name = function
   | EVar { name; _ } -> Some name
@@ -4812,6 +4848,12 @@ let tuple_element_reason index expected_ty =
   Printf.sprintf "tuple element %d must have type %s" index (pp_ty expected_ty)
 
 let rec check_stmt ctx (e : expr) (expected : expectation) : unit =
+  (* Statement-position let chains bypass check_expr. They still have their
+     tail's checked result type, and must retain identity for semantic IR. *)
+  (match e with
+   | ELet _ | ELetProof _ ->
+     Option.iter (fun nodes -> nodes := (e, expected_ty_of expected, ctx.subst) :: !nodes) ctx.typed_nodes
+   | _ -> ());
   match e with
   | ESqlQuery { query = QueryUpdate update; _ }
     when update.returning_one && not update.returns_row ->
@@ -5244,6 +5286,7 @@ use the `Tuple3 a b c` constructor instead";
   in
   let expr_meta = match binding_meta_of_expr ctx e with Some m -> m | None -> PlainBinding in
   record_expr_type_with_meta ctx (expr_loc e) checked expr_meta;
+  Option.iter (fun nodes -> nodes := (e, checked, ctx.subst) :: !nodes) ctx.typed_nodes;
   checked
 
 (* ── Function declaration type checking ─────────────────────────────────── *)
@@ -5844,7 +5887,8 @@ let collect_scope_type_names_split (m : module_form) : string list * string list
                let names = List.filter_map (function
                  | DType (TypeAdt { name; _ }) | DType (TypeNewtype { name; _ })
                   | DRecord { name; _ }
-                 | DFact { name; _ } -> Some name
+                 | DEntity { name; _ } | DFact { name; _ }
+                     when module_exports_name imp_m name -> Some (imp.module_name ^ "." ^ name)
                  | _ -> None
                ) imp_m.decls in
                (names @ locals, tesls))
@@ -5972,10 +6016,11 @@ let check_type_names_in_scope ~(suggest : string -> Import_suggest.suggestion op
     (m : module_form) : type_error list =
   let (locally_bound, stdlib_imported) = collect_scope_type_names_split m in
   let in_scope = locally_bound @ stdlib_imported in
-  (* A name is ok if: in scope, or qualified (contains '.'), or type-variable (lowercase) *)
+  (* Qualification must resolve an exported type in an imported module. A dot
+     alone is not evidence: accepting Ghost.Type would invent a nominal type. *)
   let is_ok name =
     List.mem name in_scope
-    || String.contains name '.'
+    || qualified_type_in_scope m name
     || (String.length name > 0 && Char.lowercase_ascii name.[0] = name.[0])
   in
   let make_err (name, loc) =
@@ -7209,7 +7254,7 @@ let check_api_decl_types ctx (m : module_form) =
                   "JwtToken";
                   "Agent"; "LlmProvider"; "AgentReply"; "Tool"; "ToolStep";
                   "Conversation"; "ConversationTurn" ] in
-    if not (List.mem name known || List.mem name known_types) then
+    if not (List.mem name known || List.mem name known_types || qualified_type_in_scope m name) then
       add_error ctx loc (Printf.sprintf "unknown type: %s" name)
   in
   let rec check_type_expr (te : type_expr) =
@@ -7369,7 +7414,7 @@ let check_ord_eq_calls ctx =
          ) constraints)
   ) !(ctx.ord_eq_calls)
 
-let check_module_with_metadata ?(source_lines = [||]) (m : module_form) : local_binding_info list * expr_type_info list * field_access_info list * (Location.loc * string) list * (Location.loc * (string * string list)) list * (Location.loc * (string * string list)) list * type_error list =
+let check_module_with_metadata ?typed_nodes ?(source_lines = [||]) (m : module_form) : local_binding_info list * expr_type_info list * field_access_info list * (Location.loc * string) list * (Location.loc * (string * string list)) list * (Location.loc * (string * string list)) list * type_error list =
   reset_counter ();
   (* First-Class Units: activate the quantity alias TYPE names this module
      imports from Tesl.Units.  Deliberately NOT restored on exit — the emit
@@ -7398,7 +7443,7 @@ let check_module_with_metadata ?(source_lines = [||]) (m : module_form) : local_
   let import_errors = import_errors @ check_units_name_collisions m in
   let initial_env = make_stdlib_env () in
   let ctx = make_ctx ~source_lines ~filename:m.source_file ~env:initial_env () in
-  let ctx = { ctx with import_suggest = suggest } in
+  let ctx = { ctx with import_suggest = suggest; typed_nodes } in
 
   (* 1. Collect type definitions (records, ADTs, newtypes) *)
   let ctx = collect_type_defs ctx m.decls in
@@ -8121,6 +8166,18 @@ let check_module_with_local_bindings (m : module_form) : local_binding_info list
 let check_module_with_expr_types (m : module_form) : expr_type_info list * type_error list =
   let _, expr_types, _, _, _, _, errors = check_module_with_metadata m in
   (expr_types, errors)
+
+(** Internal typed-IR input. Unlike editor positions, expression identity is
+    unambiguous even for synthesized nodes with coincident source spans. Apply
+    each node's final local substitution only after the module has been checked.
+    The caller must also pass the compiler's validation and proof gates before
+    using the resulting graph as a migration catalog. *)
+let check_module_with_typed_nodes (m : module_form) : (expr * ty) list * type_error list =
+  let typed_nodes = ref [] in
+  let _, _, _, _, _, _, errors = check_module_with_metadata ~typed_nodes m in
+  let nodes = List.rev_map (fun (expression, ty, substitution) ->
+    expression, apply !substitution ty) !typed_nodes in
+  nodes, errors
 
 let check_module (m : module_form) : type_error list =
   let _, _, _, _, _, _, errors = check_module_with_metadata m in

@@ -84,6 +84,14 @@ type return_spec =
   | RetExists     of { binding : binding; body : return_spec; loc : loc }
                      (** -> exists name: T => Body *)
 
+(** The value-carrying optional establish form. Other wrappers and unannotated
+    Maybe values do not introduce evidence through this boundary. *)
+let optional_attached_proof_return = function
+  | RetMaybeAttached {outer_ty=None; binding={proof_ann=Some _; _}; _} -> true
+  | RetMaybeAttached _ | RetPlain _ | RetAttached _ | RetNamedPack _ | RetForAll _
+  | RetMaybeForAll _ | RetSetForAll _ | RetMaybeSetForAll _ | RetForAllDictValues _
+  | RetForAllDictKeys _ | RetExists _ -> false
+
 (* ─── Expressions ────────────────────────────────────────────────────────── *)
 
 (* SQL payload records below intentionally share field labels. *)
