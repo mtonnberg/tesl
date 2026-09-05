@@ -41,7 +41,8 @@ def verify_checkout(plan, root, environment):
             raise ValueError("worktree preview requires explicit non-publishable source identity")
     elif (not re.fullmatch(r"[0-9a-f]{40}", plan.get("sourceRevision", ""))
           or revision != plan["sourceRevision"] or dirty):
-        raise ValueError("distribution requires the planned commit with clean tracked source")
+        raise ValueError("distribution requires the planned commit with clean tracked source; "
+                         f"planned={plan['sourceRevision']}, actual={revision}, tracked changes={dirty!r}")
     return {"head": revision, "tracked_changes": bool(dirty),
             "worktree_preview": plan["sourceRevision"] == "worktree"}
 

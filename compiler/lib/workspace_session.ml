@@ -54,7 +54,7 @@ let run input output =
   set_binary_mode_out output true;
   Query_cache.set_enabled true;
   Fun.protect ~finally:(fun () -> Query_cache.set_enabled false; Checker.clear_import_parse_cache ()) (fun () ->
-    write_frame output "{\"version\":1,\"protocol\":\"tesl-workspace\",\"invalidation\":\"whole-snapshot\",\"capabilities\":[\"workspace-navigation\",\"workspace-rename-arguments-v1\"]}";
+    write_frame output "{\"version\":1,\"protocol\":\"tesl-workspace\",\"invalidation\":\"dependency-inputs\",\"capabilities\":[\"workspace-navigation\",\"workspace-rename-arguments-v1\"]}";
     let current = ref None in
     let rec loop () =
       match (try Some (read_frame input 128) with End_of_file -> None) with
@@ -76,9 +76,9 @@ let run input output =
           then invalid_arg "invalid workspace snapshot or path";
           let inputs = stdlib_inputs () in
           if !current <> Some (snapshot, inputs) then begin
-            Query_cache.clear ();
-            (* This is conservative by design: filesystem/catalogue changes
-               invalidate all semantic answers. Imported ASTs are content-aware. *)
+            Query_cache.advance_snapshot ();
+            (* Whole-query and workspace graph answers are revision-bound.
+               Parse/check caches retain exact source and transitive inputs. *)
             Hashtbl.clear Validation_common.literal_occ_content;
             current := Some (snapshot, inputs)
           end;

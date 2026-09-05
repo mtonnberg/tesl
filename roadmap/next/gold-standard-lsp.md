@@ -7,8 +7,10 @@ Implemented so far:
 - Versioned retained compiler sessions shared by the Go LSP and MCP, with the
   same query implementation as one-shot CLI calls. Private project mirrors write
   changed files only; parsed modules, checked types and query results are cached
-  within bounded snapshots. Dependency changes conservatively invalidate all
-  semantic answers. Stdlib changes outside the project invalidate them too.
+  within bounded caches. Whole-query answers and the binding graph are revision
+  bound; parsed and checked modules survive unrelated changes. Checked metadata
+  keys include exact source and transitive import bytes, including selected
+  stdlib sources. Missing/recreated imports and resolver precedence are tested.
 - Cancellation, crash/restart, process cleanup, LF/CRLF query equivalence and
   disk/overlay/save/close/delete/recreate transitions have regression fixtures.
   The protocol and remaining limitations are in [`editor/protocol.md`](../../editor/protocol.md).
@@ -28,11 +30,23 @@ Implemented so far:
   [`test_import_cache.ml`](../../compiler/test/test_import_cache.ml), and
   [`completion_test.go`](../../runtime/go/internal/lsp/completion_test.go), including
   selecting a completion, applying its edits, and checking the resulting program.
+- The compiler now owns a bounded workspace binding index, cross-file definition
+  and references, and a checked rename proposal. The shared LSP/MCP adapters use
+  those semantic identities, validate source hashes and coordinates, and refuse
+  incomplete or stale edits. Rename checks import exposure, visibility, capture
+  and binding identity, then type/proof-checks the candidate workspace. Navigation
+  includes read-only stdlib declarations; rename cannot modify them.
+- [`test_workspace_index.ml`](../../compiler/test/test_workspace_index.ml) and
+  Go tooling/LSP/MCP fixtures cover imported callers, exported types and
+  constructors, shadowing, interpolation, Unicode/CRLF, and stale inputs.
+  LSP rename is offered only to clients supporting versioned document changes
+  with transactional failure handling. Already-invalid workspaces currently
+  receive a refusal rather than a diagnostic-delta rename.
 
-Still required: dependency-directed incremental checking and semantic identity, complete
-cross-file operations, expected-type/proof-aware ranking, proof/effect explanations,
-and measured latency/memory gates. Sibling type discovery is bounded local
-discovery, not the workspace semantic index promised by L1/L2.
+Still required: proactive checking of affected unopened modules, the remaining cross-file
+operations, expected-type/proof-aware ranking, proof/effect explanations, and
+measured latency/memory gates. The binding index is rebuilt after snapshot changes;
+per-module checking reuses unchanged dependency inputs on demand.
 
 Make editing a Tesl project dependable across files, useful while code is
 unfinished, and unusually good at explaining proofs. Editors and coding agents
@@ -172,8 +186,10 @@ stale work never overwrites newer diagnostics.
 
 ### L2 — Complete the project-wide editing loop
 
-- [ ] Cross-file definition/type-definition and references, with declaration
-  inclusion and use-kind filtering where supported by the client.
+- [x] Compiler-owned cross-file definition and references, including declaration
+  identity and explicit completeness, through LSP and CLI/session/MCP.
+- [ ] Cross-file type-definition, use-kind filtering, and pagination for large
+  reference sets where supported by the client.
 - [ ] Conflict-checked rename across imports and callers; file/module moves
   produce import updates under the same edit-precondition rules.
 - [ ] Workspace symbol search and diagnostics for affected unopened files,

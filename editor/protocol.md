@@ -370,7 +370,7 @@ unsigned, big-endian 32-bit byte length followed by exactly that many bytes.
 The compiler first writes a framed UTF-8 JSON handshake:
 
 ```json
-{"version":1,"protocol":"tesl-workspace","invalidation":"whole-snapshot",
+{"version":1,"protocol":"tesl-workspace","invalidation":"dependency-inputs",
  "capabilities":["workspace-navigation","workspace-rename-arguments-v1"]}
 ```
 
@@ -416,13 +416,21 @@ document and directory limits still apply. Symlinks and nonregular disk sources
 are excluded. Source paths in locations and diagnostic hints map back to the
 project. Different roots or changed toolchain configuration restart the process.
 
-The mirror stays immutable during a query. The compiler retains parsed modules,
-checked type metadata and query answers within that snapshot, with entry and
-byte limits. Any different snapshot clears semantic caches. Bundled `.tesl`
-source libraries are additional compiler-owned inputs: changed bytes or missing/
-created files invalidate answers even if project inputs are unchanged. This is
-conservative invalidation, not yet a reverse-dependency index or incremental
-checking of only affected modules.
+The mirror stays immutable during a query. Snapshot changes discard whole-query
+answers and the workspace binding graph. Parsed modules retain exact filename /
+source keys; checked metadata additionally retains the resolved paths and exact
+bytes of all transitive imports. Unrelated edits can therefore reuse checked
+metadata. Missing/created imports, resolver precedence changes, and bundled stdlib
+changes invalidate dependent entries even when the entry source is unchanged.
+Graphs exceeding the input budget run uncached. A dependency change observed
+during checking cannot populate a cache entry for different bytes.
+
+Parse retention is bounded to 128 entries / 8 MiB of source, and checked metadata
+to 128 entries / 16 MiB of serialized keys and values. Query responses retain
+their existing byte/count bounds. Process restart clears all caches. This is
+dependency-keyed demand checking; the binding graph still rebuilds on revisions,
+and proactive diagnostics through a retained reverse-dependency index remain
+future work.
 
 A client serializes exchanges and includes waiting time in its request deadline.
 Cancellation/timeout kills and reaps the owned process tree, closes its pipes,

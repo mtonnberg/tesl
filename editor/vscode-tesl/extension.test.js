@@ -682,7 +682,7 @@ async function testTerminalCommandsUseArgumentVectors() {
     file,
     () => fs.rmSync(directory, { recursive: true, force: true }),
     directory,
-    { enableTests: false }
+    { enableTests: false, configuration: installedToolFixture(directory) }
   );
   const testName = 'name $(touch injected-test) `tick` "double" \'single\' whitespace';
   const windowsFile = 'C:\\workspace with spaces\\$(calc)\\`tick`\\"quoted".tesl';

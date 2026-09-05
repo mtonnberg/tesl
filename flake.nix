@@ -118,7 +118,7 @@
           version = toolchainInputs.version;
           src = ./.;
           modRoot = "runtime/go";
-          vendorHash = "sha256-uGEz054ux/K5il3VDFGdIbUdb1vai6jII/maVvHzclA=";
+          vendorHash = "sha256-oIqFfFUrXs+7Nn3y8Ch5elfHBqvsqgbEr325EBs3soA=";
           ldflags = [
             "-X=tesl.dev/runtime/go/internal/toolchain.buildVersion=${toolchainInputs.version}"
             "-X=tesl.dev/runtime/go/internal/toolchain.buildRevision=${self.rev or "worktree"}"
