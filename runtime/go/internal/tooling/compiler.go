@@ -69,14 +69,14 @@ func (client Client) Run(ctx context.Context, args ...string) (Result, error) {
 	if err != nil {
 		return Result{}, fmt.Errorf("compiler: stdout pipe: %w", err)
 	}
-	defer stdout.Close()
-	defer stdoutWriter.Close()
+	defer func() { _ = stdout.Close() }()
+	defer func() { _ = stdoutWriter.Close() }()
 	stderr, stderrWriter, err := os.Pipe()
 	if err != nil {
 		return Result{}, fmt.Errorf("compiler: stderr pipe: %w", err)
 	}
-	defer stderr.Close()
-	defer stderrWriter.Close()
+	defer func() { _ = stderr.Close() }()
+	defer func() { _ = stderrWriter.Close() }()
 	command.Stdout, command.Stderr = stdoutWriter, stderrWriter
 	child, err := childprocess.Start(command)
 	if err != nil {

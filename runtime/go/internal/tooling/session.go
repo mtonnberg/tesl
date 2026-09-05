@@ -232,42 +232,42 @@ func startWorkspaceProcess(executable string, environment []string, directory st
 	}
 	output, outputWriter, err := os.Pipe()
 	if err != nil {
-		input.Close()
-		writer.Close()
+		_ = input.Close()
+		_ = writer.Close()
 		return nil, err
 	}
 	stderr, stderrWriter, err := os.Pipe()
 	if err != nil {
-		input.Close()
-		writer.Close()
-		output.Close()
-		outputWriter.Close()
+		_ = input.Close()
+		_ = writer.Close()
+		_ = output.Close()
+		_ = outputWriter.Close()
 		return nil, err
 	}
 	command := exec.Command(executable, "--workspace-session") // #nosec G204 -- explicit local compiler selected by the toolchain resolver.
 	command.Env, command.Dir = environment, directory
 	command.Stdin, command.Stdout, command.Stderr = input, outputWriter, stderrWriter
 	child, err := childprocess.Start(command)
-	input.Close()
-	outputWriter.Close()
-	stderrWriter.Close()
+	_ = input.Close()
+	_ = outputWriter.Close()
+	_ = stderrWriter.Close()
 	if err != nil {
-		writer.Close()
-		output.Close()
-		stderr.Close()
+		_ = writer.Close()
+		_ = output.Close()
+		_ = stderr.Close()
 		return nil, err
 	}
 	process := &workspaceProcess{child: child, input: writer, output: output, done: make(chan struct{}), stderr: &boundedSessionLog{}}
 	drained := make(chan struct{})
-	go func() { _, _ = io.Copy(process.stderr, stderr); stderr.Close(); close(drained) }()
+	go func() { _, _ = io.Copy(process.stderr, stderr); _ = stderr.Close(); close(drained) }()
 	go func() { _ = child.Wait(); <-drained; close(process.done) }()
 	return process, nil
 }
 
 func (process *workspaceProcess) close() {
 	process.child.Kill()
-	process.input.Close()
-	process.output.Close()
+	_ = process.input.Close()
+	_ = process.output.Close()
 	<-process.done
 }
 
@@ -285,8 +285,8 @@ func (process *workspaceProcess) perform(ctx context.Context, action func() ([]b
 		return result.payload, result.err
 	case <-ctx.Done():
 		process.child.Kill()
-		process.input.Close()
-		process.output.Close()
+		_ = process.input.Close()
+		_ = process.output.Close()
 		<-done
 		return nil, ctx.Err()
 	}
@@ -365,12 +365,15 @@ func (process *workspaceProcess) query(ctx context.Context, snapshot, flag, path
 }
 
 func readWorkspaceFrame(reader io.Reader, limit int) ([]byte, error) {
+	if limit < 0 || limit > DefaultCompilerOutput {
+		return nil, errors.New("compiler: invalid workspace frame limit")
+	}
 	var header [4]byte
 	if _, err := io.ReadFull(reader, header[:]); err != nil {
 		return nil, err
 	}
 	size := binary.BigEndian.Uint32(header[:])
-	if uint64(size) > uint64(limit) {
+	if int64(size) > int64(limit) {
 		return nil, errors.New("compiler: workspace response exceeds limit")
 	}
 	payload := make([]byte, int(size))
@@ -379,11 +382,19 @@ func readWorkspaceFrame(reader io.Reader, limit int) ([]byte, error) {
 }
 
 func writeWorkspaceFrame(writer io.Writer, payload []byte) error {
+	if len(payload) > DefaultCompilerOutput {
+		return errors.New("compiler: workspace frame exceeds limit")
+	}
 	var header [4]byte
 	binary.BigEndian.PutUint32(header[:], uint32(len(payload)))
-	if _, err := writer.Write(header[:]); err != nil {
+	if n, err := writer.Write(header[:]); err != nil {
 		return err
+	} else if n != len(header) {
+		return io.ErrShortWrite
 	}
-	_, err := writer.Write(payload)
+	n, err := writer.Write(payload)
+	if err == nil && n != len(payload) {
+		return io.ErrShortWrite
+	}
 	return err
 }

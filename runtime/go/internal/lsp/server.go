@@ -51,6 +51,7 @@ type Server struct {
 	nextTokenID       uint64
 	fileChangeVersion uint64
 	shutdown          bool
+	requests          *requestStream
 	diagnosticMu      sync.Mutex
 	diagnosticRuns    map[string]diagnosticRun
 	diagnosticWG      sync.WaitGroup
@@ -122,32 +123,55 @@ func (server *Server) Run(ctx context.Context, input io.Reader, output io.Writer
 			_ = closer.Close()
 		}
 	}()
-	reader := protocol.NewReader(input)
+	server.requests = newRequestStream(ctx, input)
+	defer server.requests.close(input)
 	writer := protocol.NewWriter(output)
 	for {
-		message, err := reader.Read()
-		if errors.Is(err, io.EOF) {
-			return 0
-		}
-		if err != nil {
-			if writeErr := server.writeError(writer, nil, parseError, err.Error()); writeErr != nil {
-				return 1
-			}
-			// A framing error can leave an unread body in the stream. Continuing
-			// could interpret body bytes as a new header, so terminate safely.
+		if err := server.requests.failed(); err != nil {
+			_ = server.writeError(writer, nil, invalidRequest, err.Error())
 			return 1
 		}
-		request, err := protocol.DecodeRequest(message)
-		if err != nil {
-			if writeErr := server.writeError(writer, nil, invalidRequest, err.Error()); writeErr != nil {
+		var item incomingRequest
+		select {
+		case <-server.requests.ctx.Done():
+			if err := server.requests.failed(); err != nil {
+				_ = server.writeError(writer, nil, invalidRequest, err.Error())
+				return 1
+			}
+			return 0
+		case next, ok := <-server.requests.messages:
+			if !ok {
+				if err := server.requests.failed(); err != nil {
+					_ = server.writeError(writer, nil, invalidRequest, err.Error())
+					return 1
+				}
+				return 0
+			}
+			item = next
+		}
+		if item.err != nil {
+			server.requests.finish(item)
+			if writeErr := server.writeError(writer, nil, item.code, item.err.Error()); writeErr != nil || item.terminal {
 				return 1
 			}
 			continue
 		}
+		request := item.request
 		isNotification := len(request.ID) == 0
-		status, err := server.handle(ctx, request, writer)
+		requestCtx := ctx
+		if item.pending != nil {
+			requestCtx = item.pending.ctx
+		}
+		status := -1
+		var err error
+		if item.pending != nil && requestCtx.Err() != nil {
+			err = server.writeError(writer, request.ID, requestCancelled, "request cancelled")
+		} else {
+			status, err = server.handle(requestCtx, request, writer)
+		}
 		if err != nil {
 			if isNotification {
+				server.requests.finish(item)
 				continue
 			}
 			code := internalError
@@ -156,9 +180,11 @@ func (server *Server) Run(ctx context.Context, input io.Reader, output io.Writer
 				code = protocolErr.code
 			}
 			if writeErr := server.writeError(writer, request.ID, code, err.Error()); writeErr != nil {
+				server.requests.finish(item)
 				return 1
 			}
 		}
+		server.requests.finish(item)
 		if status >= 0 {
 			return status
 		}
@@ -2042,6 +2068,9 @@ func (server *Server) publish(uri string, diagnostics []map[string]any, writer *
 }
 
 func (server *Server) writeResult(writer *protocol.Writer, id json.RawMessage, result any) error {
+	if server.requests.complete(id) {
+		return server.writeError(writer, id, requestCancelled, "request cancelled")
+	}
 	response, err := protocol.NewResultResponse(id, result)
 	if err != nil {
 		return err
@@ -2050,6 +2079,9 @@ func (server *Server) writeResult(writer *protocol.Writer, id json.RawMessage, r
 }
 
 func (server *Server) writeError(writer *protocol.Writer, id json.RawMessage, code int, message string) error {
+	if server.requests.complete(id) {
+		code, message = requestCancelled, "request cancelled"
+	}
 	response, err := protocol.NewErrorResponse(id, code, message, nil)
 	if err != nil {
 		return err

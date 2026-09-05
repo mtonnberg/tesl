@@ -181,7 +181,7 @@ _tesl_test_go_file() {
     return 1
   fi
   (cd "$out" && TESL_TEST_NAME="$test_name" TESL_TEST_KIND="$test_kind" \
-    "${TESL_GO:-go}" test ./...)
+    "${TESL_GO:-go}" test -buildvcs=false ./...)
   status=$?
   rm -rf "$root"
   return "$status"
@@ -204,7 +204,7 @@ _tesl_run_go_file() {
     return 2
   fi
   binary="$root/tesl-app"
-  (cd "$out" && "${TESL_GO:-go}" build -o "$binary" ./cmd/app) || { rm -rf "$root"; return 1; }
+  (cd "$out" && "${TESL_GO:-go}" build -buildvcs=false -o "$binary" ./cmd/app) || { rm -rf "$root"; return 1; }
   if [ "$debug" = "1" ]; then
     TESL_DEBUG=1 TESL_DEBUG_ROOT="$project" "$binary" "$@"
   else
@@ -244,7 +244,7 @@ $dep"
       out="$root/go"
       echo "[tesl watch] Compiling Go module..."
       if "$TESL_OCAML_COMPILER" "$file" --out "$out" && [ -d "$out/cmd/app" ] && \
-          (cd "$out" && "${TESL_GO:-go}" build -o "$root/tesl-app" ./cmd/app); then
+          (cd "$out" && "${TESL_GO:-go}" build -buildvcs=false -o "$root/tesl-app" ./cmd/app); then
         binary="$root/tesl-app"
         echo "[tesl watch] Starting Go app..."
         "$binary" "$@" &
@@ -1211,10 +1211,10 @@ _tesl_build_go() {
   local entry="$1" name="$2" requested_out="$3" out
   out="$(_tesl_compile_go_file "$entry" "$requested_out")" || return 1
   if [ -d "$out/cmd/app" ]; then
-    (cd "$out" && "${TESL_GO:-go}" build -trimpath -o "$out/tesl-app" ./cmd/app) || return 1
+    (cd "$out" && "${TESL_GO:-go}" build -buildvcs=false -trimpath -o "$out/tesl-app" ./cmd/app) || return 1
     echo "tesl build: $name built Go binary — $entry → $out/tesl-app"
   else
-    (cd "$out" && "${TESL_GO:-go}" build ./...) || return 1
+    (cd "$out" && "${TESL_GO:-go}" build -buildvcs=false ./...) || return 1
     echo "tesl build: $name compiled Go module — $entry → $out"
   fi
 }
@@ -1305,7 +1305,7 @@ _tesl_build_go_container() {
     return 2
   }
   go="${TESL_GO:-go}"
-  (cd "$generated" && GOOS=linux CGO_ENABLED=0 "$go" build -trimpath -o "$ctx/tesl-app" ./cmd/app) || {
+  (cd "$generated" && GOOS=linux CGO_ENABLED=0 "$go" build -buildvcs=false -trimpath -o "$ctx/tesl-app" ./cmd/app) || {
     echo "tesl build --backend go: failed to build $entry for Linux" >&2
     return 1
   }

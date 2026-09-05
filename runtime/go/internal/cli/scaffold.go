@@ -35,7 +35,7 @@ func (app *App) init(ctx context.Context, args []string) (err error) {
 				pgmode = value
 			}
 		case "--help", "-h":
-			fmt.Fprintln(app.Stdout, "Usage: tesl init [name] [--template api|minimal] [--postgres managed|existing|none] [--yes] [--no-git]")
+			_, _ = fmt.Fprintln(app.Stdout, "Usage: tesl init [name] [--template api|minimal] [--postgres managed|existing|none] [--yes] [--no-git]")
 			return nil
 		default:
 			if strings.HasPrefix(arg, "-") || name != "" {
@@ -49,7 +49,7 @@ func (app *App) init(ctx context.Context, args []string) (err error) {
 		if yes {
 			return fallback
 		}
-		fmt.Fprintf(app.Stdout, "%s [%s]: ", question, fallback)
+		_, _ = fmt.Fprintf(app.Stdout, "%s [%s]: ", question, fallback)
 		answer, _ := reader.ReadString('\n')
 		answer = strings.TrimSpace(answer)
 		if answer == "" {
@@ -98,7 +98,7 @@ func (app *App) init(ctx context.Context, args []string) (err error) {
 	}
 	contents := map[string][]byte{}
 	for _, file := range []string{"app.tesl", "tesl.toml", "README.md"} {
-		data, err := os.ReadFile(filepath.Join(templates, template, file))
+		data, err := os.ReadFile(filepath.Join(templates, template, file)) // #nosec G304 -- selected installation templates; template and file names are closed allowlists above.
 		if err != nil {
 			return err
 		}
@@ -128,7 +128,7 @@ func (app *App) init(ctx context.Context, args []string) (err error) {
 	}
 	sort.Strings(keys)
 	for _, key := range keys {
-		fmt.Fprintf(&dotenv, "%s=%s\n", key, manifest["env"][key])
+		_, _ = fmt.Fprintf(&dotenv, "%s=%s\n", key, manifest["env"][key])
 	}
 	contents[".env"] = []byte(dotenv.String())
 	contents[".gitignore"] = []byte(".tesl-postgres/\n.env\n.tesl-stuff/\nresult\n")
@@ -154,7 +154,7 @@ func (app *App) init(ctx context.Context, args []string) (err error) {
 		return err
 	}
 	contents[".vscode/launch.json"] = append(launch, '\n')
-	if err := os.Mkdir(dest, 0755); err != nil {
+	if err := os.Mkdir(dest, 0755); err != nil { // #nosec G301 -- public project sources; dotenv secrets use mode 0600 below.
 		return err
 	}
 	complete := false
@@ -165,7 +165,7 @@ func (app *App) init(ctx context.Context, args []string) (err error) {
 	}()
 	for file, data := range contents {
 		path := filepath.Join(dest, file)
-		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil { // #nosec G301 -- public project source directories; dotenv secrets use mode 0600 below.
 			return err
 		}
 		mode := os.FileMode(0644)
@@ -186,6 +186,6 @@ func (app *App) init(ctx context.Context, args []string) (err error) {
 			}
 		}
 	}
-	fmt.Fprintf(app.Stdout, "Created %s (template: %s, postgres: %s).\n\n  cd %s\n  tesl check\n  tesl test\n  tesl run\n", dest, template, pgmode, strconv.Quote(name))
+	_, _ = fmt.Fprintf(app.Stdout, "Created %s (template: %s, postgres: %s).\n\n  cd %s\n  tesl check\n  tesl test\n  tesl run\n", dest, template, pgmode, strconv.Quote(name))
 	return nil
 }

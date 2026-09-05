@@ -41,7 +41,7 @@ func (app *App) compileSource(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	defer os.RemoveAll(temp)
+	defer func() { _ = os.RemoveAll(temp) }()
 	out := filepath.Join(temp, "generated")
 	if err := app.compiler(ctx, file, "--out", out); err != nil {
 		return err
@@ -50,7 +50,7 @@ func (app *App) compileSource(ctx context.Context, args []string) error {
 	if err := replaceBuildDirectory(out, destination); err != nil {
 		return err
 	}
-	fmt.Fprintln(app.Stdout, "compiled Go module:", file, "→", destination)
+	_, _ = fmt.Fprintln(app.Stdout, "compiled Go module:", file, "→", destination)
 	return nil
 }
 
@@ -93,7 +93,7 @@ func (app *App) build(ctx context.Context, args []string) error {
 				}
 			}
 		case "--help", "-h":
-			fmt.Fprintln(app.Stdout, "Usage: tesl build [--local|--container] [--app-only|--with-postgres] [--tag NAME] [--out DIR] [--no-docker]")
+			_, _ = fmt.Fprintln(app.Stdout, "Usage: tesl build [--local|--container] [--app-only|--with-postgres] [--tag NAME] [--out DIR] [--no-docker]")
 			return nil
 		default:
 			return fmt.Errorf("unexpected build argument: %s", arg)
@@ -127,7 +127,7 @@ func (app *App) build(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	defer os.RemoveAll(temp)
+	defer func() { _ = os.RemoveAll(temp) }()
 	generated := filepath.Join(temp, "generated")
 	if err := app.compiler(ctx, entry, "--out", generated); err != nil {
 		return err
@@ -153,14 +153,14 @@ func (app *App) build(ctx context.Context, args []string) error {
 		if err := replaceBuildDirectory(generated, out); err != nil {
 			return err
 		}
-		fmt.Fprintln(app.Stdout, "tesl build:", name, "built at", out)
+		_, _ = fmt.Fprintln(app.Stdout, "tesl build:", name, "built at", out)
 		return nil
 	}
 	if mainErr != nil {
 		return fmt.Errorf("%s has no main/server entrypoint", entry)
 	}
 	contextDir := filepath.Join(temp, "context")
-	if err := os.Mkdir(contextDir, 0755); err != nil {
+	if err := os.Mkdir(contextDir, 0755); err != nil { // #nosec G301 -- public build context, inside a private temporary parent.
 		return err
 	}
 	env = toolchain.Setenv(toolchain.Setenv(env, "GOOS", "linux"), "CGO_ENABLED", "0")
@@ -171,7 +171,7 @@ func (app *App) build(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	dockerfile, err := os.ReadFile(filepath.Join(templates, "docker", "Dockerfile."+variant+".tmpl"))
+	dockerfile, err := os.ReadFile(filepath.Join(templates, "docker", "Dockerfile."+variant+".tmpl")) // #nosec G304 -- installation template; variant is restricted to app-only or with-postgres above.
 	if err != nil {
 		return err
 	}
@@ -189,10 +189,10 @@ func (app *App) build(ctx context.Context, args []string) error {
 	}
 	quoteLabel := func(value string) string { quoted := strconv.Quote(value); return quoted[1 : len(quoted)-1] }
 	replacer := strings.NewReplacer("__APP_NAME__", quoteLabel(name), "__PORT__", port, "__REVISION__", quoteLabel(revision), "__CREATED__", created.Format(time.RFC3339), "__SOURCE__", "https://github.com/mtonnberg/tesl")
-	if err := os.WriteFile(filepath.Join(contextDir, "Dockerfile"), []byte(replacer.Replace(string(dockerfile))), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(contextDir, "Dockerfile"), []byte(replacer.Replace(string(dockerfile))), 0644); err != nil { // #nosec G703 G306 -- fixed filename under the private staging directory; generated public build instructions, no secrets.
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(contextDir, ".dockerignore"), []byte("*\n!tesl-app\n!Dockerfile\n!.dockerignore\n"), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(contextDir, ".dockerignore"), []byte("*\n!tesl-app\n!Dockerfile\n!.dockerignore\n"), 0644); err != nil { // #nosec G306 -- public build instructions, no secrets.
 		return err
 	}
 	out := requestedOut
@@ -213,7 +213,7 @@ func (app *App) build(ctx context.Context, args []string) error {
 	} else if !os.IsNotExist(err) {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(out), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(out), 0755); err != nil { // #nosec G301 -- user-selected public build output, with private staging below.
 		return err
 	}
 	// Stage beside the destination so the final rename also works when --out
@@ -222,14 +222,14 @@ func (app *App) build(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	defer os.RemoveAll(staged)
+	defer func() { _ = os.RemoveAll(staged) }()
 	if err := os.CopyFS(staged, os.DirFS(contextDir)); err != nil {
 		return err
 	}
 	if err := os.Rename(staged, out); err != nil {
 		return err
 	}
-	fmt.Fprintln(app.Stdout, "tesl build: staged Docker context at", out)
+	_, _ = fmt.Fprintln(app.Stdout, "tesl build: staged Docker context at", out)
 	if noDocker {
 		return nil
 	}

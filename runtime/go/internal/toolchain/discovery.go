@@ -71,11 +71,11 @@ func (r Resolver) Load() (Manifest, string, error) {
 	if err != nil {
 		return Manifest{}, "", err
 	}
-	file, err := os.Open(filepath.Join(root, "share", "tesl", "toolchain.json"))
+	file, err := os.Open(filepath.Join(root, "share", "tesl", "toolchain.json")) // #nosec G304 -- root is the user-selected installation; the relative manifest path is fixed.
 	if err != nil {
 		return Manifest{}, root, err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	info, err := file.Stat()
 	if err != nil {
 		return Manifest{}, root, err

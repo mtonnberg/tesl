@@ -57,7 +57,7 @@ func (app *App) database(ctx context.Context, root, action string) (string, erro
 	directory := filepath.Join(root, ".tesl-postgres")
 	data := filepath.Join(directory, "data")
 	port := manifest.value("env", "TESL_POSTGRES_PORT", "5432")
-	if saved, err := os.ReadFile(filepath.Join(directory, "PORT")); err == nil {
+	if saved, err := os.ReadFile(filepath.Join(directory, "PORT")); err == nil { // #nosec G304 -- fixed managed-database state path in the selected project.
 		port = strings.TrimSpace(string(saved))
 	} else if !os.IsNotExist(err) {
 		return "", err
@@ -70,7 +70,7 @@ func (app *App) database(ctx context.Context, root, action string) (string, erro
 		return "", versionErr
 	}
 	if os.IsNotExist(versionErr) && action != "start" {
-		fmt.Fprintln(app.Stdout, "tesl db: no managed cluster (run tesl db start)")
+		_, _ = fmt.Fprintln(app.Stdout, "tesl db: no managed cluster (run tesl db start)")
 		return port, nil
 	}
 	// Resolve required tools before creating persistent project data.
@@ -85,7 +85,7 @@ func (app *App) database(ctx context.Context, root, action string) (string, erro
 	if running {
 		// PostgreSQL's own pid file reports its actual port. This also avoids
 		// moving a running cluster when the manifest has subsequently changed.
-		pid, err := os.ReadFile(filepath.Join(data, "postmaster.pid"))
+		pid, err := os.ReadFile(filepath.Join(data, "postmaster.pid")) // #nosec G304 -- fixed PostgreSQL state filename in the selected cluster.
 		if err != nil {
 			return "", err
 		}
@@ -100,7 +100,7 @@ func (app *App) database(ctx context.Context, root, action string) (string, erro
 		if running {
 			state = "running"
 		}
-		fmt.Fprintf(app.Stdout, "tesl db: %s (%s, port %s)\n", state, data, port)
+		_, _ = fmt.Fprintf(app.Stdout, "tesl db: %s (%s, port %s)\n", state, data, port)
 		return port, nil
 	}
 	if action == "stop" {
@@ -109,7 +109,7 @@ func (app *App) database(ctx context.Context, root, action string) (string, erro
 				return "", err
 			}
 		}
-		fmt.Fprintln(app.Stdout, "tesl db: stopped", data)
+		_, _ = fmt.Fprintln(app.Stdout, "tesl db: stopped", data)
 		return port, nil
 	}
 	user := manifest.value("env", "TESL_POSTGRES_USER", "app")
@@ -126,7 +126,7 @@ func (app *App) database(ctx context.Context, root, action string) (string, erro
 		}
 	} else {
 		// Never silently start a different database major version on existing data.
-		major, err := os.ReadFile(filepath.Join(data, "PG_VERSION"))
+		major, err := os.ReadFile(filepath.Join(data, "PG_VERSION")) // #nosec G304 -- fixed PostgreSQL state filename in the selected cluster.
 		if err != nil {
 			return "", err
 		}
@@ -156,7 +156,7 @@ func (app *App) database(ctx context.Context, root, action string) (string, erro
 			return "", err
 		}
 	}
-	if err := os.WriteFile(filepath.Join(directory, "PORT"), []byte(port+"\n"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(directory, "PORT"), []byte(port+"\n"), 0600); err != nil { // #nosec G703 -- selected project's fixed state path; validated numeric port is file content, never a path component.
 		return "", err
 	}
 	connection := []string{"-h", "127.0.0.1", "-p", port, "-U", user}
@@ -165,7 +165,7 @@ func (app *App) database(ctx context.Context, root, action string) (string, erro
 			return "", fmt.Errorf("cannot create or reach managed database %s: %w", database, err)
 		}
 	}
-	fmt.Fprintf(app.Stdout, "tesl db: ready — database %s at 127.0.0.1:%s\n", database, port)
+	_, _ = fmt.Fprintf(app.Stdout, "tesl db: ready — database %s at 127.0.0.1:%s\n", database, port)
 	return port, nil
 }
 
@@ -183,7 +183,7 @@ func (app *App) projectEnvironment(ctx context.Context, root string, autostart b
 	env := append([]string(nil), app.Environment...)
 	noDotenv, _ := environmentValue(env, "TESL_NO_DOTENV")
 	if noDotenv != "1" {
-		data, err := os.ReadFile(filepath.Join(root, ".env"))
+		data, err := os.ReadFile(filepath.Join(root, ".env")) // #nosec G304 -- explicit project dotenv support; values are parsed, never shell-evaluated.
 		if err != nil && !os.IsNotExist(err) {
 			return nil, err
 		}
@@ -218,7 +218,7 @@ func (app *App) projectEnvironment(ctx context.Context, root string, autostart b
 		return env, nil
 	}
 	port := manifest.value("env", "TESL_POSTGRES_PORT", "5432")
-	if data, err := os.ReadFile(filepath.Join(root, ".tesl-postgres", "PORT")); err == nil {
+	if data, err := os.ReadFile(filepath.Join(root, ".tesl-postgres", "PORT")); err == nil { // #nosec G304 -- fixed managed-database state path in the selected project.
 		port = strings.TrimSpace(string(data))
 	}
 	if !validPort(port) {

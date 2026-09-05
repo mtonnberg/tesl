@@ -54,7 +54,7 @@ def main():
     run(["go", "build", "./cmd/..."], root / "runtime/go", environment)
     run(["go", "test", "-race", "./internal/childprocess", "./internal/toolchain",
          "./internal/protocol", "./internal/cli"], root / "runtime/go", environment)
-    run(["go", "test", "./internal/lsp", "-run", "TestBuiltCompiler"], root / "runtime/go", environment)
+    run(["go", "test", "-race", "./internal/lsp"], root / "runtime/go", environment)
     run(["go", "test", "-race", "./internal/tooling", "-run", "TestCompilerPipesDrainAndCloseWithDescendants|Workspace"], root / "runtime/go", environment)
     if args.target.startswith("windows-"):
         run(["go", "test", "./teslrt", "-run", "TestWindowsDebugToken"], root / "runtime/go", environment)

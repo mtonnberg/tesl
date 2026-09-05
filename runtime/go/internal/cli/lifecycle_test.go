@@ -83,7 +83,7 @@ func TestManagedDatabaseStateTransitions(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				defer listener.Close()
+				defer func() { _ = listener.Close() }()
 				writeProjectFile(t, app.Directory, ".tesl-postgres/PORT", fmt.Sprint(listener.Addr().(*net.TCPAddr).Port))
 			}
 			execute := app.Execute

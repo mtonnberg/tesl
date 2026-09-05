@@ -229,12 +229,6 @@ func sourceProjectRoot(entryPath string) string {
 	}
 }
 
-func copyDiskSources(root, shadow string) (int64, error) {
-	return visitDiskSources(context.Background(), root, func(path string, contents []byte) error {
-		return writeShadowSource(root, shadow, path, contents)
-	})
-}
-
 func visitDiskSources(ctx context.Context, root string, visit func(string, []byte) error) (int64, error) {
 	if _, err := os.Stat(root); errors.Is(err, os.ErrNotExist) {
 		return 0, nil

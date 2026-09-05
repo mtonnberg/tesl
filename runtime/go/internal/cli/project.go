@@ -98,7 +98,7 @@ func projectRoot(start string) string {
 }
 
 func readManifest(root string) (Manifest, error) {
-	data, err := os.ReadFile(filepath.Join(root, "tesl.toml"))
+	data, err := os.ReadFile(filepath.Join(root, "tesl.toml")) // #nosec G304 -- fixed manifest name in the user's selected project.
 	if err != nil {
 		return nil, err
 	}
@@ -131,6 +131,6 @@ func (app *App) files(args []string) ([]string, error) {
 	if _, err := os.Stat(entry); err != nil {
 		return nil, err
 	}
-	fmt.Fprintln(app.Stderr, "tesl: using", entry)
+	_, _ = fmt.Fprintln(app.Stderr, "tesl: using", entry)
 	return []string{entry}, nil
 }

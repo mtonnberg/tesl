@@ -14,9 +14,9 @@ import (
 // a watched disk input changed. Source versions alone cover only the entry.
 func (server *Server) completionSnapshot() string {
 	hash := sha256.New()
-	fmt.Fprintf(hash, "%d\n", server.fileChangeVersion)
+	_, _ = fmt.Fprintf(hash, "%d\n", server.fileChangeVersion)
 	for _, overlay := range server.sourceOverlays() {
-		fmt.Fprintf(hash, "%q:%x\n", overlay.Path, sha256.Sum256([]byte(overlay.Source)))
+		_, _ = fmt.Fprintf(hash, "%q:%x\n", overlay.Path, sha256.Sum256([]byte(overlay.Source)))
 	}
 	return fmt.Sprintf("%x", hash.Sum(nil))
 }

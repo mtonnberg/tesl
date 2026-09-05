@@ -12,6 +12,10 @@ Implemented so far:
   installation-relative discovery and an offline Go environment. CLI, LSP, DAP,
   and MCP use it; the extension recognizes the same manifest layout. An explicit
   stdlib directory component makes lifted library sources work outside a checkout.
+- `nix build .#tesl-native-cli` builds a native CLI candidate using the shared Nix
+  tools. Both CLI candidates pass clean-environment init/emit/build and executable
+  stdlib tests; CI now checks both. Compiler-adjacent library discovery and explicit
+  overrides are tested with relocated and symlinked executables.
 - Compiler mutation/build subprocesses use literal argv with bounded output and
   timeouts. The native CLI owns Windows process trees; no Bash or GNU `timeout`
   is required for these compiler commands. DAP compiler/Go preparation uses the
@@ -50,7 +54,8 @@ flake also supplies DAST tools. Copying `main.exe` or archiving the current Nix
 output therefore does not satisfy the installation goal.
 
 The existing [`clean-install test`](../../tests/go-clean-install.sh) checks
-`init`, `emit`, and staging a build under a clean environment. It neither proves
+`init`, `emit`, staging a build, and type checking/executing a lifted standard-library
+program under a clean environment. It neither proves
 absence of `/nix/store` nor tests first-run dependency downloads, a running API,
 managed PostgreSQL, or desktop editor discovery. CI currently runs the
 authoritative gate on Ubuntu; release-platform testing must be added.

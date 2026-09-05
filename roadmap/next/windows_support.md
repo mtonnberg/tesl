@@ -20,6 +20,10 @@ Implemented so far:
   of these subprocess-producing commands require the CLI owner explicitly.
 - Retained compiler sessions use binary-safe pipes and native process ownership;
   their framing, revision and restart tests are included in the native matrix.
+- The native matrix includes the complete LSP race suite: active/queued request
+  cancellation, discarded late edits, bounded queues and document ordering use
+  the same goroutine implementation as Linux/macOS. Installed-resource tests cover
+  a compiler prefix containing spaces and Unicode without a development checkout.
 - Native extension launch without Bash and a five-target native CI definition
   consuming the Nix-exported source revision and tool versions.
 

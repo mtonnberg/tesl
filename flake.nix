@@ -56,6 +56,8 @@
           buildPhase   = "(cd compiler && dune build bin/main.exe)";
           installPhase = ''
             install -Dm755 compiler/_build/default/bin/main.exe $out/bin/tesl-compiler
+            mkdir -p $out/share/tesl/stdlib
+            cp tesl/*.tesl $out/share/tesl/stdlib/
             
             # Install documentation files
             mkdir -p $out/share/tesl/doc
@@ -118,6 +120,7 @@
           modRoot = "runtime/go";
           vendorHash = "sha256-SMXMkfkj5ehtjri4CCWPMwOyLIGcaoSgBv8k4DVG86c=";
           subPackages = [
+            "cmd/tesl"
             "cmd/tesl-dap"
             "cmd/tesl-debug-attach"
             "cmd/tesl-debug-inspect"
@@ -157,6 +160,8 @@
           export TESL_DEBUG_ATTACH_BIN="${tesl-go-tools}/bin/tesl-debug-attach"
           export TESL_DEBUG_INSPECT_BIN="${tesl-go-tools}/bin/tesl-debug-inspect"
           export TESL_GO="${pkgs.go}/bin/go"
+          export TESL_STDLIB_DIR="${tesl-compiler}/share/tesl/stdlib"
+          export TESL_POSTGRES_BIN="${pkgs.postgresql}/bin"
           export TESL_ZAP="${pkgs.zap}/bin/zap"
           export TESL_NUCLEI="${pkgs.nuclei}/bin/nuclei"
           export PATH="${gnuUserland}:$PATH"
@@ -167,6 +172,12 @@
         cliBody = builtins.readFile ./nix/tesl-cli-body.sh;
 
         tesl-go-cli = pkgs.writeShellScriptBin "tesl" (goRuntimePreamble + cliBody);
+
+        # Reviewable native CLI candidate; default cutover remains gated by the
+        # complete parity matrix. The shell here only supplies Nix store paths.
+        tesl-native-cli = pkgs.writeShellScriptBin "tesl" (goRuntimePreamble + ''
+          exec ${tesl-go-tools}/bin/tesl "$@"
+        '');
         
         # ── Dev tesl CLI ──────────────────────────────────────────────────────
         # Used inside devShells.default so developers run against their local
@@ -223,7 +234,7 @@
       in {
         # ── Packages ──────────────────────────────────────────────────────────
           packages = {
-           inherit tesl-compiler tesl-go-cli tesl-lsp tesl-mcp tesl-go-tools tesl-debug-tools tesl-full staticcheck;
+           inherit tesl-compiler tesl-go-cli tesl-native-cli tesl-lsp tesl-mcp tesl-go-tools tesl-debug-tools tesl-full staticcheck;
           release-plan = pkgs.writeText "tesl-release-plan.json" (builtins.toJSON
             (import ./nix/release-plan.nix {
               inherit pkgs;

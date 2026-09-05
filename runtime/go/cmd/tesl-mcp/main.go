@@ -43,7 +43,7 @@ type jsonRPCRequest struct {
 
 func main() {
 	server := &server{compiler: tooling.CompilerFromEnvironment()}
-	defer server.compiler.Close()
+	defer func() { _ = server.compiler.Close() }()
 	reader := protocol.NewLineReader(os.Stdin)
 	writer := protocol.NewLineWriter(os.Stdout)
 	for {

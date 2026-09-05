@@ -114,7 +114,7 @@ func dastPlan(options dastOptions, spec, report string) map[string]any {
 
 func (app *App) dast(ctx context.Context, args []string) error {
 	if len(args) == 1 && (args[0] == "--help" || args[0] == "-h") {
-		fmt.Fprintln(app.Stdout, "Usage: tesl dast <URL> [file.tesl] [--server NAME] [--spec FILE] [--active --allow-remote] [--report-dir DIR] [--authorization-env NAME] [--cookie-env NAME]")
+		_, _ = fmt.Fprintln(app.Stdout, "Usage: tesl dast <URL> [file.tesl] [--server NAME] [--spec FILE] [--active --allow-remote] [--report-dir DIR] [--authorization-env NAME] [--cookie-env NAME]")
 		return nil
 	}
 	options, err := parseDAST(args)
@@ -169,7 +169,7 @@ func (app *App) dast(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	defer os.RemoveAll(work)
+	defer func() { _ = os.RemoveAll(work) }()
 	if options.Spec == "" {
 		options.Spec = filepath.Join(work, "openapi.json")
 		if err := app.compiler(ctx, "generate-openapi", options.File, options.Server, "--output", options.Spec); err != nil {
@@ -211,6 +211,6 @@ func (app *App) dast(ctx context.Context, args []string) error {
 	if port > 65535 {
 		return fmt.Errorf("no free ZAP port")
 	}
-	fmt.Fprintf(app.Stdout, "tesl dast: scanning %s (reports: %s)\n", options.Target, options.Report)
+	_, _ = fmt.Fprintf(app.Stdout, "tesl dast: scanning %s (reports: %s)\n", options.Target, options.Report)
 	return app.invoke(ctx, "zap", app.Directory, app.Environment, "-dir", filepath.Join(work, "zap"), "-port", strconv.Itoa(port), "-silent", "-cmd", "-autorun", planPath)
 }

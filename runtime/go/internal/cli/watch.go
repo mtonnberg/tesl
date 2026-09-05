@@ -61,8 +61,9 @@ func (app *App) watch(ctx context.Context, args []string) error {
 		stopped = make(chan struct{})
 		go func(done chan struct{}) {
 			defer close(done)
+			defer childCancel()
 			if err := app.executeSource(childContext, file, programArgs, false, false, "", ""); err != nil && childContext.Err() == nil {
-				fmt.Fprintln(app.Stderr, "tesl watch:", err, "— waiting for changes")
+				_, _ = fmt.Fprintln(app.Stderr, "tesl watch:", err, "— waiting for changes")
 			}
 		}(stopped)
 	}
@@ -81,7 +82,7 @@ func (app *App) watch(ctx context.Context, args []string) error {
 			stop()
 			paths = dependencies()
 			previous = watchFingerprint(paths)
-			fmt.Fprintln(app.Stderr, "tesl watch: source changed; restarting")
+			_, _ = fmt.Fprintln(app.Stderr, "tesl watch: source changed; restarting")
 			start()
 		}
 	}
@@ -93,10 +94,10 @@ func watchFingerprint(paths []string) [32]byte {
 	hash := sha256.New()
 	directories := map[string]bool{}
 	for _, path := range paths {
-		fmt.Fprintln(hash, path)
-		data, err := os.ReadFile(path)
+		_, _ = fmt.Fprintln(hash, path)
+		data, err := os.ReadFile(path) // #nosec G304 -- watch intentionally reads the entry and compiler-resolved dependency paths.
 		if err != nil {
-			fmt.Fprintln(hash, err)
+			_, _ = fmt.Fprintln(hash, err)
 		} else {
 			_, _ = hash.Write(data)
 		}
@@ -107,12 +108,12 @@ func watchFingerprint(paths []string) [32]byte {
 		directories[directory] = true
 		entries, err := os.ReadDir(directory)
 		if err != nil {
-			fmt.Fprintln(hash, err)
+			_, _ = fmt.Fprintln(hash, err)
 			continue
 		}
 		for _, entry := range entries {
 			if strings.HasSuffix(strings.ToLower(entry.Name()), ".tesl") {
-				fmt.Fprintln(hash, entry.Name())
+				_, _ = fmt.Fprintln(hash, entry.Name())
 			}
 		}
 	}

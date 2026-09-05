@@ -24,6 +24,12 @@ its `-C <directory>` option selects the project working directory.
 The default Nix CLI remains the existing wrapper until the full parity gate
 passes. A successful compiler/Go cross-build does not establish platform support.
 
+Build the native Nix candidate with `nix build .#tesl-native-cli`, then run
+`./result/bin/tesl doctor --json`. It uses the native Go CLI with a small Nix
+environment launcher supplying pinned compiler, Go, PostgreSQL and stdlib paths.
+Both CLI packages run the clean-install gate, including compiled standard-library
+tests outside a checkout. This Nix candidate is not a relocatable offline payload.
+
 ## Installation manifest
 
 All native executables locate `share/tesl/toolchain.json` relative to their real
@@ -71,6 +77,7 @@ and writable user caches. Missing bundled modules fail offline.
 | Discovery | Relocated prefixes, spaces/Unicode, symlinks, explicit overrides, incomplete installations, mixed-toolchain refusal, offline Go environment |
 | CLI | Compiler argument forwarding, scaffold preservation, manifest entrypoints, literal dotenv/argv, clean boundaries, previous-build recovery, watched dependency edits |
 | Retained queries | Fresh-query equivalence across disk and unsaved changes, parse repair, crash/restart, cancellation, serialization and malformed frames |
+| LSP cancellation | Active/queued requests, discarded late edits, ID reuse, source ordering and bounded input queues; exercised by the native parity matrix |
 | Runtime lifecycle | Child descendants stop on cancellation and parent exit; compiler output is drained completely even when descendants inherit its pipes |
 | Database | Start/stop/status, version mismatch, port collision, persistent port, existing database fallback, real data preserved across restart and clean |
 | Completion | Public functions/types, project types, recovery, comment-preserving imports, duplicate/shadow handling, CRLF/UTF-16, stale overlays, accepted edits checked by the compiler |

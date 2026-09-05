@@ -491,7 +491,7 @@ func TestPostgresRebindDoesNotRepeatOutboxDDL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer tx.Rollback(context.Background())
+	defer func() { _ = tx.Rollback(context.Background()) }()
 	if _, err := tx.Exec(ctx, "lock table "+db.QualifiedTable(pubsubOutboxTable)+" in access share mode"); err != nil {
 		t.Fatal(err)
 	}

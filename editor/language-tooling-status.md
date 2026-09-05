@@ -3,7 +3,7 @@
 Source audit: 2026-09-05. This inventory describes the Go server in
 `runtime/go/internal/lsp/server.go`, not historical Racket implementations.
 The executable fixtures are in `server_test.go`, `completion_test.go`, and
-`internal/tooling/session_test.go` beside those implementations.
+`requests_test.go`, and `internal/tooling/session_test.go` beside those implementations.
 
 | Surface | Compiler contract | Current boundary |
 |---|---|---|
@@ -22,10 +22,11 @@ The executable fixtures are in `server_test.go`, `completion_test.go`, and
 | Folding and document links | Go source/URI adapter | Editor presentation, not additional name/proof resolution |
 | Formatting | `--fmt` on an isolated source copy | Full-document replacement |
 | Lifecycle | Open/change/save/close/watched-file notifications | Diagnostic generations and retained compiler ownership |
+| Request cancellation | `$/cancelRequest` to compiler context cancellation | Active/queued cancellation, late-result rejection, bounded queue; document handlers retain arrival order |
 
 Workspace symbols, cross-file reference identity, conflict-checked project rename,
-call hierarchy, proof/effect explanations, and asynchronous `$/cancelRequest`
-handling remain roadmap work. A retained session accelerates the existing
+call hierarchy and proof/effect explanations remain roadmap work.
+A retained session accelerates the existing
 semantics; it does not advertise these missing capabilities.
 
 MCP exposes `tesl.agent_context`, `tesl.check`, `tesl.type_at`, `tesl.signature`,

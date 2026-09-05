@@ -12,6 +12,10 @@ Implemented so far:
 - Cancellation, crash/restart, process cleanup, LF/CRLF query equivalence and
   disk/overlay/save/close/delete/recreate transitions have regression fixtures.
   The protocol and remaining limitations are in [`editor/protocol.md`](../../editor/protocol.md).
+- LSP `$/cancelRequest` reaches active compiler queries and skips canceled queued
+  queries. Late successful results cannot publish edits; bounded queues preserve
+  document ordering and fail explicitly on overload. Native parity includes the
+  full LSP race suite and its cancellation/ID-reuse fixtures.
 - Compiler-owned standard-library completion, public sibling-module types,
   import hints, source replacement ranges, documentation, and automatic import
   insertion/extension when a completion is accepted.
@@ -159,6 +163,8 @@ without a corresponding test.
 - [x] Route current LSP and agent queries through the shared engine. Keep the
   existing bounded temporary-project path as a compatibility fallback during
   rollout (`TESL_COMPILER_SESSION=0`), with no competing semantic rules.
+- [x] Support active/queued LSP request cancellation, reject late results, and
+  bound pending message count/bytes without silently losing document changes.
 
 Exit: incremental results match a fresh compile of the same complete snapshot
 after edit/save/close/import-change sequences. Unrelated files remain cached;

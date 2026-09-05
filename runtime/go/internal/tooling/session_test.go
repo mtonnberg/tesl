@@ -91,6 +91,76 @@ func sessionProject(t testing.TB) (string, string) {
 	return root, filepath.Join(root, "main.tesl")
 }
 
+func TestBuiltCompilerWorkspaceInstalledStdlibDiscovery(t *testing.T) {
+	client := sessionTestClient(t)
+	repo := filepath.Clean(filepath.Join(filepath.Dir(client.Executable), "../../../.."))
+	prefix := filepath.Join(t.TempDir(), "installed å toolchain")
+	installed := filepath.Join(prefix, "bin", "tesl-compiler")
+	if runtime.GOOS == "windows" {
+		installed += ".exe"
+	}
+	stdlib := filepath.Join(prefix, "share", "tesl", "stdlib")
+	if err := os.MkdirAll(filepath.Dir(installed), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(stdlib, 0700); err != nil {
+		t.Fatal(err)
+	}
+	copyFile := func(from, to string, mode os.FileMode) {
+		t.Helper()
+		data, err := os.ReadFile(from)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(to, data, mode); err != nil {
+			t.Fatal(err)
+		}
+	}
+	copyFile(client.Executable, installed, 0755)
+	paths, err := filepath.Glob(filepath.Join(repo, "tesl", "*.tesl"))
+	if err != nil || len(paths) == 0 {
+		t.Fatalf("missing bundled stdlib: %v", err)
+	}
+	for _, path := range paths {
+		copyFile(path, filepath.Join(stdlib, filepath.Base(path)), 0600)
+	}
+	client.Executable = installed
+	client.Environment = withoutEnvironment(withoutEnvironment(client.Environment, "TESL_STDLIB_DIR"), "TESL_REPO_ROOT")
+	root, entry := sessionProject(t)
+	client.Directory = root
+	source := "module Main exposing [leap]\nimport Tesl.Prelude exposing [Int, Bool]\nimport Tesl.CivilTime exposing [CivilTime.isLeapYear]\nfn leap(year: Int) -> Bool = CivilTime.isLeapYear year\n"
+	check := func(client Client, wantOK bool) {
+		t.Helper()
+		payload, result, err := client.QuerySourceJSON(context.Background(), "--agent-context-json", entry, source)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var response struct {
+			OK bool `json:"ok"`
+		}
+		if json.Unmarshal(payload, &response) != nil || response.OK != wantOK || (result.ExitCode == 0) != wantOK {
+			t.Fatalf("installed stdlib ok=%v, exit=%d: %s", wantOK, result.ExitCode, payload)
+		}
+	}
+	fresh := client
+	fresh.Sessions = nil
+	check(fresh, true)
+	check(client, true)
+	// Explicit override wins over resources adjacent to the executable. It must
+	// not fall back to the working checkout when the selected library is absent.
+	empty := t.TempDir()
+	client.Environment = withEnvironment(client.Environment, "TESL_STDLIB_DIR", empty)
+	check(client, false)
+	// Resolve the actual compiler location, not a symlink's unrelated directory.
+	link := filepath.Join(t.TempDir(), filepath.Base(installed))
+	if err := os.Symlink(installed, link); err == nil {
+		fresh.Executable = link
+		check(fresh, true)
+	} else if runtime.GOOS != "windows" {
+		t.Fatal(err)
+	}
+}
+
 const sessionSource = "module Main exposing [twice]\nimport Tesl.Prelude exposing [Int]\nimport Helper exposing [number]\nfn twice() -> Int = number() * 2\n"
 const sessionHelperSource = "module Helper exposing [number]\nimport Tesl.Prelude exposing [Int]\nfn number() -> Int = 4\n"
 
@@ -351,7 +421,7 @@ func TestWorkspaceSessionProtocolFailures(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			_, entry := sessionProject(t)
 			client := Client{Executable: os.Args[0], Sessions: NewWorkspaceSessions(), Timeout: 1500 * time.Millisecond, Environment: withEnvironment(os.Environ(), "TESL_SESSION_TEST_HELPER", mode)}
-			defer client.Close()
+			defer func() { _ = client.Close() }()
 			start := time.Now()
 			if _, _, err := client.QuerySourceJSON(context.Background(), "--check-json", entry, "module Main exposing []\n"); err == nil {
 				t.Fatal("invalid session result accepted")
@@ -428,6 +498,15 @@ func TestWorkspaceSessionConcurrentSnapshots(t *testing.T) {
 }
 
 func TestWorkspaceFrameBounds(t *testing.T) {
+	for _, limit := range []int{-1, DefaultCompilerOutput + 1} {
+		if _, err := readWorkspaceFrame(bytes.NewReader([]byte{0, 0, 0, 0}), limit); err == nil {
+			t.Fatalf("accepted invalid frame limit %d", limit)
+		}
+	}
+	var rejected bytes.Buffer
+	if err := writeWorkspaceFrame(&rejected, make([]byte, DefaultCompilerOutput+1)); err == nil || rejected.Len() != 0 {
+		t.Fatal("oversized outgoing frame wrote bytes")
+	}
 	for _, payload := range [][]byte{nil, {0}, {0, 0, 0, 4, 'a'}, {255, 255, 255, 255}} {
 		if _, err := readWorkspaceFrame(bytes.NewReader(payload), 16); err == nil {
 			t.Fatalf("accepted %v", payload)
@@ -443,6 +522,25 @@ func TestWorkspaceFrameBounds(t *testing.T) {
 	}
 	if _, err := readWorkspaceFrame(&buf, 16); !errors.Is(err, io.EOF) {
 		t.Fatal(err)
+	}
+}
+
+type shortWorkspaceWriter struct{ calls, shortAt int }
+
+func (writer *shortWorkspaceWriter) Write(data []byte) (int, error) {
+	writer.calls++
+	if writer.calls == writer.shortAt {
+		return len(data) - 1, nil
+	}
+	return len(data), nil
+}
+
+func TestWorkspaceFrameRefusesShortWrites(t *testing.T) {
+	for _, call := range []int{1, 2} {
+		writer := &shortWorkspaceWriter{shortAt: call}
+		if err := writeWorkspaceFrame(writer, []byte("body")); !errors.Is(err, io.ErrShortWrite) {
+			t.Fatalf("short write %d accepted: %v", call, err)
+		}
 	}
 }
 

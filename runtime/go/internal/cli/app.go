@@ -45,7 +45,7 @@ func execute(ctx context.Context, invocation Invocation) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	command := exec.CommandContext(ctx, invocation.Executable, invocation.Args...)
+	command := exec.CommandContext(ctx, invocation.Executable, invocation.Args...) // #nosec G204 -- selected local tool, with literal argv; no shell interpretation.
 	command.Dir, command.Env = invocation.Directory, invocation.Environment
 	command.Stdin, command.Stdout, command.Stderr = invocation.Stdin, invocation.Stdout, invocation.Stderr
 	// Managed PostgreSQL has an explicit start/stop lifecycle independent of this
@@ -191,10 +191,12 @@ func (app *App) Run(ctx context.Context, args []string) error {
 			}
 		} else {
 			for _, component := range report.Components {
+				value := component.Path
 				if component.Error != "" {
-					fmt.Fprintf(app.Stdout, "%s: %s\n", component.Name, component.Error)
-				} else {
-					fmt.Fprintf(app.Stdout, "%s: %s\n", component.Name, component.Path)
+					value = component.Error
+				}
+				if _, err := fmt.Fprintf(app.Stdout, "%s: %s\n", component.Name, value); err != nil {
+					return err
 				}
 			}
 		}
@@ -208,17 +210,20 @@ func (app *App) Run(ctx context.Context, args []string) error {
 		if version == "" {
 			version = "dev"
 		}
-		fmt.Fprintln(app.Stdout, "tesl", version)
+		if _, err := fmt.Fprintln(app.Stdout, "tesl", version); err != nil {
+			return err
+		}
 		if compiler, err := app.Resolver.Resolve("compiler"); err == nil {
-			fmt.Fprintln(app.Stdout, "compiler:", compiler)
+			_, err = fmt.Fprintln(app.Stdout, "compiler:", compiler)
+			return err
 		}
 		return nil
 	case "help", "--help", "-h":
 		if len(rest) > 0 {
 			return app.compiler(ctx, append([]string{"--help"}, rest...)...)
 		}
-		fmt.Fprintln(app.Stdout, "Tesl\n\n  init, check, compile, emit go, run, watch, test, mutate, build\n  db start|stop|status, clean, lint, fmt, fmt-check, validate\n  doc, explain, generate, agent-context, debug-inspect, debug-attach\n  doctor [--json], version\n\nUse tesl help <topic> for compiler and language documentation.")
-		return nil
+		_, err := fmt.Fprintln(app.Stdout, "Tesl\n\n  init, check, compile, emit go, run, watch, test, mutate, build\n  db start|stop|status, clean, lint, fmt, fmt-check, validate\n  doc, explain, generate, agent-context, debug-inspect, debug-attach\n  doctor [--json], version\n\nUse tesl help <topic> for compiler and language documentation.")
+		return err
 	case "check", "lint", "fmt", "format", "fmt-check", "validate":
 		files, err := app.files(rest)
 		if err != nil {
@@ -288,7 +293,7 @@ func (app *App) Run(ctx context.Context, args []string) error {
 		return app.compiler(ctx, append([]string{"--" + verb}, rest...)...)
 	case "clean":
 		if len(rest) == 1 && (rest[0] == "--help" || rest[0] == "-h") {
-			fmt.Fprintln(app.Stdout, "Usage: tesl clean (remove generated build output; preserve database and project data)")
+			_, _ = fmt.Fprintln(app.Stdout, "Usage: tesl clean (remove generated build output; preserve database and project data)")
 			return nil
 		}
 		if len(rest) != 0 {
@@ -395,7 +400,7 @@ func (app *App) executeSource(ctx context.Context, file string, args []string, d
 	if err != nil {
 		return err
 	}
-	defer os.RemoveAll(temp)
+	defer func() { _ = os.RemoveAll(temp) }()
 	out := filepath.Join(temp, "go")
 	emitArgs := []string{file, "--out", out}
 	if debug {

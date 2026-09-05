@@ -409,9 +409,38 @@ and waits for I/O to finish. A crash fails the active request; the next request
 reconstructs the compiler from the current complete mirror. Responses with a
 wrong revision, unsupported version, missing payload, or invalid query schema
 are rejected. The LSP cancels outstanding diagnostics and closes the session on
-exit/EOF; MCP closes it on EOF. This does not yet add asynchronous LSP request
-cancellation, cross-file semantic identity, or transaction-safe workspace rename.
+exit/EOF; MCP closes it on EOF. Cross-file semantic identity and transaction-safe
+workspace rename remain separate work.
 
 Regression tests: `compiler/test/test_workspace_session.ml`,
 `runtime/go/internal/tooling/session_test.go`, and the real-compiler completion
 fixtures in `runtime/go/internal/lsp/completion_test.go`.
+
+### LSP request cancellation and queue ownership
+
+The Go LSP reads `$/cancelRequest` while a query is running. Request handlers and
+document notifications still execute in arrival order under one owner; reading
+a later edit does not mutate an earlier query's source snapshot. Cancellation
+reaches active compiler queries and prevents canceled queued queries from starting.
+Detected client cancellation returns one `RequestCancelled` (-32800) response,
+including when a compiler races with cancellation and returns a successful result.
+Such a response contains no completion, import, formatting or rename edits.
+This follows the [LSP cancellation contract](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#cancelRequest).
+
+Request IDs are 32-bit integers or strings. Integer `1` and string `"1"` are
+distinct; escaped spellings of the same string share identity. Unknown, malformed,
+or late cancellation notifications are ignored. A completed ID may be reused
+without inheriting its predecessor's cancellation. A duplicate outstanding ID
+terminates the connection with an explicit protocol error.
+
+The reader permits 64 queued messages and at most 16 MiB of pending message bodies,
+including the active message. Each frame retains the protocol's 8 MiB bound.
+Exceeding either queue bound cancels owned work and terminates with an explicit
+error; it never silently drops a document change. Cancellation notifications
+bypass the queue. `Run` owns its input for the session; blocking inputs must support
+`Close` (as stdio does) so exit or parent-context cancellation releases the reader.
+Ordinary EOF drains preceding messages before closing the compiler session.
+
+Regression fixtures in `runtime/go/internal/lsp/requests_test.go` cover active and
+queued cancellation, late successful results, string/integer identities, ID reuse,
+document ordering, limits, concurrent response claims and input cleanup.
