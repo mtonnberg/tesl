@@ -684,6 +684,7 @@ viewJourney model =
                         2 ->
                             [ p [] [ text "An invoice can belong to another customer. Add the check that invoiceLabel requires before it will accept this value." ]
                             , diagram [ ( "Invoice + customer", "A valid invoice identifier does not establish that it belongs to the requested customer." ), ( "checkCustomer", "This function compares the customer and returns evidence tied to these values. Its implementation still needs correct logic and tests." ), ( "invoiceLabel", "The function requires that evidence. A caller passing an unchecked invoice is rejected by the compiler." ) ]
+                            , details [] [ summary [] [ text "What does this save me reviewing?" ], p [] [ text "Review whether checkCustomer establishes the right rule and whether invoiceLabel requires it. The compiler checks that each caller supplies evidence for this invoice and customer, including new callers written by an AI agent. You still review changed business behavior and test the check itself." ] ]
                             ]
                         4 ->
                             [ p [] [ text "publishNote declares read access, but its helper writes. Give the caller the write capability its helper requires." ]
@@ -774,8 +775,8 @@ viewWelcome model =
         [ button [ id "welcome-close", class "welcome-close", onClick ToggleWelcome, attribute "aria-label" "Close introduction", title "Hide introduction" ] [ span [ attribute "aria-hidden" "true" ] [ text "×" ] ]
         , div [ class "welcome-copy" ]
             [ p [ class "eyebrow" ] [ text "Get to know Tesl" ]
-            , h2 [ id "welcome-title" ] [ text "There’s a small API here with your name on it" ]
-            , p [] [ text "Start by changing the greeting in this server, or follow the guide to see how Tesl helps with the details as your application grows." ]
+            , h2 [ id "welcome-title" ] [ text "Keep building as your codebase grows" ]
+            , p [] [ text "Explore a language for backend APIs with a helpful compiler beside you. Start with this small server, then see how Tesl keeps checking your rules as you and your AI agents change the code." ]
             , p [ class "why-link" ] [ a [ href "why.html", target "_blank", rel "noopener" ] [ text "Why Tesl? Explore what makes it different →" ] ]
             , btn "journey-start" "Explore with a guide" OpenJourney
             , button [ class "welcome-dismiss", onClick ToggleWelcome, attribute "aria-label" "Hide getting started" ] [ text "Hide introduction" ]
