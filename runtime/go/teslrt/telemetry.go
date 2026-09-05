@@ -321,7 +321,10 @@ func recordMetricLocked(name string, kind MetricKind, value float64,
 	}
 	key := seriesKey(name, kind, attributes)
 	series, found := telemetry.series[key]
-	if !found && len(telemetry.series) >= maxMetricSeriesTotal {
+	// Reserve one entry for the shared overflow series. Without that reservation,
+	// the first sample beyond the budget would create an additional entry and the
+	// purported process-wide cap would actually be maxMetricSeriesTotal+1.
+	if !found && len(telemetry.series) >= maxMetricSeriesTotal-1 {
 		// Do not retain the caller's name after the process-wide budget is exhausted.
 		name = metricOverflowName
 		attributes = metricOverflowAttributes
