@@ -20,7 +20,7 @@ fn saveNote(id: String, body: String) -> Note
   requires [dbWrite Note] =
   insert Note { id: id, body: body }
 
-# Try changing dbRead to dbWrite here; follow the requirement up the call chain.
+# Give this caller the same write capability as saveNote.
 fn publishNote(id: String, body: String) -> Note
   requires [dbRead Note] =
   saveNote id body

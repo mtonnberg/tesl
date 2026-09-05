@@ -345,8 +345,8 @@ test('discreet introduction controls, installation, reasons and community help a
   const whyPopup = page.waitForEvent('popup');
   await page.locator('.why-link a').click();
   const why = await whyPopup;
-  await expect(why.getByRole('heading', { name: 'Make a missing check a compiler error' })).toBeVisible();
-  await expect(why.getByRole('heading', { name: 'Build on the Go runtime' })).toBeVisible();
+  await expect(why.getByRole('heading', { name: 'Focus review on the rules that matter' })).toBeVisible();
+  await expect(why.getByRole('heading', { name: 'Deploy Go with familiar hosting tools' })).toBeVisible();
   await why.close();
   await expect(page.locator('#src')).toHaveValue(source);
   await page.locator('#welcome-close').click();
@@ -500,7 +500,7 @@ test('guide links respect shared source and malformed or unavailable progress st
 });
 
 
-test('every exercise has an applicable edit and all six stars survive immediate next navigation', async ({ page }) => {
+test('the original six exercises have applicable edits and preserve stars across immediate navigation', async ({ page }) => {
   await page.goto('/');
   const original = await page.locator('#src').inputValue();
   await page.locator('#journey-start').click();
@@ -766,7 +766,7 @@ test('SQL adventure checks queries, missing rows and evidence while preserving d
   const steps = [
     { id: 12, module: 'SqlFields', error: 'customerId', title: 'Query declared fields' },
     { id: 13, module: 'SqlResults', error: 'non-exhaustive case', title: 'Handle a missing row' },
-    { id: 14, module: 'SqlEvidence', error: 'database evidence matching the requested id', title: 'Keep the requested row' }
+    { id: 14, module: 'SqlEvidence', error: 'does not carry the required database evidence', title: 'Keep the requested row' }
   ];
   let repairedQuery;
   for (const step of steps) {
@@ -792,7 +792,7 @@ test('SQL adventure checks queries, missing rows and evidence while preserving d
   await page.goto('/?guide=sql-results');
   await expect(page.locator('#journey-title')).toHaveText('Handle a missing row');
   await page.goto('/?guide=sql-evidence');
-  await expect(page.locator('.diagnostic-guide')).toHaveText('This row needs database evidence matching the requested id.');
+  await expect(page.locator('.diagnostic-guide')).toHaveText('This row does not carry the required database evidence.');
   await page.setViewportSize({ width: 375, height: 812 });
   await page.locator('#journey-title').scrollIntoViewIfNeeded();
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(375);

@@ -449,7 +449,7 @@ diagnosticSummary diagnostic =
         in
         "Missing capability: declare [" ++ capabilities ++ "] in the requires clause."
     else if diagnostic.code == "V001" && String.contains "does not statically satisfy declared proof `FromDb" diagnostic.message then
-        "This row needs database evidence matching the requested id."
+        "This row does not carry the required database evidence."
     else if diagnostic.code == "V001" && String.contains "does not statically satisfy declared proof" diagnostic.message then
         "This value needs a check before it can be used here."
     else
