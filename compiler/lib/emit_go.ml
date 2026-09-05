@@ -2386,22 +2386,7 @@ let entity_column loc (info : entity_info) field =
 
 (* A field key becomes its column name the way `camel->snake` does it, acronyms included:
    `userID` is `user_id`, not `user_i_d`. *)
-let camel_to_snake text =
-  let buffer = Buffer.create (String.length text + 4) in
-  let length = String.length text in
-  String.iteri (fun index char ->
-    let upper = char >= 'A' && char <= 'Z' in
-    if upper && index > 0 then begin
-      let previous = text.[index - 1] in
-      let previous_lower =
-        (previous >= 'a' && previous <= 'z') || (previous >= '0' && previous <= '9') in
-      let previous_upper = previous >= 'A' && previous <= 'Z' in
-      let next_lower =
-        index + 1 < length && text.[index + 1] >= 'a' && text.[index + 1] <= 'z' in
-      if previous_lower || (previous_upper && next_lower) then Buffer.add_char buffer '_'
-    end;
-    Buffer.add_char buffer (Char.lowercase_ascii char)) text;
-  Buffer.contents buffer
+let camel_to_snake = Validation_common.sql_column_name
 
 (* An identifier is quoted with its embedded quotes doubled, which is a quoted SQL identifier's
    only escape.  Identifiers here come from the PROGRAM — an entity's declared table, a field's

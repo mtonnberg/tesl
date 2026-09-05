@@ -693,6 +693,41 @@ main() -> App requires [dbRead Note] = App { database: Db, api: NotesServer, por
       try ignore (Str.search_forward (Str.regexp_string "must be imported directly") d.message 0); true
       with Not_found -> false) (Compile.check_source entry missing)))
 
+let physical_storage_names () = with_project (fun _root write ->
+  let app = write "app.tesl" {|module App exposing [Db]
+import Tesl.Database exposing [Database, Memory]
+import NotesSchema.VCurrent exposing []
+database Db = Database { schema: NotesSchema.VCurrent, migrations: NotesSchema.Migrate, backend: Memory }
+|} in
+  let schema table fields =
+    "module NotesSchema.VCurrent exposing []\nimport Tesl.Prelude exposing [String]\n"
+    ^ "entity Note table \"" ^ table ^ "\" primaryKey id { id: String\n" ^ fields ^ "\n}\n" in
+  List.iter (fun (label, table, fields, expected) ->
+    let path = write "schema/notes/v-current.tesl" (schema table fields) in
+    List.iter (fun entry ->
+      let errors = Compile.check_file entry |> List.filter (fun (d : Compile.diagnostic) -> d.severity = "error") in
+      match expected with
+      | None -> if errors <> [] then failf "%s: %s" label (Compile.diagnostics_to_json errors)
+      | Some fragment -> check bool label true
+          (List.exists (fun (d : Compile.diagnostic) ->
+            try ignore (Str.search_forward (Str.regexp_string fragment) d.message 0); true
+            with Not_found -> false) errors)) [path; app];
+    match expected, Compile.compile_go_file app with
+    | None, Compile.GoSuccess _ | Some _, Compile.GoFailure _ -> ()
+    | None, Compile.GoFailure diagnostics -> failf "%s did not emit: %s" label (Compile.diagnostics_to_json diagnostics)
+    | Some _, Compile.GoSuccess _ -> failf "%s emitted ambiguous storage" label) [
+    "63-byte table", String.make 63 'a', "", None;
+    "63-byte unicode table", String.concat "" (List.init 31 (fun _ -> "é")) ^ "a", "", None;
+    "64-byte table truncation", String.make 64 'a', "", Some "cannot preserve exactly";
+    "64-byte unicode table truncation", String.concat "" (List.init 32 (fun _ -> "é")), "", Some "cannot preserve exactly";
+    "NUL table", "notes\000other", "", Some "cannot preserve exactly";
+    "acronym alias", "notes", "userID: String\nuserId: String", Some "same SQL column `user_id`";
+    "underscore alias", "notes", "userId: String\nuser_id: String", Some "same SQL column `user_id`";
+    "distinct acronyms", "notes", "userID: String\nhttpURL: String", None;
+    "63-byte mapped column", "notes", String.make 61 'a' ^ "B: String", None;
+    "64-byte mapped column", "notes", String.make 62 'a' ^ "B: String", Some "overlong SQL column";
+  ])
+
 let source_rewrite () =
   let rewrite before after source =
     match Migration_source.rewrite_version ~family:"NotesSchema" ~before ~after source with
@@ -823,6 +858,7 @@ let () = run "migration-imports" ["source layout", [
   test_case "module references compile private tables without exposing names" `Quick module_reference_compilation;
   test_case "module configuration and legacy entity visibility" `Quick module_reference_configuration;
   test_case "module ownership through source, project and main entrypoints" `Quick module_reference_entrypoints;
+  test_case "physical storage names cannot truncate or alias" `Quick physical_storage_names;
   test_case "frozen-copy rewrite preserves source bytes and literal text" `Quick source_rewrite;
   test_case "freeze previews the whole closure and preserves existing history" `Quick freeze_closure;
   test_case "freeze rejects content, missing sources and path escapes" `Quick freeze_boundaries;

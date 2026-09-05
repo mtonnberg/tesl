@@ -1021,6 +1021,21 @@ let check_entity_structure ?facts ?(extra_funcs=[]) (decls : top_decl list) : va
       if e.table = "" then
         add "add a table name: `entity Foo table \"my_table\" ...`"
           (Printf.sprintf "entity `%s` has an empty table name" e.name);
+      if String.length e.table > 63 || String.contains e.table '\000' then
+        add "use a table name of at most 63 bytes without NUL characters"
+          (Printf.sprintf "entity `%s` has a table name PostgreSQL cannot preserve exactly" e.name);
+      let columns = Hashtbl.create 8 in
+      List.iter (fun (f : field_def) ->
+        let column = sql_column_name f.name in
+        if String.length column > 63 then
+          add "shorten the field name so its SQL column name is at most 63 bytes"
+            (Printf.sprintf "field `%s.%s` maps to an overlong SQL column name `%s`" e.name f.name column);
+        match Hashtbl.find_opt columns column with
+        | Some previous when previous <> f.name ->
+          add "rename one field so the SQL column names remain distinct"
+            (Printf.sprintf "fields `%s.%s` and `%s.%s` map to the same SQL column `%s`"
+               e.name previous e.name f.name column)
+        | _ -> Hashtbl.replace columns column f.name) e.fields;
       let field_names = List.map (fun (f : field_def) -> f.name) e.fields in
       if e.primary_key <> "" && not (List.mem e.primary_key field_names) then
         add (Printf.sprintf

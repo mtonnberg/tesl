@@ -11,6 +11,25 @@
 open Ast
 open Location
 
+(** PostgreSQL field naming is shared by validation and emission. Acronyms form
+    one word: userID and userId both map to user_id and therefore cannot coexist. *)
+let sql_column_name text =
+  let buffer = Buffer.create (String.length text + 4) in
+  let length = String.length text in
+  String.iteri (fun index char ->
+    let upper = char >= 'A' && char <= 'Z' in
+    if upper && index > 0 then begin
+      let previous = text.[index - 1] in
+      let previous_lower =
+        (previous >= 'a' && previous <= 'z') || (previous >= '0' && previous <= '9') in
+      let previous_upper = previous >= 'A' && previous <= 'Z' in
+      let next_lower =
+        index + 1 < length && text.[index + 1] >= 'a' && text.[index + 1] <= 'z' in
+      if previous_lower || (previous_upper && next_lower) then Buffer.add_char buffer '_'
+    end;
+    Buffer.add_char buffer (Char.lowercase_ascii char)) text;
+  Buffer.contents buffer
+
 (* ── Validation error ────────────────────────────────────────────────────── *)
 
 type validation_error = {

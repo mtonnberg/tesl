@@ -3,7 +3,10 @@
 # developer's application database or modifies a shared cluster's login roles.
 set -euo pipefail
 repo_root="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)"
-for tool in initdb pg_ctl go; do
+required_tools=(initdb pg_ctl go)
+if [[ ${TESL_MIGRATION_TEST_POOLERS:-0} == 1 ]]; then required_tools+=(pgbouncer); fi
+if [[ ${TESL_MIGRATION_TEST_CLUSTER_CRASH:-0} == 1 ]]; then required_tools+=(pg_basebackup); fi
+for tool in "${required_tools[@]}"; do
   command -v "$tool" >/dev/null || { echo "migration tests require $tool (nix develop)" >&2; exit 1; }
 done
 migration_tmp="$(mktemp -d "${TMPDIR:-/tmp}/tesl-migration.XXXXXXXX")"
