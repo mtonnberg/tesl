@@ -42,7 +42,7 @@ func (compiler *requestCompiler) answer(ctx context.Context, flag, source string
 		return []byte("formatted"), tooling.Result{}, nil
 	default:
 		value, err := json.Marshal(map[string]any{"version": 1, "type_at": map[string]any{
-			"type": source, "file": "/tmp/module.tesl", "line": 0, "col": 0, "end_line": 0, "end_col": 1,
+			"type": source, "file": testFilePath("module.tesl"), "line": 0, "col": 0, "end_line": 0, "end_col": 1,
 		}})
 		return value, tooling.Result{}, err
 	}

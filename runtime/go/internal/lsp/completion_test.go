@@ -46,9 +46,9 @@ func completionFixture(t *testing.T, source string, item map[string]any) (*Serve
 	}
 	compiler := &fakeCompiler{responses: map[string][]byte{"--completions-json": payload}}
 	server := NewServer(compiler)
-	server.documents["file:///tmp/demo.tesl"] = document{URI: "file:///tmp/demo.tesl", Path: "/tmp/demo.tesl", Text: source, Version: 7}
+	server.documents[testFileURI("demo.tesl")] = document{URI: testFileURI("demo.tesl"), Path: testFilePath("demo.tesl"), Text: source, Version: 7}
 	return server, completionResponseFor(t, server, "textDocument/completion", map[string]any{
-		"textDocument": map[string]string{"uri": "file:///tmp/demo.tesl"}, "position": protocol.Position{},
+		"textDocument": map[string]string{"uri": testFileURI("demo.tesl")}, "position": protocol.Position{},
 	})
 }
 
@@ -154,9 +154,9 @@ func TestCompletionResolveRejectsChangedAndClosedBuffers(t *testing.T) {
 			server, response := completionFixture(t, "String.le", map[string]any{"label": "String.length", "detail": "String -> Int", "kind": "function", "sort_text": "2:String.length"})
 			item := completionItemFor(t, response)
 			if closed {
-				delete(server.documents, "file:///tmp/demo.tesl")
+				delete(server.documents, testFileURI("demo.tesl"))
 			} else {
-				doc := server.documents["file:///tmp/demo.tesl"]
+				doc := server.documents[testFileURI("demo.tesl")]
 				doc.Version++
 				server.documents[doc.URI] = doc
 			}
@@ -187,7 +187,7 @@ func TestCompletionResolveRejectsChangedDependencySnapshots(t *testing.T) {
 			item := completionItemFor(t, response)
 			switch change {
 			case "overlay":
-				server.documents["file:///tmp/types.tesl"] = document{URI: "file:///tmp/types.tesl", Path: "/tmp/types.tesl", Text: "module Types exposing []", Version: 1}
+				server.documents[testFileURI("types.tesl")] = document{URI: testFileURI("types.tesl"), Path: testFilePath("types.tesl"), Text: "module Types exposing []", Version: 1}
 			case "disk-notification":
 				server.fileChangeVersion++
 			case "invalid-handle":

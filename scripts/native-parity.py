@@ -18,6 +18,20 @@ def run(arguments, directory, environment, capture=False):
     return completed.stdout.strip() if capture else None
 
 
+def run_checks(checks, environment):
+    """Report every independent suite failure, then fail the overall gate."""
+    failures = []
+    for name, arguments, directory in checks:
+        print(f"Native check: {name}", flush=True)
+        try:
+            run(arguments, directory, environment)
+        except (subprocess.CalledProcessError, OSError) as error:
+            print(f"FAILED {name}: {error}", flush=True)
+            failures.append(name)
+    if failures:
+        raise SystemExit("Native portability failed: " + ", ".join(failures))
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--plan", type=Path, required=True)
@@ -49,16 +63,22 @@ def main():
     environment["TESL_PROCESS_RUNNER"] = str(cli)
     targets = ["bin/main.exe", "test/test_completion.exe", "test/test_import_cache.exe", "test/test_workspace_session.exe", "test/test_process_runner.exe", "test/test_diagnostics.exe", "test/test_stdlib_docs.exe"]
     run(["opam", "exec", "--", "dune", "build", *targets], root / "compiler", environment)
-    for target in targets[1:]:
-        run(["opam", "exec", "--", "dune", "exec", target], root / "compiler", environment)
-    run(["go", "build", "./cmd/..."], root / "runtime/go", environment)
-    run(["go", "test", "-race", "./internal/childprocess", "./internal/toolchain",
-         "./internal/protocol", "./internal/cli"], root / "runtime/go", environment)
-    run(["go", "test", "-race", "./internal/lsp"], root / "runtime/go", environment)
-    run(["go", "test", "-race", "./internal/tooling", "-run", "TestCompilerPipesDrainAndCloseWithDescendants|Workspace"], root / "runtime/go", environment)
+    checks = [(target, ["opam", "exec", "--", "dune", "exec", target], root / "compiler")
+              for target in targets[1:]]
+    checks.extend([
+        ("Go commands", ["go", "build", "./cmd/..."], root / "runtime/go"),
+        ("Go CLI and process ownership", ["go", "test", "-race", "./internal/childprocess",
+         "./internal/toolchain", "./internal/protocol", "./internal/cli"], root / "runtime/go"),
+        ("Go LSP", ["go", "test", "-race", "./internal/lsp"], root / "runtime/go"),
+        ("Go compiler sessions", ["go", "test", "-race", "./internal/tooling", "-run",
+         "TestCompilerPipesDrainAndCloseWithDescendants|Workspace"], root / "runtime/go"),
+    ])
     if args.target.startswith("windows-"):
-        run(["go", "test", "./teslrt", "-run", "TestWindowsDebugToken"], root / "runtime/go", environment)
-    run(["node", "--test", "toolchain.test.js", "test-output-parser.test.js"], root / "editor/vscode-tesl", environment)
+        checks.append(("Windows debug token", ["go", "test", "./teslrt", "-run",
+                       "TestWindowsDebugToken"], root / "runtime/go"))
+    checks.append(("Editor", ["node", "--test", "toolchain.test.js", "test-output-parser.test.js"],
+                   root / "editor/vscode-tesl"))
+    run_checks(checks, environment)
     evidence = root / "artifacts" / ("native-" + args.target)
     evidence.mkdir(parents=True, exist_ok=True)
     (evidence / "checks.json").write_text(json.dumps({
