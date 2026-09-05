@@ -599,3 +599,7 @@ a.path-card { text-decoration: none; }
 .journey-options p { line-height: 1.6; }
 #journey-progress { margin-bottom: .3rem; padding: .6rem 0; }
 #journey-next.text-button { font-size: .8rem; color: var(--muted); }
+
+.testing-run { margin: 1rem 0; padding: .65rem .8rem; background: var(--panel); border-left: 2px solid var(--accent); font-size: .82rem; }
+.testing-run p { margin: 0 0 .6rem; }
+.testing-run code { overflow-wrap: anywhere; }

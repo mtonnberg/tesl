@@ -7,6 +7,7 @@ source operations, the current revision before it can affect the interface.
 
 import Browser
 import Dict exposing (Dict)
+import Guide exposing (chapters, exerciseIds, stepExample, repairFor, chapterSteps, stepTitle, nextJourneyStep)
 import Html exposing (..)
 import Html.Attributes exposing (..)
 import Html.Events exposing (on, onClick, onInput)
@@ -26,7 +27,7 @@ type alias Highlight =
     { from : Int, to : Int }
 
 type alias Flags =
-    { source : String, examples : List Example, defaultExample : Int, theme : String, query : String, linkedQuery : Bool, shared : Bool, introHidden : Bool, journeyDone : List Int, guideStep : Maybe Int, highlight : Maybe Highlight, identity : String }
+    { source : String, examples : List Example, defaultExample : Int, theme : String, query : String, linkedQuery : Bool, shared : Bool, introHidden : Bool, journeyDone : List Int, guideKey : Maybe String, highlight : Maybe Highlight, identity : String }
 
 type alias Position =
     { line : Int, col : Int }
@@ -126,13 +127,17 @@ search model =
 init : Flags -> ( Model, Cmd Msg )
 init flags =
     let
+        guide = flags.guideKey |> Maybe.andThen Guide.findByKey
+        guideStep = Maybe.map .id guide
+        exampleIndex = guide |> Maybe.map .example |> Maybe.withDefault flags.defaultExample
+        source = if guide == Nothing then flags.source else List.drop exampleIndex flags.examples |> List.head |> Maybe.map .src |> Maybe.withDefault flags.source
         initial =
-            { source = flags.source, revision = 0, nextId = 1, pending = Dict.empty
-            , examples = flags.examples, example = if flags.shared then "" else String.fromInt flags.defaultExample, theme = flags.theme, landing = not flags.shared && not flags.introHidden && flags.guideStep == Nothing, highlight = flags.highlight
+            { source = source, revision = 0, nextId = 1, pending = Dict.empty
+            , examples = flags.examples, example = if flags.shared then "" else String.fromInt exampleIndex, theme = flags.theme, landing = not flags.shared && not flags.introHidden && guideStep == Nothing, highlight = flags.highlight
             , diagnostics = [], artifacts = [], activeTab = "ts", explanations = Dict.empty
             , checkStatus = "Loading the compiler…", checkFailed = False, timing = "", bridgeError = ""
             , query = flags.query, searchOpen = flags.linkedQuery, searchStatus = "", searchFailed = False, searchResult = Nothing
-            , journey = flags.guideStep, journeyLast = Maybe.withDefault 0 flags.guideStep, journeyPaused = False, journeyDrafts = Dict.empty, journeyNext = Nothing, journeyDone = flags.journeyDone, journeyOriginal = Nothing
+            , journey = guideStep, journeyLast = Maybe.withDefault 0 guideStep, journeyPaused = False, journeyDrafts = Dict.empty, journeyNext = Nothing, journeyDone = List.filter (\id -> List.member id exerciseIds) flags.journeyDone, journeyOriginal = Nothing
             , shareStatus = "Copy share link", copyValue = "", identity = flags.identity, editorMode = False, editorStatus = "", learning = Nothing, goFile = ""
             }
         ( checked, command ) =
@@ -255,32 +260,15 @@ receive reply model =
 -- programs or runtime behavior. Keep the requirement and its caller intact.
 compactSource : String -> String
 compactSource source =
-    String.lines source |> List.filter (\line -> not (String.startsWith "#" (String.trim line)) && not (String.startsWith "import " (String.trim line))) |> String.join "" |> String.words |> String.join ""
+    let
+        relevant line =
+            let trimmed = String.trim line in
+            String.startsWith "#>" trimmed || String.startsWith "#=" trimmed || (not (String.startsWith "#" trimmed) && not (String.startsWith "import " trimmed))
+    in
+    String.lines source |> List.filter relevant |> String.join "" |> String.words |> String.join ""
 
 exampleSource : Int -> Model -> String
 exampleSource index model = List.drop index model.examples |> List.head |> Maybe.map .src |> Maybe.withDefault ""
-
-stepExample : Int -> Int
-stepExample step =
-    case step of
-        0 -> 4
-        1 -> 2
-        2 -> 1
-        4 -> 5
-        5 -> 6
-        6 -> 7
-        _ -> 4
-
-repairFor : Int -> { before : String, after : String, why : String }
-repairFor step =
-    case step of
-        0 -> { before = "Hello from Tesl!", after = "Hello from my API!", why = "Change the greeting returned by hello. Try your own message, or apply this example edit." }
-        1 -> { before = "import Tesl.Prelude exposing [Int, String]", after = "import Tesl.Prelude exposing [Int, String]\nimport Tesl.String exposing [String.length]", why = "Bring String.length into scope with an import. The compiler also offers this fix in its diagnostic." }
-        2 -> { before = "  invoiceLabel raw workspace", after = "  let invoice = check checkWorkspace raw workspace\n  invoiceLabel invoice workspace", why = "Check the workspace before calling invoiceLabel. The returned value carries the evidence that function requires." }
-        4 -> { before = "  requires [dbRead Note]", after = "  requires [dbWrite Note]", why = "publishNote calls a helper that writes. Declare dbWrite Note on the caller too." }
-        5 -> { before = "  Money.add price shipping", after = "  let checked = check Money.requireSameCurrency price shipping\n  Money.add price checked", why = "Check that both amounts carry the same currency, then pass the checked amount to Money.add." }
-        6 -> { before = "  speed + elapsed", after = "  speed * elapsed", why = "Speed multiplied by time gives distance. Replace addition with multiplication." }
-        _ -> { before = "", after = "", why = "" }
 
 repairApplicable : Int -> String -> Bool
 repairApplicable step source =
@@ -323,31 +311,14 @@ journeyProgress diagnostics model =
             Just 4 -> List.any (\caps -> matches 5 "requires [dbRead Note]" ("requires [" ++ caps ++ "]")) ["dbWrite Note", "dbRead Note, dbWrite Note", "dbWrite Note, dbRead Note"]
             Just 5 -> matches 6 "Money.add price shipping" ("let " ++ binding "checked" ++ " = check Money.requireSameCurrency price shipping\n  Money.add price " ++ binding "checked")
             Just 6 -> matches 7 "speed + elapsed" "speed * elapsed"
-            _ -> False)
+            Just step ->
+                if Guide.testCommand step /= Nothing then
+                    let repair = repairFor step in matches (stepExample step) repair.before repair.after
+                else False
+            Nothing -> False)
         done = if earned then Maybe.map (\step -> if List.member step model.journeyDone then model.journeyDone else step :: model.journeyDone) activity |> Maybe.withDefault model.journeyDone else model.journeyDone
     in
     { model | journeyDone = done }
-
-chapterSteps : Int -> List Int
-chapterSteps step =
-    if List.member step [0,1] then [0,1]
-    else if List.member step [2,4] then [2,4]
-    else if List.member step [5,6] then [5,6]
-    else [3]
-
-nextJourneyStep : Int -> Int
-nextJourneyStep step =
-    case step of
-        0 -> 1
-        1 -> 2
-        2 -> 4
-        4 -> 5
-        5 -> 6
-        _ -> 3
-
-stepTitle : Int -> String
-stepTitle step =
-    List.drop step [ "Your first endpoint", "A helpful compiler", "Keep a workspace rule", "Take it with you", "Follow a capability", "Keep currencies apart", "Check your dimensions" ] |> List.head |> Maybe.withDefault ""
 
 update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
@@ -383,7 +354,7 @@ update msg model =
                 Just step -> enterJourneyStep step { model | journey = Nothing, journeyDrafts = Dict.remove step model.journeyDrafts }
         ProgressChanged raw ->
             case D.decodeValue (D.list D.int) raw of
-                Ok steps -> ( { model | journeyDone = List.filter (\step -> List.member step steps) [0,1,2,4,5,6] }, Cmd.none )
+                Ok steps -> ( { model | journeyDone = List.filter (\step -> List.member step steps) exerciseIds }, Cmd.none )
                 Err _ -> ( model, Cmd.none )
         ResetJourney -> ( { model | journeyDone = [] }, uiEffect "journey-reset" E.null )
         CloseJourney restore ->
@@ -582,6 +553,8 @@ runtimeDeclarations source =
         lines = String.lines source |> List.map String.trimLeft
         declares prefix = List.any (String.startsWith (prefix ++ " ")) lines
     in
+    if List.any (\line -> String.startsWith "api-test " line || String.startsWith "load-test " line) lines && not (List.any (String.startsWith "main(") lines) then ""
+    else
     [ ( "server", "a server" ), ( "api", "an API" ), ( "handler", "HTTP handlers" ), ( "queue", "queue workers" ), ( "worker", "queue workers" ), ( "channel", "an SSE channel" ), ( "sseChannel", "an SSE channel" ) ]
         |> List.filter (Tuple.first >> declares) |> List.map Tuple.second |> String.join ", "
 
@@ -698,6 +671,26 @@ viewJourney model =
                             [ p [] [ text "How far did you travel? Multiply speed by elapsed time; the compiler checks that the result is a length." ]
                             , diagram [ ( "Speed", "Speed has the dimension length divided by time. Unit constructors convert to the standard internal representation." ), ( "× Duration", "Multiplying by time cancels the time dimension. The compiler checks this relationship in the expression." ), ( "Length", "The result matches the declared return type. The dimension checks happen at compile time." ) ]
                             ]
+                        7 ->
+                            [ p [] [ text "Use an ordinary test when you know the input and expected result. Add a lower-boundary case beside the existing in-range example." ]
+                            , diagram [ ( "Input: −3", "Choose a concrete edge case, not only a typical input." ), ( "clamp", "The same function used by the application is called by the test." ), ( "Expect 0", "The assertion is evaluated when tesl test runs locally. Type-checking alone does not prove it passes." ) ]
+                            ]
+                        11 ->
+                            [ p [] [ text "Keep runnable examples beside the function they explain. Add a zero case to double’s documentation; tesl test checks that each example produces its expected result." ]
+                            , diagram [ ( "#> double 0", "A #> line above a function gives an expression for the test runner to evaluate." ), ( "#= 0", "The following #= line gives the expected result. Together these two documentation lines form a doctest." ), ( "Run with tests", "tesl test runs doctests alongside ordinary tests, so an outdated documentation example can fail the test run." ) ]
+                            ]
+                        8 ->
+                            [ p [] [ text "Fuzz / property tests explore generated inputs. Tesl expresses them as property blocks inside a test with a run count. Add the rule that clamping twice gives the same result." ]
+                            , diagram [ ( "Generated Int", "The test runner generates integer inputs for n. You can also use filters or custom generators." ), ( "Apply a property", "Idempotence means repeating the operation changes nothing: clamp (clamp n) equals clamp n." ), ( "100 runs", "A passing sample increases confidence; it is not a proof about every possible input." ) ]
+                            ]
+                        9 ->
+                            [ p [] [ text "API tests exercise routing and HTTP responses through a local harness. Add a request for an unknown route and check that it returns 404." ]
+                            , diagram [ ( "GET /missing", "The test harness sends a request to GreetingServer. No deployed server is needed." ), ( "Route dispatch", "API tests exercise the request/response boundary, beyond a direct function call." ), ( "Expect 404", "Assertions can inspect response status and body; larger examples can also seed database state." ) ]
+                            ]
+                        10 ->
+                            [ p [] [ text "Load tests ask how the service behaves under a steady workload. Add a p95 latency budget alongside the error-rate check." ]
+                            , diagram [ ( "10 requests/s", "The load harness schedules a steady arrival rate while earlier requests may still be running." ), ( "Measure locally", "Warm-up happens before the measurement window and can take up to 30 seconds. These are in-process measurements, not a production capacity estimate." ), ( "p95 < 500 ms", "At least 95% of measured latencies must be below the budget. Choose realistic budgets for your own application." ) ]
+                            ]
                         _ ->
                             [ p [] [ text "Run this greeting server on your computer and send a request to /hello. The run guide walks you through it." ]
                             , diagram [ ( "Save .tesl", "Download the source currently in your editor." ), ( "tesl run", "The installed CLI builds and starts the application using the Go runtime." ), ( "GET /hello", "Send an HTTP request to your local server to see the greeting. Browser compiler checks alone do not verify a running server." ) ]
@@ -708,7 +701,7 @@ viewJourney model =
             aside [ id "journey", class "journey-card", tabindex -1, attribute "aria-label" "Guided introduction" ]
                 [ div [ class "journey-heading" ] [ p [ class "eyebrow" ] [ text "Explore with a guide" ], btn "journey-close" "Keep editing" (CloseJourney False) ]
                 , label [ class "chapter-picker" ] [ text "Chapter ", select [ id "journey-chapter", onInput (String.toInt >> Maybe.withDefault 0 >> JourneyStep), value (String.fromInt (List.head steps |> Maybe.withDefault 0)) ]
-                    (List.map (\( index, name ) -> option [ value (String.fromInt index), selected (List.member step (chapterSteps index)) ] [ text (name ++ (if index == 3 then "" else " · ★ " ++ String.fromInt (List.length (List.filter (\n -> List.member n model.journeyDone) (chapterSteps index))) ++ "/2")) ]) [ (0,"Your first API"), (2,"Rules that travel with your code"), (5,"Money and measurements"), (3,"Run it locally") ]) ]
+                    (List.map (\( index, name ) -> option [ value (String.fromInt index), selected (List.member step (chapterSteps index)) ] [ text (name ++ (if index == 3 then "" else " · ★ " ++ String.fromInt (List.length (List.filter (\n -> List.member n model.journeyDone) (chapterSteps index))) ++ "/" ++ String.fromInt (List.length (chapterSteps index)))) ]) chapters) ]
                 , p [ class "steps-heading", id "steps-heading" ] [ text "Steps" ]
                 , nav [ class "journey-stops", attribute "aria-labelledby" "steps-heading" ]
                     (List.indexedMap (\ordinal index -> button [ onClick (JourneyStep index), attribute "aria-current" (if index == step then "step" else "false"), attribute "aria-label" (stepTitle index ++ (if List.member index model.journeyDone then " — checked" else "")) ] [ span [ class "stop-number" ] [ text (if List.member index model.journeyDone then "★" else String.fromInt (ordinal + 1)) ], text (stepTitle index) ]) steps)
@@ -719,16 +712,22 @@ viewJourney model =
                             repair = repairFor step
                         in
                         [ details [ class "journey-repair", id ("repair-" ++ String.fromInt step) ]
-                            [ summary [] [ text (if step == 0 then "Need a starting point?" else "Show the repair") ]
+                            [ summary [] [ text (if Guide.testCommand step /= Nothing then "Preview the test edit" else if step == 0 then "Need a starting point?" else "Show the repair") ]
                             , p [] [ text repair.why ]
                             , pre [] [ code [] [ text repair.after ] ]
                             ]
                         ]))
-                , p [ id "journey-progress", attribute "role" "status" ] [ text (if completed then "★ Step completed" else (if step == 3 then String.fromInt (List.length model.journeyDone) ++ " of 6 steps completed" else if Dict.member "check" model.pending then "Checking your edit…" else "Try the edit below, or make your own change, to earn a star.")) ]
+                , p [ id "journey-progress", attribute "role" "status" ] [ text (if completed then (if Guide.testCommand step /= Nothing then "★ Test added and compiler-checked · run it locally below" else "★ Step completed") else (if step == 3 then String.fromInt (List.length model.journeyDone) ++ " of " ++ String.fromInt (List.length exerciseIds) ++ " steps completed" else if Dict.member "check" model.pending then "Checking your edit…" else "Try the edit below, or make your own change, to earn a star.")) ]
                 , div [ class "next-actions" ]
                     [ if step /= 3 && repairApplicable step model.source then button [ class "btn build-cta", id "journey-apply", onClick ApplyJourneyRepair ] [ text "Try this edit" ] else text ""
                     , if step /= 3 then button [ id "journey-next", class (if completed then "btn build-cta" else "text-button"), onClick (JourneyStep (nextJourneyStep step)) ] [ text (if not completed then "Continue without a star →" else if List.reverse steps |> List.head |> (==) (Just step) then "Next chapter →" else "Next step →") ] else btn "journey-share" "Copy share link" Share
                     ]
+                , case Guide.testCommand step of
+                    Nothing -> text ""
+                    Just command -> aside [ class "testing-run" ]
+                        [ p [] [ text "The browser checks test code; it does not run these tests." ]
+                        , div [ class "next-actions" ] [ btn "journey-download" "Save this source" Download, code [] [ text command ] ]
+                        ]
                 , details [ class "journey-options" ]
                     [ summary [] [ text "Guide options" ]
                     , p [] [ text "Steps open with their examples. Your edits to each step stay here during this visit. Each finished edit earns one star; skipping does not. Stars are saved in this browser when storage is available." ]

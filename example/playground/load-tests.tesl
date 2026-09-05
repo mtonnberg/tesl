@@ -1,0 +1,19 @@
+module LoadTests exposing [GreetingServer]
+
+import Tesl.Prelude exposing [String]
+import Tesl.Database exposing [Database, Memory]
+
+database Local = Database { entities: [], backend: Memory }
+
+handler get hello() -> String = "Hello from Tesl!"
+api GreetingApi { get "/hello" -> String }
+server GreetingServer for GreetingApi { hello }
+
+# This exercises the local test harness, not a remote production service.
+load-test "greeting under a small steady load" for GreetingServer
+  rate 10rps
+  duration 1s {
+  get "/hello"
+  assert errorRate < 0.01
+  # Add a latency budget here.
+}

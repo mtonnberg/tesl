@@ -27,9 +27,11 @@ try {
       assert.ok(retargeted.diagnostics.some(d => d.code === 'V001'), 'Workspace evidence must not transfer to a different workspace');
       assert.deepEqual(retargeted.go_files, []);
     }
-    if (repairs[example.file]) {
-      const repaired = source.replace(...repairs[example.file]);
-      const repairedPath = path.join(temporary, example.file);
+    const repair = repairs[example.file] || example.repair;
+    if (repair) {
+      const repaired = source.replace(...repair);
+      const repairedPath = path.join(temporary, 'repaired', example.file);
+      fs.mkdirSync(path.dirname(repairedPath), { recursive: true });
       fs.writeFileSync(repairedPath, repaired);
       const context = spawnSync(compiler, ['agent-context', repairedPath], { env, encoding: 'utf8' });
       assert.equal(context.status, 0, context.stdout + context.stderr);

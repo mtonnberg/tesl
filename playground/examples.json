@@ -52,5 +52,55 @@
       "T001",
       "T001"
     ]
+  },
+  {
+    "file": "regular-tests.tesl",
+    "name": "Write an example test",
+    "errors": [],
+    "repair": [
+      "# Add a test for the lower boundary here.",
+      "test \"below zero becomes zero\" {\n  expect clamp -3 == 0\n}"
+    ],
+    "run_tests": true
+  },
+  {
+    "file": "property-tests.tesl",
+    "name": "Fuzz inputs with a property test",
+    "errors": [],
+    "repair": [
+      "# Add a property for clamping twice here.",
+      "test \"clamping twice changes nothing\" with 100 runs {\n  property \"idempotent\" (n: Int) { clamp (clamp n) == clamp n }\n}"
+    ],
+    "run_tests": true
+  },
+  {
+    "file": "api-tests.tesl",
+    "name": "Test an HTTP route",
+    "errors": [],
+    "repair": [
+      "# Add a test for an unknown route here.",
+      "api-test \"unknown route returns 404\" for GreetingServer {\n  let response = get \"/missing\"\n  expect response.status == 404\n}"
+    ],
+    "run_tests": true
+  },
+  {
+    "file": "load-tests.tesl",
+    "name": "Check a load-test budget",
+    "errors": [],
+    "repair": [
+      "  # Add a latency budget here.",
+      "  assert p95 < 500ms"
+    ],
+    "run_tests": true
+  },
+  {
+    "file": "doc-tests.tesl",
+    "name": "Test the examples in your documentation",
+    "errors": [],
+    "repair": [
+      "# Add an example for zero here.",
+      "#> double 0\n#= 0"
+    ],
+    "run_tests": true
   }
 ]

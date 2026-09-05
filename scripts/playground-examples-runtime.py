@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Exercise the official starter through the real CLI (requires Go and sockets)."""
 import os
+import json
+import re
 from pathlib import Path
 import signal
 import socket
@@ -49,3 +51,20 @@ with tempfile.TemporaryDirectory(prefix="tesl-playground-runtime-") as directory
             except subprocess.TimeoutExpired:
                 os.killpg(server.pid, signal.SIGKILL)
                 server.wait()
+
+# Exercise both the displayed test examples and their suggested additions.
+# These run in the local Go test harness, including a small bounded load test.
+with tempfile.TemporaryDirectory(prefix="tesl-playground-test-chapter-") as directory:
+    for example in json.loads((repo / "playground/examples.json").read_text()):
+        if not example.get("run_tests"):
+            continue
+        source = (repo / "example/playground" / example["file"]).read_text()
+        for variant, text in [("starter", source), ("exercise", source.replace(*example["repair"]))]:
+            work = Path(directory) / (example["file"] + "-" + variant)
+            work.mkdir()
+            module = re.search(r"^module (\w+)", text).group(1)
+            target = work / (module + ".tesl")
+            target.write_text(text)
+            subprocess.run([env["TESL_OCAML_COMPILER"], "agent-context", str(target)], env=env, check=True, timeout=30)
+            subprocess.run(cli + ["test", target.name], cwd=work, env=env, check=True, timeout=120)
+            print(f"PASS testing chapter: {example['file']} ({variant})", flush=True)

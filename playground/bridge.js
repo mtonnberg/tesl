@@ -92,11 +92,19 @@ function substantive(kind, text) {
   if (!["system", "light", "dark"].includes(theme)) theme = "system";
   const linkedQuery = new URL(location.href).searchParams.get("q");
   const progressKey = "tesl-playground-stars-v1";
-  const exerciseIds = [0, 1, 2, 4, 5, 6];
   const starPrefix = "tesl-playground-star-v2:";
   const progressFormat = "tesl-playground-progress-format";
-  const validStars = value => Array.isArray(value) ? exerciseIds.filter(id => value.includes(id)) : [];
+  const validStars = value => Array.isArray(value) ? [...new Set(value.filter(id => Number.isSafeInteger(id) && id >= 0))].sort((a,b) => a-b) : [];
+  const readStoredStars = () => {
+    const ids = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key?.startsWith(starPrefix) && /^\d+$/.test(key.slice(starPrefix.length)) && localStorage.getItem(key) === "1") ids.push(Number(key.slice(starPrefix.length)));
+    }
+    return validStars(ids);
+  };
   let journeyDone = [];
+  let progressStorageAvailable = true;
   try { journeyDone = validStars(JSON.parse(localStorage.getItem(progressKey))); } catch (_) {}
   try {
     // One key per earned star prevents tabs from replacing each other's awards.
@@ -105,30 +113,22 @@ function substantive(kind, text) {
       journeyDone.forEach(id => localStorage.setItem(starPrefix + id, "1"));
       localStorage.setItem(progressFormat, "2");
     }
-    journeyDone = exerciseIds.filter(id => localStorage.getItem(starPrefix + id) === "1");
-  } catch (_) { /* unavailable storage: keep the session's progress */ }
-  const guideLinks = {
-    api: [0, "hello-server"], compiler: [1, "missing-import"],
-    workspace: [2, "workspace-invoice-unchecked"], capabilities: [4, "capability-chain"],
-    money: [5, "money-check"], dimensions: [6, "units-check"], runtime: [3, "hello-server"]
-  };
-  const guide = shared ? null : guideLinks[new URL(location.href).searchParams.get("guide")];
-  const guideExample = guide ? TESL_EXAMPLES.findIndex(example => example.id === guide[1]) : -1;
-  const initialExample = guideExample >= 0 ? guideExample : TESL_DEFAULT_EXAMPLE;
+    journeyDone = readStoredStars();
+  } catch (_) { progressStorageAvailable = false; }
   const identity = window.TESL_BUILD;
   const app = Elm.Main.init({ node: byId("app"), flags: {
-    source: shared ? shared.text : TESL_EXAMPLES[initialExample].src, examples: TESL_EXAMPLES, defaultExample: initialExample,
-    theme, introHidden, journeyDone, guideStep: guideExample >= 0 ? guide[0] : null, query: linkedQuery || "", linkedQuery: linkedQuery !== null, shared: shared !== null,
+    source: shared ? shared.text : TESL_EXAMPLES[TESL_DEFAULT_EXAMPLE].src, examples: TESL_EXAMPLES, defaultExample: TESL_DEFAULT_EXAMPLE,
+    theme, introHidden, journeyDone, guideKey: shared ? null : new URL(location.href).searchParams.get("guide"), query: linkedQuery || "", linkedQuery: linkedQuery !== null, shared: shared !== null,
     highlight: shared?.highlightFrom ? { from: shared.highlightFrom, to: shared.highlightTo } : null,
     identity: identity ? `Source ${identity.source_revision.slice(0, 12)}${identity.source_dirty ? " + local changes" : ""} · catalog ${identity.catalog_id.slice(0, 12)}` : "Build identity unavailable"
   } });
   // Public port surface also lets the browser contract tests inject late replies.
   window.TeslPlayground = app;
   const syncProgress = () => {
-    try {
-      journeyDone = exerciseIds.filter(id => localStorage.getItem(starPrefix + id) === "1");
+    if (progressStorageAvailable) try {
+      journeyDone = readStoredStars();
       localStorage.setItem(progressKey, JSON.stringify(journeyDone));
-    } catch (_) {}
+    } catch (_) { progressStorageAvailable = false; }
     const snapshot = journeyDone.slice();
     queueMicrotask(() => app.ports.progress.send(snapshot));
   };
@@ -235,12 +235,12 @@ function substantive(kind, text) {
     if (operation === "journey-progress") {
       const earned = validStars(payload);
       journeyDone = validStars([...journeyDone, ...earned]);
-      try { earned.forEach(id => localStorage.setItem(starPrefix + id, "1")); } catch (_) {}
+      if (progressStorageAvailable) try { earned.forEach(id => localStorage.setItem(starPrefix + id, "1")); } catch (_) { progressStorageAvailable = false; }
       syncProgress();
     }
     if (operation === "journey-reset") {
       journeyDone = [];
-      try { exerciseIds.forEach(id => localStorage.removeItem(starPrefix + id)); } catch (_) {}
+      if (progressStorageAvailable) try { readStoredStars().forEach(id => localStorage.removeItem(starPrefix + id)); } catch (_) { progressStorageAvailable = false; }
       syncProgress();
     }
     if (operation === "welcome") {

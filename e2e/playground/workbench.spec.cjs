@@ -277,9 +277,9 @@ test('guided activities earn compiler-backed progress and restore the starting b
   await toolClick(page, '#journey-menu');
   await expect(page.locator('#src')).toHaveValue(/module HelloServer/);
   await expect(page.locator('#status')).toHaveText('All checks passed');
-  await expect(page.locator('#journey-progress')).toContainText('Finish the edit');
+  await expect(page.locator('#journey-progress')).toContainText('Try the edit below');
   await expect(page.locator('#status')).toHaveText('All checks passed');
-  await expect(page.locator('#journey-progress')).toContainText('Finish the edit');
+  await expect(page.locator('#journey-progress')).toContainText('Try the edit below');
   const server = await page.locator('#src').inputValue();
   await page.locator('#src').fill(server.replace('Hello from Tesl!', 'Hello from my first API!'));
   await expect(page.locator('#journey-progress')).toContainText('Step completed');
@@ -388,7 +388,7 @@ test('guide resumes the same step and original buffer after Keep editing', async
   await page.goto('/');
   const original = await page.locator('#src').inputValue();
   await page.locator('#journey-start').click();
-  await expect(page.locator('#journey-next')).toHaveText('Skip for now →');
+  await expect(page.locator('#journey-next')).toHaveText('Continue without a star →');
   await page.locator('#journey-chapter').selectOption('2');
   await expect(page.locator('#diags')).toContainText('V001');
   const exercise = await page.locator('#src').inputValue();
@@ -410,7 +410,7 @@ test('capabilities, money and dimensions earn persistent stars only for intact r
   // Removing the privileged caller is clean code, but does not solve the exercise.
   await page.locator('#src').fill(capability.split('# Try changing')[0].replace(', publishNote]', ']'));
   await expect(page.locator('#diags .error')).toHaveCount(0);
-  await expect(page.locator('#journey-progress')).toContainText('Finish the edit');
+  await expect(page.locator('#journey-progress')).toContainText('Try the edit below');
   await page.locator('#src').fill(capability.replace('requires [dbRead Note]', 'requires [dbWrite Note]'));
   await expect(page.locator('#journey-progress')).toContainText('Step completed');
   await page.locator('#journey-next').click();
@@ -430,9 +430,9 @@ test('capabilities, money and dimensions earn persistent stars only for intact r
   await expect(page.locator('#diags')).toContainText('T001'); // History is separate from current result.
   await page.locator('.journey-options > summary').click();
   await page.locator('#journey-reset').click();
-  await expect(page.locator('#journey-progress')).toContainText('Finish the edit');
+  await expect(page.locator('#journey-progress')).toContainText('Try the edit below');
   await page.reload();
-  await expect(page.locator('#journey-progress')).toContainText('Finish the edit');
+  await expect(page.locator('#journey-progress')).toContainText('Try the edit below');
 });
 
 test('diagram explanations work with keyboard and touch-sized layouts', async ({ page }) => {
@@ -459,10 +459,10 @@ test('diagram explanations work with keyboard and touch-sized layouts', async ({
 
 test('Why Tesl disclosures link every feature to the intended live exercise', async ({ page }) => {
   await page.goto('/why.html');
-  await expect(page.locator('.why-features > details')).toHaveCount(6);
+  await expect(page.locator('.why-features > details')).toHaveCount(7);
   const links = await page.locator('.feature-action a').evaluateAll(nodes => nodes.map(a => a.getAttribute('href')));
-  expect(links).toHaveLength(7);
-  const expected = { workspace: 'WorkspaceInvoiceUnchecked', capabilities: 'CapabilityChain', api: 'HelloServer', money: 'MoneyCheck', dimensions: 'UnitsCheck', runtime: 'HelloServer', compiler: 'MissingImport' };
+  expect(links).toHaveLength(8);
+  const expected = { workspace: 'WorkspaceInvoiceUnchecked', capabilities: 'CapabilityChain', api: 'HelloServer', money: 'MoneyCheck', dimensions: 'UnitsCheck', runtime: 'HelloServer', compiler: 'MissingImport', tests: 'RegularTests' };
   await page.locator('.why-features summary').nth(1).click();
   await expect(page.locator('.why-features details').nth(1).getByRole('link', { name: 'See it in action →' })).toBeVisible();
   await page.screenshot({ path: test.info().outputPath('why-chapters.png') });
@@ -471,7 +471,7 @@ test('Why Tesl disclosures link every feature to the intended live exercise', as
     await expect(page.locator('#journey')).toBeVisible();
     const key = new URL(page.url()).searchParams.get('guide');
     const selectedChapter = await page.locator('#journey-chapter').inputValue();
-    expect(selectedChapter).toBe(({workspace:'2',capabilities:'2',api:'0',money:'5',dimensions:'5',runtime:'3',compiler:'0'})[key]);
+    expect(selectedChapter).toBe(({workspace:'2',capabilities:'2',api:'0',money:'5',dimensions:'5',runtime:'3',compiler:'0',tests:'7'})[key]);
     await expect(page.locator('#examples option:checked')).not.toHaveText('Shared source');
     await expect(page.locator('#src')).toHaveValue(new RegExp('^module ' + expected[key]));
   }
@@ -480,7 +480,7 @@ test('Why Tesl disclosures link every feature to the intended live exercise', as
 test('guide links respect shared source and malformed or unavailable progress storage', async ({ page }) => {
   await page.addInitScript(() => localStorage.setItem('tesl-playground-stars-v1', '{bad json'));
   await page.goto('/?guide=workspace');
-  await expect(page.locator('#journey-progress')).toContainText('Finish the edit');
+  await expect(page.locator('#journey-progress')).toContainText('Try the edit below');
   await page.locator('#src').fill(valid);
   await page.locator('#share').click();
   await expect(page).toHaveURL(/#/);
@@ -512,8 +512,10 @@ test('every exercise has an applicable edit and all six stars survive immediate 
     await page.locator('#journey-next').click();
     await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('tesl-playground-stars-v1') || '[]'))).toContain(step);
   }
+  await expect(page.locator('#journey-title')).toHaveText('Example tests');
+  await page.locator('#journey-chapter').selectOption('3');
   await expect(page.locator('#journey-title')).toHaveText('Take it with you');
-  await expect(page.locator('#journey-progress')).toHaveText('6 of 6 steps completed');
+  await expect(page.locator('#journey-progress')).toHaveText('6 of 11 steps completed');
   await page.locator('.journey-options > summary').click();
   await expect(page.getByRole('link', {name: 'Suggest one in Discussions →'})).toHaveAttribute('href', 'https://github.com/mtonnberg/tesl/discussions');
   await page.locator('#journey-restore').click();
@@ -546,10 +548,10 @@ test('skipped steps remain incomplete and chapter navigation restores per-step e
   await page.locator('#src').fill(source + '# My work in progress\n');
   await page.locator('#journey-next').click();
   await expect(page.locator('#src')).toHaveValue(/module CapabilityChain/);
-  await expect(page.locator('#journey-progress')).toContainText('Finish the edit');
+  await expect(page.locator('#journey-progress')).toContainText('Try the edit below');
   await page.getByRole('button', { name: 'Keep a workspace rule', exact: true }).click();
   await expect(page.locator('#src')).toHaveValue(source + '# My work in progress\n');
-  await expect(page.locator('#journey-progress')).toContainText('Finish the edit');
+  await expect(page.locator('#journey-progress')).toContainText('Try the edit below');
   await page.locator('.journey-repair > summary').click();
   await page.screenshot({ path: test.info().outputPath('guide-repair-desktop.png') });
   await page.setViewportSize({width:375,height:812});
@@ -614,6 +616,12 @@ test('stars earned in different open tabs are retained together', async ({page, 
   await money.locator('#journey-apply').click();
   await expect(money.locator('#journey-progress')).toContainText('Step completed');
   await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('tesl-playground-stars-v1') || '[]').sort())).toEqual([0,5]);
+  await expect(page.locator('#journey-chapter option[value="5"]')).toHaveText(/★ 1\/2/);
+  await expect(money.locator('#journey-chapter option[value="0"]')).toHaveText(/★ 1\/2/);
+  await money.locator('.journey-options > summary').click();
+  await money.locator('#journey-reset').click();
+  await expect(page.locator('#journey-progress')).not.toContainText('Step completed');
+  await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('tesl-playground-stars-v1') || '[]'))).toEqual([]);
 });
 
 test('an edit checked just after Keep editing still earns its star', async ({page}) => {
@@ -633,4 +641,79 @@ test('a capability repair can keep read access as well as write access', async (
   await page.locator('#src').fill(source.replace('requires [dbRead Note]', 'requires [dbRead Note, dbWrite Note]'));
   await expect(page.locator('#status')).toHaveText('All checks passed');
   await expect(page.locator('#journey-progress')).toContainText('Step completed');
+});
+
+
+test('the visible primary action earns a star before Next step is offered', async ({page}) => {
+  await page.goto('/?guide=api');
+  await expect(page.locator('#status')).toHaveText('All checks passed');
+  await expect(page.getByRole('button', {name:'Try this edit',exact:true})).toBeVisible();
+  await expect(page.locator('.journey-repair')).not.toHaveAttribute('open', '');
+  await expect(page.locator('#journey-next')).toHaveText('Continue without a star →');
+  await page.locator('#journey-apply').click();
+  await expect(page.locator('#journey-progress')).toContainText('Step completed');
+  await expect(page.locator('#journey-next')).toHaveText('Next step →');
+  await page.locator('#journey-next').click();
+  await expect(page.getByRole('button', {name:'Try this edit',exact:true})).toBeVisible();
+  await page.locator('#journey-apply').click();
+  await expect(page.locator('#journey-chapter option[value="0"]')).toHaveText(/★ 2\/2/);
+  await page.screenshot({path: test.info().outputPath('first-chapter-two-stars.png')});
+});
+
+test('existing stars migrate and read-only storage still permits session progress', async ({page, context}) => {
+  await page.addInitScript(() => localStorage.setItem('tesl-playground-stars-v1', '[0,2,5,6]'));
+  await page.goto('/?guide=api');
+  await expect(page.locator('#journey-progress')).toContainText('Step completed');
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('tesl-playground-star-v2:0'))).toBe('1');
+  const isolated = await context.browser().newContext();
+  const temporary = await isolated.newPage();
+  await temporary.addInitScript(() => { Storage.prototype.setItem = () => { throw new Error('quota'); }; });
+  await temporary.goto(new URL('/?guide=compiler', page.url()).href);
+  await temporary.locator('#journey-apply').click();
+  await expect(temporary.locator('#journey-progress')).toContainText('Step completed');
+  await isolated.close();
+});
+
+
+test('testing chapter covers example, documentation, property, API and load tests with honest local execution guidance', async ({page}) => {
+  await page.goto('/?guide=tests');
+  const cases = [
+    ['RegularTests', 'test "below zero becomes zero"', 'Example tests'],
+    ['DocTests', '#> double 0\n#= 0', 'Documentation tests'],
+    ['PropertyTests', 'property "idempotent"', 'Fuzz / property tests'],
+    ['ApiTests', 'api-test "unknown route returns 404"', 'API tests'],
+    ['LoadTests', 'assert p95 < 500ms', 'Load tests']
+  ];
+  for (const [module, added, title] of cases) {
+    await expect(page.locator('#journey-title')).toHaveText(title);
+    await expect(page.locator('#src')).toHaveValue(new RegExp('^module ' + module));
+    await expect(page.locator('#status')).toHaveText('All checks passed');
+    await expect(page.locator('.testing-run')).toContainText('does not run these tests');
+    await expect(page.locator('.testing-run code')).toHaveText('tesl test ' + module + '.tesl');
+    await expect(page.locator('#runnote')).toBeHidden();
+    await expect(page.locator('#journey-progress')).not.toContainText('★');
+    await page.locator('#journey-apply').click();
+    await expect.poll(() => page.locator('#src').inputValue()).toContain(added);
+    await expect(page.locator('#journey-progress')).toHaveText('★ Test added and compiler-checked · run it locally below');
+    if (module === 'DocTests') await page.screenshot({path:test.info().outputPath('testing-chapter-doctests.png')});
+    if (module === 'LoadTests') await page.screenshot({path:test.info().outputPath('testing-chapter-load.png')});
+    await page.locator('#journey-next').click();
+  }
+  await expect(page.locator('#journey-title')).toHaveText('Take it with you');
+  await expect(page.locator('#journey-chapter option[value="7"]')).toHaveText('Testing your code · ★ 5/5');
+  await page.reload();
+  await page.locator('#journey-resume').click();
+  await expect(page.locator('#journey-chapter option[value="7"]')).toHaveText('Testing your code · ★ 5/5');
+});
+
+test('testing chapter deep links and mobile navigation resolve through the Elm catalog', async ({page}) => {
+  for (const [key, title] of [['tests','Example tests'], ['doctests','Documentation tests'], ['fuzz','Fuzz / property tests'], ['api-tests','API tests'], ['load-tests','Load tests']]) {
+    await page.goto('/?guide=' + key);
+    await expect(page.locator('#journey-title')).toHaveText(title);
+    await expect(page.locator('#journey-chapter')).toHaveValue('7');
+  }
+  await page.setViewportSize({width:375,height:812});
+  await page.locator('#journey-title').scrollIntoViewIfNeeded();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(375);
+  await page.screenshot({path:test.info().outputPath('testing-chapter-mobile.png')});
 });

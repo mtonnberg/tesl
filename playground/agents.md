@@ -8,10 +8,10 @@ check/auth/establish functions are trusted and need correct implementation and t
 
 The default example is the runnable Hello HTTP server. An optional guided
 introduction sits beside the editor, with compiler-checked activities for an
-endpoint edit, import repair, workspace validation, capability propagation, money
-and dimensions. Steps automatically load matching examples and retain per-step drafts in memory.
-Repair help includes Apply buttons. It preserves the starting buffer and step for
-Resume guide in the current session. Completion stars store only exercise IDs in localStorage
+endpoint edit, import repair, workspace validation, capability propagation, money,
+dimensions and five forms of testing. Steps automatically load matching examples and retain per-step drafts in memory.
+Each exercise offers a visible Try this edit action and an optional repair preview. It preserves the starting buffer and step for
+Resume guide in the current session. Completion stars synchronize across open tabs and store only exercise IDs in localStorage
 when available, with a Reset stars control. They recognize suggested edits and
 do not certify arbitrary programs or local execution from a click or download.
 
@@ -57,3 +57,14 @@ Use targeted position queries when needed. A clean compiler result does not mean
 tests were executed or a service was started. Report what you actually verified.
 
 Official source: https://github.com/mtonnberg/tesl
+
+
+## Testing chapter
+
+[Compare test types](index.html?guide=tests): regular example assertions,
+[executable documentation examples](index.html?guide=doctests), fuzz/property runs, API requests and load-test budgets. Tesl expresses fuzz-style
+checks as `property` blocks inside `test ... with N runs`, not a `fuzz-test` keyword.
+The browser only checks these declarations. Stars mean a suggested test addition
+was accepted by the compiler; use the displayed `tesl test` command to execute it.
+The examples and additions are verified with the real Go-backed CLI. Load tests
+exercise a small local harness and are not production-capacity measurements.

@@ -343,10 +343,10 @@ flag, and the note it renders on `lessons.html`.
 
 ## Explore with a guide
 
-Four optional chapters sit beside the editor: Your first API, Rules that travel
-with your code, Money and measurements, and Run it locally. The six exercises
-cover a greeting edit, an import fix, workspace evidence, a capability propagated
-through a helper, currency evidence and dimension arithmetic. Each diagram node
+Five optional chapters sit beside the editor: Your first API, Rules that travel
+with your code, Money and measurements, Testing your code, and Run it locally.
+Ten exercises cover greeting edits, imports, workspace evidence, capabilities,
+currencies, dimensions, regular tests, fuzz/property tests, API tests and load tests. Each diagram node
 has a hover explanation and a native disclosure usable by keyboard or touch.
 
 Entering or selecting a step loads its matching source automatically. A per-step
@@ -354,20 +354,24 @@ in-memory draft map preserves edits when revisiting steps. Keep editing hides th
 guide and preserves its step and starting-source snapshot; Resume guide remains
 in the feedback header. Guide options contains restart, original-source restore,
 reset stars and the Discussion link for suggesting guides. The forward control
-says Skip for now on unfinished exercises, then Next step or Next chapter.
+offers Try this edit directly on unfinished exercises, then Next step or Next
+chapter once complete. Continue without a star is a secondary text action.
 
-Each exercise has repair/starting-point help and an Apply this edit button. It
+Each exercise has a visible Try this edit button and optional repair preview. It
 replaces one matching span and rechecks the result, preserving surrounding edits;
 ambiguous or already changed source disables the action. Navigation waits for an
 outstanding fix/check so a finishing edit can earn its star before source changes.
 
 One star per exercise is earned from an accepted compiler check of the suggested
 edit, keeping the example's structure intact. Comments, formatting, imports and
-the local checked-value binding name may vary; deleting the required caller does
+the local checked-value binding name may vary; the capability exercise accepts
+read and write access together as well as write access alone; deleting the required caller does
 not solve an exercise.
 Stars are historical exercise completion, not certification of arbitrary rewrites,
-tests or runtime behavior. They persist under `tesl-playground-stars-v1` as a list
-of bounded exercise IDs; no source is stored. Reset stars clears the list.
+tests or runtime behavior. They persist as one `tesl-playground-star-v2:<id>` key per earned star, so
+separate tabs cannot replace each other’s awards. Existing v1 arrays migrate
+once; the v1 array remains a compatibility snapshot. Storage events synchronize
+open tabs, including Reset stars. No source is stored.
 Malformed or unavailable localStorage falls back to in-memory learning. The
 starting buffer and current step are held only for the current page session.
 
@@ -382,3 +386,17 @@ the guide. Unknown guide keys use the normal playground default.
 **Surprise me with one** opens a random, self-contained lesson in a separate tab;
 its pool is checked with the browser compiler at build time. The community help
 link points to GitHub Discussions. These pages do not replace the current buffer.
+
+
+The guide catalog lives in `elm/src/Guide.elm`: step order, chapter membership,
+example selection, deep-link keys, suggested edits and local test commands have
+one owner. The bridge passes a raw guide key to Elm and persists opaque progress
+IDs; it does not decide which chapters or exercises exist.
+
+The testing chapter uses `test`, documentation examples (`#>` / `#=`),
+`test ... with N runs` / `property`, `api-test`
+and `load-test`. Its stars mean the suggested tests were added and compiler-checked,
+not executed. Each step includes a `tesl test Module.tesl` command. The example
+runtime check runs all five starter files and their additions through the real
+CLI; load tests use a small local in-process workload. No remote scan or load is
+started by the playground.

@@ -140,19 +140,27 @@ the source, selected example and highlight captured when opening the guide, or
 leave with the edited source. This is a source snapshot,
 not a preserved undo history. Shared links never start the guide automatically.
 
-The four chapters contain six bounded exercises. Completion compares the accepted
-source with the suggested repair (ignoring comments, whitespace and import declarations, and allowing a different
+The five chapters contain eleven bounded exercises. `Guide.elm` is the catalog for
+step IDs, order, chapter membership, examples, deep-link keys, suggested edits and
+test commands. Elm owns deep-link resolution and validation of stored exercise IDs;
+JavaScript storage effects operate on opaque IDs. Completion compares the accepted
+source with the suggested repair (ignoring ordinary comments, whitespace and import declarations, and allowing a different
 name for the checked local value); the greeting
 exercise allows a changed greeting while preserving the surrounding source.
 Removing a required check or privileged caller does not earn a star. Accepted
 compiler replies must still match the current request and source revision.
 
-Completion IDs are saved through the UI port in `tesl-playground-stars-v1`.
-Only known exercise IDs are loaded, with duplicates removed; malformed or blocked
-storage falls back to memory. Reset stars clears the IDs. Historical stars are
-separate from current diagnostics. The original-source snapshot and last step
-remain in memory across Keep editing / Resume guide; restoring the original
-source ends that snapshot. No source or queries are persisted by this feature.
+Earned IDs are sent as deltas through the UI port. Browser effects save one
+`tesl-playground-star-v2:<id>` key per award to avoid whole-array lost updates
+across tabs. Existing v1 stars migrate once; the v1 array is kept as a compatibility
+snapshot. Storage events refresh the Elm model through a dedicated progress port.
+Reset removes the per-star keys and synchronizes every open tab. Storage failures
+(including readable but unwritable storage) retain session progress in memory.
+
+A check arriving after Keep editing still grades the paused exercise against the
+same accepted source revision. The capability repair may retain read access too.
+Historical stars remain separate from current diagnostics; source snapshots and
+per-step drafts remain in memory only.
 
 Native details/summary nodes provide diagram explanations by click, keyboard or
 touch, with title text for hover. Chapter navigation synchronizes source and prose. Pending checks/fixes complete
@@ -160,7 +168,8 @@ before a queued step change, so the outgoing revision can earn its star. Explici
 a source fragment takes precedence and suppresses automatic guide activation.
 Changing an example removes the launch-only guide query and closes the active
 guide to avoid mismatched prose. Repair buttons apply a single matching source
-span, then request a fresh compiler check. Unfinished steps say Skip for now;
+span, then request a fresh compiler check. Unfinished steps offer Try this edit as the primary action and Continue without
+a star as a secondary link;
 navigation alone earns no completion, and the local run chapter makes no installation/execution claim.
 
 ## Reasons, lessons and community
@@ -176,3 +185,7 @@ listed prerequisites, no known sibling import and no error from the built browse
 compiler. The source corpus is loaded only in the separate random-lesson page.
 It previews the selected lesson and avoids an immediate repeat when another is
 requested. The browser still does not execute lesson tests or programs.
+
+Doctest exercises retain `#>` and `#=` lines when comparing source edits for
+progress. Ordinary comments remain ignored; visiting an unchanged doctest
+example does not count as adding a test.
