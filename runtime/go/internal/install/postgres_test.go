@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -123,6 +124,17 @@ func TestNativePostgresRetainsInstalledVersionLease(t *testing.T) {
 	if postgresRoot == "" {
 		t.Skip("set TESL_TEST_POSTGRES_ROOT to a native PostgreSQL component")
 	}
+	if runtime.GOOS == "windows" {
+		// initdb drops Administrator-group privileges. Build staging ACLs
+		// need not permit that restricted token, so exercise a per-user copy
+		// just like the complete installed-workflow gate. Windows components
+		// are audited to contain no symlinks before reaching this test.
+		relocated := filepath.Join(t.TempDir(), "PostgreSQL å with spaces")
+		if err := os.CopyFS(relocated, os.DirFS(postgresRoot)); err != nil {
+			t.Fatal(err)
+		}
+		postgresRoot = relocated
+	}
 	m := testManager(t)
 	installFixture(t, m, "0.3.1")
 	data := filepath.Join(t.TempDir(), "database å with spaces")
@@ -139,7 +151,9 @@ func TestNativePostgresRetainsInstalledVersionLease(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 	tool := func(name string, args ...string) *exec.Cmd {
-		return exec.CommandContext(ctx, filepath.Join(postgresRoot, "bin", name+binarySuffix()), args...)
+		command := exec.CommandContext(ctx, filepath.Join(postgresRoot, "bin", name+binarySuffix()), args...)
+		command.Dir = filepath.Dir(data)
+		return command
 	}
 	if output, err := tool("initdb", "-D", data, "-A", "trust", "-U", "tesl", "--locale=C", "--no-sync").CombinedOutput(); err != nil {
 		t.Fatalf("initdb: %v\n%s", err, output)
@@ -150,6 +164,7 @@ func TestNativePostgresRetainsInstalledVersionLease(t *testing.T) {
 			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cleanupCancel()
 			command := exec.CommandContext(cleanupCtx, filepath.Join(postgresRoot, "bin", "pg_ctl"+binarySuffix()), "-D", data, "-m", "immediate", "-w", "stop")
+			command.Dir = filepath.Dir(data)
 			_, _ = command.CombinedOutput()
 		}
 	})
@@ -176,8 +191,17 @@ func TestNativePostgresRetainsInstalledVersionLease(t *testing.T) {
 		t.Fatalf("pg_ctl stop: %v\n%s", err, output)
 	}
 	stopped = true
-	if _, err := m.Uninstall(context.Background(), "0.3.1"); err != nil {
-		t.Fatalf("stopped postmaster left a stale lease: %v", err)
+	// pg_ctl -w acknowledges removal of postmaster.pid, which can precede
+	// final process/handle cleanup (including cmd.exe on Windows). Require
+	// eventual lease release, while still rejecting a permanently held lease.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, err := m.Uninstall(context.Background(), "0.3.1"); err == nil {
+			break
+		} else if !strings.Contains(err.Error(), "managed PostgreSQL") || time.Now().After(deadline) {
+			t.Fatalf("stopped postmaster left a stale lease: %v", err)
+		}
+		time.Sleep(25 * time.Millisecond)
 	}
 	if _, err := os.Stat(filepath.Join(data, "PG_VERSION")); err != nil {
 		t.Fatalf("uninstall removed project database: %v", err)
