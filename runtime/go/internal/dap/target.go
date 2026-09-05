@@ -5,14 +5,18 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"tesl.dev/runtime/go/internal/childprocess"
+	"tesl.dev/runtime/go/internal/toolchain"
 	"tesl.dev/runtime/go/teslrt"
 )
 
@@ -21,6 +25,7 @@ const targetConnectTimeout = 10 * time.Second
 type ProcessTarget struct {
 	mutex         sync.Mutex
 	command       *exec.Cmd
+	child         *childprocess.Child
 	waitDone      chan struct{}
 	processErr    error
 	cleanup       func()
@@ -198,13 +203,14 @@ func (target *ProcessTarget) LaunchBackend(data json.RawMessage) (DebugBackend, 
 		cleanup()
 		return nil, errors.New("capture debug program stderr: pipe is nil")
 	}
-	if err := command.Start(); err != nil {
+	child, err := childprocess.Start(command)
+	if err != nil {
 		cleanup()
 		return nil, fmt.Errorf("start debug program: %w", err)
 	}
 	waitDone := make(chan struct{})
 	go func() {
-		err := command.Wait()
+		err := child.Wait()
 		target.mutex.Lock()
 		target.processErr = err
 		close(waitDone)
@@ -214,6 +220,7 @@ func (target *ProcessTarget) LaunchBackend(data json.RawMessage) (DebugBackend, 
 	go target.streamOutput(stderr, "stderr")
 	target.mutex.Lock()
 	target.command = command
+	target.child = child
 	target.waitDone = waitDone
 	target.cleanup = cleanup
 	target.mutex.Unlock()
@@ -287,24 +294,25 @@ func dialProjectEndpoint(project string) (*ControlClient, error) {
 func (target *ProcessTarget) Close() error {
 	target.mutex.Lock()
 	client := target.client
-	command := target.command
+	child := target.child
 	waitDone := target.waitDone
 	cleanup := target.cleanup
 	target.client = nil
 	target.command = nil
+	target.child = nil
 	target.waitDone = nil
 	target.cleanup = nil
 	target.mutex.Unlock()
 	if client != nil {
 		client.Close()
 	}
-	if command == nil || command.Process == nil || command.ProcessState != nil {
+	if child == nil {
 		if cleanup != nil {
 			cleanup()
 		}
 		return nil
 	}
-	_ = command.Process.Kill()
+	child.Kill()
 	if waitDone != nil {
 		select {
 		case <-waitDone:
@@ -384,10 +392,11 @@ func (target *ProcessTarget) prepareProgram(arguments processLaunchArguments, cw
 
 	compiler := arguments.Compiler
 	if compiler == "" {
-		compiler = os.Getenv("TESL_COMPILER")
-	}
-	if compiler == "" {
-		compiler = "tesl"
+		resolved, err := toolchain.Default().Resolve("compiler")
+		if err != nil {
+			return fail(err)
+		}
+		compiler = resolved
 	}
 	emitCommand := exec.Command(compiler, "--backend", "go", arguments.Program, "--out", outDir, "--debug") // #nosec G204,G702 -- compiler is an explicit local tool.
 	emitCommand.Dir = cwd
@@ -399,7 +408,16 @@ func (target *ProcessTarget) prepareProgram(arguments processLaunchArguments, cw
 	if err != nil {
 		return fail(err)
 	}
-	buildCommand := exec.Command("go", buildArgs...) // #nosec G204 -- build arguments come from the generated local module.
+	resolver := toolchain.Default()
+	goTool, err := resolver.Resolve("go")
+	if err != nil {
+		return fail(err)
+	}
+	buildCommand := exec.Command(goTool, buildArgs...) // #nosec G204 -- selected local Go toolchain and generated module.
+	buildCommand.Env, err = resolver.GoEnvironment(os.Environ())
+	if err != nil {
+		return fail(err)
+	}
 	buildCommand.Dir = outDir
 	if output, err := buildCommand.CombinedOutput(); err != nil {
 		return fail(fmt.Errorf("build debug Go for %s: %w\n%s", arguments.Program, err, strings.TrimSpace(string(output))))
@@ -409,6 +427,9 @@ func (target *ProcessTarget) prepareProgram(arguments processLaunchArguments, cw
 
 func generatedGoBuild(outDir, mode string) (string, []string, error) {
 	binary := filepath.Join(outDir, "tesl-debug-target")
+	if runtime.GOOS == "windows" {
+		binary += ".exe"
+	}
 	if mode == "test" {
 		matches, err := filepath.Glob(filepath.Join(outDir, "internal", "*", "module_test.go"))
 		if err != nil {
@@ -422,9 +443,9 @@ func generatedGoBuild(outDir, mode string) (string, []string, error) {
 		if err != nil {
 			return "", nil, fmt.Errorf("resolve generated Go test package: %w", err)
 		}
-		return binary, []string{"test", "-c", "-o", binary, "./" + filepath.ToSlash(relative)}, nil
+		return binary, []string{"test", "-buildvcs=false", "-c", "-o", binary, "./" + filepath.ToSlash(relative)}, nil
 	}
-	return binary, []string{"build", "-o", binary, "./cmd/app"}, nil
+	return binary, []string{"build", "-buildvcs=false", "-o", binary, "./cmd/app"}, nil
 }
 
 func (target *ProcessTarget) notify(event TargetEvent) {
@@ -448,6 +469,19 @@ type launchEndpointSpec struct {
 // launcher mints the token itself and hands it to the child through
 // teslrt.DebugTokenEnv, so it can dial without waiting for the token file.
 func launchEndpoint(arguments processLaunchArguments, cwd string) (launchEndpointSpec, error) {
+	if runtime.GOOS == "windows" && arguments.DebugAddress == "" && arguments.DebugPort == 0 {
+		if arguments.DebugSocket != "" {
+			return launchEndpointSpec{}, errors.New("debugging on Windows uses authenticated loopback TCP; omit debugSocket")
+		}
+		listener, err := net.Listen("tcp4", "127.0.0.1:0")
+		if err != nil {
+			return launchEndpointSpec{}, err
+		}
+		arguments.DebugPort = listener.Addr().(*net.TCPAddr).Port
+		if err := listener.Close(); err != nil {
+			return launchEndpointSpec{}, err
+		}
+	}
 	if arguments.DebugAddress != "" || arguments.DebugPort > 0 {
 		if arguments.DebugAddress != "" && arguments.DebugPort > 0 {
 			return launchEndpointSpec{}, errors.New("launch cannot set both debugAddress and debugPort")

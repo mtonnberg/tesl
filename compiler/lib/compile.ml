@@ -3684,23 +3684,24 @@ let local_bindings_source filename source =
       let bindings, _ = Checker.check_module_with_local_bindings m in
       List.map local_binding_of_checker bindings
 
-type completion_item = {
-  ci_label  : string;
-  ci_detail : string;
-  ci_kind   : string;
-}
+type completion_item = Completion.item
 
 let completion_item_to_json (item : completion_item) : string =
-  Printf.sprintf {|{"label":%s,"detail":%s,"kind":%s}|}
+  Printf.sprintf {|{"label":%s,"detail":%s,"kind":%s,"module":%s,"documentation":%s,"requires_import":%b,"text_edit":%s,"import_edit":%s,"sort_text":%s}|}
     (json_encode_string item.ci_label)
     (json_encode_string item.ci_detail)
     (json_encode_string item.ci_kind)
+    (match item.ci_module with None -> "null" | Some s -> json_encode_string s)
+    (match item.ci_documentation with None -> "null" | Some s -> json_encode_string s)
+    item.ci_requires_import
+    (fix_to_json item.ci_edit) (fix_to_json item.ci_import_fix)
+    (json_encode_string item.ci_sort_text)
 
 let completions_response_to_json (items : completion_item list) : string =
   Printf.sprintf {|{"version":1,"completions":[%s]}|}
     (String.concat "," (List.map completion_item_to_json items))
 
-let completions_source filename source line col =
+let legacy_completions_source filename source line col =
   match parse_module filename source with
   | Err _ -> []
   | Ok m ->
@@ -3740,11 +3741,8 @@ let completions_source filename source line col =
            match List.assoc_opt name ctx1.Checker.records with
            | None -> []
            | Some rd ->
-             List.map (fun (fname, fty) -> {
-               ci_label  = fname;
-               ci_detail = Type_system.pp_ty fty;
-               ci_kind   = "field";
-             }) rd.Checker.rd_fields)
+             List.map (fun (fname, fty) ->
+               Completion.make ~kind:"field" fname (Type_system.pp_ty fty)) rd.Checker.rd_fields)
     end else begin
       let ctx0 = Checker.make_ctx ~filename ~env:(Type_system.make_stdlib_env ()) () in
       let ctx1 = Checker.collect_type_defs ctx0 m.decls in
@@ -3756,10 +3754,44 @@ let completions_source filename source line col =
             | Type_system.TFun _ -> "function"
             | _ -> "variable"
           in
-          Some { ci_label = name; ci_detail = Type_system.pp_ty sch.Type_system.mono; ci_kind = kind }
+          Some (Completion.make ~kind name (Type_system.pp_ty sch.Type_system.mono))
         else None
       ) ctx.Checker.env
     end
+
+let completions_source filename source line col =
+  match Completion.context source line col with
+  | None -> []
+  | Some context ->
+    let m, safe_imports, repaired = Completion.recovered_module filename source context in
+    if Option.fold ~none:false ~some:(fun m -> module_complexity_diagnostics m <> []) m
+    then [] else
+    let library = Completion.library_items source context m safe_imports in
+    let mode = Completion.mode context in
+    let locals = match m, mode with
+      | Some m, Completion.Types -> Completion.local_types context m
+          @ Completion.project_types source context m safe_imports
+      | Some m, Completion.Values -> Completion.local_types context m @ Completion.local_functions context m
+          @ Completion.project_types source context m safe_imports
+      | _ -> [] in
+    let field = String.contains context.prefix '.' &&
+      String.length context.prefix > 0 && context.prefix.[0] >= 'a' && context.prefix.[0] <= 'z' in
+    let base = if mode <> Completion.Values then [] else
+      let query_col = if field then
+          context.start_col + Option.get (String.rindex_opt context.prefix '.') + 1
+        else col in
+      legacy_completions_source filename repaired line query_col
+      |> List.filter (fun (item : completion_item) ->
+          (* Registered library symbols get metadata and import requirements
+             from the shared public surface, not the unconditional checker env. *)
+          field || not (List.mem_assoc item.ci_label Type_system.stdlib_env)) in
+    let context = if field then
+        let start_col = context.start_col + Option.get (String.rindex_opt context.prefix '.') + 1 in
+        { context with prefix = Completion.tail context.prefix; start_col }
+      else context in
+    let base = List.map (fun (item : completion_item) ->
+      { item with ci_edit = Some (Completion.edit context item.ci_label) }) base in
+    Completion.finish context (base @ (if field then [] else locals @ library))
 
 let completions_file filename line col =
   let source = In_channel.with_open_text filename In_channel.input_all in

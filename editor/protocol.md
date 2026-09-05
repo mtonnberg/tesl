@@ -257,14 +257,43 @@ The `--completions-json <file> <line> <col>` path returns a top-level object:
 }
 ```
 
-Two modes:
+Completion is prefix-filtered and deterministic. It supports record fields (including
+partial field names), standard-library modules and import exposing lists, type
+annotations, and general identifiers. Public library candidates include functions,
+types, constructors, facts, and capabilities; unavailable backend exports and
+configuration-only type names are excluded. Local declarations take precedence
+over library candidates with the same name.
 
-1. **After `.`** (field completion): when `char_at(line, col-1)` is `.`, returns all fields of the
-   inferred type of the expression before the dot. `kind` is `"field"`.
-2. **General** (identifier completion): returns all in-scope names (functions, local lets, stdlib,
-   imports). `kind` is `"function"` for function types, `"variable"` for everything else.
+Version 1 accepts these additive item fields (older three-field items remain valid):
 
-An empty array is returned when the file has parse errors or no completions are found.
+| Field | Shape and meaning |
+| --- | --- |
+| `module` | Nullable string: declaring library module; empty string for ambient names |
+| `documentation` | Nullable string: documentation for this candidate |
+| `requires_import` | Boolean: selecting this name needs an import |
+| `sort_text` | Nullable string: stable ordering, locals before imports before out-of-scope names |
+| `text_edit` | Nullable `replace_range` diagnostic-fix payload replacing the current identifier |
+| `import_edit` | Nullable `insert_line`, `replace_span`, or `replace_range` diagnostic-fix payload |
+
+Edits use original-buffer zero-based **UTF-8 byte columns**, carry a `title` as
+specified by the diagnostic-fix contract, and are applied together. The LSP
+converts them to UTF-16 `textEdit` and `additionalTextEdits`, preserves CRLF, and
+shows the originating module and an import-required hint. Accepting a type or
+function completion inserts or extends its import automatically. Existing whole
+module imports, explicit names, and `Type(..)` imports do not produce duplicates.
+
+Unfinished buffers retain discoverable library candidates through parser recovery;
+when the import structure cannot be parsed safely, `import_edit` is null. Comments,
+string literals, invalid positions, and unmatched prefixes return an empty list.
+The LSP refuses malformed/overlapping edits and returns `ContentModified` (-32801)
+if an item is resolved after its document version changes, the document closes,
+an open dependency's content changes, or a watched disk change is received.
+Exported sibling-module types participate using the same source overlays as other
+compiler queries. Discovery currently scans at most 200 regular sibling `.tesl`
+files (1 MiB per file, 8 MiB total); full workspace discovery belongs to the
+retained project index. Files beyond these limits are not advertised as complete
+workspace search results.
+MCP `tesl.completions` exposes the same compiler metadata and edits.
 
 ## Semantic snapshot response shape
 

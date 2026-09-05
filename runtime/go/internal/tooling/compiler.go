@@ -13,6 +13,8 @@ import (
 	"os/exec"
 	"sync"
 	"time"
+
+	"tesl.dev/runtime/go/internal/childprocess"
 )
 
 const (
@@ -21,11 +23,12 @@ const (
 )
 
 type Client struct {
-	Executable  string
-	Timeout     time.Duration
-	MaxOutput   int
-	Environment []string
-	Directory   string
+	DiscoveryError error
+	Executable     string
+	Timeout        time.Duration
+	MaxOutput      int
+	Environment    []string
+	Directory      string
 }
 
 type Result struct {
@@ -35,6 +38,9 @@ type Result struct {
 }
 
 func (client Client) Run(ctx context.Context, args ...string) (Result, error) {
+	if client.DiscoveryError != nil {
+		return Result{}, client.DiscoveryError
+	}
 	if client.Executable == "" {
 		return Result{}, errors.New("compiler: executable is empty")
 	}
@@ -50,28 +56,38 @@ func (client Client) Run(ctx context.Context, args ...string) (Result, error) {
 	defer cancel()
 
 	command := exec.CommandContext(queryContext, client.Executable, args...) // #nosec G204 -- compiler is an explicit local tool.
-	configureProcess(command)
 	command.Dir = client.Directory
 	command.Env = append([]string(nil), client.Environment...)
 	if command.Env == nil {
 		command.Env = os.Environ()
 	}
-	stdout, err := command.StdoutPipe()
+	// Own these pipes separately from exec.Cmd. Wait must observe parent exit
+	// and close its process group/job even if a descendant inherited stdout;
+	// conversely, Cmd.Wait must not close a reader before its output is drained.
+	stdout, stdoutWriter, err := os.Pipe()
 	if err != nil {
 		return Result{}, fmt.Errorf("compiler: stdout pipe: %w", err)
 	}
-	stderr, err := command.StderrPipe()
+	defer stdout.Close()
+	defer stdoutWriter.Close()
+	stderr, stderrWriter, err := os.Pipe()
 	if err != nil {
 		return Result{}, fmt.Errorf("compiler: stderr pipe: %w", err)
 	}
-	if err := command.Start(); err != nil {
+	defer stderr.Close()
+	defer stderrWriter.Close()
+	command.Stdout, command.Stderr = stdoutWriter, stderrWriter
+	child, err := childprocess.Start(command)
+	if err != nil {
 		return Result{}, fmt.Errorf("compiler: start: %w", err)
 	}
+	_ = stdoutWriter.Close()
+	_ = stderrWriter.Close()
 	processDone := make(chan struct{})
 	go func() {
 		select {
 		case <-queryContext.Done():
-			terminateProcess(command)
+			child.Kill()
 		case <-processDone:
 		}
 	}()
@@ -88,9 +104,9 @@ func (client Client) Run(ctx context.Context, args ...string) (Result, error) {
 		defer wait.Done()
 		diagnostics, diagnosticsErr = readBounded(stderr, maxOutput)
 	}()
-	wait.Wait()
-	waitErr := command.Wait()
+	waitErr := child.Wait()
 	close(processDone)
+	wait.Wait()
 	result := Result{Stdout: output, Stderr: diagnostics, ExitCode: exitCode(waitErr)}
 	if outputErr != nil {
 		return result, fmt.Errorf("compiler: read stdout: %w", outputErr)
@@ -258,6 +274,26 @@ func ValidateCompilerJSON(flag string, payload []byte) error {
 			for _, field := range []string{"label", "detail", "kind"} {
 				if _, err := requiredString(value, field); err != nil {
 					return fmt.Errorf("%s: %w", name, err)
+				}
+			}
+			for _, field := range []string{"module", "documentation", "sort_text"} {
+				if raw, found := value[field]; found && raw != nil {
+					if _, ok := raw.(string); !ok {
+						return fmt.Errorf("%s.%s must be a string or null", name, field)
+					}
+				}
+			}
+			if raw, found := value["requires_import"]; found {
+				if _, ok := raw.(bool); !ok {
+					return fmt.Errorf("%s.requires_import must be a boolean", name)
+				}
+			}
+			for _, field := range []string{"text_edit", "import_edit"} {
+				if raw, found := value[field]; found && raw != nil {
+					count := 0
+					if err := validateDiagnosticFix(raw, name+"."+field, true, 0, &count); err != nil {
+						return err
+					}
 				}
 			}
 			return nil

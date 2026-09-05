@@ -5,10 +5,48 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
+
+func TestCompilerPipesDrainAndCloseWithDescendants(t *testing.T) {
+	switch os.Getenv("TESL_COMPILER_PIPE_HELPER") {
+	case "leaf":
+		if err := os.WriteFile(os.Getenv("TESL_COMPILER_PIPE_READY"), []byte("ready"), 0600); err != nil {
+			os.Exit(2)
+		}
+		time.Sleep(30 * time.Second)
+		os.Exit(0)
+	case "root":
+		child := exec.Command(os.Args[0], "-test.run=TestCompilerPipesDrainAndCloseWithDescendants")
+		child.Env = append(os.Environ(), "TESL_COMPILER_PIPE_HELPER=leaf")
+		child.Stdout, child.Stderr = os.Stdout, os.Stderr
+		if err := child.Start(); err != nil {
+			os.Exit(2)
+		}
+		for i := 0; i < 200; i++ {
+			if _, err := os.Stat(os.Getenv("TESL_COMPILER_PIPE_READY")); err == nil {
+				_, _ = os.Stdout.WriteString(strings.Repeat("x", 256*1024) + "last byte")
+				_, _ = os.Stderr.WriteString("last diagnostic")
+				os.Exit(0)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		os.Exit(3)
+	}
+	client := Client{Executable: os.Args[0], Timeout: 5 * time.Second, MaxOutput: 1 << 20,
+		Environment: append(os.Environ(), "TESL_COMPILER_PIPE_HELPER=root", "TESL_COMPILER_PIPE_READY="+filepath.Join(t.TempDir(), "ready"))}
+	result, err := client.Run(context.Background(), "-test.run=TestCompilerPipesDrainAndCloseWithDescendants")
+	if err != nil {
+		t.Fatalf("descendant held query pipes open: %v", err)
+	}
+	if string(result.Stdout) != strings.Repeat("x", 256*1024)+"last byte" || string(result.Stderr) != "last diagnostic" {
+		t.Fatal("output was truncated at parent exit")
+	}
+}
 
 func TestClientRunsJSONQueryAndPreservesStderr(t *testing.T) {
 	if os.Getenv("TESL_COMPILER_HELPER") == "diagnostics" {

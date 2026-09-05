@@ -9,6 +9,7 @@
   outputs = { self, nixpkgs, flake-utils }:
     flake-utils.lib.eachDefaultSystem (system:
       let
+        toolchainInputs = import ./nix/toolchain-inputs.nix;
         # Go is PINNED to a patch release nixpkgs has not packaged yet.
         #
         # `govulncheck` is a mandatory gate (ci.sh phase 2a), and go1.26.4 — what
@@ -25,15 +26,7 @@
         #
         # Remove this the moment nixpkgs carries go1.26.6 or newer — `nix flake update
         # nixpkgs` then gives the same result with no local patch to maintain.
-        goOverlay = final: prev: {
-          go = prev.go.overrideAttrs (old: rec {
-            version = "1.26.6";
-            src = final.fetchurl {
-              url = "https://go.dev/dl/go${version}.src.tar.gz";
-              sha256 = "1c9czy9wnbp9h89qkzsm0xrp9i57gvnb7nbssx419448qra1qwm0";
-            };
-          });
-        };
+        goOverlay = import ./nix/go-overlay.nix;
         pkgs = import nixpkgs { inherit system; overlays = [ goOverlay ]; };
         staticcheck = pkgs.buildGoModule rec {
           pname = "staticcheck";
@@ -54,7 +47,7 @@
         # Dependencies: ocaml, dune_3, findlib (all stdlib — no opam packages).
         tesl-compiler = pkgs.stdenv.mkDerivation {
           pname   = "tesl-compiler";
-          version = "0.3.1";
+          version = toolchainInputs.version;
 
           src = ./.;
 
@@ -100,7 +93,7 @@
         # fallback.
         tesl-templates = pkgs.stdenv.mkDerivation {
           pname   = "tesl-templates";
-          version = "0.3.1";
+          version = toolchainInputs.version;
 
           src = pkgs.lib.cleanSourceWith {
             src    = ./templates;
@@ -120,7 +113,7 @@
         # ── Go editor/debug/MCP tools ─────────────────────────────────────────
         tesl-go-tools = pkgs.buildGoModule {
           pname = "tesl-go-tools";
-          version = "0.3.1";
+          version = toolchainInputs.version;
           src = ./.;
           modRoot = "runtime/go";
           vendorHash = "sha256-SMXMkfkj5ehtjri4CCWPMwOyLIGcaoSgBv8k4DVG86c=";
@@ -157,7 +150,7 @@
 
         # Go-only shipped profile.
         goRuntimePreamble = ''
-           export TESL_VERSION="0.3.1"
+           export TESL_VERSION="${toolchainInputs.version}"
           export TESL_OCAML_COMPILER="${tesl-compiler}/bin/tesl-compiler"
           export TESL_DEFAULT_BACKEND="''${TESL_DEFAULT_BACKEND:-go}"
           export TESL_TEMPLATES_DIR="${tesl-templates}/share/tesl-templates"
@@ -231,6 +224,12 @@
         # ── Packages ──────────────────────────────────────────────────────────
           packages = {
            inherit tesl-compiler tesl-go-cli tesl-lsp tesl-mcp tesl-go-tools tesl-debug-tools tesl-full staticcheck;
+          release-plan = pkgs.writeText "tesl-release-plan.json" (builtins.toJSON
+            (import ./nix/release-plan.nix {
+              inherit pkgs;
+              revision = self.rev or "worktree";
+              sourceDateEpoch = self.lastModified or 0;
+            }));
           default = tesl-full;
           # Reusable PostgreSQL so the managed-PG lifecycle (`tesl db`) can source
           # initdb / pg_ctl / createdb via nix without entering a dev shell.

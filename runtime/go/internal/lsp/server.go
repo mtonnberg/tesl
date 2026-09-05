@@ -49,6 +49,7 @@ type Server struct {
 	documents         map[string]document
 	semanticTokens    map[string]semanticTokenState
 	nextTokenID       uint64
+	fileChangeVersion uint64
 	shutdown          bool
 	diagnosticMu      sync.Mutex
 	diagnosticRuns    map[string]diagnosticRun
@@ -533,6 +534,7 @@ func (server *Server) didChangeWatchedFiles(ctx context.Context, raw json.RawMes
 			return errors.New("workspace/didChangeWatchedFiles: invalid params")
 		}
 	}
+	server.fileChangeVersion++
 	server.scheduleAllDiagnostics(ctx, writer)
 	return nil
 }
@@ -750,13 +752,19 @@ type completionResponse struct {
 }
 
 type compilerCompletion struct {
-	Label  string `json:"label"`
-	Detail string `json:"detail"`
-	Kind   string `json:"kind"`
+	Label          string          `json:"label"`
+	Detail         string          `json:"detail"`
+	Kind           string          `json:"kind"`
+	Module         *string         `json:"module"`
+	Documentation  *string         `json:"documentation"`
+	RequiresImport bool            `json:"requires_import"`
+	TextEdit       json.RawMessage `json:"text_edit"`
+	ImportEdit     json.RawMessage `json:"import_edit"`
+	SortText       string          `json:"sort_text"`
 }
 
 func (server *Server) writeCompletion(ctx context.Context, id json.RawMessage, raw json.RawMessage, writer *protocol.Writer) error {
-	payload, _, err := server.queryAt(ctx, raw, "--completions-json")
+	payload, doc, err := server.queryAt(ctx, raw, "--completions-json")
 	if err != nil {
 		return server.writeError(writer, id, internalError, err.Error())
 	}
@@ -765,13 +773,44 @@ func (server *Server) writeCompletion(ctx context.Context, id json.RawMessage, r
 		return server.writeError(writer, id, internalError, err.Error())
 	}
 	items := make([]map[string]any, 0, len(response.Completions))
+	snapshot := server.completionSnapshot()
 	for _, completion := range response.Completions {
-		items = append(items, map[string]any{
+		item := map[string]any{
 			"label":  completion.Label,
 			"detail": completion.Detail,
 			"kind":   completionKind(completion.Kind),
-			"data":   map[string]string{"name": completion.Label},
-		})
+			"data":   map[string]any{"name": completion.Label, "uri": doc.URI, "version": doc.Version, "snapshot": snapshot, "compilerMetadata": completion.SortText != ""},
+		}
+		if completion.SortText != "" {
+			item["sortText"] = completion.SortText
+		}
+		if completion.Module != nil && *completion.Module != "" {
+			item["detail"] = completion.Detail + " · " + *completion.Module
+			if completion.RequiresImport {
+				hint := "import required"
+				if len(completion.ImportEdit) > 0 && string(completion.ImportEdit) != "null" {
+					hint = "auto-import"
+				}
+				item["detail"] = item["detail"].(string) + " (" + hint + ")"
+			}
+		}
+		if completion.Documentation != nil {
+			item["documentation"] = map[string]string{"kind": "plaintext", "value": *completion.Documentation}
+		}
+		if edit, err := server.completionEdit(doc, completion.TextEdit, true); err != nil {
+			return server.writeError(writer, id, internalError, err.Error())
+		} else if edit != nil {
+			item["textEdit"] = edit
+		}
+		if edit, err := server.completionEdit(doc, completion.ImportEdit, false); err != nil {
+			return server.writeError(writer, id, internalError, err.Error())
+		} else if edit != nil {
+			if primary, ok := item["textEdit"].(map[string]any); ok && completionEditsOverlap(primary, edit) {
+				return server.writeError(writer, id, internalError, "compiler: overlapping completion edits")
+			}
+			item["additionalTextEdits"] = []map[string]any{edit}
+		}
+		items = append(items, item)
 	}
 	return server.writeResult(writer, id, map[string]any{"isIncomplete": false, "items": items})
 }
@@ -783,6 +822,26 @@ func (server *Server) writeCompletionDocumentation(ctx context.Context, id json.
 	}
 	if item == nil {
 		return server.writeResult(writer, id, json.RawMessage(raw))
+	}
+	if data, ok := item["data"].(map[string]any); ok {
+		if value, exists := data["snapshot"]; exists {
+			snapshot, valid := value.(string)
+			if !valid || snapshot != server.completionSnapshot() {
+				return server.writeError(writer, id, -32801, "completion workspace changed; request fresh completions")
+			}
+		}
+		if uri, ok := data["uri"].(string); ok {
+			doc, found := server.documents[uri]
+			version, valid := data["version"].(float64)
+			if !found || !valid || version != float64(doc.Version) {
+				return server.writeError(writer, id, -32801, "completion source changed; request fresh completions")
+			}
+		}
+		if owned, _ := data["compilerMetadata"].(bool); owned {
+			// In particular, a local symbol sharing a stdlib name must not
+			// acquire that library symbol's documentation during resolve.
+			return server.writeResult(writer, id, item)
+		}
 	}
 	label, _ := item["label"].(string)
 	if label == "" || server.compiler == nil {
@@ -1741,6 +1800,16 @@ func completionKind(kind string) int {
 		return 3
 	case "field":
 		return 10
+	case "type":
+		return 7
+	case "constructor":
+		return 4
+	case "module":
+		return 9
+	case "capability":
+		return 21
+	case "fact":
+		return 8
 	default:
 		return 6
 	}
@@ -2003,9 +2072,5 @@ func samePath(left, right string) bool {
 // CompilerFromEnvironment builds the shipped command's default compiler
 // client. Keeping discovery here avoids Racket-specific path logic in the LSP.
 func CompilerFromEnvironment() tooling.Client {
-	executable := os.Getenv("TESL_COMPILER")
-	if executable == "" {
-		executable = "tesl"
-	}
-	return tooling.Client{Executable: executable}
+	return tooling.CompilerFromEnvironment()
 }

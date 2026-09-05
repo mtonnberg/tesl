@@ -1,0 +1,76 @@
+name: Native portability
+
+on:
+  push:
+    branches: [main, go_migration]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  plan:
+    runs-on: ubuntu-22.04
+    outputs:
+      matrix: ${{ steps.export.outputs.matrix }}
+      go: ${{ steps.export.outputs.go }}
+      ocaml: ${{ steps.export.outputs.ocaml }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25
+      - name: Export authoritative native build metadata
+        id: export
+        shell: bash
+        run: |
+          nix build .#release-plan --out-link release-plan
+          cp release-plan native-release-plan.json
+          python3 - <<'PY'
+          import json, os
+          plan = json.load(open('native-release-plan.json'))
+          if plan['sourceRevision'] != os.environ['GITHUB_SHA']:
+              raise SystemExit('Nix plan does not match the tested revision')
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('matrix=' + json.dumps({'include': plan['candidates']}) + '\n')
+              for name in ('go', 'ocaml'):
+                  output.write(name + '=' + plan['sources'][name]['version'] + '\n')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-release-plan
+          path: native-release-plan.json
+          if-no-files-found: error
+  parity:
+    needs: plan
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: native-release-plan
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ needs.plan.outputs.go }}
+          cache-dependency-path: runtime/go/go.sum
+      - uses: ocaml/setup-ocaml@v3
+        with:
+          ocaml-compiler: ${{ needs.plan.outputs.ocaml }}
+          windows-compiler: mingw
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Build and exercise native compiler and tools
+        run: python scripts/native-parity.py --plan native-release-plan.json --target ${{ matrix.target }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-evidence-${{ matrix.target }}
+          path: artifacts/native-${{ matrix.target }}/checks.json
+          if-no-files-found: error

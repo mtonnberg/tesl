@@ -9,6 +9,12 @@
  (modules debug_record debug_db)
  (libraries tesl_compiler_lib))
 
+(test
+ (name test_completion)
+ (modules test_completion)
+ (libraries tesl_compiler_lib alcotest str unix)
+ (deps ../bin/main.exe))
+
 ; Pure-OCaml property test for the shared AST-traversal framework
 ; (lib/ast_visitor.ml). No alcotest, so it always builds and runs:
 ;   dune exec test/test_ast_visitor.exe
@@ -173,7 +179,7 @@
  (name test_emit_go)
  (modules test_emit_go)
  (libraries tesl_compiler_lib alcotest unix)
- (deps ../bin/main.exe run_emit_go_shards.sh)
+ (deps ../bin/main.exe test_emit_go.exe run_emit_go_shards.sh)
  (action (run bash %{dep:run_emit_go_shards.sh} %{test})))
 
 (test
@@ -282,3 +288,7 @@
  (names test_durable_stores)
  (modules test_durable_stores)
  (libraries tesl_compiler_lib alcotest str unix))
+(test
+ (name test_import_cache)
+ (modules test_import_cache)
+ (libraries tesl_compiler_lib alcotest unix))
