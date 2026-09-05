@@ -101,3 +101,78 @@ test("manifest readers reject incompatible field types and oversized trailing da
   fs.writeFileSync(filename, JSON.stringify(manifest) + " ".repeat(1024 * 1024));
   assert.throws(() => readInstallation(root), /1 MiB/);
 });
+
+function managedFixture(t, suffix) {
+  const original = fixture(t, suffix);
+  const root = path.join(path.dirname(original.root), "managed å");
+  const version = "0.3.1-dev.123.g" + "a".repeat(40);
+  const selected = path.join(root, "versions", version);
+  fs.mkdirSync(path.dirname(selected), { recursive: true });
+  fs.renameSync(original.root, selected);
+  const manifest = { ...original.manifest, toolchain_version: version };
+  const writeManifest = () => fs.writeFileSync(path.join(selected, "share", "tesl", "toolchain.json"), JSON.stringify(manifest));
+  writeManifest();
+  fs.mkdirSync(path.join(root, "bin"));
+  for (const name of ["tesl", "tesl-lsp", "tesl-dap"]) {
+    fs.writeFileSync(path.join(root, "bin", name + original.suffix), "native shim", { mode: 0o755 });
+  }
+  fs.writeFileSync(path.join(root, ".tesl-install.json"), JSON.stringify({
+    version: 1, kind: "tesl-managed-installation", launcher_sha256: "b".repeat(64),
+  }));
+  const state = { version: 1, active_version: version, previous_version: "", generation: 1 };
+  const writeState = () => fs.writeFileSync(path.join(root, "state.json"), JSON.stringify(state));
+  writeState();
+  return { root, selected, version, state, writeState, manifest, writeManifest, suffix: original.suffix };
+}
+
+test("managed PATH installs use native shims with a pinned version on Unix and Windows", (t) => {
+  for (const platform of ["linux", "win32"]) {
+    const value = managedFixture(t, platform === "win32" ? ".exe" : "");
+    const selected = findInstallation({ platform, env: { PATH: path.join(value.root, "bin") } });
+    const realRoot = fs.realpathSync(value.root);
+    assert.equal(selected.component("tesl-lsp"), path.join(realRoot, "bin", "tesl-lsp" + value.suffix));
+    assert.equal(selected.component("compiler"), path.join(realRoot, "versions", value.version, "bin", "compiler" + value.suffix));
+    assert.deepEqual(selected.launchEnvironment, { TESL_INSTALL_VERSION: value.version });
+    value.state.active_version = "";
+    value.writeState();
+    assert.equal(selected.launchEnvironment.TESL_INSTALL_VERSION, value.version);
+    assert.equal(findInstallation({ root: value.selected }).manifest.toolchain_version, value.version);
+    assert.equal(findInstallation({ platform, env: { PATH: path.join(value.root, "bin") } }), null);
+  }
+});
+
+test("managed selection refuses malformed state, traversal and mismatched manifests", (t) => {
+  const value = managedFixture(t);
+  const original = { ...value.state };
+  for (const change of [{ active_version: "../escape" }, { active_version: "C:/escape" },
+    { active_version: "0.3.1/else" }, { previous_version: value.version }, { generation: -1 },
+    { generation: "1" }, { version: 2 }, { active_version: null }, { extra: true }]) {
+    fs.writeFileSync(path.join(value.root, "state.json"), JSON.stringify({ ...original, ...change }));
+    assert.throws(() => findInstallation({ root: value.root }), /selection state/);
+  }
+  value.writeState();
+  value.manifest.toolchain_version = "0.3.0";
+  value.writeManifest();
+  assert.throws(() => findInstallation({ root: value.root }), /does not match/);
+});
+
+test("managed default discovery works without PATH and missing selected versions fail explicitly", (t) => {
+  const value = managedFixture(t, ".exe");
+  const local = path.join(path.dirname(value.root), "AppData å");
+  const target = path.join(local, "Programs", "Tesl");
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.renameSync(value.root, target);
+  const selected = findInstallation({ platform: "win32", env: { LOCALAPPDATA: local } });
+  assert.equal(selected.managedRoot, target);
+  fs.rmSync(path.join(target, "versions", value.version), { recursive: true });
+  assert.throws(() => findInstallation({ platform: "win32", env: { LOCALAPPDATA: local } }), /ENOENT/);
+});
+
+test("managed directory and state links cannot redirect selection outside the installation", (t) => {
+  const value = managedFixture(t);
+  const moved = path.join(path.dirname(value.root), "outside-version");
+  fs.renameSync(value.selected, moved);
+  try { fs.symlinkSync(moved, value.selected, "junction"); }
+  catch (error) { if (error.code === "EPERM") { t.skip("symlinks unavailable"); return; } throw error; }
+  assert.throws(() => findInstallation({ root: value.root }), /must not be symlinks/);
+});

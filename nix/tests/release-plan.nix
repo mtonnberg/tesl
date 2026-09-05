@@ -1,9 +1,15 @@
 let
   # Package stubs let schema/propagation tests run without a Nix daemon or fetch.
-  package = version: { inherit version; src = { urls = [ "https://example.invalid/source.tar.gz" ]; outputHash = "pinned-source-hash"; }; };
+  pinnedHash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+  package = version: { inherit version; src = { urls = [ "https://example.invalid/source.tar.gz" ]; outputHash = pinnedHash; }; };
   pkgs = {
     go = package "1.2.3";
     postgresql = (package "17.1") // { src = (package "17.1").src // { outputHashMode = "recursive"; stripRoot = true; }; };
+    meson = package "1.10.2";
+    ninja = package "1.13.2";
+    perl = (package "5.42.3") // { src = (package "5.42.3").src // { urls = [ "mirror://cpan/src/perl.tar.gz" ]; }; };
+    flex = (package "2.6.4") // { src = (package "2.6.4").src // { outputHash = "15g9bv236nzi665p9ggqjlfn4dwck5835vf0bbw2cz7h5c1swyp8"; }; };
+    bison = (package "3.8.2") // { src = (package "3.8.2").src // { urls = [ "mirror://gnu/bison/bison.tar.gz" ]; }; };
     ocamlPackages = { ocaml = package "5.4.1"; dune_3 = package "3.21.1"; alcotest = package "1.9.1"; };
   };
   baseVersion = (import ../toolchain-inputs.nix).version;
@@ -19,8 +25,15 @@ let
     exact-revision = plan.sourceRevision == revision;
     identity = plan.toolchainVersion == version && plan.release.version == version;
     complete-matrix = builtins.attrNames plan.payloads == targets;
-    source-pins = plan.sources.go.hash == "pinned-source-hash" && plan.sources.go.version == "1.2.3";
+    source-pins = plan.sources.go.hash == pinnedHash && plan.sources.go.version == "1.2.3";
     source-urls = plan.sources.go.urls == pkgs.go.src.urls;
+    windows-build-tools = builtins.attrNames plan.windowsBuildTools == [ "bison" "flex" "meson" "ninja" "perl" ]
+      && plan.windowsBuildTools.meson.version == pkgs.meson.version
+      && plan.windowsBuildTools.perl.hash == pkgs.perl.src.outputHash;
+    windows-compiler-no-compression = plan.windowsOcamlCompiler == "ocaml-variants.5.4.1+options,ocaml-option-no-compression";
+    native-download-urls = plan.windowsBuildTools.perl.urls == [ "https://www.cpan.org/src/perl.tar.gz" ]
+      && plan.windowsBuildTools.bison.urls == [ "https://ftp.gnu.org/gnu/bison/bison.tar.gz" ];
+    native-source-hash-format = plan.windowsBuildTools.flex.hash == "sha256-6HquAyvwfCb4WsDtMlCZjDdiHZX4vXSLMfFbM8Re6ZU=";
     source-hash-mode = plan.sources.go.hashMode == "flat" && !plan.sources.go.stripRoot;
     recursive-source-hash = plan.sources.postgresql.hashMode == "recursive" && plan.sources.postgresql.stripRoot;
     module-inputs = plan.moduleInputs == [ "runtime/go/go.mod" "runtime/go/go.sum" ];

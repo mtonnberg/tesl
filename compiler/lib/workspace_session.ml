@@ -1,5 +1,6 @@
 (** Version 1 local session transport. Each request is five length-prefixed byte
-    strings: snapshot, flag, absolute staged file, line, column. Responses are
+    strings: snapshot, flag, absolute staged file, line, column. Workspace rename
+    appends two frames (new name, expected semantic snapshot). Responses are
     length-prefixed JSON. Framing deliberately uses only the OCaml standard
     library; neither source bytes nor filenames undergo shell/string parsing.
     The owner must keep the complete staged tree immutable during a request. *)
@@ -53,18 +54,22 @@ let run input output =
   set_binary_mode_out output true;
   Query_cache.set_enabled true;
   Fun.protect ~finally:(fun () -> Query_cache.set_enabled false; Checker.clear_import_parse_cache ()) (fun () ->
-    write_frame output "{\"version\":1,\"protocol\":\"tesl-workspace\",\"invalidation\":\"whole-snapshot\"}";
+    write_frame output "{\"version\":1,\"protocol\":\"tesl-workspace\",\"invalidation\":\"whole-snapshot\",\"capabilities\":[\"workspace-navigation\",\"workspace-rename-arguments-v1\"]}";
     let current = ref None in
     let rec loop () =
       match (try Some (read_frame input 128) with End_of_file -> None) with
       | None -> ()
       | Some snapshot ->
-        let flag, filename, line, col = try
+        let flag, filename, line, col, extra = try
           let flag = read_frame input 64 in
           let filename = read_frame input 4096 in
           let line = read_frame input 20 in
           let col = read_frame input 20 in
-          flag, filename, line, col
+          let extra = if flag = "--workspace-rename-json" then begin
+            let name = read_frame input 128 in
+            let expected = read_frame input 128 in [name; expected]
+          end else [] in
+          flag, filename, line, col, extra
           with End_of_file -> failwith "truncated session request" in
         let response = try
           if snapshot = "" || Filename.is_relative filename || String.contains filename '\000'
@@ -77,7 +82,7 @@ let run input output =
             Hashtbl.clear Validation_common.literal_occ_content;
             current := Some (snapshot, inputs)
           end;
-          let position = if line = "" && col = "" then [] else [line; col] in
+          let position = if line = "" && col = "" then [] else [line; col] @ extra in
           let result = cached_query (flag, filename, position) in
           Printf.sprintf "{\"version\":1,\"snapshot\":%s,\"exit_code\":%d,\"result\":%s,\"error\":null,\"cache_hits\":%d,\"cache_misses\":%d}"
             (Compile.json_encode_string snapshot) result.exit_code result.json !Query_cache.hits !Query_cache.misses

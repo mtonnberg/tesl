@@ -7,13 +7,18 @@ let position_flags = ["--definition-json"; "--occurrences-json"; "--type-at-json
   "--signature-help-json"; "--selection-range-json"; "--type-definition-json"]
 let file_flags = ["--check-json"; "--agent-context-json"; "agent-context";
   "--local-bindings-json"; "--semantic-json"]
-let supports flag = List.mem flag (position_flags @ file_flags)
+let workspace_flags = ["--workspace-definition-json"; "--workspace-references-json"; "--workspace-rename-json"]
+let supports flag = List.mem flag (position_flags @ file_flags @ workspace_flags)
 let valid_args flag position =
-  if List.mem flag position_flags then List.length position = 2
+  if flag = "--workspace-rename-json" then List.length position = 4
+  else if List.mem flag (position_flags @ workspace_flags) then List.length position = 2
   else List.mem flag file_flags && position = []
 
 let run ~filename ~logical_path flag position =
   if not (valid_args flag position) then invalid_arg "invalid source query arguments";
+  if List.mem flag workspace_flags then
+    { json = Workspace_index.run ~filename flag position; exit_code = 0 }
+  else
   let source = In_channel.with_open_bin filename In_channel.input_all in
   let line, col = match position with
     | [line; col] ->

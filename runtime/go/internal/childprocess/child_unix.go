@@ -14,7 +14,9 @@ func configure(command *exec.Cmd) {
 	command.SysProcAttr.Setpgid = true
 }
 
-func attach(command *exec.Cmd) (func(), func(), error) {
+func attach(command *exec.Cmd, _ bool) (func(), func(), error) {
 	kill := func() { _ = syscall.Kill(-command.Process.Pid, syscall.SIGKILL) }
 	return kill, kill, nil
 }
+
+func ConfigurePersistent(_ *exec.Cmd) error { return nil }

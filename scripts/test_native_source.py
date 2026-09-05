@@ -12,7 +12,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from native_source import digest_bytes, extract_verified, nar_hash
+from native_source import digest_bytes, extract_verified, nar_hash, portable_member
 
 
 def sri(digest):
@@ -74,6 +74,24 @@ class NativeSourceTest(unittest.TestCase):
                     extract_verified(self.metadata, self.archive, self.root / "output")
                 self.assertFalse((self.root / "output").exists())
                 self.assertFalse(list(self.root.glob(".tesl-source-*")))
+
+    def test_recursive_verification_uses_archive_modes_when_chmod_cannot_set_executable(self):
+        original = extract_verified(self.metadata, self.archive, self.root / "first")
+        self.metadata.update(hashMode="recursive", hash=sri(nar_hash(original)))
+        with patch.object(Path, "chmod"):
+            source = extract_verified(self.metadata, self.archive, self.root / "output")
+        self.assertEqual(nar_hash(source, {"configure"}), nar_hash(original))
+        (source / "configure").chmod(0o644)
+        self.assertEqual(nar_hash(source, {"configure"}), nar_hash(original))
+
+    def test_windows_paths_reject_ads_devices_trailing_aliases_and_case_collisions(self):
+        for name in ("root/file:stream", "C:/file", "root/NUL.txt", "root/COM1", "root/Lpt9.c",
+                     "root/file.", "root/file ", 'root/file?name', 'root/file<name'):
+            with self.subTest(name=name), self.assertRaisesRegex(ValueError, "portable Windows"):
+                portable_member(name, set())
+        with self.assertRaisesRegex(ValueError, "case-insensitive duplicate"):
+            portable_member("root/Makefile", {"root/makefile"})
+        portable_member("root/compiler.c", {"root/other.c"})
 
     def test_bad_flat_checksum_does_not_extract(self):
         self.archive.write_bytes(b"not even a tarball")

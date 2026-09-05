@@ -19,7 +19,7 @@ func configure(command *exec.Cmd) {
 	command.SysProcAttr.CreationFlags |= windows.CREATE_SUSPENDED
 }
 
-func attach(command *exec.Cmd) (func(), func(), error) {
+func attach(command *exec.Cmd, launcher bool) (func(), func(), error) {
 	job, err := windows.CreateJobObject(nil, nil)
 	if err != nil {
 		return nil, nil, err
@@ -27,6 +27,9 @@ func attach(command *exec.Cmd) (func(), func(), error) {
 	fail := func(err error) (func(), func(), error) { _ = windows.CloseHandle(job); return nil, nil, err }
 	limits := windows.JOBOBJECT_EXTENDED_LIMIT_INFORMATION{}
 	limits.BasicLimitInformation.LimitFlags = windows.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+	if launcher {
+		limits.BasicLimitInformation.LimitFlags |= windows.JOB_OBJECT_LIMIT_BREAKAWAY_OK
+	}
 	if _, err := windows.SetInformationJobObject(job, windows.JobObjectExtendedLimitInformation, uintptr(unsafe.Pointer(&limits)), uint32(unsafe.Sizeof(limits))); err != nil {
 		return fail(err)
 	}
@@ -43,6 +46,33 @@ func attach(command *exec.Cmd) (func(), func(), error) {
 		return fail(err)
 	}
 	return func() { _ = windows.TerminateJobObject(job, 1) }, func() { _ = windows.CloseHandle(job) }, nil
+}
+
+var isProcessInJob = windows.NewLazySystemDLL("kernel32.dll").NewProc("IsProcessInJob")
+
+// ConfigurePersistent requests explicit breakaway only when the immediate job
+// allows it. Ordinary frontends outside an installer launcher keep their prior
+// behavior, including when hosted by a non-breakaway CI/editor parent job.
+func ConfigurePersistent(command *exec.Cmd) error {
+	var inJob uint32
+	ok, _, err := isProcessInJob.Call(uintptr(windows.CurrentProcess()), 0, uintptr(unsafe.Pointer(&inJob)))
+	if ok == 0 {
+		return err
+	}
+	if inJob == 0 {
+		return nil
+	}
+	var limits windows.JOBOBJECT_EXTENDED_LIMIT_INFORMATION
+	if err := windows.QueryInformationJobObject(0, windows.JobObjectExtendedLimitInformation, uintptr(unsafe.Pointer(&limits)), uint32(unsafe.Sizeof(limits)), nil); err != nil {
+		return err
+	}
+	if limits.BasicLimitInformation.LimitFlags&windows.JOB_OBJECT_LIMIT_BREAKAWAY_OK != 0 {
+		if command.SysProcAttr == nil {
+			command.SysProcAttr = &syscall.SysProcAttr{}
+		}
+		command.SysProcAttr.CreationFlags |= windows.CREATE_BREAKAWAY_FROM_JOB
+	}
+	return nil
 }
 
 func resumeProcess(pid uint32) error {

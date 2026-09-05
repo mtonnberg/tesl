@@ -99,6 +99,16 @@ let lookup_ident s =
 
 (* String scanning buffer *)
 let string_buf : Buffer.t = Buffer.create 64
+let string_offsets = ref []
+let string_offset = ref 1
+
+(* Preserve source-byte provenance while decoding escapes. Each decoded byte
+   maps to its original position after the opening quote; the final entry maps
+   the closing quote. Interpolation AST locations must not point at <interp>. *)
+let append_string text source_width =
+  String.iteri (fun index _ -> string_offsets := (!string_offset + index) :: !string_offsets) text;
+  Buffer.add_string string_buf text;
+  string_offset := !string_offset + source_width
 
 (* `raw` has already been fully escape-decoded by `scan_string` (each
    `\n`/`\t`/`\r`/`\\`/`\"` was resolved to its real character there) — this
@@ -109,7 +119,7 @@ let string_buf : Buffer.t = Buffer.create 64
    the source) was reinterpreted as a fresh `\"` escape and collapsed to a
    lone `"`, silently dropping the backslash (issue #64). *)
 let process_string_content raw =
-  if String.contains raw '$' then INTERP raw
+  if String.contains raw '$' then INTERP (raw, Array.of_list (List.rev (!string_offset :: !string_offsets)))
   else STRING raw
 
 let get_pos lexbuf =
@@ -168,6 +178,7 @@ rule token_line acc = parse
   | '"'
       { let (l,c) = get_pos lexbuf in
         Buffer.clear string_buf;
+        string_offsets := []; string_offset := 1;
         let raw = scan_string lexbuf in
         let tok = process_string_content raw in
         token_line ((tok,l,c)::acc) lexbuf }
@@ -232,21 +243,21 @@ rule token_line acc = parse
 (* Scan inside a double-quoted string - returns raw content *)
 and scan_string = parse
   | '"'       { Buffer.contents string_buf }
-  | "\\n"     { Buffer.add_char string_buf '\n'; scan_string lexbuf }
-  | "\\t"     { Buffer.add_char string_buf '\t'; scan_string lexbuf }
-  | "\\r"     { Buffer.add_char string_buf '\r'; scan_string lexbuf }
-  | "\\\\"    { Buffer.add_char string_buf '\\'; scan_string lexbuf }
-  | "\\\""    { Buffer.add_char string_buf '"';  scan_string lexbuf }
+  | "\\n"     { append_string "\n" 2; scan_string lexbuf }
+  | "\\t"     { append_string "\t" 2; scan_string lexbuf }
+  | "\\r"     { append_string "\r" 2; scan_string lexbuf }
+  | "\\\\"    { append_string "\\" 2; scan_string lexbuf }
+  | "\\\""    { append_string "\"" 2; scan_string lexbuf }
   (* R51_X04 — reject unknown escape sequences. Previously any
      backslash-char not listed above was silently kept as two characters.
      The spec lists exactly the five escapes handled above as supported. *)
   | '\\' (_ as c)
       { failwith (Printf.sprintf "invalid string escape: backslash %c" c) }
   | [^ '"' '\\' '\n']+
-      { Buffer.add_string string_buf (Lexing.lexeme lexbuf); scan_string lexbuf }
+      { let text = Lexing.lexeme lexbuf in append_string text (String.length text); scan_string lexbuf }
   | '\n'      { failwith "unterminated string literal" }
   | eof       { failwith "unterminated string literal at EOF" }
-  | _ as c    { Buffer.add_char string_buf c; scan_string lexbuf }
+  | _ as c    { append_string (String.make 1 c) 1; scan_string lexbuf }
 
 {
 (* Full-file tokenizer *)
@@ -356,4 +367,40 @@ let tokenize (filename : string) (source : string) : full_token list =
   emit EOF !line_num 0;
 
   List.rev !result
+
+(* Map an interpolation's expression tokens back through decoded escape bytes.
+   Shared by parsing and semantic candidate discovery, including nested strings. *)
+let interpolation_tokens filename line col raw offsets first inner =
+  let inner_offset (token : full_token) =
+    let rec find offset remaining =
+      if remaining = 0 then min (String.length inner) (offset + token.col)
+      else match String.index_from_opt inner offset '\n' with
+        | Some next -> find (next + 1) (remaining - 1)
+        | None -> String.length inner in
+    find 0 token.line in
+  let original offset = offsets.(min (String.length raw) (first + offset)) in
+  tokenize filename inner |> List.map (fun token ->
+    let offset = inner_offset token in
+    let start = original offset in
+    let tok = match token.tok with
+      | INTERP (text, nested) ->
+        INTERP (text, Array.map (fun delta -> original (offset + delta) - start) nested)
+      | tok -> tok in
+    { tok; line; col = col + start })
+
+(* Only expression segments contribute identifiers. Literal string contents
+   never participate in semantic lookup or incomplete-index detection. *)
+let rec semantic_tokens filename tokens =
+  List.concat_map (fun token -> match token.tok with
+    | INTERP (raw, offsets) ->
+      let rec segments index acc =
+        if index + 1 >= String.length raw then List.rev acc |> List.concat
+        else if raw.[index] = '$' && raw.[index + 1] = '{' then
+          let last = Option.value ~default:(String.length raw) (String.index_from_opt raw (index + 2) '}') in
+          let inner = String.sub raw (index + 2) (last - index - 2) in
+          let inner_tokens = interpolation_tokens filename token.line token.col raw offsets (index + 2) inner in
+          segments (last + 1) (semantic_tokens filename inner_tokens :: acc)
+        else segments (index + 1) acc in
+      token :: segments 0 []
+    | _ -> [token]) tokens
 }

@@ -15,6 +15,12 @@
  (libraries tesl_compiler_lib alcotest str unix)
  (deps ../bin/main.exe))
 
+(test
+ (name test_workspace_index)
+ (modules test_workspace_index)
+ (libraries tesl_compiler_lib alcotest str unix)
+ (deps ../bin/main.exe))
+
 ; Pure-OCaml property test for the shared AST-traversal framework
 ; (lib/ast_visitor.ml). No alcotest, so it always builds and runs:
 ;   dune exec test/test_ast_visitor.exe

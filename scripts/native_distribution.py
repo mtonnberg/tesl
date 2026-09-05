@@ -14,6 +14,7 @@ from urllib.parse import urlparse
 from urllib.request import urlopen
 
 import native_payload
+import native_compiler_tools
 import native_postgres
 import native_sdk
 from module_proxy import verify as verify_module_bundle
@@ -127,25 +128,26 @@ def build(plan, root, target, module_bundle, output):
         raise ValueError("distribution output already exists")
     environment = dict(os.environ)
     if target.startswith("darwin-"):
-        environment["MACOSX_DEPLOYMENT_TARGET"] = "13.0"
+        candidate = next(row for row in plan["candidates"] if row["target"] == target)
+        match = re.fullmatch(r"macOS ([0-9]+(?:\.[0-9]+)*)", candidate.get("baseline", ""))
+        if not match:
+            raise ValueError("missing or invalid macOS baseline in release plan")
+        environment["MACOSX_DEPLOYMENT_TARGET"] = match[1]
     source_identity = verify_checkout(plan, root, environment)
     verify_module_bundle(plan, root, module_bundle)
-    ocaml_version = run(["opam", "exec", "--", "ocamlc", "-version"], root, environment, capture=True)
-    dune_version = run(["opam", "exec", "--", "dune", "--version"], root, environment, capture=True)
-    if ocaml_version != plan["sources"]["ocaml"]["version"] or dune_version != plan["sources"]["dune"]["version"]:
-        raise ValueError("native OCaml or Dune version differs from the release plan")
     bootstrap = Path(run(["go", "env", "GOROOT"], root, environment, capture=True)).resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix=".tesl-distribution-", dir=output.parent) as temporary:
         work = Path(temporary)
-        archives = {name: work / (name + ".tar") for name in ("go", "postgresql", "ocaml")}
+        archives = {name: work / (name + ".tar") for name in ("go", "postgresql", "ocaml", "dune")}
         downloads = {name: download(plan["sources"][name], archive) for name, archive in archives.items()}
         sdk = native_sdk.build(plan, target, archives["go"], bootstrap, work / "sdk")
         postgres = native_postgres.build(plan, target, archives["postgresql"], work / "postgres")
-        license_source = extract_verified(plan["sources"]["ocaml"], archives["ocaml"], work / "ocaml-source")
-        licenses = ocaml_licenses(license_source, work / "ocaml-licenses")
+        compiler_tools = native_compiler_tools.build(plan, target, archives["ocaml"], archives["dune"], work / "compiler-tools")
+        licenses = compiler_tools / "licenses"
         build_env = build_environment(environment, target, sdk, work / "build", module_bundle)
-        run(["opam", "exec", "--", "dune", "build", "--profile", "release", "bin/main.exe"],
+        build_env = native_compiler_tools.build_environment(build_env, plan, target, compiler_tools)
+        run([compiler_tools / "bin/dune", "build", "--profile", "release", "bin/main.exe"],
             root / "compiler", build_env)
         frontends = work / "frontends"
         frontends.mkdir()
@@ -183,10 +185,10 @@ def build(plan, root, target, module_bundle, output):
             "published": False,
             "source_downloads": downloads,
             "sources": {"go": plan["sources"]["go"], "postgresql": plan["sources"]["postgresql"]},
-            "ocaml": {"version": ocaml_version, "selection": "opam-version",
-                      "compiler_source_hash_verified": False,
+            "ocaml": {"version": plan["sources"]["ocaml"]["version"], "selection": "verified-source-build",
+                      "compiler_source_hash_verified": True,
                       "license_source": plan["sources"]["ocaml"]},
-            "dune": {"version": dune_version, "selection": "opam-version", "source_hash_verified": False},
+            "dune": {"version": plan["sources"]["dune"]["version"], "selection": "verified-source-build", "source_hash_verified": True},
         }
         (artifacts / "distribution-checks.json").write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         artifacts.rename(output)

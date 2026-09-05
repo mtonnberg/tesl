@@ -3,7 +3,7 @@
 
 This intentionally minimal managed server excludes optional TLS, ICU, compression
 and language dependencies. It does not replace a production PostgreSQL package.
-Windows packaging has a separate native dependency closure and is unsupported.
+Windows uses native MSVC/Meson with static CRT linkage and an audited DLL closure.
 """
 
 import argparse
@@ -17,6 +17,7 @@ import subprocess
 import tempfile
 
 from native_source import extract_verified
+from pe_audit import audit_binary
 
 
 PREFIX = "/tesl-postgresql"
@@ -24,13 +25,15 @@ COMMANDS = ("postgres", "initdb", "pg_ctl", "createdb", "psql")
 DISABLED = ("icu", "readline", "zlib", "lz4", "zstd", "ssl", "gssapi", "ldap",
             "pam", "bsd-auth", "bonjour", "selinux", "systemd", "llvm", "perl",
             "python", "tcl", "libxml", "libxslt")
+LINUX_SYSTEM_LOADERS = {"linux-amd64": "ld-linux-x86-64.so.2",
+                        "linux-arm64": "ld-linux-aarch64.so.1"}
 LINUX_SYSTEM_LIBRARIES = frozenset(("libc.so.6", "libm.so.6", "libresolv.so.2",
                                   "libpthread.so.0", "libdl.so.2", "librt.so.1",
                                   "libutil.so.1"))
 
 
 def native_target():
-    system = {"Linux": "linux", "Darwin": "darwin"}.get(platform.system())
+    system = {"Linux": "linux", "Darwin": "darwin", "Windows": "windows"}.get(platform.system())
     architecture = {"x86_64": "amd64", "AMD64": "amd64", "aarch64": "arm64",
                     "arm64": "arm64"}.get(platform.machine())
     return f"{system}-{architecture}"
@@ -41,8 +44,8 @@ def validate(plan, target, jobs):
         raise ValueError("unsupported native release plan")
     if target not in {row["target"] for row in plan.get("candidates", [])}:
         raise ValueError("target absent from Nix release plan")
-    if not target.startswith(("linux-", "darwin-")):
-        raise ValueError("PostgreSQL builder supports native Linux and macOS only")
+    if target not in {"linux-amd64", "linux-arm64", "darwin-amd64", "darwin-arm64", "windows-amd64"}:
+        raise ValueError("unsupported native PostgreSQL target")
     if target != native_target():
         raise ValueError("PostgreSQL target does not match the native host")
     if isinstance(jobs, bool) or not isinstance(jobs, int) or jobs < 1:
@@ -103,7 +106,7 @@ def binary_files(prefix):
         if path.is_file() and not path.is_symlink():
             with path.open("rb") as stream:
                 magic = stream.read(4)
-            if magic in (b"\x7fELF", b"\xcf\xfa\xed\xfe", b"\xfe\xed\xfa\xcf"):
+            if magic[:2] == b"MZ" or magic in (b"\x7fELF", b"\xcf\xfa\xed\xfe", b"\xfe\xed\xfa\xcf"):
                 yield path
 
 
@@ -126,14 +129,19 @@ def audit(prefix, target, environment):
     dependencies = {}
     for path in binary_files(prefix):
         relative = path.relative_to(prefix).as_posix()
-        if target.startswith("linux-"):
+        if target.startswith("windows-"):
+            detail, _ = audit_binary(prefix, path, prefix / "bin")
+            libraries = detail["imports"] + detail["delay_imports"] + detail["forwarded_imports"]
+        elif target.startswith("linux-"):
             output = run(["readelf", "-d", str(path)], prefix, environment, capture=True)
             libraries = re.findall(r"\(NEEDED\).*\[([^]]+)\]", output)
             rpaths = re.findall(r"\((?:RPATH|RUNPATH)\).*\[([^]]+)\]", output)
             if any(value != "$ORIGIN/../lib" for value in rpaths):
                 raise ValueError(f"unexpected PostgreSQL library path in {relative}: {rpaths}")
             for library in libraries:
-                if library in LINUX_SYSTEM_LIBRARIES:
+                if library in LINUX_SYSTEM_LOADERS.values() and library != LINUX_SYSTEM_LOADERS[target]:
+                    raise ValueError(f"wrong-architecture PostgreSQL system loader in {relative}: {library}")
+                if library in LINUX_SYSTEM_LIBRARIES or library == LINUX_SYSTEM_LOADERS[target]:
                     continue
                 if "/" in library or not (prefix / "lib" / library).is_file() or not rpaths:
                     raise ValueError(f"unbundled PostgreSQL dependency in {relative}: {library}")
@@ -151,9 +159,10 @@ def audit(prefix, target, environment):
     return dependencies
 
 
-def check_layout(prefix):
+def check_layout(prefix, target="linux-amd64"):
+    suffix = ".exe" if target.startswith("windows-") else ""
     for command in COMMANDS:
-        if not (prefix / "bin" / command).is_file():
+        if not (prefix / "bin" / (command + suffix)).is_file():
             raise ValueError(f"PostgreSQL installation is missing {command}")
     for relative in ("share/postgres.bki", "share/postgresql.conf.sample", "share/timezone", "lib"):
         if not (prefix / relative).exists():
@@ -163,6 +172,55 @@ def check_layout(prefix):
         if path.is_symlink():
             if os.path.isabs(os.readlink(path)) or not path.resolve().is_relative_to(prefix.resolve()):
                 raise ValueError(f"PostgreSQL installation contains an escaping symlink: {path}")
+
+
+def build_windows(plan, source, directory, staged, environment, tools, jobs):
+    """Use explicitly provisioned build tools; never download implicit fallbacks."""
+    names = ("meson", "ninja", "perl", "flex", "bison")
+    pins = plan.get("windowsBuildTools", {})
+    if not isinstance(tools, dict) or set(tools) != set(names) or any(name not in pins for name in names):
+        raise ValueError("Windows PostgreSQL requires Nix-declared and provisioned meson/ninja/perl/flex/bison tools")
+    evidence = {}
+    for name in names:
+        command = tools[name]
+        if (not isinstance(command, list) or not command or
+                any(not isinstance(item, str) or not item for item in command) or
+                (name != "meson" and len(command) != 1)):
+            raise ValueError(f"invalid Windows build tool command: {name}")
+        arguments = ["-e", "print $^V"] if name == "perl" else ["--version"]
+        reported = run([*command, *arguments], directory, environment, capture=True).strip()
+        expected = pins[name].get("version", "")
+        match = re.search(r"(?<![0-9.])v?([0-9]+(?:\.[0-9]+)+)(?![0-9.])", reported)
+        if not match or match[1] != expected:
+            raise ValueError(f"Windows {name} version differs from the Nix release plan: {reported}")
+        evidence[name] = {"version": expected, "selection": "version-verified-build-tool"}
+    perl_os = run([*tools["perl"], "-MConfig", "-e", "print $Config{osname}"],
+                  directory, environment, capture=True).strip()
+    if perl_os != "MSWin32":
+        raise ValueError("PostgreSQL Windows builds require native Perl, not Cygwin/MSYS Perl")
+    compiler = shutil.which("cl.exe", path=environment.get("PATH", ""))
+    if not compiler:
+        raise ValueError("PostgreSQL Windows builds require the native x64 MSVC developer environment")
+    build_env = dict(environment, CC=compiler, CXX=compiler, NINJA=tools["ninja"][0])
+    build_env.pop("CFLAGS", None)
+    build_env.pop("CXXFLAGS", None)
+    arguments = [*tools["meson"], "setup", str(directory), str(source),
+                 "--prefix=C:" + PREFIX, "--libdir=lib", "--datadir=share", "--buildtype=release",
+                 "--auto-features=disabled", "--wrap-mode=nodownload", "-Dssl=none", "-Duuid=none",
+                 "-Drpath=false", "-Db_vscrt=mt"]
+    for option, name in (("PERL", "perl"), ("FLEX", "flex"), ("BISON", "bison")):
+        arguments.append("-D" + option + "=" + tools[name][0])
+    run(arguments, directory, build_env)
+    compilers = json.loads(run([*tools["meson"], "introspect", "--compilers", str(directory)],
+                              directory, build_env, capture=True))
+    if compilers.get("host", {}).get("c", {}).get("id") != "msvc":
+        raise ValueError("PostgreSQL Windows build did not select native MSVC")
+    evidence["c"] = {"id": "msvc", "version": compilers["host"]["c"].get("version"),
+                     "runtime_library": "static"}
+    run([*tools["meson"], "compile", "-C", str(directory), "-j", str(jobs)], directory, build_env)
+    run([*tools["meson"], "install", "-C", str(directory), "--destdir", str(staged), "--no-rebuild"],
+        directory, build_env)
+    return arguments, evidence
 
 
 def collect_licenses(source_directory, prefix):
@@ -177,7 +235,7 @@ def collect_licenses(source_directory, prefix):
     return licenses
 
 
-def build(plan, target, archive, output, jobs=2):
+def build(plan, target, archive, output, jobs=2, windows_tools=None):
     source = validate(plan, target, jobs)
     output = Path(output).absolute()
     if output.exists() or output.is_symlink():
@@ -193,14 +251,20 @@ def build(plan, target, archive, output, jobs=2):
             raise ValueError("PostgreSQL source version differs from the Nix plan")
         directory = work / "build"
         directory.mkdir()
-        configure_args = configure_arguments(source_directory)
-        run(configure_args, directory, environment)
-        make_args = make_arguments(target)
-        run(["make", "-j", str(jobs), *make_args], directory, environment)
         staged = work / "stage"
-        run(["make", *make_args, "DESTDIR=" + str(staged), "install"], directory, environment)
+        build_tools = {}
+        if target.startswith("windows-"):
+            configure_args, build_tools = build_windows(plan, source_directory, directory, staged,
+                                                        environment, windows_tools, jobs)
+            make_args = []
+        else:
+            configure_args = configure_arguments(source_directory)
+            run(configure_args, directory, environment)
+            make_args = make_arguments(target)
+            run(["make", "-j", str(jobs), *make_args], directory, environment)
+            run(["make", *make_args, "DESTDIR=" + str(staged), "install"], directory, environment)
         prefix = staged / PREFIX.lstrip("/")
-        check_layout(prefix)
+        check_layout(prefix, target)
         shutil.copyfile(source_directory / "COPYRIGHT", prefix / "COPYRIGHT")
         licenses = collect_licenses(source_directory, prefix)
         if target.startswith("darwin-"):
@@ -209,7 +273,7 @@ def build(plan, target, archive, output, jobs=2):
         # This invocation occurs at a different path than the compiled prefix and
         # proves libpq lookup. Full initdb/start/SQL acceptance belongs to CI.
         for command in COMMANDS:
-            version = run([str(prefix / "bin" / command), "--version"], work, environment, capture=True)
+            version = run([str(prefix / "bin" / (command + (".exe" if target.startswith("windows-") else ""))), "--version"], work, environment, capture=True)
             if not re.search(r"\b" + re.escape(source["version"]) + r"\b", version):
                 raise ValueError(f"unexpected PostgreSQL version from {command}: {version.strip()}")
         metadata = {"version": 1, "component": "postgresql", "target": target,
@@ -218,7 +282,7 @@ def build(plan, target, archive, output, jobs=2):
                     "source_revision": plan["sourceRevision"],
                     "disabled_features": list(DISABLED) + ["nls"],
                     "configure": configure_args[1:], "make_variables": make_args,
-                    "dependencies": dependencies, "licenses": licenses}
+                    "dependencies": dependencies, "licenses": licenses, "build_tools": build_tools}
         (prefix / "native-build.json").write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         prefix.rename(output)
     return output
@@ -231,10 +295,12 @@ def main():
     parser.add_argument("--source-archive", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--jobs", type=int, default=2)
+    parser.add_argument("--windows-tools", type=Path, help="JSON command arrays for Nix-declared Windows build tools")
     args = parser.parse_args()
     try:
         output = build(json.loads(args.plan.read_text(encoding="utf-8")), args.target,
-                       args.source_archive, args.output, args.jobs)
+                       args.source_archive, args.output, args.jobs,
+                       json.loads(args.windows_tools.read_text()) if args.windows_tools else None)
     except (ValueError, OSError, subprocess.CalledProcessError) as error:
         parser.exit(1, f"PostgreSQL build failed: {error}\n")
     print(f"Built PostgreSQL component: {output}")

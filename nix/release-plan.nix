@@ -5,10 +5,13 @@ let
     baseVersion = inputs.version;
     inherit revision sourceDateEpoch releaseTag;
   };
+  downloadURL = url:
+    builtins.replaceStrings [ "mirror://gnu/" "mirror://cpan/" ]
+      [ "https://ftp.gnu.org/gnu/" "https://www.cpan.org/" ] url;
   source = package: {
     version = package.version;
-    urls = package.src.urls or [ package.src.url ];
-    hash = package.src.outputHash;
+    urls = map downloadURL (package.src.urls or [ package.src.url ]);
+    hash = builtins.convertHash { hash = package.src.outputHash; hashAlgo = "sha256"; toHashFormat = "sri"; };
     hashAlgorithm = "sha256";
     hashMode = package.src.outputHashMode or "flat";
     stripRoot = package.src.stripRoot or false;
@@ -24,6 +27,16 @@ in rec {
     dune = source pkgs.ocamlPackages.dune_3;
     postgresql = source pkgs.postgresql;
   };
+  # Native Windows build-only dependencies. Versions and verified source bytes
+  # come from the same nixpkgs lock as the payload; none belongs in the archive.
+  windowsBuildTools = {
+    meson = source pkgs.meson;
+    ninja = source pkgs.ninja;
+    perl = source pkgs.perl;
+    flex = source pkgs.flex;
+    bison = source pkgs.bison;
+  };
+  windowsOcamlCompiler = "ocaml-variants.${sources.ocaml.version}+options,ocaml-option-no-compression";
   moduleInputs = [ "runtime/go/go.mod" "runtime/go/go.sum" ];
   moduleInputHashes = builtins.listToAttrs (map (path: {
     name = path;

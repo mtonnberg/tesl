@@ -169,9 +169,10 @@ class DistributionTests(unittest.TestCase):
             output.mkdir()
             return output
 
-        def extract(source, archive, output):
+        def compiler_tools_build(plan, target, ocaml, dune, output):
             output.mkdir()
-            (output / "LICENSE").write_text("OCaml license")
+            (output / "licenses").mkdir()
+            (output / "licenses/LICENSE").write_text("OCaml license")
             return output
 
         def assemble(plan, root, target, compiler, frontends, sdk, pg, bundle, licenses, output):
@@ -190,7 +191,7 @@ class DistributionTests(unittest.TestCase):
         stack = ExitStack()
         self.addCleanup(stack.close)
         for owner, name, callback in ((distribution, "run", run), (distribution, "download", download),
-                                     (distribution, "extract_verified", extract), (distribution.native_sdk, "build", sdk_build),
+                                     (distribution.native_compiler_tools, "build", compiler_tools_build), (distribution.native_sdk, "build", sdk_build),
                                      (distribution.native_postgres, "build", pg_build), (distribution.native_payload, "assemble", assemble),
                                      (distribution.native_payload, "pack", pack)):
             stack.enter_context(patch.object(owner, name, side_effect=callback))
@@ -206,7 +207,9 @@ class DistributionTests(unittest.TestCase):
         evidence = json.loads((self.output / "distribution-checks.json").read_text())
         self.assertEqual(evidence["installed_workflow"], "passed")
         self.assertEqual(evidence["network_isolation"], "linux-network-namespace")
-        self.assertFalse(evidence["ocaml"]["compiler_source_hash_verified"])
+        self.assertTrue(evidence["ocaml"]["compiler_source_hash_verified"])
+        self.assertTrue(evidence["dune"]["source_hash_verified"])
+        self.assertFalse(any(args[0] == "opam" for args, _ in calls))
         self.assertFalse(evidence["published"])
         self.assertEqual(evidence["minimum_os_runtime"], "not-established")
         build_calls = [args for args, _ in calls if "./cmd/..." in args]
@@ -234,7 +237,7 @@ class DistributionTests(unittest.TestCase):
         result = distribution.build(value, self.root, "darwin-arm64", self.root / "modules", self.output)
         self.assertEqual(result["network_isolation"], "not-tested")
         self.assertEqual(result["minimum_os_runtime"], "not-established")
-        self.assertTrue(all(environment["MACOSX_DEPLOYMENT_TARGET"] == "13.0" for _, environment in calls))
+        self.assertTrue(all(environment["MACOSX_DEPLOYMENT_TARGET"] == "13" for _, environment in calls))
 
     def test_windows_and_existing_output_fail_before_build(self):
         with self.assertRaisesRegex(ValueError, "Windows distribution awaits"):

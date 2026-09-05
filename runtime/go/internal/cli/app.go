@@ -52,6 +52,9 @@ func execute(ctx context.Context, invocation Invocation) error {
 	// Managed PostgreSQL has an explicit start/stop lifecycle independent of this
 	// invocation. Its daemon must survive pg_ctl and the CLI exiting.
 	if invocation.Persistent {
+		if err := childprocess.ConfigurePersistent(command); err != nil {
+			return err
+		}
 		err := command.Run()
 		if ctx.Err() != nil {
 			return ctx.Err()

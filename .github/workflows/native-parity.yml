@@ -20,6 +20,7 @@ jobs:
       matrix: ${{ steps.export.outputs.matrix }}
       go: ${{ steps.export.outputs.go }}
       ocaml: ${{ steps.export.outputs.ocaml }}
+      windows-ocaml: ${{ steps.export.outputs.windows-ocaml }}
     steps:
       - uses: actions/checkout@v4
       - uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25
@@ -44,6 +45,7 @@ jobs:
               output.write('matrix=' + json.dumps({'include': plan['candidates']}) + '\n')
               for name in ('go', 'ocaml'):
                   output.write(name + '=' + plan['sources'][name]['version'] + '\n')
+              output.write('windows-ocaml=' + plan['windowsOcamlCompiler'] + '\n')
           PY
       - name: Bundle locked Go modules for offline builds
         run: python3 scripts/module_proxy.py --plan native-release-plan.json --output native-module-bundle
@@ -82,9 +84,9 @@ jobs:
           cache-dependency-path: runtime/go/go.sum
       - uses: ocaml/setup-ocaml@v3
         with:
-          ocaml-compiler: ${{ needs.plan.outputs.ocaml }}
+          ocaml-compiler: ${{ startsWith(matrix.target, 'windows-') && needs.plan.outputs.windows-ocaml || needs.plan.outputs.ocaml }}
           windows-compiler: mingw
-          cache-prefix: native-payload-macos13-v1
+          cache-prefix: native-payload-no-compression-v2
       - uses: actions/setup-node@v4
         with:
           node-version: '22'

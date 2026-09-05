@@ -34,13 +34,16 @@ def sha256_file(path):
     return digest.digest()
 
 
-def nar_hash(root):
+def nar_hash(root, executable_paths=None):
     """Hash a source tree as Nix's canonical archive, without requiring Nix.
 
     NAR strings have an unsigned little-endian length and zero padding to eight
     bytes. Directory entries sort by filename bytes; only owner executable mode
-    affects regular files. Our extraction policy excludes links/special files.
+    affects regular files. executable_paths may provide archive-relative POSIX
+    names so Windows verification does not rely on unsupported chmod bits.
+    Our extraction policy excludes links/special files.
     """
+    root = Path(root)
     digest = hashlib.sha256()
 
     def string(data):
@@ -63,7 +66,9 @@ def nar_hash(root):
                 string(")")
         elif stat.S_ISREG(mode):
             string("regular")
-            if mode & stat.S_IXUSR:
+            executable = (bool(mode & stat.S_IXUSR) if executable_paths is None else
+                          path.relative_to(root).as_posix() in executable_paths)
+            if executable:
                 string("executable")
                 string("")
             string("contents")
@@ -80,6 +85,19 @@ def nar_hash(root):
     string("nix-archive-1")
     node(Path(root))
     return digest.digest()
+
+
+def portable_member(name, previous):
+    """Reject Win32 special paths; previous contains case-folded archive names."""
+    reserved = {"con", "prn", "aux", "nul", *("com" + str(i) for i in range(1, 10)),
+                *("lpt" + str(i) for i in range(1, 10))}
+    for part in name.split("/"):
+        if (any(char in part for char in ':<>"|?*') or any(ord(char) < 32 for char in part) or part.endswith((" ", ".")) or
+                part.split(".", 1)[0].casefold() in reserved):
+            raise ValueError(f"source archive member is not a portable Windows path: {name}")
+    folded = name.casefold()
+    if folded in previous:
+        raise ValueError(f"source archive has a case-insensitive duplicate: {name}")
 
 
 def extract_verified(source, archive, output):
@@ -110,7 +128,8 @@ def extract_verified(source, archive, output):
     with tempfile.TemporaryDirectory(prefix=".tesl-source-", dir=output.parent) as temporary:
         unpacked = Path(temporary) / "unpacked"
         unpacked.mkdir()
-        seen, total = set(), 0
+        seen, total, executable_paths = set(), 0, set()
+        windows_names = set()
         with tarfile.open(archive, "r:*") as stream:
             for member in stream:
                 name = member.name.rstrip("/")
@@ -120,6 +139,9 @@ def extract_verified(source, archive, output):
                         name in seen or not (member.isdir() or member.isfile())):
                     raise ValueError(f"unsafe or duplicate source archive member: {member.name}")
                 seen.add(name)
+                if os.name == "nt":
+                    portable_member(name, windows_names)
+                    windows_names.add(name.casefold())
                 total += member.size
                 if total > MAX_SOURCE_BYTES:
                     raise ValueError("expanded source archive is too large")
@@ -130,7 +152,13 @@ def extract_verified(source, archive, output):
                     destination.parent.mkdir(parents=True, exist_ok=True)
                     with stream.extractfile(member) as content, destination.open("xb") as target:
                         shutil.copyfileobj(content, target)
-                    destination.chmod(0o755 if member.mode & stat.S_IXUSR else 0o644)
+                    executable = bool(member.mode & stat.S_IXUSR)
+                    destination.chmod(0o755 if executable else 0o644)
+                    # Equal input mtimes prevent tar order from triggering
+                    # unrelated autoconf/automake regeneration on native hosts.
+                    os.utime(destination, (0, 0))
+                    if executable:
+                        executable_paths.add(name)
         children = list(unpacked.iterdir())
         if not children:
             raise ValueError("empty source archive")
@@ -138,7 +166,8 @@ def extract_verified(source, archive, output):
             if len(children) != 1 or not children[0].is_dir():
                 raise ValueError("source archive must have a single root directory")
             unpacked = children[0]
-        if source["hashMode"] == "recursive" and nar_hash(unpacked) != expected:
+            executable_paths = {name.split("/", 1)[1] for name in executable_paths}
+        if source["hashMode"] == "recursive" and nar_hash(unpacked, executable_paths) != expected:
             raise ValueError("source tree checksum mismatch")
         unpacked.rename(output)
     return output

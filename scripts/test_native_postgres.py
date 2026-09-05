@@ -55,7 +55,7 @@ class NativePostgresTest(unittest.TestCase):
     def test_validation_rejects_bad_plan_target_host_and_jobs_before_extraction(self):
         cases = [(dict(self.plan, version=2), "linux-amd64", 2, "release plan"),
                  (self.plan, "linux-arm64", 2, "absent"),
-                 (self.plan, "windows-amd64", 2, "Linux and macOS"),
+                 (self.plan, "windows-amd64", 2, "native host"),
                  (self.plan, "darwin-arm64", 2, "native host"),
                  (self.plan, "linux-amd64", 0, "positive integer"),
                  (self.plan, "linux-amd64", True, "positive integer"),
@@ -187,6 +187,16 @@ class NativePostgresTest(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     pg.audit(self.root / "prefix", "linux-amd64", {})
 
+    def test_linux_system_loader_dependency_must_match_target_architecture(self):
+        self.install_fixture(self.root / "prefix")
+        for target, correct, wrong in (("linux-amd64", "ld-linux-x86-64.so.2", "ld-linux-aarch64.so.1"),
+                                       ("linux-arm64", "ld-linux-aarch64.so.1", "ld-linux-x86-64.so.2")):
+            with self.subTest(target=target), patch.object(pg, "run", return_value=f"(NEEDED) Shared library: [{correct}]\n"):
+                pg.audit(self.root / "prefix", target, {})
+            with self.subTest(target=target, wrong=wrong), patch.object(pg, "run", return_value=f"(NEEDED) Shared library: [{wrong}]\n"):
+                with self.assertRaisesRegex(ValueError, "wrong-architecture"):
+                    pg.audit(self.root / "prefix", target, {})
+
     def test_macos_relocation_changes_owned_dylibs_and_resigns_each_binary(self):
         prefix = self.root / "prefix"
         paths = [prefix / "bin/psql", prefix / "lib/libpq.5.dylib"]
@@ -198,6 +208,96 @@ class NativePostgresTest(unittest.TestCase):
                        "@rpath/libpq.5.dylib", str(paths[0])], commands)
         self.assertIn(["install_name_tool", "-id", "@rpath/libpq.5.dylib", str(paths[1])], commands)
         self.assertEqual(sum(command[0] == "codesign" for command in commands), 2)
+
+    def test_windows_builder_pins_tools_selects_msvc_and_disables_downloads(self):
+        tools = {name: [name] for name in ("meson", "ninja", "perl", "flex", "bison")}
+        self.plan["windowsBuildTools"] = {name: {"version": "1.2.3"} for name in tools}
+        calls = []
+        def run(arguments, directory, environment, capture=False):
+            calls.append((arguments, environment))
+            if arguments[-1] == "--version" or arguments[-1] == "print $^V":
+                return "1.2.3"
+            if arguments[-1] == "print $Config{osname}":
+                return "MSWin32"
+            if "introspect" in arguments:
+                return json.dumps({"host": {"c": {"id": "msvc", "version": "19.44"}}})
+        with patch.object(pg, "run", side_effect=run), patch.object(pg.shutil, "which", return_value="C:/MSVC/cl.exe"):
+            arguments, evidence = pg.build_windows(self.plan, self.root / "source", self.root / "build",
+                                                   self.root / "stage", {"PATH": "native", "CFLAGS": "-O2"}, tools, 2)
+        self.assertIn("--wrap-mode=nodownload", arguments)
+        self.assertIn("--auto-features=disabled", arguments)
+        self.assertIn("-Dssl=none", arguments)
+        self.assertIn("-Db_vscrt=mt", arguments)
+        self.assertIn("--prefix=C:/tesl-postgresql", arguments)
+        setup_env = next(environment for command, environment in calls if "setup" in command)
+        self.assertEqual(setup_env["CC"], "C:/MSVC/cl.exe")
+        self.assertNotIn("CFLAGS", setup_env)
+        self.assertEqual(evidence["c"]["runtime_library"], "static")
+        self.assertEqual(calls[-1][0][-1], "--no-rebuild")
+
+    def test_windows_build_publishes_complete_exe_component_with_tool_evidence(self):
+        from test_pe_audit import pe_image
+        tools = {name: [name] for name in ("meson", "ninja", "perl", "flex", "bison")}
+        self.plan["windowsBuildTools"] = {name: {"version": "1.2.3"} for name in tools}
+        def run(arguments, directory, environment, capture=False):
+            if arguments[0] in tools and (arguments[-1] == "--version" or arguments[-1] == "print $^V"):
+                return "1.2.3"
+            if arguments[-1] == "print $Config{osname}":
+                return "MSWin32"
+            if "introspect" in arguments:
+                return json.dumps({"host": {"c": {"id": "msvc", "version": "19.44"}}})
+            if "install" in arguments:
+                prefix = Path(arguments[arguments.index("--destdir") + 1]) / "tesl-postgresql"
+                self.install_fixture(prefix)
+                for command in pg.COMMANDS:
+                    (prefix / "bin" / command).unlink()
+                    (prefix / "bin" / (command + ".exe")).write_bytes(pe_image(imports=["kernel32.dll"]))
+                (prefix / "lib/libpq.so.5").unlink()
+                (prefix / "bin/libpq.dll").write_bytes(pe_image(imports=["ucrtbase.dll"], dll=True))
+            if arguments[-1] == "--version":
+                return "PostgreSQL 17.10"
+        with patch.object(pg, "native_target", return_value="windows-amd64"), \
+                patch.object(pg, "extract_verified", side_effect=self.extract_fixture), \
+                patch.object(pg, "run", side_effect=run), patch.object(pg.shutil, "which", return_value="cl.exe"):
+            output = pg.build(self.plan, "windows-amd64", self.root / "archive", self.root / "output", windows_tools=tools)
+        pg.check_layout(output, "windows-amd64")
+        metadata = json.loads((output / "native-build.json").read_text())
+        self.assertEqual(metadata["target"], "windows-amd64")
+        self.assertEqual(metadata["build_tools"]["c"]["id"], "msvc")
+        self.assertEqual(metadata["dependencies"]["bin/psql.exe"], ["kernel32.dll"])
+        self.assertEqual(sorted(path.name for path in self.root.iterdir()), ["output"])
+
+    def test_windows_builder_rejects_unpinned_tools_wrong_versions_and_cygwin_perl(self):
+        tools = {name: [name] for name in ("meson", "ninja", "perl", "flex", "bison")}
+        with self.assertRaisesRegex(ValueError, "Nix-declared"):
+            pg.build_windows(self.plan, self.root, self.root, self.root, {}, tools, 2)
+        self.plan["windowsBuildTools"] = {name: {"version": "1.2.3"} for name in tools}
+        with patch.object(pg, "run", return_value="9.0.0"), self.assertRaisesRegex(ValueError, "differs from"):
+            pg.build_windows(self.plan, self.root, self.root, self.root, {}, tools, 2)
+        with patch.object(pg, "run", side_effect=["1.2.3"] * 5 + ["cygwin"]), self.assertRaisesRegex(ValueError, "native Perl"):
+            pg.build_windows(self.plan, self.root, self.root, self.root, {}, tools, 2)
+        with patch.object(pg, "run", side_effect=["1.2.3"] * 5 + ["MSWin32"]), \
+                patch.object(pg.shutil, "which", return_value=None), self.assertRaisesRegex(ValueError, "MSVC developer"):
+            pg.build_windows(self.plan, self.root, self.root, self.root, {}, tools, 2)
+        with patch.object(pg, "run", side_effect=["1.2.3"] * 5 + ["MSWin32", None, '{"host":{"c":{"id":"gcc"}}}']), \
+                patch.object(pg.shutil, "which", return_value="cl.exe"), self.assertRaisesRegex(ValueError, "select native MSVC"):
+            pg.build_windows(self.plan, self.root, self.root, self.root, {}, tools, 2)
+
+    def test_windows_layout_and_pe_closure_require_exe_tools_and_colocated_libraries(self):
+        from test_pe_audit import pe_image
+        prefix = self.root / "prefix"
+        self.install_fixture(prefix)
+        for command in pg.COMMANDS:
+            (prefix / "bin" / command).unlink()
+            (prefix / "bin" / (command + ".exe")).write_bytes(pe_image(imports=["kernel32.dll", "libpq.dll"]))
+        (prefix / "lib/libpq.so.5").unlink()
+        (prefix / "bin/libpq.dll").write_bytes(pe_image(imports=["ucrtbase.dll"], dll=True))
+        pg.check_layout(prefix, "windows-amd64")
+        dependencies = pg.audit(prefix, "windows-amd64", {})
+        self.assertEqual(dependencies["bin/psql.exe"], ["kernel32.dll", "libpq.dll"])
+        (prefix / "bin/libpq.dll").unlink()
+        with self.assertRaisesRegex(ValueError, "unbundled Windows"):
+            pg.audit(prefix, "windows-amd64", {})
 
     def test_macos_audit_rejects_host_library_paths(self):
         prefix = self.root / "prefix"

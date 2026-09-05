@@ -12,6 +12,8 @@ import re
 import struct
 import subprocess
 
+from pe_audit import PE, audit_binary as audit_pe_binary
+
 
 ELF_BASELINE_LIBRARIES = {
     "libc.so.6", "libm.so.6", "libpthread.so.0", "libdl.so.2", "librt.so.1",
@@ -59,6 +61,9 @@ def _format(path, target):
     data = path.read_bytes()
     if b"/nix/store/" in data:
         raise ValueError(f"binary contains a Nix store reference: {path}")
+    if target == "windows-amd64":
+        PE(data)
+        return "PE"
     if target.startswith("linux-"):
         if len(data) < 64 or data[:6] != b"\x7fELF\x02\x01":
             raise ValueError(f"expected little-endian ELF64 binary: {path}")
@@ -103,6 +108,8 @@ def _elf(root, path, target, baseline):
     for name in needed:
         if "/" in name or "\\" in name or not name:
             raise ValueError(f"non-relocatable ELF dependency: {path}: {name}")
+        if name in {Path(loader).name for loader in ELF_LOADERS.values()} and name != Path(ELF_LOADERS[target]).name:
+            raise ValueError(f"wrong-architecture ELF loader dependency: {path}: {name}")
         if name in allowed:
             if any((directory / name).exists() for directory in search):
                 raise ValueError(f"payload shadows an OS baseline library: {path}: {name}")
@@ -186,18 +193,23 @@ def _macho(root, path, target, baseline):
 
 
 def audit(root, plan, target):
-    """Return binary-audit evidence, or raise ValueError; Windows is not accepted."""
-    if target not in {*ELF_LOADERS, "darwin-amd64", "darwin-arm64"}:
+    """Return static dependency evidence, or raise ValueError on an open closure."""
+    if target not in {*ELF_LOADERS, "darwin-amd64", "darwin-arm64", "windows-amd64"}:
         raise ValueError(f"payload dependency audit is not implemented for {target}")
     root = Path(root).resolve()
     try:
         candidate = next(row for row in plan["candidates"] if row["target"] == target)
         baseline = candidate["baseline"]
-        prefix = "glibc " if target.startswith("linux-") else "macOS "
-        if not baseline.startswith(prefix):
-            raise ValueError("unsupported OS baseline")
-        system_version = baseline[len(prefix):]
-        _version(system_version)
+        if target.startswith("windows-"):
+            if baseline != "Windows 11":
+                raise ValueError("unsupported Windows baseline")
+            system_version = None
+        else:
+            prefix = "glibc " if target.startswith("linux-") else "macOS "
+            if not baseline.startswith(prefix):
+                raise ValueError("unsupported OS baseline")
+            system_version = baseline[len(prefix):]
+            _version(system_version)
         components = plan["payloads"][target]["manifest"]["components"]
         executables = {name: _component(root, components[name]["path"])
                        for name in set(plan["commands"]) | EXECUTABLE_COMPONENTS}
@@ -207,13 +219,14 @@ def audit(root, plan, target):
     # Sibling tools (gofmt, PostgreSQL helpers) also form part of the installation.
     for directory in {path.parent for path in pending}:
         if directory.is_dir():
-            pending.update(path for path in directory.iterdir() if path.is_file())
+            pending.update(path for path in directory.iterdir() if path.is_file()
+                           and (not target.startswith("windows-") or path.suffix.casefold() in {".exe", ".dll"}))
     sdk = executables["go"].parent.parent
     postgres = executables["postgres"].parent.parent
     for directory in (sdk / "pkg" / "tool", postgres / "lib"):
         if directory.is_dir():
             for path in directory.rglob("*"):
-                if path.is_file() and (directory == sdk / "pkg" / "tool" or re.search(r"\.(?:so(?:\.[0-9]+)*|dylib)$", path.name)):
+                if path.is_file() and (directory == sdk / "pkg" / "tool" or re.search(r"\.(?:so(?:\.[0-9]+)*|dylib|dll)$", path.name, re.IGNORECASE)):
                     pending.add(path)
     evidence, visited = [], set()
     while pending:
@@ -227,8 +240,16 @@ def audit(root, plan, target):
         if os.name != "nt" and path in executables.values() and not os.access(path, os.X_OK):
             raise ValueError(f"runtime component is not executable: {path}")
         format_name = _format(path, target)
-        detail, dependencies = (_elf if format_name == "ELF" else _macho)(root, path, target, system_version)
+        if format_name == "PE":
+            application_directory = postgres / "bin" if path.is_relative_to(postgres) else path.parent
+            detail, dependencies = audit_pe_binary(root, path, application_directory)
+            if path.suffix.casefold() == ".dll" and not detail["is_dll"]:
+                raise ValueError(f"Windows DLL file is not marked as a DLL: {path}")
+        else:
+            detail, dependencies = (_elf if format_name == "ELF" else _macho)(root, path, target, system_version)
         if path in executables.values():
+            if format_name == "PE" and detail["is_dll"]:
+                raise ValueError(f"Windows component is not an executable: {path}")
             if format_name == "ELF" and detail["needed"] and not detail["interpreter"]:
                 raise ValueError(f"dynamic ELF executable has no baseline interpreter: {path}")
             if format_name == "Mach-O" and struct.unpack_from("<I", path.read_bytes(), 12)[0] != 2:

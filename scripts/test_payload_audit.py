@@ -70,6 +70,43 @@ class PayloadAuditTests(unittest.TestCase):
                     name: {"path": "bin/tool"} for name in audit.EXECUTABLE_COMPONENTS | {"tesl"}
                 }}}}}
 
+    def windows_plan(self):
+        from test_pe_audit import pe_image
+        components = {"tesl": {"path": "bin/tesl.exe"},
+                      "compiler": {"path": "libexec/tesl/tesl-compiler.exe"},
+                      "go": {"path": "libexec/tesl/go/bin/go.exe"}}
+        for name in {"postgres", "initdb", "pg_ctl", "createdb", "psql"}:
+            components[name] = {"path": "libexec/tesl/postgresql/bin/" + name + ".exe"}
+        for value in components.values():
+            self.write(value["path"], pe_image(imports=["kernel32.dll"]))
+        return {"commands": ["tesl"], "candidates": [{"target": "windows-amd64", "baseline": "Windows 11"}],
+                "payloads": {"windows-amd64": {"manifest": {"components": components}}}}
+
+    def test_windows_audits_tools_modules_and_transitive_dll_imports(self):
+        from test_pe_audit import pe_image
+        plan = self.windows_plan()
+        self.write("libexec/tesl/go/pkg/tool/windows_amd64/compile.exe", pe_image(imports=["kernel32.dll"]))
+        library = self.write("libexec/tesl/postgresql/bin/libpq.dll", pe_image(imports=["ucrtbase.dll"], dll=True))
+        self.write("libexec/tesl/postgresql/bin/psql.exe", pe_image(imports=["libpq.dll"]))
+        self.write("libexec/tesl/postgresql/lib/plpgsql.dll", pe_image(imports=["postgres.exe"], dll=True))
+        result = audit.audit(self.root, plan, "windows-amd64")
+        self.assertEqual(result["baseline"], "Windows 11")
+        self.assertTrue(all(item["format"] == "PE" for item in result["binaries"]))
+        self.assertIn("libexec/tesl/go/pkg/tool/windows_amd64/compile.exe", [item["path"] for item in result["binaries"]])
+        library.write_bytes(pe_image(delayed=["VCRUNTIME140.dll"], dll=True))
+        with self.assertRaisesRegex(ValueError, "unbundled Windows"):
+            audit.audit(self.root, plan, "windows-amd64")
+
+    def test_windows_manifest_rejects_dll_in_place_of_executable_and_other_baseline(self):
+        from test_pe_audit import pe_image
+        plan = self.windows_plan()
+        self.write("bin/tesl.exe", pe_image(dll=True))
+        with self.assertRaisesRegex(ValueError, "not an executable"):
+            audit.audit(self.root, plan, "windows-amd64")
+        plan["candidates"][0]["baseline"] = "Windows latest"
+        with self.assertRaisesRegex(ValueError, "unsupported Windows baseline"):
+            audit.audit(self.root, plan, "windows-amd64")
+
     def test_linux_baseline_and_static_sdk_are_accepted(self):
         self.write("pkg/tool/linux_amd64/compile", elf())
         def inspect(args):
@@ -91,6 +128,15 @@ class PayloadAuditTests(unittest.TestCase):
         with patch.object(audit, "_inspect", side_effect=lambda args: inspect(args).replace("GLIBC_2.35", "GLIBC_2.38")):
             with self.assertRaisesRegex(ValueError, "newer than 2.35"):
                 audit.audit(self.root, self.plan(), "linux-amd64")
+
+    def test_linux_loader_needed_entry_must_match_architecture(self):
+        for target, loader in audit.ELF_LOADERS.items():
+            wrong = next(value for key, value in audit.ELF_LOADERS.items() if key != target)
+            with self.subTest(target=target), patch.object(audit, "_inspect", return_value=elf_output(needed=(Path(loader).name,), loader=loader)):
+                audit._elf(self.root, self.binary, target, "2.35")
+            with self.subTest(target=target, wrong=wrong), patch.object(audit, "_inspect", return_value=elf_output(needed=(Path(wrong).name,), loader=loader)):
+                with self.assertRaisesRegex(ValueError, "wrong-architecture"):
+                    audit._elf(self.root, self.binary, target, "2.35")
 
     def test_linux_rejects_undeclared_and_nonbaseline_dependencies(self):
         cases = [
@@ -154,7 +200,7 @@ class PayloadAuditTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     audit.audit(self.root, plan, "linux-amd64")
         with self.assertRaisesRegex(ValueError, "not implemented"):
-            audit.audit(self.root, self.plan(), "windows-amd64")
+            audit.audit(self.root, self.plan(), "windows-arm64")
         with self.assertRaisesRegex(ValueError, "metadata"):
             audit.audit(self.root, {}, "linux-amd64")
 
