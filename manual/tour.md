@@ -387,6 +387,19 @@ families in one database, or binding a historical `V<n>` entity to a connection.
 Application bindings use `VCurrent`. These checks also run on new, unsaved
 application files.
 
+An application can select the complete schema with `schema: NotesSchema.VCurrent`
+and `migrations: NotesSchema.Migrate` instead of listing `entities:`. Import the
+`VCurrent` root directly; the compiler includes every entity in its local import
+closure, including private entities and child modules. That membership does not
+make private types or helpers accessible to application code. With PostgreSQL,
+put the physical schema name in `PostgresConfig.namespace`, for example
+`namespace: "notes_app"`. It must be a nonempty static string. The `Database`
+declaration and connection settings remain in the application module.
+
+This form currently establishes ownership and generated table metadata. Migration
+history, automatic transformations and deployment coordination are still under
+development; selecting a migration namespace does not yet execute migrations.
+
 Tesl derives the database schema directly from your `entity` and `database` declarations. On first
 run it creates any missing tables automatically — no separate migration file needed to get started:
 

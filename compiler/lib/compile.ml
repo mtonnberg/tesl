@@ -2759,13 +2759,14 @@ let canonical_import_path = Validation_common.canonical_import_path
    bind to `teslrt` functions, and compiling them as well would give a program two of each. *)
 let go_lifted_module_names = ["Tesl.CivilTime"]
 
-let build_local_import_graph ?(lifted=[]) entry_path =
+let build_local_import_graph ?(lifted=[]) ?entry entry_path =
   let graph : (string, string list) Hashtbl.t = Hashtbl.create 16 in
+  let entry_canon = canonical_import_path entry_path in
   let rec visit path =
     if Hashtbl.mem graph path then ()
     else begin
       let deps =
-        match parse_module_file path with
+        match (if path = entry_canon && entry <> None then entry else parse_module_file path) with
         | None -> []
         | Some m ->
           List.filter_map (fun (imp : Ast.import_decl) ->
@@ -2781,7 +2782,7 @@ let build_local_import_graph ?(lifted=[]) entry_path =
       List.iter visit deps
     end
   in
-  visit (canonical_import_path entry_path);
+  visit entry_canon;
   graph
 
 let tarjan_sccs (graph : (string, string list) Hashtbl.t) =
@@ -3532,7 +3533,7 @@ type go_dependencies =
 let local_dependency_modules entry_path (entry : Ast.module_form) =
   if entry_path = "" || Filename.check_suffix entry_path ">" then GoDeps { emit = [entry]; originals = [entry]; entry_emit = entry }
   else
-    let graph = build_local_import_graph ~lifted:go_lifted_module_names entry_path in
+    let graph = build_local_import_graph ~lifted:go_lifted_module_names ~entry entry_path in
     let entry_canon = canonical_import_path entry_path in
     (* One node per SCC: a cycle becomes ONE Go package, so the emitter never sees the
        members separately. *)
@@ -3635,6 +3636,7 @@ let go_import_boundary_diags (filename : string) (m : Ast.module_form) =
     | _ -> []) m.imports
 
 let compile_go_source ?(debug=false) ?(path="") filename source =
+  let path = if path = "" then filename else path in
   match parse_module filename source with
   | Err error -> GoFailure [diag_of_parse_error error]
   | Ok m ->

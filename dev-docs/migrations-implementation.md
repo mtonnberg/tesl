@@ -204,8 +204,20 @@ that these scenarios currently work.
   resolution, preserving local declarations versus qualified-only imports. A new
   unsaved-file test exposed the graph walk skipping files without a disk copy;
   it now checks the parsed entry and its imports, including ownership, in that case.
-  Full module references, implicit private-entity membership and the general MIG015
-  historical-import rule still remain pending.
+  Module references now select the complete private entity closure and keep the
+  physical PostgreSQL namespace separate in `PostgresConfig.namespace`. Source,
+  unsaved-file and direct project entrypoints resolve the same ownership; the
+  single-module emitter refuses an unresolved reference. Tests cover private
+  membership, diamonds, cycles, duplicate tables, same-named local and imported
+  declarations, empty roots, malformed config, and App capability wiring. They
+  caught imported metadata replacing a local entity and omitting its table, and
+  legacy config validation accepting private or nonexistent entities. Both are
+  fixed with regression cases. V7–V9 now use module references; all nine source
+  files pass agent-context. The updated PostgreSQL process run passes, including
+  shared rows and transaction pauses. An earlier attempt timed out during fixture
+  role creation before application queries; server logs are now retained in the
+  failure output. The general MIG015
+  historical-import rule and history/executor integration still remain pending.
 - PostgreSQL tests interpose retirement between a read and its admission, for old
   and surviving versions and six query forms: rows, a missing key, constant false,
   LIMIT 0, an empty aggregate, and EXISTS. They verify that contract DDL

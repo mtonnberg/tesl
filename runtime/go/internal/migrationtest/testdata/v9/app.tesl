@@ -11,9 +11,10 @@ import NotesSchema.VCurrent exposing [Note]
 import Operations exposing [run, titleOf]
 
 database FixtureDb = Database {
-  schema: "migration_fixture"
-  entities: [Note]
+  schema: NotesSchema.VCurrent
+  migrations: NotesSchema.Migrate
   backend: Postgres (PostgresConfig {
+    namespace: "migration_fixture"
     dbName: env "TESL_FIXTURE_DATABASE"
     user: env "TESL_TEST_POSTGRES_SHARED_USER"
     password: env "PGPASSWORD"

@@ -2159,7 +2159,7 @@ The `backend` is either `Postgres (PostgresConfig { ... })` or `Memory`. The `po
 The optional `poolSize` is the connection-pool size: the maximum number of simultaneously open PostgreSQL connections (default 10). It is an `Int` field, so a literal or `envInt "VAR" default` both work — e.g. `poolSize: envInt "PG_POOL_SIZE" 20`. When every pooled connection is busy, a request waits (bounded, 10s by default, `TESL_PG_POOL_LEASE_TIMEOUT_MS` overrides) for a freed connection instead of failing immediately; if the wait times out the HTTP layer answers `503 Service Unavailable`.
 
 #### Schema module references
-**Accepted design; implementation in progress.**
+**Ownership elaboration implemented; migration lifecycle in progress.**
 
 The versioned form selects ownership through a schema module:
 

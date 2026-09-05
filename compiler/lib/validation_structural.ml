@@ -1194,12 +1194,13 @@ let load_imported_entity_names (m : module_form) : string list =
               in
               Some (List.map strip names)
           in
-          List.filter_map (function
+          List.concat_map (function
             | DEntity e when List.mem e.name exported ->
+              let qualified = imp.module_name ^ "." ^ e.name in
               (match requested with
-               | None -> Some e.name
-               | Some req -> if List.mem e.name req then Some e.name else None)
-            | _ -> None
+               | None -> [qualified]
+               | Some req -> if List.mem e.name req then [e.name; qualified] else [qualified])
+            | _ -> []
           ) imported.decls
   ) m.imports
 
@@ -1212,6 +1213,7 @@ let check_database_entities (m : module_form) : validation_error list =
   let known_entities = local_entities @ imported_entities in
   List.concat_map (function
     | DDatabase db ->
+      let db = Desugar.desugar_database_config db in
       List.filter_map (fun ent_name ->
         if not (List.mem ent_name known_entities) then
           Some (make_error db.loc

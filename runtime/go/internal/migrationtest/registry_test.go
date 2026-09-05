@@ -122,7 +122,7 @@ func registryShape(t *testing.T, evidence string) string {
 // verifyRegistry is a test implementation of the template's registry hook. A
 // nested transaction confines the comparison table and any SQL failure to its
 // savepoint, retaining the caller's transaction and its bootstrap lock.
-// It is not the production installer or its complete role-membership audit.
+// It is not the production installer or its complete deployment-role audit.
 func (r *registryDatabase) verifyRegistry(t *testing.T, outer pgx.Tx) error {
 	t.Helper()
 	f := r.f
@@ -145,6 +145,20 @@ func (r *registryDatabase) verifyRegistry(t *testing.T, outer pgx.Tx) error {
 	}
 	if !trusted || login || kind != "r" || !permanent || inherited || rewritten {
 		return fmt.Errorf("registry owner/shape: owner=%s login=%t kind=%s permanent=%t inherited=%t rewritten=%t", owner, login, kind, permanent, inherited, rewritten)
+	}
+	// ACLs omit privileges obtained by becoming the owner. The one-time installer
+	// may have temporary direct membership; request, worker and intermediate roles
+	// may not. MEMBER is deliberately conservative on PG16+: a membership with SET
+	// or INHERIT disabled is still not an accepted steady-state control-role grant.
+	var members string
+	err = tx.QueryRow(f.ctx, `select coalesce(string_agg(rolname,',' order by rolname),'')
+		from pg_roles where oid<>$1::regrole and rolname<>current_user and not rolsuper
+		and pg_has_role(oid,$1::regrole,'MEMBER')`, f.control).Scan(&members)
+	if err != nil {
+		return err
+	}
+	if members != "" {
+		return fmt.Errorf("registry owner has non-installer members: %s", members)
 	}
 	const expected = `create temporary table expected_registry (
 		fence_ns int generated always as identity primary key check(fence_ns between 1 and 2147483646),
@@ -196,6 +210,10 @@ func TestPostgresRegistryLookalikesAndWritableGrantsAreRefused(t *testing.T) {
 	cases := []struct{ name, change, reason string }{
 		{"wrong_owner", "alter table public.tesl_fence_namespaces owner to " + r.f.worker, "owner/shape"},
 		{"login_owner", "alter role " + r.f.control + " login", "owner/shape"},
+		{"request_owner_membership", "grant " + r.f.control + " to " + r.f.app, "non-installer members"},
+		{"worker_owner_membership", "grant " + r.f.control + " to " + r.f.worker, "non-installer members"},
+		{"indirect_owner_membership", "grant " + r.f.control + " to " + r.f.worker + "; grant " + r.f.worker + " to " + r.f.app, "non-installer members"},
+		{"noinherit_owner_membership", "alter role " + r.f.app + " noinherit; grant " + r.f.control + " to " + r.f.app, "non-installer members"},
 		{"range", "alter table public.tesl_fence_namespaces drop constraint tesl_fence_namespaces_fence_ns_check, add check(fence_ns between 0 and 2147483647)", "catalog shape"},
 		{"missing_uuid_unique", "alter table public.tesl_fence_namespaces drop constraint tesl_fence_namespaces_database_uuid_key", "catalog shape"},
 		{"nullable_uuid", "alter table public.tesl_fence_namespaces alter column database_uuid drop not null", "catalog shape"},
@@ -241,6 +259,20 @@ func TestPostgresRegistryLookalikesAndWritableGrantsAreRefused(t *testing.T) {
 			}
 		})
 	}
+	t.Run("temporary_installer_membership", func(t *testing.T) {
+		tx, err := r.conn.Begin(r.f.ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = tx.Rollback(r.f.ctx) }()
+		installer := r.f.schema + "_installer"
+		if _, err = tx.Exec(r.f.ctx, "create role "+installer+"; grant "+r.f.control+" to "+installer+"; set local role "+installer); err != nil {
+			t.Fatal(err)
+		}
+		if err = r.verifyRegistry(t, tx); err != nil {
+			t.Fatalf("active one-time installer was refused: %v", err)
+		}
+	})
 	// Read-only grants do not enable registration or sequence mutation.
 	r.f.execOn(t, r.conn, "grant select on public.tesl_fence_namespaces to public")
 	tx, err := r.conn.Begin(r.f.ctx)

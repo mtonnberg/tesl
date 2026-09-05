@@ -2589,7 +2589,7 @@
     {
       "name": "TestPostgresRegistryLookalikesAndWritableGrantsAreRefused",
       "file": "registry_test.go",
-      "line": 193,
+      "line": 207,
       "layer": "postgres",
       "invariants": [
         "INV-PRIVILEGE",
@@ -2604,7 +2604,7 @@
     {
       "name": "TestPostgresRegistryAllocationRollbackAndExhaustion",
       "file": "registry_test.go",
-      "line": 257,
+      "line": 289,
       "layer": "postgres",
       "invariants": [
         "INV-REGISTRY-ALLOCATION",
@@ -2618,7 +2618,7 @@
     {
       "name": "TestPostgresConcurrentFamiliesReceiveDistinctFenceNamespaces",
       "file": "registry_test.go",
-      "line": 296,
+      "line": 328,
       "layer": "postgres",
       "invariants": [
         "INV-FENCE",

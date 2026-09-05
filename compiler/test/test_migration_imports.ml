@@ -571,6 +571,128 @@ func TestPrivateSchemaCatalog(t *testing.T) {
     "\nfn moduleValue() -> Int = NotesSchema.VCurrent\n";
   ])
 
+let module_reference_configuration () = with_project (fun _root write ->
+  let root_source = {|module NotesSchema.VCurrent exposing [Note]
+import Tesl.Prelude exposing [String]
+import NotesSchema.VCurrent.Hidden
+entity Note table "notes" primaryKey id { id: String }
+entity Secret table "secrets" primaryKey id { id: String }
+|} in
+  ignore (write "schema/notes/v-current.tesl" root_source);
+  ignore (write "schema/notes/v-current/hidden.tesl" {|module NotesSchema.VCurrent.Hidden exposing [Hidden]
+import Tesl.Prelude exposing [String]
+entity Hidden table "hidden" primaryKey id { id: String }
+|});
+  let header = {|module App exposing [Db]
+import Tesl.Prelude exposing [Int]
+import Tesl.Env exposing [envRead]
+import Tesl.Database exposing [Database, Memory, Postgres, PostgresConfig, TcpConnection]
+import NotesSchema.VCurrent exposing [Note]
+|} in
+  let postgres namespace = "Postgres (PostgresConfig { " ^ namespace ^ {|
+dbName: "unused", user: "unused", password: "unused"
+connection: TcpConnection { host: "localhost", port: 5432 }
+})|} in
+  let db fields backend = "database Db = Database { " ^ fields ^ "\n backend: " ^ backend ^ "\n}\n" in
+  let fields = "schema: NotesSchema.VCurrent\nmigrations: NotesSchema.Migrate" in
+  let errors diagnostics = List.filter (fun (d : Compile.diagnostic) -> d.severity = "error") diagnostics in
+  let check_config label source expected =
+    let entry = write "app.tesl" source in
+    let diagnostics = errors (Compile.check_file entry) in
+    (match expected with
+     | None -> if diagnostics <> [] then failf "%s: %s" label (Compile.diagnostics_to_json diagnostics)
+     | Some fragment ->
+       check bool label true (List.exists (fun (d : Compile.diagnostic) ->
+         try ignore (Str.search_forward (Str.regexp_string fragment) d.message 0); true
+         with Not_found -> false) diagnostics));
+    entry in
+  ignore (check_config "memory ownership" (header ^ db fields "Memory") None);
+  ignore (check_config "63-byte physical namespace" (header ^ db fields (postgres ("namespace: \"" ^ String.make 63 'a' ^ "\""))) None);
+  List.iter (fun (label, fields, backend, message) ->
+    ignore (check_config label (header ^ db fields backend) (Some message))) [
+    "missing migrations", "schema: NotesSchema.VCurrent", "Memory", "requires `migrations:";
+    "string migrations", "schema: NotesSchema.VCurrent\nmigrations: \"NotesSchema.Migrate\"", "Memory", "module prefix";
+    "function reference", "schema: choose()\nmigrations: NotesSchema.Migrate", "Memory", "schema module reference";
+    "missing namespace", fields, postgres "", "PostgresConfig.namespace";
+    "empty namespace", fields, postgres "namespace: \"\"", "PostgresConfig.namespace";
+    "dynamic namespace", fields, postgres "namespace: env \"PGSCHEMA\"", "PostgresConfig.namespace";
+    "long namespace", fields, postgres ("namespace: \"" ^ String.make 64 'a' ^ "\""), "PostgresConfig.namespace";
+    "legacy entities required", "schema: \"legacy\"", postgres "", "missing required field `entities`";
+    "legacy migrations refused", "schema: \"legacy\"\nentities: [Note]\nmigrations: NotesSchema.Migrate", postgres "", "cannot also specify";
+    "legacy namespace refused", "schema: \"legacy\"\nentities: [Note]", postgres "namespace: \"second\"", "cannot also specify";
+  ];
+  (* Config references must obey source visibility even though codegen's lowered
+     ownership projection can intentionally name every private member. *)
+  List.iter (fun entity ->
+    ignore (check_config ("legacy invisible entity " ^ entity)
+      (header ^ db ("entities: [" ^ entity ^ "]") "Memory") (Some "unknown entity"))) [
+    "Secret"; "NotesSchema.VCurrent.Secret"; "NotesSchema.VCurrent.Hidden.Hidden"; "Missing";
+  ];
+  let qualified_header = Str.global_replace (Str.regexp_string "exposing [Note]\n") "\n" header in
+  ignore (check_config "qualified-only import cannot become bare config name"
+    (qualified_header ^ db "entities: [Note]" "Memory") (Some "unknown entity"));
+  ignore (check_config "qualified public entity remains supported"
+    (qualified_header ^ db "entities: [NotesSchema.VCurrent.Note]" "Memory") None);
+  ignore (write "schema/notes/v-current.tesl" "module NotesSchema.VCurrent exposing []\n");
+  let empty_header = Str.global_replace (Str.regexp_string "exposing [Note]\n") "exposing []\n" header in
+  let empty_source = empty_header ^ db fields "Memory" in
+  let entry = check_config "empty schema closure is valid" empty_source None in
+  (match Compile.compile_go_file entry with
+   | Compile.GoSuccess _ -> ()
+   | Compile.GoFailure diagnostics -> failf "empty ownership did not emit: %s" (Compile.diagnostics_to_json diagnostics)))
+
+let module_reference_entrypoints () = with_project (fun root write ->
+  let schema_source = {|module NotesSchema.VCurrent exposing [Note]
+import Tesl.Prelude exposing [String]
+entity Note table "notes" primaryKey id { id: String }
+entity Private table "private_notes" primaryKey id { id: String }
+|} in
+  let schema_file = write "schema/notes/v-current.tesl" schema_source in
+  let source = {|module App exposing [Db, main]
+import Tesl.Prelude exposing [List]
+import Tesl.Database exposing [Database, Memory]
+import Tesl.DB exposing [dbRead]
+import Tesl.App exposing [App]
+import NotesSchema.VCurrent exposing [Note]
+database Db = Database { schema: NotesSchema.VCurrent, migrations: NotesSchema.Migrate, backend: Memory }
+handler get listNotes() -> List Note requires [dbRead Note] = select n from Note
+api Notes { get "/notes" -> List Note }
+server NotesServer for Notes { listNotes }
+main() -> App requires [dbRead Note] = App { database: Db, api: NotesServer, port: 8080 }
+|} in
+  let entry = Filename.concat root "app.tesl" in
+  let parse path text = match Parser.parse_module path text with
+    | Ok m -> m | Err e -> failf "entrypoint fixture: %s" e.msg in
+  let artifacts = function
+    | Compile.GoSuccess artifacts -> artifacts
+    | Compile.GoFailure diagnostics -> failf "entrypoint rejected valid module ownership: %s" (Compile.diagnostics_to_json diagnostics) in
+  let compare_artifacts message expected actual =
+    let contents artifacts = List.map (fun (a : Emit_go.artifact) -> a.path, a.contents) artifacts |> List.sort compare in
+    check (list (pair string string)) message (contents expected) (contents actual) in
+  let unsaved = artifacts (Compile.compile_go_source entry source) in
+  ignore (write "app.tesl" "module App exposing []\n");
+  let overlay = artifacts (Compile.compile_go_source ~path:entry entry source) in
+  compare_artifacts "source graph uses the overlay's imports, not stale disk" unsaved overlay;
+  ignore (write "app.tesl" source);
+  let saved = artifacts (Compile.compile_go_file entry) in
+  compare_artifacts "new unsaved and saved applications emit the same complete graph" saved unsaved;
+  let m = parse entry source and schema = parse schema_file schema_source in
+  (match Emit_go.compile_project ~entry:m [m; schema] with
+   | Ok direct -> compare_artifacts "direct project API resolves raw module ownership" saved direct
+   | Error errors -> failf "direct project API failed: %s" (String.concat "; " (List.map (fun (e : Emit_go.emit_error) -> e.message) errors)));
+  check bool "single-module API refuses unresolved ownership" true (Result.is_error (Emit_go.compile_module m));
+  let wrong = Str.global_replace (Str.regexp_string "requires [dbRead Note] = App")
+    "requires [dbRead Unowned] = App" source in
+  check bool "main cannot grant an entity outside its schema" true
+    (List.exists (fun (d : Compile.diagnostic) ->
+      try ignore (Str.search_forward (Str.regexp_string "not in the database selected") d.message 0); true
+      with Not_found -> false) (Compile.check_source entry wrong));
+  let missing = Str.global_replace (Str.regexp_string "import NotesSchema.VCurrent exposing [Note]\n") "" source in
+  check bool "unsaved module reference does not inherit a disk import" true
+    (List.exists (fun (d : Compile.diagnostic) ->
+      try ignore (Str.search_forward (Str.regexp_string "must be imported directly") d.message 0); true
+      with Not_found -> false) (Compile.check_source entry missing)))
+
 let source_rewrite () =
   let rewrite before after source =
     match Migration_source.rewrite_version ~family:"NotesSchema" ~before ~after source with
@@ -699,6 +821,8 @@ let () = run "migration-imports" ["source layout", [
   test_case "schema families have one application connection owner" `Quick schema_ownership;
   test_case "module references select private cyclic ownership with overlays" `Quick module_reference_binding;
   test_case "module references compile private tables without exposing names" `Quick module_reference_compilation;
+  test_case "module configuration and legacy entity visibility" `Quick module_reference_configuration;
+  test_case "module ownership through source, project and main entrypoints" `Quick module_reference_entrypoints;
   test_case "frozen-copy rewrite preserves source bytes and literal text" `Quick source_rewrite;
   test_case "freeze previews the whole closure and preserves existing history" `Quick freeze_closure;
   test_case "freeze rejects content, missing sources and path escapes" `Quick freeze_boundaries;

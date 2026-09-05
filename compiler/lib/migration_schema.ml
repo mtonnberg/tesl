@@ -167,7 +167,7 @@ let check_databases (m : module_form) =
     | DDatabase d ->
       let fields = match d.config_expr with Some e -> Desugar.config_record_fields e | None -> [] in
       (match List.assoc_opt "schema" fields with
-       | Some (EConstructor { name; args = []; _ }) -> [name]
+       | Some (EConstructor { args = []; _ }) -> [] (* The contextual resolver checks the complete closure below. *)
        | _ ->
          let entities = (Desugar.desugar_database_config d).entities in
          List.filter_map (fun (imp : import_decl) ->

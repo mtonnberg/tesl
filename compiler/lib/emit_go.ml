@@ -12701,9 +12701,9 @@ let test_source ?(debug=false) ?(imported_packages=[]) ?(api_tests=[]) ?(load_te
 
    Add-if-absent, never replace: a local declaration of the same name is this module's own,
    and an import must not silently take its place. *)
-let register_imported_types ~exposed types (exports : module_exports) =
+let register_imported_types ~exposed ?(protected_names=[]) types (exports : module_exports) =
   let add table name info =
-    if not (Hashtbl.mem table name) then Hashtbl.replace table name info;
+    if not (List.mem name protected_names) && not (Hashtbl.mem table name) then Hashtbl.replace table name info;
     if not (String.contains name '.') then
       Hashtbl.replace table (exports.ex_module ^ "." ^ name) info
   in
@@ -12735,7 +12735,9 @@ let register_imported_types ~exposed types (exports : module_exports) =
        | None -> ())) (if base = name then [name] else [name; base]))
     exposed
 
-let register_imported_module ~loc ~exposed types signatures (exports : module_exports) =
+let register_imported_module ~loc ~exposed ?(protected_names=[]) types signatures (exports : module_exports) =
+  let put table name info =
+    if not (List.mem name protected_names) then Hashtbl.replace table name info in
   (* A LIFTED module's members are DECLARED bare (`fn fromParts`) and WRITTEN qualified at
      every call site (`CivilTime.fromParts`), which is also how the import list spells them.
      So the lookup strips the qualifier while the key keeps it: `normalize_call_head` turns
@@ -12752,21 +12754,21 @@ let register_imported_module ~loc ~exposed types signatures (exports : module_ex
       match Hashtbl.find_opt exports.ex_types.newtypes name,
             Hashtbl.find_opt exports.ex_types.records name,
             Hashtbl.find_opt exports.ex_types.adts name with
-      | Some info, _, _ -> Hashtbl.replace types.newtypes name info; true
+      | Some info, _, _ -> put types.newtypes name info; true
       | None, Some info, _ ->
-        Hashtbl.replace types.records name info;
+        put types.records name info;
         (* An exposed ENTITY brings its table along with its row type: a query in this
            module reads the other package's store, so the two must be the same table. *)
         (match Hashtbl.find_opt exports.ex_types.entities name with
-         | Some entity -> Hashtbl.replace types.entities name entity
+         | Some entity -> put types.entities name entity
          | None -> ());
         true
-      | None, None, Some info -> Hashtbl.replace types.adts name info; true
+      | None, None, Some info -> put types.adts name info; true
       | None, None, None -> false
     in
     let copy_codec name =
       match Hashtbl.find_opt exports.ex_types.codecs name with
-      | Some owner -> Hashtbl.replace types.codecs name owner
+      | Some owner -> put types.codecs name owner
       | None -> ()
     in
     (* An ADT exposed as `Colour(..)` brings its constructors; the bare name is also
@@ -12781,19 +12783,19 @@ let register_imported_module ~loc ~exposed types signatures (exports : module_ex
          (match Hashtbl.find_opt exports.ex_types.newtypes bare,
                 Hashtbl.find_opt exports.ex_types.records bare,
                 Hashtbl.find_opt exports.ex_types.adts bare with
-          | Some info, _, _ -> Hashtbl.replace types.newtypes bare info; true
-          | None, Some info, _ -> Hashtbl.replace types.records bare info; true
-          | None, None, Some info -> Hashtbl.replace types.adts bare info; true
+          | Some info, _, _ -> put types.newtypes bare info; true
+          | None, Some info, _ -> put types.records bare info; true
+          | None, None, Some info -> put types.adts bare info; true
           | None, None, None -> false)
        | None -> false)
       || (base <> name &&
       (match Hashtbl.find_opt exports.ex_types.adts base with
-       | Some info -> Hashtbl.replace types.adts base info; true
+       | Some info -> put types.adts base info; true
        | None -> false)) in
     copy_codec name;
     if base <> name then copy_codec base;
     let register_signature signature =
-      Hashtbl.replace signatures name signature;
+      put signatures name signature;
       (* Keep the namespace as an explicit key. Stripping it at the call site
          would make two frozen versions' same-named functions alias whichever
          import was registered last. The frontend still checks export access. *)
@@ -12813,7 +12815,7 @@ let register_imported_module ~loc ~exposed types signatures (exports : module_ex
       Hashtbl.iter (fun ctor (signature : signature) ->
         match signature.result with
         | TAdt (info, _) when info.adt_tesl_name = base ->
-          Hashtbl.replace signatures ctor signature;
+          put signatures ctor signature;
           Hashtbl.replace signatures (exports.ex_module ^ "." ^ ctor) signature
         | _ -> ()) exports.ex_signatures;
     (* A name that is neither a type nor a value is a FACT: the frontend has already
@@ -12823,6 +12825,18 @@ let register_imported_module ~loc ~exposed types signatures (exports : module_ex
 
 let compile_module ?(mode=Release) ?(dependencies=[]) ?(entity_bindings=[]) ?project_path (m : module_form) =
   try
+    List.iter (function
+      | DDatabase { config_expr = Some config; loc; _ } ->
+        (match List.assoc_opt "schema" (Desugar.config_record_fields config) with
+         | Some (EConstructor { args = []; _ }) ->
+           unsupported loc "schema module ownership must be resolved by the project compiler before emitting a module"
+         | _ -> ())
+      | _ -> ()) m.decls;
+    let protected_names = List.concat_map (function
+      | DEntity e -> [e.name] | DRecord r -> [r.name] | DFunc f -> [f.name] | DConst c -> [c.name]
+      | DType (TypeNewtype t) -> [t.name]
+      | DType (TypeAdt t) -> t.name :: List.map (fun (v : adt_variant) -> v.ctor) t.variants
+      | _ -> []) m.decls in
     (* Debug adds only versioned runtime checkpoints. Release remains the same source path and
        contains no debug import or call. *)
     (* `Maybe` is provided by `internal/teslrt` rather than emitted per module: a
@@ -14640,7 +14654,7 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?(entity_bindings=[]) ?pro
             @ List.of_seq (Hashtbl.to_seq_keys dependency.ex_types.adts)
           | ImportExposing names -> names
         in
-        register_imported_types ~exposed types dependency)
+        register_imported_types ~exposed ~protected_names types dependency)
       m.imports;
     (* Project ownership includes unexported schema entities. Register only their
        fully qualified metadata keys: importing private bare names here would let
@@ -15713,7 +15727,7 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?(entity_bindings=[]) ?pro
         in
         if not (List.mem dependency.ex_package !imported_packages) then
           imported_packages := dependency.ex_package :: !imported_packages;
-        register_imported_module ~loc:import.loc ~exposed types signatures dependency)
+        register_imported_module ~loc:import.loc ~exposed ~protected_names types signatures dependency)
       m.imports;
     (* A `database` block may name an entity DECLARED in another module, and that entity's
        record only arrives with the import — so the flag is set again here, now that both are
@@ -16132,6 +16146,13 @@ let project_entity_bindings (modules : module_form list) =
   if !errors = [] then Ok !bindings else Error (List.rev !errors)
 
 let compile_project ?(mode=Release) ~(entry : module_form) (modules : module_form list) =
+  let lowered = List.map (Migration_schema.lower_module ~modules) modules in
+  let errors = List.concat_map (function
+    | Ok _ -> []
+    | Error errors -> List.map (fun (e : Validation_common.validation_error) ->
+        { loc = e.loc; message = e.message }) errors) lowered in
+  if errors <> [] then Error errors else
+  let modules = List.filter_map (function Ok m -> Some m | Error _ -> None) lowered in
   let project_path = "tesl.generated/" ^ package_name entry.module_name in
   let local_names = List.map (fun (m : module_form) -> m.module_name) modules in
   (* The name a local module answers to, which is not always the name the import writes:

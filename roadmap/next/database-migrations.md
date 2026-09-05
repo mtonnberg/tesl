@@ -5468,10 +5468,12 @@ throwaway first protocol. Remaining reopened items below gate only their stated 
   Ships with the fence; spec text to be written with it.
 - **Granularity is per `database`, keyed by module references.** Each `database`
   names its live schema module (`schema: NotesSchema.VCurrent`) and its migration namespace
-  (`migrations: NotesSchema.Migrate`, mandatory), and has its own `tesl_schema_*` control tables. What
-  remains to decide is the small language addition this needs — a module reference as
-  a `Database` field value, which Tesl does not have today. Paths follow the decided
-  lowercase `schema/notes/v-current.tesl` and `migrations/notes/v8.tesl` convention.
+  (`migrations: NotesSchema.Migrate`, mandatory), and has its own `tesl_schema_*` control tables.
+  Ownership uses a contextual module reference, specified in LANGUAGE-SPEC
+  §11.9 and now elaborated by the compiler; it is not a runtime value. The physical
+  PostgreSQL namespace is a separate static `PostgresConfig.namespace` string.
+  Paths follow the lowercase `schema/notes/v-current.tesl` and
+  `migrations/notes/v8.tesl` convention.
   The optional `ddlConnection:` and `fence:` fields and
   their defaults are decided with it.
 - **Topology — DECIDED (2026-09-03): `topology: Worker` is the production default;

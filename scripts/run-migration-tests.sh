@@ -8,8 +8,14 @@ for tool in initdb pg_ctl go; do
 done
 migration_tmp="$(mktemp -d "${TMPDIR:-/tmp}/tesl-migration.XXXXXXXX")"
 cleanup() {
+  local status=$?
+  if (( status != 0 )) && [[ -f "$migration_tmp/postgres.log" ]]; then
+    echo "Migration test PostgreSQL log (last 100 lines):" >&2
+    tail -100 "$migration_tmp/postgres.log" >&2
+  fi
   pg_ctl -D "$migration_tmp/data" -m immediate -w stop >/dev/null 2>&1 || true
   rm -rf -- "$migration_tmp"
+  return "$status"
 }
 trap cleanup EXIT INT TERM
 mkdir "$migration_tmp/socket"
