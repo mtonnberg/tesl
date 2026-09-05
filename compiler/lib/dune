@@ -8,7 +8,7 @@
  ; fail-closed discipline the proof/validation passes depend on.
  (ocamlopt_flags (:standard -w -50 -warn-error +8))
  (ocamlc_flags (:standard -w -50 -warn-error +8))
-  (modules migration_hash migration_schema migration_source migration_canonical migration_ir tz_zones currencies units_catalog stdlib_config_names formatter linter ast ast_visitor proof_kernel desugar checker compile diag_fix api_test_template emit_go emit_ts emit_elm emit_openapi error_codes float_fmt import_suggest ir lexer location mutate parser proof_checker proof_discharge sql_query token type_system regex_lint validation_common validation_structural validation_sql_codec validation_proof validation_names validation_capabilities validation_advanced validation embedded_docs stdlib_docs stdlib_docs_entries index_lint)
+  (modules migration_hash migration_schema migration_source migration_canonical migration_ir migration_inventory tz_zones currencies units_catalog stdlib_config_names formatter linter ast ast_visitor proof_kernel desugar checker compile diag_fix api_test_template emit_go emit_ts emit_elm emit_openapi error_codes float_fmt import_suggest ir lexer location mutate parser proof_checker proof_discharge sql_query token type_system regex_lint validation_common validation_structural validation_sql_codec validation_proof validation_names validation_capabilities validation_advanced validation embedded_docs stdlib_docs stdlib_docs_entries index_lint)
  ; unix: wall-clock timestamps for opt-in per-phase timing (TESL_PHASE_TIMING)
  ;       in compile.ml.  unix ships with the OCaml distribution.
  (libraries str unix tesl_go_runtime))

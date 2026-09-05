@@ -1,12 +1,24 @@
-module Lesson82DatabaseMigrations exposing [NoteDatabase, saveTitle, findTitle]
+module Lesson82DatabaseMigrations exposing [
+  NoteDatabase,
+  NotesServer,
+  saveTitle,
+  findTitle,
+]
 
-# lesson: track=data order=840 needs=lesson18-database-sql-and-proofs,lesson05-intro-to-proofs
-# summary: Give a database one schema-module owner and validate writes with pure schema proofs
+# lesson: track=data order=840 needs=lesson18-database-sql-and-proofs,lesson05-intro-to-proofs,lesson32-api-tests
+# summary: Run a notes API whose handlers and connection stay outside its versioned schema
 # Lesson 82 — Database migrations: schema ownership
 #
 # Run this lesson with:
 #
 #   tesl test example/learn/lesson82-database-migrations.tesl
+#   tesl run example/learn/lesson82-database-migrations.tesl
+#
+# With the app running on port 8082, create and read a note:
+#
+#   curl -H 'Content-Type: application/json' -d '{"title":"  First note  "}' \
+#     http://localhost:8082/notes/first
+#   curl http://localhost:8082/notes/first
 #
 # A connection is an application concern. A schema is a description of stored
 # data and its invariants. Keeping them in separate modules makes that boundary
@@ -15,7 +27,7 @@ module Lesson82DatabaseMigrations exposing [NoteDatabase, saveTitle, findTitle]
 #
 # This example has three files:
 #
-#   lesson82-database-migrations.tesl              application and tests
+#   lesson82-database-migrations.tesl              connection, HTTP app and tests
 #   schema/lesson-notes/v-current.tesl             schema membership
 #   schema/lesson-notes/v-current/notes.tesl       entity and pure validation
 #
@@ -29,6 +41,13 @@ module Lesson82DatabaseMigrations exposing [NoteDatabase, saveTitle, findTitle]
 # release for migration code; changing a schema version should not require
 # rewriting every application import.
 #
+# The HTTP request and reply records below belong to this application. They
+# describe what clients send and receive; Note describes what the database stores.
+# A storage-only change need not add a field to the HTTP response. In later
+# migration scenarios, compare the schema and migration files while running the
+# same API tests: the handlers change only when the app's behavior requires it.
+# Adding a stored derived value that the app must maintain is one such case.
+#
 # This first part exercises ownership and proof-checked writes. The migration
 # planner and executor are still being implemented; this example does not yet
 # demonstrate adoption, column reconciliation, or rolling deployment.
@@ -38,6 +57,9 @@ import Tesl.String exposing [String.repeat]
 import Tesl.Maybe exposing [Maybe(..)]
 import Tesl.DB exposing [dbRead, dbWrite]
 import Tesl.Database exposing [Database, Memory]
+import Tesl.App exposing [App]
+import Tesl.ApiTest exposing [statusOk]
+import Tesl.Json exposing [stringCodec]
 import LessonNotesSchema.VCurrent exposing []
 import LessonNotesSchema.VCurrent.Notes exposing [Note, tryTitle]
 
@@ -68,6 +90,105 @@ fn findTitle(id: String) -> Maybe String requires [dbRead Note] =
   case selectOne note from Note where note.id == id of
     Nothing -> Nothing
     Something note -> Something note.title
+
+# These are API shapes, so they stay outside the schema's frozen closure.
+record NewNote {
+  title: String
+}
+
+codec NewNote {
+  toJson_forbidden
+  fromJson [
+    {
+      title <- "title" with_codec stringCodec
+    }
+  ]
+}
+
+record NoteReply {
+  id: String
+  title: String
+}
+
+codec NoteReply {
+  toJson {
+    id -> "id" with_codec stringCodec
+    title -> "title" with_codec stringCodec
+  }
+  fromJson_forbidden
+}
+
+capturer noteIdCapture: id: String using stringCodec
+
+# Both the direct tests and the real HTTP handlers use the schema's tryTitle.
+# The handler translates an unsuccessful validation into an HTTP response;
+# the pure schema helper does not need to know anything about HTTP.
+handler post createNote(id: String, body: NewNote) -> NoteReply
+  requires [dbRead Note, dbWrite Note] =
+  if saveTitle id body.title then
+    case findTitle id of
+      Nothing -> fail 404 "note not found"
+      Something title -> NoteReply { id: id, title: title }
+  else
+    fail 400 "title must be 1-80 characters after trimming"
+
+handler get getNote(id: String) -> NoteReply requires [dbRead Note] =
+  case findTitle id of
+    Nothing -> fail 404 "note not found"
+    Something title -> NoteReply { id: id, title: title }
+
+api NotesApi {
+  post "/notes/:id"
+    capture id: String via noteIdCapture
+    body body: NewNote
+    -> NoteReply
+
+  get "/notes/:id"
+    capture id: String via noteIdCapture
+    -> NoteReply
+}
+
+server NotesServer for NotesApi {
+  createNote
+  getNote
+}
+
+main() -> App requires [dbRead Note, dbWrite Note] =
+  App {
+    database: NoteDatabase
+    api: NotesServer
+    port: 8082
+  }
+
+# Keep these public behavior assertions when changing storage. They exercise
+# routing, JSON codecs, validation and the generated database operations together.
+api-test "the full app creates and retrieves a normalized note" for NotesServer requires [dbRead Note, dbWrite Note] {
+  let created = post "/notes/first" body { "title": "  First note  " }
+  expect statusOk created.status
+  expect created.body == { "id": "first", "title": "First note" }
+  let fetched = get "/notes/first"
+  expect fetched.status == 200
+  expect fetched.body == created.body
+}
+
+api-test "invalid input fails without creating a note" for NotesServer requires [dbRead Note, dbWrite Note] {
+  let rejected = post "/notes/invalid" body { "title": "   " }
+  expect rejected.status == 400
+  let missing = get "/notes/invalid"
+  expect missing.status == 404
+}
+
+api-test "a malformed request never reaches storage" for NotesServer requires [dbRead Note, dbWrite Note] {
+  let rejected = post "/notes/malformed" body { "title": 42 }
+  expect rejected.status == 400
+  let missing = get "/notes/malformed"
+  expect missing.status == 404
+}
+
+api-test "a new test starts with an empty database" for NotesServer requires [dbRead Note] {
+  let missing = get "/notes/first"
+  expect missing.status == 404
+}
 
 test "schema-owned validation trims a title before storing it" requires [dbRead Note, dbWrite Note] {
   expect saveTitle "first" "  a schema has one owner  " == True

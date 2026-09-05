@@ -37,11 +37,26 @@ Each lesson must exercise its actual generated runtime and refusal cases; source
 checking alone does not meet this gate. This is a planned inventory, not a claim
 that these scenarios currently work.
 
+The maintainer also requires full-application scenarios: migrations are difficult
+to learn if examples show only entities and row functions. Lessons 1–4 and 6 will
+evolve the same runnable notes HTTP app. Each scenario will identify the changed
+files, preserve application handlers/routes/codecs byte-for-byte where behavior is
+unchanged, and run the same API assertions against the app before and after the
+migration. PostgreSQL cases must retain existing rows through the actual executor;
+starting a fresh Memory store is not evidence of migration compatibility. A
+scenario that adds a derived value maintained by application writes must show the
+necessary handler change and explain why it is necessary. Database connection
+settings stay in the application; versioned schema and migration modules contain
+no handlers or effects. These comparisons are regression assertions, not just prose.
+
 The first part of [lesson82-database-migrations](../example/learn/lesson82-database-migrations.tesl)
-now compiles and runs through `tesl test`: five tests cover schema-owned title
+now compiles and runs through `tesl test`: five direct tests cover schema-owned title
 proofs, rejected writes, length boundaries, Unicode and missing rows. Its thin
 schema root exports nothing and imports a child entity module; the application
-owns the database declaration and effects. All three source files pass
+owns the database declaration and effects. It is also a runnable notes HTTP app:
+four API tests cover create/read, validation failure without insertion, malformed
+JSON without insertion, and isolated test state. HTTP request/reply records and
+codecs live in the application, separately from the stored entity. All three source files pass
 agent-context and formatting. Generated Go snapshots and the manual lesson index
 are included. Adoption, additive execution and the remaining lessons are pending.
 
@@ -320,6 +335,12 @@ are included. Adoption, additive execution and the remaining lessons are pending
   compiler gate, the manual coherence gate and all nine fixture agent-context checks.
   The following full PostgreSQL 17 run, including the target-write ABI model, passes
   in 56 seconds with poolers, replica and owned-primary crash cases; lint is clean.
+  The subsequent schema-reference corpus refresh also passes Kanel's seven API
+  tests through the public CLI. Imported queries now honor the application's
+  database binding; the refreshed Kanel snapshot includes its PostgreSQL statements
+  and decoders. Registry membership refusal tests pass on PostgreSQL 14, 16, 17 and
+  18, including indirect and NOINHERIT membership and a temporary installer role.
+  The migration package lint gate passes with those membership checks included.
 
 ## Implementation decisions
 

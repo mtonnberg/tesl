@@ -20,6 +20,11 @@
  (deps (universe) fixtures/migration-ir-vectors.txt)
  (libraries tesl_compiler_lib alcotest unix str))
 
+(test
+ (name test_migration_inventory)
+ (modules test_migration_inventory)
+ (libraries tesl_compiler_lib alcotest unix str))
+
 ; Pure-OCaml property test for the shared AST-traversal framework
 ; (lib/ast_visitor.ml). No alcotest, so it always builds and runs:
 ;   dune exec test/test_ast_visitor.exe

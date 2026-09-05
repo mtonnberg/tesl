@@ -62,6 +62,19 @@ type binding = {
   members : (string * entity_form) list;
 }
 
+let check_member_storage members =
+  (* Physical identities belong to the whole owned schema, including private
+     modules; ordinary source visibility cannot hide a collision. *)
+  let structural = Validation_structural.check_entity_structure
+    (List.map (fun (name, entity) -> DEntity { entity with name }) members) in
+  let tables = Hashtbl.create 8 in
+  structural @ List.filter_map (fun (name, (entity : entity_form)) ->
+    match Hashtbl.find_opt tables entity.table with
+    | Some previous -> Some (make_error entity.loc (Printf.sprintf
+        "schema entities `%s` and `%s` name the same physical table `%s`"
+        previous name entity.table))
+    | None -> Hashtbl.add tables entity.table name; None) members
+
 (** Contextual module references have no expression type. This resolver consumes
     the original folded database configuration and returns an ownership projection;
     it never changes what declarations the application can use in expressions.
@@ -109,16 +122,7 @@ let resolve_binding ?(modules = []) (m : module_form) (d : database_form) =
          in
          visit m.source_file root;
          let members = List.sort (fun (left, _) (right, _) -> String.compare left right) !members in
-         (* Storage validation sees the whole ownership projection, not only the
-            declarations an application chose to expose. This also detects index
-            names shared by entities in different private modules. *)
-         errors := List.rev_append (Validation_structural.check_entity_structure
-           (List.map (fun (name, entity) -> DEntity { entity with name }) members)) !errors;
-         let tables = Hashtbl.create 8 in
-         List.iter (fun (name, (e : entity_form)) ->
-           match Hashtbl.find_opt tables e.table with
-           | Some previous -> errors := make_error e.loc (Printf.sprintf "schema entities `%s` and `%s` name the same physical table `%s`" previous name e.table) :: !errors
-           | None -> Hashtbl.add tables e.table name) members;
+         errors := List.rev_append (check_member_storage members) !errors;
          if !errors <> [] then Error (List.rev !errors)
          else Ok (Some { database = d; schema_root = root; migration_prefix = expected_migrations; members })
      | _ -> error "`Database.schema` must name an imported `FamilySchema.VCurrent` root, not a frozen version or child module")
