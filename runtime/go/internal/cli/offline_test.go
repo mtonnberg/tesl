@@ -210,8 +210,13 @@ test "bundled password dependency" requires [random] {
 			freshModules(failure)
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
+			previousOutput := len(output.String())
 			if err := app.Run(ctx, []string{"test", "password.tesl"}); err == nil || ctx.Err() != nil {
 				t.Fatalf("bad bundled module must fail promptly without downloading: %v", err)
+			}
+			diagnostic := output.String()[previousOutput:]
+			if !strings.Contains(diagnostic, "golang.org/x/crypto") || !strings.Contains(diagnostic, ".zip") && !strings.Contains(diagnostic, "zip:") {
+				t.Fatalf("failure must identify the unavailable bundled archive: %s", diagnostic)
 			}
 		})
 	}

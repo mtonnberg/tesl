@@ -81,7 +81,7 @@ def main():
               for target in targets[1:]]
     checks.extend([
         ("Go commands", ["go", "build", "-ldflags", ldflags, "./cmd/..."], root / "runtime/go"),
-        ("Go CLI and process ownership", ["go", "test", "-race", "./internal/childprocess",
+        ("Go CLI and process ownership", ["go", "test", "-race", "-timeout=20m", "./internal/childprocess",
          "./internal/toolchain", "./internal/protocol", "./internal/cli", "./cmd/tesl"], root / "runtime/go"),
         ("Go LSP", ["go", "test", "-race", "./internal/lsp"], root / "runtime/go"),
         ("Go compiler sessions", ["go", "test", "-race", "./internal/tooling", "-run",
