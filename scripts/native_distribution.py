@@ -30,7 +30,7 @@ from native_source import MAX_SOURCE_BYTES, extract_verified
 def run(arguments, root, environment, capture=False, timeout=1800):
     print("Native distribution: " + " ".join(map(str, arguments)), flush=True)
     result = subprocess.run(list(map(str, arguments)), cwd=root, env=environment,
-                            check=True, text=True, capture_output=capture, timeout=timeout)
+                            check=True, text=True, encoding="utf-8", capture_output=capture, timeout=timeout)
     return result.stdout.strip() if capture else None
 
 

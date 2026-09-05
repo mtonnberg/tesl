@@ -3,8 +3,10 @@
 from contextlib import ExitStack
 import io
 import json
+import os
 from pathlib import Path
 import subprocess
+import sys
 import tarfile
 import tempfile
 import unittest
@@ -60,6 +62,22 @@ class DistributionTests(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
         self.output = self.root / "result"
+
+    def test_cli_json_is_decoded_as_utf8_in_a_non_utf8_host_locale(self):
+        # Start a separate Python process so its actual preferred encoding is
+        # selected at startup. Tesl's JSON protocol stays UTF-8 on every host.
+        script = '''import json, os, sys
+from pathlib import Path
+from native_distribution import run
+child = "import sys; sys.stdout.buffer.write(bytes.fromhex('7b22726f6f74223a22c3a5227d'))"
+result = run([sys.executable, '-c', child], Path.cwd(), dict(os.environ), capture=True)
+assert json.loads(result)['root'] == chr(229), ascii(result)
+'''
+        environment = dict(os.environ, PYTHONUTF8="0", PYTHONCOERCECLOCALE="0", LC_ALL="C",
+                           PYTHONIOENCODING="utf-8", PYTHONPATH=str(Path(distribution.__file__).parent))
+        result = subprocess.run([sys.executable, "-c", script], env=environment,
+                                capture_output=True, encoding="utf-8", timeout=30)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_checkout_requires_exact_commit_and_clean_tracked_source(self):
         for revision, dirty in (("2" * 40, ""), (SHA, " M compiler/bin/main.ml")):

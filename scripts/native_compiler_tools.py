@@ -12,6 +12,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import xml.etree.ElementTree as ET
 import zipfile
@@ -66,8 +67,17 @@ def build_environment(environment, plan, target, prefix):
 
 
 def run(arguments, directory, environment, capture=False):
-    result = subprocess.run(list(map(str, arguments)), cwd=directory, env=environment,
-                            check=True, text=True, capture_output=capture, timeout=1800)
+    try:
+        result = subprocess.run(list(map(str, arguments)), cwd=directory, env=environment,
+                                check=True, text=True, capture_output=capture, timeout=1800)
+    except subprocess.CalledProcessError as error:
+        # Captured tool errors otherwise disappear behind the exception's terse
+        # command/exit-code message, hiding the cause of native build failures.
+        if capture:
+            for output in (error.stdout, error.stderr):
+                if output:
+                    print(output, file=sys.stderr)
+        raise
     return result.stdout.strip() if capture else None
 
 
@@ -147,17 +157,18 @@ def microsoft_runtime_identity(path, environment):
     # The file path is an environment value, never interpolated into PS code.
     command = '''$ErrorActionPreference = 'Stop'
 $s = Get-AuthenticodeSignature -LiteralPath $env:TESL_MSVC_RUNTIME_FILE
-if ($s.Status -ne 'Valid' -or $s.SignerCertificate.Subject -notmatch '(^|, )CN=Microsoft Corporation(,|$)') {
-  throw 'MSVC redistributable lacks a valid Microsoft signature'
-}
 $v = (Get-Item -LiteralPath $env:TESL_MSVC_RUNTIME_FILE).VersionInfo
-@{status='Valid'; signer=$s.SignerCertificate.Subject; version=('{0}.{1}.{2}.{3}' -f $v.FileMajorPart,$v.FileMinorPart,$v.FileBuildPart,$v.FilePrivatePart)} | ConvertTo-Json -Compress
+@{status=$s.Status.ToString(); status_message=$s.StatusMessage; signer=$s.SignerCertificate.Subject; version=('{0}.{1}.{2}.{3}' -f $v.FileMajorPart,$v.FileMinorPart,$v.FileBuildPart,$v.FilePrivatePart)} | ConvertTo-Json -Compress
 '''
+    # A pwsh -> Python -> powershell.exe launch inherits PowerShell 7 modules,
+    # which Windows PowerShell cannot load. Let it construct its own defaults.
+    # https://learn.microsoft.com/powershell/module/microsoft.powershell.core/about/about_psmodulepath
+    child_environment = {key: value for key, value in environment.items() if key.upper() != "PSMODULEPATH"}
     identity = json.loads(run(["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command],
-                              path.parent, {**environment, "TESL_MSVC_RUNTIME_FILE": str(path)}, True))
+                              path.parent, {**child_environment, "TESL_MSVC_RUNTIME_FILE": str(path)}, True))
     if (identity.get("status") != "Valid" or not re.search(r"(?:^|, )CN=Microsoft Corporation(?:,|$)", identity.get("signer", ""))
             or not re.fullmatch(r"14\.[0-9]+\.[0-9]+\.[0-9]+", identity.get("version", ""))):
-        raise ValueError("invalid Microsoft runtime signature/version evidence")
+        raise ValueError(f"invalid Microsoft runtime signature/version evidence: {identity}")
     return identity
 
 

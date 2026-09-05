@@ -112,6 +112,11 @@ jobs:
         with:
           arch: x64
           vsversion: '2022'
+      - name: Verify native Windows runtime signature inspection
+        if: ${{ startsWith(matrix.target, 'windows-') }}
+        env:
+          TESL_TEST_MSVC_RUNTIME: '1'
+        run: python -m unittest discover -s scripts -p 'test_native_windows_runtime.py' -v
       - name: Assemble and test native candidate archive
         if: ${{ !startsWith(matrix.target, 'windows-') }}
         run: python3 scripts/native_distribution.py --plan native-release-plan.json --target ${{ matrix.target }} --module-bundle native-module-bundle --output artifacts/distribution-${{ matrix.target }}

@@ -1,12 +1,14 @@
 """Provenance and failure boundaries for the temporary compiler toolchain."""
 
 import base64
+from contextlib import redirect_stderr
 import hashlib
 import io
 import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tarfile
 import tempfile
 import unittest
@@ -60,6 +62,15 @@ class CompilerToolsTests(unittest.TestCase):
 
     def build(self):
         return compiler.build(self.plan, "linux-amd64", *self.archives, self.output, jobs=2)
+
+    def test_captured_build_failure_preserves_tool_diagnostics(self):
+        diagnostics = io.StringIO()
+        child = "import sys; print('tool stdout'); print('module failed to load', file=sys.stderr); sys.exit(7)"
+        with redirect_stderr(diagnostics), self.assertRaises(subprocess.CalledProcessError) as failure:
+            compiler.run([sys.executable, "-c", child], self.root, dict(os.environ), capture=True)
+        self.assertEqual(failure.exception.returncode, 7)
+        self.assertIn("tool stdout", diagnostics.getvalue())
+        self.assertIn("module failed to load", diagnostics.getvalue())
 
     def test_verified_sources_and_license_tree_are_recorded(self):
         with patch.object(compiler, "run", side_effect=self.fake_build):
@@ -337,14 +348,23 @@ class CompilerRuntimeTests(unittest.TestCase):
 
     def test_signature_check_uses_literal_path_and_requires_microsoft_identity(self):
         path = self.dlls / "vcruntime140.dll"
+        self.environment.update(PSMODULEPATH="PowerShell 7 modules", PSModulePath="another inherited path")
+        original = dict(self.environment)
         with patch.object(compiler, "run", return_value=json.dumps(self.identity)) as run:
             self.assertEqual(compiler.microsoft_runtime_identity(path, self.environment), self.identity)
         command, _, environment, _ = run.call_args.args
         self.assertNotIn(str(path), command[-1])
         self.assertEqual(environment["TESL_MSVC_RUNTIME_FILE"], str(path))
-        with patch.object(compiler, "run", return_value=json.dumps({**self.identity, "signer": "CN=Other Vendor"})), \
-                self.assertRaisesRegex(ValueError, "signature/version"):
-            compiler.microsoft_runtime_identity(path, self.environment)
+        self.assertFalse(any(key.upper() == "PSMODULEPATH" for key in environment))
+        self.assertEqual(self.environment, original)
+        for changed in ({"signer": "CN=Other Vendor"}, {"status": "NotSigned"}, {"status": "HashMismatch"},
+                        {"status": "UnknownError", "status_message": "certificate chain failed"}, {"version": "15.0.1.0"}):
+            with self.subTest(changed=changed), \
+                    patch.object(compiler, "run", return_value=json.dumps({**self.identity, **changed})), \
+                    self.assertRaisesRegex(ValueError, "signature/version") as failure:
+                compiler.microsoft_runtime_identity(path, self.environment)
+            for value in changed.values():
+                self.assertIn(value, str(failure.exception))
 
     def test_unexpected_private_dll_and_existing_output_are_rejected(self):
         self.binary.write_bytes(pe_image(imports=["zstd.dll"]))
