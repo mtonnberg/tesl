@@ -1,0 +1,22 @@
+module CapabilityMissing exposing [Note, NoteDb, addNote]
+
+import Tesl.Prelude exposing [String]
+import Tesl.DB exposing [dbRead, dbWrite]
+import Tesl.Database exposing [Database, Memory]
+
+entity Note table "notes" primaryKey id {
+  id: String @db(text)
+  body: String @db(text)
+}
+
+database NoteDb = Database {
+  schema: "notes"
+  entities: [Note]
+  backend: Memory
+}
+
+# `requires [dbRead Note]` but the body writes. Capabilities are checked, not
+# documented — and this is not something you can forget to test for.
+fn addNote(id: String, body: String) -> Note
+  requires [dbRead Note] =
+  insert Note { id: id, body: body }

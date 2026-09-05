@@ -16,6 +16,7 @@ compiler-query client.
 | Tool | Args | Wraps | Notes |
 |------|------|-------|-------|
 | `tesl.agent_context` | `{file}` | `--agent-context-json` | **PRIMARY** — read after every edit. `{ok, summary, diagnostics, symbols, proof_obligations}` in one compact snapshot. |
+| `tesl.search` | `{query}` | `--search-json` | Builtin names, descriptions, modules or exact type shapes (e.g. `String -> Int`). Up to 20 results with imports and requirement metadata. 256 UTF-8 bytes maximum; discovery does not prove callability. |
 | `tesl.check` | `{file}` | `--check-json` | Coded diagnostics + suggested fixes. |
 | `tesl.type_at` | `{file, line, col}` | `--type-at-json` | 0-based line, 0-based col. |
 | `tesl.signature` | `{file, line, col}` | `--signature-help-json` | 0-based line, 0-based col. |

@@ -254,7 +254,7 @@ func (app *App) Run(ctx context.Context, args []string) error {
 		if len(rest) > 0 {
 			return app.compiler(ctx, append([]string{"--help"}, rest...)...)
 		}
-		_, err := fmt.Fprintln(app.Stdout, "Tesl\n\n  init, check, compile, emit go, run, watch, test, mutate, build\n  db start|stop|status, clean, lint, fmt, fmt-check, validate\n  doc, explain, generate, agent-context, debug-inspect, debug-attach\n  doctor [--json], version\n\nUse tesl help <topic> for compiler and language documentation.")
+		_, err := fmt.Fprintln(app.Stdout, "Tesl\n\n  init, check, compile, emit go, run, watch, test, mutate, build\n  db start|stop|status, clean, lint, fmt, fmt-check, validate\n  doc, explain, generate, agent-context, debug-inspect, debug-attach\n  search [--json] QUERY, --catalog-json\n  doctor [--json], version\n\nUse tesl help <topic> for compiler and language documentation.")
 		return err
 	case "check", "lint", "fmt", "format", "fmt-check", "validate":
 		files, err := app.files(rest)
@@ -319,7 +319,7 @@ func (app *App) Run(ctx context.Context, args []string) error {
 		return app.invoke(ctx, "tesl-debug-inspect", app.Directory, env, append([]string{"--file", rest[0]}, rest[1:]...)...)
 	case "debug-attach":
 		return app.invoke(ctx, "tesl-debug-attach", app.Directory, app.Environment, rest...)
-	case "doc", "explain", "agent-context":
+	case "doc", "explain", "search", "agent-context":
 		return app.compiler(ctx, args...)
 	case "check-json", "definition-json", "occurrences-json", "type-at-json", "field-at-json", "completions-json", "local-bindings-json", "semantic-json":
 		return app.compiler(ctx, append([]string{"--" + verb}, rest...)...)

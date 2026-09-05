@@ -34,6 +34,22 @@ def run_checks(checks, environment):
         raise SystemExit("Native portability failed: " + ", ".join(failures))
 
 
+def verify_generated_snapshots(root, environment):
+    """Catch promotion drift immediately, with a bounded byte-level diagnosis."""
+    for name in ("compiler/lib/embedded_docs.ml",
+                 "compiler/lib/go_runtime/embedded/embedded_go_runtime.ml"):
+        expected = subprocess.run(["git", "show", "HEAD:" + name], cwd=root, env=environment,
+                                  check=True, capture_output=True, timeout=30).stdout
+        actual = (root / name).read_bytes()
+        if actual != expected:
+            offset = next((index for index, pair in enumerate(zip(expected, actual))
+                           if pair[0] != pair[1]), min(len(expected), len(actual)))
+            start = max(0, offset - 24)
+            raise SystemExit(f"Native generated snapshot changed: {name}; first difference at byte {offset}; "
+                             f"committed[{len(expected)}]={expected[start:offset + 48]!r}; "
+                             f"generated[{len(actual)}]={actual[start:offset + 48]!r}")
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--plan", type=Path, required=True)
@@ -75,8 +91,12 @@ def main():
     if reported.splitlines()[:1] != ["tesl " + version]:
         raise SystemExit("native CLI does not report the exported toolchain version")
     environment["TESL_PROCESS_RUNNER"] = str(cli)
-    targets = ["bin/main.exe", "test/test_completion.exe", "test/test_import_cache.exe", "test/test_workspace_session.exe", "test/test_workspace_index.exe", "test/test_process_runner.exe", "test/test_diagnostics.exe", "test/test_stdlib_docs.exe"]
-    run(["opam", "exec", "--", "dune", "build", *targets], root / "compiler", environment)
+    targets = ["bin/main.exe", "test/test_embedded_go_runtime_seam.exe", "test/test_completion.exe", "test/test_import_cache.exe", "test/test_workspace_session.exe", "test/test_workspace_index.exe", "test/test_process_runner.exe", "test/test_diagnostics.exe", "test/test_stdlib_docs.exe"]
+    # These suites run via `dune exec`, which does not build the runtime deps
+    # declared for `dune runtest`. Materialize the shared relevance fixture too.
+    run(["opam", "exec", "--", "dune", "build", *targets, "test/search-queries.tsv"],
+        root / "compiler", environment)
+    verify_generated_snapshots(root, environment)
     checks = [(target, ["opam", "exec", "--", "dune", "exec", target], root / "compiler")
               for target in targets[1:]]
     checks.extend([

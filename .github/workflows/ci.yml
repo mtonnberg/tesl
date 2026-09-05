@@ -69,3 +69,13 @@ jobs:
             unset TESL_POSTGRES_HOST TESL_POSTGRES_PORT TESL_POSTGRES_USER TESL_POSTGRES_PASSWORD
             ./ci.sh
           '
+
+      - name: Export verified content from the checked revision
+        run: nix develop --command python3 scripts/content.py export --out "${{ runner.temp }}/tesl-content.json"
+
+      - name: Upload official content evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: tesl-content-${{ github.sha }}
+          path: ${{ runner.temp }}/tesl-content.json
+          if-no-files-found: error

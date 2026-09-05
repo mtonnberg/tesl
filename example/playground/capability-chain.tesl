@@ -1,0 +1,26 @@
+module CapabilityChain exposing [Note, NoteDb, saveNote, publishNote]
+
+import Tesl.Prelude exposing [String]
+import Tesl.DB exposing [dbRead, dbWrite]
+import Tesl.Database exposing [Database, Memory]
+
+entity Note table "notes" primaryKey id {
+  id: String @db(text)
+  body: String @db(text)
+}
+
+database NoteDb = Database {
+  schema: "notes"
+  entities: [Note]
+  backend: Memory
+}
+
+# The helper writes a note. Its caller must declare that privilege too.
+fn saveNote(id: String, body: String) -> Note
+  requires [dbWrite Note] =
+  insert Note { id: id, body: body }
+
+# Give this caller the same write capability as saveNote.
+fn publishNote(id: String, body: String) -> Note
+  requires [dbRead Note] =
+  saveNote id body

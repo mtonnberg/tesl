@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Why Tesl? — stay in control as your codebase grows</title>
+<meta name="description" content="Tesl aims for lasting development speed: focused code review, a helpful compiler, integrated backend tools and runtime inspection for people and AI agents.">
+<link rel="stylesheet" href="playground.css"></head>
+<body><article class="start-guide why-guide">
+<nav><a href="index.html">← Playground</a> · <a href="start.html#install">Install Tesl</a> · <a href="https://github.com/mtonnberg/tesl/discussions">Ask the community</a></nav>
+<p class="eyebrow">Why Tesl?</p><h1>Stay in control as your codebase grows.</h1>
+<p>Tesl aims to keep development fast as your application grows, whether you code yourself or work with AI agents. Its compiler helps you express and preserve your rules, with clear explanations and suggested fixes to keep you moving.</p>
+<p>Let an LLM explore the open-ended parts of a problem. Give precise requirements to the compiler and checks: what must always be true should live in the program’s contracts. That can mean less code to trace during review and more confidence when changing it.</p>
+<p><a class="btn build-cta" href="index.html?guide=customer">Try a rule that travels with your code →</a></p>
+<p class="muted">Explore the details below. Browser exercises show the compiler at work; runtime guides show what you can do locally.</p>
+<div class="why-features">
+<details><summary><h2>Focus review on the rules that matter</h2></summary>
+<p>Suppose a large PR adds callers of a function that displays an invoice. Its signature requires evidence that the invoice belongs to the requested customer. Tesl checks that every new caller supplies that evidence.</p>
+<p>You review whether the customer check is correct, whether the function requires the right evidence, and whether any of those boundaries changed. You can stop manually tracing that requirement through every caller. Other behavior still needs review and tests: a proof checks the rule you expressed.</p>
+<p>The same idea works for a string that must have 3–10 characters and a special character: write and test the validation check, then require its fact wherever that guarantee matters. The compiler checks that those functions receive validated values.</p>
+<p><a href="examples/customer-invoice.tesl" download="CustomerInvoice.tesl">Read the complete invoice example</a> · <a href="https://github.com/mtonnberg/tesl/blob/main/manual/best-practices.md#proof-management">How the evidence works</a></p><p class="feature-action"><a class="btn" href="index.html?guide=customer">See it in action →</a></p></details>
+<details><summary><h2>Keep side effects explicit as helpers evolve</h2></summary>
+<p>Capabilities make operations such as database reads and writes visible in function declarations. The requirement follows calls: if a helper writes to Note, its caller must declare dbWrite Note too. A read-only path cannot quietly gain a write through a helper. Authentication and the application's access policy still need to be designed correctly.</p>
+<p><a href="examples/capability-missing.tesl" download="CapabilityMissing.tesl">Inspect a rejected database write</a></p><p class="feature-action"><a class="btn" href="index.html?guide=capabilities">See it in action →</a></p></details>
+<details><summary><h2>Keep API contracts and clients in sync</h2></summary>
+<p>Declare routes and their types once, then generate TypeScript/Zod or Elm client code. The CLI also exports OpenAPI for tools that understand your HTTP contract. The playground’s generated-code view lets you inspect the client and Go output.</p>
+<p><a href="https://github.com/mtonnberg/tesl/blob/main/manual/openapi-dast.md">OpenAPI and API testing</a> · <a href="start.html">Run a small server</a></p><p class="feature-action"><a class="btn" href="index.html?guide=api">See it in action →</a></p></details>
+<details><summary><h2>Write SQL the compiler can check</h2></summary>
+<p>Write queries using the fields in your entity declarations. The compiler checks field names and types, so a misspelled column or incompatible value is caught while you edit. Query results have types too: a single-row lookup returns a Maybe value, making the missing-row case explicit.</p>
+<p>The generated SQL uses parameters for values, and the debugger can show the statement and its bound parameters. You can inspect what reaches the database.</p>
+<p>Entity declarations connect the schema to your application’s types. Further migration tooling is in development; the <a href="https://github.com/mtonnberg/tesl/blob/main/manual/tour.md#schema-and-migrations">schema guide</a> describes what is available today.</p>
+<p class="feature-action"><a class="btn" href="index.html?guide=sql">See it in action →</a></p></details>
+<details><summary><h2>Catch currency and unit mix-ups</h2></summary>
+<p>Money values carry a currency and use exact integer minor units. Physical quantities carry dimensions, so adding a length to a duration is a compiler error. These types make mistakes visible that would look like ordinary arithmetic on raw numbers.</p>
+<p><a href="https://github.com/mtonnberg/tesl/blob/main/example/learn/lesson71-money.tesl">Money example</a> · <a href="https://github.com/mtonnberg/tesl/blob/main/example/learn/lesson72-units.tesl">Units example</a></p><p class="feature-action"><a class="btn" href="index.html?guide=money">See it in action →</a> · <a href="index.html?guide=dimensions">Try dimensions too →</a></p></details>
+<details><summary><h2>Keep tests beside the behavior they check</h2></summary>
+<p>Choose concrete assertions, executable documentation examples, properties over generated inputs, HTTP response assertions or load-test budgets. Tests live alongside your code and run through the local CLI. The playground checks their declarations and helps you write them.</p>
+<p class="feature-action"><a class="btn" href="index.html?guide=tests">See it in action →</a></p></details>
+<details><summary><h2>Build the backend with less setup</h2></summary>
+<p>Typed SQL, queues, workers, caching and SSE are integrated with Tesl’s Go runtime. PostgreSQL-backed queues provide retries and dead-letter handling without a separate queue service. During local development, the CLI can manage the project database.</p>
+<p>Deployed database-backed applications connect to your PostgreSQL service. The same language constructs cover the database, background jobs and live updates.</p>
+<p>The generated Go project is inspectable. This browser checks the source; follow the guide to run the application locally.</p>
+<p><a href="https://github.com/mtonnberg/tesl/tree/main/runtime/go">Inspect the runtime</a></p><p class="feature-action"><a class="btn" href="index.html?guide=runtime">See it in action →</a></p></details>
+<details><summary><h2>Work with a compiler that helps you move forward</h2></summary>
+<p>The compiler points to the problem, explains the missing requirement and, where available, offers an edit. A missing import can be repaired directly; a missing proof or capability tells you which contract needs attention.</p>
+<p>People and coding agents get the same diagnostic information. The CLI’s agent-context command gives an agent a compact view of errors and declarations, while targeted queries answer questions about types and symbols. An agent can check a change and act on specific feedback.</p>
+<h3>What if my LLM hasn’t learned Tesl?</h3>
+<p>It can look Tesl up as it works. The CLI includes the language specification, manual and examples, available offline. An agent can search for an explanation, inspect a function’s signature, try an implementation and use the compiler’s diagnostics to revise it.</p>
+<p><code>tesl help search "proof"</code> searches the documentation; <code>tesl help manual language-spec</code> opens the specification. This gives the agent a local reference and a way to check its work, even when its training data contains little Tesl.</p>
+<p><a href="agents.md">Playground capabilities and limits</a> · <a href="https://github.com/mtonnberg/tesl/blob/main/AGENTS.md">The agent API</a></p><p class="feature-action"><a class="btn" href="index.html?guide=compiler">See it in action →</a></p></details>
+<details><summary><h2>See what happens in production</h2></summary>
+<p>Tesl gives application code one standard way to log: a structured <code>telemetry</code> event. Add an event where it explains your business behavior; the runtime carries the request’s trace context with it.</p>
+<p>OpenTelemetry integration connects logs, metrics and traces across HTTP, SQL, queues, caching and LLM calls. Configure an OTLP destination and enable tracing to see which query or background operation took the time, with built-in instrumentation for those operations.</p>
+<p>The instrumentation comes with Tesl. Choose your collector and observability backend, and set the sampling and retention that suit your application.</p>
+<p><a href="https://github.com/mtonnberg/tesl/blob/main/example/learn/lesson17-telemetry.tesl">See structured logging →</a> · <a href="https://github.com/mtonnberg/tesl/blob/main/example/learn/lesson73-metrics.tesl">Metrics example</a> · <a href="https://github.com/mtonnberg/tesl/blob/main/example/learn/lesson77-traces.tesl">Trace a request</a></p></details>
+<details><summary><h2>Inspect running code with your AI agent</h2></summary>
+<p>The debugger coordinates a pause across instrumented executions and exposes queues, caches, SSE connections and workers alongside the triggering execution’s locals and SQL. If an execution cannot rendezvous in time, it reports a partial stop. The CLI and MCP interface let a coding agent inspect this state too.</p>
+<p><a href="https://github.com/mtonnberg/tesl/blob/main/example/learn/lesson61-step-debugging.tesl">Follow the local debugging example →</a> · <a href="https://github.com/mtonnberg/tesl/blob/main/manual/tour.md#opentelemetry-is-ambient">Explore observability</a> · <a href="https://github.com/mtonnberg/tesl/blob/main/AGENTS.md#runtime-inspection--debug-like-a-human-headless">Agent runtime inspection</a></p></details>
+<details><summary><h2>Bring authentication and security checks into the workflow</h2></summary>
+<p>SSO and sessions, explicit authorization requirements, and an OpenAPI export give you connected tools for building and inspecting an API. The CLI’s DAST workflow uses ZAP to scan a running application against its declared API; scanner credentials can come from environment variables.</p>
+<p>You choose the access policy and run the scans against your deployment. These tools help you implement and test that policy; they do not establish that every security requirement has been met.</p>
+<p><a href="https://github.com/mtonnberg/tesl/blob/main/manual/sso.md">Configure SSO →</a> · <a href="https://github.com/mtonnberg/tesl/blob/main/manual/openapi-dast.md">Generate OpenAPI and run a scan →</a></p></details>
+<details><summary><h2>Deploy Go with familiar hosting tools</h2></summary>
+<p>Tesl compiles to an inspectable Go application. Build a binary or use <code>tesl build --container</code> to produce a Docker image. It runs as an ordinary process or container, fitting the deployment, monitoring and sidecar patterns you already use for Go services.</p>
+<p>The runtime includes HTTP header timeouts, parameterized database queries and connection pooling. These provide concrete security and performance foundations beneath your application code.</p>
+<p>Container security tools such as <a href="https://falco.org/docs/">Falco</a> operate at the host and container layer; Tesl does not require a special integration. Configure those tools for your deployment as you would for another Go service.</p>
+<p><a href="https://github.com/mtonnberg/tesl/blob/main/manual/deploy.md">Build and deploy an application →</a> · <a href="https://github.com/mtonnberg/tesl/tree/main/runtime/go">Inspect the Go runtime</a></p></details>
+</div>
+<h2>Where it fits today</h2><p>You can build and run applications with Tesl today. The language remains in beta, with changes expected as it develops; the <a href="https://github.com/mtonnberg/tesl">repository</a> and <a href="https://github.com/mtonnberg/tesl/blob/main/INSTALL.md">installation guide</a> describe the current state.</p>
+<p><a class="btn build-cta" href="start.html#install">Install Tesl</a> <a class="btn" href="index.html">Try it in your browser</a></p>
+<p>If you get stuck or wonder whether Tesl fits your project, <a href="https://github.com/mtonnberg/tesl/discussions">come ask in Discussions</a>. Questions from people trying Tesl for the first time are welcome.</p>
+</article></body></html>

@@ -1,0 +1,24 @@
+module SqlFields exposing [Invoice, InvoiceDb, invoicesFor]
+
+import Tesl.Prelude exposing [List, String]
+import Tesl.DB exposing [dbRead, dbWrite]
+import Tesl.Database exposing [Database, Memory]
+import Tesl.List exposing [List.length]
+
+entity Invoice table "invoices" primaryKey id {
+  id: String @db(text)
+  customer: String @db(text)
+}
+
+database InvoiceDb = Database { entities: [Invoice], backend: Memory }
+
+# The entity declares customer. Use that field in this query.
+fn invoicesFor(customer: String) -> List Invoice requires [dbRead Invoice] =
+  select invoice from Invoice where invoice.customerId == customer
+
+test "only the requested customer's invoice is returned" requires [dbRead Invoice, dbWrite Invoice] {
+  insert Invoice { id: "fields-acme", customer: "acme" }
+  insert Invoice { id: "fields-other", customer: "other" }
+  expect invoicesFor "acme" == [Invoice { id: "fields-acme", customer: "acme" }]
+  expect List.length (invoicesFor "missing") == 0
+}

@@ -42,3 +42,11 @@
  ; lib/go_runtime/dune).  The default implementation is the 860 KB source snapshot,
  ; which would put the bundle past its 2 MB ceiling; the playground never emits Go.
  (libraries tesl_compiler_lib tesl_go_runtime_none js_of_ocaml))
+
+(executable
+ (name tesl_search_js)
+ (modules tesl_search_js)
+ (flags (:standard -warn-error +8))
+ (modes js)
+ (enabled_if (= %{profile} release))
+ (libraries tesl_compiler_lib tesl_go_runtime_none js_of_ocaml))

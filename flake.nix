@@ -284,6 +284,7 @@
             # JavaScript for the browser playground.  Opt-in — the jsoo stanza is
             # gated on the release profile (compiler/playground/dune), so nothing
             # in the normal dev/CI path needs these.
+            elmPackages.elm
             ocamlPackages.js_of_ocaml
             ocamlPackages.js_of_ocaml-compiler
             # Integration test mock servers

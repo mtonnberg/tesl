@@ -1711,7 +1711,7 @@ case "$CMD" in
     echo "tesl ${TESL_VERSION:-dev}"
     [ -n "${TESL_OCAML_COMPILER:-}" ] && echo "compiler: $TESL_OCAML_COMPILER"
     ;;
-  doc|--doc-json|explain)
+  doc|--doc-json|explain|search|--search-json|--catalog-json)
     # `tesl doc` / `tesl doc <name>` / `tesl doc Tesl.<Module>` / `tesl explain <CODE>`
     # are pure compiler surfaces, so they forward verbatim.
     #
@@ -1776,6 +1776,8 @@ Documentation:
   tesl help manual full                                        Show ALL documentation (for LLMs)
   tesl help examples                                           List all examples
   tesl help search <query>                                     Search documentation
+  tesl search [--json] QUERY                                   Find builtins by name/type
+  tesl --catalog-json                                         Export builtin catalog
 
 Editor / Language Server (LSP) flags:
   tesl check-json          <file.tesl>                   Type-check, diagnostics as IR-2 JSON
