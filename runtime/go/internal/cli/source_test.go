@@ -142,10 +142,11 @@ func TestSourceFileSupportsProjectAliasesAndStandaloneFiles(t *testing.T) {
 				writeProjectFile(t, app.Directory, "tesl.toml", "[project]\nentrypoint = src/app.tesl\n")
 			}
 			entry := filepath.Join("src", "app.tesl")
-			if layout == "project-alias" {
+			switch layout {
+			case "project-alias":
 				sourceSymlink(t, app.Directory, filepath.Join(root, "alias"))
 				app.Directory = filepath.Join(root, "alias")
-			} else if layout == "internal-directory-link" {
+			case "internal-directory-link":
 				sourceSymlink(t, "src", filepath.Join(app.Directory, "alias"))
 				entry = filepath.Join("alias", "app.tesl")
 			}
