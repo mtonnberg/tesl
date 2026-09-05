@@ -62,7 +62,10 @@ def main():
     run(["go", "build", "-o", str(cli), "./cmd/tesl"], root / "runtime/go", environment)
     environment["TESL_PROCESS_RUNNER"] = str(cli)
     targets = ["bin/main.exe", "test/test_completion.exe", "test/test_import_cache.exe", "test/test_workspace_session.exe", "test/test_process_runner.exe", "test/test_diagnostics.exe", "test/test_stdlib_docs.exe"]
-    run(["opam", "exec", "--", "dune", "build", *targets], root / "compiler", environment)
+    # These suites run via `dune exec`, which does not build the runtime deps
+    # declared for `dune runtest`. Materialize the shared relevance fixture too.
+    run(["opam", "exec", "--", "dune", "build", *targets, "test/search-queries.tsv"],
+        root / "compiler", environment)
     checks = [(target, ["opam", "exec", "--", "dune", "exec", target], root / "compiler")
               for target in targets[1:]]
     checks.extend([
