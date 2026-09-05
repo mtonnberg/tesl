@@ -16,14 +16,15 @@
 
       { "version": 1,
         "diagnostics": [ <same objects as --check-json> ],
-        "racket": <string|null>,   // emitted only when the check passes
+        "go":     <string|null>,   // emitted only when the check passes
+        "racket": <string|null>,   // legacy alias of "go", retained for clients
         "ts":     <string|null>,
         "elm":    <string|null> }
 
     Extra keys, never fewer, so a consumer written against `--check-json` keeps
     working.
 
-    What this driver deliberately does NOT do: run anything. There is no Racket
+    What this driver deliberately does NOT do: run anything. There is no Go
     runtime, no PostgreSQL, no HTTP server in the browser. It checks, and it
     shows you what the compiler would have emitted.
 
@@ -136,14 +137,14 @@ let check (src : Js.js_string Js.t) : Js.js_string Js.t =
       in
       let racket, ts, elm = if has_error then (None, None, None) else emitted vfile source in
       Printf.sprintf
-        {|{"version":1,"diagnostics":[%s],"racket":%s,"ts":%s,"elm":%s}|}
+        {|{"version":1,"backend":"go","diagnostics":[%s],"go":%s,"racket":%s,"ts":%s,"elm":%s}|}
         (String.concat "," (List.map Compile.diag_to_json diags))
-        (json_or_null racket) (json_or_null ts) (json_or_null elm)
+        (json_or_null racket) (json_or_null racket) (json_or_null ts) (json_or_null elm)
     with e ->
       (* A crash in the compiler must surface as a diagnostic, not a blank
          page: the playground is also a bug reporter. *)
       Printf.sprintf
-        {|{"version":1,"diagnostics":[{"file":%s,"start":{"line":0,"col":0},"end":{"line":0,"col":0},"severity":"error","code":"E000","message":%s,"fix":null,"source":"playground"}],"racket":null,"ts":null,"elm":null}|}
+        {|{"version":1,"backend":"go","diagnostics":[{"file":%s,"start":{"line":0,"col":0},"end":{"line":0,"col":0},"severity":"error","code":"E000","message":%s,"fix":null,"source":"playground"}],"go":null,"racket":null,"ts":null,"elm":null}|}
         (Compile.json_encode_string vfile)
         (Compile.json_encode_string
            ("internal compiler error: " ^ Printexc.to_string e))

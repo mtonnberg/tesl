@@ -90,6 +90,9 @@ else
   ART="$BUILT/tesl_playground.js"
 fi
 
+# Search is a separate lazy artifact but must share native semantics and identity.
+node "$REPO_ROOT/scripts/playground-search-parity.cjs" "$(dirname "$ART")" || exit 1
+
 # ── The fixture set: the first N lessons in directory order ──────────────────
 FILES="$(ls "$LEARN_DIR"/*.tesl 2>/dev/null | head -n "$LIMIT")"
 [ -n "$FILES" ] || skip "no lessons under $LEARN_DIR"

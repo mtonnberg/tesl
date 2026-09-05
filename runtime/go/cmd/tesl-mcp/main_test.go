@@ -18,6 +18,9 @@ import (
 
 const compilerHelperScript = `#!/bin/sh
 case "$1" in
+  --search-json)
+    test "$2" = 'String -> Int' || exit 2
+    printf '%s' '{"version":1,"catalog_id":"fixture","scope":"builtins","query":"String -> Int","mode":"type","error":null,"total":0,"limit":20,"results":[]}' ;;
   --agent-context-json)
     printf '%s' '{"version":1,"file":"fixture.tesl","content_hash":"abc","ok":true,"summary":"clean","diagnostics":[],"symbols":[],"proof_obligations":[]}' ;;
   --check-json)
@@ -651,7 +654,15 @@ func TestMCPRacketCatalogAndCompilerDifferential(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	goTools, err := json.Marshal(map[string]any{"tools": toolDefinitions()})
+	// The frozen Racket implementation predates builtin search. Keep comparing
+	// every legacy tool exactly; the new Go-only tool has its own compiler test.
+	var legacyTools []map[string]any
+	for _, tool := range toolDefinitions() {
+		if tool["name"] != "tesl.search" {
+			legacyTools = append(legacyTools, tool)
+		}
+	}
+	goTools, err := json.Marshal(map[string]any{"tools": legacyTools})
 	if err != nil {
 		t.Fatal(err)
 	}

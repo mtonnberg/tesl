@@ -126,6 +126,12 @@ func (server *server) callTool(ctx context.Context, name string, arguments map[s
 	var args []string
 	queryClient := server.compiler
 	switch name {
+	case "tesl.search":
+		query, ok := arguments["query"].(string)
+		if !ok || len(query) > 256 {
+			return nil, errors.New("query must be a string of at most 256 UTF-8 bytes")
+		}
+		args = []string{"--search-json", query}
 	case "tesl.agent_context", "tesl.proof_obligations":
 		if file == "" {
 			return nil, errors.New("file is required")
@@ -350,6 +356,9 @@ func toolDefinitions() []map[string]any {
 		},
 	}
 	return []map[string]any{
+		{"name": "tesl.search", "description": "Discover builtins by name, description or exact type shape. Requirements still apply; proof metadata is unavailable. Query is at most 256 UTF-8 bytes.",
+			"inputSchema": map[string]any{"type": "object", "required": []string{"query"}, "properties": map[string]any{"query": map[string]any{"type": "string", "maxLength": 256}}},
+			"annotations": map[string]bool{"readOnlyHint": true, "destructiveHint": false, "openWorldHint": false}},
 		{"name": "tesl.agent_context", "description": "Compact compiler context after an edit.", "inputSchema": types},
 		{"name": "tesl.check", "description": "Compiler diagnostics and fixes.", "inputSchema": types},
 		{"name": "tesl.type_at", "description": "Type at a source position.", "inputSchema": position},

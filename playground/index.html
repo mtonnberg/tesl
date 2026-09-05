@@ -426,6 +426,8 @@
     .diag .src-tag { margin-left: 0; }
   }
 </style>
+<link rel="stylesheet" href="search.css">
+<script src="share.js"></script>
 </head>
 <body>
 <a class="skip" href="#results">Skip to the diagnostics</a>
@@ -443,6 +445,8 @@
     <label class="visually-hidden" for="examples">Example</label>
     <select id="examples"></select>
     <button id="check" class="btn" title="Check now (Ctrl+Enter)">Check</button>
+    <button id="search-open" class="btn" title="Search builtins (Ctrl or Cmd + K)">Search builtins</button>
+    <button id="compiler-retry" class="btn" hidden>Retry compiler load</button>
     <button id="share" class="btn" title="Copies a link containing the source — and the selected lines, if any">Copy share link</button>
     <fieldset class="seg" id="theme">
       <legend>Theme</legend>
@@ -457,6 +461,30 @@
     <a id="lessons-link" href="lessons.html">All lessons &rarr;</a>
   </div>
 </header>
+
+<dialog id="search-dialog" aria-labelledby="search-title">
+  <div class="search-heading"><h2 id="search-title">Find a Tesl builtin</h2><button id="search-close" class="btn">Close</button></div>
+  <label for="search-query">Name, description, module, diagnostic code or type</label>
+  <input id="search-query" type="search" autocomplete="off" spellcheck="false" aria-describedby="search-help">
+  <p id="search-help" class="search-help">Find a function, then check your call to verify its proofs and capabilities.</p>
+  <div class="search-suggestions">
+    <button class="btn" data-query="String -> Int">String → Int</button>
+    <button class="btn" data-query="Dict k v -> List k">Dict k v → List k</button>
+    <button class="btn" data-query="leading whitespace">leading whitespace</button>
+    <button class="btn" data-query="V001">V001</button>
+  </div>
+  <details class="search-help"><summary>Type syntax and keyboard shortcuts</summary>
+    <p>Types match exact shape with consistent variable renaming: application binds before →; arrows associate right. No wildcards, specialization, proof or capability filters. Proof and callback requirements are not fully indexed.</p>
+    <p>Arrow Down/Up browses results; Tab reaches actions; Escape closes. Ctrl/Cmd + K opens search.</p>
+  </details>
+  <p id="search-status" role="status" aria-live="polite" aria-atomic="true"></p>
+  <button id="search-retry" class="btn" hidden>Retry search</button>
+  <button id="search-share" class="btn">Copy search link</button>
+  <input id="search-copy-value" readonly hidden aria-label="Text to copy">
+  <p class="search-help">Queries stay local. Search links include your query and any source already in the URL. Examples open in a new tab.</p>
+  <ul id="search-results" aria-label="Search results"></ul>
+  <p id="search-version"></p>
+</dialog>
 
 <main>
   <section class="pane pane-editor" aria-label="Editor">
@@ -650,59 +678,7 @@ fn addNote(id: String, body: String) -> Note
 //
 // No backend, no storage, no moderation surface. The fragment is never sent to
 // any server by the browser.
-const b64u = {
-  enc(bytes) {
-    let s = "";
-    for (const b of bytes) s += String.fromCharCode(b);
-    return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-  },
-  dec(str) {
-    const s = atob(str.replace(/-/g, "+").replace(/_/g, "/"));
-    const out = new Uint8Array(s.length);
-    for (let i = 0; i < s.length; i++) out[i] = s.charCodeAt(i);
-    return out;
-  }
-};
-
-async function encodeShare(text, pos, highlight) {
-  const raw = new TextEncoder().encode(text);
-  let payload = null;
-  if (typeof CompressionStream === "function") {
-    try {
-      const cs = new CompressionStream("deflate-raw");
-      const w = cs.writable.getWriter();
-      w.write(raw); w.close();
-      const buf = await new Response(cs.readable).arrayBuffer();
-      payload = "z" + b64u.enc(new Uint8Array(buf));
-    } catch (e) { /* fall through */ }
-  }
-  if (payload === null) payload = "s" + b64u.enc(raw);
-  if (pos) payload += ".L" + pos;
-  if (highlight) payload += ".H" + highlight;
-  return payload;
-}
-
-// → { text, from, to, highlightFrom, highlightTo } | null.
-// `from`/`to` are 1-based line numbers or null (for caret/selection).
-// `highlightFrom`/`highlightTo` are 1-based line numbers or null (for line highlighting).
-async function decodeShare(frag) {
-  if (!frag) return null;
-  // Match the base payload and optional .L and .H sections
-  // The regex matches: kind, body, then optionally .Lstart-end and/or .Hstart-end
-  const m = /^([sz])([A-Za-z0-9_-]*)(?:\.L(\d+)(?:-(\d+))?)?(?:\.H(\d+)(?:-(\d+))?)?$/.exec(frag);
-  if (!m) return null;
-  const [, kind, body, a, b, h1, h2] = m;
-  const pos = a ? { from: Number(a), to: b ? Number(b) : Number(a) } : { from: null, to: null };
-  const highlight = h1 ? { highlightFrom: Number(h1), highlightTo: h2 ? Number(h2) : Number(h1) } : { highlightFrom: null, highlightTo: null };
-  try {
-    if (kind === "s") return { text: new TextDecoder().decode(b64u.dec(body)), ...pos, ...highlight };
-    const ds = new DecompressionStream("deflate-raw");
-    const w = ds.writable.getWriter();
-    w.write(b64u.dec(body)); w.close();
-    const buf = await new Response(ds.readable).arrayBuffer();
-    return { text: new TextDecoder().decode(new Uint8Array(buf)), ...pos, ...highlight };
-  } catch (e) { return null; }
-}
+const { encode: encodeShare, decode: decodeShare } = window.TeslShare;
 
 // ─── Fix application — mirrors compiler/lib/diag_fix.ml `apply` ──────────────
 // Line numbers in the JSON are 0-based, as in the compiler.
@@ -1433,21 +1409,21 @@ async function boot() {
     setTimeout(() => { $("share").textContent = "Copy share link"; }, 2500);
   });
 
-  // The compiler .js sets window.teslCheck when it finishes evaluating.
+  // The asset loader verifies the compiler against this build's SRI identity.
   const waitFor = () => {
     if (typeof window.teslCheck === "function") {
       ready = true;
       run();
       // Handle caret/selection position
       if (shared && shared.from) gotoRange(shared.from - 1, 0, shared.to, 0);
-    } else {
-      setTimeout(waitFor, 50);
     }
   };
+  window.addEventListener("tesl:ready", waitFor);
   waitFor();
 }
 boot();
 </script>
-<script src="tesl_playground.js" defer></script>
+<script src="playground-build.js" defer></script>
+<script src="search-ui.js" defer></script>
 </body>
 </html>

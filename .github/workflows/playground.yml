@@ -79,6 +79,9 @@ jobs:
           set -euo pipefail
           dist="playground/dist"
           test -f "$dist/index.html"   || { echo "::error::index.html missing"; exit 1; }
+          for asset in tesl_search.js search-ui.js search.css share.js search-examples.json playground-build.js; do
+            test -f "$dist/$asset" || { echo "::error::$asset missing"; exit 1; }
+          done
           test -f "$dist/tesl_playground.js" || { echo "::error::tesl_playground.js missing"; exit 1; }
           # lessons.html is generated from every lesson's `# lesson:` header. It is
           # REQUIRED here, not optional: build.sh only warns if python3 is absent,
@@ -121,6 +124,12 @@ jobs:
             || { echo "::error::artifact implausibly small ($bytes bytes) — truncated build?"; exit 1; }
           test "$bytes" -lt 2000000 \
             || { echo "::error::artifact is $bytes bytes (>2 MB). Something now references Embedded_docs, or another large module was linked in. See playground/README.md."; exit 1; }
+
+      - name: Check native and browser parity
+        run: nix develop --command bash scripts/playground-parity.sh --dist playground/dist
+
+      - name: Check search and editor behavior in Chromium
+        run: nix shell --inputs-from . nixpkgs#playwright-test nixpkgs#playwright-driver.browsers --command playwright test --config e2e/playground/playwright.config.cjs
 
       # GitHub serves the artifact as-is; `.nojekyll` stops any underscore-prefixed
       # path being swallowed by the legacy Jekyll pipeline. It lives HERE and not in

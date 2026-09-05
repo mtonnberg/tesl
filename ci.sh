@@ -119,7 +119,7 @@ phase_started_at=$SECONDS
 
 # ── Phase registry / progress bar ────────────────────────────────────────────
 # We know the phase count up front so each phase can print "[N/T] <name>".
-TOTAL_PHASES=22
+TOTAL_PHASES=23
 PHASE_NUM=0
 # Parallel arrays: name / status (OK|FAIL|SKIP) / elapsed seconds.
 PHASE_NAMES=()
@@ -740,6 +740,17 @@ fi
 # skipped by forgetting.  Placed right after the build because the section-map and
 # diagnostic-deep-link halves invoke `tesl help manual`; without main.exe those two
 # halves self-skip and the script exits 77.
+phase_begin "Verified content (proof failure, repair, executed tests)"
+if ! command -v python3 >/dev/null 2>&1; then
+    printf '  python3 is required for content verification\n'
+    phase_end FAIL
+elif python3 -m unittest discover -s tests -p test_content.py && \
+     python3 scripts/content.py verify --preview; then
+    phase_end OK
+else
+    phase_end FAIL
+fi
+
 phase_begin "Doc integrity (links, anchors, section map, orphans)"
 _docint_main_exe="$COMPILER_DIR/_build/default/bin/main.exe"
 _docint_rc=0

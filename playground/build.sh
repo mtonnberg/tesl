@@ -3,8 +3,7 @@
 #
 #   playground/build.sh [OUTDIR]        # default OUTDIR = playground/dist
 #
-# Output is host-agnostic: three plain files (index.html, tesl_playground.js and
-# the generated lessons.html), no server-side anything, no build-time knowledge of
+# Output is host-agnostic: plain static files, no server-side anything, no build-time knowledge of
 # where it will be served from — every path in index.html is relative and there is
 # no CDN, web font or image.  Publishing it is "copy this directory", on any forge
 # or CDN.
@@ -24,6 +23,10 @@ set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo="$(cd "$here/.." && pwd)"
 out="${1:-$here/dist}"
+
+for required in python3 node; do
+  command -v "$required" >/dev/null 2>&1 || { echo "error: $required is required for verified playground assets" >&2; exit 1; }
+done
 
 if ! command -v js_of_ocaml >/dev/null 2>&1; then
   cat >&2 <<'EOF'
@@ -59,13 +62,21 @@ echo "==> compiling the Tesl compiler to JavaScript"
 builddir="$repo/compiler/_build-playground"
 ( cd "$repo/compiler" \
   && dune build --profile release --build-dir "$builddir" \
-       playground/tesl_playground_js.bc.js )
+       playground/tesl_playground_js.bc.js playground/tesl_search_js.bc.js )
+
+# Verify examples and catalog parity against the native compiler from this tree.
+( cd "$repo/compiler" && dune build bin/main.exe )
 
 artifact="$builddir/default/playground/tesl_playground_js.bc.js"
 
 mkdir -p "$out"
 install -m 644 "$artifact" "$out/tesl_playground.js"
 install -m 644 "$here/index.html" "$out/index.html"
+install -m 644 "$builddir/default/playground/tesl_search_js.bc.js" "$out/tesl_search.js"
+install -m 644 "$here/search-ui.js" "$out/search-ui.js"
+install -m 644 "$here/search.css" "$out/search.css"
+install -m 644 "$here/share.js" "$out/share.js"
+python3 "$here/gen-search-assets.py" "$repo" "$out"
 
 # ── The lesson index ────────────────────────────────────────────────────────
 # One page linking every example/learn lesson into the checker, with its source

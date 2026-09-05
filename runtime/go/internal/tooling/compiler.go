@@ -199,6 +199,8 @@ func ValidateCompilerJSON(flag string, payload []byte) error {
 	}
 
 	switch flag {
+	case "--search-json":
+		return validateSearchResponse(root)
 	case "--check-json":
 		items, err := requiredArray(root, "diagnostics")
 		if err != nil {
@@ -478,7 +480,7 @@ func knownCompilerJSONFlag(flag string) bool {
 	switch flag {
 	case "--check-json", "--agent-context-json", "agent-context", "--type-at-json", "--field-at-json",
 		"--definition-json", "--type-definition-json", "--signature-help-json", "--completions-json",
-		"--occurrences-json", "--selection-range-json", "--local-bindings-json", "--semantic-json", "--doc-json":
+		"--occurrences-json", "--selection-range-json", "--local-bindings-json", "--semantic-json", "--doc-json", "--search-json":
 		return true
 	default:
 		return false
