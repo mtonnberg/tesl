@@ -1,9 +1,17 @@
 # Gold-standard language tooling
 
-Status: in progress, 2026-09-05. The completion and cache changes below are in the
-working tree; the full roadmap and release gates are not complete.
+Status: in progress, 2026-09-05. Completion and retained-session foundations are
+implemented; the full roadmap and release gates are not complete.
 
 Implemented so far:
+- Versioned retained compiler sessions shared by the Go LSP and MCP, with the
+  same query implementation as one-shot CLI calls. Private project mirrors write
+  changed files only; parsed modules, checked types and query results are cached
+  within bounded snapshots. Dependency changes conservatively invalidate all
+  semantic answers. Stdlib changes outside the project invalidate them too.
+- Cancellation, crash/restart, process cleanup, LF/CRLF query equivalence and
+  disk/overlay/save/close/delete/recreate transitions have regression fixtures.
+  The protocol and remaining limitations are in [`editor/protocol.md`](../../editor/protocol.md).
 - Compiler-owned standard-library completion, public sibling-module types,
   import hints, source replacement ranges, documentation, and automatic import
   insertion/extension when a completion is accepted.
@@ -17,7 +25,7 @@ Implemented so far:
   [`completion_test.go`](../../runtime/go/internal/lsp/completion_test.go), including
   selecting a completion, applying its edits, and checking the resulting program.
 
-Still required: retained workspace sessions and semantic identity, complete
+Still required: dependency-directed incremental checking and semantic identity, complete
 cross-file operations, expected-type/proof-aware ranking, proof/effect explanations,
 and measured latency/memory gates. Sibling type discovery is bounded local
 discovery, not the workspace semantic index promised by L1/L2.
@@ -40,7 +48,7 @@ what Tesl provides, alongside helping them enter names they already know.
 | Area | Current implementation | Work this roadmap owns |
 |---|---|---|
 | Compiler queries | One-shot JSON queries in [`compile.ml`](../../compiler/lib/compile.ml), including types, definitions, occurrences, completions, and proof obligations | Retain semantic state and answer project queries from a consistent snapshot |
-| Unsaved imports | [`query.go`](../../runtime/go/internal/tooling/query.go) stages disk sources and all relevant open buffers in a bounded temporary project for each query | Preserve this correctness while removing repeated project copying/checking from the interactive path |
+| Unsaved imports | A bounded private mirror applies changed files; retained sessions cache answers for complete snapshots | Add a compiler-owned dependency index so unrelated modules remain checked after edits |
 | Editor features | [`server.go`](../../runtime/go/internal/lsp/server.go) provides diagnostics, hover, signature help, navigation, same-file references/rename, fixes, formatting, symbols, hints, and tokens | Audit actual behavior, then extend it across the workspace |
 | Completion | Public stdlib functions/types, sibling exported types, import edits, signatures/docs, record fields, and partial parse recovery | Complete lexical scope, expected types, proof-aware ranking, and all contextual syntax |
 | Agent access | Compiler JSON and [`MCP`](../../editor/tesl-mcp/README.md) expose targeted queries | Equivalent project queries, explanations, and edit previews without requiring an editor |
@@ -124,8 +132,9 @@ Label generated placeholders and remaining obligations accordingly.
 
 ### L0 — Freeze contracts and measure the baseline
 
-- [ ] Inventory the current Go LSP methods, extension commands, compiler flags,
-  and MCP tools against executable fixtures. Record historical claims that are
+- [ ] Finish the [implementation inventory](../../editor/language-tooling-status.md)
+  against extension commands and executable fixtures for Go LSP methods, compiler
+  flags and MCP tools. Record historical claims that are
   absent or narrower in the current implementation.
 - [ ] Specify workspace sessions, snapshot identity, partial/stale results,
   cancellation, coordinate encoding, edit preconditions, and compatibility.
@@ -144,12 +153,12 @@ without a corresponding test.
 - [ ] Retain expected-type and proof metadata already computed by the checker.
   Recover inside declarations so an unfinished expression does not erase
   unrelated declarations or lexical scope.
-- [ ] Carry all unsaved overlays through each snapshot; publish only results
+- [x] Carry all unsaved overlays through each snapshot; publish only results
   that still match the requesting revision. Rebuild deterministically after a
   compiler-session crash.
-- [ ] Route current LSP and agent queries through the shared engine. Keep the
+- [x] Route current LSP and agent queries through the shared engine. Keep the
   existing bounded temporary-project path as a compatibility fallback during
-  rollout, with no competing semantic rules.
+  rollout (`TESL_COMPILER_SESSION=0`), with no competing semantic rules.
 
 Exit: incremental results match a fresh compile of the same complete snapshot
 after edit/save/close/import-change sequences. Unrelated files remain cached;

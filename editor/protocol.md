@@ -320,7 +320,7 @@ emits no JSON on a parse error; consumers must treat that as "no snapshot availa
 ## LSP methods backed by the above flags
 
 The Go LSP advertises and implements these read-only methods.
-None of them modify the compiler contract; each shells out to a frozen `--*-json` / `--fmt` flag.
+They consume the shared compiler query contracts below. Source queries use retained sessions by default; formatting still uses an isolated `--fmt` call.
 
 - `textDocument/documentSymbol` — flat `SymbolInformation[]` built from `--semantic-json`
   (functions/checks/handlers/workers → Function, records → Struct + Field children, ADTs → Enum +
@@ -343,3 +343,75 @@ None of them modify the compiler contract; each shells out to a frozen `--*-json
 The TextMate grammar (`editor/vscode-tesl/syntaxes/tesl.tmLanguage.json`) terminates string scopes at
 end-of-line (`"end": "\"|(?=$)"`); Tesl strings are single-line, so an unterminated quote no longer
 paints the string scope — and the minimap — to end-of-file.
+
+## Retained compiler sessions (workspace protocol 1)
+
+The shipped Go LSP and MCP clients retain one compiler process and private project
+mirror. The compiler entry point is `tesl-compiler --workspace-session`; normal
+one-shot flags remain available and call the same `Compiler_query.run` function.
+Set `TESL_COMPILER_SESSION=0` in the frontend environment to use the older bounded
+one-shot adapter. A failed handshake reports this option; it does not silently
+interpret malformed responses as support for a different protocol.
+
+This is a local byte-framed protocol, independent of LSP framing. A frame is an
+unsigned, big-endian 32-bit byte length followed by exactly that many bytes.
+The compiler first writes a framed UTF-8 JSON handshake:
+
+```json
+{"version":1,"protocol":"tesl-workspace","invalidation":"whole-snapshot"}
+```
+
+Each request contains five consecutive frames, in this order:
+
+| Field | Limit | Meaning |
+|---|---|---|
+| Snapshot | 128 bytes | Nonempty identity of the complete staged input tree |
+| Flag | 64 bytes | One supported source-query flag |
+| Path | 4096 bytes | Absolute filename inside the owner's private mirror |
+| Line | 20 bytes | Nonnegative decimal, or empty for a file query |
+| Column | 20 bytes | Nonnegative UTF-8 byte column, or empty for a file query |
+
+The response is one framed JSON value, at most 8 MiB:
+
+```json
+{"version":1,"snapshot":"INPUT_ID","exit_code":0,
+ "result":{"version":1,"diagnostics":[]},"error":null,
+ "cache_hits":2,"cache_misses":3}
+```
+
+`result` retains the selected flag's existing schema. Diagnostic failures have
+`exit_code: 1` with a usable result. Failed queries have `result: null` and an
+explicit `error`; they are never successful empty results. Cache counters are
+optional process-lifetime measurements. A malformed/truncated frame terminates
+the session. EOF between requests is a normal shutdown. This protocol accepts
+read-only queries; it cannot execute compiler build commands or modify files.
+
+The owner hashes sorted paths and exact source/manifest bytes using SHA-256.
+All relevant open buffers override disk, including new unsaved files. Disk bytes
+are reread on each request, so equal timestamps and lengths cannot hide edits.
+Only changed files are written to the mirror; closing/deleting an overlay
+restores the disk file or removes the staged file. Existing overlay file, byte,
+document and directory limits still apply. Symlinks and nonregular disk sources
+are excluded. Source paths in locations and diagnostic hints map back to the
+project. Different roots or changed toolchain configuration restart the process.
+
+The mirror stays immutable during a query. The compiler retains parsed modules,
+checked type metadata and query answers within that snapshot, with entry and
+byte limits. Any different snapshot clears semantic caches. Bundled `.tesl`
+source libraries are additional compiler-owned inputs: changed bytes or missing/
+created files invalidate answers even if project inputs are unchanged. This is
+conservative invalidation, not yet a reverse-dependency index or incremental
+checking of only affected modules.
+
+A client serializes exchanges and includes waiting time in its request deadline.
+Cancellation/timeout kills and reaps the owned process tree, closes its pipes,
+and waits for I/O to finish. A crash fails the active request; the next request
+reconstructs the compiler from the current complete mirror. Responses with a
+wrong revision, unsupported version, missing payload, or invalid query schema
+are rejected. The LSP cancels outstanding diagnostics and closes the session on
+exit/EOF; MCP closes it on EOF. This does not yet add asynchronous LSP request
+cancellation, cross-file semantic identity, or transaction-safe workspace rename.
+
+Regression tests: `compiler/test/test_workspace_session.ml`,
+`runtime/go/internal/tooling/session_test.go`, and the real-compiler completion
+fixtures in `runtime/go/internal/lsp/completion_test.go`.

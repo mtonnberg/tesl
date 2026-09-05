@@ -1,8 +1,20 @@
 package tooling
 
-import "tesl.dev/runtime/go/internal/toolchain"
+import (
+	"os"
+	"tesl.dev/runtime/go/internal/toolchain"
+)
 
 func CompilerFromEnvironment() Client {
-	executable, err := toolchain.Default().Resolve("compiler")
-	return Client{Executable: executable, DiscoveryError: err}
+	resolver := toolchain.Default()
+	executable, err := resolver.Resolve("compiler")
+	environment, envErr := resolver.CompilerEnvironment(nil)
+	if err == nil {
+		err = envErr
+	}
+	client := Client{Executable: executable, DiscoveryError: err, Environment: environment}
+	if os.Getenv("TESL_COMPILER_SESSION") != "0" {
+		client.Sessions = NewWorkspaceSessions()
+	}
+	return client
 }

@@ -84,6 +84,10 @@ func ExitCode(err error) int {
 	if err == nil {
 		return 0
 	}
+	var status *processStatus
+	if errors.As(err, &status) {
+		return status.code
+	}
 	if errors.Is(err, context.Canceled) {
 		return 130
 	}
@@ -107,7 +111,31 @@ func (app *App) invoke(ctx context.Context, tool, directory string, environment 
 }
 
 func (app *App) compiler(ctx context.Context, args ...string) error {
-	return app.invoke(ctx, "compiler", app.Directory, app.Environment, args...)
+	environment, err := app.Resolver.CompilerEnvironment(app.Environment)
+	if err != nil {
+		return err
+	}
+	// Only subprocess-producing compiler commands need the native process owner
+	// and the selected offline Go environment. Ordinary queries remain independent
+	// of whether Go is installed.
+	if len(args) > 0 && (args[0] == "--mutate" || args[0] == "--exe") {
+		var err error
+		environment, err = app.Resolver.GoEnvironment(environment)
+		if err != nil {
+			return err
+		}
+		goTool, err := app.Resolver.Resolve("go")
+		if err != nil {
+			return err
+		}
+		environment = toolchain.Setenv(environment, "TESL_GO", goTool)
+		self, err := os.Executable()
+		if err != nil {
+			return err
+		}
+		environment = toolchain.Setenv(environment, "TESL_PROCESS_RUNNER", self)
+	}
+	return app.invoke(ctx, "compiler", app.Directory, environment, args...)
 }
 
 func (app *App) Run(ctx context.Context, args []string) error {
@@ -132,6 +160,8 @@ func (app *App) Run(ctx context.Context, args []string) error {
 	}
 	verb, rest := args[0], args[1:]
 	switch verb {
+	case "--internal-run-process":
+		return app.runProcess(ctx, rest)
 	case "init":
 		return app.init(ctx, rest)
 	case "build":

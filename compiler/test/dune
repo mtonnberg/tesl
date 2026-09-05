@@ -292,3 +292,11 @@
  (name test_import_cache)
  (modules test_import_cache)
  (libraries tesl_compiler_lib alcotest unix))
+(test
+ (name test_workspace_session)
+ (modules test_workspace_session)
+ (libraries tesl_compiler_lib alcotest unix str))
+(test
+ (name test_process_runner)
+ (modules test_process_runner)
+ (libraries tesl_compiler_lib alcotest unix))

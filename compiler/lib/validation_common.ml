@@ -1041,6 +1041,15 @@ let lifted_stdlib_basename (module_name : string) : string option =
   | "Tesl.CivilTime" -> Some "civil-time.tesl"
   | _ -> None
 
+(** One resource-directory contract for installed tooling and sessions. *)
+let stdlib_source_directories () =
+  match Sys.getenv_opt "TESL_STDLIB_DIR" with
+  | Some directory when directory <> "" -> [directory]
+  | _ ->
+    let root = stdlib_repo_root () in
+    [Filename.concat root "tesl";
+     Filename.concat root "share/tesl-collections/tesl/tesl"]
+
 (** Resolve a lifted [Tesl.X] module to its bundled `.tesl` source path.
     Returns [None] when the module is not lifted OR the source cannot be located
     (graceful: the import then contributes no rows).  Looked up under the repo's
@@ -1052,15 +1061,8 @@ let lifted_stdlib_source_path (module_name : string) : string option =
   match lifted_stdlib_basename module_name with
   | None -> None
   | Some base ->
-    let root = stdlib_repo_root () in
-    let candidates = [
-      Filename.concat root (Filename.concat "tesl" base);
-      (* Installed distribution: cp -r tesl share/tesl-collections/tesl/tesl *)
-      Filename.concat root
-        (Filename.concat "share"
-           (Filename.concat "tesl-collections"
-              (Filename.concat "tesl" (Filename.concat "tesl" base))));
-    ] in
+    let candidates = List.map (fun directory -> Filename.concat directory base)
+      (stdlib_source_directories ()) in
     List.find_opt Sys.file_exists candidates
 
 (** Canonical spelling of a module path, for identity comparisons (import

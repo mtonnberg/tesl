@@ -208,7 +208,9 @@ func TestBuiltCompilerProjectTypeUsesUnsavedDependency(t *testing.T) {
 	if _, err := os.Stat(compiler); err != nil {
 		t.Skip("compiler build unavailable")
 	}
-	server := NewServer(tooling.Client{Executable: compiler})
+	client := tooling.Client{Executable: compiler, Sessions: tooling.NewWorkspaceSessions()}
+	t.Cleanup(func() { _ = client.Close() })
+	server := NewServer(client)
 	root := t.TempDir()
 	entry, dependency := filepath.Join(root, "app.tesl"), filepath.Join(root, "model.tesl")
 	disk := "module Model exposing [OldType]\nrecord OldType { n: Int }\n"
@@ -253,7 +255,8 @@ func TestBuiltCompilerCompletionUsesUnsavedBuffer(t *testing.T) {
 	if _, err := os.Stat(compiler); err != nil {
 		t.Skip("compiler build unavailable")
 	}
-	client := tooling.Client{Executable: compiler}
+	client := tooling.Client{Executable: compiler, Sessions: tooling.NewWorkspaceSessions()}
+	t.Cleanup(func() { _ = client.Close() })
 	server := NewServer(client)
 	path := filepath.Join(t.TempDir(), "demo.tesl")
 	if err := os.WriteFile(path, []byte("module Demo exposing []\n"), 0o600); err != nil {
@@ -284,7 +287,8 @@ func TestBuiltCompilerTypeSelectionImportsAndChecks(t *testing.T) {
 	for _, newline := range []string{"\n", "\r\n"} {
 		for _, imported := range []string{"", "import Tesl.Maybe exposing [Nothing]", "import Tesl.Maybe exposing [Maybe(..)]"} {
 			t.Run(fmt.Sprintf("crlf=%v/import=%s", newline == "\r\n", imported), func(t *testing.T) {
-				client := tooling.Client{Executable: compiler}
+				client := tooling.Client{Executable: compiler, Sessions: tooling.NewWorkspaceSessions()}
+				t.Cleanup(func() { _ = client.Close() })
 				server := NewServer(client)
 				path := filepath.Join(t.TempDir(), "demo.tesl")
 				uri := protocol.PathToURI(path)

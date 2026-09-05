@@ -23,6 +23,7 @@ const (
 )
 
 type Client struct {
+	Sessions       *WorkspaceSessions
 	DiscoveryError error
 	Executable     string
 	Timeout        time.Duration
@@ -115,7 +116,7 @@ func (client Client) Run(ctx context.Context, args ...string) (Result, error) {
 		return result, fmt.Errorf("compiler: read stderr: %w", diagnosticsErr)
 	}
 	if errors.Is(queryContext.Err(), context.DeadlineExceeded) {
-		return result, fmt.Errorf("compiler: query timed out after %s", timeout)
+		return result, fmt.Errorf("compiler: query timed out after %s: %w", timeout, context.DeadlineExceeded)
 	}
 	if errors.Is(queryContext.Err(), context.Canceled) {
 		return result, context.Canceled
@@ -138,6 +139,9 @@ func (error *ProcessError) Error() string {
 func (error *ProcessError) Unwrap() error { return error.Err }
 
 func (client Client) QueryJSON(ctx context.Context, args ...string) (json.RawMessage, Result, error) {
+	if client.Sessions != nil && len(args) >= 2 && sessionFlag(args[0]) {
+		return client.QueryFileJSON(ctx, args[0], args[1], args[2:]...)
+	}
 	result, runErr := client.Run(ctx, args...)
 	if runErr != nil && len(bytes.TrimSpace(result.Stdout)) == 0 {
 		return nil, result, runErr

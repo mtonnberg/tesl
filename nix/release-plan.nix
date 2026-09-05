@@ -26,6 +26,7 @@ in {
     compiler = "libexec/tesl/tesl-compiler";
     go = "libexec/tesl/go/bin/go";
     postgresDirectory = "libexec/tesl/postgresql/bin";
+    stdlib = "share/tesl/stdlib";
     templates = "share/tesl/templates";
     doc = "share/tesl/doc";
     moduleProxy = "share/tesl/go-modules";

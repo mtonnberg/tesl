@@ -40,7 +40,8 @@ documented per-user installation location. A minimal schema example is:
   "components": {
     "compiler": {"path": "libexec/tesl/tesl-compiler", "version": "0.3.1"},
     "go": {"path": "libexec/tesl/go/bin/go", "version": "1.26.6"},
-    "go-modules": {"path": "share/tesl/go-modules", "version": "0.3.1"}
+    "go-modules": {"path": "share/tesl/go-modules", "version": "0.3.1"},
+    "stdlib": {"path": "share/tesl/stdlib", "version": "0.3.1"}
   }
 }
 ```
@@ -58,6 +59,8 @@ as Docker, Git, and scanners may be resolved separately.
 
 Components use relative paths with no traversal, drive prefixes, backslashes,
 empty path segments, or NULs. The manifest is versioned and bounded to 1 MiB.
+The `stdlib` directory supplies lifted `.tesl` sources; `TESL_STDLIB_DIR` is its
+explicit override. Compiler clients select this resource even outside a checkout.
 Go builds use the selected GOROOT, `GOTOOLCHAIN=local`, a local file module proxy,
 and writable user caches. Missing bundled modules fail offline.
 
@@ -67,6 +70,7 @@ and writable user caches. Missing bundled modules fail offline.
 |---|---|
 | Discovery | Relocated prefixes, spaces/Unicode, symlinks, explicit overrides, incomplete installations, mixed-toolchain refusal, offline Go environment |
 | CLI | Compiler argument forwarding, scaffold preservation, manifest entrypoints, literal dotenv/argv, clean boundaries, previous-build recovery, watched dependency edits |
+| Retained queries | Fresh-query equivalence across disk and unsaved changes, parse repair, crash/restart, cancellation, serialization and malformed frames |
 | Runtime lifecycle | Child descendants stop on cancellation and parent exit; compiler output is drained completely even when descendants inherit its pipes |
 | Database | Start/stop/status, version mismatch, port collision, persistent port, existing database fallback, real data preserved across restart and clean |
 | Completion | Public functions/types, project types, recovery, comment-preserving imports, duplicate/shadow handling, CRLF/UTF-16, stale overlays, accepted edits checked by the compiler |
@@ -82,3 +86,10 @@ The authoritative release gate remains `./ci.sh`.
 `.github/workflows/native-parity.yml` consumes this plan and records native
 source-build evidence. It does not assemble offline payloads, sign installers,
 publish releases, or establish a minimum supported OS version.
+
+The native CLI supplies `TESL_PROCESS_RUNNER` for compiler build/mutation commands.
+Its private `--internal-run-process` transport accepts a deadline, working
+directory, executable and literal argument array. It returns status 124 for a
+deadline and rejects excessive captured output. Direct POSIX compiler commands
+use a bounded process group; direct Windows compiler build/mutation commands
+require this CLI owner. No shell quoting or `timeout` executable is involved.

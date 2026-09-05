@@ -114,6 +114,14 @@ func (server *Server) diagnosticLock(uri string) *sync.Mutex {
 // Run serves one LSP session. It returns the process exit status required by
 // the LSP protocol: exit before shutdown is a failure.
 func (server *Server) Run(ctx context.Context, input io.Reader, output io.Writer) int {
+	ctx, cancel := context.WithCancel(ctx)
+	defer func() {
+		cancel()
+		server.waitDiagnostics()
+		if closer, ok := server.compiler.(interface{ Close() error }); ok {
+			_ = closer.Close()
+		}
+	}()
 	reader := protocol.NewReader(input)
 	writer := protocol.NewWriter(output)
 	for {

@@ -10,7 +10,7 @@ let lexer_failure_prefix = "lexer failure: "
     and unterminated literals with [Failure]; convert those into the parser's
     normal error channel so every JSON query can still emit its documented
     envelope. *)
-let parse_module filename source =
+let parse_module_uncached (filename, source) =
   try Parser.parse_module filename source with
   | Failure message ->
     Parser.Err {
@@ -18,6 +18,10 @@ let parse_module filename source =
       loc = Location.dummy_loc filename;
       fix = None;
     }
+
+let cached_parse_module = Query_cache.memo ~limit:32 ~max_weight:(2 * 1024 * 1024)
+  ~weight:(fun (_, source) -> String.length source) parse_module_uncached
+let parse_module filename source = cached_parse_module (filename, source)
 
 (** JSON-safe string encoder.
     OCaml's [%S] format uses OCaml escape syntax (\NNN for non-ASCII bytes),
@@ -4399,26 +4403,11 @@ let collect_extra_test_decls test_files =
 
 let mutant_timeout_secs =
   match Sys.getenv_opt "TESL_MUTATE_TIMEOUT" with
-  | Some value -> (try int_of_string value with _ -> 120)
+  | Some value -> (try max 1 (min 86400 (int_of_string value)) with _ -> 120)
   | None -> 120
 
-let timeout_prefix = lazy (
-  if Sys.command "command -v timeout >/dev/null 2>&1" = 0
-  then Printf.sprintf "timeout %d " mutant_timeout_secs
-  else "")
-
-let run_capture cmd : int * string =
-  let output_file = Filename.temp_file "tesl_process_" ".txt" in
-  Fun.protect
-    ~finally:(fun () -> try Sys.remove output_file with Sys_error _ -> ())
-    (fun () ->
-       let full = Printf.sprintf "%s > %s 2>&1" cmd (Filename.quote output_file) in
-       let exit_code = Sys.command full in
-       let output =
-         try In_channel.with_open_text output_file In_channel.input_all
-         with Sys_error _ -> ""
-       in
-       exit_code, output)
+let go_executable () = match Sys.getenv_opt "TESL_GO" with
+  | Some value when value <> "" -> value | _ -> "go"
 
 let mutation_test_count (m : module_form) =
   List.fold_left (fun count -> function
@@ -4495,23 +4484,17 @@ let run_go_test_artifacts artifacts =
   match test_artifact with
   | None -> GoBuildFailed "emitted project has no Go test package"
   | Some test_artifact ->
-    let timeout_pfx = Lazy.force timeout_prefix in
-    if timeout_pfx = "" then GoTestRunnerFailed "Go mutation testing requires `timeout` on PATH"
-    else
     let root = fresh_temp_dir "tesl_go_mutant_" in
     Fun.protect ~finally:(fun () -> remove_tree root) (fun () ->
       write_go_artifacts root artifacts;
       let package = "./" ^ Filename.dirname test_artifact.path in
-      let binary = Filename.concat root "tesl-tests" in
-       let build_cmd = Printf.sprintf "cd %s && %sgo test -c -o %s %s"
-         (Filename.quote root) timeout_pfx (Filename.quote binary) (Filename.quote package) in
-       let build_code, build_output = run_capture build_cmd in
-       match classify_go_build_run ~exit_code:build_code ~output:build_output with
-       | Some outcome -> outcome
-       | None ->
-         let run_cmd = Printf.sprintf "%s%s -test.v"
-           timeout_pfx (Filename.quote binary) in
-        let run_code, run_output = run_capture run_cmd in
+      let binary = Filename.concat root (if Sys.win32 then "tesl-tests.exe" else "tesl-tests") in
+      let build_code, build_output = Process_runner.run ~timeout:mutant_timeout_secs ~cwd:root
+        (go_executable ()) ["test"; "-buildvcs=false"; "-c"; "-o"; binary; package] in
+      match classify_go_build_run ~exit_code:build_code ~output:build_output with
+      | Some outcome -> outcome
+      | None ->
+        let run_code, run_output = Process_runner.run ~timeout:mutant_timeout_secs ~cwd:root binary ["-test.v"] in
         if run_code = 124 then GoTestsTimedOut run_output
         else classify_go_test_run ~exit_code:run_code ~output:run_output)
 
@@ -4519,11 +4502,8 @@ let run_go_test_artifacts artifacts =
     surface-AST mutant passes through [Emit_go], is compiled first, then its test
     binary runs. A Go compile failure is invalid and can never inflate kills. *)
 let mutate_go_file ?(extra_test_files=[]) filename : mutate_result =
-  let timeout_pfx = Lazy.force timeout_prefix in
-  if timeout_pfx = "" then
-    MutateErr "Go mutation testing requires `timeout` on PATH"
-  else if fst (run_capture (timeout_pfx ^ "go version")) <> 0 then
-    MutateErr "Go mutation testing requires `go` on PATH"
+  if fst (Process_runner.run ~timeout:mutant_timeout_secs ~cwd:(Sys.getcwd ()) (go_executable ()) ["version"]) <> 0 then
+    MutateErr "Go mutation testing requires the selected Go toolchain and a native process runner"
   else
     let source = In_channel.with_open_text filename In_channel.input_all in
     match parse_module filename source with

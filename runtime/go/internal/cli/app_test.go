@@ -220,3 +220,25 @@ func TestTemporaryCompilationCleansAfterCompilerFailure(t *testing.T) {
 		t.Fatalf("temporary output leaked: %v", entries)
 	}
 }
+
+func TestCompilerSubprocessCommandsUseSelectedNativeOwner(t *testing.T) {
+	for _, args := range [][]string{{"mutate", "a.tesl"}, {"--exe", "a.tesl", "--out", "a file.exe"}} {
+		app, calls := fakeApp(t)
+		if err := app.Run(context.Background(), args); err != nil {
+			t.Fatal(err)
+		}
+		env := (*calls)[0].Environment
+		owner, _ := environmentValue(env, "TESL_PROCESS_RUNNER")
+		self, err := os.Executable()
+		if err != nil || owner != self {
+			t.Fatalf("wrong process owner: %q (%v)", owner, err)
+		}
+		goTool, _ := environmentValue(env, "TESL_GO")
+		if goTool != app.Resolver.Getenv("TESL_GO") {
+			t.Fatalf("Go override lost: %q", goTool)
+		}
+		if value, _ := environmentValue(env, "GOTOOLCHAIN"); value != "local" {
+			t.Fatal("implicit Go download remains enabled")
+		}
+	}
+}

@@ -42,7 +42,12 @@ def main():
         raise SystemExit("native compiler versions differ from Nix")
     run(["opam", "install", "--yes", "dune." + plan["sources"]["dune"]["version"],
          "alcotest." + plan["testPackages"]["alcotest"]], root, environment)
-    targets = ["bin/main.exe", "test/test_completion.exe", "test/test_import_cache.exe", "test/test_diagnostics.exe", "test/test_stdlib_docs.exe"]
+    binary_dir = root / "artifacts" / ("native-" + args.target) / "bin"
+    binary_dir.mkdir(parents=True, exist_ok=True)
+    cli = binary_dir / ("tesl.exe" if os.name == "nt" else "tesl")
+    run(["go", "build", "-o", str(cli), "./cmd/tesl"], root / "runtime/go", environment)
+    environment["TESL_PROCESS_RUNNER"] = str(cli)
+    targets = ["bin/main.exe", "test/test_completion.exe", "test/test_import_cache.exe", "test/test_workspace_session.exe", "test/test_process_runner.exe", "test/test_diagnostics.exe", "test/test_stdlib_docs.exe"]
     run(["opam", "exec", "--", "dune", "build", *targets], root / "compiler", environment)
     for target in targets[1:]:
         run(["opam", "exec", "--", "dune", "exec", target], root / "compiler", environment)
@@ -50,7 +55,7 @@ def main():
     run(["go", "test", "-race", "./internal/childprocess", "./internal/toolchain",
          "./internal/protocol", "./internal/cli"], root / "runtime/go", environment)
     run(["go", "test", "./internal/lsp", "-run", "TestBuiltCompiler"], root / "runtime/go", environment)
-    run(["go", "test", "-race", "./internal/tooling", "-run", "TestCompilerPipesDrainAndCloseWithDescendants"], root / "runtime/go", environment)
+    run(["go", "test", "-race", "./internal/tooling", "-run", "TestCompilerPipesDrainAndCloseWithDescendants|Workspace"], root / "runtime/go", environment)
     if args.target.startswith("windows-"):
         run(["go", "test", "./teslrt", "-run", "TestWindowsDebugToken"], root / "runtime/go", environment)
     run(["node", "--test", "toolchain.test.js", "test-output-parser.test.js"], root / "editor/vscode-tesl", environment)

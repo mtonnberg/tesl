@@ -1,6 +1,7 @@
 package dap
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,6 +18,7 @@ import (
 
 	"tesl.dev/runtime/go/internal/childprocess"
 	"tesl.dev/runtime/go/internal/toolchain"
+	"tesl.dev/runtime/go/internal/tooling"
 	"tesl.dev/runtime/go/teslrt"
 )
 
@@ -398,10 +400,13 @@ func (target *ProcessTarget) prepareProgram(arguments processLaunchArguments, cw
 		}
 		compiler = resolved
 	}
-	emitCommand := exec.Command(compiler, "--backend", "go", arguments.Program, "--out", outDir, "--debug") // #nosec G204,G702 -- compiler is an explicit local tool.
-	emitCommand.Dir = cwd
-	if output, err := emitCommand.CombinedOutput(); err != nil {
-		return fail(fmt.Errorf("emit debug Go for %s: %w\n%s", arguments.Program, err, strings.TrimSpace(string(output))))
+	compilerEnvironment, err := toolchain.Default().CompilerEnvironment(os.Environ())
+	if err != nil {
+		return fail(err)
+	}
+	emitClient := tooling.Client{Executable: compiler, Directory: cwd, Environment: compilerEnvironment, Timeout: 2 * time.Minute}
+	if result, err := emitClient.Run(context.Background(), "--backend", "go", arguments.Program, "--out", outDir, "--debug"); err != nil {
+		return fail(fmt.Errorf("emit debug Go for %s: %w\n%s", arguments.Program, err, strings.TrimSpace(string(result.Stdout)+string(result.Stderr))))
 	}
 
 	binary, buildArgs, err := generatedGoBuild(outDir, arguments.Mode)
@@ -413,14 +418,13 @@ func (target *ProcessTarget) prepareProgram(arguments processLaunchArguments, cw
 	if err != nil {
 		return fail(err)
 	}
-	buildCommand := exec.Command(goTool, buildArgs...) // #nosec G204 -- selected local Go toolchain and generated module.
-	buildCommand.Env, err = resolver.GoEnvironment(os.Environ())
+	buildEnvironment, err := resolver.GoEnvironment(os.Environ())
 	if err != nil {
 		return fail(err)
 	}
-	buildCommand.Dir = outDir
-	if output, err := buildCommand.CombinedOutput(); err != nil {
-		return fail(fmt.Errorf("build debug Go for %s: %w\n%s", arguments.Program, err, strings.TrimSpace(string(output))))
+	buildClient := tooling.Client{Executable: goTool, Directory: outDir, Environment: buildEnvironment, Timeout: 2 * time.Minute}
+	if result, err := buildClient.Run(context.Background(), buildArgs...); err != nil {
+		return fail(fmt.Errorf("build debug Go for %s: %w\n%s", arguments.Program, err, strings.TrimSpace(string(result.Stdout)+string(result.Stderr))))
 	}
 	return binary, arguments.Args, cleanup, nil
 }

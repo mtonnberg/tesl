@@ -119,14 +119,14 @@ func safeRelative(path string) bool {
 
 var overrides = map[string][]string{
 	"compiler": {"TESL_COMPILER", "TESL_OCAML_COMPILER"}, "go": {"TESL_GO"},
-	"templates": {"TESL_TEMPLATES_DIR"}, "doc": {"TESL_DOCS_DIR"},
+	"stdlib": {"TESL_STDLIB_DIR"}, "templates": {"TESL_TEMPLATES_DIR"}, "doc": {"TESL_DOCS_DIR"},
 	"tesl-lsp": {"TESL_LSP_BIN"}, "tesl-dap": {"TESL_DAP_BIN"}, "tesl-mcp": {"TESL_MCP_BIN"},
 	"tesl-debug-inspect": {"TESL_DEBUG_INSPECT_BIN"}, "tesl-debug-attach": {"TESL_DEBUG_ATTACH_BIN"},
 	"zap": {"TESL_ZAP"}, "nuclei": {"TESL_NUCLEI"},
 }
 
 func directoryComponent(name string) bool {
-	return name == "templates" || name == "doc" || name == "go-modules"
+	return name == "stdlib" || name == "templates" || name == "doc" || name == "go-modules"
 }
 
 func (r Resolver) check(path, name string) (string, error) {
@@ -192,6 +192,8 @@ func (r Resolver) Resolve(name string) (string, error) {
 		switch name {
 		case "compiler":
 			candidate = filepath.Join(repo, "compiler", "_build", "default", "bin", "main.exe")
+		case "stdlib":
+			candidate = filepath.Join(repo, "tesl")
 		case "templates":
 			candidate = filepath.Join(repo, "templates")
 		case "doc":
@@ -254,7 +256,7 @@ func (r Resolver) Doctor() Report {
 	report := Report{Version: 1, OK: true}
 	manifest, root, _ := r.Load()
 	report.Root, report.ToolchainVersion, report.SourceRevision = root, manifest.ToolchainVersion, manifest.SourceRevision
-	for _, name := range []string{"compiler", "go", "templates", "tesl-lsp", "tesl-dap", "tesl-mcp", "tesl-debug-inspect", "tesl-debug-attach", "initdb", "pg_ctl", "createdb", "psql", "zap", "nuclei"} {
+	for _, name := range []string{"compiler", "go", "stdlib", "templates", "tesl-lsp", "tesl-dap", "tesl-mcp", "tesl-debug-inspect", "tesl-debug-attach", "initdb", "pg_ctl", "createdb", "psql", "zap", "nuclei"} {
 		component := Check{Name: name, Optional: name == "zap" || name == "nuclei", Version: manifest.Components[name].Version}
 		path, err := r.Resolve(name)
 		if err != nil {

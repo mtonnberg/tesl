@@ -7370,7 +7370,7 @@ let check_ord_eq_calls ctx =
          ) constraints)
   ) !(ctx.ord_eq_calls)
 
-let check_module_with_metadata ?(source_lines = [||]) (m : module_form) : local_binding_info list * expr_type_info list * field_access_info list * (Location.loc * string) list * (Location.loc * (string * string list)) list * (Location.loc * (string * string list)) list * type_error list =
+let check_module_with_metadata_uncached ?(source_lines = [||]) (m : module_form) : local_binding_info list * expr_type_info list * field_access_info list * (Location.loc * string) list * (Location.loc * (string * string list)) list * (Location.loc * (string * string list)) list * type_error list =
   reset_counter ();
   (* First-Class Units: activate the quantity alias TYPE names this module
      imports from Tesl.Units.  Deliberately NOT restored on exit — the emit
@@ -8114,6 +8114,20 @@ let check_module_with_metadata ?(source_lines = [||]) (m : module_form) : local_
    List.rev !(ctx.server_tools_sites),
    List.rev !(ctx.human_actions_sites),
    import_errors @ export_errors @ fact_ownership_errors @ List.rev !(ctx.errors))
+
+(* Read-only session queries may reuse metadata, including inferred types and
+   structured type errors. Preserve the units state that downstream queries
+   observe even when the checker itself is skipped. *)
+let cached_module_metadata = Query_cache.memo ~limit:16 ~max_weight:(2 * 1024 * 1024)
+  ~value_weight:(fun value -> String.length (Marshal.to_string value []))
+  ~weight:(fun (lines, m) -> Array.fold_left (fun n s -> n + String.length s) 0 lines
+    + String.length (Marshal.to_string m [Marshal.No_sharing]))
+  (fun (source_lines, m) -> check_module_with_metadata_uncached ~source_lines m)
+
+let check_module_with_metadata ?(source_lines = [||]) (m : module_form) =
+  let result = cached_module_metadata (source_lines, m) in
+  ignore (activate_units_aliases_for m);
+  result
 
 let check_module_with_local_bindings (m : module_form) : local_binding_info list * type_error list =
   let local_bindings, _, _, _, _, _, errors = check_module_with_metadata m in

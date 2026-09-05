@@ -64,3 +64,35 @@ func (r Resolver) GoEnvironment(environment []string) ([]string, error) {
 	}
 	return environment, nil
 }
+
+// CompilerEnvironment makes bundled source libraries discoverable from any cwd,
+// including a retained session's private mirror. Explicit stdlib overrides win;
+// an installed manifest otherwise owns its resources, independent of a checkout.
+func (r Resolver) CompilerEnvironment(environment []string) ([]string, error) {
+	if environment == nil {
+		environment = os.Environ()
+	}
+	if r.env("TESL_STDLIB_DIR") != "" {
+		directory, err := r.Resolve("stdlib")
+		if err != nil {
+			return nil, err
+		}
+		return Setenv(environment, "TESL_STDLIB_DIR", directory), nil
+	}
+	manifest, root, err := r.Load()
+	if err != nil {
+		if os.IsNotExist(err) && r.env("TESL_TOOLCHAIN_ROOT") == "" {
+			return environment, nil
+		}
+		return nil, err
+	}
+	if _, found := manifest.Components["stdlib"]; found {
+		directory, err := r.Resolve("stdlib")
+		if err != nil {
+			return nil, err
+		}
+		return Setenv(environment, "TESL_STDLIB_DIR", directory), nil
+	}
+	// Compatibility with older distributions' collections layout.
+	return Setenv(environment, "TESL_REPO_ROOT", root), nil
+}

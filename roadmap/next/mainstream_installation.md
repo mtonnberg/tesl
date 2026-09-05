@@ -1,7 +1,7 @@
 # Mainstream installation
 
 Status: in progress, 2026-09-05. Native command orchestration and discovery are
-implemented in the working tree. Distributable payloads, installers, and release
+implemented. Distributable payloads, installers, and release
 outputs below remain targets until their acceptance gates pass.
 
 Implemented so far:
@@ -10,7 +10,12 @@ Implemented so far:
   orchestration, literal arguments, dotenv parsing, and a doctor report.
 - [`internal/toolchain`](../../runtime/go/internal/toolchain) provides versioned
   installation-relative discovery and an offline Go environment. CLI, LSP, DAP,
-  and MCP use it; the extension recognizes the same manifest layout.
+  and MCP use it; the extension recognizes the same manifest layout. An explicit
+  stdlib directory component makes lifted library sources work outside a checkout.
+- Compiler mutation/build subprocesses use literal argv with bounded output and
+  timeouts. The native CLI owns Windows process trees; no Bash or GNU `timeout`
+  is required for these compiler commands. DAP compiler/Go preparation uses the
+  same bounded Go process client.
 - [`toolchain-inputs.nix`](../../nix/toolchain-inputs.nix), the shared Go overlay,
   and [`release-plan.nix`](../../nix/release-plan.nix) export versions, source
   hashes, candidate platforms, layout, and exact-revision release policy.

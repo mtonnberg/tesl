@@ -14,6 +14,12 @@ Implemented so far:
   ACLs when token files are created, and the pinned Windows dependency in emitted
   debug projects. ACL tests are Windows-only; generated debug projects have a
   Windows cross-compilation regression test.
+- Compiler mutation/build calls no longer use shell command strings. The native
+  CLI supplies an internal process owner with Windows Job Objects, deadlines,
+  bounded output and native `.exe` names. Standalone Windows compiler invocations
+  of these subprocess-producing commands require the CLI owner explicitly.
+- Retained compiler sessions use binary-safe pipes and native process ownership;
+  their framing, revision and restart tests are included in the native matrix.
 - Native extension launch without Bash and a five-target native CI definition
   consuming the Nix-exported source revision and tool versions.
 
@@ -30,7 +36,7 @@ native Windows processes without WSL, Bash, MSYS2, Cygwin, or Nix.
 
 | Existing component | Windows gap to resolve |
 |---|---|
-| OCaml compiler | Prove a native build of the actual pinned compiler/Dune stack, generators, and linked libraries; audit shell execution such as mutation-test commands in [`compile.ml`](../../compiler/lib/compile.ml) |
+| OCaml compiler | Prove a native build of the actual pinned compiler/Dune stack, generators, and linked libraries; verify the new native process-owner path for mutation/build commands in [`process_runner.ml`](../../compiler/lib/process_runner.ml) |
 | CLI | [`tesl-cli-body.sh`](../../nix/tesl-cli-body.sh) orchestrates Go, database lifecycle, watch, and other commands through Bash/Unix utilities and Nix discovery |
 | Go tooling | Job Object ownership is implemented in [`child_windows.go`](../../runtime/go/internal/childprocess/child_windows.go); descendant cleanup still needs native execution |
 | Debug transport | [`debug_control.go`](../../runtime/go/teslrt/debug_control.go) defaults to authenticated loopback TCP on Windows; current-user token ACLs need native verification |
