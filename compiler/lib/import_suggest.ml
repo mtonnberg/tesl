@@ -156,18 +156,17 @@ type local_export = {
     their `Type(..)` import form).  Parse failures index nothing. *)
 let exports_of_file (path : string) : (string * local_export) list =
   let source =
-    try
-      let ic = open_in_bin path in
-      let n = in_channel_length ic in
-      let s = really_input_string ic n in
-      close_in ic; s
+    try In_channel.with_open_bin path In_channel.input_all
     with Sys_error _ | End_of_file -> ""
   in
   if source = "" then []
   else
-    match Parser.parse_module path source with
-    | Err _ -> []
-    | Ok m ->
+    (* Discovery is optional. A malformed, unimported sibling must not replace
+       the importing module's real diagnostic. Lexer failures are exceptions,
+       unlike the parser's ordinary Err result; both mean no candidate here. *)
+    match (try Some (Parser.parse_module path source) with Failure _ -> None) with
+    | None | Some (Err _) -> []
+    | Some (Ok m) ->
       let entry expose name =
         let opaque_const =
           List.exists (function

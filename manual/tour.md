@@ -277,15 +277,22 @@ Column type mapping is automatic for all common types — you rarely need to ann
 | Tesl type | PostgreSQL column | Notes |
 |---|---|---|
 | `String` | `TEXT NOT NULL` | |
-| `Int` | `BIGINT NOT NULL` | |
+| `Int` | `NUMERIC NOT NULL` | Arbitrary precision |
 | `Bool` | `BOOLEAN NOT NULL` | Use `Bool` in Tesl source; `BOOLEAN` describes the SQL storage type |
 | `PosixMillis` | `BIGINT NOT NULL` | Auto-coerced; no annotation needed |
 | Any ADT | `JSONB NOT NULL` | Encoded as `{"tag":"ConstructorName","fields":{...}}` |
+| Record with a bidirectional codec | `JSONB NOT NULL` | Uses its declared encoder and checked decoder |
 | Newtype wrapping `String` | `TEXT NOT NULL` | Unwrapped transparently on read/write |
 | `Maybe T` | Nullable column for `T` | `Nothing` ↔ `NULL`, `Something v` ↔ the value |
 
 `@db(type)` lets you override when you need a specific PostgreSQL type (e.g., `@db(uuid)` for a UUID
 column). For the common cases above, leave it off.
+
+Stored records require an explicit codec with both `toJson` and `fromJson`.
+That codec defines their persisted representation; reads run its validation and
+ordered fallback decoders. The same rule applies to records inside an ADT and
+to `Maybe Record` columns. SQL `NULL` becomes `Nothing`; JSON `null` is still a
+stored JSON value and must pass the record decoder.
 
 **ADTs are stored as JSONB.** An ADT field — whether a simple flag like `Status = Open | Done` or a
 richer union with payloads — is automatically stored as a PostgreSQL `JSONB` column with no
@@ -400,6 +407,22 @@ This form currently establishes ownership and generated table metadata. Migratio
 history, automatic transformations and deployment coordination are still under
 development; selecting a migration namespace does not yet execute migrations.
 
+[Lesson 82](../example/learn/lesson82-database-migrations.tesl) runs a complete
+notes HTTP app with this separation. Its schema owns the stored entity and title
+validation; the application owns the connection, handlers, request/reply records
+and routes. Its API tests create and read a note and verify that invalid input
+does not insert one. A storage-only change need not change the HTTP response.
+
+Records and ADTs stored as JSONB also have a schema, even when the SQL column
+type stays `jsonb`. A codec's `fromJson [current, legacy]` alternatives can read
+both record representations today. This does not prove rolling compatibility: an old
+reader may reject the new encoder's output. Nor does deploying a newer version
+rewrite untouched stored JSON. Keep required legacy decoders until the old
+representations have been eliminated from every occurrence, including nullable
+columns and records nested in ADTs. The migration planner's integration with
+these adapters, typed transformations and verified decoder removal is still
+under development.
+
 Tesl derives the database schema directly from your `entity` and `database` declarations. On first
 run it creates any missing tables automatically — no separate migration file needed to get started:
 
@@ -427,10 +450,10 @@ a timed-out wait answers `503 Service Unavailable`, so brief bursts queue and su
 sustained overload surfaces as a clear retryable signal.
 
 This is intentionally optimistic for development — spin up a fresh database and `tesl run` just works.
-For production, a dedicated migration tool is on the roadmap. The current approach is: Tesl owns the
-schema declaration; you own the migration strategy. If you add a column to an entity, Tesl tells you
-at startup if it is missing — then you decide how to apply the change (a migration script,
-`ALTER TABLE`, whatever your deployment allows).
+The current bootstrap creates missing tables; it does not reconcile columns on
+existing tables or guarantee an early diagnostic for a missing column. Such a
+query can fail when it runs. Changes to an existing database still require your
+deployment's migration process while the versioned executor is being implemented.
 
 The key constraint Tesl does enforce: you cannot reference a field in a query that is not in the
 entity declaration. If you remove a field from the entity, every query and handler that touches it

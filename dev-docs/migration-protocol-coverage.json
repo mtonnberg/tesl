@@ -463,6 +463,22 @@
       ]
     },
     {
+      "id": "INV-JSONB-COMPATIBILITY",
+      "statement": "A new JSONB fallback decoder accepting old data does not imply that admitted old readers can decode new writes; compiled readers and writers are checked in both directions.",
+      "model_paths": null,
+      "tests": [
+        "jsonb_blackbox_test.go#TestCompiledJSONBCodecsRequireBothDirectionsAndRewriteEvidence"
+      ]
+    },
+    {
+      "id": "INV-JSONB-RETENTION",
+      "statement": "Reads and later deployments leave untouched legacy JSONB representations intact; removing their decoder requires rewrite evidence after incompatible old writers are excluded.",
+      "model_paths": null,
+      "tests": [
+        "jsonb_blackbox_test.go#TestCompiledJSONBCodecsRequireBothDirectionsAndRewriteEvidence"
+      ]
+    },
+    {
       "id": "INV-LEASE",
       "statement": "Scheduling lease tokens increase on takeover and stale executors cannot publish another holder's work.",
       "model_paths": [
@@ -1199,6 +1215,7 @@
       ],
       "tests": [
         "blackbox_test.go#TestCompiledVersionsShareRowsAndPauseInsideTransactions",
+        "jsonb_blackbox_test.go#TestCompiledJSONBCodecsRequireBothDirectionsAndRewriteEvidence",
         "read_ordering_test.go#TestPostgresTemplateQueryFirstAdmissionAcrossRetirement"
       ]
     },
@@ -1431,6 +1448,7 @@
       ],
       "tests": [
         "blackbox_test.go#TestCompiledVersionsShareRowsAndPauseInsideTransactions",
+        "jsonb_blackbox_test.go#TestCompiledJSONBCodecsRequireBothDirectionsAndRewriteEvidence",
         "model_test.go#TestApplicationTargetWriteLocksABIBeforeBackfillStarts",
         "model_test.go#TestRetirementExcludesEveryOldWriter",
         "pooler_test.go#TestPostgresPoolerAdmissionTransactions",
@@ -2078,6 +2096,21 @@
       "named_failpoints": [
         "contract-commit"
       ]
+    },
+    {
+      "name": "TestCompiledJSONBCodecsRequireBothDirectionsAndRewriteEvidence",
+      "file": "jsonb_blackbox_test.go",
+      "line": 21,
+      "layer": "compiled-postgres",
+      "invariants": [
+        "INV-JSONB-COMPATIBILITY",
+        "INV-JSONB-RETENTION"
+      ],
+      "transitions": [
+        "TR-READ",
+        "TR-WRITE"
+      ],
+      "named_failpoints": null
     },
     {
       "name": "TestPostgresTemplateRejectsIllegalLifecycleEdges",

@@ -1,0 +1,98 @@
+module App exposing [FixtureDb, NotesServer]
+
+# Identical application code across these codec revisions. The JSONB codec
+# changes in the schema; the HTTP contract, handlers and connection do not.
+import Tesl.Prelude exposing [String]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.Env exposing [envRead, envInt]
+import Tesl.DB exposing [dbRead, dbWrite]
+import Tesl.Database exposing [
+  Database,
+  Postgres,
+  PostgresConfig,
+  TcpConnection,
+]
+import Tesl.Json exposing [stringCodec]
+import Tesl.App exposing [App]
+import JsonbNotesSchema.VCurrent exposing [Note, Details, Change(..), validText]
+
+database FixtureDb = Database {
+  schema: JsonbNotesSchema.VCurrent
+  migrations: JsonbNotesSchema.Migrate
+  backend: Postgres (PostgresConfig {
+    namespace: "migration_jsonb"
+    dbName: env "TESL_FIXTURE_DATABASE"
+    user: env "TESL_TEST_POSTGRES_SHARED_USER"
+    password: env "PGPASSWORD"
+    connection: TcpConnection {
+      host: env "TESL_TEST_POSTGRES_SHARED_HOST"
+      port: envInt "TESL_TEST_POSTGRES_SHARED_PORT" 5432
+    }
+  })
+}
+
+record NoteInput { text: String }
+codec NoteInput {
+  toJson_forbidden
+  fromJson [ { text <- "text" with_codec stringCodec } ]
+}
+record NoteReply { id: String, text: String }
+codec NoteReply {
+  toJson {
+    id -> "id" with_codec stringCodec
+    text -> "text" with_codec stringCodec
+  }
+  fromJson_forbidden
+}
+capturer noteIdCapture: id: String using stringCodec
+
+handler post createNote(id: String, body: NoteInput) -> NoteReply requires [dbWrite Note] =
+  let text = check validText body.text
+  let details = Details { text: text }
+  let _ = insert Note {
+    id: id, details: details, backup: Something details, change: Changed details
+  }
+  NoteReply { id: id, text: text }
+
+handler get getNote(id: String) -> NoteReply requires [dbRead Note] =
+  case selectOne n from Note where n.id == id of
+    Nothing -> fail 404 "note not found"
+    Something note -> NoteReply { id: id, text: note.details.text }
+
+# Explicit application re-encoding demonstrates the completion condition.
+# It is not the production migration backfill, which remains a separate gate.
+handler put rewriteNote(id: String) -> NoteReply requires [dbRead Note, dbWrite Note] =
+  case selectOne n from Note where n.id == id of
+    Nothing -> fail 404 "note not found"
+    Something note ->
+      let _ = update n in Note
+        where n.id == id
+        set n.details = note.details
+        set n.backup = note.backup
+        set n.change = note.change
+      NoteReply { id: id, text: note.details.text }
+
+api NotesApi {
+  post "/notes/:id"
+    capture id: String via noteIdCapture
+    body body: NoteInput
+    -> NoteReply
+  get "/notes/:id"
+    capture id: String via noteIdCapture
+    -> NoteReply
+  put "/notes/:id"
+    capture id: String via noteIdCapture
+    -> NoteReply
+}
+server NotesServer for NotesApi {
+  createNote
+  getNote
+  rewriteNote
+}
+
+main() -> App requires [dbRead Note, dbWrite Note, envRead] =
+  App {
+    database: FixtureDb
+    api: NotesServer
+    port: envInt "TESL_JSONB_FIXTURE_PORT" 8083
+  }

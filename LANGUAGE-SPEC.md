@@ -761,6 +761,25 @@ non-primitive definition refuses the closure. Building this inventory requires a
 checked modules in the ownership boundary, including private declarations; an export
 list is not an inventory of semantic dependencies.
 
+The saved-source inventory loader starts at a schema revision root and follows
+every owned local import, including private modules, diamonds and cycles. It
+applies the ordinary compiler judgment to every member and checks storage
+identities across the whole schema before publishing an abstract inventory.
+Imported interfaces are refreshed for each load; a changed source file cannot
+borrow an earlier load's type information. Changes detected across the load's
+checking passes refuse the inventory.
+
+An inventory result wraps its closure as
+`["compiler-semantics", compiler-abi, closure]`. Its builtin references identify
+the existing compiler's module and symbol; the outer ABI covers execution
+semantics, including lowered operators, codecs and stdlib implementations.
+No historical lowering or separate primitive-version registry is retained.
+Even an empty inventory requires an ABI. A snapshot roots every declaration;
+a per-type closure roots that declaration and its dependencies, including codecs
+of nested record/ADT fields. Thus an unchanged SQL `jsonb` column can have a
+different semantic closure. This loader does not yet implement historical
+manifest checks, the contextual `Same` rule or a cross-ABI data transition.
+
 Type-like declarations are module-scoped. If two modules both define a name such as `User`, `Task`, or `Status`, those declarations remain distinct even when they share the same surface spelling. Loading one module must not change the meaning of an unqualified type name in another module.
 
 If a module needs to use same-named imported type-like declarations from different modules, the ambiguity must be resolved by module qualification/prefixing. The compiler should reject unqualified ambiguous uses rather than merging declarations by bare name.
@@ -2109,7 +2128,19 @@ In queries, `Maybe` fields require a `case` expression or the `isAssignedTo` / h
 | newtype over `Int` (e.g. `newtype Counter = Int`) | `NUMERIC` (same as bare `Int`) | NOT NULL |
 | newtype over another built-in (e.g. `newtype UserId = String`) | column type of the base | NOT NULL |
 | Any ADT | `JSONB` | NOT NULL |
+| Record with an explicit bidirectional codec | `JSONB` | NOT NULL |
 | `Maybe T` | column type of `T` (e.g. `Maybe Int` → `NUMERIC`, `Maybe <ADT>` → `JSONB`) | NULL |
+
+**Record JSONB columns.** A stored record requires an explicit codec with both
+`toJson` and `fromJson`, including when an explicit `@db(jsonb)` annotation is
+present. Its encoder determines stored keys and its checked decoder runs ordered
+alternatives and proof checks on every read. Records nested inside ADT columns
+use the same record codec. Codec resolution follows the record's declaring module,
+including private and transitively imported field types; an unrelated same-named
+record cannot supply its codec. SQL `NULL` in a `Maybe Record` column is `Nothing`;
+JSON `null` reaches the decoder and is rejected for a record. No read rewrites the
+stored JSON. Migration history, coordinated rewrites and evidence-backed removal
+of old decoders remain under development.
 
 > **Maybe columns compare as values (2026-09-02).** `p.field == x` and `p.field != x` on a `Maybe` column are emitted as `IS NOT DISTINCT FROM` / `IS DISTINCT FROM`, so `Nothing == Nothing` is true and `Nothing == Something v` is false on PostgreSQL exactly as on the Memory store. A query's row binder may not shadow a name already in scope (a parameter, a local or a function); the compiler refuses it, because the two backends would otherwise read the two names differently. Two module names that fold to one Go package name (`FooBar`, `Foobar`, `Foo_bar`) are refused for the same reason: one module's code would silently replace the other's.
 >

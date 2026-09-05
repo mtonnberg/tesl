@@ -30,10 +30,24 @@ codec PrunedPayload {
   fromJson [ { text <- "body" with_codec stringCodec } ]
 }
 
-type OldStatus = Pending | Complete
-type CurrentStatus = Waiting | Finished
+type OldStatus
+  = Pending
+  | Complete
+type CurrentStatus
+  = Waiting
+  | Finished
+codec OldStatus { adtJson }
+codec CurrentStatus { adtJson }
 record OldTask { status: OldStatus }
 record CurrentTask { status: CurrentStatus }
+codec OldTask {
+  toJson { status -> "status" with_codec OldStatus }
+  fromJson [ { status <- "status" with_codec OldStatus } ]
+}
+codec CurrentTask {
+  toJson { status -> "status" with_codec CurrentStatus }
+  fromJson [ { status <- "status" with_codec CurrentStatus } ]
+}
 
 handler post oldReader(body: OldPayload) -> OldPayload = body
 handler post currentReader(body: CurrentPayload) -> CurrentPayload = body
@@ -71,23 +85,23 @@ api-test "new fallback reads old data but its output breaks the old reader" for 
   let old = post "/old" body { "title": "kept" }
   expect statusOk old.status
   expect old.body == { "title": "kept" }
-  let current = post "/current" body old.body
+  let current = post "/current" body "{old.body}"
   expect statusOk current.status
   expect current.body == { "body": "kept" }
-  let oldReadsNew = post "/old" body current.body
+  let oldReadsNew = post "/old" body "{current.body}"
   expect oldReadsNew.status == 400
-  let currentReadsNew = post "/current" body current.body
+  let currentReadsNew = post "/current" body "{current.body}"
   expect statusOk currentReadsNew.status
   expect currentReadsNew.body == current.body
 }
 
 api-test "removing the fallback fails on untouched old data" for CodecServer {
-  let storedOldJson = { "title": "never rewritten" }
+  let storedOldJson = "{\"title\":\"never rewritten\"}"
   let current = post "/current" body storedOldJson
   expect statusOk current.status
   let prunedReadsOld = post "/pruned" body storedOldJson
   expect prunedReadsOld.status == 400
-  let prunedReadsRewritten = post "/pruned" body current.body
+  let prunedReadsRewritten = post "/pruned" body "{current.body}"
   expect statusOk prunedReadsRewritten.status
   expect prunedReadsRewritten.body == { "body": "never rewritten" }
 }
@@ -108,8 +122,8 @@ api-test "changed nested ADT constructors require an explicit mapping" for Codec
   expect statusOk old.status
   let current = post "/current-task" body { "status": { "tag": "Waiting" } }
   expect statusOk current.status
-  let currentReadsOld = post "/current-task" body old.body
+  let currentReadsOld = post "/current-task" body "{old.body}"
   expect currentReadsOld.status == 400
-  let oldReadsNew = post "/old-task" body current.body
+  let oldReadsNew = post "/old-task" body "{current.body}"
   expect oldReadsNew.status == 400
 }

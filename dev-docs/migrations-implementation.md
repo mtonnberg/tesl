@@ -113,7 +113,7 @@ are included. Adoption, additive execution and the remaining lessons are pending
   model guards/operations, actual test declarations, named test events and configured
   PostgreSQL lanes. It rejects unmapped operations, untested transitions, tests with
   no invariant, duplicate definitions and incorrectly labelled direct database tests.
-  It currently covers 52 invariants, 57 transitions and 80 top-level test declarations.
+  It currently covers 54 invariants, 57 transitions and 81 top-level test declarations.
   This is explicitly a kernel inventory with uncovered scopes listed in the generated
   report; the complete normative inventory and production path mapping are still pending.
 - The control bootstrap now has one executable SQL fixture under the harness's
@@ -190,10 +190,49 @@ are included. Adoption, additive execution and the remaining lessons are pending
   conservative fact owners, constructor definitions and type-to-codec reverse
   dependencies, with cycle and missing-definition checks. Fourteen focused regression
   groups pass, including an independently constructed typed wire/SHA-256 golden,
-  semantic mutations, alpha-renaming and frozen-copy invariance. Building the
-  complete production resolver/stdlib inventory, verifying Same and integrating
-  hashes into manifests and runtime history remain pending. These APIs do not
-  assert that their caller has supplied a complete schema inventory.
+  semantic mutations, alpha-renaming and frozen-copy invariance. These low-level
+  APIs do not assert that their caller has supplied a complete schema inventory.
+  The subsequent saved-source loader now constructs that inventory from its root,
+  validates every private module with the public compiler judgment, resolves
+  declaration/builtin identities, and wraps results with the compiler ABI. Its
+  abstract result prevents callers from omitting a private fact producer. Thirteen
+  regression groups pass. They found stale cached import interfaces admitting a
+  newly ill-typed helper, physical table collisions hidden in private modules,
+  ambiguous builtin predicate resolution, and an omitted regex-literal gate. All
+  four cases now refuse or resolve correctly. Nested record/ADT and codec edits
+  change the containing entity's closure even when its SQL JSONB field is unchanged.
+  Contextual Same verification, compiler ABI allocation, source-history identity,
+  editor overlays and manifest/runtime-history integration remain pending.
+- Four generated codec API tests now run in the compiler gate. They demonstrate
+  the asymmetry of a legacy decoder, failure after premature decoder removal,
+  ordered fallback behavior and corrupt JSON refusal, and incompatible nested ADT
+  constructors in both directions. These are serialization counterexamples, not
+  PostgreSQL rewrite or production migration tests. The roadmap's JSONB section
+  now requires a unified plan, bidirectional rolling compatibility and durable
+  evidence before removing a decoder.
+- Record JSONB storage now uses an explicit bidirectional codec. Five compiler
+  regression groups execute emitted scanners and codecs for local/private/transitive
+  records, nested records/ADTs, nullable fields, exact large integers, ordered
+  fallback selection, proof failures, and missing/forbidden codec directions.
+  The declaration is refused even without queries or with `@db(jsonb)` when its
+  record codec contract is incomplete. Review regressions caught a missing
+  transitive Go import, same-named ADTs sharing a decoder, and an annotation
+  bypassing the record contract; those cases are fixed.
+- A complete V7/V8/V9 HTTP app now runs in separate generated binaries against
+  PostgreSQL with byte-identical application source. Raw JSONB checks and unchanged
+  HTTP assertions cover old/new read directions, untouched old values surviving
+  later versions, partial rewrites leaving nullable/ADT occurrences behind, complete
+  application re-encoding, and proof-invalid rows in all three positions. This
+  exposed pgx's pointer JSON scan conflating JSON null with SQL NULL; generated
+  scans now preserve the distinction. Runtime tests also exercise pgx's JSON and
+  JSONB scan plans in text and binary formats, legacy JSON wrapping, malformed
+  input and checked rejection. The focused PostgreSQL 17 regression passes with
+  the race detector. The production migration executor and JSONB lesson are pending.
+  A compatible V8 bridge writes both keys and remains readable by V7 and V9 with
+  identical handlers; a late V7 write reintroduces legacy-only JSON and demonstrates
+  why a rewrite alone is insufficient evidence. Versioned processes now coexist
+  throughout the trace, eliminating per-request process/race-detector shutdown cost.
+  This preserves the existing hard deadline; it does not relax a protocol timeout.
 - Compiling the roadmap's optional establish example exposed a pre-existing
   rejection of `Maybe (value: T ::: P value)`. This return form now accepts bare
   proof attachment and checks every successful payload with path-sensitive return
@@ -349,6 +388,23 @@ are included. Adoption, additive execution and the remaining lessons are pending
   and decoders. Registry membership refusal tests pass on PostgreSQL 14, 16, 17 and
   18, including indirect and NOINHERIT membership and a temporary installer role.
   The migration package lint gate passes with those membership checks included.
+  The JSONB storage slice passes the complete compiler suite, runtime race suite,
+  full runtime lint and manual coherence check. The 192-file snapshot refresh
+  changes Kanel's imported ADT helper names and reuses its declared InvoiceStatus
+  encoder; its 46 direct tests and seven API tests pass. The first combined
+  PostgreSQL 17 run with JSONB cases fails only during the owned replica's backup
+  setup deadline; the isolated replica test subsequently passes in seven seconds.
+  This is recorded as a setup failure, not a successful combined gate.
+  A subsequent combined run exposed the per-request process exit cost in the new
+  JSONB trace. After switching to coexisting app processes, the full PostgreSQL 17
+  harness passes in 95 seconds, including the compatible codec bridge, PgBouncer
+  modes, replica and owned-primary crash tests. The race detector remains enabled
+  and the existing fixture deadline is unchanged. Migration-package lint is clean.
+  The final JSONB app trace, including the compatible bridge and late old-writer
+  counterexample, also passes on PostgreSQL 14 and 18. A second codec-ownership
+  review removes redundant inherited metadata copying, and the complete compiler
+  suite passes again. These are completed slice checks; the delivery table above
+  still records the remaining implementation and feature-wide review gates.
 
 ## Implementation decisions
 

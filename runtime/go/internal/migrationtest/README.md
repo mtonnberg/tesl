@@ -71,12 +71,24 @@ limited disk bandwidth or cache space.
 | Independent registry catalog | Bootstrap CREATE and ten contending schema families in an isolated database | Owner/ACL/shape refusals, distinct namespace and UUID allocation, rollback and exhaustion |
 | `Model.Indexes` | PostgreSQL catalog, progress views and locks | Live INVALID build versus abandoned remnant, lease takeover, validity verification, backend death, successor-version fences and the removal contract's persisted target |
 | Separate V7/V8/V9 processes | Emitted application SQL and runtime | Memory/PostgreSQL outcomes, shared additive rows, transaction ordering, imported entity ownership and absence of release failpoints |
+| Byte-identical V7/V8/V9 HTTP applications | Generated record codecs, SQL binding/scanning and PostgreSQL JSONB | Both reader/writer directions, untouched legacy JSON, proof rejection, nullable records, records inside ADTs, and partial versus complete application re-encoding |
 | Read ordering argument and finite TLA+ model | Interposed PostgreSQL retirement/DDL | Query-first admission, six query shapes, old/surviving readers, commit ordering and lock retention |
 | Committed lifecycle evidence | Backend death, immediate primary shutdown and WAL recovery | Atomic floor/lifecycle outcome, lock release and resumable coordinator work |
 | Primary state | Paused physical replica | Counterexample to replica-local admission; catches up to both the new floor and changed physical schema |
 
 The finite TLA+ kernel is in [dev-docs/models](../../../../dev-docs/models/README.md).
 Its positive models and seven required counterexamples are a separate CI gate.
+
+The JSONB applications in `testdata/jsonb` keep handlers, routes, HTTP codecs and
+connection setup identical across versions. Their schema codecs change stored
+keys while the physical columns stay JSONB. The test observes raw stored JSON,
+executes the generated HTTP dispatcher in coexisting versioned processes, and shows that every
+persisted occurrence must be rewritten before its old decoder can be removed.
+The `v8-bridge` variant writes both keys so old and new readers remain compatible;
+a late V7 write demonstrates why old writers must be fenced before finality.
+Its explicit PUT operation is application re-encoding, not the pending production
+migration backfill. These fixtures also distinguish SQL NULL from JSON null and
+require stored records to pass their proof checks on reads.
 
 `Model.Rows` and `Model.Repairs` also check symbolic rejection/repair decisions:
 only a rejected row enters an ordered repair chain, an accepted row is not

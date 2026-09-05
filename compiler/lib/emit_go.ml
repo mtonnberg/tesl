@@ -713,6 +713,9 @@ type type_table = {
      to be qualified — and a type with no entry here has no hand-written codec, which is what
      says the decoder is derived locally instead. *)
   codecs : (string, string) Hashtbl.t;
+  (* Storage reaches a record through its entity, including private field types. Resolve its
+     codec by declaration identity, never by whichever same-named type is exposed here. *)
+  nominal_codecs : ((string * string), codec_form) Hashtbl.t;
   (* Module-level constants: a NAME and its Go spelling, referenced bare rather than called.
      They live here rather than in `signatures` because a signature describes something that is
      APPLIED, and a const that resolved through that table would be indistinguishable from a
@@ -1080,6 +1083,19 @@ let codec_decode_ref type_name =
   | Some owner -> qualified owner (codec_decode_name type_name)
   | None -> codec_decode_name type_name
 
+let nominal_codec owner name =
+  Option.bind !current_types (fun types ->
+    Hashtbl.find_opt types.nominal_codecs (owner, name))
+
+let record_column_codec loc (info : record_info) =
+  match nominal_codec info.rec_owner info.rec_tesl_name with
+  | Some codec when codec.to_json <> ToJsonForbidden
+                    && codec.from_json <> FromJsonForbidden -> codec
+  | _ -> unsupported loc
+    "Go backend: stored record `%s` needs an explicit codec with both toJson and fromJson; \
+     its checked decoder defines the persisted JSONB contract"
+    info.rec_tesl_name
+
 (* Defined here rather than beside the codec EMITTER below because `decodeAs` needs the
    reference: a model's structured output decodes through the very same codec an HTTP
    request body does, and that expression is emitted long before the codec layer. *)
@@ -1162,6 +1178,7 @@ type module_exports = {
   ex_package : string;
   ex_types : type_table;
   ex_signatures : (string, signature) Hashtbl.t;
+  ex_codecs : codec_form list;
 }
 
 (* Whether a compiled dependency is the module an import names.
@@ -2429,6 +2446,9 @@ let rec column_sql_type ty =
   | TNewtype { tesl_name = "PosixMillis"; _ } -> Some "BIGINT"
   | TNewtype { tesl_name = "Int32"; _ } -> Some "INTEGER"
   | TNewtype info -> column_sql_type info.base
+  | TRecord info ->
+    ignore (record_column_codec info.rec_loc info);
+    Some "JSONB"
   (* An ADT column is JSONB holding the value's own wire shape (`{"tag":…}`), which is what
      `dsl/sql.tesl` writes — a column written by one backend has to be readable by the other. *)
   | TAdt (info, _) when info.adt_tesl_name <> "Maybe" -> Some "JSONB"
@@ -2436,12 +2456,26 @@ let rec column_sql_type ty =
 
 let entity_columns (info : entity_info) =
   List.map (fun (field, ty) ->
+    (* An explicit SQL type must not bypass the record's codec contract, even if this
+       build never queries the entity. Follow wrappers and ADT payloads as well. *)
+    let rec validate_record visited = function
+      | TRecord record -> ignore (record_column_codec info.ent_loc record)
+      | TNewtype wrapped -> validate_record visited wrapped.base
+      | TAdt (adt, args) ->
+        let key = adt.adt_owner, adt.adt_tesl_name in
+        if not (List.mem key visited) then
+          List.iter (fun variant ->
+            List.iter (fun (_, field) -> validate_record (key :: visited) field)
+              (variant_field_types adt args variant)) adt.adt_variants
+      | _ -> ()
+    in
+    validate_record [] ty;
     let sql_type = match List.assoc_opt field info.ent_db_types with
       | Some declared -> String.uppercase_ascii declared
       | None ->
         (match column_sql_type ty with
          | Some text -> text
-         (* No automatic column type for this Tesl type — a list, a dict, a record, an opaque
+         (* No automatic column type for this Tesl type — a list, a dict, an opaque
             runtime value.  Legacy refuses the same field, later: its schema generator asks
             for an explicit `#:db-type`.  Both honour the same escape hatch, so the message
             names it rather than reading as a backend limit. *)
@@ -8335,6 +8369,10 @@ and sql_bound_value loc ty value =
   | TNewtype { secret = true; _ } ->
     Printf.sprintf "teslrt.PgSecret(%s.Value)" (selector_operand value)
   | TNewtype newtype -> sql_bound_value loc newtype.base (value ^ ".Value")
+  | TRecord info ->
+    ignore (record_column_codec loc info);
+    Printf.sprintf "teslrt.EncodeJSONValue(%s(%s))"
+      (qualified info.rec_owner (codec_encode_name info.rec_tesl_name)) value
   | TAdt (info, _) when info.adt_tesl_name <> "Maybe" ->
     Printf.sprintf "teslrt.EncodeJSONValue(%s(%s))" (!value_encoder_hook ty) value
   | _ ->
@@ -8344,7 +8382,7 @@ and sql_bound_value loc ty value =
          value (go_type inner) (sql_bound_value loc inner "teslValue")
      | None -> unsupported loc
        "Go backend cannot store a `%s` in a column: a column holds a scalar (Int, Float, \
-        String, Bool), a newtype over one, an instant, an ADT as JSON, or a `Maybe` of any of \
+        String, Bool), a newtype over one, an instant, a record with a codec or ADT as JSON, or a `Maybe` of any of \
         those" (go_type ty))
 
 (* The driver-side carrier a column is SCANNED into, and the expression that turns it back into
@@ -8367,29 +8405,31 @@ and sql_scan_carrier loc ty target =
   | TNewtype newtype ->
     let carrier, decode = sql_scan_carrier loc newtype.base target in
     (carrier, Printf.sprintf "%s{Value: %s}" (qualified newtype.owner newtype.go_name) decode)
+  | TRecord info ->
+    ignore (record_column_codec loc info);
+    ("[]byte", Printf.sprintf "teslrt.MustDecodeColumnJSON(%s, %s)" target
+       (qualified info.rec_owner (codec_decode_name info.rec_tesl_name)))
   | TAdt (info, _) when info.adt_tesl_name <> "Maybe" ->
     ("[]byte", Printf.sprintf "%s(%s)" (sql_adt_column_decoder loc info) target)
   | _ ->
     (match maybe_element ty with
      | Some inner ->
        let carrier, decode = sql_scan_carrier loc inner ("*" ^ target) in
-       ("*" ^ carrier,
-        Printf.sprintf "teslrt.MaybeOfPointer(%s, func() %s { return %s })"
-          target (go_type inner) decode)
+       if carrier = "[]byte" then
+         (* pgx's pointer-to-pointer JSON scan treats JSON null as SQL NULL. A byte
+            slice preserves that distinction: only a nil slice means SQL NULL. *)
+         let _, decode = sql_scan_carrier loc inner "teslJSON" in
+         (carrier, Printf.sprintf "teslrt.MaybeOfJSONColumn(%s, func(teslJSON []byte) %s { return %s })"
+            target (go_type inner) decode)
+       else
+         ("*" ^ carrier,
+          Printf.sprintf "teslrt.MaybeOfPointer(%s, func() %s { return %s })"
+            target (go_type inner) decode)
      | None -> unsupported loc
        "Go backend cannot read a `%s` column back: a column holds a scalar (Int, Float, \
-        String, Bool), a newtype over one, an instant, an ADT as JSON, or a `Maybe` of any of \
+        String, Bool), a newtype over one, an instant, a record with a codec or ADT as JSON, or a `Maybe` of any of \
         those" (go_type ty))
 
-(* The reader for an ADT COLUMN.  The stored shape is the value's own wire shape — `{"tag": …}`
-   for a constructor with no fields — so reading it back is a tag lookup.  A constructor that
-   CARRIES fields is refused rather than half-read: decoding those needs the generic decoder,
-   which does not derive an ADT yet, and a column that silently lost its payload is worse than
-   one that does not compile.
-
-   An unknown tag TRAPS.  It means the column holds a value this build has no constructor for —
-   data written by an incompatible schema — and `dsl/sql.tesl` takes the same line for a stored
-   currency code it cannot resolve. *)
 (* Reading ONE payload field of an ADT column back out of its JSON.
    The wire shape is the one the response encoder writes and `dsl/types.tesl` writes —
    `{"tag": …, "fields": {…}}`.  The DOCUMENT around it may be either of the two shapes a Tesl
@@ -8413,6 +8453,10 @@ and sql_adt_field_decoder loc ty raw =
   | TNewtype newtype ->
     Printf.sprintf "%s{Value: %s}" (qualified newtype.owner newtype.go_name)
       (sql_adt_field_decoder loc newtype.base raw)
+  | TRecord info ->
+    ignore (record_column_codec loc info);
+    Printf.sprintf "teslrt.MustDecodeColumnJSON(teslrt.MustEncodeJSON(%s), %s)" raw
+      (qualified info.rec_owner (codec_decode_name info.rec_tesl_name))
   | TAdt (nested, _) when nested.adt_tesl_name <> "Maybe" ->
     (* A nested ADT decodes through its OWN column decoder, so one rule covers any depth. *)
     Printf.sprintf "%s(teslrt.MustEncodeJSON(%s))" (sql_adt_column_decoder loc nested) raw
@@ -8423,11 +8467,14 @@ and sql_adt_field_decoder loc ty raw =
          raw (go_type inner) (sql_adt_field_decoder loc inner "teslInner")
      | None -> unsupported loc
        "Go backend: an ADT column's constructor field of type `%s` has no column decoder — a \
-        stored variant may carry scalars, newtypes over them, nested ADTs and `Maybe`s of \
+        stored variant may carry scalars, newtypes over them, records with codecs, nested ADTs and `Maybe`s of \
         those" (go_type ty))
 
 and sql_adt_column_decoder loc (info : adt_info) =
-  let name = "teslColumn" ^ go_ident ~exported:true info.adt_tesl_name in
+  (* A package may query entities from two modules whose ADTs share a source name.
+     Sharing their helper would use the first ADT's tags and payload decoder for both. *)
+  let name = "teslColumn" ^ go_ident ~exported:true info.adt_tesl_name ^
+    (if info.adt_owner = !current_package then "" else "_" ^ info.adt_owner) in
   if not (Hashtbl.mem pending_helpers name) then begin
     let go_ty = qualified info.adt_owner info.adt_go_name in
     let buffer = Buffer.create 256 in
@@ -10409,12 +10456,10 @@ let rec value_encoder ty =
     remember_helper ~prefix:"teslEncode"
       ~signature:"(teslValue teslrt.Money) any"
       ~body:"map[string]any{\"minorUnits\": teslValue.MinorUnits, \"currency\": teslValue.Currency.Code}"
-  | TRecord info when List.mem info.rec_tesl_name !current_codec_types
-                      || codec_owner info.rec_tesl_name <> None ->
-    codec_encode_ref info.rec_tesl_name
-  | TAdt (info, _) when List.mem info.adt_tesl_name !current_codec_types
-                        || codec_owner info.adt_tesl_name <> None ->
-    codec_encode_ref info.adt_tesl_name
+  | TRecord info when nominal_codec info.rec_owner info.rec_tesl_name <> None ->
+    qualified info.rec_owner (codec_encode_name info.rec_tesl_name)
+  | TAdt (info, _) when nominal_codec info.adt_owner info.adt_tesl_name <> None ->
+    qualified info.adt_owner (codec_encode_name info.adt_tesl_name)
   | TRecord info ->
     let fields = aligned_map_entries "\t\t" (List.map (fun (name, field_ty) ->
       (name, encoded_field ("teslValue." ^ record_field_go_name name) field_ty))
@@ -10533,13 +10578,12 @@ let rec json_value_decoder ~package ~loc ~what ty =
   | TRecord _ when is_money ty ->
     "func(teslRaw any) (teslrt.Money, error) {\n\t\tteslMinorUnits, teslUnitsErr := teslrt.DecodeIntField(teslRaw, \"minorUnits\")\n\t\tif teslUnitsErr != nil {\n\t\t\treturn teslrt.Money{}, teslUnitsErr\n\t\t}\n\t\tteslCode, teslCodeErr := teslrt.DecodeStringField(teslRaw, \"currency\")\n\t\tif teslCodeErr != nil {\n\t\t\treturn teslrt.Money{}, teslCodeErr\n\t\t}\n\t\tteslCurrency, teslKnown := teslrt.CurrencyFromCode(teslCode).Value()\n\t\tif !teslKnown {\n\t\t\treturn teslrt.Money{}, errors.New(\"unknown ISO 4217 currency code for Money: \" + teslCode)\n\t\t}\n\t\treturn teslrt.MoneyFromMinorUnits(teslCurrency, teslMinorUnits), nil\n\t}"
   | TRecord nested when nested.rec_owner = package
-                        || List.mem nested.rec_tesl_name !current_codec_types
-                        || codec_owner nested.rec_tesl_name <> None ->
+                        || nominal_codec nested.rec_owner nested.rec_tesl_name <> None ->
     (* A nested record decodes through its own decoder — derived or hand-written — and its
        `Check` becomes an `error` here so one field shape covers both. *)
     Printf.sprintf
       "func(teslRaw any) (%s, error) {\n\t\tteslNested := %s(teslRaw)\n\t\tif !teslNested.OK() {\n\t\t\treturn %s{}, errors.New(teslNested.Message())\n\t\t}\n\t\tteslValue, _ := teslNested.Value()\n\t\treturn teslValue, nil\n\t}"
-      (go_type ty) (codec_decode_ref nested.rec_tesl_name) (go_type ty)
+      (go_type ty) (qualified nested.rec_owner (codec_decode_name nested.rec_tesl_name)) (go_type ty)
   | _ -> unsupported loc
     "Go backend cannot decode `%s` from JSON; give the type a `codec`" what
 
@@ -13134,6 +13178,7 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?(entity_bindings=[]) ?pro
       emails = Hashtbl.create 4;
       channels = Hashtbl.create 4;
       codecs = Hashtbl.create 8;
+      nominal_codecs = Hashtbl.create 8;
       aliases = Hashtbl.create 8;
       consts = Hashtbl.create 8;
       databases = Hashtbl.create 4;
@@ -13142,6 +13187,14 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?(entity_bindings=[]) ?pro
        qualified with it (see `codec_decode_ref`). *)
     List.iter (fun (codec : codec_form) ->
       Hashtbl.replace types.codecs codec.type_name package) codecs;
+    (* Dependencies already include transitive modules. Copy each module's own codecs
+       once, rather than repeatedly copying the growing inherited inventories. *)
+    List.iter (fun dependency ->
+      List.iter (fun (codec : codec_form) ->
+        Hashtbl.replace types.nominal_codecs (dependency.ex_package, codec.type_name) codec)
+        dependency.ex_codecs) dependencies;
+    List.iter (fun (codec : codec_form) ->
+      Hashtbl.replace types.nominal_codecs (package, codec.type_name) codec) codecs;
     (* Which functions perform a proof operation, for the one assertion that depends on it
        (see the `expectFail` emission).  Computed here, where the bodies are in hand. *)
     Hashtbl.reset proof_op_functions;
@@ -15685,7 +15738,10 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?(entity_bindings=[]) ?pro
       !http_stub_imports;
     (* An imported local module contributes its exported functions with the OWNING
        package attached, so every reference to them is qualified. *)
-    let imported_packages = ref [] in
+    (* Generated scanners can reach a private field type through an imported entity.
+       Its owning package can be a transitive dependency. Import emission below retains
+       only packages actually referenced by the generated body; this adds no source names. *)
+    let imported_packages = ref (List.map (fun dependency -> dependency.ex_package) dependencies) in
     Hashtbl.iter (fun _ (database : database_info) ->
       List.iter (fun name -> match Hashtbl.find_opt types.entities name with
         | Some entity when entity.ent_owner <> package && not (List.mem entity.ent_owner !imported_packages) ->
@@ -16080,7 +16136,7 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?(entity_bindings=[]) ?pro
       end
     in
     Ok (artifacts, { ex_module = m.module_name; ex_package = package;
-                     ex_types = types; ex_signatures = signatures })
+                     ex_types = types; ex_signatures = signatures; ex_codecs = codecs })
   with Unsupported error -> Error [error]
 
 (* Test seam for single-module callers that previously consumed one backend string. *)

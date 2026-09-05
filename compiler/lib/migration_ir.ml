@@ -17,6 +17,10 @@ type definition = {
   (* Reverse semantic dependencies: fact producers support predicates; codecs
      support their target types. This inventory includes private declarations. *)
   supports : reference list;
+  (* Entity field contracts are projected by the same lowering as the complete
+     declaration. They retain only that field's direct references; closure adds
+     nested types, codecs and fact producers in the usual way. *)
+  stored_fields : (string * elaborated) list;
 }
 exception Invalid of error
 
@@ -42,7 +46,7 @@ let normalize_variables root =
     | Bytes _ as node -> node in
   visit root
 
-let declaration ~scopes ~(resolve : resolver) ~typed_nodes ~module_name decl =
+let lower_declaration ~scopes ~(resolve : resolver) ~typed_nodes ~module_name decl =
   let loc = top_decl_loc decl in
   let binding_variables bs = List.concat_map (fun (b : binding) -> Checker.collect_tvar_names b.type_expr) bs in
   let abstract_types = match decl with
@@ -56,6 +60,7 @@ let declaration ~scopes ~(resolve : resolver) ~typed_nodes ~module_name decl =
     | DType (TypeAdt t) -> t.params
     | _ -> [] in
   let references = ref [] in
+  let stored_fields = ref [] in
   let global ns symbol =
     references := (ns, symbol) :: !references;
     let identity = match symbol with
@@ -210,10 +215,32 @@ let declaration ~scopes ~(resolve : resolver) ~typed_nodes ~module_name decl =
       | ECacheDelete _ | ECacheInvalidate _ | ESendEmail _ | EStartEmailWorker _ | EWithDatabase _
       | EWithCapabilities _ | EWithTransaction _ | EServe _ | ESqlQuery _ -> reject loc "effectful expression is forbidden in migration IR" in
     tag "expr" [ty; body] in
-  let fields env fs =
+  let fields ?(stored=false) env fs =
     let env = List.fold_left (fun env (f : field_def) -> fst (bind env f.name)) env fs in
-    env, List.map (fun (f : field_def) -> tag "field" [Bytes f.name; surface_type env f.type_expr;
-      option (proof env) f.proof_ann; option bytes f.db_type]) fs in
+    (* A field's standalone contract names sibling subjects, rather than their
+       declaration-order slots. Inserting an unrelated field must not change the
+       identity of an existing proof subject. The complete declaration retains
+       its existing canonical encoding. *)
+    let rec field_subjects = function
+      | Seq [Bytes "local"; Bytes index] ->
+        let name = match List.find_opt (fun (_, i) -> string_of_int i = index) env with
+          | Some (name, _) -> name
+          | None -> reject loc "unresolved entity field subject in migration IR" in
+        tag "field-subject" [Bytes name]
+      | Seq nodes -> Seq (List.map field_subjects nodes)
+      | Bytes _ as node -> node in
+    env, List.map (fun (f : field_def) ->
+      let previous = !references in
+      references := [];
+      let node = tag "field" [Bytes f.name; surface_type env f.type_expr;
+        option (proof env) f.proof_ann; option bytes f.db_type] in
+      let field_references = !references in
+      references := field_references @ previous;
+      if stored then stored_fields := (f.name, {
+        node = normalize_variables (field_subjects node);
+        references = List.sort_uniq compare field_references;
+      }) :: !stored_fields;
+      node) fs in
   let invariant env (i : record_invariant) = tag "invariant" [proof env i.proof_text; option (lookup Value) i.checker_name] in
   try
     let node = match decl with
@@ -233,7 +260,7 @@ let declaration ~scopes ~(resolve : resolver) ~typed_nodes ~module_name decl =
       | DRecord r -> let identity = own Type r.name in let env, fs = fields [] r.fields in
         tag "record-declaration" [identity; Seq fs; option (invariant env) r.invariant]
       | DEntity e ->
-        let identity = own Type e.name in let _, fs = fields [] e.fields in
+        let identity = own Type e.name in let _, fs = fields ~stored:true [] e.fields in
         let indexes = List.map (fun (i : entity_index) -> tag "index" [bool i.ix_unique; Seq (List.map bytes i.ix_fields); option bytes i.ix_name]) e.indexes in
         tag "entity" [identity; Bytes e.table; Bytes e.primary_key; Seq fs; Seq indexes]
       | DFact f -> let identity = own Predicate f.name in let _, bs = bindings [] f.params in tag "fact" [identity; Seq bs]
@@ -251,16 +278,20 @@ let declaration ~scopes ~(resolve : resolver) ~typed_nodes ~module_name decl =
         tag "codec" [identity; target; to_json; from_json]
       | DDatabase _ | DCapability _ | DConst _ | DQueue _ | DChannel _ | DWorkers _ | DCache _
       | DAgent _ | DEmail _ | DCapture _ | DApi _ | DServer _ | DTest _ | DApiTest _ | DLoadTest _ -> reject loc "application declaration is forbidden in migration IR" in
-    Ok { node = normalize_variables node; references = List.sort_uniq compare !references }
+    Ok ({ node = normalize_variables node; references = List.sort_uniq compare !references },
+        List.rev !stored_fields)
   with Invalid error -> Error error
 
+let declaration ~scopes ~resolve ~typed_nodes ~module_name decl =
+  Result.map fst (lower_declaration ~scopes ~resolve ~typed_nodes ~module_name decl)
+
 let define ~scopes ~resolve ~typed_nodes (m : module_form) decl =
-  match declaration ~scopes ~resolve ~typed_nodes ~module_name:m.module_name decl with
+  match lower_declaration ~scopes ~resolve ~typed_nodes ~module_name:m.module_name decl with
   | Error _ as error -> error
-  | Ok body ->
+  | Ok (body, stored_fields) ->
     let ref ns name = ns, Global (m.module_name ^ "." ^ name) in
     let named ns name aliases supports =
-      Ok {key=ref ns name; aliases; body; supports} in
+      Ok {key=ref ns name; aliases; body; supports; stored_fields} in
     match decl with
     | DFunc f ->
       let supports = match f.kind with

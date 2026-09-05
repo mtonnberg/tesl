@@ -25,6 +25,24 @@
  (modules test_migration_inventory)
  (libraries tesl_compiler_lib alcotest unix str))
 
+(test
+ (name test_migration_field_impact)
+ (modules test_migration_field_impact)
+ (libraries tesl_compiler_lib alcotest unix str))
+
+(test
+ (name test_jsonb_columns)
+ (modules test_jsonb_columns)
+ (libraries tesl_compiler_lib alcotest unix str))
+
+; These are executed generated codecs, including both rolling-read directions
+; and premature decoder removal. Source checking alone is not the oracle.
+(rule
+ (alias runtest)
+ (deps fixtures/migration-jsonb-codecs.tesl ../bin/main.exe)
+ (action
+  (run %{exe:../bin/main.exe} test %{dep:fixtures/migration-jsonb-codecs.tesl})))
+
 ; Pure-OCaml property test for the shared AST-traversal framework
 ; (lib/ast_visitor.ml). No alcotest, so it always builds and runs:
 ;   dune exec test/test_ast_visitor.exe

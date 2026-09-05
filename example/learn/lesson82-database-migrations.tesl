@@ -84,8 +84,8 @@ fn saveTitle(id: String, raw: String) -> Bool requires [dbWrite Note] =
       let _ = insert Note { id: id, title: title }
       True
 
-# Database operations stay in application code. The schema itself has no dbRead
-# or dbWrite capability and cannot depend on the connection used by this query.
+# Database operations stay in application code. The schema itself performs no
+# reads or writes and cannot depend on the connection used by this query.
 fn findTitle(id: String) -> Maybe String requires [dbRead Note] =
   case selectOne note from Note where note.id == id of
     Nothing -> Nothing

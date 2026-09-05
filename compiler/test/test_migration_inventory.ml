@@ -192,6 +192,47 @@ let builtin_scope () = with_project (fun _root write ->
     "record Counter { value: Int ::: IsNonNegative value }\n") in
   ignore (load path))
 
+let nested_jsonb_dependencies () = with_project (fun _root write ->
+  let source = prefix "NotesSchema.VCurrent" ^ imports ^ {|import Tesl.Json exposing [stringCodec]
+type Status
+  = Queued
+  | Done
+codec Status { adtJson }
+record Payload { status: Status, text: String }
+codec Payload {
+  toJson {
+    status -> "status" with_codec Status
+    text -> "body" with_codec stringCodec
+  }
+  fromJson [
+    { status <- "status" with_codec Status
+      text <- "body" with_codec stringCodec }
+    { status <- "status" with_codec Status
+      text <- "title" with_codec stringCodec }
+  ]
+}
+entity Task table "tasks" primaryKey id { id: String, payload: Payload @db(jsonb) }
+|} in
+  let path = write "schema/notes/v-current.tesl" source in
+  let before = load path in
+  let entity = same before Type "NotesSchema.VCurrent.Task" in
+  List.iter (fun (label, source) ->
+    ignore (write "schema/notes/v-current.tesl" source);
+    check bool label true (entity <> same (load path) Type "NotesSchema.VCurrent.Task")) [
+    "unchanged JSONB column depends on a nested constructor", replace "Queued" "Waiting" source;
+    "unchanged JSONB column depends on a nested wire key", replace "\"body\"" "\"content\"" source;
+    "unchanged JSONB column depends on its legacy decoder", replace "\"title\"" "\"legacy\"" source;
+  ])
+
+let ordinary_compiler_gates () = with_project (fun _root write ->
+  let path = write "schema/notes/v-current.tesl" (prefix "NotesSchema.VCurrent" ^
+    "import Tesl.Prelude exposing [Bool(..), String]\nimport Tesl.Regex exposing [Regex.matches]\n" ^
+    "fn invalid(raw: String) -> Bool = Regex.matches \"[\" raw\n") in
+  check bool "fixture fails the public compiler's literal gate" true
+    (List.exists (fun (d : Compile.diagnostic) -> d.severity = "error") (Compile.check_file path));
+  match Migration_inventory.load ~compiler_abi:"A" ~root_file:path with
+  | Error _ -> () | Ok _ -> fail "inventory skipped a required compiler gate")
+
 let () = run "migration-inventory" ["checked inventory", [
   test_case "complete private dependency inventory" `Quick complete_private_inventory;
   test_case "source and frozen-copy invariance" `Quick frozen_and_source_invariance;
@@ -204,4 +245,6 @@ let () = run "migration-inventory" ["checked inventory", [
   test_case "fresh imported interfaces on repeated loads" `Quick changed_import_interface;
   test_case "whole-schema physical ownership" `Quick storage_ownership;
   test_case "builtin predicate resolves through explicit exposure" `Quick builtin_scope;
+  test_case "unchanged JSONB column follows nested types and codecs" `Quick nested_jsonb_dependencies;
+  test_case "all ordinary compiler gates precede hashing" `Quick ordinary_compiler_gates;
 ]]

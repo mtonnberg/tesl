@@ -1,14 +1,35 @@
 open Ast
 open Migration_ir
 
+type stored_field = {
+  entity : string;
+  name : string;
+  loc : Location.loc;
+  contract : Migration_canonical.node;
+}
+
+type field_change =
+  | Added_field of stored_field
+  | Removed_field of stored_field
+  | Changed_field of { previous : stored_field; current : stored_field;
+                       definition_changed : bool }
+
+type field_entry = {
+  identity : string;
+  definition : Migration_canonical.node;
+  field : stored_field;
+}
+
 type t = {
   compiler_abi : string;
   scopes : Migration_canonical.scope list;
   modules : string list;
   definitions : definition list;
+  fields : field_entry list;
 }
 
 let module_names inventory = inventory.modules
+let stored_fields inventory = List.map (fun entry -> entry.field) inventory.fields
 
 let with_abi inventory body = Migration_canonical.Seq [
   Bytes "compiler-semantics"; Bytes inventory.compiler_abi; body]
@@ -26,6 +47,29 @@ let snapshot inventory =
       ~roots:(List.map (fun d -> d.key) inventory.definitions) with
   | Ok body -> with_abi inventory body
   | Error _ -> assert false (* load checks this exact closure before publishing t *)
+
+let field_changes ~before ~after =
+  let loc = Location.dummy_loc "<migration-field-impact>" in
+  if List.map (fun (scope : Migration_canonical.scope) -> scope.family) before.scopes <>
+     List.map (fun (scope : Migration_canonical.scope) -> scope.family) after.scopes then
+    Error {loc; message="stored field comparison requires the same schema family"}
+  else if before.compiler_abi <> after.compiler_abi then
+    Error {loc; message="stored field comparison requires the same recorded compiler ABI; recompiling historical source cannot establish the meaning of previously stored values"}
+  else
+    let rec merge changes previous current = match previous, current with
+      | [], [] -> List.rev changes
+      | old :: rest, [] -> merge (Removed_field old.field :: changes) rest []
+      | [], fresh :: rest -> merge (Added_field fresh.field :: changes) [] rest
+      | old :: old_rest, fresh :: fresh_rest ->
+        let order = String.compare old.identity fresh.identity in
+        if order < 0 then merge (Removed_field old.field :: changes) old_rest current
+        else if order > 0 then merge (Added_field fresh.field :: changes) previous fresh_rest
+        else
+          let changes = if old.field.contract = fresh.field.contract then changes
+            else Changed_field { previous=old.field; current=fresh.field;
+              definition_changed=old.definition <> fresh.definition } :: changes in
+          merge changes old_rest fresh_rest in
+    Ok (merge [] before.fields after.fields)
 
 let names = function
   | DFunc f -> [Value, f.name]
@@ -131,10 +175,17 @@ let load ~compiler_abi ~root_file =
         Global (m.module_name ^ "." ^ name)) (names d)) m.decls) modules in
     let scopes = [{ Migration_canonical.family; revision; role=Snapshot_role }] in
     let definitions = List.concat_map (fun m ->
+      (* Reuse the public compiler judgment, including literal/complexity and
+         cross-module checks. Type + proof checks alone are not its full gate.
+         Every dependency body is checked by its own iteration here. *)
+      let diagnostics = Compile.check_module ~skip_dep_body:(fun _ -> true)
+        (Hashtbl.find sources m.source_file) m in
+      (match List.find_opt (fun (d : Compile.diagnostic) -> d.severity = "error") diagnostics with
+       | Some error -> reject (Location.make_loc error.file error.start_line
+           error.start_col error.end_line error.end_col) error.message
+       | None -> ());
       let typed_nodes, errors = Checker.check_module_with_typed_nodes m in
       (match errors with error :: _ -> reject error.loc error.message | [] -> ());
-      (match Proof_checker.check_module m with error :: _ -> reject error.loc error.message | [] -> ());
-      (match Validation.check_module m with error :: _ -> reject error.loc error.message | [] -> ());
       let local = List.concat_map (fun d -> List.map (fun (ns, name) ->
         (ns, name), Global (m.module_name ^ "." ^ name)) (names d)) m.decls in
       let imported = List.concat_map (fun (i : import_decl) ->
@@ -163,12 +214,27 @@ let load ~compiler_abi ~root_file =
     Hashtbl.iter (fun path source ->
       if In_channel.with_open_bin path In_channel.input_all <> source then
         reject loc ("schema source changed during semantic inventory: " ^ path)) sources;
-    let inventory = { compiler_abi; scopes; definitions;
-      modules=List.map (fun m -> m.module_name) modules } in
     (match Migration_ir.closure ~scopes ~definitions
         ~roots:(List.map (fun d -> d.key) definitions) with
      | Error error -> raise (Invalid error)
      | Ok _ -> ());
+    let inventory = { compiler_abi; scopes; definitions; fields=[];
+      modules=List.map (fun m -> m.module_name) modules } in
+    let fields = List.concat_map (fun d -> List.map (fun (name, body) ->
+      let entity = match d.key with
+        | Type, Global entity -> entity
+        | _ -> reject loc "stored field has no owning entity identity" in
+      let entity_form = List.assoc entity members in
+      let field_form = List.find (fun (f : Ast.field_def) -> f.name = name) entity_form.fields in
+      let dependencies = match Migration_ir.closure ~scopes ~definitions ~roots:body.references with
+        | Ok node -> node | Error error -> raise (Invalid error) in
+      let identity = Migration_canonical.encode (tag "stored-location" [
+        require loc (Migration_canonical.reference scopes entity); Bytes name]) in
+      let contract = with_abi inventory (tag "stored-field" [body.node; dependencies]) in
+      { identity; definition=body.node; field={entity; name; loc=field_form.loc; contract} }
+    ) d.stored_fields) definitions
+      |> List.sort (fun a b -> String.compare a.identity b.identity) in
+    let inventory = { inventory with fields } in
     Ok inventory
   with
   | Invalid error -> Error error
