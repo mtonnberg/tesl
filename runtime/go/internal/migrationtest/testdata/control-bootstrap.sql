@@ -143,7 +143,13 @@ create table if not exists notes_app.tesl_schema_leases (
 create table if not exists notes_app.tesl_schema_instances (   -- heartbeats: observability, never a guard
   instance text primary key, version int not null, protocol_level int not null, last_seen timestamptz not null,
   compat_floor_seen int not null default 0);   -- the plan mode this instance has switched to; contract's grace wait reads it
-create table if not exists notes_app.tesl_schema_index (name text primary key, state text not null, attempts int not null default 0, error text);
+create table if not exists notes_app.tesl_schema_index (
+  name text primary key, state text not null, attempts int not null default 0, error text,
+  terminal_version int check (terminal_version between 1 and 2147483646),
+  check ((state = 'terminal') = (terminal_version is not null)));
+-- terminal_version is the immutable REMOVING contract's version, which may be later than the creating version.
+-- Under the exclusive job lock, a retry verifies it is unchanged; DROP additionally requires
+-- compat_floor >= terminal_version. A creation stamp cannot authorize a later contract's physical changes.
 create table if not exists notes_app.tesl_schema_quarantine (
   entity text, pk jsonb, target_generation smallint, attempt int,  -- V8's failures and V9's are different rows
   reason text, seen_at timestamptz, primary key (entity, pk, target_generation, attempt));

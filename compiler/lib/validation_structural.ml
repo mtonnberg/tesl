@@ -2320,6 +2320,8 @@ let check_server_completeness ?(extra_funcs = []) (decls : top_decl list) : vali
 
 type vkind =
   | VStr            (* string literal, or env/envString call *)
+  | VSchemaRef      (* a VCurrent module reference, or the legacy SQL schema string *)
+  | VMigrationRef   (* contextual FamilySchema.Migrate prefix, never a value *)
   | VInt            (* int literal, or envInt call *)
   | VPort           (* int literal proven in 1..65535 (a port-validity obligation), or envInt *)
   | VMountPath      (* string literal: "/" or "/seg(/seg)*" — leading slash required, no trailing slash *)
@@ -2338,7 +2340,7 @@ type vkind =
 let config_block_schema = function
   (* schema is required for the postgres backend but not for Memory; the
      postgres-specific requirement is enforced in check_typed_config_blocks. *)
-  | "Database" -> [ "schema", VStr, false; "entities", VEntityList, true;
+  | "Database" -> [ "schema", VSchemaRef, false; "migrations", VMigrationRef, false; "entities", VEntityList, false;
                     "backend", VBackend, true ]
   (* Issue #31: `poolSize` (optional) is the connection-pool size — the max
      number of simultaneously open PostgreSQL connections (runtime default 10).
@@ -2346,7 +2348,7 @@ let config_block_schema = function
      env-backed config fields. *)
   | "PostgresConfig" -> [ "dbName", VStr, true; "user", VStr, true;
                           "password", VStr, true; "connection", VConn, true;
-                          "poolSize", VInt, false ]
+                          "poolSize", VInt, false; "namespace", VStr, false ]
   (* The two PostgresConnection shapes — validated internally via [check_record]'s
      "__Tcp"/"__Socket" rows; listed here so the LSP config-context query can
      offer field completion/hover inside a `connection: TcpConnection { … }`. *)
@@ -2385,6 +2387,12 @@ let config_block_schema = function
     an editor hint earns its keep. *)
 let config_field_doc (block : string) (field : string) : string =
   match block, field with
+  | "Database", "schema" ->
+    "Versioned schema root imported by the application (`FamilySchema.VCurrent`), or the legacy PostgreSQL schema string with `entities:`."
+  | "Database", "migrations" ->
+    "Migration directory prefix for the same schema family (`FamilySchema.Migrate`). This is a contextual module reference, not a runtime value."
+  | "PostgresConfig", "namespace" ->
+    "Physical PostgreSQL schema name. Required as a nonempty static string when Database.schema is a module reference; connection configuration stays in the application."
   | "TelemetryConfig", "service" ->
     "Service name attached to telemetry events and metrics."
   | "TelemetryConfig", "endpoint" ->
@@ -2452,6 +2460,15 @@ let check_typed_config_blocks (m : module_form) : validation_error list =
   let rec check_value loc fname kind v : validation_error list =
     let err m = [ make_error (cfg_expr_loc v) m ] in
     match kind with
+    | VSchemaRef ->
+      (match v with
+       | EConstructor { args = []; _ } -> [] (* The ownership resolver checks the imported VCurrent root. *)
+       | ELit { lit = LString _; _ } -> []
+       | _ -> err "`Database.schema` must be a schema module reference or a legacy SQL schema string")
+    | VMigrationRef ->
+      (match v with
+       | EConstructor { args = []; _ } -> [] (* The ownership resolver checks the exact family prefix. *)
+       | _ -> err "`Database.migrations` must be a `FamilySchema.Migrate` module prefix")
     | VStr ->
       (match v with
        | ELit { lit = LString _; _ } -> []
@@ -2610,9 +2627,22 @@ let check_typed_config_blocks (m : module_form) : validation_error list =
           let top = cfg_fields e in
           let is_postgres = match List.assoc_opt "backend" top with
             | Some b -> cfg_ctor b = Some "Postgres" | None -> true in
-          if is_postgres && not (List.mem_assoc "schema" top)
-          then [ make_error r.loc "`Database` (postgres backend) is missing required field `schema`" ]
-          else []
+          let module_form = match List.assoc_opt "schema" top with
+            | Some (EConstructor { args = []; _ }) -> true | _ -> false in
+          let postgres_fields = match List.assoc_opt "backend" top with
+            | Some backend -> (match cfg_ctor_arg backend with Some pg -> cfg_fields pg | None -> [])
+            | None -> [] in
+          (if is_postgres && not (List.mem_assoc "schema" top)
+           then [make_error r.loc "`Database` (postgres backend) is missing required field `schema`"] else [])
+          @ (if not module_form && not (List.mem_assoc "entities" top)
+             then [make_error r.loc "`Database` is missing required field `entities`"] else [])
+          @ (if not module_form && (List.mem_assoc "migrations" top || List.mem_assoc "namespace" postgres_fields)
+             then [make_error r.loc "legacy `Database.entities` configuration cannot also specify `migrations:` or `PostgresConfig.namespace`"] else [])
+          @ (if module_form && is_postgres then
+               match List.assoc_opt "namespace" postgres_fields with
+               | Some (ELit { lit = LString namespace; _ }) when namespace <> "" && not (String.contains namespace '\000') && String.length namespace <= 63 -> []
+               | _ -> [make_error r.loc "a schema module requires `PostgresConfig.namespace` as a nonempty static PostgreSQL schema name (at most 63 bytes)"]
+             else [])
         | None -> []
       in
       base @ schema_req

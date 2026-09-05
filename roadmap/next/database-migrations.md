@@ -1656,7 +1656,11 @@ describing each of them loosely enough to be wrong.
    takeover. Nontransactional index DDL cannot make that check atomic, so each statement
    also holds a session-level shared **DDL-job lock** and rechecks token/state after
    acquiring it; contract takes the same job key exclusively, marks it terminal, then
-   drops the temporary object. The key is the one-argument advisory hash of
+   drops the temporary object. Terminal evidence records the **removing contract's
+   version**, independently of the index's creating version. Recovery verifies that
+   immutable removal target and waits for `compat_floor` to reach it before issuing
+   a drop. For example, an index created in V8 and removed by V9 cannot be dropped
+   merely because `compat_floor` already equals 8. The key is the one-argument advisory hash of
    `(database_uuid, "tesl-ddl-job", stable job id)`, a lock space disjoint from the
    two-int version fences; a hash collision only over-serialises jobs. Leases coordinate work,
    tokens fence stale transactional workers, and neither replaces the schema-version
@@ -4168,7 +4172,13 @@ create table if not exists notes_app.tesl_schema_leases (
 create table if not exists notes_app.tesl_schema_instances (   -- heartbeats: observability, never a guard
   instance text primary key, version int not null, protocol_level int not null, last_seen timestamptz not null,
   compat_floor_seen int not null default 0);   -- the plan mode this instance has switched to; contract's grace wait reads it
-create table if not exists notes_app.tesl_schema_index (name text primary key, state text not null, attempts int not null default 0, error text);
+create table if not exists notes_app.tesl_schema_index (
+  name text primary key, state text not null, attempts int not null default 0, error text,
+  terminal_version int check (terminal_version between 1 and 2147483646),
+  check ((state = 'terminal') = (terminal_version is not null)));
+-- terminal_version is the immutable REMOVING contract's version, which may be later than the creating version.
+-- Under the exclusive job lock, a retry verifies it is unchanged; DROP additionally requires
+-- compat_floor >= terminal_version. A creation stamp cannot authorize a later contract's physical changes.
 create table if not exists notes_app.tesl_schema_quarantine (
   entity text, pk jsonb, target_generation smallint, attempt int,  -- V8's failures and V9's are different rows
   reason text, seen_at timestamptz, primary key (entity, pk, target_generation, attempt));
@@ -4689,7 +4699,8 @@ commit;
 
 -- [hook terminal-jobs]
 -- Take every listed temporary object's DDL-job key EXCLUSIVELY in stable-id order.
--- Record terminal while holding those session locks; retain them through contracted.
+-- Record terminal with terminal_version = 8 while holding those session locks; retain them through contracted.
+-- A resumed job must retain this removal version, even if its index was created before V8.
 -- This drains active autocommit builds and prevents a stale worker from recreating
 -- an object after contract removes it.
 -- [sql begin-contract]

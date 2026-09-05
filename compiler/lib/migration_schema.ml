@@ -55,6 +55,70 @@ let check_contents ?(migration = false) (m : module_form) =
       [forbidden (top_decl_loc d) "application declarations or tests"]
   ) m.decls
 
+type binding = {
+  database : database_form;
+  schema_root : string;
+  migration_prefix : string;
+  members : (string * entity_form) list;
+}
+
+(** Contextual module references have no expression type. This resolver consumes
+    the original folded database configuration and returns an ownership projection;
+    it never changes what declarations the application can use in expressions.
+    Supplying a parsed graph lets editor overlays take precedence over disk. *)
+let resolve_binding ?(modules = []) (m : module_form) (d : database_form) =
+  let fields = match d.config_expr with
+    | Some e -> Desugar.config_record_fields e | None -> [] in
+  match List.assoc_opt "schema" fields with
+  | Some (EConstructor { name = root; args = []; loc }) ->
+    let error message = Error [make_error loc message] in
+    (match String.split_on_char '.' root, schema_prefix root with
+     | [family; "VCurrent"], Some prefix when prefix = root ->
+       let expected_migrations = family ^ ".Migrate" in
+       let migrations = match List.assoc_opt "migrations" fields with
+         | Some (EConstructor { name; args = []; _ }) -> Some name | _ -> None in
+       if List.mem_assoc "entities" fields then
+         error "a schema module owns its complete entity closure; remove `entities:` from this database"
+       else if migrations <> Some expected_migrations then
+         error (Printf.sprintf "schema `%s` requires `migrations: %s`" root expected_migrations)
+       else if not (List.exists (fun (i : import_decl) -> i.module_name = root) m.imports) then
+         error (Printf.sprintf "schema module `%s` must be imported directly by the database's application module" root)
+       else
+         let visited = Hashtbl.create 8 in
+         let members = ref [] and errors = ref [] in
+         let rec visit source name =
+           if not (Hashtbl.mem visited name) then begin
+             Hashtbl.add visited name ();
+             let path = resolve_local_import_path source name in
+             let parsed = match List.find_opt (fun (candidate : module_form) ->
+               canonical_import_path candidate.source_file = canonical_import_path path) modules with
+               | Some candidate -> Some candidate
+               | None -> read_module path in
+             match parsed with
+             | None -> errors := make_error loc (Printf.sprintf "cannot read schema module `%s`" name) :: !errors
+             | Some schema when schema.module_name <> name ->
+               errors := make_error loc (Printf.sprintf "schema module `%s` resolves to a file declaring `%s`" name schema.module_name) :: !errors
+             | Some schema ->
+               errors := List.rev_append (check_contents schema) !errors;
+               List.iter (function DEntity e -> members := (name ^ "." ^ e.name, e) :: !members | _ -> ()) schema.decls;
+               List.iter (fun (i : import_decl) ->
+                 if String.starts_with ~prefix:"Tesl." i.module_name then ()
+                 else if within root i.module_name then visit schema.source_file i.module_name
+                 else errors := make_error i.loc (Printf.sprintf "schema module `%s` imports `%s` outside its ownership closure" name i.module_name) :: !errors) schema.imports
+           end
+         in
+         visit m.source_file root;
+         let members = List.sort (fun (left, _) (right, _) -> String.compare left right) !members in
+         let tables = Hashtbl.create 8 in
+         List.iter (fun (name, (e : entity_form)) ->
+           match Hashtbl.find_opt tables e.table with
+           | Some previous -> errors := make_error e.loc (Printf.sprintf "schema entities `%s` and `%s` name the same physical table `%s`" previous name e.table) :: !errors
+           | None -> Hashtbl.add tables e.table name) members;
+         if !errors <> [] then Error (List.rev !errors)
+         else Ok (Some { database = d; schema_root = root; migration_prefix = expected_migrations; members })
+     | _ -> error "`Database.schema` must name an imported `FamilySchema.VCurrent` root, not a frozen version or child module")
+  | _ -> Ok None
+
 let check_closure ?root_module ~source_file root =
   match schema_prefix root with
   | None -> []
@@ -115,6 +179,40 @@ let check_databases (m : module_form) =
              | _ -> None) m.imports)
     | _ -> []) m.decls |> List.sort_uniq String.compare in
   List.concat_map (check_closure ~source_file:m.source_file) roots
+  @ List.concat_map (function
+      | DDatabase d -> (match resolve_binding m d with Error errors -> errors | Ok _ -> [])
+      | _ -> []) m.decls
+
+(** Only the backend receives this projection. Source checking keeps the original
+    import/export visibility and folded config, so private membership grants no
+    ordinary term or type names. Run before SCC lowering and rename these entity
+    references along with their declarations. *)
+let lower_module ?(modules = []) (m : module_form) =
+  let errors = ref [] in
+  let decls = List.map (function
+    | DDatabase d as original -> (match resolve_binding ~modules m d with
+        | Ok (Some binding) ->
+          let d = Desugar.desugar_database_config d in
+          DDatabase { d with entities = List.map fst binding.members }
+        | Ok None -> original
+        | Error es -> errors := List.rev_append es !errors; original)
+    | other -> other) m.decls in
+  if !errors = [] then Ok { m with decls } else Error (List.rev !errors)
+
+let database_entities (m : module_form) =
+  List.filter_map (function
+    | DDatabase d ->
+      let names = match resolve_binding m d with
+        | Ok (Some binding) ->
+          List.concat_map (fun (qualified, (e : entity_form)) ->
+            qualified :: List.filter_map (fun (i : import_decl) ->
+              if i.module_name ^ "." ^ e.name <> qualified then None
+              else match i.names with
+                | ImportExposing names when List.mem e.name names -> Some e.name
+                | _ -> None) m.imports) binding.members
+        | _ -> (Desugar.desugar_database_config d).entities in
+      Some (d.name, names)
+    | _ -> None) m.decls
 
 (** Ownership is a project property, independent of which entrypoint imports a
     database declaration or which individual entities it exposes. During source

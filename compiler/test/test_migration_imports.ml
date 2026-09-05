@@ -427,6 +427,150 @@ entity Note table "local_notes" primaryKey id { id: String }
   check int "local entities are not mistaken for qualified-only imports" 0
     (List.length (errors (Compile.check_file local))))
 
+let module_reference_binding () = with_project (fun _root write ->
+  let parse path text = match Parser.parse_module path text with
+    | Ok m -> m | Err e -> failf "fixture parse: %s" e.msg in
+  ignore (write "schema/notes/v-current.tesl" {|module NotesSchema.VCurrent exposing [Note]
+import Tesl.Prelude exposing [String]
+import NotesSchema.VCurrent.Left
+import NotesSchema.VCurrent.Right
+entity Note table "notes" primaryKey id { id: String }
+|});
+  List.iter (fun name -> ignore (write ("schema/notes/v-current/" ^ String.lowercase_ascii name ^ ".tesl")
+    ("module NotesSchema.VCurrent." ^ name ^ " exposing []\nimport NotesSchema.VCurrent.Hidden\n"))) ["Left"; "Right"];
+  let hidden = {|module NotesSchema.VCurrent.Hidden exposing []
+import Tesl.Prelude exposing [String]
+import NotesSchema.VCurrent
+entity Secret table "hidden_notes" primaryKey id { id: String }
+|} in
+  let hidden_path = write "schema/notes/v-current/hidden.tesl" hidden in
+  let app schema migrations extra imported =
+    let text = "module App exposing []\n" ^ imported ^ "\ndatabase Db = Database { schema: " ^ schema
+      ^ "\n migrations: " ^ migrations ^ "\n backend: Memory\n" ^ extra ^ "\n}\n" in
+    let path = write "app.tesl" text in
+    parse path text in
+  let source () = app "NotesSchema.VCurrent" "NotesSchema.Migrate" "" "import NotesSchema.VCurrent" in
+  let resolve ?modules m =
+    let db = List.find_map (function Ast.DDatabase d -> Some d | _ -> None) m.Ast.decls |> Option.get in
+    Migration_schema.resolve_binding ?modules m db in
+  let binding = match resolve (source ()) with
+    | Ok (Some b) -> b | _ -> fail "schema module binding was not resolved" in
+  check (list string) "private diamond/cyclic closure contributes each entity once"
+    ["NotesSchema.VCurrent.Hidden.Secret"; "NotesSchema.VCurrent.Note"] (List.map fst binding.members);
+  List.iter (fun (schema, migrations, extra, imported) ->
+    check bool "invalid contextual reference is refused" true
+      (Result.is_error (resolve (app schema migrations extra imported)))) [
+    "NotesSchema.V7", "NotesSchema.Migrate", "", "import NotesSchema.VCurrent";
+    "NotesSchema.VCurrent.Hidden", "NotesSchema.Migrate", "", "import NotesSchema.VCurrent.Hidden";
+    "NotesSchema.VCurrent", "OtherSchema.Migrate", "", "import NotesSchema.VCurrent";
+    "NotesSchema.VCurrent", "NotesSchema.Migrate.V8", "", "import NotesSchema.VCurrent";
+    "NotesSchema.VCurrent", "NotesSchema.Migrate", "entities: []", "import NotesSchema.VCurrent";
+    "NotesSchema.VCurrent", "NotesSchema.Migrate", "", "";
+  ];
+  let refuse_child text reason =
+    ignore (write "schema/notes/v-current/hidden.tesl" text);
+    match resolve (source ()) with
+    | Error errors -> check bool reason true
+        (List.exists (fun (e : Validation_common.validation_error) ->
+           try ignore (Str.search_forward (Str.regexp_string reason) e.message 0); true with Not_found -> false) errors)
+    | _ -> failf "schema binding accepted %s" reason in
+  refuse_child (hidden ^ "\ndatabase Bad = Database { entities: [], backend: Memory }\n") "database declarations";
+  refuse_child (Str.global_replace (Str.regexp_string "import Tesl.Prelude")
+    "import OtherSchema.VCurrent\nimport Tesl.Prelude" hidden) "outside its ownership closure";
+  refuse_child (Str.global_replace (Str.regexp_string "hidden_notes") "notes" hidden) "same physical table";
+  ignore (write "schema/notes/v-current/hidden.tesl" hidden);
+  let overlay = parse hidden_path (Str.global_replace (Str.regexp_string "hidden_notes") "overlay_notes" hidden) in
+  (match resolve ~modules:[overlay] (source ()) with
+   | Ok (Some b) -> check (list string) "parsed overlays override disk" ["overlay_notes"; "notes"]
+       (List.map (fun (_, (e : Ast.entity_form)) -> e.table) b.members)
+   | _ -> fail "schema overlay failed");
+  let renamed = parse hidden_path "module OtherSchema.VCurrent exposing []\n" in
+  check bool "renamed overlay cannot fall back to stale disk" true
+    (Result.is_error (resolve ~modules:[renamed] (source ())));
+  Sys.remove hidden_path;
+  check bool "missing private child is not silently omitted" true (Result.is_error (resolve (source ()))))
+
+let module_reference_compilation () = with_project (fun root write ->
+  let schema = {|module NotesSchema.VCurrent exposing [Note]
+import Tesl.Prelude exposing [String]
+import NotesSchema.VCurrent.Hidden
+entity Note table "notes" primaryKey id { id: String }
+entity Secret table "root_secrets" primaryKey id { id: String }
+|} in
+  ignore (write "schema/notes/v-current.tesl" schema);
+  let child cycle = "module NotesSchema.VCurrent.Hidden exposing []\nimport Tesl.Prelude exposing [String]\n"
+    ^ (if cycle then "import NotesSchema.VCurrent\n" else "")
+    ^ "entity Secret table \"hidden_notes\" primaryKey id { id: String }\n" in
+  let source = {|module App exposing [Db]
+import Tesl.Prelude exposing [Int, String]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.DB exposing [dbRead, dbWrite]
+import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
+import NotesSchema.VCurrent exposing [Note]
+database Db = Database {
+  schema: NotesSchema.VCurrent
+  migrations: NotesSchema.Migrate
+  backend: Postgres (PostgresConfig {
+    namespace: "owned_notes"
+    dbName: "unused"
+    user: "unused"
+    password: "unused"
+    connection: TcpConnection { host: "localhost", port: 5432 }
+  })
+}
+record Secret { value: Int }
+fn localValue() -> Int =
+  let local = Secret { value: 42 }
+  local.value
+fn readNote() -> String requires [dbRead Note] =
+  case selectOne n from Note where n.id == "public" of
+    Something n -> n.id
+    Nothing -> "missing"
+test "schema ownership preserves local types and ordinary entity queries" requires [dbRead Note, dbWrite Note] {
+  expect localValue() == 42
+  let _ = insert Note { id: "public" }
+  expect readNote() == "public"
+}
+|} in
+  let entry = write "app.tesl" source in
+  List.iter (fun cycle ->
+    ignore (write "schema/notes/v-current/hidden.tesl" (child cycle));
+    let diags = Compile.check_file entry in
+    if diags <> [] then failf "module-reference check failed: %s" (Compile.diagnostics_to_json diags);
+    match Compile.compile_go_file entry with
+    | Compile.GoFailure diagnostics -> failf "module-reference emission failed: %s" (Compile.diagnostics_to_json diagnostics)
+    | Compile.GoSuccess artifacts ->
+      let output = Filename.concat root (if cycle then "cyclic" else "acyclic") in
+      List.iter (fun (a : Emit_go.artifact) ->
+        let path = Filename.concat output a.path in mkdir (Filename.dirname path);
+        Out_channel.with_open_bin path (fun channel -> output_string channel a.contents)) artifacts;
+      let metadata = Filename.concat output "internal/teslmodapp/ownership_test.go" in
+      Out_channel.with_open_text metadata (fun channel -> output_string channel {|package teslmodapp
+import "testing"
+func TestPrivateSchemaCatalog(t *testing.T) {
+  if DbDatabase.Config.Schema != "owned_notes" { t.Fatal("physical namespace was lost") }
+  got := map[string]int{}
+  for _, table := range DbDatabase.Tables { got[table.Name]++ }
+  if len(got)!=3 || got["notes"]!=1 || got["root_secrets"]!=1 || got["hidden_notes"]!=1 {
+    t.Fatalf("private/duplicate schema membership was lost: %v", got)
+  }
+}
+|});
+      let log = Filename.concat output "go-test.log" in
+      let status = Sys.command (Printf.sprintf "cd %s && timeout 90s go test -timeout=60s -count=1 ./... > %s 2>&1"
+        (Filename.quote output) (Filename.quote log)) in
+      if status <> 0 then failf "module-reference runtime failed: %s" (In_channel.with_open_text log In_channel.input_all)
+  ) [false; true];
+  List.iter (fun body ->
+    let entry = write "app.tesl" (source ^ body) in
+    let diags = Compile.check_file entry in
+    check bool "ownership does not expose private terms, types or a module value" true
+      (List.exists (fun (d : Compile.diagnostic) -> d.severity = "error") diags)) [
+    "\nfn hidden() -> NotesSchema.VCurrent.Secret = NotesSchema.VCurrent.Secret { id: \"bad\" }\n";
+    "\nfn hidden() -> NotesSchema.VCurrent.Hidden.Secret = NotesSchema.VCurrent.Hidden.Secret { id: \"bad\" }\n";
+    "\nfn moduleValue() -> Int = NotesSchema.VCurrent\n";
+  ])
+
 let source_rewrite () =
   let rewrite before after source =
     match Migration_source.rewrite_version ~family:"NotesSchema" ~before ~after source with
@@ -553,6 +697,8 @@ let () = run "migration-imports" ["source layout", [
   test_case "database-selected schema closure excludes application code" `Quick schema_contents;
   test_case "migration modules exclude application code and entity ownership" `Quick migration_contents;
   test_case "schema families have one application connection owner" `Quick schema_ownership;
+  test_case "module references select private cyclic ownership with overlays" `Quick module_reference_binding;
+  test_case "module references compile private tables without exposing names" `Quick module_reference_compilation;
   test_case "frozen-copy rewrite preserves source bytes and literal text" `Quick source_rewrite;
   test_case "freeze previews the whole closure and preserves existing history" `Quick freeze_closure;
   test_case "freeze rejects content, missing sources and path escapes" `Quick freeze_boundaries;

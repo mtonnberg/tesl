@@ -2158,6 +2158,63 @@ The `backend` is either `Postgres (PostgresConfig { ... })` or `Memory`. The `po
 
 The optional `poolSize` is the connection-pool size: the maximum number of simultaneously open PostgreSQL connections (default 10). It is an `Int` field, so a literal or `envInt "VAR" default` both work — e.g. `poolSize: envInt "PG_POOL_SIZE" 20`. When every pooled connection is busy, a request waits (bounded, 10s by default, `TESL_PG_POOL_LEASE_TIMEOUT_MS` overrides) for a freed connection instead of failing immediately; if the wait times out the HTTP layer answers `503 Service Unavailable`.
 
+#### Schema module references
+**Accepted design; implementation in progress.**
+
+The versioned form selects ownership through a schema module:
+
+```tesl
+import NotesSchema.VCurrent exposing [Note]
+
+database NoteDatabase = Database {
+  schema: NotesSchema.VCurrent
+  migrations: NotesSchema.Migrate
+  backend: Postgres (PostgresConfig {
+    namespace: "notes_app"
+    dbName: env "POSTGRES_DB"
+    user: env "POSTGRES_USER"
+    password: env "POSTGRES_PASSWORD"
+    connection: TcpConnection { host: "localhost", port: 5432 }
+  })
+}
+```
+
+`ModuleRef` is a contextual elaboration category, not a value type or constructor.
+In `Database.schema`, a nullary qualified name is a module reference exactly when
+it names a directly imported `FamilySchema.VCurrent` root. The import may expose
+no declarations. A frozen `V<n>`, child module, string, function result, local
+constructor or local variable cannot stand in for that root in the versioned form.
+In `Database.migrations`, the name must be that same family's `FamilySchema.Migrate`
+prefix. It denotes the conventional migration directory, not an ordinary module
+import; an empty history need not already have a directory. Neither reference
+introduces a runtime expression or makes a private declaration visible to application
+code. Ordinary expression and type positions retain their existing name-resolution
+rules and cannot use a module as a value.
+
+Let `closure(S)` be the finite local import graph reachable from schema root `S`,
+including `S`. Its non-stdlib members must belong to `S` or its children and satisfy
+the schema-content boundary. Then `members(S)` is every entity declared in that
+closure, keyed by its declaring module and entity name, independently of exports.
+Cycles and repeated imports contribute an entity once. Two distinct members cannot
+name the same physical table. `Database { schema: S, migrations: M, backend: B }`
+owns exactly `members(S)`; supplying `entities:` as well is an error. A module root
+with no entities is valid. Ownership is checked over the whole application graph,
+so another database cannot own any part of the same family.
+
+Connection configuration remains in the application. `PostgresConfig.namespace`
+is the physical PostgreSQL schema name, required as a nonempty static string for
+the module-reference form. It is independent of the Tesl module and database
+declaration names; the compiler does not guess a physical namespace from either.
+Memory has no physical namespace. During source transition the existing string
+`Database.schema` plus explicit `entities:` form retains its meaning and cannot
+also specify `migrations:` or `PostgresConfig.namespace`.
+
+Elaboration produces an ownership binding and connection description separately
+from ordinary source visibility. Generated table metadata may name private schema
+entities, but that does not import their constructors or helpers into application
+scope. Version history, migration execution and readiness are additional phase-1
+checks; accepting an ownership binding alone does not establish them.
+
 ### 11.10 Capture declarations
 **Accepted design, Implemented.**
 

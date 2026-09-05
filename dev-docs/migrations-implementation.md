@@ -66,6 +66,12 @@ that these scenarios currently work.
   build is retained; a terminated build leaves an invalid remnant that is rebuilt.
   Contract waits for catalog verification and records terminal before dropping,
   including coordinator death between those steps and a surviving stale worker.
+  Creation, executor-admission and removal versions are distinct: a V9 worker can
+  finish a V8 index while V8 retires, and a V9 removal waits for V9's plan switch.
+  The model and actual PostgreSQL case cover those boundaries. The control fixture
+  persists `terminal_version`; recovery refuses a changed removal target before
+  updating any job or dropping an object. These cases caught the model incorrectly
+  using the creating version for both the worker fence and the contract target.
   These remain protocol fixtures, not the production index executor. Nightly
   model traces run eight times the per-PR trace length with recorded seeds.
   A deterministic first-scan pause also lets an old writer insert a duplicate;
@@ -76,7 +82,7 @@ that these scenarios currently work.
   model guards/operations, actual test declarations, named test events and configured
   PostgreSQL lanes. It rejects unmapped operations, untested transitions, tests with
   no invariant, duplicate definitions and incorrectly labelled direct database tests.
-  It currently covers 49 invariants, 55 transitions and 73 top-level test declarations.
+  It currently covers 52 invariants, 57 transitions and 80 top-level test declarations.
   This is explicitly a kernel inventory with uncovered scopes listed in the generated
   report; the complete normative inventory and production path mapping are still pending.
 - The control bootstrap now has one executable SQL fixture under the harness's
@@ -84,6 +90,16 @@ that these scenarios currently work.
   marked region of the normative roadmap, refusing ambiguous boundaries and
   preserving surrounding statements. Other normative templates still need this
   fixture/execution correspondence.
+- Registry fixtures run in separate databases and compare the normative CREATE
+  against an independently specified temporary catalog. They refuse wrong owners,
+  writable table/column/sequence grants, changed constraints or identity sequences,
+  unlogged storage, inheritance and rewrite rules, while keeping the caller's
+  transaction usable. Ten family allocations are observed waiting at the bootstrap
+  lock before release; their namespaces and UUIDs remain distinct. Rollback consumes
+  a namespace without publishing it, and exhaustion fails before a reserved key can
+  be registered. These cases pass on PostgreSQL 14–18. This is a test implementation
+  of the registry hook; the production installer and full role-membership audit
+  remain pending.
 - Catalog-expression fixtures compare CHECKs, defaults, generated columns, index
   expressions and predicates using one server and matching temporary column types
   and collations. Equal deparsed text still requires matching column collation.

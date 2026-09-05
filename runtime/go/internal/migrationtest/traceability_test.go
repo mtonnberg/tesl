@@ -134,7 +134,7 @@ func readProtocolSource(files map[string]string) (protocolSource, error) {
 				}
 				ast.Inspect(fn.Body, func(node ast.Node) bool {
 					if call, ok := node.(*ast.CallExpr); ok {
-						if fun, ok := call.Fun.(*ast.Ident); ok && (fun.Name == "newDatabaseFixture" || fun.Name == "newUninstalledDatabaseFixture") {
+						if fun, ok := call.Fun.(*ast.Ident); ok && (fun.Name == "newDatabaseFixture" || fun.Name == "newUninstalledDatabaseFixture" || fun.Name == "newRegistryDatabase") {
 							test.UsesFixture = true
 						}
 					}

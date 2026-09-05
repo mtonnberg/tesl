@@ -221,7 +221,7 @@ func (m *Model) apply(op Op) error {
 		m.Writers = map[string]int{}
 		m.RetiringThrough = 0
 		for name, job := range m.Indexes {
-			job.Holders = map[string]uint64{}
+			job.Holders = map[string]IndexHolder{}
 			job.Active = ""
 			m.Indexes[name] = job
 		}

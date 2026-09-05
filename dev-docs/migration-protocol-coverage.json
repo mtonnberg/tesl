@@ -168,7 +168,10 @@
       "tests": [
         "contract_fixture_test.go#TestPostgresContractConstraintComparatorUsesServerSemantics",
         "contract_fixture_test.go#TestPostgresContractFixtureResumesAfterEveryStep",
+        "contract_fixture_test.go#TestPostgresContractRefusesChangedIndexRemovalIdentity",
+        "index_model_test.go#TestIndexRemovalUsesContractVersionInsteadOfCreatingVersion",
         "index_model_test.go#TestTerminalBeforePlanSwitchDoesNotAuthorizeEarlyDrop",
+        "index_postgres_test.go#TestPostgresSuccessorIndexWorkerSurvivesCreatingVersionRetirement",
         "model_test.go#TestEpochClosesBeforeTransformAndContractPrecedesNextExpand",
         "read_ordering_test.go#TestPostgresTemplateCoordinatorDeathAtRetirementCommit",
         "read_ordering_test.go#TestPostgresTemplateQueryFirstAdmissionAcrossRetirement"
@@ -178,34 +181,42 @@
       "id": "INV-DDL-JOB",
       "statement": "An index statement and its final catalog verification hold the same backend's shared job lock and admitted version fence.",
       "model_paths": [
-        "model_index.go:114",
-        "model_index.go:126",
-        "model_index.go:43",
-        "model_index.go:74",
-        "model_index.go:79"
+        "model_index.go:124",
+        "model_index.go:139",
+        "model_index.go:49",
+        "model_index.go:80",
+        "model_index.go:85"
       ],
       "tests": [
         "index_model_test.go#TestContractWaitsForSurvivingIndexWorkerAndCannotResurrectJob",
         "index_model_test.go#TestExpiredIndexLeaseCannotDestroyAnActiveOrValidBuild",
         "index_model_test.go#TestIndexCatalogIdentityAndWorkerFencesAreIndependentChecks",
         "index_model_test.go#TestIndexRecoveryAtEveryBuildBoundary",
+        "index_model_test.go#TestSuccessorIndexWorkerUsesItsOwnAdmissionVersion",
         "index_postgres_test.go#TestPostgresActiveIndexBuildSurvivesLeaseTakeover",
-        "index_postgres_test.go#TestPostgresContractWaitsForIndexVerificationAndPersistsTerminal"
+        "index_postgres_test.go#TestPostgresContractWaitsForIndexVerificationAndPersistsTerminal",
+        "index_postgres_test.go#TestPostgresSuccessorIndexWorkerSurvivesCreatingVersionRetirement"
       ]
     },
     {
       "id": "INV-DDL-TERMINAL",
-      "statement": "Contract drains shared job locks and records terminal before destructive DDL; a stale worker cannot resurrect the job.",
+      "statement": "Contract drains shared job locks and records terminal with its immutable removal version before destructive DDL; DROP waits for that version's compatibility switch, and a stale worker cannot resurrect the job.",
       "model_paths": [
-        "model_index.go:117",
-        "model_index.go:87",
-        "model_index.go:92"
+        "model_index.go:102",
+        "model_index.go:127",
+        "model_index.go:130",
+        "model_index.go:93",
+        "model_index.go:96"
       ],
       "tests": [
         "contract_fixture_test.go#TestPostgresContractFixtureResumesAfterEveryStep",
+        "contract_fixture_test.go#TestPostgresContractRefusesChangedIndexRemovalIdentity",
         "index_model_test.go#TestContractWaitsForSurvivingIndexWorkerAndCannotResurrectJob",
+        "index_model_test.go#TestIndexRemovalUsesContractVersionInsteadOfCreatingVersion",
+        "index_model_test.go#TestSuccessorIndexWorkerUsesItsOwnAdmissionVersion",
         "index_model_test.go#TestTerminalBeforePlanSwitchDoesNotAuthorizeEarlyDrop",
-        "index_postgres_test.go#TestPostgresContractWaitsForIndexVerificationAndPersistsTerminal"
+        "index_postgres_test.go#TestPostgresContractWaitsForIndexVerificationAndPersistsTerminal",
+        "index_postgres_test.go#TestPostgresSuccessorIndexWorkerSurvivesCreatingVersionRetirement"
       ]
     },
     {
@@ -246,13 +257,16 @@
       "tests": [
         "cluster_test.go#TestOwnedPrimaryCrashPreservesOnlyCommittedRetirement",
         "index_model_test.go#TestIndexCatalogIdentityAndWorkerFencesAreIndependentChecks",
+        "index_model_test.go#TestSuccessorIndexWorkerUsesItsOwnAdmissionVersion",
+        "index_postgres_test.go#TestPostgresSuccessorIndexWorkerSurvivesCreatingVersionRetirement",
         "model_test.go#TestAdversarialTraces",
         "model_test.go#TestApplicationTargetWriteLocksABIBeforeBackfillStarts",
         "model_test.go#TestRetirementExcludesEveryOldWriter",
         "pooler_test.go#TestPostgresPoolerAdmissionTransactions",
         "postgres_test.go#TestPostgresTemplateFenceOrdersPausedWriterAndRetirement",
         "postgres_test.go#TestPostgresTemplateRefusesMissingFloorPrerequisites",
-        "read_ordering_test.go#TestPostgresTemplateCoordinatorDeathAtRetirementCommit"
+        "read_ordering_test.go#TestPostgresTemplateCoordinatorDeathAtRetirementCommit",
+        "registry_test.go#TestPostgresConcurrentFamiliesReceiveDistinctFenceNamespaces"
       ]
     },
     {
@@ -346,9 +360,9 @@
       "id": "INV-INDEX-BUILD",
       "statement": "The model distinguishes absent, active-invalid, abandoned-invalid and valid index catalog states.",
       "model_paths": [
-        "model_index.go:108",
-        "model_index.go:48",
-        "model_index.go:56"
+        "model_index.go:118",
+        "model_index.go:54",
+        "model_index.go:62"
       ],
       "tests": [
         "index_model_test.go#TestIndexRecoveryAtEveryBuildBoundary"
@@ -358,21 +372,22 @@
       "id": "INV-INDEX-IDENTITY",
       "statement": "An index job retains its declared semantic identity; a same-named different catalog object is not adopted.",
       "model_paths": [
-        "model_index.go:105",
-        "model_index.go:111",
-        "model_index.go:32",
-        "model_index.go:36"
+        "model_index.go:115",
+        "model_index.go:121",
+        "model_index.go:38",
+        "model_index.go:42"
       ],
       "tests": [
-        "index_model_test.go#TestIndexCatalogIdentityAndWorkerFencesAreIndependentChecks"
+        "index_model_test.go#TestIndexCatalogIdentityAndWorkerFencesAreIndependentChecks",
+        "index_model_test.go#TestIndexRemovalUsesContractVersionInsteadOfCreatingVersion"
       ]
     },
     {
       "id": "INV-INDEX-READY",
       "statement": "Index readiness requires the exact expected valid catalog object, not a worker's recorded intention.",
       "model_paths": [
-        "model_index.go:120",
-        "model_index.go:69"
+        "model_index.go:133",
+        "model_index.go:75"
       ],
       "tests": [
         "index_model_test.go#TestContractWaitsForSurvivingIndexWorkerAndCannotResurrectJob",
@@ -387,7 +402,7 @@
       "id": "INV-INDEX-RECOVERY",
       "statement": "Recovery drops only an inactive invalid remnant and preserves an active or successfully completed build.",
       "model_paths": [
-        "model_index.go:64"
+        "model_index.go:70"
       ],
       "tests": [
         "index_model_test.go#TestExpiredIndexLeaseCannotDestroyAnActiveOrValidBuild",
@@ -490,7 +505,8 @@
       "model_paths": null,
       "tests": [
         "lifecycle_test.go#TestPostgresTemplateAdmissionIgnoresTemporaryLookalikes",
-        "lifecycle_test.go#TestPostgresTemplateControlOwnerIsTheOnlyDirectWriter"
+        "lifecycle_test.go#TestPostgresTemplateControlOwnerIsTheOnlyDirectWriter",
+        "registry_test.go#TestPostgresRegistryLookalikesAndWritableGrantsAreRefused"
       ]
     },
     {
@@ -538,6 +554,31 @@
         "pooler_test.go#TestPostgresPoolerAdmissionTransactions",
         "postgres_test.go#TestPostgresTemplateFenceOrdersPausedWriterAndRetirement",
         "read_ordering_test.go#TestPostgresTemplateQueryFirstAdmissionAcrossRetirement"
+      ]
+    },
+    {
+      "id": "INV-REGISTRY-ALLOCATION",
+      "statement": "Concurrent schema families allocate distinct bounded fence namespaces and UUIDs; aborted or exhausted allocations never replace a committed identity or use a reserved key.",
+      "model_paths": null,
+      "tests": [
+        "registry_test.go#TestPostgresConcurrentFamiliesReceiveDistinctFenceNamespaces",
+        "registry_test.go#TestPostgresRegistryAllocationRollbackAndExhaustion"
+      ]
+    },
+    {
+      "id": "INV-REGISTRY-OWNER",
+      "statement": "The global fence registry and its identity sequence have the trusted NOLOGIN control owner and no non-owner mutation grants.",
+      "model_paths": null,
+      "tests": [
+        "registry_test.go#TestPostgresRegistryLookalikesAndWritableGrantsAreRefused"
+      ]
+    },
+    {
+      "id": "INV-REGISTRY-SHAPE",
+      "statement": "A pre-existing registry matches the independent permanent-table, constraint, index and sequence catalog; lookalikes, inheritance, rewrite rules and altered definitions are refused without aborting caller work.",
+      "model_paths": null,
+      "tests": [
+        "registry_test.go#TestPostgresRegistryLookalikesAndWritableGrantsAreRefused"
       ]
     },
     {
@@ -664,7 +705,8 @@
       ],
       "tests": [
         "lifecycle_test.go#TestPostgresInitialHistoryRejectsReservedVersionsAndMissingIdentity",
-        "model_test.go#TestModelChecksCompleteVersionEvidenceAndImmutableClassification"
+        "model_test.go#TestModelChecksCompleteVersionEvidenceAndImmutableClassification",
+        "registry_test.go#TestPostgresRegistryAllocationRollbackAndExhaustion"
       ]
     },
     {
@@ -836,10 +878,13 @@
         "cluster_test.go#TestOwnedPrimaryCrashPreservesOnlyCommittedRetirement",
         "contract_fixture_test.go#TestPostgresContractConstraintComparatorUsesServerSemantics",
         "contract_fixture_test.go#TestPostgresContractFixtureResumesAfterEveryStep",
+        "contract_fixture_test.go#TestPostgresContractRefusesChangedIndexRemovalIdentity",
         "differential_test.go#TestPostgresTemplateAgainstReferenceTraces",
         "index_model_test.go#TestContractWaitsForSurvivingIndexWorkerAndCannotResurrectJob",
+        "index_model_test.go#TestIndexRemovalUsesContractVersionInsteadOfCreatingVersion",
         "index_model_test.go#TestTerminalBeforePlanSwitchDoesNotAuthorizeEarlyDrop",
         "index_postgres_test.go#TestPostgresContractWaitsForIndexVerificationAndPersistsTerminal",
+        "index_postgres_test.go#TestPostgresSuccessorIndexWorkerSurvivesCreatingVersionRetirement",
         "lifecycle_test.go#TestPostgresTemplateControlOwnerIsTheOnlyDirectWriter",
         "lifecycle_test.go#TestPostgresTemplateRejectsIllegalLifecycleEdges",
         "model_test.go#TestEpochClosesBeforeTransformAndContractPrecedesNextExpand",
@@ -859,8 +904,10 @@
         "contract_fixture_test.go#TestPostgresContractFixtureResumesAfterEveryStep",
         "index_model_test.go#TestContractWaitsForSurvivingIndexWorkerAndCannotResurrectJob",
         "index_model_test.go#TestIndexRecoveryAtEveryBuildBoundary",
+        "index_model_test.go#TestIndexRemovalUsesContractVersionInsteadOfCreatingVersion",
         "index_model_test.go#TestTerminalBeforePlanSwitchDoesNotAuthorizeEarlyDrop",
         "index_postgres_test.go#TestPostgresContractWaitsForIndexVerificationAndPersistsTerminal",
+        "index_postgres_test.go#TestPostgresSuccessorIndexWorkerSurvivesCreatingVersionRetirement",
         "model_test.go#TestABIChangeRefusedAfterFirstBatchOrProvisionalPass",
         "model_test.go#TestApplicationTargetWriteLocksABIBeforeBackfillStarts",
         "model_test.go#TestCrashAfterRestampBeforeFloorCommitIsResumable",
@@ -926,7 +973,7 @@
       "id": "TR-INDEX-BACKEND-DEATH",
       "statement": "Lose an index backend's locks and active statement.",
       "model_paths": [
-        "model_index.go:77"
+        "model_index.go:83"
       ],
       "tests": [
         "index_model_test.go#TestIndexRecoveryAtEveryBuildBoundary",
@@ -937,7 +984,7 @@
       "id": "TR-INDEX-CLEANUP",
       "statement": "Remove an inactive invalid remnant before rebuilding.",
       "model_paths": [
-        "model_index.go:62"
+        "model_index.go:68"
       ],
       "tests": [
         "index_model_test.go#TestExpiredIndexLeaseCannotDestroyAnActiveOrValidBuild",
@@ -948,41 +995,46 @@
     },
     {
       "id": "TR-INDEX-DROP",
-      "statement": "Drop a terminal job's physical index, idempotently.",
+      "statement": "Drop a terminal job's physical index idempotently after the removing contract version's compatibility switch.",
       "model_paths": [
-        "model_index.go:90"
+        "model_index.go:100"
       ],
       "tests": [
         "index_model_test.go#TestContractWaitsForSurvivingIndexWorkerAndCannotResurrectJob",
+        "index_model_test.go#TestIndexRemovalUsesContractVersionInsteadOfCreatingVersion",
         "index_model_test.go#TestTerminalBeforePlanSwitchDoesNotAuthorizeEarlyDrop",
-        "index_postgres_test.go#TestPostgresContractWaitsForIndexVerificationAndPersistsTerminal"
+        "index_postgres_test.go#TestPostgresContractWaitsForIndexVerificationAndPersistsTerminal",
+        "index_postgres_test.go#TestPostgresSuccessorIndexWorkerSurvivesCreatingVersionRetirement"
       ]
     },
     {
       "id": "TR-INDEX-ENTER",
       "statement": "Acquire the shared DDL-job lock and recheck current ownership.",
       "model_paths": [
-        "model_index.go:41"
+        "model_index.go:47"
       ],
       "tests": [
-        "index_model_test.go#TestIndexCatalogIdentityAndWorkerFencesAreIndependentChecks"
+        "index_model_test.go#TestIndexCatalogIdentityAndWorkerFencesAreIndependentChecks",
+        "index_model_test.go#TestSuccessorIndexWorkerUsesItsOwnAdmissionVersion",
+        "index_postgres_test.go#TestPostgresSuccessorIndexWorkerSurvivesCreatingVersionRetirement"
       ]
     },
     {
       "id": "TR-INDEX-EXIT",
       "statement": "Release the shared job lock after statement completion and verification.",
       "model_paths": [
-        "model_index.go:72"
+        "model_index.go:78"
       ],
       "tests": [
-        "index_model_test.go#TestIndexRecoveryAtEveryBuildBoundary"
+        "index_model_test.go#TestIndexRecoveryAtEveryBuildBoundary",
+        "index_model_test.go#TestSuccessorIndexWorkerUsesItsOwnAdmissionVersion"
       ]
     },
     {
       "id": "TR-INDEX-FAILURE",
       "statement": "An active concurrent build fails and leaves an invalid remnant.",
       "model_paths": [
-        "model_index.go:52"
+        "model_index.go:58"
       ],
       "tests": [
         "index_model_test.go#TestIndexRecoveryAtEveryBuildBoundary",
@@ -993,7 +1045,7 @@
       "id": "TR-INDEX-PLAN",
       "statement": "Register an immutable index job identity.",
       "model_paths": [
-        "model_index.go:30"
+        "model_index.go:36"
       ],
       "tests": [
         "index_model_test.go#TestExpiredIndexLeaseCannotDestroyAnActiveOrValidBuild"
@@ -1003,46 +1055,54 @@
       "id": "TR-INDEX-START",
       "statement": "Start a concurrent build with the current scheduling token.",
       "model_paths": [
-        "model_index.go:46"
+        "model_index.go:52"
       ],
       "tests": [
         "index_model_test.go#TestExpiredIndexLeaseCannotDestroyAnActiveOrValidBuild",
         "index_postgres_test.go#TestPostgresActiveIndexBuildSurvivesLeaseTakeover",
-        "index_postgres_test.go#TestPostgresFailedUniqueBuildCanRejectWritesBeforeItIsValid"
+        "index_postgres_test.go#TestPostgresFailedUniqueBuildCanRejectWritesBeforeItIsValid",
+        "index_postgres_test.go#TestPostgresSuccessorIndexWorkerSurvivesCreatingVersionRetirement"
       ]
     },
     {
       "id": "TR-INDEX-SUCCESS",
       "statement": "The server completes a concurrent build, independently of lease expiry.",
       "model_paths": [
-        "model_index.go:52"
+        "model_index.go:58"
       ],
       "tests": [
         "index_model_test.go#TestExpiredIndexLeaseCannotDestroyAnActiveOrValidBuild",
-        "index_postgres_test.go#TestPostgresActiveIndexBuildSurvivesLeaseTakeover"
+        "index_postgres_test.go#TestPostgresActiveIndexBuildSurvivesLeaseTakeover",
+        "index_postgres_test.go#TestPostgresSuccessorIndexWorkerSurvivesCreatingVersionRetirement"
       ]
     },
     {
       "id": "TR-INDEX-TERMINAL",
-      "statement": "Contract records terminal after all shared job holders drain.",
+      "statement": "Contract records terminal and its immutable removal version after all shared job holders drain.",
       "model_paths": [
-        "model_index.go:85"
+        "model_index.go:91"
       ],
       "tests": [
+        "contract_fixture_test.go#TestPostgresContractRefusesChangedIndexRemovalIdentity",
         "index_model_test.go#TestContractWaitsForSurvivingIndexWorkerAndCannotResurrectJob",
+        "index_model_test.go#TestIndexRemovalUsesContractVersionInsteadOfCreatingVersion",
+        "index_model_test.go#TestSuccessorIndexWorkerUsesItsOwnAdmissionVersion",
         "index_model_test.go#TestTerminalBeforePlanSwitchDoesNotAuthorizeEarlyDrop",
-        "index_postgres_test.go#TestPostgresContractWaitsForIndexVerificationAndPersistsTerminal"
+        "index_postgres_test.go#TestPostgresContractWaitsForIndexVerificationAndPersistsTerminal",
+        "index_postgres_test.go#TestPostgresSuccessorIndexWorkerSurvivesCreatingVersionRetirement"
       ]
     },
     {
       "id": "TR-INDEX-VERIFY",
       "statement": "Verify the actual catalog before publishing readiness.",
       "model_paths": [
-        "model_index.go:67"
+        "model_index.go:73"
       ],
       "tests": [
         "index_model_test.go#TestExpiredIndexLeaseCannotDestroyAnActiveOrValidBuild",
-        "index_model_test.go#TestIndexCatalogIdentityAndWorkerFencesAreIndependentChecks"
+        "index_model_test.go#TestIndexCatalogIdentityAndWorkerFencesAreIndependentChecks",
+        "index_model_test.go#TestSuccessorIndexWorkerUsesItsOwnAdmissionVersion",
+        "index_postgres_test.go#TestPostgresSuccessorIndexWorkerSurvivesCreatingVersionRetirement"
       ]
     },
     {
@@ -1140,6 +1200,23 @@
       "tests": [
         "blackbox_test.go#TestCompiledVersionsShareRowsAndPauseInsideTransactions",
         "read_ordering_test.go#TestPostgresTemplateQueryFirstAdmissionAcrossRetirement"
+      ]
+    },
+    {
+      "id": "TR-REGISTRY-ALLOCATE",
+      "statement": "Allocate a unique namespace and logical database UUID under the database-wide bootstrap lock, preserving committed identities across failures.",
+      "model_paths": null,
+      "tests": [
+        "registry_test.go#TestPostgresConcurrentFamiliesReceiveDistinctFenceNamespaces",
+        "registry_test.go#TestPostgresRegistryAllocationRollbackAndExhaustion"
+      ]
+    },
+    {
+      "id": "TR-REGISTRY-VERIFY",
+      "statement": "Verify registry ownership, exact catalog shape, identity sequence and non-owner grants in a rollback-only comparison savepoint.",
+      "model_paths": null,
+      "tests": [
+        "registry_test.go#TestPostgresRegistryLookalikesAndWritableGrantsAreRefused"
       ]
     },
     {
@@ -1255,6 +1332,8 @@
         "contract_fixture_test.go#TestPostgresContractFixtureResumesAfterEveryStep",
         "differential_test.go#TestPostgresTemplateAgainstReferenceTraces",
         "index_model_test.go#TestIndexCatalogIdentityAndWorkerFencesAreIndependentChecks",
+        "index_model_test.go#TestSuccessorIndexWorkerUsesItsOwnAdmissionVersion",
+        "index_postgres_test.go#TestPostgresSuccessorIndexWorkerSurvivesCreatingVersionRetirement",
         "lifecycle_test.go#TestPostgresTemplateControlOwnerIsTheOnlyDirectWriter",
         "model_test.go#TestRetirementExcludesEveryOldWriter",
         "pooler_test.go#TestPostgresPoolerAdmissionTransactions",
@@ -1598,7 +1677,7 @@
     {
       "name": "TestPostgresContractFixtureResumesAfterEveryStep",
       "file": "contract_fixture_test.go",
-      "line": 373,
+      "line": 389,
       "layer": "postgres",
       "invariants": [
         "INV-CONTRACT",
@@ -1622,7 +1701,7 @@
     {
       "name": "TestPostgresContractConstraintComparatorUsesServerSemantics",
       "file": "contract_fixture_test.go",
-      "line": 415,
+      "line": 431,
       "layer": "postgres",
       "invariants": [
         "INV-CONTRACT",
@@ -1631,6 +1710,21 @@
       "transitions": [
         "TR-CONTRACT",
         "TR-SQL-DOCUMENT"
+      ],
+      "named_failpoints": null
+    },
+    {
+      "name": "TestPostgresContractRefusesChangedIndexRemovalIdentity",
+      "file": "contract_fixture_test.go",
+      "line": 451,
+      "layer": "postgres",
+      "invariants": [
+        "INV-CONTRACT",
+        "INV-DDL-TERMINAL"
+      ],
+      "transitions": [
+        "TR-CONTRACT",
+        "TR-INDEX-TERMINAL"
       ],
       "named_failpoints": null
     },
@@ -1789,9 +1883,46 @@
       "named_failpoints": null
     },
     {
-      "name": "TestIndexRecoveryAtEveryBuildBoundary",
+      "name": "TestIndexRemovalUsesContractVersionInsteadOfCreatingVersion",
       "file": "index_model_test.go",
       "line": 82,
+      "layer": "model",
+      "invariants": [
+        "INV-CONTRACT",
+        "INV-DDL-TERMINAL",
+        "INV-INDEX-IDENTITY"
+      ],
+      "transitions": [
+        "TR-CONTRACT",
+        "TR-CRASH",
+        "TR-INDEX-DROP",
+        "TR-INDEX-TERMINAL"
+      ],
+      "named_failpoints": null
+    },
+    {
+      "name": "TestSuccessorIndexWorkerUsesItsOwnAdmissionVersion",
+      "file": "index_model_test.go",
+      "line": 114,
+      "layer": "model",
+      "invariants": [
+        "INV-DDL-JOB",
+        "INV-DDL-TERMINAL",
+        "INV-FENCE"
+      ],
+      "transitions": [
+        "TR-INDEX-ENTER",
+        "TR-INDEX-EXIT",
+        "TR-INDEX-TERMINAL",
+        "TR-INDEX-VERIFY",
+        "TR-RETIRE"
+      ],
+      "named_failpoints": null
+    },
+    {
+      "name": "TestIndexRecoveryAtEveryBuildBoundary",
+      "file": "index_model_test.go",
+      "line": 144,
       "layer": "model",
       "invariants": [
         "INV-DDL-JOB",
@@ -1811,7 +1942,7 @@
     {
       "name": "TestIndexCatalogIdentityAndWorkerFencesAreIndependentChecks",
       "file": "index_model_test.go",
-      "line": 125,
+      "line": 187,
       "layer": "model",
       "invariants": [
         "INV-DDL-JOB",
@@ -1829,7 +1960,7 @@
     {
       "name": "TestPostgresActiveIndexBuildSurvivesLeaseTakeover",
       "file": "index_postgres_test.go",
-      "line": 62,
+      "line": 78,
       "layer": "postgres",
       "invariants": [
         "INV-DDL-JOB",
@@ -1848,7 +1979,7 @@
     {
       "name": "TestPostgresContractWaitsForIndexVerificationAndPersistsTerminal",
       "file": "index_postgres_test.go",
-      "line": 160,
+      "line": 176,
       "layer": "postgres",
       "invariants": [
         "INV-DDL-JOB",
@@ -1863,9 +1994,33 @@
       "named_failpoints": null
     },
     {
+      "name": "TestPostgresSuccessorIndexWorkerSurvivesCreatingVersionRetirement",
+      "file": "index_postgres_test.go",
+      "line": 250,
+      "layer": "postgres",
+      "invariants": [
+        "INV-CONTRACT",
+        "INV-DDL-JOB",
+        "INV-DDL-TERMINAL",
+        "INV-FENCE"
+      ],
+      "transitions": [
+        "TR-CONTRACT",
+        "TR-CRASH",
+        "TR-INDEX-DROP",
+        "TR-INDEX-ENTER",
+        "TR-INDEX-START",
+        "TR-INDEX-SUCCESS",
+        "TR-INDEX-TERMINAL",
+        "TR-INDEX-VERIFY",
+        "TR-RETIRE"
+      ],
+      "named_failpoints": null
+    },
+    {
       "name": "TestPostgresFailedUniqueBuildCanRejectWritesBeforeItIsValid",
       "file": "index_postgres_test.go",
-      "line": 231,
+      "line": 336,
       "layer": "postgres",
       "invariants": [
         "INV-INDEX-READY",
@@ -2428,6 +2583,49 @@
         "TR-CONTRACT",
         "TR-CRASH",
         "TR-RETIRE"
+      ],
+      "named_failpoints": null
+    },
+    {
+      "name": "TestPostgresRegistryLookalikesAndWritableGrantsAreRefused",
+      "file": "registry_test.go",
+      "line": 193,
+      "layer": "postgres",
+      "invariants": [
+        "INV-PRIVILEGE",
+        "INV-REGISTRY-OWNER",
+        "INV-REGISTRY-SHAPE"
+      ],
+      "transitions": [
+        "TR-REGISTRY-VERIFY"
+      ],
+      "named_failpoints": null
+    },
+    {
+      "name": "TestPostgresRegistryAllocationRollbackAndExhaustion",
+      "file": "registry_test.go",
+      "line": 257,
+      "layer": "postgres",
+      "invariants": [
+        "INV-REGISTRY-ALLOCATION",
+        "INV-VERSION"
+      ],
+      "transitions": [
+        "TR-REGISTRY-ALLOCATE"
+      ],
+      "named_failpoints": null
+    },
+    {
+      "name": "TestPostgresConcurrentFamiliesReceiveDistinctFenceNamespaces",
+      "file": "registry_test.go",
+      "line": 296,
+      "layer": "postgres",
+      "invariants": [
+        "INV-FENCE",
+        "INV-REGISTRY-ALLOCATION"
+      ],
+      "transitions": [
+        "TR-REGISTRY-ALLOCATE"
       ],
       "named_failpoints": null
     },

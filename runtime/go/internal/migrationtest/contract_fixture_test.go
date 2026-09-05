@@ -189,7 +189,14 @@ func (h *contractHarness) hook(t *testing.T, name string) error {
 			}
 			h.heldJobs = true
 		}
-		_, err := h.coordinator.Exec(f.ctx, "update "+f.schema+".tesl_schema_index set state='terminal'")
+		var valid bool
+		if err := h.coordinator.QueryRow(f.ctx, "select count(*)=2 and bool_and(terminal_version is null or terminal_version=8) from "+f.schema+".tesl_schema_index where name in ('notes_authorid_idx','notes_tesl_v_g4_idx')").Scan(&valid); err != nil {
+			return err
+		}
+		if !valid {
+			return fmt.Errorf("contract index jobs are missing or have a different removal version")
+		}
+		_, err := h.coordinator.Exec(f.ctx, "update "+f.schema+".tesl_schema_index set state='terminal',terminal_version=8 where name in ('notes_authorid_idx','notes_tesl_v_g4_idx')")
 		return err
 	case "wait-plan-switch":
 		var pending int
@@ -290,6 +297,15 @@ func (h *contractHarness) assertState(t *testing.T) {
 	}
 	if (oldColumns != 2 || trigger != 1) && compat < 8 {
 		t.Fatal("destructive DDL preceded the plan switch")
+	}
+	var prematureDrop bool
+	if err := h.f.conn.QueryRow(h.f.ctx, `select exists(select 1 from `+h.f.schema+`.tesl_schema_index
+		where name in ('notes_authorid_idx','notes_tesl_v_g4_idx') and to_regclass($1||'.'||name) is null
+		and (state<>'terminal' or terminal_version is distinct from 8 or terminal_version>$2))`, h.f.schema, compat).Scan(&prematureDrop); err != nil {
+		t.Fatal(err)
+	}
+	if prematureDrop {
+		t.Fatal("index drop preceded its exact terminal target and plan switch")
 	}
 	for _, id := range []string{"1", "2"} {
 		var generation int
@@ -428,5 +444,35 @@ func TestPostgresContractConstraintComparatorUsesServerSemantics(t *testing.T) {
 	}
 	if err := h.hook(t, "unknown"); err == nil {
 		t.Fatal("unknown fixture hook silently skipped")
+	}
+}
+
+// INV-DDL-TERMINAL, INV-CONTRACT; TR-INDEX-TERMINAL, TR-CONTRACT.
+func TestPostgresContractRefusesChangedIndexRemovalIdentity(t *testing.T) {
+	h := newContractHarness(t)
+	for _, step := range h.steps {
+		if step.Name == "terminal-jobs" {
+			break
+		}
+		if err := h.runStep(t, step); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h.f.exec(t, "update "+h.f.schema+".tesl_schema_index set state='terminal',terminal_version=9 where name='notes_authorid_idx'")
+	if err := h.hook(t, "terminal-jobs"); err == nil || !strings.Contains(err.Error(), "different removal version") {
+		t.Fatalf("adopted an index job belonging to a different contract: %v", err)
+	}
+	var unchanged bool
+	err := h.f.conn.QueryRow(h.f.ctx, `select
+		(select terminal_version=9 from `+h.f.schema+`.tesl_schema_index where name='notes_authorid_idx') and
+		(select state='ready' and terminal_version is null from `+h.f.schema+`.tesl_schema_index where name='notes_tesl_v_g4_idx') and
+		to_regclass($1||'.notes_authorid_idx') is not null and to_regclass($1||'.notes_tesl_v_g4_idx') is not null`, h.f.schema).Scan(&unchanged)
+	if err != nil || !unchanged {
+		t.Fatalf("refused contract changed its catalog or job evidence: %t %v", unchanged, err)
+	}
+	for _, assignment := range []string{"terminal_version=null", "terminal_version=0", "terminal_version=2147483647", "state='pending'"} {
+		if _, err := h.f.conn.Exec(h.f.ctx, "update "+h.f.schema+".tesl_schema_index set "+assignment+" where name='notes_authorid_idx'"); err == nil {
+			t.Fatalf("accepted inconsistent terminal evidence: %s", assignment)
+		}
 	}
 }

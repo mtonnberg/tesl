@@ -2078,6 +2078,8 @@ type config_context = { cc_block : string; cc_fields : config_field_info list }
 let config_field_type_label (k : Validation_structural.vkind) : string =
   match k with
   | Validation_structural.VStr         -> "String"
+  | Validation_structural.VSchemaRef   -> "ModuleRef (VCurrent) | String (legacy)"
+  | Validation_structural.VMigrationRef -> "ModuleRef (Migrate prefix)"
   | Validation_structural.VInt         -> "Int"
   | Validation_structural.VPort        -> "Int (port 1..65535)"
   | Validation_structural.VMountPath   -> "String (leading `/`, no trailing `/`)"
@@ -3463,6 +3465,13 @@ let alpha_rename_cycle_members ~(targets : Ast.module_form list)
       invariant = Option.map (fun (i : Ast.record_invariant) -> { i with proof_text = proof m i.proof_text;
         checker_name = Option.map (rename m) i.checker_name }) r.invariant }
     | Ast.DEntity e -> Ast.DEntity { e with name = rename m e.name; fields = List.map (field m) e.fields }
+    | Ast.DDatabase d ->
+      let merged = List.hd (List.sort String.compare member_names) in
+      let entity name = match split_qualified name with
+        | Some (owner, _) when List.mem owner member_names -> merged ^ "." ^ rename m name
+        | _ -> rename m name in
+      Ast.DDatabase { d with entities = List.map entity d.entities;
+        config_expr = Option.map (expr m) d.config_expr }
     | Ast.DFact f -> Ast.DFact { f with name = rename m f.name; params = List.map (binding m) f.params }
     | Ast.DCapture c -> Ast.DCapture { c with name = rename m c.name;
       binding = binding m c.binding; parser = rename m c.parser;
@@ -3541,11 +3550,18 @@ let local_dependency_modules entry_path (entry : Ast.module_form) =
     in
     let component_modules = List.map (List.filter_map parsed) components in
     let originals = List.concat component_modules in
+    let ownership_modules = List.map (fun original ->
+      match Migration_schema.lower_module ~modules:originals original with
+      | Ok lowered -> lowered
+      | Error errors ->
+        if !failed = None then failed := Some (String.concat "\n"
+          (List.map (fun (e : Validation_common.validation_error) -> e.message) errors));
+        original) originals in
     (* Rewrite consumers too: after an SCC import target is collapsed, an outside
        module must ask that package for the generated owner-specific export. *)
     let emit_modules = List.fold_left (fun targets members ->
       if List.length members > 1 then alpha_rename_cycle_members ~targets members
-      else targets) originals component_modules in
+      else targets) ownership_modules component_modules in
     let emitted_member (original : Ast.module_form) =
       List.find (fun (candidate : Ast.module_form) ->
         candidate.module_name = original.module_name) emit_modules

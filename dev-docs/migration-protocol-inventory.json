@@ -25,7 +25,7 @@
     "INV-CLOCK": "Explicit model time is monotone and bounded arithmetic cannot wrap a lease into validity.",
     "INV-CONTRACT": "Physical contract follows retirement and the compatibility switch, and an interrupted contract remains resumable.",
     "INV-DDL-JOB": "An index statement and its final catalog verification hold the same backend's shared job lock and admitted version fence.",
-    "INV-DDL-TERMINAL": "Contract drains shared job locks and records terminal before destructive DDL; a stale worker cannot resurrect the job.",
+    "INV-DDL-TERMINAL": "Contract drains shared job locks and records terminal with its immutable removal version before destructive DDL; DROP waits for that version's compatibility switch, and a stale worker cannot resurrect the job.",
     "INV-DECODER": "Queue claims remain inside the admitted decoder window and never claim a future payload version.",
     "INV-EXPAND": "Retirement's coordinator lock excludes a competing expansion.",
     "INV-FENCE": "Every excluded writer is drained before retirement and cannot resume writing after its version is retired.",
@@ -48,6 +48,9 @@
     "INV-QUARANTINE": "Quarantine records a current rejection after coordinator abort; changed, accepted or deleted rows cannot retain stale evidence.",
     "INV-QUEUE-FLOOR": "At floor commit no non-quarantined durable job remains below the new floor.",
     "INV-READ": "A strict read buffers its query result and delivers only after successful admission and transaction commit, retaining table locks until then.",
+    "INV-REGISTRY-ALLOCATION": "Concurrent schema families allocate distinct bounded fence namespaces and UUIDs; aborted or exhausted allocations never replace a committed identity or use a reserved key.",
+    "INV-REGISTRY-OWNER": "The global fence registry and its identity sequence have the trusted NOLOGIN control owner and no non-owner mutation grants.",
+    "INV-REGISTRY-SHAPE": "A pre-existing registry matches the independent permanent-table, constraint, index and sequence catalog; lookalikes, inheritance, rewrite rules and altered definitions are refused without aborting caller work.",
     "INV-REPAIR-EXECUTOR": "Serving repair chains may be compatible prefixes, but the final-pass executor carries every recorded amendment.",
     "INV-REPAIR-HISTORY": "Repair chains are positive, bounded, gap-free and append-only without changing the migration's own identity.",
     "INV-REPAIR-ORDER": "Recorded repairs run in sequence on a rejected row and stop at the first acceptance.",
@@ -183,7 +186,7 @@
       ]
     },
     "TR-INDEX-DROP": {
-      "statement": "Drop a terminal job's physical index, idempotently.",
+      "statement": "Drop a terminal job's physical index idempotently after the removing contract version's compatibility switch.",
       "operations": [
         "index-drop"
       ]
@@ -225,7 +228,7 @@
       ]
     },
     "TR-INDEX-TERMINAL": {
-      "statement": "Contract records terminal after all shared job holders drain.",
+      "statement": "Contract records terminal and its immutable removal version after all shared job holders drain.",
       "operations": [
         "index-terminal"
       ]
@@ -288,6 +291,14 @@
       "operations": [
         "reject"
       ]
+    },
+    "TR-REGISTRY-ALLOCATE": {
+      "statement": "Allocate a unique namespace and logical database UUID under the database-wide bootstrap lock, preserving committed identities across failures.",
+      "operations": []
+    },
+    "TR-REGISTRY-VERIFY": {
+      "statement": "Verify registry ownership, exact catalog shape, identity sequence and non-owner grants in a rollback-only comparison savepoint.",
+      "operations": []
     },
     "TR-RENEW": {
       "statement": "Renew the exact live queue attempt under version admission.",
@@ -408,6 +419,7 @@
     "quarantine_postgres_test.go": "postgres",
     "quarantine_test.go": "model",
     "read_ordering_test.go": "postgres",
+    "registry_test.go": "postgres",
     "repair_test.go": "model",
     "repair_test.go#TestPostgresRepairHistoryAgainstReferenceTraces": "postgres",
     "traceability_test.go": "harness"

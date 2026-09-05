@@ -68,7 +68,8 @@ limited disk bandwidth or cache space.
 | `Model` | Normative control SQL | Admission, expansion, retirement, contract and immutable repair history; actual persisted rows after successful and refused transitions |
 | `BootstrapModel` | Control SQL, worker-owned application objects and session boot locks | V8/V9 initial-target races, every partial-DDL crash boundary, expired boot observability lease, initial-history commit/rollback and idempotent recovery |
 | Catalog evidence and literal grammar | Server-parsed temporary expressions and live catalog mutations | CHECK/default/index equivalence, collation, isolated constraint/index properties, domain/cast/typmod refusals and nonunique-index write failures |
-| `Model.Indexes` | PostgreSQL catalog, progress views and locks | Live INVALID build versus abandoned remnant, lease takeover, validity verification, backend death and terminal-before-drop recovery |
+| Independent registry catalog | Bootstrap CREATE and ten contending schema families in an isolated database | Owner/ACL/shape refusals, distinct namespace and UUID allocation, rollback and exhaustion |
+| `Model.Indexes` | PostgreSQL catalog, progress views and locks | Live INVALID build versus abandoned remnant, lease takeover, validity verification, backend death, successor-version fences and the removal contract's persisted target |
 | Separate V7/V8/V9 processes | Emitted application SQL and runtime | Memory/PostgreSQL outcomes, shared additive rows, transaction ordering, imported entity ownership and absence of release failpoints |
 | Read ordering argument and finite TLA+ model | Interposed PostgreSQL retirement/DDL | Query-first admission, six query shapes, old/surviving readers, commit ordering and lock retention |
 | Committed lifecycle evidence | Backend death, immediate primary shutdown and WAL recovery | Atomic floor/lifecycle outcome, lock release and resumable coordinator work |

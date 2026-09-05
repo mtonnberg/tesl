@@ -123,7 +123,8 @@ let check_module (m : module_form) : validation_error list =
      minted with a lexer-illegal hyphen (`tesl-case-N`, `tesl-ignored-N`, …), so a
      user identifier can never collide with one by construction. *)
   @ (TProof @: check_forall_param_subjects decls)
-  @ (TCapability @: check_handler_capabilities ~cap_map ~imported_func_caps:(load_imported_func_caps m) decls)
+  @ (TCapability @: check_handler_capabilities ~cap_map ~imported_func_caps:(load_imported_func_caps m)
+       ~database_entities:(Migration_schema.database_entities m) decls)
   (* SEC005 (get_handlers_do_not_mutate): a GET route may not reach dbWrite /
      queueWrite / pubsub / emailCap.  A hard error in the build path — it was
      previously a linter warning, and the linter does not run during `--check`. *)

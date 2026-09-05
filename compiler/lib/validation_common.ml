@@ -1129,7 +1129,14 @@ let canonical_import_path (p : string) : string =
 let resolve_project_entity (modules : module_form list) (m : module_form) name =
   let declares (owner : module_form) name = List.exists (function
     | DEntity e -> e.name = name | _ -> false) owner.decls in
-  if declares m name then [m.module_name ^ "." ^ name]
+  let qualified = List.filter_map (fun (owner : module_form) ->
+    let prefix = owner.module_name ^ "." in
+    if String.starts_with ~prefix name then
+      let bare = String.sub name (String.length prefix) (String.length name - String.length prefix) in
+      if declares owner bare then Some name else None
+    else None) modules in
+  if qualified <> [] then List.sort_uniq String.compare qualified
+  else if declares m name then [m.module_name ^ "." ^ name]
   else List.concat_map (fun (imp : import_decl) ->
     match List.find_opt (fun (other : module_form) -> other.module_name = imp.module_name) modules with
     | None -> []

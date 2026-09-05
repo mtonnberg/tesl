@@ -27,7 +27,8 @@ commit;
 
 -- [hook terminal-jobs]
 -- Take every listed temporary object's DDL-job key EXCLUSIVELY in stable-id order.
--- Record terminal while holding those session locks; retain them through contracted.
+-- Record terminal with terminal_version = 8 while holding those session locks; retain them through contracted.
+-- A resumed job must retain this removal version, even if its index was created before V8.
 -- This drains active autocommit builds and prevents a stale worker from recreating
 -- an object after contract removes it.
 -- [sql begin-contract]

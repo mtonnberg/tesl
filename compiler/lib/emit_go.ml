@@ -10739,12 +10739,9 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
                      else Some (go_quote database.db_schema)) ]
     in
     let tables =
-      Hashtbl.to_seq_values types.entities
-      |> List.of_seq
+      List.filter_map (Hashtbl.find_opt types.entities) database.db_entities
       |> List.sort_uniq (fun left right -> compare
            (left.ent_owner, left.ent_tesl_name) (right.ent_owner, right.ent_tesl_name))
-      |> List.filter (fun (entity : entity_info) ->
-           List.mem entity.ent_tesl_name database.db_entities)
       |> List.map (fun (entity : entity_info) ->
            let columns =
              List.map (fun (column : column_info) ->
@@ -14645,6 +14642,21 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?(entity_bindings=[]) ?pro
         in
         register_imported_types ~exposed types dependency)
       m.imports;
+    (* Project ownership includes unexported schema entities. Register only their
+       fully qualified metadata keys: importing private bare names here would let
+       them replace an unrelated local application's same-named record. *)
+    Hashtbl.iter (fun _ (database : database_info) ->
+      List.iter (fun name ->
+        List.iter (fun dependency ->
+          let prefix = dependency.ex_module ^ "." in
+          if String.starts_with ~prefix name then
+            let bare = String.sub name (String.length prefix) (String.length name - String.length prefix) in
+            match Hashtbl.find_opt dependency.ex_types.entities bare,
+                  Hashtbl.find_opt dependency.ex_types.records bare with
+            | Some entity, Some record ->
+              Hashtbl.replace types.entities name entity;
+              Hashtbl.replace types.records name record
+            | _ -> ()) dependencies) database.db_entities) types.databases;
     (* Field types resolve only after every named type is registered, so records and
        ADTs may reference each other; a cycle would be an infinitely sized Go value
        and is rejected below. *)
@@ -15675,6 +15687,11 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?(entity_bindings=[]) ?pro
     (* An imported local module contributes its exported functions with the OWNING
        package attached, so every reference to them is qualified. *)
     let imported_packages = ref [] in
+    Hashtbl.iter (fun _ (database : database_info) ->
+      List.iter (fun name -> match Hashtbl.find_opt types.entities name with
+        | Some entity when entity.ent_owner <> package && not (List.mem entity.ent_owner !imported_packages) ->
+          imported_packages := entity.ent_owner :: !imported_packages
+        | _ -> ()) database.db_entities) types.databases;
     List.iter (fun (import : import_decl) ->
       match List.find_opt (fun dependency ->
               dependency_named dependency import.module_name) dependencies with

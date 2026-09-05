@@ -58,6 +58,22 @@ func awaitIndexStatement(t *testing.T, f *databaseFixture, done <-chan error, wa
 	}
 }
 
+// Contract fixture hook. Its caller retains the exclusive DDL-job lock across
+// this metadata check and the autocommit DROP; the model is a separate oracle.
+func dropFixtureIndex(f *databaseFixture, conn *pgx.Conn, name string, target int) error {
+	var allowed bool
+	err := conn.QueryRow(f.ctx, `select i.state='terminal' and i.terminal_version=$2 and s.compat_floor>=i.terminal_version
+		from `+f.schema+`.tesl_schema_index i cross join `+f.schema+`.tesl_schema_state s where i.name=$1 and s.id=1`, name, target).Scan(&allowed)
+	if err != nil {
+		return err
+	}
+	if !allowed {
+		return fmt.Errorf("index removal identity or plan switch is not ready for V%d", target)
+	}
+	_, err = conn.Exec(f.ctx, "drop index concurrently if exists "+pgx.Identifier{f.schema, name}.Sanitize())
+	return err
+}
+
 // INV-INDEX-RECOVERY, INV-INDEX-READY, INV-DDL-JOB, INV-LEASE; TR-INDEX-START, TR-INDEX-SUCCESS, TR-INDEX-BACKEND-DEATH, TR-INDEX-CLEANUP.
 func TestPostgresActiveIndexBuildSurvivesLeaseTakeover(t *testing.T) {
 	for _, outcome := range []string{"finishes", "backend-dies"} {
@@ -200,7 +216,7 @@ func TestPostgresContractWaitsForIndexVerificationAndPersistsTerminal(t *testing
 	f.execOn(t, worker, "select pg_advisory_unlock_shared($1::bigint)", jobKey)
 	apply(t, m, indexOp("index-exit", "first", 1))
 	awaitIndexStatement(t, f, done, false)
-	f.execOn(t, contract, "update "+f.schema+".tesl_schema_index set state='terminal' where name='notes_title_v8'")
+	f.execOn(t, contract, "update "+f.schema+".tesl_schema_index set state='terminal',terminal_version=8 where name='notes_title_v8'")
 	apply(t, m, Op{Kind: "index-terminal", ID: "notes_title_v8", Version: 8})
 	// Lose the coordinator after durable terminal, before autocommit DROP.
 	if err := contract.Close(f.ctx); err != nil {
@@ -210,10 +226,12 @@ func TestPostgresContractWaitsForIndexVerificationAndPersistsTerminal(t *testing
 	recovery := f.other(t)
 	f.execOn(t, recovery, "select pg_advisory_lock($1::bigint)", jobKey)
 	var terminal bool
-	if err := recovery.QueryRow(f.ctx, "select state='terminal' from "+f.schema+".tesl_schema_index where name='notes_title_v8'").Scan(&terminal); err != nil || !terminal {
+	if err := recovery.QueryRow(f.ctx, "select state='terminal' and terminal_version=8 from "+f.schema+".tesl_schema_index where name='notes_title_v8'").Scan(&terminal); err != nil || !terminal {
 		t.Fatalf("terminal lost after coordinator exit: %t %v", terminal, err)
 	}
-	f.execOn(t, recovery, "drop index concurrently "+f.schema+".notes_title_v8")
+	if err := dropFixtureIndex(f, recovery, "notes_title_v8", 8); err != nil {
+		t.Fatal(err)
+	}
 	apply(t, m, indexOp("index-drop", "", 0))
 	assertIndexCatalog(t, f, m)
 	f.execOn(t, recovery, "select pg_advisory_unlock($1::bigint)", jobKey)
@@ -225,6 +243,93 @@ func TestPostgresContractWaitsForIndexVerificationAndPersistsTerminal(t *testing
 	}
 	denied(t, m, indexOp("index-enter", "first", 1))
 	assertIndexCatalog(t, f, m)
+}
+
+// INV-DDL-JOB, INV-FENCE, INV-DDL-TERMINAL, INV-CONTRACT;
+// TR-INDEX-ENTER, TR-INDEX-START, TR-INDEX-SUCCESS, TR-INDEX-VERIFY, TR-RETIRE, TR-INDEX-TERMINAL, TR-INDEX-DROP, TR-CRASH, TR-CONTRACT.
+func TestPostgresSuccessorIndexWorkerSurvivesCreatingVersionRetirement(t *testing.T) {
+	f := newDatabaseFixture(t)
+	f.expanded(t, 8)
+	f.expanded(t, 9)
+	m := plannedIndex(t)
+	apply(t, m, indexOp("index-exit", "first", 1), Op{Kind: "expand", Version: 9, Hash: "nine", Additive: true},
+		Op{Kind: "tick", Ticks: 10}, Op{Kind: "lease-acquire", ID: "index:notes_title_v8", Hash: "successor", Ticks: 10})
+	successor := func(kind string) Op {
+		return Op{Kind: kind, ID: "notes_title_v8", Holder: "successor", Attempt: 2, Version: 9}
+	}
+	f.exec(t, "create table "+f.schema+".index_notes(id int primary key,title text)")
+	f.exec(t, "insert into "+f.schema+".tesl_schema_index(name,state) values ('notes_title_v8','pending')")
+	worker, writer, contract := f.other(t), f.other(t), f.other(t)
+	jobKey := int64(f.fence)
+	f.execOn(t, worker, "select pg_advisory_lock_shared($1,9)", f.fence)
+	f.execOn(t, worker, "select "+f.schema+".tesl_admit(9)")
+	f.execOn(t, worker, "select pg_advisory_lock_shared($1::bigint)", jobKey)
+	apply(t, m, successor("index-enter"))
+	f.execOn(t, writer, "begin; insert into "+f.schema+".index_notes values (1,'old row')")
+	built := make(chan error, 1)
+	go func() {
+		_, err := worker.Exec(f.ctx, "create index concurrently notes_title_v8 on "+f.schema+".index_notes(title)")
+		built <- err
+	}()
+	for {
+		var waiting bool
+		if err := f.conn.QueryRow(f.ctx, "select exists(select 1 from pg_stat_progress_create_index where pid=$1 and phase='waiting for writers before build')", worker.PgConn().PID()).Scan(&waiting); err != nil {
+			t.Fatalf("index did not reach its server barrier: %v\n%s", err, f.dump())
+		}
+		if waiting {
+			break
+		}
+		select {
+		case err := <-built:
+			t.Fatalf("index exited before the writer barrier: %v", err)
+		default:
+		}
+		runtime.Gosched()
+	}
+	apply(t, m, successor("index-start"))
+	assertIndexCatalog(t, f, m)
+	f.exec(t, "begin")
+	f.exec(t, "select pg_advisory_xact_lock($1,7),pg_advisory_xact_lock($1,8)", f.fence)
+	f.exec(t, "select "+f.schema+".tesl_advance_floor(7,9,'retirement',1,'tesl-1','fixture')")
+	f.exec(t, "commit")
+	apply(t, m, Op{Kind: "retire-begin", Version: 9}, Op{Kind: "retire-commit", Version: 9})
+	assertIndexCatalog(t, f, m)
+	if _, err := f.conn.Exec(f.ctx, "select "+f.schema+".tesl_admit(8)"); err == nil {
+		t.Fatal("retirement still admits the creating version")
+	}
+	var acquired bool
+	if err := contract.QueryRow(f.ctx, "select pg_try_advisory_lock($1::bigint)", jobKey).Scan(&acquired); err != nil || acquired {
+		t.Fatalf("contract passed the surviving V9 worker: %t %v", acquired, err)
+	}
+	denied(t, m, Op{Kind: "index-terminal", ID: "notes_title_v8", Version: 9})
+	f.execOn(t, writer, "commit")
+	awaitIndexStatement(t, f, built, false)
+	apply(t, m, successor("index-success"), successor("index-verify"))
+	assertIndexCatalog(t, f, m)
+	f.execOn(t, worker, "select pg_advisory_unlock_shared($1::bigint)", jobKey)
+	apply(t, m, successor("index-exit"))
+	f.execOn(t, contract, "select pg_advisory_lock($1::bigint)", jobKey)
+	f.execOn(t, contract, "update "+f.schema+".tesl_schema_index set state='terminal',terminal_version=9 where name='notes_title_v8'")
+	apply(t, m, Op{Kind: "index-terminal", ID: "notes_title_v8", Version: 9})
+	terminateBootstrapBackend(t, f, contract)
+	apply(t, m, Op{Kind: "crash"})
+	recovery := f.other(t)
+	f.execOn(t, recovery, "select pg_advisory_lock($1::bigint)", jobKey)
+	for _, target := range []int{8, 9} {
+		if err := dropFixtureIndex(f, recovery, "notes_title_v8", target); err == nil {
+			t.Fatalf("V%d removal passed without its matching plan switch", target)
+		}
+		assertIndexCatalog(t, f, m)
+	}
+	f.execOn(t, recovery, "select "+f.schema+".tesl_begin_contract(9,'contract-9',1,'tesl-1','fixture')")
+	apply(t, m, Op{Kind: "contract-begin", Version: 9})
+	for range 2 {
+		if err := dropFixtureIndex(f, recovery, "notes_title_v8", 9); err != nil {
+			t.Fatal(err)
+		}
+		apply(t, m, indexOp("index-drop", "", 0))
+		assertIndexCatalog(t, f, m)
+	}
 }
 
 // INV-UNIQUE-WINDOW, INV-INDEX-READY, INV-INDEX-RECOVERY; TR-INDEX-START, TR-INDEX-FAILURE, TR-INDEX-CLEANUP.
