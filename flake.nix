@@ -171,14 +171,13 @@
           export PATH="${gnuUserland}:$PATH"
         '';
 
-        # ── CLI body (shared between installed and dev wrappers) ──────────────
-        # Everything after the preamble — the case statement and helpers.
+        # Previous CLI retained as the black-box parity reference.
         cliBody = builtins.readFile ./nix/tesl-cli-body.sh;
 
         tesl-go-cli = pkgs.writeShellScriptBin "tesl" (goRuntimePreamble + cliBody);
 
-        # Reviewable native CLI candidate; default cutover remains gated by the
-        # complete parity matrix. The shell here only supplies Nix store paths.
+        # Nix and native distributions share the Go command implementation.
+        # The shell here only supplies the immutable Nix component paths.
         tesl-native-cli = pkgs.writeShellScriptBin "tesl" (goRuntimePreamble + ''
           exec ${tesl-go-tools}/bin/tesl "$@"
         '');
@@ -197,7 +196,9 @@
            export TESL_ZAP="''${TESL_ZAP:-${pkgs.zap}/bin/zap}"
            export TESL_NUCLEI="''${TESL_NUCLEI:-${pkgs.nuclei}/bin/nuclei}"
            export PATH="${gnuUserland}:$PATH"
-        '' + cliBody);
+        '' + ''
+          exec ${tesl-go-tools}/bin/tesl "$@"
+        '');
 
         # ── tesl-lsp wrapper ──────────────────────────────────────────────────
          # Sets TESL_COMPILER for the Go LSP without needing TESL_REPO_ROOT. An
@@ -232,7 +233,7 @@
         # ── Combined default: CLI + LSP + MCP in one profile install ───────────
         tesl-full = pkgs.symlinkJoin {
           name = "tesl";
-          paths = [ tesl-go-cli tesl-compiler tesl-lsp tesl-mcp tesl-debug-tools ] ++ dastTools;
+          paths = [ tesl-native-cli tesl-compiler tesl-lsp tesl-mcp tesl-debug-tools ] ++ dastTools;
         };
 
       in {
@@ -253,7 +254,7 @@
 
         # ── Apps (for `nix run github:mtonnberg/tesl`) ────────────────────────
         apps = {
-          default  = { type = "app"; program = "${tesl-go-cli}/bin/tesl"; };
+          default  = { type = "app"; program = "${tesl-native-cli}/bin/tesl"; };
           tesl-lsp = { type = "app"; program = "${tesl-lsp}/bin/tesl-lsp"; };
           tesl-mcp = { type = "app"; program = "${tesl-mcp}/bin/tesl-mcp"; };
         };

@@ -95,7 +95,7 @@ func binarySuffix() string {
 }
 
 func hashFile(path string) (string, error) {
-	file, err := os.Open(path)
+	file, err := os.Open(path) // #nosec G304 G703 -- hash caller-selected installer input or validated managed payload paths; this API does not impose a global filesystem prefix.
 	if err != nil {
 		return "", err
 	}
@@ -108,14 +108,14 @@ func hashFile(path string) (string, error) {
 }
 
 func readJSON(path string, value any, limit int64) error {
-	info, err := os.Lstat(path)
+	info, err := os.Lstat(path) // #nosec G703 -- metadata paths are constructed under the explicitly selected managed installation.
 	if err != nil {
 		return err
 	}
 	if !info.Mode().IsRegular() || info.Size() > limit {
 		return fmt.Errorf("invalid managed metadata file %s", path)
 	}
-	file, err := os.Open(path)
+	file, err := os.Open(path) // #nosec G304 G703 -- read bounded regular metadata from the selected managed installation.
 	if err != nil {
 		return err
 	}
@@ -154,11 +154,11 @@ func atomicJSON(path string, value any) error {
 
 func realDirectory(path string, create bool) error {
 	if create {
-		if err := os.Mkdir(path, 0700); err != nil && !os.IsExist(err) {
+		if err := os.Mkdir(path, 0700); err != nil && !os.IsExist(err) { // #nosec G703 -- create this caller-selected installation directory, never a downloaded archive path.
 			return err
 		}
 	}
-	info, err := os.Lstat(path)
+	info, err := os.Lstat(path) // #nosec G703 -- validate the selected managed directory itself; symlinks are rejected below.
 	if err != nil {
 		return err
 	}
@@ -350,18 +350,23 @@ func snapshot(ctx context.Context, root string) (map[string]fileRecord, error) {
 }
 
 func removeOwnedTree(root string) error {
-	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+	tree, err := os.OpenRoot(root)
+	if err != nil {
+		return err
+	}
+	err = fs.WalkDir(tree.FS(), ".", func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		if entry.IsDir() {
-			return os.Chmod(path, 0700)
+			return tree.Chmod(path, 0700)
 		}
 		if runtime.GOOS == "windows" && entry.Type()&os.ModeSymlink == 0 {
-			return os.Chmod(path, 0600)
+			return tree.Chmod(path, 0600)
 		}
 		return nil
 	})
+	err = errors.Join(err, tree.Close())
 	if err != nil {
 		return err
 	}
@@ -369,14 +374,19 @@ func removeOwnedTree(root string) error {
 }
 
 func freeze(root string) error {
-	return filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+	tree, err := os.OpenRoot(root)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tree.Close() }()
+	return fs.WalkDir(tree.FS(), ".", func(path string, entry fs.DirEntry, err error) error {
 		if err != nil || entry.Type()&os.ModeSymlink != 0 {
 			return err
 		}
 		// Renaming a directory across parents requires its owner-write bit on
 		// supported filesystems. Keep only the version container writable;
 		// payload files and nested directories remain read-only on Unix.
-		if path == root {
+		if path == "." {
 			return nil
 		}
 		info, err := entry.Info()
@@ -386,7 +396,7 @@ func freeze(root string) error {
 		if runtime.GOOS == "windows" {
 			return nil
 		}
-		return os.Chmod(path, info.Mode().Perm()&0555)
+		return tree.Chmod(path, info.Mode().Perm()&0555)
 	})
 }
 
@@ -510,17 +520,9 @@ func sealPayload(ctx context.Context, payload string, manifest toolchain.Manifes
 		return err
 	}
 	record := receipt{Version: 1, ToolchainVersion: manifest.ToolchainVersion, Target: manifest.Target, ArchiveSHA256: strings.ToLower(checksum), ManifestSHA256: digest, Files: files}
-	info, err := os.Stat(payload)
-	if err != nil {
-		return err
-	}
-	if err := os.Chmod(payload, 0700); err != nil {
-		return err
-	}
-	if err := atomicJSON(filepath.Join(payload, receiptName), record); err != nil {
-		return err
-	}
-	return os.Chmod(payload, info.Mode().Perm())
+	// Install creates the version container with 0700 and freeze deliberately
+	// preserves it, so writing this receipt needs no temporary permission change.
+	return atomicJSON(filepath.Join(payload, receiptName), record)
 }
 
 func (m *Manager) Select(version string) (Result, error) {

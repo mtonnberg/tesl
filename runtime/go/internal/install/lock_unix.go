@@ -13,12 +13,12 @@ import (
 type fileLock struct{ file *os.File }
 
 func acquireLock(path string, exclusive bool) (*fileLock, error) {
-	if info, err := os.Lstat(path); err == nil && !info.Mode().IsRegular() {
+	if info, err := os.Lstat(path); err == nil && !info.Mode().IsRegular() { // #nosec G703 -- caller constructs the lock path under its selected private installation.
 		return nil, fmt.Errorf("lock path is not a regular file: %s", path)
 	} else if err != nil && !os.IsNotExist(err) {
 		return nil, err
 	}
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0600)
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|unix.O_NOFOLLOW, 0600) // #nosec G304 G703 -- private managed lock path; O_NOFOLLOW rejects a concurrent symlink replacement.
 	if err != nil {
 		return nil, err
 	}
@@ -44,7 +44,7 @@ func (lock *fileLock) inherit() error {
 	return err
 }
 func syncDirectory(path string) error {
-	file, err := os.Open(path)
+	file, err := os.Open(path) // #nosec G304 -- fsync the selected managed parent directory after an atomic metadata write.
 	if err != nil {
 		return err
 	}

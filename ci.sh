@@ -1045,10 +1045,10 @@ fi
 # wrapper ships unnoticed (it happened: the Racket-removal commit deleted the
 # _tesl_project_root helper block while keeping every call site — every
 # installed `tesl compile/build` died with "_tesl_project_root: command not
-# found"). This phase builds the actual flake profile (#tesl-go-cli) and drives
+# found"). This phase builds the default flake profile and both CLI implementations and drives
 # `init`/`emit`/`build --no-docker` through it under a scrubbed environment
 # (env -i), exactly what a fresh `nix profile install` user gets.
-phase_begin "Clean install (Nix shipped and native CLI candidates)"
+phase_begin "Clean install (Nix default and CLI parity references)"
 if ! command -v nix >/dev/null 2>&1; then
     printf "  %s⚠%s  nix not found — skipping clean-install gate\n" "$C_YELLOW" "$C_RESET"
     phase_end SKIP
@@ -1058,7 +1058,7 @@ elif ! command -v go >/dev/null 2>&1; then
 else
     _clean_install_dir="$(mktemp -d)"
     _clean_install_fail=0
-    for _clean_install_package in tesl-go-cli tesl-native-cli; do
+    for _clean_install_package in default tesl-go-cli tesl-native-cli; do
         _clean_install_link="$_clean_install_dir/$_clean_install_package"
         if ! nix build ".#$_clean_install_package" -o "$_clean_install_link" \
             || ! TESL_BIN="$_clean_install_link/bin/tesl" bash "$SCRIPT_DIR/tests/go-clean-install.sh"; then

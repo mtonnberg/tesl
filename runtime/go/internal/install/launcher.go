@@ -36,7 +36,7 @@ func RootForExecutable(executable string) (string, error) {
 }
 
 func copyExecutable(source, destination, digest string) error {
-	input, err := os.Open(source)
+	input, err := os.Open(source) // #nosec G304 -- read the caller's selected installer; the copied native prefix is checked against the managed SHA-256 before rename.
 	if err != nil {
 		return err
 	}

@@ -99,7 +99,7 @@ in rec {
       offline-install = ".github/workflows/native-parity.yml";
       minimum-os-runtime = ".github/workflows/native-parity.yml";
       payload-audit = ".github/workflows/native-parity.yml";
-      provenance = ".github/workflows/native-release.yml";
+      provenance = ".github/workflows/native-parity.yml";
     };
     windowsSigning = "optional";
     windowsDistribution = "unsigned-setup-and-portable-zip";

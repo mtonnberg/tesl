@@ -15,5 +15,5 @@ func Launch(executable, frontend string, arguments []string) error {
 	if err := lease.inherit(); err != nil {
 		return err
 	}
-	return syscall.Exec(selected, append([]string{selected}, arguments...), launcherEnvironment(selected))
+	return syscall.Exec(selected, append([]string{selected}, arguments...), launcherEnvironment(selected)) // #nosec G204 -- selectedFrontend validates the immutable managed frontend and holds its lease; arguments are literal argv.
 }

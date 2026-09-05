@@ -181,6 +181,30 @@ Quarantined-download acceptance remains separately recorded; it must not be
 reported as passed merely because command-line execution on a CI runner passes.
 See `INSTALL.md` for checksums, executable paths, and first-launch guidance.
 
+After a complete native matrix on a canonical `main` push, a separate provenance
+job validates every archive, checksum, setup executable and evidence file before
+attesting those bytes together with the release plan and `native-build-inputs.json`.
+It uses GitHub's short-lived workflow identity; no Apple/Windows signing account
+or separately managed signing key is involved. PR/manual runs do not attest, and
+the build jobs have no attestation-writing or OIDC permissions.
+
+For an attested main-build download, replace `ARTIFACT` and `SOURCE_SHA` below
+with its filename and full source commit SHA:
+
+```sh
+gh attestation verify ARTIFACT --repo mtonnberg/tesl \
+  --signer-workflow mtonnberg/tesl/.github/workflows/native-parity.yml \
+  --source-ref refs/heads/main --source-digest SOURCE_SHA \
+  --signer-digest SOURCE_SHA --deny-self-hosted-runners
+```
+
+The `native-provenance` CI artifact also contains the verification bundle; pass
+its path with `--bundle` to use a downloaded bundle. See the
+[GitHub CLI verification options](https://cli.github.com/manual/gh_attestation_verify).
+This attests native build origin and pinned inputs. It does not declare that the
+authoritative gate, minimum-OS matrix or complete release publication passed.
+The provenance job still needs its first successful main run after merge.
+
 ## Native Windows source build
 
 Use a clean checkout of the exact source revision in the release plan. The native

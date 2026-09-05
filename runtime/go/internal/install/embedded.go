@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"io"
+	"math"
 	"os"
 )
 
@@ -21,7 +22,7 @@ type EmbeddedPayload struct {
 }
 
 func FindEmbedded(executable string) (*EmbeddedPayload, error) {
-	file, err := os.Open(executable)
+	file, err := os.Open(executable) // #nosec G304 -- inspect the explicitly selected local setup executable, not an archive entry.
 	if err != nil {
 		return nil, err
 	}
@@ -44,18 +45,22 @@ func FindEmbedded(executable string) (*EmbeddedPayload, error) {
 		return nil, nil
 	}
 	offset, length := binary.LittleEndian.Uint64(footer[16:24]), binary.LittleEndian.Uint64(footer[24:32])
-	available := uint64(info.Size() - FooterSize)
-	if offset == 0 || offset > available || length == 0 || length > uint64(maxArchiveBytes) || length != available-offset {
+	if offset > math.MaxInt64 || length > math.MaxInt64 {
+		return nil, errors.New("invalid embedded ZIP bounds")
+	}
+	start, size := int64(offset), int64(length)
+	available := info.Size() - FooterSize
+	if start <= 0 || start > available || size <= 0 || size > maxArchiveBytes || size != available-start {
 		return nil, errors.New("invalid embedded ZIP bounds")
 	}
 	var magic [2]byte
-	if _, err := file.ReadAt(magic[:], int64(offset)); err != nil {
+	if _, err := file.ReadAt(magic[:], start); err != nil {
 		return nil, err
 	}
 	if string(magic[:]) != "PK" {
 		return nil, errors.New("embedded payload is not a ZIP archive")
 	}
-	return &EmbeddedPayload{Offset: int64(offset), Length: int64(length), SHA256: hex.EncodeToString(footer[32:])}, nil
+	return &EmbeddedPayload{Offset: start, Length: size, SHA256: hex.EncodeToString(footer[32:])}, nil
 }
 
 func ExtractEmbedded(ctx context.Context, executable string) (string, string, func(), error) {
@@ -66,7 +71,7 @@ func ExtractEmbedded(ctx context.Context, executable string) (string, string, fu
 	if embedded == nil {
 		return "", "", nil, errors.New("this installer has no embedded ZIP; pass --archive and --sha256")
 	}
-	input, err := os.Open(executable)
+	input, err := os.Open(executable) // #nosec G304 -- the caller-selected setup is bounds-checked above and extracted bytes must match its SHA-256.
 	if err != nil {
 		return "", "", nil, err
 	}
@@ -97,7 +102,7 @@ func launcherHash(executable string) (string, error) {
 	if embedded == nil {
 		return hashFile(executable)
 	}
-	file, err := os.Open(executable)
+	file, err := os.Open(executable) // #nosec G304 -- hash the selected local setup prefix; no archive-provided path is opened here.
 	if err != nil {
 		return "", err
 	}

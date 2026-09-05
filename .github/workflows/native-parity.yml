@@ -130,3 +130,46 @@ jobs:
           name: native-evidence-${{ matrix.target }}
           path: artifacts/native-${{ matrix.target }}/checks.json
           if-no-files-found: error
+  provenance:
+    # Privileged signing is isolated from compiler/build processes and never
+    # receives a PR token. Download only artifacts from this exact main run.
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'mtonnberg/tesl' }}
+    needs: [plan, parity]
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: native-release-plan
+          path: provenance-plan
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: native-candidate-*
+          path: provenance-artifacts
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: native-evidence-*
+          path: provenance-artifacts
+      - name: Validate complete same-revision artifact bindings
+        run: python3 scripts/native_provenance.py --plan provenance-plan/native-release-plan.json --artifacts provenance-artifacts --output native-build-inputs.json
+      - name: Attest final native bytes and their pinned inputs
+        id: attest
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: |
+            provenance-artifacts/**/*
+            provenance-plan/native-release-plan.json
+            native-build-inputs.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-provenance
+          path: |
+            ${{ steps.attest.outputs.bundle-path }}
+            native-build-inputs.json
+          if-no-files-found: error

@@ -69,14 +69,21 @@ Implemented so far:
   those additions still require native CI execution. The release catalog checks
   exact source/artifact/gate identities and complete matrices, but publication
   and external attestation verification are not yet connected.
+- A separate main-only provenance job now validates the complete same-run native
+  artifact matrix and attests its final bytes, release plan and pinned-input
+  manifest using GitHub's workflow identity. PR/build jobs receive no signing
+  permission. Regression tests cover source/event mismatches, partial matrices,
+  changed bytes and extra assets. First main execution remains pending.
 - Distribution policy, 2026-09-05: Windows ships unsigned setup/ZIP downloads;
   macOS offers ad-hoc signed native archives and recommends Nix. Developer ID,
   notarization and Authenticode are optional future improvements, not account
   prerequisites or roadmap completion blockers. Checksums and provenance remain
   required, and documentation explains first-launch prompts.
 
-The native CLI is not yet the default Nix CLI: the existing full gate must pass
-before that cutover. Native parity CI now includes Linux/macOS candidate assembly
+Nix's default install, `nix run`, and development shell now select the native CLI
+after local command-parity and clean-install checks passed. The authoritative gate
+is being rerun with this selection; it also tests the actual default profile.
+Native parity CI now includes Linux/macOS candidate assembly
 and installed-workflow gates; Windows packaging checks await their first run. It does not
 publish releases. M2–M4 remain open, including complete native
 dependency closure, scanner parity, provenance, and native install/upgrade tests.
@@ -89,9 +96,9 @@ formats from that definition instead of maintaining separate products.
 ## Current state and packaging gap
 
 [`INSTALL.md`](../../INSTALL.md) recommends Nix and documents native CI candidates.
-The [`flake`](../../flake.nix) builds an OCaml compiler, Go LSP/DAP/MCP/debug tools,
-templates, and a Bash CLI assembled from
-[`tesl-cli-body.sh`](../../nix/tesl-cli-body.sh).
+The [`flake`](../../flake.nix) builds an OCaml compiler, Go CLI/LSP/DAP/MCP/debug
+tools and templates. The previous Bash CLI in
+[`tesl-cli-body.sh`](../../nix/tesl-cli-body.sh) remains a parity-test reference.
 
 The installed wrappers contain Nix store paths and provide Go and GNU utilities.
 Running generated programs requires Go, not merely the Tesl compiler. Managed

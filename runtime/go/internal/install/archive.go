@@ -115,7 +115,7 @@ func (x *extractor) entry(name string, kind byte, link string, size int64, mode 
 	x.entries[rest] = archiveEntry{kind: kind, link: link}
 	destination := filepath.Join(x.root, filepath.FromSlash(rest))
 	if kind == 'd' {
-		return os.MkdirAll(destination, 0755)
+		return os.MkdirAll(destination, 0700)
 	}
 	if kind == 'l' {
 		if runtime.GOOS == "windows" || link == "" || strings.ContainsAny(link, "\\:\x00\r\n") || strings.HasPrefix(link, "/") {
@@ -131,14 +131,14 @@ func (x *extractor) entry(name string, kind byte, link string, size int64, mode 
 		return fmt.Errorf("unsupported archive entry type: %s", rest)
 	}
 	x.bytes += size
-	if err := os.MkdirAll(filepath.Dir(destination), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(destination), 0700); err != nil {
 		return err
 	}
 	permissions := os.FileMode(0644)
 	if mode.Perm()&0111 != 0 {
 		permissions = 0755
 	}
-	file, err := os.OpenFile(destination, os.O_CREATE|os.O_EXCL|os.O_WRONLY, permissions)
+	file, err := os.OpenFile(destination, os.O_CREATE|os.O_EXCL|os.O_WRONLY, permissions) // #nosec G304 -- portablePath and parent-kind checks confine entries to private staging; links are created only after file extraction.
 	if err != nil {
 		return err
 	}
@@ -167,7 +167,7 @@ func extractArchive(ctx context.Context, archive, expected, destination string) 
 	if err != nil || len(digest) != sha256.Size {
 		return "", errors.New("--sha256 must be a 64-character SHA-256 checksum")
 	}
-	input, err := os.Open(archive)
+	input, err := os.Open(archive) // #nosec G304 -- --archive deliberately selects a local file; its bounded private copy must match the caller's SHA-256.
 	if err != nil {
 		return "", err
 	}
@@ -266,8 +266,15 @@ func extractArchive(ctx context.Context, archive, expected, destination string) 
 			}
 			err = x.entry(header.Name, kind, "", int64(header.UncompressedSize64), header.Mode(), stream)
 			if err == nil {
-				_, err = io.Copy(io.Discard, stream)
-			} // Validate the ZIP CRC.
+				// One extra read validates CRC/EOF without allowing an unbounded
+				// drain when a malformed stream understates its expanded length.
+				_, err = io.CopyN(io.Discard, &contextReader{ctx: ctx, reader: stream}, 1)
+				if errors.Is(err, io.EOF) {
+					err = nil
+				} else if err == nil {
+					err = errors.New("ZIP entry exceeds its declared size")
+				}
+			}
 			err = errors.Join(err, stream.Close())
 			if err != nil {
 				return "", err
@@ -282,7 +289,7 @@ func extractArchive(ctx context.Context, archive, expected, destination string) 
 	for name, entry := range x.entries {
 		if entry.kind == 'l' {
 			to := filepath.Join(destination, filepath.FromSlash(name))
-			if err := os.MkdirAll(filepath.Dir(to), 0755); err != nil {
+			if err := os.MkdirAll(filepath.Dir(to), 0700); err != nil {
 				return "", err
 			}
 			if err := os.Symlink(entry.link, to); err != nil {
