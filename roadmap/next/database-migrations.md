@@ -2740,15 +2740,51 @@ Rough expectations, single primary, no replication lag budget:
 
 ### 10. JSONB columns and the codec list
 
-An ADT or record stored as JSONB does **not** need a row migration when only its JSON
-shape changed: the existing `fromJson [current, legacy]` list reads both, and the
-single encoder writes the new shape on the next write. The plan reports such a change
-as `Task.result: JSONB shape changed — read via codec fallback, no rewrite` and the
-snapshot keeps the old codec so the fallback decoder can be generated (or checked)
-against it. Under the two-version rule the legacy decoder must stay in the program
-until V9 at the earliest — the plan says when it may be removed. A rewrite-now
-backfill is available for retiring a legacy decoder. Removing a constructor that
-stored rows still use is lossy and is classified as such.
+**One history and planner cover both relational and JSONB changes.** A column
+remaining `jsonb` does not prove that its stored type is unchanged. The diff follows
+the complete record/ADT, nested types, facts and codec closures. A shared type's
+change is reported at every stored entity field and job payload that depends on it.
+HTTP-only records and codecs remain outside this storage inventory.
+
+A representation-only change can use the existing `fromJson [current, legacy]`
+list as its read adapter without eagerly rewriting stored rows. The snapshot
+retains the old codec; the planner generates or verifies the legacy adapter
+against it and reports that old representations remain. This adapter belongs to
+the versioned migration plan, not a separate untracked migration history. A
+semantic change uses the same typed transformation path as other fields: decode
+the frozen old type, transform to the current type with its required proofs, and
+encode the current representation. A record or ADT is migrated at its stored
+occurrences, under the containing entity generation or queue schema version; it
+does not create an independent durable version counter per nested value.
+
+**Rolling compatibility is bidirectional.** A new decoder accepting old JSON does
+not establish that an old reader accepts the new encoder's output. While the old
+version remains admitted, the plan must establish that compatibility or retain an
+old-readable write representation using the same compatibility/write-back rules
+as other fields. If neither is possible, the plan must require a deployment path
+that retires old readers before incompatible writes become possible. A fallback
+list alone never earns an `ONLINE` classification. Removing a constructor or
+changing its meaning requires an explicit mapping or rejection; silently discarding
+stored values is not a shape adapter. Lossy decisions appear in the plan.
+
+**Decoder removal requires durable evidence.** V9 is only an earliest version
+boundary, not evidence that V7-shaped JSON has disappeared. Untouched rows retain
+their representation indefinitely. A rewrite-now pass uses the ordinary backfill,
+conditional-write, quarantine, repair and final-pass machinery to decode and
+re-encode every affected stored occurrence. It must finish after old-format writers
+are fenced out, and the history must record that completion before pruning the
+decoder. Removing an adapter is refused while affected rows, admitted writers or
+required catch-up history can still require it. The plan distinguishes "old reader
+retired" from "old representation eliminated".
+
+Acceptance includes generated old/new reader and writer cross-products over one
+JSONB column, an untouched legacy row surviving two further schema versions, a
+concurrent old writer during rewrite, crash/resume, nested records and ADTs,
+constructor removal with explicit transformation/rejection, and decoder pruning
+before/after the final evidence. Full-app lessons keep HTTP handlers and API
+assertions unchanged for storage-only representation changes. The existing codec
+fallback mechanism is available today; this planning and execution integration is
+part of phase 5.
 
 ### 11. Command surface — a `tesl migrate` family, the rest in the binary
 

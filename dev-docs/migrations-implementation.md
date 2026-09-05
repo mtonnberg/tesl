@@ -49,6 +49,14 @@ necessary handler change and explain why it is necessary. Database connection
 settings stay in the application; versioned schema and migration modules contain
 no handlers or effects. These comparisons are regression assertions, not just prose.
 
+The JSONB lesson also uses that app. It compares a representation-only codec
+adapter with a typed record/ADT transformation under the same migration history.
+It must demonstrate both reader/writer directions during a roll and an untouched
+old JSON value surviving later deployments. Retiring an old binary does not prove
+that its JSON representation is gone; decoder pruning requires final rewrite
+evidence. The clarified rules are in the main roadmap's section 10. Integration
+with the planner, backfill and pruning is pending.
+
 The first part of [lesson82-database-migrations](../example/learn/lesson82-database-migrations.tesl)
 now compiles and runs through `tesl test`: five direct tests cover schema-owned title
 proofs, rejected writes, length boundaries, Unicode and missing rows. Its thin

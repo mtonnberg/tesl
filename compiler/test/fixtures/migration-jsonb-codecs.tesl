@@ -1,0 +1,115 @@
+module MigrationJsonbCodecs exposing [CodecServer]
+
+# These are decoder compatibility counterexamples, not a migration executor.
+# The wire values are the same JSON objects that a JSONB column can retain.
+# Old, current and post-pruning readers are separate endpoints so a test can
+# exercise every direction without accidentally calling one shared decoder.
+
+import Tesl.Prelude exposing [String]
+import Tesl.Json exposing [stringCodec]
+import Tesl.ApiTest exposing [statusOk]
+
+record OldPayload { text: String }
+codec OldPayload {
+  toJson { text -> "title" with_codec stringCodec }
+  fromJson [ { text <- "title" with_codec stringCodec } ]
+}
+
+record CurrentPayload { text: String }
+codec CurrentPayload {
+  toJson { text -> "body" with_codec stringCodec }
+  fromJson [
+    { text <- "body" with_codec stringCodec }
+    { text <- "title" with_codec stringCodec }
+  ]
+}
+
+record PrunedPayload { text: String }
+codec PrunedPayload {
+  toJson { text -> "body" with_codec stringCodec }
+  fromJson [ { text <- "body" with_codec stringCodec } ]
+}
+
+type OldStatus = Pending | Complete
+type CurrentStatus = Waiting | Finished
+record OldTask { status: OldStatus }
+record CurrentTask { status: CurrentStatus }
+
+handler post oldReader(body: OldPayload) -> OldPayload = body
+handler post currentReader(body: CurrentPayload) -> CurrentPayload = body
+handler post prunedReader(body: PrunedPayload) -> PrunedPayload = body
+handler post oldTaskReader(body: OldTask) -> OldTask = body
+handler post currentTaskReader(body: CurrentTask) -> CurrentTask = body
+
+api CodecApi {
+  post "/old"
+    body body: OldPayload
+    -> OldPayload
+  post "/current"
+    body body: CurrentPayload
+    -> CurrentPayload
+  post "/pruned"
+    body body: PrunedPayload
+    -> PrunedPayload
+  post "/old-task"
+    body body: OldTask
+    -> OldTask
+  post "/current-task"
+    body body: CurrentTask
+    -> CurrentTask
+}
+
+server CodecServer for CodecApi {
+  oldReader
+  currentReader
+  prunedReader
+  oldTaskReader
+  currentTaskReader
+}
+
+api-test "new fallback reads old data but its output breaks the old reader" for CodecServer {
+  let old = post "/old" body { "title": "kept" }
+  expect statusOk old.status
+  expect old.body == { "title": "kept" }
+  let current = post "/current" body old.body
+  expect statusOk current.status
+  expect current.body == { "body": "kept" }
+  let oldReadsNew = post "/old" body current.body
+  expect oldReadsNew.status == 400
+  let currentReadsNew = post "/current" body current.body
+  expect statusOk currentReadsNew.status
+  expect currentReadsNew.body == current.body
+}
+
+api-test "removing the fallback fails on untouched old data" for CodecServer {
+  let storedOldJson = { "title": "never rewritten" }
+  let current = post "/current" body storedOldJson
+  expect statusOk current.status
+  let prunedReadsOld = post "/pruned" body storedOldJson
+  expect prunedReadsOld.status == 400
+  let prunedReadsRewritten = post "/pruned" body current.body
+  expect statusOk prunedReadsRewritten.status
+  expect prunedReadsRewritten.body == { "body": "never rewritten" }
+}
+
+api-test "ordered alternatives are behavior and must be frozen" for CodecServer {
+  let both = post "/current" body { "body": "current wins", "title": "legacy loses" }
+  expect statusOk both.status
+  expect both.body == { "body": "current wins" }
+  let fallback = post "/current" body { "body": 42, "title": "valid legacy" }
+  expect statusOk fallback.status
+  expect fallback.body == { "body": "valid legacy" }
+  let corrupt = post "/current" body { "body": 42, "title": 99 }
+  expect corrupt.status == 400
+}
+
+api-test "changed nested ADT constructors require an explicit mapping" for CodecServer {
+  let old = post "/old-task" body { "status": { "tag": "Pending" } }
+  expect statusOk old.status
+  let current = post "/current-task" body { "status": { "tag": "Waiting" } }
+  expect statusOk current.status
+  let currentReadsOld = post "/current-task" body old.body
+  expect currentReadsOld.status == 400
+  let oldReadsNew = post "/old-task" body current.body
+  expect oldReadsNew.status == 400
+}
