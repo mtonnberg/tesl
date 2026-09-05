@@ -17,6 +17,7 @@ type field_change =
 type field_entry = {
   identity : string;
   definition : Migration_canonical.node;
+  dependencies : (Migration_ir.namespace * string) list;
   field : stored_field;
 }
 
@@ -67,6 +68,38 @@ let source_inputs inventory = inventory.sources
 let stored_fields inventory = List.map (fun entry -> entry.field) inventory.fields
 let declarations inventory = inventory.declarations
 let stored_entities inventory = List.map (fun entry -> entry.stored_entity) inventory.entities
+
+let stored_dependencies inventory ~entity ~field =
+  match List.find_opt (fun entry -> entry.field.entity = entity && entry.field.name = field) inventory.fields with
+  | None -> None
+  | Some entry -> Some (List.filter (fun d ->
+      List.mem (d.namespace, d.qualified_name) entry.dependencies) inventory.declarations)
+
+type field_shape = {
+  stored_field : stored_field;
+  type_identity : Migration_canonical.node;
+  proof_identity : Migration_canonical.node option;
+  db_type : string option;
+}
+let field_shapes inventory =
+  let open Migration_canonical in
+  let optional = function
+    | Seq [Bytes "none"] -> None
+    | Seq [Bytes "some"; node] -> Some node
+    | _ -> assert false (* Produced by the canonical field lowering. *) in
+  List.map (fun entry -> match entry.definition with
+    | Seq [Bytes "field"; Bytes _; type_identity; proof; database_type] ->
+      let db_type = match optional database_type with
+        | None -> None | Some (Bytes value) -> Some value | _ -> assert false in
+      {stored_field=entry.field;type_identity;proof_identity=optional proof;db_type}
+    | _ -> assert false) inventory.fields
+
+let entity_indexes inventory ~entity =
+  match List.find_opt (fun entry -> entry.stored_entity.entity_name = entity) inventory.entities with
+  | None -> None
+  | Some entry -> match entry.entity_definition with
+    | Migration_canonical.Seq [Bytes "entity"; _; _; _; _; indexes] -> Some indexes
+    | _ -> assert false
 
 let compatible_inventories ~before ~after =
   if List.map (fun (scope : Migration_canonical.scope) -> scope.family) before.scopes <>
@@ -388,12 +421,16 @@ let load ~compiler_abi ~root_file =
         | _ -> reject loc "stored field has no owning entity identity" in
       let entity_form = List.assoc entity members in
       let field_form = List.find (fun (f : Ast.field_def) -> f.name = name) entity_form.fields in
-      let dependencies = match Migration_ir.closure ~scopes ~definitions ~roots:body.references with
-        | Ok node -> node | Error error -> raise (Invalid error) in
+      let dependencies, reached = match Migration_ir.closure_with_definitions ~scopes ~definitions ~roots:body.references with
+        | Ok result -> result | Error error -> raise (Invalid error) in
+      let reached = List.map (fun (d : definition) -> match d.key with
+        | ns, Global name -> ns, name
+        | _ -> assert false (* Inventories contain only owned declarations. *)) reached in
       let identity = Migration_canonical.encode (tag "stored-location" [
         require loc (Migration_canonical.reference scopes entity); Bytes name]) in
       let contract = with_abi inventory (tag "stored-field" [body.node; dependencies]) in
-      { identity; definition=body.node; field={entity; name; loc=field_form.loc; contract} }
+      { identity; definition=body.node; dependencies=reached;
+        field={entity; name; loc=field_form.loc; contract} }
     ) d.stored_fields) definitions
       |> List.sort (fun a b -> String.compare a.identity b.identity) in
     let entities = List.map (fun (entity_name, (form : Ast.entity_form)) ->

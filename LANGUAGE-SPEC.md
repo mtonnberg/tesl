@@ -838,6 +838,52 @@ reported separately. The generator's candidate list includes private equal pairs
 and excludes entities, functions, constructor aliases and unmatched nominal names.
 Candidates do not override a developer's decision to omit a `Same` entry.
 
+**Sparse migration coverage.** Before checking a row function or deriving a
+single adapter, the compiler checks the record's coverage against both complete
+inventories. Entity identity is the owning module path relative to the schema
+revision plus the entity name. A short name is accepted only when it selects one
+identity in the union; an ambiguous short name must be qualified. A move to a
+different owning module is still an addition and removal, even if its table name
+is unchanged.
+
+A supplied identity pair is reverified against the actual inventories being
+compared. Duplicate pairs are errors, not additional evidence. For every stored
+field present in both revisions, the checker traverses its complete old and new
+semantic dependencies. Each matching type, fact and codec needs its own supplied
+identity pair. In particular, `Same` for an enclosing record does not imply a
+missing `Same` for a contained fact, and the first field that mentions a shared
+record does not discharge that record's other stored occurrences. Primitive types
+need no user identity pair. A dependency that exists only on one side is already
+a semantic field change; a declaration unreferenced by storage creates no stored
+obligation.
+
+An entity may be absent from the sparse record iff its complete entity contracts
+are equal **and** it has no missing stored identity pairs. Added entities require
+`New`, removed entities require `Drop`, and paired entities require a modification
+entry. An entry for an equal entity with no missing identity pairs is redundant.
+A missing stored identity pair forbids `Additive` even when the canonical closures
+are equal: the omission deliberately requests revalidation. These rules check
+coverage only. They do not validate a row function, derive a column adapter,
+classify index safety, authorize DDL or introduce cross-version proof casts.
+
+**Single-adapter row projection.** After sparse coverage, the additive row
+checker consumes that exact pair of inventories and its normalized entries. It
+cannot combine a coverage result with unrelated or subsequently loaded schemas.
+Every old field must remain, with an equal complete field contract; table and
+primary-key identity stay fixed. Every new field needs one value source. A
+proof-free field whose resolved outer type is the primitive `Maybe` receives
+`Nothing`. A new proof-free primitive `Int`, `Float`, `Bool` or `String` field may
+receive a same-typed literal through `Default`. Defaults cannot target existing or
+nullable fields, have conflicting duplicate targets, or compute a value. A new
+field with a proof, a nominal constructor, or another type requires further rule
+elaboration; this initial projection does not silently erase its type or proof.
+
+The projection returns logical row value sources, not SQL or a compatibility
+certificate. Index changes are retained as a separate obligation, including when
+no field changed. PostgreSQL default assignment, physical column sets, all-version
+index safety, admission and execution remain subsequent planner checks. A valid
+logical literal alone does not prove that an existing SQL default or cast is safe.
+
 This internal equality evidence is abstract and compiler-local. It does not grant
 a type cast or prove that a persisted value was produced under this ABI. The
 contextual migration checker must additionally establish the adjacent revisions,

@@ -222,6 +222,23 @@ abstract equality evidence or the differing dependency's source locations.
 `same_candidates` proposes equal types, facts and codecs, including private ones.
 These APIs require the same compiler ABI; they do not authorize cross-version
 proof casts, accept persisted history, classify online safety or execute DDL.
+`stored_dependencies` distinguishes an unknown location from a primitive-only
+field and returns each stored field's complete owned dependency closure.
+`Migration_sparse.check` re-verifies the user-supplied identity pairs and checks
+exact entity coverage, including private paths and duplicate aliases. It preserves
+missing identities per stored occurrence: a `Same` for a JSONB record cannot hide
+an omitted pair for one of its nested facts or codecs. Its result certifies only
+coverage; `Additive` still needs a single-adapter check, and `Transform`/`Reset`
+still need their row-function/offline checks. The contextual source declaration,
+planner classification and execution integration are pending.
+`Migration_additive.check` consumes the exact inventories bound into that coverage
+result. It projects existing equal fields, new proof-free `Maybe` fields and
+same-typed primitive literal defaults. It refuses field removals, changed contracts,
+changed table/primary-key identities, misplaced defaults and invented proofs.
+The result contains logical value sources and preserves index-change obligations;
+it is not SQL or permission to expand. Nominal/Money defaults still need contextual
+elaboration, and PostgreSQL assignments, physical column sets, index safety and
+admission remain additional checks.
 The source-history layer separately guards saved input bytes and import resolution.
 
 The following startup notes describe the legacy bootstrap, not the versioned

@@ -42,6 +42,7 @@ type category =
   | Naming        (** scope / naming / imports *)
   | Lint          (** opinionated linter warnings *)
   | Security      (** structural security mistakes (SEC0xx) *)
+  | Migration     (** schema history, migration coverage and semantic identity *)
 
 let category_name = function
   | Syntax -> "syntax"
@@ -53,6 +54,7 @@ let category_name = function
   | Naming -> "naming"
   | Lint -> "lint"
   | Security -> "security"
+  | Migration -> "migration"
 
 type entry = {
   code     : string;
@@ -173,13 +175,70 @@ let registry : entry list = [
        at the most relevant section for the kind of error.";
     manual = Some "best-practices#validation-patterns" };
 
-  { code = "MIG015"; category = Structure;
+  { code = "MIG002"; category = Migration;
+    title = "migration entity coverage is inconsistent";
+    explanation =
+      "A sparse migration record names only changed entities. Every added entity \
+       needs New, every removed entity needs Drop, and every changed existing \
+       entity needs a modification entry. Unchanged entities must be absent. \
+       Duplicate entries, unknown names and ambiguous private entity names are \
+       errors; qualify an ambiguous name with its owning module path.";
+    manual = Some "best-practices#database-access" };
+
+  { code = "MIG015"; category = Migration;
     title = "application imports a historical schema";
     explanation =
       "Application modules must import their live VCurrent schema. Frozen V<n> \
        types are inputs to pure migration functions and tests in the schema's \
        Migrate namespace. Adding a test block to application code does not grant \
        access to historical types or compatibility-test storage operations.";
+    manual = Some "best-practices#database-access" };
+
+  { code = "MIG016"; category = Migration;
+    title = "stored values require explicit identity or revalidation";
+    explanation =
+      "A type, fact or codec reached from a stored field has no verified Same \
+       pair. Even an unchanged enclosing record cannot supply a missing nested \
+       identity. Additive cannot discharge this obligation. Supply a valid Same \
+       pair or a migration that revalidates the stored values. Deliberately \
+       deleting an equal pair requests revalidation.";
+    manual = Some "best-practices#database-access" };
+
+  { code = "MIG020"; category = Migration;
+    title = "incompatible migration schema pair";
+    explanation =
+      "Migration comparison requires schema inventories from the same family \
+       and compiler semantics ABI. The contextual declaration must also establish \
+       consecutive source and target revisions. Recompiling old source under a \
+       new ABI does not prove the meaning of previously stored values.";
+    manual = Some "best-practices#database-access" };
+
+  { code = "MIG022"; category = Migration;
+    title = "migration rule does not fit its field";
+    explanation =
+      "A migration rule must name fields in the selected entity and satisfy \
+       that rule's contextual type. A Default belongs to a new non-Maybe field \
+       and must carry a value of its exact type. A literal cannot invent a field \
+       proof or erase a nominal type. The diagnostic identifies the rule and \
+       the relevant field declaration.";
+    manual = Some "best-practices#database-access" };
+
+  { code = "MIG023"; category = Migration;
+    title = "duplicate or conflicting migration rules";
+    explanation =
+      "A field cannot receive two incompatible migration rules or two Default \
+       values. Remove the duplicate or choose one consistent rule for the \
+       field; rule order does not select a winner.";
+    manual = Some "best-practices#database-access" };
+
+  { code = "MIG024"; category = Migration;
+    title = "Same identity could not be verified";
+    explanation =
+      "Same pairs owned type, fact or codec declarations of matching kinds and \
+       equal complete semantic closures. It cannot assert equality between \
+       changed helpers, checks or codecs, name another revision, or pair a \
+       function or constructor alias. Each declaration may occur only once. \
+       The diagnostic identifies the first differing dependency.";
     manual = Some "best-practices#database-access" };
 
   (* ── Legacy Bool spelling (validation source, dedicated codes) ─────────── *)
@@ -644,7 +703,7 @@ let index () : string =
      but a category omitted HERE simply never appears in `tesl help codes` while
      `tesl explain <code>` keeps working. Keep it in sync with the variant. *)
   let cats = [ Syntax; Type; Proof; Capability; Structure; Codec; Naming;
-               Security; Lint ] in
+               Security; Migration; Lint ] in
   List.iter (fun cat ->
     let rows = List.filter (fun e -> e.category = cat) registry in
     if rows <> [] then begin

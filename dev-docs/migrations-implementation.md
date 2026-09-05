@@ -70,19 +70,33 @@ are included. Adoption, additive execution and the remaining lessons are pending
 
 ## Slices under development
 
-- The complete compiler gate passed 197 suite groups after the equality, entity
-  impact and producer-ownership fixes below. Manual coherence and documentation
-  integrity also pass. A subsequent review found an existing false rejection of
-  an ordinary function returning its received detached `Fact`. The initial proof
-  environment now records that premise on its holder, keeping subjects and bounds
-  intact and requiring optional wrappers to be eliminated. Focused transport,
-  identity, adversarial and literal-subject tests pass; the expanded regression
-  also checks aliases, branches and wrong-subject/bound refusals. Its generated
-  Go application test calls the schema validator, forwards its detached evidence,
-  explicitly reattaches it and invokes a proof-requiring consumer across valid
-  values and rejected boundaries. The CLI forwarding reproducer now has zero
-  diagnostics. This later fix
-  requires another full gate. Neither feature-wide review is complete.
+- The last complete compiler gate, before the sparse/additive slices below,
+  passes 197 suite groups, including the later
+  detached-Fact forwarding fix, aliases, branches and wrong-subject/bound refusals.
+  The generated Go regression calls the schema validator, forwards its detached
+  evidence through both branches, explicitly reattaches it and calls a consumer
+  requiring the fact. Valid values and rejected boundaries run. The CLI forwarding
+  reproducer has zero diagnostics. Manual coherence and documentation integrity
+  also pass. Neither feature-wide review is complete.
+- The initial additive row projection now derives one value source per field
+  from the inventories bound into sparse coverage. It handles new proof-free
+  Maybe fields and exact primitive defaults, rejects changed existing contracts,
+  field removals, table/primary-key changes and invented proofs, and keeps index
+  changes visible for later classification. Thirteen regression groups
+  pass, including cross-type defaults, arbitrary-precision integers, non-finite
+  floats, JSONB containing facts, nominal optional-type refusals and one changed
+  entity among 300. These are logical adapters,
+  not SQL/executor integration; nominal/Money defaults and physical catalog,
+  all-version index safety and admission checks remain pending.
+- Sparse migration coverage now re-verifies explicit Same pairs and requires
+  every changed owned entity to have exactly one appropriate entry. Omitting an
+  equal fact/type/codec pair forces revalidation at every stored occurrence;
+  an enclosing record's Same cannot conceal a missing child pair. Fourteen
+  regression groups cover nested/optional/generic/recursive JSONB types, direct
+  field proofs, private entity aliases, stale/duplicate identities, table/index
+  changes and 300 independent occurrences. The affected inventory, equality,
+  field/entity impact and history suites pass. This is the coverage checker;
+  contextual source elaboration, single-adapter checks and execution remain pending.
 - The checked inventory now verifies compiler-local `Same` equality and proposes
   equal type/fact/codec pairs, including private declarations. Comparisons use the
   full canonical tree, preserve nominal identity and report the first differing

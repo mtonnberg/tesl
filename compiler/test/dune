@@ -356,3 +356,15 @@
  (name test_process_runner)
  (modules test_process_runner)
  (libraries tesl_compiler_lib alcotest unix))
+
+; Sparse migration coverage and explicit Same omissions over all stored occurrences.
+(test
+ (name test_migration_sparse)
+ (modules test_migration_sparse)
+ (libraries tesl_compiler_lib alcotest str unix))
+
+; Logical additive row adapters, independent of catalog and admission authority.
+(test
+ (name test_migration_additive)
+ (modules test_migration_additive)
+ (libraries tesl_compiler_lib alcotest str unix))

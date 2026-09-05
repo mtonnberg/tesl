@@ -637,6 +637,19 @@ An ordinary helper can also receive and return `Fact (InBounds 1 100 amount)`
 unchanged. The evidence keeps its original value and bounds; use `attachFact` when
 you need to attach it to that value. An optional proof must be unwrapped first.
 
+Review what stored values mean as well as their SQL column names and types. A
+record or ADT stored in `jsonb` can need a migration when its fields, constructors,
+codec or validation rules change, even though PostgreSQL still calls the column
+`jsonb`. Check every place that stores the type, including optional and nested
+values. Retiring an old application does not establish that all its old JSON
+values have been rewritten.
+
+Keep storage-only changes in the schema and migration files. The application's
+handlers and API tests should stay the same when its behavior stays the same.
+Adding a derived field is different: the migration supplies its value for existing
+rows, and application writes must maintain it afterward. A backfill cannot make
+an unchanged update handler recompute a new derived value.
+
 ### Typed Queries
 
 **✅ Do:** Use typed SQL queries with entities:

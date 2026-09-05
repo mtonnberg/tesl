@@ -72,6 +72,25 @@ val closure : t -> (Migration_ir.namespace * string) list ->
     occurrences; they do not create independent locations or generations. *)
 val stored_fields : t -> stored_field list
 
+(** Complete semantic dependencies of one owned stored field, including private
+    declarations, recursive types and every reachable fact producer. None means
+    the location is not owned by this inventory; Some [] is a primitive-only
+    location. The order is the same deterministic declaration order as above. *)
+val stored_dependencies : t -> entity:string -> field:string -> declaration list option
+
+type field_shape = {
+  stored_field : stored_field;
+  type_identity : Migration_canonical.node;
+  proof_identity : Migration_canonical.node option;
+  db_type : string option;
+}
+(** Canonical, resolved logical field shape from the same checked lowering.
+    These are not PostgreSQL catalog types or DDL permissions. *)
+val field_shapes : t -> field_shape list
+(** Canonical declared indexes, including uniqueness, order and explicit names.
+    A change needs separate physical/catalog and admitted-writer safety checks. *)
+val entity_indexes : t -> entity:string -> Migration_canonical.node option
+
 (** Compare saved, checked inventories in one family and compiler ABI. Unchanged
     locations are folded out. [definition_changed=false] identifies a dependency
     change such as a codec, nested ADT or fact producer under unchanged field text.
