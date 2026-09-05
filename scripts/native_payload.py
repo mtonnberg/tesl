@@ -126,8 +126,43 @@ def normalize_modes(root):
             path.chmod(0o755 if path.is_dir() or path.stat().st_mode & 0o111 else 0o644)
 
 
+def copy_compiler_runtime(plan, compiler, source, destination):
+    """Copy the explicit, hash-recorded native compiler DLL closure only."""
+    source = Path(source)
+    if source.is_symlink() or not source.is_dir():
+        raise ValueError("compiler runtime must be an explicit directory")
+    evidence = json.loads((source / "native-build.json").read_text(encoding="utf-8"))
+    if (evidence.get("version") != 1 or evidence.get("component") != "compiler-runtime"
+            or evidence.get("target") != "windows-amd64"
+            or evidence.get("compiler_sha256") != file_hash(compiler)
+            or not isinstance(plan.get("windowsRuntimeLicense"), dict)
+            or evidence.get("license") != plan.get("windowsRuntimeLicense")
+            or not isinstance(evidence.get("files"), dict)):
+        raise ValueError("compiler runtime metadata differs from the compiler or release plan")
+    files = evidence["files"]
+    if {path.name for path in source.iterdir()} != set(files) | {"native-build.json"}:
+        raise ValueError("compiler runtime inventory does not match its directory")
+    for name, information in files.items():
+        path = source / name
+        if (not re.fullmatch(r"(?:vcruntime|msvcp|concrt)[0-9]+(?:_[a-z0-9]+)*\.dll", name)
+                or path.is_symlink() or not path.is_file()
+                or not isinstance(information, dict) or file_hash(path) != information.get("sha256")
+                or not isinstance(information.get("authenticode"), dict)
+                or information.get("authenticode", {}).get("status") != "Valid"):
+            raise ValueError("invalid compiler runtime DLL or checksum")
+    destination.mkdir(parents=True, exist_ok=True)
+    for name in files:
+        target = destination / name
+        if target.exists() or target.is_symlink():
+            raise ValueError("compiler runtime collides with an existing payload component")
+        shutil.copyfile(source / name, target)
+        if file_hash(target) != files[name]["sha256"]:
+            raise ValueError("compiler runtime changed during assembly")
+    return evidence
+
+
 def assemble(plan, root, target, compiler, frontends, go_root, postgres, module_bundle,
-             ocaml_license, output):
+             ocaml_license, output, compiler_runtime=None):
     output = output.absolute()
     manifest = payload_contract(plan, target)
     verify_module_bundle(plan, root, module_bundle)
@@ -159,6 +194,11 @@ def assemble(plan, root, target, compiler, frontends, go_root, postgres, module_
         for name in plan["commands"]:
             copy_file(frontends / (name + suffix), location(name))
         copy_file(compiler, location("compiler"))
+        if compiler_runtime is not None:
+            if target != "windows-amd64":
+                raise ValueError("compiler runtime DLLs are only accepted for Windows")
+            runtime_evidence = copy_compiler_runtime(plan, compiler, compiler_runtime, location("compiler").parent)
+            write_json(stage / "share/tesl/compiler-runtime.json", runtime_evidence)
         copy_tree(go_root, location("go").parent.parent)
         copy_tree(postgres, location("postgres").parent.parent)
         copy_tree(root / "tesl", location("stdlib"))
@@ -177,6 +217,7 @@ def assemble(plan, root, target, compiler, frontends, go_root, postgres, module_
             copy_file(ocaml_license, location("licenses") / "OCaml-LICENSE")
         copy_file(module_bundle / "inventory.json", stage / "share/tesl/module-inventory.json")
         write_json(stage / "share/tesl/toolchain.json", manifest)
+        write_json(stage / "share/tesl/release-plan.json", plan)
         for name in components:
             path = location(name)
             if not (path.is_dir() if name in DIRECTORIES else path.is_file()):
@@ -260,12 +301,13 @@ def main():
     for name in ("plan", "compiler", "frontends", "go-root", "postgres", "module-bundle", "ocaml-license", "output", "archive-dir"):
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--target", required=True)
+    parser.add_argument("--compiler-runtime", type=Path)
     args = parser.parse_args()
     plan = json.loads(args.plan.read_text(encoding="utf-8"))
     root = Path(__file__).resolve().parent.parent
     try:
         assemble(plan, root, args.target, args.compiler, args.frontends, args.go_root,
-                 args.postgres, args.module_bundle, args.ocaml_license, args.output)
+                 args.postgres, args.module_bundle, args.ocaml_license, args.output, args.compiler_runtime)
         archive = args.archive_dir / plan["payloads"][args.target]["archiveName"]
         digest = pack(plan, args.target, args.output, archive)
         checksum = archive.with_name(archive.name + ".sha256")

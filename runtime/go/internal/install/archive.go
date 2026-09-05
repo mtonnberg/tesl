@@ -226,7 +226,7 @@ func extractArchive(ctx context.Context, archive, expected, destination string) 
 			}
 			kind := byte('?')
 			switch header.Typeflag {
-			case tar.TypeReg, tar.TypeRegA:
+			case tar.TypeReg, 0: // NUL is the legacy tar regular-file type.
 				kind = 'f'
 			case tar.TypeDir:
 				kind = 'd'

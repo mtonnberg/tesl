@@ -220,6 +220,10 @@ replacement without implicit database-major-version migration.
   quarantined artifacts under normal Gatekeeper settings, following
   [Apple's distribution guidance](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution).
   Signing credentials are an explicit release prerequisite.
+- Windows initially ships unsigned setup executables and portable ZIPs with
+  SHA-256 checksums and provenance, per the maintainer's 2026-09-05 decision.
+  Windows code signing is optional future work; its absence does not fail a
+  Windows release gate. Document unknown-publisher prompts and source builds.
 - Ship a component/license inventory and the exact source/lock data needed to
   rebuild. Check redistribution obligations for Go, PostgreSQL, shared libraries,
   and optional tools as part of payload assembly.

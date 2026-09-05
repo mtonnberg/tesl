@@ -275,7 +275,8 @@ let build ?root filename =
         | _ -> ()) tokens
     end end) units;
   let inputs = Hashtbl.fold (fun path source acc -> (path, source) :: acc) inputs [] |> List.sort compare in
-  let id = hash ("workspace-index-v1\000" ^ String.concat "\000" (List.map (fun (path, source) -> relative root path ^ "\000" ^ hash source) inputs)) in
+  let failures = List.map (fun p -> p.code ^ ":" ^ relative root p.file ^ ":" ^ p.message) !problems |> List.sort_uniq String.compare in
+  let id = hash ("workspace-index-v1\000" ^ String.concat "\000" (List.map (fun (path, source) -> relative root path ^ "\000" ^ hash source) inputs @ failures)) in
   { root; id; inputs; units; uses = List.sort (fun (a : use) (b : use) -> compare a.loc b.loc) !uses;
     problems = List.sort_uniq compare !problems }
 
@@ -354,7 +355,7 @@ let validation_errors snapshot =
 let validate_rename snapshot selected new_name expected =
   let fail reason = Error reason in
   let valid_name = match Lexer.tokenize "rename" new_name with
-    | [{ Lexer.tok = (Token.IDENT _ | Token.UIDENT _); _ }; { Lexer.tok = Token.NEWLINE; _ }; { Lexer.tok = Token.EOF; _ }] -> true
+    | [{ Lexer.tok = (Token.IDENT name | Token.UIDENT name); _ }; { Lexer.tok = Token.NEWLINE; _ }; { Lexer.tok = Token.EOF; _ }] -> name = new_name
     | _ -> false in
   if expected <> snapshot.id then fail "stale workspace snapshot"
   else if snapshot.problems <> [] then fail "workspace index is incomplete"
@@ -397,7 +398,8 @@ let validate_rename snapshot selected new_name expected =
 
 let rename_json snapshot selected new_name expected =
   let result = try validate_rename snapshot selected new_name expected
-    with Failure reason | Invalid_argument reason -> Error reason in
+    with Failure reason | Invalid_argument reason | Sys_error reason -> Error reason
+      | Unix.Unix_error (error, operation, _) -> Error (operation ^ ": " ^ Unix.error_message error) in
   let edits, safe, reason = match result with
     | Error reason -> [], false, json_encode_string reason
     | Ok edits -> edits, true, "null" in
@@ -432,5 +434,5 @@ let run ~filename flag arguments =
   let snapshot = if current.id = snapshot.id then snapshot else
     { snapshot with problems = { code = "stale-snapshot"; file = filename; message = "workspace changed during query" } :: snapshot.problems } in
   let extra = if current.id = snapshot.id then extra else
-    {|,"rename":{"safe":false,"reason":"workspace changed during query","files":[]}|} in
+    match rename with None -> "" | Some (name, expected) -> rename_json snapshot selected name expected in
   response snapshot selected extra

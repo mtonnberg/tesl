@@ -206,7 +206,7 @@ func (m *Manager) open(create bool, exclusive bool) (*fileLock, marker, error) {
 	fail := func(err error) (*fileLock, marker, error) { _ = lock.Close(); return nil, marker{}, err }
 	err = readJSON(markPath, &mark, 4096)
 	if os.IsNotExist(err) && create {
-		digest, hashErr := hashFile(m.Executable)
+		digest, hashErr := launcherHash(m.Executable)
 		if hashErr != nil {
 			return fail(hashErr)
 		}
@@ -372,6 +372,12 @@ func freeze(root string) error {
 	return filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil || entry.Type()&os.ModeSymlink != 0 {
 			return err
+		}
+		// Renaming a directory across parents requires its owner-write bit on
+		// supported filesystems. Keep only the version container writable;
+		// payload files and nested directories remain read-only on Unix.
+		if path == root {
+			return nil
 		}
 		info, err := entry.Info()
 		if err != nil {
@@ -578,6 +584,11 @@ func (m *Manager) Uninstall(ctx context.Context, version string) (Result, error)
 		return Result{}, fmt.Errorf("version is in use; close its tools before uninstalling: %w", err)
 	}
 	defer func() { _ = lease.Close() }()
+	postgres, err := acquirePostgresRemoval(filepath.Join(m.Root, "leases", version+".postgres.lock"))
+	if err != nil {
+		return Result{}, fmt.Errorf("version is in use by managed PostgreSQL; stop its databases before uninstalling: %w", err)
+	}
+	defer func() { _ = postgres.Close() }()
 	files, err := snapshot(ctx, directory)
 	if err != nil {
 		return Result{}, err
@@ -591,16 +602,19 @@ func (m *Manager) Uninstall(ctx context.Context, version string) (Result, error)
 	}
 	defer func() { _ = os.Remove(trash) }()
 	removed := filepath.Join(trash, "payload")
-	if err := os.Rename(directory, removed); err != nil {
-		return Result{}, err
-	}
 	if state.Active == version {
 		state.Active, state.Previous = state.Previous, ""
 	} else if state.Previous == version {
 		state.Previous = ""
 	}
 	if err := m.commit(state); err != nil {
-		return Result{}, errors.Join(err, os.Rename(removed, directory))
+		return Result{}, err
+	}
+	// Publish the replacement selection before removing the old directory. A
+	// process interruption can leave an unselected version, never a selection
+	// pointing at a directory that has already disappeared.
+	if err := os.Rename(directory, removed); err != nil {
+		return Result{}, fmt.Errorf("version deselected; cannot stage its removal: %w", err)
 	}
 	if err := removeOwnedTree(removed); err != nil {
 		return Result{}, fmt.Errorf("version deselected; cannot remove its staged payload: %w", err)

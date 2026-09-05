@@ -37,6 +37,13 @@ in rec {
     bison = source pkgs.bison;
   };
   windowsOcamlCompiler = "ocaml-variants.${sources.ocaml.version}+options,ocaml-option-no-compression";
+  windowsCompilerSources = builtins.mapAttrs (_: item: item // {
+    hash = builtins.convertHash { inherit (item) hash; hashAlgo = "sha256"; toHashFormat = "sri"; };
+    hashAlgorithm = "sha256";
+    hashMode = "flat";
+    stripRoot = false;
+  }) inputs.windowsCompilerSources;
+  inherit (inputs) windowsRuntimeLicense;
   moduleInputs = [ "runtime/go/go.mod" "runtime/go/go.sum" ];
   moduleInputHashes = builtins.listToAttrs (map (path: {
     name = path;
@@ -70,6 +77,8 @@ in rec {
     value = {
       archiveName = "${release.artifactPrefix}-${candidate.target}"
         + (if builtins.match "windows-.*" candidate.target != null then ".zip" else ".tar.gz");
+      installerName = "${release.artifactPrefix}-setup-${candidate.target}"
+        + (if builtins.match "windows-.*" candidate.target != null then ".exe" else "");
       manifest = import ./native-manifest.nix {
         inherit toolchainVersion revision commands layout sources;
         inherit (candidate) target;
@@ -77,11 +86,21 @@ in rec {
     };
   }) candidates);
   releasePolicy = {
+    repository = "mtonnberg/tesl";
     channel = release.channel;
     immutableTagPrefix = "v";
     identity = "semantic version with full source commit SHA for development builds";
     requireCompleteMatrix = true;
     preserveMainRuns = true;
     mandatoryChecks = [ "authoritative-gate" "native-parity" "offline-install" "payload-audit" "provenance" ];
+    gateWorkflows = {
+      authoritative-gate = ".github/workflows/ci.yml";
+      native-parity = ".github/workflows/native-parity.yml";
+      offline-install = ".github/workflows/native-parity.yml";
+      payload-audit = ".github/workflows/native-parity.yml";
+      provenance = ".github/workflows/native-release.yml";
+    };
+    windowsSigning = "optional";
+    windowsDistribution = "unsigned-setup-and-portable-zip";
   };
 }

@@ -27,6 +27,10 @@ SYSTEM_DLLS = frozenset(name.casefold() for name in (
     'api-ms-win-crt-runtime-l1-1-0.dll', 'api-ms-win-crt-stdio-l1-1-0.dll',
     'api-ms-win-crt-string-l1-1-0.dll', 'api-ms-win-crt-time-l1-1-0.dll',
     'api-ms-win-crt-utility-l1-1-0.dll',
+    # OCaml's WaitOnAddress/WakeByAddressAll use Synchronization.lib. Microsoft
+    # documents this exact API set as supported from Windows 8 onward:
+    # https://learn.microsoft.com/windows/win32/api/synchapi/nf-synchapi-waitonaddress
+    'api-ms-win-core-synch-l1-2-0.dll',
 ))
 
 

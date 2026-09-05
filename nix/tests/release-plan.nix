@@ -52,6 +52,11 @@ let
     unix-compiler-path = plan.payloads.linux-amd64.manifest.components.compiler.path == "libexec/tesl/tesl-compiler";
     unix-archive = plan.payloads.darwin-arm64.archiveName == "tesl-${version}-darwin-arm64.tar.gz";
     windows-archive = plan.payloads.windows-amd64.archiveName == "tesl-${version}-windows-amd64.zip";
+    windows-setup = plan.payloads.windows-amd64.installerName == "tesl-${version}-setup-windows-amd64.exe";
+    windows-signing-optional = plan.releasePolicy.windowsSigning == "optional";
+    windows-compiler-inputs = builtins.attrNames plan.windowsCompilerSources == [ "flexdll" "winpthreads" ]
+      && plan.windowsCompilerSources.flexdll.version == "0.44"
+      && plan.windowsCompilerSources.winpthreads.hashMode == "flat";
     windows-executables = builtins.all (name:
       builtins.match ".*\\.exe" plan.payloads.windows-amd64.manifest.components.${name}.path != null
     ) (plan.commands ++ [ "compiler" "go" "postgres" "initdb" "pg_ctl" "createdb" "psql" ]);

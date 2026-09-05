@@ -8,6 +8,7 @@ import subprocess
 import tarfile
 import tempfile
 import unittest
+import zipfile
 from unittest.mock import patch
 
 import native_distribution as distribution
@@ -26,14 +27,22 @@ def plan(target="linux-amd64"):
     for name, path in {"compiler": "libexec/tesl/tesl-compiler" + suffix, "go": "libexec/tesl/go/bin/go" + suffix,
                        **{name: "share/tesl/" + name for name in distribution.native_payload.DIRECTORIES}}.items():
         components[name] = {"path": path, "version": "1.26.6" if name == "go" else version}
-    return {"version": 1, "sourceRevision": SHA, "sourceDateEpoch": 1, "toolchainVersion": version,
+    value = {"version": 1, "sourceRevision": SHA, "sourceDateEpoch": 1, "toolchainVersion": version,
             "release": {"publishableSource": True}, "commands": commands,
             "sources": {name: {"version": ver, "urls": ["https://example.test/" + name]}
                         for name, ver in {"go": "1.26.6", "ocaml": "5.4.1", "dune": "3.21.1", "postgresql": "17.10"}.items()},
             "candidates": [{"target": target, "baseline": "glibc 2.35" if target.startswith("linux-") else "macOS 13"}],
             "payloads": {target: {"archiveName": f"tesl-{version}-{target}" + (".zip" if target.startswith("windows-") else ".tar.gz"),
+                                  "installerName": f"tesl-{version}-setup-{target}.exe",
                                   "manifest": {"version": 1, "target": target, "toolchain_version": version,
                                                "source_revision": SHA, "components": components}}}}
+    if target.startswith("windows-"):
+        value["windowsBuildTools"] = {name: {"version": "1.0", "urls": ["https://example.test/" + name]}
+                                      for name in ("meson", "ninja", "perl", "flex", "bison")}
+        value["windowsCompilerSources"] = {name: {"version": "1.0", "urls": ["https://example.test/" + name]}
+                                           for name in ("flexdll", "winpthreads")}
+        value["windowsRuntimeLicense"] = {"urls": ["https://example.test/runtime-license"]}
+    return value
 
 
 class Response(io.BytesIO):
@@ -165,17 +174,24 @@ class DistributionTests(unittest.TestCase):
             output.mkdir()
             return output
 
-        def pg_build(plan, target, archive, output):
+        def pg_build(plan, target, archive, output, **options):
+            if target.startswith("windows-"):
+                self.assertIn("windows_tools", options)
             output.mkdir()
             return output
 
-        def compiler_tools_build(plan, target, ocaml, dune, output):
+        def compiler_tools_build(plan, target, ocaml, dune, output, **options):
+            if target.startswith("windows-"):
+                self.assertEqual(set(options["windows_archives"]), {"flexdll", "winpthreads"})
+                self.assertIn("cygwin_bash", options)
             output.mkdir()
             (output / "licenses").mkdir()
             (output / "licenses/LICENSE").write_text("OCaml license")
             return output
 
-        def assemble(plan, root, target, compiler, frontends, sdk, pg, bundle, licenses, output):
+        def assemble(plan, root, target, compiler, frontends, sdk, pg, bundle, licenses, output, **options):
+            if target.startswith("windows-"):
+                self.assertIn("compiler_runtime", options)
             self.assertEqual((licenses / "LICENSE").read_text(), "OCaml license")
             if failure == "audit":
                 raise ValueError("payload audit failed")
@@ -184,8 +200,12 @@ class DistributionTests(unittest.TestCase):
             return {"version": 1, "target": target, "binaries": []}
 
         def pack(plan, target, payload, output):
-            with tarfile.open(output, "w:gz") as archive:
-                archive.add(payload, arcname=output.name.removesuffix(".tar.gz"))
+            if target.startswith("windows-"):
+                with zipfile.ZipFile(output, "w") as archive:
+                    archive.write(payload / "fixture", output.name.removesuffix(".zip") + "/fixture")
+            else:
+                with tarfile.open(output, "w:gz") as archive:
+                    archive.add(payload, arcname=output.name.removesuffix(".tar.gz"))
             return distribution.native_payload.file_hash(output)
 
         stack = ExitStack()
@@ -197,6 +217,10 @@ class DistributionTests(unittest.TestCase):
             stack.enter_context(patch.object(owner, name, side_effect=callback))
         stack.enter_context(patch.object(distribution, "verify_module_bundle"))
         stack.enter_context(patch.object(distribution.native_sdk, "host_target", return_value=target))
+        if target.startswith("windows-"):
+            stack.enter_context(patch.object(distribution.native_windows_tools, "provision", return_value={"verified": True}))
+            stack.enter_context(patch.object(distribution.native_compiler_tools, "collect_windows_runtime", return_value=self.root / "runtime"))
+            stack.enter_context(patch.object(distribution, "windows_setup", return_value={"authenticode": "unsigned"}))
         return value, calls
 
     def test_full_pipeline_only_exports_archive_after_extracted_acceptance(self):
@@ -240,12 +264,66 @@ class DistributionTests(unittest.TestCase):
         self.assertTrue(all(environment["MACOSX_DEPLOYMENT_TARGET"] == "13" for _, environment in calls))
 
     def test_windows_and_existing_output_fail_before_build(self):
-        with self.assertRaisesRegex(ValueError, "Windows distribution awaits"):
+        with self.assertRaisesRegex(ValueError, "explicit Cygwin"):
             distribution.build(plan("windows-amd64"), self.root, "windows-amd64", self.root / "modules", self.output)
         self.output.mkdir()
         with patch.object(distribution.native_sdk, "host_target", return_value="linux-amd64"):
             with self.assertRaisesRegex(ValueError, "already exists"):
                 distribution.build(plan(), self.root, "linux-amd64", self.root / "modules", self.output)
+
+    def test_windows_uses_verified_build_tools_native_executables_and_zip(self):
+        value, calls = self.pipeline(target="windows-amd64")
+        result = distribution.build(value, self.root, "windows-amd64", self.root / "modules", self.output,
+                                    cygwin_bash=self.root / "cygwin/bin/bash.exe")
+        self.assertEqual(result["signed_distribution"], "unsigned-by-policy")
+        self.assertEqual(result["setup"]["authenticode"], "unsigned")
+        self.assertEqual(result["installed_workflow"], "passed")
+        self.assertTrue(zipfile.is_zipfile(self.output / result["archive"]))
+        build = next(args for args, _ in calls if "./cmd/..." in args)
+        self.assertTrue(build[0].endswith("go.exe"))
+        compiler = next(args for args, _ in calls if "bin/main.exe" in args)
+        self.assertTrue(compiler[0].endswith("dune.exe"))
+        self.assertIn("compiler-winpthreads", result["source_downloads"])
+        self.assertIn("build-perl", result["source_downloads"])
+        self.assertFalse(any(args[0] == "tar" for args, _ in calls))
+
+    def test_final_windows_setup_is_installed_launched_and_uninstalled_before_checksum_export(self):
+        value = plan("windows-amd64")
+        frontends, artifacts, work = (self.root / name for name in ("frontends", "artifacts", "work"))
+        for directory in (frontends, artifacts, work):
+            directory.mkdir()
+        (frontends / "tesl-install.exe").write_bytes(b"MZ" + b"native bootstrap" * 20)
+        archive = self.root / "portable.zip"
+        with zipfile.ZipFile(archive, "w") as stream:
+            stream.writestr("payload/fixture", "tested portable bytes")
+        digest = distribution.native_payload.file_hash(archive)
+        calls = []
+
+        def run(arguments, root, environment, capture=False):
+            args = list(map(str, arguments))
+            calls.append(args)
+            self.assertNotIn("TESL_COMPILER", environment)
+            self.assertTrue(environment["PATH"].endswith("System32"))
+            if args[1] == "install":
+                self.assertNotIn("--archive", args)
+                return json.dumps({"state": {"active_version": value["toolchainVersion"]}})
+            if args[1] == "version":
+                return "tesl " + value["toolchainVersion"] + "\n"
+            if args[1] == "doctor":
+                return json.dumps({"ok": True, "toolchain_version": value["toolchainVersion"], "source_revision": SHA,
+                                   "root": str(work / "installed by setup å/versions" / value["toolchainVersion"])})
+            self.assertEqual(args[1], "uninstall")
+            return json.dumps({"state": {"active_version": ""}, "installed": []})
+
+        with patch.object(distribution, "audit_windows_binary", return_value=({"imports": ["kernel32.dll"]}, [])), \
+                patch.object(distribution, "run", side_effect=run):
+            result = distribution.windows_setup(value, frontends, archive, digest, artifacts, work,
+                                                {"TESL_COMPILER": "unrelated", "PATH": "developer tools"})
+        self.assertEqual([args[1] for args in calls], ["install", "version", "doctor", "uninstall"])
+        self.assertEqual(result["authenticode"], "unsigned")
+        self.assertEqual(result["install_launch_uninstall"], "passed")
+        self.assertEqual(result["sha256"], distribution.native_payload.file_hash(artifacts / result["archive"]))
+        self.assertTrue((artifacts / (result["archive"] + ".sha256")).is_file())
 
 
 if __name__ == "__main__":

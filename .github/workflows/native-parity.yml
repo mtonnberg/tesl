@@ -62,7 +62,7 @@ jobs:
   parity:
     needs: plan
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 60
+    timeout-minutes: 120
     env:
       # Applies while OCaml itself is built as well as when Tesl is linked.
       MACOSX_DEPLOYMENT_TARGET: '13.0'
@@ -92,15 +92,33 @@ jobs:
           node-version: '22'
       - name: Build and exercise native compiler and tools
         run: python scripts/native-parity.py --plan native-release-plan.json --target ${{ matrix.target }} --module-bundle native-module-bundle
+      # Build-only POSIX tools run after native parity so they cannot supply
+      # accidental runtime dependencies to its Windows tests.
+      - uses: cygwin/cygwin-install-action@a3d72946b163026bbd0fa9a88379ccbda4bd86bb
+        if: ${{ startsWith(matrix.target, 'windows-') }}
+        id: cygwin-build
+        with:
+          install-dir: 'C:\cygwin-tesl'
+          packages: gcc-core gcc-g++ make m4 patch perl diffutils
+          add-to-path: true
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756
+        if: ${{ startsWith(matrix.target, 'windows-') }}
+        with:
+          arch: x64
       - name: Assemble and test native candidate archive
         if: ${{ !startsWith(matrix.target, 'windows-') }}
         run: python3 scripts/native_distribution.py --plan native-release-plan.json --target ${{ matrix.target }} --module-bundle native-module-bundle --output artifacts/distribution-${{ matrix.target }}
+      - name: Assemble and test native Windows candidate and setup executable
+        if: ${{ startsWith(matrix.target, 'windows-') }}
+        shell: pwsh
+        run: python scripts/native_distribution.py --plan native-release-plan.json --target windows-amd64 --module-bundle native-module-bundle --output artifacts/distribution-windows-amd64 --cygwin-bash '${{ steps.cygwin-build.outputs.root }}\bin\bash.exe'
       - uses: actions/upload-artifact@v4
-        if: ${{ !startsWith(matrix.target, 'windows-') }}
         with:
           name: native-candidate-${{ matrix.target }}
           path: |
             artifacts/distribution-${{ matrix.target }}/*.tar.gz
+            artifacts/distribution-${{ matrix.target }}/*.zip
+            artifacts/distribution-${{ matrix.target }}/*.exe
             artifacts/distribution-${{ matrix.target }}/*.sha256
             artifacts/distribution-${{ matrix.target }}/*.json
           if-no-files-found: error

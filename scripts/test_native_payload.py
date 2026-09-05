@@ -70,6 +70,35 @@ def assemble(arguments):
 
 
 class NativePayloadTest(unittest.TestCase):
+    def test_compiler_runtime_accepts_only_exact_recorded_dll_bytes(self):
+        with fixture("windows-amd64") as args:
+            plan, root, _, compiler = args[:4]
+            plan["windowsRuntimeLicense"] = {"hash": "pinned-license"}
+            source = root / "runtime-dlls"
+            source.mkdir()
+            dll = source / "vcruntime140.dll"
+            dll.write_bytes(b"recorded Microsoft runtime")
+            evidence = {"version": 1, "component": "compiler-runtime", "target": "windows-amd64",
+                        "compiler_sha256": payload.file_hash(compiler), "license": plan["windowsRuntimeLicense"],
+                        "files": {dll.name: {"sha256": payload.file_hash(dll), "authenticode": {"status": "Valid"}}}}
+            metadata = source / "native-build.json"
+            metadata.write_text(json.dumps(evidence))
+            destination = root / "runtime-output"
+            dll.write_bytes(b"changed")
+            with self.assertRaisesRegex(ValueError, "checksum"):
+                payload.copy_compiler_runtime(plan, compiler, source, destination)
+            self.assertFalse(destination.exists())
+            dll.write_bytes(b"recorded Microsoft runtime")
+            (source / "extra.dll").write_bytes(b"unrecorded")
+            with self.assertRaisesRegex(ValueError, "inventory"):
+                payload.copy_compiler_runtime(plan, compiler, source, destination)
+            (source / "extra.dll").unlink()
+            self.assertEqual(payload.copy_compiler_runtime(plan, compiler, source, destination), evidence)
+            self.assertEqual((destination / dll.name).read_bytes(), dll.read_bytes())
+            compiler.write_text("different compiler")
+            with self.assertRaisesRegex(ValueError, "metadata differs"):
+                payload.copy_compiler_runtime(plan, compiler, source, root / "other-runtime")
+
     def test_complete_payload_and_licenses_match_manifest(self):
         with fixture() as args:
             root = assemble(args)

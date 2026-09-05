@@ -20,6 +20,9 @@ func configure(command *exec.Cmd) {
 }
 
 func attach(command *exec.Cmd, launcher bool) (func(), func(), error) {
+	if command.Process == nil {
+		return nil, nil, fmt.Errorf("child on Windows has not started")
+	}
 	job, err := windows.CreateJobObject(nil, nil)
 	if err != nil {
 		return nil, nil, err
@@ -80,7 +83,7 @@ func resumeProcess(pid uint32) error {
 	if err != nil {
 		return err
 	}
-	defer windows.CloseHandle(snapshot)
+	defer func() { _ = windows.CloseHandle(snapshot) }()
 	entry := windows.ThreadEntry32{Size: uint32(unsafe.Sizeof(windows.ThreadEntry32{}))}
 	for err := windows.Thread32First(snapshot, &entry); err == nil; err = windows.Thread32Next(snapshot, &entry) {
 		if entry.OwnerProcessID != pid {
@@ -94,5 +97,5 @@ func resumeProcess(pid uint32) error {
 		_ = windows.CloseHandle(thread)
 		return err
 	}
-	return fmt.Errorf("Windows child %d has no initial thread", pid)
+	return fmt.Errorf("child %d on Windows has no initial thread", pid)
 }

@@ -348,9 +348,11 @@ func mapShadowFilePaths(payload []byte, shadow, root string) ([]byte, error) {
 			if message, ok := current["message"].(string); ok {
 				current["message"] = strings.ReplaceAll(message, shadow+string(filepath.Separator), root+string(filepath.Separator))
 			}
-			if file, ok := current["file"].(string); ok && pathWithinRoot(shadow, file) {
-				relative, _ := filepath.Rel(shadow, file)
-				current["file"] = filepath.Join(root, relative)
+			for _, key := range []string{"file", "workspace_root"} {
+				if file, ok := current[key].(string); ok && pathWithinRoot(shadow, file) {
+					relative, _ := filepath.Rel(shadow, file)
+					current[key] = filepath.Join(root, relative)
+				}
 			}
 			for _, child := range current {
 				rewrite(child)

@@ -151,8 +151,10 @@ let read_only_lifted_source () = with_temporary_directory (fun stdlib ->
       expect_refused index target "transform")))
 
 let bounds_and_unknown_context () = with_project fixtures (fun root ->
+  let before = build (main_path root) in
   write (Filename.concat root "oversized.tesl") (String.make (1024 * 1024 + 1) ' ');
   let index = build (main_path root) in
+  check bool "new rejected input still changes snapshot" false (before.id = index.id);
   check bool "budget failure explicit" true (List.exists (fun problem -> problem.code = "workspace-limit") index.problems);
   expect_refused index (selected index (main_path root) 3 28) "twice")
 
@@ -191,10 +193,18 @@ let interpolation_escapes () =
     check bool "decoded escapes preserve exact original offsets" true
       (contains changed "\"double \\n😀 \\t ${twice n} ${twice n}\"\r\n"))
 
+let interpolation_local_scope () =
+  let source = "module Main exposing [show]\nimport Tesl.Prelude exposing [Int, String]\nfn show(n: Int) -> String = \"😀 ${(fn(innerValue: Int) -> innerValue) n}\"\n" in
+  with_project ["main.tesl", source] (fun root ->
+    let index = build (main_path root) in complete index;
+    let target = List.find (fun (use : use) -> use.symbol.symbol_name = "innerValue") index.uses in
+    check int "interpolation-only local binder is indexed" 2 (List.length (references index target.symbol));
+    ignore (expect_safe index target "renamedValue"))
+
 let invalid_rename_names () = with_project fixtures (fun root ->
   let index = build (main_path root) in complete index;
   let target = selected index (main_path root) 3 28 in
-  List.iter (expect_refused index target) [""; "fn"; "two names"; "Lib.twice"; "Twice"; "double"; String.make 129 'x'])
+  List.iter (expect_refused index target) [""; "fn"; "twice "; "twice #comment"; "two names"; "Lib.twice"; "Twice"; "double"; String.make 129 'x'])
 
 let stable_mirror_identity () = with_project fixtures (fun root ->
   let before = build (main_path root) in
@@ -221,7 +231,7 @@ let invalid_context_is_partial () =
     expect_refused index target "twice")
 
 let () = Alcotest.run "Workspace semantic index" ["identity and edits", List.map (fun (name, test) -> test_case name `Quick test)
-  ["qualified import all", import_all; "interpolation escaped prefix", interpolation_escapes;
+  ["interpolation local scope", interpolation_local_scope; "qualified import all", import_all; "interpolation escaped prefix", interpolation_escapes;
    "invalid rename identifiers", invalid_rename_names; "stable mirror identity", stable_mirror_identity;
    "manifest invalidation", manifest_change; "unsupported contexts explicit", invalid_context_is_partial;
    "exposing and qualified calls", exposed_and_qualified; "local shadowing", local_shadow;

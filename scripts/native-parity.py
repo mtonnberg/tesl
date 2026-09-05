@@ -82,7 +82,7 @@ def main():
     checks.extend([
         ("Go commands", ["go", "build", "-ldflags", ldflags, "./cmd/..."], root / "runtime/go"),
         ("Go CLI and process ownership", ["go", "test", "-race", "-timeout=20m", "./internal/childprocess",
-         "./internal/toolchain", "./internal/protocol", "./internal/cli", "./cmd/tesl"], root / "runtime/go"),
+         "./internal/toolchain", "./internal/protocol", "./internal/cli", "./internal/install", "./cmd/tesl", "./cmd/tesl-install"], root / "runtime/go"),
         ("Go LSP", ["go", "test", "-race", "./internal/lsp"], root / "runtime/go"),
         ("Go compiler sessions", ["go", "test", "-race", "./internal/tooling", "-run",
          "TestCompilerPipesDrainAndCloseWithDescendants|Workspace"], root / "runtime/go"),

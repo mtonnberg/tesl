@@ -219,6 +219,8 @@ func ValidateCompilerJSON(flag string, payload []byte) error {
 	}
 
 	switch flag {
+	case "--workspace-definition-json", "--workspace-references-json", "--workspace-rename-json":
+		return validateWorkspaceJSON(flag, root, payload)
 	case "--check-json":
 		items, err := requiredArray(root, "diagnostics")
 		if err != nil {
@@ -518,6 +520,7 @@ func knownCompilerJSONFlag(flag string) bool {
 	switch flag {
 	case "--check-json", "--agent-context-json", "agent-context", "--type-at-json", "--field-at-json",
 		"--definition-json", "--type-definition-json", "--signature-help-json", "--completions-json",
+		"--workspace-definition-json", "--workspace-references-json", "--workspace-rename-json",
 		"--occurrences-json", "--selection-range-json", "--local-bindings-json", "--semantic-json", "--doc-json":
 		return true
 	default:

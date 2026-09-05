@@ -222,7 +222,13 @@ inspection, detach/reattach, and agent queries pass against the same installatio
 
 ### W3 — Ship native installation and continuous releases
 
-- [ ] Produce a portable ZIP and signed per-user installer from the common
+Distribution decision, 2026-09-05: the initial Windows release is unsigned. A
+code-signing subscription/certificate is not feasible for the maintainer now and
+does not block this roadmap. Ship a self-contained setup `.exe`, a portable ZIP,
+SHA-256 checksums, provenance, and native source-build instructions. Authenticode
+signing is a future improvement, not a required account setup for this release.
+
+- [ ] Produce a portable ZIP and unsigned self-contained per-user setup `.exe` from the common
   payload/manifest. Support exact-version selection, install/upgrade/rollback,
   PATH integration, and uninstall while preserving user data.
 - [ ] Add generated WinGet metadata for promoted releases, following
@@ -230,9 +236,10 @@ inspection, detach/reattach, and agent queries pass against the same installatio
   Registry review/availability is separate from publishing every successful
   `main` release; the direct download remains usable independently.
 - [ ] Test final downloaded artifacts with normal Windows security settings;
-  document publisher identity and verification. Signing does not guarantee the
-  absence of all reputation prompts, and disabling OS protections is not an
-  installation step.
+  document the unknown-publisher/reputation prompts and checksum verification.
+  Checksums verify bytes, not publisher identity. Source builds remain available
+  when local policy prevents running unsigned downloads; disabling OS protections
+  is not an installation step.
 - [ ] Add Windows assets and parity gates to the shared per-revision release
   pipeline once W0–W2 are green. Publish checksums, provenance, licenses, and the
   source/native build plan for the actual shipped bytes.

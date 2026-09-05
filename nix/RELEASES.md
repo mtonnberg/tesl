@@ -44,6 +44,7 @@ back to its linked identity; an ordinary `go build` reports `dev`.
 For each candidate target, `payloads.<target>` contains:
 
 - `archiveName`: `tesl-<version>-<target>.tar.gz`, or `.zip` on Windows.
+- `installerName`: versioned setup executable name (self-contained on Windows).
 - `manifest`: the exact version-1 `share/tesl/toolchain.json` document to install.
 
 The manifest includes all six frontends, compiler, Go, PostgreSQL server/client
@@ -104,9 +105,9 @@ database. Evidence therefore records `offline_go_modules: passed` separately fro
 
 ## Native candidate archives
 
-`scripts/native_distribution.py` builds a Linux or macOS candidate from the
+`scripts/native_distribution.py` builds a native candidate from the
 exported plan, then tests the extracted archive before making its output directory
-visible. Build hosts need the pinned Go bootstrap, OCaml and Dune, plus Python 3.10+
+visible. Unix build hosts need the pinned Go bootstrap and Python 3.10+
 and native C/build tools (GNU make, Bison, Flex and Perl). Linux needs `readelf`,
 `unshare` with user/network namespaces, and `ip`; macOS uses its native linker,
 `otool`, `install_name_tool`, and `codesign`. These are builder requirements.
@@ -119,7 +120,11 @@ python3 scripts/native_distribution.py --plan release-plan --target linux-amd64 
 The builder verifies flat archive hashes and recursive Nix source hashes before
 running source code. It builds Go from the pinned upstream archive, using the
 runner's Go only for bootstrap. The new SDK builds all six frontends with CGO
-disabled and trimmed build paths. PostgreSQL is built from its pinned source and
+disabled and trimmed build paths. OCaml and Dune are built from their exact
+Nix-exported source archives; the runner's opam installation is used only by the
+separate parity tests. OCaml compression is disabled to avoid an external zstd
+dependency. Dune uses its bootstrapped native executable, not its source-tree
+shell wrapper. PostgreSQL is built from its pinned source and
 retains its own server/client binaries, libraries, schema files, timezones and
 license notices. Its local development configuration disables optional ICU,
 OpenSSL, readline, compression and other external libraries; it does not provide
@@ -140,14 +145,59 @@ queries, tests, local build and authenticated HTTP, then checks persistence acro
 clean/restart and installation immutability. Linux additionally runs it in a new
 network namespace with loopback only, retaining a non-root UID for PostgreSQL.
 
-Outputs are the versioned `.tar.gz`, its `.sha256`, and `distribution-checks.json`.
+Outputs are the versioned `.tar.gz`/`.zip`, its `.sha256`, and `distribution-checks.json`.
 They are unsigned CI candidates. Archive metadata is normalized, but complete
 cross-host reproducibility, signing, installers, upgrades and publication remain
-open. The opam compiler/Dune are checked by version; their compiler source hashes
-are explicitly unverified, even though the separately included OCaml license
-archive is hash-verified. macOS network isolation and execution on the minimum OS
-remain separate gates. Windows archives await PostgreSQL and PE/DLL packaging.
+separate acceptance gates. Windows signing is explicitly optional: the initial
+delivery is unsigned. macOS network isolation and execution on the minimum OS
+remain separate gates. Native Windows packaging includes MSVC PostgreSQL, the
+verified-source OCaml compiler, and a PE/DLL audit. Required compiler runtime DLLs
+come only from the active Visual Studio redistributable directory, retain their
+Microsoft signatures, and include hashes, versions, and the pinned license text.
 The evidence records these limits instead of claiming a finished release.
+
+## Native Windows source build
+
+Use a clean checkout of the exact source revision in the release plan. The native
+Windows source build requires Python 3.10+, the plan's exact Go bootstrap version,
+Visual Studio 2022 C++ build tools/Windows SDK, and Cygwin with `gcc-core`,
+`gcc-g++`, `make`, `m4`, `patch`, `perl`, and `diffutils`. These are build-only
+prerequisites. The resulting installed toolchain does not require Cygwin or opam.
+
+The release plan is available in `share/tesl/release-plan.json` inside a payload
+and as a CI artifact. A Linux/macOS source builder can also export it from the
+same clean checkout with `nix build .#release-plan --out-link native-release-plan.json`.
+Its `sourceRevision` must equal `git rev-parse HEAD`; do not reuse a plan from a
+different commit.
+
+From a native x64 Visual Studio developer PowerShell, with Cygwin's `bin` on PATH:
+
+```powershell
+python scripts/module_proxy.py --plan native-release-plan.json --output native-module-bundle
+python scripts/native_distribution.py --plan native-release-plan.json --target windows-amd64 --module-bundle native-module-bundle --output artifacts/distribution-windows-amd64 --cygwin-bash C:\cygwin\bin\bash.exe
+```
+
+The builder downloads and verifies the plan's OCaml, Dune, Go, PostgreSQL,
+FlexDLL, winpthreads, Meson, Ninja, Perl, Flex, and Bison sources before executing
+their build scripts. Flex/Bison run in Cygwin; the packaged executables use native
+Windows APIs. No payload DLL is selected from an arbitrary PATH directory.
+The workflow in `.github/workflows/native-parity.yml` provides the complete
+runner setup and runs the same recipe.
+
+Windows outputs include `tesl-<version>-setup-windows-amd64.exe` and its SHA-256.
+The setup embeds the exact tested ZIP, followed by a versioned footer containing
+its byte offset, length, and digest. It installs to the current user's directory,
+without network downloads or administrator privileges. The native installer
+validates the archive and manifest, stages a complete immutable version, and
+atomically changes its selection state. Its tests cover corrupt input,
+interrupted installation, coexistence, rollback, uninstall, active-process
+leases, and PostgreSQL data preservation. The distribution builder additionally
+executes the final setup, installed launcher, and uninstall on native Windows.
+
+This setup is unsigned by project policy. An embedded hash protects against
+accidental corruption; the separately published hash identifies the final setup
+bytes. Neither is an Authenticode publisher signature. Source builds and the
+portable ZIP remain alternatives to the setup executable.
 
 To exercise an already unpacked payload directly:
 

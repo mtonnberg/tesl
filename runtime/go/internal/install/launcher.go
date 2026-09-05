@@ -41,12 +41,20 @@ func copyExecutable(source, destination, digest string) error {
 		return err
 	}
 	defer func() { _ = input.Close() }()
+	var sourceReader io.Reader = input
+	embedded, err := FindEmbedded(source)
+	if err != nil {
+		return err
+	}
+	if embedded != nil {
+		sourceReader = io.LimitReader(input, embedded.Offset)
+	}
 	output, err := os.CreateTemp(filepath.Dir(destination), ".launcher-*")
 	if err != nil {
 		return err
 	}
 	defer func() { _ = os.Remove(output.Name()) }()
-	_, err = io.Copy(output, input)
+	_, err = io.Copy(output, sourceReader)
 	if err == nil {
 		err = output.Chmod(0755)
 	}
@@ -89,36 +97,36 @@ func (m *Manager) ensureLaunchers(mark marker) error {
 	for _, frontend := range Frontends {
 		name := filepath.Join(directory, frontend+binarySuffix())
 		info, err := os.Lstat(name)
-		if err != nil && !os.IsNotExist(err) {
-			return err
-		}
-		if runtime.GOOS == "windows" {
-			if os.IsNotExist(err) {
+		if os.IsNotExist(err) {
+			if runtime.GOOS == "windows" {
 				if err := copyExecutable(bootstrap, name, mark.LauncherSHA256); err != nil {
 					return err
 				}
 			} else {
-				if !info.Mode().IsRegular() {
-					return fmt.Errorf("managed launcher is not a regular file: %s", name)
-				}
-				digest, err := hashFile(name)
-				if err != nil {
-					return err
-				}
-				if digest != mark.LauncherSHA256 {
-					return fmt.Errorf("managed launcher was modified: %s", name)
-				}
-			}
-		} else {
-			if os.IsNotExist(err) {
 				if err := os.Symlink("tesl-install", name); err != nil {
 					return err
 				}
-			} else {
-				target, err := os.Readlink(name)
-				if err != nil || target != "tesl-install" {
-					return fmt.Errorf("refusing to replace an unmanaged launcher: %s", name)
-				}
+			}
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if runtime.GOOS == "windows" {
+			if !info.Mode().IsRegular() {
+				return fmt.Errorf("managed launcher is not a regular file: %s", name)
+			}
+			digest, err := hashFile(name)
+			if err != nil {
+				return err
+			}
+			if digest != mark.LauncherSHA256 {
+				return fmt.Errorf("managed launcher was modified: %s", name)
+			}
+		} else {
+			target, err := os.Readlink(name)
+			if err != nil || target != "tesl-install" {
+				return fmt.Errorf("refusing to replace an unmanaged launcher: %s", name)
 			}
 		}
 	}

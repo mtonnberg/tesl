@@ -15,11 +15,13 @@ import (
 	"syscall"
 
 	"tesl.dev/runtime/go/internal/childprocess"
+	"tesl.dev/runtime/go/internal/install"
 	"tesl.dev/runtime/go/internal/toolchain"
 )
 
 type Invocation struct {
 	Persistent     bool
+	ToolchainRoot  string
 	Executable     string
 	Args           []string
 	Directory      string
@@ -52,10 +54,15 @@ func execute(ctx context.Context, invocation Invocation) error {
 	// Managed PostgreSQL has an explicit start/stop lifecycle independent of this
 	// invocation. Its daemon must survive pg_ctl and the CLI exiting.
 	if invocation.Persistent {
+		release, err := install.ConfigurePostgresLease(command, invocation.ToolchainRoot)
+		if err != nil {
+			return err
+		}
+		defer release()
 		if err := childprocess.ConfigurePersistent(command); err != nil {
 			return err
 		}
-		err := command.Run()
+		err = command.Run()
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
@@ -124,7 +131,16 @@ func (app *App) invoke(ctx context.Context, tool, directory string, environment 
 		return err
 	}
 	persistent := tool == "pg_ctl" && len(args) > 0 && args[len(args)-1] == "start"
-	return app.Execute(ctx, Invocation{Persistent: persistent, Executable: path, Args: args, Directory: directory, Environment: environment, Stdin: app.Stdin, Stdout: app.Stdout, Stderr: app.Stderr})
+	toolchainRoot := ""
+	if persistent {
+		_, root, err := app.Resolver.Load()
+		if err == nil {
+			toolchainRoot = root
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+	}
+	return app.Execute(ctx, Invocation{Persistent: persistent, ToolchainRoot: toolchainRoot, Executable: path, Args: args, Directory: directory, Environment: environment, Stdin: app.Stdin, Stdout: app.Stdout, Stderr: app.Stderr})
 }
 
 func (app *App) compiler(ctx context.Context, args ...string) error {
