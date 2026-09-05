@@ -84,8 +84,10 @@ Implemented so far:
   required, and documentation explains first-launch prompts.
 
 Nix's default install, `nix run`, and development shell now select the native CLI
-after local command-parity and clean-install checks passed. The authoritative gate
-is being rerun with this selection; it also tests the actual default profile.
+after local command-parity and clean-install checks passed. All 22 phases of the
+local authoritative gate passed with this selection, including clean installation
+of the actual default profile and both CLI parity references. The pushed PR still
+needs its matching hosted CI results.
 Native parity CI includes candidate assembly and installed-workflow gates for all
 five targets; macOS and Windows packaging still need successful runs. It does not
 publish releases. M2–M4 remain open, including complete native
@@ -282,7 +284,7 @@ explicit optional integration. No unresolved dependency in the default quick sta
 - [x] Implement the Go CLI and installation-relative tool/resource discovery.
 - [ ] Port lifecycle, database, watch, test/mutation, build, and debug behavior
   using the parity fixtures; preserve machine-readable command contracts.
-- [ ] Switch Nix to the same implementation after the existing gate passes.
+- [x] Switch Nix to the same implementation after the existing gate passes.
 
 Exit: Nix users retain current behavior, and relocated candidate payloads find
 their own compiler, tools, and resources without shell wrappers or Nix paths.
