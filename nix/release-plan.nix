@@ -23,6 +23,10 @@ in rec {
     postgresql = source pkgs.postgresql;
   };
   moduleInputs = [ "runtime/go/go.mod" "runtime/go/go.sum" ];
+  moduleInputHashes = builtins.listToAttrs (map (path: {
+    name = path;
+    value = builtins.hashString "sha256" (builtins.readFile (../. + "/${path}"));
+  }) moduleInputs);
   testPackages = { alcotest = pkgs.ocamlPackages.alcotest.version; };
   commands = [ "tesl" "tesl-lsp" "tesl-dap" "tesl-mcp" "tesl-debug-inspect" "tesl-debug-attach" ];
   layout = {
