@@ -159,6 +159,11 @@ func TestInstalledToolchainWorkflow(t *testing.T) {
 		t.Helper()
 		return run(project, psql, "-X", "-v", "ON_ERROR_STOP=1", "-h", "127.0.0.1", "-p", port, "-U", "app", "-d", "app", "-tAc", query)
 	}
+	for setting, want := range map[string]string{"unix_socket_directories": "", "listen_addresses": "127.0.0.1"} {
+		if value := strings.TrimSpace(sql("show " + setting)); value != want {
+			t.Fatalf("installed managed database %s = %q, want %q", setting, value, want)
+		}
+	}
 	sql("create table installation_preserved (n integer); insert into installation_preserved values (42)")
 	writeProjectFile(t, project, ".tesl-stuff/user-notes.txt", "preserve user files\n")
 	userFiles := map[string][]byte{}
