@@ -53,7 +53,12 @@ trap 'rm -rf "$output_root"' EXIT
 printf '%s\0' "${sources[@]}" | xargs -0 -n1 -P "$jobs" bash -c '
   source=$4
   key=$(printf "%s" "$source" | sha256sum | cut -d" " -f1)
-  "$1" --backend go "$2/$source" --out "$3/$key" >/dev/null
+  case "$source" in
+    example/playground/*)
+      python3 "$2/scripts/playground-corpus-build.py" "$1" "$2/$source" "$3/$key"
+      ;;
+    *) "$1" --backend go "$2/$source" --out "$3/$key" >/dev/null ;;
+  esac
 ' _ "$compiler" "$repo_root" "$output_root"
 
 mapfile -t outputs < <(printf '%s\n' "$output_root"/*)
@@ -62,5 +67,5 @@ printf '%s\0' "${outputs[@]}" | xargs -0 -n1 -P "$jobs" bash -c '
   go test -run "^$" ./... >/dev/null
 ' _
 
-printf 'Go corpus OK (%s tracked recursive sources compiled; generated tests build; jobs=%s)\n' \
-  "${#sources[@]}" "$jobs" >&2
+printf 'Go corpus OK (%s tracked sources checked; %s generated modules and their tests build; jobs=%s)\n' \
+  "${#sources[@]}" "${#outputs[@]}" "$jobs" >&2

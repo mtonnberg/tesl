@@ -410,3 +410,10 @@ repair is compiled in both native and browser checks and executed by
 `scripts/playground-examples-runtime.py`. Database evidence identifies the queried
 row and key; it does not establish customer authorization. The browser does not
 connect to a database or execute the displayed tests.
+
+The recursive Go corpus gate also covers every tracked playground example.
+`playground/examples.json` declares the expected starter errors and exact repairs.
+The gate rejects changed diagnostics, missing manifest entries, and ambiguous
+repairs, then builds the Go modules and generated tests for valid starters and
+every repair. Deliberately broken starters must have a repair; they are never
+silently excluded from the corpus.

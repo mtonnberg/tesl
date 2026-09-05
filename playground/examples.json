@@ -9,6 +9,10 @@
     "file": "customer-invoice-unchecked.tesl",
     "errors": [
       "V001"
+    ],
+    "repair": [
+      "  invoiceLabel raw customer",
+      "  let invoice = check checkCustomer raw customer\n  invoiceLabel invoice customer"
     ]
   },
   {
@@ -16,6 +20,10 @@
     "file": "missing-import.tesl",
     "errors": [
       "T001"
+    ],
+    "repair": [
+      "import Tesl.Prelude exposing [Int, String]",
+      "import Tesl.Prelude exposing [Int, String]\nimport Tesl.String exposing [String.length]"
     ]
   },
   {
@@ -23,6 +31,10 @@
     "file": "capability-missing.tesl",
     "errors": [
       "V001"
+    ],
+    "repair": [
+      "  requires [dbRead Note]",
+      "  requires [dbWrite Note]"
     ]
   },
   {
