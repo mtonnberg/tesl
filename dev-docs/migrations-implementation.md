@@ -70,6 +70,20 @@ are included. Adoption, additive execution and the remaining lessons are pending
 
 ## Slices under development
 
+- Saved-source history discovery now derives `VCurrent`'s version and loads every
+  consecutive frozen schema through the checked semantic inventory. It records
+  raw-byte guards for private schema dependencies and transitive migration helpers,
+  including import diamonds and cycles. Missing intermediate snapshots/migrations,
+  invalid version numbering, noncanonical paths, symlinks, special files and local
+  import shadowing refuse discovery. Rechecking an inventory also checks revision
+  directory membership and import resolution, so adding a shadowing source file
+  cannot redirect an existing import silently. Fifteen regression groups pass.
+  This is an internal saved-source API, not the public generator or editor overlay
+  API: migration modules are parsed and checked for ownership and declaration
+  purity, but their records/types and amendment files still need elaboration.
+  Frozen-header verification, prune evidence and atomic manifest application remain
+  pending. Discovery failures retain their own categories; a schema type error is
+  not mislabeled as MIG013 edited-history evidence.
 - Ordinary application modules and their imported libraries now reject historical
   schema imports with MIG015, including nested modules and unsaved buffers.
   Adding a test block grants no exception. Pure tests are permitted in migration
@@ -99,6 +113,8 @@ are included. Adoption, additive execution and the remaining lessons are pending
   tuples. A generic boxed comparison exposed an unguarded inactive payload access;
   its disjunction now stays inside the tag guard. All 17 JSONB regression groups
   pass, including emitted HTTP responses, raw scanner refusals and Memory round trips.
+  The codec-direction check also walks nested generic arguments before its nominal
+  recursion guard; forbidden codecs cannot hide behind `Envelope (Envelope State)`.
   Explicit codecs on generic ADT declarations and additional container payloads still
   require dedicated coverage and implementation; this does not certify every ADT shape.
 - A full root CI run exposed failures in NilAway, generated-file synchronization,
@@ -118,7 +134,11 @@ are included. Adoption, additive execution and the remaining lessons are pending
   its cause has not been established. SQL failures now dump activity, blockers and
   transaction/query start times, and a failed private-cluster run preserves the full
   server log with slow-statement and lock-wait diagnostics. Timeouts and durability
-  settings are unchanged. The expanded compiler slices require the next full gate;
+  settings are unchanged. A later full compiler run passed the language/runtime
+  suites but exposed stale Dune input in the suite-registration meta-test: its
+  copied configuration omitted newly registered suites. The test now declares its
+  configuration and test-file dependencies, and its focused gate passes. The
+  expanded compiler slices require the next full gate;
   neither feature-wide review is complete.
 
 - The deterministic scheduler, independent model, real control-template tests,

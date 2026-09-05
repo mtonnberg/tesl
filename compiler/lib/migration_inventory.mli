@@ -22,6 +22,11 @@ val load : compiler_abi:string -> root_file:string ->
   (t, Migration_ir.error) result
 
 val module_names : t -> string list
+val root_module : t -> string
+
+(** Raw-byte SHA-256 preconditions for every saved source in the owned closure.
+    These are edit preconditions, not semantic identities or history evidence. *)
+val source_inputs : t -> (string * string) list
 val snapshot : t -> Migration_canonical.node
 val closure : t -> (Migration_ir.namespace * string) list ->
   (Migration_canonical.node, Migration_ir.error) result

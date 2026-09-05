@@ -26,9 +26,14 @@ type t = {
   modules : string list;
   definitions : definition list;
   fields : field_entry list;
+  sources : (string * string) list;
 }
 
 let module_names inventory = inventory.modules
+let root_module inventory = match inventory.scopes with
+  | [scope] -> scope.family ^ "." ^ scope.revision
+  | _ -> assert false (* load publishes exactly one schema revision *)
+let source_inputs inventory = inventory.sources
 let stored_fields inventory = List.map (fun entry -> entry.field) inventory.fields
 
 let with_abi inventory body = Migration_canonical.Seq [
@@ -218,7 +223,10 @@ let load ~compiler_abi ~root_file =
         ~roots:(List.map (fun d -> d.key) definitions) with
      | Error error -> raise (Invalid error)
      | Ok _ -> ());
-    let inventory = { compiler_abi; scopes; definitions; fields=[];
+    let source_inputs = Hashtbl.to_seq sources |> List.of_seq
+      |> List.map (fun (path, source) -> path, Migration_hash.digest source)
+      |> List.sort compare in
+    let inventory = { compiler_abi; scopes; definitions; fields=[]; sources=source_inputs;
       modules=List.map (fun m -> m.module_name) modules } in
     let fields = List.concat_map (fun d -> List.map (fun (name, body) ->
       let entity = match d.key with
