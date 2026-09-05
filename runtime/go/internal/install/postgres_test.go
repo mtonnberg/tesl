@@ -87,7 +87,18 @@ func TestPostgresLeaseFailedStartAndCanceledCommandRelease(t *testing.T) {
 		if canceled {
 			cancel()
 		}
-		command := exec.CommandContext(ctx, filepath.Join(t.TempDir(), "missing executable"))
+		executable := filepath.Join(t.TempDir(), "missing executable")
+		if canceled {
+			// Windows resolves executable suffixes before checking cancellation.
+			// Use a real executable to exercise the canceled-start lease path;
+			// the other iteration independently exercises a missing executable.
+			var err error
+			executable, err = os.Executable()
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		command := exec.CommandContext(ctx, executable)
 		release, err := ConfigurePostgresLease(command, filepath.Join(m.Root, "versions", "0.3.1"))
 		if err != nil {
 			cancel()

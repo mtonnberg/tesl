@@ -126,7 +126,9 @@ function managedFixture(t, suffix) {
 }
 
 test("managed PATH installs use native shims with a pinned version on Unix and Windows", (t) => {
-  for (const platform of ["linux", "win32"]) {
+  // Unix hosts can model Windows suffix lookup; Windows cannot model Unix
+  // executable permission bits (chmod is not an executable-bit API there).
+  for (const platform of new Set([process.platform, "win32"])) {
     const value = managedFixture(t, platform === "win32" ? ".exe" : "");
     const selected = findInstallation({ platform, env: { PATH: path.join(value.root, "bin") } });
     const realRoot = fs.realpathSync(value.root);
