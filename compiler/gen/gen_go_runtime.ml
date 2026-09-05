@@ -13,6 +13,9 @@ let find_repo_root start =
   up (Filename.dirname resolved) 12
 
 let () =
+  (* Snapshots are byte-stable build outputs, including on Windows where stdout
+     otherwise translates LF into CRLF. Source reads are already binary. *)
+  set_binary_mode_out stdout true;
   let root =
     match find_repo_root Sys.argv.(0) with
     | Some root -> root

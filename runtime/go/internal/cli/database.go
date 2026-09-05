@@ -153,9 +153,11 @@ func (app *App) database(ctx context.Context, root, action string) (string, erro
 		} else if err := listener.Close(); err != nil {
 			return "", err
 		}
-		// pg_ctl's -o is parsed by PostgreSQL. Only validated numeric values and
-		// fixed settings enter it; project paths remain separate native arguments.
-		options := "-F -p " + port + " -c listen_addresses=127.0.0.1 -c unix_socket_directories=''"
+		// pg_ctl passes -o through /bin/sh or cmd.exe. An empty value after
+		// '=' works in both; POSIX single quotes become literal on Windows.
+		// Only validated numeric values and fixed settings enter this string;
+		// project paths remain separate native arguments.
+		options := "-F -p " + port + " -c listen_addresses=127.0.0.1 -c unix_socket_directories="
 		if err := app.invoke(ctx, "pg_ctl", root, app.Environment, "-D", data, "-l", filepath.Join(directory, "postgres.log"), "-o", options, "-w", "start"); err != nil {
 			return "", err
 		}

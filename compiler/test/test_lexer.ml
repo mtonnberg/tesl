@@ -41,7 +41,7 @@ let test_interp_string () =
   (* Interpolated strings return INTERP token with raw content *)
   let toks = tok_list {|"Hello, ${name}!"|}  in
   (match toks with
-   | [INTERP _raw; NEWLINE; EOF] -> ()
+   | [INTERP (_raw, _offsets); NEWLINE; EOF] -> ()
    | _ -> Alcotest.fail (Printf.sprintf "expected INTERP, got %d tokens"
                            (List.length toks)))
 

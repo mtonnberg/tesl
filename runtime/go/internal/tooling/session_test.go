@@ -483,6 +483,10 @@ func TestWorkspaceSessionProtocolFailures(t *testing.T) {
 			}
 			// Changed toolchain environment after a failed request starts cleanly.
 			client.Environment = withEnvironment(client.Environment, "TESL_SESSION_TEST_HELPER", "ok")
+			// The short deadline above tests termination of a broken compiler.
+			// Recovery has the normal query budget, including restaging source
+			// and stdlib files on loaded CI hosts running the race detector.
+			client.Timeout = DefaultCompilerTimeout
 			if _, _, err := client.QuerySourceJSON(context.Background(), "--check-json", entry, "module Main exposing []\n"); err != nil {
 				t.Fatal(err)
 			}

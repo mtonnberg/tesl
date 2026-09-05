@@ -42,7 +42,7 @@ func (client Client) QuerySourcesJSON(ctx context.Context, flag, logicalPath str
 	if err != nil {
 		return nil, Result{}, err
 	}
-	shadow, err := os.MkdirTemp("", "tesl-overlay-*")
+	shadow, err := makeShadowDirectory("tesl-overlay-*")
 	if err != nil {
 		return nil, Result{}, fmt.Errorf("compiler: create source overlay: %w", err)
 	}
@@ -304,6 +304,22 @@ func readFileBounded(path string, remaining int64) ([]byte, error) {
 	return contents, nil
 }
 
+// The compiler canonicalizes source locations. Canonicalize the private root
+// too, so macOS /var -> /private/var (or a user-selected symlinked TMPDIR) cannot
+// escape result mapping or make checked rename locations appear unrelated.
+func makeShadowDirectory(pattern string) (string, error) {
+	path, err := os.MkdirTemp("", pattern)
+	if err != nil {
+		return "", err
+	}
+	canonical, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		_ = os.RemoveAll(path)
+		return "", err
+	}
+	return canonical, nil
+}
+
 func writeShadowSource(root, shadow, path string, contents []byte) error {
 	target, err := shadowSourcePath(root, shadow, path)
 	if err != nil {
@@ -348,9 +364,11 @@ func mapShadowFilePaths(payload []byte, shadow, root string) ([]byte, error) {
 			if message, ok := current["message"].(string); ok {
 				current["message"] = strings.ReplaceAll(message, shadow+string(filepath.Separator), root+string(filepath.Separator))
 			}
-			if file, ok := current["file"].(string); ok && pathWithinRoot(shadow, file) {
-				relative, _ := filepath.Rel(shadow, file)
-				current["file"] = filepath.Join(root, relative)
+			for _, key := range []string{"file", "workspace_root"} {
+				if file, ok := current[key].(string); ok && pathWithinRoot(shadow, file) {
+					relative, _ := filepath.Rel(shadow, file)
+					current[key] = filepath.Join(root, relative)
+				}
 			}
 			for _, child := range current {
 				rewrite(child)

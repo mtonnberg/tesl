@@ -39,6 +39,14 @@ func (r Resolver) GoEnvironment(environment []string) ([]string, error) {
 	}
 	environment = Setenv(environment, "GOROOT", filepath.Dir(filepath.Dir(goPath)))
 	environment = Setenv(environment, "GOWORK", "off")
+	// User-level Go configuration and private-module patterns must not bypass
+	// the installed proxy. Generated programs need no host C compiler or VCS.
+	for key, value := range map[string]string{
+		"GOENV": "off", "GO111MODULE": "on", "GOPRIVATE": "", "GONOPROXY": "none",
+		"GOVCS": "*:off", "CGO_ENABLED": "0",
+	} {
+		environment = Setenv(environment, key, value)
+	}
 	if _, found := manifest.Components["go-modules"]; found {
 		modules, err := r.Resolve("go-modules")
 		if err != nil {

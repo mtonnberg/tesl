@@ -177,9 +177,9 @@ func TestServerAnswersHoverDefinitionAndCompletion(t *testing.T) {
 	compiler := &fakeCompiler{
 		payload: []byte(`{"version":1,"diagnostics":[]}`),
 		responses: map[string][]byte{
-			"--type-at-json":     []byte(`{"version":1,"type_at":{"file":` + testFilePathJSON("demo.tesl") + `,"line":0,"col":0,"end_line":0,"end_col":1,"type":"Int"}}`),
-			"--definition-json":  []byte(`{"version":1,"definition":{"file":` + testFilePathJSON("demo.tesl") + `,"line":0,"col":0,"end_line":0,"end_col":1}}`),
-			"--completions-json": []byte(`{"version":1,"completions":[{"label":"double","detail":"Int -> Int","kind":"function"}]}`),
+			"--type-at-json":              []byte(`{"version":1,"type_at":{"file":` + testFilePathJSON("demo.tesl") + `,"line":0,"col":0,"end_line":0,"end_col":1,"type":"Int"}}`),
+			"--workspace-definition-json": workspacePayload(t, testFilePath("demo.tesl"), "x = 1", []tooling.WorkspaceLocation{{File: testFilePath("demo.tesl"), EndCol: 1}}, ""),
+			"--completions-json":          []byte(`{"version":1,"completions":[{"label":"double","detail":"Int -> Int","kind":"function"}]}`),
 		},
 	}
 	input := frames(t,
@@ -226,7 +226,7 @@ func TestServerAnswersHoverDefinitionAndCompletion(t *testing.T) {
 	if !bytes.Contains(responses[2].Result, []byte(`"label":"double"`)) {
 		t.Fatalf("completion result = %s", responses[2].Result)
 	}
-	if len(compiler.flags) != 4 || compiler.flags[1] != "--type-at-json" || compiler.flags[2] != "--definition-json" || compiler.flags[3] != "--completions-json" {
+	if len(compiler.flags) != 4 || compiler.flags[1] != "--type-at-json" || compiler.flags[2] != "--workspace-definition-json" || compiler.flags[3] != "--completions-json" {
 		t.Fatalf("compiler flags = %#v", compiler.flags)
 	}
 }
@@ -235,9 +235,9 @@ func TestServerAnswersSignatureTypeDefinitionAndReferences(t *testing.T) {
 	compiler := &fakeCompiler{
 		payload: []byte(`{"version":1,"diagnostics":[]}`),
 		responses: map[string][]byte{
-			"--signature-help-json":  []byte(`{"version":1,"signature":{"label":"add a: Int b: Int","parameters":[{"label":"a","type":"Int"},{"label":"b","type":"Int"}],"active_parameter":1}}`),
-			"--type-definition-json": []byte(`{"version":1,"type_definition":{"file":` + testFilePathJSON("demo.tesl") + `,"line":0,"col":0,"end_line":0,"end_col":1}}`),
-			"--occurrences-json":     []byte(`{"version":1,"occurrences":[{"file":` + testFilePathJSON("demo.tesl") + `,"line":0,"col":0,"end_line":0,"end_col":1,"kind":"write"}]}`),
+			"--signature-help-json":       []byte(`{"version":1,"signature":{"label":"add a: Int b: Int","parameters":[{"label":"a","type":"Int"},{"label":"b","type":"Int"}],"active_parameter":1}}`),
+			"--type-definition-json":      []byte(`{"version":1,"type_definition":{"file":` + testFilePathJSON("demo.tesl") + `,"line":0,"col":0,"end_line":0,"end_col":1}}`),
+			"--workspace-references-json": workspacePayload(t, testFilePath("demo.tesl"), "x = 1", []tooling.WorkspaceLocation{{File: testFilePath("demo.tesl"), EndCol: 1}}, ""),
 		},
 	}
 	input := frames(t,
@@ -284,7 +284,7 @@ func TestServerAnswersSignatureTypeDefinitionAndReferences(t *testing.T) {
 	if !bytes.Contains(responses[2].Result, []byte(`"uri":`+testFileURIJSON("demo.tesl"))) {
 		t.Fatalf("references result = %s", responses[2].Result)
 	}
-	if len(compiler.flags) != 4 || compiler.flags[1] != "--signature-help-json" || compiler.flags[2] != "--type-definition-json" || compiler.flags[3] != "--occurrences-json" {
+	if len(compiler.flags) != 4 || compiler.flags[1] != "--signature-help-json" || compiler.flags[2] != "--type-definition-json" || compiler.flags[3] != "--workspace-references-json" {
 		t.Fatalf("compiler flags = %#v", compiler.flags)
 	}
 }
@@ -441,8 +441,9 @@ func TestServerPreparesAndAppliesRenameAndDeclaration(t *testing.T) {
 	compiler := &fakeCompiler{
 		payload: []byte(`{"version":1,"diagnostics":[]}`),
 		responses: map[string][]byte{
-			"--occurrences-json": []byte(`{"version":1,"occurrences":[{"file":` + testFilePathJSON("demo.tesl") + `,"line":0,"col":4,"end_line":0,"end_col":9,"kind":"write"},{"file":` + testFilePathJSON("demo.tesl") + `,"line":1,"col":0,"end_line":1,"end_col":5,"kind":"read"}]}`),
-			"--definition-json":  []byte(`{"version":1,"definition":{"file":` + testFilePathJSON("demo.tesl") + `,"line":0,"col":4,"end_line":0,"end_col":9}}`),
+			"--workspace-references-json": workspacePayload(t, testFilePath("demo.tesl"), "let value\nvalue", []tooling.WorkspaceLocation{{File: testFilePath("demo.tesl"), Col: 4, EndCol: 9}, {File: testFilePath("demo.tesl"), Line: 1, EndLine: 1, EndCol: 5}}, ""),
+			"--workspace-definition-json": workspacePayload(t, testFilePath("demo.tesl"), "let value\nvalue", []tooling.WorkspaceLocation{{File: testFilePath("demo.tesl"), Col: 4, EndCol: 9}, {File: testFilePath("demo.tesl"), Line: 1, EndLine: 1, EndCol: 5}}, ""),
+			"--workspace-rename-json":     workspacePayload(t, testFilePath("demo.tesl"), "let value\nvalue", []tooling.WorkspaceLocation{{File: testFilePath("demo.tesl"), Col: 4, EndCol: 9}, {File: testFilePath("demo.tesl"), Line: 1, EndLine: 1, EndCol: 5}}, "renamed"),
 		},
 	}
 	input := frames(t,
@@ -454,7 +455,9 @@ func TestServerPreparesAndAppliesRenameAndDeclaration(t *testing.T) {
 		protocol.Request{JSONRPC: "2.0", Method: "exit"},
 	)
 	var output bytes.Buffer
-	if status := NewServer(compiler).Run(context.Background(), bytes.NewReader(input), &output); status != 0 {
+	server := NewServer(compiler)
+	server.workspaceEditsSupported = true // This fixture bypasses initialize.
+	if status := server.Run(context.Background(), bytes.NewReader(input), &output); status != 0 {
 		t.Fatalf("Run() status = %d", status)
 	}
 	reader := protocol.NewReader(&output)

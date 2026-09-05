@@ -337,6 +337,18 @@ They consume the shared compiler query contracts below. Source queries use retai
   emitted after the binding name only for `let <name> = …` forms WITHOUT an explicit annotation;
   parameters and already-annotated lets are skipped. Parameter-name hints are not derivable from the
   frozen flags and are intentionally omitted.
+- `textDocument/definition` and `declaration` use `--workspace-definition-json`.
+  References use `--workspace-references-json` and honor `includeDeclaration`.
+  Each target range is converted from its own verified source bytes to UTF-16;
+  missing/stale sources, invalid spans and incomplete indexes return explicit errors.
+- `textDocument/prepareRename` prepares the selected semantic reference. Rename
+  obtains a fresh semantic snapshot, asks `--workspace-rename-json` to validate
+  the requested identifier, checks every input hash (including unopened files),
+  and queries again to detect newly created/deleted sources. It returns one
+  `documentChanges` edit with versions for open documents and null versions for
+  unopened files. Rename is advertised only when the client supports
+  `documentChanges` and `transactional` or `textOnlyTransactional` failure handling. Clients must apply the complete proposal; this server never
+  applies filesystem edits itself. Binding conflicts return no edits.
 - `textDocument/documentHighlight` — same-file occurrence ranges from `--occurrences-json`, each as
   `{ range, kind: 1 }` (Text; the flag does not distinguish read vs write).
 
@@ -358,10 +370,11 @@ unsigned, big-endian 32-bit byte length followed by exactly that many bytes.
 The compiler first writes a framed UTF-8 JSON handshake:
 
 ```json
-{"version":1,"protocol":"tesl-workspace","invalidation":"whole-snapshot"}
+{"version":1,"protocol":"tesl-workspace","invalidation":"dependency-inputs",
+ "capabilities":["workspace-navigation","workspace-rename-arguments-v1"]}
 ```
 
-Each request contains five consecutive frames, in this order:
+Existing source queries and workspace navigation contain five consecutive frames, in this order:
 
 | Field | Limit | Meaning |
 |---|---|---|
@@ -370,6 +383,14 @@ Each request contains five consecutive frames, in this order:
 | Path | 4096 bytes | Absolute filename inside the owner's private mirror |
 | Line | 20 bytes | Nonnegative decimal, or empty for a file query |
 | Column | 20 bytes | Nonnegative UTF-8 byte column, or empty for a file query |
+
+The optional capabilities advertise compiler-owned cross-file navigation and the
+rename argument extension. `--workspace-rename-json` adds two frames after Column:
+New name (at most 128 bytes) and Expected semantic snapshot (at most 128 bytes).
+No other flag changes its framing. Clients must check the corresponding capability
+before sending these flags, and include both extra arguments in query-cache keys.
+The expected semantic snapshot comes from the nested navigation result below; it
+is distinct from the transport owner's Snapshot frame.
 
 The response is one framed JSON value, at most 8 MiB:
 
@@ -395,13 +416,21 @@ document and directory limits still apply. Symlinks and nonregular disk sources
 are excluded. Source paths in locations and diagnostic hints map back to the
 project. Different roots or changed toolchain configuration restart the process.
 
-The mirror stays immutable during a query. The compiler retains parsed modules,
-checked type metadata and query answers within that snapshot, with entry and
-byte limits. Any different snapshot clears semantic caches. Bundled `.tesl`
-source libraries are additional compiler-owned inputs: changed bytes or missing/
-created files invalidate answers even if project inputs are unchanged. This is
-conservative invalidation, not yet a reverse-dependency index or incremental
-checking of only affected modules.
+The mirror stays immutable during a query. Snapshot changes discard whole-query
+answers and the workspace binding graph. Parsed modules retain exact filename /
+source keys; checked metadata additionally retains the resolved paths and exact
+bytes of all transitive imports. Unrelated edits can therefore reuse checked
+metadata. Missing/created imports, resolver precedence changes, and bundled stdlib
+changes invalidate dependent entries even when the entry source is unchanged.
+Graphs exceeding the input budget run uncached. A dependency change observed
+during checking cannot populate a cache entry for different bytes.
+
+Parse retention is bounded to 128 entries / 8 MiB of source, and checked metadata
+to 128 entries / 16 MiB of serialized keys and values. Query responses retain
+their existing byte/count bounds. Process restart clears all caches. This is
+dependency-keyed demand checking; the binding graph still rebuilds on revisions,
+and proactive diagnostics through a retained reverse-dependency index remain
+future work.
 
 A client serializes exchanges and includes waiting time in its request deadline.
 Cancellation/timeout kills and reaps the owned process tree, closes its pipes,
@@ -409,12 +438,105 @@ and waits for I/O to finish. A crash fails the active request; the next request
 reconstructs the compiler from the current complete mirror. Responses with a
 wrong revision, unsupported version, missing payload, or invalid query schema
 are rejected. The LSP cancels outstanding diagnostics and closes the session on
-exit/EOF; MCP closes it on EOF. Cross-file semantic identity and transaction-safe
-workspace rename remain separate work.
+exit/EOF; MCP closes it on EOF. Compiler-owned cross-file queries are described
+below. The Go transport negotiates the optional capabilities before sending
+workspace navigation/rename requests, preserving five-frame legacy exchanges.
 
 Regression tests: `compiler/test/test_workspace_session.ml`,
 `runtime/go/internal/tooling/session_test.go`, and the real-compiler completion
 fixtures in `runtime/go/internal/lsp/completion_test.go`.
+
+### Compiler workspace navigation and checked rename proposals
+
+The existing `--definition-json` and `--occurrences-json` flags keep their same-file
+contracts. These additional targeted commands share one compiler-owned index:
+
+```text
+tesl-compiler --workspace-definition-json FILE LINE COL
+tesl-compiler --workspace-references-json FILE LINE COL
+tesl-compiler --workspace-rename-json FILE LINE COL NEW_NAME EXPECTED_SNAPSHOT
+```
+
+Positions and all returned ranges use **zero-based UTF-8 byte columns**, including
+string interpolation expressions. Frontends convert positions using the exact
+snapshot source bytes; CRLF and non-ASCII literals are preserved. Locations have
+the existing flat shape `{file,line,col,end_line,end_col}`. Navigation returns:
+
+```json
+{"version":1,"workspace_root":"/mirror/project","snapshot":"SEMANTIC_ID",
+ "coordinate_encoding":"utf-8","complete":true,"problems":[],
+ "inputs":[{"file":"/mirror/project/main.tesl","content_hash":"CONTENT_ID"}],
+ "symbol":{"id":"SYMBOL_ID","name":"double","kind":"term",
+           "definition":{"file":"/mirror/project/lib.tesl","line":2,"col":3,"end_line":2,"end_col":9},
+           "read_only":false},
+ "references":[{"location":{"file":"/mirror/project/main.tesl","line":3,"col":27,"end_line":3,"end_col":33},
+                "role":"read"}]}
+```
+
+`symbol` is null when no indexed symbol occupies the position. Symbol identity
+contains declaration path relative to the project, namespace (`term`, `type`, or
+`constructor`), name and declaration position, so imports and qualified spellings
+resolve to one declaration even if the mirror directory moves. A nominal type and
+its constructor share the type identity. Renaming or moving a declaration can
+change its ID; clients must not treat IDs as persistent across changed snapshots.
+References include declarations and import/export exposure clauses, with roles
+`declaration`, `exposing`, or `read`. Qualified references cover the terminal name
+only, preserving the module qualifier. There are no text-search references.
+
+The project is the nearest ancestor with `tesl.toml`, or the containing directory
+if there is no manifest. The compiler recursively discovers `.tesl` files in that
+project and resolves imported local modules with its normal import resolver.
+Nested projects, hidden paths and generated/build directories are excluded.
+Import cycles are traversed once. Lifted standard-library sources contribute
+read-only definitions and workspace call sites; their internal implementation
+callers and other projects are outside this reference scope. The index records
+module dependency edges and reuses snapshots within a retained session. A changed
+transport snapshot still invalidates the whole graph; affected-module incremental
+checking is not implemented by this protocol extension.
+
+`inputs` lists exact source and manifest content hashes; the semantic snapshot
+also includes read/parse/limit failures. Hashes are opaque compiler consistency
+tokens, not cryptographic authenticity claims. `complete:false` always includes
+`problems` entries with `code`, `file` and `message`. Missing imports, parse errors,
+ambiguous bindings, unsupported semantic contexts and exhausted limits prevent
+claims of complete references. Current limits are 512 source/manifest inputs,
+1 MiB per file, 16 MiB total and 20,000 tokens per module. Clients must surface
+incompleteness and must never convert a partial response into a successful empty
+reference set or an applicable rename.
+
+Rename adds a `rename` object:
+
+```json
+{"safe":true,"new_name":"twice","expected_snapshot":"SEMANTIC_ID",
+ "reason":null,"checked":"binding-identity-and-type-proof-check",
+ "files":[{"file":"/mirror/project/main.tesl","content_hash":"CONTENT_ID",
+           "edits":[{"location":{"file":"/mirror/project/main.tesl","line":3,"col":27,"end_line":3,"end_col":33},
+                     "new_text":"twice"}]}]}
+```
+
+This is a proposal; the compiler never changes the source workspace. It rejects a
+stale expected snapshot, incomplete index, read-only dependency declaration,
+invalid identifier or namespace change. This first implementation requires the
+existing project to pass type/proof checks. It stages all indexed project inputs,
+applies the proposed edits, resolves the candidate graph, checks that every
+previous semantic occurrence still resolves to the corresponding declaration and
+that no previously unresolved name is captured, then reruns type/proof checks.
+A conflict or failure produces `safe:false`, a reason and no edits. Existing
+language rules rejecting name shadowing remain enforced. Comments and literal
+string text never change; expressions within interpolations do participate.
+
+A client may offer a rename only when both `complete` and `rename.safe` are true.
+Before applying it, the client must revalidate the whole input snapshot, including
+open-buffer versions and unchanged dependency hashes, and map mirror paths back
+to source URIs. It must apply all file edits atomically or reject the complete
+proposal; per-file hashes are additional preconditions, not permission to apply a
+subset. One-shot calls also reread the index after checking to reject concurrent
+source changes. Cancellation or a malformed response never authorizes edits.
+
+Regression coverage: `compiler/test/test_workspace_index.ml`, including imports,
+qualifiers, cycles, local-binding identity, capture conflicts, nominal constructors,
+Unicode/CRLF and escaped interpolations, two dirty files, stale/missing/oversized
+inputs, nested projects, source immutability and mixed five/seven-frame sessions.
 
 ### LSP request cancellation and queue ownership
 

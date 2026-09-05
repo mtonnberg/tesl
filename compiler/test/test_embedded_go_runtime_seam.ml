@@ -82,6 +82,22 @@ let test_embedded_list_has_no_test_files () =
     failf "test files must not be embedded into user modules: %s"
       (String.concat ", " (List.map fst tests))
 
+let test_generator_emits_binary_snapshot () =
+  let executable = Unix.realpath Sys.executable_name in
+  let generator = Filename.dirname executable // ".." // "gen" // "gen_go_runtime.exe" in
+  let channel = Unix.open_process_args_in generator [|generator|] in
+  (* Text-mode input would hide the Windows output conversion this test checks. *)
+  set_binary_mode_in channel true;
+  let output = In_channel.input_all channel in
+  let status = Unix.close_process_in channel in
+  Alcotest.(check bool) "generator exits successfully" true (status = Unix.WEXITED 0);
+  Alcotest.(check bool) "generated source has no literal CR bytes" false
+    (String.contains output '\r');
+  let snapshot = repo_root () // "compiler" // "lib" // "go_runtime" // "embedded"
+                 // "embedded_go_runtime.ml" in
+  Alcotest.(check bool) "raw generator output matches the promoted snapshot" true
+    (output = read_file snapshot)
+
 let () =
   Alcotest.run "embedded-go-runtime-seam" [
     ("embedded runtime", [
@@ -91,5 +107,7 @@ let () =
           test_every_runtime_file_is_embedded;
         Alcotest.test_case "no test file is embedded" `Quick
           test_embedded_list_has_no_test_files;
+        Alcotest.test_case "generator output is byte-stable on native hosts" `Quick
+          test_generator_emits_binary_snapshot;
       ]);
   ]

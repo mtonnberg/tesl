@@ -149,6 +149,17 @@ func (server *server) callTool(ctx context.Context, name string, arguments map[s
 		args = sourceQueryArgs("--definition-json", file, line, col)
 	case "tesl.references":
 		args = sourceQueryArgs("--occurrences-json", file, line, col)
+	case "tesl.workspace_definition":
+		args = sourceQueryArgs("--workspace-definition-json", file, line, col)
+	case "tesl.workspace_references":
+		args = sourceQueryArgs("--workspace-references-json", file, line, col)
+	case "tesl.workspace_rename":
+		name, nameOK := arguments["new_name"].(string)
+		snapshot, snapshotOK := arguments["expected_snapshot"].(string)
+		if !nameOK || name == "" || !snapshotOK || snapshot == "" {
+			return nil, errors.New("new_name and expected_snapshot are required")
+		}
+		args = append(sourceQueryArgs("--workspace-rename-json", file, line, col), name, snapshot)
 	case "tesl.debug_inspect":
 		if file == "" {
 			return nil, errors.New("file is required")
@@ -181,6 +192,28 @@ func (server *server) callTool(ctx context.Context, name string, arguments map[s
 	payload, _, err := queryClient.QueryJSON(ctx, args...)
 	if err != nil {
 		return nil, err
+	}
+	if name == "tesl.workspace_rename" {
+		var proposal tooling.WorkspaceResponse
+		if err := json.Unmarshal(payload, &proposal); err != nil {
+			return nil, err
+		}
+		if proposal.Rename != nil && proposal.Rename.Safe {
+			if _, err := tooling.WorkspaceInputTexts(ctx, proposal, nil); err != nil {
+				return nil, err
+			}
+			fresh, _, err := queryClient.QueryFileJSON(ctx, "--workspace-references-json", file, strconv.Itoa(line), strconv.Itoa(col))
+			if err != nil {
+				return nil, err
+			}
+			var current tooling.WorkspaceResponse
+			if err := json.Unmarshal(fresh, &current); err != nil {
+				return nil, err
+			}
+			if !current.Complete || current.Snapshot != proposal.Snapshot {
+				return nil, errors.New("workspace changed while checking rename inputs")
+			}
+		}
 	}
 	if name == "tesl.proof_obligations" {
 		var envelope struct {
@@ -315,6 +348,10 @@ func debugInspectCommand() string {
 func toolDefinitions() []map[string]any {
 	types := map[string]any{"type": "object", "required": []string{"file"}, "properties": map[string]any{"file": map[string]string{"type": "string"}}}
 	position := map[string]any{"type": "object", "required": []string{"file", "line", "col"}, "properties": map[string]any{"file": map[string]string{"type": "string"}, "line": map[string]string{"type": "integer"}, "col": map[string]string{"type": "integer"}}}
+	rename := map[string]any{"type": "object", "required": []string{"file", "line", "col", "new_name", "expected_snapshot"}, "properties": map[string]any{
+		"file": map[string]string{"type": "string"}, "line": map[string]any{"type": "integer", "minimum": 0}, "col": map[string]any{"type": "integer", "minimum": 0},
+		"new_name": map[string]string{"type": "string"}, "expected_snapshot": map[string]string{"type": "string"},
+	}}
 	debugInspect := map[string]any{
 		"type":     "object",
 		"required": []string{"file"},
@@ -357,6 +394,9 @@ func toolDefinitions() []map[string]any {
 		{"name": "tesl.completions", "description": "Completion candidates.", "inputSchema": position},
 		{"name": "tesl.definition", "description": "Same-file definition.", "inputSchema": position},
 		{"name": "tesl.references", "description": "Same-file occurrences.", "inputSchema": position},
+		{"name": "tesl.workspace_definition", "description": "Compiler-resolved cross-file definition and immutable workspace snapshot; UTF-8 byte positions.", "inputSchema": position},
+		{"name": "tesl.workspace_references", "description": "Cross-file semantic references, including import/export clauses, with explicit completeness and source preconditions.", "inputSchema": position},
+		{"name": "tesl.workspace_rename", "description": "Check a workspace rename proposal against expected_snapshot from workspace navigation. Returns edits and all source preconditions; never changes files. Incomplete indexes and binding conflicts are refused.", "inputSchema": rename},
 		{"name": "tesl.proof_obligations", "description": "Unproven compiler obligations.", "inputSchema": types},
 		{"name": "tesl.debug_inspect", "description": "Run a debug target to an agent-selected breakpoint.", "inputSchema": debugInspect},
 		{"name": "tesl.debug_attach", "description": "Attach to a running debug target.", "inputSchema": debugAttach},
@@ -365,7 +405,7 @@ func toolDefinitions() []map[string]any {
 
 func isSourceQueryTool(name string) bool {
 	switch name {
-	case "tesl.type_at", "tesl.signature", "tesl.completions", "tesl.definition", "tesl.references":
+	case "tesl.type_at", "tesl.signature", "tesl.completions", "tesl.definition", "tesl.references", "tesl.workspace_definition", "tesl.workspace_references", "tesl.workspace_rename":
 		return true
 	default:
 		return false
