@@ -1,8 +1,11 @@
 """Exercise final-byte signing boundaries without requiring a macOS host."""
 
 import hashlib
+import os
 from pathlib import Path
+import platform
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -71,6 +74,59 @@ class MacOSDistributionTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "invalid audited"):
                 macos.sign_payload(self.root, self.audit, self.policy)
             run.assert_not_called()
+
+
+@unittest.skipUnless(sys.platform == "darwin", "requires native Mach-O tools and codesign")
+class NativeMacOSSigningTests(unittest.TestCase):
+    def test_audited_library_alias_signatures_survive_relocation_and_detect_tampering(self):
+        import payload_audit
+
+        with tempfile.TemporaryDirectory(prefix="tesl signing å ") as temporary:
+            work = Path(temporary).resolve()
+            root = work / "original payload"
+            (root / "bin").mkdir(parents=True)
+            (root / "lib").mkdir()
+            library = root / "lib/libanswer.1.0.dylib"
+            (library.parent / "libanswer.1.dylib").symlink_to(library.name)
+            (library.parent / "libanswer.dylib").symlink_to("libanswer.1.dylib")
+            source = work / "answer.c"
+            source.write_text('const char *answer(void) { return "tesl-native-signing-fixture"; }\n')
+            main = work / "main.c"
+            main.write_text('#include <stdio.h>\nconst char *answer(void);\nint main(void) { puts(answer()); return 0; }\n')
+            environment = dict(os.environ, MACOSX_DEPLOYMENT_TARGET="13.0")
+
+            def run(args, **kwargs):
+                return subprocess.run(args, check=True, capture_output=True, text=True,
+                                      env=environment, timeout=60, **kwargs)
+
+            run(["cc", "-dynamiclib", "-install_name", "@rpath/libanswer.1.dylib",
+                 str(source), "-o", str(library)])
+            run(["cc", str(main), "-L" + str(library.parent), "-lanswer",
+                 "-Wl,-rpath,@loader_path/../lib", "-o", str(root / "bin/tool")])
+            target = "darwin-arm64" if platform.machine() == "arm64" else "darwin-amd64"
+            plan = {"commands": ["tesl"], "candidates": [{"target": target, "baseline": "macOS 13"}],
+                    "payloads": {target: {"manifest": {"components": {
+                        name: {"path": "bin/tool"} for name in payload_audit.EXECUTABLE_COMPONENTS | {"tesl"}
+                    }}}}}
+            inventory = payload_audit.audit(root, plan, target)
+            evidence = macos.sign_payload(root, inventory, {
+                "macOSSigning": "optional", "macOSDistribution": "ad-hoc-portable-archive"})
+            self.assertEqual({item["path"] for item in evidence["binaries"]},
+                             {"bin/tool", "lib/libanswer.1.0.dylib"})
+            relocated = work / "relocated payload ü"
+            root.rename(relocated)
+            for item in evidence["binaries"]:
+                path = relocated / item["path"]
+                self.assertEqual(hashlib.sha256(path.read_bytes()).hexdigest(), item["sha256"])
+                run(["codesign", "--verify", "--strict", str(path)])
+            self.assertEqual(run([str(relocated / "bin/tool")]).stdout, "tesl-native-signing-fixture\n")
+            library = relocated / "lib/libanswer.1.0.dylib"
+            data = library.read_bytes()
+            marker = b"tesl-native-signing-fixture"
+            self.assertIn(marker, data)
+            library.write_bytes(data.replace(marker, b"Tesl-native-signing-fixture", 1))
+            with self.assertRaises(subprocess.CalledProcessError):
+                run(["codesign", "--verify", "--strict", str(library)])
 
 
 if __name__ == "__main__":
