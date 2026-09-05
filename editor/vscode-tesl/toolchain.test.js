@@ -21,21 +21,22 @@ function fixture(t, suffix = process.platform === "win32" ? ".exe" : "") {
   }
   const write = () => fs.writeFileSync(path.join(root, "share", "tesl", "toolchain.json"), JSON.stringify(manifest));
   write();
-  return { root, manifest, write, suffix };
+  // PATH discovery follows the launcher, including macOS's /var directory alias.
+  return { root, realRoot: fs.realpathSync(root), manifest, write, suffix };
 }
 
 test("desktop discovery selects one installation and preserves paths", (t) => {
-  const { root, suffix } = fixture(t);
+  const { root, realRoot, suffix } = fixture(t);
   const installation = findInstallation({ env: { PATH: path.join(root, "bin") } });
-  assert.equal(installation.component("tesl-lsp"), path.join(root, "bin", "tesl-lsp" + suffix));
-  assert.equal(installation.component("compiler"), path.join(root, "bin", "compiler" + suffix));
+  assert.equal(installation.component("tesl-lsp"), path.join(realRoot, "bin", "tesl-lsp" + suffix));
+  assert.equal(installation.component("compiler"), path.join(realRoot, "bin", "compiler" + suffix));
 });
 
 test("Windows discovery finds .exe without where.exe or a shell", (t) => {
-  const { root } = fixture(t, ".exe");
+  const { root, realRoot } = fixture(t, ".exe");
   const env = { Path: path.join(root, "bin") };
   assert.equal(findOnPath("tesl", { env, platform: "win32" }), path.join(root, "bin", "tesl.exe"));
-  assert.equal(findInstallation({ env, platform: "win32" }).component("tesl-dap"), path.join(root, "bin", "tesl-dap.exe"));
+  assert.equal(findInstallation({ env, platform: "win32" }).component("tesl-dap"), path.join(realRoot, "bin", "tesl-dap.exe"));
 });
 
 test("explicit installation overrides PATH and rejects missing components", (t) => {
@@ -62,12 +63,22 @@ test("manifest paths cannot escape through either platform's syntax", (t) => {
 });
 
 test("symlinked launchers keep their selected installation", (t) => {
-  const { root, suffix } = fixture(t);
+  const { root, realRoot, suffix } = fixture(t);
   const links = path.join(root, "links");
   fs.mkdirSync(links);
   try { fs.symlinkSync(path.join(root, "bin", "tesl" + suffix), path.join(links, "tesl" + suffix)); }
   catch (error) { if (error.code === "EPERM") { t.skip("symlinks unavailable"); return; } throw error; }
-  assert.equal(findInstallation({ env: { PATH: links } }).root, root);
+  assert.equal(findInstallation({ env: { PATH: links } }).root, realRoot);
+});
+
+test("symlinked installation directories resolve to their real tools", (t) => {
+  const { root, realRoot, suffix } = fixture(t);
+  const link = path.join(path.dirname(root), "current");
+  try { fs.symlinkSync(root, link, "junction"); }
+  catch (error) { if (error.code === "EPERM") { t.skip("symlinks unavailable"); return; } throw error; }
+  const installation = findInstallation({ env: { PATH: path.join(link, "bin") } });
+  assert.equal(installation.root, realRoot);
+  assert.equal(installation.component("tesl-lsp"), path.join(realRoot, "bin", "tesl-lsp" + suffix));
 });
 
 test("legacy PATH installation does not borrow a different installation", (t) => {
