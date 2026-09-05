@@ -26,13 +26,13 @@
       "id": "INV-ABI",
       "statement": "A migration's processing ABI cannot change after any batch, provisional work or committed target-generation application write; reprocessing uses a later version and fresh generation.",
       "model_paths": [
-        "model.go:424",
-        "model.go:427",
-        "model.go:430",
-        "model.go:436",
-        "model.go:442",
-        "model.go:547",
-        "model.go:550"
+        "model.go:432",
+        "model.go:435",
+        "model.go:438",
+        "model.go:444",
+        "model.go:450",
+        "model.go:555",
+        "model.go:558"
       ],
       "tests": [
         "model_test.go#TestABIChangeRefusedAfterFirstBatchOrProvisionalPass",
@@ -70,13 +70,13 @@
       "id": "INV-ATTEMPT",
       "statement": "Only the exact current live queue attempt may renew or publish an outcome; expired and dead claims are not silently revived.",
       "model_paths": [
-        "model.go:345",
-        "model.go:348",
-        "model.go:351",
-        "model.go:364",
+        "model.go:353",
+        "model.go:356",
+        "model.go:359",
         "model.go:372",
-        "model.go:528",
-        "model.go:537"
+        "model.go:380",
+        "model.go:536",
+        "model.go:545"
       ],
       "tests": [
         "model_test.go#TestAdversarialTraces",
@@ -90,9 +90,9 @@
       "id": "INV-BOOT-LOCK",
       "statement": "Only the backend holding the non-expiring session boot lock performs install work; an expired observability lease cannot release that lock.",
       "model_paths": [
-        "model_bootstrap.go:60",
-        "model_bootstrap.go:66",
-        "model_bootstrap.go:72"
+        "model_bootstrap.go:58",
+        "model_bootstrap.go:64",
+        "model_bootstrap.go:70"
       ],
       "tests": [
         "bootstrap_model_test.go#TestBootstrapRefusesWrongTargetIncompleteCatalogAndStaleOwner",
@@ -139,7 +139,7 @@
       "id": "INV-CLAIMANT",
       "statement": "Retirement waits for retiring claimants only; surviving claimants retain their attempt, status and lease when restamped.",
       "model_paths": [
-        "model.go:395"
+        "model.go:403"
       ],
       "tests": [
         "model_test.go#TestRetiringClaimantExpiresAndLateOutcomesAreRejected",
@@ -150,8 +150,8 @@
       "id": "INV-CLOCK",
       "statement": "Explicit model time is monotone and bounded arithmetic cannot wrap a lease into validity.",
       "model_paths": [
-        "model.go:404",
-        "model.go:485"
+        "model.go:412",
+        "model.go:493"
       ],
       "tests": [
         "model_test.go#TestModelRefusesCounterAndClockOverflowAtomically"
@@ -161,9 +161,9 @@
       "id": "INV-CONTRACT",
       "statement": "Physical contract follows retirement and the compatibility switch, and an interrupted contract remains resumable.",
       "model_paths": [
-        "model.go:158",
-        "model.go:210",
-        "model.go:216"
+        "model.go:166",
+        "model.go:218",
+        "model.go:224"
       ],
       "tests": [
         "contract_fixture_test.go#TestPostgresContractConstraintComparatorUsesServerSemantics",
@@ -223,8 +223,8 @@
       "id": "INV-DECODER",
       "statement": "Queue claims remain inside the admitted decoder window and never claim a future payload version.",
       "model_paths": [
-        "model.go:342",
-        "model.go:534"
+        "model.go:350",
+        "model.go:542"
       ],
       "tests": [
         "model_test.go#TestRetiringClaimantExpiresAndLateOutcomesAreRejected"
@@ -234,7 +234,7 @@
       "id": "INV-EXPAND",
       "statement": "Retirement's coordinator lock excludes a competing expansion.",
       "model_paths": [
-        "model.go:149"
+        "model.go:157"
       ],
       "tests": [
         "model_test.go#TestRetirementExcludesEveryOldWriter"
@@ -244,15 +244,15 @@
       "id": "INV-FENCE",
       "statement": "Every excluded writer is drained before retirement and cannot resume writing after its version is retired.",
       "model_paths": [
-        "model.go:167",
-        "model.go:188",
-        "model.go:194",
-        "model.go:241",
-        "model.go:275",
-        "model.go:285",
-        "model.go:330",
-        "model.go:367",
-        "model.go:509"
+        "model.go:175",
+        "model.go:196",
+        "model.go:202",
+        "model.go:249",
+        "model.go:283",
+        "model.go:293",
+        "model.go:338",
+        "model.go:375",
+        "model.go:517"
       ],
       "tests": [
         "cluster_test.go#TestOwnedPrimaryCrashPreservesOnlyCommittedRetirement",
@@ -273,7 +273,7 @@
       "id": "INV-FINAL",
       "statement": "Retirement commits only after every affected row is accepted at its target generation; accepted batches survive coordinator abort.",
       "model_paths": [
-        "model.go:198"
+        "model.go:206"
       ],
       "tests": [
         "contract_fixture_test.go#TestPostgresContractFixtureResumesAfterEveryStep",
@@ -288,9 +288,9 @@
       "id": "INV-FLOOR",
       "statement": "Admission and compatibility floors are ordered, monotone and consistent with committed lifecycle evidence.",
       "model_paths": [
-        "model.go:184",
-        "model.go:488",
-        "model.go:502"
+        "model.go:192",
+        "model.go:496",
+        "model.go:510"
       ],
       "tests": [
         "cluster_test.go#TestOwnedLaggedReplicaHasStaleAdmissionAndSchema",
@@ -311,8 +311,8 @@
       "id": "INV-GENERATION",
       "statement": "Row generations advance one step at a time within the permanent smallint generation bound.",
       "model_paths": [
-        "model.go:230",
-        "model.go:514"
+        "model.go:238",
+        "model.go:522"
       ],
       "tests": [
         "model_test.go#TestAdversarialTraces",
@@ -336,9 +336,9 @@
       "id": "INV-HISTORY",
       "statement": "Version identities and classifications are immutable, consecutive and complete; an equal retry remains transaction-safe.",
       "model_paths": [
-        "model.go:141",
-        "model.go:491",
-        "model.go:495"
+        "model.go:149",
+        "model.go:499",
+        "model.go:503"
       ],
       "tests": [
         "bootstrap_postgres_test.go#TestPostgresBootstrapRecordCommitIsAtomicAcrossBackendDeath",
@@ -415,10 +415,10 @@
       "id": "INV-INSTALL-ATOMIC",
       "statement": "Initial expansion publishes its lifecycle and admission singleton atomically; a database born at V9 never invents V8 history.",
       "model_paths": [
-        "model_bootstrap.go:102",
-        "model_bootstrap.go:110",
-        "model_bootstrap.go:150",
-        "model_bootstrap.go:158"
+        "model_bootstrap.go:100",
+        "model_bootstrap.go:108",
+        "model_bootstrap.go:148",
+        "model_bootstrap.go:156"
       ],
       "tests": [
         "bootstrap_model_test.go#TestBootstrapRefusesWrongTargetIncompleteCatalogAndStaleOwner",
@@ -431,11 +431,11 @@
       "id": "INV-INSTALL-CATALOG",
       "statement": "Initial install and additive expansion verify the selected catalog before recording expansion and preserve completed objects across recovery.",
       "model_paths": [
-        "model_bootstrap.go:118",
-        "model_bootstrap.go:143",
-        "model_bootstrap.go:163",
-        "model_bootstrap.go:171",
-        "model_bootstrap.go:96"
+        "model_bootstrap.go:116",
+        "model_bootstrap.go:141",
+        "model_bootstrap.go:161",
+        "model_bootstrap.go:169",
+        "model_bootstrap.go:94"
       ],
       "tests": [
         "bootstrap_model_test.go#TestBootstrapRefusesWrongTargetIncompleteCatalogAndStaleOwner",
@@ -447,12 +447,12 @@
       "id": "INV-INSTALL-TARGET",
       "statement": "The first lock holder persists an immutable initial target; a newer successor completes that target before expanding further.",
       "model_paths": [
-        "model_bootstrap.go:114",
-        "model_bootstrap.go:135",
-        "model_bootstrap.go:139",
-        "model_bootstrap.go:167",
-        "model_bootstrap.go:79",
-        "model_bootstrap.go:93"
+        "model_bootstrap.go:112",
+        "model_bootstrap.go:133",
+        "model_bootstrap.go:137",
+        "model_bootstrap.go:165",
+        "model_bootstrap.go:77",
+        "model_bootstrap.go:91"
       ],
       "tests": [
         "bootstrap_model_test.go#TestBootstrapRefusesWrongTargetIncompleteCatalogAndStaleOwner",
@@ -482,9 +482,9 @@
       "id": "INV-LEASE",
       "statement": "Scheduling lease tokens increase on takeover and stale executors cannot publish another holder's work.",
       "model_paths": [
-        "model.go:410",
-        "model.go:419",
-        "model.go:542"
+        "model.go:418",
+        "model.go:427",
+        "model.go:550"
       ],
       "tests": [
         "index_model_test.go#TestExpiredIndexLeaseCannotDestroyAnActiveOrValidBuild",
@@ -497,8 +497,8 @@
       "id": "INV-LIFECYCLE",
       "statement": "Only validated lifecycle edges append history and committed history agrees with the admission singleton.",
       "model_paths": [
-        "model.go:138",
-        "model.go:498"
+        "model.go:146",
+        "model.go:506"
       ],
       "tests": [
         "differential_test.go#TestPostgresTemplateAgainstReferenceTraces",
@@ -529,10 +529,10 @@
       "id": "INV-QUARANTINE",
       "statement": "Quarantine records a current rejection after coordinator abort; changed, accepted or deleted rows cannot retain stale evidence.",
       "model_paths": [
-        "model.go:304",
-        "model.go:313",
+        "model.go:312",
         "model.go:321",
-        "model.go:523"
+        "model.go:329",
+        "model.go:531"
       ],
       "tests": [
         "quarantine_postgres_test.go#TestPostgresAbortQuarantineRechecksCurrentRow",
@@ -545,9 +545,9 @@
       "id": "INV-QUEUE-FLOOR",
       "statement": "At floor commit no non-quarantined durable job remains below the new floor.",
       "model_paths": [
-        "model.go:203",
-        "model.go:392",
-        "model.go:531"
+        "model.go:211",
+        "model.go:400",
+        "model.go:539"
       ],
       "tests": [
         "model_test.go#TestCrashAfterRestampBeforeFloorCommitIsResumable",
@@ -560,7 +560,7 @@
       "id": "INV-READ",
       "statement": "A strict read buffers its query result and delivers only after successful admission and transaction commit, retaining table locks until then.",
       "model_paths": [
-        "model.go:180"
+        "model.go:188"
       ],
       "tests": [
         "cluster_test.go#TestOwnedLaggedReplicaHasStaleAdmissionAndSchema",
@@ -601,7 +601,7 @@
       "id": "INV-REPAIR-EXECUTOR",
       "statement": "Serving repair chains may be compatible prefixes, but the final-pass executor carries every recorded amendment.",
       "model_paths": [
-        "model.go:581"
+        "model.go:590"
       ],
       "tests": [
         "quarantine_test.go#TestRepairChainRunsOnlyOnRejectedRowsAndStopsAtFirstAcceptance",
@@ -613,14 +613,14 @@
       "id": "INV-REPAIR-HISTORY",
       "statement": "Repair chains are positive, bounded, gap-free and append-only without changing the migration's own identity.",
       "model_paths": [
-        "model.go:458",
-        "model.go:463",
         "model.go:466",
-        "model.go:555",
-        "model.go:559",
-        "model.go:568",
-        "model.go:572",
-        "model.go:578"
+        "model.go:471",
+        "model.go:474",
+        "model.go:563",
+        "model.go:567",
+        "model.go:576",
+        "model.go:580",
+        "model.go:586"
       ],
       "tests": [
         "repair_test.go#TestHistoricalRepairIsAppendOnlyAndSurvivesCrash",
@@ -633,7 +633,7 @@
       "id": "INV-REPAIR-ORDER",
       "statement": "Recorded repairs run in sequence on a rejected row and stop at the first acceptance.",
       "model_paths": [
-        "model.go:292"
+        "model.go:300"
       ],
       "tests": [
         "quarantine_test.go#TestQuarantineUsesLastRepairReasonAndClearsOnApplicationChange",
@@ -644,9 +644,9 @@
       "id": "INV-REPAIR-SCOPE",
       "statement": "Repairs cannot reinterpret rows already accepted by the frozen transform or apply a stale row evaluation.",
       "model_paths": [
-        "model.go:252",
-        "model.go:282",
-        "model.go:517"
+        "model.go:260",
+        "model.go:290",
+        "model.go:525"
       ],
       "tests": [
         "quarantine_test.go#TestRepairChainRunsOnlyOnRejectedRowsAndStopsAtFirstAcceptance"
@@ -656,9 +656,9 @@
       "id": "INV-ROW-REVISION",
       "statement": "The oracle distinguishes row revisions and refuses stale evaluations and revision overflow.",
       "model_paths": [
-        "model.go:244",
-        "model.go:265",
-        "model.go:297"
+        "model.go:252",
+        "model.go:273",
+        "model.go:305"
       ],
       "tests": [
         "quarantine_test.go#TestQuarantineAfterAbortRechecksChangedOrDeletedRows",
@@ -717,7 +717,7 @@
       "id": "INV-VERSION",
       "statement": "Schema versions are positive signed integers and cannot allocate the reserved boot-fence key.",
       "model_paths": [
-        "model.go:146"
+        "model.go:154"
       ],
       "tests": [
         "lifecycle_test.go#TestPostgresInitialHistoryRejectsReservedVersionsAndMissingIdentity",
@@ -729,9 +729,9 @@
       "id": "INV-WINDOW",
       "statement": "A transforming expansion closes an additive epoch and respects the bounded compatibility window.",
       "model_paths": [
-        "model.go:152",
-        "model.go:155",
-        "model.go:505"
+        "model.go:160",
+        "model.go:163",
+        "model.go:513"
       ],
       "tests": [
         "model_test.go#TestEpochClosesBeforeTransformAndContractPrecedesNextExpand"
@@ -741,7 +741,7 @@
       "id": "TR-ABI-BATCH",
       "statement": "Commit a batch or provisional pass with its processing ABI.",
       "model_paths": [
-        "model.go:421"
+        "model.go:429"
       ],
       "tests": [
         "model_test.go#TestABIChangeRefusedAfterFirstBatchOrProvisionalPass",
@@ -754,7 +754,7 @@
       "id": "TR-ABI-SELECT",
       "statement": "Select an execution ABI before processing is locked.",
       "model_paths": [
-        "model.go:421"
+        "model.go:429"
       ],
       "tests": [
         "model_test.go#TestABIChangeRefusedAfterFirstBatchOrProvisionalPass",
@@ -766,7 +766,7 @@
       "id": "TR-ABI-WRITE",
       "statement": "Commit a target-generation application value and its ABI evidence under the same admitted writer fence, independently of backfill counters.",
       "model_paths": [
-        "model.go:421"
+        "model.go:429"
       ],
       "tests": [
         "model_test.go#TestApplicationTargetWriteLocksABIBeforeBackfillStarts"
@@ -776,7 +776,7 @@
       "id": "TR-ADMIT",
       "statement": "Check the reader's version against the current admission floor.",
       "model_paths": [
-        "model.go:178"
+        "model.go:186"
       ],
       "tests": [
         "differential_test.go#TestPostgresTemplateAgainstReferenceTraces",
@@ -789,7 +789,7 @@
       "id": "TR-BACKFILL",
       "statement": "Commit an accepted row at its next generation.",
       "model_paths": [
-        "model.go:233"
+        "model.go:241"
       ],
       "tests": [
         "contract_fixture_test.go#TestPostgresContractFixtureResumesAfterEveryStep",
@@ -803,7 +803,7 @@
       "id": "TR-BOOT-CRASH",
       "statement": "Lose the boot backend and its lock while retaining committed install work.",
       "model_paths": [
-        "model_bootstrap.go:64"
+        "model_bootstrap.go:62"
       ],
       "tests": [
         "bootstrap_model_test.go#TestBootstrapRefusesWrongTargetIncompleteCatalogAndStaleOwner",
@@ -816,7 +816,7 @@
       "id": "TR-BOOT-EXPAND",
       "statement": "Record a verified additive successor after completing the initial target.",
       "model_paths": [
-        "model_bootstrap.go:99"
+        "model_bootstrap.go:97"
       ],
       "tests": [
         "bootstrap_model_test.go#TestBootstrapWinnerSurvivesEveryPartialInstallCrash",
@@ -827,7 +827,7 @@
       "id": "TR-BOOT-LOCK",
       "statement": "Acquire the non-expiring backend boot lock.",
       "model_paths": [
-        "model_bootstrap.go:58"
+        "model_bootstrap.go:56"
       ],
       "tests": [
         "bootstrap_model_test.go#TestBootstrapWinnerSurvivesEveryPartialInstallCrash",
@@ -838,7 +838,7 @@
       "id": "TR-BOOT-RELEASE",
       "statement": "Release the backend's boot lock after verified install work.",
       "model_paths": [
-        "model_bootstrap.go:75"
+        "model_bootstrap.go:73"
       ],
       "tests": [
         "bootstrap_model_test.go#TestBootstrapWinnerSurvivesEveryPartialInstallCrash",
@@ -863,7 +863,7 @@
       "id": "TR-CLAIM",
       "statement": "Claim a pending or expired processing job with a fresh attempt.",
       "model_paths": [
-        "model.go:336"
+        "model.go:344"
       ],
       "tests": [
         "model_test.go#TestModelRefusesCounterAndClockOverflowAtomically",
@@ -875,8 +875,8 @@
       "id": "TR-COMPLETE",
       "statement": "Complete the exact live queue attempt.",
       "model_paths": [
-        "model.go:358",
-        "model.go:375"
+        "model.go:366",
+        "model.go:383"
       ],
       "tests": [
         "model_test.go#TestRetiringClaimantExpiresAndLateOutcomesAreRejected"
@@ -886,8 +886,8 @@
       "id": "TR-CONTRACT",
       "statement": "Record contract intent, switch compatibility, and finish physical work.",
       "model_paths": [
-        "model.go:208",
-        "model.go:214"
+        "model.go:216",
+        "model.go:222"
       ],
       "tests": [
         "cluster_test.go#TestOwnedLaggedReplicaHasStaleAdmissionAndSchema",
@@ -913,7 +913,7 @@
       "id": "TR-CRASH",
       "statement": "Lose volatile locks and sessions while retaining committed work.",
       "model_paths": [
-        "model.go:219"
+        "model.go:227"
       ],
       "tests": [
         "cluster_test.go#TestOwnedPrimaryCrashPreservesOnlyCommittedRetirement",
@@ -938,8 +938,8 @@
       "id": "TR-DEAD",
       "statement": "Move the exact live queue attempt to the dead letter.",
       "model_paths": [
-        "model.go:358",
-        "model.go:381"
+        "model.go:366",
+        "model.go:389"
       ],
       "tests": [
         "repair_test.go#TestDeadJobCannotBeClaimedWithoutExplicitReplay"
@@ -949,7 +949,7 @@
       "id": "TR-ENQUEUE",
       "statement": "Enqueue a payload stamped with the admitted writer version.",
       "model_paths": [
-        "model.go:328"
+        "model.go:336"
       ],
       "tests": [
         "model_test.go#TestSurvivingClaimantRestampPreservesAttemptAndLease"
@@ -959,7 +959,7 @@
       "id": "TR-EXPAND",
       "statement": "Record the next immutable expansion or safely retry the current one.",
       "model_paths": [
-        "model.go:135"
+        "model.go:143"
       ],
       "tests": [
         "contract_fixture_test.go#TestPostgresContractFixtureResumesAfterEveryStep",
@@ -977,7 +977,7 @@
       "id": "TR-EXPIRY",
       "statement": "Advance explicit time through lease expiry.",
       "model_paths": [
-        "model.go:402"
+        "model.go:410"
       ],
       "tests": [
         "model_test.go#TestModelRefusesCounterAndClockOverflowAtomically",
@@ -1125,7 +1125,7 @@
       "id": "TR-INSTALL-OBJECT",
       "statement": "Commit or verify one selected catalog object in a short transaction.",
       "model_paths": [
-        "model_bootstrap.go:86"
+        "model_bootstrap.go:84"
       ],
       "tests": [
         "bootstrap_model_test.go#TestBootstrapRefusesWrongTargetIncompleteCatalogAndStaleOwner",
@@ -1137,7 +1137,7 @@
       "id": "TR-INSTALL-RECORD",
       "statement": "Atomically record complete initial history and admission, including equal retries.",
       "model_paths": [
-        "model_bootstrap.go:99"
+        "model_bootstrap.go:97"
       ],
       "tests": [
         "bootstrap_model_test.go#TestBootstrapRefusesWrongTargetIncompleteCatalogAndStaleOwner",
@@ -1151,7 +1151,7 @@
       "id": "TR-INSTALL-SELECT",
       "statement": "Persist or observe the initial install target under the boot lock.",
       "model_paths": [
-        "model_bootstrap.go:77"
+        "model_bootstrap.go:75"
       ],
       "tests": [
         "bootstrap_model_test.go#TestBootstrapRefusesWrongTargetIncompleteCatalogAndStaleOwner",
@@ -1163,8 +1163,8 @@
       "id": "TR-INVALIDATE",
       "statement": "An old writer invalidates derived generation and rejection evidence.",
       "model_paths": [
-        "model.go:233",
-        "model.go:239"
+        "model.go:241",
+        "model.go:247"
       ],
       "tests": [
         "model_test.go#TestProvisionalBackfillCannotAuthorizeRetirement",
@@ -1178,8 +1178,8 @@
       "id": "TR-LEASE",
       "statement": "Acquire a scheduling lease or validate its current commit token.",
       "model_paths": [
-        "model.go:407",
-        "model.go:416"
+        "model.go:415",
+        "model.go:424"
       ],
       "tests": [
         "model_test.go#TestModelRefusesCounterAndClockOverflowAtomically",
@@ -1198,7 +1198,7 @@
       "id": "TR-QUARANTINE-REFRESH",
       "statement": "Re-read a rejected key after abort and update or clear quarantine.",
       "model_paths": [
-        "model.go:311"
+        "model.go:319"
       ],
       "tests": [
         "quarantine_postgres_test.go#TestPostgresAbortQuarantineRechecksCurrentRow",
@@ -1211,7 +1211,7 @@
       "id": "TR-READ",
       "statement": "Execute and buffer a query before admission and delivery.",
       "model_paths": [
-        "model.go:178"
+        "model.go:186"
       ],
       "tests": [
         "blackbox_test.go#TestCompiledVersionsShareRowsAndPauseInsideTransactions",
@@ -1240,8 +1240,8 @@
       "id": "TR-REJECT",
       "statement": "The frozen transform rejects a row below its target generation.",
       "model_paths": [
-        "model.go:233",
-        "model.go:250"
+        "model.go:241",
+        "model.go:258"
       ],
       "tests": [
         "model_test.go#TestProvisionalBackfillCannotAuthorizeRetirement"
@@ -1251,8 +1251,8 @@
       "id": "TR-RENEW",
       "statement": "Renew the exact live queue attempt under version admission.",
       "model_paths": [
-        "model.go:358",
-        "model.go:370"
+        "model.go:366",
+        "model.go:378"
       ],
       "tests": [
         "model_test.go#TestSurvivingClaimantRestampPreservesAttemptAndLease"
@@ -1262,7 +1262,7 @@
       "id": "TR-REPAIR",
       "statement": "Validate the public repair lifecycle edge independently of ordinary expansion.",
       "model_paths": [
-        "model.go:456"
+        "model.go:464"
       ],
       "tests": [
         "lifecycle_test.go#TestPostgresTemplateControlOwnerIsTheOnlyDirectWriter",
@@ -1274,7 +1274,7 @@
       "id": "TR-REPAIR-ADMIT",
       "statement": "Accept compatible repair prefixes for ordinary serving.",
       "model_paths": [
-        "model.go:470"
+        "model.go:478"
       ],
       "tests": [
         "repair_test.go#TestRepairPrefixesPreserveRollbackButRequireCompleteExecutor"
@@ -1284,7 +1284,7 @@
       "id": "TR-REPAIR-FINAL",
       "statement": "Require the complete recorded repair chain for final-pass execution.",
       "model_paths": [
-        "model.go:470"
+        "model.go:478"
       ],
       "tests": [
         "repair_test.go#TestHistoricalRepairIsAppendOnlyAndSurvivesCrash",
@@ -1295,7 +1295,7 @@
       "id": "TR-REPAIR-RECORD",
       "statement": "Append or idempotently retry an immutable repair identity.",
       "model_paths": [
-        "model.go:456"
+        "model.go:464"
       ],
       "tests": [
         "repair_test.go#TestHistoricalRepairIsAppendOnlyAndSurvivesCrash",
@@ -1308,7 +1308,7 @@
       "id": "TR-REPAIR-ROW",
       "statement": "Apply the next recorded repair only to a current rejected row.",
       "model_paths": [
-        "model.go:279"
+        "model.go:287"
       ],
       "tests": [
         "quarantine_test.go#TestQuarantineUsesLastRepairReasonAndClearsOnApplicationChange",
@@ -1327,7 +1327,7 @@
       "id": "TR-RESTAMP",
       "statement": "Restamp old jobs before floor commit while preserving surviving claims.",
       "model_paths": [
-        "model.go:386"
+        "model.go:394"
       ],
       "tests": [
         "contract_fixture_test.go#TestPostgresContractFixtureResumesAfterEveryStep",
@@ -1340,8 +1340,8 @@
       "id": "TR-RETIRE",
       "statement": "Drain retiring fences and atomically commit the floor after final passes.",
       "model_paths": [
-        "model.go:182",
-        "model.go:192"
+        "model.go:190",
+        "model.go:200"
       ],
       "tests": [
         "cluster_test.go#TestOwnedLaggedReplicaHasStaleAdmissionAndSchema",
@@ -1366,8 +1366,8 @@
       "id": "TR-RETRY",
       "statement": "Requeue the exact live attempt with its surviving schema stamp.",
       "model_paths": [
-        "model.go:358",
-        "model.go:378"
+        "model.go:366",
+        "model.go:386"
       ],
       "tests": [
         "model_test.go#TestSurvivingClaimantRestampPreservesAttemptAndLease"
@@ -1377,7 +1377,7 @@
       "id": "TR-ROW-ADD",
       "statement": "Register a source row owing one bounded generation step.",
       "model_paths": [
-        "model.go:228"
+        "model.go:236"
       ],
       "tests": [
         "model_test.go#TestProvisionalBackfillCannotAuthorizeRetirement"
@@ -1387,7 +1387,7 @@
       "id": "TR-ROW-DELETE",
       "statement": "An admitted application deletes a row and its stale rejection evidence.",
       "model_paths": [
-        "model.go:273"
+        "model.go:281"
       ],
       "tests": [
         "quarantine_postgres_test.go#TestPostgresAbortQuarantineRechecksCurrentRow",
@@ -1443,8 +1443,8 @@
       "id": "TR-WRITE",
       "statement": "Begin an admitted fenced writer and release it at transaction end.",
       "model_paths": [
-        "model.go:165",
-        "model.go:173"
+        "model.go:173",
+        "model.go:181"
       ],
       "tests": [
         "blackbox_test.go#TestCompiledVersionsShareRowsAndPauseInsideTransactions",
@@ -2622,7 +2622,7 @@
     {
       "name": "TestPostgresRegistryLookalikesAndWritableGrantsAreRefused",
       "file": "registry_test.go",
-      "line": 207,
+      "line": 213,
       "layer": "postgres",
       "invariants": [
         "INV-PRIVILEGE",
@@ -2637,7 +2637,7 @@
     {
       "name": "TestPostgresRegistryAllocationRollbackAndExhaustion",
       "file": "registry_test.go",
-      "line": 289,
+      "line": 295,
       "layer": "postgres",
       "invariants": [
         "INV-REGISTRY-ALLOCATION",
@@ -2651,7 +2651,7 @@
     {
       "name": "TestPostgresConcurrentFamiliesReceiveDistinctFenceNamespaces",
       "file": "registry_test.go",
-      "line": 328,
+      "line": 334,
       "layer": "postgres",
       "invariants": [
         "INV-FENCE",
@@ -2698,7 +2698,7 @@
     {
       "name": "TestRepairSequenceBoundsAndCorruptedEvidence",
       "file": "repair_test.go",
-      "line": 83,
+      "line": 87,
       "layer": "model",
       "invariants": [
         "INV-REPAIR-HISTORY"
@@ -2711,7 +2711,7 @@
     {
       "name": "TestPostgresRepairHistoryAgainstReferenceTraces",
       "file": "repair_test.go",
-      "line": 111,
+      "line": 115,
       "layer": "postgres",
       "invariants": [
         "INV-HISTORY",
@@ -2727,7 +2727,7 @@
     {
       "name": "TestDeadJobCannotBeClaimedWithoutExplicitReplay",
       "file": "repair_test.go",
-      "line": 174,
+      "line": 178,
       "layer": "model",
       "invariants": [
         "INV-ATTEMPT",

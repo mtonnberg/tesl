@@ -403,7 +403,7 @@ are included. Adoption, additive execution and the remaining lessons are pending
   The JSONB storage slice passes the complete compiler suite, runtime race suite,
   full runtime lint and manual coherence check. The 192-file snapshot refresh
   changes Kanel's imported ADT helper names and reuses its declared InvoiceStatus
-  encoder; its 46 direct tests and seven API tests pass. The first combined
+  encoder; its direct and API suites pass. The first combined
   PostgreSQL 17 run with JSONB cases fails only during the owned replica's backup
   setup deadline; the isolated replica test subsequently passes in seven seconds.
   This is recorded as a setup failure, not a successful combined gate.
@@ -421,8 +421,8 @@ are included. Adoption, additive execution and the remaining lessons are pending
   failures. An isolated regression established the cause: import suggestions
   parsed an unimported malformed sibling and replaced the real type diagnostic
   with its lexer error. Discovery now skips lexer-invalid candidates, while
-  checking the broken source still fails. The 16 suggestion tests and original
-  34-case regression suite pass. Test directories now use unique temporary names
+  checking the broken source still fails. The suggestion tests and original
+  tuple/type regression suite pass. Test directories now use unique temporary names
   and cleanup; PID reuse previously caused collisions on repeated isolated runs.
 
 ## Implementation decisions

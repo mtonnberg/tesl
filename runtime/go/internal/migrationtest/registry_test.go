@@ -80,9 +80,15 @@ func registryShape(t *testing.T, evidence string) string {
 	if err := json.Unmarshal([]byte(evidence), &shape); err != nil {
 		t.Fatal(err)
 	}
+	if shape == nil {
+		t.Fatal("registry catalog evidence must be an object")
+	}
 	var relation map[string]any
 	if err := json.Unmarshal(shape["relation"], &relation); err != nil {
 		t.Fatal(err)
+	}
+	if relation == nil {
+		t.Fatal("registry relation evidence must be an object")
 	}
 	// Owner is verified against the trusted control role separately. The probe
 	// table belongs to the installer; relation/index OIDs are not identities.

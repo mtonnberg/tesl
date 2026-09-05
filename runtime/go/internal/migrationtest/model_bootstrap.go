@@ -1,7 +1,5 @@
 package migrationtest
 
-import "maps"
-
 // BootstrapSnapshot is an independent catalog oracle. Object identities are
 // atomic catalog properties (a table, column/type/default, or constraint), not
 // generated SQL text. These fixtures cover initial install and additive expand.
@@ -19,9 +17,9 @@ type BootstrapModel struct {
 }
 
 func cloneBootstrapSnapshots(snapshots map[int]BootstrapSnapshot) map[int]BootstrapSnapshot {
-	copy := maps.Clone(snapshots)
+	copy := cloneModelMap(snapshots)
 	for version, snapshot := range copy {
-		snapshot.Objects = maps.Clone(snapshot.Objects)
+		snapshot.Objects = cloneModelMap(snapshot.Objects)
 		copy[version] = snapshot
 	}
 	return copy
@@ -33,7 +31,7 @@ func NewBootstrapModel(snapshots map[int]BootstrapSnapshot) *BootstrapModel {
 
 func (m *BootstrapModel) Clone() *BootstrapModel {
 	n := *m
-	n.Catalog = maps.Clone(m.Catalog)
+	n.Catalog = cloneModelMap(m.Catalog)
 	n.Snapshots = cloneBootstrapSnapshots(m.Snapshots)
 	if m.History != nil {
 		n.History = m.History.Clone()

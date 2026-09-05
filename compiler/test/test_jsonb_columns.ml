@@ -287,10 +287,65 @@ func TestSameNamedADTs(t *testing.T) {
 }
 |}])
 
+let recursive_adt explicit_codec = with_project (fun root write ->
+  let file = write "recursive.tesl" ("module Recursive exposing [sample, store, read, Tree(..), Document]\n" ^ imports ^ {|
+type Tree
+  = Leaf
+  | Branch left: Tree right: Tree
+|} ^ (if explicit_codec then "codec Tree { adtJson }\n" else "") ^ {|
+entity Document table "documents" primaryKey id { id: String, tree: Tree }
+|} ^ database "Document" ^ {|
+fn sample() -> Tree = Branch Leaf (Branch Leaf Leaf)
+fn store(tree: Tree) -> Document requires [dbWrite Document] =
+  insert Document { id: "tree", tree: tree }
+fn read() -> Maybe Document requires [dbRead Document] =
+  selectOne doc from Document where doc.id == "tree"
+test "a recursive column retains its full value" requires [dbRead Document, dbWrite Document] {
+  let _ = store (sample ())
+  case read () of
+    Nothing -> expect False
+    Something row -> expect row.tree == sample ()
+}
+|}) in
+  (* This regression used to hang during emission. Keep the compiler itself in
+     a bounded child process so a recurrence cannot stall the entire CI suite. *)
+  let compiler = Filename.concat (Filename.dirname Sys.executable_name) "../bin/main.exe" in
+  let log = Filename.concat root "compile.log" in
+  let command = Printf.sprintf "timeout 15s %s --backend go %s --out %s > %s 2>&1"
+    (Filename.quote compiler) (Filename.quote file) (Filename.quote (Filename.concat root "out"))
+    (Filename.quote log) in
+  let status = Sys.command command in
+  if status <> 0 then failf "recursive column emission exited %d: %s" status
+    (In_channel.with_open_text log In_channel.input_all);
+  execute root write [] ["internal/teslmodrecursive/recursive_column_test.go", {|
+package teslmodrecursive
+import (
+  "reflect"
+  "testing"
+  "github.com/jackc/pgx/v5/pgconn"
+)
+|} ^ scanner_row ^ {|
+func TestRecursiveColumnDecode(t *testing.T) {
+  good := []byte(`{"tag":"Branch","fields":{"left":{"tag":"Leaf"},"right":{"tag":"Branch","fields":{"left":{"tag":"Leaf"},"right":{"tag":"Leaf"}}}}}`)
+  row, err := teslScanDocument(rawRow{[]any{"tree", good}})
+  if err != nil { t.Fatal(err) }
+  if !row.Tree.TeslEqual(Sample()) { t.Fatal("recursive payload was lost or misboxed") }
+  for _, invalid := range []string{
+    `{"tag":"Branch","fields":{"left":{"tag":"Leaf"},"right":{"tag":"Missing"}}}`,
+    `{"tag":"Branch","fields":{"left":{"tag":"Leaf"}}}`,
+    `{"tag":"Branch","fields":{"left":null,"right":{"tag":"Leaf"}}}`,
+  } {
+    mustPanic(t, func() { _, _ = teslScanDocument(rawRow{[]any{"tree", []byte(invalid)}}) })
+  }
+}
+|}])
+
 let () = run "jsonb columns" ["storage boundary", [
   test_case "local, nullable and nested records revalidate proofs" `Slow local_records;
   test_case "private same-named records keep their owning codecs" `Slow (private_nominal_codecs false);
   test_case "transitive private records keep their owning codecs" `Slow (private_nominal_codecs true);
   test_case "missing or forbidden codec directions are refused" `Quick forbidden_directions;
   test_case "same-named ADT columns retain their own payload types" `Slow same_named_adts;
+  test_case "recursive ADT columns with an implicit codec" `Slow (fun () -> recursive_adt false);
+  test_case "recursive ADT columns with an explicit codec" `Slow (fun () -> recursive_adt true);
 ]]

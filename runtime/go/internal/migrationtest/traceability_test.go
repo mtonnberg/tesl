@@ -278,7 +278,7 @@ func protocolCoverage(spec protocolInventory, source protocolSource) ([]byte, er
 		Tests      []string `json:"tests"`
 	}
 	entries := []entry{}
-	statements := maps.Clone(spec.Invariants)
+	statements := cloneModelMap(spec.Invariants)
 	for id, transition := range spec.Transitions {
 		statements[id] = transition.Statement
 	}

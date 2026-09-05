@@ -1,9 +1,9 @@
 {
   "version": 1,
   "scope": ["example/**/*.tesl", "tests/**/*.tesl", "templates/**/*.tesl"],
-  "expected_count": 189,
+  "expected_count": 192,
   "expected_by_root": {
-    "example": 108,
+    "example": 111,
     "tests": 79,
     "templates": 2
   },

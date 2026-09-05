@@ -73,8 +73,12 @@ func TestHistoricalRepairIsAppendOnlyAndSurvivesCrash(t *testing.T) {
 	// Model snapshots own their chain storage. A rejected speculative operation
 	// must not corrupt the original through a shared slice backing array.
 	clone := m.Clone()
-	clone.Repairs[8][0] = "edited"
-	if m.Repairs[8][0] != "first" {
+	cloned, original := clone.Repairs[8], m.Repairs[8]
+	if len(cloned) == 0 || len(original) == 0 {
+		t.Fatal("recorded repair is missing from model snapshot")
+	}
+	cloned[0] = "edited"
+	if original[0] != "first" {
 		t.Fatal("model clones share repair storage")
 	}
 }

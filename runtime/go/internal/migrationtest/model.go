@@ -89,26 +89,34 @@ func NewModel(version int, hash string) *Model {
 		Writers:         map[string]int{}, Rows: map[string]Row{}, Jobs: map[string]Job{}, Leases: map[string]Lease{}, Processing: map[string]ProcessingABI{}, ExecutorABI: map[int]string{}, ABILocked: map[int]bool{}, Repairs: map[int][]string{}, Indexes: map[string]IndexJob{}, Quarantine: map[string]QuarantineRow{}}
 }
 
+// Speculative model states own writable maps, including an empty input map.
+// maps.Clone preserves nil, which is unsuitable for an operation's working copy.
+func cloneModelMap[K comparable, V any](source map[K]V) map[K]V {
+	copy := make(map[K]V, len(source))
+	maps.Copy(copy, source)
+	return copy
+}
+
 func (m *Model) Clone() *Model {
 	n := *m
-	n.Versions = maps.Clone(m.Versions)
-	n.Hashes = maps.Clone(m.Hashes)
-	n.EpochPreserving = maps.Clone(m.EpochPreserving)
-	n.Writers = maps.Clone(m.Writers)
-	n.Rows = maps.Clone(m.Rows)
-	n.Jobs = maps.Clone(m.Jobs)
-	n.Leases = maps.Clone(m.Leases)
-	n.Processing = maps.Clone(m.Processing)
-	n.ExecutorABI = maps.Clone(m.ExecutorABI)
-	n.ABILocked = maps.Clone(m.ABILocked)
+	n.Versions = cloneModelMap(m.Versions)
+	n.Hashes = cloneModelMap(m.Hashes)
+	n.EpochPreserving = cloneModelMap(m.EpochPreserving)
+	n.Writers = cloneModelMap(m.Writers)
+	n.Rows = cloneModelMap(m.Rows)
+	n.Jobs = cloneModelMap(m.Jobs)
+	n.Leases = cloneModelMap(m.Leases)
+	n.Processing = cloneModelMap(m.Processing)
+	n.ExecutorABI = cloneModelMap(m.ExecutorABI)
+	n.ABILocked = cloneModelMap(m.ABILocked)
 	n.Repairs = make(map[int][]string, len(m.Repairs))
 	for v, chain := range m.Repairs {
 		n.Repairs[v] = slices.Clone(chain)
 	}
-	n.Indexes = maps.Clone(m.Indexes)
-	n.Quarantine = maps.Clone(m.Quarantine)
+	n.Indexes = cloneModelMap(m.Indexes)
+	n.Quarantine = cloneModelMap(m.Quarantine)
 	for name, job := range n.Indexes {
-		job.Holders = maps.Clone(job.Holders)
+		job.Holders = cloneModelMap(job.Holders)
 		n.Indexes[name] = job
 	}
 	return &n
@@ -573,9 +581,10 @@ func (m *Model) repairCompatible(version int, embedded []string, finalPass bool)
 		}
 	}
 	recorded := m.Repairs[version]
-	shared := min(len(recorded), len(embedded))
-	if !slices.Equal(recorded[:shared], embedded[:shared]) {
-		return refuse("INV-REPAIR-HISTORY: incompatible repair chain")
+	for i, hash := range recorded {
+		if i < len(embedded) && hash != embedded[i] {
+			return refuse("INV-REPAIR-HISTORY: incompatible repair chain")
+		}
 	}
 	if finalPass && len(embedded) < len(recorded) {
 		return refuse("INV-REPAIR-EXECUTOR: final pass requires every recorded repair")

@@ -91,6 +91,9 @@ func TestScheduleTimeoutIncludesTraceAndDatabaseDump(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	err := s.Hit(ctx, e)
+	if err == nil {
+		t.Fatal("cancelled failpoint did not report a timeout")
+	}
 	if !errors.Is(err, context.Canceled) || !strings.Contains(err.Error(), "pg_locks") || !strings.Contains(err.Error(), "contract-commit") {
 		t.Fatalf("missing timeout evidence: %v", err)
 	}

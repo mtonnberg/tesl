@@ -33,6 +33,7 @@
 (test
  (name test_jsonb_columns)
  (modules test_jsonb_columns)
+ (deps ../bin/main.exe)
  (libraries tesl_compiler_lib alcotest unix str))
 
 ; These are executed generated codecs, including both rolling-read directions
