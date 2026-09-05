@@ -29,6 +29,9 @@ Implemented so far:
 - Tests exercise a real scaffold/check/test/compile/build/HTTP/cancel workflow,
   PostgreSQL data persistence, build rollback, watch restart, discovery failures,
   and paths containing spaces and Unicode.
+- Native version/doctor identity honors the selected manifest or Nix version.
+  Subprocess tests cover unchanged diagnostic streams, ordinary exit statuses,
+  and Unix child signal statuses; native CI includes these entrypoint tests.
 
 The native CLI is not yet the default Nix CLI: the existing full gate must pass
 before that cutover. Native parity CI is a source-build spike, not an offline

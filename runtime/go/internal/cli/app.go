@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 
 	"tesl.dev/runtime/go/internal/childprocess"
 	"tesl.dev/runtime/go/internal/toolchain"
@@ -92,8 +93,15 @@ func ExitCode(err error) int {
 		return 130
 	}
 	var exit *exec.ExitError
-	if errors.As(err, &exit) && exit.ExitCode() > 0 {
-		return exit.ExitCode()
+	if errors.As(err, &exit) {
+		if code := exit.ExitCode(); code > 0 {
+			return code
+		}
+		if exit.ProcessState != nil {
+			if status, ok := exit.Sys().(syscall.WaitStatus); ok && status.Signaled() {
+				return 128 + int(status.Signal())
+			}
+		}
 	}
 	return 1
 }
@@ -205,10 +213,9 @@ func (app *App) Run(ctx context.Context, args []string) error {
 		}
 		return nil
 	case "version", "--version", "-v":
-		manifest, _, _ := app.Resolver.Load()
-		version := manifest.ToolchainVersion
-		if version == "" {
-			version = "dev"
+		version, err := app.Resolver.Version()
+		if err != nil {
+			return err
 		}
 		if _, err := fmt.Fprintln(app.Stdout, "tesl", version); err != nil {
 			return err

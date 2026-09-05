@@ -28,15 +28,40 @@ type Manifest struct {
 }
 
 type Resolver struct {
-	Executable string
-	Getenv     func(string) string
-	LookPath   func(string) (string, error)
-	GOOS       string
+	Executable                  string
+	Getenv                      func(string) string
+	LookPath                    func(string) (string, error)
+	GOOS                        string
+	builtVersion, builtRevision string
 }
+
+// Set by the release builder's -ldflags; source builds remain identifiable as dev.
+var buildVersion = "dev"
+var buildRevision = "worktree"
 
 func Default() Resolver {
 	executable, _ := os.Executable()
-	return Resolver{Executable: executable, Getenv: os.Getenv, LookPath: exec.LookPath, GOOS: runtime.GOOS}
+	return Resolver{Executable: executable, Getenv: os.Getenv, LookPath: exec.LookPath, GOOS: runtime.GOOS, builtVersion: buildVersion, builtRevision: buildRevision}
+}
+
+// Version belongs to the selected manifest. Legacy Nix launchers supply the
+// identity through TESL_VERSION; standalone builds carry a linked identity.
+// A damaged explicit installation must not report a different fallback version.
+func (r Resolver) Version() (string, error) {
+	manifest, _, err := r.Load()
+	if err == nil {
+		return manifest.ToolchainVersion, nil
+	}
+	if !errors.Is(err, os.ErrNotExist) || r.env("TESL_TOOLCHAIN_ROOT") != "" {
+		return "", err
+	}
+	if version := r.env("TESL_VERSION"); version != "" {
+		return version, nil
+	}
+	if r.builtVersion != "" {
+		return r.builtVersion, nil
+	}
+	return "dev", nil
 }
 
 func (r Resolver) env(key string) string {
@@ -126,7 +151,7 @@ var overrides = map[string][]string{
 }
 
 func directoryComponent(name string) bool {
-	return name == "stdlib" || name == "templates" || name == "doc" || name == "go-modules"
+	return name == "stdlib" || name == "templates" || name == "doc" || name == "go-modules" || name == "licenses"
 }
 
 func (r Resolver) check(path, name string) (string, error) {
@@ -255,7 +280,14 @@ type Report struct {
 func (r Resolver) Doctor() Report {
 	report := Report{Version: 1, OK: true}
 	manifest, root, _ := r.Load()
-	report.Root, report.ToolchainVersion, report.SourceRevision = root, manifest.ToolchainVersion, manifest.SourceRevision
+	version, err := r.Version()
+	if err != nil {
+		report.OK = false
+	}
+	report.Root, report.ToolchainVersion, report.SourceRevision = root, version, manifest.SourceRevision
+	if err == nil && manifest.ToolchainVersion == "" && version == r.builtVersion {
+		report.SourceRevision = r.builtRevision
+	}
 	for _, name := range []string{"compiler", "go", "stdlib", "templates", "tesl-lsp", "tesl-dap", "tesl-mcp", "tesl-debug-inspect", "tesl-debug-attach", "initdb", "pg_ctl", "createdb", "psql", "zap", "nuclei"} {
 		component := Check{Name: name, Optional: name == "zap" || name == "nuclei", Version: manifest.Components[name].Version}
 		path, err := r.Resolve(name)

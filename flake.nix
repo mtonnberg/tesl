@@ -119,6 +119,10 @@
           src = ./.;
           modRoot = "runtime/go";
           vendorHash = "sha256-uGEz054ux/K5il3VDFGdIbUdb1vai6jII/maVvHzclA=";
+          ldflags = [
+            "-X=tesl.dev/runtime/go/internal/toolchain.buildVersion=${toolchainInputs.version}"
+            "-X=tesl.dev/runtime/go/internal/toolchain.buildRevision=${self.rev or "worktree"}"
+          ];
           subPackages = [
             "cmd/tesl"
             "cmd/tesl-dap"

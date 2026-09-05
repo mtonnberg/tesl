@@ -1,17 +1,21 @@
-{ pkgs, revision ? "worktree", sourceDateEpoch ? 0 }:
+{ pkgs, revision ? "worktree", sourceDateEpoch ? 0, releaseTag ? null }:
 let
   inputs = import ./toolchain-inputs.nix;
+  release = import ./release-identity.nix {
+    baseVersion = inputs.version;
+    inherit revision sourceDateEpoch releaseTag;
+  };
   source = package: {
     version = package.version;
     urls = package.src.urls or [ package.src.url ];
     hash = package.src.outputHash;
     hashAlgorithm = "sha256";
   };
-in {
+in rec {
   version = 1;
-  toolchainVersion = inputs.version;
+  toolchainVersion = release.version;
   sourceRevision = revision;
-  inherit sourceDateEpoch;
+  inherit sourceDateEpoch release;
   sources = {
     go = source pkgs.go;
     ocaml = source pkgs.ocamlPackages.ocaml;
@@ -23,6 +27,7 @@ in {
   commands = [ "tesl" "tesl-lsp" "tesl-dap" "tesl-mcp" "tesl-debug-inspect" "tesl-debug-attach" ];
   layout = {
     manifest = "share/tesl/toolchain.json";
+    frontendsDirectory = "bin";
     compiler = "libexec/tesl/tesl-compiler";
     go = "libexec/tesl/go/bin/go";
     postgresDirectory = "libexec/tesl/postgresql/bin";
@@ -41,10 +46,21 @@ in {
     { target = "darwin-arm64"; runner = "macos-15"; baseline = "macOS 13"; }
     { target = "windows-amd64"; runner = "windows-2025"; baseline = "Windows 11"; }
   ];
+  payloads = builtins.listToAttrs (map (candidate: {
+    name = candidate.target;
+    value = {
+      archiveName = "${release.artifactPrefix}-${candidate.target}"
+        + (if builtins.match "windows-.*" candidate.target != null then ".zip" else ".tar.gz");
+      manifest = import ./native-manifest.nix {
+        inherit toolchainVersion revision commands layout sources;
+        inherit (candidate) target;
+      };
+    };
+  }) candidates);
   releasePolicy = {
-    channel = "continuous";
-    immutableTagPrefix = "continuous-";
-    identity = "full source commit SHA";
+    channel = release.channel;
+    immutableTagPrefix = "v";
+    identity = "semantic version with full source commit SHA for development builds";
     requireCompleteMatrix = true;
     preserveMainRuns = true;
     mandatoryChecks = [ "authoritative-gate" "native-parity" "offline-install" "payload-audit" "provenance" ];

@@ -25,6 +25,10 @@ jobs:
       - name: Test native gate failure reporting
         run: python3 -m unittest discover -s scripts -p test_native_parity.py
       - uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25
+      - name: Test release version identity
+        run: |
+          nix-instantiate --eval --strict --json nix/tests/release-identity.nix
+          nix-instantiate --eval --strict --json nix/tests/release-plan.nix
       - name: Export authoritative native build metadata
         id: export
         shell: bash

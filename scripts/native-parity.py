@@ -43,7 +43,8 @@ def main():
         raise SystemExit("unsupported native release plan")
     if args.target not in {row["target"] for row in plan["candidates"]}:
         raise SystemExit("target absent from Nix release plan")
-    environment = dict(os.environ, TESL_REPO_ROOT=str(root), GOTOOLCHAIN="local")
+    environment = dict(os.environ, TESL_REPO_ROOT=str(root), GOTOOLCHAIN="local",
+                       TESL_RELEASE_PLAN=str(args.plan.resolve()))
     sha = run(["git", "rev-parse", "HEAD"], root, environment, capture=True)
     if plan["sourceRevision"] != sha:
         raise SystemExit("native checkout does not match the exported source revision")
@@ -59,16 +60,24 @@ def main():
     binary_dir = root / "artifacts" / ("native-" + args.target) / "bin"
     binary_dir.mkdir(parents=True, exist_ok=True)
     cli = binary_dir / ("tesl.exe" if os.name == "nt" else "tesl")
-    run(["go", "build", "-o", str(cli), "./cmd/tesl"], root / "runtime/go", environment)
+    version = plan["toolchainVersion"]
+    ldflags = (f"-X=tesl.dev/runtime/go/internal/toolchain.buildVersion={version} "
+               f"-X=tesl.dev/runtime/go/internal/toolchain.buildRevision={sha}")
+    run(["go", "build", "-ldflags", ldflags, "-o", str(cli), "./cmd/tesl"], root / "runtime/go", environment)
+    # Test the binary's embedded identity, independent of any runner overrides.
+    version_environment = dict(environment, TESL_VERSION="", TESL_TOOLCHAIN_ROOT="")
+    reported = run([str(cli), "version"], root, version_environment, capture=True)
+    if reported.splitlines()[:1] != ["tesl " + version]:
+        raise SystemExit("native CLI does not report the exported toolchain version")
     environment["TESL_PROCESS_RUNNER"] = str(cli)
     targets = ["bin/main.exe", "test/test_completion.exe", "test/test_import_cache.exe", "test/test_workspace_session.exe", "test/test_process_runner.exe", "test/test_diagnostics.exe", "test/test_stdlib_docs.exe"]
     run(["opam", "exec", "--", "dune", "build", *targets], root / "compiler", environment)
     checks = [(target, ["opam", "exec", "--", "dune", "exec", target], root / "compiler")
               for target in targets[1:]]
     checks.extend([
-        ("Go commands", ["go", "build", "./cmd/..."], root / "runtime/go"),
+        ("Go commands", ["go", "build", "-ldflags", ldflags, "./cmd/..."], root / "runtime/go"),
         ("Go CLI and process ownership", ["go", "test", "-race", "./internal/childprocess",
-         "./internal/toolchain", "./internal/protocol", "./internal/cli"], root / "runtime/go"),
+         "./internal/toolchain", "./internal/protocol", "./internal/cli", "./cmd/tesl"], root / "runtime/go"),
         ("Go LSP", ["go", "test", "-race", "./internal/lsp"], root / "runtime/go"),
         ("Go compiler sessions", ["go", "test", "-race", "./internal/tooling", "-run",
          "TestCompilerPipesDrainAndCloseWithDescendants|Workspace"], root / "runtime/go"),
@@ -82,7 +91,7 @@ def main():
     evidence = root / "artifacts" / ("native-" + args.target)
     evidence.mkdir(parents=True, exist_ok=True)
     (evidence / "checks.json").write_text(json.dumps({
-        "version": 1, "source_revision": sha, "target": args.target,
+        "version": 1, "toolchain_version": version, "source_revision": sha, "target": args.target,
         "go": go_version, "ocaml": ocaml_version, "native_parity": "passed",
         "offline_install": "not-tested", "signed_distribution": "not-tested",
     }, indent=2) + "\n", encoding="utf-8")

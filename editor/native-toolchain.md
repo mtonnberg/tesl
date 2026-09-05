@@ -30,6 +30,12 @@ environment launcher supplying pinned compiler, Go, PostgreSQL and stdlib paths.
 Both CLI packages run the clean-install gate, including compiled standard-library
 tests outside a checkout. This Nix candidate is not a relocatable offline payload.
 
+`version`, `--version`, `-v`, and `doctor --json` report the selected installation's
+identity. A manifest is authoritative; legacy Nix launchers supply `TESL_VERSION`,
+and a development checkout reports `dev`. Invalid selected manifests fail instead
+of reporting a fallback version. Compiler stdout/stderr and child exit codes pass
+through the native CLI, including Unix signal termination statuses.
+
 ## Installation manifest
 
 All native executables locate `share/tesl/toolchain.json` relative to their real
