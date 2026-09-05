@@ -813,6 +813,33 @@ execution semantics. This field projection neither checks persisted history nor
 establishes rolling compatibility, physical catalog equivalence, a verified `Same`
 bridge, or permission to remove a decoder. Those remain planner/runtime duties.
 
+The entity-impact projection compares each declared entity's complete closure,
+including its table name, primary key and indexes. A change to one of these
+mappings must appear even when every field contract stays identical. Private
+entities participate; equal short names in different child modules remain distinct.
+Comparison folds out equal entities and distinguishes a changed entity declaration
+from a changed dependency under an unchanged declaration. Moving an entity to a
+different owning module is a removal and an addition, not an inferred rename.
+
+The inventory's internal `Same` verifier accepts only owned newtype, ADT, record,
+fact and codec declarations of the same kind in the same family and compiler ABI.
+It compares complete canonical trees, rather than trusting supplied hashes. An
+unequal pair reports the first differing dependency in canonical reference order,
+with the old and new declaration locations; added and removed dependencies are
+reported separately. The generator's candidate list includes private equal pairs
+and excludes entities, functions, constructor aliases and unmatched nominal names.
+Candidates do not override a developer's decision to omit a `Same` entry.
+
+This internal equality evidence is abstract and compiler-local. It does not grant
+a type cast or prove that a persisted value was produced under this ABI. The
+contextual migration checker must additionally establish the adjacent revisions,
+the source-history identities and recorded execution semantics before introducing
+cross-version type identity. The general fact-ownership check applies to every
+argument of `Fact (P ...)` and `Maybe (Fact (P ...))`: application or migration
+modules cannot acquire a schema fact's minting authority by importing it, even
+when its predicate has several arguments. Qualified compiler AST references obey
+the same declaring-module restriction.
+
 Type-like declarations are module-scoped. If two modules both define a name such as `User`, `Task`, or `Status`, those declarations remain distinct even when they share the same surface spelling. Loading one module must not change the meaning of an unqualified type name in another module.
 
 If a module needs to use same-named imported type-like declarations from different modules, the ambiguity must be resolved by module qualification/prefixing. The compiler should reject unqualified ambiguous uses rather than merging declarations by bare name.

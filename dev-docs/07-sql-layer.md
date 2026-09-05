@@ -213,6 +213,17 @@ The compiled process fixtures in `runtime/go/internal/migrationtest/testdata/`
 exercise separate application, operation, and schema modules against shared
 PostgreSQL rows.
 
+`Migration_inventory` loads the complete checked schema closure and provides
+field and entity impact projections. Use entity impact when checking a sparse
+migration record: comparing fields alone misses table, primary-key and index
+changes. Both projections follow nested record/ADT codecs and fact producers.
+The internal `verify_same` API compares canonical declaration closures and returns
+abstract equality evidence or the differing dependency's source locations.
+`same_candidates` proposes equal types, facts and codecs, including private ones.
+These APIs require the same compiler ABI; they do not authorize cross-version
+proof casts, accept persisted history, classify online safety or execute DDL.
+The source-history layer separately guards saved input bytes and import resolution.
+
 The following startup notes describe the legacy bootstrap, not the versioned
 migration executor being developed; delivery status is tracked in
 [the migration implementation ledger](migrations-implementation.md).

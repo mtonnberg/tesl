@@ -627,6 +627,13 @@ Those tests cannot acquire database capabilities or a connection. See the
 [schema and migration guide](tour.md#schema-and-migrations) for the module layout
 and the current implementation boundary.
 
+Keep the checks that establish stored invariants beside the facts they declare.
+Only that declaring module may produce a fact through `check` or `establish`.
+An application or migration can call the owning validator and pass already-proven
+values through ordinary functions; it cannot introduce a replacement validator
+for an imported fact. This also applies to predicates with several arguments,
+such as `InBounds 1 100 amount`.
+
 ### Typed Queries
 
 **✅ Do:** Use typed SQL queries with entities:

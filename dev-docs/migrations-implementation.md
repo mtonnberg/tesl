@@ -70,6 +70,39 @@ are included. Adoption, additive execution and the remaining lessons are pending
 
 ## Slices under development
 
+- The checked inventory now verifies compiler-local `Same` equality and proposes
+  equal type/fact/codec pairs, including private declarations. Comparisons use the
+  full canonical tree, preserve nominal identity and report the first differing
+  dependency with both source locations. Fifteen regression groups cover private
+  validators, added/removed producers, encoder and legacy-decoder changes,
+  recursive/generic ADTs, source invariance, ABI/family refusals and retained editor
+  caches. This is the equality component, not the contextual Migration declaration
+  or permission to cast persisted proofs; adjacent revision and runtime ABI evidence
+  remain required.
+- Entity impact now covers complete owned tables as well as individual fields.
+  Ten regression groups require table, primary-key and index changes to surface
+  when every field remains equal, preserve private module identities, follow
+  transitive proof/JSONB dependencies and keep 299 unaffected entities folded out
+  when one of 300 changes. Additions/removals and empty schemas retain the same
+  ABI/family checks. Online classification and sparse Migration elaboration remain
+  pending.
+- Reviewing the equality boundary exposed a fact-ownership bypass: an application
+  could establish a schema's multi-argument `Fact (InBounds 1 100 n)` and compile
+  with zero diagnostics. The core ownership check now traverses the complete
+  predicate under both `Fact` and `Maybe (Fact ...)`; qualified compiler AST names
+  also require the declaring module. Nine regression groups cover applications,
+  migration revisions, sibling schema modules, ordinary libraries, several arities,
+  valid owning validators and forwarding of proof-carrying values. The reproducer
+  failed the new regression before the fix. The focused type/proof and inventory
+  suites pass; full-gate and feature-wide reviews are still required.
+- Main's retained compiler query sessions and native editor tooling are integrated.
+  Typed migration IR collection bypasses metadata-only cache hits so it records
+  the exact checked AST identities; saved inventories clear semantic query state
+  between dependency snapshots. Pure migrations may import old/current views with
+  matching physical index names, while each schema still rejects its own index
+  collisions. The merged compiler gate passed 194 suite groups before the final
+  index fix; focused index/import/IR/inventory suites and the editor race/lint gates
+  passed afterward. Subsequent implementation changes require a fresh full gate.
 - Saved-source history discovery now derives `VCurrent`'s version and loads every
   consecutive frozen schema through the checked semantic inventory. It records
   raw-byte guards for private schema dependencies and transitive migration helpers,

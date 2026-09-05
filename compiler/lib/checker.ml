@@ -8117,17 +8117,13 @@ let check_module_with_metadata_uncached ?typed_nodes ?(source_lines = [||]) (m :
   in
   let extract_produced_preds_with_loc (fd : func_decl) : (string * Location.loc) list =
     let rec from_rs = function
-      | RetPlain { ty = TApp { head = TName { name = "Fact"; _ }; arg; loc; _ }; _ } ->
-        (match arg with
-         | TApp { head = TName { name; _ }; _ } -> [(name, loc)]
-         | TName { name; loc; _ } -> [(name, loc)]
-         | _ -> [])
-      | RetPlain { ty = TApp { head = TName { name = "Maybe"; _ };
-                               arg = TApp { head = TName { name = "Fact"; _ }; arg = inner; loc; _ }; _ }; _ } ->
-        (match inner with
-         | TApp { head = TName { name; _ }; _ } -> [(name, loc)]
-         | TName { name; loc; _ } -> [(name, loc)]
-         | _ -> [])
+      | RetPlain { ty; loc } ->
+        (* Fact predicates may have any arity or contain a conjunction. A
+           one-layer TApp match silently omitted imported multi-argument facts,
+           allowing a caller to mint a schema invariant outside its closure. *)
+        (match Validation_common.proof_of_fact_type ty with
+         | Some proof -> List.map (fun pred -> pred, loc) (collect_preds_from_proof proof)
+         | None -> [])
       | RetAttached { binding = b; loc; _ } ->
         (match b.proof_ann with
          | Some p -> List.map (fun pred -> (pred, loc)) (collect_preds_from_proof p)
@@ -8156,17 +8152,23 @@ let check_module_with_metadata_uncached ?typed_nodes ?(source_lines = [||]) (m :
          | None -> [])
       (* An existential return may itself carry a proof-producing inner spec. *)
       | RetExists { body; _ } -> from_rs body
-      | RetPlain _ -> []
     in
     from_rs fd.return_spec
   in
   let fact_ownership_errors = List.concat_map (function
     | DFunc fd when is_proof_introducing_kind fd.kind ->
       List.filter_map (fun (pred, loc) ->
-        (* Skip if it's a qualified name (already module-prefixed) or a type variable *)
-        if String.contains pred '.' then None
-        else if String.length pred > 0 && Char.lowercase_ascii pred.[0] = pred.[0] then None
-        else if List.mem pred locally_declared_facts then None
+        (* Qualified compiler ASTs must obey the same ownership rule as exposed
+           surface names. Qualification identifies the owner; it grants no
+           authority to produce a different module's fact. *)
+        let own_prefix = m.module_name ^ "." in
+        let locally_owned = List.mem pred locally_declared_facts ||
+          (String.starts_with ~prefix:own_prefix pred &&
+           List.mem (String.sub pred (String.length own_prefix)
+             (String.length pred - String.length own_prefix)) locally_declared_facts) in
+        if not (String.contains pred '.') && String.length pred > 0 &&
+           Char.lowercase_ascii pred.[0] = pred.[0] then None
+        else if locally_owned then None
         else
           let hint =
             if List.mem pred (collect_in_scope_type_names m) then
