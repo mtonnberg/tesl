@@ -1,0 +1,56 @@
+[
+  {
+    "name": "Keep invoices in the right workspace",
+    "file": "workspace-invoice.tesl",
+    "errors": []
+  },
+  {
+    "name": "What if the workspace check is missing?",
+    "file": "workspace-invoice-unchecked.tesl",
+    "errors": [
+      "V001"
+    ]
+  },
+  {
+    "name": "A missing import \u00b7 try the quick fix",
+    "file": "missing-import.tesl",
+    "errors": [
+      "T001"
+    ]
+  },
+  {
+    "name": "A database write \u00b7 explore permissions",
+    "file": "capability-missing.tesl",
+    "errors": [
+      "V001"
+    ]
+  },
+  {
+    "name": "Hello HTTP \u00b7 run this server locally",
+    "file": "hello-server.tesl",
+    "errors": [],
+    "default": true
+  },
+  {
+    "name": "A write travels up the call chain",
+    "file": "capability-chain.tesl",
+    "errors": [
+      "V001"
+    ]
+  },
+  {
+    "name": "Add money only after checking its currency",
+    "file": "money-check.tesl",
+    "errors": [
+      "V001"
+    ]
+  },
+  {
+    "name": "Let the compiler check your dimensions",
+    "file": "units-check.tesl",
+    "errors": [
+      "T001",
+      "T001"
+    ]
+  }
+]

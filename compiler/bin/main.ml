@@ -1080,6 +1080,7 @@ let () =
     (match result.error with
      | Some message -> Printf.eprintf "search: %s\n" message; exit 1
      | None ->
+       if result.completion then print_endline "Completions for an unfinished type; keep typing to narrow the results.";
        List.iter (fun e -> print_endline (Stdlib_docs.render_entry_text e); print_newline ()) result.results;
        Printf.printf "%d result(s), showing up to %d. Type shape is discovery; proof metadata is unavailable.\n"
          result.total Builtin_search.limit)

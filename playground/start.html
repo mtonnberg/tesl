@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Run your first Tesl API</title><meta name="description" content="Take a small Tesl HTTP server from the playground to a running local application.">
+<link rel="stylesheet" href="playground.css"><link rel="alternate" type="text/markdown" href="agents.md" title="Coding agent guide"></head>
+<body><article class="start-guide">
+<nav><a href="index.html">← Back to the playground</a> · <a href="agents.md">For coding agents</a></nav>
+<p class="eyebrow">From checked source to a real response</p><h1>Make your first request.</h1>
+<p>Start with a small HTTP server you can read in a minute. No database service or account is needed for this example.</p>
+<h2 id="install">1. Install Tesl</h2><p>Tesl is beta. Follow the <a href="https://github.com/mtonnberg/tesl/blob/main/INSTALL.md">current installation guide</a> for your system, then confirm <code>tesl help</code> works. The installation guide is the authority on supported methods.</p>
+<details id="agent-setup"><summary>Using a coding agent? Copy a setup prompt</summary>
+<p>Paste this into a coding agent with terminal access. It asks the agent to follow current installation guidance and verify a real response.</p>
+<textarea id="install-prompt" readonly aria-label="Installation prompt" rows="9">Help me install Tesl and run my first API. Read https://github.com/mtonnberg/tesl/blob/main/INSTALL.md and https://github.com/mtonnberg/tesl/blob/main/AGENTS.md first. Inspect my OS and tools and use a currently supported installation method. Create a new project directory without overwriting my work. Use tesl init for a starter, inspect its instructions, and run tesl agent-context on the source after edits. Start the app and send a request to a declared route. Show the actual response and the commands I can use to continue. Distinguish installation, compiler checks, tests and a running server; only report steps you verified.</textarea>
+<button class="btn" id="copy-install">Copy setup prompt</button><p id="copy-status" role="status"></p></details>
+<h2>2. Save the server</h2><p><a href="examples/hello-server.tesl" download="HelloServer.tesl">Download HelloServer.tesl</a> into a new directory. It declares <code>GET /hello</code>, its handler, and an App using port 8086. You can also pick “Hello HTTP” in the playground and choose “Save .tesl”.</p>
+<h2>3. Check it, then run it</h2><pre>tesl check HelloServer.tesl
+tesl run HelloServer.tesl</pre>
+<p>Leave that terminal running. In another terminal:</p><pre>curl http://localhost:8086/hello</pre>
+<p>You should get an HTTP 200 response containing <code>Hello from Tesl!</code>. Stop the server with Ctrl+C. The playground checks the same source but does not start the server.</p>
+<h2>4. Build something of your own</h2><p>Change the greeting and run again. When you want a project structure, use <code>tesl init myapi</code> and follow the <a href="https://github.com/mtonnberg/tesl#quick-start">quick start</a>. The <a href="https://github.com/mtonnberg/tesl/blob/main/manual/first-change.md">first-change guide</a> walks through a small change in a real project.</p>
+<p>Curious about the invoice example? Its <code>fact</code> names a rule, the <code>check</code> validates it, and the receiving function requires that evidence. Select a keyword and choose “Explain this” in the playground. <a href="lessons.html">Short lessons</a> are there when you need them.</p>
+<p>Found something useful? Share your modified source from the playground. The recipient gets the code, not just a screenshot.</p>
+<p>Need a hand? <a href="https://github.com/mtonnberg/tesl/discussions">Ask us in Discussions</a> — questions from newcomers are welcome.</p>
+</article><script>
+document.getElementById('copy-install').addEventListener('click', async () => {
+  const field = document.getElementById('install-prompt'), status = document.getElementById('copy-status');
+  try { await navigator.clipboard.writeText(field.value); status.textContent = 'Prompt copied. Paste it into your coding agent.'; }
+  catch (_) { field.focus(); field.select(); status.textContent = 'Select and copy the prompt above.'; }
+});
+</script></body></html>

@@ -153,9 +153,17 @@ let t_search_type_boundaries () =
   List.iter (fun query ->
     let result = Builtin_search.search query in
     if result.error = None then Alcotest.failf "unsupported query accepted: %s" query)
-    ["String ->"; ":: (String"; ":: String)"; ":: _"; "s: String -> Int";
+    ["String -> ->"; ":: (String) )"; ":: String)"; ":: _"; "s: String -> Int";
      "String ::: Safe -> Int"; "String -> Int requires [time]"; String.make 257 'a';
      ":: " ^ String.make 25 '(' ^ "a" ^ String.make 25 ')'];
+  List.iter (fun query ->
+    let result = Builtin_search.search query in
+    Alcotest.(check bool) (query ^ " completion") true result.completion;
+    Alcotest.(check bool) (query ^ " suggestions") true (result.total > 0);
+    Alcotest.(check bool) (query ^ " no error") true (result.error = None))
+    ["Float ->"; "Float -> F"; ":: (Float -> F"; ":: (Float -> Float"];
+  Alcotest.(check bool) "known nominal stays exact" false (Builtin_search.search "Float -> Float").completion;
+  Alcotest.(check int) "earlier nominal never relaxed" 0 (Builtin_search.search "F -> Float").total;
   Alcotest.(check int) "no invented types" 0 (Builtin_search.search "UnknownNominal -> Int").total;
   Alcotest.(check int) "combined name and type" 1 (Builtin_search.search "String.length :: String -> Int").total;
   Alcotest.(check int) "unquantified scheme variables cannot become query generics" 0

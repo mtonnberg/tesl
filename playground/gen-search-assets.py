@@ -58,7 +58,7 @@ for (const example of data.examples) {
                                ensure_ascii=True, separators=(",", ":")) + "\n"
     (out / "search-examples.json").write_text(examples_json)
     assets = {}
-    for name in ["tesl_playground.js", "tesl_search.js", "search-examples.json"]:
+    for name in ["tesl_playground.js", "tesl_search.js", "search-examples.json", "playground-elm.js", "monaco.js", "monaco.css", "monaco-worker.js"]:
         data = (out / name).read_bytes()
         digest = hashlib.sha256(data).digest()
         assets[name] = {"sha256": digest.hex(), "integrity": "sha256-" + base64.b64encode(digest).decode(), "bytes": len(data)}

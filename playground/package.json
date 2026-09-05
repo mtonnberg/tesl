@@ -1,0 +1,9 @@
+{
+  "name": "tesl-playground-editor",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Build-only dependencies for the optional, locally served Monaco editor",
+  "scripts": { "build:editor": "node build-editor.mjs" },
+  "dependencies": { "monaco-editor": "0.56.0" },
+  "devDependencies": { "esbuild": "0.28.2" }
+}

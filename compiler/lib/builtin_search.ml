@@ -112,12 +112,22 @@ let catalog_json () = Printf.sprintf
   {|{"version":%d,"catalog_id":%s,"scope":"builtins","entries":%s}|}
   version (quote (Lazy.force catalog_id)) (Lazy.force catalog_rows)
 
-type query_type = Var of string | Con of string | App of query_type * query_type | Fun of query_type * query_type
+type query_type = Hole | Nominal_prefix of string | Var of string | Con of string | App of query_type * query_type | Fun of query_type * query_type
 type token = Ident of string | Arrow | Left | Right
 exception Invalid_query of string
 let invalid s = raise (Invalid_query s)
 
-let parse_type source =
+(* Only the unfinished suffix is relaxed. Earlier nominal names and variable
+   relationships remain exact. A complete known constructor never becomes a prefix. *)
+let constructors =
+  let rec names acc = function
+    | TCon name -> name :: acc | TVar _ -> acc
+    | TApp (a, b) | TFun (a, b) -> names (names acc a) b in
+  List.concat_map (fun e -> match scheme e with Some s -> names [] s.mono | None -> []) entries
+  |> List.sort_uniq String.compare
+
+let parse_type_query ?(completion = false) source =
+  let incomplete = ref false in
   let n = String.length source in
   let ident_start c = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') in
   let ident_char c = ident_start c || (c >= '0' && c <= '9') || c = '_' || c = '.' in
@@ -152,19 +162,31 @@ let parse_type source =
     more a
   and atom depth = match !tokens with
     | Ident s :: rest -> tokens := rest;
-      if s.[0] >= 'a' && s.[0] <= 'z' then Var s else Con s
+      if s.[0] >= 'a' && s.[0] <= 'z' then Var s
+      else if completion && rest = [] && not (List.mem s constructors)
+           && List.exists (fun name -> prefix name s) constructors then
+        (incomplete := true; Nominal_prefix s)
+      else Con s
     | Left :: rest -> tokens := rest; let t = arrow (depth + 1) in
-      (match !tokens with Right :: rest -> tokens := rest; t | _ -> invalid "Missing closing parenthesis.")
+      (match !tokens with
+       | Right :: rest -> tokens := rest; t
+       | [] when completion -> incomplete := true; t
+       | _ -> invalid "Missing closing parenthesis.")
+    | [] when completion -> incomplete := true; Hole
     | _ -> invalid "Expected a type name or parenthesized type." in
   let result = arrow 0 in
   if !tokens <> [] then invalid "Unexpected token after type.";
-  result
+  result, !incomplete
+
+let parse_type source = fst (parse_type_query source)
 
 (* Bijection rather than a wildcard/unifier: a -> a differs from a -> b,
    and a never silently specializes to a nominal type such as Int32. *)
 let matches query ty =
   let forward = Hashtbl.create 8 and reverse = Hashtbl.create 8 in
   let rec go q t = match q, t with
+    | Hole, _ -> true
+    | Nominal_prefix a, TCon b -> prefix b a
     | Var a, TVar b ->
       (match Hashtbl.find_opt forward a, Hashtbl.find_opt reverse b with
        | None, None -> Hashtbl.add forward a b; Hashtbl.add reverse b a; true
@@ -193,20 +215,24 @@ let text_score query (e : Stdlib_docs.entry) =
   else if List.for_all (fun w -> contains (String.concat " " (lower e.doc :: module_ :: names)) w) (words q) then Some 7
   else None
 
-type response = { query : string; mode : string; error : string option; total : int; results : Stdlib_docs.entry list }
+type response = { query : string; mode : string; completion : bool; error : string option; total : int; results : Stdlib_docs.entry list }
 
 let search query =
   let query = String.trim query in
   let mode = ref "text" in
+  let completion = ref false in
+  let parse source =
+    let q, partial = parse_type_query ~completion:true source in
+    completion := partial; q in
   try
     if String.length query > max_query_bytes then invalid "Query exceeds 256 UTF-8 bytes.";
     let text_query, type_query =
       match String.index_opt query ':' with
       | Some i when i + 1 < String.length query && query.[i + 1] = ':' ->
         mode := "type";
-        String.trim (String.sub query 0 i), Some (parse_type (String.sub query (i + 2) (String.length query - i - 2)))
+        String.trim (String.sub query 0 i), Some (parse (String.sub query (i + 2) (String.length query - i - 2)))
       | Some _ -> mode := "type"; invalid "Parameter labels are not supported. Use String -> Int, or name :: TYPE."
-      | None when contains query "->" -> mode := "type"; "", Some (parse_type query)
+      | None when contains query "->" -> mode := "type"; "", Some (parse query)
       | None -> query, None in
     let scored = List.filter_map (fun e ->
       let shape_ok = match type_query with
@@ -222,13 +248,13 @@ let search query =
       List.filter_map (fun e -> if List.mem e.Stdlib_docs.name suggestions then Some (8, e) else None) entries
       else scored in
     let ordered = List.sort (fun (a, x) (b, y) -> let c = compare a b in if c = 0 then String.compare (id x) (id y) else c) scored in
-    { query; mode = !mode; error = None; total = List.length ordered;
+    { query; mode = !mode; completion = !completion; error = None; total = List.length ordered;
       results = List.filteri (fun i _ -> i < limit) ordered |> List.map snd }
-  with Invalid_query message -> { query; mode = !mode; error = Some message; total = 0; results = [] }
+  with Invalid_query message -> { query; mode = !mode; completion = !completion; error = Some message; total = 0; results = [] }
 
 let response_json r = Printf.sprintf
-  {|{"version":%d,"catalog_id":%s,"scope":"builtins","query":%s,"mode":%s,"error":%s,"total":%d,"limit":%d,"results":%s}|}
-  version (quote (Lazy.force catalog_id)) (quote r.query) (quote r.mode)
+  {|{"version":%d,"catalog_id":%s,"scope":"builtins","query":%s,"mode":%s,"completion":%b,"error":%s,"total":%d,"limit":%d,"results":%s}|}
+  version (quote (Lazy.force catalog_id)) (quote r.query) (quote r.mode) r.completion
   (nullable quote r.error) r.total limit (array entry_json r.results)
 
 let search_json query = response_json (search query)

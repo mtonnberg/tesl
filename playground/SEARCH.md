@@ -27,7 +27,7 @@ module, all words in names/module, all words including description. When no
 direct results exist, the existing builtin typo suggestions are used. Ties sort
 by stable ID. Aliases point to the same entry; generated families stay aggregated.
 
-Types are **exact structural shapes up to consistent generic renaming**. They
+Complete types are **exact structural shapes up to consistent generic renaming**. They
 are not approximate unification, coercion or an assertion that a call will work.
 
 ```text
@@ -46,6 +46,19 @@ query uses `:: Set a`. There are no wildcard, proof, label or capability-filter
 operators; unsupported type syntax returns a structured error. Zero-argument
 function schemes retain the checker's `Unit` domain; the display signature and
 parameter labels identify the actual zero-argument call.
+
+Unfinished suffixes return **labelled completions**. `Float ->` leaves the
+remaining result shape open; `Float -> F` completes the final nominal name to
+`Float`. Completed known names stay exact: `Float -> Float` does not match
+additional arguments. Only an unfinished final identifier is a nominal prefix;
+`F -> Float` does not relax the earlier `F`. Missing closing parentheses at the
+end can be completed; unexpected tokens, labels and proof/effect syntax remain
+errors. Generic-variable relationships in the supplied prefix still apply.
+
+The additive v1 response field `completion: true` identifies provisional results
+for every consumer, including CLI and MCP. It is `false` for text searches and
+complete type queries. A bare `Float` remains a text query. Completion is bounded
+by the same catalog, byte/token/depth limits and 20-result cap as exact search.
 
 Queries are limited to 256 UTF-8 bytes, type queries to 96 tokens and 24 recursive
 levels. Responses return at most 20 entries, plus a total count. Narrow a large
@@ -145,5 +158,5 @@ query time, CPU-throttled time and asset bytes separately. Actual mobile IMEs,
 screen-reader use and a representative device/network sample still need manual
 validation. Deployment runs the native/browser parity and Chromium gates.
 
-The optional [Elm screen and decision](elm-spike/DECISION.md) is excluded from
-ordinary builds and deployment.
+The production [Elm application and optional Monaco editor](ARCHITECTURE.md)
+are covered by the same Chromium gate. There is no separate experimental screen.

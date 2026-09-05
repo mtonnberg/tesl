@@ -135,6 +135,7 @@ test('native undo, selection and simulated composition survive diagnostics', asy
 test('375px viewport and dark theme keep search readable and within the viewport', async ({ page }) => {
   await page.setViewportSize({ width: 375, height: 812 });
   await page.goto('/'); await ready(page);
+  await page.locator('#tools > summary').click();
   await page.locator('input[name="theme"][value="dark"]').check();
   await query(page, 'String.length');
   await expect(page.getByRole('heading', { name: 'String.length', exact: true })).toBeVisible();
@@ -150,10 +151,11 @@ test('existing import fixes and generated TypeScript/Elm tabs still work', async
   await page.goto('/'); await ready(page);
   await page.locator('#examples').selectOption('2');
   await page.getByRole('button', { name: 'Apply fix: Import String.length from Tesl.String', exact: true }).click();
-  expect(await page.locator('#src').inputValue()).toContain('import Tesl.String exposing [String.length]');
+  await expect(page.locator('#src')).toHaveValue(/import Tesl.String exposing \[String.length\]/);
   expect(await page.evaluate(() => JSON.parse(teslCheck(document.getElementById('src').value)).diagnostics.filter(d => d.severity === 'error'))).toEqual([]);
   await page.locator('#src').fill(fs.readFileSync(path.join(root, 'example/learn/lesson03-records.tesl'), 'utf8'));
   await page.getByRole('button', { name: 'Check', exact: true }).click();
+  await page.getByText('See generated code', { exact: true }).click();
   await expect(page.locator('#tab-ts')).toBeVisible();
   await expect(page.locator('#panel-ts')).toContainText('Point');
   await page.locator('#tab-elm').click();

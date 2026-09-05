@@ -14,6 +14,13 @@ func validateSearchResponse(root map[string]any) error {
 	if root["scope"] != "builtins" || (root["mode"] != "text" && root["mode"] != "type") {
 		return fmt.Errorf("unsupported search scope or mode")
 	}
+	// Optional for older v1 compilers; newer responses label unfinished types.
+	if completion, present := root["completion"]; present {
+		value, ok := completion.(bool)
+		if !ok || (value && root["mode"] != "type") {
+			return fmt.Errorf("invalid search completion flag")
+		}
+	}
 	if err := searchNullableString(root, "error"); err != nil {
 		return err
 	}

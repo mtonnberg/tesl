@@ -79,7 +79,7 @@ jobs:
           set -euo pipefail
           dist="playground/dist"
           test -f "$dist/index.html"   || { echo "::error::index.html missing"; exit 1; }
-          for asset in tesl_search.js search-ui.js search.css share.js search-examples.json playground-build.js; do
+          for asset in monaco.js monaco.css monaco-worker.js monaco-LICENSE.txt tesl_search.js playground-elm.js playground.css bridge.js editor.js examples.js learning.js start.html why.html random.html agents.md examples/hello-server.tesl fix.js search.css share.js search-examples.json playground-build.js; do
             test -f "$dist/$asset" || { echo "::error::$asset missing"; exit 1; }
           done
           test -f "$dist/tesl_playground.js" || { echo "::error::tesl_playground.js missing"; exit 1; }
@@ -127,6 +127,9 @@ jobs:
 
       - name: Check native and browser parity
         run: nix develop --command bash scripts/playground-parity.sh --dist playground/dist
+
+      - name: Run the official playground examples
+        run: nix develop --command python3 scripts/playground-examples-runtime.py
 
       - name: Check search and editor behavior in Chromium
         run: nix shell --inputs-from . nixpkgs#playwright-test nixpkgs#playwright-driver.browsers --command playwright test --config e2e/playground/playwright.config.cjs

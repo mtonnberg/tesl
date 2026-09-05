@@ -15,10 +15,11 @@ search dialog; checked example links; content identities/integrity checks; share
 source-link codec; relevance/negative/parity/browser tests. See
 [`playground/SEARCH.md`](../../playground/SEARCH.md) for the API and constraints.
 
-An optional Elm feasibility screen passed its initial browser scenarios. The
-[decision](../../playground/elm-spike/DECISION.md) is to ship search in the existing
-UI and defer a full migration until the remaining editor interactions can be
-carried across and verified. Ordinary compiler builds do not require Elm.
+The production [Elm application and optional Monaco editor](../../playground/ARCHITECTURE.md)
+now preserve the native editor's adoption flows and offer compiler squiggles,
+quick fixes and catalog suggestions in IDE mode. Type search also accepts
+unfinished suffixes (`Float ->`, `Float -> F`) with explicit completion labels.
+Ordinary compiler builds do not require Elm or npm.
 
 Remaining before calling the broader discovery initiative complete:
 
@@ -37,3 +38,10 @@ Remaining before calling the broader discovery initiative complete:
 The main `./ci.sh` remains the authoritative repository gate. The publishing
 workflow additionally runs full native/browser parity and real Chromium checks;
 no publishing action has been performed as part of this local implementation.
+
+
+The welcoming workbench starts with working code and offers **Build with Tesl**,
+sharing and source download. Production browser tests cover those paths. A local
+content-free observation hook distinguishes install intent and explicit sharing;
+actual installation/first-project confirmation and aggregate collection remain
+an integration task with the installation workstream.

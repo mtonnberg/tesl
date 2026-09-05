@@ -11,7 +11,7 @@ It cannot **run** a Tesl program. See [What it deliberately cannot do](#what-it-
 
 Builtin discovery now ships through **Search builtins** (Ctrl/Cmd + K), the CLI
 and MCP. See [search, sharing and verification](SEARCH.md) and the
-[Elm feasibility decision](elm-spike/DECISION.md). The original editor was the
+[Elm/Monaco architecture](ARCHITECTURE.md). The original editor was the
 Phase 4 outcome of `roadmap/completed/revised_onboarding.md` (D7).
 
 ---
@@ -47,45 +47,33 @@ regression rather than to "did it build":
 | **Highlighting, gutter, squiggles** | the **exact** diagnostic range is underlined, multi-line ranges included; the gutter carries a severity-coloured marker per line; hovering a squiggle shows the code, the message and the fix title |
 | **Click-to-jump** | clicking a diagnostic scrolls the editor to it, puts the caret on the range, selects it and flashes it (a static flash under `prefers-reduced-motion`) |
 | **Check as you type** | 300 ms debounce, and the measured ms is shown. The Check button stays, and <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>Enter</kbd> checks immediately |
-| **Explain in place** | every diagnostic has a *Explain `<CODE>`* disclosure carrying the same prose as `tesl explain <CODE>`, fetched on first open |
-| **A guided first failure** | a first visit lands on the proof-error example, already checked, with one line of framing. It disappears the moment the visitor edits the buffer, picks another example, or arrives via a share link |
-| **Honest framing, when it matters** | declaring a `server`, `api`, `handler`, `queue` or channel surfaces an inline note saying what *is* checked and what is not, pointing at `tesl init` / `tesl run`. Detected on the stripped source, so prose about `api` in a comment does not trip it |
+| **Explain in place** | every diagnostic has an *Explain `<CODE>`* disclosure carrying the same prose as `tesl explain <CODE>`, fetched on first open |
+| **A welcoming first success** | a first visit starts with a runnable HTTP server; the invoice/workspace rule is a second example. Three paths offer a runnable API guide, a quick fix, or discovery. Explicit intro visibility is remembered; shared links go straight to the source |
+| **Honest framing, when it matters** | declaring a `server`, `api`, `handler`, `queue` or channel surfaces an inline note saying what *is* checked and what is not, pointing at `tesl init` / `tesl run`. Detected from declaration-leading lines; comments do not trip it |
+| **Build or share next** | successful checks lead to a local run guide linking canonical installation instructions and explicit sharing; Save .tesl downloads the current source. These actions are distinct from verified installation or project activation |
 | **Keyboard and mobile** | panes stack under 900 px and the page is usable at 375 px without sideways scrolling; a skip link, real list semantics for the diagnostics, buttons for every action, visible focus rings, and Tab moves focus rather than inserting a tab character |
 
-## The editor, and why there is no editor library
+## Editors inside the Elm application
 
-The editor and search use local static assets: no CDN, web font, image,
-framework or bundler. Search loads its compiler-owned catalog separately on first use. The editor is a `<textarea>` with transparent text
-layered exactly over an `aria-hidden` `<pre>` that carries the highlighted copy
-of the same text plus the squiggle spans, with a gutter column beside it. Both
-layers share one font, one line-height, one padding and `white-space: pre`; the
-textarea's `scroll` event drives the underlay's and the gutter's scroll offsets.
+Elm owns application state and views. The default native textarea keeps the
+lightweight first visit, syntax overlay, compiler squiggles and mobile editing.
+**Use IDE editor** loads Monaco locally on demand: find, folding, multiple
+cursors, actual compiler quick fixes, and builtin hover/completion (Ctrl+Space).
+**Use simple editor** switches back, preserving source and selection.
 
-`white-space: pre` rather than `pre-wrap` is deliberate: with wrapping, one
-logical line occupies several visual rows and the gutter numbers drift from the
-code. Long lines scroll horizontally *inside the editor*; the page itself never
-scrolls sideways.
+Search and lessons remain part of the custom workbench. Monaco is not a VS Code
+extension host; its catalog suggestions are not scope-aware language-server
+completion. Proof/capability requirements still apply. Monaco does not support
+mobile browsers, so the native editor remains the default. Undo histories belong
+to their editor instance and reset across editor switches.
 
-**CodeMirror 6 was considered and declined**, for the three reasons recorded at
-the top of `index.html`: the artifact must stay static files with relative paths
-and no CDN (CM6 would need bundling, and the build has no JS toolchain — only
-js_of_ocaml and python3); there is no CM6 language mode for Tesl, so the
-tokenizer is hand-written either way; and a plain `<textarea>` keeps native
-selection, undo, IME, mobile keyboards and screen-reader support, which the
-accessibility requirement asks for and a `contenteditable` gives up. Monaco stays
-out on size (~5 MB against a 1.07 MB compiler).
+See [ownership, ports, build and limits](ARCHITECTURE.md). The old inline
+JavaScript application and separate Elm spike have been replaced by one
+production Elm application. The compiler, type-search algorithm, share codec and
+machine-applicable fix semantics retain their existing authorities.
 
-The tokenizer's keyword table is transcribed from `compiler/lib/lexer.mll`, not
-guessed. Its deliberate approximations are listed beside it in `index.html`: one
-line at a time with no carried state; SQL and route words (`select`, `where`,
-`get`, …) coloured wherever they appear even though the real grammar treats them
-as contextual identifiers; no call-vs-binding distinction.
-
-**Themes.** The page follows `prefers-color-scheme` by default and has an
-explicit **System / Light / Dark** control (three radios, native keyboard
-behaviour) persisted in `localStorage` under `tesl-playground-theme`. The
-override is `:root[data-theme="light"|"dark"]`, each restating the full palette so
-it wins in both directions.
+**Themes.** System / Light / Dark applies to the application and Monaco. Only
+this preference is persisted; source and search queries stay local in memory.
 
 ## The lesson index
 
@@ -116,12 +104,13 @@ one buffer at a time.
 ## Build
 
 ```sh
-nix develop                 # dev shell ships js_of_ocaml + js_of_ocaml-compiler
+nix develop                 # OCaml, js_of_ocaml, Elm, Node/npm and Python
 playground/build.sh         # → playground/dist/ (verified static assets)
 python3 -m http.server -d playground/dist 8000
 ```
 
-Two static files, all paths relative. Publishing is "copy `dist/` to any static
+A directory of static assets, all paths relative. Elm packages and pinned npm
+build dependencies are downloaded on a cold build; runtime assets are local. Publishing is "copy `dist/` to any static
 host" — no plugins, no Actions-only build logic, no assumption about the URL
 prefix. Moving forge is a CI-config change, not a rewrite.
 
@@ -233,8 +222,9 @@ different program, which is the behaviour you want.
 
 | File | |
 |---|---|
-| `index.html`, `share.js` | editor and source-link codec; native textarea, no framework |
-| `search-ui.js`, `search.css` | accessible search presentation; no matching logic |
+| `index.html`, `elm/src/Main.elm` | Bootstrap and production Elm application |
+| `editor.js`, `monaco.js`, `fix.js`, `share.js` | Native/IDE editor adapters, structured edits and source-link codec |
+| `bridge.js`, `search.css`, `playground.css` | Browser effects, lazy assets and presentation; no type matching |
 | `../compiler/playground/tesl_search_js.ml` | lazy browser export of the shared native search module |
 | `gen-search-assets.py` | native/browser-checked examples and build integrity manifest |
 | `build.sh` | build + copy + report sizes |
@@ -256,7 +246,9 @@ serializer. The returned document is a **superset** of the CLI's shape — the
 the generated code when the check passes (and `null` when it does not, mirroring
 the CLI's rule that a program failing `tesl check` must not produce a plausible
 artifact). `backend` is `go`; the legacy `racket` key remains an alias of `go`
-for existing consumers.
+for existing consumers. The additive `go_files` array preserves each generated
+project file as `{path, content}`; it is empty on errors. The CLI supplies runtime
+library files separately; they are not included in this browser response.
 
 `teslExplain` is `Error_codes.explain` — the same prose `tesl explain <CODE>`
 prints — rendered in a `<details>` disclosure under each diagnostic. It is called
@@ -268,65 +260,37 @@ Measured cost of adding it: **+640 B raw / +288 B gzipped**, because
 
 ### The generated-code tabs are conditional
 
-TypeScript and Elm appear as tabs when their generated content contains more
-than a banner, module header and imports. The browser driver also returns the
-Go project preview through its API; the page does not display that concatenated
-project as a single Go file. The browser never executes generated code.
+TypeScript and Elm appear for substantive generated content. **Go project**
+lets the visitor select each emitted file by path. The runtime is supplied by
+the CLI; the browser never executes generated code. Arrow keys cycle all tabs.
+
+**Explain this** uses the selection or current line to find a curated language
+explanation, including `fact`, `check` and `:::`. Right-click a native line number
+or use Monaco's Tesl: Explain this action. This local guide is not semantic
+inference or an AI call. See `learning.js` and the linked manual.
 
 ### The examples
 
-Four preloaded, all verified to produce the same diagnostics in the browser as
-`tesl --check-json` produces natively:
+Five examples are generated from `examples.json` and `example/playground`:
 
-1. **Clean** — validate once, pass the stamped value to the write. No
-   diagnostics; client tabs appear if that example has substantive client output.
-2. **Proof error** — the same program with the validation skipped. `V001`:
-   *"call to `saveTitle` argument `title` does not statically satisfy declared
-   proof `ValidTitle raw`"*. This is the demonstration; a type error is not the
-   point.
-3. **Type error with a fix** — a missing stdlib import. The diagnostic carries an
-   `insert_line` edit titled *"Import String.length from Tesl.String"*; the
-   **Apply** button applies it and re-checks.
-4. **Capability error** — `requires [dbRead Note]` on a function whose body writes.
-   `V001`: *"uses privileged operations and callees requiring `[dbWrite Note]` but
-   does not declare them"*.
+1. A checked invoice/workspace rule, with success and rejection tests.
+2. The missing workspace check, rejected with `V001`.
+3. A missing import with a machine-applicable `String.length` fix.
+4. A database write without its declared capability.
+5. Hello HTTP: a minimal App listening on port 8086, with an empty memory database.
+6. Capability chain: a read-only caller invokes a write-capable helper (V001).
+7. Money check: an addition lacks evidence of matching currencies (V001).
+8. Dimensions: adding speed and duration cannot produce a length (T001).
 
-### Sharing, and the optional position
+The build verifies expected errors, native/browser diagnostic parity, and each
+clean example's Go files. Run `python3 scripts/playground-examples-runtime.py`
+with the compiler/Go environment to execute the invoice tests and smoke-test
+`tesl check` + `tesl run` + GET /hello. The browser checks tests but does not run them.
 
-The source is compressed into the URL fragment: `#z<base64url>` of a
-`deflate-raw` stream (`CompressionStream`, no library), falling back to
-`#s<base64url>` where that API is unavailable. The fragment is never sent to a
-server. **No backend, no storage, no moderation surface** — which is also the
-answer to "a good way to share Tesl code".
-
-A link can also say *"and look at line 42"*:
-
-```
-#z<base64url>            the source
-#z<base64url>.L42        …and put the caret on line 42
-#z<base64url>.L42-45     …and select lines 42 through 45
-#s<base64url>.L42        same, uncompressed payload
-```
-
-The position is **optional and appended after the payload**. `.` cannot occur in
-base64url (alphabet `A-Z a-z 0-9 - _`), so every pre-existing `#z…` / `#s…` link
-still decodes unchanged, and a decoder that ignores the suffix still gets the
-source. Line numbers are **1-based** — what the diagnostics display and what a
-person reads off the gutter.
-
-The **Copy share link** button appends a position only when text is selected:
-select the interesting lines, copy the link, and the recipient lands on them. With
-no selection the link is exactly what it always was.
-`gen-lessons-page.py`'s `share_fragment()` takes optional `line` / `end_line`
-arguments and emits no position for the lesson index — a lesson link means "open
-the lesson", and an index guessing at an interesting line would be guessing.
-
-### Module name ↔ file name
-
-One validation pass requires the `module` header to match the file name. The
-driver therefore derives a virtual file name *from the header* (`module Foo` →
-`/tesl/Foo.tesl`) instead of using a fixed one, so a lesson pasted verbatim
-checks exactly as it does on disk instead of reporting a spurious mismatch.
+`start.html` includes the download, commands and a copyable setup prompt for a
+coding agent. It links current installation documentation rather than duplicating
+platform support promises. `agents.md` provides static capabilities, limitations
+and source links for both people and visiting agents.
 
 ## What it deliberately cannot do
 
@@ -376,3 +340,45 @@ loud (a diagnostic matching ``module `X` not found``). If it ever stops differin
 the script fails on purpose, pointing at the three places that claim the
 single-buffer limit still holds — here, `gen-lessons-page.py`'s `cross_module`
 flag, and the note it renders on `lessons.html`.
+
+## Explore with a guide
+
+Four optional chapters sit beside the editor: Your first API, Rules that travel
+with your code, Money and measurements, and Run it locally. The six exercises
+cover a greeting edit, an import fix, workspace evidence, a capability propagated
+through a helper, currency evidence and dimension arithmetic. Each diagram node
+has a hover explanation and a native disclosure usable by keyboard or touch.
+
+Entering or selecting a step loads its matching source automatically. A per-step
+in-memory draft map preserves edits when revisiting steps. Keep editing hides the
+guide and preserves its step and starting-source snapshot; Resume guide remains
+in the feedback header. Guide options contains restart, original-source restore,
+reset stars and the Discussion link for suggesting guides. The forward control
+says Skip for now on unfinished exercises, then Next step or Next chapter.
+
+Each exercise has repair/starting-point help and an Apply this edit button. It
+replaces one matching span and rechecks the result, preserving surrounding edits;
+ambiguous or already changed source disables the action. Navigation waits for an
+outstanding fix/check so a finishing edit can earn its star before source changes.
+
+One star per exercise is earned from an accepted compiler check of the suggested
+edit, keeping the example's structure intact. Comments, formatting, imports and
+the local checked-value binding name may vary; deleting the required caller does
+not solve an exercise.
+Stars are historical exercise completion, not certification of arbitrary rewrites,
+tests or runtime behavior. They persist under `tesl-playground-stars-v1` as a list
+of bounded exercise IDs; no source is stored. Reset stars clears the list.
+Malformed or unavailable localStorage falls back to in-memory learning. The
+starting buffer and current step are held only for the current page session.
+
+Sharing, builtin search and Install Tesl remain in the main toolbar. More holds
+Save .tesl, editor mode, theme, lessons, introduction and guide controls; the
+manual Check action lives next to the editor.
+
+**Why Tesl?** opens a static, collapsible overview. Every feature has a See it in
+action link using an allowlisted `?guide=` key to load the relevant chapter and
+example. A shared source fragment always takes precedence and never auto-opens
+the guide. Unknown guide keys use the normal playground default.
+**Surprise me with one** opens a random, self-contained lesson in a separate tab;
+its pool is checked with the browser compiler at build time. The community help
+link points to GitHub Discussions. These pages do not replace the current buffer.

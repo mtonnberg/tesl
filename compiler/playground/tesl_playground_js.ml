@@ -16,6 +16,7 @@
 
       { "version": 1,
         "diagnostics": [ <same objects as --check-json> ],
+        "go_files": [ { "path": string, "content": string } ],
         "go":     <string|null>,   // emitted only when the check passes
         "racket": <string|null>,   // legacy alias of "go", retained for clients
         "ts":     <string|null>,
@@ -112,17 +113,17 @@ let json_or_null = function
    program that fails `tesl check` must not produce a plausible artifact. *)
 let emitted vfile source =
   match Parser.parse_module vfile source with
-  | Err _ -> (None, None, None)
+  | Err _ -> (None, None, None, [])
   | Ok m ->
-    let racket =
-      match Compile.compile_source ~root_path:"." ~type_check:false vfile source with
-      | Compile.Success rkt -> Some rkt
-      | Compile.Failure _ -> None
+    let racket, files =
+      match Compile.compile_go_source ~path:vfile vfile source with
+      | Compile.GoSuccess artifacts -> Some (Compile.artifacts_text artifacts), artifacts
+      | Compile.GoFailure _ -> None, []
     in
     let m' = try Compile.merge_imported_client_decls m with _ -> m in
     let ts = try Some (Emit_ts.emit_ts m') with _ -> None in
     let elm = try Some (Emit_elm.emit_elm m') with _ -> None in
-    (racket, ts, elm)
+    (racket, ts, elm, files)
 
 let check (src : Js.js_string Js.t) : Js.js_string Js.t =
   let source = Js.to_string src in
@@ -135,16 +136,17 @@ let check (src : Js.js_string Js.t) : Js.js_string Js.t =
       let has_error =
         List.exists (fun (d : Compile.diagnostic) -> d.severity = "error") diags
       in
-      let racket, ts, elm = if has_error then (None, None, None) else emitted vfile source in
+      let racket, ts, elm, files = if has_error then (None, None, None, []) else emitted vfile source in
       Printf.sprintf
-        {|{"version":1,"backend":"go","diagnostics":[%s],"go":%s,"racket":%s,"ts":%s,"elm":%s}|}
+        {|{"version":1,"backend":"go","diagnostics":[%s],"go":%s,"racket":%s,"ts":%s,"elm":%s,"go_files":[%s]}|}
         (String.concat "," (List.map Compile.diag_to_json diags))
         (json_or_null racket) (json_or_null racket) (json_or_null ts) (json_or_null elm)
+        (String.concat "," (List.map (fun (a : Emit_go.artifact) -> Printf.sprintf "{\"path\":%s,\"content\":%s}" (Compile.json_encode_string a.path) (Compile.json_encode_string a.contents)) files))
     with e ->
       (* A crash in the compiler must surface as a diagnostic, not a blank
          page: the playground is also a bug reporter. *)
       Printf.sprintf
-        {|{"version":1,"backend":"go","diagnostics":[{"file":%s,"start":{"line":0,"col":0},"end":{"line":0,"col":0},"severity":"error","code":"E000","message":%s,"fix":null,"source":"playground"}],"go":null,"racket":null,"ts":null,"elm":null}|}
+        {|{"version":1,"backend":"go","diagnostics":[{"file":%s,"start":{"line":0,"col":0},"end":{"line":0,"col":0},"severity":"error","code":"E000","message":%s,"fix":null,"source":"playground"}],"go":null,"racket":null,"ts":null,"elm":null,"go_files":[]}|}
         (Compile.json_encode_string vfile)
         (Compile.json_encode_string
            ("internal compiler error: " ^ Printexc.to_string e))

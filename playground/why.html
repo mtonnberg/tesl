@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Why Tesl? — practical rules, checked where you use them</title>
+<meta name="description" content="See how Tesl connects validation, permissions, API contracts and developer tools, with examples you can inspect.">
+<link rel="stylesheet" href="playground.css"></head>
+<body><article class="start-guide why-guide">
+<nav><a href="index.html">← Playground</a> · <a href="start.html#install">Install Tesl</a> · <a href="https://github.com/mtonnberg/tesl/discussions">Ask the community</a></nav>
+<p class="eyebrow">Why Tesl?</p><h1>What can Tesl help you catch?</h1>
+<p>A backend has rules that ordinary types often leave to convention: this value was validated, this record belongs to this workspace, this function may write to a database. Tesl lets you express those requirements at the function boundary and checks the calls against them.</p>
+<p class="muted">Choose a feature for the details, then try its example in the playground.</p>
+<div class="why-features">
+<details><summary><h2>Make a missing check a compiler error</h2></summary>
+<p>An invoice ID alone does not establish which workspace it belongs to. A function can require evidence for that particular invoice and workspace, and Tesl rejects a call that skips the check. The check itself still needs correct logic and tests.</p>
+<p><a href="examples/workspace-invoice.tesl" download="WorkspaceInvoice.tesl">Read the complete invoice example</a> · <a href="https://github.com/mtonnberg/tesl/blob/main/manual/best-practices.md#proof-management">How the evidence works</a></p><p class="feature-action"><a class="btn" href="index.html?guide=workspace">See it in action →</a></p></details>
+<details><summary><h2>See privileged operations in the signature</h2></summary>
+<p>Capabilities make operations such as database reads and writes visible in function declarations. The requirement follows calls: if a helper writes to Note, its caller must declare dbWrite Note too. A read-only path cannot quietly gain a write through a helper. Authentication and the application's access policy still need to be designed correctly.</p>
+<p><a href="examples/capability-missing.tesl" download="CapabilityMissing.tesl">Inspect a rejected database write</a></p><p class="feature-action"><a class="btn" href="index.html?guide=capabilities">See it in action →</a></p></details>
+<details><summary><h2>Use an API contract across server and clients</h2></summary>
+<p>Declare routes and their types once, then generate TypeScript/Zod or Elm client code. The CLI also exports OpenAPI for tools that understand your HTTP contract. The playground’s generated-code view lets you inspect the client and Go output.</p>
+<p><a href="https://github.com/mtonnberg/tesl/blob/main/manual/openapi-dast.md">OpenAPI and API testing</a> · <a href="start.html">Run a small server</a></p><p class="feature-action"><a class="btn" href="index.html?guide=api">See it in action →</a></p></details>
+<details><summary><h2>Keep money and measurements honest</h2></summary>
+<p>Money values carry a currency and use exact integer minor units. Physical quantities carry dimensions, so adding a length to a duration is a compiler error. These types make mistakes visible that would look like ordinary arithmetic on raw numbers.</p>
+<p><a href="https://github.com/mtonnberg/tesl/blob/main/example/learn/lesson71-money.tesl">Money example</a> · <a href="https://github.com/mtonnberg/tesl/blob/main/example/learn/lesson72-units.tesl">Units example</a></p><p class="feature-action"><a class="btn" href="index.html?guide=money">See it in action →</a> · <a href="index.html?guide=dimensions">Try dimensions too →</a></p></details>
+<details><summary><h2>Build on the Go runtime</h2></summary>
+<p>Tesl emits a Go project. You can inspect the generated application files and use the CLI to build and run them with the supplied Go runtime. The playground checks the source locally; it does not run the server.</p>
+<p><a href="https://github.com/mtonnberg/tesl/tree/main/runtime/go">Inspect the runtime</a></p><p class="feature-action"><a class="btn" href="index.html?guide=runtime">See it in action →</a></p></details>
+<details><summary><h2>Give people and coding agents useful feedback</h2></summary>
+<p>Diagnostics have stable codes, source locations and, where available, edits the editor can apply. The CLI’s agent-context command gives a coding agent a compact view of errors and declarations, while targeted queries answer questions about types and symbols.</p>
+<p><a href="agents.md">Playground capabilities and limits</a> · <a href="https://github.com/mtonnberg/tesl/blob/main/AGENTS.md">The agent API</a></p><p class="feature-action"><a class="btn" href="index.html?guide=compiler">See it in action →</a></p></details>
+</div>
+<h2>Where it fits today</h2><p>Tesl is a beta language aimed at backend APIs. Start with a small project where you can evaluate its rules and tooling against your own needs. Expect changes while it develops; the <a href="https://github.com/mtonnberg/tesl">repository</a> and <a href="https://github.com/mtonnberg/tesl/blob/main/INSTALL.md">installation guide</a> describe the current state.</p>
+<p><a class="btn build-cta" href="start.html#install">Install Tesl</a> <a class="btn" href="index.html">Try the playground</a></p>
+<p>If you get stuck or wonder whether Tesl fits your project, <a href="https://github.com/mtonnberg/tesl/discussions">come ask in Discussions</a>. Questions from people trying Tesl for the first time are welcome.</p>
+</article></body></html>

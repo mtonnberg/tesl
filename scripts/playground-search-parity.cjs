@@ -26,7 +26,7 @@ for (const [query, expected] of fixtures) {
   assert.deepEqual(result, native("--search-json", query), query);
   assert.ok(result.results.slice(0, 5).some(entry => entry.name === expected), query + " -> " + expected);
 }
-const negatives = ["", "UnknownNominal -> Int", "String ->", ":: (String", ":: _", "x: String -> Int",
+const negatives = ["Float", "Float ->", "Float -> F", "Float -> Float", ":: (Float -> F", "Float -> ->","", "UnknownNominal -> Int", "String ->", ":: (String", ":: _", "x: String -> Int",
   "String ::: Safe -> Int", "String -> Int requires [time]", "x".repeat(257), "List.map :: (a -> b) -> List a -> List b",
   "String.length :: Int32 -> Int", "Dict.keys :: Dict a b -> List b", "<script>alert('x')</script>", "🧪".repeat(80)];
 for (const query of negatives) assert.deepEqual(JSON.parse(teslSearch(query)), native("--search-json", query), query);

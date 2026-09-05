@@ -1,0 +1,23 @@
+module WorkspaceInvoiceUnchecked exposing [Invoice, InWorkspace, checkWorkspace, invoiceLabel, showInvoice]
+
+import Tesl.Prelude exposing [String]
+
+# A familiar multi-tenant bug: a valid invoice ID, but the wrong workspace.
+record Invoice { id: String, workspace: String }
+fact InWorkspace (invoice: Invoice, workspace: String)
+
+check checkWorkspace(invoice: Invoice, workspace: String)
+  -> invoice: Invoice ::: InWorkspace invoice workspace =
+  if invoice.workspace == workspace then
+    ok invoice ::: InWorkspace invoice workspace
+  else
+    fail 404 "Invoice not found in this workspace"
+
+# Every caller must supply the check for THIS invoice and THIS workspace.
+fn invoiceLabel(invoice: Invoice ::: InWorkspace invoice workspace, workspace: String) -> String =
+  "Invoice ${invoice.id} in ${workspace}"
+
+# In a service, obtain workspace from trusted authentication, not user input.
+fn showInvoice(raw: Invoice, workspace: String) -> String =
+  # A valid invoice ID alone does not establish workspace membership.
+  invoiceLabel raw workspace

@@ -27,3 +27,16 @@ details.search-help summary { cursor: pointer; }
 .search-actions { margin-top: .75rem; font-size: .85rem; }
 .search-actions a { color: var(--accent); }
 @media (max-width: 560px) { #search-dialog { padding: .9rem; } .search-heading h2 { font-size: 1.1rem; } }
+
+#search-dialog { border-radius: 18px; padding: 1.6rem; box-shadow: 0 24px 100px #0004; }
+.search-heading h2 { letter-spacing: -.03em; font-weight: 650; }
+#search-query { padding: .9rem; border-radius: 9px; font-size: 1.1rem; background: var(--panel); }
+#search-query:focus { border-color: var(--accent); }
+.search-card { border: 1px solid var(--line); border-radius: 10px; padding: 1.1rem; margin: .85rem 0; background: var(--panel); }
+.search-card h3 { color: var(--accent); }
+.search-card .search-requirements { margin-top: .8rem; }
+.search-requirements summary { cursor: pointer; font-size: .78rem; color: var(--muted); }
+.search-card .search-actions { padding-top: .6rem; }
+.search-card .search-meta:empty { display: none; }
+#search-version { font-size: .7rem; }
+@media (max-width: 560px) { #search-dialog { padding: 1rem; } .search-card { padding: .85rem; } }

@@ -23,8 +23,10 @@ set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo="$(cd "$here/.." && pwd)"
 out="${1:-$here/dist}"
+mkdir -p "$out"
+out="$(cd "$out" && pwd)"
 
-for required in python3 node; do
+for required in python3 node npm elm; do
   command -v "$required" >/dev/null 2>&1 || { echo "error: $required is required for verified playground assets" >&2; exit 1; }
 done
 
@@ -73,9 +75,16 @@ mkdir -p "$out"
 install -m 644 "$artifact" "$out/tesl_playground.js"
 install -m 644 "$here/index.html" "$out/index.html"
 install -m 644 "$builddir/default/playground/tesl_search_js.bc.js" "$out/tesl_search.js"
-install -m 644 "$here/search-ui.js" "$out/search-ui.js"
+for asset in playground.css editor.js bridge.js fix.js learning.js start.html why.html agents.md; do
+  install -m 644 "$here/$asset" "$out/$asset"
+done
+( cd "$here/elm" && elm make src/Main.elm --optimize --output="$out/playground-elm.js" )
 install -m 644 "$here/search.css" "$out/search.css"
 install -m 644 "$here/share.js" "$out/share.js"
+# Pinned packages are installed at build time; no CDN/runtime dependency.
+( cd "$here" && npm ci --ignore-scripts --no-audit --no-fund && node build-editor.mjs "$out" )
+python3 "$here/gen-workbench-assets.py" "$repo" "$out"
+node "$repo/scripts/playground-examples-check.cjs" "$out"
 python3 "$here/gen-search-assets.py" "$repo" "$out"
 
 # ── The lesson index ────────────────────────────────────────────────────────

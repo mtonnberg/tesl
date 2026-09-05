@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
-"""Generate playground/dist/lessons.html — every lesson, one click from running
-in the browser checker.
+"""Generate lessons.html and a checked random-lesson page.
+
+Requires Node.js and the built tesl_playground.js beside out.html; build.sh
+supplies both. Lessons open in the browser checker, which does not run programs.
 
 WHY A SEPARATE PAGE RATHER THAN A PICKER INSIDE THE PLAYGROUND
 --------------------------------------------------------------
@@ -31,6 +33,8 @@ Usage:  playground/gen-lessons-page.py <repo-root> <out.html> [playground-href]
 
 import base64
 import html
+import json
+import subprocess
 import re
 import sys
 import zlib
@@ -167,6 +171,21 @@ def main() -> int:
                .replace("%%HREF%%", html.escape(href))
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(page, encoding="utf-8")
+    # A random first lesson should neither require prior lessons nor open with
+    # an unresolved import/error. Check the actual browser artifact, not a guess.
+    candidates = [l for l in lessons if not l["needs"] and not l["cross_module"]]
+    probe = """const fs = require('fs'); require(process.argv[1]);
+const sources = JSON.parse(fs.readFileSync(0, 'utf8'));
+process.stdout.write(JSON.stringify(sources.map(s => !JSON.parse(teslCheck(s)).diagnostics.some(d => d.severity === 'error'))));"""
+    checked = subprocess.run(["node", "-e", probe, str((out.parent / "tesl_playground.js").resolve())],
+        input=json.dumps([(learn / (l["slug"] + ".tesl")).read_text() for l in candidates]), text=True, capture_output=True, check=True)
+    eligible = [l for l, clean in zip(candidates, json.loads(checked.stdout)) if clean]
+    if not eligible:
+        raise ValueError("No self-contained, clean random lessons")
+    pool = [{"title": l["slug"], "summary": l["summary"], "href": href + "#" + l["frag"]} for l in eligible]
+    random_page = RANDOM_PAGE.replace("%%POOL%%", json.dumps(pool).replace("<", "\\u003c"))
+    (out.parent / "random.html").write_text(random_page, encoding="utf-8")
+    print("gen-lessons-page: random pool has %d self-contained checked lessons" % len(pool))
     total = sum(len(l["frag"]) for l in lessons)
     print("gen-lessons-page: wrote %s (%d lessons, %d bytes of fragments, "
           "largest %d)" % (out, len(lessons), total,
@@ -177,7 +196,7 @@ def main() -> int:
 PAGE = """<!doctype html>
 <meta charset=utf-8>
 <meta name=viewport content="width=device-width,initial-scale=1">
-<title>Tesl lessons — run them in your browser</title>
+<title>Tesl lessons — explore them in your browser</title>
 <style>
   :root { color-scheme: light dark; --fg:#111; --dim:#666; --line:#d8d8d8; --accent:#0b5fff; }
   @media (prefers-color-scheme: dark) {
@@ -212,7 +231,7 @@ PAGE = """<!doctype html>
 <p class=lede>
   The checker does not <em>run</em> programs — no HTTP, no database, no
   streaming. It parses, type-checks, <strong>proof-checks</strong>, lints, and
-  shows you the generated Racket, TypeScript and Elm.
+  shows you the generated Go, TypeScript and Elm.
 </p>
 
 %%ROWS%%
@@ -224,6 +243,33 @@ PAGE = """<!doctype html>
   order: the earlier a lesson appears, the more it matters.
 </footer>
 """
+
+
+RANDOM_PAGE = """<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>A lesson to explore — Tesl</title><link rel="stylesheet" href="playground.css"></head>
+<body><article class="start-guide"><nav><a href="lessons.html">All lessons</a> · <a href="index.html">Playground</a></nav>
+<p class="eyebrow">Something to explore</p><h1 id="lesson-title">Pick a lesson</h1>
+<p id="lesson-summary">Choose from the lesson collection.</p>
+<p><a id="open-random-lesson" class="btn build-cta" href="lessons.html">Open this lesson</a> <button id="another-lesson" class="btn" hidden>Pick another</button></p>
+<p>These lessons have no listed prerequisites and pass the browser compiler as one file. Their tests and programs still need to be run locally.</p>
+<noscript><p><a href="lessons.html">Browse the complete lesson list</a>.</p></noscript>
+</article><script>
+const lessons = %%POOL%%;
+let previous = -1;
+function choose() {
+  let index = Math.floor(Math.random() * lessons.length);
+  if (lessons.length > 1 && index === previous) index = (index + 1) % lessons.length;
+  previous = index;
+  const lesson = lessons[index];
+  document.getElementById('lesson-title').textContent = lesson.title;
+  document.getElementById('lesson-summary').textContent = lesson.summary;
+  document.getElementById('open-random-lesson').href = lesson.href;
+}
+document.getElementById('another-lesson').hidden = false;
+document.getElementById('another-lesson').addEventListener('click', choose);
+choose();
+</script></body></html>"""
 
 
 if __name__ == "__main__":
