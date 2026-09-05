@@ -281,6 +281,36 @@ else
   fail "tesl emit go failed under BSD userland (rc=$rc): $out"
 fi
 
+# Security regression: the final source component must also be canonicalized.
+# An in-project symlink may not make the compiler read an outside target.
+cp "$PROJ/main.tesl" "$WORK/outside.tesl"
+ln -s ../outside.tesl "$PROJ/escape.tesl"
+out="$(tesl_bsd "$PROJ" emit go escape.tesl)"; rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q "resolves outside the project root"; then
+  pass "source symlink escaping the project root is rejected"
+else
+  fail "source symlink escaped the project root (rc=$rc): $out"
+fi
+
+ln -s loop-b.tesl "$PROJ/loop-a.tesl"
+ln -s loop-a.tesl "$PROJ/loop-b.tesl"
+out="$(tesl_bsd "$PROJ" emit go loop-a.tesl)"; rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q "cannot resolve source file"; then
+  pass "source symlink loop is rejected"
+else
+  fail "source symlink loop did not fail closed (rc=$rc): $out"
+fi
+
+# Resolution failures must fail closed rather than falling back to the lexical
+# in-project path.
+ln -s missing.tesl "$PROJ/broken.tesl"
+out="$(tesl_bsd "$PROJ" emit go broken.tesl)"; rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q "cannot resolve source file"; then
+  pass "broken source symlink is rejected"
+else
+  fail "broken source symlink did not fail closed (rc=$rc): $out"
+fi
+
 # 2) bare `tesl emit go` / `tesl check` default to [project].entrypoint (#46.2)
 out="$(tesl_bsd "$PROJ" check)"; rc=$?
 if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q "entrypoint main.tesl"; then

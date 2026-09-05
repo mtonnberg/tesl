@@ -10,7 +10,7 @@ let lexer_failure_prefix = "lexer failure: "
     and unterminated literals with [Failure]; convert those into the parser's
     normal error channel so every JSON query can still emit its documented
     envelope. *)
-let parse_module filename source =
+let parse_module_uncached (filename, source) =
   try Parser.parse_module filename source with
   | Failure message ->
     Parser.Err {
@@ -18,6 +18,10 @@ let parse_module filename source =
       loc = Location.dummy_loc filename;
       fix = None;
     }
+
+let cached_parse_module = Query_cache.memo ~limit:32 ~max_weight:(2 * 1024 * 1024)
+  ~weight:(fun (_, source) -> String.length source) parse_module_uncached
+let parse_module filename source = cached_parse_module (filename, source)
 
 (** JSON-safe string encoder.
     OCaml's [%S] format uses OCaml escape syntax (\NNN for non-ASCII bytes),
@@ -3719,23 +3723,24 @@ let local_bindings_source filename source =
       let bindings, _ = Checker.check_module_with_local_bindings m in
       List.map local_binding_of_checker bindings
 
-type completion_item = {
-  ci_label  : string;
-  ci_detail : string;
-  ci_kind   : string;
-}
+type completion_item = Completion.item
 
 let completion_item_to_json (item : completion_item) : string =
-  Printf.sprintf {|{"label":%s,"detail":%s,"kind":%s}|}
+  Printf.sprintf {|{"label":%s,"detail":%s,"kind":%s,"module":%s,"documentation":%s,"requires_import":%b,"text_edit":%s,"import_edit":%s,"sort_text":%s}|}
     (json_encode_string item.ci_label)
     (json_encode_string item.ci_detail)
     (json_encode_string item.ci_kind)
+    (match item.ci_module with None -> "null" | Some s -> json_encode_string s)
+    (match item.ci_documentation with None -> "null" | Some s -> json_encode_string s)
+    item.ci_requires_import
+    (fix_to_json item.ci_edit) (fix_to_json item.ci_import_fix)
+    (json_encode_string item.ci_sort_text)
 
 let completions_response_to_json (items : completion_item list) : string =
   Printf.sprintf {|{"version":1,"completions":[%s]}|}
     (String.concat "," (List.map completion_item_to_json items))
 
-let completions_source filename source line col =
+let legacy_completions_source filename source line col =
   match parse_module filename source with
   | Err _ -> []
   | Ok m ->
@@ -3775,11 +3780,8 @@ let completions_source filename source line col =
            match List.assoc_opt name ctx1.Checker.records with
            | None -> []
            | Some rd ->
-             List.map (fun (fname, fty) -> {
-               ci_label  = fname;
-               ci_detail = Type_system.pp_ty fty;
-               ci_kind   = "field";
-             }) rd.Checker.rd_fields)
+             List.map (fun (fname, fty) ->
+               Completion.make ~kind:"field" fname (Type_system.pp_ty fty)) rd.Checker.rd_fields)
     end else begin
       let ctx0 = Checker.make_ctx ~filename ~env:(Type_system.make_stdlib_env ()) () in
       let ctx1 = Checker.collect_type_defs ctx0 m.decls in
@@ -3791,10 +3793,44 @@ let completions_source filename source line col =
             | Type_system.TFun _ -> "function"
             | _ -> "variable"
           in
-          Some { ci_label = name; ci_detail = Type_system.pp_ty sch.Type_system.mono; ci_kind = kind }
+          Some (Completion.make ~kind name (Type_system.pp_ty sch.Type_system.mono))
         else None
       ) ctx.Checker.env
     end
+
+let completions_source filename source line col =
+  match Completion.context source line col with
+  | None -> []
+  | Some context ->
+    let m, safe_imports, repaired = Completion.recovered_module filename source context in
+    if Option.fold ~none:false ~some:(fun m -> module_complexity_diagnostics m <> []) m
+    then [] else
+    let library = Completion.library_items source context m safe_imports in
+    let mode = Completion.mode context in
+    let locals = match m, mode with
+      | Some m, Completion.Types -> Completion.local_types context m
+          @ Completion.project_types source context m safe_imports
+      | Some m, Completion.Values -> Completion.local_types context m @ Completion.local_functions context m
+          @ Completion.project_types source context m safe_imports
+      | _ -> [] in
+    let field = String.contains context.prefix '.' &&
+      String.length context.prefix > 0 && context.prefix.[0] >= 'a' && context.prefix.[0] <= 'z' in
+    let base = if mode <> Completion.Values then [] else
+      let query_col = if field then
+          context.start_col + Option.get (String.rindex_opt context.prefix '.') + 1
+        else col in
+      legacy_completions_source filename repaired line query_col
+      |> List.filter (fun (item : completion_item) ->
+          (* Registered library symbols get metadata and import requirements
+             from the shared public surface, not the unconditional checker env. *)
+          field || not (List.mem_assoc item.ci_label Type_system.stdlib_env)) in
+    let context = if field then
+        let start_col = context.start_col + Option.get (String.rindex_opt context.prefix '.') + 1 in
+        { context with prefix = Completion.tail context.prefix; start_col }
+      else context in
+    let base = List.map (fun (item : completion_item) ->
+      { item with ci_edit = Some (Completion.edit context item.ci_label) }) base in
+    Completion.finish context (base @ (if field then [] else locals @ library))
 
 let completions_file filename line col =
   let source = In_channel.with_open_text filename In_channel.input_all in
@@ -4402,26 +4438,11 @@ let collect_extra_test_decls test_files =
 
 let mutant_timeout_secs =
   match Sys.getenv_opt "TESL_MUTATE_TIMEOUT" with
-  | Some value -> (try int_of_string value with _ -> 120)
+  | Some value -> (try max 1 (min 86400 (int_of_string value)) with _ -> 120)
   | None -> 120
 
-let timeout_prefix = lazy (
-  if Sys.command "command -v timeout >/dev/null 2>&1" = 0
-  then Printf.sprintf "timeout %d " mutant_timeout_secs
-  else "")
-
-let run_capture cmd : int * string =
-  let output_file = Filename.temp_file "tesl_process_" ".txt" in
-  Fun.protect
-    ~finally:(fun () -> try Sys.remove output_file with Sys_error _ -> ())
-    (fun () ->
-       let full = Printf.sprintf "%s > %s 2>&1" cmd (Filename.quote output_file) in
-       let exit_code = Sys.command full in
-       let output =
-         try In_channel.with_open_text output_file In_channel.input_all
-         with Sys_error _ -> ""
-       in
-       exit_code, output)
+let go_executable () = match Sys.getenv_opt "TESL_GO" with
+  | Some value when value <> "" -> value | _ -> "go"
 
 let mutation_test_count (m : module_form) =
   List.fold_left (fun count -> function
@@ -4498,23 +4519,17 @@ let run_go_test_artifacts artifacts =
   match test_artifact with
   | None -> GoBuildFailed "emitted project has no Go test package"
   | Some test_artifact ->
-    let timeout_pfx = Lazy.force timeout_prefix in
-    if timeout_pfx = "" then GoTestRunnerFailed "Go mutation testing requires `timeout` on PATH"
-    else
     let root = fresh_temp_dir "tesl_go_mutant_" in
     Fun.protect ~finally:(fun () -> remove_tree root) (fun () ->
       write_go_artifacts root artifacts;
       let package = "./" ^ Filename.dirname test_artifact.path in
-      let binary = Filename.concat root "tesl-tests" in
-       let build_cmd = Printf.sprintf "cd %s && %sgo test -c -o %s %s"
-         (Filename.quote root) timeout_pfx (Filename.quote binary) (Filename.quote package) in
-       let build_code, build_output = run_capture build_cmd in
-       match classify_go_build_run ~exit_code:build_code ~output:build_output with
-       | Some outcome -> outcome
-       | None ->
-         let run_cmd = Printf.sprintf "%s%s -test.v"
-           timeout_pfx (Filename.quote binary) in
-        let run_code, run_output = run_capture run_cmd in
+      let binary = Filename.concat root (if Sys.win32 then "tesl-tests.exe" else "tesl-tests") in
+      let build_code, build_output = Process_runner.run ~timeout:mutant_timeout_secs ~cwd:root
+        (go_executable ()) ["test"; "-buildvcs=false"; "-c"; "-o"; binary; package] in
+      match classify_go_build_run ~exit_code:build_code ~output:build_output with
+      | Some outcome -> outcome
+      | None ->
+        let run_code, run_output = Process_runner.run ~timeout:mutant_timeout_secs ~cwd:root binary ["-test.v"] in
         if run_code = 124 then GoTestsTimedOut run_output
         else classify_go_test_run ~exit_code:run_code ~output:run_output)
 
@@ -4522,11 +4537,8 @@ let run_go_test_artifacts artifacts =
     surface-AST mutant passes through [Emit_go], is compiled first, then its test
     binary runs. A Go compile failure is invalid and can never inflate kills. *)
 let mutate_go_file ?(extra_test_files=[]) filename : mutate_result =
-  let timeout_pfx = Lazy.force timeout_prefix in
-  if timeout_pfx = "" then
-    MutateErr "Go mutation testing requires `timeout` on PATH"
-  else if fst (run_capture (timeout_pfx ^ "go version")) <> 0 then
-    MutateErr "Go mutation testing requires `go` on PATH"
+  if fst (Process_runner.run ~timeout:mutant_timeout_secs ~cwd:(Sys.getcwd ()) (go_executable ()) ["version"]) <> 0 then
+    MutateErr "Go mutation testing requires the selected Go toolchain and a native process runner"
   else
     let source = In_channel.with_open_text filename In_channel.input_all in
     match parse_module filename source with

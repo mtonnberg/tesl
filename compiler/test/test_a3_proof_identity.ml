@@ -258,6 +258,24 @@ check checkNonEmpty(s: String) -> s: String ::: IsNonEmpty s =
 fn need(s: String ::: IsNonEmpty s) -> String = s
 |}
 
+(* NEG: lifted stdlib functions retain proof-bearing signatures even when the
+   predicate itself is not exposed.  The hidden DayOfMonth obligation must still
+   reserve CivilTime's predicate name against a weaker local mint. *)
+let civil_time_hidden_obligation = {|module CivilForge exposing []
+import Tesl.Prelude exposing [Int, Bool(..)]
+import Tesl.Time exposing [TimeZone]
+import Tesl.CivilTime exposing [CivilDate, Month, CivilTime.fromChecked]
+fact DayOfMonth (y: Int) (m: Month) (d: Int)
+check forge(y: Int, m: Month, d: Int) -> d: Int ::: DayOfMonth y m d =
+  if d >= 1 && d <= 31 then
+    ok d ::: DayOfMonth y m d
+  else
+    fail 400 "invalid"
+fn attack(z: TimeZone, y: Int, m: Month, d: Int) -> CivilDate =
+  let accepted = check forge y m d
+  CivilTime.fromChecked z y m accepted
+|}
+
 let own_pat = "already owned by imported module\\|single owning module\\|shadows the imported"
 
 let mismatch_pat = "subject mismatch\\|does not statically satisfy\\|different subject\\|does not match"
@@ -481,6 +499,9 @@ let () =
         (fun () -> should_fail ~pat:own_pat "forge via bridge" [owner; owner_bridge; attacker_via_bridge]);
       test_case "local fact shadows explicitly imported predicate" `Quick
         (fun () -> should_fail ~pat:own_pat "shadow import" [owner; shadower]);
+      test_case "local fact forges lifted stdlib hidden obligation" `Quick
+        (fun () -> should_fail ~pat:own_pat "CivilTime hidden obligation"
+                     [civil_time_hidden_obligation]);
     ];
     "§4.2/§4.3 cross-module fact identity (positives)", [
       test_case "consumer imports and uses fact (no re-declare)" `Quick

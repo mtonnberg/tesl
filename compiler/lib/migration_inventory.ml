@@ -168,13 +168,11 @@ let load ~compiler_abi ~root_file =
       | DEntity e -> Some (m.module_name ^ "." ^ e.name, e) | _ -> None) m.decls) modules in
     (match Migration_schema.check_member_storage members with
      | error :: _ -> reject error.loc error.message | [] -> ());
-    (* A schema generation command may take several inventories in one process.
-       The ordinary one-shot compiler cache is keyed by path, not source bytes.
-       Seed it with this exact parsed closure so an earlier inventory cannot
-       supply the old interface of a file that has since changed. *)
-    Checker.clear_import_parse_cache ();
-    List.iter (fun m -> Hashtbl.replace Checker.import_parse_cache
-      m.source_file (Some (Parser.Ok m))) modules;
+    (* Imported parses are content-aware. Semantic query caches additionally
+       depend on the complete import snapshot, not just a module's own AST.
+       Inventory calls may read several saved revisions in one process, so each
+       complete load starts a fresh semantic query scope. *)
+    Query_cache.clear ();
     let globals = List.concat_map (fun m -> List.concat_map (fun d ->
       List.map (fun (ns, name) -> (ns, m.module_name ^ "." ^ name),
         Global (m.module_name ^ "." ^ name)) (names d)) m.decls) modules in

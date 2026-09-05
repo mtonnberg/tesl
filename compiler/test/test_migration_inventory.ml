@@ -233,6 +233,14 @@ let ordinary_compiler_gates () = with_project (fun _root write ->
   match Migration_inventory.load ~compiler_abi:"A" ~root_file:path with
   | Error _ -> () | Ok _ -> fail "inventory skipped a required compiler gate")
 
+let retained_query_inventory () =
+  let previous = !Query_cache.enabled in
+  Query_cache.set_enabled true;
+  Fun.protect ~finally:(fun () -> Query_cache.set_enabled previous) (fun () ->
+    complete_private_inventory ();
+    changed_import_interface ();
+    nested_jsonb_dependencies ())
+
 let () = run "migration-inventory" ["checked inventory", [
   test_case "complete private dependency inventory" `Quick complete_private_inventory;
   test_case "source and frozen-copy invariance" `Quick frozen_and_source_invariance;
@@ -247,4 +255,5 @@ let () = run "migration-inventory" ["checked inventory", [
   test_case "builtin predicate resolves through explicit exposure" `Quick builtin_scope;
   test_case "unchanged JSONB column follows nested types and codecs" `Quick nested_jsonb_dependencies;
   test_case "all ordinary compiler gates precede hashing" `Quick ordinary_compiler_gates;
+  test_case "saved inventories remain fresh with retained query caches" `Quick retained_query_inventory;
 ]]

@@ -39,7 +39,7 @@ let check_module (m : module_form) : validation_error list =
      exactly [build_func_info decls @ imported_funcs] — matching every pass below
      that is called ~extra_funcs:imported_funcs. (check_existential_proof_enforcement
      is intentionally NOT given facts: the orchestrator calls it without extra_funcs.) *)
-  let facts = build_module_facts ~extra_funcs:imported_funcs decls in
+  let facts = build_module_facts ~extra_funcs:imported_funcs decls_with_imported_types in
   (* B5: the manual deep-link topic is decided HERE by which pass produced the
      error — a semantic object, listed exactly once per pass — and stamped onto
      every error the pass returns via [with_topic].  Message text never routes
@@ -59,7 +59,13 @@ let check_module (m : module_form) : validation_error list =
   @ (TCapability @: check_capability_cycles decls)
   @ (TProof @: check_check_fn_has_proof_return decls)
   @ (TStructural @: check_auth_fn_arity decls)
-  @ (TDatabase @: check_entity_structure ~facts decls)
+  (* Migration imports are historical data views. Their index declarations
+     belong to distinct schema revisions, not additional physical owners in
+     the migration module. Each imported schema still passes its own structural
+     checks through the dependency traversal. *)
+  @ (TDatabase @: (if Migration_schema.migration_family m.module_name <> None
+      then check_entity_structure decls
+      else check_entity_structure ~facts decls))
   (* Given the imported-type harvest, not [decls]: an upsert on an entity
      declared in ANOTHER module must be checked against THAT entity's unique
      indexes, and the harvest carries no walkable bodies so the same code is

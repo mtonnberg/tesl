@@ -150,7 +150,7 @@ function makeVscode(files, debugCalls, taskCalls, workspacePath = repoRoot, opti
       isTrusted: options.isTrusted !== false,
       workspaceFolders: [workspaceFolder],
       textDocuments: [],
-      getConfiguration: () => ({ get: () => "" }),
+      getConfiguration: () => ({ get: (key) => options.configuration?.[key] || "" }),
       getWorkspaceFolder: () => workspaceFolder,
       findFiles: async () => files,
       createFileSystemWatcher: () => ({
@@ -488,11 +488,17 @@ async function withDapSession({ source, file: existingFile, breakpointLine, laun
     },
   });
   const state = { nextSeq: 1, pending: new Map(), events: new Map(), buffer: Buffer.alloc(0) };
+  let stderr = "";
+  let finished = false;
   const fail = (error) => {
     for (const pending of state.pending.values()) pending.reject(error);
     for (const event of state.events.values()) event.reject(error);
   };
+  const timeout = setTimeout(() => fail(new Error(`DAP scenario timed out\n${stderr}`)), 60000);
   child.on("error", fail);
+  child.on("exit", (code, signal) => {
+    if (!finished) fail(new Error(`DAP exited before scenario completed (${code ?? signal})\n${stderr}`));
+  });
   child.stdout.on("data", (data) => {
     state.buffer = Buffer.concat([state.buffer, data]);
     while (true) {
@@ -514,6 +520,10 @@ async function withDapSession({ source, file: existingFile, breakpointLine, laun
           else pending.resolve(message);
         }
       } else if (message.type === "event") {
+        if (message.event === "output") stderr = (stderr + (message.body?.output || "")).slice(-8192);
+        if (message.event === "terminated" && state.events.has("stopped")) {
+          fail(new Error(`Debug program terminated before reaching its breakpoint\n${stderr}`));
+        }
         const event = state.events.get(message.event);
         if (event) {
           state.events.delete(message.event);
@@ -522,7 +532,7 @@ async function withDapSession({ source, file: existingFile, breakpointLine, laun
       }
     }
   });
-  child.stderr.on("data", () => {});
+  child.stderr.on("data", data => { stderr = (stderr + data).slice(-8192); });
   try {
     await dapRequest(child, state, "initialize", {
       adapterID: "tesl",
@@ -544,6 +554,8 @@ async function withDapSession({ source, file: existingFile, breakpointLine, laun
     await inspect((command, args) => dapRequest(child, state, command, args));
     await dapRequest(child, state, "disconnect");
   } finally {
+    finished = true;
+    clearTimeout(timeout);
     if (process.platform === "win32") child.kill();
     else {
       try { process.kill(-child.pid, "SIGKILL"); } catch (_e) { child.kill(); }
@@ -708,7 +720,7 @@ async function testFunctionInputUsesArgumentsAndFilesystemCleanup() {
     file,
     () => fs.rmSync(directory, { recursive: true, force: true }),
     directory,
-    { enableTests: false, inputValues: [callExpr, expected] }
+    { enableTests: false, inputValues: [callExpr, expected], configuration: installedToolFixture(directory) }
   );
   try {
     await fixture.commands.get("tesl.runFunctionWithInput")(fixture.uri);
@@ -740,7 +752,7 @@ async function testUntrustedWorkspaceCannotExecute() {
     file,
     () => fs.rmSync(directory, { recursive: true, force: true }),
     directory,
-    { isTrusted: false, inputValues: ["dangerous", "0"] }
+    { isTrusted: false, inputValues: ["dangerous", "0"], configuration: installedToolFixture(directory) }
   );
   try {
     fixture.vscode.window.activeTextEditor = { document: { fileName: file } };
@@ -774,12 +786,28 @@ async function testUntrustedWorkspaceCannotExecute() {
   }
 }
 
+// Task construction and trust tests need a selected installation, but never
+// execute it. Keep them independent of a developer's PATH or Nix profile.
+function installedToolFixture(directory) {
+  const root = path.join(directory, "toolchain");
+  fs.mkdirSync(path.join(root, "bin"), { recursive: true });
+  fs.mkdirSync(path.join(root, "share", "tesl"), { recursive: true });
+  const manifest = { version: 1, toolchain_version: "test", source_revision: "fixture", components: {} };
+  for (const name of ["tesl", "compiler", "tesl-lsp", "tesl-dap"]) {
+    const relative = `bin/${name}${process.platform === "win32" ? ".exe" : ""}`;
+    fs.writeFileSync(path.join(root, relative), "fixture", { mode: 0o755 });
+    manifest.components[name] = { path: relative, version: "test" };
+  }
+  fs.writeFileSync(path.join(root, "share", "tesl", "toolchain.json"), JSON.stringify(manifest));
+  return { toolchainRoot: root };
+}
+
 function testManifestRequiresTrustForExecution() {
   const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, "package.json"), "utf8"));
   assert.deepStrictEqual(manifest.capabilities.untrustedWorkspaces, {
     supported: "limited",
     description: "Language features remain available, but running tests, programs, and debuggers requires Workspace Trust.",
-    restrictedConfigurations: ["tesl.lspBinary", "tesl.dapBinary"],
+    restrictedConfigurations: ["tesl.lspBinary", "tesl.dapBinary", "tesl.toolchainRoot"],
   });
   assert.ok(
     manifest.contributes.commands.every((command) => command.enablement === "isWorkspaceTrusted")

@@ -893,37 +893,38 @@ let resolve_local_import_path = Validation_common.resolve_local_import_path
    check*, and in a whole-project / batch run the same shared module is
    re-parsed by every file that imports it.
 
-   This cache memoizes the read+parse by resolved path.  The compiler is a
-   one-shot process and never mutates source files mid-run, so caching by path
-   is sound: a given path always parses to the same result.  The cache is
-   purely a performance optimization — every call site behaves exactly as
-   before (same [Parser.result], same handling of a missing file), so emitted
-   output and diagnostics are byte-identical.
-
-   [clear_import_parse_cache] is exposed for tests / long-lived hosts that may
-   want a fresh slate; the normal CLI never needs to call it. *)
-let import_parse_cache : (string, module_form Parser.result option) Hashtbl.t =
+   Reuse parses by content, never just path or mtime: a long-lived query host
+   can observe edits, deleted/recreated imports, or same-size atomic saves.
+   Reading before lookup also prevents caching a missing file forever. Cache
+   retention is bounded; larger modules remain valid but are parsed uncached. *)
+let import_parse_cache : (string, string * module_form Parser.result) Hashtbl.t =
   Hashtbl.create 32
 
-let clear_import_parse_cache () = Hashtbl.reset import_parse_cache
+let import_cache_bytes = ref 0
+let clear_import_parse_cache () =
+  Hashtbl.reset import_parse_cache;
+  import_cache_bytes := 0
 
-(** Read + parse a locally-imported module at [path], memoized by path.
+(** Read + parse a locally-imported module at [path], memoized by content.
     Returns [None] if the file does not exist (so callers can keep their
     existing "skip missing import" behavior), otherwise [Some result] where
     [result] is the parse outcome ([Ok]/[Err]) exactly as
     [Parser.parse_module] would return it for a fresh read. *)
 let parse_local_import_module (path : string) : module_form Parser.result option =
-  match Hashtbl.find_opt import_parse_cache path with
-  | Some cached -> cached
-  | None ->
-    let result =
-      if not (Sys.file_exists path) then None
-      else
-        let source = In_channel.with_open_text path In_channel.input_all in
-        Some (Parser.parse_module path source)
-    in
-    Hashtbl.replace import_parse_cache path result;
-    result
+  if not (Sys.file_exists path) then (Hashtbl.remove import_parse_cache path; None)
+  else
+    let source = In_channel.with_open_bin path In_channel.input_all in
+    match Hashtbl.find_opt import_parse_cache path with
+    | Some (previous, parsed) when previous = source -> Some parsed
+    | _ ->
+      let parsed = Parser.parse_module path source in
+      let size = String.length source in
+      if size <= 1024 * 1024 then (
+        if Hashtbl.length import_parse_cache >= 256
+           || !import_cache_bytes + size > 8 * 1024 * 1024 then clear_import_parse_cache ();
+        Hashtbl.replace import_parse_cache path (source, parsed);
+        import_cache_bytes := !import_cache_bytes + size);
+      Some parsed
 
 let module_exports_name (m : module_form) name =
   List.exists (function ExportName n | ExportAdt n -> n = name) m.exports
@@ -6430,17 +6431,22 @@ let tesl_module_predicate_exports : (string * string list) list = [
   ("Tesl.Int32",   ["IsNonNegative"; "IsNonZero"]);
   ("Tesl.Float",   ["FloatNonZero"; "FloatNonNegative"]);
   ("Tesl.Dict",    ["HasKey"]);
+  ("Tesl.CivilTime",
+   ["IsDayOfMonth"; "IsMonthNumber"; "IsDayOfYear"; "IsWeekNumber";
+    "IsWeekdayNumber"; "IsMonthLength"; "DayOfMonth"; "SameCalendar"]);
 ]
 
 (** Collect the set of stdlib predicate names that are EXPLICITLY available:
     only those that appear in an `import Tesl.X exposing [...]` list. *)
 let collect_explicitly_imported_stdlib_predicates (m : module_form) : string list =
-  let all_stdlib_preds = List.concat_map snd tesl_module_predicate_exports in
   List.concat_map (fun (imp : import_decl) ->
     match imp.names with
     | ImportAll -> []  (* ImportAll does NOT grant stdlib predicates *)
     | ImportExposing names ->
-      List.filter (fun name -> List.mem name all_stdlib_preds) names
+      let module_preds =
+        Option.value ~default:[]
+          (List.assoc_opt imp.module_name tesl_module_predicate_exports) in
+      List.filter (fun name -> List.mem name module_preds) names
   ) m.imports
 
 (** Collect all proof predicate names (uppercase) referenced in proof annotations
@@ -6964,9 +6970,42 @@ let check_fact_name_distinctness (m : module_form) : type_error list =
       | _ -> acc
     ) owners []
   in
-  (* A local `fact` colliding with an EXPLICITLY-imported stdlib predicate (stdlib
-     preds have no user-module owner, so they don't enter [owners]). *)
-  let imported_stdlib_preds = collect_explicitly_imported_stdlib_predicates m in
+  (* A stdlib function can carry a predicate in its signature even when that
+     predicate was not explicitly exposed.  Such hidden obligations must reserve
+     their owning predicate too: otherwise a local fact with the same bare name
+     can forge the proof expected by the imported function. *)
+  let rec proof_names acc = function
+    | PredApp { pred; _ } -> pred :: acc
+    | PredAnd { left; right; _ } -> proof_names (proof_names acc left) right
+  in
+  let proof_opt acc = function None -> acc | Some p -> proof_names acc p in
+  let rec return_proofs acc = function
+    | RetPlain _ -> acc
+    | RetAttached { binding; _ } ->
+      proof_opt acc binding.proof_ann
+    | RetMaybeAttached { binding; _ } ->
+      proof_opt acc binding.proof_ann
+    | RetNamedPack { entity_proof; other_proof; _ } ->
+      proof_opt (proof_opt acc entity_proof) other_proof
+    | RetForAll { proof; _ } | RetMaybeForAll { proof; _ }
+    | RetSetForAll { proof; _ } | RetMaybeSetForAll { proof; _ }
+    | RetForAllDictValues { proof; _ } | RetForAllDictKeys { proof; _ } ->
+      proof_names acc proof
+    | RetExists { binding; body; _ } ->
+      return_proofs (proof_opt acc binding.proof_ann) body
+  in
+  let all_stdlib_preds = List.concat_map snd tesl_module_predicate_exports in
+  let signature_stdlib_preds =
+    Validation_common.load_imported_func_info m
+    |> List.concat_map (fun (_, (fi : Validation_common.func_info)) ->
+         let from_params = List.fold_left (fun acc (b : binding) ->
+           proof_opt acc b.proof_ann) [] fi.fi_params in
+         return_proofs from_params fi.fi_return)
+    |> List.filter (fun name -> List.mem name all_stdlib_preds)
+  in
+  (* Stdlib predicates have no user-module owner, so they do not enter [owners]. *)
+  let imported_stdlib_preds =
+    collect_explicitly_imported_stdlib_predicates m @ signature_stdlib_preds in
   let stdlib_errors =
     List.filter_map (fun (name, loc) ->
       if List.mem name imported_stdlib_preds then
@@ -7414,7 +7453,7 @@ let check_ord_eq_calls ctx =
          ) constraints)
   ) !(ctx.ord_eq_calls)
 
-let check_module_with_metadata ?typed_nodes ?(source_lines = [||]) (m : module_form) : local_binding_info list * expr_type_info list * field_access_info list * (Location.loc * string) list * (Location.loc * (string * string list)) list * (Location.loc * (string * string list)) list * type_error list =
+let check_module_with_metadata_uncached ?typed_nodes ?(source_lines = [||]) (m : module_form) : local_binding_info list * expr_type_info list * field_access_info list * (Location.loc * string) list * (Location.loc * (string * string list)) list * (Location.loc * (string * string list)) list * type_error list =
   reset_counter ();
   (* First-Class Units: activate the quantity alias TYPE names this module
      imports from Tesl.Units.  Deliberately NOT restored on exit — the emit
@@ -8158,6 +8197,25 @@ let check_module_with_metadata ?typed_nodes ?(source_lines = [||]) (m : module_f
    List.rev !(ctx.server_tools_sites),
    List.rev !(ctx.human_actions_sites),
    import_errors @ export_errors @ fact_ownership_errors @ List.rev !(ctx.errors))
+
+(* Read-only session queries may reuse metadata, including inferred types and
+   structured type errors. Preserve the units state that downstream queries
+   observe even when the checker itself is skipped. *)
+let cached_module_metadata = Query_cache.memo ~limit:16 ~max_weight:(2 * 1024 * 1024)
+  ~value_weight:(fun value -> String.length (Marshal.to_string value []))
+  ~weight:(fun (lines, m) -> Array.fold_left (fun n s -> n + String.length s) 0 lines
+    + String.length (Marshal.to_string m [Marshal.No_sharing]))
+  (fun (source_lines, m) -> check_module_with_metadata_uncached ~source_lines m)
+
+let check_module_with_metadata ?typed_nodes ?(source_lines = [||]) (m : module_form) =
+  (* Migration inventories collect physical AST identities and final type
+     substitutions into a fresh sink. A read-only metadata cache hit cannot
+     replay that collection, even when its diagnostics are identical. *)
+  let result = match typed_nodes with
+    | Some _ -> check_module_with_metadata_uncached ?typed_nodes ~source_lines m
+    | None -> cached_module_metadata (source_lines, m) in
+  ignore (activate_units_aliases_for m);
+  result
 
 let check_module_with_local_bindings (m : module_form) : local_binding_info list * type_error list =
   let local_bindings, _, _, _, _, _, errors = check_module_with_metadata m in

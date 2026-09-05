@@ -1012,11 +1012,21 @@ let server_listen_addresses : (string, string) Hashtbl.t = Hashtbl.create 4
    password storage (see `password.go`).  Pinned here rather than fetched, so an emitted project
    builds without a network round trip deciding what it got, and checked against
    `runtime/go/go.sum` by a seam test so the two cannot drift. *)
+let windows_dependency_go_sum =
+  "golang.org/x/sys v0.47.0 h1:o7XGOvZQCADBQQ4Y7VNq2dRWQR7JmOUW8Kxx4ZsNgWs=\n\
+   golang.org/x/sys v0.47.0/go.mod h1:4GL1E5IUh+htKOUEOaiffhrAeqysfVGipDYzABqnCmw=\n"
+
 let password_dependency_go_sum =
   "golang.org/x/crypto v0.55.0 h1:+KWHjbgOaAQ66dh/YlkZKHlz9ZUlq61AFirAR9ntP8M=\n\
-   golang.org/x/crypto v0.55.0/go.mod h1:uq0V9dE/fzQuJtbnL+2EhWOE63vo164FY8xqEnV9xis=\n\
-   golang.org/x/sys v0.47.0 h1:o7XGOvZQCADBQQ4Y7VNq2dRWQR7JmOUW8Kxx4ZsNgWs=\n\
-   golang.org/x/sys v0.47.0/go.mod h1:4GL1E5IUh+htKOUEOaiffhrAeqysfVGipDYzABqnCmw=\n"
+   golang.org/x/crypto v0.55.0/go.mod h1:uq0V9dE/fzQuJtbnL+2EhWOE63vo164FY8xqEnV9xis=\n"
+  ^ windows_dependency_go_sum
+
+(* Windows debug-token ACLs use x/sys directly, even for a program that stores
+   no passwords. Keep both single-module and project manifests in agreement. *)
+let platform_dependencies ~password ~debug =
+  (if password then "\nrequire golang.org/x/crypto v0.55.0\n" else "")
+  ^ (if debug then "\nrequire golang.org/x/sys v0.47.0\n"
+     else if password then "\nrequire golang.org/x/sys v0.47.0 // indirect\n" else "")
 
 (* The pinned PostgreSQL driver, for a program that declares a Postgres-backed database.  Same
    discipline as `password_dependency_go_sum`: written here rather than fetched, so an emitted
@@ -16126,10 +16136,9 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?(entity_bindings=[]) ?pro
       in
       List.exists mentions [ "teslrt.NewDatabase"; "teslrt.WithDatabase"; "teslrt.PgPlan" ]
     in
+    let debug_runtime = mode = Debug && needs_runtime in
     let dependency_requires =
-      (if password_runtime then
-         "\nrequire golang.org/x/crypto v0.55.0\n\nrequire golang.org/x/sys v0.47.0 // indirect\n"
-       else "")
+      platform_dependencies ~password:password_runtime ~debug:debug_runtime
       ^ (if postgres_runtime then postgres_dependency_go_mod else "")
     in
     let artifacts = [
@@ -16151,9 +16160,10 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?(entity_bindings=[]) ?pro
                 "package main\n\nimport (\n\t%s\n)\n\n// The entry point Tesl's `main` describes: its `App { … }` record was lowered into the\n// startup chain (activate each queue's workers, then serve), so this is the whole program.\nfunc main() {\n%s\t_ = %s.Main()\n}\n"
                 main_imports main_startup package } ]
        else [])
-    @ (if password_runtime || postgres_runtime then
+    @ (if password_runtime || postgres_runtime || debug_runtime then
            [ { path = "go.sum";
-               contents = (if password_runtime then password_dependency_go_sum else "")
+               contents = (if password_runtime then password_dependency_go_sum
+                           else if debug_runtime then windows_dependency_go_sum else "")
                           ^ (if postgres_runtime then postgres_dependency_go_sum else "") } ]
          else []) in
     let artifacts = match tests_source with
@@ -16212,7 +16222,7 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?(entity_bindings=[]) ?pro
         in
         artifacts @ List.filter_map (fun (name, contents) ->
            if (not serves_http) && List.mem name http_only then None
-            else if List.mem name ["debug.go"; "debug_control.go"; "debug_state.go"; "debug_sql.go"] && mode <> Debug then None
+            else if List.mem name ["debug.go"; "debug_control.go"; "debug_file_unix.go"; "debug_file_windows.go"; "debug_state.go"; "debug_sql.go"] && mode <> Debug then None
            else if (not has_load_tests) && List.mem name load_test_only then None
           else if (not postgres_runtime) && List.mem name postgres_only then None
           else if (not uses_agent) && List.mem name agent_only then None
@@ -16382,13 +16392,14 @@ let compile_project ?(mode=Release) ~(entry : module_form) (modules : module_for
              "teslrt.PasswordHash" ] in
        let needs_postgres =
          List.exists references [ "teslrt.NewDatabase"; "teslrt.WithDatabase"; "teslrt.PgSql" ] in
+       let needs_debug = List.exists (fun (a : artifact) ->
+         a.path = "internal/teslrt/debug_file_windows.go") deduped in
        let requires =
-         (if needs_password then
-            "\nrequire golang.org/x/crypto v0.55.0\n\nrequire golang.org/x/sys v0.47.0 // indirect\n"
-          else "")
+         platform_dependencies ~password:needs_password ~debug:needs_debug
          ^ (if needs_postgres then postgres_dependency_go_mod else "") in
        let checksums =
-         (if needs_password then password_dependency_go_sum else "")
+         (if needs_password then password_dependency_go_sum
+          else if needs_debug then windows_dependency_go_sum else "")
          ^ (if needs_postgres then postgres_dependency_go_sum else "") in
        let rebuilt = List.filter_map (fun (artifact : artifact) ->
          if artifact.path = "go.mod" then

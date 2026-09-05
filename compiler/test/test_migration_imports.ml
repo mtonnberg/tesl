@@ -971,7 +971,38 @@ let freeze_boundaries () = with_project (fun root write ->
   check string "refusal preserves source" "module NotesSchema.VCurrent.Hidden exposing []\n"
     (In_channel.with_open_bin (Filename.concat root "schema/notes/v-current/hidden.tesl") In_channel.input_all))
 
+let historical_index_ownership () = with_project (fun _root write ->
+  let schema revision extra = "module NotesSchema." ^ revision ^ " exposing [Note]\n" ^
+    "import Tesl.Prelude exposing [String]\n" ^
+    "entity Note table \"notes\" primaryKey id {\n  id: String\n  title: String\n" ^
+    "  index [title] as \"notes_title_idx\"\n}\n" ^ extra in
+  let old = "schema/notes/v1.tesl" and current = "schema/notes/v-current.tesl" in
+  ignore (write old (schema "V1" ""));
+  ignore (write current (schema "VCurrent" ""));
+  let source = "module NotesSchema.Migrate.V2 exposing []\n" ^
+    "import Tesl.Prelude exposing [String]\nimport NotesSchema.V1\nimport NotesSchema.VCurrent\n" ^
+    "fn oldTitle(note: NotesSchema.V1.Note) -> String = note.title\n" ^
+    "fn newTitle(note: NotesSchema.VCurrent.Note) -> String = note.title\n" in
+  let path = write "migrations/notes/v2.tesl" source in
+  let errors () = Compile.check_file path |> List.filter (fun (d : Compile.diagnostic) -> d.severity = "error") in
+  let diagnostics = errors () in
+  if diagnostics <> [] then failf "historical views acquired physical ownership: %s"
+    (Compile.diagnostics_to_json diagnostics);
+  (match Compile.compile_go_file path with
+   | Compile.GoSuccess _ -> ()
+   | Compile.GoFailure diagnostics -> failf "historical index views did not emit: %s"
+       (Compile.diagnostics_to_json diagnostics));
+  let duplicate = "entity Other table \"other\" primaryKey id {\n  id: String\n  title: String\n" ^
+    "  index [title] as \"notes_title_idx\"\n}\n" in
+  List.iter (fun (relative, revision) ->
+    let changed = write relative (schema revision duplicate) in
+    check bool "an actual index collision inside either schema remains an error" true
+      (List.exists (fun (d : Compile.diagnostic) -> d.file = changed &&
+        String.starts_with ~prefix:"index name `notes_title_idx`" d.message) (errors ()));
+    ignore (write relative (schema revision ""))) [old, "V1"; current, "VCurrent"])
+
 let () = run "migration-imports" ["source layout", [
+  test_case "historical index declarations are views, not duplicate owners" `Quick historical_index_ownership;
   test_case "canonical paths and invalid names" `Quick layout;
   test_case "ancestor resolution, legacy precedence, project isolation" `Quick resolution;
   test_case "compiler loads the complete local schema closure" `Quick whole_project;

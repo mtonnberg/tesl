@@ -7,14 +7,18 @@ import (
 )
 
 func TestFileURIPathRoundTrip(t *testing.T) {
-	path, err := URIToPath("file:///tmp/a%20b.tesl")
+	wantPath, wantURI := "/tmp/a b.tesl", "file:///tmp/a%20b.tesl"
+	if filepath.Separator == '\\' {
+		wantPath, wantURI = `C:\tmp\a b.tesl`, "file:///C:/tmp/a%20b.tesl"
+	}
+	path, err := URIToPath(wantURI)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if path != "/tmp/a b.tesl" {
+	if path != wantPath {
 		t.Fatalf("URIToPath() = %q", path)
 	}
-	if got := PathToURI(path); got != "file:///tmp/a%20b.tesl" {
+	if got := PathToURI(path); got != wantURI {
 		t.Fatalf("PathToURI() = %q", got)
 	}
 }
@@ -36,7 +40,11 @@ func TestURIPathPreservesUnicodeAndUNCHost(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if path != "//server/share/雪.tesl" {
+	want := "//server/share/雪.tesl"
+	if filepath.Separator == '\\' {
+		want = `\\server\share\雪.tesl`
+	}
+	if path != want {
 		t.Fatalf("URIToPath() = %q", path)
 	}
 }

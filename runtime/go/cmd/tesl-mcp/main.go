@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"tesl.dev/runtime/go/internal/protocol"
+	"tesl.dev/runtime/go/internal/toolchain"
 	"tesl.dev/runtime/go/internal/tooling"
 )
 
@@ -41,12 +42,8 @@ type jsonRPCRequest struct {
 }
 
 func main() {
-	compiler, err := discoverCompiler()
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "tesl-mcp:", err)
-		os.Exit(1)
-	}
-	server := &server{compiler: tooling.Client{Executable: compiler}}
+	server := &server{compiler: tooling.CompilerFromEnvironment()}
+	defer func() { _ = server.compiler.Close() }()
 	reader := protocol.NewLineReader(os.Stdin)
 	writer := protocol.NewLineWriter(os.Stdout)
 	for {
@@ -305,13 +302,7 @@ func debugInspectArgs(arguments map[string]any, timeout time.Duration) []string 
 }
 
 func debugInspectCommand() string {
-	if command := os.Getenv("TESL_DEBUG_INSPECT_BIN"); command != "" {
-		return command
-	}
-	command, err := exec.LookPath("tesl-debug-inspect")
-	if err != nil {
-		return ""
-	}
+	command, _ := toolchain.Default().Resolve("tesl-debug-inspect")
 	return command
 }
 
@@ -380,24 +371,10 @@ func toolError(message string) map[string]any {
 }
 
 func discoverCompiler() (string, error) {
-	if value := os.Getenv("TESL_COMPILER"); value != "" {
-		return value, nil
-	}
-	if root := os.Getenv("TESL_REPO_ROOT"); root != "" {
-		candidate := filepath.Join(root, "compiler", "_build", "default", "bin", "main.exe")
-		if _, err := os.Stat(candidate); err == nil { // #nosec G703 -- root is the explicit local repository root.
-			return candidate, nil
-		}
-	}
-	if value, err := exec.LookPath("tesl-compiler"); err == nil {
-		return value, nil
-	}
-	if value, err := exec.LookPath("tesl"); err == nil {
-		return value, nil
-	}
 	// Keep MCP alive without a compiler. Tool calls return contained MCP errors;
 	// initialize/tools/list remain usable for clients inspecting capabilities.
-	return "", nil
+	value, _ := toolchain.Default().Resolve("compiler")
+	return value, nil
 }
 
 func numberArgument(arguments map[string]any, name string) int {

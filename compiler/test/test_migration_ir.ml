@@ -456,7 +456,25 @@ auth authenticate(request: HttpRequest) -> identity: Int ::: Positive identity &
       "auth cannot transfer its witness to a computed identity", replace "ok value ::: evidence" "ok (value + 1) ::: evidence" authenticated;
     ]
 
+let typed_nodes_after_cached_query () =
+  let previous = !Query_cache.enabled in
+  Query_cache.set_enabled true;
+  Fun.protect ~finally:(fun () -> Query_cache.set_enabled previous) (fun () ->
+    let source = "fn compute(input: Int) -> Int =\n  let doubled = input * 2\n  doubled + 1\n" in
+    let m = parsed source in
+    ignore (Checker.check_module_with_metadata m);
+    let hits = !Query_cache.hits in
+    ignore (Checker.check_module_with_metadata m);
+    check bool "fixture warms the read-only metadata cache" true (!Query_cache.hits > hits);
+    List.iter (fun ast ->
+      let nodes, errors = Checker.check_module_with_typed_nodes ast in
+      check int "typed collection has no errors" 0 (List.length errors);
+      check bool "cache hit cannot skip typed-node collection" true (nodes <> []);
+      List.iter (fun decl -> ignore (get (elaborate ~nodes ast decl))) ast.decls)
+      [m; parsed source])
+
 let () = run "migration typed IR" ["semantic nodes", [
+  test_case "typed nodes survive warmed editor metadata caches" `Quick typed_nodes_after_cached_query;
   test_case "freeze, formatting and local alpha-renaming" `Quick source_invariance;
   test_case "behavior mutation matrix" `Quick behavior_mutations;
   test_case "checker fresh-variable allocation is irrelevant" `Quick checker_variable_invariance;

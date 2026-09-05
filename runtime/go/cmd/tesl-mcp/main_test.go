@@ -247,6 +247,8 @@ func TestMCPUnknownMethodIsProtocolError(t *testing.T) {
 
 func TestMCPCompilerDiscoveryDoesNotBlockCapabilityQueries(t *testing.T) {
 	t.Setenv("TESL_COMPILER", "")
+	t.Setenv("TESL_OCAML_COMPILER", "")
+	t.Setenv("TESL_TOOLCHAIN_ROOT", "")
 	t.Setenv("TESL_REPO_ROOT", t.TempDir())
 	t.Setenv("PATH", t.TempDir())
 	compiler, err := discoverCompiler()
