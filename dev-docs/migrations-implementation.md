@@ -70,6 +70,37 @@ are included. Adoption, additive execution and the remaining lessons are pending
 
 ## Slices under development
 
+- Ordinary application modules and their imported libraries now reject historical
+  schema imports with MIG015, including nested modules and unsaved buffers.
+  Adding a test block grants no exception. Pure tests are permitted in migration
+  modules as the roadmap specifies; capability declarations, connection selection
+  and implicit effects are rejected. The multi-version nominal-type regression
+  now runs in a migration test module instead of an ordinary application. The
+  focused import suite and diagnostic registry pass. Generated compatibility-store
+  authority and the editor's import-rewrite action remain pending.
+- Recursive ADT JSONB emission now reserves recursive decoder names, boxes decoded
+  self-fields and unwraps them during encoding. Recursive encoders use a forwarder
+  without changing nonrecursive helper names. Explicit `adtJson` codecs now retain
+  constructor payloads and check their children. The regression executes recursive
+  HTTP responses, codec round trips, raw SQL scans and invalid nested inputs using
+  both flat and boxed Go layouts. It also found structural OCaml type equality in
+  `expect`, which failed on recursive types; that site now uses nominal type equality.
+  The complete compiler suite and tracked corpus build pass for this slice.
+  Generic ADT column decoding and additional container payloads still require
+  dedicated coverage and implementation; this slice does not certify every ADT shape.
+- A full root CI run exposed failures in NilAway, generated-file synchronization,
+  documentation count checks, corpus inventory and clean installation. Model clone
+  maps now remain writable when empty, and repair/registry tests establish their
+  non-nil inputs explicitly. NilAway and the subsequent model race run pass.
+  The documentation counts and corpus inventory are corrected. The clean-install
+  failure came from Go probing an incomplete parent `.git` above generated output;
+  container builds disable automatic VCS stamping and keep the explicit image source
+  revision. The scrubbed-environment regression creates that condition and passes.
+  Generated-file synchronization still depends on committing the regenerated files;
+  no gate is weakened. The subsequent complete PostgreSQL 17 harness passes with
+  poolers, replica and owned-cluster crash cases. Root CI will be rerun on the next
+  complete tree; neither feature-wide review is complete.
+
 - The deterministic scheduler, independent model, real control-template tests,
   and compiled V7/V8/V9 process oracle run against disposable PostgreSQL 17.
   The process oracle explicitly prepares its catalog; it is not the production
@@ -302,8 +333,8 @@ are included. Adoption, additive execution and the remaining lessons are pending
   fixtures that incorrectly listed a plain record in `Database.entities`. The
   PostgreSQL 17 database, replica and crash cases pass; pooler cases also pass after
   supplying the installed PgBouncer path. Optional test dependencies are now checked
-  before cluster setup. The general MIG015
-  historical-import rule and history/executor integration still remain pending.
+  before cluster setup. History/executor integration remains pending. The later
+  import-boundary slice below implements the general MIG015 refusal.
 - A storage-identity review found that distinct Tesl fields such as `userID` and
   `userId` map to one SQL column, and overlong PostgreSQL identifiers can silently
   truncate. Validation and emission now share the column-name conversion; checks

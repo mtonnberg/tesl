@@ -617,6 +617,14 @@ api TodoApi {
 
 ## Database Access
 
+Keep connection settings in the application and stored entities, types, facts,
+and codecs in their schema modules. Application modules and libraries import
+`FamilySchema.VCurrent`; a frozen `V<n>` import is MIG015. Pure migration functions
+and tests that construct historical values belong in `FamilySchema.Migrate.*`.
+Those tests cannot acquire database capabilities or a connection. See the
+[schema and migration guide](tour.md#schema-and-migrations) for the module layout
+and the current implementation boundary.
+
 ### Typed Queries
 
 **✅ Do:** Use typed SQL queries with entities:

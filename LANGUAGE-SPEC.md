@@ -650,12 +650,20 @@ entity imported from a schema family also selects this boundary. Ordinary
 application modules retain their existing rules.
 
 Modules in `FamilySchema.Migrate.*` also exclude connection configuration,
-application declarations, effects and tests. They may contain pure constants for
-migration records and fixtures, pure functions and supporting types; entity
+application declarations and effects. They may contain pure constants for
+migration records and fixtures, pure functions, supporting types, and ordinary
+`test` blocks over those functions. Such tests cannot declare capabilities or a
+database connection; undeclared effects still fail normal capability checking. Entity
 declarations belong in the schema. Imports stay within the same schema/migration
 family or `Tesl.*`. This applies to standalone checks and unsaved buffers too.
 Generated compatibility/support modules will require an explicit test-build
-boundary; a module name alone does not grant effects or test access.
+boundary; a module name alone does not grant historical storage operations.
+
+Ordinary application modules, including their imported libraries and modules
+containing tests, cannot import a historical `FamilySchema.V<n>` root or child
+module (MIG015). They import `VCurrent`. Pure tests that construct historical
+values belong in the family's `Migrate` namespace; this does not grant access to
+the generated compatibility store.
 
 The application binds an imported entity to its database before any module's
 queries are generated. Query modules resolve that database by its compiled owner

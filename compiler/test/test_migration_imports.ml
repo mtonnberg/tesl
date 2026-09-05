@@ -119,7 +119,7 @@ fn optionalChoice(choice: Maybe NotesSchema.V7.Choice) -> Int =
     Something NotesSchema.V7.Empty -> 0
     Nothing -> -1
 |});
-  let entry = write "app.tesl" {|module App exposing [result]
+  let entry = write "migrations/notes/v8-tests.tesl" {|module NotesSchema.Migrate.V8Tests exposing [result]
 import Tesl.Prelude exposing [Int]
 import Tesl.Maybe exposing [Maybe(..)]
 import NotesSchema.Migrate.V8
@@ -317,7 +317,8 @@ import Tesl.Database exposing [Database, Memory]
 import Tesl.Env exposing [envRead, requireEnv]
 |} in
   let pure_fn = "fn pure(n: Int) -> Int = n + 1\n" in
-  let pure = "migrationFixture = 7\n" ^ pure_fn in
+  let pure = "migrationFixture = 7\n" ^ pure_fn ^
+    "test \"the migration keeps its pure regression beside the function\" { expect pure migrationFixture == 8 }\n" in
   let entry = write "app.tesl" {|module App exposing [result]
 import Tesl.Prelude exposing [Int]
 import NotesSchema.Migrate.V8 exposing [pure]
@@ -346,8 +347,15 @@ fn result(n: Int) -> Int = pure n
     "fn bad() -> String requires [envRead] = requireEnv \"SETTING\"\n";
     "setting = requireEnv \"SETTING\"\n";
     "entity Note table \"notes\" primaryKey id { id: String }\n";
-    "test \"history cannot run application tests\" { expect 1 == 1 }\n";
+    "test \"history cannot acquire application capabilities\" requires [envRead] { expect 1 == 1 }\n";
+    "test \"history cannot select an application connection\" with database Missing { expect 1 == 1 }\n";
   ];
+  let file, diagnostics = check (header ^ pure_fn ^
+    "test \"effects cannot hide behind an empty requires clause\" {\n  let setting = requireEnv \"SETTING\"\n  expect setting == setting\n}\n") in
+  Alcotest.check bool "implicit effects still fail the capability checker" true
+    (List.exists (fun (d : Compile.diagnostic) -> d.severity = "error") diagnostics);
+  (match Compile.compile_go_file file with
+   | Compile.GoFailure _ -> () | Compile.GoSuccess _ -> fail "effectful migration test emitted");
   let file, _ = check (header ^ pure) in
   let draft = header ^ "handler get draft(n: Int) -> Int = n\n\n" ^ pure_fn in
   Alcotest.check bool "unsaved migration buffer is checked" true (boundary (Compile.check_source file draft));
@@ -355,6 +363,52 @@ fn result(n: Int) -> Int = pure n
   let _, diagnostics = check (header ^ "import Operations\n" ^ pure) in
   Alcotest.check bool "application imports cannot enter frozen migration closure" true
     (List.exists (fun (d : Compile.diagnostic) -> String.starts_with ~prefix:"migration module `" d.message) diagnostics))
+
+let historical_application_imports () = with_project (fun _root write ->
+  List.iter (fun revision ->
+    List.iter (fun suffix ->
+      let name = "NotesSchema." ^ revision ^ suffix in
+      let path = Option.get (Validation_common.schema_module_relative_path name) in
+      ignore (write path ("module " ^ name ^ " exposing [Note]\n" ^
+        "import Tesl.Prelude exposing [String]\nentity Note table \"notes\" primaryKey id { id: String }\n")))
+      [""; ".Private.Entities"]) ["V7"; "V2147483646"; "VCurrent"];
+  let module_text owner imported extra =
+    "module " ^ owner ^ " exposing []\nimport " ^ imported ^ "\n" ^ extra in
+  let check_import path owner imported extra =
+    let source = module_text owner imported extra in
+    let file = write path source in
+    let diagnostics = Compile.check_file file in
+    let refusals = List.filter (fun (d : Compile.diagnostic) -> d.code = "MIG015") diagnostics in
+    check int "one historical import diagnostic" 1 (List.length refusals);
+    let diagnostic = List.hd refusals in
+    check string "diagnostic belongs to the actual importer" file diagnostic.file;
+    check int "diagnostic points at the import" 1 diagnostic.start_line;
+    check (option string) "database manual link" (Some "best-practices#database-access") diagnostic.manual;
+    check bool "editor and saved checks agree" true
+      (List.exists (fun (d : Compile.diagnostic) -> d.code = "MIG015") (Compile.check_source file source));
+    (match Compile.compile_go_file file with
+     | Compile.GoFailure _ -> () | Compile.GoSuccess _ -> fail "application historical import emitted");
+    file in
+  List.iter (fun imported ->
+    ignore (check_import "app.tesl" "App" imported "");
+    (* Merely containing a test is not a compiler-generated compatibility context. *)
+    ignore (check_import "app.tesl" "App" imported "test \"not a privilege\" { expect 1 == 1 }\n"))
+    ["NotesSchema.V7"; "NotesSchema.V7 exposing [Note]";
+     "NotesSchema.V7.Private.Entities"; "NotesSchema.V2147483646.Private.Entities"];
+  let library = check_import "library.tesl" "Library" "NotesSchema.V7" "" in
+  let app = write "app.tesl" (module_text "App" "Library" "") in
+  check bool "transitive application importer is checked" true
+    (List.exists (fun (d : Compile.diagnostic) -> d.code = "MIG015" && d.file = library)
+       (Compile.check_file app));
+  List.iter (fun (path, owner, imported) ->
+    let file = write path (module_text owner imported "") in
+    check int "live application and schema/migration imports remain legal" 0
+      (List.length (List.filter (fun (d : Compile.diagnostic) -> d.severity = "error")
+         (Compile.check_file file)))) [
+      "app.tesl", "App", "NotesSchema.VCurrent.Private.Entities";
+      "schema/notes/v7.tesl", "NotesSchema.V7", "NotesSchema.V7.Private.Entities";
+      "migrations/notes/v8.tesl", "NotesSchema.Migrate.V8", "NotesSchema.V7.Private.Entities";
+    ])
 
 let schema_ownership () = with_project (fun _root write ->
   List.iter (fun (module_name, path, entity) ->
@@ -364,6 +418,7 @@ entity %s table "%s" primaryKey id { id: String }
 |} module_name entity entity (String.lowercase_ascii entity)))) [
     "NotesSchema.VCurrent.Notes", "schema/notes/v-current/notes.tesl", "Note";
     "NotesSchema.VCurrent.Memos", "schema/notes/v-current/memos.tesl", "Memo";
+    "NotesSchema.VCurrent.History", "schema/notes/v-current/history.tesl", "Historic";
     "OtherSchema.VCurrent", "schema/other/v-current.tesl", "Other";
     "NotesSchema.V7", "schema/notes/v7.tesl", "Historic";
   ];
@@ -372,7 +427,6 @@ import Tesl.Database exposing [Database, Memory]
 import NotesSchema.VCurrent.Notes exposing [Note]
 import NotesSchema.VCurrent.Memos exposing [Memo]
 import OtherSchema.VCurrent exposing [Other]
-import NotesSchema.V7 exposing [Historic]
 |} in
   let db name entities = Printf.sprintf "database %s = Database { entities: [%s], backend: Memory }\n" name entities in
   let check_source imports body =
@@ -408,7 +462,7 @@ import NotesSchema.V7 exposing [Historic]
        (Compile.check_source new_entry draft));
   reject "" (db "First" "Note" ^ db "Second" "Memo") "belongs to two databases";
   reject "" (db "Mixed" "Note, Other") "cannot combine schema families";
-  reject "" (db "Old" "Historic") "cannot bind historical schema";
+  reject "import NotesSchema.V7 exposing [Historic]\n" (db "Old" "Historic") "cannot bind historical schema";
   ignore (write "connections.tesl" ({|module Connections exposing [ImportedDb]
 import Tesl.Database exposing [Database, Memory]
 import NotesSchema.VCurrent.Memos exposing [Memo]
@@ -419,7 +473,7 @@ import NotesSchema.VCurrent.Memos exposing [Memo]
   let local = write "local.tesl" ({|module Local exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Database exposing [Database, Memory]
-import NotesSchema.V7
+import NotesSchema.VCurrent.History
 import NotesSchema.VCurrent.Notes
 entity Historic table "local_history" primaryKey id { id: String }
 entity Note table "local_notes" primaryKey id { id: String }
@@ -870,6 +924,7 @@ let () = run "migration-imports" ["source layout", [
   test_case "dotted module headers in editor recovery" `Quick header_recovery;
   test_case "database-selected schema closure excludes application code" `Quick schema_contents;
   test_case "migration modules exclude application code and entity ownership" `Quick migration_contents;
+  test_case "ordinary apps and libraries cannot import historical schema types" `Quick historical_application_imports;
   test_case "schema families have one application connection owner" `Quick schema_ownership;
   test_case "module references select private cyclic ownership with overlays" `Quick module_reference_binding;
   test_case "module references compile private tables without exposing names" `Quick module_reference_compilation;

@@ -287,12 +287,15 @@ func TestSameNamedADTs(t *testing.T) {
 }
 |}])
 
-let recursive_adt explicit_codec = with_project (fun root write ->
+let recursive_adt explicit_codec boxed = with_project (fun root write ->
   let file = write "recursive.tesl" ("module Recursive exposing [sample, store, read, Tree(..), Document]\n" ^ imports ^ {|
+import Tesl.ApiTest exposing [statusOk]
 type Tree
   = Leaf
   | Branch left: Tree right: Tree
-|} ^ (if explicit_codec then "codec Tree { adtJson }\n" else "") ^ {|
+|} ^ (if boxed then "  | Wide " ^ String.concat " " (List.init 24 (fun n ->
+        "field" ^ string_of_int n ^ ": String")) ^ "\n" else "") ^
+  (if explicit_codec then "codec Tree { adtJson }\n" else "") ^ {|
 entity Document table "documents" primaryKey id { id: String, tree: Tree }
 |} ^ database "Document" ^ {|
 fn sample() -> Tree = Branch Leaf (Branch Leaf Leaf)
@@ -306,6 +309,18 @@ test "a recursive column retains its full value" requires [dbRead Document, dbWr
     Nothing -> expect False
     Something row -> expect row.tree == sample ()
 }
+handler get sampleTree() -> Tree = sample ()
+api TreeApi { get "/tree" -> Tree }
+server TreeServer for TreeApi { sampleTree }
+api-test "recursive response encoding preserves all children" for TreeServer {
+  let response = get "/tree"
+  expect response.status == 200
+  expect response.body.tag == "Branch"
+  expect response.body.fields.left.tag == "Leaf"
+  expect response.body.fields.right.tag == "Branch"
+  expect response.body.fields.right.fields.left.tag == "Leaf"
+  expect response.body.fields.right.fields.right.tag == "Leaf"
+}
 |}) in
   (* This regression used to hang during emission. Keep the compiler itself in
      a bounded child process so a recurrence cannot stall the entire CI suite. *)
@@ -317,6 +332,30 @@ test "a recursive column retains its full value" requires [dbRead Document, dbWr
   let status = Sys.command command in
   if status <> 0 then failf "recursive column emission exited %d: %s" status
     (In_channel.with_open_text log In_channel.input_all);
+  let explicit_tests = if not explicit_codec then "" else {|
+func TestRecursiveCodec(t *testing.T) {
+  encoded := EncodeTreeJSON(Sample())
+  decoded := DecodeTreeJSON(encoded)
+  value, ok := decoded.Value()
+  if !ok || !value.TeslEqual(Sample()) { t.Fatal("codec lost recursive payload", decoded.Message()) }
+  // Both legacy leaf spellings remain valid. A constructor requiring children
+  // must never turn a bare tag, malformed field map or bad child into zero values.
+  for _, leaf := range []any{"Leaf", map[string]any{"tag":"Leaf"}} {
+    decoded := DecodeTreeJSON(leaf)
+    value, ok := decoded.Value()
+    if !ok || value.Tag != TreeLeaf { t.Fatal("leaf compatibility lost") }
+  }
+  for _, invalid := range []any{
+    "Branch", nil, map[string]any{"tag":"Branch"},
+    map[string]any{"tag":"Branch", "fields":false},
+    map[string]any{"tag":"Branch", "fields":map[string]any{"left":"Leaf"}},
+    map[string]any{"tag":"Branch", "fields":map[string]any{"left":"Leaf", "right":"Unknown"}},
+    map[string]any{"tag":"Branch", "fields":map[string]any{"left":"Leaf", "right":nil}},
+  } {
+    if DecodeTreeJSON(invalid).OK() { t.Errorf("accepted invalid payload: %#v", invalid) }
+  }
+}
+|} in
   execute root write [] ["internal/teslmodrecursive/recursive_column_test.go", {|
 package teslmodrecursive
 import (
@@ -338,7 +377,7 @@ func TestRecursiveColumnDecode(t *testing.T) {
     mustPanic(t, func() { _, _ = teslScanDocument(rawRow{[]any{"tree", []byte(invalid)}}) })
   }
 }
-|}])
+|} ^ explicit_tests])
 
 let () = run "jsonb columns" ["storage boundary", [
   test_case "local, nullable and nested records revalidate proofs" `Slow local_records;
@@ -346,6 +385,8 @@ let () = run "jsonb columns" ["storage boundary", [
   test_case "transitive private records keep their owning codecs" `Slow (private_nominal_codecs true);
   test_case "missing or forbidden codec directions are refused" `Quick forbidden_directions;
   test_case "same-named ADT columns retain their own payload types" `Slow same_named_adts;
-  test_case "recursive ADT columns with an implicit codec" `Slow (fun () -> recursive_adt false);
-  test_case "recursive ADT columns with an explicit codec" `Slow (fun () -> recursive_adt true);
+  test_case "recursive ADT columns with an implicit codec" `Slow (fun () -> recursive_adt false false);
+  test_case "recursive ADT columns with an explicit codec" `Slow (fun () -> recursive_adt true false);
+  test_case "boxed recursive ADT columns with an implicit codec" `Slow (fun () -> recursive_adt false true);
+  test_case "boxed recursive ADT columns with an explicit codec" `Slow (fun () -> recursive_adt true true);
 ]]

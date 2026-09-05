@@ -386,7 +386,13 @@ is a compile error. Editor checks apply the same rule to unsaved schema buffers.
 
 Migration modules under `NotesSchema.Migrate.*` also keep application code and
 connections out. They allow pure migration records and fixture values; entity
-declarations stay in the schema they import.
+declarations stay in the schema they import. Ordinary `test` blocks over pure
+migration functions can live beside those functions. They cannot declare
+capabilities or select a database connection.
+
+Application modules and their libraries import `VCurrent`. Importing a frozen
+`V<n>` schema there is MIG015, even if the module also contains tests. Put tests
+that construct historical values in the family's `Migrate` namespace.
 
 Keep one database binding for each schema family, including all its child modules.
 The compiler rejects splitting that family between connections, combining different
@@ -786,6 +792,13 @@ codec NewTask {
   ]
 }
 ```
+
+Constructors with payloads add a `fields` object. For example, `Delivered "m-1"`
+encodes as `{"tag":"Delivered","fields":{"messageId":"m-1"}}`.
+An `adtJson` decoder checks every payload field, including nested record codecs
+and recursive ADT values. Missing fields, unknown constructors, and invalid
+children are rejected. A constructor without a payload also accepts its bare
+name as a legacy input; a constructor that requires fields cannot use that shorthand.
 
 The compiler validates that `with_codec Priority` is used on a field declared as `Priority` and that
 `Priority` has an `adtJson` codec — a type mismatch (e.g., `with_codec stringCodec` on a `Priority`

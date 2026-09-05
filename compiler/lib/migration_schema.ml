@@ -50,6 +50,13 @@ let check_contents ?(migration = false) (m : module_form) =
         let needed = collect_needed_capabilities ~func_caps ~param_caps:[] ~bound:[] c.value in
         if needed = [] then [] else [forbidden c.loc "effectful constants"]
       else [forbidden c.loc "application constants (use pure schema helper functions)"]
+    | DTest t when migration ->
+      (* Ordinary regression tests may accompany pure migration functions. The
+         normal test capability checker also rejects undeclared effects in the
+         body; this boundary prevents opting into an application capability or
+         connection. It grants none of the generated compatibility-test powers. *)
+      if t.capabilities = [] && t.database = None then []
+      else [forbidden t.loc "tests with capabilities or a database connection"]
     | (DQueue _ | DChannel _ | DWorkers _ | DCache _ | DAgent _ | DEmail _
       | DCapture _ | DApi _ | DServer _ | DTest _ | DApiTest _ | DLoadTest _) as d ->
       [forbidden (top_decl_loc d) "application declarations or tests"]
@@ -175,6 +182,16 @@ let check_databases (m : module_form) =
   | None -> if schema_prefix m.module_name <> None then
     check_closure ~root_module:m ~source_file:m.source_file m.module_name
   else
+  let historical_imports = List.filter_map (fun (imp : import_decl) ->
+    match schema_prefix imp.module_name with
+    | Some prefix when not (String.ends_with ~suffix:".VCurrent" prefix) ->
+      let family = List.hd (String.split_on_char '.' prefix) in
+      Some (make_error ~code:"MIG015" ~topic:Error_codes.TDatabase imp.loc
+        ~hint:(Printf.sprintf "import %s.VCurrent instead; put pure tests over historical values in the %s.Migrate namespace"
+                 family family)
+        (Printf.sprintf "application module `%s` cannot import frozen historical schema `%s`; application types come from VCurrent"
+           m.module_name imp.module_name))
+    | _ -> None) m.imports in
   let roots = List.concat_map (function
     | DDatabase d ->
       let fields = match d.config_expr with Some e -> Desugar.config_record_fields e | None -> [] in
@@ -190,7 +207,7 @@ let check_databases (m : module_form) =
                  | _ -> false) imported.decls -> Some imp.module_name
              | _ -> None) m.imports)
     | _ -> []) m.decls |> List.sort_uniq String.compare in
-  List.concat_map (check_closure ~source_file:m.source_file) roots
+  historical_imports @ List.concat_map (check_closure ~source_file:m.source_file) roots
   @ List.concat_map (function
       | DDatabase d -> (match resolve_binding m d with Error errors -> errors | Ok _ -> [])
       | _ -> []) m.decls
