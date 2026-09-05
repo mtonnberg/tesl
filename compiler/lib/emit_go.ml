@@ -2066,7 +2066,9 @@ and unequal_expr ty left right =
         Some (Printf.sprintf "(%s.%s == %s && %s)"
                 (selector_operand left) adt_tag_field
                 (qualified info.adt_owner variant.var_tag)
-                (String.concat " || " parts))) info.adt_variants in
+                (* The tag guards EVERY field. Without the inner grouping, a
+                   second field could read an inactive boxed variant's nil payload. *)
+                (joined_comparison " || " parts))) info.adt_variants in
     "(" ^ String.concat " || " (tag_unequal :: payloads) ^ ")"
   | TList element ->
     Printf.sprintf "!teslrt.ListEqualBy(%s, %s, %s)" left right (element_equal_func element)
@@ -2456,20 +2458,33 @@ let rec column_sql_type ty =
 
 let entity_columns (info : entity_info) =
   List.map (fun (field, ty) ->
-    (* An explicit SQL type must not bypass the record's codec contract, even if this
+    (* An explicit SQL type must not bypass a stored type's codec contract, even if this
        build never queries the entity. Follow wrappers and ADT payloads as well. *)
-    let rec validate_record visited = function
+    let rec validate_codec visited = function
       | TRecord record -> ignore (record_column_codec info.ent_loc record)
-      | TNewtype wrapped -> validate_record visited wrapped.base
+      | TNewtype wrapped -> validate_codec visited wrapped.base
+      | TList inner | TSet inner -> validate_codec visited inner
+      | TDict (key, value) -> validate_codec visited key; validate_codec visited value
       | TAdt (adt, args) ->
+        (match nominal_codec adt.adt_owner adt.adt_tesl_name with
+         | Some codec when codec.to_json = ToJsonForbidden
+                           || codec.from_json = FromJsonForbidden ->
+           unsupported info.ent_loc
+             "Go backend: stored ADT `%s` needs both toJson and fromJson when it declares an explicit codec"
+             adt.adt_tesl_name
+         | _ -> ());
+        (* Visit concrete arguments even when the declaration was already seen:
+           Envelope (Envelope State) must reach State's codec. Keeping the body
+           guard nominal also bounds non-regular recursive declarations. *)
+        List.iter (validate_codec visited) args;
         let key = adt.adt_owner, adt.adt_tesl_name in
         if not (List.mem key visited) then
           List.iter (fun variant ->
-            List.iter (fun (_, field) -> validate_record (key :: visited) field)
+            List.iter (fun (_, field) -> validate_codec (key :: visited) field)
               (variant_field_types adt args variant)) adt.adt_variants
       | _ -> ()
     in
-    validate_record [] ty;
+    validate_codec [] ty;
     let sql_type = match List.assoc_opt field info.ent_db_types with
       | Some declared -> String.uppercase_ascii declared
       | None ->
@@ -8087,7 +8102,7 @@ and emit_variant_literal ?(indent="") signatures env result variant args =
     if parts = [] || not (adt_boxed info) then parts
     else
       [ Printf.sprintf "%s: &%s{%s}" (variant_payload_field variant)
-          (variant_payload_type info variant
+          (qualified info.adt_owner (variant_payload_type info variant)
            ^ (match type_args with
               | [] -> ""
               | args -> "[" ^ String.concat ", " (List.map go_type args) ^ "]"))
@@ -8409,8 +8424,8 @@ and sql_scan_carrier loc ty target =
     ignore (record_column_codec loc info);
     ("[]byte", Printf.sprintf "teslrt.MustDecodeColumnJSON(%s, %s)" target
        (qualified info.rec_owner (codec_decode_name info.rec_tesl_name)))
-  | TAdt (info, _) when info.adt_tesl_name <> "Maybe" ->
-    ("[]byte", Printf.sprintf "%s(%s)" (sql_adt_column_decoder loc info) target)
+  | TAdt (info, args) when info.adt_tesl_name <> "Maybe" ->
+    ("[]byte", Printf.sprintf "%s(%s)" (sql_adt_column_decoder loc info args) target)
   | _ ->
     (match maybe_element ty with
      | Some inner ->
@@ -8457,9 +8472,9 @@ and sql_adt_field_decoder loc ty raw =
     ignore (record_column_codec loc info);
     Printf.sprintf "teslrt.MustDecodeColumnJSON(teslrt.MustEncodeJSON(%s), %s)" raw
       (qualified info.rec_owner (codec_decode_name info.rec_tesl_name))
-  | TAdt (nested, _) when nested.adt_tesl_name <> "Maybe" ->
+  | TAdt (nested, args) when nested.adt_tesl_name <> "Maybe" ->
     (* A nested ADT decodes through its OWN column decoder, so one rule covers any depth. *)
-    Printf.sprintf "%s(teslrt.MustEncodeJSON(%s))" (sql_adt_column_decoder loc nested) raw
+    Printf.sprintf "%s(teslrt.MustEncodeJSON(%s))" (sql_adt_column_decoder loc nested args) raw
   | _ ->
     (match maybe_element ty with
      | Some inner ->
@@ -8470,17 +8485,20 @@ and sql_adt_field_decoder loc ty raw =
         stored variant may carry scalars, newtypes over them, records with codecs, nested ADTs and `Maybe`s of \
         those" (go_type ty))
 
-and sql_adt_column_decoder loc (info : adt_info) =
+and sql_adt_column_decoder loc (info : adt_info) args =
   (* A package may query entities from two modules whose ADTs share a source name.
      Sharing their helper would use the first ADT's tags and payload decoder for both. *)
+  let go_ty = go_type (TAdt (info, args)) in
   let name = "teslColumn" ^ go_ident ~exported:true info.adt_tesl_name ^
-    (if info.adt_owner = !current_package then "" else "_" ^ info.adt_owner) in
+    (if info.adt_owner = !current_package then "" else "_" ^ info.adt_owner) ^
+    (* Distinct instantiations can occur in one row or inside one another. Their
+       decoders have different signatures and must never share a cached helper. *)
+    (if args = [] then "" else "_" ^ Digest.to_hex (Digest.string go_ty)) in
   if not (Hashtbl.mem pending_helpers name) then begin
     (* Reserve the name before traversing payloads: a direct recursive field
        refers to this helper while its body is still being generated. A failed
        emission discards the module, and the next module resets this table. *)
     Hashtbl.add pending_helpers name "";
-    let go_ty = qualified info.adt_owner info.adt_go_name in
     let buffer = Buffer.create 256 in
     Printf.bprintf buffer "\nfunc %s(teslText []byte) %s {\n" name go_ty;
     Printf.bprintf buffer
@@ -8490,12 +8508,14 @@ and sql_adt_column_decoder loc (info : adt_info) =
       "\tteslTag, teslTagErr := teslrt.DecodeStringField(teslParsed, \"tag\")\n\tif teslTagErr != nil {\n\t\tpanic(\"database: a %s column holds \" + teslTagErr.Error())\n\t}\n"
       info.adt_tesl_name;
     Buffer.add_string buffer "\tswitch teslTag {\n";
+    let tag_assignment variant =
+      if single_variant info <> None then []
+      else [adt_tag_field ^ ": " ^ qualified info.adt_owner variant.var_tag] in
     List.iter (fun variant ->
-      match variant.var_fields with
+      match variant_field_types info args variant with
       | [] ->
-        Printf.bprintf buffer "\tcase %s:\n\t\treturn %s{%s: %s}\n"
-          (go_quote variant.var_ctor) go_ty adt_tag_field
-          (qualified info.adt_owner variant.var_tag)
+        Printf.bprintf buffer "\tcase %s:\n\t\treturn %s{%s}\n"
+          (go_quote variant.var_ctor) go_ty (String.concat ", " (tag_assignment variant))
       | fields ->
         (* A variant with a payload reads its fields out of the `fields` object, each by its
            own label — the same labels the encoder writes. *)
@@ -8514,14 +8534,15 @@ and sql_adt_column_decoder loc (info : adt_info) =
         let assignments =
           if not (adt_boxed info) then assignments
           else [ Printf.sprintf "%s: &%s{%s}" (variant_payload_field variant)
-                   (variant_payload_type info variant) (String.concat ", " assignments) ]
+                   (qualified info.adt_owner (variant_payload_type info variant) ^
+                    (if args = [] then "" else "[" ^ String.concat ", " (List.map go_type args) ^ "]"))
+                   (String.concat ", " assignments) ]
         in
         Printf.bprintf buffer
-          "\tcase %s:\n\t\tteslFields := teslrt.MustJSONFields(teslParsed, %s, %s)\n\t\treturn %s{%s: %s, %s}\n"
+          "\tcase %s:\n\t\tteslFields := teslrt.MustJSONFields(teslParsed, %s, %s)\n\t\treturn %s{%s}\n"
           (go_quote variant.var_ctor) (go_quote info.adt_tesl_name)
           (go_quote variant.var_ctor)
-          go_ty adt_tag_field (qualified info.adt_owner variant.var_tag)
-          (String.concat ", " assignments))
+          go_ty (String.concat ", " (tag_assignment variant @ assignments)))
       info.adt_variants;
     Printf.bprintf buffer
       "\t}\n\tpanic(\"database: a %s column holds an unknown tag \" + teslTag)\n}\n"
@@ -10506,6 +10527,12 @@ and value_encoder_body ty =
       ~signature:(Printf.sprintf "(teslValue %s) any" (go_type ty))
       ~body:(Printf.sprintf "map[string]any{\n%s\n\t}" fields)
   | TAdt (info, args) ->
+    (match single_variant info with
+    | Some variant ->
+      remember_helper ~prefix:"teslEncode"
+        ~signature:(Printf.sprintf "(teslValue %s) any" (go_type ty))
+        ~body:(adt_json_payload info args variant ~indent:"\t")
+    | None ->
     let arms = List.map (fun variant ->
       let payload = adt_json_payload info args variant ~indent:"\t\t\t" in
       Printf.sprintf "\t\tcase %s:\n\t\t\treturn %s"
@@ -10514,7 +10541,7 @@ and value_encoder_body ty =
       ~signature:(Printf.sprintf "(teslValue %s) any" (go_type ty))
       ~body:(Printf.sprintf
         "func() any {\n\t\tswitch teslValue.%s {\n%s\n\t\t}\n\t\tpanic(\"unreachable: checker guarantees case exhaustiveness\")\n\t}()"
-        adt_tag_field (String.concat "\n" arms))
+        adt_tag_field (String.concat "\n" arms)))
   | TList element ->
     remember_helper ~prefix:"teslEncode"
       ~signature:(Printf.sprintf "(teslValue %s) any" (go_type ty))
@@ -11071,6 +11098,11 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
      | ToJsonForbidden -> ()
      | ToJsonAdt ->
        (match go_ty with
+        | TAdt (info, args) when single_variant info <> None ->
+          let variant = List.hd info.adt_variants in
+          Printf.bprintf body "\nfunc %s(teslValue %s) any {\n\treturn %s\n}\n"
+            (codec_encode_name type_name) (go_type go_ty)
+            (adt_json_payload info args variant ~indent:"\t")
         | TAdt (info, args) ->
           Printf.bprintf body "\nfunc %s(teslValue %s) any {\n\tswitch teslValue.%s {\n"
             (codec_encode_name type_name) (go_type go_ty) adt_tag_field;
@@ -11145,8 +11177,10 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
                  (variant_payload_type info variant) (String.concat ", " assignments)]
               else assignments in
             Printf.bprintf body "\t\treturn teslrt.Accept(%s{%s})\n" (go_type go_ty)
-              (String.concat ", " ((adt_tag_field ^ ": " ^ qualified info.adt_owner variant.var_tag)
-                :: assignments))) info.adt_variants;
+              (String.concat ", "
+                (if single_variant info <> None then assignments
+                 else (adt_tag_field ^ ": " ^ qualified info.adt_owner variant.var_tag)
+                   :: assignments))) info.adt_variants;
           Printf.bprintf body
             "\t}\n\treturn teslrt.Reject[%s](400, \"expected one of the %s constructors, got \"+teslName)\n}\n"
             (go_type go_ty) type_name

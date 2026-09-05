@@ -364,7 +364,7 @@ fn result(n: Int) -> Int = pure n
   Alcotest.check bool "application imports cannot enter frozen migration closure" true
     (List.exists (fun (d : Compile.diagnostic) -> String.starts_with ~prefix:"migration module `" d.message) diagnostics))
 
-let historical_application_imports () = with_project (fun _root write ->
+let historical_application_imports () = with_project (fun root write ->
   List.iter (fun revision ->
     List.iter (fun suffix ->
       let name = "NotesSchema." ^ revision ^ suffix in
@@ -384,6 +384,11 @@ let historical_application_imports () = with_project (fun _root write ->
     check string "diagnostic belongs to the actual importer" file diagnostic.file;
     check int "diagnostic points at the import" 1 diagnostic.start_line;
     check (option string) "database manual link" (Some "best-practices#database-access") diagnostic.manual;
+    let fixed = match diagnostic.fix with
+      | None -> fail "historical import has no mechanical fix"
+      | Some fix -> Diag_fix.apply source fix in
+    check bool "the import fix removes the historical boundary error" false
+      (List.exists (fun (d : Compile.diagnostic) -> d.code = "MIG015") (Compile.check_source file fixed));
     check bool "editor and saved checks agree" true
       (List.exists (fun (d : Compile.diagnostic) -> d.code = "MIG015") (Compile.check_source file source));
     (match Compile.compile_go_file file with
@@ -396,6 +401,12 @@ let historical_application_imports () = with_project (fun _root write ->
     ["NotesSchema.V7"; "NotesSchema.V7 exposing [Note]";
      "NotesSchema.V7.Private.Entities"; "NotesSchema.V2147483646.Private.Entities"];
   let library = check_import "library.tesl" "Library" "NotesSchema.V7" "" in
+  let unsaved_file = Filename.concat root "unsaved.tesl" in
+  let unsaved = module_text "Unsaved" "NotesSchema.V7.Private.Entities" "" in
+  check bool "unsaved test really has no disk file" false (Sys.file_exists unsaved_file);
+  check bool "a new unsaved file receives its source-based fix" true
+    (List.exists (fun (d : Compile.diagnostic) -> d.code = "MIG015" && d.file = unsaved_file && d.fix <> None)
+       (Compile.check_source unsaved_file unsaved));
   let app = write "app.tesl" (module_text "App" "Library" "") in
   check bool "transitive application importer is checked" true
     (List.exists (fun (d : Compile.diagnostic) -> d.code = "MIG015" && d.file = library)
@@ -409,6 +420,51 @@ let historical_application_imports () = with_project (fun _root write ->
       "schema/notes/v7.tesl", "NotesSchema.V7", "NotesSchema.V7.Private.Entities";
       "migrations/notes/v8.tesl", "NotesSchema.Migrate.V8", "NotesSchema.V7.Private.Entities";
     ])
+
+let historical_import_fixes () = with_project (fun root write ->
+  List.iter (fun revision ->
+    ignore (write ("schema/notes/" ^ String.lowercase_ascii revision ^ ".tesl")
+      ("module NotesSchema." ^ revision ^ " exposing [Note, describe]\n" ^
+       "import Tesl.Prelude exposing [String]\n" ^
+       "entity Note table \"notes\" primaryKey id { id: String }\n" ^
+       "fn describe(note: Note) -> String = note.id\n"))) ["V7"];
+  ignore (write "schema/notes/v-current.tesl" {|module NotesSchema.VCurrent exposing [Note, describe]
+import Tesl.Prelude exposing [String]
+entity Note table "notes" primaryKey id { id: String }
+fn describe(note: Note) -> String = note.id
+|});
+  List.iter (fun (ending, indent) ->
+    let application revision = String.concat ending [
+      "module App exposing [describe]";
+      "import Tesl.Prelude exposing [String]";
+      "import NotesSchema." ^ revision ^ " # keep NotesSchema.V7 in this comment";
+      "# NotesSchema.V7, NotesSchema.V70 and Wrapper.NotesSchema.V7 are prose.";
+      "fn describe(note: NotesSchema." ^ revision ^ ".Note) -> String =";
+      indent ^ "let label = \"å 🌱: ${NotesSchema." ^ revision ^ ".describe note} / NotesSchema.V7\"";
+      indent ^ "label";
+      "";
+    ] in
+    let original = application "V7" and expected = application "VCurrent" in
+    let file = write "app.tesl" expected in
+    (* The saved text deliberately differs: an editor fix must use the checked
+       buffer, including byte positions after multibyte text and tabs. *)
+    let diagnostics = Compile.check_source file original in
+    let refusal = List.find (fun (d : Compile.diagnostic) -> d.code = "MIG015") diagnostics in
+    let fix = match refusal.fix with Some fix -> fix | None -> fail "missing import/reference edit" in
+    check string "import, type and interpolated call change without touching prose" expected
+      (Diag_fix.apply original fix);
+    check string "the action has a specific compiler-owned title"
+      "Use VCurrent for this schema import and its qualified references"
+      (Diag_fix.title ~code:"MIG015" fix);
+    check int "fixed application checks without errors" 0
+      (List.length (List.filter (fun (d : Compile.diagnostic) -> d.severity = "error")
+         (Compile.check_source file expected)));
+    check (option string) "already-current source has no further version fix" None
+      (Option.map (Diag_fix.apply expected)
+         (Migration_source.version_fix ~family:"NotesSchema" ~before:"V7" ~after:"VCurrent" expected));
+    check string "preview never writes the buffer to disk" expected
+      (In_channel.with_open_bin (Filename.concat root "app.tesl") In_channel.input_all))
+    ["\n", "  "; "\r\n", "\t"])
 
 let schema_ownership () = with_project (fun _root write ->
   List.iter (fun (module_name, path, entity) ->
@@ -925,6 +981,7 @@ let () = run "migration-imports" ["source layout", [
   test_case "database-selected schema closure excludes application code" `Quick schema_contents;
   test_case "migration modules exclude application code and entity ownership" `Quick migration_contents;
   test_case "ordinary apps and libraries cannot import historical schema types" `Quick historical_application_imports;
+  test_case "historical import fixes preserve source and check the editor buffer" `Quick historical_import_fixes;
   test_case "schema families have one application connection owner" `Quick schema_ownership;
   test_case "module references select private cyclic ownership with overlays" `Quick module_reference_binding;
   test_case "module references compile private tables without exposing names" `Quick module_reference_compilation;

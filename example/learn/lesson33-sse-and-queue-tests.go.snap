@@ -240,15 +240,9 @@ func teslEncode1(teslValue string) any {
 }
 
 func teslEncode2(teslValue NoticeEvent) any {
-	return func() any {
-		switch teslValue.Tag {
-		case NoticeEventNoticeSent:
-			return map[string]any{"tag": "NoticeSent", "fields": map[string]any{
-				"message": teslEncode1(teslValue.NoticeSentMessage),
-			}}
-		}
-		panic("unreachable: checker guarantees case exhaustiveness")
-	}()
+	return map[string]any{"tag": "NoticeSent", "fields": map[string]any{
+		"message": teslEncode1(teslValue.NoticeSentMessage),
+	}}
 }
 
 func teslEncode3(teslValue NotifyJob) any {

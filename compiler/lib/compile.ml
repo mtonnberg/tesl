@@ -2882,12 +2882,26 @@ let type_diags_of source (m : Ast.module_form) : diagnostic list =
     else base
   ) type_errors
 
-(** The full PER-MODULE check pipeline (everything `--check <file>` runs except
-    the cross-module graph walk below): legacy-Bool lint, type check, proof
-    check, validations.  Factored out so [cross_module_diags] can run the exact
-    `--check dep.tesl` judgment on every transitively imported module — same
-    passes, same order, diagnostics anchored at the DEP's own file via its
-    parse locations. *)
+(** Attach edits using the exact source checked by this module's judgment,
+    including editor buffers and the separate source of an imported library. *)
+let validation_diags_of source (m : Ast.module_form) =
+  List.map (fun error ->
+    let diagnostic = diag_of_validation_error error in
+    if diagnostic.code <> "MIG015" then diagnostic
+    else
+      let imported = List.find_opt (fun (imp : Ast.import_decl) ->
+        imp.loc = error.Validation_common.loc) m.imports in
+      let fix = match imported with
+        | Some imp ->
+          (match String.split_on_char '.' imp.module_name with
+           | family :: before :: _ ->
+             Migration_source.version_fix ~family ~before ~after:"VCurrent" source
+           | _ -> None)
+        | None -> None in
+      { diagnostic with fix }) (Validation.check_module m)
+
+(** The full per-module check pipeline, reused by the cross-module graph walk
+    so dependency diagnostics and fixes stay anchored at their own source. *)
 let module_local_diags source (m : Ast.module_form) : diagnostic list =
   match module_complexity_diagnostics m with
   | _ :: _ as diagnostics -> diagnostics
@@ -2896,7 +2910,7 @@ let module_local_diags source (m : Ast.module_form) : diagnostic list =
     @ regex_literal_diagnostics m
     @ type_diags_of source m
     @ List.map diag_of_proof_error (Proof_checker.check_module m)
-    @ List.map diag_of_validation_error (Validation.check_module m)
+    @ validation_diags_of source m
 
 (* ── Cross-module structural validation (2026-07-08 multi-module audit) ─────
    `--check <entrypoint>` historically validated the entrypoint plus module

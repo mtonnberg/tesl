@@ -109,7 +109,7 @@ func main() {
 	config.Database = database
 	conn, err := pgx.ConnectConfig(f.ctx, config)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("connect JSONB application database: %v\n%s", err, f.dump())
 	}
 	t.Cleanup(func() { _ = conn.Close(context.Background()) })
 	type applicationProcess struct {

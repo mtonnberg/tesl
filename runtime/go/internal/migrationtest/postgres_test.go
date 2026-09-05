@@ -150,7 +150,7 @@ func TestPostgresMajorGateChecksTheActualServer(t *testing.T) {
 func (f *databaseFixture) exec(t *testing.T, sql string, args ...any) {
 	t.Helper()
 	if _, err := f.conn.Exec(f.ctx, sql, args...); err != nil {
-		t.Fatalf("SQL: %s\n%v", sql, err)
+		t.Fatalf("SQL: %s\n%v\n%s", sql, err, f.dump())
 	}
 }
 
@@ -190,7 +190,7 @@ func (f *databaseFixture) dump() string {
 	}
 	defer func() { _ = conn.Close(ctx) }()
 	var output strings.Builder
-	activity := "select coalesce(json_agg(t)::text,'[]') from (select datname,pid,wait_event_type,wait_event,state,query from pg_stat_activity where datname=current_database() or datname=any($1::text[])) t"
+	activity := "select coalesce(json_agg(t)::text,'[]') from (select datname,pid,wait_event_type,wait_event,state,query_start,xact_start,pg_blocking_pids(pid) as blockers,query from pg_stat_activity where datname=current_database() or datname=any($1::text[])) t"
 	var value string
 	if err := conn.QueryRow(ctx, activity, f.activityDatabases).Scan(&value); err != nil {
 		value = err.Error()

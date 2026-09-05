@@ -76,8 +76,13 @@ are included. Adoption, additive execution and the remaining lessons are pending
   modules as the roadmap specifies; capability declarations, connection selection
   and implicit effects are rejected. The multi-version nominal-type regression
   now runs in a migration test module instead of an ordinary application. The
-  focused import suite and diagnostic registry pass. Generated compatibility-store
-  authority and the editor's import-rewrite action remain pending.
+  focused import suite and diagnostic registry pass. MIG015 now carries a single
+  source-verified action for the import, qualified types and qualified expressions,
+  including interpolations. It shares the frozen-copy token walk and preserves
+  comments, literals, Unicode, tabs and CRLF. Tests check the unsaved buffer even
+  when the file does not exist, and applying the action produces a valid application.
+  Generated compatibility-store authority and the versioned diagnostic metadata
+  protocol remain pending.
 - Recursive ADT JSONB emission now reserves recursive decoder names, boxes decoded
   self-fields and unwraps them during encoding. Recursive encoders use a forwarder
   without changing nonrecursive helper names. Explicit `adtJson` codecs now retain
@@ -86,8 +91,16 @@ are included. Adoption, additive execution and the remaining lessons are pending
   both flat and boxed Go layouts. It also found structural OCaml type equality in
   `expect`, which failed on recursive types; that site now uses nominal type equality.
   The complete compiler suite and tracked corpus build pass for this slice.
-  Generic ADT column decoding and additional container payloads still require
-  dedicated coverage and implementation; this slice does not certify every ADT shape.
+  A second review found imported boxed payload types losing their declaring package,
+  explicit forbidden ADT codec directions being bypassed, and generic columns losing
+  their type arguments. These are fixed. The expanded matrix keeps different
+  instantiations separate within one row and through nested/optional fields; it also
+  checks imported boxed constructors, single-constructor values and tagless runtime
+  tuples. A generic boxed comparison exposed an unguarded inactive payload access;
+  its disjunction now stays inside the tag guard. All 17 JSONB regression groups
+  pass, including emitted HTTP responses, raw scanner refusals and Memory round trips.
+  Explicit codecs on generic ADT declarations and additional container payloads still
+  require dedicated coverage and implementation; this does not certify every ADT shape.
 - A full root CI run exposed failures in NilAway, generated-file synchronization,
   documentation count checks, corpus inventory and clean installation. Model clone
   maps now remain writable when empty, and repair/registry tests establish their
@@ -96,10 +109,17 @@ are included. Adoption, additive execution and the remaining lessons are pending
   failure came from Go probing an incomplete parent `.git` above generated output;
   container builds disable automatic VCS stamping and keep the explicit image source
   revision. The scrubbed-environment regression creates that condition and passes.
-  Generated-file synchronization still depends on committing the regenerated files;
-  no gate is weakened. The subsequent complete PostgreSQL 17 harness passes with
-  poolers, replica and owned-cluster crash cases. Root CI will be rerun on the next
-  complete tree; neither feature-wide review is complete.
+  The subsequent committed-tree root CI run passed 22 of 23 phases, including the
+  full compiler suite, exact snapshots, shipped clean installation and browser tests.
+  Its migration harness failed during database setup; the other runtime static-analysis
+  checks and all five skipped fuzz targets subsequently passed. Both timed-out cases
+  pass in isolation, and the complete PostgreSQL 17 suite passes in 79 seconds with
+  poolers, replica and owned-cluster crash cases. The setup failure is intermittent;
+  its cause has not been established. SQL failures now dump activity, blockers and
+  transaction/query start times, and a failed private-cluster run preserves the full
+  server log with slow-statement and lock-wait diagnostics. Timeouts and durability
+  settings are unchanged. The expanded compiler slices require the next full gate;
+  neither feature-wide review is complete.
 
 - The deterministic scheduler, independent model, real control-template tests,
   and compiled V7/V8/V9 process oracle run against disposable PostgreSQL 17.

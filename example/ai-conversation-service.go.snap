@@ -507,15 +507,9 @@ func teslEncode4(teslValue string) any {
 }
 
 func teslEncode5(teslValue ChatEvent) any {
-	return func() any {
-		switch teslValue.Tag {
-		case ChatEventChunk:
-			return map[string]any{"tag": "Chunk", "fields": map[string]any{
-				"content": teslEncode4(teslValue.ChunkContent),
-			}}
-		}
-		panic("unreachable: checker guarantees case exhaustiveness")
-	}()
+	return map[string]any{"tag": "Chunk", "fields": map[string]any{
+		"content": teslEncode4(teslValue.ChunkContent),
+	}}
 }
 
 func teslKeyLessString(teslX, teslY string) bool {

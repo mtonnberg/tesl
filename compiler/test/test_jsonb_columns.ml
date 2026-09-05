@@ -251,7 +251,25 @@ let forbidden_directions () = with_project (fun _root write ->
      "codec Details { toJson { text -> \"text\" with_codec stringCodec }, fromJson_forbidden }"]) [true; false])
     ["Details"; "Maybe Details"; "Event"])
 
-let same_named_adts () = with_project (fun root write ->
+let forbidden_adt_directions () = with_project (fun _root write ->
+  List.iter (fun field_type -> List.iter (fun queried -> List.iter (fun direction ->
+    let source = (if queried then "module Columns exposing [read]\n" else "module Columns exposing []\n") ^ imports ^
+      "type State\n  = Idle\n  | Named value: String\n" ^
+      "codec State { adtJson, " ^ direction ^ " }\n" ^
+      "type Event\n  = Empty\n  | Changed state: State\n" ^
+      "type Envelope a\n  = Wrapped value: a\n" ^
+      "entity Stored table \"stored\" primaryKey id { id: String, state: " ^ field_type ^ " @db(jsonb) }\n" ^
+      database "Stored" ^
+      (if queried then "fn read() -> Maybe Stored requires [dbRead Stored] = selectOne s from Stored\n" else "") in
+    let file = write "columns.tesl" source in
+    match Compile.compile_go_file file with
+    | Compile.GoSuccess _ -> fail "stored ADT bypassed its explicit forbidden codec direction"
+    | Compile.GoFailure diagnostics -> check bool "actionable ADT codec refusal" true
+        (List.exists (fun (d : Compile.diagnostic) -> contains d.message "stored ADT") diagnostics))
+    ["toJson_forbidden"; "fromJson_forbidden"; "toJson_forbidden, fromJson_forbidden"])
+    [true; false]) ["State"; "Maybe State"; "Event"; "Envelope State"; "Envelope (Envelope State)"])
+
+let same_named_adts boxed = with_project (fun root write ->
   List.iter (fun (name, entity, field_type) ->
     ignore (write (String.lowercase_ascii name ^ ".tesl")
       (Printf.sprintf {|module %s exposing [%s]
@@ -259,8 +277,11 @@ import Tesl.Prelude exposing [String, Int]
 type State
   = Empty
   | Named value: %s
-entity %s table "%s" primaryKey id { id: String, state: State }
-|} name entity field_type entity (String.lowercase_ascii entity))))
+%sentity %s table "%s" primaryKey id { id: String, state: State }
+|} name entity field_type
+        (if boxed then "  | Wide " ^ String.concat " " (List.init 24 (fun n ->
+          "field" ^ string_of_int n ^ ": String")) ^ "\n" else "")
+        entity (String.lowercase_ascii entity))))
     ["Alpha", "First", "String"; "Beta", "Second", "Int"];
   let entry = write "columns.tesl" ("module Columns exposing [first, second]\n" ^ imports ^ {|
 import Alpha exposing [First]
@@ -269,7 +290,7 @@ import Beta exposing [Second]
 fn first() -> Maybe First requires [dbRead First] = selectOne f from First
 fn second() -> Maybe Second requires [dbRead Second] = selectOne s from Second
 |}) in
-  execute root write (compile entry) ["internal/teslmodcolumns/adt_regression_test.go", {|
+  let test = {|
 package teslmodcolumns
 import (
   "reflect"
@@ -285,7 +306,173 @@ func TestSameNamedADTs(t *testing.T) {
   mustPanic(t, func() { _, _ = teslScanFirst(rawRow{[]any{"a", []byte(`{"tag":"Named","fields":{"value":3}}`)}}) })
   mustPanic(t, func() { _, _ = teslScanSecond(rawRow{[]any{"b", []byte(`{"tag":"Named","fields":{"value":"wrong"}}`)}}) })
 }
-|}])
+|} in
+  let test = if boxed then Str.global_replace (Str.regexp_string ".State.NamedValue")
+    ".State.Named.Value" test else test in
+  execute root write (compile entry) ["internal/teslmodcolumns/adt_regression_test.go", test])
+
+let generic_adts imported boxed = with_project (fun root write ->
+  let declarations = {|type Parcel a
+  = Missing
+  | Loaded value: a
+|} ^ (if boxed then "  | Wide " ^ String.concat " " (List.init 24 (fun n ->
+        "field" ^ string_of_int n ^ ": String")) ^ "\n" else "") ^ {|
+entity Document table "documents" primaryKey id {
+  id: String, text: Parcel String, number: Parcel Int
+  nested: Parcel (Parcel Int), optional: Maybe (Parcel String)
+}
+|} in
+  let prefix = if imported then begin
+    ignore (write "model.tesl" ("module Model exposing [Parcel(..), Document]\n" ^ imports ^ declarations));
+    "Model."
+  end else "" in
+  let source = "module Columns exposing [sample, store, read]\n" ^ imports ^
+    "import Tesl.ApiTest exposing [statusOk]\n" ^
+    (if imported then "import Model exposing [Parcel(..), Document]\n" else declarations) ^
+    database "Document" ^ Printf.sprintf {|
+fn sample() -> Document = Document {
+  id: "one", text: %sLoaded "hello", number: %sLoaded 123456789012345678901234567890
+  nested: %sLoaded (%sLoaded 9), optional: Something (%sLoaded "optional")
+}
+fn store(row: Document) -> Document requires [dbWrite Document] =
+  insert Document { id: row.id, text: row.text, number: row.number, nested: row.nested, optional: row.optional }
+fn read() -> Maybe Document requires [dbRead Document] = selectOne row from Document
+test "generic payloads retain their instantiations" requires [dbRead Document, dbWrite Document] {
+  let _ = store (sample ())
+  expect read () == Something (sample ())
+}
+handler get document() -> Document = sample ()
+api DocumentsApi { get "/document" -> Document }
+server DocumentsServer for DocumentsApi { document }
+api-test "generic payloads encode through the application" for DocumentsServer {
+  let response = get "/document"
+  expect response.status == 200
+  expect response.body.text.fields.value == "hello"
+  expect response.body.number.fields.value == 123456789012345678901234567890
+  expect response.body.nested.fields.value.fields.value == 9
+  expect response.body.optional.fields.value.fields.value == "optional"
+}
+|} prefix prefix prefix prefix prefix in
+  let file = write "columns.tesl" source in
+  let test = {|
+package teslmodcolumns
+import (
+  "reflect"
+  "testing"
+  "github.com/jackc/pgx/v5/pgconn"
+)
+|} ^ scanner_row ^ {|
+func TestGenericColumnInstantiations(t *testing.T) {
+  values := []any{"one",
+    []byte(`{"tag":"Loaded","fields":{"value":"hello"}}`),
+    []byte(`{"tag":"Loaded","fields":{"value":123456789012345678901234567890}}`),
+    []byte(`{"tag":"Loaded","fields":{"value":{"tag":"Loaded","fields":{"value":9}}}}`),
+    []byte(`{"tag":"Loaded","fields":{"value":"optional"}}`),
+  }
+  row, err := teslScanDocument(rawRow{values})
+  if err != nil || row.Text.LoadedValue != "hello" || row.Number.LoadedValue.String() != "123456789012345678901234567890" || row.Nested.LoadedValue.LoadedValue.String() != "9" {
+    t.Fatalf("generic scanner mixed instantiations: %+v, %v", row, err)
+  }
+  optional, ok := row.Optional.Value()
+  if !ok || optional.LoadedValue != "optional" { t.Fatalf("nullable generic: %+v", row.Optional) }
+  for position, invalid := range map[int]string{
+    1: `{"tag":"Loaded","fields":{"value":3}}`,
+    2: `{"tag":"Loaded","fields":{"value":"wrong"}}`,
+    3: `{"tag":"Loaded","fields":{"value":{"tag":"Loaded","fields":{"value":null}}}}`,
+    4: `null`,
+  } {
+    bad := append([]any(nil), values...)
+    bad[position] = []byte(invalid)
+    mustPanic(t, func() { _, _ = teslScanDocument(rawRow{bad}) })
+  }
+  values[4] = nil
+  row, err = teslScanDocument(rawRow{values})
+  if _, ok := row.Optional.Value(); err != nil || ok { t.Fatalf("SQL NULL: %+v %v", row, err) }
+}
+|} in
+  let test = if boxed then Str.global_replace (Str.regexp_string ".LoadedValue")
+    ".Loaded.Value" test else test in
+  execute root write (compile file) ["internal/teslmodcolumns/generic_regression_test.go", test])
+
+let single_variant_adts explicit_codec = with_project (fun root write ->
+  let file = write "single.tesl" ("module Single exposing [sample, store, read]\n" ^ imports ^ {|
+import Tesl.ApiTest exposing [statusOk]
+import Tesl.Tuple exposing [Tuple2(..)]
+type Packet =
+  | Packed number: Int text: String
+type Singleton =
+  | Only
+|} ^ (if explicit_codec then "codec Packet { adtJson }\ncodec Singleton { adtJson }\n" else "") ^ {|
+entity Document table "documents" primaryKey id { id: String, packet: Packet, singleton: Singleton, pair: Tuple2 Int String }
+|} ^ database "Document" ^ {|
+fn sample() -> Packet = Packed 123456789012345678901234567890 "hello"
+fn store() -> Document requires [dbWrite Document] =
+  insert Document { id: "one", packet: sample (), singleton: Only, pair: Tuple2 7 "pair" }
+fn read() -> Maybe Document requires [dbRead Document] = selectOne row from Document
+test "a tagless Go layout retains the complete payload" requires [dbRead Document, dbWrite Document] {
+  let _ = store ()
+  case read () of
+    Nothing -> expect False
+    Something row -> expect row.packet == sample ()
+}
+handler get packet() -> Packet = sample ()
+handler get singleton() -> Singleton = Only
+handler get pair() -> Tuple2 Int String = Tuple2 7 "pair"
+api ValuesApi { get "/packet" -> Packet, get "/singleton" -> Singleton, get "/pair" -> Tuple2 Int String }
+server ValuesServer for ValuesApi { packet, singleton, pair }
+api-test "single constructors still use the tagged JSON contract" for ValuesServer {
+  let response = get "/packet"
+  expect response.status == 200
+  expect response.body.tag == "Packed"
+  expect response.body.fields.number == 123456789012345678901234567890
+  expect response.body.fields.text == "hello"
+  let empty = get "/singleton"
+  expect empty.status == 200
+  expect empty.body.tag == "Only"
+  let tuple = get "/pair"
+  expect tuple.status == 200
+  expect tuple.body.tag == "Tuple2"
+  expect tuple.body.fields.first == 7
+  expect tuple.body.fields.second == "pair"
+}
+|}) in
+  let test = {|
+package teslmodsingle
+import (
+  "reflect"
+  "testing"
+  "github.com/jackc/pgx/v5/pgconn"
+)
+|} ^ scanner_row ^ {|
+func TestSingleVariantSQLShape(t *testing.T) {
+  values := []any{"one", []byte(`{"tag":"Packed","fields":{"number":123456789012345678901234567890,"text":"hello"}}`), []byte(`{"tag":"Only"}`), []byte(`{"tag":"Tuple2","fields":{"first":7,"second":"pair"}}`)}
+  row, err := teslScanDocument(rawRow{values})
+  if err != nil || row.Packet.PackedNumber.String() != "123456789012345678901234567890" || row.Packet.PackedText != "hello" || row.Pair.Tuple2First.String() != "7" || row.Pair.Tuple2Second != "pair" {
+    t.Fatalf("tagless Go layout: %+v %v", row, err)
+  }
+  for _, invalid := range []string{`null`, `{"tag":"Wrong"}`, `{"tag":"Packed","fields":{"number":1}}`, `{"tag":"Packed","fields":{"number":"wrong","text":"hello"}}`} {
+    bad := append([]any(nil), values...)
+    bad[1] = []byte(invalid)
+    mustPanic(t, func() { _, _ = teslScanDocument(rawRow{bad}) })
+  }
+  values[2] = []byte(`{"tag":"Wrong"}`)
+  mustPanic(t, func() { _, _ = teslScanDocument(rawRow{values}) })
+}
+|} ^ (if explicit_codec then {|
+func TestSingleVariantExplicitCodec(t *testing.T) {
+  raw, err := teslrt.ParseColumnJSON(teslrt.MustEncodeJSON(EncodePacketJSON(Sample())))
+  if err != nil { t.Fatal(err) }
+  result := DecodePacketJSON(raw)
+  value, ok := result.Value()
+  if !ok || value.PackedText != "hello" || value.PackedNumber.String() != "123456789012345678901234567890" { t.Fatalf("roundtrip: %+v", result) }
+  if !DecodeSingletonJSON(EncodeSingletonJSON(Singleton{})).OK() { t.Fatal("nullary roundtrip") }
+  if !DecodeSingletonJSON("Only").OK() { t.Fatal("legacy nullary tag") }
+  if DecodePacketJSON("Packed").OK() { t.Fatal("a bare tag lost its payload") }
+}
+|} else "") in
+  let test = if explicit_codec then Str.global_replace (Str.regexp_string "\"reflect\"")
+    "\"reflect\"\n  \"tesl.generated/teslmodsingle/internal/teslrt\"" test else test in
+  execute root write (compile file) ["internal/teslmodsingle/single_regression_test.go", test])
 
 let recursive_adt explicit_codec boxed = with_project (fun root write ->
   let file = write "recursive.tesl" ("module Recursive exposing [sample, store, read, Tree(..), Document]\n" ^ imports ^ {|
@@ -384,7 +571,15 @@ let () = run "jsonb columns" ["storage boundary", [
   test_case "private same-named records keep their owning codecs" `Slow (private_nominal_codecs false);
   test_case "transitive private records keep their owning codecs" `Slow (private_nominal_codecs true);
   test_case "missing or forbidden codec directions are refused" `Quick forbidden_directions;
-  test_case "same-named ADT columns retain their own payload types" `Slow same_named_adts;
+  test_case "stored ADTs respect explicit forbidden codec directions" `Quick forbidden_adt_directions;
+  test_case "same-named ADT columns retain their own payload types" `Slow (fun () -> same_named_adts false);
+  test_case "same-named imported boxed ADTs retain their payload owners" `Slow (fun () -> same_named_adts true);
+  test_case "generic ADT columns retain each instantiation" `Slow (fun () -> generic_adts false false);
+  test_case "imported generic ADT columns retain each instantiation" `Slow (fun () -> generic_adts true false);
+  test_case "boxed generic ADT columns retain each instantiation" `Slow (fun () -> generic_adts false true);
+  test_case "imported boxed generic ADT columns retain each instantiation" `Slow (fun () -> generic_adts true true);
+  test_case "single-variant ADTs preserve their JSON tags" `Slow (fun () -> single_variant_adts false);
+  test_case "single-variant ADTs with explicit codecs" `Slow (fun () -> single_variant_adts true);
   test_case "recursive ADT columns with an implicit codec" `Slow (fun () -> recursive_adt false false);
   test_case "recursive ADT columns with an explicit codec" `Slow (fun () -> recursive_adt true false);
   test_case "boxed recursive ADT columns with an implicit codec" `Slow (fun () -> recursive_adt false true);

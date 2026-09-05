@@ -588,6 +588,78 @@ func TestServerReturnsCodeActionsAndResolvesCompletionItems(t *testing.T) {
 	}
 }
 
+func TestSchemaImportActionKeepsQualifiedEditsTogetherAndUsesUTF16(t *testing.T) {
+	const uri = "file:///tmp/migration-app.tesl"
+	const source = "import NotesSchema.V7\r\n\t\"å 🌱 ${NotesSchema.V7.describe note}\" # NotesSchema.V7\r\n"
+	const title = "Use VCurrent for this schema import and its qualified references"
+	server := NewServer(&fakeCompiler{payload: []byte(`{"version":1,"diagnostics":[]}`)})
+	server.documents[uri] = document{URI: uri, Path: "/tmp/migration-app.tesl", Version: 4, Text: source}
+	var replacements []map[string]any
+	for line, text := range strings.Split(source, "\n") {
+		if line == 2 {
+			break
+		}
+		column := strings.Index(text, "V7")
+		replacements = append(replacements, map[string]any{
+			"kind": "replace_range", "start_line": line, "start_col": column,
+			"end_line": line, "end_col": column + 2, "replacement": "VCurrent",
+		})
+	}
+	params, err := json.Marshal(map[string]any{
+		"textDocument": map[string]string{"uri": uri},
+		"context": map[string]any{"diagnostics": []map[string]any{{
+			"code": "MIG015", "message": "Application code uses the current schema",
+			"data": map[string]any{"fix": map[string]any{"kind": "multi", "title": title, "edits": replacements}},
+		}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	if err := server.writeCodeActions(json.RawMessage(`1`), params, protocol.NewWriter(&output)); err != nil {
+		t.Fatal(err)
+	}
+	message, err := protocol.NewReader(&output).Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var response struct {
+		Result []struct {
+			Title string `json:"title"`
+			Edit  struct {
+				Changes map[string][]struct {
+					Range   protocol.Range `json:"range"`
+					NewText string         `json:"newText"`
+				} `json:"changes"`
+			} `json:"edit"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(message, &response); err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Result) != 1 || response.Result[0].Title != title || len(response.Result[0].Edit.Changes) != 1 {
+		t.Fatalf("schema action split, lost its title or edited another document: %s", message)
+	}
+	edits := response.Result[0].Edit.Changes[uri]
+	if len(edits) != 2 || edits[0].Range.Start.Character != 19 || edits[1].Range.Start.Character != 21 {
+		t.Fatalf("byte columns were not converted to UTF-16: %+v", edits)
+	}
+	index := protocol.NewLineIndex(source)
+	actual := source
+	for i := len(edits) - 1; i >= 0; i-- {
+		start, startErr := index.Offset(edits[i].Range.Start)
+		end, endErr := index.Offset(edits[i].Range.End)
+		if startErr != nil || endErr != nil {
+			t.Fatalf("invalid edit range: %+v, %v, %v", edits[i], startErr, endErr)
+		}
+		actual = actual[:start] + edits[i].NewText + actual[end:]
+	}
+	const expected = "import NotesSchema.VCurrent\r\n\t\"å 🌱 ${NotesSchema.VCurrent.describe note}\" # NotesSchema.V7\r\n"
+	if actual != expected {
+		t.Fatalf("schema action changed surrounding source: %q", actual)
+	}
+}
+
 func TestServerHoverFallsBackToRecordFieldQuery(t *testing.T) {
 	compiler := &fakeCompiler{responses: map[string][]byte{
 		"--type-at-json":  []byte(`{"version":1,"type_at":null}`),

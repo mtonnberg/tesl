@@ -190,7 +190,8 @@
 ;   dune exec test/test_suite_registration.exe
 (test
  (name test_suite_registration)
- (modules test_suite_registration))
+ (modules test_suite_registration)
+ (deps dune (glob_files test_*.ml)))
 
 ; Go test-set completeness meta-test.  The Go runtime and Tesl corpus are the
 ; only shipped execution path, so this guards their gate entry point:

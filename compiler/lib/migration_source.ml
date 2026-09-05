@@ -16,7 +16,9 @@ let valid_family family =
   not (String.contains family '.') &&
   Validation_common.schema_module_relative_path (family ^ ".VCurrent") <> None
 
-let rewrite_version ~family ~before ~after source =
+(* Sorted, non-overlapping edits in raw source-byte coordinates. Sharing these
+   ranges keeps editor fixes and frozen copies on exactly the same token walk. *)
+let version_edits ~family ~before ~after source =
   if not (valid_family family) then
     Error "invalid schema family"
   else if not (valid_revision before && valid_revision after) then
@@ -86,16 +88,39 @@ let rewrite_version ~family ~before ~after source =
       !edits
     in
     let edits = replacements source |> List.sort_uniq compare in
-    let output = Buffer.create (String.length source) in
     let offset = ref 0 in
     List.iter (fun (start, length) ->
       if start < !offset then failwith "overlapping version references";
+      offset := start + length) edits;
+    Ok (if before = after then [] else List.map (fun (start, length) -> start, length, after) edits)
+  with Failure message | Invalid_argument message -> Error message
+
+let rewrite_version ~family ~before ~after source =
+  match version_edits ~family ~before ~after source with
+  | Error _ as error -> error
+  | Ok edits ->
+    let output = Buffer.create (String.length source) in
+    let offset = ref 0 in
+    List.iter (fun (start, length, replacement) ->
       Buffer.add_substring output source !offset (start - !offset);
-      Buffer.add_string output after;
+      Buffer.add_string output replacement;
       offset := start + length) edits;
     Buffer.add_substring output source !offset (String.length source - !offset);
     Ok (Buffer.contents output)
-  with Failure message | Invalid_argument message -> Error message
+
+let version_fix ~family ~before ~after source =
+  match version_edits ~family ~before ~after source with
+  | Error _ | Ok [] -> None
+  | Ok edits ->
+    let cursor = ref 0 and line = ref 0 and line_start = ref 0 in
+    let edits = List.map (fun (start, length, replacement) ->
+      while !cursor < start do
+        if source.[!cursor] = '\n' then (incr line; line_start := !cursor + 1);
+        incr cursor
+      done;
+      Diag_fix.Replace_range { start_line = !line; start_col = start - !line_start;
+        end_line = !line; end_col = start - !line_start + length; replacement }) edits in
+    Some (match edits with [edit] -> edit | _ -> Diag_fix.Multi edits)
 
 type frozen_copy = {
   source_path : string;

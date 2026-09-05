@@ -686,6 +686,10 @@ longer identifiers such as `VCurrentExtra`, and a nested prefix such as
 `Wrapper.NotesSchema.VCurrent` are untouched. No formatter runs during this copy.
 The source-edit layer returns the complete proposed text; applying the manifest
 and verifying semantic history are separate checks.
+MIG015's single-document fix uses the same token ranges to replace the historical
+import and references to that revision with `VCurrent`. It operates on the checked
+source buffer, never a substituted disk copy; prose and literal text remain intact.
+The fix carries non-overlapping byte ranges, converted to UTF-16 by the LSP.
 
 **Canonical migration encoding, format 1.** Semantic hashes use a domain-separated
 tree of byte strings and ordered lists. A byte string is `s<N>:<bytes>`, where `N`

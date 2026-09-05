@@ -393,6 +393,9 @@ capabilities or select a database connection.
 Application modules and their libraries import `VCurrent`. Importing a frozen
 `V<n>` schema there is MIG015, even if the module also contains tests. Put tests
 that construct historical values in the family's `Migrate` namespace.
+The editor's **Use VCurrent** action changes the import and its qualified references
+together, including references inside interpolations. Comments and literal text
+stay unchanged. The action uses the checked buffer, including unsaved changes.
 
 Keep one database binding for each schema family, including all its child modules.
 The compiler rejects splitting that family between connections, combining different
