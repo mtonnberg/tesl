@@ -314,7 +314,7 @@ let define ~scopes ~resolve ~typed_nodes (m : module_form) decl =
 (** [definitions] must be the complete checked schema-owned inventory, including
     private modules and every fact owner. Reachability alone cannot discover an
     additional owner of a fact. Callers may not supply only exported definitions. *)
-let closure ~scopes ~definitions ~roots =
+let closure_with_definitions ~scopes ~definitions ~roots =
   let loc = Location.dummy_loc "<migration-closure>" in
   let reference (ns, symbol) =
     let identity = match symbol with
@@ -354,7 +354,12 @@ let closure ~scopes ~definitions ~roots =
           (Option.value (Hashtbl.find_opt owners key) ~default:[]) in
     List.iter visit roots;
     let ordered nodes = List.sort_uniq (fun a b -> String.compare (encode a) (encode b)) nodes in
-    let reached = Hashtbl.fold (fun key definition nodes ->
-      Seq [reference key; definition.body.node] :: nodes) visited [] |> ordered in
-    Ok (tag "closure" [Seq (ordered (List.map reference roots)); Seq reached])
+    let reached_definitions = Hashtbl.fold (fun _ definition rest -> definition :: rest) visited []
+      |> List.sort (fun a b -> String.compare (encode (reference a.key)) (encode (reference b.key))) in
+    let reached = List.map (fun definition ->
+      Seq [reference definition.key; definition.body.node]) reached_definitions |> ordered in
+    Ok (tag "closure" [Seq (ordered (List.map reference roots)); Seq reached], reached_definitions)
   with Invalid error -> Error error
+
+let closure ~scopes ~definitions ~roots =
+  Result.map fst (closure_with_definitions ~scopes ~definitions ~roots)

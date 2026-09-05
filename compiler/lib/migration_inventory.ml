@@ -20,6 +20,34 @@ type field_entry = {
   field : stored_field;
 }
 
+type stored_entity = {
+  entity_name : string;
+  entity_loc : Location.loc;
+  table_name : string;
+  primary_key : string;
+  entity_contract : Migration_canonical.node;
+}
+
+type entity_change =
+  | Added_entity of stored_entity
+  | Removed_entity of stored_entity
+  | Changed_entity of { previous : stored_entity; current : stored_entity;
+                        definition_changed : bool }
+
+type entity_entry = {
+  entity_identity : string;
+  entity_definition : Migration_canonical.node;
+  stored_entity : stored_entity;
+}
+
+type declaration_kind = Newtype | Adt | Record | Entity | Fact | Codec_declaration | Function
+type declaration = {
+  namespace : Migration_ir.namespace;
+  qualified_name : string;
+  declaration_kind : declaration_kind;
+  source_loc : Location.loc;
+}
+
 type t = {
   compiler_abi : string;
   scopes : Migration_canonical.scope list;
@@ -27,6 +55,8 @@ type t = {
   definitions : definition list;
   fields : field_entry list;
   sources : (string * string) list;
+  declarations : declaration list;
+  entities : entity_entry list;
 }
 
 let module_names inventory = inventory.modules
@@ -35,6 +65,16 @@ let root_module inventory = match inventory.scopes with
   | _ -> assert false (* load publishes exactly one schema revision *)
 let source_inputs inventory = inventory.sources
 let stored_fields inventory = List.map (fun entry -> entry.field) inventory.fields
+let declarations inventory = inventory.declarations
+let stored_entities inventory = List.map (fun entry -> entry.stored_entity) inventory.entities
+
+let compatible_inventories ~before ~after =
+  if List.map (fun (scope : Migration_canonical.scope) -> scope.family) before.scopes <>
+     List.map (fun (scope : Migration_canonical.scope) -> scope.family) after.scopes then
+    Error "comparison requires the same schema family"
+  else if before.compiler_abi <> after.compiler_abi then
+    Error "comparison requires the same recorded compiler ABI; recompiling historical source cannot establish the meaning of previously stored values"
+  else Ok ()
 
 let with_abi inventory body = Migration_canonical.Seq [
   Bytes "compiler-semantics"; Bytes inventory.compiler_abi; body]
@@ -55,12 +95,9 @@ let snapshot inventory =
 
 let field_changes ~before ~after =
   let loc = Location.dummy_loc "<migration-field-impact>" in
-  if List.map (fun (scope : Migration_canonical.scope) -> scope.family) before.scopes <>
-     List.map (fun (scope : Migration_canonical.scope) -> scope.family) after.scopes then
-    Error {loc; message="stored field comparison requires the same schema family"}
-  else if before.compiler_abi <> after.compiler_abi then
-    Error {loc; message="stored field comparison requires the same recorded compiler ABI; recompiling historical source cannot establish the meaning of previously stored values"}
-  else
+  match compatible_inventories ~before ~after with
+  | Error message -> Error {loc; message="stored field " ^ message}
+  | Ok () ->
     let rec merge changes previous current = match previous, current with
       | [], [] -> List.rev changes
       | old :: rest, [] -> merge (Removed_field old.field :: changes) rest []
@@ -75,6 +112,113 @@ let field_changes ~before ~after =
               definition_changed=old.definition <> fresh.definition } :: changes in
           merge changes old_rest fresh_rest in
     Ok (merge [] before.fields after.fields)
+
+let entity_changes ~before ~after =
+  let loc = Location.dummy_loc "<migration-entity-impact>" in
+  match compatible_inventories ~before ~after with
+  | Error message -> Error {loc; message="stored entity " ^ message}
+  | Ok () ->
+    let rec merge changes previous current = match previous, current with
+      | [], [] -> List.rev changes
+      | old :: rest, [] -> merge (Removed_entity old.stored_entity :: changes) rest []
+      | [], fresh :: rest -> merge (Added_entity fresh.stored_entity :: changes) [] rest
+      | old :: old_rest, fresh :: fresh_rest ->
+        let order = String.compare old.entity_identity fresh.entity_identity in
+        if order < 0 then merge (Removed_entity old.stored_entity :: changes) old_rest current
+        else if order > 0 then merge (Added_entity fresh.stored_entity :: changes) previous fresh_rest
+        else
+          let changes = if old.stored_entity.entity_contract = fresh.stored_entity.entity_contract then changes
+            else Changed_entity { previous=old.stored_entity; current=fresh.stored_entity;
+              definition_changed=old.entity_definition <> fresh.entity_definition } :: changes in
+          merge changes old_rest fresh_rest in
+    Ok (merge [] before.entities after.entities)
+
+type same = {
+  previous_declaration : declaration;
+  current_declaration : declaration;
+  compiler_abi : string;
+  same_hash : string;
+}
+
+type same_error_kind = Incompatible_inventories | Invalid_declaration | Different_kind | Different_closure
+type difference = { previous : declaration option; current : declaration option }
+type same_error = { kind : same_error_kind; message : string; difference : difference }
+
+let same_declarations evidence = evidence.previous_declaration, evidence.current_declaration
+let same_digest evidence = evidence.same_hash
+let same_compiler_abi (evidence : same) = evidence.compiler_abi
+
+let same_eligible = function Newtype | Adt | Record | Fact | Codec_declaration -> true
+  | Entity | Function -> false
+
+let declaration_key (d : declaration) = d.namespace, d.qualified_name
+
+let verify_same ~(before : t) ~(after : t) ~previous ~current =
+  let find inventory key = List.find_opt (fun d -> declaration_key d = key) inventory.declarations in
+  let old = find before previous and fresh = find after current in
+  let refuse kind message difference = Error {kind; message; difference} in
+  let difference = {previous=old; current=fresh} in
+  match compatible_inventories ~before ~after with
+  | Error message -> refuse Incompatible_inventories ("Same " ^ message) difference
+  | Ok () ->
+    match old, fresh with
+    | None, _ | _, None ->
+      refuse Invalid_declaration "Same arguments must name declarations owned by their respective schema inventories; constructors, builtins and foreign revisions are not declarations" difference
+    | Some old, Some fresh when not (same_eligible old.declaration_kind && same_eligible fresh.declaration_kind) ->
+      refuse Invalid_declaration "Same accepts newtypes, ADTs, records, facts and codecs; entities and functions are compared by the migration plan" difference
+    | Some old, Some fresh when old.declaration_kind <> fresh.declaration_kind ->
+      refuse Different_kind "Same arguments must have the same declaration kind" difference
+    | Some old, Some fresh ->
+      let details inventory declaration =
+        match Migration_ir.closure_with_definitions ~scopes:inventory.scopes
+            ~definitions:inventory.definitions ~roots:[declaration.namespace, Global declaration.qualified_name] with
+        | Error _ -> assert false (* The complete checked inventory is closed. *)
+        | Ok (body, definitions) ->
+          let definitions = List.map (fun (d : definition) ->
+            let ns, name = match d.key with ns, Global name -> ns, name | _ -> assert false in
+            let declaration = match find inventory (ns, name) with Some d -> d | None -> assert false in
+            let identity = match Migration_canonical.reference inventory.scopes name with
+              | Ok identity -> identity | Error _ -> assert false in
+            Migration_canonical.encode (tag "reference" [Bytes (namespace ns); identity]),
+            (declaration, d.body.node)) definitions in
+          with_abi inventory body, definitions in
+      let old_body, old_definitions = details before old in
+      let new_body, new_definitions = details after fresh in
+      (* Compare the complete trees, not just a digest supplied by a caller. *)
+      if old_body = new_body then Ok {previous_declaration=old; current_declaration=fresh;
+        compiler_abi=before.compiler_abi; same_hash=Migration_canonical.digest Same old_body}
+      else
+        let rec first_difference previous current = match previous, current with
+          | [], [] -> difference (* Different root identities within one recursive closure. *)
+          | (_, (d, _)) :: _, [] -> {previous=Some d; current=None}
+          | [], (_, (d, _)) :: _ -> {previous=None; current=Some d}
+          | (old_key, (old, old_node)) :: old_rest, (new_key, (fresh, new_node)) :: new_rest ->
+            let order = String.compare old_key new_key in
+            if order < 0 then {previous=Some old; current=None}
+            else if order > 0 then {previous=None; current=Some fresh}
+            else if old_node <> new_node then {previous=Some old; current=Some fresh}
+            else first_difference old_rest new_rest in
+        let difference = first_difference old_definitions new_definitions in
+        let changed = match difference.previous, difference.current with
+          | Some old, Some fresh -> old.qualified_name ^ " -> " ^ fresh.qualified_name
+          | Some old, None -> old.qualified_name ^ " (removed from closure)"
+          | None, Some fresh -> fresh.qualified_name ^ " (added to closure)"
+          | None, None -> assert false in
+        refuse Different_closure ("Same semantic closures differ first at " ^ changed) difference
+
+let same_candidates ~(before : t) ~(after : t) =
+  match compatible_inventories ~before ~after with
+  | Error message -> Error {loc=Location.dummy_loc "<migration-same>"; message}
+  | Ok () ->
+    let previous_root = root_module before and current_root = root_module after in
+    Ok (List.filter_map (fun d ->
+      if not (same_eligible d.declaration_kind) then None
+      else
+        let suffix = String.sub d.qualified_name (String.length previous_root) (String.length d.qualified_name - String.length previous_root) in
+        match verify_same ~before ~after ~previous:(declaration_key d)
+            ~current:(d.namespace, current_root ^ suffix) with
+        | Ok evidence -> Some evidence
+        | Error _ -> None) before.declarations)
 
 let names = function
   | DFunc f -> [Value, f.name]
@@ -224,7 +368,19 @@ let load ~compiler_abi ~root_file =
     let source_inputs = Hashtbl.to_seq sources |> List.of_seq
       |> List.map (fun (path, source) -> path, Migration_hash.digest source)
       |> List.sort compare in
-    let inventory = { compiler_abi; scopes; definitions; fields=[]; sources=source_inputs;
+    let declarations = List.concat_map (fun m -> List.map (fun d ->
+      let namespace, name, kind = match d with
+        | DType (TypeNewtype t) -> Type, t.name, Newtype
+        | DType (TypeAdt t) -> Type, t.name, Adt
+        | DRecord r -> Type, r.name, Record
+        | DEntity e -> Type, e.name, Entity
+        | DFact f -> Predicate, f.name, Fact
+        | DCodec c -> Codec, c.name, Codec_declaration
+        | DFunc f -> Value, f.name, Function
+        | _ -> assert false (* Schema content and typed lowering already checked. *) in
+      {namespace; qualified_name=m.module_name ^ "." ^ name; declaration_kind=kind; source_loc=top_decl_loc d}) m.decls) modules
+      |> List.sort (fun a b -> compare (declaration_key a) (declaration_key b)) in
+    let inventory = { compiler_abi; scopes; definitions; fields=[]; entities=[]; sources=source_inputs; declarations;
       modules=List.map (fun m -> m.module_name) modules } in
     let fields = List.concat_map (fun d -> List.map (fun (name, body) ->
       let entity = match d.key with
@@ -240,7 +396,17 @@ let load ~compiler_abi ~root_file =
       { identity; definition=body.node; field={entity; name; loc=field_form.loc; contract} }
     ) d.stored_fields) definitions
       |> List.sort (fun a b -> String.compare a.identity b.identity) in
-    let inventory = { inventory with fields } in
+    let entities = List.map (fun (entity_name, (form : Ast.entity_form)) ->
+      let definition = List.find (fun (d : definition) -> d.key = (Type, Global entity_name)) definitions in
+      let entity_identity = Migration_canonical.encode (tag "stored-entity-location" [
+        require form.loc (Migration_canonical.reference scopes entity_name)]) in
+      let entity_contract = match closure inventory [Type, entity_name] with
+        | Ok node -> node | Error error -> raise (Invalid error) in
+      {entity_identity; entity_definition=definition.body.node;
+        stored_entity={entity_name; entity_loc=form.loc; table_name=form.table;
+          primary_key=form.primary_key; entity_contract}}) members
+      |> List.sort (fun a b -> String.compare a.entity_identity b.entity_identity) in
+    let inventory = { inventory with fields; entities } in
     Ok inventory
   with
   | Invalid error -> Error error

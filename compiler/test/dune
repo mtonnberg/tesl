@@ -26,6 +26,11 @@
  (libraries tesl_compiler_lib alcotest unix str))
 
 (test
+ (name test_migration_same)
+ (modules test_migration_same)
+ (libraries tesl_compiler_lib alcotest unix str))
+
+(test
  (name test_migration_history_sources)
  (modules test_migration_history_sources)
  (libraries tesl_compiler_lib alcotest unix str))
@@ -33,6 +38,11 @@
 (test
  (name test_migration_field_impact)
  (modules test_migration_field_impact)
+ (libraries tesl_compiler_lib alcotest unix str))
+
+(test
+ (name test_migration_entity_impact)
+ (modules test_migration_entity_impact)
  (libraries tesl_compiler_lib alcotest unix str))
 
 (test
