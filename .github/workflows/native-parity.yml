@@ -90,6 +90,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Verify macOS offline network enforcement
+        if: ${{ startsWith(matrix.target, 'darwin-') }}
+        run: python3 -m unittest discover -s scripts -p 'test_macos_network.py'
       - name: Build and exercise native compiler and tools
         run: python scripts/native-parity.py --plan native-release-plan.json --target ${{ matrix.target }} --module-bundle native-module-bundle
       # Build-only POSIX tools run after native parity so they cannot supply

@@ -75,6 +75,8 @@ let
       && stable.payloads.windows-amd64.manifest.components.tesl.version == baseVersion;
     complete-release-required = plan.releasePolicy.requireCompleteMatrix && plan.releasePolicy.preserveMainRuns;
     offline-gate-required = builtins.elem "offline-install" plan.releasePolicy.mandatoryChecks;
+    minimum-os-gate-required = builtins.elem "minimum-os-runtime" plan.releasePolicy.mandatoryChecks
+      && plan.releasePolicy.gateWorkflows.minimum-os-runtime == ".github/workflows/native-parity.yml";
   };
   failures = builtins.filter (name: !tests.${name}) (builtins.attrNames tests);
 in

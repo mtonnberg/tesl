@@ -92,11 +92,12 @@ in rec {
     identity = "semantic version with full source commit SHA for development builds";
     requireCompleteMatrix = true;
     preserveMainRuns = true;
-    mandatoryChecks = [ "authoritative-gate" "native-parity" "offline-install" "payload-audit" "provenance" ];
+    mandatoryChecks = [ "authoritative-gate" "native-parity" "offline-install" "minimum-os-runtime" "payload-audit" "provenance" ];
     gateWorkflows = {
       authoritative-gate = ".github/workflows/ci.yml";
       native-parity = ".github/workflows/native-parity.yml";
       offline-install = ".github/workflows/native-parity.yml";
+      minimum-os-runtime = ".github/workflows/native-parity.yml";
       payload-audit = ".github/workflows/native-parity.yml";
       provenance = ".github/workflows/native-release.yml";
     };

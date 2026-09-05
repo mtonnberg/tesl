@@ -20,6 +20,8 @@ import native_postgres
 import native_sdk
 import native_windows_tools
 import installer_artifact
+import macos_network
+import native_host
 from pe_audit import audit_binary as audit_windows_binary
 from module_proxy import verify as verify_module_bundle
 from native_source import MAX_SOURCE_BYTES, extract_verified
@@ -241,7 +243,12 @@ def build(plan, root, target, module_bundle, output, cygwin_bash=None):
             run(["tar", "-xzf", archive, "-C", unpacked], root, environment)
         installed = unpacked / archive.name.removesuffix(".tar.gz").removesuffix(".zip")
         test_env = dict(build_env, TESL_TEST_INSTALLED_ROOT=str(installed))
-        run(acceptance_command(target, sdk / "bin" / ("go" + suffix), root), root, test_env, timeout=1500)
+        acceptance = acceptance_command(target, sdk / "bin" / ("go" + suffix), root)
+        network = {"network_isolation": "linux-network-namespace" if target.startswith("linux-") else "not-tested"}
+        if target.startswith("darwin-"):
+            network = macos_network.run(acceptance, root, test_env, timeout=1500)
+        else:
+            run(acceptance, root, test_env, timeout=1500)
         if native_payload.file_hash(archive) != digest:
             raise ValueError("archive changed during installed acceptance")
         setup = windows_setup(plan, frontends, archive, digest, artifacts, work, environment) if windows else None
@@ -250,8 +257,8 @@ def build(plan, root, target, module_bundle, output, cygwin_bash=None):
             "source_revision": plan["sourceRevision"], "checkout": source_identity,
             "archive": archive.name, "sha256": digest, "candidate_only": True,
             "installed_workflow": "passed", "payload_audit": audit,
-            "network_isolation": "linux-network-namespace" if target.startswith("linux-") else "not-tested",
-            "minimum_os_runtime": "not-established",
+            **network,
+            **native_host.runtime_evidence(plan, target),
             "signed_distribution": "unsigned-by-policy" if windows else "ad-hoc-by-policy" if target.startswith("darwin-") else "not-required",
             "quarantined_download": "not-tested",
             "setup": setup,

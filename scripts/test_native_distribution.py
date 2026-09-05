@@ -217,6 +217,15 @@ class DistributionTests(unittest.TestCase):
             stack.enter_context(patch.object(owner, name, side_effect=callback))
         stack.enter_context(patch.object(distribution, "verify_module_bundle"))
         stack.enter_context(patch.object(distribution.native_sdk, "host_target", return_value=target))
+        stack.enter_context(patch.object(distribution.native_host, "runtime_evidence", return_value={
+            "minimum_os_runtime": "not-established", "acceptance_host": {"matches_baseline": False}}))
+        if target.startswith("darwin-"):
+            def isolated(arguments, root, environment, timeout):
+                run(arguments, root, environment, timeout=timeout)
+                if failure == "network":
+                    raise ValueError("outbound network remains reachable")
+                return {"network_isolation": "macos-sandbox-exec", "loopback_only_reachability": "passed"}
+            stack.enter_context(patch.object(distribution.macos_network, "run", side_effect=isolated))
         if target.startswith("windows-"):
             stack.enter_context(patch.object(distribution.native_windows_tools, "provision", return_value={"verified": True}))
             stack.enter_context(patch.object(distribution.native_compiler_tools, "collect_windows_runtime", return_value=self.root / "runtime"))
@@ -256,14 +265,21 @@ class DistributionTests(unittest.TestCase):
                 self.assertFalse(self.output.exists())
                 self.assertFalse(list(self.root.glob(".tesl-distribution-*")))
 
-    def test_macos_evidence_retains_network_and_minimum_os_limitations(self):
+    def test_macos_records_probed_network_isolation_and_retains_minimum_os_limitation(self):
         value, calls = self.pipeline(target="darwin-arm64")
         result = distribution.build(value, self.root, "darwin-arm64", self.root / "modules", self.output)
-        self.assertEqual(result["network_isolation"], "not-tested")
+        self.assertEqual(result["network_isolation"], "macos-sandbox-exec")
+        self.assertEqual(result["loopback_only_reachability"], "passed")
         self.assertEqual(result["minimum_os_runtime"], "not-established")
         self.assertEqual(result["signed_distribution"], "ad-hoc-by-policy")
         self.assertEqual(result["quarantined_download"], "not-tested")
         self.assertTrue(all(environment["MACOSX_DEPLOYMENT_TARGET"] == "13" for _, environment in calls))
+
+    def test_macos_failed_network_probe_never_exports_candidate(self):
+        value, _ = self.pipeline(target="darwin-arm64", failure="network")
+        with self.assertRaisesRegex(ValueError, "outbound network"):
+            distribution.build(value, self.root, "darwin-arm64", self.root / "modules", self.output)
+        self.assertFalse(self.output.exists())
 
     def test_windows_and_existing_output_fail_before_build(self):
         with self.assertRaisesRegex(ValueError, "explicit Cygwin"):

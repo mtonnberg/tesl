@@ -56,6 +56,10 @@ Implemented so far:
   See [`nix/RELEASES.md`](../../nix/RELEASES.md) for commands and evidence limits.
   Local source builds and workflow tests pass; candidate platform CI is still
   required. OCaml and Dune now build from their verified source pins as well.
+- macOS acceptance now uses an inherited network sandbox with positive loopback
+  controls and explicit outbound TCP/UDP policy-denial probes for IPv4/IPv6.
+  Helper/orchestration regression tests pass locally; native macOS execution
+  remains pending. Failure cannot export a candidate archive.
 - The user-prefix installer validates checksums, manifests and archive contents,
   stages immutable versions, and supports selection, rollback and owned-file
   uninstall. Process leases protect active versions, including persistent managed

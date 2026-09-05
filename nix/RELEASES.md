@@ -144,6 +144,16 @@ without development tools, exercises the API scaffold, managed database, compile
 queries, tests, local build and authenticated HTTP, then checks persistence across
 clean/restart and installation immutability. Linux additionally runs it in a new
 network namespace with loopback only, retaining a non-root UID for PostgreSQL.
+macOS uses `sandbox-exec` around the complete acceptance process tree. A local
+TCP/UDP listener supplies reachable non-loopback controls before entering the
+sandbox; inside it, loopback must still work and outbound IPv4/IPv6 must return
+an explicit policy denial. A refused connection or timeout is not accepted as
+proof of isolation. Probe failures prevent candidate export. This CI-only helper
+does not change the runner's firewall or add a dependency to installed Tesl.
+Acceptance also records the actual host OS, architecture and libc version.
+Only execution on the declared baseline earns `minimum_os_runtime: passed`;
+a newer macOS runner or a Windows Server runner retains `not-established` for
+the declared macOS/desktop Windows baseline.
 
 Outputs are the versioned `.tar.gz`/`.zip`, its `.sha256`, and `distribution-checks.json`.
 They are unsigned CI candidates. Archive metadata is normalized, but complete
@@ -151,8 +161,9 @@ cross-host reproducibility, installers, upgrades and publication remain
 separate acceptance gates. Windows Authenticode and macOS Developer ID signing /
 notarization are explicitly optional under the maintainer's 2026-09-05 policy.
 Windows delivery is unsigned; macOS delivery is an ad-hoc signed native archive,
-with Nix recommended for macOS users. macOS network isolation and execution on the minimum OS
-remain separate gates. Native Windows packaging includes MSVC PostgreSQL, the
+with Nix recommended for macOS users. Execution on the declared minimum OS and
+Windows network isolation remain separate gates; the new macOS isolation helper
+still needs its first successful native matrix run. Native Windows packaging includes MSVC PostgreSQL, the
 verified-source OCaml compiler, and a PE/DLL audit. Required compiler runtime DLLs
 come only from the active Visual Studio redistributable directory, retain their
 Microsoft signatures, and include hashes, versions, and the pinned license text.
