@@ -92,6 +92,9 @@ var telemetry = struct {
 //	maxMetricSeriesPerInstrument   "each instrument is capped at 2000 distinct attribute sets
 //	                               — overflow folds into a single {otel.metric.overflow=true}
 //	                               series", so a hostile label costs one extra series;
+//	maxMetricSeriesTotal           caps request-derived instrument names across the process;
+//	maxMetricNameBytes             prevents one name from retaining an arbitrarily large value;
+//	maxMetricAttributeBytes        bounds the total attribute key/value data retained per sample;
 //	maxTelemetryEvents             "events are buffered in a bounded queue (drop-oldest on
 //	                               overflow) flushed by a background timer"; exported events
 //	                               leave the buffer, and a drop is counted in the exporter's
@@ -102,8 +105,12 @@ var telemetry = struct {
 // nil — blanking the ENTIRE metrics export for the rest of the process.
 const (
 	maxMetricSeriesPerInstrument = 2000
+	maxMetricSeriesTotal         = 10000
+	maxMetricNameBytes           = 255
+	maxMetricAttributeBytes      = 4096
 	maxTelemetryEvents           = 10000
 	telemetryDroppedMetric       = "tesl.telemetry.dropped"
+	metricOverflowName           = "tesl.metric.overflow"
 )
 
 var metricOverflowAttributes = []Tuple2[string, string]{
@@ -295,8 +302,35 @@ func recordMetric(name string, kind MetricKind, value float64,
 // instead of a series of its own.
 func recordMetricLocked(name string, kind MetricKind, value float64,
 	attributes []Tuple2[string, string]) {
+	attributeBytes, attributesTooLarge := 0, false
+	for _, attribute := range attributes {
+		for _, part := range [...]string{attribute.Tuple2First, attribute.Tuple2Second} {
+			if len(part) > maxMetricAttributeBytes-attributeBytes {
+				attributesTooLarge = true
+				break
+			}
+			attributeBytes += len(part)
+		}
+		if attributesTooLarge {
+			break
+		}
+	}
+	if len(name) > maxMetricNameBytes || attributesTooLarge {
+		name = metricOverflowName
+		attributes = metricOverflowAttributes
+	}
 	key := seriesKey(name, kind, attributes)
 	series, found := telemetry.series[key]
+	// Reserve one entry for the shared overflow series. Without that reservation,
+	// the first sample beyond the budget would create an additional entry and the
+	// purported process-wide cap would actually be maxMetricSeriesTotal+1.
+	if !found && len(telemetry.series) >= maxMetricSeriesTotal-1 {
+		// Do not retain the caller's name after the process-wide budget is exhausted.
+		name = metricOverflowName
+		attributes = metricOverflowAttributes
+		key = seriesKey(name, kind, attributes)
+		series, found = telemetry.series[key]
+	}
 	if !found {
 		instrument := fmt.Sprintf("%d\x00%s", kind, name)
 		if telemetry.instrumentSeries[instrument] >= maxMetricSeriesPerInstrument {

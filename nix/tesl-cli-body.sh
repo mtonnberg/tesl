@@ -60,11 +60,24 @@ _tesl_check() {
 # enforces it: it greps this file for the banned constructs AND re-runs the
 # verbs with a BSD-only userland shimmed onto PATH.
 
-# Absolute path of an existing file/dir, with the DIRECTORY part symlink-resolved
-# (`cd -P`). Replaces plain `realpath` (absent on older macOS).
+# Absolute path of an existing file/dir with the complete symlink chain resolved.
+# Replaces plain `realpath` (absent on older macOS).
 _tesl_abspath() {
-  local p="$1" d b
+  local p="$1" d b target i=0
   [ -n "$p" ] || return 1
+  while [ -L "$p" ]; do
+    [ "$i" -lt 32 ] || return 1
+    d="$(cd -P -- "$(dirname -- "$p")" 2>/dev/null && pwd -P)" || return 1
+    b="$(basename -- "$p")"
+    target="$(readlink "$d/$b" 2>/dev/null)" || return 1
+    [ -n "$target" ] || return 1
+    case "$target" in
+      /*) p="$target" ;;
+      *)  p="$d/$target" ;;
+    esac
+    i=$((i + 1))
+  done
+  [ -e "$p" ] || return 1
   if [ -d "$p" ]; then ( cd -P -- "$p" 2>/dev/null && pwd -P ); return; fi
   d="$(dirname -- "$p")"; b="$(basename -- "$p")"
   d="$(cd -P -- "$d" 2>/dev/null && pwd -P)" || return 1
@@ -152,6 +165,24 @@ _tesl_project_root() {
   _tesl_project_root_of_dir "$dir" || echo "$dir"
 }
 
+# Resolve a source before handing it to the compiler and prove that the final
+# target remains below the project root selected from the spelling the user
+# supplied. Broken links, link loops, and escaping links all fail closed.
+_tesl_project_file() {
+  local file="$1" abs root rel
+  abs="$(_tesl_abspath "$file" 2>/dev/null)" || {
+    echo "error: cannot resolve source file $file" >&2; return 1; }
+  root="$(_tesl_project_root "$file")" || {
+    echo "error: cannot resolve directory of $file" >&2; return 1; }
+  rel="$(_tesl_relpath "$root" "$abs" 2>/dev/null)" || rel=""
+  case "$rel" in
+    ""|.|/*|..|../*)
+      echo "error: $file resolves outside the project root $root (nearest tesl.toml)" >&2
+      return 1 ;;
+  esac
+  printf '%s\n' "$abs"
+}
+
 # Effective build root for a project root ($1), honoring TESL_BUILD_DIR.
 _tesl_build_root() {
   local root="$1"
@@ -174,6 +205,7 @@ _tesl_project_mktemp_dir() {
 
 _tesl_test_go_file() {
   local file="$1" test_name="$2" test_kind="$3" root out status
+  file="$(_tesl_project_file "$file")" || return 1
   root="$(_tesl_project_mktemp_dir "$file" test-go)" || return 1
   out="$root/go"
   if ! "$TESL_OCAML_COMPILER" "$file" --out "$out"; then
@@ -190,6 +222,7 @@ _tesl_test_go_file() {
 _tesl_run_go_file() {
   local file="$1" debug="$2" project root out binary status
   shift 2
+  file="$(_tesl_project_file "$file")" || return 1
   project="$(_tesl_project_root "$file")" || return 1
   root="$(_tesl_project_mktemp_dir "$file" run-go)" || return 1
   out="$root/go"
@@ -218,6 +251,7 @@ _tesl_run_go_file() {
 _tesl_watch_go() {
   local file="$1" project root out binary pid="" previous="" current status
   shift
+  file="$(_tesl_project_file "$file")" || return 1
   project="$(_tesl_project_root "$file")" || return 1
   cleanup() {
     [ -n "$pid" ] && kill "$pid" 2>/dev/null || true
@@ -1191,6 +1225,7 @@ _tesl_init() {
 # an image variant is itself a request for the container path.
 _tesl_compile_go_file() {
   local entry="$1" requested_out="$2" project out
+  entry="$(_tesl_project_file "$entry")" || return 1
   project="$(_tesl_project_root "$entry")" || return 1
   if [ -n "$requested_out" ]; then
     out="$requested_out"
