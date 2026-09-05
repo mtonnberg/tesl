@@ -163,15 +163,18 @@ $v = (Get-Item -LiteralPath $env:TESL_MSVC_RUNTIME_FILE).VersionInfo
 
 def collect_windows_runtime(binary, compiler_tools, plan, environment, runtime_license):
     """Collect only final compiler PE imports from the active VS2022 CRT redist."""
+    # os.environ is case-insensitive on Windows, but dict(os.environ) is not:
+    # Python exposes uppercase keys even when vcvars declared mixed-case names.
+    environment = {name.upper(): value for name, value in environment.items()}
     binary, compiler_tools = Path(binary), Path(compiler_tools)
     output, notices = compiler_tools / "runtime", compiler_tools / "licenses/msvc-runtime"
     if output.exists() or output.is_symlink() or notices.exists() or notices.is_symlink():
         raise ValueError("compiler runtime output already exists")
     text = verify_runtime_license(plan, runtime_license)
-    if not environment.get("VSINSTALLDIR") or not environment.get("VCToolsRedistDir"):
+    if not environment.get("VSINSTALLDIR") or not environment.get("VCTOOLSREDISTDIR"):
         raise ValueError("active VSINSTALLDIR and VCToolsRedistDir are required")
     studio = Path(environment["VSINSTALLDIR"]).resolve(strict=True)
-    redist = Path(environment["VCToolsRedistDir"]).resolve(strict=True)
+    redist = Path(environment["VCTOOLSREDISTDIR"]).resolve(strict=True)
     try:
         relative = redist.relative_to(studio / "VC/Redist/MSVC")
     except ValueError as error:
@@ -215,8 +218,8 @@ def collect_windows_runtime(binary, compiler_tools, plan, environment, runtime_l
     evidence = {"version": 1, "component": "compiler-runtime", "target": "windows-amd64",
                 "compiler_sha256": sha256_file(binary).hex(), "files": files, "imports": imports,
                 "license": plan["windowsRuntimeLicense"], "redistribution": MSVC_REDISTRIBUTION,
-                "msvc_version": environment.get("VCToolsVersion"),
-                "windows_sdk_version": environment.get("WindowsSDKVersion")}
+                "msvc_version": environment.get("VCTOOLSVERSION"),
+                "windows_sdk_version": environment.get("WINDOWSSDKVERSION")}
     with tempfile.TemporaryDirectory(prefix=".tesl-compiler-runtime-", dir=compiler_tools) as temporary:
         stage = Path(temporary)
         (stage / "runtime").mkdir()

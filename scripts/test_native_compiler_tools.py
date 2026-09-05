@@ -261,7 +261,8 @@ class CompilerRuntimeTests(unittest.TestCase):
         (self.dlls / "vcruntime140_1.dll").write_bytes(pe_image(imports=["ucrtbase.dll"], dll=True))
         (self.dlls / "msvcp140.dll").write_bytes(pe_image(dll=True))
         self.environment = {"VSINSTALLDIR": str(self.studio), "VCToolsRedistDir": str(self.redist),
-                            "VCToolsVersion": "14.44.12345", "PATH": "/untrusted"}
+                            "VCToolsVersion": "14.44.12345", "WindowsSDKVersion": "10.0.26100.0",
+                            "PATH": "/untrusted"}
         self.license = self.root / "license.docx"
         document = ('<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
                     '<w:body><w:p><w:r><w:t>MICROSOFT VISUAL C++ 2015 - 2022 RUNTIME</w:t></w:r></w:p></w:body></w:document>')
@@ -288,6 +289,21 @@ class CompilerRuntimeTests(unittest.TestCase):
             self.assertEqual(item["authenticode"], self.identity)
         self.assertEqual((self.tools / "licenses/msvc-runtime/Microsoft-Visual-C-Runtime-2015-2022.docx").read_bytes(), self.license.read_bytes())
         self.assertIn("MICROSOFT VISUAL C++", (self.tools / "licenses/msvc-runtime/LICENSE.txt").read_text())
+
+    def test_windows_environment_casing_preserves_runtime_selection_and_version_evidence(self):
+        for case in (str.upper, str.lower):
+            with self.subTest(case=case.__name__):
+                environment = {case(key): value for key, value in self.environment.items()}
+                original = dict(environment)
+                tools = self.root / case.__name__
+                (tools / "licenses").mkdir(parents=True)
+                with patch.object(compiler, "microsoft_runtime_identity", return_value=self.identity):
+                    output = compiler.collect_windows_runtime(self.binary, tools, self.plan, environment, self.license)
+                metadata = json.loads((output / "native-build.json").read_text())
+                self.assertEqual(metadata["msvc_version"], "14.44.12345")
+                self.assertEqual(metadata["windows_sdk_version"], "10.0.26100.0")
+                self.assertEqual(set(metadata["files"]), {"vcruntime140.dll", "vcruntime140_1.dll"})
+                self.assertEqual(environment, original)
 
     def test_missing_redist_dependency_never_uses_another_directory(self):
         (self.dlls / "vcruntime140.dll").rename(self.root / "vcruntime140.dll")

@@ -316,8 +316,11 @@ class DistributionTests(unittest.TestCase):
             stream.writestr("payload/fixture", "tested portable bytes")
         digest = distribution.native_payload.file_hash(archive)
         calls = []
+        system_root = self.root / "Custom Windows"
 
         def run(arguments, root, environment, capture=False):
+            self.assertEqual(environment["PATH"], str(system_root / "System32"))
+            self.assertFalse(any(key.upper().startswith("TESL_") for key in environment))
             args = list(map(str, arguments))
             calls.append(args)
             self.assertNotIn("TESL_COMPILER", environment)
@@ -336,7 +339,8 @@ class DistributionTests(unittest.TestCase):
         with patch.object(distribution, "audit_windows_binary", return_value=({"imports": ["kernel32.dll"]}, [])), \
                 patch.object(distribution, "run", side_effect=run):
             result = distribution.windows_setup(value, frontends, archive, digest, artifacts, work,
-                                                {"TESL_COMPILER": "unrelated", "PATH": "developer tools"})
+                                                {"TESL_COMPILER": "unrelated", "tesl_toolchain_root": "unrelated",
+                                                 "SYSTEMROOT": str(system_root), "PATH": "developer tools"})
         self.assertEqual([args[1] for args in calls], ["install", "version", "doctor", "uninstall"])
         self.assertEqual(result["authenticode"], "unsigned")
         self.assertEqual(result["install_launch_uninstall"], "passed")

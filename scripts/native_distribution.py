@@ -137,9 +137,9 @@ def windows_setup(plan, frontends, archive, digest, artifacts, work, environment
     manager = work / "installed by setup å"
     # Test the actual downloadable executable and its embedded payload. The
     # clean-host workflow already exercised that ZIP's complete runtime above.
-    isolated = {key: value for key, value in environment.items()
-                if not key.startswith("TESL_")}
-    isolated["PATH"] = str(Path(environment.get("SystemRoot", r"C:\Windows")) / "System32")
+    isolated = {key.upper(): value for key, value in environment.items()
+                if not key.upper().startswith("TESL_")}
+    isolated["PATH"] = str(Path(isolated.get("SYSTEMROOT", r"C:\Windows")) / "System32")
     result = json.loads(run([executable, "install", "--root", manager, "--json"], work, isolated, capture=True))
     if result.get("state", {}).get("active_version") != plan["toolchainVersion"]:
         raise ValueError("setup selected an unexpected version")
