@@ -17,6 +17,10 @@ func (app *App) compileSource(ctx context.Context, args []string) error {
 	if len(args) != 1 && (len(args) != 3 || args[1] != "--out" || args[2] == "") {
 		return fmt.Errorf("usage: tesl compile [file.tesl] [--out directory]")
 	}
+	file, project, err := app.sourceFile(args[0])
+	if err != nil {
+		return err
+	}
 	if len(args) == 3 {
 		out := args[2]
 		if !filepath.IsAbs(out) {
@@ -27,13 +31,9 @@ func (app *App) compileSource(ctx context.Context, args []string) error {
 		} else if !os.IsNotExist(err) {
 			return err
 		}
-		return app.compiler(ctx, args...)
+		return app.compiler(ctx, file, "--out", args[2])
 	}
-	file := args[0]
-	if !filepath.IsAbs(file) {
-		file = filepath.Join(app.Directory, file)
-	}
-	stuff := filepath.Join(projectRoot(filepath.Dir(file)), ".tesl-stuff")
+	stuff := filepath.Join(project, ".tesl-stuff")
 	if err := os.MkdirAll(stuff, 0700); err != nil {
 		return err
 	}
@@ -113,6 +113,10 @@ func (app *App) build(ctx context.Context, args []string) error {
 	entry := manifest.value("project", "entrypoint", "app.tesl")
 	if !filepath.IsAbs(entry) {
 		entry = filepath.Join(root, entry)
+	}
+	entry, err = resolveProjectSource(root, entry)
+	if err != nil {
+		return err
 	}
 	name := manifest.value("project", "name", "app")
 	port := manifest.value("env", "PORT", "8086")

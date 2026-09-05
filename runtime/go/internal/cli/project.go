@@ -115,6 +115,45 @@ func (manifest Manifest) value(section, key, fallback string) string {
 	return fallback
 }
 
+// Resolve the complete source link chain against the project selected before
+// following that chain. Pass this canonical path to the compiler so its sibling
+// imports refer to the checked source location, as in the installed shell CLI.
+func resolveProjectSource(root, file string) (string, error) {
+	project, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return "", fmt.Errorf("cannot resolve source project root %s: %w", root, err)
+	}
+	resolved, err := filepath.EvalSymlinks(file)
+	if err != nil {
+		return "", fmt.Errorf("cannot resolve source file %s: %w", file, err)
+	}
+	relative, err := filepath.Rel(project, resolved)
+	if err != nil || relative == "." || !filepath.IsLocal(relative) {
+		return "", fmt.Errorf("source file %s resolves outside the project root %s", file, root)
+	}
+	info, err := os.Stat(resolved)
+	if err != nil {
+		return "", fmt.Errorf("cannot inspect source file %s: %w", file, err)
+	}
+	if !info.Mode().IsRegular() {
+		return "", fmt.Errorf("source file %s is not a regular file", file)
+	}
+	return resolved, nil
+}
+
+func (app *App) sourceFile(file string) (string, string, error) {
+	if !filepath.IsAbs(file) {
+		file = filepath.Join(app.Directory, file)
+	}
+	file, err := filepath.Abs(file)
+	if err != nil {
+		return "", "", fmt.Errorf("cannot resolve source file: %w", err)
+	}
+	root := projectRoot(filepath.Dir(file))
+	resolved, err := resolveProjectSource(root, file)
+	return resolved, root, err
+}
+
 func (app *App) files(args []string) ([]string, error) {
 	if len(args) > 0 {
 		return args, nil
@@ -131,7 +170,7 @@ func (app *App) files(args []string) ([]string, error) {
 	if !filepath.IsAbs(entry) {
 		entry = filepath.Join(root, entry)
 	}
-	if _, err := os.Stat(entry); err != nil {
+	if _, err := resolveProjectSource(root, entry); err != nil {
 		return nil, err
 	}
 	_, _ = fmt.Fprintln(app.Stderr, "tesl: using", entry)

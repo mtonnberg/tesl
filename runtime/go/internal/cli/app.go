@@ -388,10 +388,10 @@ func (app *App) runOrTest(ctx context.Context, verb string, args []string) error
 }
 
 func (app *App) executeSource(ctx context.Context, file string, args []string, debug, tests bool, name, kind string) error {
-	if !filepath.IsAbs(file) {
-		file = filepath.Join(app.Directory, file)
+	file, project, err := app.sourceFile(file)
+	if err != nil {
+		return err
 	}
-	project := projectRoot(filepath.Dir(file))
 	stuff := filepath.Join(project, ".tesl-stuff")
 	if err := os.MkdirAll(stuff, 0700); err != nil {
 		return err

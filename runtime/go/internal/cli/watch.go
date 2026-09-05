@@ -22,11 +22,11 @@ func (app *App) watch(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	file := files[0]
-	programArgs := files[1:]
-	if !filepath.IsAbs(file) {
-		file = filepath.Join(app.Directory, file)
+	file, _, err := app.sourceFile(files[0])
+	if err != nil {
+		return err
 	}
+	programArgs := files[1:]
 	dependencies := func() []string {
 		paths := []string{file}
 		if output, err := app.capture(ctx, "compiler", app.Directory, "--deps", file); err == nil {

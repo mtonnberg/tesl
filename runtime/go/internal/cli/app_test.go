@@ -56,10 +56,19 @@ func TestCompilerCommandParity(t *testing.T) {
 	} {
 		t.Run(strings.Join(sample.args, " "), func(t *testing.T) {
 			app, calls := fakeApp(t)
+			want := append([]string(nil), sample.want...)
+			if sample.args[0] == "compile" || sample.args[0] == "emit" {
+				writeProjectFile(t, app.Directory, "a.tesl", "module A exposing []\n")
+				var err error
+				want[0], err = filepath.EvalSymlinks(filepath.Join(app.Directory, "a.tesl"))
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
 			if err := app.Run(context.Background(), sample.args); err != nil {
 				t.Fatal(err)
 			}
-			if len(*calls) != 1 || !reflect.DeepEqual((*calls)[0].Args, sample.want) {
+			if len(*calls) != 1 || !reflect.DeepEqual((*calls)[0].Args, want) {
 				t.Fatalf("forwarded: %+v", *calls)
 			}
 		})
@@ -235,6 +244,7 @@ func TestScaffoldRealTemplatesAndDoesNotOverwrite(t *testing.T) {
 
 func TestTemporaryCompilationCleansAfterCompilerFailure(t *testing.T) {
 	app, _ := fakeApp(t)
+	writeProjectFile(t, app.Directory, "app.tesl", "module App exposing []\n")
 	app.Execute = func(context.Context, Invocation) error { return fmt.Errorf("compiler error") }
 	if err := app.Run(context.Background(), []string{"run", "app.tesl"}); err == nil {
 		t.Fatal("ignored compilation failure")
