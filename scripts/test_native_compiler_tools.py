@@ -357,14 +357,24 @@ class CompilerRuntimeTests(unittest.TestCase):
         self.assertEqual(environment["TESL_MSVC_RUNTIME_FILE"], str(path))
         self.assertFalse(any(key.upper() == "PSMODULEPATH" for key in environment))
         self.assertEqual(self.environment, original)
+        compatible = "CN=Microsoft Windows Software Compatibility Publisher, O=Microsoft Corporation, L=Redmond, S=Washington, C=US"
+        identity = {**self.identity, "signer": compatible, "signature_type": "Authenticode"}
+        with patch.object(compiler, "run", return_value=json.dumps(identity)):
+            self.assertEqual(compiler.microsoft_runtime_identity(path, self.environment), identity)
         for changed in ({"signer": "CN=Other Vendor"}, {"status": "NotSigned"}, {"status": "HashMismatch"},
+                        {"signer": compatible, "status": "NotSigned"},
+                        {"signer": "CN=Microsoft Corporation, O=Other Vendor"},
+                        {"signer": compatible.replace("O=Microsoft Corporation", "O=Other Vendor")},
+                        {"signer": "CN=Unrelated Publisher, O=Microsoft Corporation"},
+                        {"signer": "OU=Fake\\, " + compatible},
+                        {"signer": compatible.replace("Publisher, O=", "Publisher\\, O=")},
                         {"status": "UnknownError", "status_message": "certificate chain failed"}, {"version": "15.0.1.0"}):
             with self.subTest(changed=changed), \
                     patch.object(compiler, "run", return_value=json.dumps({**self.identity, **changed})), \
                     self.assertRaisesRegex(ValueError, "signature/version") as failure:
                 compiler.microsoft_runtime_identity(path, self.environment)
             for value in changed.values():
-                self.assertIn(value, str(failure.exception))
+                self.assertIn(repr(value), str(failure.exception))
 
     def test_unexpected_private_dll_and_existing_output_are_rejected(self):
         self.binary.write_bytes(pe_image(imports=["zstd.dll"]))

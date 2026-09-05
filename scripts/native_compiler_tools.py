@@ -26,6 +26,11 @@ from native_msvc import prefer_msvc
 WINDOWS_SOURCES = {"flexdll": "flexdll.h", "winpthreads": "src/winpthread_internal.h"}
 MSVC_REDISTRIBUTION = "https://learn.microsoft.com/en-us/visualstudio/releases/2022/redistribution"
 MSVC_RUNTIME_NAMES = re.compile(r"(?:vcruntime140(?:_1)?|msvcp140(?:_1|_2|_atomic_wait|_codecvt_ids)?|concrt140)\.dll")
+# VS2022's redistributables can report Microsoft's compatibility publisher
+# certificate. Require its exact CN and organization, plus Windows' signature
+# validation below; a generic Microsoft-looking publisher name is insufficient.
+MSVC_RUNTIME_PUBLISHER = re.compile(
+    r"^CN=Microsoft (?:Corporation|Windows Software Compatibility Publisher), O=Microsoft Corporation(?:, |$)")
 
 
 def source_root(directory, sentinel):
@@ -158,7 +163,7 @@ def microsoft_runtime_identity(path, environment):
     command = '''$ErrorActionPreference = 'Stop'
 $s = Get-AuthenticodeSignature -LiteralPath $env:TESL_MSVC_RUNTIME_FILE
 $v = (Get-Item -LiteralPath $env:TESL_MSVC_RUNTIME_FILE).VersionInfo
-@{status=$s.Status.ToString(); status_message=$s.StatusMessage; signer=$s.SignerCertificate.Subject; version=('{0}.{1}.{2}.{3}' -f $v.FileMajorPart,$v.FileMinorPart,$v.FileBuildPart,$v.FilePrivatePart)} | ConvertTo-Json -Compress
+@{status=$s.Status.ToString(); status_message=$s.StatusMessage; signature_type=$s.SignatureType.ToString(); signer=$s.SignerCertificate.Subject; version=('{0}.{1}.{2}.{3}' -f $v.FileMajorPart,$v.FileMinorPart,$v.FileBuildPart,$v.FilePrivatePart)} | ConvertTo-Json -Compress
 '''
     # A pwsh -> Python -> powershell.exe launch inherits PowerShell 7 modules,
     # which Windows PowerShell cannot load. Let it construct its own defaults.
@@ -166,7 +171,7 @@ $v = (Get-Item -LiteralPath $env:TESL_MSVC_RUNTIME_FILE).VersionInfo
     child_environment = {key: value for key, value in environment.items() if key.upper() != "PSMODULEPATH"}
     identity = json.loads(run(["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command],
                               path.parent, {**child_environment, "TESL_MSVC_RUNTIME_FILE": str(path)}, True))
-    if (identity.get("status") != "Valid" or not re.search(r"(?:^|, )CN=Microsoft Corporation(?:,|$)", identity.get("signer", ""))
+    if (identity.get("status") != "Valid" or not MSVC_RUNTIME_PUBLISHER.match(identity.get("signer") or "")
             or not re.fullmatch(r"14\.[0-9]+\.[0-9]+\.[0-9]+", identity.get("version", ""))):
         raise ValueError(f"invalid Microsoft runtime signature/version evidence: {identity}")
     return identity

@@ -21,7 +21,8 @@ class NativeWindowsRuntimeTests(unittest.TestCase):
         environment["PSMODULEPATH"] = str(runtime.parent / "not-a-powershell-module-directory")
         identity = microsoft_runtime_identity(runtime, environment)
         self.assertEqual(identity["status"], "Valid")
-        self.assertIn("CN=Microsoft Corporation", identity["signer"])
+        self.assertIn(", O=Microsoft Corporation", identity["signer"])
+        self.assertIn(identity["signature_type"], ("Authenticode", "Catalog"))
 
 
 if __name__ == "__main__":
