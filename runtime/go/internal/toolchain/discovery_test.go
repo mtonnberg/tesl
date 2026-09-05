@@ -26,6 +26,12 @@ func fixture(t *testing.T) (Resolver, map[string]string, string) {
 	t.Helper()
 	root := filepath.Join(t.TempDir(), "Tesl tools å 😀")
 	executable := writeFixture(t, root, "bin/tesl", "launcher", 0755)
+	// Discovery follows the launcher to its real installation. Keep the original
+	// executable spelling, but expect the canonical root (macOS aliases /var).
+	root, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
 	env := make(map[string]string)
 	r := Resolver{Executable: executable, GOOS: runtime.GOOS, Getenv: func(k string) string { return env[k] }, LookPath: func(s string) (string, error) { return "", os.ErrNotExist }}
 	return r, env, root
@@ -59,15 +65,30 @@ func TestRelocatedInstallationAndExplicitOverride(t *testing.T) {
 }
 
 func TestSymlinkedLauncherUsesRealInstallation(t *testing.T) {
-	r, _, root := fixture(t)
-	compiler := writeFixture(t, root, "bin/tesl-compiler"+r.suffix(), "compiler", 0755)
-	link := filepath.Join(t.TempDir(), "tesl")
-	if err := os.Symlink(r.Executable, link); err != nil {
-		t.Skipf("symlinks unavailable: %v", err)
-	}
-	r.Executable = link
-	if got, err := r.Resolve("compiler"); err != nil || got != compiler {
-		t.Fatalf("symlink = %q, %v", got, err)
+	for _, directoryLink := range []bool{false, true} {
+		name := "launcher"
+		if directoryLink {
+			name = "installation directory"
+		}
+		t.Run(name, func(t *testing.T) {
+			r, _, root := fixture(t)
+			compiler := writeFixture(t, root, "bin/tesl-compiler"+r.suffix(), "compiler", 0755)
+			link := filepath.Join(t.TempDir(), "tesl")
+			target := r.Executable
+			if directoryLink {
+				target = root
+			}
+			if err := os.Symlink(target, link); err != nil {
+				t.Skipf("symlinks unavailable: %v", err)
+			}
+			r.Executable = link
+			if directoryLink {
+				r.Executable = filepath.Join(link, "bin", "tesl")
+			}
+			if got, err := r.Resolve("compiler"); err != nil || got != compiler {
+				t.Fatalf("symlink = %q, %v", got, err)
+			}
+		})
 	}
 }
 

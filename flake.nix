@@ -118,7 +118,7 @@
           version = toolchainInputs.version;
           src = ./.;
           modRoot = "runtime/go";
-          vendorHash = "sha256-SMXMkfkj5ehtjri4CCWPMwOyLIGcaoSgBv8k4DVG86c=";
+          vendorHash = "sha256-uGEz054ux/K5il3VDFGdIbUdb1vai6jII/maVvHzclA=";
           subPackages = [
             "cmd/tesl"
             "cmd/tesl-dap"
