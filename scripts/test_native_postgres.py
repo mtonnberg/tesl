@@ -1,9 +1,11 @@
 """Native PostgreSQL builds must preserve source identity and loader closure."""
 
 import json
+import hashlib
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -47,6 +49,8 @@ class NativePostgresTest(unittest.TestCase):
         (destination / "COPYRIGHT").write_text("PostgreSQL license")
         (destination / "src/backend/regex").mkdir(parents=True)
         (destination / "src/backend/regex/COPYRIGHT").write_text("Regex license")
+        (destination / "src/tools").mkdir()
+        (destination / "src/tools/pgflex").write_bytes(b"env = {'FLEX_TMP_DIR': args.privatedir}\n")
         return destination
 
     def run_fixture(self, arguments, directory, environment, capture=False):
@@ -123,6 +127,7 @@ class NativePostgresTest(unittest.TestCase):
         self.assertEqual(metadata["source"], self.plan["sources"]["postgresql"])
         self.assertEqual(metadata["source_revision"], "abc")
         self.assertEqual(metadata["target"], "linux-amd64")
+        self.assertEqual(metadata["source_patches"], [])
         self.assertEqual((output / "licenses/src/backend/regex/COPYRIGHT").read_text(), "Regex license")
         self.assertEqual(metadata["licenses"], ["COPYRIGHT", "src/backend/regex/COPYRIGHT"])
         self.assertIn("ssl", metadata["disabled_features"])
@@ -270,8 +275,50 @@ class NativePostgresTest(unittest.TestCase):
         metadata = json.loads((output / "native-build.json").read_text())
         self.assertEqual(metadata["target"], "windows-amd64")
         self.assertEqual(metadata["build_tools"]["c"]["id"], "msvc")
+        self.assertEqual(metadata["source_patches"][0]["file"], "src/tools/pgflex")
+        self.assertNotEqual(metadata["source_patches"][0]["original_sha256"],
+                            metadata["source_patches"][0]["patched_sha256"])
         self.assertEqual(metadata["dependencies"]["bin/psql.exe"], ["kernel32.dll"])
         self.assertEqual(sorted(path.name for path in self.root.iterdir()), ["output"])
+
+    def test_pgflex_preserves_child_environment_and_overrides_private_temp_directory(self):
+        source = self.extract_fixture(None, None, self.root / "source")
+        wrapper = source / "src/tools/pgflex"
+        original = b'''import os, subprocess, sys
+from types import SimpleNamespace
+args = SimpleNamespace(privatedir=sys.argv[1])
+env = {'FLEX_TMP_DIR': args.privatedir}
+subprocess.run([sys.executable, '-c',
+    'import json, os; print(json.dumps(dict(os.environ)))'], env=env, check=True)
+'''
+        wrapper.write_bytes(original)
+        system_root = os.environ.get("SystemRoot", "Windows root")
+        environment = dict(os.environ, PATH="build tools", SystemRoot=system_root,
+                           FLEX_TMP_DIR="inherited wrong directory")
+        def child_environment():
+            result = subprocess.run([sys.executable, str(wrapper), str(self.root)],
+                                    env=environment, text=True, capture_output=True, check=True)
+            return json.loads(result.stdout)
+        if os.name != "nt":
+            # Windows can fail to start the child at all with this environment.
+            self.assertNotIn("PATH", child_environment())
+        patches = pg.prepare_windows_source(source)
+        child = child_environment()
+        self.assertEqual(child["PATH"], environment["PATH"])
+        self.assertEqual(child["SystemRoot" if os.name != "nt" else "SYSTEMROOT"], system_root)
+        self.assertEqual(child["FLEX_TMP_DIR"], str(self.root))
+        self.assertEqual(patches[0]["original_sha256"], hashlib.sha256(original).hexdigest())
+        self.assertEqual(patches[0]["patched_sha256"], hashlib.sha256(wrapper.read_bytes()).hexdigest())
+
+    def test_pgflex_patch_rejects_upstream_changes_without_modifying_source(self):
+        source = self.extract_fixture(None, None, self.root / "source")
+        wrapper = source / "src/tools/pgflex"
+        for content in (b"env = os.environ.copy()\n", wrapper.read_bytes() * 2):
+            with self.subTest(content=content):
+                wrapper.write_bytes(content)
+                with self.assertRaisesRegex(ValueError, "review the Windows source patch"):
+                    pg.prepare_windows_source(source)
+                self.assertEqual(wrapper.read_bytes(), content)
 
     def test_windows_builder_rejects_unpinned_tools_wrong_versions_and_cygwin_perl(self):
         tools = {name: [name] for name in ("meson", "ninja", "perl", "flex", "bison")}

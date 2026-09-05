@@ -7,6 +7,7 @@ Windows uses native MSVC/Meson with static CRT linkage and an audited DLL closur
 """
 
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -236,6 +237,23 @@ def collect_licenses(source_directory, prefix):
     return licenses
 
 
+def prepare_windows_source(source):
+    # PostgreSQL 17's pgflex replaces the child environment with FLEX_TMP_DIR
+    # alone. Cygwin Flex needs PATH/SystemRoot to load its runtime and run m4.
+    # Keep the already-sanitized build environment and the private temp dir.
+    path = source / "src/tools/pgflex"
+    original = path.read_bytes()
+    before = b"env = {'FLEX_TMP_DIR': args.privatedir}\n"
+    after = b"env = dict(os.environ, FLEX_TMP_DIR=args.privatedir)\n"
+    if original.count(before) != 1:
+        raise ValueError("unexpected PostgreSQL pgflex environment; review the Windows source patch")
+    updated = original.replace(before, after)
+    path.write_bytes(updated)
+    return [{"file": "src/tools/pgflex", "purpose": "preserve-flex-build-environment",
+             "original_sha256": hashlib.sha256(original).hexdigest(),
+             "patched_sha256": hashlib.sha256(updated).hexdigest()}]
+
+
 def build(plan, target, archive, output, jobs=2, windows_tools=None):
     source = validate(plan, target, jobs)
     output = Path(output).absolute()
@@ -254,7 +272,9 @@ def build(plan, target, archive, output, jobs=2, windows_tools=None):
         directory.mkdir()
         staged = work / "stage"
         build_tools = {}
+        source_patches = []
         if target.startswith("windows-"):
+            source_patches = prepare_windows_source(source_directory)
             configure_args, build_tools = build_windows(plan, source_directory, directory, staged,
                                                         environment, windows_tools, jobs)
             make_args = []
@@ -283,7 +303,8 @@ def build(plan, target, archive, output, jobs=2, windows_tools=None):
                     "source_revision": plan["sourceRevision"],
                     "disabled_features": list(DISABLED) + ["nls"],
                     "configure": configure_args[1:], "make_variables": make_args,
-                    "dependencies": dependencies, "licenses": licenses, "build_tools": build_tools}
+                    "dependencies": dependencies, "licenses": licenses, "build_tools": build_tools,
+                    "source_patches": source_patches}
         (prefix / "native-build.json").write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         prefix.rename(output)
     return output
