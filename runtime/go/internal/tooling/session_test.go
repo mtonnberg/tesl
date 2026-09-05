@@ -124,6 +124,13 @@ func sessionProject(t testing.TB) (string, string) {
 
 func TestBuiltCompilerWorkspaceInstalledStdlibDiscovery(t *testing.T) {
 	client := sessionTestClient(t)
+	// Defers run before TempDir cleanups. Windows cannot remove the installed
+	// executable while the retained compiler still has it open.
+	defer func() {
+		if err := client.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	repo := filepath.Clean(filepath.Join(filepath.Dir(client.Executable), "../../../.."))
 	prefix := filepath.Join(t.TempDir(), "installed å toolchain")
 	installed := filepath.Join(prefix, "bin", "tesl-compiler")
@@ -190,6 +197,14 @@ func TestBuiltCompilerWorkspaceInstalledStdlibDiscovery(t *testing.T) {
 	} else if runtime.GOOS != "windows" {
 		t.Fatal(err)
 	}
+	process := runningWorkspaceProcess(t, client)
+	t.Cleanup(func() {
+		select {
+		case <-process.done:
+		default:
+			t.Error("installed compiler must exit before its temporary installation is removed")
+		}
+	})
 }
 
 const sessionSource = "module Main exposing [twice]\nimport Tesl.Prelude exposing [Int]\nimport Helper exposing [number]\nfn twice() -> Int = number() * 2\n"
