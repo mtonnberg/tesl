@@ -54,7 +54,7 @@ type alias Model =
     { source : String, revision : Int, nextId : Int, pending : Dict String ( Int, Int )
     , examples : List Example, example : String, theme : String, landing : Bool, highlight : Maybe Highlight
     , diagnostics : List Diagnostic, artifacts : List Artifact, activeTab : String, explanations : Dict String String
-    , checkStatus : String, checkFailed : Bool, timing : String, bridgeError : String
+    , checkStatus : String, checkFailed : Bool, checkedRevision : Maybe Int, timing : String, bridgeError : String
     , query : String, searchOpen : Bool, searchStatus : String, searchFailed : Bool, searchResult : Maybe SearchResult
     , journey : Maybe Int, journeyLast : Int, journeyPaused : Bool, journeyDrafts : Dict Int String, journeyNext : Maybe Int, journeyDone : List Int, journeyOriginal : Maybe { source : String, example : String, highlight : Maybe Highlight }
     , shareStatus : String, copyValue : String, identity : String, editorMode : Bool, editorStatus : String, learning : Maybe { title : String, body : String, link : String }, goFile : String
@@ -135,7 +135,7 @@ init flags =
             { source = source, revision = 0, nextId = 1, pending = Dict.empty
             , examples = flags.examples, example = if flags.shared then "" else String.fromInt exampleIndex, theme = flags.theme, landing = not flags.shared && not flags.introHidden && guideStep == Nothing, highlight = flags.highlight
             , diagnostics = [], artifacts = [], activeTab = "ts", explanations = Dict.empty
-            , checkStatus = "Loading the compiler…", checkFailed = False, timing = "", bridgeError = ""
+            , checkStatus = "Loading the compiler…", checkFailed = False, checkedRevision = Nothing, timing = "", bridgeError = ""
             , query = flags.query, searchOpen = flags.linkedQuery, searchStatus = "", searchFailed = False, searchResult = Nothing
             , journey = guideStep, journeyLast = Maybe.withDefault 0 guideStep, journeyPaused = False, journeyDrafts = Dict.empty, journeyNext = Nothing, journeyDone = List.filter (\id -> List.member id exerciseIds) flags.journeyDone, journeyOriginal = Nothing
             , shareStatus = "Copy share link", copyValue = "", identity = flags.identity, editorMode = False, editorStatus = "", learning = Nothing, goFile = ""
@@ -215,7 +215,7 @@ receive reply model =
                             Err error -> fail ("Invalid compiler output: " ++ D.errorToString error)
                             Ok ( diagnostics, artifacts, timing ) ->
                                 let
-                                    progressed = journeyProgress diagnostics { current | diagnostics = diagnostics, artifacts = artifacts, timing = timing, checkStatus = diagnosticStatus diagnostics, checkFailed = False
+                                    progressed = journeyProgress diagnostics { current | checkedRevision = Just current.revision, diagnostics = diagnostics, artifacts = artifacts, timing = timing, checkStatus = diagnosticStatus diagnostics, checkFailed = False
                                         , activeTab = if List.any (\a -> a.kind == model.activeTab) artifacts then model.activeTab else Maybe.withDefault "ts" (List.head artifacts |> Maybe.map .kind)
                                         }
                                     ( moved, moveCommand ) = case progressed.journeyNext of
@@ -290,11 +290,9 @@ enterJourneyStep step model =
     in
     ( changed, Cmd.batch [ command, uiEffect "clear-fragment" E.null, uiEffect "focus" (E.string "journey-title") ] )
 
-journeyProgress : List Diagnostic -> Model -> Model
-journeyProgress diagnostics model =
+exerciseMatches : Int -> Model -> Bool
+exerciseMatches step model =
     let
-        activity = if model.journeyPaused then Just model.journeyLast else model.journey
-        clean = not (List.any (\d -> d.severity == "error") diagnostics)
         matches index before after = compactSource model.source == compactSource (String.replace before after (exampleSource index model))
         binding fallback =
             String.lines model.source |> List.filterMap (\line -> case String.words line of
@@ -304,18 +302,25 @@ journeyProgress diagnostics model =
         greetingChanged = case greetingParts of
             [ before, after ] -> String.startsWith before (compactSource model.source) && String.endsWith after (compactSource model.source) && String.length (compactSource model.source) > String.length before + String.length after && compactSource model.source /= compactSource (exampleSource 4 model)
             _ -> False
-        earned = clean && (case activity of
-            Just 0 -> greetingChanged
-            Just 1 -> matches 2 "import Tesl.Prelude exposing [Int, String]" "import Tesl.Prelude exposing [Int, String]\nimport Tesl.String exposing [String.length]"
-            Just 2 -> matches 1 "invoiceLabel raw workspace" ("let " ++ binding "invoice" ++ " = check checkWorkspace raw workspace\n  invoiceLabel " ++ binding "invoice" ++ " workspace")
-            Just 4 -> List.any (\caps -> matches 5 "requires [dbRead Note]" ("requires [" ++ caps ++ "]")) ["dbWrite Note", "dbRead Note, dbWrite Note", "dbWrite Note, dbRead Note"]
-            Just 5 -> matches 6 "Money.add price shipping" ("let " ++ binding "checked" ++ " = check Money.requireSameCurrency price shipping\n  Money.add price " ++ binding "checked")
-            Just 6 -> matches 7 "speed + elapsed" "speed * elapsed"
-            Just step ->
-                if Guide.testCommand step /= Nothing then
-                    let repair = repairFor step in matches (stepExample step) repair.before repair.after
-                else False
-            Nothing -> False)
+    in
+    case step of
+        0 -> greetingChanged
+        1 -> matches 2 "import Tesl.Prelude exposing [Int, String]" "import Tesl.Prelude exposing [Int, String]\nimport Tesl.String exposing [String.length]"
+        2 -> matches 1 "invoiceLabel raw workspace" ("let " ++ binding "invoice" ++ " = check checkWorkspace raw workspace\n  invoiceLabel " ++ binding "invoice" ++ " workspace")
+        4 -> List.any (\caps -> matches 5 "requires [dbRead Note]" ("requires [" ++ caps ++ "]")) ["dbWrite Note", "dbRead Note, dbWrite Note", "dbWrite Note, dbRead Note"]
+        5 -> matches 6 "Money.add price shipping" ("let " ++ binding "checked" ++ " = check Money.requireSameCurrency price shipping\n  Money.add price " ++ binding "checked")
+        6 -> matches 7 "speed + elapsed" "speed * elapsed"
+        _ ->
+            if Guide.testCommand step /= Nothing then
+                let repair = repairFor step in matches (stepExample step) repair.before repair.after
+            else False
+
+journeyProgress : List Diagnostic -> Model -> Model
+journeyProgress diagnostics model =
+    let
+        activity = if model.journeyPaused then Just model.journeyLast else model.journey
+        clean = not (List.any (\d -> d.severity == "error") diagnostics)
+        earned = clean && (activity |> Maybe.map (\step -> exerciseMatches step model) |> Maybe.withDefault False)
         done = if earned then Maybe.map (\step -> if List.member step model.journeyDone then model.journeyDone else step :: model.journeyDone) activity |> Maybe.withDefault model.journeyDone else model.journeyDone
     in
     { model | journeyDone = done }
@@ -643,6 +648,16 @@ viewJourney model =
             let
                 steps = chapterSteps step
                 completed = List.member step model.journeyDone
+                checking = Dict.member "check" model.pending
+                currentComplete = model.checkedRevision == Just model.revision && not model.checkFailed && not (List.any (\d -> d.severity == "error") model.diagnostics) && exerciseMatches step model
+                progressText =
+                    if step == 3 then String.fromInt (List.length model.journeyDone) ++ " of " ++ String.fromInt (List.length exerciseIds) ++ " steps completed"
+                    else if checking then "Checking your edit…"
+                    else if completed && currentComplete then
+                        if Guide.testCommand step /= Nothing then "★ Test added and compiler-checked · run it locally below" else "★ Step completed"
+                    else if completed then "★ Completed earlier; your star is saved."
+                    else "Try the edit below, or make your own change, to earn a star."
+                stepNumber = List.indexedMap Tuple.pair steps |> List.filter (\( _, index ) -> index == step) |> List.head |> Maybe.map (Tuple.first >> (+) 1) |> Maybe.withDefault 1
                 diagram labels = div [ class "journey-flow", attribute "aria-label" "How the pieces connect" ] (List.intersperse (span [ attribute "aria-hidden" "true", class "flow-arrow" ] [ text "→" ]) (List.map (\( label, explanation ) -> details [ class "flow-detail" ] [ summary [ class "flow-node", title explanation ] [ text label, span [ class "flow-help", attribute "aria-hidden" "true" ] [ text " ⓘ" ] ], p [] [ text explanation ] ]) labels))
                 content =
                     case step of
@@ -702,7 +717,7 @@ viewJourney model =
                 [ div [ class "journey-heading" ] [ p [ class "eyebrow" ] [ text "Explore with a guide" ], btn "journey-close" "Keep editing" (CloseJourney False) ]
                 , label [ class "chapter-picker" ] [ text "Chapter ", select [ id "journey-chapter", onInput (String.toInt >> Maybe.withDefault 0 >> JourneyStep), value (String.fromInt (List.head steps |> Maybe.withDefault 0)) ]
                     (List.map (\( index, name ) -> option [ value (String.fromInt index), selected (List.member step (chapterSteps index)) ] [ text (name ++ (if index == 3 then "" else " · ★ " ++ String.fromInt (List.length (List.filter (\n -> List.member n model.journeyDone) (chapterSteps index))) ++ "/" ++ String.fromInt (List.length (chapterSteps index)))) ]) chapters) ]
-                , p [ class "steps-heading", id "steps-heading" ] [ text "Steps" ]
+                , p [ class "steps-heading", id "steps-heading" ] [ text ("Step " ++ String.fromInt stepNumber ++ " of " ++ String.fromInt (List.length steps)) ]
                 , nav [ class "journey-stops", attribute "aria-labelledby" "steps-heading" ]
                     (List.indexedMap (\ordinal index -> button [ onClick (JourneyStep index), attribute "aria-current" (if index == step then "step" else "false"), attribute "aria-label" (stepTitle index ++ (if List.member index model.journeyDone then " — checked" else "")) ] [ span [ class "stop-number" ] [ text (if List.member index model.journeyDone then "★" else String.fromInt (ordinal + 1)) ], text (stepTitle index) ]) steps)
                 , h2 [ id "journey-title", tabindex -1 ] [ text (stepTitle step) ]
@@ -717,10 +732,10 @@ viewJourney model =
                             , pre [] [ code [] [ text repair.after ] ]
                             ]
                         ]))
-                , p [ id "journey-progress", attribute "role" "status" ] [ text (if completed then (if Guide.testCommand step /= Nothing then "★ Test added and compiler-checked · run it locally below" else "★ Step completed") else (if step == 3 then String.fromInt (List.length model.journeyDone) ++ " of " ++ String.fromInt (List.length exerciseIds) ++ " steps completed" else if Dict.member "check" model.pending then "Checking your edit…" else "Try the edit below, or make your own change, to earn a star.")) ]
+                , p [ id "journey-progress", attribute "role" "status" ] [ text progressText ]
                 , div [ class "next-actions" ]
                     [ if step /= 3 && repairApplicable step model.source then button [ class "btn build-cta", id "journey-apply", onClick ApplyJourneyRepair ] [ text "Try this edit" ] else text ""
-                    , if step /= 3 then button [ id "journey-next", class (if completed then "btn build-cta" else "text-button"), onClick (JourneyStep (nextJourneyStep step)) ] [ text (if not completed then "Continue without a star →" else if List.reverse steps |> List.head |> (==) (Just step) then "Next chapter →" else "Next step →") ] else btn "journey-share" "Copy share link" Share
+                    , if step /= 3 then button [ id "journey-next", class (if completed && not (repairApplicable step model.source) then "btn build-cta" else "text-button"), onClick (JourneyStep (nextJourneyStep step)) ] [ text (if not completed then "Continue without a star →" else if List.reverse steps |> List.head |> (==) (Just step) then "Next chapter →" else "Next step →") ] else btn "journey-share" "Copy share link" Share
                     ]
                 , case Guide.testCommand step of
                     Nothing -> text ""

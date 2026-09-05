@@ -150,6 +150,12 @@ exercise allows a changed greeting while preserving the surrounding source.
 Removing a required check or privileged caller does not earn a star. Accepted
 compiler replies must still match the current request and source revision.
 
+The completion message also checks the current source against the exercise and
+the last accepted compiler revision. A saved star on a restarted or changed
+example is shown as earlier completion, not as validation of the current code.
+The step heading reports the current position within the chapter; compact step
+buttons keep the exercise visible as chapters grow.
+
 Earned IDs are sent as deltas through the UI port. Browser effects save one
 `tesl-playground-star-v2:<id>` key per award to avoid whole-array lost updates
 across tabs. Existing v1 stars migrate once; the v1 array is kept as a compatibility

@@ -663,7 +663,7 @@ test('the visible primary action earns a star before Next step is offered', asyn
 test('existing stars migrate and read-only storage still permits session progress', async ({page, context}) => {
   await page.addInitScript(() => localStorage.setItem('tesl-playground-stars-v1', '[0,2,5,6]'));
   await page.goto('/?guide=api');
-  await expect(page.locator('#journey-progress')).toContainText('Step completed');
+  await expect(page.locator('#journey-progress')).toContainText('Completed earlier');
   await expect.poll(() => page.evaluate(() => localStorage.getItem('tesl-playground-star-v2:0'))).toBe('1');
   const isolated = await context.browser().newContext();
   const temporary = await isolated.newPage();
@@ -716,4 +716,25 @@ test('testing chapter deep links and mobile navigation resolve through the Elm c
   await page.locator('#journey-title').scrollIntoViewIfNeeded();
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(375);
   await page.screenshot({path:test.info().outputPath('testing-chapter-mobile.png')});
+});
+
+test('saved stars distinguish prior completion from the current source', async ({page}) => {
+  await page.goto('/?guide=doctests');
+  await expect(page.locator('#status')).toHaveText('All checks passed');
+  await page.locator('#journey-apply').click();
+  await expect(page.locator('#journey-progress')).toContainText('Test added and compiler-checked');
+  await page.goto('/?guide=doctests');
+  await expect(page.locator('#status')).toHaveText('All checks passed');
+  await expect(page.locator('#journey-progress')).toHaveText('★ Completed earlier; your star is saved.');
+  await expect(page.locator('#journey-chapter option[value="7"]')).toHaveText('Testing your code · ★ 1/5');
+  await expect(page.locator('#steps-heading')).toHaveText('Step 2 of 5');
+  await page.locator('#journey-apply').click();
+  await expect(page.locator('#journey-progress')).toContainText('Test added and compiler-checked');
+  const source = await page.locator('#src').inputValue();
+  await page.locator('#src').fill(source.replace('n * 2', 'n + 2'));
+  await expect(page.locator('#status')).toHaveText('All checks passed');
+  await expect(page.locator('#journey-progress')).toHaveText('★ Completed earlier; your star is saved.');
+  await page.locator('#src').fill(source.replace('n * 2', 'unknown n'));
+  await expect(page.locator('#diags')).toContainText('T001');
+  await expect(page.locator('#journey-progress')).toHaveText('★ Completed earlier; your star is saved.');
 });
