@@ -19,6 +19,10 @@ class WindowsBuildToolsTests(unittest.TestCase):
         self.bash.with_name('cygpath.exe').write_text('fixture')
         self.plan = {'version': 1, 'windowsBuildTools': {name: {'version': '1.2.3', 'hash': name} for name in tools.NAMES}}
         self.archives = {name: self.root / (name + '.tar.gz') for name in tools.NAMES}
+        self.msvc = self.root / 'Visual Studio/cl.exe'
+        self.msvc.parent.mkdir()
+        self.msvc.touch()
+        self.msvc.with_name('link.exe').touch()
 
     def test_source_root_requires_one_expected_root(self):
         directory = self.root / 'source'
@@ -62,7 +66,7 @@ class WindowsBuildToolsTests(unittest.TestCase):
         def run(*arguments, **kwargs):
             self.assertEqual(events, list(tools.NAMES))
             raise RuntimeError('stop before building')
-        with patch.object(tools.sys, 'platform', 'win32'), patch.object(tools.shutil, 'which', return_value='MSVC'), \
+        with patch.object(tools.sys, 'platform', 'win32'), patch.object(tools.shutil, 'which', return_value=str(self.msvc)), \
                 patch.object(tools, 'extract_verified', side_effect=extract), patch.object(tools, 'run', side_effect=run):
             with self.assertRaisesRegex(RuntimeError, 'stop before'):
                 tools.provision(self.plan, self.archives, self.root / 'output', self.bash)
@@ -99,6 +103,7 @@ class WindowsBuildToolsTests(unittest.TestCase):
         def run(command, directory, environment, capture=False, timeout=1800):
             command = list(map(str, command))
             calls.append(command)
+            self.assertEqual(environment['PATH'].split(tools.os.pathsep)[0], str(self.msvc.parent))
             if command[-1] == 'uname -s':
                 return 'CYGWIN_NT-10.0'
             if '--bootstrap' in command:
@@ -115,7 +120,7 @@ class WindowsBuildToolsTests(unittest.TestCase):
             (prefix / 'bin').mkdir(parents=True)
             (prefix / ('bin/' + name + '.exe')).touch()
         output = self.root / 'output'
-        with patch.object(tools.sys, 'platform', 'win32'), patch.object(tools.shutil, 'which', return_value='MSVC'), \
+        with patch.object(tools.sys, 'platform', 'win32'), patch.object(tools.shutil, 'which', return_value=str(self.msvc)), \
                 patch.object(tools, 'extract_verified', side_effect=extract), patch.object(tools, 'run', side_effect=run), \
                 patch.object(tools, 'build_cygwin', side_effect=cygwin):
             commands = tools.provision(self.plan, self.archives, output, self.bash)

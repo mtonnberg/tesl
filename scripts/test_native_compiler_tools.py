@@ -199,14 +199,20 @@ class CompilerToolsTests(unittest.TestCase):
                     compiler.build(self.plan, "windows-amd64", *self.archives, self.output, **partial)
 
     def test_windows_retains_selected_msvc_libraries_but_removes_injection_flags(self):
-        original = {"PATH": "MSVC first", "INCLUDE": "SDK include", "LIB": "SDK lib", "LIBPATH": "SDK libpath",
+        tool = self.root / "Visual Studio/bin/cl.exe"
+        tool.parent.mkdir(parents=True)
+        tool.touch()
+        tool.with_name("link.exe").touch()
+        original = {"PATH": "Cygwin first", "INCLUDE": "SDK include", "LIB": "SDK lib", "LIBPATH": "SDK libpath",
                     "CL": "injected", "_CL_": "injected", "LINK": "injected", "BASH_ENV": "injected", "ENV": "injected"}
-        environment = compiler.build_environment(original, self.plan, "windows-amd64", self.output)
+        with patch.object(compiler.shutil, "which", return_value=str(tool)):
+            environment = compiler.build_environment(original, self.plan, "windows-amd64", self.output)
         for name in ("INCLUDE", "LIB", "LIBPATH"):
             self.assertEqual(environment[name], original[name])
         for name in ("CFLAGS", "CL", "_CL_", "LINK", "BASH_ENV", "ENV"):
             self.assertNotIn(name, environment)
         self.assertEqual(environment["CC"], "cl.exe")
+        self.assertEqual(environment["PATH"].split(compiler.os.pathsep)[0], str(tool.parent))
 
     def test_windows_build_uses_explicit_msvc_linker_and_positional_paths(self):
         inputs = self.windows_inputs()

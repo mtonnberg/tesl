@@ -17,6 +17,7 @@ import sys
 import tempfile
 
 from native_source import extract_verified
+from native_msvc import prefer_msvc
 
 
 NAMES = ("meson", "ninja", "perl", "flex", "bison")
@@ -83,8 +84,10 @@ def provision(plan, archives, output, cygwin_bash, jobs=2):
                    if name.upper() not in {"CC", "CXX", "CFLAGS", "CXXFLAGS", "CPPFLAGS", "LDFLAGS", "LIBS",
                                            "PERL5LIB", "PERL5OPT", "PERLLIB", "PERL_LOCAL_LIB_ROOT", "MAKEFLAGS"}
                    and not name.startswith("NIX_")}
-    if not shutil.which("cl.exe", path=environment.get("PATH", "")) or not shutil.which("nmake.exe", path=environment.get("PATH", "")):
+    compiler = shutil.which("cl.exe", path=environment.get("PATH", ""))
+    if not compiler or not shutil.which("nmake.exe", path=environment.get("PATH", "")):
         raise ValueError("native x64 MSVC cl.exe and nmake.exe must be available")
+    environment = prefer_msvc(environment, compiler)
     environment.update(CC="cl.exe", CXX="cl.exe", SOURCE_DATE_EPOCH=str(plan.get("sourceDateEpoch", 0)))
     output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix=".tesl-win-tools-", dir=output.parent) as temporary:

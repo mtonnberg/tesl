@@ -19,6 +19,7 @@ import zipfile
 from native_sdk import host_target
 from native_source import digest_bytes, extract_verified, sha256_file
 import pe_audit
+from native_msvc import prefer_msvc
 
 
 WINDOWS_SOURCES = {"flexdll": "flexdll.h", "winpthreads": "src/winpthread_internal.h"}
@@ -58,6 +59,9 @@ def build_environment(environment, plan, target, prefix):
         # compiler environment. Keep them, but let OCaml choose its own C flags.
         result.pop("CFLAGS", None)
         result.update(CC="cl.exe", CXX="cl.exe")
+        compiler = shutil.which("cl.exe", path=result["PATH"])
+        if compiler:
+            result = prefer_msvc(result, compiler)
     return result
 
 

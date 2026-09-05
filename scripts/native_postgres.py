@@ -15,6 +15,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+from native_msvc import prefer_msvc
 
 from native_source import extract_verified
 from pe_audit import audit_binary
@@ -201,7 +202,7 @@ def build_windows(plan, source, directory, staged, environment, tools, jobs):
     compiler = shutil.which("cl.exe", path=environment.get("PATH", ""))
     if not compiler:
         raise ValueError("PostgreSQL Windows builds require the native x64 MSVC developer environment")
-    build_env = dict(environment, CC=compiler, CXX=compiler, NINJA=tools["ninja"][0])
+    build_env = prefer_msvc(dict(environment, CC=compiler, CXX=compiler, NINJA=tools["ninja"][0]), compiler)
     build_env.pop("CFLAGS", None)
     build_env.pop("CXXFLAGS", None)
     arguments = [*tools["meson"], "setup", str(directory), str(source),

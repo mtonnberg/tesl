@@ -16,6 +16,11 @@ class NativePostgresTest(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(prefix="postgres component å ")
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
+        native_tools = tempfile.TemporaryDirectory(prefix="PostgreSQL MSVC å ")
+        self.addCleanup(native_tools.cleanup)
+        self.msvc = Path(native_tools.name) / "cl.exe"
+        self.msvc.touch()
+        self.msvc.with_name("link.exe").touch()
         self.plan = {"version": 1, "toolchainVersion": "0.3.1-dev.test", "sourceRevision": "abc",
                      "sourceDateEpoch": 42, "candidates": [{"target": "linux-amd64"},
                                                             {"target": "darwin-arm64", "baseline": "macOS 13"},
@@ -221,7 +226,7 @@ class NativePostgresTest(unittest.TestCase):
                 return "MSWin32"
             if "introspect" in arguments:
                 return json.dumps({"host": {"c": {"id": "msvc", "version": "19.44"}}})
-        with patch.object(pg, "run", side_effect=run), patch.object(pg.shutil, "which", return_value="C:/MSVC/cl.exe"):
+        with patch.object(pg, "run", side_effect=run), patch.object(pg.shutil, "which", return_value=str(self.msvc)):
             arguments, evidence = pg.build_windows(self.plan, self.root / "source", self.root / "build",
                                                    self.root / "stage", {"PATH": "native", "CFLAGS": "-O2"}, tools, 2)
         self.assertIn("--wrap-mode=nodownload", arguments)
@@ -230,7 +235,8 @@ class NativePostgresTest(unittest.TestCase):
         self.assertIn("-Db_vscrt=mt", arguments)
         self.assertIn("--prefix=C:/tesl-postgresql", arguments)
         setup_env = next(environment for command, environment in calls if "setup" in command)
-        self.assertEqual(setup_env["CC"], "C:/MSVC/cl.exe")
+        self.assertEqual(setup_env["CC"], str(self.msvc))
+        self.assertEqual(setup_env["PATH"].split(os.pathsep)[0], str(self.msvc.parent))
         self.assertNotIn("CFLAGS", setup_env)
         self.assertEqual(evidence["c"]["runtime_library"], "static")
         self.assertEqual(calls[-1][0][-1], "--no-rebuild")
@@ -258,7 +264,7 @@ class NativePostgresTest(unittest.TestCase):
                 return "PostgreSQL 17.10"
         with patch.object(pg, "native_target", return_value="windows-amd64"), \
                 patch.object(pg, "extract_verified", side_effect=self.extract_fixture), \
-                patch.object(pg, "run", side_effect=run), patch.object(pg.shutil, "which", return_value="cl.exe"):
+                patch.object(pg, "run", side_effect=run), patch.object(pg.shutil, "which", return_value=str(self.msvc)):
             output = pg.build(self.plan, "windows-amd64", self.root / "archive", self.root / "output", windows_tools=tools)
         pg.check_layout(output, "windows-amd64")
         metadata = json.loads((output / "native-build.json").read_text())
@@ -280,7 +286,7 @@ class NativePostgresTest(unittest.TestCase):
                 patch.object(pg.shutil, "which", return_value=None), self.assertRaisesRegex(ValueError, "MSVC developer"):
             pg.build_windows(self.plan, self.root, self.root, self.root, {}, tools, 2)
         with patch.object(pg, "run", side_effect=["1.2.3"] * 5 + ["MSWin32", None, '{"host":{"c":{"id":"gcc"}}}']), \
-                patch.object(pg.shutil, "which", return_value="cl.exe"), self.assertRaisesRegex(ValueError, "select native MSVC"):
+                patch.object(pg.shutil, "which", return_value=str(self.msvc)), self.assertRaisesRegex(ValueError, "select native MSVC"):
             pg.build_windows(self.plan, self.root, self.root, self.root, {}, tools, 2)
 
     def test_windows_layout_and_pe_closure_require_exe_tools_and_colocated_libraries(self):
