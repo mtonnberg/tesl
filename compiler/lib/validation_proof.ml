@@ -11,11 +11,18 @@ open Validation_structural
 
 let build_initial_proof_env (params : binding list) : proof_env =
   List.filter_map (fun (b : binding) ->
-    match b.proof_ann with
-    (* A proof-carrying parameter's declared proof is ASSUMED inside the body;
-       sound because every call site discharges it (proof_matches). *)
-    | Some proof -> Some (b.name, [Proof_kernel.assume_param proof])
-    | None -> None
+    (* A proof-carrying parameter's declared proof is assumed inside the body;
+       every call site discharges it. A detached Fact parameter also carries
+       evidence, indexed by its original subjects rather than the holder's name.
+       Keep it on the holder: having p : Fact (P n) does not implicitly attach P
+       to the raw parameter n. Optional facts need branch elimination first. *)
+    let detached = match b.type_expr with
+      | TApp {head=TName {name="Fact"; _}; arg; _} ->
+        Option.to_list (type_expr_to_proof_expr arg)
+      | _ -> [] in
+    match Option.to_list b.proof_ann @ detached with
+    | [] -> None
+    | proofs -> Some (b.name, List.map Proof_kernel.assume_param proofs)
   ) params
 
 let build_initial_subject_env (params : binding list) : subject_env =

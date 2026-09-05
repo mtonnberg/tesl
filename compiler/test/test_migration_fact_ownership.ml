@@ -144,6 +144,65 @@ establish forge(n: Int) -> Fact (InBounds 1 100 n) =
     (List.exists (fun (e : Type_system.type_error) -> contains "fact ownership violation" e.message &&
       contains "NotesSchema.VCurrent.InBounds" e.message) errors))
 
+let detached_fact_forwarding () = with_project (fun _ write ->
+  setup write;
+  let path = write "app.tesl" (importer "App" "VCurrent" {|
+fn retain(n: Int, proof: Fact (InBounds 1 100 n)) -> Fact (InBounds 1 100 n) =
+  proof
+fn alias(n: Int, proof: Fact (InBounds 1 100 n)) -> Fact (InBounds 1 100 n) =
+  let kept = proof
+  kept
+fn choose(n: Int, first: Fact (InBounds 1 100 n), second: Fact (InBounds 1 100 n), preferFirst: Bool)
+  -> Fact (InBounds 1 100 n) =
+  if preferFirst then
+    first
+  else
+    second
+fn relay(n: Int, proof: Fact (InBounds 1 100 n)) -> Fact (InBounds 1 100 n) =
+  retain n proof
+|}) in
+  accepted path)
+
+let detached_fact_refusals () = with_project (fun _ write ->
+  setup write;
+  List.iter (fun (label, body) ->
+    let path = write "app.tesl" (importer "App" "VCurrent" body) in
+    let errors = Compile.check_file path |> List.filter (fun (d : Compile.diagnostic) -> d.severity = "error") in
+    check bool ("cannot reuse a Fact by " ^ label) true (errors <> [])) [
+    "changing its subject", {|
+fn swap(n: Int, m: Int, proof: Fact (InBounds 1 100 n)) -> Fact (InBounds 1 100 m) =
+  proof
+|};
+    "changing its lower bound", {|
+fn strengthen(n: Int, proof: Fact (InBounds 1 100 n)) -> Fact (InBounds 2 100 n) =
+  proof
+|};
+    "changing its upper bound", {|
+fn strengthen(n: Int, proof: Fact (InBounds 1 100 n)) -> Fact (InBounds 1 99 n) =
+  proof
+|};
+    "implicitly attaching it to a raw value", {|
+fn unattached(n: Int, proof: Fact (InBounds 1 100 n)) -> n: Int ::: InBounds 1 100 n =
+  n
+|};
+    "returning a fresh constructor", {|
+fn fabricate(n: Int, proof: Fact (InBounds 1 100 n)) -> Fact (InBounds 1 100 n) =
+  InBounds 1 100 n
+|};
+    "treating an optional proof as present", {|
+fn unwrap(n: Int, proof: Maybe (Fact (InBounds 1 100 n))) -> Fact (InBounds 1 100 n) =
+  proof
+|};
+    "using the wrong branch's proof", {|
+fn choose(n: Int, m: Int, first: Fact (InBounds 1 100 n), second: Fact (InBounds 1 100 m), preferFirst: Bool)
+  -> Fact (InBounds 1 100 n) =
+  if preferFirst then
+    first
+  else
+    second
+|};
+  ])
+
 let retained_editor_checks () =
   let enabled = !Query_cache.enabled in
   Query_cache.set_enabled true;
@@ -161,5 +220,7 @@ let () = run "migration-fact-ownership" ["sealed producers", [
   test_case "declaring owner and ordinary proof forwarding remain valid" `Quick owner_and_forwarding;
   test_case "ordinary library facts retain the same ownership rule" `Quick ordinary_library_ownership;
   test_case "qualified compiler AST cannot bypass ownership" `Quick qualified_lowered_predicate;
+  test_case "ordinary functions forward received detached facts" `Quick detached_fact_forwarding;
+  test_case "detached facts retain their subjects, bounds and presence" `Quick detached_fact_refusals;
   test_case "retained editor query checks preserve ownership" `Quick retained_editor_checks;
 ]]
