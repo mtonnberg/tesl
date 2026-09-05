@@ -21,6 +21,7 @@ import zipfile
 
 from module_proxy import verify as verify_module_bundle
 from payload_audit import audit
+from macos_distribution import sign_payload as sign_macos_payload
 
 
 DIRECTORIES = {"stdlib", "templates", "doc", "go-modules", "licenses"}
@@ -224,6 +225,8 @@ def assemble(plan, root, target, compiler, frontends, go_root, postgres, module_
                 raise ValueError(f"missing payload component: {name}")
         normalize_modes(stage)
         evidence = audit(stage, plan, target)
+        if target.startswith("darwin-"):
+            evidence["macos_signatures"] = sign_macos_payload(stage, evidence, plan.get("releasePolicy", {}))
         write_json(stage / "share/tesl/payload-audit.json", evidence)
         normalize_modes(stage)
         write_json(stage / "share/tesl/payload-inventory.json", {

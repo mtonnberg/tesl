@@ -261,6 +261,8 @@ class DistributionTests(unittest.TestCase):
         result = distribution.build(value, self.root, "darwin-arm64", self.root / "modules", self.output)
         self.assertEqual(result["network_isolation"], "not-tested")
         self.assertEqual(result["minimum_os_runtime"], "not-established")
+        self.assertEqual(result["signed_distribution"], "ad-hoc-by-policy")
+        self.assertEqual(result["quarantined_download"], "not-tested")
         self.assertTrue(all(environment["MACOSX_DEPLOYMENT_TARGET"] == "13" for _, environment in calls))
 
     def test_windows_and_existing_output_fail_before_build(self):

@@ -227,14 +227,16 @@ function makeVscode(files, debugCalls, taskCalls, workspacePath = repoRoot, opti
   };
 }
 
-function loadExtension(vscode) {
+function loadExtension(vscode, languageClients) {
   const originalLoad = Module._load;
   Module._load = function (request, parent, isMain) {
     if (request === "vscode") return vscode;
     if (request === "vscode-languageclient/node") {
       return {
         LanguageClient: class {
-          constructor() {}
+          constructor(id, name, serverOptions, clientOptions) {
+            languageClients.push({ id, name, serverOptions, clientOptions });
+          }
           start() { return Promise.resolve(); }
           stop() { return Promise.resolve(); }
         },
@@ -255,8 +257,9 @@ async function activateWithFile(file, cleanup, workspacePath = repoRoot, options
   const uri = Uri.file(file);
   const debugCalls = [];
   const taskCalls = [];
+  const languageClients = [];
   const host = makeVscode([uri], debugCalls, taskCalls, workspacePath, options);
-  const extension = loadExtension(host.vscode);
+  const extension = loadExtension(host.vscode, languageClients);
   const context = { extensionPath: __dirname, subscriptions: { push() {} } };
   extension.activate(context);
   await new Promise((resolve) => setImmediate(resolve));
@@ -266,6 +269,7 @@ async function activateWithFile(file, cleanup, workspacePath = repoRoot, options
     uri,
     debugCalls,
     taskCalls,
+    languageClients,
     cleanup: cleanup || (() => {}),
   };
 }
@@ -802,6 +806,63 @@ function installedToolFixture(directory) {
   return { toolchainRoot: root };
 }
 
+async function testManagedSelectionPinsLanguageServerDebuggerAndTasksUntilReload() {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "tesl-managed-editor-"));
+  const root = path.join(directory, "managed å");
+  const configuration = { toolchainRoot: root };
+  const file = path.join(directory, "app.tesl");
+  fs.writeFileSync(file, "module App exposing []\n");
+  const suffix = process.platform === "win32" ? ".exe" : "";
+  const versions = ["0.3.1", "0.3.2"];
+  for (const version of versions) {
+    const inputs = path.join(directory, version);
+    fs.mkdirSync(inputs);
+    const portable = installedToolFixture(inputs).toolchainRoot;
+    const manifestPath = path.join(portable, "share", "tesl", "toolchain.json");
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    manifest.toolchain_version = version;
+    for (const item of Object.values(manifest.components)) item.version = version;
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+    fs.mkdirSync(path.join(root, "versions"), { recursive: true });
+    fs.renameSync(portable, path.join(root, "versions", version));
+  }
+  fs.mkdirSync(path.join(root, "bin"));
+  for (const name of ["tesl", "tesl-lsp", "tesl-dap"]) {
+    fs.writeFileSync(path.join(root, "bin", name + suffix), "managed shim", { mode: 0o755 });
+  }
+  fs.writeFileSync(path.join(root, ".tesl-install.json"), JSON.stringify({
+    version: 1, kind: "tesl-managed-installation", launcher_sha256: "a".repeat(64),
+  }));
+  const select = (version) => fs.writeFileSync(path.join(root, "state.json"), JSON.stringify({
+    version: 1, active_version: version, previous_version: "", generation: versions.indexOf(version) + 1,
+  }));
+  const activate = () => activateWithFile(file, undefined, directory, { enableTests: false, configuration });
+  try {
+    select(versions[0]);
+    const fixture = await activate();
+    assert.equal(fixture.languageClients.length, 1);
+    const lsp = fixture.languageClients[0].serverOptions;
+    assert.equal(lsp.command, path.join(root, "bin", "tesl-lsp" + suffix));
+    assert.equal(lsp.options.env.TESL_INSTALL_VERSION, versions[0]);
+    select(versions[1]);
+    await fixture.commands.get("tesl.runTests")(fixture.uri);
+    const task = fixture.taskCalls[0].task.execution;
+    assert.equal(task.process, path.join(root, "bin", "tesl" + suffix));
+    assert.equal(task.options.env.TESL_INSTALL_VERSION, versions[0]);
+    assert.equal(task.options.env.TESL_COMPILER, path.join(root, "versions", versions[0], "bin", "compiler" + suffix));
+    const dap = fixture.debugFactories[0].createDebugAdapterDescriptor({ configuration: { program: file } });
+    assert.equal(dap.command, path.join(root, "bin", "tesl-dap" + suffix));
+    assert.equal(dap.options.env.TESL_INSTALL_VERSION, versions[0]);
+    assert.equal(dap.options.env.TESL_COMPILER, task.options.env.TESL_COMPILER);
+    const reloaded = await activate();
+    assert.equal(reloaded.languageClients[0].serverOptions.options.env.TESL_INSTALL_VERSION, versions[1]);
+    await reloaded.commands.get("tesl.runTests")(reloaded.uri);
+    assert.equal(reloaded.taskCalls[0].task.execution.options.env.TESL_INSTALL_VERSION, versions[1]);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+}
+
 function testManifestRequiresTrustForExecution() {
   const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, "package.json"), "utf8"));
   assert.deepStrictEqual(manifest.capabilities.untrustedWorkspaces, {
@@ -834,3 +895,4 @@ test("terminal commands pass adversarial POSIX and Windows values as argv", test
 test("function input is an argv value and temporary cleanup does not use a shell", testFunctionInputUsesArgumentsAndFilesystemCleanup);
 test("untrusted workspaces cannot execute Tesl tasks or debug sessions", testUntrustedWorkspaceCannotExecute);
 test("manifest requires Workspace Trust for execution commands", testManifestRequiresTrustForExecution);
+test("managed installations pin LSP, debugger and tasks until editor reload", testManagedSelectionPinsLanguageServerDebuggerAndTasksUntilReload);

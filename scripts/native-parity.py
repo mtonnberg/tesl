@@ -75,7 +75,7 @@ def main():
     if reported.splitlines()[:1] != ["tesl " + version]:
         raise SystemExit("native CLI does not report the exported toolchain version")
     environment["TESL_PROCESS_RUNNER"] = str(cli)
-    targets = ["bin/main.exe", "test/test_completion.exe", "test/test_import_cache.exe", "test/test_workspace_session.exe", "test/test_process_runner.exe", "test/test_diagnostics.exe", "test/test_stdlib_docs.exe"]
+    targets = ["bin/main.exe", "test/test_completion.exe", "test/test_import_cache.exe", "test/test_workspace_session.exe", "test/test_workspace_index.exe", "test/test_process_runner.exe", "test/test_diagnostics.exe", "test/test_stdlib_docs.exe"]
     run(["opam", "exec", "--", "dune", "build", *targets], root / "compiler", environment)
     checks = [(target, ["opam", "exec", "--", "dune", "exec", target], root / "compiler")
               for target in targets[1:]]

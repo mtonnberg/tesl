@@ -147,14 +147,26 @@ network namespace with loopback only, retaining a non-root UID for PostgreSQL.
 
 Outputs are the versioned `.tar.gz`/`.zip`, its `.sha256`, and `distribution-checks.json`.
 They are unsigned CI candidates. Archive metadata is normalized, but complete
-cross-host reproducibility, signing, installers, upgrades and publication remain
-separate acceptance gates. Windows signing is explicitly optional: the initial
-delivery is unsigned. macOS network isolation and execution on the minimum OS
+cross-host reproducibility, installers, upgrades and publication remain
+separate acceptance gates. Windows Authenticode and macOS Developer ID signing /
+notarization are explicitly optional under the maintainer's 2026-09-05 policy.
+Windows delivery is unsigned; macOS delivery is an ad-hoc signed native archive,
+with Nix recommended for macOS users. macOS network isolation and execution on the minimum OS
 remain separate gates. Native Windows packaging includes MSVC PostgreSQL, the
 verified-source OCaml compiler, and a PE/DLL audit. Required compiler runtime DLLs
 come only from the active Visual Studio redistributable directory, retain their
 Microsoft signatures, and include hashes, versions, and the pinned license text.
 The evidence records these limits instead of claiming a finished release.
+
+On macOS, assembly ad-hoc signs every audited Mach-O executable and library with
+`codesign --sign - --timestamp=none`, then verifies every signature before recording
+file inventories and archive checksums. It needs no keychain identity, Apple
+account, or notarization service. Evidence records `publisher_identity: false`
+and `notarized: false`; the catalog requires this evidence without treating it as
+Developer ID signing. Failed ad-hoc signing/verification still fails assembly.
+Quarantined-download acceptance remains separately recorded; it must not be
+reported as passed merely because command-line execution on a CI runner passes.
+See `INSTALL.md` for checksums, executable paths, and first-launch guidance.
 
 ## Native Windows source build
 
@@ -225,4 +237,6 @@ TESL_RELEASE_PLAN="$PWD/release-plan" go -C runtime/go test ./internal/toolchain
 Native CI runs both sets of checks and preserves the exact plan with its
 per-platform evidence. Future publishers must additionally require a clean,
 authorized source ref, the complete matrix, offline installation and dependency
-audits, and provenance/signing gates before making any release visible.
+audits, and provenance before making any release visible. OS signing follows the
+explicit per-platform policy; missing paid signing credentials do not block
+unsigned Windows or ad-hoc macOS releases.

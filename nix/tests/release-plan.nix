@@ -54,6 +54,9 @@ let
     windows-archive = plan.payloads.windows-amd64.archiveName == "tesl-${version}-windows-amd64.zip";
     windows-setup = plan.payloads.windows-amd64.installerName == "tesl-${version}-setup-windows-amd64.exe";
     windows-signing-optional = plan.releasePolicy.windowsSigning == "optional";
+    macos-signing-optional = plan.releasePolicy.macOSSigning == "optional"
+      && plan.releasePolicy.macOSDistribution == "ad-hoc-portable-archive"
+      && plan.releasePolicy.macOSRecommendedInstall == "nix";
     windows-compiler-inputs = builtins.attrNames plan.windowsCompilerSources == [ "flexdll" "winpthreads" ]
       && plan.windowsCompilerSources.flexdll.version == "0.44"
       && plan.windowsCompilerSources.winpthreads.hashMode == "flat";

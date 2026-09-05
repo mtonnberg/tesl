@@ -1,9 +1,45 @@
 # Installing Tesl
 
-**Tesl is beta.** Expect breaking changes. Nix is the established Linux/macOS
-installation path. Native archives and the Windows setup executable are being
+**Tesl is beta.** Expect breaking changes. Nix is the recommended macOS and
+established Linux installation path. Native archives and the Windows setup executable are being
 validated in CI; use a candidate only when its native installation checks pass.
 Marketplace publication remains separate from installing the toolchain.
+
+## Native macOS candidates
+
+Use Nix below for the recommended macOS installation. If you prefer to avoid Nix,
+download the complete native archive and its matching `.sha256`: `darwin-arm64`
+for Apple Silicon, or `darwin-amd64` for Intel. They contain the compiled
+executables, Go SDK, managed PostgreSQL, and resources; no development toolchain
+is required. Until release publication is enabled, downloads are CI previews in
+a successful **Native portability** run's `native-candidate-darwin-*` artifact.
+
+Replace `<version>` and select your architecture before running these commands
+in the download directory:
+
+```sh
+archive='tesl-<version>-darwin-arm64.tar.gz'
+shasum -a 256 -c "$archive.sha256" && tar -xzf "$archive"
+```
+
+Continue only after checksum verification and extraction succeed:
+
+```sh
+./tesl-<version>-darwin-arm64/bin/tesl doctor
+./tesl-<version>-darwin-arm64/bin/tesl init myapi --yes
+```
+
+Keep the extracted directory together and add its absolute `bin` directory to
+your PATH, or configure the editor's `tesl.toolchainRoot` to that directory.
+Copying only `bin/tesl` omits the compiler and runtime resources.
+
+These downloads have **no Developer ID signature or Apple notarization**. The
+binaries use ad-hoc signatures for execution integrity; these do not establish
+publisher identity. macOS may block their first launch. After verifying the
+download and deciding to trust it, use Apple's per-app **Privacy & Security →
+Open Anyway** procedure, described in [Apple's opening guidance](https://support.apple.com/en-us/102445).
+Bundled tools may prompt separately. Nix is the recommended alternative if that
+friction is undesirable. Signing accounts are not required for native downloads.
 
 ## Native Windows candidates
 

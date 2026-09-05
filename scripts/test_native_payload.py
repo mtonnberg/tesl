@@ -63,13 +63,43 @@ def fixture(target="linux-amd64"):
 
 
 def assemble(arguments):
-    with patch.object(payload, "audit", return_value={"version": 1, "test_only": True}) as audit:
+    with patch.object(payload, "audit", return_value={"version": 1, "test_only": True}) as audit, \
+            patch.object(payload, "sign_macos_payload", return_value={"mode": "ad-hoc", "test_only": True}):
         payload.assemble(*arguments)
         audit.assert_called_once()
     return arguments[-1]
 
 
 class NativePayloadTest(unittest.TestCase):
+    def test_macos_signing_precedes_inventory_and_archive_checksums(self):
+        with fixture("darwin-arm64") as args:
+            def sign(root, audit, policy):
+                self.assertFalse((root / "share/tesl/payload-inventory.json").exists())
+                (root / "bin/tesl").write_bytes(b"final signed executable")
+                return {"mode": "ad-hoc", "verification": "passed"}
+            with patch.object(payload, "audit", return_value={"version": 1}), \
+                    patch.object(payload, "sign_macos_payload", side_effect=sign):
+                payload.assemble(*args)
+            root = args[-1]
+            inventory = json.loads((root / "share/tesl/payload-inventory.json").read_text())
+            self.assertEqual(inventory["files"]["bin/tesl"]["sha256"], payload.file_hash(root / "bin/tesl"))
+            audit = json.loads((root / "share/tesl/payload-audit.json").read_text())
+            self.assertEqual(audit["macos_signatures"]["mode"], "ad-hoc")
+            archive = args[1] / args[0]["payloads"][args[2]]["archiveName"]
+            payload.pack(args[0], args[2], root, archive)
+            with tarfile.open(archive) as stream:
+                file = stream.extractfile(archive.name.removesuffix(".tar.gz") + "/bin/tesl")
+                self.assertEqual(file.read(), b"final signed executable")
+
+    def test_macos_signing_failure_does_not_leave_a_candidate(self):
+        with fixture("darwin-arm64") as args:
+            with patch.object(payload, "audit", return_value={"version": 1}), \
+                    patch.object(payload, "sign_macos_payload", side_effect=ValueError("signing failed")):
+                with self.assertRaisesRegex(ValueError, "signing failed"):
+                    payload.assemble(*args)
+            self.assertFalse(args[-1].exists())
+            self.assertEqual(list(args[1].glob(".tesl-payload-*")), [])
+
     def test_compiler_runtime_accepts_only_exact_recorded_dll_bytes(self):
         with fixture("windows-amd64") as args:
             plan, root, _, compiler = args[:4]

@@ -55,13 +55,27 @@ Implemented so far:
   local build and authenticated HTTP; Linux uses a loopback-only network namespace.
   See [`nix/RELEASES.md`](../../nix/RELEASES.md) for commands and evidence limits.
   Local source builds and workflow tests pass; candidate platform CI is still
-  required, and opam compiler source pinning remains incomplete.
+  required. OCaml and Dune now build from their verified source pins as well.
+- The user-prefix installer validates checksums, manifests and archive contents,
+  stages immutable versions, and supports selection, rollback and owned-file
+  uninstall. Process leases protect active versions, including persistent managed
+  PostgreSQL. The editor discovers managed installations and pins its selected
+  version until reload. Unit and real PostgreSQL lease tests pass locally.
+- Windows now has a source-build pipeline and self-contained setup executable;
+  those additions still require native CI execution. The release catalog checks
+  exact source/artifact/gate identities and complete matrices, but publication
+  and external attestation verification are not yet connected.
+- Distribution policy, 2026-09-05: Windows ships unsigned setup/ZIP downloads;
+  macOS offers ad-hoc signed native archives and recommends Nix. Developer ID,
+  notarization and Authenticode are optional future improvements, not account
+  prerequisites or roadmap completion blockers. Checksums and provenance remain
+  required, and documentation explains first-launch prompts.
 
 The native CLI is not yet the default Nix CLI: the existing full gate must pass
 before that cutover. Native parity CI now includes Linux/macOS candidate assembly
-and installed-workflow gates; Windows still has source parity only. It does not
+and installed-workflow gates; Windows packaging checks await their first run. It does not
 publish releases. M2–M4 remain open, including complete native
-dependency closure, scanner parity, signing, provenance, and install/upgrade tests.
+dependency closure, scanner parity, provenance, and native install/upgrade tests.
 
 Let Linux and macOS users download one Tesl toolchain and reach a running API
 without installing Nix or a development toolchain. Keep Nix as the authoritative
@@ -70,7 +84,7 @@ formats from that definition instead of maintaining separate products.
 
 ## Current state and packaging gap
 
-[`INSTALL.md`](../../INSTALL.md) documents Nix as the only supported installation.
+[`INSTALL.md`](../../INSTALL.md) recommends Nix and documents native CI candidates.
 The [`flake`](../../flake.nix) builds an OCaml compiler, Go LSP/DAP/MCP/debug tools,
 templates, and a Bash CLI assembled from
 [`tesl-cli-body.sh`](../../nix/tesl-cli-body.sh).
@@ -120,7 +134,7 @@ scanner bundling is selected, measure its size and startup effects explicitly.
 | Target | First-class delivery |
 |---|---|
 | Linux x86-64 and ARM64, on a declared glibc baseline | Relocatable `.tar.gz`, a user-prefix installer, and generated `.deb`/`.rpm` wrappers around the tested payload |
-| macOS Apple Silicon and Intel, on declared minimum OS versions | Signed/notarized distribution and an upstream Homebrew tap using the same tested payload |
+| macOS Apple Silicon and Intel, on declared minimum OS versions | Nix recommended; ad-hoc signed native downloads and an upstream Homebrew tap using the same tested payload |
 | Source builders | Exact-revision source plus lock files and documented Nix build/test/package commands |
 
 Choose the oldest supported OS/ABI baselines in M0 based on actual compiler,
@@ -215,11 +229,13 @@ replacement without implicit database-major-version migration.
   and [GitHub artifact-attestation verification](https://docs.github.com/en/actions/how-tos/secure-your-work/use-artifact-attestations/use-artifact-attestations).
   Installer automation validates the expected repository/workflow identity as
   well as the digest before activating a payload.
-- On macOS, sign the applicable nested executables and distribution container,
-  then notarize/staple as supported by the chosen format. Test downloaded,
-  quarantined artifacts under normal Gatekeeper settings, following
-  [Apple's distribution guidance](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution).
-  Signing credentials are an explicit release prerequisite.
+- macOS initially ships ad-hoc signed native archives, per the maintainer's
+  2026-09-05 decision. Nix remains the recommended route. Ad-hoc sign and verify
+  each native executable/library before hashing the final payload; this needs no
+  certificate. Developer ID signing and notarization are optional future work.
+  Record quarantined-download behavior separately and document first-launch
+  prompts using [Apple's opening guidance](https://support.apple.com/en-us/102445).
+  Do not claim publisher identity or notarization for ad-hoc signatures.
 - Windows initially ships unsigned setup executables and portable ZIPs with
   SHA-256 checksums and provenance, per the maintainer's 2026-09-05 decision.
   Windows code signing is optional future work; its absence does not fail a
@@ -239,15 +255,17 @@ replacement without implicit database-major-version migration.
   managed PostgreSQL, Go module acquisition, Docker, DAST, and debugger launches.
 - [ ] Select tested OS/ABI baselines, payload layout, version/channel rules, and
   native-runner export schema. Measure candidate download and installed sizes.
-- [ ] Record the unsigned-payload reproducibility target and signing/account
-  prerequisites. Define a maximum artifact size from the measured prototype.
+- [x] Record the no-account distribution policy: unsigned Windows, ad-hoc macOS,
+  Nix recommended on macOS; paid signing is optional.
+- [ ] Record the payload reproducibility target and define a maximum artifact
+  size from the measured prototype.
 
 Exit: every dependency is bundled, embedded, an OS baseline dependency, or an
 explicit optional integration. No unresolved dependency in the default quick start.
 
 ### M1 — Share portable execution and discovery
 
-- [ ] Implement the Go CLI and installation-relative tool/resource discovery.
+- [x] Implement the Go CLI and installation-relative tool/resource discovery.
 - [ ] Port lifecycle, database, watch, test/mutation, build, and debug behavior
   using the parity fixtures; preserve machine-readable command contracts.
 - [ ] Switch Nix to the same implementation after the existing gate passes.
@@ -274,9 +292,9 @@ database, plus watch/restart, build-context staging, LSP/MCP startup, and a debu
 ### M3 — Automate trustworthy per-revision releases
 
 - [ ] Extend CI with exact-revision platform gates, payload identity checks,
-  signing/notarization, checksums, provenance, and complete-matrix publication.
+  declared signing policy, checksums, provenance, and complete-matrix publication.
 - [ ] Exercise duplicate runs, an older run finishing late, a failed architecture,
-  signing failure, corrupt downloads, and interrupted upgrades.
+  ad-hoc signing/verification failure, corrupt downloads, and interrupted upgrades.
 - [ ] Publish rebuild instructions and verify an independent unsigned rebuild.
 
 Exit: a successful new `main` revision produces one complete verifiable release

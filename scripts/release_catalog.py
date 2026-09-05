@@ -261,6 +261,24 @@ def build_catalog(plan, artifacts_root, records):
                     blockers.append(f"{gate}/{target}: Windows signing policy/evidence differs")
                 checks[gate][target] = {"status": "not-required", "reason": "declared platform policy"}
                 continue
+            if gate == "signed-distribution" and policy.get("macOSDistribution") == "ad-hoc-portable-archive":
+                audit = distribution["payload_audit"]
+                signatures = audit.get("macos_signatures", {})
+                binaries = signatures.get("binaries", [])
+                paths = [row.get("path") for row in binaries if isinstance(row, dict)] if isinstance(binaries, list) else []
+                valid = (policy.get("macOSSigning") == "optional"
+                         and distribution.get("signed_distribution") == "ad-hoc-by-policy"
+                         and signatures.get("mode") == "ad-hoc" and signatures.get("verification") == "passed"
+                         and signatures.get("publisher_identity") is False and signatures.get("notarized") is False
+                         and len(paths) == len(audit["binaries"]) and len(set(paths)) == len(paths)
+                         and set(paths) == {row["path"] for row in audit["binaries"]}
+                         and all(isinstance(row, dict) and isinstance(row.get("sha256"), str)
+                                 and HEX.fullmatch(row["sha256"]) for row in binaries))
+                reason = "Developer ID and notarization are optional; ad-hoc signatures verified" if valid else "macOS ad-hoc policy/evidence differs"
+                checks[gate][target] = {"status": "not-required" if valid else "blocked", "reason": reason}
+                if not valid:
+                    blockers.append(f"{gate}/{target}: {reason}")
+                continue
             reason = check_receipt(gate, target, supplied.get(target), plan, source,
                                    expected_subjects(gate, target, targets, inventory))
             if gate == "offline-install":
@@ -275,7 +293,7 @@ def build_catalog(plan, artifacts_root, records):
                     or distribution.get("quarantined_download") != "passed"):
                 reason = "macOS signing, notarization and quarantined-download acceptance are incomplete"
             if gate == "signed-distribution" and policy.get("macOSDistribution", "signed-notarized") != "signed-notarized":
-                reason = "macOS preview/source-only policy does not authorize a signed public release"
+                reason = "unsupported macOS distribution policy"
             checks[gate][target] = {"status": "passed" if reason is None else "blocked", "receipt": supplied.get(target)}
             if reason is not None:
                 checks[gate][target]["reason"] = reason

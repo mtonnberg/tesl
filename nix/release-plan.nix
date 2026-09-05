@@ -102,5 +102,8 @@ in rec {
     };
     windowsSigning = "optional";
     windowsDistribution = "unsigned-setup-and-portable-zip";
+    macOSSigning = "optional";
+    macOSDistribution = "ad-hoc-portable-archive";
+    macOSRecommendedInstall = "nix";
   };
 }

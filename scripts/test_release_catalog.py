@@ -140,6 +140,58 @@ class ReleaseCatalogTests(unittest.TestCase):
         self.assertNotEqual(catalog["checks"]["signed-distribution"]["windows-amd64"]["status"], "passed")
         self.assertEqual(release.canonical(catalog), release.canonical(self.build()))
 
+    def use_ad_hoc_macos(self):
+        self.plan["releasePolicy"].update(macOSSigning="optional", macOSDistribution="ad-hoc-portable-archive",
+                                          macOSRecommendedInstall="nix")
+        for target in ("darwin-amd64", "darwin-arm64"):
+            def change(row):
+                row.update(signed_distribution="ad-hoc-by-policy", quarantined_download="not-tested")
+                row["payload_audit"]["macos_signatures"] = {
+                    "mode": "ad-hoc", "verification": "passed", "publisher_identity": False, "notarized": False,
+                    "binaries": [{"path": item["path"], "sha256": "7" * 64} for item in row["payload_audit"]["binaries"]]}
+            self.change(target, "distribution", change)
+
+    def test_explicit_ad_hoc_macos_policy_allows_release_without_signing_account(self):
+        self.use_ad_hoc_macos()
+        self.receipts()
+        del self.records["checks"]["signed-distribution"]
+        catalog = self.build()
+        self.assertEqual(catalog["eligibility"], {"publish_eligible": True, "blockers": []})
+        for target in ("darwin-amd64", "darwin-arm64"):
+            self.assertEqual(catalog["checks"]["signed-distribution"][target]["status"], "not-required")
+            self.assertEqual(catalog["targets"][target]["distribution_result"]["quarantined_download"], "not-tested")
+
+    def test_optional_macos_signing_does_not_bypass_other_release_gates(self):
+        self.use_ad_hoc_macos()
+        self.change("darwin-arm64", "distribution", lambda row: row.update(network_isolation="not-tested", minimum_os_runtime="not-established"))
+        self.receipts()
+        del self.records["checks"]["provenance"]["darwin-arm64"]
+        catalog = self.build()
+        self.assertFalse(catalog["eligibility"]["publish_eligible"])
+        for gate in ("offline-install", "minimum-os-runtime", "provenance"):
+            self.assertEqual(catalog["checks"][gate]["darwin-arm64"]["status"], "blocked")
+
+    def test_ad_hoc_evidence_must_cover_every_binary_without_claiming_publisher_identity(self):
+        self.use_ad_hoc_macos()
+        path = self.artifacts / self.records["targets"]["darwin-arm64"]["distribution"]
+        original = path.read_bytes()
+        for change in (lambda row: row.update(signed_distribution="signed-notarized-stapled"),
+                       lambda row: row["payload_audit"]["macos_signatures"].update(verification="failed"),
+                       lambda row: row["payload_audit"]["macos_signatures"].update(publisher_identity=True),
+                       lambda row: row["payload_audit"]["macos_signatures"].update(notarized=True),
+                       lambda row: row["payload_audit"]["macos_signatures"].update(binaries=[]),
+                       lambda row: row["payload_audit"]["macos_signatures"]["binaries"][0].update(sha256="wrong")):
+            path.write_bytes(original)
+            self.change("darwin-arm64", "distribution", change)
+            self.receipts()
+            self.assertEqual(self.build()["checks"]["signed-distribution"]["darwin-arm64"]["status"], "blocked")
+
+    def test_required_macos_signing_policy_cannot_be_satisfied_by_ad_hoc_evidence(self):
+        self.use_ad_hoc_macos()
+        self.plan["releasePolicy"]["macOSSigning"] = "required"
+        self.receipts()
+        self.assertFalse(self.build()["eligibility"]["publish_eligible"])
+
     def test_one_failed_architecture_cannot_produce_a_complete_catalog(self):
         for status in ("failed", "cancelled", "not-tested"):
             with self.subTest(status=status):

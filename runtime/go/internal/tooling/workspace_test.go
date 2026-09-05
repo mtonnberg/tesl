@@ -119,6 +119,9 @@ func TestWorkspaceCapabilityAndRenameFraming(t *testing.T) {
 	if _, _, err = client.QuerySourceJSON(context.Background(), "--type-at-json", path, source, "2", "26"); err != nil {
 		t.Fatalf("five-frame request after rename: %v", err)
 	}
+	if client.Sessions == nil {
+		t.Fatal("workspace queries did not retain a compiler session")
+	}
 	if client.Sessions.starts != 1 {
 		t.Fatalf("session restarted: %d", client.Sessions.starts)
 	}
