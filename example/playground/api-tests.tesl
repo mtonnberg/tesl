@@ -1,0 +1,18 @@
+module ApiTests exposing [GreetingServer]
+
+import Tesl.Prelude exposing [String]
+import Tesl.ApiTest exposing [statusOk]
+import Tesl.Database exposing [Database, Memory]
+
+database Local = Database { entities: [], backend: Memory }
+
+handler get hello() -> String = "Hello from Tesl!"
+api GreetingApi { get "/hello" -> String }
+server GreetingServer for GreetingApi { hello }
+
+api-test "greeting returns successfully" for GreetingServer {
+  let response = get "/hello"
+  expect statusOk response.status
+}
+
+# Add a test for an unknown route here.

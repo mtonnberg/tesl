@@ -1,24 +1,38 @@
-# Tesl — proof-carrying web APIs, for humans and AI agents
+# Tesl — keep building as your codebase grows
 
-**Tesl is a beta-stage language for building web APIs, built for the AI era.** A `check` function
-makes a validated value *carry its proof*, so once data is checked at the boundary the compiler
-structurally prevents whole classes of forgotten-validation and defensive-boilerplate bugs
-downstream. Auth, effects, typed SQL, queues, real-time pub/sub, and AI-agent tools are part of the
-language, not bolted on.
+**Tesl is a language for building backend APIs with a helpful compiler beside you.** Its goal is
+lasting development speed, whether you write the code yourself or work with AI agents. As an
+application grows, its rules should remain easy to change, check and understand.
 
-> **Status: beta.** The guarantees below are compiler-enforced 
-> guarantees with no runtime re-check ([runtime cost](manual/tour.md#runtime-cost)), and the trust
-> boundary is drawn precisely in [`LANGUAGE-SPEC.md` §7](LANGUAGE-SPEC.md). Breaking changes are
-> expected.
+Use an LLM to explore an open-ended problem, and give precise requirements to tools that can
+check them. A human can say “this must be an integer” or “this string must have 3–10 characters
+and include a special character.” Tesl lets you express those requirements as types and
+validation facts, so they become part of the contract that future changes must satisfy.
+
+Facts, strong types and capabilities let you put requirements into code that the compiler checks
+at each use. That gives a reviewer a more focused question: does this contract express the right
+rule, and does the code establishing it deserve our trust? The compiler checks that callers meet
+the encoded requirements, including callers added by an AI agent.
+
+Typed SQL, queues, caching, API tests and observability share an integrated backend runtime.
+Diagnostics explain what needs attention, often with an applicable fix; debugging tools expose
+application state to both people and agents. The aim is less repeated checking and setup, and more
+time spent on the application.
+
+> **Status: beta.** Breaking changes are expected. Proofs check encoded requirements; they do not
+> establish that your requirements or trusted validation logic are correct. See the
+> [trust boundary](LANGUAGE-SPEC.md) and [runtime costs](manual/tour.md#runtime-cost).
 
 ## Playground
 
-See the compiler in action [Playground](https://mtonnberg.github.io/tesl/index.html).
+[Try Tesl in your browser](https://mtonnberg.github.io/tesl/index.html), or go straight to
+[an invoice that needs a customer check](https://mtonnberg.github.io/tesl/index.html?guide=customer).
+The guided example shows a rule the compiler can keep checking as callers change.
 
 ## The 60-second version
 
-A `fact` is a named claim about a value. A `check` is the only way to introduce one. Ask for a proof
-you have not earned, and the compiler stops you:
+A `fact` is a named claim about a value. A `check` can validate that claim and return evidence
+for callers to use. Ask for evidence you have not established, and the compiler explains what is missing:
 
 ```tesl
 fact ValidTitle (title: String)
@@ -45,10 +59,14 @@ Hint: validate `rawTitle` with a check function that establishes `ValidTitle raw
   read more: tesl help manual best-practices#proof-management  (explain: tesl help V001)
 ```
 
-That error is the language selling itself. **Every diagnostic carries a stable code**, a precise
-span, a manual deep-link, and often a machine-applicable fix — `tesl explain V001` tells you the
-whole story and `tesl help codes` lists every code the compiler can emit. It is also why Tesl suits
-an AI coding agent: the compiler, not a human reviewer, is the thing that says no.
+The diagnostic points to the call and explains the missing requirement. Stable codes, source
+locations and available fixes give people and AI agents a concrete next step. Use `tesl explain V001`
+for more context, or `tesl help codes` to explore diagnostic codes.
+
+In a larger PR, review the meaning of `ValidTitle`, the implementation of `checkTitle`, and any
+changes to those boundaries. The compiler checks that callers of `saveTitle` supply the evidence
+it requires. You still review other changed behavior and run tests, but you can stop manually
+tracing this particular validation requirement through every caller.
 
 ## Quick start
 
@@ -106,19 +124,19 @@ compiler. `editor/protocol.md` documents the compiler–editor JSON contract the
 
 ## What Tesl is trying to achieve
 
-Most API bugs are not "business logic is hard" bugs. They come from validation being forgotten, auth
-being implicit, effects being hidden, and domain guarantees evaporating a few calls after the
-boundary. So: validate once and carry the result as evidence; put auth requirements in signatures
-instead of middleware folklore; make capabilities and effects explicit; make queues, pub/sub, typed
-SQL, and agent tools part of the language story; and let refactoring preserve guarantees instead of
-silently eroding them.
+Writing the first version quickly is only part of the job. Tesl aims to keep changes manageable
+after the application has acquired more callers, workers, integrations and contributors.
 
-Tesl is deliberately opinionated, and deliberately **not**: a language with many equally valid
-styles; a framework where auth, validation, and effects are runtime wiring; a general-purpose
-language before it is excellent at the web-API problem; or a place where unsafe escape hatches are
-the normal way to get things done. The goal is that a normal programmer asking *"what should I use
-for my next web API?"* can answer *"Tesl"* — because the language makes the correct path the obvious
-path.
+- **Focus review:** facts and types carry domain requirements; capabilities make side effects
+  explicit and follow them through function calls.
+- **Spend less time wiring services:** typed SQL, database-backed queues, caching and SSE share
+  the runtime, with built-in instrumentation for logs, metrics and traces.
+- **Get useful feedback throughout a change:** compiler diagnostics, documentation and property
+  tests, API and load tests, and a debugger that exposes domain state support the same workflow.
+- **Give agents the tools you use:** compact compiler queries, applicable fixes, and runtime
+  inspection let an agent investigate and verify its work.
+
+[Why Tesl?](https://mtonnberg.github.io/tesl/why.html) connects these features to examples you can try.
 
 ## Other features
 

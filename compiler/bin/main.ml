@@ -23,6 +23,8 @@
        tesl --mutate [--backend go] <file> [test-file ...]  run Go mutation testing
       tesl doc [name|Tesl.Module]  show a builtin's Tesl signature / a module's surface
       tesl --doc-json <name>     same, as JSON (editor/agent integration)
+      tesl search [--json] QUERY  discover builtins by name or exact type shape
+      tesl --catalog-json         export the versioned builtin search catalog
       tesl help [manual] [section]  show help and documentation
 *)
 
@@ -61,6 +63,8 @@ Documentation:
                                (e.g. tesl doc Email.send, tesl doc SmtpConfig)
   tesl doc Tesl.<Module>       show a stdlib module's full surface
   tesl --doc-json <name>       same, as JSON (editor/agent integration)
+  tesl search [--json] QUERY  names, descriptions, or types (e.g. 'String -> Int')
+  tesl --catalog-json         structured, versioned builtin catalog
 
 Help:
   tesl help                    show this help message
@@ -1055,6 +1059,22 @@ let () =
      lists the stdlib modules; `--doc-json` is the machine form (LSP hover). *)
   | "doc" :: rest -> handle_doc ~json:false rest
   | "--doc-json" :: rest -> handle_doc ~json:true rest
+  | ["--catalog-json"] -> print_endline (Builtin_search.catalog_json ())
+  | ["--search-json"; query] | ["search"; "--json"; query] ->
+    let result = Builtin_search.search query in
+    print_endline (Builtin_search.response_json result);
+    if Option.is_some result.error then exit 1
+  | ["search"; query] when query <> "--json" ->
+    let result = Builtin_search.search query in
+    (match result.error with
+     | Some message -> Printf.eprintf "search: %s\n" message; exit 1
+     | None ->
+       if result.completion then print_endline "Completions for an unfinished type; keep typing to narrow the results.";
+       List.iter (fun e -> print_endline (Stdlib_docs.render_entry_text e); print_newline ()) result.results;
+       Printf.printf "%d result(s), showing up to %d. Type shape is discovery; proof metadata is unavailable.\n"
+         result.total Builtin_search.limit)
+  | "search" :: _ | "--search-json" :: _ | "--catalog-json" :: _ ->
+    Printf.eprintf "Usage: tesl search [--json] QUERY | tesl --catalog-json\n"; exit 1
   | [] -> print_string usage; exit 1
 
   | ("--check" :: filenames) when filenames <> [] ->

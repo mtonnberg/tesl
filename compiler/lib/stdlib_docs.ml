@@ -2,7 +2,7 @@
     improved_transparency_for_built_in_types).
 
     Single source of renderable Tesl signatures for every builtin type and
-    function — whether declared in Tesl or implemented in Racket.  Serves the
+    function — whether declared in Tesl or implemented in Go. Serves the
     `tesl doc` CLI command, the `--doc-json` editor query, and the LSP hover.
 
     DRIFT-PROOF BY CONSTRUCTION: function/value entries carry only PARAMETER
@@ -223,7 +223,7 @@ let config_entries : entry list =
 
 let family_entries : entry list =
   [ e "TimeZone" ~m:"Tesl.Time"
-      ~kind:(KType "type TimeZone = Utc | FixedOffset Int | Europe_Stockholm | America_New_York | ... (one constructor per IANA zone)")
+      ~kind:(KType "type TimeZone = Utc | FixedOffset Int | EuropeStockholm | AmericaNewYork | ... (one constructor per IANA zone)")
       ~doc:(Printf.sprintf
               "DST-correct IANA time zones — %d zone constructors plus Utc and FixedOffset <minutes>; used with Time.offsetAt / formatTime."
               (List.length Tz_zones.ctor_names));

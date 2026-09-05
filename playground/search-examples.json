@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "examples": [
+    {"id": "validation-title", "title": "Validate a title before accepting it", "path": "example/adoption/validation-title.tesl", "symbols": ["String.length"]},
+    {"id": "strings-lists-ints", "title": "Strings, lists and integers", "path": "example/learn/lesson25-standard-library-strings-lists-ints.tesl", "symbols": ["String.trim", "String.split", "String.join", "String.isEmpty", "String.toUpper", "String.toLower", "List.sort", "Int.divide"]},
+    {"id": "dict-set", "title": "Lookups and unique values", "path": "example/learn/lesson27-either-dict-set.tesl", "symbols": ["Dict.lookup", "Dict.get", "Dict.requireKey", "Dict.singleton", "Dict.filterCheckValues", "Set.fromList", "Set.toList"]}
+  ]
+}

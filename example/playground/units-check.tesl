@@ -1,0 +1,7 @@
+module UnitsCheck exposing [distance]
+
+import Tesl.Units exposing [Speed, Duration, Length]
+
+# Speed multiplied by time gives a distance. Adding them is a mistake.
+fn distance(speed: Speed, elapsed: Duration) -> Length =
+  speed + elapsed

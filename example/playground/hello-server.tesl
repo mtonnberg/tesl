@@ -1,0 +1,21 @@
+module HelloServer exposing [HelloServer]
+
+import Tesl.Prelude exposing [String]
+import Tesl.App exposing [App]
+import Tesl.Database exposing [Database, Memory]
+
+handler get hello() -> String = "Hello from Tesl!"
+
+api HelloApi {
+  get "/hello" -> String
+}
+
+server HelloServer for HelloApi { hello }
+
+# No database service is needed for this example.
+database Local = Database { entities: [], backend: Memory }
+
+# Save as HelloServer.tesl, then run: tesl run HelloServer.tesl
+# In another terminal: curl http://localhost:8086/hello
+main() -> App =
+  App { database: Local, api: HelloServer, port: 8086 }

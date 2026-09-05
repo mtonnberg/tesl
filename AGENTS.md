@@ -43,6 +43,15 @@ Emits (compact, single line):
 
 ## Targeted semantic queries
 
+For builtin discovery, use `tesl search --json 'String -> Int'` or the MCP tool
+`tesl.search` with `{ "query": "String -> Int" }`. Names, modules, descriptions
+and exact type shapes share a compiler-owned search implementation with the
+playground. Results preserve imports, parameter order, nominal types and known
+direct capabilities; proof and callback requirements are not fully indexed.
+Check the actual call with `agent-context`. See
+[`playground/SEARCH.md`](playground/SEARCH.md) for the bounded query grammar.
+Prefer a targeted search over dumping the full `--catalog-json` export.
+
 All take a file (+ a 0-based `LINE COL` where shown) and emit `{"version":1, ...}`.
 Use these for a *specific* question — never dump a whole module into context.
 
