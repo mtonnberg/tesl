@@ -128,6 +128,60 @@ class NativeSourceTest(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     extract_verified(self.metadata, self.archive, self.root / "output")
 
+    def test_omitted_test_links_are_authenticated_without_creating_or_following_them(self):
+        original = extract_verified(self.metadata, self.archive, self.root / "first")
+        (original / "test cases").mkdir()
+        links = {"test cases/link": "../../outside", "test cases/other": "link"}
+        self.metadata.update(hashMode="recursive", hash=sri(nar_hash(original, symlink_targets=links)))
+        entries = self.entries + [("root/" + name, target.encode(), tarfile.SYMTYPE, 0o777)
+                                  for name, target in links.items()]
+        archive_file(self.archive, entries)
+        output = extract_verified(self.metadata, self.archive, self.root / "output",
+                                  omit_symlinks_under=("test cases",))
+        self.assertEqual((output / "nested/data").read_bytes(), b"data")
+        self.assertEqual(list((output / "test cases").iterdir()), [])
+        self.assertFalse((self.root / "outside").exists())
+        # An omitted link is still source: changing its target or name must fail.
+        for changed in (("root/test cases/link", b"other", tarfile.SYMTYPE, 0o777),
+                        ("root/test cases/renamed", b"../../outside", tarfile.SYMTYPE, 0o777)):
+            with self.subTest(changed=changed):
+                archive_file(self.archive, self.entries + [changed, entries[-1]])
+                with self.assertRaisesRegex(ValueError, "tree checksum mismatch"):
+                    extract_verified(self.metadata, self.archive, self.root / "changed",
+                                     omit_symlinks_under=("test cases",))
+                self.assertFalse((self.root / "changed").exists())
+
+    def test_link_omission_is_narrow_and_rejects_link_children_in_either_order(self):
+        self.metadata.update(hashMode="recursive")
+        link = ("root/test cases/link", b"../nested", tarfile.SYMTYPE, 0o777)
+        child = ("root/test cases/link/file", b"data", tarfile.REGTYPE, 0o644)
+        cases = [[("root/runtime/link", b"../nested", tarfile.SYMTYPE, 0o777)],
+                 [("root/test cases/link", b"root/nested/data", tarfile.LNKTYPE, 0o644)],
+                 [link, child], [child, link], [link, link]]
+        for entries in cases:
+            with self.subTest(entries=entries):
+                archive_file(self.archive, self.entries + entries)
+                with self.assertRaisesRegex(ValueError, "unsafe or duplicate|collides"):
+                    extract_verified(self.metadata, self.archive, self.root / "output",
+                                     omit_symlinks_under=("test cases",))
+                self.assertFalse((self.root / "output").exists())
+
+    def test_link_omission_requires_explicit_hash_and_directory_contract(self):
+        for metadata in (self.metadata, dict(self.metadata, hashMode="recursive", stripRoot=False)):
+            with self.assertRaisesRegex(ValueError, "recursive stripRoot"):
+                extract_verified(metadata, self.archive, self.root / "output", omit_symlinks_under=("tests",))
+        for names in ("tests", ("",), (".",), ("..",), ("../tests",), ("tests/links",), ("tests\\links",), (None,)):
+            with self.subTest(names=names), self.assertRaisesRegex(ValueError, "top-level names"):
+                extract_verified(self.metadata, self.archive, self.root / "output", omit_symlinks_under=names)
+
+    def test_virtual_link_metadata_cannot_be_ignored_or_shadow_a_real_file(self):
+        source = extract_verified(self.metadata, self.archive, self.root / "output")
+        for links, message in (({"missing/link": "target"}, "parent is missing"),
+                               ({"nested/data": "target"}, "collides"),
+                               ({"../outside": "target"}, "invalid omitted")):
+            with self.subTest(links=links), self.assertRaisesRegex(ValueError, message):
+                nar_hash(source, symlink_targets=links)
+
     def test_metadata_requires_explicit_supported_hash_semantics(self):
         for key, value in (("hashAlgorithm", "sha512"), ("hashMode", None),
                            ("hashMode", "nar"), ("stripRoot", None), ("stripRoot", "yes")):
@@ -174,6 +228,16 @@ class NativeSourceTest(unittest.TestCase):
         result = subprocess.run(["nix", "--extra-experimental-features", "nix-command",
                                  "hash", "path", str(source)], check=True, capture_output=True, text=True)
         self.assertEqual(result.stdout.strip(), sri(nar_hash(source)))
+        # Nix is the independent oracle for virtual links, including dangling
+        # and directory targets. No Windows symlink privilege is needed to hash.
+        links = {"empty/link": "../nested", "external": "../../missing", "å-link": "å"}
+        for name, target in links.items():
+            (source / name).symlink_to(target)
+        result = subprocess.run(["nix", "--extra-experimental-features", "nix-command",
+                                 "hash", "path", str(source)], check=True, capture_output=True, text=True)
+        for name in links:
+            (source / name).unlink()
+        self.assertEqual(result.stdout.strip(), sri(nar_hash(source, symlink_targets=links)))
 
 
 if __name__ == "__main__":

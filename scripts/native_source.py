@@ -34,17 +34,26 @@ def sha256_file(path):
     return digest.digest()
 
 
-def nar_hash(root, executable_paths=None):
+def nar_hash(root, executable_paths=None, symlink_targets=None):
     """Hash a source tree as Nix's canonical archive, without requiring Nix.
 
     NAR strings have an unsigned little-endian length and zero padding to eight
     bytes. Directory entries sort by filename bytes; only owner executable mode
     affects regular files. executable_paths may provide archive-relative POSIX
     names so Windows verification does not rely on unsupported chmod bits.
-    Our extraction policy excludes links/special files.
+    symlink_targets records explicitly omitted source-test links. Their names
+    and literal targets are hashed without creating or following a symlink.
     """
     root = Path(root)
     digest = hashlib.sha256()
+    symlink_targets = symlink_targets or {}
+    hashed_links = set()
+    virtual_children = {}
+    for name in symlink_targets:
+        path = PurePosixPath(name)
+        if path.is_absolute() or "\\" in name or any(part in ("", ".", "..") for part in name.split("/")):
+            raise ValueError("invalid omitted source link path")
+        virtual_children.setdefault(path.parent.as_posix(), []).append(path.name)
 
     def string(data):
         if isinstance(data, str):
@@ -54,12 +63,23 @@ def nar_hash(root, executable_paths=None):
         digest.update(b"\0" * (-len(data) % 8))
 
     def node(path):
-        mode = path.lstat().st_mode
+        relative = path.relative_to(root).as_posix()
         string("(")
         string("type")
+        if relative in symlink_targets:
+            if path.exists() or path.is_symlink():
+                raise ValueError("omitted source link collides with an extracted entry")
+            string("symlink")
+            string("target")
+            string(symlink_targets[relative])
+            hashed_links.add(relative)
+            string(")")
+            return
+        mode = path.lstat().st_mode
         if stat.S_ISDIR(mode):
             string("directory")
-            for child in sorted(path.iterdir(), key=lambda child: os.fsencode(child.name)):
+            children = list(path.iterdir()) + [path / name for name in virtual_children.get(relative, [])]
+            for child in sorted(children, key=lambda child: os.fsencode(child.name)):
                 for item in ["entry", "(", "name", os.fsencode(child.name), "node"]:
                     string(item)
                 node(child)
@@ -84,6 +104,8 @@ def nar_hash(root, executable_paths=None):
 
     string("nix-archive-1")
     node(Path(root))
+    if hashed_links != symlink_targets.keys():
+        raise ValueError("omitted source link parent is missing")
     return digest.digest()
 
 
@@ -100,14 +122,16 @@ def portable_member(name, previous):
         raise ValueError(f"source archive has a case-insensitive duplicate: {name}")
 
 
-def extract_verified(source, archive, output):
+def extract_verified(source, archive, output, *, omit_symlinks_under=()):
     """Return an extracted source directory, atomically published at output.
 
     source is plan['sources'][component], archive is a local tar file, and output
     must not exist. Recursive hashes authenticate a stripRoot-normalized NAR;
     flat hashes authenticate the original archive bytes. No source code executes
     before the applicable hash has been verified. Links and special files are
-    rejected to keep extraction and later source traversal inside this directory.
+    rejected by default. For recursive stripRoot sources, named top-level test
+    directories may explicitly omit symlinks; the complete original tree,
+    including those link names and targets, must still match the Nix hash.
     """
     archive, output = Path(archive), Path(output)
     expected = digest_bytes(source.get("hash"))
@@ -117,6 +141,12 @@ def extract_verified(source, archive, output):
         raise ValueError("unsupported or missing source hash mode")
     if not isinstance(source.get("stripRoot"), bool):
         raise ValueError("source stripRoot must be explicit")
+    if not isinstance(omit_symlinks_under, (tuple, list)) or any(
+            not isinstance(name, str) or not name or name in (".", "..") or "/" in name or "\\" in name
+            for name in omit_symlinks_under):
+        raise ValueError("omitted symlink directories must be top-level names")
+    if omit_symlinks_under and (source["hashMode"] != "recursive" or not source["stripRoot"]):
+        raise ValueError("omitting source links requires a recursive stripRoot hash")
     if output.exists() or output.is_symlink():
         raise ValueError("source output already exists")
     if archive.stat().st_size > MAX_SOURCE_BYTES:
@@ -129,14 +159,18 @@ def extract_verified(source, archive, output):
         unpacked = Path(temporary) / "unpacked"
         unpacked.mkdir()
         seen, total, executable_paths = set(), 0, set()
+        symlink_targets = {}
         windows_names = set()
         with tarfile.open(archive, "r:*") as stream:
             for member in stream:
                 name = member.name.rstrip("/")
                 path = PurePosixPath(name)
+                omitted_link = (member.issym() and len(path.parts) >= 3
+                                and path.parts[1] in omit_symlinks_under)
                 if (not name or path.is_absolute() or "\\" in name or
                         any(part in ("", ".", "..") for part in name.split("/")) or
-                        name in seen or not (member.isdir() or member.isfile())):
+                        name in seen or not (member.isdir() or member.isfile() or omitted_link)
+                        or any(parent.as_posix() in symlink_targets for parent in path.parents)):
                     raise ValueError(f"unsafe or duplicate source archive member: {member.name}")
                 seen.add(name)
                 if os.name == "nt":
@@ -146,7 +180,12 @@ def extract_verified(source, archive, output):
                 if total > MAX_SOURCE_BYTES:
                     raise ValueError("expanded source archive is too large")
                 destination = unpacked.joinpath(*path.parts)
-                if member.isdir():
+                if omitted_link:
+                    if destination.exists() or destination.is_symlink():
+                        raise ValueError("omitted source link collides with an extracted entry")
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    symlink_targets[name] = member.linkname
+                elif member.isdir():
                     destination.mkdir(parents=True, exist_ok=True)
                 else:
                     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -167,7 +206,8 @@ def extract_verified(source, archive, output):
                 raise ValueError("source archive must have a single root directory")
             unpacked = children[0]
             executable_paths = {name.split("/", 1)[1] for name in executable_paths}
-        if source["hashMode"] == "recursive" and nar_hash(unpacked, executable_paths) != expected:
+            symlink_targets = {name.split("/", 1)[1]: target for name, target in symlink_targets.items()}
+        if source["hashMode"] == "recursive" and nar_hash(unpacked, executable_paths, symlink_targets) != expected:
             raise ValueError("source tree checksum mismatch")
         unpacked.rename(output)
     return output

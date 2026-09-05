@@ -93,7 +93,10 @@ def provision(plan, archives, output, cygwin_bash, jobs=2):
         sentinels = {"meson": "meson.py", "ninja": "configure.py", "perl": "win32/Makefile", "flex": "configure", "bison": "configure"}
         # Authenticate every input before running any of its build scripts.
         for name in NAMES:
-            extracted = extract_verified(pins[name], archives[name], work / (name + "-source"))
+            # Meson's upstream test fixtures contain symlinks. Verify them as
+            # part of the full Nix tree hash, without creating Windows links.
+            options = {"omit_symlinks_under": ("test cases",)} if name == "meson" else {}
+            extracted = extract_verified(pins[name], archives[name], work / (name + "-source"), **options)
             sources[name] = source_root(extracted, sentinels[name])
         platform = run([cygwin_bash, "--noprofile", "--norc", "-c", "uname -s"], work,
                        environment, capture=True, timeout=30)
@@ -104,7 +107,11 @@ def provision(plan, archives, output, cygwin_bash, jobs=2):
             work, environment, timeout=30)
         stage = work / "tools"
         stage.mkdir()
-        shutil.move(str(sources["meson"]), stage / "meson")
+        meson = stage / "meson"
+        meson.mkdir()
+        for name in ("meson.py", "COPYING"):
+            shutil.copyfile(sources["meson"] / name, meson / name)
+        shutil.copytree(sources["meson"] / "mesonbuild", meson / "mesonbuild")
         # Ninja's upstream bootstrap builds itself with the active native C++ compiler.
         run([sys.executable, "configure.py", "--bootstrap"], sources["ninja"], environment)
         (stage / "ninja").mkdir()

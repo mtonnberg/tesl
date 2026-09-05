@@ -50,8 +50,9 @@ class WindowsBuildToolsTests(unittest.TestCase):
 
     def test_all_sources_are_verified_before_any_build_script_executes(self):
         events = []
-        def extract(pin, archive, output):
+        def extract(pin, archive, output, **options):
             events.append(pin['hash'])
+            self.assertEqual(options, {'omit_symlinks_under': ('test cases',)} if pin['hash'] == 'meson' else {})
             output.mkdir()
             sentinel = {'meson': 'meson.py', 'ninja': 'configure.py', 'perl': 'win32/Makefile'}.get(pin['hash'], 'configure')
             path = output / sentinel
@@ -80,7 +81,7 @@ class WindowsBuildToolsTests(unittest.TestCase):
         self.assertNotIn(str(native_paths[0]), command[4])
 
     def test_source_builds_publish_verified_tool_paths_and_source_evidence(self):
-        def extract(pin, archive, output):
+        def extract(pin, archive, output, **options):
             output.mkdir()
             name = pin['hash']
             sentinel = {'meson': 'meson.py', 'ninja': 'configure.py', 'perl': 'win32/Makefile'}.get(name, 'configure')
@@ -88,6 +89,11 @@ class WindowsBuildToolsTests(unittest.TestCase):
             path.parent.mkdir(parents=True, exist_ok=True)
             path.touch()
             (output / 'COPYING').write_text('upstream license')
+            if name == 'meson':
+                (output / 'mesonbuild').mkdir()
+                (output / 'mesonbuild/mesonmain.py').write_text('runtime')
+                (output / 'test cases').mkdir()
+                (output / 'test cases/fixture').write_text('not needed at runtime')
             return output
         calls = []
         def run(command, directory, environment, capture=False, timeout=1800):
@@ -120,6 +126,9 @@ class WindowsBuildToolsTests(unittest.TestCase):
         self.assertFalse(metadata['runtime_payload'])
         self.assertEqual(sum(command[0] == 'nmake.exe' for command in calls), 2)
         self.assertTrue(any('CCTYPE=MSVC143' in command for command in calls))
+        self.assertEqual((output / 'meson/mesonbuild/mesonmain.py').read_text(), 'runtime')
+        self.assertEqual((output / 'meson/COPYING').read_text(), 'upstream license')
+        self.assertFalse((output / 'meson/test cases').exists())
 
 
 if __name__ == '__main__':
