@@ -1,3 +1,7 @@
 # Release-plan lock hashes must describe identical bytes on native runners.
 runtime/go/go.mod text eol=lf
 runtime/go/go.sum text eol=lf
+# The compiler embeds these exact source bytes; CRLF checkout conversion must
+# not change the generated snapshot or dirty a native Windows release checkout.
+runtime/go/teslrt/*.go text eol=lf
+compiler/lib/go_runtime/embedded/embedded_go_runtime.ml text eol=lf
