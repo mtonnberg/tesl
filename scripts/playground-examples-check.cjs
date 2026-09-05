@@ -22,9 +22,9 @@ try {
     assert.deepEqual(normalized(browser.diagnostics), normalized(diagnostics), example.file);
     assert.deepEqual(diagnostics.filter(d => d.severity === 'error').map(d => d.code), example.errors, example.file);
     assert.equal(browser.go, browser.racket);
-    if (example.file === 'workspace-invoice.tesl') {
-      const retargeted = JSON.parse(global.teslCheck(source.replace('  invoiceLabel invoice workspace', '  invoiceLabel invoice "other-team"')));
-      assert.ok(retargeted.diagnostics.some(d => d.code === 'V001'), 'Workspace evidence must not transfer to a different workspace');
+    if (example.file === 'customer-invoice.tesl') {
+      const retargeted = JSON.parse(global.teslCheck(source.replace('  invoiceLabel invoice customer', '  invoiceLabel invoice "other-team"')));
+      assert.ok(retargeted.diagnostics.some(d => d.code === 'V001'), 'Customer evidence must not transfer to a different customer');
       assert.deepEqual(retargeted.go_files, []);
     }
     const repair = repairs[example.file] || example.repair;

@@ -8,20 +8,20 @@ check/auth/establish functions are trusted and need correct implementation and t
 
 The default example is the runnable Hello HTTP server. An optional guided
 introduction sits beside the editor, with compiler-checked activities for an
-endpoint edit, import repair, workspace validation, capability propagation, money,
+endpoint edit, import repair, customer validation, capability propagation, money,
 dimensions and five forms of testing. Steps automatically load matching examples and retain per-step drafts in memory.
-Each exercise offers a visible Try this edit action and an optional repair preview. It preserves the starting buffer and step for
+Each exercise shows its suggested code beside an Apply edit button. It preserves the starting buffer and step for
 Resume guide in the current session. Completion stars synchronize across open tabs and store only exercise IDs in localStorage
 when available, with a Reset stars control. They recognize suggested edits and
 do not certify arbitrary programs or local execution from a click or download.
 
 ## Try a concrete task
 
-- [Workspace invoice](examples/workspace-invoice.tesl): require evidence that the
-  invoice belongs to the supplied workspace before producing its label. Includes
-  success and rejection tests. In a service the workspace must come from trusted
+- [Customer invoice](examples/customer-invoice.tesl): require evidence that the
+  invoice belongs to the supplied customer before producing its label. Includes
+  success and rejection tests. In a service the customer must come from trusted
   authentication. This example is not a complete authorization system.
-- [Missing workspace check](examples/workspace-invoice-unchecked.tesl): deliberately
+- [Missing customer check](examples/customer-invoice-unchecked.tesl): deliberately
   fails with V001 at the unchecked call.
 - [Hello HTTP](examples/hello-server.tesl): an App on port 8086 with GET /hello,
   using an empty in-memory database. Save as HelloServer.tesl and run locally.

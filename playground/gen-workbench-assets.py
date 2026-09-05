@@ -9,6 +9,9 @@ for example in examples:
     source = repo / "example/playground" / example["file"]
     items.append({"name": example["name"], "src": source.read_text(), "id": source.stem})
     shutil.copyfile(source, out / "examples" / example["file"])
+    # Keep previously shared example links working after the customer rename.
+    if source.stem in ("customer-invoice", "customer-invoice-unchecked"):
+        shutil.copyfile(source, out / "examples" / example["file"].replace("customer", "workspace"))
 (out / "examples.js").write_text("window.TESL_EXAMPLES = " + json.dumps(items, ensure_ascii=False) + ";\n")
 
 defaults = [i for i, example in enumerate(examples) if example.get("default")]

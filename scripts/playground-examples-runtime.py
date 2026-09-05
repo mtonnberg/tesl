@@ -20,9 +20,9 @@ with socket.socket() as probe:
     probe.bind(("127.0.0.1", 8086))
 with tempfile.TemporaryDirectory(prefix="tesl-playground-runtime-") as directory:
     work = Path(directory)
-    for filename, module in [("hello-server.tesl", "HelloServer"), ("workspace-invoice.tesl", "WorkspaceInvoice")]:
+    for filename, module in [("hello-server.tesl", "HelloServer"), ("customer-invoice.tesl", "CustomerInvoice")]:
         (work / f"{module}.tesl").write_text((repo / "example/playground" / filename).read_text())
-    subprocess.run(cli + ["test", "WorkspaceInvoice.tesl"], cwd=work, env=env, check=True, timeout=120)
+    subprocess.run(cli + ["test", "CustomerInvoice.tesl"], cwd=work, env=env, check=True, timeout=120)
     subprocess.run(cli + ["check", "HelloServer.tesl"], cwd=work, env=env, check=True, timeout=30)
     with (work / "server.log").open("w") as log:
         server = subprocess.Popen(cli + ["run", "HelloServer.tesl"], cwd=work, env=env, stdout=log, stderr=log, start_new_session=True)

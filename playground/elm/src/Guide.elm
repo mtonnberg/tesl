@@ -16,7 +16,7 @@ steps =
     ,
     { id = 1, chapter = 0, example = 2, key = "compiler", title = "A helpful compiler", repair = { before = "import Tesl.Prelude exposing [Int, String]", after = "import Tesl.Prelude exposing [Int, String]\nimport Tesl.String exposing [String.length]", why = "Bring String.length into scope with an import. The compiler also offers this fix in its diagnostic." }, testCommand = Nothing }
     ,
-    { id = 2, chapter = 2, example = 1, key = "workspace", title = "Keep a workspace rule", repair = { before = "  invoiceLabel raw workspace", after = "  let invoice = check checkWorkspace raw workspace\n  invoiceLabel invoice workspace", why = "Check the workspace before calling invoiceLabel. The returned value carries the evidence that function requires." }, testCommand = Nothing }
+    { id = 2, chapter = 2, example = 1, key = "customer", title = "Keep invoices with the right customer", repair = { before = "  invoiceLabel raw customer", after = "  let invoice = check checkCustomer raw customer\n  invoiceLabel invoice customer", why = "Check the customer before calling invoiceLabel. The returned value carries the evidence that function requires." }, testCommand = Nothing }
     ,
     { id = 4, chapter = 2, example = 5, key = "capabilities", title = "Follow a capability", repair = { before = "  requires [dbRead Note]", after = "  requires [dbWrite Note]", why = "publishNote calls a helper that writes. Declare dbWrite Note on the caller too." }, testCommand = Nothing }
     ,
@@ -41,7 +41,9 @@ find : Int -> Maybe Step
 find id = List.filter (\step -> step.id == id) steps |> List.head
 
 findByKey : String -> Maybe Step
-findByKey key = List.filter (\step -> step.key == key) steps |> List.head
+findByKey key =
+    let canonical = if key == "workspace" then "customer" else key in
+    List.filter (\step -> step.key == canonical) steps |> List.head
 
 exerciseIds : List Int
 exerciseIds = steps |> List.filter (\step -> step.repair.before /= "") |> List.map .id

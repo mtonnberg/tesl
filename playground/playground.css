@@ -591,7 +591,8 @@ a.path-card { text-decoration: none; }
 
 /* Keep the task and its primary action clear; secondary controls stay folded. */
 .journey-repair { margin: .9rem 0; padding: .75rem !important; border: 1px solid var(--line) !important; border-radius: .5rem; background: var(--panel); }
-.journey-repair summary { cursor: pointer; color: var(--accent); }
+.journey-repair h3 { margin: 0; font-size: .9rem; }
+.journey-legend { color: var(--muted); font-size: .75rem; line-height: 1.5; }
 .journey-repair p { font-size: .88rem; }
 .journey-repair pre { background: var(--bg); padding: .75rem; border-radius: .4rem; font-size: .8rem; }
 .journey-options { margin-top: 1rem; font-size: .8rem; color: var(--muted); }

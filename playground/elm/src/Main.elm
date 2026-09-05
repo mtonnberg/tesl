@@ -306,7 +306,7 @@ exerciseMatches step model =
     case step of
         0 -> greetingChanged
         1 -> matches 2 "import Tesl.Prelude exposing [Int, String]" "import Tesl.Prelude exposing [Int, String]\nimport Tesl.String exposing [String.length]"
-        2 -> matches 1 "invoiceLabel raw workspace" ("let " ++ binding "invoice" ++ " = check checkWorkspace raw workspace\n  invoiceLabel " ++ binding "invoice" ++ " workspace")
+        2 -> matches 1 "invoiceLabel raw customer" ("let " ++ binding "invoice" ++ " = check checkCustomer raw customer\n  invoiceLabel " ++ binding "invoice" ++ " customer")
         4 -> List.any (\caps -> matches 5 "requires [dbRead Note]" ("requires [" ++ caps ++ "]")) ["dbWrite Note", "dbRead Note, dbWrite Note", "dbWrite Note, dbRead Note"]
         5 -> matches 6 "Money.add price shipping" ("let " ++ binding "checked" ++ " = check Money.requireSameCurrency price shipping\n  Money.add price " ++ binding "checked")
         6 -> matches 7 "speed + elapsed" "speed * elapsed"
@@ -441,6 +441,18 @@ searchStatus result =
 btn : String -> String -> Msg -> Html Msg
 btn identifier caption message = button [ id identifier, class "btn", onClick message ] [ text caption ]
 
+diagnosticSummary : Diagnostic -> String
+diagnosticSummary diagnostic =
+    if diagnostic.code == "V001" && String.contains "uses privileged operations and callees requiring [" diagnostic.message && String.contains "but does not declare them" diagnostic.message then
+        let
+            capabilities = String.split "requiring [" diagnostic.message |> List.drop 1 |> List.head |> Maybe.map (String.split "]" >> List.head >> Maybe.withDefault "") |> Maybe.withDefault ""
+        in
+        "Missing capability: declare [" ++ capabilities ++ "] in the requires clause."
+    else if diagnostic.code == "V001" && String.contains "does not statically satisfy declared proof" diagnostic.message then
+        "This value needs a check before it can be used here."
+    else
+        Maybe.map .title diagnostic.fix |> Maybe.withDefault diagnostic.message
+
 viewDiagnostic : Model -> Int -> Diagnostic -> Html Msg
 viewDiagnostic model index diagnostic =
     let
@@ -449,7 +461,7 @@ viewDiagnostic model index diagnostic =
     li [ class ("diag " ++ diagnostic.severity) ]
         [ button [ class "diag-jump", onClick (Jump index diagnostic), attribute "aria-label" (diagnostic.severity ++ " " ++ diagnostic.code ++ " at line " ++ String.fromInt (diagnostic.start.line + 1) ++ ", column " ++ String.fromInt (diagnostic.start.col + 1) ++ ": " ++ diagnostic.message) ]
             [ span [ class "sev" ] [ text diagnostic.severity ], code [ class "code" ] [ text diagnostic.code ], span [ class "loc" ] [ text location ], span [ class "src-tag" ] [ text diagnostic.source ] ]
-        , p [ class "diagnostic-guide" ] [ text (if diagnostic.code == "V001" then "This value needs a check before it can be used here." else Maybe.map .title diagnostic.fix |> Maybe.withDefault diagnostic.message) ]
+        , p [ class "diagnostic-guide" ] [ text (diagnosticSummary diagnostic) ]
         , if diagnostic.code == "V001" || diagnostic.fix /= Nothing then
             details [ class "diagnostic-details" ] [ summary [] [ text "Compiler details" ], p [ class "msg" ] [ text diagnostic.message ] ]
           else text ""
@@ -656,7 +668,7 @@ viewJourney model =
                     else if completed && currentComplete then
                         if Guide.testCommand step /= Nothing then "★ Test added and compiler-checked · run it locally below" else "★ Step completed"
                     else if completed then "★ Completed earlier; your star is saved."
-                    else "Try the edit below, or make your own change, to earn a star."
+                    else "Apply the suggested edit, or try your own change in the editor."
                 stepNumber = List.indexedMap Tuple.pair steps |> List.filter (\( _, index ) -> index == step) |> List.head |> Maybe.map (Tuple.first >> (+) 1) |> Maybe.withDefault 1
                 diagram labels = div [ class "journey-flow", attribute "aria-label" "How the pieces connect" ] (List.intersperse (span [ attribute "aria-hidden" "true", class "flow-arrow" ] [ text "→" ]) (List.map (\( label, explanation ) -> details [ class "flow-detail" ] [ summary [ class "flow-node", title explanation ] [ text label, span [ class "flow-help", attribute "aria-hidden" "true" ] [ text " ⓘ" ] ], p [] [ text explanation ] ]) labels))
                 content =
@@ -670,8 +682,8 @@ viewJourney model =
                             , diagram [ ( "Missing import", "The name exists in the standard library but is not in scope here." ), ( "Useful diagnostic", "A source location and stable diagnostic code identify the problem; this diagnostic also includes an edit." ), ( "Apply the fix", "Apply changes the source and asks the compiler to check it again. You can undo the edit." ) ]
                             ]
                         2 ->
-                            [ p [] [ text "An invoice can belong to another workspace. Add the check that invoiceLabel requires before it will accept this value." ]
-                            , diagram [ ( "Invoice + workspace", "A valid invoice identifier does not establish membership in the requested workspace." ), ( "checkWorkspace", "This function compares the workspace and returns evidence tied to these values. Its implementation still needs correct logic and tests." ), ( "invoiceLabel", "The function requires that evidence. A caller passing an unchecked invoice is rejected by the compiler." ) ]
+                            [ p [] [ text "An invoice can belong to another customer. Add the check that invoiceLabel requires before it will accept this value." ]
+                            , diagram [ ( "Invoice + customer", "A valid invoice identifier does not establish that it belongs to the requested customer." ), ( "checkCustomer", "This function compares the customer and returns evidence tied to these values. Its implementation still needs correct logic and tests." ), ( "invoiceLabel", "The function requires that evidence. A caller passing an unchecked invoice is rejected by the compiler." ) ]
                             ]
                         4 ->
                             [ p [] [ text "publishNote declares read access, but its helper writes. Give the caller the write capability its helper requires." ]
@@ -720,22 +732,23 @@ viewJourney model =
                 , p [ class "steps-heading", id "steps-heading" ] [ text ("Step " ++ String.fromInt stepNumber ++ " of " ++ String.fromInt (List.length steps)) ]
                 , nav [ class "journey-stops", attribute "aria-labelledby" "steps-heading" ]
                     (List.indexedMap (\ordinal index -> button [ onClick (JourneyStep index), attribute "aria-current" (if index == step then "step" else "false"), attribute "aria-label" (stepTitle index ++ (if List.member index model.journeyDone then " — checked" else "")) ] [ span [ class "stop-number" ] [ text (if List.member index model.journeyDone then "★" else String.fromInt (ordinal + 1)) ], text (stepTitle index) ]) steps)
+                , p [ class "journey-legend" ] [ text "Stars mark completed edits, saved in this browser. Explore the steps in any order." ]
                 , h2 [ id "journey-title", tabindex -1 ] [ text (stepTitle step) ]
                 , div [ class "journey-content" ] (content ++
                     (if step == 3 then [] else
                         let
                             repair = repairFor step
                         in
-                        [ details [ class "journey-repair", id ("repair-" ++ String.fromInt step) ]
-                            [ summary [] [ text (if Guide.testCommand step /= Nothing then "Preview the test edit" else if step == 0 then "Need a starting point?" else "Show the repair") ]
+                        [ section [ class "journey-repair", id ("repair-" ++ String.fromInt step), attribute "aria-label" "Suggested edit" ]
+                            [ h3 [] [ text "Suggested edit" ]
                             , p [] [ text repair.why ]
                             , pre [] [ code [] [ text repair.after ] ]
+                            , if repairApplicable step model.source then button [ class "btn build-cta", id "journey-apply", onClick ApplyJourneyRepair ] [ text "Apply edit" ] else text ""
                             ]
                         ]))
                 , p [ id "journey-progress", attribute "role" "status" ] [ text progressText ]
                 , div [ class "next-actions" ]
-                    [ if step /= 3 && repairApplicable step model.source then button [ class "btn build-cta", id "journey-apply", onClick ApplyJourneyRepair ] [ text "Try this edit" ] else text ""
-                    , if step /= 3 then button [ id "journey-next", class (if completed && not (repairApplicable step model.source) then "btn build-cta" else "text-button"), onClick (JourneyStep (nextJourneyStep step)) ] [ text (if not completed then "Continue without a star →" else if List.reverse steps |> List.head |> (==) (Just step) then "Next chapter →" else "Next step →") ] else btn "journey-share" "Copy share link" Share
+                    [ if step /= 3 then button [ id "journey-next", class (if completed && not (repairApplicable step model.source) then "btn build-cta" else "text-button"), onClick (JourneyStep (nextJourneyStep step)) ] [ text (if List.reverse steps |> List.head |> (==) (Just step) then "Next chapter →" else "Next step →") ] else btn "journey-share" "Copy share link" Share
                     ]
                 , case Guide.testCommand step of
                     Nothing -> text ""
@@ -771,7 +784,7 @@ viewWelcome model =
             [ a [ class "path-card", id "welcome-edit", href "start.html", target "_blank", rel "noopener", onClick BuildIntent ]
                 [ span [ class "path-number" ] [ text "01" ], div [] [ strong [] [ text "Run your first API" ], p [] [ text "Get this server running on your computer." ] ], span [ attribute "aria-hidden" "true" ] [ text "↗" ] ]
             , button [ class "path-card", id "landing-next", onClick (ChooseExample "1") ]
-                [ span [ class "path-number" ] [ text "02" ], div [] [ strong [] [ text "Meet your compiler" ], p [] [ text "See it catch a missing workspace check before the code runs." ] ], span [ attribute "aria-hidden" "true" ] [ text "↗" ] ]
+                [ span [ class "path-number" ] [ text "02" ], div [] [ strong [] [ text "Meet your compiler" ], p [] [ text "See it catch a missing customer check before the code runs." ] ], span [ attribute "aria-hidden" "true" ] [ text "↗" ] ]
             , button [ class "path-card", id "welcome-search", onClick OpenSearch ]
                 [ span [ class "path-number" ] [ text "03" ], div [] [ strong [] [ text "Find a useful function" ], p [] [ text "Describe what you need or search by a function’s type." ] ], span [ attribute "aria-hidden" "true" ] [ text "↗" ] ]
             ]

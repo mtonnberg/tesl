@@ -48,7 +48,7 @@ regression rather than to "did it build":
 | **Click-to-jump** | clicking a diagnostic scrolls the editor to it, puts the caret on the range, selects it and flashes it (a static flash under `prefers-reduced-motion`) |
 | **Check as you type** | 300 ms debounce, and the measured ms is shown. The Check button stays, and <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>Enter</kbd> checks immediately |
 | **Explain in place** | every diagnostic has an *Explain `<CODE>`* disclosure carrying the same prose as `tesl explain <CODE>`, fetched on first open |
-| **A welcoming first success** | a first visit starts with a runnable HTTP server; the invoice/workspace rule is a second example. Three paths offer a runnable API guide, a quick fix, or discovery. Explicit intro visibility is remembered; shared links go straight to the source |
+| **A welcoming first success** | a first visit starts with a runnable HTTP server; the invoice/customer rule is a second example. Three paths offer a runnable API guide, a quick fix, or discovery. Explicit intro visibility is remembered; shared links go straight to the source |
 | **Honest framing, when it matters** | declaring a `server`, `api`, `handler`, `queue` or channel surfaces an inline note saying what *is* checked and what is not, pointing at `tesl init` / `tesl run`. Detected from declaration-leading lines; comments do not trip it |
 | **Build or share next** | successful checks lead to a local run guide linking canonical installation instructions and explicit sharing; Save .tesl downloads the current source. These actions are distinct from verified installation or project activation |
 | **Keyboard and mobile** | panes stack under 900 px and the page is usable at 375 px without sideways scrolling; a skip link, real list semantics for the diagnostics, buttons for every action, visible focus rings, and Tab moves focus rather than inserting a tab character |
@@ -273,8 +273,8 @@ inference or an AI call. See `learning.js` and the linked manual.
 
 Five examples are generated from `examples.json` and `example/playground`:
 
-1. A checked invoice/workspace rule, with success and rejection tests.
-2. The missing workspace check, rejected with `V001`.
+1. A checked invoice/customer rule, with success and rejection tests.
+2. The missing customer check, rejected with `V001`.
 3. A missing import with a machine-applicable `String.length` fix.
 4. A database write without its declared capability.
 5. Hello HTTP: a minimal App listening on port 8086, with an empty memory database.
@@ -345,30 +345,32 @@ flag, and the note it renders on `lessons.html`.
 
 Five optional chapters sit beside the editor: Your first API, Rules that travel
 with your code, Money and measurements, Testing your code, and Run it locally.
-Ten exercises cover greeting edits, imports, workspace evidence, capabilities,
-currencies, dimensions, regular tests, fuzz/property tests, API tests and load tests. Each diagram node
+Eleven exercises cover greeting edits, imports, customer evidence, capabilities,
+currencies, dimensions, regular tests, doctests, fuzz/property tests, API tests and load tests. Each diagram node
 has a hover explanation and a native disclosure usable by keyboard or touch.
 
 Entering or selecting a step loads its matching source automatically. A per-step
 in-memory draft map preserves edits when revisiting steps. Keep editing hides the
 guide and preserves its step and starting-source snapshot; Resume guide remains
 in the feedback header. Guide options contains restart, original-source restore,
-reset stars and the Discussion link for suggesting guides. The forward control
-offers Try this edit directly on unfinished exercises, then Next step or Next
-chapter once complete. Continue without a star is a secondary text action.
+reset stars and the Discussion link for suggesting guides. Next step and Next chapter let visitors explore freely. A short legend explains
+that stars mark completed edits and are saved in the browser.
 
-Each exercise has a visible Try this edit button and optional repair preview. It
+Each exercise shows the suggested code with an adjacent Apply edit button. It
 replaces one matching span and rechecks the result, preserving surrounding edits;
 ambiguous or already changed source disables the action. Navigation waits for an
 outstanding fix/check so a finishing edit can earn its star before source changes.
 
 One star per exercise is earned from an accepted compiler check of the suggested
-edit, keeping the example's structure intact. Comments, formatting, imports and
+edit, keeping the example's structure intact. Ordinary comments, formatting, imports and
 the local checked-value binding name may vary; the capability exercise accepts
 read and write access together as well as write access alone; deleting the required caller does
 not solve an exercise.
 Stars are historical exercise completion, not certification of arbitrary rewrites,
-tests or runtime behavior. They persist as one `tesl-playground-star-v2:<id>` key per earned star, so
+tests or runtime behavior. Returning to a starter or changing a completed example
+shows “Completed earlier; your star is saved” until the current source satisfies
+the exercise and its compiler check. Doctest lines remain part of that comparison.
+Stars persist as one `tesl-playground-star-v2:<id>` key per earned star, so
 separate tabs cannot replace each other’s awards. Existing v1 arrays migrate
 once; the v1 array remains a compatibility snapshot. Storage events synchronize
 open tabs, including Reset stars. No source is stored.

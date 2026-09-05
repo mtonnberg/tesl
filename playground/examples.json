@@ -1,12 +1,12 @@
 [
   {
-    "name": "Keep invoices in the right workspace",
-    "file": "workspace-invoice.tesl",
+    "name": "Keep invoices with the right customer",
+    "file": "customer-invoice.tesl",
     "errors": []
   },
   {
-    "name": "What if the workspace check is missing?",
-    "file": "workspace-invoice-unchecked.tesl",
+    "name": "What if the customer check is missing?",
+    "file": "customer-invoice-unchecked.tesl",
     "errors": [
       "V001"
     ]

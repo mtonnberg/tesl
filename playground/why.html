@@ -6,12 +6,12 @@
 <body><article class="start-guide why-guide">
 <nav><a href="index.html">← Playground</a> · <a href="start.html#install">Install Tesl</a> · <a href="https://github.com/mtonnberg/tesl/discussions">Ask the community</a></nav>
 <p class="eyebrow">Why Tesl?</p><h1>What can Tesl help you catch?</h1>
-<p>A backend has rules that ordinary types often leave to convention: this value was validated, this record belongs to this workspace, this function may write to a database. Tesl lets you express those requirements at the function boundary and checks the calls against them.</p>
+<p>A backend has rules that ordinary types often leave to convention: this value was validated, this record belongs to this customer, this function may write to a database. Tesl lets you express those requirements at the function boundary and checks the calls against them.</p>
 <p class="muted">Choose a feature for the details, then try its example in the playground.</p>
 <div class="why-features">
 <details><summary><h2>Make a missing check a compiler error</h2></summary>
-<p>An invoice ID alone does not establish which workspace it belongs to. A function can require evidence for that particular invoice and workspace, and Tesl rejects a call that skips the check. The check itself still needs correct logic and tests.</p>
-<p><a href="examples/workspace-invoice.tesl" download="WorkspaceInvoice.tesl">Read the complete invoice example</a> · <a href="https://github.com/mtonnberg/tesl/blob/main/manual/best-practices.md#proof-management">How the evidence works</a></p><p class="feature-action"><a class="btn" href="index.html?guide=workspace">See it in action →</a></p></details>
+<p>An invoice ID alone does not establish which customer it belongs to. A function can require evidence for that particular invoice and customer, and Tesl rejects a call that skips the check. The check itself still needs correct logic and tests.</p>
+<p><a href="examples/customer-invoice.tesl" download="CustomerInvoice.tesl">Read the complete invoice example</a> · <a href="https://github.com/mtonnberg/tesl/blob/main/manual/best-practices.md#proof-management">How the evidence works</a></p><p class="feature-action"><a class="btn" href="index.html?guide=customer">See it in action →</a></p></details>
 <details><summary><h2>See privileged operations in the signature</h2></summary>
 <p>Capabilities make operations such as database reads and writes visible in function declarations. The requirement follows calls: if a helper writes to Note, its caller must declare dbWrite Note too. A read-only path cannot quietly gain a write through a helper. Authentication and the application's access policy still need to be designed correctly.</p>
 <p><a href="examples/capability-missing.tesl" download="CapabilityMissing.tesl">Inspect a rejected database write</a></p><p class="feature-action"><a class="btn" href="index.html?guide=capabilities">See it in action →</a></p></details>

@@ -145,7 +145,7 @@ test('welcoming start leads through a useful fix to building and sharing, with c
   await expect(page.locator('#landing')).not.toBeVisible();
   await expect(page.locator('#diags')).toContainText('V001');
   const unchecked = await page.locator('#src').inputValue();
-  await page.locator('#src').fill(unchecked.replace('  invoiceLabel raw workspace', '  let invoice = check checkWorkspace raw workspace\n  invoiceLabel invoice workspace'));
+  await page.locator('#src').fill(unchecked.replace('  invoiceLabel raw customer', '  let invoice = check checkCustomer raw customer\n  invoiceLabel invoice customer'));
   await expect(page.locator('#status')).toHaveText('All checks passed');
   await expect(page.locator('.success-card')).toContainText('Your code passes the compiler’s checks');
   await page.evaluate(() => {
@@ -158,7 +158,7 @@ test('welcoming start leads through a useful fix to building and sharing, with c
   const downloadPromise = page.waitForEvent('download');
   await toolClick(page, '#download');
   const download = await downloadPromise;
-  expect(download.suggestedFilename()).toBe('WorkspaceInvoiceUnchecked.tesl');
+  expect(download.suggestedFilename()).toBe('CustomerInvoiceUnchecked.tesl');
   const fs = require('node:fs');
   expect(fs.readFileSync(await download.path(), 'utf8')).toBe(await page.locator('#src').inputValue());
   await expect.poll(() => page.evaluate(() => milestones)).toEqual([{ version: 1, event: 'install_intent' }, { version: 1, event: 'source_download' }]);
@@ -277,9 +277,9 @@ test('guided activities earn compiler-backed progress and restore the starting b
   await toolClick(page, '#journey-menu');
   await expect(page.locator('#src')).toHaveValue(/module HelloServer/);
   await expect(page.locator('#status')).toHaveText('All checks passed');
-  await expect(page.locator('#journey-progress')).toContainText('Try the edit below');
+  await expect(page.locator('#journey-progress')).toContainText('Apply the suggested edit');
   await expect(page.locator('#status')).toHaveText('All checks passed');
-  await expect(page.locator('#journey-progress')).toContainText('Try the edit below');
+  await expect(page.locator('#journey-progress')).toContainText('Apply the suggested edit');
   const server = await page.locator('#src').inputValue();
   await page.locator('#src').fill(server.replace('Hello from Tesl!', 'Hello from my first API!'));
   await expect(page.locator('#journey-progress')).toContainText('Step completed');
@@ -294,7 +294,7 @@ test('guided activities earn compiler-backed progress and restore the starting b
   await page.locator('#journey-next').click();
   await expect(page.locator('#diags')).toContainText('V001');
   const unchecked = await page.locator('#src').inputValue();
-  await page.locator('#src').fill(unchecked.replace('  invoiceLabel raw workspace', '  let invoice = check checkWorkspace raw workspace\n  invoiceLabel invoice workspace'));
+  await page.locator('#src').fill(unchecked.replace('  invoiceLabel raw customer', '  let invoice = check checkCustomer raw customer\n  invoiceLabel invoice customer'));
   await expect(page.locator('#status')).toHaveText('All checks passed');
   await expect(page.locator('#journey-progress')).toContainText('Step completed');
   await page.locator('#journey-next').click();
@@ -312,7 +312,7 @@ test('guide is optional on shared sources, remains usable on mobile and keeps ed
   await page.locator('#journey-start').click();
   await page.setViewportSize({ width: 375, height: 812 });
   await page.locator('#journey').scrollIntoViewIfNeeded();
-  await expect(page.getByRole('navigation', { name: 'Steps' })).toBeVisible();
+  await expect(page.getByRole('navigation', { name: /Step \d+ of \d+/ })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(375);
   await page.screenshot({ path: test.info().outputPath('journey-mobile.png') });
   await page.locator('#src').fill(valid);
@@ -388,14 +388,14 @@ test('guide resumes the same step and original buffer after Keep editing', async
   await page.goto('/');
   const original = await page.locator('#src').inputValue();
   await page.locator('#journey-start').click();
-  await expect(page.locator('#journey-next')).toHaveText('Continue without a star →');
+  await expect(page.locator('#journey-next')).toHaveText('Next step →');
   await page.locator('#journey-chapter').selectOption('2');
   await expect(page.locator('#diags')).toContainText('V001');
   const exercise = await page.locator('#src').inputValue();
   await page.locator('#journey-close').click();
   await expect(page.locator('#journey-resume')).toHaveText('Resume guide');
   await page.locator('#journey-resume').click();
-  await expect(page.locator('#journey-title')).toHaveText('Keep a workspace rule');
+  await expect(page.locator('#journey-title')).toHaveText('Keep invoices with the right customer');
   await expect(page.locator('#src')).toHaveValue(exercise);
   await page.locator('.journey-options > summary').click();
   await page.locator('#journey-restore').click();
@@ -410,7 +410,7 @@ test('capabilities, money and dimensions earn persistent stars only for intact r
   // Removing the privileged caller is clean code, but does not solve the exercise.
   await page.locator('#src').fill(capability.split('# Try changing')[0].replace(', publishNote]', ']'));
   await expect(page.locator('#diags .error')).toHaveCount(0);
-  await expect(page.locator('#journey-progress')).toContainText('Try the edit below');
+  await expect(page.locator('#journey-progress')).toContainText('Apply the suggested edit');
   await page.locator('#src').fill(capability.replace('requires [dbRead Note]', 'requires [dbWrite Note]'));
   await expect(page.locator('#journey-progress')).toContainText('Step completed');
   await page.locator('#journey-next').click();
@@ -426,13 +426,13 @@ test('capabilities, money and dimensions earn persistent stars only for intact r
   await expect(page.locator('#journey-progress')).toContainText('Step completed');
   await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('tesl-playground-stars-v1')).sort())).toEqual([4,5,6]);
   await page.goto('/?guide=dimensions');
-  await expect(page.locator('#journey-progress')).toContainText('Step completed');
+  await expect(page.locator('#journey-progress')).toContainText('Completed earlier');
   await expect(page.locator('#diags')).toContainText('T001'); // History is separate from current result.
   await page.locator('.journey-options > summary').click();
   await page.locator('#journey-reset').click();
-  await expect(page.locator('#journey-progress')).toContainText('Try the edit below');
+  await expect(page.locator('#journey-progress')).toContainText('Apply the suggested edit');
   await page.reload();
-  await expect(page.locator('#journey-progress')).toContainText('Try the edit below');
+  await expect(page.locator('#journey-progress')).toContainText('Apply the suggested edit');
 });
 
 test('diagram explanations work with keyboard and touch-sized layouts', async ({ page }) => {
@@ -462,7 +462,7 @@ test('Why Tesl disclosures link every feature to the intended live exercise', as
   await expect(page.locator('.why-features > details')).toHaveCount(7);
   const links = await page.locator('.feature-action a').evaluateAll(nodes => nodes.map(a => a.getAttribute('href')));
   expect(links).toHaveLength(8);
-  const expected = { workspace: 'WorkspaceInvoiceUnchecked', capabilities: 'CapabilityChain', api: 'HelloServer', money: 'MoneyCheck', dimensions: 'UnitsCheck', runtime: 'HelloServer', compiler: 'MissingImport', tests: 'RegularTests' };
+  const expected = { customer: 'CustomerInvoiceUnchecked', capabilities: 'CapabilityChain', api: 'HelloServer', money: 'MoneyCheck', dimensions: 'UnitsCheck', runtime: 'HelloServer', compiler: 'MissingImport', tests: 'RegularTests' };
   await page.locator('.why-features summary').nth(1).click();
   await expect(page.locator('.why-features details').nth(1).getByRole('link', { name: 'See it in action →' })).toBeVisible();
   await page.screenshot({ path: test.info().outputPath('why-chapters.png') });
@@ -471,7 +471,7 @@ test('Why Tesl disclosures link every feature to the intended live exercise', as
     await expect(page.locator('#journey')).toBeVisible();
     const key = new URL(page.url()).searchParams.get('guide');
     const selectedChapter = await page.locator('#journey-chapter').inputValue();
-    expect(selectedChapter).toBe(({workspace:'2',capabilities:'2',api:'0',money:'5',dimensions:'5',runtime:'3',compiler:'0',tests:'7'})[key]);
+    expect(selectedChapter).toBe(({customer:'2',capabilities:'2',api:'0',money:'5',dimensions:'5',runtime:'3',compiler:'0',tests:'7'})[key]);
     await expect(page.locator('#examples option:checked')).not.toHaveText('Shared source');
     await expect(page.locator('#src')).toHaveValue(new RegExp('^module ' + expected[key]));
   }
@@ -479,8 +479,8 @@ test('Why Tesl disclosures link every feature to the intended live exercise', as
 
 test('guide links respect shared source and malformed or unavailable progress storage', async ({ page }) => {
   await page.addInitScript(() => localStorage.setItem('tesl-playground-stars-v1', '{bad json'));
-  await page.goto('/?guide=workspace');
-  await expect(page.locator('#journey-progress')).toContainText('Try the edit below');
+  await page.goto('/?guide=customer');
+  await expect(page.locator('#journey-progress')).toContainText('Apply the suggested edit');
   await page.locator('#src').fill(valid);
   await page.locator('#share').click();
   await expect(page).toHaveURL(/#/);
@@ -505,8 +505,7 @@ test('every exercise has an applicable edit and all six stars survive immediate 
   const steps = [0,1,2,4,5,6];
   for (const step of steps) {
     await expect(page.locator('#repair-' + step)).toBeVisible();
-    const disclosure = page.locator('#repair-' + step);
-    if (await disclosure.getAttribute('open') === null) await disclosure.locator('summary').click();
+    await expect(page.locator('#repair-' + step + ' pre')).toBeVisible();
     await expect(page.locator('#journey-apply')).toBeEnabled();
     await page.locator('#journey-apply').click();
     await page.locator('#journey-next').click();
@@ -542,17 +541,16 @@ test('a debounced edit earns its star before the guide changes source and import
 });
 
 test('skipped steps remain incomplete and chapter navigation restores per-step edits', async ({ page }) => {
-  await page.goto('/?guide=workspace');
+  await page.goto('/?guide=customer');
   await expect(page.locator('#diags')).toContainText('V001');
   const source = await page.locator('#src').inputValue();
   await page.locator('#src').fill(source + '# My work in progress\n');
   await page.locator('#journey-next').click();
   await expect(page.locator('#src')).toHaveValue(/module CapabilityChain/);
-  await expect(page.locator('#journey-progress')).toContainText('Try the edit below');
-  await page.getByRole('button', { name: 'Keep a workspace rule', exact: true }).click();
+  await expect(page.locator('#journey-progress')).toContainText('Apply the suggested edit');
+  await page.getByRole('button', { name: 'Keep invoices with the right customer', exact: true }).click();
   await expect(page.locator('#src')).toHaveValue(source + '# My work in progress\n');
-  await expect(page.locator('#journey-progress')).toContainText('Try the edit below');
-  await page.locator('.journey-repair > summary').click();
+  await expect(page.locator('#journey-progress')).toContainText('Apply the suggested edit');
   await page.screenshot({ path: test.info().outputPath('guide-repair-desktop.png') });
   await page.setViewportSize({width:375,height:812});
   await page.locator('.journey-repair').scrollIntoViewIfNeeded();
@@ -567,16 +565,15 @@ test('manual repairs may name their checked value and applying a repair preserve
   const money = await page.locator('#src').inputValue();
   await page.locator('#src').fill(money.replace('Money.add price shipping', 'let verified = check Money.requireSameCurrency price shipping\n  Money.add price verified'));
   await expect(page.locator('#journey-progress')).toHaveText('★ Step completed');
-  await page.goto('/?guide=workspace');
+  await page.goto('/?guide=customer');
   await expect(page.locator('#diags')).toContainText('V001');
   const invoice = await page.locator('#src').inputValue();
-  await page.locator('#src').fill(invoice.replace('  invoiceLabel raw workspace', '  let validated = check checkWorkspace raw workspace\n  invoiceLabel validated workspace'));
+  await page.locator('#src').fill(invoice.replace('  invoiceLabel raw customer', '  let validated = check checkCustomer raw customer\n  invoiceLabel validated customer'));
   await expect(page.locator('#journey-progress')).toHaveText('★ Step completed');
   await page.goto('/?guide=capabilities');
   await expect(page.locator('#diags')).toContainText('V001');
   const cap = await page.locator('#src').inputValue();
   await page.locator('#src').fill(cap + '# Keep my note\n');
-  await page.locator('.journey-repair > summary').click();
   await page.locator('#journey-apply').click();
   await expect(page.locator('#journey-progress')).toHaveText('★ Step completed');
   await expect(page.locator('#src')).toHaveValue(cap.replace('  requires [dbRead Note]', '  requires [dbWrite Note]') + '# Keep my note\n');
@@ -598,7 +595,7 @@ test('an obsolete pending compiler fix cannot trap chapter navigation', async ({
   const source = await page.locator('#src').inputValue();
   await page.locator('#src').fill(source + '# Newer edit before the fix arrives\n');
   await page.locator('#journey-next').click();
-  await expect(page.locator('#journey-title')).toHaveText('Keep a workspace rule');
+  await expect(page.locator('#journey-title')).toHaveText('Keep invoices with the right customer');
   const next = await page.locator('#src').inputValue();
   await page.evaluate(() => window.delayedGuideFix());
   await expect(page.locator('#src')).toHaveValue(next);
@@ -609,10 +606,8 @@ test('stars earned in different open tabs are retained together', async ({page, 
   const money = await context.newPage();
   await money.goto('/?guide=money');
   await expect(money.locator('#diags')).toContainText('V001');
-  await page.locator('.journey-repair summary').click();
   await page.locator('#journey-apply').click();
   await expect(page.locator('#journey-progress')).toContainText('Step completed');
-  await money.locator('.journey-repair summary').click();
   await money.locator('#journey-apply').click();
   await expect(money.locator('#journey-progress')).toContainText('Step completed');
   await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('tesl-playground-stars-v1') || '[]').sort())).toEqual([0,5]);
@@ -627,7 +622,6 @@ test('stars earned in different open tabs are retained together', async ({page, 
 test('an edit checked just after Keep editing still earns its star', async ({page}) => {
   await page.goto('/?guide=api');
   await expect(page.locator('#status')).toHaveText('All checks passed');
-  await page.locator('.journey-repair summary').click();
   await page.evaluate(() => { document.querySelector('#journey-apply').click(); document.querySelector('#journey-close').click(); });
   await expect(page.locator('#status')).toHaveText('All checks passed');
   await page.locator('#journey-resume').click();
@@ -647,14 +641,16 @@ test('a capability repair can keep read access as well as write access', async (
 test('the visible primary action earns a star before Next step is offered', async ({page}) => {
   await page.goto('/?guide=api');
   await expect(page.locator('#status')).toHaveText('All checks passed');
-  await expect(page.getByRole('button', {name:'Try this edit',exact:true})).toBeVisible();
-  await expect(page.locator('.journey-repair')).not.toHaveAttribute('open', '');
-  await expect(page.locator('#journey-next')).toHaveText('Continue without a star →');
+  await expect(page.getByRole('button', {name:'Apply edit',exact:true})).toBeVisible();
+  await expect(page.locator('.journey-repair pre')).toBeVisible();
+  await expect(page.locator('.journey-repair #journey-apply')).toHaveText('Apply edit');
+  await expect(page.locator('.journey-legend')).toContainText('Stars mark completed edits');
+  await expect(page.locator('#journey-next')).toHaveText('Next step →');
   await page.locator('#journey-apply').click();
   await expect(page.locator('#journey-progress')).toContainText('Step completed');
   await expect(page.locator('#journey-next')).toHaveText('Next step →');
   await page.locator('#journey-next').click();
-  await expect(page.getByRole('button', {name:'Try this edit',exact:true})).toBeVisible();
+  await expect(page.getByRole('button', {name:'Apply edit',exact:true})).toBeVisible();
   await page.locator('#journey-apply').click();
   await expect(page.locator('#journey-chapter option[value="0"]')).toHaveText(/★ 2\/2/);
   await page.screenshot({path: test.info().outputPath('first-chapter-two-stars.png')});
@@ -737,4 +733,26 @@ test('saved stars distinguish prior completion from the current source', async (
   await page.locator('#src').fill(source.replace('n * 2', 'unknown n'));
   await expect(page.locator('#diags')).toContainText('T001');
   await expect(page.locator('#journey-progress')).toHaveText('★ Completed earlier; your star is saved.');
+});
+
+test('customer edits are visible before applying and capability errors name the missing access', async ({page}) => {
+  await page.goto('/?guide=workspace'); // Previously shared guide links still resolve.
+  await expect(page.locator('#journey-title')).toHaveText('Keep invoices with the right customer');
+  await expect(page.locator('#src')).toHaveValue(/module CustomerInvoiceUnchecked/);
+  await expect(page.locator('.diagnostic-guide')).toHaveText('This value needs a check before it can be used here.');
+  const preview = page.getByRole('region', {name:'Suggested edit'});
+  await expect(preview.locator('pre')).toBeVisible();
+  await expect(preview.locator('pre')).toContainText('checkCustomer raw customer');
+  await expect(preview.getByRole('button', {name:'Apply edit',exact:true})).toBeVisible();
+  await expect(page.locator('#journey-next')).toHaveText('Next step →');
+  await page.screenshot({path:test.info().outputPath('customer-suggested-edit.png')});
+  await page.locator('#journey-next').click();
+  await expect(page.locator('.diagnostic-guide')).toHaveText('Missing capability: declare [dbWrite Note] in the requires clause.');
+  await expect(page.locator('#journey-next')).toHaveText('Next chapter →');
+  await page.locator('#journey-apply').click();
+  await expect(page.locator('#status')).toHaveText('All checks passed');
+  await page.goto('/?guide=customer');
+  await page.locator('#journey-apply').click();
+  await expect(page.locator('#status')).toHaveText('All checks passed');
+  await expect(page.locator('#src')).toHaveValue(/check checkCustomer raw customer/);
 });

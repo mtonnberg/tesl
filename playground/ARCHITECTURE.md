@@ -16,9 +16,9 @@ embedding the shell would not make the native Tesl runtime work in a browser.
 
 ## First-visit experience
 
-Start with the runnable Hello HTTP server; the invoice/workspace rule and its
+Start with the runnable Hello HTTP server; the invoice/customer rule and its
 success/rejection tests remain available as the next practical example. The welcome
-panel offers a runnable API guide, a missing-workspace-check demonstration and search in everyday
+panel offers a runnable API guide, a missing-customer-check demonstration and search in everyday
 language. Success points to **Build with Tesl**, sharing, or a short lesson.
 Explicitly hiding/reopening the introduction persists the preference; shared
 links always begin with the introduction hidden. The local run guide includes a
@@ -174,8 +174,8 @@ before a queued step change, so the outgoing revision can earn its star. Explici
 a source fragment takes precedence and suppresses automatic guide activation.
 Changing an example removes the launch-only guide query and closes the active
 guide to avoid mismatched prose. Repair buttons apply a single matching source
-span, then request a fresh compiler check. Unfinished steps offer Try this edit as the primary action and Continue without
-a star as a secondary link;
+span, then request a fresh compiler check. Suggested code is visible beside Apply edit. Next step and Next chapter allow
+visitors to move on freely; a short legend explains saved stars;
 navigation alone earns no completion, and the local run chapter makes no installation/execution claim.
 
 ## Reasons, lessons and community
