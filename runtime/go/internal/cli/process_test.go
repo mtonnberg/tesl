@@ -42,7 +42,7 @@ func TestNativeProcessRunner(t *testing.T) {
 			var stdout, stderr bytes.Buffer
 			app.Stdout, app.Stderr = &stdout, &stderr
 			app.Environment = toolchain.Setenv(os.Environ(), "TESL_NATIVE_RUNNER_TEST", mode)
-			args := []string{"--internal-run-process", "2", t.TempDir(), os.Args[0], "-test.run=TestNativeProcessRunnerHelper", "--", "space value", "räksmörgås😀", "$(echo nope)", `quoted"\tail`, ""}
+			args := []string{"--internal-run-process", "2", t.TempDir(), testExecutable(t), "-test.run=TestNativeProcessRunnerHelper", "--", "space value", "räksmörgås😀", "$(echo nope)", `quoted"\tail`, ""}
 			err := app.Run(context.Background(), args)
 			switch mode {
 			case "echo":
@@ -74,7 +74,7 @@ func TestNativeProcessRunner(t *testing.T) {
 	app := New()
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if err := app.Run(ctx, []string{"--internal-run-process", "1", t.TempDir(), os.Args[0]}); !errors.Is(err, context.Canceled) {
+	if err := app.Run(ctx, []string{"--internal-run-process", "1", t.TempDir(), testExecutable(t)}); !errors.Is(err, context.Canceled) {
 		t.Fatal(err)
 	}
 	for _, args := range [][]string{nil, {"0", ".", "go"}, {"-1", ".", "go"}, {"86401", ".", "go"}, {"bad", ".", "go"}} {
@@ -84,11 +84,20 @@ func TestNativeProcessRunner(t *testing.T) {
 	}
 }
 
+func testExecutable(t testing.TB) string {
+	t.Helper()
+	path, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
 func TestNativeRunnerRejectsMissingWorkingDirectory(t *testing.T) {
 	app := New()
 	var output bytes.Buffer
 	app.Stdout, app.Stderr = &output, &output
-	err := app.runProcess(context.Background(), []string{"1", filepath.Join(t.TempDir(), "absent"), os.Args[0]})
+	err := app.runProcess(context.Background(), []string{"1", filepath.Join(t.TempDir(), "absent"), testExecutable(t)})
 	if err == nil {
 		t.Fatal("accepted missing cwd")
 	}

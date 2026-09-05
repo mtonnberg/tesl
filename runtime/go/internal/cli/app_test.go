@@ -158,6 +158,33 @@ func TestCleanPreservesProjectDataAndUnrelatedFiles(t *testing.T) {
 	}
 }
 
+func TestScaffoldRejectsMissingTemplateSectionsBeforeCreatingProject(t *testing.T) {
+	for _, section := range []string{"database", "env"} {
+		t.Run(section, func(t *testing.T) {
+			app, _ := fakeApp(t)
+			templates := t.TempDir()
+			writeProjectFile(t, templates, "minimal/app.tesl", "module App exposing []\n")
+			writeProjectFile(t, templates, "minimal/README.md", "template\n")
+			manifest := "[project]\nname = \"demo\"\n[" + section + "]\n"
+			writeProjectFile(t, templates, "minimal/tesl.toml", manifest)
+			getenv := app.Resolver.Getenv
+			app.Resolver.Getenv = func(key string) string {
+				if key == "TESL_TEMPLATES_DIR" {
+					return templates
+				}
+				return getenv(key)
+			}
+			err := app.Run(context.Background(), []string{"init", "new-app", "--template", "minimal", "--yes", "--no-git"})
+			if err == nil || !strings.Contains(err.Error(), "must contain [database] and [env]") {
+				t.Fatalf("missing section: %v", err)
+			}
+			if _, err := os.Stat(filepath.Join(app.Directory, "new-app")); !os.IsNotExist(err) {
+				t.Fatal("invalid template left a partial project")
+			}
+		})
+	}
+}
+
 func TestScaffoldRealTemplatesAndDoesNotOverwrite(t *testing.T) {
 	_, file, _, _ := runtime.Caller(0)
 	repo := filepath.Clean(filepath.Join(filepath.Dir(file), "../../../.."))

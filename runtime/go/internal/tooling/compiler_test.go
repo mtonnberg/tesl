@@ -21,7 +21,7 @@ func TestCompilerPipesDrainAndCloseWithDescendants(t *testing.T) {
 		time.Sleep(30 * time.Second)
 		os.Exit(0)
 	case "root":
-		child := exec.Command(os.Args[0], "-test.run=TestCompilerPipesDrainAndCloseWithDescendants")
+		child := exec.Command(testExecutable(t), "-test.run=TestCompilerPipesDrainAndCloseWithDescendants")
 		child.Env = append(os.Environ(), "TESL_COMPILER_PIPE_HELPER=leaf")
 		child.Stdout, child.Stderr = os.Stdout, os.Stderr
 		if err := child.Start(); err != nil {
@@ -37,7 +37,7 @@ func TestCompilerPipesDrainAndCloseWithDescendants(t *testing.T) {
 		}
 		os.Exit(3)
 	}
-	client := Client{Executable: os.Args[0], Timeout: 5 * time.Second, MaxOutput: 1 << 20,
+	client := Client{Executable: testExecutable(t), Timeout: 5 * time.Second, MaxOutput: 1 << 20,
 		Environment: append(os.Environ(), "TESL_COMPILER_PIPE_HELPER=root", "TESL_COMPILER_PIPE_READY="+filepath.Join(t.TempDir(), "ready"))}
 	result, err := client.Run(context.Background(), "-test.run=TestCompilerPipesDrainAndCloseWithDescendants")
 	if err != nil {
@@ -62,7 +62,7 @@ func TestClientRunsJSONQueryAndPreservesStderr(t *testing.T) {
 		t.Fatal("test executable path unavailable")
 	}
 	client := Client{
-		Executable:  os.Args[0],
+		Executable:  testExecutable(t),
 		Environment: append(os.Environ(), "TESL_COMPILER_HELPER=1"),
 	}
 	payload, result, err := client.QueryJSON(context.Background(), "-test.run=TestClientRunsJSONQueryAndPreservesStderr")
@@ -94,7 +94,7 @@ func TestClientAcceptsValidJSONFromDiagnosticExit(t *testing.T) {
 		t.Fatal("test executable path unavailable")
 	}
 	client := Client{
-		Executable:  os.Args[0],
+		Executable:  testExecutable(t),
 		Environment: append(os.Environ(), "TESL_COMPILER_HELPER=diagnostics"),
 	}
 	payload, result, err := client.QueryJSON(context.Background(), "-test.run=TestClientAcceptsValidJSONFromDiagnosticExit")
@@ -131,7 +131,7 @@ func TestClientRejectsOutputBomb(t *testing.T) {
 		t.Fatal("test executable path unavailable")
 	}
 	client := Client{
-		Executable:  os.Args[0],
+		Executable:  testExecutable(t),
 		MaxOutput:   10,
 		Environment: append(os.Environ(), "TESL_COMPILER_HELPER=bomb"),
 	}

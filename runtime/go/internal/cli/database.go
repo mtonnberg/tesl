@@ -135,7 +135,11 @@ func (app *App) database(ctx context.Context, root, action string) (string, erro
 			return "", err
 		}
 		fields := strings.Fields(version)
-		if len(fields) == 0 || strings.Split(fields[len(fields)-1], ".")[0] != strings.TrimSpace(string(major)) {
+		selectedMajor := ""
+		if len(fields) > 0 {
+			selectedMajor, _, _ = strings.Cut(fields[len(fields)-1], ".")
+		}
+		if selectedMajor == "" || selectedMajor != strings.TrimSpace(string(major)) {
 			return "", fmt.Errorf("managed PostgreSQL data needs major %s; selected tools report %s", strings.TrimSpace(string(major)), strings.TrimSpace(version))
 		}
 	}

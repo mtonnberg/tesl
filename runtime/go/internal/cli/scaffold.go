@@ -108,7 +108,11 @@ func (app *App) init(ctx context.Context, args []string) (err error) {
 	if err != nil {
 		return err
 	}
-	manifest["database"]["mode"] = pgmode
+	databaseConfig, envConfig := manifest["database"], manifest["env"]
+	if databaseConfig == nil || envConfig == nil {
+		return fmt.Errorf("template %s: tesl.toml must contain [database] and [env] sections", template)
+	}
+	databaseConfig["mode"] = pgmode
 	manifestText := strings.Replace(string(contents["tesl.toml"]), "mode = "+strconv.Quote(defaultPG), "mode = "+strconv.Quote(pgmode), 1)
 	if pgmode == "managed" {
 		port, err := freeManagedPort(dest)
@@ -116,7 +120,7 @@ func (app *App) init(ctx context.Context, args []string) (err error) {
 			return err
 		}
 		old := manifest.value("env", "TESL_POSTGRES_PORT", "5432")
-		manifest["env"]["TESL_POSTGRES_PORT"] = port
+		envConfig["TESL_POSTGRES_PORT"] = port
 		manifestText = strings.Replace(manifestText, "TESL_POSTGRES_PORT = "+strconv.Quote(old), "TESL_POSTGRES_PORT = "+strconv.Quote(port), 1)
 	}
 	contents["tesl.toml"] = []byte(manifestText)

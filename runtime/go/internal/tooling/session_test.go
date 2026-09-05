@@ -27,15 +27,19 @@ func TestMain(m *testing.M) {
 }
 
 func sessionHelper(mode string) {
+	input, output := os.Stdin, os.Stdout
+	if input == nil || output == nil {
+		os.Exit(2)
+	}
 	if mode == "bad-handshake" {
-		_ = writeWorkspaceFrame(os.Stdout, []byte(`{"version":99,"protocol":"tesl-workspace"}`))
+		_ = writeWorkspaceFrame(output, []byte(`{"version":99,"protocol":"tesl-workspace"}`))
 		return
 	}
-	_ = writeWorkspaceFrame(os.Stdout, []byte(`{"version":1,"protocol":"tesl-workspace"}`))
+	_ = writeWorkspaceFrame(output, []byte(`{"version":1,"protocol":"tesl-workspace"}`))
 	for {
 		fields := make([][]byte, 5)
 		for i := range fields {
-			value, err := readWorkspaceFrame(os.Stdin, 8192)
+			value, err := readWorkspaceFrame(input, 8192)
 			if err != nil {
 				return
 			}
@@ -62,7 +66,7 @@ func sessionHelper(mode string) {
 			result = `{"version":1}`
 		}
 		response := fmt.Sprintf(`{"version":1,"snapshot":%q,"exit_code":0,"result":%s,"error":null}`, snapshot, result)
-		_ = writeWorkspaceFrame(os.Stdout, []byte(response))
+		_ = writeWorkspaceFrame(output, []byte(response))
 	}
 }
 
@@ -77,6 +81,33 @@ func sessionTestClient(t testing.TB) Client {
 	client := Client{Executable: executable, Sessions: NewWorkspaceSessions(), Environment: withEnvironment(os.Environ(), "TESL_REPO_ROOT", root)}
 	t.Cleanup(func() { _ = client.Close() })
 	return client
+}
+
+func testExecutable(t testing.TB) string {
+	t.Helper()
+	path, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func workspaceState(t *testing.T, client Client) *WorkspaceSessions {
+	t.Helper()
+	sessions := client.Sessions
+	if sessions == nil {
+		t.Fatal("expected retained workspace sessions")
+	}
+	return sessions
+}
+
+func runningWorkspaceProcess(t *testing.T, client Client) *workspaceProcess {
+	t.Helper()
+	process := workspaceState(t, client).process
+	if process == nil {
+		t.Fatal("expected a running workspace compiler")
+	}
+	return process
 }
 
 func sessionProject(t testing.TB) (string, string) {
@@ -200,12 +231,12 @@ func TestBuiltCompilerWorkspaceMatchesFreshQueries(t *testing.T) {
 			})
 		}
 	}
-	if client.Sessions.starts != 1 {
-		t.Fatalf("compiler started %d times", client.Sessions.starts)
+	if workspaceState(t, client).starts != 1 {
+		t.Fatalf("compiler started %d times", workspaceState(t, client).starts)
 	}
 	// manifest/helper once, entry twice (LF then CRLF), never per query.
-	if client.Sessions.writes != 4 {
-		t.Fatalf("mirror wrote %d files", client.Sessions.writes)
+	if workspaceState(t, client).writes != 4 {
+		t.Fatalf("mirror wrote %d files", workspaceState(t, client).writes)
 	}
 	if _, err := os.Stat(entry); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("unsaved entry was written into user's workspace")
@@ -243,7 +274,10 @@ func TestBuiltCompilerWorkspaceRevisions(t *testing.T) {
 	overlay := []SourceOverlay{{entry, sessionSource}}
 	baseline := query(overlay)
 	// Same-size and same-mtime save must still invalidate dependent diagnostics.
-	stat, _ := os.Stat(helper)
+	stat, err := os.Stat(helper)
+	if err != nil {
+		t.Fatal(err)
+	}
 	write(helper, strings.Replace(sessionHelperSource, "= 4", "= x", 1))
 	_ = os.Chtimes(helper, stat.ModTime(), stat.ModTime())
 	if got := query(overlay); got == baseline {
@@ -278,7 +312,7 @@ func TestBuiltCompilerWorkspaceRevisions(t *testing.T) {
 	}
 	write(filepath.Join(root, "new-module.tesl"), "module NewModule exposing []\n")
 	query(overlay)
-	before := client.Sessions.process
+	before := runningWorkspaceProcess(t, client)
 	before.child.Kill()
 	<-before.done
 	if _, _, err := client.QuerySourcesJSON(context.Background(), "--check-json", entry, overlay); err == nil {
@@ -287,10 +321,10 @@ func TestBuiltCompilerWorkspaceRevisions(t *testing.T) {
 	if got := query(overlay); got != baseline {
 		t.Fatal("crash restart did not reconstruct snapshot")
 	}
-	if client.Sessions.starts != 2 {
-		t.Fatalf("starts = %d", client.Sessions.starts)
+	if workspaceState(t, client).starts != 2 {
+		t.Fatalf("starts = %d", workspaceState(t, client).starts)
 	}
-	shadow := client.Sessions.shadow
+	shadow := workspaceState(t, client).shadow
 	if err := client.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -357,15 +391,15 @@ func TestBuiltCompilerWorkspaceRootAndEnvironmentChanges(t *testing.T) {
 			t.Fatalf("wrong project: %s", got)
 		}
 	}
-	if client.Sessions.starts != 3 {
+	if workspaceState(t, client).starts != 3 {
 		t.Fatal("different roots shared one process")
 	}
-	previous := client.Sessions.process
+	previous := runningWorkspaceProcess(t, client)
 	client.Environment = withEnvironment(client.Environment, "TESL_TEST_TOOLCHAIN_REVISION", "next")
 	if _, _, err := client.QuerySourceJSON(context.Background(), "--check-json", first, source); err != nil {
 		t.Fatal(err)
 	}
-	if client.Sessions.process == previous {
+	if workspaceState(t, client).process == previous {
 		t.Fatal("changed toolchain environment reused process")
 	}
 	select {
@@ -420,7 +454,7 @@ func TestWorkspaceSessionProtocolFailures(t *testing.T) {
 	for _, mode := range []string{"bad-handshake", "stale", "crash", "oversized", "truncated", "bad-schema", "hang"} {
 		t.Run(mode, func(t *testing.T) {
 			_, entry := sessionProject(t)
-			client := Client{Executable: os.Args[0], Sessions: NewWorkspaceSessions(), Timeout: 1500 * time.Millisecond, Environment: withEnvironment(os.Environ(), "TESL_SESSION_TEST_HELPER", mode)}
+			client := Client{Executable: testExecutable(t), Sessions: NewWorkspaceSessions(), Timeout: 1500 * time.Millisecond, Environment: withEnvironment(os.Environ(), "TESL_SESSION_TEST_HELPER", mode)}
 			defer func() { _ = client.Close() }()
 			start := time.Now()
 			if _, _, err := client.QuerySourceJSON(context.Background(), "--check-json", entry, "module Main exposing []\n"); err == nil {
@@ -429,7 +463,7 @@ func TestWorkspaceSessionProtocolFailures(t *testing.T) {
 			if time.Since(start) > 5*time.Second {
 				t.Fatal("failed process did not terminate promptly")
 			}
-			if client.Sessions.process != nil {
+			if workspaceState(t, client).process != nil {
 				t.Fatal("failed session retained")
 			}
 			// Changed toolchain environment after a failed request starts cleanly.
@@ -443,14 +477,14 @@ func TestWorkspaceSessionProtocolFailures(t *testing.T) {
 
 func TestWorkspaceSessionCancellationAndClose(t *testing.T) {
 	_, entry := sessionProject(t)
-	client := Client{Executable: os.Args[0], Sessions: NewWorkspaceSessions(), Environment: withEnvironment(os.Environ(), "TESL_SESSION_TEST_HELPER", "hang")}
+	client := Client{Executable: testExecutable(t), Sessions: NewWorkspaceSessions(), Environment: withEnvironment(os.Environ(), "TESL_SESSION_TEST_HELPER", "hang")}
 	// An already-canceled query must not scan or start a process.
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if _, _, err := client.QuerySourceJSON(ctx, "--check-json", entry, "module Main exposing []\n"); !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled query: %v", err)
 	}
-	if client.Sessions.starts != 0 {
+	if workspaceState(t, client).starts != 0 {
 		t.Fatal("canceled query started compiler")
 	}
 	// Closing also interrupts the active exchange and canceled queued callers.

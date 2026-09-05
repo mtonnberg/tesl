@@ -166,7 +166,10 @@ func TestWatchFingerprintUsesContentAndMissingImports(t *testing.T) {
 	writeProjectFile(t, root, "app.tesl", "abc")
 	paths := []string{file}
 	before := watchFingerprint(paths)
-	info, _ := os.Stat(file)
+	info, err := os.Stat(file)
+	if err != nil {
+		t.Fatal(err)
+	}
 	writeProjectFile(t, root, "app.tesl", "def")
 	_ = os.Chtimes(file, info.ModTime(), info.ModTime())
 	if before == watchFingerprint(paths) {

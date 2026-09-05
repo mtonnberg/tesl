@@ -19,6 +19,7 @@ var manifestName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_-]*$`)
 func ParseManifest(source string) (Manifest, error) {
 	result := Manifest{}
 	section := ""
+	var values map[string]string
 	scanner := bufio.NewScanner(strings.NewReader(source))
 	scanner.Buffer(make([]byte, 4096), 1<<20)
 	for line := 1; scanner.Scan(); line++ {
@@ -32,24 +33,26 @@ func ParseManifest(source string) (Manifest, error) {
 				return nil, fmt.Errorf("tesl.toml:%d: invalid section", line)
 			}
 			section = text[1:end]
-			if result[section] == nil {
-				result[section] = map[string]string{}
+			values = result[section]
+			if values == nil {
+				values = map[string]string{}
+				result[section] = values
 			}
 			continue
 		}
 		key, value, found := strings.Cut(text, "=")
 		key = strings.TrimSpace(key)
-		if !found || !manifestName.MatchString(key) || section == "" {
+		if !found || !manifestName.MatchString(key) || values == nil {
 			return nil, fmt.Errorf("tesl.toml:%d: expected section key = value", line)
 		}
 		parsed, err := configValue(value)
 		if err != nil {
 			return nil, fmt.Errorf("tesl.toml:%d: %w", line, err)
 		}
-		if _, exists := result[section][key]; exists {
+		if _, exists := values[key]; exists {
 			return nil, fmt.Errorf("tesl.toml:%d: duplicate %s.%s", line, section, key)
 		}
-		result[section][key] = parsed
+		values[key] = parsed
 	}
 	return result, scanner.Err()
 }

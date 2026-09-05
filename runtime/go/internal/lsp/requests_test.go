@@ -53,6 +53,9 @@ func (compiler *requestCompiler) QuerySourceJSON(ctx context.Context, flag, _, s
 }
 
 func (compiler *requestCompiler) QueryJSON(ctx context.Context, args ...string) (json.RawMessage, tooling.Result, error) {
+	if len(args) == 0 {
+		return nil, tooling.Result{}, fmt.Errorf("missing query flag")
+	}
 	return compiler.answer(ctx, args[0], "")
 }
 

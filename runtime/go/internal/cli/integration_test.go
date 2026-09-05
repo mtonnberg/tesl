@@ -90,7 +90,7 @@ func TestBuiltCompilerNativeCLIWorkflow(t *testing.T) {
 		default:
 		}
 		response, err := client.Get("http://" + address + "/tasks/1")
-		if err == nil {
+		if err == nil && response != nil {
 			_, _ = io.Copy(io.Discard, response.Body)
 			_ = response.Body.Close()
 			if response.StatusCode != http.StatusUnauthorized {

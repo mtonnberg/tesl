@@ -10,12 +10,24 @@ import (
 	"time"
 )
 
+func testExecutable(t testing.TB) string {
+	t.Helper()
+	path, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
 func TestProcessHelper(t *testing.T) {
 	mode := os.Getenv("TESL_PROCESS_HELPER")
 	if mode == "" {
 		return
 	}
 	if mode == "args" {
+		if len(os.Args) < 2 {
+			t.Fatal("missing helper arguments")
+		}
 		data, err := json.Marshal(os.Args[2:])
 		if err != nil {
 			os.Exit(2)
@@ -26,7 +38,7 @@ func TestProcessHelper(t *testing.T) {
 		os.Exit(0)
 	}
 	if mode == "root" {
-		child := exec.Command(os.Args[0], "-test.run=TestProcessHelper")
+		child := exec.Command(testExecutable(t), "-test.run=TestProcessHelper")
 		child.Env = append(os.Environ(), "TESL_PROCESS_HELPER=leaf")
 		if err := child.Start(); err != nil {
 			os.Exit(2)
@@ -59,7 +71,7 @@ func TestDescendantsStopOnCancellationAndParentExit(t *testing.T) {
 	for _, exit := range []bool{false, true} {
 		t.Run(fmt.Sprint("exit=", exit), func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "heartbeat")
-			command := exec.Command(os.Args[0], "-test.run=TestProcessHelper")
+			command := exec.Command(testExecutable(t), "-test.run=TestProcessHelper")
 			command.Env = append(os.Environ(), "TESL_PROCESS_HELPER=root", "TESL_PROCESS_HEARTBEAT="+path)
 			if exit {
 				command.Env = append(command.Env, "TESL_PROCESS_ROOT_EXIT=1")
@@ -114,7 +126,7 @@ func TestDescendantsStopOnCancellationAndParentExit(t *testing.T) {
 func TestArgumentsRemainLiteral(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "arguments")
 	literal := "literal argument $() ; & å😀"
-	command := exec.Command(os.Args[0], "-test.run=TestProcessHelper", literal)
+	command := exec.Command(testExecutable(t), "-test.run=TestProcessHelper", literal)
 	command.Env = append(os.Environ(), "TESL_PROCESS_HELPER=args", "TESL_PROCESS_HEARTBEAT="+path)
 	child, err := Start(command)
 	if err != nil {
