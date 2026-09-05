@@ -131,7 +131,7 @@ def assemble(plan, root, target, compiler, frontends, go_root, postgres, module_
     output = output.absolute()
     manifest = payload_contract(plan, target)
     verify_module_bundle(plan, root, module_bundle)
-    if (go_root / "VERSION").read_text().splitlines()[0] != "go" + plan["sources"]["go"]["version"]:
+    if (go_root / "VERSION").read_text().splitlines()[:1] != ["go" + plan["sources"]["go"]["version"]]:
         raise ValueError("Go SDK version differs from release plan")
     for name, prefix in (("go", go_root), ("postgresql", postgres)):
         built = json.loads((prefix / "native-build.json").read_text(encoding="utf-8"))

@@ -54,7 +54,7 @@ def build(plan, target, archive, bootstrap, output):
         # already strip it; both must have the exact release VERSION file.
         sdk = source if (source / "VERSION").is_file() else source / "go"
         version = "go" + plan["sources"]["go"]["version"]
-        if (sdk / "VERSION").read_text().splitlines()[0] != version:
+        if (sdk / "VERSION").read_text().splitlines()[:1] != [version]:
             raise ValueError("Go source version differs from release plan")
         environment = build_environment(os.environ, target, bootstrap, work)
         suffix = ".exe" if target.startswith("windows-") else ""

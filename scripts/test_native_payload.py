@@ -124,6 +124,13 @@ class NativePayloadTest(unittest.TestCase):
                     with self.assertRaisesRegex(ValueError, "build metadata"):
                         assemble(args)
 
+    def test_empty_or_wrong_sdk_version_is_rejected(self):
+        for version in ("", "go1.0.0\n"):
+            with self.subTest(version=version), fixture() as args:
+                (args[5] / "VERSION").write_text(version)
+                with self.assertRaisesRegex(ValueError, "SDK version"):
+                    assemble(args)
+
     def test_existing_payload_is_preserved(self):
         with fixture() as args:
             args[-1].mkdir()
