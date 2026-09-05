@@ -109,6 +109,11 @@ let resolve_binding ?(modules = []) (m : module_form) (d : database_form) =
          in
          visit m.source_file root;
          let members = List.sort (fun (left, _) (right, _) -> String.compare left right) !members in
+         (* Storage validation sees the whole ownership projection, not only the
+            declarations an application chose to expose. This also detects index
+            names shared by entities in different private modules. *)
+         errors := List.rev_append (Validation_structural.check_entity_structure
+           (List.map (fun (name, entity) -> DEntity { entity with name }) members)) !errors;
          let tables = Hashtbl.create 8 in
          List.iter (fun (name, (e : entity_form)) ->
            match Hashtbl.find_opt tables e.table with
@@ -139,7 +144,10 @@ let check_closure ?root_module ~source_file root =
           let header_errors = if m.module_name = name then [] else
             [make_error (Location.dummy_loc path) (Printf.sprintf
                "schema module `%s` resolves to a file declaring `%s`" name m.module_name)] in
-          header_errors @ check_contents m @ List.concat_map (fun (imp : import_decl) ->
+          let storage_errors = match root_module with
+            | Some current when current.source_file = m.source_file -> [] (* Already checked by the local validation pass. *)
+            | _ -> Validation_structural.check_entity_structure m.decls in
+          header_errors @ check_contents m @ storage_errors @ List.concat_map (fun (imp : import_decl) ->
             if String.starts_with ~prefix:"Tesl." imp.module_name then []
             else if within prefix imp.module_name then visit m.source_file imp.module_name
             else [make_error imp.loc (Printf.sprintf

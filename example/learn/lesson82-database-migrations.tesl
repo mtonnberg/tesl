@@ -1,0 +1,100 @@
+module Lesson82DatabaseMigrations exposing [NoteDatabase, saveTitle, findTitle]
+
+# lesson: track=data order=840 needs=lesson18-database-sql-and-proofs,lesson05-intro-to-proofs
+# summary: Give a database one schema-module owner and validate writes with pure schema proofs
+# Lesson 82 — Database migrations: schema ownership
+#
+# Run this lesson with:
+#
+#   tesl test example/learn/lesson82-database-migrations.tesl
+#
+# A connection is an application concern. A schema is a description of stored
+# data and its invariants. Keeping them in separate modules makes that boundary
+# enforceable, and gives migration history a closure it can freeze independently
+# of connection settings, routes, tests, or background workers.
+#
+# This example has three files:
+#
+#   lesson82-database-migrations.tesl              application and tests
+#   schema/lesson-notes/v-current.tesl             schema membership
+#   schema/lesson-notes/v-current/notes.tesl       entity and pure validation
+#
+# The root exports nothing: imports define schema membership, while exposing
+# lists define which names ordinary application code may use. We import the root
+# for Database.schema and the Notes child for Note and tryTitle. The database's
+# table list comes from the complete schema closure, including private entities;
+# there is no second entities: list to keep synchronized.
+#
+# The application always imports VCurrent. A frozen V<n> describes an earlier
+# release for migration code; changing a schema version should not require
+# rewriting every application import.
+#
+# This first part exercises ownership and proof-checked writes. The migration
+# planner and executor are still being implemented; this example does not yet
+# demonstrate adoption, column reconciliation, or rolling deployment.
+
+import Tesl.Prelude exposing [Bool(..), String]
+import Tesl.String exposing [String.repeat]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.DB exposing [dbRead, dbWrite]
+import Tesl.Database exposing [Database, Memory]
+import LessonNotesSchema.VCurrent exposing []
+import LessonNotesSchema.VCurrent.Notes exposing [Note, tryTitle]
+
+# Memory keeps the lesson runnable without external services. A PostgreSQL
+# deployment keeps this declaration in the application and puts its physical
+# schema name in PostgresConfig.namespace, separately from the module reference.
+# Different deployments can supply different connection settings for the same
+# schema. They cannot split one schema family between two Database declarations.
+database NoteDatabase = Database {
+  schema: LessonNotesSchema.VCurrent
+  migrations: LessonNotesSchema.Migrate
+  backend: Memory
+}
+
+# Every successful insert carries ValidTitle from the schema's establish function.
+# Returning False leaves the database untouched. Constructing a Note directly
+# from raw input would fail proof checking at compile time.
+fn saveTitle(id: String, raw: String) -> Bool requires [dbWrite Note] =
+  case tryTitle raw of
+    Nothing -> False
+    Something title ->
+      let _ = insert Note { id: id, title: title }
+      True
+
+# Database operations stay in application code. The schema itself has no dbRead
+# or dbWrite capability and cannot depend on the connection used by this query.
+fn findTitle(id: String) -> Maybe String requires [dbRead Note] =
+  case selectOne note from Note where note.id == id of
+    Nothing -> Nothing
+    Something note -> Something note.title
+
+test "schema-owned validation trims a title before storing it" requires [dbRead Note, dbWrite Note] {
+  expect saveTitle "first" "  a schema has one owner  " == True
+  expect findTitle "first" == Something "a schema has one owner"
+}
+
+test "an invalid title does not insert a row" requires [dbRead Note, dbWrite Note] {
+  expect saveTitle "empty" "" == False
+  expect saveTitle "spaces" "   " == False
+  expect findTitle "empty" == Nothing
+  expect findTitle "spaces" == Nothing
+}
+
+test "the private schema helper defines the accepted title boundary" requires [dbRead Note, dbWrite Note] {
+  let limit = String.repeat "x" 80
+  let overLimit = String.repeat "x" 81
+  expect saveTitle "limit" limit == True
+  expect findTitle "limit" == Something limit
+  expect saveTitle "too-long" overLimit == False
+  expect findTitle "too-long" == Nothing
+}
+
+test "validation and storage preserve Unicode titles" requires [dbRead Note, dbWrite Note] {
+  expect saveTitle "unicode" "  Ändra schemat  " == True
+  expect findTitle "unicode" == Something "Ändra schemat"
+}
+
+test "a missing row stays missing" requires [dbRead Note] {
+  expect findTitle "never-written" == Nothing
+}

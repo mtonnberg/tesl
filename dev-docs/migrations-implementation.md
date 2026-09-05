@@ -216,8 +216,20 @@ that these scenarios currently work.
   files pass agent-context. The updated PostgreSQL process run passes, including
   shared rows and transaction pauses. An earlier attempt timed out during fixture
   role creation before application queries; server logs are now retained in the
-  failure output. The general MIG015
+  failure output. The complete compiler gate passes after correcting older GET/POST
+  fixtures that incorrectly listed a plain record in `Database.entities`. The
+  PostgreSQL 17 database, replica and crash cases pass; pooler cases also pass after
+  supplying the installed PgBouncer path. Optional test dependencies are now checked
+  before cluster setup. The general MIG015
   historical-import rule and history/executor integration still remain pending.
+- A storage-identity review found that distinct Tesl fields such as `userID` and
+  `userId` map to one SQL column, and overlong PostgreSQL identifiers can silently
+  truncate. Validation and emission now share the column-name conversion; checks
+  reject these collisions and overlong/NUL table names, including private schema
+  members. Focused tests pass for ASCII and Unicode byte boundaries, acronym and
+  underscore aliases, and names that grow during conversion. The whole ownership
+  projection is also checked for explicit index-name collisions across modules.
+  The expanded compiler gate for this latest storage check is pending.
 - PostgreSQL tests interpose retirement between a read and its admission, for old
   and surviving versions and six query forms: rows, a missing key, constant false,
   LIMIT 0, an empty aggregate, and EXISTS. They verify that contract DDL

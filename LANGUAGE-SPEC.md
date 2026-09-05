@@ -2027,13 +2027,13 @@ The compiler enforces that:
 3. Builtin codecs (`stringCodec`, `intCodec`, etc.) must match the field's declared type (e.g., `with_codec stringCodec` on an `OrgRole` field is a compile error).
 
 ### 11.8 Entities
+**Accepted design, Implemented but still evolving.**
+
 Table names must be nonempty, contain no NUL, and fit PostgreSQL's 63-byte
 identifier limit. Field names map to snake-case column names, preserving acronym
 groups (`userID` becomes `user_id`). The compiler rejects two fields that map to
 one column, or a mapped column name longer than 63 bytes. PostgreSQL's silent
 identifier truncation must never merge distinct declared storage identities.
-
-**Accepted design, Implemented but still evolving.**
 
 ```text
 <entity-decl> ::= "entity" <identifier>

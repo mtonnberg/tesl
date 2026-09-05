@@ -1,0 +1,29 @@
+module LessonNotesSchema.VCurrent.Notes exposing [Note, ValidTitle, tryTitle]
+
+# This module owns data shapes and the pure rules that justify their proofs.
+# Connections, handlers, workers, database operations and tests belong outside
+# the schema closure. The compiler rejects them here.
+
+import Tesl.Prelude exposing [Int, String]
+import Tesl.String exposing [String.length, String.trim]
+import Tesl.Maybe exposing [Maybe(..)]
+
+fact ValidTitle (title: String)
+
+# A private helper is still part of the schema's meaning. Changing this limit
+# changes what ValidTitle accepts; it must be included in migration history.
+fn titleLimit() -> Int = 80
+
+# Unlike an HTTP check, an establish function can describe failure with Nothing.
+# That makes the same validation usable by application code and row transforms.
+establish tryTitle(raw: String) -> Maybe (value: String ::: ValidTitle value) =
+  let title = String.trim raw
+  if String.length title > 0 && String.length title <= titleLimit() then
+    Something (title ::: ValidTitle title)
+  else
+    Nothing
+
+entity Note table "lesson_migration_notes" primaryKey id {
+  id: String
+  title: String ::: ValidTitle title
+}

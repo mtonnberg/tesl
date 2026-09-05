@@ -726,7 +726,24 @@ database Db = Database { schema: NotesSchema.VCurrent, migrations: NotesSchema.M
     "distinct acronyms", "notes", "userID: String\nhttpURL: String", None;
     "63-byte mapped column", "notes", String.make 61 'a' ^ "B: String", None;
     "64-byte mapped column", "notes", String.make 62 'a' ^ "B: String", Some "overlong SQL column";
-  ])
+  ];
+  let indexed name table = "entity " ^ name ^ " table \"" ^ table
+    ^ "\" primaryKey id { id: String\n title: String\n index [title] as \"shared_index\"\n}\n" in
+  ignore (write "schema/notes/v-current.tesl"
+    ("module NotesSchema.VCurrent exposing []\nimport Tesl.Prelude exposing [String]\nimport NotesSchema.VCurrent.Hidden\n"
+      ^ indexed "Note" "notes"));
+  ignore (write "schema/notes/v-current/hidden.tesl"
+    ("module NotesSchema.VCurrent.Hidden exposing []\nimport Tesl.Prelude exposing [String]\n"
+      ^ indexed "Private" "private_notes"));
+  check bool "index namespace collision includes private modules" true
+    (List.exists (fun (d : Compile.diagnostic) ->
+      List.for_all (fun fragment ->
+        try ignore (Str.search_forward (Str.regexp_string fragment) d.message 0); true
+        with Not_found -> false)
+        ["index name `shared_index`"; "already used"; "NotesSchema.VCurrent.Hidden.Private"; "NotesSchema.VCurrent.Note"])
+      (Compile.check_file app));
+  (match Compile.compile_go_file app with
+   | Compile.GoFailure _ -> () | Compile.GoSuccess _ -> fail "private index name collision was emitted"))
 
 let source_rewrite () =
   let rewrite before after source =
