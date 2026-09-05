@@ -780,6 +780,27 @@ of nested record/ADT fields. Thus an unchanged SQL `jsonb` column can have a
 different semantic closure. This loader does not yet implement historical
 manifest checks, the contextual `Same` rule or a cross-ABI data transition.
 
+The field-impact projection has one location per declared entity field, including
+private entities in child modules. It uses the same typed lowering as the complete
+declaration. Each contract is
+`["compiler-semantics", compiler-abi, ["stored-field", field-node, dependency-closure]]`.
+In this standalone field node, proof subjects referring to entity fields use
+`["field-subject", field-name]`; adding or reordering a sibling must not rename an
+existing proof subject by shifting its positional index. The complete declaration
+encoding above is unchanged. The location identity is
+`["stored-location", schema-entity-reference, field-name]`, with the same revision
+alpha-renaming as snapshots.
+
+Comparison reports added and removed locations, changed field definitions, and
+changed dependencies under unchanged field text. A record codec, nested ADT, or
+fact producer can therefore affect several entity fields while all their SQL types
+remain `jsonb`. An unreferenced record or codec has no stored location. Comparison
+refuses different schema families or compiler ABIs. The ABI supplied to the loader
+identifies the compiler performing that load; it cannot request historical
+execution semantics. This field projection neither checks persisted history nor
+establishes rolling compatibility, physical catalog equivalence, a verified `Same`
+bridge, or permission to remove a decoder. Those remain planner/runtime duties.
+
 Type-like declarations are module-scoped. If two modules both define a name such as `User`, `Task`, or `Status`, those declarations remain distinct even when they share the same surface spelling. Loading one module must not change the meaning of an unqualified type name in another module.
 
 If a module needs to use same-named imported type-like declarations from different modules, the ambiguity must be resolved by module qualification/prefixing. The compiler should reject unqualified ambiguous uses rather than merging declarations by bare name.

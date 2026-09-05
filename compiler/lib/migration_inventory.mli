@@ -16,6 +16,8 @@ type field_change =
   | Changed_field of { previous : stored_field; current : stored_field;
                        definition_changed : bool }
 
+(** [compiler_abi] identifies the compiler executing this load. Supplying an old
+    tag does not execute old semantics or validate a persisted history record. *)
 val load : compiler_abi:string -> root_file:string ->
   (t, Migration_ir.error) result
 

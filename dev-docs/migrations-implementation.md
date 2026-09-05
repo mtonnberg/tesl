@@ -218,6 +218,18 @@ are included. Adoption, additive execution and the remaining lessons are pending
   record codec contract is incomplete. Review regressions caught a missing
   transitive Go import, same-named ADTs sharing a decoder, and an annotation
   bypassing the record contract; those cases are fixed.
+- The checked inventory now projects semantic contracts for every stored entity
+  field using the same IR lowering as complete declarations. A changed codec,
+  nested ADT, or fact producer reaches all containing fields, including private
+  entities, optional fields and newtype wrappers. Nine regression groups cover
+  exact affected locations, fallback removal/order, proof subjects, annotations,
+  additions/removals, frozen copies, same-named private types, ABI/family refusals,
+  and one codec shared by 300 private entities. Unstored records/codecs and
+  unrelated fields remain outside the change report. Field proof subjects use
+  stable names so adding or reordering a sibling does not create spurious changes.
+  This is planner input; physical catalog diffing, compatibility classification,
+  persisted ABI/history checks, queue occurrences and decoder-pruning gates are
+  still pending.
 - A complete V7/V8/V9 HTTP app now runs in separate generated binaries against
   PostgreSQL with byte-identical application source. Raw JSONB checks and unchanged
   HTTP assertions cover old/new read directions, untouched old values surviving
@@ -405,6 +417,13 @@ are included. Adoption, additive execution and the remaining lessons are pending
   review removes redundant inherited metadata copying, and the complete compiler
   suite passes again. These are completed slice checks; the delivery table above
   still records the remaining implementation and feature-wide review gates.
+  The next compiler run, with field-impact tests, found two unrelated tuple-arity
+  failures. An isolated regression established the cause: import suggestions
+  parsed an unimported malformed sibling and replaced the real type diagnostic
+  with its lexer error. Discovery now skips lexer-invalid candidates, while
+  checking the broken source still fails. The 16 suggestion tests and original
+  34-case regression suite pass. Test directories now use unique temporary names
+  and cleanup; PID reuse previously caused collisions on repeated isolated runs.
 
 ## Implementation decisions
 
