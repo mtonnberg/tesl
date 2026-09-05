@@ -86,8 +86,8 @@ Implemented so far:
 Nix's default install, `nix run`, and development shell now select the native CLI
 after local command-parity and clean-install checks passed. The authoritative gate
 is being rerun with this selection; it also tests the actual default profile.
-Native parity CI now includes Linux/macOS candidate assembly
-and installed-workflow gates; Windows packaging checks await their first run. It does not
+Native parity CI includes candidate assembly and installed-workflow gates for all
+five targets; macOS and Windows packaging still need successful runs. It does not
 publish releases. M2–M4 remain open, including complete native
 dependency closure, scanner parity, provenance, and native install/upgrade tests.
 

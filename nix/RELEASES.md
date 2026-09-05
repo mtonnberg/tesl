@@ -157,15 +157,23 @@ Only execution on the declared baseline earns `minimum_os_runtime: passed`;
 a newer macOS runner or a Windows Server runner retains `not-established` for
 the declared macOS/desktop Windows baseline.
 
+The current matrix uses macOS 15 and Windows Server 2025. GitHub's
+[standard runner list](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)
+does not include macOS 13 or Windows 11 x86-64. Its Windows 11 ARM runner would
+provide supplementary emulation coverage, not native x86-64 baseline evidence.
+Minimum-OS acceptance therefore needs a matching test host or an explicit change
+to the supported baseline. This test-coverage gap is independent of signing accounts.
+
 Outputs are the versioned `.tar.gz`/`.zip`, its `.sha256`, and `distribution-checks.json`.
-They are unsigned CI candidates. Archive metadata is normalized, but complete
+They are CI candidates without a publisher certificate. Archive metadata is normalized, but complete
 cross-host reproducibility, installers, upgrades and publication remain
 separate acceptance gates. Windows Authenticode and macOS Developer ID signing /
 notarization are explicitly optional under the maintainer's 2026-09-05 policy.
 Windows delivery is unsigned; macOS delivery is an ad-hoc signed native archive,
 with Nix recommended for macOS users. Execution on the declared minimum OS and
-Windows network isolation remain separate gates; the new macOS isolation helper
-still needs its first successful native matrix run. Native Windows packaging includes MSVC PostgreSQL, the
+Windows network isolation remain separate gates. The macOS isolation probe passes
+on both architectures; the complete macOS installed workflow remains pending.
+Native Windows packaging includes MSVC PostgreSQL, the
 verified-source OCaml compiler, and a PE/DLL audit. Required compiler runtime DLLs
 come only from the active Visual Studio redistributable directory, retain their
 Microsoft signatures, and include hashes, versions, and the pinned license text.

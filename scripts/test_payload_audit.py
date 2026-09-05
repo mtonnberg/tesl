@@ -53,7 +53,7 @@ class PayloadAuditTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="tesl payload å ")
         self.addCleanup(self.temporary.cleanup)
-        self.root = Path(self.temporary.name)
+        self.root = Path(self.temporary.name).resolve()
         self.binary = self.write("bin/tool", elf())
 
     def write(self, name, data):

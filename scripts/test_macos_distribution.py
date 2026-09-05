@@ -17,7 +17,7 @@ class MacOSDistributionTests(unittest.TestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory(prefix="tesl macOS å ")
         self.addCleanup(self.directory.cleanup)
-        self.root = Path(self.directory.name)
+        self.root = Path(self.directory.name).resolve()
         self.binary = self.root / "tesl"
         self.binary.write_bytes(b"original")
         self.audit = {"binaries": [{"path": "tesl", "format": "Mach-O"}]}
@@ -49,6 +49,16 @@ class MacOSDistributionTests(unittest.TestCase):
             with self.subTest(failure=failure), patch.object(macos.subprocess, "run", side_effect=effects):
                 with self.assertRaises(subprocess.CalledProcessError):
                     macos.sign_payload(self.root, self.audit, self.policy)
+
+    @unittest.skipIf(os.name == "nt", "Windows symlink creation needs privileges")
+    def test_payload_root_alias_uses_the_same_canonical_inventory(self):
+        alias = self.root / "alias"
+        alias.symlink_to(".", target_is_directory=True)
+        with patch.object(macos.subprocess, "run") as run:
+            result = macos.sign_payload(alias, self.audit, self.policy)
+        self.assertEqual([call.args[0][-1] for call in run.call_args_list], [str(self.binary)] * 2)
+        self.assertTrue(all(call.kwargs["cwd"] == self.root for call in run.call_args_list))
+        self.assertEqual(result["binaries"][0]["path"], "tesl")
 
     def test_missing_or_conflicting_policy_does_not_silently_downgrade(self):
         for policy in ({}, {**self.policy, "macOSSigning": "required"},

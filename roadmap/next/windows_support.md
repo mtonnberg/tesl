@@ -29,17 +29,22 @@ Implemented so far:
   consuming the Nix-exported source revision and tool versions.
 - The matrix now receives one checksum-verified offline Go module bundle and
   exercises copied-SDK scaffold/password/debug builds with empty module caches.
-  This new step2 check still needs its native Windows CI result; it does not
-  establish compiler DLL or PostgreSQL relocation.
-- Shared source verification, payload assembly/inventory, and an installed CLI
-  acceptance harness now exist. Distribution remains Linux/macOS-only: the current
-  dependency audit rejects Windows explicitly until PE/DLL closure and native
-  PostgreSQL packaging are implemented. Windows source parity continues to run.
+  This check passes on native Windows; it does not establish compiler DLL or
+  PostgreSQL relocation.
+- Native source builders now cover the pinned Go SDK, OCaml/Dune compiler tools,
+  and MSVC PostgreSQL. The payload assembler audits PE/DLL dependency closure,
+  collects runtime libraries and licenses, and packages a portable ZIP plus a
+  self-contained setup executable. End-to-end native packaging still needs a
+  successful CI run; the source-parity gate passes separately.
+- Windows checkout tests keep embedded runtime inputs in LF form even with
+  `core.autocrlf=true`, preserving the exact source identity during packaging.
+  CI continues to reject builds that change tracked source files.
 
 PR #100's [native Windows job](https://github.com/mtonnberg/tesl/actions/runs/33960309969/job/101291009775)
 passed the compiler, CLI/process, LSP, compiler-session, token-ACL, and extension
-unit suites. Windows PostgreSQL and scanner parity, complete offline payloads,
-signing, installers, and real desktop editor tests remain open. W0 also requires
+unit suites. Windows installed PostgreSQL and scanner parity, complete offline
+payload acceptance, setup acceptance, and real desktop editor tests remain open.
+Authenticode signing is optional under the distribution policy below. W0 also requires
 the packaged workflow and dependency closure; the source-build result is partial
 evidence for that gate.
 
@@ -53,11 +58,11 @@ native Windows processes without WSL, Bash, MSYS2, Cygwin, or Nix.
 | Existing component | Windows gap to resolve |
 |---|---|
 | OCaml compiler | Native build and process-runner tests pass; inventory and relocate the resulting native runtime dependencies |
-| CLI | [`tesl-cli-body.sh`](../../nix/tesl-cli-body.sh) orchestrates Go, database lifecycle, watch, and other commands through Bash/Unix utilities and Nix discovery |
+| CLI | The shared [`native CLI`](../../runtime/go/internal/cli) implements orchestration; verify its complete installed workflow on Windows |
 | Go tooling | Job Object ownership and descendant cleanup pass native tests; verify installed end-to-end debugger and agent workflows |
 | Debug transport | Authenticated loopback TCP and current-user token ACL tests pass natively; verify the installed desktop workflow |
 | Extension | Native launch and installation discovery are implemented in [`extension.js`](../../editor/vscode-tesl/extension.js); legacy Nix compatibility remains, and native desktop scenarios need verification |
-| Installation and CI | [`INSTALL.md`](../../INSTALL.md) points Windows users to WSL; native parity CI now passes, but offline payloads and installers do not exist yet |
+| Installation and CI | [`INSTALL.md`](../../INSTALL.md) documents unsigned setup/ZIP candidates and source builds; source parity passes, while complete native packaging and offline acceptance remain pending |
 
 Reuse the compiler and Go LSP/DAP/MCP/runtime implementations. Port platform
 boundaries rather than maintaining a Windows language fork.
