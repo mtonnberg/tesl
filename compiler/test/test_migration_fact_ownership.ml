@@ -144,9 +144,9 @@ establish forge(n: Int) -> Fact (InBounds 1 100 n) =
     (List.exists (fun (e : Type_system.type_error) -> contains "fact ownership violation" e.message &&
       contains "NotesSchema.VCurrent.InBounds" e.message) errors))
 
-let detached_fact_forwarding () = with_project (fun _ write ->
+let detached_fact_forwarding () = with_project (fun root write ->
   setup write;
-  let path = write "app.tesl" (importer "App" "VCurrent" {|
+  let source = importer "App" "VCurrent" {|
 fn retain(n: Int, proof: Fact (InBounds 1 100 n)) -> Fact (InBounds 1 100 n) =
   proof
 fn alias(n: Int, proof: Fact (InBounds 1 100 n)) -> Fact (InBounds 1 100 n) =
@@ -160,8 +160,38 @@ fn choose(n: Int, first: Fact (InBounds 1 100 n), second: Fact (InBounds 1 100 n
     second
 fn relay(n: Int, proof: Fact (InBounds 1 100 n)) -> Fact (InBounds 1 100 n) =
   retain n proof
-|}) in
-  accepted path)
+fn consume(n: Int ::: InBounds 1 100 n) -> Int = n
+fn validate(n: Int) -> Maybe Int =
+  case accept n of
+    Nothing -> Nothing
+    Something proof ->
+      let kept = alias n (relay n proof)
+      let chosen = choose n proof kept (n <= 50)
+      Something (consume (attachFact n chosen))
+test "forwarded facts retain the validator's values and rejection boundary" {
+  expect validate 12 == Something 12
+  expect validate 1 == Something 1
+  expect validate 100 == Something 100
+  expect validate 0 == Nothing
+  expect validate 101 == Nothing
+}
+|} in
+  let source = Str.global_replace (Str.regexp_string "exposing [InBounds]")
+    "exposing [InBounds, accept]" source
+    |> Str.global_replace (Str.regexp_string "String, Fact]") "String, Fact, attachFact]" in
+  let path = write "app.tesl" source in
+  accepted path;
+  let artifacts = match Compile.compile_go_file path with
+    | Compile.GoSuccess artifacts -> artifacts
+    | Compile.GoFailure errors -> fail (Compile.diagnostics_to_json errors) in
+  List.iter (fun (a : Emit_go.artifact) -> ignore (write ("out/" ^ a.path) a.contents)) artifacts;
+  let log = Filename.concat root "go-test.log" in
+  let command = Printf.sprintf "cd %s && timeout 90s go test -timeout=60s -count=1 -v ./... > %s 2>&1"
+    (Filename.quote (Filename.concat root "out")) (Filename.quote log) in
+  let status = Sys.command command in
+  let output = In_channel.with_open_bin log In_channel.input_all in
+  if status <> 0 then fail output;
+  check bool "generated runtime test actually ran" true (contains "--- PASS:" output))
 
 let detached_fact_refusals () = with_project (fun _ write ->
   setup write;

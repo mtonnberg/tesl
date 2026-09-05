@@ -70,6 +70,19 @@ are included. Adoption, additive execution and the remaining lessons are pending
 
 ## Slices under development
 
+- The complete compiler gate passed 197 suite groups after the equality, entity
+  impact and producer-ownership fixes below. Manual coherence and documentation
+  integrity also pass. A subsequent review found an existing false rejection of
+  an ordinary function returning its received detached `Fact`. The initial proof
+  environment now records that premise on its holder, keeping subjects and bounds
+  intact and requiring optional wrappers to be eliminated. Focused transport,
+  identity, adversarial and literal-subject tests pass; the expanded regression
+  also checks aliases, branches and wrong-subject/bound refusals. Its generated
+  Go application test calls the schema validator, forwards its detached evidence,
+  explicitly reattaches it and invokes a proof-requiring consumer across valid
+  values and rejected boundaries. The CLI forwarding reproducer now has zero
+  diagnostics. This later fix
+  requires another full gate. Neither feature-wide review is complete.
 - The checked inventory now verifies compiler-local `Same` equality and proposes
   equal type/fact/codec pairs, including private declarations. Comparisons use the
   full canonical tree, preserve nominal identity and report the first differing

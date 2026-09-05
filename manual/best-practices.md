@@ -633,6 +633,9 @@ An application or migration can call the owning validator and pass already-prove
 values through ordinary functions; it cannot introduce a replacement validator
 for an imported fact. This also applies to predicates with several arguments,
 such as `InBounds 1 100 amount`.
+An ordinary helper can also receive and return `Fact (InBounds 1 100 amount)`
+unchanged. The evidence keeps its original value and bounds; use `attachFact` when
+you need to attach it to that value. An optional proof must be unwrapped first.
 
 ### Typed Queries
 

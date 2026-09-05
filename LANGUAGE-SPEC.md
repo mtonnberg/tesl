@@ -358,6 +358,14 @@ This does **not** mean the runtime performs no validation. A handful of checks r
 
 The `:::` operator in expression context outside `establish`, `check`, and `auth` function bodies may only attach existing proof values. Using a raw GDP predicate expression (e.g. `value ::: IsPositive x`) in a `fn` or `handler` body is rejected at compile time. This closes the bypass path that would otherwise let any function kind fabricate a proof fact without passing through a validation boundary.
 
+A parameter `evidence: Fact (P n)` carries the declared proof about `n`. Ordinary
+functions may return this evidence unchanged, including through local aliases,
+calls and branches whose returned evidence satisfies the declared proposition.
+The assumption is indexed by the evidence holder and keeps the original subjects
+and literal arguments. It does not implicitly attach `P` to the raw value `n` or
+permit changing a subject or bound. `Maybe (Fact (P n))` does not provide an
+unconditional assumption; the wrapper must first be eliminated.
+
 ### 7.13 The `?` pack operator for named return values
 **Accepted design, Implemented.**
 
