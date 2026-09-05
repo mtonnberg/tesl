@@ -1048,7 +1048,7 @@ fi
 # found"). This phase builds the actual flake profile (#tesl-go-cli) and drives
 # `init`/`emit`/`build --no-docker` through it under a scrubbed environment
 # (env -i), exactly what a fresh `nix profile install` user gets.
-phase_begin "Clean install (nix-built shipped wrapper)"
+phase_begin "Clean install (Nix shipped and native CLI candidates)"
 if ! command -v nix >/dev/null 2>&1; then
     printf "  %s⚠%s  nix not found — skipping clean-install gate\n" "$C_YELLOW" "$C_RESET"
     phase_end SKIP
@@ -1056,13 +1056,17 @@ elif ! command -v go >/dev/null 2>&1; then
     printf "  %s⚠%s  go not found — skipping clean-install gate\n" "$C_YELLOW" "$C_RESET"
     phase_end SKIP
 else
-    _clean_install_link="$(mktemp -d)/tesl-profile"
-    if nix build .#tesl-go-cli -o "$_clean_install_link" \
-        && TESL_BIN="$_clean_install_link/bin/tesl" bash "$SCRIPT_DIR/tests/go-clean-install.sh"; then
-        phase_end OK
-    else
-        phase_end FAIL
-    fi
+    _clean_install_dir="$(mktemp -d)"
+    _clean_install_fail=0
+    for _clean_install_package in tesl-go-cli tesl-native-cli; do
+        _clean_install_link="$_clean_install_dir/$_clean_install_package"
+        if ! nix build ".#$_clean_install_package" -o "$_clean_install_link" \
+            || ! TESL_BIN="$_clean_install_link/bin/tesl" bash "$SCRIPT_DIR/tests/go-clean-install.sh"; then
+            _clean_install_fail=1
+        fi
+    done
+    rm -rf "$_clean_install_dir"
+    if [ "$_clean_install_fail" -eq 0 ]; then phase_end OK; else phase_end FAIL; fi
 fi
 
 # ══════════════════════════════════════════════════════════════════════════════

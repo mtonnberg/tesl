@@ -11,6 +11,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -240,7 +241,7 @@ func StartDebugControlFromEnvironment() (*DebugControlServer, error) {
 		return nil, nil
 	}
 	socket := filepath.Join(debugRootFromEnvironment(), ".tesl-stuff", "debug.sock")
-	if len([]byte(socket)) > debugMaxUnixPathBytes {
+	if runtime.GOOS == "windows" || len([]byte(socket)) > debugMaxUnixPathBytes {
 		token, err := NewDebugToken()
 		if err != nil {
 			return nil, err
@@ -287,7 +288,7 @@ func (server *DebugControlServer) writeDiscoveryFiles(directory string) error {
 		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) { // #nosec G703 -- replace only the runtime's own discovery file.
 			return fmt.Errorf("debug control: replace %s: %w", entry.name, err)
 		}
-		file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600) // #nosec G304,G703 -- owner-only discovery file under the debug root.
+		file, err := createPrivateDebugFile(path)
 		if err != nil {
 			return fmt.Errorf("debug control: write %s: %w", entry.name, err)
 		}

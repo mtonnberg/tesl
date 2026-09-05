@@ -188,6 +188,11 @@ let test_debug_emission_has_versioned_checkpoint () =
   check string "debug IDs are stable" module_go module_again;
   ignore (artifact "internal/teslrt/debug.go" emitted);
   ignore (artifact "internal/teslrt/debug_control.go" emitted);
+  ignore (artifact "internal/teslrt/debug_file_windows.go" emitted);
+  check bool "Windows debug dependency included without password runtime" true
+    (contains (artifact "go.mod" emitted) "require golang.org/x/sys v0.47.0");
+  check bool "Windows debug dependency checksum pinned" true
+    (contains (artifact "go.sum" emitted) "golang.org/x/sys v0.47.0 h1:");
   ignore (artifact "internal/teslrt/debug_state.go" emitted)
 
 let debug_kind_source = {|module GoDebugKinds exposing [plain, positive, authenticate, ping, provePositive]

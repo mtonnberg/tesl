@@ -885,18 +885,6 @@ let logical_path filename =
   | Some p when p <> "" -> p
   | _ -> filename
 
-let check_json_diags filename source =
-  (* Import resolution + diagnostic [file] use the logical path; the linter
-     still reads the real (temp) file's edited content from disk. *)
-  let diags = Compile.check_source (logical_path filename) source in
-  (* Don't lint an unparseable file: on a parser OR lexer error the linter's
-     re-parse is meaningless (and used to crash the JSON entry points — the
-     LSP-crash class).  Linter.lint_file now also swallows parse failures. *)
-  if List.exists (fun (d : Compile.diagnostic) ->
-        d.source = "parser" || d.source = "lexer") diags
-  then diags
-  else diags @ Linter.lint_file ~logical_path:(logical_path filename) filename
-
 (** Print a single diagnostic to stderr.
 
     Each diagnostic carries a stable [code] (documented in [Error_codes]). When
@@ -986,9 +974,9 @@ let build_go_executable filename out_opt =
     then Filename.chop_suffix filename ".tesl"
     else filename
   in
-  let exe_path = match out_opt with Some path -> path | None -> stem in
+  let exe_path = match out_opt with Some path -> path | None -> stem ^ (if Sys.win32 then ".exe" else "") in
   let temp_dir = fresh_go_output_dir filename in
-  let cleanup () = ignore (Sys.command (Printf.sprintf "rm -rf %s" (Filename.quote temp_dir))) in
+  let cleanup () = Compile.remove_tree temp_dir in
   try
     match Compile.compile_go_file filename with
     | Compile.GoFailure diags ->
@@ -997,9 +985,10 @@ let build_go_executable filename out_opt =
       write_go_project temp_dir artifacts;
       ensure_directory (Filename.dirname exe_path);
       let go = match Sys.getenv_opt "TESL_GO" with Some value -> value | None -> "go" in
-      let command = Printf.sprintf "cd %s && %s build -o %s ./cmd/app"
-          (Filename.quote temp_dir) (Filename.quote go) (Filename.quote exe_path) in
-      let status = Sys.command command in
+      let output_path = if Filename.is_relative exe_path then Filename.concat (Sys.getcwd ()) exe_path else exe_path in
+      let status, output = Process_runner.run ~timeout:120 ~cwd:temp_dir go
+        ["build"; "-buildvcs=false"; "-o"; output_path; "./cmd/app"] in
+      if output <> "" then prerr_string output;
       cleanup ();
       if status = 0 then
         Printf.eprintf "%sbuilt%s %s\n" (col "1;32") (col "0") exe_path
@@ -1093,152 +1082,12 @@ let () =
     end;
     print_batch_results results
 
-  | ["--check-json"; filename] ->
-    (try
-       let source = In_channel.with_open_text filename In_channel.input_all in
-       let diags = check_json_diags filename source in
-       print_string (Compile.diagnostics_to_json diags);
-       print_newline ();
-       (* 2026-07-03 ergonomics fix: exit non-zero IFF there is an error-severity
-          diagnostic — matching the documented contract (AGENTS.md, usage: "exit
-          code is non-zero iff there are error-severity diags") and `agent-context`
-          below.  The old `diags <> []` test also failed on WARNING-only files, so
-          a CI gate or editor keyed on the exit code saw ~40/92 shipped example
-          files "fail" on nothing but lint warnings (e.g. unused-import). *)
-       let has_error =
-         List.exists (fun (d : Compile.diagnostic) -> d.severity = "error") diags in
-       exit (if has_error then 1 else 0)
-     with Sys_error msg ->
-       Printf.eprintf "error: %s\n" msg; exit 1)
+  | ["--workspace-session"] -> Workspace_session.run stdin stdout
 
-  | ["--agent-context-json"; filename]
-  | ["agent-context"; filename] ->
-    (* AC1: token-economical compiler/linter snapshot for an AI coding agent.
-       Always emits a JSON snapshot; exit 0 iff there are no error-severity
-       diagnostics ([ok]), 1 otherwise, mirroring --check-json's exit code so a
-       wrapper can branch on the status without re-parsing. *)
-    (try
-       let source = In_channel.with_open_text filename In_channel.input_all in
-       let lpath = logical_path filename in
-       (* Include linter findings so agent-context reports the SAME diagnostic
-          set as --check-json (review 2026-07 TOOL-AGENTCTX). *)
-       let lint_diags = Linter.lint_file ~logical_path:lpath filename in
-       let result =
-         Compile.agent_context_result_source ~extra_diags:lint_diags lpath source in
-       print_string result.json;
-       print_newline ();
-       exit (if result.ok then 0 else 1)
-     with Sys_error msg ->
-       Printf.eprintf "error: %s\n" msg; exit 1)
-
-  | ["--local-bindings-json"; filename] ->
-    (try
-       let source = In_channel.with_open_text filename In_channel.input_all in
-       let bindings = Compile.local_bindings_source (logical_path filename) source in
-       print_string (Compile.local_bindings_to_json bindings);
-       print_newline ();
-       exit 0
-     with Sys_error msg ->
-       Printf.eprintf "error: %s\n" msg; exit 1)
-
-  | ["--definition-json"; filename; line; col] ->
-    (try
-       let source = In_channel.with_open_text filename In_channel.input_all in
-       let definition = Compile.definition_source (logical_path filename) source (int_of_string line) (int_of_string col) in
-       print_string (Compile.definition_response_to_json definition);
-       print_newline ();
-       exit 0
-     with
-     | Sys_error msg -> Printf.eprintf "error: %s\n" msg; exit 1
-     | Failure msg -> Printf.eprintf "error: %s\n" msg; exit 1)
-
-  | ["--occurrences-json"; filename; line; col] ->
-    (try
-       let source = In_channel.with_open_text filename In_channel.input_all in
-       let occurrences = Compile.occurrences_source (logical_path filename) source (int_of_string line) (int_of_string col) in
-       print_string (Compile.occurrences_response_to_json occurrences);
-       print_newline ();
-       exit 0
-     with
-     | Sys_error msg -> Printf.eprintf "error: %s\n" msg; exit 1
-     | Failure msg -> Printf.eprintf "error: %s\n" msg; exit 1)
-
-  | ["--type-at-json"; filename; line; col] ->
-    (try
-       let source = In_channel.with_open_text filename In_channel.input_all in
-       let result = Compile.type_at_source (logical_path filename) source (int_of_string line) (int_of_string col) in
-       print_string (Compile.type_at_response_to_json result);
-       print_newline ();
-       exit 0
-     with
-     | Sys_error msg -> Printf.eprintf "error: %s\n" msg; exit 1
-     | Failure msg -> Printf.eprintf "error: %s\n" msg; exit 1)
-
-  | ["--field-at-json"; filename; line; col] ->
-    (try
-       let source = In_channel.with_open_text filename In_channel.input_all in
-       let result = Compile.field_at_source (logical_path filename) source (int_of_string line) (int_of_string col) in
-       print_string (Compile.field_at_response_to_json result);
-       print_newline ();
-       exit 0
-     with
-     | Sys_error msg -> Printf.eprintf "error: %s\n" msg; exit 1
-     | Failure msg -> Printf.eprintf "error: %s\n" msg; exit 1)
-
-  | ["--config-context-json"; filename; line; col] ->
-    (try
-       let source = In_channel.with_open_text filename In_channel.input_all in
-       let result = Compile.config_context_source (logical_path filename) source (int_of_string line) (int_of_string col) in
-       print_string (Compile.config_context_response_to_json result);
-       print_newline ();
-       exit 0
-     with
-     | Sys_error msg -> Printf.eprintf "error: %s\n" msg; exit 1
-     | Failure msg -> Printf.eprintf "error: %s\n" msg; exit 1)
-
-  | ["--completions-json"; filename; line; col] ->
-    (try
-       let source = In_channel.with_open_text filename In_channel.input_all in
-       let items = Compile.completions_source (logical_path filename) source (int_of_string line) (int_of_string col) in
-       print_string (Compile.completions_response_to_json items);
-       print_newline ();
-       exit 0
-     with
-     | Sys_error msg -> Printf.eprintf "error: %s\n" msg; exit 1
-     | Failure msg -> Printf.eprintf "error: %s\n" msg; exit 1)
-
-  | ["--signature-help-json"; filename; line; col] ->
-    (try
-       let source = In_channel.with_open_text filename In_channel.input_all in
-       let sig_ = Compile.signature_help_source (logical_path filename) source (int_of_string line) (int_of_string col) in
-       print_string (Compile.signature_help_response_to_json sig_);
-       print_newline ();
-       exit 0
-     with
-     | Sys_error msg -> Printf.eprintf "error: %s\n" msg; exit 1
-     | Failure msg -> Printf.eprintf "error: %s\n" msg; exit 1)
-
-  | ["--selection-range-json"; filename; line; col] ->
-    (try
-       let source = In_channel.with_open_text filename In_channel.input_all in
-       let ranges = Compile.selection_range_source (logical_path filename) source (int_of_string line) (int_of_string col) in
-       print_string (Compile.selection_ranges_response_to_json ranges);
-       print_newline ();
-       exit 0
-     with
-     | Sys_error msg -> Printf.eprintf "error: %s\n" msg; exit 1
-     | Failure msg -> Printf.eprintf "error: %s\n" msg; exit 1)
-
-  | ["--type-definition-json"; filename; line; col] ->
-    (try
-       let source = In_channel.with_open_text filename In_channel.input_all in
-       let loc = Compile.type_definition_source (logical_path filename) source (int_of_string line) (int_of_string col) in
-       print_string (Compile.type_definition_response_to_json loc);
-       print_newline ();
-       exit 0
-     with
-     | Sys_error msg -> Printf.eprintf "error: %s\n" msg; exit 1
-     | Failure msg -> Printf.eprintf "error: %s\n" msg; exit 1)
+  | flag :: filename :: position when Compiler_query.supports flag ->
+    let result = Compiler_query.run ~filename ~logical_path:(logical_path filename) flag position in
+    print_endline result.json;
+    exit result.exit_code
 
   | ("--fmt" :: filenames) when filenames <> [] ->
     let ret = ref 0 in
@@ -1418,20 +1267,6 @@ let () =
          Printf.eprintf "%s:%d:%d: error: %s\n"
            e.loc.file (e.loc.start.line + 1) (e.loc.start.col + 1) e.msg;
          exit 1
-     with Sys_error msg ->
-       Printf.eprintf "error: %s\n" msg; exit 1)
-
-  | ["--semantic-json"; filename] ->
-    (* Deliberately PARSE-ONLY (not checker-gated like --ir): the LSP consumes
-       this snapshot for documentSymbol / semanticTokens (editor/protocol.md),
-       which must keep working while the buffer has type errors — gating it
-       would blank the outline and highlighting on every in-progress edit.
-       Diagnostics reach the editor through --check-json, never this path. *)
-    (try
-       match Compile.semantic_json_file filename with
-       | Some json -> print_string json; print_newline (); exit 0
-       | None ->
-         Printf.eprintf "error: could not parse %s\n" filename; exit 1
      with Sys_error msg ->
        Printf.eprintf "error: %s\n" msg; exit 1)
 

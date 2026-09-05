@@ -1,0 +1,278 @@
+# Mainstream installation
+
+Status: in progress, 2026-09-05. Native command orchestration and discovery are
+implemented. Distributable payloads, installers, and release
+outputs below remain targets until their acceptance gates pass.
+
+Implemented so far:
+- [`internal/cli`](../../runtime/go/internal/cli) and [`cmd/tesl`](../../runtime/go/cmd/tesl)
+  provide native init/check/compile/run/test/build/watch/database/debug/agent
+  orchestration, literal arguments, dotenv parsing, and a doctor report.
+- [`internal/toolchain`](../../runtime/go/internal/toolchain) provides versioned
+  installation-relative discovery and an offline Go environment. CLI, LSP, DAP,
+  and MCP use it; the extension recognizes the same manifest layout. An explicit
+  stdlib directory component makes lifted library sources work outside a checkout.
+- `nix build .#tesl-native-cli` builds a native CLI candidate using the shared Nix
+  tools. Both CLI candidates pass clean-environment init/emit/build and executable
+  stdlib tests; CI now checks both. Compiler-adjacent library discovery and explicit
+  overrides are tested with relocated and symlinked executables.
+- Compiler mutation/build subprocesses use literal argv with bounded output and
+  timeouts. The native CLI owns Windows process trees; no Bash or GNU `timeout`
+  is required for these compiler commands. DAP compiler/Go preparation uses the
+  same bounded Go process client.
+- [`toolchain-inputs.nix`](../../nix/toolchain-inputs.nix), the shared Go overlay,
+  and [`release-plan.nix`](../../nix/release-plan.nix) export versions, source
+  hashes, candidate platforms, layout, and exact-revision release policy.
+- [`native-parity.yml`](../../.github/workflows/native-parity.yml) defines native
+  compiler/tooling checks for five candidate targets. Main CI revisions are no
+  longer canceled by a newer main push.
+- Tests exercise a real scaffold/check/test/compile/build/HTTP/cancel workflow,
+  PostgreSQL data persistence, build rollback, watch restart, discovery failures,
+  and paths containing spaces and Unicode.
+
+The native CLI is not yet the default Nix CLI: the existing full gate must pass
+before that cutover. Native parity CI is a source-build spike, not an offline
+payload builder or publication workflow. M2–M4 remain open, including native
+dependency closure, scanner parity, signing, provenance, and install/upgrade tests.
+
+Let Linux and macOS users download one Tesl toolchain and reach a running API
+without installing Nix or a development toolchain. Keep Nix as the authoritative
+build definition and supported contributor/install path. Derive distribution
+formats from that definition instead of maintaining separate products.
+
+## Current state and packaging gap
+
+[`INSTALL.md`](../../INSTALL.md) documents Nix as the only supported installation.
+The [`flake`](../../flake.nix) builds an OCaml compiler, Go LSP/DAP/MCP/debug tools,
+templates, and a Bash CLI assembled from
+[`tesl-cli-body.sh`](../../nix/tesl-cli-body.sh).
+
+The installed wrappers contain Nix store paths and provide Go and GNU utilities.
+Running generated programs requires Go, not merely the Tesl compiler. Managed
+PostgreSQL discovery falls back to `nix build` when its tools are absent. The
+flake also supplies DAST tools. Copying `main.exe` or archiving the current Nix
+output therefore does not satisfy the installation goal.
+
+The existing [`clean-install test`](../../tests/go-clean-install.sh) checks
+`init`, `emit`, staging a build, and type checking/executing a lifted standard-library
+program under a clean environment. It neither proves
+absence of `/nix/store` nor tests first-run dependency downloads, a running API,
+managed PostgreSQL, or desktop editor discovery. CI currently runs the
+authoritative gate on Ubuntu; release-platform testing must be added.
+
+## Product contract
+
+### One download per platform
+
+“One artifact” means one archive or installer containing the working toolchain,
+not necessarily one executable. Checksums, provenance, and source archives are
+separate verification/rebuild assets, not additional runtime installations.
+
+| Included in the standard artifact | Reason |
+|---|---|
+| Native CLI and OCaml compiler | Scaffold, check/prove, format, lint, emit, run, watch, test, and build |
+| LSP, DAP, MCP, debug-inspect, and debug-attach tools | Editor and agent workflows use the matching compiler revision |
+| Pinned Go toolchain and required generated-program dependencies | First `run`/`test` works without a system Go, C compiler, or module download |
+| Native PostgreSQL tools and required libraries | The default managed-database scaffold works without Nix or a separate database install |
+| Templates, stdlib/runtime resources not already embedded, docs, and licenses | Installed commands work without a checkout |
+| Machine-readable release/component manifest | Report identity, locate resources, verify contents, and diagnose mixed installations |
+
+After download, the standard scaffold must compile, run, and pass its local tests
+with outbound networking disabled and empty user caches. External APIs and an
+explicitly selected remote database naturally still need their services.
+
+Docker image construction requires a user-provided container engine; staging a
+build context does not. Inventory DAST/scanner requirements separately in M0:
+provide a documented, pinned installation path and preserve those commands, but
+do not make a scanner/Java download part of the default API quick start. If full
+scanner bundling is selected, measure its size and startup effects explicitly.
+
+### Initial support and installation surfaces
+
+| Target | First-class delivery |
+|---|---|
+| Linux x86-64 and ARM64, on a declared glibc baseline | Relocatable `.tar.gz`, a user-prefix installer, and generated `.deb`/`.rpm` wrappers around the tested payload |
+| macOS Apple Silicon and Intel, on declared minimum OS versions | Signed/notarized distribution and an upstream Homebrew tap using the same tested payload |
+| Source builders | Exact-revision source plus lock files and documented Nix build/test/package commands |
+
+Choose the oldest supported OS/ABI baselines in M0 based on actual compiler,
+Go, and PostgreSQL constraints; publish and test them. “Linux support” must not
+imply all libc variants. Alpine/musl and additional architectures are follow-ups.
+Native Windows is specified in [`windows_support.md`](windows_support.md).
+
+Keep the first package-manager integrations thin: no separate compiler builds,
+hand-edited version pins, or prerequisite admission to central repositories.
+An upstream [Homebrew tap](https://docs.brew.sh/How-to-Create-and-Maintain-a-Tap)
+provides a supported distribution route while wider repository inclusion remains
+independent. Package-manager policy may require a formula or cask; verify that
+choice against the actual bundled payload in M4.
+
+## Shared architecture
+
+### Nix owns the inputs and release description
+
+- Define component versions, source hashes, patches, target baselines, resource
+  layout, and package metadata in Nix, with `flake.lock` pinning inputs. Extract
+  shared definitions so `flake.nix` and compatibility entry points cannot drift.
+- Export a machine-readable build/release plan for native runners and packaging
+  tools. Generated manifests and recipes are outputs, not a second set of pins.
+  CI rejects differences between regenerated and consumed metadata.
+- Keep existing Go module lock files and compiler/runtime synchronization checks;
+  Nix consumes these language-specific inputs. Extend the checks to the bundled
+  generated-program dependencies rather than hand-copying their versions again.
+- Build relocatable payloads explicitly. Audit dynamic loaders, shared libraries,
+  Go paths, and resource lookups; a Nix closure is not automatically relocatable.
+  Use relative library/resource paths or static linking where supported, and
+  prove the result on machines without Nix.
+
+### One portable CLI
+
+Move the shell orchestration into a shared native Go CLI, retaining the existing
+OCaml frontend and command contracts. This is also the prerequisite for native
+Windows; do not write a second PowerShell implementation of the Bash CLI.
+
+Inventory every existing command, option, exit code, JSON response, environment
+override, and lifecycle behavior before cutover. Migrate command groups with
+black-box parity fixtures. Invoke child tools with argument arrays and use
+platform filesystem/process APIs. Once parity is demonstrated, both Nix and
+standalone installs launch the same CLI; remove duplicate shell behavior.
+
+Use one toolchain discovery contract across CLI, editor, and agent tools: explicit
+supported override, then resources beside the selected installation, then a
+documented development fallback. Validate compatibility and report every chosen
+path. A proposed `tesl doctor --json` reports component versions, source revision,
+install location, and missing optional tools without exposing secrets.
+
+Keep immutable program files separate from writable caches and project data.
+Bundled Go must have the matching host tools and a verified source of all required
+modules; disable implicit toolchain switching/downloading in the offline path.
+Managed PostgreSQL must use project/user data directories and survive toolchain
+replacement without implicit database-major-version migration.
+
+## Release policy
+
+1. For every distinct pushed `main` head that passes the authoritative gate and
+   the required release-platform matrix, publish one immutable continuous release
+   tied to the full commit SHA. Pull requests and failed/cancelled builds do not
+   publish. Retrying a successful SHA is idempotent.
+2. Use sortable continuous versions derived from source metadata, with a SHA
+   suffix and full SHA in the manifest. Keep named stable releases as deliberate
+   promotions of tested artifacts. A new successful `main` revision does not
+   require a manual version bump in several files.
+3. Check out and attest the exact tested revision at every stage. Do not resolve
+   `main` again during packaging. Stage all mandatory assets before publishing;
+   a partial matrix leaves the previous complete release available.
+4. Preserve per-revision release work when newer pushes arrive. The current CI
+   `cancel-in-progress: true` policy must be adjusted for releasable `main` runs;
+   otherwise the promise to release every successful pushed revision is lost.
+5. Advance the continuous-channel pointer only after publication, with serialized
+   ordering so a slow older build cannot replace a newer one. Stable channels and
+   public package registries have their own explicit promotion policy; they need
+   not ingest every continuous build.
+6. Installers support selecting an exact version. Upgrades stage and verify the
+   replacement before switching; interrupted installs preserve the old version.
+   Package-manager installs are upgraded by their package manager. Uninstall
+   removes owned program files and PATH entries, preserving projects and databases.
+
+## Integrity, provenance, and rebuilding
+
+- Publish SHA-256 digests for the final distributable bytes. A checksum detects
+  changed bytes; a checksum hosted beside a binary alone does not prove who built
+  it or which source was used.
+- Attach verifiable build provenance binding each artifact digest to the source
+  SHA, workflow, and build inputs. Document both ordinary checksum verification
+  and [GitHub artifact-attestation verification](https://docs.github.com/en/actions/how-tos/secure-your-work/use-artifact-attestations/use-artifact-attestations).
+  Installer automation validates the expected repository/workflow identity as
+  well as the digest before activating a payload.
+- On macOS, sign the applicable nested executables and distribution container,
+  then notarize/staple as supported by the chosen format. Test downloaded,
+  quarantined artifacts under normal Gatekeeper settings, following
+  [Apple's distribution guidance](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution).
+  Signing credentials are an explicit release prerequisite.
+- Ship a component/license inventory and the exact source/lock data needed to
+  rebuild. Check redistribution obligations for Go, PostgreSQL, shared libraries,
+  and optional tools as part of payload assembly.
+- Record separate identities for the reproducible unsigned payload and signed
+  distribution. Test independent rebuilds of the former and report differences;
+  signing timestamps/notarization must not be described as byte-reproducible.
+
+## Delivery plan and gates
+
+### M0 — Freeze the release contract
+
+- [ ] Inventory CLI behavior and transitive runtime dependencies, including
+  managed PostgreSQL, Go module acquisition, Docker, DAST, and debugger launches.
+- [ ] Select tested OS/ABI baselines, payload layout, version/channel rules, and
+  native-runner export schema. Measure candidate download and installed sizes.
+- [ ] Record the unsigned-payload reproducibility target and signing/account
+  prerequisites. Define a maximum artifact size from the measured prototype.
+
+Exit: every dependency is bundled, embedded, an OS baseline dependency, or an
+explicit optional integration. No unresolved dependency in the default quick start.
+
+### M1 — Share portable execution and discovery
+
+- [ ] Implement the Go CLI and installation-relative tool/resource discovery.
+- [ ] Port lifecycle, database, watch, test/mutation, build, and debug behavior
+  using the parity fixtures; preserve machine-readable command contracts.
+- [ ] Switch Nix to the same implementation after the existing gate passes.
+
+Exit: Nix users retain current behavior, and relocated candidate payloads find
+their own compiler, tools, and resources without shell wrappers or Nix paths.
+
+### M2 — Produce complete Linux and macOS payloads
+
+- [ ] Build both architectures on the declared baselines and assemble pinned Go,
+  generated-module dependencies, PostgreSQL, resources, and licenses.
+- [ ] Test on clean hosts without Nix, a checkout, system Go/OCaml, PostgreSQL,
+  or a C compiler. Block outbound networking during the default workflow.
+- [ ] Verify symlinked launchers, arbitrary install prefixes, spaces/Unicode in
+  paths, read-only installations, TLS trust, time-zone data, and process cleanup.
+
+Exit: `init` → check → test → run → HTTP request works, including a managed
+database, plus watch/restart, build-context staging, LSP/MCP startup, and a debug stop.
+
+### M3 — Automate trustworthy per-revision releases
+
+- [ ] Extend CI with exact-revision platform gates, payload identity checks,
+  signing/notarization, checksums, provenance, and complete-matrix publication.
+- [ ] Exercise duplicate runs, an older run finishing late, a failed architecture,
+  signing failure, corrupt downloads, and interrupted upgrades.
+- [ ] Publish rebuild instructions and verify an independent unsigned rebuild.
+
+Exit: a successful new `main` revision produces one complete verifiable release
+without manual packaging; failures preserve the prior usable channel.
+
+### M4 — Add ecosystem installation and finish onboarding
+
+- [ ] Generate/test the user-prefix installer, `.deb`/`.rpm`, macOS distribution,
+  and Homebrew integration from the release manifest.
+- [ ] Verify install, exact-version selection, upgrade, rollback, and uninstall
+  for each supported route, including coexistence with a Nix installation.
+- [ ] Make desktop-launched VS Code/VSCodium discover the selected toolchain;
+  publish a compatible extension/VSIX path and test LSP, tests, DAP, and MCP.
+- [ ] Update `INSTALL.md`, the README quick start, contributor/source-build
+  instructions, editor/MCP docs, and troubleshooting with tested commands.
+
+Exit: a new user follows one documented path to the default API and editor
+workflow, with no hidden dependency setup or unexplained PATH/version mismatch.
+
+## Ownership and completion
+
+Sequence the shared work once: M0 defines the inputs/layout consumed by Windows
+W0; M1 supplies the portable CLI needed by Windows W1. Linux/macOS M2–M4 can
+finish before Windows parity. Windows W3 extends the proven M3 release pipeline
+and M4 installer contracts rather than creating another release system. LSP
+L0–L4 can proceed independently against the shared discovery/version contract.
+
+This roadmap owns portable CLI orchestration, payload layout/discovery, version
+identity, release generation, and Linux/macOS distribution.
+[`windows_support.md`](windows_support.md) supplies native Windows builds and
+platform behavior against those contracts.
+[`gold-standard-lsp.md`](gold-standard-lsp.md) improves language semantics and
+editor features independently; installation must ship the existing tools first.
+
+Complete when M0–M4 pass on every declared target, the Nix path remains supported,
+all release metadata derives from the shared definition, and fresh-install and
+upgrade checks gate subsequent releases. Adding another ecosystem must mean
+adapting packaging, not maintaining another Tesl implementation.
