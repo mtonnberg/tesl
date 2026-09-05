@@ -318,11 +318,11 @@ class ReleaseCatalogTests(unittest.TestCase):
         for gate in ("offline-install", "minimum-os-runtime", "signed-distribution"):
             self.assertEqual(catalog["checks"][gate]["darwin-amd64"]["status"], "blocked")
 
-    def test_macos_sandbox_requires_loopback_only_reachability_evidence(self):
+    def test_macos_sandbox_requires_host_local_only_reachability_evidence(self):
         self.change("darwin-arm64", "distribution", lambda row: row.update(network_isolation="macos-sandbox-exec"))
         self.receipts()
         self.assertFalse(self.build()["eligibility"]["publish_eligible"])
-        self.change("darwin-arm64", "distribution", lambda row: row.update(loopback_only_reachability="passed"))
+        self.change("darwin-arm64", "distribution", lambda row: row.update(host_local_only_reachability="passed"))
         self.receipts()
         self.assertTrue(self.build()["eligibility"]["publish_eligible"])
 

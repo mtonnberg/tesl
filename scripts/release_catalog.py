@@ -285,8 +285,8 @@ def build_catalog(plan, artifacts_root, records):
                 method = distribution.get("network_isolation")
                 if method not in OFFLINE_METHODS[target.split("-")[0]]:
                     reason = "outbound network isolation has not been tested"
-                elif method == "macos-sandbox-exec" and distribution.get("loopback_only_reachability") != "passed":
-                    reason = "macOS sandbox loopback-only reachability has not been verified"
+                elif method == "macos-sandbox-exec" and distribution.get("host_local_only_reachability") != "passed":
+                    reason = "macOS sandbox host-local-only reachability has not been verified"
             if gate == "minimum-os-runtime" and distribution.get("minimum_os_runtime") != "passed":
                 reason = "execution on the declared minimum OS has not been established"
             if gate == "signed-distribution" and (distribution.get("signed_distribution") != "signed-notarized-stapled"

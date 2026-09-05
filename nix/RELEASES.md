@@ -144,11 +144,13 @@ without development tools, exercises the API scaffold, managed database, compile
 queries, tests, local build and authenticated HTTP, then checks persistence across
 clean/restart and installation immutability. Linux additionally runs it in a new
 network namespace with loopback only, retaining a non-root UID for PostgreSQL.
-macOS uses `sandbox-exec` around the complete acceptance process tree. A local
-TCP/UDP listener supplies reachable non-loopback controls before entering the
-sandbox; inside it, loopback must still work and outbound IPv4/IPv6 must return
-an explicit policy denial. A refused connection or timeout is not accepted as
-proof of isolation. Probe failures prevent candidate export. This CI-only helper
+macOS uses `sandbox-exec` around the complete acceptance process tree. Local
+TCP/UDP listeners must remain reachable; an external connection to the CI
+provider supplies a positive control before sandboxing. Inside the sandbox,
+off-host IPv4/IPv6 operations must return an explicit policy denial. macOS's
+`localhost` filter covers all addresses of this host, so its own LAN address is
+not used as the negative control. A refused connection or timeout is not
+accepted as proof of isolation. Probe failures prevent candidate export. This CI-only helper
 does not change the runner's firewall or add a dependency to installed Tesl.
 Acceptance also records the actual host OS, architecture and libc version.
 Only execution on the declared baseline earns `minimum_os_runtime: passed`;

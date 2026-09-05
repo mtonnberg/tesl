@@ -44,33 +44,39 @@ def exchange(address, port, kind, token):
             raise ValueError("network probe did not reach its own listener")
 
 
-def require_policy_denial(operation):
+def require_policy_denial(operation, context="outbound network"):
     try:
         operation()
     except OSError as error:
         if error.errno in (errno.EPERM, errno.EACCES):
             return
-        raise ValueError("outbound probe failed without a network-policy denial") from error
-    raise ValueError("outbound network remains reachable")
+        raise ValueError(f"{context} probe failed without a network-policy denial") from error
+    raise ValueError(f"{context} remains reachable")
+
+
+def remote_connection(family, kind, address, port):
+    with socket.socket(family, kind) as connection:
+        connection.settimeout(5)
+        connection.connect((address, port))
+        if kind == socket.SOCK_DGRAM:
+            connection.send(b"")
 
 
 def probe(configuration):
-    address = configuration["address"]
-    if ipaddress.ip_address(address).is_loopback:
-        raise ValueError("negative control must use a non-loopback address")
+    address = configuration["remote_address"]
+    if not ipaddress.ip_address(address).is_global:
+        raise ValueError("negative control must use an off-host public address")
     token = configuration["token"].encode("ascii")
     for name, kind in (("tcp", socket.SOCK_STREAM), ("udp", socket.SOCK_DGRAM)):
         port = configuration[name]
         exchange("127.0.0.1", port, kind, token)
-        require_policy_denial(lambda: exchange(address, port, kind, token))
+        # Seatbelt's localhost filter covers all addresses of this host, not
+        # just 127/8. These stay reachable; the public endpoint must be denied.
+        exchange(configuration["address"], port, kind, token)
+        require_policy_denial(lambda: remote_connection(socket.AF_INET, kind, address, 443), f"off-host IPv4 {name}")
         # Even hosts without an IPv6 route must reject the operation by policy,
         # not merely time out or return "network unreachable". No DNS is used.
-        def ipv6():
-            with socket.socket(socket.AF_INET6, kind) as connection:
-                connection.settimeout(3)
-                connection.connect(("2001:db8::1", port))
-                connection.send(token)
-        require_policy_denial(ipv6)
+        require_policy_denial(lambda: remote_connection(socket.AF_INET6, kind, "2001:db8::1", 443), f"off-host IPv6 {name}")
 
 
 @contextmanager
@@ -82,6 +88,26 @@ def controls():
     if ipaddress.ip_address(address).is_loopback or ipaddress.ip_address(address).is_unspecified:
         raise ValueError("offline acceptance requires a non-loopback positive control")
     configuration = {"address": address, "token": secrets.token_hex(24)}
+    # Resolve and establish a real external TCP connection before sandboxing.
+    # A self-address is not an outbound control on macOS. Use the CI provider's
+    # public endpoint; the probe exchanges no application data or credentials.
+    remote_addresses = sorted({row[4][0] for row in socket.getaddrinfo("github.com", 443, socket.AF_INET, socket.SOCK_STREAM)})
+    last_error = None
+    for remote in remote_addresses[:3]:
+        if not ipaddress.ip_address(remote).is_global:
+            continue
+        try:
+            remote_connection(socket.AF_INET, socket.SOCK_STREAM, remote, 443)
+            # UDP send is the positive syscall control; unlike TCP it does not
+            # establish remote reachability. The sandbox must explicitly deny
+            # that same operation, regardless of any response from the peer.
+            remote_connection(socket.AF_INET, socket.SOCK_DGRAM, remote, 443)
+            configuration["remote_address"] = remote
+            break
+        except OSError as error:
+            last_error = error
+    else:
+        raise ValueError("cannot establish an off-host positive control") from last_error
     stopped = threading.Event()
     listeners, workers = [], []
 
@@ -132,7 +158,7 @@ def run(arguments, root, environment, timeout=1500):
                    str(Path(__file__).resolve()), "--probe", json.dumps(configuration),
                    "--", *map(str, arguments)]
         subprocess.run(command, cwd=root, env=environment, check=True, timeout=timeout)
-    return {"network_isolation": "macos-sandbox-exec", "loopback_only_reachability": "passed"}
+    return {"network_isolation": "macos-sandbox-exec", "host_local_only_reachability": "passed"}
 
 
 def main():
@@ -144,7 +170,7 @@ def main():
     if not command:
         parser.error("missing acceptance command")
     probe(json.loads(args.probe))
-    print("Verified macOS loopback TCP/UDP and denied outbound IPv4/IPv6", flush=True)
+    print("Verified macOS host-local TCP/UDP and denied off-host IPv4/IPv6", flush=True)
     os.execvpe(command[0], command, os.environ)
 
 

@@ -224,7 +224,7 @@ class DistributionTests(unittest.TestCase):
                 run(arguments, root, environment, timeout=timeout)
                 if failure == "network":
                     raise ValueError("outbound network remains reachable")
-                return {"network_isolation": "macos-sandbox-exec", "loopback_only_reachability": "passed"}
+                return {"network_isolation": "macos-sandbox-exec", "host_local_only_reachability": "passed"}
             stack.enter_context(patch.object(distribution.macos_network, "run", side_effect=isolated))
         if target.startswith("windows-"):
             stack.enter_context(patch.object(distribution.native_windows_tools, "provision", return_value={"verified": True}))
@@ -269,7 +269,7 @@ class DistributionTests(unittest.TestCase):
         value, calls = self.pipeline(target="darwin-arm64")
         result = distribution.build(value, self.root, "darwin-arm64", self.root / "modules", self.output)
         self.assertEqual(result["network_isolation"], "macos-sandbox-exec")
-        self.assertEqual(result["loopback_only_reachability"], "passed")
+        self.assertEqual(result["host_local_only_reachability"], "passed")
         self.assertEqual(result["minimum_os_runtime"], "not-established")
         self.assertEqual(result["signed_distribution"], "ad-hoc-by-policy")
         self.assertEqual(result["quarantined_download"], "not-tested")
