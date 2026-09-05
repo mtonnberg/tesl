@@ -37,6 +37,14 @@ Each lesson must exercise its actual generated runtime and refusal cases; source
 checking alone does not meet this gate. This is a planned inventory, not a claim
 that these scenarios currently work.
 
+The first part of [lesson82-database-migrations](../example/learn/lesson82-database-migrations.tesl)
+now compiles and runs through `tesl test`: five tests cover schema-owned title
+proofs, rejected writes, length boundaries, Unicode and missing rows. Its thin
+schema root exports nothing and imports a child entity module; the application
+owns the database declaration and effects. All three source files pass
+agent-context and formatting. Generated Go snapshots and the manual lesson index
+are included. Adoption, additive execution and the remaining lessons are pending.
+
 ## Slices under development
 
 - The deterministic scheduler, independent model, real control-template tests,
@@ -229,7 +237,9 @@ that these scenarios currently work.
   members. Focused tests pass for ASCII and Unicode byte boundaries, acronym and
   underscore aliases, and names that grow during conversion. The whole ownership
   projection is also checked for explicit index-name collisions across modules.
-  The expanded compiler gate for this latest storage check is pending.
+  The expanded compiler gate passes, including all seventeen migration import,
+  ownership and source-freeze groups. The private-index case checks that the
+  diagnostic identifies both declaring modules.
 - PostgreSQL tests interpose retirement between a read and its admission, for old
   and surviving versions and six query forms: rows, a missing key, constant false,
   LIMIT 0, an empty aggregate, and EXISTS. They verify that contract DDL

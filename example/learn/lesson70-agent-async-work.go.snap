@@ -115,6 +115,8 @@ var ReportDbDatabase = teslrt.NewDatabase(
 	},
 )
 
+var _ = teslrt.RegisterDatabaseIdentity("teslmodlesson70agentasyncwork.ReportDb", ReportDbDatabase)
+
 //line lesson70-agent-async-work.tesl:175
 func validateReportSpec(argsJson string) ReportSpec {
 //line lesson70-agent-async-work.tesl:176

@@ -105,6 +105,8 @@ var RunDatabaseDatabase = teslrt.NewDatabase(
 	},
 )
 
+var _ = teslrt.RegisterDatabaseIdentity("teslmodagentruntests.RunDatabase", RunDatabaseDatabase)
+
 //line agent-run-tests.tesl:137
 func validateEcho(argsJson string) EchoArgs {
 //line agent-run-tests.tesl:138

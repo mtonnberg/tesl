@@ -90,6 +90,8 @@ var Lesson74DatabaseDatabase = teslrt.NewDatabase(
 	},
 )
 
+var _ = teslrt.RegisterDatabaseIdentity("teslmodlesson74interoppatterns.Lesson74Database", Lesson74DatabaseDatabase)
+
 //line lesson74-interop-patterns.tesl:69
 func resolveUploadBucket() string {
 //line lesson74-interop-patterns.tesl:70
