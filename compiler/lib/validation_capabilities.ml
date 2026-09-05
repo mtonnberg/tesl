@@ -148,7 +148,7 @@ let collect_test_body_caps ~func_caps ?(server_tools_caps=[]) ?(queue_for_job=[]
   ignore (List.fold_left go [] stmts);
   List.sort_uniq String.compare !acc
 
-let check_handler_capabilities ?(cap_map=[]) ?(imported_func_caps=[]) (decls : top_decl list) : validation_error list =
+let check_handler_capabilities ?(cap_map=[]) ?(imported_func_caps=[]) ?database_entities (decls : top_decl list) : validation_error list =
   (* Local callee→caps first (a local name shadows an imported one); then
      imported functions' declared `requires`, so a transitive call into an
      imported effecting function is enforced across the module boundary. *)
@@ -401,7 +401,7 @@ let check_handler_capabilities ?(cap_map=[]) ?(imported_func_caps=[]) (decls : t
       let api_servers = referenced "api" in
       let app_queues = referenced "queues" in
       let app_databases = referenced "database" in
-      let database_entities =
+      let database_entities = match database_entities with Some known -> known | None ->
         List.filter_map (function
           | DDatabase db ->
             let db = Desugar.desugar_database_config db in

@@ -59,7 +59,13 @@ let check_module (m : module_form) : validation_error list =
   @ (TCapability @: check_capability_cycles decls)
   @ (TProof @: check_check_fn_has_proof_return decls)
   @ (TStructural @: check_auth_fn_arity decls)
-  @ (TDatabase @: check_entity_structure ~facts decls)
+  (* Migration imports are historical data views. Their index declarations
+     belong to distinct schema revisions, not additional physical owners in
+     the migration module. Each imported schema still passes its own structural
+     checks through the dependency traversal. *)
+  @ (TDatabase @: (if Migration_schema.migration_family m.module_name <> None
+      then check_entity_structure decls
+      else check_entity_structure ~facts decls))
   (* Given the imported-type harvest, not [decls]: an upsert on an entity
      declared in ANOTHER module must be checked against THAT entity's unique
      indexes, and the harvest carries no walkable bodies so the same code is
@@ -78,6 +84,7 @@ let check_module (m : module_form) : validation_error list =
    @ (TStructural @: check_typed_config_blocks m)
   @ (TStructural @: check_app_wiring decls)
   @ (TDatabase @: check_database_entities m)
+  @ (TDatabase @: Migration_schema.check_databases m)
   @ (TTesting @: check_api_test_structure m)
   @ (TTesting @: check_test_descriptions decls)
   @ (TStructural @: check_content_security_policy decls)
@@ -122,7 +129,8 @@ let check_module (m : module_form) : validation_error list =
      minted with a lexer-illegal hyphen (`tesl-case-N`, `tesl-ignored-N`, …), so a
      user identifier can never collide with one by construction. *)
   @ (TProof @: check_forall_param_subjects decls)
-  @ (TCapability @: check_handler_capabilities ~cap_map ~imported_func_caps:(load_imported_func_caps m) decls)
+  @ (TCapability @: check_handler_capabilities ~cap_map ~imported_func_caps:(load_imported_func_caps m)
+       ~database_entities:(Migration_schema.database_entities m) decls)
   (* SEC005 (get_handlers_do_not_mutate): a GET route may not reach dbWrite /
      queueWrite / pubsub / emailCap.  A hard error in the build path — it was
      previously a linter warning, and the linter does not run during `--check`. *)

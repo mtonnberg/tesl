@@ -150,6 +150,8 @@ var TodoDatabaseDatabase = teslrt.NewDatabase(
 	},
 )
 
+var _ = teslrt.RegisterDatabaseIdentity("teslmodtodoapi.TodoDatabase", TodoDatabaseDatabase)
+
 //line todo-api.tesl:87
 var DefaultExamplePort = teslrt.FromInt64(8086)
 

@@ -265,6 +265,8 @@
             jq
             nodejs
             postgresql
+            pgbouncer
+            tlaplus
             go
             staticcheck
             gosec

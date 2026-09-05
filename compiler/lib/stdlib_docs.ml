@@ -109,6 +109,8 @@ let render_capability name =
    trailing comment. *)
 let vkind_label : Validation_structural.vkind -> string * string option = function
   | VStr -> "String", None
+  | VSchemaRef -> "ModuleRef (VCurrent) | String", Some "String is the legacy SQL schema name"
+  | VMigrationRef -> "ModuleRef (Migrate prefix)", None
   | VInt -> "Int", None
   | VPort -> "Int", Some "port, 1..65535"
   | VMountPath -> "String", Some "leading `/`, no trailing `/`, e.g. \"/api\""

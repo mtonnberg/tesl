@@ -2082,6 +2082,8 @@ type config_context = { cc_block : string; cc_fields : config_field_info list }
 let config_field_type_label (k : Validation_structural.vkind) : string =
   match k with
   | Validation_structural.VStr         -> "String"
+  | Validation_structural.VSchemaRef   -> "ModuleRef (VCurrent) | String (legacy)"
+  | Validation_structural.VMigrationRef -> "ModuleRef (Migrate prefix)"
   | Validation_structural.VInt         -> "Int"
   | Validation_structural.VPort        -> "Int (port 1..65535)"
   | Validation_structural.VMountPath   -> "String (leading `/`, no trailing `/`)"
@@ -2761,13 +2763,14 @@ let canonical_import_path = Validation_common.canonical_import_path
    bind to `teslrt` functions, and compiling them as well would give a program two of each. *)
 let go_lifted_module_names = ["Tesl.CivilTime"]
 
-let build_local_import_graph ?(lifted=[]) entry_path =
+let build_local_import_graph ?(lifted=[]) ?entry entry_path =
   let graph : (string, string list) Hashtbl.t = Hashtbl.create 16 in
+  let entry_canon = canonical_import_path entry_path in
   let rec visit path =
     if Hashtbl.mem graph path then ()
     else begin
       let deps =
-        match parse_module_file path with
+        match (if path = entry_canon && entry <> None then entry else parse_module_file path) with
         | None -> []
         | Some m ->
           List.filter_map (fun (imp : Ast.import_decl) ->
@@ -2783,7 +2786,7 @@ let build_local_import_graph ?(lifted=[]) entry_path =
       List.iter visit deps
     end
   in
-  visit (canonical_import_path entry_path);
+  visit entry_canon;
   graph
 
 let tarjan_sccs (graph : (string, string list) Hashtbl.t) =
@@ -2883,12 +2886,26 @@ let type_diags_of source (m : Ast.module_form) : diagnostic list =
     else base
   ) type_errors
 
-(** The full PER-MODULE check pipeline (everything `--check <file>` runs except
-    the cross-module graph walk below): legacy-Bool lint, type check, proof
-    check, validations.  Factored out so [cross_module_diags] can run the exact
-    `--check dep.tesl` judgment on every transitively imported module — same
-    passes, same order, diagnostics anchored at the DEP's own file via its
-    parse locations. *)
+(** Attach edits using the exact source checked by this module's judgment,
+    including editor buffers and the separate source of an imported library. *)
+let validation_diags_of source (m : Ast.module_form) =
+  List.map (fun error ->
+    let diagnostic = diag_of_validation_error error in
+    if diagnostic.code <> "MIG015" then diagnostic
+    else
+      let imported = List.find_opt (fun (imp : Ast.import_decl) ->
+        imp.loc = error.Validation_common.loc) m.imports in
+      let fix = match imported with
+        | Some imp ->
+          (match String.split_on_char '.' imp.module_name with
+           | family :: before :: _ ->
+             Migration_source.version_fix ~family ~before ~after:"VCurrent" source
+           | _ -> None)
+        | None -> None in
+      { diagnostic with fix }) (Validation.check_module m)
+
+(** The full per-module check pipeline, reused by the cross-module graph walk
+    so dependency diagnostics and fixes stay anchored at their own source. *)
 let module_local_diags source (m : Ast.module_form) : diagnostic list =
   match module_complexity_diagnostics m with
   | _ :: _ as diagnostics -> diagnostics
@@ -2897,7 +2914,7 @@ let module_local_diags source (m : Ast.module_form) : diagnostic list =
     @ regex_literal_diagnostics m
     @ type_diags_of source m
     @ List.map diag_of_proof_error (Proof_checker.check_module m)
-    @ List.map diag_of_validation_error (Validation.check_module m)
+    @ validation_diags_of source m
 
 (* ── Cross-module structural validation (2026-07-08 multi-module audit) ─────
    `--check <entrypoint>` historically validated the entrypoint plus module
@@ -2959,7 +2976,7 @@ let cycle_unsafe_decl_reason (d : Ast.top_decl) : string option =
 let cross_module_diags ?(skip_dep_body : string -> bool = fun _ -> false)
     (m : Ast.module_form) : diagnostic list =
   let entry = m.Ast.source_file in
-  if entry = "" || entry = "<test>" || not (Sys.file_exists entry) then []
+  if entry = "" || entry = "<test>" then []
   else begin
     let mk_diag ~(source : string) (loc : Location.loc) message : diagnostic = {
       file       = loc.Location.file;
@@ -3107,6 +3124,9 @@ let cross_module_diags ?(skip_dep_body : string -> bool = fun _ -> false)
       ) im.Ast.imports
     in
     dfs entry_canon m [];
+    diags := List.rev_append
+      (List.map diag_of_validation_error
+         (Migration_schema.check_ownership (m :: List.rev !closure_mods))) !diags;
     (* ── Entrypoint-closure name-wired resolution (issue #41 class) ─────────
        Cache / email / publish / subscribe / enqueue sites resolve their NAME
        through the process-wide domain registry at runtime when the declaring
@@ -3464,6 +3484,13 @@ let alpha_rename_cycle_members ~(targets : Ast.module_form list)
       invariant = Option.map (fun (i : Ast.record_invariant) -> { i with proof_text = proof m i.proof_text;
         checker_name = Option.map (rename m) i.checker_name }) r.invariant }
     | Ast.DEntity e -> Ast.DEntity { e with name = rename m e.name; fields = List.map (field m) e.fields }
+    | Ast.DDatabase d ->
+      let merged = List.hd (List.sort String.compare member_names) in
+      let entity name = match split_qualified name with
+        | Some (owner, _) when List.mem owner member_names -> merged ^ "." ^ rename m name
+        | _ -> rename m name in
+      Ast.DDatabase { d with entities = List.map entity d.entities;
+        config_expr = Option.map (expr m) d.config_expr }
     | Ast.DFact f -> Ast.DFact { f with name = rename m f.name; params = List.map (binding m) f.params }
     | Ast.DCapture c -> Ast.DCapture { c with name = rename m c.name;
       binding = binding m c.binding; parser = rename m c.parser;
@@ -3524,7 +3551,7 @@ type go_dependencies =
 let local_dependency_modules entry_path (entry : Ast.module_form) =
   if entry_path = "" || Filename.check_suffix entry_path ">" then GoDeps { emit = [entry]; originals = [entry]; entry_emit = entry }
   else
-    let graph = build_local_import_graph ~lifted:go_lifted_module_names entry_path in
+    let graph = build_local_import_graph ~lifted:go_lifted_module_names ~entry entry_path in
     let entry_canon = canonical_import_path entry_path in
     (* One node per SCC: a cycle becomes ONE Go package, so the emitter never sees the
        members separately. *)
@@ -3542,11 +3569,18 @@ let local_dependency_modules entry_path (entry : Ast.module_form) =
     in
     let component_modules = List.map (List.filter_map parsed) components in
     let originals = List.concat component_modules in
+    let ownership_modules = List.map (fun original ->
+      match Migration_schema.lower_module ~modules:originals original with
+      | Ok lowered -> lowered
+      | Error errors ->
+        if !failed = None then failed := Some (String.concat "\n"
+          (List.map (fun (e : Validation_common.validation_error) -> e.message) errors));
+        original) originals in
     (* Rewrite consumers too: after an SCC import target is collapsed, an outside
        module must ask that package for the generated owner-specific export. *)
     let emit_modules = List.fold_left (fun targets members ->
       if List.length members > 1 then alpha_rename_cycle_members ~targets members
-      else targets) originals component_modules in
+      else targets) ownership_modules component_modules in
     let emitted_member (original : Ast.module_form) =
       List.find (fun (candidate : Ast.module_form) ->
         candidate.module_name = original.module_name) emit_modules
@@ -3620,6 +3654,7 @@ let go_import_boundary_diags (filename : string) (m : Ast.module_form) =
     | _ -> []) m.imports
 
 let compile_go_source ?(debug=false) ?(path="") filename source =
+  let path = if path = "" then filename else path in
   match parse_module filename source with
   | Err error -> GoFailure [diag_of_parse_error error]
   | Ok m ->

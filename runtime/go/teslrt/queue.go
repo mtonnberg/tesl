@@ -70,6 +70,19 @@ type queueBackend interface {
 	reset()
 }
 
+// A durable claim needs renewal while its handler runs. Memory claims remain
+// owned until the handler returns and have no wall-clock lease to maintain.
+type queueLeaseBackend interface {
+	keepClaim(id, claimToken string) func()
+}
+
+func (queue *Queue) keepClaim(id, token string) func() {
+	if backend, ok := queue.durable().(queueLeaseBackend); ok {
+		return backend.keepClaim(id, token)
+	}
+	return func() {}
+}
+
 // durable answers the backend this call runs against, or nil for the in-memory path.
 func (queue *Queue) durable() queueBackend {
 	if backend := queue.backend; backend != nil && backend.active() {
@@ -325,8 +338,11 @@ func ProcessNextJob(queue *Queue, handler func(any) JobOutcome) JobOutcome {
 	if !found {
 		return JobOutcome{}
 	}
+	stopRenewal := queue.keepClaim(id, claimToken)
+	defer stopRenewal()
 	started := time.Now()
 	outcome := runJob(handler, payload)
+	stopRenewal()
 	Histogram("tesl.queue.job.duration", time.Since(started).Seconds(),
 		[]Tuple2[string, string]{{Tuple2First: "tesl.queue", Tuple2Second: queue.name}})
 	if outcome.OK {
@@ -351,7 +367,10 @@ func ProcessNextDeadJob(queue *Queue, handler func(any) JobOutcome) JobOutcome {
 	if !found {
 		return JobOutcome{}
 	}
+	stopRenewal := queue.keepClaim(id, claimToken)
+	defer stopRenewal()
 	outcome := runJob(handler, payload)
+	stopRenewal()
 	if !queue.complete(id, claimToken) {
 		panic("queue " + queue.name + ": dead-letter completion lost ownership of job " + id)
 	}

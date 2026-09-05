@@ -409,6 +409,7 @@ func PgQuery[Row any](db *PostgresDB, statement string, arguments []any,
 	if err != nil {
 		panic(pgFailure("database", err))
 	}
+	migrationBoundary("query-complete")
 	return collected
 }
 
@@ -451,6 +452,7 @@ func PgExec(db *PostgresDB, statement string, arguments []any) int64 {
 	if err != nil {
 		panic(pgFailure("database", err))
 	}
+	migrationBoundary("write-complete")
 	return tag.RowsAffected()
 }
 
@@ -637,6 +639,16 @@ func MaybeOfPointer[Carrier any, Value any](carrier *Carrier, decode func() Valu
 		return Nothing[Value]()
 	}
 	return Something(decode())
+}
+
+// MaybeOfJSONColumn preserves the difference between SQL NULL and JSON null.
+// pgx scans only SQL NULL to a nil []byte; a non-nil "null" must reach the
+// type's decoder and be rejected if it is not a valid record or ADT.
+func MaybeOfJSONColumn[Value any](carrier []byte, decode func([]byte) Value) Maybe[Value] {
+	if carrier == nil {
+		return Nothing[Value]()
+	}
+	return Something(decode(carrier))
 }
 
 // PgBigint binds a PosixMillis-shaped value, whose column is BIGINT.

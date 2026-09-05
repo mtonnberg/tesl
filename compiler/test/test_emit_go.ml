@@ -12971,4 +12971,7 @@ let () =
       Printf.sprintf "emit_go-shard-%02d" shard_index,
       Printf.sprintf "emission-shard-%02d" shard_index
   in
-  run suite_name [group_name, selected]
+  (* Alcotest updates one shared `latest` symlink per log directory. Concurrent
+     shards otherwise race in that update and can abort before running a test. *)
+  let log_dir = Filename.concat "_build/_tests/emit-go-shards" suite_name in
+  run ~log_dir suite_name [group_name, selected]

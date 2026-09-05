@@ -897,7 +897,7 @@ writer's meaning the current value carries.
 | type change / transform a new column with a row function | as rename, V8 writes `b` and, if `WriteBack g` given, `a`; trigger on `a` | lazy read via `f`; backfill | `drop column a`; drop trigger | ONLINE with `WriteBack`; otherwise ROLL-WINDOW RISK |
 | column removed | V8 stops writing it, but V7 still **reads** it as non-null, so rows V8 inserts must carry a value: `Legacy c v` (constant → `set default c`, metadata-only) or `LegacyWith f g` (V8 dual-writes `g(row)`) | — | `drop column` | ONLINE with `Legacy`; compile error without. The schema-only compatibility model has no "V7 never decodes it" exception |
 | entity removed | — (V7 still uses it) | — | `drop table` | ONLINE |
-| new plain index | `create index concurrently` (outside transaction, background) | ready before it exists; slower until then | — | ONLINE |
+| new plain index | `create index concurrently` (outside transaction, background) | ready before it exists; slower until then | — | ONLINE only if its admitted old-key domain is proved safe (§7); otherwise ROLL-WINDOW RISK |
 | new unique index | `create unique index concurrently`; **readiness waits until it is `VALID`** whenever this version's type/tests promise uniqueness. A staged-promotion version instead uses its guard and cannot rely on the index | behavioural enforcement may begin once PostgreSQL marks the index `indisready`, before `indisvalid`; failed remnants are dropped promptly. V7 may therefore see uniqueness failures from build start | — | ONLINE only if **every** indexed column is new in this version, nullable, default-free and not filled by a row function while older versions are admitted (so every old-version insert writes `NULL`, which `NULLS DISTINCT` never collides); otherwise ROLL-WINDOW RISK (§7) |
 | index removed | — | — | `drop index concurrently` | ONLINE |
 | `Maybe T` narrowed to `T` | as "computed column" into a new column | | drop old | ONLINE |
@@ -1079,7 +1079,7 @@ program, and computes per entity one of:
 | Class | Examples | Plan output |
 |---|---|---|
 | **unchanged** | identical columns, indexes, proofs, `Same` closure | **no entry** in the record — absence is compiler-verified `Unchanged`; the plan header lists it folded |
-| **additive, epoch-preserving** | new `Maybe` column; constant-default column; new entity; plain index; a unique index whose **every** column is new in this version, nullable, default-free and not filled by a row function (every old-version insert writes `NULL`; Tesl's `unique index` is `NULLS DISTINCT`) | `User: Additive [Default rank 0]` — the compiler derives the adapter (`Nothing` / the constant), emits the expand DDL, bumps no generation; a new entity is `Tag: New`. Compatible with **every** version admitted since the epoch began, so it never narrows the window |
+| **additive, epoch-preserving** | new `Maybe` column; constant-default column; new entity; a plain index whose admitted old-key domain passes §7's safety test; a unique index whose **every** column is new in this version, nullable, default-free and not filled by a row function (every old-version insert writes `NULL`; Tesl's `unique index` is `NULLS DISTINCT`) | `User: Additive [Default rank 0]` — the compiler derives the adapter (`Nothing` / the constant), emits the expand DDL, bumps no generation; a new entity is `Tag: New`. Compatible with **every** version admitted since the epoch began, so it never narrows the window |
 | **window-narrowing** | a unique index over a column **any admitted version writes** (the compiler checks against every schema revision in the current epoch, not the predecessor alone) — **and** any other new unique index that fails the additive test: over a defaulted new column (every old insert writes the same constant and collides), a composite mixing new and old-written columns, or a column a row function fills while old writers exist (backfilled values can collide independently of who wrote the source); a **proof removed** from a column any admitted version reads (the old binary keeps trusting an invariant nothing enforces any more, and a row is never re-validated on decode); anything else additive in storage but not in behaviour | still `Additive`, but the plan header says `WINDOW-NARROWING`: before this version can expand, the epoch must be closed to the two-version window (`close-epoch`), because once the index is `VALID` an old writer meets constraint failures its schema never predicted — bounded for one predecessor, unbounded across an epoch |
 | **needs a value** | new non-`Maybe` computed column; new field proof (`Revalidate`); `Maybe T` narrowed or type changed under the same name (`Retype`); a removed column V7 still decodes (needs `Legacy`); **a fact or type a column names changed** (its closure differs, so no `Same`) — re-validation of every row through the new check | `User: Migrate migrateUser […]` with a generated function whose body has one `todo` per problem |
 | **lossy** | column removed; entity removed; ADT constructor removed on a JSONB column | listed with what will be dropped at V9 contract and how many queries/handlers touched it — never silent |
@@ -1091,6 +1091,10 @@ reads and no handler writes is still lossy for the data, but the plan says so
 ("no query reads `User.legacyScore`; 0 handlers write it"), which is the information a
 reviewer needs. `Money`/`MoneyRate` fields, which expand to several derived columns,
 diff as one field.
+
+The window-narrowing class also includes a nonunique index whose admitted old-key
+domain has no safety proof under §7. Absence of uniqueness does not prove that old
+writes remain valid.
 
 **Multi-column fields (`Money`, `MoneyRate`, future compound types) work because the
 unit of every mechanism is the logical field, and the emitter already owns the
@@ -1247,9 +1251,12 @@ handler-facing `check` delegates to it, so there is one predicate expression:
 fact NonNegative (n: Int)
 
 establish tryNonNegative(n: Int) -> Maybe (v: Int ::: NonNegative v) =
-  if n >= 0 then Something (n ::: NonNegative n) else Nothing
+  if n >= 0 then
+    Something (n ::: NonNegative n)
+  else
+    Nothing
 
-check checkNonNegative(n: Int) -> n: Int ::: NonNegative n =        # handlers: HTTP failure
+check checkNonNegative(n: Int) -> v: Int ::: NonNegative v =        # handlers: HTTP failure
   case tryNonNegative n of
     Nothing -> fail 400 "negative"
     Something valid ->
@@ -1649,7 +1656,11 @@ describing each of them loosely enough to be wrong.
    takeover. Nontransactional index DDL cannot make that check atomic, so each statement
    also holds a session-level shared **DDL-job lock** and rechecks token/state after
    acquiring it; contract takes the same job key exclusively, marks it terminal, then
-   drops the temporary object. The key is the one-argument advisory hash of
+   drops the temporary object. Terminal evidence records the **removing contract's
+   version**, independently of the index's creating version. Recovery verifies that
+   immutable removal target and waits for `compat_floor` to reach it before issuing
+   a drop. For example, an index created in V8 and removed by V9 cannot be dropped
+   merely because `compat_floor` already equals 8. The key is the one-argument advisory hash of
    `(database_uuid, "tesl-ddl-job", stable job id)`, a lock space disjoint from the
    two-int version fences; a hash collision only over-serialises jobs. Leases coordinate work,
    tokens fence stale transactional workers, and neither replaces the schema-version
@@ -2285,12 +2296,27 @@ guarantees, and the compiler error that leads the user to it.
 Adding an index is the most common schema change in a running system. Building one
 never blocks the running program — but "non-blocking" and "`ONLINE`" are not the same
 word: a **unique** index over columns V7 still writes is `ROLL-WINDOW RISK` (below),
-because it changes what V7's inserts are allowed to do. Plain indexes are `ONLINE`; a
+because it changes what V7's inserts are allowed to do. A plain index is `ONLINE`
+only after the old-key domain test below; a
 unique index is `ONLINE` only under the full additive test of §3 — every column new,
 nullable, default-free, not row-function-filled — because "V7 does not name the column"
 is not enough: a constant default makes every V7 insert write the same value, a
 composite key may include an old column, and backfilled values can collide on their
-own. Two things have to be handled that the earlier draft did not.
+own.
+
+**Old-key domain safety applies to nonunique indexes too.** An expression or partial
+index can reject an old write through an expression error; even a plain B-tree index
+over an unbounded text column rejects sufficiently wide keys that the table accepts.
+Consequently, "nonunique" is not a proof of behaviour-preserving expansion. The
+compiler must prove that every key produced by every admitted old schema fits the
+selected index's supported limits and uses total, supported key operations, or that
+old writes produce only harmless NULL keys (all relevant columns are new, nullable,
+default-free and not backfilled). Without that proof, the plan is `ROLL-WINDOW RISK`
+and window-narrowing, so expansion first closes the additive epoch. This does not
+add a uniqueness readiness gate to a plain index. It does make the possible old-write
+failure visible before deployment. Staged uniqueness's preparatory index obeys the
+same rule. A narrow, fixed-width key can pass this proof; unbounded `String` or
+arbitrary-precision `Int` storage does not pass merely from its type name.
 
 **How they are built.** Never inside a transaction and never with a plain `CREATE
 INDEX` on a populated table (that holds a `SHARE` lock that blocks every write for the
@@ -2714,15 +2740,51 @@ Rough expectations, single primary, no replication lag budget:
 
 ### 10. JSONB columns and the codec list
 
-An ADT or record stored as JSONB does **not** need a row migration when only its JSON
-shape changed: the existing `fromJson [current, legacy]` list reads both, and the
-single encoder writes the new shape on the next write. The plan reports such a change
-as `Task.result: JSONB shape changed — read via codec fallback, no rewrite` and the
-snapshot keeps the old codec so the fallback decoder can be generated (or checked)
-against it. Under the two-version rule the legacy decoder must stay in the program
-until V9 at the earliest — the plan says when it may be removed. A rewrite-now
-backfill is available for retiring a legacy decoder. Removing a constructor that
-stored rows still use is lossy and is classified as such.
+**One history and planner cover both relational and JSONB changes.** A column
+remaining `jsonb` does not prove that its stored type is unchanged. The diff follows
+the complete record/ADT, nested types, facts and codec closures. A shared type's
+change is reported at every stored entity field and job payload that depends on it.
+HTTP-only records and codecs remain outside this storage inventory.
+
+A representation-only change can use the existing `fromJson [current, legacy]`
+list as its read adapter without eagerly rewriting stored rows. The snapshot
+retains the old codec; the planner generates or verifies the legacy adapter
+against it and reports that old representations remain. This adapter belongs to
+the versioned migration plan, not a separate untracked migration history. A
+semantic change uses the same typed transformation path as other fields: decode
+the frozen old type, transform to the current type with its required proofs, and
+encode the current representation. A record or ADT is migrated at its stored
+occurrences, under the containing entity generation or queue schema version; it
+does not create an independent durable version counter per nested value.
+
+**Rolling compatibility is bidirectional.** A new decoder accepting old JSON does
+not establish that an old reader accepts the new encoder's output. While the old
+version remains admitted, the plan must establish that compatibility or retain an
+old-readable write representation using the same compatibility/write-back rules
+as other fields. If neither is possible, the plan must require a deployment path
+that retires old readers before incompatible writes become possible. A fallback
+list alone never earns an `ONLINE` classification. Removing a constructor or
+changing its meaning requires an explicit mapping or rejection; silently discarding
+stored values is not a shape adapter. Lossy decisions appear in the plan.
+
+**Decoder removal requires durable evidence.** V9 is only an earliest version
+boundary, not evidence that V7-shaped JSON has disappeared. Untouched rows retain
+their representation indefinitely. A rewrite-now pass uses the ordinary backfill,
+conditional-write, quarantine, repair and final-pass machinery to decode and
+re-encode every affected stored occurrence. It must finish after old-format writers
+are fenced out, and the history must record that completion before pruning the
+decoder. Removing an adapter is refused while affected rows, admitted writers or
+required catch-up history can still require it. The plan distinguishes "old reader
+retired" from "old representation eliminated".
+
+Acceptance includes generated old/new reader and writer cross-products over one
+JSONB column, an untouched legacy row surviving two further schema versions, a
+concurrent old writer during rewrite, crash/resume, nested records and ADTs,
+constructor removal with explicit transformation/rejection, and decoder pruning
+before/after the final evidence. Full-app lessons keep HTTP handlers and API
+assertions unchanged for storage-only representation changes. The existing codec
+fallback mechanism is available today; this planning and execution integration is
+part of phase 5.
 
 ### 11. Command surface — a `tesl migrate` family, the rest in the binary
 
@@ -3996,6 +4058,10 @@ statements (a batched pass, a catalog check, a wait); the template is executable
 those steps supplied. The earlier "every block runs
 verbatim" acceptance line was not satisfiable and is replaced below.
 
+The bootstrap transaction below is generated from the executed
+[control fixture](../../runtime/go/internal/migrationtest/testdata/control-bootstrap.sql).
+Its documentation sync test preserves the later statements in this SQL fence.
+
 ```sql
 -- [normative-template] the control schema, created once at the first bootstrap (or by --schema adopt), never by a version.
 -- The lease table does not exist yet, so the guard is a database-scoped advisory lock in Tesl's fixed bootstrap
@@ -4142,10 +4208,25 @@ create table if not exists notes_app.tesl_schema_leases (
 create table if not exists notes_app.tesl_schema_instances (   -- heartbeats: observability, never a guard
   instance text primary key, version int not null, protocol_level int not null, last_seen timestamptz not null,
   compat_floor_seen int not null default 0);   -- the plan mode this instance has switched to; contract's grace wait reads it
-create table if not exists notes_app.tesl_schema_index (name text primary key, state text not null, attempts int not null default 0, error text);
+create table if not exists notes_app.tesl_schema_index (
+  name text primary key, state text not null, attempts int not null default 0, error text,
+  terminal_version int check (terminal_version between 1 and 2147483646),
+  check ((state = 'terminal') = (terminal_version is not null)));
+-- terminal_version is the immutable REMOVING contract's version, which may be later than the creating version.
+-- Under the exclusive job lock, a retry verifies it is unchanged; DROP additionally requires
+-- compat_floor >= terminal_version. A creation stamp cannot authorize a later contract's physical changes.
 create table if not exists notes_app.tesl_schema_quarantine (
   entity text, pk jsonb, target_generation smallint, attempt int,  -- V8's failures and V9's are different rows
   reason text, seen_at timestamptz, primary key (entity, pk, target_generation, attempt));
+-- Worker observability and progress writes are explicit. None of these grants
+-- permits direct lifecycle/floor, protocol-activation or barrier writes.
+grant select on notes_app.tesl_schema_meta, notes_app.tesl_schema_state,
+  notes_app.tesl_schema_versions, notes_app.tesl_schema_instances to tesl_schema;
+grant select, insert, update, delete on notes_app.tesl_schema_entities,
+  notes_app.tesl_schema_backfill_shards, notes_app.tesl_schema_leases,
+  notes_app.tesl_schema_index, notes_app.tesl_schema_quarantine,
+  notes_app.tesl_schema_queue_restamps, notes_app.tesl_schema_backfill_jobs,
+  notes_app.tesl_schema_stages to tesl_schema;
 create or replace function notes_app.tesl_admit(v int) returns int language plpgsql stable security definer
 set search_path = pg_catalog, notes_app, pg_temp as $$
 declare m int; f int;
@@ -4193,6 +4274,13 @@ create or replace function notes_app.tesl_lifecycle_core__(
 language plpgsql as $$
 declare r notes_app.tesl_schema_versions%rowtype;
 begin
+  if v is null or v < 1 or v >= 2147483647 then
+    raise exception 'tesl: schema version % is outside [1, 2147483646]', v; end if;
+  if s = 'expanded' and (snap is null or snap = '') then
+    raise exception 'tesl: expanded snapshot hash is missing'; end if;
+  if proto is null or proto < 0 or dom is null or dom = '' then
+    raise exception 'tesl: lifecycle protocol identity is missing or invalid'; end if;
+  if art is null or art = '' then raise exception 'tesl: lifecycle artefact hash is missing'; end if;
   if q < 0 or q > 32767 then raise exception 'tesl: lifecycle seq % out of range', q; end if;   -- column is smallint
   insert into notes_app.tesl_schema_versions
       (version, step, seq, snapshot_hash, artefact_hash, protocol_level, fence_domain, epoch_preserving, executed_by)
@@ -4382,6 +4470,7 @@ insert into notes_app.tesl_schema_state (id, min_version, current, installing_ve
                                                   -- draft) would have let a V9 seeder refuse a V8 that then won the lease.
 insert into notes_app.tesl_schema_leases (name) values ('boot'), ('backfill') on conflict do nothing;
 commit;
+-- END GENERATED CONTROL BOOTSTRAP
 
 -- initial expansion (fresh database): the ONLY transition out of current = 0, run under the session-level boot LOCK by
 -- whichever version holds it (the seed is version-neutral, so the seeder and the expander may differ):
@@ -4618,59 +4707,90 @@ V9's boot runs, in this order:
 
 ```sql
 -- [normative-template] `contract V8` as the harness runs it; :binds supplied by the executor.
--- step 5: retire V7 = tesl_advance_floor(7 -> 8), the ONLY path that moves min_version (also used by
--- close-epoch and apply-offline). One transaction; the final pass is a harness step, not a comment:
-begin;                                                        -- the COORDINATOR transaction: holds the fence throughout
-select pg_advisory_xact_lock(:fence_ns, 7);                   -- no V7 write can now start; in-flight ones drain
--- HARNESS STEP final_pass('Note', 4): bounded transactions on OTHER connections, each `update … where _tesl_v = 3`
--- through the frozen migrateNote (V7 writers are fenced out, V8 writers write gen 4, so the set only shrinks);
--- a Reject → quarantine row, ROLLBACK of this coordinator, command refused
-select count(*) from notes_app.notes where "_tesl_v" < 4;    -- postcondition: the harness asserts 0, else ROLLBACK
--- HARNESS STEP jobs_retire(from = [7], to = 8): bounded transactions on other connections, progress in
--- tesl_schema_queue_restamps(:retirement_plan_hash); pending/dead/processing V7 rows restamped in place (payload
--- re-encoded through the embedded V7→V8 jobs: migration; untouched when Same); retiring claimants' renewals already
--- fail under this fence, so their rows expire within one lease and are restamped in a later batch
-select count(*) from notes_app.tesl_jobs where schema_version < 8 and status <> 'quarantined';  -- harness asserts 0
+-- Each labelled SQL block is one statement/transaction boundary. Hooks are executed
+-- by the harness; a failed hook or nonzero assertion stops the recipe.
+
+-- [sql begin-retirement]
+begin;
+-- [sql fence-v7]
+select pg_advisory_xact_lock(:fence_ns, 7);
+-- [hook final-pass]
+-- Run frozen migrateNote to generation 4 in bounded transactions on OTHER connections.
+-- V7 writers are fenced out; V8 writes generation 4. Reject aborts the coordinator,
+-- then quarantine re-reads the current row. Accepted batches remain committed.
+-- [zero rows-final]
+select count(*) from notes_app.notes where "_tesl_v" < 4;
+-- [hook jobs-retire]
+-- Restamp pending/dead jobs and surviving processing claims in bounded batches;
+-- wait only for retiring claimants' leases. Re-encode when jobs: changes the shape.
+-- Progress belongs to tesl_schema_queue_restamps(:retirement_plan_hash).
+-- [zero jobs-final]
+select count(*) from notes_app.tesl_jobs where schema_version < 8 and status <> 'quarantined';
+-- [sql entity-final]
 update notes_app.tesl_schema_entities set generation = 4 where entity = 'Note' and target_generation = 4;
+-- [sql advance-floor]
 select notes_app.tesl_advance_floor(7, 8, :retirement_plan_hash, :protocol_level, :fence_domain, :holder);
-  -- protocol coverage, fence domain, exclusive key held (pg_locks), entities final, no job below 8, CAS 7 → 8, and the
-  -- (7, 'retired') row via the private lifecycle core — all or nothing, and never a raw `update … min_version`
+-- [sql commit-retirement]
 commit;
 
--- step 6a: on the dedicated coordinator connection, take every listed temporary object's DDL-job key EXCLUSIVELY in
--- stable-id order, mark each job terminal, and hold those session locks through the final drop/record below. This waits
--- out an active autocommit build and prevents a stale V8 worker from recreating an object after contract removes it.
--- Then announce the plan switch BEFORE any drop (V8 binaries are still admitted and dual-writing):
+-- [hook terminal-jobs]
+-- Take every listed temporary object's DDL-job key EXCLUSIVELY in stable-id order.
+-- Record terminal with terminal_version = 8 while holding those session locks; retain them through contracted.
+-- A resumed job must retain this removal version, even if its index was created before V8.
+-- This drains active autocommit builds and prevents a stale worker from recreating
+-- an object after contract removes it.
+-- [sql begin-contract]
 select notes_app.tesl_begin_contract(8, :contract_hash, :protocol_level, :fence_domain, :holder);
--- HARNESS STEP wait_plan_switch(8): until every row of tesl_schema_instances with version <= 8 reports
--- compat_floor_seen >= 8, or 2 poll intervals (30 s) have passed — a grace, not a guard; the retry table is the guard
+-- [hook wait-plan-switch]
+-- Wait for compat_floor_seen >= 8 from each admitted instance, or two poll intervals.
+-- This grace is observability; the plan-switch retry protocol remains the guard.
 
--- step 6b: contract V8's migration of Note, one short transaction per statement, lock_timeout = 2s;
--- every statement is idempotent or catalog-checked, so a rerun after a crash resumes here:
--- HARNESS STEP ensure_check_constraint('notes', 'notes_wordcount_nn', '("wordCount" IS NOT NULL)'): pg_constraint
---   has no IF NOT EXISTS, so the ADD lives INSIDE this step, which reads pg_constraint and then does exactly one of:
---   absent → `alter table notes_app.notes add constraint notes_wordcount_nn check ("wordCount" is not null) not valid`;
---   present and SEMANTICALLY equal (the canonical comparator of the acceptance criteria: both expressions deparsed by
---   THIS server with an empty search_path and compared as deparsed text; convalidated either way) → nothing;
---   present with a different definition → drift, refuse with the object named
--- HARNESS STEP validate_if_needed('notes_wordcount_nn'): `alter table … validate constraint` unless convalidated
---   (SHARE UPDATE EXCLUSIVE); a crash after the ADD and before validation resumes here
-alter table notes_app.notes alter column "wordCount" set not null;           -- cheap: the constraint proves it; idempotent
+-- Short DDL statements below use lock_timeout = 2s, each in its own transaction.
+-- [hook ensure-wordcount-check]
+-- Read pg_constraint. Absent: ADD CHECK ("wordCount" IS NOT NULL) NOT VALID.
+-- Present: compare both expressions deparsed by THIS server with empty search_path;
+-- equal is an idempotent retry, different is named catalog drift and a refusal.
+-- [hook validate-wordcount-check]
+-- VALIDATE CONSTRAINT notes_wordcount_nn unless pg_constraint.convalidated is true.
+-- [sql wordcount-not-null]
+alter table notes_app.notes alter column "wordCount" set not null;
+-- [sql drop-wordcount-check]
 alter table notes_app.notes drop constraint if exists notes_wordcount_nn;
--- same for ownerId; the proof's CHECK where expressible: check ("wordCount" >= 0) not valid → validate
+-- [hook ensure-owner-check]
+-- The same catalog-checked NOT VALID / validation recipe for "ownerId" IS NOT NULL.
+-- [hook validate-owner-check]
+-- VALIDATE CONSTRAINT notes_owner_nn unless already validated.
+-- [sql owner-not-null]
+alter table notes_app.notes alter column "ownerId" set not null;
+-- [sql drop-owner-check]
+alter table notes_app.notes drop constraint if exists notes_owner_nn;
+-- [hook ensure-wordcount-proof]
+-- Keep the expressible proof CHECK ("wordCount" >= 0) using the same comparator.
+-- [hook validate-wordcount-proof]
+-- VALIDATE CONSTRAINT notes_wordcount_nonnegative unless already validated.
+-- [sql drop-trigger]
 drop trigger if exists tesl_mig_notes_g4 on notes_app.notes;
+-- [sql drop-function]
 drop function if exists notes_app.tesl_mig_notes_g4();
+-- [sql drop-author]
 alter table notes_app.notes drop column if exists "authorId";
+-- [sql drop-rank]
 alter table notes_app.notes drop column if exists "legacyRank";
-drop index concurrently if exists notes_app.notes_authorId_idx;              -- DDL connection, outside a transaction
-drop index concurrently if exists notes_app.notes_tesl_v_g4_idx;             -- the partial marker index; every row is at gen 4
+-- [sql drop-author-index]
+drop index concurrently if exists notes_app.notes_authorId_idx;
+-- [sql drop-marker-index]
+drop index concurrently if exists notes_app.notes_tesl_v_g4_idx;
+-- [sql record-contracted]
 select notes_app.tesl_record_contracted(8, :contract_hash, :protocol_level, :fence_domain, :holder);
--- HARNESS STEP release_ddl_job_locks: release only after `contracted` is durable
+-- [hook release-job-locks]
+-- Release only after contracted is durable. Backend death releases session locks;
+-- a successor reacquires them, rechecks terminal/catalog state, and resumes.
 
--- step 7: expand V8 -> V9 (a later boot; waits for the row above) — the `Additive` entry is one metadata-only statement
-alter table notes_app.notes add column if not exists "archivedAt" bigint;          -- Maybe → NULL
+-- A subsequent V9 expansion waits for the contracted row above.
+-- [sql add-archived]
+alter table notes_app.notes add column if not exists "archivedAt" bigint;
+-- [sql expand-v9]
 select notes_app.tesl_record_expanded(9, :snapshot_hash, :migration_hash, :protocol_level, :fence_domain, :epoch_preserving, :holder);
-  -- row + `current = 9` in one statement
 ```
 
 V9's readiness waits for `Note`'s final pass because `longNotes` uses `wordCount`
@@ -5384,10 +5504,12 @@ throwaway first protocol. Remaining reopened items below gate only their stated 
   Ships with the fence; spec text to be written with it.
 - **Granularity is per `database`, keyed by module references.** Each `database`
   names its live schema module (`schema: NotesSchema.VCurrent`) and its migration namespace
-  (`migrations: NotesSchema.Migrate`, mandatory), and has its own `tesl_schema_*` control tables. What
-  remains to decide is the small language addition this needs — a module reference as
-  a `Database` field value, which Tesl does not have today. Paths follow the decided
-  lowercase `schema/notes/v-current.tesl` and `migrations/notes/v8.tesl` convention.
+  (`migrations: NotesSchema.Migrate`, mandatory), and has its own `tesl_schema_*` control tables.
+  Ownership uses a contextual module reference, specified in LANGUAGE-SPEC
+  §11.9 and now elaborated by the compiler; it is not a runtime value. The physical
+  PostgreSQL namespace is a separate static `PostgresConfig.namespace` string.
+  Paths follow the lowercase `schema/notes/v-current.tesl` and
+  `migrations/notes/v8.tesl` convention.
   The optional `ddlConnection:` and `fence:` fields and
   their defaults are decided with it.
 - **Topology — DECIDED (2026-09-03): `topology: Worker` is the production default;
@@ -5492,14 +5614,18 @@ throwaway first protocol. Remaining reopened items below gate only their stated 
   semantic-version tag for the Migration Core subset, bumped when a lowering changes
   meaning); the expanding binary's tag is recorded with `(v, 'expanded')` and in
   `tesl_schema_entities.processing_abi` the moment the first row of an entity is
-  processed under it. A later step of that migration — provisional backfill, final pass,
+  processed under it. A target-generation **application write also fixes this ABI**,
+  in the same transaction as that value, even when no backfill batch has run. Otherwise
+  `rows_done = 0` would permit a new executor to mix its values with rows already
+  produced by the first application build. A later step of that migration — provisional backfill, final pass,
   repair — by an executor with a **different** tag is **refused**. The re-review was right
   that a recorded `--accept-abi-drift` override (the previous draft) preserves
   auditability but not consistency: provisional rows already at the target generation
   are never revisited, batches carry no lifecycle row of their own, and a reason on a
   later row cannot say which rows were produced by which semantics. So the override
-  exists only **before the first migrated row** (`rows_done = 0` for every entity of the
-  migration and no provisional pass recorded) — the point at which choosing the new ABI
+  exists only **before any target-generation value has been written** (`rows_done = 0`
+  for every entity of the migration, no target-generation application-write evidence
+  and no provisional pass recorded) — the point at which choosing the new ABI
   costs nothing — and after that the two paths are: finish with a same-ABI executor (a
   build from the recorded compiler), or declare a **new generation** in the next version
   whose row function reprocesses every row deterministically under the new ABI (an
@@ -5565,10 +5691,18 @@ throwaway first protocol. Remaining reopened items below gate only their stated 
   concurrent builder exists. The metadata-only catalog matches the module afterwards. **Catalog
   drift is classified, not tolerated wholesale:** a pre-existing extra column is *benign* only when **both** hold —
   it is nullable **or** has a default (so a Tesl insert that omits it succeeds), **and**
-  its default, if any, is **literal-only**: a constant, or a constant under a type cast,
-  and nothing else (the earlier "nullable *or* safe default" let a nullable column with
-  `DEFAULT nextval(…)` through, and every Tesl insert would have run that side effect);
-  an extra non-unique index is benign too; both are left alone and reported. An extra
+  its default, if any, is a **recognized scalar constant** in a supported built-in
+  type, with no computing coercion, and fits the column's type and typmod. Domains and
+  unsupported extra-column types are refused even when `attnotnull` is false: their
+  coercions or constraints can run code or reject an omitted value. The earlier
+  "nullable *or* safe default" let a nullable column with
+  `DEFAULT nextval(…)` through, and every Tesl insert would have run that side effect;
+  a benign extra column is left alone and reported. **An unrecorded extra index is
+  refused by the initial classifier**, including a nonunique one: expression errors,
+  custom key operations and plain B-tree key-size limits can all change which
+  writes succeed. An operator can declare/adopt a supported index with an explicit
+  plan; a later benign-index classifier must carry the same domain proof as §7.
+  An extra
   `NOT NULL` column without default, any default that calls a function or operator
   (`now()`, `nextval`, `gen_random_uuid()`, a user function — classified conservatively,
   built-in or not), unique index or constraint, check, trigger, generated column,
@@ -5592,10 +5726,20 @@ throwaway first protocol. Remaining reopened items below gate only their stated 
   fully qualified by the one deparser and formatting, qualification and rendering
   differences cannot appear. Equality of the two deparsed strings is the definition of
   "semantically equal" on that server; the fingerprint stores the live deparsed form.
-  **Default classification is literal-only**, decided on the deparsed form: benign iff the
-  deparsed default is a single constant, optionally under one or more type casts
-  (`0`, `''::text`, `'{}'::jsonb`, `'2020-01-01'::date`); anything containing a function
-  call or an operator is behaviour-affecting, built-in or not. A `pg_depend` walk was
+  **Default classification is conservative**, using the deparsed form together with
+  the column's resolved type, type kind, namespace and typmod. Accept a scalar literal
+  (`0`, `true`, `NULL`, a quoted string), or one quoted/NULL constant with a recognized
+  built-in scalar type annotation (`''::text`, `'{}'::jsonb`,
+  `'2020-01-01'::date`). The recognized spellings are a closed, tested list; unknown
+  spellings, arrays, domains, user types, nested casts, function calls and operators
+  are behaviour-affecting. A literal must also fit the column: after these checks,
+  evaluate only the recognized constant on the temporary comparison table with the
+  actual type and typmod, rolling back the probe. Never evaluate a computing default
+  to classify it, and never probe by inserting into a live application table.
+  **Arbitrary casts are not constant annotations.** PostgreSQL can deparse a volatile
+  user-defined cast as `(0)::some_type`, without showing its function name; a cast from
+  `'now'::text` to `timestamptz` also computes on each insertion. The earlier rule
+  allowing any constant under one or more casts was unsafe. A `pg_depend` walk was
   the first draft's rule and is **not** usable: dependencies on pinned `pg_catalog`
   objects are not recorded in `pg_depend`, so `now()` and `nextval()` would have evaded
   it. Conservative is correct here — a default that computes anything runs on every Tesl
@@ -5786,7 +5930,19 @@ throwaway first protocol. Remaining reopened items below gate only their stated 
   operator compares different; defaults are read from `pg_attrdef.adbin`, and a default
   calling `now()`, `nextval`, `lower('X')` or a user function is classified
   behaviour-affecting (literal-only rule: any call is a call) while `0`, `''` and
-  `'{}'::jsonb` are benign.
+  `'{}'::jsonb` are benign. A volatile user-defined cast whose deparse contains only
+  a literal and `::type` is refused; the test demonstrates that omitting the nullable
+  column otherwise executes its side effect. A domain column is refused even when
+  its stored default deparses as plain `'x'::text`; a literal default too large for
+  a column's typmod is refused without writing the live table. Catalog comparison
+  must retain column collation even when two differently collated expressions
+  deparse to identical text.
+- (Phase 1/2) an unrecorded nonunique expression index, partial index and plain index
+  over unbounded text are refused as drift. Regression witnesses insert the same
+  row before and after adding each index: the table accepts it, while the index
+  rejects division by zero or a too-wide key. A generated plain index is marked
+  window-narrowing unless its old-key domain is proved safe for every admitted
+  version; a fixed-width proven key and a new all-NULL old-write key remain additive.
 - (Phase 3) `close-epoch` with a **surviving** claimant paused mid-handler on a row stamped
   below the target: at the floor's commit the row is restamped in place with `status`,
   `claim_seq`, `claimed_by_version` and `lease_until` unchanged, the postcondition holds,

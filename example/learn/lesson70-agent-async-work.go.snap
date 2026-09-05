@@ -115,6 +115,8 @@ var ReportDbDatabase = teslrt.NewDatabase(
 	},
 )
 
+var _ = teslrt.RegisterDatabaseIdentity("teslmodlesson70agentasyncwork.ReportDb", ReportDbDatabase)
+
 //line lesson70-agent-async-work.tesl:175
 func validateReportSpec(argsJson string) ReportSpec {
 //line lesson70-agent-async-work.tesl:176
@@ -487,15 +489,9 @@ func teslEncode1(teslValue string) any {
 }
 
 func teslEncode2(teslValue ChatEvent) any {
-	return func() any {
-		switch teslValue.Tag {
-		case ChatEventChunk:
-			return map[string]any{"tag": "Chunk", "fields": map[string]any{
-				"content": teslEncode1(teslValue.ChunkContent),
-			}}
-		}
-		panic("unreachable: checker guarantees case exhaustiveness")
-	}()
+	return map[string]any{"tag": "Chunk", "fields": map[string]any{
+		"content": teslEncode1(teslValue.ChunkContent),
+	}}
 }
 
 func teslScanConversationRecord(teslRow pgx.CollectableRow) (ConversationRecord, error) {

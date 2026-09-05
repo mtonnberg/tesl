@@ -1340,6 +1340,9 @@ _tesl_build_go_container() {
     return 2
   }
   go="${TESL_GO:-go}"
+  # This directory contains compiler output, not an application checkout. Go's
+  # automatic VCS discovery can find an unrelated or incomplete parent .git.
+  # The image's source revision is recorded explicitly below from the entrypoint.
   (cd "$generated" && GOOS=linux CGO_ENABLED=0 "$go" build -buildvcs=false -trimpath -o "$ctx/tesl-app" ./cmd/app) || {
     echo "tesl build --backend go: failed to build $entry for Linux" >&2
     return 1

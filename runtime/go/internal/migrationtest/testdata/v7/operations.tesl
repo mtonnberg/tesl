@@ -1,0 +1,36 @@
+module Operations exposing [run, titleOf]
+
+# Application effects; never copied into schema history.
+import Tesl.Prelude exposing [Bool(..), String, Unit]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.Env exposing [envRead, requireEnv]
+import Tesl.DB exposing [dbRead, dbWrite]
+import NotesSchema.VCurrent exposing [Note]
+
+fn titleOf(key: String) -> String requires [dbRead Note] =
+  case selectOne n from Note where n.id == key of
+    Something n -> n.title
+    Nothing -> "missing"
+
+fn run() -> Unit requires [dbRead Note, dbWrite Note, envRead] =
+  let key = requireEnv "TESL_FIXTURE_KEY"
+  let value = requireEnv "TESL_FIXTURE_VALUE"
+  case requireEnv "TESL_FIXTURE_OPERATION" of
+    "insert" ->
+      let _ = insert Note { id: key, title: value }
+      Unit
+    "update" ->
+      transaction {
+        update n in Note
+          where n.id == key
+          set n.title = value
+      }
+    "read" ->
+      case selectOne n from Note where n.id == key of
+        Something n ->
+          if n.title == value then
+            Unit
+          else
+            fail 500 "fixture read mismatch"
+        Nothing -> fail 500 "fixture row missing"
+    _ -> fail 500 "unknown fixture operation"

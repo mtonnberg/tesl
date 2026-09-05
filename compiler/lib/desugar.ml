@@ -199,10 +199,6 @@ let desugar_database_config (d : database_form) : database_form =
   | None -> d
   | Some e ->
     let top = config_record_fields e in
-    let schema =
-      match List.assoc_opt "schema" top with
-      | Some (ELit { lit = LString s; _ }) -> s | _ -> ""
-    in
     let entities =
       match List.assoc_opt "entities" top with
       | Some (EList { elems; _ }) -> List.filter_map config_ctor_name elems
@@ -221,6 +217,14 @@ let desugar_database_config (d : database_form) : database_form =
             (match b with EApp { arg; _ } -> Some arg | _ -> None)
           | _ -> None)
       | None -> None
+    in
+    let schema =
+      match List.assoc_opt "schema" top with
+      | Some (ELit { lit = LString s; _ }) -> s
+      | _ -> (match postgres_expr with
+          | Some pg -> (match List.assoc_opt "namespace" (config_record_fields pg) with
+              | Some (ELit { lit = LString s; _ }) -> s | _ -> "")
+          | None -> "")
     in
     let postgres =
       match postgres_expr with

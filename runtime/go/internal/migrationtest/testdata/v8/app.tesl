@@ -1,0 +1,38 @@
+module App exposing [FixtureDb, perform]
+
+# Application deployed at V8. Connection settings and effects belong here.
+# Its independent schema source is under schema/notes/.
+import Tesl.Prelude exposing [Unit]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.Env exposing [envRead]
+import Tesl.DB exposing [dbRead, dbWrite]
+import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
+import NotesSchema.VCurrent exposing [Note]
+import Operations exposing [run, titleOf]
+
+database FixtureDb = Database {
+  schema: NotesSchema.VCurrent
+  migrations: NotesSchema.Migrate
+  backend: Postgres (PostgresConfig {
+    namespace: "migration_fixture"
+    dbName: env "TESL_FIXTURE_DATABASE"
+    user: env "TESL_TEST_POSTGRES_SHARED_USER"
+    password: env "PGPASSWORD"
+    connection: TcpConnection {
+      host: env "TESL_TEST_POSTGRES_SHARED_HOST"
+      port: envInt "TESL_TEST_POSTGRES_SHARED_PORT" 5432
+    }
+  })
+}
+
+fn perform() -> Unit requires [dbRead Note, dbWrite Note, envRead] =
+  run()
+
+test "postgres trace" with database FixtureDb requires [dbRead Note, dbWrite Note, envRead] {
+  perform()
+}
+
+test "memory round trip" requires [dbRead Note, dbWrite Note] {
+  let _ = insert Note { id: "memory", title: "stored", label: Something "label" }
+  expect titleOf "memory" == "stored"
+}

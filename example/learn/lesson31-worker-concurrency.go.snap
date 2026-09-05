@@ -72,6 +72,8 @@ var EmailDatabaseDatabase = teslrt.NewDatabase(
 	[]teslrt.PostgresTable{},
 )
 
+var _ = teslrt.RegisterDatabaseIdentity("teslmodlesson31workerconcurrency.EmailDatabase", EmailDatabaseDatabase)
+
 //line lesson31-worker-concurrency.tesl:117
 func processEmail(job EmailJob) EmailJob {
 	{

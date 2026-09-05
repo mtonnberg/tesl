@@ -519,6 +519,14 @@ if [ "$migration_contract_fail" -gt 0 ]; then
     print_summary_and_exit
 fi
 
+phase_begin "Migration admission models"
+if bash "$SCRIPT_DIR/scripts/check-migration-models.sh"; then
+    phase_end OK
+else
+    phase_end FAIL
+    print_summary_and_exit
+fi
+
 # ══════════════════════════════════════════════════════════════════════════════
 #  Phase 1 — Build (dune)
 # ══════════════════════════════════════════════════════════════════════════════
@@ -647,6 +655,7 @@ if [ "$go_gate_fail" -eq 0 ]; then
       fi
       go test -count=1 ./... &&
       go test -race -count=1 ./... &&
+      bash "$SCRIPT_DIR/scripts/run-migration-tests.sh" &&
       # Fuzz targets go through scripts/go-fuzz-target.sh: it retries ONLY the Go fuzz
       # engine's own -fuzztime deadline race ("context deadline exceeded", no crasher
       # written); a real finding still fails on the first run.  TESL_GO_FUZZTIME sets

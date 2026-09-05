@@ -3,6 +3,15 @@
 > Audience: contributors working on the frontend IR in the compiler (`compiler/lib/ir.ml`, `compiler/bin/main.ml`).
 
 The current frontend-facing IR lives in the OCaml compiler, not in Python staging modules. The implementation is `compiler/lib/ir.ml`, and the CLI surface is `tesl --ir` in `compiler/bin/main.ml`.
+
+Database migration semantic identities use a separate internal representation in
+`migration_ir.ml` and `migration_canonical.ml`. That representation requires checked
+expression types, resolved symbol identities and a complete schema-owned declaration
+inventory. It includes private helpers, fact-producing checks and codecs; it omits
+source locations and normalizes version roles and local binders. Never use the
+parse-only `--ir` JSON or printed source as a substitute for these semantic hashes.
+The migration resolver, verified Same, manifest and runtime-history integration are
+still under development; see [the implementation ledger](migrations-implementation.md).
 ## What `--ir` is today
 `tesl --ir file.tesl`:
 1. reads the source file

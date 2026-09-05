@@ -11,6 +11,25 @@
 open Ast
 open Location
 
+(** PostgreSQL field naming is shared by validation and emission. Acronyms form
+    one word: userID and userId both map to user_id and therefore cannot coexist. *)
+let sql_column_name text =
+  let buffer = Buffer.create (String.length text + 4) in
+  let length = String.length text in
+  String.iteri (fun index char ->
+    let upper = char >= 'A' && char <= 'Z' in
+    if upper && index > 0 then begin
+      let previous = text.[index - 1] in
+      let previous_lower =
+        (previous >= 'a' && previous <= 'z') || (previous >= '0' && previous <= '9') in
+      let previous_upper = previous >= 'A' && previous <= 'Z' in
+      let next_lower =
+        index + 1 < length && text.[index + 1] >= 'a' && text.[index + 1] <= 'z' in
+      if previous_lower || (previous_upper && next_lower) then Buffer.add_char buffer '_'
+    end;
+    Buffer.add_char buffer (Char.lowercase_ascii char)) text;
+  Buffer.contents buffer
+
 (* ── Validation error ────────────────────────────────────────────────────── *)
 
 type validation_error = {
@@ -984,11 +1003,59 @@ let module_name_to_kebab name =
   ) name;
   Buffer.contents buf
 
+(* Versioned schema families use the source-owned directory layout. These are
+   module paths, never value strings: reject path separators/traversal before
+   considering the filesystem. Flat local imports retain their old precedence. *)
+let schema_module_relative_path module_name =
+  let identifier segment =
+    String.length segment > 0
+    && segment.[0] >= 'A' && segment.[0] <= 'Z'
+    && String.for_all (function
+         | 'A'..'Z' | 'a'..'z' | '0'..'9' | '_' -> true | _ -> false) segment
+  in
+  let version name =
+    name = "VCurrent" ||
+    (String.length name > 1 && name.[0] = 'V'
+     && name.[1] >= '1' && name.[1] <= '9'
+     && String.for_all (function '0'..'9' -> true | _ -> false)
+          (String.sub name 1 (String.length name - 1))
+     && match Int64.of_string_opt (String.sub name 1 (String.length name - 1)) with
+        | Some n -> n <= 2147483646L
+        | None -> false)
+  in
+  let parts = String.split_on_char '.' module_name in
+  if not (List.for_all identifier parts) then None
+  else match parts with
+    | family :: revision :: rest when Filename.check_suffix family "Schema"
+                                    && String.length family > 6 ->
+      let name = String.sub family 0 (String.length family - 6) |> module_name_to_kebab in
+      let dirs = if revision = "Migrate" then Some ["migrations"; name]
+        else if version revision then Some ["schema"; name; module_name_to_kebab revision]
+        else None in
+      Option.map (fun dirs -> String.concat "/" (dirs @ List.map module_name_to_kebab rest) ^ ".tesl") dirs
+    | _ -> None
+
 let resolve_local_import_path source_file module_name =
   let dir = Filename.dirname source_file in
   let kebab_path = Filename.concat dir (module_name_to_kebab module_name ^ ".tesl") in
   if Sys.file_exists kebab_path then kebab_path
-  else Filename.concat dir (module_name ^ ".tesl")
+  else
+    let pascal_path = Filename.concat dir (module_name ^ ".tesl") in
+    if Sys.file_exists pascal_path then pascal_path
+    else match schema_module_relative_path module_name with
+      | None -> pascal_path
+      | Some relative ->
+        let rec search current =
+          let candidate = Filename.concat current relative in
+          if Sys.file_exists candidate then candidate
+          else if List.exists (fun marker -> Sys.file_exists (Filename.concat current marker))
+                    ["tesl.toml"; "tesl.json"; ".git"] then candidate
+          else
+            let parent = Filename.dirname current in
+            if parent = current then Filename.concat dir relative
+            else search parent
+        in
+        search (try Unix.realpath dir with _ -> dir)
 
 (* ── Lifted-stdlib source resolution ──────────────────────────────────────────
    A subset of the [Tesl.*] standard library is written in Tesl itself: a bundled
@@ -1080,6 +1147,31 @@ let lifted_stdlib_source_path (module_name : string) : string option =
 let canonical_import_path (p : string) : string =
   try Unix.realpath p with _ -> p
 
+(** Resolve an entity in a checked project graph to its declaring module. The
+    ordinary scope/type checker validates visibility; this shared ownership lookup
+    retains ambiguities and gives local declarations precedence over imports. *)
+let resolve_project_entity (modules : module_form list) (m : module_form) name =
+  let declares (owner : module_form) name = List.exists (function
+    | DEntity e -> e.name = name | _ -> false) owner.decls in
+  let qualified = List.filter_map (fun (owner : module_form) ->
+    let prefix = owner.module_name ^ "." in
+    if String.starts_with ~prefix name then
+      let bare = String.sub name (String.length prefix) (String.length name - String.length prefix) in
+      if declares owner bare then Some name else None
+    else None) modules in
+  if qualified <> [] then List.sort_uniq String.compare qualified
+  else if declares m name then [m.module_name ^ "." ^ name]
+  else List.concat_map (fun (imp : import_decl) ->
+    match List.find_opt (fun (other : module_form) -> other.module_name = imp.module_name) modules with
+    | None -> []
+    | Some other ->
+      let prefix = imp.module_name ^ "." in
+      let bare = if String.starts_with ~prefix name then
+        String.sub name (String.length prefix) (String.length name - String.length prefix)
+        else name in
+      if declares other bare then [other.module_name ^ "." ^ bare] else []) m.imports
+    |> List.sort_uniq String.compare
+
 let normalize_exposed_type_name (name : string) : string option =
   let n = String.length name in
   let base =
@@ -1113,20 +1205,34 @@ let load_imported_ctor_info (m : module_form) : ctor_info =
          | Err _ -> []
          | Ok imported ->
            let requested_types = match imp.names with
-             | ImportAll -> None
-              | ImportExposing names -> Some (List.filter_map normalize_exposed_type_name names)
-           in
+             | ImportAll -> []
+             | ImportExposing names -> List.filter_map normalize_exposed_type_name names in
+           let local_types = List.filter_map (function
+             | DType (TypeAdt { name; _ }) | DType (TypeNewtype { name; _ })
+             | DRecord { name; _ } | DEntity { name; _ } -> Some name
+             | _ -> None) imported.decls in
+           let qualify_name name =
+             if List.mem name local_types && not (List.mem name requested_types)
+             then imp.module_name ^ "." ^ name else name in
+           let rec qualify = function
+             | TName n -> TName { n with name = qualify_name n.name }
+             | TApp t -> TApp { t with head = qualify t.head; arg = qualify t.arg }
+             | TFun t -> TFun { t with dom = qualify t.dom; cod = qualify t.cod }
+             | TTuple t -> TTuple { t with elems = List.map qualify t.elems }
+             | TVar _ as t -> t in
            List.concat_map (function
              | DType (TypeAdt { name; variants; _ }) ->
-               let include_it = match requested_types with
-                 | None -> true
-                 | Some names -> List.mem name names
-               in
-               if not include_it then []
+               let exported = List.exists (function ExportName n | ExportAdt n -> n = name) imported.exports in
+               if not exported then []
                else
-                 let result_ty = mk_name_type name in
-                 List.map (fun (v : adt_variant) ->
-                   (v.ctor, (List.map (fun (f : field_def) -> f.type_expr) v.fields, result_ty))
+                 let result_ty = mk_name_type (qualify_name name) in
+                 List.concat_map (fun (v : adt_variant) ->
+                   let metadata = List.map (fun (f : field_def) -> qualify f.type_expr) v.fields, result_ty in
+                   (* Bare imports stay scoped; qualified-only versions never
+                      merge their constructor inventory by the leaf name. *)
+                   (if List.mem name requested_types then [v.ctor, metadata] else [])
+                   @ [imp.module_name ^ "." ^ v.ctor,
+                      (fst metadata, mk_name_type (imp.module_name ^ "." ^ name))]
                  ) variants
              | _ -> []
            ) imported.decls)

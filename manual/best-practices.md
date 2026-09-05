@@ -617,6 +617,26 @@ api TodoApi {
 
 ## Database Access
 
+Keep connection settings in the application and stored entities, types, facts,
+and codecs in their schema modules. Application modules and libraries import
+`FamilySchema.VCurrent`; a frozen `V<n>` import is MIG015. Pure migration functions
+and tests that construct historical values belong in `FamilySchema.Migrate.*`.
+Use the diagnostic's **Use VCurrent** action to update an application import and
+its qualified references together.
+Those tests cannot acquire database capabilities or a connection. See the
+[schema and migration guide](tour.md#schema-and-migrations) for the module layout
+and the current implementation boundary.
+
+Keep the checks that establish stored invariants beside the facts they declare.
+Only that declaring module may produce a fact through `check` or `establish`.
+An application or migration can call the owning validator and pass already-proven
+values through ordinary functions; it cannot introduce a replacement validator
+for an imported fact. This also applies to predicates with several arguments,
+such as `InBounds 1 100 amount`.
+An ordinary helper can also receive and return `Fact (InBounds 1 100 amount)`
+unchanged. The evidence keeps its original value and bounds; use `attachFact` when
+you need to attach it to that value. An optional proof must be unwrapped first.
+
 ### Typed Queries
 
 **✅ Do:** Use typed SQL queries with entities:

@@ -173,6 +173,15 @@ let registry : entry list = [
        at the most relevant section for the kind of error.";
     manual = Some "best-practices#validation-patterns" };
 
+  { code = "MIG015"; category = Structure;
+    title = "application imports a historical schema";
+    explanation =
+      "Application modules must import their live VCurrent schema. Frozen V<n> \
+       types are inputs to pure migration functions and tests in the schema's \
+       Migrate namespace. Adding a test block to application code does not grant \
+       access to historical types or compatibility-test storage operations.";
+    manual = Some "best-practices#database-access" };
+
   (* ── Legacy Bool spelling (validation source, dedicated codes) ─────────── *)
   { code = "VBOOL001"; category = Type;
     title = "use `Bool`, not `Boolean`/`bool`";

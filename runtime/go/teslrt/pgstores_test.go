@@ -364,10 +364,9 @@ func TestDurableQueueReclaimsAJobFromACrashedInstance(t *testing.T) {
 	registerStoreJobCodec(queueA)
 	registerStoreJobCodec(queueB)
 
-	previous := queueVisibilityTimeout
 	previousReclaim := queueReclaimInterval
 	queueReclaimInterval = 0 // every claim sweeps, so the test does not wait a minute
-	t.Cleanup(func() { queueVisibilityTimeout = previous; queueReclaimInterval = previousReclaim })
+	t.Cleanup(func() { queueReclaimInterval = previousReclaim })
 
 	var claimedID string
 	WithDatabase(dbA, func() {
@@ -385,8 +384,8 @@ func TestDurableQueueReclaimsAJobFromACrashedInstance(t *testing.T) {
 		if _, _, _, _, found := queueB.dequeue(jobPending); found {
 			t.Fatal("B claimed a job A is still processing within the visibility window")
 		}
-		queueVisibilityTimeout = func() time.Duration { return 100 * time.Millisecond }
-		time.Sleep(250 * time.Millisecond)
+		db := dbB.bound()
+		PgExec(db, "update "+db.QualifiedTable(jobsTable)+" set lease_until=clock_timestamp()-interval '1 second' where id=$1", []any{claimedID})
 		id, payload, attempts, claimToken, found := queueB.dequeue(jobPending)
 		if !found {
 			t.Fatal("B did not reclaim the abandoned job")
@@ -432,7 +431,7 @@ func TestDurableQueueReclaimsADeadJobToTheDeadLetter(t *testing.T) {
 			t.Fatalf("claimed dead job status = %v", rows)
 		}
 		PgExec(db, "update "+db.QualifiedTable(jobsTable)+
-			" set locked_at = now() - interval '1 day' where id = $1", []any{id})
+			" set locked_at = now() - interval '1 day', lease_until = now() - interval '1 day' where id = $1", []any{id})
 	})
 	WithDatabase(dbB, func() {
 		backend := queueB.backend.(*pgQueueBackend)
@@ -485,7 +484,7 @@ func TestDurableDeadWorkerSurfacesAFencedCompletion(t *testing.T) {
 			<-handlerEntered
 			db := database.bound()
 			table := db.QualifiedTable(jobsTable)
-			PgExec(db, "update "+table+" set locked_at = now() - interval '1 day' "+
+			PgExec(db, "update "+table+" set locked_at = now() - interval '1 day', lease_until = now() - interval '1 day' "+
 				"where queue = $1 and status = 'dead_processing'", []any{queue.name})
 			backend := queue.backend.(*pgQueueBackend)
 			backend.lastReclaim.Store(0)
@@ -522,7 +521,7 @@ func TestDurableQueueRejectsOutcomesFromAStaleClaim(t *testing.T) {
 
 		db := database.bound()
 		table := db.QualifiedTable(jobsTable)
-		PgExec(db, "update "+table+" set locked_at = now() - interval '1 day' where id = $1", []any{id})
+		PgExec(db, "update "+table+" set locked_at = now() - interval '1 day', lease_until = now() - interval '1 day' where id = $1", []any{id})
 		backend := queue.backend.(*pgQueueBackend)
 		backend.lastReclaim.Store(0)
 		backend.reclaimStuck(db, table)

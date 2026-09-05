@@ -189,6 +189,53 @@ checks at function return time.
 
 ## Auto-migration on startup
 
+The Go backend resolves entity ownership across the whole project before emitting
+queries. `Emit_go.project_entity_bindings` maps each module-qualified entity to the
+application's database. Generated query modules resolve the compiled database
+identity through `teslrt.ResolveDatabaseIdentity`; application initialization
+registers that identity. This avoids an import cycle and keeps connections out of
+schema modules. Qualified aliases of the same entity produce one table descriptor.
+
+`Migration_schema` checks standalone schema modules, database-selected schema
+families, and their complete import closure. The root module comes from the
+current parsed buffer, so an unsaved edit cannot escape through a clean disk copy.
+Entities, types, facts, codecs, and pure helpers belong there;
+application declarations, connection configuration, effects, and tests do not.
+Migration-family modules enforce the same separation while allowing pure record
+and fixture constants. They cannot declare entities or import application code;
+schema snapshots remain the source of entity ownership.
+`Migration_schema.check_ownership` validates the whole parsed application graph:
+one database per schema family, no combined families and no historical snapshot
+bound to a connection. `Validation_common.resolve_project_entity` is shared with
+Go database binding so the checks and queries resolve local and imported entities
+consistently. New unsaved application files participate in the same graph checks.
+The compiled process fixtures in `runtime/go/internal/migrationtest/testdata/`
+exercise separate application, operation, and schema modules against shared
+PostgreSQL rows.
+
+`Migration_inventory` loads the complete checked schema closure and provides
+field and entity impact projections. Use entity impact when checking a sparse
+migration record: comparing fields alone misses table, primary-key and index
+changes. Both projections follow nested record/ADT codecs and fact producers.
+The internal `verify_same` API compares canonical declaration closures and returns
+abstract equality evidence or the differing dependency's source locations.
+`same_candidates` proposes equal types, facts and codecs, including private ones.
+These APIs require the same compiler ABI; they do not authorize cross-version
+proof casts, accept persisted history, classify online safety or execute DDL.
+The source-history layer separately guards saved input bytes and import resolution.
+
+The following startup notes describe the legacy bootstrap, not the versioned
+migration executor being developed; delivery status is tracked in
+[the migration implementation ledger](migrations-implementation.md).
+
+The catalog test harness uses same-server parsing/deparsing for expected and live
+expressions, with matching types and collations on disposable temporary tables.
+Do not infer harmless defaults from `::type` syntax: a user-defined cast can execute
+a function while deparsing that way. Nor does a domain column's plain text default
+exclude constraints on assignment. The fixture's conservative scalar-constant
+recognizer and column checks cover these cases, including typmod failures, without
+evaluating computing defaults. Production catalog reconciliation remains pending.
+
 `ensure-database-ready!` runs when a database is first connected (`call-with-database`, which `main`'s `App { database: X }` lowers to):
 
 1. `(create schema if not exists schema-name)` — creates the schema
