@@ -70,7 +70,9 @@ in rec {
     { target = "linux-arm64"; runner = "ubuntu-22.04-arm"; baseline = "glibc 2.35"; }
     { target = "darwin-amd64"; runner = "macos-15-intel"; baseline = "macOS 13"; }
     { target = "darwin-arm64"; runner = "macos-15"; baseline = "macOS 13"; }
-    { target = "windows-amd64"; runner = "windows-2025"; baseline = "Windows 11"; }
+    # windows-2025 now selects VS2026. The native compiler recipe and audited
+    # redistributable license target VS2022 / VC143, available on this image.
+    { target = "windows-amd64"; runner = "windows-2022"; baseline = "Windows 11"; }
   ];
   payloads = builtins.listToAttrs (map (candidate: {
     name = candidate.target;

@@ -111,6 +111,7 @@ jobs:
         if: ${{ startsWith(matrix.target, 'windows-') }}
         with:
           arch: x64
+          vsversion: '2022'
       - name: Assemble and test native candidate archive
         if: ${{ !startsWith(matrix.target, 'windows-') }}
         run: python3 scripts/native_distribution.py --plan native-release-plan.json --target ${{ matrix.target }} --module-bundle native-module-bundle --output artifacts/distribution-${{ matrix.target }}
