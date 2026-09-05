@@ -113,6 +113,9 @@ def main():
     checks.append(("Editor", ["node", "--test", "toolchain.test.js", "test-output-parser.test.js"],
                    root / "editor/vscode-tesl"))
     run_checks(checks, environment)
+    # `dune exec` can promote the generators again while running the suites.
+    # Check the final bytes before switching to the distribution build tools.
+    verify_generated_snapshots(root, environment)
     evidence = root / "artifacts" / ("native-" + args.target)
     evidence.mkdir(parents=True, exist_ok=True)
     (evidence / "checks.json").write_text(json.dumps({

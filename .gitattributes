@@ -5,3 +5,4 @@ runtime/go/go.sum text eol=lf
 # not change the generated snapshot or dirty a native Windows release checkout.
 runtime/go/teslrt/*.go text eol=lf
 compiler/lib/go_runtime/embedded/embedded_go_runtime.ml text eol=lf
+compiler/lib/embedded_docs.ml text eol=lf
