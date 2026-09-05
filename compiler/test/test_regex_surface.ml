@@ -186,6 +186,29 @@ let t_pattern_from_a_concatenation () =
   should_fail_with "VREGEX002"
     (prog "fn f(part: String, s: String) -> Bool =\n  Regex.matches (\"^\" ++ part) s")
 
+let t_regex_function_alias_is_rejected () =
+  should_fail_with "VREGEX002"
+    (prog
+       "fn f(p: String, s: String) -> Bool =\n\
+       \  let matcher = Regex.matches\n\
+       \  matcher p s")
+
+let t_regex_function_argument_is_rejected () =
+  should_fail_with "VREGEX002"
+    (prog
+       "fn apply(matcher: String -> String -> Bool, p: String, s: String) -> Bool =\n\
+       \  matcher p s\n\
+        fn f(p: String, s: String) -> Bool =\n\
+       \  apply Regex.matches p s")
+
+let t_regex_function_in_collection_is_rejected () =
+  should_fail_with "VREGEX002"
+    (prog "fn f() -> List (String -> String -> Bool) =\n  [Regex.matches]")
+
+let t_partially_applied_regex_function_is_rejected () =
+  should_fail_with "VREGEX002"
+    (prog "fn f() -> String -> Bool =\n  Regex.matches \"^[a-z]+$\"")
+
 (* A `$` in a Tesl string lexes as an interpolation even with no `${…}` hole,
    so an ANCHORED pattern only works if the literal check sees through that. *)
 let t_dollar_anchor_is_still_a_literal () =
@@ -362,6 +385,14 @@ let () =
             t_pattern_from_a_local_binding;
           test_case "an interpolated pattern" `Quick t_pattern_from_an_interpolation;
           test_case "a concatenated pattern" `Quick t_pattern_from_a_concatenation;
+          test_case "a let-bound Regex function" `Quick
+            t_regex_function_alias_is_rejected;
+          test_case "a Regex function argument" `Quick
+            t_regex_function_argument_is_rejected;
+          test_case "a Regex function in a collection" `Quick
+            t_regex_function_in_collection_is_rejected;
+          test_case "a partially applied Regex function" `Quick
+            t_partially_applied_regex_function_is_rejected;
           test_case "a `$` anchor is still a literal" `Quick
             t_dollar_anchor_is_still_a_literal ] );
       ( "positions",

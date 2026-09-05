@@ -122,7 +122,9 @@ function finish(out, line) {
 
 // ─── The highlighted underlay, with the diagnostic ranges on top ─────────────
 const SEV_RANK = { error: 3, warning: 2, info: 1 };
-const esc = s => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+// Diagnostic titles are quoted attributes, so escape quotes as well as text delimiters.
+const esc = s => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+  .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 
 // Per line, the diagnostic slices that touch it. A multi-line range contributes
 // [start.col, EOL] on its first line, whole lines in between, [0, end.col] on

@@ -22,10 +22,11 @@ on:
     branches: [main, go_migration]
   pull_request:
 
-# Cancel superseded runs on the same ref to save runner minutes.
+# Preserve each pushed main revision for its eventual immutable release gate.
+# Superseded pull-request runs still cancel normally.
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.workflow }}-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   gate:

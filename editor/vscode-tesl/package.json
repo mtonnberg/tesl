@@ -2,10 +2,10 @@
   "name": "vscode-tesl",
   "displayName": "Tesl Language",
   "description": "Syntax highlighting, live diagnostics, go-to-definition, hover types, and completions for the Tesl (.tesl) language",
-  "version": "0.7.11",
+  "version": "0.7.12",
   "publisher": "Tesl",
   "namespace": "Tesl",
-  "//extensionKind": "Run only on the workspace (remote/WSL) side. Without this, in a Remote-WSL session VSCode can run the extension on BOTH the local UI host and the remote workspace, starting two language-server clients that each publish diagnostics — so every error/warning appears twice.",
+  "//extensionKind": "Run only on the workspace (remote/WSL) side. Without this, in a Remote-WSL session VSCode can run the extension on BOTH the local UI host and the remote workspace, starting two language-server clients that each publish diagnostics \u2014 so every error/warning appears twice.",
   "extensionKind": [
     "workspace"
   ],
@@ -15,7 +15,8 @@
       "description": "Language features remain available, but running tests, programs, and debuggers requires Workspace Trust.",
       "restrictedConfigurations": [
         "tesl.lspBinary",
-        "tesl.dapBinary"
+        "tesl.dapBinary",
+        "tesl.toolchainRoot"
       ]
     }
   },
@@ -82,6 +83,11 @@
           "type": "string",
           "default": "",
           "description": "Absolute path to the Go tesl-dap binary. Leave empty to use tesl-dap from PATH or go run the workspace runtime during development."
+        },
+        "tesl.toolchainRoot": {
+          "type": "string",
+          "default": "",
+          "description": "Installation directory containing share/tesl/toolchain.json. Selects matching compiler, CLI, language server, and debugger."
         }
       }
     },
@@ -90,7 +96,6 @@
         "type": "tesl",
         "label": "Tesl Debugger",
         "program": "tesl-dap",
-        "runtime": "bash",
         "languages": [
           "tesl"
         ],
@@ -215,7 +220,7 @@
           },
           {
             "label": "Tesl: Attach to running app",
-            "description": "Attach to an app started with `tesl run --debug` — the app keeps running when you disconnect.",
+            "description": "Attach to an app started with `tesl run --debug` \u2014 the app keeps running when you disconnect.",
             "body": {
               "type": "tesl",
               "request": "attach",
@@ -324,7 +329,7 @@
     }
   },
   "scripts": {
-    "test": "node --test test-output-parser.test.js extension.test.js",
+    "test": "node --test test-output-parser.test.js toolchain.test.js extension.test.js",
     "bundle": "esbuild extension.js --bundle --platform=node --format=cjs --target=node16 --minify --external:vscode --outfile=dist/extension.js",
     "package": "npm run bundle && npx @vscode/vsce package",
     "publish:vsce": "npx @vscode/vsce publish",

@@ -87,6 +87,47 @@ import Tesl.DB exposing [dbWrite]
 
 let check src = with_source (prelude ^ src) (fun p -> run_cc ["--check"; p])
 
+let check_cross_module_index_collision () =
+  let dir = Filename.temp_dir "tesl-dbindex-imports" "" in
+  let write name contents =
+    Out_channel.with_open_text (Filename.concat dir name)
+      (fun oc -> Out_channel.output_string oc contents)
+  in
+  let entity_module module_name entity_name table =
+    Printf.sprintf
+      {|module %s exposing [%s]
+import Tesl.Prelude exposing [String]
+
+entity %s table "%s" primaryKey id {
+  id: String
+  key: String
+  unique index [key] as "shared_idx"
+}
+|} module_name entity_name entity_name table
+  in
+  Fun.protect
+    ~finally:(fun () ->
+      List.iter (fun name -> try Sys.remove (Filename.concat dir name) with _ -> ())
+        ["a.tesl"; "b.tesl"; "indexes.tesl"];
+      (try Unix.rmdir dir with _ -> ()))
+    (fun () ->
+      write "a.tesl" (entity_module "A" "AEntity" "a");
+      write "b.tesl" (entity_module "B" "BEntity" "b");
+      write "indexes.tesl"
+        {|module Indexes exposing []
+import Tesl.Prelude exposing []
+import Tesl.DB exposing []
+import A exposing [AEntity]
+import B exposing [BEntity]
+
+database MainDb = Database {
+  schema: "app"
+  entities: [AEntity, BEntity]
+  backend: Memory
+}
+|};
+      run_cc ["--check"; Filename.concat dir "indexes.tesl"])
+
 let emit_go src =
   match Compile.compile_go_source "Indexes.tesl" (prelude ^ src) with
   | Compile.GoFailure diagnostics ->
@@ -221,6 +262,13 @@ database MainDb = Database {
   backend: Memory
 }
 |}
+
+let test_name_collision_across_imported_entities () =
+  let code, out = check_cross_module_index_collision () in
+  if code = 0 then
+    failf "the same explicit index name in imported entities should be rejected";
+  if not (contains out "is already used by entity `AEntity`") then
+    failf "rejected, but not for the imported index-name collision:\n%s" out
 
 let test_same_name_on_one_entity_collides () =
   should_fail "the same explicit index name twice on one entity"
@@ -397,6 +445,7 @@ let () =
       test_case "bad explicit name rejected"          `Quick test_bad_explicit_name;
       test_case "over-long explicit name rejected"    `Quick test_overlong_explicit_name;
       test_case "name collision across entities"      `Quick test_name_collision_across_entities;
+      test_case "name collision across imports"       `Quick test_name_collision_across_imported_entities;
       test_case "name collision within one entity"    `Quick test_same_name_on_one_entity_collides;
     ];
     "backward compatibility", [

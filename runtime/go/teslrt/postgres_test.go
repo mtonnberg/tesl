@@ -477,3 +477,29 @@ func TestBoundNullNumericIntoIntTrapsAndIntoMaybeIsNothing(t *testing.T) {
 		t.Fatalf("a NULL NUMERIC read into a Maybe Int answered %+v", maybes)
 	}
 }
+
+// A routine rebind must not repeat runtime ALTER TABLE upgrades: an active
+// outbox reader holds ACCESS SHARE until its transaction finishes. The upgrade
+// would need ACCESS EXCLUSIVE and block, despite both columns already existing.
+func TestPostgresRebindDoesNotRepeatOutboxDDL(t *testing.T) {
+	config := liveCluster(t)
+	config.Schema = uniqueName("rebind_ddl")
+	db := OpenPostgres(config, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	tx, err := db.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(context.Background()) }()
+	if _, err := tx.Exec(ctx, "lock table "+db.QualifiedTable(pubsubOutboxTable)+" in access share mode"); err != nil {
+		t.Fatal(err)
+	}
+	checkCtx, checkCancel := context.WithTimeout(context.Background(), time.Second)
+	defer checkCancel()
+	// Still create an application table first encountered at this call site.
+	db.bootstrap(checkCtx, []PostgresTable{{Name: "later", Columns: []PostgresColumn{{Name: "id", Type: "text", PrimaryKey: true}}}})
+	if _, err := db.pool.Exec(ctx, "insert into "+db.QualifiedTable("later")+" (id) values ('new declaration')"); err != nil {
+		t.Fatal(err)
+	}
+}

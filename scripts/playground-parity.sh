@@ -64,6 +64,10 @@ skip() { say "$*  — nothing to do"; exit 77; }
 [ -d "$LEARN_DIR" ] || skip "no example/learn"
 command -v node >/dev/null 2>&1 || skip "node is not on PATH"
 
+# This needs only the static page and Node, so run it before optional compiler /
+# js_of_ocaml checks can skip the broader parity suite.
+python3 "$REPO_ROOT/tests/playground-dom-xss.py" || exit 1
+
 # ── The CLI side ─────────────────────────────────────────────────────────────
 MAIN_EXE="${TESL_OCAML_COMPILER:-$REPO_ROOT/compiler/_build/default/bin/main.exe}"
 [ -x "$MAIN_EXE" ] || skip "no compiler at $MAIN_EXE (run: cd compiler && dune build)"

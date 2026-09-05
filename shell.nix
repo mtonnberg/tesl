@@ -8,7 +8,7 @@
 , pkgs ? import
     (builtins.fetchTree
       (builtins.fromJSON (builtins.readFile ./flake.lock)).nodes.nixpkgs.locked)
-    { inherit system; } }:
+    { inherit system; overlays = [ (import ./nix/go-overlay.nix) ]; } }:
 let
   # The CLI verb body is the single source of truth shared with flake.nix
   # (nix/tesl-cli-body.sh).  Here we prepend the DEV preamble: it points the

@@ -2525,9 +2525,9 @@ let rec safe_forward_binder_type = function
   | TVar _ | TFun _ -> false
 
 (* Rename identifiers inside a proof argument.  Parenthesised args (`(Id == id)`)
-   reach us as opaque strings from the parser, so the substitution is token-wise:
-   maximal identifier runs are looked up whole, and a dotted path substitutes on
-   its head segment only (`u.name` with `u -> user` becomes `user.name`). *)
+   reach us as opaque strings from the parser, so the substitution is token-wise.
+   Quoted contents are literals, not names, and only the head of a dotted path is
+   eligible (`u.name` with `u -> user` becomes `user.name`). *)
 let rename_in_proof_arg (subst : (string * string) list) (arg : string) : string =
   let is_word c =
     (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
@@ -2535,18 +2535,38 @@ let rename_in_proof_arg (subst : (string * string) list) (arg : string) : string
   let buf = Buffer.create (String.length arg) in
   let n = String.length arg in
   let i = ref 0 in
+  let quote = ref None in
+  let escaped = ref false in
+  let after_dot = ref false in
   while !i < n do
-    if is_word arg.[!i] then begin
+    let c = arg.[!i] in
+    match !quote with
+    | Some delimiter ->
+      Buffer.add_char buf c;
+      if !escaped then escaped := false
+      else if c = '\\' then escaped := true
+      else if c = delimiter then quote := None;
+      incr i
+    | None when c = '"' || c = '\'' ->
+      quote := Some c;
+      after_dot := false;
+      Buffer.add_char buf c;
+      incr i
+    | None when is_word c ->
       let j = ref !i in
       while !j < n && is_word arg.[!j] do incr j done;
       let word = String.sub arg !i (!j - !i) in
       Buffer.add_string buf
-        (match List.assoc_opt word subst with Some r -> r | None -> word);
+        (if !after_dot then word
+         else match List.assoc_opt word subst with Some r -> r | None -> word);
+      after_dot := false;
       i := !j
-    end else begin
-      Buffer.add_char buf arg.[!i];
+    | None ->
+      Buffer.add_char buf c;
+      if c = '.' then after_dot := true
+      else if c <> ' ' && c <> '\t' && c <> '\r' && c <> '\n' then
+        after_dot := false;
       incr i
-    end
   done;
   Buffer.contents buf
 

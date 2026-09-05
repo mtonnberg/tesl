@@ -122,11 +122,11 @@ func (compiler *dependencyCompiler) queryCount(path string) int {
 }
 
 func TestServerInitializesPublishesDiagnosticsAndShutsDown(t *testing.T) {
-	compiler := &fakeCompiler{payload: []byte(`{"version":1,"diagnostics":[{"file":"/tmp/demo.tesl","start":{"line":0,"col":1},"end":{"line":0,"col":5},"severity":"warning","code":"W001","message":"careful","source":"lint","fix":null}]}`)}
+	compiler := &fakeCompiler{payload: []byte(`{"version":1,"diagnostics":[{"file":` + testFilePathJSON("demo.tesl") + `,"start":{"line":0,"col":1},"end":{"line":0,"col":5},"severity":"warning","code":"W001","message":"careful","source":"lint","fix":null}]}`)}
 	input := frames(t,
 		protocol.Request{JSONRPC: "2.0", ID: json.RawMessage(`1`), Method: "initialize", Params: json.RawMessage(`{}`)},
 		protocol.Request{JSONRPC: "2.0", Method: "initialized"},
-		protocol.Request{JSONRPC: "2.0", Method: "textDocument/didOpen", Params: json.RawMessage(`{"textDocument":{"uri":"file:///tmp/demo.tesl","version":1,"text":"x = 1"}}`)},
+		protocol.Request{JSONRPC: "2.0", Method: "textDocument/didOpen", Params: json.RawMessage(`{"textDocument":{"uri":` + testFileURIJSON("demo.tesl") + `,"version":1,"text":"x = 1"}}`)},
 		protocol.Request{JSONRPC: "2.0", ID: json.RawMessage(`2`), Method: "shutdown", Params: json.RawMessage(`null`)},
 		protocol.Request{JSONRPC: "2.0", Method: "exit"},
 	)
@@ -177,16 +177,16 @@ func TestServerAnswersHoverDefinitionAndCompletion(t *testing.T) {
 	compiler := &fakeCompiler{
 		payload: []byte(`{"version":1,"diagnostics":[]}`),
 		responses: map[string][]byte{
-			"--type-at-json":     []byte(`{"version":1,"type_at":{"file":"/tmp/demo.tesl","line":0,"col":0,"end_line":0,"end_col":1,"type":"Int"}}`),
-			"--definition-json":  []byte(`{"version":1,"definition":{"file":"/tmp/demo.tesl","line":0,"col":0,"end_line":0,"end_col":1}}`),
+			"--type-at-json":     []byte(`{"version":1,"type_at":{"file":` + testFilePathJSON("demo.tesl") + `,"line":0,"col":0,"end_line":0,"end_col":1,"type":"Int"}}`),
+			"--definition-json":  []byte(`{"version":1,"definition":{"file":` + testFilePathJSON("demo.tesl") + `,"line":0,"col":0,"end_line":0,"end_col":1}}`),
 			"--completions-json": []byte(`{"version":1,"completions":[{"label":"double","detail":"Int -> Int","kind":"function"}]}`),
 		},
 	}
 	input := frames(t,
-		protocol.Request{JSONRPC: "2.0", Method: "textDocument/didOpen", Params: json.RawMessage(`{"textDocument":{"uri":"file:///tmp/demo.tesl","version":1,"text":"x = 1"}}`)},
-		protocol.Request{JSONRPC: "2.0", ID: json.RawMessage(`2`), Method: "textDocument/hover", Params: json.RawMessage(`{"textDocument":{"uri":"file:///tmp/demo.tesl"},"position":{"line":0,"character":0}}`)},
-		protocol.Request{JSONRPC: "2.0", ID: json.RawMessage(`3`), Method: "textDocument/definition", Params: json.RawMessage(`{"textDocument":{"uri":"file:///tmp/demo.tesl"},"position":{"line":0,"character":0}}`)},
-		protocol.Request{JSONRPC: "2.0", ID: json.RawMessage(`4`), Method: "textDocument/completion", Params: json.RawMessage(`{"textDocument":{"uri":"file:///tmp/demo.tesl"},"position":{"line":0,"character":0}}`)},
+		protocol.Request{JSONRPC: "2.0", Method: "textDocument/didOpen", Params: json.RawMessage(`{"textDocument":{"uri":` + testFileURIJSON("demo.tesl") + `,"version":1,"text":"x = 1"}}`)},
+		protocol.Request{JSONRPC: "2.0", ID: json.RawMessage(`2`), Method: "textDocument/hover", Params: json.RawMessage(`{"textDocument":{"uri":` + testFileURIJSON("demo.tesl") + `},"position":{"line":0,"character":0}}`)},
+		protocol.Request{JSONRPC: "2.0", ID: json.RawMessage(`3`), Method: "textDocument/definition", Params: json.RawMessage(`{"textDocument":{"uri":` + testFileURIJSON("demo.tesl") + `},"position":{"line":0,"character":0}}`)},
+		protocol.Request{JSONRPC: "2.0", ID: json.RawMessage(`4`), Method: "textDocument/completion", Params: json.RawMessage(`{"textDocument":{"uri":` + testFileURIJSON("demo.tesl") + `},"position":{"line":0,"character":0}}`)},
 		protocol.Request{JSONRPC: "2.0", ID: json.RawMessage(`5`), Method: "shutdown", Params: json.RawMessage(`null`)},
 		protocol.Request{JSONRPC: "2.0", Method: "exit"},
 	)
@@ -220,7 +220,7 @@ func TestServerAnswersHoverDefinitionAndCompletion(t *testing.T) {
 	if !bytes.Contains(responses[0].Result, []byte(`"Int"`)) {
 		t.Fatalf("hover result = %s", responses[0].Result)
 	}
-	if !bytes.Contains(responses[1].Result, []byte(`"uri":"file:///tmp/demo.tesl"`)) {
+	if !bytes.Contains(responses[1].Result, []byte(`"uri":`+testFileURIJSON("demo.tesl"))) {
 		t.Fatalf("definition result = %s", responses[1].Result)
 	}
 	if !bytes.Contains(responses[2].Result, []byte(`"label":"double"`)) {
@@ -236,15 +236,15 @@ func TestServerAnswersSignatureTypeDefinitionAndReferences(t *testing.T) {
 		payload: []byte(`{"version":1,"diagnostics":[]}`),
 		responses: map[string][]byte{
 			"--signature-help-json":  []byte(`{"version":1,"signature":{"label":"add a: Int b: Int","parameters":[{"label":"a","type":"Int"},{"label":"b","type":"Int"}],"active_parameter":1}}`),
-			"--type-definition-json": []byte(`{"version":1,"type_definition":{"file":"/tmp/demo.tesl","line":0,"col":0,"end_line":0,"end_col":1}}`),
-			"--occurrences-json":     []byte(`{"version":1,"occurrences":[{"file":"/tmp/demo.tesl","line":0,"col":0,"end_line":0,"end_col":1,"kind":"write"}]}`),
+			"--type-definition-json": []byte(`{"version":1,"type_definition":{"file":` + testFilePathJSON("demo.tesl") + `,"line":0,"col":0,"end_line":0,"end_col":1}}`),
+			"--occurrences-json":     []byte(`{"version":1,"occurrences":[{"file":` + testFilePathJSON("demo.tesl") + `,"line":0,"col":0,"end_line":0,"end_col":1,"kind":"write"}]}`),
 		},
 	}
 	input := frames(t,
-		protocol.Request{JSONRPC: "2.0", Method: "textDocument/didOpen", Params: json.RawMessage(`{"textDocument":{"uri":"file:///tmp/demo.tesl","version":1,"text":"x = 1"}}`)},
-		protocol.Request{JSONRPC: "2.0", ID: json.RawMessage(`2`), Method: "textDocument/signatureHelp", Params: json.RawMessage(`{"textDocument":{"uri":"file:///tmp/demo.tesl"},"position":{"line":0,"character":0}}`)},
-		protocol.Request{JSONRPC: "2.0", ID: json.RawMessage(`3`), Method: "textDocument/typeDefinition", Params: json.RawMessage(`{"textDocument":{"uri":"file:///tmp/demo.tesl"},"position":{"line":0,"character":0}}`)},
-		protocol.Request{JSONRPC: "2.0", ID: json.RawMessage(`4`), Method: "textDocument/references", Params: json.RawMessage(`{"textDocument":{"uri":"file:///tmp/demo.tesl"},"position":{"line":0,"character":0},"context":{"includeDeclaration":true}}`)},
+		protocol.Request{JSONRPC: "2.0", Method: "textDocument/didOpen", Params: json.RawMessage(`{"textDocument":{"uri":` + testFileURIJSON("demo.tesl") + `,"version":1,"text":"x = 1"}}`)},
+		protocol.Request{JSONRPC: "2.0", ID: json.RawMessage(`2`), Method: "textDocument/signatureHelp", Params: json.RawMessage(`{"textDocument":{"uri":` + testFileURIJSON("demo.tesl") + `},"position":{"line":0,"character":0}}`)},
+		protocol.Request{JSONRPC: "2.0", ID: json.RawMessage(`3`), Method: "textDocument/typeDefinition", Params: json.RawMessage(`{"textDocument":{"uri":` + testFileURIJSON("demo.tesl") + `},"position":{"line":0,"character":0}}`)},
+		protocol.Request{JSONRPC: "2.0", ID: json.RawMessage(`4`), Method: "textDocument/references", Params: json.RawMessage(`{"textDocument":{"uri":` + testFileURIJSON("demo.tesl") + `},"position":{"line":0,"character":0},"context":{"includeDeclaration":true}}`)},
 		protocol.Request{JSONRPC: "2.0", ID: json.RawMessage(`5`), Method: "shutdown", Params: json.RawMessage(`null`)},
 		protocol.Request{JSONRPC: "2.0", Method: "exit"},
 	)
@@ -281,7 +281,7 @@ func TestServerAnswersSignatureTypeDefinitionAndReferences(t *testing.T) {
 	if !bytes.Contains(responses[1].Result, []byte(`"range"`)) {
 		t.Fatalf("type definition result = %s", responses[1].Result)
 	}
-	if !bytes.Contains(responses[2].Result, []byte(`"uri":"file:///tmp/demo.tesl"`)) {
+	if !bytes.Contains(responses[2].Result, []byte(`"uri":`+testFileURIJSON("demo.tesl"))) {
 		t.Fatalf("references result = %s", responses[2].Result)
 	}
 	if len(compiler.flags) != 4 || compiler.flags[1] != "--signature-help-json" || compiler.flags[2] != "--type-definition-json" || compiler.flags[3] != "--occurrences-json" {
@@ -292,8 +292,8 @@ func TestServerAnswersSignatureTypeDefinitionAndReferences(t *testing.T) {
 func TestServerFormatsTheWholeDocument(t *testing.T) {
 	compiler := &fakeCompiler{payload: []byte(`{"version":1,"diagnostics":[]}`)}
 	input := frames(t,
-		protocol.Request{JSONRPC: "2.0", Method: "textDocument/didOpen", Params: json.RawMessage(`{"textDocument":{"uri":"file:///tmp/demo.tesl","version":1,"text":"x=1"}}`)},
-		protocol.Request{JSONRPC: "2.0", ID: json.RawMessage(`2`), Method: "textDocument/formatting", Params: json.RawMessage(`{"textDocument":{"uri":"file:///tmp/demo.tesl"},"options":{"tabSize":2,"insertSpaces":true}}`)},
+		protocol.Request{JSONRPC: "2.0", Method: "textDocument/didOpen", Params: json.RawMessage(`{"textDocument":{"uri":` + testFileURIJSON("demo.tesl") + `,"version":1,"text":"x=1"}}`)},
+		protocol.Request{JSONRPC: "2.0", ID: json.RawMessage(`2`), Method: "textDocument/formatting", Params: json.RawMessage(`{"textDocument":{"uri":` + testFileURIJSON("demo.tesl") + `},"options":{"tabSize":2,"insertSpaces":true}}`)},
 		protocol.Request{JSONRPC: "2.0", ID: json.RawMessage(`3`), Method: "shutdown", Params: json.RawMessage(`null`)},
 		protocol.Request{JSONRPC: "2.0", Method: "exit"},
 	)
@@ -322,16 +322,16 @@ func TestServerAnswersHighlightsSelectionRangesAndInlayHints(t *testing.T) {
 	compiler := &fakeCompiler{
 		payload: []byte(`{"version":1,"diagnostics":[]}`),
 		responses: map[string][]byte{
-			"--occurrences-json":     []byte(`{"version":1,"occurrences":[{"file":"/tmp/demo.tesl","line":0,"col":4,"end_line":0,"end_col":9,"kind":"write"}]}`),
+			"--occurrences-json":     []byte(`{"version":1,"occurrences":[{"file":` + testFilePathJSON("demo.tesl") + `,"line":0,"col":4,"end_line":0,"end_col":9,"kind":"write"}]}`),
 			"--selection-range-json": []byte(`{"version":1,"ranges":[{"line":0,"col":4,"end_line":0,"end_col":9},{"line":0,"col":0,"end_line":0,"end_col":13}]}`),
-			"--local-bindings-json":  []byte(`{"version":1,"bindings":[{"file":"/tmp/demo.tesl","line":0,"col":4,"end_line":0,"end_col":9,"name":"value","type":"Int"}]}`),
+			"--local-bindings-json":  []byte(`{"version":1,"bindings":[{"file":` + testFilePathJSON("demo.tesl") + `,"line":0,"col":4,"end_line":0,"end_col":9,"name":"value","type":"Int"}]}`),
 		},
 	}
 	input := frames(t,
-		protocol.Request{JSONRPC: "2.0", Method: "textDocument/didOpen", Params: json.RawMessage(`{"textDocument":{"uri":"file:///tmp/demo.tesl","version":1,"text":"let value = 1"}}`)},
-		protocol.Request{JSONRPC: "2.0", ID: json.RawMessage(`2`), Method: "textDocument/documentHighlight", Params: json.RawMessage(`{"textDocument":{"uri":"file:///tmp/demo.tesl"},"position":{"line":0,"character":5}}`)},
-		protocol.Request{JSONRPC: "2.0", ID: json.RawMessage(`3`), Method: "textDocument/selectionRange", Params: json.RawMessage(`{"textDocument":{"uri":"file:///tmp/demo.tesl"},"positions":[{"line":0,"character":5}]}`)},
-		protocol.Request{JSONRPC: "2.0", ID: json.RawMessage(`4`), Method: "textDocument/inlayHint", Params: json.RawMessage(`{"textDocument":{"uri":"file:///tmp/demo.tesl"},"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":13}}}`)},
+		protocol.Request{JSONRPC: "2.0", Method: "textDocument/didOpen", Params: json.RawMessage(`{"textDocument":{"uri":` + testFileURIJSON("demo.tesl") + `,"version":1,"text":"let value = 1"}}`)},
+		protocol.Request{JSONRPC: "2.0", ID: json.RawMessage(`2`), Method: "textDocument/documentHighlight", Params: json.RawMessage(`{"textDocument":{"uri":` + testFileURIJSON("demo.tesl") + `},"position":{"line":0,"character":5}}`)},
+		protocol.Request{JSONRPC: "2.0", ID: json.RawMessage(`3`), Method: "textDocument/selectionRange", Params: json.RawMessage(`{"textDocument":{"uri":` + testFileURIJSON("demo.tesl") + `},"positions":[{"line":0,"character":5}]}`)},
+		protocol.Request{JSONRPC: "2.0", ID: json.RawMessage(`4`), Method: "textDocument/inlayHint", Params: json.RawMessage(`{"textDocument":{"uri":` + testFileURIJSON("demo.tesl") + `},"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":13}}}`)},
 		protocol.Request{JSONRPC: "2.0", ID: json.RawMessage(`5`), Method: "shutdown", Params: json.RawMessage(`null`)},
 		protocol.Request{JSONRPC: "2.0", Method: "exit"},
 	)
@@ -377,14 +377,14 @@ func TestServerAnswersFoldingSymbolsAndSemanticTokens(t *testing.T) {
 	compiler := &fakeCompiler{
 		payload: []byte(`{"version":1,"diagnostics":[]}`),
 		responses: map[string][]byte{
-			"--semantic-json": []byte(`{"version":1,"functions":[{"name":"foo","kind":"fn","loc":{"file":"/tmp/demo.tesl","start_line":0,"start_col":0,"end_line":3,"end_col":1}}],"records":[],"adts":[],"local_bindings":[{"name":"value","loc":{"file":"/tmp/demo.tesl","start_line":1,"start_col":0,"end_line":1,"end_col":9}}]}`),
+			"--semantic-json": []byte(`{"version":1,"functions":[{"name":"foo","kind":"fn","loc":{"file":` + testFilePathJSON("demo.tesl") + `,"start_line":0,"start_col":0,"end_line":3,"end_col":1}}],"records":[],"adts":[],"local_bindings":[{"name":"value","loc":{"file":` + testFilePathJSON("demo.tesl") + `,"start_line":1,"start_col":0,"end_line":1,"end_col":9}}]}`),
 		},
 	}
 	input := frames(t,
-		protocol.Request{JSONRPC: "2.0", Method: "textDocument/didOpen", Params: json.RawMessage(`{"textDocument":{"uri":"file:///tmp/demo.tesl","version":1,"text":"fn foo() {\n# one\n# two\n}\n"}}`)},
-		protocol.Request{JSONRPC: "2.0", ID: json.RawMessage(`2`), Method: "textDocument/foldingRange", Params: json.RawMessage(`{"textDocument":{"uri":"file:///tmp/demo.tesl"}}`)},
-		protocol.Request{JSONRPC: "2.0", ID: json.RawMessage(`3`), Method: "textDocument/documentSymbol", Params: json.RawMessage(`{"textDocument":{"uri":"file:///tmp/demo.tesl"}}`)},
-		protocol.Request{JSONRPC: "2.0", ID: json.RawMessage(`4`), Method: "textDocument/semanticTokens/full", Params: json.RawMessage(`{"textDocument":{"uri":"file:///tmp/demo.tesl"}}`)},
+		protocol.Request{JSONRPC: "2.0", Method: "textDocument/didOpen", Params: json.RawMessage(`{"textDocument":{"uri":` + testFileURIJSON("demo.tesl") + `,"version":1,"text":"fn foo() {\n# one\n# two\n}\n"}}`)},
+		protocol.Request{JSONRPC: "2.0", ID: json.RawMessage(`2`), Method: "textDocument/foldingRange", Params: json.RawMessage(`{"textDocument":{"uri":` + testFileURIJSON("demo.tesl") + `}}`)},
+		protocol.Request{JSONRPC: "2.0", ID: json.RawMessage(`3`), Method: "textDocument/documentSymbol", Params: json.RawMessage(`{"textDocument":{"uri":` + testFileURIJSON("demo.tesl") + `}}`)},
+		protocol.Request{JSONRPC: "2.0", ID: json.RawMessage(`4`), Method: "textDocument/semanticTokens/full", Params: json.RawMessage(`{"textDocument":{"uri":` + testFileURIJSON("demo.tesl") + `}}`)},
 		protocol.Request{JSONRPC: "2.0", ID: json.RawMessage(`5`), Method: "shutdown", Params: json.RawMessage(`null`)},
 		protocol.Request{JSONRPC: "2.0", Method: "exit"},
 	)
@@ -431,7 +431,7 @@ func TestServerRejectsMalformedNestedSemanticMember(t *testing.T) {
 		"--semantic-json": []byte(`{"version":1,"records":[],"adts":[],"functions":[{"name":"broken"}],"local_bindings":[]}`),
 	}}
 	server := NewServer(compiler)
-	_, err := server.semanticSnapshot(context.Background(), document{Path: "/tmp/demo.tesl", Text: "fn broken() = 1"})
+	_, err := server.semanticSnapshot(context.Background(), document{Path: testFilePath("demo.tesl"), Text: "fn broken() = 1"})
 	if err == nil || !strings.Contains(err.Error(), "kind") {
 		t.Fatalf("malformed semantic member error = %v", err)
 	}
@@ -441,15 +441,15 @@ func TestServerPreparesAndAppliesRenameAndDeclaration(t *testing.T) {
 	compiler := &fakeCompiler{
 		payload: []byte(`{"version":1,"diagnostics":[]}`),
 		responses: map[string][]byte{
-			"--occurrences-json": []byte(`{"version":1,"occurrences":[{"file":"/tmp/demo.tesl","line":0,"col":4,"end_line":0,"end_col":9,"kind":"write"},{"file":"/tmp/demo.tesl","line":1,"col":0,"end_line":1,"end_col":5,"kind":"read"}]}`),
-			"--definition-json":  []byte(`{"version":1,"definition":{"file":"/tmp/demo.tesl","line":0,"col":4,"end_line":0,"end_col":9}}`),
+			"--occurrences-json": []byte(`{"version":1,"occurrences":[{"file":` + testFilePathJSON("demo.tesl") + `,"line":0,"col":4,"end_line":0,"end_col":9,"kind":"write"},{"file":` + testFilePathJSON("demo.tesl") + `,"line":1,"col":0,"end_line":1,"end_col":5,"kind":"read"}]}`),
+			"--definition-json":  []byte(`{"version":1,"definition":{"file":` + testFilePathJSON("demo.tesl") + `,"line":0,"col":4,"end_line":0,"end_col":9}}`),
 		},
 	}
 	input := frames(t,
-		protocol.Request{JSONRPC: "2.0", Method: "textDocument/didOpen", Params: json.RawMessage(`{"textDocument":{"uri":"file:///tmp/demo.tesl","version":1,"text":"let value\nvalue"}}`)},
-		protocol.Request{JSONRPC: "2.0", ID: json.RawMessage(`2`), Method: "textDocument/prepareRename", Params: json.RawMessage(`{"textDocument":{"uri":"file:///tmp/demo.tesl"},"position":{"line":0,"character":5}}`)},
-		protocol.Request{JSONRPC: "2.0", ID: json.RawMessage(`3`), Method: "textDocument/rename", Params: json.RawMessage(`{"textDocument":{"uri":"file:///tmp/demo.tesl"},"position":{"line":1,"character":2},"newName":"renamed"}`)},
-		protocol.Request{JSONRPC: "2.0", ID: json.RawMessage(`4`), Method: "textDocument/declaration", Params: json.RawMessage(`{"textDocument":{"uri":"file:///tmp/demo.tesl"},"position":{"line":1,"character":2}}`)},
+		protocol.Request{JSONRPC: "2.0", Method: "textDocument/didOpen", Params: json.RawMessage(`{"textDocument":{"uri":` + testFileURIJSON("demo.tesl") + `,"version":1,"text":"let value\nvalue"}}`)},
+		protocol.Request{JSONRPC: "2.0", ID: json.RawMessage(`2`), Method: "textDocument/prepareRename", Params: json.RawMessage(`{"textDocument":{"uri":` + testFileURIJSON("demo.tesl") + `},"position":{"line":0,"character":5}}`)},
+		protocol.Request{JSONRPC: "2.0", ID: json.RawMessage(`3`), Method: "textDocument/rename", Params: json.RawMessage(`{"textDocument":{"uri":` + testFileURIJSON("demo.tesl") + `},"position":{"line":1,"character":2},"newName":"renamed"}`)},
+		protocol.Request{JSONRPC: "2.0", ID: json.RawMessage(`4`), Method: "textDocument/declaration", Params: json.RawMessage(`{"textDocument":{"uri":` + testFileURIJSON("demo.tesl") + `},"position":{"line":1,"character":2}}`)},
 		protocol.Request{JSONRPC: "2.0", ID: json.RawMessage(`5`), Method: "shutdown", Params: json.RawMessage(`null`)},
 		protocol.Request{JSONRPC: "2.0", Method: "exit"},
 	)
@@ -483,7 +483,7 @@ func TestServerPreparesAndAppliesRenameAndDeclaration(t *testing.T) {
 	if !bytes.Contains(responses[0].Result, []byte(`"start":{"line":0,"character":4}`)) {
 		t.Fatalf("prepare rename result = %s", responses[0].Result)
 	}
-	if !bytes.Contains(responses[1].Result, []byte(`"newText":"renamed"`)) || !bytes.Contains(responses[1].Result, []byte(`"file:///tmp/demo.tesl"`)) {
+	if !bytes.Contains(responses[1].Result, []byte(`"newText":"renamed"`)) || !bytes.Contains(responses[1].Result, []byte(testFileURIJSON("demo.tesl"))) {
 		t.Fatalf("rename result = %s", responses[1].Result)
 	}
 	if !bytes.Contains(responses[2].Result, []byte(`"range"`)) {
@@ -495,14 +495,14 @@ func TestServerSemanticTokenDeltaAndRange(t *testing.T) {
 	compiler := &fakeCompiler{
 		payload: []byte(`{"version":1,"diagnostics":[]}`),
 		responses: map[string][]byte{
-			"--semantic-json": []byte(`{"version":1,"functions":[{"name":"foo","kind":"fn","loc":{"file":"/tmp/demo.tesl","start_line":0,"start_col":0,"end_line":0,"end_col":7}}],"records":[],"adts":[],"local_bindings":[]}`),
+			"--semantic-json": []byte(`{"version":1,"functions":[{"name":"foo","kind":"fn","loc":{"file":` + testFilePathJSON("demo.tesl") + `,"start_line":0,"start_col":0,"end_line":0,"end_col":7}}],"records":[],"adts":[],"local_bindings":[]}`),
 		},
 	}
 	input := frames(t,
-		protocol.Request{JSONRPC: "2.0", Method: "textDocument/didOpen", Params: json.RawMessage(`{"textDocument":{"uri":"file:///tmp/demo.tesl","version":1,"text":"fn foo()"}}`)},
-		protocol.Request{JSONRPC: "2.0", ID: json.RawMessage(`2`), Method: "textDocument/semanticTokens/full", Params: json.RawMessage(`{"textDocument":{"uri":"file:///tmp/demo.tesl"}}`)},
-		protocol.Request{JSONRPC: "2.0", ID: json.RawMessage(`3`), Method: "textDocument/semanticTokens/full/delta", Params: json.RawMessage(`{"textDocument":{"uri":"file:///tmp/demo.tesl"},"previousResultId":"1"}`)},
-		protocol.Request{JSONRPC: "2.0", ID: json.RawMessage(`4`), Method: "textDocument/semanticTokens/range", Params: json.RawMessage(`{"textDocument":{"uri":"file:///tmp/demo.tesl"},"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":2}}}`)},
+		protocol.Request{JSONRPC: "2.0", Method: "textDocument/didOpen", Params: json.RawMessage(`{"textDocument":{"uri":` + testFileURIJSON("demo.tesl") + `,"version":1,"text":"fn foo()"}}`)},
+		protocol.Request{JSONRPC: "2.0", ID: json.RawMessage(`2`), Method: "textDocument/semanticTokens/full", Params: json.RawMessage(`{"textDocument":{"uri":` + testFileURIJSON("demo.tesl") + `}}`)},
+		protocol.Request{JSONRPC: "2.0", ID: json.RawMessage(`3`), Method: "textDocument/semanticTokens/full/delta", Params: json.RawMessage(`{"textDocument":{"uri":` + testFileURIJSON("demo.tesl") + `},"previousResultId":"1"}`)},
+		protocol.Request{JSONRPC: "2.0", ID: json.RawMessage(`4`), Method: "textDocument/semanticTokens/range", Params: json.RawMessage(`{"textDocument":{"uri":` + testFileURIJSON("demo.tesl") + `},"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":2}}}`)},
 		protocol.Request{JSONRPC: "2.0", ID: json.RawMessage(`5`), Method: "shutdown", Params: json.RawMessage(`null`)},
 		protocol.Request{JSONRPC: "2.0", Method: "exit"},
 	)
@@ -547,8 +547,8 @@ func TestServerSemanticTokenDeltaAndRange(t *testing.T) {
 func TestServerReturnsCodeActionsAndResolvesCompletionItems(t *testing.T) {
 	compiler := &fakeCompiler{payload: []byte(`{"version":1,"diagnostics":[]}`)}
 	input := frames(t,
-		protocol.Request{JSONRPC: "2.0", Method: "textDocument/didOpen", Params: json.RawMessage(`{"textDocument":{"uri":"file:///tmp/demo.tesl","version":1,"text":"bad\n"}}`)},
-		protocol.Request{JSONRPC: "2.0", ID: json.RawMessage(`2`), Method: "textDocument/codeAction", Params: json.RawMessage(`{"textDocument":{"uri":"file:///tmp/demo.tesl"},"context":{"diagnostics":[{"code":"E1","message":"fix me","data":{"fix":{"kind":"replace_line","line":0,"replacement":"good","title":"Use good"}}}]}}`)},
+		protocol.Request{JSONRPC: "2.0", Method: "textDocument/didOpen", Params: json.RawMessage(`{"textDocument":{"uri":` + testFileURIJSON("demo.tesl") + `,"version":1,"text":"bad\n"}}`)},
+		protocol.Request{JSONRPC: "2.0", ID: json.RawMessage(`2`), Method: "textDocument/codeAction", Params: json.RawMessage(`{"textDocument":{"uri":` + testFileURIJSON("demo.tesl") + `},"context":{"diagnostics":[{"code":"E1","message":"fix me","data":{"fix":{"kind":"replace_line","line":0,"replacement":"good","title":"Use good"}}}]}}`)},
 		protocol.Request{JSONRPC: "2.0", ID: json.RawMessage(`3`), Method: "completionItem/resolve", Params: json.RawMessage(`{"label":"double","detail":"Int -> Int"}`)},
 		protocol.Request{JSONRPC: "2.0", ID: json.RawMessage(`4`), Method: "shutdown", Params: json.RawMessage(`null`)},
 		protocol.Request{JSONRPC: "2.0", Method: "exit"},
@@ -591,16 +591,16 @@ func TestServerReturnsCodeActionsAndResolvesCompletionItems(t *testing.T) {
 func TestServerHoverFallsBackToRecordFieldQuery(t *testing.T) {
 	compiler := &fakeCompiler{responses: map[string][]byte{
 		"--type-at-json":  []byte(`{"version":1,"type_at":null}`),
-		"--field-at-json": []byte(`{"version":1,"field_at":{"file":"/tmp/demo.tesl","line":0,"col":5,"end_line":0,"end_col":7,"field":"x","record_type":"Point","field_type":"Int"}}`),
+		"--field-at-json": []byte(`{"version":1,"field_at":{"file":` + testFilePathJSON("demo.tesl") + `,"line":0,"col":5,"end_line":0,"end_col":7,"field":"x","record_type":"Point","field_type":"Int"}}`),
 	}}
 	server := NewServer(compiler)
-	server.documents["file:///tmp/demo.tesl"] = document{
-		URI: "file:///tmp/demo.tesl", Path: "/tmp/demo.tesl", Text: "p.x\n", Version: 1,
+	server.documents[testFileURI("demo.tesl")] = document{
+		URI: testFileURI("demo.tesl"), Path: testFilePath("demo.tesl"), Text: "p.x\n", Version: 1,
 	}
 	var output bytes.Buffer
 	_, err := server.handle(context.Background(), protocol.Request{
 		JSONRPC: "2.0", ID: json.RawMessage(`1`), Method: "textDocument/hover",
-		Params: json.RawMessage(`{"textDocument":{"uri":"file:///tmp/demo.tesl"},"position":{"line":0,"character":2}}`),
+		Params: json.RawMessage(`{"textDocument":{"uri":` + testFileURIJSON("demo.tesl") + `},"position":{"line":0,"character":2}}`),
 	}, protocol.NewWriter(&output))
 	if err != nil {
 		t.Fatal(err)
@@ -647,9 +647,9 @@ func TestServerCompletionResolveLoadsCompilerDocumentation(t *testing.T) {
 func TestServerReturnsDocumentLinksAndLinkedEditingRanges(t *testing.T) {
 	compiler := &fakeCompiler{payload: []byte(`{"version":1,"diagnostics":[]}`)}
 	input := frames(t,
-		protocol.Request{JSONRPC: "2.0", Method: "textDocument/didOpen", Params: json.RawMessage(`{"textDocument":{"uri":"file:///tmp/demo.tesl","version":1,"text":"fn demo() {\n  # see https://example.com/docs\n  let value = value\n}\n"}}`)},
-		protocol.Request{JSONRPC: "2.0", ID: json.RawMessage(`2`), Method: "textDocument/documentLink", Params: json.RawMessage(`{"textDocument":{"uri":"file:///tmp/demo.tesl"}}`)},
-		protocol.Request{JSONRPC: "2.0", ID: json.RawMessage(`3`), Method: "textDocument/linkedEditingRange", Params: json.RawMessage(`{"textDocument":{"uri":"file:///tmp/demo.tesl"},"position":{"line":2,"character":7}}`)},
+		protocol.Request{JSONRPC: "2.0", Method: "textDocument/didOpen", Params: json.RawMessage(`{"textDocument":{"uri":` + testFileURIJSON("demo.tesl") + `,"version":1,"text":"fn demo() {\n  # see https://example.com/docs\n  let value = value\n}\n"}}`)},
+		protocol.Request{JSONRPC: "2.0", ID: json.RawMessage(`2`), Method: "textDocument/documentLink", Params: json.RawMessage(`{"textDocument":{"uri":` + testFileURIJSON("demo.tesl") + `}}`)},
+		protocol.Request{JSONRPC: "2.0", ID: json.RawMessage(`3`), Method: "textDocument/linkedEditingRange", Params: json.RawMessage(`{"textDocument":{"uri":` + testFileURIJSON("demo.tesl") + `},"position":{"line":2,"character":7}}`)},
 		protocol.Request{JSONRPC: "2.0", ID: json.RawMessage(`4`), Method: "shutdown", Params: json.RawMessage(`null`)},
 		protocol.Request{JSONRPC: "2.0", Method: "exit"},
 	)
@@ -689,17 +689,17 @@ func TestServerReturnsDocumentLinksAndLinkedEditingRanges(t *testing.T) {
 }
 
 func TestServerPullDiagnosticsReturnsUnchangedReport(t *testing.T) {
-	compiler := &fakeCompiler{payload: []byte(`{"version":1,"diagnostics":[{"file":"/tmp/demo.tesl","start":{"line":0,"col":0},"end":{"line":0,"col":1},"severity":"warning","code":"W1","message":"warn","source":"lint","fix":null}]}`)}
+	compiler := &fakeCompiler{payload: []byte(`{"version":1,"diagnostics":[{"file":` + testFilePathJSON("demo.tesl") + `,"start":{"line":0,"col":0},"end":{"line":0,"col":1},"severity":"warning","code":"W1","message":"warn","source":"lint","fix":null}]}`)}
 	previous := diagnosticResultID("x", map[string][]map[string]any{
-		"file:///tmp/demo.tesl": {{
+		testFileURI("demo.tesl"): {{
 			"range":    map[string]protocol.Position{"start": {Line: 0, Character: 0}, "end": {Line: 0, Character: 1}},
 			"severity": 2, "code": "W1", "message": "warn", "source": "lint",
 		}},
 	})
 	input := frames(t,
-		protocol.Request{JSONRPC: "2.0", Method: "textDocument/didOpen", Params: json.RawMessage(`{"textDocument":{"uri":"file:///tmp/demo.tesl","version":1,"text":"x"}}`)},
-		protocol.Request{JSONRPC: "2.0", ID: json.RawMessage(`2`), Method: "textDocument/diagnostic", Params: json.RawMessage(`{"textDocument":{"uri":"file:///tmp/demo.tesl"}}`)},
-		protocol.Request{JSONRPC: "2.0", ID: json.RawMessage(`3`), Method: "textDocument/diagnostic", Params: json.RawMessage(fmt.Sprintf(`{"textDocument":{"uri":"file:///tmp/demo.tesl"},"previousResultId":%q}`, previous))},
+		protocol.Request{JSONRPC: "2.0", Method: "textDocument/didOpen", Params: json.RawMessage(`{"textDocument":{"uri":` + testFileURIJSON("demo.tesl") + `,"version":1,"text":"x"}}`)},
+		protocol.Request{JSONRPC: "2.0", ID: json.RawMessage(`2`), Method: "textDocument/diagnostic", Params: json.RawMessage(`{"textDocument":{"uri":` + testFileURIJSON("demo.tesl") + `}}`)},
+		protocol.Request{JSONRPC: "2.0", ID: json.RawMessage(`3`), Method: "textDocument/diagnostic", Params: json.RawMessage(fmt.Sprintf(`{"textDocument":{"uri":%s},"previousResultId":%q}`, testFileURIJSON("demo.tesl"), previous))},
 		protocol.Request{JSONRPC: "2.0", ID: json.RawMessage(`4`), Method: "shutdown", Params: json.RawMessage(`null`)},
 		protocol.Request{JSONRPC: "2.0", Method: "exit"},
 	)
@@ -745,10 +745,10 @@ func TestServerPullDiagnosticsReturnsUnchangedReport(t *testing.T) {
 }
 
 func TestServerRejectsStaleChangesAndUsesUTF16Ranges(t *testing.T) {
-	compiler := &fakeCompiler{payload: []byte(`{"version":1,"diagnostics":[{"file":"/tmp/demo.tesl","start":{"line":0,"col":4},"end":{"line":0,"col":8},"severity":"error","code":"T001","message":"bad","source":"type-checker","fix":null}]}`)}
+	compiler := &fakeCompiler{payload: []byte(`{"version":1,"diagnostics":[{"file":` + testFilePathJSON("demo.tesl") + `,"start":{"line":0,"col":4},"end":{"line":0,"col":8},"severity":"error","code":"T001","message":"bad","source":"type-checker","fix":null}]}`)}
 	input := frames(t,
-		protocol.Request{JSONRPC: "2.0", Method: "textDocument/didOpen", Params: json.RawMessage(`{"textDocument":{"uri":"file:///tmp/demo.tesl","version":2,"text":"😀 = 1"}}`)},
-		protocol.Request{JSONRPC: "2.0", Method: "textDocument/didChange", Params: json.RawMessage(`{"textDocument":{"uri":"file:///tmp/demo.tesl","version":1},"contentChanges":[{"text":"stale"}]}`)},
+		protocol.Request{JSONRPC: "2.0", Method: "textDocument/didOpen", Params: json.RawMessage(`{"textDocument":{"uri":` + testFileURIJSON("demo.tesl") + `,"version":2,"text":"😀 = 1"}}`)},
+		protocol.Request{JSONRPC: "2.0", Method: "textDocument/didChange", Params: json.RawMessage(`{"textDocument":{"uri":` + testFileURIJSON("demo.tesl") + `,"version":1},"contentChanges":[{"text":"stale"}]}`)},
 		protocol.Request{JSONRPC: "2.0", Method: "exit"},
 	)
 	var output bytes.Buffer
@@ -780,10 +780,10 @@ func TestServerRejectsStaleChangesAndUsesUTF16Ranges(t *testing.T) {
 func TestServerCancelsStaleDiagnosticQueries(t *testing.T) {
 	compiler := &cancellableCompiler{started: make(chan struct{}), canceled: make(chan struct{})}
 	server := NewServer(compiler)
-	server.documents["file:///tmp/demo.tesl"] = document{URI: "file:///tmp/demo.tesl", Path: "/tmp/demo.tesl", Version: 1, Text: "initial"}
+	server.documents[testFileURI("demo.tesl")] = document{URI: testFileURI("demo.tesl"), Path: testFilePath("demo.tesl"), Version: 1, Text: "initial"}
 	var output bytes.Buffer
 	writer := protocol.NewWriter(&output)
-	if err := server.didChange(context.Background(), json.RawMessage(`{"textDocument":{"uri":"file:///tmp/demo.tesl","version":2},"contentChanges":[{"text":"old"}]}`), writer); err != nil {
+	if err := server.didChange(context.Background(), json.RawMessage(`{"textDocument":{"uri":`+testFileURIJSON("demo.tesl")+`,"version":2},"contentChanges":[{"text":"old"}]}`), writer); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -791,7 +791,7 @@ func TestServerCancelsStaleDiagnosticQueries(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("old diagnostic query did not start")
 	}
-	if err := server.didChange(context.Background(), json.RawMessage(`{"textDocument":{"uri":"file:///tmp/demo.tesl","version":3},"contentChanges":[{"text":"new"}]}`), writer); err != nil {
+	if err := server.didChange(context.Background(), json.RawMessage(`{"textDocument":{"uri":`+testFileURIJSON("demo.tesl")+`,"version":3},"contentChanges":[{"text":"new"}]}`), writer); err != nil {
 		t.Fatal(err)
 	}
 	server.waitDiagnostics()
@@ -816,15 +816,15 @@ func TestServerCancelsStaleDiagnosticQueries(t *testing.T) {
 
 func TestServerAppliesUTF16RangedAndMultipleChanges(t *testing.T) {
 	server := NewServer(&fakeCompiler{payload: []byte(`{"version":1,"diagnostics":[]}`)})
-	server.documents["file:///tmp/demo.tesl"] = document{
-		URI: "file:///tmp/demo.tesl", Path: "/tmp/demo.tesl", Version: 1, Text: "a😀c\ndef",
+	server.documents[testFileURI("demo.tesl")] = document{
+		URI: testFileURI("demo.tesl"), Path: testFilePath("demo.tesl"), Version: 1, Text: "a😀c\ndef",
 	}
 	var output bytes.Buffer
-	if err := server.didChange(context.Background(), json.RawMessage(`{"textDocument":{"uri":"file:///tmp/demo.tesl","version":2},"contentChanges":[{"range":{"start":{"line":0,"character":1},"end":{"line":0,"character":3}},"text":"X"},{"range":{"start":{"line":1,"character":0},"end":{"line":1,"character":3}},"text":"DEF"}]}`), protocol.NewWriter(&output)); err != nil {
+	if err := server.didChange(context.Background(), json.RawMessage(`{"textDocument":{"uri":`+testFileURIJSON("demo.tesl")+`,"version":2},"contentChanges":[{"range":{"start":{"line":0,"character":1},"end":{"line":0,"character":3}},"text":"X"},{"range":{"start":{"line":1,"character":0},"end":{"line":1,"character":3}},"text":"DEF"}]}`), protocol.NewWriter(&output)); err != nil {
 		t.Fatal(err)
 	}
 	server.waitDiagnostics()
-	if got := server.documents["file:///tmp/demo.tesl"].Text; got != "aXc\nDEF" {
+	if got := server.documents[testFileURI("demo.tesl")].Text; got != "aXc\nDEF" {
 		t.Fatalf("document text = %q", got)
 	}
 }
@@ -895,21 +895,21 @@ func TestServerPublishesDependencyDiagnosticsAtActualURI(t *testing.T) {
 
 func TestDependencyDiagnosticPublicationAggregatesEntryOwnership(t *testing.T) {
 	server := NewServer(&fakeCompiler{})
-	dependencyURI := "file:///tmp/lib.tesl"
+	dependencyURI := testFileURI("lib.tesl")
 	diagnostic := map[string]any{"code": "T001", "message": "bad dependency"}
 	groups := map[string][]map[string]any{dependencyURI: {diagnostic}}
 	var output bytes.Buffer
 	writer := protocol.NewWriter(&output)
-	if err := server.publishDiagnosticGroups("file:///tmp/main-a.tesl", groups, writer); err != nil {
+	if err := server.publishDiagnosticGroups(testFileURI("main-a.tesl"), groups, writer); err != nil {
 		t.Fatal(err)
 	}
-	if err := server.publishDiagnosticGroups("file:///tmp/main-b.tesl", groups, writer); err != nil {
+	if err := server.publishDiagnosticGroups(testFileURI("main-b.tesl"), groups, writer); err != nil {
 		t.Fatal(err)
 	}
-	if err := server.publishDiagnosticGroups("file:///tmp/main-a.tesl", nil, writer); err != nil {
+	if err := server.publishDiagnosticGroups(testFileURI("main-a.tesl"), nil, writer); err != nil {
 		t.Fatal(err)
 	}
-	if err := server.publishDiagnosticGroups("file:///tmp/main-b.tesl", nil, writer); err != nil {
+	if err := server.publishDiagnosticGroups(testFileURI("main-b.tesl"), nil, writer); err != nil {
 		t.Fatal(err)
 	}
 	reader := protocol.NewReader(&output)
@@ -1003,7 +1003,7 @@ func TestDependencyChangesRecheckImportersAndClearStaleOwnedGroups(t *testing.T)
 
 func TestServerInvalidCompilerSchemaPublishesFailure(t *testing.T) {
 	server := NewServer(&fakeCompiler{payload: []byte(`{"version":1}`)})
-	doc := document{URI: "file:///tmp/demo.tesl", Path: "/tmp/demo.tesl", Text: "x"}
+	doc := document{URI: testFileURI("demo.tesl"), Path: testFilePath("demo.tesl"), Text: "x"}
 	var output bytes.Buffer
 	if err := server.publishDiagnostics(context.Background(), doc, protocol.NewWriter(&output)); err != nil {
 		t.Fatal(err)
@@ -1018,9 +1018,9 @@ func TestServerInvalidCompilerSchemaPublishesFailure(t *testing.T) {
 }
 
 func TestServerMalformedNestedFixPublishesCompilerFailure(t *testing.T) {
-	payload := []byte(`{"version":1,"diagnostics":[{"file":"/tmp/demo.tesl","start":{"line":0,"col":0},"end":{"line":0,"col":1},"severity":"error","code":"E1","message":"bad","fix":{"kind":"multi","title":"Fix all","edits":[{"kind":"replace_line","line":0}]},"source":"parser"}]}`)
+	payload := []byte(`{"version":1,"diagnostics":[{"file":` + testFilePathJSON("demo.tesl") + `,"start":{"line":0,"col":0},"end":{"line":0,"col":1},"severity":"error","code":"E1","message":"bad","fix":{"kind":"multi","title":"Fix all","edits":[{"kind":"replace_line","line":0}]},"source":"parser"}]}`)
 	server := NewServer(&fakeCompiler{payload: payload})
-	doc := document{URI: "file:///tmp/demo.tesl", Path: "/tmp/demo.tesl", Text: "x"}
+	doc := document{URI: testFileURI("demo.tesl"), Path: testFilePath("demo.tesl"), Text: "x"}
 	var output bytes.Buffer
 	if err := server.publishDiagnostics(context.Background(), doc, protocol.NewWriter(&output)); err != nil {
 		t.Fatal(err)
@@ -1035,10 +1035,10 @@ func TestServerMalformedNestedFixPublishesCompilerFailure(t *testing.T) {
 }
 
 func TestDidCloseCannotBeOvertakenByDiagnosticPublication(t *testing.T) {
-	uri := "file:///tmp/close-race.tesl"
-	payload := []byte(`{"version":1,"diagnostics":[{"file":"/tmp/close-race.tesl","start":{"line":0,"col":0},"end":{"line":0,"col":1},"severity":"error","code":"E1","message":"bad","fix":null,"source":"parser"}]}`)
+	uri := testFileURI("close-race.tesl")
+	payload := []byte(`{"version":1,"diagnostics":[{"file":` + testFilePathJSON("close-race.tesl") + `,"start":{"line":0,"col":0},"end":{"line":0,"col":1},"severity":"error","code":"E1","message":"bad","fix":null,"source":"parser"}]}`)
 	server := NewServer(&fakeCompiler{payload: payload})
-	doc := document{URI: uri, Path: "/tmp/close-race.tesl", Version: 1, Text: "x"}
+	doc := document{URI: uri, Path: testFilePath("close-race.tesl"), Version: 1, Text: "x"}
 	server.documents[uri] = doc
 	ready := make(chan struct{})
 	release := make(chan struct{})
@@ -1056,7 +1056,7 @@ func TestDidCloseCannotBeOvertakenByDiagnosticPublication(t *testing.T) {
 	}
 	closed := make(chan error, 1)
 	go func() {
-		closed <- server.didClose(context.Background(), json.RawMessage(`{"textDocument":{"uri":"file:///tmp/close-race.tesl"}}`), writer)
+		closed <- server.didClose(context.Background(), json.RawMessage(`{"textDocument":{"uri":`+testFileURIJSON("close-race.tesl")+`}}`), writer)
 	}()
 	select {
 	case err := <-closed:
