@@ -4,6 +4,11 @@
 lasting development speed, whether you write the code yourself or work with AI agents. As an
 application grows, its rules should remain easy to change, check and understand.
 
+Use an LLM to explore an open-ended problem, and give precise requirements to tools that can
+check them. A human can say “this must be an integer” or “this string must have 3–10 characters
+and include a special character.” Tesl lets you express those requirements as types and
+validation facts, so they become part of the contract that future changes must satisfy.
+
 Facts, strong types and capabilities let you put requirements into code that the compiler checks
 at each use. That gives a reviewer a more focused question: does this contract express the right
 rule, and does the code establishing it deserve our trust? The compiler checks that callers meet

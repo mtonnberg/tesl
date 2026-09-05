@@ -446,7 +446,8 @@ header { padding: 1rem 1.25rem; gap: .8rem 1.4rem; background: var(--bg); }
 .path-number { font: .75rem var(--mono); opacity: .65; }
 #workbench > main { margin: 0 1.25rem 1.1rem; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--bg); }
 .pane-head { padding: .6rem .85rem; text-transform: none; font-size: .78rem; letter-spacing: 0; }
-#modname { font-family: var(--mono); }
+#modname { font-family: var(--mono); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pane-head .btn { flex-shrink: 0; }
 #linecount { color: var(--faint); }
 .results-body { padding: 1rem; }
 .statusbar { padding-bottom: .8rem; border-bottom: 1px solid var(--line); font-size: .82rem; }

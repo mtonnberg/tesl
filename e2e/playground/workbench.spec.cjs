@@ -138,7 +138,7 @@ test('Monaco offers actual compiler fixes and builtin completions, with recovera
 test('welcoming start leads through a useful fix to building and sharing, with content-free milestones', async ({ page }) => {
   await page.goto('/');
   await expect(page.locator('#status')).toHaveText('All checks passed');
-  await expect(page.locator('#welcome-title')).toHaveText('There’s a small API here with your name on it');
+  await expect(page.locator('#welcome-title')).toHaveText('Keep building as your codebase grows');
   await expect(page.locator('#build-tesl')).toHaveAttribute('href', 'start.html');
   await page.screenshot({ path: test.info().outputPath('workbench-welcome-desktop.png') });
   await page.locator('#landing-next').click();
@@ -166,6 +166,8 @@ test('welcoming start leads through a useful fix to building and sharing, with c
   await toolClick(page, '#welcome-toggle');
   await expect(page.locator('#welcome-title')).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(375);
+  const checkBounds = await page.locator('#check').boundingBox();
+  expect(checkBounds.x + checkBounds.width).toBeLessThanOrEqual(375);
   await page.screenshot({ path: test.info().outputPath('workbench-welcome-mobile.png') });
 });
 
@@ -457,9 +459,9 @@ test('diagram explanations work with keyboard and touch-sized layouts', async ({
   await page.screenshot({ path: test.info().outputPath('chapter-explanation-mobile.png') });
 });
 
-test('Why Tesl disclosures link every feature to the intended live exercise', async ({ page }) => {
+test('Why Tesl links compiler features to live exercises and runtime features to guides', async ({ page }) => {
   await page.goto('/why.html');
-  await expect(page.locator('.why-features > details')).toHaveCount(7);
+  await expect(page.locator('.why-features > details')).toHaveCount(12);
   const links = await page.locator('.feature-action a').evaluateAll(nodes => nodes.map(a => a.getAttribute('href')));
   expect(links).toHaveLength(8);
   const expected = { customer: 'CustomerInvoiceUnchecked', capabilities: 'CapabilityChain', api: 'HelloServer', money: 'MoneyCheck', dimensions: 'UnitsCheck', runtime: 'HelloServer', compiler: 'MissingImport', tests: 'RegularTests' };

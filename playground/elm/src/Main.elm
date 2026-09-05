@@ -612,7 +612,7 @@ view model =
         , viewWelcome model
         , main_ []
             [ section [ class "pane pane-editor", attribute "aria-label" "Editor" ]
-                [ div [ class "pane-head" ] [ span [ id "modname" ] [ text moduleName ], span [ class "grow" ] [], btn "learn-selection" "Explain this" Learn, btn "check" "Check" Check, span [ id "linecount" ] [ text (String.fromInt (List.length (String.lines model.source)) ++ " lines") ] ]
+                [ div [ class "pane-head" ] [ span [ id "modname", title moduleName ] [ text moduleName ], span [ class "grow" ] [], btn "learn-selection" "Explain this" Learn, btn "check" "Check" Check, span [ id "linecount" ] [ text (String.fromInt (List.length (String.lines model.source)) ++ " lines") ] ]
                 , node "tesl-editor"
                     [ property "state" (E.object [ ( "source", E.string model.source ), ( "diagnostics", E.list .raw model.diagnostics ), ( "highlight", encodeHighlight model.highlight ) ])
                     , on "source-edit" (D.field "detail" (D.map2 Edit (D.field "source" D.string) (D.field "composing" D.bool)))
