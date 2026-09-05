@@ -1195,10 +1195,23 @@ fi
 # STATIC scan of nix/tesl-cli-body.sh for GNU-only constructs plus a DYNAMIC
 # re-run of the verbs with BSD-only mktemp/stat/readlink/sed/xargs shimmed onto
 # PATH — both run on this Linux CI, so a macOS-only regression fails here.
-phase_begin "CLI portability (BSD userland) + manifest-driven verbs"
+phase_begin "CLI portability (shell/native) + manifest-driven verbs"
 _portability_rc=0
 TESL_REPO_ROOT="$SCRIPT_DIR" TESL_OCAML_COMPILER="$_main_exe" \
     bash "$SCRIPT_DIR/tests/cli-portability.sh" || _portability_rc=$?
+# Apply the same behavioral cases to the native candidate before a default
+# cutover. Keep running it after a shell failure so both results are visible.
+if [ "$_portability_rc" -ne 77 ] && command -v go >/dev/null 2>&1; then
+    _native_portability_dir="$(mktemp -d)"
+    if ! go -C "$SCRIPT_DIR/runtime/go" build -o "$_native_portability_dir/tesl" ./cmd/tesl; then
+        _portability_rc=1
+    elif ! TESL_REPO_ROOT="$SCRIPT_DIR" TESL_OCAML_COMPILER="$_main_exe" \
+        TESL_CLI_UNDER_TEST="$_native_portability_dir/tesl" \
+        bash "$SCRIPT_DIR/tests/cli-portability.sh"; then
+        _portability_rc=1
+    fi
+    rm -rf "$_native_portability_dir"
+fi
 if [ "$_portability_rc" -eq 0 ]; then
     phase_end OK
 elif [ "$_portability_rc" -eq 77 ]; then

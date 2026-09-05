@@ -30,12 +30,17 @@
 # Usage:  tests/cli-portability.sh
 # Exit:   0 = pass, 1 = failure, 77 = skipped (compiler not built)
 # Env:    TESL_REPO_ROOT, TESL_OCAML_COMPILER (both auto-detected)
+#         TESL_CLI_UNDER_TEST selects a native CLI for the same dynamic cases.
 
 set -uo pipefail
 
 REPO_ROOT="${TESL_REPO_ROOT:-$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)}"
 BODY="$REPO_ROOT/nix/tesl-cli-body.sh"
 MAIN_EXE="${TESL_OCAML_COMPILER:-$REPO_ROOT/compiler/_build/default/bin/main.exe}"
+CLI=(bash "$BODY")
+if [ -n "${TESL_CLI_UNDER_TEST:-}" ]; then
+  CLI=("$TESL_CLI_UNDER_TEST")
+fi
 
 FAIL=0
 pass() { printf '  \033[32m✓\033[0m  %s\n' "$1"; }
@@ -209,7 +214,7 @@ tesl_bsd() {
       TESL_REPO_ROOT="$REPO_ROOT" TESL_OCAML_COMPILER="$MAIN_EXE" \
       TESL_NO_DB_AUTOSTART=1 TESL_ZAP="${TESL_ZAP:-}" \
       FAKE_PLAN="${FAKE_PLAN:-}" TEST_TOKEN="${TEST_TOKEN:-}" \
-      bash "$BODY" "$@" 2>&1 )
+      "${CLI[@]}" "$@" 2>&1 )
 }
 
 # Sanity: the stubs really do reject the GNU flags (else the test proves nothing).
@@ -313,14 +318,14 @@ fi
 
 # 2) bare `tesl emit go` / `tesl check` default to [project].entrypoint (#46.2)
 out="$(tesl_bsd "$PROJ" check)"; rc=$?
-if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q "entrypoint main.tesl"; then
+if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -Eq '(entrypoint main.tesl|using .*/main.tesl)'; then
   pass "bare 'tesl check' uses [project].entrypoint"
 else
   fail "bare 'tesl check' did not default to the entrypoint (rc=$rc): $out"
 fi
 
 out="$(tesl_bsd "$PROJ/sub" check)"; rc=$?
-if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q "entrypoint"; then
+if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -Eq '(entrypoint|using .*/main.tesl)'; then
   pass "bare verb resolves the entrypoint from a SUBDIRECTORY of the project"
 else
   fail "bare verb from a subdirectory failed (rc=$rc): $out"
@@ -329,7 +334,7 @@ fi
 # 3) no manifest ⇒ still the usage line (single-file workflow unchanged)
 mkdir -p "$WORK/bare"
 out="$(tesl_bsd "$WORK/bare" check)"; rc=$?
-if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q "Usage: tesl check"; then
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -Eq '(Usage: tesl check|supply a .tesl file or a tesl.toml)'; then
   pass "no tesl.toml ⇒ bare verb still prints its usage line"
 else
   fail "bare verb outside a project should print usage (rc=$rc): $out"
@@ -344,19 +349,21 @@ else
 fi
 
 # 5) `tesl dast` emits a scanner plan without serializing auth secrets.
+# The shell emits YAML and the native CLI emits JSON (also valid YAML). Accept
+# quoted keys/scalars while requiring the same jobs, references, and thresholds.
 out="$(TESL_ZAP="$WORK/fake-zap" FAKE_PLAN="$FAKE_PLAN" TEST_TOKEN='Bearer secret' \
   TEST_COOKIE='__Host-session=secret-cookie' \
   tesl_bsd "$PROJ" dast http://localhost:8099 --spec "$WORK/openapi.json" \
   --authorization-env TEST_TOKEN --cookie-env TEST_COOKIE)"; rc=$?
 if [ "$rc" -eq 0 ] && [ -f "$FAKE_PLAN" ] \
-   && grep -q 'type: openapi' "$FAKE_PLAN" \
+   && grep -Eq '"?type"?: "?openapi"?' "$FAKE_PLAN" \
    && grep -q '\${TEST_TOKEN}' "$FAKE_PLAN" \
    && grep -q '\${TEST_COOKIE}' "$FAKE_PLAN" \
    && ! grep -q 'Bearer secret' "$FAKE_PLAN" \
    && ! grep -q 'secret-cookie' "$FAKE_PLAN" \
-   && grep -q 'reportFile: zap-report.json' "$FAKE_PLAN" \
-   && grep -q 'errorLevel: High' "$FAKE_PLAN" \
-   && grep -q 'warnLevel: Medium' "$FAKE_PLAN"; then
+   && grep -Eq '"?reportFile"?: "?zap-report.json"?' "$FAKE_PLAN" \
+   && grep -Eq '"?errorLevel"?: "?High"?' "$FAKE_PLAN" \
+   && grep -Eq '"?warnLevel"?: "?Medium"?' "$FAKE_PLAN"; then
   pass "tesl dast builds a ZAP plan without leaking authorization secrets"
 else
   fail "tesl dast plan generation failed or leaked a secret (rc=$rc): $out"
@@ -366,7 +373,7 @@ fi
 out="$(TESL_ZAP="$WORK/fake-zap" FAKE_PLAN="$FAKE_PLAN" \
   tesl_bsd "$PROJ" dast 'http://localhost:8099@staging.example.test' \
   --spec "$WORK/openapi.json" --active)"; rc=$?
-if [ "$rc" -eq 2 ] && printf '%s' "$out" | grep -q "userinfo is not allowed"; then
+if [ "$rc" -eq 2 ] && printf '%s' "$out" | grep -Eq '(userinfo is not allowed|without userinfo)'; then
   pass "tesl dast rejects loopback-prefix URL userinfo bypasses"
 else
   fail "tesl dast accepted a URL userinfo active-scan bypass (rc=$rc): $out"
@@ -376,7 +383,7 @@ fi
 out="$(TESL_ZAP="$WORK/fake-zap" FAKE_PLAN="$FAKE_PLAN" \
   tesl_bsd "$PROJ" dast http://localhost:8099 --spec "$WORK/openapi.json" \
   --authorization-env 'TOKEN-NAME')"; rc=$?
-if [ "$rc" -eq 2 ] && printf '%s' "$out" | grep -q "invalid environment variable name"; then
+if [ "$rc" -eq 2 ] && printf '%s' "$out" | grep -Eq 'invalid (authentication )?environment variable name'; then
   pass "tesl dast rejects malformed authentication environment names"
 else
   fail "tesl dast accepted a malformed environment name (rc=$rc): $out"
@@ -404,7 +411,7 @@ fi
 #    PATH deliberately has no docker: a Docker attempt fails the assertion.
 out="$(tesl_bsd "$PROJ" build)"; rc=$?
 if [ "$rc" -eq 0 ] \
-   && printf '%s' "$out" | grep -q "compiled Go module" \
+   && printf '%s' "$out" | grep -Eq '(compiled Go module|tesl build: .* built at)' \
    && ! printf '%s' "$out" | grep -qE "staged Dockerfile|building image" \
    && [ -f "$PROJ/.tesl-stuff/go-build/go.mod" ]; then
   pass "tesl build honours [deploy].target = local (compile only, no Docker)"
@@ -414,7 +421,7 @@ fi
 
 # 6) …and --container still stages the image context on demand
 out="$(tesl_bsd "$PROJ" build --container --no-docker)"; rc=$?
-if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q "does not define a main/server entrypoint"; then
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -Eq '(does not define a|has no) main/server entrypoint'; then
   pass "tesl build --container rejects a non-application source explicitly"
 else
   fail "tesl build --container did not stage a Dockerfile (rc=$rc): $out"
@@ -426,7 +433,7 @@ mkdir -p "$CPROJ"
 sed 's/^target = "local"/target = "container"/' "$PROJ/tesl.toml" > "$CPROJ/tesl.toml"
 cp "$PROJ/main.tesl" "$PROJ/lib.tesl" "$CPROJ/"
 out="$(tesl_bsd "$CPROJ" build --no-docker)"; rc=$?
-if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q "does not define a main/server entrypoint"; then
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -Eq '(does not define a|has no) main/server entrypoint'; then
   pass "tesl build rejects a non-application container target explicitly"
 else
   fail "tesl build did not stage a Dockerfile for target = container (rc=$rc): $out"

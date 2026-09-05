@@ -1,7 +1,8 @@
 # Native Windows support
 
-Status: in progress, 2026-09-05. Native Windows is not yet a supported installation;
-cross-compilation and Linux tests do not establish native Windows parity.
+Status: in progress, 2026-09-05. The native Windows source-build/parity gate passes.
+Native Windows is not yet a supported installation; offline distribution remains
+unverified.
 
 Implemented so far:
 - Shared native CLI and tool discovery, Windows executable suffixes, and
@@ -27,9 +28,12 @@ Implemented so far:
 - Native extension launch without Bash and a five-target native CI definition
   consuming the Nix-exported source revision and tool versions.
 
-Native runner execution, Windows PostgreSQL and scanner parity, complete offline
-payloads, signing, installers, and real desktop editor tests remain open. Do not
-mark W0 complete until native evidence has been produced.
+PR #100's [native Windows job](https://github.com/mtonnberg/tesl/actions/runs/33960309969/job/101291009775)
+passed the compiler, CLI/process, LSP, compiler-session, token-ACL, and extension
+unit suites. Windows PostgreSQL and scanner parity, complete offline payloads,
+signing, installers, and real desktop editor tests remain open. W0 also requires
+the packaged workflow and dependency closure; the source-build result is partial
+evidence for that gate.
 
 A Windows user should install Tesl, build and run an API, use the managed local
 database, and work in VS Code/VSCodium with the same language, proof, testing,
@@ -40,12 +44,12 @@ native Windows processes without WSL, Bash, MSYS2, Cygwin, or Nix.
 
 | Existing component | Windows gap to resolve |
 |---|---|
-| OCaml compiler | Prove a native build of the actual pinned compiler/Dune stack, generators, and linked libraries; verify the new native process-owner path for mutation/build commands in [`process_runner.ml`](../../compiler/lib/process_runner.ml) |
+| OCaml compiler | Native build and process-runner tests pass; inventory and relocate the resulting native runtime dependencies |
 | CLI | [`tesl-cli-body.sh`](../../nix/tesl-cli-body.sh) orchestrates Go, database lifecycle, watch, and other commands through Bash/Unix utilities and Nix discovery |
-| Go tooling | Job Object ownership is implemented in [`child_windows.go`](../../runtime/go/internal/childprocess/child_windows.go); descendant cleanup still needs native execution |
-| Debug transport | [`debug_control.go`](../../runtime/go/teslrt/debug_control.go) defaults to authenticated loopback TCP on Windows; current-user token ACLs need native verification |
+| Go tooling | Job Object ownership and descendant cleanup pass native tests; verify installed end-to-end debugger and agent workflows |
+| Debug transport | Authenticated loopback TCP and current-user token ACL tests pass natively; verify the installed desktop workflow |
 | Extension | Native launch and installation discovery are implemented in [`extension.js`](../../editor/vscode-tesl/extension.js); legacy Nix compatibility remains, and native desktop scenarios need verification |
-| Installation and CI | [`INSTALL.md`](../../INSTALL.md) points Windows users to WSL; the authoritative workflow runs on Ubuntu and supplies no native Windows parity evidence |
+| Installation and CI | [`INSTALL.md`](../../INSTALL.md) points Windows users to WSL; native parity CI now passes, but offline payloads and installers do not exist yet |
 
 Reuse the compiler and Go LSP/DAP/MCP/runtime implementations. Port platform
 boundaries rather than maintaining a Windows language fork.

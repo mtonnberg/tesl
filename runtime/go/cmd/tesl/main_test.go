@@ -25,8 +25,8 @@ func TestMain(m *testing.M) {
 			os.Args = append(os.Args[:1], os.Args[2:]...)
 			main()
 		case "--check-json":
-			fmt.Fprintln(os.Stdout, `{"version":1,"diagnostics":[]}`)
-			fmt.Fprintln(os.Stderr, "compiler diagnostic")
+			_, _ = fmt.Fprintln(os.Stdout, `{"version":1,"diagnostics":[]}`)
+			_, _ = fmt.Fprintln(os.Stderr, "compiler diagnostic")
 			if code < 0 {
 				process, err := os.FindProcess(os.Getpid())
 				if err != nil {

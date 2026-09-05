@@ -1,7 +1,9 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"regexp"
 	"strings"
 	"testing"
@@ -30,7 +32,24 @@ func TestDASTScopeAndArguments(t *testing.T) {
 			if (err == nil) != sample.ok {
 				t.Fatalf("parse = %v", err)
 			}
+			if !sample.ok {
+				app, calls := fakeApp(t)
+				err := app.Run(context.Background(), append([]string{"dast"}, sample.args...))
+				if ExitCode(err) != 2 || ExitCode(fmt.Errorf("wrapped: %w", err)) != 2 || len(*calls) != 0 {
+					t.Fatalf("invalid DAST arguments must exit 2 before running tools: %v, calls=%v", err, *calls)
+				}
+			}
 		})
+	}
+}
+
+func TestDASTUnsetAuthenticationExitsTwo(t *testing.T) {
+	for _, flag := range []string{"--authorization-env", "--cookie-env"} {
+		app, calls := fakeApp(t)
+		err := app.Run(context.Background(), []string{"dast", "http://localhost", flag, "MISSING_AUTH"})
+		if err == nil || ExitCode(err) != 2 || len(*calls) != 0 || !strings.Contains(err.Error(), "unset or empty") {
+			t.Fatalf("missing authentication: %v, calls=%v", err, *calls)
+		}
 	}
 }
 

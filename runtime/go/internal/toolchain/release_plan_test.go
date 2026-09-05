@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -34,7 +33,9 @@ func TestGeneratedReleaseManifests(t *testing.T) {
 	for _, candidate := range plan.Candidates {
 		t.Run(candidate.Target, func(t *testing.T) {
 			r, _, root := fixture(t)
-			r.GOOS = strings.Split(candidate.Target, "-")[0]
+			// Exercise every exported path layout with the host's filesystem rules.
+			// Windows cannot manufacture POSIX executable permission bits for the
+			// Unix-layout fixtures; actual binary execution belongs to its runner.
 			writeFixture(t, root, "share/tesl/toolchain.json", string(plan.Payloads[candidate.Target].Manifest), 0644)
 			manifest, _, err := r.Load()
 			if err != nil {

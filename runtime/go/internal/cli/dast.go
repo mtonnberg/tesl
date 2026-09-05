@@ -119,12 +119,12 @@ func (app *App) dast(ctx context.Context, args []string) error {
 	}
 	options, err := parseDAST(args)
 	if err != nil {
-		return err
+		return &usageError{err}
 	}
 	for _, name := range []string{options.AuthorizationEnv, options.CookieEnv} {
 		if name != "" {
 			if value, _ := environmentValue(app.Environment, name); value == "" {
-				return fmt.Errorf("authentication environment variable %s is unset or empty", name)
+				return &usageError{fmt.Errorf("authentication environment variable %s is unset or empty", name)}
 			}
 		}
 	}
@@ -198,7 +198,7 @@ func (app *App) dast(ctx context.Context, args []string) error {
 		}
 	}
 	if !validPort(options.Port) {
-		return fmt.Errorf("invalid ZAP port")
+		return &usageError{fmt.Errorf("invalid ZAP port")}
 	}
 	port, _ := strconv.Atoi(options.Port)
 	for ; port <= 65535; port++ {

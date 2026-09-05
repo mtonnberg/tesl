@@ -32,6 +32,14 @@ Implemented so far:
 - Native version/doctor identity honors the selected manifest or Nix version.
   Subprocess tests cover unchanged diagnostic streams, ordinary exit statuses,
   and Unix child signal statuses; native CI includes these entrypoint tests.
+- The authoritative gate runs the existing CLI portability scenarios against
+  both implementations, including entrypoints, build targets, symlink boundaries,
+  scanner plans, and DAST validation exit statuses.
+- [`release-identity.nix`](../../nix/release-identity.nix) derives semantic artifact
+  versions from the pinned product version and exact source metadata. The export
+  includes versioned archive names and component manifests for all five targets;
+  native binaries embed their identity and test the generated manifests. The
+  contract and local checks are documented in [`nix/RELEASES.md`](../../nix/RELEASES.md).
 
 The native CLI is not yet the default Nix CLI: the existing full gate must pass
 before that cutover. Native parity CI is a source-build spike, not an offline
@@ -158,10 +166,13 @@ replacement without implicit database-major-version migration.
    the required release-platform matrix, publish one immutable continuous release
    tied to the full commit SHA. Pull requests and failed/cancelled builds do not
    publish. Retrying a successful SHA is idempotent.
-2. Use sortable continuous versions derived from source metadata, with a SHA
-   suffix and full SHA in the manifest. Keep named stable releases as deliberate
-   promotions of tested artifacts. A new successful `main` revision does not
-   require a manual version bump in several files.
+2. Use `MAJOR.MINOR.PATCH-dev.<commit timestamp>.g<full SHA>` for continuous
+   artifacts and `MAJOR.MINOR.PATCH` for deliberate stable releases, with `v`
+   prefixed release tags. `nix/toolchain-inputs.nix` owns the base version. A
+   stable tag must match it; stable bytes must be rebuilt and tested with their
+   final identity. Dirty checkouts use `-dev.worktree` and cannot publish. A new
+   successful `main` revision requires no manual version bump. Commit timestamps
+   can move backwards; channel advancement must follow main's revision order.
 3. Check out and attest the exact tested revision at every stage. Do not resolve
    `main` again during packaging. Stage all mandatory assets before publishing;
    a partial matrix leaves the previous complete release available.

@@ -81,9 +81,15 @@ func execute(ctx context.Context, invocation Invocation) error {
 	return err
 }
 
+type usageError struct{ error }
+
 func ExitCode(err error) int {
 	if err == nil {
 		return 0
+	}
+	var usage *usageError
+	if errors.As(err, &usage) {
+		return 2
 	}
 	var status *processStatus
 	if errors.As(err, &status) {
