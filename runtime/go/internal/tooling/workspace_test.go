@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -129,6 +130,58 @@ func TestWorkspaceCapabilityAndRenameFraming(t *testing.T) {
 	defer func() { _ = legacy.Close() }()
 	if _, _, err = legacy.QuerySourceJSON(context.Background(), "--workspace-references-json", path, source, "2", "3"); err == nil || !strings.Contains(err.Error(), "capability") {
 		t.Fatalf("legacy capability not rejected: %v", err)
+	}
+}
+
+func TestWorkspaceCanonicalTemporaryDirectoryNeverEscapesMapping(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlinked temporary-parent fixture requires Unix symlink permissions")
+	}
+	client := sessionTestClient(t)
+	root := t.TempDir()
+	entry := filepath.Join(root, "main.tesl")
+	source := "module Main exposing [value]\nimport Tesl.Prelude exposing [Int]\nfn value(n: Int) -> Int = n\n"
+	if err := os.WriteFile(entry, []byte(source), 0600); err != nil {
+		t.Fatal(err)
+	}
+	parent := t.TempDir()
+	real := filepath.Join(parent, "real")
+	alias := filepath.Join(parent, "alias")
+	if err := os.Mkdir(real, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(real, alias); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TMPDIR", alias)
+	for _, retained := range []bool{false, true} {
+		t.Run(fmt.Sprintf("retained=%v", retained), func(t *testing.T) {
+			queryClient := client
+			if !retained {
+				queryClient.Sessions = nil
+			}
+			payload, _, err := queryClient.QuerySourceJSON(context.Background(), "--workspace-references-json", entry, source, "2", "3")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var response WorkspaceResponse
+			if err := json.Unmarshal(payload, &response); err != nil {
+				t.Fatal(err)
+			}
+			if response.Root != root || len(response.Inputs) != 1 || response.Inputs[0].File != entry || strings.Contains(string(payload), parent) {
+				t.Fatalf("canonical temporary path leaked into response: %s", payload)
+			}
+			payload, _, err = queryClient.QuerySourceJSON(context.Background(), "--workspace-rename-json", entry, source, "2", "3", "renamed", response.Snapshot)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := json.Unmarshal(payload, &response); err != nil {
+				t.Fatal(err)
+			}
+			if response.Rename == nil || !response.Rename.Safe || len(response.Rename.Files) != 1 || response.Rename.Files[0].File != entry {
+				t.Fatalf("rename failed or returned a temporary path: %s", payload)
+			}
+		})
 	}
 }
 

@@ -318,6 +318,7 @@ let rec remove_tree path =
 let with_temporary_directory f =
   let path = Filename.temp_file "tesl-rename-" "" in
   Sys.remove path; Unix.mkdir path 0o700;
+  let path = canonical path in
   Fun.protect ~finally:(fun () -> remove_tree path) (fun () -> f path)
 
 let apply_edits source edits =

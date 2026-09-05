@@ -117,7 +117,7 @@ func (sessions *WorkspaceSessions) query(ctx context.Context, client Client, fla
 	config, _ := json.Marshal([]any{executable, info.Size(), info.ModTime().UnixNano(), environment, client.Directory})
 	if sessions.root != root || sessions.configuration != string(config) {
 		sessions.reset()
-		shadow, err := os.MkdirTemp("", "tesl-workspace-*")
+		shadow, err := makeShadowDirectory("tesl-workspace-*")
 		if err != nil {
 			return nil, Result{}, err
 		}

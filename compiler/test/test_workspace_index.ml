@@ -230,8 +230,23 @@ let invalid_context_is_partial () =
     check int "field text is never a function reference" 3 (List.length (references index target.symbol));
     expect_refused index target "twice")
 
+let symlinked_temporary_parent () =
+  if not Sys.win32 then with_temporary_directory (fun root ->
+    let real = Filename.concat root "real" and alias = Filename.concat root "alias" in
+    Unix.mkdir real 0o700; Unix.symlink real alias;
+    let previous = Filename.get_temp_dir_name () in
+    Fun.protect ~finally:(fun () -> Filename.set_temp_dir_name previous) (fun () ->
+      Filename.set_temp_dir_name alias;
+      with_project fixtures (fun project ->
+        check string "temporary root is canonical" (canonical project) project;
+        let index = build (main_path project) in complete index;
+        let target = selected index (main_path project) 3 28 in
+        let edits = expect_safe index target "twice" in
+        check int "rename remains safe through a symlinked temp parent" 5 (List.length edits))))
+
 let () = Alcotest.run "Workspace semantic index" ["identity and edits", List.map (fun (name, test) -> test_case name `Quick test)
-  ["interpolation local scope", interpolation_local_scope; "qualified import all", import_all; "interpolation escaped prefix", interpolation_escapes;
+  ["symlinked temporary parent", symlinked_temporary_parent;
+   "interpolation local scope", interpolation_local_scope; "qualified import all", import_all; "interpolation escaped prefix", interpolation_escapes;
    "invalid rename identifiers", invalid_rename_names; "stable mirror identity", stable_mirror_identity;
    "manifest invalidation", manifest_change; "unsupported contexts explicit", invalid_context_is_partial;
    "exposing and qualified calls", exposed_and_qualified; "local shadowing", local_shadow;
