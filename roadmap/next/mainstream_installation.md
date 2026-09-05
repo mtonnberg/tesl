@@ -48,10 +48,19 @@ Implemented so far:
   unchanged installation files. This is an M2 component; the copied SDK/compiler
   acceptance fixture does not establish native dependency closure or managed
   PostgreSQL distribution.
+- The native candidate pipeline now builds upstream Go and a minimal local
+  PostgreSQL from verified Nix source pins, assembles all manifest components,
+  audits native dependencies/baselines, and tests the extracted archive using
+  the installed CLI. The installed workflow covers managed database persistence,
+  local build and authenticated HTTP; Linux uses a loopback-only network namespace.
+  See [`nix/RELEASES.md`](../../nix/RELEASES.md) for commands and evidence limits.
+  Local source builds and workflow tests pass; candidate platform CI is still
+  required, and opam compiler source pinning remains incomplete.
 
 The native CLI is not yet the default Nix CLI: the existing full gate must pass
-before that cutover. Native parity CI is a source-build spike, not an offline
-payload builder or publication workflow. M2–M4 remain open, including native
+before that cutover. Native parity CI now includes Linux/macOS candidate assembly
+and installed-workflow gates; Windows still has source parity only. It does not
+publish releases. M2–M4 remain open, including complete native
 dependency closure, scanner parity, signing, provenance, and install/upgrade tests.
 
 Let Linux and macOS users download one Tesl toolchain and reach a running API
@@ -246,6 +255,8 @@ their own compiler, tools, and resources without shell wrappers or Nix paths.
 
 - [x] Build and checksum the locked Go module proxy with licenses; add empty-cache
   scaffold/password/debug coverage to the native matrix.
+- [x] Implement native Go/PostgreSQL source builders, the complete payload
+  assembler, binary audit, and extracted-archive acceptance harness.
 - [ ] Build both architectures on the declared baselines and assemble pinned Go,
   generated-module dependencies, PostgreSQL, resources, and licenses.
 - [ ] Test on clean hosts without Nix, a checkout, system Go/OCaml, PostgreSQL,

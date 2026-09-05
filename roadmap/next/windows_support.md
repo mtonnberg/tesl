@@ -31,6 +31,10 @@ Implemented so far:
   exercises copied-SDK scaffold/password/debug builds with empty module caches.
   This new step2 check still needs its native Windows CI result; it does not
   establish compiler DLL or PostgreSQL relocation.
+- Shared source verification, payload assembly/inventory, and an installed CLI
+  acceptance harness now exist. Distribution remains Linux/macOS-only: the current
+  dependency audit rejects Windows explicitly until PE/DLL closure and native
+  PostgreSQL packaging are implemented. Windows source parity continues to run.
 
 PR #100's [native Windows job](https://github.com/mtonnberg/tesl/actions/runs/33960309969/job/101291009775)
 passed the compiler, CLI/process, LSP, compiler-session, token-ACL, and extension

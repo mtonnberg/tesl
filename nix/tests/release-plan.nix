@@ -3,7 +3,7 @@ let
   package = version: { inherit version; src = { urls = [ "https://example.invalid/source.tar.gz" ]; outputHash = "pinned-source-hash"; }; };
   pkgs = {
     go = package "1.2.3";
-    postgresql = package "17.1";
+    postgresql = (package "17.1") // { src = (package "17.1").src // { outputHashMode = "recursive"; stripRoot = true; }; };
     ocamlPackages = { ocaml = package "5.4.1"; dune_3 = package "3.21.1"; alcotest = package "1.9.1"; };
   };
   baseVersion = (import ../toolchain-inputs.nix).version;
@@ -21,6 +21,8 @@ let
     complete-matrix = builtins.attrNames plan.payloads == targets;
     source-pins = plan.sources.go.hash == "pinned-source-hash" && plan.sources.go.version == "1.2.3";
     source-urls = plan.sources.go.urls == pkgs.go.src.urls;
+    source-hash-mode = plan.sources.go.hashMode == "flat" && !plan.sources.go.stripRoot;
+    recursive-source-hash = plan.sources.postgresql.hashMode == "recursive" && plan.sources.postgresql.stripRoot;
     module-inputs = plan.moduleInputs == [ "runtime/go/go.mod" "runtime/go/go.sum" ];
     module-lock-hashes = plan.moduleInputHashes == {
       "runtime/go/go.mod" = builtins.hashString "sha256" (builtins.readFile ../../runtime/go/go.mod);

@@ -1,0 +1,249 @@
+"""Exercise orchestration identity, failed gates, extraction, and network isolation."""
+
+from contextlib import ExitStack
+import io
+import json
+from pathlib import Path
+import subprocess
+import tarfile
+import tempfile
+import unittest
+from unittest.mock import patch
+
+import native_distribution as distribution
+
+
+SHA = "1" * 40
+
+
+def plan(target="linux-amd64"):
+    version = "0.3.1"
+    suffix = ".exe" if target.startswith("windows-") else ""
+    commands = ["tesl", "tesl-lsp", "tesl-dap", "tesl-mcp", "tesl-debug-inspect", "tesl-debug-attach"]
+    components = {name: {"path": "bin/" + name + suffix, "version": version} for name in commands}
+    for name in distribution.native_payload.PG_COMMANDS:
+        components[name] = {"path": "libexec/tesl/postgresql/bin/" + name + suffix, "version": "17.10"}
+    for name, path in {"compiler": "libexec/tesl/tesl-compiler" + suffix, "go": "libexec/tesl/go/bin/go" + suffix,
+                       **{name: "share/tesl/" + name for name in distribution.native_payload.DIRECTORIES}}.items():
+        components[name] = {"path": path, "version": "1.26.6" if name == "go" else version}
+    return {"version": 1, "sourceRevision": SHA, "sourceDateEpoch": 1, "toolchainVersion": version,
+            "release": {"publishableSource": True}, "commands": commands,
+            "sources": {name: {"version": ver, "urls": ["https://example.test/" + name]}
+                        for name, ver in {"go": "1.26.6", "ocaml": "5.4.1", "dune": "3.21.1", "postgresql": "17.10"}.items()},
+            "candidates": [{"target": target, "baseline": "glibc 2.35" if target.startswith("linux-") else "macOS 13"}],
+            "payloads": {target: {"archiveName": f"tesl-{version}-{target}" + (".zip" if target.startswith("windows-") else ".tar.gz"),
+                                  "manifest": {"version": 1, "target": target, "toolchain_version": version,
+                                               "source_revision": SHA, "components": components}}}}
+
+
+class Response(io.BytesIO):
+    def __init__(self, content, url="https://example.test/source"):
+        super().__init__(content)
+        self.url = url
+
+    def geturl(self):
+        return self.url
+
+
+class DistributionTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory(prefix="tesl distribution å ")
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.output = self.root / "result"
+
+    def test_checkout_requires_exact_commit_and_clean_tracked_source(self):
+        for revision, dirty in (("2" * 40, ""), (SHA, " M compiler/bin/main.ml")):
+            with self.subTest(revision=revision, dirty=dirty), patch.object(distribution, "run", side_effect=[revision, dirty]):
+                with self.assertRaisesRegex(ValueError, "planned commit"):
+                    distribution.verify_checkout(plan(), self.root, {})
+        with patch.object(distribution, "run", side_effect=[SHA, ""]):
+            result = distribution.verify_checkout(plan(), self.root, {})
+        self.assertEqual(result, {"head": SHA, "tracked_changes": False, "worktree_preview": False})
+
+    def test_worktree_requires_explicit_nonpublishable_plan(self):
+        value = plan()
+        value["sourceRevision"] = "worktree"
+        with patch.object(distribution, "run", side_effect=[SHA, " M source"]):
+            with self.assertRaisesRegex(ValueError, "non-publishable"):
+                distribution.verify_checkout(value, self.root, {})
+        value["release"]["publishableSource"] = False
+        with patch.object(distribution, "run", side_effect=[SHA, " M source"]):
+            self.assertTrue(distribution.verify_checkout(value, self.root, {})["worktree_preview"])
+
+    def test_download_records_actual_https_upgrade_and_redirect(self):
+        with patch.object(distribution, "urlopen", return_value=Response(b"source", "https://cdn.example.test/source")) as opened:
+            value = distribution.download({"urls": ["http://example.test/source"]}, self.root / "archive")
+        self.assertEqual(opened.call_args.args[0], "https://example.test/source")
+        self.assertEqual(value["final_url"], "https://cdn.example.test/source")
+        self.assertEqual(value["archive_sha256"], distribution.native_payload.file_hash(self.root / "archive"))
+
+    def test_download_falls_back_only_to_declared_mirrors_and_cleans_failures(self):
+        with patch.object(distribution, "urlopen", side_effect=[OSError("first failed"), Response(b"second")]) as opened:
+            distribution.download({"urls": ["https://one.test/source", "https://two.test/source"]}, self.root / "archive")
+        self.assertEqual([call.args[0] for call in opened.call_args_list], ["https://one.test/source", "https://two.test/source"])
+        self.assertEqual((self.root / "archive").read_bytes(), b"second")
+        for source in ({"urls": []}, {"urls": ["file:///tmp/source"]}):
+            with self.assertRaises(ValueError):
+                distribution.download(source, self.root / "invalid")
+
+    def test_download_byte_and_time_bounds_remove_partial_archive(self):
+        for limit, ticks in ((2, [0, 0]), (1024, [0, 301])):
+            with self.subTest(limit=limit), patch.object(distribution, "MAX_SOURCE_BYTES", limit), \
+                    patch.object(distribution.time, "monotonic", side_effect=ticks), \
+                    patch.object(distribution, "urlopen", return_value=Response(b"archive")):
+                with self.assertRaisesRegex(ValueError, "bound"):
+                    distribution.download({"urls": ["https://example.test/source"]}, self.root / "archive")
+            self.assertFalse((self.root / "archive").exists())
+
+    def test_download_preserves_existing_output(self):
+        archive = self.root / "existing"
+        archive.write_text("preserved")
+        with self.assertRaisesRegex(ValueError, "already exists"):
+            distribution.download({"urls": ["https://example.test/source"]}, archive)
+        self.assertEqual(archive.read_text(), "preserved")
+
+    def test_frontend_environment_selects_new_sdk_and_locked_local_proxy(self):
+        env = distribution.build_environment({"PATH": "old", "GOPROXY": "https://invalid.test", "CGO_ENABLED": "1", "GOFLAGS": "-race"},
+                                             "linux-amd64", self.root / "sdk", self.root / "work", self.root / "modules")
+        self.assertEqual(env["GOROOT"], str(self.root / "sdk"))
+        self.assertEqual(env["GOPROXY"], (self.root / "modules/proxy").as_uri())
+        self.assertEqual(env["CGO_ENABLED"], "0")
+        self.assertEqual(env["GONOPROXY"], "none")
+        self.assertEqual(env["GOVCS"], "*:off")
+        self.assertNotIn("GOFLAGS", env)
+
+    def test_linux_isolation_preserves_user_and_macos_does_not_claim_namespace(self):
+        args = distribution.acceptance_command("linux-amd64", self.root / "go", self.root)
+        self.assertEqual(args[:5], ["unshare", "--user", "--map-current-user", "--keep-caps", "--net"])
+        self.assertEqual(args[7], 'ip link set lo up && exec "$@"')
+        self.assertIn("^TestInstalledToolchainWorkflow$", args)
+        mac = distribution.acceptance_command("darwin-arm64", self.root / "go", self.root)
+        self.assertEqual(mac[0], str(self.root / "go"))
+        self.assertNotIn("unshare", mac)
+
+    def test_ocaml_licenses_preserve_referenced_license_tree(self):
+        source = self.root / "ocaml-source/ocaml-5.4.1"
+        (source / "LICENSES").mkdir(parents=True)
+        (source / "LICENSE").write_text("see LICENSES")
+        (source / "LICENSES/LGPL.txt").write_text("license text")
+        result = distribution.ocaml_licenses(source.parent, self.root / "licenses")
+        self.assertEqual((result / "LICENSES/LGPL.txt").read_text(), "license text")
+
+    def pipeline(self, failure=None, target="linux-amd64"):
+        calls = []
+        value = plan(target)
+
+        def run(arguments, root, environment, capture=False, timeout=1800):
+            args = list(map(str, arguments))
+            calls.append((args, environment.copy()))
+            if args[:3] == ["git", "rev-parse", "HEAD"]:
+                return SHA
+            if args[:2] == ["git", "status"]:
+                return ""
+            if args[:4] == ["opam", "exec", "--", "ocamlc"]:
+                return "5.4.1"
+            if args[:4] == ["opam", "exec", "--", "dune"] and "--version" in args:
+                return "3.21.1"
+            if args[:3] == ["go", "env", "GOROOT"]:
+                return str(self.root / "bootstrap")
+            if args[0] == "tar":
+                with tarfile.open(args[2], "r:gz") as archive:
+                    archive.extractall(args[4], filter="data")
+            if "^TestInstalledToolchainWorkflow$" in args:
+                installed = Path(environment["TESL_TEST_INSTALLED_ROOT"])
+                self.assertEqual((installed / "fixture").read_text(), "tested extracted bytes")
+                if failure == "acceptance":
+                    raise subprocess.CalledProcessError(1, args)
+
+        def download(source, output):
+            output.write_bytes(b"pinned archive")
+            return {"requested_url": source["urls"][0]}
+
+        def sdk_build(plan, target, archive, bootstrap, output):
+            self.assertTrue(output.is_absolute())
+            output.mkdir()
+            return output
+
+        def pg_build(plan, target, archive, output):
+            output.mkdir()
+            return output
+
+        def extract(source, archive, output):
+            output.mkdir()
+            (output / "LICENSE").write_text("OCaml license")
+            return output
+
+        def assemble(plan, root, target, compiler, frontends, sdk, pg, bundle, licenses, output):
+            self.assertEqual((licenses / "LICENSE").read_text(), "OCaml license")
+            if failure == "audit":
+                raise ValueError("payload audit failed")
+            output.mkdir()
+            (output / "fixture").write_text("tested extracted bytes")
+            return {"version": 1, "target": target, "binaries": []}
+
+        def pack(plan, target, payload, output):
+            with tarfile.open(output, "w:gz") as archive:
+                archive.add(payload, arcname=output.name.removesuffix(".tar.gz"))
+            return distribution.native_payload.file_hash(output)
+
+        stack = ExitStack()
+        self.addCleanup(stack.close)
+        for owner, name, callback in ((distribution, "run", run), (distribution, "download", download),
+                                     (distribution, "extract_verified", extract), (distribution.native_sdk, "build", sdk_build),
+                                     (distribution.native_postgres, "build", pg_build), (distribution.native_payload, "assemble", assemble),
+                                     (distribution.native_payload, "pack", pack)):
+            stack.enter_context(patch.object(owner, name, side_effect=callback))
+        stack.enter_context(patch.object(distribution, "verify_module_bundle"))
+        stack.enter_context(patch.object(distribution.native_sdk, "host_target", return_value=target))
+        return value, calls
+
+    def test_full_pipeline_only_exports_archive_after_extracted_acceptance(self):
+        value, calls = self.pipeline()
+        result = distribution.build(value, self.root, "linux-amd64", self.root / "module-bundle", self.output)
+        self.assertTrue((self.output / result["archive"]).is_file())
+        self.assertTrue((self.output / (result["archive"] + ".sha256")).is_file())
+        evidence = json.loads((self.output / "distribution-checks.json").read_text())
+        self.assertEqual(evidence["installed_workflow"], "passed")
+        self.assertEqual(evidence["network_isolation"], "linux-network-namespace")
+        self.assertFalse(evidence["ocaml"]["compiler_source_hash_verified"])
+        self.assertFalse(evidence["published"])
+        self.assertEqual(evidence["minimum_os_runtime"], "not-established")
+        build_calls = [args for args, _ in calls if "./cmd/..." in args]
+        self.assertEqual(len(build_calls), 1)
+        self.assertIn("-trimpath", build_calls[0])
+        self.assertIn("-buildvcs=false", build_calls[0])
+        self.assertIn("-ldflags", build_calls[0])
+        self.assertFalse(list(self.root.glob(".tesl-distribution-*")))
+
+    def test_failed_audit_or_acceptance_never_exports_success_artifacts(self):
+        for failure in ("audit", "acceptance"):
+            with self.subTest(failure=failure):
+                value, calls = self.pipeline(failure)
+                expected = ValueError if failure == "audit" else subprocess.CalledProcessError
+                message = "payload audit failed" if failure == "audit" else "TestInstalledToolchainWorkflow"
+                with self.assertRaisesRegex(expected, message):
+                    distribution.build(value, self.root, "linux-amd64", self.root / "modules", self.output)
+                acceptance_ran = any("^TestInstalledToolchainWorkflow$" in args for args, _ in calls)
+                self.assertEqual(acceptance_ran, failure == "acceptance")
+                self.assertFalse(self.output.exists())
+                self.assertFalse(list(self.root.glob(".tesl-distribution-*")))
+
+    def test_macos_evidence_retains_network_and_minimum_os_limitations(self):
+        value, calls = self.pipeline(target="darwin-arm64")
+        result = distribution.build(value, self.root, "darwin-arm64", self.root / "modules", self.output)
+        self.assertEqual(result["network_isolation"], "not-tested")
+        self.assertEqual(result["minimum_os_runtime"], "not-established")
+        self.assertTrue(all(environment["MACOSX_DEPLOYMENT_TARGET"] == "13.0" for _, environment in calls))
+
+    def test_windows_and_existing_output_fail_before_build(self):
+        with self.assertRaisesRegex(ValueError, "Windows distribution awaits"):
+            distribution.build(plan("windows-amd64"), self.root, "windows-amd64", self.root / "modules", self.output)
+        self.output.mkdir()
+        with patch.object(distribution.native_sdk, "host_target", return_value="linux-amd64"):
+            with self.assertRaisesRegex(ValueError, "already exists"):
+                distribution.build(plan(), self.root, "linux-amd64", self.root / "modules", self.output)
+
+
+if __name__ == "__main__":
+    unittest.main()

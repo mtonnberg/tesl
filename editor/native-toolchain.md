@@ -82,6 +82,12 @@ do not require a host C compiler. Development without an installation manifest
 retains user Go configuration. See [`nix/RELEASES.md`](../nix/RELEASES.md) for the
 verified module-bundle builder and its empty-cache acceptance test.
 
+The native candidate assembler and extracted-installation test are described in
+[`nix/RELEASES.md`](../nix/RELEASES.md#native-candidate-archives). The latter uses the
+actual installed CLI with managed PostgreSQL, fresh caches and no development
+tools on PATH. Candidate builds still require platform CI evidence before they
+can establish support; there is no published native installation channel yet.
+
 ## Behavioral verification
 
 | Area | Regression coverage |

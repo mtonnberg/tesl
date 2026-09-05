@@ -1,0 +1,217 @@
+"""Native PostgreSQL builds must preserve source identity and loader closure."""
+
+import json
+import os
+from pathlib import Path
+import subprocess
+import tempfile
+import unittest
+from unittest.mock import patch
+
+import native_postgres as pg
+
+
+class NativePostgresTest(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="postgres component å ")
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.plan = {"version": 1, "toolchainVersion": "0.3.1-dev.test", "sourceRevision": "abc",
+                     "sourceDateEpoch": 42, "candidates": [{"target": "linux-amd64"},
+                                                            {"target": "darwin-arm64", "baseline": "macOS 13"},
+                                                            {"target": "windows-amd64"}],
+                     "sources": {"postgresql": {"version": "17.10", "hash": "pinned"}}}
+        patcher = patch.object(pg, "native_target", return_value="linux-amd64")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def install_fixture(self, prefix):
+        for command in pg.COMMANDS:
+            path = prefix / "bin" / command
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"\x7fELF fake unit-test binary")
+        (prefix / "lib").mkdir()
+        (prefix / "lib/libpq.so.5").write_bytes(b"\x7fELF fake shared library")
+        (prefix / "share/timezone").mkdir(parents=True)
+        for resource in ("postgres.bki", "postgresql.conf.sample"):
+            (prefix / "share" / resource).write_text("resource")
+
+    def extract_fixture(self, source, archive, destination):
+        destination.mkdir()
+        (destination / "configure").write_text("PACKAGE_VERSION='17.10'\n")
+        (destination / "COPYRIGHT").write_text("PostgreSQL license")
+        (destination / "src/backend/regex").mkdir(parents=True)
+        (destination / "src/backend/regex/COPYRIGHT").write_text("Regex license")
+        return destination
+
+    def run_fixture(self, arguments, directory, environment, capture=False):
+        if arguments[-1] == "install":
+            stage = Path(next(item.removeprefix("DESTDIR=") for item in arguments if item.startswith("DESTDIR=")))
+            self.install_fixture(stage / pg.PREFIX.lstrip("/"))
+        if arguments[-1] == "--version":
+            return "PostgreSQL 17.10\n"
+        return None
+
+    def test_validation_rejects_bad_plan_target_host_and_jobs_before_extraction(self):
+        cases = [(dict(self.plan, version=2), "linux-amd64", 2, "release plan"),
+                 (self.plan, "linux-arm64", 2, "absent"),
+                 (self.plan, "windows-amd64", 2, "Linux and macOS"),
+                 (self.plan, "darwin-arm64", 2, "native host"),
+                 (self.plan, "linux-amd64", 0, "positive integer"),
+                 (self.plan, "linux-amd64", True, "positive integer"),
+                 (dict(self.plan, sources={"postgresql": {"version": "17; echo bad"}}),
+                  "linux-amd64", 2, "invalid PostgreSQL version")]
+        for plan, target, jobs, error in cases:
+            with self.subTest(target=target, jobs=jobs, error=error):
+                with patch.object(pg, "extract_verified") as extract:
+                    with self.assertRaisesRegex(ValueError, error):
+                        pg.build(plan, target, self.root / "archive", self.root / "output", jobs)
+                    extract.assert_not_called()
+
+    def test_configure_uses_relocatable_layout_and_disables_optional_libraries(self):
+        args = pg.configure_arguments(Path("source"))
+        self.assertIn("--prefix=/tesl-postgresql", args)
+        self.assertIn("--disable-nls", args)
+        self.assertNotIn("--with-system-tzdata", " ".join(args))
+        # PostgreSQL's --without-ssl is rejected by its own configure script;
+        # --without-openssl is the supported way to disable the optional library.
+        self.assertIn("--without-openssl", args)
+        self.assertNotIn("--without-ssl", args)
+        for option in ("icu", "readline", "zlib", "llvm", "gssapi", "ldap", "lz4", "zstd"):
+            self.assertIn("--without-" + option, args)
+        self.assertEqual(pg.make_arguments("linux-amd64"), ["rpath=-Wl,-rpath,'$$ORIGIN/../lib'"])
+        self.assertEqual(pg.make_arguments("darwin-arm64"), ["rpath=-Wl,-rpath,@loader_path/../lib"])
+
+    def test_environment_removes_injected_link_flags_and_host_library_searches(self):
+        hostile = {key: "host injected" for key in ("LDFLAGS", "LIBS", "NIX_LDFLAGS", "CPPFLAGS",
+                   "MAKEFLAGS", "LD_LIBRARY_PATH", "DYLD_LIBRARY_PATH", "PKG_CONFIG_PATH", "ICU_LIBS",
+                   "CPATH", "CFLAGS", "CONFIG_SITE", "MAKELEVEL", "with_ssl",
+                   "DYLD_FALLBACK_LIBRARY_PATH", "LD_PRELOAD", "ac_cv_lib_ssl_SSL_new")}
+        with patch.dict(os.environ, dict(hostile, PATH="native tools"), clear=True):
+            environment = pg.build_environment(self.plan)
+        self.assertEqual(environment["PATH"], "native tools")
+        self.assertEqual(environment["CFLAGS"], "-O2")
+        self.assertEqual(environment["CONFIG_SITE"], "/dev/null")
+        self.assertEqual(environment["SOURCE_DATE_EPOCH"], "42")
+        self.assertEqual(environment["MAKELEVEL"], "0")
+        for key in set(hostile) - {"CFLAGS", "CONFIG_SITE", "MAKELEVEL"}:
+            self.assertNotIn(key, environment)
+
+    def test_macos_deployment_target_comes_from_plan_and_requires_valid_baseline(self):
+        with patch.dict(os.environ, {"MACOSX_DEPLOYMENT_TARGET": "15.2"}):
+            environment = pg.build_environment(self.plan, "darwin-arm64")
+        self.assertEqual(environment["MACOSX_DEPLOYMENT_TARGET"], "13")
+        self.plan["candidates"][1]["baseline"] = "latest"
+        with self.assertRaisesRegex(ValueError, "macOS baseline"):
+            pg.build_environment(self.plan, "darwin-arm64")
+
+    def test_build_stages_resources_and_license_and_preserves_source_identity(self):
+        with patch.object(pg, "extract_verified", side_effect=self.extract_fixture) as extract, \
+                patch.object(pg, "run", side_effect=self.run_fixture) as run, \
+                patch.object(pg, "audit", return_value={"bin/postgres": ["libc.so.6"]}):
+            output = pg.build(self.plan, "linux-amd64", self.root / "archive", self.root / "output", 3)
+        extract.assert_called_once()
+        self.assertEqual(extract.call_args.args[0], self.plan["sources"]["postgresql"])
+        pg.check_layout(output)
+        self.assertEqual((output / "COPYRIGHT").read_text(), "PostgreSQL license")
+        metadata = json.loads((output / "native-build.json").read_text())
+        self.assertEqual(metadata["source"], self.plan["sources"]["postgresql"])
+        self.assertEqual(metadata["source_revision"], "abc")
+        self.assertEqual(metadata["target"], "linux-amd64")
+        self.assertEqual((output / "licenses/src/backend/regex/COPYRIGHT").read_text(), "Regex license")
+        self.assertEqual(metadata["licenses"], ["COPYRIGHT", "src/backend/regex/COPYRIGHT"])
+        self.assertIn("ssl", metadata["disabled_features"])
+        self.assertIn("share/timezone", [p.relative_to(output).as_posix() for p in output.rglob("*")])
+        self.assertEqual(run.call_args_list[1].args[0][:3], ["make", "-j", "3"])
+        self.assertEqual(sorted(path.name for path in self.root.iterdir()), ["output"])
+
+    def test_failed_extraction_or_build_never_publishes_partial_component(self):
+        for phase in ("extract", "configure", "audit", "version"):
+            with self.subTest(phase=phase):
+                def run(arguments, *args, **kwargs):
+                    if phase == "configure" and arguments[0].endswith("configure"):
+                        raise subprocess.CalledProcessError(1, arguments)
+                    if phase == "version" and arguments[-1] == "--version":
+                        return "PostgreSQL 16.0"
+                    return self.run_fixture(arguments, *args, **kwargs)
+                extract_effect = ValueError("bad checksum") if phase == "extract" else self.extract_fixture
+                with patch.object(pg, "extract_verified", side_effect=extract_effect), \
+                        patch.object(pg, "run", side_effect=run), \
+                        patch.object(pg, "audit", side_effect=ValueError("bad dependency") if phase == "audit" else None):
+                    with self.assertRaises((ValueError, subprocess.CalledProcessError)):
+                        pg.build(self.plan, "linux-amd64", self.root / "archive", self.root / "output")
+                self.assertEqual(list(self.root.iterdir()), [])
+
+    def test_existing_output_and_source_version_mismatch_fail_before_build(self):
+        output = self.root / "output"
+        output.mkdir()
+        with patch.object(pg, "extract_verified") as extract, self.assertRaisesRegex(ValueError, "already exists"):
+            pg.build(self.plan, "linux-amd64", self.root / "archive", output)
+        extract.assert_not_called()
+        output.rmdir()
+        self.plan["sources"]["postgresql"]["version"] = "18.0"
+        with patch.object(pg, "extract_verified", side_effect=self.extract_fixture), patch.object(pg, "run") as run:
+            with self.assertRaisesRegex(ValueError, "source version differs"):
+                pg.build(self.plan, "linux-amd64", self.root / "archive", output)
+            run.assert_not_called()
+
+    def test_layout_requires_all_commands_resources_and_contained_links(self):
+        self.install_fixture(self.root / "prefix")
+        pg.check_layout(self.root / "prefix")
+        for relative in ("bin/psql", "share/postgres.bki"):
+            path = self.root / "prefix" / relative
+            content = path.read_bytes()
+            path.unlink()
+            with self.assertRaisesRegex(ValueError, "missing"):
+                pg.check_layout(self.root / "prefix")
+            path.write_bytes(content)
+        if os.name != "nt":
+            link = self.root / "prefix/lib/libpq.so"
+            link.symlink_to("libpq.so.5")
+            pg.check_layout(self.root / "prefix")
+            link.unlink()
+            link.symlink_to("../../../escape")
+            with self.assertRaisesRegex(ValueError, "escaping symlink"):
+                pg.check_layout(self.root / "prefix")
+
+    def test_linux_audit_rejects_missing_libraries_and_absolute_runtime_paths(self):
+        self.install_fixture(self.root / "prefix")
+        good = "(NEEDED) Shared library: [libpq.so.5]\n(NEEDED) Shared library: [libc.so.6]\n(RUNPATH) Library runpath: [$ORIGIN/../lib]\n"
+        with patch.object(pg, "run", return_value=good):
+            self.assertIn("bin/psql", pg.audit(self.root / "prefix", "linux-amd64", {}))
+        for output in (good.replace("libpq.so.5", "libssl.so.3"),
+                       good.replace("$ORIGIN/../lib", "/tmp/host/lib"),
+                       good.replace("$ORIGIN/../lib", "$ORIGIN/../lib:/opt/homebrew/lib"),
+                       "(NEEDED) Shared library: [libpq.so.5]"):
+            with self.subTest(output=output), patch.object(pg, "run", return_value=output):
+                with self.assertRaises(ValueError):
+                    pg.audit(self.root / "prefix", "linux-amd64", {})
+
+    def test_macos_relocation_changes_owned_dylibs_and_resigns_each_binary(self):
+        prefix = self.root / "prefix"
+        paths = [prefix / "bin/psql", prefix / "lib/libpq.5.dylib"]
+        with patch.object(pg, "binary_files", return_value=iter(paths)), patch.object(pg, "run") as run:
+            run.return_value = "file:\n /tesl-postgresql/lib/libpq.5.dylib (compatibility version 5.0)\n /usr/lib/libSystem.B.dylib (compatibility version 1.0)\n"
+            pg.relocate_macos(prefix, {})
+        commands = [call.args[0] for call in run.call_args_list]
+        self.assertIn(["install_name_tool", "-change", "/tesl-postgresql/lib/libpq.5.dylib",
+                       "@rpath/libpq.5.dylib", str(paths[0])], commands)
+        self.assertIn(["install_name_tool", "-id", "@rpath/libpq.5.dylib", str(paths[1])], commands)
+        self.assertEqual(sum(command[0] == "codesign" for command in commands), 2)
+
+    def test_macos_audit_rejects_host_library_paths(self):
+        prefix = self.root / "prefix"
+        self.install_fixture(prefix)
+        (prefix / "lib/libpq.5.dylib").write_bytes(b"\xcf\xfa\xed\xfe fake")
+        for library, succeeds in (("/usr/lib/libSystem.B.dylib", True), ("@rpath/libpq.5.dylib", True),
+                                  ("/opt/homebrew/lib/libpq.5.dylib", False), ("@rpath/missing.dylib", False)):
+            with self.subTest(library=library), patch.object(pg, "run", return_value="file:\n " + library + " (version)\n"):
+                if succeeds:
+                    pg.audit(prefix, "darwin-arm64", {})
+                else:
+                    with self.assertRaisesRegex(ValueError, "unbundled"):
+                        pg.audit(prefix, "darwin-arm64", {})
+
+
+if __name__ == "__main__":
+    unittest.main()

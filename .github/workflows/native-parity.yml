@@ -22,11 +22,9 @@ jobs:
       ocaml: ${{ steps.export.outputs.ocaml }}
     steps:
       - uses: actions/checkout@v4
-      - name: Test native gate failure reporting
-        run: |
-          python3 -m unittest discover -s scripts -p test_native_parity.py
-          python3 -m unittest discover -s scripts -p test_module_proxy.py
       - uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25
+      - name: Test native packaging helpers
+        run: python3 -m unittest discover -s scripts -p 'test_*.py'
       - name: Test release version identity
         run: |
           nix-instantiate --eval --strict --json nix/tests/release-identity.nix
@@ -63,6 +61,9 @@ jobs:
     needs: plan
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
+    env:
+      # Applies while OCaml itself is built as well as when Tesl is linked.
+      MACOSX_DEPLOYMENT_TARGET: '13.0'
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
@@ -83,11 +84,24 @@ jobs:
         with:
           ocaml-compiler: ${{ needs.plan.outputs.ocaml }}
           windows-compiler: mingw
+          cache-prefix: native-payload-macos13-v1
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
       - name: Build and exercise native compiler and tools
         run: python scripts/native-parity.py --plan native-release-plan.json --target ${{ matrix.target }} --module-bundle native-module-bundle
+      - name: Assemble and test native candidate archive
+        if: ${{ !startsWith(matrix.target, 'windows-') }}
+        run: python3 scripts/native_distribution.py --plan native-release-plan.json --target ${{ matrix.target }} --module-bundle native-module-bundle --output artifacts/distribution-${{ matrix.target }}
+      - uses: actions/upload-artifact@v4
+        if: ${{ !startsWith(matrix.target, 'windows-') }}
+        with:
+          name: native-candidate-${{ matrix.target }}
+          path: |
+            artifacts/distribution-${{ matrix.target }}/*.tar.gz
+            artifacts/distribution-${{ matrix.target }}/*.sha256
+            artifacts/distribution-${{ matrix.target }}/*.json
+          if-no-files-found: error
       - uses: actions/upload-artifact@v4
         with:
           name: native-evidence-${{ matrix.target }}

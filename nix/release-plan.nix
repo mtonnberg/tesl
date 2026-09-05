@@ -10,6 +10,8 @@ let
     urls = package.src.urls or [ package.src.url ];
     hash = package.src.outputHash;
     hashAlgorithm = "sha256";
+    hashMode = package.src.outputHashMode or "flat";
+    stripRoot = package.src.stripRoot or false;
   };
 in rec {
   version = 1;

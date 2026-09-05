@@ -1,0 +1,211 @@
+#!/usr/bin/env python3
+"""Build an audited native archive and test its extracted installation, without publishing."""
+
+import argparse
+import json
+import os
+from pathlib import Path
+import re
+import shutil
+import subprocess
+import tempfile
+import time
+from urllib.parse import urlparse
+from urllib.request import urlopen
+
+import native_payload
+import native_postgres
+import native_sdk
+from module_proxy import verify as verify_module_bundle
+from native_source import MAX_SOURCE_BYTES, extract_verified
+
+
+def run(arguments, root, environment, capture=False, timeout=1800):
+    print("Native distribution: " + " ".join(map(str, arguments)), flush=True)
+    result = subprocess.run(list(map(str, arguments)), cwd=root, env=environment,
+                            check=True, text=True, capture_output=capture, timeout=timeout)
+    return result.stdout.strip() if capture else None
+
+
+def verify_checkout(plan, root, environment):
+    revision = run(["git", "rev-parse", "HEAD"], root, environment, capture=True, timeout=30)
+    dirty = run(["git", "status", "--porcelain", "--untracked-files=no"], root,
+                environment, capture=True, timeout=30)
+    if plan.get("sourceRevision") == "worktree":
+        if plan.get("release", {}).get("publishableSource") is not False:
+            raise ValueError("worktree preview requires explicit non-publishable source identity")
+    elif (not re.fullmatch(r"[0-9a-f]{40}", plan.get("sourceRevision", ""))
+          or revision != plan["sourceRevision"] or dirty):
+        raise ValueError("distribution requires the planned commit with clean tracked source")
+    return {"head": revision, "tracked_changes": bool(dirty),
+            "worktree_preview": plan["sourceRevision"] == "worktree"}
+
+
+def download(source, output):
+    """Fetch a declared source with byte, socket, and overall time bounds.
+
+    Hash verification happens before extraction/build in extract_verified. HTTP
+    is accepted only because the authoritative OCaml input currently uses it;
+    the pinned SRI digest, rather than the transport, authenticates those bytes.
+    """
+    if output.exists() or output.is_symlink():
+        raise ValueError("source download output already exists")
+    urls = source.get("urls", [])
+    if not isinstance(urls, list) or not urls:
+        raise ValueError("source has no declared download URLs")
+    errors, attempts = [], []
+    for url in urls:
+        if not isinstance(url, str) or urlparse(url).scheme not in {"http", "https"}:
+            raise ValueError("source URL must use HTTP or HTTPS")
+        # Same-host HTTPS is preferable for legacy HTTP declarations. The exact
+        # archive still has to satisfy the Nix-pinned source hash before use.
+        if url.startswith("http://"):
+            attempts.append("https://" + url[7:])
+        attempts.append(url)
+    for url in dict.fromkeys(attempts):
+        try:
+            started, size = time.monotonic(), 0
+            with urlopen(url, timeout=30) as response, output.open("xb") as stream:
+                if urlparse(response.geturl()).scheme not in {"http", "https"}:
+                    raise ValueError("source redirect uses an unsupported protocol")
+                while data := response.read(1024 * 1024):
+                    size += len(data)
+                    if size > MAX_SOURCE_BYTES or time.monotonic() - started > 300:
+                        raise ValueError("source download exceeds its size or time bound")
+                    stream.write(data)
+            return {"requested_url": url, "final_url": response.geturl(),
+                    "archive_sha256": native_payload.file_hash(output)}
+        except (OSError, ValueError) as error:
+            output.unlink(missing_ok=True)
+            errors.append(str(error))
+    raise ValueError("source download failed: " + "; ".join(errors))
+
+
+def build_environment(environment, target, sdk, work, module_bundle):
+    result = native_sdk.build_environment(environment, target, sdk, work)
+    result.update(GOROOT=str(sdk), PATH=str(sdk / "bin") + os.pathsep + environment.get("PATH", ""),
+                  GOPROXY=(module_bundle / "proxy").as_uri(), GONOPROXY="none",
+                  GOPRIVATE="", GONOSUMDB="none", GOVCS="*:off")
+    return result
+
+
+def acceptance_command(target, go, root):
+    arguments = [str(go), "-C", str(root / "runtime/go"), "test", "./internal/cli",
+                 "-run", "^TestInstalledToolchainWorkflow$", "-count=1", "-timeout=20m", "-v"]
+    if target.startswith("linux-"):
+        # Preserve the invoking UID so PostgreSQL does not see uid 0. Only the
+        # new namespace receives capabilities needed to bring up loopback.
+        arguments = ["unshare", "--user", "--map-current-user", "--keep-caps", "--net",
+                     "sh", "-c", 'ip link set lo up && exec "$@"', "sh", *arguments]
+    return arguments
+
+
+def ocaml_licenses(source, output):
+    directory = source
+    if not (directory / "LICENSE").is_file():
+        children = list(source.iterdir())
+        if len(children) != 1 or not children[0].is_dir():
+            raise ValueError("OCaml source has no unique licensed root")
+        directory = children[0]
+    if not (directory / "LICENSE").is_file():
+        raise ValueError("OCaml source license is missing")
+    output.mkdir()
+    shutil.copyfile(directory / "LICENSE", output / "LICENSE")
+    if (directory / "LICENSES").is_dir():
+        shutil.copytree(directory / "LICENSES", output / "LICENSES")
+    return output
+
+
+def build(plan, root, target, module_bundle, output):
+    root, module_bundle, output = Path(root).resolve(), Path(module_bundle).resolve(), Path(output).absolute()
+    native_payload.payload_contract(plan, target)
+    if target.startswith("windows-"):
+        raise ValueError("Windows distribution awaits the native PostgreSQL and PE dependency audits")
+    if target != native_sdk.host_target():
+        raise ValueError("distribution builder requires the native target host")
+    if output.exists() or output.is_symlink():
+        raise ValueError("distribution output already exists")
+    environment = dict(os.environ)
+    if target.startswith("darwin-"):
+        environment["MACOSX_DEPLOYMENT_TARGET"] = "13.0"
+    source_identity = verify_checkout(plan, root, environment)
+    verify_module_bundle(plan, root, module_bundle)
+    ocaml_version = run(["opam", "exec", "--", "ocamlc", "-version"], root, environment, capture=True)
+    dune_version = run(["opam", "exec", "--", "dune", "--version"], root, environment, capture=True)
+    if ocaml_version != plan["sources"]["ocaml"]["version"] or dune_version != plan["sources"]["dune"]["version"]:
+        raise ValueError("native OCaml or Dune version differs from the release plan")
+    bootstrap = Path(run(["go", "env", "GOROOT"], root, environment, capture=True)).resolve()
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=".tesl-distribution-", dir=output.parent) as temporary:
+        work = Path(temporary)
+        archives = {name: work / (name + ".tar") for name in ("go", "postgresql", "ocaml")}
+        downloads = {name: download(plan["sources"][name], archive) for name, archive in archives.items()}
+        sdk = native_sdk.build(plan, target, archives["go"], bootstrap, work / "sdk")
+        postgres = native_postgres.build(plan, target, archives["postgresql"], work / "postgres")
+        license_source = extract_verified(plan["sources"]["ocaml"], archives["ocaml"], work / "ocaml-source")
+        licenses = ocaml_licenses(license_source, work / "ocaml-licenses")
+        build_env = build_environment(environment, target, sdk, work / "build", module_bundle)
+        run(["opam", "exec", "--", "dune", "build", "--profile", "release", "bin/main.exe"],
+            root / "compiler", build_env)
+        frontends = work / "frontends"
+        frontends.mkdir()
+        flags = (f"-X=tesl.dev/runtime/go/internal/toolchain.buildVersion={plan['toolchainVersion']} "
+                 f"-X=tesl.dev/runtime/go/internal/toolchain.buildRevision={plan['sourceRevision']}")
+        run([sdk / "bin/go", "build", "-trimpath", "-buildvcs=false", "-ldflags", flags,
+             "-o", str(frontends) + os.sep, "./cmd/..."], root / "runtime/go", build_env)
+        if verify_checkout(plan, root, environment) != source_identity:
+            raise ValueError("tracked source identity changed during native build")
+        payload = work / "payload"
+        audit = native_payload.assemble(plan, root, target, root / "compiler/_build/default/bin/main.exe",
+                                        frontends, sdk, postgres, module_bundle, licenses, payload)
+        artifacts = work / "artifacts"
+        artifacts.mkdir()
+        archive = artifacts / plan["payloads"][target]["archiveName"]
+        digest = native_payload.pack(plan, target, payload, archive)
+        (artifacts / (archive.name + ".sha256")).write_text(f"{digest}  {archive.name}\n", encoding="utf-8")
+        unpacked = work / "unpacked"
+        unpacked.mkdir()
+        # This archive was just assembled and audited above, not supplied by an
+        # external caller. Native tar preserves its relative links and modes.
+        run(["tar", "-xzf", archive, "-C", unpacked], root, environment)
+        installed = unpacked / archive.name.removesuffix(".tar.gz")
+        test_env = dict(build_env, TESL_TEST_INSTALLED_ROOT=str(installed))
+        run(acceptance_command(target, sdk / "bin/go", root), root, test_env, timeout=1500)
+        if native_payload.file_hash(archive) != digest:
+            raise ValueError("archive changed during installed acceptance")
+        evidence = {
+            "version": 1, "target": target, "toolchain_version": plan["toolchainVersion"],
+            "source_revision": plan["sourceRevision"], "checkout": source_identity,
+            "archive": archive.name, "sha256": digest, "candidate_only": True,
+            "installed_workflow": "passed", "payload_audit": audit,
+            "network_isolation": "linux-network-namespace" if target.startswith("linux-") else "not-tested",
+            "minimum_os_runtime": "not-established", "signed_distribution": "not-tested",
+            "published": False,
+            "source_downloads": downloads,
+            "sources": {"go": plan["sources"]["go"], "postgresql": plan["sources"]["postgresql"]},
+            "ocaml": {"version": ocaml_version, "selection": "opam-version",
+                      "compiler_source_hash_verified": False,
+                      "license_source": plan["sources"]["ocaml"]},
+            "dune": {"version": dune_version, "selection": "opam-version", "source_hash_verified": False},
+        }
+        (artifacts / "distribution-checks.json").write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        artifacts.rename(output)
+    return evidence
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    for name in ("plan", "module-bundle", "output"):
+        parser.add_argument("--" + name, type=Path, required=True)
+    parser.add_argument("--target", required=True)
+    args = parser.parse_args()
+    try:
+        build(json.loads(args.plan.read_text(encoding="utf-8")), Path(__file__).resolve().parent.parent,
+              args.target, args.module_bundle, args.output)
+    except (OSError, ValueError, subprocess.SubprocessError) as error:
+        raise SystemExit(f"native distribution failed: {error}") from error
+    print(f"Candidate archive and installed-workflow evidence: {args.output}")
+
+
+if __name__ == "__main__":
+    main()
