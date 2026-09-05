@@ -386,7 +386,7 @@ func writeWorkspaceFrame(writer io.Writer, payload []byte) error {
 		return errors.New("compiler: workspace frame exceeds limit")
 	}
 	var header [4]byte
-	binary.BigEndian.PutUint32(header[:], uint32(len(payload)))
+	binary.BigEndian.PutUint32(header[:], uint32(len(payload))) // #nosec G115 -- len is nonnegative and bounded to 8 MiB immediately above.
 	if n, err := writer.Write(header[:]); err != nil {
 		return err
 	} else if n != len(header) {

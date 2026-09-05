@@ -32,6 +32,8 @@ func (compiler *requestCompiler) answer(ctx context.Context, flag, source string
 		}
 	}
 	switch flag {
+	case "--check-json":
+		return []byte(`{"version":1,"diagnostics":[]}`), tooling.Result{}, nil
 	case "--completions-json":
 		return []byte(`{"version":1,"completions":[{"label":"UnsafeLateEdit","detail":"type","kind":"type"}]}`), tooling.Result{}, nil
 	case "--doc-json":
@@ -272,6 +274,11 @@ func TestRequestCancellationIdentityAndLateNotifications(t *testing.T) {
 }
 
 func TestRequestKeysRejectInvalidIDsAndDistinguishStrings(t *testing.T) {
+	for _, raw := range []string{`-2147483648`, `2147483647`, `""`, `"\uD83D\uDE00"`} {
+		if _, valid := requestKey(json.RawMessage(raw)); !valid {
+			t.Errorf("rejected valid id %q", raw)
+		}
+	}
 	for _, raw := range []string{"", " null ", "{}", "[]", "true", "1.5", "2147483648", "-2147483649"} {
 		if key, valid := requestKey(json.RawMessage(raw)); valid {
 			t.Errorf("accepted %q as %q", raw, key)
@@ -343,4 +350,44 @@ func TestServerContextCancellationClosesBlockedInput(t *testing.T) {
 	cancel()
 	awaitSignal(t, finished, "cancellation with idle input")
 	awaitSignal(t, server.requests.done, "input reader cleanup")
+}
+
+func TestServerRefusesOverloadWithoutLeavingActiveQueryRunning(t *testing.T) {
+	for _, reason := range []string{"count", "duplicate"} {
+		t.Run(reason, func(t *testing.T) {
+			compiler := &requestCompiler{started: make(chan struct{}), canceled: make(chan struct{})}
+			connection := newRequestConnection(t, compiler)
+			connection.send(t, "1", "textDocument/hover", connection.position())
+			awaitSignal(t, compiler.started, "active query")
+			if reason == "count" {
+				for i := 0; i < maxPendingMessages; i++ {
+					connection.send(t, "", "$/noop", nil)
+				}
+			}
+			id := "1"
+			if reason == "count" {
+				id = "2"
+			}
+			// This frame may race with the server closing the overloaded input.
+			_ = connection.writer.WriteJSON(protocol.Request{JSONRPC: "2.0", ID: json.RawMessage(id), Method: "textDocument/hover"})
+			awaitSignal(t, compiler.canceled, "overload cancellation")
+			select {
+			case status := <-connection.status:
+				if status != 1 {
+					t.Fatalf("overload status %d", status)
+				}
+			case <-time.After(3 * time.Second):
+				t.Fatal("overloaded session did not exit")
+			}
+			explicit := false
+			for response := range connection.responses {
+				if response.Error != nil && response.Error.Code == invalidRequest {
+					explicit = true
+				}
+			}
+			if !explicit {
+				t.Fatal("overload was not reported as a protocol error")
+			}
+		})
+	}
 }

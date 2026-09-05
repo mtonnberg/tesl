@@ -2,7 +2,7 @@
 
 Source audit: 2026-09-05. This inventory describes the Go server in
 `runtime/go/internal/lsp/server.go`, not historical Racket implementations.
-The executable fixtures are in `server_test.go`, `completion_test.go`, and
+The executable fixtures are in `server_test.go`, `completion_test.go`,
 `requests_test.go`, and `internal/tooling/session_test.go` beside those implementations.
 
 | Surface | Compiler contract | Current boundary |
