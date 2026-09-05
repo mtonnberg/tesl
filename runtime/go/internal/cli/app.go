@@ -59,10 +59,7 @@ func execute(ctx context.Context, invocation Invocation) error {
 			return err
 		}
 		defer release()
-		if err := childprocess.ConfigurePersistent(command); err != nil {
-			return err
-		}
-		err = command.Run()
+		err = childprocess.RunPersistent(command)
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}

@@ -174,6 +174,10 @@ assert json.loads(result)['root'] == chr(229), ascii(result)
                 return "3.21.1"
             if args[:3] == ["go", "env", "GOROOT"]:
                 return str(self.root / "bootstrap")
+            if "^TestNativePostgresRetainsInstalledVersionLease$" in args:
+                self.assertTrue(Path(environment["TESL_TEST_POSTGRES_ROOT"]).is_dir())
+                if failure == "postgres-lease":
+                    raise subprocess.CalledProcessError(1, args)
             if args[0] == "tar":
                 with tarfile.open(args[2], "r:gz") as archive:
                     archive.extractall(args[4], filter="data")
@@ -257,6 +261,7 @@ assert json.loads(result)['root'] == chr(229), ascii(result)
         self.assertTrue((self.output / (result["archive"] + ".sha256")).is_file())
         evidence = json.loads((self.output / "distribution-checks.json").read_text())
         self.assertEqual(evidence["installed_workflow"], "passed")
+        self.assertEqual(evidence["postgres_version_lease"], "passed")
         self.assertEqual(evidence["network_isolation"], "linux-network-namespace")
         self.assertTrue(evidence["ocaml"]["compiler_source_hash_verified"])
         self.assertTrue(evidence["dune"]["source_hash_verified"])
@@ -271,15 +276,18 @@ assert json.loads(result)['root'] == chr(229), ascii(result)
         self.assertFalse(list(self.root.glob(".tesl-distribution-*")))
 
     def test_failed_audit_or_acceptance_never_exports_success_artifacts(self):
-        for failure in ("audit", "acceptance"):
+        for failure in ("postgres-lease", "audit", "acceptance"):
             with self.subTest(failure=failure):
                 value, calls = self.pipeline(failure)
                 expected = ValueError if failure == "audit" else subprocess.CalledProcessError
-                message = "payload audit failed" if failure == "audit" else "TestInstalledToolchainWorkflow"
+                message = {"audit": "payload audit failed", "acceptance": "TestInstalledToolchainWorkflow",
+                           "postgres-lease": "TestNativePostgresRetainsInstalledVersionLease"}[failure]
                 with self.assertRaisesRegex(expected, message):
                     distribution.build(value, self.root, "linux-amd64", self.root / "modules", self.output)
                 acceptance_ran = any("^TestInstalledToolchainWorkflow$" in args for args, _ in calls)
                 self.assertEqual(acceptance_ran, failure == "acceptance")
+                if failure == "postgres-lease":
+                    self.assertFalse(any("bin/main.exe" in args for args, _ in calls))
                 self.assertFalse(self.output.exists())
                 self.assertFalse(list(self.root.glob(".tesl-distribution-*")))
 

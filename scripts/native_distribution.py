@@ -204,10 +204,15 @@ def build(plan, root, target, module_bundle, output, cygwin_bash=None):
             downloads["msvc-runtime-license"] = download(plan["windowsRuntimeLicense"], runtime_license)
         postgres_options = {"windows_tools": windows_tools} if windows else {}
         postgres = native_postgres.build(plan, target, archives["postgresql"], work / "postgres", **postgres_options)
+        build_env = build_environment(environment, target, sdk, work / "build", module_bundle)
+        # Exercise the real daemon's inherited version lease and startup I/O
+        # before spending time building the OCaml compiler and final payload.
+        run([sdk / "bin" / ("go" + suffix), "test", "./internal/install", "-run",
+             "^TestNativePostgresRetainsInstalledVersionLease$", "-count=1", "-timeout=3m", "-v"],
+            root / "runtime/go", dict(build_env, TESL_TEST_POSTGRES_ROOT=str(postgres)), timeout=240)
         compiler_options = {"windows_archives": windows_archives, "cygwin_bash": cygwin_bash} if windows else {}
         compiler_tools = native_compiler_tools.build(plan, target, archives["ocaml"], archives["dune"], work / "compiler-tools", **compiler_options)
         licenses = compiler_tools / "licenses"
-        build_env = build_environment(environment, target, sdk, work / "build", module_bundle)
         build_env = native_compiler_tools.build_environment(build_env, plan, target, compiler_tools)
         run([compiler_tools / "bin" / ("dune" + suffix), "build", "--profile", "release", "bin/main.exe"],
             root / "compiler", build_env)
@@ -257,6 +262,7 @@ def build(plan, root, target, module_bundle, output, cygwin_bash=None):
             "source_revision": plan["sourceRevision"], "checkout": source_identity,
             "archive": archive.name, "sha256": digest, "candidate_only": True,
             "installed_workflow": "passed", "payload_audit": audit,
+            "postgres_version_lease": "passed",
             **network,
             **native_host.runtime_evidence(plan, target),
             "signed_distribution": "unsigned-by-policy" if windows else "ad-hoc-by-policy" if target.startswith("darwin-") else "not-required",

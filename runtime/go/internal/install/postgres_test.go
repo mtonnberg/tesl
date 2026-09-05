@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"tesl.dev/runtime/go/internal/childprocess"
 )
 
 func TestPostgresLeaseHelper(t *testing.T) {
@@ -151,16 +153,18 @@ func TestNativePostgresRetainsInstalledVersionLease(t *testing.T) {
 			_, _ = command.CombinedOutput()
 		}
 	})
-	command := tool("pg_ctl", "-D", data, "-l", log, "-o", "-F -p "+port+" -c listen_addresses=127.0.0.1 -c unix_socket_directories=''", "-w", "start")
+	command := tool("pg_ctl", "-D", data, "-l", log, "-o", "-F -p "+port+" -c listen_addresses=127.0.0.1 -c unix_socket_directories=", "-w", "start")
 	release, err := ConfigurePostgresLease(command, filepath.Join(m.Root, "versions", "0.3.1"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	output, err := command.CombinedOutput()
+	var output strings.Builder
+	command.Stdout, command.Stderr = &output, &output
+	err = childprocess.RunPersistent(command)
 	release()
 	if err != nil {
 		serverLog, _ := os.ReadFile(log)
-		t.Fatalf("pg_ctl: %v\n%s\n%s", err, output, serverLog)
+		t.Fatalf("pg_ctl: %v\n%s\n%s", err, output.String(), serverLog)
 	}
 	if output, err := tool("psql", "-h", "127.0.0.1", "-p", port, "-U", "tesl", "-d", "postgres", "-Atc", "create table lease_persistence(value text); insert into lease_persistence values ('preserved')").CombinedOutput(); err != nil {
 		t.Fatalf("psql: %v\n%s", err, output)
@@ -179,8 +183,11 @@ func TestNativePostgresRetainsInstalledVersionLease(t *testing.T) {
 		t.Fatalf("uninstall removed project database: %v", err)
 	}
 	stopped = false
-	if output, err := tool("pg_ctl", "-D", data, "-l", log, "-o", "-F -p "+port+" -c listen_addresses=127.0.0.1 -c unix_socket_directories=''", "-w", "start").CombinedOutput(); err != nil {
-		t.Fatalf("restart preserved database: %v\n%s", err, output)
+	command = tool("pg_ctl", "-D", data, "-l", log, "-o", "-F -p "+port+" -c listen_addresses=127.0.0.1 -c unix_socket_directories=", "-w", "start")
+	output.Reset()
+	command.Stdout, command.Stderr = &output, &output
+	if err := childprocess.RunPersistent(command); err != nil {
+		t.Fatalf("restart preserved database: %v\n%s", err, output.String())
 	}
 	if output, err := tool("psql", "-h", "127.0.0.1", "-p", port, "-U", "tesl", "-d", "postgres", "-Atc", "select value from lease_persistence").CombinedOutput(); err != nil || strings.TrimSpace(string(output)) != "preserved" {
 		t.Fatalf("database row did not survive stop/uninstall/restart: %v\n%s", err, output)
