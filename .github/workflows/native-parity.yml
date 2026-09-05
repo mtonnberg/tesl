@@ -23,7 +23,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Test native gate failure reporting
-        run: python3 -m unittest discover -s scripts -p test_native_parity.py
+        run: |
+          python3 -m unittest discover -s scripts -p test_native_parity.py
+          python3 -m unittest discover -s scripts -p test_module_proxy.py
       - uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25
       - name: Test release version identity
         run: |
@@ -45,6 +47,13 @@ jobs:
               for name in ('go', 'ocaml'):
                   output.write(name + '=' + plan['sources'][name]['version'] + '\n')
           PY
+      - name: Bundle locked Go modules for offline builds
+        run: python3 scripts/module_proxy.py --plan native-release-plan.json --output native-module-bundle
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-module-bundle
+          path: native-module-bundle
+          if-no-files-found: error
       - uses: actions/upload-artifact@v4
         with:
           name: native-release-plan
@@ -62,6 +71,10 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: native-release-plan
+      - uses: actions/download-artifact@v4
+        with:
+          name: native-module-bundle
+          path: native-module-bundle
       - uses: actions/setup-go@v5
         with:
           go-version: ${{ needs.plan.outputs.go }}
@@ -74,7 +87,7 @@ jobs:
         with:
           node-version: '22'
       - name: Build and exercise native compiler and tools
-        run: python scripts/native-parity.py --plan native-release-plan.json --target ${{ matrix.target }}
+        run: python scripts/native-parity.py --plan native-release-plan.json --target ${{ matrix.target }} --module-bundle native-module-bundle
       - uses: actions/upload-artifact@v4
         with:
           name: native-evidence-${{ matrix.target }}

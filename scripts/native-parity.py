@@ -11,6 +11,8 @@ import os
 from pathlib import Path
 import subprocess
 
+from module_proxy import verify as verify_module_bundle
+
 
 def run(arguments, directory, environment, capture=False):
     completed = subprocess.run(arguments, cwd=directory, env=environment,
@@ -36,6 +38,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--plan", type=Path, required=True)
     parser.add_argument("--target", required=True)
+    parser.add_argument("--module-bundle", type=Path, required=True)
     args = parser.parse_args()
     root = Path(__file__).resolve().parent.parent
     plan = json.loads(args.plan.read_text(encoding="utf-8"))
@@ -44,10 +47,12 @@ def main():
     if args.target not in {row["target"] for row in plan["candidates"]}:
         raise SystemExit("target absent from Nix release plan")
     environment = dict(os.environ, TESL_REPO_ROOT=str(root), GOTOOLCHAIN="local",
-                       TESL_RELEASE_PLAN=str(args.plan.resolve()))
+                       TESL_RELEASE_PLAN=str(args.plan.resolve()),
+                       TESL_TEST_MODULE_BUNDLE=str(args.module_bundle.resolve()))
     sha = run(["git", "rev-parse", "HEAD"], root, environment, capture=True)
     if plan["sourceRevision"] != sha:
         raise SystemExit("native checkout does not match the exported source revision")
+    verify_module_bundle(plan, root, args.module_bundle)
     host = run(["go", "env", "GOOS", "GOARCH"], root, environment, capture=True).splitlines()
     if "-".join(host) != args.target:
         raise SystemExit("native runner does not match its declared target")
@@ -94,6 +99,7 @@ def main():
         "version": 1, "toolchain_version": version, "source_revision": sha, "target": args.target,
         "go": go_version, "ocaml": ocaml_version, "native_parity": "passed",
         "offline_install": "not-tested", "signed_distribution": "not-tested",
+        "offline_go_modules": "passed",
     }, indent=2) + "\n", encoding="utf-8")
 
 

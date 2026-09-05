@@ -40,6 +40,14 @@ Implemented so far:
   includes versioned archive names and component manifests for all five targets;
   native binaries embed their identity and test the generated manifests. The
   contract and local checks are documented in [`nix/RELEASES.md`](../../nix/RELEASES.md).
+- [`module_proxy.py`](../../scripts/module_proxy.py) builds the offline Go module
+  bundle from the release plan's lock hashes, verifies module content checksums,
+  and collects licenses and a file inventory. Native CI verifies the transferred
+  bundle before scaffold/password/debug compilation with empty module caches.
+  Tests cover corrupt/missing modules, private-module environment overrides, and
+  unchanged installation files. This is an M2 component; the copied SDK/compiler
+  acceptance fixture does not establish native dependency closure or managed
+  PostgreSQL distribution.
 
 The native CLI is not yet the default Nix CLI: the existing full gate must pass
 before that cutover. Native parity CI is a source-build spike, not an offline
@@ -236,6 +244,8 @@ their own compiler, tools, and resources without shell wrappers or Nix paths.
 
 ### M2 — Produce complete Linux and macOS payloads
 
+- [x] Build and checksum the locked Go module proxy with licenses; add empty-cache
+  scaffold/password/debug coverage to the native matrix.
 - [ ] Build both architectures on the declared baselines and assemble pinned Go,
   generated-module dependencies, PostgreSQL, resources, and licenses.
 - [ ] Test on clean hosts without Nix, a checkout, system Go/OCaml, PostgreSQL,

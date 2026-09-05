@@ -27,6 +27,10 @@ Implemented so far:
   a compiler prefix containing spaces and Unicode without a development checkout.
 - Native extension launch without Bash and a five-target native CI definition
   consuming the Nix-exported source revision and tool versions.
+- The matrix now receives one checksum-verified offline Go module bundle and
+  exercises copied-SDK scaffold/password/debug builds with empty module caches.
+  This new step2 check still needs its native Windows CI result; it does not
+  establish compiler DLL or PostgreSQL relocation.
 
 PR #100's [native Windows job](https://github.com/mtonnberg/tesl/actions/runs/33960309969/job/101291009775)
 passed the compiler, CLI/process, LSP, compiler-session, token-ACL, and extension

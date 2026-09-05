@@ -65,6 +65,42 @@ class ModuleProxyTest(unittest.TestCase):
                 self.assertEqual(info, {"bytes": len(data), "sha256": bundle.sha256(data)})
             self.assertEqual({p.relative_to(output).as_posix() for p in output.rglob("*") if p.is_file()},
                              set(inventory["files"]) | {"inventory.json"})
+            self.assertEqual(bundle.verify(plan, root, output), inventory)
+
+    def test_transferred_bundle_rejects_changed_missing_and_extra_files(self):
+        for kind in ("changed", "missing", "extra", "symlink"):
+            with self.subTest(kind=kind), fixture() as (root, plan, source, _):
+                output = root / "bundle"
+                inventory = bundle.build(plan, root, output, source.__getitem__)
+                file = output / next(iter(inventory["files"]))
+                if kind == "changed":
+                    file.write_bytes(b"modified")
+                elif kind == "missing":
+                    file.unlink()
+                elif kind == "extra":
+                    (output / "extra").write_bytes(b"unlisted")
+                else:
+                    (output / "link").symlink_to(file)
+                with self.assertRaises(ValueError):
+                    bundle.verify(plan, root, output)
+
+    def test_transferred_bundle_rejects_mismatched_identity(self):
+        for key in ("version", "module_inputs", "toolchain_version", "source_revision"):
+            with self.subTest(key=key), fixture() as (root, plan, source, _):
+                output = root / "bundle"
+                inventory = bundle.build(plan, root, output, source.__getitem__)
+                inventory[key] = "different"
+                (output / "inventory.json").write_text(json.dumps(inventory))
+                with self.assertRaisesRegex(ValueError, "identity"):
+                    bundle.verify(plan, root, output)
+
+    def test_transferred_bundle_rejects_stale_checkout_locks(self):
+        with fixture() as (root, plan, source, _):
+            output = root / "bundle"
+            bundle.build(plan, root, output, source.__getitem__)
+            (root / bundle.LOCKS[0]).write_bytes(b"different go.mod")
+            with self.assertRaisesRegex(ValueError, "lock files"):
+                bundle.verify(plan, root, output)
 
     def test_rebuilds_ignore_zip_compression_order_and_timestamps(self):
         with fixture() as (root, plan, source, files):

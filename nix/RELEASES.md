@@ -59,6 +59,49 @@ The remaining distribution gates are in
 [`mainstream_installation.md`](../roadmap/next/mainstream_installation.md) and
 [`windows_support.md`](../roadmap/next/windows_support.md).
 
+## Offline Go module bundle
+
+The release plan includes SHA-256 hashes of `runtime/go/go.mod` and `go.sum`.
+The module builder refuses changed locks, fetches only their exact versions,
+and checks Go's `h1` content hashes before exposing a completed output directory:
+
+```sh
+nix build .#release-plan --out-link release-plan
+python3 scripts/module_proxy.py --plan release-plan --output module-bundle
+```
+
+Use `--source /path/to/pkg/mod/cache/download` to build from a complete local
+download cache. No Python packages are needed. The output contains a `proxy/`
+directory for the manifest's `go-modules` component, a `licenses/` tree, and
+`inventory.json` with the source revision, version, lock hashes, module checksums,
+and every payload file's size and SHA-256. Source archives are included only for
+versions with a pinned source checksum; older `go.mod`-only entries remain metadata.
+There is no latest-version lookup or network fallback in the installed proxy.
+
+Archive members are sorted and use fixed timestamps and uncompressed ZIP entries,
+so proxy file bytes do not depend on upstream ZIP ordering, compression, or dates.
+An eventual distribution archive can compress these files. This does not yet
+prove reproducibility of a complete native payload, its filesystem metadata,
+SDK, or PostgreSQL dependencies.
+
+Native CI creates one bundle and verifies its identity and file inventory on each
+runner before testing it. The CLI acceptance test copies the runner's compiler and
+SDK into a prefix containing spaces and Unicode, then uses empty module caches
+for both scaffolds, password hashing, and Windows debug compilation. The test
+rejects missing/corrupt modules and checks that installation files remain unchanged;
+Unix also enforces read-only permissions. Run it after building the compiler:
+
+```sh
+TESL_TEST_MODULE_BUNDLE="$PWD/module-bundle" \
+  go -C runtime/go test ./internal/cli -run TestOfflineModuleBundleWorkflow -count=1 -timeout=12m
+python3 -m unittest discover -s scripts -p test_module_proxy.py
+```
+
+This test uses local module resolution and deliberately unusable network proxies.
+It tests module availability, not native dependency relocation or a managed
+database. Evidence therefore records `offline_go_modules: passed` separately from
+`offline_install: not-tested`; the latter remains a release gate.
+
 ## Regression checks
 
 The version and plan tests require only the Nix evaluator, without downloads:

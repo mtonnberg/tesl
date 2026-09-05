@@ -76,6 +76,11 @@ The `stdlib` directory supplies lifted `.tesl` sources; `TESL_STDLIB_DIR` is its
 explicit override. Compiler clients select this resource even outside a checkout.
 Go builds use the selected GOROOT, `GOTOOLCHAIN=local`, a local file module proxy,
 and writable user caches. Missing bundled modules fail offline.
+Installed builds disable user Go configuration, workspace files, private-module
+proxy bypasses, and VCS fetching. They use `CGO_ENABLED=0` so generated programs
+do not require a host C compiler. Development without an installation manifest
+retains user Go configuration. See [`nix/RELEASES.md`](../nix/RELEASES.md) for the
+verified module-bundle builder and its empty-cache acceptance test.
 
 ## Behavioral verification
 

@@ -124,13 +124,42 @@ def canonical_zip(data, module, version, expected):
     return canonical.getvalue(), sorted(licenses)
 
 
-def build(plan, root, output, read):
+def locked_inputs(plan, root):
     if plan.get("version") != 1 or set(plan.get("moduleInputs", [])) != set(LOCKS):
         raise ValueError("unsupported release module inputs")
     locks = {name: (root / name).read_bytes() for name in LOCKS}
     hashes = {name: sha256(data) for name, data in locks.items()}
     if hashes != plan.get("moduleInputHashes"):
         raise ValueError("module lock files differ from the Nix release plan")
+    return locks, hashes
+
+
+def verify(plan, root, output):
+    """Check a transferred bundle against the plan, checkout and file inventory.
+
+    The inventory is transport-integrity evidence, not a signature. Go also
+    authenticates consumed module contents against the checkout's go.sum.
+    """
+    _, hashes = locked_inputs(plan, root)
+    inventory = json.loads((output / "inventory.json").read_text(encoding="utf-8"))
+    if (inventory.get("version") != 1 or inventory.get("module_inputs") != hashes
+            or inventory.get("toolchain_version") != plan["toolchainVersion"]
+            or inventory.get("source_revision") != plan["sourceRevision"]):
+        raise ValueError("module bundle identity differs from the Nix release plan")
+    actual = {}
+    for path in output.rglob("*"):
+        if path.is_symlink():
+            raise ValueError("module bundle must not contain symlinks")
+        if path.is_file() and path != output / "inventory.json":
+            data = path.read_bytes()
+            actual[path.relative_to(output).as_posix()] = {"bytes": len(data), "sha256": sha256(data)}
+    if not actual or actual != inventory.get("files"):
+        raise ValueError("module bundle files differ from its inventory")
+    return inventory
+
+
+def build(plan, root, output, read):
+    locks, hashes = locked_inputs(plan, root)
     modules = parse_sums(locks[LOCKS[1]].decode("utf-8"))
     if output.exists() or output.is_symlink():
         raise FileExistsError(f"refusing to replace existing bundle: {output}")

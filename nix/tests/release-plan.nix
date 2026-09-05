@@ -21,6 +21,11 @@ let
     complete-matrix = builtins.attrNames plan.payloads == targets;
     source-pins = plan.sources.go.hash == "pinned-source-hash" && plan.sources.go.version == "1.2.3";
     source-urls = plan.sources.go.urls == pkgs.go.src.urls;
+    module-inputs = plan.moduleInputs == [ "runtime/go/go.mod" "runtime/go/go.sum" ];
+    module-lock-hashes = plan.moduleInputHashes == {
+      "runtime/go/go.mod" = builtins.hashString "sha256" (builtins.readFile ../../runtime/go/go.mod);
+      "runtime/go/go.sum" = builtins.hashString "sha256" (builtins.readFile ../../runtime/go/go.sum);
+    };
     manifest-identity = all (target: payload: payload.manifest.toolchain_version == version
       && payload.manifest.source_revision == revision && payload.manifest.target == target && payload.manifest.version == 1);
     component-inventory = all (_: payload: builtins.attrNames payload.manifest.components == [
