@@ -19,7 +19,7 @@ def sign_payload(root, audit, policy):
                 or PurePosixPath(relative).is_absolute() or ".." in PurePosixPath(relative).parts
                 or "\\" in relative or path.is_symlink() or not path.is_file()
                 or not path.resolve().is_relative_to(root)):
-            raise ValueError("invalid audited macOS binary")
+            raise ValueError(f"invalid audited macOS binary: {relative!r} ({binary.get('format')!r})")
         paths.append(path)
     if not paths or len(set(paths)) != len(paths):
         raise ValueError("macOS signing requires a unique, nonempty binary inventory")

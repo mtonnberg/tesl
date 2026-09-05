@@ -222,6 +222,60 @@ class PayloadAuditTests(unittest.TestCase):
             result = audit.audit(self.root, self.plan("darwin-amd64"), "darwin-amd64")
         self.assertEqual(len(result["binaries"]), 2)
 
+    @unittest.skipIf(os.name == "nt", "Windows symlink creation needs privileges")
+    def test_macos_audit_and_sign_versioned_library_aliases_once(self):
+        import hashlib
+        import macos_distribution
+
+        self.binary.write_bytes(macho())
+        library = self.write("lib/libpq.5.18.dylib", macho(file_type=6))
+        (library.parent / "libpq.5.dylib").symlink_to(library.name)
+        (library.parent / "libpq.dylib").symlink_to("libpq.5.dylib")
+        inspected, signed, verified = [], [], []
+
+        def inspect(args):
+            path = Path(args[-1])
+            self.assertFalse(path.is_symlink())
+            inspected.append(path)
+            return (macho_output(dependencies=("@rpath/libpq.dylib",), rpaths=("@loader_path/../lib",))
+                    if path == self.binary else macho_output(identity="@rpath/libpq.5.dylib"))
+
+        def codesign(args, **kwargs):
+            path = Path(args[-1])
+            self.assertFalse(path.is_symlink())
+            if "--sign" in args:
+                signed.append(path)
+                path.write_bytes(path.read_bytes() + b"signed")
+            else:
+                self.assertEqual(set(signed), {self.binary, library})
+                verified.append(path)
+
+        with patch.object(audit, "_inspect", side_effect=inspect):
+            inventory = audit.audit(self.root, self.plan("darwin-amd64"), "darwin-amd64")
+        with patch.object(macos_distribution.subprocess, "run", side_effect=codesign):
+            evidence = macos_distribution.sign_payload(self.root, inventory, {
+                "macOSSigning": "optional", "macOSDistribution": "ad-hoc-portable-archive"})
+        self.assertEqual(inspected, [self.binary, library])
+        self.assertEqual(signed, inspected)
+        self.assertEqual(verified, inspected)
+        self.assertEqual(evidence["binaries"], [
+            {"path": path.relative_to(self.root).as_posix(),
+             "sha256": hashlib.sha256(path.read_bytes()).hexdigest()} for path in inspected])
+        self.assertEqual((library.parent / "libpq.dylib").read_bytes(), library.read_bytes())
+
+    @unittest.skipIf(os.name == "nt", "Windows symlink creation needs privileges")
+    def test_executable_alias_cannot_bypass_file_type_or_permission_checks(self):
+        real = self.write("bin/actual", macho(file_type=6))
+        self.binary.unlink()
+        self.binary.symlink_to(real.name)
+        with patch.object(audit, "_inspect", return_value=macho_output()):
+            with self.assertRaisesRegex(ValueError, "not an executable"):
+                audit.audit(self.root, self.plan("darwin-amd64"), "darwin-amd64")
+            real.write_bytes(macho())
+            real.chmod(0o644)
+            with self.assertRaisesRegex(ValueError, "not executable"):
+                audit.audit(self.root, self.plan("darwin-amd64"), "darwin-amd64")
+
     def test_macos_rejects_newer_system_and_external_libraries(self):
         self.binary.write_bytes(macho())
         cases = [macho_output(minimum="15.0"), macho_output(platform="2"), "",

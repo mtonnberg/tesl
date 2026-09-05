@@ -171,6 +171,14 @@ come only from the active Visual Studio redistributable directory, retain their
 Microsoft signatures, and include hashes, versions, and the pinned license text.
 The evidence records these limits instead of claiming a finished release.
 
+The [2026-09-05 native run](https://github.com/mtonnberg/tesl/actions/runs/33973183098)
+passed complete archive assembly and isolated installed-workflow acceptance on
+Linux x86-64 and ARM64, both with glibc 2.35. The downloaded x86-64 candidate for
+source `51e520383b8f02b3942f55c63cfe2eaafad24e55` was independently checksum-checked:
+115,102,511 archive bytes, 370,598,455 expanded regular-file bytes, and 18,607 tar
+entries. These are prototype measurements; filesystem allocation differs and
+the complete matrix still needs a measured size budget.
+
 On macOS, assembly ad-hoc signs every audited Mach-O executable and library with
 `codesign --sign - --timestamp=none`, then verifies every signature before recording
 file inventories and archive checksums. It needs no keychain identity, Apple

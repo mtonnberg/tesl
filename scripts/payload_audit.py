@@ -216,6 +216,7 @@ def audit(root, plan, target):
     except (KeyError, TypeError, StopIteration) as error:
         raise ValueError("release plan lacks native payload audit metadata") from error
     pending = set(executables.values())
+    executable_files = {path.resolve() for path in pending}
     # Sibling tools (gofmt, PostgreSQL helpers) also form part of the installation.
     for directory in {path.parent for path in pending}:
         if directory.is_dir():
@@ -232,12 +233,15 @@ def audit(root, plan, target):
     while pending:
         path = min(pending)
         pending.remove(path)
-        _inside(root, path)
-        if path.resolve() in visited:
+        # PostgreSQL ships versioned libraries with symlink aliases. Inspect and
+        # record each contained file once, so downstream signing receives the
+        # actual file rather than whichever alias sorts first.
+        path = _inside(root, path).resolve()
+        if path in visited:
             continue
         if not path.is_file():
             raise ValueError(f"missing runtime binary: {path}")
-        if os.name != "nt" and path in executables.values() and not os.access(path, os.X_OK):
+        if os.name != "nt" and path in executable_files and not os.access(path, os.X_OK):
             raise ValueError(f"runtime component is not executable: {path}")
         format_name = _format(path, target)
         if format_name == "PE":
@@ -247,7 +251,7 @@ def audit(root, plan, target):
                 raise ValueError(f"Windows DLL file is not marked as a DLL: {path}")
         else:
             detail, dependencies = (_elf if format_name == "ELF" else _macho)(root, path, target, system_version)
-        if path in executables.values():
+        if path in executable_files:
             if format_name == "PE" and detail["is_dll"]:
                 raise ValueError(f"Windows component is not an executable: {path}")
             if format_name == "ELF" and detail["needed"] and not detail["interpreter"]:
@@ -255,6 +259,6 @@ def audit(root, plan, target):
             if format_name == "Mach-O" and struct.unpack_from("<I", path.read_bytes(), 12)[0] != 2:
                 raise ValueError(f"Mach-O component is not an executable: {path}")
         evidence.append({"path": path.relative_to(root).as_posix(), "format": format_name, **detail})
-        visited.add(path.resolve())
+        visited.add(path)
         pending.update(dependencies)
     return {"version": 1, "target": target, "baseline": baseline, "binaries": evidence}
