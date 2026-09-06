@@ -281,15 +281,8 @@ function activate(context) {
     let serverOptions;
     if (lsp.kind === "binary") {
       outputChannel.appendLine(`[tesl-lsp] using binary: ${lsp.command}`);
-      // A repo checkout's own build wins over the compiler baked into the
-      // installed wrapper: otherwise diagnostics come from whatever revision
-      // the profile was installed at, so a rule added in the working tree
-      // looks like it simply does not exist. The wrapper honours an inherited
-      // TESL_COMPILER (flake.nix, tesl-lsp).
-      const wsCompiler = !installedComponent("compiler") && vscode.workspace.isTrusted ? findWorkspaceCompiler(wsPath) : null;
-      if (wsCompiler) {
-        outputChannel.appendLine(`[tesl-lsp] using workspace compiler: ${wsCompiler}`);
-      }
+      // Opening a document must not execute a compiler discovered in its repository.
+      // Installed toolchain selection and explicit process configuration remain available.
       serverOptions = {
         command: lsp.command,
         args: [],
@@ -298,7 +291,6 @@ function activate(context) {
           env: {
             ...process.env,
             ...installedToolchain()?.launchEnvironment,
-            ...(wsCompiler ? { TESL_COMPILER: wsCompiler } : {}),
           },
         },
       };

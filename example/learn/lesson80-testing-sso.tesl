@@ -271,7 +271,8 @@ api-test "GitHub login all the way through: redirect, code exchange, real sessio
     Something sessionCookie ->
       let profileResp = get "/me" cookie sessionCookie headers (onHost())
       expect statusOk profileResp.status
-      expect profileResp.body.userId == "12345"
+      # The issuer-scoped key for (https://api.github.com, 12345).
+      expect profileResp.body.userId == "8ac406c2b4ecea8f381d2a0023a65442c2d700301c19be17c96e354587b979a2"
 }
 
 # ─────────────────────────────────────────────────────────────────────────────

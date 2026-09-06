@@ -12,12 +12,39 @@
       "example/kanel/<module>.tesl"    kanel multi-module example
 *)
 
+let canonical_root = ref ""
+let total_bytes = ref 0
+let max_file_bytes = 4 * 1024 * 1024
+let max_total_bytes = 32 * 1024 * 1024
+
+let require_path kind path =
+  let info = Unix.lstat path in
+  if info.Unix.st_kind <> kind then
+    failwith ("gen_docs: refusing symlink or non-regular documentation path: " ^ path);
+  let resolved = Unix.realpath path in
+  let prefix = !canonical_root ^ Filename.dir_sep in
+  if resolved <> !canonical_root &&
+     not (String.starts_with ~prefix resolved) then
+    failwith ("gen_docs: documentation escapes repository: " ^ path);
+  info
+
 let emit oc key path =
-  match (try Some (In_channel.with_open_text path In_channel.input_all)
-         with Sys_error _ -> None) with
-  | None -> ()
-  | Some content ->
-    Printf.fprintf oc "  (%S,\n   %S);\n\n" key content
+  let expected = require_path Unix.S_REG path in
+  let fd = Unix.openfile path [Unix.O_RDONLY; Unix.O_NONBLOCK] 0 in
+  let ic = Unix.in_channel_of_descr fd in
+  Fun.protect ~finally:(fun () -> close_in_noerr ic) (fun () ->
+    let actual = Unix.fstat fd in
+    if actual.st_kind <> Unix.S_REG || actual.st_dev <> expected.st_dev ||
+       actual.st_ino <> expected.st_ino then
+      failwith ("gen_docs: documentation changed during open: " ^ path);
+    if actual.st_size > max_file_bytes || actual.st_size > max_total_bytes - !total_bytes then
+      failwith ("gen_docs: documentation size limit exceeded: " ^ path);
+    let content = really_input_string ic actual.st_size in
+    let grew = try ignore (input_char ic); true with End_of_file -> false in
+    if grew then failwith ("gen_docs: documentation grew during read: " ^ path);
+    total_bytes := !total_bytes + String.length content;
+    Printf.fprintf oc "  (%S,\n   %S);\n\n" key content)
+
 
 (* The LSP writes transient validation copies named `tesl-lsp-<n>.tesl` into the
    directory of the file being edited; they must never be baked into the embedded
@@ -27,6 +54,7 @@ let is_transient f =
 
 let walk_dir dir key_prefix ext oc =
   if Sys.file_exists dir then begin
+    ignore (require_path Unix.S_DIR dir);
     let files = Sys.readdir dir |> Array.to_list |> List.sort String.compare in
     List.iter (fun f ->
       if (not (is_transient f)) && List.exists (Filename.check_suffix f) ext then
@@ -42,8 +70,7 @@ let () =
      unchanged after 8 levels, and that fail-open default cost real damage:
      a `dune build --build-dir` pointing OUTSIDE the repo makes the walk start in
      /tmp, find nothing, and return a directory with no manual/ — every [emit]
-     call then silently skips its missing file (emit is deliberately fail-open for
-     individual files), so the generator produces `let files = []`.  And because
+     call then silently skipped its missing file, so the generator produces `let files = []`.  And because
      compiler/lib/dune's embedded-docs rule is `(mode promote)`, dune writes that
      EMPTY document list straight back into the source tree.  The entire manual
      disappears from the binary, nothing errors, and the truncation is committable.
@@ -85,6 +112,7 @@ let () =
         exit 2
   in
 
+  canonical_root := Unix.realpath repo_root;
   let oc = stdout in
   set_binary_mode_out oc true;
 

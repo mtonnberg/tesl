@@ -1081,20 +1081,10 @@ let check_workers_structure ?(extra_funcs = []) (decls : top_decl list) : valida
   let queues =
     List.filter_map (function DQueue q -> Some q.name | _ -> None) decls
   in
-  let worker_fns =
-    let local =
-      List.filter_map (function
-        | DFunc fd when fd.kind = WorkerKind || fd.kind = DeadWorkerKind -> Some fd.name
-        | _ -> None
-      ) decls
-    in
-    let imported =
-      List.filter_map (fun (name, info) ->
-        if info.fi_kind = WorkerKind || info.fi_kind = DeadWorkerKind then Some name else None
-      ) extra_funcs
-    in
-    local @ imported
-  in
+  let funcs = build_func_info decls @ extra_funcs in
+  let folded = List.concat_map (function
+    | DQueue q -> List.map (fun w -> DWorkers w) (Desugar.folded_queue_workers q)
+    | _ -> []) decls in
   List.concat_map (function
     | DWorkers w ->
       let errs = ref [] in
@@ -1109,14 +1099,39 @@ let check_workers_structure ?(extra_funcs = []) (decls : top_decl list) : valida
           (Printf.sprintf "workers `%s` has no job bindings; at least one `JobType = workerFn` entry is required" w.name);
       (* Undefined or wrong-kind worker functions *)
       List.iter (fun (job_type, fn_name) ->
-        if not (List.mem fn_name worker_fns) then
-          add (Printf.sprintf "declare `worker %s(...) -> ...`" fn_name)
-            (Printf.sprintf "workers `%s`: `%s` for job type `%s` is not declared as a `worker` function"
-               w.name fn_name job_type)
+        let expected_kind = if w.is_dead then DeadWorkerKind else WorkerKind in
+        match List.assoc_opt fn_name funcs with
+        | None ->
+          add "declare the worker before wiring it to a queue"
+            (Printf.sprintf "workers `%s`: `%s` is not declared as a `worker` function" w.name fn_name)
+        | Some info ->
+          if info.fi_kind <> expected_kind then
+            add "use worker for regular jobs and deadWorker for dead-letter jobs"
+              (Printf.sprintf "workers `%s`: `%s` is not declared as a `%s` function"
+                 w.name fn_name (if w.is_dead then "deadWorker" else "worker"));
+          (match info.fi_params with
+           | [param] when (match param.type_expr with TName { name; _ } -> name = job_type | _ -> false) ->
+             let pred = if w.is_dead then "FromDeadQueue" else "FromQueue" in
+             let rec allowed = function
+               | PredApp { pred = p; args = [query; subject]; _ } ->
+                 p = pred && subject = param.name &&
+                 (match Validation_capabilities.extract_col_eq_var query with
+                  | Some ("Id", witness) ->
+                    String.length witness > 0 && witness.[0] >= 'a' && witness.[0] <= 'z'
+                  | _ -> false)
+               | PredAnd { left; right; _ } -> allowed left && allowed right
+               | _ -> false in
+             (match param.proof_ann with
+              | Some proof when not (allowed proof) ->
+                add "validate domain facts inside the worker; dequeue supplies only job provenance"
+                  (Printf.sprintf "workers `%s`: `%s` requires proofs not supplied by %s" w.name fn_name pred)
+              | _ -> ())
+           | _ -> add "a worker must take exactly one parameter of its job type"
+               (Printf.sprintf "workers `%s`: `%s` must accept exactly one `%s` payload" w.name fn_name job_type))
       ) w.bindings;
       List.rev !errs
     | _ -> []
-  ) decls
+  ) (decls @ folded)
 
 let check_cache_structure (decls : top_decl list) : validation_error list =
   let known_dbs =
@@ -2551,8 +2566,16 @@ let check_typed_config_blocks (m : module_form) : validation_error list =
                 declaring it.  Fail closed here instead. *)
              (match e with
               | EApp { fn = EApp { fn = EApp { fn = EConstructor { name = "Job"; _ };
-                                               arg = jt; _ }; _ }; _ } ->
-                (match cfg_ctor jt with
+                                               arg = jt; _ }; arg = handler; _ }; arg = dead; _ } ->
+                let valid_handler = match handler with EVar _ -> true | _ -> false in
+                let valid_dead = match dead with
+                  | EConstructor { name = "Nothing"; args = []; _ } -> true
+                  | EApp { fn = EConstructor { name = "Something"; args = []; _ }; arg = EVar _; _ } -> true
+                  | EConstructor { name = "Something"; args = [EVar _]; _ } -> true
+                  | _ -> false in
+                if not valid_handler || not valid_dead then
+                  [make_error (cfg_expr_loc e) "Job requires a worker name and Nothing or (Something deadWorkerName)"]
+                else (match cfg_ctor jt with
                  | Some _ -> []
                  | None ->
                    [ make_error (cfg_expr_loc e)

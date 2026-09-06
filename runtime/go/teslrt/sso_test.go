@@ -42,6 +42,28 @@ func TestSubjectKeyIsInjectiveAcrossIssuers(t *testing.T) {
 	}
 }
 
+func TestSsoSubjectReturnsIssuerScopedKey(t *testing.T) {
+	identity := SsoIdentity{
+		Key:     ssoSubjectKey("https://issuer.example", "42"),
+		Subject: "42",
+	}
+	if got := SsoSubject(identity); got != identity.Key {
+		t.Errorf("SsoSubject: got %q, want issuer-scoped key %q", got, identity.Key)
+	}
+}
+
+func TestSsoSubjectSeparatesIdenticalProviderSubjects(t *testing.T) {
+	first := SsoIdentity{Key: ssoSubjectKey("https://first.example", "42"), Subject: "42"}
+	second := SsoIdentity{Key: ssoSubjectKey("https://second.example", "42"), Subject: "42"}
+	if SsoSubject(first) == SsoSubject(second) {
+		t.Fatal("identical subjects from different issuers identify the same user")
+	}
+	sameIssuer := SsoIdentity{Key: ssoSubjectKey("https://first.example", "42"), Subject: "42"}
+	if SsoSubject(first) != SsoSubject(sameIssuer) {
+		t.Fatal("the identity accessor is not stable")
+	}
+}
+
 // "verified" is reachable ONLY with a positive signal AND an address: a provider that emits
 // no email_verified can never produce one.
 func TestEmailClaimNeedsAPositiveSignal(t *testing.T) {

@@ -756,6 +756,7 @@ _docint_main_exe="$COMPILER_DIR/_build/default/bin/main.exe"
 _docint_rc=0
 TESL_REPO_ROOT="$SCRIPT_DIR" TESL_OCAML_COMPILER="$_docint_main_exe" \
     bash "$SCRIPT_DIR/tests/doc-integrity.sh" || _docint_rc=$?
+    python3 "$SCRIPT_DIR/tests/security-build-boundaries.py" || _docint_rc=$?
 if [ "$_docint_rc" -eq 0 ]; then
     phase_end OK
 elif [ "$_docint_rc" -eq 77 ]; then

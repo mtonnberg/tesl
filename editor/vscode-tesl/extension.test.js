@@ -896,3 +896,19 @@ test("function input is an argv value and temporary cleanup does not use a shell
 test("untrusted workspaces cannot execute Tesl tasks or debug sessions", testUntrustedWorkspaceCannotExecute);
 test("manifest requires Workspace Trust for execution commands", testManifestRequiresTrustForExecution);
 test("managed installations pin LSP, debugger and tasks until editor reload", testManagedSelectionPinsLanguageServerDebuggerAndTasksUntilReload);
+
+test("opening a trusted workspace does not select its compiler executable", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "tesl-lsp-unselected-"));
+  const file = path.join(directory, "app.tesl");
+  const compiler = path.join(directory, "compiler", "_build", "default", "bin", "main.exe");
+  fs.mkdirSync(path.dirname(compiler), { recursive: true });
+  fs.writeFileSync(compiler, "untrusted executable");
+  fs.writeFileSync(file, "module App exposing []\n");
+  const fixture = await activateWithFile(file,
+    () => fs.rmSync(directory, { recursive: true, force: true }), directory,
+    { isTrusted: true, configuration: { lspBinary: process.execPath } });
+  try {
+    assert.strictEqual(fixture.languageClients.length, 1);
+    assert.notStrictEqual(fixture.languageClients[0].serverOptions.options.env.TESL_COMPILER, compiler);
+  } finally { fixture.cleanup(); }
+});

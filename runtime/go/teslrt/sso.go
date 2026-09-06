@@ -563,7 +563,7 @@ type SsoSubjectKeyValue struct {
 
 func SsoKeyText(key SsoSubjectKeyValue) string { return key.Value }
 
-func SsoSubject(identity SsoIdentity) string { return identity.Subject }
+func SsoSubject(identity SsoIdentity) string { return identity.Key }
 
 // SsoEmail answers the VERIFIED address only. An app cannot obtain an unverified one, so it
 // cannot trust one by accident — which is the whole of the nOAuth containment.
