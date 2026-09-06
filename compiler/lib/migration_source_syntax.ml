@@ -46,8 +46,8 @@ let rec shape rename expression =
   | ESendEmail _ | EStartEmailWorker _ | EWithDatabase _ | EWithCapabilities _ | EWithTransaction _
   | EServe _ | ELambda _ | ESqlQuery _ -> raise Unsupported
 let fingerprint ~previous ~current expression =
-  let root name = match String.split_on_char '.' name with
-    | [family;version] when Migration_source.valid_family family && Migration_source.valid_revision version -> Some family
+  let root name = match Validation_common.schema_module_parts name with
+    | Some (family,version,[]) when Migration_source.valid_family family && Migration_source.valid_revision version -> Some family
     | _ -> None in
   if previous = current || root previous = None || root previous <> root current then None else
   let rename name =

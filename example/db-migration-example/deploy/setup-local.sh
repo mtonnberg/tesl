@@ -1,16 +1,21 @@
 #!/usr/bin/env bash
 # Creates a dedicated local demo cluster. Never touches an existing remote database.
 set -euo pipefail
-APP_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
-source "$APP_DIR/scripts/local-env.sh"
-mkdir -p "$TODO_LOCAL_DIR/socket"
+APP_DIR="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+source "$APP_DIR/deploy/local-env.sh"
 if [[ -f "$TODO_LOCAL_DIR/postgres/PG_VERSION" && ! -f "$TODO_LOCAL_DIR/todo-demo-cluster" ]]; then
   echo "Refusing a PostgreSQL directory not created by this demo: $TODO_LOCAL_DIR/postgres" >&2
   exit 1
 fi
+if [[ -f "$TODO_LOCAL_DIR/postgres/PG_VERSION" && "$(cat "$TODO_LOCAL_DIR/todo-demo-cluster")" != 'Field Notes Schema.Todo local PostgreSQL cluster' ]]; then
+  echo 'This retained demo directory predates the Schema.Todo example. Its history is a different identity.' >&2
+  echo 'Keep that data intact. Choose a fresh TODO_LOCAL_DIR and an unused TODO_DB_PORT; no schema was changed.' >&2
+  exit 1
+fi
+mkdir -p "$TODO_LOCAL_DIR/socket"
 if [[ ! -f "$TODO_LOCAL_DIR/postgres/PG_VERSION" ]]; then
   initdb -D "$TODO_LOCAL_DIR/postgres" -U todo_setup_admin --auth-local=trust --auth-host=trust > "$TODO_LOCAL_DIR/initdb.log"
-  printf 'Field Notes local PostgreSQL cluster\n' > "$TODO_LOCAL_DIR/todo-demo-cluster"
+  printf 'Field Notes Schema.Todo local PostgreSQL cluster\n' > "$TODO_LOCAL_DIR/todo-demo-cluster"
 fi
 if ! pg_ctl -D "$TODO_LOCAL_DIR/postgres" status >/dev/null 2>&1; then
   pg_ctl -D "$TODO_LOCAL_DIR/postgres" -l "$TODO_LOCAL_DIR/postgres.log" \

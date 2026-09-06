@@ -108,7 +108,7 @@ func InspectPgMigrationStatus(ctx context.Context, conn *pgx.Conn, history PgCom
 		}
 		plan, planErr := history.ExpansionPlan(state.InitialVersion)
 		if planErr == nil {
-			planErr = pgVerifyExpansionHistory(state, plan, intents)
+			planErr = pgVerifyExpansionObservation(state, plan, intents)
 		}
 		if state.Format >= 3 {
 			jobs, err := pgReadMigrationIndexJobs(ctx, tx, history.Namespace, intents)

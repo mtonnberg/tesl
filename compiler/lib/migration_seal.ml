@@ -46,8 +46,8 @@ let digest_valid s = String.length s = 64 &&
 
 let validate seal =
   let invalid message = reject Invalid_record seal.root_module message in
-  (match String.split_on_char '.' seal.root_module with
-   | [family; revision] when Migration_source.valid_family family && Migration_source.valid_revision revision -> ()
+  (match Validation_common.schema_module_parts seal.root_module with
+   | Some (family, revision, []) when Migration_source.valid_family family && Migration_source.valid_revision revision -> ()
    | _ -> invalid "a snapshot seal must name a canonical schema revision root");
   if String.trim seal.compiler_abi = "" then invalid "snapshot seal requires a compiler ABI";
   Option.iter (fun contract -> if not (Migration_abi.valid_stored_value_compatibility contract) then

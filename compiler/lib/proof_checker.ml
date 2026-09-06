@@ -1255,6 +1255,7 @@ let stdlib_predicates : string list =
 
 (** Collect predicate names produced by check/auth/establish functions in imported modules. *)
 let load_imported_predicates (m : module_form) : string list =
+  let ambiguous = Validation_common.ambiguous_predicate_names m in
   let is_tesl_module name =
     String.length name >= 5 && String.sub name 0 5 = "Tesl."
   in
@@ -1272,15 +1273,14 @@ let load_imported_predicates (m : module_form) : string list =
             | ImportAll -> None
             | ImportExposing names -> Some names
           in
-          List.filter_map (function
-            | DFact ff ->
+          Validation_common.provided_predicate_owners imported
+          |> List.concat_map (fun (name, _) ->
               let include_it = match requested with
-                | Some names -> List.mem ff.name names
-                | None -> true
-              in
-              if include_it then Some ff.name else None
-            | _ -> None
-          ) imported.decls
+                | Some names -> List.mem name names | None -> true in
+              let exported = List.exists (function
+                | ExportName n | ExportAdt n -> n = name) imported.exports in
+              (if include_it && not (List.mem name ambiguous) then [name] else [])
+              @ (if exported then [imp.module_name ^ "." ^ name] else []))
   ) m.imports
 
 let collect_import_parse_errors (m : module_form) : proof_error list =
@@ -1494,7 +1494,7 @@ before this function, or import it from the module that declares it"
 
 (* ── Module-level proof checking ─────────────────────────────────────────── *)
 
-let check_module (m : module_form) : proof_error list =
+let check_module_unscoped (m : module_form) : proof_error list =
   let errors = ref [] in
   (* Collect all top-level func_decls for cross-function proof lookup *)
   let all_funcs : func_decl list = List.filter_map (function DFunc fd -> Some fd | _ -> None) m.decls in
@@ -2512,3 +2512,6 @@ supplies the wrong arguments (%s); the body must return the declared fact about 
   ) m.decls;
 
   List.rev !errors
+
+let check_module m =
+  Validation_common.with_predicate_scope m (fun () -> check_module_unscoped m)

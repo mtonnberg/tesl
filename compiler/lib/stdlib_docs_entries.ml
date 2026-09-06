@@ -1158,7 +1158,7 @@ let sso : entry list = [
 let migration : entry list = [
   e "Migration" ~m:"Tesl.Migration"
     ~kind:(KType "Migration { from: schemaRef, to: schemaRef, same: List Same, entities: { EntityName: Entity }, fixtures: [] }")
-    ~doc:"A contextual declaration in FamilySchema.Migrate.V<n>. References and entity keys are compiler-checked against adjacent schema revisions. It is not a runtime type or value. The initial checker covers additive declarations; physical planning and execution are separate.";
+    ~doc:"A contextual declaration in Schema.Family.Migrate.V<n> (legacy FamilySchema.Migrate.V<n> is also supported). References and entity keys are compiler-checked against adjacent schema revisions. It is not a runtime type or value. The initial checker covers additive declarations; physical planning and execution are separate.";
   e "Entity" ~m:"Tesl.Migration" ~aliases:["Additive";"New";"Drop"]
     ~kind:(KType "Entity = Additive (List Rule) | New | Drop   # contextual")
     ~doc:"One entry per changed entity. Additive derives a single row adapter; New and Drop name an added or removed table. An absent entity must be compiler-verified unchanged. These markers cannot be used as runtime values.";

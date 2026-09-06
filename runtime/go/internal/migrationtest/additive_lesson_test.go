@@ -48,7 +48,7 @@ func testCompiledAdditiveLesson(t *testing.T, upgrade bool, interruption Event) 
 			t.Fatal(err)
 		}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Minute)
 	defer cancel()
 	project := t.TempDir()
 	const entry = "lesson83-additive-migrations.tesl"
@@ -78,6 +78,7 @@ func testCompiledAdditiveLesson(t *testing.T, upgrade bool, interruption Event) 
 	if upgrade {
 		compiler, compatibleCompiler, incompatibleCompiler = buildMigrationCompilerVariants(t, ctx, root)
 	}
+	baselineCompiler := compiler
 	var output bytes.Buffer
 	app := cli.New()
 	app.Directory, app.Stdout, app.Stderr = project, &output, &output
@@ -108,6 +109,9 @@ func testCompiledAdditiveLesson(t *testing.T, upgrade bool, interruption Event) 
 		compiler, field string
 	}
 	revisions := []revision{{1, 1, compiler, ""}, {2, 2, compiler, "category"}}
+	if !upgrade {
+		revisions = append(revisions, revision{3, 3, compiler, "indexed"})
+	}
 	if upgrade {
 		// C has no frozen source yet: its freshly compiled V1 is valid in
 		// isolation, but cannot interpret a database established by A.
@@ -141,6 +145,17 @@ func testCompiledAdditiveLesson(t *testing.T, upgrade bool, interruption Event) 
 				}
 				text = strings.Replace(text, edit[0], edit[1], 1)
 			}
+			if revision.field == "indexed" {
+				for _, edit := range [][2]string{
+					{"  indexed: Maybe String\n", "  indexed: Maybe Bool\n  index [indexed]\n"},
+					{"import Tesl.Prelude exposing [Int, String]", "import Tesl.Prelude exposing [Bool, Int, String]"},
+				} {
+					if strings.Count(text, edit[0]) != 1 {
+						t.Fatalf("Embedded index edit target changed: %q", edit[0])
+					}
+					text = strings.Replace(text, edit[0], edit[1], 1)
+				}
+			}
 			if err := os.WriteFile(path, []byte(text), 0600); err != nil {
 				t.Fatal(err)
 			}
@@ -149,7 +164,7 @@ func testCompiledAdditiveLesson(t *testing.T, upgrade bool, interruption Event) 
 			check(child)
 			check(fmt.Sprintf("migrations/additive-notes/v%d.tesl", version))
 		}
-		if revision.key == 3 {
+		if upgrade && revision.key == 3 {
 			// Frozen schema bytes are an independent guard, even if a new
 			// compiler says it supports the same stored-value contract.
 			assertMigrationBuildRefuses(t, ctx, incompatibleCompiler, project, entry)
@@ -172,8 +187,8 @@ func testCompiledAdditiveLesson(t *testing.T, upgrade bool, interruption Event) 
 			t.Fatalf("lesson V%d application: %v\n%s", version, err, out)
 		}
 		binaries[revision.key], versions[revision.key] = binary, version
-		if upgrade && revision.key == 2 {
-			interrupted := filepath.Join(t.TempDir(), "app-a2-crash")
+		if upgrade && revision.key == 2 || !upgrade && revision.key == 3 {
+			interrupted := filepath.Join(t.TempDir(), fmt.Sprintf("app-v%d-interrupted", version))
 			build := exec.CommandContext(ctx, "go", "build", "-race", "-tags=tesl_migration_test", "-o", interrupted, "./cmd/app")
 			build.Dir = generated
 			if out, err := build.CombinedOutput(); err != nil {
@@ -197,6 +212,11 @@ func testCompiledAdditiveLesson(t *testing.T, upgrade bool, interruption Event) 
 	}
 	if err := os.RemoveAll(project); err != nil {
 		t.Fatal(err)
+	}
+	if upgrade {
+		t.Run("pending-compatible-worker-requests", func(t *testing.T) {
+			testPendingCompatibleCompilerRequests(t, ctx, root, baselineCompiler, compatibleCompiler)
+		})
 	}
 	admin, err := pgx.Connect(ctx, dsn)
 	if err != nil {
@@ -410,6 +430,9 @@ func testCompiledAdditiveLesson(t *testing.T, upgrade bool, interruption Event) 
 	var rows, nulls int
 	if err := installer.QueryRow(ctx, "select count(*),count(*) filter(where category is null) from additive_notes.lesson_migration_notes").Scan(&rows, &nulls); err != nil || rows != 4 || nulls != 4 {
 		t.Fatalf("retained rows or nullable defaults changed: %d %d %v", rows, nulls, err)
+	}
+	if !upgrade {
+		testCompiledEmbeddedIndexLifecycle(t, ctx, installer, binaries[3], binaries[7], applicationEnvironment, current, restarted)
 	}
 	if upgrade {
 		third, stopThird := start(6)

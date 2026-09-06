@@ -635,18 +635,21 @@ import Tesl.Bool exposing [Bool]   # error: import must come before all definiti
 **Module file resolution.** When a user module is imported (e.g. `import MyDomain`), the compiler looks for the file `my-domain.tesl` (PascalCase-to-kebab-case conversion) in the same directory as the importing file. If the file does not exist the compiler emits a clear error naming the path that was searched. This is a compile-time error, not a missing-name error downstream.
 
 Module headers may contain several uppercase namespace segments, for example
-`module NotesSchema.VCurrent exposing [Note]`. Schema-family imports also resolve
+`module Schema.Notes.VCurrent exposing [Note]`. Schema-family imports also resolve
 the conventional paths `schema/notes/v-current.tesl`, `schema/notes/v7.tesl`, and
-`schema/notes/v-current/shared.tesl` for `NotesSchema.VCurrent.Shared`. The migration
-namespace `NotesSchema.Migrate.V8` resolves to `migrations/notes/v8.tesl`. The family
-stem before `Schema` is converted to kebab case. Resolution searches ancestors of
+`schema/notes/v-current/shared.tesl` for `Schema.Notes.VCurrent.Shared`. The migration
+namespace `Schema.Notes.Migrate.V8` resolves to `migrations/notes/v8.tesl`. The family
+segment after `Schema` is converted to kebab case. Legacy `NotesSchema.*` uses the
+same paths by removing the `Schema` suffix. Both conventions are supported, but
+they are distinct source identities: a file must declare the exact imported name,
+and renaming an already sealed family does not preserve its provenance. Resolution searches ancestors of
 the importing file and stops at the nearest `tesl.toml`, `tesl.json`, or `.git`
 project boundary. Existing same-directory kebab-case and PascalCase files retain
 precedence. Qualified calls and type annotations retain the complete namespace;
 two versions' same-named functions or newtypes remain separate.
 
-**Schema content boundary.** Every schema module in a `FamilySchema.VCurrent` or
-`FamilySchema.V<n>` namespace, including child modules, owns only
+**Schema content boundary.** Every schema module in a `Schema.Family.VCurrent` or
+`Schema.Family.V<n>` namespace (also legacy `FamilySchema.*`), including child modules, owns only
 entities, records, types, facts, codecs, and pure `fn`, `check`, and `establish`
 functions. This rule applies to the complete schema import closure, including
 unexported declarations. The rule applies to standalone compilation and unsaved
@@ -657,7 +660,7 @@ effects, and test blocks. During the legacy `Database.entities` transition, an
 entity imported from a schema family also selects this boundary. Ordinary
 application modules retain their existing rules.
 
-Modules in `FamilySchema.Migrate.*` also exclude connection configuration,
+Modules in `Schema.Family.Migrate.*` (also legacy `FamilySchema.Migrate.*`) also exclude connection configuration,
 application declarations and effects. They may contain pure constants for
 migration records and fixtures, pure functions, supporting types, and ordinary
 `test` blocks over those functions. Such tests cannot declare capabilities or a
@@ -668,7 +671,7 @@ Generated compatibility/support modules will require an explicit test-build
 boundary; a module name alone does not grant historical storage operations.
 
 Ordinary application modules, including their imported libraries and modules
-containing tests, cannot import a historical `FamilySchema.V<n>` root or child
+containing tests, cannot import a historical `Schema.Family.V<n>` root or child
 module (MIG015). They import `VCurrent`. Pure tests that construct historical
 values belong in the family's `Migrate` namespace; this does not grant access to
 the generated compatibility store.
@@ -838,7 +841,7 @@ of its semantic digest. New production seals use format 2:
 Tokens have one ASCII space between them. ABI bytes use lowercase hexadecimal;
 all SHA-256 digests use 64 lowercase hexadecimal digits. Source lines are sorted
 by their complete module names, with no duplicates, omissions or unowned entries.
-The root names exactly `FamilySchema.VCurrent` or a legal frozen revision. Sources
+The root names exactly `Schema.Family.VCurrent` (or legacy `FamilySchema.VCurrent`) or a legal frozen revision. Sources
 must resolve to canonical regular files within that revision's ownership closure.
 Writers terminate each line with LF; readers also accept CRLF metadata.
 
@@ -1066,7 +1069,7 @@ reported separately. The generator's candidate list includes private equal pairs
 and excludes entities, functions, constructor aliases and unmatched nominal names.
 Candidates do not override a developer's decision to omit a `Same` entry.
 
-**Contextual additive source declarations.** A canonical `FamilySchema.Migrate.V<n>`
+**Contextual additive source declarations.** A canonical `Schema.Family.Migrate.V<n>` (or legacy `FamilySchema.Migrate.V<n>`)
 root contains exactly one `migration = Migration { ... }` declaration. Standalone
 pure functions and tests may live in helper modules of the same family. The initial
 `Tesl.Migration` vocabulary exposes `Migration`, `Entity(..)` (`Additive`, `New`,
@@ -2597,10 +2600,10 @@ database NoteDatabase = Database {
 
 `ModuleRef` is a contextual elaboration category, not a value type or constructor.
 In `Database.schema`, a nullary qualified name is a module reference exactly when
-it names a directly imported `FamilySchema.VCurrent` root. The import may expose
+it names a directly imported `Schema.Family.VCurrent` root (or legacy `FamilySchema.VCurrent`). The import may expose
 no declarations. A frozen `V<n>`, child module, string, function result, local
 constructor or local variable cannot stand in for that root in the versioned form.
-In `Database.migrations`, the name must be that same family's `FamilySchema.Migrate`
+In `Database.migrations`, the name must be that same family's `Schema.Family.Migrate` (or legacy `FamilySchema.Migrate`)
 prefix. It denotes the conventional migration directory, not an ordinary module
 import; an empty history need not already have a directory. Neither reference
 introduces a runtime expression or makes a private declaration visible to application

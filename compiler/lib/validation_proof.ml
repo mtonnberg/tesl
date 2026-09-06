@@ -330,7 +330,7 @@ let upper_camel_tokens (s : string) : string list =
   in
   String.iter (fun c ->
     match c with
-    | 'A'..'Z' | 'a'..'z' | '0'..'9' | '_' -> Buffer.add_char buf c
+    | 'A'..'Z' | 'a'..'z' | '0'..'9' | '_' | '.' -> Buffer.add_char buf c
     | _ -> flush ()) s;
   flush ();
   List.rev !out
@@ -461,7 +461,8 @@ let rec check_expr_call_proofs
        check the actual arguments against those annotations. *)
     let inline_lambda_errors = match head with
       | ELambda { params; _ }
-        when List.exists (fun (p : binding) -> p.proof_ann <> None) params ->
+        when List.exists (fun (p : binding) -> p.proof_ann <> None ||
+          Option.is_some (proof_of_fact_type p.type_expr)) params ->
         let call_loc = match e with
           | EApp { fn = _; arg = _; loc = l } -> l
           | _ -> gen_loc

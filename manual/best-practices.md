@@ -619,8 +619,11 @@ api TodoApi {
 
 Keep connection settings in the application and stored entities, types, facts,
 and codecs in their schema modules. Application modules and libraries import
-`FamilySchema.VCurrent`; a frozen `V<n>` import is MIG015. Pure migration functions
-and tests that construct historical values belong in `FamilySchema.Migrate.*`.
+`Schema.Family.VCurrent`; a frozen `V<n>` import is MIG015. Pure migration functions
+and tests that construct historical values belong in `Schema.Family.Migrate.*`.
+For example, `Schema.Todo.VCurrent` lives at `schema/todo/v-current.tesl`, and
+`Schema.Todo.Migrate.V2` lives at `migrations/todo/v2.tesl`. Existing
+`TodoSchema.*` histories remain supported; keep their recorded module names.
 Use the diagnostic's **Use VCurrent** action to update an application import and
 its qualified references together.
 Those tests cannot acquire database capabilities or a connection. See the
@@ -709,10 +712,27 @@ switching builds. A different stored-value contract refuses even completed histo
 do not edit seals or database metadata to suppress that refusal. The explicit
 revalidation workflow for that case is still being implemented. Older experimental
 control formats lacking compatibility metadata also require a separate upgrade
-path, which is not yet available. Ordinary `agent-context` diagnostics check source;
+path when no supported bridge exists. `tesl check app.tesl` checks the saved source;
 the production build additionally checks compatibility with recorded source seals.
+`tesl agent-context` exposes compact diagnostics and symbols for editor/AI tools;
+it is not a migration step and does not access your database.
 
-Preview the next source changes with:
+On Linux, start a guided edit session in a terminal:
+
+```sh
+tesl migrate app.tesl
+```
+
+It freezes the accepted current revision, lists the current schema files to edit,
+and waits while you save changes. It then generates the migration, shows any
+decisions to resolve, checks the saved application, and displays the PostgreSQL
+plan. The final message explains testing, building and deploying the worker.
+Use `tesl migrate app.tesl --resume` to continue an already prepared, undeployed
+revision. Quitting leaves the prepared files saved. The command changes source;
+the compiled worker executes database migrations at deployment.
+
+For scripts or a read-only preview, use the explicit commands below. Preview the
+next source changes with:
 
 ```sh
 tesl migrate generate app.tesl --manifest-json
@@ -805,10 +825,11 @@ select each process's actual login through your connection environment:
 application and deployment regression. Its handlers and API tests stay identical
 while a new worker adds a field and old/new request processes keep serving.
 The [todo migration example](../example/db-migration-example/README.md) extends
-this pattern to seven revisions, an Elm frontend, two request nodes and a rolling
-deployment through a real HTTP proxy. Its README includes the steps for changing
-the schema; the current history demonstrates repeated nullable additions, a new
-entity with its initial index, and a constant default.
+this pattern with an Elm frontend, two request nodes and a rolling deployment
+through a real HTTP proxy. Its [database-change guide](../example/db-migration-example/how-to-update-the-db.md)
+identifies the current schema and migration to edit. The local proxy, deployment
+scripts and replay fixtures live under `deploy/`; the compiled Tesl worker owns
+database migration execution.
 Request verification needs neither CREATE nor temporary-table privileges. Keep
 the worker connection direct or behind a session pooler; `ddlConnection` can name
 a separate DSN when requests use a transaction pooler.
@@ -819,6 +840,15 @@ privileges and logs that fact. An installed Embedded grant profile cannot be
 silently converted to Worker. This initial Worker path supports additive entity
 changes; durable queue/outbox installation, background transformation jobs and
 retirement are still being implemented.
+
+The separate worker can build a supported index on an existing table with
+`CREATE INDEX CONCURRENTLY`. A plain index does not hold up request readiness;
+the worker keeps running until PostgreSQL has finished and Tesl has recorded its
+result. A required unique index waits for both checks. Keep the worker supervised
+during a rollout: after interruption, its replacement verifies the old database
+executor has stopped before claiming the job. An index that could reject writes
+from an admitted old binary still requires a compatibility decision. Embedded
+index supervision and epoch-closing index changes are not yet implemented.
 
 Compiler updates can also change Tesl's own migration bookkeeping tables. The
 current runtime reads formats 2 and 3 and installs format 3 on new databases.

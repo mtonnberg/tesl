@@ -42,5 +42,8 @@ go test -race -count=1 -timeout=900s ./internal/migrationtest "$@"
 if (( $# == 0 )); then
   # Production control/executor APIs and their crash tests use the same
   # isolated cluster and supported-major matrix as the independent harness.
-  go test -race -count=1 -timeout=300s -tags=tesl_migration_test ./teslrt -run '^TestPgMigration(Control|Expansion|Admission|Boot|Status|Install|StoredValueCompatibility|Compatibility|Worker|Index|FutureIndex)'
+  go test -race -count=1 -timeout=300s -tags=tesl_migration_test ./teslrt -run '^TestPgMigration(Control|Expansion|Admission|Boot|Status|Install|StoredValueCompatibility|Compatibility|Worker)'
+  # Long-running index work and its application lifetime have independent
+  # mandatory budgets; neither gate may skip unavailable PostgreSQL.
+  go test -race -count=1 -timeout=300s -tags=tesl_migration_test ./teslrt -run '^(TestPgMigration(Index|FutureIndex|Embedded)|TestServe(Shutdown|ListenFailure))'
 fi

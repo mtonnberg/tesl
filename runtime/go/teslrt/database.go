@@ -83,6 +83,25 @@ var databaseBindings = struct {
 
 func init() {
 	databaseBindings.cond = sync.NewCond(&databaseBindings.mutex)
+	currentRuntimeLifecycle = currentDatabaseLifecycle
+}
+
+func currentDatabaseLifecycle() context.Context {
+	database := boundDatabase.Load()
+	if database == nil {
+		return context.Background()
+	}
+	connection := database.bound()
+	if connection == nil || connection.embedded == nil {
+		return context.Background()
+	}
+	service := connection.embedded
+	service.mutex.Lock()
+	defer service.mutex.Unlock()
+	if service.generation == nil {
+		return context.Background()
+	}
+	return service.generation.ctx
 }
 
 // acquireDatabaseBinding serializes process-wide bindings while allowing the same goroutine
@@ -167,11 +186,21 @@ func WithDatabase(database *Database, body func()) {
 	}
 	var connection *PostgresDB
 	if history, versioned := database.CompiledMigrationHistory(); versioned {
-		connection = openVersionedPostgres(database.Config, history)
+		var release func()
+		connection, release = openVersionedPostgres(database.Config, history)
+		if release != nil {
+			defer release()
+		}
 	} else {
 		connection = OpenPostgres(database.Config, database.Tables)
 	}
 	acquireDatabaseBinding()
+	if connection.embedded != nil {
+		if err := connection.embedded.check(); err != nil {
+			releaseDatabaseBinding()
+			panic(pgFailure("database: Embedded migration service refused before binding", err))
+		}
+	}
 	database.mutex.Lock()
 	previous := database.open
 	database.open = connection

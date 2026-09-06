@@ -18,8 +18,8 @@ let mentions_file ~project_root ~file located =
     match Validation_common.schema_module_relative_path name with
     | Some relative -> Filename.concat project_root relative = file
     | None -> false) (S.sources seal)) [located.header.previous;located.header.current]
-let version root = match String.split_on_char '.' root with
-  | [family;revision] when Migration_source.valid_family family && Migration_source.valid_revision revision ->
+let version root = match Validation_common.schema_module_parts root with
+  | Some (family,revision,[]) when Migration_source.valid_family family && Migration_source.valid_revision revision ->
     Some (family, if revision = "VCurrent" then None else Some (int_of_string (String.sub revision 1 (String.length revision - 1))))
   | _ -> None
 let validate loc header =

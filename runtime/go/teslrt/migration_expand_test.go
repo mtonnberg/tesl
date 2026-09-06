@@ -182,8 +182,8 @@ func TestPgMigrationExpansionRefusesUnsupportedPlanBeforeWork(t *testing.T) {
 	f.namespace = "notes"
 	f.install(t, 1)
 	_, err := ExecutePgMigrationExpansion(f.ctx, f.worker, pgPlanTestHistory(), f.roles)
-	if err == nil || !strings.Contains(err.Error(), "index") {
-		t.Fatalf("unsupported populated index plan: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "epoch transition") {
+		t.Fatalf("unsupported non-additive plan: %v", err)
 	}
 	var count int
 	if err := f.worker.QueryRow(f.ctx, "select count(*) from notes.tesl_schema_expansions").Scan(&count); err != nil || count != 0 {

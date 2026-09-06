@@ -121,7 +121,7 @@ func pgWaitForMigrationReadiness(ctx context.Context, conn *pgx.Conn, history Pg
 			if err != nil {
 				return err
 			}
-			if err := pgVerifyExpansionHistory(state, plan, intents); err != nil {
+			if err := pgVerifyExpansionObservation(state, plan, intents); err != nil {
 				return err
 			}
 			var jobs []pgMigrationIndexJob

@@ -61,15 +61,12 @@ func Serve(server Server, options ServeOptions) struct{} {
 	httpServer := newHTTPServer(handler, bindAddress(options), serveWriteTimeout)
 	// Graceful: an interrupt stops accepting and lets in-flight requests finish, so a deploy does
 	// not answer a request with a truncated response.
-	shutdown, stop := signal.NotifyContext(context.Background(),
+	shutdown, stop := signal.NotifyContext(currentRuntimeLifecycle(),
 		os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	go func() {
-		<-shutdown.Done()
-		drain, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		defer cancel()
-		_ = httpServer.Shutdown(drain)
-	}()
+	if shutdown.Err() != nil {
+		return struct{}{}
+	}
 	announced := options.ListenAddress
 	if announced == "" {
 		announced = "localhost"
@@ -79,12 +76,83 @@ func Serve(server Server, options ServeOptions) struct{} {
 	// blocking lifecycle wait quiescent so a request breakpoint does not wait for
 	// main to reach a checkpoint that cannot occur until the server exits.
 	resumeDebugExecution := debugLifecycleQuiesce()
-	err := httpServer.ListenAndServe()
+	err := serveHTTPUntilShutdown(shutdown, httpServer, httpServer.ListenAndServe, 15*time.Second)
 	resumeDebugExecution()
 	if err != nil && !errors.Is(err, http.ErrServerClosed) {
 		panic("serve: " + err.Error())
 	}
 	return struct{}{}
+}
+
+// Shutdown closes the listener before it has drained active requests. Join that
+// drain before Serve returns and its enclosing database scope is restored. A
+// socket close does not join a handler that ignores cancellation: keep its scope
+// alive until it returns, including after the graceful deadline or listen error.
+func serveHTTPUntilShutdown(ctx context.Context, server *http.Server, serve func() error, timeout time.Duration) error {
+	handler := server.Handler
+	if handler == nil {
+		handler = http.DefaultServeMux
+	}
+	scopes := &serveHandlerScopes{handler: handler}
+	scopes.changed = sync.NewCond(&scopes.mutex)
+	server.Handler = scopes
+	finished := make(chan struct{})
+	drained := make(chan error, 1)
+	go func() {
+		select {
+		case <-ctx.Done():
+		case <-finished:
+		}
+		drain, cancel := context.WithTimeout(context.Background(), timeout)
+		err := server.Shutdown(drain)
+		cancel()
+		if err != nil {
+			err = errors.Join(err, server.Close())
+		}
+		scopes.join()
+		drained <- err
+	}()
+	err := serve()
+	close(finished)
+	if errors.Is(err, http.ErrServerClosed) {
+		err = nil
+	}
+	return errors.Join(err, <-drained)
+}
+
+type serveHandlerScopes struct {
+	handler http.Handler
+	mutex   sync.Mutex
+	changed *sync.Cond
+	active  int
+	closed  bool
+}
+
+func (scopes *serveHandlerScopes) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
+	scopes.mutex.Lock()
+	if scopes.closed {
+		scopes.mutex.Unlock()
+		http.Error(writer, "server is stopping", http.StatusServiceUnavailable)
+		return
+	}
+	scopes.active++
+	scopes.mutex.Unlock()
+	defer func() {
+		scopes.mutex.Lock()
+		scopes.active--
+		scopes.changed.Broadcast()
+		scopes.mutex.Unlock()
+	}()
+	scopes.handler.ServeHTTP(writer, request)
+}
+
+func (scopes *serveHandlerScopes) join() {
+	scopes.mutex.Lock()
+	defer scopes.mutex.Unlock()
+	scopes.closed = true
+	for scopes.active != 0 {
+		scopes.changed.Wait()
+	}
 }
 
 // serveWriteTimeout is the per-response write deadline `Serve` installs. Go arms it ONCE per

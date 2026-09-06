@@ -18,11 +18,12 @@ let protect file f = try Ok (f ()) with
     Error [{E.code="MIG013";loc=Location.dummy_loc file;message;related=[]}]
   | Unix.Unix_error (error,operation,path) ->
     Error [{E.code="MIG013";loc=Location.dummy_loc path;message=operation ^ ": " ^ Unix.error_message error;related=[]}]
-let valid_root name = match String.split_on_char '.' name with
-  | [family;"Migrate";version] when Migration_source.valid_family family &&
+let valid_root name = match V.schema_module_parts name with
+  | Some (family,"Migrate",[version]) when Migration_source.valid_family family &&
       Migration_source.valid_revision version && version <> "VCurrent" && version <> "V1" -> true
   | _ -> false
-let family name = List.hd (String.split_on_char '.' name)
+let family name = match V.schema_module_parts name with
+  | Some (family,_,_) -> family | None -> reject name "invalid frozen migration family"
 let path root name = match V.schema_module_relative_path name with
   | Some relative -> Filename.concat root relative
   | None -> reject root ("invalid frozen migration module: " ^ name)

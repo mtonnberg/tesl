@@ -204,9 +204,9 @@ def main():
         threading.Thread(target=server.serve_forever, daemon=True).start()
         thread = threading.Thread(target=probe, daemon=True)
         thread.start()
-        print(f"Field Notes: http://127.0.0.1:{proxy_port} — rolling V1 → V7 with continuous CRUD", flush=True)
+        print(f"Field Notes: http://127.0.0.1:{proxy_port} — rolling V1 → V9 with continuous CRUD", flush=True)
         spare = proxy_port + 3
-        for version in range(2, 8):
+        for version in range(2, 10):
             time.sleep(2)
             if probe_failures:
                 raise RuntimeError("continuous request probe failed") from probe_failures[0]

@@ -76,23 +76,24 @@ let lower_declaration ~scopes ~(resolve : resolver) ~typed_nodes ~module_name de
   (* Lexical depth identifies binders; spelling and source positions do not. *)
   let bind env name = let id = List.length env in (name, id) :: env, tag "local" [natural id] in
   let local env name = Option.map (fun id -> tag "local" [natural id]) (List.assoc_opt name env) in
+  let rec inferred_predicate = function
+    | PredAnd p -> tag "and" [inferred_predicate p.left; inferred_predicate p.right]
+    | PredApp { pred = ("ForAll" | "ForAllValues" | "ForAllKeys") as pred; args = [inner]; _ } ->
+      (match Validation_common.parse_nested_predicate inner with
+       | Some nested -> tag "quantified-predicate" [lookup Predicate pred; inferred_predicate nested]
+       | None -> reject loc "unresolved nested Fact predicate in inferred migration type")
+    | PredApp { pred; args = []; _ } -> tag "predicate" [lookup Predicate pred]
+    | _ -> reject loc "inferred Fact identity unexpectedly contains proof subjects" in
   let rec inferred_type = function
     | Type_system.TVar id -> tag "inferred-variable" [natural id]
     | Type_system.TCon name when List.mem name abstract_types -> tag "declared-variable" [Bytes name]
     | Type_system.TCon name -> tag "named" [lookup Type name]
+    | Type_system.TApp (TCon "Fact", TCon identity) ->
+      (match Validation_common.parse_nested_predicate identity with
+       | Some predicate -> tag "inferred-fact" [inferred_predicate predicate]
+       | None -> reject loc "unresolved Fact predicate in inferred migration type")
     | Type_system.TApp (head, arg) -> tag "apply" [inferred_type head; inferred_type arg]
     | Type_system.TFun (dom, cod) -> tag "arrow" [inferred_type dom; inferred_type cod] in
-  let rec surface_type env = function
-    | TName n ->
-      (match local env n.name with
-       | Some subject -> tag "subject-type" [subject]
-       | None -> tag "named" [lookup Type n.name])
-    | TVar n -> tag "declared-variable" [Bytes n.name]
-    | TApp t -> tag "apply" [surface_type env t.head; surface_type env t.arg]
-    | TFun t ->
-      if t.caps <> [] then reject t.loc "capability-bearing arrow in migration IR";
-      tag "arrow" [surface_type env t.dom; surface_type env t.cod]
-    | TTuple t -> tag "tuple" (List.map (surface_type env) t.elems) in
   let proof_argument env name =
     let raw = String.starts_with ~prefix:"*" name in
     let name = if raw then String.sub name 1 (String.length name - 1) else name in
@@ -109,6 +110,21 @@ let lower_declaration ~scopes ~(resolve : resolver) ~typed_nodes ~module_name de
       let predicate = match local env p.pred with Some local -> local | None -> lookup Predicate p.pred in
       tag "predicate" [predicate; Seq (List.map (proof_argument env) p.args)]
     | PredAnd p -> tag "and" [proof env p.left; proof env p.right] in
+  let rec surface_type env = function
+    | TName n ->
+      (match local env n.name with
+       | Some subject -> tag "subject-type" [subject]
+       | None -> tag "named" [lookup Type n.name])
+    | TVar n -> tag "declared-variable" [Bytes n.name]
+    | TApp { head = TName { name = "Fact"; _ }; arg; loc } ->
+      (match Ast.type_expr_to_proof_expr arg with
+       | Some predicate -> tag "fact-type" [proof env predicate]
+       | None -> reject loc "Fact requires a predicate in migration IR")
+    | TApp t -> tag "apply" [surface_type env t.head; surface_type env t.arg]
+    | TFun t ->
+      if t.caps <> [] then reject t.loc "capability-bearing arrow in migration IR";
+      tag "arrow" [surface_type env t.dom; surface_type env t.cod]
+    | TTuple t -> tag "tuple" (List.map (surface_type env) t.elems) in
   let binding env (b : binding) =
     let env, id = bind env b.name in
     env, tag "binding" [id; surface_type env b.type_expr; option (proof env) b.proof_ann] in
@@ -189,6 +205,9 @@ let lower_declaration ~scopes ~(resolve : resolver) ~typed_nodes ~module_name de
         (match fn, args with
          | EVar {name="check"; _}, check_fn :: arguments ->
            tag "checked-call" [expression env check_fn; Seq (List.map (expression env) arguments)]
+         | EConstructor { name; args = []; _ }, arguments
+           when resolve Value name = None && resolve Predicate name <> None ->
+           tag "fact" [lookup Predicate name; Seq (List.map (expression env) arguments)]
          | _ -> tag "call" [expression env fn; Seq (List.map (expression env) args)])
       | EBinop b -> tag "binary" [Bytes (binop b.op); expression env b.left; expression env b.right]
       | EUnop u -> tag "unary" [Bytes (match u.op with UNeg -> "negate" | UNot -> "not"); expression env u.arg]
@@ -209,6 +228,8 @@ let lower_declaration ~scopes ~(resolve : resolver) ~typed_nodes ~module_name de
       | EList l -> tag "list" (List.map (expression env) l.elems)
       | EOk o -> tag "attach" [bool o.keyword; expression env o.value; proof env o.proof]
       | EFail f -> tag "fail" [natural f.status; expression env f.message]
+      | EConstructor c when resolve Value c.name = None && resolve Predicate c.name <> None ->
+        tag "fact" [lookup Predicate c.name; Seq (List.map (expression env) c.args)]
       | EConstructor c -> tag "construct" [lookup Value c.name; Seq (List.map (expression env) c.args)]
       | ELambda l -> let env, bs = bindings env l.params in tag "lambda" [Seq bs; expression env l.body]
       | ETelemetry _ | EEnqueue _ | EPublish _ | EStartWorkers _ | ECacheGet _ | ECacheSet _

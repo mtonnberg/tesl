@@ -568,8 +568,8 @@ let validation_diags_of source (m : Ast.module_form) =
         imp.loc = error.Validation_common.loc) m.imports in
       let fix = match imported with
         | Some imp ->
-          (match String.split_on_char '.' imp.module_name with
-           | family :: before :: _ ->
+          (match Validation_common.schema_module_parts imp.module_name with
+           | Some (family,before,_) when Migration_source.valid_revision before ->
              Migration_source.version_fix ~family ~before ~after:"VCurrent" source
            | _ -> None)
         | None -> None in

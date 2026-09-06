@@ -63,6 +63,18 @@ func pgReadExpansionIntents(ctx context.Context, tx pgx.Tx, namespace string) (m
 // needs an immutable intent, complete object progress and exactly its lifecycle
 // rows. The source portion known to this binary must agree byte for byte.
 func pgVerifyExpansionHistory(state PgMigrationControlState, plan PgMigrationExpansionPlan, intents map[int]*pgExpansionIntent) error {
+	return pgVerifyExpansionHistoryMode(state, plan, intents, true)
+}
+
+// Observers verify the same immutable source, storage contract and progress as
+// executors. They do not resume pending work, so its creator ABI does not prevent
+// an already compatible request binary from starting during a rolling expansion.
+// The caller must still compare its actual catalog and wait for its own version.
+func pgVerifyExpansionObservation(state PgMigrationControlState, plan PgMigrationExpansionPlan, intents map[int]*pgExpansionIntent) error {
+	return pgVerifyExpansionHistoryMode(state, plan, intents, false)
+}
+
+func pgVerifyExpansionHistoryMode(state PgMigrationControlState, plan PgMigrationExpansionPlan, intents map[int]*pgExpansionIntent, executor bool) error {
 	last := state.Current
 	if last == 0 {
 		last = state.InitialVersion - 1
@@ -82,7 +94,7 @@ func pgVerifyExpansionHistory(state PgMigrationControlState, plan PgMigrationExp
 		if !pgStoredValueCompatibility(r.StoredValueCompatibility) || r.StoredValueCompatibility != plan.StoredValueCompatibility {
 			return fmt.Errorf("persisted stored-value compatibility differs at V%d", v)
 		}
-		if v > last && r.SourceABI != plan.SourceCompilerABI {
+		if executor && v > last && r.SourceABI != plan.SourceCompilerABI {
 			return fmt.Errorf("unfinished migration compiler ABI differs at V%d", v)
 		}
 		if v <= plan.CurrentVersion {

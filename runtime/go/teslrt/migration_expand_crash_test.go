@@ -21,6 +21,25 @@ import (
 // The test controls the real executor through its build-tag-only Unix seam.
 func pgPauseExpansionBoundary(t *testing.T, name string, hit int) (<-chan struct{}, func()) {
 	t.Helper()
+	pauses := pgPauseExpansionBoundaries(t, []pgExpansionBoundary{{name, hit}})
+	return pauses[0].arrived, pauses[0].resume
+}
+
+type pgExpansionBoundary struct {
+	name string
+	hit  int
+}
+
+type pgExpansionBoundaryPause struct {
+	arrived <-chan struct{}
+	resume  func()
+}
+
+// Multiple pauses share one listener and count each named boundary locally. A
+// successor can be stopped before it has a chance to hide the first actor's
+// effects by adopting or removing a physical object.
+func pgPauseExpansionBoundaries(t *testing.T, boundaries []pgExpansionBoundary) []pgExpansionBoundaryPause {
+	t.Helper()
 	dir, err := os.MkdirTemp("", "tesl-expand-")
 	if err != nil {
 		t.Fatal(err)
@@ -31,12 +50,24 @@ func pgPauseExpansionBoundary(t *testing.T, name string, hit int) (<-chan struct
 	if err != nil {
 		t.Fatal(err)
 	}
-	arrived, release, stopped := make(chan struct{}, 1), make(chan struct{}), make(chan struct{})
-	resume := sync.OnceFunc(func() { close(release) })
-	t.Cleanup(func() { resume(); _ = listener.Close(); <-stopped })
+	pauses := make([]pgExpansionBoundaryPause, len(boundaries))
+	arrivals := make([]chan struct{}, len(boundaries))
+	releases := make([]chan struct{}, len(boundaries))
+	for i := range boundaries {
+		arrivals[i], releases[i] = make(chan struct{}, 1), make(chan struct{})
+		pauses[i] = pgExpansionBoundaryPause{arrivals[i], sync.OnceFunc(func() { close(releases[i]) })}
+	}
+	stopped := make(chan struct{})
+	t.Cleanup(func() {
+		for _, pause := range pauses {
+			pause.resume()
+		}
+		_ = listener.Close()
+		<-stopped
+	})
 	go func() {
 		defer close(stopped)
-		seen := 0
+		seen := make(map[string]int)
 		for {
 			conn, err := listener.Accept()
 			if err != nil {
@@ -45,11 +76,11 @@ func pgPauseExpansionBoundary(t *testing.T, name string, hit int) (<-chan struct
 			_ = conn.SetDeadline(time.Now().Add(30 * time.Second))
 			var event struct{ Name string }
 			if err := json.NewDecoder(io.LimitReader(conn, 4096)).Decode(&event); err == nil {
-				if event.Name == name {
-					seen++
-					if seen == hit {
-						arrived <- struct{}{}
-						<-release
+				seen[event.Name]++
+				for i, boundary := range boundaries {
+					if event.Name == boundary.name && seen[event.Name] == boundary.hit {
+						arrivals[i] <- struct{}{}
+						<-releases[i]
 					}
 				}
 				_, _ = io.WriteString(conn, "continue\n")
@@ -59,7 +90,7 @@ func pgPauseExpansionBoundary(t *testing.T, name string, hit int) (<-chan struct
 	}()
 	t.Setenv("TESL_MIGRATION_TEST_SOCKET", socket)
 	t.Setenv("TESL_MIGRATION_TEST_ACTOR", "expansion")
-	return arrived, resume
+	return pauses
 }
 
 func pgStartTestExpansion(f *pgControlTestFixture, conn *pgx.Conn, version int) <-chan error {

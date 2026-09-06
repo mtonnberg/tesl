@@ -49,7 +49,9 @@
         "additive_lesson_test.go#TestCompiledAdditiveLessonRetainsRows",
         "additive_lesson_test.go#TestCompiledMigrationCompilerUpgradeRetainsRows",
         "blackbox_test.go#TestCompiledVersionsShareRowsAndPauseInsideTransactions",
+        "control_upgrade_app_test.go#TestCompiledControlFormatUpgrade",
         "expansion_blackbox_test.go#TestCompiledMigrationExpansionRetainsRowsAcrossStandaloneRevisions",
+        "todo_showcase_test.go#TestCompiledTodoShowcaseRollingUpgrade",
         "worker_lesson_test.go#TestCompiledWorkerLessonRetainsRows"
       ]
     },
@@ -61,7 +63,9 @@
         "additive_lesson_test.go#TestCompiledAdditiveLessonRetainsRows",
         "additive_lesson_test.go#TestCompiledMigrationCompilerUpgradeRetainsRows",
         "blackbox_test.go#TestCompiledVersionsShareRowsAndPauseInsideTransactions",
+        "control_upgrade_app_test.go#TestCompiledControlFormatUpgrade",
         "expansion_blackbox_test.go#TestCompiledMigrationExpansionRetainsRowsAcrossStandaloneRevisions",
+        "todo_showcase_test.go#TestCompiledTodoShowcaseRollingUpgrade",
         "worker_lesson_test.go#TestCompiledWorkerLessonRetainsRows"
       ]
     },
@@ -139,7 +143,8 @@
         "catalog_runtime_test.go#TestRuntimeCatalogRefusesPartitionAndInheritance",
         "catalog_runtime_test.go#TestRuntimeCatalogRejectsInvalidConcurrentIndex",
         "catalog_runtime_test.go#TestRuntimeCatalogReportsMissingStorageWithoutRecreatingIt",
-        "storage_blackbox_test.go#TestCompiledStorageUsesOwnedTypeBaseAndBuiltinBounds"
+        "storage_blackbox_test.go#TestCompiledStorageUsesOwnedTypeBaseAndBuiltinBounds",
+        "todo_showcase_test.go#TestCompiledTodoShowcaseRollingUpgrade"
       ]
     },
     {
@@ -314,6 +319,15 @@
       ]
     },
     {
+      "id": "INV-FIXTURE-PROVENANCE",
+      "statement": "A previous-binary regression builds only the complete hash-pinned historical emission and unchanged corresponding Tesl source; malformed or altered evidence is refused before extraction, compilation or database connection.",
+      "model_paths": null,
+      "tests": [
+        "control_upgrade_app_test.go#TestCompiledControlFormatUpgrade",
+        "control_upgrade_app_test.go#TestControlUpgradeFixtureRefusesTampering"
+      ]
+    },
+    {
       "id": "INV-FLOOR",
       "statement": "Admission and compatibility floors are ordered, monotone and consistent with committed lifecycle evidence.",
       "model_paths": [
@@ -471,6 +485,7 @@
         "bootstrap_model_test.go#TestBootstrapRefusesWrongTargetIncompleteCatalogAndStaleOwner",
         "bootstrap_model_test.go#TestBootstrapWinnerSurvivesEveryPartialInstallCrash",
         "bootstrap_postgres_test.go#TestPostgresBootstrapWinnerSurvivesEveryPartialInstallCrash",
+        "control_upgrade_app_test.go#TestCompiledControlFormatUpgrade",
         "worker_lesson_test.go#TestCompiledWorkerLessonRetainsRows"
       ]
     },
@@ -551,9 +566,11 @@
       "statement": "Application and worker roles cannot bypass lifecycle guards by writing control tables or shadowing control functions.",
       "model_paths": null,
       "tests": [
+        "control_upgrade_app_test.go#TestCompiledControlFormatUpgrade",
         "lifecycle_test.go#TestPostgresTemplateAdmissionIgnoresTemporaryLookalikes",
         "lifecycle_test.go#TestPostgresTemplateControlOwnerIsTheOnlyDirectWriter",
         "registry_test.go#TestPostgresRegistryLookalikesAndWritableGrantsAreRefused",
+        "todo_showcase_test.go#TestCompiledTodoShowcaseRollingUpgrade",
         "worker_lesson_test.go#TestCompiledWorkerLessonRetainsRows"
       ]
     },
@@ -855,7 +872,9 @@
         "additive_lesson_test.go#TestCompiledMigrationCompilerUpgradeRetainsRows",
         "bootstrap_model_test.go#TestBootstrapWinnerSurvivesEveryPartialInstallCrash",
         "bootstrap_postgres_test.go#TestPostgresBootstrapWinnerSurvivesEveryPartialInstallCrash",
+        "control_upgrade_app_test.go#TestCompiledControlFormatUpgrade",
         "expansion_blackbox_test.go#TestCompiledMigrationExpansionRetainsRowsAcrossStandaloneRevisions",
+        "todo_showcase_test.go#TestCompiledTodoShowcaseRollingUpgrade",
         "worker_lesson_test.go#TestCompiledWorkerLessonRetainsRows"
       ]
     },
@@ -1266,8 +1285,10 @@
         "additive_lesson_test.go#TestCompiledAdditiveLessonRetainsRows",
         "additive_lesson_test.go#TestCompiledMigrationCompilerUpgradeRetainsRows",
         "blackbox_test.go#TestCompiledVersionsShareRowsAndPauseInsideTransactions",
+        "control_upgrade_app_test.go#TestCompiledControlFormatUpgrade",
         "jsonb_blackbox_test.go#TestCompiledJSONBCodecsRequireBothDirectionsAndRewriteEvidence",
         "read_ordering_test.go#TestPostgresTemplateQueryFirstAdmissionAcrossRetirement",
+        "todo_showcase_test.go#TestCompiledTodoShowcaseRollingUpgrade",
         "worker_lesson_test.go#TestCompiledWorkerLessonRetainsRows"
       ]
     },
@@ -1502,11 +1523,13 @@
         "additive_lesson_test.go#TestCompiledAdditiveLessonRetainsRows",
         "additive_lesson_test.go#TestCompiledMigrationCompilerUpgradeRetainsRows",
         "blackbox_test.go#TestCompiledVersionsShareRowsAndPauseInsideTransactions",
+        "control_upgrade_app_test.go#TestCompiledControlFormatUpgrade",
         "jsonb_blackbox_test.go#TestCompiledJSONBCodecsRequireBothDirectionsAndRewriteEvidence",
         "model_test.go#TestApplicationTargetWriteLocksABIBeforeBackfillStarts",
         "model_test.go#TestRetirementExcludesEveryOldWriter",
         "pooler_test.go#TestPostgresPoolerAdmissionTransactions",
         "postgres_test.go#TestPostgresTemplateFenceOrdersPausedWriterAndRetirement",
+        "todo_showcase_test.go#TestCompiledTodoShowcaseRollingUpgrade",
         "worker_lesson_test.go#TestCompiledWorkerLessonRetainsRows"
       ]
     }
@@ -1998,6 +2021,36 @@
         "TR-CONTRACT",
         "TR-INDEX-TERMINAL"
       ],
+      "named_failpoints": null
+    },
+    {
+      "name": "TestCompiledControlFormatUpgrade",
+      "file": "control_upgrade_app_test.go",
+      "line": 38,
+      "layer": "compiled-postgres",
+      "invariants": [
+        "INV-ADDITIVE-READ",
+        "INV-ADDITIVE-WRITE",
+        "INV-FIXTURE-PROVENANCE",
+        "INV-INSTALL-CATALOG",
+        "INV-PRIVILEGE"
+      ],
+      "transitions": [
+        "TR-BOOT-EXPAND",
+        "TR-READ",
+        "TR-WRITE"
+      ],
+      "named_failpoints": null
+    },
+    {
+      "name": "TestControlUpgradeFixtureRefusesTampering",
+      "file": "control_upgrade_app_test.go",
+      "line": 592,
+      "layer": "harness",
+      "invariants": [
+        "INV-FIXTURE-PROVENANCE"
+      ],
+      "transitions": null,
       "named_failpoints": null
     },
     {
@@ -3020,6 +3073,26 @@
         "TR-CATALOG-COMPARE"
       ],
       "named_failpoints": null
+    },
+    {
+      "name": "TestCompiledTodoShowcaseRollingUpgrade",
+      "file": "todo_showcase_test.go",
+      "line": 31,
+      "layer": "compiled-postgres",
+      "invariants": [
+        "INV-ADDITIVE-READ",
+        "INV-ADDITIVE-WRITE",
+        "INV-CATALOG-EVIDENCE",
+        "INV-PRIVILEGE"
+      ],
+      "transitions": [
+        "TR-BOOT-EXPAND",
+        "TR-READ",
+        "TR-WRITE"
+      ],
+      "named_failpoints": [
+        "expansion-after-ddl"
+      ]
     },
     {
       "name": "TestProtocolTraceability",

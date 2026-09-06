@@ -358,6 +358,18 @@ and parse_proof_atom s =
          | Some n -> advance s; Ok n
          | None -> err s (Printf.sprintf "expected proof predicate, got %s" (tok_to_string (peek s))))
     in
+    (* Qualified predicates also occur inside opaque grouped ForAll arguments,
+       whose token rendering contains spaces around dots. Resolve the complete
+       namespace here, independently of adjacent-token preprocessing. *)
+    let rec qualified_predicate name =
+      if peek s <> DOT then Ok name else begin
+        advance s;
+        match peek s with
+        | UIDENT part | IDENT part ->
+          advance s; qualified_predicate (name ^ "." ^ part)
+        | _ -> err s "expected predicate name after module qualifier"
+      end in
+    let* pred_name = qualified_predicate pred_name in
     (* Collect argument names (identifiers, possibly raw *x, or parenthesized) *)
     let args = ref [] in
     let continue_ = ref true in

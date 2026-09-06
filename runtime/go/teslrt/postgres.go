@@ -105,8 +105,9 @@ type PostgresDB struct {
 	pool           *pgxpool.Pool
 	schema         string
 	bootstrapMutex sync.Mutex
-	outboxReady    bool                  // protected by bootstrapMutex; runtime DDL runs before first binding
-	migration      *pgMigrationAdmission // immutable after initialization, nil for legacy databases
+	outboxReady    bool                    // protected by bootstrapMutex; runtime DDL runs before first binding
+	migration      *pgMigrationAdmission   // immutable after initialization, nil for legacy databases
+	embedded       *pgEmbeddedIndexService // nil for legacy and Worker request pools
 }
 
 type postgresInitialization struct {

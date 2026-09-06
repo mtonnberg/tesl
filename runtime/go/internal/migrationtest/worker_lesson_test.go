@@ -378,6 +378,7 @@ func TestCompiledWorkerLessonRetainsRows(t *testing.T) {
 		"select worker_notes.tesl_begin_expansion(3,null,null,null,null,0,true)",
 		"select worker_notes.tesl_record_expansion_object(3,0,null)",
 		"select worker_notes.tesl_record_expanded(3)",
+		"select worker_notes.tesl_lock_expired_index_holder('x','tesl-exec:old',1,2,'abi')",
 		"set role " + worker,
 		"set role " + owner,
 	} {

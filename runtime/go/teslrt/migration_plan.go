@@ -76,7 +76,7 @@ func (history PgCompiledMigrationHistory) ExpansionPlan(initialVersion int) (PgM
 		identity, family, namespace := pgMigrationRead[string](r, d["database"]), pgMigrationRead[string](r, d["family"]), pgMigrationRead[string](r, d["namespace"])
 		current := pgMigrationRead[int](r, d["currentVersion"])
 		origins := pgMigrationRead[[]json.RawMessage](r, d["origins"])
-		if identity == "" || !strings.HasSuffix(family, "Schema") || !pgMigrationIdentifier(namespace) ||
+		if identity == "" || !pgMigrationFamily(family) || !pgMigrationIdentifier(namespace) ||
 			identities[identity] || families[family] || current < 1 || current > 2147483646 || len(origins) != current {
 			r.fail("invalid connection identity or incomplete origin history")
 			break

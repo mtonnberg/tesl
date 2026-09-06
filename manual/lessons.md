@@ -176,6 +176,7 @@ A few lessons have a longer prose companion alongside the code:
 - [`lesson24-pubsub-sse.md`](../example/learn/lesson24-pubsub-sse.md) — Lesson 24: Pub/Sub Channels and SSE Endpoints
 - [`lesson72-units.md`](../example/learn/lesson72-units.md) — Lesson 72: Units — Compile-Time Dimensions, Runtime Floats
 - [`lesson83-additive-migrations.md`](../example/learn/lesson83-additive-migrations.md) — Updating the compiler while the notes app keeps serving
+- [`lesson84-worker-migrations.md`](../example/learn/lesson84-worker-migrations.md) — Adding an index while the application keeps serving
 
 ---
 

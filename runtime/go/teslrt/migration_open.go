@@ -13,7 +13,7 @@ import (
 // Versioned connections have a separate initialization identity, even when two
 // compiled revisions are embedded in one process. They never use legacy entity
 // bootstrap or its name-based adoption of existing objects.
-func openVersionedPostgres(config PostgresConfig, history PgCompiledMigrationHistory) *PostgresDB {
+func openVersionedPostgres(config PostgresConfig, history PgCompiledMigrationHistory) (*PostgresDB, func()) {
 	if config.Schema != history.Namespace {
 		panic("database: migration namespace disagrees with connection")
 	}
@@ -32,8 +32,9 @@ func openVersionedPostgres(config PostgresConfig, history PgCompiledMigrationHis
 	if !ok {
 		panic("database: unexpected connection initialization")
 	}
+	var release func()
 	if !loaded {
-		initializeVersionedPostgres(key, initialization, poolConfig, config, history, roles)
+		release = initializeVersionedPostgres(key, initialization, poolConfig, config, history, roles)
 	} else {
 		<-initialization.done
 	}
@@ -43,15 +44,25 @@ func openVersionedPostgres(config PostgresConfig, history PgCompiledMigrationHis
 	if initialization.db == nil {
 		panic("database: versioned initialization completed without a pool")
 	}
-	return initialization.db
+	if loaded && initialization.db.embedded != nil {
+		release, err = initialization.db.embedded.acquire()
+		if err != nil {
+			panic(pgFailure("database: Embedded migration service refused", err))
+		}
+	}
+	return initialization.db, release
 }
 
 func initializeVersionedPostgres(key string, initialization *postgresInitialization, config *pgxpool.Config,
-	connectionConfig PostgresConfig, history PgCompiledMigrationHistory, roles PgMigrationControlRoles) {
+	connectionConfig PostgresConfig, history PgCompiledMigrationHistory, roles PgMigrationControlRoles) (release func()) {
 	defer close(initialization.done)
 	var pool *pgxpool.Pool
 	defer func() {
 		if failure := recover(); failure != nil {
+			if release != nil {
+				release()
+				release = nil
+			}
 			if pool != nil {
 				pool.Close()
 			}
@@ -62,7 +73,18 @@ func initializeVersionedPostgres(key string, initialization *postgresInitializat
 	if _, err := history.ExpansionPlan(1); err != nil {
 		panic("database: invalid compiled migration history: " + err.Error())
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), pgLeaseTimeout())
+	serviceContext := context.Background()
+	stopService := func() {}
+	if roles.Request == "" {
+		serviceContext, stopService = pgEmbeddedContext()
+	}
+	transferred := false
+	defer func() {
+		if !transferred {
+			stopService()
+		}
+	}()
+	ctx, cancel := context.WithTimeout(serviceContext, pgLeaseTimeout())
 	defer cancel()
 	// Both paths use a dedicated connection. Worker request startup is entirely
 	// read-only; only Embedded startup may borrow the trusted DDL connection.
@@ -80,6 +102,9 @@ func initializeVersionedPostgres(key string, initialization *postgresInitializat
 		panic(pgFailure("database: cannot connect migration executor", err))
 	}
 	defer func() {
+		if transferred {
+			return
+		}
 		cleanup, stop := context.WithTimeout(context.Background(), pgLeaseTimeout())
 		defer stop()
 		_ = conn.Close(cleanup)
@@ -91,14 +116,8 @@ func initializeVersionedPostgres(key string, initialization *postgresInitializat
 	} else {
 		state, executeErr = pgWaitForMigrationReadiness(ctx, conn, history, roles)
 	}
-	closeCtx, stopClose := context.WithTimeout(context.Background(), pgLeaseTimeout())
-	closeErr := conn.Close(closeCtx)
-	stopClose()
 	if executeErr != nil {
 		panic(pgFailure("database: migration startup refused", executeErr))
-	}
-	if closeErr != nil {
-		panic(pgFailure("database: cannot close migration executor", closeErr))
 	}
 	principal := roles.Worker
 	if roles.Request != "" {
@@ -106,16 +125,39 @@ func initializeVersionedPostgres(key string, initialization *postgresInitializat
 	}
 	db := &PostgresDB{schema: history.Namespace, migration: &pgMigrationAdmission{version: history.CurrentVersion,
 		fenceNamespace: state.FenceNamespace, databaseUUID: state.DatabaseUUID, worker: principal, roles: roles}}
+	if roles.Request == "" {
+		settings, err := pgIndexWorkerConfiguration()
+		if err != nil {
+			panic(err)
+		}
+		cancel() // Required unique builds may outlive the short expansion budget.
+		transferred = true
+		db.embedded, release, err = pgStartEmbeddedIndexService(serviceContext, stopService, conn, startupConfig, history, roles, state, settings)
+		if err != nil {
+			panic(pgFailure("database: Embedded migration service refused", err))
+		}
+	} else {
+		closeCtx, stopClose := context.WithTimeout(context.Background(), pgLeaseTimeout())
+		closeErr := conn.Close(closeCtx)
+		stopClose()
+		if closeErr != nil {
+			panic(pgFailure("database: cannot close migration executor", closeErr))
+		}
+	}
+	// Pool admission gets its own bounded context after any long unique build.
+	poolContext, stopPool := context.WithTimeout(serviceContext, pgLeaseTimeout())
+	defer stopPool()
 	config.AfterConnect = func(ctx context.Context, conn *pgx.Conn) error { return pgVerifyMigrationConnection(ctx, conn, db) }
-	pool, err = pgxpool.NewWithConfig(ctx, config)
+	pool, err = pgxpool.NewWithConfig(poolContext, config)
 	if err != nil {
 		panic(pgFailure("database: cannot open versioned pool", err))
 	}
 	db.pool = pool
-	if err := pool.Ping(ctx); err != nil {
+	if err := pool.Ping(poolContext); err != nil {
 		panic(pgFailure("database: versioned connection refused", err))
 	}
 	initialization.db = db
+	return release
 }
 
 // A replacement/reconnected database may have the same DSN and version numbers

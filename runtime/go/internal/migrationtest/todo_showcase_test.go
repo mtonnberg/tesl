@@ -26,7 +26,7 @@ import (
 )
 
 // INV-ADDITIVE-READ, INV-ADDITIVE-WRITE, INV-PRIVILEGE, INV-CATALOG-EVIDENCE; TR-BOOT-EXPAND, TR-READ, TR-WRITE.
-// Seven ordinary compiled apps share retained PostgreSQL rows through six real
+// Nine ordinary compiled apps share retained PostgreSQL rows through eight real
 // migration edges. Only the interrupted V4 worker has test boundary hooks.
 func TestCompiledTodoShowcaseRollingUpgrade(t *testing.T) {
 	dsn := os.Getenv("TESL_MIGRATION_TEST_DSN")
@@ -77,7 +77,7 @@ func TestCompiledTodoShowcaseRollingUpgrade(t *testing.T) {
 	// Stop and join the writer before process cleanups even if a phase fails.
 	defer traffic.finish(t)
 	traffic.requireProgress(t, ctx, nodes[0].process.label, nodes[1].process.label)
-	for version := 2; version <= 7; version++ {
+	for version := 2; version <= 9; version++ {
 		t.Logf("rollout V%d while both request nodes serve retained todo rows", version)
 		worker.stop(t)
 		next := db.requestNode(t, binaries[version], fmt.Sprintf("todo-v%d-a", version))
@@ -89,7 +89,12 @@ func TestCompiledTodoShowcaseRollingUpgrade(t *testing.T) {
 				nodes[0].process.label, nodes[1].process.label)
 			next.assertNoHTTP(t)
 		}
-		worker = db.workerNode(t, binaries[version], version)
+		if version == 8 {
+			worker = recoverShowcaseConcurrentIndex(t, db, binaries, next, traffic, client,
+				nodes[0].process.label, nodes[1].process.label)
+		} else {
+			worker = db.workerNode(t, binaries[version], version)
+		}
 		requireShowcaseReady(t, ctx, client, next)
 		for index := range nodes {
 			if index == 1 {
@@ -109,7 +114,7 @@ func TestCompiledTodoShowcaseRollingUpgrade(t *testing.T) {
 		worker.assertNoHTTP(t)
 	}
 	worker.stop(t)
-	// The original compatible binary restarts after all six schema changes,
+	// The original compatible binary restarts after all eight schema changes,
 	// receives real proxy traffic, and writes without a live schema worker.
 	restarted := db.requestNode(t, binaries[1], "todo-v1-restarted")
 	requireShowcaseReady(t, ctx, client, restarted)
@@ -117,7 +122,7 @@ func TestCompiledTodoShowcaseRollingUpgrade(t *testing.T) {
 	proxy.replace(t, nodes[0], replacement)
 	nodes[0] = replacement
 	traffic.requireProgress(t, ctx, nodes[0].process.label, nodes[1].process.label)
-	db.status(t, binaries[1], 1, 7)
+	db.status(t, binaries[1], 1, 9)
 	retained := traffic.finish(t)
 	if len(retained) < 25 {
 		t.Fatalf("rollout produced only %d completed write/readback cycles", len(retained))
@@ -148,7 +153,7 @@ func buildShowcaseRevisions(t *testing.T, ctx context.Context, root string) (map
 		if entry.IsDir() && (entry.Name() == ".local" || entry.Name() == ".tesl-stuff" || entry.Name() == "elm-stuff") {
 			return filepath.SkipDir
 		}
-		if entry.IsDir() || (!strings.HasSuffix(path, ".tesl") && filepath.Dir(path) != filepath.Join(example, "releases")) {
+		if entry.IsDir() || (!strings.HasSuffix(path, ".tesl") && filepath.Dir(path) != filepath.Join(example, "deploy", "releases")) {
 			return nil
 		}
 		data, err := os.ReadFile(path)
@@ -167,9 +172,9 @@ func buildShowcaseRevisions(t *testing.T, ctx context.Context, root string) (map
 	compiler := filepath.Join(root, "compiler", "_build", "default", "bin", "main.exe")
 	buildRoot, binaries := t.TempDir(), make(map[int]string)
 	interrupted := filepath.Join(t.TempDir(), "todo-v4-interrupted")
-	for version := 1; version <= 7; version++ {
+	for version := 1; version <= 9; version++ {
 		output := filepath.Join(buildRoot, fmt.Sprintf("v%d", version))
-		command := exec.CommandContext(ctx, "bash", filepath.Join(example, "build-revision.sh"), strconv.Itoa(version), output, "--emit-only")
+		command := exec.CommandContext(ctx, "bash", filepath.Join(example, "deploy", "build-revision.sh"), strconv.Itoa(version), output, "--emit-only")
 		command.Dir = root
 		command.Env = append(os.Environ(), "TESL_COMPILER="+compiler, "TESL_REPO_ROOT="+root)
 		if data, err := command.CombinedOutput(); err != nil {
@@ -220,7 +225,7 @@ func requireShowcaseReleaseSources(t *testing.T, example, source string, version
 		Revision int               `json:"revision"`
 		Files    map[string]string `json:"files"`
 	}
-	if err := json.Unmarshal(originals[filepath.Join(example, "releases", fmt.Sprintf("v%d.json", version))], &release); err != nil || release.Revision != version || len(release.Files) == 0 {
+	if err := json.Unmarshal(originals[filepath.Join(example, "deploy", "releases", fmt.Sprintf("v%d.json", version))], &release); err != nil || release.Revision != version || len(release.Files) == 0 {
 		t.Fatalf("V%d release archive is absent or invalid: %v", version, err)
 	}
 	for relative, expected := range release.Files {
@@ -800,6 +805,7 @@ func (db *showcaseDatabase) requireRequestPrivileges(t *testing.T) {
 		"select todo_app.tesl_renew_index('spoof',1,30000)",
 		"select todo_app.tesl_release_index('spoof',1)",
 		"select todo_app.tesl_record_index_state('spoof',1,'valid',null)",
+		"select todo_app.tesl_lock_expired_index_holder('spoof','tesl-exec:old',1,2,'abi')",
 		"set role " + db.worker,
 		"set role " + db.owner,
 	} {
@@ -897,7 +903,7 @@ func (db *showcaseDatabase) requireFinalStorage(t *testing.T, wantRows int) {
 	t.Helper()
 	var rows, defaults int
 	if err := db.observer.QueryRow(db.ctx, `select count(*),count(*) filter(where
- details is null and due_at is null and project_id is null and priority=0) from todo_app.todos`).Scan(&rows, &defaults); err != nil || rows != wantRows || defaults != wantRows {
+ details is null and due_at is null and project_id is null and reminder_at is null and priority=0) from todo_app.todos`).Scan(&rows, &defaults); err != nil || rows != wantRows || defaults != wantRows {
 		t.Fatalf("old/new writes did not retain every row with nullable/default semantics: rows=%d defaults=%d want=%d (%v)", rows, defaults, wantRows, err)
 	}
 	var revisions, first, last, abis, contracts int
@@ -907,8 +913,8 @@ func (db *showcaseDatabase) requireFinalStorage(t *testing.T, wantRows int) {
  bool_and(epoch_preserving and operation_count>0 and operation_count=(
  select count(*) from todo_app.tesl_schema_expansion_objects o where o.version=e.version))
  from todo_app.tesl_schema_expansions e`).Scan(&revisions, &first, &last, &abis, &contracts, &receiptsComplete); err != nil ||
-		revisions != 7 || first != 1 || last != 7 || abis != 1 || contracts != 1 || !receiptsComplete {
-		t.Fatalf("seven genuine expansion steps were not recorded with complete immutable receipts: revisions=%d range=%d..%d ABI=%d contracts=%d complete=%v (%v)", revisions, first, last, abis, contracts, receiptsComplete, err)
+		revisions != 9 || first != 1 || last != 9 || abis != 1 || contracts != 1 || !receiptsComplete {
+		t.Fatalf("nine genuine expansion steps were not recorded with complete immutable receipts: revisions=%d range=%d..%d ABI=%d contracts=%d complete=%v (%v)", revisions, first, last, abis, contracts, receiptsComplete, err)
 	}
 	var projects bool
 	if err := db.observer.QueryRow(db.ctx, `select
@@ -917,5 +923,9 @@ func (db *showcaseDatabase) requireFinalStorage(t *testing.T, wantRows int) {
  where i.indrelid='todo_app.projects'::regclass and a.attname='archived' and i.indisvalid and i.indisready and
  not i.indisunique and i.indnkeyatts=1 and a.attnum=any(i.indkey))`).Scan(&projects); err != nil || !projects {
 		t.Fatalf("projects table, its fresh-table index, or its later nullable field is absent: %v (%v)", projects, err)
+	}
+	job := readShowcaseConcurrentIndex(t, db)
+	if job.state != "valid" || job.holder != "" || !job.valid {
+		t.Fatalf("V8 concurrent index was not retained through V9 and oldest restart: %+v", job)
 	}
 }

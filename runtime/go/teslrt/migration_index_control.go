@@ -160,7 +160,9 @@ func pgMigrationIndexHolder(holder string) bool {
 		return false
 	}
 	for _, c := range strings.TrimPrefix(holder, "tesl-exec:") {
-		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_' || c == '-') {
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9', c == '_', c == '-':
+		default:
 			return false
 		}
 	}
@@ -224,6 +226,33 @@ begin
  update ` + ns + `tesl_schema_leases set holder=who,token=token+1,
    expires_at=pg_catalog.clock_timestamp()+ttl_ms*interval '1 millisecond' where name=lease.name returning token into result;
  return result;
+end`},
+		{"tesl_lock_expired_index_holder", "j text, old_holder text, old_token bigint, v integer, abi text", "boolean", "volatile", `
+declare job ` + ns + `tesl_schema_index%rowtype; lease ` + ns + `tesl_schema_leases%rowtype;
+ who text := pg_catalog.current_setting('application_name',true); creator text;
+begin
+ if who is null or who !~ '^tesl-exec:[A-Za-z0-9_-]{1,53}$' or
+   old_holder is null or old_holder !~ '^tesl-exec:[A-Za-z0-9_-]{1,53}$' or
+   old_token is null or old_token<1 or abi is null then
+   raise exception 'tesl: invalid expired index holder identity, token or ABI';
+ end if;
+ if who=old_holder then return false; end if;
+ perform ` + ns + `tesl_admit(v);
+ -- Match renewal/claim/publication lock order. The caller keeps this outer
+ -- transaction open while signalling only the exact observed old sessions.
+ select * into job from ` + ns + `tesl_schema_index where id=j for update;
+ if not found then raise exception 'tesl: index job is missing'; end if;
+ if v<job.version then raise exception 'tesl: index executor version predates its job'; end if;
+ if job.state in ('valid','terminal') then return false; end if;
+ select source_abi into creator from ` + ns + `tesl_schema_expansions where version=job.version;
+ if not found or abi is distinct from creator then raise exception 'tesl: unfinished index compiler ABI differs'; end if;
+ select * into lease from ` + ns + `tesl_schema_leases where name='index:' || job.index_name for update;
+ if not found then raise exception 'tesl: index lease is missing'; end if;
+ -- Check wall time after acquiring both locks, not against a stale snapshot
+ -- taken before a competing renewal or claim finished. This function does not
+ -- rewrite ownership, extend expiry or signal a backend on the owner's behalf.
+ return lease.holder is not distinct from old_holder and lease.token=old_token
+   and lease.expires_at is not null and lease.expires_at<=pg_catalog.clock_timestamp();
 end`},
 		{"tesl_renew_index", "j text, tok bigint, ttl_ms integer", "boolean", "volatile", `
 declare job ` + ns + `tesl_schema_index%rowtype;

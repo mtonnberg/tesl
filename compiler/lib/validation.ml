@@ -22,7 +22,7 @@ open Validation_advanced
 (* Re-export the core type so compile.ml can still use Validation.validation_error *)
 type validation_error = Validation_common.validation_error
 
-let check_module (m : module_form) : validation_error list =
+let check_module_unscoped (m : module_form) : validation_error list =
   let decls = m.decls in
   (* 2026-07 matrix: validators whose metadata tables (entity columns, codec
      target types, newtype→base, record proof-anns/invariants) were built from
@@ -180,3 +180,6 @@ let check_module (m : module_form) : validation_error list =
   @ (TStructural @: check_handler_isolation decls)
   @ (TCapability @: check_auth_call_restriction decls)
   @ (TNaming @: collect_import_parse_errors m)
+
+let check_module m =
+  Validation_common.with_predicate_scope m (fun () -> check_module_unscoped m)

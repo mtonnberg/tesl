@@ -8,16 +8,16 @@ open Ast
 open Validation_common
 
 let schema_prefix name =
-  match schema_module_relative_path name, String.split_on_char '.' name with
-  | Some path, family :: revision :: _ when String.starts_with ~prefix:"schema/" path ->
+  match schema_module_parts name with
+  | Some (family, revision, _) when revision <> "Migrate" ->
     Some (family ^ "." ^ revision)
   | _ -> None
 
 let within prefix name = name = prefix || String.starts_with ~prefix:(prefix ^ ".") name
 
 let migration_family name =
-  match schema_module_relative_path name, String.split_on_char '.' name with
-  | Some path, family :: "Migrate" :: _ when String.starts_with ~prefix:"migrations/" path -> Some family
+  match schema_module_parts name with
+  | Some (family, "Migrate", _) -> Some family
   | _ -> None
 
 let read_module path =
@@ -97,8 +97,8 @@ let resolve_binding ?(modules = []) (m : module_form) (d : database_form) =
   match List.assoc_opt "schema" fields with
   | Some (EConstructor { name = root; args = []; loc }) ->
     let error message = Error [make_error loc message] in
-    (match String.split_on_char '.' root, schema_prefix root with
-     | [family; "VCurrent"], Some prefix when prefix = root ->
+    (match schema_module_parts root, schema_prefix root with
+     | Some (family, "VCurrent", []), Some prefix when prefix = root ->
        let expected_migrations = family ^ ".Migrate" in
        let migrations = match List.assoc_opt "migrations" fields with
          | Some (EConstructor { name; args = []; _ }) -> Some name | _ -> None in
@@ -137,7 +137,7 @@ let resolve_binding ?(modules = []) (m : module_form) (d : database_form) =
          errors := List.rev_append (check_member_storage members) !errors;
          if !errors <> [] then Error (List.rev !errors)
          else Ok (Some { database = d; schema_root = root; migration_prefix = expected_migrations; members })
-     | _ -> error "`Database.schema` must name an imported `FamilySchema.VCurrent` root, not a frozen version or child module")
+     | _ -> error "`Database.schema` must name an imported `Schema.Family.VCurrent` root (or legacy `FamilySchema.VCurrent`), not a frozen version or child module")
   | _ -> Ok None
 
 let check_closure ?root_module ~source_file root =
@@ -190,7 +190,7 @@ let check_databases (m : module_form) =
   let historical_imports = List.filter_map (fun (imp : import_decl) ->
     match schema_prefix imp.module_name with
     | Some prefix when not (String.ends_with ~suffix:".VCurrent" prefix) ->
-      let family = List.hd (String.split_on_char '.' prefix) in
+      let family = match schema_module_parts prefix with Some (family,_,_) -> family | None -> assert false in
       Some (make_error ~code:"MIG015" ~topic:Error_codes.TDatabase imp.loc
         ~hint:(Printf.sprintf "import %s.VCurrent instead; put pure tests over historical values in the %s.Migrate namespace"
                  family family)

@@ -13,8 +13,9 @@ let valid_revision name =
    | None -> false)
 
 let valid_family family =
-  not (String.contains family '.') &&
-  Validation_common.schema_module_relative_path (family ^ ".VCurrent") <> None
+  match Validation_common.schema_module_parts (family ^ ".VCurrent") with
+  | Some (actual, "VCurrent", []) -> actual = family
+  | _ -> false
 
 (* Sorted, non-overlapping edits in raw source-byte coordinates. Sharing these
    ranges keeps editor fixes and frozen copies on exactly the same token walk. *)
@@ -43,13 +44,19 @@ let version_edits ~family ~before ~after source =
       in
       let tokens = Array.of_list (Lexer.tokenize "<schema-rewrite>" source) in
       let edits = ref [] in
+      let family_tokens = String.split_on_char '.' family |> List.concat_map (fun part -> [Token.UIDENT part; Token.DOT]) in
+      let family_width = List.length family_tokens in
+      let matches_family i =
+        i + family_width < Array.length tokens &&
+        List.for_all (fun (offset, expected) -> tokens.(i + offset).tok = expected)
+          (List.mapi (fun offset expected -> offset, expected) family_tokens) in
       Array.iteri (fun i (token : Lexer.full_token) ->
         (match token.tok with
-         | Token.UIDENT name when name = family && i + 2 < Array.length tokens &&
+         | Token.UIDENT _ when matches_family i &&
              (i = 0 || tokens.(i - 1).tok <> Token.DOT) ->
-           (match tokens.(i + 1).tok, tokens.(i + 2).tok with
-            | Token.DOT, Token.UIDENT revision when revision = before ->
-              let offset = position tokens.(i + 2) in
+           (match tokens.(i + family_width).tok with
+            | Token.UIDENT revision when revision = before ->
+              let offset = position tokens.(i + family_width) in
               if String.sub source offset (String.length before) <> before then
                 failwith "version token does not match its source range";
               edits := (offset, String.length before) :: !edits

@@ -192,6 +192,13 @@ let make_ctx ?(source_lines = [||]) ~filename ~env () = {
   source_lines;
 }
 
+let is_intrinsic_fact_combinator ctx = function
+  | EVar { name = ("attachFact" | "andLeft" | "andRight" | "introAnd") as name; _ } ->
+    (match env_lookup name ctx.env, env_lookup name (make_stdlib_env ()) with
+     | Some actual, Some intrinsic -> actual == intrinsic
+     | _ -> false)
+  | _ -> false
+
 (** Every TYPE name the module's own declarations introduce.
 
     Single source for "is this type name declared here?".  It is DERIVED from the
@@ -558,6 +565,25 @@ let activate_units_aliases_for (m : module_form) : string list =
     List.exists (fun (i : import_decl) -> i.module_name = "Tesl.Money") m.imports;
   prev
 
+(* A detached proof's subjects are checked by the proof kernel. Its qualified
+   predicate identity must ALSO survive HM arrows, partial application and
+   aliases; erasing it here would let a callback accept another owner's Fact. *)
+let qualified_fact_ty proof =
+  let proof = Validation_common.map_predicate_proof Validation_common.predicate_identity proof in
+  let rec predicates = function
+    | PredApp { pred = ("ForAll" | "ForAllValues" | "ForAllKeys") as pred;
+        args = inner :: _; _ } -> [pred ^ "(" ^ inner ^ ")"]
+    | PredApp { pred; _ } -> [pred]
+    | PredAnd { left; right; _ } -> predicates left @ predicates right in
+  let names = predicates proof |> List.sort_uniq String.compare in
+  if List.exists (fun name -> String.contains name '.') names
+  then TApp (t_fact, TCon (String.concat " && " names)) else t_fact
+
+let fact_ty_of_argument arg =
+  match Ast.type_expr_to_proof_expr arg with
+  | Some proof -> qualified_fact_ty proof
+  | None -> t_fact
+
 (** Tesl type expression → OCaml ty *)
 let rec ty_of_type_expr (te : type_expr) : ty =
   match te with
@@ -574,7 +600,7 @@ let rec ty_of_type_expr (te : type_expr) : ty =
         | Some q -> q
         | None -> TCon other))
   | TVar { name; _ }     -> TCon name   (* treat named tyvars as abstract *)
-  | TApp { head = TName { name = "Fact"; _ }; _ } -> t_fact
+  | TApp { head = TName { name = "Fact"; _ }; arg; _ } -> fact_ty_of_argument arg
   | TApp { head; arg; _ }-> TApp (ty_of_type_expr head, ty_of_type_expr arg)
   | TFun { dom; cod; _ } -> TFun (ty_of_type_expr dom, ty_of_type_expr cod)
   | TTuple { elems; loc = _ } ->
@@ -609,7 +635,7 @@ let ty_of_type_expr_with_params (params_map : (string * int) list) (te : type_ex
       (match List.assoc_opt name params_map with
        | Some id -> TVar id
        | None    -> TCon name)
-    | TApp { head = TName { name = "Fact"; _ }; _ } -> t_fact
+    | TApp { head = TName { name = "Fact"; _ }; arg; _ } -> fact_ty_of_argument arg
     | TApp { head; arg; _ } -> TApp (go head, go arg)
     | TFun { dom; cod; _ } -> TFun (go dom, go cod)
     | TTuple { elems; _ }  ->
@@ -897,34 +923,9 @@ let resolve_local_import_path = Validation_common.resolve_local_import_path
    can observe edits, deleted/recreated imports, or same-size atomic saves.
    Reading before lookup also prevents caching a missing file forever. Cache
    retention is bounded; larger modules remain valid but are parsed uncached. *)
-let import_parse_cache : (string, string * module_form Parser.result) Hashtbl.t =
-  Hashtbl.create 32
-
-let import_cache_bytes = ref 0
-let clear_import_parse_cache () =
-  Hashtbl.reset import_parse_cache;
-  import_cache_bytes := 0
-
-(** Read + parse a locally-imported module at [path], memoized by content.
-    Returns [None] if the file does not exist (so callers can keep their
-    existing "skip missing import" behavior), otherwise [Some result] where
-    [result] is the parse outcome ([Ok]/[Err]) exactly as
-    [Parser.parse_module] would return it for a fresh read. *)
-let parse_local_import_module (path : string) : module_form Parser.result option =
-  if not (Source_input.exists path) then (Hashtbl.remove import_parse_cache path; None)
-  else
-    let source = Source_input.read path in
-    match Hashtbl.find_opt import_parse_cache path with
-    | Some (previous, parsed) when previous = source -> Some parsed
-    | _ ->
-      let parsed = Parser.parse_module path source in
-      let size = String.length source in
-      if size <= 1024 * 1024 then (
-        if Hashtbl.length import_parse_cache >= 256
-           || !import_cache_bytes + size > 8 * 1024 * 1024 then clear_import_parse_cache ();
-        Hashtbl.replace import_parse_cache path (source, parsed);
-        import_cache_bytes := !import_cache_bytes + size);
-      Some parsed
+let import_parse_cache = Validation_common.import_parse_cache
+let clear_import_parse_cache = Validation_common.clear_import_parse_cache
+let parse_local_import_module = Validation_common.parse_local_import_module
 
 let module_exports_name (m : module_form) name =
   List.exists (function ExportName n | ExportAdt n -> n = name) m.exports
@@ -940,10 +941,11 @@ let qualified_type_in_scope (m : module_form) name =
       match parse_local_import_module (resolve_local_import_path m.source_file qualifier) with
       | None | Some (Err _) -> false
       | Some (Ok imported) ->
-        module_exports_name imported local_name && List.exists (function
+        module_exports_name imported local_name && (List.exists (function
           | DType (TypeAdt { name; _ }) | DType (TypeNewtype { name; _ })
           | DRecord { name; _ } | DEntity { name; _ } | DFact { name; _ } -> name = local_name
-          | _ -> false) imported.decls) m.imports
+          | _ -> false) imported.decls
+          || List.mem_assoc local_name (Validation_common.provided_predicate_owners imported))) m.imports
 
 (* Qualified-only imports must retain each version's nominal identity, including
    nested field and constructor types. Use the same substitution for signatures,
@@ -1131,9 +1133,13 @@ let load_imported_func_sigs (m : module_form) : (string * scheme) list =
             | ImportExposing names -> Some (List.map strip_dotdot names)
           in
           let qualify = qualify_imported_ty imp imported in
+          let transport = Validation_common.imported_predicate_transport m imp imported in
           List.concat_map (function
             | DFunc fd when module_exports_name imported fd.name ->
               let qualified_name = imp.module_name ^ "." ^ fd.name in
+              let fd = { fd with
+                params = List.map (Validation_common.map_predicate_binding transport) fd.params;
+                return_spec = Validation_common.map_predicate_return transport fd.return_spec } in
               let sch = decl_scheme fd in
               (* Qualify the scheme's type so local types appear as Module.Type *)
               let q_sch = { sch with mono = qualify sch.mono } in
@@ -1242,6 +1248,11 @@ let load_imported_ctors (m : module_form) : (string * (string * scheme)) list =
       | None | Some (Err _) -> []
       | Some (Ok imported) ->
         with_module_alias_activation imported @@ fun () ->
+          let transport = Validation_common.imported_predicate_transport m imp imported in
+          let typed_imported = { imported with decls = List.map (function
+            | DType (TypeAdt t) -> DType (TypeAdt { t with variants = List.map (fun (v : adt_variant) ->
+                { v with fields = List.map (Validation_common.map_predicate_field transport) v.fields }) t.variants })
+            | d -> d) imported.decls } in
           let requested = match imp.names with
             | ImportAll -> None
             | ImportExposing names -> Some names
@@ -1267,7 +1278,7 @@ let load_imported_ctors (m : module_form) : (string * (string * scheme)) list =
             in
             (if include_plain then [ (ctor_name, (adt_name, ctor_sch)) ] else [])
             @ (if include_qualified then [ (qualified_name, (adt_name, ctor_sch)) ] else [])
-          ) (exported_ctor_entries imported)
+          ) (exported_ctor_entries typed_imported)
   ) m.imports
 
 (* 2026-07-03 hole #15: load imported record/entity FIELD TYPES so dotted field
@@ -1307,13 +1318,16 @@ let load_imported_records (m : module_form) : (string * record_def) list =
            name.  The bare key is kept (gated on `wants`) for the exposing-import
            access style. *)
         let qualify name = imp.module_name ^ "." ^ name in
+        let transport = Validation_common.imported_predicate_transport m imp imported in
         List.concat_map (function
           | DRecord r when module_exports_name imported r.name ->
+            let r = { r with fields = List.map (Validation_common.map_predicate_field transport) r.fields } in
             let rd = build_record_def r in
             let rd = { rd with rd_fields = List.map (fun (n, ty) ->
               n, qualify_imported_ty imp imported ty) rd.rd_fields } in
             (qualify r.name, rd) :: (if wants r.name then [(r.name, rd)] else [])
           | DEntity e when module_exports_name imported e.name ->
+            let e = { e with fields = List.map (Validation_common.map_predicate_field transport) e.fields } in
             let rd =
               { rd_name = e.name;
                 rd_fields =
@@ -3308,7 +3322,10 @@ let rec infer_expr ctx (e : expr) : ty =
             unify_at ctx (expr_loc arg_expr) current_ret_ty (TFun (arg_ty, next_ret_ty));
             (arg_ty, next_ret_ty)
         in
-        unify_at ctx (expr_loc arg_expr) arg_ty param_ty;
+        let checked_arg_ty = match apply !(ctx.subst) arg_ty, param_ty with
+          | TApp (TCon "Fact", _), TCon "Fact" when is_intrinsic_fact_combinator ctx fn_expr -> t_fact
+          | _ -> arg_ty in
+        unify_at ctx (expr_loc arg_expr) checked_arg_ty param_ty;
         apply !(ctx.subst) next_ret_ty
       ) fn_ty call_args in
       (* Record the call for Eq/Ord discharge after the whole module is checked
@@ -3554,14 +3571,14 @@ let rec infer_expr ctx (e : expr) : ty =
          match classify_lowered_query ctx base_fn with
          | Some ty -> record_sql_operand_field_accesses ctx base_fn; ty
          | None -> infer_direct_call base_fn args)
-     | EConstructor { name; _ }
+     | EConstructor { name; loc; _ }
        when ctx.in_establish &&
             (match List.assoc_opt name ctx.ctors with None -> true | _ -> false) &&
             (match env_lookup name (make_stdlib_env ()) with None -> true | _ -> false) ->
         (* In establish context, unknown uppercase constructors are proof predicates.
-           Infer arg types for any side effects but return t_fact. *)
+           Infer arguments and preserve the declaring predicate identity. *)
         List.iter (fun arg -> ignore (infer_expr ctx arg)) args;
-        t_fact
+        qualified_fact_ty (PredApp { pred = name; args = []; loc })
      | EVar { name = "decodeAs"; loc } ->
         (* Infer normally so the (json:String) arg is checked and the result var
            can be pinned by surrounding unification, then decide-by-resolution.
@@ -4041,7 +4058,7 @@ let rec infer_expr ctx (e : expr) : ty =
     (match resolve_constructor_type ctx name loc with
      | ProofPredicateConstructor ->
        List.iter (fun arg -> ignore (infer_expr ctx arg)) args;
-       t_fact
+       qualified_fact_ty (PredApp { pred = name; args = []; loc })
      | KnownConstructor ctor_ty ->
        List.fold_left (fun fn_ty arg ->
          let arg_ty = infer_expr ctx arg in
@@ -4058,6 +4075,9 @@ let rec infer_expr ctx (e : expr) : ty =
     List.fold_right (fun (_, t) acc -> TFun (t, acc)) param_tys body_ty
   in
   let expr_meta = match binding_meta_of_expr ctx e with Some m -> m | None -> PlainBinding in
+  let inferred = match apply !(ctx.subst) inferred, expr_meta with
+    | TCon "Fact", FactProofBinding proof -> qualified_fact_ty proof
+    | _ -> inferred in
   record_expr_type_with_meta ctx (expr_loc e) inferred expr_meta;
   Option.iter (fun nodes -> nodes := (e, inferred, ctx.subst) :: !nodes) ctx.typed_nodes;
   inferred
@@ -5170,6 +5190,7 @@ use the `Tuple3 a b c` constructor instead";
        check-call rule has to run here too — [infer_expr]'s copy never sees it. *)
     reject_nested_check_calls ctx base_fn args;
     (match base_fn with
+     | _ when is_intrinsic_fact_combinator ctx base_fn -> fallback ()
      | EVar { name = "initTelemetry" | "check" | "make-witness" | "selectOne" | "select" | "selectCount" | "selectSum" | "selectMax" | "selectMin" | "selectCountBy" | "selectSumBy" | "insert" | "insertMany" | "upsert" | "update" | "updateAndReturnOne" | "returning" | "where" | "set" | "onConflict" | "doUpdate" | "delete" | "deleteAndReturnResult" | "one" | "#record-update#"; _ } ->
        fallback ()
      | EVar { name = "serverTools"; _ } when not ctx.server_tools_shadowed ->
@@ -6869,58 +6890,12 @@ let check_proof_predicate_scope (m : module_form) : type_error list =
     end
   ) uses
 
-(** BMOD-FORGE-01 (review §4.2 + §4.3): a proof-predicate (`fact`) name must have a
-    SINGLE owning module across the import graph — exactly as a type name does.
-
-    Before this, predicate identity was the bare surface name and the emitter
-    interned a shared `eq?` symbol, so a consumer could declare a local `fact F`
-    with the same spelling as a predicate owned by an imported module and thereby
-    (a) become a co-"owner" able to MINT it, and (b) satisfy that module's `::: F`
-    obligation with a forged value — the exact cross-module forgery the thesis's
-    invariant #2 forbids.  It also left thesis invariant #1 (no-shadowing) with a
-    hole for `fact` specifically (the fn/type shadow detector omits it).
-
-    Rather than re-architect predicate identity, we close the class fail-closed:
-    a proof-predicate name must resolve to a SINGLE owning module across everything
-    in scope.  This rejects (a) a local `fact` whose name is already owned by an
-    imported module, (b) two DISTINCT imported modules that each own a fact of the
-    same name reachable in this module — the cross-module "diamond" where a value
-    carrying `ModA.F` would satisfy a `ModB.F` obligation because identity is the
-    bare name (confirmed forgeable via `ModA.mint` + `ModB.sink` bridged in a
-    consumer), and (c) a local `fact` colliding with an explicitly-imported stdlib
-    predicate.  A re-export of the SAME originally-declared fact keeps one owner, so
-    legitimate re-export + use is unaffected. *)
+(** Bare predicates must have one owner. Namespace-only imports may carry the
+    same spelling from distinct modules: their imported proof metadata uses the
+    original owner's qualified identity. Exposed names and local declarations
+    retain the fail-closed ownership rule, including hidden function obligations. *)
 let check_fact_name_distinctness (m : module_form) : type_error list =
-  let is_tesl_module name =
-    String.length name >= 5 && String.sub name 0 5 = "Tesl." in
-  (* Facts a module PROVIDES as (name, ORIGINAL-owner): those it declares (owner =
-     itself), plus those it re-exports resolved transitively to their declaring
-     module — so a re-export chain of one fact keeps a single owner, while two
-     independent declarations of the same name have two distinct owners.  [visited]
-     bounds recursion over cycles. *)
-  let rec provided_owned visited (mm : module_form) : (string * string) list =
-    if List.mem mm.module_name visited then []
-    else begin
-      let visited = mm.module_name :: visited in
-      let declared =
-        List.filter_map (function
-          | DFact { name; _ } -> Some (name, mm.module_name) | _ -> None) mm.decls in
-      let exported_names =
-        List.filter_map (function ExportName n | ExportAdt n -> Some n) mm.exports in
-      let reexported =
-        List.concat_map (fun (imp : import_decl) ->
-          if is_tesl_module imp.module_name then []
-          else
-            match parse_local_import_module
-                    (resolve_local_import_path mm.source_file imp.module_name) with
-            | Some (Ok im) ->
-              List.filter (fun (n, _) -> List.mem n exported_names) (provided_owned visited im)
-            | _ -> []
-        ) mm.imports
-      in
-      declared @ reexported
-    end
-  in
+  let is_tesl_module name = String.starts_with ~prefix:"Tesl." name in
   (* fact-name -> distinct owning modules reachable in THIS module, and, for a
      diamond with no local declaration, an import loc to report at. *)
   let owners : (string, string list) Hashtbl.t = Hashtbl.create 16 in
@@ -6941,16 +6916,27 @@ let check_fact_name_distinctness (m : module_form) : type_error list =
               (resolve_local_import_path m.source_file imp.module_name) with
       | Some (Ok imported) ->
         List.iter (fun (name, owner) -> add_owner ~loc:imp.loc name owner)
-          (provided_owned [] imported)
+          (Validation_common.scope_predicate_owners imported)
       | _ -> ()
   ) m.imports;
-  (* Report each name owned by >= 2 distinct modules exactly once, preferring a
-     local-declaration loc for the message when this module declares the fact. *)
+  (* Namespace imports retain distinct owners. Reject only an actual unqualified
+     binding collision; hidden proof signatures already carry original owners. *)
+  let bare_owners name =
+    let local = if List.mem_assoc name local_facts then [m.module_name] else [] in
+    List.sort_uniq String.compare (local @ List.concat_map (fun (imp : import_decl) ->
+      match imp.names with
+      | ImportAll -> []
+      | ImportExposing names when List.mem name names ->
+        (match Validation_common.predicate_import_module m imp.module_name with
+         | None -> []
+         | Some imported -> Validation_common.provided_predicate_owners imported
+             |> List.filter_map (fun (n, owner) -> if n = name then Some owner else None))
+      | ImportExposing _ -> []) m.imports) in
   let local_name_loc = local_facts in
   let ambiguity_errors =
     Hashtbl.fold (fun name owner_list acc ->
       match owner_list with
-      | _ :: _ :: _ ->
+      | _ :: _ :: _ when List.length (bare_owners name) > 1 ->
         let owners_str = String.concat ", " (List.sort compare owner_list) in
         let loc, msg =
           match List.assoc_opt name local_name_loc with
@@ -8263,6 +8249,7 @@ let cached_module_metadata = Query_cache.memo ~retain_across_snapshots:true ~lim
     result)
 
 let check_module_with_metadata ?typed_nodes ?(source_lines = [||]) (m : module_form) =
+  Validation_common.with_predicate_scope m (fun () ->
   (* Migration inventories collect physical AST identities and final type
      substitutions into a fresh sink. A read-only metadata cache hit cannot
      replay that collection, even when its diagnostics are identical. *)
@@ -8273,7 +8260,7 @@ let check_module_with_metadata ?typed_nodes ?(source_lines = [||]) (m : module_f
         | Some inputs -> cached_module_metadata (inputs, source_lines, m)
         | None -> check_module_with_metadata_uncached ~source_lines m) in
   ignore (activate_units_aliases_for m);
-  result
+  result)
 
 let check_module_with_local_bindings (m : module_form) : local_binding_info list * type_error list =
   let local_bindings, _, _, _, _, _, errors = check_module_with_metadata m in

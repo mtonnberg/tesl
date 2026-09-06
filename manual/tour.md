@@ -377,14 +377,14 @@ handlers, workers, and tests in application modules that import those entities.
 The application selects the database for imported entities too, so an entity
 module needs no connection settings or import back to the application.
 
-Schema families use names such as `NotesSchema.VCurrent` in
+Schema families use names such as `Schema.Notes.VCurrent` in
 `schema/notes/v-current.tesl`, with optional child modules under
 `schema/notes/v-current/`. Every schema module and its import closure obeys this
 boundary, including private declarations, even before an application binds it to
 a database. A handler, database declaration, effect, or test inside that closure
 is a compile error. Editor checks apply the same rule to unsaved schema buffers.
 
-Migration modules under `NotesSchema.Migrate.*` also keep application code and
+Migration modules under `Schema.Notes.Migrate.*` also keep application code and
 connections out. They allow pure migration records and fixture values; entity
 declarations stay in the schema they import. Ordinary `test` blocks over pure
 migration functions can live beside those functions. They cannot declare
@@ -403,14 +403,22 @@ families in one database, or binding a historical `V<n>` entity to a connection.
 Application bindings use `VCurrent`. These checks also run on new, unsaved
 application files.
 
-An application can select the complete schema with `schema: NotesSchema.VCurrent`
-and `migrations: NotesSchema.Migrate` instead of listing `entities:`. Import the
+An application can select the complete schema with `schema: Schema.Notes.VCurrent`
+and `migrations: Schema.Notes.Migrate` instead of listing `entities:`. Import the
 `VCurrent` root directly; the compiler includes every entity in its local import
 closure, including private entities and child modules. That membership does not
 make private types or helpers accessible to application code. With PostgreSQL,
 put the physical schema name in `PostgresConfig.namespace`, for example
 `namespace: "notes_app"`. It must be a nonempty static string. The `Database`
 declaration and connection settings remain in the application module.
+
+For a small application, keep the schema in that one `v-current.tesl` file.
+Freezing creates a neighboring `v1.tesl`, `v2.tesl`, and so on; a child directory
+is only needed if you split the schema into modules. Migration rules live in
+`migrations/notes/v2.tesl` and later versions. Existing `NotesSchema.*` modules
+remain supported, but keep their recorded spelling: renaming a sealed family
+changes its history identity. The [todo example](../example/db-migration-example/README.md)
+shows the single-file layout with a complete application.
 
 The compiler also checks additive `Migration { from, to, same, entities }`
 declarations imported from `Tesl.Migration`. Each `Migrate.V<n>` root owns one

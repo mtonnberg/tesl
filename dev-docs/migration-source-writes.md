@@ -9,6 +9,50 @@ that the proposal compiles or that a database migration is safe to execute.
 
 ## Commands and outcomes
 
+`tesl migrate app.tesl [--database App.Main]` is the guided saved-source flow.
+Start it from the checked current revision, before editing the schema. It freezes
+that revision with the existing `--new-revision` generator, then lists the current
+schema files to edit separately from the newly prepared history. After the user
+saves and presses Enter, it refreshes the migration. Generated decisions and
+other compiler diagnostics remain visible until the user resolves them. The final
+steps check the saved application and produce the read-only PostgreSQL plan.
+Deployment guidance is printed only after both succeed.
+
+`tesl migrate app.tesl --resume` continues an existing **undeployed** revision.
+It can reenter the diagnostic loop when a saved edit does not parse or type-check.
+It cannot start a first revision or freeze another one. The guided flow does not
+connect to PostgreSQL, run application tests, build a release, or execute database
+migrations. Explicit `generate`, `plan`, and `recover-source` commands retain their
+noninteractive behavior and JSON contracts.
+
+The wizard and ordinary generation share `migrationGenerate` and the same
+`sourceedit` publisher. An optional wizard validator checks the **exact decoded
+preview immediately before `Apply`**, rather than checking one preview and applying
+another. Resume requires `operation: refresh` there. After preparation, each refresh
+must preserve the selected entry, database, family, schema root, and revision. A
+concurrent change to another family or revision refuses further publication.
+Module names and paths come from the compiler; current-closure guidance follows
+the selected module root and its children, including qualified roots such as
+`Schema.Todo.VCurrent`, without assuming a legacy family suffix or path spelling.
+The final plan must still name that database and family and end at the prepared
+revision. A saved change between the last application check and planning cannot
+produce completion or deployment guidance for a different selection.
+
+Implicit interactive input must be a Linux terminal, matching the current
+saved-source publisher's platform support. CI and nonterminal file input refuse
+before invoking tools or changing files. A non-file `App.Stdin` is an explicit
+embedding/test seam. Every wizard compiler child receives nil stdin: otherwise
+`os/exec` can consume answers while copying stdin even when the compiler itself
+never reads them. The wizard reads bounded complete lines and polls terminal input
+with context cancellation; EOF is not an empty affirmative answer.
+
+`q` stops successfully; EOF or cancellation stops with an error. Already committed
+source edits remain saved, and `--resume` continues that undeployed revision.
+The wizard does not invent a multi-command rollback. A failed source publication
+uses the ordinary guarded inverse and recovery journal described below; it is not
+retried as if it were a compiler diagnostic. The existing `recover-source` command
+handles interrupted publication or retained cleanup state.
+
 `tesl migrate generate app.tesl --manifest-json` returns the read-only version-1
 `migration-source-preview` envelope. Plain `tesl migrate generate app.tesl` uses
 the same preview and publishes its saved-file edits. Its JSON changes `kind` to

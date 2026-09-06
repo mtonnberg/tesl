@@ -16,8 +16,8 @@ let roots (m : module_form) = List.filter_map (function
     let fields = match d.config_expr with None -> [] | Some e -> Desugar.config_record_fields e in
     (match List.assoc_opt "schema" fields,List.assoc_opt "migrations" fields with
      | Some (EConstructor {name=root;args=[];_}),Some (EConstructor {name=prefix;args=[];_}) ->
-       (match String.split_on_char '.' root with
-        | [family;"VCurrent"] when Migration_source.valid_family family && prefix=family ^ ".Migrate" &&
+       (match Validation_common.schema_module_parts root with
+        | Some (family,"VCurrent",[]) when Migration_source.valid_family family && prefix=family ^ ".Migrate" &&
             List.exists (fun (i : import_decl) -> i.module_name=root) m.imports -> Some (d,root,family)
         | _ -> None)
      | _ -> None)

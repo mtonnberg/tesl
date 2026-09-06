@@ -1,6 +1,7 @@
 package teslrt
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"sync"
 	"testing"
@@ -8,7 +9,7 @@ import (
 
 func compiledHistoryFixture(t *testing.T, suffix string) (string, *Database) {
 	t.Helper()
-	family := "Fixture" + suffix + "Schema"
+	family := fmt.Sprintf("Fixture%xSchema", sha256.Sum256([]byte(suffix)))
 	t.Cleanup(func() { compiledMigrationHistories.Delete(family) })
 	registerCompiledMigrationHistory("Config.Main", family, "app_space", 8, "actual-compiler-abi", pgTestStoredValueCompatibility, `{"fixture":true}`)
 	return family, NewDatabase("Main", PostgresConfig{Schema: "app_space"}, nil)

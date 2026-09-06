@@ -24,7 +24,7 @@ var compiledMigrationHistories sync.Map // schema family -> immutable compiled i
 // never reads a mutable source checkout or adjacent JSON file.
 func registerCompiledMigrationHistory(database, family, namespace string, version int, sourceABI, compatibility, history string) {
 	if database == "" || family == "" || namespace == "" || sourceABI == "" || !pgStoredValueCompatibility(compatibility) || history == "" ||
-		version < 1 || version > 2147483646 || !strings.HasSuffix(family, "Schema") {
+		version < 1 || version > 2147483646 || !pgMigrationFamily(family) {
 		panic("database: invalid compiler-generated migration history")
 	}
 	info := PgCompiledMigrationHistory{Database: database, Family: family, Namespace: namespace,
@@ -33,6 +33,30 @@ func registerCompiledMigrationHistory(database, family, namespace string, versio
 	if loaded && previous != info {
 		panic("database: conflicting compiled migration histories for " + family)
 	}
+}
+
+// Schema.Todo names the schema/todo directory. Legacy TodoSchema families keep
+// their original identity and source history; the two spellings are not aliases.
+func pgMigrationFamily(family string) bool {
+	var name string
+	if strings.HasPrefix(family, "Schema.") {
+		name = strings.TrimPrefix(family, "Schema.")
+	} else if strings.HasSuffix(family, "Schema") && len(family) > len("Schema") {
+		name = strings.TrimSuffix(family, "Schema")
+	} else {
+		return false
+	}
+	if name == "" || name[0] < 'A' || name[0] > 'Z' {
+		return false
+	}
+	for _, c := range name {
+		switch {
+		case c >= 'A' && c <= 'Z', c >= 'a' && c <= 'z', c >= '0' && c <= '9', c == '_':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // RegisterDatabaseMigrationHistory binds the application's connection to its

@@ -18,8 +18,8 @@ let at = Checker.expr_loc
 let application = Migration_form.application
 
 let root_version (m : module_form) =
-  match String.split_on_char '.' m.module_name with
-  | [family;"Migrate";revision] when Migration_source.valid_family family &&
+  match Validation_common.schema_module_parts m.module_name with
+  | Some (family,"Migrate",[revision]) when Migration_source.valid_family family &&
         Migration_source.valid_revision revision && revision <> "VCurrent" ->
     Some (family, int_of_string (String.sub revision 1 (String.length revision - 1)))
   | _ -> None

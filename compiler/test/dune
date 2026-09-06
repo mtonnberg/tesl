@@ -36,6 +36,11 @@
  (libraries tesl_compiler_lib alcotest unix str))
 
 (test
+ (name test_qualified_predicate_identity)
+ (modules test_qualified_predicate_identity)
+ (libraries tesl_compiler_lib alcotest unix str))
+
+(test
  (name test_migration_history_sources)
  (modules test_migration_history_sources)
  (libraries tesl_compiler_lib alcotest unix str))
@@ -481,6 +486,11 @@
 (test
  (name test_migration_program)
  (modules test_migration_program)
+ (libraries tesl_compiler_lib alcotest str unix))
+
+(test
+ (name test_migration_qualified_family)
+ (modules test_migration_qualified_family)
  (libraries tesl_compiler_lib alcotest str unix))
 
 (test

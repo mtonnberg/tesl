@@ -14,12 +14,17 @@ import (
 	"tesl.dev/runtime/go/internal/sourceedit"
 )
 
-const migrationUsage = `Usage: tesl migrate generate <entry.tesl> [--database D] [--new-revision]
+const migrationUsage = `Usage: tesl migrate <entry.tesl> [--database D] [--resume]
+       tesl migrate generate <entry.tesl> [--database D] [--new-revision]
        tesl migrate generate <entry.tesl> --manifest-json [--database D] [--new-revision]
        tesl migrate recover-source --project-root DIR
        tesl migrate plan <entry.tesl> [--database D] [--initial-version N]
 
-Generate or refresh migration sources and report the result as JSON.
+The guided flow prepares a new revision, waits for your saved schema changes,
+then refreshes migration sources and checks the application until it compiles.
+--resume continues an existing undeployed revision instead of freezing the next one.
+The guided flow requires an interactive terminal; use explicit commands in CI.
+generate refreshes migration sources and reports the result as JSON.
 --manifest-json previews the edits without writing files.
 The report separates source generation from compilation: decision holes need filling.
 recover-source restores an interrupted source write, or finishes committed cleanup.
@@ -63,9 +68,19 @@ func (app *App) migrate(ctx context.Context, args []string) error {
 		}
 		return err
 	}
+	if strings.HasSuffix(rest[0], ".tesl") || rest[0] == "--" {
+		return app.migrationWizard(ctx, rest)
+	}
 	if rest[0] != "generate" || slices.Contains(rest, "--manifest-json") {
 		return app.compiler(ctx, args...)
 	}
+	return app.migrationGenerate(ctx, args, nil)
+}
+
+// A host may add selection preconditions before publication. The compiler still
+// owns every edit and the shared writer enforces the identical file guards.
+func (app *App) migrationGenerate(ctx context.Context, args []string, validate func(*sourceedit.Preview) error) error {
+	rest := args[1:]
 	// The compiler owns selection, arguments, source validation and every edit.
 	// The native host supplies only guarded saved-file publication and recovery.
 	var output compilerOutput
@@ -81,6 +96,11 @@ func (app *App) migrate(ctx context.Context, args []string) error {
 	preview, err := sourceedit.DecodePreview(output.Bytes())
 	if err != nil {
 		return fmt.Errorf("invalid migration compiler response: %w", err)
+	}
+	if validate != nil {
+		if err := validate(preview); err != nil {
+			return err
+		}
 	}
 	report, applyErr := preview.Manifest().Apply(ctx)
 	result := make(map[string]json.RawMessage)

@@ -7,8 +7,8 @@ additive expansion executor. Versioned application startup consumes the linked
 compiler history and publishes its request pool only after required expansion succeeds.
 Every versioned SQL read and write checks permanent admission. The compiled binary
 provides installation, status and separate worker commands. The Worker request/
-executor split is covered below; automatic heartbeats, adoption, concurrent index
-jobs, typed backfill and contract remain pending. The complete acceptance gates are tracked in
+executor split and concurrent index jobs are covered below; adoption, typed
+backfill, durable payload migrations and contract remain pending. The complete acceptance gates are tracked in
 [the implementation ledger](migrations-implementation.md).
 
 ## Application startup and requests
@@ -85,11 +85,12 @@ temporarily hold the authority needed for installation.
 The same ownership restriction applies to Embedded's combined long-lived login.
 
 `./app --schema worker --json` expands on its dedicated connection and emits one
-`schema-worker-ready` JSON object after success. It then stays alive until SIGTERM
-or SIGINT; it starts no HTTP handlers or application queue workers. The service
-lifetime is independent of the startup lease. This initial worker runs additive
-expansion; background transformation/index jobs and automatic heartbeats are not
-implemented by waiting in that loop.
+`schema-worker-ready` JSON object after required expansion and unique-index
+readiness. It then stays alive until SIGTERM or SIGINT, building pending plain
+indexes and checking its connections, leases, admission and catalog. It starts no
+HTTP handlers or application queue workers. The service lifetime is independent
+of the startup lease. Heartbeats report liveness; they do not authorize ownership
+or prove that an old binary has retired. Typed transformation jobs remain pending.
 
 A request process observes fresh READ ONLY, repeatable-read snapshots while its
 revision is pending, without acquiring the boot lock. Each snapshot checks role
@@ -213,14 +214,39 @@ is no automatic adoption of their missing compatibility metadata. Changing the
 format number or relabelling their stored ABI is not an upgrade procedure.
 
 Fresh installations now use format 3, adding protected index descriptors and leases
-with five narrow Worker-only functions for registration, claim, renewal, release
-and state recording. Registration and ordered expansion progress commit together.
+with six narrow Worker-only functions for registration, claim, renewal, release,
+state recording and locked validation of an expired holder. Registration and ordered expansion progress commit together.
 An unfinished job retains its creator ABI even after its expansion completes.
 The observer recognizes only exact registered index shapes: a pending plain index
 does not delay readiness; a required unique index needs both durable success and
 an actual valid, ready, live index. An older reader independently checks that a
 future index cannot reject its admitted writes. Unknown indexes remain drift.
-Production concurrent-index scheduling and cleanup are still pending.
+The Worker runs `CREATE INDEX CONCURRENTLY` on its dedicated DDL connection with
+no startup/statement deadline. A separate coordinator renews its fenced lease and
+polls immutable history and catalog identity. `TESL_LEASE_TTL_S` and
+`TESL_SCHEMA_POLL_S` configure lease and poll intervals. The service holds a shared
+version fence throughout execution and uses a separate job advisory lock; neither
+is a substitute for fresh admission or lease checks.
+
+Before cleanup it observes actual PostgreSQL index-build progress and then reads
+a fresh catalog snapshot. It drops only a confirmed invalid remnant belonging to
+the exact registered job, never an active or valid index. Connection loss closes
+and joins the old executor, confirms its full tagged backend group has gone,
+then reconnects with a fresh identity. An expired live holder can be signalled
+only after the narrow control function locks and rechecks its exact token, ABI,
+expiry and admission; signalling itself occurs outside the definer as the same
+Worker login. No broad backend-signalling role is granted. SQL failure is durable;
+ambiguous connection failure is resolved from PostgreSQL rather than guessed.
+Embedded topology owns the same index service through `WithDatabase`. Concurrent
+and nested scopes share one service generation; the last scope cancels and joins
+its executors before releasing the database binding. A later scope creates a fresh
+generation while reusing the request pool. Plain index construction can continue
+after HTTP readiness; a required unique index must finish before readiness.
+SIGINT/SIGTERM cancellation covers startup as well as `Serve`, including a signal
+received before the HTTP listener starts. Shutdown stops accepting handlers and
+joins handlers already using the binding before the scope returns. An executor's
+permanent failure is retained and refuses a later acquisition; it does not terminate
+an established request pool. Status exposes the recorded index failure.
 
 Bridge binaries inspect both exact formats 2 and 3. Before upgrading an existing
 format-2 installation, deploy the bridge request binaries with unchanged app code,
@@ -233,6 +259,15 @@ exact format 3; an acknowledged or ambiguous successful commit can be retried.
 Then start the bridge worker. Workers never perform this upgrade on startup.
 Pre-bridge binaries that only support format 2 cannot restart against format 3;
 heartbeats do not prove that all such executables have been replaced.
+
+The native regression preserves two authentic historical emissions: the original
+format-2/contract-2 app and a format-3/contract-2 bridge. Their generated runtime,
+source and provenance are immutable. The current compiler's contract 3 refuses
+contract-2 rows; upgrading control metadata does not revalidate stored proofs.
+The historical format-3 bridge also predates the sixth index recovery function,
+so the current exact catalog check refuses that prototype before interpreting
+its rows. The regression distinguishes these refusal layers instead of patching
+either historical executable to make it appear compatible.
 
 These are additive production definitions, not the independent phase-0 fixture's
 full future protocol. Retirement and later lifecycle tables still require
@@ -265,11 +300,16 @@ Retaining that revision promises compatible proof/type/check/establish semantics
 erasure, lowering, primitives, codecs and SQL-visible representation. This promise
 must be reviewed when those implementations change; runtime string equality alone
 does not establish semantic equivalence.
-The September 2026 main merge strengthens proof ownership, server authentication
-type checking and queue-worker proof admission. The semantic revision therefore
-advances to 2; binaries from before those fixes are not silently declared
-stored-value compatible. The full-app compiler-upgrade test still checks a harmless
-query-only build change within this new contract and refusal across contracts.
+The September 2026 main merge introduced revision 2 for stronger proof ownership,
+server authentication type checking and queue-worker proof admission. Revision 3
+also preserves original predicate owners through hidden forwarding modules and
+Fact-valued callbacks. An actual revision-2 compiler accepted a witness from one
+owner where another owner's evidence was required; the corrected compiler rejects
+it. This is a proof-interpretation change, so existing revision-2 histories are not
+silently relabelled as compatible. The full-app compiler-upgrade test checks a
+harmless query-only build change within the current contract and refusal across
+contracts. Control-format upgrades and stored-value revalidation are separate:
+upgrading metadata does not repair evidence produced under an older proof kernel.
 
 A completed additive intent may have a different creator ABI when its contract
 matches the current compiler and the checked source/storage/step identities,

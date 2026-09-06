@@ -2426,9 +2426,9 @@ let config_block_schema = function
 let config_field_doc (block : string) (field : string) : string =
   match block, field with
   | "Database", "schema" ->
-    "Versioned schema root imported by the application (`FamilySchema.VCurrent`), or the legacy PostgreSQL schema string with `entities:`."
+    "Versioned schema root imported by the application (`Schema.Family.VCurrent`; legacy `FamilySchema.VCurrent` is also supported), or the legacy PostgreSQL schema string with `entities:`."
   | "Database", "migrations" ->
-    "Migration directory prefix for the same schema family (`FamilySchema.Migrate`). This is a contextual module reference, not a runtime value."
+    "Migration directory prefix for the same schema family (`Schema.Family.Migrate`; legacy `FamilySchema.Migrate` is also supported). This is a contextual module reference, not a runtime value."
   | "PostgresConfig", "controlOwner" ->
     "No-login owner of versioned migration control objects (default tesl_control). Provisioned by the operator; connection settings remain in the application."
   | "PostgresConfig", "namespace" ->
@@ -2516,7 +2516,7 @@ let check_typed_config_blocks (m : module_form) : validation_error list =
     | VMigrationRef ->
       (match v with
        | EConstructor { args = []; _ } -> [] (* The ownership resolver checks the exact family prefix. *)
-       | _ -> err "`Database.migrations` must be a `FamilySchema.Migrate` module prefix")
+       | _ -> err "`Database.migrations` must be a `Schema.Family.Migrate` module prefix (or legacy `FamilySchema.Migrate`)")
     | VStr ->
       (match v with
        | ELit { lit = LString _; _ } -> []

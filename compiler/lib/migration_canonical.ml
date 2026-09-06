@@ -62,8 +62,8 @@ let reference scopes name =
     match validate [] scopes with
     | Error _ as error -> error
     | Ok () ->
-      match parts with
-      | family :: revision :: remaining ->
+      match Validation_common.schema_reference_parts name with
+      | Some (family, revision, remaining) ->
         (match List.find_opt (fun s -> s.family = family && s.revision = revision) scopes with
          | Some scope -> Ok (Seq [Bytes "schema"; Bytes family; Bytes (role_name scope.role);
                                   Seq (List.map bytes remaining)])

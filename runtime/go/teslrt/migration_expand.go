@@ -86,9 +86,11 @@ func ExecutePgMigrationExpansion(ctx context.Context, conn *pgx.Conn, history Pg
 				if !step.EpochPreserving {
 					return fmt.Errorf("migration V%d requires an epoch transition; additive execution refuses", step.Version)
 				}
-				for _, op := range step.Operations {
-					if op.Kind == "build-index-concurrently" && roles.Request == "" {
-						return fmt.Errorf("migration V%d concurrent-index execution currently requires Worker topology", step.Version)
+				for ordinal, op := range step.Operations {
+					if op.Kind == "build-index-concurrently" && (intents[step.Version] == nil || ordinal >= len(intents[step.Version].Objects)) {
+						if err := pgVerifyIndexRegistrationName(ctx, tx, plan.Namespace, op.Index.Name); err != nil {
+							return err
+						}
 					}
 				}
 			}
@@ -175,6 +177,9 @@ func pgApplyExpansion(ctx context.Context, conn *pgx.Conn, plan PgMigrationExpan
 				if op.Kind == "build-index-concurrently" {
 					// Registration and this ordinal's progress commit together. CIC
 					// runs after releasing boot, on its admitted dedicated session.
+					if err := pgVerifyIndexRegistrationName(ctx, tx, plan.Namespace, op.Index.Name); err != nil {
+						return err
+					}
 					if _, err := tx.Exec(ctx, "select "+ns+"tesl_register_index($1::text,$2::integer,$3::integer,$4::text,$5::text,$6::text[],$7::boolean)",
 						hash, step.Version, ordinal, op.Table, op.Index.Name, op.Index.Columns, op.Index.Unique); err != nil {
 						return err
@@ -260,6 +265,17 @@ func pgExpansionCatalogError(report PgMigrationCatalogReport) error {
 			issue := issues[0]
 			return fmt.Errorf("migration catalog %s.%s: %s", issue.Table, issue.Object, issue.Reason)
 		}
+	}
+	return nil
+}
+
+func pgVerifyIndexRegistrationName(ctx context.Context, tx pgx.Tx, namespace, name string) error {
+	var present bool
+	if err := tx.QueryRow(ctx, "select pg_catalog.to_regclass($1) is not null", pgx.Identifier{namespace, name}.Sanitize()).Scan(&present); err != nil {
+		return err
+	}
+	if present {
+		return fmt.Errorf("unrecorded relation already uses concurrent index name %s.%s", namespace, name)
 	}
 	return nil
 }

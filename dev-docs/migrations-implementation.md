@@ -15,7 +15,8 @@ tests are supporting evidence; they do not implement transforming migrations.
 Independent architecture and editor reviews confirmed that the next work must
 prioritize executable application scenarios over further editor machinery.
 
-The compiler-upgrade design gate now has production evidence.
+The compiler-upgrade design gate has production evidence from the preceding
+implementation snapshot; current changes require a fresh native run.
 Build provenance and stored-value compatibility now have separate identities.
 The explicit contract binds a compiler-owned semantic revision and active lifted
 stdlib digests; its maintainer promise includes proof/check/establish semantics,
@@ -23,22 +24,43 @@ lowering, codecs and SQL representation. Fully checked historical source/storage
 must reproduce the same identity before a different build can serve completed
 additive history. Pending intents keep the original build ABI. Old provenance is
 preserved, and legacy metadata lacking the contract is refused. Compiler migration
-and embedding suites pass (495 cases), and the actual A/B/C retained-database
-scenario passes. The remaining runtime expansion/boot gate also passed (142.080s),
-as did native migration CLI race tests and targeted lint. Mandatory migration CI
+and embedding suites passed (495 cases), and the actual A/B/C retained-database
+scenario passed before the proof-owner correction below. The runtime
+expansion/boot gate also passed (142.080s), as did native migration CLI race tests
+and targeted lint. Mandatory migration CI
 now fails instead of skipping unavailable PostgreSQL; its negative subprocess
 tests pass. Transforming execution and different-contract
 revalidation retain their separate phase-3 requirements.
 
-The production Worker request/executor split now passes its full-app regression.
-The next production work is concurrent index jobs and protected durable runtime
-storage, followed by a predecessor protocol that understands recorded
+The simplified example uses `Schema.Todo.VCurrent` and fully prefixed historical
+imports, with each frozen schema beside the current file. This exposed a proof
+identity defect through imported functions and higher-order `Fact` parameters.
+The correction preserves each predicate's original declaring module during
+checking and lowering without rewriting source hash inputs. An unmodified main
+compiler accepted a cross-owner proof through hidden forwarding functions; the
+corrected compiler refuses it. Stored-value semantics therefore advance to
+revision 3. Existing contract-2 histories are not relabeled, and metadata upgrades
+are not presented as stored-proof revalidation. The final compiler/proof review,
+fresh nine-revision showcase generation and native app gates remain in progress.
+
+The production Worker request/executor split and concurrent index worker pass
+their PostgreSQL regression gates. The next production work is protected durable
+runtime storage, followed by a predecessor protocol that understands recorded
 generation/trigger objects, safe additive epoch closure and the first typed full-app transformation. Current
 additive binaries reject unknown control formats and triggers; they cannot be
 treated as compatible transforming predecessors without that bridge. Queues and
 outboxes require real versioned storage/restamping, or an explicit restricted
 entity-only protocol from inception. A one-time check for absent queue tables is
 not sufficient evidence about older admitted binaries.
+
+Embedded index supervision is implemented with scope-owned executor generations,
+startup-to-server signal cancellation and joined handler shutdown. Focused real
+PostgreSQL and race tests cover concurrent scopes, reconnects, permanent failures,
+plain/unique indexes and shutdown. The expanded core PostgreSQL lane passes
+(206.402s); the separate index/Embedded lane and the compiled full-app index lesson
+still require their final runs. The lanes are disjoint mandatory selections with
+the existing 300-second limit each; the former combined selection outgrew that
+limit. This is slice evidence, not completion of phase 2.
 
 Use these application scenarios as the progress surface. Each requires production
 execution, retained PostgreSQL data, failure/restart regressions, a runnable lesson,
@@ -47,7 +69,7 @@ and both reviews. The normative phase prerequisites remain in force.
 | Scenario | Current evidence / remaining work |
 |---|---|
 | Existing database survives a supported compiler upgrade | Actual A/B/C full-app scenario, compiler/runtime gates and two reviews pass |
-| Adopt/deploy the notes app; add fields and indexes | Additive and separate Worker lessons pass; adoption and existing-table indexes remain |
+| Adopt/deploy the notes app; add fields and indexes | Additive/Worker lessons and real concurrent-index recovery pass; adoption and the extended todo-app gate remain |
 | Transform an entity while old/new apps keep serving | Planner/typing groundwork exists; compatibility, backfill and epoch closure remain |
 | Reject a row, repair it, retire old code and contract | Model coverage exists; production lifecycle remains |
 | Evolve a stored record/ADT without changing the HTTP API | Codec/storage traces exist; unified history, rewrite and pruning remain |
@@ -158,31 +180,62 @@ covered for both local bindings and function parameters.
 
 ## Slices under development
 
+- Qualified schema families now accept `Schema.Todo.VCurrent` at
+  `schema/todo/v-current.tesl`, with matching frozen and migration namespaces.
+  Legacy `TodoSchema.*` remains supported as a separate source identity, never a
+  spelling alias for already recorded history. The new compiler suite exercises
+  three generated revisions, a private entity module and proof producer, Same
+  evidence, concurrent-index emission, preserved application/snapshot bytes,
+  frozen-source tampering, historical-import fixes and wrong-family refusal.
+  Source rewrite and canonical-role tests include lowercase function names,
+  qualified prefix boundaries, tabs, CRLF and interpolation. The todo example is
+  being regenerated from its baseline; its old sealed bytes are not relabelled.
+  Actual TextMate/Oniguruma tests cover contextual migration highlighting without
+  changing ordinary identifiers. The full editor command passes, including real
+  compiler/debugger fixtures and parser assertions.
+
 - The control-format bridge now has exact format-2/3 definitions, an explicit
   transactional installer upgrade and protected index job/lease APIs. The upgrade
   preserves existing rows, lifecycle/source provenance, UUID and fence identity;
   real backend-kill tests cover both sides of its commit. Request observers verify
   finite registered index shapes without TEMP, distinguish pending plain indexes
   from uniqueness readiness, and independently check future indexes against old
-  writer domains. Existing expansion still refuses concurrent-index operations:
-  the long-lived CIC executor and recovery loop are the next production work.
-  The PostgreSQL 17 race/tag bridge/catalog/installer gate passes (25.077s), followed
-  by malformed-array/failure-evidence and terminal-state regressions (6.257s), with
-  no skips. Root/agent reviews found and corrected row-shape and identifier issues.
-  Topology, embedded-runtime identity and runtime emission gates pass (19 cases).
-  Actual previous-binary compatibility, the broad integrated gate and final review
-  remain pending. Format-2-only binaries cannot be described as bridge readers.
+  writer domains. The long-lived Worker executor now registers existing-table
+  index jobs during expansion and executes CIC outside the startup deadline.
+  Dedicated DDL and coordinator connections renew protected leases, retain a
+  shared version fence, verify actual index progress before invalid-remnant
+  cleanup, and recover with a new full execution identity after connection loss.
+  Expired-holder cleanup locks and rechecks the exact lease before signalling
+  only the same Worker login's exact old backend group; takeover waits for that
+  group to disappear. Active external builds, valid indexes and unrecorded names
+  are never dropped. Unique readiness needs both durable and physical success.
+  Pure observers can inspect another ABI's pending expansion, while executors
+  remain pinned to its creator ABI. The PostgreSQL 17 integrated race/tag gate
+  passes (99.097s, no skips), including real backend kills, lease/renewal races,
+  active independent CIC, catalog collisions and old/new request writes. Runtime
+  lint is clean. The authentic format-2 application fixture now builds and runs
+  both old and bridge executables against retained rows, verifies atomic installer
+  upgrade and retry after a lost acknowledgement, then verifies old binaries
+  refuse format 3 (21.16s; package 22.182s). Two executor reviews found and fixed
+  the valid-commit/renewal race and a post-failpoint ownership check. Embedded CIC,
+  retirement/contract and the feature-wide final reviews remain pending.
 
 - The todo showcase now contains six real CLI-generated migration edges across
   seven source revisions, byte-identical application code, proven CRUD handlers,
   an Elm frontend, separate PostgreSQL worker/request credentials, and a runnable
   local rolling-deployment proxy. All seven source emissions, the Elm optimized
-  compilation and seven source/proxy/compiler-refusal tests pass. Its native
-  PostgreSQL regression is being validated against the integrated compiler; it
-  requires writes and reads through both old/new nodes at every rollout phase,
-  interrupted worker DDL, retained data and an oldest-version restart. Review
+  compilation and nine source/proxy/compiler-refusal tests pass. Its native
+  PostgreSQL race regression passes (88.36s; package 89.380s), with zero lint
+  findings. It requires writes and reads through both old/new nodes at every
+  rollout phase, interrupted worker DDL, retained data and an oldest-version restart. Review
   corrected a traffic parity bug that could have exercised writes on only one
-  node. The current history is additive; index/typed-transform/JSONB/lifecycle
+  node. The documented local runner also passed all seven actual rolls with 565
+  complete CRUD cycles and no failures, then a retained-database restart with 307
+  cycles and no failures. Separate HTTP assertions cover create, edit, complete,
+  reopen, delete and rejected updates; SQL verifies retained rows and omission
+  defaults. Elm assets compile and are served, but no browser was available for
+  interactive UI verification. Two script reviews corrected ambient PostgreSQL
+  overrides and ensured probes drain before cluster shutdown. The current history is additive; index/typed-transform/JSONB/lifecycle
   extensions remain required before this showcase satisfies the full request.
 
 - The separate Worker topology now has real PostgreSQL 17 and 18 coverage.
@@ -217,7 +270,7 @@ covered for both local bindings and function parameters.
   issues. A deterministic editor test now covers
   both a supplied Nix toolchain and unavailable-Nix fallback without depending on
   the host's PostgreSQL environment. The full exact editor package command with
-  default test isolation passes: 38 tests plus seven parser assertions. Its DAP
+  default test isolation passes, including the parser assertions. Its DAP
   fixture uses an isolated Memory copy for debugger behavior; migration deployment
   evidence continues to use actual PostgreSQL binaries and retained data.
 

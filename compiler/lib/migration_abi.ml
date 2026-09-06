@@ -13,9 +13,10 @@ let stored_value_compatibility t = t.stored_value_compatibility
    Bump it when stored values, proof interpretation, codecs, primitive behavior
    or the canonical/storage mapping cease to be compatible. It never permits a
    different executor to resume a pinned transforming generation.
-   Revision 2 includes the proof-ownership, server auth-type and queue-worker
-   admission security fixes; do not promise compatibility with earlier checks. *)
-let stored_value_semantics_revision = "tesl-stored-value-semantics-2"
+   Revision 3 preserves original predicate owners through hidden forwarding,
+   qualified imports and Fact-valued callbacks. Revision 2 accepted cross-owner
+   evidence through hidden wrappers; do not promise compatibility with it. *)
+let stored_value_semantics_revision = "tesl-stored-value-semantics-3"
 let valid_stored_value_compatibility value =
   let prefix = "tesl-stored-value-v1:" in
   String.starts_with ~prefix value && String.length value = String.length prefix + 64 &&

@@ -97,7 +97,8 @@ let resolve_with_compatibility ~stored_value_compatibility ~compiler_abi ~projec
   let sources = graph root entry_file in
   let m,binding,candidate = select entry_file database sources in
   require_root root m binding;
-  let family = List.hd (String.split_on_char '.' binding.schema_root) in
+  let family = match Validation_common.schema_module_parts binding.schema_root with
+    | Some (family, "VCurrent", []) -> family | _ -> assert false in
   let h = history (H.discover_with_compatibility ~stored_value_compatibility ~compiler_abi ~project_root:root ~family) in
   let current = H.current h in
   let selected = {entry_file;database_file=candidate.database_file;database_name=candidate.database_name;

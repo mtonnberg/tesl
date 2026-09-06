@@ -220,6 +220,9 @@ func TestPgMigrationCompatibilityRequiresCompleteMatchingHistory(t *testing.T) {
 			if err := pgVerifyExpansionHistory(state, plan, intents); err == nil {
 				t.Fatal("incompatible or incomplete completed history accepted")
 			}
+			if err := pgVerifyExpansionObservation(state, plan, intents); err == nil {
+				t.Fatal("observer accepted incompatible or incomplete completed history")
+			}
 		})
 	}
 }
@@ -244,6 +247,9 @@ func TestPgMigrationCompatibilityPinsUnfinishedIntentsToActualABI(t *testing.T) 
 				plan.CurrentVersion, plan.Steps = current, plan.Steps[:current]
 				if err := pgVerifyExpansionHistory(state, plan, intents); err == nil || !strings.Contains(err.Error(), "unfinished migration compiler ABI") {
 					t.Fatalf("different ABI accepted unfinished intent at binary V%d: %v", current, err)
+				}
+				if err := pgVerifyExpansionObservation(state, plan, intents); err != nil {
+					t.Fatalf("compatible observer could not inspect pending V2 from binary V%d: %v", current, err)
 				}
 			}
 		})

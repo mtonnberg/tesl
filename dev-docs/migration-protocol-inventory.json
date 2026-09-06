@@ -30,6 +30,7 @@
     "INV-EXPAND": "Retirement's coordinator lock excludes a competing expansion.",
     "INV-FENCE": "Every excluded writer is drained before retirement and cannot resume writing after its version is retired.",
     "INV-FINAL": "Retirement commits only after every affected row is accepted at its target generation; accepted batches survive coordinator abort.",
+    "INV-FIXTURE-PROVENANCE": "A previous-binary regression builds only the complete hash-pinned historical emission and unchanged corresponding Tesl source; malformed or altered evidence is refused before extraction, compilation or database connection.",
     "INV-FLOOR": "Admission and compatibility floors are ordered, monotone and consistent with committed lifecycle evidence.",
     "INV-GENERATION": "Row generations advance one step at a time within the permanent smallint generation bound.",
     "INV-HARNESS": "Interleavings identify actor and occurrence, reject ambiguous control input, and fail with bounded waits and useful state dumps.",
@@ -431,6 +432,8 @@
     "expansion_blackbox_test.go": "compiled-postgres",
     "additive_lesson_test.go": "compiled-postgres",
     "worker_lesson_test.go": "compiled-postgres",
-    "todo_showcase_test.go": "compiled-postgres"
+    "todo_showcase_test.go": "compiled-postgres",
+    "control_upgrade_app_test.go": "compiled-postgres",
+    "control_upgrade_app_test.go#TestControlUpgradeFixtureRefusesTampering": "harness"
   }
 }

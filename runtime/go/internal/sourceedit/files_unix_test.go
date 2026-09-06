@@ -170,13 +170,19 @@ func TestCompilerImportResolutionParityVectors(t *testing.T) {
 		{"JSONNotesSchema.V12.PrivateTypes", "schema/j-s-o-n-notes/v12/private-types.tesl"},
 		{"NotesSchema.Migrate.V2.Helpers", "migrations/notes/v2/helpers.tesl"},
 		{"NotesSchema.V2147483646", "schema/notes/v2147483646.tesl"},
+		{"Schema.Notes.VCurrent", "schema/notes/v-current.tesl"},
+		{"Schema.JSONNotes.V12.PrivateTypes", "schema/j-s-o-n-notes/v12/private-types.tesl"},
+		{"Schema.Notes.Migrate.V2.Helpers", "migrations/notes/v2/helpers.tesl"},
+		{"Schema.Notes.V2147483646", "schema/notes/v2147483646.tesl"},
 	} {
 		got, ok := schemaRelative(v.name)
 		if !ok || got != filepath.FromSlash(v.path) {
 			t.Fatalf("%s -> %s", v.name, got)
 		}
 	}
-	for _, name := range []string{"Schema.V2", "NotesSchema.V0", "NotesSchema.V01", "NotesSchema.V2147483647", "NotesSchema.V2/Other", "NotesSchema..V2", "../App", "NotesSchema.V2_0"} {
+	for _, name := range []string{"Schema.V2", "NotesSchema.V0", "NotesSchema.V01", "NotesSchema.V2147483647", "NotesSchema.V2/Other", "NotesSchema..V2", "../App", "NotesSchema.V2_0",
+		"Schema.Notes.V0", "Schema.Notes.V01", "Schema.Notes.V2147483647", "Schema.Notes.V99999999999999999999", "Schema.Notes.V2/Other", "Schema.Notes..V2",
+		"Schema.Notes.V2_0", "Schema.notes.V2", "Schema.Notes.VCurrent.lower", "Schema.Notes.Other.V2"} {
 		if _, ok := schemaRelative(name); ok {
 			t.Fatalf("invalid schema import accepted: %s", name)
 		}

@@ -210,8 +210,9 @@ typed values, then verifies those stored values remain intact.
 
 The additive executor now uses this inspector inside the transaction that commits
 DDL and object progress, after checking protected control state and source history.
-Application boot, permanent admission and write fences, processing-ABI rules,
-concurrent indexes, epoch closure and contract execution remain pending. An
-inspection report is not an adoption report and cannot authorize pruning.
+Application boot, permanent admission/write fences and the separate Worker's
+concurrent-index service now use the production history and control interface.
+Typed processing-ABI rules, epoch closure and contract execution remain pending.
+An inspection report is not an adoption report and cannot authorize pruning.
 The complete delivery gates remain in
 [the implementation ledger](migrations-implementation.md).

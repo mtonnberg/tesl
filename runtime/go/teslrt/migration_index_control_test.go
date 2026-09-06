@@ -289,6 +289,7 @@ func TestPgMigrationControlIndexPrivilegesAndReadOnlyRequest(t *testing.T) {
 		"select notes_app.tesl_renew_index('x',1,30000)",
 		"select notes_app.tesl_release_index('x',1)",
 		"select notes_app.tesl_record_index_state('x',1,'valid',null)",
+		"select notes_app.tesl_lock_expired_index_holder('x','tesl-exec:old',1,2,'abi')",
 	} {
 		if _, err := request.Exec(f.ctx, statement); err == nil || !strings.Contains(err.Error(), "permission denied") {
 			t.Fatalf("request acquired index transition authority: %s: %v", statement, err)

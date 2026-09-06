@@ -35,8 +35,8 @@ let candidates (modules:module_form list) =
     let fields = Option.fold ~none:[] ~some:Desugar.config_record_fields d.config_expr in
     (match List.assoc_opt "schema" fields,List.assoc_opt "migrations" fields,List.assoc_opt "backend" fields with
      | Some (EConstructor {name=root;args=[];_}),Some (EConstructor {name=prefix;args=[];_}),Some backend ->
-       (match String.split_on_char '.' root,Migration_form.application backend with
-        | [family;"VCurrent"],("Postgres",[config]) when Migration_source.valid_family family && prefix=family ^ ".Migrate" ->
+       (match Validation_common.schema_module_parts root,Migration_form.application backend with
+        | Some (family,"VCurrent",[]),("Postgres",[config]) when Migration_source.valid_family family && prefix=family ^ ".Migrate" ->
           let namespace = match List.assoc_opt "namespace" (Desugar.config_record_fields config) with
            | Some (ELit {lit=LString name;_}) when name<>"" && String.length name<=63 &&
                String.is_valid_utf_8 name && not (String.contains name '\000') -> name

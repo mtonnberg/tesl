@@ -338,8 +338,8 @@ let load_with_compatibility ~stored_value_compatibility ~compiler_abi ~root_file
       Hashtbl.replace sources path source;
       m in
     let root = read None root_file in
-    let family, revision = match String.split_on_char '.' root.module_name with
-      | [family; revision] when Migration_source.valid_family family &&
+    let family, revision = match Validation_common.schema_module_parts root.module_name with
+      | Some (family, revision, []) when Migration_source.valid_family family &&
           Migration_source.valid_revision revision -> family, revision
       | _ -> reject (Location.dummy_loc root.source_file) "semantic inventory requires a schema revision root" in
     let modules = Hashtbl.create 16 in

@@ -257,11 +257,16 @@ func schemaRelative(name string) (string, bool) {
 	if len(parts) < 2 {
 		return "", false
 	}
-	family, revision := parts[0], parts[1]
-	if !strings.HasSuffix(family, "Schema") || len(family) <= 6 {
+	var family, revision string
+	var children []string
+	if parts[0] == "Schema" && len(parts) >= 3 {
+		family, revision, children = parts[1], parts[2], parts[3:]
+	} else if strings.HasSuffix(parts[0], "Schema") && len(parts[0]) > 6 {
+		family, revision, children = strings.TrimSuffix(parts[0], "Schema"), parts[1], parts[2:]
+	} else {
 		return "", false
 	}
-	family = kebab(strings.TrimSuffix(family, "Schema"))
+	family = kebab(family)
 	var components []string
 	if revision == "Migrate" {
 		components = []string{"migrations", family}
@@ -277,7 +282,7 @@ func schemaRelative(name string) (string, bool) {
 		}
 		components = []string{"schema", family, kebab(revision)}
 	}
-	for _, part := range parts[2:] {
+	for _, part := range children {
 		components = append(components, kebab(part))
 	}
 	return filepath.Join(components...) + ".tesl", true

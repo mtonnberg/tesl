@@ -185,27 +185,25 @@ func pgRunSchemaCommandContext(serviceContext context.Context, command pgSchemaC
 		if err != nil {
 			return err
 		}
-		if err := serviceContext.Err(); err != nil {
-			return err
-		}
-		if command.json {
-			err = json.NewEncoder(out).Encode(struct {
-				Version        int    `json:"version"`
-				Kind           string `json:"kind"`
-				Database       string `json:"database"`
-				BinaryVersion  int    `json:"binaryVersion"`
-				CurrentVersion int    `json:"currentVersion"`
-				DatabaseUUID   string `json:"databaseUuid"`
-			}{1, "schema-worker-ready", history.Database, history.CurrentVersion, state.Current, state.DatabaseUUID})
-		} else {
-			_, err = fmt.Fprintf(out, "%s: schema worker ready at V%d (binary V%d).\n", history.Database, state.Current, history.CurrentVersion)
-		}
-		if err != nil {
+		onReady := func(state PgMigrationControlState) error {
+			if err := serviceContext.Err(); err != nil {
+				return err
+			}
+			if command.json {
+				return json.NewEncoder(out).Encode(struct {
+					Version        int    `json:"version"`
+					Kind           string `json:"kind"`
+					Database       string `json:"database"`
+					BinaryVersion  int    `json:"binaryVersion"`
+					CurrentVersion int    `json:"currentVersion"`
+					DatabaseUUID   string `json:"databaseUuid"`
+				}{1, "schema-worker-ready", history.Database, history.CurrentVersion, state.Current, state.DatabaseUUID})
+			}
+			_, err := fmt.Fprintf(out, "%s: schema worker ready at V%d (binary V%d).\n", history.Database, state.Current, history.CurrentVersion)
 			return err
 		}
 		cancel() // The startup lease does not bound the worker's service lifetime.
-		<-serviceContext.Done()
-		return nil
+		return pgRunMigrationIndexWorker(serviceContext, conn, config, history, roles, state, onReady)
 	}
 	status, err := InspectPgMigrationStatus(ctx, conn, history, roles)
 	if err != nil {
