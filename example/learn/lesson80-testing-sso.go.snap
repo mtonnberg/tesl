@@ -589,9 +589,9 @@ func TestTeslApi4(teslT *testing.T) {
 //line lesson80-testing-sso.tesl:273
 											teslT.Fatal("Tesl expectation failed")
 										}
-//line lesson80-testing-sso.tesl:274
-										if !teslrt.JsonEqual(teslrt.JsonFieldOf(profileResp.Body, "userId"), "12345") {
-//line lesson80-testing-sso.tesl:274
+//line lesson80-testing-sso.tesl:275
+										if !teslrt.JsonEqual(teslrt.JsonFieldOf(profileResp.Body, "userId"), "8ac406c2b4ecea8f381d2a0023a65442c2d700301c19be17c96e354587b979a2") {
+//line lesson80-testing-sso.tesl:275
 											teslT.Fatal("Tesl expectation failed")
 										}
 									}

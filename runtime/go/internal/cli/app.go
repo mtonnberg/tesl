@@ -442,13 +442,34 @@ func (app *App) executeSource(ctx context.Context, file string, args []string, d
 	if err != nil {
 		return err
 	}
-	env, err := app.Resolver.GoEnvironment(projectEnv)
+	env, err := app.Resolver.GoEnvironment(app.Environment)
 	if err != nil {
 		return err
 	}
 	if tests {
-		env = toolchain.Setenv(toolchain.Setenv(env, "TESL_TEST_NAME", name), "TESL_TEST_KIND", kind)
-		return app.invoke(ctx, "go", out, env, "test", "./...")
+		// Compile with operator-owned toolchain settings. Project dotenv values are
+		// application data and must never become Go flags or compiler wrappers.
+		testDir := filepath.Join(temp, "tests")
+		if err := os.Mkdir(testDir, 0700); err != nil {
+			return err
+		}
+		if err := app.invoke(ctx, "go", out, env, "test", "-c", "-o", testDir+string(filepath.Separator), "./..."); err != nil {
+			return err
+		}
+		entries, err := os.ReadDir(testDir)
+		if err != nil {
+			return err
+		}
+		testEnv := toolchain.Setenv(toolchain.Setenv(projectEnv, "TESL_TEST_NAME", name), "TESL_TEST_KIND", kind)
+		for _, entry := range entries {
+			if entry.IsDir() || (!strings.HasSuffix(entry.Name(), ".test") && !strings.HasSuffix(entry.Name(), ".test.exe")) {
+				continue
+			}
+			if err := app.Execute(ctx, Invocation{Executable: filepath.Join(testDir, entry.Name()), Args: []string{"-test.timeout=10m"}, Directory: out, Environment: testEnv, Stdin: app.Stdin, Stdout: app.Stdout, Stderr: app.Stderr}); err != nil {
+				return err
+			}
+		}
+		return nil
 	}
 	if _, err := os.Stat(filepath.Join(out, "cmd", "app")); err != nil {
 		return fmt.Errorf("%s has no main/server entrypoint", file)

@@ -11657,7 +11657,8 @@ api-test "a whole GitHub login" for SsoServer requires [httpClient, sessions] {
     Something sessionCookie ->
       let profile = get "/me" cookie sessionCookie headers (onHost())
       expect statusOk profile.status
-      expect profile.body.userId == "4242"
+      # The session contains the issuer-scoped key, never the raw provider subject.
+      expect profile.body.userId == "0f304bbc1846c75ae1cf2a483339a846793f63cab921a7e7a90108399c4d7344"
 }
 
 # The state is single-use: presenting the same callback twice is a replay.
@@ -12632,7 +12633,9 @@ test "IPv6 is classified in brackets and refused without them" {
   expect describe "::1" == "invalid"
   expect describe "[fe80::1]" == "link-local"
   expect describe "[::ffff:169.254.169.254]" == "link-local"
-  expect describe "[2001:db8::1]" == "public"
+  expect describe "[2001:db8::1]" == "invalid"
+  expect describe "[100::1]" == "invalid"
+  expect describe "[2606:4700:4700::1111]" == "public"
   expect Net.isIpv4Mapped "[::ffff:169.254.169.254]"
   expect Net.isIpv4Mapped "[2001:db8::1]" == False
 }

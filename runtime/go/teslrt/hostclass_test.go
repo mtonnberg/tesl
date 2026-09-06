@@ -25,6 +25,8 @@ func TestIPForbiddenReasonNamesTheRange(t *testing.T) {
 		{"100.64.0.1", "CGNAT 100.64.0.0/10"},
 		{"224.0.0.1", "multicast/reserved >= 224.0.0.0"},
 		{"ff02::1", "IPv6 multicast ff00::/8"},
+		{"100::1", "discard-only 100::/64"},
+		{"2001:db8::1", "documentation 2001:db8::/32"},
 		// 172.15 and 172.32 are OUTSIDE the /12, and a classifier that tested only the first
 		// octet would refuse them.
 		{"172.15.0.1", ""},
@@ -33,6 +35,39 @@ func TestIPForbiddenReasonNamesTheRange(t *testing.T) {
 	for _, testCase := range cases {
 		if got := IPForbiddenReason(testCase.address); got != testCase.reason {
 			t.Fatalf("IPForbiddenReason(%q) = %q, want %q", testCase.address, got, testCase.reason)
+		}
+	}
+}
+
+func TestSpecialUseRangeBoundariesAgreeAtGuardAndEgress(t *testing.T) {
+	for _, address := range []string{
+		"100::", "100::ffff:ffff:ffff:ffff",
+		"100:0:0:1::", "100:0:0:1:ffff:ffff:ffff:ffff",
+		"2001:2::", "2001:2:0:ffff:ffff:ffff:ffff:ffff",
+		"2001:1::4", "2001:2:1::", "2001:1ff:ffff:ffff:ffff:ffff:ffff:ffff",
+		"2001:db8::", "2001:db8:ffff:ffff:ffff:ffff:ffff:ffff",
+		"3fff::", "3fff:fff:ffff:ffff:ffff:ffff:ffff:ffff",
+		"5f00::", "5f00:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+	} {
+		if !NetIsForbiddenHost("["+address+"]") || SsrfEgressRefusal(address) == "" {
+			t.Errorf("guard or egress allowed special-use address %q", address)
+		}
+	}
+	for _, address := range []string{
+		"2001:1::1", "2001:1::2", "2001:1::3", "2001:3::1",
+		"2001:4:112::1", "2001:20::1", "2001:3f::1", "2001:200::",
+		"2001:db7:ffff:ffff:ffff:ffff:ffff:ffff", "2001:db9::",
+		"3ffe:ffff:ffff:ffff:ffff:ffff:ffff:ffff", "3fff:1000::",
+		"5eff:ffff:ffff:ffff:ffff:ffff:ffff:ffff", "5f01::", "2606:4700::1111",
+	} {
+		if NetIsForbiddenHost("["+address+"]") || IPForbiddenReason(address) != "" {
+			t.Errorf("guard or egress rejected address outside special-use blocks %q", address)
+		}
+	}
+	// More-specific public allocations take precedence over 192.0.0.0/24.
+	for _, address := range []string{"192.0.0.9", "192.0.0.10"} {
+		if NetIsForbiddenHost(address) || IPForbiddenReason(address) != "" {
+			t.Errorf("guard or egress rejected public anycast %q", address)
 		}
 	}
 }
