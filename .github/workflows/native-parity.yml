@@ -20,11 +20,16 @@ jobs:
       matrix: ${{ steps.export.outputs.matrix }}
       go: ${{ steps.export.outputs.go }}
       ocaml: ${{ steps.export.outputs.ocaml }}
+      windows-ocaml: ${{ steps.export.outputs.windows-ocaml }}
     steps:
       - uses: actions/checkout@v4
-      - name: Test native gate failure reporting
-        run: python3 -m unittest discover -s scripts -p test_native_parity.py
       - uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25
+      - name: Test native packaging helpers
+        run: python3 -m unittest discover -s scripts -p 'test_*.py'
+      - name: Test release version identity
+        run: |
+          nix-instantiate --eval --strict --json nix/tests/release-identity.nix
+          nix-instantiate --eval --strict --json nix/tests/release-plan.nix
       - name: Export authoritative native build metadata
         id: export
         shell: bash
@@ -40,7 +45,15 @@ jobs:
               output.write('matrix=' + json.dumps({'include': plan['candidates']}) + '\n')
               for name in ('go', 'ocaml'):
                   output.write(name + '=' + plan['sources'][name]['version'] + '\n')
+              output.write('windows-ocaml=' + plan['windowsOcamlCompiler'] + '\n')
           PY
+      - name: Bundle locked Go modules for offline builds
+        run: python3 scripts/module_proxy.py --plan native-release-plan.json --output native-module-bundle
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-module-bundle
+          path: native-module-bundle
+          if-no-files-found: error
       - uses: actions/upload-artifact@v4
         with:
           name: native-release-plan
@@ -49,7 +62,10 @@ jobs:
   parity:
     needs: plan
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 60
+    timeout-minutes: 120
+    env:
+      # Applies while OCaml itself is built as well as when Tesl is linked.
+      MACOSX_DEPLOYMENT_TARGET: '13.0'
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
@@ -58,21 +74,111 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: native-release-plan
+      - uses: actions/download-artifact@v4
+        with:
+          name: native-module-bundle
+          path: native-module-bundle
       - uses: actions/setup-go@v5
         with:
           go-version: ${{ needs.plan.outputs.go }}
           cache-dependency-path: runtime/go/go.sum
       - uses: ocaml/setup-ocaml@v3
         with:
-          ocaml-compiler: ${{ needs.plan.outputs.ocaml }}
+          ocaml-compiler: ${{ startsWith(matrix.target, 'windows-') && needs.plan.outputs.windows-ocaml || needs.plan.outputs.ocaml }}
           windows-compiler: mingw
+          cache-prefix: native-payload-no-compression-v2
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Verify macOS offline network enforcement
+        if: ${{ startsWith(matrix.target, 'darwin-') }}
+        run: python3 -m unittest discover -s scripts -p 'test_macos_network.py'
+      - name: Verify macOS ad-hoc signing and relocation
+        if: ${{ startsWith(matrix.target, 'darwin-') }}
+        run: python3 -m unittest discover -s scripts -p 'test_macos_distribution.py'
       - name: Build and exercise native compiler and tools
-        run: python scripts/native-parity.py --plan native-release-plan.json --target ${{ matrix.target }}
+        run: python scripts/native-parity.py --plan native-release-plan.json --target ${{ matrix.target }} --module-bundle native-module-bundle
+      # Build-only POSIX tools run after native parity so they cannot supply
+      # accidental runtime dependencies to its Windows tests.
+      - uses: cygwin/cygwin-install-action@a3d72946b163026bbd0fa9a88379ccbda4bd86bb
+        if: ${{ startsWith(matrix.target, 'windows-') }}
+        id: cygwin-build
+        with:
+          install-dir: 'C:\cygwin-tesl'
+          packages: gcc-core gcc-g++ make m4 patch perl diffutils
+          add-to-path: true
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756
+        if: ${{ startsWith(matrix.target, 'windows-') }}
+        with:
+          arch: x64
+          vsversion: '2022'
+      - name: Verify native Windows runtime signature inspection
+        if: ${{ startsWith(matrix.target, 'windows-') }}
+        env:
+          TESL_TEST_MSVC_RUNTIME: '1'
+        run: python -m unittest discover -s scripts -p 'test_native_windows_runtime.py' -v
+      - name: Assemble and test native candidate archive
+        if: ${{ !startsWith(matrix.target, 'windows-') }}
+        run: python3 scripts/native_distribution.py --plan native-release-plan.json --target ${{ matrix.target }} --module-bundle native-module-bundle --output artifacts/distribution-${{ matrix.target }}
+      - name: Assemble and test native Windows candidate and setup executable
+        if: ${{ startsWith(matrix.target, 'windows-') }}
+        shell: pwsh
+        run: python scripts/native_distribution.py --plan native-release-plan.json --target windows-amd64 --module-bundle native-module-bundle --output artifacts/distribution-windows-amd64 --cygwin-bash '${{ steps.cygwin-build.outputs.root }}\bin\bash.exe'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-candidate-${{ matrix.target }}
+          path: |
+            artifacts/distribution-${{ matrix.target }}/*.tar.gz
+            artifacts/distribution-${{ matrix.target }}/*.zip
+            artifacts/distribution-${{ matrix.target }}/*.exe
+            artifacts/distribution-${{ matrix.target }}/*.sha256
+            artifacts/distribution-${{ matrix.target }}/*.json
+          if-no-files-found: error
       - uses: actions/upload-artifact@v4
         with:
           name: native-evidence-${{ matrix.target }}
           path: artifacts/native-${{ matrix.target }}/checks.json
+          if-no-files-found: error
+  provenance:
+    # Privileged signing is isolated from compiler/build processes and never
+    # receives a PR token. Download only artifacts from this exact main run.
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'mtonnberg/tesl' }}
+    needs: [plan, parity]
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: native-release-plan
+          path: provenance-plan
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: native-candidate-*
+          path: provenance-artifacts
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: native-evidence-*
+          path: provenance-artifacts
+      - name: Validate complete same-revision artifact bindings
+        run: python3 scripts/native_provenance.py --plan provenance-plan/native-release-plan.json --artifacts provenance-artifacts --output native-build-inputs.json
+      - name: Attest final native bytes and their pinned inputs
+        id: attest
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: |
+            provenance-artifacts/**/*
+            provenance-plan/native-release-plan.json
+            native-build-inputs.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-provenance
+          path: |
+            ${{ steps.attest.outputs.bundle-path }}
+            native-build-inputs.json
           if-no-files-found: error

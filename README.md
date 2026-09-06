@@ -70,6 +70,11 @@ tracing this particular validation requirement through every caller.
 
 ## Quick start
 
+Windows users can follow the [native Windows candidate instructions](INSTALL.md#native-windows-candidates)
+for the unsigned setup executable or portable ZIP. macOS users can also download
+[native executable archives](INSTALL.md#native-macos-candidates) with ad-hoc
+signatures and checksums. Nix remains the recommended macOS path:
+
 From nothing to a running, type-checked web API:
 
 ```bash

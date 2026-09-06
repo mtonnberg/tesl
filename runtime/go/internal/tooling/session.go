@@ -117,7 +117,7 @@ func (sessions *WorkspaceSessions) query(ctx context.Context, client Client, fla
 	config, _ := json.Marshal([]any{executable, info.Size(), info.ModTime().UnixNano(), environment, client.Directory})
 	if sessions.root != root || sessions.configuration != string(config) {
 		sessions.reset()
-		shadow, err := os.MkdirTemp("", "tesl-workspace-*")
+		shadow, err := makeShadowDirectory("tesl-workspace-*")
 		if err != nil {
 			return nil, Result{}, err
 		}
@@ -205,6 +205,7 @@ type workspaceProcess struct {
 	input, output *os.File
 	done          chan struct{}
 	stderr        *boundedSessionLog
+	capabilities  map[string]bool
 }
 
 type boundedSessionLog struct {
@@ -298,8 +299,9 @@ func (process *workspaceProcess) handshake(ctx context.Context) error {
 		return fmt.Errorf("%w: %s", err, process.stderr.String())
 	}
 	var hello struct {
-		Version  int    `json:"version"`
-		Protocol string `json:"protocol"`
+		Version      int      `json:"version"`
+		Protocol     string   `json:"protocol"`
+		Capabilities []string `json:"capabilities"`
 	}
 	if err := json.Unmarshal(payload, &hello); err != nil {
 		return err
@@ -307,14 +309,24 @@ func (process *workspaceProcess) handshake(ctx context.Context) error {
 	if hello.Version != 1 || hello.Protocol != "tesl-workspace" {
 		return errors.New("unsupported workspace protocol")
 	}
+	process.capabilities = make(map[string]bool)
+	for _, capability := range hello.Capabilities {
+		process.capabilities[capability] = true
+	}
 	return nil
 }
 
 func (process *workspaceProcess) query(ctx context.Context, snapshot, flag, path string, position []string, maxOutput int) ([]byte, Result, error) {
 	line, col := "", ""
-	if len(position) == 2 {
+	if workspaceFlag(flag) && !process.capabilities["workspace-navigation"] {
+		return nil, Result{}, errors.New("compiler: workspace navigation capability is unavailable")
+	}
+	if flag == "--workspace-rename-json" && !process.capabilities["workspace-rename-arguments-v1"] {
+		return nil, Result{}, errors.New("compiler: checked workspace rename capability is unavailable")
+	}
+	if len(position) == 2 && flag != "--workspace-rename-json" || len(position) == 4 && flag == "--workspace-rename-json" {
 		line, col = position[0], position[1]
-	} else if len(position) != 0 {
+	} else if len(position) != 0 || workspaceFlag(flag) {
 		return nil, Result{}, errors.New("compiler: invalid query position")
 	}
 	if maxOutput <= 0 {
@@ -323,6 +335,10 @@ func (process *workspaceProcess) query(ctx context.Context, snapshot, flag, path
 	payload, err := process.perform(ctx, func() ([]byte, error) {
 		fields := []string{snapshot, flag, path, line, col}
 		limits := []int{128, 64, 4096, 20, 20}
+		if flag == "--workspace-rename-json" {
+			fields = append(fields, position[2:]...)
+			limits = append(limits, 128, 128)
+		}
 		for i, field := range fields {
 			if len(field) > limits[i] {
 				return nil, errors.New("compiler: session request exceeds field limit")

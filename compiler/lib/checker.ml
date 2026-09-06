@@ -8153,17 +8153,68 @@ let check_module_with_metadata_uncached ?(source_lines = [||]) (m : module_form)
    List.rev !(ctx.human_actions_sites),
    import_errors @ export_errors @ fact_ownership_errors @ List.rev !(ctx.errors))
 
+(* Exact transitive source inputs for a checked module. Resolving every edge
+   again observes create/delete and kebab-case precedence changes, including
+   changes to the selected bundled stdlib. Broken parses remain inputs too.
+   Bytes, not mtimes or a lossy hash, identify cached semantic results. This
+   bounded scan only reads/parses imports; it never recursively type-checks them.
+   If the graph cannot be represented safely, the ordinary checker runs uncached. *)
+let module_semantic_inputs (m : module_form) =
+  let inputs = Hashtbl.create 32 in
+  let bytes = ref 0 in
+  let rec visit (m : module_form) =
+    List.iter (fun (imp : import_decl) ->
+      let path = if String.starts_with ~prefix:"Tesl." imp.module_name
+        then lifted_stdlib_source_path imp.module_name
+        else Some (resolve_local_import_path m.source_file imp.module_name) in
+      (* A missing lifted source cannot contribute metadata. Its later creation
+         adds the resolved path/bytes to the key, so that result is invalidated. *)
+      match path with
+      | None -> ()
+      | Some path ->
+        let canonical = Validation_common.canonical_import_path path in
+        if not (Hashtbl.mem inputs canonical) then begin
+          if Hashtbl.length inputs >= 512 then raise Exit;
+          Hashtbl.add inputs canonical None;
+          if Sys.file_exists path then begin
+            if (Unix.stat path).Unix.st_size > 1024 * 1024 then raise Exit;
+            let source = In_channel.with_open_bin path In_channel.input_all in
+            bytes := !bytes + String.length source;
+            if String.length source > 1024 * 1024 || !bytes > 16 * 1024 * 1024 then raise Exit;
+            Hashtbl.replace inputs canonical (Some source);
+            (* Use the same content-aware parser as import checking. Refuse to
+               cache if the file changed between the two reads. *)
+            let parsed = parse_local_import_module path in
+            if In_channel.with_open_bin path In_channel.input_all <> source then raise Exit;
+            match parsed with Some (Parser.Ok imported) -> visit imported | _ -> ()
+          end
+        end) m.imports
+  in
+  try
+    visit m;
+    Some (Hashtbl.fold (fun path source rows -> (path, source) :: rows) inputs [] |> List.sort compare)
+  with Exit | Sys_error _ | Unix.Unix_error _ | Failure _ -> None
+
 (* Read-only session queries may reuse metadata, including inferred types and
    structured type errors. Preserve the units state that downstream queries
    observe even when the checker itself is skipped. *)
-let cached_module_metadata = Query_cache.memo ~limit:16 ~max_weight:(2 * 1024 * 1024)
+let cached_module_metadata = Query_cache.memo ~retain_across_snapshots:true ~limit:128 ~max_weight:(16 * 1024 * 1024)
   ~value_weight:(fun value -> String.length (Marshal.to_string value []))
-  ~weight:(fun (lines, m) -> Array.fold_left (fun n s -> n + String.length s) 0 lines
+  ~weight:(fun (inputs, lines, m) -> List.fold_left (fun n (path, source) -> n + String.length path
+      + Option.fold ~none:0 ~some:String.length source) 0 inputs
+    + Array.fold_left (fun n s -> n + String.length s) 0 lines
     + String.length (Marshal.to_string m [Marshal.No_sharing]))
-  (fun (source_lines, m) -> check_module_with_metadata_uncached ~source_lines m)
+  (fun (inputs, source_lines, m) ->
+    let result = check_module_with_metadata_uncached ~source_lines m in
+    if module_semantic_inputs m <> Some inputs then
+      failwith "semantic imports changed during checking";
+    result)
 
 let check_module_with_metadata ?(source_lines = [||]) (m : module_form) =
-  let result = cached_module_metadata (source_lines, m) in
+  let result = if not !Query_cache.enabled then check_module_with_metadata_uncached ~source_lines m
+    else match module_semantic_inputs m with
+    | Some inputs -> cached_module_metadata (inputs, source_lines, m)
+    | None -> check_module_with_metadata_uncached ~source_lines m in
   ignore (activate_units_aliases_for m);
   result
 

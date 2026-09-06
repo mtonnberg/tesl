@@ -12,13 +12,16 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 
 	"tesl.dev/runtime/go/internal/childprocess"
+	"tesl.dev/runtime/go/internal/install"
 	"tesl.dev/runtime/go/internal/toolchain"
 )
 
 type Invocation struct {
 	Persistent     bool
+	ToolchainRoot  string
 	Executable     string
 	Args           []string
 	Directory      string
@@ -51,7 +54,12 @@ func execute(ctx context.Context, invocation Invocation) error {
 	// Managed PostgreSQL has an explicit start/stop lifecycle independent of this
 	// invocation. Its daemon must survive pg_ctl and the CLI exiting.
 	if invocation.Persistent {
-		err := command.Run()
+		release, err := install.ConfigurePostgresLease(command, invocation.ToolchainRoot)
+		if err != nil {
+			return err
+		}
+		defer release()
+		err = childprocess.RunPersistent(command)
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
@@ -80,9 +88,15 @@ func execute(ctx context.Context, invocation Invocation) error {
 	return err
 }
 
+type usageError struct{ error }
+
 func ExitCode(err error) int {
 	if err == nil {
 		return 0
+	}
+	var usage *usageError
+	if errors.As(err, &usage) {
+		return 2
 	}
 	var status *processStatus
 	if errors.As(err, &status) {
@@ -92,8 +106,15 @@ func ExitCode(err error) int {
 		return 130
 	}
 	var exit *exec.ExitError
-	if errors.As(err, &exit) && exit.ExitCode() > 0 {
-		return exit.ExitCode()
+	if errors.As(err, &exit) {
+		if code := exit.ExitCode(); code > 0 {
+			return code
+		}
+		if exit.ProcessState != nil {
+			if status, ok := exit.Sys().(syscall.WaitStatus); ok && status.Signaled() {
+				return 128 + int(status.Signal())
+			}
+		}
 	}
 	return 1
 }
@@ -107,7 +128,16 @@ func (app *App) invoke(ctx context.Context, tool, directory string, environment 
 		return err
 	}
 	persistent := tool == "pg_ctl" && len(args) > 0 && args[len(args)-1] == "start"
-	return app.Execute(ctx, Invocation{Persistent: persistent, Executable: path, Args: args, Directory: directory, Environment: environment, Stdin: app.Stdin, Stdout: app.Stdout, Stderr: app.Stderr})
+	toolchainRoot := ""
+	if persistent {
+		_, root, err := app.Resolver.Load()
+		if err == nil {
+			toolchainRoot = root
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+	}
+	return app.Execute(ctx, Invocation{Persistent: persistent, ToolchainRoot: toolchainRoot, Executable: path, Args: args, Directory: directory, Environment: environment, Stdin: app.Stdin, Stdout: app.Stdout, Stderr: app.Stderr})
 }
 
 func (app *App) compiler(ctx context.Context, args ...string) error {
@@ -205,10 +235,9 @@ func (app *App) Run(ctx context.Context, args []string) error {
 		}
 		return nil
 	case "version", "--version", "-v":
-		manifest, _, _ := app.Resolver.Load()
-		version := manifest.ToolchainVersion
-		if version == "" {
-			version = "dev"
+		version, err := app.Resolver.Version()
+		if err != nil {
+			return err
 		}
 		if _, err := fmt.Fprintln(app.Stdout, "tesl", version); err != nil {
 			return err
@@ -222,7 +251,7 @@ func (app *App) Run(ctx context.Context, args []string) error {
 		if len(rest) > 0 {
 			return app.compiler(ctx, append([]string{"--help"}, rest...)...)
 		}
-		_, err := fmt.Fprintln(app.Stdout, "Tesl\n\n  init, check, compile, emit go, run, watch, test, mutate, build\n  db start|stop|status, clean, lint, fmt, fmt-check, validate\n  doc, explain, generate, agent-context, debug-inspect, debug-attach\n  doctor [--json], version\n\nUse tesl help <topic> for compiler and language documentation.")
+		_, err := fmt.Fprintln(app.Stdout, "Tesl\n\n  init, check, compile, emit go, run, watch, test, mutate, build\n  db start|stop|status, clean, lint, fmt, fmt-check, validate\n  doc, explain, generate, agent-context, debug-inspect, debug-attach\n  search [--json] QUERY, --catalog-json\n  doctor [--json], version\n\nUse tesl help <topic> for compiler and language documentation.")
 		return err
 	case "check", "lint", "fmt", "format", "fmt-check", "validate":
 		files, err := app.files(rest)
@@ -287,7 +316,7 @@ func (app *App) Run(ctx context.Context, args []string) error {
 		return app.invoke(ctx, "tesl-debug-inspect", app.Directory, env, append([]string{"--file", rest[0]}, rest[1:]...)...)
 	case "debug-attach":
 		return app.invoke(ctx, "tesl-debug-attach", app.Directory, app.Environment, rest...)
-	case "doc", "explain", "agent-context":
+	case "doc", "explain", "search", "agent-context":
 		return app.compiler(ctx, args...)
 	case "check-json", "definition-json", "occurrences-json", "type-at-json", "field-at-json", "completions-json", "local-bindings-json", "semantic-json":
 		return app.compiler(ctx, append([]string{"--" + verb}, rest...)...)

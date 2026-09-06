@@ -1056,10 +1056,10 @@ fi
 # wrapper ships unnoticed (it happened: the Racket-removal commit deleted the
 # _tesl_project_root helper block while keeping every call site — every
 # installed `tesl compile/build` died with "_tesl_project_root: command not
-# found"). This phase builds the actual flake profile (#tesl-go-cli) and drives
+# found"). This phase builds the default flake profile and both CLI implementations and drives
 # `init`/`emit`/`build --no-docker` through it under a scrubbed environment
 # (env -i), exactly what a fresh `nix profile install` user gets.
-phase_begin "Clean install (Nix shipped and native CLI candidates)"
+phase_begin "Clean install (Nix default and CLI parity references)"
 if ! command -v nix >/dev/null 2>&1; then
     printf "  %s⚠%s  nix not found — skipping clean-install gate\n" "$C_YELLOW" "$C_RESET"
     phase_end SKIP
@@ -1069,7 +1069,7 @@ elif ! command -v go >/dev/null 2>&1; then
 else
     _clean_install_dir="$(mktemp -d)"
     _clean_install_fail=0
-    for _clean_install_package in tesl-go-cli tesl-native-cli; do
+    for _clean_install_package in default tesl-go-cli tesl-native-cli; do
         _clean_install_link="$_clean_install_dir/$_clean_install_package"
         if ! nix build ".#$_clean_install_package" -o "$_clean_install_link" \
             || ! TESL_BIN="$_clean_install_link/bin/tesl" bash "$SCRIPT_DIR/tests/go-clean-install.sh"; then
@@ -1206,10 +1206,23 @@ fi
 # STATIC scan of nix/tesl-cli-body.sh for GNU-only constructs plus a DYNAMIC
 # re-run of the verbs with BSD-only mktemp/stat/readlink/sed/xargs shimmed onto
 # PATH — both run on this Linux CI, so a macOS-only regression fails here.
-phase_begin "CLI portability (BSD userland) + manifest-driven verbs"
+phase_begin "CLI portability (shell/native) + manifest-driven verbs"
 _portability_rc=0
 TESL_REPO_ROOT="$SCRIPT_DIR" TESL_OCAML_COMPILER="$_main_exe" \
     bash "$SCRIPT_DIR/tests/cli-portability.sh" || _portability_rc=$?
+# Apply the same behavioral cases to the native candidate before a default
+# cutover. Keep running it after a shell failure so both results are visible.
+if [ "$_portability_rc" -ne 77 ] && command -v go >/dev/null 2>&1; then
+    _native_portability_dir="$(mktemp -d)"
+    if ! go -C "$SCRIPT_DIR/runtime/go" build -o "$_native_portability_dir/tesl" ./cmd/tesl; then
+        _portability_rc=1
+    elif ! TESL_REPO_ROOT="$SCRIPT_DIR" TESL_OCAML_COMPILER="$_main_exe" \
+        TESL_CLI_UNDER_TEST="$_native_portability_dir/tesl" \
+        bash "$SCRIPT_DIR/tests/cli-portability.sh"; then
+        _portability_rc=1
+    fi
+    rm -rf "$_native_portability_dir"
+fi
 if [ "$_portability_rc" -eq 0 ]; then
     phase_end OK
 elif [ "$_portability_rc" -eq 77 ]; then

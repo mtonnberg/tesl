@@ -158,6 +158,16 @@ func TestManagedPostgresWorkflow(t *testing.T) {
 		t.Fatalf("start: %v\n%s", err, output.String())
 	}
 	connection := []string{"-h", "127.0.0.1", "-p", selected, "-U", "app", "-d", "app", "-tAc"}
+	checkListeners := func() {
+		t.Helper()
+		for setting, want := range map[string]string{"unix_socket_directories": "", "listen_addresses": "127.0.0.1"} {
+			value, err := app.capture(ctx, "psql", app.Directory, append(connection, "show "+setting)...)
+			if err != nil || strings.TrimSpace(value) != want {
+				t.Fatalf("managed database %s = %q, want %q: %v", setting, value, want, err)
+			}
+		}
+	}
+	checkListeners()
 	if _, err := app.capture(ctx, "psql", app.Directory, append(connection, "create table preserved (n integer); insert into preserved values (42)")...); err != nil {
 		t.Fatal(err)
 	}
@@ -174,6 +184,7 @@ func TestManagedPostgresWorkflow(t *testing.T) {
 		t.Fatal(err)
 	}
 	result, err := app.capture(ctx, "psql", app.Directory, append(connection, "select n from preserved")...)
+	checkListeners()
 	if err != nil || strings.TrimSpace(result) != "42" {
 		t.Fatalf("restart lost data: %q, %v", result, err)
 	}

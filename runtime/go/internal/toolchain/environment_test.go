@@ -23,7 +23,8 @@ func TestOfflineGoEnvironmentUsesBundledProxyAndWritableCaches(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeFixture(t, root, "share/tesl/toolchain.json", string(data), 0644)
-	env, err := r.GoEnvironment([]string{"GOTOOLCHAIN=auto", "GOPROXY=https://proxy.example", "GOWORK=somewhere", "PATH=untouched"})
+	env, err := r.GoEnvironment([]string{"GOTOOLCHAIN=auto", "GOPROXY=https://proxy.example", "GOWORK=somewhere", "PATH=untouched",
+		"GOENV=/custom/go/env", "GO111MODULE=off", "GOPRIVATE=*", "GONOPROXY=*", "GOVCS=*:all", "CGO_ENABLED=1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -37,6 +38,21 @@ func TestOfflineGoEnvironmentUsesBundledProxyAndWritableCaches(t *testing.T) {
 	}
 	if strings.HasPrefix(values["GOCACHE"], root) || strings.HasPrefix(values["GOMODCACHE"], root) || values["PATH"] != "untouched" {
 		t.Fatalf("incorrect cache environment: %v", env)
+	}
+	for key, want := range map[string]string{"GOENV": "off", "GO111MODULE": "on", "GOPRIVATE": "", "GONOPROXY": "none", "GOVCS": "*:off", "CGO_ENABLED": "0"} {
+		if got := values[key]; got != want {
+			t.Fatalf("installed %s = %q, want %q", key, got, want)
+		}
+	}
+}
+
+func TestDevelopmentGoEnvironmentKeepsUserConfiguration(t *testing.T) {
+	r, _, _ := fixture(t)
+	for key, value := range map[string]string{"GOENV": "/custom/env", "CGO_ENABLED": "1", "GONOPROXY": "private.example", "GOPRIVATE": "private.example", "GOVCS": "*:all"} {
+		env, err := r.GoEnvironment([]string{key + "=" + value})
+		if err != nil || !strings.Contains(strings.Join(env, "\n"), key+"="+value) {
+			t.Fatalf("development override %s changed: %v (%v)", key, env, err)
+		}
 	}
 }
 

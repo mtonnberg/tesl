@@ -19,7 +19,7 @@ let parse_module_uncached (filename, source) =
       fix = None;
     }
 
-let cached_parse_module = Query_cache.memo ~limit:32 ~max_weight:(2 * 1024 * 1024)
+let cached_parse_module = Query_cache.memo ~retain_across_snapshots:true ~limit:128 ~max_weight:(8 * 1024 * 1024)
   ~weight:(fun (_, source) -> String.length source) parse_module_uncached
 let parse_module filename source = cached_parse_module (filename, source)
 
@@ -1205,6 +1205,12 @@ let resolve_symbol_in_pattern env line col (pat : Ast.pattern) =
     if loc_contains_position ctor_loc line col then find_ctor_symbol env.ctor_defs ctor else None
   | Ast.PVar _ | Ast.PWild | Ast.PLit _ -> None
 
+let qualified_term_symbol env obj field =
+  match obj with
+  | Ast.EConstructor { name; args = []; _ } | Ast.EVar { name; _ } ->
+    find_term_symbol env.term_defs (name ^ "." ^ field)
+  | _ -> None
+
 let rec resolve_symbol_in_expr env locals line col (expr : Ast.expr) =
   let recurse = resolve_symbol_in_expr env locals line col in
   match expr with
@@ -1214,7 +1220,11 @@ let rec resolve_symbol_in_expr env locals line col (expr : Ast.expr) =
   | Ast.EVar { name; loc } ->
     let name_loc = precise_name_loc loc name in
     if loc_contains_position name_loc line col then resolve_term_symbol locals env name else None
-  | Ast.EField { obj; _ } -> resolve_symbol_in_expr env locals line col obj
+  | Ast.EField { obj; field; loc } ->
+    (match qualified_term_symbol env obj field with
+     | Some symbol ->
+       if loc_contains_position (precise_name_loc loc field) line col then Some symbol else None
+     | None -> resolve_symbol_in_expr env locals line col obj)
   | Ast.EApp { fn; arg; _ } ->
     (match resolve_symbol_in_expr env locals line col fn with
      | Some _ as result -> result
@@ -1683,7 +1693,10 @@ let rec collect_occurrences_in_expr env locals target (expr : Ast.expr) =
     (match resolve_term_symbol locals env name with
      | Some symbol when symbol_equal symbol target -> [name_loc]
      | _ -> [])
-  | Ast.EField { obj; _ } -> collect_occurrences_in_expr env locals target obj
+  | Ast.EField { obj; field; loc } ->
+    (match qualified_term_symbol env obj field with
+     | Some symbol -> if symbol_equal symbol target then [precise_name_loc loc field] else []
+     | None -> collect_occurrences_in_expr env locals target obj)
   | Ast.EApp { fn; arg; _ } -> collect_occurrences_in_expr env locals target fn @ collect_occurrences_in_expr env locals target arg
   | Ast.EBinop { left; right; _ } -> collect_occurrences_in_expr env locals target left @ collect_occurrences_in_expr env locals target right
   | Ast.EUnop { arg; _ } -> collect_occurrences_in_expr env locals target arg
@@ -1752,7 +1765,7 @@ let rec collect_occurrences_in_expr env locals target (expr : Ast.expr) =
   | Ast.EStartEmailWorker _ -> []
   | Ast.EConstructor { name; args; loc } ->
     (match find_ctor_symbol env.ctor_defs name with
-     | Some symbol when symbol_equal symbol target -> loc :: List.concat_map (collect_occurrences_in_expr env locals target) args
+     | Some symbol when symbol_equal symbol target -> precise_name_loc loc name :: List.concat_map (collect_occurrences_in_expr env locals target) args
      | _ -> List.concat_map (collect_occurrences_in_expr env locals target) args)
    | Ast.ELambda { params; body; _ } ->
      List.concat_map (collect_occurrences_in_binding env target) params

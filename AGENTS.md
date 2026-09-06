@@ -71,9 +71,15 @@ Use these for a *specific* question — never dump a whole module into context.
 | `tesl --lint <file>` | linter findings |
 | `tesl --fmt <file>` | format in place |
 
-> Cross-file navigation (project-wide definition/references/rename, workspace symbol)
-> is **not** available yet — it needs the IR-1 multi-file index (see
-> `roadmap/later/further_editor_improvements.md`). The queries above are same-file.
+> The original queries above remain same-file. Compiler-owned cross-file navigation
+> is available through `--workspace-definition-json FILE L C` and
+> `--workspace-references-json FILE L C`. Results carry `snapshot`, `inputs`,
+> `symbol`, `references`, and explicit `complete`/`problems` fields. A checked,
+> read-only rename proposal uses `--workspace-rename-json FILE L C NEW_NAME SNAPSHOT`.
+> Apply no edits unless the index is complete, `rename.safe` is true, and all input
+> preconditions still match. These queries use zero-based UTF-8 byte columns.
+> MCP exposes `tesl.workspace_definition`, `tesl.workspace_references`, and
+> `tesl.workspace_rename`; see `editor/protocol.md` for scope and limits.
 
 > **Diagnostic JSON shapes differ by design.** `agent-context` and `--check-json`
 > carry the **same diagnostics** (same `code`/`severity`/`message`/`fix`), but in
