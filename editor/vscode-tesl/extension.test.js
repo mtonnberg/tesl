@@ -478,9 +478,9 @@ function dapEvent(state, eventName) {
   });
 }
 
-async function withDapSession({ source, file: existingFile, breakpointLine, launch, cwd = repoRoot }, inspect) {
+async function withDapSession({ source, sourceName = "fixture.tesl", file: existingFile, breakpointLine, launch, cwd = repoRoot }, inspect) {
   const directory = source ? fs.mkdtempSync(path.join(os.tmpdir(), "tesl-dap-extension-test-")) : null;
-  const file = existingFile || path.join(directory, "fixture.tesl");
+  const file = existingFile || path.join(directory, sourceName);
   if (source) fs.writeFileSync(file, source, "utf8");
   const child = spawn("go", ["run", "./cmd/tesl-dap"], {
     cwd: path.join(repoRoot, "runtime", "go"),
@@ -559,7 +559,7 @@ async function withDapSession({ source, file: existingFile, breakpointLine, laun
     const stopped = dapEvent(state, "stopped");
     await dapRequest(child, state, "configurationDone");
     await stopped;
-    await inspect((command, args) => dapRequest(child, state, command, args));
+    await inspect((command, args) => dapRequest(child, state, command, args), file);
     await dapRequest(child, state, "disconnect");
   } finally {
     finished = true;
@@ -628,10 +628,17 @@ async function testDapApiResponseExposesJsonFields() {
 }
 
 async function testDapProgramBreakpointHitsLessonMain() {
-  const file = path.join(repoRoot, "example", "learn", "lesson31-worker-concurrency.tesl");
-  const line = fs.readFileSync(file, "utf8").split("\n")
+  const lesson = path.join(repoRoot, "example", "learn", "lesson31-worker-concurrency.tesl");
+  const original = fs.readFileSync(lesson, "utf8");
+  // Keep the complete application's main, queue and API, but its debugger
+  // breakpoint needs no external database or developer PostgreSQL credentials.
+  const backend = /^  backend: Postgres \(PostgresConfig \{[\s\S]*?^  \}\)/gm;
+  assert.strictEqual([...original.matchAll(backend)].length, 1, "lesson PostgreSQL backend changed");
+  const source = original.replace(backend, "  backend: Memory");
+  const line = source.split("\n")
     .findIndex((text) => text.includes("let port = 8090")) + 1;
-  await withDapSession({ file, breakpointLine: line, launch: { mode: "program" } }, async (request) => {
+  assert.ok(line > 0, "lesson main breakpoint changed");
+  await withDapSession({ source, sourceName: path.basename(lesson), breakpointLine: line, launch: { mode: "program" } }, async (request, file) => {
     const stack = await request("stackTrace", { threadId: 1 });
     const frame = stack.body.stackFrames[0];
     assert.strictEqual(frame.source.path, file);

@@ -49,7 +49,8 @@
         "additive_lesson_test.go#TestCompiledAdditiveLessonRetainsRows",
         "additive_lesson_test.go#TestCompiledMigrationCompilerUpgradeRetainsRows",
         "blackbox_test.go#TestCompiledVersionsShareRowsAndPauseInsideTransactions",
-        "expansion_blackbox_test.go#TestCompiledMigrationExpansionRetainsRowsAcrossStandaloneRevisions"
+        "expansion_blackbox_test.go#TestCompiledMigrationExpansionRetainsRowsAcrossStandaloneRevisions",
+        "worker_lesson_test.go#TestCompiledWorkerLessonRetainsRows"
       ]
     },
     {
@@ -60,7 +61,8 @@
         "additive_lesson_test.go#TestCompiledAdditiveLessonRetainsRows",
         "additive_lesson_test.go#TestCompiledMigrationCompilerUpgradeRetainsRows",
         "blackbox_test.go#TestCompiledVersionsShareRowsAndPauseInsideTransactions",
-        "expansion_blackbox_test.go#TestCompiledMigrationExpansionRetainsRowsAcrossStandaloneRevisions"
+        "expansion_blackbox_test.go#TestCompiledMigrationExpansionRetainsRowsAcrossStandaloneRevisions",
+        "worker_lesson_test.go#TestCompiledWorkerLessonRetainsRows"
       ]
     },
     {
@@ -468,7 +470,8 @@
       "tests": [
         "bootstrap_model_test.go#TestBootstrapRefusesWrongTargetIncompleteCatalogAndStaleOwner",
         "bootstrap_model_test.go#TestBootstrapWinnerSurvivesEveryPartialInstallCrash",
-        "bootstrap_postgres_test.go#TestPostgresBootstrapWinnerSurvivesEveryPartialInstallCrash"
+        "bootstrap_postgres_test.go#TestPostgresBootstrapWinnerSurvivesEveryPartialInstallCrash",
+        "worker_lesson_test.go#TestCompiledWorkerLessonRetainsRows"
       ]
     },
     {
@@ -550,7 +553,8 @@
       "tests": [
         "lifecycle_test.go#TestPostgresTemplateAdmissionIgnoresTemporaryLookalikes",
         "lifecycle_test.go#TestPostgresTemplateControlOwnerIsTheOnlyDirectWriter",
-        "registry_test.go#TestPostgresRegistryLookalikesAndWritableGrantsAreRefused"
+        "registry_test.go#TestPostgresRegistryLookalikesAndWritableGrantsAreRefused",
+        "worker_lesson_test.go#TestCompiledWorkerLessonRetainsRows"
       ]
     },
     {
@@ -851,7 +855,8 @@
         "additive_lesson_test.go#TestCompiledMigrationCompilerUpgradeRetainsRows",
         "bootstrap_model_test.go#TestBootstrapWinnerSurvivesEveryPartialInstallCrash",
         "bootstrap_postgres_test.go#TestPostgresBootstrapWinnerSurvivesEveryPartialInstallCrash",
-        "expansion_blackbox_test.go#TestCompiledMigrationExpansionRetainsRowsAcrossStandaloneRevisions"
+        "expansion_blackbox_test.go#TestCompiledMigrationExpansionRetainsRowsAcrossStandaloneRevisions",
+        "worker_lesson_test.go#TestCompiledWorkerLessonRetainsRows"
       ]
     },
     {
@@ -1262,7 +1267,8 @@
         "additive_lesson_test.go#TestCompiledMigrationCompilerUpgradeRetainsRows",
         "blackbox_test.go#TestCompiledVersionsShareRowsAndPauseInsideTransactions",
         "jsonb_blackbox_test.go#TestCompiledJSONBCodecsRequireBothDirectionsAndRewriteEvidence",
-        "read_ordering_test.go#TestPostgresTemplateQueryFirstAdmissionAcrossRetirement"
+        "read_ordering_test.go#TestPostgresTemplateQueryFirstAdmissionAcrossRetirement",
+        "worker_lesson_test.go#TestCompiledWorkerLessonRetainsRows"
       ]
     },
     {
@@ -1500,7 +1506,8 @@
         "model_test.go#TestApplicationTargetWriteLocksABIBeforeBackfillStarts",
         "model_test.go#TestRetirementExcludesEveryOldWriter",
         "pooler_test.go#TestPostgresPoolerAdmissionTransactions",
-        "postgres_test.go#TestPostgresTemplateFenceOrdersPausedWriterAndRetirement"
+        "postgres_test.go#TestPostgresTemplateFenceOrdersPausedWriterAndRetirement",
+        "worker_lesson_test.go#TestCompiledWorkerLessonRetainsRows"
       ]
     }
   ],
@@ -3037,6 +3044,24 @@
       ],
       "transitions": [
         "TR-TRACEABILITY-CHECK"
+      ],
+      "named_failpoints": null
+    },
+    {
+      "name": "TestCompiledWorkerLessonRetainsRows",
+      "file": "worker_lesson_test.go",
+      "line": 30,
+      "layer": "compiled-postgres",
+      "invariants": [
+        "INV-ADDITIVE-READ",
+        "INV-ADDITIVE-WRITE",
+        "INV-INSTALL-CATALOG",
+        "INV-PRIVILEGE"
+      ],
+      "transitions": [
+        "TR-BOOT-EXPAND",
+        "TR-READ",
+        "TR-WRITE"
       ],
       "named_failpoints": null
     }

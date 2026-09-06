@@ -30,9 +30,10 @@ now fails instead of skipping unavailable PostgreSQL; its negative subprocess
 tests pass. Transforming execution and different-contract
 revalidation retain their separate phase-3 requirements.
 
-The next implementation is the production Worker request/executor split, followed
-by a predecessor protocol that understands recorded generation/trigger objects,
-safe additive epoch closure and the first typed full-app transformation. Current
+The production Worker request/executor split now passes its full-app regression.
+The next production work is concurrent index jobs and protected durable runtime
+storage, followed by a predecessor protocol that understands recorded
+generation/trigger objects, safe additive epoch closure and the first typed full-app transformation. Current
 additive binaries reject unknown control formats and triggers; they cannot be
 treated as compatible transforming predecessors without that bridge. Queues and
 outboxes require real versioned storage/restamping, or an explicit restricted
@@ -46,7 +47,7 @@ and both reviews. The normative phase prerequisites remain in force.
 | Scenario | Current evidence / remaining work |
 |---|---|
 | Existing database survives a supported compiler upgrade | Actual A/B/C full-app scenario, compiler/runtime gates and two reviews pass |
-| Adopt/deploy the notes app; add fields and indexes | Additive lesson passes; Worker split and lesson84 under verification; adoption and existing-table indexes remain |
+| Adopt/deploy the notes app; add fields and indexes | Additive and separate Worker lessons pass; adoption and existing-table indexes remain |
 | Transform an entity while old/new apps keep serving | Planner/typing groundwork exists; compatibility, backfill and epoch closure remain |
 | Reject a row, repair it, retire old code and contract | Model coverage exists; production lifecycle remains |
 | Evolve a stored record/ADT without changing the HTTP API | Codec/storage traces exist; unified history, rewrite and pruning remain |
@@ -155,7 +156,15 @@ covered for both local bindings and function parameters.
   unsupported durable-facility startup and executor identity-check ordering.
   Worker refuses queues, caches, email and SSE until their protected installation
   exists; this is not evidence authorizing epoch closure. The full-app lesson84
-  gate and post-merge compiler checks are still pending.
+  race gate passes (24.87s): both compiled revisions run their unit/API tests,
+  then standalone worker/request processes preserve rows with identical app bytes.
+  Requests have no TEMP or namespace/public CREATE grants. The trace checks pending
+  readiness, denied DDL/lifecycle calls, wrong identities and an old-binary restart.
+  Compiler checks pass (190 cases plus the strengthened emission suite); actual
+  lesson emission exposed and fixed a missing ADT import allowlist entry. Four
+  source files pass formatting/agent-context, generated snapshots are included,
+  traceability and documentation integrity pass, and integration-test lint is clean.
+  Background jobs, heartbeat/reconnect supervision and deployment recipes remain.
 
 - Main's September security fixes are merged, preserving source overlays and the
   bounded import scanner. A combined regression covers unsaved files/directories

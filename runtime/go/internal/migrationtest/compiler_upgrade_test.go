@@ -54,11 +54,50 @@ func buildMigrationCompilerVariants(t *testing.T, ctx context.Context, root stri
 	if err := os.WriteFile(filepath.Join(clone, "compiler/dune-project"), project, 0600); err != nil {
 		t.Fatal(err)
 	}
-	// Documentation is read by the ordinary build generator, but is explicitly
-	// excluded from both the exact execution ABI and the stored-value contract.
-	for _, directory := range []string{"manual", "example", "dev-docs"} {
-		if err := os.Symlink(filepath.Join(root, directory), filepath.Join(clone, directory)); err != nil {
+	// The ordinary build generator requires regular documentation inputs inside
+	// its repository root. Copy those bytes rather than linking outside the clone;
+	// documentation remains excluded from execution ABI and value compatibility.
+	copyDocumentation := func(relative string) {
+		t.Helper()
+		path := filepath.Join(root, relative)
+		info, err := os.Lstat(path)
+		if err != nil || !info.Mode().IsRegular() {
+			t.Fatalf("compiler documentation input is not a regular file: %s (%v)", relative, err)
+		}
+		contents, err := os.ReadFile(path)
+		if err != nil {
 			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(clone, relative), contents, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, name := range []string{"LANGUAGE-SPEC.md", "README.md", "INSTALL.md"} {
+		copyDocumentation(name)
+	}
+	for _, directory := range []string{
+		"manual", "dev-docs", "example", "example/learn", "example/intro",
+		"example/kanel", "example/chat", "example/medical-journal_wip",
+	} {
+		info, err := os.Lstat(filepath.Join(root, directory))
+		// gen_docs skips optional example/doc directories absent from the checkout.
+		if os.IsNotExist(err) && directory != "manual" && directory != "example" {
+			continue
+		}
+		if err != nil || !info.IsDir() {
+			t.Fatalf("compiler documentation directory is not a real directory: %s (%v)", directory, err)
+		}
+		if err := os.MkdirAll(filepath.Join(clone, directory), 0700); err != nil {
+			t.Fatal(err)
+		}
+		entries, err := os.ReadDir(filepath.Join(root, directory))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, entry := range entries {
+			if !entry.IsDir() && (strings.HasSuffix(entry.Name(), ".md") || strings.HasSuffix(entry.Name(), ".tesl")) {
+				copyDocumentation(filepath.Join(directory, entry.Name()))
+			}
 		}
 	}
 	edit := func(name, old, replacement string) {
