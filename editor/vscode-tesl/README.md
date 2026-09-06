@@ -74,6 +74,22 @@ If you have Tesl installed with Nix, the extension finds the Go `tesl-lsp` binar
 | Setting | Default | Description |
 |---|---|---|
 | `tesl.lspBinary` | `""` | Advanced override: absolute path to the Go `tesl-lsp` binary. Leave empty to use `tesl-lsp` from PATH. |
+| `tesl.compilerBinary` | `""` | User Settings only: absolute path to a development compiler. Overrides the installed compiler for language features, tests and debugging. Reload the window after changing it. |
+
+When developing Tesl with an official version also installed, build with
+`cd compiler && dune build`, then add this to VS Code's **User Settings (JSON)**:
+
+```json
+{
+  "tesl.compilerBinary": "/absolute/path/to/tesl/compiler/_build/default/bin/main.exe"
+}
+```
+
+The extension uses that compiler and its checkout's standard library. Rebuilding
+the same binary updates the compiler used for subsequent checks. Workspace
+settings cannot set this override: a repository must not choose an executable
+merely by being opened. An explicit `TESL_COMPILER` environment override also
+remains supported. Clear the setting to return to the installed compiler.
 
 ---
 

@@ -29,6 +29,27 @@ function installedComponent(name) {
   return installedToolchain()?.component(name) || null;
 }
 
+function configuredCompiler() {
+  // Read only the user's machine setting. A repository's .vscode/settings.json
+  // must not opt itself into executing a development compiler when opened.
+  const value = vscode.workspace.getConfiguration("tesl").inspect("compilerBinary")?.globalValue;
+  if (value && !path.isAbsolute(value)) {
+    throw new Error("tesl.compilerBinary must be an absolute path in User Settings.");
+  }
+  return value || process.env.TESL_COMPILER || null;
+}
+
+function configuredCompilerEnvironment() {
+  const compiler = configuredCompiler();
+  if (!compiler) return {};
+  const repo = findTeslRepoRoot(compiler);
+  return {
+    TESL_COMPILER: compiler,
+    TESL_OCAML_COMPILER: compiler,
+    ...(repo ? { TESL_REPO_ROOT: repo, TESL_STDLIB_DIR: path.join(repo, "tesl") } : {}),
+  };
+}
+
 function findNixShell() {
   if (commandOnPath("nix-shell")) return "nix-shell";
   const candidates = [
@@ -182,7 +203,8 @@ function resolveTeslRoot(wsPath, filePath) {
 }
 
 function findTeslCompiler(wsPath, filePath) {
-  if (process.env.TESL_COMPILER) return process.env.TESL_COMPILER;
+  const configured = configuredCompiler();
+  if (configured) return configured;
   const installed = installedComponent("compiler");
   if (installed) return installed;
   // 1. Locally compiled binary in the workspace repo
@@ -291,6 +313,7 @@ function activate(context) {
           env: {
             ...process.env,
             ...installedToolchain()?.launchEnvironment,
+            ...configuredCompilerEnvironment(),
           },
         },
       };
@@ -475,7 +498,7 @@ function activate(context) {
     const folder = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(file));
     const root = resolveTeslRoot(folder ? folder.uri.fsPath : wsPath, file);
     const installed = installedComponent("compiler");
-    const compiler = installed || findWorkspaceCompiler(root);
+    const compiler = configuredCompiler() || installed || findWorkspaceCompiler(root);
     const toolchain = !installed && compiler ? findRepoToolchain(root) : null;
     return {
       cwd: path.dirname(file),
@@ -489,6 +512,7 @@ function activate(context) {
           TESL_COMPILER: compiler,
           ...(toolchain ? { TESL_GO: toolchain.go } : {}),
         } : {}),
+        ...configuredCompilerEnvironment(),
       },
     };
   }
@@ -1160,6 +1184,7 @@ function activate(context) {
           TESL_DAP_TRACE: "1",
           ...(!installed && repoRoot ? { TESL_REPO_ROOT: repoRoot } : {}),
           ...(compiler ? { TESL_COMPILER: compiler } : {}),
+          ...configuredCompilerEnvironment(),
         };
         const dbgOut = vscode.window.createOutputChannel("Tesl Debugger");
         dbgOut.appendLine(`[tesl-debug] Go DAP: ${goDap.command} ${goDap.args.join(" ")}`);

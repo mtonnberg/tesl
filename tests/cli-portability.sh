@@ -342,7 +342,9 @@ fi
 
  # 4) bare `tesl test` runs the test blocks (README's documented command)
 out="$(tesl_bsd "$PROJ" test)"; rc=$?
-if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q "ok"; then
+# The shell uses go test's package summary; the native CLI runs the compiled
+# test executable so project dotenv cannot configure Go tool execution.
+if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -Eq '^(ok[[:space:]]|PASS$)'; then
   pass "bare 'tesl test' runs the entrypoint's Go test blocks"
 else
   fail "bare 'tesl test' failed (rc=$rc): $out"

@@ -74,6 +74,12 @@
     "configuration": {
       "title": "Tesl",
       "properties": {
+        "tesl.compilerBinary": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "description": "Development override: absolute path to a locally built Tesl compiler. Set in User Settings, then reload the window. Applies to language features, tests, and debugging even when Tesl is installed globally; workspace settings cannot select a compiler."
+        },
         "tesl.lspBinary": {
           "type": "string",
           "default": "",
