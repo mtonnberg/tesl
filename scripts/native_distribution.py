@@ -158,7 +158,7 @@ def windows_setup(plan, frontends, archive, digest, artifacts, work, environment
         raise ValueError("setup uninstall did not remove its selected version")
     if native_payload.file_hash(executable) != checksum:
         raise ValueError("setup executable changed during acceptance")
-    (artifacts / (name + ".sha256")).write_text(f"{checksum}  {name}\n", encoding="utf-8")
+    (artifacts / (name + ".sha256")).write_text(f"{checksum}  {name}\n", encoding="utf-8", newline="\n")
     return {"archive": name, "sha256": checksum, "embedded_archive_sha256": digest,
             "install_launch_uninstall": "passed", "authenticode": "unsigned", "binary_audit": detail}
 
@@ -236,7 +236,7 @@ def build(plan, root, target, module_bundle, output, cygwin_bash=None):
         artifacts.mkdir()
         archive = artifacts / plan["payloads"][target]["archiveName"]
         digest = native_payload.pack(plan, target, payload, archive)
-        (artifacts / (archive.name + ".sha256")).write_text(f"{digest}  {archive.name}\n", encoding="utf-8")
+        (artifacts / (archive.name + ".sha256")).write_text(f"{digest}  {archive.name}\n", encoding="utf-8", newline="\n")
         unpacked = work / "unpacked"
         unpacked.mkdir()
         # This archive was just assembled and audited above, not supplied by an
