@@ -8,7 +8,8 @@ open Ast
 include Frontend_check
 
 let check_module ?skip_dep_body source m =
-  let diagnostics = Frontend_check.check_module ~additional:Migration_declaration.diagnostics
+  let additional = Migration_application.make ?skip_dep_body m in
+  let diagnostics = Frontend_check.check_module ~additional
     ?skip_dep_body source m in
   Migration_declaration.diagnostics_of_errors
     (Migration_source_diagnostics.check_module_source source m) @ diagnostics
@@ -133,6 +134,48 @@ let diag_to_json (d : diagnostic) : string =
 let diagnostics_to_json (diags : diagnostic list) : string =
   Printf.sprintf {|{"version":1,"diagnostics":[%s]}|}
     (String.concat "," (List.map diag_to_json diags))
+
+let diagnostic_manual_href d =
+  let anchor = match d.manual with Some _ as a -> a
+    | None -> Error_codes.manual_for ~code:d.code ~message:d.message () in
+  Option.bind anchor (fun anchor ->
+    let section,fragment = match String.split_on_char '#' anchor with
+      | [section] -> section,"" | [section;fragment] -> section,"#" ^ fragment
+      | _ -> "","" in
+    let file = match section with
+      | "language-spec" -> Some "LANGUAGE-SPEC.md"
+      | "getting-started" -> Some "manual/GETTING-STARTED.md"
+      | "faq" -> Some "manual/FAQ.md"
+      | "dev" -> Some "dev-docs/README.md"
+      | "overview" | "best-practices" | "examples" | "sso" -> Some ("manual/" ^ section ^ ".md")
+      | _ -> None in
+    Option.map (fun file -> "https://github.com/mtonnberg/tesl/blob/main/" ^ file ^ fragment) file)
+
+let diag_to_json_v2 (d : diagnostic) =
+  let metadata = d.metadata in
+  let message = Option.fold ~none:d.message ~some:(fun (m : Diagnostic_metadata.t) -> m.message) metadata in
+  let base = diag_to_json {d with message} in
+  let related = Option.fold ~none:[] ~some:(fun (m : Diagnostic_metadata.t) -> m.related) metadata in
+  let related = List.filter_map (fun (loc,message) ->
+    if loc.Location.file="" then None else Some (Printf.sprintf
+      {|{"file":%s,"start":{"line":%d,"col":%d},"end":{"line":%d,"col":%d},"message":%s}|}
+      (json_encode_string loc.file) loc.start.line loc.start.col loc.stop.line loc.stop.col (json_encode_string message))) related in
+  let action = Option.bind metadata (fun (m : Diagnostic_metadata.t) -> m.action) in
+  let command = Option.bind action (fun (a : Diagnostic_metadata.action) -> a.command) in
+  let command = Option.fold ~none:"null" ~some:(fun (c : Diagnostic_metadata.command) ->
+    let args = String.concat "," (List.map (fun (key,value) -> json_encode_string key ^ ":" ^ json_encode_string value) c.arguments) in
+    Printf.sprintf {|{"title":%s,"command":%s,"arguments":[{%s}]}|}
+      (json_encode_string c.title) (json_encode_string c.name) args) command in
+  let href = Option.fold ~none:"null" ~some:(fun href -> "{\"href\":" ^ json_encode_string href ^ "}") (diagnostic_manual_href d) in
+  String.sub base 0 (String.length base-1) ^ Printf.sprintf
+    {|,"relatedInformation":[%s],"actionClass":%s,"needsConfirmation":%b,"fixAllEligible":%b,"command":%s,"codeDescription":%s}|}
+    (String.concat "," related)
+    (Option.fold ~none:"null" ~some:(fun (a : Diagnostic_metadata.action) -> json_encode_string (Diagnostic_metadata.class_name a.class_)) action)
+    (Option.fold ~none:false ~some:(fun (a : Diagnostic_metadata.action) -> a.needs_confirmation) action)
+    (Option.fold ~none:false ~some:(fun (a : Diagnostic_metadata.action) -> a.fix_all_eligible) action) command href
+
+let diagnostics_to_json_v2 diags =
+  Printf.sprintf {|{"version":2,"diagnostics":[%s]}|} (String.concat "," (List.map diag_to_json_v2 diags))
 
 let local_binding_to_json (b : local_binding) : string =
   let note_field = match b.note with
@@ -2371,7 +2414,7 @@ let diag_of_go_emit_error (error : Emit_go.emit_error) : diagnostic = {
   message    = error.message;
   fix        = None;
   source     = "go-emitter";
-  manual     = None;
+  metadata = None; manual = None;
 }
 
 (** Compile a checked Tesl module into a complete standalone Go module tree.
@@ -2705,7 +2748,7 @@ let local_dependency_modules entry_path (entry : Ast.module_form) =
 let go_project_diag file message = {
   file; start_line = 1; start_col = 1; end_line = 1; end_col = 1;
   severity = "error"; code = "V001"; message; fix = None; source = "go-emitter";
-  manual = None;
+  metadata = None; manual = None;
 }
 
 (* Keep Go's unsupported-export boundary observable even when the frontend also
@@ -2736,6 +2779,7 @@ let compile_go_source ?(debug=false) ?(path="") filename source =
   match parse_module filename source with
   | Err error -> GoFailure (source_parse_diagnostics filename source error)
   | Ok m ->
+    let result = Migration_program.with_history ~entry:m ~source (fun history ->
     let diags = check_module source m in
     if diags <> [] then GoFailure (diags @ go_import_boundary_diags filename m)
     else
@@ -2751,12 +2795,28 @@ let compile_go_source ?(debug=false) ?(path="") filename source =
              match Source_input.read_text dependency.source_file with
              | dependency_source -> check_module dependency_source dependency
              | exception Sys_error _ -> []) originals in
-         if dependency_diags <> [] then GoFailure dependency_diags
+         let binding_diags = match Migration_program.verify_bindings history originals with
+          | Ok () -> [] | Error es -> Migration_declaration.diagnostics_of_errors es in
+         if dependency_diags @ binding_diags <> [] then GoFailure (dependency_diags @ binding_diags)
          else
             let mode = if debug then Emit_go.Debug else Emit_go.Release in
-            match Emit_go.compile_project ~mode ~entry:entry_emit modules with
-           | Ok artifacts -> GoSuccess artifacts
-           | Error errors -> GoFailure (List.map diag_of_go_emit_error errors))
+            let migration_families = Option.fold ~none:[] ~some:(fun p ->
+              List.map (fun (d:Migration_program.database) -> d.identity,d.family) (Migration_program.databases p)) history in
+            match Emit_go.compile_project ~mode ~migration_families ~entry:entry_emit modules with
+           | Ok artifacts ->
+             let metadata = match history with None -> [] | Some history ->
+              let json = Migration_program.to_json ~quote:json_encode_string history in
+              let registrations = List.map (fun (d:Migration_program.database) ->
+                Printf.sprintf "\tregisterCompiledMigrationHistory(%s, %s, %s, %d, %s, teslGeneratedMigrationHistoryJSON)\n"
+                  (Emit_go.go_quote d.identity) (Emit_go.go_quote d.family) (Emit_go.go_quote d.namespace)
+                  d.current_version (Emit_go.go_quote (Migration_program.compiler_abi history))) (Migration_program.databases history) in
+              [{Emit_go.path="migration-history.json";contents=json ^ "\n"};
+               {Emit_go.path="internal/teslrt/migration_history_generated.go";
+                contents="package teslrt\n\nconst teslGeneratedMigrationHistoryJSON = " ^ Emit_go.go_quote json ^
+                  "\n\nfunc init() {\n" ^ String.concat "" registrations ^ "}\n"}] in
+             GoSuccess (artifacts @ metadata)
+           | Error errors -> GoFailure (List.map diag_of_go_emit_error errors))) in
+    match result with Ok result -> result | Error es -> GoFailure (Migration_declaration.diagnostics_of_errors es)
 
 let compile_go_file ?(debug=false) filename =
   let source = Source_input.read_text filename in
@@ -2932,7 +2992,7 @@ let check_source ?skip_dep_body filename source =
     message    = msg;
     fix        = None;
     source     = "lexer";
-    manual     = None;
+    metadata = None; manual = None;
   }]
 
 let check_file ?skip_dep_body filename =
@@ -3048,7 +3108,7 @@ let check_files_batch (filenames : string list) : (string * diagnostic list) lis
       with Sys_error msg ->
         [{ file = filename; start_line = 0; start_col = 0;
            end_line = 0; end_col = 0; severity = "error";
-           code = "E000"; message = msg; fix = None; source = "io"; manual = None }]
+           code = "E000"; message = msg; fix = None; source = "io"; metadata = None; manual = None }]
     in
     (filename, diags)
   ) filenames

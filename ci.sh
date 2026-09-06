@@ -663,8 +663,14 @@ if [ "$go_gate_fail" -eq 0 ]; then
       bash "$SCRIPT_DIR/scripts/go-fuzz-target.sh" ./teslrt FuzzIntDecimalAndJSONRoundTrip &&
       bash "$SCRIPT_DIR/scripts/go-fuzz-target.sh" ./teslrt FuzzIntArithmeticAgainstBig &&
       bash "$SCRIPT_DIR/scripts/go-fuzz-target.sh" ./teslrt FuzzIntJSONInput &&
+      bash "$SCRIPT_DIR/scripts/go-fuzz-target.sh" ./teslrt FuzzMigrationCatalogLiteral &&
+      bash "$SCRIPT_DIR/scripts/go-fuzz-target.sh" ./teslrt FuzzCompiledMigrationHistory &&
       bash "$SCRIPT_DIR/scripts/go-fuzz-target.sh" ./internal/protocol FuzzReaderAcceptsWriterFrames &&
       bash "$SCRIPT_DIR/scripts/go-fuzz-target.sh" ./internal/protocol FuzzUTF16PositionsNeverPanic &&
+      bash "$SCRIPT_DIR/scripts/go-fuzz-target.sh" ./internal/tooling FuzzRichDiagnosticEnvelope &&
+      bash "$SCRIPT_DIR/scripts/go-fuzz-target.sh" ./internal/lsp FuzzFixAllSourceBoundaries &&
+      bash "$SCRIPT_DIR/scripts/go-fuzz-target.sh" ./internal/lsp FuzzClientResponseEnvelopes &&
+      bash "$SCRIPT_DIR/scripts/go-fuzz-target.sh" ./internal/sourceedit FuzzSourceManifestDecode &&
       go vet ./... &&
       CGO_ENABLED=0 go build ./... &&
       staticcheck ./... &&

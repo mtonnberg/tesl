@@ -212,6 +212,61 @@ let duplicate_aliases () = with_project (fun root path ->
   let source = read (migration path) |> replace "entities: {}" "entities: { Note: Additive [], Notes.Note: Additive [] }" in
   edit path "migrations/notes/v2.tesl" source;
   refuses (refresh root))
+let hole_becomes_additive () = with_project (fun root path ->
+  change path (replace "title: String }" "title: String, count: Int }" child);
+  materialize (get (refresh root)).manifest;
+  change path (replace "title: String }" "title: String, count: Maybe Int }" child);
+  let p = get (refresh root) in assert_codes [] p;
+  check bool "generated decision replaced with checked adapter" true (contains (preview_source path p) "Additive []");
+  check bool "old generated decision removed" false (contains (preview_source path p) "todo "))
+let invalid_source () = with_project (fun root path ->
+  let original = read (migration path) in
+  change path (child ^ "fn broken() -> Int = \"not an Int\"\n");
+  refuses (refresh root);
+  check string "invalid schema cannot renew seals" original (read (migration path));
+  change path child;
+  let source = replace "import Tesl.Migration" "import Tesl.Prelude exposing [Int]\nimport Tesl.Migration" original ^
+    "fn broken() -> Int = \"not an Int\"\n" in
+  edit path "migrations/notes/v2.tesl" source;
+  let p = get (refresh root) in
+  check bool "full frontend still rejects bad user helper" true (List.mem "T001" (codes p.diagnostics));
+  check string "bad helper remains available for correction" source (preview_source path p))
+let changed_fact () =
+  let source = {|module NotesSchema.VCurrent.Notes exposing [Note]
+import Tesl.Prelude exposing [Int, String]
+import Tesl.Maybe exposing [Maybe(..)]
+fact Positive (n: Int)
+establish accept(n: Int) -> Maybe (value: Int ::: Positive value) =
+  if n > 0 then
+    Something (n ::: Positive n)
+  else
+    Nothing
+entity Note table "notes" primaryKey id { id: String, amount: Int ::: Positive amount }
+|} in
+  with_project ~source (fun root path ->
+    change path (replace "n > 0" "n > 10" source);
+    let p = get (refresh root) in assert_codes ["MIG003"] p;
+    let output = preview_source path p in
+    check int "stale fact identity is removed" 0 (same_count (migration path) output);
+    check bool "proof decision identifies fact" true (contains output "Positive");
+    check bool "proof decision identifies stored occurrence" true (contains output "amount"))
+let later_revision () = with_project (fun root path ->
+  change path (replace "title: String }" "title: String, caption: Maybe String }" child);
+  materialize (get (refresh root)).manifest;
+  materialize (get (start root 2)).manifest;
+  let frozen = List.map (fun name -> name,read (path name))
+    ["schema/notes/v1/notes.tesl";"schema/notes/v2/notes.tesl";"migrations/notes/v2.tesl"] in
+  change path (replace "title: String }" "title: String, caption: Maybe String, count: Maybe Int }" child);
+  let p = get (refresh ~version:3 root) in assert_codes [] p;
+  materialize p.manifest;
+  accepts (path "migrations/notes/v3.tesl") (read (path "migrations/notes/v3.tesl"));
+  List.iter (fun (name,source) -> check string "frozen bytes preserved" source (read (path name))) frozen;
+  change path (replace "title: String }" "title: String, caption: Maybe String, count: Maybe Int, required: Int }" child);
+  let p = get (refresh ~version:3 root) in assert_codes ["MIG003"] p;
+  materialize p.manifest;
+  let first = path "schema/notes/v1/notes.tesl" in
+  edit path "schema/notes/v1/notes.tesl" (read first ^ "# frozen tamper\n");
+  refuses (refresh ~version:3 root))
 let () = run "Migration refresh previews" ["checked source merge",List.map (fun (name,f) -> test_case name `Quick f)
   ["unchanged preview is deterministic and empty",noop;"optional private field preserves app and helpers",optional;
    "missing value blocks compilation and manual default survives",holes_and_manual_default;
@@ -221,4 +276,8 @@ let () = run "Migration refresh previews" ["checked source merge",List.map (fun 
    "multiple decisions get separate noncascading diagnostics",two_holes;"frozen drift never reseals history",frozen_drift;
    "stale revision selection and different ABI refuse",selected_and_abi;"malformed and completed history refuse",corrupt_history;
    "unsaved schema and independent disk guards",unsaved;"edited entity key protects original entry",aliases;
-   "duplicate entity aliases refuse merging",duplicate_aliases]]
+   "duplicate entity aliases refuse merging",duplicate_aliases;
+   "generated decision becomes additive after schema correction",hole_becomes_additive;
+   "invalid schema and user helper still receive full checks",invalid_source;
+   "changed private fact requires stored-value revalidation",changed_fact;
+   "later revision refresh checks completed history in proposed view",later_revision]]

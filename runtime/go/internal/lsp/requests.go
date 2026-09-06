@@ -40,6 +40,7 @@ type pendingRequest struct {
 
 type incomingRequest struct {
 	request  protocol.Request
+	response *protocol.Response
 	pending  *pendingRequest
 	key      string
 	bytes    int
@@ -87,7 +88,30 @@ func (stream *requestStream) read(input io.Reader) {
 			stream.enqueue(incomingRequest{err: err, code: parseError, terminal: true})
 			return
 		}
+		// Skip params while classifying the envelope: a didChange can contain a
+		// large buffer, which must not be copied just to distinguish a reply.
+		var envelope struct {
+			Method json.RawMessage `json:"method"`
+			Result json.RawMessage `json:"result"`
+			Error  json.RawMessage `json:"error"`
+		}
+		shapeErr := json.Unmarshal(message, &envelope)
+		hasMethod := len(envelope.Method) != 0
+		if shapeErr == nil && !hasMethod {
+			response, err := decodeClientResponse(message)
+			item := incomingRequest{response: &response, bytes: len(message)}
+			if err != nil {
+				item.err, item.code = err, invalidRequest
+			}
+			if !stream.enqueue(item) {
+				return
+			}
+			continue
+		}
 		request, err := protocol.DecodeRequest(message)
+		if len(envelope.Result) != 0 || len(envelope.Error) != 0 {
+			err = errors.New("LSP request cannot contain response fields")
+		}
 		if err != nil {
 			if !stream.enqueue(incomingRequest{err: err, code: invalidRequest, bytes: len(message)}) {
 				return

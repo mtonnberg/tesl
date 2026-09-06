@@ -170,6 +170,9 @@ let check ~compiler_abi ~source (m : module_form) =
         | None -> None
         | Some header -> Some (checked (Migration_header.verify ~project_root ~migration_module:m.module_name
             ~previous:previous_root ~current:current_root header)) in
+      let closure = checked (Migration_closure.read ~file:m.source_file source) in
+      Option.iter (fun located -> ignore (checked (Migration_closure.verify ~project_root
+        ~root_file:(Validation_common.canonical_import_path m.source_file) ~source located))) closure;
       let previous,current = match H.adjacent_pair ~compiler_abi ~project_root ~family
           ~previous:previous_root ~current:current_root with
         | Ok pair -> pair
@@ -177,6 +180,10 @@ let check ~compiler_abi ~source (m : module_form) =
             related=[error.loc,"schema history"]}]) in
       if current.H.version <> target then reject "MIG020" (at current_expr)
         (Printf.sprintf "Migrate.V%d must target schema version %d" target target);
+      if current_root <> family ^ ".VCurrent" && (source_seals=None || closure=None) then
+        reject "MIG013" declaration.loc "a completed migration requires schema seals and its complete frozen source closure";
+      if current_root = family ^ ".VCurrent" && closure <> None then
+        reject "MIG013" declaration.loc "a current migration cannot claim a completed source closure";
       let holes = entry_holes entities in
       if holes <> [] then raise (Invalid holes);
       (match List.assoc_opt "fixtures" fields with
@@ -209,6 +216,8 @@ let check ~compiler_abi ~source (m : module_form) =
         (List.rev !rules) in
       let additive = checked (A.check coverage ~defaults) in
       Option.iter (fun header -> ignore (checked (Migration_header.verify_unchanged header))) source_seals;
+      Option.iter (fun located -> ignore (checked (Migration_closure.verify ~project_root
+        ~root_file:(Validation_common.canonical_import_path m.source_file) ~source located))) closure;
       Ok (Some {coverage;additive;version=target;source_seals})
   with Invalid errors -> Error errors
 
@@ -226,6 +235,7 @@ let diagnostics_of_errors errors =
       Some {Frontend_check.file=loc.file;start_line=loc.start.line;start_col=loc.start.col;
        end_line=loc.stop.line;end_col=loc.stop.col;severity="error";code=error.code;
        message=String.concat "\n" (error.message :: related);fix=None;source="migration";
+       metadata=Some (Diagnostic_metadata.migration ~code:error.code ~message:error.message ~related:error.related);
        manual=Error_codes.manual_for ~code:error.code ~message:error.message ()}
     end) errors
 

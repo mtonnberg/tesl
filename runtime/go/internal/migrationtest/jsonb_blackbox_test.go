@@ -16,7 +16,9 @@ import (
 )
 
 // INV-JSONB-COMPATIBILITY, INV-JSONB-RETENTION; TR-READ, TR-WRITE.
-// Existing codecs are the oracle here, not a production migration executor.
+// Existing codecs over an explicitly unversioned connection are the oracle.
+// Typed JSONB migration execution is still pending; this must not bypass the
+// production boot gate or forge a shared history for incompatible source builds.
 // Every version has byte-identical handlers, HTTP codecs and connection setup.
 func TestCompiledJSONBCodecsRequireBothDirectionsAndRewriteEvidence(t *testing.T) {
 	if os.Getenv("TESL_MIGRATION_TEST_DSN") == "" {
@@ -67,6 +69,7 @@ func TestCompiledJSONBCodecsRequireBothDirectionsAndRewriteEvidence(t *testing.T
 		program := fmt.Sprintf(`package main
 import ("encoding/json"; "io"; "os"; fixture %q; %q)
 func main() {
+  if _, versioned := fixture.FixtureDbDatabase.CompiledMigrationHistory(); versioned { panic("codec oracle must use an explicit unversioned connection") }
   teslrt.WithDatabase(fixture.FixtureDbDatabase, func() {
     input, output := json.NewDecoder(os.Stdin), json.NewEncoder(os.Stdout)
     for {
@@ -244,14 +247,29 @@ from migration_jsonb.notes where id='partial'`).Scan(&optionalNull, &changed); e
 	if err = conn.QueryRow(f.ctx, `select count(*) from migration_jsonb.notes where id='invalid-input'`).Scan(&invalidCount); err != nil || invalidCount != 0 {
 		t.Fatalf("rejected input was inserted: %d (%v)", invalidCount, err)
 	}
-	// A compatible bridge writes both keys. The legacy and current decoders can
-	// both read it, while handlers and the HTTP contract remain identical.
+	// A decoder-compatible bridge writes both keys. This does not establish SQL
+	// predicate compatibility: equality with the old encoded parameter can stop
+	// matching even when both decoders return exactly the same logical value.
+	predicateMatches := func(id, encoded string, want int) {
+		t.Helper()
+		var count int
+		if err := conn.QueryRow(f.ctx, `select count(*) from migration_jsonb.notes
+where id=$1 and details=$2::jsonb`, id, encoded).Scan(&count); err != nil || count != want {
+			t.Fatalf("JSONB predicate %s = %s: %d, want %d (%v)", id, encoded, count, want, err)
+		}
+	}
 	request("v7", "POST", "bridge-old", `{"text":"old value"}`, "200", "old value")
 	request("v8-bridge", "GET", "bridge-old", "", "200", "old value")
 	raw("bridge-old", "title", "old value")
+	predicateMatches("bridge-old", `{"title":"old value"}`, 1)
 	request("v8-bridge", "PUT", "bridge-old", "", "200", "old value")
 	request("v7", "GET", "bridge-old", "", "200", "old value")
 	request("v9", "GET", "bridge-old", "", "200", "old value")
+	predicateMatches("bridge-old", `{"title":"old value"}`, 0)
+	predicateMatches("bridge-old", `{"title":"old value","body":"old value"}`, 1)
+	// These direct PostgreSQL predicates pin the counterexample, not production
+	// query adaptation. An online planner must preserve admitted SQL behavior as
+	// well as decoding, usually through separate old/new physical storage.
 	request("v8-bridge", "POST", "bridge-new", `{"text":"new value"}`, "200", "new value")
 	request("v7", "GET", "bridge-new", "", "200", "new value")
 	request("v9", "GET", "bridge-new", "", "200", "new value")

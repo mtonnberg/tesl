@@ -37,4 +37,9 @@ export TESL_TEST_POSTGRES_SHARED_USER=migration_installer
 export TESL_TEST_POSTGRES_SHARED_ADMIN_DATABASE=postgres
 export TESL_REPO_ROOT="$repo_root"
 cd "$repo_root/runtime/go"
-go test -race -count=1 -timeout=180s ./internal/migrationtest "$@"
+go test -race -count=1 -timeout=300s ./internal/migrationtest "$@"
+if (( $# == 0 )); then
+  # Production control/executor APIs and their crash tests use the same
+  # isolated cluster and supported-major matrix as the independent harness.
+  go test -race -count=1 -timeout=300s -tags=tesl_migration_test ./teslrt -run '^TestPgMigration(Control|Expansion|Admission|Boot|Status|Install)'
+fi

@@ -201,25 +201,53 @@ const (
 	maxDiagnosticFixEdits = 256
 )
 
-// ValidateCompilerJSON checks the required version-1 fields consumed by editor
+// ValidateCompilerJSON checks the required versioned fields consumed by editor
 // tooling. Unknown flags are left alone so QueryJSON remains usable for future
 // compiler commands, while every currently consumed schema fails closed.
 func ValidateCompilerJSON(flag string, payload []byte) error {
 	if !knownCompilerJSONFlag(flag) {
 		return nil
 	}
+	if flag == "--check-json-v2" {
+		if err := validateDiagnosticWire(payload); err != nil {
+			return err
+		}
+	}
 	root, err := decodeObject(payload, "compiler response")
 	if err != nil {
 		return err
 	}
+	expectedVersion := compilerProtocolVersion
+	if flag == "--check-json-v2" {
+		expectedVersion = 2
+	}
 	if version, err := requiredInt(root, "version"); err != nil {
 		return err
-	} else if version != compilerProtocolVersion {
+	} else if version != expectedVersion {
 		return fmt.Errorf("unsupported compiler protocol version %d", version)
 	}
 
 	switch flag {
-	case "--check-json":
+	case "--format-json":
+		if _, err := requiredString(root, "formatted"); err != nil {
+			return err
+		}
+		readOnly, ok := root["readOnly"].(bool)
+		if !ok {
+			return errors.New("compiler formatting response requires readOnly")
+		}
+		reason, present := root["reason"]
+		if !present {
+			return errors.New("compiler formatting response requires reason")
+		}
+		if readOnly {
+			if _, err := requiredNonEmptyString(root, "reason"); err != nil {
+				return err
+			}
+		} else if reason != nil {
+			return errors.New("mutable formatting response cannot carry a refusal reason")
+		}
+	case "--check-json", "--check-json-v2":
 		items, err := requiredArray(root, "diagnostics")
 		if err != nil {
 			return err
@@ -231,6 +259,11 @@ func ValidateCompilerJSON(flag string, payload []byte) error {
 			}
 			if err := validateDiagnostic(diagnostic, index); err != nil {
 				return err
+			}
+			if flag == "--check-json-v2" {
+				if err := validateDiagnosticMetadata(diagnostic); err != nil {
+					return err
+				}
 			}
 		}
 	case "--agent-context-json", "agent-context":
@@ -516,9 +549,9 @@ func validateOptionalString(value map[string]any, field, name string) error {
 
 func knownCompilerJSONFlag(flag string) bool {
 	switch flag {
-	case "--check-json", "--agent-context-json", "agent-context", "--type-at-json", "--field-at-json",
+	case "--check-json", "--check-json-v2", "--agent-context-json", "agent-context", "--type-at-json", "--field-at-json",
 		"--definition-json", "--type-definition-json", "--signature-help-json", "--completions-json",
-		"--occurrences-json", "--selection-range-json", "--local-bindings-json", "--semantic-json", "--doc-json":
+		"--occurrences-json", "--selection-range-json", "--local-bindings-json", "--semantic-json", "--doc-json", "--format-json":
 		return true
 	default:
 		return false

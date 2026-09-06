@@ -170,6 +170,9 @@ that checks manual coherence without building the compiler.
 | `10-common-patterns.md` | Gotchas, quick reference table, diagnostic commands |
 | `11-frontend-ir.md` | Generator-facing frontend IR stage and `emit_ir` architecture |
 | [Migration implementation](migrations-implementation.md) | Delivery gates, implemented prerequisites, regression evidence and remaining migration work |
+| [Migration source writes](migration-source-writes.md) | Guarded native generation, compiler manifest consumption, concurrent saves and crash recovery |
+| [Migration planning](migration-planning.md) | Checked PostgreSQL source plans, retained storage, index compatibility and execution boundaries |
+| [Migration execution](migration-execution.md) | Protected installation, additive execution, regression evidence and pending startup/admission integration |
 | `12-your-first-compiler-change.md` | **Start here if you are new.** One real diagnostic improvement (`W020`), end to end: the edit, the tests it breaks, the byte-exact diff, the regression test, the finished change |
 | `zero-cost-proofs-contract.md` | Proof erasure as the only mode — the as-built compile-time proof/declared-context contract |
 | `deploy.md` | *(moved → [`manual/deploy.md`](../manual/deploy.md))* Deploying a Tesl web API — `tesl build`, the generated Docker image, database flavours. This file is now a redirect stub. |

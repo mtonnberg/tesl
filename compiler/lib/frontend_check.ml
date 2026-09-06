@@ -45,10 +45,10 @@ type diagnostic = {
      the STRUCTURED topic the producing validation pass stamped on the error —
      NOT by sniffing keywords out of [message].  [None] means "no structured
      anchor was resolved here"; the renderer then falls back to the registry's
-     code→anchor mapping (which is 1:1 for every non-V001 code).  CLI-render-only:
-     deliberately NOT serialized by [diag_to_json] so the JSON wire format stays
-     byte-identical for existing consumers. *)
+     code→anchor mapping (which is 1:1 for every non-V001 code). The legacy
+     [diag_to_json] omits it to preserve version 1; version 2 exposes the link. *)
   manual     : string option;
+  metadata   : Diagnostic_metadata.t option;
 }
 
 
@@ -74,7 +74,7 @@ let diag_of_parse_error (e : parse_error) : diagnostic = {
     (if String.length e.msg >= String.length lexer_failure_prefix
         && String.sub e.msg 0 (String.length lexer_failure_prefix) = lexer_failure_prefix
      then "lexer" else "parser");
-  manual     = None;
+  metadata = None; manual = None;
 }
 
 let diag_of_proof_error (e : Proof_checker.proof_error) : diagnostic = {
@@ -88,7 +88,7 @@ let diag_of_proof_error (e : Proof_checker.proof_error) : diagnostic = {
   message    = e.message;
   fix        = None;
   source     = "proof-checker";
-  manual     = None;
+  metadata = None; manual = None;
 }
 
 let diag_of_type_error (e : Type_system.type_error) : diagnostic = {
@@ -102,10 +102,11 @@ let diag_of_type_error (e : Type_system.type_error) : diagnostic = {
   message    = e.message;
   fix        = e.fix;
   source     = "type-checker";
-  manual     = None;
+  metadata = None; manual = None;
 }
 
-let diag_of_validation_error (e : Validation.validation_error) : diagnostic = {
+let diag_of_validation_error (e : Validation.validation_error) : diagnostic =
+ let message = if e.hint = "" then e.message else e.message ^ "\nHint: " ^ e.hint in {
   file       = e.loc.file;
   start_line = e.loc.start.line;
   start_col  = e.loc.start.col;
@@ -115,13 +116,15 @@ let diag_of_validation_error (e : Validation.validation_error) : diagnostic = {
   (* get_handlers_do_not_mutate: a pass may stamp its own stable code (SEC005);
      everything else keeps the pass-generic V001. *)
   code       = (if e.code = "" then "V001" else e.code);
-  message    = if e.hint = "" then e.message else e.message ^ "\nHint: " ^ e.hint;
+  message;
   fix        = None;
   source     = "validation";
   (* B5: resolve the deep-link anchor from the STRUCTURED topic the producing
      pass stamped on the error — not from the message text.  main.ml prefers
      this over the (now vestigial) message-based path. *)
-  manual     = Error_codes.manual_for ~topic:e.topic
+  metadata = (if String.starts_with ~prefix:"MIG" e.code then
+    Some (Diagnostic_metadata.migration ~code:e.code ~message ~related:[]) else None);
+  manual = Error_codes.manual_for ~topic:e.topic
                  ~code:(if e.code = "" then "V001" else e.code) ~message:e.message ();
 }
 
@@ -178,7 +181,7 @@ let module_complexity_diagnostics (m : Ast.module_form) : diagnostic list =
        message = Printf.sprintf
          "source complexity budget exceeded: %s; split the expression into named functions or smaller declarations"
          detail;
-       fix = None; source = "parser"; manual = None }]
+       fix = None; source = "parser"; metadata = None; manual = None }]
 
 
 let starts_with ~prefix s =
@@ -249,7 +252,7 @@ let legacy_bool_diag source_lines loc ~old_text ~replacement ~message = {
   message    = message;
   fix        = single_line_replace_fix source_lines loc ~old_text replacement;
   source     = "validation";
-  manual     = None;
+  metadata = None; manual = None;
 }
 
 let missing_bool_import_diag (m : module_form) loc ~is_ctor =
@@ -271,7 +274,7 @@ let missing_bool_import_diag (m : module_form) loc ~is_ctor =
     fix        = Import_suggest.build_fix m ~target_module:"Tesl.Prelude"
                    ~expose_name:"Bool(..)";
     source     = "validation";
-    manual     = None;
+    metadata = None; manual = None;
   }
 
 let legacy_bool_diagnostics _filename source (m : module_form) =
@@ -403,7 +406,7 @@ let regex_literal_diagnostics (m : module_form) : diagnostic list =
     message;
     fix        = None;
     source     = "validation";
-    manual     = Error_codes.manual_for ~code ~message ();
+    metadata = None; manual = Error_codes.manual_for ~code ~message ();
   }) (Regex_lint.module_diagnostics m)
 
 let parse_module_file path =
@@ -570,7 +573,21 @@ let validation_diags_of source (m : Ast.module_form) =
              Migration_source.version_fix ~family ~before ~after:"VCurrent" source
            | _ -> None)
         | None -> None in
-      { diagnostic with fix }) (Validation.check_module m)
+      (* This producer has verified the exact source ranges and replacement.
+         Keep larger document rewrites as explicit quick fixes; small import
+         corrections are idempotent and can participate in source.fixAll. *)
+      let small = function
+        | Replace_range {start_line;end_line;start_col;end_col;replacement} ->
+          start_line=end_line && end_col-start_col<=32 && replacement="VCurrent"
+        | _ -> false in
+      let eligible = match fix with
+        | Some (Multi edits) -> edits<>[] && List.length edits<=8 && List.for_all small edits
+        | Some edit -> small edit
+        | None -> false in
+      let metadata = Option.map (fun (metadata : Diagnostic_metadata.t) ->
+        {metadata with action=Option.map (fun (action : Diagnostic_metadata.action) ->
+          {action with fix_all_eligible=eligible}) metadata.action}) diagnostic.metadata in
+      { diagnostic with fix;metadata }) (Validation.check_module m)
 
 (** The full per-module check pipeline, reused by the cross-module graph walk
     so dependency diagnostics and fixes stay anchored at their own source. *)
@@ -658,7 +675,7 @@ let cross_module_diags ?(additional = fun _ _ -> []) ?(skip_dep_body : string ->
       message;
       fix        = None;
       source;
-      manual     = None;
+      metadata = None; manual = None;
     } in
     let diags : diagnostic list ref = ref [] in
     let entry_canon = canonical_import_path entry in

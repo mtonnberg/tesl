@@ -853,7 +853,7 @@ These integrity checks apply when checking the migration, a recorded schema file
 or an application importing that schema. Unsaved source buffers participate in the
 same checks. A private-only import still checks the recorded revision root.
 
-**Source edit manifest format 1 (generator/application integration pending).**
+**Source edit manifest format 1.**
 A manifest describes source operations, not executable database transitions. Its
 JSON object contains `version: 1`, `projectRoot`, `documents`, `inputs`,
 `directories`, `imports`, and `edits`. Paths are absolute canonical UTF-8 paths under one
@@ -881,6 +881,76 @@ The manifest identity is SHA-256 of its canonical compact JSON. Input, directory
 document and edit lists are sorted by path. Manifest construction does not write
 files or establish that proposed programs compile; the generator must check the
 complete proposed source view, and application must recheck the preconditions.
+Independent manifests may be combined only with the same project and document
+versions. Composition preserves the original preconditions, deduplicates equal
+operations, rejects conflicting guards or edits, and checks combined output paths.
+It does not sequence dependent edits or take a new snapshot of changed inputs.
+In particular, application/database selection guards must survive composition
+with a schema-generation manifest.
+
+**Source preview command format 1.** `tesl migrate generate <entry>
+--manifest-json [--database D] [--new-revision]` returns a non-mutating
+`migration-source-preview` envelope. It contains the source manifest, selected
+application/database/family, revisions before and after, actual `compilerAbi`,
+operation (`start` or `refresh`), complete application diagnostics and `compilable`.
+`ok: true` and exit 0 mean a proposal was produced, including proposals with
+unresolved decisions and `compilable: false`. Selection/generation failure gives
+`ok: false`, exit 1, errors with selection candidates and `manifest: null`.
+Generation starts a revision for a new family and otherwise refreshes its current
+revision; `--new-revision` explicitly starts another. It selects the actual schema
+import, refusing a project/history root that would freeze another schema copy.
+`--project-root DIR` selects that canonical root explicitly. Repeated
+`--overlay FILE VERSION CONTENTS_FILE` options require this root and supply
+canonical source paths, signed 32-bit editor versions and exact buffer bytes from
+regular files. Virtual files remain virtual. Source, disk and editor guards remain
+separate. Physical database plans are not part of this API.
+
+**Saved-source application format 1.** The native CLI's plain `tesl migrate
+generate <entry>` consumes the same preview and writes its guarded saved-file
+edits. Its envelope uses `kind: migration-source-application` and adds
+`sourceTransaction` with `outcome`, `manifestHash`, `written`, `restored` and
+`recoveryRequired`. `ok` reports source application success independently of
+`compilable`; decision holes remain compilation errors. Open document versions,
+source/disk differences and stale guards refuse application. Publication uses
+individually atomic file operations and a durable guarded inverse; it is not an
+atomic replacement of the whole project. `tesl migrate recover-source
+--project-root DIR` restores unfinished publication or finishes terminal cleanup,
+returning `kind: migration-source-recovery`. Concurrent user edits are preserved
+and unresolved conflicts retain recovery state. Publication/recovery currently
+require Linux; other platforms refuse before writing. These commands grant no
+database execution authority.
+
+The command obtains a conservative source ABI identity from its build inputs,
+embedded runtime and captured lifted stdlib. It pins resource bytes and module
+resolution for the complete preview check and rejects later resource drift.
+This identity does not establish persisted processing-ABI admission or sound
+transport of stored proofs across compilers.
+
+**Source expansion plan format 1.** `tesl migrate plan <entry> [--database D] [--initial-version N]`
+returns read-only JSON with `kind: migration-plan-preview`, `ok`,
+`executable: false`, the actual `compilerAbi`, `planHash`, selected `database`,
+PostgreSQL `namespace`, `family`, `initialVersion` (default 1), and ordered `steps`
+from that initial installation version. The selected initial version must be a
+canonical decimal integer from 1 through the current source revision (at most
+2147483646). It is the database's first installed revision, not its admission
+floor. Planning still checks the complete source history from V1, then re-derives
+storage from the selected baseline; objects removed before installation and older
+omission-adapter defaults are not inherited. The plan hash binds this assumption.
+Each step carries
+its `version`, semantic/storage `snapshotHash`, `epochPreserving` classification,
+operations and the expected retained physical `catalog` at that revision. Catalog
+columns include their PostgreSQL carrier, nullability, primary-key status and
+installed constant default; catalog indexes retain their allocated physical names.
+Logical drops and removed indexes remain in later projections until contraction.
+Supported operations are `create-table`, `add-column`,
+`build-index-concurrently`, `retain-table` and `retain-index`. Constants preserve
+canonical integer text, float64 bits, booleans and strings. Index operations report
+window restrictions, concurrent-builder or contract requirements. Logical removal
+never releases retained storage names. Complete source/type/proof/history and Go
+codec emission checks precede planning; source/ABI guards are rechecked afterwards.
+The report is not live catalog evidence, an adoption judgment, persisted-proof
+admission, pruning authority or an executable migration. Database execution remains
+under implementation.
 
 **Generated-node ownership format 1.** A generated migration data expression may
 end its line with `# @tesl-gen <id> <fingerprint>`, after any separating comma.
@@ -900,6 +970,35 @@ line endings, and refuses duplicate identities or insertion points. Exact editin
 ranges come from the token stream and a matching reparse of the same source view;
 diagnostic spans must not be used as replacement ranges. An AST object from a
 different view cannot address the source, even if its text is identical.
+
+Refresh reconciles individual direct members of `same` and `entities`, preserving
+all user-owned members and surrounding comments. Generated entity identities use
+the actual record key; changing it to another alias invalidates ownership. An
+obsolete generated member can be removed through its trailing marker, while an
+obsolete user member remains and receives the normal contextual diagnostic.
+Semantically equal generated data retains its original formatting. A Same claim
+is retained only when every eligible namespace sharing its spelling still checks;
+refresh does not restore deliberately omitted Same claims.
+
+The initial source refresh API handles New, Drop and proven additive adapters.
+Other entity decisions use `todo "reason"` in contextual entity data. Each such
+hole emits MIG003 and blocks compilation, including through imports and Go
+emission. A hole does not establish a value or proof. General row-function holes
+and transformations are not yet elaborated. Refresh returns full proposed-view
+diagnostics alongside its source manifest, so a preview containing holes is
+explicitly an incomplete program. It verifies frozen source and same-ABI semantic
+seals before replacing the undeployed current target; it cannot infer deployment
+state or authorize rewriting persisted history.
+
+Completing a source revision also seals the migration’s exact root and transitive
+private migration helper bytes. The root excludes only its own closure metadata
+block, so its schema seals, comments and tests remain covered. Completed
+declarations require both schema and migration closure seals. Verification checks
+canonical paths, exact source and import closure membership; changed helpers and
+missing seals emit MIG013 in direct queries and application builds. Starting or
+refreshing later revisions cannot rewrite these inputs. An unchanged frozen
+helper may be shared. These source records do not replace persisted history or
+prove execution compatibility across compiler ABIs.
 
 The field-impact projection has one location per declared entity field, including
 private entities in child modules. It uses the same typed lowering as the complete
@@ -2413,6 +2512,8 @@ A `database` declaration is a folded record assigned with `=`:
                          "user"       ":" <expr>
                          "password"   ":" <expr>
                          [ "poolSize"  ":" <expr> ]
+                         [ "namespace" ":" <string-literal> ]
+                         [ "controlOwner" ":" <expr> ]
                          "connection" ":" <connection>
                        "}" ")"
                      | "Memory"
@@ -2490,7 +2591,12 @@ the module-reference form. It is independent of the Tesl module and database
 declaration names; the compiler does not guess a physical namespace from either.
 Memory has no physical namespace. During source transition the existing string
 `Database.schema` plus explicit `entities:` form retains its meaning and cannot
-also specify `migrations:` or `PostgresConfig.namespace`.
+also specify `migrations:`, `PostgresConfig.namespace`, or `PostgresConfig.controlOwner`.
+The optional versioned `PostgresConfig.controlOwner` is a string or `env` expression
+naming the no-login role that owns migration control objects (default `tesl_control`).
+It is application configuration, independent of the schema's source history. The
+operator provisions it and installs the protected control interface; application
+startup does not create roles or adopt existing tables.
 
 Elaboration produces an ownership binding and connection description separately
 from ordinary source visibility. Generated table metadata may name private schema

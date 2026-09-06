@@ -46,7 +46,9 @@
       "statement": "Independently compiled old and new applications read the same logical rows across additive schema versions.",
       "model_paths": null,
       "tests": [
-        "blackbox_test.go#TestCompiledVersionsShareRowsAndPauseInsideTransactions"
+        "additive_lesson_test.go#TestCompiledAdditiveLessonRetainsRows",
+        "blackbox_test.go#TestCompiledVersionsShareRowsAndPauseInsideTransactions",
+        "expansion_blackbox_test.go#TestCompiledMigrationExpansionRetainsRowsAcrossStandaloneRevisions"
       ]
     },
     {
@@ -54,7 +56,9 @@
       "statement": "An additive old-version write preserves columns owned by newer versions.",
       "model_paths": null,
       "tests": [
-        "blackbox_test.go#TestCompiledVersionsShareRowsAndPauseInsideTransactions"
+        "additive_lesson_test.go#TestCompiledAdditiveLessonRetainsRows",
+        "blackbox_test.go#TestCompiledVersionsShareRowsAndPauseInsideTransactions",
+        "expansion_blackbox_test.go#TestCompiledMigrationExpansionRetainsRowsAcrossStandaloneRevisions"
       ]
     },
     {
@@ -107,7 +111,11 @@
       "tests": [
         "catalog_expression_test.go#TestPostgresDefaultClassificationUsesStoredExpressions",
         "catalog_expression_test.go#TestPostgresLiteralCastDefaultCanExecuteUserCode",
-        "catalog_literal_test.go#TestLiteralCatalogDefaultFailsClosed"
+        "catalog_literal_test.go#TestLiteralCatalogDefaultFailsClosed",
+        "catalog_runtime_test.go#TestRuntimeCatalogCanonicalizesAndRestoresRenderingSettings",
+        "catalog_runtime_test.go#TestRuntimeCatalogCompilerLiteralsMatchServerDefaults",
+        "catalog_runtime_test.go#TestRuntimeCatalogExtraDefaultsNeverEvaluateComputingExpressions",
+        "catalog_runtime_test.go#TestRuntimeCatalogPreservesPreexistingTemporaryObjects"
       ]
     },
     {
@@ -115,8 +123,18 @@
       "statement": "Catalog evidence includes behavior-affecting relation, column, constraint, index, trigger and policy properties; isolated property changes are distinguishable without catalog-row OIDs or raw DDL text.",
       "model_paths": null,
       "tests": [
+        "additive_lesson_test.go#TestCompiledAdditiveLessonRetainsRows",
         "catalog_evidence_test.go#TestPostgresCatalogEvidenceDetectsBehavioralDrift",
-        "catalog_evidence_test.go#TestPostgresCatalogIdentityDistinguishesIndividualProperties"
+        "catalog_evidence_test.go#TestPostgresCatalogIdentityDistinguishesIndividualProperties",
+        "catalog_runtime_test.go#TestRuntimeCatalogFingerprintIgnoresEquivalentPhysicalIdentity",
+        "catalog_runtime_test.go#TestRuntimeCatalogMatchesSemanticShapesWithoutTouchingRows",
+        "catalog_runtime_test.go#TestRuntimeCatalogPreservesCallerTransactionAndCancellation",
+        "catalog_runtime_test.go#TestRuntimeCatalogQuotesIdentifiersAndRefusesUntrustedTypes",
+        "catalog_runtime_test.go#TestRuntimeCatalogRefusesBehaviorChangingObjects",
+        "catalog_runtime_test.go#TestRuntimeCatalogRefusesPartitionAndInheritance",
+        "catalog_runtime_test.go#TestRuntimeCatalogRejectsInvalidConcurrentIndex",
+        "catalog_runtime_test.go#TestRuntimeCatalogReportsMissingStorageWithoutRecreatingIt",
+        "storage_blackbox_test.go#TestCompiledStorageUsesOwnedTypeBaseAndBuiltinBounds"
       ]
     },
     {
@@ -124,7 +142,12 @@
       "statement": "Catalog expressions use one server deparser under an empty search path, with matching types and collations; comparison objects and settings do not survive the probe transaction.",
       "model_paths": null,
       "tests": [
-        "catalog_expression_test.go#TestPostgresCatalogExpressionsUseOneServerAndColumnContext"
+        "catalog_expression_test.go#TestPostgresCatalogExpressionsUseOneServerAndColumnContext",
+        "catalog_runtime_test.go#TestRuntimeCatalogCanonicalizesAndRestoresRenderingSettings",
+        "catalog_runtime_test.go#TestRuntimeCatalogCompilerLiteralsMatchServerDefaults",
+        "catalog_runtime_test.go#TestRuntimeCatalogFingerprintIgnoresEquivalentPhysicalIdentity",
+        "catalog_runtime_test.go#TestRuntimeCatalogMatchesSemanticShapesWithoutTouchingRows",
+        "catalog_runtime_test.go#TestRuntimeCatalogPreservesPreexistingTemporaryObjects"
       ]
     },
     {
@@ -132,7 +155,8 @@
       "statement": "Nonunique indexes are not automatically harmless: expressions, predicates and plain-key width limits can reject old-valid writes; extra indexes require classification and an old-key domain proof.",
       "model_paths": null,
       "tests": [
-        "catalog_evidence_test.go#TestPostgresNonuniqueIndexesCanRejectOtherwiseValidRows"
+        "catalog_evidence_test.go#TestPostgresNonuniqueIndexesCanRejectOtherwiseValidRows",
+        "catalog_runtime_test.go#TestRuntimeCatalogRefusesBehaviorChangingObjects"
       ]
     },
     {
@@ -390,6 +414,7 @@
         "model_index.go:75"
       ],
       "tests": [
+        "catalog_runtime_test.go#TestRuntimeCatalogRejectsInvalidConcurrentIndex",
         "index_model_test.go#TestContractWaitsForSurvivingIndexWorkerAndCannotResurrectJob",
         "index_model_test.go#TestExpiredIndexLeaseCannotDestroyAnActiveOrValidBuild",
         "index_model_test.go#TestIndexCatalogIdentityAndWorkerFencesAreIndependentChecks",
@@ -464,7 +489,7 @@
     },
     {
       "id": "INV-JSONB-COMPATIBILITY",
-      "statement": "A new JSONB fallback decoder accepting old data does not imply that admitted old readers can decode new writes; compiled readers and writers are checked in both directions.",
+      "statement": "A new JSONB fallback decoder accepting old data does not imply that admitted old readers can decode new writes; compiled readers and writers are checked in both directions. Decoder compatibility also does not establish that admitted SQL predicates retain their meaning after the encoded JSONB value changes.",
       "model_paths": null,
       "tests": [
         "jsonb_blackbox_test.go#TestCompiledJSONBCodecsRequireBothDirectionsAndRewriteEvidence"
@@ -819,8 +844,10 @@
         "model_bootstrap.go:97"
       ],
       "tests": [
+        "additive_lesson_test.go#TestCompiledAdditiveLessonRetainsRows",
         "bootstrap_model_test.go#TestBootstrapWinnerSurvivesEveryPartialInstallCrash",
-        "bootstrap_postgres_test.go#TestPostgresBootstrapWinnerSurvivesEveryPartialInstallCrash"
+        "bootstrap_postgres_test.go#TestPostgresBootstrapWinnerSurvivesEveryPartialInstallCrash",
+        "expansion_blackbox_test.go#TestCompiledMigrationExpansionRetainsRowsAcrossStandaloneRevisions"
       ]
     },
     {
@@ -856,7 +883,20 @@
         "catalog_expression_test.go#TestPostgresCatalogExpressionsUseOneServerAndColumnContext",
         "catalog_expression_test.go#TestPostgresDefaultClassificationUsesStoredExpressions",
         "catalog_expression_test.go#TestPostgresLiteralCastDefaultCanExecuteUserCode",
-        "catalog_literal_test.go#TestLiteralCatalogDefaultFailsClosed"
+        "catalog_literal_test.go#TestLiteralCatalogDefaultFailsClosed",
+        "catalog_runtime_test.go#TestRuntimeCatalogCanonicalizesAndRestoresRenderingSettings",
+        "catalog_runtime_test.go#TestRuntimeCatalogCompilerLiteralsMatchServerDefaults",
+        "catalog_runtime_test.go#TestRuntimeCatalogExtraDefaultsNeverEvaluateComputingExpressions",
+        "catalog_runtime_test.go#TestRuntimeCatalogFingerprintIgnoresEquivalentPhysicalIdentity",
+        "catalog_runtime_test.go#TestRuntimeCatalogMatchesSemanticShapesWithoutTouchingRows",
+        "catalog_runtime_test.go#TestRuntimeCatalogPreservesCallerTransactionAndCancellation",
+        "catalog_runtime_test.go#TestRuntimeCatalogPreservesPreexistingTemporaryObjects",
+        "catalog_runtime_test.go#TestRuntimeCatalogQuotesIdentifiersAndRefusesUntrustedTypes",
+        "catalog_runtime_test.go#TestRuntimeCatalogRefusesBehaviorChangingObjects",
+        "catalog_runtime_test.go#TestRuntimeCatalogRefusesPartitionAndInheritance",
+        "catalog_runtime_test.go#TestRuntimeCatalogRejectsInvalidConcurrentIndex",
+        "catalog_runtime_test.go#TestRuntimeCatalogReportsMissingStorageWithoutRecreatingIt",
+        "storage_blackbox_test.go#TestCompiledStorageUsesOwnedTypeBaseAndBuiltinBounds"
       ]
     },
     {
@@ -1214,6 +1254,7 @@
         "model.go:186"
       ],
       "tests": [
+        "additive_lesson_test.go#TestCompiledAdditiveLessonRetainsRows",
         "blackbox_test.go#TestCompiledVersionsShareRowsAndPauseInsideTransactions",
         "jsonb_blackbox_test.go#TestCompiledJSONBCodecsRequireBothDirectionsAndRewriteEvidence",
         "read_ordering_test.go#TestPostgresTemplateQueryFirstAdmissionAcrossRetirement"
@@ -1447,6 +1488,7 @@
         "model.go:181"
       ],
       "tests": [
+        "additive_lesson_test.go#TestCompiledAdditiveLessonRetainsRows",
         "blackbox_test.go#TestCompiledVersionsShareRowsAndPauseInsideTransactions",
         "jsonb_blackbox_test.go#TestCompiledJSONBCodecsRequireBothDirectionsAndRewriteEvidence",
         "model_test.go#TestApplicationTargetWriteLocksABIBeforeBackfillStarts",
@@ -1458,9 +1500,26 @@
   ],
   "tests": [
     {
+      "name": "TestCompiledAdditiveLessonRetainsRows",
+      "file": "additive_lesson_test.go",
+      "line": 28,
+      "layer": "compiled-postgres",
+      "invariants": [
+        "INV-ADDITIVE-READ",
+        "INV-ADDITIVE-WRITE",
+        "INV-CATALOG-EVIDENCE"
+      ],
+      "transitions": [
+        "TR-BOOT-EXPAND",
+        "TR-READ",
+        "TR-WRITE"
+      ],
+      "named_failpoints": null
+    },
+    {
       "name": "TestCompiledVersionsShareRowsAndPauseInsideTransactions",
       "file": "blackbox_test.go",
-      "line": 20,
+      "line": 21,
       "layer": "compiled-postgres",
       "invariants": [
         "INV-ADDITIVE-READ",
@@ -1646,6 +1705,169 @@
       "named_failpoints": null
     },
     {
+      "name": "TestRuntimeCatalogMatchesSemanticShapesWithoutTouchingRows",
+      "file": "catalog_runtime_test.go",
+      "line": 66,
+      "layer": "postgres",
+      "invariants": [
+        "INV-CATALOG-EVIDENCE",
+        "INV-CATALOG-EXPRESSION"
+      ],
+      "transitions": [
+        "TR-CATALOG-COMPARE"
+      ],
+      "named_failpoints": null
+    },
+    {
+      "name": "TestRuntimeCatalogRefusesBehaviorChangingObjects",
+      "file": "catalog_runtime_test.go",
+      "line": 90,
+      "layer": "postgres",
+      "invariants": [
+        "INV-CATALOG-EVIDENCE",
+        "INV-CATALOG-EXTRA-INDEX"
+      ],
+      "transitions": [
+        "TR-CATALOG-COMPARE"
+      ],
+      "named_failpoints": null
+    },
+    {
+      "name": "TestRuntimeCatalogExtraDefaultsNeverEvaluateComputingExpressions",
+      "file": "catalog_runtime_test.go",
+      "line": 134,
+      "layer": "postgres",
+      "invariants": [
+        "INV-CATALOG-DEFAULT"
+      ],
+      "transitions": [
+        "TR-CATALOG-COMPARE"
+      ],
+      "named_failpoints": null
+    },
+    {
+      "name": "TestRuntimeCatalogPreservesCallerTransactionAndCancellation",
+      "file": "catalog_runtime_test.go",
+      "line": 197,
+      "layer": "postgres",
+      "invariants": [
+        "INV-CATALOG-EVIDENCE"
+      ],
+      "transitions": [
+        "TR-CATALOG-COMPARE"
+      ],
+      "named_failpoints": null
+    },
+    {
+      "name": "TestRuntimeCatalogReportsMissingStorageWithoutRecreatingIt",
+      "file": "catalog_runtime_test.go",
+      "line": 224,
+      "layer": "postgres",
+      "invariants": [
+        "INV-CATALOG-EVIDENCE"
+      ],
+      "transitions": [
+        "TR-CATALOG-COMPARE"
+      ],
+      "named_failpoints": null
+    },
+    {
+      "name": "TestRuntimeCatalogRejectsInvalidConcurrentIndex",
+      "file": "catalog_runtime_test.go",
+      "line": 251,
+      "layer": "postgres",
+      "invariants": [
+        "INV-CATALOG-EVIDENCE",
+        "INV-INDEX-READY"
+      ],
+      "transitions": [
+        "TR-CATALOG-COMPARE"
+      ],
+      "named_failpoints": null
+    },
+    {
+      "name": "TestRuntimeCatalogQuotesIdentifiersAndRefusesUntrustedTypes",
+      "file": "catalog_runtime_test.go",
+      "line": 272,
+      "layer": "postgres",
+      "invariants": [
+        "INV-CATALOG-EVIDENCE"
+      ],
+      "transitions": [
+        "TR-CATALOG-COMPARE"
+      ],
+      "named_failpoints": null
+    },
+    {
+      "name": "TestRuntimeCatalogFingerprintIgnoresEquivalentPhysicalIdentity",
+      "file": "catalog_runtime_test.go",
+      "line": 298,
+      "layer": "postgres",
+      "invariants": [
+        "INV-CATALOG-EVIDENCE",
+        "INV-CATALOG-EXPRESSION"
+      ],
+      "transitions": [
+        "TR-CATALOG-COMPARE"
+      ],
+      "named_failpoints": null
+    },
+    {
+      "name": "TestRuntimeCatalogRefusesPartitionAndInheritance",
+      "file": "catalog_runtime_test.go",
+      "line": 324,
+      "layer": "postgres",
+      "invariants": [
+        "INV-CATALOG-EVIDENCE"
+      ],
+      "transitions": [
+        "TR-CATALOG-COMPARE"
+      ],
+      "named_failpoints": null
+    },
+    {
+      "name": "TestRuntimeCatalogCompilerLiteralsMatchServerDefaults",
+      "file": "catalog_runtime_test.go",
+      "line": 349,
+      "layer": "postgres",
+      "invariants": [
+        "INV-CATALOG-DEFAULT",
+        "INV-CATALOG-EXPRESSION"
+      ],
+      "transitions": [
+        "TR-CATALOG-COMPARE"
+      ],
+      "named_failpoints": null
+    },
+    {
+      "name": "TestRuntimeCatalogPreservesPreexistingTemporaryObjects",
+      "file": "catalog_runtime_test.go",
+      "line": 378,
+      "layer": "postgres",
+      "invariants": [
+        "INV-CATALOG-DEFAULT",
+        "INV-CATALOG-EXPRESSION"
+      ],
+      "transitions": [
+        "TR-CATALOG-COMPARE"
+      ],
+      "named_failpoints": null
+    },
+    {
+      "name": "TestRuntimeCatalogCanonicalizesAndRestoresRenderingSettings",
+      "file": "catalog_runtime_test.go",
+      "line": 395,
+      "layer": "postgres",
+      "invariants": [
+        "INV-CATALOG-DEFAULT",
+        "INV-CATALOG-EXPRESSION"
+      ],
+      "transitions": [
+        "TR-CATALOG-COMPARE"
+      ],
+      "named_failpoints": null
+    },
+    {
       "name": "TestOwnedPrimaryCrashPreservesOnlyCommittedRetirement",
       "file": "cluster_test.go",
       "line": 106,
@@ -1814,6 +2036,20 @@
       ],
       "transitions": [
         "TR-SQL-DOCUMENT"
+      ],
+      "named_failpoints": null
+    },
+    {
+      "name": "TestCompiledMigrationExpansionRetainsRowsAcrossStandaloneRevisions",
+      "file": "expansion_blackbox_test.go",
+      "line": 26,
+      "layer": "compiled-postgres",
+      "invariants": [
+        "INV-ADDITIVE-READ",
+        "INV-ADDITIVE-WRITE"
+      ],
+      "transitions": [
+        "TR-BOOT-EXPAND"
       ],
       "named_failpoints": null
     },
@@ -2100,7 +2336,7 @@
     {
       "name": "TestCompiledJSONBCodecsRequireBothDirectionsAndRewriteEvidence",
       "file": "jsonb_blackbox_test.go",
-      "line": 21,
+      "line": 23,
       "layer": "compiled-postgres",
       "invariants": [
         "INV-JSONB-COMPATIBILITY",
@@ -2737,6 +2973,19 @@
         "TR-CLAIM",
         "TR-DEAD",
         "TR-RESTAMP"
+      ],
+      "named_failpoints": null
+    },
+    {
+      "name": "TestCompiledStorageUsesOwnedTypeBaseAndBuiltinBounds",
+      "file": "storage_blackbox_test.go",
+      "line": 21,
+      "layer": "compiled-postgres",
+      "invariants": [
+        "INV-CATALOG-EVIDENCE"
+      ],
+      "transitions": [
+        "TR-CATALOG-COMPARE"
       ],
       "named_failpoints": null
     },

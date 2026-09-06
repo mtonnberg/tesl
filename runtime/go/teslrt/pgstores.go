@@ -444,7 +444,7 @@ func (backend *pgQueueBackend) dequeue(status string) (string, any, int, string,
 	}
 	for {
 		claimToken := UUIDv7()
-		rows := PgQuery(db, "update "+table+" set status = $3, locked_at = now(), locked_by = $4, "+
+		rows := PgWriteQuery(db, "update "+table+" set status = $3, locked_at = now(), locked_by = $4, "+
 			"claim_token = $5 || ':' || (claim_seq + 1)::text, claim_seq = claim_seq + 1, "+
 			"lease_until = clock_timestamp() + ($6::bigint * interval '1 millisecond') "+
 			"where id = (select id from "+table+" where queue = $1 and status = $2 "+
@@ -567,12 +567,14 @@ func (backend *pgQueueBackend) renewClaim(ctx context.Context, db *PostgresDB,
 	}
 	ctx, cancel := context.WithTimeout(ctx, pgLeaseTimeout())
 	defer cancel()
-	tag, err := db.pool.Exec(ctx, "update "+table+" set locked_at = clock_timestamp(), "+
-		"lease_until = clock_timestamp() + ($4::bigint * interval '1 millisecond') "+
-		"where id = $1 and queue = $2 and claim_token = $3 "+
-		"and status in ('processing', 'dead_processing') and claim_seq = $5 "+
-		"and lease_until > clock_timestamp()",
-		id, backend.name, token, lease.Milliseconds(), sequence)
+	tag, err := pgMigrationStatement(ctx, db, true, func(executor pgExecutor) (pgconn.CommandTag, error) {
+		return executor.Exec(ctx, "update "+table+" set locked_at = clock_timestamp(), "+
+			"lease_until = clock_timestamp() + ($4::bigint * interval '1 millisecond') "+
+			"where id = $1 and queue = $2 and claim_token = $3 "+
+			"and status in ('processing', 'dead_processing') and claim_seq = $5 "+
+			"and lease_until > clock_timestamp()",
+			id, backend.name, token, lease.Milliseconds(), sequence)
+	})
 	if err == nil && tag.RowsAffected() == 1 {
 		migrationBoundary("queue-renewal")
 	}
@@ -829,7 +831,7 @@ func scanOutboxRow(row pgx.CollectableRow) (EmailMessage, error) {
 func (backend *pgOutboxBackend) claimDue(limit int) []EmailMessage {
 	db, table := backend.table()
 	claimToken := UUIDv7()
-	return PgQuery(db, "update "+table+" set locked_at = now(), claim_token = $3 where id in ("+
+	return PgWriteQuery(db, "update "+table+" set locked_at = now(), claim_token = $3 where id in ("+
 		"select id from "+table+" where status = 'pending' and next_attempt_at <= now() "+
 		"and (locked_at is null or locked_at < now() - ($2::bigint * interval '1 millisecond')) "+
 		"order by id for update skip locked limit $1) returning "+outboxColumns,

@@ -32,6 +32,8 @@ type Database struct {
 	mutex sync.RWMutex
 	// The live connection, non-nil only inside `with database D`.
 	open *PostgresDB
+	// Immutable source information linked by the compiler, not live DB state.
+	migrationHistory *PgCompiledMigrationHistory
 }
 
 // The database `with database D` most recently bound, program-wide.
@@ -147,7 +149,21 @@ func PostgresColumnOf(name, columnType string, primaryKey, nullable bool) Postgr
 // idle connections, which is what a pool is for. Nothing observable differs — a query outside
 // the block does not reach the server either way, because the binding is what routes it.
 func WithDatabase(database *Database, body func()) {
-	connection := OpenPostgres(database.Config, database.Tables)
+	// Refuse a cross-database scope before even opening/bootstraping its pool.
+	// It cannot participate atomically in the caller's existing transaction.
+	if currentTransaction() != nil {
+		currentTransactionFor(database.bound())
+		// The existing transaction already owns this physical connection. Reopening
+		// or rebinding would borrow another connection or wait on the serving scope.
+		body()
+		return
+	}
+	var connection *PostgresDB
+	if history, versioned := database.CompiledMigrationHistory(); versioned {
+		connection = openVersionedPostgres(database.Config, history)
+	} else {
+		connection = OpenPostgres(database.Config, database.Tables)
+	}
 	acquireDatabaseBinding()
 	database.mutex.Lock()
 	previous := database.open
@@ -191,7 +207,12 @@ func (database *Database) bound() *PostgresDB {
 // inherit it, where a Racket thread created inside a `parameterize` does. A transaction body
 // that spawns work and expects that work to join the transaction is refused by the emitter
 // rather than silently running outside it.
-var openTransactions sync.Map // goroutine id -> pgx.Tx
+type pgTransactionBinding struct {
+	database    *PostgresDB
+	transaction pgx.Tx
+}
+
+var openTransactions sync.Map // goroutine id -> pgTransactionBinding
 
 // WithTransaction is `transaction { … }`: the body runs atomically with respect to a trap.
 // Against PostgreSQL it is a real BEGIN/COMMIT, rolled back if the body panics so a check
@@ -201,6 +222,12 @@ var openTransactions sync.Map // goroutine id -> pgx.Tx
 // `tesl test` runs on the Memory store: a test asserting atomicity has to observe the same
 // outcome production does.
 func WithTransaction(body func()) {
+	key := goroutineID()
+	if _, nested := openTransactions.Load(key); nested {
+		// Refuse before borrowing a second connection: a size-one pool is
+		// already leased by the outer transaction and cannot satisfy BEGIN.
+		panic("transaction: a transaction is already open")
+	}
 	database := boundDatabase.Load()
 	connection := database.bound()
 	if connection == nil {
@@ -212,19 +239,15 @@ func WithTransaction(body func()) {
 	// commit gets a fresh bound below, so a transaction may legitimately outlive one lease.
 	beginCtx, cancelBegin := context.WithTimeout(context.Background(), pgLeaseTimeout())
 	defer cancelBegin()
-	transaction, err := connection.pool.Begin(beginCtx)
+	options := pgx.TxOptions{}
+	if connection.migration != nil {
+		options.IsoLevel = pgx.ReadCommitted
+	}
+	transaction, err := connection.pool.BeginTx(beginCtx, options)
 	if err != nil {
 		panic(pgFailure("transaction: cannot begin", err))
 	}
-	key := goroutineID()
-	if _, nested := openTransactions.Load(key); nested {
-		// Racket nests by starting a SAVEPOINT; until that is built, a nested block would
-		// silently commit the outer one at its own end, so it is refused here rather than
-		// answered with weaker atomicity than it claims.
-		_ = transaction.Rollback(beginCtx)
-		panic("transaction: a transaction is already open on database " + database.Name)
-	}
-	openTransactions.Store(key, transaction)
+	openTransactions.Store(key, pgTransactionBinding{database: connection, transaction: transaction})
 	committed := false
 	defer func() {
 		openTransactions.Delete(key)
@@ -238,6 +261,9 @@ func WithTransaction(body func()) {
 	body()
 	commitCtx, cancelCommit := context.WithTimeout(context.Background(), pgLeaseTimeout())
 	defer cancelCommit()
+	if err := pgAdmitMigrationTransaction(commitCtx, transaction, connection, false); err != nil {
+		panic(pgFailure("transaction", err))
+	}
 	if err := transaction.Commit(commitCtx); err != nil {
 		panic(pgFailure("transaction: cannot commit", err))
 	}
@@ -247,9 +273,23 @@ func WithTransaction(body func()) {
 // currentTransaction is the open transaction for THIS goroutine, if any.
 func currentTransaction() pgx.Tx {
 	if found, open := openTransactions.Load(goroutineID()); open {
-		if transaction, ok := found.(pgx.Tx); ok {
-			return transaction
+		if binding, ok := found.(pgTransactionBinding); ok {
+			return binding.transaction
 		}
+	}
+	return nil
+}
+
+// A transaction belongs to one opened database, not merely to a goroutine.
+// Reusing its connection for another database can execute that database's SQL
+// against the wrong server and would also apply the wrong migration fence.
+func currentTransactionFor(database *PostgresDB) pgx.Tx {
+	if found, open := openTransactions.Load(goroutineID()); open {
+		binding, ok := found.(pgTransactionBinding)
+		if !ok || binding.database != database || binding.transaction == nil {
+			panic("transaction: cannot use another database inside an open transaction")
+		}
+		return binding.transaction
 	}
 	return nil
 }

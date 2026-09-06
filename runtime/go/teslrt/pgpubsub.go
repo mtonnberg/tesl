@@ -192,12 +192,19 @@ func (runtime *pgPubsub) publish(channel, key string, encoded string) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), pgLeaseTimeout())
 	defer cancel()
-	if transaction := currentTransaction(); transaction != nil {
+	if transaction := currentTransactionFor(connection); transaction != nil {
+		if err := pgAdmitMigrationTransaction(ctx, transaction, connection, true); err != nil {
+			panic(pgFailure("publish", err))
+		}
 		if _, err := writePubsub(ctx, transaction, connection, channel, key, encoded); err != nil {
 			panic(pgFailure("publish", err))
 		}
 	} else {
-		transaction, err := connection.pool.Begin(ctx)
+		options := pgx.TxOptions{}
+		if connection.migration != nil {
+			options.IsoLevel = pgx.ReadCommitted
+		}
+		transaction, err := connection.pool.BeginTx(ctx, options)
 		if err != nil {
 			panic(pgFailure("publish: cannot begin", err))
 		}
@@ -207,6 +214,9 @@ func (runtime *pgPubsub) publish(channel, key string, encoded string) {
 				_ = transaction.Rollback(context.Background())
 			}
 		}()
+		if err := pgAdmitMigrationTransaction(ctx, transaction, connection, true); err != nil {
+			panic(pgFailure("publish", err))
+		}
 		if _, err := writePubsub(ctx, transaction, connection, channel, key, encoded); err != nil {
 			panic(pgFailure("publish", err))
 		}
@@ -254,10 +264,16 @@ func (runtime *pgPubsub) prepareOn(connection *PostgresDB, executor pgExecutor) 
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), pgLeaseTimeout())
 	defer cancel()
-	if err := executor.QueryRow(ctx, `select coalesce(max("dispatch_seq"), 0) from `+
-		connection.QualifiedTable(pubsubOutboxTable)).Scan(&runtime.dispatchCursor); err != nil {
+	cursor, err := pgMigrationStatementOn(ctx, connection, executor, false, func(executor pgExecutor) (int64, error) {
+		var cursor int64
+		err := executor.QueryRow(ctx, `select coalesce(max("dispatch_seq"), 0) from `+connection.QualifiedTable(pubsubOutboxTable)).Scan(&cursor)
+		return cursor, err
+	})
+	if err != nil {
 		return err
 	}
+	runtime.dispatchCursor = cursor
+
 	runtime.ready = true
 	return nil
 }
@@ -437,6 +453,9 @@ func (runtime *pgPubsub) listen(connection *PostgresDB) (listened bool, err erro
 		runtime.listener = nil
 		runtime.mutex.Unlock()
 	}()
+	if err := pgVerifyMigrationConnection(connectCtx, conn, connection); err != nil {
+		return false, err
+	}
 	if err := runtime.prepareOn(connection, conn); err != nil {
 		return false, err
 	}
@@ -523,7 +542,17 @@ type pgTransactionStarter interface {
 // draw sequence values, and commit before another cooperating publisher can draw one.
 func dispatchLegacyPubsubPending(ctx context.Context, starter pgTransactionStarter,
 	connection *PostgresDB) (int, error) {
-	transaction, err := starter.Begin(ctx)
+	var transaction pgx.Tx
+	var err error
+	if connection.migration == nil {
+		transaction, err = starter.Begin(ctx)
+	} else {
+		capable, ok := starter.(pgMigrationTransactionStarter)
+		if !ok {
+			return 0, fmt.Errorf("migration dispatch requires a transaction-capable connection")
+		}
+		transaction, err = capable.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	}
 	if err != nil {
 		return 0, err
 	}
@@ -533,6 +562,9 @@ func dispatchLegacyPubsubPending(ctx context.Context, starter pgTransactionStart
 			_ = transaction.Rollback(context.Background())
 		}
 	}()
+	if err := pgAdmitMigrationTransaction(ctx, transaction, connection, true); err != nil {
+		return 0, err
+	}
 	if _, err := transaction.Exec(ctx,
 		`select pg_advisory_xact_lock(hashtextextended(current_database() || ':' || $1, 0))`,
 		connection.QualifiedTable(pubsubOutboxTable)); err != nil {
@@ -579,21 +611,22 @@ func (runtime *pgPubsub) drainWithStats(conn *pgx.Conn, connection *PostgresDB) 
 			return stats, err
 		}
 		ctx, cancel := context.WithTimeout(runtime.ctx, pgLeaseTimeout())
-		rows, err := conn.Query(ctx, `select "id", "channel", "key", "payload"::text, "dispatch_seq" from `+
-			connection.QualifiedTable(pubsubOutboxTable)+
-			` where "dispatch_seq" > $1 order by "dispatch_seq" limit $2`,
-			runtime.cursor(), pubsubSweepBatch)
-		stats.fetchQueries++
-		if err != nil {
-			cancel()
-			return stats, err
-		}
-		batch, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (pubsubRow, error) {
-			var collected pubsubRow
-			err := row.Scan(&collected.id, &collected.channel, &collected.key, &collected.encoded,
-				&collected.dispatchSequence)
-			return collected, err
+		batch, err := pgMigrationStatementOn(ctx, connection, conn, false, func(executor pgExecutor) ([]pubsubRow, error) {
+			rows, err := executor.Query(ctx, `select "id", "channel", "key", "payload"::text, "dispatch_seq" from `+
+				connection.QualifiedTable(pubsubOutboxTable)+
+				` where "dispatch_seq" > $1 order by "dispatch_seq" limit $2`,
+				runtime.cursor(), pubsubSweepBatch)
+			if err != nil {
+				return nil, err
+			}
+			return pgx.CollectRows(rows, func(row pgx.CollectableRow) (pubsubRow, error) {
+				var collected pubsubRow
+				err := row.Scan(&collected.id, &collected.channel, &collected.key, &collected.encoded,
+					&collected.dispatchSequence)
+				return collected, err
+			})
 		})
+		stats.fetchQueries++
 		cancel()
 		if err != nil {
 			return stats, err
@@ -613,9 +646,11 @@ func (runtime *pgPubsub) drainWithStats(conn *pgx.Conn, connection *PostgresDB) 
 		}
 
 		ctx, cancel = context.WithTimeout(runtime.ctx, pgLeaseTimeout())
-		var legacyPending bool
-		err = conn.QueryRow(ctx, `select exists (select 1 from `+
-			connection.QualifiedTable(pubsubOutboxTable)+` where "dispatch_seq" is null)`).Scan(&legacyPending)
+		legacyPending, err := pgMigrationStatementOn(ctx, connection, conn, false, func(executor pgExecutor) (bool, error) {
+			var pending bool
+			err := executor.QueryRow(ctx, `select exists (select 1 from `+connection.QualifiedTable(pubsubOutboxTable)+` where "dispatch_seq" is null)`).Scan(&pending)
+			return pending, err
+		})
 		cancel()
 		stats.legacyChecks++
 		if err != nil {
@@ -650,9 +685,11 @@ func (runtime *pgPubsub) drain(conn *pgx.Conn, connection *PostgresDB) error {
 func (runtime *pgPubsub) prune(conn *pgx.Conn, connection *PostgresDB) error {
 	ctx, cancel := context.WithTimeout(runtime.ctx, pgLeaseTimeout())
 	defer cancel()
-	_, err := conn.Exec(ctx, `delete from `+connection.QualifiedTable(pubsubOutboxTable)+
-		` where "dispatched_at" < now() - make_interval(secs => $1)`,
-		pubsubOutboxRetention.Seconds())
+	_, err := pgMigrationStatementOn(ctx, connection, conn, true, func(executor pgExecutor) (struct{}, error) {
+		_, err := executor.Exec(ctx, `delete from `+connection.QualifiedTable(pubsubOutboxTable)+
+			` where "dispatched_at" < now() - make_interval(secs => $1)`, pubsubOutboxRetention.Seconds())
+		return struct{}{}, err
+	})
 	return err
 }
 

@@ -250,7 +250,7 @@ let desugar_database_config (d : database_form) : database_form =
            maps it to the runtime's `#:max-connections` keyword (same pattern
            as `host` → `#:server`). *)
         scalar "dbName" "database" @ scalar "user" "user"
-        @ scalar "password" "password" @ scalar "poolSize" "poolSize" @ conn
+        @ scalar "password" "password" @ scalar "poolSize" "poolSize" @ scalar "controlOwner" "controlOwner" @ conn
       | None -> []
     in
     { d with backend; schema; entities; postgres; config_expr = None }

@@ -31,11 +31,12 @@ func migrationBoundary(name string) {
 	occurrence := migrationOccurrences.counts[name]
 	migrationOccurrences.Unlock()
 	deadline := time.Now().Add(30 * time.Second)
+	// #nosec G704 -- Test-only, caller-selected local Unix control socket; no network protocol or URL is accepted.
 	conn, err := net.DialTimeout("unix", socket, time.Until(deadline))
 	if err != nil {
 		panic(fmt.Sprintf("migration boundary %s/%s/%d: %v", actor, name, occurrence, err))
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	if err = conn.SetDeadline(deadline); err != nil {
 		panic(err)
 	}

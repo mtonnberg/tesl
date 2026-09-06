@@ -15,8 +15,9 @@ import (
 )
 
 // INV-ADDITIVE-READ, INV-ADDITIVE-WRITE, INV-ATOMIC-WRITE; TR-READ, TR-WRITE.
-// This is the phase-0 oracle: the test prepares the superset catalog explicitly.
-// It does not claim that the runtime can yet execute a migration plan.
+// This independent phase-0 oracle prepares a superset catalog explicitly and
+// uses an unversioned connection. Production linked-history startup/execution
+// has separate tests; this oracle does not impersonate installed migration state.
 func TestCompiledVersionsShareRowsAndPauseInsideTransactions(t *testing.T) {
 	if os.Getenv("TESL_MIGRATION_TEST_DSN") == "" {
 		t.Skip("PostgreSQL process matrix: run scripts/run-migration-tests.sh")
@@ -67,7 +68,7 @@ func TestCompiledVersionsShareRowsAndPauseInsideTransactions(t *testing.T) {
 		if err = os.MkdirAll(launcher, 0700); err != nil {
 			t.Fatal(err)
 		}
-		source := fmt.Sprintf("package main\nimport ( fixture %q; %q )\nfunc main() { if len(fixture.FixtureDbDatabase.Tables) != 1 || fixture.FixtureDbDatabase.Tables[0].Name != \"notes\" { panic(\"imported entity catalog duplicated or missing\") }; teslrt.WithDatabase(fixture.FixtureDbDatabase, func() { _ = fixture.Perform() }) }\n", fields[1]+"/internal/teslmodapp", fields[1]+"/internal/teslrt")
+		source := fmt.Sprintf("package main\nimport ( fixture %q; %q )\nfunc main() { if _, versioned := fixture.FixtureDbDatabase.CompiledMigrationHistory(); versioned { panic(\"storage oracle must use an explicit unversioned connection\") }; if len(fixture.FixtureDbDatabase.Tables) != 1 || fixture.FixtureDbDatabase.Tables[0].Name != \"notes\" { panic(\"imported entity catalog duplicated or missing\") }; teslrt.WithDatabase(fixture.FixtureDbDatabase, func() { _ = fixture.Perform() }) }\n", fields[1]+"/internal/teslmodapp", fields[1]+"/internal/teslrt")
 		if err = os.WriteFile(filepath.Join(launcher, "main.go"), []byte(source), 0600); err != nil {
 			t.Fatal(err)
 		}

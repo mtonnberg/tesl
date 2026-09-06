@@ -23,3 +23,13 @@ val is_directory : string -> bool
 val kind : string -> Unix.file_kind
 val realpath : string -> string
 val readdir : string -> string array
+
+(** Pin already captured compiler resource bytes during a serialized query.
+    These regular, canonical inputs may be outside the application project.
+    They do not create directories or change the project root. The caller must
+    pin module resolution too and recheck resources before publishing results.
+    Nested snapshots and project edits may not change a pinned resource. *)
+val with_pinned_files : (string * string) list -> (unit -> 'a) -> 'a
+(** Observe the underlying source view when verifying mutable resource guards.
+    Both operations restore on exceptions and invalidate semantic caches. *)
+val without_pinned_files : (unit -> 'a) -> 'a

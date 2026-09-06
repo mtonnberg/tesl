@@ -102,6 +102,18 @@ let entity_indexes inventory ~entity =
     | Migration_canonical.Seq [Bytes "entity"; _; _; _; _; indexes] -> Some indexes
     | _ -> assert false
 
+let owned_type_definition inventory reference =
+  List.find_map (fun (d : declaration) ->
+    if d.namespace <> Type then None else
+    match Migration_canonical.reference inventory.scopes d.qualified_name with
+    | Error _ -> None
+    | Ok identity when reference = Migration_canonical.Seq
+        [Bytes "reference"; Bytes "type"; identity] ->
+      let definition = List.find (fun (definition : Migration_ir.definition) ->
+        definition.key = (Type, Global d.qualified_name)) inventory.definitions in
+      Some (d, definition.body.node)
+    | Ok _ -> None) inventory.declarations
+
 let compatible_inventories ~before ~after =
   if List.map (fun (scope : Migration_canonical.scope) -> scope.family) before.scopes <>
      List.map (fun (scope : Migration_canonical.scope) -> scope.family) after.scopes then

@@ -597,6 +597,7 @@ and sql_arguments = { mutable sql_args : string list }
 and database_info = {
   db_tesl_name : string;
   db_backend : string;              (* "memory" | "postgres" *)
+  db_migration_family : string option;
   db_schema : string;
   db_entities : string list;
   db_config : (string * string) list;
@@ -2456,7 +2457,8 @@ let rec column_sql_type ty =
   | TString -> Some "TEXT"
   | TBool -> Some "BOOLEAN"
   | TNewtype { tesl_name = "PosixMillis"; _ } -> Some "BIGINT"
-  | TNewtype { tesl_name = "Int32"; _ } -> Some "INTEGER"
+  (* Built-in Int32 is registered as an Int runtime alias below. A user-owned
+     newtype may also be named Int32; its spelling must not override its base. *)
   | TNewtype info -> column_sql_type info.base
   | TRecord info ->
     ignore (record_column_codec info.rec_loc info);
@@ -10219,7 +10221,7 @@ let runtime_file_gates : (string * string list) list = [
      the reason the HTTP half does: it pulls a third-party driver and its whole dependency
      chain into a binary that would otherwise require nothing. *)
    "postgres", [ "postgres.go"; "database.go"; "dbquery.go"; "debug_sql.go"; "pgstores.go";
-                 "pgpubsub.go"; "migration_boundary.go"; "migration_boundary_testbuild.go" ];
+                 "pgpubsub.go"; "migration_program.go"; "migration_control.go"; "migration_expand.go"; "migration_admission.go"; "migration_open.go"; "migration_status.go"; "migration_command.go"; "migration_expand_history.go"; "migration_control_spec.go"; "migration_control_catalog.go"; "migration_plan.go"; "migration_plan_wire.go"; "migration_plan_hash.go"; "migration_catalog.go"; "migration_catalog_compare.go"; "migration_catalog_probe.go"; "migration_literal.go"; "migration_boundary.go"; "migration_boundary_testbuild.go" ];
   (* `agent.go` ships only to a program that talks to a model.  Not a dependency argument —
      everything in it is standard library — but a runtime file a program has no use for is
      still surface a reader has to rule out, and the gate costs nothing. *)
@@ -10833,6 +10835,7 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
           "Port", Option.map (go_config_int database.db_loc) (setting "port");
           "PoolSize", Option.map (go_config_pool_size database.db_loc) (setting "poolSize");
           "SocketDir", text "socket";
+          "ControlOwner", text "controlOwner";
           "Schema", (if database.db_schema = "" then None
                      else Some (go_quote database.db_schema)) ]
     in
@@ -10885,7 +10888,10 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
        | [] -> "[]teslrt.PostgresTable{}"
        | _ -> Printf.sprintf "[]teslrt.PostgresTable{\n%s\t}" (String.concat "" tables));
     Printf.bprintf body "\nvar _ = teslrt.RegisterDatabaseIdentity(%s, %s)\n"
-      (go_quote (database.db_owner ^ "." ^ database.db_tesl_name)) database.db_go_var);
+      (go_quote (database.db_owner ^ "." ^ database.db_tesl_name)) database.db_go_var;
+    Option.iter (fun family -> Printf.bprintf body
+      "\nvar _ = teslrt.RegisterDatabaseMigrationHistory(%s, %s)\n"
+      database.db_go_var (go_quote family)) database.db_migration_family);
   (* Module-level constants, in declaration order: each one's type settles as it is emitted, so
      a constant may be written in terms of an earlier one. *)
   List.iter (fun (c : const_form) ->
@@ -12951,7 +12957,7 @@ let register_imported_module ~loc ~exposed ?(protected_names=[]) types signature
     ignore (found_type, found_value, loc))
     exposed
 
-let compile_module ?(mode=Release) ?(dependencies=[]) ?(entity_bindings=[]) ?project_path (m : module_form) =
+let compile_module ?(mode=Release) ?(dependencies=[]) ?(entity_bindings=[]) ?(migration_families=[]) ?project_path (m : module_form) =
   try
     List.iter (function
       | DDatabase { config_expr = Some config; loc; _ } ->
@@ -13486,6 +13492,7 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?(entity_bindings=[]) ?pro
        Postgres-backed database manages it before any of its queries are emitted. *)
     List.iter (function
       | DDatabase d ->
+        let migration_family = List.assoc_opt (m.module_name ^ "." ^ d.name) migration_families in
         let d = Desugar.desugar_database_config d in
         let backend =
           match String.lowercase_ascii d.backend with
@@ -13495,6 +13502,7 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?(entity_bindings=[]) ?pro
         Hashtbl.replace types.databases d.name {
           db_tesl_name = d.name;
           db_backend = backend;
+          db_migration_family = migration_family;
           db_schema = d.schema;
           db_entities = d.entities;
           db_config = d.postgres;
@@ -16086,9 +16094,10 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?(entity_bindings=[]) ?pro
       if tests = [] && api_tests = [] && load_tests = [] then None
        else Some (test_source ~debug:(mode = Debug) ~imported_packages:!imported_packages ~api_tests ~load_tests
                     module_path package signatures tests) in
-    let needs_runtime = mode = Debug || contains_go_code source "teslrt." ||
+    let schema_commands = migration_families <> [] && List.exists (fun (fd : func_decl) -> fd.kind = MainKind) funcs in
+    let needs_runtime = schema_commands || mode = Debug || contains_go_code source "teslrt." ||
       match tests_source with Some text -> contains_go_code text "teslrt." | None -> false in
-    let main_imports = if mode = Debug then
+    let main_imports = if mode = Debug || schema_commands then
       Printf.sprintf "%s\n\t%s\n\t%s" (go_quote "os")
         (go_quote (module_path ^ "/internal/" ^ package))
         (go_quote (module_path ^ "/internal/teslrt"))
@@ -16096,6 +16105,9 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?(entity_bindings=[]) ?pro
     let main_startup = if mode = Debug then
        "\tteslDebug, teslDebugErr := teslrt.StartDebugControlFromEnvironment()\n\tif teslDebugErr != nil {\n\t\tpanic(teslDebugErr)\n\t}\n\tif teslDebug != nil && os.Getenv(\"TESL_DEBUG_WAIT\") != \"\" {\n\t\tteslDebug.WaitForConfiguration()\n\t}\n\tif teslDebug != nil {\n\t\tdefer func() { _ = teslDebug.Close() }()\n\t}\n"
     else "" in
+    let main_startup = (if schema_commands then
+      "\tif handled, code := teslrt.RunSchemaCommand(os.Args[1:], os.Stdout, os.Stderr); handled {\n\t\tos.Exit(code)\n\t}\n"
+      else "") ^ main_startup in
     (* The lint configuration is part of the emitter contract, versioned with this
        file: `exhaustive` is the static half of the ADT exhaustiveness mitigation and
        only sees a tag switch when a `default` arm does NOT count as covering. *)
@@ -16133,7 +16145,7 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?(entity_bindings=[]) ?pro
        takes `github.com/jackc/pgx/v5` and a program that does not takes nothing.  Pinned here
        and checked against `runtime/go/go.mod`/`go.sum` by a seam test, so a bump cannot
        drift. *)
-    let postgres_runtime =
+    let postgres_runtime = schema_commands ||
       let mentions name =
         contains_go_code source name
         || (match tests_source with
@@ -16273,6 +16285,7 @@ let project_entity_bindings (modules : module_form list) =
       let identity = package_name m.module_name ^ "." ^ d.name in
       let database = {
         db_tesl_name = d.name; db_backend = backend; db_schema = d.schema;
+        db_migration_family = None; (* query reference; the owner emits history registration *)
         db_entities = d.entities; db_config = d.postgres; db_loc = d.loc;
         db_owner = "";
         db_go_var = Printf.sprintf "teslrt.ResolveDatabaseIdentity(%s)" (go_quote identity);
@@ -16291,7 +16304,7 @@ let project_entity_bindings (modules : module_form list) =
     | _ -> ()) m.decls) modules;
   if !errors = [] then Ok !bindings else Error (List.rev !errors)
 
-let compile_project ?(mode=Release) ~(entry : module_form) (modules : module_form list) =
+let compile_project ?(mode=Release) ?(migration_families=[]) ~(entry : module_form) (modules : module_form list) =
   let lowered = List.map (Migration_schema.lower_module ~modules) modules in
   let errors = List.concat_map (function
     | Ok _ -> []
@@ -16366,7 +16379,7 @@ let compile_project ?(mode=Release) ~(entry : module_form) (modules : module_for
     let rec emit acc exports = function
       | [] -> Ok (List.rev acc)
       | (m : module_form) :: rest ->
-        (match compile_module ~mode ~dependencies:exports ~entity_bindings ~project_path m with
+        (match compile_module ~mode ~dependencies:exports ~entity_bindings ~migration_families ~project_path m with
          | Error errors -> Error errors
          | Ok (artifacts, module_exports) ->
            emit (List.rev_append artifacts acc) (module_exports :: exports) rest)

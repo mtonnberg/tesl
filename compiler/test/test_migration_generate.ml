@@ -199,18 +199,28 @@ entity Note table "notes" primaryKey id { id: String, amount: Int ::: Positive a
     d.severity = "error" && d.code <> "MIG001") ds);
   refuse (start root 3))
 let shared_helper () = with_project (fun root path ->
-  apply_fixture (get (start root 1)); apply_fixture (get (start root 2));
+  apply_fixture (get (start root 1));
   let helper = path "migrations/notes/shared.tesl" in
   let source = {|module NotesSchema.Migrate.Shared exposing [identity]
 import NotesSchema.VCurrent.Notes exposing [Note]
 fn identity(note: NotesSchema.VCurrent.Notes.Note) -> NotesSchema.VCurrent.Notes.Note = note
 |} in
   write helper source; checked helper source;
-  List.iter (fun version ->
+  let import_helper version =
     let file = path ("migrations/notes/v" ^ string_of_int version ^ ".tesl") in
     let source = replace "import Tesl.Migration" "import NotesSchema.Migrate.Shared\nimport Tesl.Migration" (read file) in
-    write file source; checked file source) [2;3];
-  let before = files root in refuse (start root 3);
+    write file source; checked file source in
+  import_helper 2;
+  apply_fixture (get (start root 2));
+  let frozen_helper = read helper in
+  import_helper 3;
+  apply_fixture (get (start root 3));
+  check string "shared frozen helper is retained exactly" frozen_helper (read helper);
+  write helper source;
+  let context = Compile.agent_context_result_source helper source in
+  check bool "editing a shared frozen helper fails its own query" false context.ok;
+  check bool "frozen closure diagnostic" true (Compile.string_contains context.json "MIG013");
+  let before = files root in refuse (start root 4);
   check (list (pair string string)) "shared history is never rewritten" before (files root))
 let () = run "Migration revision previews" ["checked generation", List.map (fun (name,f) -> test_case name `Quick f)
   ["complete first freeze and deterministic preview",first;"successive freezes finalize targets",next_revision;
@@ -220,4 +230,4 @@ let () = run "Migration revision previews" ["checked generation", List.map (fun 
    "preexisting equal private targets are guarded",existing_private_target;
    "unproven or ill-typed schema cannot generate",invalid_schema;"concurrent history creation",stale_preview;
    "same-named record and codec claims",codec_and_type;"private persisted facts stay checked",proved_schema;
-   "shared completed migration helper refuses rewrite",shared_helper]]
+   "shared frozen helpers survive and refuse edits",shared_helper]]

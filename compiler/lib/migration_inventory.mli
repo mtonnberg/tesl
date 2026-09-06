@@ -90,6 +90,12 @@ type field_shape = {
 (** Canonical, resolved logical field shape from the same checked lowering.
     These are not PostgreSQL catalog types or DDL permissions. *)
 val field_shapes : t -> field_shape list
+(** Resolve a canonical owned type reference from a checked field/declaration to
+    its checked declaration body. Primitive references return None. The body is
+    immutable semantic IR from this inventory, not reparsed source or permission
+    to reinterpret stored values. *)
+val owned_type_definition : t -> Migration_canonical.node ->
+  (declaration * Migration_canonical.node) option
 (** Canonical declared indexes, including uniqueness, order and explicit names.
     A change needs separate physical/catalog and admitted-writer safety checks. *)
 val entity_indexes : t -> entity:string -> Migration_canonical.node option

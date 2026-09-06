@@ -125,6 +125,16 @@ let start ~compiler_abi ~project_root:root ~family ~version ~documents =
       let next_source = mark_next next_file (Header.encode header ^ next_body family next before current.inventory)
         ~previous:(I.root_module before) ~current:(I.root_module current.inventory) in
       frozen @ rewrites @ [next_file,next_source],List.map fst (I.source_inputs before)) in
+    (* Retarget every helper first, then seal the exact completed closure. The
+       root hashes its schema header too, excluding only its own closure block. *)
+    let writes = match existing with
+      | None -> writes
+      | Some migration -> overlay root writes (fun () ->
+        let source = List.assoc migration.path writes in
+        let closure = sparse (Migration_closure.capture ~project_root:root
+          ~root_file:migration.path ~source) in
+        let source = sparse (Migration_closure.attach ~file:migration.path ~source closure) in
+        (migration.path,source) :: List.remove_assoc migration.path writes) in
     let original_reads = List.map fst (H.source_inputs h) in
     let reads = original_reads @ frozen_inputs in
     let imports = List.concat_map (fun file ->
@@ -269,8 +279,7 @@ let refresh ~compiler_abi ~project_root:root ~family ~version ~documents =
         | Some header -> header | None -> reject edge.path "completed migration is missing its source seals" in
       let old,fresh = Header.roots header in
       ignore (sparse (Header.verify ~project_root:root ~migration_module:(family ^ ".Migrate.V" ^ string_of_int edge.version)
-        ~previous:old ~current:fresh header));
-      check edge.path edge.contents) (H.completed_migrations h);
+        ~previous:old ~current:fresh header))) (H.completed_migrations h);
     let header = match sparse (Header.read ~file:migration.path migration.contents) with
       | Some header -> header | None -> reject migration.path "current migration is missing its recorded source seals" in
     if Header.module_name header <> family ^ ".Migrate.V" ^ string_of_int version ||
@@ -284,6 +293,12 @@ let refresh ~compiler_abi ~project_root:root ~family ~version ~documents =
     let source = refresh_same migration.path migration.contents previous.inventory current.inventory in
     let source = refresh_entities migration.path source previous.inventory current.inventory in
     let source = sparse (Header.replace ~file:migration.path ~source header) in
+    (* A completed edge's target is also the current edge's predecessor. The
+       public source checker therefore sees both seals. Check completed bodies
+       against the proposed refreshed header, after their own frozen seals have
+       passed above; otherwise a legitimate VCurrent edit prevents V3+ refresh. *)
+    overlay root [migration.path,source] (fun () ->
+      List.iter (fun (edge : H.migration_source) -> check edge.path edge.contents) (H.completed_migrations h));
     let reads = List.map fst (H.source_inputs h) in
     let imports = List.concat_map (fun file ->
       let m = parse file (Source_input.read file) in

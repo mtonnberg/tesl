@@ -145,37 +145,46 @@ func (client Client) QueryFileJSON(ctx context.Context, flag, filePath string, p
 	return client.QueryJSON(ctx, arguments...)
 }
 
-// FormatSource runs the compiler's in-place formatter against a system
-// temporary file and returns the resulting source. Formatting failures return
-// an error without exposing the temporary path to callers.
+// FormatSource preserves the single-document API. FormatSources includes other
+// open buffers when deciding whether a migration namespace has become frozen.
 func (client Client) FormatSource(ctx context.Context, logicalPath, source string) ([]byte, Result, error) {
-	if logicalPath == "" {
-		return nil, Result{}, errors.New("compiler: logical path is required")
-	}
-	temporary, err := os.CreateTemp("", "tesl-format-*.tesl")
+	return client.FormatSources(ctx, logicalPath, []SourceOverlay{{Path: logicalPath, Source: source}})
+}
+
+func (client Client) FormatSources(ctx context.Context, logicalPath string, overlays []SourceOverlay) ([]byte, Result, error) {
+	entry, err := filepath.Abs(logicalPath)
 	if err != nil {
-		return nil, Result{}, fmt.Errorf("compiler: create formatting source: %w", err)
+		return nil, Result{}, err
 	}
-	temporaryPath := temporary.Name()
-	defer func() { _ = os.Remove(temporaryPath) }()
-	if _, err := temporary.WriteString(source); err != nil {
-		_ = temporary.Close()
-		return nil, Result{}, fmt.Errorf("compiler: write formatting source: %w", err)
+	var original string
+	found := false
+	for _, overlay := range overlays {
+		path, err := filepath.Abs(overlay.Path)
+		if err != nil {
+			return nil, Result{}, err
+		}
+		if path == entry {
+			original, found = overlay.Source, true
+		}
 	}
-	if err := temporary.Close(); err != nil {
-		return nil, Result{}, fmt.Errorf("compiler: close formatting source: %w", err)
+	if !found {
+		return nil, Result{}, errors.New("compiler formatting requires the requested document's source overlay")
 	}
-	formatClient := client
-	formatClient.Environment = withEnvironment(client.Environment, "TESL_LOGICAL_PATH", logicalPath)
-	result, err := formatClient.Run(ctx, "--fmt", temporaryPath)
+	payload, result, err := client.QuerySourcesJSON(ctx, "--format-json", logicalPath, overlays)
 	if err != nil {
 		return nil, result, err
 	}
-	formatted, err := os.ReadFile(temporaryPath) // #nosec G304 -- path was created by os.CreateTemp above.
-	if err != nil {
-		return nil, result, fmt.Errorf("compiler: read formatted source: %w", err)
+	var response struct {
+		Formatted string
+		ReadOnly  bool
 	}
-	return formatted, result, nil
+	if err = json.Unmarshal(payload, &response); err != nil {
+		return nil, result, err
+	}
+	if response.ReadOnly && response.Formatted != original {
+		return nil, result, errors.New("compiler formatting response attempted to rewrite read-only source")
+	}
+	return []byte(response.Formatted), result, nil
 }
 
 func withEnvironment(environment []string, name, value string) []string {
@@ -348,9 +357,11 @@ func mapShadowFilePaths(payload []byte, shadow, root string) ([]byte, error) {
 			if message, ok := current["message"].(string); ok {
 				current["message"] = strings.ReplaceAll(message, shadow+string(filepath.Separator), root+string(filepath.Separator))
 			}
-			if file, ok := current["file"].(string); ok && pathWithinRoot(shadow, file) {
-				relative, _ := filepath.Rel(shadow, file)
-				current["file"] = filepath.Join(root, relative)
+			for _, field := range []string{"file", "entryFile"} {
+				if file, ok := current[field].(string); ok && pathWithinRoot(shadow, file) {
+					relative, _ := filepath.Rel(shadow, file)
+					current[field] = filepath.Join(root, relative)
+				}
 			}
 			for _, child := range current {
 				rewrite(child)

@@ -7,6 +7,7 @@
       tesl --check-batch <file> ...  batch-check many files in one process (per-file summary)
       tesl --check-all <dir>     recursively batch-check every .tesl file under <dir>
       tesl --check-json <file>   check, emit diagnostics as IR-2 JSON
+      tesl --check-json-v2 <file> check with related locations and action metadata
       tesl --local-bindings-json <file> emit inferred local binding types as JSON
       tesl --definition-json <file> <line> <col> emit definition location as JSON
       tesl --occurrences-json <file> <line> <col> emit same-file occurrences as JSON
@@ -33,6 +34,7 @@ let usage = {|Usage:
   tesl --check-batch <file> [...]  batch-check many files in one process (shared import cache, per-file summary)
   tesl --check-all <dir>       recursively batch-check every .tesl file under <dir>
   tesl --check-json <file>     check, emit diagnostics as IR-2 JSON
+  tesl --check-json-v2 <file>  check with related locations and action metadata
   tesl --local-bindings-json <file> emit inferred local binding types as JSON
   tesl --definition-json <file> <line> <col> emit definition location as JSON
   tesl --occurrences-json <file> <line> <col> emit same-file occurrences as JSON
@@ -52,6 +54,7 @@ let usage = {|Usage:
   tesl --semantic-json <file>  emit full module semantic snapshot as JSON (IR-1 foundation)
   tesl agent-context <file>    emit a compact AI-agent snapshot (diagnostics+symbols+obligations) as JSON
   tesl --agent-context-json <file>  alias for `tesl agent-context`
+  tesl migrate generate <file> --manifest-json  preview guarded migration source edits
   tesl test [--test-name NAME] [--test-kind KIND] <file> [...]  run all generated test packages
   tesl --mutate [--backend go] <file> [test-file ...]  run Go mutation testing; optionally merge tests from extra files
    tesl --exe <file> [--out <path>]  build a standalone Go executable
@@ -1113,6 +1116,11 @@ let () =
   (* `tesl doc <name>` — Tesl-syntax signature of any builtin name; `tesl doc`
      lists the stdlib modules; `--doc-json` is the machine form (LSP hover). *)
   | "doc" :: rest -> handle_doc ~json:false rest
+  | "migrate" :: rest ->
+    let response = Migration_command.run rest in
+    print_string response.stdout;
+    prerr_string response.stderr;
+    exit response.exit_code
   | "--doc-json" :: rest -> handle_doc ~json:true rest
   | [] -> print_string usage; exit 1
 
@@ -1151,7 +1159,7 @@ let () =
   | ("--fmt" :: filenames) when filenames <> [] ->
     let ret = ref 0 in
     List.iter (fun filename ->
-      match Formatter.format_file filename with
+      match Formatter.format_file ~logical_path:(logical_path filename) filename with
       | Ok ()  -> ()
       | Error msg -> Printf.eprintf "%s: %s\n" filename msg; ret := 1
     ) filenames;
@@ -1160,7 +1168,7 @@ let () =
   | ("--fmt-check" :: filenames) when filenames <> [] ->
     let ret = ref 0 in
     List.iter (fun filename ->
-      match Formatter.format_check filename with
+      match Formatter.format_check ~logical_path:(logical_path filename) filename with
       | Ok true  -> ()
       | Ok false ->
         Printf.eprintf "%s: not formatted (run `tesl fmt %s` to fix)\n" filename filename;

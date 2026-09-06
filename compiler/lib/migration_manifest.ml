@@ -73,6 +73,13 @@ let verify_source t ~documents = protect (fun () ->
   if documents <> t.documents then reject t.root "open document set or version changed since preview";
   verify_files t false)
 let verify_disk t = protect (fun () -> verify_files t true)
+let source_files t = protect (fun () ->
+  List.filter_map (fun guard ->
+    canonical t.root guard.file;
+    let source = file_bytes ~disk:false guard.file in
+    if Option.map hash source <> guard.source_digest then
+      reject guard.file "source changed before capturing compilation bytes";
+    Option.map (fun source -> guard.file,source) source) t.files)
 let create ~project_root:root ~reads ~directories ~imports ~documents ~writes = protect (fun () ->
   validate_root root;
   let documents = normalized_documents root documents in
@@ -111,6 +118,33 @@ let create ~project_root:root ~reads ~directories ~imports ~documents ~writes = 
   (* Catch a changed earlier input before publishing the proposal. Apply must
      check again; this is a precondition snapshot, not a filesystem transaction. *)
   verify_files t false; verify_files t true; t)
+
+(** Combine independently computed operations without taking a new snapshot of
+    their inputs. Re-capturing after target selection could bless changed source
+    while retaining the old selection. Conflicting preconditions must refuse. *)
+let combine left right ~documents = protect (fun () ->
+  if left.root <> right.root then reject right.root "cannot combine manifests from different projects";
+  let documents = normalized_documents left.root documents in
+  if left.documents <> right.documents || documents <> left.documents then
+    reject left.root "open document set or version changed between previews";
+  let union label key path xs ys =
+    let all = List.sort (fun a b -> compare (key a) (key b)) (xs @ ys) in
+    let rec merge = function
+      | a :: b :: rest when key a = key b ->
+        if a <> b then reject (path a) ("conflicting " ^ label ^ " between previews");
+        merge (a :: rest)
+      | a :: rest -> a :: merge rest
+      | [] -> [] in
+    merge all in
+  let files = union "source precondition" (fun g -> g.file) (fun g -> g.file) left.files right.files in
+  let directories = union "directory precondition" (fun g -> g.directory) (fun g -> g.directory) left.directories right.directories in
+  let imports = union "import precondition" (fun g -> g.source,g.name) (fun g -> g.source) left.imports right.imports in
+  let edits = union "source edit" (fun (e : edit) -> e.path) (fun e -> e.path) left.edits right.edits in
+  let combined = {root=left.root;documents;files;directories;imports;edits} in
+  let overlay_root = Option.value (Source_input.project_root ()) ~default:left.root in
+  Source_input.with_overlays ~project_root:overlay_root (overlays combined) (fun () -> ());
+  verify_files combined false; verify_files combined true;
+  combined)
 
 (* Kept independent of Compile so compiler-owned generators can use manifests
    without introducing a compilation pipeline dependency cycle. *)

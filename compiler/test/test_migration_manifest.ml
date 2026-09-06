@@ -213,6 +213,89 @@ let virtual_import_resolution () = with_project (fun root path ->
     check bool "saved import keeps disk fallback" true (contains json ("\"diskResolved\":\"" ^ fallback ^ "\"")); t) in
   get (M.verify_disk t);
   refuse (fun () -> M.verify_source t ~documents:[]))
+let combine_selection () = with_project (fun root path ->
+  let app = path "app.tesl" and helper = path "helper.tesl" in
+  write app "module App exposing []\nimport Helper\n";
+  write helper "module Helper exposing []\n";
+  let selection = proposal ~reads:[app] ~imports:[app,"Helper"] root [] in
+  let schema = path "schema/notes/v-current.tesl" in
+  let output = path "migrations/notes/v2.tesl" in
+  let generation = proposal ~reads:[schema] root [output,"generated"] in
+  let combined = get (M.combine selection generation ~documents:[]) in
+  let together = proposal ~reads:[app;schema] ~imports:[app,"Helper"] root [output,"generated"] in
+  check string "union retains all original guards" (M.to_json together) (M.to_json combined);
+  check string "independent composition is commutative" (M.to_json combined)
+    (M.to_json (get (M.combine generation selection ~documents:[])));
+  check string "equal operations are idempotent" (M.to_json combined)
+    (M.to_json (get (M.combine combined combined ~documents:[])));
+  check bool "combined preview creates no file" false (Sys.file_exists output);
+  write app "module App exposing []\n# database selection changed\n";
+  refuse (fun () -> M.verify_source combined ~documents:[]);
+  refuse (fun () -> M.verify_disk combined))
+let combine_stale () = with_project (fun root path ->
+  let app = path "app.tesl" in write app "old database";
+  let selected = proposal ~reads:[app] root [] in
+  write app "different database";
+  let generated = proposal root [path "migrations/notes/v2.tesl","generated"] in
+  refuse (fun () -> M.combine selected generated ~documents:[]);
+  let recaptured = proposal ~reads:[app] root [] in
+  refuse (fun () -> M.combine selected recaptured ~documents:[]))
+let combine_conflicts () = with_project (fun root path ->
+  let output = path "migrations/notes/v2.tesl" in
+  let a = proposal root [output,"first"] and b = proposal root [output,"second"] in
+  refuse (fun () -> M.combine a b ~documents:[]);
+  let a = proposal root [path "parent.tesl","file"] in
+  let b = proposal root [path "parent.tesl/child.tesl","child"] in
+  refuse (fun () -> M.combine a b ~documents:[]);
+  with_project (fun other _ ->
+    let b = proposal other [] in refuse (fun () -> M.combine a b ~documents:[])))
+let combine_versions () = with_project (fun root path ->
+  let file = path "schema/notes/v-current.tesl" in
+  let old = [{M.path=file;version=3}] and fresh = [{M.path=file;version=4}] in
+  let a = proposal ~documents:old root [] in
+  let b = proposal ~documents:fresh root [] in
+  refuse (fun () -> M.combine a b ~documents:fresh);
+  refuse (fun () -> M.combine a a ~documents:fresh);
+  refuse (fun () -> M.combine a a ~documents:[]);
+  let combined = get (M.combine a a ~documents:old) in
+  get (M.verify_source combined ~documents:old))
+let combine_disk_buffer () = with_project (fun root path ->
+  let file = path "schema/notes/v-current.tesl" in
+  let saved = read file and buffer = "unsaved selected source" in
+  Source_input.with_overlays ~project_root:root [file,buffer] (fun () ->
+    let a = proposal ~reads:[file] root [] in
+    write file (saved ^ "# later saved write\n");
+    let b = proposal ~reads:[file] root [] in
+    refuse (fun () -> M.combine a b ~documents:[]);
+    write file saved;
+    let b = proposal root [path "migrations/notes/v2.tesl","generated"] in
+    let combined = get (M.combine a b ~documents:[]) in
+    unchanged combined;
+    check bool "source and disk hashes remain different" true
+      (contains (M.to_json combined) (Migration_hash.digest buffer) && contains (M.to_json combined) (Migration_hash.digest saved))))
+let combine_discovery () = with_project (fun root path ->
+  mkdir (path "discovery");
+  let a = proposal ~directories:[path "discovery"] root [] in
+  write (path "discovery/entry.tesl") "new candidate";
+  let b = proposal ~directories:[path "discovery"] root [] in
+  refuse (fun () -> M.combine a b ~documents:[]);
+  let app = path "app.tesl" in write app "module App exposing []\nimport Helper\n";
+  write (path "Helper.tesl") "module Helper exposing []\n";
+  let a = proposal ~imports:[app,"Helper"] root [] in
+  Source_input.with_overlays ~project_root:root [path "helper.tesl","module Helper exposing []\n"] (fun () ->
+    let b = proposal ~imports:[app,"Helper"] root [] in
+    refuse (fun () -> M.combine a b ~documents:[])))
+let compilation_bytes () = with_project (fun root path ->
+ let app=path "schema/notes/v-current.tesl" in
+ let source=read app in
+ let manifest=proposal ~reads:[app] root [] in
+ check bool "captured exact source bytes" true (List.mem (app,source) (get (M.source_files manifest)));
+ write app (source ^ "# changed\n");
+ refuse (fun () -> M.source_files manifest);
+ Source_input.with_overlays ~project_root:root [app,source] (fun () ->
+  check bool "source capture respects the original unsaved view" true
+   (List.mem (app,source) (get (M.source_files manifest)));
+  refuse (fun () -> M.verify_disk manifest)))
 let () = run "Migration source manifests" ["guarded proposals", List.map (fun (name,f) -> test_case name `Quick f)
   ["preview never writes sources or directories",no_writes;
    "arbitrary source bytes survive JSON transport",byte_edits;"no-op writes retain guards",noops;
@@ -225,4 +308,11 @@ let () = run "Migration source manifests" ["guarded proposals", List.map (fun (n
    "non-UTF8 directory entries are hashable",arbitrary_directory_bytes;
    "checked private schema freeze remains virtual",checked_freeze;"nested source view",outer_scope;
    "dangling candidate becoming an import",import_retarget;
-   "separate disk and proposed import resolution",virtual_import_resolution]]
+   "separate disk and proposed import resolution",virtual_import_resolution;
+   "combine target and generation without recapturing inputs",combine_selection;
+   "changed selection cannot be blessed by another preview",combine_stale;
+   "competing edits, path conflicts and different roots",combine_conflicts;
+   "composition retains document-version guards",combine_versions;
+   "composition keeps disk and unsaved source distinct",combine_disk_buffer;
+   "composition retains discovery and import resolution",combine_discovery;
+   "compilation captures exact original source bytes",compilation_bytes]]

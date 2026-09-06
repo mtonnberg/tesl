@@ -3,6 +3,7 @@ module Names = Set.Make (String)
 
 type view = { root : string; files : string Paths.t; directories : Names.t }
 let active : view option ref = ref None
+let pinned_files : string Paths.t ref = ref Paths.empty
 let project_root () = Option.map (fun view -> view.root) !active
 
 let invalid path reason = invalid_arg ("source overlay " ^ path ^ ": " ^ reason)
@@ -65,6 +66,9 @@ let with_overlays ~project_root inputs f =
       invalid path "expected an absolute .tesl path inside the project";
     validate_file path;
     if proposed_path path <> path then invalid path "path must use its canonical spelling";
+    (match Paths.find_opt path !pinned_files with
+     | Some pinned when pinned <> contents -> invalid path "cannot change a pinned compiler resource in a nested source view"
+     | _ -> ());
     if Names.mem path !seen then invalid path "duplicate input";
     seen := Names.add path !seen;
     Paths.add path contents files) base inputs in
@@ -75,7 +79,7 @@ let with_overlays ~project_root inputs f =
 
 type entry = File of string | Directory
 
-let find path = match !active with
+let find_project path = match !active with
   | None -> None
   | Some view ->
     let lookup path = match Paths.find_opt path view.files with
@@ -89,6 +93,13 @@ let find path = match !active with
     | None ->
       let canonical = try proposed_path path with Unix.Unix_error _ | Sys_error _ -> path in
       if canonical = path then None else lookup canonical
+
+let find path =
+  (* Pinned compiler resources are immutable input bytes, independently of the
+     application's overlay root. Their resolver is fixed by the caller too. *)
+  match Paths.find_opt path !pinned_files with
+  | Some contents -> Some (File contents)
+  | None -> find_project path
 
 let read_using disk path = match find path with
   | Some (File contents) -> contents
@@ -126,3 +137,26 @@ let readdir path = match !active, find path with
       if Filename.dirname child = canonical then Names.add (Filename.basename child) names else names in
     let names = Paths.fold (fun child _ names -> add_child child names) view.files names in
     Names.fold add_child view.directories names |> Names.elements |> Array.of_list
+
+let with_pinned_files inputs f =
+  let previous = !pinned_files and seen = ref Names.empty in
+  let next = List.fold_left (fun files (path,contents) ->
+    if Filename.is_relative path || not (Filename.check_suffix path ".tesl") ||
+       String.contains path '\000' || canonical_path path <> path then
+      invalid path "compiler resources require canonical absolute .tesl paths";
+    if kind path <> Unix.S_REG then invalid path "compiler resource must be a regular input file";
+    if Names.mem path !seen then invalid path "duplicate compiler resource";
+    seen := Names.add path !seen;
+    (match Paths.find_opt path files with
+     | Some previous when previous <> contents -> invalid path "nested compiler resource snapshots disagree"
+     | _ -> ());
+    Paths.add path contents files) previous inputs in
+  Query_cache.clear (); pinned_files := next;
+  Fun.protect ~finally:(fun () -> pinned_files := previous; Query_cache.clear ()) f
+
+let without_pinned_files f =
+  let previous = !pinned_files in
+  if Paths.is_empty previous then f () else begin
+    Query_cache.clear (); pinned_files := Paths.empty;
+    Fun.protect ~finally:(fun () -> pinned_files := previous; Query_cache.clear ()) f
+  end

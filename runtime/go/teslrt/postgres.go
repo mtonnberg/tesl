@@ -34,7 +34,7 @@ import (
 // created by one backend is unreadable by the other:
 //
 //	Int          NUMERIC             arbitrary precision, lossless at any magnitude
-//	Int32        INTEGER             the opt-in compact width
+//	Int32        NUMERIC             INTEGER/BIGINT through explicit @db storage
 //	Float        DOUBLE PRECISION
 //	String       TEXT
 //	Bool         BOOLEAN
@@ -61,6 +61,9 @@ type PostgresConfig struct {
 	// cluster is usually reached; when it is set, Host and Port are ignored.
 	SocketDir string
 	Schema    string
+	// ControlOwner is the no-login owner for versioned migration metadata.
+	// Omission selects tesl_control; this is application connection configuration.
+	ControlOwner string
 }
 
 // PostgresColumn describes one column, as the entity declares it.
@@ -94,7 +97,8 @@ type PostgresDB struct {
 	pool           *pgxpool.Pool
 	schema         string
 	bootstrapMutex sync.Mutex
-	outboxReady    bool // protected by bootstrapMutex; runtime DDL runs before first binding
+	outboxReady    bool                  // protected by bootstrapMutex; runtime DDL runs before first binding
+	migration      *pgMigrationAdmission // immutable after initialization, nil for legacy databases
 }
 
 type postgresInitialization struct {
@@ -344,7 +348,7 @@ type pgExecutor interface {
 }
 
 func (db *PostgresDB) executor() pgExecutor {
-	if transaction := currentTransaction(); transaction != nil {
+	if transaction := currentTransactionFor(db); transaction != nil {
 		return transaction
 	}
 	return db.pool
@@ -393,6 +397,10 @@ func pgFailure(prefix string, err error) any {
 	if errors.Is(err, context.DeadlineExceeded) || pgconn.Timeout(err) {
 		return pgDatabaseBusy
 	}
+	var admission *pgMigrationAdmissionError
+	if errors.As(err, &admission) {
+		return RequestRejection{Status: 503, Message: "database schema version unavailable"}
+	}
 	return prefix + ": " + err.Error()
 }
 
@@ -401,15 +409,34 @@ func PgQuery[Row any](db *PostgresDB, statement string, arguments []any,
 	scan func(pgx.CollectableRow) (Row, error)) []Row {
 	ctx, cancel := context.WithTimeout(context.Background(), pgLeaseTimeout())
 	defer cancel()
-	rows, err := db.executor().Query(ctx, statement, arguments...)
+	return pgQueryStatement(ctx, db, statement, arguments, false, scan)
+}
+
+// PgWriteQuery is for compiler-classified writes with RETURNING. Their result
+// shape does not turn them into read transactions; no SQL-prefix guessing occurs.
+func PgWriteQuery[Row any](db *PostgresDB, statement string, arguments []any,
+	scan func(pgx.CollectableRow) (Row, error)) []Row {
+	ctx, cancel := context.WithTimeout(context.Background(), pgLeaseTimeout())
+	defer cancel()
+	return pgQueryStatement(ctx, db, statement, arguments, true, scan)
+}
+
+func pgQueryStatement[Row any](ctx context.Context, db *PostgresDB, statement string, arguments []any, write bool,
+	scan func(pgx.CollectableRow) (Row, error)) []Row {
+	collected, err := pgMigrationStatement(ctx, db, write, func(executor pgExecutor) ([]Row, error) {
+		rows, err := executor.Query(ctx, statement, arguments...)
+		if err != nil {
+			return nil, err
+		}
+		values, err := pgx.CollectRows(rows, scan)
+		if err == nil {
+			migrationBoundary("query-complete")
+		}
+		return values, err
+	})
 	if err != nil {
 		panic(pgFailure("database", err))
 	}
-	collected, err := pgx.CollectRows(rows, scan)
-	if err != nil {
-		panic(pgFailure("database", err))
-	}
-	migrationBoundary("query-complete")
 	return collected
 }
 
@@ -421,6 +448,17 @@ func PgQueryPlan[Row any](db *PostgresDB, plan PgPlan,
 	}
 	rows := PgQuery(db, plan.SQL, plan.arguments(), scan)
 	rowCount = len(rows)
+	return rows
+}
+
+// PgWriteQueryPlan preserves debugger capture for UPDATE/INSERT RETURNING.
+func PgWriteQueryPlan[Row any](db *PostgresDB, plan PgPlan, scan func(pgx.CollectableRow) (Row, error)) []Row {
+	count := 0
+	if plan.Capture != nil {
+		defer func() { plan.Capture(count) }()
+	}
+	rows := PgWriteQuery(db, plan.SQL, plan.arguments(), scan)
+	count = len(rows)
 	return rows
 }
 
@@ -448,11 +486,16 @@ func PgQueryOnePlan[Row any](db *PostgresDB, plan PgPlan,
 func PgExec(db *PostgresDB, statement string, arguments []any) int64 {
 	ctx, cancel := context.WithTimeout(context.Background(), pgLeaseTimeout())
 	defer cancel()
-	tag, err := db.executor().Exec(ctx, statement, arguments...)
+	tag, err := pgMigrationStatement(ctx, db, true, func(executor pgExecutor) (pgconn.CommandTag, error) {
+		tag, err := executor.Exec(ctx, statement, arguments...)
+		if err == nil {
+			migrationBoundary("write-complete")
+		}
+		return tag, err
+	})
 	if err != nil {
 		panic(pgFailure("database", err))
 	}
-	migrationBoundary("write-complete")
 	return tag.RowsAffected()
 }
 
@@ -470,9 +513,12 @@ func PgExecPlan(db *PostgresDB, plan PgPlan) int64 {
 func PgCount(db *PostgresDB, statement string, arguments []any) Int {
 	ctx, cancel := context.WithTimeout(context.Background(), pgLeaseTimeout())
 	defer cancel()
-	row := db.executor().QueryRow(ctx, statement, arguments...)
-	var counted int64
-	if err := row.Scan(&counted); err != nil {
+	counted, err := pgMigrationStatement(ctx, db, false, func(executor pgExecutor) (int64, error) {
+		var counted int64
+		err := executor.QueryRow(ctx, statement, arguments...).Scan(&counted)
+		return counted, err
+	})
+	if err != nil {
 		panic(pgFailure("database", err))
 	}
 	return FromInt64(counted)
@@ -496,7 +542,9 @@ func PgScalar[Value any](db *PostgresDB, statement string, arguments []any,
 	scan func(pgx.Row) (Value, error)) Value {
 	ctx, cancel := context.WithTimeout(context.Background(), pgLeaseTimeout())
 	defer cancel()
-	value, err := scan(db.executor().QueryRow(ctx, statement, arguments...))
+	value, err := pgMigrationStatement(ctx, db, false, func(executor pgExecutor) (Value, error) {
+		return scan(executor.QueryRow(ctx, statement, arguments...))
+	})
 	if err != nil {
 		panic(pgFailure("database", err))
 	}
@@ -527,8 +575,10 @@ func PgSumMoney(db *PostgresDB, statement string, arguments []any, entity, field
 	var total pgtype.Numeric
 	var distinct int64
 	var witness *string
-	if err := db.executor().QueryRow(ctx, statement, arguments...).
-		Scan(&total, &distinct, &witness); err != nil {
+	_, err := pgMigrationStatement(ctx, db, false, func(executor pgExecutor) (struct{}, error) {
+		return struct{}{}, executor.QueryRow(ctx, statement, arguments...).Scan(&total, &distinct, &witness)
+	})
+	if err != nil {
 		panic(pgFailure("database", err))
 	}
 	currency := Currency{}
@@ -567,7 +617,13 @@ func PgSumMoneyPlan(db *PostgresDB, plan PgPlan, entity, field string) Money {
 func PgTruncate(db *PostgresDB, table string) {
 	ctx, cancel := context.WithTimeout(context.Background(), pgLeaseTimeout())
 	defer cancel()
-	if _, err := db.executor().Exec(ctx, "truncate table "+db.QualifiedTable(table)); err != nil {
+	_, err := pgMigrationStatement(ctx, db, true, func(executor pgExecutor) (pgconn.CommandTag, error) {
+		return executor.Exec(ctx, "truncate table "+db.QualifiedTable(table))
+	})
+	if err != nil {
+		if db.migration != nil {
+			panic(pgFailure("database: cannot truncate", err))
+		}
 		// A table that does not exist yet is not an error here: a test may run before anything
 		// created it, and the bootstrap is what creates it.
 		if !strings.Contains(err.Error(), "does not exist") {

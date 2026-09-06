@@ -66,10 +66,416 @@ four API tests cover create/read, validation failure without insertion, malforme
 JSON without insertion, and isolated test state. HTTP request/reply records and
 codecs live in the application, separately from the stored entity. All three source files pass
 agent-context and formatting. Generated Go snapshots and the manual lesson index
-are included. Adoption, additive execution and the remaining lessons are pending.
+are included. Adoption and the remaining lessons are pending. The following lesson now tests
+additive execution through the real PostgreSQL application path.
+
+[Lesson83-additive-migrations](../example/learn/lesson83-additive-migrations.tesl)
+now evolves a full PostgreSQL notes app. Its permanent regression copies the
+lesson, compiles V1, generates and refreshes V2, and adds a nullable category plus
+the corresponding field in the schema's pure constructor. It asserts the complete
+application file stays byte-identical, runs both revisions' unit/API tests, deletes
+source and build directories, and runs the standalone HTTP binaries. The operator
+installer creates only control state; actual application boot performs the DDL.
+The trace retains a V1 row through V2, runs both servers concurrently, checks both
+writer/reader directions, and restarts V1 while V2 continues serving. Validation
+and malformed-input failures leave no rows. This is an additive scenario; the
+adoption, transformations and the other planned scenarios remain
+pending. The lesson exposed a linter omission for bulk-insert input names, now
+covered for both local bindings and function parameters.
 
 ## Slices under development
 
+- The editor tooling now has a non-mutating migration-preview client that sends
+  exact open-buffer bytes and versions to the compiler. Returned application,
+  database, operation and content/version guards must match the request. Focused
+  transport tests and a real compiler fixture pass, including virtual unsaved
+  files and ambiguous target refusal. Cancellation cleans private transport files.
+  Complete tooling/source-edit/LSP race suites, native CLI regressions and static
+  gates pass. Follow-up review added exact overlay-content checks and prevented
+  diagnostic-style handling from accepting a failed compiler process.
+  The LSP now retains a bounded immutable preview and exposes per-file original/
+  proposed contents. Focused real-compiler, cancellation, expired-handle, refusal
+  and oversized-response regressions pass. Complete race suites, static gates and
+  documentation checks pass; follow-up review tightened malformed-request handle
+  expiry and bounded both raw and encoded diff sizes.
+  The Change Schema UI and mixed open/closed source application remain pending.
+
+- The LSP can now send bounded client requests and handle replies on its document
+  event loop. Acknowledgements cannot overtake preceding document notifications;
+  incoming and outgoing request identities are separate. Duplicate/late replies
+  cannot complete another operation, and timeout/disconnect outcomes remain
+  explicitly unknown. The response envelope rejects ambiguous identities and
+  malformed errors. Full LSP/protocol race suites and static gates pass, and
+  609,689 response-parser fuzz cases pass; the fuzzer is in CI. Follow-up review
+  avoided copying whole notification buffers during reply classification.
+  The read-only application planner now checks the complete open-input set and
+  document lifetimes, retains every manifest guard, and prepares exact versioned
+  forward/inverse edits. Focused tests cover stale dependencies, reopened files,
+  Unicode/CRLF, caller mutation and preserving user edits during an inverse. A
+  real compiler fixture freezes an unsaved migration buffer, creates a later
+  revision in its preview and restores the exact buffer preimage in memory;
+  the saved migration and application remain unchanged. Focused native tests and
+  static gates pass; the broader planner gate is in progress. It does not yet send
+  migration edits or perform mixed source transactions.
+
+- The LSP now provides `source.fixAll.tesl` to clients supporting versioned
+  document edits. It rechecks current buffers, consumes producer eligibility,
+  excludes decisions/commands, and returns only a guarded single-document edit.
+  Conflict, compound-fix, Unicode and request-cancellation regressions pass.
+  A real compiler fixture corrects both the historical import and its
+  qualified schema use, checks idempotence and preserves the saved application.
+  The complete LSP/tooling race suites, compiler diagnostic-protocol tests and
+  static gates pass. The source-boundary fuzzer completed 1,363,010 cases without
+  failure and is in CI. Follow-up review added shared source indexing, aggregate
+  edit bounds, no-op suppression and cancellation coverage; those checks pass.
+  Multi-file application and the Change Schema UI remain pending.
+
+- The compiled binary now dispatches `--schema install --worker ROLE`. The
+  history-bound installer chooses the current revision for a fresh database and
+  verifies existing origin/source history inside its protected transaction. The
+  native HTTP lesson invokes this command with a temporary, non-administrative
+  installer login and then revokes its owner membership. Focused and broad
+  control/status/crash regressions pass, including refused installation origins,
+  fresh later origins, interrupted earlier baselines, source drift, login isolation
+  and output failure. The complete standalone lesson, compiler checks, static
+  gates, manual coherence and documentation integrity pass. Follow-up review
+  found no further issue in this command. Adoption and role-script generation
+  remain pending.
+
+- Compiled applications now dispatch `--schema status` before their main or
+  debug startup. Explicit database selection, JSON and human output, source
+  mismatch reporting, cancellation and output failures have focused regression
+  coverage. Status performs no expansion or adoption. The full HTTP lesson now
+  invokes standalone status before installation completes, before V2 expands, and
+  from V1 against V2; each observation leaves the database version unchanged.
+  The status/control suites, native lesson, compiler entrypoint/embedding tests
+  and static gates pass. Follow-up review verified that an origin-specific refusal
+  remains visible in status while a different supported origin can boot. No
+  further issue was found in this status slice.
+
+- Versioned `WithDatabase` now runs the linked-history executor before publishing
+  its pool. Failed initialization can retry after installation; revisions have
+  distinct immutable pool bindings. Every physical pool or listener connection
+  checks database identity, protocol and actual worker login. Writes hold their
+  version fence through commit and then-current admission follows the lock in a
+  separate statement; reads scan before admission and commit before returning.
+  Queue claims/renewals and pub/sub operations use these gates too. Startup and
+  admission tests cover retirement interleavings, caught refusals, pool-size-one
+  transaction reuse, concurrent opens, retained rows, old-binary restarts,
+  source/catalog/role drift and replacement connections. The complete migration
+  gate and full runtime/CLI/tooling/LSP race suites pass; the latter has no skips.
+  Compiler configuration tests and runtime static gates pass. The full compiler
+  run passes all 220 test groups; the affected native catalog/storage/expansion
+  and lesson tests pass after rebuilding it. Documentation integrity passes. The independent
+  phase-0 storage/codec fixtures explicitly use unversioned application connections,
+  because they do not represent production migration history; actual compiled
+  history tests remain versioned and refuse uninstalled storage. `--schema status` is now available; installation/adoption commands,
+  heartbeat/readiness, worker topology and later phases remain pending.
+
+
+- Production control installation and additive execution now consume linked
+  compiler history. The installer protects role ownership, catalog definitions,
+  grants and immutable installation provenance. The executor validates recorded
+  source/ABI/step identities, holds the session boot lock, and commits each DDL
+  operation with its progress record after comparing the uncommitted catalog.
+  Retained-row tests cover defaults, nullable additions, old writers and restarts,
+  late origins, lookalike refusal and recorded drift. Twenty-two backend-death
+  boundaries and ten concurrent executors pass. Actual compiler-built V1–V3
+  binaries execute after deleting sources and sidecars. Review found PostgreSQL's
+  integer rendering of numeric defaults prevented old-binary restarts; comparison
+  now preserves the original integer range before widening. It also added actual
+  worker-login checks. The combined control and executor suites pass PostgreSQL 14–18. Additional
+  regressions cover DDL lock timeout with retained old writes, empty-schema
+  installation, pre-canceled entry and refusal before installation. The expanded
+  constant fuzzer passed 209,411 executions across text, numeric, integer, float
+  and boolean inputs. Complete runtime, native CLI, tooling and LSP race suites
+  pass against PostgreSQL with no skips; vet, staticcheck, tagged lint, gosec,
+  nilaway, compiler embedding, native catalog regressions, manual coherence and
+  documentation integrity pass. Follow-up review found no further issue in this
+  installer and additive-executor slice. [Execution details](migration-execution.md)
+  distinguish the implemented startup/admission path from pending schema commands
+  and later migration phases. No delivery row above
+  is complete.
+
+- Transaction routing now retains the owning opened database as well as the
+  goroutine. Cross-database queries, writes, pub/sub and nested database scopes
+  refuse before SQL or bootstrap; nested transactions refuse before borrowing a
+  second connection. A live two-database regression proves that the attempted
+  cross-server write is rejected, the caller's prior write rolls back, and the
+  other server is unchanged. It also verifies recovery and nested refusal with a
+  one-connection pool. The full runtime race suite passes all 640 test groups
+  against PostgreSQL, with no skips. Debugger regressions, embedding checks, vet,
+  staticcheck, lint, gosec, nilaway, manual coherence and documentation integrity
+  pass. Follow-up review found no further issue in the routing fix. This fixes a
+  pre-existing defect; the versioned startup and admission slice above now builds
+  on that owning-connection routing.
+
+- Compiled histories now use compact format 2. The runtime validates every
+  connection and installation origin, reconstructs catalogs from ordered
+  operations, checks physical contracts and independently recomputes each
+  `stepHash`. Source previews retain full catalogs. Step identities survive
+  connection renaming and appended revisions but include omission defaults and
+  installation-specific storage. Thirty-three compiler plan groups and twelve
+  build groups pass, including cross-language golden vectors for every operation
+  and supported constant. Runtime tests cover malformed and incomplete histories,
+  explicit origin refusals, invalid physical histories with recomputed hashes,
+  exact Unicode decoding, and independent concurrent readers. A native V1–V3
+  application compares every reconstructed catalog and identity with its source
+  preview; the standalone binary and PostgreSQL storage fixture also consume the
+  linked plan after the JSON sidecar is removed. Review added rejection of lossy
+  Unicode decoding. The strengthened fuzzer passed 201,057 executions and is in
+  CI. Complete runtime/CLI/tooling/LSP race suites, embedding checks, vet,
+  staticcheck, lint, gosec, nilaway, manual coherence and documentation integrity
+  pass. Follow-up review found no further issue in this input boundary. The
+  production executor must still bind this source plan to trusted control state,
+  installation provenance, ownership and permanent transaction admission.
+
+- Versioned PostgreSQL Go builds now produce `migration-history.json`, containing
+  every reachable connection's checked history and every installation-origin
+  variant. `Migration_selection` shares target discovery and source guards without
+  depending on the compiler driver. Builds pin captured application/history bytes
+  and actual stdlib resources, check the complete application through Go emission,
+  verify the emitted bindings, then recheck source, disk, imports and discovery.
+  Review added protection against temporary saved-byte changes and explicit
+  origin-specific refusals instead of empty plans. Twelve build regression groups
+  pass, including new unsaved entry files, imported connection owners, frozen edits
+  and stable prior steps. Twenty-seven manifest groups and the existing planning,
+  selection, preview, command and application suites pass. The native CLI compiles
+  V1–V3 and compares every transported origin with its source plan. Complete
+  CLI/tooling/LSP race suites, the compiled PostgreSQL storage round-trip, vet,
+  staticcheck, lint, manual coherence and documentation integrity pass. The fresh
+  full compiler gate passes all 220 suite groups. Follow-up review found no further
+  issue in this slice. Boot admission and execution remain pending.
+
+  The same artifact is now linked into standalone Go binaries and bound to the
+  application-owned connection. Read-only inspection returns an immutable copy;
+  missing, conflicting and namespace-mismatched registrations refuse. Four runtime
+  groups pass under the race detector. An executable imported-connection regression
+  removes the source tree and JSON sidecar before reading its history; the compiled
+  PostgreSQL storage fixture also runs with the sidecar removed. Review found and
+  fixed loss of the family reference during schema lowering by passing the checked
+  binding explicitly to the emitter. Twelve compiler build groups, runtime
+  embedding checks, native V1–V3 transport, vet, staticcheck, lint, gosec and nilaway
+  pass. Complete runtime/CLI/tooling/LSP race suites, manual coherence and
+  documentation integrity pass. The full compiler gate again passes all 220 suite
+  groups. Follow-up review found no additional issue in the linking change. The
+  linked information does not yet enforce admission or execute migrations.
+
+- Diagnostic protocol 2 now carries related source locations, documentation links,
+  compiler-owned action classes, explicit confirmation, and separate fix-all
+  eligibility. Version 1 keeps its existing bytes and diagnostic hints. The LSP
+  publishes cross-file links using each file's unsaved bytes for UTF-16 conversion;
+  retained sessions invalidate when an implicit frozen-history dependency changes.
+  Decision actions cannot become ordinary quick fixes. Six compiler regression
+  groups and the complete LSP/tooling/native CLI race suites pass. Review found
+  duplicate-key interpretation differences between exact JSON maps and Go struct
+  decoding; the transport now rejects ASCII and Unicode case-fold collisions as
+  well as escaped duplicates. The strengthened fuzzer checks interpretation
+  agreement and completed 205,284 executions without failure. Vet, staticcheck,
+  lint, gosec, nilaway, manual coherence and documentation integrity pass. The full
+  compiler gate passes all 219 suite groups. Follow-up review found no additional
+  issue in this slice. The Change Schema command, general fix-all provider and
+  phase-3 typed-hole workflow remain pending.
+
+- Source plans now take `--initial-version N` and derive storage from the
+  database's first installation revision. They still validate every source edge
+  from V1. Later installations omit earlier dropped tables and omission defaults;
+  a reintroduced index is rebuilt when it did not exist at installation, with
+  fresh compatibility and relation-name collision checks. The plan hash binds the
+  selected origin. Twenty-nine compiler plan regression groups pass, including
+  late-origin refusal of edited frozen history and invalid earlier defaults. The
+  complete native CLI race suite passes with every valid origin through V3 and
+  unchanged application files. Review added an origin-specific index collision
+  witness; follow-up review found no further issue. The full compiler gate passed
+  217 groups; its remaining SSE listener test passed on rerun with local socket
+  access. Vet, staticcheck and lint pass. This remains read-only source planning;
+  the executor must obtain installation identity from trusted control state.
+  Physical derivation is now shared through `Migration_expansion`, independent
+  of the compiler driver. Thirty plan regression groups pass, including rejection
+  of swapped/missing edges and mixed ABI inventories, and stable canonical prior
+  steps across source freezing. The command suite and native CLI planning race
+  regression also pass after extraction. Runtime metadata and execution remain
+  pending.
+
+- Frozen-source formatting is protected in the compiler, native CLI and LSP.
+  Numbered schema snapshots and completed migration namespaces retain their
+  exact bytes, including private helpers and symlink aliases. The editor uses
+  a read-only formatting query over all open buffers, so unsaved sibling
+  snapshots and completed roots protect helpers before saving. It bypasses
+  retained-query caching until sibling ownership dependencies are represented
+  there. Nine compiler regression groups and the existing formatter suite pass;
+  native generation/freezing/format/refusal/refresh and real LSP/compiler tests
+  pass. Review replaced a marker-text heuristic with the existing closure
+  metadata reader and added host rejection of a read-only response that changes
+  source bytes. Complete LSP, tooling and native CLI race suites pass, alongside
+  vet, staticcheck, lint, gosec and nilaway. The fresh full compiler gate passes
+  all 218 suite groups; follow-up review found no additional issue in this slice.
+  This prevents accidental formatting edits and does not replace source-seal or
+  persisted-history checks. The Change Schema editor lifecycle remains pending.
+
+- Live catalog inspection now compares compiler-derived physical projections
+  with PostgreSQL metadata. Every source-plan revision carries its retained
+  tables, columns, installed defaults and allocated index names. The runtime uses
+  same-server temporary comparison objects and canonical expression rendering;
+  physical column ordinals and equivalent index/constraint names do not change
+  its fingerprint. Extra columns pass only through a closed literal/type/typmod
+  classifier which never evaluates computing defaults or writes application
+  rows. Twelve PostgreSQL regression groups pass on every supported major,
+  14–18, including invalid concurrent indexes, ownership, RLS, constraints,
+  triggers, rules, partitioning/inheritance, custom casts, session settings,
+  cancellation, missing objects and caller-owned temporary tables. Review fixed
+  numeric default spelling, fingerprint normalization and session-dependent
+  rendering. The literal fuzzer completed 53,210 executions without failure and
+  is registered in CI. Native V1–V3 generation/plan tests verify the transport of
+  each physical projection. A compiled PostgreSQL application matches its actual
+  compiler plan and retains Unicode and integer boundary values after inspection.
+  Unit/race checks, embedding/file gates, vet, staticcheck, lint, gosec and nilaway
+  pass. The fresh full compiler gate passes all 217 suite groups. Follow-up review
+  found no additional issue in this slice. This is catalog observation, not
+  execution: missing recorded storage, lookalike objects and ABI/history mismatches
+  still require the pending executor's provenance and ownership decisions.
+  Bootstrap, admission, expansion and all delivery rows above remain pending.
+
+- Read-only PostgreSQL source expansion plans are connected to `tesl migrate
+  plan`. The selected complete application must pass Go emission; every adjacent
+  declaration and required source seal is checked. The storage mapping preserves
+  semantic/ABI identity, typed defaults, private entities and JSONB dependencies.
+  Plans retain dropped tables/indexes, refuse retained-name reuse, classify
+  admitted-writer index risks and never authorize execution. Twenty-six plan
+  regression groups and eleven storage groups pass. Review exposed and fixed an
+  emitter bug choosing integer storage for an application-owned `Int32 = String`;
+  an isolated compiled PostgreSQL race test now verifies actual column types and
+  round-trips text plus built-in integer bounds. The complete native CLI and source
+  writer race suites pass, including native generate/refresh/plan through V1–V3
+  with an unchanged connection owner. Multi-revision planning also exposed a V3
+  refresh deadlock on its stale current seal: completed bodies now check in the
+  proposed refreshed view after their frozen seals pass, with regression coverage
+  for valid changes, new holes and refusal of old-byte tampering. Review also added
+  retained-index write restrictions and prevented repeated removal operations in
+  unchanged later revisions. The fresh full compiler gate passes all 217 suite
+  groups; manual coherence and documentation integrity pass. All compiled
+  PostgreSQL fixtures pass under the race detector with the updated compiler.
+  Vet, staticcheck, lint, gosec and nilaway pass; the follow-up review found no
+  additional issue in this slice. See [migration planning](migration-planning.md) for the protocol and
+  bounded storage/index support. Live catalog comparison, persisted ABI/admission,
+  the executor and the remaining delivery gates are still pending.
+
+- Guarded saved-source publication is now connected to the native CLI's plain
+  `migrate generate`, with explicit `migrate recover-source` for interrupted writes.
+  The compiler remains the sole producer of edits. The Go consumer strictly
+  validates its protocol, independently checks source/discovery guards, preserves
+  racing saves through retained inodes, and uses durable prepared/committed/restored
+  outcomes for restart recovery. Review closed foreign-directory ownership,
+  unfinished-state/no-op refresh, unsaved directory-view, and bounded compiler-output
+  gaps. Real compiler/native CLI lifecycle and decision-hole regressions pass;
+  publication, inverse and cleanup process-exit tests pass under the race detector.
+  The full compiler gate passes all 215 suite groups, followed by manual coherence
+  and documentation integrity. The complete native CLI and source consumer suites
+  pass under the race detector; vet, staticcheck, lint, gosec and nilaway pass.
+  Native CLI builds also cross-compile for Windows and macOS (mutation there still
+  refuses). The real native writer generated/refreshed/completed the notes app's
+  source history: all generated files passed agent-context, the full application
+  stayed byte-identical, its five direct/four API tests passed before and after,
+  and a changed frozen helper refused with MIG013. Follow-up review added
+  no-replace inverse capture, pre-journal failure/process-exit, old-file-handle
+  saves, inverse save races and redirected-source recovery regressions. That race
+  suite passes with 80.3% aggregate source-consumer statement coverage; uncovered
+  statements include filesystem-error paths and are not claimed as verified.
+  Fuzz runs completed 297,356 and 193,095 executions without failure, and the
+  manifest fuzzer is now registered in the repository CI gate. See
+  [source write design](migration-source-writes.md). Linux mutation is implemented;
+  other platforms, editor lifecycle and production database execution are pending.
+
+- Public non-mutating source previews now use the executing compiler's build and
+  captured lifted-stdlib identity, with resource bytes/resolution pinned throughout
+  generation. `tesl migrate generate <entry> --manifest-json` checks the complete
+  proposed app, exposes `compilable` separately from preview success, refreshes by
+  default and accepts explicit `--new-revision`. It supports guarded editor buffers
+  and virtual entries. Review closed a nested-schema selection gap: the source
+  actually imported by the connection must match the discovered history root.
+  Focused ABI (21), preview (10), target (22) and command (12) groups pass, including
+  a real compiler process; the complete native CLI suite passes with its required
+  local listeners. The full compiler gate passes all 215 suite groups, followed by
+  manual coherence and documentation integrity. A real CLI consumer generated,
+  refreshed and completed revisions in a disposable full-app project; every source
+  passed agent-context, a changed frozen helper refused with MIG013 in both helper
+  and app, and all five direct/four API tests passed with byte-identical app source.
+  Follow-up review found no additional issue in this slice.
+  This is source integration, not a persisted execution ABI or a physical plan.
+  The source writer is tracked above; editor lifecycle and the production
+  executor remain pending.
+
+- Completed migration source now has an independent raw closure seal. Starting
+  the next revision retargets source before sealing the root, its schema metadata
+  and all transitive private helpers. Current references, changed bytes, missing
+  metadata and changed import resolution refuse. Direct/private/unsaved queries,
+  application builds and start/refresh enforce these records; unchanged shared
+  helpers remain reusable. Source records are not the persisted runtime backstop.
+  Twenty-seven closure regression groups pass. Review found and closed a direct
+  helper-query bypass when a metadata member was removed; membership is now
+  validated before it can select queries. All 212 groups in the fresh compiler
+  gate pass, followed by manual coherence and documentation integrity. A fresh
+  independent CLI scenario generated successive revisions with a private helper,
+  rejected a valid typed helper edit in both helper and full app with MIG013, and
+  passed the unchanged app’s five direct and four API tests after restoration.
+  The application remained byte-identical; this is source integration using
+  Memory, not PostgreSQL migration execution.
+
+- Application checking now follows a database’s declared migration history even
+  without ordinary imports of migration modules. A full-app CLI probe exposed
+  the previous gap: MIG003 in the migration did not prevent the app from checking.
+  The shared frontend now checks current/completed migration bodies and private
+  helpers, requires recorded schema seals, preserves application name boundaries,
+  and refuses missing history. Regressions cover Go emission, imported owners,
+  independent families, shared imports, unsaved edits, whole-snapshot editor
+  sessions and ordinary application types. Source checking does not constitute
+  runtime migration execution. All twenty-four application dependency groups pass,
+  followed by all 211 groups in the complete compiler gate. The original real CLI
+  reproduction now refuses both files with MIG003; restoring the migration passes
+  every source query and the unchanged app’s five direct and four API tests.
+  Manual coherence, documentation integrity and the follow-up review pass.
+
+- Explicit application target resolution now finds the connection owner through
+  the import graph and infers only a single database. Nineteen regression groups
+  cover qualified/ambiguous names, imported owners, legacy/invalid ownership,
+  unsaved/virtual applications, stale selections, changed imports, malformed and
+  special files, and shared/cyclic dependencies. Target-bound start/refresh retain
+  the application guards in their manifests. Composition adds six groups (26
+  manifest groups total) for stale source/disk/document/discovery inputs and
+  conflicting operations; it never re-captures a changed selection. Focused target,
+  manifest, generation and refresh gates pass. The fresh complete compiler gate
+  passes all 210 suite groups; manual coherence and documentation integrity pass.
+  An independent JSON consumer exercised start, refresh and another start on a
+  disposable copy of the full lesson 82 app. All generated files passed the real
+  CLI's agent-context, saved hashes matched, and the full app stayed byte-identical.
+  Its five direct and four API tests passed before and after. This is source
+  integration with Memory, not PostgreSQL row migration through an executor.
+  Workspace entry discovery/preferences, public CLI/editor transport, complete
+  application diagnostics and atomic apply/recovery remain pending.
+- JSONB design review identified a further rolling-compatibility obligation:
+  decoder-compatible wire changes can change equality predicates and indexes for
+  admitted builds. Section 10 now requires preserving SQL behavior and describes
+  separate physical storage as the conservative transforming path. A generation
+  marker also cannot prove new representation if current writers emit old wire
+  data. The compiled codec oracle now pins the equality counterexample with actual
+  PostgreSQL predicates before/after a bridge rewrite; planner/query adaptation is
+  still pending. The fresh compiled PostgreSQL regression passes under the race
+  detector, and its traceability map is regenerated.
+- Initial source refresh now returns guarded previews with full compiler
+  diagnostics. It verifies frozen history, updates the undeployed target seal,
+  rechecks generated Same claims, and reconciles individual entity entries while
+  retaining handwritten rules, helpers, tests and comments. Automatic entries are
+  limited to New, Drop and checked additive adapters; remaining decisions emit
+  compile-blocking MIG003 placeholders. Deliberate Same omissions are retained.
+  Review caught a Same shared by record/codec namespaces needing all namespaces
+  checked, duplicate diagnostics for the same dependency, and edited entity aliases
+  needing ownership protection. Source merge has twelve regression groups; refresh
+  has nineteen, and declaration checking has twenty-two including placeholder
+  imports and backend refusal. Focused checks pass, followed by the fresh complete
+  compiler gate: all 209 suite groups pass. Manual coherence and documentation
+  integrity also pass.
+  Public CLI/editor target resolution, atomic apply/recovery, general row functions
+  and the production planner/executor remain unfinished.
 - Refresh ownership now has precise source ranges and generated-node markers.
   Thirteen syntax groups cover raw literal spellings, diagnostic-span overreach,
   comments/separators, Unicode/tabs/CRLF, stale AST identities and overlapping edits.
@@ -78,8 +484,8 @@ are included. Adoption, additive execution and the remaining lessons are pending
   The starter annotates its Same claims, with integration assertions before and
   after finalization. The sparse checker now exposes checked requirements before
   entry selection; its fifteen groups retain every stored occurrence and reject
-  invalid identity claims without placeholder entries. Entry refresh/merging and
-  its public commands remain pending. Focused syntax, provenance, sparse, additive,
+  invalid identity claims without placeholder entries. Public commands remain
+  pending. Focused syntax, provenance, sparse, additive,
   declaration and generation suites pass. The fresh full compiler gate passes all
   207 suite groups; manual coherence and documentation integrity also pass.
 - Revision starting now builds a checked, non-mutating source manifest: freeze

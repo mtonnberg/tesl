@@ -10,11 +10,13 @@ import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection
 import NotesSchema.VCurrent exposing [Note]
 import Operations exposing [run, titleOf]
 
+# This independent storage/codec oracle deliberately uses an unversioned
+# connection. It neither installs nor bypasses production migration history.
+# Production startup has separate compiled-history integration regressions.
 database FixtureDb = Database {
-  schema: NotesSchema.VCurrent
-  migrations: NotesSchema.Migrate
+  schema: "migration_fixture"
+  entities: [Note]
   backend: Postgres (PostgresConfig {
-    namespace: "migration_fixture"
     dbName: env "TESL_FIXTURE_DATABASE"
     user: env "TESL_TEST_POSTGRES_SHARED_USER"
     password: env "PGPASSWORD"

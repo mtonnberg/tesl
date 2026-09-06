@@ -24,6 +24,16 @@ val overlays : t -> (string * string) list
     This check does not replace the separate disk precondition. *)
 val verify_source : t -> documents:document list -> (unit, error list) result
 val verify_disk : t -> (unit, error list) result
+(** Read exact input bytes and compare each with its original source precondition.
+    A build can pin these bytes while deriving output, then recheck source, disk,
+    imports and directory guards after leaving the pinned scope. *)
+val source_files : t -> ((string * string) list,error list) result
+(** Union independent previews, preserving their original source/disk/import and
+    directory preconditions. Different roots, document versions, preconditions or
+    competing edits refuse. Equal operations are deduplicated deterministically.
+    The combined proposed paths and current preconditions are checked; this does
+    not apply edits, sequence dependent previews or re-capture changed inputs. *)
+val combine : t -> t -> documents:document list -> (t,error list) result
 (** Stable version-1 JSON with separate source/disk hashes, hashed directory
     membership, exact replacement bytes (lowercase hex) and editor versions.
     Paths are UTF-8. Source bytes need not be. It grants no execution authority.

@@ -16,11 +16,13 @@ import Tesl.Json exposing [stringCodec]
 import Tesl.App exposing [App]
 import JsonbNotesSchema.VCurrent exposing [Note, Details, Change(..), validText]
 
+# This independent storage/codec oracle deliberately uses an unversioned
+# connection. It neither installs nor bypasses production migration history.
+# Production startup has separate compiled-history integration regressions.
 database FixtureDb = Database {
-  schema: JsonbNotesSchema.VCurrent
-  migrations: JsonbNotesSchema.Migrate
+  schema: "migration_jsonb"
+  entities: [Note]
   backend: Postgres (PostgresConfig {
-    namespace: "migration_jsonb"
     dbName: env "TESL_FIXTURE_DATABASE"
     user: env "TESL_TEST_POSTGRES_SHARED_USER"
     password: env "PGPASSWORD"

@@ -29,7 +29,7 @@ type refresh_preview = {
   diagnostics : Compile.diagnostic list;
 }
 (** Refresh a selected, already sealed current migration after undeployed schema
-    edits. Frozen history is verified before replacing the current target seal.
+    edits. Frozen schema seals are verified before replacing the current target seal.
     Generated Same claims are rechecked; deliberate omissions are retained.
     New/Drop and proof-free additive adapters are generated where established by
     the checked inventories. Other required entries get compile-blocking todo
@@ -39,6 +39,8 @@ type refresh_preview = {
     returned, including holes and stale handwritten entries. An error-bearing
     preview is not a compilable program. The compiler cannot infer deployment
     state; this source-only API provides no permission to change deployed history.
+    Completed migration and helper source closures are sealed when starting the
+    next revision and verified before refreshing later revisions.
     No files are written. General row-function holes and transformations remain
     separate elaboration work. *)
 val refresh : compiler_abi:string -> project_root:string -> family:string ->

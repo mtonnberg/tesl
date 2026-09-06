@@ -1097,19 +1097,19 @@ let stdlib_repo_root () =
     basename, e.g. [Tesl.List] -> [Some "list.tesl"].  Only modules that have
     actually been lifted return [Some]; every other [Tesl.*] returns [None] so
     callers fall back to their hardcoded rows. *)
-let lifted_stdlib_basename (module_name : string) : string option =
-  match module_name with
-  | "Tesl.List" -> Some "list.tesl"
-  | "Tesl.ListPrim" -> Some "list-prim.tesl"
-  | "Tesl.Either" -> Some "either.tesl"
+let lifted_stdlib_sources = [
+  "Tesl.List", "list.tesl";
+  "Tesl.ListPrim", "list-prim.tesl";
+  "Tesl.Either", "either.tesl";
   (* #78.  The whole calendar module is written in Tesl — that is where its
      subtle bugs would live (era arithmetic, the ISO week-year rule, day-of-month
      clamping), so it is the language's own checker that verifies them.  Its
      signatures, its proof obligations and its proof-carrying returns therefore
      all come from the source, and it has NO function rows in [stdlib_env] or
      [stdlib_func_infos]. *)
-  | "Tesl.CivilTime" -> Some "civil-time.tesl"
-  | _ -> None
+  "Tesl.CivilTime", "civil-time.tesl";
+]
+let lifted_stdlib_basename module_name = List.assoc_opt module_name lifted_stdlib_sources
 
 (** One resource-directory contract for installed tooling and sessions. *)
 let stdlib_source_directories () =
@@ -1130,9 +1130,16 @@ let stdlib_source_directories () =
     wins, followed by resources beside the real compiler executable, then the
     development checkout and historical collections layout. This NEVER points
     at a runtime require; emission is unaffected. *)
+let fixed_stdlib_sources : (string * string) list option ref = ref None
+let with_fixed_stdlib_sources paths f =
+  let previous = !fixed_stdlib_sources in
+  Query_cache.clear (); fixed_stdlib_sources := Some paths;
+  Fun.protect ~finally:(fun () -> fixed_stdlib_sources := previous; Query_cache.clear ()) f
+
 let lifted_stdlib_source_path (module_name : string) : string option =
   match lifted_stdlib_basename module_name with
   | None -> None
+  | Some base when !fixed_stdlib_sources <> None -> List.assoc_opt base (Option.get !fixed_stdlib_sources)
   | Some base ->
     let candidates = List.map (fun directory -> Filename.concat directory base)
       (stdlib_source_directories ()) in

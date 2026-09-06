@@ -155,6 +155,9 @@ let frozen_target () = with_project (fun root path file source ->
   let completed = get (H.create ~previous:(seal root (path "schema/notes/v1.tesl"))
     ~current:(seal root (path "schema/notes/v2.tesl"))) in
   let finished = get (H.replace ~file ~source:rewritten completed) in
+  ignore (refuses "MIG013" file finished);
+  let closure = get (Migration_closure.capture ~project_root:root ~root_file:file ~source:finished) in
+  let finished = get (Migration_closure.attach ~file ~source:finished closure) in
   accepts file finished;
   write (path "schema/notes/v2/notes.tesl") (child "V2" ", archivedAt: Maybe String" ^ "# edited frozen target\n");
   ignore (refuses "MIG013" file finished))

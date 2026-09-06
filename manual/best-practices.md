@@ -627,6 +627,12 @@ Those tests cannot acquire database capabilities or a connection. See the
 [schema and migration guide](tour.md#schema-and-migrations) for the module layout
 and the current implementation boundary.
 
+Frozen snapshots and completed migrations keep their exact recorded bytes.
+CLI formatting refuses to rewrite them, editor formatting leaves them alone,
+and format checks exempt them from later style changes. Format `VCurrent` and
+the undeployed migration normally, then refresh the generated migration if its
+current source seal changed. This also applies to private helper files.
+
 Keep the checks that establish stored invariants beside the facts they declare.
 Only that declaring module may produce a fact through `check` or `establish`.
 An application or migration can call the owning validator and pass already-proven
@@ -644,6 +650,12 @@ codec or validation rules change, even though PostgreSQL still calls the column
 values. Retiring an old application does not establish that all its old JSON
 values have been rewritten.
 
+Successful decoding is only part of compatibility. Adding an extra JSON key can
+leave decoded records unchanged while breaking an old query that compares the
+whole JSONB value. Migration planning must preserve admitted SQL predicates and
+indexes as well as readers and writers; a fallback decoder alone does not prove
+that a representation change is safe during a rolling deployment.
+
 When only the stored representation changes, keep the changes in the schema and
 migration files; application handlers and API tests can stay the same.
 Adding a derived field is different: the migration supplies its value for existing
@@ -658,15 +670,153 @@ check that omitted entities are unchanged. An explicit `Same` must pass the
 compiler's semantic comparison. When a record and its codec share a name, that
 claim checks both; an unchanged record cannot conceal a changed codec. The current
 source checker covers additive declarations and literal defaults. The physical
-planner and executor are still under development.
+planner, additive executor, versioned application startup and SQL admission have
+regression coverage. Typed transformations and the complete migration lifecycle
+are still under development.
+
+A generated `todo "reason"` in a migration entity entry is an unresolved decision,
+reported as MIG003. It blocks compilation and has no runtime value. Read the
+reason, supply the required value rule or adapter, and check the file again.
+Checking an application follows its database’s declared migration history, even
+without an ordinary migration import. Unresolved decisions, invalid private
+helpers and missing history block the application build. Application histories
+require recorded schema seals; a new V1 schema needs no migration yet.
+Refresh preserves handwritten rules, helpers and tests; an obsolete handwritten
+entry remains visible with a diagnostic. Removing a Same claim deliberately asks
+for stored-value revalidation, so refresh does not put that claim back.
 
 A recorded history header covers private schema helpers as well as entities.
+Completing a revision also seals the migration’s full source closure, including
+private functions, tests and comments. A helper shared with a completed migration
+is frozen too: keep it unchanged and put new behavior in a new revision’s helper.
+Even a change that still type-checks is an edited-history error.
 MIG001 means its current schema input changed; refreshing that revision is only
 appropriate before deployment. MIG013 identifies changed frozen source or invalid
 history metadata. Restore the recorded source and make a forward revision instead
 of rewriting deployed history. Changing compiler ABI is a separate check and does
-not by itself mean a frozen source file was edited. Header checks are implemented;
-the public generator and complete runtime history enforcement are still pending.
+not by itself mean a frozen source file was edited. Header checks, source previews and guarded source writes on Linux are implemented.
+Complete runtime history enforcement is still pending.
+
+Preview the next source changes with:
+
+```sh
+tesl migrate generate app.tesl --manifest-json
+```
+
+For a new schema this proposes the first frozen snapshot and migration. Repeating
+it refreshes the same migration; add `--new-revision` to propose freezing the
+current revision and starting the next. With multiple databases, select one with
+`--database App.Main`. The connection stays in the app, and the command follows
+the schema that connection actually imports.
+
+The preview writes nothing. Its JSON includes the exact file edits, full app
+diagnostics and `compilable`. A generated migration can still need a decision,
+so `ok: true` with `compilable: false` is an incomplete proposal. Resolve its
+diagnostics before deployment.
+
+To write the proposed files on Linux, omit `--manifest-json`:
+
+```sh
+tesl migrate generate app.tesl
+```
+
+Generation keeps the connection and handlers in the application untouched. Its
+JSON reports the files written and whether the proposal compiles. If generation
+is interrupted, run `tesl migrate recover-source --project-root DIR` with the
+project directory. Recovery preserves concurrent edits and reports any conflict
+that needs resolving. It finishes cleanup after a committed write, or restores
+an unfinished write. Preview remains available on other platforms; guarded
+source writes there are pending.
+
+These commands change source history. They do not move stored database rows.
+Editors supporting versioned document edits can run **Fix All (Tesl)** for small
+compiler-proven corrections, such as changing an accidental historical schema
+import to `VCurrent`. It checks the current buffers and excludes migration
+decisions, source generation and confirmation-requiring changes. Conflicting fixes
+are left for individual review. Fix-all does not save files or contact a database.
+
+Versioned PostgreSQL startup now executes supported additive changes before the
+application body runs, using the history compiled into that binary. The protected
+control objects must already be installed by an operator; startup refuses missing
+installation and unrecorded existing tables. The application owns its worker login
+and optional `PostgresConfig.controlOwner` (default `tesl_control`). Schema and
+migration modules own neither credentials nor connection configuration.
+
+Reads and writes check whether their compiled schema version remains admitted.
+A refused operation returns HTTP 503. Additive deployments retain existing rows
+and allow admitted old binaries to keep using their original queries. [Lesson 83](../example/learn/lesson83-additive-migrations.tesl) runs a full notes API
+through this additive scenario against retained PostgreSQL rows. Its schema owns a
+pure row constructor; changing that constructor and adding the column leaves the
+whole application file and API tests unchanged. The scenario also restarts the old
+binary while the newer app serves. Adoption and the remaining lifecycle are
+still in progress.
+
+For a fresh database, the operator provisions a no-login control owner and the
+application worker login. A temporary installer login receives membership in the
+control owner and runs the compiled binary using the application's connection
+settings:
+
+```sh
+./app --schema install --worker notes_worker --database MyApp.Main
+```
+
+The `--worker` is the application's login, separate from the installer connection.
+For lesson 83, set `NOTES_DB_USER` to the installer login for this command. The
+operator then revokes its temporary control-owner membership and launches the
+application with the worker credentials. Installation creates protected control
+state; normal startup creates the entity storage. A fresh database starts at the
+binary's current revision, while a retry preserves its recorded installation
+origin. The command refuses pre-versioning tables rather than adopting them.
+
+To inspect a running deployment's recorded migration state, use its compiled
+application binary:
+
+```sh
+./app --schema status
+./app --schema status --database MyApp.Main --json
+```
+
+Use the exact connection identity printed by the command when there are several
+databases. Status reports installed and admitted versions, expansion progress,
+recorded heartbeats and source-history mismatches. It exits after inspection;
+it does not start the server or apply a pending migration. JSON goes to stdout,
+and errors go to stderr with a nonzero exit status. Inspection is an observation,
+not permission to skip the admission checks on subsequent requests.
+
+For a PostgreSQL database, inspect the checked expansion history with:
+
+```sh
+tesl migrate plan app.tesl --database App.Main
+```
+
+This read-only report includes every source revision from V1: new tables,
+nullable/defaulted columns, planned concurrent indexes, and storage retained for
+older applications. Removing an entity from the current schema does not delete
+its old table. Each revision includes its expected retained catalog, so a default
+or index introduced earlier remains visible when reviewing a later deployment.
+Index changes can narrow compatibility even without uniqueness:
+an index over unbounded text may reject a wide value that older code writes.
+The report explains these cases. JSONB codec changes still require a migration
+decision even when the column remains JSONB.
+
+If the database was first installed at a later revision, pass that version:
+`tesl migrate plan app.tesl --initial-version 3`. This is its original installation
+version, not today's deployment version. A fresh V3 database does not have tables
+removed in V2, while a database upgraded from V1 still retains them. The planner
+checks the whole source history in both cases and reports storage from the chosen
+initial version. The default is V1; this command does not read the database to
+discover its installation history.
+
+The plan checks the complete application, including storage codec emission. It
+does not connect to PostgreSQL or compare its live catalog, and reports
+`executable: false` while database execution is under implementation. A source
+plan is not evidence that stored rows have migrated.
+
+In the editor, a frozen-source error links to the migration that recorded the
+snapshot. Those links use unsaved buffers too. Migration decisions require an
+explicit choice; the editor does not offer them as ordinary text fixes. Tools
+that need the related locations and action classification can request
+`tesl --check-json-v2 app.tesl`; the original JSON endpoint remains available.
 
 ### Typed Queries
 

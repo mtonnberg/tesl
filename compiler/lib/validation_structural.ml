@@ -2365,7 +2365,7 @@ let config_block_schema = function
      env-backed config fields. *)
   | "PostgresConfig" -> [ "dbName", VStr, true; "user", VStr, true;
                           "password", VStr, true; "connection", VConn, true;
-                          "poolSize", VInt, false; "namespace", VStr, false ]
+                          "poolSize", VInt, false; "namespace", VStr, false; "controlOwner", VStr, false ]
   (* The two PostgresConnection shapes — validated internally via [check_record]'s
      "__Tcp"/"__Socket" rows; listed here so the LSP config-context query can
      offer field completion/hover inside a `connection: TcpConnection { … }`. *)
@@ -2408,6 +2408,8 @@ let config_field_doc (block : string) (field : string) : string =
     "Versioned schema root imported by the application (`FamilySchema.VCurrent`), or the legacy PostgreSQL schema string with `entities:`."
   | "Database", "migrations" ->
     "Migration directory prefix for the same schema family (`FamilySchema.Migrate`). This is a contextual module reference, not a runtime value."
+  | "PostgresConfig", "controlOwner" ->
+    "No-login owner of versioned migration control objects (default tesl_control). Provisioned by the operator; connection settings remain in the application."
   | "PostgresConfig", "namespace" ->
     "Physical PostgreSQL schema name. Required as a nonempty static string when Database.schema is a module reference; connection configuration stays in the application."
   | "TelemetryConfig", "service" ->
@@ -2655,6 +2657,7 @@ let check_typed_config_blocks (m : module_form) : validation_error list =
              then [make_error r.loc "`Database` is missing required field `entities`"] else [])
           @ (if not module_form && (List.mem_assoc "migrations" top || List.mem_assoc "namespace" postgres_fields)
              then [make_error r.loc "legacy `Database.entities` configuration cannot also specify `migrations:` or `PostgresConfig.namespace`"] else [])
+          @ (if not module_form && List.mem_assoc "controlOwner" postgres_fields then [make_error r.loc "`PostgresConfig.controlOwner` requires a versioned schema module"] else [])
           @ (if module_form && is_postgres then
                match List.assoc_opt "namespace" postgres_fields with
                | Some (ELit { lit = LString namespace; _ }) when namespace <> "" && not (String.contains namespace '\000') && String.length namespace <= 63 -> []

@@ -419,3 +419,59 @@
  (name test_migration_refresh)
  (modules test_migration_refresh)
  (libraries tesl_compiler_lib alcotest str unix))
+
+(test
+ (name test_migration_target)
+ (modules test_migration_target)
+ (libraries tesl_compiler_lib alcotest str unix))
+
+(test
+ (name test_migration_application)
+ (modules test_migration_application)
+ (libraries tesl_compiler_lib alcotest str unix))
+
+(test
+ (name test_migration_closure)
+ (modules test_migration_closure)
+ (libraries tesl_compiler_lib alcotest str unix))
+
+(test
+ (name test_migration_abi)
+ (modules test_migration_abi)
+ (libraries tesl_compiler_lib alcotest str unix))
+
+(test
+ (name test_migration_preview)
+ (modules test_migration_preview)
+ (libraries tesl_compiler_lib alcotest str unix))
+
+(test
+ (name test_migration_command)
+ (modules test_migration_command)
+ (deps ../bin/main.exe)
+ (libraries tesl_compiler_lib alcotest str unix))
+
+(test
+ (name test_migration_storage)
+ (modules test_migration_storage)
+ (libraries tesl_compiler_lib alcotest str unix))
+
+(test
+ (name test_migration_plan)
+ (modules test_migration_plan)
+ (libraries tesl_compiler_lib alcotest str unix))
+
+(test
+ (name test_migration_format)
+ (modules test_migration_format)
+ (libraries tesl_compiler_lib alcotest str unix))
+
+(test
+ (name test_diagnostic_protocol)
+ (modules test_diagnostic_protocol)
+ (libraries tesl_compiler_lib alcotest str unix))
+
+(test
+ (name test_migration_program)
+ (modules test_migration_program)
+ (libraries tesl_compiler_lib alcotest str unix))

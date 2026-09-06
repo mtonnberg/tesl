@@ -1,12 +1,13 @@
 (** Shared implementation of one-shot and retained read-only source queries.
-    Payloads keep their existing version-1 schemas and exit-status semantics. *)
+    Legacy queries retain version 1; --check-json-v2 explicitly selects richer
+    diagnostics while preserving the same checking and exit-status semantics. *)
 type response = { json : string; exit_code : int }
 
 let position_flags = ["--definition-json"; "--occurrences-json"; "--type-at-json";
   "--field-at-json"; "--config-context-json"; "--completions-json";
   "--signature-help-json"; "--selection-range-json"; "--type-definition-json"]
-let file_flags = ["--check-json"; "--agent-context-json"; "agent-context";
-  "--local-bindings-json"; "--semantic-json"]
+let file_flags = ["--check-json"; "--check-json-v2"; "--agent-context-json"; "agent-context";
+  "--local-bindings-json"; "--semantic-json"; "--format-json"]
 let supports flag = List.mem flag (position_flags @ file_flags)
 let valid_args flag position =
   if List.mem flag position_flags then List.length position = 2
@@ -24,12 +25,18 @@ let run ~filename ~logical_path flag position =
   let path = logical_path in
   let ok json = { json; exit_code = 0 } in
   match flag with
-  | "--check-json" ->
+  | "--format-json" ->
+    let reason = Migration_format_guard.reason ~file:path ~source in
+    let formatted = if reason <> None then source else Formatter.format_source source in
+    ok (Printf.sprintf {|{"version":1,"formatted":%s,"readOnly":%b,"reason":%s}|}
+      (Compile.json_encode_string formatted) (reason<>None)
+      (Option.fold ~none:"null" ~some:Compile.json_encode_string reason))
+  | "--check-json" | "--check-json-v2" ->
     let diags = Compile.check_source path source in
     let diags = if List.exists (fun (d : Compile.diagnostic) ->
       d.source = "parser" || d.source = "lexer") diags then diags
       else diags @ Linter.lint_file ~logical_path:path filename in
-    { json = Compile.diagnostics_to_json diags;
+    { json = (if flag="--check-json-v2" then Compile.diagnostics_to_json_v2 diags else Compile.diagnostics_to_json diags);
       exit_code = if List.exists (fun (d : Compile.diagnostic) -> d.severity = "error") diags then 1 else 0 }
   | "--agent-context-json" | "agent-context" ->
     let extra_diags = Linter.lint_file ~logical_path:path filename in

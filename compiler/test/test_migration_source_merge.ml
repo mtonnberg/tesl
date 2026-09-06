@@ -94,6 +94,8 @@ let unsupported_sibling () =
   let source = replace "\n  }" "\n    Manual: Additive [Default count (1 + 2)] # manual rule\n  }" source in
   let result = get (merge source [wanted "Note" "Drop";wanted "Tag" "New"]) in
   check (list string) "unsupported sibling stays protected" ["entity:Manual"] result.protected;
+  check (list string) "append cannot be swallowed by preceding user expression"
+    ["entity:Note";"entity:Manual";"entity:Tag"] (List.map fst (ids (view result.source) "entities"));
   check bool "manual rule survives exact" true
     (try ignore (Str.search_forward (Str.regexp_string "Manual: Additive [Default count (1 + 2)] # manual rule") result.source 0); true with Not_found -> false)
 let keys_and_ranges () =

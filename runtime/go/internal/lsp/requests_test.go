@@ -165,12 +165,17 @@ func (connection *requestConnection) response(t *testing.T, id string, code int)
 }
 
 func TestServerCancelsActiveRequestsAndDiscardsLateResults(t *testing.T) {
-	for _, method := range []string{"textDocument/hover", "textDocument/completion", "textDocument/formatting", "completionItem/resolve"} {
+	for _, method := range []string{"textDocument/hover", "textDocument/completion", "textDocument/formatting", "completionItem/resolve", "textDocument/codeAction"} {
 		for _, late := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/late=%v", method, late), func(t *testing.T) {
 				compiler := &requestCompiler{started: make(chan struct{}), canceled: make(chan struct{}), lateSuccess: late}
 				connection := newRequestConnection(t, compiler)
 				params := connection.position()
+				if method == "textDocument/codeAction" {
+					connection.send(t, "0", "initialize", map[string]any{"capabilities": map[string]any{"workspace": map[string]any{"workspaceEdit": map[string]bool{"documentChanges": true}}}})
+					connection.response(t, "0", 0)
+					params["context"] = map[string]any{"only": []string{"source.fixAll.tesl"}, "diagnostics": []any{}}
+				}
 				if method == "completionItem/resolve" {
 					params = map[string]any{"label": "List.length"}
 				}

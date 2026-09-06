@@ -2753,7 +2753,8 @@ change is reported at every stored entity field and job payload that depends on 
 HTTP-only records and codecs remain outside this storage inventory.
 
 A representation-only change can use the existing `fromJson [current, legacy]`
-list as its read adapter without eagerly rewriting stored rows. The snapshot
+list as its read adapter without eagerly rewriting stored rows when the plan also
+preserves the SQL behavior of every admitted binary, as required below. The snapshot
 retains the old codec; the planner generates or verifies the legacy adapter
 against it and reports that old representations remain. This adapter belongs to
 the versioned migration plan, not a separate untracked migration history. A
@@ -2773,6 +2774,24 @@ list alone never earns an `ONLINE` classification. Removing a constructor or
 changing its meaning requires an explicit mapping or rejection; silently discarding
 stored values is not a shape adapter. Lossy decisions appear in the plan.
 
+**Decoding compatibility does not establish SQL compatibility.** An old codec
+encoding a logical value as `{"title":"hello"}` and a bridge encoding it as
+`{"title":"hello","body":"hello"}` can both decode the bridge value. Yet an old
+query comparing the entire JSONB column with its encoded parameter no longer
+matches it. JSON paths, ordering, indexes and constraints can likewise depend on
+the stored representation. Adapter-only classification must preserve all such
+behavior for every admitted binary; inspecting only the current source's queries
+does not establish what older admitted builds query.
+
+The conservative path for an encoder or semantic change is the ordinary
+transforming migration: use new physical storage for the current representation,
+retain old-format write-back in the old storage during the roll, restrict queries
+on the new field until its required backfill, then contract the old storage. A
+logical field can keep its name and SQL type while requiring a new physical column.
+An in-place adapter needs separate evidence for any SQL-observable difference.
+Decoder priority must also preserve the meaning of old data, including objects
+containing both old and new keys; successful parsing alone is insufficient.
+
 **Decoder removal requires durable evidence.** V9 is only an earliest version
 boundary, not evidence that V7-shaped JSON has disappeared. Untouched rows retain
 their representation indefinitely. A rewrite-now pass uses the ordinary backfill,
@@ -2782,12 +2801,18 @@ are fenced out, and the history must record that completion before pruning the
 decoder. Removing an adapter is refused while affected rows, admitted writers or
 required catch-up history can still require it. The plan distinguishes "old reader
 retired" from "old representation eliminated".
+If an admitted current-generation writer still emits the old wire format, an
+entity generation marker alone cannot establish representation finality. A rewrite
+must include those writes or use distinct physical storage/evidence; filtering
+only rows below the target generation would incorrectly skip them.
 
 Acceptance includes generated old/new reader and writer cross-products over one
 JSONB column, an untouched legacy row surviving two further schema versions, a
 concurrent old writer during rewrite, crash/resume, nested records and ADTs,
 constructor removal with explicit transformation/rejection, and decoder pruning
-before/after the final evidence. Full-app lessons keep HTTP handlers and API
+before/after the final evidence. It also includes old encoded SQL predicates before
+and after a decoder-compatible bridge, decoder precedence over conflicting keys,
+and current-generation writes that retain an old wire format. Full-app lessons keep HTTP handlers and API
 assertions unchanged for storage-only representation changes. The existing codec
 fallback mechanism is available today; this planning and execution integration is
 part of phase 5.
@@ -2799,6 +2824,7 @@ uses (`--fmt`, `--lint`, `--check`):
 
 ```
 tesl migrate generate  <entry> [--database D] [--suggest-online]   # the everyday verb; creates the next revision if none exists
+tesl migrate plan      <entry> [--database D] [--initial-version N] # read-only checked source expansion history; no database execution
 tesl migrate rebase    <entry> [--database D] [--combine]
 tesl migrate repair    <entry> [--database D] --entity <E> [--fixture <path>]
 tesl migrate contract  <entry> [--database D] V<n>                   # writes v<n>-contract.tesl (authorisation)
@@ -5012,10 +5038,14 @@ generator-owned redundant entry, copy a helper closure — are preferred quick f
 
 ### LSP requirements
 
-The current server (`runtime/go/internal/lsp/server.go`) applies code-action edits to
-the active document only, exposes `workspace/executeCommand` with a single
-`tesl.applyFix`, and filters diagnostics to the active document's path. Migration
-tooling needs four things it does not have:
+The current server (`runtime/go/internal/lsp/server.go`) applies code-action edits
+to the active document and groups imported-file diagnostics by URI. The new
+`--check-json-v2` path carries related locations, documentation links and action
+metadata; the server converts related spans using open buffers and excludes
+decisions from ordinary quick fixes. It provides guarded single-document fix-all
+and read-only multi-file generation previews; editor application and the Change
+Schema UI remain pending. The following requirements describe the complete
+migration workflow; see the implementation ledger for delivered slices:
 
 1. **Multi-file generation as a command over a non-mutating compiler API.**
    `tesl.generateMigration` under `workspace/executeCommand` must not shell out to a
