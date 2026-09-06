@@ -1,0 +1,6 @@
+module LessonNotesSchema.VCurrent exposing []
+
+# The schema root defines membership by importing its child modules.
+# It exports no application names. The application imports Notes directly.
+# Freezing this root also freezes Notes and every private helper it reaches.
+import LessonNotesSchema.VCurrent.Notes

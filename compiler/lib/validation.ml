@@ -22,8 +22,10 @@ open Validation_advanced
 (* Re-export the core type so compile.ml can still use Validation.validation_error *)
 type validation_error = Validation_common.validation_error
 
-let check_module (m : module_form) : validation_error list =
+let check_module_unscoped (m : module_form) : validation_error list =
   let decls = m.decls in
+  let queue_type_identity = queue_type_identity (queue_type_aliases m) in
+  let queue_for_job = queue_bindings_for_module m in
   (* 2026-07 matrix: validators whose metadata tables (entity columns, codec
      target types, newtype→base, record proof-anns/invariants) were built from
      LOCAL decls only get the merged list — local decls first (local-wins for
@@ -67,7 +69,17 @@ let check_module (m : module_form) : validation_error list =
   @ (TCapability @: check_capability_cycles decls)
   @ (TProof @: check_check_fn_has_proof_return decls)
   @ (TStructural @: check_auth_fn_arity decls)
-  @ (TDatabase @: check_entity_structure ~facts decls)
+  (* Migration imports are historical data views. Their index declarations
+     belong to distinct schema revisions, not additional physical owners in
+     the migration module. Each imported schema still passes its own structural
+     checks through the dependency traversal. *)
+  @ (TDatabase @: (if Migration_schema.migration_family m.module_name <> None
+      then check_entity_structure decls
+      else
+        (* Lookup metadata contains both qualified and exposed names. Physical
+           indexes belong to the declaration once, not once per lookup alias. *)
+        check_entity_structure
+          (decls @ load_imported_type_decls ~include_exposed_aliases:false m)))
   (* Given the imported-type harvest, not [decls]: an upsert on an entity
      declared in ANOTHER module must be checked against THAT entity's unique
      indexes, and the harvest carries no walkable bodies so the same code is
@@ -76,16 +88,19 @@ let check_module (m : module_form) : validation_error list =
   @ (TCodec @: check_capture_codec_types (decls_with_imported_types @ capture_decls))
   @ (TProof @: check_capture_proof_via ~facts (decls @ capture_decls))
   @ (TProof @: check_auth_proof_via ~facts decls)
+  @ (TProof @: check_api_body_proof_boundary decls)
   @ (TProof @: check_endpoint_proof_subject_binding decls)
   @ (TStructural @: check_api_endpoint_structure ~facts decls)
   @ (TStructural @: check_queue_structure decls)
   @ (TStructural @: check_channel_structure decls)
-  @ (TStructural @: check_workers_structure ~extra_funcs:imported_funcs decls)
+  @ (TStructural @: check_workers_structure ~extra_funcs:imported_funcs ~type_identity:queue_type_identity
+       ~parameter_identity:(queue_parameter_identity m) decls)
   @ (TStructural @: check_cache_structure decls)
   @ (TStructural @: check_email_structure decls)
    @ (TStructural @: check_typed_config_blocks m)
   @ (TStructural @: check_app_wiring decls)
   @ (TDatabase @: check_database_entities m)
+  @ (TDatabase @: Migration_schema.check_databases m)
   @ (TTesting @: check_api_test_structure m)
   @ (TTesting @: check_test_descriptions decls)
   @ (TStructural @: check_content_security_policy decls)
@@ -130,11 +145,12 @@ let check_module (m : module_form) : validation_error list =
      minted with a lexer-illegal hyphen (`tesl-case-N`, `tesl-ignored-N`, …), so a
      user identifier can never collide with one by construction. *)
   @ (TProof @: check_forall_param_subjects decls)
-  @ (TCapability @: check_handler_capabilities ~cap_map ~imported_func_caps:(load_imported_func_caps m) decls)
+  @ (TCapability @: check_handler_capabilities ~cap_map ~queue_for_job ~imported_func_caps:(load_imported_func_caps m)
+       ~database_entities:(Migration_schema.database_entities m) decls)
   (* SEC005 (get_handlers_do_not_mutate): a GET route may not reach dbWrite /
      queueWrite / pubsub / emailCap.  A hard error in the build path — it was
      previously a linter warning, and the linter does not run during `--check`. *)
-  @ (TCapability @: check_get_routes_do_not_mutate ~cap_map
+  @ (TCapability @: check_get_routes_do_not_mutate ~cap_map ~queue_for_job
        ~imported_func_caps:(load_imported_func_caps m) decls)
   @ (TDatabase @: check_pk_match decls)
   @ (TDatabase @: check_insert_pk_match decls)
@@ -172,3 +188,6 @@ let check_module (m : module_form) : validation_error list =
   @ (TStructural @: check_handler_isolation decls)
   @ (TCapability @: check_auth_call_restriction decls)
   @ (TNaming @: collect_import_parse_errors m)
+
+let check_module m =
+  Validation_common.with_predicate_scope m (fun () -> check_module_unscoped m)

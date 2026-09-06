@@ -1,5 +1,5 @@
 (tests
- (names test_security_remediation test_pinpoint_tests test_formatter test_linter test_lexer test_parser test_advanced test_types test_proofs test_validation test_diagnostics test_diag_snapshots test_ir test_frontend test_review18_antagonistic test_review19_antagonistic test_review20_antagonistic test_review24_antagonistic test_review25_antagonistic test_review26_antagonistic test_review27_antagonistic test_mutation test_review29_antagonistic test_review30_antagonistic test_review31_antagonistic test_review32_antagonistic test_dict_forall test_review34_antagonistic test_review36_antagonistic test_review37_antagonistic test_review38_antagonistic test_review39_antagonistic test_review40_antagonistic test_review41_antagonistic test_review42_antagonistic test_review43_antagonistic test_review44_antagonistic test_review45_antagonistic test_review47_antagonistic test_review48_antagonistic test_review49_antagonistic test_review50_antagonistic test_review51_antagonistic test_review52_antagonistic test_review53_antagonistic test_review54_antagonistic test_review55_antagonistic test_review56_antagonistic test_review57_antagonistic test_review58_antagonistic test_review59_antagonistic test_review59_antagonistic_backend test_review60_antagonistic test_review61_antagonistic test_review62_antagonistic test_review63_antagonistic test_review64_antagonistic test_review65_antagonistic test_stdlib_consistency test_review66_api_validation test_review67_block_validation test_capability_polymorphism test_proof_negatives test_review68_newcomer_feedback test_review69_critical_language_validation test_review70_codegen_safety test_review72_critical_002 test_jwt test_agent_decode test_httpclient test_cache test_email test_linter_w080 test_review74_proof test_review74_misc test_review74_gibberish test_proofsuite_attack test_proofsuite_produce test_proofsuite_consume test_proofsuite_flow test_proofsuite_conjunction test_proofsuite_crossparam test_proofsuite_forall test_proofsuite_transport test_proofsuite_existential test_proofsuite_newtype test_proofsuite_identity test_proofsuite_codec test_proofsuite_capability test_proofsuite_exhaustive test_proofsuite_arith test_proofsuite_record test_proofsuite_negspace test_aisuite_capability test_aisuite_entitlement test_aisuite_structured test_p0_soundness_fixes test_eval_review_fixes test_wave2_soundness test_s7_generative test_literal_subject_identity test_b6_structural_proof_eq test_fromdb_where_unification test_a6_unnamed_proof_return test_s13_fail_closed_boundary test_a2_capability_launder test_import_scope_single_source test_a9_bigint test_a3_proof_identity test_a2_sql_provenance test_a4_capability_completeness test_a5_decoder_comparison test_b1_client_gen test_b5_diagnostics test_a2b_update_provenance test_review75_reviewfixes test_review76_soundness_fixes test_review77_soundness_fixes test_metamorphic test_hole12_cross_module_caps test_discharge_fail_closed test_discharge_normalize test_fail_closed_hardening test_server_tools test_human_actions test_group_by test_import_suggestions test_fix_apply test_units_money test_app_main_typecheck test_issues_40_41_42 test_module_system test_config_only_type_positions test_astool_imported test_checker_multimodule test_emit_incidentals test_stdlib_docs test_fix_titles test_stdlib_signature_coverage test_int32_surface test_issue45_computed_path test_sql_read_lines test_regex_surface test_secret_surface test_security_lints test_fail_open_tightening test_session_cookie test_check_binding_gap test_sso_surface test_sso_adversarial test_issues_70_71 test_url_net_surface test_issue_72 test_elm_api_helpers_cycle test_exists_forwarding test_issue_74 test_issue_76 test_mint_structural_proof_eq test_get_no_mutate test_database_indexes test_index_lint test_activation_lint test_ambiguous_handler_lint test_app_config_context test_http_method_surface test_issue_77 test_partial_application_statement test_import_gated_ctors)
+ (names test_security_remediation test_migration_imports test_migration_hash test_pinpoint_tests test_formatter test_linter test_lexer test_parser test_advanced test_types test_proofs test_validation test_diagnostics test_diag_snapshots test_ir test_frontend test_review18_antagonistic test_review19_antagonistic test_review20_antagonistic test_review24_antagonistic test_review25_antagonistic test_review26_antagonistic test_review27_antagonistic test_mutation test_review29_antagonistic test_review30_antagonistic test_review31_antagonistic test_review32_antagonistic test_dict_forall test_review34_antagonistic test_review36_antagonistic test_review37_antagonistic test_review38_antagonistic test_review39_antagonistic test_review40_antagonistic test_review41_antagonistic test_review42_antagonistic test_review43_antagonistic test_review44_antagonistic test_review45_antagonistic test_review47_antagonistic test_review48_antagonistic test_review49_antagonistic test_review50_antagonistic test_review51_antagonistic test_review52_antagonistic test_review53_antagonistic test_review54_antagonistic test_review55_antagonistic test_review56_antagonistic test_review57_antagonistic test_review58_antagonistic test_review59_antagonistic test_review59_antagonistic_backend test_review60_antagonistic test_review61_antagonistic test_review62_antagonistic test_review63_antagonistic test_review64_antagonistic test_review65_antagonistic test_stdlib_consistency test_review66_api_validation test_review67_block_validation test_capability_polymorphism test_proof_negatives test_review68_newcomer_feedback test_review69_critical_language_validation test_review70_codegen_safety test_review72_critical_002 test_jwt test_agent_decode test_httpclient test_cache test_email test_linter_w080 test_review74_proof test_review74_misc test_review74_gibberish test_proofsuite_attack test_proofsuite_produce test_proofsuite_consume test_proofsuite_flow test_proofsuite_conjunction test_proofsuite_crossparam test_proofsuite_forall test_proofsuite_transport test_proofsuite_existential test_proofsuite_newtype test_proofsuite_identity test_proofsuite_codec test_proofsuite_capability test_proofsuite_exhaustive test_proofsuite_arith test_proofsuite_record test_proofsuite_negspace test_aisuite_capability test_aisuite_entitlement test_aisuite_structured test_p0_soundness_fixes test_eval_review_fixes test_wave2_soundness test_s7_generative test_literal_subject_identity test_b6_structural_proof_eq test_fromdb_where_unification test_a6_unnamed_proof_return test_s13_fail_closed_boundary test_a2_capability_launder test_import_scope_single_source test_a9_bigint test_a3_proof_identity test_a2_sql_provenance test_a4_capability_completeness test_a5_decoder_comparison test_b1_client_gen test_b5_diagnostics test_a2b_update_provenance test_review75_reviewfixes test_review76_soundness_fixes test_review77_soundness_fixes test_metamorphic test_hole12_cross_module_caps test_discharge_fail_closed test_discharge_normalize test_fail_closed_hardening test_server_tools test_human_actions test_group_by test_import_suggestions test_fix_apply test_units_money test_app_main_typecheck test_issues_40_41_42 test_module_system test_config_only_type_positions test_astool_imported test_checker_multimodule test_emit_incidentals test_stdlib_docs test_fix_titles test_stdlib_signature_coverage test_int32_surface test_issue45_computed_path test_sql_read_lines test_regex_surface test_secret_surface test_security_lints test_fail_open_tightening test_session_cookie test_check_binding_gap test_sso_surface test_sso_adversarial test_issues_70_71 test_url_net_surface test_issue_72 test_elm_api_helpers_cycle test_exists_forwarding test_issue_74 test_issue_76 test_mint_structural_proof_eq test_get_no_mutate test_database_indexes test_index_lint test_activation_lint test_ambiguous_handler_lint test_app_config_context test_http_method_surface test_issue_77 test_partial_application_statement test_import_gated_ctors)
  (flags (:standard -warn-error +8))
  (libraries tesl_compiler_lib alcotest unix str)
  (deps ../bin/main.exe search-queries.tsv))
@@ -8,6 +8,66 @@
  (names debug_record debug_db)
  (modules debug_record debug_db)
  (libraries tesl_compiler_lib))
+
+(test
+ (name test_migration_canonical)
+ (modules test_migration_canonical)
+ (libraries tesl_compiler_lib alcotest unix str))
+
+(test
+ (name test_migration_ir)
+ (modules test_migration_ir)
+ (deps (universe) fixtures/migration-ir-vectors.txt)
+ (libraries tesl_compiler_lib alcotest unix str))
+
+(test
+ (name test_migration_inventory)
+ (modules test_migration_inventory)
+ (libraries tesl_compiler_lib alcotest unix str))
+
+(test
+ (name test_migration_same)
+ (modules test_migration_same)
+ (libraries tesl_compiler_lib alcotest unix str))
+
+(test
+ (name test_migration_fact_ownership)
+ (modules test_migration_fact_ownership)
+ (libraries tesl_compiler_lib alcotest unix str))
+
+(test
+ (name test_qualified_predicate_identity)
+ (modules test_qualified_predicate_identity)
+ (libraries tesl_compiler_lib alcotest unix str))
+
+(test
+ (name test_migration_history_sources)
+ (modules test_migration_history_sources)
+ (libraries tesl_compiler_lib alcotest unix str))
+
+(test
+ (name test_migration_field_impact)
+ (modules test_migration_field_impact)
+ (libraries tesl_compiler_lib alcotest unix str))
+
+(test
+ (name test_migration_entity_impact)
+ (modules test_migration_entity_impact)
+ (libraries tesl_compiler_lib alcotest unix str))
+
+(test
+ (name test_jsonb_columns)
+ (modules test_jsonb_columns)
+ (deps ../bin/main.exe)
+ (libraries tesl_compiler_lib alcotest unix str))
+
+; These are executed generated codecs, including both rolling-read directions
+; and premature decoder removal. Source checking alone is not the oracle.
+(rule
+ (alias runtest)
+ (deps fixtures/migration-jsonb-codecs.tesl ../bin/main.exe)
+ (action
+  (run %{exe:../bin/main.exe} test %{dep:fixtures/migration-jsonb-codecs.tesl})))
 
 (test
  (name test_completion)
@@ -167,7 +227,8 @@
 ;   dune exec test/test_suite_registration.exe
 (test
  (name test_suite_registration)
- (modules test_suite_registration))
+ (modules test_suite_registration)
+ (deps dune (glob_files test_*.ml)))
 
 ; Go test-set completeness meta-test.  The Go runtime and Tesl corpus are the
 ; only shipped execution path, so this guards their gate entry point:
@@ -240,7 +301,7 @@
 (tests
  (names test_embedded_go_runtime_seam)
  (modules test_embedded_go_runtime_seam)
- (deps ../gen/gen_go_runtime.exe)
+ (deps ../gen/gen_go_runtime.exe ../lib/go_runtime/embedded/dune)
  (libraries tesl_compiler_lib alcotest unix))
 
 ; `inList`/`notInList` need a list literal (review 2026-09-02, H1): a non-literal member list
@@ -307,3 +368,183 @@
  (name test_process_runner)
  (modules test_process_runner)
  (libraries tesl_compiler_lib alcotest unix))
+
+; Sparse migration coverage and explicit Same omissions over all stored occurrences.
+(test
+ (name test_migration_sparse)
+ (modules test_migration_sparse)
+ (libraries tesl_compiler_lib alcotest str unix))
+
+; Logical additive row adapters, independent of catalog and admission authority.
+(test
+ (name test_migration_additive)
+ (modules test_migration_additive)
+ (libraries tesl_compiler_lib alcotest str unix))
+
+; Public contextual source diagnostics and logical additive adapters.
+(test
+ (name test_migration_declaration)
+ (modules test_migration_declaration)
+ (libraries tesl_compiler_lib alcotest str unix))
+
+(test
+ (name test_migration_transform_rules)
+ (modules test_migration_transform_rules)
+ (libraries tesl_compiler_lib alcotest str unix))
+
+(test
+ (name test_migration_transform)
+ (modules test_migration_transform)
+ (libraries tesl_compiler_lib alcotest str unix))
+
+(test
+ (name test_migration_result)
+ (modules test_migration_result)
+ (libraries tesl_compiler_lib alcotest str unix))
+
+(test
+ (name test_source_input)
+ (modules test_source_input)
+ (libraries tesl_compiler_lib alcotest str unix))
+
+(test
+ (name test_migration_seal)
+ (modules test_migration_seal)
+ (libraries tesl_compiler_lib alcotest str unix))
+
+(test
+ (name test_migration_header)
+ (modules test_migration_header)
+ (libraries tesl_compiler_lib alcotest str unix))
+
+(test
+ (name test_migration_manifest)
+ (modules test_migration_manifest)
+ (libraries tesl_compiler_lib alcotest str unix))
+
+(test
+ (name test_migration_generate)
+ (modules test_migration_generate)
+ (libraries tesl_compiler_lib alcotest str unix))
+
+(test
+ (name test_migration_source_syntax)
+ (modules test_migration_source_syntax)
+ (libraries tesl_compiler_lib alcotest str unix))
+
+(test
+ (name test_migration_provenance)
+ (modules test_migration_provenance)
+ (libraries tesl_compiler_lib alcotest str unix))
+
+(test
+ (name test_migration_source_merge)
+ (modules test_migration_source_merge)
+ (libraries tesl_compiler_lib alcotest str unix))
+
+(test
+ (name test_migration_refresh)
+ (modules test_migration_refresh)
+ (libraries tesl_compiler_lib alcotest str unix))
+
+(test
+ (name test_migration_target)
+ (modules test_migration_target)
+ (libraries tesl_compiler_lib alcotest str unix))
+
+(test
+ (name test_migration_application)
+ (modules test_migration_application)
+ (libraries tesl_compiler_lib alcotest str unix))
+
+(test
+ (name test_migration_closure)
+ (modules test_migration_closure)
+ (libraries tesl_compiler_lib alcotest str unix))
+
+(test
+ (name test_migration_abi)
+ (modules test_migration_abi)
+ (libraries tesl_compiler_lib alcotest str unix))
+
+(test
+ (name test_migration_preview)
+ (modules test_migration_preview)
+ (libraries tesl_compiler_lib alcotest str unix))
+
+(test
+ (name test_migration_command)
+ (modules test_migration_command)
+ (deps ../bin/main.exe)
+ (libraries tesl_compiler_lib alcotest str unix))
+
+(test
+ (name test_migration_storage)
+ (modules test_migration_storage)
+ (libraries tesl_compiler_lib alcotest str unix))
+
+(test
+ (name test_migration_plan)
+ (modules test_migration_plan)
+ (libraries tesl_compiler_lib alcotest str unix))
+
+(test
+ (name test_migration_format)
+ (modules test_migration_format)
+ (libraries tesl_compiler_lib alcotest str unix))
+
+(test
+ (name test_diagnostic_protocol)
+ (modules test_diagnostic_protocol)
+ (libraries tesl_compiler_lib alcotest str unix))
+
+(test
+ (name test_migration_program)
+ (modules test_migration_program)
+ (libraries tesl_compiler_lib alcotest str unix))
+
+(test
+ (name test_migration_qualified_family)
+ (modules test_migration_qualified_family)
+ (libraries tesl_compiler_lib alcotest str unix))
+
+(test
+ (name test_migration_topology)
+ (modules test_migration_topology)
+ (libraries tesl_compiler_lib alcotest str unix))
+
+(test
+ (name test_migration_queue)
+ (modules test_migration_queue)
+ (libraries tesl_compiler_lib alcotest str unix))
+
+(test
+ (name test_dead_job_metadata)
+ (modules test_dead_job_metadata)
+ (libraries tesl_compiler_lib alcotest str unix))
+
+(test
+ (name test_queue_imports)
+ (modules test_queue_imports)
+ (libraries tesl_compiler_lib alcotest str unix))
+
+(test
+ (name test_queue_candidate_app)
+ (modules test_queue_candidate_app)
+ (deps (source_tree fixtures/queue-candidate-app))
+ (libraries tesl_compiler_lib alcotest str unix))
+
+(test
+ (name test_optional_attached_transport)
+ (modules test_optional_attached_transport)
+ (libraries tesl_compiler_lib alcotest unix str))
+
+(test
+ (name test_attached_input_identity)
+ (modules test_attached_input_identity)
+ (libraries tesl_compiler_lib alcotest unix))
+
+(test
+ (name test_migration_checked_graph)
+ (modules test_migration_checked_graph)
+ (libraries tesl_compiler_lib alcotest unix str))

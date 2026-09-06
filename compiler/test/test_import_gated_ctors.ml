@@ -414,16 +414,81 @@ let t_exhaustiveness_covers_the_groups () =
 let t_config_only_names_are_not_gated () =
   (* The 489 IANA zone / ISO 4217 currency / config-marker names emit NO require
      under ANY import, so gating them would demand imports that cannot help.
-     (Using one outside a config block is unbound with or without the import —
-     recorded as still-open in the roadmap file.) *)
+     They use the contextual config boundary rather than ordinary ADT gating;
+     the Queue cases below exercise rejection outside that boundary. *)
   let leaked =
     List.filter (fun n -> Type_system.stdlib_ctor_home_modules_of n <> [])
       [ "Utc"; "FixedOffset"; "EuropeStockholm"; "Usd"; "Memory"; "Postgres";
-        "Exponential"; "Github" ]
+        "Fixed"; "Exponential"; "Linear"; "Github" ]
   in
   if leaked <> [] then
     failf "config-only names must not be import-gated: %s"
       (String.concat ", " leaked)
+
+(* Queue's retry modes participate in Type(..) imports, but configure the
+   declaration rather than creating values an ordinary case can inspect. Job
+   likewise names a payload TYPE and worker, not a polymorphic runtime value. *)
+let queue_config_src mode imports = Printf.sprintf {|module Gated exposing []
+import Tesl.Prelude exposing [String]
+import Tesl.Database exposing [Database, Memory]
+import Tesl.Queue exposing [Queue, Job, QueueRetryStrategy, FromQueue, queueRead%s]
+import Tesl.Maybe exposing [Maybe(..)]
+record Notify { message: String }
+database D = Database { entities: [], backend: Memory }
+worker handle(job: Notify ::: FromQueue (Id == jobId) job) requires [queueRead] = job
+queue Tasks requires [queueRead] = Queue {
+  database: D
+  jobs: [Job Notify handle Nothing]
+  retry: QueueRetryStrategy { maxAttempts: 3, initialDelay: 1, backoff: %s }
+}
+|} imports mode
+
+let t_queue_retry_imports_configure () =
+  List.iter (fun mode ->
+    should_pass (mode ^ " family import") (queue_config_src mode ", QueueRetryBackoff(..)");
+    should_pass (mode ^ " direct import") (queue_config_src mode (", " ^ mode)))
+    ["Fixed"; "Exponential"; "Linear"]
+
+let t_queue_retry_values_refuse () =
+  List.iter (fun mode ->
+    List.iter (fun imp ->
+      should_fail (mode ^ " ordinary value") ~expect:"config-block constructor"
+        (Printf.sprintf {|module Gated exposing [f]
+import Tesl.Prelude exposing [String]
+%s
+fn f() -> String =
+  let mode = %s
+  "not a configuration"
+|} imp mode))
+      ["import Tesl.Queue";
+       "import Tesl.Queue exposing [QueueRetryBackoff(..)]";
+       "import Tesl.Queue exposing [" ^ mode ^ "]"])
+    ["Fixed"; "Exponential"; "Linear"]
+
+let t_queue_retry_wrong_module_refuses () =
+  List.iter (fun name ->
+    should_fail (name ^ " wrong home") ~expect:"does not export"
+      (Printf.sprintf {|module Gated exposing []
+import Tesl.Database exposing [%s]
+|} name)) ["Fixed"; "Exponential"; "Linear"; "QueueRetryBackoff(..)"; "Job"]
+
+let t_contextual_job_cannot_escape () =
+  List.iter (fun (expect, body) ->
+    should_fail "Job outside Queue.jobs" ~expect
+      (queue_config_src "Fixed" ", QueueRetryBackoff(..)" ^ body))
+    [ ("unknown constructor: Job",
+       "\nfn leak() -> String =\n  let value = Job\n  \"not a job\"\n");
+      ("unknown constructor: Job",
+       "\nfn leak() -> String requires [queueRead] =\n  let value = Job Notify handle Nothing\n  \"not a job\"\n");
+      ("`Job` is a config-only stdlib name",
+       "\nrecord Bad { value: Job }\n") ]
+
+let t_contextual_job_checks_payload () =
+  let source = queue_config_src "Fixed" ", QueueRetryBackoff(..)" in
+  should_fail "wrong worker payload" ~expect:"must accept exactly one"
+    (Str.global_replace (Str.regexp_string "job: Notify") "job: String" source);
+  should_fail "invalid retry mode" ~expect:"`backoff` must be"
+    (queue_config_src "Unknown" ", QueueRetryBackoff(..)")
 
 let () =
   run "Import-gated stdlib constructors"
@@ -461,6 +526,12 @@ let () =
         [ test_case "every position demands the import" `Quick t_all_positions_gated;
           test_case "every position is clean with Maybe(..)" `Quick
             t_all_positions_clean_with_the_import ] );
+      ( "contextual Queue declarations",
+        [ test_case "retry constructors configure through family or direct imports" `Quick t_queue_retry_imports_configure;
+          test_case "retry constructors never become ordinary values" `Quick t_queue_retry_values_refuse;
+          test_case "retry modes and Job cannot be imported from another module" `Quick t_queue_retry_wrong_module_refuses;
+          test_case "Job cannot escape Queue.jobs as a value or type" `Quick t_contextual_job_cannot_escape;
+          test_case "Job still checks worker payload and retry configuration" `Quick t_contextual_job_checks_payload ] );
       ( "single source",
         [ test_case "derived tables agree with the groups" `Quick t_derived_tables_agree;
           test_case "every group constructor is gated" `Quick t_every_group_ctor_is_gated;

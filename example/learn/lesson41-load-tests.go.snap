@@ -72,6 +72,8 @@ var Lesson41DatabaseDatabase = teslrt.NewDatabase(
 	},
 )
 
+var _ = teslrt.RegisterDatabaseIdentity("teslmodlesson41loadtests.Lesson41Database", Lesson41DatabaseDatabase)
+
 //line lesson41-load-tests.tesl:68
 func greet(g Greeting) Greeting {
 //line lesson41-load-tests.tesl:69

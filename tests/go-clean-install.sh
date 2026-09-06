@@ -15,6 +15,9 @@ mkdir -p "$tmp/home" "$tmp/work"
   "${clean_env[@]}" "$tesl_bin" init clean-app --template minimal --postgres none --yes --no-git >/dev/null
   cd clean-app
   "${clean_env[@]}" "$tesl_bin" emit go app.tesl >/dev/null
+  # The output context may be under an unrelated, incomplete checkout. It must
+  # not inherit that checkout's VCS metadata or fail Go's automatic VCS probe.
+  mkdir "$tmp/.git"
   "${clean_env[@]}" "$tesl_bin" build --no-docker --out "$tmp/context" >/dev/null
   # Lifted signatures must come from this installation, without a checkout or
   # TESL_REPO_ROOT. Compile and execute the accepted program as well as checking it.

@@ -134,6 +134,8 @@ var ConversationDbDatabase = teslrt.NewDatabase(
 	},
 )
 
+var _ = teslrt.RegisterDatabaseIdentity("teslmodaiconversationservice.ConversationDb", ConversationDbDatabase)
+
 //line ai-conversation-service.tesl:178
 var MistralAgent = teslrt.Agent{Provider: teslrt.DeferredProvider(teslProvider1), SystemPrompt: "You are a concise support assistant. Use lookupOrderStatus for order questions.", MaxTokens: teslrt.FromInt64(512), Tools: []teslrt.Tool{teslrt.ToolOf("lookupOrderStatus", "\xe2\x94\x80\xe2\x94\x80 Tool: a typed function the model may call, grounded in the database \xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80 The result is derived ONLY from a row fetched through the trusted SQL boundary, which carries a FromDb proof \xe2\x80\x94 so the model cannot make the tool assert a status for an order that isn't in the database (data integrity by construction).", "{\"type\":\"object\",\"properties\":{\"orderId\":{\"type\":\"string\"}},\"required\":[\"orderId\"]}", teslToolArgs2, teslToolCall3)}}
 
@@ -505,15 +507,9 @@ func teslEncode4(teslValue string) any {
 }
 
 func teslEncode5(teslValue ChatEvent) any {
-	return func() any {
-		switch teslValue.Tag {
-		case ChatEventChunk:
-			return map[string]any{"tag": "Chunk", "fields": map[string]any{
-				"content": teslEncode4(teslValue.ChunkContent),
-			}}
-		}
-		panic("unreachable: checker guarantees case exhaustiveness")
-	}()
+	return map[string]any{"tag": "Chunk", "fields": map[string]any{
+		"content": teslEncode4(teslValue.ChunkContent),
+	}}
 }
 
 func teslKeyLessString(teslX, teslY string) bool {

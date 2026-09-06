@@ -138,22 +138,7 @@ let rec normalize (kind : func_kind) (rs : return_spec) : obligation list =
     return type declares.  Relocated here to co-locate with the obligation
     model above; the per-form dispatch below is being incrementally rewired
     to consume [normalize].  Behaviour is unchanged by the move. *)
-let check_fn_return_proof_annotations
-    ?facts
-    ?(extra_funcs : (string * func_info) list = [])
-    (decls : top_decl list)
-    : validation_error list =
-  let mf = facts_or_compute ?facts ~extra_funcs decls in
-  let funcs = mf.mf_funcs in
-  let fields_by_type = mf.mf_fields_map in
-  let ctors = mf.mf_ctors in
-  field_proof_registry := mf.mf_field_proof_map;
-  let errors = ref [] in
-  let actual_proof_summary proofs =
-    match combine_proof_list (dummy_loc "named-pack return") proofs with
-    | Some proof -> pp_proof proof
-    | None -> "no proofs"
-  in
+let return_context_operations ~funcs ~fields_by_type ~ctors =
   let extend_let_envs type_env subject_env proof_env name value =
     (* Special case: forgetFact strips all proofs — do not propagate subject chain,
        and add an explicit empty proof entry to prevent alias resolution from
@@ -176,41 +161,9 @@ let check_fn_return_proof_annotations
       (* Empty proof entry blocks alias resolution; no subject link *)
       (type_env', subject_env, (name, []) :: proof_env)
     else
-    let subject_env' =
-      match subject_of_expr subject_env value with
-      | Some s -> (name, s) :: subject_env
-      | None ->
-        (match value with
-         | EApp _ ->
-           let (head0, args0) = collect_call_head_and_args [] value in
-           let (head, args) = normalize_explicit_check_call head0 args0 in
-           (match function_name_of_expr head with
-            | Some fn_name ->
-              (match List.assoc_opt fn_name funcs with
-               | Some info when (match info.fi_return with RetAttached _ -> true | _ -> false) ->
-                 let binding_arg =
-                   match info.fi_return with
-                   | RetAttached { binding = b; _ } ->
-                     let rec find_idx i = function
-                       | [] -> None
-                       | (p : binding) :: _ when p.name = b.name ->
-                         if i < List.length args then Some (List.nth args i) else None
-                       | _ :: rest -> find_idx (i + 1) rest
-                     in
-                     (match find_idx 0 info.fi_params with
-                      | Some a -> Some a
-                      | None -> List.nth_opt args 0)
-                   | _ -> List.nth_opt args 0
-                 in
-                 (match binding_arg with
-                  | Some arg ->
-                    (match subject_of_expr subject_env arg with
-                     | Some s -> (name, s) :: subject_env
-                     | None -> subject_env)
-                  | None -> subject_env)
-               | _ -> subject_env)
-            | None -> subject_env)
-         | _ -> subject_env)
+    let subject_env' = match attached_subject_of_expr funcs subject_env value with
+      | Some subject -> (name, subject) :: subject_env
+      | None -> subject_env
     in
     let new_proofs = proofs_of_expr name funcs subject_env' proof_env value in
     let proof_env' = if new_proofs = [] then proof_env else (name, new_proofs) :: proof_env in
@@ -249,26 +202,139 @@ let check_fn_return_proof_annotations
         | _ -> subject_env
       in
       (penv, senv)
-    | PCon { fields = [(_, PVar x)]; _ } ->
-      let penv = if scrut_proofs <> [] then (x, scrut_proofs) :: proof_env else proof_env in
-      let senv =
-        let rec resolve_chain seen name =
-          if List.mem name seen then name
-          else
-            match List.assoc_opt name subject_env with
-            | Some s when s <> name -> resolve_chain (name :: seen) s
-            | _ -> name
-        in
-        let final_subj =
-          match scrut with
-          | EVar { name; _ } -> resolve_chain [] name
-          | _ -> (match subject_of_expr subject_env scrut with Some s -> s | None -> x)
-        in
-        if final_subj <> x then (x, final_subj) :: subject_env else subject_env
-      in
-      (penv, senv)
+    | PCon { fields = [(_, PVar _)]; _ } ->
+      case_payload_proof_environments funcs subject_env proof_env scrut pat
     | _ -> (proof_env, subject_env)
   in
+  (* The single return-leaf traversal shared by the Carry-side discharge forms:
+     descend through let / letproof / if / case / with-blocks — threading the
+     subject/proof/type envs exactly as a returned value's scope evolves — and
+     yield each RETURNING leaf with its envs.  `fail` never returns, so it yields
+     no leaf.  Every per-form verifier (scalar carry, named-pack) maps its own
+     leaf check over this ONE traversal, so how a returned value's environment
+     evolves is defined in exactly one place. *)
+  let rec return_leaves type_env subject_env proof_env (e : expr) =
+    match e with
+    | ELet { name; value; body; _ } ->
+      (match returning_let_envs type_env subject_env proof_env name value with
+       | None -> []
+       | Some (te, se, pe) -> return_leaves te se pe body)
+    | ELetProof { value_name; proof_name; proof_index; value; body; _ } ->
+      (match returning_let_envs type_env subject_env proof_env value_name value with
+       | None -> []
+       | Some (te, se, pe) ->
+      let pe =
+        let ps = proofs_of_expr value_name funcs se pe value in
+        let ps = match proof_index with
+          | None -> ps
+          | Some (index, arity) ->
+            (* A decomposed witness carries one conjunct, not the whole source
+               proof. Preserve order while removing repeated inherited evidence;
+               a malformed projection supplies no evidence to return checking. *)
+            let rec unique seen = function
+              | [] -> []
+              | fact :: rest ->
+                let key = proof_key (Proof_kernel.fact_of fact) in
+                if List.mem key seen then unique seen rest
+                else fact :: unique (key :: seen) rest in
+            let facts = unique [] (List.concat_map Proof_kernel.conj_split ps) in
+            if arity > 1 && List.length facts = arity && index >= 0 && index < arity
+            then [List.nth facts index] else [] in
+        (proof_name, ps) :: pe
+      in
+      return_leaves te se pe body)
+    | EIf { then_; else_; _ } ->
+      return_leaves type_env subject_env proof_env then_
+      @ return_leaves type_env subject_env proof_env else_
+    | ECase { scrut; arms; _ } ->
+      let scrut_ty = infer_expr_type type_env funcs fields_by_type ctors scrut in
+      List.concat_map (fun (arm : case_arm) ->
+        let result_name = match arm.pattern with
+          | PVar name | PCon {fields=[(_, PVar name)]; _} -> name
+          | _ -> "_" in
+        let scrut_proofs = proofs_of_expr result_name funcs subject_env proof_env scrut in
+        let te = pattern_bindings scrut_ty ctors arm.pattern @ type_env in
+        let pe, se = extend_case_envs subject_env proof_env scrut scrut_proofs arm.pattern in
+        return_leaves te se pe arm.body
+      ) arms
+    | EWithDatabase { body; _ } | EWithCapabilities { body; _ } | EWithTransaction { body; _ } ->
+      return_leaves type_env subject_env proof_env body
+    | EFail _ -> []
+    | _ -> [ (type_env, subject_env, proof_env, e) ]
+  and returning_let_envs type_env subject_env proof_env name value =
+    match return_leaves type_env subject_env proof_env value with
+    | [] -> None (* An always-aborting value never reaches its continuation. *)
+    | contexts ->
+      (* Join only subject identity, not branch environments or proofs. A let
+         result aliases an outer subject exactly when every returning value
+         leaf is that subject. Continuing once avoids a Cartesian product for
+         sequential branch-valued lets. Resolve the RHS before removing the
+         destination's previous alias. *)
+      let te, direct_subjects, pe = extend_let_envs type_env subject_env proof_env name value in
+      match attached_subject_of_expr funcs subject_env value with
+      | Some _ -> Some (te, direct_subjects, pe)
+      | None ->
+        (* Reuse ordinary let alias policy for each leaf. In particular,
+           forgetFact deliberately creates no alias: joining the raw input
+           subject here would recover stripped evidence through proof lookup.
+           The temporary name cannot collide with a source binding. *)
+        let temporary = "joined-let#subject" in
+        let subjects = List.map (fun (types, subjects, proofs, leaf) ->
+          let _, subjects, _ = extend_let_envs types subjects proofs temporary leaf in
+          List.assoc_opt temporary subjects) contexts in
+        let common = match subjects with
+          | Some subject :: rest when List.for_all ((=) (Some subject)) rest ->
+            let visible = List.exists (fun (binding, _) ->
+              match attached_subject_of_expr funcs subject_env
+                  (EVar {name=binding;loc=Location.dummy_loc "<let-subject>"}) with
+              | Some outer -> subject = outer || String.starts_with ~prefix:(outer ^ ".") subject
+              | None -> false) type_env in
+            if visible then Some subject else None
+          | _ -> None in
+        let subjects = List.remove_assoc name subject_env in
+        let subjects = match common with Some subject -> (name,subject) :: subjects | None -> subjects in
+        Some (te, subjects, pe)
+  in
+  (extend_let_envs, extend_case_envs, return_leaves)
+
+let function_return_contexts ~decls ~extra_funcs (fd : func_decl) =
+  let mf = build_module_facts ~extra_funcs decls in
+  let saved_fields = !field_proof_registry and saved_context = !field_proof_type_ctx in
+  Fun.protect ~finally:(fun () ->
+    field_proof_registry := saved_fields; field_proof_type_ctx := saved_context) (fun () ->
+    field_proof_registry := mf.mf_field_proof_map;
+    field_proof_type_ctx := Some (fn_type_env mf.mf_funcs mf.mf_fields_map mf.mf_ctors fd,
+                                 mf.mf_fields_map, mf.mf_ctors);
+    let _, _, leaves = return_context_operations ~funcs:mf.mf_funcs
+      ~fields_by_type:mf.mf_fields_map ~ctors:mf.mf_ctors in
+    leaves (List.map (fun (p : binding) -> p.name, p.type_expr) fd.params)
+      (build_initial_subject_env fd.params) (build_initial_proof_env fd.params) fd.body)
+
+let check_fn_return_proof_annotations
+    ?facts
+    ?(extra_funcs : (string * func_info) list = [])
+    (decls : top_decl list)
+    : validation_error list =
+  (* Optional establish may mint at explicit bare ::: sites, but every returning
+     success payload must actually carry the declared predicate and subject.
+     Reuse the existing path-sensitive discharge, including Nothing branches,
+     constructor fields, aliases, proof decomposition and framework restrictions. *)
+  let requires_return_evidence (fd : func_decl) =
+    is_forgery_restricted_kind fd.kind ||
+    (fd.kind = EstablishKind && optional_attached_proof_return fd.return_spec) in
+  let mf = facts_or_compute ?facts ~extra_funcs decls in
+  let funcs = mf.mf_funcs in
+  let fields_by_type = mf.mf_fields_map in
+  let ctors = mf.mf_ctors in
+  field_proof_registry := mf.mf_field_proof_map;
+  let errors = ref [] in
+  let actual_proof_summary proofs =
+    match combine_proof_list (dummy_loc "named-pack return") proofs with
+    | Some proof -> pp_proof proof
+    | None -> "no proofs"
+  in
+  let extend_let_envs, extend_case_envs, return_leaves =
+    return_context_operations ~funcs ~fields_by_type ~ctors in
   (* Predicates that come from infrastructure (SQL, queue) and cannot be
      validated by tracing the function body — exclude them from proof-body
      checking so fn functions can correctly propagate these proofs.
@@ -288,41 +354,6 @@ let check_fn_return_proof_annotations
      (proof_matches below) or obtain it via `ok`/`attachFact` (body_uses_attach_or_ok). *)
   let stdlib_auto_preds =
     [ "FromDb"; "FromQueue"; "ForAll"; "ForAllValues"; "ForAllKeys" ] in
-  (* The single return-leaf traversal shared by the Carry-side discharge forms:
-     descend through let / letproof / if / case / with-blocks — threading the
-     subject/proof/type envs exactly as a returned value's scope evolves — and
-     yield each RETURNING leaf with its envs.  `fail` never returns, so it yields
-     no leaf.  Every per-form verifier (scalar carry, named-pack) maps its own
-     leaf check over this ONE traversal, so how a returned value's environment
-     evolves is defined in exactly one place. *)
-  let rec return_leaves type_env subject_env proof_env (e : expr) =
-    match e with
-    | ELet { name; value; body; _ } ->
-      let te, se, pe = extend_let_envs type_env subject_env proof_env name value in
-      return_leaves te se pe body
-    | ELetProof { value_name; proof_name; value; body; _ } ->
-      let te, se, pe = extend_let_envs type_env subject_env proof_env value_name value in
-      let pe =
-        let ps = proofs_of_expr value_name funcs se pe value in
-        if ps = [] then pe else (proof_name, ps) :: pe
-      in
-      return_leaves te se pe body
-    | EIf { then_; else_; _ } ->
-      return_leaves type_env subject_env proof_env then_
-      @ return_leaves type_env subject_env proof_env else_
-    | ECase { scrut; arms; _ } ->
-      let scrut_ty = infer_expr_type type_env funcs fields_by_type ctors scrut in
-      let scrut_proofs = proofs_of_expr "_" funcs subject_env proof_env scrut in
-      List.concat_map (fun (arm : case_arm) ->
-        let te = pattern_bindings scrut_ty ctors arm.pattern @ type_env in
-        let pe, se = extend_case_envs subject_env proof_env scrut scrut_proofs arm.pattern in
-        return_leaves te se pe arm.body
-      ) arms
-    | EWithDatabase { body; _ } | EWithCapabilities { body; _ } | EWithTransaction { body; _ } ->
-      return_leaves type_env subject_env proof_env body
-    | EFail _ -> []
-    | _ -> [ (type_env, subject_env, proof_env, e) ]
-  in
   let rec check_named_pack_body (fd : func_decl) ret_loc entity_proof other_proof type_env subject_env proof_env expr =
     List.iter (fun (te, se, pe, e) ->
       check_named_pack_body_leaf fd ret_loc entity_proof other_proof te se pe e)
@@ -479,6 +510,24 @@ let check_fn_return_proof_annotations
          check_required "cargo" required
        | None -> ())
   in
+  (* A return binder that names an input is a subject-identity promise: callers
+     keep that input's identity when transporting its returned proof. Check every
+     returning leaf, not just a syntactically bare final variable. A transformed
+     result must use a fresh return binder, even when it carries the same fact. *)
+  List.iter (function
+    | DFunc ({ return_spec = RetAttached { binding; loc }; _ } as fd)
+      when List.exists (fun (parameter : binding) -> parameter.name = binding.name) fd.params ->
+      field_proof_type_ctx := Some (fn_type_env funcs fields_by_type ctors fd, fields_by_type, ctors);
+      let contexts = return_leaves
+        (List.map (fun (parameter : binding) -> parameter.name, parameter.type_expr) fd.params)
+        (build_initial_subject_env fd.params) (build_initial_proof_env fd.params) fd.body in
+      if List.exists (fun (_, subjects, _, leaf) ->
+        attached_subject_of_expr funcs subjects leaf <> Some binding.name) contexts then
+        errors := make_error loc
+          ~hint:"return that input (or a verified alias) on every branch; give a transformed result a fresh return binder"
+          (Printf.sprintf "return binding `%s` in `%s` names an input, but a returning branch does not preserve that input's subject identity"
+             binding.name fd.name) :: !errors
+    | _ -> ()) decls;
   (* §7.12 forgery restriction applies to fn, handler, and worker: none of these
      can fabricate a proof their inputs do not carry. (check/auth/establish are the
      only kinds that may introduce a fresh proof at a boundary.) deadWorker is
@@ -486,7 +535,7 @@ let check_fn_return_proof_annotations
      handled elsewhere.  [is_forgery_restricted_kind] is the shared definition in
      Validation_common (in scope via `open`). *)
   List.iter (function
-    | DFunc fd when is_forgery_restricted_kind fd.kind ->
+    | DFunc fd when requires_return_evidence fd ->
       (* #6 (2026-07-04): set the per-fn type context so the EField arm of
          carried_proofs_of_expr (reached via body_carries below) can resolve a
          field receiver's type — e.g. `extractValue(item: ValidItem) = item.value`. *)
@@ -613,6 +662,34 @@ let check_fn_return_proof_annotations
           proof.  Field proofs propagate through pattern matching (PFC-2 a), so
           `findMin`'s `Node Leaf cur _ -> Right cur` is accepted (cur carries the
           field proof) while `Something (0 - 999)` is rejected. *)
+       | RetMaybeAttached { binding = b; loc = ret_loc; _ }
+         when fd.kind = EstablishKind && optional_attached_proof_return fd.return_spec ->
+         let required = Option.get b.proof_ann in
+         let check_leaf (_te, subjects, proofs, leaf) =
+           let head, args = collect_call_head_and_args [] leaf in
+           let payload = match head, args with
+             | EConstructor {name="Nothing"; args=[]; _}, [] -> None
+             | EConstructor {name="Something"; args=direct; _}, applied ->
+               (match direct @ applied with [value] -> Some value | _ -> Some leaf)
+             | _ -> Some leaf in
+           match payload with
+           | None -> ()
+           | Some value ->
+             let subject = Option.value (subject_of_expr subjects value) ~default:b.name in
+             let wanted = subst_proof [(b.name, subject)] required in
+             let carried = List.map Proof_kernel.fact_of (proofs_of_expr subject funcs subjects proofs value) in
+             let framework_ok = List.for_all (fun p ->
+               match p with
+               | PredApp {pred; _} when is_framework_pred pred -> is_framework_produced p
+               | _ -> true) (flatten_proof wanted) in
+             if not (framework_ok && proof_matches wanted carried) then
+               errors := make_error ret_loc
+                 ~hint:"attach the declared proof to the returned value with ::: inside establish, preserve existing evidence, or return Nothing"
+                 (Printf.sprintf "establish `%s` returns a success value without the declared proof `%s` on that value"
+                   fd.name (pp_proof wanted)) :: !errors in
+         List.iter check_leaf (return_leaves
+           (List.map (fun (p : binding) -> p.name, p.type_expr) fd.params)
+           (build_initial_subject_env fd.params) (build_initial_proof_env fd.params) fd.body)
        | RetMaybeAttached { binding = b; loc = ret_loc; _ }
          when is_forgery_restricted_kind fd.kind && b.proof_ann <> None ->
          let required_proof = match b.proof_ann with Some p -> p | None -> PredApp { pred = ""; args = []; loc = fd.loc } in

@@ -597,6 +597,7 @@ and sql_arguments = { mutable sql_args : string list }
 and database_info = {
   db_tesl_name : string;
   db_backend : string;              (* "memory" | "postgres" *)
+  db_migration_family : string option;
   db_schema : string;
   db_entities : string list;
   db_config : (string * string) list;
@@ -619,6 +620,7 @@ type queue_info = {
      emitter passes a dispatcher that type-switches, which is what queue.go was written
      for. *)
   qu_jobs : (string * string * string option) list;
+  qu_schema : Migration_program.queue_binding option;
   (* The FIRST wiring, which is what the single-payload surfaces use: an api-test's
      `processNextJob` answers a `JobResult` of ONE job type, and no reading of a multi-type
      queue gives it two. *)
@@ -699,9 +701,11 @@ type type_table = {
   records : (string, record_info) Hashtbl.t;
   adts : (string, adt_info) Hashtbl.t;
   entities : (string, entity_info) Hashtbl.t;
-  (* Keyed by the QUEUE's name and again by its job type: `enqueue` names the job type,
-     while an api-test verb names the queue. *)
+  (* Queue values and payload types occupy different namespaces. A queue named
+     Tasks may coexist with an imported record named Tasks handled elsewhere. *)
   queues : (string, queue_info) Hashtbl.t;
+  job_queues : (string, queue_info) Hashtbl.t;
+  queue_type_identity : string -> string;
   (* Declared caches, by name — the four `Cache.*` leaves all name one. *)
   caches : (string, cache_info) Hashtbl.t;
   (* Declared emails, by name — `Email.send E { … }` and `startEmailWorker E` both name one. *)
@@ -713,6 +717,10 @@ type type_table = {
      to be qualified — and a type with no entry here has no hand-written codec, which is what
      says the decoder is derived locally instead. *)
   codecs : (string, string) Hashtbl.t;
+  (* Storage reaches a record through its entity, including private field types. Resolve its
+     codec by declaration identity, never by whichever same-named type is exposed here. *)
+  nominal_codecs : ((string * string), codec_form) Hashtbl.t;
+  queue_derived_codecs : ((string * string), unit) Hashtbl.t;
   (* Module-level constants: a NAME and its Go spelling, referenced bare rather than called.
      They live here rather than in `signatures` because a signature describes something that is
      APPLIED, and a const that resolved through that table would be indistinguishable from a
@@ -919,6 +927,8 @@ let module_has_postgres_database () =
   | Some types ->
     Hashtbl.fold (fun _ (info : database_info) found -> found || info.db_backend = "postgres")
       types.databases false
+    || Hashtbl.fold (fun _ (info : entity_info) found -> found || info.ent_database <> None)
+         types.entities false
 
 (* The server an `api-test` block drives, while its statements are being emitted.  A
    request verb (`get "/path"`) only means something inside such a block, and this is what
@@ -1088,6 +1098,19 @@ let codec_decode_ref type_name =
   | Some owner -> qualified owner (codec_decode_name type_name)
   | None -> codec_decode_name type_name
 
+let nominal_codec owner name =
+  Option.bind !current_types (fun types ->
+    Hashtbl.find_opt types.nominal_codecs (owner, name))
+
+let record_column_codec loc (info : record_info) =
+  match nominal_codec info.rec_owner info.rec_tesl_name with
+  | Some codec when codec.to_json <> ToJsonForbidden
+                    && codec.from_json <> FromJsonForbidden -> codec
+  | _ -> unsupported loc
+    "Go backend: stored record `%s` needs an explicit codec with both toJson and fromJson; \
+     its checked decoder defines the persisted JSONB contract"
+    info.rec_tesl_name
+
 (* Defined here rather than beside the codec EMITTER below because `decodeAs` needs the
    reference: a model's structured output decodes through the very same codec an HTTP
    request body does, and that expression is emitted long before the codec layer. *)
@@ -1170,6 +1193,7 @@ type module_exports = {
   ex_package : string;
   ex_types : type_table;
   ex_signatures : (string, signature) Hashtbl.t;
+  ex_codecs : codec_form list;
 }
 
 (* Whether a compiled dependency is the module an import names.
@@ -1690,6 +1714,9 @@ let single_variant info =
   | _ -> None
 
 let find_variant info ctor =
+  let ctor = match String.rindex_opt ctor '.' with
+    | None -> ctor
+    | Some dot -> String.sub ctor (dot + 1) (String.length ctor - dot - 1) in
   List.find_opt (fun variant -> variant.var_ctor = ctor) info.adt_variants
 
 let rec substitute_type bindings ty =
@@ -2054,7 +2081,9 @@ and unequal_expr ty left right =
         Some (Printf.sprintf "(%s.%s == %s && %s)"
                 (selector_operand left) adt_tag_field
                 (qualified info.adt_owner variant.var_tag)
-                (String.concat " || " parts))) info.adt_variants in
+                (* The tag guards EVERY field. Without the inner grouping, a
+                   second field could read an inactive boxed variant's nil payload. *)
+                (joined_comparison " || " parts))) info.adt_variants in
     "(" ^ String.concat " || " (tag_unequal :: payloads) ^ ")"
   | TList element ->
     Printf.sprintf "!teslrt.ListEqualBy(%s, %s, %s)" left right (element_equal_func element)
@@ -2191,12 +2220,15 @@ let equality_refusal what ty =
   | None -> Printf.sprintf "Go backend cannot %s this type" what
 
 let record_info_of_signature signatures name =
+  let type_name = match String.rindex_opt name '.' with
+    | None -> name
+    | Some dot -> String.sub name (dot + 1) (String.length name - dot - 1) in
   match Hashtbl.find_opt signatures name with
   (* A record LITERAL is written with the TYPE's own name.  A capitalised function that
      merely ANSWERS a record — `FixedOffset 60` answers a `TimeZone` — parses as a
      constructor too, and reading it as a literal would demand `FixedOffset { … }` of a
      program that is already right. *)
-  | Some { result = TRecord info; _ } when info.rec_tesl_name = name -> Some info
+  | Some { result = TRecord info; _ } when info.rec_tesl_name = type_name -> Some info
   | _ -> None
 
 (* ─── SQL ──────────────────────────────────────────────────────────────────────
@@ -2239,12 +2271,19 @@ let entity_of_query loc name =
   | Some info -> info
   | None -> unsupported loc "Go backend cannot resolve entity `%s`" name
 
-(* A queue is found by the JOB TYPE (`enqueue`) or by its own name (an api-test verb); the
-   table holds both keys. *)
-let queue_of_job_type loc name =
+let queue_of_name loc name =
   match Option.bind !current_types (fun types -> Hashtbl.find_opt types.queues name) with
   | Some info -> info
+  | None -> unsupported loc "Go backend cannot resolve queue `%s`" name
+
+let queue_of_payload_type loc name =
+  match Option.bind !current_types (fun types ->
+    Hashtbl.find_opt types.job_queues (types.queue_type_identity name)) with
+  | Some info -> info
   | None -> unsupported loc "Go backend cannot resolve a queue for `%s`" name
+
+let is_queue_value (info : record_info) =
+  info.rec_owner = "" && info.rec_go_name = "*teslrt.Queue"
 
 (* An api-test queue verb takes the QUEUE as its only argument, written as a bare name
    (`pendingJobCount SendQueue`), which parses as a constructor. *)
@@ -2388,22 +2427,7 @@ let entity_column loc (info : entity_info) field =
 
 (* A field key becomes its column name the way `camel->snake` does it, acronyms included:
    `userID` is `user_id`, not `user_i_d`. *)
-let camel_to_snake text =
-  let buffer = Buffer.create (String.length text + 4) in
-  let length = String.length text in
-  String.iteri (fun index char ->
-    let upper = char >= 'A' && char <= 'Z' in
-    if upper && index > 0 then begin
-      let previous = text.[index - 1] in
-      let previous_lower =
-        (previous >= 'a' && previous <= 'z') || (previous >= '0' && previous <= '9') in
-      let previous_upper = previous >= 'A' && previous <= 'Z' in
-      let next_lower =
-        index + 1 < length && text.[index + 1] >= 'a' && text.[index + 1] <= 'z' in
-      if previous_lower || (previous_upper && next_lower) then Buffer.add_char buffer '_'
-    end;
-    Buffer.add_char buffer (Char.lowercase_ascii char)) text;
-  Buffer.contents buffer
+let camel_to_snake = Validation_common.sql_column_name
 
 (* An identifier is quoted with its embedded quotes doubled, which is a quoted SQL identifier's
    only escape.  Identifiers here come from the PROGRAM — an entity's declared table, a field's
@@ -2444,8 +2468,12 @@ let rec column_sql_type ty =
   | TString -> Some "TEXT"
   | TBool -> Some "BOOLEAN"
   | TNewtype { tesl_name = "PosixMillis"; _ } -> Some "BIGINT"
-  | TNewtype { tesl_name = "Int32"; _ } -> Some "INTEGER"
+  (* Built-in Int32 is registered as an Int runtime alias below. A user-owned
+     newtype may also be named Int32; its spelling must not override its base. *)
   | TNewtype info -> column_sql_type info.base
+  | TRecord info ->
+    ignore (record_column_codec info.rec_loc info);
+    Some "JSONB"
   (* An ADT column is JSONB holding the value's own wire shape (`{"tag":…}`), which is what
      `dsl/sql.tesl` writes — a column written by one backend has to be readable by the other. *)
   | TAdt (info, _) when info.adt_tesl_name <> "Maybe" -> Some "JSONB"
@@ -2453,12 +2481,39 @@ let rec column_sql_type ty =
 
 let entity_columns (info : entity_info) =
   List.map (fun (field, ty) ->
+    (* An explicit SQL type must not bypass a stored type's codec contract, even if this
+       build never queries the entity. Follow wrappers and ADT payloads as well. *)
+    let rec validate_codec visited = function
+      | TRecord record -> ignore (record_column_codec info.ent_loc record)
+      | TNewtype wrapped -> validate_codec visited wrapped.base
+      | TList inner | TSet inner -> validate_codec visited inner
+      | TDict (key, value) -> validate_codec visited key; validate_codec visited value
+      | TAdt (adt, args) ->
+        (match nominal_codec adt.adt_owner adt.adt_tesl_name with
+         | Some codec when codec.to_json = ToJsonForbidden
+                           || codec.from_json = FromJsonForbidden ->
+           unsupported info.ent_loc
+             "Go backend: stored ADT `%s` needs both toJson and fromJson when it declares an explicit codec"
+             adt.adt_tesl_name
+         | _ -> ());
+        (* Visit concrete arguments even when the declaration was already seen:
+           Envelope (Envelope State) must reach State's codec. Keeping the body
+           guard nominal also bounds non-regular recursive declarations. *)
+        List.iter (validate_codec visited) args;
+        let key = adt.adt_owner, adt.adt_tesl_name in
+        if not (List.mem key visited) then
+          List.iter (fun variant ->
+            List.iter (fun (_, field) -> validate_codec (key :: visited) field)
+              (variant_field_types adt args variant)) adt.adt_variants
+      | _ -> ()
+    in
+    validate_codec [] ty;
     let sql_type = match List.assoc_opt field info.ent_db_types with
       | Some declared -> String.uppercase_ascii declared
       | None ->
         (match column_sql_type ty with
          | Some text -> text
-         (* No automatic column type for this Tesl type — a list, a dict, a record, an opaque
+         (* No automatic column type for this Tesl type — a list, a dict, an opaque
             runtime value.  Legacy refuses the same field, later: its schema generator asks
             for an explicit `#:db-type`.  Both honour the same escape hatch, so the message
             names it rather than reading as a backend limit. *)
@@ -3377,9 +3432,7 @@ let rec type_of_expr signatures env expr =
        when (match args with
              | [argument] ->
                (match typed_with_default (type_of_expr signatures env) argument with
-                | Some (TRecord info), _ ->
-                  Option.fold ~none:false ~some:(fun types -> Hashtbl.mem types.queues info.rec_tesl_name)
-                    !current_types
+                | Some (TRecord info), _ -> is_queue_value info
                 | _ -> false)
              | _ -> false) ->
        (match Option.bind !current_types (fun types -> Hashtbl.find_opt types.records "DeadJob") with
@@ -3390,14 +3443,14 @@ let rec type_of_expr signatures env expr =
                      | "processNextDeadJob" | "deadJobs") as verb; _ }
        when queue_argument args <> None ->
        let info = match queue_argument args with
-         | Some name -> queue_of_job_type loc name
+         | Some name -> queue_of_name loc name
          | None -> assert false
        in
        (match verb with
         | "pendingJobCount" -> TInt
         | "drainQueue" -> TUnit
-        (* The dead-letter contents.  `DeadJob` is opaque — a test counts the list or
-           requeues from it, which is all the Legacy surface allows either. *)
+        (* The dead-letter contents carry opaque metadata, inspected through typed
+           accessors and conditionally requeued. Payloads remain unavailable. *)
         | "deadJobs" ->
           (match Option.bind !current_types (fun types ->
                    Hashtbl.find_opt types.records "DeadJob") with
@@ -5714,10 +5767,7 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
         when (match args with
               | [argument] ->
                 (match typed_with_default (type_of_expr signatures env) argument with
-                 | Some (TRecord info), _ ->
-                   Option.fold ~none:false
-                     ~some:(fun types -> Hashtbl.mem types.queues info.rec_tesl_name)
-                     !current_types
+                 | Some (TRecord info), _ -> is_queue_value info
                  | _ -> false)
               | _ -> false) ->
         ignore (type_of_expr signatures env app);
@@ -5729,7 +5779,7 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
                       | "processNextDeadJob" | "deadJobs") as verb; _ }
         when queue_argument args <> None ->
         let info = match queue_argument args with
-          | Some name -> queue_of_job_type loc name
+          | Some name -> queue_of_name loc name
           | None -> assert false
         in
         ignore (type_of_expr signatures env app);
@@ -6648,7 +6698,7 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
          (inner ^ "\t") (emit_expr ~expected:ty ~indent:(inner ^ "\t") signatures env body)
          inner inner indent)
   | EEnqueue { job_type; payload; loc } ->
-    let info = queue_of_job_type loc job_type in
+    let info = queue_of_payload_type loc job_type in
     (* The row is the type ENQUEUED, which on a queue carrying several is not the queue's
        first one — reading it off the queue put every job in at the same type. *)
     let row = match Option.bind !current_types
@@ -6706,7 +6756,7 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
         Filename.chop_suffix workers_name suffix
       else workers_name
     in
-    let info = queue_of_job_type loc queue_name in
+    let info = queue_of_name loc queue_name in
     let queue = qualified info.qu_owner info.qu_go_var in
     (* One dispatcher over every job type the queue carries: the store holds a payload as
        `any` precisely so one queue can carry several, and the type switch is where the
@@ -8070,7 +8120,7 @@ and emit_variant_literal ?(indent="") signatures env result variant args =
     if parts = [] || not (adt_boxed info) then parts
     else
       [ Printf.sprintf "%s: &%s{%s}" (variant_payload_field variant)
-          (variant_payload_type info variant
+          (qualified info.adt_owner (variant_payload_type info variant)
            ^ (match type_args with
               | [] -> ""
               | args -> "[" ^ String.concat ", " (List.map go_type args) ^ "]"))
@@ -8352,6 +8402,10 @@ and sql_bound_value loc ty value =
   | TNewtype { secret = true; _ } ->
     Printf.sprintf "teslrt.PgSecret(%s.Value)" (selector_operand value)
   | TNewtype newtype -> sql_bound_value loc newtype.base (value ^ ".Value")
+  | TRecord info ->
+    ignore (record_column_codec loc info);
+    Printf.sprintf "teslrt.EncodeJSONValue(%s(%s))"
+      (qualified info.rec_owner (codec_encode_name info.rec_tesl_name)) value
   | TAdt (info, _) when info.adt_tesl_name <> "Maybe" ->
     Printf.sprintf "teslrt.EncodeJSONValue(%s(%s))" (!value_encoder_hook ty) value
   | _ ->
@@ -8361,7 +8415,7 @@ and sql_bound_value loc ty value =
          value (go_type inner) (sql_bound_value loc inner "teslValue")
      | None -> unsupported loc
        "Go backend cannot store a `%s` in a column: a column holds a scalar (Int, Float, \
-        String, Bool), a newtype over one, an instant, an ADT as JSON, or a `Maybe` of any of \
+        String, Bool), a newtype over one, an instant, a record with a codec or ADT as JSON, or a `Maybe` of any of \
         those" (go_type ty))
 
 (* The driver-side carrier a column is SCANNED into, and the expression that turns it back into
@@ -8384,29 +8438,31 @@ and sql_scan_carrier loc ty target =
   | TNewtype newtype ->
     let carrier, decode = sql_scan_carrier loc newtype.base target in
     (carrier, Printf.sprintf "%s{Value: %s}" (qualified newtype.owner newtype.go_name) decode)
-  | TAdt (info, _) when info.adt_tesl_name <> "Maybe" ->
-    ("[]byte", Printf.sprintf "%s(%s)" (sql_adt_column_decoder loc info) target)
+  | TRecord info ->
+    ignore (record_column_codec loc info);
+    ("[]byte", Printf.sprintf "teslrt.MustDecodeColumnJSON(%s, %s)" target
+       (qualified info.rec_owner (codec_decode_name info.rec_tesl_name)))
+  | TAdt (info, args) when info.adt_tesl_name <> "Maybe" ->
+    ("[]byte", Printf.sprintf "%s(%s)" (sql_adt_column_decoder loc info args) target)
   | _ ->
     (match maybe_element ty with
      | Some inner ->
        let carrier, decode = sql_scan_carrier loc inner ("*" ^ target) in
-       ("*" ^ carrier,
-        Printf.sprintf "teslrt.MaybeOfPointer(%s, func() %s { return %s })"
-          target (go_type inner) decode)
+       if carrier = "[]byte" then
+         (* pgx's pointer-to-pointer JSON scan treats JSON null as SQL NULL. A byte
+            slice preserves that distinction: only a nil slice means SQL NULL. *)
+         let _, decode = sql_scan_carrier loc inner "teslJSON" in
+         (carrier, Printf.sprintf "teslrt.MaybeOfJSONColumn(%s, func(teslJSON []byte) %s { return %s })"
+            target (go_type inner) decode)
+       else
+         ("*" ^ carrier,
+          Printf.sprintf "teslrt.MaybeOfPointer(%s, func() %s { return %s })"
+            target (go_type inner) decode)
      | None -> unsupported loc
        "Go backend cannot read a `%s` column back: a column holds a scalar (Int, Float, \
-        String, Bool), a newtype over one, an instant, an ADT as JSON, or a `Maybe` of any of \
+        String, Bool), a newtype over one, an instant, a record with a codec or ADT as JSON, or a `Maybe` of any of \
         those" (go_type ty))
 
-(* The reader for an ADT COLUMN.  The stored shape is the value's own wire shape — `{"tag": …}`
-   for a constructor with no fields — so reading it back is a tag lookup.  A constructor that
-   CARRIES fields is refused rather than half-read: decoding those needs the generic decoder,
-   which does not derive an ADT yet, and a column that silently lost its payload is worse than
-   one that does not compile.
-
-   An unknown tag TRAPS.  It means the column holds a value this build has no constructor for —
-   data written by an incompatible schema — and `dsl/sql.tesl` takes the same line for a stored
-   currency code it cannot resolve. *)
 (* Reading ONE payload field of an ADT column back out of its JSON.
    The wire shape is the one the response encoder writes and `dsl/types.tesl` writes —
    `{"tag": …, "fields": {…}}`.  The DOCUMENT around it may be either of the two shapes a Tesl
@@ -8430,9 +8486,13 @@ and sql_adt_field_decoder loc ty raw =
   | TNewtype newtype ->
     Printf.sprintf "%s{Value: %s}" (qualified newtype.owner newtype.go_name)
       (sql_adt_field_decoder loc newtype.base raw)
-  | TAdt (nested, _) when nested.adt_tesl_name <> "Maybe" ->
+  | TRecord info ->
+    ignore (record_column_codec loc info);
+    Printf.sprintf "teslrt.MustDecodeColumnJSON(teslrt.MustEncodeJSON(%s), %s)" raw
+      (qualified info.rec_owner (codec_decode_name info.rec_tesl_name))
+  | TAdt (nested, args) when nested.adt_tesl_name <> "Maybe" ->
     (* A nested ADT decodes through its OWN column decoder, so one rule covers any depth. *)
-    Printf.sprintf "%s(teslrt.MustEncodeJSON(%s))" (sql_adt_column_decoder loc nested) raw
+    Printf.sprintf "%s(teslrt.MustEncodeJSON(%s))" (sql_adt_column_decoder loc nested args) raw
   | _ ->
     (match maybe_element ty with
      | Some inner ->
@@ -8440,13 +8500,23 @@ and sql_adt_field_decoder loc ty raw =
          raw (go_type inner) (sql_adt_field_decoder loc inner "teslInner")
      | None -> unsupported loc
        "Go backend: an ADT column's constructor field of type `%s` has no column decoder — a \
-        stored variant may carry scalars, newtypes over them, nested ADTs and `Maybe`s of \
+        stored variant may carry scalars, newtypes over them, records with codecs, nested ADTs and `Maybe`s of \
         those" (go_type ty))
 
-and sql_adt_column_decoder loc (info : adt_info) =
-  let name = "teslColumn" ^ go_ident ~exported:true info.adt_tesl_name in
+and sql_adt_column_decoder loc (info : adt_info) args =
+  (* A package may query entities from two modules whose ADTs share a source name.
+     Sharing their helper would use the first ADT's tags and payload decoder for both. *)
+  let go_ty = go_type (TAdt (info, args)) in
+  let name = "teslColumn" ^ go_ident ~exported:true info.adt_tesl_name ^
+    (if info.adt_owner = !current_package then "" else "_" ^ info.adt_owner) ^
+    (* Distinct instantiations can occur in one row or inside one another. Their
+       decoders have different signatures and must never share a cached helper. *)
+    (if args = [] then "" else "_" ^ Digest.to_hex (Digest.string go_ty)) in
   if not (Hashtbl.mem pending_helpers name) then begin
-    let go_ty = qualified info.adt_owner info.adt_go_name in
+    (* Reserve the name before traversing payloads: a direct recursive field
+       refers to this helper while its body is still being generated. A failed
+       emission discards the module, and the next module resets this table. *)
+    Hashtbl.add pending_helpers name "";
     let buffer = Buffer.create 256 in
     Printf.bprintf buffer "\nfunc %s(teslText []byte) %s {\n" name go_ty;
     Printf.bprintf buffer
@@ -8456,21 +8526,25 @@ and sql_adt_column_decoder loc (info : adt_info) =
       "\tteslTag, teslTagErr := teslrt.DecodeStringField(teslParsed, \"tag\")\n\tif teslTagErr != nil {\n\t\tpanic(\"database: a %s column holds \" + teslTagErr.Error())\n\t}\n"
       info.adt_tesl_name;
     Buffer.add_string buffer "\tswitch teslTag {\n";
+    let tag_assignment variant =
+      if single_variant info <> None then []
+      else [adt_tag_field ^ ": " ^ qualified info.adt_owner variant.var_tag] in
     List.iter (fun variant ->
-      match variant.var_fields with
+      match variant_field_types info args variant with
       | [] ->
-        Printf.bprintf buffer "\tcase %s:\n\t\treturn %s{%s: %s}\n"
-          (go_quote variant.var_ctor) go_ty adt_tag_field
-          (qualified info.adt_owner variant.var_tag)
+        Printf.bprintf buffer "\tcase %s:\n\t\treturn %s{%s}\n"
+          (go_quote variant.var_ctor) go_ty (String.concat ", " (tag_assignment variant))
       | fields ->
         (* A variant with a payload reads its fields out of the `fields` object, each by its
            own label — the same labels the encoder writes. *)
         let assignments = List.map (fun (field, field_ty) ->
+          let decoded = sql_adt_field_decoder loc field_ty
+            (Printf.sprintf "teslrt.MustJSONField(teslFields, %s)" (go_quote field)) in
           Printf.sprintf "%s: %s"
             (if adt_boxed info then go_ident ~exported:true field
              else variant_field_literal_name variant field)
-            (sql_adt_field_decoder loc field_ty
-               (Printf.sprintf "teslrt.MustJSONField(teslFields, %s)" (go_quote field))))
+            (if adt_self_payload info variant field then
+               Printf.sprintf "teslrt.Boxed(%s)" decoded else decoded))
           fields in
         (* BOXED: the decoded fields go into the variant's own payload struct — the same shape
            the constructor builds, so a value read back from a column is indistinguishable from
@@ -8478,14 +8552,15 @@ and sql_adt_column_decoder loc (info : adt_info) =
         let assignments =
           if not (adt_boxed info) then assignments
           else [ Printf.sprintf "%s: &%s{%s}" (variant_payload_field variant)
-                   (variant_payload_type info variant) (String.concat ", " assignments) ]
+                   (qualified info.adt_owner (variant_payload_type info variant) ^
+                    (if args = [] then "" else "[" ^ String.concat ", " (List.map go_type args) ^ "]"))
+                   (String.concat ", " assignments) ]
         in
         Printf.bprintf buffer
-          "\tcase %s:\n\t\tteslFields := teslrt.MustJSONFields(teslParsed, %s, %s)\n\t\treturn %s{%s: %s, %s}\n"
+          "\tcase %s:\n\t\tteslFields := teslrt.MustJSONFields(teslParsed, %s, %s)\n\t\treturn %s{%s}\n"
           (go_quote variant.var_ctor) (go_quote info.adt_tesl_name)
           (go_quote variant.var_ctor)
-          go_ty adt_tag_field (qualified info.adt_owner variant.var_tag)
-          (String.concat ", " assignments))
+          go_ty (String.concat ", " (tag_assignment variant @ assignments)))
       info.adt_variants;
     Printf.bprintf buffer
       "\t}\n\tpanic(\"database: a %s column holds an unknown tag \" + teslTag)\n}\n"
@@ -10152,7 +10227,7 @@ let runtime_file_gates : (string * string list) list = [
      the reason the HTTP half does: it pulls a third-party driver and its whole dependency
      chain into a binary that would otherwise require nothing. *)
    "postgres", [ "postgres.go"; "database.go"; "dbquery.go"; "debug_sql.go"; "pgstores.go";
-                 "pgpubsub.go" ];
+                 "pgpubsub.go"; "migration_program.go"; "migration_queue_program.go"; "migration_queue_control.go"; "migration_queue_registration.go"; "migration_queue_registration_sql.go"; "migration_queue_control_spec.go"; "migration_queue_operations.go"; "migration_queue_runtime.go"; "migration_queue_control_expected.go"; "migration_control.go"; "migration_expand.go"; "migration_admission.go"; "migration_open.go"; "migration_status.go"; "migration_command.go"; "migration_expand_history.go"; "migration_control_spec.go"; "migration_control_catalog.go"; "migration_plan.go"; "migration_plan_wire.go"; "migration_plan_hash.go"; "migration_catalog.go"; "migration_catalog_trigger.go"; "migration_catalog_compare.go"; "migration_catalog_probe.go"; "migration_catalog_expected.go"; "migration_control_expected.go"; "migration_control_upgrade.go"; "migration_index_control.go"; "migration_index_catalog.go"; "migration_index_history.go"; "migration_index_worker.go"; "migration_embedded.go"; "migration_worker.go"; "migration_facilities.go"; "migration_literal.go"; "migration_boundary.go"; "migration_boundary_testbuild.go" ];
   (* `agent.go` ships only to a program that talks to a model.  Not a dependency argument —
      everything in it is standard library — but a runtime file a program has no use for is
      still surface a reader has to rule out, and the gate costs nothing. *)
@@ -10401,7 +10476,39 @@ let rec json_dict_key_encoder ty operand =
     json_dict_key_encoder base (operand ^ ".Value")
   | _ -> invalid_arg "Go JSON encoding requires a Dict with String keys"
 
+(* Most encoders are named from their completed body. A recursive ADT needs a
+   name before that body exists. Only recursive edges use the forwarder, keeping
+   the existing names and output for nonrecursive values. *)
+let active_value_encoders : (string, string * bool ref) Hashtbl.t = Hashtbl.create 8
+
 let rec value_encoder ty =
+  let key = go_type ty in
+  match Hashtbl.find_opt active_value_encoders key with
+  | Some (name, used) -> used := true; name
+  | None ->
+    let name = "teslEncodeRecursive" ^ Digest.to_hex (Digest.string key) in
+    let used = ref false in
+    Hashtbl.add active_value_encoders key (name, used);
+    Fun.protect ~finally:(fun () -> Hashtbl.remove active_value_encoders key) (fun () ->
+      let encoder = value_encoder_body ty in
+      if !used then Hashtbl.replace pending_helpers name
+        (Printf.sprintf "\nfunc %s(teslValue %s) any {\n\treturn %s(teslValue)\n}\n"
+           name key encoder);
+      encoder)
+
+and adt_json_payload info args variant ~indent =
+  match variant_field_types info args variant with
+  | [] -> Printf.sprintf "map[string]any{\"tag\": %S}" variant.var_ctor
+  | fields ->
+    let entries = aligned_map_entries (indent ^ "\t") (List.map (fun (name, field_ty) ->
+      let operand = "teslValue." ^ variant_field_path info variant name in
+      let operand = if adt_self_payload info variant name then
+        Printf.sprintf "teslrt.Unboxed(%s)" operand else operand in
+      (name, Printf.sprintf "%s(%s)" (value_encoder field_ty) operand)) fields) in
+    Printf.sprintf "map[string]any{\"tag\": %S, \"fields\": map[string]any{\n%s\n%s}}"
+      variant.var_ctor entries indent
+
+and value_encoder_body ty =
   let encoded_field operand field_ty =
     Printf.sprintf "%s(%s)" (value_encoder field_ty) operand in
   match ty with
@@ -10426,12 +10533,10 @@ let rec value_encoder ty =
     remember_helper ~prefix:"teslEncode"
       ~signature:"(teslValue teslrt.Money) any"
       ~body:"map[string]any{\"minorUnits\": teslValue.MinorUnits, \"currency\": teslValue.Currency.Code}"
-  | TRecord info when List.mem info.rec_tesl_name !current_codec_types
-                      || codec_owner info.rec_tesl_name <> None ->
-    codec_encode_ref info.rec_tesl_name
-  | TAdt (info, _) when List.mem info.adt_tesl_name !current_codec_types
-                        || codec_owner info.adt_tesl_name <> None ->
-    codec_encode_ref info.adt_tesl_name
+  | TRecord info when nominal_codec info.rec_owner info.rec_tesl_name <> None ->
+    qualified info.rec_owner (codec_encode_name info.rec_tesl_name)
+  | TAdt (info, _) when nominal_codec info.adt_owner info.adt_tesl_name <> None ->
+    qualified info.adt_owner (codec_encode_name info.adt_tesl_name)
   | TRecord info ->
     let fields = aligned_map_entries "\t\t" (List.map (fun (name, field_ty) ->
       (name, encoded_field ("teslValue." ^ record_field_go_name name) field_ty))
@@ -10440,25 +10545,21 @@ let rec value_encoder ty =
       ~signature:(Printf.sprintf "(teslValue %s) any" (go_type ty))
       ~body:(Printf.sprintf "map[string]any{\n%s\n\t}" fields)
   | TAdt (info, args) ->
+    (match single_variant info with
+    | Some variant ->
+      remember_helper ~prefix:"teslEncode"
+        ~signature:(Printf.sprintf "(teslValue %s) any" (go_type ty))
+        ~body:(adt_json_payload info args variant ~indent:"\t")
+    | None ->
     let arms = List.map (fun variant ->
-      let fields = variant_field_types info args variant in
-      let payload = match fields with
-        | [] -> Printf.sprintf "map[string]any{\"tag\": %S}" variant.var_ctor
-        | _ ->
-          let entries = aligned_map_entries "\t\t\t\t" (List.map (fun (name, field_ty) ->
-            (name, encoded_field ("teslValue." ^ variant_field_path info variant name) field_ty))
-            fields) in
-          Printf.sprintf
-            "map[string]any{\"tag\": %S, \"fields\": map[string]any{\n%s\n\t\t\t}}"
-            variant.var_ctor entries
-      in
+      let payload = adt_json_payload info args variant ~indent:"\t\t\t" in
       Printf.sprintf "\t\tcase %s:\n\t\t\treturn %s"
         (qualified info.adt_owner variant.var_tag) payload) info.adt_variants in
     remember_helper ~prefix:"teslEncode"
       ~signature:(Printf.sprintf "(teslValue %s) any" (go_type ty))
       ~body:(Printf.sprintf
         "func() any {\n\t\tswitch teslValue.%s {\n%s\n\t\t}\n\t\tpanic(\"unreachable: checker guarantees case exhaustiveness\")\n\t}()"
-        adt_tag_field (String.concat "\n" arms))
+        adt_tag_field (String.concat "\n" arms)))
   | TList element ->
     remember_helper ~prefix:"teslEncode"
       ~signature:(Printf.sprintf "(teslValue %s) any" (go_type ty))
@@ -10550,18 +10651,22 @@ let rec json_value_decoder ~package ~loc ~what ty =
   | TRecord _ when is_money ty ->
     "func(teslRaw any) (teslrt.Money, error) {\n\t\tteslMinorUnits, teslUnitsErr := teslrt.DecodeIntField(teslRaw, \"minorUnits\")\n\t\tif teslUnitsErr != nil {\n\t\t\treturn teslrt.Money{}, teslUnitsErr\n\t\t}\n\t\tteslCode, teslCodeErr := teslrt.DecodeStringField(teslRaw, \"currency\")\n\t\tif teslCodeErr != nil {\n\t\t\treturn teslrt.Money{}, teslCodeErr\n\t\t}\n\t\tteslCurrency, teslKnown := teslrt.CurrencyFromCode(teslCode).Value()\n\t\tif !teslKnown {\n\t\t\treturn teslrt.Money{}, errors.New(\"unknown ISO 4217 currency code for Money: \" + teslCode)\n\t\t}\n\t\treturn teslrt.MoneyFromMinorUnits(teslCurrency, teslMinorUnits), nil\n\t}"
   | TRecord nested when nested.rec_owner = package
-                        || List.mem nested.rec_tesl_name !current_codec_types
-                        || codec_owner nested.rec_tesl_name <> None ->
+                        || nominal_codec nested.rec_owner nested.rec_tesl_name <> None
+                        || Option.fold ~none:false ~some:(fun types -> Hashtbl.mem types.queue_derived_codecs (nested.rec_owner,nested.rec_tesl_name)) !current_types ->
     (* A nested record decodes through its own decoder — derived or hand-written — and its
        `Check` becomes an `error` here so one field shape covers both. *)
     Printf.sprintf
       "func(teslRaw any) (%s, error) {\n\t\tteslNested := %s(teslRaw)\n\t\tif !teslNested.OK() {\n\t\t\treturn %s{}, errors.New(teslNested.Message())\n\t\t}\n\t\tteslValue, _ := teslNested.Value()\n\t\treturn teslValue, nil\n\t}"
-      (go_type ty) (codec_decode_ref nested.rec_tesl_name) (go_type ty)
+      (go_type ty) (qualified nested.rec_owner (codec_decode_name nested.rec_tesl_name)) (go_type ty)
+  | TAdt (nested, _) when nominal_codec nested.adt_owner nested.adt_tesl_name <> None ->
+    Printf.sprintf
+      "func(teslRaw any) (%s, error) {\n\t\tteslNested := %s(teslRaw)\n\t\tif !teslNested.OK() {\n\t\t\treturn %s{}, errors.New(teslNested.Message())\n\t\t}\n\t\tteslValue, _ := teslNested.Value()\n\t\treturn teslValue, nil\n\t}"
+      (go_type ty) (qualified nested.adt_owner (codec_decode_name nested.adt_tesl_name)) (go_type ty)
   | _ -> unsupported loc
     "Go backend cannot decode `%s` from JSON; give the type a `codec`" what
 
 let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) ?(apis=[])
-    ?(servers=[]) ?(capturers=[]) ?(consts=[]) ?(agents=[]) ?(capabilities=[])
+    ?(servers=[]) ?(capturers=[]) ?(consts=[]) ?(agents=[]) ?(capabilities=[]) ?(queue_codec_records=[]) ?(app_databases=[])
     module_path package signatures
     types (funcs : func_decl list) =
   Hashtbl.reset pending_helpers;
@@ -10632,7 +10737,12 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
            decoders they need exist. *)
         Printf.bprintf body "var %s = teslrt.NewQueueOn(%s, %s, %d, %s, %d)\n"
           info.qu_go_var (qualified db.db_owner db.db_go_var) (go_quote info.qu_tesl_name)
-          info.qu_max_attempts (go_quote info.qu_backoff) info.qu_initial_delay
+          info.qu_max_attempts (go_quote info.qu_backoff) info.qu_initial_delay;
+        Option.iter (fun (binding:Migration_program.queue_binding) ->
+          Printf.bprintf body "var _ = teslrt.RegisterQueueSchema(%s, teslrt.RegisterDatabaseMigrationHistory(teslrt.RegisterDatabaseIdentity(%s, %s), %s), %s, %s, %d)\n"
+            info.qu_go_var (go_quote binding.database_identity) (qualified db.db_owner db.db_go_var)
+            (go_quote binding.family) (go_quote binding.family)
+            (go_quote binding.queue_identity) binding.current_version) info.qu_schema
       | None ->
         Printf.bprintf body "var %s = teslrt.NewQueue(%s, %d)\n"
           info.qu_go_var (go_quote info.qu_tesl_name) info.qu_max_attempts);
@@ -10737,15 +10847,18 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
           "Port", Option.map (go_config_int database.db_loc) (setting "port");
           "PoolSize", Option.map (go_config_pool_size database.db_loc) (setting "poolSize");
           "SocketDir", text "socket";
+          "ControlOwner", text "controlOwner";
+          "MigrationTopology", Option.map go_quote (setting "topology");
+          "RequestRole", text "requestRole";
+          "WorkerRole", text "workerRole";
+          "DDLConnection", text "ddlConnection";
           "Schema", (if database.db_schema = "" then None
                      else Some (go_quote database.db_schema)) ]
     in
     let tables =
-      Hashtbl.to_seq_values types.entities
-      |> List.of_seq
-      |> List.sort (fun left right -> String.compare left.ent_tesl_name right.ent_tesl_name)
-      |> List.filter (fun (entity : entity_info) ->
-           List.mem entity.ent_tesl_name database.db_entities)
+      List.filter_map (Hashtbl.find_opt types.entities) database.db_entities
+      |> List.sort_uniq (fun left right -> compare
+           (left.ent_owner, left.ent_tesl_name) (right.ent_owner, right.ent_tesl_name))
       |> List.map (fun (entity : entity_info) ->
            let columns =
              List.map (fun (column : column_info) ->
@@ -10789,7 +10902,12 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
          whose entities are declared in another module has none of them here. *)
       (match tables with
        | [] -> "[]teslrt.PostgresTable{}"
-       | _ -> Printf.sprintf "[]teslrt.PostgresTable{\n%s\t}" (String.concat "" tables)));
+       | _ -> Printf.sprintf "[]teslrt.PostgresTable{\n%s\t}" (String.concat "" tables));
+    Printf.bprintf body "\nvar _ = teslrt.RegisterDatabaseIdentity(%s, %s)\n"
+      (go_quote (database.db_owner ^ "." ^ database.db_tesl_name)) database.db_go_var;
+    Option.iter (fun family -> Printf.bprintf body
+      "\nvar _ = teslrt.RegisterDatabaseMigrationHistory(%s, %s)\n"
+      database.db_go_var (go_quote family)) database.db_migration_family);
   (* Module-level constants, in declaration order: each one's type settles as it is emitted, so
      a constant may be written in terms of an earlier one. *)
   List.iter (fun (c : const_form) ->
@@ -10926,6 +11044,16 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
            @ List.map (fun (name, ty) -> local_ident name ^ " " ^ go_type ty) params
            @ dictionaries))
        (go_type result);
+    (* This belongs in Main, before the lowered database scope and all user
+       startup effects. The cmd wrapper handles selected schema commands first;
+       direct Main calls receive the same App-local preflight. *)
+    Option.iter (fun database_name ->
+      Option.iter (fun database ->
+        if database.db_migration_family <> None then Printf.bprintf body
+          "\tif teslPreflightErr := teslrt.PreflightApplicationDatabases(%s); teslPreflightErr != nil {\n\t\tpanic(teslPreflightErr)\n\t}\n"
+          (qualified database.db_owner database.db_go_var))
+        (postgres_database fd.loc database_name))
+      (List.assoc_opt fd.name app_databases);
      if debug then
        Printf.bprintf body
          "\tteslDebugScope := teslrt.DebugEnter(teslrt.DebugFrame{Version: teslrt.DebugABIVersion, ID: %S, Function: %S, Location: teslrt.SourceLocation{File: %S, Line: %d, Column: %d}})\n\tdefer teslDebugScope.Leave()\n"
@@ -11006,24 +11134,28 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
            unsupported codec.loc "Go backend codec `%s` has no field `%s`" type_name name)
       | None -> unsupported codec.loc "Go backend codec `%s` needs a record type" type_name
     in
-    (* Encode: a record becomes a sorted-key map; an `adtJson` type becomes the
-       constructor name as a JSON string. *)
+    (* Encode: a record becomes a sorted-key map; an `adtJson` value carries its
+       constructor tag and, when present, its named payload fields. *)
     (match codec.to_json with
      | ToJsonForbidden -> ()
      | ToJsonAdt ->
        (match go_ty with
-        | TAdt (info, _) ->
+        | TAdt (info, args) when single_variant info <> None ->
+          let variant = List.hd info.adt_variants in
+          Printf.bprintf body "\nfunc %s(teslValue %s) any {\n\treturn %s\n}\n"
+            (codec_encode_name type_name) (go_type go_ty)
+            (adt_json_payload info args variant ~indent:"\t")
+        | TAdt (info, args) ->
           Printf.bprintf body "\nfunc %s(teslValue %s) any {\n\tswitch teslValue.%s {\n"
             (codec_encode_name type_name) (go_type go_ty) adt_tag_field;
           List.iter (fun variant ->
-            if variant.var_fields <> [] then unsupported codec.loc
-              "Go backend `adtJson` needs constructors without payloads (`%s`)" variant.var_ctor;
             (* The wire shape is `{"tag": "Ctor"}`, which is what Legacy's generated `adtJson`
                encoder writes — a bare constructor STRING (which this emitted before) reads
                back as a different value on the other backend, and the two disagreed about
                every response carrying an enum. *)
-            Printf.bprintf body "\tcase %s:\n\t\treturn map[string]any{\"tag\": %S}\n"
-              (qualified info.adt_owner variant.var_tag) variant.var_ctor) info.adt_variants;
+            Printf.bprintf body "\tcase %s:\n\t\treturn %s\n"
+              (qualified info.adt_owner variant.var_tag)
+              (adt_json_payload info args variant ~indent:"\t\t")) info.adt_variants;
           Printf.bprintf body "\t}\n\tpanic(\"unreachable: checker guarantees case exhaustiveness\")\n}\n"
         | _ -> unsupported codec.loc "Go backend `adtJson` needs an ADT type")
      | ToJsonFields entries ->
@@ -11055,7 +11187,7 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
      | FromJsonForbidden -> ()
      | FromJsonAdt ->
        (match go_ty with
-        | TAdt (info, _) ->
+        | TAdt (info, args) ->
           Printf.bprintf body
             (* BOTH shapes are accepted, as Legacy's generated decoder accepts them: the
                tagged object its own encoder writes, and a bare string a hand-written or Elm
@@ -11063,9 +11195,34 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
             "\nfunc %s(teslJSON any) teslrt.Check[%s] {\n\tteslName, teslErr := teslrt.DecodeAdtTag(teslJSON)\n\tif teslErr != nil {\n\t\treturn teslrt.Reject[%s](400, teslErr.Error())\n\t}\n\tswitch teslName {\n"
             (codec_decode_name type_name) (go_type go_ty) (go_type go_ty);
           List.iter (fun variant ->
-            Printf.bprintf body "\tcase %S:\n\t\treturn teslrt.Accept(%s{%s: %s})\n"
-              variant.var_ctor (go_type go_ty) adt_tag_field
-              (qualified info.adt_owner variant.var_tag)) info.adt_variants;
+            Printf.bprintf body "\tcase %S:\n" variant.var_ctor;
+            let fields = variant_field_types info args variant in
+            if fields <> [] then Printf.bprintf body
+              "\t\tteslFields, teslFieldsErr := teslrt.JSONFieldValue(teslJSON, \"fields\")\n\t\tif teslFieldsErr != nil {\n\t\t\treturn teslrt.RejectShape[%s](teslFieldsErr.Error())\n\t\t}\n"
+              (go_type go_ty);
+            let assignments = List.mapi (fun index (field, field_ty) ->
+              let suffix = string_of_int index in
+              let decoder = json_value_decoder ~package ~loc:codec.loc
+                ~what:(type_name ^ "." ^ variant.var_ctor ^ "." ^ field) field_ty in
+              Printf.bprintf body
+                "\t\tteslRaw%s, teslFieldErr%s := teslrt.JSONFieldValue(teslFields, %s)\n\t\tif teslFieldErr%s != nil {\n\t\t\treturn teslrt.RejectShape[%s](teslFieldErr%s.Error())\n\t\t}\n\t\tteslValue%s, teslDecodeErr%s := %s(teslRaw%s)\n\t\tif teslDecodeErr%s != nil {\n\t\t\treturn teslrt.RejectShape[%s](teslDecodeErr%s.Error())\n\t\t}\n"
+                suffix suffix (go_quote field) suffix (go_type go_ty) suffix
+                suffix suffix decoder suffix suffix (go_type go_ty) suffix;
+              let value = "teslValue" ^ suffix in
+              Printf.sprintf "%s: %s"
+                (if adt_boxed info then go_ident ~exported:true field
+                 else variant_field_literal_name variant field)
+                (if adt_self_payload info variant field then
+                   Printf.sprintf "teslrt.Boxed(%s)" value else value)) fields in
+            let assignments = if fields <> [] && adt_boxed info then
+              [Printf.sprintf "%s: &%s{%s}" (variant_payload_field variant)
+                 (variant_payload_type info variant) (String.concat ", " assignments)]
+              else assignments in
+            Printf.bprintf body "\t\treturn teslrt.Accept(%s{%s})\n" (go_type go_ty)
+              (String.concat ", "
+                (if single_variant info <> None then assignments
+                 else (adt_tag_field ^ ": " ^ qualified info.adt_owner variant.var_tag)
+                   :: assignments))) info.adt_variants;
           Printf.bprintf body
             "\t}\n\treturn teslrt.Reject[%s](400, \"expected one of the %s constructors, got \"+teslName)\n}\n"
             (go_type go_ty) type_name
@@ -11295,6 +11452,12 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
       | Http { body = Some (binding : binding); _ } ->
         derive_decoder endpoint.loc (type_of_type_expr types binding.type_expr)
       | _ -> ()) api.endpoints) apis;
+  List.iter (fun name -> match Hashtbl.find_opt types.records name with
+   | Some record ->
+     if record.rec_proof_fields && nominal_codec record.rec_owner record.rec_tesl_name=None then
+       unsupported record.rec_loc "queue payload `%s` has proof-bearing fields; an explicit checked codec is required" name;
+     derive_decoder record.rec_loc (TRecord record)
+   | None -> unsupported (Location.dummy_loc module_path) "checked queue payload record `%s` is missing" name) queue_codec_records;
   (* ── Durable stores: job codecs and Postgres-backed caches ─────────────────
      A `tesl_jobs` row holds its payload as JSONB, so every job type a durable queue carries
      needs a JSON encoder and decoder; a `tesl_cache` row likewise for its value type.  The
@@ -11317,9 +11480,17 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
           | Some row -> TRecord row
           | None -> unsupported info.qu_loc "Go backend cannot resolve job type `%s`" job_type in
         let encoder, decoder = durable_codec info.qu_loc job_type row in
+        let registration = match info.qu_schema with
+         | None -> "teslrt.RegisterJobCodec(" ^ info.qu_go_var ^ ", " ^ go_quote job_type
+         | Some binding ->
+           let _,job,hash=match List.find_opt (fun (spelling,_,_) -> spelling=job_type) binding.jobs with
+            | Some job -> job | None -> unsupported info.qu_loc "checked queue codec binding missing for `%s`" job_type in
+           Printf.sprintf "teslrt.RegisterQueueSchemaJobCodec(%s, %s, %s, %s, %d, %s, %s"
+            info.qu_go_var (go_quote binding.family) (go_quote binding.queue_identity) (go_quote job)
+            binding.current_version (go_quote hash) (go_quote job_type) in
         Printf.bprintf body
-          "\nvar _ = teslrt.RegisterJobCodec(%s, %s, func(teslJob any) any {\n\treturn %s(teslJob.(%s))\n}, func(teslJSON any) (any, error) {\n\tteslDecoded, teslErr := %s(teslJSON)\n\tif teslErr != nil {\n\t\treturn nil, teslErr\n\t}\n\treturn teslDecoded, nil\n})\n"
-          info.qu_go_var (go_quote job_type) encoder (go_type row) decoder)
+          "\nvar _ = %s, func(teslJob any) any {\n\treturn %s(teslJob.(%s))\n}, func(teslJSON any) (any, error) {\n\tteslDecoded, teslErr := %s(teslJSON)\n\tif teslErr != nil {\n\t\treturn nil, teslErr\n\t}\n\treturn teslDecoded, nil\n})\n"
+          registration encoder (go_type row) decoder)
         info.qu_jobs);
   Hashtbl.to_seq_values types.caches
   |> List.of_seq
@@ -12128,7 +12299,8 @@ let test_source ?(debug=false) ?(imported_packages=[]) ?(api_tests=[]) ?(load_te
             Printf.sprintf "!teslrt.JsonEqual(%s, %s)"
               (emit_expr ~indent signatures env json_side) encoded
           end else begin
-          if left_ty <> right_ty then unsupported loc "Go backend expect operands have different types";
+          if not (type_equal left_ty right_ty) then
+            unsupported loc "Go backend expect operands have different types";
           (match left_ty, bool_literal_value left, bool_literal_value right with
            | TBool, Some expected, None ->
              if expected then strip_outer_parens (emit_negated ~indent signatures env right)
@@ -12703,8 +12875,31 @@ let test_source ?(debug=false) ?(imported_packages=[]) ?(api_tests=[]) ?(load_te
 
    Add-if-absent, never replace: a local declaration of the same name is this module's own,
    and an import must not silently take its place. *)
-let register_imported_types ~exposed types (exports : module_exports) =
-  let add table name info = if not (Hashtbl.mem table name) then Hashtbl.replace table name info in
+let register_imported_types ~exposed ?(protected_names=[]) types (exports : module_exports) =
+  (* `exposing []` hides bare aliases, not qualified type references. Copy
+     declarations owned by this dependency under their full names even when
+     none are exposed. Never copy one dependency's imported aliases as its own
+     declarations or let them replace a local bare name. The frontend checks
+     the source module's export boundary. *)
+  let qualified table name info =
+    Hashtbl.replace table (exports.ex_module ^ "." ^ name) info in
+  Hashtbl.iter (fun name (info : record_info) ->
+    if not (String.contains name '.') && info.rec_owner = exports.ex_package then
+      qualified types.records name info) exports.ex_types.records;
+  Hashtbl.iter (fun name (info : newtype_info) ->
+    if not (String.contains name '.') && info.owner = exports.ex_package then
+      qualified types.newtypes name info) exports.ex_types.newtypes;
+  Hashtbl.iter (fun name (info : adt_info) ->
+    if not (String.contains name '.') && info.adt_owner = exports.ex_package then
+      qualified types.adts name info) exports.ex_types.adts;
+  Hashtbl.iter (fun name (info : entity_info) ->
+    if not (String.contains name '.') && info.ent_owner = exports.ex_package then
+      qualified types.entities name info) exports.ex_types.entities;
+  let add table name info =
+    if not (List.mem name protected_names) && not (Hashtbl.mem table name) then Hashtbl.replace table name info;
+    if not (String.contains name '.') then
+      Hashtbl.replace table (exports.ex_module ^ "." ^ name) info
+  in
   List.iter (fun name ->
     let base = match String.index_opt name '(' with
       | Some index -> String.sub name 0 index
@@ -12733,7 +12928,9 @@ let register_imported_types ~exposed types (exports : module_exports) =
        | None -> ())) (if base = name then [name] else [name; base]))
     exposed
 
-let register_imported_module ~loc ~exposed types signatures (exports : module_exports) =
+let register_imported_module ~loc ~exposed ?(protected_names=[]) types signatures (exports : module_exports) =
+  let put table name info =
+    if not (List.mem name protected_names) then Hashtbl.replace table name info in
   (* A LIFTED module's members are DECLARED bare (`fn fromParts`) and WRITTEN qualified at
      every call site (`CivilTime.fromParts`), which is also how the import list spells them.
      So the lookup strips the qualifier while the key keeps it: `normalize_call_head` turns
@@ -12750,21 +12947,21 @@ let register_imported_module ~loc ~exposed types signatures (exports : module_ex
       match Hashtbl.find_opt exports.ex_types.newtypes name,
             Hashtbl.find_opt exports.ex_types.records name,
             Hashtbl.find_opt exports.ex_types.adts name with
-      | Some info, _, _ -> Hashtbl.replace types.newtypes name info; true
+      | Some info, _, _ -> put types.newtypes name info; true
       | None, Some info, _ ->
-        Hashtbl.replace types.records name info;
+        put types.records name info;
         (* An exposed ENTITY brings its table along with its row type: a query in this
            module reads the other package's store, so the two must be the same table. *)
         (match Hashtbl.find_opt exports.ex_types.entities name with
-         | Some entity -> Hashtbl.replace types.entities name entity
+         | Some entity -> put types.entities name entity
          | None -> ());
         true
-      | None, None, Some info -> Hashtbl.replace types.adts name info; true
+      | None, None, Some info -> put types.adts name info; true
       | None, None, None -> false
     in
     let copy_codec name =
       match Hashtbl.find_opt exports.ex_types.codecs name with
-      | Some owner -> Hashtbl.replace types.codecs name owner
+      | Some owner -> put types.codecs name owner
       | None -> ()
     in
     (* An ADT exposed as `Colour(..)` brings its constructors; the bare name is also
@@ -12779,22 +12976,31 @@ let register_imported_module ~loc ~exposed types signatures (exports : module_ex
          (match Hashtbl.find_opt exports.ex_types.newtypes bare,
                 Hashtbl.find_opt exports.ex_types.records bare,
                 Hashtbl.find_opt exports.ex_types.adts bare with
-          | Some info, _, _ -> Hashtbl.replace types.newtypes bare info; true
-          | None, Some info, _ -> Hashtbl.replace types.records bare info; true
-          | None, None, Some info -> Hashtbl.replace types.adts bare info; true
+          | Some info, _, _ -> put types.newtypes bare info; true
+          | None, Some info, _ -> put types.records bare info; true
+          | None, None, Some info -> put types.adts bare info; true
           | None, None, None -> false)
        | None -> false)
       || (base <> name &&
       (match Hashtbl.find_opt exports.ex_types.adts base with
-       | Some info -> Hashtbl.replace types.adts base info; true
+       | Some info -> put types.adts base info; true
        | None -> false)) in
     copy_codec name;
     if base <> name then copy_codec base;
+    let register_signature signature =
+      put signatures name signature;
+      (* Keep the namespace as an explicit key. Stripping it at the call site
+         would make two frozen versions' same-named functions alias whichever
+         import was registered last. The frontend still checks export access. *)
+      let full_name = match unqualified name with
+        | Some _ -> name | None -> exports.ex_module ^ "." ^ name in
+      Hashtbl.replace signatures full_name signature
+    in
     let found_value = match Hashtbl.find_opt exports.ex_signatures name with
-      | Some signature -> Hashtbl.replace signatures name signature; true
+      | Some signature -> register_signature signature; true
       | None ->
         (match Option.bind (unqualified name) (Hashtbl.find_opt exports.ex_signatures) with
-         | Some signature -> Hashtbl.replace signatures name signature; true
+         | Some signature -> register_signature signature; true
          | None -> false)
     in
     (* A constructor of an exposed ADT is itself a signature entry. *)
@@ -12802,15 +13008,29 @@ let register_imported_module ~loc ~exposed types signatures (exports : module_ex
       Hashtbl.iter (fun ctor (signature : signature) ->
         match signature.result with
         | TAdt (info, _) when info.adt_tesl_name = base ->
-          Hashtbl.replace signatures ctor signature
+          put signatures ctor signature;
+          Hashtbl.replace signatures (exports.ex_module ^ "." ^ ctor) signature
         | _ -> ()) exports.ex_signatures;
     (* A name that is neither a type nor a value is a FACT: the frontend has already
        validated the import, and a fact has no runtime form to bring across. *)
     ignore (found_type, found_value, loc))
     exposed
 
-let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_form) =
+let compile_module ?(mode=Release) ?(dependencies=[]) ?(entity_bindings=[]) ?(migration_families=[]) ?(migration_queues=[]) ?(queue_codec_records=[]) ?project_path (m : module_form) =
   try
+    List.iter (function
+      | DDatabase { config_expr = Some config; loc; _ } ->
+        (match List.assoc_opt "schema" (Desugar.config_record_fields config) with
+         | Some (EConstructor { args = []; _ }) ->
+           unsupported loc "schema module ownership must be resolved by the project compiler before emitting a module"
+         | _ -> ())
+      | _ -> ()) m.decls;
+    let protected_names = List.concat_map (function
+      | DEntity e -> [e.name] | DRecord r -> [r.name] | DFunc f -> [f.name] | DConst c -> [c.name]
+      | DQueue q -> [q.name]
+      | DType (TypeNewtype t) -> [t.name]
+      | DType (TypeAdt t) -> t.name :: List.map (fun (v : adt_variant) -> v.ctor) t.variants
+      | _ -> []) m.decls in
     (* Debug adds only versioned runtime checkpoints. Release remains the same source path and
        contains no debug import or call. *)
     (* `Maybe` is provided by `internal/teslrt` rather than emitted per module: a
@@ -13004,8 +13224,9 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
           match name with
           (* These names are only meaningful inside a `database` declaration, which is where
              the backend is read and where the connection is built. *)
-          | "Database" | "Memory" | "DatabaseBackend" | "Postgres" | "PostgresConfig"
-          | "PostgresConnection" | "TcpConnection" | "SocketConnection" -> ()
+          | "Database" | "Memory" | "DatabaseBackend" | "Postgres" | "PostgresConfig" | "MigrationConfig"
+          | "PostgresConnection" | "TcpConnection" | "SocketConnection"
+          | "MigrationTopology" | "MigrationTopology(..)" | "Worker" | "Embedded" -> ()
           | other -> unsupported import.loc
             "Go backend does not emit the `Tesl.Database` export `%s`: the module is wired, that \
              export is not — test_go_stdlib_export_seam.ml holds the whole inventory" other) exposed
@@ -13050,10 +13271,18 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
          its backoff constructors), two capabilities, and the `FromQueue`/`FromDeadQueue`
          provenance proofs — which erase.  None of it needs a runtime binding: the store is
          the queue's own variable and the retry rule is baked into it. *)
+      | "Tesl.Migration" ->
+        List.iter (fun name ->
+          if not (List.mem name (Migration_form.names @ Migration_form.runtime_names) || List.exists
+              (fun (owner,_) -> name = owner ^ "(..)")
+              (Migration_form.constructor_groups @ Migration_form.runtime_constructor_groups)) then
+            unsupported import.loc "Go backend does not emit the `Tesl.Migration` export `%s`" name)
+          exposed
       | "Tesl.Queue" ->
         List.iter (fun name ->
           match name with
-          | "Queue" | "QueueRetryStrategy" | "Fixed" | "Exponential" | "Linear"
+          | "Queue" | "QueueRetryStrategy" | "QueueRetryBackoff" | "QueueRetryBackoff(..)"
+          | "Fixed" | "Exponential" | "Linear"
           | "queueRead" | "queueWrite" | "FromQueue" | "FromDeadQueue" | "Job"
           (* `pubsub` is the SSE capability: a compile-time grant, and the functions it
              gates fail closed on their own. *)
@@ -13062,7 +13291,11 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
              `DeadJob` the opaque type of its elements. *)
           (* `requeue` takes a `DeadJob` back to pending, so importing it brings `DeadJob`
              in as well — the value it takes has to have a type. *)
-          | "deadJobs" | "DeadJob" | "requeue" -> ()
+          | "deadJobs" | "DeadJob" | "requeue"
+          | "DeadJobReason" | "DeadJobReason(..)"
+          | "AttemptsExhausted" | "PayloadInvalid" | "MigrationRejected" | "LegacyUnresolved"
+          | "DeadJob.id" | "DeadJob.reason" | "DeadJob.sourceVersion"
+          | "DeadJob.attempts" | "DeadJob.typeName" -> ()
           | other -> unsupported import.loc
             "Go backend does not support the `Tesl.Queue` export `%s`: the exports it emits \
              are enumerated above, and test_go_stdlib_export_seam.ml holds the whole \
@@ -13093,6 +13326,8 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
        emitter: a second reader of a config record is a second place for a field to be misread,
        which is exactly how `backend: Memory` once looked like Postgres. *)
     let funcs = List.filter_map (function DFunc fd -> Some fd | _ -> None) m.decls in
+    let app_databases = List.filter_map (fun (fd : func_decl) ->
+      Option.map (fun database -> fd.name, database) (Desugar.app_database fd)) funcs in
     let funcs = List.map (Desugar.lower_main_app m.decls) funcs in
     let codecs = List.filter_map (function DCodec c -> Some c | _ -> None) m.decls in
     let apis = List.filter_map (function DApi a -> Some a | _ -> None) m.decls in
@@ -13119,18 +13354,33 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
       adts = Hashtbl.create 8;
       entities = Hashtbl.create 8;
       queues = Hashtbl.create 8;
+      job_queues = Hashtbl.create 8;
+      queue_type_identity = Validation_common.queue_type_identity (Validation_common.queue_type_aliases m);
       caches = Hashtbl.create 4;
       emails = Hashtbl.create 4;
       channels = Hashtbl.create 4;
       codecs = Hashtbl.create 8;
+      nominal_codecs = Hashtbl.create 8;
+      queue_derived_codecs = Hashtbl.create 8;
       aliases = Hashtbl.create 8;
       consts = Hashtbl.create 8;
       databases = Hashtbl.create 4;
     } in
+    List.iter (fun name -> match List.rev (String.split_on_char '.' name) with
+     | record::owner -> Hashtbl.replace types.queue_derived_codecs (package_name (String.concat "." (List.rev owner)),record) ()
+     | [] -> ()) queue_codec_records;
     (* A hand-written codec is emitted by THIS package, once; a use from another package is
        qualified with it (see `codec_decode_ref`). *)
     List.iter (fun (codec : codec_form) ->
       Hashtbl.replace types.codecs codec.type_name package) codecs;
+    (* Dependencies already include transitive modules. Copy each module's own codecs
+       once, rather than repeatedly copying the growing inherited inventories. *)
+    List.iter (fun dependency ->
+      List.iter (fun (codec : codec_form) ->
+        Hashtbl.replace types.nominal_codecs (dependency.ex_package, codec.type_name) codec)
+        dependency.ex_codecs) dependencies;
+    List.iter (fun (codec : codec_form) ->
+      Hashtbl.replace types.nominal_codecs (package, codec.type_name) codec) codecs;
     (* Which functions perform a proof operation, for the one assertion that depends on it
        (see the `expectFail` emission).  Computed here, where the bodies are in hand. *)
     Hashtbl.reset proof_op_functions;
@@ -13317,6 +13567,7 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
        Postgres-backed database manages it before any of its queries are emitted. *)
     List.iter (function
       | DDatabase d ->
+        let migration_family = List.assoc_opt (m.module_name ^ "." ^ d.name) migration_families in
         let d = Desugar.desugar_database_config d in
         let backend =
           match String.lowercase_ascii d.backend with
@@ -13326,6 +13577,7 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
         Hashtbl.replace types.databases d.name {
           db_tesl_name = d.name;
           db_backend = backend;
+          db_migration_family = migration_family;
           db_schema = d.schema;
           db_entities = d.entities;
           db_config = d.postgres;
@@ -13423,6 +13675,7 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
            qu_go_var = go_var;
            qu_owner = package;
            qu_jobs = jobs;
+           qu_schema = List.find_opt (fun (binding:Migration_program.queue_binding) -> binding.application_queue=m.module_name ^ "." ^ q.name) migration_queues;
            qu_job_type = job_type;
            qu_worker = worker;
            qu_dead_worker = dead_worker;
@@ -13437,17 +13690,21 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
             takes the queue as a value.  Opaque — a program names one, hands it to a queue
             verb, and reads nothing off it — so it registers with no fields, like `DeadJob`
             itself.  The Go representation is the pointer `NewQueue` answers. *)
-         Hashtbl.replace types.records q.name {
+         let queue_type = {
            rec_tesl_name = q.name;
            rec_owner = "";
            rec_go_name = "*teslrt.Queue";
            rec_proof_fields = false;
            rec_fields = [];
            rec_loc = q.loc;
-         };
-         (* Also by job type, since `enqueue` names the JOB and not the queue — every one of
-            them, so a queue carrying two job types is reachable from either. *)
-         List.iter (fun (each, _, _) -> Hashtbl.replace types.queues each info) jobs;
+         } in
+         Hashtbl.replace types.records q.name queue_type;
+         (* Naming a queue as an argument refers to its existing store, just as
+            passing it directly to a queue verb does. It constructs no record. *)
+         Hashtbl.replace types.consts q.name (TRecord queue_type, go_var);
+         (* Enqueue resolves a nominal payload type, never a queue value name. *)
+         List.iter (fun (each, _, _) ->
+           Hashtbl.replace types.job_queues (types.queue_type_identity each) info) jobs;
          ignore lowered)) queue_forms;
     (* An entity's ROW type is registered exactly like a record — a query result and an
        `insert` argument are ordinary struct values — and its store is one package-level
@@ -13494,10 +13751,15 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
             then Some database else None)
           types.databases None
       in
+      let project_binding = List.assoc_opt (m.module_name ^ "." ^ e.name) entity_bindings in
+      let managing = match managing, project_binding with
+        | None, Some database when database.db_backend = "postgres" -> Some database
+        | other, _ -> other in
       (* Named by SOME database, whatever its backend: that is what decides whether a test
          block starts from an empty table (see `ent_in_database`). *)
       let declared = Hashtbl.fold (fun _ (database : database_info) found ->
-        found || List.mem e.name database.db_entities) types.databases false in
+        found || List.mem e.name database.db_entities) types.databases false
+        || project_binding <> None in
       Hashtbl.replace types.entities e.name {
         ent_tesl_name = e.name;
         ent_row = row;
@@ -14256,16 +14518,30 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
           runtime_record "ConversationTurn" "teslrt.ConversationTurn" [] ]
     end;
     (* `deadJobs` answers the dead-letter contents of a queue.  Its element type is opaque
-       (`DeadJob`), so what a test can do with the list is count it or requeue from it — which
-       is what the Legacy surface allows too. *)
+       (`DeadJob`), so callers inspect metadata through typed accessors and may requeue retryable entries. *)
     let dead_jobs_imported = ref false in
+    let dead_job_accessors = ref [] in
+    let queue_reason_imported = ref false in
     let requeue_imported = ref false in
     List.iter (fun (import : import_decl) ->
       if import.module_name = "Tesl.Queue" then begin
         let exposed = match import.names with
-          | ImportAll -> [] | ImportExposing names -> names in
-        if List.mem "deadJobs" exposed || List.mem "requeue" exposed then
+          | ImportAll -> Option.value ~default:[]
+              (List.assoc_opt "Tesl.Queue" Type_system.tesl_module_exports)
+          | ImportExposing names -> names in
+        if List.exists (fun name -> List.mem name exposed)
+            ["deadJobs"; "DeadJob"; "requeue"; "DeadJob.id"; "DeadJob.reason";
+             "DeadJob.sourceVersion"; "DeadJob.attempts"; "DeadJob.typeName"] then
           dead_jobs_imported := true;
+        List.iter (fun name -> if String.starts_with ~prefix:"DeadJob." name then begin
+          dead_job_accessors := name :: !dead_job_accessors;
+          if name = "DeadJob.sourceVersion" || name = "DeadJob.typeName" then
+            maybe_imported := true
+        end) exposed;
+        if List.exists (fun name -> List.mem name exposed)
+            ["DeadJobReason"; "DeadJobReason(..)"; "DeadJob.reason";
+             "AttemptsExhausted"; "PayloadInvalid"; "MigrationRejected"; "LegacyUnresolved"] then
+          queue_reason_imported := true;
         (* `requeue` is an ordinary function over a `DeadJob`, unlike the queue VERBS, which
            name a queue and are resolved statically. *)
         if List.mem "requeue" exposed then requeue_imported := true
@@ -14348,8 +14624,21 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
         rec_loc = loc;
       }
     end;
-    (* `DeadJob` is opaque: the runtime carries the job's identity and nothing a program can
-       read, so the element type is a runtime struct with no Tesl-visible fields. *)
+    if !queue_reason_imported then begin
+      let loc = Location.dummy_loc m.source_file in
+      Hashtbl.replace types.adts "DeadJobReason" {
+        adt_tesl_name = "DeadJobReason"; adt_owner = "";
+        adt_go_name = "teslrt.DeadJobReason"; adt_tag_type = "teslrt.DeadJobReasonTag";
+        adt_params = [];
+        adt_variants = List.map (fun ctor ->
+          { var_ctor = ctor; var_tag = "teslrt.DeadJobReason" ^ ctor;
+            var_fields = []; var_go_fields = []; var_loc = loc })
+          ["AttemptsExhausted"; "PayloadInvalid"; "MigrationRejected"; "LegacyUnresolved"];
+        adt_loc = loc; adt_builtin = true;
+      }
+    end;
+    (* `DeadJob` exposes metadata through accessors, so the runtime struct has
+       no Tesl-visible fields and no decoded payload. *)
     if !dead_jobs_imported then
       Hashtbl.replace types.records "DeadJob" {
         rec_tesl_name = "DeadJob";
@@ -14533,6 +14822,27 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
           adt_builtin = true;
         }
       end) m.imports;
+    if List.exists (fun (import : import_decl) -> import.module_name = "Tesl.Migration" &&
+      match import.names with
+      | ImportAll -> true
+      | ImportExposing names -> List.exists (fun name ->
+          List.mem name ("Migrated(..)" :: Migration_form.runtime_names)) names) m.imports then begin
+      let loc = Location.dummy_loc m.source_file in
+      Hashtbl.replace types.adts "Migrated" {
+        adt_tesl_name = "Migrated"; adt_owner = "";
+        adt_go_name = "teslrt.Migrated"; adt_tag_type = "teslrt.MigratedTag";
+        adt_params = ["a", "A"];
+        adt_variants = [
+          { var_ctor = "Row"; var_tag = "teslrt.MigratedRow";
+            var_fields = ["value", TParam "A"];
+            var_go_fields = ["value", "RowValue"]; var_loc = loc };
+          { var_ctor = "Reject"; var_tag = "teslrt.MigratedReject";
+            var_fields = ["reason", TString];
+            var_go_fields = ["reason", "RejectReason"]; var_loc = loc };
+        ];
+        adt_loc = loc; adt_builtin = true;
+      }
+    end;
     if !either_imported then begin
       let loc = Location.dummy_loc m.source_file in
       Hashtbl.replace types.adts "Either" {
@@ -14623,8 +14933,23 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
             @ List.of_seq (Hashtbl.to_seq_keys dependency.ex_types.adts)
           | ImportExposing names -> names
         in
-        register_imported_types ~exposed types dependency)
+        register_imported_types ~exposed ~protected_names types dependency)
       m.imports;
+    (* Project ownership includes unexported schema entities. Register only their
+       fully qualified metadata keys: importing private bare names here would let
+       them replace an unrelated local application's same-named record. *)
+    Hashtbl.iter (fun _ (database : database_info) ->
+      List.iter (fun name ->
+        List.iter (fun dependency ->
+          let prefix = dependency.ex_module ^ "." in
+          if String.starts_with ~prefix name then
+            let bare = String.sub name (String.length prefix) (String.length name - String.length prefix) in
+            match Hashtbl.find_opt dependency.ex_types.entities bare,
+                  Hashtbl.find_opt dependency.ex_types.records bare with
+            | Some entity, Some record ->
+              Hashtbl.replace types.entities name entity;
+              Hashtbl.replace types.records name record
+            | _ -> ()) dependencies) database.db_entities) types.databases;
     (* Field types resolve only after every named type is registered, so records and
        ADTs may reference each other; a cycle would be an infinitely sized Go value
        and is rejected below. *)
@@ -14787,7 +15112,7 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
       else ignore directly_recursive)
       adt_forms;
     List.iter (function
-      | DFunc _ | DTest _ -> ()
+      | DQueueSchema _ | DFunc _ | DTest _ -> ()
       | DType (TypeNewtype _) -> ()
       | DRecord _ -> ()
       | DType (TypeAdt _) -> ()
@@ -14914,7 +15239,10 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
       }) types.records;
     (* Each constructor is its own signature entry: the surface syntax names the
        constructor, and the variant it belongs to is recovered from the result type. *)
-    Hashtbl.iter (fun _ info ->
+    Hashtbl.iter (fun name info ->
+      (* Qualified table entries alias the same ADT metadata. Their constructors
+         are registered from the owning module below, not emitted a second time. *)
+      if not (String.contains name '.') then
       List.iter (fun variant ->
         if Hashtbl.mem signatures variant.var_ctor then unsupported variant.var_loc
           "Go backend generated name collision for constructor `%s`" variant.var_ctor;
@@ -15189,7 +15517,7 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
       !effect_imports;
     (* `requeue job` resets a dead job to pending.  It answers whether the job was there to
        reset — a dead letter that no longer holds it is `False` rather than a trap, which is
-       the answer `tesl/queue.tesl` gives for the same case. *)
+       the answer the runtime gives for the same case. *)
     if !requeue_imported then
       (match Hashtbl.find_opt types.records "DeadJob" with
        | Some row ->
@@ -15198,6 +15526,27 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
              sig_owner = ""; sig_needs_scope = false }
        | None -> unsupported (Location.dummy_loc m.source_file)
          "Go backend `requeue` needs `DeadJob` from `Tesl.Queue`");
+
+    List.iter (fun name ->
+      let loc = Location.dummy_loc m.source_file in
+      let row = match Hashtbl.find_opt types.records "DeadJob" with
+        | Some row -> row | None -> unsupported loc "Go backend needs DeadJob metadata" in
+      let maybe_of ty = match Hashtbl.find_opt types.adts "Maybe" with
+        | Some info -> TAdt (info, [ty])
+        | None -> unsupported loc "Go backend `%s` answers a Maybe; import `Tesl.Maybe`" name in
+      let result, go_name = match name with
+        | "DeadJob.id" -> TString, "teslrt.DeadJobID"
+        | "DeadJob.attempts" -> TInt, "teslrt.DeadJobAttempts"
+        | "DeadJob.sourceVersion" -> maybe_of TInt, "teslrt.DeadJobSourceVersion"
+        | "DeadJob.typeName" -> maybe_of TString, "teslrt.DeadJobTypeName"
+        | "DeadJob.reason" ->
+          (match Hashtbl.find_opt types.adts "DeadJobReason" with
+           | Some info -> TAdt (info, []), "teslrt.DeadJobReasonOf"
+           | None -> unsupported loc "Go backend needs DeadJobReason")
+        | _ -> unsupported loc "Go backend does not emit `%s`" name in
+      Hashtbl.replace signatures name
+        { params = [TRecord row]; result; go_name; sig_owner = ""; sig_needs_scope = false })
+      !dead_job_accessors;
 
     (* `FixedOffset minutes` is the one zone constructor that takes an argument, so it is a
        signature where the others are constants. *)
@@ -15651,7 +16000,15 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
       !http_stub_imports;
     (* An imported local module contributes its exported functions with the OWNING
        package attached, so every reference to them is qualified. *)
-    let imported_packages = ref [] in
+    (* Generated scanners can reach a private field type through an imported entity.
+       Its owning package can be a transitive dependency. Import emission below retains
+       only packages actually referenced by the generated body; this adds no source names. *)
+    let imported_packages = ref (List.map (fun dependency -> dependency.ex_package) dependencies) in
+    Hashtbl.iter (fun _ (database : database_info) ->
+      List.iter (fun name -> match Hashtbl.find_opt types.entities name with
+        | Some entity when entity.ent_owner <> package && not (List.mem entity.ent_owner !imported_packages) ->
+          imported_packages := entity.ent_owner :: !imported_packages
+        | _ -> ()) database.db_entities) types.databases;
     List.iter (fun (import : import_decl) ->
       match List.find_opt (fun dependency ->
               dependency_named dependency import.module_name) dependencies with
@@ -15673,7 +16030,7 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
         in
         if not (List.mem dependency.ex_package !imported_packages) then
           imported_packages := dependency.ex_package :: !imported_packages;
-        register_imported_module ~loc:import.loc ~exposed types signatures dependency)
+        register_imported_module ~loc:import.loc ~exposed ~protected_names types signatures dependency)
       m.imports;
     (* A `database` block may name an entity DECLARED in another module, and that entity's
        record only arrives with the import — so the flag is set again here, now that both are
@@ -15873,7 +16230,13 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
     current_package := package;
     current_types := Some types;
     let source =
-       module_source ~debug:(mode = Debug) ~imported_packages:!imported_packages ~codecs ~apis ~servers ~capturers
+       module_source ~debug:(mode = Debug) ~imported_packages:!imported_packages ~codecs ~apis ~servers ~capturers ~app_databases
+        ~queue_codec_records:(List.filter_map (fun name ->
+          let prefix=m.module_name ^ "." in
+          if String.starts_with ~prefix name then
+            let local=String.sub name (String.length prefix) (String.length name-String.length prefix) in
+            if String.contains local '.' then None else Some local
+          else None) queue_codec_records)
         ~consts:(List.filter_map (function DConst c -> Some c | _ -> None) m.decls)
         ~agents:(List.filter_map (function DAgent a -> Some a | _ -> None) m.decls)
         ~capabilities:(List.filter_map (function DCapability c -> Some c | _ -> None) m.decls)
@@ -15886,9 +16249,10 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
       if tests = [] && api_tests = [] && load_tests = [] then None
        else Some (test_source ~debug:(mode = Debug) ~imported_packages:!imported_packages ~api_tests ~load_tests
                     module_path package signatures tests) in
-    let needs_runtime = mode = Debug || contains_go_code source "teslrt." ||
+    let schema_commands = migration_families <> [] && List.exists (fun (fd : func_decl) -> fd.kind = MainKind) funcs in
+    let needs_runtime = schema_commands || mode = Debug || contains_go_code source "teslrt." ||
       match tests_source with Some text -> contains_go_code text "teslrt." | None -> false in
-    let main_imports = if mode = Debug then
+    let main_imports = if mode = Debug || schema_commands then
       Printf.sprintf "%s\n\t%s\n\t%s" (go_quote "os")
         (go_quote (module_path ^ "/internal/" ^ package))
         (go_quote (module_path ^ "/internal/teslrt"))
@@ -15896,6 +16260,9 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
     let main_startup = if mode = Debug then
        "\tteslDebug, teslDebugErr := teslrt.StartDebugControlFromEnvironment()\n\tif teslDebugErr != nil {\n\t\tpanic(teslDebugErr)\n\t}\n\tif teslDebug != nil && os.Getenv(\"TESL_DEBUG_WAIT\") != \"\" {\n\t\tteslDebug.WaitForConfiguration()\n\t}\n\tif teslDebug != nil {\n\t\tdefer func() { _ = teslDebug.Close() }()\n\t}\n"
     else "" in
+    let main_startup = (if schema_commands then
+      "\tif handled, code := teslrt.RunSchemaCommand(os.Args[1:], os.Stdout, os.Stderr); handled {\n\t\tos.Exit(code)\n\t}\n"
+      else "") ^ main_startup in
     (* The lint configuration is part of the emitter contract, versioned with this
        file: `exhaustive` is the static half of the ADT exhaustiveness mitigation and
        only sees a tag switch when a `default` arm does NOT count as covering. *)
@@ -15933,7 +16300,7 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
        takes `github.com/jackc/pgx/v5` and a program that does not takes nothing.  Pinned here
        and checked against `runtime/go/go.mod`/`go.sum` by a seam test, so a bump cannot
        drift. *)
-    let postgres_runtime =
+    let postgres_runtime = schema_commands ||
       let mentions name =
         contains_go_code source name
         || (match tests_source with
@@ -16041,7 +16408,7 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
       end
     in
     Ok (artifacts, { ex_module = m.module_name; ex_package = package;
-                     ex_types = types; ex_signatures = signatures })
+                     ex_types = types; ex_signatures = signatures; ex_codecs = codecs })
   with Unsupported error -> Error [error]
 
 (* Test seam for single-module callers that previously consumed one backend string. *)
@@ -16062,7 +16429,44 @@ let compile_to_string ?(root_path = "") (m : module_form) =
    dependency emitted from.  That is what makes a type crossing the boundary the same
    type on both sides: `go_type` equality is structural, so a re-derived record would
    compare unequal to the original even when it describes the same Tesl declaration. *)
-let compile_project ?(mode=Release) ~(entry : module_form) (modules : module_form list) =
+let project_entity_bindings (modules : module_form list) =
+  let bindings = ref [] and errors = ref [] in
+  let resolve = Validation_common.resolve_project_entity modules in
+  List.iter (fun (m : module_form) -> List.iter (function
+    | DDatabase original ->
+      let d = Desugar.desugar_database_config original in
+      let backend = match String.lowercase_ascii d.backend with
+        | "" | "postgres" -> "postgres" | other -> other in
+      let identity = package_name m.module_name ^ "." ^ d.name in
+      let database = {
+        db_tesl_name = d.name; db_backend = backend; db_schema = d.schema;
+        db_migration_family = None; (* query reference; the owner emits history registration *)
+        db_entities = d.entities; db_config = d.postgres; db_loc = d.loc;
+        db_owner = "";
+        db_go_var = Printf.sprintf "teslrt.ResolveDatabaseIdentity(%s)" (go_quote identity);
+      } in
+      List.iter (fun entity -> match resolve m entity with
+        | [key] ->
+          (match List.assoc_opt key !bindings with
+           | None -> bindings := (key, database) :: !bindings
+           | Some previous -> errors := { loc = d.loc; message = Printf.sprintf
+               "entity `%s` belongs to two databases (`%s` and `%s`); connection configuration must have one owner"
+               key previous.db_tesl_name d.name } :: !errors)
+        | [] -> () (* The frontend reports an unknown entity at its source. *)
+        | _ -> errors := { loc = d.loc; message = Printf.sprintf
+            "database `%s` has an ambiguous entity `%s`; qualify its module" d.name entity } :: !errors)
+        d.entities
+    | _ -> ()) m.decls) modules;
+  if !errors = [] then Ok !bindings else Error (List.rev !errors)
+
+let compile_project ?(mode=Release) ?(migration_families=[]) ?(migration_queues=[]) ?(queue_codec_records=[]) ~(entry : module_form) (modules : module_form list) =
+  let lowered = List.map (Migration_schema.lower_module ~modules) modules in
+  let errors = List.concat_map (function
+    | Ok _ -> []
+    | Error errors -> List.map (fun (e : Validation_common.validation_error) ->
+        { loc = e.loc; message = e.message }) errors) lowered in
+  if errors <> [] then Error errors else
+  let modules = List.filter_map (function Ok m -> Some m | Error _ -> None) lowered in
   let project_path = "tesl.generated/" ^ package_name entry.module_name in
   let local_names = List.map (fun (m : module_form) -> m.module_name) modules in
   (* The name a local module answers to, which is not always the name the import writes:
@@ -16122,15 +16526,15 @@ let compile_project ?(mode=Release) ~(entry : module_form) (modules : module_for
         order (List.rev_append (List.map (fun (m : module_form) -> m.module_name) ready)
                  done_names) blocked (passes - 1)
   in
-  match order [] modules (List.length modules + 1) with
-  | Error errors -> Error errors
-  | Ok ordered_names ->
+  match project_entity_bindings modules, order [] modules (List.length modules + 1) with
+  | Error errors, _ | _, Error errors -> Error errors
+  | Ok entity_bindings, Ok ordered_names ->
     let ordered = List.filter_map (fun name ->
       List.find_opt (fun (m : module_form) -> m.module_name = name) modules) ordered_names in
     let rec emit acc exports = function
       | [] -> Ok (List.rev acc)
       | (m : module_form) :: rest ->
-        (match compile_module ~mode ~dependencies:exports ~project_path m with
+        (match compile_module ~mode ~dependencies:exports ~entity_bindings ~migration_families ~migration_queues ~queue_codec_records ~project_path m with
          | Error errors -> Error errors
          | Ok (artifacts, module_exports) ->
            emit (List.rev_append artifacts acc) (module_exports :: exports) rest)

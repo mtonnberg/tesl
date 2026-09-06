@@ -40,28 +40,31 @@
     SseChannel { … }`, `cache C = Cache { … }`, the `main() -> App` tail, the
     `jobs: [Job …]` list) and have no runtime representation. *)
 let config_block_types : string list =
-  [ "Database"; "PostgresConfig"; "Queue"; "QueueRetryStrategy";
+  [ "Database"; "PostgresConfig"; "MigrationConfig"; "Queue"; "QueueRetryStrategy";
     "QueueRetryConfig"; "Email"; "SmtpConfig"; "SseChannel"; "App"; "Job";
-    "Cache" ]
+    "Cache" ] @ Migration_form.names
 
 (** The checker-seeded config ADTs and their constructors
     (checker.ml [config_stdlib_seed]): `backend: Postgres (PostgresConfig
     { … })` / `Memory`, `connection: TcpConnection { … }` /
-    `SocketConnection { … }`, `backoff: Exponential` / `Fixed` / `Linear`.
+    `SocketConnection { … }`, `topology: Worker` / `Embedded`,
+    `backoff: Exponential` / `Fixed` / `Linear`.
     Their values cannot escape config blocks (validation forces literal ctor
     forms), so outside one they are compile-time only. *)
 let config_adts_and_ctors : string list =
   [ "DatabaseBackend"; "PostgresConnection"; "TcpConnection";
-    "SocketConnection"; "Postgres"; "Memory"; "QueueRetryBackoff";
+    "SocketConnection"; "Postgres"; "Memory"; "MigrationTopology"; "Worker"; "Embedded"; "QueueRetryBackoff";
     "Exponential"; "Fixed"; "Linear" ]
 
 (** Constructor → owning config ADT, for diagnostics ([config_adts_and_ctors]
-    minus the three ADT names themselves). *)
+    minus the ADT names themselves). *)
 let config_ctor_owner : (string * string) list =
   [ ("Postgres",         "DatabaseBackend");
     ("Memory",           "DatabaseBackend");
     ("TcpConnection",    "PostgresConnection");
     ("SocketConnection", "PostgresConnection");
+    ("Worker",           "MigrationTopology");
+    ("Embedded",         "MigrationTopology");
     ("Exponential",      "QueueRetryBackoff");
     ("Fixed",            "QueueRetryBackoff");
     ("Linear",           "QueueRetryBackoff") ]

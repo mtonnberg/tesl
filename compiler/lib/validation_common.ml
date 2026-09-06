@@ -11,6 +11,25 @@
 open Ast
 open Location
 
+(** PostgreSQL field naming is shared by validation and emission. Acronyms form
+    one word: userID and userId both map to user_id and therefore cannot coexist. *)
+let sql_column_name text =
+  let buffer = Buffer.create (String.length text + 4) in
+  let length = String.length text in
+  String.iteri (fun index char ->
+    let upper = char >= 'A' && char <= 'Z' in
+    if upper && index > 0 then begin
+      let previous = text.[index - 1] in
+      let previous_lower =
+        (previous >= 'a' && previous <= 'z') || (previous >= '0' && previous <= '9') in
+      let previous_upper = previous >= 'A' && previous <= 'Z' in
+      let next_lower =
+        index + 1 < length && text.[index + 1] >= 'a' && text.[index + 1] <= 'z' in
+      if previous_lower || (previous_upper && next_lower) then Buffer.add_char buffer '_'
+    end;
+    Buffer.add_char buffer (Char.lowercase_ascii char)) text;
+  Buffer.contents buffer
+
 (* ── Validation error ────────────────────────────────────────────────────── *)
 
 type validation_error = {
@@ -434,18 +453,39 @@ let strip_outer_parens (s : string) : string =
    (=) over this variant, i.e. over the RESOLVED predicate identity (pred name)
    and the RESOLVED subject identities (the canonical arg strings produced by
    subst_proof_args_with_subjects / A4 literal identity keys). *)
+(* Checking-only identity context; source AST and canonical source bytes are never rewritten. *)
+let predicate_identity_context = ref Fun.id
+let predicate_identity name = !predicate_identity_context name
+
+(* Import aliases are spellings of the original declaration, not new proof
+   authorities. Keep source names for diagnostics and resolve only comparisons. *)
+let predicate_mem name names =
+  let identity = predicate_identity name in
+  List.exists (fun other -> predicate_identity other = identity) names
+
 type proof_key_t =
   | KApp of string * string list       (* (resolved pred, resolved args) *)
   | KAnd of proof_key_t list           (* sorted conjuncts, order-insensitive *)
+  | KQuantified of string * proof_key_t * string
+
+let parse_nested_predicate text =
+  let source = "module PredicateTransport exposing []\nfn carry(value: Int ::: " ^
+    text ^ ") -> Int = value\n" in
+  match Parser.parse_module "<predicate>" source with
+  | Ok { decls = [DFunc { params = [{ proof_ann = Some proof; _ }]; _ }]; _ } -> Some proof
+  | _ -> None
 
 let rec proof_key (p : proof_expr) : proof_key_t =
   match p with
-  | PredApp { pred = "ForAll"; args = [proof_name; subject]; _ } ->
+  | PredApp { pred = ("ForAll" | "ForAllValues" | "ForAllKeys") as pred;
+      args = [proof_name; subject]; _ } ->
     (* Keep the required (parenthesised) and carried (bare) inner renderings
        comparable, matching the pre-B6 special case.  The inner is still one
        rendered field, but the pred/subject BOUNDARY is now unambiguous. *)
-    KApp ("ForAll", [strip_outer_parens proof_name; subject])
-  | PredApp { pred; args; _ } -> KApp (pred, args)
+    (match parse_nested_predicate proof_name with
+     | Some inner -> KQuantified (pred, proof_key inner, subject)
+     | None -> KApp (pred, [strip_outer_parens proof_name; subject]))
+  | PredApp { pred; args; _ } -> KApp (predicate_identity pred, args)
   | PredAnd { left; right; _ } ->
     let flat = function KAnd xs -> xs | k -> [k] in
     KAnd (List.sort compare (flat (proof_key left) @ flat (proof_key right)))
@@ -641,7 +681,34 @@ let describe_proof_app ((pred, args) : proof_app) : string =
 (** The declared applications no via function establishes (exact match after subject
     canonicalisation). *)
 let uncovered_proof_apps ~(declared : proof_app list) ~(covered : proof_app list) : proof_app list =
-  List.filter (fun app -> not (List.mem app covered)) declared
+  let key (pred, args) = proof_key (PredApp { pred; args; loc = dummy_loc "<proof-boundary>" }) in
+  let covered_keys = List.map key covered in
+  List.filter (fun app -> not (List.mem (key app) covered_keys)) declared
+
+(** Response guarantees also include element/key/value proofs. Split inner
+    conjunctions so a stronger quantified guarantee covers each advertised part,
+    while retaining the quantifier and every predicate argument in comparisons. *)
+let response_proof_apps_of_return_spec spec =
+  let rec quantified ?(subject="$subject") quantifier = function
+    | PredAnd {left;right;_} ->
+      quantified ~subject quantifier left @ quantified ~subject quantifier right
+    | proof -> [(quantifier, [pp_proof proof; subject])] in
+  match spec with
+  | RetForAll {proof;_} | RetMaybeForAll {proof;_}
+  | RetSetForAll {proof;_} | RetMaybeSetForAll {proof;_} -> quantified "ForAll" proof
+  | RetForAllDictValues {proof;_} -> quantified "ForAllValues" proof
+  | RetForAllDictKeys {proof;_} -> quantified "ForAllKeys" proof
+  | _ ->
+    proof_apps_of_return_spec spec |> List.concat_map (function
+      | (("ForAll" | "ForAllValues" | "ForAllKeys") as quantifier,
+          [inner; subject]) as app ->
+        (* Attached returns and the `? ForAll` surface carry the same guarantee.
+           Normalize only parsed conjunctions, without changing the quantified
+           subject or any inner predicate argument. *)
+        (match parse_nested_predicate inner with
+         | Some proof -> quantified ~subject quantifier proof
+         | None -> [app])
+      | app -> [app])
 
 (** Extract the element-level predicate names from a ForAll/MaybeForAll/SetForAll return spec. *)
 let forall_preds_of_return_spec (spec : return_spec) : string list =
@@ -863,6 +930,8 @@ let builtin_ctor_info : ctor_info = [
   ("Err", ([mk_var_type "e"], mk_app_type (mk_app_type (mk_name_type "Result") (mk_var_type "a")) (mk_var_type "e")));
   ("Left", ([mk_var_type "a"], mk_app_type (mk_app_type (mk_name_type "Either") (mk_var_type "a")) (mk_var_type "b")));
   ("Right", ([mk_var_type "b"], mk_app_type (mk_app_type (mk_name_type "Either") (mk_var_type "a")) (mk_var_type "b")));
+  ("Row", ([mk_var_type "a"], mk_app_type (mk_name_type "Migrated") (mk_var_type "a")));
+  ("Reject", ([mk_name_type "String"], mk_app_type (mk_name_type "Migrated") (mk_var_type "a")));
   ("Tuple2", ([mk_var_type "a"; mk_var_type "b"], mk_app_type (mk_app_type (mk_name_type "Tuple2") (mk_var_type "a")) (mk_var_type "b")));
   ("Tuple3", ([mk_var_type "a"; mk_var_type "b"; mk_var_type "c"], mk_app_type (mk_app_type (mk_app_type (mk_name_type "Tuple3") (mk_var_type "a")) (mk_var_type "b")) (mk_var_type "c")));
   (* EmailBody (Tesl.Email) is a REAL stdlib ADT — TextBody String | HtmlBody
@@ -893,6 +962,10 @@ let builtin_ctor_info : ctor_info = [
   ("PublicIp",    ([], mk_name_type "HostClass"));
   ("DomainName",  ([], mk_name_type "HostClass"));
   ("InvalidHost", ([], mk_name_type "HostClass"));
+  ("AttemptsExhausted", ([], mk_name_type "DeadJobReason"));
+  ("PayloadInvalid", ([], mk_name_type "DeadJobReason"));
+  ("MigrationRejected", ([], mk_name_type "DeadJobReason"));
+  ("LegacyUnresolved", ([], mk_name_type "DeadJobReason"));
   (* Month / Weekday (Tesl.CivilTime, GitHub #78) — twelve and seven nullary
      variants.  These rows are the reason the calendar uses low-cardinality ADTs
      instead of a 1..12 Int: `case CivilTime.month d of January -> …` has to be
@@ -984,11 +1057,273 @@ let module_name_to_kebab name =
   ) name;
   Buffer.contents buf
 
-let resolve_local_import_path source_file module_name =
+(* Versioned schema families use the source-owned directory layout. These are
+   module paths, never value strings: reject path separators/traversal before
+   considering the filesystem. Flat local imports retain their old precedence. *)
+let schema_reference_parts module_name =
+  let identifier segment =
+    String.length segment > 0
+    && segment.[0] >= 'A' && segment.[0] <= 'Z'
+    && String.for_all (function
+         | 'A'..'Z' | 'a'..'z' | '0'..'9' | '_' -> true | _ -> false) segment
+  in
+  let version name =
+    name = "VCurrent" ||
+    (String.length name > 1 && name.[0] = 'V'
+     && name.[1] >= '1' && name.[1] <= '9'
+     && String.for_all (function '0'..'9' -> true | _ -> false)
+          (String.sub name 1 (String.length name - 1))
+     && match Int64.of_string_opt (String.sub name 1 (String.length name - 1)) with
+        | Some n -> n <= 2147483646L
+        | None -> false)
+  in
+  let parts = String.split_on_char '.' module_name in
+  match parts with
+    | "Schema" :: name :: revision :: rest when identifier name && (revision = "Migrate" || version revision) ->
+      Some ("Schema." ^ name, revision, rest)
+    | family :: revision :: rest when identifier family && Filename.check_suffix family "Schema"
+                                    && String.length family > 6
+                                    && (revision = "Migrate" || version revision) ->
+      Some (family, revision, rest)
+    | _ -> None
+
+let schema_module_parts module_name =
+  match schema_reference_parts module_name with
+  | Some (_, _, rest) as parts when List.for_all (fun segment ->
+      String.length segment > 0 && segment.[0] >= 'A' && segment.[0] <= 'Z' &&
+      String.for_all (function 'A'..'Z' | 'a'..'z' | '0'..'9' | '_' -> true | _ -> false) segment) rest -> parts
+  | _ -> None
+
+let schema_module_relative_path module_name =
+  match schema_module_parts module_name with
+  | None -> None
+  | Some (family, revision, rest) ->
+    let name = if String.starts_with ~prefix:"Schema." family then
+        String.sub family 7 (String.length family - 7)
+      else String.sub family 0 (String.length family - 6) in
+    let name = module_name_to_kebab name in
+    let dirs = if revision = "Migrate" then ["migrations"; name]
+      else ["schema"; name; module_name_to_kebab revision] in
+    Some (String.concat "/" (dirs @ List.map module_name_to_kebab rest) ^ ".tesl")
+
+let resolve_local_import_path_with ~exists ~realpath source_file module_name =
   let dir = Filename.dirname source_file in
   let kebab_path = Filename.concat dir (module_name_to_kebab module_name ^ ".tesl") in
-  if Sys.file_exists kebab_path then kebab_path
-  else Filename.concat dir (module_name ^ ".tesl")
+  if exists kebab_path then kebab_path
+  else
+    let pascal_path = Filename.concat dir (module_name ^ ".tesl") in
+    if exists pascal_path then pascal_path
+    else match schema_module_relative_path module_name with
+      | None -> pascal_path
+      | Some relative ->
+        let rec search current =
+          let candidate = Filename.concat current relative in
+          if exists candidate then candidate
+          else if List.exists (fun marker -> exists (Filename.concat current marker))
+                    ["tesl.toml"; "tesl.json"; ".git"] then candidate
+          else
+            let parent = Filename.dirname current in
+            if parent = current then Filename.concat dir relative
+            else search parent
+        in
+        search (try realpath dir with _ -> dir)
+
+let resolve_local_import_path source_file module_name =
+  resolve_local_import_path_with ~exists:Source_input.exists ~realpath:Source_input.realpath source_file module_name
+
+let import_parse_cache : (string, string * module_form Parser.result) Hashtbl.t =
+  Hashtbl.create 32
+
+let import_cache_bytes = ref 0
+let clear_import_parse_cache () =
+  Hashtbl.reset import_parse_cache;
+  import_cache_bytes := 0
+
+(** Read + parse a locally-imported module at [path], memoized by content.
+    Returns [None] if the file does not exist (so callers can keep their
+    existing "skip missing import" behavior), otherwise [Some result] where
+    [result] is the parse outcome ([Ok]/[Err]) exactly as
+    [Parser.parse_module] would return it for a fresh read. *)
+let parse_local_import_module (path : string) : module_form Parser.result option =
+  if not (Source_input.exists path) then (Hashtbl.remove import_parse_cache path; None)
+  else
+    let source = Source_input.read path in
+    match Hashtbl.find_opt import_parse_cache path with
+    | Some (previous, parsed) when previous = source -> Some parsed
+    | _ ->
+      let parsed = Parser.parse_module path source in
+      let size = String.length source in
+      if size <= 1024 * 1024 then (
+        if Hashtbl.length import_parse_cache >= 256
+           || !import_cache_bytes + size > 8 * 1024 * 1024 then clear_import_parse_cache ();
+        Hashtbl.replace import_parse_cache path (source, parsed);
+        import_cache_bytes := !import_cache_bytes + size);
+      Some parsed
+
+
+(* Imported predicates keep the identity of their declaring module, including
+   through re-exports. Every user predicate uses its original declaring owner;
+   this is a checking view, never a rewrite of source or migration hash input. *)
+let predicate_import_module (m : module_form) name =
+  if String.starts_with ~prefix:"Tesl." name then None
+  else
+    let path = resolve_local_import_path m.source_file name in
+    match parse_local_import_module path with
+    | Some (Ok imported) -> Some imported | None | Some (Err _) -> None
+
+let predicate_owner_inventory () =
+  (* One query-local DAG walk. In particular, a reexport diamond does not
+     recursively parse and revisit its shared ancestors for every field. *)
+  let cache = Hashtbl.create 16 in
+  let rec provided (m : module_form) =
+    match Hashtbl.find_opt cache m.source_file with
+    | Some owners -> owners
+    | None ->
+      Hashtbl.add cache m.source_file [];
+      let declared = List.filter_map (function
+        | DFact f -> Some (f.name, m.module_name) | _ -> None) m.decls in
+      let local_names = List.filter_map (function
+        | DFact f -> Some f.name
+        | DRecord r -> Some r.name | DEntity e -> Some e.name
+        | DType (TypeAdt { name; _ }) | DType (TypeNewtype { name; _ }) -> Some name
+        | _ -> None) m.decls in
+      let reexported name = not (List.mem name local_names) && List.exists (function
+        | ExportName n | ExportAdt n -> n = name) m.exports in
+      let inherited = List.concat_map (fun (imp : import_decl) ->
+        match predicate_import_module m imp.module_name with
+        | None -> []
+        | Some imported -> provided imported
+          |> List.filter (fun (name, _) -> reexported name)) m.imports in
+      let owners = List.sort_uniq compare (declared @ inherited) in
+      Hashtbl.replace cache m.source_file owners;
+      owners in
+  provided
+
+let provided_predicate_owners m = predicate_owner_inventory () m
+
+let scope_predicate_owners (m : module_form) =
+  let visited = Hashtbl.create 16 in
+  let rec collect (m : module_form) =
+    if Hashtbl.mem visited m.module_name then [] else begin
+      Hashtbl.add visited m.module_name ();
+      let local = List.filter_map (function
+        | DFact f -> Some (f.name, m.module_name) | _ -> None) m.decls in
+      local @ List.concat_map (fun (imp : import_decl) ->
+        match predicate_import_module m imp.module_name with
+        | None -> [] | Some imported -> collect imported) m.imports
+    end in
+  List.sort_uniq compare (collect m)
+
+let ambiguous_predicate_names m =
+  let owners = scope_predicate_owners m in
+  List.map fst owners |> List.sort_uniq String.compare
+  |> List.filter (fun name -> List.length (List.filter (fun (n, _) -> n = name) owners) > 1)
+
+let predicate_transport (_consumer : module_form) (origin : module_form) =
+  let provided = predicate_owner_inventory () in
+  let declared = List.filter_map (function
+    | DFact f -> Some (f.name, origin.module_name) | _ -> None) origin.decls in
+  let imports = List.filter_map (fun (imp : import_decl) ->
+    Option.map (fun imported -> imp, imported, provided imported)
+      (predicate_import_module origin imp.module_name)) origin.imports in
+  let cache = Hashtbl.create 16 in
+  fun name -> match Hashtbl.find_opt cache name with
+    | Some identity -> identity
+    | None ->
+      let qualifier, bare = match String.rindex_opt name '.' with
+        | None -> None, name
+        | Some dot -> Some (String.sub name 0 dot),
+            String.sub name (dot + 1) (String.length name - dot - 1) in
+      let named = List.filter (fun (n, _) -> n = bare) in
+      let candidates = match qualifier with
+        | None ->
+          (match named declared with
+           | _ :: _ as local -> local
+           | [] ->
+             let gather explicit = List.concat_map (fun ((imp : import_decl), imported, owners) ->
+               let visible = match imp.names with
+                 | ImportAll -> not explicit
+                 | ImportExposing names -> explicit && List.mem bare names in
+               let exported = List.exists (function
+                 | ExportName n | ExportAdt n -> n = bare) imported.exports in
+               if visible && exported then named owners else []) imports in
+             (match gather true with [] -> gather false | exposed -> exposed))
+        | Some owner when owner = origin.module_name -> named (provided origin)
+        | Some owner -> List.concat_map (fun ((imp : import_decl), _, owners) ->
+            if imp.module_name = owner then named owners else []) imports in
+      let identity = match List.sort_uniq compare candidates with
+        | [(_, owner)] -> owner ^ "." ^ bare
+        | _ -> name in
+      Hashtbl.add cache name identity;
+      identity
+
+let with_predicate_scope m f =
+  let previous = !predicate_identity_context in
+  predicate_identity_context := predicate_transport m m;
+  Fun.protect ~finally:(fun () -> predicate_identity_context := previous) f
+
+let rec map_predicate_type name = function
+  | TName n -> TName { n with name = name n.name }
+  | TApp t -> TApp { t with head = map_predicate_type name t.head; arg = map_predicate_type name t.arg }
+  | TFun t -> TFun { t with dom = map_predicate_type name t.dom; cod = map_predicate_type name t.cod }
+  | TTuple t -> TTuple { t with elems = List.map (map_predicate_type name) t.elems }
+  | TVar _ as t -> t
+
+let rec map_predicate_proof name = function
+  | PredApp ({ pred = ("ForAll" | "ForAllValues" | "ForAllKeys"); args = inner :: rest; _ } as p) ->
+    (* These surface forms encode the nested predicate in their first argument.
+       Parse that proof grammar instead of rewriting subjects or literal text. *)
+    let inner = match parse_nested_predicate inner with
+      | Some proof ->
+        let mapped = map_predicate_proof name proof in
+        if mapped = proof then inner else pp_proof mapped
+      | None -> inner in
+    PredApp { p with args = inner :: rest }
+  | PredApp p -> PredApp { p with pred = name p.pred }
+  | PredAnd p -> PredAnd { p with left = map_predicate_proof name p.left; right = map_predicate_proof name p.right }
+
+let map_predicate_binding name (b : binding) =
+  { b with type_expr = map_predicate_type name b.type_expr;
+           proof_ann = Option.map (map_predicate_proof name) b.proof_ann }
+
+let rec map_predicate_return name = function
+  | RetPlain r -> RetPlain { r with ty = map_predicate_type name r.ty }
+  | RetAttached r -> RetAttached { r with binding = map_predicate_binding name r.binding }
+  | RetNamedPack r -> RetNamedPack { r with ty = map_predicate_type name r.ty;
+      entity_proof = Option.map (map_predicate_proof name) r.entity_proof;
+      other_proof = Option.map (map_predicate_proof name) r.other_proof }
+  | RetMaybeAttached r -> RetMaybeAttached { r with binding = map_predicate_binding name r.binding;
+      outer_ty = Option.map (map_predicate_type name) r.outer_ty }
+  | RetForAll r -> RetForAll { r with elem_ty = map_predicate_type name r.elem_ty; proof = map_predicate_proof name r.proof }
+  | RetMaybeForAll r -> RetMaybeForAll { r with elem_ty = map_predicate_type name r.elem_ty; proof = map_predicate_proof name r.proof }
+  | RetSetForAll r -> RetSetForAll { r with elem_ty = map_predicate_type name r.elem_ty; proof = map_predicate_proof name r.proof }
+  | RetMaybeSetForAll r -> RetMaybeSetForAll { r with elem_ty = map_predicate_type name r.elem_ty; proof = map_predicate_proof name r.proof }
+  | RetForAllDictValues r -> RetForAllDictValues { r with key_ty = map_predicate_type name r.key_ty;
+      val_ty = map_predicate_type name r.val_ty; proof = map_predicate_proof name r.proof }
+  | RetForAllDictKeys r -> RetForAllDictKeys { r with key_ty = map_predicate_type name r.key_ty;
+      val_ty = map_predicate_type name r.val_ty; proof = map_predicate_proof name r.proof }
+  | RetExists r -> RetExists { r with binding = map_predicate_binding name r.binding;
+      body = map_predicate_return name r.body }
+
+let map_predicate_field name (f : field_def) =
+  { f with type_expr = map_predicate_type name f.type_expr;
+           proof_ann = Option.map (map_predicate_proof name) f.proof_ann }
+
+let imported_predicate_transport m (imp : import_decl) imported =
+  let predicate = predicate_transport m imported in
+  let nominal_names = List.filter_map (function
+    | DType (TypeAdt { name; _ }) | DType (TypeNewtype { name; _ })
+    | DRecord { name; _ } | DEntity { name; _ } -> Some name
+    | _ -> None) imported.decls in
+  let exposed = match imp.names with
+    | ImportAll -> []
+    | ImportExposing names -> List.map (fun name ->
+        if String.ends_with ~suffix:"(..)" name
+        then String.sub name 0 (String.length name - 4) else name) names in
+  fun name ->
+    if List.mem name nominal_names then
+      if List.mem name exposed then name else imp.module_name ^ "." ^ name
+    else predicate name
 
 (* ── Lifted-stdlib source resolution ──────────────────────────────────────────
    A subset of the [Tesl.*] standard library is written in Tesl itself: a bundled
@@ -1014,7 +1349,7 @@ let stdlib_repo_root () =
   | _ ->
     let rec find dir =
       let candidate = Filename.concat dir "compiler" in
-      if (try Sys.file_exists candidate && Sys.is_directory candidate with _ -> false)
+      if (try Source_input.exists candidate && Source_input.is_directory candidate with _ -> false)
       then dir
       else
         let parent = Filename.dirname dir in
@@ -1027,19 +1362,19 @@ let stdlib_repo_root () =
     basename, e.g. [Tesl.List] -> [Some "list.tesl"].  Only modules that have
     actually been lifted return [Some]; every other [Tesl.*] returns [None] so
     callers fall back to their hardcoded rows. *)
-let lifted_stdlib_basename (module_name : string) : string option =
-  match module_name with
-  | "Tesl.List" -> Some "list.tesl"
-  | "Tesl.ListPrim" -> Some "list-prim.tesl"
-  | "Tesl.Either" -> Some "either.tesl"
+let lifted_stdlib_sources = [
+  "Tesl.List", "list.tesl";
+  "Tesl.ListPrim", "list-prim.tesl";
+  "Tesl.Either", "either.tesl";
   (* #78.  The whole calendar module is written in Tesl — that is where its
      subtle bugs would live (era arithmetic, the ISO week-year rule, day-of-month
      clamping), so it is the language's own checker that verifies them.  Its
      signatures, its proof obligations and its proof-carrying returns therefore
      all come from the source, and it has NO function rows in [stdlib_env] or
      [stdlib_func_infos]. *)
-  | "Tesl.CivilTime" -> Some "civil-time.tesl"
-  | _ -> None
+  "Tesl.CivilTime", "civil-time.tesl";
+]
+let lifted_stdlib_basename module_name = List.assoc_opt module_name lifted_stdlib_sources
 
 (** One resource-directory contract for installed tooling and sessions. *)
 let stdlib_source_directories () =
@@ -1048,7 +1383,7 @@ let stdlib_source_directories () =
   | _ ->
     let executable = try Unix.realpath Sys.executable_name with _ -> Sys.executable_name in
     let installed = Filename.concat (Filename.dirname (Filename.dirname executable)) "share/tesl/stdlib" in
-    if Sys.file_exists installed then [installed]
+    if Source_input.exists installed then [installed]
     else
       let root = stdlib_repo_root () in
       [Filename.concat root "tesl";
@@ -1060,13 +1395,20 @@ let stdlib_source_directories () =
     wins, followed by resources beside the real compiler executable, then the
     development checkout and historical collections layout. This NEVER points
     at a runtime require; emission is unaffected. *)
+let fixed_stdlib_sources : (string * string) list option ref = ref None
+let with_fixed_stdlib_sources paths f =
+  let previous = !fixed_stdlib_sources in
+  Query_cache.clear (); fixed_stdlib_sources := Some paths;
+  Fun.protect ~finally:(fun () -> fixed_stdlib_sources := previous; Query_cache.clear ()) f
+
 let lifted_stdlib_source_path (module_name : string) : string option =
   match lifted_stdlib_basename module_name with
   | None -> None
+  | Some base when !fixed_stdlib_sources <> None -> List.assoc_opt base (Option.get !fixed_stdlib_sources)
   | Some base ->
     let candidates = List.map (fun directory -> Filename.concat directory base)
       (stdlib_source_directories ()) in
-    List.find_opt Sys.file_exists candidates
+    List.find_opt Source_input.exists candidates
 
 (** Canonical spelling of a module path, for identity comparisons (import
     cycle/SCC detection).  [resolve_local_import_path] builds paths relative
@@ -1078,7 +1420,32 @@ let lifted_stdlib_source_path (module_name : string) : string option =
     file (unresolvable import) keeps its given spelling — callers report that
     separately. *)
 let canonical_import_path (p : string) : string =
-  try Unix.realpath p with _ -> p
+  try Source_input.realpath p with _ -> p
+
+(** Resolve an entity in a checked project graph to its declaring module. The
+    ordinary scope/type checker validates visibility; this shared ownership lookup
+    retains ambiguities and gives local declarations precedence over imports. *)
+let resolve_project_entity (modules : module_form list) (m : module_form) name =
+  let declares (owner : module_form) name = List.exists (function
+    | DEntity e -> e.name = name | _ -> false) owner.decls in
+  let qualified = List.filter_map (fun (owner : module_form) ->
+    let prefix = owner.module_name ^ "." in
+    if String.starts_with ~prefix name then
+      let bare = String.sub name (String.length prefix) (String.length name - String.length prefix) in
+      if declares owner bare then Some name else None
+    else None) modules in
+  if qualified <> [] then List.sort_uniq String.compare qualified
+  else if declares m name then [m.module_name ^ "." ^ name]
+  else List.concat_map (fun (imp : import_decl) ->
+    match List.find_opt (fun (other : module_form) -> other.module_name = imp.module_name) modules with
+    | None -> []
+    | Some other ->
+      let prefix = imp.module_name ^ "." in
+      let bare = if String.starts_with ~prefix name then
+        String.sub name (String.length prefix) (String.length name - String.length prefix)
+        else name in
+      if declares other bare then [other.module_name ^ "." ^ bare] else []) m.imports
+    |> List.sort_uniq String.compare
 
 let normalize_exposed_type_name (name : string) : string option =
   let n = String.length name in
@@ -1106,27 +1473,42 @@ let load_imported_ctor_info (m : module_form) : ctor_info =
     if is_tesl_module imp.module_name then []
     else
       let path = resolve_local_import_path m.source_file imp.module_name in
-      if not (Sys.file_exists path) then []
+      if not (Source_input.exists path) then []
       else
-        let source = In_channel.with_open_text path In_channel.input_all in
+        let source = Source_input.read_text path in
         (match Parser.parse_module path source with
          | Err _ -> []
          | Ok imported ->
            let requested_types = match imp.names with
-             | ImportAll -> None
-              | ImportExposing names -> Some (List.filter_map normalize_exposed_type_name names)
-           in
+             | ImportAll -> []
+             | ImportExposing names -> List.filter_map normalize_exposed_type_name names in
+           let local_types = List.filter_map (function
+             | DType (TypeAdt { name; _ }) | DType (TypeNewtype { name; _ })
+             | DRecord { name; _ } | DEntity { name; _ } -> Some name
+             | _ -> None) imported.decls in
+           let qualify_name name =
+             if List.mem name local_types && not (List.mem name requested_types)
+             then imp.module_name ^ "." ^ name else name in
+           let predicate = predicate_transport m imported in
+           let rec qualify = function
+             | TName n -> TName { n with name = predicate (qualify_name n.name) }
+             | TApp t -> TApp { t with head = qualify t.head; arg = qualify t.arg }
+             | TFun t -> TFun { t with dom = qualify t.dom; cod = qualify t.cod }
+             | TTuple t -> TTuple { t with elems = List.map qualify t.elems }
+             | TVar _ as t -> t in
            List.concat_map (function
              | DType (TypeAdt { name; variants; _ }) ->
-               let include_it = match requested_types with
-                 | None -> true
-                 | Some names -> List.mem name names
-               in
-               if not include_it then []
+               let exported = List.exists (function ExportName n | ExportAdt n -> n = name) imported.exports in
+               if not exported then []
                else
-                 let result_ty = mk_name_type name in
-                 List.map (fun (v : adt_variant) ->
-                   (v.ctor, (List.map (fun (f : field_def) -> f.type_expr) v.fields, result_ty))
+                 let result_ty = mk_name_type (qualify_name name) in
+                 List.concat_map (fun (v : adt_variant) ->
+                   let metadata = List.map (fun (f : field_def) -> qualify f.type_expr) v.fields, result_ty in
+                   (* Bare imports stay scoped; qualified-only versions never
+                      merge their constructor inventory by the leaf name. *)
+                   (if List.mem name requested_types then [v.ctor, metadata] else [])
+                   @ [imp.module_name ^ "." ^ v.ctor,
+                      (fst metadata, mk_name_type (imp.module_name ^ "." ^ name))]
                  ) variants
              | _ -> []
            ) imported.decls)
@@ -1138,15 +1520,15 @@ let load_imported_ctor_info (m : module_form) : ctor_info =
    so the identical program was accepted same-module but rejected — or worse,
    NOT rejected (proof enforcement) — when the type came through an import.
    This is the validator-side mirror of the emitter's scope-accurate #40
-   harvest (emit_racket.ml emit_module): only names the import's exposing
-   clause actually brings into scope qualify (`Name` or `Name(..)`;
-   [ImportAll] brings all), and a name the current module itself declares as a
-   type/record/entity wins unconditionally (the harvested twin is dropped, so
-   local metadata cannot be shadowed by an import).  Returned decls carry only
+   harvest: exported declarations have a module-qualified lookup view; explicit
+   exposing also adds a bare lookup view (`Name` or `Name(..)`), unless a local
+   declaration owns that bare name. [include_exposed_aliases:false] keeps only
+   canonical qualified views for structural checks: two lookup names for one
+   declaration are not two physical entities. Returned decls carry only
    TYPE-LIKE forms (DRecord/DEntity/DType) — appending them to a module's
    [decls] never adds walkable bodies (DFunc/DTest/…), so validators that
    iterate bodies are unaffected by construction. *)
-let load_imported_type_decls (m : module_form) : top_decl list =
+let load_imported_type_decls ?(include_exposed_aliases = true) (m : module_form) : top_decl list =
   let is_tesl_module name =
     String.length name >= 5 && String.sub name 0 5 = "Tesl."
   in
@@ -1163,9 +1545,9 @@ let load_imported_type_decls (m : module_form) : top_decl list =
     if is_tesl_module imp.module_name then []
     else
       let path = resolve_local_import_path m.source_file imp.module_name in
-      if not (Sys.file_exists path) then []
+      if not (Source_input.exists path) then []
       else
-        let source = In_channel.with_open_text path In_channel.input_all in
+        let source = Source_input.read_text path in
         match Parser.parse_module path source with
         | Err _ -> []
         | Ok imported ->
@@ -1180,16 +1562,95 @@ let load_imported_type_decls (m : module_form) : top_decl list =
              | Some names -> List.mem name names)
             && not (List.mem name local_type_names)
           in
-          List.filter (function
-            | DRecord (r : record_form) -> in_scope r.name
-            | DEntity (e : entity_form) -> in_scope e.name
-            | DType (TypeAdt { name; _ })
-            | DType (TypeNewtype { name; _ }) -> in_scope name
-            | _ -> false
-          ) imported.decls
+            let transport = imported_predicate_transport m imp imported in
+            let qualify name = imp.module_name ^ "." ^ name in
+            let exported name = List.exists (function
+              | ExportName n | ExportAdt n -> n = name) imported.exports in
+            let views name make =
+              if not (exported name) then [] else
+              [make true (qualify name)] @
+              (match imp.names with
+               | ImportExposing _ when include_exposed_aliases && in_scope name -> [make false name]
+               | _ -> []) in
+            List.concat_map (function
+              | DRecord r -> views r.name (fun _ name -> DRecord { r with
+                  name; fields = List.map (map_predicate_field transport) r.fields;
+                  invariant = Option.map (fun i -> { i with
+                    proof_text = map_predicate_proof transport i.proof_text }) r.invariant })
+              | DEntity e -> views e.name (fun _ name -> DEntity { e with
+                  name; fields = List.map (map_predicate_field transport) e.fields })
+              | DType (TypeAdt t) -> views t.name (fun qualified name -> DType (TypeAdt { t with
+                  name; variants = List.map (fun (v : adt_variant) ->
+                    { v with ctor = (if qualified then qualify v.ctor else v.ctor);
+                      fields = List.map (map_predicate_field transport) v.fields }) t.variants }))
+              | DType (TypeNewtype t) -> views t.name (fun _ name -> DType (TypeNewtype { t with
+                  name; base_type = map_predicate_type transport t.base_type }))
+              | _ -> []) imported.decls
   ) m.imports
 
 (* ── Stdlib proof metadata ───────────────────────────────────────────────── *)
+
+(** Queue payloads are nominal records. Exposed and fully qualified spellings
+    identify one declaration, while records with the same name in different
+    modules remain distinct. Only direct, exported imports introduce aliases;
+    qualification must never be inferred by dropping a module prefix. *)
+let queue_type_aliases (m : module_form) =
+  let records owner = List.filter_map (function DRecord r -> Some r.name | _ -> None) owner.decls in
+  let locals = records m in
+  let local = List.concat_map (fun name ->
+    let identity = m.module_name ^ "." ^ name in
+    [name, identity; identity, identity]) locals in
+  let imported = List.concat_map (fun (imp : import_decl) ->
+    if String.starts_with ~prefix:"Tesl." imp.module_name then [] else
+    let path = resolve_local_import_path m.source_file imp.module_name in
+    if not (Source_input.exists path) then [] else
+    match Parser.parse_module path (Source_input.read_text path) with
+    | Err _ -> []
+    | Ok owner -> List.concat_map (fun name ->
+        if not (List.mem (ExportName name) owner.exports) then [] else
+        let identity = imp.module_name ^ "." ^ name in
+        let exposed = match imp.names with
+          | ImportAll -> false
+          | ImportExposing names -> List.mem name names in
+        (identity, identity) ::
+        (if exposed && not (List.mem name locals) then [name, identity] else [])) (records owner)) m.imports in
+  let aliases = local @ imported in
+  List.sort_uniq compare aliases |> List.filter (fun (name, _) ->
+    List.length (List.filter_map (fun (alias, identity) ->
+      if alias = name then Some identity else None) aliases |> List.sort_uniq compare) = 1)
+
+let queue_type_identity aliases name =
+  Option.value ~default:name (List.assoc_opt name aliases)
+
+(** An imported worker's parameter belongs to its declaration's scope. Its
+    bare name must not be interpreted as an unrelated record exposed by the
+    application wiring the queue. Locations survive signature transport. *)
+let queue_parameter_identity (m : module_form) =
+  let scopes = Hashtbl.create 4 in
+  Hashtbl.add scopes (Source_input.canonical_path m.source_file) (queue_type_aliases m);
+  fun (loc : Location.loc) name ->
+    let path = Source_input.canonical_path loc.file in
+    let aliases = match Hashtbl.find_opt scopes path with
+      | Some aliases -> aliases
+      | None ->
+        let aliases = if not (Source_input.exists path) then [] else
+          match Parser.parse_module path (Source_input.read_text path) with
+          | Err _ -> []
+          | Ok owner -> queue_type_aliases owner in
+        Hashtbl.add scopes path aliases;
+        aliases in
+    queue_type_identity aliases name
+
+let queue_bindings_for_module (m : module_form) =
+  let aliases = queue_type_aliases m in
+  List.concat_map (function
+    | DQueue q -> List.concat_map (fun job ->
+        let identity = queue_type_identity aliases job in
+        (job, q.name) :: (identity, q.name) ::
+        List.filter_map (fun (alias, target) ->
+          if target = identity then Some (alias, q.name) else None) aliases)
+        (Desugar.queue_job_types q)
+    | _ -> []) m.decls
 (* func_info records for stdlib functions that have proof-annotated parameters.
    Used by load_imported_func_info so calls like `Int.divide n d` are checked
    for the required `d ::: IsNonZero d` proof at the call site. *)
@@ -1225,6 +1686,22 @@ let stdlib_func_infos : (string * func_info) list =
      { fi_name = "Net.classifyHost"; fi_kind = FnKind;
        fi_params = [ plain "host" "String" ];
        fi_return = ret "HostClass"; fi_loc = g; fi_http_methods = [] });
+    (* Keep case analysis of direct metadata calls exhaustive as well as calls
+       assigned to explicitly typed bindings. These accessors establish no proof. *)
+    ("DeadJob.reason",
+     { fi_name = "DeadJob.reason"; fi_kind = FnKind;
+       fi_params = [ plain "job" "DeadJob" ]; fi_return = ret "DeadJobReason";
+       fi_loc = g; fi_http_methods = [] });
+    ("DeadJob.sourceVersion",
+     { fi_name = "DeadJob.sourceVersion"; fi_kind = FnKind;
+       fi_params = [ plain "job" "DeadJob" ];
+       fi_return = RetPlain { ty = mk_app_type (tname "Maybe") (tname "Int"); loc = g };
+       fi_loc = g; fi_http_methods = [] });
+    ("DeadJob.typeName",
+     { fi_name = "DeadJob.typeName"; fi_kind = FnKind;
+       fi_params = [ plain "job" "DeadJob" ];
+       fi_return = RetPlain { ty = mk_app_type (tname "Maybe") (tname "String"); loc = g };
+       fi_loc = g; fi_http_methods = [] });
     (* Int.divide: second arg b must carry IsNonZero b *)
     ("Int.divide",
      { fi_name = "Int.divide"; fi_kind = FnKind;
@@ -1576,7 +2053,7 @@ let load_imported_func_info (m : module_form) : (string * func_info) list =
      return hands the caller nothing to require (issue #78).  Reading the source
      also means the two can never drift, which is the whole point of lifting. *)
   let lifted_func_infos (imp : import_decl) (path : string) : (string * func_info) list =
-    let source = In_channel.with_open_text path In_channel.input_all in
+    let source = Source_input.read_text path in
     match Parser.parse_module path source with
     | Err _ -> []
     | Ok imported ->
@@ -1642,9 +2119,9 @@ let load_imported_func_info (m : module_form) : (string * func_info) list =
       hardcoded @ lifted
     else
       let path = resolve_local_import_path m.source_file imp.module_name in
-      if not (Sys.file_exists path) then []
+      if not (Source_input.exists path) then []
       else
-        let source = In_channel.with_open_text path In_channel.input_all in
+        let source = Source_input.read_text path in
         match Parser.parse_module path source with
         | Err _ -> []
         | Ok imported ->
@@ -1652,9 +2129,13 @@ let load_imported_func_info (m : module_form) : (string * func_info) list =
             | ImportAll -> None
             | ImportExposing names -> Some names
           in
+          let transport = imported_predicate_transport m imp imported in
           List.concat_map (function
             | DFunc fd ->
-              let info = { fi_name = fd.name; fi_kind = fd.kind; fi_params = fd.params; fi_return = fd.return_spec; fi_loc = fd.loc; fi_http_methods = fd.http_methods } in
+              let info = { fi_name = fd.name; fi_kind = fd.kind;
+                fi_params = List.map (map_predicate_binding transport) fd.params;
+                fi_return = map_predicate_return transport fd.return_spec;
+                fi_loc = fd.loc; fi_http_methods = fd.http_methods } in
               let qualified_name = imp.module_name ^ "." ^ fd.name in
               let include_plain = match requested with
                 | Some names -> List.mem fd.name names
@@ -2064,9 +2545,9 @@ let rec load_imported_func_caps ?(visited : string list = []) (m : module_form)
     if is_tesl_module imp.module_name || List.mem imp.module_name visited then []
     else
       let path = resolve_local_import_path m.source_file imp.module_name in
-      if not (Sys.file_exists path) then []
+      if not (Source_input.exists path) then []
       else
-        let source = In_channel.with_open_text path In_channel.input_all in
+        let source = Source_input.read_text path in
         match Parser.parse_module path source with
         | Err _ -> []
         | Ok imported ->
@@ -2103,10 +2584,7 @@ let rec load_imported_func_caps ?(visited : string list = []) (m : module_form)
                 (Ast.func_bound_cap_vars fd) in
             List.filter (fun c -> not (List.mem c bound)) caps
           in
-           let queue_for_job =
-             List.concat_map (function
-               | DQueue q -> List.map (fun job -> (job, q.name)) (Desugar.queue_job_types q)
-               | _ -> []) imported.decls in
+           let queue_for_job = queue_bindings_for_module imported in
            let step verified =
             List.map (fun (name, cur) ->
               match List.assoc_opt name fd_by_name with
@@ -2205,9 +2683,9 @@ let collect_imported_cache_caps (m : module_form) : (string * string list) list 
         if Hashtbl.mem visited canon then []
         else begin
           Hashtbl.replace visited canon ();
-          if not (Sys.file_exists path) then []
+          if not (Source_input.exists path) then []
           else
-            let source = In_channel.with_open_text path In_channel.input_all in
+            let source = Source_input.read_text path in
             match Parser.parse_module path source with
             | Err _ -> []
             | Ok imported ->
@@ -2243,9 +2721,9 @@ let load_imported_cap_map (m : module_form) : (string * string list) list =
          ) caps)
     else
       let path = resolve_local_import_path m.source_file imp.module_name in
-      if not (Sys.file_exists path) then []
+      if not (Source_input.exists path) then []
       else
-        let source = In_channel.with_open_text path In_channel.input_all in
+        let source = Source_input.read_text path in
         match Parser.parse_module path source with
         | Err _ -> []
         | Ok imported ->
@@ -2316,9 +2794,9 @@ let collect_import_parse_errors (m : module_form) : validation_error list =
     if is_tesl_module imp.module_name then None
     else
       let path = resolve_local_import_path m.source_file imp.module_name in
-      if not (Sys.file_exists path) then None
+      if not (Source_input.exists path) then None
       else
-        let source = In_channel.with_open_text path In_channel.input_all in
+        let source = Source_input.read_text path in
         match Parser.parse_module path source with
         | Ok _ -> None
         | Err e -> Some (make_error e.loc
@@ -2408,6 +2886,14 @@ let expr_of_test_stmts (stmts : test_stmt list) : expr option =
 let rec collect_call_head_and_args acc = function
   | EApp { fn; arg; _ } -> collect_call_head_and_args (arg :: acc) fn
   | fn -> (fn, acc)
+
+(* The parser encodes a nullary call's () as one empty-list Unit marker.
+   This marker completes only a declaration with no parameters; never drop an
+   ordinary empty-list argument from a non-nullary call when checking arity. *)
+let call_is_fully_applied (params : binding list) args =
+  match params, args with
+  | [], [EList { elems = []; _ }] -> true
+  | _ -> List.length params = List.length args
 
 let normalize_explicit_check_call head args =
   match head, args with
@@ -2729,16 +3215,11 @@ let proofs_of_return_spec
     ?(param_mapping = [])
     (spec : return_spec)
     : proof_expr list =
-  let attach_binding_proof (binding : binding) =
-    (* Use the param_mapping's subject for this binding name ONLY when the mapping is
-       non-trivial (maps to a different name). Self-mappings like rawLabel → rawLabel mean
-       the result should be indexed by result_name.
-
-       E.g. checkPositive(n: Int) -> n: Int ::: Positive n, called on `raw`:
-         param_mapping = [("n","raw")] → "n" ≠ "raw" → use "raw" → proof = Positive raw
-       E.g. sanitize(rawLabel: String) -> rawLabel: String ::: Sanitized rawLabel, called on `rawLabel`:
-         param_mapping = [("rawLabel","rawLabel")] → self-map → use result_name → proof = Sanitized validLabel *)
-    let subject_for_binding = match List.assoc_opt binding.name param_mapping with
+  let attach_binding_proof ?(input_subject = true) (binding : binding) =
+    (* Ordinary attached checks preserve their existing parameter-subject rule.
+       Optional returns override it below: the result binder names the returned
+       success payload, including when it shares an input parameter's spelling. *)
+    let subject_for_binding = match if input_subject then List.assoc_opt binding.name param_mapping else None with
       | Some s -> s      (* use the argument's subject (consistent with subject_env propagation) *)
       | None -> result_name  (* param not in mapping → use result_name *)
     in
@@ -2766,7 +3247,10 @@ let proofs_of_return_spec
     [ normalize_carried_forall_dict_values result_name (subst_proof param_mapping proof) ]
   | RetForAllDictKeys { proof; _ } ->
     [ normalize_carried_forall_dict_keys result_name (subst_proof param_mapping proof) ]
-  | RetMaybeAttached { binding; _ } -> attach_binding_proof binding
+  | RetMaybeAttached { binding; _ } ->
+    (* An optional attached return describes its success payload, not an input.
+       Even a same-spelled binder may hold a transformed value on success. *)
+    attach_binding_proof ~input_subject:false binding
   | RetExists _ -> []
   | RetPlain { ty; _ } -> (match proof_of_fact_type ty with Some proof -> [ subst_proof param_mapping proof ] | None -> [])
 
@@ -2925,6 +3409,42 @@ let rec subject_of_expr (subject_env : subject_env) (expr : expr) : string optio
     Some occ
   | _ -> None
 
+(* An attached result preserves an input subject only when its return binder
+   names that parameter. Every such declaration is checked on every returning
+   leaf by Proof_discharge. Fresh binders and named packs never alias an arbitrary
+   first argument. Shared by all let/decomposition and return-context consumers. *)
+let rec attached_subject_of_expr funcs subject_env expression =
+  let canonical name =
+    let rec follow seen name =
+      if List.mem name seen then None else
+      match List.assoc_opt name subject_env with
+      | Some next when next <> name -> follow (name :: seen) next
+      | _ -> Some name in
+    follow [] name in
+  match subject_of_expr subject_env expression with
+  | Some subject -> canonical subject
+  | None ->
+    let head, args = collect_call_head_and_args [] expression in
+    let head, args = normalize_explicit_check_call head args in
+    let rec call_subject head args =
+      match function_name_of_expr head with
+      | Some name ->
+        (match List.assoc_opt name funcs with
+         | Some { fi_return = RetAttached { binding; _ }; fi_params; _ }
+           when call_is_fully_applied fi_params args ->
+           List.find_map (fun ((parameter : binding), argument) ->
+             if parameter.name = binding.name then attached_subject_of_expr funcs subject_env argument else None)
+             (zip_prefix fi_params args)
+         | _ -> None)
+      | None ->
+        (match head with
+         | EBinop { op = BAnd; left; right; _ } ->
+           (match call_subject left args, call_subject right args with
+            | Some left, Some right when left = right -> Some left
+            | _ -> None)
+         | _ -> None) in
+    call_subject head args
+
 (* close_fail_open Option B — admit the declared return proofs of a CALLED function
    through the kernel: a check/auth/establish callee mints fresh
    ([Proof_kernel.mint_at_boundary]); a forgery-restricted callee's declared return
@@ -2996,7 +3516,7 @@ let rec proofs_of_evidence_expr
        (* When funcs is available, resolve inline establish/check calls.
           E.g. `attachFact forgotten (validPort y)` — evidence is `validPort y`. *)
        (match List.assoc_opt fn_name funcs with
-        | Some info ->
+        | Some info when call_is_fully_applied info.fi_params args ->
           let param_mapping = List.filter_map (fun ((param : binding), arg) ->
             match subject_of_expr subject_env arg with
             | Some subject -> Some (param.name, subject)
@@ -3005,7 +3525,7 @@ let rec proofs_of_evidence_expr
           let preds = admit_call_return info.fi_kind
             (proofs_of_return_spec "_" ~param_mapping info.fi_return) in
           if preds = [] then None else Some preds
-        | None -> None)
+        | _ -> None)
      | _ -> None)
   | _ -> None
 

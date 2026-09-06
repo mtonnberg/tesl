@@ -116,6 +116,7 @@ let t_conversation_turn = TCon "ConversationTurn"
 
 let t_list a        = TApp (TCon "List", a)
 let t_maybe a       = TApp (TCon "Maybe", a)
+let t_migrated a    = TApp (TCon "Migrated", a)
 let t_set a         = TApp (TCon "Set", a)
 let t_dict k v      = TApp (TApp (TCon "Dict", k), v)
 let t_either a b    = TApp (TApp (TCon "Either", a), b)
@@ -754,6 +755,11 @@ let stdlib_env : (string * scheme) list = [
   "Left",             { vars = _r2_ab; mono = t_fun [_a] (t_either _a _b) };
   "Right",            { vars = _r2_ab; mono = t_fun [_b] (t_either _a _b) };
 
+  (* A row result is ordinary typed data, unlike contextual Migration rules.
+     Reject is polymorphic only in the absent row; its reason is always String. *)
+  "Row",              { vars = _r1_a; mono = t_fun [_a] (t_migrated _a) };
+  "Reject",           { vars = _r1_a; mono = t_fun [t_string] (t_migrated _a) };
+
 
   (* ── Float arithmetic functions ─────────────────────────────────────── *)
   "Float.add",  mono (t_fun [t_float; t_float] t_float);
@@ -1172,6 +1178,15 @@ let stdlib_env : (string * scheme) list = [
      (#t/#f from the runtime).  The result type is CONCRETE — an earlier scheme
      `∀a b. a -> b` had a free result var `_b` that HM would instantiate to any
      type at the use site, i.e. an `unsafeCoerce` (review 2.3).  Fixed. *)
+  "DeadJob.id", mono (t_fun [TCon "DeadJob"] t_string);
+  "DeadJob.reason", mono (t_fun [TCon "DeadJob"] (TCon "DeadJobReason"));
+  "DeadJob.sourceVersion", mono (t_fun [TCon "DeadJob"] (t_maybe t_int));
+  "DeadJob.attempts", mono (t_fun [TCon "DeadJob"] t_int);
+  "DeadJob.typeName", mono (t_fun [TCon "DeadJob"] (t_maybe t_string));
+  "AttemptsExhausted", mono (TCon "DeadJobReason");
+  "PayloadInvalid", mono (TCon "DeadJobReason");
+  "MigrationRejected", mono (TCon "DeadJobReason");
+  "LegacyUnresolved", mono (TCon "DeadJobReason");
   "requeue",        mono (t_fun [TCon "DeadJob"] t_bool);
   (* deadJobs: takes a queue (nominal per-declaration, hence polymorphic in `_a`)
      and returns a concrete `List DeadJob`.  `_a` appears in an argument position,
@@ -1683,10 +1698,11 @@ let tesl_module_exports : (string * string list) list = [
       "Email.send"; "startEmailWorker";
       (* config-block types (typed config blocks) *)
       "Email"; "SmtpConfig" ] );
+  ( "Tesl.Migration", Migration_form.names @ Migration_form.runtime_names );
   ( "Tesl.Database",
     [ "Database"; "DatabaseBackend"; "Postgres"; "Memory";
-      "PostgresConfig"; "PostgresConnection";
-      "TcpConnection"; "SocketConnection" ] );
+      "PostgresConfig"; "MigrationConfig"; "PostgresConnection";
+      "TcpConnection"; "SocketConnection"; "MigrationTopology"; "Worker"; "Embedded" ] );
   (* App-simplification (roadmap/next/app_simplification.md): `main : () -> App`
      returning a typed App record; `Job` pairs a job type with its handler +
      optional dead-letter handler inside a folded `queue`. *)
@@ -1720,7 +1736,14 @@ let tesl_module_exports : (string * string list) list = [
   ( "Tesl.Http",
     [ "HttpRequest"; "cookieCap";
       "Http.setSessionCookie"; "Http.clearSessionCookie"; "Http.sessionToken" ] );
-  (* Tesl.DB, Tesl.Uuid, Tesl.Logging, Tesl.Queue, Tesl.Sse —
+  ( "Tesl.Queue",
+    [ "Queue"; "QueueRetryStrategy"; "QueueRetryBackoff"; "Fixed"; "Exponential"; "Linear";
+      "queueRead"; "queueWrite"; "FromQueue"; "FromDeadQueue"; "Job"; "pubsub";
+      "deadJobs"; "DeadJob"; "requeue"; "DeadJobReason";
+      "AttemptsExhausted"; "PayloadInvalid"; "MigrationRejected"; "LegacyUnresolved";
+      "DeadJob.id"; "DeadJob.reason"; "DeadJob.sourceVersion";
+      "DeadJob.attempts"; "DeadJob.typeName" ] );
+  (* Tesl.DB, Tesl.Uuid, Tesl.Logging, Tesl.Sse —
      internal modules; imports validated loosely (unknown names accepted)
      Note: Tesl.UUID (uppercase) now has a full export list above. *)
 ]
@@ -1808,7 +1831,7 @@ let stdlib_bare_home_module : (string * string) list = [
   "stubHttp", "Tesl.ApiTest"; "stubHttpFailure", "Tesl.ApiTest";
   "stubHttpTimeout", "Tesl.ApiTest"; "httpCalled", "Tesl.ApiTest";
   "httpCallCount", "Tesl.ApiTest"; "httpLastBody", "Tesl.ApiTest";
-  (* Queue infrastructure (Tesl.Queue — internal module, no export list) *)
+  (* Queue infrastructure; snapshot metadata accessors are pure. *)
   "requeue", "Tesl.Queue"; "deadJobs", "Tesl.Queue";
   (* UUID codecs (bare tokens; UUID.* dotted forms come from the derived rows) *)
   "uuidV4Codec", "Tesl.UUID"; "uuidV7Codec", "Tesl.UUID";
@@ -1880,7 +1903,9 @@ let stdlib_home_module_of (name : string) : string option =
 
     The constructor lists deliberately do NOT repeat the type name; consumers
     that want `["Maybe"; "Something"; "Nothing"]` prepend it themselves. *)
-let stdlib_adt_ctor_groups : (string * string * string list) list = [
+let stdlib_adt_ctor_groups : (string * string * string list) list =
+  List.map (fun (name, ctors) -> "Tesl.Migration", name, ctors)
+    Migration_form.runtime_constructor_groups @ [
   "Tesl.Maybe",      "Maybe",        [ "Something"; "Nothing" ];
   "Tesl.Result",     "Result",       [ "Ok"; "Err" ];
   "Tesl.Either",     "Either",       [ "Left"; "Right" ];
@@ -1889,6 +1914,8 @@ let stdlib_adt_ctor_groups : (string * string * string list) list = [
      tesl/either.tesl itself imports only the PRIM one. *)
   "Tesl.EitherPrim", "Either",       [ "Left"; "Right" ];
   "Tesl.ApiTest",    "JobResult",    [ "JobOk"; "JobFailed" ];
+  "Tesl.Queue", "DeadJobReason",
+    [ "AttemptsExhausted"; "PayloadInvalid"; "MigrationRejected"; "LegacyUnresolved" ];
   "Tesl.Email",      "EmailBody",    [ "TextBody"; "HtmlBody"; "RichBody" ];
   "Tesl.Net",        "HostClass",
     [ "Loopback"; "PrivateIp"; "LinkLocal"; "Cgnat"; "Multicast";
@@ -1903,11 +1930,19 @@ let stdlib_adt_ctor_groups : (string * string * string list) list = [
       "Saturday"; "Sunday" ];
 ]
 
+(** Contextual constructors participate in import expansion but have no ordinary
+    value scheme, runtime representation, or pattern-exhaustiveness rows. Keep
+    that boundary explicit rather than pretending they are ordinary ADTs. *)
+let stdlib_import_ctor_groups = stdlib_adt_ctor_groups @
+  ["Tesl.Database", "MigrationTopology", ["Worker"; "Embedded"];
+   "Tesl.Queue", "QueueRetryBackoff", ["Fixed"; "Exponential"; "Linear"]] @
+  List.map (fun (name, ctors) -> "Tesl.Migration", name, ctors) Migration_form.constructor_groups
+
 (** Constructor → the ADT type that owns it, for the `Type(..)` exposing form.
     A constructor owned by two modules (Left/Right) has ONE owning type name. *)
 let stdlib_ctor_owner_type : (string * string) list =
   List.concat_map (fun (_m, ty, ctors) -> List.map (fun c -> (c, ty)) ctors)
-    stdlib_adt_ctor_groups
+    stdlib_import_ctor_groups
   |> List.sort_uniq compare
 
 (** Bare (dot-free, capital-initial) stdlib names usable in a VALUE position that
@@ -2065,7 +2100,7 @@ let tesl_known_module_names : string list = [
   "Tesl.UUID"; "Tesl.Set"; "Tesl.Env";
   "Tesl.Telemetry"; "Tesl.ApiTest"; "Tesl.Tuple"; "Tesl.Id";
   "Tesl.Queue"; "Tesl.Sse"; "Tesl.Logging";
-  "Tesl.JWT"; "Tesl.Cache"; "Tesl.Email"; "Tesl.Database"; "Tesl.SSE"; "Tesl.App"; "Tesl.Agent";
+  "Tesl.Migration"; "Tesl.JWT"; "Tesl.Cache"; "Tesl.Email"; "Tesl.Database"; "Tesl.SSE"; "Tesl.App"; "Tesl.Agent";
   (* Tesl.Sso: SSO / third-party-auth surface (roadmap/next/ensure_sso_works.md,
      Phase 3), backed by tesl/sso.rkt. *)
   "Tesl.Sso";

@@ -169,10 +169,27 @@ that checks manual coherence without building the compiler.
 | `09-adding-tests.md` | Test patterns, infrastructure, regression test conventions |
 | `10-common-patterns.md` | Gotchas, quick reference table, diagnostic commands |
 | `11-frontend-ir.md` | Generator-facing frontend IR stage and `emit_ir` architecture |
+| [Migration implementation](migrations-implementation.md) | Delivery gates, implemented prerequisites, regression evidence and remaining migration work |
+| [Migration source writes](migration-source-writes.md) | Guarded native generation, compiler manifest consumption, concurrent saves and crash recovery |
+| [Migration planning](migration-planning.md) | Checked PostgreSQL source plans, retained storage, index compatibility and execution boundaries |
+| [Migration execution](migration-execution.md) | Protected installation, additive execution, regression evidence and pending startup/admission integration |
+| [Migration row results](migration-result-type.md) | Typed `Row`/`Reject` results and proof identity prerequisites |
+| [Transforming declarations](migration-transform-declaration.md) | Checked row functions, field mappings, fixtures and execution boundaries |
+| [Row generation prototype](migration-row-generations-candidate.md) | Test-only invalidation triggers and production integration requirements |
+| [Frozen queue schemas](queue-schema-prerequisite.md) | Complete source inventories, stable queue identities and immutable history |
+| [Compiled queue history](queue-history-projection.md) | Linked queue contracts and application registration checks |
+| [Queue control candidate](queue-control-format4-candidate.md) | Unpublished protected storage, catalog checks and registration protocol |
+| [Protected queue operations](queue-operations-candidate.md) | Unpublished fenced claims, renewal, completion and retry operations |
+| [Dead-letter metadata](dead-letter-metadata.md) | Opaque job diagnostics and operator-facing metadata |
 | `12-your-first-compiler-change.md` | **Start here if you are new.** One real diagnostic improvement (`W020`), end to end: the edit, the tests it breaks, the byte-exact diff, the regression test, the finished change |
 | `zero-cost-proofs-contract.md` | Proof erasure as the only mode — the as-built compile-time proof/declared-context contract |
 | `deploy.md` | *(moved → [`manual/deploy.md`](../manual/deploy.md))* Deploying a Tesl web API — `tesl build`, the generated Docker image, database flavours. This file is now a redirect stub. |
 | `tesl-manifest.md` | *(moved → [`manual/tesl-manifest.md`](../manual/tesl-manifest.md))* `tesl.toml` project manifest schema read by `tesl build` / `tesl db`. This file is now a redirect stub. |
+
+Migration contributors should also read the
+[protocol harness](../runtime/go/internal/migrationtest/README.md),
+[finite model assumptions](models/README.md), and
+[generated kernel coverage map](migration-protocol-coverage.json).
 
 Every guide here is also in the binary, with no checkout:
 `tesl help manual dev` opens this index and `tesl help manual dev-docs/<file>` opens one guide —

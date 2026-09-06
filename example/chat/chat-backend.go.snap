@@ -236,6 +236,8 @@ var ChatDatabaseDatabase = teslrt.NewDatabase(
 	},
 )
 
+var _ = teslrt.RegisterDatabaseIdentity("teslmodchatbackend.ChatDatabase", ChatDatabaseDatabase)
+
 //line chat-backend.tesl:199
 func cookieAuth(request teslrt.HttpRequest) teslrt.Check[SessionUser] {
 //line chat-backend.tesl:201

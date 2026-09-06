@@ -7,6 +7,7 @@
       tesl --check-batch <file> ...  batch-check many files in one process (per-file summary)
       tesl --check-all <dir>     recursively batch-check every .tesl file under <dir>
       tesl --check-json <file>   check, emit diagnostics as IR-2 JSON
+      tesl --check-json-v2 <file> check with related locations and action metadata
       tesl --local-bindings-json <file> emit inferred local binding types as JSON
       tesl --definition-json <file> <line> <col> emit definition location as JSON
       tesl --occurrences-json <file> <line> <col> emit same-file occurrences as JSON
@@ -38,6 +39,7 @@ let usage = {|Usage:
   tesl --check-batch <file> [...]  batch-check many files in one process (shared import cache, per-file summary)
   tesl --check-all <dir>       recursively batch-check every .tesl file under <dir>
   tesl --check-json <file>     check, emit diagnostics as IR-2 JSON
+  tesl --check-json-v2 <file>  check with related locations and action metadata
   tesl --local-bindings-json <file> emit inferred local binding types as JSON
   tesl --workspace-definition-json <file> <line> <col> emit workspace definition and snapshot
   tesl --workspace-references-json <file> <line> <col> emit complete/partial workspace references
@@ -60,6 +62,8 @@ let usage = {|Usage:
   tesl --semantic-json <file>  emit full module semantic snapshot as JSON (IR-1 foundation)
   tesl agent-context <file>    emit a compact AI-agent snapshot (diagnostics+symbols+obligations) as JSON
   tesl --agent-context-json <file>  alias for `tesl agent-context`
+  tesl migrate generate <file> --manifest-json  preview guarded migration source edits
+  tesl test [--test-name NAME] [--test-kind KIND] <file> [...]  run all generated test packages
   tesl --mutate [--backend go] <file> [test-file ...]  run Go mutation testing; optionally merge tests from extra files
    tesl --exe <file> [--out <path>]  build a standalone Go executable
 
@@ -1011,6 +1015,63 @@ let build_go_executable filename out_opt =
   | Sys_error msg -> cleanup (); Printf.eprintf "%serror%s: %s\n" (col "1;31") (col "0") msg; exit 1
   | Failure msg -> cleanup (); Printf.eprintf "%serror%s: %s\n" (col "1;31") (col "0") msg; exit 1
 
+(* The compiler is also called directly by editor and agent clients. Keep its
+   `test` route independent of the installed shell wrapper, and run ALL emitted
+   packages: compatibility tests may live in imported modules. *)
+let run_go_tests args =
+  let rec parse name kind short files = function
+    | [] when files <> [] -> name, kind, short, List.rev files
+    | "--test-name" :: value :: rest when value <> "" && name = None ->
+      parse (Some value) kind short files rest
+    | "--test-kind" :: (("test" | "api-test" | "load-test" | "doctest") as value) :: rest
+      when kind = None -> parse name (Some value) short files rest
+    | "--short" :: rest when not short -> parse name kind true files rest
+    | "--backend" :: "go" :: rest -> parse name kind short files rest
+    | file :: rest when file <> "" && file.[0] <> '-' ->
+      parse name kind short (file :: files) rest
+    | _ ->
+      Printf.eprintf "usage: tesl test [--test-name NAME] [--test-kind test|api-test|load-test|doctest] [--short] <file.tesl> [...]\n";
+      exit 2
+  in
+  let name, kind, short, files = parse None None false [] args in
+  let status = ref 0 in
+  List.iter (fun filename ->
+    match Compile.compile_go_file filename with
+    | Compile.GoFailure diags -> List.iter print_diagnostic diags; status := 1
+    | Compile.GoSuccess artifacts ->
+      let tests = List.filter (fun (a : Emit_go.artifact) ->
+        Filename.check_suffix a.path "_test.go") artifacts in
+      let contains text needle =
+        try ignore (Str.search_forward (Str.regexp_string needle) text 0); true
+        with Not_found -> false in
+      let cases = List.concat_map (fun (a : Emit_go.artifact) ->
+        Str.split (Str.regexp_string "\nfunc Test") a.contents
+        |> List.filter (fun body -> contains body "(teslT *testing.T) {")) tests in
+      let has_selection = List.exists (fun body ->
+        (* These are emitted filter comparisons, not comments or source matches.
+           A typo must not report success with every generated test skipped. *)
+        (match name with None -> true | Some value ->
+          contains body ("teslWanted != " ^ Emit_go.go_quote value))
+        && (match kind with None -> true | Some value ->
+          contains body ("teslKind != " ^ Emit_go.go_quote value))) cases in
+      if not has_selection then begin
+        Printf.eprintf "error: %s has no generated tests matching the requested selection\n" filename;
+        status := 1
+      end else begin
+        let root = fresh_go_output_dir filename in
+        Fun.protect ~finally:(fun () -> Compile.remove_tree root) (fun () ->
+          write_go_project root artifacts;
+          let go = match Sys.getenv_opt "TESL_GO" with Some value -> value | None -> "go" in
+          let value = function None -> "" | Some value -> value in
+          let command = Printf.sprintf
+            "cd %s && TESL_TEST_NAME=%s TESL_TEST_KIND=%s %s test -count=1 -v %s ./..."
+            (Filename.quote root) (Filename.quote (value name)) (Filename.quote (value kind))
+            (Filename.quote go) (if short then "-short" else "") in
+          let code = Sys.command command in
+          if code <> 0 then status := 1)
+      end) files;
+  exit !status
+
 (** WS4: print per-file results for a batch / whole-project check, then a
     one-line summary, and exit (1 if any file has an error diagnostic, else 0).
     Diagnostics go to stderr (as for `--check`); the summary goes to stdout so
@@ -1057,6 +1118,7 @@ let () =
   (* `tesl explain <CODE>` — alias for `tesl help <CODE>`; show a diagnostic
      code's explanation + manual link. *)
   | "explain" :: [code] -> display_code_explanation code
+  | "test" :: rest -> run_go_tests rest
   | ["explain"] | "explain" :: _ ->
     Printf.eprintf "Usage: tesl explain <CODE>   (e.g. tesl explain V001)\n";
     Printf.eprintf "Run `tesl help codes` for the list of all diagnostic codes.\n";
@@ -1064,6 +1126,11 @@ let () =
   (* `tesl doc <name>` — Tesl-syntax signature of any builtin name; `tesl doc`
      lists the stdlib modules; `--doc-json` is the machine form (LSP hover). *)
   | "doc" :: rest -> handle_doc ~json:false rest
+  | "migrate" :: rest ->
+    let response = Migration_command.run rest in
+    print_string response.stdout;
+    prerr_string response.stderr;
+    exit response.exit_code
   | "--doc-json" :: rest -> handle_doc ~json:true rest
   | ["--catalog-json"] -> print_endline (Builtin_search.catalog_json ())
   | ["--search-json"; query] | ["search"; "--json"; query] ->
@@ -1118,7 +1185,7 @@ let () =
   | ("--fmt" :: filenames) when filenames <> [] ->
     let ret = ref 0 in
     List.iter (fun filename ->
-      match Formatter.format_file filename with
+      match Formatter.format_file ~logical_path:(logical_path filename) filename with
       | Ok ()  -> ()
       | Error msg -> Printf.eprintf "%s: %s\n" filename msg; ret := 1
     ) filenames;
@@ -1127,7 +1194,7 @@ let () =
   | ("--fmt-check" :: filenames) when filenames <> [] ->
     let ret = ref 0 in
     List.iter (fun filename ->
-      match Formatter.format_check filename with
+      match Formatter.format_check ~logical_path:(logical_path filename) filename with
       | Ok true  -> ()
       | Ok false ->
         Printf.eprintf "%s: not formatted (run `tesl fmt %s` to fix)\n" filename filename;

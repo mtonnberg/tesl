@@ -4,24 +4,19 @@
 open Parser
 open Ast
 
-let lexer_failure_prefix = "lexer failure: "
+(* Share the complete frontend judgment with migration inventories. *)
+include Frontend_check
 
-(** Total parser boundary for compiler APIs.  The lexer reports malformed bytes
-    and unterminated literals with [Failure]; convert those into the parser's
-    normal error channel so every JSON query can still emit its documented
-    envelope. *)
-let parse_module_uncached (filename, source) =
-  try Parser.parse_module filename source with
-  | Failure message ->
-    Parser.Err {
-      msg = lexer_failure_prefix ^ message;
-      loc = Location.dummy_loc filename;
-      fix = None;
-    }
+let check_module ?skip_dep_body source m =
+  let additional = Migration_application.make ?skip_dep_body m in
+  let diagnostics = Frontend_check.check_module ~additional
+    ?skip_dep_body source m in
+  Migration_declaration.diagnostics_of_errors
+    (Migration_source_diagnostics.check_module_source source m) @ diagnostics
 
-let cached_parse_module = Query_cache.memo ~retain_across_snapshots:true ~limit:128 ~max_weight:(8 * 1024 * 1024)
-  ~weight:(fun (_, source) -> String.length source) parse_module_uncached
-let parse_module filename source = cached_parse_module (filename, source)
+let source_parse_diagnostics filename source error =
+  Migration_declaration.diagnostics_of_errors
+    (Migration_source_diagnostics.check_source ~file:filename source) @ [diag_of_parse_error error]
 
 (** JSON-safe string encoder.
     OCaml's [%S] format uses OCaml escape syntax (\NNN for non-ASCII bytes),
@@ -45,38 +40,6 @@ let json_encode_string s =
   ) s;
   Buffer.add_char buf '"';
   Buffer.contents buf
-
-(** A unified diagnostic that can come from the parser or the type checker.
-    The fix type itself lives in {!Type_system} (so type errors can carry one);
-    re-exported here so existing [Compile.Replace_line] consumers keep working. *)
-type diagnostic_fix = Type_system.diagnostic_fix =
-  | Replace_line of { line : int; replacement : string }
-  | Insert_line  of { line : int; text : string }
-  | Replace_span of { start_line : int; end_line : int; replacement : string }
-  | Replace_range of { start_line : int; start_col : int;
-                       end_line : int; end_col : int; replacement : string }
-  | Multi of diagnostic_fix list
-
-type diagnostic = {
-  file     : string;
-  start_line : int;
-  start_col  : int;
-  end_line   : int;
-  end_col    : int;
-  severity   : string;
-  code       : string;
-  message    : string;
-  fix        : diagnostic_fix option;
-  source     : string;
-  (* B5: pre-resolved manual deep-link anchor ("<section>#<anchor>"), decided by
-     the STRUCTURED topic the producing validation pass stamped on the error —
-     NOT by sniffing keywords out of [message].  [None] means "no structured
-     anchor was resolved here"; the renderer then falls back to the registry's
-     code→anchor mapping (which is 1:1 for every non-V001 code).  CLI-render-only:
-     deliberately NOT serialized by [diag_to_json] so the JSON wire format stays
-     byte-identical for existing consumers. *)
-  manual     : string option;
-}
 
 type go_compile_result =
   | GoSuccess of Emit_go.artifact list
@@ -119,79 +82,6 @@ type local_binding = {
   name : string;
   ty : string;
   note : string option;
-}
-
-let diag_of_parse_error (e : parse_error) : diagnostic = {
-  file       = e.loc.file;
-  start_line = e.loc.start.line;
-  start_col  = e.loc.start.col;
-  end_line   = e.loc.stop.line;
-  end_col    = e.loc.stop.col;
-  severity   = "error";
-  (* The rejected `#lang tesl` pragma has a dedicated code (E002, repurposed
-     from the retired "missing #lang" lint) so `tesl help E002` explains it. *)
-  code       = (if String.length e.msg >= 12 && String.sub e.msg 0 12 = "`#lang tesl`"
-                then "E002" else "E000");
-  message    =
-    (if String.length e.msg >= String.length lexer_failure_prefix
-        && String.sub e.msg 0 (String.length lexer_failure_prefix) = lexer_failure_prefix
-     then String.sub e.msg (String.length lexer_failure_prefix)
-            (String.length e.msg - String.length lexer_failure_prefix)
-     else e.msg);
-  fix        = e.fix;
-  source     =
-    (if String.length e.msg >= String.length lexer_failure_prefix
-        && String.sub e.msg 0 (String.length lexer_failure_prefix) = lexer_failure_prefix
-     then "lexer" else "parser");
-  manual     = None;
-}
-
-let diag_of_proof_error (e : Proof_checker.proof_error) : diagnostic = {
-  file       = e.loc.file;
-  start_line = e.loc.start.line;
-  start_col  = e.loc.start.col;
-  end_line   = e.loc.stop.line;
-  end_col    = e.loc.stop.col;
-  severity   = "error";
-  code       = "P001";
-  message    = e.message;
-  fix        = None;
-  source     = "proof-checker";
-  manual     = None;
-}
-
-let diag_of_type_error (e : Type_system.type_error) : diagnostic = {
-  file       = e.loc.file;
-  start_line = e.loc.start.line;
-  start_col  = e.loc.start.col;
-  end_line   = e.loc.stop.line;
-  end_col    = e.loc.stop.col;
-  severity   = "error";
-  code       = "T001";
-  message    = e.message;
-  fix        = e.fix;
-  source     = "type-checker";
-  manual     = None;
-}
-
-let diag_of_validation_error (e : Validation.validation_error) : diagnostic = {
-  file       = e.loc.file;
-  start_line = e.loc.start.line;
-  start_col  = e.loc.start.col;
-  end_line   = e.loc.stop.line;
-  end_col    = e.loc.stop.col;
-  severity   = "error";
-  (* get_handlers_do_not_mutate: a pass may stamp its own stable code (SEC005);
-     everything else keeps the pass-generic V001. *)
-  code       = (if e.code = "" then "V001" else e.code);
-  message    = if e.hint = "" then e.message else e.message ^ "\nHint: " ^ e.hint;
-  fix        = None;
-  source     = "validation";
-  (* B5: resolve the deep-link anchor from the STRUCTURED topic the producing
-     pass stamped on the error — not from the message text.  main.ml prefers
-     this over the (now vestigial) message-based path. *)
-  manual     = Error_codes.manual_for ~topic:e.topic
-                 ~code:(if e.code = "" then "V001" else e.code) ~message:e.message ();
 }
 
 (* The nested edits of a `multi` fix carry no title of their own — the action is
@@ -244,6 +134,48 @@ let diag_to_json (d : diagnostic) : string =
 let diagnostics_to_json (diags : diagnostic list) : string =
   Printf.sprintf {|{"version":1,"diagnostics":[%s]}|}
     (String.concat "," (List.map diag_to_json diags))
+
+let diagnostic_manual_href d =
+  let anchor = match d.manual with Some _ as a -> a
+    | None -> Error_codes.manual_for ~code:d.code ~message:d.message () in
+  Option.bind anchor (fun anchor ->
+    let section,fragment = match String.split_on_char '#' anchor with
+      | [section] -> section,"" | [section;fragment] -> section,"#" ^ fragment
+      | _ -> "","" in
+    let file = match section with
+      | "language-spec" -> Some "LANGUAGE-SPEC.md"
+      | "getting-started" -> Some "manual/GETTING-STARTED.md"
+      | "faq" -> Some "manual/FAQ.md"
+      | "dev" -> Some "dev-docs/README.md"
+      | "overview" | "best-practices" | "examples" | "sso" -> Some ("manual/" ^ section ^ ".md")
+      | _ -> None in
+    Option.map (fun file -> "https://github.com/mtonnberg/tesl/blob/main/" ^ file ^ fragment) file)
+
+let diag_to_json_v2 (d : diagnostic) =
+  let metadata = d.metadata in
+  let message = Option.fold ~none:d.message ~some:(fun (m : Diagnostic_metadata.t) -> m.message) metadata in
+  let base = diag_to_json {d with message} in
+  let related = Option.fold ~none:[] ~some:(fun (m : Diagnostic_metadata.t) -> m.related) metadata in
+  let related = List.filter_map (fun (loc,message) ->
+    if loc.Location.file="" then None else Some (Printf.sprintf
+      {|{"file":%s,"start":{"line":%d,"col":%d},"end":{"line":%d,"col":%d},"message":%s}|}
+      (json_encode_string loc.file) loc.start.line loc.start.col loc.stop.line loc.stop.col (json_encode_string message))) related in
+  let action = Option.bind metadata (fun (m : Diagnostic_metadata.t) -> m.action) in
+  let command = Option.bind action (fun (a : Diagnostic_metadata.action) -> a.command) in
+  let command = Option.fold ~none:"null" ~some:(fun (c : Diagnostic_metadata.command) ->
+    let args = String.concat "," (List.map (fun (key,value) -> json_encode_string key ^ ":" ^ json_encode_string value) c.arguments) in
+    Printf.sprintf {|{"title":%s,"command":%s,"arguments":[{%s}]}|}
+      (json_encode_string c.title) (json_encode_string c.name) args) command in
+  let href = Option.fold ~none:"null" ~some:(fun href -> "{\"href\":" ^ json_encode_string href ^ "}") (diagnostic_manual_href d) in
+  String.sub base 0 (String.length base-1) ^ Printf.sprintf
+    {|,"relatedInformation":[%s],"actionClass":%s,"needsConfirmation":%b,"fixAllEligible":%b,"command":%s,"codeDescription":%s}|}
+    (String.concat "," related)
+    (Option.fold ~none:"null" ~some:(fun (a : Diagnostic_metadata.action) -> json_encode_string (Diagnostic_metadata.class_name a.class_)) action)
+    (Option.fold ~none:false ~some:(fun (a : Diagnostic_metadata.action) -> a.needs_confirmation) action)
+    (Option.fold ~none:false ~some:(fun (a : Diagnostic_metadata.action) -> a.fix_all_eligible) action) command href
+
+let diagnostics_to_json_v2 diags =
+  Printf.sprintf {|{"version":2,"diagnostics":[%s]}|} (String.concat "," (List.map diag_to_json_v2 diags))
 
 let local_binding_to_json (b : local_binding) : string =
   let note_field = match b.note with
@@ -366,60 +298,6 @@ let field_at_response_to_json result =
 
 (* Bound work before recursive semantic passes. The walk itself is iterative,
    so detecting an excessive tree cannot overflow the OCaml stack. *)
-let max_expression_depth = 512
-let max_expression_nodes = 100_000
-
-let module_expression_roots (m : Ast.module_form) : Ast.expr list =
-  let test_roots stmts = List.concat_map Ast.test_stmt_exprs stmts in
-  List.concat_map (function
-    | Ast.DFunc fd -> [fd.body]
-    | Ast.DConst c -> [c.value]
-    | Ast.DTest t -> test_roots t.stmts
-    | Ast.DApiTest t -> t.seed_stmts @ test_roots t.stmts
-    | Ast.DLoadTest t -> t.seed_stmts @ test_roots t.request_stmts
-    | Ast.DDatabase d -> Option.to_list d.config_expr
-    | Ast.DQueue q -> Option.to_list q.config_expr
-    | Ast.DChannel c -> Option.to_list c.config_expr
-    | Ast.DCache c -> Option.to_list c.config_expr
-    | Ast.DEmail e -> Option.to_list e.config_expr
-    | Ast.DAgent a -> Option.to_list a.config_expr
-    | Ast.DType _ | Ast.DRecord _ | Ast.DEntity _ | Ast.DFact _ | Ast.DCodec _
-    | Ast.DCapability _ | Ast.DWorkers _ | Ast.DCapture _ | Ast.DApi _
-    | Ast.DServer _ -> []) m.decls
-
-let module_complexity_diagnostics (m : Ast.module_form) : diagnostic list =
-  let stack = Stack.create () in
-  List.iter (fun root -> Stack.push (root, 1) stack) (module_expression_roots m);
-  let nodes = ref 0 in
-  let exceeded = ref None in
-  while !exceeded = None && not (Stack.is_empty stack) do
-    let expr, depth = Stack.pop stack in
-    incr nodes;
-    if depth > max_expression_depth then
-      exceeded := Some (`Depth depth, Checker.expr_loc expr)
-    else if !nodes > max_expression_nodes then
-      exceeded := Some (`Nodes !nodes, Checker.expr_loc expr)
-    else
-      ignore (Ast_visitor.fold_children
-        (fun () child -> Stack.push (child, depth + 1) stack) () expr)
-  done;
-  match !exceeded with
-  | None -> []
-  | Some (reason, loc) ->
-    let detail = match reason with
-      | `Depth depth -> Printf.sprintf "expression nesting is %d levels (limit %d)"
-                          depth max_expression_depth
-      | `Nodes _ -> Printf.sprintf "module contains more than %d expression nodes"
-                      max_expression_nodes in
-    [{ file = loc.Location.file;
-       start_line = loc.Location.start.line; start_col = loc.Location.start.col;
-       end_line = loc.Location.stop.line; end_col = loc.Location.stop.col;
-       severity = "error"; code = "E003";
-       message = Printf.sprintf
-         "source complexity budget exceeded: %s; split the expression into named functions or smaller declarations"
-         detail;
-       fix = None; source = "parser"; manual = None }]
-
 type named_loc = {
   bound_name : string;
   bound_loc : Location.loc;
@@ -1041,7 +919,7 @@ let definition_in_top_decl env line col (decl : Ast.top_decl) =
          match type_definition_at_precise_loc env.type_defs line col c.loc c.type_name with
          | Some _ as result -> result
          | None -> None)
-  | Ast.DDatabase _ | Ast.DCapability _ | Ast.DQueue _
+  | Ast.DQueueSchema _ | Ast.DDatabase _ | Ast.DCapability _ | Ast.DQueue _
   | Ast.DWorkers _ | Ast.DServer _ | Ast.DFact _ | Ast.DCache _ | Ast.DEmail _
   | Ast.DAgent _ -> None
 
@@ -1061,6 +939,7 @@ let collect_definition_env (m : Ast.module_form) =
     | Ast.DCapability c -> add_term_def env c.name (precise_name_loc c.loc c.name)
     | Ast.DConst c -> add_term_def env c.name (precise_name_loc c.loc c.name)
     | Ast.DQueue q -> add_term_def env q.name (precise_name_loc q.loc q.name)
+    | Ast.DQueueSchema q -> add_term_def env q.name (precise_name_loc q.loc q.name)
     | Ast.DChannel c -> add_term_def env c.name (precise_name_loc c.loc c.name)
     | Ast.DWorkers w -> add_term_def env w.name (precise_name_loc w.loc w.name)
     | Ast.DCapture c -> add_term_def env c.name (precise_name_loc c.loc c.name)
@@ -1088,7 +967,7 @@ let definition_source filename source line col =
     |> Option.map location_to_definition
 
 let definition_file filename line col =
-  let source = In_channel.with_open_text filename In_channel.input_all in
+  let source = Source_input.read_text filename in
   definition_source filename source line col
 
 let resolve_term_symbol locals env name =
@@ -1579,6 +1458,7 @@ let resolve_symbol_in_top_decl env line col (decl : Ast.top_decl) =
   | Ast.DDatabase d -> let name_loc = precise_name_loc d.loc d.name in if loc_contains_position name_loc line col then Some (term_symbol d.name name_loc) else None
   | Ast.DCapability c -> let name_loc = precise_name_loc c.loc c.name in if loc_contains_position name_loc line col then Some (term_symbol c.name name_loc) else None
   | Ast.DQueue q -> let name_loc = precise_name_loc q.loc q.name in if loc_contains_position name_loc line col then Some (term_symbol q.name name_loc) else None
+  | Ast.DQueueSchema q -> let name_loc = precise_name_loc q.loc q.name in if loc_contains_position name_loc line col then Some (term_symbol q.name name_loc) else None
   | Ast.DWorkers w -> let name_loc = precise_name_loc w.loc w.name in if loc_contains_position name_loc line col then Some (term_symbol w.name name_loc) else None
   | Ast.DServer s -> let name_loc = precise_name_loc s.loc s.name in if loc_contains_position name_loc line col then Some (term_symbol s.name name_loc) else None
   | Ast.DFact f -> let name_loc = precise_name_loc f.loc f.name in if loc_contains_position name_loc line col then Some (type_symbol f.name name_loc) else None
@@ -1936,6 +1816,7 @@ let rec collect_occurrences_in_top_decl env target (decl : Ast.top_decl) =
   | Ast.DDatabase d -> let name_loc = precise_name_loc d.loc d.name in if symbol_equal (term_symbol d.name name_loc) target then [name_loc] else []
   | Ast.DCapability c -> let name_loc = precise_name_loc c.loc c.name in if symbol_equal (term_symbol c.name name_loc) target then [name_loc] else []
   | Ast.DQueue q -> let name_loc = precise_name_loc q.loc q.name in if symbol_equal (term_symbol q.name name_loc) target then [name_loc] else []
+  | Ast.DQueueSchema q -> let name_loc = precise_name_loc q.loc q.name in if symbol_equal (term_symbol q.name name_loc) target then [name_loc] else []
   | Ast.DWorkers w -> let name_loc = precise_name_loc w.loc w.name in if symbol_equal (term_symbol w.name name_loc) target then [name_loc] else []
   | Ast.DServer s -> let name_loc = precise_name_loc s.loc s.name in if symbol_equal (term_symbol s.name name_loc) target then [name_loc] else []
   | Ast.DFact f -> let name_loc = precise_name_loc f.loc f.name in if symbol_equal (type_symbol f.name name_loc) target then [name_loc] else []
@@ -1979,7 +1860,7 @@ let occurrences_source filename source line col =
       |> location_list_to_occurrences ~write_loc:target.symbol_loc
 
 let occurrences_file filename line col =
-  let source = In_channel.with_open_text filename In_channel.input_all in
+  let source = Source_input.read_text filename in
   occurrences_source filename source line col
 
 let loc_specificity_key (loc : Location.loc) =
@@ -2030,7 +1911,7 @@ let type_at_source filename source line col =
           else None) bindings
 
 let type_at_file filename line col =
-  let source = In_channel.with_open_text filename In_channel.input_all in
+  let source = Source_input.read_text filename in
   type_at_source filename source line col
 
 let better_field_access (current : Checker.field_access_info option) (candidate : Checker.field_access_info) =
@@ -2065,7 +1946,7 @@ let field_at_source filename source line col =
     |> Option.map field_at_of_checker
 
 let field_at_file filename line col =
-  let source = In_channel.with_open_text filename In_channel.input_all in
+  let source = Source_input.read_text filename in
   field_at_source filename source line col
 
 (* ── Shared module-walking helpers for the position queries below ───────────── *)
@@ -2095,6 +1976,8 @@ type config_context = { cc_block : string; cc_fields : config_field_info list }
 let config_field_type_label (k : Validation_structural.vkind) : string =
   match k with
   | Validation_structural.VStr         -> "String"
+  | Validation_structural.VSchemaRef   -> "ModuleRef (VCurrent) | String (legacy)"
+  | Validation_structural.VMigrationRef -> "ModuleRef (Migrate prefix)"
   | Validation_structural.VInt         -> "Int"
   | Validation_structural.VPort        -> "Int (port 1..65535)"
   | Validation_structural.VMountPath   -> "String (leading `/`, no trailing `/`)"
@@ -2102,6 +1985,7 @@ let config_field_type_label (k : Validation_structural.vkind) : string =
   | Validation_structural.VSub sub     -> sub ^ " { … }"
   | Validation_structural.VConn        -> "TcpConnection { … } | SocketConnection { … }"
   | Validation_structural.VBackend     -> "Postgres (PostgresConfig { … }) | Memory"
+  | Validation_structural.VMigrationTopology -> "Worker | Embedded"
   | Validation_structural.VBackoff     -> "Exponential | Fixed | Linear"
   | Validation_structural.VDatabaseRef -> "Database"
   | Validation_structural.VEntityList  -> "[Entity]"
@@ -2396,7 +2280,7 @@ let signature_help_source filename source line col : signature_info option =
       Some { sig_ with si_active_parameter = active }
 
 let signature_help_file filename line col =
-  let source = In_channel.with_open_text filename In_channel.input_all in
+  let source = Source_input.read_text filename in
   signature_help_source filename source line col
 
 (* ── Selection range ─────────────────────────────────────────────────────────
@@ -2456,7 +2340,7 @@ let selection_range_source filename source line col : selection_range list =
     List.map selection_range_of_loc sorted
 
 let selection_range_file filename line col =
-  let source = In_channel.with_open_text filename In_channel.input_all in
+  let source = Source_input.read_text filename in
   selection_range_source filename source line col
 
 (* ── Type definition ─────────────────────────────────────────────────────────
@@ -2521,747 +2405,8 @@ let type_definition_source filename source line col : definition_location option
        | _ -> None)
 
 let type_definition_file filename line col =
-  let source = In_channel.with_open_text filename In_channel.input_all in
+  let source = Source_input.read_text filename in
   type_definition_source filename source line col
-
-let starts_with ~prefix s =
-  let prefix_len = String.length prefix in
-  String.length s >= prefix_len && String.sub s 0 prefix_len = prefix
-
-let is_tesl_stdlib_module_name name =
-  starts_with ~prefix:"Tesl." name
-
-(* Review item 3: one canonical resolver in Validation_common (was a copy). *)
-let module_name_to_kebab = Validation_common.module_name_to_kebab
-let resolve_local_import_path = Validation_common.resolve_local_import_path
-
-let strip_dotdot raw_name =
-  let n = String.length raw_name in
-  if n > 4 && String.sub raw_name (n - 4) 4 = "(..)"
-  then String.sub raw_name 0 (n - 4)
-  else raw_name
-
-let import_includes_bool_type (imp : import_decl) =
-  match imp.names with
-  | ImportAll -> true
-  | ImportExposing names ->
-      List.exists (fun raw_name -> strip_dotdot raw_name = "Bool") names
-
-let import_includes_bool_ctors (imp : import_decl) =
-  match imp.names with
-  | ImportAll -> true
-  | ImportExposing names ->
-      List.exists (fun raw_name ->
-        raw_name = "Bool(..)" ||
-        let stripped = strip_dotdot raw_name in
-        stripped = "Bool" || stripped = "True" || stripped = "False"
-      ) names
-
-let has_prelude_bool_type_import (m : module_form) =
-  List.exists (fun (imp : import_decl) -> imp.module_name = "Tesl.Prelude" && import_includes_bool_type imp) m.imports
-
-let has_prelude_bool_ctor_import (m : module_form) =
-  List.exists (fun (imp : import_decl) -> imp.module_name = "Tesl.Prelude" && import_includes_bool_ctors imp) m.imports
-
-let single_line_replace_fix (source_lines : string array) loc ~old_text replacement =
-  if loc.Location.start.line <> loc.Location.stop.line then None
-  else if loc.Location.start.line < 0 || loc.Location.start.line >= Array.length source_lines then None
-  else
-    let line = source_lines.(loc.Location.start.line) in
-    let len = String.length line in
-    let start_col = max 0 (min len loc.Location.start.col) in
-    let expected_end = start_col + String.length old_text in
-    let end_col =
-      if expected_end <= len && String.sub line start_col (String.length old_text) = old_text
-      then expected_end
-      else max start_col (min len loc.Location.stop.col)
-    in
-    let new_line =
-      String.sub line 0 start_col ^ replacement ^ String.sub line end_col (len - end_col)
-    in
-    Some (Replace_line { line = loc.Location.start.line; replacement = new_line })
-
-let legacy_bool_diag source_lines loc ~old_text ~replacement ~message = {
-  file       = loc.Location.file;
-  start_line = loc.Location.start.line;
-  start_col  = loc.Location.start.col;
-  end_line   = loc.Location.stop.line;
-  end_col    = loc.Location.stop.col;
-  severity   = "error";
-  code       = "VBOOL001";
-  message    = message;
-  fix        = single_line_replace_fix source_lines loc ~old_text replacement;
-  source     = "validation";
-  manual     = None;
-}
-
-let missing_bool_import_diag (m : module_form) loc ~is_ctor =
-  let message =
-    if is_ctor then
-      "`True`/`False` come from `Tesl.Prelude`; add `import Tesl.Prelude exposing [Bool(..)]`"
-    else
-      "`Bool` comes from `Tesl.Prelude`; add `import Tesl.Prelude exposing [Bool(..)]`"
-  in
-  {
-    file       = loc.Location.file;
-    start_line = loc.Location.start.line;
-    start_col  = loc.Location.start.col;
-    end_line   = loc.Location.stop.line;
-    end_col    = loc.Location.stop.col;
-    severity   = "error";
-    code       = "VBOOL002";
-    message;
-    fix        = Import_suggest.build_fix m ~target_module:"Tesl.Prelude"
-                   ~expose_name:"Bool(..)";
-    source     = "validation";
-    manual     = None;
-  }
-
-let legacy_bool_diagnostics _filename source (m : module_form) =
-  let source_lines = Array.of_list (String.split_on_char '
-' source) in
-  let bool_type_imported = has_prelude_bool_type_import m in
-  let bool_ctor_imported = has_prelude_bool_ctor_import m in
-  let diags = ref [] in
-  let first_bool_type_use = ref None in
-  let first_bool_ctor_use = ref None in
-  let note_bool_type_use loc = if !first_bool_type_use = None then first_bool_type_use := Some loc in
-  let note_bool_ctor_use loc = if !first_bool_ctor_use = None then first_bool_ctor_use := Some loc in
-  let rec visit_type_expr = function
-    | TName { name = "Boolean"; loc } ->
-        diags := legacy_bool_diag source_lines loc ~old_text:"Boolean" ~replacement:"Bool"
-          ~message:"use `Bool`, not `Boolean`" :: !diags
-    | TName { name = "Bool"; loc } ->
-        note_bool_type_use loc
-    | TVar { name = "bool"; loc } ->
-        diags := legacy_bool_diag source_lines loc ~old_text:"bool" ~replacement:"Bool"
-          ~message:"use `Bool`, not `bool`" :: !diags
-    | TApp { head; arg; _ } ->
-        visit_type_expr head; visit_type_expr arg
-    | TFun { dom; cod; _ } ->
-        visit_type_expr dom; visit_type_expr cod
-    | TTuple { elems; _ } ->
-        List.iter visit_type_expr elems
-    | _ -> ()
-  in
-  let rec visit_binding (b : binding) =
-    visit_type_expr b.type_expr
-  and visit_field_def (f : field_def) =
-    visit_type_expr f.type_expr
-  and visit_return_spec = function
-    | RetPlain { ty; _ } -> visit_type_expr ty
-    | RetAttached { binding; _ } -> visit_binding binding
-    | RetNamedPack { ty; _ } -> visit_type_expr ty
-    | RetForAll { elem_ty; _ }
-    | RetMaybeForAll { elem_ty; _ }
-    | RetSetForAll { elem_ty; _ }
-    | RetMaybeSetForAll { elem_ty; _ } -> visit_type_expr elem_ty
-    | RetForAllDictValues { key_ty; val_ty; _ }
-    | RetForAllDictKeys   { key_ty; val_ty; _ } ->
-      visit_type_expr key_ty; visit_type_expr val_ty
-    | RetMaybeAttached { binding; _ } -> visit_binding binding
-    | RetExists { binding; body; _ } -> visit_binding binding; visit_return_spec body
-  and visit_expr e =
-    (* Only the legacy-bool-bearing variants get bespoke handling; the
-       structural recursion into every other variant's children is delegated to
-       {!Ast_visitor.iter_children}, the single shared traversal.  This is what
-       fixes the historical bug where [EFail _ -> ()] never descended into
-       [EFail.message] (an expr): the structural default now visits it, so a
-       legacy `true`/`false`/`Boolean` inside a fail message is diagnosed too.
-       ELambda additionally needs its parameter *types* walked for `Boolean`/
-       `bool` annotations — bindings carry type_expr, which the expr visitor
-       (correctly) does not traverse — so that arm is kept explicit. *)
-    match e with
-    | ELit { lit = LBool true; loc } ->
-        diags := legacy_bool_diag source_lines loc ~old_text:"true" ~replacement:"True"
-          ~message:"use `True`, not `true`" :: !diags
-    | ELit { lit = LBool false; loc } ->
-        diags := legacy_bool_diag source_lines loc ~old_text:"false" ~replacement:"False"
-          ~message:"use `False`, not `false`" :: !diags
-    | EConstructor { name = ("True" | "False"); args = []; loc } ->
-        note_bool_ctor_use loc
-    | ELambda { params; body; _ } ->
-        List.iter visit_binding params; visit_expr body
-    | _ -> Ast_visitor.iter_children visit_expr e
-  in
-  let rec visit_test_stmt = function
-    | TsLetProof { value; _ } -> visit_expr value
-    | TsLet { value; _ } -> visit_expr value
-    | TsExpect { left; right; _ } -> visit_expr left; Option.iter visit_expr right
-    | TsExpectFail { fn; arg; _ } -> visit_expr fn; visit_expr arg
-    | TsExpectHasProof { fn; arg; _ } -> visit_expr fn; visit_expr arg
-    | TsProperty { body; _ } -> visit_expr body
-    | TsIf { cond; then_stmts; else_stmts; _ } ->
-        visit_expr cond;
-        List.iter visit_test_stmt then_stmts;
-        List.iter visit_test_stmt else_stmts
-    | TsCase { scrut; arms; _ } ->
-        visit_expr scrut;
-        List.iter (fun arm -> List.iter visit_test_stmt arm.ts_body) arms
-    | TsExpr { e; _ } -> visit_expr e
-  in
-  List.iter (function
-    | DFunc fd ->
-        List.iter visit_binding fd.params;
-        visit_return_spec fd.return_spec;
-        visit_expr fd.body
-    | DRecord r -> List.iter visit_field_def r.fields
-    | DEntity e -> List.iter visit_field_def e.fields
-    | DType (TypeNewtype { base_type; _ }) -> visit_type_expr base_type
-    | DType (TypeAdt { variants; _ }) ->
-        List.iter (fun (v : adt_variant) -> List.iter visit_field_def v.fields) variants
-    | DConst c -> visit_expr c.value
-    | DTest test ->
-        List.iter visit_test_stmt test.stmts
-    | DApiTest test ->
-        List.iter visit_expr test.seed_stmts;
-        List.iter visit_test_stmt test.stmts
-    | DLoadTest test ->
-        List.iter visit_expr test.seed_stmts;
-        List.iter visit_test_stmt test.request_stmts
-    | _ -> ()
-  ) m.decls;
-  (match !first_bool_type_use with
-   | Some loc when not bool_type_imported -> diags := missing_bool_import_diag m loc ~is_ctor:false :: !diags
-   | _ -> ());
-  (match !first_bool_ctor_use with
-   | Some loc when not bool_ctor_imported -> diags := missing_bool_import_diag m loc ~is_ctor:true :: !diags
-   | _ -> ());
-  List.rev !diags
-
-(* ── Regex pattern literals (VREGEX001-4) ──────────────────────────────────
-   `Tesl.Regex` patterns are validated where the program is validated: see
-   regex_lint.ml for the subset, the literal-only rule, and the
-   backtracking/capture-participation rules.  Runs alongside the other surface
-   passes so `tesl check`, `--check-json` and `agent-context` all report it. *)
-let regex_literal_diagnostics (m : module_form) : diagnostic list =
-  List.map (fun (loc, code, message) -> {
-    file       = loc.Location.file;
-    start_line = loc.Location.start.line;
-    start_col  = loc.Location.start.col;
-    end_line   = loc.Location.stop.line;
-    end_col    = loc.Location.stop.col;
-    severity   = "error";
-    code;
-    message;
-    fix        = None;
-    source     = "validation";
-    manual     = Error_codes.manual_for ~code ~message ();
-  }) (Regex_lint.module_diagnostics m)
-
-let parse_module_file path =
-  try
-    let source = In_channel.with_open_text path In_channel.input_all in
-    match parse_module path source with
-    | Ok m -> Some m
-    | Err _ -> None
-  with Sys_error _ -> None
-
-(* Graph nodes are CANONICAL paths (Validation_common.canonical_import_path):
-   [resolve_local_import_path] spells the same file differently depending on
-   the importing file (`main.tesl` on the CLI vs `./main.tesl` reached through
-   a dep's back-edge), and raw-string nodes made the SCC containing the entry
-   invisible — the emitter then fell back to plain requires and `go-tool make`
-   died with a raw "cycle in loading" (2026-07-08 audit). *)
-let canonical_import_path = Validation_common.canonical_import_path
-
-(* The ONE lifted stdlib module the Go backend compiles from its Tesl SOURCE rather than
-   binding to a runtime file.  `Tesl.CivilTime` has no Go runtime of its own and is ordinary
-   Tesl — ADTs, opaque types, checks, proof-carrying returns — so compiling it is both the
-   smallest way to have it and the most demanding thing the backend is asked to do.
-
-   `Tesl.List` and `Tesl.Either` are lifted too and are deliberately NOT here: their leaves
-   bind to `teslrt` functions, and compiling them as well would give a program two of each. *)
-let go_lifted_module_names = ["Tesl.CivilTime"]
-
-let build_local_import_graph ?(lifted=[]) entry_path =
-  let graph : (string, string list) Hashtbl.t = Hashtbl.create 16 in
-  let rec visit path =
-    if Hashtbl.mem graph path then ()
-    else begin
-      let deps =
-        match parse_module_file path with
-        | None -> []
-        | Some m ->
-          List.filter_map (fun (imp : Ast.import_decl) ->
-            if List.mem imp.module_name lifted then
-              Option.map canonical_import_path
-                (Validation_common.lifted_stdlib_source_path imp.module_name)
-            else if is_tesl_stdlib_module_name imp.module_name then None
-            else Some (canonical_import_path
-                         (resolve_local_import_path m.source_file imp.module_name))
-          ) m.imports
-      in
-      Hashtbl.add graph path deps;
-      List.iter visit deps
-    end
-  in
-  visit (canonical_import_path entry_path);
-  graph
-
-let tarjan_sccs (graph : (string, string list) Hashtbl.t) =
-  let index = ref 0 in
-  let stack : string Stack.t = Stack.create () in
-  let indices : (string, int) Hashtbl.t = Hashtbl.create 16 in
-  let lowlinks : (string, int) Hashtbl.t = Hashtbl.create 16 in
-  let on_stack : (string, unit) Hashtbl.t = Hashtbl.create 16 in
-  let sccs = ref [] in
-  let rec strongconnect v =
-    Hashtbl.replace indices v !index;
-    Hashtbl.replace lowlinks v !index;
-    incr index;
-    Stack.push v stack;
-    Hashtbl.replace on_stack v ();
-    let neighbors = match Hashtbl.find_opt graph v with Some xs -> xs | None -> [] in
-    List.iter (fun w ->
-      if not (Hashtbl.mem indices w) then begin
-        strongconnect w;
-        let low_v = Hashtbl.find lowlinks v in
-        let low_w = Hashtbl.find lowlinks w in
-        Hashtbl.replace lowlinks v (min low_v low_w)
-      end else if Hashtbl.mem on_stack w then begin
-        let low_v = Hashtbl.find lowlinks v in
-        let idx_w = Hashtbl.find indices w in
-        Hashtbl.replace lowlinks v (min low_v idx_w)
-      end
-    ) neighbors;
-    if Hashtbl.find lowlinks v = Hashtbl.find indices v then begin
-      let component = ref [] in
-      let continue = ref true in
-      while !continue do
-        let w = Stack.pop stack in
-        Hashtbl.remove on_stack w;
-        component := w :: !component;
-        if w = v then continue := false
-      done;
-      sccs := !component :: !sccs
-    end
-  in
-  Hashtbl.iter (fun v _ ->
-    if not (Hashtbl.mem indices v) then strongconnect v
-  ) graph;
-  !sccs
-
-let cyclic_local_import_paths_for_entry entry_path =
-  let entry_canon = canonical_import_path entry_path in
-  let graph = build_local_import_graph entry_path in
-  let sccs = tarjan_sccs graph in
-  match List.find_opt (fun component -> List.mem entry_canon component) sccs with
-  | Some component when List.length component > 1 -> component
-  | _ -> []
-
-(* ── WS1: opt-in per-phase wall-clock timing ────────────────────────────────
-   When the environment variable [TESL_PHASE_TIMING=1] is set, each compiler
-   phase (parse / typecheck / proof / validation / emit) prints its wall-clock
-   duration in milliseconds to *stderr* so it never pollutes the emitted code
-   on stdout.  When the flag is unset the cost is a single [Sys.getenv_opt]
-   lookup per [compile_source] call and the phase thunks run unwrapped — no
-   timing, no allocation, no stderr writes. *)
-let phase_timing_enabled () =
-  match Sys.getenv_opt "TESL_PHASE_TIMING" with
-  | Some ("1" | "true" | "TRUE" | "yes" | "YES" | "on" | "ON") -> true
-  | _ -> false
-
-(** Run [f ()], and when [enabled] print "[phase-timing] <label>: <ms> ms" to
-    stderr.  Returns [f]'s result unchanged.  When [enabled] is false, [f] is
-    called directly with no timing overhead. *)
-let time_phase enabled label (f : unit -> 'a) : 'a =
-  if not enabled then f ()
-  else begin
-    let t0 = Unix.gettimeofday () in
-    let result = f () in
-    let elapsed_ms = (Unix.gettimeofday () -. t0) *. 1000.0 in
-    Printf.eprintf "[phase-timing] %-10s %8.3f ms\n%!" label elapsed_ms;
-    result
-  end
-
-(* Typecheck → diagnostics, factored out of [check_module] so the timed
-   pipeline in [compile_source] can reuse the *identical* diagnostic-building
-   logic (including the bare-record-literal quick-fix) without duplicating it. *)
-let type_diags_of source (m : Ast.module_form) : diagnostic list =
-  let source_lines = Array.of_list (String.split_on_char '\n' source) in
-  let _, _, _, bare_hints, _, _, type_errors = Checker.check_module_with_metadata ~source_lines m in
-  List.map (fun (e : Type_system.type_error) ->
-    let base = diag_of_type_error e in
-    if starts_with ~prefix:"bare record literal" e.message then
-      match List.find_opt (fun (loc, _) ->
-        loc.Location.start.line = e.loc.start.line
-        && loc.Location.start.col = e.loc.start.col
-      ) bare_hints with
-      | Some (hint_loc, type_name) ->
-        let fix = single_line_replace_fix source_lines hint_loc
-          ~old_text:"{" (type_name ^ " {") in
-        { base with fix }
-      | None -> base
-    else base
-  ) type_errors
-
-(** The full PER-MODULE check pipeline (everything `--check <file>` runs except
-    the cross-module graph walk below): legacy-Bool lint, type check, proof
-    check, validations.  Factored out so [cross_module_diags] can run the exact
-    `--check dep.tesl` judgment on every transitively imported module — same
-    passes, same order, diagnostics anchored at the DEP's own file via its
-    parse locations. *)
-let module_local_diags source (m : Ast.module_form) : diagnostic list =
-  match module_complexity_diagnostics m with
-  | _ :: _ as diagnostics -> diagnostics
-  | [] ->
-    legacy_bool_diagnostics m.source_file source m
-    @ regex_literal_diagnostics m
-    @ type_diags_of source m
-    @ List.map diag_of_proof_error (Proof_checker.check_module m)
-    @ List.map diag_of_validation_error (Validation.check_module m)
-
-(* ── Cross-module structural validation (2026-07-08 multi-module audit) ─────
-   `--check <entrypoint>` historically validated the entrypoint plus module
-   INTERFACES only, so two classes of dependency errors surfaced one phase too
-   late (at that module's own emit, or as a raw runtime error at `go-tool make`):
-
-   1. EXPORT LOCALITY — a dependency whose `exposing` list re-exports an
-      imported name passed the whole-program check, then its emit failed T001.
-   2. IMPORT CYCLES the emitter cannot lower — the cyclic-SCC inliner supports
-      only pure declarations (fn/type/record/entity/const/fact/tests/capturers);
-      a cycle containing config decls (server/database/queue/sseChannel/api/
-      codec/capability/agent/email/cache/workers/`main`) emitted provides with
-      no definition, and `go-tool make` rejected the require graph with a raw
-      "standard-module-name-resolver: cycle in loading".
-
-   3. (2026-07-09, the systemic hole behind both) MODULE BODIES — the
-      entrypoint check never type-checked imported modules' bodies at all: a
-      dependency with a hard type error (`cannot unify String with Int`), an
-      out-of-scope type, a proof error or a failing validation passed
-      `--check main.tesl` silently and only died when THAT module was emitted
-      ("check green, build red"; --generate-elm/-ts shipped clients for broken
-      programs).  The walk now runs the FULL per-module check pipeline
-      ([module_local_diags] — exactly `--check dep.tesl` semantics, which the
-      audit confirmed rejects these bodies) on every transitively imported
-      local module, each diagnostic anchored at that module's own file:line.
-      A dep that fails to PARSE is reported the same way.
-
-   This walk loads the transitive local-import graph (memoized parse) and
-   rejects all of the above at CHECK time with .tesl-anchored diagnostics.
-   Cycles made only of pure declarations remain legal — mutually recursive
-   modules are supported by the SCC inliner (example/sandbox*.tesl) — but a
-   module importing ITSELF is always rejected (the inliner never fires for a
-   single-node SCC, so the emitted file would require itself).
-
-   [skip_dep_body canon] (canonical path): when true, the dep's PER-MODULE
-   check is skipped — used by `--check f1 f2`/`--check-batch`/`--check-all` so
-   a module that is ITSELF a CLI argument is body-checked exactly once (its
-   own per-file run), never re-reported under each consumer.  The graph is
-   still traversed through skipped modules (their deps may not be CLI args),
-   and cycle/self-import detection is unaffected. *)
-let cycle_unsafe_decl_reason (d : Ast.top_decl) : string option =
-  match d with
-  | Ast.DFunc fd when fd.kind = Ast.MainKind -> Some "`main()`"
-  | Ast.DFunc _ | Ast.DType _ | Ast.DRecord _ | Ast.DEntity _ | Ast.DConst _
-  | Ast.DFact _ | Ast.DTest _ | Ast.DApiTest _ | Ast.DLoadTest _
-  | Ast.DCapture _ -> None
-  | Ast.DCodec c      -> Some (Printf.sprintf "codec `%s`" c.name)
-  | Ast.DDatabase db  -> Some (Printf.sprintf "database `%s`" db.name)
-  | Ast.DCapability c -> Some (Printf.sprintf "capability `%s`" c.name)
-  | Ast.DQueue q      -> Some (Printf.sprintf "queue `%s`" q.name)
-  | Ast.DChannel c    -> Some (Printf.sprintf "sseChannel `%s`" c.name)
-  | Ast.DWorkers w    -> Some (Printf.sprintf "workers `%s`" w.name)
-  | Ast.DCache c      -> Some (Printf.sprintf "cache `%s`" c.name)
-  | Ast.DAgent a      -> Some (Printf.sprintf "agent `%s`" a.name)
-  | Ast.DEmail e      -> Some (Printf.sprintf "email `%s`" e.name)
-  | Ast.DApi a        -> Some (Printf.sprintf "api `%s`" a.name)
-  | Ast.DServer s     -> Some (Printf.sprintf "server `%s`" s.name)
-
-let cross_module_diags ?(skip_dep_body : string -> bool = fun _ -> false)
-    (m : Ast.module_form) : diagnostic list =
-  let entry = m.Ast.source_file in
-  if entry = "" || entry = "<test>" || not (Sys.file_exists entry) then []
-  else begin
-    let mk_diag ~(source : string) (loc : Location.loc) message : diagnostic = {
-      file       = loc.Location.file;
-      start_line = loc.Location.start.line;
-      start_col  = loc.Location.start.col;
-      end_line   = loc.Location.stop.line;
-      end_col    = loc.Location.stop.col;
-      severity   = "error";
-      code       = (if source = "type-checker" then "T001" else "V001");
-      message;
-      fix        = None;
-      source;
-      manual     = None;
-    } in
-    let diags : diagnostic list ref = ref [] in
-    let entry_canon = canonical_import_path entry in
-    (* Parse cache keyed by canonical path; the entry uses the ALREADY-parsed
-       [m] (check_source may be validating an in-memory buffer).  Parse ERRORS
-       are kept (not collapsed to None) so a dep that fails to parse is
-       reported like any other dep-check failure; the underlying reads go
-       through [Checker.parse_local_import_module], the import cache shared
-       with the checker's own import loading (and across a batch run). *)
-    let parsed : (string, Ast.module_form Parser.result option) Hashtbl.t =
-      Hashtbl.create 16 in
-    Hashtbl.replace parsed entry_canon (Some (Parser.Ok m));
-    let parse_at ~spelling ~canon : Ast.module_form Parser.result option =
-      match Hashtbl.find_opt parsed canon with
-      | Some r -> r
-      | None ->
-        let r = Checker.parse_local_import_module spelling in
-        Hashtbl.replace parsed canon r; r
-    in
-    let visited : (string, unit) Hashtbl.t = Hashtbl.create 16 in
-    let reported_cycles : (string, unit) Hashtbl.t = Hashtbl.create 4 in
-    (* Every successfully parsed module of the transitive closure (deps only;
-       the entry [m] is prepended below) — input to the name-wired resolution
-       check after the walk. *)
-    let closure_mods : Ast.module_form list ref = ref [] in
-    (* [stack]: modules on the current DFS path, HEAD = the module whose
-       imports are being walked; used to reconstruct the cycle path. *)
-    let rec dfs (canon : string) (im : Ast.module_form)
-                (stack : (string * Ast.module_form) list) : unit =
-      let stack = (canon, im) :: stack in
-      List.iter (fun (imp : Ast.import_decl) ->
-        if not (is_tesl_stdlib_module_name imp.module_name) then begin
-          let spelling = resolve_local_import_path im.Ast.source_file imp.Ast.module_name in
-          let dep_canon = canonical_import_path spelling in
-          if dep_canon = canon then begin
-            (* Self-import: never lowerable — the emitted module would require
-               itself.  Always rejected.  The name-based
-               [Validation_names.check_self_imports] already reports the
-               `import Self` spelling; this PATH-based variant only reports
-               when the import is spelled differently but still resolves to
-               the module's own file. *)
-            if imp.Ast.module_name <> im.Ast.module_name then
-              diags := mk_diag ~source:"validation" imp.Ast.loc
-                (Printf.sprintf
-                   "module `%s` imports itself (import `%s` resolves to this \
-                    module's own file) — remove this import; a module's own \
-                    declarations are already in scope"
-                   im.Ast.module_name imp.Ast.module_name)
-                :: !diags
-          end
-          else if List.mem_assoc dep_canon stack then begin
-            (* Back edge: an import cycle.  Reconstruct the path
-               dep -> ... -> current -> dep for the diagnostic. *)
-            let rec take_until acc = function
-              | [] -> acc
-              | (c, mf) :: rest ->
-                if c = dep_canon then (c, mf) :: acc
-                else take_until ((c, mf) :: acc) rest
-            in
-            let members = take_until [] stack in  (* dep first, current last *)
-            let key = String.concat "\x00"
-                        (List.sort String.compare (List.map fst members)) in
-            if not (Hashtbl.mem reported_cycles key) then begin
-              Hashtbl.replace reported_cycles key ();
-              let offender =
-                List.find_map (fun (_, mf) ->
-                  List.find_map (fun d ->
-                    match cycle_unsafe_decl_reason d with
-                    | Some reason -> Some (mf.Ast.module_name, reason)
-                    | None -> None
-                  ) mf.Ast.decls
-                ) members
-              in
-              match offender with
-              | None -> ()  (* pure SCC: supported via inline (sandbox class) *)
-              | Some (offender_name, reason) ->
-                let path_str =
-                  String.concat " -> "
-                    (List.map (fun (_, mf) -> mf.Ast.module_name) members
-                     @ [ (match members with (_, first) :: _ -> first.Ast.module_name
-                                           | [] -> imp.Ast.module_name) ])
-                in
-                diags := mk_diag ~source:"validation" imp.Ast.loc
-                  (Printf.sprintf
-                     "import cycle detected: %s — module `%s` declares %s, so \
-                      this cycle cannot be compiled (modules in an import cycle \
-                      may only contain fn (non-main)/type/record/entity/const/\
-                      fact/test/api-test/load-test/capture declarations, which \
-                      the compiler inlines). Break the cycle by moving the \
-                      shared declarations into a separate module imported by \
-                      both sides."
-                     path_str offender_name reason)
-                  :: !diags
-            end
-          end
-          else if not (Hashtbl.mem visited dep_canon) then begin
-            (* Mark BEFORE descending: a diamond re-reaches the dep only after
-               this subtree completes (during it, the stack check fires), so
-               every module is body-checked at most once per invocation. *)
-            Hashtbl.replace visited dep_canon ();
-            match parse_at ~spelling ~canon:dep_canon with
-            | None -> ()   (* unresolvable import: the entry's own checker
-                              reports it at the import site *)
-            | Some (Parser.Err e) ->
-              (* A dep that fails to PARSE is a whole-program check failure,
-                 anchored at the dep's own file (previously silent here; the
-                 entry only saw "unbound name" fallout at best). *)
-              if not (skip_dep_body dep_canon) then
-                diags := diag_of_parse_error e :: !diags
-            | Some (Parser.Ok dep_m) ->
-              closure_mods := dep_m :: !closure_mods;
-              (* THE WHOLE-PROGRAM CHECK: run the full `--check dep.tesl`
-                 pipeline on the dependency (types, proofs, validations,
-                 export locality — the checker returns all of these), so a
-                 broken body can no longer hide behind a clean interface.
-                 Diagnostics carry the dep's own file/lines via its parse
-                 locations. *)
-              if not (skip_dep_body dep_canon) then begin
-                match
-                  (try Some (In_channel.with_open_text spelling
-                               In_channel.input_all)
-                   with Sys_error _ -> None)
-                with
-                | Some dep_source ->
-                  diags := List.rev_append
-                             (module_local_diags dep_source dep_m) !diags
-                | None -> ()
-              end;
-              dfs dep_canon dep_m stack
-          end
-        end
-      ) im.Ast.imports
-    in
-    dfs entry_canon m [];
-    (* ── Entrypoint-closure name-wired resolution (issue #41 class) ─────────
-       Cache / email / publish / subscribe / enqueue sites resolve their NAME
-       through the process-wide domain registry at runtime when the declaring
-       block is in another module.  The registry only ever holds specs from
-       modules that are actually part of the program, so a name declared
-       NOWHERE in the entry's transitive import closure can NEVER resolve —
-       the runtime lookup is fail-closed, but only fires at first call.  When
-       the entry is a PROGRAM ROOT (it declares `main()`, a server, or an
-       api-test/load-test — the module IS the program), reject at check time
-       with the use anchored at its own site.  A plain library checked
-       standalone is exempt by design: its declaring module may legitimately
-       be a downstream importer (the importer-declares pattern #41 chose the
-       registry for). *)
-    let is_program_root =
-      List.exists (function
-        | Ast.DFunc fd -> fd.Ast.kind = Ast.MainKind
-        | Ast.DServer _ | Ast.DApiTest _ | Ast.DLoadTest _ -> true
-        | _ -> false
-      ) m.Ast.decls
-    in
-    if is_program_root then begin
-      let closure = m :: List.rev !closure_mods in
-      (* (kind, name, declaring module, decl loc) for every name-wired
-         declaration in the closure — the loc/module carry the duplicate
-         diagnostic below; the (kind, name) projection feeds the
-         declared-nowhere check. *)
-      let declared_with_locs =
-        List.concat_map (fun (cm : Ast.module_form) ->
-          List.concat_map (fun d ->
-            match d with
-            | Ast.DCache (c : Ast.cache_form) ->
-              [ (Desugar.UseCache, c.Ast.name, cm.Ast.module_name, c.Ast.loc) ]
-            | Ast.DEmail (em : Ast.email_form) ->
-              [ (Desugar.UseEmail, em.Ast.name, cm.Ast.module_name, em.Ast.loc) ]
-            | Ast.DChannel (ch : Ast.channel_form) ->
-              [ (Desugar.UseChannel, ch.Ast.name, cm.Ast.module_name, ch.Ast.loc) ]
-            | Ast.DQueue (q : Ast.queue_form) ->
-              List.map (fun jt ->
-                (Desugar.UseJobType, jt, cm.Ast.module_name, q.Ast.loc))
-                (Desugar.queue_job_types q)
-            | _ -> []
-          ) cm.Ast.decls
-        ) closure
-      in
-      let declared =
-        List.map (fun (k, n, _, _) -> (k, n)) declared_with_locs in
-      let declared_mem kind name =
-        List.exists (fun (k, n) -> k = kind && n = name) declared in
-      (* Item 13 (review 2026-07-09): 'declared more than once' is as illegal
-         as 'declared nowhere' — the runtime lookups (cache-for-name /
-         email-for-name / channel-for-name / queue-for-job) fail closed on
-         multiplicity ("declared exactly once per program") but only at first
-         cross-module call or module instantiation.  Surface it at check time,
-         anchored at the second declaration, naming every declaring module. *)
-      let dup_reported : (Desugar.wired_use_kind * string, unit) Hashtbl.t =
-        Hashtbl.create 4 in
-      List.iter (fun (kind, name, _, _) ->
-        if not (Hashtbl.mem dup_reported (kind, name)) then begin
-          let dups =
-            List.filter (fun (k, n, _, _) -> k = kind && n = name)
-              declared_with_locs in
-          if List.length dups > 1 then begin
-            Hashtbl.replace dup_reported (kind, name) ();
-            let modules =
-              List.map (fun (_, _, mn, _) -> Printf.sprintf "`%s`" mn) dups in
-            let (_, _, _, anchor_loc) = List.nth dups 1 in
-            let msg = match kind with
-              | Desugar.UseCache ->
-                Printf.sprintf
-                  "cache `%s` is declared %d times in this program (modules \
-                   %s) — a cache name must be declared exactly once per \
-                   program; remove or rename the duplicate declarations"
-                  name (List.length dups) (String.concat ", " modules)
-              | Desugar.UseEmail ->
-                Printf.sprintf
-                  "email `%s` is declared %d times in this program (modules \
-                   %s) — an email name must be declared exactly once per \
-                   program; remove or rename the duplicate declarations"
-                  name (List.length dups) (String.concat ", " modules)
-              | Desugar.UseChannel ->
-                Printf.sprintf
-                  "sseChannel `%s` is declared %d times in this program \
-                   (modules %s) — an sseChannel name must be declared exactly \
-                   once per program; remove or rename the duplicate \
-                   declarations"
-                  name (List.length dups) (String.concat ", " modules)
-              | Desugar.UseJobType ->
-                Printf.sprintf
-                  "job type `%s` is declared by %d queues in this program \
-                   (modules %s) — a job type must belong to exactly one \
-                   queue per program; remove it from the duplicate `jobs:` \
-                   lists"
-                  name (List.length dups) (String.concat ", " modules)
-            in
-            diags := mk_diag ~source:"validation" anchor_loc msg :: !diags
-          end
-        end
-      ) declared_with_locs;
-      List.iter (fun cm ->
-        List.iter (fun ((kind : Desugar.wired_use_kind), name, loc) ->
-          if not (declared_mem kind name) then begin
-            let msg = match kind with
-              | Desugar.UseCache ->
-                Printf.sprintf
-                  "no cache named `%s` is declared anywhere in this program — \
-                   declare `cache %s = Cache { … }` in this module or one of \
-                   the entrypoint's (transitive) imports" name name
-              | Desugar.UseEmail ->
-                Printf.sprintf
-                  "no email named `%s` is declared anywhere in this program — \
-                   declare `email %s = Email { … }` in this module or one of \
-                   the entrypoint's (transitive) imports" name name
-              | Desugar.UseChannel ->
-                Printf.sprintf
-                  "no sseChannel named `%s` is declared anywhere in this \
-                   program — declare `sseChannel %s(…) = SseChannel { … }` in \
-                   this module or one of the entrypoint's (transitive) imports"
-                  name name
-              | Desugar.UseJobType ->
-                Printf.sprintf
-                  "no queue declares job type `%s` anywhere in this program — \
-                   add `%s` to a queue's `jobs:` list in this module or one of \
-                   the entrypoint's (transitive) imports" name name
-            in
-            diags := mk_diag ~source:"validation" loc msg :: !diags
-          end
-        ) (Desugar.collect_name_wired_uses cm)
-      ) closure
-    end;
-    List.rev !diags
-  end
-
-(** Run the full check pipeline on a parsed module; returns diagnostics.
-    Whole-program: [cross_module_diags] runs the same per-module pipeline on
-    every transitively imported local module, so a dependency's errors fail
-    the entrypoint check with dep-anchored diagnostics.  [skip_dep_body]
-    (canonical path predicate) suppresses the dep-body re-check for modules
-    that are themselves being checked in the same CLI invocation. *)
-let check_module ?skip_dep_body source (m : Ast.module_form) : diagnostic list =
-  match module_local_diags source m with
-  | ({ code = "E003"; _ } :: _) as diagnostics -> diagnostics
-  | diagnostics -> diagnostics @ cross_module_diags ?skip_dep_body m
 
 let default_root_path () =
   match Sys.getenv_opt "TESL_REPO_ROOT" with
@@ -3286,7 +2431,7 @@ let diag_of_go_emit_error (error : Emit_go.emit_error) : diagnostic = {
   message    = error.message;
   fix        = None;
   source     = "go-emitter";
-  manual     = None;
+  metadata = None; manual = None;
 }
 
 (** Compile a checked Tesl module into a complete standalone Go module tree.
@@ -3477,6 +2622,13 @@ let alpha_rename_cycle_members ~(targets : Ast.module_form list)
       invariant = Option.map (fun (i : Ast.record_invariant) -> { i with proof_text = proof m i.proof_text;
         checker_name = Option.map (rename m) i.checker_name }) r.invariant }
     | Ast.DEntity e -> Ast.DEntity { e with name = rename m e.name; fields = List.map (field m) e.fields }
+    | Ast.DDatabase d ->
+      let merged = List.hd (List.sort String.compare member_names) in
+      let entity name = match split_qualified name with
+        | Some (owner, _) when List.mem owner member_names -> merged ^ "." ^ rename m name
+        | _ -> rename m name in
+      Ast.DDatabase { d with entities = List.map entity d.entities;
+        config_expr = Option.map (expr m) d.config_expr }
     | Ast.DFact f -> Ast.DFact { f with name = rename m f.name; params = List.map (binding m) f.params }
     | Ast.DCapture c -> Ast.DCapture { c with name = rename m c.name;
       binding = binding m c.binding; parser = rename m c.parser;
@@ -3537,7 +2689,7 @@ type go_dependencies =
 let local_dependency_modules entry_path (entry : Ast.module_form) =
   if entry_path = "" || Filename.check_suffix entry_path ">" then GoDeps { emit = [entry]; originals = [entry]; entry_emit = entry }
   else
-    let graph = build_local_import_graph ~lifted:go_lifted_module_names entry_path in
+    let graph = build_local_import_graph ~lifted:go_lifted_module_names ~entry entry_path in
     let entry_canon = canonical_import_path entry_path in
     (* One node per SCC: a cycle becomes ONE Go package, so the emitter never sees the
        members separately. *)
@@ -3555,11 +2707,18 @@ let local_dependency_modules entry_path (entry : Ast.module_form) =
     in
     let component_modules = List.map (List.filter_map parsed) components in
     let originals = List.concat component_modules in
+    let ownership_modules = List.map (fun original ->
+      match Migration_schema.lower_module ~modules:originals original with
+      | Ok lowered -> Migration_form.erase lowered
+      | Error errors ->
+        if !failed = None then failed := Some (String.concat "\n"
+          (List.map (fun (e : Validation_common.validation_error) -> e.message) errors));
+        original) originals in
     (* Rewrite consumers too: after an SCC import target is collapsed, an outside
        module must ask that package for the generated owner-specific export. *)
     let emit_modules = List.fold_left (fun targets members ->
       if List.length members > 1 then alpha_rename_cycle_members ~targets members
-      else targets) originals component_modules in
+      else targets) ownership_modules component_modules in
     let emitted_member (original : Ast.module_form) =
       List.find (fun (candidate : Ast.module_form) ->
         candidate.module_name = original.module_name) emit_modules
@@ -3606,7 +2765,7 @@ let local_dependency_modules entry_path (entry : Ast.module_form) =
 let go_project_diag file message = {
   file; start_line = 1; start_col = 1; end_line = 1; end_col = 1;
   severity = "error"; code = "V001"; message; fix = None; source = "go-emitter";
-  manual = None;
+  metadata = None; manual = None;
 }
 
 (* Keep Go's unsupported-export boundary observable even when the frontend also
@@ -3633,9 +2792,11 @@ let go_import_boundary_diags (filename : string) (m : Ast.module_form) =
     | _ -> []) m.imports
 
 let compile_go_source ?(debug=false) ?(path="") filename source =
+  let path = if path = "" then filename else path in
   match parse_module filename source with
-  | Err error -> GoFailure [diag_of_parse_error error]
+  | Err error -> GoFailure (source_parse_diagnostics filename source error)
   | Ok m ->
+    let result = Migration_program.with_history ~entry:m ~source (fun history ->
     let diags = check_module source m in
     if diags <> [] then GoFailure (diags @ go_import_boundary_diags filename m)
     else
@@ -3648,18 +2809,40 @@ let compile_go_source ?(debug=false) ?(path="") filename source =
          let dependency_diags = List.concat_map (fun (dependency : Ast.module_form) ->
            if dependency.source_file = m.source_file then []
            else
-             match In_channel.with_open_text dependency.source_file In_channel.input_all with
+             match Source_input.read_text dependency.source_file with
              | dependency_source -> check_module dependency_source dependency
              | exception Sys_error _ -> []) originals in
-         if dependency_diags <> [] then GoFailure dependency_diags
+         let binding_diags = match Migration_program.verify_bindings history originals with
+          | Ok () -> [] | Error es -> Migration_declaration.diagnostics_of_errors es in
+         if dependency_diags @ binding_diags <> [] then GoFailure (dependency_diags @ binding_diags)
          else
             let mode = if debug then Emit_go.Debug else Emit_go.Release in
-            match Emit_go.compile_project ~mode ~entry:entry_emit modules with
-           | Ok artifacts -> GoSuccess artifacts
-           | Error errors -> GoFailure (List.map diag_of_go_emit_error errors))
+            let migration_families = Option.fold ~none:[] ~some:(fun p ->
+              List.map (fun (d:Migration_program.database) -> d.identity,d.family) (Migration_program.databases p)) history in
+            let migration_queues=Option.fold ~none:[] ~some:Migration_program.queue_bindings history in
+            let queue_codec_records=Option.fold ~none:[] ~some:Migration_program.queue_codec_records history in
+            match Emit_go.compile_project ~mode ~migration_families ~migration_queues ~queue_codec_records ~entry:entry_emit modules with
+           | Ok artifacts ->
+             let metadata = match history with None -> [] | Some history ->
+              let json = Migration_program.to_json ~quote:json_encode_string history in
+              let queue_json=Migration_program.queues_to_json ~quote:json_encode_string history in
+              let registrations = List.map (fun (d:Migration_program.database) ->
+                Printf.sprintf "\tregisterCompiledMigrationHistory(%s, %s, %s, %d, %s, %s, teslGeneratedMigrationHistoryJSON)\n"
+                  (Emit_go.go_quote d.identity) (Emit_go.go_quote d.family) (Emit_go.go_quote d.namespace)
+                  d.current_version (Emit_go.go_quote (Migration_program.compiler_abi history))
+                  (Emit_go.go_quote (Migration_program.stored_value_compatibility history))) (Migration_program.databases history) in
+              [{Emit_go.path="migration-history.json";contents=json ^ "\n"};
+               {Emit_go.path="queue-history.json";contents=queue_json ^ "\n"};
+               {Emit_go.path="internal/teslrt/migration_history_generated.go";
+                contents="package teslrt\n\nconst teslGeneratedMigrationHistoryJSON = " ^ Emit_go.go_quote json ^
+                  "\nconst teslGeneratedQueueHistoryJSON = " ^ Emit_go.go_quote queue_json ^
+                  "\n\nfunc init() {\n" ^ String.concat "" registrations ^ "\tregisterCompiledQueueHistory(teslGeneratedQueueHistoryJSON)\n}\n"}] in
+             GoSuccess (artifacts @ metadata)
+           | Error errors -> GoFailure (List.map diag_of_go_emit_error errors))) in
+    match result with Ok result -> result | Error es -> GoFailure (Migration_declaration.diagnostics_of_errors es)
 
 let compile_go_file ?(debug=false) filename =
-  let source = In_channel.with_open_text filename In_channel.input_all in
+  let source = Source_input.read_text filename in
   compile_go_source ~debug ~path:filename filename source
 
 type compile_result =
@@ -3677,7 +2860,7 @@ let compile_source ?(root_path=default_root_path ()) ?(type_check=true) ?(debug=
   | GoFailure diagnostics -> Failure diagnostics
 
 let compile_file ?(root_path=default_root_path ()) ?(type_check=true) filename =
-  let source = In_channel.with_open_text filename In_channel.input_all in
+  let source = Source_input.read_text filename in
   compile_source ~root_path ~type_check filename source
 
 (** Check only — return diagnostics without emitting code. *)
@@ -3811,17 +2994,17 @@ let completions_source filename source line col =
     Completion.finish context (base @ (if field then [] else locals @ library))
 
 let completions_file filename line col =
-  let source = In_channel.with_open_text filename In_channel.input_all in
+  let source = Source_input.read_text filename in
   completions_source filename source line col
 
 let local_bindings_file filename =
-  let source = In_channel.with_open_text filename In_channel.input_all in
+  let source = Source_input.read_text filename in
   local_bindings_source filename source
 
 let check_source ?skip_dep_body filename source =
   try
     match parse_module filename source with
-    | Err e -> [diag_of_parse_error e]
+    | Err e -> source_parse_diagnostics filename source e
     | Ok m  -> check_module ?skip_dep_body source m
   with Failure msg -> [{
     file       = filename;
@@ -3832,11 +3015,11 @@ let check_source ?skip_dep_body filename source =
     message    = msg;
     fix        = None;
     source     = "lexer";
-    manual     = None;
+    metadata = None; manual = None;
   }]
 
 let check_file ?skip_dep_body filename =
-  let source = In_channel.with_open_text filename In_channel.input_all in
+  let source = Source_input.read_text filename in
   check_source ?skip_dep_body filename source
 
 (** Canonical-path membership predicate over a CLI file list.  Used by every
@@ -3897,11 +3080,11 @@ let merge_imported_client_decls (entry : Ast.module_form) : Ast.module_form =
       let path =
         Checker.resolve_local_import_path m.Ast.source_file imp.Ast.module_name
       in
-      if Hashtbl.mem seen_files path || not (Sys.file_exists path) then []
+      if Hashtbl.mem seen_files path || not (Source_input.exists path) then []
       else begin
         Hashtbl.replace seen_files path ();
         try
-          let source = In_channel.with_open_text path In_channel.input_all in
+          let source = Source_input.read_text path in
           match Parser.parse_module path source with
           | Err _ -> []   (* the full-checker gate already reported it *)
           | Ok im ->
@@ -3948,7 +3131,7 @@ let check_files_batch (filenames : string list) : (string * diagnostic list) lis
       with Sys_error msg ->
         [{ file = filename; start_line = 0; start_col = 0;
            end_line = 0; end_col = 0; severity = "error";
-           code = "E000"; message = msg; fix = None; source = "io"; manual = None }]
+           code = "E000"; message = msg; fix = None; source = "io"; metadata = None; manual = None }]
     in
     (filename, diags)
   ) filenames
@@ -3958,9 +3141,9 @@ let check_files_batch (filenames : string list) : (string * diagnostic list) lis
 let collect_tesl_files (dir : string) : string list =
   let acc = ref [] in
   let rec walk path =
-    match (try Some (Sys.is_directory path) with Sys_error _ -> None) with
+    match (try Some (Source_input.is_directory path) with Sys_error _ -> None) with
     | Some true ->
-      let entries = try Sys.readdir path with Sys_error _ -> [||] in
+      let entries = try Source_input.readdir path with Sys_error _ -> [||] in
       Array.sort compare entries;
       Array.iter (fun name -> walk (Filename.concat path name)) entries
     | Some false ->
@@ -4022,7 +3205,7 @@ let scheme_json (sch : Type_system.scheme) =
 
 (** Collect all top-level semantic info from a parsed + checked module. *)
 let semantic_json_of_module (m : Ast.module_form) : string =
-  let source_text = (try In_channel.with_open_text m.source_file (fun ic -> In_channel.input_all ic) with _ -> "") in
+  let source_text = (try Source_input.read_text m.source_file with _ -> "") in
   (* Run the checker to obtain the full context. *)
   let local_bindings, expr_types, _field_accesses, _bare_hints, _server_tools_sites, _human_actions_sites, _errors = Checker.check_module_with_metadata m in
 
@@ -4147,7 +3330,7 @@ let semantic_json_source filename source =
        ]))
 
 let semantic_json_file filename =
-  let source = In_channel.with_open_text filename In_channel.input_all in
+  let source = Source_input.read_text filename in
   semantic_json_source filename source
 
 (* ── AC1: agent-context snapshot ─────────────────────────────────────────── *)
@@ -4366,7 +3549,7 @@ let agent_context_result_source ?(extra_diags = []) filename source : agent_cont
     match parse_module filename source with
     | Ok m -> check_module source m, agent_symbols_of_module m
     | Err error ->
-      let diagnostics = [diag_of_parse_error error] in
+      let diagnostics = source_parse_diagnostics filename source error in
       let symbols =
         match (try Parser.parse_module_recover filename source with Failure _ -> None) with
         | Some m -> (try agent_symbols_of_module m with _ -> [])
@@ -4382,7 +3565,7 @@ let agent_context_source ?(extra_diags = []) filename source : string =
   (agent_context_result_source ~extra_diags filename source).json
 
 let agent_context_file filename : string =
-  let source = In_channel.with_open_text filename In_channel.input_all in
+  let source = Source_input.read_text filename in
   agent_context_source filename source
 
 (* ── Built-in mutation testing ──────────────────────────────────────────── *)
@@ -4397,7 +3580,7 @@ let collect_extra_test_decls test_files =
   let rec go acc = function
     | [] -> `Ok (List.rev acc)
     | path :: rest ->
-      (match (try `Ok (In_channel.with_open_text path In_channel.input_all)
+      (match (try `Ok (Source_input.read_text path)
               with Sys_error msg -> `Err msg) with
        | `Err msg -> `Err msg
        | `Ok src ->
@@ -4518,7 +3701,7 @@ let mutate_go_file ?(extra_test_files=[]) filename : mutate_result =
   if fst (Process_runner.run ~timeout:mutant_timeout_secs ~cwd:(Sys.getcwd ()) (go_executable ()) ["version"]) <> 0 then
     MutateErr "Go mutation testing requires the selected Go toolchain and a native process runner"
   else
-    let source = In_channel.with_open_text filename In_channel.input_all in
+    let source = Source_input.read_text filename in
     match parse_module filename source with
     | Err error ->
       MutateErr (Printf.sprintf "parse error at %s:%d: %s"

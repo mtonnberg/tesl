@@ -289,6 +289,7 @@ let proofs_of_expr
          | [] -> [])
       | Some fn_name ->
         (match List.assoc_opt fn_name funcs with
+         | Some info when not (call_is_fully_applied info.fi_params args) -> []
          | Some info ->
            let param_mapping = List.filter_map (fun ((param : binding), arg) ->
              match subject_of_expr subject_env arg with
@@ -312,7 +313,7 @@ let proofs_of_expr
                   List.iteri (fun i (p : binding) -> if p.name = spn && !idx < 0 then idx := i) info.fi_params;
                   let subj_arg = match !idx with
                     | i when i >= 0 -> List.nth_opt args i
-                    | _ -> List.nth_opt args 0
+                    | _ -> None
                   in
                   (match subj_arg with
                    | None -> []
@@ -501,7 +502,7 @@ let collect_auth_predicates decls extra_funcs =
     by recursively checking all leaf predicates. *)
 let has_auth_proof_param auth_preds params =
   let rec proof_mentions_auth = function
-    | PredApp { pred; _ } -> List.mem pred auth_preds
+    | PredApp { pred; _ } -> predicate_mem pred auth_preds
     | PredAnd { left; right; _ } -> proof_mentions_auth left || proof_mentions_auth right
   in
   List.exists (fun (b : binding) ->
@@ -1021,6 +1022,21 @@ let check_entity_structure ?facts ?(extra_funcs=[]) (decls : top_decl list) : va
       if e.table = "" then
         add "add a table name: `entity Foo table \"my_table\" ...`"
           (Printf.sprintf "entity `%s` has an empty table name" e.name);
+      if String.length e.table > 63 || String.contains e.table '\000' then
+        add "use a table name of at most 63 bytes without NUL characters"
+          (Printf.sprintf "entity `%s` has a table name PostgreSQL cannot preserve exactly" e.name);
+      let columns = Hashtbl.create 8 in
+      List.iter (fun (f : field_def) ->
+        let column = sql_column_name f.name in
+        if String.length column > 63 then
+          add "shorten the field name so its SQL column name is at most 63 bytes"
+            (Printf.sprintf "field `%s.%s` maps to an overlong SQL column name `%s`" e.name f.name column);
+        match Hashtbl.find_opt columns column with
+        | Some previous when previous <> f.name ->
+          add "rename one field so the SQL column names remain distinct"
+            (Printf.sprintf "fields `%s.%s` and `%s.%s` map to the same SQL column `%s`"
+               e.name previous e.name f.name column)
+        | _ -> Hashtbl.replace columns column f.name) e.fields;
       let field_names = List.map (fun (f : field_def) -> f.name) e.fields in
       if e.primary_key <> "" && not (List.mem e.primary_key field_names) then
         add (Printf.sprintf
@@ -1077,7 +1093,8 @@ let check_channel_structure (decls : top_decl list) : validation_error list =
     | _ -> []
   ) decls
 
-let check_workers_structure ?(extra_funcs = []) (decls : top_decl list) : validation_error list =
+let check_workers_structure ?(extra_funcs = []) ?(type_identity = Fun.id)
+    ?(parameter_identity = fun _ name -> name) (decls : top_decl list) : validation_error list =
   let queues =
     List.filter_map (function DQueue q -> Some q.name | _ -> None) decls
   in
@@ -1110,7 +1127,7 @@ let check_workers_structure ?(extra_funcs = []) (decls : top_decl list) : valida
               (Printf.sprintf "workers `%s`: `%s` is not declared as a `%s` function"
                  w.name fn_name (if w.is_dead then "deadWorker" else "worker"));
           (match info.fi_params with
-           | [param] when (match param.type_expr with TName { name; _ } -> name = job_type | _ -> false) ->
+           | [param] when (match param.type_expr with TName { name; _ } -> parameter_identity info.fi_loc name = type_identity job_type | _ -> false) ->
              let pred = if w.is_dead then "FromDeadQueue" else "FromQueue" in
              let rec allowed = function
                | PredApp { pred = p; args = [query; subject]; _ } ->
@@ -1194,9 +1211,9 @@ let load_imported_entity_names (m : module_form) : string list =
     if is_tesl_module imp.module_name then []
     else
       let path = resolve_local_import_path m.source_file imp.module_name in
-      if not (Sys.file_exists path) then []
+      if not (Source_input.exists path) then []
       else
-        let source = In_channel.with_open_text path In_channel.input_all in
+        let source = Source_input.read_text path in
         match Parser.parse_module path source with
         | Err _ -> []
         | Ok imported ->
@@ -1212,12 +1229,13 @@ let load_imported_entity_names (m : module_form) : string list =
               in
               Some (List.map strip names)
           in
-          List.filter_map (function
+          List.concat_map (function
             | DEntity e when List.mem e.name exported ->
+              let qualified = imp.module_name ^ "." ^ e.name in
               (match requested with
-               | None -> Some e.name
-               | Some req -> if List.mem e.name req then Some e.name else None)
-            | _ -> None
+               | None -> [qualified]
+               | Some req -> if List.mem e.name req then [e.name; qualified] else [qualified])
+            | _ -> []
           ) imported.decls
   ) m.imports
 
@@ -1230,6 +1248,7 @@ let check_database_entities (m : module_form) : validation_error list =
   let known_entities = local_entities @ imported_entities in
   List.concat_map (function
     | DDatabase db ->
+      let db = Desugar.desugar_database_config db in
       List.filter_map (fun ent_name ->
         if not (List.mem ent_name known_entities) then
           Some (make_error db.loc
@@ -1249,9 +1268,9 @@ let load_imported_server_names (m : module_form) : string list =
     if is_tesl_module imp.module_name then []
     else
       let path = resolve_local_import_path m.source_file imp.module_name in
-      if not (Sys.file_exists path) then []
+      if not (Source_input.exists path) then []
       else
-        let source = In_channel.with_open_text path In_channel.input_all in
+        let source = Source_input.read_text path in
         match Parser.parse_module path source with
         | Err _ -> []
         | Ok imported ->
@@ -1445,13 +1464,26 @@ let check_capture_proof_via
     | _ -> None
   ) decls
 
-(* Auth analogue of {!check_capture_proof_via}.  Review 2026-07 (AUTH-VIA): an
-   endpoint's `auth <b> ::: P via <fn>` clause was NEVER validated at the
-   frontend for (a) existence of <fn>, (b) its kind, or (c) whether it produces
-   the declared predicate — whereas captures had all three.  So a typo'd /
-   wrong-kind / wrong-predicate auth `via` passed --check and failed only at
-   Racket load or first request, violating the validate-once promise on the
-   auth boundary specifically.  This mirrors the capture check exactly. *)
+(* A body decoder establishes the declared type, including validated codec
+   fields. It does not establish arbitrary whole-value predicates, and the
+   parsed body-via slot currently has no runtime executor. *)
+let check_api_body_proof_boundary decls =
+  List.concat_map (function
+    | DApi api -> List.filter_map (fun (ep : api_endpoint) ->
+        match ep_body ep with
+        | Some binding when ep_body_via ep <> None ->
+          Some (make_error binding.loc
+            ~hint:"validate fields with a record/ADT codec, or receive the raw body and call a check inside the handler before using its proof"
+            "HTTP body `via` validation is not implemented; the runtime would decode the body without invoking this check")
+        | Some ({proof_ann=Some _;_} as binding) ->
+          Some (make_error binding.loc
+            ~hint:"put the invariant on a record field and validate that field in its codec, or check the raw body inside the handler"
+            "HTTP body decoding does not establish a top-level proof annotation; declaring a proof here would pass unvalidated evidence to the handler")
+        | _ -> None) api.endpoints
+    | _ -> []) decls
+
+(* Auth analogue of {!check_capture_proof_via}: validate the producer's
+   existence, kind and complete proof applications before HTTP can supply them. *)
 let check_auth_proof_via
     ?facts
     ?(extra_funcs : (string * func_info) list = [])
@@ -1711,9 +1743,8 @@ let check_server_handler_binding
           or a different fact entirely, is the endpoint lying about its response.
           Before this check, two endpoints differing only in return proof were
           silently interchangeable — swapping their handlers compiled clean. *)
-       let all_preds spec =
-         List.sort_uniq String.compare
-           (pred_names_of_return_spec spec @ forall_preds_of_return_spec spec) in
+       let all_preds = response_proof_apps_of_return_spec in
+       let describe apps = String.concat ", " (List.map describe_proof_app apps) in
        let ep_preds = match ep_return_spec_opt ep with
          | Some rs -> all_preds rs | None -> [] in
        if ep_preds <> [] then begin
@@ -1721,7 +1752,7 @@ let check_server_handler_binding
            | LocalHandler fd -> fd.return_spec
            | ImportedHandler info -> info.fi_return in
          let h_preds = all_preds h_spec in
-         let missing = List.filter (fun p -> not (List.mem p h_preds)) ep_preds in
+         let missing = uncovered_proof_apps ~declared:ep_preds ~covered:h_preds in
          if missing <> [] then
            errors := make_error (handler_loc_of hdl)
              ~hint:(Printf.sprintf
@@ -1729,12 +1760,12 @@ let check_server_handler_binding
                 '%s' to declare what the handler actually establishes%s"
                handler_name endpoint_name
                (if h_preds = [] then " (the handler's return carries no proof)"
-                else Printf.sprintf " (it carries [%s])" (String.concat ", " h_preds)))
+                else Printf.sprintf " (it carries [%s])" (describe h_preds)))
              (Printf.sprintf
                "server '%s': endpoint '%s' declares its response carries [%s], but \
                 handler '%s' does not establish %s"
-               sv.name endpoint_name (String.concat ", " ep_preds) handler_name
-               (String.concat ", " missing))
+               sv.name endpoint_name (describe ep_preds) handler_name
+               (describe missing))
              :: !errors
        end
      | _ -> ());
@@ -1814,11 +1845,31 @@ let check_server_handler_binding
         let handler_auth_preds =
           List.concat_map (fun (b : binding) ->
             match b.proof_ann with
-            | Some p -> List.filter (fun pred -> List.mem pred auth_preds) (proof_predicates p)
+            | Some p -> List.filter (fun pred -> predicate_mem pred auth_preds) (proof_predicates p)
             | None -> []
           ) handler_params
           |> List.sort_uniq String.compare
         in
+        (* The router supplies the principal in slot zero. Comparing predicate
+           names alone would let a reader-authenticated value reach an admin
+           handler. Use the producer's complete return contract and normalize
+           only the principal binder; all role/tenant arguments stay exact. *)
+        (match ep.auth, handler_params with
+         | Some a, principal :: _ ->
+           let produced = match List.assoc_opt a.via_fn handlers with
+             | Some (LocalHandler fd) -> proof_apps_of_return_spec fd.return_spec
+             | Some (ImportedHandler info) -> proof_apps_of_return_spec info.fi_return
+             | None -> [] in
+           let required = match principal.proof_ann with
+             | Some proof -> proof_apps_of ~subject:principal.name proof
+             | None -> [] in
+           let missing = uncovered_proof_apps ~declared:required ~covered:produced in
+           if missing <> [] then
+             errors := make_error principal.loc
+               (Printf.sprintf "server '%s': handler '%s' requires auth proof %s not established by `via %s`"
+                 sv.name handler_name (String.concat ", " (List.map describe_proof_app missing)) a.via_fn)
+               :: !errors
+         | _ -> ());
         (* (Fix a) Reject auth predicate OVER-declaration: the predicate(s) the
            endpoint declares on its `auth <binding> via <fn>` clause MUST be a
            subset of what <fn> actually produces. Otherwise a declared-but-
@@ -1837,7 +1888,7 @@ let check_server_handler_binding
              match List.assoc_opt a.via_fn auth_fn_preds with Some ps -> ps | None -> []
            in
            let over_declared =
-             List.filter (fun pred -> not (List.mem pred produced)) declared
+             List.filter (fun pred -> not (predicate_mem pred produced)) declared
            in
            if over_declared <> [] then
              errors := make_error handler_loc
@@ -1868,10 +1919,10 @@ let check_server_handler_binding
         else if ep_needs_auth && handler_has_auth
              && ep_auth_preds <> []
              && (let mismatched =
-                   List.filter (fun pred -> not (List.mem pred ep_auth_preds)) handler_auth_preds
+                   List.filter (fun pred -> not (predicate_mem pred ep_auth_preds)) handler_auth_preds
                  in mismatched <> []) then
           let mismatched =
-            List.filter (fun pred -> not (List.mem pred ep_auth_preds)) handler_auth_preds in
+            List.filter (fun pred -> not (predicate_mem pred ep_auth_preds)) handler_auth_preds in
           let via_fn = match ep.auth with Some a -> a.via_fn | None -> "?" in
           errors := make_error handler_loc
             ~hint:(Printf.sprintf
@@ -1911,7 +1962,7 @@ let check_server_handler_binding
            let first_is_auth = match handler_params with
              | b0 :: _ ->
                (match b0.proof_ann with
-                | Some p -> List.exists (fun pred -> List.mem pred auth_preds) (proof_predicates p)
+                | Some p -> List.exists (fun pred -> predicate_mem pred auth_preds) (proof_predicates p)
                 | None -> false)
              | [] -> false
            in
@@ -1946,34 +1997,21 @@ let check_server_handler_binding
          | LocalHandler fd -> fd.params
          | ImportedHandler info -> info.fi_params
        in
-       (* Auth-supplied predicates are reconciled by the auth block above, NOT by
-          name here. We exclude them endpoint-wide: any predicate the endpoint's own
-          `auth` clause carries (read off `ep.auth.binding.proof_ann`) plus the global
-          auth_preds set. Reading the endpoint's auth clause directly matters because
-          the auth param name need not match the handler param name, so relying on the
-          module-global auth_preds alone could wrongly demand a capture/body for an
-          auth-supplied param. *)
-       let endpoint_auth_preds =
-         auth_preds @ (match ep.auth with
-           | Some a -> (match a.binding.proof_ann with
-               | Some p -> proof_predicates p | None -> [])
-           | None -> [])
-       in
-       (* Non-auth proofs the endpoint supplies for a given param name, via a
-          same-named capture or body binding. *)
-       let supplied_for (param_name : string) : string list =
+       (* Only slot zero is supplied by auth. Another parameter carrying the
+          same predicate still needs its own capture/body evidence. *)
+       let supplied_for (param_name : string) : proof_app list =
          let from_captures =
            List.concat_map (fun (c : api_capture) ->
              if c.binding.name = param_name then
                (match c.binding.proof_ann with
-                | Some p -> proof_predicates p | None -> [])
+                | Some p -> proof_apps_of ~subject:c.binding.name p | None -> [])
              else []
            ) ep.captures
          in
          let from_body =
            match (ep_body ep) with
            | Some b when b.name = param_name ->
-             (match b.proof_ann with Some p -> proof_predicates p | None -> [])
+             (match b.proof_ann with Some p -> proof_apps_of ~subject:b.name p | None -> [])
            | _ -> []
          in
          from_captures @ from_body
@@ -1983,21 +2021,21 @@ let check_server_handler_binding
          List.exists (fun (c : api_capture) -> c.binding.name = param_name) ep.captures
          || (match (ep_body ep) with Some b -> b.name = param_name | None -> false)
        in
-       List.iter (fun (p : binding) ->
+       List.iteri (fun index (p : binding) ->
          match p.proof_ann with
          | None -> ()
          | Some proof ->
-           (* Predicates the handler requires on this param, excluding auth
-              predicates (reconciled in the auth block above). *)
            let required =
-             List.filter (fun pred -> not (List.mem pred endpoint_auth_preds))
-               (proof_predicates proof)
+             if index = 0 && ep.auth <> None then []
+             else proof_apps_of ~subject:p.name proof
            in
            if required <> [] then begin
              let supplied = supplied_for p.name in
              let uncovered =
-               List.filter (fun pred -> not (List.mem pred supplied)) required
+               uncovered_proof_apps ~declared:required ~covered:supplied
              in
+             let uncovered = List.map describe_proof_app uncovered in
+             let supplied = List.map describe_proof_app supplied in
              if uncovered <> [] then
                let handler_loc = match hdl with
                  | LocalHandler fd -> fd.loc
@@ -2005,10 +2043,16 @@ let check_server_handler_binding
                in
                if has_named_source p.name then
                  errors := make_error handler_loc
-                   ~hint:(Printf.sprintf
-                     "annotate the capture/body for `%s` with `::: %s %s` (and a `via` \
-                      that establishes it) in endpoint '%s', so the proof reaches the handler"
-                     p.name (String.concat " && " uncovered) p.name endpoint_name)
+                   ~hint:(if List.exists (fun (c : api_capture) -> c.binding.name = p.name) ep.captures then
+                     Printf.sprintf
+                       "annotate capture `%s` with its required proof and a `via` check \
+                        that establishes it in endpoint '%s'"
+                       p.name endpoint_name
+                     else Printf.sprintf
+                       "accept the decoded body `%s` without a top-level proof annotation; \
+                        establish the required proof with a check inside the handler, \
+                        or validate record fields through their codec"
+                       p.name)
                    (Printf.sprintf
                      "server '%s': handler '%s' requires proof %s on `%s`, but the \
                       capture/body for `%s` in endpoint '%s' establishes %s — the \
@@ -2020,8 +2064,8 @@ let check_server_handler_binding
                else
                  errors := make_error handler_loc
                    ~hint:(Printf.sprintf
-                     "add `capture %s: %s ::: %s %s via <checkFn>` (or a proof-carrying \
-                      `body`) to endpoint '%s' so the proof reaches the handler"
+                     "add `capture %s: %s ::: %s %s via <checkFn>` to endpoint '%s'; \
+                      for body input, accept the decoded value and check it inside the handler"
                      p.name (pp_type_expr p.type_expr) (String.concat " && " uncovered)
                      p.name endpoint_name)
                    (Printf.sprintf
@@ -2338,6 +2382,8 @@ let check_server_completeness ?(extra_funcs = []) (decls : top_decl list) : vali
 
 type vkind =
   | VStr            (* string literal, or env/envString call *)
+  | VSchemaRef      (* a VCurrent module reference, or the legacy SQL schema string *)
+  | VMigrationRef   (* contextual FamilySchema.Migrate prefix, never a value *)
   | VInt            (* int literal, or envInt call *)
   | VPort           (* int literal proven in 1..65535 (a port-validity obligation), or envInt *)
   | VMountPath      (* string literal: "/" or "/seg(/seg)*" — leading slash required, no trailing slash *)
@@ -2345,6 +2391,7 @@ type vkind =
   | VSub of string  (* nested record, validated against the named sub-schema *)
   | VConn           (* PostgresConnection: Tcp { host,port } | Socket { path } *)
   | VBackend        (* DatabaseBackend: Postgres (PostgresConfig {…}) | Memory *)
+  | VMigrationTopology (* MigrationTopology: Worker | Embedded *)
   | VBackoff        (* QueueRetryBackoff: Exponential | Fixed *)
   | VDatabaseRef    (* UIDENT naming a declared database *)
   | VEntityList     (* [Entity, …] naming declared entities *)
@@ -2356,7 +2403,7 @@ type vkind =
 let config_block_schema = function
   (* schema is required for the postgres backend but not for Memory; the
      postgres-specific requirement is enforced in check_typed_config_blocks. *)
-  | "Database" -> [ "schema", VStr, false; "entities", VEntityList, true;
+  | "Database" -> [ "schema", VSchemaRef, false; "migrations", VMigrationRef, false; "entities", VEntityList, false;
                     "backend", VBackend, true ]
   (* Issue #31: `poolSize` (optional) is the connection-pool size — the max
      number of simultaneously open PostgreSQL connections (runtime default 10).
@@ -2364,13 +2411,17 @@ let config_block_schema = function
      env-backed config fields. *)
   | "PostgresConfig" -> [ "dbName", VStr, true; "user", VStr, true;
                           "password", VStr, true; "connection", VConn, true;
-                          "poolSize", VInt, false ]
+                          "poolSize", VInt, false; "namespace", VStr, false;
+                          "migrations", VSub "MigrationConfig", false ]
+  | "MigrationConfig" -> [ "topology", VMigrationTopology, false;
+                           "controlOwner", VStr, false; "requestRole", VStr, false;
+                           "workerRole", VStr, false; "ddlConnection", VStr, false ]
   (* The two PostgresConnection shapes — validated internally via [check_record]'s
      "__Tcp"/"__Socket" rows; listed here so the LSP config-context query can
      offer field completion/hover inside a `connection: TcpConnection { … }`. *)
   | "TcpConnection" -> [ "host", VStr, true; "port", VPort, true ]
   | "SocketConnection" -> [ "path", VStr, true ]
-  | "Queue" -> [ "database", VDatabaseRef, true; "jobs", VJobList, true;
+  | "Queue" -> [ "database", VDatabaseRef, true; "schema", VSchemaRef, false; "jobs", VJobList, true;
                  "retry", VSub "QueueRetryStrategy", false;
                  "numberOfWorkers", VInt, false ]
   | "QueueRetryStrategy" -> [ "maxAttempts", VInt, true; "backoff", VBackoff, true;
@@ -2403,6 +2454,24 @@ let config_block_schema = function
     an editor hint earns its keep. *)
 let config_field_doc (block : string) (field : string) : string =
   match block, field with
+  | "Database", "schema" ->
+    "Versioned schema root imported by the application (`Schema.Family.VCurrent`; legacy `FamilySchema.VCurrent` is also supported), or the legacy PostgreSQL schema string with `entities:`."
+  | "Database", "migrations" ->
+    "Migration directory prefix for the same schema family (`Schema.Family.Migrate`; legacy `FamilySchema.Migrate` is also supported). This is a contextual module reference, not a runtime value."
+  | "PostgresConfig", "migrations" ->
+    "Optional migration execution and role settings for a versioned schema. Use MigrationConfig { ... }; the source history remains Database.migrations. Omission retains the deployment defaults."
+  | "MigrationConfig", "controlOwner" ->
+    "No-login owner of versioned migration control objects (default tesl_control). Provisioned by the operator; connection settings remain in the application."
+  | "PostgresConfig", "namespace" ->
+    "Physical PostgreSQL schema name. Required as a nonempty static string when Database.schema is a module reference; connection configuration stays in the application."
+  | "MigrationConfig", "topology" ->
+    "Versioned migrations use Worker for separate request and schema-worker processes, or Embedded for execution in the application process. Omission selects Worker when TESL_DEPLOYED is present and Embedded otherwise; an explicit value wins."
+  | "MigrationConfig", "requestRole" ->
+    "Operator-provisioned request login for Worker topology (default tesl_app). Request processes have entity DML and admission privileges, without migration DDL authority. Requires a versioned schema."
+  | "MigrationConfig", "workerRole" ->
+    "Operator-provisioned schema-worker login for Worker topology (default tesl_schema). The worker owns entity storage; the separate controlOwner still owns protected migration metadata. Requires a versioned schema."
+  | "MigrationConfig", "ddlConnection" ->
+    "Optional PostgreSQL DSN for the migration executor, as a String or environment read. This is an explicit deployment promise of a direct, session-affine connection; do not use a transaction-pooling DSN. Requires a versioned schema."
   | "TelemetryConfig", "service" ->
     "Service name attached to telemetry events and metrics."
   | "TelemetryConfig", "endpoint" ->
@@ -2470,6 +2539,15 @@ let check_typed_config_blocks (m : module_form) : validation_error list =
   let rec check_value loc fname kind v : validation_error list =
     let err m = [ make_error (cfg_expr_loc v) m ] in
     match kind with
+    | VSchemaRef ->
+      (match v with
+       | EConstructor { args = []; _ } -> [] (* The ownership resolver checks the imported VCurrent root. *)
+       | ELit { lit = LString _; _ } -> []
+       | _ -> err "`Database.schema` must be a schema module reference or a legacy SQL schema string")
+    | VMigrationRef ->
+      (match v with
+       | EConstructor { args = []; _ } -> [] (* The ownership resolver checks the exact family prefix. *)
+       | _ -> err "`Database.migrations` must be a `Schema.Family.Migrate` module prefix (or legacy `FamilySchema.Migrate`)")
     | VStr ->
       (match v with
        | ELit { lit = LString _; _ } -> []
@@ -2520,11 +2598,34 @@ let check_typed_config_blocks (m : module_form) : validation_error list =
        | ELit { lit = LBool _; _ }
        | EConstructor { name = "True" | "False"; _ } -> []
        | _ -> err (Printf.sprintf "field `%s` must be a Bool (true/false)" fname))
+    | VSub "MigrationConfig" ->
+      let named = match v with
+        | ERecord { type_hint = Some "MigrationConfig"; _ }
+        | EApp { fn = EConstructor { name = "MigrationConfig"; args = []; _ }; arg = ERecord _; _ } -> true
+        | _ -> false in
+      if not named then err "`migrations` must be `MigrationConfig { ... }` (from Tesl.Database)"
+      else
+        let visible = List.exists (fun (imp : import_decl) ->
+          imp.module_name = "Tesl.Database" && match imp.names with
+          | ImportAll -> true
+          | ImportExposing names -> List.mem "MigrationConfig" names) m.imports in
+        if not visible then err "`migrations: MigrationConfig { ... }` requires importing `MigrationConfig` from Tesl.Database"
+        else check_record (cfg_expr_loc v) "MigrationConfig" (cfg_fields v)
     | VSub sub -> check_record (cfg_expr_loc v) sub (cfg_fields v)
     | VBackoff ->
       (match cfg_ctor v with
        | Some ("Exponential" | "Fixed" | "Linear") -> []
        | _ -> err "`backoff` must be `Exponential`, `Fixed`, or `Linear` (from Tesl.Queue)")
+    | VMigrationTopology ->
+      (match v with
+       | EConstructor { name = (("Worker" | "Embedded") as name); args = []; _ } ->
+         let visible = List.exists (fun (imp : import_decl) ->
+           imp.module_name = "Tesl.Database" && match imp.names with
+           | ImportAll -> true
+           | ImportExposing names -> List.mem name names || List.mem "MigrationTopology(..)" names) m.imports in
+         if visible then []
+         else err (Printf.sprintf "`topology: %s` requires importing `%s` from Tesl.Database" name name)
+       | _ -> err "`topology` must be the literal constructor `Worker` or `Embedded` (from Tesl.Database)")
     | VConn ->
       (match cfg_ctor v with
        | Some "TcpConnection" -> check_record (cfg_expr_loc v) "__Tcp" (cfg_fields v)
@@ -2614,13 +2715,23 @@ let check_typed_config_blocks (m : module_form) : validation_error list =
           if req && not (List.mem fn provided)
           then Some (make_error loc (Printf.sprintf "`%s` is missing required field `%s`" schema_name fn))
           else None) schema in
+      (* Keep old checked application fixtures readable. Flat migration settings
+         are a compatibility spelling only; docs/completion expose the grouped
+         record. Mixing forms is always an error, even for disjoint fields. *)
+      let legacy = if schema_name = "PostgresConfig" then config_block_schema "MigrationConfig" else [] in
+      let mixed = if List.mem "migrations" provided &&
+          List.exists (fun (name,_,_) -> List.mem name provided) legacy then
+        [make_error loc "move all PostgreSQL migration settings into `migrations: MigrationConfig { ... }`; flat and grouped settings cannot be mixed"] else [] in
+      let duplicates = List.sort compare provided |> List.fold_left (fun (last,errors) name ->
+        (Some name, if Some name = last then
+          make_error loc (Printf.sprintf "duplicate field `%s` in `%s`" name schema_name) :: errors else errors)) (None,[]) |> snd in
       let per_field =
         List.concat_map (fun (fn, v) ->
-          match List.find_opt (fun (n,_,_) -> n = fn) schema with
+          match List.find_opt (fun (n,_,_) -> n = fn) (schema @ legacy) with
           | Some (_, kind, _) -> check_value loc fn kind v
           | None -> [ make_error (cfg_expr_loc v) (Printf.sprintf "unknown field `%s` in `%s`" fn schema_name) ]
         ) fields in
-      missing @ per_field
+      missing @ mixed @ duplicates @ per_field
     end
   in
   let check_decl top_schema loc = function
@@ -2636,9 +2747,26 @@ let check_typed_config_blocks (m : module_form) : validation_error list =
           let top = cfg_fields e in
           let is_postgres = match List.assoc_opt "backend" top with
             | Some b -> cfg_ctor b = Some "Postgres" | None -> true in
-          if is_postgres && not (List.mem_assoc "schema" top)
-          then [ make_error r.loc "`Database` (postgres backend) is missing required field `schema`" ]
-          else []
+          let module_form = match List.assoc_opt "schema" top with
+            | Some (EConstructor { args = []; _ }) -> true | _ -> false in
+          let postgres_fields = match List.assoc_opt "backend" top with
+            | Some backend -> (match cfg_ctor_arg backend with Some pg -> cfg_fields pg | None -> [])
+            | None -> [] in
+          (if is_postgres && not (List.mem_assoc "schema" top)
+           then [make_error r.loc "`Database` (postgres backend) is missing required field `schema`"] else [])
+          @ (if not module_form && not (List.mem_assoc "entities" top)
+             then [make_error r.loc "`Database` is missing required field `entities`"] else [])
+          @ (if not module_form && (List.mem_assoc "migrations" top || List.mem_assoc "namespace" postgres_fields)
+             then [make_error r.loc "legacy `Database.entities` configuration cannot also specify `migrations:` or `PostgresConfig.namespace`"] else [])
+          @ (if not module_form then List.filter_map (fun field ->
+               if List.mem_assoc field postgres_fields then
+                 Some (make_error r.loc (Printf.sprintf "`PostgresConfig.%s` requires a versioned schema module" field))
+               else None) ["migrations"; "controlOwner"; "topology"; "requestRole"; "workerRole"; "ddlConnection"] else [])
+          @ (if module_form && is_postgres then
+               match List.assoc_opt "namespace" postgres_fields with
+               | Some (ELit { lit = LString namespace; _ }) when namespace <> "" && not (String.contains namespace '\000') && String.length namespace <= 63 -> []
+               | _ -> [make_error r.loc "a schema module requires `PostgresConfig.namespace` as a nonempty static PostgreSQL schema name (at most 63 bytes)"]
+             else [])
         | None -> []
       in
       base @ schema_req
@@ -2752,3 +2880,18 @@ let check_app_wiring (decls : top_decl list) : validation_error list =
   decl_db_errs @ app_errs
 
 (* ── 2. SQL/record field name validation ─────────────────────────────────── *)
+
+(* Every proof consumer must use the same success binder and subject when
+   eliminating a wrapper. In particular, a record constructor must not see the
+   old placeholder `_` while a direct function call sees the actual binder. *)
+let case_payload_proof_environments funcs subject_env proof_env scrut pattern =
+  match pattern with
+  | PCon { fields = [(_, PVar name)]; _ } when name <> "_" ->
+    let subject = match subject_of_expr subject_env scrut with
+      | Some subject -> subject
+      | None -> name in
+    let proofs = proofs_of_expr subject funcs subject_env proof_env scrut in
+    let proof_env = (name, proofs) :: List.remove_assoc name proof_env in
+    let subject_env = (name, subject) :: List.remove_assoc name subject_env in
+    proof_env, subject_env
+  | _ -> proof_env, subject_env

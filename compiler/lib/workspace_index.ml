@@ -290,9 +290,14 @@ let json_list f values = "[" ^ String.concat "," (List.map f values) ^ "]"
 let loc_json loc = definition_location_to_json (location_to_definition loc)
 let problem_json p = Printf.sprintf {|{"code":%s,"file":%s,"message":%s}|}
   (json_encode_string p.code) (json_encode_string p.file) (json_encode_string p.message)
+let source_read_only snapshot file =
+  not (within snapshot.root file) ||
+  match List.assoc_opt file snapshot.inputs with
+  | None -> true
+  | Some source -> Migration_format_guard.reason ~file ~source <> None
 let symbol_json snapshot s = Printf.sprintf {|{"id":%s,"name":%s,"kind":%s,"definition":%s,"read_only":%b}|}
   (json_encode_string (symbol_id snapshot.root s)) (json_encode_string s.symbol_name)
-  (json_encode_string (kind s.symbol_kind)) (loc_json s.symbol_loc) (not (within snapshot.root s.symbol_loc.file))
+  (json_encode_string (kind s.symbol_kind)) (loc_json s.symbol_loc) (source_read_only snapshot s.symbol_loc.file)
 let use_json (use : use) = Printf.sprintf {|{"location":%s,"role":%s}|} (loc_json use.loc) (json_encode_string use.role)
 let input_json (file, source) = Printf.sprintf {|{"file":%s,"content_hash":%s}|} (json_encode_string file) (json_encode_string (hash source))
 
@@ -365,6 +370,7 @@ let validate_rename snapshot selected new_name expected =
   | Some selected ->
     let symbol = selected.symbol in
     if not (within snapshot.root symbol.symbol_loc.file) then fail "dependency declarations are read-only"
+    else if source_read_only snapshot symbol.symbol_loc.file then fail "frozen migration declarations are read-only; generate a forward revision"
     else if not valid_name || String.length new_name > 128 then fail "new name must be one non-keyword identifier"
     else if new_name = symbol.symbol_name then fail "new name is unchanged"
     else if (new_name.[0] >= 'A' && new_name.[0] <= 'Z') <>
@@ -373,6 +379,7 @@ let validate_rename snapshot selected new_name expected =
     else
       let edits = references snapshot symbol |> List.map (fun (use : use) -> { loc = use.loc; text = new_name }) in
       if List.exists (fun edit -> not (within snapshot.root edit.loc.file)) edits then fail "rename would edit a read-only dependency"
+      else if List.exists (fun edit -> source_read_only snapshot edit.loc.file) edits then fail "rename would edit frozen migration source; generate a forward revision"
       else with_temporary_directory (fun candidate_root ->
         List.iter (fun (path, source) -> if within snapshot.root path then begin
           let path' = Filename.concat candidate_root (relative snapshot.root path) in

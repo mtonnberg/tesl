@@ -10843,6 +10843,77 @@ let test_boundary_with_go () =
       ())
   end
 
+(* The real example accepts a raw JSON list and obtains ForAll by executing
+   List.allCheck. Test the emitted handler itself, not a copied implementation or
+   a source-string assertion; the direct principal below makes no auth claim. *)
+let test_todo_example_body_validation_with_go () =
+  let input = Filename.concat (Compile.default_root_path ()) "example/todo-api.tesl" in
+  let source = In_channel.with_open_bin input In_channel.input_all in
+  let emitted = emit_ok input source in
+  let regression = {Emit_go.path="internal/teslmodtodoapi/todo_body_validation_test.go";
+    contents={|package teslmodtodoapi
+
+import (
+	"testing"
+
+	"tesl.generated/teslmodtodoapi/internal/teslrt"
+)
+
+// This calls the actual emitted handler to test batch validation. The direct
+// principal is test-only: authentication and HTTP decoding are separate gates.
+func invokeTodoIDBatchForTest(values []string) (result string, rejection *teslrt.RequestRejection) {
+	defer func() {
+		if raised := recover(); raised != nil {
+			failure, ok := raised.(teslrt.RequestRejection)
+			if !ok {
+				panic(raised)
+			}
+			rejection = &failure
+		}
+	}()
+	result = listTest(User{}, values)
+	return result, nil
+}
+
+func TestTodoExampleValidatesEverySubmittedID(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		values []string
+	}{
+		{name: "nil list"},
+		{name: "empty list", values: []string{}},
+		{name: "valid ID", values: []string{"todo-a"}},
+		{name: "valid batch", values: []string{"todo-a", "todo-1", "todo-last"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			result, rejection := invokeTodoIDBatchForTest(test.values)
+			if rejection != nil || result != "hej" {
+				t.Fatalf("valid batch = %q, %v; want hej without rejection", result, rejection)
+			}
+		})
+	}
+	for _, test := range []struct {
+		name   string
+		values []string
+	}{
+		{name: "wrong prefix", values: []string{"other-a"}},
+		{name: "prefix only", values: []string{"todo-"}},
+		{name: "empty ID", values: []string{""}},
+		{name: "invalid first", values: []string{"other-a", "todo-a", "todo-last"}},
+		{name: "invalid middle", values: []string{"todo-a", "other-a", "todo-last"}},
+		{name: "invalid last", values: []string{"todo-a", "todo-1", "other-a"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			result, rejection := invokeTodoIDBatchForTest(test.values)
+			if rejection == nil || rejection.Status != 400 || rejection.Message != "Malformed todo id" || result != "" {
+				t.Fatalf("malformed batch = %q, %v; want RequestRejection 400", result, rejection)
+			}
+		})
+	}
+}
+|}} in
+  gate_emitted "tesl-go-todo-body-validation" (emitted @ [regression])
+
 (* ── Proof shapes at the edges of erasure ────────────────────────────────────
    A proof ANNOTATION on a constructor field is a type-level contract with no runtime
    structure, like every other: what it buys is that a `Node` cannot be BUILT without a
@@ -12924,6 +12995,8 @@ let emission_tests =
         test_proof_erasure_limits_fail_closed;
       test_case "the request boundary: captures, list bodies, chained checks" `Slow
         test_boundary_with_go;
+      test_case "the real todo handler validates every submitted ID" `Slow
+        test_todo_example_body_validation_with_go;
       test_case "a newtype over a newtype, and unobservable containers" `Slow
         test_ordered_newtype_with_go;
       test_case "empty containers, and what a seed block describes" `Slow
@@ -12974,4 +13047,7 @@ let () =
       Printf.sprintf "emit_go-shard-%02d" shard_index,
       Printf.sprintf "emission-shard-%02d" shard_index
   in
-  run suite_name [group_name, selected]
+  (* Alcotest updates one shared `latest` symlink per log directory. Concurrent
+     shards otherwise race in that update and can abort before running a test. *)
+  let log_dir = Filename.concat "_build/_tests/emit-go-shards" suite_name in
+  run ~log_dir suite_name [group_name, selected]

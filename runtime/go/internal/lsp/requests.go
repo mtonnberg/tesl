@@ -36,10 +36,12 @@ type pendingRequest struct {
 	ctx            context.Context
 	cancel         context.CancelFunc
 	clientCanceled bool
+	deferred       bool
 }
 
 type incomingRequest struct {
 	request  protocol.Request
+	response *protocol.Response
 	pending  *pendingRequest
 	key      string
 	bytes    int
@@ -87,7 +89,30 @@ func (stream *requestStream) read(input io.Reader) {
 			stream.enqueue(incomingRequest{err: err, code: parseError, terminal: true})
 			return
 		}
+		// Skip params while classifying the envelope: a didChange can contain a
+		// large buffer, which must not be copied just to distinguish a reply.
+		var envelope struct {
+			Method json.RawMessage `json:"method"`
+			Result json.RawMessage `json:"result"`
+			Error  json.RawMessage `json:"error"`
+		}
+		shapeErr := json.Unmarshal(message, &envelope)
+		hasMethod := len(envelope.Method) != 0
+		if shapeErr == nil && !hasMethod {
+			response, err := decodeClientResponse(message)
+			item := incomingRequest{response: &response, bytes: len(message)}
+			if err != nil {
+				item.err, item.code = err, invalidRequest
+			}
+			if !stream.enqueue(item) {
+				return
+			}
+			continue
+		}
 		request, err := protocol.DecodeRequest(message)
+		if len(envelope.Result) != 0 || len(envelope.Error) != 0 {
+			err = errors.New("LSP request cannot contain response fields")
+		}
 		if err != nil {
 			if !stream.enqueue(incomingRequest{err: err, code: invalidRequest, bytes: len(message)}) {
 				return
@@ -129,6 +154,8 @@ func (stream *requestStream) enqueue(item incomingRequest) bool {
 	}
 	if item.pending != nil && stream.pending[item.key] != nil {
 		stream.failure = errors.New("duplicate outstanding LSP request id")
+	} else if item.pending != nil && len(stream.pending) >= maxPendingMessages {
+		stream.failure = errors.New("LSP outstanding request count limit exceeded")
 	} else if item.bytes > maxPendingBytes-stream.bytes {
 		stream.failure = errors.New("LSP pending message byte limit exceeded")
 	} else {
@@ -186,7 +213,27 @@ func (stream *requestStream) complete(id json.RawMessage) bool {
 		return false
 	}
 	delete(stream.pending, key)
+	if pending.deferred {
+		pending.cancel()
+	}
 	return pending.clientCanceled
+}
+
+// A continuation keeps its request identity and cancellation context while the
+// dispatcher consumes intervening document notifications and client replies.
+func (stream *requestStream) deferResponse(id json.RawMessage) {
+	if stream == nil {
+		return
+	}
+	key, valid := requestKey(id)
+	if !valid {
+		return
+	}
+	stream.mu.Lock()
+	defer stream.mu.Unlock()
+	if pending := stream.pending[key]; pending != nil {
+		pending.deferred = true
+	}
 }
 
 func (stream *requestStream) finish(item incomingRequest) {
@@ -195,6 +242,9 @@ func (stream *requestStream) finish(item incomingRequest) {
 	stream.bytes -= item.bytes
 	if item.pending != nil {
 		if stream.pending[item.key] == item.pending {
+			if item.pending.deferred {
+				return
+			}
 			delete(stream.pending, item.key)
 		}
 		item.pending.cancel()

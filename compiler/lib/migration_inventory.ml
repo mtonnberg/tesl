@@ -1,0 +1,440 @@
+open Ast
+open Migration_ir
+
+type stored_field = {
+  entity : string;
+  name : string;
+  loc : Location.loc;
+  contract : Migration_canonical.node;
+}
+
+type field_change =
+  | Added_field of stored_field
+  | Removed_field of stored_field
+  | Changed_field of { previous : stored_field; current : stored_field;
+                       definition_changed : bool }
+
+type field_entry = {
+  identity : string;
+  definition : Migration_canonical.node;
+  dependencies : (Migration_ir.namespace * string) list;
+  field : stored_field;
+}
+
+type stored_entity = {
+  entity_name : string;
+  entity_loc : Location.loc;
+  table_name : string;
+  primary_key : string;
+  entity_contract : Migration_canonical.node;
+}
+
+type entity_change =
+  | Added_entity of stored_entity
+  | Removed_entity of stored_entity
+  | Changed_entity of { previous : stored_entity; current : stored_entity;
+                        definition_changed : bool }
+
+type entity_entry = {
+  entity_identity : string;
+  entity_definition : Migration_canonical.node;
+  stored_entity : stored_entity;
+}
+
+type declaration_kind = Newtype | Adt | Record | Entity | Fact | Codec_declaration | Function | Queue_schema
+type declaration = {
+  namespace : Migration_ir.namespace;
+  qualified_name : string;
+  declaration_kind : declaration_kind;
+  source_loc : Location.loc;
+}
+
+type t = {
+  compiler_abi : string;
+  stored_value_compatibility : string option;
+  scopes : Migration_canonical.scope list;
+  modules : string list;
+  definitions : definition list;
+  fields : field_entry list;
+  sources : (string * string) list;
+  declarations : declaration list;
+  entities : entity_entry list;
+}
+
+let compiler_abi (inventory : t) = inventory.compiler_abi
+let stored_value_compatibility (inventory : t) = inventory.stored_value_compatibility
+let module_names inventory = inventory.modules
+let root_module inventory = match inventory.scopes with
+  | [scope] -> scope.family ^ "." ^ scope.revision
+  | _ -> assert false (* load publishes exactly one schema revision *)
+let source_inputs inventory = inventory.sources
+let stored_fields inventory = List.map (fun entry -> entry.field) inventory.fields
+let declarations inventory = inventory.declarations
+let stored_entities inventory = List.map (fun entry -> entry.stored_entity) inventory.entities
+
+let stored_dependencies inventory ~entity ~field =
+  match List.find_opt (fun entry -> entry.field.entity = entity && entry.field.name = field) inventory.fields with
+  | None -> None
+  | Some entry -> Some (List.filter (fun d ->
+      List.mem (d.namespace, d.qualified_name) entry.dependencies) inventory.declarations)
+
+type field_shape = {
+  stored_field : stored_field;
+  type_identity : Migration_canonical.node;
+  proof_identity : Migration_canonical.node option;
+  db_type : string option;
+}
+let field_shapes inventory =
+  let open Migration_canonical in
+  let optional = function
+    | Seq [Bytes "none"] -> None
+    | Seq [Bytes "some"; node] -> Some node
+    | _ -> assert false (* Produced by the canonical field lowering. *) in
+  List.map (fun entry -> match entry.definition with
+    | Seq [Bytes "field"; Bytes _; type_identity; proof; database_type] ->
+      let db_type = match optional database_type with
+        | None -> None | Some (Bytes value) -> Some value | _ -> assert false in
+      {stored_field=entry.field;type_identity;proof_identity=optional proof;db_type}
+    | _ -> assert false) inventory.fields
+
+let entity_indexes inventory ~entity =
+  match List.find_opt (fun entry -> entry.stored_entity.entity_name = entity) inventory.entities with
+  | None -> None
+  | Some entry -> match entry.entity_definition with
+    | Migration_canonical.Seq [Bytes "entity"; _; _; _; _; indexes] -> Some indexes
+    | _ -> assert false
+
+let owned_type_definition inventory reference =
+  List.find_map (fun (d : declaration) ->
+    if d.namespace <> Type then None else
+    match Migration_canonical.reference inventory.scopes d.qualified_name with
+    | Error _ -> None
+    | Ok identity when reference = Migration_canonical.Seq
+        [Bytes "reference"; Bytes "type"; identity] ->
+      let definition = List.find (fun (definition : Migration_ir.definition) ->
+        definition.key = (Type, Global d.qualified_name)) inventory.definitions in
+      Some (d, definition.body.node)
+    | Ok _ -> None) inventory.declarations
+
+let compatible_inventories ~before ~after =
+  if List.map (fun (scope : Migration_canonical.scope) -> scope.family) before.scopes <>
+     List.map (fun (scope : Migration_canonical.scope) -> scope.family) after.scopes then
+    Error "comparison requires the same schema family"
+  else match before.stored_value_compatibility, after.stored_value_compatibility with
+    | Some a, Some b when a = b -> Ok ()
+    | None, None when before.compiler_abi = after.compiler_abi -> Ok ()
+    | _ -> Error "comparison requires the same explicit stored-value compatibility contract, or the same compiler ABI for legacy inventories"
+
+let with_abi inventory body = match inventory.stored_value_compatibility with
+  | None -> Migration_canonical.Seq [Bytes "compiler-semantics"; Bytes inventory.compiler_abi; body]
+  | Some contract -> Migration_canonical.Seq [Bytes "stored-value-semantics"; Bytes contract; body]
+
+let closure inventory roots =
+  match Migration_ir.closure ~scopes:inventory.scopes
+      ~definitions:inventory.definitions
+      ~roots:(List.map (fun (ns, name) -> ns, Global name) roots) with
+  | Ok body -> Ok (with_abi inventory body)
+  | Error _ as error -> error
+
+let snapshot inventory =
+  match Migration_ir.closure ~scopes:inventory.scopes
+      ~definitions:inventory.definitions
+      ~roots:(List.map (fun d -> d.key) inventory.definitions) with
+  | Ok body -> with_abi inventory body
+  | Error _ -> assert false (* load checks this exact closure before publishing t *)
+
+type queue_payload = { payload_name : string; payload_contract : Migration_canonical.node; payload_loc : Location.loc }
+type queue_contract = { queue_name : string; queue_loc : Location.loc; payloads : queue_payload list }
+let queue_payload_codec_records inventory payload =
+ (* Codec emission follows the value's type graph, not arbitrary types used by
+    proof producers or helper bodies in its larger semantic contract. *)
+ let seen=Hashtbl.create 16 in
+ let rec visit name =
+  if not (Hashtbl.mem seen name) then begin
+   Hashtbl.add seen name ();
+   match List.find_opt (fun definition -> definition.key=(Type,Global name)) inventory.definitions with
+   | None -> ()
+   | Some definition -> List.iter (function Type,Global name -> visit name | _ -> ()) definition.body.references
+  end in
+ visit payload.payload_name;
+ List.filter (fun declaration -> declaration.declaration_kind=Record &&
+  Hashtbl.mem seen declaration.qualified_name) inventory.declarations
+
+let queue_contracts inventory =
+  List.filter_map (fun (declaration : declaration) ->
+    if declaration.declaration_kind <> Queue_schema then None else
+    let definition = List.find (fun d -> d.key = (Value, Global declaration.qualified_name)) inventory.definitions in
+    let payloads = List.filter_map (function
+      | Type, Global name ->
+        let payload = List.find (fun (d : declaration) -> d.namespace = Type && d.qualified_name = name) inventory.declarations in
+        let contract = match closure inventory [Type,name] with Ok c -> c | Error _ -> assert false in
+        Some {payload_name=name;payload_contract=contract;payload_loc=payload.source_loc}
+      | _ -> None) definition.body.references
+      |> List.sort (fun a b -> String.compare a.payload_name b.payload_name) in
+    Some {queue_name=declaration.qualified_name;queue_loc=declaration.source_loc;payloads}) inventory.declarations
+
+let field_changes ~before ~after =
+  let loc = Location.dummy_loc "<migration-field-impact>" in
+  match compatible_inventories ~before ~after with
+  | Error message -> Error {loc; message="stored field " ^ message}
+  | Ok () ->
+    let rec merge changes previous current = match previous, current with
+      | [], [] -> List.rev changes
+      | old :: rest, [] -> merge (Removed_field old.field :: changes) rest []
+      | [], fresh :: rest -> merge (Added_field fresh.field :: changes) [] rest
+      | old :: old_rest, fresh :: fresh_rest ->
+        let order = String.compare old.identity fresh.identity in
+        if order < 0 then merge (Removed_field old.field :: changes) old_rest current
+        else if order > 0 then merge (Added_field fresh.field :: changes) previous fresh_rest
+        else
+          let changes = if old.field.contract = fresh.field.contract then changes
+            else Changed_field { previous=old.field; current=fresh.field;
+              definition_changed=old.definition <> fresh.definition } :: changes in
+          merge changes old_rest fresh_rest in
+    Ok (merge [] before.fields after.fields)
+
+let entity_changes ~before ~after =
+  let loc = Location.dummy_loc "<migration-entity-impact>" in
+  match compatible_inventories ~before ~after with
+  | Error message -> Error {loc; message="stored entity " ^ message}
+  | Ok () ->
+    let rec merge changes previous current = match previous, current with
+      | [], [] -> List.rev changes
+      | old :: rest, [] -> merge (Removed_entity old.stored_entity :: changes) rest []
+      | [], fresh :: rest -> merge (Added_entity fresh.stored_entity :: changes) [] rest
+      | old :: old_rest, fresh :: fresh_rest ->
+        let order = String.compare old.entity_identity fresh.entity_identity in
+        if order < 0 then merge (Removed_entity old.stored_entity :: changes) old_rest current
+        else if order > 0 then merge (Added_entity fresh.stored_entity :: changes) previous fresh_rest
+        else
+          let changes = if old.stored_entity.entity_contract = fresh.stored_entity.entity_contract then changes
+            else Changed_entity { previous=old.stored_entity; current=fresh.stored_entity;
+              definition_changed=old.entity_definition <> fresh.entity_definition } :: changes in
+          merge changes old_rest fresh_rest in
+    Ok (merge [] before.entities after.entities)
+
+type same = {
+  previous_declaration : declaration;
+  current_declaration : declaration;
+  compiler_abi : string;
+  same_hash : string;
+}
+
+type same_error_kind = Incompatible_inventories | Invalid_declaration | Different_kind | Different_closure
+type difference = { previous : declaration option; current : declaration option }
+type same_error = { kind : same_error_kind; message : string; difference : difference }
+
+let same_declarations evidence = evidence.previous_declaration, evidence.current_declaration
+let same_digest evidence = evidence.same_hash
+let same_compiler_abi (evidence : same) = evidence.compiler_abi
+
+let same_eligible = function Newtype | Adt | Record | Fact | Codec_declaration | Queue_schema -> true
+  | Entity | Function -> false
+
+let declaration_key (d : declaration) = d.namespace, d.qualified_name
+
+let verify_same ~(before : t) ~(after : t) ~previous ~current =
+  let find inventory key = List.find_opt (fun d -> declaration_key d = key) inventory.declarations in
+  let old = find before previous and fresh = find after current in
+  let refuse kind message difference = Error {kind; message; difference} in
+  let difference = {previous=old; current=fresh} in
+  match compatible_inventories ~before ~after with
+  | Error message -> refuse Incompatible_inventories ("Same " ^ message) difference
+  | Ok () ->
+    match old, fresh with
+    | None, _ | _, None ->
+      refuse Invalid_declaration "Same arguments must name declarations owned by their respective schema inventories; constructors, builtins and foreign revisions are not declarations" difference
+    | Some old, Some fresh when not (same_eligible old.declaration_kind && same_eligible fresh.declaration_kind) ->
+      refuse Invalid_declaration "Same accepts newtypes, ADTs, records, facts, codecs and queueSchema contracts; entities and functions are compared by the migration plan" difference
+    | Some old, Some fresh when old.declaration_kind <> fresh.declaration_kind ->
+      refuse Different_kind "Same arguments must have the same declaration kind" difference
+    | Some old, Some fresh ->
+      let details inventory declaration =
+        match Migration_ir.closure_with_definitions ~scopes:inventory.scopes
+            ~definitions:inventory.definitions ~roots:[declaration.namespace, Global declaration.qualified_name] with
+        | Error _ -> assert false (* The complete checked inventory is closed. *)
+        | Ok (body, definitions) ->
+          let definitions = List.map (fun (d : definition) ->
+            let ns, name = match d.key with ns, Global name -> ns, name | _ -> assert false in
+            let declaration = match find inventory (ns, name) with Some d -> d | None -> assert false in
+            let identity = match Migration_canonical.reference inventory.scopes name with
+              | Ok identity -> identity | Error _ -> assert false in
+            Migration_canonical.encode (tag "reference" [Bytes (namespace ns); identity]),
+            (declaration, d.body.node)) definitions in
+          with_abi inventory body, definitions in
+      let old_body, old_definitions = details before old in
+      let new_body, new_definitions = details after fresh in
+      (* Compare the complete trees, not just a digest supplied by a caller. *)
+      if old_body = new_body then Ok {previous_declaration=old; current_declaration=fresh;
+        compiler_abi=before.compiler_abi; same_hash=Migration_canonical.digest Same old_body}
+      else
+        let rec first_difference previous current = match previous, current with
+          | [], [] -> difference (* Different root identities within one recursive closure. *)
+          | (_, (d, _)) :: _, [] -> {previous=Some d; current=None}
+          | [], (_, (d, _)) :: _ -> {previous=None; current=Some d}
+          | (old_key, (old, old_node)) :: old_rest, (new_key, (fresh, new_node)) :: new_rest ->
+            let order = String.compare old_key new_key in
+            if order < 0 then {previous=Some old; current=None}
+            else if order > 0 then {previous=None; current=Some fresh}
+            else if old_node <> new_node then {previous=Some old; current=Some fresh}
+            else first_difference old_rest new_rest in
+        let difference = first_difference old_definitions new_definitions in
+        let changed = match difference.previous, difference.current with
+          | Some old, Some fresh -> old.qualified_name ^ " -> " ^ fresh.qualified_name
+          | Some old, None -> old.qualified_name ^ " (removed from closure)"
+          | None, Some fresh -> fresh.qualified_name ^ " (added to closure)"
+          | None, None -> assert false in
+        refuse Different_closure ("Same semantic closures differ first at " ^ changed) difference
+
+let same_candidates ~(before : t) ~(after : t) =
+  match compatible_inventories ~before ~after with
+  | Error message -> Error {loc=Location.dummy_loc "<migration-same>"; message}
+  | Ok () ->
+    let previous_root = root_module before and current_root = root_module after in
+    Ok (List.filter_map (fun d ->
+      if not (same_eligible d.declaration_kind) then None
+      else
+        let suffix = String.sub d.qualified_name (String.length previous_root) (String.length d.qualified_name - String.length previous_root) in
+        match verify_same ~before ~after ~previous:(declaration_key d)
+            ~current:(d.namespace, current_root ^ suffix) with
+        | Ok evidence -> Some evidence
+        | Error _ -> None) before.declarations)
+
+let load_with_compatibility ~stored_value_compatibility ~compiler_abi ~root_file =
+  let loc = Location.dummy_loc root_file in
+  try
+    if String.trim compiler_abi = "" then reject loc "compiler ABI identity is required for a semantic schema inventory";
+    Option.iter (fun contract -> if not (Migration_abi.valid_stored_value_compatibility contract) then
+      reject loc "invalid stored-value compatibility contract") stored_value_compatibility;
+    let sources = Hashtbl.create 16 in
+    let read expected path =
+      let path = Validation_common.canonical_import_path path in
+      let source = Source_input.read path in
+      let m = match Parser.parse_module path source with
+        | Ok m -> m
+        | Err e -> reject e.loc e.msg in
+      (match expected with
+       | Some name when m.module_name <> name ->
+         reject (Location.dummy_loc m.source_file) (Printf.sprintf "schema module `%s` declares `%s`" name m.module_name)
+       | _ -> ());
+      Hashtbl.replace sources path source;
+      m in
+    let root = read None root_file in
+    let family, revision = match Validation_common.schema_module_parts root.module_name with
+      | Some (family, revision, []) when Migration_source.valid_family family &&
+          Migration_source.valid_revision revision -> family, revision
+      | _ -> reject (Location.dummy_loc root.source_file) "semantic inventory requires a schema revision root" in
+    let modules = Hashtbl.create 16 in
+    let rec visit m =
+      if not (Hashtbl.mem modules m.module_name) then begin
+        Hashtbl.add modules m.module_name m;
+        (match Migration_schema.check_contents m with
+         | error :: _ -> reject error.loc error.message
+         | [] -> ());
+        List.iter (fun (i : import_decl) ->
+          if String.starts_with ~prefix:"Tesl." i.module_name then ()
+          else if not (Migration_schema.within root.module_name i.module_name) then
+            reject i.loc (Printf.sprintf "schema import `%s` escapes `%s`" i.module_name root.module_name)
+          else if not (Hashtbl.mem modules i.module_name) then
+            visit (read (Some i.module_name)
+              (Validation_common.resolve_local_import_path m.source_file i.module_name))) m.imports
+      end in
+    visit root;
+    let modules = Hashtbl.fold (fun _ m rest -> m :: rest) modules []
+      |> List.sort (fun a b -> String.compare a.module_name b.module_name) in
+    let members = List.concat_map (fun m -> List.filter_map (function
+      | DEntity e -> Some (m.module_name ^ "." ^ e.name, e) | _ -> None) m.decls) modules in
+    (match Migration_schema.check_member_storage members with
+     | error :: _ -> reject error.loc error.message | [] -> ());
+    let graph = match Migration_checked_graph.check
+        (List.map (fun m -> m, Hashtbl.find sources m.source_file) modules) with
+      | Ok graph -> graph | Error error -> raise (Invalid error) in
+    let scopes = [{ Migration_canonical.family; revision; role=Snapshot_role }] in
+    List.iter (fun m ->
+      let resolve = Migration_checked_graph.resolve graph ~owner:m.module_name in
+      List.iter (function
+        | DQueueSchema q -> List.iter (fun (name,loc) ->
+            let resolved = match resolve Type name with
+              | Some (Global resolved) -> resolved
+              | _ -> reject loc ("queueSchema payload must be an owned record: " ^ name) in
+            let owner,record = List.find_map (fun owner -> List.find_map (function
+              | DRecord record when owner.module_name ^ "." ^ record.name = resolved -> Some (owner,record)
+              | _ -> None) owner.decls) modules
+              |> function Some pair -> pair | None -> reject loc ("queueSchema payload must be a record: " ^ name) in
+            if owner.module_name <> m.module_name &&
+               (not (List.exists (fun (i : import_decl) -> i.module_name = owner.module_name) m.imports) ||
+                not (List.mem (ExportName record.name) owner.exports)) then
+              reject loc ("queueSchema payload is not exported by a directly imported schema module: " ^ name)) q.jobs
+        | _ -> ()) m.decls) modules;
+    let definitions = match Migration_checked_graph.lower ~scopes graph with
+      | Ok definitions -> definitions | Error error -> raise (Invalid error) in
+    (* Validation and inference load imported interfaces themselves. Refuse a
+       source change across these passes rather than publish mixed source state. *)
+    Hashtbl.iter (fun path source ->
+      if Source_input.read path <> source then
+        reject loc ("schema source changed during semantic inventory: " ^ path)) sources;
+    (match Migration_ir.closure ~scopes ~definitions
+        ~roots:(List.map (fun d -> d.key) definitions) with
+     | Error error -> raise (Invalid error)
+     | Ok _ -> ());
+    let source_inputs = Hashtbl.to_seq sources |> List.of_seq
+      |> List.map (fun (path, source) -> path, Migration_hash.digest source)
+      |> List.sort compare in
+    let declarations = List.concat_map (fun m -> List.map (fun d ->
+      let namespace, name, kind = match d with
+        | DType (TypeNewtype t) -> Type, t.name, Newtype
+        | DType (TypeAdt t) -> Type, t.name, Adt
+        | DRecord r -> Type, r.name, Record
+        | DEntity e -> Type, e.name, Entity
+        | DFact f -> Predicate, f.name, Fact
+        | DCodec c -> Codec, c.name, Codec_declaration
+        | DFunc f -> Value, f.name, Function
+        | DQueueSchema q -> Value, q.name, Queue_schema
+        | _ -> assert false (* Schema content and typed lowering already checked. *) in
+      {namespace; qualified_name=m.module_name ^ "." ^ name; declaration_kind=kind; source_loc=top_decl_loc d}) m.decls) modules
+      |> List.sort (fun a b -> compare (declaration_key a) (declaration_key b)) in
+    let inventory = { compiler_abi; stored_value_compatibility; scopes; definitions; fields=[]; entities=[]; sources=source_inputs; declarations;
+      modules=List.map (fun m -> m.module_name) modules } in
+    let fields = List.concat_map (fun d -> List.map (fun (name, body) ->
+      let entity = match d.key with
+        | Type, Global entity -> entity
+        | _ -> reject loc "stored field has no owning entity identity" in
+      let entity_form = List.assoc entity members in
+      let field_form = List.find (fun (f : Ast.field_def) -> f.name = name) entity_form.fields in
+      let dependencies, reached = match Migration_ir.closure_with_definitions ~scopes ~definitions ~roots:body.references with
+        | Ok result -> result | Error error -> raise (Invalid error) in
+      let reached = List.map (fun (d : definition) -> match d.key with
+        | ns, Global name -> ns, name
+        | _ -> assert false (* Inventories contain only owned declarations. *)) reached in
+      let identity = Migration_canonical.encode (tag "stored-location" [
+        require loc (Migration_canonical.reference scopes entity); Bytes name]) in
+      let contract = with_abi inventory (tag "stored-field" [body.node; dependencies]) in
+      { identity; definition=body.node; dependencies=reached;
+        field={entity; name; loc=field_form.loc; contract} }
+    ) d.stored_fields) definitions
+      |> List.sort (fun a b -> String.compare a.identity b.identity) in
+    let entities = List.map (fun (entity_name, (form : Ast.entity_form)) ->
+      let definition = List.find (fun (d : definition) -> d.key = (Type, Global entity_name)) definitions in
+      let entity_identity = Migration_canonical.encode (tag "stored-entity-location" [
+        require form.loc (Migration_canonical.reference scopes entity_name)]) in
+      let entity_contract = match closure inventory [Type, entity_name] with
+        | Ok node -> node | Error error -> raise (Invalid error) in
+      {entity_identity; entity_definition=definition.body.node;
+        stored_entity={entity_name; entity_loc=form.loc; table_name=form.table;
+          primary_key=form.primary_key; entity_contract}}) members
+      |> List.sort (fun a b -> String.compare a.entity_identity b.entity_identity) in
+    let inventory = { inventory with fields; entities } in
+    let assigned = Hashtbl.create 8 in
+    List.iter (fun queue -> List.iter (fun payload ->
+      match Hashtbl.find_opt assigned payload.payload_name with
+      | Some previous -> reject payload.payload_loc ("queue payload belongs to multiple queueSchema contracts: " ^ previous ^ " and " ^ queue.queue_name)
+      | None -> Hashtbl.add assigned payload.payload_name queue.queue_name) queue.payloads) (queue_contracts inventory);
+    Ok inventory
+  with
+  | Invalid error -> Error error
+  | Sys_error message | Failure message | Invalid_argument message -> Error {loc; message}
+  | Unix.Unix_error (error, operation, path) ->
+    Error {loc; message=Printf.sprintf "%s: %s: %s" operation path (Unix.error_message error)}
+
+let load ~compiler_abi ~root_file =
+  load_with_compatibility ~stored_value_compatibility:None ~compiler_abi ~root_file

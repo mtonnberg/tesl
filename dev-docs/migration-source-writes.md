@@ -1,0 +1,224 @@
+# Guarded migration source writes
+
+> Audience: compiler, native CLI and editor contributors.
+
+The compiler owns source selection, history validation and edit generation. The
+native CLI consumes that compiler response through `internal/sourceedit`. Neither
+component connects to a database. A successful source write does not establish
+that the proposal compiles or that a database migration is safe to execute.
+
+## Commands and outcomes
+
+`tesl migrate app.tesl [--database App.Main]` is the guided saved-source flow.
+Start it from the checked current revision, before editing the schema. It freezes
+that revision with the existing `--new-revision` generator, then lists the current
+schema files to edit separately from the newly prepared history. After the user
+saves and presses Enter, it refreshes the migration. Generated decisions and
+other compiler diagnostics remain visible until the user resolves them. The final
+steps check the saved application and produce the read-only PostgreSQL plan.
+Deployment guidance is printed only after both succeed.
+
+`tesl migrate app.tesl --resume` continues an existing **undeployed** revision.
+It can reenter the diagnostic loop when a saved edit does not parse or type-check.
+It cannot start a first revision or freeze another one. The guided flow does not
+connect to PostgreSQL, run application tests, build a release, or execute database
+migrations. Explicit `generate`, `plan`, and `recover-source` commands retain their
+noninteractive behavior and JSON contracts.
+
+The wizard and ordinary generation share `migrationGenerate` and the same
+`sourceedit` publisher. An optional wizard validator checks the **exact decoded
+preview immediately before `Apply`**, rather than checking one preview and applying
+another. Resume requires `operation: refresh` there. After preparation, each refresh
+must preserve the selected entry, database, family, schema root, and revision. A
+concurrent change to another family or revision refuses further publication.
+Module names and paths come from the compiler; current-closure guidance follows
+the selected module root and its children, including qualified roots such as
+`Schema.Todo.VCurrent`, without assuming a legacy family suffix or path spelling.
+The final plan must still name that database and family and end at the prepared
+revision. A saved change between the last application check and planning cannot
+produce completion or deployment guidance for a different selection.
+
+Implicit interactive input must be a Linux terminal, matching the current
+saved-source publisher's platform support. CI and nonterminal file input refuse
+before invoking tools or changing files. A non-file `App.Stdin` is an explicit
+embedding/test seam. Every wizard compiler child receives nil stdin: otherwise
+`os/exec` can consume answers while copying stdin even when the compiler itself
+never reads them. The wizard reads bounded complete lines and polls terminal input
+with context cancellation; EOF is not an empty affirmative answer.
+
+`q` stops successfully; EOF or cancellation stops with an error. Already committed
+source edits remain saved, and `--resume` continues that undeployed revision.
+The wizard does not invent a multi-command rollback. A failed source publication
+uses the ordinary guarded inverse and recovery journal described below; it is not
+retried as if it were a compiler diagnostic. The existing `recover-source` command
+handles interrupted publication or retained cleanup state.
+
+`tesl migrate generate app.tesl --manifest-json` returns the read-only version-1
+`migration-source-preview` envelope. Plain `tesl migrate generate app.tesl` uses
+the same preview and publishes its saved-file edits. Its JSON changes `kind` to
+`migration-source-application` and adds `sourceTransaction`:
+
+```json
+{"outcome":"committed","manifestHash":"<sha256>","written":["/project/migrations/notes/v2.tesl"],"restored":[],"recoveryRequired":false}
+```
+
+`ok` reports source operation success; `compilable` retains the compiler's complete
+application judgment. A skeleton with MIG003 holes can be written successfully.
+The caller must not mistake that result for a compiling program. Failure returns
+a nonzero exit, `ok: false`, and an error. A compiler selection/generation failure
+retains the original preview error response without an applicable manifest.
+
+`outcome` is `unchanged`, `prepared`, `editor-pending`, `committed`, or `restored`. `written` and
+`restored` list operations observed by that invocation; a restarted recovery does
+not reconstruct the previous process's entire activity log. `recoveryRequired`
+means retained state needs recovery or inspection. A commit followed by cleanup
+failure remains committed; recovery must not undo it.
+
+`tesl migrate recover-source --project-root DIR` restores an unfinished source
+write or completes cleanup after a durable terminal outcome. Its version-1 JSON
+has `kind: migration-source-recovery`, `ok`, and `sourceTransaction`. Repeating
+recovery after cleanup succeeds without changes. It never chooses a project by
+searching for a journal. Path normalization checks each component before handling
+`..`, so a symlink cannot disappear from the selected path spelling.
+
+## Consumer boundary
+
+The decoder requires the compiler's known protocol, successful preview judgment,
+actual source ABI identity, and consistent application diagnostics. It rejects
+unknown or duplicate keys, case aliases, invalid UTF-8, unpaired JSON surrogates,
+invalid paths, inconsistent preimages, missing guards and oversized input. The
+manifest's immutable canonical JSON and SHA-256 match the OCaml producer exactly,
+including Unicode and control-character encoding. Accessors return copies.
+
+The tooling client's `QueryMigrationPreview` passes open buffers and signed
+document versions through the compiler's explicit overlay endpoint. It uses real
+logical project paths, not a remapped shadow manifest. It verifies the returned
+project, entry, selected database, requested new-revision operation and every
+buffer's version **and source hash**. Open-document guards cannot claim absent
+source. Compiler failure, cancellation and timeout never yield an applicable
+preview, even if stdout contains JSON. Private overlay contents files are removed
+after the process exits. The LSP exposes this transport through the read-only
+`tesl.generateMigration` command and retains one immutable preview per session.
+Its summary lists every edited file, the selected database, operation and proposed
+application diagnostics; `tesl.migrationPreviewFile` retrieves original/proposed
+bytes for one listed file without reading disk again. A new generation attempt
+expires the previous handle, including refusal, invalid selection and cancellation.
+Late compiler success after cancellation cannot retain a preview. Summary and
+file responses are bounded below the editor transport's message limit. See
+[the editor protocol](../editor/protocol.md#migration-source-preview-commands)
+for arguments and responses. The UI and mixed open/closed apply protocol remain
+pending; neither preview command changes source.
+
+Saved-file application rejects open document versions, source/disk byte or
+membership differences, and differing import resolution. Even a no-op refresh
+refuses an existing transaction. The editor's mixed open/closed document protocol
+is a separate pending consumer; this writer never silently saves a buffer.
+
+The editor's read-only application planner retains that full manifest and checks
+all open inputs again, including dependencies with no generated edits. A close/
+reopen invalidates the preview even if the replacement buffer has the same bytes
+and document version. Forward edits bind exact versions and source; inverse edits
+bind the observed post-edit version and restore the exact original buffer. An
+inverse refuses changed user contents or a different buffer lifetime. LF and CRLF
+sources are supported; bare CR is refused because the shared position index cannot
+describe those complete replacements exactly. This planner does not yet apply
+buffers or publish closed files. The separate `EditorTransaction` API now retains
+the full manifest in a version-2 journal while publishing only closed files.
+`PrepareEditor` checks every original buffer and disk input; `Publish` retains its
+backups. `BeginClientEdits` durably records `editor-pending` before the caller sends
+any editor request. `Commit` requires the observed new buffer contents and versions;
+`Restore` requires completed forward/inverse requests and restored original buffers.
+Unrelated user buffer changes survive restoration. A proposal with only closed-file
+edits uses `CommitWithoutClient`, still checking its unedited open inputs.
+
+Before the client marker, `Abort` or restarted recovery can restore the closed
+files. After that marker, a timeout or disconnect leaves an unknown editor outcome:
+`Close` releases the lock and preserves the journal. Disk-only recovery refuses to
+guess from saved files or from the absence of a reply. A durable terminal outcome
+permits cleanup only. Editor reconciliation and the LSP coordinator remain pending;
+the saved-file CLI continues to reject open-buffer manifests.
+
+The coordinator implementation remains internal and public editor application is
+disabled. Standard `workspace/applyEdit` capabilities do not establish that every
+buffer notification precedes a negative acknowledgement. Such replies retain the
+journal until an explicit editor snapshot can reconcile the result. Restoration
+also rechecks the saved bytes of every original open input: an auto-saved importer
+may depend on generated closed files even after its buffer was restored. Changed
+saved bytes preserve those files and require recovery. These boundaries need a
+complete wire-level journey before enabling the command.
+
+Each input file, directory membership and import resolution is checked again
+against disk. Checks continue as publication progresses, ignoring only this
+transaction's own new entries. Root and control-directory identity are pinned;
+reads reject symlinks and special files. Nonblocking no-follow opens prevent a
+FIFO substituted after a path check from hanging the operation.
+
+## Publication and inverse
+
+A private `.tesl-source-edit` directory contains an exclusively locked owner file,
+a versioned journal, and staged/captured inodes. The journal records the manifest,
+its hash, a random operation identity, original permissions, required new
+directories and phase. It is durable before any source file or directory changes.
+Existing source files are replaced with Linux atomic exchange, retaining the
+actual displaced inode. New files use atomic no-replace hard-link publication.
+A save racing the last preimage check therefore remains recoverable. Permissions
+are preserved on replacements; new files and directories are private to the user.
+
+New directories are prepared privately with a durable ownership marker before
+no-replace publication. Rollback removes only its own directories. An unrelated
+empty directory created at the same path survives. User files arriving during
+directory capture are returned to their original directory and block cleanup.
+
+A failure before commit applies the guarded inverse in reverse order. It captures
+published output before restoring a retained original inode with no-replace
+publication. Unexpected user bytes are retained, not overwritten with a journal
+preimage. If a user edited a published source, recovery reports the conflict and
+leaves the source and journal for inspection. After the conflict is resolved,
+recovery can resume; it can itself be interrupted at any boundary.
+
+The `committed` or `restored` journal phase is durable before backup cleanup. A
+restart in either terminal phase only finishes cleanup. A torn unpublished
+`journal.tmp` cannot authorize commit. If no journal was published, recovery only
+cleans recognized preparation files; retained source slots without a journal
+require inspection. Unknown metadata or changed retained bytes also block cleanup.
+
+These are individually atomic file operations with a durable guarded inverse,
+not a filesystem-wide atomic replacement of the whole project. Other processes
+may observe intermediate files. Editors must coordinate their own document/index
+updates around the eventual shared apply protocol.
+
+## Verification and remaining scope
+
+Formatting preserves the same frozen-source boundary. `Migration_format_guard`
+protects canonical numbered schema snapshots and completed migration namespaces,
+including their private helpers and symlink aliases. Completion comes from a
+frozen sibling snapshot or the existing leading-comment closure protocol; a
+marker-shaped comment in ordinary code is not completion. CLI formatting refuses
+a changed frozen file with MIG013, while `fmt-check` exempts frozen bytes from
+style drift. Current source remains editable and can be refreshed normally.
+The editor's read-only `--format-json` query sees all open buffers in a bounded
+snapshot, including unsaved completion metadata. It returns no edit for protected
+source and never writes or saves a workspace file. This prevents accidental
+formatting changes; seals and persisted history remain independent integrity
+checks. See [the editor protocol](../editor/protocol.md#formatting-response-shape).
+
+Regressions consume real compiler manifests and check every resulting Tesl file
+with the current compiler. They cover start/refresh/next revision, complete app
+judgments, unchanged connection/application source, staleness, overlays, imports,
+malformed protocols, permissions, cancellation, concurrent saves and creations,
+live-owner exclusion, and interrupted publication/inverse/cleanup. Crash tests
+use separate processes that exit at private test callbacks; no production command
+or environment variable enables fault injection. Directory tests include user
+writes after capture and foreign empty directories racing publication. Additional
+cases cover failure before journal preparation, writes through displaced open file
+handles, saves racing the inverse's last comparison, occupied capture destinations
+and symlink redirection during recovery. The manifest fuzzer runs in `ci.sh`.
+Aggregate statement coverage is recorded in the implementation ledger; it does not
+stand in for testing every filesystem failure.
+
+The decoder is portable. Atomic publication/recovery currently require Linux
+`renameat2` and `flock`; other hosts refuse before writing. Windows/macOS mutation,
+the editor lifecycle, rebase/repair/contract/prune source commands, live catalog
+planning, and PostgreSQL execution remain pending. Read-only source expansion
+plans are described in [migration planning](migration-planning.md). Source ABI records also do not
+settle the separate persisted execution ABI or cross-ABI proof-admission design.

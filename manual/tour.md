@@ -88,13 +88,16 @@ When Tesl decodes a `NewTodo` from a request body, it runs `isValidTitle` automa
 the request is rejected with a 400 before your handler even runs. If it passes, the `title` field
 carries the `ValidTitle` proof.
 
-If an endpoint needs a separate wire shape, write the adapter explicitly in the API declaration:
-`body req: Domain from Wire via decodeWire` and `response Wire via encodeWire`. These adapters must
-be declared Tesl functions so the compiler can verify them at compile time. `decodeWire` must accept
-exactly one raw `Wire` value and return `Domain` (including any required body proof unless the
-endpoint uses a `body ... via (...)` boundary checker). `encodeWire` must accept the raw handler
-return value and return `Wire`. The `Wire` type still needs a visible codec because it is the type
-that crosses the HTTP boundary.
+Declare the decoded request type directly, for example `body req: NewTodo`. The codec's field
+checks establish the proofs carried by the decoded fields. A proof annotation on the whole HTTP
+body does not validate incoming JSON: top-level `body ... ::: ...` annotations and standalone
+`body ... via ...` clauses are rejected. Validate fields in the codec, or call a `check` in the
+handler before passing the value to a function that requires its proof.
+
+Separate HTTP wire adapters (`body req: Domain from Wire via decodeWire` and
+`response Wire via encodeWire`) are not implemented by the Go backend. When wire and domain shapes
+differ, decode the declared wire type through its codec and convert it with ordinary checked calls
+inside the handler; return the response's wire type through its codec.
 
 ### 3. Client generation
 
@@ -277,15 +280,22 @@ Column type mapping is automatic for all common types — you rarely need to ann
 | Tesl type | PostgreSQL column | Notes |
 |---|---|---|
 | `String` | `TEXT NOT NULL` | |
-| `Int` | `BIGINT NOT NULL` | |
+| `Int` | `NUMERIC NOT NULL` | Arbitrary precision |
 | `Bool` | `BOOLEAN NOT NULL` | Use `Bool` in Tesl source; `BOOLEAN` describes the SQL storage type |
 | `PosixMillis` | `BIGINT NOT NULL` | Auto-coerced; no annotation needed |
 | Any ADT | `JSONB NOT NULL` | Encoded as `{"tag":"ConstructorName","fields":{...}}` |
+| Record with a bidirectional codec | `JSONB NOT NULL` | Uses its declared encoder and checked decoder |
 | Newtype wrapping `String` | `TEXT NOT NULL` | Unwrapped transparently on read/write |
 | `Maybe T` | Nullable column for `T` | `Nothing` ↔ `NULL`, `Something v` ↔ the value |
 
 `@db(type)` lets you override when you need a specific PostgreSQL type (e.g., `@db(uuid)` for a UUID
 column). For the common cases above, leave it off.
+
+Stored records require an explicit codec with both `toJson` and `fromJson`.
+That codec defines their persisted representation; reads run its validation and
+ordered fallback decoders. The same rule applies to records inside an ADT and
+to `Maybe Record` columns. SQL `NULL` becomes `Nothing`; JSON `null` is still a
+stored JSON value and must pass the record decoder.
 
 **ADTs are stored as JSONB.** An ADT field — whether a simple flag like `Status = Open | Done` or a
 richer union with payloads — is automatically stored as a PostgreSQL `JSONB` column with no
@@ -364,6 +374,112 @@ PostgreSQL per zone and unit.
 
 ### Schema and migrations
 
+Keep the database connection in the application module. Put entities, their types,
+facts, codecs, and pure validation helpers in the schema module; put queries,
+handlers, workers, and tests in application modules that import those entities.
+The application selects the database for imported entities too, so an entity
+module needs no connection settings or import back to the application.
+
+Schema families use names such as `Schema.Notes.VCurrent` in
+`schema/notes/v-current.tesl`, with optional child modules under
+`schema/notes/v-current/`. Every schema module and its import closure obeys this
+boundary, including private declarations, even before an application binds it to
+a database. A handler, database declaration, effect, or test inside that closure
+is a compile error. Editor checks apply the same rule to unsaved schema buffers.
+
+Migration modules under `Schema.Notes.Migrate.*` also keep application code and
+connections out. They allow pure migration records and fixture values; entity
+declarations stay in the schema they import. Ordinary `test` blocks over pure
+migration functions can live beside those functions. They cannot declare
+capabilities or select a database connection.
+
+Application modules and their libraries import `VCurrent`. Importing a frozen
+`V<n>` schema there is MIG015, even if the module also contains tests. Put tests
+that construct historical values in the family's `Migrate` namespace.
+The editor's **Use VCurrent** action changes the import and its qualified references
+together, including references inside interpolations. Comments and literal text
+stay unchanged. The action uses the checked buffer, including unsaved changes.
+
+Keep one database binding for each schema family, including all its child modules.
+The compiler rejects splitting that family between connections, combining different
+families in one database, or binding a historical `V<n>` entity to a connection.
+Application bindings use `VCurrent`. These checks also run on new, unsaved
+application files.
+
+An application can select the complete schema with `schema: Schema.Notes.VCurrent`
+and `migrations: Schema.Notes.Migrate` instead of listing `entities:`. Import the
+`VCurrent` root directly; the compiler includes every entity in its local import
+closure, including private entities and child modules. That membership does not
+make private types or helpers accessible to application code. With PostgreSQL,
+put the physical schema name in `PostgresConfig.namespace`, for example
+`namespace: "notes_app"`. It must be a nonempty static string. The `Database`
+declaration and connection settings remain in the application module.
+
+For a small application, keep the schema in that one `v-current.tesl` file.
+Freezing creates a neighboring `v1.tesl`, `v2.tesl`, and so on; a child directory
+is only needed if you split the schema into modules. Migration rules live in
+`migrations/notes/v2.tesl` and later versions. Existing `NotesSchema.*` modules
+remain supported, but keep their recorded spelling: renaming a sealed family
+changes its history identity. The [todo example](../example/db-migration-example/README.md)
+shows the single-file layout with a complete application.
+
+The compiler also checks additive `Migration { from, to, same, entities }`
+declarations imported from `Tesl.Migration`. Each `Migrate.V<n>` root owns one
+declaration; ordinary pure helpers and tests can use other module names in the
+same migration family. `Additive` derives values for new optional fields or fields
+with literal `Default` rules. `New` and `Drop` identify added and removed entities.
+An entity omitted from the record must be unchanged, including its stored proofs
+and codecs. `Same` asks the compiler to verify an identity; it cannot assert one.
+
+Pure row helpers can return `Migrated NewRow`, imported from `Tesl.Migration`
+with `Migrated(..)`. `Row value` contains a fully typed value with all required
+proofs; `Reject reason` describes a row that could not be converted. Match both
+branches in helper tests. This result type is available for writing and testing
+converters; the transforming database executor remains under development.
+
+When a migration includes a recorded history header, the compiler checks every
+owned source file, including private helpers. A changed recorded `VCurrent`
+reports MIG001; a changed frozen file reports MIG013. A compiler ABI mismatch is
+separate from a source edit. These checks also work with unsaved migration headers.
+
+Production builds also check the compiler's stored-value compatibility contract.
+Completed additive history can survive a compiler build update when that contract,
+the unchanged source and the checked storage/proof definitions agree. Unfinished
+work remains pinned to the original build. A different contract requires explicit
+revalidation; editing recorded history is not a substitute.
+
+The current implementation checks source ownership and history, plans physical
+storage and runs supported additive changes during PostgreSQL startup. An operator
+must first install protected control state. Source generation and checking alone
+do not execute database work. Typed transformations and the remaining deployment
+lifecycle are still under development.
+
+[Lesson 82](../example/learn/lesson82-database-migrations.tesl) runs a complete
+notes HTTP app with this separation. Its schema owns the stored entity and title
+validation; the application owns the connection, handlers, request/reply records
+and routes. Its API tests create and read a note and verify that invalid input
+does not insert one. A storage-only change need not change the HTTP response.
+
+[Lesson 84](../example/learn/lesson84-worker-migrations.tesl) deploys that pattern
+with `migrations: MigrationConfig { topology: Worker }` inside `PostgresConfig`:
+one compiled binary runs as the schema
+worker with DDL credentials, while request processes use a separate DML login.
+The request app waits for its schema revision and runs the same handlers before
+and after an additive migration. Connection roles and optional `ddlConnection`
+remain in the application's `MigrationConfig`. The separate
+`Database.migrations` field names the source history. `Embedded` combines those roles for development;
+when topology is omitted, the presence of `TESL_DEPLOYED` selects Worker.
+
+Records and ADTs stored as JSONB also have a schema, even when the SQL column
+type stays `jsonb`. A codec's `fromJson [current, legacy]` alternatives can read
+both record representations today. This does not prove rolling compatibility: an old
+reader may reject the new encoder's output. Nor does deploying a newer version
+rewrite untouched stored JSON. Keep required legacy decoders until the old
+representations have been eliminated from every occurrence, including nullable
+columns and records nested in ADTs. The migration planner's integration with
+these adapters, typed transformations and verified decoder removal is still
+under development.
+
 Tesl derives the database schema directly from your `entity` and `database` declarations. On first
 run it creates any missing tables automatically — no separate migration file needed to get started:
 
@@ -391,10 +507,10 @@ a timed-out wait answers `503 Service Unavailable`, so brief bursts queue and su
 sustained overload surfaces as a clear retryable signal.
 
 This is intentionally optimistic for development — spin up a fresh database and `tesl run` just works.
-For production, a dedicated migration tool is on the roadmap. The current approach is: Tesl owns the
-schema declaration; you own the migration strategy. If you add a column to an entity, Tesl tells you
-at startup if it is missing — then you decide how to apply the change (a migration script,
-`ALTER TABLE`, whatever your deployment allows).
+The current bootstrap creates missing tables; it does not reconcile columns on
+existing tables or guarantee an early diagnostic for a missing column. Such a
+query can fail when it runs. Changes to an existing database still require your
+deployment's migration process while the versioned executor is being implemented.
 
 The key constraint Tesl does enforce: you cannot reference a field in a query that is not in the
 entity declaration. If you remove a field from the entity, every query and handler that touches it
@@ -728,6 +844,13 @@ codec NewTask {
 }
 ```
 
+Constructors with payloads add a `fields` object. For example, `Delivered "m-1"`
+encodes as `{"tag":"Delivered","fields":{"messageId":"m-1"}}`.
+An `adtJson` decoder checks every payload field, including nested record codecs
+and recursive ADT values. Missing fields, unknown constructors, and invalid
+children are rejected. A constructor without a payload also accepts its bare
+name as a legacy input; a constructor that requires fields cannot use that shorthand.
+
 The compiler validates that `with_codec Priority` is used on a field declared as `Priority` and that
 `Priority` has an `adtJson` codec — a type mismatch (e.g., `with_codec stringCodec` on a `Priority`
 field) is a compile error.
@@ -883,7 +1006,32 @@ establish validPort(p: Int) -> Maybe (Fact (ValidPort p)) =
     Nothing
 ```
 
-When the value and its proof are produced together inside the function, use the `Maybe (v: T ::: P v)`
+An `establish` can also return the value together with its proof. This is useful for
+a migration check that should let its caller decide how to handle rejection:
+
+```tesl
+fact Positive (n: Int)
+
+establish tryPositive(n: Int) -> Maybe (value: Int ::: Positive value) =
+  if n > 0 then
+    Something (n ::: Positive n)
+  else
+    Nothing
+```
+
+Every successful branch must carry `Positive` on the returned value. `Nothing`
+means the caller must choose another path. The proof is erased; a successful
+result contains the ordinary `Int`. Use bare `:::` here; `ok` and `fail` belong to
+HTTP-shaped checks. The condition inside `establish` remains trusted code to review
+and test.
+
+A successful producer may return a normalized or otherwise changed value. Its
+proof belongs to that returned value, even if the return binder has the same name
+as an input parameter. Use the value bound by `Something` when constructing a
+record or entity that requires the proof. Unwrapping or detaching the proof does
+not make it evidence about the original input.
+
+When a function forwards a value and proof produced by another validator, use the `Maybe (v: T ::: P v)`
 form — the proof propagates automatically through `case`:
 
 ```tesl

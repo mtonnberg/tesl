@@ -11,11 +11,18 @@ open Validation_structural
 
 let build_initial_proof_env (params : binding list) : proof_env =
   List.filter_map (fun (b : binding) ->
-    match b.proof_ann with
-    (* A proof-carrying parameter's declared proof is ASSUMED inside the body;
-       sound because every call site discharges it (proof_matches). *)
-    | Some proof -> Some (b.name, [Proof_kernel.assume_param proof])
-    | None -> None
+    (* A proof-carrying parameter's declared proof is assumed inside the body;
+       every call site discharges it. A detached Fact parameter also carries
+       evidence, indexed by its original subjects rather than the holder's name.
+       Keep it on the holder: having p : Fact (P n) does not implicitly attach P
+       to the raw parameter n. Optional facts need branch elimination first. *)
+    let detached = match b.type_expr with
+      | TApp {head=TName {name="Fact"; _}; arg; _} ->
+        Option.to_list (type_expr_to_proof_expr arg)
+      | _ -> [] in
+    match Option.to_list b.proof_ann @ detached with
+    | [] -> None
+    | proofs -> Some (b.name, List.map Proof_kernel.assume_param proofs)
   ) params
 
 let build_initial_subject_env (params : binding list) : subject_env =
@@ -323,7 +330,7 @@ let upper_camel_tokens (s : string) : string list =
   in
   String.iter (fun c ->
     match c with
-    | 'A'..'Z' | 'a'..'z' | '0'..'9' | '_' -> Buffer.add_char buf c
+    | 'A'..'Z' | 'a'..'z' | '0'..'9' | '_' | '.' -> Buffer.add_char buf c
     | _ -> flush ()) s;
   flush ();
   List.rev !out
@@ -338,6 +345,143 @@ let forall_inner_pred_names (proofs : proof_expr list) : string list =
     | _ -> []
   ) proofs
   |> List.sort_uniq String.compare
+
+(* Detached Fact callbacks need both predicate and subject provenance. HM keeps
+   the owner; this validator keeps captured subjects across aliases/application. *)
+let rec contains_fact_type = function
+  | TApp { head = TName { name = "Fact"; _ }; _ } -> true
+  | TApp { head; arg; _ } -> contains_fact_type head || contains_fact_type arg
+  | TFun { dom; cod; _ } -> contains_fact_type dom || contains_fact_type cod
+  | TTuple { elems; _ } -> List.exists contains_fact_type elems
+  | TName _ | TVar _ -> false
+
+let rec contains_dependent_callback = function
+  | TFun _ as ty when contains_fact_type ty -> true
+  | TApp { head; arg; _ } -> contains_dependent_callback head || contains_dependent_callback arg
+  | TTuple { elems; _ } -> List.exists contains_dependent_callback elems
+  | TFun { dom; cod; _ } -> contains_dependent_callback dom || contains_dependent_callback cod
+  | TName _ | TVar _ -> false
+
+let rec subst_fact_subjects mapping = function
+  | TApp ({ head = TName { name = "Fact"; _ }; arg; _ } as ty) ->
+    (match type_expr_to_proof_expr arg with
+     | Some proof -> TApp { ty with arg = Parser.proof_expr_to_type_expr (subst_proof mapping proof) }
+     | None -> TApp ty)
+  | TApp ty -> TApp { ty with head = subst_fact_subjects mapping ty.head; arg = subst_fact_subjects mapping ty.arg }
+  | TFun ty -> TFun { ty with dom = subst_fact_subjects mapping ty.dom; cod = subst_fact_subjects mapping ty.cod }
+  | TTuple ty -> TTuple { ty with elems = List.map (subst_fact_subjects mapping) ty.elems }
+  | (TName _ | TVar _) as ty -> ty
+
+let subst_callback_info mapping info =
+  { info with fi_params = List.map (fun (p : binding) ->
+      { p with type_expr = subst_fact_subjects mapping p.type_expr;
+        proof_ann = Option.map (subst_proof mapping) p.proof_ann }) info.fi_params;
+    fi_return = (match return_value_type info.fi_return with
+      | Some ty -> RetPlain { ty = subst_fact_subjects mapping ty; loc = info.fi_loc }
+      | None -> info.fi_return) }
+
+let alpha_callback_info info =
+  (* Rename before substituting captured subjects. A caller variable may have
+     exactly the same spelling as a remaining callee parameter. *)
+  let mapping = List.mapi (fun i (p : binding) -> p.name, "$callback-formal:" ^ string_of_int i) info.fi_params in
+  let renamed = subst_callback_info mapping info in
+  { renamed with fi_params = List.map2 (fun (p : binding) (_, name) -> { p with name }) renamed.fi_params mapping }
+
+let callback_info_of_type name loc ty =
+  let rec split n = function
+    | TFun { dom; cod; _ } ->
+      let params, result = split (n + 1) cod in
+      { name = "$callback-arg:" ^ string_of_int n; type_expr = dom; proof_ann = None; loc } :: params, result
+    | result -> [], result in
+  let params, result = split 0 ty in
+  match params with
+  | [] -> None
+  | _ -> Some { fi_name = name; fi_kind = FnKind; fi_params = params;
+      fi_return = RetPlain { ty = result; loc }; fi_loc = loc; fi_http_methods = [] }
+
+let callback_params funcs params = List.filter_map (fun (p : binding) ->
+  Option.map (fun info -> p.name, info) (callback_info_of_type p.name p.loc p.type_expr)) params @ funcs
+
+let rec callback_info funcs subject_env expr =
+  match function_name_of_expr expr with
+  | Some name -> Option.map alpha_callback_info (List.assoc_opt name funcs)
+  | None -> match expr with
+    | EApp { fn; arg; _ } ->
+      (match callback_info funcs subject_env fn with
+       | Some ({ fi_params = param :: remaining; _ } as info) when remaining <> [] ->
+         (match subject_of_expr subject_env arg with
+          | Some subject -> Some (subst_callback_info [param.name, subject] { info with fi_params = remaining })
+          | None -> None)
+       | _ -> None)
+    | ELambda { params; body; loc } ->
+      let result = match !field_proof_type_ctx with
+        | Some (env, fields, ctors) ->
+          infer_expr_type (List.map (fun (p : binding) -> p.name, p.type_expr) params @ env) funcs fields ctors body
+        | None -> infer_expr_type (List.map (fun (p : binding) -> p.name, p.type_expr) params) funcs [] [] body in
+      Option.map (fun ty -> alpha_callback_info { fi_name = "<lambda>"; fi_kind = FnKind; fi_params = params;
+        fi_return = RetPlain { ty; loc }; fi_loc = loc; fi_http_methods = [] }) result
+    | _ -> None
+
+let callback_type info =
+  let renamed = List.mapi (fun i (p : binding) -> p.name, "$callback-arg:" ^ string_of_int i) info.fi_params in
+  let info = subst_callback_info renamed info in
+  Option.map (fun result -> List.fold_right (fun (p : binding) cod ->
+    TFun { dom = p.type_expr; cod; caps = []; loc = p.loc }) info.fi_params result)
+    (return_value_type info.fi_return)
+
+let rec callback_facts_match expected actual =
+  match proof_of_fact_type expected, proof_of_fact_type actual with
+  | Some wanted, Some carried -> proof_matches wanted [carried] && proof_matches carried [wanted]
+  | Some _, None | None, Some _ -> false
+  | None, None -> match expected, actual with
+    | TFun a, TFun b -> callback_facts_match a.dom b.dom && callback_facts_match a.cod b.cod
+    | TApp a, TApp b -> callback_facts_match a.head b.head && callback_facts_match a.arg b.arg
+    | TTuple a, TTuple b when List.length a.elems = List.length b.elems ->
+      List.for_all2 callback_facts_match a.elems b.elems
+    | _ -> not (contains_fact_type expected || contains_fact_type actual)
+
+let inferred_callback_type funcs expr =
+  match !field_proof_type_ctx with
+  | Some (env, fields, ctors) -> infer_expr_type env funcs fields ctors expr
+  | None -> infer_expr_type [] funcs [] [] expr
+
+let rec dependent_callback_value funcs subject_env expr =
+  Option.fold ~none:false ~some:contains_dependent_callback
+    (Option.bind (callback_info funcs subject_env expr) callback_type)
+  || Option.fold ~none:false ~some:contains_dependent_callback (inferred_callback_type funcs expr)
+  || match expr with
+     | EIf { then_; else_; _ } -> dependent_callback_value funcs subject_env then_ || dependent_callback_value funcs subject_env else_
+     | ECase { arms; _ } -> List.exists (fun (a : case_arm) -> dependent_callback_value funcs subject_env a.body) arms
+     | ELet { body; _ } -> dependent_callback_value funcs subject_env body
+     | _ -> false
+
+let check_callback_arguments subject_env funcs head args =
+  let receiving = match function_name_of_expr head with
+    | Some name -> List.assoc_opt name funcs
+    | None -> callback_info funcs subject_env head in
+  let params = Option.fold ~none:[] ~some:(fun info -> info.fi_params) receiving in
+  let mapping = List.filter_map (fun ((param : binding), arg) ->
+    Option.map (fun subject -> param.name, subject) (subject_of_expr subject_env arg)) (zip_prefix params args) in
+  List.concat_map (fun (index, arg) ->
+    let actual = Option.bind (callback_info funcs subject_env arg) callback_type in
+    let expected = Option.map (fun (p : binding) -> subst_fact_subjects mapping p.type_expr)
+      (List.nth_opt params index) in
+    let relevant = Option.fold ~none:false ~some:contains_dependent_callback expected
+      || dependent_callback_value funcs subject_env arg in
+    if not relevant then [] else
+    let matches = match expected, actual with
+      | Some expected, Some actual -> callback_facts_match
+          (subst_fact_subjects subject_env expected) (subst_fact_subjects subject_env actual)
+      | _ -> false in
+    if matches then [] else
+    let loc = Parser.expr_loc arg in
+    let message = match expected, actual with
+      | Some expected, Some actual -> Printf.sprintf
+          "dependent Fact callback proof mismatch: expected `%s`, but callback requires `%s`; predicate owners and captured subjects must match"
+          (type_key expected) (type_key actual)
+      | _ -> "unsupported opaque dependent Fact callback: its predicate and captured subject contract cannot be verified here" in
+    [make_error loc ~hint:"pass a named function, a tracked partial application, or an explicit lambda whose Fact subjects match the receiving callback annotation" message]
+  ) (List.mapi (fun i arg -> i, arg) args)
 
 let rec check_expr_call_proofs
     (subject_env : subject_env)
@@ -411,9 +555,12 @@ let rec check_expr_call_proofs
          | _ -> [])
       | _ -> []
     in
-    let call_errors = match function_name_of_expr head with
-      | Some fn_name ->
-        (match List.assoc_opt fn_name funcs with
+    let call_errors = match (match function_name_of_expr head with
+      | Some name -> List.assoc_opt name funcs
+      | None -> callback_info funcs subject_env head) with
+      | Some info ->
+        let fn_name = info.fi_name in
+        (match Some info with
          | Some info when List.exists (fun (p : binding) ->
              p.proof_ann <> None || Option.is_some (proof_of_fact_type p.type_expr)
            ) info.fi_params ->
@@ -454,7 +601,8 @@ let rec check_expr_call_proofs
        check the actual arguments against those annotations. *)
     let inline_lambda_errors = match head with
       | ELambda { params; _ }
-        when List.exists (fun (p : binding) -> p.proof_ann <> None) params ->
+        when List.exists (fun (p : binding) -> p.proof_ann <> None ||
+          Option.is_some (proof_of_fact_type p.type_expr)) params ->
         let call_loc = match e with
           | EApp { fn = _; arg = _; loc = l } -> l
           | _ -> gen_loc
@@ -557,7 +705,27 @@ let rec check_expr_call_proofs
         end
       | _ -> []
     ) args in
+    let opaque_call_errors =
+      let intrinsic = match head with
+        | EVar { name = ("attachFact" | "detachFact" | "andLeft" | "andRight" | "introAnd" | "forgetFact"); _ } -> true
+        | EConstructor _ -> true
+        | _ -> false in
+      let fact_argument arg =
+        (* Attached evidence on an ordinary value is not a detached Fact
+           argument. Existing check/ForAll and authentication paths validate
+           that evidence separately; treating it as Fact misclassifies them
+           as opaque dependent callbacks. *)
+        Option.fold ~none:false ~some:(fun ty -> Option.is_some (proof_of_fact_type ty))
+          (inferred_callback_type funcs arg) in
+      let opaque = match callback_info funcs subject_env head with
+        | None -> not intrinsic && (dependent_callback_value funcs subject_env head || List.exists fact_argument args)
+        | Some info -> List.length args > List.length info.fi_params
+            && Option.fold ~none:false ~some:contains_dependent_callback (return_value_type info.fi_return) in
+      if opaque then [make_error (Parser.expr_loc head)
+        "unsupported opaque dependent Fact callback: a returned or stored callback cannot be invoked without its captured subject contract"]
+      else [] in
     inner @ attach_errors @ call_errors @ callback_errors @ inline_lambda_errors @ lambda_arg_errors
+    @ check_callback_arguments subject_env funcs head args @ opaque_call_errors
   | ELet { name = _binder; declared_proof; declared_type; value; body; loc } ->
     let name = _binder in
     (* R51_P01 / R51_P02 — proof laundering via `let`.
@@ -781,99 +949,9 @@ let rec check_expr_call_proofs
       | _ -> []
     in
     let value_errors = laundering_errors @ let_lambda_errors @ check_expr_call_proofs subject_env proof_env funcs value in
-    let subject_env' = match subject_of_expr subject_env value with
+    let subject_env' = match attached_subject_of_expr funcs subject_env value with
       | Some subject -> (name, subject) :: subject_env
-      | None ->
-        (* For check/establish function calls (RetAttached returns), the result IS the
-           first argument (same value with proof). Propagate its subject so cross-parameter
-           proof validation works correctly (e.g. requiresPositiveX raw checked). *)
-        (match value with
-         | EApp _ ->
-           let (head, args) = collect_call_head_and_args [] value in
-           (match function_name_of_expr head with
-            | Some "check" ->
-              (* `check fn arg` — fn is first arg, real arg is second *)
-              (match args with
-               | fn_expr :: rest_args ->
-                 (match function_name_of_expr fn_expr with
-                  | Some fn_name ->
-                    (match List.assoc_opt fn_name funcs with
-                     | Some info when (match info.fi_return with RetAttached _ -> true | _ -> false) ->
-                       (* Use the arg corresponding to the return binding's param name *)
-                       let binding_arg = match info.fi_return with
-                         | RetAttached { binding = b; _ } ->
-                           (* Find which param index has binding's name, use that arg *)
-                           let rec find_idx i = function
-                             | [] -> None
-                             | (p : binding) :: _ when p.name = b.name ->
-                               if i < List.length rest_args then Some (List.nth rest_args i) else None
-                             | _ :: rest -> find_idx (i+1) rest
-                           in
-                           (match find_idx 0 info.fi_params with
-                            | Some arg -> Some arg
-                            | None -> match rest_args with x :: _ -> Some x | [] -> None)
-                         | _ -> match rest_args with x :: _ -> Some x | [] -> None
-                       in
-                       (match binding_arg with
-                        | Some arg ->
-                          (match subject_of_expr subject_env arg with
-                           | Some s -> (name, s) :: subject_env
-                           | None -> subject_env)
-                        | None -> subject_env)
-                     | _ -> subject_env)
-                  | None ->
-                     (* Combined check: (checkA && checkB) real_arg.
-                        fn_expr is an EBinop BAnd, not a simple function name.
-                        The real argument is the first element of rest_args.
-                        Propagate its subject to the let-binder so that
-                        later calls like `needsBoth v` can resolve proofs. *)
-                     (match rest_args with
-                      | real_arg :: _ ->
-                        (match subject_of_expr subject_env real_arg with
-                         | Some s -> (name, s) :: subject_env
-                         | None -> subject_env)
-                      | [] -> subject_env))
-               | [] -> subject_env)
-            | Some fn_name ->
-              (match List.assoc_opt fn_name funcs with
-               | Some info when (match info.fi_return with RetAttached _ -> true | _ -> false) ->
-                 (* Use the arg that corresponds to the return binding's param name, NOT
-                    always the first arg.  For single-param checks both are the same, but
-                    for multi-param checks like isInRange(lo,hi,n)->n:T:::P, the relevant
-                    arg is the one bound to `n` (3rd), not `lo` (1st). *)
-                 let binding_arg = match info.fi_return with
-                   | RetAttached { binding = b; _ } ->
-                     let rec find_idx i = function
-                       | [] -> None
-                       | (p : binding) :: _ when p.name = b.name ->
-                         if i < List.length args then Some (List.nth args i) else None
-                       | _ :: rest -> find_idx (i+1) rest
-                     in
-                     (match find_idx 0 info.fi_params with
-                      | Some arg -> Some arg
-                      | None -> (match args with x :: _ -> Some x | [] -> None))
-                   | _ -> (match args with x :: _ -> Some x | [] -> None)
-                 in
-                 (match binding_arg with
-                  | Some arg ->
-                    (match subject_of_expr subject_env arg with
-                     | Some s -> (name, s) :: subject_env
-                     | None -> subject_env)
-                  | None -> subject_env)
-               | _ -> subject_env)
-            | None ->
-              (* Combined check: (checkA && checkB) arg — no "check" wrapper.
-                 Propagate the argument subject to the let-binder. *)
-              (match head with
-               | EBinop { op = BAnd; _ } ->
-                 (match args with
-                  | subj_arg :: _ ->
-                    (match subject_of_expr subject_env subj_arg with
-                     | Some s -> (name, s) :: subject_env
-                     | None -> subject_env)
-                  | [] -> subject_env)
-               | _ -> subject_env))
-         | _ -> subject_env)
+      | None -> subject_env
     in
     let new_proofs = proofs_of_expr name funcs subject_env proof_env value in
     (* Collect all atom names used as arguments in a proof expression. *)
@@ -945,44 +1023,16 @@ let rec check_expr_call_proofs
          | _ -> [])
     in
     let proof_env' = if new_proofs = [] then proof_env else (name, new_proofs) :: proof_env in
+    let inherited = List.remove_assoc name funcs in
+    let funcs = match callback_info funcs subject_env value with
+      | Some info -> (name, { info with fi_name = name }) :: inherited
+      | None -> inherited in
     value_errors @ declared_proof_errors @ check_expr_call_proofs subject_env' proof_env' funcs body
   | ELetProof { value_name; proof_name; proof_index; value; body; loc } ->
     let value_errors = check_expr_call_proofs subject_env proof_env funcs value in
-    let subject_env' = match subject_of_expr subject_env value with
+    let subject_env' = match attached_subject_of_expr funcs subject_env value with
       | Some subject -> (value_name, subject) :: subject_env
-      | None ->
-        (* For check-fn calls (RetAttached), propagate the subject of the
-           return-bound argument — same logic as the ELet handler. *)
-        (match value with
-         | EApp _ ->
-           let (head0, args0) = collect_call_head_and_args [] value in
-           let (_head, args) = normalize_explicit_check_call head0 args0 in
-           (match function_name_of_expr _head with
-            | Some fn_name ->
-              (match List.assoc_opt fn_name funcs with
-               | Some info when (match info.fi_return with RetAttached _ -> true | _ -> false) ->
-                 let binding_arg = match info.fi_return with
-                   | RetAttached { binding = b; _ } ->
-                     let rec find_idx i = function
-                       | [] -> None
-                       | (p : binding) :: _ when p.name = b.name ->
-                         if i < List.length args then Some (List.nth args i) else None
-                       | _ :: rest -> find_idx (i+1) rest
-                     in
-                     (match find_idx 0 info.fi_params with
-                      | Some arg -> Some arg
-                      | None -> (match args with x :: _ -> Some x | [] -> None))
-                   | _ -> (match args with x :: _ -> Some x | [] -> None)
-                 in
-                 (match binding_arg with
-                  | Some arg ->
-                    (match subject_of_expr subject_env arg with
-                     | Some s -> (value_name, s) :: subject_env
-                     | None -> subject_env)
-                  | None -> subject_env)
-               | _ -> subject_env)
-            | None -> subject_env)
-         | _ -> subject_env)
+      | None -> subject_env
     in
     (* Use proofs_of_expr (not carried_proofs_of_expr) so that function-call
        return proofs are included — carried_proofs_of_expr can't derive proofs
@@ -1054,80 +1104,9 @@ let rec check_expr_call_proofs
     value_errors @ no_proof_errors @ check_expr_call_proofs subject_env' proof_env' funcs body
   | ECase { scrut; arms; _ } ->
     let scrut_errors = check_expr_call_proofs subject_env proof_env funcs scrut in
-    (* For `case (establish_fn arg) of Something proof ->`, the `proof` binding
-       carries the inner proof from the establish function's Maybe (Fact P) return.
-       Also handles user ADT round-trips: `let m = Something p; case m of Something x ->`
-       where x should inherit p's proofs via subject aliasing. *)
-    (* Use a sentinel result name for non-variable scrutinees so that named-return
-       proofs like `Maybe (r: T ::: ForAll P r)` get a trackable subject.
-       For EVar scrutinees the result_name is irrelevant (carried_proofs_of_expr
-       uses the variable's own proof_env entry directly).  For call expressions the
-       sentinel will be substituted with the pattern-bound name below. *)
-    let scrut_result_name = match scrut with
-      | EVar { name; _ } -> name
-      | _ -> "_case_scrut"
-    in
-    let scrut_proofs = proofs_of_expr scrut_result_name funcs subject_env proof_env scrut in
     let arm_errors = List.concat_map (fun (arm : case_arm) ->
-      let proof_env', subject_env' = match arm.pattern with
-        | PCon { fields = [(_, PVar x)]; _ } ->
-          (* Any single-field constructor: propagate scrutinee's proofs and subject chain
-             to the bound variable x. This enables proof tracking through constructor
-             round-trips: `let m = Something p; case m of Something x -> requiresP x`.
-             For direct call scrutinees the sentinel result name is substituted with x
-             so that `ForAll P _case_scrut` becomes `ForAll P x`.
-             We fully resolve the subject chain (m→p→n) so that call-site substitution
-             maps the proof subject correctly (Positive n, not Positive p). *)
-          let scrut_proofs_for_x =
-            if scrut_result_name = "_case_scrut" then
-              List.map (Proof_kernel.pass_through (subst_proof [("_case_scrut", x)])) scrut_proofs
-            else scrut_proofs
-          in
-          let penv = if scrut_proofs_for_x <> [] then (x, scrut_proofs_for_x) :: proof_env else proof_env in
-          let senv =
-            (* Fully follow the subject_env chain to the final canonical subject.
-               e.g. m→p→n resolves to "n", which is what x's call-site subject must be.
-               When the chain doesn't extend (e.g. m has no subject alias), fall back to
-               the subject described by the carried proofs themselves — e.g. if scrut_proofs
-               contain `IsPositive raw`, use "raw" as x's subject so that `needPos x`
-               resolves to `IsPositive raw` (matching the carried proof). *)
-            let rec resolve_chain seen name =
-              if List.mem name seen then name  (* cycle guard *)
-              else match List.assoc_opt name subject_env with
-                | Some s when s <> name -> resolve_chain (name :: seen) s
-                | _ -> name
-            in
-            let chain_subj = match scrut with
-              | EVar { name; _ } -> resolve_chain [] name
-              | _ -> (match subject_of_expr subject_env scrut with Some s -> s | None -> x)
-            in
-            (* If the chain didn't extend beyond the scrutinee name, try to find
-               the ultimate subject from the proof's own argument list. *)
-            let final_subj =
-              if chain_subj = (match scrut with EVar { name; _ } -> name | _ -> "") then
-                (* Chain stopped at the scrutinee itself — try proof's last argument *)
-                let proof_subject = List.find_map (fun p ->
-                  match Proof_kernel.fact_of p with
-                  | PredApp { args = (_ :: _ as pargs); _ } ->
-                    let last = List.nth pargs (List.length pargs - 1) in
-                    (* Only use if it's a simple lowercase identifier (a subject name) *)
-                    if String.length last > 0 && last.[0] >= 'a' && last.[0] <= 'z'
-                       && not (String.contains last '.')
-                    then Some last
-                    else None
-                  | _ -> None
-                ) scrut_proofs_for_x in
-                (match proof_subject with
-                 | Some s -> resolve_chain [] s  (* follow the chain from the proof's subject *)
-                 | None -> chain_subj)
-              else chain_subj
-            in
-            if final_subj <> x then (x, final_subj) :: subject_env
-            else subject_env
-          in
-          (penv, senv)
-        | _ -> (proof_env, subject_env)
-      in
+      let proof_env', subject_env' = case_payload_proof_environments
+        funcs subject_env proof_env scrut arm.pattern in
       (* PFC-2 (a): propagate CONSTRUCTOR FIELD proofs to pattern binders,
          positionally.  `case t of Node l cur r -> …` gives `cur` the `value`
           field's `::: P` proof (subject renamed field_name -> binder).  Sound
@@ -1301,7 +1280,8 @@ let rec check_expr_call_proofs
       | Some proof ->
         (b.name, List.map Proof_kernel.assume_param (flatten_proof_conj proof)) :: acc
     ) proof_env params in
-    check_expr_call_proofs subject_env proof_env' funcs body
+    let proof_env' = build_initial_proof_env params @ proof_env' in
+    check_expr_call_proofs subject_env proof_env' (callback_params funcs params) body
   | ELit { lit = LInterp segments; _ } ->
     List.concat_map (function
       | ILiteral _ -> []
@@ -1415,24 +1395,12 @@ let rec check_test_stmt_call_proofs
   match stmt with
   | TsLetProof { value_name; proof_names; value; _ } ->
     let value_errors = check_expr_call_proofs subject_env proof_env funcs value in
-    (* For proof variable tracking, we need a meaningful result name even when
-       value_name is "_".  Use the first argument's subject so that entity proofs
-       in RetNamedPack get the correct subject (e.g. Positive n99 not Positive _). *)
-    let first_arg_subject =
-      let (_, args) = collect_call_head_and_args [] value in
-      match args with
-      | arg :: _ -> subject_of_expr subject_env arg
-      | [] -> None
-    in
+    let subject = attached_subject_of_expr funcs subject_env value in
     let effective_name = if value_name = "_" then
-      match first_arg_subject with Some s -> s | None -> value_name
-    else value_name in
-    let subject_env' = match subject_of_expr subject_env value with
+      Option.value subject ~default:value_name else value_name in
+    let subject_env' = match subject with
       | Some subject -> (effective_name, subject) :: subject_env
-      | None ->
-        (match first_arg_subject with
-         | Some s -> (effective_name, s) :: subject_env
-         | None -> subject_env)
+      | None -> subject_env
     in
     let new_proofs = proofs_of_expr effective_name funcs subject_env' proof_env value in
     let proof_env' = List.fold_left (fun env pname ->
@@ -1446,82 +1414,9 @@ let rec check_test_stmt_call_proofs
       check_expr_call_proofs subject_env proof_env funcs value
       @ inline_proof_arg_errors_for_call loc funcs value
     in
-    let subject_env' = match subject_of_expr subject_env value with
+    let subject_env' = match attached_subject_of_expr funcs subject_env value with
       | Some subject -> (name, subject) :: subject_env
-      | None ->
-        (* For check/establish/named-pack function calls, propagate subjects.
-           Mirrors the ELet case in check_expr_call_proofs. *)
-        (match value with
-         | EApp _ ->
-           let (head, args) = collect_call_head_and_args [] value in
-           (match function_name_of_expr head with
-            | Some "check" ->
-              (* `check fn arg` — fn is first arg, real arg is second *)
-              (match args with
-               | fn_expr :: rest_args ->
-                 (match function_name_of_expr fn_expr with
-                  | Some fn_name ->
-                    (match List.assoc_opt fn_name funcs with
-                     | Some info when (match info.fi_return with RetAttached _ -> true | _ -> false) ->
-                       let binding_arg = match info.fi_return with
-                         | RetAttached { binding = b; _ } ->
-                           let rec find_idx i = function
-                             | [] -> None
-                             | (p : binding) :: _ when p.name = b.name ->
-                               if i < List.length rest_args then Some (List.nth rest_args i) else None
-                             | _ :: rest -> find_idx (i+1) rest
-                           in
-                           (match find_idx 0 info.fi_params with
-                            | Some arg -> Some arg
-                            | None -> match rest_args with x :: _ -> Some x | [] -> None)
-                         | _ -> match rest_args with x :: _ -> Some x | [] -> None
-                       in
-                       (match binding_arg with
-                        | Some arg ->
-                          (match subject_of_expr subject_env arg with
-                           | Some s -> (name, s) :: subject_env
-                           | None -> subject_env)
-                        | None -> subject_env)
-                     | _ -> subject_env)
-                  | None ->
-                    (* Compound check: fn_expr is EBinop (&&); use first real arg as subject *)
-                    (match rest_args with
-                     | arg :: _ ->
-                       (match subject_of_expr subject_env arg with
-                        | Some s -> (name, s) :: subject_env
-                        | None -> subject_env)
-                     | [] -> subject_env))
-               | [] -> subject_env)
-            | Some fn_name ->
-              (match List.assoc_opt fn_name funcs with
-               | Some info when (match info.fi_return with RetAttached _ | RetNamedPack _ -> true | _ -> false) ->
-                 (* For multi-parameter checks like checkInBounds(lo,hi,n)->n:T:::P,
-                    the subject of the result is the subject of the argument that
-                    corresponds to the return binding's param name (here `n`, index 2),
-                    NOT always the first argument.  Mirror the find_idx logic used in
-                    the ELet case of check_expr_call_proofs. *)
-                 let binding_arg = match info.fi_return with
-                   | RetAttached { binding = b; _ } ->
-                     let rec find_idx i = function
-                       | [] -> None
-                       | (p : binding) :: _ when p.name = b.name ->
-                         if i < List.length args then Some (List.nth args i) else None
-                       | _ :: rest -> find_idx (i+1) rest
-                     in
-                     (match find_idx 0 info.fi_params with
-                      | Some arg -> Some arg
-                      | None -> (match args with x :: _ -> Some x | [] -> None))
-                   | _ -> (match args with x :: _ -> Some x | [] -> None)
-                 in
-                 (match binding_arg with
-                  | Some arg ->
-                    (match subject_of_expr subject_env arg with
-                     | Some s -> (name, s) :: subject_env
-                     | None -> subject_env)
-                  | None -> subject_env)
-               | _ -> subject_env)
-            | None -> subject_env)
-         | _ -> subject_env)
+      | None -> subject_env
     in
     let new_proofs = proofs_of_expr name funcs subject_env proof_env value in
     let rec proof_arg_names = function
@@ -1612,32 +1507,14 @@ let rec check_test_stmt_call_proofs
     (cond_errors @ then_errors @ else_errors, subject_env, proof_env)
   | TsCase { scrut; arms; _ } ->
     let scrut_errors = check_expr_call_proofs subject_env proof_env funcs scrut in
-    let scrut_proofs = proofs_of_expr "_" funcs subject_env proof_env scrut in
     let arm_errors = List.concat_map (fun (arm : Ast.ts_case_arm) ->
-      (* Propagate scrutinee proofs into the arm binding, same as ECase in
-         check_expr_call_proofs: `case m of Something v ->` gives v the proof of m. *)
-      let proof_env', subject_env' =
-        let penv, senv = match arm.ts_pattern with
-          | PCon { fields = [(_, PVar x)]; _ } ->
-            let penv = if scrut_proofs <> [] then (x, scrut_proofs) :: proof_env else proof_env in
-            let senv =
-              let rec resolve_chain seen name =
-                if List.mem name seen then name
-                else match List.assoc_opt name subject_env with
-                  | Some s when s <> name -> resolve_chain (name :: seen) s
-                  | _ -> name
-              in
-              let final_subj = match scrut with
-                | EVar { name; _ } -> resolve_chain [] name
-                | _ -> (match subject_of_expr subject_env scrut with Some s -> s | None -> x)
-              in
-              if final_subj <> x then (x, final_subj) :: subject_env else subject_env
-            in
-            (penv, senv)
-          | _ -> (proof_env, subject_env)
-        in
-        (penv, senv)
-      in
+      let parent_type_ctx = !field_proof_type_ctx in
+      Fun.protect ~finally:(fun () -> field_proof_type_ctx := parent_type_ctx) (fun () ->
+      Option.iter (fun (env, fields, ctors) ->
+        let bindings = pattern_bindings (infer_expr_type env funcs fields ctors scrut) ctors arm.ts_pattern in
+        field_proof_type_ctx := Some (bindings @ env, fields, ctors)) parent_type_ctx;
+      let proof_env', subject_env' = case_payload_proof_environments
+        funcs subject_env proof_env scrut arm.ts_pattern in
       let guard_errors = match arm.ts_guard with
         | Some g -> check_expr_call_proofs subject_env' proof_env' funcs g
         | None -> []
@@ -1645,7 +1522,7 @@ let rec check_test_stmt_call_proofs
       let body_errors =
         check_test_stmts_call_proofs subject_env' proof_env' funcs arm.ts_body
       in
-      guard_errors @ body_errors
+      guard_errors @ body_errors)
     ) arms in
     (scrut_errors @ arm_errors, subject_env, proof_env)
   | TsExpr { e; _ } ->
@@ -1659,13 +1536,44 @@ and check_test_stmts_call_proofs
     (funcs : (string * func_info) list)
     (stmts : test_stmt list)
     : validation_error list =
-  let (errors, _, _) =
-    List.fold_left (fun (acc_errors, se, pe) stmt ->
-      let (errs, se', pe') = check_test_stmt_call_proofs se pe funcs stmt in
-      (acc_errors @ errs, se', pe')
-    ) ([], subject_env, proof_env) stmts
+  let parent_type_ctx = !field_proof_type_ctx in
+  Fun.protect ~finally:(fun () -> field_proof_type_ctx := parent_type_ctx) (fun () ->
+  let (errors, _, _, _) =
+    List.fold_left (fun (acc_errors, se, pe, scoped_funcs) stmt ->
+      let (errs, se', pe') = check_test_stmt_call_proofs se pe scoped_funcs stmt in
+      let next_funcs = match stmt with
+        | TsLet { name; value; _ } ->
+          let inherited = List.remove_assoc name scoped_funcs in
+          (match callback_info scoped_funcs se value with
+           | Some info -> (name, { info with fi_name = name }) :: inherited
+           | None -> inherited)
+        | _ -> scoped_funcs in
+      (* Keep test-local types independently from attached proof evidence.
+         Otherwise a separately bound Fact (or opaque callback) becomes
+         untyped to this pass, while ordinary proven values look identical. *)
+      Option.iter (fun (env, fields, ctors) ->
+        let names, bindings = match stmt with
+          | TsLet { name; declared_type; value; _ } ->
+            let ty = match declared_type with Some _ -> declared_type
+              | None -> infer_expr_type env scoped_funcs fields ctors value in
+            [name], Option.fold ~none:[] ~some:(fun ty -> [name, ty]) ty
+          | TsLetProof { value_name; proof_names; value; loc } ->
+            let value_binding = Option.fold ~none:[] ~some:(fun ty -> [value_name, ty])
+                (infer_expr_type env scoped_funcs fields ctors value) in
+            let proof_bindings = List.filter_map (fun name ->
+              let proofs = Option.value ~default:[] (List.assoc_opt name pe')
+                |> List.map Proof_kernel.fact_of in
+              Option.map (fun proof -> name, mk_app_type (mk_name_type "Fact")
+                  (Parser.proof_expr_to_type_expr proof)) (combine_proof_list loc proofs)) proof_names in
+            value_name :: proof_names, value_binding @ proof_bindings
+          | _ -> [], [] in
+        field_proof_type_ctx := Some
+          (bindings @ List.filter (fun (name, _) -> not (List.mem name names)) env, fields, ctors)
+      ) !field_proof_type_ctx;
+      (acc_errors @ errs, se', pe', next_funcs)
+    ) ([], subject_env, proof_env, funcs) stmts
   in
-  errors
+  errors)
 
 let check_call_site_proofs ?facts ?(extra_funcs=[]) (decls : top_decl list) : validation_error list =
   let mf = facts_or_compute ?facts ~extra_funcs decls in
@@ -1675,6 +1583,14 @@ let check_call_site_proofs ?facts ?(extra_funcs=[]) (decls : top_decl list) : va
   let errors = ref [] in
   List.iter (function
     | DFunc fd ->
+      if Option.fold ~none:false ~some:contains_dependent_callback (return_value_type fd.return_spec) then
+        errors := make_error fd.loc "unsupported opaque dependent Fact callback return: return the value or proof directly so its captured subjects remain checkable" :: !errors;
+      List.iter (fun (p : binding) ->
+        match p.type_expr with
+        | TFun _ -> ()
+        | ty when contains_dependent_callback ty ->
+          errors := make_error p.loc "unsupported opaque dependent Fact callback parameter: callbacks stored inside containers lose their captured subject contract" :: !errors
+        | _ -> ()) fd.params;
       let subject_env = build_initial_subject_env fd.params in
       let proof_env = build_initial_proof_env fd.params in
       (* #6/#5 (2026-07-04): set the per-fn type context (params + let-chain +
@@ -1683,17 +1599,35 @@ let check_call_site_proofs ?facts ?(extra_funcs=[]) (decls : top_decl list) : va
       field_proof_type_ctx :=
         Some (fn_type_env funcs mf.mf_fields_map mf.mf_ctors fd,
               mf.mf_fields_map, mf.mf_ctors);
-      errors := check_expr_call_proofs subject_env proof_env funcs fd.body @ !errors
+      errors := check_expr_call_proofs subject_env proof_env (callback_params funcs fd.params) fd.body @ !errors
     | DTest tf ->
+      field_proof_type_ctx := Some ([], mf.mf_fields_map, mf.mf_ctors);
       errors := check_test_stmts_call_proofs [] [] funcs tf.stmts @ !errors
     | DApiTest atf ->
+      field_proof_type_ctx := Some ([], mf.mf_fields_map, mf.mf_ctors);
       let seed_errors = List.concat_map (check_expr_call_proofs [] [] funcs) atf.seed_stmts in
       let stmt_errors = check_test_stmts_call_proofs [] [] funcs atf.stmts in
       errors := seed_errors @ stmt_errors @ !errors
     | DLoadTest ltf ->
+      field_proof_type_ctx := Some ([], mf.mf_fields_map, mf.mf_ctors);
       let seed_errors = List.concat_map (check_expr_call_proofs [] [] funcs) ltf.seed_stmts in
       let req_errors = check_test_stmts_call_proofs [] [] funcs ltf.request_stmts in
       errors := seed_errors @ req_errors @ !errors
+    | DType (TypeNewtype t) when contains_fact_type t.base_type ->
+      let message = if contains_dependent_callback t.base_type then
+          "unsupported opaque dependent Fact callback type alias: hiding this callback would erase its captured subject contract"
+        else "unsupported detached Fact storage in a newtype: its subject bindings cannot be retained through wrapping and projection" in
+      errors := make_error t.loc ~hint:"keep Fact evidence in function parameters and returns; use attached field proofs (`value: T ::: P value`) to carry a proven value in a record" message :: !errors
+    | (DRecord _ | DEntity _ | DType _) as decl ->
+      let fields = match decl with
+        | DRecord r -> r.fields | DEntity e -> e.fields
+        | DType (TypeAdt t) -> List.concat_map (fun (v : adt_variant) -> v.fields) t.variants
+        | DType (TypeNewtype _) | _ -> [] in
+      List.iter (fun (f : field_def) -> if contains_fact_type f.type_expr then
+        let message = if contains_dependent_callback f.type_expr then
+            "unsupported opaque dependent Fact callback field: storing this callback would erase its captured subject contract"
+          else "unsupported detached Fact storage in a field: construction, updates and projection cannot retain its subject bindings" in
+        errors := make_error f.loc ~hint:"attach the proof to its value field (`value: T ::: P value`) instead of storing a separate Fact field" message :: !errors) fields
     | _ -> ()
   ) decls;
   field_proof_registry := [];
@@ -1972,7 +1906,7 @@ let check_forall_consistency ?facts ?(extra_funcs=[]) (decls : top_decl list) : 
               info.fi_params
             |> List.sort_uniq String.compare
           in
-          let missing = List.filter (fun p -> not (List.mem p !available)) pre in
+          let missing = List.filter (fun p -> not (predicate_mem p !available)) pre in
           if missing <> [] then
             errs := make_error loc
               ~hint:(Printf.sprintf
@@ -2125,7 +2059,7 @@ let check_forall_consistency ?facts ?(extra_funcs=[]) (decls : top_decl list) : 
               let required_preds = proof_predicates wanted in
               (* Available = what the check fn(s) produce + what the input already has. *)
               let available_preds = List.sort_uniq String.compare (produced_preds @ input_preds) in
-              let missing = List.filter (fun pred -> not (List.mem pred available_preds)) required_preds in
+              let missing = List.filter (fun pred -> not (predicate_mem pred available_preds)) required_preds in
               if missing <> [] then begin
                 let produced = String.concat ", " produced_preds in
                 let required = String.concat ", " required_preds in
@@ -2201,7 +2135,7 @@ let check_forall_consistency ?facts ?(extra_funcs=[]) (decls : top_decl list) : 
                | Some info ->
                  let call_preds = forall_preds_of_return_spec info.fi_return in
                  if call_preds <> [] then begin
-                   let missing = List.filter (fun p -> not (List.mem p call_preds)) required_preds in
+                   let missing = List.filter (fun p -> not (predicate_mem p call_preds)) required_preds in
                    if missing <> [] then
                      let loc = (match e with EApp { loc; _ } -> loc | _ -> gen_loc) in
                      errors := make_error loc
@@ -2297,7 +2231,7 @@ let check_forall_consistency ?facts ?(extra_funcs=[]) (decls : top_decl list) : 
          in
          let required_preds = proof_predicates wanted in
          if var_preds <> [] then begin
-           let missing = List.filter (fun pred -> not (List.mem pred var_preds)) required_preds in
+           let missing = List.filter (fun pred -> not (predicate_mem pred var_preds)) required_preds in
            if missing <> [] then
              errors := make_error loc
                ~hint:(Printf.sprintf "add a `List.filterCheck` call to prove [%s] on each element before returning" (String.concat ", " missing))
@@ -2397,20 +2331,11 @@ let check_forall_consistency ?facts ?(extra_funcs=[]) (decls : top_decl list) : 
      ForAll obligation — they parse to RetMaybeAttached, not RetMaybeForAll. *)
   let forall_inner_proof_of_ann (p : proof_expr) : proof_expr option =
     match p with
-    | PredApp { pred = ("ForAll" | "ForAllValues" | "ForAllKeys"); args = inner_pred :: _; loc } ->
-      let names =
-        String.split_on_char ' '
-          (String.concat "" (List.map (fun c ->
-             match c with '(' | ')' -> "" | c -> String.make 1 c)
-             (List.of_seq (String.to_seq inner_pred))))
-        |> List.filter (fun s -> s <> "" && s <> "&&")
-      in
-      (match names with
-       | [] -> None
-       | first :: rest ->
-         Some (List.fold_left
-                 (fun acc n -> PredAnd { left = acc; right = PredApp { pred = n; args = []; loc }; loc })
-                 (PredApp { pred = first; args = []; loc }) rest))
+    | PredApp { pred = ("ForAll" | "ForAllValues" | "ForAllKeys"); args = inner_pred :: _; _ } ->
+      (* The parser may render qualified tokens as `Owner . Predicate`.
+         Reparse the proof grammar, rather than treating punctuation or literal
+         arguments as additional predicate names. *)
+      parse_nested_predicate inner_pred
     | _ -> None
   in
   List.iter (function
@@ -2434,13 +2359,8 @@ let check_forall_consistency ?facts ?(extra_funcs=[]) (decls : top_decl list) : 
       (* Seed forall_env with predicates already on ForAll-annotated parameters. *)
       let init_env = List.filter_map (fun (b : binding) ->
         match b.proof_ann with
-        | Some (PredApp { pred = "ForAll" | "ForAllValues" | "ForAllKeys"; args = [inner_pred; _]; _ }) ->
-          (* Inner pred is a string like "IsActive" or "(P1 && P2)" — extract names *)
-          let preds = List.filter (fun s -> s <> "") (String.split_on_char ' '
-            (String.concat "" (List.map (fun c ->
-              match c with '(' | ')' -> "" | c -> String.make 1 c)
-              (List.of_seq (String.to_seq inner_pred))))) in
-          let cleaned = List.filter (fun s -> s <> "&&" && s <> "") preds in
+        | Some proof ->
+          let cleaned = Option.fold ~none:[] ~some:proof_predicates (forall_inner_proof_of_ann proof) in
           if cleaned = [] then None else Some (b.name, cleaned)
         | _ -> None
       ) fd.params in

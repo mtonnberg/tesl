@@ -2,7 +2,7 @@
   "name": "vscode-tesl",
   "displayName": "Tesl Language",
   "description": "Syntax highlighting, live diagnostics, go-to-definition, hover types, and completions for the Tesl (.tesl) language",
-  "version": "0.7.12",
+  "version": "0.7.13",
   "publisher": "Tesl",
   "namespace": "Tesl",
   "//extensionKind": "Run only on the workspace (remote/WSL) side. Without this, in a Remote-WSL session VSCode can run the extension on BOTH the local UI host and the remote workspace, starting two language-server clients that each publish diagnostics \u2014 so every error/warning appears twice.",
@@ -335,7 +335,7 @@
     }
   },
   "scripts": {
-    "test": "node --test test-output-parser.test.js toolchain.test.js extension.test.js",
+    "test": "node --test test-output-parser.test.js toolchain.test.js extension.test.js grammar.test.js",
     "bundle": "esbuild extension.js --bundle --platform=node --format=cjs --target=node16 --minify --external:vscode --outfile=dist/extension.js",
     "package": "npm run bundle && npx @vscode/vsce package",
     "publish:vsce": "npx @vscode/vsce publish",
@@ -344,6 +344,8 @@
   "devDependencies": {
     "@types/vscode": "^1.80.0",
     "esbuild": "^0.28.2",
-    "vscode-languageclient": "^9.0.1"
+    "vscode-languageclient": "^9.0.1",
+    "vscode-oniguruma": "^2.0.1",
+    "vscode-textmate": "^9.3.2"
   }
 }

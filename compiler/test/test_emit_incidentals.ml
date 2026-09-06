@@ -1163,12 +1163,12 @@ let qualified_partial_application_eta_expands () =
      | [_lib_p; main_p] ->
        check_ok "qualified partial application" main_p;
        (match Compile.compile_go_file main_p with
-        | Compile.GoSuccess _ -> failf "qualified partial application needs a Go artifact assertion"
+        | Compile.GoSuccess artifacts ->
+          run_go_tests ~expect_success:true "qualified partial application" artifacts
         | Compile.GoFailure diagnostics ->
           let out = String.concat "\n"
               (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics) in
-          assert_contains ~what:"documented qualified-call Go gap"
-            "cannot resolve function `PartialLib.addN`" out)
+          failf "qualified partial application must compile: %s" out)
      | _ -> assert false)
 
 (* ITEM 12 (Money/PosixMillis newtype field decode): primitive codecs decode

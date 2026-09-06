@@ -89,6 +89,10 @@ type ctx = {
   errors   : type_error list ref;
   local_bindings : local_binding_info list ref;
   expr_types : expr_type_info list ref;
+  typed_nodes : (expr * ty * subst ref) list ref option;
+  (** Optional identity-based capture for canonical typed IR. Retain the actual
+      function/test substitution cell: each has its own inference context, and
+      source locations are not unique expression identities. *)
   field_accesses    : field_access_info list ref;
   bare_record_hints : (Location.loc * string) list ref;
   entity_binder_at : (Location.loc * string) list ref;
@@ -96,6 +100,7 @@ type ctx = {
   subject_chain_env : (string * string list) list;
   proof_returns : (string * function_proof_return) list;
   function_kinds : (string * func_kind) list;
+  queue_types : string list;
   subst    : subst ref;
   filename : string;
   in_establish : bool;  (** true when type-checking an establish function body *)
@@ -164,6 +169,7 @@ let make_ctx ?(source_lines = [||]) ~filename ~env () = {
   errors   = ref [];
   local_bindings = ref [];
   expr_types = ref [];
+  typed_nodes = None;
   field_accesses    = ref [];
   bare_record_hints = ref [];
   entity_binder_at = ref [];
@@ -171,6 +177,7 @@ let make_ctx ?(source_lines = [||]) ~filename ~env () = {
   subject_chain_env = [];
   proof_returns = [];
   function_kinds = [];
+  queue_types = [];
   subst    = ref empty_subst;
   filename;
   in_establish = false;
@@ -186,6 +193,20 @@ let make_ctx ?(source_lines = [||]) ~filename ~env () = {
   import_suggest = (fun _ -> None);
   source_lines;
 }
+
+let is_intrinsic_fact_combinator ctx = function
+  | EVar { name = ("attachFact" | "andLeft" | "andRight" | "introAnd") as name; _ } ->
+    (match env_lookup name ctx.env, env_lookup name (make_stdlib_env ()) with
+     | Some actual, Some intrinsic -> actual == intrinsic
+     | _ -> false)
+  | _ -> false
+
+let is_intrinsic_dead_jobs ctx = function
+  | EVar { name = "deadJobs"; _ } ->
+    (match env_lookup "deadJobs" ctx.env, env_lookup "deadJobs" (make_stdlib_env ()) with
+     | Some actual, Some intrinsic -> actual == intrinsic
+     | _ -> false)
+  | _ -> false
 
 (** Every TYPE name the module's own declarations introduce.
 
@@ -553,6 +574,50 @@ let activate_units_aliases_for (m : module_form) : string list =
     List.exists (fun (i : import_decl) -> i.module_name = "Tesl.Money") m.imports;
   prev
 
+(* A detached proof's subjects are checked by the proof kernel. Its qualified
+   predicate identity must ALSO survive HM arrows, partial application and
+   aliases; erasing it here would let a callback accept another owner's Fact. *)
+let qualified_fact_ty proof =
+  let proof = Validation_common.map_predicate_proof Validation_common.predicate_identity proof in
+  let rec predicates = function
+    | PredApp { pred = ("ForAll" | "ForAllValues" | "ForAllKeys") as pred;
+        args = inner :: _; _ } -> [pred ^ "(" ^ inner ^ ")"]
+    | PredApp { pred; _ } -> [pred]
+    | PredAnd { left; right; _ } -> predicates left @ predicates right in
+  (* Builtin predicates retain their existing proof-kernel checks. HM's added
+     key records qualified identities only, consistently for both an annotated
+     conjunction and a conjunction assembled from separate Fact values. *)
+  match predicates proof |> List.filter (fun name -> String.contains name '.')
+        |> List.sort_uniq String.compare with
+  | [] -> t_fact
+  | names -> TApp (t_fact, TCon (String.concat " && " names))
+
+let fact_ty_of_argument arg =
+  match Ast.type_expr_to_proof_expr arg with
+  | Some proof -> qualified_fact_ty proof
+  | None -> t_fact
+
+(* HM retains predicate owners in a canonical conjunction key. Split only at
+   the outer level: a quantified predicate can itself contain a conjunction. *)
+let fact_conjunct_names = function
+  | TApp (TCon "Fact", TCon key) ->
+    let rec split start pos depth acc =
+      if pos = String.length key then
+        List.rev (String.sub key start (pos - start) :: acc)
+      else if depth = 0 && pos + 4 <= String.length key
+          && String.sub key pos 4 = " && " then
+        split (pos + 4) (pos + 4) depth (String.sub key start (pos - start) :: acc)
+      else
+        let depth = match key.[pos] with '(' -> depth + 1 | ')' -> depth - 1 | _ -> depth in
+        split start (pos + 1) depth acc
+    in split 0 0 0 []
+  | _ -> []
+
+let conjoin_fact_tys left right =
+  match List.sort_uniq String.compare (fact_conjunct_names left @ fact_conjunct_names right) with
+  | [] -> t_fact
+  | names -> TApp (t_fact, TCon (String.concat " && " names))
+
 (** Tesl type expression → OCaml ty *)
 let rec ty_of_type_expr (te : type_expr) : ty =
   match te with
@@ -569,7 +634,7 @@ let rec ty_of_type_expr (te : type_expr) : ty =
         | Some q -> q
         | None -> TCon other))
   | TVar { name; _ }     -> TCon name   (* treat named tyvars as abstract *)
-  | TApp { head = TName { name = "Fact"; _ }; _ } -> t_fact
+  | TApp { head = TName { name = "Fact"; _ }; arg; _ } -> fact_ty_of_argument arg
   | TApp { head; arg; _ }-> TApp (ty_of_type_expr head, ty_of_type_expr arg)
   | TFun { dom; cod; _ } -> TFun (ty_of_type_expr dom, ty_of_type_expr cod)
   | TTuple { elems; loc = _ } ->
@@ -604,7 +669,7 @@ let ty_of_type_expr_with_params (params_map : (string * int) list) (te : type_ex
       (match List.assoc_opt name params_map with
        | Some id -> TVar id
        | None    -> TCon name)
-    | TApp { head = TName { name = "Fact"; _ }; _ } -> t_fact
+    | TApp { head = TName { name = "Fact"; _ }; arg; _ } -> fact_ty_of_argument arg
     | TApp { head; arg; _ } -> TApp (go head, go arg)
     | TFun { dom; cod; _ } -> TFun (go dom, go cod)
     | TTuple { elems; _ }  ->
@@ -892,34 +957,50 @@ let resolve_local_import_path = Validation_common.resolve_local_import_path
    can observe edits, deleted/recreated imports, or same-size atomic saves.
    Reading before lookup also prevents caching a missing file forever. Cache
    retention is bounded; larger modules remain valid but are parsed uncached. *)
-let import_parse_cache : (string, string * module_form Parser.result) Hashtbl.t =
-  Hashtbl.create 32
+let import_parse_cache = Validation_common.import_parse_cache
+let clear_import_parse_cache = Validation_common.clear_import_parse_cache
+let parse_local_import_module = Validation_common.parse_local_import_module
 
-let import_cache_bytes = ref 0
-let clear_import_parse_cache () =
-  Hashtbl.reset import_parse_cache;
-  import_cache_bytes := 0
+let module_exports_name (m : module_form) name =
+  List.exists (function ExportName n | ExportAdt n -> n = name) m.exports
 
-(** Read + parse a locally-imported module at [path], memoized by content.
-    Returns [None] if the file does not exist (so callers can keep their
-    existing "skip missing import" behavior), otherwise [Some result] where
-    [result] is the parse outcome ([Ok]/[Err]) exactly as
-    [Parser.parse_module] would return it for a fresh read. *)
-let parse_local_import_module (path : string) : module_form Parser.result option =
-  if not (Sys.file_exists path) then (Hashtbl.remove import_parse_cache path; None)
-  else
-    let source = In_channel.with_open_bin path In_channel.input_all in
-    match Hashtbl.find_opt import_parse_cache path with
-    | Some (previous, parsed) when previous = source -> Some parsed
-    | _ ->
-      let parsed = Parser.parse_module path source in
-      let size = String.length source in
-      if size <= 1024 * 1024 then (
-        if Hashtbl.length import_parse_cache >= 256
-           || !import_cache_bytes + size > 8 * 1024 * 1024 then clear_import_parse_cache ();
-        Hashtbl.replace import_parse_cache path (source, parsed);
-        import_cache_bytes := !import_cache_bytes + size);
-      Some parsed
+let qualified_type_in_scope (m : module_form) name =
+  match String.rindex_opt name '.' with
+  | None -> false
+  | Some dot ->
+    let qualifier = String.sub name 0 dot in
+    let local_name = String.sub name (dot + 1) (String.length name - dot - 1) in
+    List.exists (fun (imp : import_decl) ->
+      imp.module_name = qualifier &&
+      match parse_local_import_module (resolve_local_import_path m.source_file qualifier) with
+      | None | Some (Err _) -> false
+      | Some (Ok imported) ->
+        module_exports_name imported local_name && (List.exists (function
+          | DType (TypeAdt { name; _ }) | DType (TypeNewtype { name; _ })
+          | DRecord { name; _ } | DEntity { name; _ } | DFact { name; _ } -> name = local_name
+          | _ -> false) imported.decls
+          || List.mem_assoc local_name (Validation_common.provided_predicate_owners imported))) m.imports
+
+(* Qualified-only imports must retain each version's nominal identity, including
+   nested field and constructor types. Use the same substitution for signatures,
+   constructors and records so none can accidentally reconnect two versions. *)
+let qualify_imported_ty (imp : import_decl) (imported : module_form) =
+  let local_types = List.filter_map (function
+    | DType (TypeAdt { name; _ }) | DType (TypeNewtype { name; _ })
+    | DRecord { name; _ } | DEntity { name; _ } -> Some name
+    | _ -> None) imported.decls in
+  let explicitly_imported = match imp.names with
+    | ImportAll -> []
+    | ImportExposing names -> List.map (fun s ->
+        if Filename.check_suffix s "(..)" then String.sub s 0 (String.length s - 4)
+        else s) names in
+  let rec qualify = function
+    | TCon n when List.mem n local_types && not (List.mem n explicitly_imported) ->
+      TCon (imp.module_name ^ "." ^ n)
+    | TApp (f, a) -> TApp (qualify f, qualify a)
+    | TFun (a, b) -> TFun (qualify a, qualify b)
+    | other -> other
+  in qualify
 
 let load_imported_func_kinds (m : module_form) : (string * func_kind) list =
   let is_tesl_module name =
@@ -964,7 +1045,7 @@ let load_imported_func_kinds (m : module_form) : (string * func_kind) list =
             | ImportExposing names -> Some (List.map strip_dotdot names)
           in
           List.concat_map (function
-            | DFunc fd ->
+            | DFunc fd when module_exports_name imported fd.name ->
               let qualified_name = qualifier ^ "." ^ fd.name in
               let requested_here names =
                 List.mem fd.name names || List.mem qualified_name names
@@ -1010,7 +1091,8 @@ let load_imported_func_decls (m : module_form) : (string * func_decl) list =
          | ImportExposing names ->
            List.filter_map (function
              | DFunc (fd : func_decl)
-               when fd.kind <> MainKind && List.mem fd.name names ->
+               when fd.kind <> MainKind && List.mem fd.name names
+                    && module_exports_name imported fd.name ->
                Some (fd.name, fd)
              | _ -> None
            ) imported.decls)
@@ -1019,21 +1101,6 @@ let load_imported_func_decls (m : module_form) : (string * func_decl) list =
 let load_imported_func_sigs (m : module_form) : (string * scheme) list =
   let is_tesl_module name =
     String.length name >= 5 && String.sub name 0 5 = "Tesl."
-  in
-  (** Qualify local type names that are NOT explicitly imported with the module name.
-      E.g. `Widget` from B becomes `B.Widget` only when Widget is NOT directly imported.
-      This enables `fn f(w: B.Widget)` to match `makeB`'s return type. *)
-  let qualify_ty mod_name local_type_names explicitly_imported =
-    let should_qualify n =
-      List.mem n local_type_names && not (List.mem n explicitly_imported)
-    in
-    let rec go = function
-      | TCon n when should_qualify n -> TCon (mod_name ^ "." ^ n)
-      | TApp (f, a) -> TApp (go f, go a)
-      | TFun (a, b) -> TFun (go a, go b)
-      | other -> other
-    in
-    go
   in
   (* Load the lifted-stdlib TYPE signatures for a module whose types now come
      from a bundled `.tesl` source instead of [stdlib_env] (the "type source of
@@ -1069,7 +1136,7 @@ let load_imported_func_sigs (m : module_form) : (string * scheme) list =
           | ImportExposing names -> Some (List.map strip_dotdot names)
         in
         List.concat_map (function
-          | DFunc fd ->
+          | DFunc fd when module_exports_name imported fd.name ->
             let dotted = short_mod ^ "." ^ fd.name in   (* e.g. "List.map" *)
             let sch = decl_scheme fd in
             let include_it = match requested with
@@ -1091,12 +1158,6 @@ let load_imported_func_sigs (m : module_form) : (string * scheme) list =
       | None | Some (Err _) -> []
       | Some (Ok imported) ->
         with_module_alias_activation imported @@ fun () ->
-          (* Collect locally-defined type names from the imported module *)
-          let local_types = List.concat_map (function
-            | DType (TypeAdt { name; _ }) | DType (TypeNewtype { name; _ })
-             | DRecord { name; _ } -> [name]
-            | _ -> []
-          ) imported.decls in
           let strip_dotdot s =
             let n = String.length s in
             if n > 4 && String.sub s (n-4) 4 = "(..)" then String.sub s 0 (n-4) else s
@@ -1105,14 +1166,14 @@ let load_imported_func_sigs (m : module_form) : (string * scheme) list =
             | ImportAll -> None
             | ImportExposing names -> Some (List.map strip_dotdot names)
           in
-          let explicitly_imported = match requested with
-            | None -> []
-            | Some names -> names
-          in
-          let qualify = qualify_ty imp.module_name local_types explicitly_imported in
+          let qualify = qualify_imported_ty imp imported in
+          let transport = Validation_common.imported_predicate_transport m imp imported in
           List.concat_map (function
-            | DFunc fd ->
+            | DFunc fd when module_exports_name imported fd.name ->
               let qualified_name = imp.module_name ^ "." ^ fd.name in
+              let fd = { fd with
+                params = List.map (Validation_common.map_predicate_binding transport) fd.params;
+                return_spec = Validation_common.map_predicate_return transport fd.return_spec } in
               let sch = decl_scheme fd in
               (* Qualify the scheme's type so local types appear as Module.Type *)
               let q_sch = { sch with mono = qualify sch.mono } in
@@ -1126,7 +1187,7 @@ let load_imported_func_sigs (m : module_form) : (string * scheme) list =
               in
               (if include_plain then [ (fd.name, q_sch) ] else [])
               @ (if include_qualified then [ (qualified_name, q_sch) ] else [])
-            | DConst c ->
+            | DConst c when module_exports_name imported c.name && not (Migration_form.is_declaration imported c) ->
               (* #34: bind exported constants across the module boundary.  The
                  emitted Racket already `provide`s them; only the checker's
                  import env was missing the binding, so `import Lib exposing
@@ -1134,7 +1195,7 @@ let load_imported_func_sigs (m : module_form) : (string * scheme) list =
               (match shallow_const_ty c.value with
                | None -> []
                | Some ty ->
-                 let sch = mono ty in
+                 let sch = mono (qualify ty) in
                  let qualified_name = imp.module_name ^ "." ^ c.name in
                  let include_plain = match requested with
                    | Some names -> List.mem c.name names
@@ -1221,11 +1282,18 @@ let load_imported_ctors (m : module_form) : (string * (string * scheme)) list =
       | None | Some (Err _) -> []
       | Some (Ok imported) ->
         with_module_alias_activation imported @@ fun () ->
+          let transport = Validation_common.imported_predicate_transport m imp imported in
+          let typed_imported = { imported with decls = List.map (function
+            | DType (TypeAdt t) -> DType (TypeAdt { t with variants = List.map (fun (v : adt_variant) ->
+                { v with fields = List.map (Validation_common.map_predicate_field transport) v.fields }) t.variants })
+            | d -> d) imported.decls } in
           let requested = match imp.names with
             | ImportAll -> None
             | ImportExposing names -> Some names
           in
           List.concat_map (fun (adt_name, ctor_name, ctor_sch) ->
+            let qualify = qualify_imported_ty imp imported in
+            let ctor_sch = { ctor_sch with mono = qualify ctor_sch.mono } in
             let qualified_name = imp.module_name ^ "." ^ ctor_name in
             let requested_name = match requested with
               | Some names ->
@@ -1244,7 +1312,7 @@ let load_imported_ctors (m : module_form) : (string * (string * scheme)) list =
             in
             (if include_plain then [ (ctor_name, (adt_name, ctor_sch)) ] else [])
             @ (if include_qualified then [ (qualified_name, (adt_name, ctor_sch)) ] else [])
-          ) (exported_ctor_entries imported)
+          ) (exported_ctor_entries typed_imported)
   ) m.imports
 
 (* 2026-07-03 hole #15: load imported record/entity FIELD TYPES so dotted field
@@ -1284,15 +1352,21 @@ let load_imported_records (m : module_form) : (string * record_def) list =
            name.  The bare key is kept (gated on `wants`) for the exposing-import
            access style. *)
         let qualify name = imp.module_name ^ "." ^ name in
+        let transport = Validation_common.imported_predicate_transport m imp imported in
         List.concat_map (function
-          | DRecord r ->
+          | DRecord r when module_exports_name imported r.name ->
+            let r = { r with fields = List.map (Validation_common.map_predicate_field transport) r.fields } in
             let rd = build_record_def r in
+            let rd = { rd with rd_fields = List.map (fun (n, ty) ->
+              n, qualify_imported_ty imp imported ty) rd.rd_fields } in
             (qualify r.name, rd) :: (if wants r.name then [(r.name, rd)] else [])
-          | DEntity e ->
+          | DEntity e when module_exports_name imported e.name ->
+            let e = { e with fields = List.map (Validation_common.map_predicate_field transport) e.fields } in
             let rd =
               { rd_name = e.name;
                 rd_fields =
-                  List.map (fun (f : field_def) -> (f.name, ty_of_type_expr f.type_expr))
+                  List.map (fun (f : field_def) -> (f.name,
+                    qualify_imported_ty imp imported (ty_of_type_expr f.type_expr)))
                     e.fields } in
             (qualify e.name, rd) :: (if wants e.name then [(e.name, rd)] else [])
           | _ -> []
@@ -1325,7 +1399,8 @@ let load_imported_codec_decode_types (m : module_form) : string list =
           | ImportExposing names -> List.mem name names
         in
         List.concat_map (function
-          | DCodec (cf : codec_form) when cf.from_json <> FromJsonForbidden ->
+          | DCodec (cf : codec_form) when cf.from_json <> FromJsonForbidden
+              && module_exports_name imported cf.type_name ->
             (imp.module_name ^ "." ^ cf.type_name)
             :: (if wants cf.type_name then [cf.type_name] else [])
           | _ -> []
@@ -1353,12 +1428,15 @@ let config_stdlib_seed (m : module_form) :
       [ ("TcpConnection", [ ("host", TCon "String"); ("port", TCon "Int") ]);
         ("SocketConnection", [ ("path", TCon "String") ]) ]
       :: adt "DatabaseBackend" []
-      [ ("Postgres", [ ("config", TCon "PostgresConfig") ]); ("Memory", []) ] :: !adts;
+      [ ("Postgres", [ ("config", TCon "PostgresConfig") ]); ("Memory", []) ]
+      :: adt "MigrationTopology" [] [ ("Worker", []); ("Embedded", []) ] :: !adts;
     ctors :=
       fn_ctor "PostgresConnection" "TcpConnection" [ TCon "String"; TCon "Int" ]
       :: fn_ctor "PostgresConnection" "SocketConnection" [ TCon "String" ]
       :: fn_ctor "DatabaseBackend" "Postgres" [ TCon "PostgresConfig" ]
       :: nullary_ctor "DatabaseBackend" "Memory"
+      :: nullary_ctor "MigrationTopology" "Worker"
+      :: nullary_ctor "MigrationTopology" "Embedded"
       :: !ctors
   end;
   if imported "Tesl.Queue" then begin
@@ -2091,6 +2169,9 @@ let opaque_special_field_types =
    then fail at runtime, which is worse than either accepting or rejecting it
    consistently. *)
 let no_eliminator_stdlib_types : (string * string) list = [
+  "DeadJob",
+  "A DeadJob is opaque metadata, not a decoded job payload. Use DeadJob.id, \
+   DeadJob.reason, DeadJob.sourceVersion, DeadJob.attempts or DeadJob.typeName.";
   "PasswordHash",
   "A PasswordHash is opaque on purpose: the only legitimate way to use one is \
    `Crypto.checkPassword`, which is constant-time and returns a proof. Store it \
@@ -2197,7 +2278,7 @@ let opaque_display_name (type_name : string) : string =
      | None -> type_name)
 
 let known_qualifier_modules =
-  [ "List"; "ListPrim"; "Dict"; "String"; "Regex"; "Url"; "Net";
+  [ "List"; "ListPrim"; "Dict"; "String"; "Regex"; "Url"; "Net"; "DeadJob";
     "Int"; "Float"; "Set"; "Maybe";
     "Either"; "Result"; "Time"; "CivilTime"; "Random"; "Uuid"; "UUID"; "Env";
     "Http"; "HttpClient"; "Json"; "DB"; "Telemetry"; "Tesl"; "JWT"; "Email";
@@ -2227,7 +2308,7 @@ let qualifier_modules_that_are_not_constructors =
     (* #68, same rule: `Url` is an opaque stdlib TYPE built only by `Url.parse`,
        and `Net` is a pure qualifier with no same-named type, so `Url x` /
        `Net x` are plain T001s rather than escaping to a fresh type variable. *)
-    "Url"; "Net";
+    "Url"; "Net"; "DeadJob";
     (* #78: `CivilTime` is a pure qualifier with no same-named type, so a bare
        `CivilTime x` is a plain T001 instead of resolving to `anything`. *)
     "CivilTime" ]
@@ -2526,7 +2607,8 @@ let normalized_preds_of_proof (subject : string) (p : proof_expr)
   : (string * string list) list =
   let rec go acc = function
     | PredApp { pred; args; _ } ->
-      (pred, List.map (fun a -> if a = subject then "\xc2\xa7" else a) args) :: acc
+      (Validation_common.predicate_identity pred,
+       List.map (fun a -> if a = subject then "\xc2\xa7" else a) args) :: acc
     | PredAnd { left; right; _ } -> go (go acc left) right
   in
   List.sort_uniq compare (go [] p)
@@ -3229,6 +3311,18 @@ let rec infer_expr ctx (e : expr) : ty =
     in
     apply !(ctx.subst) ret_ty
 
+  | EApp { fn; arg; loc } when is_intrinsic_dead_jobs ctx fn ->
+    let argument_type = apply !(ctx.subst) (infer_expr ctx arg) in
+    let queue_reference = match arg with
+      | EConstructor { name; args = []; _ } -> List.mem name ctx.queue_types
+      | _ -> false in
+    let queue_value = match argument_type with
+      | TCon name -> List.mem name ctx.queue_types
+      | _ -> false in
+    if not (queue_reference || queue_value) then
+      add_error ctx loc "`deadJobs` requires a declared queue value, not a job payload";
+    t_list (TCon "DeadJob")
+
   | EApp { fn; arg = (EList { elems = []; _ } as empty_list); loc } ->
     (* Parser reuses the same AST node for () and []. Treat this as a real
        application when the callee is callable; otherwise preserve the zero-arg
@@ -3278,7 +3372,10 @@ let rec infer_expr ctx (e : expr) : ty =
             unify_at ctx (expr_loc arg_expr) current_ret_ty (TFun (arg_ty, next_ret_ty));
             (arg_ty, next_ret_ty)
         in
-        unify_at ctx (expr_loc arg_expr) arg_ty param_ty;
+        let checked_arg_ty = match apply !(ctx.subst) arg_ty, param_ty with
+          | TApp (TCon "Fact", _), TCon "Fact" when is_intrinsic_fact_combinator ctx fn_expr -> t_fact
+          | _ -> arg_ty in
+        unify_at ctx (expr_loc arg_expr) checked_arg_ty param_ty;
         apply !(ctx.subst) next_ret_ty
       ) fn_ty call_args in
       (* Record the call for Eq/Ord discharge after the whole module is checked
@@ -3524,14 +3621,14 @@ let rec infer_expr ctx (e : expr) : ty =
          match classify_lowered_query ctx base_fn with
          | Some ty -> record_sql_operand_field_accesses ctx base_fn; ty
          | None -> infer_direct_call base_fn args)
-     | EConstructor { name; _ }
+     | EConstructor { name; loc; _ }
        when ctx.in_establish &&
             (match List.assoc_opt name ctx.ctors with None -> true | _ -> false) &&
             (match env_lookup name (make_stdlib_env ()) with None -> true | _ -> false) ->
         (* In establish context, unknown uppercase constructors are proof predicates.
-           Infer arg types for any side effects but return t_fact. *)
+           Infer arguments and preserve the declaring predicate identity. *)
         List.iter (fun arg -> ignore (infer_expr ctx arg)) args;
-        t_fact
+        qualified_fact_ty (PredApp { pred = name; args = []; loc })
      | EVar { name = "decodeAs"; loc } ->
         (* Infer normally so the (json:String) arg is checked and the result var
            can be pinned by surrounding unification, then decide-by-resolution.
@@ -4011,7 +4108,7 @@ let rec infer_expr ctx (e : expr) : ty =
     (match resolve_constructor_type ctx name loc with
      | ProofPredicateConstructor ->
        List.iter (fun arg -> ignore (infer_expr ctx arg)) args;
-       t_fact
+       qualified_fact_ty (PredApp { pred = name; args = []; loc })
      | KnownConstructor ctor_ty ->
        List.fold_left (fun fn_ty arg ->
          let arg_ty = infer_expr ctx arg in
@@ -4028,7 +4125,11 @@ let rec infer_expr ctx (e : expr) : ty =
     List.fold_right (fun (_, t) acc -> TFun (t, acc)) param_tys body_ty
   in
   let expr_meta = match binding_meta_of_expr ctx e with Some m -> m | None -> PlainBinding in
+  let inferred = match apply !(ctx.subst) inferred, expr_meta with
+    | TCon "Fact", FactProofBinding proof -> qualified_fact_ty proof
+    | _ -> inferred in
   record_expr_type_with_meta ctx (expr_loc e) inferred expr_meta;
+  Option.iter (fun nodes -> nodes := (e, inferred, ctx.subst) :: !nodes) ctx.typed_nodes;
   inferred
 
 (* Ambiguous-dot where-clause hint (issue #26/#27 follow-up): a lowered SQL
@@ -4436,7 +4537,7 @@ and infer_binop ctx loc ~op_loc op left right =
     let lt' = apply !(ctx.subst) lt in
     let rt' = apply !(ctx.subst) rt in
     (match lt', rt' with
-     | TCon "Fact", TCon "Fact" -> t_fact
+     | left, right when is_fact_ty left && is_fact_ty right -> conjoin_fact_tys left right
      | _ ->
        unify_at ctx loc lt t_bool;
        unify_at ctx loc rt t_bool;
@@ -4645,8 +4746,10 @@ and bind_pattern_vars ctx scrut_ty (pat : pattern) : (string * scheme) list =
            List.concat_map (fun ((_, sub_pat), field_ty) ->
              fresh_sub_bindings sub_pat (apply !(ctx.subst) field_ty)
            ) (List.combine fields field_tys)
-         else
+         else begin
+           add_error ctx loc (Printf.sprintf "pattern `%s` expects %d fields but supplies %d" ctor n_tys n_fields);
            fresh_field_bindings fields
+         end
        | exception TypeMismatch _ ->
          add_unknown_name_error ctx loc ~what:"constructor" ctor;
          fresh_field_bindings fields)
@@ -4706,7 +4809,7 @@ and record_pattern_bindings ?(extra_meta = []) ctx loc (bindings : (string * sch
 
 (** Infer a statement sequence (for function bodies with multiple statements). *)
 let rec infer_stmt ctx (e : expr) : ty * ctx =
-  match e with
+  let result = match e with
   | ELet {
       name = "_";
       declared_type = _;
@@ -4783,6 +4886,12 @@ let rec infer_stmt ctx (e : expr) : ty * ctx =
     infer_stmt ctx' body
   | _ ->
     (infer_expr ctx e, ctx)
+  in
+  (match e with
+   | ELet _ | ELetProof _ ->
+     Option.iter (fun nodes -> nodes := (e, fst result, ctx.subst) :: !nodes) ctx.typed_nodes
+   | _ -> ());
+  result
 
 let call_target_name = function
   | EVar { name; _ } -> Some name
@@ -4811,6 +4920,12 @@ let tuple_element_reason index expected_ty =
   Printf.sprintf "tuple element %d must have type %s" index (pp_ty expected_ty)
 
 let rec check_stmt ctx (e : expr) (expected : expectation) : unit =
+  (* Statement-position let chains bypass check_expr. They still have their
+     tail's checked result type, and must retain identity for semantic IR. *)
+  (match e with
+   | ELet _ | ELetProof _ ->
+     Option.iter (fun nodes -> nodes := (e, expected_ty_of expected, ctx.subst) :: !nodes) ctx.typed_nodes
+   | _ -> ());
   match e with
   | ESqlQuery { query = QueryUpdate update; _ }
     when update.returning_one && not update.returns_row ->
@@ -5125,6 +5240,8 @@ use the `Tuple3 a b c` constructor instead";
        check-call rule has to run here too — [infer_expr]'s copy never sees it. *)
     reject_nested_check_calls ctx base_fn args;
     (match base_fn with
+     | _ when is_intrinsic_fact_combinator ctx base_fn -> fallback ()
+     | _ when is_intrinsic_dead_jobs ctx base_fn -> fallback ()
      | EVar { name = "initTelemetry" | "check" | "make-witness" | "selectOne" | "select" | "selectCount" | "selectSum" | "selectMax" | "selectMin" | "selectCountBy" | "selectSumBy" | "insert" | "insertMany" | "upsert" | "update" | "updateAndReturnOne" | "returning" | "where" | "set" | "onConflict" | "doUpdate" | "delete" | "deleteAndReturnResult" | "one" | "#record-update#"; _ } ->
        fallback ()
      | EVar { name = "serverTools"; _ } when not ctx.server_tools_shadowed ->
@@ -5243,6 +5360,7 @@ use the `Tuple3 a b c` constructor instead";
   in
   let expr_meta = match binding_meta_of_expr ctx e with Some m -> m | None -> PlainBinding in
   record_expr_type_with_meta ctx (expr_loc e) checked expr_meta;
+  Option.iter (fun nodes -> nodes := (e, checked, ctx.subst) :: !nodes) ctx.typed_nodes;
   checked
 
 (* ── Function declaration type checking ─────────────────────────────────── *)
@@ -5666,6 +5784,7 @@ let export_locality_errors (m : module_form) : type_error list =
     | DServer srv -> [srv.name]
     | DAgent a -> [a.name]
     | DQueue q -> [q.name]
+    | DQueueSchema q -> [q.name]
     | DChannel ch -> [ch.name]
     (* cache / email names are exportable like queue / channel names: the
        emitted define-cache / define-email is a plain module-level binding, so
@@ -5843,7 +5962,8 @@ let collect_scope_type_names_split (m : module_form) : string list * string list
                let names = List.filter_map (function
                  | DType (TypeAdt { name; _ }) | DType (TypeNewtype { name; _ })
                   | DRecord { name; _ }
-                 | DFact { name; _ } -> Some name
+                 | DEntity { name; _ } | DFact { name; _ }
+                     when module_exports_name imp_m name -> Some (imp.module_name ^ "." ^ name)
                  | _ -> None
                ) imp_m.decls in
                (names @ locals, tesls))
@@ -5903,9 +6023,10 @@ let type_names_of_return_spec (rs : return_spec) : (string * Location.loc) list 
     never trades this error for a fresh not-in-scope one. *)
 let config_only_type_position_error ~(replacement_in_scope : string -> bool)
     (name : string) (loc : Location.loc) : type_error =
-  let config_block_usage = [
+  let config_block_usage = List.map (fun name -> name, "a contextual `Migration { … }` declaration") Migration_form.names @ [
     ("Database",           "a `database NAME = Database { … }` declaration");
     ("PostgresConfig",     "the `backend: Postgres (PostgresConfig { … })` field of a `database` declaration");
+    ("MigrationConfig",    "the `migrations: MigrationConfig { … }` field of `PostgresConfig`");
     ("Queue",              "a `queue NAME = Queue { … }` declaration");
     ("QueueRetryStrategy", "the `retry: QueueRetryStrategy { … }` field of a `queue` declaration");
     ("QueueRetryConfig",   "the retry configuration of a `queue` declaration");
@@ -5971,10 +6092,11 @@ let check_type_names_in_scope ~(suggest : string -> Import_suggest.suggestion op
     (m : module_form) : type_error list =
   let (locally_bound, stdlib_imported) = collect_scope_type_names_split m in
   let in_scope = locally_bound @ stdlib_imported in
-  (* A name is ok if: in scope, or qualified (contains '.'), or type-variable (lowercase) *)
+  (* Qualification must resolve an exported type in an imported module. A dot
+     alone is not evidence: accepting Ghost.Type would invent a nominal type. *)
   let is_ok name =
     List.mem name in_scope
-    || String.contains name '.'
+    || qualified_type_in_scope m name
     || (String.length name > 0 && Char.lowercase_ascii name.[0] = name.[0])
   in
   let make_err (name, loc) =
@@ -6084,7 +6206,7 @@ let check_type_names_in_scope ~(suggest : string -> Import_suggest.suggestion op
       in
       (* Cycle guard on CANONICAL paths (the item-19 lesson: raw resolved
          spellings differ per importing module); the entry is pre-marked. *)
-      let canon p = try Unix.realpath p with _ -> p in
+      let canon p = try Source_input.realpath p with _ -> p in
       let visited : (string, unit) Hashtbl.t = Hashtbl.create 8 in
       Hashtbl.replace visited (canon m.source_file) ();
       let acc = ref (decls_of m) in
@@ -6657,7 +6779,7 @@ let collect_stdlib_fn_uses (m : module_form) : (string * Location.loc) list =
        stdlib names.  Kept as an explicit, exhaustive enumeration so a new decl
        form forces a decision here. *)
     | DDatabase _ | DQueue _ | DChannel _ | DCache _ | DEmail _
-    | DType _ | DRecord _ | DEntity _ | DFact _ | DCodec _ | DCapability _
+    | DQueueSchema _ | DType _ | DRecord _ | DEntity _ | DFact _ | DCodec _ | DCapability _
     | DWorkers _ | DCapture _ | DApi _ | DServer _ -> ()
   ) m.decls;
   Hashtbl.fold (fun k v acc -> (k, v) :: acc) seen []
@@ -6821,58 +6943,12 @@ let check_proof_predicate_scope (m : module_form) : type_error list =
     end
   ) uses
 
-(** BMOD-FORGE-01 (review §4.2 + §4.3): a proof-predicate (`fact`) name must have a
-    SINGLE owning module across the import graph — exactly as a type name does.
-
-    Before this, predicate identity was the bare surface name and the emitter
-    interned a shared `eq?` symbol, so a consumer could declare a local `fact F`
-    with the same spelling as a predicate owned by an imported module and thereby
-    (a) become a co-"owner" able to MINT it, and (b) satisfy that module's `::: F`
-    obligation with a forged value — the exact cross-module forgery the thesis's
-    invariant #2 forbids.  It also left thesis invariant #1 (no-shadowing) with a
-    hole for `fact` specifically (the fn/type shadow detector omits it).
-
-    Rather than re-architect predicate identity, we close the class fail-closed:
-    a proof-predicate name must resolve to a SINGLE owning module across everything
-    in scope.  This rejects (a) a local `fact` whose name is already owned by an
-    imported module, (b) two DISTINCT imported modules that each own a fact of the
-    same name reachable in this module — the cross-module "diamond" where a value
-    carrying `ModA.F` would satisfy a `ModB.F` obligation because identity is the
-    bare name (confirmed forgeable via `ModA.mint` + `ModB.sink` bridged in a
-    consumer), and (c) a local `fact` colliding with an explicitly-imported stdlib
-    predicate.  A re-export of the SAME originally-declared fact keeps one owner, so
-    legitimate re-export + use is unaffected. *)
+(** Bare predicates must have one owner. Namespace-only imports may carry the
+    same spelling from distinct modules: their imported proof metadata uses the
+    original owner's qualified identity. Exposed names and local declarations
+    retain the fail-closed ownership rule, including hidden function obligations. *)
 let check_fact_name_distinctness (m : module_form) : type_error list =
-  let is_tesl_module name =
-    String.length name >= 5 && String.sub name 0 5 = "Tesl." in
-  (* Facts a module PROVIDES as (name, ORIGINAL-owner): those it declares (owner =
-     itself), plus those it re-exports resolved transitively to their declaring
-     module — so a re-export chain of one fact keeps a single owner, while two
-     independent declarations of the same name have two distinct owners.  [visited]
-     bounds recursion over cycles. *)
-  let rec provided_owned visited (mm : module_form) : (string * string) list =
-    if List.mem mm.module_name visited then []
-    else begin
-      let visited = mm.module_name :: visited in
-      let declared =
-        List.filter_map (function
-          | DFact { name; _ } -> Some (name, mm.module_name) | _ -> None) mm.decls in
-      let exported_names =
-        List.filter_map (function ExportName n | ExportAdt n -> Some n) mm.exports in
-      let reexported =
-        List.concat_map (fun (imp : import_decl) ->
-          if is_tesl_module imp.module_name then []
-          else
-            match parse_local_import_module
-                    (resolve_local_import_path mm.source_file imp.module_name) with
-            | Some (Ok im) ->
-              List.filter (fun (n, _) -> List.mem n exported_names) (provided_owned visited im)
-            | _ -> []
-        ) mm.imports
-      in
-      declared @ reexported
-    end
-  in
+  let is_tesl_module name = String.starts_with ~prefix:"Tesl." name in
   (* fact-name -> distinct owning modules reachable in THIS module, and, for a
      diamond with no local declaration, an import loc to report at. *)
   let owners : (string, string list) Hashtbl.t = Hashtbl.create 16 in
@@ -6893,16 +6969,27 @@ let check_fact_name_distinctness (m : module_form) : type_error list =
               (resolve_local_import_path m.source_file imp.module_name) with
       | Some (Ok imported) ->
         List.iter (fun (name, owner) -> add_owner ~loc:imp.loc name owner)
-          (provided_owned [] imported)
+          (Validation_common.scope_predicate_owners imported)
       | _ -> ()
   ) m.imports;
-  (* Report each name owned by >= 2 distinct modules exactly once, preferring a
-     local-declaration loc for the message when this module declares the fact. *)
+  (* Namespace imports retain distinct owners. Reject only an actual unqualified
+     binding collision; hidden proof signatures already carry original owners. *)
+  let bare_owners name =
+    let local = if List.mem_assoc name local_facts then [m.module_name] else [] in
+    List.sort_uniq String.compare (local @ List.concat_map (fun (imp : import_decl) ->
+      match imp.names with
+      | ImportAll -> []
+      | ImportExposing names when List.mem name names ->
+        (match Validation_common.predicate_import_module m imp.module_name with
+         | None -> []
+         | Some imported -> Validation_common.provided_predicate_owners imported
+             |> List.filter_map (fun (n, owner) -> if n = name then Some owner else None))
+      | ImportExposing _ -> []) m.imports) in
   let local_name_loc = local_facts in
   let ambiguity_errors =
     Hashtbl.fold (fun name owner_list acc ->
       match owner_list with
-      | _ :: _ :: _ ->
+      | _ :: _ :: _ when List.length (bare_owners name) > 1 ->
         let owners_str = String.concat ", " (List.sort compare owner_list) in
         let loc, msg =
           match List.assoc_opt name local_name_loc with
@@ -7251,7 +7338,7 @@ let check_api_decl_types ctx (m : module_form) =
                   "JwtToken";
                   "Agent"; "LlmProvider"; "AgentReply"; "Tool"; "ToolStep";
                   "Conversation"; "ConversationTurn" ] in
-    if not (List.mem name known || List.mem name known_types) then
+    if not (List.mem name known || List.mem name known_types || qualified_type_in_scope m name) then
       add_error ctx loc (Printf.sprintf "unknown type: %s" name)
   in
   let rec check_type_expr (te : type_expr) =
@@ -7411,7 +7498,7 @@ let check_ord_eq_calls ctx =
          ) constraints)
   ) !(ctx.ord_eq_calls)
 
-let check_module_with_metadata_uncached ?(source_lines = [||]) (m : module_form) : local_binding_info list * expr_type_info list * field_access_info list * (Location.loc * string) list * (Location.loc * (string * string list)) list * (Location.loc * (string * string list)) list * type_error list =
+let check_module_with_metadata_uncached ?typed_nodes ?(source_lines = [||]) (m : module_form) : local_binding_info list * expr_type_info list * field_access_info list * (Location.loc * string) list * (Location.loc * (string * string list)) list * (Location.loc * (string * string list)) list * type_error list =
   reset_counter ();
   (* First-Class Units: activate the quantity alias TYPE names this module
      imports from Tesl.Units.  Deliberately NOT restored on exit — the emit
@@ -7440,7 +7527,19 @@ let check_module_with_metadata_uncached ?(source_lines = [||]) (m : module_form)
   let import_errors = import_errors @ check_units_name_collisions m in
   let initial_env = make_stdlib_env () in
   let ctx = make_ctx ~source_lines ~filename:m.source_file ~env:initial_env () in
-  let ctx = { ctx with import_suggest = suggest } in
+  let queue_types =
+    let local = List.filter_map (function DQueue q -> Some q.name | _ -> None) m.decls in
+    let imported = List.concat_map (fun (imp : import_decl) ->
+      if String.starts_with ~prefix:"Tesl." imp.module_name then [] else
+      match Validation_common.predicate_import_module m imp.module_name with
+      | None -> []
+      | Some owner -> List.concat_map (function
+          | DQueue q when List.mem (ExportName q.name) owner.exports ->
+            let exposed = match imp.names with ImportAll -> false | ImportExposing names -> List.mem q.name names in
+            (imp.module_name ^ "." ^ q.name) :: (if exposed then [q.name] else [])
+          | _ -> []) owner.decls) m.imports in
+    local @ imported in
+  let ctx = { ctx with import_suggest = suggest; typed_nodes; queue_types } in
 
   (* 1. Collect type definitions (records, ADTs, newtypes) *)
   let ctx = collect_type_defs ctx m.decls in
@@ -7481,7 +7580,7 @@ let check_module_with_metadata_uncached ?(source_lines = [||]) (m : module_form)
   (* re-activate THIS module's quantity aliases: loading an imported module
      above may have checked it and set its own (see activate note at entry) *)
   ignore (activate_units_aliases_for m);
-  let ctx = collect_func_sigs ctx m.decls in
+  let ctx = collect_func_sigs ctx (Migration_form.runtime_declarations m) in
   let ctx = {
     ctx with
     proof_returns = collect_proof_returns m.decls;
@@ -7915,6 +8014,7 @@ let check_module_with_metadata_uncached ?(source_lines = [||]) (m : module_form)
     match decl with
     | DFunc fd ->
       check_func_decl ~user_fn_names ctx fd
+    | DConst c when Migration_form.is_declaration m c -> ()
     | DConst c ->
       let ty = infer_expr ctx c.value in
       (* Update the env with the inferred type *)
@@ -8073,17 +8173,13 @@ let check_module_with_metadata_uncached ?(source_lines = [||]) (m : module_form)
   in
   let extract_produced_preds_with_loc (fd : func_decl) : (string * Location.loc) list =
     let rec from_rs = function
-      | RetPlain { ty = TApp { head = TName { name = "Fact"; _ }; arg; loc; _ }; _ } ->
-        (match arg with
-         | TApp { head = TName { name; _ }; _ } -> [(name, loc)]
-         | TName { name; loc; _ } -> [(name, loc)]
-         | _ -> [])
-      | RetPlain { ty = TApp { head = TName { name = "Maybe"; _ };
-                               arg = TApp { head = TName { name = "Fact"; _ }; arg = inner; loc; _ }; _ }; _ } ->
-        (match inner with
-         | TApp { head = TName { name; _ }; _ } -> [(name, loc)]
-         | TName { name; loc; _ } -> [(name, loc)]
-         | _ -> [])
+      | RetPlain { ty; loc } ->
+        (* Fact predicates may have any arity or contain a conjunction. A
+           one-layer TApp match silently omitted imported multi-argument facts,
+           allowing a caller to mint a schema invariant outside its closure. *)
+        (match Validation_common.proof_of_fact_type ty with
+         | Some proof -> List.map (fun pred -> pred, loc) (collect_preds_from_proof proof)
+         | None -> [])
       | RetAttached { binding = b; loc; _ } ->
         (match b.proof_ann with
          | Some p -> List.map (fun pred -> (pred, loc)) (collect_preds_from_proof p)
@@ -8112,17 +8208,23 @@ let check_module_with_metadata_uncached ?(source_lines = [||]) (m : module_form)
          | None -> [])
       (* An existential return may itself carry a proof-producing inner spec. *)
       | RetExists { body; _ } -> from_rs body
-      | RetPlain _ -> []
     in
     from_rs fd.return_spec
   in
   let fact_ownership_errors = List.concat_map (function
     | DFunc fd when is_proof_introducing_kind fd.kind ->
       List.filter_map (fun (pred, loc) ->
-        (* Skip if it's a qualified name (already module-prefixed) or a type variable *)
-        if String.contains pred '.' then None
-        else if String.length pred > 0 && Char.lowercase_ascii pred.[0] = pred.[0] then None
-        else if List.mem pred locally_declared_facts then None
+        (* Qualified compiler ASTs must obey the same ownership rule as exposed
+           surface names. Qualification identifies the owner; it grants no
+           authority to produce a different module's fact. *)
+        let own_prefix = m.module_name ^ "." in
+        let locally_owned = List.mem pred locally_declared_facts ||
+          (String.starts_with ~prefix:own_prefix pred &&
+           List.mem (String.sub pred (String.length own_prefix)
+             (String.length pred - String.length own_prefix)) locally_declared_facts) in
+        if not (String.contains pred '.') && String.length pred > 0 &&
+           Char.lowercase_ascii pred.[0] = pred.[0] then None
+        else if locally_owned then None
         else
           let hint =
             if List.mem pred (collect_in_scope_type_names m) then
@@ -8211,13 +8313,19 @@ let cached_module_metadata = Query_cache.memo ~retain_across_snapshots:true ~lim
       failwith "semantic imports changed during checking";
     result)
 
-let check_module_with_metadata ?(source_lines = [||]) (m : module_form) =
-  let result = if not !Query_cache.enabled then check_module_with_metadata_uncached ~source_lines m
-    else match module_semantic_inputs m with
-    | Some inputs -> cached_module_metadata (inputs, source_lines, m)
-    | None -> check_module_with_metadata_uncached ~source_lines m in
+let check_module_with_metadata ?typed_nodes ?(source_lines = [||]) (m : module_form) =
+  Validation_common.with_predicate_scope m (fun () ->
+  (* Migration inventories collect physical AST identities and final type
+     substitutions into a fresh sink. A read-only metadata cache hit cannot
+     replay that collection, even when its diagnostics are identical. *)
+  let result = match typed_nodes with
+    | Some _ -> check_module_with_metadata_uncached ?typed_nodes ~source_lines m
+    | None when not !Query_cache.enabled -> check_module_with_metadata_uncached ~source_lines m
+    | None -> (match module_semantic_inputs m with
+        | Some inputs -> cached_module_metadata (inputs, source_lines, m)
+        | None -> check_module_with_metadata_uncached ~source_lines m) in
   ignore (activate_units_aliases_for m);
-  result
+  result)
 
 let check_module_with_local_bindings (m : module_form) : local_binding_info list * type_error list =
   let local_bindings, _, _, _, _, _, errors = check_module_with_metadata m in
@@ -8226,6 +8334,18 @@ let check_module_with_local_bindings (m : module_form) : local_binding_info list
 let check_module_with_expr_types (m : module_form) : expr_type_info list * type_error list =
   let _, expr_types, _, _, _, _, errors = check_module_with_metadata m in
   (expr_types, errors)
+
+(** Internal typed-IR input. Unlike editor positions, expression identity is
+    unambiguous even for synthesized nodes with coincident source spans. Apply
+    each node's final local substitution only after the module has been checked.
+    The caller must also pass the compiler's validation and proof gates before
+    using the resulting graph as a migration catalog. *)
+let check_module_with_typed_nodes (m : module_form) : (expr * ty) list * type_error list =
+  let typed_nodes = ref [] in
+  let _, _, _, _, _, _, errors = check_module_with_metadata ~typed_nodes m in
+  let nodes = List.rev_map (fun (expression, ty, substitution) ->
+    expression, apply !substitution ty) !typed_nodes in
+  nodes, errors
 
 let check_module (m : module_form) : type_error list =
   let _, _, _, _, _, _, errors = check_module_with_metadata m in

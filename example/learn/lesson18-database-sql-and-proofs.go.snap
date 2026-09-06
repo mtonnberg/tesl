@@ -88,6 +88,8 @@ var NoteDatabaseDatabase = teslrt.NewDatabase(
 	},
 )
 
+var _ = teslrt.RegisterDatabaseIdentity("teslmodlesson18databasesqlandproofs.NoteDatabase", NoteDatabaseDatabase)
+
 //line lesson18-database-sql-and-proofs.tesl:237
 var DefaultNotePort = teslrt.FromInt64(8090)
 
