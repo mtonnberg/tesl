@@ -1001,7 +1001,7 @@ queue PingQueue = Queue {
   jobs: [Job PingJob handlePing%s]
 }
 
-fn handlePing(j: PingJob) -> String
+worker handlePing(j: PingJob) -> String
   requires [] =
   j.msg
 
@@ -1054,7 +1054,7 @@ record PingJob {
   msg: String
 }
 
-fn handlePing(j: PingJob) -> String
+worker handlePing(j: PingJob) -> String
   requires [] =
   j.msg
 

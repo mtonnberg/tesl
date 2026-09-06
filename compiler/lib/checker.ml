@@ -116,8 +116,8 @@ type ctx = {
   ord_eq_calls : (string * ty list * Location.loc) list ref;
   (** Module-wide: (callee-name, resolved arg types, call loc) recorded at each
       direct call, discharged after the module is checked. *)
-  server_tools_env : (string * (string option * server_tools_endpoint list)) list;
-  (** `serverTools` static surface: server name → (the user TYPE name bound by
+  server_tools_env : (string * (type_expr option * server_tools_endpoint list)) list;
+  (** `serverTools` static surface: server name → (the complete user type bound by
       the api's `auth` lines (None when no non-SSE endpoint declares auth), the
       non-SSE endpoints with their tool names + normalized auth predicates).
       Server names are declarative configuration, not expression values (the
@@ -2797,9 +2797,8 @@ let rec infer_expr ctx (e : expr) : ty =
         | Some (auth_ty_opt, endpoints) ->
           let user_ty = infer_expr ctx user_arg in
           (match auth_ty_opt with
-           | Some auth_ty_name ->
-             unify_at ctx (expr_loc user_arg) user_ty
-               (ty_of_type_expr (TName { name = auth_ty_name; loc }))
+           | Some auth_ty ->
+             unify_at ctx (expr_loc user_arg) user_ty (ty_of_type_expr auth_ty)
            | None -> ());
           (match user_arg with
            | EVar { name = uname; _ } ->
@@ -2883,9 +2882,8 @@ let rec infer_expr ctx (e : expr) : ty =
         | Some (auth_ty_opt, endpoints) ->
           let user_ty = infer_expr ctx user_arg in
           (match auth_ty_opt with
-           | Some auth_ty_name ->
-             unify_at ctx (expr_loc user_arg) user_ty
-               (ty_of_type_expr (TName { name = auth_ty_name; loc }))
+           | Some auth_ty ->
+             unify_at ctx (expr_loc user_arg) user_ty (ty_of_type_expr auth_ty)
            | None -> ());
           (match user_arg with
            | EVar { name = uname; _ } ->
@@ -6431,6 +6429,7 @@ let tesl_module_predicate_exports : (string * string list) list = [
   ("Tesl.Int32",   ["IsNonNegative"; "IsNonZero"]);
   ("Tesl.Float",   ["FloatNonZero"; "FloatNonNegative"]);
   ("Tesl.Dict",    ["HasKey"]);
+  ("Tesl.Money",   ["SameCurrency"; "NonNegativeMoney"; "RateFor"]);
   ("Tesl.CivilTime",
    ["IsDayOfMonth"; "IsMonthNumber"; "IsDayOfYear"; "IsWeekNumber";
     "IsWeekdayNumber"; "IsMonthLength"; "DayOfMonth"; "SameCalendar"]);
@@ -7007,14 +7006,18 @@ let check_fact_name_distinctness (m : module_form) : type_error list =
   let imported_stdlib_preds =
     collect_explicitly_imported_stdlib_predicates m @ signature_stdlib_preds in
   let stdlib_errors =
-    List.filter_map (fun (name, loc) ->
-      if List.mem name imported_stdlib_preds then
+    List.sort_uniq compare imported_stdlib_preds
+    |> List.filter_map (fun name ->
+      match Hashtbl.find_opt owners name with
+      | Some user_owners ->
+        let loc = try Hashtbl.find import_loc_of name
+          with Not_found -> Location.dummy_loc m.source_file in
         Some { loc; message = Printf.sprintf
-          "fact `%s` shadows the imported stdlib proof predicate `%s`; a proof \
-           predicate has a single owning module. Drop the local `fact %s` and use \
-           the imported one, or rename this fact." name name name; fix = None }
-      else None
-    ) local_facts
+          "proof predicate `%s` is owned by both imported stdlib module and user \
+           module(s) %s; a proof predicate has a single owning module. Rename the \
+           user-module fact, or do not import it into this scope."
+          name (String.concat ", " (List.sort compare user_owners)); fix = None }
+      | None -> None)
   in
   ambiguity_errors @ stdlib_errors
 
@@ -7634,9 +7637,7 @@ let check_module_with_metadata_uncached ?typed_nodes ?(source_lines = [||]) (m :
            let auth_ty = List.find_map (fun (ep : Ast.api_endpoint) ->
              match ep.auth with
              | Some (a : Ast.api_auth) ->
-               (match a.binding.type_expr with
-                | TName { name; _ } -> Some name
-                | _ -> None)
+               Some a.binding.type_expr
              | None -> None) non_sse in
            Some (srv.name, (auth_ty, endpoints)))
       | _ -> None) m.decls in
@@ -7883,14 +7884,16 @@ let check_module_with_metadata_uncached ?typed_nodes ?(source_lines = [||]) (m :
      Per-endpoint predicate INCLUSION (who gets the admin-gated endpoints) is
      decided at each call site by the infer_expr arm; these are the rules that
      do not depend on the caller. *)
-  (if not ctx.server_tools_shadowed then begin
+  (if not ctx.server_tools_shadowed || not ctx.human_actions_shadowed then begin
     let method_str = function
       | Ast.GET -> "get" | Ast.POST -> "post" | Ast.PUT -> "put"
       | Ast.DELETE -> "delete" | Ast.PATCH -> "patch" | Ast.SSE -> "sse" in
     let used_servers : (string * Location.loc) list ref = ref [] in
     let rec walk_st (e : Ast.expr) : unit =
       (match e with
-       | EApp { fn = EApp { fn = EVar { name = "serverTools"; _ }; arg = server_ref; _ }; loc; _ } ->
+       | EApp { fn = EApp { fn = EVar { name; _ }; arg = server_ref; _ }; loc; _ }
+         when (name = "serverTools" && not ctx.server_tools_shadowed)
+           || (name = "humanActions" && not ctx.human_actions_shadowed) ->
          (match server_ref with
           | EConstructor { name; args = []; _ } | EVar { name; _ } ->
             if not (List.mem_assoc name !used_servers) then
@@ -7923,9 +7926,7 @@ let check_module_with_metadata_uncached ?typed_nodes ?(source_lines = [||]) (m :
         let auth_tys = List.filter_map (fun (ep : Ast.api_endpoint) ->
           match ep.auth with
           | Some (a : Ast.api_auth) ->
-            Some (ep, (match a.binding.type_expr with
-                       | TName { name; _ } -> name
-                       | _ -> "?"))
+            Some (ep, ty_of_type_expr a.binding.type_expr)
           | None -> None) eps in
         (match auth_tys with
          | (_, first_ty) :: rest ->
@@ -7936,7 +7937,7 @@ let check_module_with_metadata_uncached ?typed_nodes ?(source_lines = [||]) (m :
                   endpoints authenticate a `%s` — serverTools partially applies ONE \
                   user value, so every authed endpoint of the api must bind the same \
                   user type"
-                 sname (method_str ep.method_) ep.path ty first_ty)) rest
+                 sname (method_str ep.method_) ep.path (pp_ty ty) (pp_ty first_ty))) rest
          | [] -> ());
         (* capture params arrive as model JSON — agent-prim whitelist (B4) *)
         List.iter (fun (ep : Ast.api_endpoint) ->

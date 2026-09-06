@@ -243,6 +243,64 @@ let test_unknown_name_without_candidate_is_plain () =
    | Some f ->
      Alcotest.failf "expected no fix, got %s" (Compile.fix_to_json (Some f)))
 
+(* Folder discovery must not follow attacker-controlled directory symlinks.
+   These self/mutual cycles made an unknown-name diagnostic recurse forever. *)
+let test_local_scan_ignores_directory_symlink_cycles () =
+  let dir = fresh_dir () in
+  let sub = Filename.concat dir "sub" in
+  Unix.mkdir sub 0o755;
+  Unix.symlink "." (Filename.concat sub "self");
+  Unix.symlink "right" (Filename.concat sub "left");
+  Unix.symlink "left" (Filename.concat sub "right");
+  let src = "\
+             module Main exposing [go]\n\
+             import Tesl.Prelude exposing [Int]\n\
+             \n\
+             fn go(x: Int) -> Int =\n\
+             \  frobnicateXyz x\n" in
+  let diags = check_at (Filename.concat dir "main.tesl") src in
+  let d = find_diag ~code:"T001" ~msg_sub:"unknown name: frobnicateXyz" diags in
+  Alcotest.(check string) "scan completed without a spurious suggestion"
+    "unknown name: frobnicateXyz" d.message
+
+let test_local_scan_excludes_external_files () =
+  let dir = fresh_dir () in
+  let outside = fresh_dir () in
+  let outside_file = Filename.concat outside "secret.tesl" in
+  write_file outside_file "module Secret exposing []\n";
+  Unix.symlink outside_file (Filename.concat dir "leak.tesl");
+  Unix.symlink outside (Filename.concat dir "external");
+  let local = Filename.concat dir "local.tesl" in
+  write_file local "module Local exposing []\n";
+  Alcotest.(check (list string)) "only ordinary local files are indexed" [local]
+    (Import_suggest.tesl_files_under dir ~self:"")
+
+(* The bounded, non-symlink scan must retain migration preview overlays,
+   including source files and directories that have not been written yet. *)
+let test_local_scan_overlay_preserves_security_boundary () =
+  let dir = Unix.realpath (fresh_dir ()) in
+  let outside = fresh_dir () in
+  let external = Filename.concat outside "external.tesl" in
+  write_file external "module External exposing []\n";
+  Unix.symlink external (Filename.concat dir "external.tesl");
+  Unix.symlink outside (Filename.concat dir "external");
+  let future = Filename.concat dir "future.tesl" in
+  let nested = Filename.concat dir "future/deep.tesl" in
+  let main = Filename.concat dir "main.tesl" in
+  Source_input.with_overlays ~project_root:dir [
+    future, "module Future exposing [futureFn]\nimport Tesl.Prelude exposing [Int]\nfn futureFn(n: Int) -> Int = n\n";
+    nested, "module Deep exposing []\n";
+  ] (fun () ->
+    Alcotest.(check (list string)) "only checked overlay files enter the scan"
+      [future; nested] (Import_suggest.tesl_files_under dir ~self:main);
+    let diags = check_at main
+      "module Main exposing []\nimport Tesl.Prelude exposing [Int]\nfn use() -> Int = futureFn 1\n" in
+    let d = find_diag ~code:"T001" ~msg_sub:"futureFn" diags in
+    check_insert_line ~line:2 ~text:"import Future exposing [futureFn]" d);
+  Alcotest.(check bool) "preview did not create its source" false (Sys.file_exists future);
+  Alcotest.(check bool) "preview did not create its directory" false
+    (Sys.file_exists (Filename.dirname nested))
+
 (* ── #34: bare top-level constants across the module boundary ────────────── *)
 
 (* A literal-valued exported constant now binds in the importing module — with
@@ -489,6 +547,12 @@ let () =
         test_unknown_name_without_candidate_is_plain;
       Alcotest.test_case "broken siblings preserve errors and valid suggestions" `Quick
         test_broken_sibling_cannot_replace_diagnostics;
+      Alcotest.test_case "external file and directory links are ignored" `Quick
+        test_local_scan_excludes_external_files;
+      Alcotest.test_case "directory symlink cycles are ignored" `Quick
+        test_local_scan_ignores_directory_symlink_cycles;
+      Alcotest.test_case "preview overlays retain the scan security boundary" `Quick
+        test_local_scan_overlay_preserves_security_boundary;
     ];
     "const-exports", [
       Alcotest.test_case "literal const binds across modules (#34)" `Quick

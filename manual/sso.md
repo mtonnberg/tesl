@@ -47,6 +47,11 @@ it (the nOAuth account-takeover). `Sso.subject` returns the injective
 `(issuer, subject)` key — the raw provider `sub` is unique only *within* one
 issuer, so the accessor does the issuer-namespacing that makes it safe to store.
 
+Applications that stored the raw provider subject with an older Go runtime must migrate
+those identifiers using the verified issuer and subject together, and invalidate sessions
+that still contain the old identifiers. Do not fall back to matching the raw subject:
+that would restore collisions between issuers.
+
 ## Reading the session back
 
 There is nothing SSO-specific about reading a logged-in user. The callback mints
