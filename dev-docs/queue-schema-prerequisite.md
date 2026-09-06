@@ -64,10 +64,12 @@ New payload identities can be added while predecessors remain intact.
 
 The checked projection exposes family-relative queue and payload declaration
 identities. Application variable names, worker function names, handler bodies,
-and retry settings do not enter these identities. The current runtime emitter
-still uses its legacy queue representation; wiring this projection into runtime
-registration belongs with the protected storage/claim protocol. This compiler
-prerequisite does not change ordinary unversioned queue wire IDs.
+and retry settings do not enter these identities. Generated Go registration now binds actual queue and job codec implementations
+with these checked identities. It retains the legacy queue/job wire spellings;
+the protected storage/claim protocol must opt into versioned wire identities.
+Ordinary unversioned and Memory queues retain their existing behavior. See
+[the compiled queue companion](queue-history-projection.md) for the linked metadata
+contract and its separation from persisted baseline authority.
 
 ## Empty is different from unknown
 
@@ -88,6 +90,12 @@ These are source integrity records, with the existing persisted history backstop
 still required. They are neither an authentication mechanism nor permission to
 claim or transform durable jobs. Compiled runtime history does not yet carry the
 new claim-ready inventory protocol.
+
+In particular, an initial deployed V1 may have no source seal. Its first freeze
+checks the source visible now; it cannot prove that the deployed application
+never had an older queue declaration that has since been removed. Runtime
+activation must require persisted baseline inventory evidence or explicit legacy
+adoption. A metadata-only control-format upgrade cannot manufacture that evidence.
 
 ## Regression gates
 

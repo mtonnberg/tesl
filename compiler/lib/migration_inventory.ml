@@ -145,6 +145,21 @@ let snapshot inventory =
 
 type queue_payload = { payload_name : string; payload_contract : Migration_canonical.node; payload_loc : Location.loc }
 type queue_contract = { queue_name : string; queue_loc : Location.loc; payloads : queue_payload list }
+let queue_payload_codec_records inventory payload =
+ (* Codec emission follows the value's type graph, not arbitrary types used by
+    proof producers or helper bodies in its larger semantic contract. *)
+ let seen=Hashtbl.create 16 in
+ let rec visit name =
+  if not (Hashtbl.mem seen name) then begin
+   Hashtbl.add seen name ();
+   match List.find_opt (fun definition -> definition.key=(Type,Global name)) inventory.definitions with
+   | None -> ()
+   | Some definition -> List.iter (function Type,Global name -> visit name | _ -> ()) definition.body.references
+  end in
+ visit payload.payload_name;
+ List.filter (fun declaration -> declaration.declaration_kind=Record &&
+  Hashtbl.mem seen declaration.qualified_name) inventory.declarations
+
 let queue_contracts inventory =
   List.filter_map (fun (declaration : declaration) ->
     if declaration.declaration_kind <> Queue_schema then None else

@@ -240,6 +240,7 @@ type pgQueueBackend struct {
 	// before anything is enqueued.
 	codecsMutex sync.RWMutex
 	codecs      []jobCodec
+	queueSchema *pgQueueBinding
 	// codecByType remembers which codec took a Go type, so the probe below runs once per type.
 	codecByType sync.Map     // reflect.Type -> int (index into codecs)
 	lastReclaim atomic.Int64 // unix nanoseconds of this process's last stale-job sweep
@@ -281,6 +282,9 @@ func RegisterJobCodec(queue *Queue, typeName string, encode func(any) any,
 	}
 	backend.codecsMutex.Lock()
 	defer backend.codecsMutex.Unlock()
+	if backend.queueSchema != nil {
+		panic("queue schema: ordinary codec registration cannot replace checked codecs")
+	}
 	for index, existing := range backend.codecs {
 		if existing.typeName == typeName {
 			backend.codecs[index] = jobCodec{typeName: typeName, encode: encode, decode: decode}

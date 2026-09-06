@@ -4,12 +4,19 @@ type origin = {
   initial_version : int;
   steps : (Migration_expansion.step list, Migration_sparse.error list) result;
 }
+type queue_payload = {job:string;contract:string;contract_hash:string}
+type queue_contract = {queue:string;payloads:queue_payload list}
+type queue_version = {version:int;storage_snapshot_hash:string;schema_snapshot_hash:string;
+ source_seal_inventory:string;contracts:queue_contract list}
+type queue_binding = {application_queue:string;database_identity:string;family:string;queue_identity:string;
+ current_version:int;jobs:(string * string * string) list}
 type database = {
   identity : string;
   family : string;
   namespace : string;
   current_version : int;
   origins : origin list;
+  queue_versions : queue_version list;
 }
 type t
 val databases : t -> database list
@@ -27,3 +34,10 @@ val with_history : entry:Ast.module_form -> source:string ->
 val verify_bindings : t option -> Ast.module_form list ->
   (unit, Migration_sparse.error list) result
 val to_json : quote:(string -> string) -> t -> string
+
+(** Complete source inventory, including empty and unrecorded initial V1. This
+    does not assert persisted baseline completeness or authorize queue claims. *)
+val queues_to_json : quote:(string -> string) -> t -> string
+val queue_bindings : t -> queue_binding list
+
+val queue_codec_records : t -> string list

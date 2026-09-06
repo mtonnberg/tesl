@@ -608,8 +608,8 @@ test "attached values remain ordinary arguments" {
     Something alias -> expect callback alias == raw
 |}])
 
-let http_owner name = "module " ^ name ^ " exposing [Allowed, Tagged, Role, authenticate, validate, reply, adminReply]\n" ^
-  "import Tesl.Prelude exposing [String]\nimport Tesl.Http exposing [HttpRequest]\n" ^ {|
+let http_owner name = "module " ^ name ^ " exposing [Allowed, Tagged, Role, authenticate, validate, validateTagged, reply, adminReply]\n" ^
+  "import Tesl.Prelude exposing [String, List]\nimport Tesl.Http exposing [HttpRequest]\n" ^ {|
 fact Allowed(value: String)
 fact Tagged(value: String)
 fact Role(value: String, role: String)
@@ -617,6 +617,8 @@ auth authenticate(request: HttpRequest) -> value: String ::: Allowed value && Ro
   fail 401 "denied"
 check validate(value: String) -> value: String ::: Allowed value && Role value "reader" =
   ok value ::: Allowed value && Role value "reader"
+check validateTagged(value: String) -> value: String ::: Allowed value && Tagged value =
+  ok value ::: Allowed value && Tagged value
 handler get reply(value: String ::: Allowed value && Role value "reader") -> String = value
 handler get adminReply(value: String ::: Allowed value && Role value "admin") -> String = value
 |}
@@ -703,17 +705,29 @@ let http_tool_identity () = with_http_project (fun write ->
   rejected (write "app.tesl" (source "Allowed value && Role value \"admin\"")))
 
 let http_quantified_response_identity () = with_http_project (fun write ->
-  let source proof = Printf.sprintf {|module App exposing []
+  let source handler endpoint = Printf.sprintf {|module App exposing []
 import Tesl.Prelude exposing [String, List]
-import Boundary exposing [Allowed, Tagged]
+import Tesl.List exposing [List.filterCheck]
+import Boundary exposing [Allowed, Tagged, validateTagged]
 import OtherBoundary
-handler get respond(values: List String ::: ForAll (Boundary.Allowed && Boundary.Tagged) values) -> List String ? ForAll (Boundary.Allowed && Boundary.Tagged) = values
-api A { get "/values" body values: List String ::: ForAll (Allowed && Tagged) values -> List String ? ForAll (%s) }
+handler get respond(values: List String) -> %s = List.filterCheck validateTagged values
+api A { get "/values" body values: List String -> %s }
 server S for A { respond }
-|} proof in
-  accepted (write "app.tesl" (source "Allowed"));
-  accepted (write "app.tesl" (source "Tagged && Allowed"));
-  rejected (write "app.tesl" (source "OtherBoundary.Allowed")))
+|} handler endpoint in
+  let handlers = [
+    "List String ? ForAll (Boundary.Allowed && Boundary.Tagged)";
+    "result: List String ::: ForAll (Boundary.Allowed && Boundary.Tagged) result"] in
+  List.iter (fun handler ->
+    List.iter (fun endpoint -> accepted (write "app.tesl" (source handler endpoint))) [
+      "List String ? ForAll (Allowed)";
+      "List String ? ForAll (Tagged && Allowed)";
+      "reply: List String ::: ForAll (Allowed) reply";
+      "reply: List String ::: ForAll (Tagged && Allowed) reply"];
+    List.iter (fun endpoint -> rejected (write "app.tesl" (source handler endpoint))) [
+      "List String ? ForAll (OtherBoundary.Allowed)";
+      "reply: List String ::: ForAll (OtherBoundary.Allowed) reply";
+      "reply: List String ::: ForAll (Allowed && OtherBoundary.Tagged) reply"]
+  ) handlers)
 
 let http_auth_proof_on_capture () = with_http_project (fun write ->
   let source annotation = Printf.sprintf {|module App exposing []
@@ -729,6 +743,37 @@ server S for A { respond }
   accepted (write "app.tesl" proven);
   rejected (write "app.tesl" (source "")))
 
+let http_raw_body_proofs () = with_http_project (fun write ->
+  let source ty annotation = Printf.sprintf {|module App exposing []
+import Tesl.Prelude exposing [String, List]
+import Boundary exposing [Allowed, validate]
+handler post respond(value: %s) -> String = "ok"
+api A { post "/value" body value: %s %s -> String }
+server S for A { respond }
+|} ty ty annotation in
+  List.iter (fun (ty, annotation, message) ->
+    let path = write "app.tesl" (source ty annotation) in
+    rejected path;
+    check bool message true (List.exists (fun (d:Compile.diagnostic) ->
+      Compile.string_contains d.message message) (errors path)))
+    ["String", "::: Allowed value", "does not establish a top-level proof";
+     "List String", "::: ForAll (Allowed) value", "does not establish a top-level proof";
+     "String", "via validate", "body `via` validation is not implemented";
+     "String", "::: Allowed value via validate", "body `via` validation is not implemented"];
+  accepted (write "app.tesl" {|module App exposing []
+import Tesl.Prelude exposing [String]
+import Tesl.Json exposing [stringCodec]
+import Boundary exposing [Allowed, validate]
+record Input { title: String ::: Allowed title }
+codec Input {
+  toJson { title -> "title" with_codec stringCodec }
+  fromJson [ { title <- "title" with_codec stringCodec via validate } ]
+}
+handler post respond(value: Input) -> String = value.title
+api A { post "/value" body value: Input -> String }
+server S for A { respond }
+|}))
+
 let () = run "qualified predicate identity" ["ownership", [
   test_case "HTTP auth aliases keep their original authority and role" `Quick http_imported_auth_identity;
   test_case "HTTP auth cannot mint a same-spelled local proof" `Quick http_local_auth_owner;
@@ -737,6 +782,7 @@ let () = run "qualified predicate identity" ["ownership", [
   test_case "HTTP response guarantees preserve owners and literal arguments" `Quick http_response_identity;
   test_case "HTTP quantified response retains owner and conjunct coverage" `Quick http_quantified_response_identity;
   test_case "auth evidence does not prove another captured value" `Quick http_auth_proof_on_capture;
+  test_case "raw body annotations and unexecuted via cannot supply proofs" `Quick http_raw_body_proofs;
   test_case "detached Fact storage refuses while attached fields remain supported" `Quick detached_fact_storage;
   test_case "Fact conjunction retains every owner and subject in either order" `Quick fact_conjunction_identity;
   test_case "builtin and qualified Fact conjunctions preserve all proof requirements" `Quick builtin_fact_conjunction;

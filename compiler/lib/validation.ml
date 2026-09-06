@@ -86,6 +86,7 @@ let check_module_unscoped (m : module_form) : validation_error list =
   @ (TCodec @: check_capture_codec_types (decls_with_imported_types @ capture_decls))
   @ (TProof @: check_capture_proof_via ~facts (decls @ capture_decls))
   @ (TProof @: check_auth_proof_via ~facts decls)
+  @ (TProof @: check_api_body_proof_boundary decls)
   @ (TProof @: check_endpoint_proof_subject_binding decls)
   @ (TStructural @: check_api_endpoint_structure ~facts decls)
   @ (TStructural @: check_queue_structure decls)

@@ -689,15 +689,26 @@ let uncovered_proof_apps ~(declared : proof_app list) ~(covered : proof_app list
     conjunctions so a stronger quantified guarantee covers each advertised part,
     while retaining the quantifier and every predicate argument in comparisons. *)
 let response_proof_apps_of_return_spec spec =
-  let rec quantified quantifier = function
-    | PredAnd {left;right;_} -> quantified quantifier left @ quantified quantifier right
-    | proof -> [(quantifier, [pp_proof proof; "$subject"])] in
+  let rec quantified ?(subject="$subject") quantifier = function
+    | PredAnd {left;right;_} ->
+      quantified ~subject quantifier left @ quantified ~subject quantifier right
+    | proof -> [(quantifier, [pp_proof proof; subject])] in
   match spec with
   | RetForAll {proof;_} | RetMaybeForAll {proof;_}
   | RetSetForAll {proof;_} | RetMaybeSetForAll {proof;_} -> quantified "ForAll" proof
   | RetForAllDictValues {proof;_} -> quantified "ForAllValues" proof
   | RetForAllDictKeys {proof;_} -> quantified "ForAllKeys" proof
-  | _ -> proof_apps_of_return_spec spec
+  | _ ->
+    proof_apps_of_return_spec spec |> List.concat_map (function
+      | (("ForAll" | "ForAllValues" | "ForAllKeys") as quantifier,
+          [inner; subject]) as app ->
+        (* Attached returns and the `? ForAll` surface carry the same guarantee.
+           Normalize only parsed conjunctions, without changing the quantified
+           subject or any inner predicate argument. *)
+        (match parse_nested_predicate inner with
+         | Some proof -> quantified ~subject quantifier proof
+         | None -> [app])
+      | app -> [app])
 
 (** Extract the element-level predicate names from a ForAll/MaybeForAll/SetForAll return spec. *)
 let forall_preds_of_return_spec (spec : return_spec) : string list =

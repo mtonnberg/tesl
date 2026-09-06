@@ -587,7 +587,7 @@ api TodoApi {
 
   post "/todos"
     auth user: User ::: Authenticated user via cookieAuth
-    body req: NewTodo ::: ValidNewTodo
+    body req: NewTodo
     -> Todo ? FromDb (Id == todo.id)
 
   put "/todos/:id"
@@ -597,6 +597,11 @@ api TodoApi {
     -> Todo ? FromDb (Id == id)
 }
 ```
+
+Put request-field invariants on `NewTodo` and validate them in its codec with
+`via` checks. A top-level `body req: NewTodo ::: ValidNewTodo` annotation does not
+run a whole-record check and is rejected, as is the unimplemented `body ... via`
+form. Validate cross-field invariants inside the handler before using them.
 
 ### Versioning
 
@@ -747,6 +752,13 @@ without a recorded complete queue inventory cannot establish that no jobs existe
 claims and job transformations are not yet implemented. See the
 [queue schema prerequisite](../dev-docs/queue-schema-prerequisite.md) for the
 current boundary.
+
+Compiled PostgreSQL apps link a complete queue source inventory and bind each
+schema queue to its generated job codecs. This remains source information:
+checking or resealing V1 cannot prove what an existing database stored. Missing
+or legacy inventory metadata never means an empty installed queue. Versioned
+queue claiming still requires the protected storage and baseline protocol;
+see [compiled queue history](../dev-docs/queue-history-projection.md).
 
 On Linux, start a guided edit session in a terminal:
 

@@ -147,3 +147,7 @@ val entity_changes : before:t -> after:t ->
 type queue_payload = { payload_name : string; payload_contract : Migration_canonical.node; payload_loc : Location.loc }
 type queue_contract = { queue_name : string; queue_loc : Location.loc; payloads : queue_payload list }
 val queue_contracts : t -> queue_contract list
+
+(** Owned records reachable through the payload value type graph. Proof/helper
+    closure remains in payload_contract but does not require unrelated codecs. *)
+val queue_payload_codec_records : t -> queue_payload -> declaration list

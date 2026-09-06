@@ -135,3 +135,37 @@ test("an unfinished migration record does not paint the next declaration", async
   ordinary([tokens[2]], "same");
   ordinary([tokens[2]], "to");
 });
+
+
+test("queueSchema highlights an actual pure schema without reserving its function name", async () => {
+  const name = path.join(__dirname, "fixtures/queue-schema/schema/todo/v-current.tesl");
+  const source = fs.readFileSync(name, "utf8");
+  const lines = source.split(/\r?\n/);
+  const tokens = await tokenize(source);
+  const declaration = lines.findIndex(line => line.startsWith("queueSchema Notifications"));
+  assert.ok(declaration >= 0);
+  keyword([tokens[declaration]], "queueSchema", "keyword.other.declaration.tesl");
+  keyword([tokens[declaration]], "Notifications", "entity.name.type.tesl");
+  ordinary([tokens[lines.findIndex(line => line.startsWith("module "))]], "queueSchema");
+  ordinary([tokens[lines.findIndex(line => line.startsWith("fn queueSchema"))]], "queueSchema");
+});
+
+test("queueSchema contextual highlighting handles layout and excludes ordinary uses", async () => {
+  for (const source of ["queueSchema\tJobs\t{ jobs: [Notify] }", "queueSchema Jobs\n{ jobs: [Schema.Todo.VCurrent.Notify] }"]) {
+    keyword(await tokenize(source), "queueSchema", "keyword.other.declaration.tesl");
+  }
+  const tokens = await tokenize([
+    "record Config { queueSchema: String }",
+    "fn queueSchema(value: String) -> String = value",
+    "fn use() -> String = queueSchema Notify",
+    "fn indented() -> String =",
+    "  queueSchema Notify { message: \"ordinary call\" }",
+    "queueSchema = Notify { message: \"ordinary binding\" }",
+    "# queueSchema Jobs { jobs: [Notify] }",
+    "text = \"queueSchema Jobs { jobs: [Notify] }\"",
+  ].join("\n"));
+  for (const index of [0, 1, 2, 4, 5]) ordinary([tokens[index]], "queueSchema");
+  assert.ok(tokens[6].every(token => token.scopes.includes("comment.line.number-sign.tesl")));
+  const string = tokens[7].filter(token => token.text.includes("queueSchema"));
+  assert.ok(string.length && string.every(token => token.scopes.includes("string.quoted.double.tesl")));
+});

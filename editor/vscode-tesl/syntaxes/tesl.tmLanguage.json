@@ -10,6 +10,7 @@
     { "include": "#pipe-operators" },
     { "include": "#operators" },
     { "include": "#migration-declaration" },
+    { "include": "#queue-schema-declaration" },
     { "include": "#agent-declaration" },
     { "include": "#declaration-keywords" },
     { "include": "#control-keywords" },
@@ -102,6 +103,13 @@
         { "include": "#migration-nested-record" },
         { "include": "$self" }
       ]
+    },
+    "queue-schema-declaration": {
+      "comment": "queueSchema is contextual pure metadata. Match the canonical top-level spelling; indented calls, fields and function names remain identifiers.",
+      "match": "^(queueSchema)\\b(?=[ \\t]+[A-Z][a-zA-Z0-9_]*[ \\t]*(?:\\{|$))",
+      "captures": {
+        "1": { "name": "keyword.other.declaration.tesl" }
+      }
     },
     "agent-declaration": {
       "comment": "`agent` is a contextual keyword — a declaration keyword only in `agent <Name> ...` at the top level. Elsewhere it is an ordinary identifier (e.g. a parameter named `agent: Agent`), so anchor to line start and require an uppercase name to follow.",

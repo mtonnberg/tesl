@@ -15,6 +15,8 @@ let stored_value_compatibility t = t.stored_value_compatibility
    different executor to resume a pinned transforming generation.
    Revision 4 compares complete proof applications at HTTP auth, capture and
    response boundaries, including role/tenant arguments and quantified proofs.
+   It also refuses unvalidated top-level request-body proofs and unexecuted
+   body-via clauses; codec-validated field proofs remain supported.
    Revision 3 could admit reader evidence to an admin-annotated handler, which
    could then store that invalid evidence; it is not a compatible predecessor.
    Revision 3 preserved original predicate owners through hidden forwarding,

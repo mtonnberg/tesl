@@ -223,8 +223,151 @@ let origin_collision () = with_project (fun root path ->
  check bool "refused origin cannot appear as an empty executable plan" true
   (Compile.string_contains a.contents "\"initialVersion\":2,\"steps\":null,\"errors\":[");
  check string "whole build still carries the two supported origins" (json p ^ "\n") a.contents)
+let queue_schema = {|module NotesSchema.VCurrent exposing [Note, Notify, Other, Notifications]
+import Tesl.Prelude exposing [String]
+entity Note table "notes" primaryKey id { id: String }
+record Notify { message: String }
+record Other { message: String }
+queueSchema Notifications { jobs: [Notify] }
+|}
+let queue_app=(app |> replace "import NotesSchema.VCurrent" {|import NotesSchema.VCurrent
+import Tesl.Prelude exposing [String, Unit]
+import Tesl.App exposing [App]
+import Tesl.Queue exposing [Queue, FromQueue, queueRead]
+import Tesl.Maybe exposing [Maybe(..)]|}) ^ {|
+queue Tasks requires [queueRead] = Queue { database: Main, schema: NotesSchema.VCurrent.Notifications,
+ jobs: [Job NotesSchema.VCurrent.Notify handle Nothing] }
+worker handle(job: NotesSchema.VCurrent.Notify ::: FromQueue (Id == jobId) job) requires [queueRead] = job
+handler get healthy() -> String = "ok"
+api Routes { get "/" -> String }
+server Web for Routes { healthy }
+main() -> App requires [queueRead] = App { database: Main, queues: [Tasks], api: Web }
+|}
+let queue_fixture f=with_project (fun root path ->
+ save (path "schema/notes/v-current.tesl") queue_schema;
+ save (path "app.tesl") queue_app;
+ f root path)
+let queue_projection ()=queue_fixture (fun root path ->
+ let p=bundle path in
+ let version=List.hd (current p).queue_versions in
+ check string "unsealed initial V1 cannot claim recorded authority" "unrecorded" version.source_seal_inventory;
+ check string "stable queue identity" "Notifications" (List.hd version.contracts).queue;
+ check bool "storage and semantic identities use distinct domains" true (version.storage_snapshot_hash<>version.schema_snapshot_hash);
+ let serialized=P.queues_to_json ~quote:Compile.json_encode_string p in
+ let artifacts=emit path queue_app in
+ let queue_artifact=List.find (fun (a:Emit_go.artifact) -> a.path="queue-history.json") artifacts in
+ check string "standalone companion equals guarded projection" (serialized ^ "\n") queue_artifact.contents;
+ let source=(List.find (fun (a:Emit_go.artifact) -> a.path="internal/teslmodapp/module.go") artifacts).contents in
+ check bool "real queue and codec bind checked IDs" true (Compile.string_contains source "RegisterQueueSchemaJobCodec(TasksQueue, \"NotesSchema\", \"Notifications\", \"Notify\", 1");
+ check bool "legacy queue name unchanged" true (Compile.string_contains source "NewQueueOn(MainDatabase, \"Tasks\"");
+ let generated=(List.find (fun (a:Emit_go.artifact) -> a.path="internal/teslrt/migration_history_generated.go") artifacts).contents in
+ check bool "binary links companion without disk reads" true (Compile.string_contains generated "registerCompiledQueueHistory(teslGeneratedQueueHistoryJSON)");
+ let owner=(List.find (fun (a:Emit_go.artifact) -> a.path="internal/teslmodnotesschemavcurrent/module.go") artifacts).contents in
+ check bool "schema owner emits derived payload decoder" true (Compile.string_contains owner "func DecodeNotify");
+ generate root 1;
+ let second=bundle path in
+ check (list string) "new recorded inventories complete" ["complete";"complete"]
+  (List.map (fun (v:P.queue_version) -> v.source_seal_inventory) (current second).queue_versions);
+ let original=List.hd (current second).queue_versions in
+ generate root 2;
+ let third=bundle path in
+ check bool "frozen inventory remains byte exact" true (List.hd (current third).queue_versions=original);
+ let renamed=queue_app |> replace "Tasks" "Background" |> replace "handle(" "process(" |> replace " handle " " process " in
+ save (path "app.tesl") renamed;
+ check string "application and handler names do not change queue history" (P.queues_to_json ~quote:Compile.json_encode_string third)
+  (P.queues_to_json ~quote:Compile.json_encode_string (bundle path));
+ ignore (emit path renamed))
+let queue_prefixed_codec_dependency ()=queue_fixture (fun _ path ->
+ save (path "schema/notes/v-current/detail.tesl") "module NotesSchema.VCurrent.Detail exposing [Content]\nimport Tesl.Prelude exposing [String]\nrecord Content { text: String }\n";
+ let source=queue_schema |> replace "import Tesl.Prelude" "import NotesSchema.VCurrent.Detail\nimport Tesl.Prelude"
+  |> replace "record Notify { message: String }" "record Notify { message: NotesSchema.VCurrent.Detail.Content }" in
+ save (path "schema/notes/v-current.tesl") source;
+ let p=bundle path in
+ check (list string) "derived codec dependencies include nested child owner" ["NotesSchema.VCurrent.Detail.Content";"NotesSchema.VCurrent.Notify"] (P.queue_codec_records p);
+ let artifacts=emit path queue_app in
+ let child=List.find (fun (a:Emit_go.artifact) -> a.path="internal/teslmodnotesschemavcurrentdetail/module.go") artifacts in
+ check bool "nested owner emits decoder" true (Compile.string_contains child.contents "func DecodeContent"))
+let queue_source_proof_codec ()=queue_fixture (fun _ path ->
+ let source=queue_schema |> replace "record Notify { message: String }" "fact Valid(message: String)\nrecord Notify { message: String ::: Valid message }" in
+ save (path "schema/notes/v-current.tesl") source;
+ match Compile.compile_go_source (path "app.tesl") queue_app with
+ | Compile.GoFailure ds -> check bool "derived decoder cannot manufacture a proof" true
+   (List.exists (fun (d:Compile.diagnostic) -> Compile.string_contains d.message "proof-bearing fields") ds)
+ | _ -> fail "proof-bearing payload compiled without a checked codec")
+let queue_legacy_provenance ()=with_project (fun root path ->
+ generate root 1;
+ let edge=path "migrations/notes/v2.tesl" in
+ let old=read edge |> replace "tesl:snapshot-seal:v3" "tesl:snapshot-seal:v2" |> replace " queue-inventory-v1" "" in
+ save edge old;
+ check (list string) "legacy absence remains unknown after current compiler checks"
+  ["unknown";"unknown"] (List.map (fun (v:P.queue_version) -> v.source_seal_inventory) (current (bundle path)).queue_versions);
+ generate root 2;
+ check (list string) "freezing preserves old unknown provenance"
+  ["unknown";"unknown";"complete"] (List.map (fun (v:P.queue_version) -> v.source_seal_inventory) (current (bundle path)).queue_versions))
+let queue_additive_projection ()=queue_fixture (fun root path ->
+ generate root 1;
+ let old=(List.hd (current (bundle path)).queue_versions).contracts |> List.hd |> fun q -> List.hd q.payloads in
+ edit_schema path (replace "jobs: [Notify]" "jobs: [Notify, Other]");
+ let source=queue_app |> replace "jobs: [Job NotesSchema.VCurrent.Notify handle Nothing]"
+  "jobs: [Job NotesSchema.VCurrent.Other otherHandle Nothing, Job NotesSchema.VCurrent.Notify handle Nothing]"
+  |> replace "handler get healthy" "worker otherHandle(job: NotesSchema.VCurrent.Other ::: FromQueue (Id == jobId) job) requires [queueRead] = job\nhandler get healthy" in
+ save (path "app.tesl") source;refresh root;
+ let p=bundle path in
+ let payloads=(List.hd (List.hd (List.rev (current p).queue_versions)).contracts).payloads in
+ check (list string) "new identities are additive and sorted" ["Notify";"Other"] (List.map (fun (p:P.queue_payload) -> p.job) payloads);
+ check bool "unchanged full payload contract is preserved" true (List.hd payloads=old);
+ let changed=parsed (path "app.tesl") (source |> replace "schema: NotesSchema.VCurrent.Notifications" "schema: NotesSchema.VCurrent.Other") in
+ let schema=parsed (path "schema/notes/v-current.tesl") (read (path "schema/notes/v-current.tesl")) in
+ refuse "MIG028" (P.verify_bindings (Some p) [changed;schema]);
+ ignore (emit path source))
+let queue_binary ?(nested=false) ()=queue_fixture (fun _ path ->
+ if nested then begin
+  save (path "schema/notes/v-current/detail.tesl") "module NotesSchema.VCurrent.Detail exposing [Content]\nimport Tesl.Prelude exposing [String]\nrecord Content { text: String }\n";
+  save (path "schema/notes/v-current.tesl") (queue_schema
+    |> replace "import Tesl.Prelude" "import NotesSchema.VCurrent.Detail\nimport Tesl.Prelude"
+    |> replace "record Notify { message: String }" "record Notify { message: NotesSchema.VCurrent.Detail.Content }")
+ end;
+ if Sys.command "go version >/dev/null 2>&1" <> 0 then Alcotest.skip () else
+ let destination=path "generated" in
+ List.iter (fun (a:Emit_go.artifact) -> write (Filename.concat destination a.path) a.contents) (emit path queue_app);
+ (* Generated registration must remain complete after all loose metadata files
+    disappear; only the checked compiler literals inside the binary may feed it. *)
+ Sys.remove (Filename.concat destination "queue-history.json");
+ Sys.remove (Filename.concat destination "migration-history.json");
+ write (Filename.concat destination "internal/teslrt/queue_projection_probe.go") {|package teslrt
+func QueueProjectionRoundTripForTest(queue *Queue, value any) (any,error) {
+ backend:=queue.backend.(*pgQueueBackend)
+ codec:=backend.codecs[0]
+ return codec.decode(codec.encode(value))
+}
+|};
+ let probe={|package teslmodapp
+import (
+ "testing"
+ "tesl.generated/teslmodapp/internal/teslrt"
+ schema "tesl.generated/teslmodapp/internal/teslmodnotesschemavcurrent"
+)
+func TestLinkedQueueProjection(t *testing.T) {
+ history,ok:=MainDatabase.CompiledMigrationHistory();if !ok {t.Fatal("missing linked history")}
+ inventory,err:=history.QueueSourceInventory(1);if err!=nil {t.Fatal(err)}
+ if inventory.Versions[0].SourceSealInventory!="unrecorded" {t.Fatal("fresh source claimed persisted V1 authority")}
+ codecs,err:=teslrt.QueueSourceCodecs(TasksQueue);if err!=nil || len(codecs)!=1 || codecs[0].Job!="Notify" || codecs[0].Queue!="Notifications" || codecs[0].LegacyTypeName!="NotesSchema.VCurrent.Notify" {t.Fatal(codecs,err)}
+ value:=schema.Notify{Message:"persisted payload"}
+ decoded,err:=teslrt.QueueProjectionRoundTripForTest(TasksQueue,value);if err!=nil || decoded.(schema.Notify)!=value {t.Fatal(decoded,err)}
+ if schema.DecodeNotifyJSON(map[string]any{"message":42}).OK() {t.Fatal("malformed payload was accepted")}
+}
+|} in
+ let probe=if not nested then probe else probe
+  |> replace "schema \"tesl.generated/teslmodapp/internal/teslmodnotesschemavcurrent\""
+     "schema \"tesl.generated/teslmodapp/internal/teslmodnotesschemavcurrent\"\n detail \"tesl.generated/teslmodapp/internal/teslmodnotesschemavcurrentdetail\""
+  |> replace "Message:\"persisted payload\"" "Message:detail.Content{Text:\"persisted payload\"}" in
+ write (Filename.concat destination "internal/teslmodapp/queue_projection_test.go") probe;
+ let command=Printf.sprintf "cd %s && GOMAXPROCS=2 CGO_ENABLED=0 go test -p 2 ./internal/teslmodapp -run '^TestLinkedQueueProjection$' -count=1 2>&1" (Filename.quote destination) in
+ let channel=Unix.open_process_in command in
+ let output=In_channel.input_all channel in
+ match Unix.close_process_in channel with Unix.WEXITED 0 -> () | _ -> fail output)
 let () = run "Compiled migration history" ["build boundary",List.map (fun (n,f) -> test_case n `Quick f)
- ["actual build artifact and no credentials",baseline;"ordinary and Memory builds",ordinary;"control owner belongs to application configuration",control_owner;"schema commands precede main and debug startup",command_entrypoints;
+ ["nested schema codec binary roundtrip",queue_binary ~nested:true;"queue legacy provenance",queue_legacy_provenance;"queue additive identity projection",queue_additive_projection;"linked queue binary and actual codec roundtrip",queue_binary ~nested:false;"queue companion and stable frozen versions",queue_projection;"queue nested prefixed codec owner",queue_prefixed_codec_dependency;"queue decoder requires proof evidence",queue_source_proof_codec;"actual build artifact and no credentials",baseline;"ordinary and Memory builds",ordinary;"control owner belongs to application configuration",control_owner;"schema commands precede main and debug startup",command_entrypoints;
   "explicit caller bytes",caller_bytes;"virtual application entry",virtual_entry;
   "every origin and stable frozen steps",origins;
   "frozen history refusal",invalid_history;"saved races and pinned bytes",changed_inputs;

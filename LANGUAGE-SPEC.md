@@ -2384,10 +2384,9 @@ This design is theoretically sound because:
 - The ghost witness pattern (GDP) shifts all fallibility to proof *acquisition* — the construction function itself is total.
 - HTTP boundaries are validated by the codec; application-internal construction is validated by requiring a pre-acquired proof as a ghost witness.
 
-**Explicit HTTP wire adapters.** An endpoint may name a different wire type with `body req: Domain from Wire via decodeWire` and `response Wire via encodeWire`. These adapters are part of the static boundary contract, not an escape hatch. The compiler requires:
-- `decodeWire` to be a declared Tesl function with exactly one raw `Wire` argument and a `Domain` return; if the endpoint body declares a proof, `decodeWire` must establish that proof itself unless the endpoint uses `body ... via (...)` to establish it at the boundary.
-- `encodeWire` to be a declared Tesl function with exactly one raw handler-result argument and a `Wire` return.
-- `Wire` to have the appropriate visible codec (`fromJson` for request bodies, `toJson` for responses), because `Wire` is still the type that crosses the HTTP boundary.
+**HTTP body proofs.** The runtime decodes the endpoint's declared body type. A record or ADT codec may establish its declared field proofs through validated decoder checks. The endpoint cannot establish a proof merely by annotating the entire incoming body: top-level body proof annotations and standalone `body ... via ...` clauses are rejected. For scalar or list input, perform the required check in the handler, then use the checked value. Validated capture and auth clauses retain their own producer checks.
+
+**Separate HTTP wire adapters are not implemented by the Go backend.** The forms `body req: Domain from Wire via decodeWire` and `response Wire via encodeWire` do not describe an executed request/response conversion. Do not use them to establish a boundary guarantee. Declare the actual decoded request and encoded response types, supply their codecs where required, and perform domain conversions through ordinary checked function calls in the handler.
 
 **`adtJson` shorthand for ADT types.** When a codec is needed solely to declare the standard `{"tag": "ConstructorName"}` JSON encoding for an ADT, use the `adtJson` shorthand:
 
@@ -2694,14 +2693,12 @@ This creates a reusable capture kind that can later be referenced from API decla
 
 <api-endpoint-line> ::= <auth-line>
                       | <body-line>
-                      | <response-line>
                       | <capture-line>
                       | <return-line>
 
 <auth-line> ::= "auth" <binding> "via" <identifier>
 <capture-line> ::= "capture" <binding> "via" <identifier>
-<body-line> ::= "body" <binding> [ "from" <gdp-expr> "via" <identifier> ]
-<response-line> ::= "response" <gdp-expr> [ "via" <identifier> ]
+<body-line> ::= "body" <binding>
 <return-line> ::= "->" <return-spec>
 ```
 

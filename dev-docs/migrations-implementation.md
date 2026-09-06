@@ -44,11 +44,14 @@ A subsequent review reproduced an HTTP boundary accepting `Role "reader"`
 evidence for a handler requiring `Role "admin"`; the handler could then store
 that invalid evidence. Complete proof applications now cross auth, capture and
 response boundaries, preserving owners, subjects, literals and quantified
-conjunctions. This correction advances the current contract to revision 4.
+conjunctions. A separate reproduction showed raw HTTP body annotations and a
+parsed-but-unexecuted `body via` clause passing unvalidated evidence to handlers;
+these forms now fail at the frontend, while codec-validated fields remain usable.
+This correction advances the current contract to revision 4.
 Contract-2/3 histories are not relabeled, and bookkeeping upgrades do not
 revalidate their stored proofs. The contract-3 native result below remains exact
 historical slice evidence; current compiler and regenerated application gates
-are in progress. Focused owner/HTTP and ForAll suites pass (47 and 61 cases).
+are in progress. Focused owner/HTTP and ForAll suites pass (48 and 61 cases).
 
 The source prerequisite for queues is integrated: pure `queueSchema` declarations,
 complete payload/proof/codec closure, immutable family-relative identities,
@@ -59,6 +62,24 @@ not runtime admission: a newly frozen, previously unsealed V1 cannot prove that
 an older deployed V1 never had queues outside its schema. Protected storage must
 require persisted baseline inventory evidence or explicit legacy adoption before
 any cross-version claims are enabled. See [the prerequisite contract](queue-schema-prerequisite.md).
+
+The checked queue history now reaches emitted binaries as a separate immutable
+companion, preserving the existing expansion wire format. Every database and
+installation origin is validated before publication, and actual queue codecs
+are bound to their declaring schema and database. Compiler program/queue suites
+pass (21 groups each), including executed generated codecs with the loose JSON
+files removed; the companion and registration race tests pass. Two reviews found
+no remaining blocker in this metadata slice. It does not enable durable claims
+or establish a persisted installation baseline. See
+[the projection contract](queue-history-projection.md).
+
+The broad compiler run after the revision-4 proof correction exposed five old
+test groups that relied on unchecked HTTP body annotations or unexecuted wire
+adapters. Those fixtures are being corrected to perform real validation; the
+compiler restriction remains. Response validation now also accepts equivalent
+attached and quantified conjunctions without losing owner or argument identity.
+Its focused ownership and ForAll suites pass (48 and 61 cases); the complete
+compiler gate is pending the fixture corrections.
 
 The production Worker request/executor split and concurrent index worker pass
 their PostgreSQL regression gates. The next production work is protected durable
@@ -85,7 +106,7 @@ and both reviews. The normative phase prerequisites remain in force.
 
 | Scenario | Current evidence / remaining work |
 |---|---|
-| Existing database survives a supported compiler upgrade | Actual A/B/C full-app scenario, compiler/runtime gates and two reviews pass |
+| Existing database survives a supported compiler upgrade | Earlier A/B/C full-app scenario passed; current revision-4 rerun is pending |
 | Adopt/deploy the notes app; add fields and indexes | Additive/Worker lessons and the nine-release todo rolling/index gate pass; adoption remains |
 | Transform an entity while old/new apps keep serving | Planner/typing groundwork exists; compatibility, backfill and epoch closure remain |
 | Reject a row, repair it, retire old code and contract | Model coverage exists; production lifecycle remains |

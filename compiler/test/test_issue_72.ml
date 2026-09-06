@@ -200,6 +200,7 @@ server DummyServer for DummyApi {
    not client-translatable, so this classifies as FkServerOnly — the emit arm
    that only writes a decoder signature. *)
 let server_only_src = {|module Issue72ServerOnly exposing [TagApi]
+import Tesl.Json exposing [listCodec]
 import Tesl.Prelude exposing [Bool(..), Int, String, List]
 import Tesl.List exposing [List.length]
 
@@ -211,8 +212,13 @@ check checkTags(tags: List String) -> tags: List String ::: NonEmptyTags tags =
   else
     fail 400 "empty"
 
+record TagInput { tags: List String ::: NonEmptyTags tags }
+codec TagInput {
+  toJson { tags -> "tags" }
+  fromJson [ { tags <- "tags" with_codec listCodec via checkTags } ]
+}
 api TagApi {
-  post "/tags" body tags: List String ::: NonEmptyTags tags -> String
+  post "/tags" body input: TagInput -> String
 }
 |}
 
@@ -277,9 +283,18 @@ check checkNote(note: Maybe String) -> note: Maybe String ::: NoteGiven note =
     Nothing -> fail 400 "no note"
     Something _text -> ok note ::: NoteGiven note
 
-api NoteApi {
-  post "/notes" body note: Maybe String ::: NoteGiven note -> String
+record NoteResult { note: Maybe String ::: NoteGiven note }
+codec NoteResult {
+  toJson { note -> "note" }
+  fromJson_forbidden
 }
+handler get givenNote() -> NoteResult =
+  let note = check checkNote (Something "a note")
+  NoteResult { note: note }
+api NoteApi {
+  get "/notes" -> NoteResult
+}
+server NoteServer for NoteApi { givenNote }
 |}
 
 (* ── Tests ────────────────────────────────────────────────────────────────── *)

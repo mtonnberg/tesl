@@ -620,6 +620,7 @@ type queue_info = {
      emitter passes a dispatcher that type-switches, which is what queue.go was written
      for. *)
   qu_jobs : (string * string * string option) list;
+  qu_schema : Migration_program.queue_binding option;
   (* The FIRST wiring, which is what the single-payload surfaces use: an api-test's
      `processNextJob` answers a `JobResult` of ONE job type, and no reading of a multi-type
      queue gives it two. *)
@@ -717,6 +718,7 @@ type type_table = {
   (* Storage reaches a record through its entity, including private field types. Resolve its
      codec by declaration identity, never by whichever same-named type is exposed here. *)
   nominal_codecs : ((string * string), codec_form) Hashtbl.t;
+  queue_derived_codecs : ((string * string), unit) Hashtbl.t;
   (* Module-level constants: a NAME and its Go spelling, referenced bare rather than called.
      They live here rather than in `signatures` because a signature describes something that is
      APPLIED, and a const that resolved through that table would be indistinguishable from a
@@ -10221,7 +10223,7 @@ let runtime_file_gates : (string * string list) list = [
      the reason the HTTP half does: it pulls a third-party driver and its whole dependency
      chain into a binary that would otherwise require nothing. *)
    "postgres", [ "postgres.go"; "database.go"; "dbquery.go"; "debug_sql.go"; "pgstores.go";
-                 "pgpubsub.go"; "migration_program.go"; "migration_control.go"; "migration_expand.go"; "migration_admission.go"; "migration_open.go"; "migration_status.go"; "migration_command.go"; "migration_expand_history.go"; "migration_control_spec.go"; "migration_control_catalog.go"; "migration_plan.go"; "migration_plan_wire.go"; "migration_plan_hash.go"; "migration_catalog.go"; "migration_catalog_compare.go"; "migration_catalog_probe.go"; "migration_catalog_expected.go"; "migration_control_expected.go"; "migration_control_upgrade.go"; "migration_index_control.go"; "migration_index_catalog.go"; "migration_index_history.go"; "migration_index_worker.go"; "migration_embedded.go"; "migration_worker.go"; "migration_facilities.go"; "migration_literal.go"; "migration_boundary.go"; "migration_boundary_testbuild.go" ];
+                 "pgpubsub.go"; "migration_program.go"; "migration_queue_program.go"; "migration_control.go"; "migration_expand.go"; "migration_admission.go"; "migration_open.go"; "migration_status.go"; "migration_command.go"; "migration_expand_history.go"; "migration_control_spec.go"; "migration_control_catalog.go"; "migration_plan.go"; "migration_plan_wire.go"; "migration_plan_hash.go"; "migration_catalog.go"; "migration_catalog_compare.go"; "migration_catalog_probe.go"; "migration_catalog_expected.go"; "migration_control_expected.go"; "migration_control_upgrade.go"; "migration_index_control.go"; "migration_index_catalog.go"; "migration_index_history.go"; "migration_index_worker.go"; "migration_embedded.go"; "migration_worker.go"; "migration_facilities.go"; "migration_literal.go"; "migration_boundary.go"; "migration_boundary_testbuild.go" ];
   (* `agent.go` ships only to a program that talks to a model.  Not a dependency argument —
      everything in it is standard library — but a runtime file a program has no use for is
      still surface a reader has to rule out, and the gate costs nothing. *)
@@ -10645,7 +10647,8 @@ let rec json_value_decoder ~package ~loc ~what ty =
   | TRecord _ when is_money ty ->
     "func(teslRaw any) (teslrt.Money, error) {\n\t\tteslMinorUnits, teslUnitsErr := teslrt.DecodeIntField(teslRaw, \"minorUnits\")\n\t\tif teslUnitsErr != nil {\n\t\t\treturn teslrt.Money{}, teslUnitsErr\n\t\t}\n\t\tteslCode, teslCodeErr := teslrt.DecodeStringField(teslRaw, \"currency\")\n\t\tif teslCodeErr != nil {\n\t\t\treturn teslrt.Money{}, teslCodeErr\n\t\t}\n\t\tteslCurrency, teslKnown := teslrt.CurrencyFromCode(teslCode).Value()\n\t\tif !teslKnown {\n\t\t\treturn teslrt.Money{}, errors.New(\"unknown ISO 4217 currency code for Money: \" + teslCode)\n\t\t}\n\t\treturn teslrt.MoneyFromMinorUnits(teslCurrency, teslMinorUnits), nil\n\t}"
   | TRecord nested when nested.rec_owner = package
-                        || nominal_codec nested.rec_owner nested.rec_tesl_name <> None ->
+                        || nominal_codec nested.rec_owner nested.rec_tesl_name <> None
+                        || Option.fold ~none:false ~some:(fun types -> Hashtbl.mem types.queue_derived_codecs (nested.rec_owner,nested.rec_tesl_name)) !current_types ->
     (* A nested record decodes through its own decoder — derived or hand-written — and its
        `Check` becomes an `error` here so one field shape covers both. *)
     Printf.sprintf
@@ -10659,7 +10662,7 @@ let rec json_value_decoder ~package ~loc ~what ty =
     "Go backend cannot decode `%s` from JSON; give the type a `codec`" what
 
 let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) ?(apis=[])
-    ?(servers=[]) ?(capturers=[]) ?(consts=[]) ?(agents=[]) ?(capabilities=[])
+    ?(servers=[]) ?(capturers=[]) ?(consts=[]) ?(agents=[]) ?(capabilities=[]) ?(queue_codec_records=[])
     module_path package signatures
     types (funcs : func_decl list) =
   Hashtbl.reset pending_helpers;
@@ -10730,7 +10733,12 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
            decoders they need exist. *)
         Printf.bprintf body "var %s = teslrt.NewQueueOn(%s, %s, %d, %s, %d)\n"
           info.qu_go_var (qualified db.db_owner db.db_go_var) (go_quote info.qu_tesl_name)
-          info.qu_max_attempts (go_quote info.qu_backoff) info.qu_initial_delay
+          info.qu_max_attempts (go_quote info.qu_backoff) info.qu_initial_delay;
+        Option.iter (fun (binding:Migration_program.queue_binding) ->
+          Printf.bprintf body "var _ = teslrt.RegisterQueueSchema(%s, teslrt.RegisterDatabaseMigrationHistory(teslrt.RegisterDatabaseIdentity(%s, %s), %s), %s, %s, %d)\n"
+            info.qu_go_var (go_quote binding.database_identity) (qualified db.db_owner db.db_go_var)
+            (go_quote binding.family) (go_quote binding.family)
+            (go_quote binding.queue_identity) binding.current_version) info.qu_schema
       | None ->
         Printf.bprintf body "var %s = teslrt.NewQueue(%s, %d)\n"
           info.qu_go_var (go_quote info.qu_tesl_name) info.qu_max_attempts);
@@ -11430,6 +11438,12 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
       | Http { body = Some (binding : binding); _ } ->
         derive_decoder endpoint.loc (type_of_type_expr types binding.type_expr)
       | _ -> ()) api.endpoints) apis;
+  List.iter (fun name -> match Hashtbl.find_opt types.records name with
+   | Some record ->
+     if record.rec_proof_fields && nominal_codec record.rec_owner record.rec_tesl_name=None then
+       unsupported record.rec_loc "queue payload `%s` has proof-bearing fields; an explicit checked codec is required" name;
+     derive_decoder record.rec_loc (TRecord record)
+   | None -> unsupported (Location.dummy_loc module_path) "checked queue payload record `%s` is missing" name) queue_codec_records;
   (* ── Durable stores: job codecs and Postgres-backed caches ─────────────────
      A `tesl_jobs` row holds its payload as JSONB, so every job type a durable queue carries
      needs a JSON encoder and decoder; a `tesl_cache` row likewise for its value type.  The
@@ -11452,9 +11466,17 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
           | Some row -> TRecord row
           | None -> unsupported info.qu_loc "Go backend cannot resolve job type `%s`" job_type in
         let encoder, decoder = durable_codec info.qu_loc job_type row in
+        let registration = match info.qu_schema with
+         | None -> "teslrt.RegisterJobCodec(" ^ info.qu_go_var ^ ", " ^ go_quote job_type
+         | Some binding ->
+           let _,job,hash=match List.find_opt (fun (spelling,_,_) -> spelling=job_type) binding.jobs with
+            | Some job -> job | None -> unsupported info.qu_loc "checked queue codec binding missing for `%s`" job_type in
+           Printf.sprintf "teslrt.RegisterQueueSchemaJobCodec(%s, %s, %s, %s, %d, %s, %s"
+            info.qu_go_var (go_quote binding.family) (go_quote binding.queue_identity) (go_quote job)
+            binding.current_version (go_quote hash) (go_quote job_type) in
         Printf.bprintf body
-          "\nvar _ = teslrt.RegisterJobCodec(%s, %s, func(teslJob any) any {\n\treturn %s(teslJob.(%s))\n}, func(teslJSON any) (any, error) {\n\tteslDecoded, teslErr := %s(teslJSON)\n\tif teslErr != nil {\n\t\treturn nil, teslErr\n\t}\n\treturn teslDecoded, nil\n})\n"
-          info.qu_go_var (go_quote job_type) encoder (go_type row) decoder)
+          "\nvar _ = %s, func(teslJob any) any {\n\treturn %s(teslJob.(%s))\n}, func(teslJSON any) (any, error) {\n\tteslDecoded, teslErr := %s(teslJSON)\n\tif teslErr != nil {\n\t\treturn nil, teslErr\n\t}\n\treturn teslDecoded, nil\n})\n"
+          registration encoder (go_type row) decoder)
         info.qu_jobs);
   Hashtbl.to_seq_values types.caches
   |> List.of_seq
@@ -12961,7 +12983,7 @@ let register_imported_module ~loc ~exposed ?(protected_names=[]) types signature
     ignore (found_type, found_value, loc))
     exposed
 
-let compile_module ?(mode=Release) ?(dependencies=[]) ?(entity_bindings=[]) ?(migration_families=[]) ?project_path (m : module_form) =
+let compile_module ?(mode=Release) ?(dependencies=[]) ?(entity_bindings=[]) ?(migration_families=[]) ?(migration_queues=[]) ?(queue_codec_records=[]) ?project_path (m : module_form) =
   try
     List.iter (function
       | DDatabase { config_expr = Some config; loc; _ } ->
@@ -13295,10 +13317,14 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?(entity_bindings=[]) ?(mi
       channels = Hashtbl.create 4;
       codecs = Hashtbl.create 8;
       nominal_codecs = Hashtbl.create 8;
+      queue_derived_codecs = Hashtbl.create 8;
       aliases = Hashtbl.create 8;
       consts = Hashtbl.create 8;
       databases = Hashtbl.create 4;
     } in
+    List.iter (fun name -> match List.rev (String.split_on_char '.' name) with
+     | record::owner -> Hashtbl.replace types.queue_derived_codecs (package_name (String.concat "." (List.rev owner)),record) ()
+     | [] -> ()) queue_codec_records;
     (* A hand-written codec is emitted by THIS package, once; a use from another package is
        qualified with it (see `codec_decode_ref`). *)
     List.iter (fun (codec : codec_form) ->
@@ -13605,6 +13631,7 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?(entity_bindings=[]) ?(mi
            qu_go_var = go_var;
            qu_owner = package;
            qu_jobs = jobs;
+           qu_schema = List.find_opt (fun (binding:Migration_program.queue_binding) -> binding.application_queue=m.module_name ^ "." ^ q.name) migration_queues;
            qu_job_type = job_type;
            qu_worker = worker;
            qu_dead_worker = dead_worker;
@@ -16087,6 +16114,12 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?(entity_bindings=[]) ?(mi
     current_types := Some types;
     let source =
        module_source ~debug:(mode = Debug) ~imported_packages:!imported_packages ~codecs ~apis ~servers ~capturers
+        ~queue_codec_records:(List.filter_map (fun name ->
+          let prefix=m.module_name ^ "." in
+          if String.starts_with ~prefix name then
+            let local=String.sub name (String.length prefix) (String.length name-String.length prefix) in
+            if String.contains local '.' then None else Some local
+          else None) queue_codec_records)
         ~consts:(List.filter_map (function DConst c -> Some c | _ -> None) m.decls)
         ~agents:(List.filter_map (function DAgent a -> Some a | _ -> None) m.decls)
         ~capabilities:(List.filter_map (function DCapability c -> Some c | _ -> None) m.decls)
@@ -16309,7 +16342,7 @@ let project_entity_bindings (modules : module_form list) =
     | _ -> ()) m.decls) modules;
   if !errors = [] then Ok !bindings else Error (List.rev !errors)
 
-let compile_project ?(mode=Release) ?(migration_families=[]) ~(entry : module_form) (modules : module_form list) =
+let compile_project ?(mode=Release) ?(migration_families=[]) ?(migration_queues=[]) ?(queue_codec_records=[]) ~(entry : module_form) (modules : module_form list) =
   let lowered = List.map (Migration_schema.lower_module ~modules) modules in
   let errors = List.concat_map (function
     | Ok _ -> []
@@ -16384,7 +16417,7 @@ let compile_project ?(mode=Release) ?(migration_families=[]) ~(entry : module_fo
     let rec emit acc exports = function
       | [] -> Ok (List.rev acc)
       | (m : module_form) :: rest ->
-        (match compile_module ~mode ~dependencies:exports ~entity_bindings ~migration_families ~project_path m with
+        (match compile_module ~mode ~dependencies:exports ~entity_bindings ~migration_families ~migration_queues ~queue_codec_records ~project_path m with
          | Error errors -> Error errors
          | Ok (artifacts, module_exports) ->
            emit (List.rev_append artifacts acc) (module_exports :: exports) rest)

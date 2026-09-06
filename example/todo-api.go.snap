@@ -394,31 +394,65 @@ func SeedExampleData() teslrt.Int {
 	}
 }
 
+//line todo-api.tesl:205
+func acceptTodoIds(todoIds []string) string {
 //line todo-api.tesl:206
-func listTest(requestUser User, newTodos []string) string {
-//line todo-api.tesl:209
 	return "hej"
 }
 
+//line todo-api.tesl:208
+func listTest(requestUser User, newTodos []string) string {
 //line todo-api.tesl:211
+	{
+		teslScrut1 := (func() teslrt.Maybe[[]string] {
+			teslAll2 := true
+			teslOut2 := make([]string, 0, len(newTodos))
+			for _, Value2 := range newTodos {
+				if teslKept2, teslOK2 := (isTodoId(Value2)).Value(); teslOK2 {
+					teslOut2 = append(teslOut2, teslKept2)
+				} else {
+					teslAll2 = false
+				}
+			}
+			if teslAll2 {
+				return teslrt.Maybe[[]string]{Tag: teslrt.MaybeSomething, SomethingValue: teslOut2}
+			}
+			return teslrt.Maybe[[]string]{Tag: teslrt.MaybeNothing}
+		}())
+		switch teslScrut1.Tag {
+		case teslrt.MaybeNothing:
+//line todo-api.tesl:212
+			panic(teslrt.RequestRejection{Status: 400, Message: "Malformed todo id"})
+		case teslrt.MaybeSomething:
+			checkedTodos := teslScrut1.SomethingValue
+			_ = checkedTodos
+//line todo-api.tesl:213
+			return acceptTodoIds(checkedTodos)
+		default:
+			panic("unreachable: checker guarantees case exhaustiveness")
+		}
+	}
+}
+
+//line todo-api.tesl:215
 func createTodo(requestUser User, newTodo NewTodo) Todo {
 	{
-//line todo-api.tesl:215
+//line todo-api.tesl:219
 		todoId := generateTodoId()
 		_ = todoId
-//line todo-api.tesl:216
+//line todo-api.tesl:220
 		return teslrt.DbInsert(TodoDatabaseDatabase, TodoTable, "Todo", Todo{Id: todoId, Title: newTodo.Title, OwnerId: requestUser.Id, Status: Status{Tag: StatusOpen}, CreatedAt: teslrt.NowMillis()}, func(teslRow, teslNew Todo) bool { return (teslRow.Id == teslNew.Id) }, "insert into \"todo_api\".\"todos\" (\"id\", \"title\", \"owner_id\", \"status\", \"created_at\") values ($1, $2, $3, $4, $5)", func(teslRow Todo) []any {
 			return []any{teslRow.Id, teslRow.Title, teslRow.OwnerId.Value, teslrt.EncodeJSONValue(teslEncode1(teslRow.Status)), teslrt.PgBigint(teslRow.CreatedAt.Value)}
 		})
 	}
 }
 
-//line todo-api.tesl:225
+//line todo-api.tesl:229
 func listMyTodos(requestUser User) []Todo {
 	{
-//line todo-api.tesl:228
+//line todo-api.tesl:232
 		_ = teslrt.Telemetry("todo.list", []teslrt.Tuple2[string, string]{{Tuple2First: "user.id", Tuple2Second: requestUser.Id.Value}})
-//line todo-api.tesl:229
+//line todo-api.tesl:233
 		return teslrt.DbSelect(TodoDatabaseDatabase, TodoTable, func(todo Todo) bool {
 			return (todo.OwnerId.Value == requestUser.Id.Value)
 		}, nil, 0, -1, teslrt.PgSql("select \"id\", \"title\", \"owner_id\", \"status\", \"created_at\" from \"todo_api\".\"todos\" where \"owner_id\" = $1", func() []any {
@@ -427,17 +461,17 @@ func listMyTodos(requestUser User) []Todo {
 	}
 }
 
-//line todo-api.tesl:233
+//line todo-api.tesl:237
 func listOpenTodos(requestUser User) []Todo {
 	{
-//line todo-api.tesl:236
+//line todo-api.tesl:240
 		myTodos := teslrt.DbSelect(TodoDatabaseDatabase, TodoTable, func(todo Todo) bool {
 			return (todo.OwnerId.Value == requestUser.Id.Value)
 		}, nil, 0, -1, teslrt.PgSql("select \"id\", \"title\", \"owner_id\", \"status\", \"created_at\" from \"todo_api\".\"todos\" where \"owner_id\" = $1", func() []any {
 			return []any{requestUser.Id.Value}
 		}), teslScanTodo)
 		_ = myTodos
-//line todo-api.tesl:237
+//line todo-api.tesl:241
 		return (func() []Todo {
 			teslOut2 := make([]Todo, 0, len(myTodos))
 			for _, Value2 := range myTodos {
@@ -450,35 +484,35 @@ func listOpenTodos(requestUser User) []Todo {
 	}
 }
 
-//line todo-api.tesl:239
+//line todo-api.tesl:243
 func getTodo(requestUser User, todoId string) Todo {
 	{
-//line todo-api.tesl:242
+//line todo-api.tesl:246
 		existing := teslrt.DbSelectOne(TodoDatabaseDatabase, TodoTable, func(todo Todo) bool {
 			return (todo.Id == todoId)
 		}, nil, teslrt.PgSql("select \"id\", \"title\", \"owner_id\", \"status\", \"created_at\" from \"todo_api\".\"todos\" where \"id\" = $1 limit 1", func() []any {
 			return []any{todoId}
 		}), teslScanTodo)
 		_ = existing
-//line todo-api.tesl:243
+//line todo-api.tesl:247
 		{
 			teslScrut2 := existing
 			if teslScrut2.Tag == teslrt.MaybeNothing {
-//line todo-api.tesl:245
+//line todo-api.tesl:249
 				panic(teslrt.RequestRejection{Status: 404, Message: "Todo not found"})
 			}
 			if teslScrut2.Tag == teslrt.MaybeSomething {
 				todo := teslScrut2.SomethingValue
 				_ = todo
 				if todo.OwnerId.Value != requestUser.Id.Value {
-//line todo-api.tesl:247
+//line todo-api.tesl:251
 					panic(teslrt.RequestRejection{Status: 403, Message: "Todo not owned by request user"})
 				}
 			}
 			if teslScrut2.Tag == teslrt.MaybeSomething {
 				todo := teslScrut2.SomethingValue
 				_ = todo
-//line todo-api.tesl:249
+//line todo-api.tesl:253
 				return todo
 			}
 			panic("unreachable: checker guarantees case exhaustiveness")
@@ -486,33 +520,33 @@ func getTodo(requestUser User, todoId string) Todo {
 	}
 }
 
-//line todo-api.tesl:251
+//line todo-api.tesl:255
 func completeTodo(requestUser User, todoId string) Todo {
 	{
-//line todo-api.tesl:254
+//line todo-api.tesl:258
 		existing := teslrt.DbSelectOne(TodoDatabaseDatabase, TodoTable, func(todo Todo) bool {
 			return (todo.Id == todoId)
 		}, nil, teslrt.PgSql("select \"id\", \"title\", \"owner_id\", \"status\", \"created_at\" from \"todo_api\".\"todos\" where \"id\" = $1 limit 1", func() []any {
 			return []any{todoId}
 		}), teslScanTodo)
 		_ = existing
-//line todo-api.tesl:255
+//line todo-api.tesl:259
 		{
 			teslScrut2 := existing
 			if teslScrut2.Tag == teslrt.MaybeNothing {
-//line todo-api.tesl:257
+//line todo-api.tesl:261
 				panic(teslrt.RequestRejection{Status: 404, Message: "Todo not found"})
 			}
 			if teslScrut2.Tag == teslrt.MaybeSomething {
 				todo := teslScrut2.SomethingValue
 				_ = todo
 				if todo.OwnerId.Value != requestUser.Id.Value {
-//line todo-api.tesl:259
+//line todo-api.tesl:263
 					panic(teslrt.RequestRejection{Status: 403, Message: "Todo not owned by request user"})
 				}
 			}
 			if teslScrut2.Tag == teslrt.MaybeSomething {
-//line todo-api.tesl:261
+//line todo-api.tesl:265
 				return teslrt.DbUpdateReturnOne(TodoDatabaseDatabase, TodoTable, func(todo Todo) bool {
 					return (todo.Id == todoId)
 				}, func(todo Todo) Todo {
@@ -530,9 +564,9 @@ func completeTodo(requestUser User, todoId string) Todo {
 	}
 }
 
-//line todo-api.tesl:305
+//line todo-api.tesl:309
 func Main() struct{} {
-//line todo-api.tesl:305
+//line todo-api.tesl:309
 	return func() struct{} {
 		var teslBound struct{}
 		teslrt.WithDatabase(TodoDatabaseDatabase, func() {
@@ -819,6 +853,7 @@ func teslScanTodo(teslRow pgx.CollectableRow) (Todo, error) {
 // private declaration; Go's linters do not, so these references keep them.
 var (
 	_ = Main
+	_ = acceptTodoIds
 	_ = checkOpen
 	_ = completeTodo
 	_ = containsAnA

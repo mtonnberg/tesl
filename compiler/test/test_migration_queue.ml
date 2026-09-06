@@ -53,6 +53,11 @@ let pair before after test = with_project (fun root write ->
 let parser () = with_project (fun _ write ->
   let multiline=replace "{ jobs: [Notify] }" "{\n jobs: [\n  Notify,\n ]\n}" source in
   let p=write "schema/todo/v-current.tesl" multiline in accepts p multiline;
+  let formatted=Formatter.format_source multiline in
+  check string "formatter preserves contextual declaration idempotently" formatted (Formatter.format_source formatted);
+  accepts p formatted;
+  check bool "formatter preserves checked pure inventory" true
+    (List.exists (function Ast.DQueueSchema _ -> true | _ -> false) (parse p formatted).decls);
   check int "one distinct pure declaration" 1 (List.length (List.filter (function Ast.DQueueSchema _ -> true | _ -> false) (parse p multiline).decls));
   List.iter (fun changed -> match Parser.parse_module p changed with
     | Err _ -> () | Ok _ -> fail "effectful/computed queueSchema parsed")

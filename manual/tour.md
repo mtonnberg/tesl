@@ -88,13 +88,16 @@ When Tesl decodes a `NewTodo` from a request body, it runs `isValidTitle` automa
 the request is rejected with a 400 before your handler even runs. If it passes, the `title` field
 carries the `ValidTitle` proof.
 
-If an endpoint needs a separate wire shape, write the adapter explicitly in the API declaration:
-`body req: Domain from Wire via decodeWire` and `response Wire via encodeWire`. These adapters must
-be declared Tesl functions so the compiler can verify them at compile time. `decodeWire` must accept
-exactly one raw `Wire` value and return `Domain` (including any required body proof unless the
-endpoint uses a `body ... via (...)` boundary checker). `encodeWire` must accept the raw handler
-return value and return `Wire`. The `Wire` type still needs a visible codec because it is the type
-that crosses the HTTP boundary.
+Declare the decoded request type directly, for example `body req: NewTodo`. The codec's field
+checks establish the proofs carried by the decoded fields. A proof annotation on the whole HTTP
+body does not validate incoming JSON: top-level `body ... ::: ...` annotations and standalone
+`body ... via ...` clauses are rejected. Validate fields in the codec, or call a `check` in the
+handler before passing the value to a function that requires its proof.
+
+Separate HTTP wire adapters (`body req: Domain from Wire via decodeWire` and
+`response Wire via encodeWire`) are not implemented by the Go backend. When wire and domain shapes
+differ, decode the declared wire type through its codec and convert it with ordinary checked calls
+inside the handler; return the response's wire type through its codec.
 
 ### 3. Client generation
 

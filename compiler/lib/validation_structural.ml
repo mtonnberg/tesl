@@ -1462,13 +1462,26 @@ let check_capture_proof_via
     | _ -> None
   ) decls
 
-(* Auth analogue of {!check_capture_proof_via}.  Review 2026-07 (AUTH-VIA): an
-   endpoint's `auth <b> ::: P via <fn>` clause was NEVER validated at the
-   frontend for (a) existence of <fn>, (b) its kind, or (c) whether it produces
-   the declared predicate — whereas captures had all three.  So a typo'd /
-   wrong-kind / wrong-predicate auth `via` passed --check and failed only at
-   Racket load or first request, violating the validate-once promise on the
-   auth boundary specifically.  This mirrors the capture check exactly. *)
+(* A body decoder establishes the declared type, including validated codec
+   fields. It does not establish arbitrary whole-value predicates, and the
+   parsed body-via slot currently has no runtime executor. *)
+let check_api_body_proof_boundary decls =
+  List.concat_map (function
+    | DApi api -> List.filter_map (fun (ep : api_endpoint) ->
+        match ep_body ep with
+        | Some binding when ep_body_via ep <> None ->
+          Some (make_error binding.loc
+            ~hint:"validate fields with a record/ADT codec, or receive the raw body and call a check inside the handler before using its proof"
+            "HTTP body `via` validation is not implemented; the runtime would decode the body without invoking this check")
+        | Some ({proof_ann=Some _;_} as binding) ->
+          Some (make_error binding.loc
+            ~hint:"put the invariant on a record field and validate that field in its codec, or check the raw body inside the handler"
+            "HTTP body decoding does not establish a top-level proof annotation; declaring a proof here would pass unvalidated evidence to the handler")
+        | _ -> None) api.endpoints
+    | _ -> []) decls
+
+(* Auth analogue of {!check_capture_proof_via}: validate the producer's
+   existence, kind and complete proof applications before HTTP can supply them. *)
 let check_auth_proof_via
     ?facts
     ?(extra_funcs : (string * func_info) list = [])
@@ -2028,10 +2041,16 @@ let check_server_handler_binding
                in
                if has_named_source p.name then
                  errors := make_error handler_loc
-                   ~hint:(Printf.sprintf
-                     "annotate the capture/body for `%s` with `::: %s %s` (and a `via` \
-                      that establishes it) in endpoint '%s', so the proof reaches the handler"
-                     p.name (String.concat " && " uncovered) p.name endpoint_name)
+                   ~hint:(if List.exists (fun (c : api_capture) -> c.binding.name = p.name) ep.captures then
+                     Printf.sprintf
+                       "annotate capture `%s` with its required proof and a `via` check \
+                        that establishes it in endpoint '%s'"
+                       p.name endpoint_name
+                     else Printf.sprintf
+                       "accept the decoded body `%s` without a top-level proof annotation; \
+                        establish the required proof with a check inside the handler, \
+                        or validate record fields through their codec"
+                       p.name)
                    (Printf.sprintf
                      "server '%s': handler '%s' requires proof %s on `%s`, but the \
                       capture/body for `%s` in endpoint '%s' establishes %s — the \
@@ -2043,8 +2062,8 @@ let check_server_handler_binding
                else
                  errors := make_error handler_loc
                    ~hint:(Printf.sprintf
-                     "add `capture %s: %s ::: %s %s via <checkFn>` (or a proof-carrying \
-                      `body`) to endpoint '%s' so the proof reaches the handler"
+                     "add `capture %s: %s ::: %s %s via <checkFn>` to endpoint '%s'; \
+                      for body input, accept the decoded value and check it inside the handler"
                      p.name (pp_type_expr p.type_expr) (String.concat " && " uncovered)
                      p.name endpoint_name)
                    (Printf.sprintf
