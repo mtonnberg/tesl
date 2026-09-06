@@ -63,10 +63,29 @@ producer returned a transformed value, but a decomposed success witness could
 be attached to the unchanged input and stored in a proof-bearing record. Success
 proofs now follow the returned payload, independently of input/return binder
 spelling. Direct, bound, aliased, decomposed and forwarded optional values are
-covered; the 22-group integration gate passes, including two generated Go race
-apps. Contract-4 databases are not relabeled or silently trusted. The earlier
-retained-database results remain historical evidence; the revision-5 application
-and compiler-upgrade gates require a fresh run after the adjacent proof review.
+covered. The adjacent review also found an ordinary attached result promising
+its input's identity while returning a different value through a branch. Every
+returning branch now verifies that identity; fresh result binders and partial
+calls cannot borrow an input subject. The author's combined 403-case gate passes,
+including five generated Go race executions. The shared full compiler gate caught
+an additional compatibility regression: a nested check result bound through a
+local name loses its input identity. That correction and a repeated union gate
+are pending; the unrelated old spelling-only alias negative also needs updating.
+An additional regression preserves proof returns from nullary `()` calls.
+Contract-4 databases are not relabeled or silently trusted. The earlier
+retained-database results remain historical evidence. Fresh revision-5 compiler
+upgrade, nine-release rolling application and separate-worker lesson tests pass
+on PostgreSQL 17 (623.095s combined, including pending-worker recovery). Source
+history was regenerated with the compiler; old contract-4 databases and archives
+were preserved without relabeling.
+
+PostgreSQL deployment settings now use `PostgresConfig.migrations: MigrationConfig
+{ topology, controlOwner, requestRole, workerRole, ddlConnection }`.
+`Database.migrations` continues to select the history module; namespace and
+application connection settings remain on `PostgresConfig`. The typed record
+supplies the usual field completion, hover and documentation. Historical flat
+spelling remains readable, but mixing it with grouped fields is rejected.
+Focused compiler/configuration gates pass, as do the real applications above.
 
 The source prerequisite for queues is integrated: pure `queueSchema` declarations,
 complete payload/proof/codec closure, immutable family-relative identities,

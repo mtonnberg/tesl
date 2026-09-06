@@ -820,7 +820,8 @@ Versioned PostgreSQL startup waits for supported additive changes before the
 application body runs, using the history compiled into that binary. The protected
 control objects must already be installed by an operator; startup refuses missing
 installation and unrecorded existing tables. The application owns its connection
-and optional `PostgresConfig.controlOwner` (default `tesl_control`). Schema and
+and optional `MigrationConfig.controlOwner` (default `tesl_control`) under
+`PostgresConfig.migrations`. Schema and
 migration modules own neither credentials nor connection configuration.
 
 Reads and writes check whether their compiled schema version remains admitted.
@@ -852,10 +853,11 @@ state; normal startup creates the entity storage. A fresh database starts at the
 binary's current revision, while a retry preserves its recorded installation
 origin. The command refuses pre-versioning tables rather than adopting them.
 
-For separate production credentials, use `topology: Worker` in `PostgresConfig`
-and import `MigrationTopology(..)` from `Tesl.Database`. The request login can
+For separate production credentials, use
+`migrations: MigrationConfig { topology: Worker }` inside `PostgresConfig` and
+import `MigrationConfig` and `MigrationTopology(..)` from `Tesl.Database`. The request login can
 read and write entities; a separate schema worker owns DDL. Configure the stable
-`requestRole` and `workerRole` names (defaults `tesl_app` and `tesl_schema`), then
+`requestRole` and `workerRole` names in that record (defaults `tesl_app` and `tesl_schema`), then
 select each process's actual login through your connection environment:
 
 ```sh

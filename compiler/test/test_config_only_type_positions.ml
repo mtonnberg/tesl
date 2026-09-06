@@ -61,9 +61,9 @@ let assert_clean ~ctx src =
 (* ── The reject matrix ────────────────────────────────────────────────────── *)
 
 let import_for = function
-  | "Database" | "Postgres" | "Memory" | "MigrationTopology" | "Worker" | "Embedded" ->
+  | "Database" | "Postgres" | "Memory" | "MigrationConfig" | "MigrationTopology" | "Worker" | "Embedded" ->
     "import Tesl.Database exposing [Database, DatabaseBackend, Postgres, \
-     Memory, PostgresConfig, PostgresConnection, TcpConnection, SocketConnection, \
+     Memory, PostgresConfig, MigrationConfig, PostgresConnection, TcpConnection, SocketConnection, \
      MigrationTopology, Worker, Embedded]"
   | "Queue" | "Job" ->
     "import Tesl.Queue exposing [Queue, QueueRetryStrategy, Exponential, \
@@ -78,7 +78,7 @@ let import_for = function
 
 (* The category-specific message fragment each rejected name must produce. *)
 let expected_fragment = function
-  | "Database" | "Queue" | "Job" | "App" | "SmtpConfig" | "SseChannel" ->
+  | "Database" | "MigrationConfig" | "Queue" | "Job" | "App" | "SmtpConfig" | "SseChannel" ->
     "is a config-only stdlib name"
   | "Postgres" | "Memory" ->
     "is a config-block constructor (of `DatabaseBackend`)"
@@ -110,7 +110,7 @@ let positions name = [
 ]
 
 let reject_names =
-  [ "Database"; "Postgres"; "Memory"; "Queue"; "Job"; "App"; "SmtpConfig";
+  [ "Database"; "MigrationConfig"; "Postgres"; "Memory"; "Queue"; "Job"; "App"; "SmtpConfig";
     "SseChannel"; "Utc"; "EuropeStockholm"; "Usd"; "MigrationTopology"; "Worker"; "Embedded" ]
 
 let test_reject_matrix () =
@@ -320,7 +320,7 @@ module SS = Set.Make (String)
    the runtime provide-existence seam off this set, so the refactored value
    must stay set-identical. *)
 let pre_refactor_literal =
-  [ "Database"; "DatabaseBackend"; "Postgres"; "Memory"; "PostgresConfig";
+  [ "Database"; "DatabaseBackend"; "Postgres"; "Memory"; "PostgresConfig"; "MigrationConfig";
     "PostgresConnection"; "TcpConnection"; "SocketConnection";
     (* Versioned migration topology is likewise consumed as declaration configuration. *)
     "MigrationTopology"; "Worker"; "Embedded";
@@ -337,7 +337,7 @@ let pre_refactor_literal =
     "SsoConnection"; "SsoSubjectKey"; "SsoIdentity";
     (* Phase 4: the SsoProvider type + its inline-lowered value constructors. *)
     "SsoProvider"; "Github"; "Google" ]
-  @ ["Migration"; "Entity"; "Rule"; "Same"; "Additive"; "New"; "Drop"; "Default"]
+  @ ["Migration"; "Entity"; "Rule"; "Same"; "Additive"; "Derived"; "Migrate"; "New"; "Drop"; "Default"; "Rename"]
   @ Tz_zones.ctor_names
   @ Currencies.ctor_names
   @ List.map fst Units_catalog.aliases

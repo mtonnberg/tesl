@@ -1701,7 +1701,7 @@ let tesl_module_exports : (string * string list) list = [
   ( "Tesl.Migration", Migration_form.names @ Migration_form.runtime_names );
   ( "Tesl.Database",
     [ "Database"; "DatabaseBackend"; "Postgres"; "Memory";
-      "PostgresConfig"; "PostgresConnection";
+      "PostgresConfig"; "MigrationConfig"; "PostgresConnection";
       "TcpConnection"; "SocketConnection"; "MigrationTopology"; "Worker"; "Embedded" ] );
   (* App-simplification (roadmap/next/app_simplification.md): `main : () -> App`
      returning a typed App record; `Job` pairs a job type with its handler +

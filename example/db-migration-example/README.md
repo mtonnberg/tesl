@@ -19,6 +19,9 @@ Database connections and handlers do not belong in schema modules. A storage
 change usually touches the current schema and its migration; adding an app
 feature may also change the handlers and UI.
 Each accepted snapshot is one `schema/todo/vN.tesl` file beside the current one.
+In the app's database block, `Database.migrations` selects that history.
+`PostgresConfig.connection` describes the connection, while its `migrations:
+MigrationConfig { ... }` record groups the schema worker and role settings.
 
 ## Run it
 

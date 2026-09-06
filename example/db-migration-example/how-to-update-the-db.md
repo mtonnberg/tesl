@@ -8,6 +8,10 @@ there. Then focus on two things:
 - **The migration** explains how that schema can coexist with retained rows and
   older binaries. Review it as code, including any rule you must supply.
 
+`Database.migrations` selects the history. The separate `MigrationConfig` inside
+`PostgresConfig.migrations` configures its execution and database roles. Those
+deployment settings normally stay the same when you change an entity.
+
 ## 1. Start the guided workflow
 
 ```sh

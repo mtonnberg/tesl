@@ -7,15 +7,15 @@ if [[ -f "$TODO_LOCAL_DIR/postgres/PG_VERSION" && ! -f "$TODO_LOCAL_DIR/todo-dem
   echo "Refusing a PostgreSQL directory not created by this demo: $TODO_LOCAL_DIR/postgres" >&2
   exit 1
 fi
-if [[ -f "$TODO_LOCAL_DIR/postgres/PG_VERSION" && "$(cat "$TODO_LOCAL_DIR/todo-demo-cluster")" != 'Field Notes Schema.Todo local PostgreSQL cluster' ]]; then
-  echo 'This retained demo directory predates the Schema.Todo example. Its history is a different identity.' >&2
+if [[ -f "$TODO_LOCAL_DIR/postgres/PG_VERSION" && "$(cat "$TODO_LOCAL_DIR/todo-demo-cluster")" != 'Field Notes Schema.Todo contract-5 local PostgreSQL cluster' ]]; then
+  echo 'This retained demo directory uses an earlier schema or stored-value contract. Its history is a different identity.' >&2
   echo 'Keep that data intact. Choose a fresh TODO_LOCAL_DIR and an unused TODO_DB_PORT; no schema was changed.' >&2
   exit 1
 fi
 mkdir -p "$TODO_LOCAL_DIR/socket"
 if [[ ! -f "$TODO_LOCAL_DIR/postgres/PG_VERSION" ]]; then
   initdb -D "$TODO_LOCAL_DIR/postgres" -U todo_setup_admin --auth-local=trust --auth-host=trust > "$TODO_LOCAL_DIR/initdb.log"
-  printf 'Field Notes Schema.Todo local PostgreSQL cluster\n' > "$TODO_LOCAL_DIR/todo-demo-cluster"
+  printf 'Field Notes Schema.Todo contract-5 local PostgreSQL cluster\n' > "$TODO_LOCAL_DIR/todo-demo-cluster"
 fi
 if ! pg_ctl -D "$TODO_LOCAL_DIR/postgres" status >/dev/null 2>&1; then
   pg_ctl -D "$TODO_LOCAL_DIR/postgres" -l "$TODO_LOCAL_DIR/postgres.log" \

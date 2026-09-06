@@ -1,5 +1,7 @@
 # Compiled queue history projection
 
+> Audience: contributors implementing and verifying compiled queue inventories.
+
 The compiler emits `queue-history.json` for each build containing a versioned
 PostgreSQL database, including builds whose queue inventory is explicitly empty.
 The identical bytes are linked as a Go constant in

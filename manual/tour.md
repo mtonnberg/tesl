@@ -461,11 +461,13 @@ and routes. Its API tests create and read a note and verify that invalid input
 does not insert one. A storage-only change need not change the HTTP response.
 
 [Lesson 84](../example/learn/lesson84-worker-migrations.tesl) deploys that pattern
-with `PostgresConfig.topology: Worker`: one compiled binary runs as the schema
+with `migrations: MigrationConfig { topology: Worker }` inside `PostgresConfig`:
+one compiled binary runs as the schema
 worker with DDL credentials, while request processes use a separate DML login.
 The request app waits for its schema revision and runs the same handlers before
 and after an additive migration. Connection roles and optional `ddlConnection`
-remain in the application. `Embedded` combines those roles for development;
+remain in the application's `MigrationConfig`. The separate
+`Database.migrations` field names the source history. `Embedded` combines those roles for development;
 when topology is omitted, the presence of `TESL_DEPLOYED` selects Worker.
 
 Records and ADTs stored as JSONB also have a schema, even when the SQL column

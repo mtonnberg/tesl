@@ -18,7 +18,7 @@ before replacing an old node; old requests drain before its process stops.
 Continuous create/update/read/delete probes check every rollout.
 
 Ctrl-C stops the app processes. PostgreSQL and its data remain under
-`example/db-migration-example/.local-schema-todo/`. Logs and the saved binaries are printed
+`example/db-migration-example/.local-schema-todo-v5/`. Logs and the saved binaries are printed
 when the demo starts. Stop the owned database separately:
 
 ```sh
@@ -36,13 +36,22 @@ belongs to a different schema identity. Keep it intact; the regenerated
 still uses port 55439, choose another port:
 
 ```sh
-TODO_LOCAL_DIR="$PWD/example/db-migration-example/.local-schema-todo" TODO_DB_PORT=55440 \
+TODO_LOCAL_DIR="$PWD/example/db-migration-example/.local-schema-todo-v5" TODO_DB_PORT=55440 \
   bash example/db-migration-example/deploy/run-cluster.sh
 ```
 
 The setup script refuses the old demo marker before invoking PostgreSQL tools.
 It never renames, reseals or resets that retained history. Re-running against
 retained data above means data created by this same new history.
+
+**Ran the earlier `Schema.Todo` trial with stored-value contract 4?** Keep that
+database and its saved binaries intact too. The compiler now uses contract 5
+after correcting proof transport; a bookkeeping change cannot validate evidence
+stored by the older compiler. Use a new directory and a free database port for
+this freshly generated sample history; the new default directory does this
+automatically. The setup script refuses an earlier directory before invoking
+PostgreSQL tools. Revalidating a database across different
+stored-value contracts remains a separate, unfinished migration path.
 
 ## Ordinary deployments
 

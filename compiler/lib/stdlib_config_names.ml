@@ -40,7 +40,7 @@
     SseChannel { … }`, `cache C = Cache { … }`, the `main() -> App` tail, the
     `jobs: [Job …]` list) and have no runtime representation. *)
 let config_block_types : string list =
-  [ "Database"; "PostgresConfig"; "Queue"; "QueueRetryStrategy";
+  [ "Database"; "PostgresConfig"; "MigrationConfig"; "Queue"; "QueueRetryStrategy";
     "QueueRetryConfig"; "Email"; "SmtpConfig"; "SseChannel"; "App"; "Job";
     "Cache" ] @ Migration_form.names
 

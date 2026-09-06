@@ -1,5 +1,7 @@
 # Frozen queue schema prerequisite
 
+> Audience: contributors implementing and verifying frozen queue schemas.
+
 This is the compiler prerequisite for `roadmap/next/queue-payload-migrations.md`.
 It does not enable versioned PostgreSQL queues. Guarded queue startup still refuses
 until protected runtime storage, version-aware claims, claim-attempt fencing,

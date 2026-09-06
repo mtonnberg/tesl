@@ -13,7 +13,9 @@ let stored_value_compatibility t = t.stored_value_compatibility
    Bump it when stored values, proof interpretation, codecs, primitive behavior
    or the canonical/storage mapping cease to be compatible. It never permits a
    different executor to resume a pinned transforming generation.
-   Revision 5 keeps optional attached evidence on the returned success payload.
+   Revision 5 keeps optional attached evidence on the returned success payload,
+   verifies input-named attached results on every returning branch, and never
+   treats a fresh result or partial call as an input alias.
    Revision 4 could attach a transformed result's detached witness to the
    unchanged input when return/input binders had the same spelling, then store
    that invalid evidence. It is not a compatible stored-value predecessor.

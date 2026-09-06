@@ -1,5 +1,7 @@
 # Dead-letter metadata boundary
 
+> Audience: contributors implementing and verifying queue diagnostics.
+
 `DeadJob` is an opaque snapshot returned by `deadJobs`. Its pure accessors are
 `DeadJob.id : DeadJob -> String`, `DeadJob.reason : DeadJob -> DeadJobReason`,
 `DeadJob.attempts : DeadJob -> Int`, `DeadJob.sourceVersion : DeadJob -> Maybe Int`,

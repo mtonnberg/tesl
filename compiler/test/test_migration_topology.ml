@@ -24,10 +24,10 @@ entity Note table "notes" primaryKey id { id: String }
 |};
     f (Filename.concat root "app.tesl"))
 
-let source ?(imports="Worker, Embedded") fields = Printf.sprintf {|module App exposing [Db]
+let source ?(imports="Worker, Embedded") ?(grouped=true) fields = Printf.sprintf {|module App exposing [Db]
 import Tesl.Prelude exposing [Int, String]
 import Tesl.Env exposing [env, envString]
-import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection%s]
+import Tesl.Database exposing [Database, Postgres, PostgresConfig, MigrationConfig, TcpConnection%s]
 import NotesSchema.VCurrent exposing [Note]
 database Db = Database {
   schema: NotesSchema.VCurrent
@@ -41,7 +41,8 @@ database Db = Database {
 %s
   })
 }
-|} (if imports="" then "" else ", " ^ imports) fields
+|} (if imports="" then "" else ", " ^ imports)
+  (if grouped && fields<>"" then "    migrations: MigrationConfig {\n" ^ fields ^ "\n    }" else fields)
 
 let diagnostics path text =
   write path text;
@@ -98,11 +99,13 @@ let literal_connections () = with_project (fun path ->
     {|DDLConnection: "host=direct.internal dbname=notes user=notes_schema"|} ])
 
 let environment_connections () = with_project (fun path ->
-  let result = emit path (source {|    requestRole: envString "NOTES_REQUEST_ROLE" "tesl_app"
+  let result = emit path (source {|    controlOwner: env "NOTES_CONTROL_OWNER"
+    requestRole: envString "NOTES_REQUEST_ROLE" "tesl_app"
     workerRole: env "NOTES_WORKER_ROLE"
     ddlConnection: env "NOTES_DDL_DSN"
 |}) in
   List.iter (fun expected -> check bool expected true (contains result expected)) [
+    {|ControlOwner: teslrt.EnvString("NOTES_CONTROL_OWNER", "")|};
     {|RequestRole: teslrt.EnvString("NOTES_REQUEST_ROLE", "tesl_app")|};
     {|WorkerRole: teslrt.EnvString("NOTES_WORKER_ROLE", "")|};
     {|DDLConnection: teslrt.EnvString("NOTES_DDL_DSN", "")|} ];
@@ -113,7 +116,7 @@ let constructor_imports () = with_project (fun path ->
   ignore (emit path (source ~imports:"Embedded" "topology: Embedded"));
   ignore (emit path (source ~imports:"MigrationTopology(..)" "topology: Worker"));
   let all = source ~imports:"" "topology: Embedded" |>
-    replace "import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]" "import Tesl.Database" in
+    replace "import Tesl.Database exposing [Database, Postgres, PostgresConfig, MigrationConfig, TcpConnection]" "import Tesl.Database" in
   ignore (emit path all);
   refuses path (source ~imports:"" "topology: Worker") "requires importing `Worker`";
   refuses path (source ~imports:"MigrationTopology" "topology: Embedded") "requires importing `Embedded`";
@@ -129,7 +132,7 @@ let string_config_only () = with_project (fun path ->
     List.iter (fun value ->
       refuses path (source (field ^ ": " ^ value)) ("field `" ^ field ^ "` must be a String"))
       ["42"; "Worker"; "True"; "[\"x\"]"])
-    ["requestRole"; "workerRole"; "ddlConnection"])
+    ["controlOwner"; "requestRole"; "workerRole"; "ddlConnection"])
 
 let legacy_refusal () = with_project (fun path ->
   let legacy text = text |>
@@ -138,7 +141,7 @@ let legacy_refusal () = with_project (fun path ->
   accepts path (legacy (source ~imports:"" ""));
   List.iter (fun (field,value) ->
     refuses path (legacy (source (field ^ ": " ^ value)))
-      ("`PostgresConfig." ^ field ^ "` requires a versioned schema module")) [
+      "`PostgresConfig.migrations` requires a versioned schema module") [
     "topology", "Worker"; "topology", "Embedded"; "requestRole", "\"app\"";
     "workerRole", "\"worker\""; "ddlConnection", {|env "DDL_DSN"|} ])
 
@@ -161,9 +164,9 @@ let config_context () =
   let lines = String.split_on_char '\n' text in
   let line = List.find_index (fun line -> String.trim line="topology: Worker") lines |> Option.get in
   match Compile.config_context_source "<topology-context>" text line 6 with
-  | None -> fail "missing PostgresConfig context"
+  | None -> fail "missing MigrationConfig context"
   | Some context ->
-    check string "configuration block" "PostgresConfig" context.cc_block;
+    check string "configuration block" "MigrationConfig" context.cc_block;
     List.iter (fun (name,kind,doc) ->
       match List.find_opt (fun (f : Compile.config_field_info) -> f.cfi_name=name) context.cc_fields with
       | None -> fail ("missing configuration field " ^ name)
@@ -178,7 +181,7 @@ let config_context () =
       "ddlConnection", "String", "session-affine" ]
 
 let config_docs () =
-  let rendered = Result.get_ok (Stdlib_docs.render_config "PostgresConfig") in
+  let rendered = Result.get_ok (Stdlib_docs.render_config "MigrationConfig") in
   List.iter (fun field -> check bool "generated config documentation" true (contains rendered field))
     ["topology: Worker | Embedded"; "requestRole: String"; "workerRole: String"; "ddlConnection: String"];
   List.iter (fun name ->
@@ -188,6 +191,64 @@ let config_docs () =
       check bool "docs describe deployment default" true (contains entry.doc "TESL_DEPLOYED")
     | _ -> fail ("missing or ambiguous topology documentation for " ^ name))
     ["MigrationTopology"; "Worker"; "Embedded"]
+
+let record_shape () = with_project (fun path ->
+  let block value = source ~grouped:false ("migrations: " ^ value) in
+  ignore (emit path (block "MigrationConfig {}"));
+  List.iter (fun value -> refuses path (block value) "must be `MigrationConfig")
+    ["42"; "{}"; "Worker"; "MigrationConfig"; "PostgresConfig {}"; "MigrationConfig 42"; "MigrationConfig {} {}"];
+  refuses path (block "MigrationConfig { requestRole: \"a\", requestRole: \"b\" }") "duplicate field `requestRole`";
+  refuses path (block "MigrationConfig { poolSize: 5 }") "unknown field `poolSize`";
+  refuses path (block "MigrationConfig { unknown: \"role\" }") "unknown field `unknown`";
+  let missing = block "MigrationConfig {}" |> replace "MigrationConfig, " "" in
+  refuses path missing "requires importing `MigrationConfig`";
+  let legacy = block "MigrationConfig {}" |>
+    replace "schema: NotesSchema.VCurrent\n  migrations: NotesSchema.Migrate" "schema: \"legacy\"\n  entities: [Note]" |>
+    replace "    namespace: \"notes\"\n" "" in
+  refuses path legacy "`PostgresConfig.migrations` requires a versioned schema module")
+
+let compatibility_spelling () = with_project (fun path ->
+  let fields = {|topology: Worker
+controlOwner: "control"
+requestRole: "requests"
+workerRole: "workers"
+ddlConnection: "host=direct dbname=notes"|} in
+  check string "existing flat config has exactly the same emitted meaning"
+    (emit path (source ~grouped:false fields)) (emit path (source fields));
+  List.iter (fun flat ->
+    refuses path (source ~grouped:false ("migrations: MigrationConfig {}\n" ^ flat)) "flat and grouped settings cannot be mixed")
+    ["topology: Worker"; "controlOwner: \"control\""; "requestRole: \"requests\"";
+     "workerRole: \"workers\""; "ddlConnection: \"direct\""])
+
+let legacy_flat_validation () = with_project (fun path ->
+  let legacy text = text |>
+    replace "schema: NotesSchema.VCurrent\n  migrations: NotesSchema.Migrate" "schema: \"legacy\"\n  entities: [Note]" |>
+    replace "    namespace: \"notes\"\n" "" in
+  List.iter (fun (field,value) ->
+    refuses path (legacy (source ~grouped:false (field ^ ": " ^ value)))
+      ("`PostgresConfig." ^ field ^ "` requires a versioned schema module"))
+    ["topology", "Worker"; "controlOwner", "\"control\""; "requestRole", "\"requests\"";
+     "workerRole", "\"workers\""; "ddlConnection", "\"direct\""];
+  List.iter (fun field -> refuses path (source ~grouped:false (field ^ ": 42"))
+    ("field `" ^ field ^ "` must be a String"))
+    ["controlOwner"; "requestRole"; "workerRole"; "ddlConnection"];
+  refuses path (source ~grouped:false "topology: \"Worker\"") "literal constructor")
+
+let containing_context () =
+  let text = source "topology: Worker" in
+  let lines = String.split_on_char '\n' text in
+  let line = List.find_index (fun line -> String.trim line="dbName: \"unused\"") lines |> Option.get in
+  let context = Compile.config_context_source "<grouped-config>" text line 6 |> Option.get in
+  check string "outer context stays PostgreSQL" "PostgresConfig" context.cc_block;
+  let migration = List.find (fun (f:Compile.config_field_info) -> f.cfi_name="migrations") context.cc_fields in
+  check string "discoverable record type" "MigrationConfig { … }" migration.cfi_type;
+  check bool "nested record is optional" false migration.cfi_required;
+  check bool "nested record is present" true migration.cfi_present;
+  List.iter (fun name -> check bool "flat migration fields are not offered" false
+    (List.exists (fun (f:Compile.config_field_info) -> f.cfi_name=name) context.cc_fields))
+    ["topology";"controlOwner";"requestRole";"workerRole";"ddlConnection"];
+  let rendered = Result.get_ok (Stdlib_docs.render_config "PostgresConfig") in
+  check bool "config docs link the nested type" true (contains rendered "migrations: MigrationConfig")
 
 let () =
   run "Migration topology configuration" [
@@ -204,9 +265,13 @@ let () =
       test_case "role and DSN values are strings" `Quick string_config_only;
       test_case "legacy configuration remains unchanged" `Quick legacy_refusal;
       test_case "constructors cannot escape config" `Quick expression_refusal;
+      test_case "typed migration record and malformed shapes" `Quick record_shape;
+      test_case "flat history spelling and no ambiguous mixing" `Quick compatibility_spelling;
+      test_case "historical flat spelling keeps validation" `Quick legacy_flat_validation;
     ];
     "tooling", [
       test_case "normal config field completion and hover" `Quick config_context;
       test_case "normal config and constructor documentation" `Quick config_docs;
+      test_case "Postgres config points to the grouped type" `Quick containing_context;
     ];
   ]

@@ -1,5 +1,7 @@
 # Protected queue operations (unpublished)
 
+> Audience: contributors implementing and verifying fenced queue operations.
+
 This implements the operation portion of the format-4 candidate described in
 [queue-control-format4-candidate.md](queue-control-format4-candidate.md). Production
 format selection remains disabled. The SQL is executed

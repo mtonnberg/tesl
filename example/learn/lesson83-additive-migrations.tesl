@@ -88,7 +88,7 @@ import Tesl.DB exposing [dbRead, dbWrite]
 import Tesl.Database exposing [
   Database,
   Postgres,
-  PostgresConfig,
+  PostgresConfig, MigrationConfig,
   TcpConnection,
   MigrationTopology(..),
 ]
@@ -104,8 +104,10 @@ database NoteDatabase = Database {
   migrations: AdditiveNotesSchema.Migrate
   backend: Postgres (PostgresConfig {
     namespace: "additive_notes"
-    controlOwner: env "NOTES_CONTROL_OWNER"
-    topology: Embedded
+    migrations: MigrationConfig {
+      controlOwner: env "NOTES_CONTROL_OWNER"
+      topology: Embedded
+    }
     dbName: env "NOTES_DB_NAME"
     user: env "NOTES_DB_USER"
     password: env "NOTES_DB_PASSWORD"

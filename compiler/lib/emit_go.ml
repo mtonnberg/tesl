@@ -13224,7 +13224,7 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?(entity_bindings=[]) ?(mi
           match name with
           (* These names are only meaningful inside a `database` declaration, which is where
              the backend is read and where the connection is built. *)
-          | "Database" | "Memory" | "DatabaseBackend" | "Postgres" | "PostgresConfig"
+          | "Database" | "Memory" | "DatabaseBackend" | "Postgres" | "PostgresConfig" | "MigrationConfig"
           | "PostgresConnection" | "TcpConnection" | "SocketConnection"
           | "MigrationTopology" | "MigrationTopology(..)" | "Worker" | "Embedded" -> ()
           | other -> unsupported import.loc

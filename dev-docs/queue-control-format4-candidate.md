@@ -1,5 +1,7 @@
 # Queue control format 4 candidate (unpublished)
 
+> Audience: contributors implementing and verifying protected queue storage.
+
 This is the storage prerequisite for protected versioned queues. Production
 installation still creates format 3; the public upgrade API/CLI still supports
 only the explicit 2 → 3 bridge. Production readers/openers reject candidate 4,

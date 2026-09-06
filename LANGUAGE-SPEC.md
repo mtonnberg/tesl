@@ -2543,11 +2543,13 @@ A `database` declaration is a folded record assigned with `=`:
                          "password"   ":" <expr>
                          [ "poolSize"  ":" <expr> ]
                          [ "namespace" ":" <string-literal> ]
-                         [ "controlOwner" ":" <expr> ]
-                         [ "topology" ":" ("Worker" | "Embedded") ]
-                         [ "requestRole" ":" <expr> ]
-                         [ "workerRole" ":" <expr> ]
-                         [ "ddlConnection" ":" <expr> ]
+                         [ "migrations" ":" "MigrationConfig" "{"
+                             [ "topology" ":" ("Worker" | "Embedded") ]
+                             [ "controlOwner" ":" <expr> ]
+                             [ "requestRole" ":" <expr> ]
+                             [ "workerRole" ":" <expr> ]
+                             [ "ddlConnection" ":" <expr> ]
+                           "}" ]
                          "connection" ":" <connection>
                        "}" ")"
                      | "Memory"
@@ -2625,15 +2627,25 @@ the module-reference form. It is independent of the Tesl module and database
 declaration names; the compiler does not guess a physical namespace from either.
 Memory has no physical namespace. During source transition the existing string
 `Database.schema` plus explicit `entities:` form retains its meaning and cannot
-also specify `migrations:`, `PostgresConfig.namespace`, `PostgresConfig.controlOwner`,
-`topology`, `requestRole`, `workerRole`, or `ddlConnection`.
-The optional versioned `PostgresConfig.controlOwner` is a string or `env` expression
+also specify `Database.migrations`, `PostgresConfig.namespace`, or
+`PostgresConfig.migrations` (including an empty `MigrationConfig {}`).
+The optional `PostgresConfig.migrations` field takes the typed configuration
+record `MigrationConfig` from `Tesl.Database`. It groups execution topology,
+control ownership, request/worker roles and the executor's connection override.
+`Database.migrations` separately names the source history. Import `MigrationConfig`
+explicitly or import all of `Tesl.Database`; all its fields are optional.
+The earlier flat spellings of those five settings remain readable for existing
+application fixtures, but may not be mixed with the grouped record. Editor
+completion and generated documentation offer the grouped form. Duplicate fields
+are errors.
+
+The optional `MigrationConfig.controlOwner` is a string or `env` expression
 naming the no-login role that owns migration control objects (default `tesl_control`).
 It is application configuration, independent of the schema's source history. The
 operator provisions it and installs the protected control interface; application
 startup does not create roles or adopt existing tables.
 
-`PostgresConfig.topology` selects `Worker` or `Embedded`, literal config-only
+`MigrationConfig.topology` selects `Worker` or `Embedded`, literal config-only
 constructors of `Tesl.Database.MigrationTopology`. Import the selected constructor
 or `MigrationTopology(..)`; neither constructor is an ordinary runtime value.
 An omitted topology selects Worker when `TESL_DEPLOYED` is present and Embedded

@@ -5,7 +5,7 @@ import Tesl.List exposing [List.map]
 import Tesl.String exposing [String.repeat]
 import Tesl.Maybe exposing [Maybe(..)]
 import Tesl.DB exposing [dbRead, dbWrite]
-import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection, MigrationTopology(..)]
+import Tesl.Database exposing [Database, Postgres, PostgresConfig, MigrationConfig, TcpConnection, MigrationTopology(..)]
 import Tesl.Env exposing [envRead, envInt]
 import Tesl.App exposing [App]
 import Tesl.ApiTest exposing [statusOk]
@@ -18,11 +18,13 @@ database TodoDatabase = Database {
   migrations: Schema.Todo.Migrate
   backend: Postgres (PostgresConfig {
     namespace: "todo_app"
-    topology: Worker
-    controlOwner: env "TODO_CONTROL_OWNER"
-    requestRole: env "TODO_REQUEST_ROLE"
-    workerRole: env "TODO_WORKER_ROLE"
-    ddlConnection: env "TODO_DDL_CONNECTION"
+    migrations: MigrationConfig {
+      topology: Worker
+      controlOwner: env "TODO_CONTROL_OWNER"
+      requestRole: env "TODO_REQUEST_ROLE"
+      workerRole: env "TODO_WORKER_ROLE"
+      ddlConnection: env "TODO_DDL_CONNECTION"
+    }
     dbName: env "TODO_DB_NAME"
     user: env "TODO_DB_USER"
     password: env "TODO_DB_PASSWORD"

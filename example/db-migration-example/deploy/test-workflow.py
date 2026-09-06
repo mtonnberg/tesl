@@ -110,7 +110,7 @@ class ReleaseTests(unittest.TestCase):
 
     def test_changed_application_refuses_archived_comparison(self):
         copy = self.directory / "app-copy"
-        shutil.copytree(APP, copy, ignore=shutil.ignore_patterns(".local", "elm-stuff", "main.js", "__pycache__"))
+        shutil.copytree(APP, copy, ignore=shutil.ignore_patterns(".local*", "elm-stuff", "main.js", "__pycache__"))
         path = copy / "todo-app.tesl"
         path.write_text(path.read_text() + "\n# Changed handler/application snapshot.\n")
         result = subprocess.run(["bash", str(copy / "deploy/build-revision.sh"), "9", str(self.directory / "refused"), "--prepare-only"],
@@ -127,7 +127,7 @@ class LocalScriptTests(unittest.TestCase):
         result = subprocess.run(["bash", "-c", 'source "$1"; printf "%s" "$TODO_LOCAL_DIR"',
                                  "bash", str(APP / "deploy/local-env.sh")], env=env,
                                 capture_output=True, text=True, check=True)
-        self.assertEqual(result.stdout, str(APP / ".local-schema-todo"))
+        self.assertEqual(result.stdout, str(APP / ".local-schema-todo-v5"))
 
     def test_ambient_postgres_configuration_cannot_redirect_local_children(self):
         env = dict(os.environ, TODO_LOCAL_DIR=str(APP / ".local"), TODO_DB_PORT="55439", PGHOST="other-db.invalid", PGPORT="6543",
@@ -163,12 +163,17 @@ class LocalScriptTests(unittest.TestCase):
             self.assertFalse((root / "invoked").exists())
 
     def test_setup_refuses_the_legacy_family_without_touching_retained_data(self):
+        for marker in ("Field Notes local PostgreSQL cluster", "Field Notes Schema.Todo local PostgreSQL cluster"):
+            with self.subTest(marker=marker):
+                self.check_retained_directory_refused(marker)
+
+    def check_retained_directory_refused(self, marker):
         with tempfile.TemporaryDirectory(prefix="tesl-todo-family-test-") as directory:
             root = Path(directory)
             (root / "postgres").mkdir()
             (root / "postgres/PG_VERSION").write_text("17\n")
             (root / "postgres/retained-row-evidence").write_bytes(b"old demo data\x00")
-            (root / "todo-demo-cluster").write_text("Field Notes local PostgreSQL cluster\n")
+            (root / "todo-demo-cluster").write_text(marker + "\n")
             tools = root / "tools"
             tools.mkdir()
             for name in ("initdb", "pg_ctl", "psql"):

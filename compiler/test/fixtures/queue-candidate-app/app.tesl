@@ -1,6 +1,6 @@
 module App exposing [NotifyRequest, AuditRequest, notify, audit, handleNotify, handleAudit, deadAudit]
 import Tesl.Prelude exposing [String]
-import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection, Worker]
+import Tesl.Database exposing [Database, Postgres, PostgresConfig, MigrationConfig, TcpConnection, Worker]
 import Tesl.DB exposing [dbWrite]
 import Tesl.App exposing [App]
 import Tesl.Queue exposing [Queue, Job, QueueRetryStrategy, Fixed, FromQueue, FromDeadQueue, queueRead, queueWrite]
@@ -11,7 +11,7 @@ import Schema.Tasks.VCurrent.Detail
 database Store = Database {
   schema: Schema.Tasks.VCurrent
   migrations: Schema.Tasks.Migrate
-  backend: Postgres (PostgresConfig { dbName: "provided-by-test-bridge", user: "provided-by-test-bridge", password: "", namespace: "queued_app", topology: Worker,
+  backend: Postgres (PostgresConfig { dbName: "provided-by-test-bridge", user: "provided-by-test-bridge", password: "", namespace: "queued_app", migrations: MigrationConfig { topology: Worker },
     connection: TcpConnection { host: "127.0.0.1", port: 1 } })
 }
 record NotifyRequest { id: String, message: String }

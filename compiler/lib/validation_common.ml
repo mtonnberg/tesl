@@ -2887,6 +2887,14 @@ let rec collect_call_head_and_args acc = function
   | EApp { fn; arg; _ } -> collect_call_head_and_args (arg :: acc) fn
   | fn -> (fn, acc)
 
+(* The parser encodes a nullary call's () as one empty-list Unit marker.
+   This marker completes only a declaration with no parameters; never drop an
+   ordinary empty-list argument from a non-nullary call when checking arity. *)
+let call_is_fully_applied (params : binding list) args =
+  match params, args with
+  | [], [EList { elems = []; _ }] -> true
+  | _ -> List.length params = List.length args
+
 let normalize_explicit_check_call head args =
   match head, args with
   | EVar { name = "check"; _ }, check_fn :: check_args -> (check_fn, check_args)
@@ -3423,7 +3431,7 @@ let rec attached_subject_of_expr funcs subject_env expression =
       | Some name ->
         (match List.assoc_opt name funcs with
          | Some { fi_return = RetAttached { binding; _ }; fi_params; _ }
-           when List.length args = List.length fi_params ->
+           when call_is_fully_applied fi_params args ->
            List.find_map (fun ((parameter : binding), argument) ->
              if parameter.name = binding.name then attached_subject_of_expr funcs subject_env argument else None)
              (zip_prefix fi_params args)
@@ -3508,7 +3516,7 @@ let rec proofs_of_evidence_expr
        (* When funcs is available, resolve inline establish/check calls.
           E.g. `attachFact forgotten (validPort y)` — evidence is `validPort y`. *)
        (match List.assoc_opt fn_name funcs with
-        | Some info when List.length args = List.length info.fi_params ->
+        | Some info when call_is_fully_applied info.fi_params args ->
           let param_mapping = List.filter_map (fun ((param : binding), arg) ->
             match subject_of_expr subject_env arg with
             | Some subject -> Some (param.name, subject)

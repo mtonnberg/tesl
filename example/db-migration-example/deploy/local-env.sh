@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Local demo identities only. Production should inject its own role credentials.
 TODO_APP_DIR="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
-export TODO_LOCAL_DIR="${TODO_LOCAL_DIR:-$TODO_APP_DIR/.local-schema-todo}"
+export TODO_LOCAL_DIR="${TODO_LOCAL_DIR:-$TODO_APP_DIR/.local-schema-todo-v5}"
 export TODO_DB_HOST=127.0.0.1
 export TODO_DB_PORT="${TODO_DB_PORT:-55439}"
 export TODO_DB_NAME=todo_demo

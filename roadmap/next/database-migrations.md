@@ -1694,7 +1694,7 @@ describing each of them loosely enough to be wrong.
    assignments releases the lock silently, and one that does not may still run the
    admission read and the later DDL on different backends, so "a leaked lock blocks
    retirement" holds for some misconfigurations and not others. Hence
-   `PostgresConfig { ddlConnection: … }` — a DSN that must reach PostgreSQL directly
+   `PostgresConfig { migrations: MigrationConfig { ddlConnection: … } }` — a DSN that must reach PostgreSQL directly
    or through a session-mode pooler, documented as such, distinct from the request
    pool's DSN when that goes through a transaction pooler. The clearest deployment is
    the **dedicated schema worker**: `./app --schema worker` runs the DDL and backfill
@@ -5343,7 +5343,7 @@ happens without an explicit, reviewed step:
 - **Production topology: the schema worker by default, an embedded option for tiny
   services.** Request processes run as a role with entity DML and read-only control
   access; DDL, control-state transitions, backfill and index builds run in `--schema
-  worker` under the DDL-owning role. `PostgresConfig { topology: Embedded }` lets a
+  worker` under the DDL-owning role. `PostgresConfig { migrations: MigrationConfig { topology: Embedded } }` lets a
   one-process service with one long-lived login credential expand at boot itself; the
   no-login control owner and short-lived installer still exist: every correctness
   guard is unchanged, only the least-privilege isolation is given up, and the boot log

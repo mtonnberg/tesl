@@ -38,6 +38,9 @@ func testCompiledAdditiveLesson(t *testing.T, upgrade bool, interruption Event) 
 	t.Helper()
 	dsn := os.Getenv("TESL_MIGRATION_TEST_DSN")
 	if dsn == "" {
+		if os.Getenv("TESL_MIGRATION_TEST_REQUIRE_POSTGRES") == "1" {
+			t.Fatal("TESL_MIGRATION_TEST_REQUIRE_POSTGRES=1 requires TESL_MIGRATION_TEST_DSN")
+		}
 		t.Skip("run scripts/run-migration-tests.sh")
 	}
 	root := os.Getenv("TESL_REPO_ROOT")

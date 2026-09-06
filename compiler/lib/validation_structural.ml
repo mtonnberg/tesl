@@ -289,7 +289,7 @@ let proofs_of_expr
          | [] -> [])
       | Some fn_name ->
         (match List.assoc_opt fn_name funcs with
-         | Some info when List.length args <> List.length info.fi_params -> []
+         | Some info when not (call_is_fully_applied info.fi_params args) -> []
          | Some info ->
            let param_mapping = List.filter_map (fun ((param : binding), arg) ->
              match subject_of_expr subject_env arg with
@@ -2411,9 +2411,11 @@ let config_block_schema = function
      env-backed config fields. *)
   | "PostgresConfig" -> [ "dbName", VStr, true; "user", VStr, true;
                           "password", VStr, true; "connection", VConn, true;
-                          "poolSize", VInt, false; "namespace", VStr, false; "controlOwner", VStr, false;
-                          "topology", VMigrationTopology, false; "requestRole", VStr, false;
-                          "workerRole", VStr, false; "ddlConnection", VStr, false ]
+                          "poolSize", VInt, false; "namespace", VStr, false;
+                          "migrations", VSub "MigrationConfig", false ]
+  | "MigrationConfig" -> [ "topology", VMigrationTopology, false;
+                           "controlOwner", VStr, false; "requestRole", VStr, false;
+                           "workerRole", VStr, false; "ddlConnection", VStr, false ]
   (* The two PostgresConnection shapes — validated internally via [check_record]'s
      "__Tcp"/"__Socket" rows; listed here so the LSP config-context query can
      offer field completion/hover inside a `connection: TcpConnection { … }`. *)
@@ -2456,17 +2458,19 @@ let config_field_doc (block : string) (field : string) : string =
     "Versioned schema root imported by the application (`Schema.Family.VCurrent`; legacy `FamilySchema.VCurrent` is also supported), or the legacy PostgreSQL schema string with `entities:`."
   | "Database", "migrations" ->
     "Migration directory prefix for the same schema family (`Schema.Family.Migrate`; legacy `FamilySchema.Migrate` is also supported). This is a contextual module reference, not a runtime value."
-  | "PostgresConfig", "controlOwner" ->
+  | "PostgresConfig", "migrations" ->
+    "Optional migration execution and role settings for a versioned schema. Use MigrationConfig { ... }; the source history remains Database.migrations. Omission retains the deployment defaults."
+  | "MigrationConfig", "controlOwner" ->
     "No-login owner of versioned migration control objects (default tesl_control). Provisioned by the operator; connection settings remain in the application."
   | "PostgresConfig", "namespace" ->
     "Physical PostgreSQL schema name. Required as a nonempty static string when Database.schema is a module reference; connection configuration stays in the application."
-  | "PostgresConfig", "topology" ->
+  | "MigrationConfig", "topology" ->
     "Versioned migrations use Worker for separate request and schema-worker processes, or Embedded for execution in the application process. Omission selects Worker when TESL_DEPLOYED is present and Embedded otherwise; an explicit value wins."
-  | "PostgresConfig", "requestRole" ->
+  | "MigrationConfig", "requestRole" ->
     "Operator-provisioned request login for Worker topology (default tesl_app). Request processes have entity DML and admission privileges, without migration DDL authority. Requires a versioned schema."
-  | "PostgresConfig", "workerRole" ->
+  | "MigrationConfig", "workerRole" ->
     "Operator-provisioned schema-worker login for Worker topology (default tesl_schema). The worker owns entity storage; the separate controlOwner still owns protected migration metadata. Requires a versioned schema."
-  | "PostgresConfig", "ddlConnection" ->
+  | "MigrationConfig", "ddlConnection" ->
     "Optional PostgreSQL DSN for the migration executor, as a String or environment read. This is an explicit deployment promise of a direct, session-affine connection; do not use a transaction-pooling DSN. Requires a versioned schema."
   | "TelemetryConfig", "service" ->
     "Service name attached to telemetry events and metrics."
@@ -2594,6 +2598,19 @@ let check_typed_config_blocks (m : module_form) : validation_error list =
        | ELit { lit = LBool _; _ }
        | EConstructor { name = "True" | "False"; _ } -> []
        | _ -> err (Printf.sprintf "field `%s` must be a Bool (true/false)" fname))
+    | VSub "MigrationConfig" ->
+      let named = match v with
+        | ERecord { type_hint = Some "MigrationConfig"; _ }
+        | EApp { fn = EConstructor { name = "MigrationConfig"; args = []; _ }; arg = ERecord _; _ } -> true
+        | _ -> false in
+      if not named then err "`migrations` must be `MigrationConfig { ... }` (from Tesl.Database)"
+      else
+        let visible = List.exists (fun (imp : import_decl) ->
+          imp.module_name = "Tesl.Database" && match imp.names with
+          | ImportAll -> true
+          | ImportExposing names -> List.mem "MigrationConfig" names) m.imports in
+        if not visible then err "`migrations: MigrationConfig { ... }` requires importing `MigrationConfig` from Tesl.Database"
+        else check_record (cfg_expr_loc v) "MigrationConfig" (cfg_fields v)
     | VSub sub -> check_record (cfg_expr_loc v) sub (cfg_fields v)
     | VBackoff ->
       (match cfg_ctor v with
@@ -2698,13 +2715,23 @@ let check_typed_config_blocks (m : module_form) : validation_error list =
           if req && not (List.mem fn provided)
           then Some (make_error loc (Printf.sprintf "`%s` is missing required field `%s`" schema_name fn))
           else None) schema in
+      (* Keep old checked application fixtures readable. Flat migration settings
+         are a compatibility spelling only; docs/completion expose the grouped
+         record. Mixing forms is always an error, even for disjoint fields. *)
+      let legacy = if schema_name = "PostgresConfig" then config_block_schema "MigrationConfig" else [] in
+      let mixed = if List.mem "migrations" provided &&
+          List.exists (fun (name,_,_) -> List.mem name provided) legacy then
+        [make_error loc "move all PostgreSQL migration settings into `migrations: MigrationConfig { ... }`; flat and grouped settings cannot be mixed"] else [] in
+      let duplicates = List.sort compare provided |> List.fold_left (fun (last,errors) name ->
+        (Some name, if Some name = last then
+          make_error loc (Printf.sprintf "duplicate field `%s` in `%s`" name schema_name) :: errors else errors)) (None,[]) |> snd in
       let per_field =
         List.concat_map (fun (fn, v) ->
-          match List.find_opt (fun (n,_,_) -> n = fn) schema with
+          match List.find_opt (fun (n,_,_) -> n = fn) (schema @ legacy) with
           | Some (_, kind, _) -> check_value loc fn kind v
           | None -> [ make_error (cfg_expr_loc v) (Printf.sprintf "unknown field `%s` in `%s`" fn schema_name) ]
         ) fields in
-      missing @ per_field
+      missing @ mixed @ duplicates @ per_field
     end
   in
   let check_decl top_schema loc = function
@@ -2734,7 +2761,7 @@ let check_typed_config_blocks (m : module_form) : validation_error list =
           @ (if not module_form then List.filter_map (fun field ->
                if List.mem_assoc field postgres_fields then
                  Some (make_error r.loc (Printf.sprintf "`PostgresConfig.%s` requires a versioned schema module" field))
-               else None) ["controlOwner"; "topology"; "requestRole"; "workerRole"; "ddlConnection"] else [])
+               else None) ["migrations"; "controlOwner"; "topology"; "requestRole"; "workerRole"; "ddlConnection"] else [])
           @ (if module_form && is_postgres then
                match List.assoc_opt "namespace" postgres_fields with
                | Some (ELit { lit = LString namespace; _ }) when namespace <> "" && not (String.contains namespace '\000') && String.length namespace <= 63 -> []

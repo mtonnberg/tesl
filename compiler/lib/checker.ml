@@ -6026,6 +6026,7 @@ let config_only_type_position_error ~(replacement_in_scope : string -> bool)
   let config_block_usage = List.map (fun name -> name, "a contextual `Migration { … }` declaration") Migration_form.names @ [
     ("Database",           "a `database NAME = Database { … }` declaration");
     ("PostgresConfig",     "the `backend: Postgres (PostgresConfig { … })` field of a `database` declaration");
+    ("MigrationConfig",    "the `migrations: MigrationConfig { … }` field of `PostgresConfig`");
     ("Queue",              "a `queue NAME = Queue { … }` declaration");
     ("QueueRetryStrategy", "the `retry: QueueRetryStrategy { … }` field of a `queue` declaration");
     ("QueueRetryConfig",   "the retry configuration of a `queue` declaration");

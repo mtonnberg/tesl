@@ -15,7 +15,8 @@ backfill, durable payload migrations and contract remain pending. The complete a
 
 `WithDatabase` selects versioned startup when the compiler attached migration
 history to the application's connection. The application supplies its connection
-and optional `PostgresConfig.controlOwner` (default `tesl_control`). These settings
+and optional `MigrationConfig.controlOwner` (default `tesl_control`) inside
+`PostgresConfig.migrations`. These settings
 stay outside the pure schema and migration modules. The operator must install the
 protected control objects first; missing installation or unrecorded lookalike
 storage refuses before the application's body runs. There is no fallback to legacy
@@ -49,10 +50,11 @@ still the legacy format; its versioned ownership and upgrade path are phase-2 wo
 
 ## Separate schema worker
 
-`PostgresConfig.topology` is a literal `Worker` or `Embedded` constructor from
+`MigrationConfig.topology` is a literal `Worker` or `Embedded` constructor from
 `Tesl.Database` (`MigrationTopology(..)`). If omitted, the existing `TESL_DEPLOYED`
 environment flag selects Worker when present and Embedded otherwise. An explicit
-setting wins. These fields are legal only with a versioned schema module:
+setting wins. `PostgresConfig.migrations: MigrationConfig { ... }` contains these
+fields and is legal only with a versioned schema module, even when empty:
 
 | Field | Meaning |
 |---|---|
@@ -60,6 +62,12 @@ setting wins. These fields are legal only with a versioned schema module:
 | `workerRole` | Worker executor and entity owner, default `tesl_schema` |
 | `ddlConnection` | Optional direct/session-affine DSN for the executor; omitted uses that process's normal connection settings |
 | `controlOwner` | Separate NOLOGIN control owner, default `tesl_control` |
+
+The config schema drives validation, editor context and `tesl doc MigrationConfig`.
+The desugarer maps these fields into the existing runtime configuration, so
+grouping does not change role or connection behavior. Historical flat spellings
+remain accepted, but any mixture with the grouped record refuses. Source history
+selection remains the contextual `Database.migrations` reference.
 
 Role names are stable deployment identities, independent of the actual login
 selected by each process's credentials. Request/worker role settings require

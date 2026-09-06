@@ -1,5 +1,7 @@
 # Checked transforming declarations
 
+> Audience: contributors implementing and verifying the migration source checker.
+
 The source checker now accepts a bounded `Migrate rowFunction rules` and
 `Derived rules` vocabulary in a family's adjacent migration declaration. This
 is an internal compiler prerequisite. A PostgreSQL application containing any

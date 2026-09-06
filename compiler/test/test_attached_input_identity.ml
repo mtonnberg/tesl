@@ -1,7 +1,7 @@
 open Alcotest
 
 let prelude = {|module Identity exposing []
-import Tesl.Prelude exposing [String, Int, Bool(..)]
+import Tesl.Prelude exposing [String, Int, Bool(..), Fact]
 import Tesl.Maybe exposing [Maybe(..)]
 fact NonEmpty (value: String)
 record Note { title: String ::: NonEmpty title }
@@ -142,6 +142,52 @@ fn bad(raw: String) -> Note =
   check bool "partially applied producer cannot provide witness" true
     (List.exists (fun (d : Compile.diagnostic) -> d.code = "V001") ds)
 
+let nullary_source = {|
+fn nullary() -> title: String ::: NonEmpty title =
+  let title = check nonEmpty "ready"
+  title
+establish maybeTitle() -> Maybe (title: String ::: NonEmpty title) =
+  let title = "rea" ++ "dy"
+  Something (title ::: NonEmpty title)
+fact Global
+establish global() -> Fact (Global) = Global
+fn requireGlobal(proof: Fact (Global)) -> Int = 7
+fn nullaryRecord() -> Note =
+  let title = nullary()
+  Note { title: title }
+fn optionalRecord() -> Maybe Note =
+  case maybeTitle() of
+    Nothing -> Nothing
+    Something title -> Something (Note { title: title })
+test "nullary calls retain returned proofs" {
+  expect (nullaryRecord()).title == "ready"
+  expect requireGlobal (global()) == 7
+  let (title ::: witness) = nullary()
+  let note = Note { title: title ::: witness }
+  expect note.title == "ready"
+  case optionalRecord() of
+    Nothing -> expect False
+    Something stored -> expect stored.title == "ready"
+}
+|}
+let nullary () =
+  let source = prelude ^ nullary_source in accepts source;
+  let parsed = match Parser.parse_module "identity.tesl" source with Ok m -> m | Err e -> fail e.msg in
+  let funcs = Validation_common.build_func_info parsed.Ast.decls in
+  let call = match List.find_map (function
+    | Ast.DFunc { name = "nullaryRecord"; body = Ast.ELet {value; _}; _ } -> Some value
+    | _ -> None) parsed.Ast.decls with Some value -> value | None -> fail "fixture call missing" in
+  check int "real parsed nullary Unit call retains its returned proof" 1
+    (List.length (Validation_structural.proofs_of_expr "result" funcs [] [] call));
+  let ds = errors (source ^ {|
+fn unrelated(raw: String) -> Note =
+  let (title ::: witness) = nullary()
+  Note { title: raw ::: witness }
+|}) in
+  check bool "nullary witness does not belong to unrelated input" true
+    (List.exists (fun (d : Compile.diagnostic) -> d.code = "V001" &&
+      Compile.string_contains d.message "different subject") ds)
+
 let native () =
   let root = Filename.temp_dir "tesl-attached-identity-" "" in
   let rec remove path = if Sys.is_directory path then begin
@@ -150,7 +196,7 @@ let native () =
   let rec mkdir path = if not (Sys.file_exists path) then (mkdir (Filename.dirname path); Unix.mkdir path 0o700) in
   let write path contents = mkdir (Filename.dirname path); Out_channel.with_open_bin path (fun out -> output_string out contents) in
   Fun.protect ~finally:(fun () -> remove root) (fun () ->
-    let source = prelude ^ fresh in accepts source;
+    let source = prelude ^ fresh ^ nullary_source in accepts source;
     let file = Filename.concat root "identity.tesl" in write file source;
     let artifacts = match Compile.compile_go_file file with
       | Compile.GoSuccess artifacts -> artifacts
@@ -187,5 +233,6 @@ fn aliased(value: String ::: NonEmpty value) -> value: String ::: NonEmpty value
   test_case "actual second parameter subject is retained" `Quick second_parameter;
   test_case "ordinary establish shape stays refused" `Quick establish_shape;
   test_case "partial calls have no input identity or returned proof" `Quick partial_application;
+  test_case "nullary Unit calls transport returned proof" `Quick nullary;
   test_case "fresh transformed result compiles and runs" `Quick native;
 ]]

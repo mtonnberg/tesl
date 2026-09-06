@@ -995,7 +995,7 @@ let database : entry list = [
     ~doc:"The `connection:` field of a PostgresConfig — TCP or Unix socket.";
   e "MigrationTopology" ~m:"Tesl.Database"
     ~kind:(KType "type MigrationTopology = Worker | Embedded")
-    ~doc:"The optional `PostgresConfig.topology` for a versioned schema. Worker separates request processes from `app --schema worker`; Embedded runs migration execution in the application process. Without an explicit value, TESL_DEPLOYED selects Worker and local execution selects Embedded. Connection settings and role names belong to application configuration."
+    ~doc:"The optional `MigrationConfig.topology` inside `PostgresConfig.migrations` for a versioned schema. Worker separates request processes from `app --schema worker`; Embedded runs migration execution in the application process. Without an explicit value, TESL_DEPLOYED selects Worker and local execution selects Embedded. Connection settings and role names belong to application configuration."
     ~aliases:[ "Worker"; "Embedded" ];
 ]
 

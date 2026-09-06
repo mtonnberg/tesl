@@ -1,16 +1,21 @@
 # Row generation and trigger prerequisite
 
-This is a private runtime prerequisite for the first transforming migration.
+> Audience: contributors implementing and verifying PostgreSQL row generations.
+
+This is a test-only runtime prototype for the first transforming migration.
 It does not enable `Migrate` or `Derived` execution. The production catalog still
 refuses unrecorded triggers. The compiler must not emit an executable transform
 plan until generation registration, adapters, processing ABI checks, backfill
 and retirement are integrated.
 
-`migration_row_generation.go` derives one invalidation function and trigger from
+`migration_row_generation_candidate_test.go` derives one invalidation function and trigger from
 an exact namespace, table, consecutive entity generations and physical source
 columns. The descriptor owns a sorted copy of those columns. Object names derive
 from its hash, but a name is never sufficient identity. SQL identifier quoting and
 function-body quoting preserve embedded quotes, backslashes and dollar delimiters.
+It is compiled only into the runtime test binary. Production integration must
+add a registered consumer and include the implementation in the compiler's
+embedded runtime; passing these tests alone does not authorize emission.
 
 An old writer changing a source column lowers the row's `_tesl_v` to the previous
 generation. The trigger compares actual values with `IS DISTINCT FROM`, including

@@ -5,7 +5,7 @@ import Tesl.Maybe exposing [Maybe(..)]
 import Tesl.Int32 exposing [Int32.fromIntClamped]
 import Tesl.Env exposing [envInt]
 import Tesl.DB exposing [dbRead, dbWrite]
-import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
+import Tesl.Database exposing [Database, Postgres, PostgresConfig, MigrationConfig, TcpConnection]
 import StorageSchema.VCurrent exposing [Sample]
 import StorageSchema.VCurrent.Text
 
@@ -14,7 +14,9 @@ database FixtureDb = Database {
   migrations: StorageSchema.Migrate
   backend: Postgres (PostgresConfig {
     namespace: "storage_fixture"
-    controlOwner: env "TESL_FIXTURE_CONTROL_OWNER"
+    migrations: MigrationConfig {
+      controlOwner: env "TESL_FIXTURE_CONTROL_OWNER"
+    }
     dbName: env "TESL_FIXTURE_DATABASE"
     user: env "TESL_TEST_POSTGRES_SHARED_USER"
     password: env "PGPASSWORD"
