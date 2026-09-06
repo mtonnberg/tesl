@@ -24,6 +24,9 @@ let with_sources f =
 let stable () =
   let first = get (A.current ()) and second = get (A.current ()) in
   check string "same build and resources" (A.id first) (A.id second);
+  check string "stable stored-value contract" (A.stored_value_compatibility first) (A.stored_value_compatibility second);
+  check bool "strict stored-value contract format" true (A.valid_stored_value_compatibility (A.stored_value_compatibility first));
+  check bool "source ABI is not a compatibility contract" false (A.valid_stored_value_compatibility (A.id first));
   check bool "versioned actual-build tag" true (String.starts_with ~prefix:"tesl-source-abi-v1:" (A.id first));
   check int "fixed SHA-256 suffix" (String.length "tesl-source-abi-v1:" + 64) (String.length (A.id first));
   check int "all lifted sources guarded" (List.length Validation_common.lifted_stdlib_sources) (List.length (A.source_inputs first));
@@ -31,7 +34,11 @@ let stable () =
 let relocated () =
   let original = get (A.current ()) and sources = originals () in
   with_directory (fun root -> populate root sources;
-    with_env root (fun () -> check string "resource installation path is not semantics" (A.id original) (A.id (get (A.current ())))))
+    with_env root (fun () ->
+      let relocated = get (A.current ()) in
+      check string "resource installation path is not semantics" (A.id original) (A.id relocated);
+      check string "compatibility is independent of resource installation path"
+        (A.stored_value_compatibility original) (A.stored_value_compatibility relocated)))
 let changed_source () = with_sources (fun root sources ->
   let before = get (A.current ()) in
   List.iter (fun (name,source) ->
@@ -39,6 +46,8 @@ let changed_source () = with_sources (fun root sources ->
     write file (source ^ "\n# source ABI regression\n");
     ignore (Compile.agent_context_result_source file (read file));
     check bool "each lifted source contributes" false (A.id before=A.id (get (A.current ())));
+    check bool "every lifted source contributes to stored-value compatibility" false
+      (A.stored_value_compatibility before=A.stored_value_compatibility (get (A.current ())));
     ignore (refuse (A.verify before));
     write file source;
     ignore (Compile.agent_context_result_source file source);

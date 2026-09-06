@@ -6,6 +6,66 @@ This ledger tracks the work in `roadmap/next/database-migrations.md`,
 `queue-payload-migrations.md`, and `staged-uniqueness-guard.md`. The history file is
 non-normative. An unchecked row is not delivered.
 
+## Current assessment and implementation order
+
+Reassessment, 2026-09-06: the feature is not near completion. Additive PostgreSQL
+evolution and supported compiler upgrades are demonstrated with retained
+rows and unchanged application code in lesson 83. Compiler, source-edit and model
+tests are supporting evidence; they do not implement transforming migrations.
+Independent architecture and editor reviews confirmed that the next work must
+prioritize executable application scenarios over further editor machinery.
+
+The compiler-upgrade design gate now has production evidence.
+Build provenance and stored-value compatibility now have separate identities.
+The explicit contract binds a compiler-owned semantic revision and active lifted
+stdlib digests; its maintainer promise includes proof/check/establish semantics,
+lowering, codecs and SQL representation. Fully checked historical source/storage
+must reproduce the same identity before a different build can serve completed
+additive history. Pending intents keep the original build ABI. Old provenance is
+preserved, and legacy metadata lacking the contract is refused. Compiler migration
+and embedding suites pass (495 cases), and the actual A/B/C retained-database
+scenario passes. The remaining runtime expansion/boot gate also passed (142.080s),
+as did native migration CLI race tests and targeted lint. Mandatory migration CI
+now fails instead of skipping unavailable PostgreSQL; its negative subprocess
+tests pass. Transforming execution and different-contract
+revalidation retain their separate phase-3 requirements.
+
+The next implementation is the production Worker request/executor split, followed
+by a predecessor protocol that understands recorded generation/trigger objects,
+safe additive epoch closure and the first typed full-app transformation. Current
+additive binaries reject unknown control formats and triggers; they cannot be
+treated as compatible transforming predecessors without that bridge. Queues and
+outboxes require real versioned storage/restamping, or an explicit restricted
+entity-only protocol from inception. A one-time check for absent queue tables is
+not sufficient evidence about older admitted binaries.
+
+Use these application scenarios as the progress surface. Each requires production
+execution, retained PostgreSQL data, failure/restart regressions, a runnable lesson,
+and both reviews. The normative phase prerequisites remain in force.
+
+| Scenario | Current evidence / remaining work |
+|---|---|
+| Existing database survives a supported compiler upgrade | Actual A/B/C full-app scenario, compiler/runtime gates and two reviews pass |
+| Adopt/deploy the notes app; add fields and indexes | Additive lesson passes; Worker split and lesson84 under verification; adoption and existing-table indexes remain |
+| Transform an entity while old/new apps keep serving | Planner/typing groundwork exists; compatibility, backfill and epoch closure remain |
+| Reject a row, repair it, retire old code and contract | Model coverage exists; production lifecycle remains |
+| Evolve a stored record/ADT without changing the HTTP API | Codec/storage traces exist; unified history, rewrite and pruning remain |
+| Carry delayed, dead and in-flight jobs through a roll | Claim-token groundwork exists; versioned payload executor/effects remain |
+| Stage and promote uniqueness under concurrent writes | Production reservation, reconciliation and promotion remain |
+| Restore an old database, catch up, migrate offline and prune | Production orchestration and durable completion evidence remain |
+
+Storage-only lessons must assert byte-identical handlers, routes and API contracts.
+JSONB evolution uses the same migration history and transformation engine as rows;
+a fallback decoder alone is not completion or permission to prune old decoders.
+
+The editor apply coordinator is an **internal, disabled slice**. Review found that
+a negative client reply need not precede every resulting buffer notification, and
+auto-save can make generated files dependencies of saved user source. Public apply
+capability activation is disabled; negative replies retain recovery state, and
+restoration rechecks open inputs' saved bytes before removing generated files.
+Re-enabling requires an explicit editor snapshot barrier and complete wire-level
+failure/recovery tests. Read-only previews and the saved-source CLI remain usable.
+
 | Delivery gate | Implementation | Regression gate | First review | Final review |
 |---|---|---|---|---|
 | 0: deterministic harness, independent model and traceability | pending | pending | pending | pending |
@@ -84,6 +144,20 @@ pending. The lesson exposed a linter omission for bulk-insert input names, now
 covered for both local bindings and function parameters.
 
 ## Slices under development
+
+- Compiler upgrades now have a production full-app regression. It builds actual A,
+  B and C compilers from one isolated source tree: B changes only query source;
+  C changes the stored-value semantic revision. A authors V1–V3 including a completed
+  V2 migration, B recompiles V3 and authors V4, and the complete lesson83 app and API
+  assertions stay byte-identical. The test kills A after its intent commit, verifies
+  that B refuses without mutation, lets A finish, serves both builds concurrently,
+  restarts old A against V4, and checks retained rows, omission defaults and rejected
+  invalid writes. B rejects tampered frozen schema/migration bytes; C rejects sealed
+  compilation and database startup. Old source and protected creator provenance
+  remain A's; only V4 records B. The native race regression passes (354.97s including
+  three compiler builds). The source/compiler and runtime changes each received
+  independent reviews; final integration review and broad gates are tracked
+  separately. The lesson83 prose companion explains the scenario and limitations.
 
 - The editor tooling now has a non-mutating migration-preview client that sends
   exact open-buffer bytes and versions to the compiler. Returned application,
@@ -1089,10 +1163,11 @@ edited history. Catch-up records one ABI for every replayed version. The superse
 frozen-slice passages in the original proposal require reconciliation in phase 3.
 That reconciliation must also cover persisted proofs and `Same`: locking an ABI
 for backfill batches does not justify interpreting facts established by another
-ABI as facts under the current one. A new-generation recovery must re-establish
-those facts without trusting an old proof under changed semantics. Until that
-boundary is specified and checked, the execution-ABI model is only a consistency
-oracle, not an end-to-end proof of cross-compiler migration soundness.
+ABI as facts under the current one. The explicit stored-value contract now supplies
+a bounded compatibility promise for fully checked, completed additive history.
+A new-generation recovery across different contracts must re-establish facts from
+untrusted decoded values. That production path remains pending; the execution-ABI
+model alone is still only a consistency oracle.
 The model now distinguishes a committed target-generation application write from
 backfill progress. It locks the ABI even when `rows_done` is zero and no provisional
 pass exists, requires that application's admitted fence, survives a crash and rejects

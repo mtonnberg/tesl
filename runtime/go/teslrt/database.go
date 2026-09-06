@@ -34,6 +34,10 @@ type Database struct {
 	open *PostgresDB
 	// Immutable source information linked by the compiler, not live DB state.
 	migrationHistory *PgCompiledMigrationHistory
+	// Declarations may initialize before or after the compiled history is linked.
+	// Worker preflight closes registration under this same mutex before any I/O.
+	migrationFacilities       map[pgMigrationFacility]struct{}
+	migrationFacilitiesClosed bool
 }
 
 // The database `with database D` most recently bound, program-wide.
@@ -149,6 +153,9 @@ func PostgresColumnOf(name, columnType string, primaryKey, nullable bool) Postgr
 // idle connections, which is what a pool is for. Nothing observable differs — a query outside
 // the block does not reach the server either way, because the binding is what routes it.
 func WithDatabase(database *Database, body func()) {
+	if err := pgVerifyMigrationFacilities(database); err != nil {
+		panic(err)
+	}
 	// Refuse a cross-database scope before even opening/bootstraping its pool.
 	// It cannot participate atomically in the caller's existing transaction.
 	if currentTransaction() != nil {

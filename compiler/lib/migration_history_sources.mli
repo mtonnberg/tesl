@@ -33,6 +33,8 @@ type t
     inventories and input guards do not establish persisted history. *)
 val discover : compiler_abi:string -> project_root:string -> family:string ->
   (t, error) result
+val discover_with_compatibility : stored_value_compatibility:string option ->
+  compiler_abi:string -> project_root:string -> family:string -> (t,error) result
 
 val current : t -> schema
 val frozen : t -> schema list
@@ -58,3 +60,6 @@ val verify_unchanged : t -> (unit, error) result
     sources, provide frozen-history evidence, or grant execution authority. *)
 val adjacent_pair : compiler_abi:string -> project_root:string -> family:string ->
   previous:string -> current:string -> (schema * schema, error) result
+val adjacent_pair_with_compatibility : stored_value_compatibility:string option ->
+  compiler_abi:string -> project_root:string -> family:string ->
+  previous:string -> current:string -> (schema * schema,error) result

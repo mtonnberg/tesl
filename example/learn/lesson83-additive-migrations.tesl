@@ -24,6 +24,8 @@ module Lesson83AdditiveMigrations exposing [
 # the new binary against the SAME database. It checks the retained note, new writes,
 # both running versions, and an old-binary restart. Your own database is untouched.
 # The wider deployment workflow, including adoption and typed transforms, is pending.
+# The companion lesson83-additive-migrations.md explains a compiler upgrade against
+# this same app and provides the retained-database A/B/C compiler regression command.
 #
 # For a fresh deployment, the operator provisions the control-owner and worker roles,
 # gives a temporary installer login membership in the control owner, and runs:

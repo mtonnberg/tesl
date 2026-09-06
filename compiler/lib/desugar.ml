@@ -249,8 +249,13 @@ let desugar_database_config (d : database_form) : database_form =
         (* Issue #31: `poolSize` keeps its surface spelling here; the emitter
            maps it to the runtime's `#:max-connections` keyword (same pattern
            as `host` → `#:server`). *)
+        let topology = match List.assoc_opt "topology" pf with
+          | Some (EConstructor { name = (("Worker" | "Embedded") as name); args = []; _ }) -> ["topology", name]
+          | _ -> [] in
         scalar "dbName" "database" @ scalar "user" "user"
-        @ scalar "password" "password" @ scalar "poolSize" "poolSize" @ scalar "controlOwner" "controlOwner" @ conn
+        @ scalar "password" "password" @ scalar "poolSize" "poolSize" @ scalar "controlOwner" "controlOwner"
+        @ topology @ scalar "requestRole" "requestRole" @ scalar "workerRole" "workerRole"
+        @ scalar "ddlConnection" "ddlConnection" @ conn
       | None -> []
     in
     { d with backend; schema; entities; postgres; config_expr = None }

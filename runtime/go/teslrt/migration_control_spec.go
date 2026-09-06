@@ -3,7 +3,7 @@ package teslrt
 // The initial production format supports additive expansion only. These closed
 // definitions serve both installation and same-server catalog comparison; they
 // are never assembled from a source program's SQL or a database's stored text.
-const pgMigrationControlFormat = 1
+const pgMigrationControlFormat = 2
 
 type pgMigrationControlTable struct{ name, columns string }
 
@@ -30,6 +30,7 @@ var pgMigrationControlTables = []pgMigrationControlTable{
  snapshot_hash text,
  artefact_hash text not null,
  source_abi text not null,
+ stored_value_compatibility text not null,
  applied_at timestamptz not null default pg_catalog.now(),
  protocol_level integer not null,
  fence_domain text not null,
@@ -42,6 +43,7 @@ var pgMigrationControlTables = []pgMigrationControlTable{
  snapshot_hash text not null,
  artefact_hash text not null,
  source_abi text not null,
+ stored_value_compatibility text not null,
  operation_count integer not null check (operation_count >= 0),
  epoch_preserving boolean not null,
  started_at timestamptz not null default pg_catalog.now()`},
@@ -88,11 +90,12 @@ begin
  end if;
  return s.compat_floor;
 end`},
-		{"tesl_begin_expansion", "v integer, snap text, art text, abi text, ops integer, ep boolean", "void", "volatile", `
+		{"tesl_begin_expansion", "v integer, snap text, art text, abi text, compatibility text, ops integer, ep boolean", "void", "volatile", `
 declare s ` + ns + `tesl_schema_state%rowtype; r ` + ns + `tesl_schema_expansions%rowtype;
 begin
  if v is null or v < 1 or v > 2147483646 or snap is null or art is null or
-   snap !~ '^[0-9a-f]{64}$' or art !~ '^[0-9a-f]{64}$' or abi is null or abi = '' or
+   snap !~ '^[0-9a-f]{64}$' or art !~ '^[0-9a-f]{64}$' or abi is null or abi !~ '^tesl-source-abi-v1:[0-9a-f]{64}$' or
+   compatibility is null or compatibility !~ '^tesl-stored-value-v1:[0-9a-f]{64}$' or
    ops is null or ops < 0 or ep is distinct from true then
    raise exception 'tesl: invalid additive expansion intent';
  end if;
@@ -103,11 +106,12 @@ begin
      (select 1 from ` + ns + `tesl_schema_expansions where version = v)) then
    raise exception 'tesl: expansion must follow the recorded installation target and history';
  end if;
- insert into ` + ns + `tesl_schema_expansions(version,snapshot_hash,artefact_hash,source_abi,operation_count,epoch_preserving)
-   values (v,snap,art,abi,ops,ep) on conflict (version) do nothing;
+ insert into ` + ns + `tesl_schema_expansions(version,snapshot_hash,artefact_hash,source_abi,stored_value_compatibility,operation_count,epoch_preserving)
+   values (v,snap,art,abi,compatibility,ops,ep) on conflict (version) do nothing;
  select * into r from ` + ns + `tesl_schema_expansions where version = v;
  if r.snapshot_hash is distinct from snap or r.artefact_hash is distinct from art or
-   r.source_abi is distinct from abi or r.operation_count is distinct from ops or r.epoch_preserving is distinct from ep then
+   r.source_abi is distinct from abi or r.stored_value_compatibility is distinct from compatibility or
+   r.operation_count is distinct from ops or r.epoch_preserving is distinct from ep then
    raise exception 'tesl: immutable expansion intent differs at V%', v;
  end if;
 end`},
@@ -146,12 +150,12 @@ begin
  end if;
  select pg_catalog.count(*) into completed from ` + ns + `tesl_schema_expansion_objects where version = v;
  if completed <> r.operation_count then raise exception 'tesl: expansion objects are incomplete'; end if;
- insert into ` + ns + `tesl_schema_versions(version,step,snapshot_hash,artefact_hash,source_abi,protocol_level,fence_domain,epoch_preserving,executed_by)
-   values (v,'expanded',r.snapshot_hash,r.artefact_hash,r.source_abi,1,'tesl-1',true,pg_catalog.current_setting('application_name'));
+ insert into ` + ns + `tesl_schema_versions(version,step,snapshot_hash,artefact_hash,source_abi,stored_value_compatibility,protocol_level,fence_domain,epoch_preserving,executed_by)
+   values (v,'expanded',r.snapshot_hash,r.artefact_hash,r.source_abi,r.stored_value_compatibility,1,'tesl-1',true,pg_catalog.current_setting('application_name'));
  if s.current = 0 then
-   insert into ` + ns + `tesl_schema_versions(version,step,artefact_hash,source_abi,protocol_level,fence_domain,executed_by)
-   values (v,'contracting',r.artefact_hash,r.source_abi,1,'tesl-1',pg_catalog.current_setting('application_name')),
-          (v,'contracted',r.artefact_hash,r.source_abi,1,'tesl-1',pg_catalog.current_setting('application_name'));
+   insert into ` + ns + `tesl_schema_versions(version,step,artefact_hash,source_abi,stored_value_compatibility,protocol_level,fence_domain,executed_by)
+   values (v,'contracting',r.artefact_hash,r.source_abi,r.stored_value_compatibility,1,'tesl-1',pg_catalog.current_setting('application_name')),
+          (v,'contracted',r.artefact_hash,r.source_abi,r.stored_value_compatibility,1,'tesl-1',pg_catalog.current_setting('application_name'));
  end if;
  update ` + ns + `tesl_schema_state set current = v, installing_version = null,
    min_version = case when s.current = 0 then v else min_version end,

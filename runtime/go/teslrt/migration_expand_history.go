@@ -11,6 +11,7 @@ import (
 type pgExpansionIntent struct {
 	Version                               int
 	SnapshotHash, ArtifactHash, SourceABI string
+	StoredValueCompatibility              string
 	OperationCount                        int
 	EpochPreserving                       bool
 	Objects                               []string
@@ -18,14 +19,14 @@ type pgExpansionIntent struct {
 
 func pgReadExpansionIntents(ctx context.Context, tx pgx.Tx, namespace string) (map[int]*pgExpansionIntent, error) {
 	ns := quoteIdentifier(namespace) + "."
-	rows, err := tx.Query(ctx, "select version,snapshot_hash,artefact_hash,source_abi,operation_count,epoch_preserving from "+ns+"tesl_schema_expansions order by version")
+	rows, err := tx.Query(ctx, "select version,snapshot_hash,artefact_hash,source_abi,stored_value_compatibility,operation_count,epoch_preserving from "+ns+"tesl_schema_expansions order by version")
 	if err != nil {
 		return nil, err
 	}
 	intents := map[int]*pgExpansionIntent{}
 	for rows.Next() {
 		r := &pgExpansionIntent{}
-		if err := rows.Scan(&r.Version, &r.SnapshotHash, &r.ArtifactHash, &r.SourceABI, &r.OperationCount, &r.EpochPreserving); err != nil {
+		if err := rows.Scan(&r.Version, &r.SnapshotHash, &r.ArtifactHash, &r.SourceABI, &r.StoredValueCompatibility, &r.OperationCount, &r.EpochPreserving); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -66,7 +67,7 @@ func pgVerifyExpansionHistory(state PgMigrationControlState, plan PgMigrationExp
 	if last == 0 {
 		last = state.InitialVersion - 1
 	}
-	if !state.Present || state.InitialVersion != plan.InitialVersion || plan.CurrentVersion < state.InitialVersion {
+	if !state.Present || state.InitialVersion != plan.InitialVersion || plan.CurrentVersion < state.InitialVersion || !pgStoredValueCompatibility(plan.StoredValueCompatibility) {
 		return fmt.Errorf("migration plan does not match the recorded installation origin")
 	}
 	for v, r := range intents {
@@ -75,9 +76,18 @@ func pgVerifyExpansionHistory(state PgMigrationControlState, plan PgMigrationExp
 			!strings.HasPrefix(r.SourceABI, "tesl-source-abi-v1:") || !pgMigrationDigest(strings.TrimPrefix(r.SourceABI, "tesl-source-abi-v1:")) {
 			return fmt.Errorf("invalid or out-of-order expansion intent at V%d", v)
 		}
+		// Unknown future steps still describe values this older binary may read.
+		// A completed operation's creator ABI remains provenance; resuming an
+		// unfinished operation always requires that exact executable ABI.
+		if !pgStoredValueCompatibility(r.StoredValueCompatibility) || r.StoredValueCompatibility != plan.StoredValueCompatibility {
+			return fmt.Errorf("persisted stored-value compatibility differs at V%d", v)
+		}
+		if v > last && r.SourceABI != plan.SourceCompilerABI {
+			return fmt.Errorf("unfinished migration compiler ABI differs at V%d", v)
+		}
 		if v <= plan.CurrentVersion {
 			step := plan.Steps[v-plan.InitialVersion]
-			if r.SnapshotHash != step.SnapshotHash || r.ArtifactHash != step.StepHash || r.SourceABI != plan.SourceCompilerABI ||
+			if r.SnapshotHash != step.SnapshotHash || r.ArtifactHash != step.StepHash ||
 				r.OperationCount != len(step.Operations) || r.EpochPreserving != step.EpochPreserving {
 				return fmt.Errorf("persisted migration source, ABI or plan differs at V%d", v)
 			}
@@ -90,7 +100,7 @@ func pgVerifyExpansionHistory(state PgMigrationControlState, plan PgMigrationExp
 	for _, row := range state.Versions {
 		r := intents[row.Version]
 		if r == nil || row.Version > last || row.Sequence != 0 || row.Protocol != 1 || row.FenceDomain != "tesl-1" ||
-			row.ArtifactHash != r.ArtifactHash || row.SourceABI != r.SourceABI {
+			row.ArtifactHash != r.ArtifactHash || row.SourceABI != r.SourceABI || row.StoredValueCompatibility != r.StoredValueCompatibility {
 			return fmt.Errorf("migration lifecycle row lacks matching expansion provenance at V%d", row.Version)
 		}
 		if seen[row.Version] == nil {

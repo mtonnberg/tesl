@@ -133,10 +133,11 @@ func TestPgMigrationControlRecordsCompleteImmutableExpansion(t *testing.T) {
 	if _, err := f.worker.Exec(f.ctx, "select "+ns+"tesl_admit(7)"); err == nil {
 		t.Fatal("uninstalled version admitted")
 	}
-	begin := "select " + ns + "tesl_begin_expansion($1::integer,$2::text,$3::text,$4::text,$5::integer,$6::boolean)"
-	f.call(t, begin, 7, snap, art, "source-abi", 1, true)
-	f.call(t, begin, 7, snap, art, "source-abi", 1, true)
-	for _, args := range [][]any{{7, snap, object, "source-abi", 1, true}, {7, snap, art, "changed-abi", 1, true}, {7, snap, art, "source-abi", 2, true}, {8, snap, art, "source-abi", 0, true}, {7, snap, art, "source-abi", 1, false}} {
+	begin := "select " + ns + "tesl_begin_expansion($1::integer,$2::text,$3::text,$4::text,$5::text,$6::integer,$7::boolean)"
+	f.call(t, begin, 7, snap, art, pgTestSourceABI, pgTestStoredValueCompatibility, 1, true)
+	f.call(t, begin, 7, snap, art, pgTestSourceABI, pgTestStoredValueCompatibility, 1, true)
+	for _, args := range [][]any{{7, snap, object, pgTestSourceABI, pgTestStoredValueCompatibility, 1, true}, {7, snap, art, "changed-abi", pgTestStoredValueCompatibility, 1, true}, {7, snap, art, "tesl-source-abi-v1:" + strings.Repeat("b", 64), pgTestStoredValueCompatibility, 1, true}, {7, snap, art, pgTestSourceABI, pgTestStoredValueCompatibility, 2, true}, {8, snap, art, pgTestSourceABI, pgTestStoredValueCompatibility, 0, true}, {7, snap, art, pgTestSourceABI, pgTestStoredValueCompatibility, 1, false},
+		{7, snap, art, pgTestSourceABI, "", 1, true}, {7, snap, art, pgTestSourceABI, "tesl-stored-value-v1:" + strings.Repeat("d", 64), 1, true}} {
 		if _, err := f.worker.Exec(f.ctx, begin, args...); err == nil {
 			t.Fatalf("invalid intent accepted: %+v", args)
 		}
@@ -165,7 +166,7 @@ func TestPgMigrationControlRecordsCompleteImmutableExpansion(t *testing.T) {
 		}
 	}
 	for _, version := range []int{8, 9, 10} {
-		f.call(t, begin, version, snap, art, "source-abi", 0, true)
+		f.call(t, begin, version, snap, art, pgTestSourceABI, pgTestStoredValueCompatibility, 0, true)
 		f.call(t, "select "+ns+"tesl_record_expanded($1::integer)", version)
 	}
 	// The additive epoch admits V7 at V10 without pretending only two versions
@@ -543,7 +544,7 @@ func TestPgMigrationControlObjectProgressIsAnAtomicPrefix(t *testing.T) {
 	f := pgNewControlTest(t)
 	f.install(t, 1)
 	step := PgMigrationExpansionStep{StepHash: strings.Repeat("b", 64), Operations: make([]PgMigrationExpansionOperation, 2)}
-	f.call(t, "select notes_app.tesl_begin_expansion(1,$1::text,$2::text,'source-abi',2,true)", strings.Repeat("a", 64), step.StepHash)
+	f.call(t, "select notes_app.tesl_begin_expansion(1,$1::text,$2::text,$3::text,$4::text,2,true)", strings.Repeat("a", 64), step.StepHash, pgTestSourceABI, pgTestStoredValueCompatibility)
 	first, err := step.ObjectHash(0)
 	if err != nil {
 		t.Fatal(err)

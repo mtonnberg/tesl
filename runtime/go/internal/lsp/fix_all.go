@@ -36,12 +36,10 @@ func (server *Server) initializeCapabilities(raw json.RawMessage) map[string]any
 	edit := params.Capabilities.Workspace.WorkspaceEdit
 	server.documentChanges = err == nil && edit.DocumentChanges
 	server.workspaceEditsSupported = server.documentChanges && (edit.FailureHandling == "transactional" || edit.FailureHandling == "textOnlyTransactional")
-	server.migrationApplySupported = server.documentChanges && params.Capabilities.Workspace.ApplyEdit
-	creates := false
-	for _, operation := range edit.ResourceOperations {
-		creates = creates || operation == "create"
-	}
-	server.migrationApplySupported = server.migrationApplySupported && creates
+	// Standard applyEdit capabilities do not establish that all document updates
+	// precede an acknowledgement. Keep the internal coordinator unavailable until
+	// a checked editor snapshot barrier and real-wire recovery tests establish it.
+	server.migrationApplySupported = false
 	server.migrationBatchEdits = edit.FailureHandling == "transactional" || edit.FailureHandling == "textOnlyTransactional" || edit.FailureHandling == "undo"
 	result := initializeResult()
 	if !server.workspaceEditsSupported {

@@ -40,12 +40,16 @@ let emit path source = match Compile.compile_go_source (path "app.tesl") source 
  | Compile.GoFailure ds -> fail (String.concat "\n" (List.map (fun (d:Compile.diagnostic) -> d.code ^ ": " ^ d.message) ds))
 let artifact xs = List.find_opt (fun (a:Emit_go.artifact) -> a.path="migration-history.json") xs
 let generate root version =
- let preview = match G.start ~compiler_abi:"fixture-comparison" ~project_root:root ~family:"NotesSchema" ~version ~documents:[] with
+ let context = Result.get_ok (Migration_abi.current ()) in
+ let preview = match G.start_with_compatibility ~stored_value_compatibility:(Some (Migration_abi.stored_value_compatibility context))
+   ~compiler_abi:(Migration_abi.id context) ~project_root:root ~family:"NotesSchema" ~version ~documents:[] with
   | Ok x -> x | Error es -> fail (String.concat "\n" (List.map (fun (e:G.error) -> e.message) es)) in
  List.iter (fun (e:M.edit) -> save e.path e.after) (M.edits preview.manifest)
 let edit_schema path f = let file=path "schema/notes/v-current.tesl" in save file (f (read file))
 let refresh ?(version=2) root =
- let preview = match G.refresh ~compiler_abi:"fixture-comparison" ~project_root:root ~family:"NotesSchema" ~version ~documents:[] with
+ let context = Result.get_ok (Migration_abi.current ()) in
+ let preview = match G.refresh_with_compatibility ~stored_value_compatibility:(Some (Migration_abi.stored_value_compatibility context))
+   ~compiler_abi:(Migration_abi.id context) ~project_root:root ~family:"NotesSchema" ~version ~documents:[] with
   | Ok x -> x | Error es -> fail (String.concat "\n" (List.map (fun (e:G.error) -> e.message) es)) in
  List.iter (fun (e:M.edit) -> save e.path e.after) (M.edits preview.manifest)
 let current p = List.hd (P.databases p)
@@ -64,7 +68,12 @@ let baseline () = with_project (fun _ path ->
  let output = match artifact artifacts with Some a -> a.contents | None -> fail "build omitted history artifact" in
  check string "actual build uses guarded history" (json p ^ "\n") output;
  check bool "compact history uses its own versioned envelope" true
-  (Compile.string_contains output "\"version\":2,\"kind\":\"compiled-migration-history\"");
+  (Compile.string_contains output "\"version\":3,\"kind\":\"compiled-migration-history\"");
+ check string "compiled stored-value contract comes from actual context"
+  (Migration_abi.stored_value_compatibility (Result.get_ok (Migration_abi.current ())))
+  (P.stored_value_compatibility p);
+ check bool "wire carries explicit compatibility" true
+  (Compile.string_contains output ("\"storedValueCompatibility\":" ^ Compile.json_encode_string (P.stored_value_compatibility p)));
  check bool "catalogs are reconstructed from operations at runtime" false
   (Compile.string_contains output "\"catalog\":");
  List.iter (fun secret -> check bool "history contains no connection credentials or source paths" false (Compile.string_contains output secret))

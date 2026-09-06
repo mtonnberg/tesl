@@ -15,6 +15,7 @@ type pgMigrationAdmission struct {
 	version, fenceNamespace int
 	databaseUUID            string
 	worker                  string
+	roles                   PgMigrationControlRoles
 }
 
 type pgMigrationAdmissionError struct{ cause error }

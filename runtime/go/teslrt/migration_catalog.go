@@ -226,6 +226,11 @@ func pgInspectMigrationCatalogInTx(ctx context.Context, tx pgx.Tx, namespace, ow
 			return report, err
 		}
 	}
+	return pgFinishMigrationCatalogReport(report, namespace, owner, observed)
+}
+
+func pgFinishMigrationCatalogReport(report PgMigrationCatalogReport, namespace, owner string,
+	observed []*pgCatalogTable) (PgMigrationCatalogReport, error) {
 	// Physical attribute numbers and equivalent index/constraint names are not
 	// storage semantics. Normalize a copy; diagnostics retain the original names.
 	for i, table := range observed {

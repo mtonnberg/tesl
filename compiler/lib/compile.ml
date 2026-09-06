@@ -1982,6 +1982,7 @@ let config_field_type_label (k : Validation_structural.vkind) : string =
   | Validation_structural.VSub sub     -> sub ^ " { … }"
   | Validation_structural.VConn        -> "TcpConnection { … } | SocketConnection { … }"
   | Validation_structural.VBackend     -> "Postgres (PostgresConfig { … }) | Memory"
+  | Validation_structural.VMigrationTopology -> "Worker | Embedded"
   | Validation_structural.VBackoff     -> "Exponential | Fixed | Linear"
   | Validation_structural.VDatabaseRef -> "Database"
   | Validation_structural.VEntityList  -> "[Entity]"
@@ -2820,9 +2821,10 @@ let compile_go_source ?(debug=false) ?(path="") filename source =
              let metadata = match history with None -> [] | Some history ->
               let json = Migration_program.to_json ~quote:json_encode_string history in
               let registrations = List.map (fun (d:Migration_program.database) ->
-                Printf.sprintf "\tregisterCompiledMigrationHistory(%s, %s, %s, %d, %s, teslGeneratedMigrationHistoryJSON)\n"
+                Printf.sprintf "\tregisterCompiledMigrationHistory(%s, %s, %s, %d, %s, %s, teslGeneratedMigrationHistoryJSON)\n"
                   (Emit_go.go_quote d.identity) (Emit_go.go_quote d.family) (Emit_go.go_quote d.namespace)
-                  d.current_version (Emit_go.go_quote (Migration_program.compiler_abi history))) (Migration_program.databases history) in
+                  d.current_version (Emit_go.go_quote (Migration_program.compiler_abi history))
+                  (Emit_go.go_quote (Migration_program.stored_value_compatibility history))) (Migration_program.databases history) in
               [{Emit_go.path="migration-history.json";contents=json ^ "\n"};
                {Emit_go.path="internal/teslrt/migration_history_generated.go";
                 contents="package teslrt\n\nconst teslGeneratedMigrationHistoryJSON = " ^ Emit_go.go_quote json ^

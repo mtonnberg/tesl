@@ -57,7 +57,7 @@ func pgBootTestDatabase(t *testing.T, f *pgControlTestFixture, version int) *Dat
 	t.Helper()
 	conn := f.worker.Config()
 	config := PostgresConfig{DBName: conn.Database, User: conn.User, Password: conn.Password,
-		Host: conn.Host, Port: int(conn.Port), Schema: f.namespace, ControlOwner: f.roles.Owner, PoolSize: 1}
+		Host: conn.Host, Port: int(conn.Port), Schema: f.namespace, ControlOwner: f.roles.Owner, PoolSize: 1, MigrationTopology: "Embedded"}
 	if strings.HasPrefix(conn.Host, "/") {
 		config.SocketDir = conn.Host
 	}
@@ -152,7 +152,7 @@ func TestPgMigrationBootKeepsRowsAndSeparatesRevisions(t *testing.T) {
 }
 
 func TestPgMigrationBootRefusesLookalikesAndChangedContracts(t *testing.T) {
-	for _, scenario := range []string{"unrecorded table", "source ABI", "catalog", "control owner", "namespace"} {
+	for _, scenario := range []string{"unrecorded table", "stored-value compatibility", "catalog", "control owner", "namespace"} {
 		t.Run(scenario, func(t *testing.T) {
 			f := pgNewControlTest(t)
 			f.install(t, 1)
@@ -162,11 +162,11 @@ func TestPgMigrationBootRefusesLookalikesAndChangedContracts(t *testing.T) {
 			case "unrecorded table":
 				f.call(t, "create table notes_app.notes(id text primary key, active bool not null)")
 				f.call(t, "insert into notes_app.notes values ('unowned',true)")
-			case "source ABI":
+			case "stored-value compatibility":
 				f.expand(t, 1)
-				old := db.migrationHistory.SourceCompilerABI
-				db.migrationHistory.SourceCompilerABI = "tesl-source-abi-v1:" + strings.Repeat("b", 64)
-				db.migrationHistory.HistoryJSON = strings.ReplaceAll(db.migrationHistory.HistoryJSON, old, db.migrationHistory.SourceCompilerABI)
+				old := db.migrationHistory.StoredValueCompatibility
+				db.migrationHistory.StoredValueCompatibility = "tesl-stored-value-v1:" + strings.Repeat("b", 64)
+				db.migrationHistory.HistoryJSON = strings.ReplaceAll(db.migrationHistory.HistoryJSON, old, db.migrationHistory.StoredValueCompatibility)
 			case "catalog":
 				f.expand(t, 1)
 				f.call(t, "alter table notes_app.notes alter column active drop not null")
@@ -239,7 +239,7 @@ func TestPgMigrationBootVerifiesEveryReplacementConnection(t *testing.T) {
 				case "fence":
 					statement = "update notes_app.tesl_schema_meta set fence_ns=fence_ns+1"
 				case "format":
-					statement = "update notes_app.tesl_schema_meta set format_version=2"
+					statement = "update notes_app.tesl_schema_meta set format_version=999"
 				case "domain":
 					statement = "update notes_app.tesl_schema_meta set fence_domain='different'"
 				case "protocol":

@@ -222,6 +222,47 @@ fn identity(note: NotesSchema.VCurrent.Notes.Note) -> NotesSchema.VCurrent.Notes
   check bool "frozen closure diagnostic" true (Compile.string_contains context.json "MIG013");
   let before = files root in refuse (start root 4);
   check (list (pair string string)) "shared history is never rewritten" before (files root))
+let compatible_upgrade () = with_project (fun root path ->
+  let contract = Migration_abi.stored_value_compatibility (Result.get_ok (Migration_abi.current ())) in
+  let generate ?(compatibility=contract) abi version =
+    G.start_with_compatibility ~stored_value_compatibility:(Some compatibility) ~compiler_abi:abi
+      ~project_root:root ~family:"NotesSchema" ~version ~documents:[] in
+  apply_fixture (get (generate "compiler-A" 1));
+  let canonical abi =
+    let h = match Migration_history_sources.discover_with_compatibility
+      ~stored_value_compatibility:(Some contract) ~compiler_abi:abi ~project_root:root ~family:"NotesSchema" with
+      | Ok h -> h | Error e -> fail e.message in
+    let schemas = List.map (fun (s:Migration_history_sources.schema) -> s.inventory)
+      (Migration_history_sources.frozen h @ [Migration_history_sources.current h]) in
+    let sources = Migration_history_sources.completed_migrations h @ Option.to_list (Migration_history_sources.current_migration h) in
+    let edges = List.map (fun (s:Migration_history_sources.migration_source) ->
+      let module_ = match Parser.parse_module s.path s.contents with Ok m -> m | Err e -> fail e.msg in
+      match Migration_declaration.check ~stored_value_compatibility:contract ~compiler_abi:abi ~source:s.contents module_ with
+      | Ok (Some edge) -> edge | _ -> fail "compatible migration declaration refused") sources in
+    match Migration_expansion.generate ~initial_version:1 ~schemas ~edges with
+    | Ok steps -> List.map Migration_expansion.step_hash steps
+    | Error _ -> fail "compatible physical expansion refused" in
+  check (list string) "all historical step hashes survive compiler upgrade" (canonical "compiler-A") (canonical "compiler-B");
+  let first_frozen = read (path "schema/notes/v1.tesl") in
+  let header file = match Migration_header.read ~file (read file) with
+    | Ok (Some h) -> h | _ -> fail "missing generated history header" in
+  let previous,_ = Migration_header.recorded_seals (header (path "migrations/notes/v2.tesl")) in
+  check string "A owns the original predecessor seal" "compiler-A" (Migration_seal.compiler_abi previous);
+  apply_fixture (get (generate "compiler-B" 2));
+  check string "B leaves frozen A source byte-identical" first_frozen (read (path "schema/notes/v1.tesl"));
+  let previous,_ = Migration_header.recorded_seals (header (path "migrations/notes/v2.tesl")) in
+  check string "freezing the current target does not relabel A predecessor" "compiler-A" (Migration_seal.compiler_abi previous);
+  let completed = read (path "migrations/notes/v2.tesl") in
+  let refreshed = get (G.refresh_with_compatibility ~stored_value_compatibility:(Some contract) ~compiler_abi:"compiler-B"
+    ~project_root:root ~family:"NotesSchema" ~version:3 ~documents:[]) in
+  List.iter (fun (e:M.edit) -> write e.path e.after) (M.edits refreshed.manifest);
+  check string "refresh leaves completed A/B history byte-identical" completed (read (path "migrations/notes/v2.tesl"));
+  let original = files root in
+  refuse (generate ~compatibility:("tesl-stored-value-v1:" ^ String.make 64 '0') "compiler-C" 3);
+  check (list (pair string string)) "incompatible upgrade has no source writes" original (files root);
+  write (path "schema/notes/v1.tesl") (first_frozen ^ "# changed frozen bytes\n");
+  refuse (generate "compiler-B" 3))
+
 let () = run "Migration revision previews" ["checked generation", List.map (fun (name,f) -> test_case name `Quick f)
   ["complete first freeze and deterministic preview",first;"successive freezes finalize targets",next_revision;
    "user helpers, comments and tests survive",user_helpers;"current drift needs refresh",current_drift;
@@ -230,4 +271,5 @@ let () = run "Migration revision previews" ["checked generation", List.map (fun 
    "preexisting equal private targets are guarded",existing_private_target;
    "unproven or ill-typed schema cannot generate",invalid_schema;"concurrent history creation",stale_preview;
    "same-named record and codec claims",codec_and_type;"private persisted facts stay checked",proved_schema;
-   "shared frozen helpers survive and refuse edits",shared_helper]]
+   "shared frozen helpers survive and refuse edits",shared_helper;
+   "compatible compiler upgrade preserves canonical history and creator provenance",compatible_upgrade]]

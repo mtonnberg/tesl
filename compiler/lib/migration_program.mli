@@ -1,5 +1,5 @@
 (** Checked history carried by a complete Go build. This is compile-time input
-    to the pending boot/executor integration, never database authority. *)
+    to the boot/executor's independent persisted-history checks, never database authority. *)
 type origin = {
   initial_version : int;
   steps : (Migration_expansion.step list, Migration_sparse.error list) result;
@@ -14,6 +14,7 @@ type database = {
 type t
 val databases : t -> database list
 val compiler_abi : t -> string
+val stored_value_compatibility : t -> string
 (** Capture application/history guards before invoking compilation. The supplied
     entry bytes and active overlays are authoritative. Actual stdlib resources
     are pinned, then all guards are checked again before a result is released.

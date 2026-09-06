@@ -791,23 +791,45 @@ checking passes refuse the inventory. Compiler-internal read-only overlays may
 provide unsaved dependencies and proposed frozen files. They use the same import,
 type, proof and validation checks and create no source files or directories.
 
-An inventory result wraps its closure as
-`["compiler-semantics", compiler-abi, closure]`. Its builtin references identify
-the existing compiler's module and symbol; the outer ABI covers execution
-semantics, including lowered operators, codecs and stdlib implementations.
+An inventory loaded with an explicit stored-value compatibility contract wraps its
+closure as `["stored-value-semantics", compatibility, closure]`. Legacy loads without
+that contract use `["compiler-semantics", compiler-abi, closure]`. Its builtin
+references identify the existing compiler's module and symbol; the outer identity
+covers execution semantics, including lowered operators, codecs and stdlib implementations.
 No historical lowering or separate primitive-version registry is retained.
-Even an empty inventory requires an ABI. A snapshot roots every declaration;
+Even an empty inventory retains the actual executing compiler ABI. A snapshot roots every declaration;
 a per-type closure roots that declaration and its dependencies, including codecs
 of nested record/ADT fields. Thus an unchanged SQL `jsonb` column can have a
-different semantic closure. This loader does not yet implement historical
-manifest checks, the contextual `Same` rule or a cross-ABI data transition.
+different semantic closure. The inventory alone grants no persisted-value admission
+or authority to perform a cross-compiler data transition.
 
-**Snapshot source-seal format 1 (accepted design; generator integration pending).**
+**Stored-value compatibility contract.** The current contract is
+`tesl-stored-value-v1:<sha256>`, hashing the compiler-owned semantic revision and the
+active lifted stdlib source names and byte digests. It is separate from the exact
+whole-build source ABI. Keeping the semantic revision promises compatible type,
+proof/check/establish and erasure semantics, lowering, primitives, codecs and
+SQL-visible representations. Changes to those semantics require a new revision;
+compiler maintainers must review that decision and its regression evidence.
+This is a versioned compiler compatibility promise, not a proof that arbitrary
+compiler implementations are equivalent. Stdlib changes conservatively change the
+contract even when the application does not call the changed function.
+
+Production generation, planning and compilation obtain both identities from the
+actual compiler and captured stdlib; callers cannot select old semantics by supplying
+an old label. Ordinary diagnostics check source integrity and types under the current
+compiler. Production compilation additionally verifies the stored-value contract.
+Completed additive history can survive a build change only with the same supported
+contract, exact frozen sources, reproduced checked snapshot/storage identities and
+matching protected database history, progress and catalog. Pending expansion intents
+remain pinned to the original build ABI. Processing-ABI rules for transforming
+migrations and revalidation across different contracts remain separate requirements.
+
+**Snapshot source-seal formats.**
 A snapshot seal records the complete checked owned source closure independently
-of its compiler-bound semantic digest. Its comment block is:
+of its semantic digest. New production seals use format 2:
 
 ```text
-# tesl:snapshot-seal:v1 <schema-root> <compiler-abi-hex> <snapshot-sha256>
+# tesl:snapshot-seal:v2 <schema-root> <creator-compiler-abi-hex> <stored-value-compatibility> <snapshot-sha256>
 # tesl:snapshot-source <owned-module> <source-sha256>
 ...one source line per owned module, including the root...
 # tesl:snapshot-end
@@ -826,10 +848,13 @@ formatting and revision alpha-renaming. A freeze therefore preserves the semanti
 digest while recording the copied files' new byte digests. Source verification
 checks every recorded file, the complete import closure and canonical resolution;
 it does not require executing an older compiler. Semantic verification additionally
-requires the actual executing compiler ABI to equal the recorded ABI, applies the
-complete compiler judgment again and compares the resulting snapshot digest. An
-ABI mismatch is distinct from edited source. Supplying an old ABI label does not
-reconstruct old compiler semantics.
+requires the same explicit stored-value contract, applies the complete compiler
+judgment under the actual current compiler and compares the resulting snapshot
+digest. The recorded creator ABI remains unchanged. Legacy format 1 omits the
+compatibility token and uses `tesl:snapshot-seal:v1`; its semantic comparison still
+requires the exact recorded compiler ABI, even when a caller offers a new contract.
+Legacy records are never relabelled as format 2. A compatibility mismatch is distinct
+from edited source. Supplying an old ABI label does not reconstruct old semantics.
 
 These source records are not authenticated database history: editing the metadata
 and source together can change both. The persisted boot/execution checks provide
@@ -986,7 +1011,7 @@ hole emits MIG003 and blocks compilation, including through imports and Go
 emission. A hole does not establish a value or proof. General row-function holes
 and transformations are not yet elaborated. Refresh returns full proposed-view
 diagnostics alongside its source manifest, so a preview containing holes is
-explicitly an incomplete program. It verifies frozen source and same-ABI semantic
+explicitly an incomplete program. It verifies frozen source and compatible semantic
 seals before replacing the undeployed current target; it cannot infer deployment
 state or authorize rewriting persisted history.
 
@@ -1002,8 +1027,9 @@ prove execution compatibility across compiler ABIs.
 
 The field-impact projection has one location per declared entity field, including
 private entities in child modules. It uses the same typed lowering as the complete
-declaration. Each contract is
-`["compiler-semantics", compiler-abi, ["stored-field", field-node, dependency-closure]]`.
+declaration. Each contract wraps `["stored-field", field-node, dependency-closure]`
+with the explicit stored-value semantics identity above, or the legacy compiler ABI
+when no compatibility contract was supplied.
 In this standalone field node, proof subjects referring to entity fields use
 `["field-subject", field-name]`; adding or reordering a sibling must not rename an
 existing proof subject by shifting its positional index. The complete declaration
@@ -1015,7 +1041,8 @@ Comparison reports added and removed locations, changed field definitions, and
 changed dependencies under unchanged field text. A record codec, nested ADT, or
 fact producer can therefore affect several entity fields while all their SQL types
 remain `jsonb`. An unreferenced record or codec has no stored location. Comparison
-refuses different schema families or compiler ABIs. The ABI supplied to the loader
+refuses different schema families or compatibility contracts; legacy comparisons
+require the same compiler ABI. The ABI supplied to the loader
 identifies the compiler performing that load; it cannot request historical
 execution semantics. This field projection neither checks persisted history nor
 establishes rolling compatibility, physical catalog equivalence, a verified `Same`
@@ -1030,7 +1057,8 @@ from a changed dependency under an unchanged declaration. Moving an entity to a
 different owning module is a removal and an addition, not an inferred rename.
 
 The inventory's internal `Same` verifier accepts only owned newtype, ADT, record,
-fact and codec declarations of the same kind in the same family and compiler ABI.
+fact and codec declarations of the same kind in the same family and explicit
+compatibility contract (or the same compiler ABI for legacy inventories).
 It compares complete canonical trees, rather than trusting supplied hashes. An
 unequal pair reports the first differing dependency in canonical reference order,
 with the old and new declaration locations; added and removed dependencies are
@@ -2514,6 +2542,10 @@ A `database` declaration is a folded record assigned with `=`:
                          [ "poolSize"  ":" <expr> ]
                          [ "namespace" ":" <string-literal> ]
                          [ "controlOwner" ":" <expr> ]
+                         [ "topology" ":" ("Worker" | "Embedded") ]
+                         [ "requestRole" ":" <expr> ]
+                         [ "workerRole" ":" <expr> ]
+                         [ "ddlConnection" ":" <expr> ]
                          "connection" ":" <connection>
                        "}" ")"
                      | "Memory"
@@ -2591,12 +2623,30 @@ the module-reference form. It is independent of the Tesl module and database
 declaration names; the compiler does not guess a physical namespace from either.
 Memory has no physical namespace. During source transition the existing string
 `Database.schema` plus explicit `entities:` form retains its meaning and cannot
-also specify `migrations:`, `PostgresConfig.namespace`, or `PostgresConfig.controlOwner`.
+also specify `migrations:`, `PostgresConfig.namespace`, `PostgresConfig.controlOwner`,
+`topology`, `requestRole`, `workerRole`, or `ddlConnection`.
 The optional versioned `PostgresConfig.controlOwner` is a string or `env` expression
 naming the no-login role that owns migration control objects (default `tesl_control`).
 It is application configuration, independent of the schema's source history. The
 operator provisions it and installs the protected control interface; application
 startup does not create roles or adopt existing tables.
+
+`PostgresConfig.topology` selects `Worker` or `Embedded`, literal config-only
+constructors of `Tesl.Database.MigrationTopology`. Import the selected constructor
+or `MigrationTopology(..)`; neither constructor is an ordinary runtime value.
+An omitted topology selects Worker when `TESL_DEPLOYED` is present and Embedded
+otherwise. Embedded uses one combined request/executor login. Worker separates
+the `requestRole` (default `tesl_app`) from the entity-owning `workerRole` (default
+`tesl_schema`); these role fields require Worker at runtime. Both are strings or
+environment expressions, independent of the actual process login in `user`.
+`ddlConnection` is an optional string/environment DSN used by Embedded expansion
+and the compiled `--schema worker` and `--schema install` commands. It must be
+direct or session-affine; when omitted those operations use that process's normal
+connection. The installer supplies its own short-lived credentials, including in
+`ddlConnection` when configured. Worker request startup never uses that DSN and
+performs no DDL; it verifies committed storage through read-only snapshots before
+publishing its request pool. These connection and deployment settings are not
+stored schema declarations or authority to reinterpret frozen history.
 
 Elaboration produces an ownership binding and connection description separately
 from ordinary source visibility. Generated table metadata may name private schema

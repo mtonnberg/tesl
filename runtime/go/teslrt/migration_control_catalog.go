@@ -18,14 +18,19 @@ set local extra_float_digits = 3; set local bytea_output = 'hex'; set local lock
 	return err
 }
 
-func pgControlRoles(ctx context.Context, tx pgx.Tx, owner, worker string, installer bool) error {
+func pgControlRoles(ctx context.Context, tx pgx.Tx, roles PgMigrationControlRoles, installer bool) error {
+	owner, worker := roles.Owner, roles.Worker
 	if !pgMigrationIdentifier(owner) || !pgMigrationIdentifier(worker) || owner == worker {
 		return fmt.Errorf("migration control requires distinct valid control and worker roles")
+	}
+	if roles.Request != "" && (!pgMigrationIdentifier(roles.Request) || roles.Request == owner || roles.Request == worker) {
+		return fmt.Errorf("Worker migration topology requires distinct valid owner, worker and request roles")
 	}
 	var valid, canInstall, leaked bool
 	err := tx.QueryRow(ctx, `select
  w.rolcanlogin and not c.rolcanlogin and not c.rolsuper and not c.rolcreaterole and not c.rolcreatedb and not c.rolreplication and not c.rolbypassrls
  and not pg_catalog.pg_has_role(w.oid,c.oid,'MEMBER')
+ and not pg_catalog.pg_has_role(w.oid,(select datdba from pg_catalog.pg_database where datname=pg_catalog.current_database()),'MEMBER')
  and not exists (select 1 from pg_catalog.pg_roles p where pg_catalog.pg_has_role(w.oid,p.oid,'MEMBER')
    and (p.rolsuper or p.rolcreaterole or p.rolcreatedb or p.rolreplication or p.rolbypassrls or p.rolname in
      ('pg_write_all_data','pg_signal_backend','pg_execute_server_program','pg_read_server_files','pg_write_server_files','pg_checkpoint','pg_create_subscription','pg_maintain')))
@@ -43,6 +48,22 @@ func pgControlRoles(ctx context.Context, tx pgx.Tx, owner, worker string, instal
 	}
 	if installer && !canInstall {
 		return fmt.Errorf("migration installation requires a short-lived identity with temporary control-owner membership")
+	}
+	if roles.Request != "" {
+		var isolated bool
+		if err := tx.QueryRow(ctx, `select r.rolcanlogin
+ and not pg_catalog.pg_has_role(r.oid,(select oid from pg_catalog.pg_roles where rolname=$2),'MEMBER')
+ and not pg_catalog.pg_has_role(r.oid,(select oid from pg_catalog.pg_roles where rolname=$3),'MEMBER')
+ and not pg_catalog.pg_has_role(r.oid,(select datdba from pg_catalog.pg_database where datname=pg_catalog.current_database()),'MEMBER')
+ and not exists (select 1 from pg_catalog.pg_roles p where pg_catalog.pg_has_role(r.oid,p.oid,'MEMBER')
+   and (p.rolsuper or p.rolcreaterole or p.rolcreatedb or p.rolreplication or p.rolbypassrls or p.rolname in
+     ('pg_write_all_data','pg_signal_backend','pg_execute_server_program','pg_read_server_files','pg_write_server_files','pg_checkpoint','pg_create_subscription','pg_maintain')))
+ from pg_catalog.pg_roles r where r.rolname=$1`, roles.Request, owner, worker).Scan(&isolated); err != nil {
+			return fmt.Errorf("migration request role must be provisioned by the operator: %w", err)
+		}
+		if !isolated {
+			return fmt.Errorf("migration request role isolation is invalid: request logins must not have worker, control-owner or administrative authority")
+		}
 	}
 	return nil
 }
@@ -194,7 +215,7 @@ func pgControlArgumentTypes(fn pgMigrationControlFunction) string {
 	return strings.Join(arguments, ",")
 }
 
-func pgControlFunctionCatalog(ctx context.Context, tx pgx.Tx, namespace, owner, worker string, fn pgMigrationControlFunction) error {
+func pgControlFunctionCatalog(ctx context.Context, tx pgx.Tx, namespace string, roles PgMigrationControlRoles, fn pgMigrationControlFunction) error {
 	var actual struct {
 		Owner, Language, Kind, Arguments, Result, Volatility, Parallel, Body string
 		SecurityDefiner, Strict, Leakproof, SetReturning, Unsafe             bool
@@ -208,22 +229,33 @@ func pgControlFunctionCatalog(ctx context.Context, tx pgx.Tx, namespace, owner, 
  'SecurityDefiner',p.prosecdef,'Strict',p.proisstrict,'Leakproof',p.proleakproof,'SetReturning',p.proretset,
  'Configuration',p.proconfig,'Unsafe',exists (
    select 1 from pg_catalog.aclexplode(coalesce(p.proacl,pg_catalog.acldefault('f',p.proowner))) a
-   where a.grantee<>p.proowner and (a.grantee<>(select oid from pg_catalog.pg_roles where rolname=$4) or a.is_grantable)))
+   where a.grantee<>p.proowner and (a.grantee not in (select oid from pg_catalog.pg_roles where rolname=any($4::text[])) or a.is_grantable))
+   or exists (select 1 from unnest($4::text[]) expected(role) where not exists (
+     select 1 from pg_catalog.aclexplode(coalesce(p.proacl,pg_catalog.acldefault('f',p.proowner))) a
+     join pg_catalog.pg_roles grantee on grantee.oid=a.grantee where grantee.rolname=expected.role and a.privilege_type='EXECUTE' and not a.is_grantable)))
  from pg_catalog.pg_proc p join pg_catalog.pg_namespace n on n.oid=p.pronamespace
  join pg_catalog.pg_roles r on r.oid=p.proowner join pg_catalog.pg_language l on l.oid=p.prolang
  where n.nspname=$1 and p.proname=$2 and pg_catalog.oidvectortypes(p.proargtypes)=$3`,
-		namespace, fn.name, strings.ReplaceAll(pgControlArgumentTypes(fn), ",", ", "), worker).Scan(&encoded)
+		namespace, fn.name, strings.ReplaceAll(pgControlArgumentTypes(fn), ",", ", "), pgControlFunctionRoles(roles, fn)).Scan(&encoded)
 	if err != nil {
 		return fmt.Errorf("protected migration function %s.%s is missing or unreadable: %w", namespace, fn.name, err)
 	}
 	if err := json.Unmarshal(encoded, &actual); err != nil {
 		return err
 	}
-	if actual.Owner != owner || actual.Language != "plpgsql" || actual.Kind != "f" || actual.Arguments != fn.arguments ||
+	if actual.Owner != roles.Owner || actual.Language != "plpgsql" || actual.Kind != "f" || actual.Arguments != fn.arguments ||
 		actual.Result != fn.result || actual.Volatility != fn.volatility[:1] || actual.Parallel != "u" || actual.Support != 0 || actual.Body != fn.body ||
 		!actual.SecurityDefiner || actual.Strict || actual.Leakproof || actual.SetReturning || actual.Unsafe ||
 		!reflect.DeepEqual(actual.Configuration, []string{`search_path=""`}) {
 		return fmt.Errorf("protected migration function %s.%s differs from its definition, owner or execution grants", namespace, fn.name)
 	}
 	return nil
+}
+
+func pgControlFunctionRoles(roles PgMigrationControlRoles, fn pgMigrationControlFunction) []string {
+	principals := []string{roles.Worker}
+	if roles.Request != "" && (fn.name == "tesl_admit" || fn.name == "tesl_heartbeat") {
+		principals = append(principals, roles.Request)
+	}
+	return principals
 }

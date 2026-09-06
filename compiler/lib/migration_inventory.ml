@@ -51,6 +51,7 @@ type declaration = {
 
 type t = {
   compiler_abi : string;
+  stored_value_compatibility : string option;
   scopes : Migration_canonical.scope list;
   modules : string list;
   definitions : definition list;
@@ -61,6 +62,7 @@ type t = {
 }
 
 let compiler_abi (inventory : t) = inventory.compiler_abi
+let stored_value_compatibility (inventory : t) = inventory.stored_value_compatibility
 let module_names inventory = inventory.modules
 let root_module inventory = match inventory.scopes with
   | [scope] -> scope.family ^ "." ^ scope.revision
@@ -118,12 +120,14 @@ let compatible_inventories ~before ~after =
   if List.map (fun (scope : Migration_canonical.scope) -> scope.family) before.scopes <>
      List.map (fun (scope : Migration_canonical.scope) -> scope.family) after.scopes then
     Error "comparison requires the same schema family"
-  else if before.compiler_abi <> after.compiler_abi then
-    Error "comparison requires the same recorded compiler ABI; recompiling historical source cannot establish the meaning of previously stored values"
-  else Ok ()
+  else match before.stored_value_compatibility, after.stored_value_compatibility with
+    | Some a, Some b when a = b -> Ok ()
+    | None, None when before.compiler_abi = after.compiler_abi -> Ok ()
+    | _ -> Error "comparison requires the same explicit stored-value compatibility contract, or the same compiler ABI for legacy inventories"
 
-let with_abi inventory body = Migration_canonical.Seq [
-  Bytes "compiler-semantics"; Bytes inventory.compiler_abi; body]
+let with_abi inventory body = match inventory.stored_value_compatibility with
+  | None -> Migration_canonical.Seq [Bytes "compiler-semantics"; Bytes inventory.compiler_abi; body]
+  | Some contract -> Migration_canonical.Seq [Bytes "stored-value-semantics"; Bytes contract; body]
 
 let closure inventory roots =
   match Migration_ir.closure ~scopes:inventory.scopes
@@ -314,10 +318,12 @@ let builtin (m : module_form) ns name =
       Some (Primitive ("Tesl.Prelude." ^ name))
     | _ -> None
 
-let load ~compiler_abi ~root_file =
+let load_with_compatibility ~stored_value_compatibility ~compiler_abi ~root_file =
   let loc = Location.dummy_loc root_file in
   try
     if String.trim compiler_abi = "" then reject loc "compiler ABI identity is required for a semantic schema inventory";
+    Option.iter (fun contract -> if not (Migration_abi.valid_stored_value_compatibility contract) then
+      reject loc "invalid stored-value compatibility contract") stored_value_compatibility;
     let sources = Hashtbl.create 16 in
     let read expected path =
       let path = Validation_common.canonical_import_path path in
@@ -426,7 +432,7 @@ let load ~compiler_abi ~root_file =
         | _ -> assert false (* Schema content and typed lowering already checked. *) in
       {namespace; qualified_name=m.module_name ^ "." ^ name; declaration_kind=kind; source_loc=top_decl_loc d}) m.decls) modules
       |> List.sort (fun a b -> compare (declaration_key a) (declaration_key b)) in
-    let inventory = { compiler_abi; scopes; definitions; fields=[]; entities=[]; sources=source_inputs; declarations;
+    let inventory = { compiler_abi; stored_value_compatibility; scopes; definitions; fields=[]; entities=[]; sources=source_inputs; declarations;
       modules=List.map (fun m -> m.module_name) modules } in
     let fields = List.concat_map (fun d -> List.map (fun (name, body) ->
       let entity = match d.key with
@@ -463,3 +469,6 @@ let load ~compiler_abi ~root_file =
   | Sys_error message | Failure message | Invalid_argument message -> Error {loc; message}
   | Unix.Unix_error (error, operation, path) ->
     Error {loc; message=Printf.sprintf "%s: %s: %s" operation path (Unix.error_message error)}
+
+let load ~compiler_abi ~root_file =
+  load_with_compatibility ~stored_value_compatibility:None ~compiler_abi ~root_file

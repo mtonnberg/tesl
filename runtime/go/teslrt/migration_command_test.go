@@ -119,8 +119,12 @@ func TestPgMigrationInstallRetainsAndVerifiesExistingHistory(t *testing.T) {
 	oldABI := history.SourceCompilerABI
 	history.SourceCompilerABI = "tesl-source-abi-v1:" + strings.Repeat("b", 64)
 	history.HistoryJSON = strings.ReplaceAll(history.HistoryJSON, oldABI, history.SourceCompilerABI)
-	if _, err := InstallPgCompiledMigrationControl(f.ctx, f.installer, history, f.roles); err == nil || !strings.Contains(err.Error(), "ABI or plan differs") {
-		t.Fatalf("installer accepted rewritten source history: %v", err)
+	checkRetry() // A completed compatible intent preserves its actual creator ABI.
+	oldCompatibility := history.StoredValueCompatibility
+	history.StoredValueCompatibility = "tesl-stored-value-v1:" + strings.Repeat("d", 64)
+	history.HistoryJSON = strings.ReplaceAll(history.HistoryJSON, oldCompatibility, history.StoredValueCompatibility)
+	if _, err := InstallPgCompiledMigrationControl(f.ctx, f.installer, history, f.roles); err == nil || !strings.Contains(err.Error(), "stored-value compatibility") {
+		t.Fatalf("installer accepted incompatible stored values: %v", err)
 	}
 	after, err := InspectPgMigrationControl(f.ctx, f.worker, f.namespace, f.roles)
 	if err != nil || !reflect.DeepEqual(before, after) {
@@ -240,8 +244,15 @@ func TestPgMigrationStatusCommandReportsHistoryMismatchWithoutRepair(t *testing.
 	db.migrationHistory.SourceCompilerABI = "tesl-source-abi-v1:" + strings.Repeat("b", 64)
 	db.migrationHistory.HistoryJSON = strings.ReplaceAll(db.migrationHistory.HistoryJSON, oldABI, db.migrationHistory.SourceCompilerABI)
 	out.Reset()
+	if handled, code := RunSchemaCommand(args, &out, &diagnostics); !handled || code != 0 {
+		t.Fatal("compatible completed history refused a newer compiler")
+	}
+	oldCompatibility := db.migrationHistory.StoredValueCompatibility
+	db.migrationHistory.StoredValueCompatibility = "tesl-stored-value-v1:" + strings.Repeat("d", 64)
+	db.migrationHistory.HistoryJSON = strings.ReplaceAll(db.migrationHistory.HistoryJSON, oldCompatibility, db.migrationHistory.StoredValueCompatibility)
+	out.Reset()
 	if handled, code := RunSchemaCommand(args, &out, &diagnostics); !handled || code != 2 {
-		t.Fatal("changed ABI appeared compatible")
+		t.Fatal("changed stored-value contract appeared compatible")
 	}
 	if err := json.Unmarshal(out.Bytes(), &report); err != nil || report.HistoryError == "" || report.CurrentVersion != 1 || len(report.Expansions) != 1 {
 		t.Fatalf("mismatch lost observed state: %s %v", &out, err)

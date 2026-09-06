@@ -30,8 +30,9 @@ pass Go emission before its artifact is returned. `Migration_selection` provides
 the shared read-only selection beneath both this build boundary and the source
 generator; it has no dependency on the compiler driver.
 
-The version-2 `compiled-migration-history` artifact carries the actual compiler ABI
-and each database's family, namespace, current revision and per-installation-origin
+The version-3 `compiled-migration-history` artifact carries the actual compiler ABI,
+the explicit `storedValueCompatibility` contract, and each database's family,
+namespace, current revision and per-installation-origin
 steps. Its compact steps omit `catalog`; the runtime reconstructs it from the
 baseline and subsequent operations. Source previews remain version 1 and include
 full catalogs for inspection. Omitting repeated catalogs keeps transported history
@@ -49,7 +50,7 @@ through schema lowering, which erases the contextual schema reference.
 information without connecting to PostgreSQL. Standalone binary tests remove
 both the source tree and adjacent JSON before inspecting the linked history.
 `PgCompiledMigrationHistory.ExpansionPlan(initialVersion)` checks the closed wire
-format, linked connection and ABI, complete origins and consecutive versions. It
+format, linked connection, ABI and compatibility contract, complete origins and consecutive versions. It
 replays operations into independent catalog snapshots, checks physical contracts,
 and recomputes every step identity using the compiler's length-framed canonical
 encoding. Each revision must have the same source snapshot in every origin.

@@ -199,6 +199,72 @@ let input_change_after_verification () = with_project (fun root path ->
   write (path "schema/notes/v-current/notes.tesl") (replace "42" "43" source);
   refuses S.Changed_source (S.verify_semantics ~compiler_abi:"compiler-A" checked))
 
+let contract = "tesl-stored-value-v1:" ^ String.make 64 'a'
+let other_contract = "tesl-stored-value-v1:" ^ String.make 64 'b'
+let load_compatible ?(compatibility=contract) abi path =
+  match I.load_with_compatibility ~stored_value_compatibility:(Some compatibility) ~compiler_abi:abi ~root_file:path with
+  | Ok value -> value | Error error -> fail error.message
+
+let compatible_compilers () = with_project (fun root path ->
+  let original = files root in
+  let file = path "schema/notes/v-current.tesl" in
+  let a = load_compatible "compiler-A" file and b = load_compatible "compiler-B" file in
+  check bool "compatible snapshots retain canonical identity" true (I.snapshot a=I.snapshot b);
+  check string "actual compiler provenance remains distinct" "compiler-B" (I.compiler_abi b);
+  let storage inventory = match Migration_storage.describe inventory with
+    | Ok value -> Migration_storage.digest value | Error _ -> fail "storage fixture rejected" in
+  check string "physical snapshot digest survives compatible compiler upgrade" (storage a) (storage b);
+  let record = get (S.create ~project_root:root a) in
+  let encoded = S.encode record in
+  check bool "explicit contract selects seal v2" true (String.starts_with ~prefix:"# tesl:snapshot-seal:v2 " encoded);
+  check string "v2 roundtrip" encoded (S.encode (get (S.decode encoded)));
+  check string "v2 CRLF roundtrip" encoded (S.encode (get (S.decode (replace "\n" "\r\n" encoded))));
+  let checked = get (S.verify_sources ~project_root:root record) in
+  let verified = get (S.verify_semantics ~stored_value_compatibility:contract ~compiler_abi:"compiler-B" checked) in
+  check string "verification uses executing B, not recorded A" "compiler-B" (I.compiler_abi verified);
+  check string "verification never relabels creator provenance" "compiler-A" (S.compiler_abi record);
+  check string "verification does not rewrite the seal" encoded (S.encode record);
+  refuses S.Abi_mismatch (S.verify_semantics ~compiler_abi:"compiler-A" checked);
+  refuses S.Abi_mismatch (S.verify_semantics ~stored_value_compatibility:other_contract ~compiler_abi:"compiler-B" checked);
+  refuses S.Abi_mismatch (S.verify_semantics ~stored_value_compatibility:other_contract ~compiler_abi:"compiler-A" checked);
+  check bool "changed semantics change the canonical snapshot" false
+    (I.snapshot a=I.snapshot (load_compatible ~compatibility:other_contract "compiler-B" file));
+  let forged = get (S.decode (replace (S.snapshot_digest record) (String.make 64 '0') encoded)) in
+  refuses S.Semantic_mismatch (S.verify_semantics ~stored_value_compatibility:contract ~compiler_abi:"compiler-B"
+    (get (S.verify_sources ~project_root:root forged)));
+  check (list (pair string string)) "compatible checks never write history" original (files root);
+  write (path "schema/notes/v-current/notes.tesl") (replace "42" "43" source);
+  refuses S.Changed_source (S.verify_semantics ~stored_value_compatibility:contract ~compiler_abi:"compiler-B" checked))
+
+let legacy_cannot_gain_compatibility () = with_project (fun root path ->
+  let record = seal root path in
+  let encoded = S.encode record in
+  let checked = get (S.verify_sources ~project_root:root record) in
+  refuses S.Abi_mismatch (S.verify_semantics ~stored_value_compatibility:contract ~compiler_abi:"compiler-B" checked);
+  let a = get (S.verify_semantics ~stored_value_compatibility:contract ~compiler_abi:"compiler-A" checked) in
+  check (option string) "legacy verification does not invent compatibility" None (I.stored_value_compatibility a);
+  check string "legacy provenance is retained" encoded (S.encode record);
+  check bool "legacy and explicit contracts are distinct canonical domains" false
+    (I.snapshot a=I.snapshot (load_compatible "compiler-A" (path "schema/notes/v-current.tesl"))))
+
+let invalid_compatibility_metadata () = with_project (fun root path ->
+  let record = get (S.create ~project_root:root (load_compatible "compiler-A" (path "schema/notes/v-current.tesl"))) in
+  List.iter (fun invalid ->
+    refuses S.Invalid_record (S.decode (replace contract invalid (S.encode record))))
+    ["";"tesl-stored-value-v1:" ^ String.make 64 'A';"tesl-stored-value-v2:" ^ String.make 64 'a';
+     contract ^ "0";"compiler-A"])
+
+let v2_metadata_cannot_replace_checking () = with_project (fun root path ->
+  let record = get (S.create ~project_root:root (load_compatible "compiler-A" (path "schema/notes/v-current.tesl"))) in
+  let encoded = S.encode record in
+  List.iter (fun (replacement,kind) ->
+    let changed = replace "42" replacement source in
+    write (path "schema/notes/v-current/notes.tesl") changed;
+    let forged = get (S.decode (replace (Migration_hash.digest source) (Migration_hash.digest changed) encoded)) in
+    let checked = get (S.verify_sources ~project_root:root forged) in
+    refuses kind (S.verify_semantics ~stored_value_compatibility:contract ~compiler_abi:"compiler-B" checked))
+    ["43",S.Semantic_mismatch;"\"not an Int\"",S.Invalid_schema])
+
 let () = run "Snapshot source seals" ["integrity",List.map (fun (name,f) -> test_case name `Quick f)
   ["complete deterministic roundtrip",roundtrip; "ABI byte encoding",abi_bytes;
    "strict metadata validation",malformed_records; "private edits and raw bytes",every_byte;
@@ -207,4 +273,8 @@ let () = run "Snapshot source seals" ["integrity",List.map (fun (name,f) -> test
    "metadata cannot replace type/proof checks",metadata_is_not_validation;
    "exact owned module headers",exact_module_headers; "repeated unsaved source changes",repeated_virtual_changes;
    "canonical regular input paths",path_integrity; "changed import resolution",import_shadow;
-   "fully checked virtual freeze",frozen_preview; "stale source verification",input_change_after_verification]]
+   "fully checked virtual freeze",frozen_preview; "stale source verification",input_change_after_verification;
+   "compatible compiler builds preserve source and storage identity",compatible_compilers;
+   "legacy seals cannot gain cross-ABI authority",legacy_cannot_gain_compatibility;
+   "v2 compatibility metadata is strict",invalid_compatibility_metadata;
+   "v2 metadata cannot replace current semantic checking",v2_metadata_cannot_replace_checking]]

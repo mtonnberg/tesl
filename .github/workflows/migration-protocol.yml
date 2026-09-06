@@ -27,7 +27,7 @@ jobs:
   protocol:
     name: PostgreSQL ${{ matrix.postgres }} protocol and race tests
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -58,6 +58,11 @@ jobs:
           TESL_MIGRATION_TEST_TRACE_SCALE: ${{ github.event_name == 'schedule' && '8' || '1' }}
           POSTGRES_MAJOR: ${{ matrix.postgres }}
           TESL_MIGRATION_TEST_POSTGRES_MAJOR: ${{ matrix.postgres }}
+          TESL_MIGRATION_TEST_REQUIRE_POSTGRES: '1'
+          TESL_TEST_POSTGRES_SHARED_HOST: 127.0.0.1
+          TESL_TEST_POSTGRES_SHARED_PORT: '5432'
+          TESL_TEST_POSTGRES_SHARED_USER: postgres
+          TESL_TEST_POSTGRES_SHARED_ADMIN_DATABASE: postgres
         run: |
           if [ "$TESL_MIGRATION_TEST_CLUSTER_CRASH" = 1 ]; then
             nixpkgs_rev="$(jq -r '.nodes.nixpkgs.locked.rev' flake.lock)"
@@ -73,5 +78,6 @@ jobs:
             export TESL_REPO_ROOT="$PWD"
             (cd compiler && dune build)
             cd runtime/go
-            go test -race -count=1 -timeout=180s -v ./internal/migrationtest
+            go test -race -count=1 -timeout=900s -v ./internal/migrationtest
+            go test -race -count=1 -timeout=300s -tags=tesl_migration_test ./teslrt -run "^TestPgMigration(Control|Expansion|Admission|Boot|Status|Install|StoredValueCompatibility|Compatibility|Worker)"
           '

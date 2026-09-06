@@ -4,29 +4,31 @@
 
 The production runtime has an installer, a protected control interface and an
 additive expansion executor. Versioned application startup consumes the linked
-compiler history and publishes its request pool only after execution succeeds.
+compiler history and publishes its request pool only after required expansion succeeds.
 Every versioned SQL read and write checks permanent admission. The compiled binary
-provides installation and status commands. Adoption, worker topology, heartbeat/readiness, typed backfill and contract remain
-pending. The complete acceptance gates are tracked in
+provides installation, status and separate worker commands. The Worker request/
+executor split is covered below; automatic heartbeats, adoption, concurrent index
+jobs, typed backfill and contract remain pending. The complete acceptance gates are tracked in
 [the implementation ledger](migrations-implementation.md).
 
 ## Application startup and requests
 
 `WithDatabase` selects versioned startup when the compiler attached migration
-history to the application's connection. The application supplies the worker login
+history to the application's connection. The application supplies its connection
 and optional `PostgresConfig.controlOwner` (default `tesl_control`). These settings
 stay outside the pure schema and migration modules. The operator must install the
 protected control objects first; missing installation or unrecorded lookalike
 storage refuses before the application's body runs. There is no fallback to legacy
 bootstrap. Unversioned declarations retain their existing behavior.
 
-A dedicated connection runs the executor and closes before the request pool is
-published. Pool initialization includes the complete compiled history and role in
+A dedicated connection runs either the Embedded executor or Worker request
+verification before the request pool is published. Pool initialization includes
+the complete compiled history, topology and roles in
 its cache identity; different revisions cannot mutate or reuse each other's
 protocol binding. Failed initialization is removed so installation or repair can
 be followed by a retry. Each new physical connection, including dedicated pub/sub
 listeners, verifies the database UUID, fence allocation, format, protocol and
-actual worker login, then checks admission. Whole startup is currently bounded by
+actual configured login, then checks admission. Whole startup is currently bounded by
 `TESL_PG_POOL_LEASE_TIMEOUT_MS` (default ten seconds), independently of each DDL
 operation's two-second lock timeout. Larger startup plans need a higher limit.
 
@@ -45,6 +47,83 @@ and listener reads use the same gates. Refused operations report HTTP 503 rather
 than returning data or acknowledging a write. Runtime-owned table installation is
 still the legacy format; its versioned ownership and upgrade path are phase-2 work.
 
+## Separate schema worker
+
+`PostgresConfig.topology` is a literal `Worker` or `Embedded` constructor from
+`Tesl.Database` (`MigrationTopology(..)`). If omitted, the existing `TESL_DEPLOYED`
+environment flag selects Worker when present and Embedded otherwise. An explicit
+setting wins. These fields are legal only with a versioned schema module:
+
+| Field | Meaning |
+|---|---|
+| `requestRole` | Worker request login, default `tesl_app` |
+| `workerRole` | Worker executor and entity owner, default `tesl_schema` |
+| `ddlConnection` | Optional direct/session-affine DSN for the executor; omitted uses that process's normal connection settings |
+| `controlOwner` | Separate NOLOGIN control owner, default `tesl_control` |
+
+Role names are stable deployment identities, independent of the actual login
+selected by each process's credentials. Request/worker role settings require
+Worker topology. The DSN may use an environment value and is never printed by a
+configuration parse error. Its session affinity is a trusted deployment
+requirement; the runtime does not claim it can detect transaction poolers.
+The installer also uses this dedicated DSN when configured, so its invocation
+must supply the short-lived installer credentials there rather than a worker login.
+
+Worker installation requires `--schema install --worker ROLE --request ROLE`,
+matching the configured role identities. The short-lived installer establishes
+the grant profile. Requests receive control-table SELECT and execution of only
+`tesl_admit` and `tesl_heartbeat`; entity SELECT/INSERT/UPDATE/DELETE grants commit
+with table creation before expansion progress. Requests have no namespace CREATE,
+entity ownership, lifecycle transition authority or worker/control membership,
+including indirect and NOINHERIT membership. The worker retains entity DDL and
+narrow control transition authority; the control owner remains separate.
+Neither long-lived login may own the connected database or reach its owner
+through role membership, even with NOINHERIT. Database ownership would otherwise
+provide authority outside the intended namespace grants, including implicit
+`pg_database_owner` membership on newer PostgreSQL versions. The installer may
+temporarily hold the authority needed for installation.
+The same ownership restriction applies to Embedded's combined long-lived login.
+
+`./app --schema worker --json` expands on its dedicated connection and emits one
+`schema-worker-ready` JSON object after success. It then stays alive until SIGTERM
+or SIGINT; it starts no HTTP handlers or application queue workers. The service
+lifetime is independent of the startup lease. This initial worker runs additive
+expansion; background transformation/index jobs and automatic heartbeats are not
+implemented by waiting in that loop.
+
+A request process observes fresh READ ONLY, repeatable-read snapshots while its
+revision is pending, without acquiring the boot lock. Each snapshot checks role
+isolation, immutable history, protected definitions, recorded entity storage and
+DML grants. It never borrows executor credentials. On readiness it publishes the
+request pool; identity changes or incompatible history refuse, and a missing
+worker eventually reaches the bounded startup deadline.
+
+Request catalog verification needs neither CREATE nor TEMPORARY privilege.
+Closed expected control definitions and compiler storage shapes use builtin type
+and operator-class metadata. Literal defaults preserve PostgreSQL's canonical
+rendering; extra-column checks submit only parsed, whitelisted literal values to
+builtin casts in SELECT statements. They preserve assignment semantics, including
+varchar/char overflow and numeric rounding. No stored default expression executes.
+The regression matrix cross-checks this path against the installer's independent
+temporary-table probes, including actual READ ONLY transactions without TEMP.
+
+The format number remains 2: Worker changes the explicit grant profile, not the
+control function bodies or stored rows. An existing Embedded profile is not
+silently converted by a Worker installer or request. Such a topology transition
+needs a separate operator protocol. Embedded keeps one combined request/executor
+login and reports that reduced isolation at startup. Worker startup and installation
+refuse databases declaring durable queues, caches, email or SSE before connecting;
+their protected storage installation is still pending. Declarations are tracked
+per database, regardless of history-link order, and cannot be added after Worker
+preflight. Lazy storage entry points also check the opened connection's topology.
+This local restriction is not persisted proof about facilities used by older
+binaries and cannot authorize epoch closure. Status remains available for inspection.
+
+[Lesson 84](../example/learn/lesson84-worker-migrations.tesl) exercises the same
+notes API across separate Worker deployments and retained old/new application
+processes. Its regression includes request-before-worker startup, byte-identical
+handlers, role-denied DDL/lifecycle calls and an old binary restart.
+
 ## Inspecting a compiled application
 
 A versioned binary accepts `./app --schema status`, optionally with `--database
@@ -59,8 +138,9 @@ format, object progress, lifecycle rows and recorded heartbeats. It verifies
 protected catalog/role definitions and compares persisted history to the binary's
 source plan. A source mismatch still yields the JSON observation plus
 `historyError`, with an explanation on stderr and exit status 2. Connection,
-control-integrity and output errors also exit nonzero. The snapshot and temporary
-comparison objects are rolled back; status never opens the application's pool,
+control-integrity and output errors also exit nonzero. The snapshot and any Embedded
+comparison objects are rolled back; Worker status uses the read-only catalog path.
+Status never opens the application's pool,
 expands, adopts or repairs. A status observation does not authorize later requests
 and does not claim that entity storage is ready. Automatic application heartbeats
 remain pending; this command reports the records that actually exist.
@@ -73,7 +153,7 @@ observed current version stays unchanged until an actual application starts.
 ## Installation and roles
 
 `./app --schema install --worker ROLE [--database Module.Database] [--json]`
-uses the application's configured connection as the short-lived installer. Supply
+is the Embedded form and uses the application's configured connection as the short-lived installer. Supply
 its credentials through the application's own configuration (for example
 `NOTES_DB_USER` in lesson 83), then restore the worker credentials for normal
 startup. The explicit `--worker` names the separately provisioned application
@@ -118,7 +198,7 @@ entity installation later stops. A newer executor must finish that baseline befo
 expanding subsequent revisions. Retries never replace the UUID or installation
 origin and never adopt pre-existing objects by name.
 
-Production format 1 contains the meta/state/version/instance tables, expansion
+Production format 2 contains the meta/state/version/instance tables, expansion
 intents and ordered object progress. Its five security-definer functions admit a
 version, begin an expansion, record an object, finalize expansion, and heartbeat.
 Their search path is empty and their references are qualified. PostgreSQL verifies
@@ -126,8 +206,14 @@ each object identity and permits only an immutable consecutive prefix. Finalizin
 the baseline records `expanded`, `contracting` and `contracted` together; later
 additive revisions only record `expanded`, without advancing the admission floor.
 
-These are the initial production definitions, not the independent phase-0 fixture's
-full future protocol. Format upgrades, retirement, leases and later lifecycle
+Expansion intents and lifecycle rows record both the actual creator `source_abi`
+and `stored_value_compatibility`. Finalization copies both from the immutable intent.
+Format 1 installations and older compiled history formats refuse explicitly; there
+is no automatic adoption of their missing compatibility metadata. Changing the
+format number or relabelling their stored ABI is not an upgrade procedure.
+
+These are additive production definitions, not the independent phase-0 fixture's
+full future protocol. A format-upgrade executor, retirement, leases and later lifecycle
 tables still require implementation. The inspector compares the installed format
 exactly, including function bodies, ownership, ACLs, sequence definitions and
 behavior-affecting catalog properties. Extra control columns are not treated like
@@ -149,11 +235,36 @@ step hashes must match the binary. A pending earlier expansion cannot be skipped
 An older binary may reopen a later additive database: its known history and storage
 must still match, and additional columns must preserve omitted writes.
 
-The current implementation conservatively requires the same source compiler ABI
-for every known persisted intent, including an intent with no completed objects.
-This is a refusal policy for this initial executor, not the completed processing-ABI
-policy for typed transformations. Cross-ABI proof compatibility, processing-ABI
-locking, and the target-generation application-write boundary remain phase-3 work.
+The whole-build source ABI identifies the actual compiler/runtime/stdlib build.
+The separate stored-value contract binds an explicit compiler semantic revision
+and active lifted stdlib digests. Its definition and maintainer obligations are in
+[LANGUAGE-SPEC](../LANGUAGE-SPEC.md).
+Retaining that revision promises compatible proof/type/check/establish semantics,
+erasure, lowering, primitives, codecs and SQL-visible representation. This promise
+must be reviewed when those implementations change; runtime string equality alone
+does not establish semantic equivalence.
+The September 2026 main merge strengthens proof ownership, server authentication
+type checking and queue-worker proof admission. The semantic revision therefore
+advances to 2; binaries from before those fixes are not silently declared
+stored-value compatible. The full-app compiler-upgrade test still checks a harmless
+query-only build change within this new contract and refusal across contracts.
+
+A completed additive intent may have a different creator ABI when its contract
+matches the current compiler and the checked source/storage/step identities,
+complete progress, lifecycle provenance and live catalog agree. The compiler
+rechecks the entire historical source closure under its actual semantics. Earlier
+creator ABIs remain unchanged in protected history; a later step records its own
+creator. Different contracts require explicit untrusted decoding/revalidation,
+whose production executor is still pending.
+
+Every unfinished intent requires the exact original ABI, including zero completed
+objects and complete DDL awaiting its lifecycle commit. A different-ABI older
+binary also refuses while an unknown future intent is pending. This conservative
+rule applies to startup and status history validation; same-contract acceptance
+is restricted to fully completed history. It grants no ability to resume another
+build's work. Processing-ABI locking for typed transformations, including the
+first target-generation application write with zero backfilled rows, remains
+phase-3 work.
 
 The supported operations are creation of a new table and its indexes, addition of
 a nullable or constant-defaulted column, and retention of a dropped table. Index
@@ -199,6 +310,16 @@ reads and writers around retirement and verify refusal without leaked rows,
 commits, queue claims, lease renewals or pub/sub results. Retirement is simulated
 by the installer under the exclusive version fence; production contract remains
 pending.
+
+The [lesson83 compiler-upgrade companion](../example/learn/lesson83-additive-migrations.md)
+has a separate full-app regression. It builds actual compiler A, a query-only
+variant B and a different-semantic-contract C in an isolated source copy. A authors
+V1–V3; B recompiles unchanged V3 and authors V4. Both builds run unchanged API tests
+and HTTP handlers against retained rows, and A restarts against B's later revision.
+An interrupted A intent refuses B before mutation; A then completes it. Tampered
+frozen source and C compilation/startup refuse. Protected history keeps every
+creator ABI rather than replacing A with B. This regression passes with race
+instrumentation; only the interruption executable uses the migration test hooks.
 
 `scripts/run-migration-tests.sh` runs the independent harness plus production
 control/executor/startup/admission tests when invoked without filtering arguments. The production

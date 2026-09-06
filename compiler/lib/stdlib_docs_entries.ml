@@ -993,6 +993,10 @@ let database : entry list = [
   e "PostgresConnection" ~m:"Tesl.Database"
     ~kind:(KType "type PostgresConnection = TcpConnection { host, port } | SocketConnection { path }")
     ~doc:"The `connection:` field of a PostgresConfig — TCP or Unix socket.";
+  e "MigrationTopology" ~m:"Tesl.Database"
+    ~kind:(KType "type MigrationTopology = Worker | Embedded")
+    ~doc:"The optional `PostgresConfig.topology` for a versioned schema. Worker separates request processes from `app --schema worker`; Embedded runs migration execution in the application process. Without an explicit value, TESL_DEPLOYED selects Worker and local execution selects Embedded. Connection settings and role names belong to application configuration."
+    ~aliases:[ "Worker"; "Embedded" ];
 ]
 
 (* ── Tesl.HttpClient ───────────────────────────────────────────────────────── *)

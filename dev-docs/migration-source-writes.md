@@ -94,6 +94,15 @@ guess from saved files or from the absence of a reply. A durable terminal outcom
 permits cleanup only. Editor reconciliation and the LSP coordinator remain pending;
 the saved-file CLI continues to reject open-buffer manifests.
 
+The coordinator implementation remains internal and public editor application is
+disabled. Standard `workspace/applyEdit` capabilities do not establish that every
+buffer notification precedes a negative acknowledgement. Such replies retain the
+journal until an explicit editor snapshot can reconcile the result. Restoration
+also rechecks the saved bytes of every original open input: an auto-saved importer
+may depend on generated closed files even after its buffer was restored. Changed
+saved bytes preserve those files and require recovery. These boundaries need a
+complete wire-level journey before enabling the command.
+
 Each input file, directory membership and import resolution is checked again
 against disk. Checks continue as publication progresses, ignoring only this
 transaction's own new entries. Root and control-directory identity are pinned;

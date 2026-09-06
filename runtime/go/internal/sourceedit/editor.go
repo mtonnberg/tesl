@@ -278,6 +278,20 @@ func (editor *EditorTransaction) Restore(ctx context.Context, documents []Editor
 	if err := editor.tx.manifest.verifyEditorDocuments(documents, "restored"); err != nil {
 		return editor.Report(), err
 	}
+	// An editor may have saved an applied buffer before acknowledging it. Its
+	// saved imports can now depend on our published closed files, even after a
+	// buffer-only inverse. Do not delete those dependencies or claim restoration.
+	versions := editor.tx.manifest.DocumentVersions()
+	for _, input := range editor.tx.manifest.wire.Inputs {
+		if _, open := versions[input.Path]; !open {
+			continue
+		}
+		actual, err := editor.tx.tree.fileHash(input.Path)
+		if err != nil || !same(actual, input.DiskHash) {
+			editor.tx.report.RecoveryRequired = true
+			return editor.Report(), errors.Join(fmt.Errorf("saved editor input changed; retain generated dependencies for recovery: %s", input.Path), err)
+		}
+	}
 	return editor.finish(editor.tx.rollback(editor.step(ctx)))
 }
 

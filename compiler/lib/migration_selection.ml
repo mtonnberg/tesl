@@ -14,7 +14,7 @@ type selection = {
 }
 type candidate = { database_name : string; database_file : string }
 type error = { loc : Location.loc; message : string; candidates : candidate list }
-type t = { selected : selection; compiler_abi : string; root : string; guard : M.t }
+type t = { selected : selection; compiler_abi : string; stored_value_compatibility : string option; root : string; guard : M.t }
 let selection t = t.selected
 let source_guard t = t.guard
 exception Invalid of error list
@@ -90,7 +90,7 @@ let infer_project_root ~entry_file ~database = protect entry_file (fun () ->
   require_root root m binding;
   List.iter (fun (file,_) -> require_path root file) sources;
   root)
-let resolve ~compiler_abi ~project_root:root ~entry_file ~database ~documents = protect entry_file (fun () ->
+let resolve_with_compatibility ~stored_value_compatibility ~compiler_abi ~project_root:root ~entry_file ~database ~documents = protect entry_file (fun () ->
   (* Validate the project and capture selection inputs before interpreting them.
      All subsequently discovered dependencies retain their separately read hashes. *)
   let initial = manifest (M.create ~project_root:root ~reads:[entry_file] ~directories:[] ~imports:[] ~documents ~writes:[]) in
@@ -98,7 +98,7 @@ let resolve ~compiler_abi ~project_root:root ~entry_file ~database ~documents = 
   let m,binding,candidate = select entry_file database sources in
   require_root root m binding;
   let family = List.hd (String.split_on_char '.' binding.schema_root) in
-  let h = history (H.discover ~compiler_abi ~project_root:root ~family) in
+  let h = history (H.discover_with_compatibility ~stored_value_compatibility ~compiler_abi ~project_root:root ~family) in
   let current = H.current h in
   let selected = {entry_file;database_file=candidate.database_file;database_name=candidate.database_name;
     family;schema_root=binding.schema_root;previous_version=(if current.version=1 then None else Some (current.version-1));
@@ -119,9 +119,12 @@ let resolve ~compiler_abi ~project_root:root ~entry_file ~database ~documents = 
       file_error file "target source changed during database selection") sources;
   history (H.verify_unchanged h);
   let guard = manifest (M.combine initial complete ~documents) in
-  {selected;compiler_abi;root;guard})
+  {selected;compiler_abi;stored_value_compatibility;root;guard})
+
+let resolve = resolve_with_compatibility ~stored_value_compatibility:None
 let project_root t = t.root
 let compiler_abi t = t.compiler_abi
+let stored_value_compatibility t = t.stored_value_compatibility
 let verify t ~documents = protect t.selected.entry_file (fun () ->
   manifest (M.verify_source t.guard ~documents);
   manifest (M.verify_disk t.guard))

@@ -44,8 +44,10 @@ let generate ~project_root ~entry_file ~database ~initial_version ~documents = p
  if initial_version<1 || initial_version>2147483646 then
   reject ~code:"MIG020" (Location.dummy_loc entry_file) "initial installation version must be between 1 and 2147483646";
  let context = abi (A.current ()) in
+ let stored_value_compatibility = A.stored_value_compatibility context in
  let result = abi (A.with_snapshot context (fun () ->
-  let selected = target (T.resolve ~compiler_abi:(A.id context) ~project_root ~entry_file ~database ~documents) in
+  let selected = target (T.resolve_with_compatibility ~stored_value_compatibility:(Some stored_value_compatibility)
+    ~compiler_abi:(A.id context) ~project_root ~entry_file ~database ~documents) in
   let selection = T.selection selected in
   let owner = parsed selection.database_file (Source_input.read selection.database_file) in
   let connection = List.find_map (function Ast.DDatabase d when owner.module_name ^ "." ^ d.name=selection.database_name -> Some d | _ -> None) owner.decls in
@@ -67,14 +69,15 @@ let generate ~project_root ~entry_file ~database ~initial_version ~documents = p
      if d.severity<>"error" then None else Some {S.code=d.code;
        loc={Location.file=d.file;start={line=d.start_line;col=d.start_col};stop={line=d.end_line;col=d.end_col}};
        message=d.message;related=[]}) ds)));
-  let h = history (H.discover ~compiler_abi:(A.id context) ~project_root ~family:selection.family) in
+  let h = history (H.discover_with_compatibility ~stored_value_compatibility:(Some stored_value_compatibility)
+    ~compiler_abi:(A.id context) ~project_root ~family:selection.family) in
   let schemas = H.frozen h @ [H.current h] in
   if initial_version>List.length schemas then reject ~code:"MIG020" connection.loc
     "initial installation version exceeds the current source revision";
   let sources = H.completed_migrations h @ Option.to_list (H.current_migration h) in
   if List.length sources+1<>List.length schemas then reject ~code:"MIG001" connection.loc "complete source history is required before planning";
   let edges = List.mapi (fun index (s : H.migration_source) ->
-    let edge = match checked (D.check ~compiler_abi:(A.id context) ~source:s.contents (parsed s.path s.contents)) with
+    let edge = match checked (D.check ~stored_value_compatibility ~compiler_abi:(A.id context) ~source:s.contents (parsed s.path s.contents)) with
       | Some x -> x | None -> reject ~code:"MIG020" (Location.dummy_loc s.path) "migration declaration missing" in
     if D.version edge<>index+2 then reject ~code:"MIG020" (Location.dummy_loc s.path) "source history must start at V1 and remain consecutive";
     if D.source_seals edge=None then reject ~code:"MIG013" (Location.dummy_loc s.path) "physical planning requires the recorded schema source seals";

@@ -13,6 +13,7 @@ import (
 // installation identity, persisted steps, admission and ownership separately.
 type PgMigrationExpansionPlan struct {
 	Database, Family, Namespace, SourceCompilerABI string
+	StoredValueCompatibility                       string
 	InitialVersion, CurrentVersion                 int
 	Steps                                          []PgMigrationExpansionStep
 }
@@ -50,13 +51,17 @@ func (history PgCompiledMigrationHistory) ExpansionPlan(initialVersion int) (PgM
 		return empty, err
 	}
 	r := &pgMigrationWireReader{}
-	o := r.object(json.RawMessage(history.HistoryJSON), "version", "kind", "compilerAbi", "databases")
-	if pgMigrationRead[int](r, o["version"]) != 2 || pgMigrationRead[string](r, o["kind"]) != "compiled-migration-history" {
-		r.fail("unsupported history format")
+	o := r.object(json.RawMessage(history.HistoryJSON), "version", "kind", "compilerAbi", "storedValueCompatibility", "databases")
+	if pgMigrationRead[int](r, o["version"]) != 3 || pgMigrationRead[string](r, o["kind"]) != "compiled-migration-history" {
+		r.fail("unsupported history format; version 3 with stored-value compatibility is required")
 	}
 	abi := pgMigrationRead[string](r, o["compilerAbi"])
 	if !strings.HasPrefix(abi, "tesl-source-abi-v1:") || !pgMigrationDigest(strings.TrimPrefix(abi, "tesl-source-abi-v1:")) || abi != history.SourceCompilerABI {
 		r.fail("compiler ABI does not match linked metadata")
+	}
+	compatibility := pgMigrationRead[string](r, o["storedValueCompatibility"])
+	if !pgStoredValueCompatibility(compatibility) || compatibility != history.StoredValueCompatibility {
+		r.fail("stored-value compatibility does not match linked metadata")
 	}
 	databases := pgMigrationRead[[]json.RawMessage](r, o["databases"])
 	identities, families := map[string]bool{}, map[string]bool{}
@@ -97,7 +102,7 @@ func (history PgCompiledMigrationHistory) ExpansionPlan(initialVersion int) (PgM
 			if matches && origin == initialVersion {
 				selectedErr = refusal
 				selected = PgMigrationExpansionPlan{Database: identity, Family: family, Namespace: namespace, SourceCompilerABI: abi,
-					InitialVersion: origin, CurrentVersion: current, Steps: steps}
+					StoredValueCompatibility: compatibility, InitialVersion: origin, CurrentVersion: current, Steps: steps}
 			}
 		}
 	}
@@ -111,6 +116,10 @@ func (history PgCompiledMigrationHistory) ExpansionPlan(initialVersion int) (PgM
 		return empty, selectedErr
 	}
 	return selected, nil
+}
+
+func pgStoredValueCompatibility(value string) bool {
+	return strings.HasPrefix(value, "tesl-stored-value-v1:") && pgMigrationDigest(strings.TrimPrefix(value, "tesl-stored-value-v1:"))
 }
 
 func (r *pgMigrationWireReader) origin(raw json.RawMessage, expected, current int) (int, []PgMigrationExpansionStep, error) {

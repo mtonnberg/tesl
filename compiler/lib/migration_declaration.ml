@@ -154,7 +154,7 @@ let entry_holes expression =
     | _ -> ()) expression;
   List.rev !holes
 
-let check ~compiler_abi ~source (m : module_form) =
+let check ?stored_value_compatibility ~compiler_abi ~source (m : module_form) =
   try
     match checked (read_syntax m) with
     | None -> Ok None
@@ -170,10 +170,20 @@ let check ~compiler_abi ~source (m : module_form) =
         | None -> None
         | Some header -> Some (checked (Migration_header.verify ~project_root ~migration_module:m.module_name
             ~previous:previous_root ~current:current_root header)) in
+      (* Ordinary diagnostics compare current source only. Production generation
+         and builds supply their actual compatibility context and additionally
+         verify persisted source metadata without borrowing its creator ABI. *)
+      Option.iter (fun contract -> Option.iter (fun header ->
+        let before,after = Migration_header.seals header in
+        List.iter (fun seal ->
+          let result = Result.bind (Migration_seal.verify_sources ~project_root seal)
+            (Migration_seal.verify_semantics ~stored_value_compatibility:contract ~compiler_abi) in
+          match result with Ok _ -> () | Error error ->
+            reject "MIG013" error.loc error.message) [before;after]) source_seals) stored_value_compatibility;
       let closure = checked (Migration_closure.read ~file:m.source_file source) in
       Option.iter (fun located -> ignore (checked (Migration_closure.verify ~project_root
         ~root_file:(Validation_common.canonical_import_path m.source_file) ~source located))) closure;
-      let previous,current = match H.adjacent_pair ~compiler_abi ~project_root ~family
+      let previous,current = match H.adjacent_pair_with_compatibility ~stored_value_compatibility ~compiler_abi ~project_root ~family
           ~previous:previous_root ~current:current_root with
         | Ok pair -> pair
         | Error error -> raise (Invalid [{S.code="MIG020";loc=declaration.loc;message=error.message;

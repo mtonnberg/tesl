@@ -13,7 +13,7 @@ Go snapshot and test blocks in the gate. Read one with:
 tesl help manual <lesson-name>      # e.g. tesl help manual lesson05-intro-to-proofs
 ```
 
-There are **85** lessons. That number is generated; it cannot drift.
+There are **86** lessons. That number is generated; it cannot drift.
 
 ## In a hurry? Start with these
 
@@ -108,6 +108,7 @@ exactly what you are missing.
 | 680 | [`lesson48-sql-inner-join`](../example/learn/lesson48-sql-inner-join.tesl) | Query two entities together on a foreign key with innerJoin | [`lesson21-sql-reference`](../example/learn/lesson21-sql-reference.tesl) — The whole SQL surface in one file: select, insert, update, delete, ordering, aggregates and upsert |
 | 840 | [`lesson82-database-migrations`](../example/learn/lesson82-database-migrations.tesl) | Run a notes API whose handlers and connection stay outside its versioned schema | [`lesson18-database-sql-and-proofs`](../example/learn/lesson18-database-sql-and-proofs.tesl) — Declare a table with entity and query it in typed SQL whose results carry a proof that they came from the database<br>[`lesson05-intro-to-proofs`](../example/learn/lesson05-intro-to-proofs.tesl) — A check function stamps a value as validated, and the stamp travels with it through the type system<br>[`lesson32-api-tests`](../example/learn/lesson32-api-tests.tesl) — Test a whole HTTP endpoint from Tesl: seeded state, request bodies and JSON response assertions |
 | 850 | [`lesson83-additive-migrations`](../example/learn/lesson83-additive-migrations.tesl) | Add a nullable column while the complete notes API keeps serving the same contract | [`lesson82-database-migrations`](../example/learn/lesson82-database-migrations.tesl) — Run a notes API whose handlers and connection stay outside its versioned schema |
+| 860 | [`lesson84-worker-migrations`](../example/learn/lesson84-worker-migrations.tesl) | Keep serving the same notes API while a separate schema worker owns migration DDL | [`lesson83-additive-migrations`](../example/learn/lesson83-additive-migrations.tesl) — Add a nullable column while the complete notes API keeps serving the same contract |
 
 ### Async — queues, workers, streaming
 
@@ -174,6 +175,7 @@ A few lessons have a longer prose companion alongside the code:
 - [`lesson23-queues-and-workers.md`](../example/learn/lesson23-queues-and-workers.md) — Lesson 23: Queues and Workers
 - [`lesson24-pubsub-sse.md`](../example/learn/lesson24-pubsub-sse.md) — Lesson 24: Pub/Sub Channels and SSE Endpoints
 - [`lesson72-units.md`](../example/learn/lesson72-units.md) — Lesson 72: Units — Compile-Time Dimensions, Runtime Floats
+- [`lesson83-additive-migrations.md`](../example/learn/lesson83-additive-migrations.md) — Updating the compiler while the notes app keeps serving
 
 ---
 

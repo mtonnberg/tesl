@@ -2364,6 +2364,7 @@ type vkind =
   | VSub of string  (* nested record, validated against the named sub-schema *)
   | VConn           (* PostgresConnection: Tcp { host,port } | Socket { path } *)
   | VBackend        (* DatabaseBackend: Postgres (PostgresConfig {…}) | Memory *)
+  | VMigrationTopology (* MigrationTopology: Worker | Embedded *)
   | VBackoff        (* QueueRetryBackoff: Exponential | Fixed *)
   | VDatabaseRef    (* UIDENT naming a declared database *)
   | VEntityList     (* [Entity, …] naming declared entities *)
@@ -2383,7 +2384,9 @@ let config_block_schema = function
      env-backed config fields. *)
   | "PostgresConfig" -> [ "dbName", VStr, true; "user", VStr, true;
                           "password", VStr, true; "connection", VConn, true;
-                          "poolSize", VInt, false; "namespace", VStr, false; "controlOwner", VStr, false ]
+                          "poolSize", VInt, false; "namespace", VStr, false; "controlOwner", VStr, false;
+                          "topology", VMigrationTopology, false; "requestRole", VStr, false;
+                          "workerRole", VStr, false; "ddlConnection", VStr, false ]
   (* The two PostgresConnection shapes — validated internally via [check_record]'s
      "__Tcp"/"__Socket" rows; listed here so the LSP config-context query can
      offer field completion/hover inside a `connection: TcpConnection { … }`. *)
@@ -2430,6 +2433,14 @@ let config_field_doc (block : string) (field : string) : string =
     "No-login owner of versioned migration control objects (default tesl_control). Provisioned by the operator; connection settings remain in the application."
   | "PostgresConfig", "namespace" ->
     "Physical PostgreSQL schema name. Required as a nonempty static string when Database.schema is a module reference; connection configuration stays in the application."
+  | "PostgresConfig", "topology" ->
+    "Versioned migrations use Worker for separate request and schema-worker processes, or Embedded for execution in the application process. Omission selects Worker when TESL_DEPLOYED is present and Embedded otherwise; an explicit value wins."
+  | "PostgresConfig", "requestRole" ->
+    "Operator-provisioned request login for Worker topology (default tesl_app). Request processes have entity DML and admission privileges, without migration DDL authority. Requires a versioned schema."
+  | "PostgresConfig", "workerRole" ->
+    "Operator-provisioned schema-worker login for Worker topology (default tesl_schema). The worker owns entity storage; the separate controlOwner still owns protected migration metadata. Requires a versioned schema."
+  | "PostgresConfig", "ddlConnection" ->
+    "Optional PostgreSQL DSN for the migration executor, as a String or environment read. This is an explicit deployment promise of a direct, session-affine connection; do not use a transaction-pooling DSN. Requires a versioned schema."
   | "TelemetryConfig", "service" ->
     "Service name attached to telemetry events and metrics."
   | "TelemetryConfig", "endpoint" ->
@@ -2561,6 +2572,16 @@ let check_typed_config_blocks (m : module_form) : validation_error list =
       (match cfg_ctor v with
        | Some ("Exponential" | "Fixed" | "Linear") -> []
        | _ -> err "`backoff` must be `Exponential`, `Fixed`, or `Linear` (from Tesl.Queue)")
+    | VMigrationTopology ->
+      (match v with
+       | EConstructor { name = (("Worker" | "Embedded") as name); args = []; _ } ->
+         let visible = List.exists (fun (imp : import_decl) ->
+           imp.module_name = "Tesl.Database" && match imp.names with
+           | ImportAll -> true
+           | ImportExposing names -> List.mem name names || List.mem "MigrationTopology(..)" names) m.imports in
+         if visible then []
+         else err (Printf.sprintf "`topology: %s` requires importing `%s` from Tesl.Database" name name)
+       | _ -> err "`topology` must be the literal constructor `Worker` or `Embedded` (from Tesl.Database)")
     | VConn ->
       (match cfg_ctor v with
        | Some "TcpConnection" -> check_record (cfg_expr_loc v) "__Tcp" (cfg_fields v)
@@ -2683,7 +2704,10 @@ let check_typed_config_blocks (m : module_form) : validation_error list =
              then [make_error r.loc "`Database` is missing required field `entities`"] else [])
           @ (if not module_form && (List.mem_assoc "migrations" top || List.mem_assoc "namespace" postgres_fields)
              then [make_error r.loc "legacy `Database.entities` configuration cannot also specify `migrations:` or `PostgresConfig.namespace`"] else [])
-          @ (if not module_form && List.mem_assoc "controlOwner" postgres_fields then [make_error r.loc "`PostgresConfig.controlOwner` requires a versioned schema module"] else [])
+          @ (if not module_form then List.filter_map (fun field ->
+               if List.mem_assoc field postgres_fields then
+                 Some (make_error r.loc (Printf.sprintf "`PostgresConfig.%s` requires a versioned schema module" field))
+               else None) ["controlOwner"; "topology"; "requestRole"; "workerRole"; "ddlConnection"] else [])
           @ (if module_form && is_postgres then
                match List.assoc_opt "namespace" postgres_fields with
                | Some (ELit { lit = LString namespace; _ }) when namespace <> "" && not (String.contains namespace '\000') && String.length namespace <= 63 -> []

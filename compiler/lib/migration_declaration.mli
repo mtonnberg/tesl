@@ -1,10 +1,12 @@
 (** Contextual source checking for additive Migration declarations. This binds
     sparse coverage and logical row adapters to the adjacent schema source view.
-    Present history headers receive source-integrity checks. Mandatory sealed
-    history, semantic ABI validation, runtime admission, physical planning, transformations and
+    Present history headers receive source-integrity checks. Supplying an explicit
+    compatibility contract additionally verifies seal semantics under the actual
+    caller ABI; ordinary source diagnostics do not make that build judgment.
+    Mandatory sealed history, runtime admission, physical planning, transformations and
     nonempty compatibility fixtures are separate, still-required judgments. *)
 type t
-val check : compiler_abi:string -> source:string -> Ast.module_form ->
+val check : ?stored_value_compatibility:string -> compiler_abi:string -> source:string -> Ast.module_form ->
   (t option, Migration_sparse.error list) result
 val coverage : t -> Migration_sparse.t
 val additive : t -> Migration_additive.t

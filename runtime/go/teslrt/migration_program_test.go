@@ -10,7 +10,7 @@ func compiledHistoryFixture(t *testing.T, suffix string) (string, *Database) {
 	t.Helper()
 	family := "Fixture" + suffix + "Schema"
 	t.Cleanup(func() { compiledMigrationHistories.Delete(family) })
-	registerCompiledMigrationHistory("Config.Main", family, "app_space", 8, "actual-compiler-abi", `{"fixture":true}`)
+	registerCompiledMigrationHistory("Config.Main", family, "app_space", 8, "actual-compiler-abi", pgTestStoredValueCompatibility, `{"fixture":true}`)
 	return family, NewDatabase("Main", PostgresConfig{Schema: "app_space"}, nil)
 }
 
@@ -38,7 +38,7 @@ func TestCompiledMigrationHistoryIsSourceInformation(t *testing.T) {
 	}
 	info, ok := database.CompiledMigrationHistory()
 	if !ok || info.Database != "Config.Main" || info.Family != family || info.Namespace != "app_space" ||
-		info.CurrentVersion != 8 || info.SourceCompilerABI != "actual-compiler-abi" || info.HistoryJSON != `{"fixture":true}` {
+		info.CurrentVersion != 8 || info.SourceCompilerABI != "actual-compiler-abi" || info.StoredValueCompatibility != pgTestStoredValueCompatibility || info.HistoryJSON != `{"fixture":true}` {
 		t.Fatalf("lost compiler information: %+v", info)
 	}
 	info.CurrentVersion = 100
@@ -58,7 +58,7 @@ func TestCompiledMigrationHistoryRefusesMissingOrConflictingBindings(t *testing.
 	})
 	RegisterDatabaseMigrationHistory(database, family)
 	migrationRegistrationPanics(t, func() {
-		registerCompiledMigrationHistory("Other.Main", family, "app_space", 8, "actual-compiler-abi", `{"fixture":true}`)
+		registerCompiledMigrationHistory("Other.Main", family, "app_space", 8, "actual-compiler-abi", pgTestStoredValueCompatibility, `{"fixture":true}`)
 	})
 	other, _ := compiledHistoryFixture(t, "OtherBindings")
 	migrationRegistrationPanics(t, func() { RegisterDatabaseMigrationHistory(database, other) })
@@ -73,7 +73,7 @@ func TestCompiledMigrationHistoryRegistrationCanRace(t *testing.T) {
 	var group sync.WaitGroup
 	for range 40 {
 		group.Go(func() {
-			registerCompiledMigrationHistory("Config.Main", family, "app_space", 8, "actual-compiler-abi", `{"fixture":true}`)
+			registerCompiledMigrationHistory("Config.Main", family, "app_space", 8, "actual-compiler-abi", pgTestStoredValueCompatibility, `{"fixture":true}`)
 			RegisterDatabaseMigrationHistory(database, family)
 			if info, ok := database.CompiledMigrationHistory(); !ok || info.CurrentVersion != 8 {
 				t.Error("concurrent inspection observed an incomplete binding")
@@ -87,7 +87,7 @@ func TestCompiledMigrationHistoryRejectsIncompleteGeneratedMetadata(t *testing.T
 	for _, version := range []int{-1, 0, 2147483647} {
 		t.Run(fmt.Sprint(version), func(t *testing.T) {
 			migrationRegistrationPanics(t, func() {
-				registerCompiledMigrationHistory("App.Main", "InvalidSchema", "space", version, "abi", "json")
+				registerCompiledMigrationHistory("App.Main", "InvalidSchema", "space", version, "abi", pgTestStoredValueCompatibility, "json")
 			})
 		})
 	}
@@ -95,7 +95,7 @@ func TestCompiledMigrationHistoryRejectsIncompleteGeneratedMetadata(t *testing.T
 		{"App.Main", "InvalidSchema", "", "abi", "json"}, {"App.Main", "InvalidSchema", "space", "", "json"},
 		{"App.Main", "InvalidSchema", "space", "abi", ""}} {
 		migrationRegistrationPanics(t, func() {
-			registerCompiledMigrationHistory(fields[0], fields[1], fields[2], 1, fields[3], fields[4])
+			registerCompiledMigrationHistory(fields[0], fields[1], fields[2], 1, fields[3], pgTestStoredValueCompatibility, fields[4])
 		})
 	}
 }

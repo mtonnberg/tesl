@@ -30,7 +30,9 @@ let verify p ~documents = protect p.selection.entry_file (fun () ->
 let generate ~project_root ~entry_file ~database ~new_revision ~documents = protect entry_file (fun () ->
   let context = abi (A.current ()) in
   let preview = abi (A.with_snapshot context (fun () ->
-    let target_ = target (T.resolve ~compiler_abi:(A.id context) ~project_root ~entry_file ~database ~documents) in
+    let target_ = target (T.resolve_with_compatibility
+      ~stored_value_compatibility:(Some (A.stored_value_compatibility context))
+      ~compiler_abi:(A.id context) ~project_root ~entry_file ~database ~documents) in
     let selected = T.selection target_ in
     let operation,revision_after,manifest =
       if new_revision || selected.current_version=1 then

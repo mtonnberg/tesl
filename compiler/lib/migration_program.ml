@@ -11,6 +11,7 @@ type database = {identity:string;family:string;namespace:string;current_version:
 type t = {abi:A.t;databases:database list;inputs:(string * string) list}
 let databases t = t.databases
 let compiler_abi t = A.id t.abi
+let stored_value_compatibility t = A.stored_value_compatibility t.abi
 exception Invalid of S.error list
 let reject ?(code="MIG020") loc message = raise (Invalid [{S.code;loc;message;related=[]}])
 let checked = function Ok x -> x | Error es -> raise (Invalid es)
@@ -66,20 +67,23 @@ let with_history ~entry ~source f = protect entry.source_file (fun () ->
  let input_root = Option.value (Source_input.project_root ()) ~default:(filesystem_root entry_file) in
  Source_input.with_overlays ~project_root:input_root [entry_file,source] (fun () ->
   let context = abi (A.current ()) in
+  let stored_value_compatibility = A.stored_value_compatibility context in
   abi (A.with_snapshot context (fun () ->
    (* Capture every connection before interpreting any history or emitting Go.
       Imported application modules and implicit historical dependencies all belong
       to these guards; no credentials are copied into the artifact. *)
    let targets = List.map (fun (identity,family,namespace,loc) ->
     let root = target (T.infer_project_root ~entry_file ~database:(Some identity)) in
-    let selected = target (T.resolve ~compiler_abi:(A.id context) ~project_root:root ~entry_file
+    let selected = target (T.resolve_with_compatibility ~stored_value_compatibility:(Some stored_value_compatibility)
+      ~compiler_abi:(A.id context) ~project_root:root ~entry_file
       ~database:(Some identity) ~documents:[]) in
     identity,family,namespace,loc,root,selected) selected in
    let guards = List.map (fun (_,_,_,_,_,selected) -> T.source_guard selected) targets in
    let inputs = List.concat_map (fun source_guard -> guard (M.source_files source_guard)) guards |> List.sort_uniq compare in
    let result = Source_input.with_pinned_files inputs (fun () ->
    let databases = List.map (fun (identity,family,namespace,loc,root,selected) ->
-    let h = history (H.discover ~compiler_abi:(A.id context) ~project_root:root ~family) in
+    let h = history (H.discover_with_compatibility ~stored_value_compatibility:(Some stored_value_compatibility)
+      ~compiler_abi:(A.id context) ~project_root:root ~family) in
     List.iter (fun (file,digest) ->
      if Option.map Migration_hash.digest (List.assoc_opt file inputs) <> Some digest then
       reject ~code:"MIG013" (Location.dummy_loc file) "history selected a source outside its captured compilation snapshot")
@@ -88,7 +92,7 @@ let with_history ~entry ~source f = protect entry.source_file (fun () ->
     let sources = H.completed_migrations h @ Option.to_list (H.current_migration h) in
     if List.length sources+1<>List.length schemas then reject ~code:"MIG001" loc "a versioned build requires complete migration history from V1";
     let edges = List.mapi (fun index (s:H.migration_source) ->
-     let edge = match checked (D.check ~compiler_abi:(A.id context) ~source:s.contents (parse s.path s.contents)) with
+     let edge = match checked (D.check ~stored_value_compatibility ~compiler_abi:(A.id context) ~source:s.contents (parse s.path s.contents)) with
       | Some edge -> edge | None -> reject loc "migration declaration missing from compiled history" in
      if D.version edge<>index+2 then reject loc "compiled migration history must start at V1 and remain consecutive";
      if D.source_seals edge=None then reject ~code:"MIG013" loc "compiled migration history requires recorded schema source seals";
@@ -113,5 +117,5 @@ let to_json ~quote t =
   | Error es -> Printf.sprintf {|{"initialVersion":%d,"steps":null,"errors":%s}|} o.initial_version (array error es) in
  let database d = Printf.sprintf {|{"database":%s,"family":%s,"namespace":%s,"currentVersion":%d,"origins":%s}|}
   (quote d.identity) (quote d.family) (quote d.namespace) d.current_version (array origin d.origins) in
- Printf.sprintf {|{"version":2,"kind":"compiled-migration-history","compilerAbi":%s,"databases":%s}|}
-  (quote (compiler_abi t)) (array database t.databases)
+ Printf.sprintf {|{"version":3,"kind":"compiled-migration-history","compilerAbi":%s,"storedValueCompatibility":%s,"databases":%s}|}
+  (quote (compiler_abi t)) (quote (stored_value_compatibility t)) (array database t.databases)

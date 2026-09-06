@@ -42,6 +42,11 @@ func pgEquivalentMigrationIndex(actual, expected *pgCatalogTable, a, b pgCatalog
 
 func pgCompareMigrationTable(ctx context.Context, tx pgx.Tx, owner string, actual, expected *pgCatalogTable,
 	report *PgMigrationCatalogReport) error {
+	return pgCompareMigrationTableWithExtras(ctx, tx, owner, actual, expected, report, pgBenignExtraColumn)
+}
+
+func pgCompareMigrationTableWithExtras(ctx context.Context, tx pgx.Tx, owner string, actual, expected *pgCatalogTable,
+	report *PgMigrationCatalogReport, extra func(context.Context, pgx.Tx, pgCatalogColumn) (bool, error)) error {
 	drift := func(object, reason string) {
 		report.Drift = append(report.Drift, PgMigrationCatalogIssue{actual.Name, object, reason})
 	}
@@ -79,7 +84,7 @@ func pgCompareMigrationTable(ctx context.Context, tx pgx.Tx, owner string, actua
 		if wanted[column.Name] {
 			continue
 		}
-		benign, err := pgBenignExtraColumn(ctx, tx, column)
+		benign, err := extra(ctx, tx, column)
 		if err != nil {
 			return err
 		}

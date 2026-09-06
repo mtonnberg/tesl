@@ -184,10 +184,11 @@ func TestMigrationNativePlanIsReadOnlyAndCoversCompleteHistory(t *testing.T) {
 			t.Fatal(err)
 		}
 		var compiled struct {
-			Version     int
-			Kind        string
-			CompilerABI string `json:"compilerAbi"`
-			Databases   []struct {
+			Version                  int
+			Kind                     string
+			CompilerABI              string `json:"compilerAbi"`
+			StoredValueCompatibility string
+			Databases                []struct {
 				Database       string
 				Family         string
 				Namespace      string
@@ -206,7 +207,7 @@ func TestMigrationNativePlanIsReadOnlyAndCoversCompleteHistory(t *testing.T) {
 		if err := json.Unmarshal(result["compilerAbi"], &planABI); err != nil {
 			t.Fatal(err)
 		}
-		if compiled.Version != 2 || compiled.Kind != "compiled-migration-history" || compiled.CompilerABI != planABI || len(compiled.Databases) != 1 {
+		if compiled.Version != 3 || compiled.Kind != "compiled-migration-history" || compiled.CompilerABI != planABI || !strings.HasPrefix(compiled.StoredValueCompatibility, "tesl-stored-value-v1:") || len(compiled.Databases) != 1 {
 			t.Fatalf("invalid compiled history envelope: %s", compiledBytes)
 		}
 		database := compiled.Databases[0]
@@ -223,7 +224,7 @@ func TestMigrationNativePlanIsReadOnlyAndCoversCompleteHistory(t *testing.T) {
 				t.Fatalf("compiled origin V%d disagrees with the checked source plan: %s", origin, compiledOrigin.Steps)
 			}
 			history := teslrt.PgCompiledMigrationHistory{Database: database.Database, Family: database.Family, Namespace: database.Namespace,
-				CurrentVersion: version, SourceCompilerABI: compiled.CompilerABI, HistoryJSON: string(compiledBytes)}
+				CurrentVersion: version, SourceCompilerABI: compiled.CompilerABI, StoredValueCompatibility: compiled.StoredValueCompatibility, HistoryJSON: string(compiledBytes)}
 			runtimePlan, err := history.ExpansionPlan(origin)
 			if err != nil {
 				t.Fatalf("runtime rejected compiled V%d history from V%d: %v", version, origin, err)
@@ -327,6 +328,10 @@ entity Note table "notes" primaryKey id {
 	if err != nil {
 		t.Fatal(err)
 	}
+	var metadata struct{ StoredValueCompatibility string }
+	if err := json.Unmarshal(historyBytes, &metadata); err != nil {
+		t.Fatal(err)
+	}
 	seen := map[string]bool{}
 	for origin := 1; origin <= 3; origin++ {
 		preview, err := migrationRun(t, app, "plan", "app.tesl", "--initial-version", fmt.Sprint(origin))
@@ -338,7 +343,7 @@ entity Note table "notes" primaryKey id {
 			t.Fatal(err)
 		}
 		history := teslrt.PgCompiledMigrationHistory{Database: "App.Main", Family: "NotesSchema", Namespace: "notes_app", CurrentVersion: 3,
-			SourceCompilerABI: abi, HistoryJSON: string(historyBytes)}
+			SourceCompilerABI: abi, StoredValueCompatibility: metadata.StoredValueCompatibility, HistoryJSON: string(historyBytes)}
 		plan, err := history.ExpansionPlan(origin)
 		if err != nil {
 			t.Fatal(err)
@@ -439,7 +444,7 @@ func main() {
 		t.Fatal(err)
 	}
 	if history.Database != "Config.Main" || history.Family != "NotesSchema" || history.Namespace != "notes_app" ||
-		history.CurrentVersion != 1 || !strings.HasPrefix(history.SourceCompilerABI, "tesl-source-abi-v1:") || !json.Valid([]byte(history.HistoryJSON)) {
+		history.CurrentVersion != 1 || !strings.HasPrefix(history.SourceCompilerABI, "tesl-source-abi-v1:") || !strings.HasPrefix(history.StoredValueCompatibility, "tesl-stored-value-v1:") || !json.Valid([]byte(history.HistoryJSON)) {
 		t.Fatalf("wrong standalone connection history: %+v", history)
 	}
 }

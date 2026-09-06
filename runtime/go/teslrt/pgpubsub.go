@@ -111,6 +111,7 @@ var pgPubsubs sync.Map // *Database -> *pgPubsub
 // with the database's pub/sub runtime attached, and registered with that runtime under its
 // name so an event arriving from another instance finds it.
 func NewSseChannelOn(database *Database, name string) *SseChannel {
+	pgRegisterMigrationFacility(database, "SSE channel", name)
 	channel := NewSseChannel(name)
 	runtime := pubsubFor(database)
 	runtime.mutex.Lock()
@@ -230,6 +231,9 @@ func (runtime *pgPubsub) publish(channel, key string, encoded string) {
 
 func writePubsub(ctx context.Context, executor pgExecutor, connection *PostgresDB,
 	channel, key, encoded string) (int64, error) {
+	if err := pgVerifyMigrationFacilityConnection(connection, "SSE outbox"); err != nil {
+		return 0, err
+	}
 	if _, err := executor.Exec(ctx,
 		`select pg_advisory_xact_lock(hashtextextended(current_database() || ':' || $1, 0))`,
 		connection.QualifiedTable(pubsubOutboxTable)); err != nil {
@@ -257,6 +261,9 @@ func (runtime *pgPubsub) prepare(connection *PostgresDB) error {
 }
 
 func (runtime *pgPubsub) prepareOn(connection *PostgresDB, executor pgExecutor) error {
+	if err := pgVerifyMigrationFacilityConnection(connection, "SSE outbox"); err != nil {
+		return err
+	}
 	runtime.mutex.Lock()
 	defer runtime.mutex.Unlock()
 	if runtime.ready {
@@ -282,6 +289,9 @@ func (runtime *pgPubsub) prepareOn(connection *PostgresDB, executor pgExecutor) 
 // idempotent upgrade from the original allocation-ordered outbox; they are not application
 // schema migration machinery.
 func createPubsubOutbox(ctx context.Context, connection *PostgresDB) error {
+	if err := pgVerifyMigrationFacilityConnection(connection, "SSE outbox"); err != nil {
+		return err
+	}
 	table := connection.QualifiedTable(pubsubOutboxTable)
 	statements := []string{
 		`create sequence if not exists ` + connection.QualifiedTable(pubsubDispatchSeq),
@@ -324,6 +334,9 @@ func createPubsubOutbox(ctx context.Context, connection *PostgresDB) error {
 // and before a runtime captures its baseline. Each transaction has a fresh lease and handles a
 // bounded batch, avoiding the old single 10-second context across an arbitrarily large outbox.
 func normalizeLegacyPubsubRows(connection *PostgresDB) error {
+	if err := pgVerifyMigrationFacilityConnection(connection, "SSE outbox"); err != nil {
+		return err
+	}
 	for {
 		ctx, cancel := context.WithTimeout(context.Background(), pgLeaseTimeout())
 		dispatched, err := dispatchLegacyPubsubPending(ctx, connection.pool, connection)
@@ -439,6 +452,9 @@ func (runtime *pgPubsub) pause(duration time.Duration) bool {
 // lives for the process, which is not what a pool's connections are for. `listened` reports
 // whether LISTEN was established, which is what resets the reconnect backoff.
 func (runtime *pgPubsub) listen(connection *PostgresDB) (listened bool, err error) {
+	if err := pgVerifyMigrationFacilityConnection(connection, "SSE listener"); err != nil {
+		return false, err
+	}
 	connectCtx, cancelConnect := context.WithTimeout(runtime.ctx, pgLeaseTimeout())
 	defer cancelConnect()
 	conn, err := pgx.ConnectConfig(connectCtx, connection.pool.Config().ConnConfig.Copy())

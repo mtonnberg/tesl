@@ -47,6 +47,7 @@
       "model_paths": null,
       "tests": [
         "additive_lesson_test.go#TestCompiledAdditiveLessonRetainsRows",
+        "additive_lesson_test.go#TestCompiledMigrationCompilerUpgradeRetainsRows",
         "blackbox_test.go#TestCompiledVersionsShareRowsAndPauseInsideTransactions",
         "expansion_blackbox_test.go#TestCompiledMigrationExpansionRetainsRowsAcrossStandaloneRevisions"
       ]
@@ -57,6 +58,7 @@
       "model_paths": null,
       "tests": [
         "additive_lesson_test.go#TestCompiledAdditiveLessonRetainsRows",
+        "additive_lesson_test.go#TestCompiledMigrationCompilerUpgradeRetainsRows",
         "blackbox_test.go#TestCompiledVersionsShareRowsAndPauseInsideTransactions",
         "expansion_blackbox_test.go#TestCompiledMigrationExpansionRetainsRowsAcrossStandaloneRevisions"
       ]
@@ -124,6 +126,7 @@
       "model_paths": null,
       "tests": [
         "additive_lesson_test.go#TestCompiledAdditiveLessonRetainsRows",
+        "additive_lesson_test.go#TestCompiledMigrationCompilerUpgradeRetainsRows",
         "catalog_evidence_test.go#TestPostgresCatalogEvidenceDetectsBehavioralDrift",
         "catalog_evidence_test.go#TestPostgresCatalogIdentityDistinguishesIndividualProperties",
         "catalog_runtime_test.go#TestRuntimeCatalogFingerprintIgnoresEquivalentPhysicalIdentity",
@@ -845,6 +848,7 @@
       ],
       "tests": [
         "additive_lesson_test.go#TestCompiledAdditiveLessonRetainsRows",
+        "additive_lesson_test.go#TestCompiledMigrationCompilerUpgradeRetainsRows",
         "bootstrap_model_test.go#TestBootstrapWinnerSurvivesEveryPartialInstallCrash",
         "bootstrap_postgres_test.go#TestPostgresBootstrapWinnerSurvivesEveryPartialInstallCrash",
         "expansion_blackbox_test.go#TestCompiledMigrationExpansionRetainsRowsAcrossStandaloneRevisions"
@@ -1255,6 +1259,7 @@
       ],
       "tests": [
         "additive_lesson_test.go#TestCompiledAdditiveLessonRetainsRows",
+        "additive_lesson_test.go#TestCompiledMigrationCompilerUpgradeRetainsRows",
         "blackbox_test.go#TestCompiledVersionsShareRowsAndPauseInsideTransactions",
         "jsonb_blackbox_test.go#TestCompiledJSONBCodecsRequireBothDirectionsAndRewriteEvidence",
         "read_ordering_test.go#TestPostgresTemplateQueryFirstAdmissionAcrossRetirement"
@@ -1489,6 +1494,7 @@
       ],
       "tests": [
         "additive_lesson_test.go#TestCompiledAdditiveLessonRetainsRows",
+        "additive_lesson_test.go#TestCompiledMigrationCompilerUpgradeRetainsRows",
         "blackbox_test.go#TestCompiledVersionsShareRowsAndPauseInsideTransactions",
         "jsonb_blackbox_test.go#TestCompiledJSONBCodecsRequireBothDirectionsAndRewriteEvidence",
         "model_test.go#TestApplicationTargetWriteLocksABIBeforeBackfillStarts",
@@ -1515,6 +1521,25 @@
         "TR-WRITE"
       ],
       "named_failpoints": null
+    },
+    {
+      "name": "TestCompiledMigrationCompilerUpgradeRetainsRows",
+      "file": "additive_lesson_test.go",
+      "line": 33,
+      "layer": "compiled-postgres",
+      "invariants": [
+        "INV-ADDITIVE-READ",
+        "INV-ADDITIVE-WRITE",
+        "INV-CATALOG-EVIDENCE"
+      ],
+      "transitions": [
+        "TR-BOOT-EXPAND",
+        "TR-READ",
+        "TR-WRITE"
+      ],
+      "named_failpoints": [
+        "expansion-after-commit"
+      ]
     },
     {
       "name": "TestCompiledVersionsShareRowsAndPauseInsideTransactions",

@@ -81,6 +81,9 @@ func (server *Server) writeMigrationApply(ctx context.Context, id json.RawMessag
 	if err != nil {
 		return op.finish(report, err)
 	}
+	if tx == nil {
+		return op.finish(report, fmt.Errorf("source preparation returned no transaction"))
+	}
 	op.tx = tx
 	server.migrationApply = op
 	if report, err = tx.Publish(ctx); err != nil {
@@ -221,7 +224,10 @@ func (op *migrationApplyState) forward() error {
 	}
 	return op.send(edits, false, func(applied bool, failure error) error {
 		if !applied {
-			return op.inverse(failure)
+			// A negative reply does not promise that delayed didChange messages
+			// from a partial edit have already arrived. A snapshot barrier must
+			// reconcile the actual buffers before any inverse can remove files.
+			return op.finish(op.tx.Report(), errors.Join(failure, fmt.Errorf("partial editor outcome needs reconciliation before restoration")))
 		}
 		for _, edit := range batch {
 			after := op.server.documents[edit.before.URI]

@@ -92,7 +92,7 @@ let check_inputs history =
 
 let verify_unchanged history = protect history.current.root_file (fun () -> check_inputs history)
 
-let inspect ~include_migrations ~compiler_abi ~project_root ~family =
+let inspect ~stored_value_compatibility ~include_migrations ~compiler_abi ~project_root ~family =
   protect project_root (fun () ->
     if not (Migration_source.valid_family family) then
       reject project_root "invalid schema family";
@@ -159,7 +159,7 @@ let inspect ~include_migrations ~compiler_abi ~project_root ~family =
     let load_schema version revision path =
       let expected = family ^ "." ^ revision in
       visit_schema expected expected;
-      match Migration_inventory.load ~compiler_abi ~root_file:path with
+      match Migration_inventory.load_with_compatibility ~stored_value_compatibility ~compiler_abi ~root_file:path with
       | Error error -> raise (Invalid {kind=Invalid_source; loc=error.loc; message=error.message})
       | Ok inventory ->
         if Migration_inventory.root_module inventory <> expected then
@@ -215,14 +215,15 @@ let inspect ~include_migrations ~compiler_abi ~project_root ~family =
     history)
 
 
-let discover = inspect ~include_migrations:true
+let discover_with_compatibility = inspect ~include_migrations:true
+let discover = discover_with_compatibility ~stored_value_compatibility:None
 
 (** Declaration diagnostics use the supplied migration AST (including an unsaved
     editor buffer). They need the complete checked schema chain, not another parse
     of the migration's saved bytes. Keep this result narrower than history: it
     grants no authority about migration sources, seals, or their frozen closures. *)
-let adjacent_pair ~compiler_abi ~project_root ~family ~previous ~current =
-  match inspect ~include_migrations:false ~compiler_abi ~project_root ~family with
+let adjacent_pair_with_compatibility ~stored_value_compatibility ~compiler_abi ~project_root ~family ~previous ~current =
+  match inspect ~stored_value_compatibility ~include_migrations:false ~compiler_abi ~project_root ~family with
   | Error error -> Error error
   | Ok history ->
     let root schema = Migration_inventory.root_module schema.inventory in
@@ -233,3 +234,5 @@ let adjacent_pair ~compiler_abi ~project_root ~family ~previous ~current =
         previous <> family ^ ".VCurrent" -> Ok (before,after)
     | _ -> Error {kind=Invalid_layout;loc=Location.dummy_loc history.current.root_file;
         message="Migration must bridge a frozen schema and its immediately following revision in the same saved schema history"}
+
+let adjacent_pair = adjacent_pair_with_compatibility ~stored_value_compatibility:None

@@ -429,6 +429,7 @@
     "repair_test.go#TestPostgresRepairHistoryAgainstReferenceTraces": "postgres",
     "traceability_test.go": "harness",
     "expansion_blackbox_test.go": "compiled-postgres",
-    "additive_lesson_test.go": "compiled-postgres"
+    "additive_lesson_test.go": "compiled-postgres",
+    "worker_lesson_test.go": "compiled-postgres"
   }
 }

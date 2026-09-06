@@ -14,13 +14,17 @@ type preview = {
     [version] is the explicitly selected current version; a changed selection
     refuses instead of silently starting another revision. The caller supplies
     the actual executing compiler ABI, not the old recorded
-    tag. Finalizing an already recorded current target requires that same ABI.
+    tag. The legacy entry point requires that same ABI; the explicit compatibility
+    entry point can verify v2 seals under a matching stored-value contract.
     The generated next edge is initially unchanged; schema editing and refresh
     happen afterward. Target resolution, refresh, CLI/application and persisted
     migration semantics are separate integrations. No files are written. *)
 val start : compiler_abi:string -> project_root:string -> family:string ->
   version:int ->
   documents:Migration_manifest.document list -> (preview, error list) result
+val start_with_compatibility : stored_value_compatibility:string option ->
+  compiler_abi:string -> project_root:string -> family:string -> version:int ->
+  documents:Migration_manifest.document list -> (preview,error list) result
 
 type refresh_preview = {
   family : string;
@@ -46,3 +50,6 @@ type refresh_preview = {
 val refresh : compiler_abi:string -> project_root:string -> family:string ->
   version:int -> documents:Migration_manifest.document list ->
   (refresh_preview,error list) result
+val refresh_with_compatibility : stored_value_compatibility:string option ->
+  compiler_abi:string -> project_root:string -> family:string -> version:int ->
+  documents:Migration_manifest.document list -> (refresh_preview,error list) result

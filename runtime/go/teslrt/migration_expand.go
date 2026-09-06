@@ -21,6 +21,19 @@ func ExecutePgMigrationExpansion(ctx context.Context, conn *pgx.Conn, history Pg
 	if _, err := history.ExpansionPlan(1); err != nil {
 		return result, err
 	}
+	if conn == nil || conn.IsClosed() || conn.PgConn().TxStatus() != 'I' {
+		return result, fmt.Errorf("migration coordination requires an idle, exclusively borrowed connection")
+	}
+	// A request login deliberately has no TEMP privilege. Refuse the wrong
+	// executor identity before inspection attempts its temporary catalog probes,
+	// and repeat the identity check after waiting for the boot lock below.
+	var currentUser, sessionUser string
+	if err := conn.QueryRow(ctx, "select current_user, session_user").Scan(&currentUser, &sessionUser); err != nil {
+		return result, err
+	}
+	if currentUser != roles.Worker || sessionUser != roles.Worker {
+		return result, fmt.Errorf("migration expansion requires the configured worker identity")
+	}
 	state, err := InspectPgMigrationControl(ctx, conn, history.Namespace, roles)
 	if err != nil {
 		return result, err
@@ -32,7 +45,7 @@ func ExecutePgMigrationExpansion(ctx context.Context, conn *pgx.Conn, history Pg
 		return pgControlTransaction(ctx, conn, false, func(tx pgx.Tx) error {
 			// Recheck after the boot-lock wait. This snapshot must follow the
 			// previous executor's commit, and may not use cached installation IDs.
-			if err := pgControlRoles(ctx, tx, roles.Owner, roles.Worker, false); err != nil {
+			if err := pgControlRoles(ctx, tx, roles, false); err != nil {
 				return err
 			}
 			var currentUser, sessionUser string
@@ -80,12 +93,15 @@ func ExecutePgMigrationExpansion(ctx context.Context, conn *pgx.Conn, history Pg
 			if err := pgVerifyExpansionCatalog(ctx, tx, plan.Namespace, roles.Worker, catalog); err != nil {
 				return err
 			}
+			if err := pgVerifyRequestGrants(ctx, tx, plan.Namespace, roles, catalog); err != nil {
+				return err
+			}
 			// End the validation snapshot before the short DDL transactions. The
 			// session boot lock and shared installer lock remain held throughout.
 			if err := tx.Rollback(ctx); err != nil {
 				return err
 			}
-			if err := pgApplyExpansion(ctx, conn, plan, roles.Worker, fresh.Current, intents); err != nil {
+			if err := pgApplyExpansion(ctx, conn, plan, roles, fresh.Current, intents); err != nil {
 				return err
 			}
 			result, err = InspectPgMigrationControl(ctx, conn, plan.Namespace, roles)
@@ -125,22 +141,22 @@ func pgExpansionTransaction(ctx context.Context, conn *pgx.Conn, f func(pgx.Tx) 
 	return nil
 }
 
-func pgApplyExpansion(ctx context.Context, conn *pgx.Conn, plan PgMigrationExpansionPlan, owner string, current int, intents map[int]*pgExpansionIntent) error {
+func pgApplyExpansion(ctx context.Context, conn *pgx.Conn, plan PgMigrationExpansionPlan, roles PgMigrationControlRoles, current int, intents map[int]*pgExpansionIntent) error {
 	ns := quoteIdentifier(plan.Namespace) + "."
 	for _, step := range plan.Steps {
 		if step.Version <= current {
 			continue
 		}
 		if err := pgExpansionTransaction(ctx, conn, func(tx pgx.Tx) error {
-			_, err := tx.Exec(ctx, "select "+ns+"tesl_begin_expansion($1::integer,$2::text,$3::text,$4::text,$5::integer,$6::boolean)",
-				step.Version, step.SnapshotHash, step.StepHash, plan.SourceCompilerABI, len(step.Operations), step.EpochPreserving)
+			_, err := tx.Exec(ctx, "select "+ns+"tesl_begin_expansion($1::integer,$2::text,$3::text,$4::text,$5::text,$6::integer,$7::boolean)",
+				step.Version, step.SnapshotHash, step.StepHash, plan.SourceCompilerABI, plan.StoredValueCompatibility, len(step.Operations), step.EpochPreserving)
 			return err
 		}); err != nil {
 			return err
 		}
 		if intents[step.Version] == nil {
 			intents[step.Version] = &pgExpansionIntent{Version: step.Version, SnapshotHash: step.SnapshotHash, ArtifactHash: step.StepHash,
-				SourceABI: plan.SourceCompilerABI, OperationCount: len(step.Operations), EpochPreserving: step.EpochPreserving}
+				SourceABI: plan.SourceCompilerABI, StoredValueCompatibility: plan.StoredValueCompatibility, OperationCount: len(step.Operations), EpochPreserving: step.EpochPreserving}
 		}
 		r := intents[step.Version]
 		for ordinal := len(r.Objects); ordinal < len(step.Operations); ordinal++ {
@@ -152,6 +168,11 @@ func pgApplyExpansion(ctx context.Context, conn *pgx.Conn, plan PgMigrationExpan
 				if err := pgExecuteExpansionOperation(ctx, tx, plan.Namespace, step.Operations[ordinal]); err != nil {
 					return err
 				}
+				if roles.Request != "" && step.Operations[ordinal].Kind == "create-table" {
+					if _, err := tx.Exec(ctx, "grant select,insert,update,delete on "+pgx.Identifier{plan.Namespace, step.Operations[ordinal].Table}.Sanitize()+" to "+quoteIdentifier(roles.Request)); err != nil {
+						return err
+					}
+				}
 				migrationBoundary("expansion-after-ddl")
 				// Verify the uncommitted catalog before recording success. The
 				// savepoint used by the observer preserves this transaction's DDL.
@@ -161,7 +182,10 @@ func pgApplyExpansion(ctx context.Context, conn *pgx.Conn, plan PgMigrationExpan
 				if err != nil {
 					return err
 				}
-				if err := pgVerifyExpansionCatalog(ctx, tx, plan.Namespace, owner, catalog); err != nil {
+				if err := pgVerifyExpansionCatalog(ctx, tx, plan.Namespace, roles.Worker, catalog); err != nil {
+					return err
+				}
+				if err := pgVerifyRequestGrants(ctx, tx, plan.Namespace, roles, catalog); err != nil {
 					return err
 				}
 				_, err = tx.Exec(ctx, "select "+ns+"tesl_record_expansion_object($1::integer,$2::integer,$3::text)", step.Version, ordinal, hash)
@@ -172,7 +196,10 @@ func pgApplyExpansion(ctx context.Context, conn *pgx.Conn, plan PgMigrationExpan
 			r.Objects = append(r.Objects, hash)
 		}
 		if err := pgExpansionTransaction(ctx, conn, func(tx pgx.Tx) error {
-			if err := pgVerifyExpansionCatalog(ctx, tx, plan.Namespace, owner, step.Catalog); err != nil {
+			if err := pgVerifyExpansionCatalog(ctx, tx, plan.Namespace, roles.Worker, step.Catalog); err != nil {
+				return err
+			}
+			if err := pgVerifyRequestGrants(ctx, tx, plan.Namespace, roles, step.Catalog); err != nil {
 				return err
 			}
 			_, err := tx.Exec(ctx, "select "+ns+"tesl_record_expanded($1::integer)", step.Version)

@@ -4,18 +4,11 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"os"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
-
-func pgMigrationRoles(config PostgresConfig, worker string) PgMigrationControlRoles {
-	owner := config.ControlOwner
-	if owner == "" {
-		owner = "tesl_control"
-	}
-	return PgMigrationControlRoles{Owner: owner, Worker: worker}
-}
 
 // Versioned connections have a separate initialization identity, even when two
 // compiled revisions are embedded in one process. They never use legacy entity
@@ -26,10 +19,13 @@ func openVersionedPostgres(config PostgresConfig, history PgCompiledMigrationHis
 	}
 	dsn := postgresDSN(config)
 	poolConfig := postgresPoolConfig(config, dsn)
-	roles := pgMigrationRoles(config, poolConfig.ConnConfig.User)
+	roles, err := pgMigrationRoles(config, poolConfig.ConnConfig.User)
+	if err != nil {
+		panic("database: " + err.Error())
+	}
 	digest := sha256.Sum256([]byte(history.HistoryJSON))
-	key := fmt.Sprintf("versioned\x00%s\x00%s\x00%d\x00%s\x00%s\x00%d\x00%s\x00%x", config.Schema, dsn, poolConfig.MaxConns,
-		roles.Owner, history.Database, history.CurrentVersion, history.SourceCompilerABI, digest)
+	key := fmt.Sprintf("versioned\x00%s\x00%s\x00%d\x00%s\x00%s\x00%s\x00%s\x00%s\x00%d\x00%s\x00%x", config.Schema, dsn, poolConfig.MaxConns,
+		roles.Owner, roles.Worker, roles.Request, config.DDLConnection, history.Database, history.CurrentVersion, history.SourceCompilerABI, digest)
 	created := &postgresInitialization{done: make(chan struct{})}
 	actual, loaded := postgresConnectOnce.LoadOrStore(key, created)
 	initialization, ok := actual.(*postgresInitialization)
@@ -37,7 +33,7 @@ func openVersionedPostgres(config PostgresConfig, history PgCompiledMigrationHis
 		panic("database: unexpected connection initialization")
 	}
 	if !loaded {
-		initializeVersionedPostgres(key, initialization, poolConfig, history, roles)
+		initializeVersionedPostgres(key, initialization, poolConfig, config, history, roles)
 	} else {
 		<-initialization.done
 	}
@@ -51,7 +47,7 @@ func openVersionedPostgres(config PostgresConfig, history PgCompiledMigrationHis
 }
 
 func initializeVersionedPostgres(key string, initialization *postgresInitialization, config *pgxpool.Config,
-	history PgCompiledMigrationHistory, roles PgMigrationControlRoles) {
+	connectionConfig PostgresConfig, history PgCompiledMigrationHistory, roles PgMigrationControlRoles) {
 	defer close(initialization.done)
 	var pool *pgxpool.Pool
 	defer func() {
@@ -68,9 +64,18 @@ func initializeVersionedPostgres(key string, initialization *postgresInitializat
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), pgLeaseTimeout())
 	defer cancel()
-	// The boot connection is dedicated. It cannot re-enter a pool carrying the
-	// session boot lock, and no request pool is published until execution succeeds.
-	conn, err := pgx.ConnectConfig(ctx, config.ConnConfig.Copy())
+	// Both paths use a dedicated connection. Worker request startup is entirely
+	// read-only; only Embedded startup may borrow the trusted DDL connection.
+	startupConfig := config.ConnConfig.Copy()
+	if roles.Request == "" {
+		var err error
+		startupConfig, err = pgMigrationDDLConfig(connectionConfig)
+		if err != nil {
+			panic("database: " + err.Error())
+		}
+		_, _ = fmt.Fprintf(os.Stderr, "database: %s uses Embedded migration topology with combined schema and request privileges\n", history.Database)
+	}
+	conn, err := pgx.ConnectConfig(ctx, startupConfig)
 	if err != nil {
 		panic(pgFailure("database: cannot connect migration executor", err))
 	}
@@ -79,7 +84,13 @@ func initializeVersionedPostgres(key string, initialization *postgresInitializat
 		defer stop()
 		_ = conn.Close(cleanup)
 	}()
-	state, executeErr := ExecutePgMigrationExpansion(ctx, conn, history, roles)
+	var state PgMigrationControlState
+	var executeErr error
+	if roles.Request == "" {
+		state, executeErr = ExecutePgMigrationExpansion(ctx, conn, history, roles)
+	} else {
+		state, executeErr = pgWaitForMigrationReadiness(ctx, conn, history, roles)
+	}
 	closeCtx, stopClose := context.WithTimeout(context.Background(), pgLeaseTimeout())
 	closeErr := conn.Close(closeCtx)
 	stopClose()
@@ -89,8 +100,12 @@ func initializeVersionedPostgres(key string, initialization *postgresInitializat
 	if closeErr != nil {
 		panic(pgFailure("database: cannot close migration executor", closeErr))
 	}
+	principal := roles.Worker
+	if roles.Request != "" {
+		principal = roles.Request
+	}
 	db := &PostgresDB{schema: history.Namespace, migration: &pgMigrationAdmission{version: history.CurrentVersion,
-		fenceNamespace: state.FenceNamespace, databaseUUID: state.DatabaseUUID, worker: roles.Worker}}
+		fenceNamespace: state.FenceNamespace, databaseUUID: state.DatabaseUUID, worker: principal, roles: roles}}
 	config.AfterConnect = func(ctx context.Context, conn *pgx.Conn) error { return pgVerifyMigrationConnection(ctx, conn, db) }
 	pool, err = pgxpool.NewWithConfig(ctx, config)
 	if err != nil {
@@ -120,7 +135,14 @@ func pgVerifyMigrationConnection(ctx context.Context, conn *pgx.Conn, db *Postgr
 	expected := db.migration
 	if uuid != expected.databaseUUID || fence != expected.fenceNamespace || format != pgMigrationControlFormat || domain != "tesl-1" || protocol != 1 ||
 		currentUser != expected.worker || sessionUser != expected.worker {
-		return fmt.Errorf("migration connection identity, protocol or worker login changed")
+		return fmt.Errorf("migration connection identity, protocol or worker/request login changed")
+	}
+	if expected.roles.Request != "" {
+		if err := pgControlSnapshotMode(ctx, conn, pgx.ReadOnly, func(tx pgx.Tx) error {
+			return pgControlRoles(ctx, tx, expected.roles, false)
+		}); err != nil {
+			return err
+		}
 	}
 	_, err = pgMigrationStatementOn(ctx, db, conn, false, func(pgExecutor) (struct{}, error) { return struct{}{}, nil })
 	return err

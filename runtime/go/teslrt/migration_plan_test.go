@@ -10,6 +10,9 @@ import (
 	"testing"
 )
 
+const pgTestStoredValueCompatibility = "tesl-stored-value-v1:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+const pgTestSourceABI = "tesl-source-abi-v1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
 func pgPlanTestColumn(name, typ string, nullable, primary bool) PgMigrationCatalogColumn {
 	return PgMigrationCatalogColumn{Name: name, Type: typ, Nullable: nullable, PrimaryKey: primary}
 }
@@ -126,8 +129,8 @@ func pgPlanTestHistory() PgCompiledMigrationHistory {
 		origins = append(origins, map[string]any{"initialVersion": origin + 1, "steps": pgPlanTestStepsJSON(chain), "errors": []any{}})
 	}
 	history := PgCompiledMigrationHistory{Database: "App.Main", Family: "NotesSchema", Namespace: "notes", CurrentVersion: 3,
-		SourceCompilerABI: "tesl-source-abi-v1:" + strings.Repeat("a", 64)}
-	envelope := map[string]any{"version": 2, "kind": "compiled-migration-history", "compilerAbi": history.SourceCompilerABI,
+		SourceCompilerABI: pgTestSourceABI, StoredValueCompatibility: pgTestStoredValueCompatibility}
+	envelope := map[string]any{"version": 3, "kind": "compiled-migration-history", "compilerAbi": history.SourceCompilerABI, "storedValueCompatibility": history.StoredValueCompatibility,
 		"databases": []any{map[string]any{"database": history.Database, "family": history.Family, "namespace": history.Namespace,
 			"currentVersion": history.CurrentVersion, "origins": origins}}}
 	encoded, err := json.Marshal(envelope)
@@ -230,7 +233,7 @@ func TestPgCompiledExpansionPlanImmutable(t *testing.T) {
 func TestPgCompiledExpansionPlanRefusesMalformedWire(t *testing.T) {
 	base := pgPlanTestHistory()
 	mutations := map[string]func(string) string{
-		"old format": func(s string) string { return strings.Replace(s, `"version":2`, `"version":1`, 1) },
+		"old format": func(s string) string { return strings.Replace(s, `"version":3`, `"version":2`, 1) },
 		"duplicate escaped": func(s string) string {
 			return strings.Replace(s, `"compilerAbi":`, `"compiler\u0041bi":"wrong","compilerAbi":`, 1)
 		},

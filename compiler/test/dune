@@ -482,3 +482,8 @@
  (name test_migration_program)
  (modules test_migration_program)
  (libraries tesl_compiler_lib alcotest str unix))
+
+(test
+ (name test_migration_topology)
+ (modules test_migration_topology)
+ (libraries tesl_compiler_lib alcotest str unix))

@@ -1,4 +1,4 @@
-(** Source integrity and same-compiler semantic validation are separate judgments.
+(** Source integrity and checked semantic compatibility are separate judgments.
     These records are committed source metadata, not authenticated database state
     or authority to transport proofs between compiler ABIs. *)
 module I = Migration_inventory
@@ -7,13 +7,14 @@ module C = Migration_canonical
 type error_kind = Invalid_record | Invalid_layout | Missing_source | Changed_source
   | Invalid_schema | Abi_mismatch | Semantic_mismatch
 type error = {kind : error_kind; loc : Location.loc; message : string}
-type t = {root_module : string; compiler_abi : string; snapshot_digest : string;
+type t = {root_module : string; compiler_abi : string; stored_value_compatibility : string option; snapshot_digest : string;
           sources : (string * string) list}
 type source_check = {seal : t; project_root : string; root_file : string;
                      source_inputs : (string * string) list}
 
 let root_module seal = seal.root_module
 let compiler_abi seal = seal.compiler_abi
+let stored_value_compatibility seal = seal.stored_value_compatibility
 let snapshot_digest seal = seal.snapshot_digest
 let sources seal = seal.sources
 let source_inputs checked = checked.source_inputs
@@ -49,6 +50,8 @@ let validate seal =
    | [family; revision] when Migration_source.valid_family family && Migration_source.valid_revision revision -> ()
    | _ -> invalid "a snapshot seal must name a canonical schema revision root");
   if String.trim seal.compiler_abi = "" then invalid "snapshot seal requires a compiler ABI";
+  Option.iter (fun contract -> if not (Migration_abi.valid_stored_value_compatibility contract) then
+    invalid "invalid snapshot stored-value compatibility contract") seal.stored_value_compatibility;
   if not (digest_valid seal.snapshot_digest) then invalid "invalid snapshot semantic digest";
   if not (List.mem_assoc seal.root_module seal.sources) then invalid "snapshot seal omits its root source";
   let names = List.map fst seal.sources in
@@ -60,7 +63,9 @@ let validate seal =
     if not (digest_valid digest) then invalid ("invalid source digest for " ^ name)) seal.sources
 
 let encode seal =
-  "# tesl:snapshot-seal:v1 " ^ seal.root_module ^ " " ^ hex seal.compiler_abi ^ " " ^ seal.snapshot_digest ^ "\n" ^
+  (match seal.stored_value_compatibility with
+   | None -> "# tesl:snapshot-seal:v1 " ^ seal.root_module ^ " " ^ hex seal.compiler_abi ^ " " ^ seal.snapshot_digest ^ "\n"
+   | Some contract -> "# tesl:snapshot-seal:v2 " ^ seal.root_module ^ " " ^ hex seal.compiler_abi ^ " " ^ contract ^ " " ^ seal.snapshot_digest ^ "\n") ^
   String.concat "" (List.map (fun (name,digest) -> "# tesl:snapshot-source " ^ name ^ " " ^ digest ^ "\n") seal.sources) ^
   "# tesl:snapshot-end\n"
 
@@ -70,9 +75,11 @@ let decode text = protect "<snapshot-seal>" (fun () ->
     if String.ends_with ~suffix:"\r" line then String.sub line 0 (String.length line - 1) else line) in
   match lines with
   | first :: rest ->
-    let root_module,compiler_abi,snapshot_digest = match String.split_on_char ' ' first with
+    let root_module,compiler_abi,stored_value_compatibility,snapshot_digest = match String.split_on_char ' ' first with
       | ["#";"tesl:snapshot-seal:v1";root;abi;digest] ->
-        let abi = match unhex abi with Some abi -> abi | None -> bad () in root,abi,digest
+        let abi = match unhex abi with Some abi -> abi | None -> bad () in root,abi,None,digest
+      | ["#";"tesl:snapshot-seal:v2";root;abi;contract;digest] ->
+        let abi = match unhex abi with Some abi -> abi | None -> bad () in root,abi,Some contract,digest
       | _ -> bad () in
     let rec entries result = function
       | ["# tesl:snapshot-end";""] -> List.rev result
@@ -82,7 +89,7 @@ let decode text = protect "<snapshot-seal>" (fun () ->
          | _ -> bad ())
       | [] -> bad () in
     let sources = entries [] rest in
-    let seal = {root_module;compiler_abi;snapshot_digest;sources} in
+    let seal = {root_module;compiler_abi;stored_value_compatibility;snapshot_digest;sources} in
     validate seal;
     if sources <> List.sort compare sources then
       reject Invalid_record root_module "snapshot sources must use canonical module order";
@@ -157,23 +164,30 @@ let create ~project_root inventory = protect project_root (fun () ->
   if List.length sources <> List.length inputs then
     reject Invalid_record root "inventory and snapshot source sets differ";
   let seal = {root_module=I.root_module inventory;compiler_abi=I.compiler_abi inventory;
+    stored_value_compatibility=I.stored_value_compatibility inventory;
     snapshot_digest=C.digest C.Snapshot (I.snapshot inventory);sources} in
   (match verify_sources ~project_root:root seal with Ok _ -> () | Error error -> raise (Invalid error));
   seal)
 
-let verify_semantics ~compiler_abi checked = protect checked.root_file (fun () ->
+let verify_semantics ?stored_value_compatibility ~compiler_abi checked = protect checked.root_file (fun () ->
   (* Recheck bytes before making an ABI judgment, so an actual edit remains
      identifiable even when the caller also changed compiler. Never reconstruct
      an old semantic hash by labelling a new compiler with the old ABI. *)
   (match verify_sources ~project_root:checked.project_root checked.seal with
    | Ok _ -> () | Error error -> raise (Invalid error));
-  if compiler_abi <> checked.seal.compiler_abi then reject Abi_mismatch checked.root_file
-    "snapshot source is unchanged, but semantic comparison requires its recorded compiler ABI";
-  let inventory = match I.load ~compiler_abi ~root_file:checked.root_file with
+  (match checked.seal.stored_value_compatibility,stored_value_compatibility with
+   | None,_ when compiler_abi = checked.seal.compiler_abi -> ()
+   | None,_ -> reject Abi_mismatch checked.root_file
+       "legacy snapshot source is unchanged, but semantic comparison requires its recorded compiler ABI"
+   | Some recorded,Some current when recorded = current -> ()
+   | Some _,_ -> reject Abi_mismatch checked.root_file
+       "snapshot requires the same explicit stored-value compatibility contract; changed semantics need revalidation");
+  let inventory = match I.load_with_compatibility
+      ~stored_value_compatibility:checked.seal.stored_value_compatibility ~compiler_abi ~root_file:checked.root_file with
     | Ok inventory -> inventory
     | Error error -> raise (Invalid {kind=Invalid_schema;loc=error.loc;message=error.message}) in
   if C.digest C.Snapshot (I.snapshot inventory) <> checked.seal.snapshot_digest then
-    reject Semantic_mismatch checked.root_file "snapshot semantic digest differs under the recorded compiler ABI";
+    reject Semantic_mismatch checked.root_file "snapshot semantic digest differs under its recorded compatibility domain";
   (match verify_sources ~project_root:checked.project_root checked.seal with
    | Ok _ -> () | Error error -> raise (Invalid error));
   inventory)

@@ -79,6 +79,50 @@ func editorCompilerPreview(t *testing.T, root string, documents []EditorDocument
 	return preview
 }
 
+func TestEditorRestorationRetainsDependenciesAfterBufferAutoSave(t *testing.T) {
+	m, documents := editorTransactionFixture(t)
+	ctx := context.Background()
+	editor, _, err := m.PrepareEditor(ctx, documents)
+	if err != nil || editor == nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = editor.Close() })
+	if _, err := editor.Publish(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := editor.BeginClientEdits(ctx); err != nil {
+		t.Fatal(err)
+	}
+	applied := editorAppliedDocuments(t, m, documents)
+	saved := false
+	for i, doc := range applied {
+		if doc.Source != documents[i].Source {
+			if err := os.WriteFile(doc.Path, []byte(doc.Source), 0600); err != nil {
+				t.Fatal(err)
+			}
+			documents[i].Version = doc.Version + 1
+			saved = true
+		}
+	}
+	if !saved {
+		t.Fatal("fixture did not save an applied buffer")
+	}
+	beforeRestore := sourceSnapshot(t, m.ProjectRoot())
+	report, err := editor.Restore(ctx, documents)
+	if err == nil || !strings.Contains(err.Error(), "saved editor input changed") || !report.RecoveryRequired || report.Outcome != "editor-pending" {
+		t.Fatalf("auto-saved imports lost their generated dependencies: %+v %v", report, err)
+	}
+	if !reflect.DeepEqual(beforeRestore, sourceSnapshot(t, m.ProjectRoot())) {
+		t.Fatal("refused restoration changed saved sources or retained state")
+	}
+	if err := editor.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if report, err := Recover(ctx, m.ProjectRoot()); err == nil || !report.RecoveryRequired || !reflect.DeepEqual(beforeRestore, sourceSnapshot(t, m.ProjectRoot())) {
+		t.Fatal("disk recovery discarded an auto-saved buffer's dependencies")
+	}
+}
+
 func runEditorSourceChild(t *testing.T, m *Manifest, documents []EditorDocument, operation, stop string) {
 	t.Helper()
 	private := t.TempDir()

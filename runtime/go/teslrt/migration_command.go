@@ -6,15 +6,18 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"os/signal"
 	"sort"
 	"strings"
+	"syscall"
 
 	"github.com/jackc/pgx/v5"
 )
 
 type pgSchemaCommand struct {
-	verb, database, worker string
-	json                   bool
+	verb, database, worker, request string
+	json                            bool
 }
 
 func pgParseSchemaCommand(args []string) (pgSchemaCommand, bool, error) {
@@ -29,8 +32,8 @@ func pgParseSchemaCommand(args []string) (pgSchemaCommand, bool, error) {
 	if position < 0 {
 		return command, false, nil
 	}
-	if position != 0 || args[0] != "--schema" || len(args) < 2 || (args[1] != "status" && args[1] != "install") {
-		return command, true, fmt.Errorf("usage: app --schema status [--database Module.Database] [--json]\n       app --schema install --worker ROLE [--database Module.Database] [--json]")
+	if position != 0 || args[0] != "--schema" || len(args) < 2 || (args[1] != "status" && args[1] != "install" && args[1] != "worker") {
+		return command, true, fmt.Errorf("usage: app --schema status [--database Module.Database] [--json]\n       app --schema install --worker ROLE [--request ROLE] [--database Module.Database] [--json]\n       app --schema worker [--database Module.Database] [--json]")
 	}
 	command.verb = args[1]
 	for i := 2; i < len(args); i++ {
@@ -47,6 +50,12 @@ func pgParseSchemaCommand(args []string) (pgSchemaCommand, bool, error) {
 			}
 			i++
 			command.worker = args[i]
+		case "--request":
+			if command.verb != "install" || command.request != "" || i+1 == len(args) || strings.HasPrefix(args[i+1], "--") || !pgMigrationIdentifier(args[i+1]) {
+				return command, true, fmt.Errorf("install requires one --request ROLE naming the Worker topology request login")
+			}
+			i++
+			command.request = args[i]
 		case "--json":
 			if command.json {
 				return command, true, fmt.Errorf("--json may appear only once")
@@ -93,6 +102,16 @@ func pgSelectSchemaDatabase(selector string) (*Database, PgCompiledMigrationHist
 }
 
 func pgRunSchemaCommand(command pgSchemaCommand, out io.Writer) (resultErr error) {
+	ctx := context.Background()
+	if command.verb == "worker" {
+		var stop context.CancelFunc
+		ctx, stop = signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+		defer stop()
+	}
+	return pgRunSchemaCommandContext(ctx, command, out)
+}
+
+func pgRunSchemaCommandContext(serviceContext context.Context, command pgSchemaCommand, out io.Writer) (resultErr error) {
 	database, history, err := pgSelectSchemaDatabase(command.database)
 	if err != nil {
 		return err
@@ -100,18 +119,44 @@ func pgRunSchemaCommand(command pgSchemaCommand, out io.Writer) (resultErr error
 	if database.Config.Schema != history.Namespace {
 		return fmt.Errorf("migration namespace disagrees with connection")
 	}
+	if command.verb == "install" || command.verb == "worker" {
+		if err := pgVerifyMigrationFacilities(database); err != nil {
+			return err
+		}
+	}
 	if _, err := history.ExpansionPlan(1); err != nil {
 		return err
 	}
 	config, err := pgx.ParseConfig(postgresDSN(database.Config))
 	if err != nil {
+		return fmt.Errorf("invalid PostgreSQL schema connection configuration")
+	}
+	roles, err := pgMigrationRoles(database.Config, config.User)
+	if err != nil {
 		return err
 	}
-	roles := pgMigrationRoles(database.Config, config.User)
 	if command.verb == "install" {
-		roles.Worker = command.worker
+		if roles.Request != "" {
+			if command.worker != roles.Worker || command.request != roles.Request {
+				return fmt.Errorf("Worker topology installation requires --worker %q --request %q matching the compiled database configuration", roles.Worker, roles.Request)
+			}
+		} else {
+			if command.request != "" {
+				return fmt.Errorf("--request requires Worker migration topology")
+			}
+			roles.Worker = command.worker
+		}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), pgLeaseTimeout())
+	if command.verb == "worker" && roles.Request == "" {
+		return fmt.Errorf("schema worker requires Worker migration topology")
+	}
+	if command.verb == "worker" || command.verb == "install" {
+		config, err = pgMigrationDDLConfig(database.Config)
+		if err != nil {
+			return err
+		}
+	}
+	ctx, cancel := context.WithTimeout(serviceContext, pgLeaseTimeout())
 	defer cancel()
 	conn, err := pgx.ConnectConfig(ctx, config)
 	if err != nil {
@@ -127,7 +172,34 @@ func pgRunSchemaCommand(command pgSchemaCommand, out io.Writer) (resultErr error
 		if err != nil {
 			return err
 		}
-		return pgWriteSchemaInstallation(out, command.json, history, state)
+		return pgWriteSchemaInstallation(out, command.json, history, state, roles)
+	}
+	if command.verb == "worker" {
+		state, err := ExecutePgMigrationExpansion(ctx, conn, history, roles)
+		if err != nil {
+			return err
+		}
+		if err := serviceContext.Err(); err != nil {
+			return err
+		}
+		if command.json {
+			err = json.NewEncoder(out).Encode(struct {
+				Version        int    `json:"version"`
+				Kind           string `json:"kind"`
+				Database       string `json:"database"`
+				BinaryVersion  int    `json:"binaryVersion"`
+				CurrentVersion int    `json:"currentVersion"`
+				DatabaseUUID   string `json:"databaseUuid"`
+			}{1, "schema-worker-ready", history.Database, history.CurrentVersion, state.Current, state.DatabaseUUID})
+		} else {
+			_, err = fmt.Fprintf(out, "%s: schema worker ready at V%d (binary V%d).\n", history.Database, state.Current, history.CurrentVersion)
+		}
+		if err != nil {
+			return err
+		}
+		cancel() // The startup lease does not bound the worker's service lifetime.
+		<-serviceContext.Done()
+		return nil
 	}
 	status, err := InspectPgMigrationStatus(ctx, conn, history, roles)
 	if err != nil {
@@ -181,13 +253,17 @@ type pgSchemaInstallation struct {
 	InstallingVersion int    `json:"installingVersion"`
 }
 
-func pgWriteSchemaInstallation(out io.Writer, asJSON bool, history PgCompiledMigrationHistory, state PgMigrationControlState) error {
+func pgWriteSchemaInstallation(out io.Writer, asJSON bool, history PgCompiledMigrationHistory, state PgMigrationControlState, roles PgMigrationControlRoles) error {
 	if asJSON {
 		return json.NewEncoder(out).Encode(pgSchemaInstallation{Version: 1, Kind: "schema-install", Database: history.Database,
 			Namespace: history.Namespace, DatabaseUUID: state.DatabaseUUID, BinaryVersion: history.CurrentVersion,
 			InitialVersion: state.InitialVersion, CurrentVersion: state.Current, InstallingVersion: state.InstallingVersion})
 	}
-	_, err := fmt.Fprintf(out, "%s: migration control verified; namespace %q; installation origin V%d.\nRevoke the installer's temporary control-owner membership before starting the application.\nApplication boot performs pending storage installation and additive expansion.\n", history.Database, history.Namespace, state.InitialVersion)
+	executor := "Application boot performs pending storage installation and additive expansion."
+	if roles.Request != "" {
+		executor = "Start --schema worker with the schema credential; request processes wait for their revision to be ready."
+	}
+	_, err := fmt.Fprintf(out, "%s: migration control verified; namespace %q; installation origin V%d.\nRevoke the installer's temporary control-owner membership before starting the application.\n%s\n", history.Database, history.Namespace, state.InitialVersion, executor)
 	return err
 }
 

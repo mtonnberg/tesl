@@ -425,16 +425,31 @@ owned source file, including private helpers. A changed recorded `VCurrent`
 reports MIG001; a changed frozen file reports MIG013. A compiler ABI mismatch is
 separate from a source edit. These checks also work with unsaved migration headers.
 
-This currently checks source ownership, recorded source integrity and logical
-adapters and emits table metadata. Mandatory generated history, the physical planner, transformations and deployment
-coordination remain under development. Selecting a migration namespace or checking
-a declaration does not yet execute a database migration.
+Production builds also check the compiler's stored-value compatibility contract.
+Completed additive history can survive a compiler build update when that contract,
+the unchanged source and the checked storage/proof definitions agree. Unfinished
+work remains pinned to the original build. A different contract requires explicit
+revalidation; editing recorded history is not a substitute.
+
+The current implementation checks source ownership and history, plans physical
+storage and runs supported additive changes during PostgreSQL startup. An operator
+must first install protected control state. Source generation and checking alone
+do not execute database work. Typed transformations and the remaining deployment
+lifecycle are still under development.
 
 [Lesson 82](../example/learn/lesson82-database-migrations.tesl) runs a complete
 notes HTTP app with this separation. Its schema owns the stored entity and title
 validation; the application owns the connection, handlers, request/reply records
 and routes. Its API tests create and read a note and verify that invalid input
 does not insert one. A storage-only change need not change the HTTP response.
+
+[Lesson 84](../example/learn/lesson84-worker-migrations.tesl) deploys that pattern
+with `PostgresConfig.topology: Worker`: one compiled binary runs as the schema
+worker with DDL credentials, while request processes use a separate DML login.
+The request app waits for its schema revision and runs the same handlers before
+and after an additive migration. Connection roles and optional `ddlConnection`
+remain in the application. `Embedded` combines those roles for development;
+when topology is omitted, the presence of `TESL_DEPLOYED` selects Worker.
 
 Records and ADTs stored as JSONB also have a schema, even when the SQL column
 type stays `jsonb`. A codec's `fromJson [current, legacy]` alternatives can read

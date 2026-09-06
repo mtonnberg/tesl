@@ -107,18 +107,18 @@ import (
 	"tesl.generated/teslmodlesson83additivemigrations/internal/teslrt"
 )
 
-//line lesson83-additive-migrations.tesl:126
+//line lesson83-additive-migrations.tesl:128
 type NewNote struct {
 	Title string
 }
 
-//line lesson83-additive-migrations.tesl:139
+//line lesson83-additive-migrations.tesl:141
 type NoteReply struct {
 	Id    string
 	Title string
 }
 
-//line lesson83-additive-migrations.tesl:99
+//line lesson83-additive-migrations.tesl:101
 var NoteDatabaseDatabase = teslrt.NewDatabase(
 	"NoteDatabase",
 	teslrt.PostgresConfig{DBName: teslrt.EnvString("NOTES_DB_NAME", ""), User: teslrt.EnvString("NOTES_DB_USER", ""), Password: teslrt.EnvString("NOTES_DB_PASSWORD", ""), Host: teslrt.EnvString("NOTES_DB_HOST", ""), Port: teslrt.PgPort("NOTES_DB_PORT", 5432), ControlOwner: teslrt.EnvString("NOTES_CONTROL_OWNER", ""), Schema: "additive_notes"},
@@ -134,28 +134,28 @@ var _ = teslrt.RegisterDatabaseIdentity("teslmodlesson83additivemigrations.NoteD
 
 var _ = teslrt.RegisterDatabaseMigrationHistory(NoteDatabaseDatabase, "AdditiveNotesSchema")
 
-//line lesson83-additive-migrations.tesl:113
+//line lesson83-additive-migrations.tesl:115
 func SaveTitle(id string, raw string) bool {
-//line lesson83-additive-migrations.tesl:114
+//line lesson83-additive-migrations.tesl:116
 	{
 		teslScrut1 := teslmodadditivenotesschemavcurrentnotes.TryTitle(raw)
 		switch teslScrut1.Tag {
 		case teslrt.MaybeNothing:
-//line lesson83-additive-migrations.tesl:115
+//line lesson83-additive-migrations.tesl:117
 			return false
 		case teslrt.MaybeSomething:
 			title := teslScrut1.SomethingValue
 			_ = title
 			{
-//line lesson83-additive-migrations.tesl:117
+//line lesson83-additive-migrations.tesl:119
 				notes := []teslmodadditivenotesschemavcurrentnotes.Note{teslmodadditivenotesschemavcurrentnotes.NewNote(id, title)}
 				_ = notes
 				{
-//line lesson83-additive-migrations.tesl:118
+//line lesson83-additive-migrations.tesl:120
 					_ = teslrt.DbInsertMany(teslrt.ResolveDatabaseIdentity("teslmodlesson83additivemigrations.NoteDatabase"), teslmodadditivenotesschemavcurrentnotes.NoteTable, "Note", notes, func(teslRow, teslNew teslmodadditivenotesschemavcurrentnotes.Note) bool { return (teslRow.Id == teslNew.Id) }, "insert into \"additive_notes\".\"lesson_migration_notes\" (\"id\", \"title\") values ($1, $2)", func(teslRow teslmodadditivenotesschemavcurrentnotes.Note) []any {
 						return []any{teslRow.Id, teslRow.Title}
 					})
-//line lesson83-additive-migrations.tesl:119
+//line lesson83-additive-migrations.tesl:121
 					return true
 				}
 			}
@@ -165,9 +165,9 @@ func SaveTitle(id string, raw string) bool {
 	}
 }
 
-//line lesson83-additive-migrations.tesl:121
+//line lesson83-additive-migrations.tesl:123
 func FindTitle(id string) teslrt.Maybe[string] {
-//line lesson83-additive-migrations.tesl:122
+//line lesson83-additive-migrations.tesl:124
 	{
 		teslScrut1 := teslrt.DbSelectOne(teslrt.ResolveDatabaseIdentity("teslmodlesson83additivemigrations.NoteDatabase"), teslmodadditivenotesschemavcurrentnotes.NoteTable, func(note teslmodadditivenotesschemavcurrentnotes.Note) bool {
 			return (note.Id == id)
@@ -176,12 +176,12 @@ func FindTitle(id string) teslrt.Maybe[string] {
 		}), teslScanNote)
 		switch teslScrut1.Tag {
 		case teslrt.MaybeNothing:
-//line lesson83-additive-migrations.tesl:123
+//line lesson83-additive-migrations.tesl:125
 			return teslrt.Maybe[string]{Tag: teslrt.MaybeNothing}
 		case teslrt.MaybeSomething:
 			note := teslScrut1.SomethingValue
 			_ = note
-//line lesson83-additive-migrations.tesl:124
+//line lesson83-additive-migrations.tesl:126
 			return teslrt.Maybe[string]{Tag: teslrt.MaybeSomething, SomethingValue: note.Title}
 		default:
 			panic("unreachable: checker guarantees case exhaustiveness")
@@ -189,45 +189,45 @@ func FindTitle(id string) teslrt.Maybe[string] {
 	}
 }
 
-//line lesson83-additive-migrations.tesl:154
-func createNote(id string, body NewNote) NoteReply {
 //line lesson83-additive-migrations.tesl:156
+func createNote(id string, body NewNote) NoteReply {
+//line lesson83-additive-migrations.tesl:158
 	if SaveTitle(id, body.Title) {
-//line lesson83-additive-migrations.tesl:157
+//line lesson83-additive-migrations.tesl:159
 		{
 			teslScrut2 := FindTitle(id)
 			switch teslScrut2.Tag {
 			case teslrt.MaybeNothing:
-//line lesson83-additive-migrations.tesl:158
+//line lesson83-additive-migrations.tesl:160
 				panic(teslrt.RequestRejection{Status: 404, Message: "note not found"})
 			case teslrt.MaybeSomething:
 				title := teslScrut2.SomethingValue
 				_ = title
-//line lesson83-additive-migrations.tesl:159
+//line lesson83-additive-migrations.tesl:161
 				return NoteReply{Id: id, Title: title}
 			default:
 				panic("unreachable: checker guarantees case exhaustiveness")
 			}
 		}
 	} else {
-//line lesson83-additive-migrations.tesl:161
+//line lesson83-additive-migrations.tesl:163
 		panic(teslrt.RequestRejection{Status: 400, Message: "title must be 1-80 characters after trimming"})
 	}
 }
 
-//line lesson83-additive-migrations.tesl:163
+//line lesson83-additive-migrations.tesl:165
 func getNote(id string) NoteReply {
-//line lesson83-additive-migrations.tesl:164
+//line lesson83-additive-migrations.tesl:166
 	{
 		teslScrut1 := FindTitle(id)
 		switch teslScrut1.Tag {
 		case teslrt.MaybeNothing:
-//line lesson83-additive-migrations.tesl:165
+//line lesson83-additive-migrations.tesl:167
 			panic(teslrt.RequestRejection{Status: 404, Message: "note not found"})
 		case teslrt.MaybeSomething:
 			title := teslScrut1.SomethingValue
 			_ = title
-//line lesson83-additive-migrations.tesl:166
+//line lesson83-additive-migrations.tesl:168
 			return NoteReply{Id: id, Title: title}
 		default:
 			panic("unreachable: checker guarantees case exhaustiveness")
@@ -235,9 +235,9 @@ func getNote(id string) NoteReply {
 	}
 }
 
-//line lesson83-additive-migrations.tesl:185
+//line lesson83-additive-migrations.tesl:187
 func Main() struct{} {
-//line lesson83-additive-migrations.tesl:185
+//line lesson83-additive-migrations.tesl:187
 	return func() struct{} {
 		var teslBound struct{}
 		teslrt.WithDatabase(NoteDatabaseDatabase, func() {
@@ -372,16 +372,16 @@ func TestTesl0(teslT *testing.T) {
 			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
 		}
 	}()
-//line lesson83-additive-migrations.tesl:221
+//line lesson83-additive-migrations.tesl:223
 	if !(SaveTitle("first", "  a schema has one owner  ")) {
-//line lesson83-additive-migrations.tesl:221
+//line lesson83-additive-migrations.tesl:223
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft1 := FindTitle("first")
 	teslRight1 := teslrt.Maybe[string]{Tag: teslrt.MaybeSomething, SomethingValue: "a schema has one owner"}
-//line lesson83-additive-migrations.tesl:222
+//line lesson83-additive-migrations.tesl:224
 	if teslLeft1.Tag != teslRight1.Tag || (teslLeft1.Tag == teslrt.MaybeSomething && (teslLeft1.SomethingValue != teslRight1.SomethingValue)) {
-//line lesson83-additive-migrations.tesl:222
+//line lesson83-additive-migrations.tesl:224
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -399,28 +399,28 @@ func TestTesl1(teslT *testing.T) {
 			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
 		}
 	}()
-//line lesson83-additive-migrations.tesl:226
+//line lesson83-additive-migrations.tesl:228
 	if SaveTitle("empty", "") {
-//line lesson83-additive-migrations.tesl:226
+//line lesson83-additive-migrations.tesl:228
 		teslT.Fatal("Tesl expectation failed")
 	}
-//line lesson83-additive-migrations.tesl:227
+//line lesson83-additive-migrations.tesl:229
 	if SaveTitle("spaces", "   ") {
-//line lesson83-additive-migrations.tesl:227
+//line lesson83-additive-migrations.tesl:229
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft2 := FindTitle("empty")
 	teslRight2 := teslrt.Maybe[string]{Tag: teslrt.MaybeNothing}
-//line lesson83-additive-migrations.tesl:228
+//line lesson83-additive-migrations.tesl:230
 	if teslLeft2.Tag != teslRight2.Tag || (teslLeft2.Tag == teslrt.MaybeSomething && (teslLeft2.SomethingValue != teslRight2.SomethingValue)) {
-//line lesson83-additive-migrations.tesl:228
+//line lesson83-additive-migrations.tesl:230
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft3 := FindTitle("spaces")
 	teslRight3 := teslrt.Maybe[string]{Tag: teslrt.MaybeNothing}
-//line lesson83-additive-migrations.tesl:229
+//line lesson83-additive-migrations.tesl:231
 	if teslLeft3.Tag != teslRight3.Tag || (teslLeft3.Tag == teslrt.MaybeSomething && (teslLeft3.SomethingValue != teslRight3.SomethingValue)) {
-//line lesson83-additive-migrations.tesl:229
+//line lesson83-additive-migrations.tesl:231
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -439,35 +439,35 @@ func TestTesl2(teslT *testing.T) {
 		}
 	}()
 	{
-//line lesson83-additive-migrations.tesl:233
+//line lesson83-additive-migrations.tesl:235
 		limit := teslrt.StringRepeat("x", teslrt.FromInt64(80))
 		_ = limit
 		{
-//line lesson83-additive-migrations.tesl:234
+//line lesson83-additive-migrations.tesl:236
 			overLimit := teslrt.StringRepeat("x", teslrt.FromInt64(81))
 			_ = overLimit
-//line lesson83-additive-migrations.tesl:235
+//line lesson83-additive-migrations.tesl:237
 			if !(SaveTitle("limit", limit)) {
-//line lesson83-additive-migrations.tesl:235
+//line lesson83-additive-migrations.tesl:237
 				teslT.Fatal("Tesl expectation failed")
 			}
 			teslLeft4 := FindTitle("limit")
 			teslRight4 := teslrt.Maybe[string]{Tag: teslrt.MaybeSomething, SomethingValue: limit}
-//line lesson83-additive-migrations.tesl:236
+//line lesson83-additive-migrations.tesl:238
 			if teslLeft4.Tag != teslRight4.Tag || (teslLeft4.Tag == teslrt.MaybeSomething && (teslLeft4.SomethingValue != teslRight4.SomethingValue)) {
-//line lesson83-additive-migrations.tesl:236
+//line lesson83-additive-migrations.tesl:238
 				teslT.Fatal("Tesl expectation failed")
 			}
-//line lesson83-additive-migrations.tesl:237
+//line lesson83-additive-migrations.tesl:239
 			if SaveTitle("too-long", overLimit) {
-//line lesson83-additive-migrations.tesl:237
+//line lesson83-additive-migrations.tesl:239
 				teslT.Fatal("Tesl expectation failed")
 			}
 			teslLeft5 := FindTitle("too-long")
 			teslRight5 := teslrt.Maybe[string]{Tag: teslrt.MaybeNothing}
-//line lesson83-additive-migrations.tesl:238
+//line lesson83-additive-migrations.tesl:240
 			if teslLeft5.Tag != teslRight5.Tag || (teslLeft5.Tag == teslrt.MaybeSomething && (teslLeft5.SomethingValue != teslRight5.SomethingValue)) {
-//line lesson83-additive-migrations.tesl:238
+//line lesson83-additive-migrations.tesl:240
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -487,16 +487,16 @@ func TestTesl3(teslT *testing.T) {
 			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
 		}
 	}()
-//line lesson83-additive-migrations.tesl:242
+//line lesson83-additive-migrations.tesl:244
 	if !(SaveTitle("unicode", "  \xc3\x84ndra schemat  ")) {
-//line lesson83-additive-migrations.tesl:242
+//line lesson83-additive-migrations.tesl:244
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft6 := FindTitle("unicode")
 	teslRight6 := teslrt.Maybe[string]{Tag: teslrt.MaybeSomething, SomethingValue: "\xc3\x84ndra schemat"}
-//line lesson83-additive-migrations.tesl:243
+//line lesson83-additive-migrations.tesl:245
 	if teslLeft6.Tag != teslRight6.Tag || (teslLeft6.Tag == teslrt.MaybeSomething && (teslLeft6.SomethingValue != teslRight6.SomethingValue)) {
-//line lesson83-additive-migrations.tesl:243
+//line lesson83-additive-migrations.tesl:245
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -516,16 +516,16 @@ func TestTesl4(teslT *testing.T) {
 	}()
 	teslLeft7 := FindTitle("never-written")
 	teslRight7 := teslrt.Maybe[string]{Tag: teslrt.MaybeNothing}
-//line lesson83-additive-migrations.tesl:247
+//line lesson83-additive-migrations.tesl:249
 	if teslLeft7.Tag != teslRight7.Tag || (teslLeft7.Tag == teslrt.MaybeSomething && (teslLeft7.SomethingValue != teslRight7.SomethingValue)) {
-//line lesson83-additive-migrations.tesl:247
+//line lesson83-additive-migrations.tesl:249
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
 
 // api-test the full app creates and retrieves a normalized note
 //
-//line lesson83-additive-migrations.tesl:192
+//line lesson83-additive-migrations.tesl:194
 func TestTeslApi0(teslT *testing.T) {
 	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "the full app creates and retrieves a normalized note" && teslWanted != "TestTeslApi0" {
 		teslT.Skip("named test filter")
@@ -540,32 +540,32 @@ func TestTeslApi0(teslT *testing.T) {
 		}
 	}()
 	{
-//line lesson83-additive-migrations.tesl:193
+//line lesson83-additive-migrations.tesl:195
 		created := teslrt.ApiRequest(NotesServer, "POST", "/notes/first", "{\"title\":\"  First note  \"}", nil, nil)
 		_ = created
-//line lesson83-additive-migrations.tesl:194
+//line lesson83-additive-migrations.tesl:196
 		if !(teslrt.StatusOk(created.Status)) {
-//line lesson83-additive-migrations.tesl:194
+//line lesson83-additive-migrations.tesl:196
 			teslT.Fatal("Tesl expectation failed")
 		}
-//line lesson83-additive-migrations.tesl:195
+//line lesson83-additive-migrations.tesl:197
 		if !teslrt.JsonEqual(created.Body, teslrt.JsonParseBody("{\"id\":\"first\",\"title\":\"First note\"}").JsonRaw()) {
-//line lesson83-additive-migrations.tesl:195
+//line lesson83-additive-migrations.tesl:197
 			teslT.Fatal("Tesl expectation failed")
 		}
 		{
-//line lesson83-additive-migrations.tesl:196
+//line lesson83-additive-migrations.tesl:198
 			fetched := teslrt.ApiRequest(NotesServer, "GET", "/notes/first", "", nil, nil)
 			_ = fetched
 			teslLeft8 := fetched.Status
-//line lesson83-additive-migrations.tesl:197
+//line lesson83-additive-migrations.tesl:199
 			if !teslrt.Equal(teslLeft8, teslrt.FromInt64(200)) {
-//line lesson83-additive-migrations.tesl:197
+//line lesson83-additive-migrations.tesl:199
 				teslT.Fatal("Tesl expectation failed")
 			}
-//line lesson83-additive-migrations.tesl:198
+//line lesson83-additive-migrations.tesl:200
 			if !teslrt.JsonEqual(fetched.Body, created.Body) {
-//line lesson83-additive-migrations.tesl:198
+//line lesson83-additive-migrations.tesl:200
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -574,7 +574,7 @@ func TestTeslApi0(teslT *testing.T) {
 
 // api-test invalid input fails without creating a note
 //
-//line lesson83-additive-migrations.tesl:201
+//line lesson83-additive-migrations.tesl:203
 func TestTeslApi1(teslT *testing.T) {
 	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "invalid input fails without creating a note" && teslWanted != "TestTeslApi1" {
 		teslT.Skip("named test filter")
@@ -589,23 +589,23 @@ func TestTeslApi1(teslT *testing.T) {
 		}
 	}()
 	{
-//line lesson83-additive-migrations.tesl:202
+//line lesson83-additive-migrations.tesl:204
 		rejected := teslrt.ApiRequest(NotesServer, "POST", "/notes/invalid", "{\"title\":\"   \"}", nil, nil)
 		_ = rejected
 		teslLeft9 := rejected.Status
-//line lesson83-additive-migrations.tesl:203
+//line lesson83-additive-migrations.tesl:205
 		if !teslrt.Equal(teslLeft9, teslrt.FromInt64(400)) {
-//line lesson83-additive-migrations.tesl:203
+//line lesson83-additive-migrations.tesl:205
 			teslT.Fatal("Tesl expectation failed")
 		}
 		{
-//line lesson83-additive-migrations.tesl:204
+//line lesson83-additive-migrations.tesl:206
 			missing := teslrt.ApiRequest(NotesServer, "GET", "/notes/invalid", "", nil, nil)
 			_ = missing
 			teslLeft10 := missing.Status
-//line lesson83-additive-migrations.tesl:205
+//line lesson83-additive-migrations.tesl:207
 			if !teslrt.Equal(teslLeft10, teslrt.FromInt64(404)) {
-//line lesson83-additive-migrations.tesl:205
+//line lesson83-additive-migrations.tesl:207
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -614,7 +614,7 @@ func TestTeslApi1(teslT *testing.T) {
 
 // api-test a malformed request never reaches storage
 //
-//line lesson83-additive-migrations.tesl:208
+//line lesson83-additive-migrations.tesl:210
 func TestTeslApi2(teslT *testing.T) {
 	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "a malformed request never reaches storage" && teslWanted != "TestTeslApi2" {
 		teslT.Skip("named test filter")
@@ -629,23 +629,23 @@ func TestTeslApi2(teslT *testing.T) {
 		}
 	}()
 	{
-//line lesson83-additive-migrations.tesl:209
+//line lesson83-additive-migrations.tesl:211
 		rejected := teslrt.ApiRequest(NotesServer, "POST", "/notes/malformed", "{\"title\":42}", nil, nil)
 		_ = rejected
 		teslLeft11 := rejected.Status
-//line lesson83-additive-migrations.tesl:210
+//line lesson83-additive-migrations.tesl:212
 		if !teslrt.Equal(teslLeft11, teslrt.FromInt64(400)) {
-//line lesson83-additive-migrations.tesl:210
+//line lesson83-additive-migrations.tesl:212
 			teslT.Fatal("Tesl expectation failed")
 		}
 		{
-//line lesson83-additive-migrations.tesl:211
+//line lesson83-additive-migrations.tesl:213
 			missing := teslrt.ApiRequest(NotesServer, "GET", "/notes/malformed", "", nil, nil)
 			_ = missing
 			teslLeft12 := missing.Status
-//line lesson83-additive-migrations.tesl:212
+//line lesson83-additive-migrations.tesl:214
 			if !teslrt.Equal(teslLeft12, teslrt.FromInt64(404)) {
-//line lesson83-additive-migrations.tesl:212
+//line lesson83-additive-migrations.tesl:214
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -654,7 +654,7 @@ func TestTeslApi2(teslT *testing.T) {
 
 // api-test a new test starts with an empty database
 //
-//line lesson83-additive-migrations.tesl:215
+//line lesson83-additive-migrations.tesl:217
 func TestTeslApi3(teslT *testing.T) {
 	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "a new test starts with an empty database" && teslWanted != "TestTeslApi3" {
 		teslT.Skip("named test filter")
@@ -669,13 +669,13 @@ func TestTeslApi3(teslT *testing.T) {
 		}
 	}()
 	{
-//line lesson83-additive-migrations.tesl:216
+//line lesson83-additive-migrations.tesl:218
 		missing := teslrt.ApiRequest(NotesServer, "GET", "/notes/first", "", nil, nil)
 		_ = missing
 		teslLeft13 := missing.Status
-//line lesson83-additive-migrations.tesl:217
+//line lesson83-additive-migrations.tesl:219
 		if !teslrt.Equal(teslLeft13, teslrt.FromInt64(404)) {
-//line lesson83-additive-migrations.tesl:217
+//line lesson83-additive-migrations.tesl:219
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -688,4 +688,4 @@ func teslResetTestState() {
 }
 
 //tesl-snapshot: migration-history.json
-{"version":2,"kind":"compiled-migration-history","compilerAbi":"tesl-source-abi-v1:7d5883ce8623b727baee8f5818160fa99b425be3f470bc862c1045c4f96eac33","databases":[{"database":"Lesson83AdditiveMigrations.NoteDatabase","family":"AdditiveNotesSchema","namespace":"additive_notes","currentVersion":1,"origins":[{"initialVersion":1,"steps":[{"version":1,"snapshotHash":"ccd952b39586b11a4f57a165c78b164c3967b05bd7db328354f5b9aa2df80f06","stepHash":"ce0d6dac43c3e187808be5d0dd47b3ad11b622dba2095ef0b5d7d90d9a4b4554","epochPreserving":true,"operations":[{"kind":"create-table","table":"lesson_migration_notes","columns":[{"name":"id","type":"text","nullable":false,"primaryKey":true},{"name":"title","type":"text","nullable":false,"primaryKey":false}],"indexes":[]}]}],"errors":[]}]}]}
+{"version":3,"kind":"compiled-migration-history","compilerAbi":"tesl-source-abi-v1:1a89cfd8f651392d51093639b88615c936d687687540eb57750c2e90511ef74a","storedValueCompatibility":"tesl-stored-value-v1:b1fa45a128818e83695919b0de88e7a536af4e4f4ec0c4e647d7f2c3ef6bf047","databases":[{"database":"Lesson83AdditiveMigrations.NoteDatabase","family":"AdditiveNotesSchema","namespace":"additive_notes","currentVersion":1,"origins":[{"initialVersion":1,"steps":[{"version":1,"snapshotHash":"e21f536a3a3f1bcdf42f8328fc789dcf61efb39ffbe3d51d7b5331ce149b7cc4","stepHash":"b8fee6cca1915bd9fff03a73acfb956d14f160503c12d723e8dc9d0b18ab9544","epochPreserving":true,"operations":[{"kind":"create-table","table":"lesson_migration_notes","columns":[{"name":"id","type":"text","nullable":false,"primaryKey":true},{"name":"title","type":"text","nullable":false,"primaryKey":false}],"indexes":[]}]}],"errors":[]}]}]}

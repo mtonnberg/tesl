@@ -26,6 +26,16 @@ import (
 // This lesson runs the actual generated main and HTTP server. Its only schema
 // setup is the production operator installer; application startup does the DDL.
 func TestCompiledAdditiveLessonRetainsRows(t *testing.T) {
+	testCompiledAdditiveLesson(t, false, Event{})
+}
+
+// INV-ADDITIVE-READ, INV-ADDITIVE-WRITE, INV-CATALOG-EVIDENCE; TR-BOOT-EXPAND, TR-READ, TR-WRITE.
+func TestCompiledMigrationCompilerUpgradeRetainsRows(t *testing.T) {
+	testCompiledAdditiveLesson(t, true, Event{Name: "expansion-after-commit", Actor: "compiler-a", Occurrence: 1})
+}
+
+func testCompiledAdditiveLesson(t *testing.T, upgrade bool, interruption Event) {
+	t.Helper()
 	dsn := os.Getenv("TESL_MIGRATION_TEST_DSN")
 	if dsn == "" {
 		t.Skip("run scripts/run-migration-tests.sh")
@@ -38,7 +48,7 @@ func TestCompiledAdditiveLessonRetainsRows(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 	defer cancel()
 	project := t.TempDir()
 	const entry = "lesson83-additive-migrations.tesl"
@@ -64,6 +74,10 @@ func TestCompiledAdditiveLessonRetainsRows(t *testing.T) {
 		t.Fatal(err)
 	}
 	compiler := filepath.Join(root, "compiler/_build/default/bin/main.exe")
+	var compatibleCompiler, incompatibleCompiler string
+	if upgrade {
+		compiler, compatibleCompiler, incompatibleCompiler = buildMigrationCompilerVariants(t, ctx, root)
+	}
 	var output bytes.Buffer
 	app := cli.New()
 	app.Directory, app.Stdout, app.Stderr = project, &output, &output
@@ -88,9 +102,23 @@ func TestCompiledAdditiveLessonRetainsRows(t *testing.T) {
 			t.Fatalf("lesson diagnostics: %v\n%s", err, out)
 		}
 	}
-	binaries := map[int]string{}
-	for version := 1; version <= 2; version++ {
-		if version == 2 {
+	binaries, versions := map[int]string{}, map[int]int{}
+	type revision struct {
+		key, version    int
+		compiler, field string
+	}
+	revisions := []revision{{1, 1, compiler, ""}, {2, 2, compiler, "category"}}
+	if upgrade {
+		// C has no frozen source yet: its freshly compiled V1 is valid in
+		// isolation, but cannot interpret a database established by A.
+		revisions = append([]revision{{5, 1, incompatibleCompiler, ""}}, revisions...)
+		revisions = append(revisions, revision{6, 3, compiler, "archived"}, revision{3, 3, compatibleCompiler, ""}, revision{4, 4, compatibleCompiler, "label"})
+	}
+	var frozenByA map[string][]byte
+	for _, revision := range revisions {
+		version := revision.version
+		compiler = revision.compiler
+		if revision.field != "" {
 			command("migrate", "generate", entry, "--new-revision")
 			path := filepath.Join(project, child)
 			source, err := os.ReadFile(path)
@@ -98,7 +126,16 @@ func TestCompiledAdditiveLessonRetainsRows(t *testing.T) {
 				t.Fatal(err)
 			}
 			text := string(source)
-			for _, edit := range [][2]string{{"  title: String ::: ValidTitle title\n}", "  title: String ::: ValidTitle title\n  category: Maybe String\n}"}, {"Note { id: id, title: title }", "Note { id: id, title: title, category: Nothing }"}} {
+			beforeFields, beforeValue := "  title: String ::: ValidTitle title\n", "Note { id: id, title: title"
+			if version >= 3 {
+				beforeFields += "  category: Maybe String\n"
+				beforeValue += ", category: Nothing"
+			}
+			if version == 4 {
+				beforeFields += "  archived: Maybe String\n"
+				beforeValue += ", archived: Nothing"
+			}
+			for _, edit := range [][2]string{{beforeFields + "}", beforeFields + "  " + revision.field + ": Maybe String\n}"}, {beforeValue + " }", beforeValue + ", " + revision.field + ": Nothing }"}} {
 				if strings.Count(text, edit[0]) != 1 {
 					t.Fatalf("lesson edit target changed: %q", edit[0])
 				}
@@ -110,7 +147,14 @@ func TestCompiledAdditiveLessonRetainsRows(t *testing.T) {
 			// A schema edit invalidates its unrefreshed header. The command resolves it.
 			command("migrate", "generate", entry)
 			check(child)
-			check("migrations/additive-notes/v2.tesl")
+			check(fmt.Sprintf("migrations/additive-notes/v%d.tesl", version))
+		}
+		if revision.key == 3 {
+			// Frozen schema bytes are an independent guard, even if a new
+			// compiler says it supports the same stored-value contract.
+			assertMigrationBuildRefuses(t, ctx, incompatibleCompiler, project, entry)
+			assertFrozenMigrationSources(t, project, frozenByA)
+			assertChangedFrozenSourceRefuses(t, ctx, compiler, project, entry, frozenByA)
 		}
 		check(entry)
 		generated := filepath.Join(t.TempDir(), fmt.Sprintf("go-v%d", version))
@@ -127,7 +171,22 @@ func TestCompiledAdditiveLessonRetainsRows(t *testing.T) {
 		if out, err := build.CombinedOutput(); err != nil {
 			t.Fatalf("lesson V%d application: %v\n%s", version, err, out)
 		}
-		binaries[version] = binary
+		binaries[revision.key], versions[revision.key] = binary, version
+		if upgrade && revision.key == 2 {
+			interrupted := filepath.Join(t.TempDir(), "app-a2-crash")
+			build := exec.CommandContext(ctx, "go", "build", "-race", "-tags=tesl_migration_test", "-o", interrupted, "./cmd/app")
+			build.Dir = generated
+			if out, err := build.CombinedOutput(); err != nil {
+				t.Fatalf("instrumented interruption application: %v\n%s", err, out)
+			}
+			binaries[7] = interrupted
+		}
+		if revision.key == 6 {
+			frozenByA = frozenMigrationSources(t, project)
+		}
+		if revision.key == 4 {
+			assertFrozenMigrationSources(t, project, frozenByA)
+		}
 		current, err := os.ReadFile(filepath.Join(project, entry))
 		if err != nil || !bytes.Equal(original, current) {
 			t.Fatal("migration changed the application, handlers or API tests")
@@ -197,7 +256,7 @@ func TestCompiledAdditiveLessonRetainsRows(t *testing.T) {
 	if _, err := installer.Exec(ctx, "revoke "+roles.Owner+" from "+setupRole); err != nil {
 		t.Fatal(err)
 	}
-	status := func(version, current int) {
+	status := func(version, current int) teslrt.PgMigrationStatus {
 		t.Helper()
 		commandCtx, stop := context.WithTimeout(ctx, 5*time.Second)
 		defer stop()
@@ -208,9 +267,10 @@ func TestCompiledAdditiveLessonRetainsRows(t *testing.T) {
 			t.Fatalf("standalone schema command: %v\n%s", err, text)
 		}
 		var report teslrt.PgMigrationStatus
-		if err := json.Unmarshal(text, &report); err != nil || report.Kind != "schema-status" || report.BinaryVersion != version || report.CurrentVersion != current || report.HistoryError != "" {
+		if err := json.Unmarshal(text, &report); err != nil || report.Kind != "schema-status" || report.BinaryVersion != versions[version] || report.CurrentVersion != current || report.HistoryError != "" {
 			t.Fatalf("standalone status misreported or performed an expansion: %s, %v", text, err)
 		}
+		return report
 	}
 	status(1, 0) // Operator command reports installation without starting the app.
 	client := &http.Client{Timeout: time.Second}
@@ -317,6 +377,10 @@ func TestCompiledAdditiveLessonRetainsRows(t *testing.T) {
 	defer stopOld()
 	request(old, "POST", "retained", `{"title":"  First note  "}`, 200, "First note")
 	status(2, 1) // The newer command does not run its pending expansion.
+	if upgrade {
+		interruptLessonExpansion(t, ctx, binaries[7], applicationEnvironment, interruption)
+		assertMigrationStartupRefuses(t, ctx, binaries[3], applicationEnvironment, installer, "abi")
+	}
 	current, stopCurrent := start(2)
 	defer stopCurrent()
 	status(1, 2) // An older operator binary can inspect a later additive epoch.
@@ -346,5 +410,46 @@ func TestCompiledAdditiveLessonRetainsRows(t *testing.T) {
 	var rows, nulls int
 	if err := installer.QueryRow(ctx, "select count(*),count(*) filter(where category is null) from additive_notes.lesson_migration_notes").Scan(&rows, &nulls); err != nil || rows != 4 || nulls != 4 {
 		t.Fatalf("retained rows or nullable defaults changed: %d %d %v", rows, nulls, err)
+	}
+	if upgrade {
+		third, stopThird := start(6)
+		defer stopThird()
+		request(third, "GET", "retained", "", 200, "First note")
+		before := status(6, 3)
+		after := status(3, 3)
+		if before.SourceCompilerABI == after.SourceCompilerABI || before.StoredValueCompatibility != after.StoredValueCompatibility || after.StoredValueCompatibility == "" {
+			t.Fatalf("fixture must use distinct real builds with the same compatibility contract: A=%+v B=%+v", before, after)
+		}
+		upgraded, stopUpgraded := start(3)
+		defer stopUpgraded()
+		request(upgraded, "GET", "retained", "", 200, "First note")
+		request(upgraded, "POST", "compiler-b", `{"title":"Compiler B writer"}`, 200, "Compiler B writer")
+		request(current, "GET", "compiler-b", "", 200, "Compiler B writer")
+		newRevision, stopNewRevision := start(4)
+		defer stopNewRevision()
+		status(1, 4)
+		status(2, 4)
+		status(3, 4)
+		request(newRevision, "GET", "retained", "", 200, "First note")
+		request(newRevision, "POST", "compiler-b-v4", `{"title":"New revision"}`, 200, "New revision")
+		request(current, "GET", "compiler-b-v4", "", 200, "New revision")
+		stopCurrent()
+		oldCompilerRestart, stopOldCompilerRestart := start(2)
+		defer stopOldCompilerRestart()
+		request(oldCompilerRestart, "GET", "compiler-b-v4", "", 200, "New revision")
+		request(oldCompilerRestart, "POST", "compiler-a-restart", `{"title":"Still compatible"}`, 200, "Still compatible")
+		request(newRevision, "GET", "compiler-a-restart", "", 200, "Still compatible")
+		for i, base := range []string{upgraded, newRevision, oldCompilerRestart} {
+			id := fmt.Sprintf("compiler-invalid-%d", i)
+			for _, body := range []string{`{"title":"   "}`, `{"title":42}`, `{"title":"` + strings.Repeat("a", 81) + `"}`} {
+				request(base, "POST", id, body, 400, "")
+				request(base, "GET", id, "", 404, "")
+			}
+		}
+		assertMigrationBuildProvenance(t, ctx, installer, before.SourceCompilerABI, after.SourceCompilerABI, after.StoredValueCompatibility)
+		assertMigrationStartupRefuses(t, ctx, binaries[5], applicationEnvironment, installer, "stored-value")
+		if err := installer.QueryRow(ctx, "select count(*),count(*) filter(where category is null and archived is null and label is null) from additive_notes.lesson_migration_notes").Scan(&rows, &nulls); err != nil || rows != 7 || nulls != 7 {
+			t.Fatalf("compiler upgrade changed retained rows or omission defaults: %d %d %v", rows, nulls, err)
+		}
 	}
 }

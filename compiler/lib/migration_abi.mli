@@ -6,6 +6,11 @@ type t
 type error = {path:string;message:string}
 val current : unit -> (t,error) result
 val id : t -> string
+(** Explicit compiler-owned stored-value semantics contract plus the active
+    stdlib source digests. Independent of unrelated build bytes; equality is not
+    permission to switch a persisted processing ABI. *)
+val stored_value_compatibility : t -> string
+val valid_stored_value_compatibility : string -> bool
 (** Verify that mutable stdlib resources still have the same identity. This does
     not attest a database's processing ABI or authorize an ABI drift override. *)
 val verify : t -> (unit,error) result

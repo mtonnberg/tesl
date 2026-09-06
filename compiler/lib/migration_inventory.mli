@@ -21,8 +21,14 @@ type field_change =
     tag does not execute old semantics or validate a persisted history record. *)
 val load : compiler_abi:string -> root_file:string ->
   (t, Migration_ir.error) result
+(** Production callers obtain the explicit contract from Migration_abi.current.
+    None preserves the legacy same-ABI-only comparison. A contract controls
+    canonical comparison, not execution authority or database admission. *)
+val load_with_compatibility : stored_value_compatibility:string option ->
+  compiler_abi:string -> root_file:string -> (t, Migration_ir.error) result
 
 val compiler_abi : t -> string
+val stored_value_compatibility : t -> string option
 val module_names : t -> string list
 val root_module : t -> string
 
@@ -43,8 +49,9 @@ type declaration = {
     constructors are aliases of their defining declaration, not extra entries. *)
 val declarations : t -> declaration list
 
-(** Compiler-local semantic equality evidence. This checks full canonical trees
-    and can only be constructed from checked inventories in one family and ABI.
+(** Checked source semantic equality evidence. This checks full canonical trees
+    in one family and explicit compatibility contract, or one ABI for two legacy
+    inventories. Both inventories are checked by the executing compiler.
     It is NOT authority to cast values/proofs or accept a persisted row. The
     contextual Migration checker must additionally establish the adjacent source
     and target versions, sealed fact ownership and recorded execution semantics
@@ -100,7 +107,7 @@ val owned_type_definition : t -> Migration_canonical.node ->
     A change needs separate physical/catalog and admitted-writer safety checks. *)
 val entity_indexes : t -> entity:string -> Migration_canonical.node option
 
-(** Compare saved, checked inventories in one family and compiler ABI. Unchanged
+(** Compare checked inventories in one family and compatible semantic domain. Unchanged
     locations are folded out. [definition_changed=false] identifies a dependency
     change such as a codec, nested ADT or fact producer under unchanged field text.
     This is field impact, not a physical-catalog diff, compatibility proof, verified

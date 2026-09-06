@@ -276,14 +276,16 @@ let expansion_chain_boundary () = with_project (fun root path ->
  generate root;edit_schema path (fun s -> append_field s "caption: Maybe String");generate root;
  generate ~next:true root;edit_schema path (fun s -> append_field s "active: Maybe Bool");generate root;
  let expected = get (plan root) in
- let history = match Migration_history_sources.discover ~compiler_abi:(P.compiler_abi expected)
+ let stored_value_compatibility = Migration_abi.stored_value_compatibility (Result.get_ok (Migration_abi.current ())) in
+ let history = match Migration_history_sources.discover_with_compatibility ~stored_value_compatibility:(Some stored_value_compatibility)
+   ~compiler_abi:(P.compiler_abi expected)
    ~project_root:root ~family:"NotesSchema" with Ok h -> h | Error e -> fail e.message in
  let schema_sources = Migration_history_sources.frozen history @ [Migration_history_sources.current history] in
  let schemas = List.map (fun (s : Migration_history_sources.schema) -> s.inventory) schema_sources in
  let sources = Migration_history_sources.completed_migrations history @ Option.to_list (Migration_history_sources.current_migration history) in
  let edges = List.map (fun (s : Migration_history_sources.migration_source) ->
    let module_ = match Parser.parse_module s.path s.contents with Ok m -> m | Err e -> fail e.msg in
-   match get (Migration_declaration.check ~compiler_abi:(P.compiler_abi expected) ~source:s.contents module_) with
+   match get (Migration_declaration.check ~stored_value_compatibility ~compiler_abi:(P.compiler_abi expected) ~source:s.contents module_) with
     Some edge -> edge | None -> fail "checked fixture edge missing") sources in
  let derive = Migration_expansion.generate ~schemas ~edges in
  List.iter (fun initial_version ->

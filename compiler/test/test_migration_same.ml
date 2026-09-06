@@ -277,6 +277,28 @@ let retained_queries () =
     nested_adt ();
     harmless_source_changes ())
 
+let explicit_compatibility () = with_project (fun root write ->
+  let _,_,path = fixture root write shared in
+  let contract = "tesl-stored-value-v1:" ^ String.make 64 'a' in
+  let compatible ?(contract=contract) abi file = get (Migration_inventory.load_with_compatibility
+    ~stored_value_compatibility:(Some contract) ~compiler_abi:abi ~root_file:file) in
+  let before = compatible "compiler-A" (Filename.concat root "schema/notes/v1.tesl") in
+  let after = compatible "compiler-B" path in
+  List.iter (fun (ns,name) -> ignore (equal (verify before after ns name)))
+    [Type,"Id";Type,"Payload";Type,"State";Predicate,"Positive";Codec,"Payload";Codec,"State"];
+  check int "all eligible checked closures agree across compatible builds" 6 (List.length (candidates before after));
+  let missing_contract = load ~abi:"compiler-A" path in
+  ignore (rejected Incompatible_inventories (verify before missing_contract Predicate "Positive"));
+  let changed_contract = compatible ~contract:("tesl-stored-value-v1:" ^ String.make 64 'b') "compiler-A" path in
+  ignore (rejected Incompatible_inventories (verify before changed_contract Predicate "Positive"));
+  ignore (write "schema/notes/v-current/shared.tesl" (replace "threshold() -> Int = 0" "threshold() -> Int = 1" shared));
+  let changed_check = compatible "compiler-B" path in
+  ignore (rejected Different_closure (verify before changed_check Predicate "Positive"));
+  ignore (write "schema/notes/v-current/shared.tesl" (replace "\"body\"" "\"newBody\"" shared));
+  let changed_codec = compatible "compiler-B" path in
+  ignore (rejected Different_closure (verify before changed_codec Codec "Payload"));
+  ignore (rejected Different_closure (verify before changed_codec Type "Payload")))
+
 let () = run "migration-same" ["checked semantic equality", [
   test_case "complete private inventory and domain-separated evidence" `Quick complete_inventory;
   test_case "private helper change and precise source locations" `Quick changed_private_helper;
@@ -293,4 +315,5 @@ let () = run "migration-same" ["checked semantic equality", [
   test_case "recursive ADT and codec closure terminates" `Quick recursive_closure;
   test_case "candidate order and declaration identity" `Quick candidate_identity_and_order;
   test_case "retained editor query caches cannot hide changed dependencies" `Quick retained_queries;
+  test_case "explicit compatibility preserves complete proof and codec checks" `Quick explicit_compatibility;
 ]]

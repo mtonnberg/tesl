@@ -12,11 +12,12 @@ import (
 
 // PgMigrationControlRoles names operator-provisioned roles. Owner must be a
 // no-login control owner; Worker must have no administrative or owner membership.
-type PgMigrationControlRoles struct{ Owner, Worker string }
+type PgMigrationControlRoles struct{ Owner, Worker, Request string }
 
 type PgMigrationControlVersion struct {
 	Version, Sequence                                        int
 	Step, SnapshotHash, ArtifactHash, SourceABI, FenceDomain string
+	StoredValueCompatibility                                 string
 	Protocol                                                 int
 	EpochPreserving                                          *bool
 }
@@ -76,7 +77,11 @@ func pgControlTransaction(ctx context.Context, conn *pgx.Conn, exclusive bool, f
 }
 
 func pgControlSnapshot(ctx context.Context, conn *pgx.Conn, f func(pgx.Tx) error) (resultErr error) {
-	tx, err := conn.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead})
+	return pgControlSnapshotMode(ctx, conn, pgx.ReadWrite, f)
+}
+
+func pgControlSnapshotMode(ctx context.Context, conn *pgx.Conn, access pgx.TxAccessMode, f func(pgx.Tx) error) (resultErr error) {
+	tx, err := conn.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: access})
 	if err != nil {
 		return err
 	}
@@ -140,7 +145,7 @@ func pgInstallMigrationControl(ctx context.Context, conn *pgx.Conn, namespace st
 		return state, fmt.Errorf("invalid migration namespace or installation version")
 	}
 	err := pgControlTransaction(ctx, conn, true, func(tx pgx.Tx) error {
-		if err := pgControlRoles(ctx, tx, roles.Owner, roles.Worker, true); err != nil {
+		if err := pgControlRoles(ctx, tx, roles, true); err != nil {
 			return err
 		}
 		exists, err := pgControlNamespace(ctx, tx, namespace, roles.Owner, roles.Worker)
@@ -188,15 +193,19 @@ func pgInstallMigrationControl(ctx context.Context, conn *pgx.Conn, namespace st
 		if err := pgControlTableCatalog(ctx, tx, "public", roles.Owner, roles.Worker, pgMigrationFenceRegistry); err != nil {
 			return err
 		}
-		if _, err := tx.Exec(ctx, "grant usage on schema public to "+quoteIdentifier(roles.Worker)+
-			"; grant select on public.tesl_fence_namespaces to "+quoteIdentifier(roles.Worker)); err != nil {
+		readers := quoteIdentifier(roles.Worker)
+		if roles.Request != "" {
+			readers += "," + quoteIdentifier(roles.Request)
+		}
+		if _, err := tx.Exec(ctx, "grant usage on schema public to "+readers+
+			"; grant select on public.tesl_fence_namespaces to "+readers); err != nil {
 			return err
 		}
 		for _, spec := range pgMigrationControlTables {
 			if _, err := tx.Exec(ctx, "create table "+pgx.Identifier{namespace, spec.name}.Sanitize()+" ("+spec.columns+")"); err != nil {
 				return err
 			}
-			if _, err := tx.Exec(ctx, "grant select on "+pgx.Identifier{namespace, spec.name}.Sanitize()+" to "+quoteIdentifier(roles.Worker)); err != nil {
+			if _, err := tx.Exec(ctx, "grant select on "+pgx.Identifier{namespace, spec.name}.Sanitize()+" to "+readers); err != nil {
 				return err
 			}
 		}
@@ -205,12 +214,21 @@ func pgInstallMigrationControl(ctx context.Context, conn *pgx.Conn, namespace st
 				return err
 			}
 			qualified := pgx.Identifier{namespace, fn.name}.Sanitize() + "(" + pgControlArgumentTypes(fn) + ")"
-			if _, err := tx.Exec(ctx, "revoke all on function "+qualified+" from public; grant execute on function "+qualified+" to "+quoteIdentifier(roles.Worker)); err != nil {
+			grantees := pgControlFunctionRoles(roles, fn)
+			for i := range grantees {
+				grantees[i] = quoteIdentifier(grantees[i])
+			}
+			if _, err := tx.Exec(ctx, "revoke all on function "+qualified+" from public; grant execute on function "+qualified+" to "+strings.Join(grantees, ",")); err != nil {
 				return err
 			}
 		}
 		if _, err := tx.Exec(ctx, "grant usage, create on schema "+quoteIdentifier(namespace)+" to "+quoteIdentifier(roles.Worker)); err != nil {
 			return err
+		}
+		if roles.Request != "" {
+			if _, err := tx.Exec(ctx, "grant usage on schema "+quoteIdentifier(namespace)+" to "+quoteIdentifier(roles.Request)); err != nil {
+				return err
+			}
 		}
 		ns := quoteIdentifier(namespace) + "."
 		if _, err := tx.Exec(ctx, `with allocated as (
@@ -253,7 +271,7 @@ func InspectPgMigrationControl(ctx context.Context, conn *pgx.Conn, namespace st
 		return state, fmt.Errorf("invalid migration namespace")
 	}
 	err := pgControlTransaction(ctx, conn, false, func(tx pgx.Tx) error {
-		if err := pgControlRoles(ctx, tx, roles.Owner, roles.Worker, false); err != nil {
+		if err := pgControlRoles(ctx, tx, roles, false); err != nil {
 			return err
 		}
 		exists, err := pgControlNamespace(ctx, tx, namespace, roles.Owner, roles.Worker)
@@ -270,23 +288,44 @@ func InspectPgMigrationControl(ctx context.Context, conn *pgx.Conn, namespace st
 }
 
 func pgInspectControl(ctx context.Context, tx pgx.Tx, namespace string, roles PgMigrationControlRoles) (PgMigrationControlState, error) {
+	return pgInspectControlMode(ctx, tx, namespace, roles, false)
+}
+
+func pgInspectControlReadOnly(ctx context.Context, tx pgx.Tx, namespace string, roles PgMigrationControlRoles) (PgMigrationControlState, error) {
+	return pgInspectControlMode(ctx, tx, namespace, roles, true)
+}
+
+func pgInspectControlMode(ctx context.Context, tx pgx.Tx, namespace string, roles PgMigrationControlRoles, readOnly bool) (PgMigrationControlState, error) {
 	var state PgMigrationControlState
+	inspectTable, principal := pgControlTableCatalog, roles.Worker
+	if readOnly {
+		inspectTable, principal = pgControlTableCatalogReadOnly, roles.Request
+	}
 	if exists, err := pgControlNamespace(ctx, tx, namespace, roles.Owner, roles.Worker); err != nil || !exists {
 		if err == nil {
 			err = fmt.Errorf("migration control namespace is missing")
 		}
 		return state, err
 	}
-	if err := pgControlTableCatalog(ctx, tx, "public", roles.Owner, roles.Worker, pgMigrationFenceRegistry); err != nil {
+	if err := inspectTable(ctx, tx, "public", roles.Owner, principal, pgMigrationFenceRegistry); err != nil {
 		return state, err
 	}
 	for _, spec := range pgMigrationControlTables {
-		if err := pgControlTableCatalog(ctx, tx, namespace, roles.Owner, roles.Worker, spec); err != nil {
+		if err := inspectTable(ctx, tx, namespace, roles.Owner, principal, spec); err != nil {
 			return state, err
+		}
+		if spec.name == "tesl_schema_meta" {
+			var format int
+			if err := tx.QueryRow(ctx, "select format_version from "+quoteIdentifier(namespace)+".tesl_schema_meta where id=1").Scan(&format); err != nil {
+				return state, fmt.Errorf("migration control format is unavailable: %w", err)
+			}
+			if format != pgMigrationControlFormat {
+				return state, fmt.Errorf("unsupported migration control format %d; format %d with stored-value compatibility is required; no automatic upgrade is available", format, pgMigrationControlFormat)
+			}
 		}
 	}
 	for _, fn := range pgMigrationControlFunctions(namespace) {
-		if err := pgControlFunctionCatalog(ctx, tx, namespace, roles.Owner, roles.Worker, fn); err != nil {
+		if err := pgControlFunctionCatalog(ctx, tx, namespace, roles, fn); err != nil {
 			return state, err
 		}
 	}
@@ -316,7 +355,7 @@ func pgInspectControl(ctx context.Context, tx pgx.Tx, namespace string, roles Pg
 		(state.Current != 0 && (state.Current < state.InitialVersion || state.MinVersion != state.InitialVersion || state.InstallingVersion != 0 || state.CompatFloor != state.InitialVersion)) {
 		return state, fmt.Errorf("migration control state is inconsistent or uses an unsupported format/protocol")
 	}
-	rows, err := tx.Query(ctx, "select version,seq,step,coalesce(snapshot_hash,''),artefact_hash,source_abi,fence_domain,protocol_level,epoch_preserving from "+ns+"tesl_schema_versions order by version,step,seq")
+	rows, err := tx.Query(ctx, "select version,seq,step,coalesce(snapshot_hash,''),artefact_hash,source_abi,fence_domain,stored_value_compatibility,protocol_level,epoch_preserving from "+ns+"tesl_schema_versions order by version,step,seq")
 	if err != nil {
 		return state, err
 	}

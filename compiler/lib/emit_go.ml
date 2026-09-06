@@ -10221,7 +10221,7 @@ let runtime_file_gates : (string * string list) list = [
      the reason the HTTP half does: it pulls a third-party driver and its whole dependency
      chain into a binary that would otherwise require nothing. *)
    "postgres", [ "postgres.go"; "database.go"; "dbquery.go"; "debug_sql.go"; "pgstores.go";
-                 "pgpubsub.go"; "migration_program.go"; "migration_control.go"; "migration_expand.go"; "migration_admission.go"; "migration_open.go"; "migration_status.go"; "migration_command.go"; "migration_expand_history.go"; "migration_control_spec.go"; "migration_control_catalog.go"; "migration_plan.go"; "migration_plan_wire.go"; "migration_plan_hash.go"; "migration_catalog.go"; "migration_catalog_compare.go"; "migration_catalog_probe.go"; "migration_literal.go"; "migration_boundary.go"; "migration_boundary_testbuild.go" ];
+                 "pgpubsub.go"; "migration_program.go"; "migration_control.go"; "migration_expand.go"; "migration_admission.go"; "migration_open.go"; "migration_status.go"; "migration_command.go"; "migration_expand_history.go"; "migration_control_spec.go"; "migration_control_catalog.go"; "migration_plan.go"; "migration_plan_wire.go"; "migration_plan_hash.go"; "migration_catalog.go"; "migration_catalog_compare.go"; "migration_catalog_probe.go"; "migration_catalog_expected.go"; "migration_control_expected.go"; "migration_worker.go"; "migration_facilities.go"; "migration_literal.go"; "migration_boundary.go"; "migration_boundary_testbuild.go" ];
   (* `agent.go` ships only to a program that talks to a model.  Not a dependency argument —
      everything in it is standard library — but a runtime file a program has no use for is
      still surface a reader has to rule out, and the gate costs nothing. *)
@@ -10836,6 +10836,10 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
           "PoolSize", Option.map (go_config_pool_size database.db_loc) (setting "poolSize");
           "SocketDir", text "socket";
           "ControlOwner", text "controlOwner";
+          "MigrationTopology", Option.map go_quote (setting "topology");
+          "RequestRole", text "requestRole";
+          "WorkerRole", text "workerRole";
+          "DDLConnection", text "ddlConnection";
           "Schema", (if database.db_schema = "" then None
                      else Some (go_quote database.db_schema)) ]
     in
@@ -13165,7 +13169,8 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?(entity_bindings=[]) ?(mi
           (* These names are only meaningful inside a `database` declaration, which is where
              the backend is read and where the connection is built. *)
           | "Database" | "Memory" | "DatabaseBackend" | "Postgres" | "PostgresConfig"
-          | "PostgresConnection" | "TcpConnection" | "SocketConnection" -> ()
+          | "PostgresConnection" | "TcpConnection" | "SocketConnection"
+          | "MigrationTopology" | "Worker" | "Embedded" -> ()
           | other -> unsupported import.loc
             "Go backend does not emit the `Tesl.Database` export `%s`: the module is wired, that \
              export is not — test_go_stdlib_export_seam.ml holds the whole inventory" other) exposed

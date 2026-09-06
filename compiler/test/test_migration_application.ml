@@ -36,7 +36,10 @@ database Main = Database {
 }
 |}
 let start root family version =
-  let p = get (G.start ~compiler_abi:"fixture-ABI" ~project_root:root ~family ~version ~documents:[]) in
+  let context = Result.get_ok (Migration_abi.current ()) in
+  let p = get (G.start_with_compatibility
+    ~stored_value_compatibility:(Some (Migration_abi.stored_value_compatibility context))
+    ~compiler_abi:(Migration_abi.id context) ~project_root:root ~family ~version ~documents:[]) in
   (match M.verify_disk p.manifest with Ok () -> () | Error _ -> fail "stale fixture");
   List.iter (fun (e : M.edit) -> save e.path e.after) (M.edits p.manifest)
 let with_project ?(versions=1) f =

@@ -118,6 +118,7 @@ let vkind_label : Validation_structural.vkind -> string * string option = functi
   | VSub sub -> Printf.sprintf "%s { ... }" sub, None
   | VConn -> "TcpConnection { host, port } | SocketConnection { path }", None
   | VBackend -> "Postgres (PostgresConfig { ... }) | Memory", None
+  | VMigrationTopology -> "Worker | Embedded", Some "versioned schema only; deployment default"
   | VBackoff -> "Exponential | Fixed", None
   | VDatabaseRef -> "<declared database name>", None
   | VEntityList -> "[<declared entities>]", None

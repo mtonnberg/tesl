@@ -64,6 +64,14 @@ type PostgresConfig struct {
 	// ControlOwner is the no-login owner for versioned migration metadata.
 	// Omission selects tesl_control; this is application connection configuration.
 	ControlOwner string
+	// Worker separates request DML from schema execution. Empty selects Worker
+	// in deployed processes and Embedded during local development.
+	MigrationTopology string
+	RequestRole       string
+	WorkerRole        string
+	// DDLConnection is an operator-trusted direct/session-affine DSN used only
+	// by schema commands and the Embedded executor, never by request pools.
+	DDLConnection string
 }
 
 // PostgresColumn describes one column, as the entity declares it.
@@ -175,7 +183,8 @@ const defaultPostgresPoolSize = 10
 func postgresPoolConfig(config PostgresConfig, dsn string) *pgxpool.Config {
 	poolConfig, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
-		panic("database: invalid PostgreSQL configuration: " + err.Error())
+		// pgx parse errors include the DSN, which can contain credentials.
+		panic("database: invalid PostgreSQL configuration")
 	}
 	size := config.PoolSize
 	if size == 0 {

@@ -61,9 +61,10 @@ let assert_clean ~ctx src =
 (* ── The reject matrix ────────────────────────────────────────────────────── *)
 
 let import_for = function
-  | "Database" | "Postgres" | "Memory" ->
+  | "Database" | "Postgres" | "Memory" | "MigrationTopology" | "Worker" | "Embedded" ->
     "import Tesl.Database exposing [Database, DatabaseBackend, Postgres, \
-     Memory, PostgresConfig, PostgresConnection, TcpConnection, SocketConnection]"
+     Memory, PostgresConfig, PostgresConnection, TcpConnection, SocketConnection, \
+     MigrationTopology, Worker, Embedded]"
   | "Queue" | "Job" ->
     "import Tesl.Queue exposing [Queue, QueueRetryStrategy, Exponential, \
      Fixed, Linear, Job]"
@@ -81,6 +82,9 @@ let expected_fragment = function
     "is a config-only stdlib name"
   | "Postgres" | "Memory" ->
     "is a config-block constructor (of `DatabaseBackend`)"
+  | "Worker" | "Embedded" ->
+    "is a config-block constructor (of `MigrationTopology`)"
+  | "MigrationTopology" -> "is a config-block type consumed at compile time"
   | "Utc" | "EuropeStockholm" ->
     "is a `TimeZone` constructor, not a type"
   | "Usd" ->
@@ -107,7 +111,7 @@ let positions name = [
 
 let reject_names =
   [ "Database"; "Postgres"; "Memory"; "Queue"; "Job"; "App"; "SmtpConfig";
-    "SseChannel"; "Utc"; "EuropeStockholm"; "Usd" ]
+    "SseChannel"; "Utc"; "EuropeStockholm"; "Usd"; "MigrationTopology"; "Worker"; "Embedded" ]
 
 let test_reject_matrix () =
   List.iter (fun name ->
@@ -318,6 +322,8 @@ module SS = Set.Make (String)
 let pre_refactor_literal =
   [ "Database"; "DatabaseBackend"; "Postgres"; "Memory"; "PostgresConfig";
     "PostgresConnection"; "TcpConnection"; "SocketConnection";
+    (* Versioned migration topology is likewise consumed as declaration configuration. *)
+    "MigrationTopology"; "Worker"; "Embedded";
     "Queue"; "QueueRetryStrategy"; "QueueRetryConfig"; "QueueRetryBackoff";
     "Exponential"; "Fixed"; "Linear";
     "Email"; "SmtpConfig"; "SseChannel"; "App"; "Job"; "Cache";

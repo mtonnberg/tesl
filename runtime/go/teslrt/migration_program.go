@@ -13,6 +13,7 @@ type PgCompiledMigrationHistory struct {
 	Database, Family, Namespace string
 	CurrentVersion              int
 	SourceCompilerABI           string
+	StoredValueCompatibility    string
 	HistoryJSON                 string
 }
 
@@ -21,13 +22,13 @@ var compiledMigrationHistories sync.Map // schema family -> immutable compiled i
 // Called only by the compiler-generated file in this runtime package. Keeping
 // the data in Go initialization links it into standalone executables; startup
 // never reads a mutable source checkout or adjacent JSON file.
-func registerCompiledMigrationHistory(database, family, namespace string, version int, sourceABI, history string) {
-	if database == "" || family == "" || namespace == "" || sourceABI == "" || history == "" ||
+func registerCompiledMigrationHistory(database, family, namespace string, version int, sourceABI, compatibility, history string) {
+	if database == "" || family == "" || namespace == "" || sourceABI == "" || !pgStoredValueCompatibility(compatibility) || history == "" ||
 		version < 1 || version > 2147483646 || !strings.HasSuffix(family, "Schema") {
 		panic("database: invalid compiler-generated migration history")
 	}
 	info := PgCompiledMigrationHistory{Database: database, Family: family, Namespace: namespace,
-		CurrentVersion: version, SourceCompilerABI: sourceABI, HistoryJSON: history}
+		CurrentVersion: version, SourceCompilerABI: sourceABI, StoredValueCompatibility: compatibility, HistoryJSON: history}
 	previous, loaded := compiledMigrationHistories.LoadOrStore(family, info)
 	if loaded && previous != info {
 		panic("database: conflicting compiled migration histories for " + family)

@@ -27,6 +27,9 @@ val infer_project_root : entry_file:string -> database:string option -> (string,
 val resolve : compiler_abi:string -> project_root:string -> entry_file:string ->
   database:string option -> documents:Migration_manifest.document list ->
   (t,error list) result
+val resolve_with_compatibility : stored_value_compatibility:string option ->
+  compiler_abi:string -> project_root:string -> entry_file:string ->
+  database:string option -> documents:Migration_manifest.document list -> (t,error list) result
 val selection : t -> selection
 (** Immutable guards captured by selection, including the complete application
     imports and schema/migration discovery. Consumers recheck source and disk

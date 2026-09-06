@@ -4,10 +4,23 @@ module V = Validation_common
 module Build = Migration_build_snapshot
 type error = {path:string;message:string}
 type resource = {name:string;path:string;source:string;digest:string}
-type t = {id:string;resources:resource list}
+type t = {id:string;stored_value_compatibility:string;resources:resource list}
 exception Invalid of error
 let reject path message = raise (Invalid {path;message})
 let id t = t.id
+let stored_value_compatibility t = t.stored_value_compatibility
+(* This is a reviewed compiler/runtime semantics contract, not a build version.
+   Bump it when stored values, proof interpretation, codecs, primitive behavior
+   or the canonical/storage mapping cease to be compatible. It never permits a
+   different executor to resume a pinned transforming generation.
+   Revision 2 includes the proof-ownership, server auth-type and queue-worker
+   admission security fixes; do not promise compatibility with earlier checks. *)
+let stored_value_semantics_revision = "tesl-stored-value-semantics-2"
+let valid_stored_value_compatibility value =
+  let prefix = "tesl-stored-value-v1:" in
+  String.starts_with ~prefix value && String.length value = String.length prefix + 64 &&
+  String.for_all (function '0'..'9' | 'a'..'f' -> true | _ -> false)
+    (String.sub value (String.length prefix) 64)
 let source_inputs t = List.map (fun r -> r.path,r.digest) t.resources |> List.sort compare
 let frame values = String.concat "" (List.map (fun value -> string_of_int (String.length value) ^ ":" ^ value) values)
 let component label values = frame (label :: List.map (fun (name,value) -> frame [name;value]) (List.sort compare values))
@@ -36,7 +49,9 @@ let current () =
     let resources = Hashtbl.to_seq chosen |> List.of_seq |> List.sort compare |> List.map snd in
     let stdlib = component "lifted-stdlib" (List.map (fun r -> r.name,r.digest) resources) in
     let id = "tesl-source-abi-v1:" ^ Hash.digest (frame ["migration-compiler";compiler;runtime;stdlib]) in
-    Ok {id;resources}
+    let stored_value_compatibility = "tesl-stored-value-v1:" ^
+      Hash.digest (frame [stored_value_semantics_revision;stdlib]) in
+    Ok {id;stored_value_compatibility;resources}
   with
   | Invalid error -> Error error
   | Sys_error message | Invalid_argument message | Failure message -> Error {path="<compiler>";message}

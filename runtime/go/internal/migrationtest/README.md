@@ -20,6 +20,30 @@ socket and no TCP listener. It runs the race detector. `go test` without
 `TESL_MIGRATION_TEST_DSN` runs the pure model and controller tests and explicitly
 skips database cases; that is not a PostgreSQL gate. The controller tests also
 need permission to create a local Unix socket.
+The dedicated runner and matrix set `TESL_MIGRATION_TEST_REQUIRE_POSTGRES=1`:
+missing or unavailable PostgreSQL must fail those runtime gates rather than
+silently turning them into a skipped-test success.
+
+`TestCompiledMigrationCompilerUpgradeRetainsRows` builds actual compiler A/B/C
+variants in an isolated source copy. B changes only a query source comment; C
+changes the explicit stored-value semantic revision. It runs the complete lesson83
+app through A's V1–V3 and B's V3–V4 against retained PostgreSQL rows, with unchanged
+handlers/API assertions, preserved creator provenance and old-binary restart.
+An interrupted A intent refuses B before mutation; A completes it before B serves.
+Changed frozen source and incompatible C compilation/startup refuse. Only the
+crash binary uses test hooks; the serving binaries use the ordinary runtime.
+This case needs Dune and OCaml as well as Go, and the package timeout allows its
+isolated compiler builds. It never rewrites the working compiler or artifact ABIs.
+
+`TestCompiledWorkerLessonRetainsRows` compiles both revisions of lesson84 and runs
+their unchanged HTTP applications with separate request and schema-worker logins.
+The fixture revokes request TEMP and namespace/public CREATE privileges, verifies
+request startup waits in read-only snapshots, then starts the worker as a separate
+process. V1 and V2 retain rows and serve together; an old binary restarts after V2
+expansion. Actual denied SQL and wrong-process credentials verify isolation. The
+test removes source and generated Go before deploying the ordinary binaries.
+The runtime gate also compares read-only catalog expectations to independently
+created PostgreSQL objects across the supported-major CI matrix.
 
 The control bootstrap is authored in `testdata/control-bootstrap.sql`, executed
 by the database fixtures, and rendered into the normative roadmap. A sync test

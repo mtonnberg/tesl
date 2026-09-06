@@ -1380,12 +1380,15 @@ let config_stdlib_seed (m : module_form) :
       [ ("TcpConnection", [ ("host", TCon "String"); ("port", TCon "Int") ]);
         ("SocketConnection", [ ("path", TCon "String") ]) ]
       :: adt "DatabaseBackend" []
-      [ ("Postgres", [ ("config", TCon "PostgresConfig") ]); ("Memory", []) ] :: !adts;
+      [ ("Postgres", [ ("config", TCon "PostgresConfig") ]); ("Memory", []) ]
+      :: adt "MigrationTopology" [] [ ("Worker", []); ("Embedded", []) ] :: !adts;
     ctors :=
       fn_ctor "PostgresConnection" "TcpConnection" [ TCon "String"; TCon "Int" ]
       :: fn_ctor "PostgresConnection" "SocketConnection" [ TCon "String" ]
       :: fn_ctor "DatabaseBackend" "Postgres" [ TCon "PostgresConfig" ]
       :: nullary_ctor "DatabaseBackend" "Memory"
+      :: nullary_ctor "MigrationTopology" "Worker"
+      :: nullary_ctor "MigrationTopology" "Embedded"
       :: !ctors
   end;
   if imported "Tesl.Queue" then begin

@@ -64,9 +64,9 @@ let mark_next file source ~previous ~current =
   match Migration_provenance.annotate view ~previous ~current nodes with
   | Ok source -> source | Error error -> reject file error.message
 
-let start ~compiler_abi ~project_root:root ~family ~version ~documents =
+let start_with_compatibility ~stored_value_compatibility ~compiler_abi ~project_root:root ~family ~version ~documents =
   try
-    let h = history (H.discover ~compiler_abi ~project_root:root ~family) in
+    let h = history (H.discover_with_compatibility ~stored_value_compatibility ~compiler_abi ~project_root:root ~family) in
     let current = H.current h in
     let n = current.H.version and next = current.H.version + 1 in
     if n <> version then reject current.root_file "the selected schema revision changed; resolve the target again before starting a revision";
@@ -82,14 +82,16 @@ let start ~compiler_abi ~project_root:root ~family ~version ~documents =
       let previous,current = Header.roots located in
       let checked = sparse (Header.verify ~project_root:root ~migration_module:(family ^ ".Migrate.V" ^ string_of_int migration.version)
         ~previous ~current located) in
+      let previous_seal,current_seal = Header.seals checked in
+      List.iter (fun recorded -> ignore (seal (S.verify_semantics ?stored_value_compatibility ~compiler_abi
+        (seal (S.verify_sources ~project_root:root recorded))))) [previous_seal;current_seal];
       check migration.path migration.contents;
       migration,checked) (completed @ Option.to_list existing) in
     let old_target = match existing with
       | None -> None
       | Some migration ->
         let _,checked = List.find (fun ((m : H.migration_source),_) -> m.path = migration.path) checked_edges in
-        let previous,current = Header.seals checked in
-        ignore (seal (S.verify_semantics ~compiler_abi (seal (S.verify_sources ~project_root:root current))));
+        let previous,_ = Header.seals checked in
         Some previous in
     let copies = match Migration_source.freeze_closure ~project_root:root ~family ~version:n with
       | Ok copies -> copies | Error message -> reject current.root_file message in
@@ -109,7 +111,7 @@ let start ~compiler_abi ~project_root:root ~family ~version ~documents =
           end) in
     let frozen_root = module_path root (family ^ ".V" ^ string_of_int n) in
     let writes,frozen_inputs = overlay root frozen (fun () ->
-      let before = inventory (I.load ~compiler_abi ~root_file:frozen_root) in
+      let before = inventory (I.load_with_compatibility ~stored_value_compatibility ~compiler_abi ~root_file:frozen_root) in
       let frozen_seal = seal (S.create ~project_root:root before) in
       let current_seal = seal (S.create ~project_root:root current.inventory) in
       let rewrites = match existing,old_target with
@@ -146,7 +148,7 @@ let start ~compiler_abi ~project_root:root ~family ~version ~documents =
       ~imports ~documents ~writes) in
     overlay root (M.overlays source_manifest) (fun () ->
       List.iter (fun (file,source) -> check file source) writes;
-      ignore (history (H.discover ~compiler_abi ~project_root:root ~family)));
+      ignore (history (H.discover_with_compatibility ~stored_value_compatibility ~compiler_abi ~project_root:root ~family)));
     history (H.verify_unchanged h);
     manifest (M.verify_source source_manifest ~documents);
     manifest (M.verify_disk source_manifest);
@@ -155,6 +157,8 @@ let start ~compiler_abi ~project_root:root ~family ~version ~documents =
   | Invalid errors -> Error errors
   | Sys_error message | Failure message | Invalid_argument message -> Error [{path=root;message}]
   | Unix.Unix_error (error,operation,path) -> Error [{path;message=operation ^ ": " ^ Unix.error_message error}]
+
+let start = start_with_compatibility ~stored_value_compatibility:None
 
 module Syntax = Migration_source_syntax
 module Merge = Migration_source_merge
@@ -262,9 +266,9 @@ let refresh_entities file source before after =
         body=inferred_entry requirements before syntax.declaration.loc identity entity}) in
     (source_result file (Merge.reconcile view ~collection:syntax.entities ~previous ~current ~existing ~desired)).source
 
-let refresh ~compiler_abi ~project_root:root ~family ~version ~documents =
+let refresh_with_compatibility ~stored_value_compatibility ~compiler_abi ~project_root:root ~family ~version ~documents =
   try
-    let h = history (H.discover ~compiler_abi ~project_root:root ~family) in
+    let h = history (H.discover_with_compatibility ~stored_value_compatibility ~compiler_abi ~project_root:root ~family) in
     let current = H.current h in
     if current.H.version <> version then reject current.root_file "the selected schema revision changed; resolve the target again before refreshing";
     let migration = match H.current_migration h with
@@ -278,8 +282,11 @@ let refresh ~compiler_abi ~project_root:root ~family ~version ~documents =
       let header = match sparse (Header.read ~file:edge.path edge.contents) with
         | Some header -> header | None -> reject edge.path "completed migration is missing its source seals" in
       let old,fresh = Header.roots header in
-      ignore (sparse (Header.verify ~project_root:root ~migration_module:(family ^ ".Migrate.V" ^ string_of_int edge.version)
-        ~previous:old ~current:fresh header))) (H.completed_migrations h);
+      let checked = sparse (Header.verify ~project_root:root ~migration_module:(family ^ ".Migrate.V" ^ string_of_int edge.version)
+        ~previous:old ~current:fresh header) in
+      let before,after = Header.seals checked in
+      List.iter (fun recorded -> ignore (seal (S.verify_semantics ?stored_value_compatibility ~compiler_abi
+        (seal (S.verify_sources ~project_root:root recorded))))) [before;after]) (H.completed_migrations h);
     let header = match sparse (Header.read ~file:migration.path migration.contents) with
       | Some header -> header | None -> reject migration.path "current migration is missing its recorded source seals" in
     if Header.module_name header <> family ^ ".Migrate.V" ^ string_of_int version ||
@@ -287,7 +294,7 @@ let refresh ~compiler_abi ~project_root:root ~family ~version ~documents =
       reject migration.path "MIG013: current migration metadata does not match its adjacent schema references";
     let previous_seal,_ = Header.recorded_seals header in
     let checked_previous = seal (S.verify_sources ~project_root:root previous_seal) in
-    ignore (seal (S.verify_semantics ~compiler_abi checked_previous));
+    ignore (seal (S.verify_semantics ?stored_value_compatibility ~compiler_abi checked_previous));
     let target_seal = seal (S.create ~project_root:root current.inventory) in
     let header = sparse (Header.create ~previous:previous_seal ~current:target_seal) in
     let source = refresh_same migration.path migration.contents previous.inventory current.inventory in
@@ -315,3 +322,5 @@ let refresh ~compiler_abi ~project_root:root ~family ~version ~documents =
   | Invalid errors -> Error errors
   | Sys_error message | Failure message | Invalid_argument message -> Error [{path=root;message}]
   | Unix.Unix_error (error,operation,path) -> Error [{path;message=operation ^ ": " ^ Unix.error_message error}]
+
+let refresh = refresh_with_compatibility ~stored_value_compatibility:None

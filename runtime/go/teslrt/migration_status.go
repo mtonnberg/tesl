@@ -12,33 +12,36 @@ import (
 // PgMigrationStatus is an observation of protected history, never permission to
 // serve, modify storage or retire a version. It does not run the boot executor.
 type PgMigrationStatus struct {
-	Version             int                          `json:"version"`
-	Kind                string                       `json:"kind"`
-	Database            string                       `json:"database"`
-	Namespace           string                       `json:"namespace"`
-	BinaryVersion       int                          `json:"binaryVersion"`
-	Present             bool                         `json:"present"`
-	DatabaseUUID        string                       `json:"databaseUuid,omitempty"`
-	InitialVersion      int                          `json:"initialVersion"`
-	CurrentVersion      int                          `json:"currentVersion"`
-	MinVersion          int                          `json:"minVersion"`
-	CompatFloor         int                          `json:"compatFloor"`
-	InstallingVersion   int                          `json:"installingVersion"`
-	SourceCompilerABI   string                       `json:"sourceCompilerAbi"`
-	FormatVersion       int                          `json:"formatVersion"`
-	ProtocolFloor       int                          `json:"protocolFloor"`
-	MaxObservedProtocol int                          `json:"maxObservedProtocol"`
-	FenceNamespace      int                          `json:"fenceNamespace"`
-	HistoryError        string                       `json:"historyError,omitempty"`
-	Expansions          []PgMigrationExpansionStatus `json:"expansions"`
-	Instances           []PgMigrationInstanceStatus  `json:"instances"`
+	Version                  int                          `json:"version"`
+	Kind                     string                       `json:"kind"`
+	Database                 string                       `json:"database"`
+	Namespace                string                       `json:"namespace"`
+	BinaryVersion            int                          `json:"binaryVersion"`
+	Present                  bool                         `json:"present"`
+	DatabaseUUID             string                       `json:"databaseUuid,omitempty"`
+	InitialVersion           int                          `json:"initialVersion"`
+	CurrentVersion           int                          `json:"currentVersion"`
+	MinVersion               int                          `json:"minVersion"`
+	CompatFloor              int                          `json:"compatFloor"`
+	InstallingVersion        int                          `json:"installingVersion"`
+	SourceCompilerABI        string                       `json:"sourceCompilerAbi"`
+	StoredValueCompatibility string                       `json:"storedValueCompatibility"`
+	FormatVersion            int                          `json:"formatVersion"`
+	ProtocolFloor            int                          `json:"protocolFloor"`
+	MaxObservedProtocol      int                          `json:"maxObservedProtocol"`
+	FenceNamespace           int                          `json:"fenceNamespace"`
+	HistoryError             string                       `json:"historyError,omitempty"`
+	Expansions               []PgMigrationExpansionStatus `json:"expansions"`
+	Instances                []PgMigrationInstanceStatus  `json:"instances"`
 }
 
 type PgMigrationExpansionStatus struct {
-	Version   int      `json:"version"`
-	Completed int      `json:"completedObjects"`
-	Total     int      `json:"totalObjects"`
-	Steps     []string `json:"steps"`
+	Version                  int      `json:"version"`
+	SourceCompilerABI        string   `json:"sourceCompilerAbi"`
+	StoredValueCompatibility string   `json:"storedValueCompatibility"`
+	Completed                int      `json:"completedObjects"`
+	Total                    int      `json:"totalObjects"`
+	Steps                    []string `json:"steps"`
 }
 
 type PgMigrationInstanceStatus struct {
@@ -55,12 +58,13 @@ type PgMigrationInstanceStatus struct {
 func InspectPgMigrationStatus(ctx context.Context, conn *pgx.Conn, history PgCompiledMigrationHistory, roles PgMigrationControlRoles) (PgMigrationStatus, error) {
 	result := PgMigrationStatus{Version: 1, Kind: "schema-status", Database: history.Database,
 		Namespace: history.Namespace, BinaryVersion: history.CurrentVersion, SourceCompilerABI: history.SourceCompilerABI,
-		Expansions: []PgMigrationExpansionStatus{}, Instances: []PgMigrationInstanceStatus{}}
+		StoredValueCompatibility: history.StoredValueCompatibility,
+		Expansions:               []PgMigrationExpansionStatus{}, Instances: []PgMigrationInstanceStatus{}}
 	if _, err := history.ExpansionPlan(1); err != nil {
 		return result, err
 	}
 	err := pgControlTransaction(ctx, conn, false, func(tx pgx.Tx) error {
-		if err := pgControlRoles(ctx, tx, roles.Owner, roles.Worker, false); err != nil {
+		if err := pgControlRoles(ctx, tx, roles, false); err != nil {
 			return err
 		}
 		exists, err := pgControlNamespace(ctx, tx, history.Namespace, roles.Owner, roles.Worker)
@@ -71,7 +75,11 @@ func InspectPgMigrationStatus(ctx context.Context, conn *pgx.Conn, history PgCom
 		if err != nil || !present {
 			return err
 		}
-		state, err := pgInspectControl(ctx, tx, history.Namespace, roles)
+		inspect := pgInspectControl
+		if roles.Request != "" {
+			inspect = pgInspectControlReadOnly
+		}
+		state, err := inspect(ctx, tx, history.Namespace, roles)
 		if err != nil {
 			return err
 		}
@@ -92,7 +100,8 @@ func InspectPgMigrationStatus(ctx context.Context, conn *pgx.Conn, history PgCom
 			result.HistoryError = planErr.Error()
 		}
 		for version, intent := range intents {
-			progress := PgMigrationExpansionStatus{Version: version, Completed: len(intent.Objects), Total: intent.OperationCount, Steps: []string{}}
+			progress := PgMigrationExpansionStatus{Version: version, SourceCompilerABI: intent.SourceABI, StoredValueCompatibility: intent.StoredValueCompatibility,
+				Completed: len(intent.Objects), Total: intent.OperationCount, Steps: []string{}}
 			for _, row := range state.Versions {
 				if row.Version == version {
 					progress.Steps = append(progress.Steps, row.Step)

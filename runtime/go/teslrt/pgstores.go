@@ -92,6 +92,9 @@ var pgTablesReady sync.Map // pgTableKey -> *pgTableOnce
 // (the catalog's unique index wins where the `if not exists` check lost), so a duplicate-
 // object error is the OTHER instance's success and is tolerated.
 func ensureTable(db *PostgresDB, table string, statements func(qualified string) []string) {
+	if err := pgVerifyMigrationFacilityConnection(db, table); err != nil {
+		panic(err)
+	}
 	key := pgTableKey{db: db, table: table}
 	loaded, _ := pgTablesReady.LoadOrStore(key, &pgTableOnce{})
 	once, ok := loaded.(*pgTableOnce)
@@ -247,6 +250,7 @@ type pgQueueBackend struct {
 // delay between retries); `initialDelaySeconds` is the declaration's `initialDelay`.
 func NewQueueOn(database *Database, name string, maxAttempts int, backoff string,
 	initialDelaySeconds int) *Queue {
+	pgRegisterMigrationFacility(database, "queue", name)
 	queue := NewQueue(name, maxAttempts)
 	if initialDelaySeconds < 0 {
 		initialDelaySeconds = 0
@@ -708,6 +712,7 @@ type pgOutboxBackend struct {
 
 // NewOutboxOn is `email E = Email { database: D … }` for a Postgres-backed D.
 func NewOutboxOn(database *Database, settings SmtpSettings) *Outbox {
+	pgRegisterMigrationFacility(database, "email outbox", "")
 	outbox := NewOutbox(settings)
 	outbox.backend = &pgOutboxBackend{pgStore: pgStore{database: database}}
 	return outbox
@@ -918,6 +923,7 @@ type pgCacheBackend struct {
 // cache plus the durable backend. `encode` and `decode` are the value type's JSON codec.
 func NewCacheOn[V any](database *Database, name string, defaultTTLSeconds int64,
 	encode func(V) any, decode func(any) (V, error)) *Cache[V] {
+	pgRegisterMigrationFacility(database, "cache", name)
 	cache := NewCache[V](defaultTTLSeconds)
 	// The typed codecs are adapted to `any` at the one place the type parameter is known.
 	cache.backend = &pgCacheBackend{pgStore: pgStore{database: database}, name: name,

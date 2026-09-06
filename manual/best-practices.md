@@ -697,6 +697,21 @@ of rewriting deployed history. Changing compiler ABI is a separate check and doe
 not by itself mean a frozen source file was edited. Header checks, source previews and guarded source writes on Linux are implemented.
 Complete runtime history enforcement is still pending.
 
+An unrelated compiler update does not require a schema revision. A new build can
+read a completed additive history when it supports the same stored-value contract
+and rechecks the unchanged historical schema, proofs and storage layout. The old
+build's identity stays in database history. This contract is the compiler's
+compatibility promise; it does not let application code assert that changed proofs
+mean the same thing.
+
+If an expansion is unfinished, finish it with its original compiler build before
+switching builds. A different stored-value contract refuses even completed history;
+do not edit seals or database metadata to suppress that refusal. The explicit
+revalidation workflow for that case is still being implemented. Older experimental
+control formats lacking compatibility metadata also require a separate upgrade
+path, which is not yet available. Ordinary `agent-context` diagnostics check source;
+the production build additionally checks compatibility with recorded source seals.
+
 Preview the next source changes with:
 
 ```sh
@@ -735,10 +750,10 @@ import to `VCurrent`. It checks the current buffers and excludes migration
 decisions, source generation and confirmation-requiring changes. Conflicting fixes
 are left for individual review. Fix-all does not save files or contact a database.
 
-Versioned PostgreSQL startup now executes supported additive changes before the
+Versioned PostgreSQL startup waits for supported additive changes before the
 application body runs, using the history compiled into that binary. The protected
 control objects must already be installed by an operator; startup refuses missing
-installation and unrecorded existing tables. The application owns its worker login
+installation and unrecorded existing tables. The application owns its connection
 and optional `PostgresConfig.controlOwner` (default `tesl_control`). Schema and
 migration modules own neither credentials nor connection configuration.
 
@@ -750,9 +765,12 @@ pure row constructor; changing that constructor and adding the column leaves the
 whole application file and API tests unchanged. The scenario also restarts the old
 binary while the newer app serves. Adoption and the remaining lifecycle are
 still in progress.
+Its [compiler-upgrade companion](../example/learn/lesson83-additive-migrations.md)
+walks through separate compiler builds sharing completed history, unfinished-work
+refusal, unchanged handlers and preserved database provenance.
 
-For a fresh database, the operator provisions a no-login control owner and the
-application worker login. A temporary installer login receives membership in the
+For an Embedded development database, the operator provisions a no-login control owner and the
+combined application/worker login. A temporary installer login receives membership in the
 control owner and runs the compiled binary using the application's connection
 settings:
 
@@ -767,6 +785,35 @@ application with the worker credentials. Installation creates protected control
 state; normal startup creates the entity storage. A fresh database starts at the
 binary's current revision, while a retry preserves its recorded installation
 origin. The command refuses pre-versioning tables rather than adopting them.
+
+For separate production credentials, use `topology: Worker` in `PostgresConfig`
+and import `MigrationTopology(..)` from `Tesl.Database`. The request login can
+read and write entities; a separate schema worker owns DDL. Configure the stable
+`requestRole` and `workerRole` names (defaults `tesl_app` and `tesl_schema`), then
+select each process's actual login through your connection environment:
+
+```sh
+# Run with the temporary installer login, then revoke its owner membership.
+./app --schema install --worker notes_schema --request notes_app
+# Run separately with the worker login; starts no HTTP handlers.
+./app --schema worker --json
+# Run with the request login; waits until its schema revision is ready.
+./app
+```
+
+[Lesson 84](../example/learn/lesson84-worker-migrations.tesl) provides the full
+application and deployment regression. Its handlers and API tests stay identical
+while a new worker adds a field and old/new request processes keep serving.
+Request verification needs neither CREATE nor temporary-table privileges. Keep
+the worker connection direct or behind a session pooler; `ddlConnection` can name
+a separate DSN when requests use a transaction pooler.
+
+An explicit topology is easiest to review. If omitted, `TESL_DEPLOYED` selects
+Worker when present and Embedded otherwise. Embedded combines request/executor
+privileges and logs that fact. An installed Embedded grant profile cannot be
+silently converted to Worker. This initial Worker path supports additive entity
+changes; durable queue/outbox installation, background transformation jobs and
+retirement are still being implemented.
 
 To inspect a running deployment's recorded migration state, use its compiled
 application binary:

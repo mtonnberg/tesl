@@ -58,10 +58,11 @@ func migrationApplicationFixture(t *testing.T, batch bool) (*Server, *bytes.Buff
 	if err != nil {
 		t.Fatal(err)
 	}
-	compiler.preview, err = sourceedit.DecodePreview(raw)
-	if err != nil {
+	preview, err := sourceedit.DecodePreview(raw)
+	if err != nil || preview == nil {
 		t.Fatal(err)
 	}
+	compiler.preview = preview
 	server.migrationApplySupported, server.migrationBatchEdits = true, batch
 	previewMigrationEditPlan(t, server, doc)
 	t.Cleanup(server.closeClientRequests)
@@ -162,6 +163,9 @@ func TestMigrationApplicationCommitsOnlyObservedBuffers(t *testing.T) {
 			requests++
 		}
 		assertMigrationOutcome(t, server, output, "committed", false)
+		if server.migrationResult == nil {
+			t.Fatal("missing committed result")
+		}
 		if (batch && requests != 1) || (!batch && requests != 2) || len(server.migrationResult.BuffersWritten) != 2 {
 			t.Fatal("wrong edit accounting")
 		}
@@ -177,40 +181,28 @@ func TestMigrationApplicationCommitsOnlyObservedBuffers(t *testing.T) {
 }
 
 func TestMigrationApplicationRestoresPartialEditsAndCancellation(t *testing.T) {
-	for _, scenario := range []string{"first refused", "second refused", "partial batch", "cancelled", "dependency changed"} {
+	for _, scenario := range []string{"cancelled", "dependency changed"} {
 		t.Run(scenario, func(t *testing.T) {
-			server, output, doc, created := migrationApplicationFixture(t, scenario == "partial batch")
+			server, output, doc, created := migrationApplicationFixture(t, false)
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			startMigrationApplication(t, ctx, server, output)
 			request, edits := nextMigrationClientEdit(t, output)
-			if scenario == "first refused" {
-				acknowledgeMigration(t, server, request, `{"applied":false}`)
-			} else {
-				observeMigrationEdits(t, server, edits[:1])
-				if scenario == "cancelled" {
-					cancel()
-				}
-				if scenario == "dependency changed" {
-					uri := protocol.PathToURI(filepath.Join(filepath.Dir(doc.Path), "dependency.tesl"))
-					changed := server.documents[uri]
-					changed.Text = "new user work"
-					changed.Version++
-					server.documents[uri] = changed
-				}
-				if scenario == "partial batch" {
-					acknowledgeMigration(t, server, request, `{"applied":false,"failedChange":1}`)
-				} else {
-					acknowledgeMigration(t, server, request, `{"applied":true}`)
-					if scenario == "second refused" {
-						request, _ = nextMigrationClientEdit(t, output)
-						acknowledgeMigration(t, server, request, `{"applied":false}`)
-					}
-				}
-				inverse, changes := nextMigrationClientEdit(t, output)
-				observeMigrationEdits(t, server, changes)
-				acknowledgeMigration(t, server, inverse, `{"applied":true}`)
+			observeMigrationEdits(t, server, edits)
+			if scenario == "cancelled" {
+				cancel()
 			}
+			if scenario == "dependency changed" {
+				uri := protocol.PathToURI(filepath.Join(filepath.Dir(doc.Path), "dependency.tesl"))
+				changed := server.documents[uri]
+				changed.Text = "new user work"
+				changed.Version++
+				server.documents[uri] = changed
+			}
+			acknowledgeMigration(t, server, request, `{"applied":true}`)
+			inverse, changes := nextMigrationClientEdit(t, output)
+			observeMigrationEdits(t, server, changes)
+			acknowledgeMigration(t, server, inverse, `{"applied":true}`)
 			assertMigrationOutcome(t, server, output, "restored", false)
 			if server.documents[doc.URI].Text != doc.Text {
 				t.Fatal("inverse did not restore original buffer")
@@ -229,7 +221,7 @@ func TestMigrationApplicationRestoresPartialEditsAndCancellation(t *testing.T) {
 }
 
 func TestMigrationApplicationUnknownRepliesAndUserChangesRetainRecovery(t *testing.T) {
-	for _, scenario := range []string{"timeout", "missing update", "invalid reply", "user text", "reopened", "closed target opened", "inverse missing update", "inverse refused"} {
+	for _, scenario := range []string{"timeout", "missing update", "invalid reply", "negative before update", "user text", "reopened", "closed target opened", "inverse missing update", "inverse refused"} {
 		t.Run(scenario, func(t *testing.T) {
 			server, output, doc, created := migrationApplicationFixture(t, true)
 			startMigrationApplication(t, context.Background(), server, output)
@@ -243,6 +235,9 @@ func TestMigrationApplicationUnknownRepliesAndUserChangesRetainRecovery(t *testi
 				acknowledgeMigration(t, server, request, `{"applied":true}`)
 			case "invalid reply":
 				acknowledgeMigration(t, server, request, `{"applied":true,"applied":false}`)
+			case "negative before update":
+				acknowledgeMigration(t, server, request, `{"applied":false}`)
+				observeMigrationEdits(t, server, edits[:1])
 			default:
 				observeMigrationEdits(t, server, edits[:1])
 				after := server.documents[doc.URI]
@@ -256,14 +251,24 @@ func TestMigrationApplicationUnknownRepliesAndUserChangesRetainRecovery(t *testi
 					server.documents[protocol.PathToURI(created)] = document{URI: protocol.PathToURI(created), Path: created, Text: "new user work", Version: 1, openID: 90}
 				}
 				server.documents[doc.URI] = after
-				acknowledgeMigration(t, server, request, `{"applied":false}`)
 				if strings.HasPrefix(scenario, "inverse ") {
+					// A positive reply with all updates observed, followed by a
+					// stale unedited dependency, gives a known state to invert.
+					observeMigrationEdits(t, server, edits[1:])
+					uri := protocol.PathToURI(filepath.Join(filepath.Dir(doc.Path), "dependency.tesl"))
+					dependency := server.documents[uri]
+					dependency.Text = "changed dependency"
+					dependency.Version++
+					server.documents[uri] = dependency
+					acknowledgeMigration(t, server, request, `{"applied":true}`)
 					inverse, _ := nextMigrationClientEdit(t, output)
 					if scenario == "inverse refused" {
 						acknowledgeMigration(t, server, inverse, `{"applied":false}`)
 					} else {
 						acknowledgeMigration(t, server, inverse, `{"applied":true}`)
 					}
+				} else {
+					acknowledgeMigration(t, server, request, `{"applied":false}`)
 				}
 			}
 			assertMigrationOutcome(t, server, output, "editor-pending", true)
@@ -293,6 +298,32 @@ func TestMigrationApplyAcknowledgementIsStrict(t *testing.T) {
 	for _, raw := range []string{`{"applied":true}`, `{"applied":false}`, `{"applied":false,"failedChange":0,"failureReason":"stale version"}`} {
 		if _, err := migrationApplyAcknowledgement(protocol.Response{Result: json.RawMessage(raw)}); err != nil {
 			t.Errorf("refused %s: %v", raw, err)
+		}
+	}
+}
+
+func TestMigrationApplicationRemainsUnavailableWithoutSnapshotBarrier(t *testing.T) {
+	for _, mode := range []string{"transactional", "textOnlyTransactional", "undo", "abort", ""} {
+		server, output, _, created := migrationApplicationFixture(t, true)
+		capabilities := server.initializeCapabilities(json.RawMessage(`{"capabilities":{"workspace":{"applyEdit":true,"workspaceEdit":{"documentChanges":true,"resourceOperations":["create"],"failureHandling":"` + mode + `"}}}}`))
+		encoded, err := json.Marshal(capabilities)
+		if err != nil || server.migrationApplySupported || bytes.Contains(encoded, []byte(`"tesl.applyMigration"`)) {
+			t.Fatalf("unproven editor apply was advertised: %s %v", encoded, err)
+		}
+		startMigrationApplication(t, context.Background(), server, output)
+		raw, err := protocol.NewReader(output).Read()
+		if err != nil {
+			t.Fatal(err)
+		}
+		response, err := protocol.DecodeResponse(raw)
+		if err != nil || response.Error == nil || response.Error.Code != -32602 {
+			t.Fatalf("unproven editor apply was accepted: %s %v", raw, err)
+		}
+		if _, err := os.Stat(created); !os.IsNotExist(err) {
+			t.Fatal("disabled application published source")
+		}
+		if _, err := os.Stat(filepath.Join(filepath.Dir(created), ".tesl-source-edit")); !os.IsNotExist(err) {
+			t.Fatal("disabled application created a journal")
 		}
 	}
 }

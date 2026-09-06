@@ -37,8 +37,8 @@ func pgExpansionTestHistory(namespace string, current int) PgCompiledMigrationHi
 		origins = append(origins, map[string]any{"initialVersion": origin + 1, "steps": pgPlanTestStepsJSON(chain), "errors": []any{}})
 	}
 	history := PgCompiledMigrationHistory{Database: "App.Main", Family: "NotesSchema", Namespace: namespace, CurrentVersion: current,
-		SourceCompilerABI: "tesl-source-abi-v1:" + strings.Repeat("a", 64)}
-	encoded, err := json.Marshal(map[string]any{"version": 2, "kind": "compiled-migration-history", "compilerAbi": history.SourceCompilerABI,
+		SourceCompilerABI: pgTestSourceABI, StoredValueCompatibility: pgTestStoredValueCompatibility}
+	encoded, err := json.Marshal(map[string]any{"version": 3, "kind": "compiled-migration-history", "compilerAbi": history.SourceCompilerABI, "storedValueCompatibility": history.StoredValueCompatibility,
 		"databases": []any{map[string]any{"database": history.Database, "family": history.Family, "namespace": namespace, "currentVersion": current, "origins": origins}}})
 	if err != nil {
 		panic(err)
@@ -155,7 +155,7 @@ func TestPgMigrationExpansionRejectsRecordedDriftBeforeDDL(t *testing.T) {
 		"missing object":         "delete from notes_app.tesl_schema_expansion_objects",
 		"object hash":            "update notes_app.tesl_schema_expansion_objects set operation_hash=repeat('b',64)",
 		"missing intent":         "delete from notes_app.tesl_schema_expansions",
-		"extra intent":           "insert into notes_app.tesl_schema_expansions select 3,snapshot_hash,artefact_hash,source_abi,operation_count,epoch_preserving,started_at from notes_app.tesl_schema_expansions",
+		"extra intent":           "insert into notes_app.tesl_schema_expansions select 3,snapshot_hash,artefact_hash,source_abi,stored_value_compatibility,operation_count,epoch_preserving,started_at from notes_app.tesl_schema_expansions",
 		"ABI":                    "update notes_app.tesl_schema_expansions set source_abi='tesl-source-abi-v1:'||repeat('b',64)",
 		"snapshot":               "update notes_app.tesl_schema_expansions set snapshot_hash=repeat('b',64)",
 	} {

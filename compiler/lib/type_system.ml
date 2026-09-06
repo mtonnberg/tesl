@@ -1687,7 +1687,7 @@ let tesl_module_exports : (string * string list) list = [
   ( "Tesl.Database",
     [ "Database"; "DatabaseBackend"; "Postgres"; "Memory";
       "PostgresConfig"; "PostgresConnection";
-      "TcpConnection"; "SocketConnection" ] );
+      "TcpConnection"; "SocketConnection"; "MigrationTopology"; "Worker"; "Embedded" ] );
   (* App-simplification (roadmap/next/app_simplification.md): `main : () -> App`
      returning a typed App record; `Job` pairs a job type with its handler +
      optional dead-letter handler inside a folded `queue`. *)
@@ -1908,6 +1908,7 @@ let stdlib_adt_ctor_groups : (string * string * string list) list = [
     value scheme, runtime representation, or pattern-exhaustiveness rows. Keep
     that boundary explicit rather than pretending they are ordinary ADTs. *)
 let stdlib_import_ctor_groups = stdlib_adt_ctor_groups @
+  ["Tesl.Database", "MigrationTopology", ["Worker"; "Embedded"]] @
   List.map (fun (name, ctors) -> "Tesl.Migration", name, ctors) Migration_form.constructor_groups
 
 (** Constructor → the ADT type that owns it, for the `Type(..)` exposing form.

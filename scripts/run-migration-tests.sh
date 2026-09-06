@@ -31,15 +31,16 @@ initdb -D "$migration_tmp/data" -U migration_installer --auth=trust --no-locale 
 # A private Unix socket removes port-allocation races and network exposure.
 pg_ctl -D "$migration_tmp/data" -l "$migration_tmp/postgres.log" -o "-k $migration_tmp/socket -h '' -c max_connections=40 -c log_min_duration_statement=1000 -c log_lock_waits=on -c log_checkpoints=on" -w start >/dev/null
 export TESL_MIGRATION_TEST_DSN="host=$migration_tmp/socket user=migration_installer dbname=postgres"
+export TESL_MIGRATION_TEST_REQUIRE_POSTGRES=1
 export TESL_TEST_POSTGRES_SHARED_HOST="$migration_tmp/socket"
 export TESL_TEST_POSTGRES_SHARED_PORT=5432
 export TESL_TEST_POSTGRES_SHARED_USER=migration_installer
 export TESL_TEST_POSTGRES_SHARED_ADMIN_DATABASE=postgres
 export TESL_REPO_ROOT="$repo_root"
 cd "$repo_root/runtime/go"
-go test -race -count=1 -timeout=300s ./internal/migrationtest "$@"
+go test -race -count=1 -timeout=900s ./internal/migrationtest "$@"
 if (( $# == 0 )); then
   # Production control/executor APIs and their crash tests use the same
   # isolated cluster and supported-major matrix as the independent harness.
-  go test -race -count=1 -timeout=300s -tags=tesl_migration_test ./teslrt -run '^TestPgMigration(Control|Expansion|Admission|Boot|Status|Install)'
+  go test -race -count=1 -timeout=300s -tags=tesl_migration_test ./teslrt -run '^TestPgMigration(Control|Expansion|Admission|Boot|Status|Install|StoredValueCompatibility|Compatibility|Worker)'
 fi
