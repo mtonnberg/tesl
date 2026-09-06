@@ -543,3 +543,8 @@
  (name test_attached_input_identity)
  (modules test_attached_input_identity)
  (libraries tesl_compiler_lib alcotest unix))
+
+(test
+ (name test_migration_checked_graph)
+ (modules test_migration_checked_graph)
+ (libraries tesl_compiler_lib alcotest unix str))

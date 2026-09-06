@@ -300,55 +300,6 @@ let same_candidates ~(before : t) ~(after : t) =
         | Ok evidence -> Some evidence
         | Error _ -> None) before.declarations)
 
-let names = function
-  | DFunc f -> [Value, f.name]
-  | DType (TypeNewtype t) -> [Type, t.name; Value, t.name]
-  | DType (TypeAdt t) -> (Type, t.name) ::
-      List.map (fun (v : adt_variant) -> Value, v.ctor) t.variants
-  | DRecord r -> [Type, r.name; Value, r.name]
-  | DEntity e -> [Type, e.name; Value, e.name]
-  | DFact f -> [Predicate, f.name]
-  | DQueueSchema q -> [Value, q.name]
-  | DCodec c -> [Codec, c.name]
-  | DDatabase _ | DCapability _ | DConst _ | DQueue _ | DChannel _
-  | DWorkers _ | DCache _ | DAgent _ | DEmail _ | DCapture _ | DApi _
-  | DServer _ | DTest _ | DApiTest _ | DLoadTest _ -> []
-
-let wants (import : import_decl) (owner : module_form) (ns, name) =
-  match import.names with
-  | ImportAll -> false
-  | ImportExposing exposed ->
-    List.mem name exposed ||
-    ns = Value && List.exists (function
-      | DType (TypeAdt t) -> List.mem (t.name ^ "(..)") exposed &&
-          List.exists (fun (v : adt_variant) -> v.ctor = name) t.variants
-      | _ -> false) owner.decls
-
-(** Resolve existing compiler builtins by their owning module and name. There
-    is no new per-primitive version registry or retained historical lowering:
-    the complete inventory is bound to the caller's compiler ABI above. *)
-let builtin (m : module_form) ns name =
-  let exports = Type_system.tesl_module_exports in
-  let homes = List.filter_map (fun (home, members) ->
-    if List.mem name members then Some home else None) exports in
-  let chosen = List.filter (fun home -> List.exists (fun (i : import_decl) ->
-    i.module_name = home && (ns <> Predicate || match i.names with
-      | ImportAll -> false | ImportExposing exposed -> List.mem name exposed)) m.imports) homes in
-  let homes = if chosen = [] then homes else chosen in
-  let homes = List.sort_uniq String.compare homes in
-  let kind_ok = match ns with
-    | Codec -> List.mem_assoc name Validation_common.builtin_codec_type
-    | Predicate -> List.exists (fun (_, preds) -> List.mem name preds)
-        Checker.tesl_module_predicate_exports
-    | Type -> name <> "" && name.[0] >= 'A' && name.[0] <= 'Z'
-    | Value -> Type_system.stdlib_capabilities_of name = [] in
-  if not kind_ok then None
-  else match homes with
-    | [home] -> Some (Primitive (home ^ "." ^ name))
-    | [] when List.mem name Type_system.always_available_stdlib_names ->
-      Some (Primitive ("Tesl.Prelude." ^ name))
-    | _ -> None
-
 let load_with_compatibility ~stored_value_compatibility ~compiler_abi ~root_file =
   let loc = Location.dummy_loc root_file in
   try
@@ -395,47 +346,12 @@ let load_with_compatibility ~stored_value_compatibility ~compiler_abi ~root_file
       | DEntity e -> Some (m.module_name ^ "." ^ e.name, e) | _ -> None) m.decls) modules in
     (match Migration_schema.check_member_storage members with
      | error :: _ -> reject error.loc error.message | [] -> ());
-    (* Imported parses are content-aware. Semantic query caches additionally
-       depend on the complete import snapshot, not just a module's own AST.
-       Inventory calls may read several saved revisions in one process, so each
-       complete load starts a fresh semantic query scope. *)
-    Query_cache.clear ();
-    let globals = List.concat_map (fun m -> List.concat_map (fun d ->
-      List.map (fun (ns, name) -> (ns, m.module_name ^ "." ^ name),
-        Global (m.module_name ^ "." ^ name)) (names d)) m.decls) modules in
+    let graph = match Migration_checked_graph.check
+        (List.map (fun m -> m, Hashtbl.find sources m.source_file) modules) with
+      | Ok graph -> graph | Error error -> raise (Invalid error) in
     let scopes = [{ Migration_canonical.family; revision; role=Snapshot_role }] in
-    let definitions = List.concat_map (fun m ->
-      (* Reuse the public compiler judgment, including literal/complexity and
-         cross-module checks. Type + proof checks alone are not its full gate.
-         Every dependency body is checked by its own iteration here. *)
-      let diagnostics = Frontend_check.check_module ~skip_dep_body:(fun _ -> true)
-        (Hashtbl.find sources m.source_file) m in
-      (match List.find_opt (fun (d : Frontend_check.diagnostic) -> d.severity = "error") diagnostics with
-       | Some error -> reject (Location.make_loc error.file error.start_line
-           error.start_col error.end_line error.end_col) error.message
-       | None -> ());
-      let typed_nodes, errors = Checker.check_module_with_typed_nodes m in
-      (match errors with error :: _ -> reject error.loc error.message | [] -> ());
-      let local = List.concat_map (fun d -> List.map (fun (ns, name) ->
-        (ns, name), Global (m.module_name ^ "." ^ name)) (names d)) m.decls in
-      let imported = List.concat_map (fun (i : import_decl) ->
-        match List.find_opt (fun owner -> owner.module_name = i.module_name) modules with
-        | None -> []
-        | Some owner -> List.concat_map (fun d ->
-            List.filter_map (fun ((ns, name) as key) ->
-              if wants i owner key then Some ((ns, name), Global (owner.module_name ^ "." ^ name))
-              else None) (names d)) owner.decls) m.imports in
-      let resolve ns name = match List.assoc_opt (ns, name) local with
-        | Some _ as result -> result
-        | None ->
-          let candidates = List.filter_map (fun (key, symbol) ->
-            if key = (ns, name) then Some symbol else None) imported |> List.sort_uniq compare in
-          (match candidates with
-           | [symbol] -> Some symbol
-           | _ :: _ -> reject (Location.dummy_loc m.source_file) ("ambiguous semantic reference `" ^ name ^ "`")
-           | [] -> match List.assoc_opt (ns, name) globals with
-             | Some _ as result -> result
-             | None -> builtin m ns name) in
+    List.iter (fun m ->
+      let resolve = Migration_checked_graph.resolve graph ~owner:m.module_name in
       List.iter (function
         | DQueueSchema q -> List.iter (fun (name,loc) ->
             let resolved = match resolve Type name with
@@ -449,10 +365,9 @@ let load_with_compatibility ~stored_value_compatibility ~compiler_abi ~root_file
                (not (List.exists (fun (i : import_decl) -> i.module_name = owner.module_name) m.imports) ||
                 not (List.mem (ExportName record.name) owner.exports)) then
               reject loc ("queueSchema payload is not exported by a directly imported schema module: " ^ name)) q.jobs
-        | _ -> ()) m.decls;
-      List.map (fun d -> match Migration_ir.define ~scopes ~resolve ~typed_nodes m d with
-        | Ok definition -> definition
-        | Error error -> raise (Invalid error)) m.decls) modules in
+        | _ -> ()) m.decls) modules;
+    let definitions = match Migration_checked_graph.lower ~scopes graph with
+      | Ok definitions -> definitions | Error error -> raise (Invalid error) in
     (* Validation and inference load imported interfaces themselves. Refuse a
        source change across these passes rather than publish mixed source state. *)
     Hashtbl.iter (fun path source ->

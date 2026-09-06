@@ -16,6 +16,14 @@ emitted Go under the race detector after removing every Tesl source file.
 
 ## Source judgment
 
+`Migration_checked_graph` supplies the shared checked source graph for inventories
+and the forthcoming transform linker. It preserves the original AST objects and
+their inferred types, checks the complete captured import closure, and lowers
+those objects afresh under explicit Snapshot, From or To roles. Private codecs
+and fact producers remain part of semantic closure. Unlowered declarations,
+including ordinary constants, are refused explicitly. This extraction preserves
+the pre-existing inventory digest; it does not produce an executable callback.
+
 `Migration_declaration` binds the sparse entity inventory and passes its exact
 checked pair to `Migration_transform_rules`. `Rename oldField newField` requires
 an old-only source, a new-only destination, and an unchanged stored contract.

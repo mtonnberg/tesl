@@ -188,6 +188,111 @@ fn unrelated(raw: String) -> Note =
     (List.exists (fun (d : Compile.diagnostic) -> d.code = "V001" &&
       Compile.string_contains d.message "different subject") ds)
 
+let bound_control_source = {|
+check nested(value: String) -> value: String ::: NonEmpty value =
+  let outcome = if value != "" then
+    let same = value
+    ok same ::: NonEmpty same
+  else
+    let rejected = value
+    fail 400 "empty: ${rejected}"
+  outcome
+check neverReturns(value: String) -> value: String ::: NonEmpty value =
+  let outcome = fail 400 "always"
+  outcome
+check neverBranches(value: String, choose: Bool) -> value: String ::: NonEmpty value =
+  let outcome = if choose then
+    fail 400 "left"
+  else
+    fail 400 "right"
+  outcome
+fn preserveBound(value: String ::: NonEmpty value, choose: Bool) -> value: String ::: NonEmpty value =
+  let outcome = if choose then
+    let same = value
+    identity same
+  else
+    value
+  outcome
+fn preserveCase(value: String ::: NonEmpty value, choose: Bool) -> value: String ::: NonEmpty value =
+  let outcome = case choose of
+    True -> value
+    False -> identity value
+  outcome
+fn inspectNested(raw: String) -> String =
+  let (value ::: witness) = check nested raw
+  let note = Note { title: raw ::: witness }
+  note.title
+test "branch-valued let preserves input identity and actual failure" {
+  expect inspectNested "kept" == "kept"
+  expectFail check nested ""
+  expectFail check neverReturns "good"
+  expectFail check neverBranches "good" True
+  expectFail check neverBranches "good" False
+  let rawGood = "kept"
+  let good = check nonEmpty rawGood
+  expect preserveBound good True == "kept"
+  expect preserveBound good False == "kept"
+  expect preserveCase good True == "kept"
+  expect preserveCase good False == "kept"
+}
+|}
+let bound_control () = accepts (prelude ^ bound_control_source)
+let bound_control_wrong shape () =
+  let branches = if shape = "case" then
+    "  let outcome = case choose of\n    True -> value\n    False -> identity other\n"
+  else "  let outcome = if choose then\n    value\n  else\n    let same = other\n    identity same\n" in
+  refuses (prelude ^
+    "fn invalid(value: String ::: NonEmpty value, other: String ::: NonEmpty other, choose: Bool) -> value: String ::: NonEmpty value =\n" ^
+    branches ^ "  outcome\n");
+  refuses (prelude ^ {|
+check invalid(value: String, other: String) -> value: String ::: NonEmpty value =
+  let outcome = if other != "" then
+    ok other ::: NonEmpty other
+  else
+    fail 400 "empty"
+  outcome
+|})
+
+let bound_control_strip () =
+  let with_forget = Str.global_replace (Str.regexp_string "Bool(..), Fact]")
+    "Bool(..), Fact, forgetFact]" prelude in
+  let source body = with_forget ^
+    "fn invalid(value: String ::: NonEmpty value, choose: Bool) -> value: String ::: NonEmpty value =\n" ^ body in
+  List.iter (fun body ->
+    let ds = errors (source body) in
+    check bool ("forgetFact cannot recover a removed proof through a joined alias: " ^
+      String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) ds)) true
+      (List.exists (fun (d : Compile.diagnostic) -> d.code = "V001" &&
+        (Compile.string_contains d.message "does not preserve that input's subject identity" ||
+         Compile.string_contains d.message "cannot declare a proof return type")) ds)) [
+    "  let result = forgetFact value\n  result\n";
+    "  let result = if choose then\n    forgetFact value\n  else\n    value\n  result\n";
+    "  let result = if choose then\n    let clean = forgetFact value\n    clean\n  else\n    value\n  result\n";
+  ];
+  accepts (source "  let result = if choose then\n    value\n  else\n    value\n  result\n")
+
+let branch_local_subject () =
+  accepts (prelude ^ {|
+fn valid(value: String ::: NonEmpty value, choose: Bool) -> value: String ::: NonEmpty value =
+  let result = if choose then
+    let local = value
+    local
+  else
+    let local = value
+    local
+  result
+|});
+  refuses (prelude ^ {|
+fn invalid(value: String, choose: Bool) -> value: String ::: NonEmpty value =
+  let result = if choose then
+    let local = check nonEmpty (value ++ "left")
+    local
+  else
+    let local = check nonEmpty (value ++ "right")
+    local
+  result
+|})
+
 let native () =
   let root = Filename.temp_dir "tesl-attached-identity-" "" in
   let rec remove path = if Sys.is_directory path then begin
@@ -196,7 +301,7 @@ let native () =
   let rec mkdir path = if not (Sys.file_exists path) then (mkdir (Filename.dirname path); Unix.mkdir path 0o700) in
   let write path contents = mkdir (Filename.dirname path); Out_channel.with_open_bin path (fun out -> output_string out contents) in
   Fun.protect ~finally:(fun () -> remove root) (fun () ->
-    let source = prelude ^ fresh ^ nullary_source in accepts source;
+    let source = prelude ^ fresh ^ nullary_source ^ bound_control_source in accepts source;
     let file = Filename.concat root "identity.tesl" in write file source;
     let artifacts = match Compile.compile_go_file file with
       | Compile.GoSuccess artifacts -> artifacts
@@ -234,5 +339,10 @@ fn aliased(value: String ::: NonEmpty value) -> value: String ::: NonEmpty value
   test_case "ordinary establish shape stays refused" `Quick establish_shape;
   test_case "partial calls have no input identity or returned proof" `Quick partial_application;
   test_case "nullary Unit calls transport returned proof" `Quick nullary;
+  test_case "branch-valued lets and nonreturning continuations" `Quick bound_control;
+  test_case "branch-valued if cannot alias another subject" `Quick (bound_control_wrong "if");
+  test_case "branch-valued case cannot alias another subject" `Quick (bound_control_wrong "case");
+  test_case "joined lets preserve forgetFact proof removal" `Quick bound_control_strip;
+  test_case "branch-local spelling is not an outer subject" `Quick branch_local_subject;
   test_case "fresh transformed result compiles and runs" `Quick native;
 ]]

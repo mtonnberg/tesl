@@ -216,10 +216,13 @@ let return_context_operations ~funcs ~fields_by_type ~ctors =
   let rec return_leaves type_env subject_env proof_env (e : expr) =
     match e with
     | ELet { name; value; body; _ } ->
-      let te, se, pe = extend_let_envs type_env subject_env proof_env name value in
-      return_leaves te se pe body
+      (match returning_let_envs type_env subject_env proof_env name value with
+       | None -> []
+       | Some (te, se, pe) -> return_leaves te se pe body)
     | ELetProof { value_name; proof_name; proof_index; value; body; _ } ->
-      let te, se, pe = extend_let_envs type_env subject_env proof_env value_name value in
+      (match returning_let_envs type_env subject_env proof_env value_name value with
+       | None -> []
+       | Some (te, se, pe) ->
       let pe =
         let ps = proofs_of_expr value_name funcs se pe value in
         let ps = match proof_index with
@@ -239,7 +242,7 @@ let return_context_operations ~funcs ~fields_by_type ~ctors =
             then [List.nth facts index] else [] in
         (proof_name, ps) :: pe
       in
-      return_leaves te se pe body
+      return_leaves te se pe body)
     | EIf { then_; else_; _ } ->
       return_leaves type_env subject_env proof_env then_
       @ return_leaves type_env subject_env proof_env else_
@@ -258,6 +261,39 @@ let return_context_operations ~funcs ~fields_by_type ~ctors =
       return_leaves type_env subject_env proof_env body
     | EFail _ -> []
     | _ -> [ (type_env, subject_env, proof_env, e) ]
+  and returning_let_envs type_env subject_env proof_env name value =
+    match return_leaves type_env subject_env proof_env value with
+    | [] -> None (* An always-aborting value never reaches its continuation. *)
+    | contexts ->
+      (* Join only subject identity, not branch environments or proofs. A let
+         result aliases an outer subject exactly when every returning value
+         leaf is that subject. Continuing once avoids a Cartesian product for
+         sequential branch-valued lets. Resolve the RHS before removing the
+         destination's previous alias. *)
+      let te, direct_subjects, pe = extend_let_envs type_env subject_env proof_env name value in
+      match attached_subject_of_expr funcs subject_env value with
+      | Some _ -> Some (te, direct_subjects, pe)
+      | None ->
+        (* Reuse ordinary let alias policy for each leaf. In particular,
+           forgetFact deliberately creates no alias: joining the raw input
+           subject here would recover stripped evidence through proof lookup.
+           The temporary name cannot collide with a source binding. *)
+        let temporary = "joined-let#subject" in
+        let subjects = List.map (fun (types, subjects, proofs, leaf) ->
+          let _, subjects, _ = extend_let_envs types subjects proofs temporary leaf in
+          List.assoc_opt temporary subjects) contexts in
+        let common = match subjects with
+          | Some subject :: rest when List.for_all ((=) (Some subject)) rest ->
+            let visible = List.exists (fun (binding, _) ->
+              match attached_subject_of_expr funcs subject_env
+                  (EVar {name=binding;loc=Location.dummy_loc "<let-subject>"}) with
+              | Some outer -> subject = outer || String.starts_with ~prefix:(outer ^ ".") subject
+              | None -> false) type_env in
+            if visible then Some subject else None
+          | _ -> None in
+        let subjects = List.remove_assoc name subject_env in
+        let subjects = match common with Some subject -> (name,subject) :: subjects | None -> subjects in
+        Some (te, subjects, pe)
   in
   (extend_let_envs, extend_case_envs, return_leaves)
 

@@ -44,7 +44,9 @@ that names an input must preserve that input on every returning branch. A
 transformation uses a fresh result binder, whose witness proves only its actual
 result. Fully applied identity calls and value aliases preserve subjects; partial
 calls carry neither a result identity nor its returned proof. Nullary `()` calls
-retain their actual returned evidence. The 19-group
+retain their actual returned evidence. Branch-valued local bindings preserve
+identity only when every returning branch carries the same outer subject;
+`forgetFact` still removes proof access. The 24-group
 `test_attached_input_identity` suite covers these boundaries, including the
 previously accepted detached-witness forgery and an emitted Go race execution.
 

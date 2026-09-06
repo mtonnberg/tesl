@@ -69,8 +69,12 @@ returning branch now verifies that identity; fresh result binders and partial
 calls cannot borrow an input subject. The author's combined 403-case gate passes,
 including five generated Go race executions. The shared full compiler gate caught
 an additional compatibility regression: a nested check result bound through a
-local name loses its input identity. That correction and a repeated union gate
-are pending; the unrelated old spelling-only alias negative also needs updating.
+local name lost its input identity. The correction joins identity only when every
+returning branch preserves the same outer subject; an always-failing value has
+no returning continuation. It preserves `forgetFact` removal and rejects unrelated
+branch-local subjects. The old spelling-only alias negative now has paired valid
+alias and wrong-subject tests. The 233-case focused gate, including actual Go
+execution and all emission cases, passes; the repeated full union gate is pending.
 An additional regression preserves proof returns from nullary `()` calls.
 Contract-4 databases are not relabeled or silently trusted. The earlier
 retained-database results remain historical evidence. Fresh revision-5 compiler
@@ -86,6 +90,16 @@ application connection settings remain on `PostgresConfig`. The typed record
 supplies the usual field completion, hover and documentation. Historical flat
 spelling remains readable, but mixing it with grouped fields is rejected.
 Focused compiler/configuration gates pass, as do the real applications above.
+The documented `tesl test` and `tesl build --local` commands also pass. The
+configuration has two completed reviews; its expanded focused suite passes all
+16 groups. Documentation integrity and standalone manual coherence pass after
+adding the new contributor guides to their index.
+
+The checked-graph extraction shares complete source/type capture between schema
+inventories and the forthcoming transform linker, preserving the exact previous
+inventory digest. Its 90-group compiler union passes, including explicit role
+re-lowering, private proof/codec closure, unsaved imports and early complexity
+refusal. Migration proof context binding and callback linking remain pending.
 
 The source prerequisite for queues is integrated: pure `queueSchema` declarations,
 complete payload/proof/codec closure, immutable family-relative identities,
