@@ -33,6 +33,21 @@ type PgMigrationStatus struct {
 	HistoryError             string                       `json:"historyError,omitempty"`
 	Expansions               []PgMigrationExpansionStatus `json:"expansions"`
 	Instances                []PgMigrationInstanceStatus  `json:"instances"`
+	Indexes                  []PgMigrationIndexStatus     `json:"indexes"`
+}
+
+type PgMigrationIndexStatus struct {
+	ID                string     `json:"id"`
+	Name              string     `json:"name"`
+	Table             string     `json:"table"`
+	Version           int        `json:"version"`
+	State             string     `json:"state"`
+	SourceCompilerABI string     `json:"sourceCompilerAbi"`
+	Attempts          int64      `json:"attempts"`
+	Holder            string     `json:"holder,omitempty"`
+	Token             int64      `json:"token"`
+	ExpiresAt         *time.Time `json:"expiresAt,omitempty"`
+	Error             string     `json:"error,omitempty"`
 }
 
 type PgMigrationExpansionStatus struct {
@@ -59,7 +74,7 @@ func InspectPgMigrationStatus(ctx context.Context, conn *pgx.Conn, history PgCom
 	result := PgMigrationStatus{Version: 1, Kind: "schema-status", Database: history.Database,
 		Namespace: history.Namespace, BinaryVersion: history.CurrentVersion, SourceCompilerABI: history.SourceCompilerABI,
 		StoredValueCompatibility: history.StoredValueCompatibility,
-		Expansions:               []PgMigrationExpansionStatus{}, Instances: []PgMigrationInstanceStatus{}}
+		Expansions:               []PgMigrationExpansionStatus{}, Instances: []PgMigrationInstanceStatus{}, Indexes: []PgMigrationIndexStatus{}}
 	if _, err := history.ExpansionPlan(1); err != nil {
 		return result, err
 	}
@@ -94,6 +109,20 @@ func InspectPgMigrationStatus(ctx context.Context, conn *pgx.Conn, history PgCom
 		plan, planErr := history.ExpansionPlan(state.InitialVersion)
 		if planErr == nil {
 			planErr = pgVerifyExpansionHistory(state, plan, intents)
+		}
+		if state.Format >= 3 {
+			jobs, err := pgReadMigrationIndexJobs(ctx, tx, history.Namespace, intents)
+			if err != nil {
+				return err
+			}
+			if planErr == nil {
+				planErr = pgVerifyMigrationIndexJobs(plan, intents, jobs, false)
+			}
+			for _, job := range jobs {
+				result.Indexes = append(result.Indexes, PgMigrationIndexStatus{ID: job.ID, Name: job.Index.Name,
+					Table: job.Table, Version: job.Version, State: job.State, SourceCompilerABI: job.SourceABI,
+					Attempts: job.Attempts, Holder: job.Holder, Token: job.Token, ExpiresAt: job.ExpiresAt, Error: job.Error})
+			}
 		}
 		if planErr != nil {
 			// Status must still explain a source mismatch without attempting repair.

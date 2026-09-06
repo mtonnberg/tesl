@@ -95,6 +95,30 @@ func pgControlTableExists(ctx context.Context, tx pgx.Tx, namespace, name string
 	return exists, err
 }
 
+// A format is a closed set of protected relations, not merely a collection of
+// required names. In particular, format 3 jobs cannot be smuggled into format 2
+// by taking advantage of its original reader's unknown-table gap. Entity-owned
+// relations are checked separately by the entity catalog verifier.
+func pgControlRelationSet(ctx context.Context, tx pgx.Tx, namespace, owner string, format int) error {
+	var names []string
+	for _, spec := range pgControlTablesForFormat(format) {
+		names = append(names, spec.name)
+	}
+	var extra bool
+	err := tx.QueryRow(ctx, `select exists(select 1 from pg_catalog.pg_class c
+ join pg_catalog.pg_namespace n on n.oid=c.relnamespace join pg_catalog.pg_roles r on r.oid=c.relowner
+ where n.nspname=$1 and c.relkind not in ('i','I') and
+   ((r.rolname=$2 and not(c.relname=any($3::text[]))) or
+    (pg_catalog.left(c.relname,12)='tesl_schema_' and not(c.relname=any($3::text[])))))`, namespace, owner, names).Scan(&extra)
+	if err != nil {
+		return err
+	}
+	if extra {
+		return fmt.Errorf("migration control namespace contains an unrecorded protected relation for format %d", format)
+	}
+	return nil
+}
+
 func pgControlTableACL(ctx context.Context, tx pgx.Tx, namespace, name, worker string) error {
 	var unsafe bool
 	err := tx.QueryRow(ctx, `select exists (

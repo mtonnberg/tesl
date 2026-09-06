@@ -12,7 +12,7 @@ import (
 
 // ExecutePgMigrationExpansion borrows a dedicated idle Worker connection. The
 // one-time installer must already have provisioned protected control state. It
-// applies only additive table/column operations; populated-table index work and
+// applies additive table/column operations and records concurrent-index jobs;
 // transformations refuse before any entity changes. It never calls the legacy
 // bootstrap, adopts a lookalike, removes storage or admits application requests.
 func ExecutePgMigrationExpansion(ctx context.Context, conn *pgx.Conn, history PgCompiledMigrationHistory, roles PgMigrationControlRoles) (PgMigrationControlState, error) {
@@ -41,6 +41,9 @@ func ExecutePgMigrationExpansion(ctx context.Context, conn *pgx.Conn, history Pg
 	if !state.Present {
 		return result, fmt.Errorf("migration control is not installed; run the one-time installer")
 	}
+	if state.Format != pgMigrationControlFormat {
+		return result, fmt.Errorf("migration control format %d requires the installer upgrade before worker expansion; run %s", state.Format, pgMigrationInstallerHint(history, roles))
+	}
 	err = pgMigrationSessionLock(ctx, conn, state.FenceNamespace, 2147483647, true, func() error {
 		return pgControlTransaction(ctx, conn, false, func(tx pgx.Tx) error {
 			// Recheck after the boot-lock wait. This snapshot must follow the
@@ -62,6 +65,9 @@ func ExecutePgMigrationExpansion(ctx context.Context, conn *pgx.Conn, history Pg
 			if fresh.DatabaseUUID != state.DatabaseUUID || fresh.FenceNamespace != state.FenceNamespace {
 				return fmt.Errorf("migration installation identity changed while acquiring the boot lock")
 			}
+			if fresh.Format != pgMigrationControlFormat {
+				return fmt.Errorf("migration control format changed while acquiring the boot lock")
+			}
 			plan, err := history.ExpansionPlan(fresh.InitialVersion)
 			if err != nil {
 				return err
@@ -81,8 +87,8 @@ func ExecutePgMigrationExpansion(ctx context.Context, conn *pgx.Conn, history Pg
 					return fmt.Errorf("migration V%d requires an epoch transition; additive execution refuses", step.Version)
 				}
 				for _, op := range step.Operations {
-					if op.Kind == "build-index-concurrently" || op.Kind == "retain-index" {
-						return fmt.Errorf("migration V%d index changes require the concurrent-index executor", step.Version)
+					if op.Kind == "build-index-concurrently" && roles.Request == "" {
+						return fmt.Errorf("migration V%d concurrent-index execution currently requires Worker topology", step.Version)
 					}
 				}
 			}
@@ -90,7 +96,7 @@ func ExecutePgMigrationExpansion(ctx context.Context, conn *pgx.Conn, history Pg
 			if err != nil {
 				return err
 			}
-			if err := pgVerifyExpansionCatalog(ctx, tx, plan.Namespace, roles.Worker, catalog); err != nil {
+			if err := pgVerifyExpansionJobCatalog(ctx, tx, plan, roles, catalog); err != nil {
 				return err
 			}
 			if err := pgVerifyRequestGrants(ctx, tx, plan.Namespace, roles, catalog); err != nil {
@@ -165,7 +171,15 @@ func pgApplyExpansion(ctx context.Context, conn *pgx.Conn, plan PgMigrationExpan
 				return err
 			}
 			if err := pgExpansionTransaction(ctx, conn, func(tx pgx.Tx) error {
-				if err := pgExecuteExpansionOperation(ctx, tx, plan.Namespace, step.Operations[ordinal]); err != nil {
+				op := step.Operations[ordinal]
+				if op.Kind == "build-index-concurrently" {
+					// Registration and this ordinal's progress commit together. CIC
+					// runs after releasing boot, on its admitted dedicated session.
+					if _, err := tx.Exec(ctx, "select "+ns+"tesl_register_index($1::text,$2::integer,$3::integer,$4::text,$5::text,$6::text[],$7::boolean)",
+						hash, step.Version, ordinal, op.Table, op.Index.Name, op.Index.Columns, op.Index.Unique); err != nil {
+						return err
+					}
+				} else if err := pgExecuteExpansionOperation(ctx, tx, plan.Namespace, op); err != nil {
 					return err
 				}
 				if roles.Request != "" && step.Operations[ordinal].Kind == "create-table" {
@@ -182,7 +196,7 @@ func pgApplyExpansion(ctx context.Context, conn *pgx.Conn, plan PgMigrationExpan
 				if err != nil {
 					return err
 				}
-				if err := pgVerifyExpansionCatalog(ctx, tx, plan.Namespace, roles.Worker, catalog); err != nil {
+				if err := pgVerifyExpansionJobCatalog(ctx, tx, plan, roles, catalog); err != nil {
 					return err
 				}
 				if err := pgVerifyRequestGrants(ctx, tx, plan.Namespace, roles, catalog); err != nil {
@@ -196,7 +210,7 @@ func pgApplyExpansion(ctx context.Context, conn *pgx.Conn, plan PgMigrationExpan
 			r.Objects = append(r.Objects, hash)
 		}
 		if err := pgExpansionTransaction(ctx, conn, func(tx pgx.Tx) error {
-			if err := pgVerifyExpansionCatalog(ctx, tx, plan.Namespace, roles.Worker, step.Catalog); err != nil {
+			if err := pgVerifyExpansionJobCatalog(ctx, tx, plan, roles, step.Catalog); err != nil {
 				return err
 			}
 			if err := pgVerifyRequestGrants(ctx, tx, plan.Namespace, roles, step.Catalog); err != nil {
@@ -216,6 +230,31 @@ func pgVerifyExpansionCatalog(ctx context.Context, tx pgx.Tx, namespace, owner s
 	if err != nil {
 		return err
 	}
+	return pgExpansionCatalogError(report)
+}
+
+func pgVerifyExpansionJobCatalog(ctx context.Context, tx pgx.Tx, plan PgMigrationExpansionPlan, roles PgMigrationControlRoles, catalog []PgMigrationCatalogTable) error {
+	intents, err := pgReadExpansionIntents(ctx, tx, plan.Namespace)
+	if err != nil {
+		return err
+	}
+	jobs, err := pgReadMigrationIndexJobs(ctx, tx, plan.Namespace, intents)
+	if err != nil {
+		return err
+	}
+	if err := pgVerifyMigrationIndexJobs(plan, intents, jobs, true); err != nil {
+		return err
+	}
+	report, _, err := pgInspectMigrationCatalogWithIndexJobsInTx(ctx, tx, plan.Namespace, roles.Worker, catalog, jobs, plan.CurrentVersion)
+	if err != nil {
+		return err
+	}
+	// A new version's uniqueness readiness is separate from expansion. Older
+	// versions can keep serving while that introducing version waits for its job.
+	return pgExpansionCatalogError(report)
+}
+
+func pgExpansionCatalogError(report PgMigrationCatalogReport) error {
 	for _, issues := range [][]PgMigrationCatalogIssue{report.Missing, report.Drift} {
 		if len(issues) > 0 {
 			issue := issues[0]
@@ -260,7 +299,7 @@ func pgExecuteExpansionOperation(ctx context.Context, tx pgx.Tx, namespace strin
 		}
 		_, err = tx.Exec(ctx, "ALTER TABLE "+table+" ADD COLUMN "+column)
 		return err
-	case "retain-table": // Retained storage remains readable by older versions.
+	case "retain-table", "retain-index": // Retained storage remains readable by older versions.
 	default:
 		return fmt.Errorf("unsupported additive expansion operation %q", op.Kind)
 	}

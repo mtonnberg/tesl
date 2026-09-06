@@ -127,6 +127,39 @@ func pgExpectedControlTable(expected *pgCatalogExpectations, owner string, spec 
 			{"compat_floor_seen", "int4", true, "0", false},
 		}
 		primary("instance")
+	case "tesl_schema_index":
+		columns = []pgControlExpectedColumn{
+			{"id", "text", true, "", false},
+			{"version", "int4", true, "", false},
+			{"ordinal", "int4", true, "", false},
+			{"table_name", "text", true, "", false},
+			{"index_name", "text", true, "", false},
+			{"key_columns", "_text", true, "", false},
+			{"is_unique", "bool", true, "", false},
+			{"state", "text", true, "'pending'::text", false},
+			{"terminal_version", "int4", false, "", false},
+			{"attempts", "int8", true, "0", false},
+			{"error", "text", false, "", false},
+		}
+		primary("id")
+		unique("index_name")
+		unique("version", "ordinal")
+		check("((version >= 1) AND (version <= 2147483646))", "version")
+		check("(ordinal >= 0)", "ordinal")
+		check("(state = ANY (ARRAY['pending'::text, 'building'::text, 'valid'::text, 'failed'::text, 'terminal'::text]))", "state")
+		check("((terminal_version >= 1) AND (terminal_version <= 2147483646))", "terminal_version")
+		check("(attempts >= 0)", "attempts")
+		check("((state = 'terminal'::text) = (terminal_version IS NOT NULL))", "state", "terminal_version")
+	case "tesl_schema_leases":
+		columns = []pgControlExpectedColumn{
+			{"name", "text", true, "", false},
+			{"holder", "text", false, "", false},
+			{"token", "int8", true, "0", false},
+			{"expires_at", "timestamptz", false, "", false},
+		}
+		primary("name")
+		check("(token >= 0)", "token")
+		check("((holder IS NULL) = (expires_at IS NULL))", "holder", "expires_at")
 	case "tesl_fence_namespaces":
 		columns = []pgControlExpectedColumn{
 			{"fence_ns", "int4", true, "", true},

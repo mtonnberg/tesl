@@ -133,7 +133,7 @@ func pgVerifyMigrationConnection(ctx context.Context, conn *pgx.Conn, db *Postgr
 		return err
 	}
 	expected := db.migration
-	if uuid != expected.databaseUUID || fence != expected.fenceNamespace || format != pgMigrationControlFormat || domain != "tesl-1" || protocol != 1 ||
+	if uuid != expected.databaseUUID || fence != expected.fenceNamespace || !pgSupportedMigrationControlFormat(format) || domain != "tesl-1" || protocol != 1 ||
 		currentUser != expected.worker || sessionUser != expected.worker {
 		return fmt.Errorf("migration connection identity, protocol or worker/request login changed")
 	}

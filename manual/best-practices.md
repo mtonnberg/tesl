@@ -804,6 +804,11 @@ select each process's actual login through your connection environment:
 [Lesson 84](../example/learn/lesson84-worker-migrations.tesl) provides the full
 application and deployment regression. Its handlers and API tests stay identical
 while a new worker adds a field and old/new request processes keep serving.
+The [todo migration example](../example/db-migration-example/README.md) extends
+this pattern to seven revisions, an Elm frontend, two request nodes and a rolling
+deployment through a real HTTP proxy. Its README includes the steps for changing
+the schema; the current history demonstrates repeated nullable additions, a new
+entity with its initial index, and a constant default.
 Request verification needs neither CREATE nor temporary-table privileges. Keep
 the worker connection direct or behind a session pooler; `ddlConnection` can name
 a separate DSN when requests use a transaction pooler.
@@ -814,6 +819,15 @@ privileges and logs that fact. An installed Embedded grant profile cannot be
 silently converted to Worker. This initial Worker path supports additive entity
 changes; durable queue/outbox installation, background transformation jobs and
 retirement are still being implemented.
+
+Compiler updates can also change Tesl's own migration bookkeeping tables. The
+current runtime reads formats 2 and 3 and installs format 3 on new databases.
+For an existing format-2 database, first deploy the new request binaries, finish
+any pending expansion with its original worker, and stop that worker. Run the new
+binary's installer command above using the temporary installer login, then start
+the new worker. The upgrade preserves application rows and recorded history;
+ordinary request or worker startup does not perform it. Older executables that
+only understand format 2 cannot restart after this upgrade.
 
 To inspect a running deployment's recorded migration state, use its compiled
 application binary:

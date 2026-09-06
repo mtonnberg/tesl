@@ -172,6 +172,12 @@ func pgRunSchemaCommandContext(serviceContext context.Context, command pgSchemaC
 		if err != nil {
 			return err
 		}
+		if state.Format < pgMigrationControlFormat {
+			state, err = UpgradePgCompiledMigrationControl(ctx, conn, history, roles, pgMigrationControlFormat)
+			if err != nil {
+				return err
+			}
+		}
 		return pgWriteSchemaInstallation(out, command.json, history, state, roles)
 	}
 	if command.verb == "worker" {
@@ -230,6 +236,12 @@ func pgRunSchemaCommandContext(serviceContext context.Context, command pgSchemaC
 			for _, instance := range status.Instances {
 				fmt.Fprintf(&text, "%q: V%d; last heartbeat %s\n", instance.Instance, instance.Version, instance.LastSeen.Format("2006-01-02T15:04:05Z"))
 			}
+			for _, index := range status.Indexes {
+				fmt.Fprintf(&text, "%q.%q: V%d index %s; %d attempts; holder %q\n", index.Table, index.Name, index.Version, index.State, index.Attempts, index.Holder)
+				if index.Error != "" {
+					fmt.Fprintf(&text, "  last error: %q\n", index.Error)
+				}
+			}
 		}
 		if _, err := io.WriteString(out, text.String()); err != nil {
 			return err
@@ -239,6 +251,15 @@ func pgRunSchemaCommandContext(serviceContext context.Context, command pgSchemaC
 		return fmt.Errorf("compiled migration history differs: %s", status.HistoryError)
 	}
 	return nil
+}
+
+func pgMigrationInstallerHint(history PgCompiledMigrationHistory, roles PgMigrationControlRoles) string {
+	quote := func(value string) string { return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'" }
+	command := "app --schema install --database " + quote(history.Database) + " --worker " + quote(roles.Worker)
+	if roles.Request != "" {
+		command += " --request " + quote(roles.Request)
+	}
+	return command
 }
 
 type pgSchemaInstallation struct {

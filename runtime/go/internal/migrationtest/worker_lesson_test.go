@@ -447,6 +447,11 @@ type workerLessonProcess struct {
 
 func startWorkerLessonProcess(t *testing.T, ctx context.Context, binary string, environment []string, label string, args ...string) *workerLessonProcess {
 	t.Helper()
+	return startMigrationAppProcess(t, ctx, binary, environment, label, "NOTES_HTTP_PORT", args...)
+}
+
+func startMigrationAppProcess(t *testing.T, ctx context.Context, binary string, environment []string, label, portEnvironment string, args ...string) *workerLessonProcess {
+	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -465,7 +470,7 @@ func startWorkerLessonProcess(t *testing.T, ctx context.Context, binary string, 
 		t.Fatal(err)
 	}
 	cmd := exec.CommandContext(ctx, binary, args...)
-	cmd.Env = append(append([]string(nil), environment...), "NOTES_HTTP_PORT="+port)
+	cmd.Env = append(append([]string(nil), environment...), portEnvironment+"="+port)
 	cmd.Stdout, cmd.Stderr = log, log
 	if err := cmd.Start(); err != nil {
 		_ = log.Close()

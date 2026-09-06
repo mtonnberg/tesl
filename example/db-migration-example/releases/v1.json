@@ -1,0 +1,10 @@
+{
+  "format": 1,
+  "revision": 1,
+  "description": "Original todo table",
+  "appSha256": "efcfce6c70945660f8b7a341efffed042fe95ea7266ae12b468ae03ef45c0537",
+  "files": {
+    "schema/todo/v-current.tesl": "module TodoSchema.VCurrent exposing []\n\n# Schema membership only. Connections and handlers belong in todo-app.tesl.\nimport TodoSchema.VCurrent.Todos\n",
+    "schema/todo/v-current/todos.tesl": "module TodoSchema.VCurrent.Todos exposing [Todo, ValidTitle, tryTitle, newTodo]\n\nimport Tesl.Prelude exposing [Bool(..), String]\nimport Tesl.String exposing [String.length, String.trim]\nimport Tesl.Maybe exposing [Maybe(..)]\n\nfact ValidTitle (title: String)\n\n# The proof and its pure establishment belong to the versioned schema.\nestablish tryTitle(raw: String) -> Maybe (title: String ::: ValidTitle title) =\n  let title = String.trim raw\n  if String.length title > 0 && String.length title <= 120 then\n    Something (title ::: ValidTitle title)\n  else\n    Nothing\n\nentity Todo table \"todos\" primaryKey id {\n  id: String\n  title: String ::: ValidTitle title\n  completed: Bool\n}\n\n# Storage-only additions change this constructor, leaving request handlers alone.\nfn newTodo(id: String, title: String ::: ValidTitle title) -> Todo =\n  Todo { id: id, title: title, completed: False }\n"
+  }
+}

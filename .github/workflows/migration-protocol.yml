@@ -79,5 +79,5 @@ jobs:
             (cd compiler && dune build)
             cd runtime/go
             go test -race -count=1 -timeout=900s -v ./internal/migrationtest
-            go test -race -count=1 -timeout=300s -tags=tesl_migration_test ./teslrt -run "^TestPgMigration(Control|Expansion|Admission|Boot|Status|Install|StoredValueCompatibility|Compatibility|Worker)"
+            go test -race -count=1 -timeout=300s -tags=tesl_migration_test ./teslrt -run "^TestPgMigration(Control|Expansion|Admission|Boot|Status|Install|StoredValueCompatibility|Compatibility|Worker|Index|FutureIndex)"
           '

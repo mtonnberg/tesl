@@ -299,7 +299,10 @@ func pgInspectControlMode(ctx context.Context, tx pgx.Tx, namespace string, role
 	var state PgMigrationControlState
 	inspectTable, principal := pgControlTableCatalog, roles.Worker
 	if readOnly {
-		inspectTable, principal = pgControlTableCatalogReadOnly, roles.Request
+		inspectTable = pgControlTableCatalogReadOnly
+		if roles.Request != "" {
+			principal = roles.Request
+		}
 	}
 	if exists, err := pgControlNamespace(ctx, tx, namespace, roles.Owner, roles.Worker); err != nil || !exists {
 		if err == nil {
@@ -310,21 +313,28 @@ func pgInspectControlMode(ctx context.Context, tx pgx.Tx, namespace string, role
 	if err := inspectTable(ctx, tx, "public", roles.Owner, principal, pgMigrationFenceRegistry); err != nil {
 		return state, err
 	}
-	for _, spec := range pgMigrationControlTables {
+	// The meta table is invariant across formats. Verify it before reading its
+	// version selector, then check the corresponding closed schema in full.
+	if err := inspectTable(ctx, tx, namespace, roles.Owner, principal, pgMigrationControlTablesV2[0]); err != nil {
+		return state, err
+	}
+	var format int
+	if err := tx.QueryRow(ctx, "select format_version from "+quoteIdentifier(namespace)+".tesl_schema_meta where id=1").Scan(&format); err != nil {
+		return state, fmt.Errorf("migration control format is unavailable: %w", err)
+	}
+	if !pgSupportedMigrationControlFormat(format) {
+		return state, fmt.Errorf("unsupported migration control format %d; this binary supports formats 2 through %d with stored-value compatibility; no automatic upgrade is available", format, pgMigrationControlFormat)
+	}
+	for _, spec := range pgControlTablesForFormat(format)[1:] {
 		if err := inspectTable(ctx, tx, namespace, roles.Owner, principal, spec); err != nil {
 			return state, err
 		}
-		if spec.name == "tesl_schema_meta" {
-			var format int
-			if err := tx.QueryRow(ctx, "select format_version from "+quoteIdentifier(namespace)+".tesl_schema_meta where id=1").Scan(&format); err != nil {
-				return state, fmt.Errorf("migration control format is unavailable: %w", err)
-			}
-			if format != pgMigrationControlFormat {
-				return state, fmt.Errorf("unsupported migration control format %d; format %d with stored-value compatibility is required; no automatic upgrade is available", format, pgMigrationControlFormat)
-			}
-		}
 	}
-	for _, fn := range pgMigrationControlFunctions(namespace) {
+	if err := pgControlRelationSet(ctx, tx, namespace, roles.Owner, format); err != nil {
+		return state, err
+	}
+	functions := pgControlFunctionsForFormat(namespace, format)
+	for _, fn := range functions {
 		if err := pgControlFunctionCatalog(ctx, tx, namespace, roles, fn); err != nil {
 			return state, err
 		}
@@ -335,7 +345,7 @@ func pgInspectControlMode(ctx context.Context, tx pgx.Tx, namespace string, role
  where n.nspname=$1 and r.rolname=$2`, namespace, roles.Owner).Scan(&functionCount); err != nil {
 		return state, err
 	}
-	if functionCount != len(pgMigrationControlFunctions(namespace)) {
+	if functionCount != len(functions) {
 		return state, fmt.Errorf("migration control namespace contains an unrecorded control-owned function")
 	}
 	ns := quoteIdentifier(namespace) + "."
@@ -348,7 +358,7 @@ func pgInspectControlMode(ctx context.Context, tx pgx.Tx, namespace string, role
 	if err != nil {
 		return state, fmt.Errorf("migration control singleton or its registry identity is missing: %w", err)
 	}
-	if state.Format != pgMigrationControlFormat || state.FenceDomain != "tesl-1" || state.RetirementProtocolFloor != 1 || state.MaxObservedProtocol < 1 ||
+	if state.Format != format || state.FenceDomain != "tesl-1" || state.RetirementProtocolFloor != 1 || state.MaxObservedProtocol < 1 ||
 		state.InitialVersion < 1 || state.InitialVersion > 2147483646 || state.Current < 0 || state.Current > 2147483646 ||
 		state.MinVersion < 0 || state.MinVersion > state.Current || state.CompatFloor < 0 || state.CompatFloor > state.Current ||
 		(state.Current == 0 && (state.InstallingVersion != state.InitialVersion || state.MinVersion != 0 || state.CompatFloor != 0)) ||

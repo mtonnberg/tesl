@@ -1,0 +1,5 @@
+module TodoSchema.VCurrent exposing []
+
+# Schema membership only. Connections and handlers belong in todo-app.tesl.
+import TodoSchema.VCurrent.Todos
+import TodoSchema.VCurrent.Projects

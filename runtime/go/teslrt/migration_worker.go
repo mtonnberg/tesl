@@ -124,11 +124,21 @@ func pgWaitForMigrationReadiness(ctx context.Context, conn *pgx.Conn, history Pg
 			if err := pgVerifyExpansionHistory(state, plan, intents); err != nil {
 				return err
 			}
+			var jobs []pgMigrationIndexJob
+			if state.Format >= 3 {
+				jobs, err = pgReadMigrationIndexJobs(ctx, tx, history.Namespace, intents)
+				if err != nil {
+					return err
+				}
+				if err := pgVerifyMigrationIndexJobs(plan, intents, jobs, false); err != nil {
+					return err
+				}
+			}
 			catalog, err := pgExpansionRecordedCatalog(plan, intents)
 			if err != nil {
 				return err
 			}
-			report, err := pgInspectMigrationCatalogReadOnlyInTx(ctx, tx, history.Namespace, roles.Worker, catalog)
+			report, indexesReady, err := pgInspectMigrationCatalogWithIndexJobsInTx(ctx, tx, history.Namespace, roles.Worker, catalog, jobs, history.CurrentVersion)
 			if err != nil {
 				return err
 			}
@@ -143,7 +153,7 @@ func pgWaitForMigrationReadiness(ctx context.Context, conn *pgx.Conn, history Pg
 			if history.CurrentVersion < state.MinVersion {
 				return fmt.Errorf("migration request revision V%d is retired", history.CurrentVersion)
 			}
-			ready = state.Current >= history.CurrentVersion && state.Current != 0
+			ready = indexesReady && state.Current >= history.CurrentVersion && state.Current != 0
 			return nil
 		})
 		if err != nil {

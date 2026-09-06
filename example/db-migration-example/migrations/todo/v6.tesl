@@ -1,0 +1,32 @@
+# tesl:frozen-migration:v1 TodoSchema.Migrate.V6
+# tesl:frozen-source TodoSchema.Migrate.V6 2cf7bf4405513c7b6762d86db2b7fe4ba09960c8ed451cc80dd377ac311f0c18
+# tesl:frozen-migration:end
+# tesl:migration-history:v1
+# tesl:migration-from
+# tesl:snapshot-seal:v2 TodoSchema.V5 7465736c2d736f757263652d6162692d76313a38373431343532616464373034393134336634616232646438383039333466636161353435623032666337353065613761393135353030373133373330353564 tesl-stored-value-v1:12c05146e5164485b878df083a803b23ceedcb16b232268408b1f5de2088de4b 4859ccd5e8c4aaf624c1bb0aea4f31d14260373254871369a0d2673151efe4a2
+# tesl:snapshot-source TodoSchema.V5 bd2819368584aca3c62ebf75b5412475a87f72ef278eda695e77833a63494dd3
+# tesl:snapshot-source TodoSchema.V5.Projects b682e302fa8b4c6bfc5242a228412cb8c8b07e83f8a2c5e887c6fe78753f6786
+# tesl:snapshot-source TodoSchema.V5.Todos afe3542d0c4c12849b983e7ce3a8b58abd892c22a78ac0afaaecc0e62dc55ab2
+# tesl:snapshot-end
+# tesl:migration-to
+# tesl:snapshot-seal:v2 TodoSchema.V6 7465736c2d736f757263652d6162692d76313a38373431343532616464373034393134336634616232646438383039333466636161353435623032666337353065613761393135353030373133373330353564 tesl-stored-value-v1:12c05146e5164485b878df083a803b23ceedcb16b232268408b1f5de2088de4b 39a88ea1d9d94f662a11f752f66b0ad690fbec9c25bf97177c926ad7282a98a7
+# tesl:snapshot-source TodoSchema.V6 231cc6a23709797deff640aab98aa5d70109902721b3c6af8bc245964845e52f
+# tesl:snapshot-source TodoSchema.V6.Projects ad1134e0caf075373084f87157aa21ff2f13a44315f3835d4da3db05d462d30c
+# tesl:snapshot-source TodoSchema.V6.Todos b2fcf42e32b88c43117aade75bb643937b985b61dc99c50198b51b388239f7ef
+# tesl:snapshot-end
+# tesl:migration-history:end
+module TodoSchema.Migrate.V6 exposing [migration]
+import Tesl.Migration exposing [Migration, Entity(..), Rule(..), Same(..)]
+import TodoSchema.V5
+import TodoSchema.V6
+
+migration = Migration {
+  from: TodoSchema.V5
+  to: TodoSchema.V6
+  same: [
+    Same TodoSchema.V5.Todos.ValidTitle TodoSchema.V6.Todos.ValidTitle # @tesl-gen same:Todos.ValidTitle 44216c64c7bee44b36c7e55d96b8d45254b91198d92f365ebc0f4b8cc0d07b79
+  ]
+  entities: {
+    "Projects.Project": Additive [], # @tesl-gen entity:Projects.Project 3b63e7cd694eb5b717b01e7b7851f03ae0f4ac22292411c77effcf71db067501
+  }
+}

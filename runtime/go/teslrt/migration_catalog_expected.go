@@ -38,10 +38,11 @@ func pgReadCatalogExpectations(ctx context.Context, tx pgx.Tx) (*pgCatalogExpect
 	if version < 140000 || version >= 190000 {
 		return nil, fmt.Errorf("read-only migration catalog supports PostgreSQL 14 through 18, got %d", version)
 	}
-	names := []string{"int2", "int4", "int8", "numeric", "float8", "text", "bool", "jsonb", "uuid", "timestamptz"}
+	names := []string{"int2", "int4", "int8", "numeric", "float8", "text", "bool", "jsonb", "uuid", "timestamptz", "_text"}
 	rows, err := tx.Query(ctx, `select t.typname,t.typtype,pg_catalog.format_type(t.oid,-1),t.typcollation,o.oid::bigint
  from pg_catalog.pg_type t join pg_catalog.pg_namespace n on n.oid=t.typnamespace
- join pg_catalog.pg_opclass o on o.opcintype=t.oid and o.opcdefault and o.opcnamespace=n.oid
+ join pg_catalog.pg_opclass o on (o.opcintype=t.oid or
+   (t.typname='_text' and o.opcintype='pg_catalog.anyarray'::pg_catalog.regtype)) and o.opcdefault and o.opcnamespace=n.oid
  join pg_catalog.pg_am a on a.oid=o.opcmethod and a.amname='btree'
  where n.nspname='pg_catalog' and t.typname=any($1::text[]) order by t.typname`, names)
 	if err != nil {
@@ -194,21 +195,28 @@ func (e *pgCatalogExpectations) entity(ctx context.Context, tx pgx.Tx, want PgMi
 
 func pgInspectMigrationCatalogReadOnlyInTx(ctx context.Context, tx pgx.Tx, namespace, owner string,
 	expected []PgMigrationCatalogTable) (report PgMigrationCatalogReport, resultErr error) {
+	report, _, resultErr = pgInspectMigrationCatalogWithIndexJobsInTx(ctx, tx, namespace, owner, expected, nil, 0)
+	return report, resultErr
+}
+
+func pgInspectMigrationCatalogWithIndexJobsInTx(ctx context.Context, tx pgx.Tx, namespace, owner string,
+	expected []PgMigrationCatalogTable, jobs []pgMigrationIndexJob, version int) (report PgMigrationCatalogReport, ready bool, resultErr error) {
 	if !pgMigrationIdentifier(namespace) || !pgMigrationIdentifier(owner) {
-		return report, fmt.Errorf("migration catalog requires valid namespace and owner names")
+		return report, false, fmt.Errorf("migration catalog requires valid namespace and owner names")
 	}
 	if err := pgValidateMigrationCatalog(expected); err != nil {
-		return report, err
+		return report, false, err
 	}
 	metadata, err := pgReadCatalogExpectations(ctx, tx)
 	if err != nil {
-		return report, err
+		return report, false, err
 	}
+	ready = true
 	var observed []*pgCatalogTable
 	for _, want := range expected {
 		actual, err := pgReadMigrationTable(ctx, tx, namespace, want.Name)
 		if err != nil {
-			return report, err
+			return report, false, err
 		}
 		if actual == nil {
 			observed = append(observed, &pgCatalogTable{Name: want.Name})
@@ -218,13 +226,19 @@ func pgInspectMigrationCatalogReadOnlyInTx(ctx context.Context, tx pgx.Tx, names
 		observed = append(observed, actual)
 		comparison, err := metadata.entity(ctx, tx, want, owner)
 		if err != nil {
-			return report, err
+			return report, false, err
 		}
-		if err := pgCompareMigrationTableWithExtras(ctx, tx, owner, actual, comparison, &report, pgBenignExtraColumnReadOnly); err != nil {
-			return report, err
+		live, required, indexesReady, err := pgPrepareIndexJobCatalog(metadata, actual, comparison, jobs, version, &report)
+		if err != nil {
+			return report, false, err
+		}
+		ready = ready && indexesReady
+		if err := pgCompareMigrationTableWithExtras(ctx, tx, owner, live, required, &report, pgBenignExtraColumnReadOnly); err != nil {
+			return report, false, err
 		}
 	}
-	return pgFinishMigrationCatalogReport(report, namespace, owner, observed)
+	report, resultErr = pgFinishMigrationCatalogReport(report, namespace, owner, observed)
+	return report, ready && len(report.Missing) == 0 && len(report.Drift) == 0, resultErr
 }
 
 func pgBenignExtraColumnReadOnly(ctx context.Context, tx pgx.Tx, c pgCatalogColumn) (benign bool, resultErr error) {

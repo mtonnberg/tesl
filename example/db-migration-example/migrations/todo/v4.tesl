@@ -1,0 +1,31 @@
+# tesl:frozen-migration:v1 TodoSchema.Migrate.V4
+# tesl:frozen-source TodoSchema.Migrate.V4 45822c52502718697379cd372605275283384f9e745a4397ba18531a518f25ad
+# tesl:frozen-migration:end
+# tesl:migration-history:v1
+# tesl:migration-from
+# tesl:snapshot-seal:v2 TodoSchema.V3 7465736c2d736f757263652d6162692d76313a38373431343532616464373034393134336634616232646438383039333466636161353435623032666337353065613761393135353030373133373330353564 tesl-stored-value-v1:12c05146e5164485b878df083a803b23ceedcb16b232268408b1f5de2088de4b 6f5082d6412fdc0a42f5eb54aff9f411ac703ba8bc9e45f2ff539f4fa6bfa2d9
+# tesl:snapshot-source TodoSchema.V3 11f4c85d09fc047b500c819cd857be887abdce1890277587fb0c37c80ba6341b
+# tesl:snapshot-source TodoSchema.V3.Todos 6dbf695caad45959d23a1a14d6d23a4ff622bb0422c920d4c513b1299b9f2888
+# tesl:snapshot-end
+# tesl:migration-to
+# tesl:snapshot-seal:v2 TodoSchema.V4 7465736c2d736f757263652d6162692d76313a38373431343532616464373034393134336634616232646438383039333466636161353435623032666337353065613761393135353030373133373330353564 tesl-stored-value-v1:12c05146e5164485b878df083a803b23ceedcb16b232268408b1f5de2088de4b 9be41732e2d77d4b2f777bf519234c82827896294ae2879eb9a4d386914edf97
+# tesl:snapshot-source TodoSchema.V4 630f94052a1dbfc4ed0e7b835ee9b9eb72587b44053d1be75a43c73e6f0b5ee2
+# tesl:snapshot-source TodoSchema.V4.Projects a6164adf914d0afd6d1ea775ecd8fd4668d3c80d8ef0885344a5af26739797e6
+# tesl:snapshot-source TodoSchema.V4.Todos 66b5fa0368fcdc23cfedf0e8ca58848009fa482b3bbc77d2841540ff552e0990
+# tesl:snapshot-end
+# tesl:migration-history:end
+module TodoSchema.Migrate.V4 exposing [migration]
+import Tesl.Migration exposing [Migration, Entity(..), Rule(..), Same(..)]
+import TodoSchema.V3
+import TodoSchema.V4
+
+migration = Migration {
+  from: TodoSchema.V3
+  to: TodoSchema.V4
+  same: [
+    Same TodoSchema.V3.Todos.ValidTitle TodoSchema.V4.Todos.ValidTitle # @tesl-gen same:Todos.ValidTitle 44216c64c7bee44b36c7e55d96b8d45254b91198d92f365ebc0f4b8cc0d07b79
+  ]
+  entities: {
+    "Projects.Project": New, # @tesl-gen entity:Projects.Project c14d2da784b5ac94d5654c40fca3bf5cc1b6cb61fe24332f30c4a339a1fbd8d4
+  }
+}

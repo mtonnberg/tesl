@@ -98,6 +98,18 @@ Each lesson must exercise its actual generated runtime and refusal cases; source
 checking alone does not meet this gate. This is a planned inventory, not a claim
 that these scenarios currently work.
 
+The maintainer also requires `example/db-migration-example/`: a full PostgreSQL
+todo application with an Elm frontend following the chat example, separate schema
+worker and request processes, and a recorded history of at least five migrations
+(preferably more). Common migration kinds recur, and the final history must cover
+the implemented transformation, index, JSONB and lifecycle scenarios rather than
+only nullable additions. Its README gives concrete database-change steps and a
+cluster rolling-update recipe. Regression tests must compile the actual history,
+retain data across revisions, verify unchanged handlers for storage-only changes,
+and continuously exercise the load-balanced HTTP API during replacement. Startup
+readiness, worker interruption/recovery, invalid input and request-role isolation
+are explicit assertions. This showcase is under construction, not yet delivered.
+
 The maintainer also requires full-application scenarios: migrations are difficult
 to learn if examples show only entities and row functions. Lessons 1–4 and 6 will
 evolve the same runnable notes HTTP app. Each scenario will identify the changed
@@ -146,6 +158,33 @@ covered for both local bindings and function parameters.
 
 ## Slices under development
 
+- The control-format bridge now has exact format-2/3 definitions, an explicit
+  transactional installer upgrade and protected index job/lease APIs. The upgrade
+  preserves existing rows, lifecycle/source provenance, UUID and fence identity;
+  real backend-kill tests cover both sides of its commit. Request observers verify
+  finite registered index shapes without TEMP, distinguish pending plain indexes
+  from uniqueness readiness, and independently check future indexes against old
+  writer domains. Existing expansion still refuses concurrent-index operations:
+  the long-lived CIC executor and recovery loop are the next production work.
+  The PostgreSQL 17 race/tag bridge/catalog/installer gate passes (25.077s), followed
+  by malformed-array/failure-evidence and terminal-state regressions (6.257s), with
+  no skips. Root/agent reviews found and corrected row-shape and identifier issues.
+  Topology, embedded-runtime identity and runtime emission gates pass (19 cases).
+  Actual previous-binary compatibility, the broad integrated gate and final review
+  remain pending. Format-2-only binaries cannot be described as bridge readers.
+
+- The todo showcase now contains six real CLI-generated migration edges across
+  seven source revisions, byte-identical application code, proven CRUD handlers,
+  an Elm frontend, separate PostgreSQL worker/request credentials, and a runnable
+  local rolling-deployment proxy. All seven source emissions, the Elm optimized
+  compilation and seven source/proxy/compiler-refusal tests pass. Its native
+  PostgreSQL regression is being validated against the integrated compiler; it
+  requires writes and reads through both old/new nodes at every rollout phase,
+  interrupted worker DDL, retained data and an oldest-version restart. Review
+  corrected a traffic parity bug that could have exercised writes on only one
+  node. The current history is additive; index/typed-transform/JSONB/lifecycle
+  extensions remain required before this showcase satisfies the full request.
+
 - The separate Worker topology now has real PostgreSQL 17 and 18 coverage.
   Request startup verifies control and entity catalogs in read-only snapshots
   without CREATE or TEMP privilege; the worker owns expansion and grants entity
@@ -170,10 +209,17 @@ covered for both local bindings and function parameters.
   bounded import scanner. A combined regression covers unsaved files/directories
   while refusing external symlinks. The stored-value semantic revision advances
   to 2 because proof-boundary checks changed; historical contract 1 is not silently
-  accepted as equivalent. Compiler-upgrade scenarios must be rerun against this
-  merged build before final acceptance. A deterministic editor test now covers
+  accepted as equivalent. The merged-build A/B/C compiler-upgrade race scenario
+  passes (68.93s), including retained rows, interrupted-expansion ABI refusal and
+  recovery, and incompatible-contract refusal. Its isolated compiler fixture now
+  copies regular documentation files rather than using symlinks, preserving the
+  merged generator's source-boundary checks; integration-test lint reports zero
+  issues. A deterministic editor test now covers
   both a supplied Nix toolchain and unavailable-Nix fallback without depending on
-  the host's PostgreSQL environment; its mocked subset passes.
+  the host's PostgreSQL environment. The full exact editor package command with
+  default test isolation passes: 38 tests plus seven parser assertions. Its DAP
+  fixture uses an isolated Memory copy for debugger behavior; migration deployment
+  evidence continues to use actual PostgreSQL binaries and retained data.
 
 - Compiler upgrades now have a production full-app regression. It builds actual A,
   B and C compilers from one isolated source tree: B changes only query source;

@@ -1,0 +1,15 @@
+module TodoSchema.VCurrent.Projects exposing [Project, newProject]
+
+import Tesl.Prelude exposing [Bool(..), String]
+import Tesl.Maybe exposing [Maybe(..)]
+
+entity Project table "projects" primaryKey id {
+  id: String
+  name: String
+  archived: Bool
+  index [archived]
+  description: Maybe String
+}
+
+fn newProject(id: String, name: String) -> Project =
+  Project { id: id, name: name, archived: False, description: Nothing }

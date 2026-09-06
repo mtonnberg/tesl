@@ -136,6 +136,57 @@ func TestPgMigrationInstallRetainsAndVerifiesExistingHistory(t *testing.T) {
 	}
 }
 
+func TestPgMigrationInstallCommandExplicitlyUpgradesCompletedControl(t *testing.T) {
+	f := pgNewControlTest(t)
+	f.install(t, 1)
+	f.expand(t, 1)
+	f.call(t, "insert into notes_app.notes(id,active) values('retained',true)")
+	pgControlTestFormat2(t, f)
+	preserved := pgControlUpgradePreservedRows(t, f)
+	db := pgBootTestDatabase(t, f, 1)
+	RegisterDatabaseIdentity("CommandFixture.ControlUpgrade", db)
+	t.Cleanup(func() { databaseIdentities.Delete("CommandFixture.ControlUpgrade") })
+	db.Config.User, db.Config.Password = f.installer.Config().User, f.installer.Config().Password
+	args := []string{"--schema", "install", "--worker", f.roles.Worker, "--database", db.migrationHistory.Database, "--json"}
+	var out, diagnostics bytes.Buffer
+	if handled, code := RunSchemaCommand(args, &out, &diagnostics); !handled || code != 0 || diagnostics.Len() != 0 {
+		t.Fatalf("explicit installer upgrade failed: %s %s", &out, &diagnostics)
+	}
+	state, err := InspectPgMigrationControl(f.ctx, f.worker, f.namespace, f.roles)
+	if err != nil || state.Format != 3 || pgControlUpgradePreservedRows(t, f) != preserved || db.bound() != nil {
+		t.Fatalf("upgrade changed app data/history or opened its request pool: %+v %v", state, err)
+	}
+	var report pgSchemaInstallation
+	if err := json.Unmarshal(out.Bytes(), &report); err != nil || report.DatabaseUUID != state.DatabaseUUID || report.CurrentVersion != 1 {
+		t.Fatalf("upgrade report: %s %v", &out, err)
+	}
+}
+
+func TestPgMigrationIndexStatusReportsFutureJobWithoutExecutingIt(t *testing.T) {
+	f := pgNewControlTest(t)
+	f.install(t, 1)
+	f.expand(t, 1)
+	id := pgIndexControlTestIntent(t, f)
+	pgIndexControlTestRegister(t, f, id, "notes", "active__v2", []string{"active"})
+	f.call(t, "select notes_app.tesl_record_expanded(2)")
+	history := pgExpansionTestHistory(f.namespace, 1)
+	before := pgControlUpgradePreservedRows(t, f)
+	status, err := InspectPgMigrationStatus(f.ctx, f.worker, history, f.roles)
+	if err != nil || status.HistoryError != "" || len(status.Indexes) != 1 {
+		t.Fatalf("future protected job status: %+v %v", status, err)
+	}
+	job := status.Indexes[0]
+	if job.ID != id || job.Name != "active__v2" || job.Version != 2 || job.State != "pending" ||
+		job.SourceCompilerABI != pgTestSourceABI || job.Attempts != 0 || job.Token != 0 || job.Holder != "" {
+		t.Fatalf("status lost immutable job/progress fields: %+v", job)
+	}
+	var exists bool
+	if err := f.worker.QueryRow(f.ctx, "select pg_catalog.to_regclass('notes_app.active__v2') is not null").Scan(&exists); err != nil || exists ||
+		pgControlUpgradePreservedRows(t, f) != before {
+		t.Fatalf("status executed a pending index job: %v %v", exists, err)
+	}
+}
+
 func TestPgMigrationInstallRefusesNoLoginWorker(t *testing.T) {
 	f := pgNewControlTest(t)
 	if _, err := f.installer.Exec(f.ctx, "alter role "+quoteIdentifier(f.roles.Worker)+" nologin"); err != nil {

@@ -1,0 +1,241 @@
+module TodoApp exposing [TodoDatabase, TodoServer, TodoReply, createTodo, findTodo, editTodo, removeTodo]
+
+import Tesl.Prelude exposing [Bool(..), List, String, Unit]
+import Tesl.List exposing [List.map]
+import Tesl.String exposing [String.repeat]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.DB exposing [dbRead, dbWrite]
+import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection, MigrationTopology(..)]
+import Tesl.Env exposing [envRead, envInt]
+import Tesl.App exposing [App]
+import Tesl.ApiTest exposing [statusOk]
+import Tesl.Json exposing [stringCodec, boolCodec]
+import TodoSchema.VCurrent exposing []
+import TodoSchema.VCurrent.Todos exposing [Todo, tryTitle, newTodo]
+
+# Deployment configuration lives in the app, outside the sealed schema closure.
+database TodoDatabase = Database {
+  schema: TodoSchema.VCurrent
+  migrations: TodoSchema.Migrate
+  backend: Postgres (PostgresConfig {
+    namespace: "todo_app"
+    topology: Worker
+    controlOwner: env "TODO_CONTROL_OWNER"
+    requestRole: env "TODO_REQUEST_ROLE"
+    workerRole: env "TODO_WORKER_ROLE"
+    ddlConnection: env "TODO_DDL_CONNECTION"
+    dbName: env "TODO_DB_NAME"
+    user: env "TODO_DB_USER"
+    password: env "TODO_DB_PASSWORD"
+    connection: TcpConnection { host: env "TODO_DB_HOST", port: envInt "TODO_DB_PORT" 5432 }
+  })
+}
+
+# DTOs express the public API. They never serialize a stored entity wholesale.
+record TodoReply { id: String, title: String, completed: Bool }
+codec TodoReply {
+  toJson {
+    id -> "id" with_codec stringCodec
+    title -> "title" with_codec stringCodec
+    completed -> "completed" with_codec boolCodec
+  }
+  fromJson_forbidden
+}
+record CreateTodo { title: String }
+codec CreateTodo {
+  toJson_forbidden
+  fromJson [ { title <- "title" with_codec stringCodec } ]
+}
+record EditTodo { title: String, completed: Bool }
+codec EditTodo {
+  toJson_forbidden
+  fromJson [ {
+    title <- "title" with_codec stringCodec
+    completed <- "completed" with_codec boolCodec
+  } ]
+}
+record DeletedTodo { id: String, deleted: Bool }
+codec DeletedTodo {
+  toJson {
+    id -> "id" with_codec stringCodec
+    deleted -> "deleted" with_codec boolCodec
+  }
+  fromJson_forbidden
+}
+record Health { status: String }
+codec Health {
+  toJson { status -> "status" with_codec stringCodec }
+  fromJson_forbidden
+}
+
+fn reply(todo: Todo) -> TodoReply =
+  TodoReply { id: todo.id, title: todo.title, completed: todo.completed }
+
+fn findTodo(id: String) -> Maybe TodoReply requires [dbRead Todo] =
+  case selectOne todo from Todo where todo.id == id of
+    Nothing -> Nothing
+    Something todo -> Something (reply todo)
+
+fn createTodo(id: String, raw: String) -> Bool requires [dbWrite Todo] =
+  case tryTitle raw of
+    Nothing -> False
+    Something title ->
+      let rows = [newTodo id title]
+      let _ = insertMany rows in Todo
+      True
+
+# The established title proof must reach SQL assignment. Invalid input does not write.
+fn editTodo(id: String, raw: String, completed: Bool) -> Bool requires [dbRead Todo, dbWrite Todo] =
+  case tryTitle raw of
+    Nothing -> False
+    Something title ->
+      update todo in Todo
+        where todo.id == id
+        set todo.title = title
+        set todo.completed = completed
+      True
+
+fn removeTodo(id: String) -> Unit requires [dbWrite Todo] =
+  delete todo from Todo where todo.id == id
+
+capturer todoIdCapture: id: String using stringCodec
+
+handler get health() -> Health = Health { status: "ready" }
+handler get listTodos() -> List TodoReply requires [dbRead Todo] =
+  List.map reply (select todo from Todo order todo.id asc)
+handler get getTodo(id: String) -> TodoReply requires [dbRead Todo] =
+  case findTodo id of
+    Nothing -> fail 404 "todo not found"
+    Something todo -> todo
+handler post postTodo(id: String, body: CreateTodo) -> TodoReply requires [dbRead Todo, dbWrite Todo] =
+  case findTodo id of
+    Something _ -> fail 409 "todo already exists"
+    Nothing ->
+      if createTodo id body.title then
+        case findTodo id of
+          Nothing -> fail 404 "todo not found"
+          Something todo -> todo
+      else
+        fail 400 "title must be 1-120 characters after trimming"
+handler put putTodo(id: String, body: EditTodo) -> TodoReply requires [dbRead Todo, dbWrite Todo] =
+  case findTodo id of
+    Nothing -> fail 404 "todo not found"
+    Something _ ->
+      if editTodo id body.title body.completed then
+        case findTodo id of
+          Nothing -> fail 404 "todo not found"
+          Something todo -> todo
+      else
+        fail 400 "title must be 1-120 characters after trimming"
+handler delete deleteTodo(id: String) -> DeletedTodo requires [dbWrite Todo] =
+  removeTodo id
+  DeletedTodo { id: id, deleted: True }
+
+api TodoApi {
+  get "/api/health" -> Health
+  get "/api/todos" -> List TodoReply
+  get "/api/todos/:id"
+    capture id: String via todoIdCapture
+    -> TodoReply
+  post "/api/todos/:id"
+    capture id: String via todoIdCapture
+    body body: CreateTodo
+    -> TodoReply
+  put "/api/todos/:id"
+    capture id: String via todoIdCapture
+    body body: EditTodo
+    -> TodoReply
+  delete "/api/todos/:id"
+    capture id: String via todoIdCapture
+    -> DeletedTodo
+}
+server TodoServer for TodoApi {
+  health
+  listTodos
+  getTodo
+  postTodo
+  putTodo
+  deleteTodo
+  listenAddress Loopback
+}
+main() -> App requires [dbRead Todo, dbWrite Todo, envRead] =
+  App { database: TodoDatabase, api: TodoServer, port: envInt "TODO_HTTP_PORT" 8085 }
+
+api-test "create, list, edit, complete, reopen and delete a todo" for TodoServer requires [dbRead Todo, dbWrite Todo] {
+  let empty = get "/api/todos"
+  expect empty.body == []
+  let created = post "/api/todos/first" body { "title": "  Learn migrations  " }
+  expect created.status == 200
+  expect created.body == { "id": "first", "title": "Learn migrations", "completed": False }
+  let listed = get "/api/todos"
+  expect listed.body == [{ "id": "first", "title": "Learn migrations", "completed": False }]
+  let updated = put "/api/todos/first" body { "title": "  Keep the API stable  ", "completed": True }
+  expect updated.status == 200
+  expect updated.body == { "id": "first", "title": "Keep the API stable", "completed": True }
+  let reopened = put "/api/todos/first" body { "title": "Keep the API stable", "completed": False }
+  expect reopened.status == 200
+  let removed = delete "/api/todos/first"
+  expect removed.body == { "id": "first", "deleted": True }
+  let missing = get "/api/todos/first"
+  expect missing.status == 404
+  let removedAgain = delete "/api/todos/first"
+  expect removedAgain.status == 200
+}
+api-test "rejected updates preserve the existing title and completion state" for TodoServer requires [dbRead Todo, dbWrite Todo] {
+  let created = post "/api/todos/retained" body { "title": "Keep me" }
+  expect created.status == 200
+  let rejected = put "/api/todos/retained" body { "title": "   ", "completed": True }
+  expect rejected.status == 400
+  let retained = get "/api/todos/retained"
+  expect retained.body == { "id": "retained", "title": "Keep me", "completed": False }
+}
+api-test "malformed create and update bodies never change storage" for TodoServer requires [dbRead Todo, dbWrite Todo] {
+  let badTitle = post "/api/todos/bad" body { "title": 42 }
+  expect badTitle.status == 400
+  let absent = get "/api/todos/bad"
+  expect absent.status == 404
+  let created = post "/api/todos/good" body { "title": "Original" }
+  expect created.status == 200
+  let badCompleted = put "/api/todos/good" body { "title": "Changed", "completed": "yes" }
+  expect badCompleted.status == 400
+  let retained = get "/api/todos/good"
+  expect retained.body == { "id": "good", "title": "Original", "completed": False }
+}
+api-test "missing updates and duplicate creates do not replace rows" for TodoServer requires [dbRead Todo, dbWrite Todo] {
+  let absent = put "/api/todos/missing" body { "title": "Never inserted", "completed": False }
+  expect absent.status == 404
+  let created = post "/api/todos/duplicate" body { "title": "Original" }
+  expect created.status == 200
+  let duplicate = post "/api/todos/duplicate" body { "title": "Replacement" }
+  expect duplicate.status == 409
+  let retained = get "/api/todos/duplicate"
+  expect retained.body == { "id": "duplicate", "title": "Original", "completed": False }
+}
+api-test "deletion only removes its target and tests start isolated" for TodoServer requires [dbRead Todo, dbWrite Todo] {
+  let first = post "/api/todos/a" body { "title": "First" }
+  let second = post "/api/todos/b" body { "title": "Second" }
+  expect first.status == 200
+  expect second.status == 200
+  let removed = delete "/api/todos/a"
+  expect removed.status == 200
+  let remaining = get "/api/todos"
+  expect remaining.body == [{ "id": "b", "title": "Second", "completed": False }]
+}
+api-test "readiness is available only after application database binding" for TodoServer {
+  let response = get "/api/health"
+  expect statusOk response.status
+  expect response.body == { "status": "ready" }
+}
+test "title boundaries apply to both inserts and updates" requires [dbRead Todo, dbWrite Todo] {
+  expect createTodo "limit" (String.repeat "x" 120) == True
+  expect createTodo "too-long" (String.repeat "x" 121) == False
+  expect createTodo "blank" "   " == False
+  expect editTodo "limit" (String.repeat "x" 121) True == False
+  expect findTodo "too-long" == Nothing
+  expect findTodo "blank" == Nothing
+  expect findTodo "limit" == Something (TodoReply { id: "limit", title: String.repeat "x" 120, completed: False })
+}
+test "deleting an absent row is harmless" requires [dbRead Todo, dbWrite Todo] {
+  removeTodo "missing"
+  expect findTodo "missing" == Nothing
+}

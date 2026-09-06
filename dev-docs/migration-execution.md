@@ -107,8 +107,8 @@ varchar/char overflow and numeric rounding. No stored default expression execute
 The regression matrix cross-checks this path against the installer's independent
 temporary-table probes, including actual READ ONLY transactions without TEMP.
 
-The format number remains 2: Worker changes the explicit grant profile, not the
-control function bodies or stored rows. An existing Embedded profile is not
+Worker topology changes the explicit grant profile, not the source history.
+An existing Embedded profile is not
 silently converted by a Worker installer or request. Such a topology transition
 needs a separate operator protocol. Embedded keeps one combined request/executor
 login and reports that reduced isolation at startup. Worker startup and installation
@@ -198,7 +198,7 @@ entity installation later stops. A newer executor must finish that baseline befo
 expanding subsequent revisions. Retries never replace the UUID or installation
 origin and never adopt pre-existing objects by name.
 
-Production format 2 contains the meta/state/version/instance tables, expansion
+The format-2 base contains the meta/state/version/instance tables, expansion
 intents and ordered object progress. Its five security-definer functions admit a
 version, begin an expansion, record an object, finalize expansion, and heartbeat.
 Their search path is empty and their references are qualified. PostgreSQL verifies
@@ -212,9 +212,31 @@ Format 1 installations and older compiled history formats refuse explicitly; the
 is no automatic adoption of their missing compatibility metadata. Changing the
 format number or relabelling their stored ABI is not an upgrade procedure.
 
+Fresh installations now use format 3, adding protected index descriptors and leases
+with five narrow Worker-only functions for registration, claim, renewal, release
+and state recording. Registration and ordered expansion progress commit together.
+An unfinished job retains its creator ABI even after its expansion completes.
+The observer recognizes only exact registered index shapes: a pending plain index
+does not delay readiness; a required unique index needs both durable success and
+an actual valid, ready, live index. An older reader independently checks that a
+future index cannot reject its admitted writes. Unknown indexes remain drift.
+Production concurrent-index scheduling and cleanup are still pending.
+
+Bridge binaries inspect both exact formats 2 and 3. Before upgrading an existing
+format-2 installation, deploy the bridge request binaries with unchanged app code,
+finish any old pending expansion using its original worker, and stop that worker.
+Run the bridge binary's explicit `--schema install --worker ROLE` command (also
+`--request ROLE` for Worker topology) using the short-lived installer identity.
+It upgrades completed additive history in one transaction, preserving rows,
+history, source ABI, UUID and fence allocation. A crash leaves exact format 2 or
+exact format 3; an acknowledged or ambiguous successful commit can be retried.
+Then start the bridge worker. Workers never perform this upgrade on startup.
+Pre-bridge binaries that only support format 2 cannot restart against format 3;
+heartbeats do not prove that all such executables have been replaced.
+
 These are additive production definitions, not the independent phase-0 fixture's
-full future protocol. A format-upgrade executor, retirement, leases and later lifecycle
-tables still require implementation. The inspector compares the installed format
+full future protocol. Retirement and later lifecycle tables still require
+implementation. The inspector compares the installed format
 exactly, including function bodies, ownership, ACLs, sequence definitions and
 behavior-affecting catalog properties. Extra control columns are not treated like
 benign extra entity columns. Live defaults are never evaluated during inspection.

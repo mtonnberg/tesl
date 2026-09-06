@@ -3,11 +3,11 @@ package teslrt
 // The initial production format supports additive expansion only. These closed
 // definitions serve both installation and same-server catalog comparison; they
 // are never assembled from a source program's SQL or a database's stored text.
-const pgMigrationControlFormat = 2
+const pgMigrationControlFormat = 3
 
 type pgMigrationControlTable struct{ name, columns string }
 
-var pgMigrationControlTables = []pgMigrationControlTable{
+var pgMigrationControlTablesV2 = []pgMigrationControlTable{
 	{"tesl_schema_meta", `
  id smallint primary key check (id = 1),
  format_version integer not null,
@@ -73,7 +73,7 @@ type pgMigrationControlFunction struct {
 // tables. The installer adds SECURITY DEFINER, an empty search_path and ownership
 // by the no-login control role, and revokes PUBLIC in the creation transaction.
 // There is no entity DDL or arbitrary SQL entry point in this interface.
-func pgMigrationControlFunctions(namespace string) []pgMigrationControlFunction {
+func pgMigrationControlFunctionsV2(namespace string) []pgMigrationControlFunction {
 	ns := quoteIdentifier(namespace) + "."
 	return []pgMigrationControlFunction{
 		{"tesl_admit", "v integer", "integer", "stable", `

@@ -1,0 +1,4 @@
+module TodoSchema.V1 exposing []
+
+# Schema membership only. Connections and handlers belong in todo-app.tesl.
+import TodoSchema.V1.Todos

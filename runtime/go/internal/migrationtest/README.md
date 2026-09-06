@@ -87,6 +87,17 @@ limited disk bandwidth or cache space.
 
 ## What the independent comparisons establish
 
+`TestCompiledTodoShowcaseRollingUpgrade` builds all seven recorded revisions of
+[`example/db-migration-example`](../../../../example/db-migration-example/README.md),
+runs each emitted unit/API suite, and deletes its source/build trees before
+deployment. Two request processes share retained PostgreSQL data behind an actual
+HTTP reverse proxy. Every roll requires successful creates, updates and readbacks
+through both nodes, including mixed revisions, an interrupted V4 worker and an
+oldest-version restart. Separate logins, denied request DDL/control calls, exact
+frozen source bytes, omission defaults and final row contents are assertions.
+These are additive revisions; they do not stand in for future typed-transform,
+JSONB, concurrent-index or retirement execution tests.
+
 | Oracle | Implementation under observation | Scope |
 |---|---|---|
 | `Model` | Normative control SQL | Admission, expansion, retirement, contract and immutable repair history; actual persisted rows after successful and refused transitions |
