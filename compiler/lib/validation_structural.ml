@@ -1117,7 +1117,10 @@ let check_workers_structure ?(extra_funcs = []) (decls : top_decl list) : valida
                  p = pred && subject = param.name &&
                  (match Validation_capabilities.extract_col_eq_var query with
                   | Some ("Id", witness) ->
-                    String.length witness > 0 && witness.[0] >= 'a' && witness.[0] <= 'z'
+                    String.length witness > 0 && witness.[0] >= 'a' && witness.[0] <= 'z' &&
+                    String.for_all (function
+                      | 'a'..'z' | 'A'..'Z' | '0'..'9' | '_' -> true
+                      | _ -> false) witness
                   | _ -> false)
                | PredAnd { left; right; _ } -> allowed left && allowed right
                | _ -> false in

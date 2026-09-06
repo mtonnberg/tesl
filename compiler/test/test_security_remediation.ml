@@ -72,6 +72,7 @@ let () = run "security-remediation" [
     test_case "ordinary function" `Quick (fun () -> check ~message:"not declared as a `worker`" (folded "fn" "" "Nothing"));
     test_case "extra domain proof" `Quick (fun () -> check ~message:"proofs not supplied" (folded "worker" "::: Authorized p" "Nothing"));
     test_case "wrong provenance" `Quick (fun () -> check ~message:"proofs not supplied" (folded "worker" "::: FromDeadQueue (Id == jobId) p" "Nothing"));
+    test_case "provenance expression" `Quick (fun () -> check ~message:"proofs not supplied" (folded "worker" "::: FromQueue (Id == jobId + 1) p" "Nothing"));
     test_case "malformed dead slot" `Quick (fun () -> check ~message:"Nothing or" (folded "worker" "" "sensitive"));
     test_case "wrong dead worker" `Quick (fun () -> check ~message:"not declared as a `deadWorker`" (folded "worker" "" "(Something sensitive)"));
     test_case "valid plain workers" `Quick (fun () -> check (folded "worker" "" "(Something dead)"));
