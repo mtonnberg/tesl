@@ -2160,6 +2160,9 @@ let opaque_special_field_types =
    then fail at runtime, which is worse than either accepting or rejecting it
    consistently. *)
 let no_eliminator_stdlib_types : (string * string) list = [
+  "DeadJob",
+  "A DeadJob is opaque metadata, not a decoded job payload. Use DeadJob.id, \
+   DeadJob.reason, DeadJob.sourceVersion, DeadJob.attempts or DeadJob.typeName.";
   "PasswordHash",
   "A PasswordHash is opaque on purpose: the only legitimate way to use one is \
    `Crypto.checkPassword`, which is constant-time and returns a proof. Store it \
@@ -2266,7 +2269,7 @@ let opaque_display_name (type_name : string) : string =
      | None -> type_name)
 
 let known_qualifier_modules =
-  [ "List"; "ListPrim"; "Dict"; "String"; "Regex"; "Url"; "Net";
+  [ "List"; "ListPrim"; "Dict"; "String"; "Regex"; "Url"; "Net"; "DeadJob";
     "Int"; "Float"; "Set"; "Maybe";
     "Either"; "Result"; "Time"; "CivilTime"; "Random"; "Uuid"; "UUID"; "Env";
     "Http"; "HttpClient"; "Json"; "DB"; "Telemetry"; "Tesl"; "JWT"; "Email";
@@ -2296,7 +2299,7 @@ let qualifier_modules_that_are_not_constructors =
     (* #68, same rule: `Url` is an opaque stdlib TYPE built only by `Url.parse`,
        and `Net` is a pure qualifier with no same-named type, so `Url x` /
        `Net x` are plain T001s rather than escaping to a fresh type variable. *)
-    "Url"; "Net";
+    "Url"; "Net"; "DeadJob";
     (* #78: `CivilTime` is a pure qualifier with no same-named type, so a bare
        `CivilTime x` is a plain T001 instead of resolving to `anything`. *)
     "CivilTime" ]

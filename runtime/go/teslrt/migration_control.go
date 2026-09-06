@@ -140,6 +140,13 @@ func InstallPgCompiledMigrationControl(ctx context.Context, conn *pgx.Conn, hist
 
 func pgInstallMigrationControl(ctx context.Context, conn *pgx.Conn, namespace string, roles PgMigrationControlRoles, initialVersion int,
 	verify func(pgx.Tx, PgMigrationControlState) error) (PgMigrationControlState, error) {
+	return pgInstallMigrationControlPrepared(ctx, conn, namespace, roles, initialVersion, verify, nil)
+}
+
+// prepare is private unpublished control-format work. Production callers always
+// pass nil; an existing installation is only inspected, never prepared as fresh.
+func pgInstallMigrationControlPrepared(ctx context.Context, conn *pgx.Conn, namespace string, roles PgMigrationControlRoles, initialVersion int,
+	verify func(pgx.Tx, PgMigrationControlState) error, candidate *pgQueueCandidatePreparation) (PgMigrationControlState, error) {
 	var state PgMigrationControlState
 	if !pgMigrationIdentifier(namespace) || strings.HasPrefix(namespace, "pg_") || initialVersion < 1 || initialVersion > 2147483646 {
 		return state, fmt.Errorf("invalid migration namespace or installation version")
@@ -158,7 +165,14 @@ func pgInstallMigrationControl(ctx context.Context, conn *pgx.Conn, namespace st
 				return err
 			}
 			if present {
-				state, err = pgInspectControl(ctx, tx, namespace, roles)
+				if candidate != nil {
+					state, err = pgInspectQueueCandidate(ctx, tx, namespace, roles)
+				} else {
+					state, err = pgInspectControl(ctx, tx, namespace, roles)
+				}
+				if err == nil && candidate != nil {
+					err = candidate.verify(ctx, tx, state)
+				}
 				if err == nil && verify != nil {
 					err = verify(tx, state)
 				}
@@ -249,6 +263,18 @@ func pgInstallMigrationControl(ctx context.Context, conn *pgx.Conn, namespace st
 				return err
 			}
 		}
+		if candidate != nil {
+			if err := candidate.prepareFresh(ctx, tx, state); err != nil {
+				return err
+			}
+			state, err = pgInspectQueueCandidate(ctx, tx, namespace, roles)
+			if err != nil {
+				return err
+			}
+			if err := candidate.verify(ctx, tx, state); err != nil {
+				return err
+			}
+		}
 		migrationBoundary("control-before-commit")
 		if err := tx.Commit(ctx); err != nil {
 			return err
@@ -296,6 +322,10 @@ func pgInspectControlReadOnly(ctx context.Context, tx pgx.Tx, namespace string, 
 }
 
 func pgInspectControlMode(ctx context.Context, tx pgx.Tx, namespace string, roles PgMigrationControlRoles, readOnly bool) (PgMigrationControlState, error) {
+	return pgInspectControlCandidateMode(ctx, tx, namespace, roles, readOnly, false)
+}
+
+func pgInspectControlCandidateMode(ctx context.Context, tx pgx.Tx, namespace string, roles PgMigrationControlRoles, readOnly, queueCandidate bool) (PgMigrationControlState, error) {
 	var state PgMigrationControlState
 	inspectTable, principal := pgControlTableCatalog, roles.Worker
 	if readOnly {
@@ -322,18 +352,29 @@ func pgInspectControlMode(ctx context.Context, tx pgx.Tx, namespace string, role
 	if err := tx.QueryRow(ctx, "select format_version from "+quoteIdentifier(namespace)+".tesl_schema_meta where id=1").Scan(&format); err != nil {
 		return state, fmt.Errorf("migration control format is unavailable: %w", err)
 	}
-	if !pgSupportedMigrationControlFormat(format) {
+	if !pgSupportedMigrationControlFormat(format) && (!queueCandidate || format != pgQueueCandidateFormat) {
 		return state, fmt.Errorf("unsupported migration control format %d; this binary supports formats 2 through %d with stored-value compatibility; no automatic upgrade is available", format, pgMigrationControlFormat)
 	}
-	for _, spec := range pgControlTablesForFormat(format)[1:] {
+	baseFormat := format
+	if queueCandidate && format == pgQueueCandidateFormat {
+		baseFormat = 3
+	}
+	for _, spec := range pgControlTablesForFormat(baseFormat)[1:] {
 		if err := inspectTable(ctx, tx, namespace, roles.Owner, principal, spec); err != nil {
 			return state, err
 		}
 	}
-	if err := pgControlRelationSet(ctx, tx, namespace, roles.Owner, format); err != nil {
+	if queueCandidate && format == pgQueueCandidateFormat {
+		if err := pgQueueCandidateCatalog(ctx, tx, namespace, roles); err != nil {
+			return state, err
+		}
+	} else if err := pgControlRelationSet(ctx, tx, namespace, roles.Owner, format); err != nil {
 		return state, err
 	}
-	functions := pgControlFunctionsForFormat(namespace, format)
+	functions := pgControlFunctionsForFormat(namespace, baseFormat)
+	if queueCandidate && format == pgQueueCandidateFormat {
+		functions = pgQueueCandidateControlFunctions(namespace)
+	}
 	for _, fn := range functions {
 		if err := pgControlFunctionCatalog(ctx, tx, namespace, roles, fn); err != nil {
 			return state, err

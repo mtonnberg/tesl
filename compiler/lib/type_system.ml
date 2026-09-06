@@ -1172,6 +1172,15 @@ let stdlib_env : (string * scheme) list = [
      (#t/#f from the runtime).  The result type is CONCRETE — an earlier scheme
      `∀a b. a -> b` had a free result var `_b` that HM would instantiate to any
      type at the use site, i.e. an `unsafeCoerce` (review 2.3).  Fixed. *)
+  "DeadJob.id", mono (t_fun [TCon "DeadJob"] t_string);
+  "DeadJob.reason", mono (t_fun [TCon "DeadJob"] (TCon "DeadJobReason"));
+  "DeadJob.sourceVersion", mono (t_fun [TCon "DeadJob"] (t_maybe t_int));
+  "DeadJob.attempts", mono (t_fun [TCon "DeadJob"] t_int);
+  "DeadJob.typeName", mono (t_fun [TCon "DeadJob"] (t_maybe t_string));
+  "AttemptsExhausted", mono (TCon "DeadJobReason");
+  "PayloadInvalid", mono (TCon "DeadJobReason");
+  "MigrationRejected", mono (TCon "DeadJobReason");
+  "LegacyUnresolved", mono (TCon "DeadJobReason");
   "requeue",        mono (t_fun [TCon "DeadJob"] t_bool);
   (* deadJobs: takes a queue (nominal per-declaration, hence polymorphic in `_a`)
      and returns a concrete `List DeadJob`.  `_a` appears in an argument position,
@@ -1721,7 +1730,14 @@ let tesl_module_exports : (string * string list) list = [
   ( "Tesl.Http",
     [ "HttpRequest"; "cookieCap";
       "Http.setSessionCookie"; "Http.clearSessionCookie"; "Http.sessionToken" ] );
-  (* Tesl.DB, Tesl.Uuid, Tesl.Logging, Tesl.Queue, Tesl.Sse —
+  ( "Tesl.Queue",
+    [ "Queue"; "QueueRetryStrategy"; "QueueRetryBackoff"; "Fixed"; "Exponential"; "Linear";
+      "queueRead"; "queueWrite"; "FromQueue"; "FromDeadQueue"; "Job"; "pubsub";
+      "deadJobs"; "DeadJob"; "requeue"; "DeadJobReason";
+      "AttemptsExhausted"; "PayloadInvalid"; "MigrationRejected"; "LegacyUnresolved";
+      "DeadJob.id"; "DeadJob.reason"; "DeadJob.sourceVersion";
+      "DeadJob.attempts"; "DeadJob.typeName" ] );
+  (* Tesl.DB, Tesl.Uuid, Tesl.Logging, Tesl.Sse —
      internal modules; imports validated loosely (unknown names accepted)
      Note: Tesl.UUID (uppercase) now has a full export list above. *)
 ]
@@ -1809,7 +1825,7 @@ let stdlib_bare_home_module : (string * string) list = [
   "stubHttp", "Tesl.ApiTest"; "stubHttpFailure", "Tesl.ApiTest";
   "stubHttpTimeout", "Tesl.ApiTest"; "httpCalled", "Tesl.ApiTest";
   "httpCallCount", "Tesl.ApiTest"; "httpLastBody", "Tesl.ApiTest";
-  (* Queue infrastructure (Tesl.Queue — internal module, no export list) *)
+  (* Queue infrastructure; snapshot metadata accessors are pure. *)
   "requeue", "Tesl.Queue"; "deadJobs", "Tesl.Queue";
   (* UUID codecs (bare tokens; UUID.* dotted forms come from the derived rows) *)
   "uuidV4Codec", "Tesl.UUID"; "uuidV7Codec", "Tesl.UUID";
@@ -1890,6 +1906,9 @@ let stdlib_adt_ctor_groups : (string * string * string list) list = [
      tesl/either.tesl itself imports only the PRIM one. *)
   "Tesl.EitherPrim", "Either",       [ "Left"; "Right" ];
   "Tesl.ApiTest",    "JobResult",    [ "JobOk"; "JobFailed" ];
+  "Tesl.Queue", "QueueRetryBackoff", [ "Fixed"; "Exponential"; "Linear" ];
+  "Tesl.Queue", "DeadJobReason",
+    [ "AttemptsExhausted"; "PayloadInvalid"; "MigrationRejected"; "LegacyUnresolved" ];
   "Tesl.Email",      "EmailBody",    [ "TextBody"; "HtmlBody"; "RichBody" ];
   "Tesl.Net",        "HostClass",
     [ "Loopback"; "PrivateIp"; "LinkLocal"; "Cgnat"; "Multicast";

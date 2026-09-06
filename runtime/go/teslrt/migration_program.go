@@ -64,6 +64,8 @@ func pgMigrationFamily(family string) bool {
 // proves that one application connection owns each family; connection details
 // remain separate from the schema's declarations.
 func RegisterDatabaseMigrationHistory(database *Database, family string) *Database {
+	pgMigrationRegistrations.Lock()
+	defer pgMigrationRegistrations.Unlock()
 	if database == nil {
 		panic("database: missing connection for compiled migration history")
 	}

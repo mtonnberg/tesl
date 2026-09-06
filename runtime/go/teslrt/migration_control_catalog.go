@@ -269,7 +269,7 @@ func pgControlFunctionCatalog(ctx context.Context, tx pgx.Tx, namespace string, 
 	}
 	if actual.Owner != roles.Owner || actual.Language != "plpgsql" || actual.Kind != "f" || actual.Arguments != fn.arguments ||
 		actual.Result != fn.result || actual.Volatility != fn.volatility[:1] || actual.Parallel != "u" || actual.Support != 0 || actual.Body != fn.body ||
-		!actual.SecurityDefiner || actual.Strict || actual.Leakproof || actual.SetReturning || actual.Unsafe ||
+		!actual.SecurityDefiner || actual.Strict || actual.Leakproof || (actual.SetReturning != strings.HasPrefix(fn.result, "TABLE(")) || actual.Unsafe ||
 		!reflect.DeepEqual(actual.Configuration, []string{`search_path=""`}) {
 		return fmt.Errorf("protected migration function %s.%s differs from its definition, owner or execution grants", namespace, fn.name)
 	}
@@ -278,7 +278,14 @@ func pgControlFunctionCatalog(ctx context.Context, tx pgx.Tx, namespace string, 
 
 func pgControlFunctionRoles(roles PgMigrationControlRoles, fn pgMigrationControlFunction) []string {
 	principals := []string{roles.Worker}
-	if roles.Request != "" && (fn.name == "tesl_admit" || fn.name == "tesl_heartbeat") {
+	requestCallable := false
+	switch fn.name {
+	case "tesl_admit", "tesl_heartbeat", "tesl_queue_admit", "tesl_queue_enqueue",
+		"tesl_queue_claim", "tesl_queue_complete", "tesl_queue_renew", "tesl_queue_fail",
+		"tesl_queue_quarantine", "tesl_queue_count", "tesl_queue_dead_jobs", "tesl_queue_requeue":
+		requestCallable = true
+	}
+	if roles.Request != "" && requestCallable {
 		principals = append(principals, roles.Request)
 	}
 	return principals

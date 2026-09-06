@@ -85,8 +85,11 @@ type pgPubsub struct {
 	// channels by declared NAME. A name normally has one channel; a test standing two
 	// channels in for two instances registers two, and both receive.
 	channels map[string][]*SseChannel
-	// queues by declared name, woken on a `tesl_queue` notification naming them.
+	// queues by declared name, used only by the legacy listener.
 	queues map[string][]*Queue
+	// Protected notifications name the checked schema contract, not an App-local
+	// binding. Keep that routing separate even when the two names collide.
+	queueAliases map[string][]*Queue
 	// ready is set once the outbox table exists and the dispatch baseline is captured.
 	ready bool
 	// dispatchCursor is the highest commit-ordered dispatch sequence this process delivered.
@@ -126,6 +129,47 @@ func (runtime *pgPubsub) registerQueue(queue *Queue) {
 	runtime.mutex.Lock()
 	runtime.queues[queue.name] = append(runtime.queues[queue.name], queue)
 	runtime.mutex.Unlock()
+}
+
+// registerQueueAlias records only an already checked schema binding. It does
+// not rename the App queue or make an unversioned notification authoritative.
+func (runtime *pgPubsub) registerQueueAlias(identity string, queue *Queue) {
+	runtime.mutex.Lock()
+	defer runtime.mutex.Unlock()
+	if runtime.queueAliases == nil {
+		runtime.queueAliases = map[string][]*Queue{}
+	}
+	for _, registered := range runtime.queueAliases[identity] {
+		if registered == queue {
+			return
+		}
+	}
+	runtime.queueAliases[identity] = append(runtime.queueAliases[identity], queue)
+}
+
+func (runtime *pgPubsub) wakeQueueAlias(identity string) {
+	runtime.mutex.Lock()
+	queues := append([]*Queue(nil), runtime.queueAliases[identity]...)
+	runtime.mutex.Unlock()
+	for _, queue := range queues {
+		queue.Wake()
+	}
+}
+
+// A successful LISTEN/reconnect may have missed a committed notification. Wake
+// each checked queue once; its protected claim query remains the authority.
+func (runtime *pgPubsub) wakeAllQueueAliases() {
+	runtime.mutex.Lock()
+	queues := map[*Queue]struct{}{}
+	for _, aliases := range runtime.queueAliases {
+		for _, queue := range aliases {
+			queues[queue] = struct{}{}
+		}
+	}
+	runtime.mutex.Unlock()
+	for queue := range queues {
+		queue.Wake()
+	}
 }
 
 // wakeQueues rings every registered queue named by a `tesl_queue` notification.
@@ -452,6 +496,9 @@ func (runtime *pgPubsub) pause(duration time.Duration) bool {
 // lives for the process, which is not what a pool's connections are for. `listened` reports
 // whether LISTEN was established, which is what resets the reconnect backoff.
 func (runtime *pgPubsub) listen(connection *PostgresDB) (listened bool, err error) {
+	if connection.queueRuntime != nil {
+		return runtime.listenQueue(connection)
+	}
 	if err := pgVerifyMigrationFacilityConnection(connection, "SSE listener"); err != nil {
 		return false, err
 	}
@@ -539,6 +586,139 @@ func (runtime *pgPubsub) listen(connection *PostgresDB) (listened bool, err erro
 		default:
 			return true, err
 		}
+	}
+}
+
+// pgVerifyQueueCandidateConnection is private candidate admission, shared by
+// startup preparation and the queue-only listener. The caller owns an idle
+// read-committed, read-only transaction and publishes no binding before commit.
+// Ordinary format-3 connection validation remains unchanged and refuses format 4.
+func pgVerifyQueueCandidateConnection(ctx context.Context, tx pgx.Tx, db *PostgresDB, binding *pgQueueRuntime) error {
+	if db == nil || db.migration == nil || binding == nil || binding.database == nil {
+		return fmt.Errorf("queue listener: missing protected database binding")
+	}
+	expected := db.migration
+	login := expected.roles.Worker
+	if expected.roles.Request != "" {
+		login = expected.roles.Request
+	}
+	if login == "" || expected.worker != login {
+		return fmt.Errorf("queue listener: worker/request login changed from declared topology")
+	}
+	if binding.history.Namespace != db.schema || binding.history.CurrentVersion != expected.version ||
+		(db.queueRuntime != nil && db.queueRuntime != binding) {
+		return fmt.Errorf("queue listener: compiled database binding changed")
+	}
+	binding.database.mutex.RLock()
+	closed := binding.database.applicationPreflightClosed && binding.database.migrationFacilitiesClosed
+	history := binding.database.migrationHistory
+	matches := history != nil && *history == binding.history
+	binding.database.mutex.RUnlock()
+	if !closed || !matches {
+		return fmt.Errorf("queue listener: incomplete or changed application registration")
+	}
+	identity, exists := databaseIdentities.Load(binding.history.Database)
+	if !exists || identity != binding.database {
+		return fmt.Errorf("queue listener: database pointer does not own compiled identity")
+	}
+	if err := pgControlSession(ctx, tx); err != nil {
+		return err
+	}
+	var currentUser, sessionUser string
+	if err := tx.QueryRow(ctx, "select current_user, session_user").Scan(&currentUser, &sessionUser); err != nil {
+		return err
+	}
+	if expected.worker == "" || currentUser != expected.worker || sessionUser != expected.worker {
+		return fmt.Errorf("queue listener: worker/request login changed")
+	}
+	if err := pgControlRoles(ctx, tx, expected.roles, false); err != nil {
+		return err
+	}
+	state, err := pgInspectQueueCandidate(ctx, tx, db.schema, expected.roles)
+	if err != nil {
+		return err
+	}
+	if state.DatabaseUUID != expected.databaseUUID || state.FenceNamespace != expected.fenceNamespace {
+		return fmt.Errorf("queue listener: database identity differs from admission")
+	}
+	preparation := pgQueueCandidatePreparation{history: binding.history, roles: expected.roles}
+	if err := preparation.verify(ctx, tx, state); err != nil {
+		return err
+	}
+	return pgAdmitMigrationTransaction(ctx, tx, db, false)
+}
+
+// listenQueue never enters the SSE outbox preparation, sweep or prune paths.
+// PostgreSQL notifications are commit-ordered doorbells, not stored payloads.
+// A dedicated connection is rechecked against the complete protected catalog on
+// every reconnect; no connection ever passes the ordinary format-3 guard as 4.
+func (runtime *pgPubsub) listenQueue(db *PostgresDB) (bool, error) {
+	if db.queueRuntime == nil || db.queueRuntime.database != runtime.database || runtime.database.bound() != db {
+		return false, fmt.Errorf("queue listener: database is no longer bound")
+	}
+	connectCtx, cancelConnect := context.WithTimeout(runtime.ctx, pgLeaseTimeout())
+	defer cancelConnect()
+	config := db.pool.Config().ConnConfig.Copy()
+	// A config copied from a live connection can retain that connection's
+	// notification callback. This dedicated listener owns its own buffer.
+	config.OnNotification = nil
+	conn, err := pgx.ConnectConfig(connectCtx, config)
+	if err != nil {
+		return false, err
+	}
+	defer func() {
+		closeCtx, cancelClose := context.WithTimeout(context.Background(), pgLeaseTimeout())
+		defer cancelClose()
+		_ = conn.Close(closeCtx)
+		runtime.mutex.Lock()
+		runtime.listener = nil
+		runtime.mutex.Unlock()
+	}()
+	tx, err := conn.BeginTx(connectCtx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted, AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return false, err
+	}
+	defer func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), pgLeaseTimeout())
+		defer cancel()
+		_ = tx.Rollback(cleanupCtx)
+	}()
+	if err := pgVerifyQueueCandidateConnection(connectCtx, tx, db, db.queueRuntime); err != nil {
+		return false, err
+	}
+	if err := tx.Commit(connectCtx); err != nil {
+		return false, err
+	}
+	if _, err := conn.Exec(connectCtx, "listen "+quoteIdentifier(queueNotifyChannel)); err != nil {
+		return false, err
+	}
+	if runtime.database.bound() != db {
+		return false, fmt.Errorf("queue listener: database binding ended during connection")
+	}
+	runtime.mutex.Lock()
+	runtime.listener = conn
+	runtime.mutex.Unlock()
+	runtime.wakeAllQueueAliases()
+	for {
+		if runtime.database.bound() != db {
+			return true, nil
+		}
+		waitCtx, cancelWait := context.WithTimeout(runtime.ctx, pubsubBindPollInterval)
+		notification, err := conn.WaitForNotification(waitCtx)
+		cancelWait()
+		if runtime.database.bound() != db {
+			return true, nil
+		}
+		if err == nil {
+			if notification != nil && notification.Channel == queueNotifyChannel {
+				runtime.wakeQueueAlias(notification.Payload)
+			}
+			continue
+		}
+		if errors.Is(err, context.DeadlineExceeded) && runtime.ctx.Err() == nil {
+			continue
+		}
+		return true, err
 	}
 }
 

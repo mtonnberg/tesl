@@ -128,8 +128,8 @@ func TestPgMigrationWorkerFacilitiesBlockSchemaCommandsButPreserveStatus(t *test
 // INV-PRIVILEGE; TR-BOOT-EXPAND.
 func TestPgMigrationWorkerFacilitiesRespectRuntimeDefaultAndLegacyMode(t *testing.T) {
 	for _, scenario := range []struct {
-		name, topology, deployed  string
-		versioned, present, block bool
+		name, topology, deployed          string
+		versioned, present, workerRefusal bool
 	}{
 		{"explicit-worker", "Worker", "", true, false, true},
 		{"deployed-default", "", "1", true, true, true},
@@ -157,12 +157,16 @@ func TestPgMigrationWorkerFacilitiesRespectRuntimeDefaultAndLegacyMode(t *testin
 				constructor.run(database)
 			}
 			err := pgVerifyMigrationFacilities(database)
-			if scenario.block {
+			if scenario.workerRefusal {
 				for _, constructor := range pgFacilityConstructors() {
 					pgRequireFacilityRefusal(t, err, constructor.kind)
 				}
+			} else if scenario.versioned {
+				if err == nil || !strings.Contains(err.Error(), "Embedded migration topology does not yet support versioned queues") {
+					t.Fatalf("versioned Embedded queue did not refuse legacy storage: %v", err)
+				}
 			} else if err != nil {
-				t.Fatalf("existing Embedded/legacy facility behavior was refused: %v", err)
+				t.Fatalf("existing unversioned facility behavior was refused: %v", err)
 			}
 			if database.bound() != nil || database.migrationFacilitiesClosed {
 				t.Fatal("facility-only preflight opened a connection or sealed a refused/legacy declaration")
@@ -295,7 +299,7 @@ func TestPgMigrationWorkerFacilitiesGuardLazyStorageBeforePoolOrCachedReadiness(
 	if listened {
 		t.Fatal("unsupported Worker started a listener")
 	}
-	for _, legacy := range []*PostgresDB{nil, {}, {migration: &pgMigrationAdmission{roles: PgMigrationControlRoles{Worker: "embedded"}}}} {
+	for _, legacy := range []*PostgresDB{nil, {}} {
 		if err := pgVerifyMigrationFacilityConnection(legacy, jobsTable); err != nil {
 			t.Fatalf("legacy/Embedded opened connection was refused: %v", err)
 		}

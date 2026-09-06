@@ -132,6 +132,70 @@ main() -> App = App { database: ProbeDb, api: ProbeServer, port: 8093 }
   (List.exists (fun (a:Emit_go.artifact) -> a.path="internal/teslrt/migration_command.go") artifacts);
  let plain="module App exposing []\nimport Tesl.Database exposing [Database, Memory]\n" ^ imports ^ main in
  check bool "ordinary main remains inert" false (Compile.string_contains (entry (emit path plain)) "RunSchemaCommand"))
+let app_preflight () = with_project (fun _ path ->
+ let imports="import Tesl.Prelude exposing [String]\nimport Tesl.App exposing [App]\nimport Tesl.Telemetry exposing [counter]\n" in
+ let main={|
+api ProbeApi { get "/probe" -> String }
+handler get probe() -> String = "ok"
+server ProbeServer for ProbeApi { probe }
+main() -> App =
+ let _ = counter "app-preflight-startup" 1 []
+ App { database: Main, api: ProbeServer }
+|} in
+ let source=(app |> replace "import Tesl.Database" (imports ^ "import Tesl.Database")) ^ main in
+ save (path "app.tesl") source;
+ let module_source artifacts=(List.find (fun (a:Emit_go.artifact) -> a.path="internal/teslmodapp/module.go") artifacts).contents in
+ let before text a b = Str.search_forward (Str.regexp_string a) text 0 < Str.search_forward (Str.regexp_string b) text 0 in
+ let artifacts=emit path source in
+ let legacy=source
+  |> replace "schema: NotesSchema.VCurrent, migrations: NotesSchema.Migrate," "schema: \"notes_app\", entities: [],"
+  |> replace "namespace: \"notes_app\"," "" in
+ check bool "unversioned PostgreSQL Main keeps its existing emission" false
+  (Compile.string_contains (module_source (emit path legacy)) "PreflightApplicationDatabases");
+ List.iter (fun debug ->
+  let artifacts=if not debug then artifacts else match Compile.compile_go_source ~debug:true (path "app.tesl") source with
+   | Compile.GoSuccess xs -> xs | Compile.GoFailure _ -> fail "debug preflight compilation failed" in
+  let text=module_source artifacts in
+  check bool "explicit Main preflight precedes connection and user effects" true
+   (before text "PreflightApplicationDatabases(MainDatabase)" "teslrt.WithDatabase(MainDatabase"
+    && before text "PreflightApplicationDatabases(MainDatabase)" "teslrt.Counter(\"app-preflight-startup\"");
+  let entry=(List.find (fun (a:Emit_go.artifact) -> a.path="cmd/app/main.go") artifacts).contents in
+  check bool "selected schema command bypasses App startup" true (before entry "RunSchemaCommand" "teslmodapp.Main()")) [false;true];
+ (* A linked versioned database is available to --schema, but a Memory App does
+    not activate it. The emitter must not infer activation from the registry. *)
+ save (path "connection.tesl") (replace "module App" "module Connection" app);
+ let inactive="module App exposing []\nimport Connection\nimport Tesl.Database exposing [Database, Memory]\n" ^ imports ^
+  "database Local = Database { entities: [], backend: Memory }\n" ^ (main |> replace "database: Main" "database: Local") in
+ check bool "inactive imported DB is excluded from Main" false
+  (Compile.string_contains (module_source (emit path inactive)) "PreflightApplicationDatabases");
+ if Sys.command "go version >/dev/null 2>&1" <> 0 then Alcotest.skip () else
+ let destination=path "preflight-generated" in
+ List.iter (fun (a:Emit_go.artifact) -> write (Filename.concat destination a.path) a.contents) artifacts;
+ write (Filename.concat destination "internal/teslmodapp/app_preflight_test.go") {|package teslmodapp
+import (
+ "fmt"
+ "strings"
+ "testing"
+ "tesl.generated/teslmodapp/internal/teslrt"
+)
+func TestActualMainPreflightBeforeConnectionAndEffects(t *testing.T) {
+ // This unbound queue is a deliberate invalid runtime registration. The actual
+ // Main must reject it locally before parsing the malformed connection or
+ // executing the source's observable telemetry startup statement.
+ MainDatabase.Config.MigrationTopology="Embedded"
+ MainDatabase.Config.Password="'private-preflight-connection"
+ teslrt.NewQueueOn(MainDatabase,"UnboundQueue",1,"",0)
+ teslrt.ResetTelemetry()
+ var failure any
+ func(){defer func(){failure=recover()}();Main()}()
+ if failure==nil || !strings.Contains(fmt.Sprint(failure),"queue schema application bindings") || strings.Contains(fmt.Sprint(failure),"private-preflight-connection") {t.Fatal("Main did not reject its incomplete local declaration before connection",failure)}
+ if len(teslrt.MetricSeriesSnapshot())!=0 {t.Fatal("user startup effect ran before local validation")}
+}
+|};
+ let command=Printf.sprintf "cd %s && GOMAXPROCS=2 go test -race -p 1 ./internal/teslmodapp -run '^TestActualMainPreflightBeforeConnectionAndEffects$' -count=1 2>&1" (Filename.quote destination) in
+ let channel=Unix.open_process_in command in
+ let output=In_channel.input_all channel in
+ match Unix.close_process_in channel with Unix.WEXITED 0 -> () | _ -> fail output)
 let caller_bytes () = with_project (fun _ path ->
  let modified=replace "notes_app" "unsaved_namespace" app in
  let output=Option.get (artifact (emit path modified)) in
@@ -343,6 +407,8 @@ func QueueProjectionRoundTripForTest(queue *Queue, value any) (any,error) {
 |};
  let probe={|package teslmodapp
 import (
+ "fmt"
+ "strings"
  "testing"
  "tesl.generated/teslmodapp/internal/teslrt"
  schema "tesl.generated/teslmodapp/internal/teslmodnotesschemavcurrent"
@@ -355,6 +421,16 @@ func TestLinkedQueueProjection(t *testing.T) {
  value:=schema.Notify{Message:"persisted payload"}
  decoded,err:=teslrt.QueueProjectionRoundTripForTest(TasksQueue,value);if err!=nil || decoded.(schema.Notify)!=value {t.Fatal(decoded,err)}
  if schema.DecodeNotifyJSON(map[string]any{"message":42}).OK() {t.Fatal("malformed payload was accepted")}
+ // Complete linked codecs are local source metadata, not permission to enter
+ // unversioned legacy queue storage. Exercise the actual generated Main.
+ MainDatabase.Config.Password="'private-queued-connection"
+ for _,topology:=range []string{"Worker","Embedded"} {
+  MainDatabase.Config.MigrationTopology=topology
+  var failure any
+  func(){defer func(){failure=recover()}();Main()}()
+  want:=topology+" migration topology does not yet support"
+  if failure==nil || !strings.Contains(fmt.Sprint(failure),want) || strings.Contains(fmt.Sprint(failure),"private-queued-connection") {t.Fatal("complete metadata enabled production queues",topology,failure)}
+ }
 }
 |} in
  let probe=if not nested then probe else probe
@@ -367,7 +443,7 @@ func TestLinkedQueueProjection(t *testing.T) {
  let output=In_channel.input_all channel in
  match Unix.close_process_in channel with Unix.WEXITED 0 -> () | _ -> fail output)
 let () = run "Compiled migration history" ["build boundary",List.map (fun (n,f) -> test_case n `Quick f)
- ["nested schema codec binary roundtrip",queue_binary ~nested:true;"queue legacy provenance",queue_legacy_provenance;"queue additive identity projection",queue_additive_projection;"linked queue binary and actual codec roundtrip",queue_binary ~nested:false;"queue companion and stable frozen versions",queue_projection;"queue nested prefixed codec owner",queue_prefixed_codec_dependency;"queue decoder requires proof evidence",queue_source_proof_codec;"actual build artifact and no credentials",baseline;"ordinary and Memory builds",ordinary;"control owner belongs to application configuration",control_owner;"schema commands precede main and debug startup",command_entrypoints;
+ ["App-local atomic startup preflight and actual Main",app_preflight;"nested schema codec binary roundtrip",queue_binary ~nested:true;"queue legacy provenance",queue_legacy_provenance;"queue additive identity projection",queue_additive_projection;"linked queue binary and actual codec roundtrip",queue_binary ~nested:false;"queue companion and stable frozen versions",queue_projection;"queue nested prefixed codec owner",queue_prefixed_codec_dependency;"queue decoder requires proof evidence",queue_source_proof_codec;"actual build artifact and no credentials",baseline;"ordinary and Memory builds",ordinary;"control owner belongs to application configuration",control_owner;"schema commands precede main and debug startup",command_entrypoints;
   "explicit caller bytes",caller_bytes;"virtual application entry",virtual_entry;
   "every origin and stable frozen steps",origins;
   "frozen history refusal",invalid_history;"saved races and pinned bytes",changed_inputs;

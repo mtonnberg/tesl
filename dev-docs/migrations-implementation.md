@@ -15,8 +15,10 @@ tests are supporting evidence; they do not implement transforming migrations.
 Independent architecture and editor reviews confirmed that the next work must
 prioritize executable application scenarios over further editor machinery.
 
-The compiler-upgrade design gate has production evidence from the preceding
-implementation snapshot; current changes require a fresh native run.
+The compiler-upgrade design gate passes with the current stored-value contract
+(revision 4): actual A/B/C executables retain data, a different compiler ABI may
+serve completed compatible history, and pending execution remains ABI-pinned
+(115.28s, including pending-worker recovery).
 Build provenance and stored-value compatibility now have separate identities.
 The explicit contract binds a compiler-owned semantic revision and active lifted
 stdlib digests; its maintainer promise includes proof/check/establish semantics,
@@ -50,8 +52,10 @@ these forms now fail at the frontend, while codec-validated fields remain usable
 This correction advances the current contract to revision 4.
 Contract-2/3 histories are not relabeled, and bookkeeping upgrades do not
 revalidate their stored proofs. The contract-3 native result below remains exact
-historical slice evidence; current compiler and regenerated application gates
-are in progress. Focused owner/HTTP and ForAll suites pass (48 and 61 cases).
+historical slice evidence. The regenerated revision-4 nine-release application
+passes its retained-PostgreSQL rolling/index/crash gate (123.08s), all twelve
+workflow/proxy regressions, and the documented `tesl test` and `tesl build --local`
+commands. Focused owner/HTTP and ForAll suites pass (48 and 61 cases).
 
 The source prerequisite for queues is integrated: pure `queueSchema` declarations,
 complete payload/proof/codec closure, immutable family-relative identities,
@@ -73,13 +77,61 @@ no remaining blocker in this metadata slice. It does not enable durable claims
 or establish a persisted installation baseline. See
 [the projection contract](queue-history-projection.md).
 
+Protected queue storage has an unpublished format-4 candidate. Fresh installation
+records the complete checked inventory; upgrading format 3 records an unknown
+legacy baseline and cannot enable claims. Exact table/sequence/FK/trigger/grant
+verification, immutable semantic inventory, compatible compiler changes and
+source-seal provenance are covered. The combined PostgreSQL control/candidate
+gate passes 246 cases, including 16 real backend-kill boundaries; the candidate
+race gate passes (24.583s). The protected operation candidate also passes real
+PostgreSQL race regressions (12.321s), including a reproduced and fixed lease
+check after waiting on an unchanged row lock, mixed-version claims, backend loss
+and atomic handler/queue commit. These execute SQL directly; generated backend
+dispatch remains pending. Production
+installation, CLI and queue dispatch still use format 3. See
+[the candidate contract](queue-control-format4-candidate.md) and
+[operation invariants](queue-operations-candidate.md).
+
+The candidate now registers each deployed queue inventory immutably, before
+publishing expansion. The worker verifies complete canonical contracts, preserves
+original creator provenance on compatible replay, and rejects removal/movement or
+payload changes until typed job migrations exist. Old observers verify future
+inventories without claiming their jobs. UNKNOWN upgraded inventories cannot
+publish an expansion or imply historical absence. Candidate installation now
+includes the closed operation function catalog. The integrated control,
+registration, operation and App preflight race gate passes 430 cases (103.642s),
+with no skips and zero lint findings.
+
+Dead-letter metadata now has five typed accessors and an exhaustive four-reason
+ADT. Memory and legacy queues report only known provenance. Legacy quarantines
+remain `LegacyUnresolved`; a stale retryable handle cannot override the live
+quarantine marker. Compiler/native metadata, import/export, Memory and PostgreSQL
+regressions pass. See [the metadata contract](dead-letter-metadata.md).
+
+App startup now validates its explicit active database before entering its scope
+or running user startup effects. It prepares every target before closing any
+registration, preserves retry after a refusal, and closes codec/constructor races
+without reversing the database/codec lock order. Source metadata cannot enable
+legacy queue storage: versioned queues refuse in both Worker and Embedded paths,
+including lazy access through a cached binding. The actual generated Main and
+queue binaries, all 22 compiler/program groups, runtime race tests (7.731s) and
+focused lint pass. Unversioned queues and Memory keep their existing behavior.
+
+The same lease-after-row-lock defect also reproduced in the existing unversioned
+queue backend. Its completion, renewal, failure and decoder-quarantine SQL now
+materializes and locks the exact attempt before checking the lease clock. The
+actual backend regression covers all four paths; the broader queue/candidate/SQL
+operation race suite passes (33.923s). Independent review confirmed that existing
+claim identity and explicit-transaction ownership remain intact.
+
 The broad compiler run after the revision-4 proof correction exposed five old
 test groups that relied on unchecked HTTP body annotations or unexecuted wire
-adapters. Those fixtures are being corrected to perform real validation; the
-compiler restriction remains. Response validation now also accepts equivalent
+adapters. Those fixtures now perform real validation; the compiler restriction remains. Response validation now also accepts equivalent
 attached and quantified conjunctions without losing owner or argument identity.
-Its focused ownership and ForAll suites pass (48 and 61 cases); the complete
-compiler gate is pending the fixture corrections.
+Its focused ownership and ForAll suites pass (48 and 61 cases). The full
+`dune runtest -j2` gate passed after those corrections. An additional native
+regression calls the actual emitted todo handler with valid batches and invalid
+IDs in every batch position; all ten cases pass.
 
 The production Worker request/executor split and concurrent index worker pass
 their PostgreSQL regression gates. The next production work is protected durable
@@ -106,12 +158,12 @@ and both reviews. The normative phase prerequisites remain in force.
 
 | Scenario | Current evidence / remaining work |
 |---|---|
-| Existing database survives a supported compiler upgrade | Earlier A/B/C full-app scenario passed; current revision-4 rerun is pending |
+| Existing database survives a supported compiler upgrade | Current revision-4 A/B/C retained-database and pending-worker recovery scenario passes |
 | Adopt/deploy the notes app; add fields and indexes | Additive/Worker lessons and the nine-release todo rolling/index gate pass; adoption remains |
 | Transform an entity while old/new apps keep serving | Planner/typing groundwork exists; compatibility, backfill and epoch closure remain |
 | Reject a row, repair it, retire old code and contract | Model coverage exists; production lifecycle remains |
 | Evolve a stored record/ADT without changing the HTTP API | Codec/storage traces exist; unified history, rewrite and pruning remain |
-| Carry delayed, dead and in-flight jobs through a roll | Claim-token groundwork exists; versioned payload executor/effects remain |
+| Carry delayed, dead and in-flight jobs through a roll | Checked source/codec inventories and unpublished protected storage pass; claim integration, payload executor and effects remain |
 | Stage and promote uniqueness under concurrent writes | Production reservation, reconciliation and promotion remain |
 | Restore an old database, catch up, migrate offline and prune | Production orchestration and durable completion evidence remain |
 
@@ -258,9 +310,10 @@ covered for both local bindings and function parameters.
   refuse format 3 (21.16s; package 22.182s). Two executor reviews found and fixed
   the valid-commit/renewal race and a post-failpoint ownership check. The current
   native gate uses three authentic compiler generations: format 2/contract 2,
-  the historical format-3/contract-2 bridge, and current contract 3. Both archived
+  the historical format-3/contract-2 bridge, and current contract 4. Both archived
   emissions have closed source/file inventories; 34 tamper cases and package lint
-  pass. Its new native run remains pending. Embedded supervision is now implemented
+  pass. The current native replay passes (36.33s), preserving the original
+  contract and refusing to relabel old stored proofs. Embedded supervision is now implemented
   as described above; retirement/contract and feature-wide final reviews remain.
 
 - The todo showcase now contains eight real CLI-generated migration edges across

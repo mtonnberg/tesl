@@ -1089,7 +1089,29 @@ let agent : entry list = [
 (* ── Tesl.Queue (infrastructure helpers; queue caps + config are generated) ── *)
 
 let queue : entry list = [
-  f "requeue" [ "job" ] ~m:"Tesl.Queue" ~doc:"Re-enqueues a dead-letter job for another attempt; True when requeued.";
+  e "DeadJob" ~m:"Tesl.Queue" ~kind:(KType "type DeadJob # opaque metadata")
+    ~doc:"A dead-letter entry's metadata. No constructor, record fields or decoded payload are exposed.";
+  e "DeadJobReason" ~m:"Tesl.Queue"
+    ~kind:(KType "type DeadJobReason = AttemptsExhausted | PayloadInvalid | MigrationRejected | LegacyUnresolved")
+    ~doc:"Why a job cannot currently run. Only AttemptsExhausted is eligible for ordinary requeue.";
+  v "AttemptsExhausted" ~m:"Tesl.Queue" ~doc:"The job exhausted its ordinary retry policy.";
+  v "PayloadInvalid" ~m:"Tesl.Queue" ~doc:"The recorded source payload failed its source decoder.";
+  v "MigrationRejected" ~m:"Tesl.Queue" ~doc:"A checked payload migration rejected this job.";
+  v "LegacyUnresolved" ~m:"Tesl.Queue" ~doc:"Legacy quarantine has no trustworthy recorded source version or precise failure reason.";
+  f "DeadJob.id" ["job"] ~m:"Tesl.Queue" ~doc:"The stable job identifier; does not decode its payload.";
+  f "DeadJob.reason" ["job"] ~m:"Tesl.Queue" ~doc:"The typed dead-letter reason. Match all four cases.";
+  f "DeadJob.sourceVersion" ["job"] ~m:"Tesl.Queue" ~doc:"The recorded source schema version, when known. Nothing for Memory and unversioned PostgreSQL jobs.";
+  f "DeadJob.attempts" ["job"] ~m:"Tesl.Queue" ~doc:"The recorded number of processing attempts.";
+  f "DeadJob.typeName" ["job"] ~m:"Tesl.Queue" ~doc:"The stored job type identity, when available. Nothing for Memory jobs; never inferred from the current payload.";
+  e "FromQueue" ~m:"Tesl.Queue" ~kind:(KFact "FromQueue queue job")
+    ~doc:"Provenance attached to a job supplied to its queue worker.";
+  e "FromDeadQueue" ~m:"Tesl.Queue" ~kind:(KFact "FromDeadQueue queue job")
+    ~doc:"Provenance attached to a decodable job supplied to its dead-letter worker.";
+  e "Job" ~m:"Tesl.Queue" ~kind:(KSyntax "Job { job, worker, deadWorker? }")
+    ~doc:"Associates a queue's payload record with its workers.";
+  e "QueueRetryBackoff" ~m:"Tesl.Queue" ~kind:(KType "type QueueRetryBackoff = Fixed | Exponential | Linear")
+    ~aliases:["Fixed"; "Exponential"; "Linear"] ~doc:"The backoff mode in QueueRetryStrategy.";
+  f "requeue" [ "job" ] ~m:"Tesl.Queue" ~doc:"Re-enqueues an AttemptsExhausted entry for another attempt; False for quarantines, claimed or absent jobs.";
   f "deadJobs" [ "queue" ] ~m:"Tesl.Queue" ~doc:"The queue's dead-letter entries.";
 ]
 

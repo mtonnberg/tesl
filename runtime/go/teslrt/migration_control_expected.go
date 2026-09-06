@@ -171,7 +171,11 @@ func pgExpectedControlTable(expected *pgCatalogExpectations, owner string, spec 
 	default:
 		return nil, fmt.Errorf("control format %d has no read-only descriptor for %q", pgMigrationControlFormat, spec.name)
 	}
-	table := pgNewExpectedCatalogTable(spec.name, owner)
+	return pgBuildExpectedControlTable(expected, owner, spec.name, columns, constraints)
+}
+
+func pgBuildExpectedControlTable(expected *pgCatalogExpectations, owner, name string, columns []pgControlExpectedColumn, constraints []pgControlExpectedConstraint) (*pgCatalogTable, error) {
+	table := pgNewExpectedCatalogTable(name, owner)
 	numbers := map[string]int{}
 	for i, definition := range columns {
 		column, err := expected.column(i+1, definition.name, definition.typeName, definition.required)

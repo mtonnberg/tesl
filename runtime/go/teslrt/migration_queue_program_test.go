@@ -206,6 +206,7 @@ func TestQueueProjectionBindsActualCodecsWithoutChangingLegacyWire(t *testing.T)
 	db := RegisterDatabaseIdentity(h.Database, NewDatabase("Main", PostgresConfig{Schema: h.Namespace}, nil))
 	RegisterDatabaseMigrationHistory(db, h.Family)
 	q := NewQueueOn(db, "AppBindingName", 3, "", 0)
+	t.Cleanup(pubsubRuntimeOf(t, db).Close)
 	t.Cleanup(func() { queueSchemaOwners.Lock(); delete(queueSchemaOwners.queues, db); queueSchemaOwners.Unlock() })
 	if _, err := QueueSourceCodecs(q); err == nil {
 		t.Fatal("unbound codec became complete")
@@ -217,6 +218,7 @@ func TestQueueProjectionBindsActualCodecsWithoutChangingLegacyWire(t *testing.T)
 	other := NewDatabase("Other", PostgresConfig{Schema: h.Namespace}, nil)
 	migrationRegistrationPanics(t, func() { RegisterQueueSchema(q, other, h.Family, "Notifications", 3) })
 	migrationRegistrationPanics(t, func() { RegisterQueueSchema(NewQueueOn(other, "Other", 1, "", 0), other, h.Family, "Notifications", 3) })
+	t.Cleanup(pubsubRuntimeOf(t, other).Close)
 	migrationRegistrationPanics(t, func() { RegisterQueueSchema(NewQueueOn(db, "Duplicate", 1, "", 0), db, h.Family, "Notifications", 3) })
 	encode := func(v any) any { return v }
 	decode := func(v any) (any, error) { return v, nil }
@@ -244,7 +246,9 @@ func TestQueueProjectionBindsActualCodecsWithoutChangingLegacyWire(t *testing.T)
 	if again[0].Job != "Notify" {
 		t.Fatal("metadata alias")
 	}
-	plain := NewQueueOn(NewDatabase("Plain", PostgresConfig{}, nil), "Legacy", 1, "", 0)
+	plainDB := NewDatabase("Plain", PostgresConfig{}, nil)
+	plain := NewQueueOn(plainDB, "Legacy", 1, "", 0)
+	t.Cleanup(pubsubRuntimeOf(t, plainDB).Close)
 	RegisterJobCodec(plain, "PlainRecord", encode, decode)
 	RegisterJobCodec(plain, "PlainRecord", encode, decode)
 	RegisterJobCodec(NewQueue("Memory", 1), "Record", encode, decode)

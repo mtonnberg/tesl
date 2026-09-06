@@ -103,6 +103,7 @@ type PostgresIndex struct {
 // PostgresDB is a live pool plus the schema every statement is qualified with.
 type PostgresDB struct {
 	pool           *pgxpool.Pool
+	queueRuntime   *pgQueueRuntime // immutable candidate binding; nil in production format 3
 	schema         string
 	bootstrapMutex sync.Mutex
 	outboxReady    bool                    // protected by bootstrapMutex; runtime DDL runs before first binding

@@ -1277,6 +1277,35 @@ api-test "posting a registration enqueues and processes a job" for RegistrationS
 - Drain the dead-letter queue with `processNextDeadJob <Queue>`
 - Check database state after processing
 
+`deadJobs QueueName` returns opaque `DeadJob` metadata. Inspect a retained job
+without decoding its payload:
+
+```tesl
+import Tesl.Prelude exposing [String]
+import Tesl.Queue exposing [DeadJob, DeadJobReason(..), DeadJob.reason]
+
+fn nextAction(job: DeadJob) -> String =
+  case DeadJob.reason job of
+    AttemptsExhausted -> "Retry after fixing the worker or dependency"
+    PayloadInvalid -> "Repair the source payload"
+    MigrationRejected -> "Inspect the rejected migration"
+    LegacyUnresolved -> "Investigate the legacy quarantine"
+```
+
+`DeadJob.id` and `DeadJob.attempts` identify the entry and its recorded attempt
+count. `DeadJob.sourceVersion` returns `Maybe Int`; Memory and unversioned
+PostgreSQL entries return `Nothing`. `DeadJob.typeName` returns the stored type
+identity as `Maybe String`, or `Nothing` for Memory. These accessors are pure:
+they describe the listing's snapshot, so later worker activity can make it stale.
+
+`requeue job` returns `False` for quarantines and for entries that have already
+been claimed or removed. Only `AttemptsExhausted` entries may be retried this way.
+Legacy PostgreSQL quarantines cannot reliably distinguish a missing codec from
+an invalid payload, so they report `LegacyUnresolved`. The API does not expose
+raw JSON as a current typed job. Versioned PostgreSQL queue migration dispatch
+remains unavailable until its protected storage and migration path are enabled;
+adding these inspection types does not enable it.
+
 ### 4b. Outbound HTTP (stubbing what your code calls)
 
 A handler or worker that calls an external service used to have an untestable

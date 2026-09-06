@@ -36,8 +36,10 @@ type Database struct {
 	migrationHistory *PgCompiledMigrationHistory
 	// Declarations may initialize before or after the compiled history is linked.
 	// Worker preflight closes registration under this same mutex before any I/O.
-	migrationFacilities       map[pgMigrationFacility]struct{}
-	migrationFacilitiesClosed bool
+	migrationFacilities        map[pgMigrationFacility]struct{}
+	migrationQueues            map[*Queue]struct{}
+	migrationFacilitiesClosed  bool
+	applicationPreflightClosed bool
 }
 
 // The database `with database D` most recently bound, program-wide.

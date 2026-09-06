@@ -593,6 +593,26 @@ let queue_startup_info (q : queue_form) : string * string list * int option * bo
   in
   (q.name, q.capabilities, nw, has_dead)
 
+(* Shared literal-App metadata: backends may use the same checked activation
+   that lowering consumes, without treating every linked database as active. *)
+let app_record_fields = function
+  | ERecord { type_hint = Some "App"; fields; _ }
+  | EApp { fn = EConstructor { name = "App"; _ }; arg = ERecord { fields; _ }; _ } -> Some fields
+  | _ -> None
+
+let app_fields (fd : func_decl) =
+  let rec tail = function
+    | ELet r -> tail r.body
+    | ELetProof r -> tail r.body
+    | e -> app_record_fields e
+  in
+  if fd.kind = MainKind then tail fd.body else None
+
+let app_database fd =
+  match app_fields fd with
+  | None -> None
+  | Some fields -> Option.bind (List.assoc_opt "database" fields) config_ctor_name
+
 let lower_main_app (decls : top_decl list) (fd : func_decl) : func_decl =
   if fd.kind <> MainKind then fd else
   let qinfo = List.filter_map (function DQueue q -> Some (queue_startup_info q) | _ -> None) decls in
@@ -600,10 +620,6 @@ let lower_main_app (decls : top_decl list) (fd : func_decl) : func_decl =
   let main_caps = fd.capabilities and loc = fd.loc in
   let names_of = function
     | EList { elems; _ } -> List.filter_map config_ctor_name elems | _ -> [] in
-  let is_app = function
-    | ERecord { type_hint = Some "App"; fields; _ } -> Some fields
-    | EApp { fn = EConstructor { name = "App"; _ }; arg = ERecord { fields; _ }; _ } -> Some fields
-    | _ -> None in
   let db_of fields =
     match List.assoc_opt "database" fields with Some v -> Option.value ~default:"" (config_ctor_name v) | None -> "" in
   (* The startup chain (start-workers per activated queue, start-email-workers,
@@ -637,20 +653,14 @@ let lower_main_app (decls : top_decl list) (fd : func_decl) : func_decl =
     in
     chain (telemetry_stmts @ worker_stmts @ email_stmts @ [ serve ])
   in
-  (* Walk the let-chain of main's body to the trailing `App { … }` record. *)
-  let rec find_app e = match e with
-    | ELet r      -> find_app r.body
-    | ELetProof r -> find_app r.body
-    | _           -> is_app e
-  in
   (* Replace ONLY the trailing App record with the startup chain, preserving the
      user's `let … = …` startup statements (seed, telemetry, port) in place. *)
   let rec rewrite e = match e with
     | ELet r      -> ELet { r with body = rewrite r.body }
     | ELetProof r -> ELetProof { r with body = rewrite r.body }
-    | _ -> (match is_app e with Some fields -> startup_chain fields | None -> e)
+    | _ -> (match app_record_fields e with Some fields -> startup_chain fields | None -> e)
   in
-  match find_app fd.body with
+  match app_fields fd with
   | None -> fd  (* no App record returned — leave untouched *)
   | Some fields ->
     (* Per the App-model design: the WHOLE main body (the user's seed/telemetry/

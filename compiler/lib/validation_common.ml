@@ -960,6 +960,10 @@ let builtin_ctor_info : ctor_info = [
   ("PublicIp",    ([], mk_name_type "HostClass"));
   ("DomainName",  ([], mk_name_type "HostClass"));
   ("InvalidHost", ([], mk_name_type "HostClass"));
+  ("AttemptsExhausted", ([], mk_name_type "DeadJobReason"));
+  ("PayloadInvalid", ([], mk_name_type "DeadJobReason"));
+  ("MigrationRejected", ([], mk_name_type "DeadJobReason"));
+  ("LegacyUnresolved", ([], mk_name_type "DeadJobReason"));
   (* Month / Weekday (Tesl.CivilTime, GitHub #78) — twelve and seven nullary
      variants.  These rows are the reason the calendar uses low-cardinality ADTs
      instead of a 1..12 Int: `case CivilTime.month d of January -> …` has to be
@@ -1618,6 +1622,22 @@ let stdlib_func_infos : (string * func_info) list =
      { fi_name = "Net.classifyHost"; fi_kind = FnKind;
        fi_params = [ plain "host" "String" ];
        fi_return = ret "HostClass"; fi_loc = g; fi_http_methods = [] });
+    (* Keep case analysis of direct metadata calls exhaustive as well as calls
+       assigned to explicitly typed bindings. These accessors establish no proof. *)
+    ("DeadJob.reason",
+     { fi_name = "DeadJob.reason"; fi_kind = FnKind;
+       fi_params = [ plain "job" "DeadJob" ]; fi_return = ret "DeadJobReason";
+       fi_loc = g; fi_http_methods = [] });
+    ("DeadJob.sourceVersion",
+     { fi_name = "DeadJob.sourceVersion"; fi_kind = FnKind;
+       fi_params = [ plain "job" "DeadJob" ];
+       fi_return = RetPlain { ty = mk_app_type (tname "Maybe") (tname "Int"); loc = g };
+       fi_loc = g; fi_http_methods = [] });
+    ("DeadJob.typeName",
+     { fi_name = "DeadJob.typeName"; fi_kind = FnKind;
+       fi_params = [ plain "job" "DeadJob" ];
+       fi_return = RetPlain { ty = mk_app_type (tname "Maybe") (tname "String"); loc = g };
+       fi_loc = g; fi_http_methods = [] });
     (* Int.divide: second arg b must carry IsNonZero b *)
     ("Int.divide",
      { fi_name = "Int.divide"; fi_kind = FnKind;

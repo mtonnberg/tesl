@@ -51,7 +51,7 @@ func registerStoreJobCodec(queue *Queue) {
 // stores create their tables lazily, so nothing is declared up front.
 func storeDatabase(t *testing.T, name string) *Database {
 	t.Helper()
-	return &Database{Name: name, Config: liveCluster(t)}
+	return pubsubDatabase(t, name)
 }
 
 func uniqueName(prefix string) string {

@@ -3442,8 +3442,8 @@ let rec type_of_expr signatures env expr =
        (match verb with
         | "pendingJobCount" -> TInt
         | "drainQueue" -> TUnit
-        (* The dead-letter contents.  `DeadJob` is opaque — a test counts the list or
-           requeues from it, which is all the Legacy surface allows either. *)
+        (* The dead-letter contents carry opaque metadata, inspected through typed
+           accessors and conditionally requeued. Payloads remain unavailable. *)
         | "deadJobs" ->
           (match Option.bind !current_types (fun types ->
                    Hashtbl.find_opt types.records "DeadJob") with
@@ -10223,7 +10223,7 @@ let runtime_file_gates : (string * string list) list = [
      the reason the HTTP half does: it pulls a third-party driver and its whole dependency
      chain into a binary that would otherwise require nothing. *)
    "postgres", [ "postgres.go"; "database.go"; "dbquery.go"; "debug_sql.go"; "pgstores.go";
-                 "pgpubsub.go"; "migration_program.go"; "migration_queue_program.go"; "migration_control.go"; "migration_expand.go"; "migration_admission.go"; "migration_open.go"; "migration_status.go"; "migration_command.go"; "migration_expand_history.go"; "migration_control_spec.go"; "migration_control_catalog.go"; "migration_plan.go"; "migration_plan_wire.go"; "migration_plan_hash.go"; "migration_catalog.go"; "migration_catalog_compare.go"; "migration_catalog_probe.go"; "migration_catalog_expected.go"; "migration_control_expected.go"; "migration_control_upgrade.go"; "migration_index_control.go"; "migration_index_catalog.go"; "migration_index_history.go"; "migration_index_worker.go"; "migration_embedded.go"; "migration_worker.go"; "migration_facilities.go"; "migration_literal.go"; "migration_boundary.go"; "migration_boundary_testbuild.go" ];
+                 "pgpubsub.go"; "migration_program.go"; "migration_queue_program.go"; "migration_queue_control.go"; "migration_queue_registration.go"; "migration_queue_registration_sql.go"; "migration_queue_control_spec.go"; "migration_queue_operations.go"; "migration_queue_runtime.go"; "migration_queue_control_expected.go"; "migration_control.go"; "migration_expand.go"; "migration_admission.go"; "migration_open.go"; "migration_status.go"; "migration_command.go"; "migration_expand_history.go"; "migration_control_spec.go"; "migration_control_catalog.go"; "migration_plan.go"; "migration_plan_wire.go"; "migration_plan_hash.go"; "migration_catalog.go"; "migration_catalog_compare.go"; "migration_catalog_probe.go"; "migration_catalog_expected.go"; "migration_control_expected.go"; "migration_control_upgrade.go"; "migration_index_control.go"; "migration_index_catalog.go"; "migration_index_history.go"; "migration_index_worker.go"; "migration_embedded.go"; "migration_worker.go"; "migration_facilities.go"; "migration_literal.go"; "migration_boundary.go"; "migration_boundary_testbuild.go" ];
   (* `agent.go` ships only to a program that talks to a model.  Not a dependency argument —
      everything in it is standard library — but a runtime file a program has no use for is
      still surface a reader has to rule out, and the gate costs nothing. *)
@@ -10662,7 +10662,7 @@ let rec json_value_decoder ~package ~loc ~what ty =
     "Go backend cannot decode `%s` from JSON; give the type a `codec`" what
 
 let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) ?(apis=[])
-    ?(servers=[]) ?(capturers=[]) ?(consts=[]) ?(agents=[]) ?(capabilities=[]) ?(queue_codec_records=[])
+    ?(servers=[]) ?(capturers=[]) ?(consts=[]) ?(agents=[]) ?(capabilities=[]) ?(queue_codec_records=[]) ?(app_databases=[])
     module_path package signatures
     types (funcs : func_decl list) =
   Hashtbl.reset pending_helpers;
@@ -11040,6 +11040,16 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
            @ List.map (fun (name, ty) -> local_ident name ^ " " ^ go_type ty) params
            @ dictionaries))
        (go_type result);
+    (* This belongs in Main, before the lowered database scope and all user
+       startup effects. The cmd wrapper handles selected schema commands first;
+       direct Main calls receive the same App-local preflight. *)
+    Option.iter (fun database_name ->
+      Option.iter (fun database ->
+        if database.db_migration_family <> None then Printf.bprintf body
+          "\tif teslPreflightErr := teslrt.PreflightApplicationDatabases(%s); teslPreflightErr != nil {\n\t\tpanic(teslPreflightErr)\n\t}\n"
+          (qualified database.db_owner database.db_go_var))
+        (postgres_database fd.loc database_name))
+      (List.assoc_opt fd.name app_databases);
      if debug then
        Printf.bprintf body
          "\tteslDebugScope := teslrt.DebugEnter(teslrt.DebugFrame{Version: teslrt.DebugABIVersion, ID: %S, Function: %S, Location: teslrt.SourceLocation{File: %S, Line: %d, Column: %d}})\n\tdefer teslDebugScope.Leave()\n"
@@ -13246,7 +13256,8 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?(entity_bindings=[]) ?(mi
       | "Tesl.Queue" ->
         List.iter (fun name ->
           match name with
-          | "Queue" | "QueueRetryStrategy" | "Fixed" | "Exponential" | "Linear"
+          | "Queue" | "QueueRetryStrategy" | "QueueRetryBackoff" | "QueueRetryBackoff(..)"
+          | "Fixed" | "Exponential" | "Linear"
           | "queueRead" | "queueWrite" | "FromQueue" | "FromDeadQueue" | "Job"
           (* `pubsub` is the SSE capability: a compile-time grant, and the functions it
              gates fail closed on their own. *)
@@ -13255,7 +13266,11 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?(entity_bindings=[]) ?(mi
              `DeadJob` the opaque type of its elements. *)
           (* `requeue` takes a `DeadJob` back to pending, so importing it brings `DeadJob`
              in as well — the value it takes has to have a type. *)
-          | "deadJobs" | "DeadJob" | "requeue" -> ()
+          | "deadJobs" | "DeadJob" | "requeue"
+          | "DeadJobReason" | "DeadJobReason(..)"
+          | "AttemptsExhausted" | "PayloadInvalid" | "MigrationRejected" | "LegacyUnresolved"
+          | "DeadJob.id" | "DeadJob.reason" | "DeadJob.sourceVersion"
+          | "DeadJob.attempts" | "DeadJob.typeName" -> ()
           | other -> unsupported import.loc
             "Go backend does not support the `Tesl.Queue` export `%s`: the exports it emits \
              are enumerated above, and test_go_stdlib_export_seam.ml holds the whole \
@@ -13286,6 +13301,8 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?(entity_bindings=[]) ?(mi
        emitter: a second reader of a config record is a second place for a field to be misread,
        which is exactly how `backend: Memory` once looked like Postgres. *)
     let funcs = List.filter_map (function DFunc fd -> Some fd | _ -> None) m.decls in
+    let app_databases = List.filter_map (fun (fd : func_decl) ->
+      Option.map (fun database -> fd.name, database) (Desugar.app_database fd)) funcs in
     let funcs = List.map (Desugar.lower_main_app m.decls) funcs in
     let codecs = List.filter_map (function DCodec c -> Some c | _ -> None) m.decls in
     let apis = List.filter_map (function DApi a -> Some a | _ -> None) m.decls in
@@ -14470,16 +14487,30 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?(entity_bindings=[]) ?(mi
           runtime_record "ConversationTurn" "teslrt.ConversationTurn" [] ]
     end;
     (* `deadJobs` answers the dead-letter contents of a queue.  Its element type is opaque
-       (`DeadJob`), so what a test can do with the list is count it or requeue from it — which
-       is what the Legacy surface allows too. *)
+       (`DeadJob`), so callers inspect metadata through typed accessors and may requeue retryable entries. *)
     let dead_jobs_imported = ref false in
+    let dead_job_accessors = ref [] in
+    let queue_reason_imported = ref false in
     let requeue_imported = ref false in
     List.iter (fun (import : import_decl) ->
       if import.module_name = "Tesl.Queue" then begin
         let exposed = match import.names with
-          | ImportAll -> [] | ImportExposing names -> names in
-        if List.mem "deadJobs" exposed || List.mem "requeue" exposed then
+          | ImportAll -> Option.value ~default:[]
+              (List.assoc_opt "Tesl.Queue" Type_system.tesl_module_exports)
+          | ImportExposing names -> names in
+        if List.exists (fun name -> List.mem name exposed)
+            ["deadJobs"; "DeadJob"; "requeue"; "DeadJob.id"; "DeadJob.reason";
+             "DeadJob.sourceVersion"; "DeadJob.attempts"; "DeadJob.typeName"] then
           dead_jobs_imported := true;
+        List.iter (fun name -> if String.starts_with ~prefix:"DeadJob." name then begin
+          dead_job_accessors := name :: !dead_job_accessors;
+          if name = "DeadJob.sourceVersion" || name = "DeadJob.typeName" then
+            maybe_imported := true
+        end) exposed;
+        if List.exists (fun name -> List.mem name exposed)
+            ["DeadJobReason"; "DeadJobReason(..)"; "DeadJob.reason";
+             "AttemptsExhausted"; "PayloadInvalid"; "MigrationRejected"; "LegacyUnresolved"] then
+          queue_reason_imported := true;
         (* `requeue` is an ordinary function over a `DeadJob`, unlike the queue VERBS, which
            name a queue and are resolved statically. *)
         if List.mem "requeue" exposed then requeue_imported := true
@@ -14562,8 +14593,21 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?(entity_bindings=[]) ?(mi
         rec_loc = loc;
       }
     end;
-    (* `DeadJob` is opaque: the runtime carries the job's identity and nothing a program can
-       read, so the element type is a runtime struct with no Tesl-visible fields. *)
+    if !queue_reason_imported then begin
+      let loc = Location.dummy_loc m.source_file in
+      Hashtbl.replace types.adts "DeadJobReason" {
+        adt_tesl_name = "DeadJobReason"; adt_owner = "";
+        adt_go_name = "teslrt.DeadJobReason"; adt_tag_type = "teslrt.DeadJobReasonTag";
+        adt_params = [];
+        adt_variants = List.map (fun ctor ->
+          { var_ctor = ctor; var_tag = "teslrt.DeadJobReason" ^ ctor;
+            var_fields = []; var_go_fields = []; var_loc = loc })
+          ["AttemptsExhausted"; "PayloadInvalid"; "MigrationRejected"; "LegacyUnresolved"];
+        adt_loc = loc; adt_builtin = true;
+      }
+    end;
+    (* `DeadJob` exposes metadata through accessors, so the runtime struct has
+       no Tesl-visible fields and no decoded payload. *)
     if !dead_jobs_imported then
       Hashtbl.replace types.records "DeadJob" {
         rec_tesl_name = "DeadJob";
@@ -15421,7 +15465,7 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?(entity_bindings=[]) ?(mi
       !effect_imports;
     (* `requeue job` resets a dead job to pending.  It answers whether the job was there to
        reset — a dead letter that no longer holds it is `False` rather than a trap, which is
-       the answer `tesl/queue.tesl` gives for the same case. *)
+       the answer the runtime gives for the same case. *)
     if !requeue_imported then
       (match Hashtbl.find_opt types.records "DeadJob" with
        | Some row ->
@@ -15430,6 +15474,27 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?(entity_bindings=[]) ?(mi
              sig_owner = ""; sig_needs_scope = false }
        | None -> unsupported (Location.dummy_loc m.source_file)
          "Go backend `requeue` needs `DeadJob` from `Tesl.Queue`");
+
+    List.iter (fun name ->
+      let loc = Location.dummy_loc m.source_file in
+      let row = match Hashtbl.find_opt types.records "DeadJob" with
+        | Some row -> row | None -> unsupported loc "Go backend needs DeadJob metadata" in
+      let maybe_of ty = match Hashtbl.find_opt types.adts "Maybe" with
+        | Some info -> TAdt (info, [ty])
+        | None -> unsupported loc "Go backend `%s` answers a Maybe; import `Tesl.Maybe`" name in
+      let result, go_name = match name with
+        | "DeadJob.id" -> TString, "teslrt.DeadJobID"
+        | "DeadJob.attempts" -> TInt, "teslrt.DeadJobAttempts"
+        | "DeadJob.sourceVersion" -> maybe_of TInt, "teslrt.DeadJobSourceVersion"
+        | "DeadJob.typeName" -> maybe_of TString, "teslrt.DeadJobTypeName"
+        | "DeadJob.reason" ->
+          (match Hashtbl.find_opt types.adts "DeadJobReason" with
+           | Some info -> TAdt (info, []), "teslrt.DeadJobReasonOf"
+           | None -> unsupported loc "Go backend needs DeadJobReason")
+        | _ -> unsupported loc "Go backend does not emit `%s`" name in
+      Hashtbl.replace signatures name
+        { params = [TRecord row]; result; go_name; sig_owner = ""; sig_needs_scope = false })
+      !dead_job_accessors;
 
     (* `FixedOffset minutes` is the one zone constructor that takes an argument, so it is a
        signature where the others are constants. *)
@@ -16113,7 +16178,7 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?(entity_bindings=[]) ?(mi
     current_package := package;
     current_types := Some types;
     let source =
-       module_source ~debug:(mode = Debug) ~imported_packages:!imported_packages ~codecs ~apis ~servers ~capturers
+       module_source ~debug:(mode = Debug) ~imported_packages:!imported_packages ~codecs ~apis ~servers ~capturers ~app_databases
         ~queue_codec_records:(List.filter_map (fun name ->
           let prefix=m.module_name ^ "." in
           if String.starts_with ~prefix name then

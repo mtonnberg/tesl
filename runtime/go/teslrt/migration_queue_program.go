@@ -49,6 +49,8 @@ var compiledQueueHistories = struct {
 // one critical section. Failed validation or any conflicting family leaves the
 // registry untouched; there is never a partially linked database set.
 func registerCompiledQueueHistory(payload string) {
+	pgMigrationRegistrations.Lock()
+	defer pgMigrationRegistrations.Unlock()
 	if err := pgMigrationCheckJSON(payload); err != nil {
 		panic(err)
 	}
@@ -82,6 +84,9 @@ func registerCompiledQueueHistory(payload string) {
 	compiledQueueHistories.Lock()
 	defer compiledQueueHistories.Unlock()
 	for family, registration := range pending {
+		if _, exists := compiledQueueHistories.families[family]; !exists && pgMigrationClosedFamilies[family] {
+			panic("database: application startup queue history registration is closed")
+		}
 		if previous, exists := compiledQueueHistories.families[family]; exists && previous != registration {
 			panic("database: conflicting compiled queue history for " + family)
 		}
@@ -116,7 +121,7 @@ func pgQueueIdentity(value string) bool {
 			return false
 		}
 		for _, c := range segment {
-			if !(c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '_') {
+			if (c < 'A' || c > 'Z') && (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '_' {
 				return false
 			}
 		}
@@ -373,8 +378,11 @@ type pgQueueBinding struct {
 
 // RegisterQueueSchema binds an actual durable queue pointer to its exact linked
 // database and checked contract. It neither opens a connection nor changes the
-// queue name, storage schema, facility refusal, or claim behavior.
+// queue name, storage schema, facility refusal, or claim behavior. The checked
+// identity is registered as a notification alias for the private queue listener.
 func RegisterQueueSchema(queue *Queue, database *Database, family, identity string, version int) struct{} {
+	pgMigrationRegistrations.Lock()
+	defer pgMigrationRegistrations.Unlock()
 	if queue == nil || database == nil {
 		panic("queue schema: missing queue or database")
 	}
@@ -411,6 +419,9 @@ func RegisterQueueSchema(queue *Queue, database *Database, family, identity stri
 	}
 	backend.codecsMutex.Lock()
 	defer backend.codecsMutex.Unlock()
+	if backend.queueCodecsClosed {
+		panic("queue schema: application startup codec registration is closed")
+	}
 	if backend.queueSchema != nil {
 		if backend.queueSchema.history != history || backend.queueSchema.contract.Queue != identity || backend.queueSchema.version != version {
 			panic("queue schema: conflicting registration")
@@ -432,6 +443,7 @@ func RegisterQueueSchema(queue *Queue, database *Database, family, identity stri
 	owners[identity] = queue
 	queueSchemaOwners.queues[database] = owners
 	backend.queueSchema = &pgQueueBinding{history: history, contract: *contract, version: version, codecs: map[string]PgQueueCodecSource{}}
+	pubsubFor(database).registerQueueAlias(identity, queue)
 	return struct{}{}
 }
 
@@ -439,6 +451,8 @@ func RegisterQueueSchema(queue *Queue, database *Database, family, identity stri
 // ordinary RegisterJobCodec cannot overwrite this checked registration later.
 func RegisterQueueSchemaJobCodec(queue *Queue, family, contract, job string, version int, contractHash, legacyName string,
 	encode func(any) any, decode func(any) (any, error)) struct{} {
+	pgMigrationRegistrations.Lock()
+	defer pgMigrationRegistrations.Unlock()
 	if queue == nil || encode == nil || decode == nil || legacyName == "" {
 		panic("queue schema: incomplete codec registration")
 	}
@@ -448,6 +462,9 @@ func RegisterQueueSchemaJobCodec(queue *Queue, family, contract, job string, ver
 	}
 	backend.codecsMutex.Lock()
 	defer backend.codecsMutex.Unlock()
+	if backend.queueCodecsClosed {
+		panic("queue schema: application startup codec registration is closed")
+	}
 	binding := backend.queueSchema
 	if binding == nil || binding.history.Family != family || binding.contract.Queue != contract || binding.version != version {
 		panic("queue schema: codec belongs to another queue contract")

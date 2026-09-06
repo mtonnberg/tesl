@@ -38,7 +38,7 @@ func pgReadCatalogExpectations(ctx context.Context, tx pgx.Tx) (*pgCatalogExpect
 	if version < 140000 || version >= 190000 {
 		return nil, fmt.Errorf("read-only migration catalog supports PostgreSQL 14 through 18, got %d", version)
 	}
-	names := []string{"int2", "int4", "int8", "numeric", "float8", "text", "bool", "jsonb", "uuid", "timestamptz", "_text"}
+	names := []string{"int2", "int4", "int8", "numeric", "float8", "text", "bool", "jsonb", "uuid", "timestamptz", "_text", "bytea", "xid8"}
 	rows, err := tx.Query(ctx, `select t.typname,t.typtype,pg_catalog.format_type(t.oid,-1),t.typcollation,o.oid::bigint
  from pg_catalog.pg_type t join pg_catalog.pg_namespace n on n.oid=t.typnamespace
  join pg_catalog.pg_opclass o on (o.opcintype=t.oid or
