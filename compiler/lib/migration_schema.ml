@@ -25,6 +25,20 @@ let read_module path =
     | Ok m -> Some m | Err _ -> None
   with Sys_error _ -> None
 
+let queue_payload_reference (m:module_form) name =
+  let record_names owner = List.filter_map (function DRecord r -> Some r.name | _ -> None) owner.decls in
+  let own = record_names m |> List.map (fun n -> m.module_name ^ "." ^ n) in
+  if List.mem name own then Some name else if List.mem (m.module_name ^ "." ^ name) own then Some (m.module_name ^ "." ^ name) else
+  let imported = List.concat_map (fun (imp:import_decl) ->
+    match read_module (resolve_local_import_path m.source_file imp.module_name) with
+    | None -> []
+    | Some owner -> List.filter_map (fun n ->
+        let qualified = owner.module_name ^ "." ^ n in
+        let exposed = match imp.names with ImportAll -> false | ImportExposing names -> List.mem n names in
+        if List.mem (ExportName n) owner.exports && (name=qualified || (name=n && exposed)) then Some qualified else None) (record_names owner)) m.imports
+    |> List.sort_uniq compare in
+  match imported with [one] -> Some one | _ -> None
+
 let check_contents ?(migration = false) (m : module_form) =
   let forbidden loc what = make_error loc
     (Printf.sprintf "%s modules cannot contain %s; keep connection configuration, application operations and tests outside the frozen import closure"
@@ -32,6 +46,20 @@ let check_contents ?(migration = false) (m : module_form) =
   let func_caps = build_func_capability_map m.decls in
   List.concat_map (function
     | DType _ | DRecord _ | DFact _ | DCodec _ -> []
+    | DQueueSchema q ->
+      if migration then [forbidden q.loc "queueSchema declarations (declare them in the schema)"]
+      else if q.jobs = [] then [make_error ~code:"MIG028" q.loc "queueSchema requires at least one payload record"]
+      else
+        let seen = Hashtbl.create 8 in
+        List.filter_map (fun (name, loc) ->
+          match queue_payload_reference m name with
+          | None -> Some (make_error ~code:"MIG028" loc ("queueSchema payload must name a visible schema-owned record: " ^ name))
+          | Some resolved when not (Option.fold ~none:false ~some:(fun root -> within root resolved) (schema_prefix m.module_name)) ->
+            Some (make_error ~code:"MIG028" loc "queueSchema payload escapes its schema revision")
+          | Some resolved ->
+            if Hashtbl.mem seen resolved then Some (make_error ~code:"MIG028" loc
+              ("duplicate queueSchema payload `" ^ name ^ "`"))
+            else (Hashtbl.add seen resolved (); None)) q.jobs
     | DEntity e -> if migration then [forbidden e.loc "entity declarations (declare them in the schema)"] else []
     | DFunc fd ->
       (match fd.kind with
@@ -145,6 +173,7 @@ let check_closure ?root_module ~source_file root =
   | None -> []
   | Some prefix ->
     let visited = Hashtbl.create 16 in
+    let queued = ref [] in
     let rec visit source name =
       let path = resolve_local_import_path source name in
       let key = canonical_import_path path in
@@ -157,6 +186,11 @@ let check_closure ?root_module ~source_file root =
         match parsed with
         | None -> [] (* Ordinary import checking reports missing or invalid source. *)
         | Some m ->
+          List.iter (function
+            | DQueueSchema q -> List.iter (fun (payload,loc) ->
+                Option.iter (fun resolved -> queued := (resolved,m.module_name ^ "." ^ q.name,loc) :: !queued)
+                  (queue_payload_reference m payload)) q.jobs
+            | _ -> ()) m.decls;
           let header_errors = if m.module_name = name then [] else
             [make_error (Location.dummy_loc path) (Printf.sprintf
                "schema module `%s` resolves to a file declaring `%s`" name m.module_name)] in
@@ -170,7 +204,40 @@ let check_closure ?root_module ~source_file root =
               "schema module `%s` may import only `%s` and its children or Tesl.*; `%s` is outside the schema closure"
               name prefix imp.module_name)]) m.imports
       end
-    in visit source_file root
+    in
+    let errors = visit source_file root in
+    let assigned = Hashtbl.create 8 in
+    errors @ List.filter_map (fun (payload,queue,loc) ->
+      match Hashtbl.find_opt assigned payload with
+      | Some previous when previous<>queue -> Some (make_error ~code:"MIG028" loc
+          ("queue payload belongs to multiple queueSchema contracts: " ^ previous ^ " and " ^ queue))
+      | Some _ -> None (* A repeated member already has a focused diagnostic. *)
+      | None -> Hashtbl.add assigned payload queue; None) !queued
+
+let check_queue_schema_targets (m:module_form) =
+  let fields q = Option.fold ~none:[] ~some:Desugar.config_record_fields q in
+  let name = function EConstructor {name;args=[];_} -> Some name | _ -> None in
+  if not (List.exists (function DQueue q -> List.mem_assoc "schema" (fields q.config_expr) | _ -> false) m.decls) then [] else
+  let databases = List.concat_map (function DDatabase d -> [d.name,d;m.module_name ^ "." ^ d.name,d] | _ -> []) m.decls in
+  let imported = List.concat_map (fun (i:import_decl) ->
+    match read_module (resolve_local_import_path m.source_file i.module_name) with
+    | None -> []
+    | Some owner -> List.concat_map (function
+      | DDatabase d when List.mem (ExportName d.name) owner.exports ->
+        let qualified=owner.module_name ^ "." ^ d.name,d in
+        (match i.names with ImportExposing names when List.mem d.name names -> [qualified;d.name,d] | _ -> [qualified])
+      | _ -> []) owner.decls) m.imports in
+  List.filter_map (function
+    | DQueue q when List.mem_assoc "schema" (fields q.config_expr) ->
+      let config=fields q.config_expr in
+      let db=Option.bind (List.assoc_opt "database" config) name
+        |> fun n -> Option.bind n (fun n -> List.assoc_opt n (databases @ imported)) in
+      let root=Option.bind db (fun d -> Option.bind (List.assoc_opt "schema" (fields d.config_expr)) name) in
+      let contract=Option.bind (List.assoc_opt "schema" config) name in
+      (match root,contract with
+       | Some root,Some _ when schema_prefix root=Some root && String.ends_with ~suffix:".VCurrent" root -> None
+       | _ -> Some (make_error ~code:"MIG028" q.loc "Queue.schema requires a versioned Database.schema binding and a queueSchema declaration reference"))
+    | _ -> None) m.decls
 
 let check_databases (m : module_form) =
   match migration_family m.module_name with
@@ -212,7 +279,9 @@ let check_databases (m : module_form) =
                  | _ -> false) imported.decls -> Some imp.module_name
              | _ -> None) m.imports)
     | _ -> []) m.decls |> List.sort_uniq String.compare in
-  historical_imports @ List.concat_map (check_closure ~source_file:m.source_file) roots
+  check_queue_schema_targets m @ List.filter_map (function
+    | DQueueSchema q -> Some (make_error ~code:"MIG028" q.loc "queueSchema belongs in a schema module")
+    | _ -> None) m.decls @ historical_imports @ List.concat_map (check_closure ~source_file:m.source_file) roots
   @ List.concat_map (function
       | DDatabase d -> (match resolve_binding m d with Error errors -> errors | Ok _ -> [])
       | _ -> []) m.decls

@@ -42,7 +42,7 @@ let unchanged_count t = List.fold_left (fun count -> function
   | Paired {contract_changed=false; missing_identities=[]; _} -> count + 1
   | _ -> count) 0 t.entities
 
-let eligible = function Newtype | Adt | Record | Fact | Codec_declaration -> true
+let eligible = function Newtype | Adt | Record | Fact | Codec_declaration | Queue_schema -> true
   | Entity | Function -> false
 let key (d : declaration) = d.namespace, d.qualified_name
 let relative inventory name =

@@ -262,8 +262,8 @@ heartbeats do not prove that all such executables have been replaced.
 
 The native regression preserves two authentic historical emissions: the original
 format-2/contract-2 app and a format-3/contract-2 bridge. Their generated runtime,
-source and provenance are immutable. The current compiler's contract 3 refuses
-contract-2 rows; upgrading control metadata does not revalidate stored proofs.
+source and provenance are immutable. The current compiler's contract 4 refuses
+contract-2/3 rows; upgrading control metadata does not revalidate stored proofs.
 The historical format-3 bridge also predates the sixth index recovery function,
 so the current exact catalog check refuses that prototype before interpreting
 its rows. The regression distinguishes these refusal layers instead of patching

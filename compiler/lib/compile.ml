@@ -919,7 +919,7 @@ let definition_in_top_decl env line col (decl : Ast.top_decl) =
          match type_definition_at_precise_loc env.type_defs line col c.loc c.type_name with
          | Some _ as result -> result
          | None -> None)
-  | Ast.DDatabase _ | Ast.DCapability _ | Ast.DQueue _
+  | Ast.DQueueSchema _ | Ast.DDatabase _ | Ast.DCapability _ | Ast.DQueue _
   | Ast.DWorkers _ | Ast.DServer _ | Ast.DFact _ | Ast.DCache _ | Ast.DEmail _
   | Ast.DAgent _ -> None
 
@@ -939,6 +939,7 @@ let collect_definition_env (m : Ast.module_form) =
     | Ast.DCapability c -> add_term_def env c.name (precise_name_loc c.loc c.name)
     | Ast.DConst c -> add_term_def env c.name (precise_name_loc c.loc c.name)
     | Ast.DQueue q -> add_term_def env q.name (precise_name_loc q.loc q.name)
+    | Ast.DQueueSchema q -> add_term_def env q.name (precise_name_loc q.loc q.name)
     | Ast.DChannel c -> add_term_def env c.name (precise_name_loc c.loc c.name)
     | Ast.DWorkers w -> add_term_def env w.name (precise_name_loc w.loc w.name)
     | Ast.DCapture c -> add_term_def env c.name (precise_name_loc c.loc c.name)
@@ -1457,6 +1458,7 @@ let resolve_symbol_in_top_decl env line col (decl : Ast.top_decl) =
   | Ast.DDatabase d -> let name_loc = precise_name_loc d.loc d.name in if loc_contains_position name_loc line col then Some (term_symbol d.name name_loc) else None
   | Ast.DCapability c -> let name_loc = precise_name_loc c.loc c.name in if loc_contains_position name_loc line col then Some (term_symbol c.name name_loc) else None
   | Ast.DQueue q -> let name_loc = precise_name_loc q.loc q.name in if loc_contains_position name_loc line col then Some (term_symbol q.name name_loc) else None
+  | Ast.DQueueSchema q -> let name_loc = precise_name_loc q.loc q.name in if loc_contains_position name_loc line col then Some (term_symbol q.name name_loc) else None
   | Ast.DWorkers w -> let name_loc = precise_name_loc w.loc w.name in if loc_contains_position name_loc line col then Some (term_symbol w.name name_loc) else None
   | Ast.DServer s -> let name_loc = precise_name_loc s.loc s.name in if loc_contains_position name_loc line col then Some (term_symbol s.name name_loc) else None
   | Ast.DFact f -> let name_loc = precise_name_loc f.loc f.name in if loc_contains_position name_loc line col then Some (type_symbol f.name name_loc) else None
@@ -1814,6 +1816,7 @@ let rec collect_occurrences_in_top_decl env target (decl : Ast.top_decl) =
   | Ast.DDatabase d -> let name_loc = precise_name_loc d.loc d.name in if symbol_equal (term_symbol d.name name_loc) target then [name_loc] else []
   | Ast.DCapability c -> let name_loc = precise_name_loc c.loc c.name in if symbol_equal (term_symbol c.name name_loc) target then [name_loc] else []
   | Ast.DQueue q -> let name_loc = precise_name_loc q.loc q.name in if symbol_equal (term_symbol q.name name_loc) target then [name_loc] else []
+  | Ast.DQueueSchema q -> let name_loc = precise_name_loc q.loc q.name in if symbol_equal (term_symbol q.name name_loc) target then [name_loc] else []
   | Ast.DWorkers w -> let name_loc = precise_name_loc w.loc w.name in if symbol_equal (term_symbol w.name name_loc) target then [name_loc] else []
   | Ast.DServer s -> let name_loc = precise_name_loc s.loc s.name in if symbol_equal (term_symbol s.name name_loc) target then [name_loc] else []
   | Ast.DFact f -> let name_loc = precise_name_loc f.loc f.name in if symbol_equal (type_symbol f.name name_loc) target then [name_loc] else []

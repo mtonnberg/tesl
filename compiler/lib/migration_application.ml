@@ -41,13 +41,25 @@ let make ?(skip_dep_body=fun _ -> false) (entry : module_form) =
       | Error error -> failure "MIG020" error.loc error.message [d.loc,"database declaring this migration history"]
       | Ok history ->
         let current = H.current history in
+        let modules = List.filter_map (fun path -> if path=F.canonical_import_path entry.source_file then Some entry else F.parse_module_file path) (Lazy.force explicit) in
+        let queue_diags = D.diagnostics_of_errors (Migration_queue.application_bindings
+          ~modules ~database_module:m ~database:d current.inventory) in
         let missing = if current.version > 1 && H.current_migration history = None then
           failure "MIG001" d.loc
             (Printf.sprintf "database `%s` requires its current %s.Migrate.V%d migration before the application can compile"
               d.name family current.version) [Location.dummy_loc current.root_file,"current schema"]
           else [] in
         let edges = H.completed_migrations history @ Option.to_list (H.current_migration history) in
-        missing @ List.concat_map (fun (edge : H.migration_source) ->
+        let queue_history_diags = if Migration_inventory.queue_contracts current.inventory=[] then [] else
+          List.concat_map (fun (edge:H.migration_source) ->
+            match Header.read ~file:edge.path edge.contents with
+            | Ok (Some header) ->
+              let previous,target = Header.recorded_seals header in
+              if Migration_seal.queue_inventory_complete previous && Migration_seal.queue_inventory_complete target then []
+              else failure "MIG028" (Location.dummy_loc edge.path)
+                "this queue-bearing application has legacy history with an unknown payload inventory; a later empty snapshot cannot establish absence in earlier deployed revisions" []
+            | _ -> []) edges in
+        queue_diags @ queue_history_diags @ missing @ List.concat_map (fun (edge : H.migration_source) ->
           let seals = match Header.read ~file:edge.path edge.contents with
             | Error errors -> D.diagnostics_of_errors errors
             | Ok None -> failure "MIG013" (Location.dummy_loc edge.path)

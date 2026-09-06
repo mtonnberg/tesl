@@ -37,7 +37,7 @@ val root_module : t -> string
     editor versions. These are not semantic identities or history evidence. *)
 val source_inputs : t -> (string * string) list
 
-type declaration_kind = Newtype | Adt | Record | Entity | Fact | Codec_declaration | Function
+type declaration_kind = Newtype | Adt | Record | Entity | Fact | Codec_declaration | Function | Queue_schema
 type declaration = {
   namespace : Migration_ir.namespace;
   qualified_name : string;
@@ -67,7 +67,7 @@ val same_declarations : same -> declaration * declaration
 val same_digest : same -> string
 val same_compiler_abi : same -> string
 
-(** Deterministically propose every equal type/fact/codec pair, including private
+(** Deterministically propose every equal type/fact/codec/queueSchema pair, including private
     declarations. Missing/changed declarations are omitted. No user Same list is
     modified; omitting an equal pair deliberately remains possible. *)
 val same_candidates : before:t -> after:t -> (same list, Migration_ir.error) result
@@ -141,3 +141,9 @@ val stored_entities : t -> stored_entity list
     that a user supplied every required Same entry, or authorize DDL. *)
 val entity_changes : before:t -> after:t ->
   (entity_change list, Migration_ir.error) result
+
+(** Complete pure queue membership and each payload's owned type/proof/codec closure.
+    Historical completeness is a separate source-seal capability. *)
+type queue_payload = { payload_name : string; payload_contract : Migration_canonical.node; payload_loc : Location.loc }
+type queue_contract = { queue_name : string; queue_loc : Location.loc; payloads : queue_payload list }
+val queue_contracts : t -> queue_contract list

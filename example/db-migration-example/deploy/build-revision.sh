@@ -14,7 +14,11 @@ if [[ "$MODE" == --prepare-only ]]; then printf '%s\n' "$OUTPUT"; exit 0; fi
 COMPILER="${TESL_COMPILER:-$REPO_ROOT/compiler/_build/default/bin/main.exe}"
 if [[ ! -x "$COMPILER" ]]; then echo "Build the compiler first (cd compiler && dune build), or set TESL_COMPILER." >&2; exit 1; fi
 export TESL_REPO_ROOT="${TESL_REPO_ROOT:-$REPO_ROOT}"
-"$COMPILER" agent-context "$OUTPUT/source/todo-app.tesl" > "$OUTPUT/diagnostics.json"
+if ! "$COMPILER" agent-context "$OUTPUT/source/todo-app.tesl" > "$OUTPUT/diagnostics.json"; then
+  cat "$OUTPUT/diagnostics.json" >&2
+  echo "Release $1 failed compiler checks; diagnostics retained at $OUTPUT/diagnostics.json" >&2
+  exit 1
+fi
 "$COMPILER" --backend go "$OUTPUT/source/todo-app.tesl" --out "$OUTPUT/go"
 if [[ "$MODE" == build ]]; then
   (cd "$OUTPUT/go" && go test ./internal/teslmodtodoapp && go build -o "$OUTPUT/app" ./cmd/app)

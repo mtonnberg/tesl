@@ -1219,7 +1219,7 @@ let check_capabilities ?(extra_caps = []) (decls : top_decl list) : proof_error 
        Enumerated (no wildcard) so `@8` forces a decision here the day a new
        or existing kind gains a capability requirement.  DCapability / DCache /
        DEmail capability DEFINITIONS are folded into [build_cap_map] above. *)
-    | DType _ | DRecord _ | DEntity _ | DFact _ | DCodec _ | DDatabase _
+    | DQueueSchema _ | DType _ | DRecord _ | DEntity _ | DFact _ | DCodec _ | DDatabase _
     | DConst _ | DChannel _ | DWorkers _ | DCache _ | DEmail _ | DCapture _
     | DApi _ | DServer _ -> ()
   ) decls;
@@ -1486,7 +1486,7 @@ before this function, or import it from the module that declares it"
        - Expression-level proofs inside test bodies are validated by the
          expression passes, not this declaration walk.
        - The rest carry no proof annotation at all. *)
-    | DType _ | DFact _ | DCodec _ | DDatabase _ | DCapability _ | DConst _
+    | DQueueSchema _ | DType _ | DFact _ | DCodec _ | DDatabase _ | DCapability _ | DConst _
     | DQueue _ | DChannel _ | DWorkers _ | DCache _ | DAgent _ | DEmail _
     | DCapture _ | DApi _ | DServer _ | DTest _ | DApiTest _ | DLoadTest _ -> ()
   ) m.decls;

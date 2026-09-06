@@ -14989,7 +14989,7 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?(entity_bindings=[]) ?(mi
       else ignore directly_recursive)
       adt_forms;
     List.iter (function
-      | DFunc _ | DTest _ -> ()
+      | DQueueSchema _ | DFunc _ | DTest _ -> ()
       | DType (TypeNewtype _) -> ()
       | DRecord _ -> ()
       | DType (TypeAdt _) -> ()

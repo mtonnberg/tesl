@@ -698,6 +698,7 @@ let check_duplicate_top_level_names (decls : top_decl list) : validation_error l
     | DType (TypeNewtype { name; loc; _ }) -> check seen_types name loc "type"
     | DType (TypeAdt { name; loc; _ }) -> check seen_types name loc "type"
     | DRecord rf -> check seen_types rf.name rf.loc "record"
+    | DQueueSchema q -> check seen_types q.name q.loc "queueSchema"
     | DEntity ef -> check seen_types ef.name ef.loc "entity"
     | DFact ff -> check seen_facts ff.name ff.loc "fact"
     | DCodec cf -> check seen_codecs cf.type_name cf.loc "codec for type"

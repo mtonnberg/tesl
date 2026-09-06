@@ -39,9 +39,26 @@ The correction preserves each predicate's original declaring module during
 checking and lowering without rewriting source hash inputs. An unmodified main
 compiler accepted a cross-owner proof through hidden forwarding functions; the
 corrected compiler refuses it. Stored-value semantics therefore advance to
-revision 3. Existing contract-2 histories are not relabeled, and metadata upgrades
-are not presented as stored-proof revalidation. The final compiler/proof review,
-fresh nine-revision showcase generation and native app gates remain in progress.
+revision 3. Its fresh nine-revision showcase and native rolling/index gate passed.
+A subsequent review reproduced an HTTP boundary accepting `Role "reader"`
+evidence for a handler requiring `Role "admin"`; the handler could then store
+that invalid evidence. Complete proof applications now cross auth, capture and
+response boundaries, preserving owners, subjects, literals and quantified
+conjunctions. This correction advances the current contract to revision 4.
+Contract-2/3 histories are not relabeled, and bookkeeping upgrades do not
+revalidate their stored proofs. The contract-3 native result below remains exact
+historical slice evidence; current compiler and regenerated application gates
+are in progress. Focused owner/HTTP and ForAll suites pass (47 and 61 cases).
+
+The source prerequisite for queues is integrated: pure `queueSchema` declarations,
+complete payload/proof/codec closure, immutable family-relative identities,
+incompatible-change errors and complete application binding checks. Its 21 grouped
+regressions pass and two source reviews are complete. Old source seals remain
+unknown inventories, including through later freeze/refresh operations. This is
+not runtime admission: a newly frozen, previously unsealed V1 cannot prove that
+an older deployed V1 never had queues outside its schema. Protected storage must
+require persisted baseline inventory evidence or explicit legacy adoption before
+any cross-version claims are enabled. See [the prerequisite contract](queue-schema-prerequisite.md).
 
 The production Worker request/executor split and concurrent index worker pass
 their PostgreSQL regression gates. The next production work is protected durable
@@ -69,7 +86,7 @@ and both reviews. The normative phase prerequisites remain in force.
 | Scenario | Current evidence / remaining work |
 |---|---|
 | Existing database survives a supported compiler upgrade | Actual A/B/C full-app scenario, compiler/runtime gates and two reviews pass |
-| Adopt/deploy the notes app; add fields and indexes | Additive/Worker lessons and real concurrent-index recovery pass; adoption and the extended todo-app gate remain |
+| Adopt/deploy the notes app; add fields and indexes | Additive/Worker lessons and the nine-release todo rolling/index gate pass; adoption remains |
 | Transform an entity while old/new apps keep serving | Planner/typing groundwork exists; compatibility, backfill and epoch closure remain |
 | Reject a row, repair it, retire old code and contract | Model coverage exists; production lifecycle remains |
 | Evolve a stored record/ADT without changing the HTTP API | Codec/storage traces exist; unified history, rewrite and pruning remain |
@@ -188,8 +205,9 @@ covered for both local bindings and function parameters.
   evidence, concurrent-index emission, preserved application/snapshot bytes,
   frozen-source tampering, historical-import fixes and wrong-family refusal.
   Source rewrite and canonical-role tests include lowercase function names,
-  qualified prefix boundaries, tabs, CRLF and interpolation. The todo example is
-  being regenerated from its baseline; its old sealed bytes are not relabelled.
+  qualified prefix boundaries, tabs, CRLF and interpolation. The todo example has
+  been regenerated from its baseline under contract 3; its old sealed bytes were
+  preserved separately, not relabelled. Each schema revision is now one file.
   Actual TextMate/Oniguruma tests cover contextual migration highlighting without
   changing ordinary identifiers. The full editor command passes, including real
   compiler/debugger fixtures and parser assertions.
@@ -224,23 +242,33 @@ covered for both local bindings and function parameters.
   pass. Its new native run remains pending. Embedded supervision is now implemented
   as described above; retirement/contract and feature-wide final reviews remain.
 
-- The todo showcase now contains six real CLI-generated migration edges across
-  seven source revisions, byte-identical application code, proven CRUD handlers,
-  an Elm frontend, separate PostgreSQL worker/request credentials, and a runnable
-  local rolling-deployment proxy. All seven source emissions, the Elm optimized
-  compilation and nine source/proxy/compiler-refusal tests pass. Its native
-  PostgreSQL race regression passes (88.36s; package 89.380s), with zero lint
-  findings. It requires writes and reads through both old/new nodes at every
-  rollout phase, interrupted worker DDL, retained data and an oldest-version restart. Review
-  corrected a traffic parity bug that could have exercised writes on only one
-  node. The documented local runner also passed all seven actual rolls with 565
-  complete CRUD cycles and no failures, then a retained-database restart with 307
-  cycles and no failures. Separate HTTP assertions cover create, edit, complete,
-  reopen, delete and rejected updates; SQL verifies retained rows and omission
-  defaults. Elm assets compile and are served, but no browser was available for
-  interactive UI verification. Two script reviews corrected ambient PostgreSQL
-  overrides and ensured probes drain before cluster shutdown. The current history is additive; index/typed-transform/JSONB/lifecycle
-  extensions remain required before this showcase satisfies the full request.
+- The todo showcase now contains eight real CLI-generated migration edges across
+  nine source revisions under `Schema.Todo`, with one schema file per revision.
+  Its app, handlers, DTOs and tests are identical across all nine releases; replay
+  preserves exact frozen source and actual creator provenance. Twelve published
+  source/proxy/compiler-refusal tests pass, including actionable diagnostics when
+  archived source is changed. Actual `tesl check`, `test`, `build --local` and
+  `run` commands pass for V9 with separate worker/request logins, retained-data
+  restart, CRUD/proof rejection and SQL default/NULL checks. Installing fresh V9
+  is a command smoke, not evidence that earlier migration edges executed.
+  The independent native race gate executes every edge through real load-balanced
+  old/new writes: V4 worker death rolls back uncommitted table DDL, V8 pauses a
+  real concurrent index behind an old writer and replaces its killed worker,
+  and V1 restarts and writes after V9. It passes in 121.73s (package 122.758s).
+  All releases use one copied actual compiler; source/build trees are removed
+  before deployment. Two unchanged disk-backed attempts hit ordinary HTTP write
+  timeouts before the next migration worker started, with PostgreSQL COMMIT up
+  to 6.879s and host I/O pressure. The successful run uses an owned PostgreSQL
+  17.10 cluster on tmpfs, private Unix sockets, and verified `fsync`,
+  `synchronous_commit` and `full_page_writes` all on. Its three-second HTTP limit
+  is unchanged. This proves process interruption/recovery, not physical host
+  power-loss durability; the owned cluster was removed afterward.
+  The preceding seven-release layout also passed the real local proxy walkthrough
+  and retained-data restart. Elm assets compiled and were served, but no browser
+  was available for interactive UI verification; that evidence is not a nine-roll
+  UI walkthrough. Two script reviews corrected ambient PostgreSQL overrides and
+  ensured probes drain before cluster shutdown. Typed transforms, JSONB evolution
+  and lifecycle scenarios remain required before the showcase is complete.
 
 - The separate Worker topology now has real PostgreSQL 17 and 18 coverage.
   Request startup verifies control and entity catalogs in read-only snapshots

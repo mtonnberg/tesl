@@ -80,6 +80,22 @@ class ReleaseTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("MIG001", [d["code"] for d in diagnostics["diagnostics"]])
 
+    def test_emission_prints_failed_compiler_diagnostics_and_keeps_the_report(self):
+        copy = self.directory / "app-copy"
+        shutil.copytree(APP, copy, ignore=shutil.ignore_patterns(".local*", "elm-stuff", "main.js", "__pycache__"))
+        frozen = copy / "schema/todo/v1.tesl"
+        frozen.write_text(frozen.read_text() + "\n# Changed frozen input must be reported.\n")
+        output = self.directory / "refused-emission"
+        env = dict(os.environ, TESL_COMPILER=str(COMPILER), TESL_REPO_ROOT=str(ROOT))
+        result = subprocess.run(["bash", str(copy / "deploy/build-revision.sh"), "2", str(output), "--emit-only"],
+                                env=env, capture_output=True, text=True, timeout=60)
+        self.assertNotEqual(result.returncode, 0)
+        report = (output / "diagnostics.json").read_text()
+        self.assertIn("MIG013", [d["code"] for d in json.loads(report)["diagnostics"]])
+        self.assertIn(report.strip(), result.stderr)
+        self.assertIn(str(output / "diagnostics.json"), result.stderr)
+        self.assertFalse((output / "go").exists())
+
     def test_invalid_revision_and_existing_output_do_not_mutate_output(self):
         output = self.directory / "existing"
         output.mkdir()

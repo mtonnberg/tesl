@@ -41,7 +41,7 @@ type entity_entry = {
   stored_entity : stored_entity;
 }
 
-type declaration_kind = Newtype | Adt | Record | Entity | Fact | Codec_declaration | Function
+type declaration_kind = Newtype | Adt | Record | Entity | Fact | Codec_declaration | Function | Queue_schema
 type declaration = {
   namespace : Migration_ir.namespace;
   qualified_name : string;
@@ -143,6 +143,21 @@ let snapshot inventory =
   | Ok body -> with_abi inventory body
   | Error _ -> assert false (* load checks this exact closure before publishing t *)
 
+type queue_payload = { payload_name : string; payload_contract : Migration_canonical.node; payload_loc : Location.loc }
+type queue_contract = { queue_name : string; queue_loc : Location.loc; payloads : queue_payload list }
+let queue_contracts inventory =
+  List.filter_map (fun (declaration : declaration) ->
+    if declaration.declaration_kind <> Queue_schema then None else
+    let definition = List.find (fun d -> d.key = (Value, Global declaration.qualified_name)) inventory.definitions in
+    let payloads = List.filter_map (function
+      | Type, Global name ->
+        let payload = List.find (fun (d : declaration) -> d.namespace = Type && d.qualified_name = name) inventory.declarations in
+        let contract = match closure inventory [Type,name] with Ok c -> c | Error _ -> assert false in
+        Some {payload_name=name;payload_contract=contract;payload_loc=payload.source_loc}
+      | _ -> None) definition.body.references
+      |> List.sort (fun a b -> String.compare a.payload_name b.payload_name) in
+    Some {queue_name=declaration.qualified_name;queue_loc=declaration.source_loc;payloads}) inventory.declarations
+
 let field_changes ~before ~after =
   let loc = Location.dummy_loc "<migration-field-impact>" in
   match compatible_inventories ~before ~after with
@@ -198,7 +213,7 @@ let same_declarations evidence = evidence.previous_declaration, evidence.current
 let same_digest evidence = evidence.same_hash
 let same_compiler_abi (evidence : same) = evidence.compiler_abi
 
-let same_eligible = function Newtype | Adt | Record | Fact | Codec_declaration -> true
+let same_eligible = function Newtype | Adt | Record | Fact | Codec_declaration | Queue_schema -> true
   | Entity | Function -> false
 
 let declaration_key (d : declaration) = d.namespace, d.qualified_name
@@ -215,7 +230,7 @@ let verify_same ~(before : t) ~(after : t) ~previous ~current =
     | None, _ | _, None ->
       refuse Invalid_declaration "Same arguments must name declarations owned by their respective schema inventories; constructors, builtins and foreign revisions are not declarations" difference
     | Some old, Some fresh when not (same_eligible old.declaration_kind && same_eligible fresh.declaration_kind) ->
-      refuse Invalid_declaration "Same accepts newtypes, ADTs, records, facts and codecs; entities and functions are compared by the migration plan" difference
+      refuse Invalid_declaration "Same accepts newtypes, ADTs, records, facts, codecs and queueSchema contracts; entities and functions are compared by the migration plan" difference
     | Some old, Some fresh when old.declaration_kind <> fresh.declaration_kind ->
       refuse Different_kind "Same arguments must have the same declaration kind" difference
     | Some old, Some fresh ->
@@ -278,6 +293,7 @@ let names = function
   | DRecord r -> [Type, r.name; Value, r.name]
   | DEntity e -> [Type, e.name; Value, e.name]
   | DFact f -> [Predicate, f.name]
+  | DQueueSchema q -> [Value, q.name]
   | DCodec c -> [Codec, c.name]
   | DDatabase _ | DCapability _ | DConst _ | DQueue _ | DChannel _
   | DWorkers _ | DCache _ | DAgent _ | DEmail _ | DCapture _ | DApi _
@@ -405,6 +421,20 @@ let load_with_compatibility ~stored_value_compatibility ~compiler_abi ~root_file
            | [] -> match List.assoc_opt (ns, name) globals with
              | Some _ as result -> result
              | None -> builtin m ns name) in
+      List.iter (function
+        | DQueueSchema q -> List.iter (fun (name,loc) ->
+            let resolved = match resolve Type name with
+              | Some (Global resolved) -> resolved
+              | _ -> reject loc ("queueSchema payload must be an owned record: " ^ name) in
+            let owner,record = List.find_map (fun owner -> List.find_map (function
+              | DRecord record when owner.module_name ^ "." ^ record.name = resolved -> Some (owner,record)
+              | _ -> None) owner.decls) modules
+              |> function Some pair -> pair | None -> reject loc ("queueSchema payload must be a record: " ^ name) in
+            if owner.module_name <> m.module_name &&
+               (not (List.exists (fun (i : import_decl) -> i.module_name = owner.module_name) m.imports) ||
+                not (List.mem (ExportName record.name) owner.exports)) then
+              reject loc ("queueSchema payload is not exported by a directly imported schema module: " ^ name)) q.jobs
+        | _ -> ()) m.decls;
       List.map (fun d -> match Migration_ir.define ~scopes ~resolve ~typed_nodes m d with
         | Ok definition -> definition
         | Error error -> raise (Invalid error)) m.decls) modules in
@@ -429,6 +459,7 @@ let load_with_compatibility ~stored_value_compatibility ~compiler_abi ~root_file
         | DFact f -> Predicate, f.name, Fact
         | DCodec c -> Codec, c.name, Codec_declaration
         | DFunc f -> Value, f.name, Function
+        | DQueueSchema q -> Value, q.name, Queue_schema
         | _ -> assert false (* Schema content and typed lowering already checked. *) in
       {namespace; qualified_name=m.module_name ^ "." ^ name; declaration_kind=kind; source_loc=top_decl_loc d}) m.decls) modules
       |> List.sort (fun a b -> compare (declaration_key a) (declaration_key b)) in
@@ -463,6 +494,11 @@ let load_with_compatibility ~stored_value_compatibility ~compiler_abi ~root_file
           primary_key=form.primary_key; entity_contract}}) members
       |> List.sort (fun a b -> String.compare a.entity_identity b.entity_identity) in
     let inventory = { inventory with fields; entities } in
+    let assigned = Hashtbl.create 8 in
+    List.iter (fun queue -> List.iter (fun payload ->
+      match Hashtbl.find_opt assigned payload.payload_name with
+      | Some previous -> reject payload.payload_loc ("queue payload belongs to multiple queueSchema contracts: " ^ previous ^ " and " ^ queue.queue_name)
+      | None -> Hashtbl.add assigned payload.payload_name queue.queue_name) queue.payloads) (queue_contracts inventory);
     Ok inventory
   with
   | Invalid error -> Error error

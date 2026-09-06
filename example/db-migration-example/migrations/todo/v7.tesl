@@ -1,29 +1,28 @@
+# tesl:frozen-migration:v1 Schema.Todo.Migrate.V7
+# tesl:frozen-source Schema.Todo.Migrate.V7 fc5df225eac802fc0bc06ff6944f374cd95fcc8523a2cea99af52125022ac04a
+# tesl:frozen-migration:end
 # tesl:migration-history:v1
 # tesl:migration-from
-# tesl:snapshot-seal:v2 TodoSchema.V6 7465736c2d736f757263652d6162692d76313a38373431343532616464373034393134336634616232646438383039333466636161353435623032666337353065613761393135353030373133373330353564 tesl-stored-value-v1:12c05146e5164485b878df083a803b23ceedcb16b232268408b1f5de2088de4b 39a88ea1d9d94f662a11f752f66b0ad690fbec9c25bf97177c926ad7282a98a7
-# tesl:snapshot-source TodoSchema.V6 231cc6a23709797deff640aab98aa5d70109902721b3c6af8bc245964845e52f
-# tesl:snapshot-source TodoSchema.V6.Projects ad1134e0caf075373084f87157aa21ff2f13a44315f3835d4da3db05d462d30c
-# tesl:snapshot-source TodoSchema.V6.Todos b2fcf42e32b88c43117aade75bb643937b985b61dc99c50198b51b388239f7ef
+# tesl:snapshot-seal:v2 Schema.Todo.V6 7465736c2d736f757263652d6162692d76313a35633561343833333363313666613265336461386230666335656662313537366630393162346363383939346531383164613034376366663563323661396534 tesl-stored-value-v1:737a4ce8fd3e74d67e55fa232067c14532b9485e805ccaeeb6f86df1377c5c87 ca92de726b60a1f41ba6b87fe51edf4229e496652cadd5e4456230d709c89c34
+# tesl:snapshot-source Schema.Todo.V6 2a03672b26c0a01689041742b63b605093da987f7f6cadadf42038660d3cc212
 # tesl:snapshot-end
 # tesl:migration-to
-# tesl:snapshot-seal:v2 TodoSchema.VCurrent 7465736c2d736f757263652d6162692d76313a38373431343532616464373034393134336634616232646438383039333466636161353435623032666337353065613761393135353030373133373330353564 tesl-stored-value-v1:12c05146e5164485b878df083a803b23ceedcb16b232268408b1f5de2088de4b d191725508a92eb47d09e06d1e85ef0fa340e1f9cc877bb1c86097bf019cf671
-# tesl:snapshot-source TodoSchema.VCurrent 569c43a72ad440d9c34733d572b2b1d3579fc8eb828bf8e48f85229cf1f2172e
-# tesl:snapshot-source TodoSchema.VCurrent.Projects 8d5861f03b3ad49f1e6beff1acc5afce9c1946c4b63a08992e2194189a6f5474
-# tesl:snapshot-source TodoSchema.VCurrent.Todos 469326e7adf1fa764863d5964f46c2bbec6587f12835f14c68b3420e327aad51
+# tesl:snapshot-seal:v2 Schema.Todo.V7 7465736c2d736f757263652d6162692d76313a35633561343833333363313666613265336461386230666335656662313537366630393162346363383939346531383164613034376366663563323661396534 tesl-stored-value-v1:737a4ce8fd3e74d67e55fa232067c14532b9485e805ccaeeb6f86df1377c5c87 3d100627bbdf70069f479fc141ca1727f2b614405d14382b657db601c0426536
+# tesl:snapshot-source Schema.Todo.V7 fbff6042e7f21d5c4fc542f073a891151e1ebe9ec9b70ad3d72fb1ceba60469d
 # tesl:snapshot-end
 # tesl:migration-history:end
-module TodoSchema.Migrate.V7 exposing [migration]
+module Schema.Todo.Migrate.V7 exposing [migration]
 import Tesl.Migration exposing [Migration, Entity(..), Rule(..), Same(..)]
-import TodoSchema.V6
-import TodoSchema.VCurrent
+import Schema.Todo.V6
+import Schema.Todo.V7
 
 migration = Migration {
-  from: TodoSchema.V6
-  to: TodoSchema.VCurrent
+  from: Schema.Todo.V6
+  to: Schema.Todo.V7
   same: [
-    Same TodoSchema.V6.Todos.ValidTitle TodoSchema.VCurrent.Todos.ValidTitle # @tesl-gen same:Todos.ValidTitle 44216c64c7bee44b36c7e55d96b8d45254b91198d92f365ebc0f4b8cc0d07b79
+    Same Schema.Todo.V6.ValidTitle Schema.Todo.V7.ValidTitle # @tesl-gen same:ValidTitle 84f60cf0a2ca6ec87f9ffa0e47962271a15570bc1403397caa6d13e709efc1c8
   ]
   entities: {
-    "Todos.Todo": Additive [Default priority 0],
+    "Todo": Additive [Default priority 0],
   }
 }

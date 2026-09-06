@@ -475,6 +475,12 @@ type database_form = {
 
 (* ─── Queue / sseChannel / workers ─────────────────────────────────────────── *)
 
+type queue_schema_form = {
+  name : string;
+  jobs : (string * loc) list;
+  loc : loc;
+}
+
 type queue_form = {
   name             : string;
   database         : string;
@@ -870,6 +876,7 @@ type top_decl =
   | DDatabase   of database_form
   | DCapability of capability_form
   | DConst      of const_form
+  | DQueueSchema of queue_schema_form
   | DQueue      of queue_form
   | DChannel    of channel_form
   | DWorkers    of workers_form
@@ -896,6 +903,7 @@ let top_decl_loc (decl : top_decl) : loc =
   | DDatabase d -> d.loc
   | DCapability c -> c.loc
   | DConst c -> c.loc
+  | DQueueSchema q -> q.loc
   | DQueue q -> q.loc
   | DChannel c -> c.loc
   | DWorkers w -> w.loc

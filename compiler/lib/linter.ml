@@ -734,6 +734,7 @@ let collect_decl_names acc (d : Ast.top_decl) =
   | DWorkers wf ->
     let acc = wf.queue_name :: acc in
     List.fold_left (fun a (_, fn) -> fn :: a) acc wf.bindings
+  | DQueueSchema q -> List.map fst q.jobs @ acc
   | DCapability cf ->
     List.fold_left collect_capability_name acc cf.implies
 

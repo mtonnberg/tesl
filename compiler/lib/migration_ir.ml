@@ -297,6 +297,9 @@ let lower_declaration ~scopes ~(resolve : resolver) ~typed_nodes ~module_name de
               | DecodeDefault d -> tag "default" [Bytes d.field_name; literal [] d.default_lit]
               | DecodeCrossCheck c -> tag "check" [lookup Value c.checker]) alt)) alts) in
         tag "codec" [identity; target; to_json; from_json]
+      | DQueueSchema q ->
+        let members = List.map (fun (name, _) -> lookup Type name) q.jobs |> List.sort compare in
+        tag "queue-schema" [own Value q.name; Seq members]
       | DDatabase _ | DCapability _ | DConst _ | DQueue _ | DChannel _ | DWorkers _ | DCache _
       | DAgent _ | DEmail _ | DCapture _ | DApi _ | DServer _ | DTest _ | DApiTest _ | DLoadTest _ -> reject loc "application declaration is forbidden in migration IR" in
     Ok ({ node = normalize_variables node; references = List.sort_uniq compare !references },
@@ -324,6 +327,7 @@ let define ~scopes ~resolve ~typed_nodes (m : module_form) decl =
     | DRecord r -> named Type r.name [ref Value r.name] []
     | DEntity e -> named Type e.name [ref Value e.name] []
     | DFact f -> named Predicate f.name [] []
+    | DQueueSchema q -> named Value q.name [] []
     | DCodec c ->
       let target = match resolve Type c.type_name with
         | Some symbol -> [Type, symbol] | None -> [] in

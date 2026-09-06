@@ -64,7 +64,7 @@ let abi_bytes () = with_project (fun root path ->
 let malformed_records () = with_project (fun root path ->
   let record = seal root path in let encoded = S.encode record in
   List.iter (fun text -> refuses S.Invalid_record (S.decode text))
-    ["";encoded ^ "# trailing\n";replace ":v1 " ":v2 " encoded;
+    ["";encoded ^ "# trailing\n";replace ":v3 " ":v99 " encoded;
      replace "compiler-A" "" "not a header";
      replace "636f6d70696c65722d41" "z" encoded;
      replace "636f6d70696c65722d41" "20" encoded;
@@ -216,7 +216,7 @@ let compatible_compilers () = with_project (fun root path ->
   check string "physical snapshot digest survives compatible compiler upgrade" (storage a) (storage b);
   let record = get (S.create ~project_root:root a) in
   let encoded = S.encode record in
-  check bool "explicit contract selects seal v2" true (String.starts_with ~prefix:"# tesl:snapshot-seal:v2 " encoded);
+  check bool "complete queue inventory selects seal v3" true (String.starts_with ~prefix:"# tesl:snapshot-seal:v3 " encoded);
   check string "v2 roundtrip" encoded (S.encode (get (S.decode encoded)));
   check string "v2 CRLF roundtrip" encoded (S.encode (get (S.decode (replace "\n" "\r\n" encoded))));
   let checked = get (S.verify_sources ~project_root:root record) in

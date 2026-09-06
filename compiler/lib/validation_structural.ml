@@ -501,7 +501,7 @@ let collect_auth_predicates decls extra_funcs =
     by recursively checking all leaf predicates. *)
 let has_auth_proof_param auth_preds params =
   let rec proof_mentions_auth = function
-    | PredApp { pred; _ } -> List.mem pred auth_preds
+    | PredApp { pred; _ } -> predicate_mem pred auth_preds
     | PredAnd { left; right; _ } -> proof_mentions_auth left || proof_mentions_auth right
   in
   List.exists (fun (b : binding) ->
@@ -1728,9 +1728,8 @@ let check_server_handler_binding
           or a different fact entirely, is the endpoint lying about its response.
           Before this check, two endpoints differing only in return proof were
           silently interchangeable — swapping their handlers compiled clean. *)
-       let all_preds spec =
-         List.sort_uniq String.compare
-           (pred_names_of_return_spec spec @ forall_preds_of_return_spec spec) in
+       let all_preds = response_proof_apps_of_return_spec in
+       let describe apps = String.concat ", " (List.map describe_proof_app apps) in
        let ep_preds = match ep_return_spec_opt ep with
          | Some rs -> all_preds rs | None -> [] in
        if ep_preds <> [] then begin
@@ -1738,7 +1737,7 @@ let check_server_handler_binding
            | LocalHandler fd -> fd.return_spec
            | ImportedHandler info -> info.fi_return in
          let h_preds = all_preds h_spec in
-         let missing = List.filter (fun p -> not (List.mem p h_preds)) ep_preds in
+         let missing = uncovered_proof_apps ~declared:ep_preds ~covered:h_preds in
          if missing <> [] then
            errors := make_error (handler_loc_of hdl)
              ~hint:(Printf.sprintf
@@ -1746,12 +1745,12 @@ let check_server_handler_binding
                 '%s' to declare what the handler actually establishes%s"
                handler_name endpoint_name
                (if h_preds = [] then " (the handler's return carries no proof)"
-                else Printf.sprintf " (it carries [%s])" (String.concat ", " h_preds)))
+                else Printf.sprintf " (it carries [%s])" (describe h_preds)))
              (Printf.sprintf
                "server '%s': endpoint '%s' declares its response carries [%s], but \
                 handler '%s' does not establish %s"
-               sv.name endpoint_name (String.concat ", " ep_preds) handler_name
-               (String.concat ", " missing))
+               sv.name endpoint_name (describe ep_preds) handler_name
+               (describe missing))
              :: !errors
        end
      | _ -> ());
@@ -1831,11 +1830,31 @@ let check_server_handler_binding
         let handler_auth_preds =
           List.concat_map (fun (b : binding) ->
             match b.proof_ann with
-            | Some p -> List.filter (fun pred -> List.mem pred auth_preds) (proof_predicates p)
+            | Some p -> List.filter (fun pred -> predicate_mem pred auth_preds) (proof_predicates p)
             | None -> []
           ) handler_params
           |> List.sort_uniq String.compare
         in
+        (* The router supplies the principal in slot zero. Comparing predicate
+           names alone would let a reader-authenticated value reach an admin
+           handler. Use the producer's complete return contract and normalize
+           only the principal binder; all role/tenant arguments stay exact. *)
+        (match ep.auth, handler_params with
+         | Some a, principal :: _ ->
+           let produced = match List.assoc_opt a.via_fn handlers with
+             | Some (LocalHandler fd) -> proof_apps_of_return_spec fd.return_spec
+             | Some (ImportedHandler info) -> proof_apps_of_return_spec info.fi_return
+             | None -> [] in
+           let required = match principal.proof_ann with
+             | Some proof -> proof_apps_of ~subject:principal.name proof
+             | None -> [] in
+           let missing = uncovered_proof_apps ~declared:required ~covered:produced in
+           if missing <> [] then
+             errors := make_error principal.loc
+               (Printf.sprintf "server '%s': handler '%s' requires auth proof %s not established by `via %s`"
+                 sv.name handler_name (String.concat ", " (List.map describe_proof_app missing)) a.via_fn)
+               :: !errors
+         | _ -> ());
         (* (Fix a) Reject auth predicate OVER-declaration: the predicate(s) the
            endpoint declares on its `auth <binding> via <fn>` clause MUST be a
            subset of what <fn> actually produces. Otherwise a declared-but-
@@ -1854,7 +1873,7 @@ let check_server_handler_binding
              match List.assoc_opt a.via_fn auth_fn_preds with Some ps -> ps | None -> []
            in
            let over_declared =
-             List.filter (fun pred -> not (List.mem pred produced)) declared
+             List.filter (fun pred -> not (predicate_mem pred produced)) declared
            in
            if over_declared <> [] then
              errors := make_error handler_loc
@@ -1885,10 +1904,10 @@ let check_server_handler_binding
         else if ep_needs_auth && handler_has_auth
              && ep_auth_preds <> []
              && (let mismatched =
-                   List.filter (fun pred -> not (List.mem pred ep_auth_preds)) handler_auth_preds
+                   List.filter (fun pred -> not (predicate_mem pred ep_auth_preds)) handler_auth_preds
                  in mismatched <> []) then
           let mismatched =
-            List.filter (fun pred -> not (List.mem pred ep_auth_preds)) handler_auth_preds in
+            List.filter (fun pred -> not (predicate_mem pred ep_auth_preds)) handler_auth_preds in
           let via_fn = match ep.auth with Some a -> a.via_fn | None -> "?" in
           errors := make_error handler_loc
             ~hint:(Printf.sprintf
@@ -1928,7 +1947,7 @@ let check_server_handler_binding
            let first_is_auth = match handler_params with
              | b0 :: _ ->
                (match b0.proof_ann with
-                | Some p -> List.exists (fun pred -> List.mem pred auth_preds) (proof_predicates p)
+                | Some p -> List.exists (fun pred -> predicate_mem pred auth_preds) (proof_predicates p)
                 | None -> false)
              | [] -> false
            in
@@ -1963,34 +1982,21 @@ let check_server_handler_binding
          | LocalHandler fd -> fd.params
          | ImportedHandler info -> info.fi_params
        in
-       (* Auth-supplied predicates are reconciled by the auth block above, NOT by
-          name here. We exclude them endpoint-wide: any predicate the endpoint's own
-          `auth` clause carries (read off `ep.auth.binding.proof_ann`) plus the global
-          auth_preds set. Reading the endpoint's auth clause directly matters because
-          the auth param name need not match the handler param name, so relying on the
-          module-global auth_preds alone could wrongly demand a capture/body for an
-          auth-supplied param. *)
-       let endpoint_auth_preds =
-         auth_preds @ (match ep.auth with
-           | Some a -> (match a.binding.proof_ann with
-               | Some p -> proof_predicates p | None -> [])
-           | None -> [])
-       in
-       (* Non-auth proofs the endpoint supplies for a given param name, via a
-          same-named capture or body binding. *)
-       let supplied_for (param_name : string) : string list =
+       (* Only slot zero is supplied by auth. Another parameter carrying the
+          same predicate still needs its own capture/body evidence. *)
+       let supplied_for (param_name : string) : proof_app list =
          let from_captures =
            List.concat_map (fun (c : api_capture) ->
              if c.binding.name = param_name then
                (match c.binding.proof_ann with
-                | Some p -> proof_predicates p | None -> [])
+                | Some p -> proof_apps_of ~subject:c.binding.name p | None -> [])
              else []
            ) ep.captures
          in
          let from_body =
            match (ep_body ep) with
            | Some b when b.name = param_name ->
-             (match b.proof_ann with Some p -> proof_predicates p | None -> [])
+             (match b.proof_ann with Some p -> proof_apps_of ~subject:b.name p | None -> [])
            | _ -> []
          in
          from_captures @ from_body
@@ -2000,21 +2006,21 @@ let check_server_handler_binding
          List.exists (fun (c : api_capture) -> c.binding.name = param_name) ep.captures
          || (match (ep_body ep) with Some b -> b.name = param_name | None -> false)
        in
-       List.iter (fun (p : binding) ->
+       List.iteri (fun index (p : binding) ->
          match p.proof_ann with
          | None -> ()
          | Some proof ->
-           (* Predicates the handler requires on this param, excluding auth
-              predicates (reconciled in the auth block above). *)
            let required =
-             List.filter (fun pred -> not (List.mem pred endpoint_auth_preds))
-               (proof_predicates proof)
+             if index = 0 && ep.auth <> None then []
+             else proof_apps_of ~subject:p.name proof
            in
            if required <> [] then begin
              let supplied = supplied_for p.name in
              let uncovered =
-               List.filter (fun pred -> not (List.mem pred supplied)) required
+               uncovered_proof_apps ~declared:required ~covered:supplied
              in
+             let uncovered = List.map describe_proof_app uncovered in
+             let supplied = List.map describe_proof_app supplied in
              if uncovered <> [] then
                let handler_loc = match hdl with
                  | LocalHandler fd -> fd.loc
@@ -2392,7 +2398,7 @@ let config_block_schema = function
      offer field completion/hover inside a `connection: TcpConnection { … }`. *)
   | "TcpConnection" -> [ "host", VStr, true; "port", VPort, true ]
   | "SocketConnection" -> [ "path", VStr, true ]
-  | "Queue" -> [ "database", VDatabaseRef, true; "jobs", VJobList, true;
+  | "Queue" -> [ "database", VDatabaseRef, true; "schema", VSchemaRef, false; "jobs", VJobList, true;
                  "retry", VSub "QueueRetryStrategy", false;
                  "numberOfWorkers", VInt, false ]
   | "QueueRetryStrategy" -> [ "maxAttempts", VInt, true; "backoff", VBackoff, true;

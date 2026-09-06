@@ -139,7 +139,7 @@ func buildMigrationCompilerVariants(t *testing.T, ctx context.Context, root stri
 	baseline := build("a")
 	edit("compiler_query.ml", "", "\n(* Compiler-upgrade regression: query-only build change. *)\n")
 	compatible := build("b")
-	edit("migration_abi.ml", `let stored_value_semantics_revision = "tesl-stored-value-semantics-3"`,
+	edit("migration_abi.ml", `let stored_value_semantics_revision = "tesl-stored-value-semantics-4"`,
 		`let stored_value_semantics_revision = "tesl-stored-value-semantics-incompatible-test"`)
 	incompatible := build("c")
 	return baseline, compatible, incompatible

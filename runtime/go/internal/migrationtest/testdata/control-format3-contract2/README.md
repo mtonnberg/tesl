@@ -19,7 +19,7 @@ original format-2 executable must refuse the upgraded catalog.
 
 This prototype predates `tesl_lock_expired_index_holder`, the sixth index-recovery
 API required by the current closed format-3 catalog. The current compiler also
-uses stored-value contract 3 after tightening proof identity. Its executable
+uses stored-value contract 4 after tightening proof identity and HTTP proof arguments. Its executable
 must refuse this prototype's precise missing function without HTTP or mutation;
 that check is catalog evidence. Its request, status and installer paths exercise
 exact semantic-contract refusal against the recognized format-2 catalog. Its

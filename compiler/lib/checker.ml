@@ -2595,7 +2595,8 @@ let normalized_preds_of_proof (subject : string) (p : proof_expr)
   : (string * string list) list =
   let rec go acc = function
     | PredApp { pred; args; _ } ->
-      (pred, List.map (fun a -> if a = subject then "\xc2\xa7" else a) args) :: acc
+      (Validation_common.predicate_identity pred,
+       List.map (fun a -> if a = subject then "\xc2\xa7" else a) args) :: acc
     | PredAnd { left; right; _ } -> go (go acc left) right
   in
   List.sort_uniq compare (go [] p)
@@ -5758,6 +5759,7 @@ let export_locality_errors (m : module_form) : type_error list =
     | DServer srv -> [srv.name]
     | DAgent a -> [a.name]
     | DQueue q -> [q.name]
+    | DQueueSchema q -> [q.name]
     | DChannel ch -> [ch.name]
     (* cache / email names are exportable like queue / channel names: the
        emitted define-cache / define-email is a plain module-level binding, so
@@ -6751,7 +6753,7 @@ let collect_stdlib_fn_uses (m : module_form) : (string * Location.loc) list =
        stdlib names.  Kept as an explicit, exhaustive enumeration so a new decl
        form forces a decision here. *)
     | DDatabase _ | DQueue _ | DChannel _ | DCache _ | DEmail _
-    | DType _ | DRecord _ | DEntity _ | DFact _ | DCodec _ | DCapability _
+    | DQueueSchema _ | DType _ | DRecord _ | DEntity _ | DFact _ | DCodec _ | DCapability _
     | DWorkers _ | DCapture _ | DApi _ | DServer _ -> ()
   ) m.decls;
   Hashtbl.fold (fun k v acc -> (k, v) :: acc) seen []

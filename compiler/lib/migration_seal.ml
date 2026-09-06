@@ -7,11 +7,13 @@ module C = Migration_canonical
 type error_kind = Invalid_record | Invalid_layout | Missing_source | Changed_source
   | Invalid_schema | Abi_mismatch | Semantic_mismatch
 type error = {kind : error_kind; loc : Location.loc; message : string}
-type t = {root_module : string; compiler_abi : string; stored_value_compatibility : string option; snapshot_digest : string;
+type t = {queue_inventory_complete : bool; root_module : string; compiler_abi : string; stored_value_compatibility : string option; snapshot_digest : string;
           sources : (string * string) list}
 type source_check = {seal : t; project_root : string; root_file : string;
                      source_inputs : (string * string) list}
 
+let queue_inventory_complete seal = seal.queue_inventory_complete
+let inherit_queue_inventory ~from seal = {seal with queue_inventory_complete=from.queue_inventory_complete}
 let root_module seal = seal.root_module
 let compiler_abi seal = seal.compiler_abi
 let stored_value_compatibility seal = seal.stored_value_compatibility
@@ -63,7 +65,10 @@ let validate seal =
     if not (digest_valid digest) then invalid ("invalid source digest for " ^ name)) seal.sources
 
 let encode seal =
-  (match seal.stored_value_compatibility with
+  (if seal.queue_inventory_complete then
+    "# tesl:snapshot-seal:v3 " ^ seal.root_module ^ " " ^ hex seal.compiler_abi ^ " " ^
+    Option.value ~default:"none" seal.stored_value_compatibility ^ " " ^ seal.snapshot_digest ^ " queue-inventory-v1\n"
+   else match seal.stored_value_compatibility with
    | None -> "# tesl:snapshot-seal:v1 " ^ seal.root_module ^ " " ^ hex seal.compiler_abi ^ " " ^ seal.snapshot_digest ^ "\n"
    | Some contract -> "# tesl:snapshot-seal:v2 " ^ seal.root_module ^ " " ^ hex seal.compiler_abi ^ " " ^ contract ^ " " ^ seal.snapshot_digest ^ "\n") ^
   String.concat "" (List.map (fun (name,digest) -> "# tesl:snapshot-source " ^ name ^ " " ^ digest ^ "\n") seal.sources) ^
@@ -75,11 +80,14 @@ let decode text = protect "<snapshot-seal>" (fun () ->
     if String.ends_with ~suffix:"\r" line then String.sub line 0 (String.length line - 1) else line) in
   match lines with
   | first :: rest ->
-    let root_module,compiler_abi,stored_value_compatibility,snapshot_digest = match String.split_on_char ' ' first with
+    let root_module,compiler_abi,stored_value_compatibility,snapshot_digest,queue_inventory_complete = match String.split_on_char ' ' first with
       | ["#";"tesl:snapshot-seal:v1";root;abi;digest] ->
-        let abi = match unhex abi with Some abi -> abi | None -> bad () in root,abi,None,digest
+        let abi = match unhex abi with Some abi -> abi | None -> bad () in root,abi,None,digest,false
       | ["#";"tesl:snapshot-seal:v2";root;abi;contract;digest] ->
-        let abi = match unhex abi with Some abi -> abi | None -> bad () in root,abi,Some contract,digest
+        let abi = match unhex abi with Some abi -> abi | None -> bad () in root,abi,Some contract,digest,false
+      | ["#";"tesl:snapshot-seal:v3";root;abi;contract;digest;"queue-inventory-v1"] ->
+        let abi = match unhex abi with Some abi -> abi | None -> bad () in
+        root,abi,(if contract = "none" then None else Some contract),digest,true
       | _ -> bad () in
     let rec entries result = function
       | ["# tesl:snapshot-end";""] -> List.rev result
@@ -89,7 +97,7 @@ let decode text = protect "<snapshot-seal>" (fun () ->
          | _ -> bad ())
       | [] -> bad () in
     let sources = entries [] rest in
-    let seal = {root_module;compiler_abi;stored_value_compatibility;snapshot_digest;sources} in
+    let seal = {root_module;compiler_abi;stored_value_compatibility;snapshot_digest;sources;queue_inventory_complete} in
     validate seal;
     if sources <> List.sort compare sources then
       reject Invalid_record root_module "snapshot sources must use canonical module order";
@@ -163,7 +171,7 @@ let create ~project_root inventory = protect project_root (fun () ->
     |> List.sort compare in
   if List.length sources <> List.length inputs then
     reject Invalid_record root "inventory and snapshot source sets differ";
-  let seal = {root_module=I.root_module inventory;compiler_abi=I.compiler_abi inventory;
+  let seal = {queue_inventory_complete=true;root_module=I.root_module inventory;compiler_abi=I.compiler_abi inventory;
     stored_value_compatibility=I.stored_value_compatibility inventory;
     snapshot_digest=C.digest C.Snapshot (I.snapshot inventory);sources} in
   (match verify_sources ~project_root:root seal with Ok _ -> () | Error error -> raise (Invalid error));

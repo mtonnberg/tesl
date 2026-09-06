@@ -13,12 +13,16 @@ let stored_value_compatibility t = t.stored_value_compatibility
    Bump it when stored values, proof interpretation, codecs, primitive behavior
    or the canonical/storage mapping cease to be compatible. It never permits a
    different executor to resume a pinned transforming generation.
-   Revision 3 preserves original predicate owners through hidden forwarding,
+   Revision 4 compares complete proof applications at HTTP auth, capture and
+   response boundaries, including role/tenant arguments and quantified proofs.
+   Revision 3 could admit reader evidence to an admin-annotated handler, which
+   could then store that invalid evidence; it is not a compatible predecessor.
+   Revision 3 preserved original predicate owners through hidden forwarding,
    qualified imports and Fact-valued callbacks, retains captured callback
    subjects, and refuses detached Fact storage without a subject contract.
    Revision 2 accepted cross-owner evidence through hidden wrappers and subject
    rebinding through raw Fact carriers; do not promise compatibility with it. *)
-let stored_value_semantics_revision = "tesl-stored-value-semantics-3"
+let stored_value_semantics_revision = "tesl-stored-value-semantics-4"
 let valid_stored_value_compatibility value =
   let prefix = "tesl-stored-value-v1:" in
   String.starts_with ~prefix value && String.length value = String.length prefix + 64 &&

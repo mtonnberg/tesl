@@ -608,7 +608,135 @@ test "attached values remain ordinary arguments" {
     Something alias -> expect callback alias == raw
 |}])
 
+let http_owner name = "module " ^ name ^ " exposing [Allowed, Tagged, Role, authenticate, validate, reply, adminReply]\n" ^
+  "import Tesl.Prelude exposing [String]\nimport Tesl.Http exposing [HttpRequest]\n" ^ {|
+fact Allowed(value: String)
+fact Tagged(value: String)
+fact Role(value: String, role: String)
+auth authenticate(request: HttpRequest) -> value: String ::: Allowed value && Role value "reader" =
+  fail 401 "denied"
+check validate(value: String) -> value: String ::: Allowed value && Role value "reader" =
+  ok value ::: Allowed value && Role value "reader"
+handler get reply(value: String ::: Allowed value && Role value "reader") -> String = value
+handler get adminReply(value: String ::: Allowed value && Role value "admin") -> String = value
+|}
+
+let with_http_project f = with_project (fun write ->
+  ignore (write "boundary.tesl" (http_owner "Boundary"));
+  ignore (write "other-boundary.tesl" (Str.global_replace (Str.regexp_string "authenticate")
+    "otherAuthenticate" (http_owner "OtherBoundary")));
+  f write)
+
+let http_app ?(extra = "") ?(via = "authenticate")
+    ?(handler = "respond") endpoint_proof handler_proof =
+  "module App exposing []\nimport Tesl.Prelude exposing [String, List]\n" ^
+  "import Tesl.Agent exposing [Tool, serverTools]\n" ^
+  "import Boundary exposing [Allowed, Role, authenticate, reply, adminReply]\nimport OtherBoundary exposing [otherAuthenticate]\n" ^ extra ^
+  Printf.sprintf {|
+handler get respond(value: String ::: %s) -> String = value
+api A { get "/value" auth value: String ::: %s via %s -> String }
+server S for A { %s }
+|} handler_proof endpoint_proof via handler
+
+let http_imported_auth_identity () = with_http_project (fun write ->
+  let bare = "Allowed value && Role value \"reader\"" in
+  let qualified = "Boundary.Allowed value && Boundary.Role value \"reader\"" in
+  List.iter (fun (endpoint, handler) ->
+    accepted (write "app.tesl" (http_app endpoint handler)))
+    [bare, bare; bare, qualified; qualified, bare; qualified, qualified];
+  accepted (write "app.tesl" (http_app ~handler:"reply" bare bare));
+  List.iter (fun proof ->
+    rejected (write "app.tesl" (http_app proof proof)))
+    ["OtherBoundary.Allowed value && OtherBoundary.Role value \"reader\"";
+     "Allowed value && Role value \"admin\""];
+  rejected (write "app.tesl" (http_app bare
+    "OtherBoundary.Allowed value && OtherBoundary.Role value \"reader\""));
+  rejected (write "app.tesl" (http_app ~via:"otherAuthenticate" bare bare));
+  rejected (write "app.tesl" (http_app bare "Allowed value && Role value \"admin\""));
+  rejected (write "app.tesl" (http_app ~handler:"adminReply" bare bare)))
+
+let http_local_auth_owner () = with_http_project (fun write ->
+  let source = http_app ~extra:"fact Allowed(value: String)\n" "Allowed value" "Allowed value" in
+  let source = Str.global_replace
+    (Str.regexp_string "import Boundary exposing [Allowed, Role, authenticate, reply, adminReply]")
+    "import Boundary exposing [authenticate]" source in
+  rejected (write "app.tesl" source))
+
+let http_capture_identity () = with_http_project (fun write ->
+  let source endpoint handler = Printf.sprintf {|module App exposing []
+import Tesl.Prelude exposing [String]
+import Tesl.Json exposing [stringCodec]
+import Boundary exposing [Allowed, Role, validate]
+import OtherBoundary
+handler get read(value: String ::: %s) -> String = value
+api A { get "/value/:value" capture value: String ::: %s using stringCodec via validate -> String }
+server S for A { read }
+|} handler endpoint in
+  let bare = "Allowed value && Role value \"reader\"" in
+  let qualified = "Boundary.Allowed value && Boundary.Role value \"reader\"" in
+  accepted (write "app.tesl" (source bare qualified));
+  accepted (write "app.tesl" (source qualified bare));
+  rejected (write "app.tesl" (source "OtherBoundary.Allowed value" "OtherBoundary.Allowed value"));
+  rejected (write "app.tesl" (source "Role value \"admin\"" "Role value \"admin\""));
+  rejected (write "app.tesl" (source bare "Role value \"admin\"")))
+
+let http_response_identity () = with_http_project (fun write ->
+  let source proof = Printf.sprintf {|module App exposing []
+import Tesl.Prelude exposing [String]
+import Boundary exposing [Role, authenticate]
+import OtherBoundary
+handler get respond(value: String ::: Boundary.Role value "reader") -> value: String ::: Boundary.Role value "reader" = value
+api A { get "/value" auth value: String ::: Role value "reader" via authenticate -> reply: String ::: %s }
+server S for A { respond }
+|} proof in
+  accepted (write "app.tesl" (source "Role reply \"reader\""));
+  rejected (write "app.tesl" (source "Role reply \"admin\""));
+  rejected (write "app.tesl" (source "OtherBoundary.Role reply \"reader\"")))
+
+let http_tool_identity () = with_http_project (fun write ->
+  let source proof = http_app
+    "Boundary.Allowed value && Boundary.Role value \"reader\""
+    "Allowed value && Role value \"reader\"" ^
+    Printf.sprintf "\nfn expose(value: String ::: %s) -> List Tool = serverTools S value\n" proof in
+  accepted (write "app.tesl" (source "Allowed value && Role value \"reader\""));
+  rejected (write "app.tesl" (source "OtherBoundary.Allowed value && OtherBoundary.Role value \"reader\""));
+  rejected (write "app.tesl" (source "Allowed value && Role value \"admin\"")))
+
+let http_quantified_response_identity () = with_http_project (fun write ->
+  let source proof = Printf.sprintf {|module App exposing []
+import Tesl.Prelude exposing [String, List]
+import Boundary exposing [Allowed, Tagged]
+import OtherBoundary
+handler get respond(values: List String ::: ForAll (Boundary.Allowed && Boundary.Tagged) values) -> List String ? ForAll (Boundary.Allowed && Boundary.Tagged) = values
+api A { get "/values" body values: List String ::: ForAll (Allowed && Tagged) values -> List String ? ForAll (%s) }
+server S for A { respond }
+|} proof in
+  accepted (write "app.tesl" (source "Allowed"));
+  accepted (write "app.tesl" (source "Tagged && Allowed"));
+  rejected (write "app.tesl" (source "OtherBoundary.Allowed")))
+
+let http_auth_proof_on_capture () = with_http_project (fun write ->
+  let source annotation = Printf.sprintf {|module App exposing []
+import Tesl.Prelude exposing [String]
+import Tesl.Json exposing [stringCodec]
+import Boundary exposing [Allowed, authenticate, validate]
+handler get respond(principal: String ::: Allowed principal, value: String ::: Allowed value) -> String = value
+api A { get "/value/:value" auth user: String ::: Allowed user via authenticate capture value: String %s using stringCodec -> String }
+server S for A { respond }
+|} annotation in
+  let proven = source "::: Allowed value" |> Str.global_replace
+    (Str.regexp_string "using stringCodec") "using stringCodec via validate" in
+  accepted (write "app.tesl" proven);
+  rejected (write "app.tesl" (source "")))
+
 let () = run "qualified predicate identity" ["ownership", [
+  test_case "HTTP auth aliases keep their original authority and role" `Quick http_imported_auth_identity;
+  test_case "HTTP auth cannot mint a same-spelled local proof" `Quick http_local_auth_owner;
+  test_case "HTTP capture aliases preserve owner and proof arguments" `Quick http_capture_identity;
+  test_case "serverTools matches imported aliases without widening authority" `Quick http_tool_identity;
+  test_case "HTTP response guarantees preserve owners and literal arguments" `Quick http_response_identity;
+  test_case "HTTP quantified response retains owner and conjunct coverage" `Quick http_quantified_response_identity;
+  test_case "auth evidence does not prove another captured value" `Quick http_auth_proof_on_capture;
   test_case "detached Fact storage refuses while attached fields remain supported" `Quick detached_fact_storage;
   test_case "Fact conjunction retains every owner and subject in either order" `Quick fact_conjunction_identity;
   test_case "builtin and qualified Fact conjunctions preserve all proof requirements" `Quick builtin_fact_conjunction;

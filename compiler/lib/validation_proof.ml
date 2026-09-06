@@ -2207,7 +2207,7 @@ let check_forall_consistency ?facts ?(extra_funcs=[]) (decls : top_decl list) : 
               info.fi_params
             |> List.sort_uniq String.compare
           in
-          let missing = List.filter (fun p -> not (List.mem p !available)) pre in
+          let missing = List.filter (fun p -> not (predicate_mem p !available)) pre in
           if missing <> [] then
             errs := make_error loc
               ~hint:(Printf.sprintf
@@ -2360,7 +2360,7 @@ let check_forall_consistency ?facts ?(extra_funcs=[]) (decls : top_decl list) : 
               let required_preds = proof_predicates wanted in
               (* Available = what the check fn(s) produce + what the input already has. *)
               let available_preds = List.sort_uniq String.compare (produced_preds @ input_preds) in
-              let missing = List.filter (fun pred -> not (List.mem pred available_preds)) required_preds in
+              let missing = List.filter (fun pred -> not (predicate_mem pred available_preds)) required_preds in
               if missing <> [] then begin
                 let produced = String.concat ", " produced_preds in
                 let required = String.concat ", " required_preds in
@@ -2436,7 +2436,7 @@ let check_forall_consistency ?facts ?(extra_funcs=[]) (decls : top_decl list) : 
                | Some info ->
                  let call_preds = forall_preds_of_return_spec info.fi_return in
                  if call_preds <> [] then begin
-                   let missing = List.filter (fun p -> not (List.mem p call_preds)) required_preds in
+                   let missing = List.filter (fun p -> not (predicate_mem p call_preds)) required_preds in
                    if missing <> [] then
                      let loc = (match e with EApp { loc; _ } -> loc | _ -> gen_loc) in
                      errors := make_error loc
@@ -2532,7 +2532,7 @@ let check_forall_consistency ?facts ?(extra_funcs=[]) (decls : top_decl list) : 
          in
          let required_preds = proof_predicates wanted in
          if var_preds <> [] then begin
-           let missing = List.filter (fun pred -> not (List.mem pred var_preds)) required_preds in
+           let missing = List.filter (fun pred -> not (predicate_mem pred var_preds)) required_preds in
            if missing <> [] then
              errors := make_error loc
                ~hint:(Printf.sprintf "add a `List.filterCheck` call to prove [%s] on each element before returning" (String.concat ", " missing))
@@ -2632,20 +2632,11 @@ let check_forall_consistency ?facts ?(extra_funcs=[]) (decls : top_decl list) : 
      ForAll obligation — they parse to RetMaybeAttached, not RetMaybeForAll. *)
   let forall_inner_proof_of_ann (p : proof_expr) : proof_expr option =
     match p with
-    | PredApp { pred = ("ForAll" | "ForAllValues" | "ForAllKeys"); args = inner_pred :: _; loc } ->
-      let names =
-        String.split_on_char ' '
-          (String.concat "" (List.map (fun c ->
-             match c with '(' | ')' -> "" | c -> String.make 1 c)
-             (List.of_seq (String.to_seq inner_pred))))
-        |> List.filter (fun s -> s <> "" && s <> "&&")
-      in
-      (match names with
-       | [] -> None
-       | first :: rest ->
-         Some (List.fold_left
-                 (fun acc n -> PredAnd { left = acc; right = PredApp { pred = n; args = []; loc }; loc })
-                 (PredApp { pred = first; args = []; loc }) rest))
+    | PredApp { pred = ("ForAll" | "ForAllValues" | "ForAllKeys"); args = inner_pred :: _; _ } ->
+      (* The parser may render qualified tokens as `Owner . Predicate`.
+         Reparse the proof grammar, rather than treating punctuation or literal
+         arguments as additional predicate names. *)
+      parse_nested_predicate inner_pred
     | _ -> None
   in
   List.iter (function
@@ -2669,13 +2660,8 @@ let check_forall_consistency ?facts ?(extra_funcs=[]) (decls : top_decl list) : 
       (* Seed forall_env with predicates already on ForAll-annotated parameters. *)
       let init_env = List.filter_map (fun (b : binding) ->
         match b.proof_ann with
-        | Some (PredApp { pred = "ForAll" | "ForAllValues" | "ForAllKeys"; args = [inner_pred; _]; _ }) ->
-          (* Inner pred is a string like "IsActive" or "(P1 && P2)" — extract names *)
-          let preds = List.filter (fun s -> s <> "") (String.split_on_char ' '
-            (String.concat "" (List.map (fun c ->
-              match c with '(' | ')' -> "" | c -> String.make 1 c)
-              (List.of_seq (String.to_seq inner_pred))))) in
-          let cleaned = List.filter (fun s -> s <> "&&" && s <> "") preds in
+        | Some proof ->
+          let cleaned = Option.fold ~none:[] ~some:proof_predicates (forall_inner_proof_of_ann proof) in
           if cleaned = [] then None else Some (b.name, cleaned)
         | _ -> None
       ) fd.params in

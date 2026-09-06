@@ -731,6 +731,23 @@ the production build additionally checks compatibility with recorded source seal
 `tesl agent-context` exposes compact diagnostics and symbols for editor/AI tools;
 it is not a migration step and does not access your database.
 
+Queue payloads have a compiler prerequisite too: declare their records and a
+`queueSchema Notifications { jobs: [NotifyJob] }` contract in the schema, then
+bind that contract with `schema: Schema.Todo.VCurrent.Notifications` in the
+application's ordinary `Queue`. Workers, retry settings, connections, and
+`App.queues` stay in the application. Each frozen contract requires one activated
+queue binding with exactly its declared jobs. Removing the binding does not make
+old jobs disappear.
+
+MIG028 rejects changes to an existing payload's record, nested ADT, proof, or
+codec closure, as well as removing, renaming, or moving it to another queue.
+Adding a new payload identity is supported by the compiler. A legacy history
+without a recorded complete queue inventory cannot establish that no jobs existed.
+**Versioned PostgreSQL queues still refuse at runtime:** protected queue storage,
+claims and job transformations are not yet implemented. See the
+[queue schema prerequisite](../dev-docs/queue-schema-prerequisite.md) for the
+current boundary.
+
 On Linux, start a guided edit session in a terminal:
 
 ```sh
@@ -869,7 +886,7 @@ Compiler updates can also change Tesl's own migration bookkeeping tables. The
 current runtime reads exact supported formats 2 and 3 and installs format 3 on new
 databases. A control-format upgrade also requires a compatible stored-value
 contract; changing bookkeeping does not revalidate previously stored proofs.
-The current compiler uses semantic revision 3 and refuses revision-2 data. That
+The current compiler uses semantic revision 4 and refuses revision-2/3 data. That
 cross-contract revalidation path is still being implemented.
 For a compatible format-2 database, first deploy the bridge request binaries, finish
 any pending expansion with its original worker, and stop that worker. Run the new

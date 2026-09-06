@@ -113,6 +113,12 @@ let start_with_compatibility ~stored_value_compatibility ~compiler_abi ~project_
     let writes,frozen_inputs = overlay root frozen (fun () ->
       let before = inventory (I.load_with_compatibility ~stored_value_compatibility ~compiler_abi ~root_file:frozen_root) in
       let frozen_seal = seal (S.create ~project_root:root before) in
+      let frozen_seal = match existing with
+        | None -> frozen_seal
+        | Some migration ->
+          let _,checked = List.find (fun ((m:H.migration_source),_) -> m.path=migration.path) checked_edges in
+          let _,recorded_target = Header.seals checked in
+          S.inherit_queue_inventory ~from:recorded_target frozen_seal in
       let current_seal = seal (S.create ~project_root:root current.inventory) in
       let rewrites = match existing,old_target with
         | Some migration,Some previous ->

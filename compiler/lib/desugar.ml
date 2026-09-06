@@ -538,7 +538,7 @@ let desugar_decl (tables : lower_tables) (d : top_decl) : top_decl =
     DLoadTest { lf with
       seed_stmts = List.map (desugar_expr tables) lf.seed_stmts;
       request_stmts = List.map (desugar_test_stmt tables) lf.request_stmts }
-  | DType _ | DRecord _ | DEntity _ | DFact _ | DCodec _
+  | DQueueSchema _ | DType _ | DRecord _ | DEntity _ | DFact _ | DCodec _
   | DCapability _ | DWorkers _
   | DCapture _ | DApi _ | DServer _ -> d
 

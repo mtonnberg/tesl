@@ -10,13 +10,12 @@ import Tesl.Env exposing [envRead, envInt]
 import Tesl.App exposing [App]
 import Tesl.ApiTest exposing [statusOk]
 import Tesl.Json exposing [stringCodec, boolCodec]
-import TodoSchema.VCurrent exposing []
-import TodoSchema.VCurrent.Todos exposing [Todo, tryTitle, newTodo]
+import Schema.Todo.VCurrent exposing [Todo, tryTitle, newTodo]
 
 # Deployment configuration lives in the app, outside the sealed schema closure.
 database TodoDatabase = Database {
-  schema: TodoSchema.VCurrent
-  migrations: TodoSchema.Migrate
+  schema: Schema.Todo.VCurrent
+  migrations: Schema.Todo.Migrate
   backend: Postgres (PostgresConfig {
     namespace: "todo_app"
     topology: Worker

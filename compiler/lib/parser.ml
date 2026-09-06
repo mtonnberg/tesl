@@ -4183,6 +4183,31 @@ let parse_database_form s =
   return { name; backend = ""; schema = ""; entities = []; postgres = [];
            config_expr = Some (hint_expr_type type_name body); loc }
 
+(** Pure schema metadata. No expressions, handlers or connection options are
+    admitted here; those belong to the application's ordinary Queue. *)
+let parse_queue_schema_form s =
+  let loc0 = current_loc s in
+  let* name = expect_uident s in
+  let* _ = expect s LBRACE in
+  skip_layout s;
+  let* key = expect_ident s in
+  let* _ = if key = "jobs" then return () else err s "queueSchema requires only a jobs field" in
+  let* _ = expect s COLON in
+  skip_layout s;
+  let job s =
+    let loc = current_loc s in
+    let* name = expect_uident s in
+    let rec qualified name =
+      if peek s = DOT then begin
+        advance s;
+        let* part = expect_uident s in qualified (name ^ "." ^ part)
+      end else return (name,loc) in
+    qualified name in
+  let* jobs = parse_bracketed_list job s in
+  skip_layout s;
+  let* _ = expect s RBRACE in
+  return { name; jobs; loc = span loc0 (current_loc s) }
+
 (** Parse a queue block. *)
 let parse_queue_form s =
   let loc0 = current_loc s in
@@ -5644,6 +5669,10 @@ and parse_top_decl s =
     advance s;
     let* e = parse_email_form s in
     return (DEmail e)
+  | IDENT "queueSchema" when (match peek2 s with UIDENT _ -> true | _ -> false) ->
+    advance s;
+    let* q = parse_queue_schema_form s in
+    return (DQueueSchema q)
   | QUEUE ->
     advance s;
     let* q = parse_queue_form s in
@@ -5715,7 +5744,7 @@ and parse_top_decl s =
             (* `secret Password = String` starts a declaration too.  The SAME
                two-token test as the parse arm, so a `let secret = …` inside a
                body is not mistaken for one. *)
-            | IDENT "secret" when (match peek2 s with UIDENT _ -> true | _ -> false) -> ()
+            | IDENT ("secret" | "queueSchema") when (match peek2 s with UIDENT _ -> true | _ -> false) -> ()
             | _ -> advance s; skip_to_top ()
           in
           skip_to_top ();
@@ -5921,7 +5950,7 @@ let starts_top_decl = function
 let starts_top_decl_at s =
   starts_top_decl (peek s)
   || (match peek s with
-      | IDENT "secret" -> (match peek2 s with UIDENT _ -> true | _ -> false)
+      | IDENT ("secret" | "queueSchema") -> (match peek2 s with UIDENT _ -> true | _ -> false)
       | _ -> false)
 
 (** Best-effort top-level declaration loop: collects every declaration that

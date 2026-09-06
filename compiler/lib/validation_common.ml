@@ -457,6 +457,12 @@ let strip_outer_parens (s : string) : string =
 let predicate_identity_context = ref Fun.id
 let predicate_identity name = !predicate_identity_context name
 
+(* Import aliases are spellings of the original declaration, not new proof
+   authorities. Keep source names for diagnostics and resolve only comparisons. *)
+let predicate_mem name names =
+  let identity = predicate_identity name in
+  List.exists (fun other -> predicate_identity other = identity) names
+
 type proof_key_t =
   | KApp of string * string list       (* (resolved pred, resolved args) *)
   | KAnd of proof_key_t list           (* sorted conjuncts, order-insensitive *)
@@ -675,7 +681,23 @@ let describe_proof_app ((pred, args) : proof_app) : string =
 (** The declared applications no via function establishes (exact match after subject
     canonicalisation). *)
 let uncovered_proof_apps ~(declared : proof_app list) ~(covered : proof_app list) : proof_app list =
-  List.filter (fun app -> not (List.mem app covered)) declared
+  let key (pred, args) = proof_key (PredApp { pred; args; loc = dummy_loc "<proof-boundary>" }) in
+  let covered_keys = List.map key covered in
+  List.filter (fun app -> not (List.mem (key app) covered_keys)) declared
+
+(** Response guarantees also include element/key/value proofs. Split inner
+    conjunctions so a stronger quantified guarantee covers each advertised part,
+    while retaining the quantifier and every predicate argument in comparisons. *)
+let response_proof_apps_of_return_spec spec =
+  let rec quantified quantifier = function
+    | PredAnd {left;right;_} -> quantified quantifier left @ quantified quantifier right
+    | proof -> [(quantifier, [pp_proof proof; "$subject"])] in
+  match spec with
+  | RetForAll {proof;_} | RetMaybeForAll {proof;_}
+  | RetSetForAll {proof;_} | RetMaybeSetForAll {proof;_} -> quantified "ForAll" proof
+  | RetForAllDictValues {proof;_} -> quantified "ForAllValues" proof
+  | RetForAllDictKeys {proof;_} -> quantified "ForAllKeys" proof
+  | _ -> proof_apps_of_return_spec spec
 
 (** Extract the element-level predicate names from a ForAll/MaybeForAll/SetForAll return spec. *)
 let forall_preds_of_return_spec (spec : return_spec) : string list =

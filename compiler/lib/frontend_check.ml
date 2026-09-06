@@ -146,7 +146,7 @@ let module_expression_roots (m : Ast.module_form) : Ast.expr list =
     | Ast.DCache c -> Option.to_list c.config_expr
     | Ast.DEmail e -> Option.to_list e.config_expr
     | Ast.DAgent a -> Option.to_list a.config_expr
-    | Ast.DType _ | Ast.DRecord _ | Ast.DEntity _ | Ast.DFact _ | Ast.DCodec _
+    | Ast.DQueueSchema _ | Ast.DType _ | Ast.DRecord _ | Ast.DEntity _ | Ast.DFact _ | Ast.DCodec _
     | Ast.DCapability _ | Ast.DWorkers _ | Ast.DCapture _ | Ast.DApi _
     | Ast.DServer _ -> []) m.decls
 
@@ -644,7 +644,7 @@ let module_local_diags ?(additional = fun _ _ -> []) source (m : Ast.module_form
 let cycle_unsafe_decl_reason (d : Ast.top_decl) : string option =
   match d with
   | Ast.DFunc fd when fd.kind = Ast.MainKind -> Some "`main()`"
-  | Ast.DFunc _ | Ast.DType _ | Ast.DRecord _ | Ast.DEntity _ | Ast.DConst _
+  | Ast.DFunc _ | Ast.DQueueSchema _ | Ast.DType _ | Ast.DRecord _ | Ast.DEntity _ | Ast.DConst _
   | Ast.DFact _ | Ast.DTest _ | Ast.DApiTest _ | Ast.DLoadTest _
   | Ast.DCapture _ -> None
   | Ast.DCodec c      -> Some (Printf.sprintf "codec `%s`" c.name)

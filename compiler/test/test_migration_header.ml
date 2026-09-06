@@ -116,7 +116,9 @@ let malformed_metadata () = with_project (fun _ _ file source ->
 
 let wrong_edge () = with_project (fun _ _ file source ->
   ignore (refuses "MIG013" file (replace "from: NotesSchema.V1" "from: NotesSchema.VCurrent" source));
-  ignore (refuses "MIG013" file (replace "tesl:snapshot-seal:v1 NotesSchema.V1 " "tesl:snapshot-seal:v1 OtherSchema.V1 " source)))
+  let changed = replace "tesl:snapshot-seal:v3 NotesSchema.V1 " "tesl:snapshot-seal:v3 OtherSchema.V1 " source in
+  check bool "wrong-edge fixture actually changes the recorded family" true (changed<>source);
+  ignore (refuses "MIG013" file changed))
 
 let preserve_source () = with_project (fun root path file source ->
   let prefix = "# License: åäö\r\n\r\n" in

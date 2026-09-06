@@ -74,7 +74,7 @@ let identities before after expressions =
       let previous = reference "MIG024" left and current = reference "MIG024" right in
       let eligible inventory name = I.declarations inventory |> List.filter (fun (d : I.declaration) ->
         d.qualified_name = name && match d.declaration_kind with
-        | I.Newtype | I.Adt | I.Record | I.Fact | I.Codec_declaration -> true
+        | I.Newtype | I.Adt | I.Record | I.Fact | I.Codec_declaration | I.Queue_schema -> true
         | I.Entity | I.Function -> false) in
       let old = eligible before previous and fresh = eligible after current in
       let namespaces declarations = List.map (fun (d : I.declaration) -> d.namespace) declarations |> List.sort_uniq compare in
@@ -83,7 +83,7 @@ let identities before after expressions =
          lookup hit. Each namespace is still independently checked by Sparse. *)
       if old = [] || namespaces old <> namespaces fresh then
         reject "MIG024" (at expression)
-          "Same must pair matching owned type/fact/codec declarations from the previous and current schemas";
+          "Same must pair matching owned type/fact/codec/queueSchema declarations from the previous and current schemas";
       List.map (fun (d : I.declaration) ->
         {S.previous=(d.namespace,previous);current=(d.namespace,current);loc=at expression}) old
     | _ -> reject "MIG024" (at expression) "expected `Same From.Declaration To.Declaration`") expressions
@@ -201,6 +201,9 @@ let check ?stored_value_compatibility ~compiler_abi ~source (m : module_form) =
        | Some expression when list "MIG020" expression = [] -> ()
        | Some expression -> reject "MIG020" (at expression) "nonempty compatibility fixtures require the transformation checker");
       let before = previous.H.inventory and after = current.H.inventory in
+      let queue_errors = Migration_queue.changes ~before ~after @
+        Migration_queue.historical_capability ~before ~after (Option.map Migration_header.seals source_seals) in
+      if queue_errors <> [] then raise (Invalid queue_errors);
       let identities = identities before after (list "MIG024" same) in
       let definitions = record "MIG002" entities in
       let rules = ref [] in

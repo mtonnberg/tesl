@@ -169,8 +169,21 @@ func buildShowcaseRevisions(t *testing.T, ctx context.Context, root string) (map
 	if len(appSource) == 0 {
 		t.Fatal("showcase entry module is missing")
 	}
-	compiler := filepath.Join(root, "compiler", "_build", "default", "bin", "main.exe")
 	buildRoot, binaries := t.TempDir(), make(map[int]string)
+	compilerSource := os.Getenv("TESL_COMPILER")
+	if compilerSource == "" {
+		compilerSource = filepath.Join(root, "compiler", "_build", "default", "bin", "main.exe")
+	}
+	// Every release must use one actual compiler build even if another gate
+	// rebuilds the shared compiler while these nine applications are emitted.
+	compilerBytes, err := os.ReadFile(compilerSource)
+	if err != nil {
+		t.Fatal(err)
+	}
+	compiler := filepath.Join(buildRoot, "compiler-main")
+	if err := os.WriteFile(compiler, compilerBytes, 0700); err != nil {
+		t.Fatal(err)
+	}
 	interrupted := filepath.Join(t.TempDir(), "todo-v4-interrupted")
 	for version := 1; version <= 9; version++ {
 		output := filepath.Join(buildRoot, fmt.Sprintf("v%d", version))
