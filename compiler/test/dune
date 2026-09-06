@@ -301,7 +301,7 @@
 (tests
  (names test_embedded_go_runtime_seam)
  (modules test_embedded_go_runtime_seam)
- (deps ../gen/gen_go_runtime.exe)
+ (deps ../gen/gen_go_runtime.exe ../lib/go_runtime/embedded/dune)
  (libraries tesl_compiler_lib alcotest unix))
 
 ; `inList`/`notInList` need a list literal (review 2026-09-02, H1): a non-literal member list

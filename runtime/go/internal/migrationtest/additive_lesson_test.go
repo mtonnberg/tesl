@@ -73,10 +73,24 @@ func testCompiledAdditiveLesson(t *testing.T, upgrade bool, interruption Event) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	compiler := filepath.Join(root, "compiler/_build/default/bin/main.exe")
+	compiler := os.Getenv("TESL_COMPILER")
+	if compiler == "" {
+		compiler = filepath.Join(root, "compiler/_build/default/bin/main.exe")
+	}
 	var compatibleCompiler, incompatibleCompiler string
 	if upgrade {
 		compiler, compatibleCompiler, incompatibleCompiler = buildMigrationCompilerVariants(t, ctx, root)
+	} else {
+		// All revisions use one immutable compiler artifact, even if a developer
+		// rebuilds the selected compiler while the native journey is running.
+		contents, err := os.ReadFile(compiler)
+		if err != nil {
+			t.Fatal(err)
+		}
+		compiler = filepath.Join(t.TempDir(), "compiler")
+		if err := os.WriteFile(compiler, contents, 0700); err != nil {
+			t.Fatal(err)
+		}
 	}
 	baselineCompiler := compiler
 	var output bytes.Buffer

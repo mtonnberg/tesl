@@ -55,9 +55,16 @@ old stored values satisfy a different proof.
 ## 3. Test and build
 
 ```sh
+tesl check todo-app.tesl
 tesl test todo-app.tesl
-tesl compile todo-app.tesl --out /tmp/todo-next-go
-(cd /tmp/todo-next-go && go test ./internal/teslmodtodoapp && go build -o /tmp/todo-next ./cmd/app)
+tesl build --local
+```
+
+With your development PostgreSQL connection configured and its schema worker
+running (step 4), try the app:
+
+```sh
+tesl run todo-app.tesl
 ```
 
 Add a regression that starts with real rows from the previous binary, runs the
@@ -68,8 +75,9 @@ its historical fixtures, not another migration mechanism.
 
 ## 4. Deploy the worker, then roll request processes
 
-Run the new executable as `./app --schema worker --json` with the schema worker
-login. Run ordinary `./app` processes with the request login. A new request waits
+For local development, run `tesl run todo-app.tesl --schema worker --json` with
+the schema worker login in one terminal and `tesl run todo-app.tesl` with the
+request login in another. A new request waits
 for its schema readiness; only then route traffic to it and drain an old one.
 Keep a healthy old process available throughout the rollout.
 
@@ -82,9 +90,11 @@ executor has stopped before a replacement takes ownership.
 local setup. The deployed executable contains its checked migration history;
 source files and the compiler are not required on application nodes.
 
-## Explicit commands for scripts
+## The same workflow without prompts
 
-These are the noninteractive alternative to the guided workflow:
+These commands perform the same freeze, edit, refresh and review steps as the
+interactive command. Use them for scripts or when you prefer explicit commands;
+you do not need to run them again after completing the guided workflow.
 
 ```sh
 # Freeze the accepted version and open a new current target.

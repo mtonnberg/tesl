@@ -2026,7 +2026,7 @@
     {
       "name": "TestCompiledControlFormatUpgrade",
       "file": "control_upgrade_app_test.go",
-      "line": 38,
+      "line": 39,
       "layer": "compiled-postgres",
       "invariants": [
         "INV-ADDITIVE-READ",
@@ -2045,7 +2045,7 @@
     {
       "name": "TestControlUpgradeFixtureRefusesTampering",
       "file": "control_upgrade_app_test.go",
-      "line": 592,
+      "line": 677,
       "layer": "harness",
       "invariants": [
         "INV-FIXTURE-PROVENANCE"

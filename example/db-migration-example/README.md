@@ -37,7 +37,8 @@ is ready and its in-flight requests have drained. CRUD probes run throughout.
 
 The Python and shell files under `deploy/` arrange that local cluster; Tesl's
 compiled schema worker performs the migrations. They are not migration code and
-are not needed in your own application. [Deployment details](deploy/README.md)
+are not needed in your own application. You might use Helm or something
+yourself in a real world scenario. [Deployment details](deploy/README.md)
 include credentials, standalone commands, logs and cleanup.
 
 ## The storage changes

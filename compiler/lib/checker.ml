@@ -575,14 +575,39 @@ let qualified_fact_ty proof =
         args = inner :: _; _ } -> [pred ^ "(" ^ inner ^ ")"]
     | PredApp { pred; _ } -> [pred]
     | PredAnd { left; right; _ } -> predicates left @ predicates right in
-  let names = predicates proof |> List.sort_uniq String.compare in
-  if List.exists (fun name -> String.contains name '.') names
-  then TApp (t_fact, TCon (String.concat " && " names)) else t_fact
+  (* Builtin predicates retain their existing proof-kernel checks. HM's added
+     key records qualified identities only, consistently for both an annotated
+     conjunction and a conjunction assembled from separate Fact values. *)
+  match predicates proof |> List.filter (fun name -> String.contains name '.')
+        |> List.sort_uniq String.compare with
+  | [] -> t_fact
+  | names -> TApp (t_fact, TCon (String.concat " && " names))
 
 let fact_ty_of_argument arg =
   match Ast.type_expr_to_proof_expr arg with
   | Some proof -> qualified_fact_ty proof
   | None -> t_fact
+
+(* HM retains predicate owners in a canonical conjunction key. Split only at
+   the outer level: a quantified predicate can itself contain a conjunction. *)
+let fact_conjunct_names = function
+  | TApp (TCon "Fact", TCon key) ->
+    let rec split start pos depth acc =
+      if pos = String.length key then
+        List.rev (String.sub key start (pos - start) :: acc)
+      else if depth = 0 && pos + 4 <= String.length key
+          && String.sub key pos 4 = " && " then
+        split (pos + 4) (pos + 4) depth (String.sub key start (pos - start) :: acc)
+      else
+        let depth = match key.[pos] with '(' -> depth + 1 | ')' -> depth - 1 | _ -> depth in
+        split start (pos + 1) depth acc
+    in split 0 0 0 []
+  | _ -> []
+
+let conjoin_fact_tys left right =
+  match List.sort_uniq String.compare (fact_conjunct_names left @ fact_conjunct_names right) with
+  | [] -> t_fact
+  | names -> TApp (t_fact, TCon (String.concat " && " names))
 
 (** Tesl type expression → OCaml ty *)
 let rec ty_of_type_expr (te : type_expr) : ty =
@@ -4487,7 +4512,7 @@ and infer_binop ctx loc ~op_loc op left right =
     let lt' = apply !(ctx.subst) lt in
     let rt' = apply !(ctx.subst) rt in
     (match lt', rt' with
-     | TCon "Fact", TCon "Fact" -> t_fact
+     | left, right when is_fact_ty left && is_fact_ty right -> conjoin_fact_tys left right
      | _ ->
        unify_at ctx loc lt t_bool;
        unify_at ctx loc rt t_bool;

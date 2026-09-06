@@ -103,7 +103,9 @@ func serveHTTPUntilShutdown(ctx context.Context, server *http.Server, serve func
 		case <-ctx.Done():
 		case <-finished:
 		}
-		drain, cancel := context.WithTimeout(context.Background(), timeout)
+		// The lifecycle has ended, but active handlers still get their own
+		// bounded drain interval. Preserve values without its cancellation.
+		drain, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
 		err := server.Shutdown(drain)
 		cancel()
 		if err != nil {

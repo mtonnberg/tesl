@@ -56,9 +56,9 @@ not sufficient evidence about older admitted binaries.
 Embedded index supervision is implemented with scope-owned executor generations,
 startup-to-server signal cancellation and joined handler shutdown. Focused real
 PostgreSQL and race tests cover concurrent scopes, reconnects, permanent failures,
-plain/unique indexes and shutdown. The expanded core PostgreSQL lane passes
-(206.402s); the separate index/Embedded lane and the compiled full-app index lesson
-still require their final runs. The lanes are disjoint mandatory selections with
+plain/unique indexes and shutdown. Both PostgreSQL lanes pass without skips:
+core (206.402s) and index/Embedded/Serve (101.460s). The compiled full-app index
+lesson still requires its final run. The lanes are disjoint mandatory selections with
 the existing 300-second limit each; the former combined selection outgrew that
 limit. This is slice evidence, not completion of phase 2.
 
@@ -213,12 +213,16 @@ covered for both local bindings and function parameters.
   remain pinned to its creator ABI. The PostgreSQL 17 integrated race/tag gate
   passes (99.097s, no skips), including real backend kills, lease/renewal races,
   active independent CIC, catalog collisions and old/new request writes. Runtime
-  lint is clean. The authentic format-2 application fixture now builds and runs
+  lint is clean. Before the semantic-revision-3 correction, the authentic format-2 application fixture built and ran
   both old and bridge executables against retained rows, verifies atomic installer
   upgrade and retry after a lost acknowledgement, then verifies old binaries
   refuse format 3 (21.16s; package 22.182s). Two executor reviews found and fixed
-  the valid-commit/renewal race and a post-failpoint ownership check. Embedded CIC,
-  retirement/contract and the feature-wide final reviews remain pending.
+  the valid-commit/renewal race and a post-failpoint ownership check. The current
+  native gate uses three authentic compiler generations: format 2/contract 2,
+  the historical format-3/contract-2 bridge, and current contract 3. Both archived
+  emissions have closed source/file inventories; 34 tamper cases and package lint
+  pass. Its new native run remains pending. Embedded supervision is now implemented
+  as described above; retirement/contract and feature-wide final reviews remain.
 
 - The todo showcase now contains six real CLI-generated migration edges across
   seven source revisions, byte-identical application code, proven CRUD handlers,

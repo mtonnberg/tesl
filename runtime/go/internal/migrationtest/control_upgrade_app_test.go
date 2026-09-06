@@ -199,14 +199,14 @@ func TestCompiledControlFormatUpgrade(t *testing.T) {
 		t.Fatalf("original binary did not persist its actual compiler identity: %v (%v)", provenance, err)
 	}
 	before := controlUpgradeSnapshot(t, ctx, observer, false)
-	if _, err := observer.Exec(ctx, "grant "+owner+" to "+setup); err != nil {
-		t.Fatal(err)
-	}
 	// Contract 3 cannot interpret the original contract-2 rows. Request,
 	// status and installer recognize this catalog and reach semantic refusal;
 	// the current worker requires the format upgrade before inspecting history.
-	assertCurrentControlUpgradeRefusals(t, ctx, observer, currentBinary, login, worker, requestRole, setup,
+	assertCurrentControlUpgradeRefusals(t, ctx, observer, currentBinary, login, worker, requestRole, setup, owner,
 		"format2", "persisted stored-value compatibility differs at V1", false, installArgs)
+	if _, err := observer.Exec(ctx, "grant "+owner+" to "+setup); err != nil {
+		t.Fatal(err)
+	}
 	// The acknowledgement is intentionally lost only after the actual installer
 	// has committed. A closed pipe exercises the ordinary executable's output
 	// path; no test hook or instrumented runtime is involved.
@@ -280,14 +280,8 @@ func TestCompiledControlFormatUpgrade(t *testing.T) {
 	// This immutable historical format-3 prototype predates the sixth index
 	// recovery API. Current software must refuse that exact missing function
 	// before interpreting rows. This is catalog evidence, not semantic refusal.
-	if _, err := observer.Exec(ctx, "grant "+owner+" to "+setup); err != nil {
-		t.Fatal(err)
-	}
-	assertCurrentControlUpgradeRefusals(t, ctx, observer, currentBinary, login, worker, requestRole, setup,
+	assertCurrentControlUpgradeRefusals(t, ctx, observer, currentBinary, login, worker, requestRole, setup, owner,
 		"historical-format3", "protected migration function worker_notes.tesl_lock_expired_index_holder is missing or unreadable", true, installArgs)
-	if _, err := observer.Exec(ctx, "revoke "+owner+" from "+setup); err != nil {
-		t.Fatal(err)
-	}
 	restarted := startRequest(bridgeBinary, "format3-request-restart")
 	workerLessonRequest(t, ctx, client, restarted.base, "GET", "after-upgrade", "", 200, "Upgraded writer")
 	format(3)
@@ -336,8 +330,12 @@ func assertOldControlUpgradeRefused(t *testing.T, ctx context.Context, binary st
 }
 
 func assertCurrentControlUpgradeRefusals(t *testing.T, ctx context.Context, observer *pgx.Conn, binary string,
-	login func(string) []string, worker, requestRole, setup, phase, expected string, includeFormat3 bool, installArgs []string) {
+	login func(string) []string, worker, requestRole, setup, owner, phase, expected string, includeFormat3 bool, installArgs []string) {
 	t.Helper()
+	var installerMember bool
+	if err := observer.QueryRow(ctx, "select pg_has_role($1,$2,'MEMBER')", setup, owner).Scan(&installerMember); err != nil || installerMember {
+		t.Fatalf("installer must be detached before current request/worker/status refusals: membership=%v (%v)", installerMember, err)
+	}
 	before := controlUpgradeRefusalSnapshot(t, ctx, observer, includeFormat3)
 	workerExpected := expected
 	if !includeFormat3 {
@@ -352,8 +350,23 @@ func assertCurrentControlUpgradeRefusals(t *testing.T, ctx context.Context, obse
 		{"status", requestRole, expected, []string{"--schema", "status", "--json"}},
 		{"installer", setup, expected, installArgs},
 	} {
-		assertControlUpgradeRefused(t, ctx, binary, login(command.role), "current-"+command.label+"-"+phase,
-			func(output []byte) bool { return bytes.Contains(output, []byte(command.expected)) }, command.args...)
+		func() {
+			// Request admission also rejects a leaked installer membership. Only
+			// the installer command receives that role, and it loses it before
+			// the unchanged-state comparison or any subsequent request starts.
+			if command.label == "installer" {
+				if _, err := observer.Exec(ctx, "grant "+owner+" to "+setup); err != nil {
+					t.Fatal(err)
+				}
+				defer func() {
+					if _, err := observer.Exec(ctx, "revoke "+owner+" from "+setup); err != nil {
+						t.Errorf("detach installer after refusal: %v", err)
+					}
+				}()
+			}
+			assertControlUpgradeRefused(t, ctx, binary, login(command.role), "current-"+command.label+"-"+phase,
+				func(output []byte) bool { return bytes.Contains(output, []byte(command.expected)) }, command.args...)
+		}()
 		if after := controlUpgradeRefusalSnapshot(t, ctx, observer, includeFormat3); before != after {
 			t.Fatalf("current %s refusal changed retained %s state:\nbefore %s\nafter %s", command.label, phase, before, after)
 		}
@@ -441,7 +454,16 @@ func buildControlUpgradeApps(t *testing.T, ctx context.Context) (string, string,
 		}
 	}
 	writeControlUpgradeFile(t, filepath.Join(project, "tesl.toml"), nil)
-	compiler := filepath.Join(root, "compiler/_build/default/bin/main.exe")
+	// Use one compiler artifact for all source checks and emission, even when a
+	// developer rebuilds the shared compiler while this native gate is running.
+	compilerBytes, err := os.ReadFile(filepath.Join(root, "compiler/_build/default/bin/main.exe"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	compiler := filepath.Join(buildRoot, "compiler")
+	if err := os.WriteFile(compiler, compilerBytes, 0700); err != nil {
+		t.Fatal(err)
+	}
 	for name := range sources {
 		command := exec.CommandContext(ctx, compiler, "agent-context", filepath.Join(project, name))
 		command.Dir = project

@@ -78,7 +78,7 @@ func (service *pgEmbeddedIndexService) run(generation *pgEmbeddedIndexGeneration
 	// The executor normally closes its connection, including its tagged backend
 	// set. This also covers preflight errors before it takes its first session.
 	if conn != nil && !conn.IsClosed() {
-		cleanup, cancel := context.WithTimeout(context.Background(), service.settings.cleanup)
+		cleanup, cancel := context.WithTimeout(context.WithoutCancel(generation.ctx), service.settings.cleanup)
 		closeErr := conn.Close(cleanup)
 		cancel()
 		if err == nil {
@@ -86,7 +86,7 @@ func (service *pgEmbeddedIndexService) run(generation *pgEmbeddedIndexGeneration
 		}
 	}
 	if err == nil && generation.ctx.Err() == nil {
-		err = fmt.Errorf("Embedded migration executor stopped unexpectedly")
+		err = fmt.Errorf("embedded migration executor stopped unexpectedly")
 	}
 	service.mutex.Lock()
 	generation.err = err
@@ -161,7 +161,7 @@ func (service *pgEmbeddedIndexService) check() error {
 		return service.failure
 	}
 	if service.generation == nil {
-		return fmt.Errorf("Embedded migration service has no active scope owner")
+		return fmt.Errorf("embedded migration service has no active scope owner")
 	}
 	return service.generation.ctx.Err()
 }

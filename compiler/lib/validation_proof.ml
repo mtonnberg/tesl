@@ -346,6 +346,143 @@ let forall_inner_pred_names (proofs : proof_expr list) : string list =
   ) proofs
   |> List.sort_uniq String.compare
 
+(* Detached Fact callbacks need both predicate and subject provenance. HM keeps
+   the owner; this validator keeps captured subjects across aliases/application. *)
+let rec contains_fact_type = function
+  | TApp { head = TName { name = "Fact"; _ }; _ } -> true
+  | TApp { head; arg; _ } -> contains_fact_type head || contains_fact_type arg
+  | TFun { dom; cod; _ } -> contains_fact_type dom || contains_fact_type cod
+  | TTuple { elems; _ } -> List.exists contains_fact_type elems
+  | TName _ | TVar _ -> false
+
+let rec contains_dependent_callback = function
+  | TFun _ as ty when contains_fact_type ty -> true
+  | TApp { head; arg; _ } -> contains_dependent_callback head || contains_dependent_callback arg
+  | TTuple { elems; _ } -> List.exists contains_dependent_callback elems
+  | TFun { dom; cod; _ } -> contains_dependent_callback dom || contains_dependent_callback cod
+  | TName _ | TVar _ -> false
+
+let rec subst_fact_subjects mapping = function
+  | TApp ({ head = TName { name = "Fact"; _ }; arg; _ } as ty) ->
+    (match type_expr_to_proof_expr arg with
+     | Some proof -> TApp { ty with arg = Parser.proof_expr_to_type_expr (subst_proof mapping proof) }
+     | None -> TApp ty)
+  | TApp ty -> TApp { ty with head = subst_fact_subjects mapping ty.head; arg = subst_fact_subjects mapping ty.arg }
+  | TFun ty -> TFun { ty with dom = subst_fact_subjects mapping ty.dom; cod = subst_fact_subjects mapping ty.cod }
+  | TTuple ty -> TTuple { ty with elems = List.map (subst_fact_subjects mapping) ty.elems }
+  | (TName _ | TVar _) as ty -> ty
+
+let subst_callback_info mapping info =
+  { info with fi_params = List.map (fun (p : binding) ->
+      { p with type_expr = subst_fact_subjects mapping p.type_expr;
+        proof_ann = Option.map (subst_proof mapping) p.proof_ann }) info.fi_params;
+    fi_return = (match return_value_type info.fi_return with
+      | Some ty -> RetPlain { ty = subst_fact_subjects mapping ty; loc = info.fi_loc }
+      | None -> info.fi_return) }
+
+let alpha_callback_info info =
+  (* Rename before substituting captured subjects. A caller variable may have
+     exactly the same spelling as a remaining callee parameter. *)
+  let mapping = List.mapi (fun i (p : binding) -> p.name, "$callback-formal:" ^ string_of_int i) info.fi_params in
+  let renamed = subst_callback_info mapping info in
+  { renamed with fi_params = List.map2 (fun (p : binding) (_, name) -> { p with name }) renamed.fi_params mapping }
+
+let callback_info_of_type name loc ty =
+  let rec split n = function
+    | TFun { dom; cod; _ } ->
+      let params, result = split (n + 1) cod in
+      { name = "$callback-arg:" ^ string_of_int n; type_expr = dom; proof_ann = None; loc } :: params, result
+    | result -> [], result in
+  let params, result = split 0 ty in
+  match params with
+  | [] -> None
+  | _ -> Some { fi_name = name; fi_kind = FnKind; fi_params = params;
+      fi_return = RetPlain { ty = result; loc }; fi_loc = loc; fi_http_methods = [] }
+
+let callback_params funcs params = List.filter_map (fun (p : binding) ->
+  Option.map (fun info -> p.name, info) (callback_info_of_type p.name p.loc p.type_expr)) params @ funcs
+
+let rec callback_info funcs subject_env expr =
+  match function_name_of_expr expr with
+  | Some name -> Option.map alpha_callback_info (List.assoc_opt name funcs)
+  | None -> match expr with
+    | EApp { fn; arg; _ } ->
+      (match callback_info funcs subject_env fn with
+       | Some ({ fi_params = param :: remaining; _ } as info) when remaining <> [] ->
+         (match subject_of_expr subject_env arg with
+          | Some subject -> Some (subst_callback_info [param.name, subject] { info with fi_params = remaining })
+          | None -> None)
+       | _ -> None)
+    | ELambda { params; body; loc } ->
+      let result = match !field_proof_type_ctx with
+        | Some (env, fields, ctors) ->
+          infer_expr_type (List.map (fun (p : binding) -> p.name, p.type_expr) params @ env) funcs fields ctors body
+        | None -> infer_expr_type (List.map (fun (p : binding) -> p.name, p.type_expr) params) funcs [] [] body in
+      Option.map (fun ty -> alpha_callback_info { fi_name = "<lambda>"; fi_kind = FnKind; fi_params = params;
+        fi_return = RetPlain { ty; loc }; fi_loc = loc; fi_http_methods = [] }) result
+    | _ -> None
+
+let callback_type info =
+  let renamed = List.mapi (fun i (p : binding) -> p.name, "$callback-arg:" ^ string_of_int i) info.fi_params in
+  let info = subst_callback_info renamed info in
+  Option.map (fun result -> List.fold_right (fun (p : binding) cod ->
+    TFun { dom = p.type_expr; cod; caps = []; loc = p.loc }) info.fi_params result)
+    (return_value_type info.fi_return)
+
+let rec callback_facts_match expected actual =
+  match proof_of_fact_type expected, proof_of_fact_type actual with
+  | Some wanted, Some carried -> proof_matches wanted [carried] && proof_matches carried [wanted]
+  | Some _, None | None, Some _ -> false
+  | None, None -> match expected, actual with
+    | TFun a, TFun b -> callback_facts_match a.dom b.dom && callback_facts_match a.cod b.cod
+    | TApp a, TApp b -> callback_facts_match a.head b.head && callback_facts_match a.arg b.arg
+    | TTuple a, TTuple b when List.length a.elems = List.length b.elems ->
+      List.for_all2 callback_facts_match a.elems b.elems
+    | _ -> not (contains_fact_type expected || contains_fact_type actual)
+
+let inferred_callback_type funcs expr =
+  match !field_proof_type_ctx with
+  | Some (env, fields, ctors) -> infer_expr_type env funcs fields ctors expr
+  | None -> infer_expr_type [] funcs [] [] expr
+
+let rec dependent_callback_value funcs subject_env expr =
+  Option.fold ~none:false ~some:contains_dependent_callback
+    (Option.bind (callback_info funcs subject_env expr) callback_type)
+  || Option.fold ~none:false ~some:contains_dependent_callback (inferred_callback_type funcs expr)
+  || match expr with
+     | EIf { then_; else_; _ } -> dependent_callback_value funcs subject_env then_ || dependent_callback_value funcs subject_env else_
+     | ECase { arms; _ } -> List.exists (fun (a : case_arm) -> dependent_callback_value funcs subject_env a.body) arms
+     | ELet { body; _ } -> dependent_callback_value funcs subject_env body
+     | _ -> false
+
+let check_callback_arguments subject_env funcs head args =
+  let receiving = match function_name_of_expr head with
+    | Some name -> List.assoc_opt name funcs
+    | None -> callback_info funcs subject_env head in
+  let params = Option.fold ~none:[] ~some:(fun info -> info.fi_params) receiving in
+  let mapping = List.filter_map (fun ((param : binding), arg) ->
+    Option.map (fun subject -> param.name, subject) (subject_of_expr subject_env arg)) (zip_prefix params args) in
+  List.concat_map (fun (index, arg) ->
+    let actual = Option.bind (callback_info funcs subject_env arg) callback_type in
+    let expected = Option.map (fun (p : binding) -> subst_fact_subjects mapping p.type_expr)
+      (List.nth_opt params index) in
+    let relevant = Option.fold ~none:false ~some:contains_dependent_callback expected
+      || dependent_callback_value funcs subject_env arg in
+    if not relevant then [] else
+    let matches = match expected, actual with
+      | Some expected, Some actual -> callback_facts_match
+          (subst_fact_subjects subject_env expected) (subst_fact_subjects subject_env actual)
+      | _ -> false in
+    if matches then [] else
+    let loc = Parser.expr_loc arg in
+    let message = match expected, actual with
+      | Some expected, Some actual -> Printf.sprintf
+          "dependent Fact callback proof mismatch: expected `%s`, but callback requires `%s`; predicate owners and captured subjects must match"
+          (type_key expected) (type_key actual)
+      | _ -> "unsupported opaque dependent Fact callback: its predicate and captured subject contract cannot be verified here" in
+    [make_error loc ~hint:"pass a named function, a tracked partial application, or an explicit lambda whose Fact subjects match the receiving callback annotation" message]
+  ) (List.mapi (fun i arg -> i, arg) args)
+
 let rec check_expr_call_proofs
     (subject_env : subject_env)
     (proof_env : proof_env)
@@ -418,9 +555,12 @@ let rec check_expr_call_proofs
          | _ -> [])
       | _ -> []
     in
-    let call_errors = match function_name_of_expr head with
-      | Some fn_name ->
-        (match List.assoc_opt fn_name funcs with
+    let call_errors = match (match function_name_of_expr head with
+      | Some name -> List.assoc_opt name funcs
+      | None -> callback_info funcs subject_env head) with
+      | Some info ->
+        let fn_name = info.fi_name in
+        (match Some info with
          | Some info when List.exists (fun (p : binding) ->
              p.proof_ann <> None || Option.is_some (proof_of_fact_type p.type_expr)
            ) info.fi_params ->
@@ -565,7 +705,27 @@ let rec check_expr_call_proofs
         end
       | _ -> []
     ) args in
+    let opaque_call_errors =
+      let intrinsic = match head with
+        | EVar { name = ("attachFact" | "detachFact" | "andLeft" | "andRight" | "introAnd" | "forgetFact"); _ } -> true
+        | EConstructor _ -> true
+        | _ -> false in
+      let fact_argument arg =
+        (* Attached evidence on an ordinary value is not a detached Fact
+           argument. Existing check/ForAll and authentication paths validate
+           that evidence separately; treating it as Fact misclassifies them
+           as opaque dependent callbacks. *)
+        Option.fold ~none:false ~some:(fun ty -> Option.is_some (proof_of_fact_type ty))
+          (inferred_callback_type funcs arg) in
+      let opaque = match callback_info funcs subject_env head with
+        | None -> not intrinsic && (dependent_callback_value funcs subject_env head || List.exists fact_argument args)
+        | Some info -> List.length args > List.length info.fi_params
+            && Option.fold ~none:false ~some:contains_dependent_callback (return_value_type info.fi_return) in
+      if opaque then [make_error (Parser.expr_loc head)
+        "unsupported opaque dependent Fact callback: a returned or stored callback cannot be invoked without its captured subject contract"]
+      else [] in
     inner @ attach_errors @ call_errors @ callback_errors @ inline_lambda_errors @ lambda_arg_errors
+    @ check_callback_arguments subject_env funcs head args @ opaque_call_errors
   | ELet { name = _binder; declared_proof; declared_type; value; body; loc } ->
     let name = _binder in
     (* R51_P01 / R51_P02 — proof laundering via `let`.
@@ -953,6 +1113,10 @@ let rec check_expr_call_proofs
          | _ -> [])
     in
     let proof_env' = if new_proofs = [] then proof_env else (name, new_proofs) :: proof_env in
+    let inherited = List.remove_assoc name funcs in
+    let funcs = match callback_info funcs subject_env value with
+      | Some info -> (name, { info with fi_name = name }) :: inherited
+      | None -> inherited in
     value_errors @ declared_proof_errors @ check_expr_call_proofs subject_env' proof_env' funcs body
   | ELetProof { value_name; proof_name; proof_index; value; body; loc } ->
     let value_errors = check_expr_call_proofs subject_env proof_env funcs value in
@@ -1309,7 +1473,8 @@ let rec check_expr_call_proofs
       | Some proof ->
         (b.name, List.map Proof_kernel.assume_param (flatten_proof_conj proof)) :: acc
     ) proof_env params in
-    check_expr_call_proofs subject_env proof_env' funcs body
+    let proof_env' = build_initial_proof_env params @ proof_env' in
+    check_expr_call_proofs subject_env proof_env' (callback_params funcs params) body
   | ELit { lit = LInterp segments; _ } ->
     List.concat_map (function
       | ILiteral _ -> []
@@ -1622,6 +1787,11 @@ let rec check_test_stmt_call_proofs
     let scrut_errors = check_expr_call_proofs subject_env proof_env funcs scrut in
     let scrut_proofs = proofs_of_expr "_" funcs subject_env proof_env scrut in
     let arm_errors = List.concat_map (fun (arm : Ast.ts_case_arm) ->
+      let parent_type_ctx = !field_proof_type_ctx in
+      Fun.protect ~finally:(fun () -> field_proof_type_ctx := parent_type_ctx) (fun () ->
+      Option.iter (fun (env, fields, ctors) ->
+        let bindings = pattern_bindings (infer_expr_type env funcs fields ctors scrut) ctors arm.ts_pattern in
+        field_proof_type_ctx := Some (bindings @ env, fields, ctors)) parent_type_ctx;
       (* Propagate scrutinee proofs into the arm binding, same as ECase in
          check_expr_call_proofs: `case m of Something v ->` gives v the proof of m. *)
       let proof_env', subject_env' =
@@ -1653,7 +1823,7 @@ let rec check_test_stmt_call_proofs
       let body_errors =
         check_test_stmts_call_proofs subject_env' proof_env' funcs arm.ts_body
       in
-      guard_errors @ body_errors
+      guard_errors @ body_errors)
     ) arms in
     (scrut_errors @ arm_errors, subject_env, proof_env)
   | TsExpr { e; _ } ->
@@ -1667,13 +1837,44 @@ and check_test_stmts_call_proofs
     (funcs : (string * func_info) list)
     (stmts : test_stmt list)
     : validation_error list =
-  let (errors, _, _) =
-    List.fold_left (fun (acc_errors, se, pe) stmt ->
-      let (errs, se', pe') = check_test_stmt_call_proofs se pe funcs stmt in
-      (acc_errors @ errs, se', pe')
-    ) ([], subject_env, proof_env) stmts
+  let parent_type_ctx = !field_proof_type_ctx in
+  Fun.protect ~finally:(fun () -> field_proof_type_ctx := parent_type_ctx) (fun () ->
+  let (errors, _, _, _) =
+    List.fold_left (fun (acc_errors, se, pe, scoped_funcs) stmt ->
+      let (errs, se', pe') = check_test_stmt_call_proofs se pe scoped_funcs stmt in
+      let next_funcs = match stmt with
+        | TsLet { name; value; _ } ->
+          let inherited = List.remove_assoc name scoped_funcs in
+          (match callback_info scoped_funcs se value with
+           | Some info -> (name, { info with fi_name = name }) :: inherited
+           | None -> inherited)
+        | _ -> scoped_funcs in
+      (* Keep test-local types independently from attached proof evidence.
+         Otherwise a separately bound Fact (or opaque callback) becomes
+         untyped to this pass, while ordinary proven values look identical. *)
+      Option.iter (fun (env, fields, ctors) ->
+        let names, bindings = match stmt with
+          | TsLet { name; declared_type; value; _ } ->
+            let ty = match declared_type with Some _ -> declared_type
+              | None -> infer_expr_type env scoped_funcs fields ctors value in
+            [name], Option.fold ~none:[] ~some:(fun ty -> [name, ty]) ty
+          | TsLetProof { value_name; proof_names; value; loc } ->
+            let value_binding = Option.fold ~none:[] ~some:(fun ty -> [value_name, ty])
+                (infer_expr_type env scoped_funcs fields ctors value) in
+            let proof_bindings = List.filter_map (fun name ->
+              let proofs = Option.value ~default:[] (List.assoc_opt name pe')
+                |> List.map Proof_kernel.fact_of in
+              Option.map (fun proof -> name, mk_app_type (mk_name_type "Fact")
+                  (Parser.proof_expr_to_type_expr proof)) (combine_proof_list loc proofs)) proof_names in
+            value_name :: proof_names, value_binding @ proof_bindings
+          | _ -> [], [] in
+        field_proof_type_ctx := Some
+          (bindings @ List.filter (fun (name, _) -> not (List.mem name names)) env, fields, ctors)
+      ) !field_proof_type_ctx;
+      (acc_errors @ errs, se', pe', next_funcs)
+    ) ([], subject_env, proof_env, funcs) stmts
   in
-  errors
+  errors)
 
 let check_call_site_proofs ?facts ?(extra_funcs=[]) (decls : top_decl list) : validation_error list =
   let mf = facts_or_compute ?facts ~extra_funcs decls in
@@ -1683,6 +1884,14 @@ let check_call_site_proofs ?facts ?(extra_funcs=[]) (decls : top_decl list) : va
   let errors = ref [] in
   List.iter (function
     | DFunc fd ->
+      if Option.fold ~none:false ~some:contains_dependent_callback (return_value_type fd.return_spec) then
+        errors := make_error fd.loc "unsupported opaque dependent Fact callback return: return the value or proof directly so its captured subjects remain checkable" :: !errors;
+      List.iter (fun (p : binding) ->
+        match p.type_expr with
+        | TFun _ -> ()
+        | ty when contains_dependent_callback ty ->
+          errors := make_error p.loc "unsupported opaque dependent Fact callback parameter: callbacks stored inside containers lose their captured subject contract" :: !errors
+        | _ -> ()) fd.params;
       let subject_env = build_initial_subject_env fd.params in
       let proof_env = build_initial_proof_env fd.params in
       (* #6/#5 (2026-07-04): set the per-fn type context (params + let-chain +
@@ -1691,17 +1900,35 @@ let check_call_site_proofs ?facts ?(extra_funcs=[]) (decls : top_decl list) : va
       field_proof_type_ctx :=
         Some (fn_type_env funcs mf.mf_fields_map mf.mf_ctors fd,
               mf.mf_fields_map, mf.mf_ctors);
-      errors := check_expr_call_proofs subject_env proof_env funcs fd.body @ !errors
+      errors := check_expr_call_proofs subject_env proof_env (callback_params funcs fd.params) fd.body @ !errors
     | DTest tf ->
+      field_proof_type_ctx := Some ([], mf.mf_fields_map, mf.mf_ctors);
       errors := check_test_stmts_call_proofs [] [] funcs tf.stmts @ !errors
     | DApiTest atf ->
+      field_proof_type_ctx := Some ([], mf.mf_fields_map, mf.mf_ctors);
       let seed_errors = List.concat_map (check_expr_call_proofs [] [] funcs) atf.seed_stmts in
       let stmt_errors = check_test_stmts_call_proofs [] [] funcs atf.stmts in
       errors := seed_errors @ stmt_errors @ !errors
     | DLoadTest ltf ->
+      field_proof_type_ctx := Some ([], mf.mf_fields_map, mf.mf_ctors);
       let seed_errors = List.concat_map (check_expr_call_proofs [] [] funcs) ltf.seed_stmts in
       let req_errors = check_test_stmts_call_proofs [] [] funcs ltf.request_stmts in
       errors := seed_errors @ req_errors @ !errors
+    | DType (TypeNewtype t) when contains_fact_type t.base_type ->
+      let message = if contains_dependent_callback t.base_type then
+          "unsupported opaque dependent Fact callback type alias: hiding this callback would erase its captured subject contract"
+        else "unsupported detached Fact storage in a newtype: its subject bindings cannot be retained through wrapping and projection" in
+      errors := make_error t.loc ~hint:"keep Fact evidence in function parameters and returns; use attached field proofs (`value: T ::: P value`) to carry a proven value in a record" message :: !errors
+    | (DRecord _ | DEntity _ | DType _) as decl ->
+      let fields = match decl with
+        | DRecord r -> r.fields | DEntity e -> e.fields
+        | DType (TypeAdt t) -> List.concat_map (fun (v : adt_variant) -> v.fields) t.variants
+        | DType (TypeNewtype _) | _ -> [] in
+      List.iter (fun (f : field_def) -> if contains_fact_type f.type_expr then
+        let message = if contains_dependent_callback f.type_expr then
+            "unsupported opaque dependent Fact callback field: storing this callback would erase its captured subject contract"
+          else "unsupported detached Fact storage in a field: construction, updates and projection cannot retain its subject bindings" in
+        errors := make_error f.loc ~hint:"attach the proof to its value field (`value: T ::: P value`) instead of storing a separate Fact field" message :: !errors) fields
     | _ -> ()
   ) decls;
   field_proof_registry := [];

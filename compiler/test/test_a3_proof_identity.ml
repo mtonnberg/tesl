@@ -14,8 +14,9 @@
       A consumer declared a local `fact F` colliding with a predicate owned by an
       imported module; predicate identity was the bare name (+ an eq?-shared
       emitted symbol), so the local `F` satisfied the foreign module's `::: F`
-      obligation.  Fixed fail-closed: a local `fact` may not collide with a fact
-      owned by any imported module (nor an explicitly-imported stdlib predicate).
+      obligation. Predicate identity now retains its original module owner:
+      a same-spelled local fact cannot satisfy that foreign obligation. Bare
+      names still cannot shadow an explicitly imported predicate.
 
     §4.3 BMOD-SHADOW-ASYM-02 — the no-shadowing detector omitted `fact`.  The same
       fix rejects a local `fact` shadowing an imported predicate, closing the hole
@@ -305,6 +306,8 @@ import MoneyAttacker exposing [forge]
 
 let own_pat = "already owned by imported module\\|single owning module\\|shadows the imported"
 
+let foreign_email_pat = "does not statically satisfy declared proof `FactOwner\\.ValidEmail"
+
 let mismatch_pat = "subject mismatch\\|does not statically satisfy\\|different subject\\|does not match"
 
 (* ── §4.1 parameterised matrix: every ordered field pair × launder mechanism ─
@@ -366,10 +369,18 @@ let owner_bridge = {|module OwnerBridge exposing [ValidEmail, checkEmail, truste
 import FactOwner exposing [ValidEmail, checkEmail, trustedSink]
 |}
 
-(* attacker importing via the re-export bridge, minting a same-named local fact. *)
-let attacker_via_bridge = {|module AttackerB exposing []
+(* A legal wrapper exports its own functions, not the imported predicate. Its
+   hidden signature still requires FactOwner.ValidEmail at every caller. *)
+let owner_forward = {|module OwnerForward exposing [checkedEmail, trustedSink]
 import Tesl.Prelude exposing [String]
-import OwnerBridge exposing [trustedSink]
+import FactOwner exposing [ValidEmail, checkEmail]
+fn checkedEmail(raw: String) -> raw: String ::: ValidEmail raw = check checkEmail raw
+fn trustedSink(value: String ::: ValidEmail value) -> String = value
+|}
+
+let attacker_via_forward = {|module AttackerB exposing []
+import Tesl.Prelude exposing [String]
+import OwnerForward exposing [trustedSink]
 fact ValidEmail (s: String)
 check forge(s: String) -> s: String ::: ValidEmail s = ok s ::: ValidEmail s
 fn attack(evil: String) -> String =
@@ -377,16 +388,31 @@ fn attack(evil: String) -> String =
   trustedSink v
 |}
 
-(* auth-mint variant — the collision is caught at the `fact` DECLARATION, before
-   any mint, so simply declaring the same-named local fact while importing the
-   owner is already the forgery vector regardless of mint kind. *)
-let attacker_auth = {|module AttackerA exposing []
+let legitimate_forward = {|module LegitimateForward exposing []
+import Tesl.Prelude exposing [String]
+import OwnerForward exposing [checkedEmail, trustedSink]
+fn use(raw: String) -> String =
+  let verified = checkedEmail raw
+  trustedSink verified
+|}
+
+(* A local auth predicate may coexist with a hidden imported obligation. Its
+   actual authenticated value must never satisfy the foreign owner's sink. *)
+let local_auth_owner = {|module AttackerA exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Http exposing [HttpRequest]
 import FactOwner exposing [trustedSink]
 fact ValidEmail (s: String)
 auth forge(req: HttpRequest) -> s: String ::: ValidEmail s =
   ok "evil" ::: ValidEmail s
+|}
+
+let attacker_auth = local_auth_owner ^ {|
+handler get leak(value: String ::: ValidEmail value) -> String = trustedSink value
+api AttackApi {
+  get "/leak" auth value: String ::: ValidEmail value via forge -> String
+}
+server AttackServer for AttackApi { leak }
 |}
 
 (* POS: two modules each declaring DISTINCT facts, one importing the other. *)
@@ -418,8 +444,8 @@ fn needBeta(s: String ::: FactBeta s) -> String = s
    (same OR different arity); a consumer that reaches BOTH (via imported minters /
    sinks, directly or through a re-export hop) must NOT let a value carrying one
    owner's fact satisfy the other owner's obligation — even if the other is never
-   proved.  Identity is bare-name, so this is fail-closed by rejecting any fact
-   name owned by >1 module in scope. *)
+   proved. Distinct qualified owners may coexist; an actual bridge must be
+   rejected for failing the destination owner's proof obligation. *)
 let own_int_mint = {|module OwnIntMint exposing [Widget, mkWidget]
 import Tesl.Prelude exposing [Int, Bool(..)]
 fact Widget (n: Int)
@@ -448,8 +474,9 @@ fn attack(raw: Int) -> Int =
   let w = check mkWidget raw
   useWidget w
 |}
-(* NEG: same name, DIFFERENT arity/type owners — ambiguous even if never bridged. *)
-let neg_diamond_arity = {|module DiamondArity exposing []
+(* POS: different payload types and a shared predicate spelling do not collide
+   when only the original owner's proof is used. *)
+let pos_diamond_types = {|module DiamondTypes exposing []
 import Tesl.Prelude exposing [Int]
 import OwnIntMint exposing [mkWidget]
 import OwnStrSink exposing [useWidget]
@@ -457,17 +484,30 @@ fn attack(raw: Int) -> Int =
   let w = check mkWidget raw
   w
 |}
-(* NEG (user's 4-module form): C re-exports A's Widget; D reaches A (via C) and B. *)
-let bridge_reexport = {|module BridgeReexport exposing [Widget]
-import OwnIntMint exposing [Widget]
+
+(* NEG companion: detaching the integer owner's evidence cannot make it the
+   string owner's predicate, even when it is explicitly attached to text. *)
+let neg_diamond_types = {|module DiamondTypesBridge exposing []
+import Tesl.Prelude exposing [Int, String, attachFact, detachFact]
+import OwnIntMint exposing [mkWidget]
+import OwnStrSink exposing [useWidget]
+fn attack(raw: Int, text: String) -> String =
+  let w = check mkWidget raw
+  useWidget (attachFact text (detachFact w))
+|}
+(* NEG (four modules): C legally forwards A's evidence; D reaches A only via
+   that function and still cannot pass the evidence to B's sink. *)
+let bridge_forward = {|module BridgeForward exposing [forwardedWidget]
+import Tesl.Prelude exposing [Int]
+import OwnIntMint exposing [Widget, mkWidget]
+fn forwardedWidget(raw: Int) -> raw: Int ::: Widget raw = check mkWidget raw
 |}
 let neg_diamond_4mod = {|module Diamond4 exposing []
 import Tesl.Prelude exposing [Int]
-import OwnIntMint exposing [mkWidget]
 import OwnIntSink exposing [useWidget]
-import BridgeReexport exposing []
+import BridgeForward exposing [forwardedWidget]
 fn attack(raw: Int) -> Int =
-  let w = check mkWidget raw
+  let w = forwardedWidget raw
   useWidget w
 |}
 (* POS: a consumer using a fact from a SINGLE owning module compiles. *)
@@ -489,7 +529,7 @@ fn ok(raw: Int) -> Int =
   useWidget w
 |}
 
-let diamond_pat = "more than one module\\|ambiguous\\|already owned by another module\\|single owning module"
+let diamond_pat = "does not statically satisfy declared proof `OwnIntSink\\.Widget"
 
 (* ── Runner ───────────────────────────────────────────────────────────────── *)
 
@@ -517,13 +557,18 @@ let () =
     "§4.1 same-field matrix (positives)", quad_pos_cases;
     "§4.2/§4.3 cross-module fact identity (negatives)", [
       test_case "forge via same-named local fact (check mint)" `Quick
-        (fun () -> should_fail ~pat:own_pat "forge check" [owner; attacker_check]);
+        (fun () -> should_fail ~pat:foreign_email_pat "forge check" [owner; attacker_check]);
       test_case "forge via same-named local fact (establish mint)" `Quick
-        (fun () -> should_fail ~pat:own_pat "forge establish" [owner; attacker_establish]);
+        (fun () -> should_fail ~pat:foreign_email_pat "forge establish" [owner; attacker_establish]);
       test_case "forge via same-named local fact (auth mint)" `Quick
-        (fun () -> should_fail ~pat:own_pat "forge auth" [owner; attacker_auth]);
-      test_case "forge through a re-export bridge" `Quick
-        (fun () -> should_fail ~pat:own_pat "forge via bridge" [owner; owner_bridge; attacker_via_bridge]);
+        (fun () -> should_fail ~pat:foreign_email_pat "forge auth" [owner; attacker_auth]);
+      test_case "source re-export of an imported predicate is refused" `Quick
+        (fun () -> should_fail
+          ~pat:"module exposes `ValidEmail`, but only locally-defined names can be exported.*re-export is not supported"
+          "source re-export" [owner; owner_bridge]);
+      test_case "legal forwarding retains the hidden original owner" `Quick
+        (fun () -> should_fail ~pat:foreign_email_pat "forge via forwarding"
+          [owner; owner_forward; attacker_via_forward]);
       test_case "local fact shadows explicitly imported predicate" `Quick
         (fun () -> should_fail ~pat:own_pat "shadow import" [owner; shadower]);
       test_case "local fact forges lifted stdlib hidden obligation" `Quick
@@ -544,6 +589,10 @@ let () =
         (fun () -> should_pass "legit consumer" [owner; legit_consumer]);
       test_case "self-contained owner of its own fact" `Quick
         (fun () -> should_pass "self owner" [self_owner]);
+      test_case "local auth fact coexists with a hidden foreign predicate" `Quick
+        (fun () -> should_pass "local auth owner" [owner; local_auth_owner]);
+      test_case "legal forwarding consumes the original owner's evidence" `Quick
+        (fun () -> should_pass "legal same-owner forwarding" [owner; owner_forward; legitimate_forward]);
       test_case "local fact sharing spelling with non-imported stdlib pred" `Quick
         (fun () -> should_pass "stdlib name not imported" [stdlib_name_not_imported]);
       test_case "two modules with DISTINCT facts, one imports the other" `Quick
@@ -553,12 +602,15 @@ let () =
       test_case "bridge mint(A.Widget) → sink(B.Widget) is rejected" `Quick
         (fun () -> should_fail ~pat:diamond_pat "diamond-bridge"
                      [own_int_mint; own_int_sink; neg_diamond_bridge]);
-      test_case "same name, different arity owners is rejected" `Quick
-        (fun () -> should_fail ~pat:diamond_pat "diamond-arity"
-                     [own_int_mint; own_str_sink; neg_diamond_arity]);
-      test_case "4-module form (C re-exports A; D reaches A and B) is rejected" `Quick
+      test_case "same spelling with different payload owners may coexist" `Quick
+        (fun () -> should_pass "diamond distinct payloads"
+                     [own_int_mint; own_str_sink; pos_diamond_types]);
+      test_case "detached evidence cannot bridge different payload owners" `Quick
+        (fun () -> should_fail ~pat:"does not statically satisfy declared proof `OwnStrSink\\.Widget"
+                     "diamond different payload bridge" [own_int_mint; own_str_sink; neg_diamond_types]);
+      test_case "four-module legal forwarding cannot change proof owner" `Quick
         (fun () -> should_fail ~pat:diamond_pat "diamond-4mod"
-                     [own_int_mint; own_int_sink; bridge_reexport; neg_diamond_4mod]);
+                     [own_int_mint; own_int_sink; bridge_forward; neg_diamond_4mod]);
       test_case "single-owner consumer still compiles" `Quick
         (fun () -> should_pass "single-owner" [own_full; pos_single_owner]);
     ];

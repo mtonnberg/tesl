@@ -328,7 +328,301 @@ fn use(value: String ::: Facade.Valid value) -> String = OldOwner.sink value
   check bool "language still refuses source reexports" true (List.exists (fun (d : Compile.diagnostic) ->
     try ignore (Str.search_forward (Str.regexp_string "re-export is not supported") d.message 0); true with Not_found -> false) diagnostics))
 
+let same_owner_subjects mode () = with_project (fun write ->
+  setup write;
+  let body captured = "module App exposing []\n" ^ imports ^ "import OldOwner\n" ^ {|
+fn run(n: String, callback: Fact (OldOwner.Valid n) -> String, witness: Fact (OldOwner.Valid n)) -> String = callback witness
+fn bridge(n: String, m: String) -> String =
+|} ^ (match mode with
+    | "alias" -> "  let sink = OldOwner.factSink " ^ captured ^ "\n  run n sink (OldOwner.evidence n)\n"
+    | "lambda" -> "  run n (fn(w: Fact (OldOwner.Valid " ^ captured ^ ")) -> OldOwner.factSink " ^ captured ^ " w) (OldOwner.evidence n)\n"
+    | _ -> "  run n (OldOwner.factSink " ^ captured ^ ") (OldOwner.evidence n)\n") in
+  accepted (write "app.tesl" (body "n"));
+  rejected (write "app.tesl" (body "m")))
+
+let callback_body_subjects () = with_project (fun write ->
+  setup write;
+  let source witness = "module App exposing []\n" ^ imports ^ "import OldOwner\n" ^
+    "fn run(n: String, m: String, callback: Fact (OldOwner.Valid n) -> String, witness: Fact (OldOwner.Valid " ^ witness ^ ")) -> String = callback witness\n" in
+  accepted (write "app.tesl" (source "n"));
+  rejected (write "app.tesl" (source "m")))
+
+let callback_field_subjects () = with_project (fun write ->
+  setup write;
+  let source field = "module App exposing []\n" ^ imports ^ "import OldOwner\n" ^ {|
+record Pair { left: String, right: String }
+fn run(n: String, callback: Fact (OldOwner.Valid n) -> String, witness: Fact (OldOwner.Valid n)) -> String = callback witness
+fn bridge(pair: Pair) -> String =
+|} ^ "  let left = pair.left\n  let captured = pair." ^ field ^ "\n  run left (OldOwner.factSink captured) (OldOwner.evidence left)\n" in
+  accepted (write "app.tesl" (source "left"));
+  rejected (write "app.tesl" (source "right")))
+
+let opaque_callbacks () = with_project (fun write ->
+  setup write;
+  let prefix = "module App exposing []\n" ^ imports ^ "import OldOwner\n" in
+  accepted (write "app.tesl" (prefix ^ {|
+record Box { callback: String -> String }
+type Callback = (String) -> String
+fn identity(value: String) -> String = value
+fn factory() -> String -> String = identity
+|}));
+  List.iter (fun body ->
+    let path = write "app.tesl" (prefix ^ body) in
+    let diagnostics = errors path in
+    check bool "opaque dependent callback has an explicit refusal" true
+      (List.exists (fun (d : Compile.diagnostic) -> try ignore (Str.search_forward
+        (Str.regexp_string "unsupported opaque dependent Fact callback") d.message 0); true with Not_found -> false) diagnostics)) [
+      "fn factory(value: String) -> Fact (OldOwner.Valid value) -> String = OldOwner.factSink value\n";
+      "record Box { value: String, callback: Fact (OldOwner.Valid value) -> String }\n";
+      "type Box = Boxed value: String callback: Fact (OldOwner.Valid value) -> String\n";
+      "type Callback = (Fact (OldOwner.Valid value)) -> String\n"
+    ])
+
+let detached_fact_storage () = with_project (fun write ->
+  setup write;
+  let prefix = "module App exposing []\n" ^ imports ^ "import OldOwner\n" in
+  accepted (write "app.tesl" (prefix ^ {|
+type Label = String
+record Witness { value: String ::: OldOwner.Valid value }
+type Checked = CheckedValue value: String ::: OldOwner.Valid value
+fn wrap(value: String) -> Witness =
+  let proven = check OldOwner.trust value
+  Witness { value: proven }
+fn consume(witness: Witness) -> String = OldOwner.sink witness.value
+fn roundTrip(value: String) -> String = consume (wrap value)
+fn detached(value: String) -> Fact (OldOwner.Valid value) = OldOwner.evidence value
+|}));
+  List.iter (fun body ->
+    let source = prefix ^ body in
+    let path = write "app.tesl" source in
+    (match Parser.parse_module path source with
+     | Ok _ -> () | Err e -> fail ("storage boundary fixture must parse: " ^ e.msg));
+    let diagnostics = errors path in
+    check bool "raw Fact storage has an explicit boundary diagnostic" true
+      (List.exists (fun (d : Compile.diagnostic) -> try ignore (Str.search_forward
+        (Str.regexp_string "unsupported detached Fact storage") d.message 0); true with Not_found -> false) diagnostics)
+  ) [
+    "record Witness { value: String, proof: Fact (OldOwner.Valid value) }\n";
+    "record Witness { value: String, proof: Maybe (Fact (OldOwner.Valid value)) }\n";
+    "entity Witness table \"witnesses\" primaryKey value { value: String, proof: Fact (OldOwner.Valid value) }\n";
+    "type Witness = Witnessed value: String proof: Fact (OldOwner.Valid value)\n";
+    "type Evidence = Fact (OldOwner.Valid value)\ntype Callback = Evidence -> String\n";
+    "type Evidence = List (Fact (OldOwner.Valid value))\n";
+    {|
+record Witness { value: String, proof: Fact (OldOwner.Valid value) }
+fn wrap(value: String) -> Witness =
+  let proof = OldOwner.evidence value
+  Witness { value: value, proof: proof }
+fn consume(value: String, witness: Witness) -> String = OldOwner.factSink value witness.proof
+fn bridge(n: String, m: String) -> String = consume m (wrap n)
+|};
+    {|
+type Evidence = Fact (OldOwner.Valid value)
+fn wrap(value: String) -> Evidence = Evidence (OldOwner.evidence value)
+fn consume(value: String, proof: Evidence) -> String = OldOwner.factSink value proof.value
+fn bridge(n: String, m: String) -> String = consume m (wrap n)
+|}
+  ])
+
+let fact_conjunction_identity () = with_project (fun write ->
+  setup write;
+  let prefix = app {|
+fact Local (value: String)
+establish local(value: String) -> Fact (Local value) = Local value
+fn sink(value: String, proof: Fact (OldOwner.Valid value && NewOwner.Valid value && Local value)) -> String = attachFact value proof
+fn together(value: String, old: Fact (OldOwner.Valid value), current: Fact (NewOwner.Valid value), here: Fact (Local value)) -> String =
+  sink value ((current && old) && here)
+fn reordered(value: String, old: Fact (OldOwner.Valid value), current: Fact (NewOwner.Valid value), here: Fact (Local value)) -> String =
+  sink value (here && (old && current))
+|} in
+  accepted (write "app.tesl" prefix);
+  rejected (write "app.tesl" (prefix ^ {|
+fn missing(value: String, old: Fact (OldOwner.Valid value), here: Fact (Local value)) -> String =
+  sink value ((old && old) && here)
+|}));
+  rejected (write "app.tesl" (prefix ^ {|
+fn changedSubject(value: String, other: String, old: Fact (OldOwner.Valid value), current: Fact (NewOwner.Valid other), here: Fact (Local value)) -> String =
+  sink value ((old && current) && here)
+|})))
+
+let builtin_fact_conjunction () = with_project (fun write ->
+  setup write;
+  let prefix = app "import Tesl.String exposing [IsNonEmpty]\n" ^ {|
+fn sink(value: String, proof: Fact (IsNonEmpty value && OldOwner.Valid value)) -> String = attachFact value proof
+fn both(value: String, builtin: Fact (IsNonEmpty value), owned: Fact (OldOwner.Valid value)) -> String =
+  sink value (builtin && owned)
+fn reverse(value: String, builtin: Fact (IsNonEmpty value), owned: Fact (OldOwner.Valid value)) -> String =
+  sink value (owned && builtin)
+fn run(value: String, callback: Fact (OldOwner.Valid value) -> String, proof: Fact (OldOwner.Valid value)) -> String = callback proof
+|} in
+  accepted (write "app.tesl" prefix);
+  List.iter (fun body -> rejected (write "app.tesl" (prefix ^ body))) [{|
+fn missingBuiltin(value: String, proof: Fact (OldOwner.Valid value)) -> String = sink value proof
+|}; {|
+fn changedOwner(value: String, builtin: Fact (IsNonEmpty value), proof: Fact (NewOwner.Valid value)) -> String =
+  sink value (builtin && proof)
+|}; {|
+fn changedSubject(value: String, other: String, builtin: Fact (IsNonEmpty other), proof: Fact (OldOwner.Valid value)) -> String =
+  sink value (builtin && proof)
+|}; {|
+fn changedCallback(value: String, proof: Fact (OldOwner.Valid value)) -> String = run value (sink value) proof
+|}])
+
+let hidden_local_owners () = with_project (fun write ->
+  ignore (write "unrelated.tesl" (owner "Unrelated"));
+  List.iter (fun name ->
+    let source = owner name |> Str.global_replace (Str.regexp_string "fact Valid") "import Unrelated\nfact Valid" in
+    accepted (write (Validation_common.module_name_to_kebab name ^ ".tesl") source)) ["OldOwner"; "NewOwner"];
+  let wrapper name original = "module " ^ name ^ " exposing [forward]\n" ^ imports ^
+    "import " ^ original ^ " exposing [Valid, evidence]\nimport Unrelated\nfn forward(value: String) -> Fact (Valid value) = evidence value\n" in
+  accepted (write "old-forward.tesl" (wrapper "OldForward" "OldOwner"));
+  accepted (write "new-forward.tesl" (wrapper "NewForward" "NewOwner"));
+  let body owner = "module App exposing []\n" ^ imports ^ "import OldForward\nimport NewForward\nimport OldOwner\nimport NewOwner\n" ^
+    "fn use(value: String) -> String = " ^ owner ^ ".factSink value (OldForward.forward value)\n" in
+  accepted (write "app.tesl" (body "OldOwner"));
+  rejected (write "app.tesl" (body "NewOwner")))
+
+let callback_capture_names () = with_project (fun write ->
+  setup write;
+  let source captured = "module App exposing []\n" ^ imports ^ "import OldOwner\n" ^ {|
+fn run(n: String, callback: Fact (OldOwner.Valid n) -> String, witness: Fact (OldOwner.Valid n)) -> String = callback witness
+fn bridge(__callback_arg0: String, proof: String) -> String =
+|} ^ "  run __callback_arg0 (OldOwner.factSink " ^ captured ^ ") (OldOwner.evidence __callback_arg0)\n" in
+  accepted (write "app.tesl" (source "__callback_arg0"));
+  rejected (write "app.tesl" (source "proof"));
+  let same = "module App exposing []\n" ^ imports ^ "import OldOwner\n" ^ {|
+fn run(n: String, callback: Fact (OldOwner.Valid n) -> String, witness: Fact (OldOwner.Valid n)) -> String = callback witness
+fn bridge(proof: String) -> String = run proof (OldOwner.factSink proof) (OldOwner.evidence proof)
+|} in accepted (write "app.tesl" same))
+
+let test_callback_subjects () = with_project (fun write ->
+  setup write;
+  let source value = "module App exposing []\n" ^ imports ^ "import OldOwner\n" ^ {|
+test "tracked callback" {
+  let raw = "first"
+  let other = "second"
+  let callback = OldOwner.factSink raw
+|} ^ "  expect callback (OldOwner.evidence " ^ value ^ ") == raw\n}\n" in
+  accepted (write "app.tesl" (source "raw"));
+  rejected (write "app.tesl" (source "other")))
+
+let opaque_branch_callbacks () = with_project (fun write ->
+  setup write;
+  let prefix = "module App exposing []\n" ^ imports ^ "import OldOwner\nimport Tesl.List exposing [List.map]\n" in
+  accepted (write "app.tesl" (prefix ^ {|
+fn map(flag: Bool, values: List String) -> List String =
+  let chosen = if flag then
+    fn(v: String) -> v
+  else
+    fn(v: String) -> v
+  List.map chosen values
+|}));
+  let source tail = prefix ^ {|
+fn bridge(n: String, m: String, flag: Bool) -> List String =
+|} ^ tail in
+  rejected (write "app.tesl" (source {|
+  let chosen = if flag then
+    fn(w: Fact (OldOwner.Valid m)) -> OldOwner.factSink m w
+  else
+    fn(w: Fact (OldOwner.Valid m)) -> OldOwner.factSink m w
+  List.map chosen [OldOwner.evidence n]
+|}));
+  rejected (write "app.tesl" (source {|
+  let callback = if flag then
+    OldOwner.factSink n
+  else
+    OldOwner.factSink m
+  [callback (OldOwner.evidence n)]
+|})))
+
+let test_opaque_callback_bindings () = with_project (fun write ->
+  setup write;
+  let prefix = "module App exposing []\n" ^ imports ^ "import OldOwner\n" in
+  accepted (write "app.tesl" (prefix ^ {|
+fn identity(value: String) -> String = value
+test "attached values remain ordinary arguments" {
+  let callback = if True then
+    identity
+  else
+    identity
+  let raw = "first"
+  let value = check OldOwner.trust raw
+  if True then
+    let branchCallback = OldOwner.factSink raw
+    expect branchCallback (OldOwner.evidence raw) == raw
+  else
+    expect True
+  expect callback value == "first"
+}
+|}));
+  List.iter (fun statements ->
+    let path = write "app.tesl" (prefix ^ "test \"opaque bound evidence\" {\n" ^ statements ^ "\n}\n") in
+    rejected path;
+    check bool "opaque callback refusal names the unsupported contract" true
+      (List.exists (fun (d : Compile.diagnostic) ->
+        try ignore (Str.search_forward (Str.regexp_string "unsupported opaque dependent Fact callback") d.message 0); true
+        with Not_found -> false) (errors path))
+  ) [{|
+  let raw = "first"
+  let other = "second"
+  let callback = if True then
+    OldOwner.factSink raw
+  else
+    OldOwner.factSink other
+  let witness = OldOwner.evidence raw
+  expect callback witness == raw
+|}; {|
+  let raw = "first"
+  let other = "second"
+  let callback = if True then
+    OldOwner.factSink raw
+  else
+    OldOwner.factSink other
+  let proven = check OldOwner.trust raw
+  let (_ ::: witness) = proven
+  expect callback witness == raw
+|}; {|
+  let raw = "first"
+  let other = "second"
+  let callback = if True then
+    OldOwner.factSink raw
+  else
+    OldOwner.factSink other
+  let witness = OldOwner.evidence raw
+  if True then
+    let alias = witness
+    expect callback alias == raw
+  else
+    expect True
+|}; {|
+  let raw = "first"
+  let other = "second"
+  let callback = if True then
+    OldOwner.factSink raw
+  else
+    OldOwner.factSink other
+  let witness = OldOwner.evidence raw
+  let maybe = Something witness
+  case maybe of
+    Nothing -> expect True
+    Something alias -> expect callback alias == raw
+|}])
+
 let () = run "qualified predicate identity" ["ownership", [
+  test_case "detached Fact storage refuses while attached fields remain supported" `Quick detached_fact_storage;
+  test_case "Fact conjunction retains every owner and subject in either order" `Quick fact_conjunction_identity;
+  test_case "builtin and qualified Fact conjunctions preserve all proof requirements" `Quick builtin_fact_conjunction;
+  test_case "test bindings distinguish detached Facts from proven values" `Quick test_opaque_callback_bindings;
+  test_case "callback alpha-renaming cannot capture caller names" `Quick callback_capture_names;
+  test_case "test statement callback aliases preserve subjects" `Quick test_callback_subjects;
+  test_case "opaque conditional callbacks cannot enter generic HOFs" `Quick opaque_branch_callbacks;
+  test_case "same-owner partial callback retains captured subjects" `Quick (same_owner_subjects "partial");
+  test_case "same-owner alias callback retains captured subjects" `Quick (same_owner_subjects "alias");
+  test_case "same-owner lambda callback retains captured subjects" `Quick (same_owner_subjects "lambda");
+  test_case "HOF body must respect callback proof subjects" `Quick callback_body_subjects;
+  test_case "captured record fields retain distinct subjects" `Quick callback_field_subjects;
+  test_case "opaque returned and stored dependent callbacks refuse" `Quick opaque_callbacks;
+  test_case "local owner wins over unrelated reachable predicates" `Quick hidden_local_owners;
   test_case "single owner qualified annotations retain original identity" `Quick single_owner_qualified;
   test_case "qualified reexport aliases retain original identity" `Quick reexport_qualified;
   test_case "each namespace keeps its own checks, facts and fields" `Quick independently_proven;

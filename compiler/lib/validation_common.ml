@@ -1200,13 +1200,15 @@ let predicate_transport (_consumer : module_form) (origin : module_form) =
         | None ->
           (match named declared with
            | _ :: _ as local -> local
-           | [] -> List.concat_map (fun ((imp : import_decl), imported, owners) ->
+           | [] ->
+             let gather explicit = List.concat_map (fun ((imp : import_decl), imported, owners) ->
                let visible = match imp.names with
-                 | ImportAll -> true
-                 | ImportExposing names -> List.mem bare names in
+                 | ImportAll -> not explicit
+                 | ImportExposing names -> explicit && List.mem bare names in
                let exported = List.exists (function
                  | ExportName n | ExportAdt n -> n = bare) imported.exports in
-               if visible && exported then named owners else []) imports)
+               if visible && exported then named owners else []) imports in
+             (match gather true with [] -> gather false | exposed -> exposed))
         | Some owner when owner = origin.module_name -> named (provided origin)
         | Some owner -> List.concat_map (fun ((imp : import_decl), _, owners) ->
             if imp.module_name = owner then named owners else []) imports in
@@ -1479,15 +1481,15 @@ let load_imported_ctor_info (m : module_form) : ctor_info =
    so the identical program was accepted same-module but rejected — or worse,
    NOT rejected (proof enforcement) — when the type came through an import.
    This is the validator-side mirror of the emitter's scope-accurate #40
-   harvest (emit_racket.ml emit_module): only names the import's exposing
-   clause actually brings into scope qualify (`Name` or `Name(..)`;
-   [ImportAll] brings all), and a name the current module itself declares as a
-   type/record/entity wins unconditionally (the harvested twin is dropped, so
-   local metadata cannot be shadowed by an import).  Returned decls carry only
+   harvest: exported declarations have a module-qualified lookup view; explicit
+   exposing also adds a bare lookup view (`Name` or `Name(..)`), unless a local
+   declaration owns that bare name. [include_exposed_aliases:false] keeps only
+   canonical qualified views for structural checks: two lookup names for one
+   declaration are not two physical entities. Returned decls carry only
    TYPE-LIKE forms (DRecord/DEntity/DType) — appending them to a module's
    [decls] never adds walkable bodies (DFunc/DTest/…), so validators that
    iterate bodies are unaffected by construction. *)
-let load_imported_type_decls (m : module_form) : top_decl list =
+let load_imported_type_decls ?(include_exposed_aliases = true) (m : module_form) : top_decl list =
   let is_tesl_module name =
     String.length name >= 5 && String.sub name 0 5 = "Tesl."
   in
@@ -1529,7 +1531,7 @@ let load_imported_type_decls (m : module_form) : top_decl list =
               if not (exported name) then [] else
               [make true (qualify name)] @
               (match imp.names with
-               | ImportExposing _ when in_scope name -> [make false name]
+               | ImportExposing _ when include_exposed_aliases && in_scope name -> [make false name]
                | _ -> []) in
             List.concat_map (function
               | DRecord r -> views r.name (fun _ name -> DRecord { r with

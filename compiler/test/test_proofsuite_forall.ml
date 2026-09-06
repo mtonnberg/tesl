@@ -328,12 +328,22 @@ fn bad(nums: List Int) -> Int =
   in
   (Printf.sprintf "PRED-AC-%02d allCheck %s require ForAll(%s)" idx built required, test)
 
+let pred_combined_missing_predicate () =
+  should_fail pred_re
+    (list_hdr "Pred05" ^ int_checks ^ {|
+fact IsEven (n: Int)
+fn needs(xs: List Int ::: ForAll (IsSmall && IsEven) xs) -> Int = List.length xs
+fn bad(nums: List Int) -> Int =
+  let xs = List.filterCheck (checkPos && checkSmall) nums
+  needs xs
+|})
+
 let pred_cases =
   [ pred_clash 1 ~built:"checkPos" ~required:"IsSmall";
     pred_clash 2 ~built:"checkSmall" ~required:"IsPos";
     pred_clash 3 ~built:"checkPos" ~required:"IsPos && IsSmall";
     pred_clash 4 ~built:"checkSmall" ~required:"IsPos && IsSmall";
-    pred_clash 5 ~built:"(checkPos && checkSmall)" ~required:"IsSmall && IsPos";
+    ("PRED-05 combined checks cannot invent a third predicate", pred_combined_missing_predicate);
     pred_clash 6 ~built:"checkPos" ~required:"IsSmall && IsPos";
     pred_allcheck_clash 1 ~built:"checkPos" ~required:"IsSmall";
     pred_allcheck_clash 2 ~built:"checkSmall" ~required:"IsPos";
@@ -495,6 +505,17 @@ fn good(nums: List Int) -> Int =
   needsBoth both
 |})
 
+(* Conjunction identity is structural: both predicates are required, but their
+   source order is not authority. The PRED-05 companion still refuses replacing
+   either member with a different predicate. *)
+let pos_reordered_conjunction () =
+  should_pass (list_hdr "PosF14" ^ int_checks ^ {|
+fn needsBoth(xs: List Int ::: ForAll (IsSmall && IsPos) xs) -> Int = List.length xs
+fn good(nums: List Int) -> Int =
+  let xs = List.filterCheck (checkPos && checkSmall) nums
+  needsBoth xs
+|})
+
 let pos_dict_values () =
   should_pass (dict_hdr "PosF08" ^ dict_facts ^ {|
 fn getVerified(raw: Dict String Int) -> Dict String Int ::: ForAllValues IsPos =
@@ -562,6 +583,7 @@ let () =
       test_case "POS allCheck combined check" `Quick pos_allcheck_combined;
       test_case "POS ForAll parameter contract" `Quick pos_forall_param;
       test_case "POS sequential filterCheck accumulates" `Quick pos_sequential_filter;
+      test_case "POS conjunction order preserves both predicates" `Quick pos_reordered_conjunction;
       test_case "POS Dict.filterCheckValues" `Quick pos_dict_values;
       test_case "POS Dict.filterCheckKeys" `Quick pos_dict_keys;
       test_case "POS select auto ForAll(FromDb)" `Quick pos_select_forall;

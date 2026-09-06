@@ -105,9 +105,11 @@ valid index, and unchanged immutable migration receipts. Later nullable-field
 evolution must preserve that completed index. The test observes actual work and
 recovery; it does not substitute a sleep for evidence that a build started.
 
-This scenario covers an additive index under Worker topology. Typed row or JSONB
-transformations, epoch closure, physical contraction and Embedded index
-supervision still have separate implementation work. Use the
+This scenario covers an additive index under Worker topology. Embedded runs the
+same index service inside `WithDatabase`; its compiled full-app regression extends
+lesson 83 with an index while preserving the application code. Typed row or JSONB
+transformations, epoch closure and physical contraction still have separate
+implementation work. Use the
 [short database-change guide](../db-migration-example/how-to-update-the-db.md)
 for the everyday edit steps and [deployment guide](../db-migration-example/deploy/README.md)
 for the local cluster commands.

@@ -1,1 +1,3 @@
-# Each example is a separate migration project.
+[project]
+name = "field-notes"
+entrypoint = "todo-app.tesl"

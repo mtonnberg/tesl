@@ -362,6 +362,7 @@ func pgIndexWorkerRound(ctx context.Context, ddl, coordinator *pgx.Conn, tag str
 			finished = make(chan error, 1)
 			completion := finished
 			go func(job pgMigrationIndexJob) {
+				defer cancelJob()
 				completion <- pgIndexExecuteJob(jobContext, ddl, tag, history, roles, expected, job, settings)
 			}(job)
 			return nil
@@ -487,10 +488,17 @@ func pgIndexRecord(ctx context.Context, conn *pgx.Conn, namespace string, job pg
 func pgMigrationDDLJobKey(uuid, id string) int64 {
 	var framed []byte
 	for _, value := range []string{uuid, "tesl-ddl-job", id} {
-		framed = binary.BigEndian.AppendUint32(framed, uint32(len(value)))
+		length := int64(len(value))
+		if length > 1<<32-1 {
+			panic("migration DDL job identity exceeds its four-byte length frame")
+		}
+		framed = binary.BigEndian.AppendUint32(framed, uint32(length))
 		framed = append(framed, value...)
 	}
 	digest := sha256.Sum256(framed)
+	// #nosec G115 -- PostgreSQL bigint uses the same 64-bit pattern as a signed
+	// value. This conversion intentionally preserves every SHA-256 prefix bit;
+	// the positive and negative wire vectors pin that lock identity.
 	return int64(binary.BigEndian.Uint64(digest[:8]))
 }
 

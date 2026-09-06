@@ -237,6 +237,20 @@ fn processTodo(todo: Todo ::: TodoExists todo.id) -> Result =
   ...
 ```
 
+A detached `Fact` retains both its declaring module and the value it describes.
+Two modules may declare a fact named `Valid`; their facts are distinct. A proof
+about `original` also cannot justify `replacement`, even when the types match.
+Ordinary functions may receive and forward detached facts. Named callbacks,
+tracked partial applications and explicit lambdas must preserve that same
+subject contract.
+
+For stored data, attach the proof to its field, for example
+`value: String ::: TitleValid value`. Tesl currently rejects raw `Fact` fields
+in records, entities and ADTs, and raw `Fact` newtype bases, including nested
+containers. Such storage would need to preserve subject bindings across
+construction, updates and projection. Returned or stored callbacks whose types
+contain `Fact` are also rejected when that contract cannot be checked.
+
 ### Forall Proofs
 
 **✅ Do:** Use forall proofs for collections:
@@ -848,13 +862,18 @@ result. A required unique index waits for both checks. Keep the worker supervise
 during a rollout: after interruption, its replacement verifies the old database
 executor has stopped before claiming the job. An index that could reject writes
 from an admitted old binary still requires a compatibility decision. Embedded
-index supervision and epoch-closing index changes are not yet implemented.
+uses the same index service for the lifetime of `WithDatabase` and joins it on
+shutdown. Epoch-closing index changes are not yet implemented.
 
 Compiler updates can also change Tesl's own migration bookkeeping tables. The
-current runtime reads formats 2 and 3 and installs format 3 on new databases.
-For an existing format-2 database, first deploy the new request binaries, finish
+current runtime reads exact supported formats 2 and 3 and installs format 3 on new
+databases. A control-format upgrade also requires a compatible stored-value
+contract; changing bookkeeping does not revalidate previously stored proofs.
+The current compiler uses semantic revision 3 and refuses revision-2 data. That
+cross-contract revalidation path is still being implemented.
+For a compatible format-2 database, first deploy the bridge request binaries, finish
 any pending expansion with its original worker, and stop that worker. Run the new
-binary's installer command above using the temporary installer login, then start
+bridge binary's installer command above using the temporary installer login, then start
 the new worker. The upgrade preserves application rows and recorded history;
 ordinary request or worker startup does not perform it. Older executables that
 only understand format 2 cannot restart after this upgrade.
