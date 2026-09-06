@@ -1,0 +1,10 @@
+module DocTests exposing [double]
+
+import Tesl.Prelude exposing [Int]
+
+# Double an integer. The examples below run with tesl test DocTests.tesl.
+# Add an example for zero here.
+#> double 3
+#= 6
+fn double(n: Int) -> Int =
+  n * 2

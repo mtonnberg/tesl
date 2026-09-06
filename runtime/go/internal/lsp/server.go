@@ -51,26 +51,31 @@ type document struct {
 }
 
 type Server struct {
-	compiler            Compiler
-	documents           map[string]document
-	semanticTokens      map[string]semanticTokenState
-	nextTokenID         uint64
-	fileChangeVersion   uint64
-	shutdown            bool
-	documentChanges     bool
-	migrationPreview    *migrationPreviewState
-	requests            *requestStream
-	clientRequests      map[string]clientRequest
-	nextClientRequestID uint64
-	nextDocumentID      uint64
-	clientClosed        bool
-	diagnosticMu        sync.Mutex
-	diagnosticRuns      map[string]diagnosticRun
-	diagnosticWG        sync.WaitGroup
-	diagnosticSets      map[string]map[string][]map[string]any
-	nextDiagnostic      uint64
-	diagnosticLocksMu   sync.Mutex
-	diagnosticLocks     map[string]*sync.Mutex
+	compiler                Compiler
+	workspaceEditsSupported bool
+	documents               map[string]document
+	semanticTokens          map[string]semanticTokenState
+	nextTokenID             uint64
+	fileChangeVersion       uint64
+	shutdown                bool
+	documentChanges         bool
+	migrationPreview        *migrationPreviewState
+	migrationApply          *migrationApplyState
+	migrationResult         *migrationApplicationResult
+	migrationApplySupported bool
+	migrationBatchEdits     bool
+	requests                *requestStream
+	clientRequests          map[string]clientRequest
+	nextClientRequestID     uint64
+	nextDocumentID          uint64
+	clientClosed            bool
+	diagnosticMu            sync.Mutex
+	diagnosticRuns          map[string]diagnosticRun
+	diagnosticWG            sync.WaitGroup
+	diagnosticSets          map[string]map[string][]map[string]any
+	nextDiagnostic          uint64
+	diagnosticLocksMu       sync.Mutex
+	diagnosticLocks         map[string]*sync.Mutex
 	// beforeDiagnosticPublish is used by race tests to pause between a query and
 	// its lifecycle check. Production servers leave it nil.
 	beforeDiagnosticPublish func()
@@ -232,6 +237,9 @@ func (server *Server) Run(ctx context.Context, input io.Reader, output io.Writer
 func (server *Server) handle(ctx context.Context, request protocol.Request, writer *protocol.Writer) (int, error) {
 	switch request.Method {
 	case "initialize":
+		if _, err := decodeInitializeParams(request.Params); err != nil {
+			return -1, &requestError{code: invalidRequest, message: "invalid initialize params"}
+		}
 		return -1, server.writeResult(writer, request.ID, server.initializeCapabilities(request.Params))
 	case "initialized":
 		return -1, nil
@@ -732,7 +740,7 @@ func (server *Server) queryAt(ctx context.Context, raw json.RawMessage, flag str
 	return payload, doc, err
 }
 
-func (server *Server) queryDocumentPosition(ctx context.Context, doc document, position protocol.Position, flag string) ([]byte, error) {
+func (server *Server) queryDocumentPosition(ctx context.Context, doc document, position protocol.Position, flag string, extra ...string) ([]byte, error) {
 	index := protocol.NewLineIndex(doc.Text)
 	offset, err := index.Offset(position)
 	if err != nil {
@@ -743,8 +751,8 @@ func (server *Server) queryDocumentPosition(ctx context.Context, doc document, p
 		return nil, err
 	}
 	byteColumn := offset - lineStart
-	payload, _, err := server.querySourceJSON(ctx, flag, doc, server.sourceOverlays(),
-		strconv.Itoa(position.Line), strconv.Itoa(byteColumn))
+	arguments := append([]string{strconv.Itoa(position.Line), strconv.Itoa(byteColumn)}, extra...)
+	payload, _, err := server.querySourceJSON(ctx, flag, doc, server.sourceOverlays(), arguments...)
 	return payload, err
 }
 
@@ -803,33 +811,6 @@ type compilerLocation struct {
 	EndLine int    `json:"end_line"`
 	EndCol  int    `json:"end_col"`
 	Kind    string `json:"kind"`
-}
-
-type definitionResponse struct {
-	Version    int               `json:"version"`
-	Definition *compilerLocation `json:"definition"`
-}
-
-func (server *Server) writeDefinition(ctx context.Context, id json.RawMessage, raw json.RawMessage, writer *protocol.Writer) error {
-	payload, doc, err := server.queryAt(ctx, raw, "--definition-json")
-	if err != nil {
-		return server.writeError(writer, id, internalError, err.Error())
-	}
-	var response definitionResponse
-	if err := decodeVersioned("--definition-json", payload, &response); err != nil {
-		return server.writeError(writer, id, internalError, err.Error())
-	}
-	if response.Definition == nil {
-		return server.writeResult(writer, id, nil)
-	}
-	location := map[string]any{
-		"uri": protocol.PathToURI(response.Definition.File),
-		"range": map[string]protocol.Position{
-			"start": sourceLocationPosition(doc, response.Definition.Line, response.Definition.Col),
-			"end":   sourceLocationPosition(doc, response.Definition.EndLine, response.Definition.EndCol),
-		},
-	}
-	return server.writeResult(writer, id, location)
 }
 
 type completionResponse struct {
@@ -1022,68 +1003,6 @@ func (server *Server) writeTypeDefinition(ctx context.Context, id json.RawMessag
 type referencesResponse struct {
 	Version     int                `json:"version"`
 	Occurrences []compilerLocation `json:"occurrences"`
-}
-
-func (server *Server) writeReferences(ctx context.Context, id json.RawMessage, raw json.RawMessage, writer *protocol.Writer) error {
-	payload, doc, err := server.queryAt(ctx, raw, "--occurrences-json")
-	if err != nil {
-		return server.writeError(writer, id, internalError, err.Error())
-	}
-	var response referencesResponse
-	if err := decodeVersioned("--occurrences-json", payload, &response); err != nil {
-		return server.writeError(writer, id, internalError, err.Error())
-	}
-	locations := make([]map[string]any, 0, len(response.Occurrences))
-	for _, occurrence := range response.Occurrences {
-		locations = append(locations, compilerLocationToLSPForDocument(doc, occurrence))
-	}
-	return server.writeResult(writer, id, locations)
-}
-
-func (server *Server) writePrepareRename(ctx context.Context, id json.RawMessage, raw json.RawMessage, writer *protocol.Writer) error {
-	payload, doc, err := server.queryAt(ctx, raw, "--occurrences-json")
-	if err != nil {
-		return server.writeResult(writer, id, nil)
-	}
-	var response referencesResponse
-	if err := decodeVersioned("--occurrences-json", payload, &response); err != nil {
-		return server.writeResult(writer, id, nil)
-	}
-	var params positionParams
-	if err := json.Unmarshal(raw, &params); err != nil {
-		return server.writeResult(writer, id, nil)
-	}
-	for _, occurrence := range response.Occurrences {
-		location := compilerLocationToLSPForDocument(doc, occurrence)
-		rangeValue, ok := location["range"].(map[string]protocol.Position)
-		if ok && positionInRange(params.Position, rangeValue) {
-			return server.writeResult(writer, id, map[string]any{"range": rangeValue})
-		}
-	}
-	return server.writeResult(writer, id, nil)
-}
-
-func (server *Server) writeRename(ctx context.Context, id json.RawMessage, raw json.RawMessage, writer *protocol.Writer) error {
-	var params renameParams
-	if err := json.Unmarshal(raw, &params); err != nil || params.TextDocument.URI == "" || params.NewName == "" {
-		return server.writeResult(writer, id, nil)
-	}
-	payload, doc, err := server.queryAt(ctx, raw, "--occurrences-json")
-	if err != nil {
-		return server.writeResult(writer, id, nil)
-	}
-	var response referencesResponse
-	if err := decodeVersioned("--occurrences-json", payload, &response); err != nil || len(response.Occurrences) == 0 {
-		return server.writeResult(writer, id, nil)
-	}
-	edits := make([]map[string]any, 0, len(response.Occurrences))
-	for _, occurrence := range response.Occurrences {
-		location := compilerLocationToLSPForDocument(doc, occurrence)
-		edits = append(edits, map[string]any{"range": location["range"], "newText": params.NewName})
-	}
-	return server.writeResult(writer, id, map[string]any{
-		"changes": map[string][]map[string]any{doc.URI: edits},
-	})
 }
 
 type fixPayload struct {
@@ -1873,14 +1792,6 @@ func compilerLocationToLSP(doc document, location compilerLocation) map[string]a
 			"end":   sourceLocationPosition(doc, location.EndLine, location.EndCol),
 		},
 	}
-}
-
-func compilerLocationToLSPForDocument(doc document, location compilerLocation) map[string]any {
-	result := compilerLocationToLSP(doc, location)
-	if location.File == "" || samePath(location.File, doc.Path) {
-		result["uri"] = doc.URI
-	}
-	return result
 }
 
 func decodeVersioned(flag string, payload []byte, destination any) error {

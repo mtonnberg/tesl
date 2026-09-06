@@ -54,18 +54,12 @@ let version_edits ~family ~before ~after source =
                 failwith "version token does not match its source range";
               edits := (offset, String.length before) :: !edits
             | _ -> ())
-         | Token.INTERP decoded ->
-           (* The lexer has decoded escapes. Retain an exact decoded-byte to
-              source-byte map, then recurse only into ${...} expressions using
+         | Token.INTERP (decoded, offsets) ->
+           (* Use the lexer's exact decoded-byte to source-byte map, then
+              recurse only into ${...} expressions using
               the same closing-brace rule as Parser.parse_interp_string. *)
            let start = position token in
-           let map = Array.make (String.length decoded + 1) 0 in
-           let src = ref (start + 1) in
-           for j = 0 to String.length decoded - 1 do
-             map.(j) <- !src;
-             src := !src + (if source.[!src] = '\\' then 2 else 1)
-           done;
-           map.(String.length decoded) <- !src;
+           let map = Array.map ((+) start) offsets in
            let j = ref 0 in
            while !j + 1 < String.length decoded do
              if decoded.[!j] = '$' && decoded.[!j + 1] = '{' then begin

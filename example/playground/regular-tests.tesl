@@ -1,0 +1,18 @@
+module RegularTests exposing [clamp]
+
+import Tesl.Prelude exposing [Int]
+
+fn clamp(n: Int) -> Int =
+  if n < 0 then
+    0
+  else
+    if n > 10 then
+      10
+    else
+      n
+
+test "keeps values inside the range" {
+  expect clamp 5 == 5
+}
+
+# Add a test for the lower boundary here.

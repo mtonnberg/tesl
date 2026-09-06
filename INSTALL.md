@@ -1,6 +1,103 @@
 # Installing Tesl
 
-**Tesl is beta.** Expect breaking changes. The only supported install path today is Nix. A standalone binary installer and VS Code Marketplace publish are on the roadmap but not yet done.
+**Tesl is beta.** Expect breaking changes. Nix is the recommended macOS and
+established Linux installation path. Native archives and the Windows setup executable are being
+validated in CI; use a candidate only when its native installation checks pass.
+Marketplace publication remains separate from installing the toolchain.
+
+## Native macOS candidates
+
+Use Nix below for the recommended macOS installation. If you prefer to avoid Nix,
+download the complete native archive and its matching `.sha256`: `darwin-arm64`
+for Apple Silicon, or `darwin-amd64` for Intel. They contain the compiled
+executables, Go SDK, managed PostgreSQL, and resources; no development toolchain
+is required. Until release publication is enabled, downloads are CI previews in
+a successful **Native portability** run's `native-candidate-darwin-*` artifact.
+
+Replace `<version>` and select your architecture before running these commands
+in the download directory:
+
+```sh
+archive='tesl-<version>-darwin-arm64.tar.gz'
+shasum -a 256 -c "$archive.sha256" && tar -xzf "$archive"
+```
+
+Continue only after checksum verification and extraction succeed:
+
+```sh
+./tesl-<version>-darwin-arm64/bin/tesl doctor
+./tesl-<version>-darwin-arm64/bin/tesl init myapi --yes
+```
+
+Keep the extracted directory together and add its absolute `bin` directory to
+your PATH, or configure the editor's `tesl.toolchainRoot` to that directory.
+Copying only `bin/tesl` omits the compiler and runtime resources.
+
+These downloads have **no Developer ID signature or Apple notarization**. The
+binaries use ad-hoc signatures for execution integrity; these do not establish
+publisher identity. macOS may block their first launch. After verifying the
+download and deciding to trust it, use Apple's per-app **Privacy & Security →
+Open Anyway** procedure, described in [Apple's opening guidance](https://support.apple.com/en-us/102445).
+Bundled tools may prompt separately. Nix is the recommended alternative if that
+friction is undesirable. Signing accounts are not required for native downloads.
+
+## Native Windows candidates
+
+Windows 11 x86-64 candidates contain the CLI, compiler, editor/agent tools, Go SDK,
+managed PostgreSQL, standard library, templates, and offline Go dependencies.
+End users do not need Nix, WSL, Bash, Go, or OCaml. Build dependencies are separate.
+
+Download the setup `.exe` and its matching `.sha256` from the same release or
+successful **Native portability** workflow's `native-candidate-windows-amd64`
+artifact. Published filenames include the exact semantic version and target.
+Until a release is published, these are CI previews rather than a stable channel.
+
+Verify the executable in PowerShell before running it. Replace `<version>` with
+the downloaded version:
+
+```powershell
+$setup = '.\tesl-<version>-setup-windows-amd64.exe'
+$expected = ((Get-Content -LiteralPath ($setup + '.sha256') -Raw).Trim() -split '\s+')[0]
+if ((Get-FileHash -Algorithm SHA256 -LiteralPath $setup).Hash -ine $expected) {
+    throw 'The setup checksum does not match; do not run this download.'
+}
+& $setup install
+& "$env:LOCALAPPDATA\Programs\Tesl\bin\tesl.exe" doctor
+```
+
+The initial setup is **unsigned**. Windows may display an unknown-publisher or
+reputation warning. The checksum verifies the downloaded bytes; it does not
+establish publisher identity. If your organization's policy blocks unsigned
+executables, use the source-build path below. Disabling Windows protections is
+not part of installation.
+
+Setup installs for the current user under `%LOCALAPPDATA%\Programs\Tesl`; no
+administrator account is needed. Add its reported `bin` directory to your user
+`PATH` in Windows environment-variable settings, then open a new terminal. The
+VS Code/VSCodium extension also discovers this default directory when launched
+from the desktop. An open editor keeps its selected version; reload it after an
+upgrade to select the new default.
+
+```powershell
+tesl init myapi --yes
+Set-Location myapi
+tesl check app.tesl
+tesl test app.tesl
+tesl run app.tesl
+```
+
+The portable ZIP contains the same complete payload. Extract its top-level
+directory and run `bin\tesl.exe` there. Keep the directory together; copying only
+`tesl.exe` omits the compiler and runtime resources.
+
+The installed `bin\tesl-install.exe` supports `list`, `select <version>`,
+`rollback`, and `uninstall <version>`. Additional versions install alongside
+existing versions. Uninstall preserves projects and databases and refuses to
+remove a version used by running managed processes.
+
+To build on Windows, use the exact checkout, exported Nix release plan, and native
+build recipe in [nix/RELEASES.md](nix/RELEASES.md#native-windows-source-build).
+The same plan is included in each payload at `share/tesl/release-plan.json`.
 
 ---
 
@@ -21,7 +118,8 @@ experimental-features = nix-flakes nix-command
 
 **macOS / Linux:** The [official Nix installer](https://nixos.org/download/) sets this up. The [Determinate Systems installer](https://github.com/DeterminateSystems/nix-installer) enables flakes automatically.
 
-**Windows:** Use WSL2, install Nix inside it, then follow the Linux path.
+**Windows:** WSL2 remains an optional way to use the Nix installation path.
+Native Windows candidates use the setup or portable ZIP described above.
 
 ---
 
@@ -135,7 +233,9 @@ nix profile install github:mtonnberg/tesl
 
 This installs both the `tesl` CLI and the `tesl-lsp` language server. The extension will find `tesl-lsp` automatically, even when VSCodium is launched from the desktop rather than a terminal.
 
-**Alternative — explicit path override:** if you need to point the extension at a specific LSP script, set `tesl.lspScript` in your VS Code settings to the absolute path of the `tesl-lsp` binary (built from `runtime/go/cmd/tesl-lsp`).
+**Alternative — explicit installation:** set `tesl.toolchainRoot` to a portable
+payload or managed installation directory. For a development override, set
+`tesl.lspBinary` to the absolute `tesl-lsp` executable path.
 
 ---
 
@@ -157,7 +257,6 @@ TESL_POSTGRES_PASSWORD  (optional)
 
 | Path | Status |
 |---|---|
-| Standalone binary (no Nix) | Roadmap — not done |
+| Native archives/setup (no Nix) | CI candidates; public release gates remain open |
 | `brew install tesl` / `apt install tesl` | Roadmap — not done |
-| Native Windows (no WSL2) | Not planned for beta |
-
+| Native Windows (no WSL2) | Unsigned setup and portable ZIP; native packaging validation in progress |

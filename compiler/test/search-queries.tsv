@@ -1,0 +1,21 @@
+# Search relevance v1: query<TAB>intended result in the first five.
+String.length	String.length
+string.len	String.length
+Email.snd	Email.send
+number characters	String.length
+leading whitespace	String.trimLeft
+separator list strings	String.join
+parses float	String.toFloat
+outbound GET	HttpClient.get
+SmtpConfig	SmtpConfig
+europestockholm	TimeZone
+nowMillis	nowMillis
+emailCap	emailCap
+String -> Int	String.length
+Tesl.HttpClient	HttpClient.get
+String -> Maybe Float	String.toFloat
+Dict k v -> List k	Dict.keys
+Dict k v -> List v	Dict.values
+(a -> b) -> List a -> List a	List.sortBy
+List (Tuple2 a b) -> Dict a b	Dict.fromList
+Set a -> List a	Set.toList

@@ -281,6 +281,48 @@ func TestRequestCancellationIdentityAndLateNotifications(t *testing.T) {
 	stream.finish(second)
 }
 
+func TestDeferredRequestsRetainCancellationAndReleaseOnReply(t *testing.T) {
+	for _, canceled := range []bool{false, true} {
+		stream := dormantStream(t)
+		item := pendingItem(stream, `1`)
+		if !stream.enqueue(item) {
+			t.Fatal("enqueue")
+		}
+		<-stream.messages
+		stream.deferResponse(json.RawMessage(`1`))
+		stream.finish(item)
+		if stream.bytes != 0 || item.pending.ctx.Err() != nil || len(stream.pending) != 1 {
+			t.Fatal("dispatch completion released the deferred request")
+		}
+		if canceled {
+			stream.cancelRequest(json.RawMessage(`{"id":1}`))
+			if item.pending.ctx.Err() == nil {
+				t.Fatal("deferred request cannot be cancelled")
+			}
+		}
+		if stream.complete(json.RawMessage(`1`)) != canceled || item.pending.ctx.Err() == nil || len(stream.pending) != 0 {
+			t.Fatal("response did not release deferred identity and context")
+		}
+	}
+}
+
+func TestDeferredRequestsCannotBypassOutstandingBound(t *testing.T) {
+	stream := dormantStream(t)
+	for i := 0; i < maxPendingMessages; i++ {
+		id := fmt.Sprint(i)
+		item := pendingItem(stream, id)
+		if !stream.enqueue(item) {
+			t.Fatal("premature refusal")
+		}
+		<-stream.messages
+		stream.deferResponse(json.RawMessage(id))
+		stream.finish(item)
+	}
+	if stream.enqueue(pendingItem(stream, fmt.Sprint(maxPendingMessages))) || stream.failed() == nil || stream.ctx.Err() == nil {
+		t.Fatal("deferred requests bypassed outstanding identity bound")
+	}
+}
+
 func TestRequestKeysRejectInvalidIDsAndDistinguishStrings(t *testing.T) {
 	for _, raw := range []string{`-2147483648`, `2147483647`, `""`, `"\uD83D\uDE00"`} {
 		if _, valid := requestKey(json.RawMessage(raw)); !valid {

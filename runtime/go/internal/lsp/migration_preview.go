@@ -38,6 +38,9 @@ func (server *Server) writeMigrationCommand(ctx context.Context, id json.RawMess
 		return server.writeError(writer, id, -32602, "invalid workspace command")
 	}
 	if params.Command == "tesl.generateMigration" {
+		if server.migrationApply != nil {
+			return server.writeError(writer, id, -32602, "migration application is still active")
+		}
 		server.migrationPreview = nil
 	}
 	if len(params.Arguments) != 1 {
@@ -48,6 +51,10 @@ func (server *Server) writeMigrationCommand(ctx context.Context, id json.RawMess
 		return server.writeMigrationPreview(ctx, id, params.Arguments[0], writer)
 	case "tesl.migrationPreviewFile":
 		return server.writeMigrationPreviewFile(id, params.Arguments[0], writer)
+	case "tesl.applyMigration":
+		return server.writeMigrationApply(ctx, id, params.Arguments[0], writer)
+	case "tesl.migrationApplicationStatus":
+		return server.writeMigrationApplicationStatus(id, params.Arguments[0], writer)
 	default:
 		return server.writeError(writer, id, -32602, "unsupported workspace command")
 	}

@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "documents": ["LICENSE", "manual/first-change.md", "manual/GETTING-STARTED.md"],
+  "reference_queries": ["String.length"],
+  "error_codes": ["V001"],
+  "examples": [
+    {
+      "id": "validation-title",
+      "title": "Require a validated title at a call site",
+      "source": "example/adoption/validation-title.tesl",
+      "license": "BSD-3-Clause",
+      "owner": "Tesl maintainers",
+      "coverage": "verified-example",
+      "prerequisites": ["Basic functions and strings"],
+      "limitations": [
+        "acceptTitle returns a string; this example does not run an HTTP server or write to a database.",
+        "The compiler tracks declared proof requirements; the validation predicate still needs review and behavior tests."
+      ],
+      "regions": ["guarantee", "repair", "tests"],
+      "broken": {
+        "region": "repair",
+        "replacement": "fn createTitle(raw: String) -> String =\n  acceptTitle raw\n",
+        "diagnostic": {
+          "code": "V001",
+          "message_contains": ["call to `acceptTitle`", "declared proof `TitleSafe raw`"],
+          "at_line": "  acceptTitle raw"
+        }
+      },
+      "tests": [
+        "valid title is preserved",
+        "empty and short titles are rejected",
+        "upper boundary is accepted",
+        "above upper boundary is rejected"
+      ],
+      "claims": [
+        {"id": "required-proof", "text": "An unchecked string cannot satisfy acceptTitle's declared TitleSafe requirement.", "evidence": ["broken", "repaired"]},
+        {"id": "repair", "text": "Calling checkTitle before acceptTitle supplies the required proof for the checked value.", "evidence": ["repaired"]},
+        {"id": "boundaries", "text": "The example's executed tests accept lengths 4 and 120 and reject empty, 3-character and 121-character titles.", "evidence": ["tests"]},
+        {"id": "scope", "text": "These results concern the declared proof and the tested boundary cases; they do not establish arbitrary business correctness or API security.", "evidence": ["broken", "repaired", "tests"], "editorial_review": true}
+      ]
+    }
+  ]
+}

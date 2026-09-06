@@ -115,8 +115,27 @@ covered for both local bindings and function parameters.
   real compiler fixture freezes an unsaved migration buffer, creates a later
   revision in its preview and restores the exact buffer preimage in memory;
   the saved migration and application remain unchanged. Focused native tests and
-  static gates pass; the broader planner gate is in progress. It does not yet send
+  static gates and the complete LSP/tooling/source-edit race suites pass. It does not yet send
   migration edits or perform mixed source transactions.
+
+- The source-edit package now provides a mixed transaction API with a version-2
+  journal retaining the original compiler manifest and every open-buffer guard.
+  Closed files publish under retained ownership; editor requests require a durable
+  pending marker and commits require actual observed buffer versions and contents.
+  Guarded restoration preserves unrelated user edits. Unknown client outcomes
+  retain the journal and refuse automatic disk-only recovery. Fifteen process-exit
+  checkpoints exercise preparation, publication, pending replies and terminal
+  cleanup. Complete source-edit race tests and static checks pass after review,
+  including closed-only proposals, cancellation and stale/missing acknowledgements.
+  LSP application, editor reconciliation and the Change Schema UI remain pending.
+
+- The merge of main's workspace navigation, search and standalone installation
+  preserves the migration query endpoints and typed-node collection. Migration
+  source rewriting now uses the lexer's interpolation byte provenance. Workspace
+  rename respects frozen schema and completed migration ownership, including
+  references from mutable declarations into frozen files. Focused compiler suites,
+  complete LSP/tooling/source-edit race suites, native CLI/MCP/installation tests
+  and static checks pass. The merged corpus inventory contains 212 sources.
 
 - The LSP now provides `source.fixAll.tesl` to clients supporting versioned
   document edits. It rechecks current buffers, consumes producer eligibility,

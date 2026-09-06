@@ -247,6 +247,10 @@ func ValidateCompilerJSON(flag string, payload []byte) error {
 		} else if reason != nil {
 			return errors.New("mutable formatting response cannot carry a refusal reason")
 		}
+	case "--workspace-definition-json", "--workspace-references-json", "--workspace-rename-json":
+		return validateWorkspaceJSON(flag, root, payload)
+	case "--search-json":
+		return validateSearchResponse(root)
 	case "--check-json", "--check-json-v2":
 		items, err := requiredArray(root, "diagnostics")
 		if err != nil {
@@ -551,7 +555,8 @@ func knownCompilerJSONFlag(flag string) bool {
 	switch flag {
 	case "--check-json", "--check-json-v2", "--agent-context-json", "agent-context", "--type-at-json", "--field-at-json",
 		"--definition-json", "--type-definition-json", "--signature-help-json", "--completions-json",
-		"--occurrences-json", "--selection-range-json", "--local-bindings-json", "--semantic-json", "--doc-json", "--format-json":
+		"--workspace-definition-json", "--workspace-references-json", "--workspace-rename-json",
+		"--occurrences-json", "--selection-range-json", "--local-bindings-json", "--semantic-json", "--doc-json", "--format-json", "--search-json":
 		return true
 	default:
 		return false

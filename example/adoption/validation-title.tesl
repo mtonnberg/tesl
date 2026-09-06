@@ -1,0 +1,51 @@
+module ValidationTitle exposing [
+  TitleSafe,
+  checkTitle,
+  acceptTitle,
+  createTitle,
+]
+
+import Tesl.Prelude exposing [String]
+import Tesl.String exposing [String.length]
+
+# content:start guarantee
+fact TitleSafe (title: String)
+
+check checkTitle(title: String) -> title: String ::: TitleSafe title =
+  if 4 <= String.length title && String.length title <= 120 then
+    ok title ::: TitleSafe title
+  else
+    fail 400 "title must contain 4 to 120 characters"
+
+fn acceptTitle(title: String ::: TitleSafe title) -> String =
+  title
+# content:end guarantee
+
+# content:start repair
+fn createTitle(raw: String) -> String =
+  let checked = check checkTitle raw
+  acceptTitle checked
+# content:end repair
+
+# content:start tests
+test "valid title is preserved" {
+  expect createTitle "Read" == "Read"
+}
+
+test "empty and short titles are rejected" {
+  expectFail createTitle ""
+  expectFail createTitle "abc"
+}
+
+test "upper boundary is accepted" {
+  let longest = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  expect String.length longest == 120
+  expect createTitle longest == longest
+}
+
+test "above upper boundary is rejected" {
+  let tooLong = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  expect String.length tooLong == 121
+  expectFail createTitle tooLong
+}
+# content:end tests

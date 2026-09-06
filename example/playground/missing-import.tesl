@@ -1,0 +1,8 @@
+module MissingImport exposing [titleLength]
+
+import Tesl.Prelude exposing [Int, String]
+
+# `String.length` needs its import. The diagnostic carries the exact edit —
+# press Apply.
+fn titleLength(title: String) -> Int =
+  String.length title

@@ -61,6 +61,10 @@ finished change looks like.
 
 ## 4. Pick something to work on
 
+For reusable tutorials and adoption material, see the
+[verified content workflow](content/README.md). Official examples and their
+verification rules live here; editorial production consumes exported evidence.
+
 The roadmap is the queue:
 
 | Folder | What it holds |

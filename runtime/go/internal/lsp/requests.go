@@ -36,6 +36,7 @@ type pendingRequest struct {
 	ctx            context.Context
 	cancel         context.CancelFunc
 	clientCanceled bool
+	deferred       bool
 }
 
 type incomingRequest struct {
@@ -153,6 +154,8 @@ func (stream *requestStream) enqueue(item incomingRequest) bool {
 	}
 	if item.pending != nil && stream.pending[item.key] != nil {
 		stream.failure = errors.New("duplicate outstanding LSP request id")
+	} else if item.pending != nil && len(stream.pending) >= maxPendingMessages {
+		stream.failure = errors.New("LSP outstanding request count limit exceeded")
 	} else if item.bytes > maxPendingBytes-stream.bytes {
 		stream.failure = errors.New("LSP pending message byte limit exceeded")
 	} else {
@@ -210,7 +213,27 @@ func (stream *requestStream) complete(id json.RawMessage) bool {
 		return false
 	}
 	delete(stream.pending, key)
+	if pending.deferred {
+		pending.cancel()
+	}
 	return pending.clientCanceled
+}
+
+// A continuation keeps its request identity and cancellation context while the
+// dispatcher consumes intervening document notifications and client replies.
+func (stream *requestStream) deferResponse(id json.RawMessage) {
+	if stream == nil {
+		return
+	}
+	key, valid := requestKey(id)
+	if !valid {
+		return
+	}
+	stream.mu.Lock()
+	defer stream.mu.Unlock()
+	if pending := stream.pending[key]; pending != nil {
+		pending.deferred = true
+	}
 }
 
 func (stream *requestStream) finish(item incomingRequest) {
@@ -219,6 +242,9 @@ func (stream *requestStream) finish(item incomingRequest) {
 	stream.bytes -= item.bytes
 	if item.pending != nil {
 		if stream.pending[item.key] == item.pending {
+			if item.pending.deferred {
+				return
+			}
 			delete(stream.pending, item.key)
 		}
 		item.pending.cancel()

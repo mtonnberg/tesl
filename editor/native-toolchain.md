@@ -30,6 +30,13 @@ environment launcher supplying pinned compiler, Go, PostgreSQL and stdlib paths.
 Both CLI packages run the clean-install gate, including compiled standard-library
 tests outside a checkout. This Nix candidate is not a relocatable offline payload.
 
+`version`, `--version`, `-v`, and `doctor --json` report the selected installation's
+identity. A manifest is authoritative; legacy Nix launchers supply `TESL_VERSION`,
+then native binaries use their embedded build identity. Unversioned development
+builds report `dev`. Invalid selected manifests fail instead
+of reporting a fallback version. Compiler stdout/stderr and child exit codes pass
+through the native CLI, including Unix signal termination statuses.
+
 ## Installation manifest
 
 All native executables locate `share/tesl/toolchain.json` relative to their real
@@ -69,6 +76,17 @@ The `stdlib` directory supplies lifted `.tesl` sources; `TESL_STDLIB_DIR` is its
 explicit override. Compiler clients select this resource even outside a checkout.
 Go builds use the selected GOROOT, `GOTOOLCHAIN=local`, a local file module proxy,
 and writable user caches. Missing bundled modules fail offline.
+Installed builds disable user Go configuration, workspace files, private-module
+proxy bypasses, and VCS fetching. They use `CGO_ENABLED=0` so generated programs
+do not require a host C compiler. Development without an installation manifest
+retains user Go configuration. See [`nix/RELEASES.md`](../nix/RELEASES.md) for the
+verified module-bundle builder and its empty-cache acceptance test.
+
+The native candidate assembler and extracted-installation test are described in
+[`nix/RELEASES.md`](../nix/RELEASES.md#native-candidate-archives). The latter uses the
+actual installed CLI with managed PostgreSQL, fresh caches and no development
+tools on PATH. Candidate builds still require platform CI evidence before they
+can establish support; there is no published native installation channel yet.
 
 ## Behavioral verification
 
@@ -81,17 +99,20 @@ and writable user caches. Missing bundled modules fail offline.
 | Runtime lifecycle | Child descendants stop on cancellation and parent exit; compiler output is drained completely even when descendants inherit its pipes |
 | Database | Start/stop/status, version mismatch, port collision, persistent port, existing database fallback, real data preserved across restart and clean |
 | Completion | Public functions/types, project types, recovery, comment-preserving imports, duplicate/shadow handling, CRLF/UTF-16, stale overlays, accepted edits checked by the compiler |
-| Windows | Drive/UNC URI cases and cross-compilation run on Linux; Job Object behavior and token ACLs have native tests awaiting a Windows runner |
+| Windows | Drive/UNC URI cases, native compiler/CLI/LSP tests, Job Object behavior and token ACLs pass the Windows native parity job; offline installation remains unverified |
 
-Run `go test -race ./internal/... ./cmd/tesl-mcp ./teslrt` in `runtime/go`.
+Run `go test -race ./internal/... ./cmd/tesl ./cmd/tesl-mcp ./teslrt` in `runtime/go`.
 Tests using the actual compiler require its build to exist. The real PostgreSQL
 test requires native PostgreSQL tools. Run the compiler suites with `dune test`
 and the extension suite with `npm test` in the repository development environment.
 The authoritative release gate remains `./ci.sh`.
 
-`nix build .#release-plan` exports exact inputs and candidate targets.
+`nix build .#release-plan` exports exact inputs, semantic artifact versions,
+candidate archive names, and complete installation manifests. See
+[`nix/RELEASES.md`](../nix/RELEASES.md) for the version and metadata contract.
 `.github/workflows/native-parity.yml` consumes this plan and records native
-source-build evidence. It does not assemble offline payloads, sign installers,
+source-build evidence, including the embedded CLI version. Native tests load the
+exported manifests through the Go resolver. It does not assemble offline payloads, sign installers,
 publish releases, or establish a minimum supported OS version.
 
 The native CLI supplies `TESL_PROCESS_RUNNER` for compiler build/mutation commands.

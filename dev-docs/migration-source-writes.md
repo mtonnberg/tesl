@@ -24,7 +24,7 @@ The caller must not mistake that result for a compiling program. Failure returns
 a nonzero exit, `ok: false`, and an error. A compiler selection/generation failure
 retains the original preview error response without an applicable manifest.
 
-`outcome` is `unchanged`, `prepared`, `committed`, or `restored`. `written` and
+`outcome` is `unchanged`, `prepared`, `editor-pending`, `committed`, or `restored`. `written` and
 `restored` list operations observed by that invocation; a restarted recovery does
 not reconstruct the previous process's entire activity log. `recoveryRequired`
 means retained state needs recovery or inspection. A commit followed by cleanup
@@ -78,9 +78,21 @@ bind the observed post-edit version and restore the exact original buffer. An
 inverse refuses changed user contents or a different buffer lifetime. LF and CRLF
 sources are supported; bare CR is refused because the shared position index cannot
 describe those complete replacements exactly. This planner does not yet apply
-buffers or publish closed files. The filesystem writer's saved-only restriction
-remains in place until the shared journal and client acknowledgement lifecycle are
-implemented.
+buffers or publish closed files. The separate `EditorTransaction` API now retains
+the full manifest in a version-2 journal while publishing only closed files.
+`PrepareEditor` checks every original buffer and disk input; `Publish` retains its
+backups. `BeginClientEdits` durably records `editor-pending` before the caller sends
+any editor request. `Commit` requires the observed new buffer contents and versions;
+`Restore` requires completed forward/inverse requests and restored original buffers.
+Unrelated user buffer changes survive restoration. A proposal with only closed-file
+edits uses `CommitWithoutClient`, still checking its unedited open inputs.
+
+Before the client marker, `Abort` or restarted recovery can restore the closed
+files. After that marker, a timeout or disconnect leaves an unknown editor outcome:
+`Close` releases the lock and preserves the journal. Disk-only recovery refuses to
+guess from saved files or from the absence of a reply. A durable terminal outcome
+permits cleanup only. Editor reconciliation and the LSP coordinator remain pending;
+the saved-file CLI continues to reject open-buffer manifests.
 
 Each input file, directory membership and import resolution is checked again
 against disk. Checks continue as publication progresses, ignoring only this

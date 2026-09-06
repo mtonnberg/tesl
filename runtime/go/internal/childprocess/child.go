@@ -14,11 +14,21 @@ type Child struct {
 }
 
 func Start(command *exec.Cmd) (*Child, error) {
+	return start(command, false)
+}
+
+// StartLauncher owns a selected native frontend while permitting its explicit
+// managed PostgreSQL process to outlive the frontend on Windows.
+func StartLauncher(command *exec.Cmd) (*Child, error) {
+	return start(command, true)
+}
+
+func start(command *exec.Cmd, launcher bool) (*Child, error) {
 	configure(command)
 	if err := command.Start(); err != nil {
 		return nil, err
 	}
-	kill, close, err := attach(command)
+	kill, close, err := attach(command, launcher)
 	if err != nil {
 		_ = command.Process.Kill()
 		_ = command.Wait()

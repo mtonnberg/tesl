@@ -1,7 +1,8 @@
 # Native Windows support
 
-Status: in progress, 2026-09-05. Native Windows is not yet a supported installation;
-cross-compilation and Linux tests do not establish native Windows parity.
+Status: in progress, 2026-09-05. The native Windows source-build/parity gate passes.
+Native Windows is not yet a supported installation; offline distribution remains
+unverified.
 
 Implemented so far:
 - Shared native CLI and tool discovery, Windows executable suffixes, and
@@ -26,10 +27,26 @@ Implemented so far:
   a compiler prefix containing spaces and Unicode without a development checkout.
 - Native extension launch without Bash and a five-target native CI definition
   consuming the Nix-exported source revision and tool versions.
+- The matrix now receives one checksum-verified offline Go module bundle and
+  exercises copied-SDK scaffold/password/debug builds with empty module caches.
+  This check passes on native Windows; it does not establish compiler DLL or
+  PostgreSQL relocation.
+- Native source builders now cover the pinned Go SDK, OCaml/Dune compiler tools,
+  and MSVC PostgreSQL. The payload assembler audits PE/DLL dependency closure,
+  collects runtime libraries and licenses, and packages a portable ZIP plus a
+  self-contained setup executable. End-to-end native packaging still needs a
+  successful CI run; the source-parity gate passes separately.
+- Windows checkout tests keep embedded runtime inputs in LF form even with
+  `core.autocrlf=true`, preserving the exact source identity during packaging.
+  CI continues to reject builds that change tracked source files.
 
-Native runner execution, Windows PostgreSQL and scanner parity, complete offline
-payloads, signing, installers, and real desktop editor tests remain open. Do not
-mark W0 complete until native evidence has been produced.
+PR #100's [native Windows job](https://github.com/mtonnberg/tesl/actions/runs/33960309969/job/101291009775)
+passed the compiler, CLI/process, LSP, compiler-session, token-ACL, and extension
+unit suites. Windows installed PostgreSQL and scanner parity, complete offline
+payload acceptance, setup acceptance, and real desktop editor tests remain open.
+Authenticode signing is optional under the distribution policy below. W0 also requires
+the packaged workflow and dependency closure; the source-build result is partial
+evidence for that gate.
 
 A Windows user should install Tesl, build and run an API, use the managed local
 database, and work in VS Code/VSCodium with the same language, proof, testing,
@@ -40,12 +57,12 @@ native Windows processes without WSL, Bash, MSYS2, Cygwin, or Nix.
 
 | Existing component | Windows gap to resolve |
 |---|---|
-| OCaml compiler | Prove a native build of the actual pinned compiler/Dune stack, generators, and linked libraries; verify the new native process-owner path for mutation/build commands in [`process_runner.ml`](../../compiler/lib/process_runner.ml) |
-| CLI | [`tesl-cli-body.sh`](../../nix/tesl-cli-body.sh) orchestrates Go, database lifecycle, watch, and other commands through Bash/Unix utilities and Nix discovery |
-| Go tooling | Job Object ownership is implemented in [`child_windows.go`](../../runtime/go/internal/childprocess/child_windows.go); descendant cleanup still needs native execution |
-| Debug transport | [`debug_control.go`](../../runtime/go/teslrt/debug_control.go) defaults to authenticated loopback TCP on Windows; current-user token ACLs need native verification |
+| OCaml compiler | Native build and process-runner tests pass; inventory and relocate the resulting native runtime dependencies |
+| CLI | The shared [`native CLI`](../../runtime/go/internal/cli) implements orchestration; verify its complete installed workflow on Windows |
+| Go tooling | Job Object ownership and descendant cleanup pass native tests; verify installed end-to-end debugger and agent workflows |
+| Debug transport | Authenticated loopback TCP and current-user token ACL tests pass natively; verify the installed desktop workflow |
 | Extension | Native launch and installation discovery are implemented in [`extension.js`](../../editor/vscode-tesl/extension.js); legacy Nix compatibility remains, and native desktop scenarios need verification |
-| Installation and CI | [`INSTALL.md`](../../INSTALL.md) points Windows users to WSL; the authoritative workflow runs on Ubuntu and supplies no native Windows parity evidence |
+| Installation and CI | [`INSTALL.md`](../../INSTALL.md) documents unsigned setup/ZIP candidates and source builds; source parity passes, while complete native packaging and offline acceptance remain pending |
 
 Reuse the compiler and Go LSP/DAP/MCP/runtime implementations. Port platform
 boundaries rather than maintaining a Windows language fork.
@@ -210,7 +227,13 @@ inspection, detach/reattach, and agent queries pass against the same installatio
 
 ### W3 — Ship native installation and continuous releases
 
-- [ ] Produce a portable ZIP and signed per-user installer from the common
+Distribution decision, 2026-09-05: the initial Windows release is unsigned. A
+code-signing subscription/certificate is not feasible for the maintainer now and
+does not block this roadmap. Ship a self-contained setup `.exe`, a portable ZIP,
+SHA-256 checksums, provenance, and native source-build instructions. Authenticode
+signing is a future improvement, not a required account setup for this release.
+
+- [ ] Produce a portable ZIP and unsigned self-contained per-user setup `.exe` from the common
   payload/manifest. Support exact-version selection, install/upgrade/rollback,
   PATH integration, and uninstall while preserving user data.
 - [ ] Add generated WinGet metadata for promoted releases, following
@@ -218,9 +241,10 @@ inspection, detach/reattach, and agent queries pass against the same installatio
   Registry review/availability is separate from publishing every successful
   `main` release; the direct download remains usable independently.
 - [ ] Test final downloaded artifacts with normal Windows security settings;
-  document publisher identity and verification. Signing does not guarantee the
-  absence of all reputation prompts, and disabling OS protections is not an
-  installation step.
+  document the unknown-publisher/reputation prompts and checksum verification.
+  Checksums verify bytes, not publisher identity. Source builds remain available
+  when local policy prevents running unsigned downloads; disabling OS protections
+  is not an installation step.
 - [ ] Add Windows assets and parity gates to the shared per-revision release
   pipeline once W0–W2 are green. Publish checksums, provenance, licenses, and the
   source/native build plan for the actual shipped bytes.

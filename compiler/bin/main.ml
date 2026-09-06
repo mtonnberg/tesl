@@ -11,6 +11,9 @@
       tesl --local-bindings-json <file> emit inferred local binding types as JSON
       tesl --definition-json <file> <line> <col> emit definition location as JSON
       tesl --occurrences-json <file> <line> <col> emit same-file occurrences as JSON
+      tesl --workspace-definition-json <file> <line> <col> emit workspace definition and snapshot
+      tesl --workspace-references-json <file> <line> <col> emit complete/partial semantic references
+      tesl --workspace-rename-json <file> <line> <col> <name> <snapshot> check a rename proposal
       tesl --type-at-json <file> <line> <col> emit expression type at cursor as JSON
       tesl --field-at-json <file> <line> <col> emit record field info at cursor as JSON
       tesl --completions-json <file> <line> <col> emit completions at cursor as JSON
@@ -24,6 +27,8 @@
        tesl --mutate [--backend go] <file> [test-file ...]  run Go mutation testing
       tesl doc [name|Tesl.Module]  show a builtin's Tesl signature / a module's surface
       tesl --doc-json <name>     same, as JSON (editor/agent integration)
+      tesl search [--json] QUERY  discover builtins by name or exact type shape
+      tesl --catalog-json         export the versioned builtin search catalog
       tesl help [manual] [section]  show help and documentation
 *)
 
@@ -36,6 +41,9 @@ let usage = {|Usage:
   tesl --check-json <file>     check, emit diagnostics as IR-2 JSON
   tesl --check-json-v2 <file>  check with related locations and action metadata
   tesl --local-bindings-json <file> emit inferred local binding types as JSON
+  tesl --workspace-definition-json <file> <line> <col> emit workspace definition and snapshot
+  tesl --workspace-references-json <file> <line> <col> emit complete/partial workspace references
+  tesl --workspace-rename-json <file> <line> <col> <name> <snapshot> check workspace rename proposal
   tesl --definition-json <file> <line> <col> emit definition location as JSON
   tesl --occurrences-json <file> <line> <col> emit same-file occurrences as JSON
   tesl --type-at-json <file> <line> <col> emit expression type at cursor as JSON
@@ -65,6 +73,8 @@ Documentation:
                                (e.g. tesl doc Email.send, tesl doc SmtpConfig)
   tesl doc Tesl.<Module>       show a stdlib module's full surface
   tesl --doc-json <name>       same, as JSON (editor/agent integration)
+  tesl search [--json] QUERY  names, descriptions, or types (e.g. 'String -> Int')
+  tesl --catalog-json         structured, versioned builtin catalog
 
 Help:
   tesl help                    show this help message
@@ -1122,6 +1132,22 @@ let () =
     prerr_string response.stderr;
     exit response.exit_code
   | "--doc-json" :: rest -> handle_doc ~json:true rest
+  | ["--catalog-json"] -> print_endline (Builtin_search.catalog_json ())
+  | ["--search-json"; query] | ["search"; "--json"; query] ->
+    let result = Builtin_search.search query in
+    print_endline (Builtin_search.response_json result);
+    if Option.is_some result.error then exit 1
+  | ["search"; query] when query <> "--json" ->
+    let result = Builtin_search.search query in
+    (match result.error with
+     | Some message -> Printf.eprintf "search: %s\n" message; exit 1
+     | None ->
+       if result.completion then print_endline "Completions for an unfinished type; keep typing to narrow the results.";
+       List.iter (fun e -> print_endline (Stdlib_docs.render_entry_text e); print_newline ()) result.results;
+       Printf.printf "%d result(s), showing up to %d. Type shape is discovery; proof metadata is unavailable.\n"
+         result.total Builtin_search.limit)
+  | "search" :: _ | "--search-json" :: _ | "--catalog-json" :: _ ->
+    Printf.eprintf "Usage: tesl search [--json] QUERY | tesl --catalog-json\n"; exit 1
   | [] -> print_string usage; exit 1
 
   | ("--check" :: filenames) when filenames <> [] ->

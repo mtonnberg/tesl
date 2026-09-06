@@ -14,7 +14,7 @@ let lexer_failure_prefix = Parser.lexer_failure_prefix
     envelope. *)
 let parse_module_uncached (filename, source) = Parser.parse_module filename source
 
-let cached_parse_module = Query_cache.memo ~limit:32 ~max_weight:(2 * 1024 * 1024)
+let cached_parse_module = Query_cache.memo ~retain_across_snapshots:true ~limit:128 ~max_weight:(8 * 1024 * 1024)
   ~weight:(fun (_, source) -> String.length source) parse_module_uncached
 let parse_module filename source = cached_parse_module (filename, source)
 

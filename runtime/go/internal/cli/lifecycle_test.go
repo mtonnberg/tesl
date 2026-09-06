@@ -120,6 +120,17 @@ func TestManagedDatabaseStateTransitions(t *testing.T) {
 					if !inv.Persistent {
 						t.Fatal("daemon would die when CLI exits")
 					}
+					for i, arg := range inv.Args {
+						if arg == "-o" {
+							// cmd.exe does not strip POSIX single quotes. The
+							// socket setting must reach PostgreSQL as an empty
+							// value without depending on shell-specific quoting.
+							options := strings.Fields(inv.Args[i+1])
+							if len(options) != 7 || options[6] != "unix_socket_directories=" {
+								t.Fatalf("socket option is not portable: %q", inv.Args[i+1])
+							}
+						}
+					}
 				} else if inv.Persistent {
 					t.Fatal("short-lived command escaped cleanup")
 				}

@@ -8,14 +8,25 @@ const { parseTeslTestOutput } = require("./test-output-parser");
 const { findOnPath, findInstallation } = require("./toolchain");
 
 let client;
+let managedSelection;
 
 function commandOnPath(name) {
   return findOnPath(name) !== null;
 }
 
-function installedComponent(name) {
+function installedToolchain() {
   const root = vscode.workspace.getConfiguration("tesl").get("toolchainRoot");
-  return findInstallation({ root })?.component(name) || null;
+  const key = JSON.stringify([root, process.env.TESL_TOOLCHAIN_ROOT, process.env.PATH, process.env.Path]);
+  // Keep an editor session on one version. Shims lease this explicit version,
+  // even if `tesl-install select` changes the user's default while it is open.
+  if (managedSelection?.key === key) return managedSelection.installation;
+  const installation = findInstallation({ root });
+  if (installation?.managedRoot) managedSelection = { key, installation };
+  return installation;
+}
+
+function installedComponent(name) {
+  return installedToolchain()?.component(name) || null;
 }
 
 function findNixShell() {
@@ -286,6 +297,7 @@ function activate(context) {
         options: {
           env: {
             ...process.env,
+            ...installedToolchain()?.launchEnvironment,
             ...(wsCompiler ? { TESL_COMPILER: wsCompiler } : {}),
           },
         },
@@ -478,6 +490,7 @@ function activate(context) {
       env: {
         ...(toolchain ? toolchain.environment : process.env),
         ...teslTempEnvironment(),
+        ...installedToolchain()?.launchEnvironment,
         ...(compiler ? {
           ...(!installed ? { TESL_REPO_ROOT: root } : {}),
           TESL_OCAML_COMPILER: compiler,
@@ -1151,6 +1164,7 @@ function activate(context) {
         const env = {
           ...(toolchain ? toolchain.environment : process.env),
           ...teslTempEnvironment(),
+          ...installedToolchain()?.launchEnvironment,
           TESL_DAP_TRACE: "1",
           ...(!installed && repoRoot ? { TESL_REPO_ROOT: repoRoot } : {}),
           ...(compiler ? { TESL_COMPILER: compiler } : {}),

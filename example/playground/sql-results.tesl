@@ -1,0 +1,27 @@
+module SqlResults exposing [Invoice, InvoiceDb, invoiceLabel]
+
+import Tesl.Prelude exposing [String]
+import Tesl.DB exposing [dbRead, dbWrite]
+import Tesl.Database exposing [Database, Memory]
+import Tesl.Maybe exposing [Maybe(..)]
+
+entity Invoice table "invoices" primaryKey id {
+  id: String @db(text)
+  customer: String @db(text)
+}
+
+database InvoiceDb = Database { entities: [Invoice], backend: Memory }
+
+fn invoiceLabel(id: String) -> String requires [dbRead Invoice] =
+  let found = selectOne invoice from Invoice where invoice.id == id
+  case found of
+    Something invoice -> "Invoice ${invoice.id} for ${invoice.customer}"
+
+test "a matching row becomes a label" requires [dbRead Invoice, dbWrite Invoice] {
+  insert Invoice { id: "results-acme", customer: "acme" }
+  expect invoiceLabel "results-acme" == "Invoice results-acme for acme"
+}
+
+test "an unknown invoice has a fallback" requires [dbRead Invoice] {
+  expect invoiceLabel "results-missing" == "No invoice found"
+}

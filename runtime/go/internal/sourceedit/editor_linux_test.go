@@ -32,7 +32,7 @@ func editorTransactionFixture(t *testing.T) (*Manifest, []EditorDocument) {
 		t.Fatal("next revision fixture has no existing migration to freeze")
 	}
 	entry := filepath.Join(root, "app.tesl")
-	var documents []EditorDocument
+	documents := make([]EditorDocument, 0, 2)
 	for i, path := range []string{entry, changed} {
 		source, err := os.ReadFile(path)
 		if err != nil {

@@ -1,0 +1,7 @@
+module MoneyCheck exposing [total]
+
+import Tesl.Money exposing [Money, Money.add, Money.requireSameCurrency]
+
+# Two amounts can carry different currencies. Check before adding them.
+fn total(price: Money, shipping: Money) -> Money =
+  Money.add price shipping

@@ -1,0 +1,37 @@
+module SqlEvidence exposing [Invoice, InvoiceDb, fetchInvoice, invoiceLabel, showInvoice]
+
+import Tesl.Prelude exposing [String]
+import Tesl.DB exposing [dbRead, dbWrite]
+import Tesl.Database exposing [Database, Memory]
+import Tesl.Maybe exposing [Maybe(..)]
+
+entity Invoice table "invoices" primaryKey id {
+  id: String @db(text)
+  customer: String @db(text)
+}
+
+database InvoiceDb = Database { entities: [Invoice], backend: Memory }
+
+# The result carries evidence for the requested id and the fetched row.
+fn fetchInvoice(id: String) -> Invoice ? FromDb (Id == id) requires [dbRead Invoice] =
+  let found = selectOne invoice from Invoice where invoice.id == id
+  case found of
+    Nothing -> fail 404 "Invoice not found"
+    Something invoice -> invoice
+
+fn invoiceLabel(invoice: Invoice ::: FromDb (Id == id) invoice, id: String) -> String =
+  "Invoice ${invoice.id} for ${invoice.customer}"
+
+fn showInvoice(id: String) -> String requires [dbRead Invoice] =
+  let invoice = fetchInvoice "evidence-other"
+  invoiceLabel invoice id
+
+test "the label uses the requested invoice" requires [dbRead Invoice, dbWrite Invoice] {
+  insert Invoice { id: "evidence-acme", customer: "acme" }
+  insert Invoice { id: "evidence-other", customer: "other" }
+  expect showInvoice "evidence-acme" == "Invoice evidence-acme for acme"
+}
+
+test "a missing invoice is rejected" requires [dbRead Invoice] {
+  expectFail showInvoice "evidence-missing"
+}

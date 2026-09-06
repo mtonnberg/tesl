@@ -12,24 +12,51 @@ import (
 	"tesl.dev/runtime/go/internal/protocol"
 )
 
+type initializeParams struct {
+	Capabilities struct {
+		Workspace struct {
+			ApplyEdit     bool `json:"applyEdit"`
+			WorkspaceEdit struct {
+				DocumentChanges    bool     `json:"documentChanges"`
+				FailureHandling    string   `json:"failureHandling"`
+				ResourceOperations []string `json:"resourceOperations"`
+			} `json:"workspaceEdit"`
+		} `json:"workspace"`
+	} `json:"capabilities"`
+}
+
+func decodeInitializeParams(raw json.RawMessage) (initializeParams, error) {
+	var params initializeParams
+	err := json.Unmarshal(raw, &params)
+	return params, err
+}
+
 func (server *Server) initializeCapabilities(raw json.RawMessage) map[string]any {
-	var params struct {
-		Capabilities struct {
-			Workspace struct {
-				WorkspaceEdit struct {
-					DocumentChanges bool `json:"documentChanges"`
-				} `json:"workspaceEdit"`
-			} `json:"workspace"`
-		} `json:"capabilities"`
+	params, err := decodeInitializeParams(raw)
+	edit := params.Capabilities.Workspace.WorkspaceEdit
+	server.documentChanges = err == nil && edit.DocumentChanges
+	server.workspaceEditsSupported = server.documentChanges && (edit.FailureHandling == "transactional" || edit.FailureHandling == "textOnlyTransactional")
+	server.migrationApplySupported = server.documentChanges && params.Capabilities.Workspace.ApplyEdit
+	creates := false
+	for _, operation := range edit.ResourceOperations {
+		creates = creates || operation == "create"
 	}
-	server.documentChanges = json.Unmarshal(raw, &params) == nil && params.Capabilities.Workspace.WorkspaceEdit.DocumentChanges
+	server.migrationApplySupported = server.migrationApplySupported && creates
+	server.migrationBatchEdits = edit.FailureHandling == "transactional" || edit.FailureHandling == "textOnlyTransactional" || edit.FailureHandling == "undo"
 	result := initializeResult()
+	if !server.workspaceEditsSupported {
+		result["capabilities"].(map[string]any)["renameProvider"] = false
+	}
 	if server.documentChanges {
 		capabilities := result["capabilities"].(map[string]any)
 		capabilities["codeActionProvider"] = map[string]any{"codeActionKinds": []string{"quickfix", "source.fixAll.tesl"}}
 	}
 	if _, supported := server.compiler.(migrationCompiler); supported {
-		result["capabilities"].(map[string]any)["executeCommandProvider"] = map[string]any{"commands": []string{"tesl.generateMigration", "tesl.migrationPreviewFile"}}
+		commands := []string{"tesl.generateMigration", "tesl.migrationPreviewFile", "tesl.migrationApplicationStatus"}
+		if server.migrationApplySupported {
+			commands = append(commands, "tesl.applyMigration")
+		}
+		result["capabilities"].(map[string]any)["executeCommandProvider"] = map[string]any{"commands": commands}
 	}
 	return result
 }
