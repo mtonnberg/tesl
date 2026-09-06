@@ -330,7 +330,23 @@ let holes_do_not_escape () = with_project (fun _ write path ->
   let ordinary = "module Ordinary exposing [value]\nimport Tesl.Prelude exposing [Int, String]\nfn todo(reason: String) -> Int = 7\nfn value() -> Int = todo \"ordinary function\"\n" in
   let file = write "ordinary.tesl" ordinary in accepts file ordinary)
 
+let result_type_does_not_enable_transforms () = with_project (fun _ _ path ->
+  let source = declaration ~fixtures:"  fixtures: [oldNote]\n" "Note: Migrate migrateNote []"
+    |> replace "Migration, Entity(..)" "Migrated(..), Migration, Entity(..)" in
+  let source = source ^ {|fn migrateNote(old: NotesSchema.V1.Note) -> Migrated NotesSchema.VCurrent.Note =
+  Reject "executor not implemented"
+fn oldNote() -> NotesSchema.V1.Note = NotesSchema.V1.Note { id: "one", title: "previous" }
+|} in
+  let d=checked path source in
+  let previous,current=S.inventories (D.coverage d) in
+  List.iter (fun initial_version ->
+    match Migration_expansion.generate ~initial_version ~schemas:[previous;current] ~edges:[d] with
+    | Ok _ -> fail "ordinary result type enabled a partial transformation plan"
+    | Error errors -> check bool "physical plan remains explicitly refused" true
+        (List.exists (fun (e:S.error) -> e.code="MIG016" && Compile.string_contains e.message "transformation executor") errors)) [1;2])
+
 let () = run "Migration-Declarations" ["contextual source", [
+  test_case "ordinary row results do not enable transformation plans" `Quick result_type_does_not_enable_transforms;
   test_case "nullable adapter and folded unchanged table" `Quick nullable;
   test_case "exact source literals" `Quick defaults;
   test_case "sparse coverage and aliases" `Quick sparse;

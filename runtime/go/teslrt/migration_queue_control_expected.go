@@ -190,6 +190,7 @@ func pgQueueCandidateCatalog(ctx context.Context, tx pgx.Tx, namespace string, r
 			return fmt.Errorf("candidate queue table %s is missing", spec.name)
 		}
 		actual.Triggers = []string{} // Complete trigger identity checked immediately above.
+		actual.TriggerDefinitions = nil
 		if !reflect.DeepEqual(pgCanonicalMigrationTable(actual), pgCanonicalMigrationTable(expected)) {
 			return fmt.Errorf("candidate queue table %s differs from unpublished format 4", spec.name)
 		}

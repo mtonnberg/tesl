@@ -5,10 +5,13 @@ module S = Migration_sparse
 module I = Migration_inventory
 module H = Migration_history_sources
 module A = Migration_additive
+module R = Migration_transform_rules
+module T = Migration_transform
 
-type t = { coverage : S.t; additive : A.t; version : int; source_seals : Migration_header.checked option }
+type t = { coverage : S.t; additive : A.t; transforms : T.t option; version : int; source_seals : Migration_header.checked option }
 let coverage t = t.coverage
 let additive t = t.additive
+let transforms t = t.transforms
 let version t = t.version
 let source_seals t = t.source_seals
 exception Invalid of S.error list
@@ -196,10 +199,8 @@ let check ?stored_value_compatibility ~compiler_abi ~source (m : module_form) =
         reject "MIG013" declaration.loc "a current migration cannot claim a completed source closure";
       let holes = entry_holes entities in
       if holes <> [] then raise (Invalid holes);
-      (match List.assoc_opt "fixtures" fields with
-       | None -> ()
-       | Some expression when list "MIG020" expression = [] -> ()
-       | Some expression -> reject "MIG020" (at expression) "nonempty compatibility fixtures require the transformation checker");
+      let fixtures = match List.assoc_opt "fixtures" fields with
+        | None -> [] | Some expression -> list "MIG020" expression in
       let before = previous.H.inventory and after = current.H.inventory in
       let queue_errors = Migration_queue.changes ~before ~after @
         Migration_queue.historical_capability ~before ~after (Option.map Migration_header.seals source_seals) in
@@ -207,14 +208,20 @@ let check ?stored_value_compatibility ~compiler_abi ~source (m : module_form) =
       let identities = identities before after (list "MIG024" same) in
       let definitions = record "MIG002" entities in
       let rules = ref [] in
+      let transform_rules = ref [] and functions = ref [] in
       let entries = List.map (fun (entity,expression) ->
         let kind = match application expression with
           | "Additive", [rule_list] ->
             rules := (entity,list "MIG022" rule_list) :: !rules; S.Additive
+          | "Derived", [rule_list] ->
+            transform_rules := (entity,R.Derived,list "MIG022" rule_list,at expression) :: !transform_rules; S.Transform
+          | "Migrate", [function_ref;rule_list] ->
+            transform_rules := (entity,R.Migrate,list "MIG022" rule_list,at expression) :: !transform_rules;
+            functions := {T.entity;function_ref;loc=at expression} :: !functions; S.Transform
           | "New", [] -> S.New
           | "Drop", [] -> S.Drop
           | _ -> reject "MIG016" (at expression)
-            "expected Additive rules, New or Drop; row transformations require the transformation checker" in
+            "expected Additive rules, Derived rules, Migrate rowFunction rules, New or Drop; other transformation forms are not implemented" in
         {S.entity;kind;loc=at expression}) definitions in
       let coverage = checked (S.check ~before ~after ~identities ~entries ~loc:declaration.loc) in
       let short name = match List.rev (String.split_on_char '.' name) with name::_ -> name | [] -> name in
@@ -228,10 +235,25 @@ let check ?stored_value_compatibility ~compiler_abi ~source (m : module_form) =
           | _ -> reject "MIG022" (at expression) "this additive adapter expects `Default newField literal`") rules)
         (List.rev !rules) in
       let additive = checked (A.check coverage ~defaults) in
+      let transforms = if !transform_rules=[] then begin
+        if fixtures<>[] then reject "MIG020" declaration.loc "nonempty compatibility fixtures require a transforming entry";
+        None
+      end else begin
+        let entries = List.rev !transform_rules |> List.map (fun (entity,mode,rules,loc) ->
+          let entity=normalize entity in
+          let rules=List.map (fun expression -> match application expression with
+            | "Rename",[previous;current] -> R.Rename {previous=field_name previous;current=field_name current;loc=at expression}
+            | "Default",[field;value] -> R.Default {A.entity;field=field_name field;value=literal m value;loc=at expression}
+            | _ -> reject "MIG022" (at expression) "this transformation checker supports Rename and Default rules; Retype and legacy-write rules require their complete checker") rules in
+          {R.entity;mode;rules;loc}) in
+        let mapping=checked (R.check coverage ~entries) in
+        let functions=List.map (fun (f:T.requested) -> {f with entity=normalize f.entity}) (List.rev !functions) in
+        Some (checked (T.check ~project_root ~source m mapping ~functions ~fixtures))
+      end in
       Option.iter (fun header -> ignore (checked (Migration_header.verify_unchanged header))) source_seals;
       Option.iter (fun located -> ignore (checked (Migration_closure.verify ~project_root
         ~root_file:(Validation_common.canonical_import_path m.source_file) ~source located))) closure;
-      Ok (Some {coverage;additive;version=target;source_seals})
+      Ok (Some {coverage;additive;transforms;version=target;source_seals})
   with Invalid errors -> Error errors
 
 let diagnostics_of_errors errors =

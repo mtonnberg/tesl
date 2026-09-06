@@ -394,10 +394,13 @@ func TestPgMigrationEmbeddedCanceledStartupContextReachesServeAndLaterScopeIsFre
 	database := pgBootTestDatabase(t, f, 1)
 	WithDatabase(database, func() {
 		generation, _ := pgEmbeddedTestGeneration(database.bound().embedded)
-		if currentRuntimeLifecycle() != generation.ctx {
-			t.Fatal("server lifecycle does not inherit the bound Embedded scope")
+		if currentRuntimeLifecycle().Err() != nil {
+			t.Fatal("new database lifecycle is already canceled")
 		}
 		generation.stop() // Shutdown occurs in user startup, before Serve subscribes.
+		if currentRuntimeLifecycle().Err() == nil {
+			t.Fatal("Embedded cancellation did not synchronously reach the database scope")
+		}
 		// An attempted listen would fail with this invalid port. Correctly
 		// inherited cancellation returns normally before any listener is opened.
 		Serve(Server{}, ServeOptions{Port: -1, ListenAddress: "127.0.0.1"})

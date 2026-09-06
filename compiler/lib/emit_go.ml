@@ -701,9 +701,11 @@ type type_table = {
   records : (string, record_info) Hashtbl.t;
   adts : (string, adt_info) Hashtbl.t;
   entities : (string, entity_info) Hashtbl.t;
-  (* Keyed by the QUEUE's name and again by its job type: `enqueue` names the job type,
-     while an api-test verb names the queue. *)
+  (* Queue values and payload types occupy different namespaces. A queue named
+     Tasks may coexist with an imported record named Tasks handled elsewhere. *)
   queues : (string, queue_info) Hashtbl.t;
+  job_queues : (string, queue_info) Hashtbl.t;
+  queue_type_identity : string -> string;
   (* Declared caches, by name — the four `Cache.*` leaves all name one. *)
   caches : (string, cache_info) Hashtbl.t;
   (* Declared emails, by name — `Email.send E { … }` and `startEmailWorker E` both name one. *)
@@ -2269,12 +2271,19 @@ let entity_of_query loc name =
   | Some info -> info
   | None -> unsupported loc "Go backend cannot resolve entity `%s`" name
 
-(* A queue is found by the JOB TYPE (`enqueue`) or by its own name (an api-test verb); the
-   table holds both keys. *)
-let queue_of_job_type loc name =
+let queue_of_name loc name =
   match Option.bind !current_types (fun types -> Hashtbl.find_opt types.queues name) with
   | Some info -> info
+  | None -> unsupported loc "Go backend cannot resolve queue `%s`" name
+
+let queue_of_payload_type loc name =
+  match Option.bind !current_types (fun types ->
+    Hashtbl.find_opt types.job_queues (types.queue_type_identity name)) with
+  | Some info -> info
   | None -> unsupported loc "Go backend cannot resolve a queue for `%s`" name
+
+let is_queue_value (info : record_info) =
+  info.rec_owner = "" && info.rec_go_name = "*teslrt.Queue"
 
 (* An api-test queue verb takes the QUEUE as its only argument, written as a bare name
    (`pendingJobCount SendQueue`), which parses as a constructor. *)
@@ -3423,9 +3432,7 @@ let rec type_of_expr signatures env expr =
        when (match args with
              | [argument] ->
                (match typed_with_default (type_of_expr signatures env) argument with
-                | Some (TRecord info), _ ->
-                  Option.fold ~none:false ~some:(fun types -> Hashtbl.mem types.queues info.rec_tesl_name)
-                    !current_types
+                | Some (TRecord info), _ -> is_queue_value info
                 | _ -> false)
              | _ -> false) ->
        (match Option.bind !current_types (fun types -> Hashtbl.find_opt types.records "DeadJob") with
@@ -3436,7 +3443,7 @@ let rec type_of_expr signatures env expr =
                      | "processNextDeadJob" | "deadJobs") as verb; _ }
        when queue_argument args <> None ->
        let info = match queue_argument args with
-         | Some name -> queue_of_job_type loc name
+         | Some name -> queue_of_name loc name
          | None -> assert false
        in
        (match verb with
@@ -5760,10 +5767,7 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
         when (match args with
               | [argument] ->
                 (match typed_with_default (type_of_expr signatures env) argument with
-                 | Some (TRecord info), _ ->
-                   Option.fold ~none:false
-                     ~some:(fun types -> Hashtbl.mem types.queues info.rec_tesl_name)
-                     !current_types
+                 | Some (TRecord info), _ -> is_queue_value info
                  | _ -> false)
               | _ -> false) ->
         ignore (type_of_expr signatures env app);
@@ -5775,7 +5779,7 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
                       | "processNextDeadJob" | "deadJobs") as verb; _ }
         when queue_argument args <> None ->
         let info = match queue_argument args with
-          | Some name -> queue_of_job_type loc name
+          | Some name -> queue_of_name loc name
           | None -> assert false
         in
         ignore (type_of_expr signatures env app);
@@ -6694,7 +6698,7 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
          (inner ^ "\t") (emit_expr ~expected:ty ~indent:(inner ^ "\t") signatures env body)
          inner inner indent)
   | EEnqueue { job_type; payload; loc } ->
-    let info = queue_of_job_type loc job_type in
+    let info = queue_of_payload_type loc job_type in
     (* The row is the type ENQUEUED, which on a queue carrying several is not the queue's
        first one — reading it off the queue put every job in at the same type. *)
     let row = match Option.bind !current_types
@@ -6752,7 +6756,7 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
         Filename.chop_suffix workers_name suffix
       else workers_name
     in
-    let info = queue_of_job_type loc queue_name in
+    let info = queue_of_name loc queue_name in
     let queue = qualified info.qu_owner info.qu_go_var in
     (* One dispatcher over every job type the queue carries: the store holds a payload as
        `any` precisely so one queue can carry several, and the type switch is where the
@@ -10223,7 +10227,7 @@ let runtime_file_gates : (string * string list) list = [
      the reason the HTTP half does: it pulls a third-party driver and its whole dependency
      chain into a binary that would otherwise require nothing. *)
    "postgres", [ "postgres.go"; "database.go"; "dbquery.go"; "debug_sql.go"; "pgstores.go";
-                 "pgpubsub.go"; "migration_program.go"; "migration_queue_program.go"; "migration_queue_control.go"; "migration_queue_registration.go"; "migration_queue_registration_sql.go"; "migration_queue_control_spec.go"; "migration_queue_operations.go"; "migration_queue_runtime.go"; "migration_queue_control_expected.go"; "migration_control.go"; "migration_expand.go"; "migration_admission.go"; "migration_open.go"; "migration_status.go"; "migration_command.go"; "migration_expand_history.go"; "migration_control_spec.go"; "migration_control_catalog.go"; "migration_plan.go"; "migration_plan_wire.go"; "migration_plan_hash.go"; "migration_catalog.go"; "migration_catalog_compare.go"; "migration_catalog_probe.go"; "migration_catalog_expected.go"; "migration_control_expected.go"; "migration_control_upgrade.go"; "migration_index_control.go"; "migration_index_catalog.go"; "migration_index_history.go"; "migration_index_worker.go"; "migration_embedded.go"; "migration_worker.go"; "migration_facilities.go"; "migration_literal.go"; "migration_boundary.go"; "migration_boundary_testbuild.go" ];
+                 "pgpubsub.go"; "migration_program.go"; "migration_queue_program.go"; "migration_queue_control.go"; "migration_queue_registration.go"; "migration_queue_registration_sql.go"; "migration_queue_control_spec.go"; "migration_queue_operations.go"; "migration_queue_runtime.go"; "migration_queue_control_expected.go"; "migration_control.go"; "migration_expand.go"; "migration_admission.go"; "migration_open.go"; "migration_status.go"; "migration_command.go"; "migration_expand_history.go"; "migration_control_spec.go"; "migration_control_catalog.go"; "migration_plan.go"; "migration_plan_wire.go"; "migration_plan_hash.go"; "migration_catalog.go"; "migration_catalog_trigger.go"; "migration_catalog_compare.go"; "migration_catalog_probe.go"; "migration_catalog_expected.go"; "migration_control_expected.go"; "migration_control_upgrade.go"; "migration_index_control.go"; "migration_index_catalog.go"; "migration_index_history.go"; "migration_index_worker.go"; "migration_embedded.go"; "migration_worker.go"; "migration_facilities.go"; "migration_literal.go"; "migration_boundary.go"; "migration_boundary_testbuild.go" ];
   (* `agent.go` ships only to a program that talks to a model.  Not a dependency argument —
      everything in it is standard library — but a runtime file a program has no use for is
      still surface a reader has to rule out, and the gate costs nothing. *)
@@ -12872,6 +12876,25 @@ let test_source ?(debug=false) ?(imported_packages=[]) ?(api_tests=[]) ?(load_te
    Add-if-absent, never replace: a local declaration of the same name is this module's own,
    and an import must not silently take its place. *)
 let register_imported_types ~exposed ?(protected_names=[]) types (exports : module_exports) =
+  (* `exposing []` hides bare aliases, not qualified type references. Copy
+     declarations owned by this dependency under their full names even when
+     none are exposed. Never copy one dependency's imported aliases as its own
+     declarations or let them replace a local bare name. The frontend checks
+     the source module's export boundary. *)
+  let qualified table name info =
+    Hashtbl.replace table (exports.ex_module ^ "." ^ name) info in
+  Hashtbl.iter (fun name (info : record_info) ->
+    if not (String.contains name '.') && info.rec_owner = exports.ex_package then
+      qualified types.records name info) exports.ex_types.records;
+  Hashtbl.iter (fun name (info : newtype_info) ->
+    if not (String.contains name '.') && info.owner = exports.ex_package then
+      qualified types.newtypes name info) exports.ex_types.newtypes;
+  Hashtbl.iter (fun name (info : adt_info) ->
+    if not (String.contains name '.') && info.adt_owner = exports.ex_package then
+      qualified types.adts name info) exports.ex_types.adts;
+  Hashtbl.iter (fun name (info : entity_info) ->
+    if not (String.contains name '.') && info.ent_owner = exports.ex_package then
+      qualified types.entities name info) exports.ex_types.entities;
   let add table name info =
     if not (List.mem name protected_names) && not (Hashtbl.mem table name) then Hashtbl.replace table name info;
     if not (String.contains name '.') then
@@ -13004,6 +13027,7 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?(entity_bindings=[]) ?(mi
       | _ -> ()) m.decls;
     let protected_names = List.concat_map (function
       | DEntity e -> [e.name] | DRecord r -> [r.name] | DFunc f -> [f.name] | DConst c -> [c.name]
+      | DQueue q -> [q.name]
       | DType (TypeNewtype t) -> [t.name]
       | DType (TypeAdt t) -> t.name :: List.map (fun (v : adt_variant) -> v.ctor) t.variants
       | _ -> []) m.decls in
@@ -13249,8 +13273,9 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?(entity_bindings=[]) ?(mi
          the queue's own variable and the retry rule is baked into it. *)
       | "Tesl.Migration" ->
         List.iter (fun name ->
-          if not (List.mem name Migration_form.names || List.exists
-              (fun (owner,_) -> name = owner ^ "(..)") Migration_form.constructor_groups) then
+          if not (List.mem name (Migration_form.names @ Migration_form.runtime_names) || List.exists
+              (fun (owner,_) -> name = owner ^ "(..)")
+              (Migration_form.constructor_groups @ Migration_form.runtime_constructor_groups)) then
             unsupported import.loc "Go backend does not emit the `Tesl.Migration` export `%s`" name)
           exposed
       | "Tesl.Queue" ->
@@ -13329,6 +13354,8 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?(entity_bindings=[]) ?(mi
       adts = Hashtbl.create 8;
       entities = Hashtbl.create 8;
       queues = Hashtbl.create 8;
+      job_queues = Hashtbl.create 8;
+      queue_type_identity = Validation_common.queue_type_identity (Validation_common.queue_type_aliases m);
       caches = Hashtbl.create 4;
       emails = Hashtbl.create 4;
       channels = Hashtbl.create 4;
@@ -13663,17 +13690,21 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?(entity_bindings=[]) ?(mi
             takes the queue as a value.  Opaque — a program names one, hands it to a queue
             verb, and reads nothing off it — so it registers with no fields, like `DeadJob`
             itself.  The Go representation is the pointer `NewQueue` answers. *)
-         Hashtbl.replace types.records q.name {
+         let queue_type = {
            rec_tesl_name = q.name;
            rec_owner = "";
            rec_go_name = "*teslrt.Queue";
            rec_proof_fields = false;
            rec_fields = [];
            rec_loc = q.loc;
-         };
-         (* Also by job type, since `enqueue` names the JOB and not the queue — every one of
-            them, so a queue carrying two job types is reachable from either. *)
-         List.iter (fun (each, _, _) -> Hashtbl.replace types.queues each info) jobs;
+         } in
+         Hashtbl.replace types.records q.name queue_type;
+         (* Naming a queue as an argument refers to its existing store, just as
+            passing it directly to a queue verb does. It constructs no record. *)
+         Hashtbl.replace types.consts q.name (TRecord queue_type, go_var);
+         (* Enqueue resolves a nominal payload type, never a queue value name. *)
+         List.iter (fun (each, _, _) ->
+           Hashtbl.replace types.job_queues (types.queue_type_identity each) info) jobs;
          ignore lowered)) queue_forms;
     (* An entity's ROW type is registered exactly like a record — a query result and an
        `insert` argument are ordinary struct values — and its store is one package-level
@@ -14791,6 +14822,27 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?(entity_bindings=[]) ?(mi
           adt_builtin = true;
         }
       end) m.imports;
+    if List.exists (fun (import : import_decl) -> import.module_name = "Tesl.Migration" &&
+      match import.names with
+      | ImportAll -> true
+      | ImportExposing names -> List.exists (fun name ->
+          List.mem name ("Migrated(..)" :: Migration_form.runtime_names)) names) m.imports then begin
+      let loc = Location.dummy_loc m.source_file in
+      Hashtbl.replace types.adts "Migrated" {
+        adt_tesl_name = "Migrated"; adt_owner = "";
+        adt_go_name = "teslrt.Migrated"; adt_tag_type = "teslrt.MigratedTag";
+        adt_params = ["a", "A"];
+        adt_variants = [
+          { var_ctor = "Row"; var_tag = "teslrt.MigratedRow";
+            var_fields = ["value", TParam "A"];
+            var_go_fields = ["value", "RowValue"]; var_loc = loc };
+          { var_ctor = "Reject"; var_tag = "teslrt.MigratedReject";
+            var_fields = ["reason", TString];
+            var_go_fields = ["reason", "RejectReason"]; var_loc = loc };
+        ];
+        adt_loc = loc; adt_builtin = true;
+      }
+    end;
     if !either_imported then begin
       let loc = Location.dummy_loc m.source_file in
       Hashtbl.replace types.adts "Either" {

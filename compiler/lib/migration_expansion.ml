@@ -199,6 +199,17 @@ let generate ~initial_version ~schemas ~edges =
      check_chain (version+1) rest later
    | _ -> reject ~code:"MIG001" loc "physical planning requires a complete source history" in
   check_chain 2 schemas edges;
+  (* Logical checking is deliberately ahead of runtime transformation support.
+     Inspect EVERY retained edge before selecting a fresh installation origin:
+     choosing a later origin must not silently skip an unsupported transform. *)
+  List.iter (fun (edge : D.t) ->
+    List.iter (fun (entity,kind) -> match kind with
+      | S.Transform | S.Reset -> reject
+          (Location.dummy_loc (match I.source_inputs (snd (S.inventories (D.coverage edge))) with
+            | (file,_)::_ -> file | [] -> ""))
+          (Printf.sprintf "V%d %s: transforming migrations are checked source only; the PostgreSQL transformation executor is not implemented"
+            (D.version edge) entity)
+      | S.Additive | S.New | S.Drop -> ()) (S.entries (D.coverage edge))) edges;
   let complete_steps = derive ~initial_version:1 (List.hd schemas) edges in
   Ok (if initial_version=1 then complete_steps else
     derive ~initial_version (List.nth schemas (initial_version-1))

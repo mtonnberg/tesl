@@ -840,6 +840,8 @@ let cross_module_diags ?(additional = fun _ _ -> []) ?(skip_dep_body : string ->
          declared-nowhere check. *)
       let declared_with_locs =
         List.concat_map (fun (cm : Ast.module_form) ->
+          let job_identity = Validation_common.queue_type_identity
+            (Validation_common.queue_type_aliases cm) in
           List.concat_map (fun d ->
             match d with
             | Ast.DCache (c : Ast.cache_form) ->
@@ -850,7 +852,7 @@ let cross_module_diags ?(additional = fun _ _ -> []) ?(skip_dep_body : string ->
               [ (Desugar.UseChannel, ch.Ast.name, cm.Ast.module_name, ch.Ast.loc) ]
             | Ast.DQueue (q : Ast.queue_form) ->
               List.map (fun jt ->
-                (Desugar.UseJobType, jt, cm.Ast.module_name, q.Ast.loc))
+                (Desugar.UseJobType, job_identity jt, cm.Ast.module_name, q.Ast.loc))
                 (Desugar.queue_job_types q)
             | _ -> []
           ) cm.Ast.decls
@@ -911,8 +913,11 @@ let cross_module_diags ?(additional = fun _ _ -> []) ?(skip_dep_body : string ->
         end
       ) declared_with_locs;
       List.iter (fun cm ->
+        let job_identity = Validation_common.queue_type_identity
+          (Validation_common.queue_type_aliases cm) in
         List.iter (fun ((kind : Desugar.wired_use_kind), name, loc) ->
-          if not (declared_mem kind name) then begin
+          let identity = if kind = Desugar.UseJobType then job_identity name else name in
+          if not (declared_mem kind identity) then begin
             let msg = match kind with
               | Desugar.UseCache ->
                 Printf.sprintf

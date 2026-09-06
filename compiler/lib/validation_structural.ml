@@ -289,6 +289,7 @@ let proofs_of_expr
          | [] -> [])
       | Some fn_name ->
         (match List.assoc_opt fn_name funcs with
+         | Some info when List.length args <> List.length info.fi_params -> []
          | Some info ->
            let param_mapping = List.filter_map (fun ((param : binding), arg) ->
              match subject_of_expr subject_env arg with
@@ -312,7 +313,7 @@ let proofs_of_expr
                   List.iteri (fun i (p : binding) -> if p.name = spn && !idx < 0 then idx := i) info.fi_params;
                   let subj_arg = match !idx with
                     | i when i >= 0 -> List.nth_opt args i
-                    | _ -> List.nth_opt args 0
+                    | _ -> None
                   in
                   (match subj_arg with
                    | None -> []
@@ -1092,7 +1093,8 @@ let check_channel_structure (decls : top_decl list) : validation_error list =
     | _ -> []
   ) decls
 
-let check_workers_structure ?(extra_funcs = []) (decls : top_decl list) : validation_error list =
+let check_workers_structure ?(extra_funcs = []) ?(type_identity = Fun.id)
+    ?(parameter_identity = fun _ name -> name) (decls : top_decl list) : validation_error list =
   let queues =
     List.filter_map (function DQueue q -> Some q.name | _ -> None) decls
   in
@@ -1125,7 +1127,7 @@ let check_workers_structure ?(extra_funcs = []) (decls : top_decl list) : valida
               (Printf.sprintf "workers `%s`: `%s` is not declared as a `%s` function"
                  w.name fn_name (if w.is_dead then "deadWorker" else "worker"));
           (match info.fi_params with
-           | [param] when (match param.type_expr with TName { name; _ } -> name = job_type | _ -> false) ->
+           | [param] when (match param.type_expr with TName { name; _ } -> parameter_identity info.fi_loc name = type_identity job_type | _ -> false) ->
              let pred = if w.is_dead then "FromDeadQueue" else "FromQueue" in
              let rec allowed = function
                | PredApp { pred = p; args = [query; subject]; _ } ->
@@ -2851,3 +2853,18 @@ let check_app_wiring (decls : top_decl list) : validation_error list =
   decl_db_errs @ app_errs
 
 (* ── 2. SQL/record field name validation ─────────────────────────────────── *)
+
+(* Every proof consumer must use the same success binder and subject when
+   eliminating a wrapper. In particular, a record constructor must not see the
+   old placeholder `_` while a direct function call sees the actual binder. *)
+let case_payload_proof_environments funcs subject_env proof_env scrut pattern =
+  match pattern with
+  | PCon { fields = [(_, PVar name)]; _ } when name <> "_" ->
+    let subject = match subject_of_expr subject_env scrut with
+      | Some subject -> subject
+      | None -> name in
+    let proofs = proofs_of_expr subject funcs subject_env proof_env scrut in
+    let proof_env = (name, proofs) :: List.remove_assoc name proof_env in
+    let subject_env = (name, subject) :: List.remove_assoc name subject_env in
+    proof_env, subject_env
+  | _ -> proof_env, subject_env

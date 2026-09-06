@@ -431,6 +431,12 @@ with literal `Default` rules. `New` and `Drop` identify added and removed entiti
 An entity omitted from the record must be unchanged, including its stored proofs
 and codecs. `Same` asks the compiler to verify an identity; it cannot assert one.
 
+Pure row helpers can return `Migrated NewRow`, imported from `Tesl.Migration`
+with `Migrated(..)`. `Row value` contains a fully typed value with all required
+proofs; `Reject reason` describes a row that could not be converted. Match both
+branches in helper tests. This result type is available for writing and testing
+converters; the transforming database executor remains under development.
+
 When a migration includes a recorded history header, the compiler checks every
 owned source file, including private helpers. A changed recorded `VCurrent`
 reports MIG001; a changed frozen file reports MIG013. A compiler ABI mismatch is
@@ -1016,6 +1022,12 @@ means the caller must choose another path. The proof is erased; a successful
 result contains the ordinary `Int`. Use bare `:::` here; `ok` and `fail` belong to
 HTTP-shaped checks. The condition inside `establish` remains trusted code to review
 and test.
+
+A successful producer may return a normalized or otherwise changed value. Its
+proof belongs to that returned value, even if the return binder has the same name
+as an input parameter. Use the value bound by `Something` when constructing a
+record or entity that requires the proof. Unwrapping or detaching the proof does
+not make it evidence about the original input.
 
 When a function forwards a value and proof produced by another validator, use the `Maybe (v: T ::: P v)`
 form — the proof propagates automatically through `case`:

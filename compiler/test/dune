@@ -388,6 +388,21 @@
  (libraries tesl_compiler_lib alcotest str unix))
 
 (test
+ (name test_migration_transform_rules)
+ (modules test_migration_transform_rules)
+ (libraries tesl_compiler_lib alcotest str unix))
+
+(test
+ (name test_migration_transform)
+ (modules test_migration_transform)
+ (libraries tesl_compiler_lib alcotest str unix))
+
+(test
+ (name test_migration_result)
+ (modules test_migration_result)
+ (libraries tesl_compiler_lib alcotest str unix))
+
+(test
  (name test_source_input)
  (modules test_source_input)
  (libraries tesl_compiler_lib alcotest str unix))
@@ -507,3 +522,24 @@
  (name test_dead_job_metadata)
  (modules test_dead_job_metadata)
  (libraries tesl_compiler_lib alcotest str unix))
+
+(test
+ (name test_queue_imports)
+ (modules test_queue_imports)
+ (libraries tesl_compiler_lib alcotest str unix))
+
+(test
+ (name test_queue_candidate_app)
+ (modules test_queue_candidate_app)
+ (deps (source_tree fixtures/queue-candidate-app))
+ (libraries tesl_compiler_lib alcotest str unix))
+
+(test
+ (name test_optional_attached_transport)
+ (modules test_optional_attached_transport)
+ (libraries tesl_compiler_lib alcotest unix str))
+
+(test
+ (name test_attached_input_identity)
+ (modules test_attached_input_identity)
+ (libraries tesl_compiler_lib alcotest unix))

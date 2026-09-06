@@ -2187,18 +2187,21 @@ and parse_app s =
        return (ESendEmail { email_name; to_; subject; body; loc })
      | _ -> err s "Email.send requires `to`, `subject`, and `body` fields")
   | fn ->
-  (* A Default rule's first argument is an entity field, including otherwise
+  (* Default's first and Rename's first two arguments are entity fields, including otherwise
      contextual spellings such as `select`, `enqueue`, `ok` and `of`. Consume
-     that one binding token before ordinary expression parsing. Values and
+     those binding tokens before ordinary expression parsing. Values and
      malformed non-identifier arguments keep the normal expression grammar. *)
   let* fn =
     match fn with
-    | EConstructor {name="Default";args=[];loc} when s.migration_record_keys && peek2 s <> DOT ->
-      let field_loc = current_loc s in
-      (match try_parse s expect_ident with
-       | Ok (Some name) -> return (EConstructor {name="Default";
-           args=[EVar {name;loc=field_loc}];loc})
-       | Ok None | Err _ -> return fn)
+    | EConstructor {name=("Default" | "Rename") as name;args=[];loc}
+        when s.migration_record_keys && peek2 s <> DOT ->
+      let rec fields remaining args =
+        if remaining=0 || peek2 s=DOT then return (EConstructor {name;args;loc}) else
+        let field_loc = current_loc s in
+        match try_parse s expect_ident with
+        | Ok (Some field) -> fields (remaining-1) (args @ [EVar {name=field;loc=field_loc}])
+        | Ok None | Err _ -> return (EConstructor {name;args;loc}) in
+      fields (if name="Rename" then 2 else 1) []
     | _ -> return fn in
   let rec loop in_test_request_continuation fn =
     (* ctor_multiline: true when the initial fn is a bare EConstructor.
@@ -2765,7 +2768,7 @@ and parse_enqueue_stmt s =
     | IDENT "enqueue" -> advance s; return ()
     | t -> err s (Printf.sprintf "expected enqueue statement, got %s" (tok_to_string t))
   in
-  let* job_type = expect_uident s in
+  let* job_type = parse_module_path s in
   let* payload = parse_expr s in
   let loc = span loc0 (current_loc s) in
   return (EEnqueue { job_type; payload = hint_expr_type job_type payload; loc })

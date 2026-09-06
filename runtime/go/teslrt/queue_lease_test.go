@@ -3,6 +3,7 @@ package teslrt
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -101,7 +102,8 @@ func TestQueueRenewalDatabaseFailureIsReportedOnce(t *testing.T) {
 
 type leasedTestBackend struct {
 	flakyBackend
-	started, stopped int
+	started, stopped  int
+	beforePersistence func(string)
 }
 
 func (b *leasedTestBackend) keepClaim(id, token string) func() {
@@ -110,8 +112,68 @@ func (b *leasedTestBackend) keepClaim(id, token string) func() {
 	return func() { once.Do(func() { b.stopped++ }) }
 }
 
-// Both the success and panic paths stop renewal before completing/retrying. A
-// missing stop on the panic path would leave a lease alive after the worker exits.
+func (b *leasedTestBackend) complete(id, token string) bool {
+	if b.beforePersistence != nil {
+		b.beforePersistence("complete")
+	}
+	return b.flakyBackend.complete(id, token)
+}
+func (b *leasedTestBackend) fail(id string, attempts int, token string) bool {
+	if b.beforePersistence != nil {
+		b.beforePersistence("fail")
+	}
+	return b.flakyBackend.fail(id, attempts, token)
+}
+
+// A handler and its final store mutation share one renewal lifetime. Store
+// failures must still release it while unwinding, without leaking a goroutine.
+func TestQueueRenewalCoversPersistence(t *testing.T) {
+	for _, dead := range []bool{false, true} {
+		for _, handlerFails := range []bool{false, true} {
+			for _, storeFails := range []bool{false, true} {
+				t.Run(fmt.Sprintf("dead=%v/handler_failure=%v/store_failure=%v", dead, handlerFails, storeFails), func(t *testing.T) {
+					inner := NewQueue("lease-inner", 1)
+					Enqueue(inner, "payload")
+					if dead {
+						ProcessNextJob(inner, func(any) JobOutcome { return JobOutcome{OK: false} })
+					}
+					calls := 0
+					backend := &leasedTestBackend{flakyBackend: flakyBackend{inner: inner}}
+					backend.beforePersistence = func(kind string) {
+						calls++
+						if backend.started != 1 || backend.stopped != 0 {
+							t.Errorf("renewal stopped before %s: starts=%d stops=%d", kind, backend.started, backend.stopped)
+						}
+						want := "complete"
+						if !dead && handlerFails {
+							want = "fail"
+						}
+						if kind != want {
+							t.Errorf("persisted %s, want %s", kind, want)
+						}
+						if storeFails {
+							panic("injected persistence failure")
+						}
+					}
+					queue := NewQueue("lease-outer", 1)
+					queue.backend = backend
+					outcome, ok := workerIteration(queue, func(any) JobOutcome {
+						if handlerFails {
+							panic("handler failure")
+						}
+						return JobOutcome{OK: true}
+					}, dead)
+					if ok == storeFails || (!storeFails && (!outcome.Ran || outcome.OK == handlerFails)) || calls != 1 || backend.stopped != 1 {
+						t.Fatalf("outcome=%+v store_ok=%v calls=%d starts=%d stops=%d", outcome, ok, calls, backend.started, backend.stopped)
+					}
+				})
+			}
+		}
+	}
+}
+
+// Both the success and panic paths eventually stop renewal. A missing stop on
+// the panic path would leave a lease alive after the worker exits.
 func TestQueueHandlerAlwaysReleasesItsRenewal(t *testing.T) {
 	for _, trap := range []bool{false, true} {
 		inner := NewQueue("lease-inner", 1)

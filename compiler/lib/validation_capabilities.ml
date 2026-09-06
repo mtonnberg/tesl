@@ -148,15 +148,15 @@ let collect_test_body_caps ~func_caps ?(server_tools_caps=[]) ?(queue_for_job=[]
   ignore (List.fold_left go [] stmts);
   List.sort_uniq String.compare !acc
 
-let check_handler_capabilities ?(cap_map=[]) ?(imported_func_caps=[]) ?database_entities (decls : top_decl list) : validation_error list =
+let check_handler_capabilities ?(cap_map=[]) ?(imported_func_caps=[]) ?database_entities ?queue_for_job (decls : top_decl list) : validation_error list =
   (* Local callee→caps first (a local name shadows an imported one); then
      imported functions' declared `requires`, so a transitive call into an
      imported effecting function is enforced across the module boundary. *)
   let func_caps = build_func_capability_map decls @ imported_func_caps in
-  let queue_for_job =
+  let queue_for_job = Option.value queue_for_job ~default:(
     List.concat_map (function
       | DQueue q -> List.map (fun job -> (job, q.name)) (Desugar.queue_job_types q)
-      | _ -> []) decls in
+      | _ -> []) decls) in
   (* serverTools: server name → union of its bound handlers' declared caps, so a
      fn/test whose body exposes a server's endpoints to an agent must declare
      everything those handlers may do (V001 with the standard hint). *)
@@ -576,13 +576,13 @@ let get_forbidden_caps : string list =
     direction is deliberate: an imported handler we cannot see the body of is
     judged by a superset, so the rule cannot be laundered across a module
     boundary — it can only over-reject, never silently pass. *)
-let check_get_routes_do_not_mutate ?(cap_map=[]) ?(imported_func_caps=[])
+let check_get_routes_do_not_mutate ?(cap_map=[]) ?(imported_func_caps=[]) ?queue_for_job
     (decls : top_decl list) : validation_error list =
   let func_caps = build_func_capability_map decls @ imported_func_caps in
-  let queue_for_job =
+  let queue_for_job = Option.value queue_for_job ~default:(
     List.concat_map (function
       | DQueue q -> List.map (fun job -> (job, q.name)) (Desugar.queue_job_types q)
-      | _ -> []) decls in
+      | _ -> []) decls) in
   let fn_map =
     List.filter_map (function
       | DFunc (fd : func_decl) -> Some (fd.name, fd) | _ -> None) decls in

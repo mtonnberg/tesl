@@ -161,42 +161,9 @@ let return_context_operations ~funcs ~fields_by_type ~ctors =
       (* Empty proof entry blocks alias resolution; no subject link *)
       (type_env', subject_env, (name, []) :: proof_env)
     else
-    let subject_env' =
-      match subject_of_expr subject_env value with
-      | Some s -> (name, s) :: subject_env
-      | None ->
-        (match value with
-         | EApp _ ->
-           let (head0, args0) = collect_call_head_and_args [] value in
-           let (head, args) = normalize_explicit_check_call head0 args0 in
-           (match function_name_of_expr head with
-            | Some fn_name ->
-              (match List.assoc_opt fn_name funcs with
-               | Some info when (match info.fi_return with RetAttached _ -> true | _ -> false) ->
-                 let binding_arg =
-                   match info.fi_return with
-                   | RetAttached { binding = b; _ } ->
-                     let rec find_idx i = function
-                       | [] -> None
-                       | (p : binding) :: _ when p.name = b.name ->
-                         if i < List.length args then Some (List.nth args i) else None
-                       | _ :: rest -> find_idx (i + 1) rest
-                     in
-                     (* Only a return binder naming an actual parameter
-                        preserves that parameter's subject. A distinct result
-                        may be transformed; it is never an alias of arg 1. *)
-                     find_idx 0 info.fi_params
-                   | _ -> None
-                 in
-                 (match binding_arg with
-                  | Some arg ->
-                    (match subject_of_expr subject_env arg with
-                     | Some s -> (name, s) :: subject_env
-                     | None -> subject_env)
-                  | None -> subject_env)
-               | _ -> subject_env)
-            | None -> subject_env)
-         | _ -> subject_env)
+    let subject_env' = match attached_subject_of_expr funcs subject_env value with
+      | Some subject -> (name, subject) :: subject_env
+      | None -> subject_env
     in
     let new_proofs = proofs_of_expr name funcs subject_env' proof_env value in
     let proof_env' = if new_proofs = [] then proof_env else (name, new_proofs) :: proof_env in
@@ -235,24 +202,8 @@ let return_context_operations ~funcs ~fields_by_type ~ctors =
         | _ -> subject_env
       in
       (penv, senv)
-    | PCon { fields = [(_, PVar x)]; _ } ->
-      let penv = if scrut_proofs <> [] then (x, scrut_proofs) :: proof_env else proof_env in
-      let senv =
-        let rec resolve_chain seen name =
-          if List.mem name seen then name
-          else
-            match List.assoc_opt name subject_env with
-            | Some s when s <> name -> resolve_chain (name :: seen) s
-            | _ -> name
-        in
-        let final_subj =
-          match scrut with
-          | EVar { name; _ } -> resolve_chain [] name
-          | _ -> (match subject_of_expr subject_env scrut with Some s -> s | None -> x)
-        in
-        if final_subj <> x then (x, final_subj) :: subject_env else subject_env
-      in
-      (penv, senv)
+    | PCon { fields = [(_, PVar _)]; _ } ->
+      case_payload_proof_environments funcs subject_env proof_env scrut pat
     | _ -> (proof_env, subject_env)
   in
   (* The single return-leaf traversal shared by the Carry-side discharge forms:
@@ -523,6 +474,24 @@ let check_fn_return_proof_annotations
          check_required "cargo" required
        | None -> ())
   in
+  (* A return binder that names an input is a subject-identity promise: callers
+     keep that input's identity when transporting its returned proof. Check every
+     returning leaf, not just a syntactically bare final variable. A transformed
+     result must use a fresh return binder, even when it carries the same fact. *)
+  List.iter (function
+    | DFunc ({ return_spec = RetAttached { binding; loc }; _ } as fd)
+      when List.exists (fun (parameter : binding) -> parameter.name = binding.name) fd.params ->
+      field_proof_type_ctx := Some (fn_type_env funcs fields_by_type ctors fd, fields_by_type, ctors);
+      let contexts = return_leaves
+        (List.map (fun (parameter : binding) -> parameter.name, parameter.type_expr) fd.params)
+        (build_initial_subject_env fd.params) (build_initial_proof_env fd.params) fd.body in
+      if List.exists (fun (_, subjects, _, leaf) ->
+        attached_subject_of_expr funcs subjects leaf <> Some binding.name) contexts then
+        errors := make_error loc
+          ~hint:"return that input (or a verified alias) on every branch; give a transformed result a fresh return binder"
+          (Printf.sprintf "return binding `%s` in `%s` names an input, but a returning branch does not preserve that input's subject identity"
+             binding.name fd.name) :: !errors
+    | _ -> ()) decls;
   (* §7.12 forgery restriction applies to fn, handler, and worker: none of these
      can fabricate a proof their inputs do not carry. (check/auth/establish are the
      only kinds that may introduce a fresh proof at a boundary.) deadWorker is

@@ -15,8 +15,8 @@ tests are supporting evidence; they do not implement transforming migrations.
 Independent architecture and editor reviews confirmed that the next work must
 prioritize executable application scenarios over further editor machinery.
 
-The compiler-upgrade design gate passes with the current stored-value contract
-(revision 4): actual A/B/C executables retain data, a different compiler ABI may
+The compiler-upgrade design gate passed under stored-value contract
+revision 4: actual A/B/C executables retain data, a different compiler ABI may
 serve completed compatible history, and pending execution remains ABI-pinned
 (115.28s, including pending-worker recovery).
 Build provenance and stored-value compatibility now have separate identities.
@@ -57,6 +57,17 @@ passes its retained-PostgreSQL rolling/index/crash gate (123.08s), all twelve
 workflow/proxy regressions, and the documented `tesl test` and `tesl build --local`
 commands. Focused owner/HTTP and ForAll suites pass (48 and 61 cases).
 
+The current stored-value contract is revision 5. Review of the first typed row
+converter reproduced a different-subject proof forgery in revision 4: an optional
+producer returned a transformed value, but a decomposed success witness could
+be attached to the unchanged input and stored in a proof-bearing record. Success
+proofs now follow the returned payload, independently of input/return binder
+spelling. Direct, bound, aliased, decomposed and forwarded optional values are
+covered; the 22-group integration gate passes, including two generated Go race
+apps. Contract-4 databases are not relabeled or silently trusted. The earlier
+retained-database results remain historical evidence; the revision-5 application
+and compiler-upgrade gates require a fresh run after the adjacent proof review.
+
 The source prerequisite for queues is integrated: pure `queueSchema` declarations,
 complete payload/proof/codec closure, immutable family-relative identities,
 incompatible-change errors and complete application binding checks. Its 21 grouped
@@ -86,9 +97,9 @@ gate passes 246 cases, including 16 real backend-kill boundaries; the candidate
 race gate passes (24.583s). The protected operation candidate also passes real
 PostgreSQL race regressions (12.321s), including a reproduced and fixed lease
 check after waiting on an unchanged row lock, mixed-version claims, backend loss
-and atomic handler/queue commit. These execute SQL directly; generated backend
-dispatch remains pending. Production
-installation, CLI and queue dispatch still use format 3. See
+and atomic handler/queue commit. A private runtime dispatcher and dedicated
+queue listener now execute the protocol; production installation and CLI still
+use format 3 and refuse versioned queues. See
 [the candidate contract](queue-control-format4-candidate.md) and
 [operation invariants](queue-operations-candidate.md).
 
@@ -101,6 +112,26 @@ publish an expansion or imply historical absence. Candidate installation now
 includes the closed operation function catalog. The integrated control,
 registration, operation and App preflight race gate passes 430 cases (103.642s),
 with no skips and zero lint findings.
+
+The integrated private backend, pool admission and queue-only listener pass the
+combined PostgreSQL race suite (80.591s), with zero lint findings. Pool replacement
+and listener teardown are covered without leaked test goroutines. The compiled
+full-App witness exercises actual generated handlers, nested proof codecs,
+regular/dead workers and transaction rollback with loose metadata removed. The
+private bridge supplies installation/binding only; public startup remains
+refused. Background-worker cancellation/join now preserves the database binding
+through in-flight completion, interrupts idle polling, and refuses a different
+nested database while workers are active. The integrated worker/Embedded/HTTP
+shutdown race gate passes (109.578s), including real signal shutdown before serving.
+Two bounded reviews cover the lifecycle implementation and its Memory-only runtime
+boundary. Neither this witness nor the additive todo history implements
+transforming or removing stored payloads.
+
+A later repeated integration run caught renewal stopping between handler return
+and queue completion. Renewal now continues through the final store mutation,
+including failure and panic paths. Deterministic scheduling and real protected
+PostgreSQL tests reproduce that interval for ordinary and dead-letter workers.
+The race result above includes the correction and its two bounded reviews.
 
 Dead-letter metadata now has five typed accessors and an exhaustive four-reason
 ADT. Memory and legacy queues report only known provenance. Legacy quarantines

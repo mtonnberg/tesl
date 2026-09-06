@@ -3,10 +3,17 @@
 open Ast
 
 let type_names = ["Migration"; "Entity"; "Rule"; "Same"]
-let constructor_groups = ["Entity", ["Additive"; "New"; "Drop"];
-                          "Rule", ["Default"]; "Same", ["Same"]]
+let constructor_groups = ["Entity", ["Additive"; "Derived"; "Migrate"; "New"; "Drop"];
+                          "Rule", ["Default"; "Rename"]; "Same", ["Same"]]
 let names = List.sort_uniq String.compare
   (type_names @ List.concat_map snd constructor_groups)
+
+(** Unlike the declaration vocabulary above, Migrated is an ordinary runtime
+    ADT. Never add these names to [names]: contextual erasure and config-only
+    type checks consume that list. *)
+let runtime_constructor_groups = ["Migrated", ["Row"; "Reject"]]
+let runtime_names = List.concat_map (fun (name, constructors) -> name :: constructors)
+  runtime_constructor_groups
 
 let rec application = function
   | EApp {fn;arg;_} -> let head,args = application fn in head,args @ [arg]

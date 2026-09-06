@@ -82,6 +82,7 @@ type pgCatalogTable struct {
 	Indexes                                []pgCatalogIndex
 	Constraints                            []pgCatalogConstraint
 	Triggers, Policies, Rules              []string
+	TriggerDefinitions                     []pgCatalogTrigger `json:",omitempty"`
 }
 
 // Catalog observation is kept independent of the test harness's catalog reader.
@@ -116,6 +117,7 @@ const pgMigrationCatalogSQL = `select jsonb_build_object(
   'Expression',pg_catalog.pg_get_expr(k.conbin,k.conrelid)) order by k.conname)
   from pg_catalog.pg_constraint k where k.conrelid=c.oid),'[]'::jsonb),
  'Triggers',coalesce((select jsonb_agg(t.tgname order by t.tgname) from pg_catalog.pg_trigger t where t.tgrelid=c.oid),'[]'::jsonb),
+ 'TriggerDefinitions',` + pgMigrationTriggerCatalogSQL + `,
  'Policies',coalesce((select jsonb_agg(p.polname order by p.polname) from pg_catalog.pg_policy p where p.polrelid=c.oid),'[]'::jsonb),
  'Rules',coalesce((select jsonb_agg(r.rulename order by r.rulename) from pg_catalog.pg_rewrite r where r.ev_class=c.oid),'[]'::jsonb)
 )::text from pg_catalog.pg_class c join pg_catalog.pg_namespace n on n.oid=c.relnamespace
@@ -123,8 +125,22 @@ const pgMigrationCatalogSQL = `select jsonb_build_object(
  where n.nspname=$1 and c.relname=$2`
 
 func pgReadMigrationTable(ctx context.Context, tx pgx.Tx, namespace, name string) (*pgCatalogTable, error) {
+	return pgReadMigrationTableForRoles(ctx, tx, namespace, name, nil)
+}
+
+// pgReadMigrationTableForRoles adds effective function privileges for the named
+// deployment roles. Unrelated cluster roles are not part of the observation.
+func pgReadMigrationTableForRoles(ctx context.Context, tx pgx.Tx, namespace, name string, roles []string) (*pgCatalogTable, error) {
+	roles = slices.Clone(roles)
+	slices.Sort(roles)
+	roles = slices.Compact(roles)
+	for _, role := range roles {
+		if !pgMigrationIdentifier(role) {
+			return nil, fmt.Errorf("invalid migration catalog role name")
+		}
+	}
 	var raw string
-	if err := tx.QueryRow(ctx, pgMigrationCatalogSQL, namespace, name).Scan(&raw); err == pgx.ErrNoRows {
+	if err := tx.QueryRow(ctx, pgMigrationCatalogSQL, namespace, name, roles).Scan(&raw); err == pgx.ErrNoRows {
 		return nil, nil
 	} else if err != nil {
 		return nil, err
@@ -135,6 +151,18 @@ func pgReadMigrationTable(ctx context.Context, tx pgx.Tx, namespace, name string
 	var table pgCatalogTable
 	if err := json.Unmarshal([]byte(raw), &table); err != nil {
 		return nil, fmt.Errorf("decode migration catalog: %w", err)
+	}
+	// Empty optional observations stay nil so legacy no-trigger fingerprints and
+	// read-only expected tables keep their exact representation.
+	if len(table.TriggerDefinitions) == 0 {
+		table.TriggerDefinitions = nil
+	}
+	for _, trigger := range table.TriggerDefinitions {
+		for _, role := range trigger.Function.Roles {
+			if !role.Exists {
+				return nil, fmt.Errorf("migration catalog role %q is missing", role.Role)
+			}
+		}
 	}
 	return &table, nil
 }
@@ -256,6 +284,7 @@ func pgCanonicalMigrationTable(table *pgCatalogTable) *pgCatalogTable {
 	canonical.Columns = slices.Clone(table.Columns)
 	canonical.Indexes = slices.Clone(table.Indexes)
 	canonical.Constraints = slices.Clone(table.Constraints)
+	canonical.TriggerDefinitions = slices.Clone(table.TriggerDefinitions)
 	slices.SortFunc(canonical.Columns, func(a, b pgCatalogColumn) int { return strings.Compare(a.Name, b.Name) })
 	ordinals := make(map[int]int, len(canonical.Columns))
 	for i := range canonical.Columns {
@@ -281,6 +310,9 @@ func pgCanonicalMigrationTable(table *pgCatalogTable) *pgCatalogTable {
 	for i := range canonical.Constraints {
 		constraint := &canonical.Constraints[i]
 		constraint.Name, constraint.Keys = "", keys(constraint.Keys)
+	}
+	for i := range canonical.TriggerDefinitions {
+		canonical.TriggerDefinitions[i].Columns = keys(canonical.TriggerDefinitions[i].Columns)
 	}
 	// These fixed structs contain only JSON primitives, so encoding cannot fail.
 	slices.SortFunc(canonical.Indexes, func(a, b pgCatalogIndex) int {

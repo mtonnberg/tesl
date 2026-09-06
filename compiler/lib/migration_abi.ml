@@ -13,6 +13,10 @@ let stored_value_compatibility t = t.stored_value_compatibility
    Bump it when stored values, proof interpretation, codecs, primitive behavior
    or the canonical/storage mapping cease to be compatible. It never permits a
    different executor to resume a pinned transforming generation.
+   Revision 5 keeps optional attached evidence on the returned success payload.
+   Revision 4 could attach a transformed result's detached witness to the
+   unchanged input when return/input binders had the same spelling, then store
+   that invalid evidence. It is not a compatible stored-value predecessor.
    Revision 4 compares complete proof applications at HTTP auth, capture and
    response boundaries, including role/tenant arguments and quantified proofs.
    It also refuses unvalidated top-level request-body proofs and unexecuted
@@ -24,7 +28,7 @@ let stored_value_compatibility t = t.stored_value_compatibility
    subjects, and refuses detached Fact storage without a subject contract.
    Revision 2 accepted cross-owner evidence through hidden wrappers and subject
    rebinding through raw Fact carriers; do not promise compatibility with it. *)
-let stored_value_semantics_revision = "tesl-stored-value-semantics-4"
+let stored_value_semantics_revision = "tesl-stored-value-semantics-5"
 let valid_stored_value_compatibility value =
   let prefix = "tesl-stored-value-v1:" in
   String.starts_with ~prefix value && String.length value = String.length prefix + 64 &&

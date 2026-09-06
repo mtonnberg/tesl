@@ -2,12 +2,38 @@
 
 This implements the operation portion of the format-4 candidate described in
 [queue-control-format4-candidate.md](queue-control-format4-candidate.md). Production
-format selection and queue backend dispatch remain disabled. The SQL is executed
+format selection remains disabled. The SQL is executed
 by PostgreSQL regression tests through restricted request and worker logins.
 Candidate installation now creates and verifies the closed operation catalog
 alongside immutable source registration.
-Typed dead-letter accessors, retirement, external-effect
-idempotency and the final generated-app integration are separate remaining gates.
+Private backend dispatch and typed dead-letter accessors are implemented.
+Database scopes cancel and join background workers before releasing their binding.
+Retirement and external-effect idempotency remain separate gates before publication.
+
+## Private application runtime
+
+The private opener verifies the closed compiled application, persisted inventory,
+exact catalog and restricted login on every physical pool connection. The queue
+backend uses frozen schema identities rather than application variable names,
+selects the registered codec by job identity, and preserves failed decodes as
+quarantines. Its dedicated listener subscribes only to the queue channel, verifies
+each reconnect, and wakes checked queues after a reconnect to recover missed
+notifications. It neither creates nor reads SSE storage.
+
+A compiled full-App regression drives emitted HTTP handlers, nested proof-checked
+codecs, regular workers and a dead-letter worker against PostgreSQL. A test-only
+bridge installs and binds the unpublished candidate using the actual linked
+history; it supplies no hand-written history or codec. Loose history JSON is
+removed before execution. Public `Main` remains refused even after this private
+installation. This is evidence for generated handler/runtime integration, not
+production startup or a rolling payload migration.
+
+Worker cancellation stops new claims and wakes idle polling immediately. An active
+claim finishes its handler, lease renewal and completion before the database scope
+returns, including on signal shutdown or panic. Nested calls on the same database
+borrow that binding; switching databases while workers are active is refused.
+Each new scope owns a fresh cancellation context. Memory-only applications retain
+their existing unscoped worker behavior.
 
 ## Admission and payload identity
 
@@ -75,5 +101,19 @@ dead-letter metadata, refused quarantine requeue, unknown/incompatible admission
 retirement while a call waits, unchanged row-lock expiry, atomic business effects,
 actual backend termination, transactional notifications and exact function
 catalog/grants. It runs with `-race` in the mandatory migration PostgreSQL matrix.
-These direct SQL tests are not a claim that a generated Tesl application already
-uses this unpublished protocol.
+The combined queue, registration, runtime, listener, dead-letter and preflight
+race gate passes (80.591s), with zero lint findings. The generated-App gate is
+also part of the required PostgreSQL matrix. The integrated worker, Embedded and
+HTTP shutdown race gate passes (109.578s), including actual signal cancellation
+before serving, in-flight success/failure with lease renewal, pending-job
+preservation, panic unwinding and nested database bindings. These tests exercise
+background workers separately from the compiled witness's synchronous dispatch.
+
+A repeated integration run exposed a completion race: the worker stopped lease
+renewal after the handler returned, before its result reached the queue store.
+Renewal now lasts through completion, failure or panic persistence, and its
+deferred cancellation joins afterward. Deterministic schedule tests and protected
+PostgreSQL tests cover ordinary and dead-letter workers, successful and failed
+handlers, and a delayed store write after handler return. The combined race gate
+above includes this fix; both implementation reviews found no remaining issue in
+that lifetime boundary.

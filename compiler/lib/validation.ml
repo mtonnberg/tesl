@@ -24,6 +24,8 @@ type validation_error = Validation_common.validation_error
 
 let check_module_unscoped (m : module_form) : validation_error list =
   let decls = m.decls in
+  let queue_type_identity = queue_type_identity (queue_type_aliases m) in
+  let queue_for_job = queue_bindings_for_module m in
   (* 2026-07 matrix: validators whose metadata tables (entity columns, codec
      target types, newtype→base, record proof-anns/invariants) were built from
      LOCAL decls only get the merged list — local decls first (local-wins for
@@ -91,7 +93,8 @@ let check_module_unscoped (m : module_form) : validation_error list =
   @ (TStructural @: check_api_endpoint_structure ~facts decls)
   @ (TStructural @: check_queue_structure decls)
   @ (TStructural @: check_channel_structure decls)
-  @ (TStructural @: check_workers_structure ~extra_funcs:imported_funcs decls)
+  @ (TStructural @: check_workers_structure ~extra_funcs:imported_funcs ~type_identity:queue_type_identity
+       ~parameter_identity:(queue_parameter_identity m) decls)
   @ (TStructural @: check_cache_structure decls)
   @ (TStructural @: check_email_structure decls)
    @ (TStructural @: check_typed_config_blocks m)
@@ -142,12 +145,12 @@ let check_module_unscoped (m : module_form) : validation_error list =
      minted with a lexer-illegal hyphen (`tesl-case-N`, `tesl-ignored-N`, …), so a
      user identifier can never collide with one by construction. *)
   @ (TProof @: check_forall_param_subjects decls)
-  @ (TCapability @: check_handler_capabilities ~cap_map ~imported_func_caps:(load_imported_func_caps m)
+  @ (TCapability @: check_handler_capabilities ~cap_map ~queue_for_job ~imported_func_caps:(load_imported_func_caps m)
        ~database_entities:(Migration_schema.database_entities m) decls)
   (* SEC005 (get_handlers_do_not_mutate): a GET route may not reach dbWrite /
      queueWrite / pubsub / emailCap.  A hard error in the build path — it was
      previously a linter warning, and the linter does not run during `--check`. *)
-  @ (TCapability @: check_get_routes_do_not_mutate ~cap_map
+  @ (TCapability @: check_get_routes_do_not_mutate ~cap_map ~queue_for_job
        ~imported_func_caps:(load_imported_func_caps m) decls)
   @ (TDatabase @: check_pk_match decls)
   @ (TDatabase @: check_insert_pk_match decls)

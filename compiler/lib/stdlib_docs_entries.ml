@@ -1107,10 +1107,12 @@ let queue : entry list = [
     ~doc:"Provenance attached to a job supplied to its queue worker.";
   e "FromDeadQueue" ~m:"Tesl.Queue" ~kind:(KFact "FromDeadQueue queue job")
     ~doc:"Provenance attached to a decodable job supplied to its dead-letter worker.";
-  e "Job" ~m:"Tesl.Queue" ~kind:(KSyntax "Job { job, worker, deadWorker? }")
-    ~doc:"Associates a queue's payload record with its workers.";
+  e "Job" ~m:"Tesl.Queue"
+    ~kind:(KSyntax "Job <JobRecord> <workerFn> (Something <deadWorker> | Nothing)")
+    ~doc:"Associates a payload record with its workers inside Queue.jobs. This contextual declaration is not an ordinary value or data type.";
   e "QueueRetryBackoff" ~m:"Tesl.Queue" ~kind:(KType "type QueueRetryBackoff = Fixed | Exponential | Linear")
-    ~aliases:["Fixed"; "Exponential"; "Linear"] ~doc:"The backoff mode in QueueRetryStrategy.";
+    ~aliases:["Fixed"; "Exponential"; "Linear"]
+    ~doc:"The literal backoff mode inside QueueRetryStrategy. Import QueueRetryBackoff(..) to name all three modes; they are configuration constructors, not ordinary runtime values.";
   f "requeue" [ "job" ] ~m:"Tesl.Queue" ~doc:"Re-enqueues an AttemptsExhausted entry for another attempt; False for quarantines, claimed or absent jobs.";
   f "deadJobs" [ "queue" ] ~m:"Tesl.Queue" ~doc:"The queue's dead-letter entries.";
 ]
@@ -1178,15 +1180,22 @@ let sso : entry list = [
 ]
 
 let migration : entry list = [
+  e "Migrated" ~m:"Tesl.Migration"
+    ~kind:(KType "type Migrated a = Row a | Reject String")
+    ~doc:"The ordinary result of a pure row function: a fully typed new value or a rejection reason. It can be returned, stored in local data, and exhaustively matched. This result type alone does not enable transforming database migrations.";
+  f "Row" ["value"] ~m:"Tesl.Migration"
+    ~doc:"Wraps a new value without changing its type or granting any proofs.";
+  f "Reject" ["reason"] ~m:"Tesl.Migration"
+    ~doc:"Rejects a row with a String reason; no new row is available in this branch.";
   e "Migration" ~m:"Tesl.Migration"
-    ~kind:(KType "Migration { from: schemaRef, to: schemaRef, same: List Same, entities: { EntityName: Entity }, fixtures: [] }")
-    ~doc:"A contextual declaration in Schema.Family.Migrate.V<n> (legacy FamilySchema.Migrate.V<n> is also supported). References and entity keys are compiler-checked against adjacent schema revisions. It is not a runtime type or value. The initial checker covers additive declarations; physical planning and execution are separate.";
-  e "Entity" ~m:"Tesl.Migration" ~aliases:["Additive";"New";"Drop"]
-    ~kind:(KType "Entity = Additive (List Rule) | New | Drop   # contextual")
-    ~doc:"One entry per changed entity. Additive derives a single row adapter; New and Drop name an added or removed table. An absent entity must be compiler-verified unchanged. These markers cannot be used as runtime values.";
-  e "Rule" ~m:"Tesl.Migration" ~aliases:["Default"]
-    ~kind:(KType "Rule = Default field literal   # contextual")
-    ~doc:"Default supplies the exact primitive literal for a new, non-optional, proof-free field. Optional new fields receive Nothing in the adapter; current application literals still name every field.";
+    ~kind:(KType "Migration { from: schemaRef, to: schemaRef, same: List Same, entities: { EntityName: Entity }, fixtures: List oldRowFunction }")
+    ~doc:"A contextual declaration in Schema.Family.Migrate.V<n> (legacy FamilySchema.Migrate.V<n> is also supported). References and entity keys are compiler-checked against adjacent schema revisions. It is not a runtime type or value. Additive entries have logical adapters; Migrate and Derived entries have checked source mappings. Transforming physical plans and execution remain refused until the executor is complete.";
+  e "Entity" ~m:"Tesl.Migration" ~aliases:["Additive";"Derived";"Migrate";"New";"Drop"]
+    ~kind:(KType "Entity = Additive (List Rule) | Derived (List Rule) | Migrate rowFunction (List Rule) | New | Drop   # contextual")
+    ~doc:"One entry per changed entity. Additive derives a row adapter; Derived derives an identity rename; Migrate checks an exact From.E -> Migrated To.E pure function and requires previous-row fixtures. New and Drop name an added or removed table. An absent entity must be compiler-verified unchanged. These markers cannot be used as runtime values.";
+  e "Rule" ~m:"Tesl.Migration" ~aliases:["Default";"Rename"]
+    ~kind:(KType "Rule = Default field literal | Rename previous current   # contextual")
+    ~doc:"Default supplies the exact primitive literal for a new, non-optional, proof-free field. Rename binds an old-only field to a new-only field with the same stored contract; explicit row functions must copy exactly old.previous into current. Optional new fields receive Nothing in derived adapters; current application and migration literals still name every field.";
   e "Same" ~m:"Tesl.Migration"
     ~kind:(KType "Same From.Declaration To.Declaration   # contextual")
     ~doc:"The compiler verifies semantic equality for every eligible type, fact and codec with the named spelling. A record and its same-named codec are both checked. This claim cannot assert equality or cast persisted proofs.";

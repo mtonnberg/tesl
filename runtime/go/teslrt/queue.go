@@ -351,7 +351,11 @@ func DeadJobs(queue *Queue) []DeadJob {
 	sort.Slice(found, func(left, right int) bool { return found[left].seq < found[right].seq })
 	dead := make([]DeadJob, 0, len(found))
 	for _, each := range found {
-		dead = append(dead, DeadJob{ID: each.id, queue: queue, reason: DeadJobReason{Tag: DeadJobReasonAttemptsExhausted}, attempts: FromInt64(int64(each.attempts))})
+		job, err := deadJobFromMetadata(queue, each.id, nil, nil, each.attempts, "attempts-exhausted")
+		if err != nil {
+			panic(err)
+		}
+		dead = append(dead, job)
 	}
 	return dead
 }
@@ -397,7 +401,9 @@ func ProcessNextJob(queue *Queue, handler func(any) JobOutcome) JobOutcome {
 	defer stopRenewal()
 	started := time.Now()
 	outcome := runJob(handler, payload)
-	stopRenewal()
+	// Renewal covers the final store mutation too: borrowing a connection or
+	// waiting for its statement can outlive the handler's remaining lease. The
+	// deferred stop joins renewal after completion/retry, including store panics.
 	Histogram("tesl.queue.job.duration", time.Since(started).Seconds(),
 		[]Tuple2[string, string]{{Tuple2First: "tesl.queue", Tuple2Second: queue.name}})
 	if outcome.OK {
@@ -425,7 +431,9 @@ func ProcessNextDeadJob(queue *Queue, handler func(any) JobOutcome) JobOutcome {
 	stopRenewal := queue.keepClaim(id, claimToken)
 	defer stopRenewal()
 	outcome := runJob(handler, payload)
-	stopRenewal()
+	// Renewal covers the final store mutation too: borrowing a connection or
+	// waiting for its statement can outlive the handler's remaining lease. The
+	// deferred stop joins renewal after completion/retry, including store panics.
 	if !queue.complete(id, claimToken) {
 		panic("queue " + queue.name + ": dead-letter completion lost ownership of job " + id)
 	}

@@ -100,6 +100,7 @@ type ctx = {
   subject_chain_env : (string * string list) list;
   proof_returns : (string * function_proof_return) list;
   function_kinds : (string * func_kind) list;
+  queue_types : string list;
   subst    : subst ref;
   filename : string;
   in_establish : bool;  (** true when type-checking an establish function body *)
@@ -176,6 +177,7 @@ let make_ctx ?(source_lines = [||]) ~filename ~env () = {
   subject_chain_env = [];
   proof_returns = [];
   function_kinds = [];
+  queue_types = [];
   subst    = ref empty_subst;
   filename;
   in_establish = false;
@@ -195,6 +197,13 @@ let make_ctx ?(source_lines = [||]) ~filename ~env () = {
 let is_intrinsic_fact_combinator ctx = function
   | EVar { name = ("attachFact" | "andLeft" | "andRight" | "introAnd") as name; _ } ->
     (match env_lookup name ctx.env, env_lookup name (make_stdlib_env ()) with
+     | Some actual, Some intrinsic -> actual == intrinsic
+     | _ -> false)
+  | _ -> false
+
+let is_intrinsic_dead_jobs ctx = function
+  | EVar { name = "deadJobs"; _ } ->
+    (match env_lookup "deadJobs" ctx.env, env_lookup "deadJobs" (make_stdlib_env ()) with
      | Some actual, Some intrinsic -> actual == intrinsic
      | _ -> false)
   | _ -> false
@@ -3302,6 +3311,18 @@ let rec infer_expr ctx (e : expr) : ty =
     in
     apply !(ctx.subst) ret_ty
 
+  | EApp { fn; arg; loc } when is_intrinsic_dead_jobs ctx fn ->
+    let argument_type = apply !(ctx.subst) (infer_expr ctx arg) in
+    let queue_reference = match arg with
+      | EConstructor { name; args = []; _ } -> List.mem name ctx.queue_types
+      | _ -> false in
+    let queue_value = match argument_type with
+      | TCon name -> List.mem name ctx.queue_types
+      | _ -> false in
+    if not (queue_reference || queue_value) then
+      add_error ctx loc "`deadJobs` requires a declared queue value, not a job payload";
+    t_list (TCon "DeadJob")
+
   | EApp { fn; arg = (EList { elems = []; _ } as empty_list); loc } ->
     (* Parser reuses the same AST node for () and []. Treat this as a real
        application when the callee is callable; otherwise preserve the zero-arg
@@ -5220,6 +5241,7 @@ use the `Tuple3 a b c` constructor instead";
     reject_nested_check_calls ctx base_fn args;
     (match base_fn with
      | _ when is_intrinsic_fact_combinator ctx base_fn -> fallback ()
+     | _ when is_intrinsic_dead_jobs ctx base_fn -> fallback ()
      | EVar { name = "initTelemetry" | "check" | "make-witness" | "selectOne" | "select" | "selectCount" | "selectSum" | "selectMax" | "selectMin" | "selectCountBy" | "selectSumBy" | "insert" | "insertMany" | "upsert" | "update" | "updateAndReturnOne" | "returning" | "where" | "set" | "onConflict" | "doUpdate" | "delete" | "deleteAndReturnResult" | "one" | "#record-update#"; _ } ->
        fallback ()
      | EVar { name = "serverTools"; _ } when not ctx.server_tools_shadowed ->
@@ -7504,7 +7526,19 @@ let check_module_with_metadata_uncached ?typed_nodes ?(source_lines = [||]) (m :
   let import_errors = import_errors @ check_units_name_collisions m in
   let initial_env = make_stdlib_env () in
   let ctx = make_ctx ~source_lines ~filename:m.source_file ~env:initial_env () in
-  let ctx = { ctx with import_suggest = suggest; typed_nodes } in
+  let queue_types =
+    let local = List.filter_map (function DQueue q -> Some q.name | _ -> None) m.decls in
+    let imported = List.concat_map (fun (imp : import_decl) ->
+      if String.starts_with ~prefix:"Tesl." imp.module_name then [] else
+      match Validation_common.predicate_import_module m imp.module_name with
+      | None -> []
+      | Some owner -> List.concat_map (function
+          | DQueue q when List.mem (ExportName q.name) owner.exports ->
+            let exposed = match imp.names with ImportAll -> false | ImportExposing names -> List.mem q.name names in
+            (imp.module_name ^ "." ^ q.name) :: (if exposed then [q.name] else [])
+          | _ -> []) owner.decls) m.imports in
+    local @ imported in
+  let ctx = { ctx with import_suggest = suggest; typed_nodes; queue_types } in
 
   (* 1. Collect type definitions (records, ADTs, newtypes) *)
   let ctx = collect_type_defs ctx m.decls in

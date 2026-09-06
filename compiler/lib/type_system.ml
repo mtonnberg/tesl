@@ -116,6 +116,7 @@ let t_conversation_turn = TCon "ConversationTurn"
 
 let t_list a        = TApp (TCon "List", a)
 let t_maybe a       = TApp (TCon "Maybe", a)
+let t_migrated a    = TApp (TCon "Migrated", a)
 let t_set a         = TApp (TCon "Set", a)
 let t_dict k v      = TApp (TApp (TCon "Dict", k), v)
 let t_either a b    = TApp (TApp (TCon "Either", a), b)
@@ -753,6 +754,11 @@ let stdlib_env : (string * scheme) list = [
      their bodies compile to tesl/either-derived.rkt. *)
   "Left",             { vars = _r2_ab; mono = t_fun [_a] (t_either _a _b) };
   "Right",            { vars = _r2_ab; mono = t_fun [_b] (t_either _a _b) };
+
+  (* A row result is ordinary typed data, unlike contextual Migration rules.
+     Reject is polymorphic only in the absent row; its reason is always String. *)
+  "Row",              { vars = _r1_a; mono = t_fun [_a] (t_migrated _a) };
+  "Reject",           { vars = _r1_a; mono = t_fun [t_string] (t_migrated _a) };
 
 
   (* ── Float arithmetic functions ─────────────────────────────────────── *)
@@ -1692,7 +1698,7 @@ let tesl_module_exports : (string * string list) list = [
       "Email.send"; "startEmailWorker";
       (* config-block types (typed config blocks) *)
       "Email"; "SmtpConfig" ] );
-  ( "Tesl.Migration", Migration_form.names );
+  ( "Tesl.Migration", Migration_form.names @ Migration_form.runtime_names );
   ( "Tesl.Database",
     [ "Database"; "DatabaseBackend"; "Postgres"; "Memory";
       "PostgresConfig"; "PostgresConnection";
@@ -1897,7 +1903,9 @@ let stdlib_home_module_of (name : string) : string option =
 
     The constructor lists deliberately do NOT repeat the type name; consumers
     that want `["Maybe"; "Something"; "Nothing"]` prepend it themselves. *)
-let stdlib_adt_ctor_groups : (string * string * string list) list = [
+let stdlib_adt_ctor_groups : (string * string * string list) list =
+  List.map (fun (name, ctors) -> "Tesl.Migration", name, ctors)
+    Migration_form.runtime_constructor_groups @ [
   "Tesl.Maybe",      "Maybe",        [ "Something"; "Nothing" ];
   "Tesl.Result",     "Result",       [ "Ok"; "Err" ];
   "Tesl.Either",     "Either",       [ "Left"; "Right" ];
@@ -1906,7 +1914,6 @@ let stdlib_adt_ctor_groups : (string * string * string list) list = [
      tesl/either.tesl itself imports only the PRIM one. *)
   "Tesl.EitherPrim", "Either",       [ "Left"; "Right" ];
   "Tesl.ApiTest",    "JobResult",    [ "JobOk"; "JobFailed" ];
-  "Tesl.Queue", "QueueRetryBackoff", [ "Fixed"; "Exponential"; "Linear" ];
   "Tesl.Queue", "DeadJobReason",
     [ "AttemptsExhausted"; "PayloadInvalid"; "MigrationRejected"; "LegacyUnresolved" ];
   "Tesl.Email",      "EmailBody",    [ "TextBody"; "HtmlBody"; "RichBody" ];
@@ -1927,7 +1934,8 @@ let stdlib_adt_ctor_groups : (string * string * string list) list = [
     value scheme, runtime representation, or pattern-exhaustiveness rows. Keep
     that boundary explicit rather than pretending they are ordinary ADTs. *)
 let stdlib_import_ctor_groups = stdlib_adt_ctor_groups @
-  ["Tesl.Database", "MigrationTopology", ["Worker"; "Embedded"]] @
+  ["Tesl.Database", "MigrationTopology", ["Worker"; "Embedded"];
+   "Tesl.Queue", "QueueRetryBackoff", ["Fixed"; "Exponential"; "Linear"]] @
   List.map (fun (name, ctors) -> "Tesl.Migration", name, ctors) Migration_form.constructor_groups
 
 (** Constructor → the ADT type that owns it, for the `Type(..)` exposing form.

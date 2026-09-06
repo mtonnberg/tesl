@@ -1,0 +1,7 @@
+module Schema.Tasks.VCurrent exposing [Receipt, Notify, Audit, Notifications]
+import Tesl.Prelude exposing [String]
+import Schema.Tasks.VCurrent.Detail
+entity Receipt table "receipts" primaryKey id { id: String, label: String }
+record Notify { id: String, detail: Schema.Tasks.VCurrent.Detail.Content }
+record Audit { id: String, message: String }
+queueSchema Notifications { jobs: [Notify, Audit] }

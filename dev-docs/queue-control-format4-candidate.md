@@ -89,13 +89,13 @@ worker roles can call only the closed checked registration protocol described be
 | `tesl_queue_payloads` | Job identities, canonical closure bytes and digest |
 | `tesl_jobs` | Protected payload version, attempt/claimant/transaction/lease fields and typed dead reason |
 
-The jobs table reserves the complete reviewed claim-state layout but has no
-runtime dispatcher yet. It keeps `claim_seq`, opaque `claim_token`,
+The jobs table has protected SQL operations and a private runtime dispatcher.
+It keeps `claim_seq`, opaque `claim_token`,
 `claimed_by_version`, DB-derived `claim_xid`, `lease_until`, source version, and
 visible dead/quarantine reason fields. SQL constraints require claim fields to
 be present only while processing and explicitly reject NULL dead reasons for dead
-or quarantined rows. The future transaction lease exception must compare the
-stored transaction ID in PostgreSQL, never accept a caller's boolean authority.
+or quarantined rows. The transaction lease exception compares the stored
+transaction ID in PostgreSQL and accepts no caller-supplied ownership flag.
 
 `migration_queue_control_expected.go` independently describes the expected
 catalog. It does not parse or execute the creation descriptors or live defaults.

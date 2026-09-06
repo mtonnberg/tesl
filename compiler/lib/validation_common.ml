@@ -930,6 +930,8 @@ let builtin_ctor_info : ctor_info = [
   ("Err", ([mk_var_type "e"], mk_app_type (mk_app_type (mk_name_type "Result") (mk_var_type "a")) (mk_var_type "e")));
   ("Left", ([mk_var_type "a"], mk_app_type (mk_app_type (mk_name_type "Either") (mk_var_type "a")) (mk_var_type "b")));
   ("Right", ([mk_var_type "b"], mk_app_type (mk_app_type (mk_name_type "Either") (mk_var_type "a")) (mk_var_type "b")));
+  ("Row", ([mk_var_type "a"], mk_app_type (mk_name_type "Migrated") (mk_var_type "a")));
+  ("Reject", ([mk_name_type "String"], mk_app_type (mk_name_type "Migrated") (mk_var_type "a")));
   ("Tuple2", ([mk_var_type "a"; mk_var_type "b"], mk_app_type (mk_app_type (mk_name_type "Tuple2") (mk_var_type "a")) (mk_var_type "b")));
   ("Tuple3", ([mk_var_type "a"; mk_var_type "b"; mk_var_type "c"], mk_app_type (mk_app_type (mk_app_type (mk_name_type "Tuple3") (mk_var_type "a")) (mk_var_type "b")) (mk_var_type "c")));
   (* EmailBody (Tesl.Email) is a REAL stdlib ADT — TextBody String | HtmlBody
@@ -1587,6 +1589,68 @@ let load_imported_type_decls ?(include_exposed_aliases = true) (m : module_form)
   ) m.imports
 
 (* ── Stdlib proof metadata ───────────────────────────────────────────────── *)
+
+(** Queue payloads are nominal records. Exposed and fully qualified spellings
+    identify one declaration, while records with the same name in different
+    modules remain distinct. Only direct, exported imports introduce aliases;
+    qualification must never be inferred by dropping a module prefix. *)
+let queue_type_aliases (m : module_form) =
+  let records owner = List.filter_map (function DRecord r -> Some r.name | _ -> None) owner.decls in
+  let locals = records m in
+  let local = List.concat_map (fun name ->
+    let identity = m.module_name ^ "." ^ name in
+    [name, identity; identity, identity]) locals in
+  let imported = List.concat_map (fun (imp : import_decl) ->
+    if String.starts_with ~prefix:"Tesl." imp.module_name then [] else
+    let path = resolve_local_import_path m.source_file imp.module_name in
+    if not (Source_input.exists path) then [] else
+    match Parser.parse_module path (Source_input.read_text path) with
+    | Err _ -> []
+    | Ok owner -> List.concat_map (fun name ->
+        if not (List.mem (ExportName name) owner.exports) then [] else
+        let identity = imp.module_name ^ "." ^ name in
+        let exposed = match imp.names with
+          | ImportAll -> false
+          | ImportExposing names -> List.mem name names in
+        (identity, identity) ::
+        (if exposed && not (List.mem name locals) then [name, identity] else [])) (records owner)) m.imports in
+  let aliases = local @ imported in
+  List.sort_uniq compare aliases |> List.filter (fun (name, _) ->
+    List.length (List.filter_map (fun (alias, identity) ->
+      if alias = name then Some identity else None) aliases |> List.sort_uniq compare) = 1)
+
+let queue_type_identity aliases name =
+  Option.value ~default:name (List.assoc_opt name aliases)
+
+(** An imported worker's parameter belongs to its declaration's scope. Its
+    bare name must not be interpreted as an unrelated record exposed by the
+    application wiring the queue. Locations survive signature transport. *)
+let queue_parameter_identity (m : module_form) =
+  let scopes = Hashtbl.create 4 in
+  Hashtbl.add scopes (Source_input.canonical_path m.source_file) (queue_type_aliases m);
+  fun (loc : Location.loc) name ->
+    let path = Source_input.canonical_path loc.file in
+    let aliases = match Hashtbl.find_opt scopes path with
+      | Some aliases -> aliases
+      | None ->
+        let aliases = if not (Source_input.exists path) then [] else
+          match Parser.parse_module path (Source_input.read_text path) with
+          | Err _ -> []
+          | Ok owner -> queue_type_aliases owner in
+        Hashtbl.add scopes path aliases;
+        aliases in
+    queue_type_identity aliases name
+
+let queue_bindings_for_module (m : module_form) =
+  let aliases = queue_type_aliases m in
+  List.concat_map (function
+    | DQueue q -> List.concat_map (fun job ->
+        let identity = queue_type_identity aliases job in
+        (job, q.name) :: (identity, q.name) ::
+        List.filter_map (fun (alias, target) ->
+          if target = identity then Some (alias, q.name) else None) aliases)
+        (Desugar.queue_job_types q)
+    | _ -> []) m.decls
 (* func_info records for stdlib functions that have proof-annotated parameters.
    Used by load_imported_func_info so calls like `Int.divide n d` are checked
    for the required `d ::: IsNonZero d` proof at the call site. *)
@@ -2520,10 +2584,7 @@ let rec load_imported_func_caps ?(visited : string list = []) (m : module_form)
                 (Ast.func_bound_cap_vars fd) in
             List.filter (fun c -> not (List.mem c bound)) caps
           in
-           let queue_for_job =
-             List.concat_map (function
-               | DQueue q -> List.map (fun job -> (job, q.name)) (Desugar.queue_job_types q)
-               | _ -> []) imported.decls in
+           let queue_for_job = queue_bindings_for_module imported in
            let step verified =
             List.map (fun (name, cur) ->
               match List.assoc_opt name fd_by_name with
@@ -3146,16 +3207,11 @@ let proofs_of_return_spec
     ?(param_mapping = [])
     (spec : return_spec)
     : proof_expr list =
-  let attach_binding_proof (binding : binding) =
-    (* Use the param_mapping's subject for this binding name ONLY when the mapping is
-       non-trivial (maps to a different name). Self-mappings like rawLabel → rawLabel mean
-       the result should be indexed by result_name.
-
-       E.g. checkPositive(n: Int) -> n: Int ::: Positive n, called on `raw`:
-         param_mapping = [("n","raw")] → "n" ≠ "raw" → use "raw" → proof = Positive raw
-       E.g. sanitize(rawLabel: String) -> rawLabel: String ::: Sanitized rawLabel, called on `rawLabel`:
-         param_mapping = [("rawLabel","rawLabel")] → self-map → use result_name → proof = Sanitized validLabel *)
-    let subject_for_binding = match List.assoc_opt binding.name param_mapping with
+  let attach_binding_proof ?(input_subject = true) (binding : binding) =
+    (* Ordinary attached checks preserve their existing parameter-subject rule.
+       Optional returns override it below: the result binder names the returned
+       success payload, including when it shares an input parameter's spelling. *)
+    let subject_for_binding = match if input_subject then List.assoc_opt binding.name param_mapping else None with
       | Some s -> s      (* use the argument's subject (consistent with subject_env propagation) *)
       | None -> result_name  (* param not in mapping → use result_name *)
     in
@@ -3183,7 +3239,10 @@ let proofs_of_return_spec
     [ normalize_carried_forall_dict_values result_name (subst_proof param_mapping proof) ]
   | RetForAllDictKeys { proof; _ } ->
     [ normalize_carried_forall_dict_keys result_name (subst_proof param_mapping proof) ]
-  | RetMaybeAttached { binding; _ } -> attach_binding_proof binding
+  | RetMaybeAttached { binding; _ } ->
+    (* An optional attached return describes its success payload, not an input.
+       Even a same-spelled binder may hold a transformed value on success. *)
+    attach_binding_proof ~input_subject:false binding
   | RetExists _ -> []
   | RetPlain { ty; _ } -> (match proof_of_fact_type ty with Some proof -> [ subst_proof param_mapping proof ] | None -> [])
 
@@ -3342,6 +3401,42 @@ let rec subject_of_expr (subject_env : subject_env) (expr : expr) : string optio
     Some occ
   | _ -> None
 
+(* An attached result preserves an input subject only when its return binder
+   names that parameter. Every such declaration is checked on every returning
+   leaf by Proof_discharge. Fresh binders and named packs never alias an arbitrary
+   first argument. Shared by all let/decomposition and return-context consumers. *)
+let rec attached_subject_of_expr funcs subject_env expression =
+  let canonical name =
+    let rec follow seen name =
+      if List.mem name seen then None else
+      match List.assoc_opt name subject_env with
+      | Some next when next <> name -> follow (name :: seen) next
+      | _ -> Some name in
+    follow [] name in
+  match subject_of_expr subject_env expression with
+  | Some subject -> canonical subject
+  | None ->
+    let head, args = collect_call_head_and_args [] expression in
+    let head, args = normalize_explicit_check_call head args in
+    let rec call_subject head args =
+      match function_name_of_expr head with
+      | Some name ->
+        (match List.assoc_opt name funcs with
+         | Some { fi_return = RetAttached { binding; _ }; fi_params; _ }
+           when List.length args = List.length fi_params ->
+           List.find_map (fun ((parameter : binding), argument) ->
+             if parameter.name = binding.name then attached_subject_of_expr funcs subject_env argument else None)
+             (zip_prefix fi_params args)
+         | _ -> None)
+      | None ->
+        (match head with
+         | EBinop { op = BAnd; left; right; _ } ->
+           (match call_subject left args, call_subject right args with
+            | Some left, Some right when left = right -> Some left
+            | _ -> None)
+         | _ -> None) in
+    call_subject head args
+
 (* close_fail_open Option B — admit the declared return proofs of a CALLED function
    through the kernel: a check/auth/establish callee mints fresh
    ([Proof_kernel.mint_at_boundary]); a forgery-restricted callee's declared return
@@ -3413,7 +3508,7 @@ let rec proofs_of_evidence_expr
        (* When funcs is available, resolve inline establish/check calls.
           E.g. `attachFact forgotten (validPort y)` — evidence is `validPort y`. *)
        (match List.assoc_opt fn_name funcs with
-        | Some info ->
+        | Some info when List.length args = List.length info.fi_params ->
           let param_mapping = List.filter_map (fun ((param : binding), arg) ->
             match subject_of_expr subject_env arg with
             | Some subject -> Some (param.name, subject)
@@ -3422,7 +3517,7 @@ let rec proofs_of_evidence_expr
           let preds = admit_call_return info.fi_kind
             (proofs_of_return_spec "_" ~param_mapping info.fi_return) in
           if preds = [] then None else Some preds
-        | None -> None)
+        | _ -> None)
      | _ -> None)
   | _ -> None
 

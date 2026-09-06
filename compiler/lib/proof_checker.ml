@@ -764,7 +764,7 @@ let validate_check_return ~decls (all_funcs : func_decl list) (fd : func_decl) :
               in
               let ok_name = value_name_of_expr value in
               (match ok_name with
-               | Some n when n <> b.name ->
+               | Some n when n <> b.name && canonical_subject n <> canonical_subject b.name ->
                  errors := { loc; message = Printf.sprintf
                    "ok expression returns `%s` but the declared return binding name is `%s`; \
 either use `let %s = ... in ok %s ::: ...` to bind the result to `%s`, \
@@ -973,8 +973,11 @@ use the named constructor instead: `ok %s { ... } ::: ...`" b.name } :: !errors
   | FnKind ->
     (* For fn functions with RetAttached, the body must return the binding name *)
     (match fd.return_spec with
-     | RetAttached { binding = b; _ } ->
+     | RetAttached { binding = b; _ }
+       when not (List.exists (fun (parameter : binding) -> parameter.name = b.name) fd.params) ->
        let errors = ref [] in
+       (* Input-named return bindings are checked on every returning leaf by
+          Proof_discharge; preserve the fresh local-result spelling check here. *)
        (* Find the tail expression and check it returns the binding name *)
        let rec get_tail = function
          | ELet { body; _ } | ELetProof { body; _ } -> get_tail body

@@ -77,9 +77,11 @@ jobs:
             fi
             export TESL_REPO_ROOT="$PWD"
             (cd compiler && dune build)
+            (cd compiler && dune exec --no-build ./test/test_queue_candidate_app.exe)
             cd runtime/go
             go test -race -count=1 -timeout=900s -v ./internal/migrationtest
             go test -race -count=1 -timeout=300s -tags=tesl_migration_test ./teslrt -run "^TestPgMigration(Control|Expansion|Admission|Boot|Status|Install|StoredValueCompatibility|Compatibility|Worker)"
             go test -race -count=1 -timeout=300s -tags=tesl_migration_test ./teslrt -run "^(TestPgMigration(Index|FutureIndex|Embedded)|TestServe(Shutdown|ListenFailure))"
-            go test -race -count=1 -timeout=300s -tags=tesl_migration_test ./teslrt -run "^(TestQueue|TestDurableQueue|TestAppPreflight|TestDeadJob|TestDurableDeadJob)"
+            go test -race -count=1 -timeout=300s -tags=tesl_migration_test ./teslrt -run "^(TestQueue|TestDurableQueue|TestAppPreflight|TestDeadJob|TestDurableDeadJob|TestWorkerLifetime)"
+            go test -race -count=1 -timeout=300s -tags=tesl_migration_test ./teslrt -run "^(TestPgMigration(TriggerCatalog|RowGeneration)|TestMigrationRowGeneration)"
           '

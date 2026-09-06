@@ -22,6 +22,11 @@ type entity = {
   indexes_changed : bool;
 }
 type t
+(** Shared checked-inventory predicates and canonical primitive literal lowering
+    used by both additive and transforming rule elaboration. *)
+val primitive : string -> Migration_canonical.node
+val nullable : Migration_inventory.field_shape -> bool
+val literal : literal -> (string * Migration_canonical.node, string) result
 val check : Migration_sparse.t -> defaults:default list ->
   (t, Migration_sparse.error list) result
 val entities : t -> entity list

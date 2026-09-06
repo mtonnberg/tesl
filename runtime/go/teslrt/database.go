@@ -2,8 +2,11 @@ package teslrt
 
 import (
 	"context"
+	"os"
+	"os/signal"
 	"sync"
 	"sync/atomic"
+	"syscall"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -51,6 +54,18 @@ type Database struct {
 // where two databases are in scope.
 var boundDatabase atomic.Pointer[Database]
 
+// Binding ownership also owns every worker started within that lexical scope.
+// Retain the parent chain so nested same-connection scopes cannot hide live
+// outer workers when a later nested scope attempts a different binding.
+type pgDatabaseScope struct {
+	database   *Database
+	connection *PostgresDB
+	workers    *runtimeWorkerScope
+	parent     *pgDatabaseScope
+}
+
+var boundDatabaseScope atomic.Pointer[pgDatabaseScope]
+
 // Application configuration owns connections. Query modules resolve the compiled
 // database identity at execution time, avoiding a Go import back-edge from a
 // handler or schema package to the application that imports it.
@@ -86,9 +101,18 @@ var databaseBindings = struct {
 func init() {
 	databaseBindings.cond = sync.NewCond(&databaseBindings.mutex)
 	currentRuntimeLifecycle = currentDatabaseLifecycle
+	currentRuntimeWorkers = func() runtimeWorkers {
+		if scope := boundDatabaseScope.Load(); scope != nil {
+			return scope.workers
+		}
+		return nil
+	}
 }
 
 func currentDatabaseLifecycle() context.Context {
+	if scope := boundDatabaseScope.Load(); scope != nil {
+		return scope.workers.ctx
+	}
 	database := boundDatabase.Load()
 	if database == nil {
 		return context.Background()
@@ -174,6 +198,9 @@ func PostgresColumnOf(name, columnType string, primaryKey, nullable bool) Postgr
 // idle connections, which is what a pool is for. Nothing observable differs — a query outside
 // the block does not reach the server either way, because the binding is what routes it.
 func WithDatabase(database *Database, body func()) {
+	if borrowWorkerDatabase(database, body) {
+		return
+	}
 	if err := pgVerifyMigrationFacilities(database); err != nil {
 		panic(err)
 	}
@@ -196,24 +223,85 @@ func WithDatabase(database *Database, body func()) {
 	} else {
 		connection = OpenPostgres(database.Config, database.Tables)
 	}
+	withDatabaseBinding(database, connection, body)
+}
+
+// A worker is already owned by a scope whose binding cannot be released until
+// that worker returns. Reacquiring the main goroutine's binding lock would
+// deadlock its drain. Borrow exactly that binding, without a new lifetime or
+// connection; reject another database before opening or bootstrapping anything.
+func borrowWorkerDatabase(database *Database, body func()) bool {
+	identity := goroutineID()
+	for scope := boundDatabaseScope.Load(); scope != nil; scope = scope.parent {
+		if !scope.workers.owns(identity) {
+			continue
+		}
+		if scope.database != database || database.bound() != scope.connection || boundDatabase.Load() != database {
+			panic("database: worker cannot enter another database scope")
+		}
+		body()
+		return true
+	}
+	return false
+}
+
+// The production binding boundary is shared by ordinary and versioned pools.
+// Pools remain reusable, but no worker may outlive the binding it dispatches on.
+func withDatabaseBinding(database *Database, connection *PostgresDB, body func()) {
 	acquireDatabaseBinding()
+	defer releaseDatabaseBinding()
+	previousScope := boundDatabaseScope.Load()
+	var suspended []*runtimeWorkerScope
+	defer func() {
+		for _, scope := range suspended {
+			scope.resume()
+		}
+	}()
+	for scope := previousScope; scope != nil; scope = scope.parent {
+		if scope.database == database && scope.connection == connection {
+			continue
+		}
+		if !scope.workers.suspend() {
+			panic("database: cannot replace a binding while its workers are running")
+		}
+		suspended = append(suspended, scope.workers)
+	}
+	parent := currentRuntimeLifecycle()
 	if connection.embedded != nil {
 		if err := connection.embedded.check(); err != nil {
-			releaseDatabaseBinding()
 			panic(pgFailure("database: Embedded migration service refused before binding", err))
 		}
+		service := connection.embedded
+		service.mutex.Lock()
+		generation := service.generation
+		service.mutex.Unlock()
+		// Direct ancestry propagates cancellation synchronously. An AfterFunc
+		// bridge could lose a stop immediately followed by Serve. Same-pool
+		// nesting already descends from this generation through its outer scope.
+		if generation != nil && (previousScope == nil || previousScope.connection != connection) {
+			parent = generation.ctx
+		}
 	}
+	signalContext, stopSignals := signal.NotifyContext(parent, os.Interrupt, syscall.SIGTERM)
+	defer stopSignals()
+	workers := newRuntimeWorkerScope(signalContext, goroutineID)
+	defer workers.cancel()
 	database.mutex.Lock()
 	previous := database.open
 	database.open = connection
 	database.mutex.Unlock()
 	previousBound := boundDatabase.Swap(database)
+	scope := &pgDatabaseScope{database: database, connection: connection, workers: workers, parent: previousScope}
+	boundDatabaseScope.Store(scope)
 	defer func() {
+		// Keep both lookup paths intact during handler cleanup and completion,
+		// even when Serve failed or the application body is unwinding a panic.
+		workers.join()
+		boundDatabaseScope.Store(previousScope)
 		boundDatabase.Store(previousBound)
 		database.mutex.Lock()
 		database.open = previous
 		database.mutex.Unlock()
-		releaseDatabaseBinding()
 	}()
 	body()
 }
@@ -331,3 +419,92 @@ func currentTransactionFor(database *PostgresDB) pgx.Tx {
 	}
 	return nil
 }
+
+// The group owns workers through claim, handler, lease renewal and completion.
+// Cancellation stops new iterations, not in-flight work. A claim which passed
+// beginIteration before cancellation is already in flight and must finish too.
+// The enclosing scope must join this group before changing its database binding.
+type runtimeWorkerScope struct {
+	ctx       context.Context
+	identify  func() uint64
+	cancel    context.CancelFunc
+	mutex     sync.Mutex
+	workers   sync.WaitGroup
+	live      int
+	members   map[uint64]struct{}
+	closed    bool
+	suspended int
+}
+
+func newRuntimeWorkerScope(parent context.Context, identify func() uint64) *runtimeWorkerScope {
+	ctx, cancel := context.WithCancel(parent)
+	return &runtimeWorkerScope{ctx: ctx, cancel: cancel, members: map[uint64]struct{}{}, identify: identify}
+}
+
+func (scope *runtimeWorkerScope) start(run func()) {
+	scope.mutex.Lock()
+	defer scope.mutex.Unlock()
+	if scope.suspended != 0 {
+		panic("workers: cannot start while another database is bound")
+	}
+	if scope.closed || scope.ctx.Err() != nil {
+		return
+	}
+	scope.live++
+	scope.workers.Add(1)
+	go func() {
+		identity := scope.identify()
+		scope.mutex.Lock()
+		scope.members[identity] = struct{}{}
+		scope.mutex.Unlock()
+		defer func() {
+			scope.mutex.Lock()
+			scope.live--
+			delete(scope.members, identity)
+			scope.mutex.Unlock()
+			scope.workers.Done()
+		}()
+		run()
+	}()
+}
+
+func (scope *runtimeWorkerScope) beginIteration() bool {
+	scope.mutex.Lock()
+	defer scope.mutex.Unlock()
+	return !scope.closed && scope.suspended == 0 && scope.ctx.Err() == nil
+}
+
+// Pause registration atomically with checking for live workers. Without this,
+// a callback could start workers between the check and a nested DB rebind.
+func (scope *runtimeWorkerScope) suspend() bool {
+	scope.mutex.Lock()
+	defer scope.mutex.Unlock()
+	if scope.live != 0 {
+		return false
+	}
+	scope.suspended++
+	return true
+}
+
+func (scope *runtimeWorkerScope) resume() {
+	scope.mutex.Lock()
+	defer scope.mutex.Unlock()
+	scope.suspended--
+}
+
+func (scope *runtimeWorkerScope) join() {
+	scope.mutex.Lock()
+	scope.closed = true
+	scope.cancel()
+	scope.mutex.Unlock()
+	scope.workers.Wait()
+}
+
+func (scope *runtimeWorkerScope) owns(identity uint64) bool {
+	scope.mutex.Lock()
+	defer scope.mutex.Unlock()
+	_, exists := scope.members[identity]
+	return exists
+}
+
+func (scope *runtimeWorkerScope) context() context.Context { return scope.ctx }

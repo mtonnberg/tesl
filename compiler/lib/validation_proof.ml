@@ -949,99 +949,9 @@ let rec check_expr_call_proofs
       | _ -> []
     in
     let value_errors = laundering_errors @ let_lambda_errors @ check_expr_call_proofs subject_env proof_env funcs value in
-    let subject_env' = match subject_of_expr subject_env value with
+    let subject_env' = match attached_subject_of_expr funcs subject_env value with
       | Some subject -> (name, subject) :: subject_env
-      | None ->
-        (* For check/establish function calls (RetAttached returns), the result IS the
-           first argument (same value with proof). Propagate its subject so cross-parameter
-           proof validation works correctly (e.g. requiresPositiveX raw checked). *)
-        (match value with
-         | EApp _ ->
-           let (head, args) = collect_call_head_and_args [] value in
-           (match function_name_of_expr head with
-            | Some "check" ->
-              (* `check fn arg` — fn is first arg, real arg is second *)
-              (match args with
-               | fn_expr :: rest_args ->
-                 (match function_name_of_expr fn_expr with
-                  | Some fn_name ->
-                    (match List.assoc_opt fn_name funcs with
-                     | Some info when (match info.fi_return with RetAttached _ -> true | _ -> false) ->
-                       (* Use the arg corresponding to the return binding's param name *)
-                       let binding_arg = match info.fi_return with
-                         | RetAttached { binding = b; _ } ->
-                           (* Find which param index has binding's name, use that arg *)
-                           let rec find_idx i = function
-                             | [] -> None
-                             | (p : binding) :: _ when p.name = b.name ->
-                               if i < List.length rest_args then Some (List.nth rest_args i) else None
-                             | _ :: rest -> find_idx (i+1) rest
-                           in
-                           (match find_idx 0 info.fi_params with
-                            | Some arg -> Some arg
-                            | None -> match rest_args with x :: _ -> Some x | [] -> None)
-                         | _ -> match rest_args with x :: _ -> Some x | [] -> None
-                       in
-                       (match binding_arg with
-                        | Some arg ->
-                          (match subject_of_expr subject_env arg with
-                           | Some s -> (name, s) :: subject_env
-                           | None -> subject_env)
-                        | None -> subject_env)
-                     | _ -> subject_env)
-                  | None ->
-                     (* Combined check: (checkA && checkB) real_arg.
-                        fn_expr is an EBinop BAnd, not a simple function name.
-                        The real argument is the first element of rest_args.
-                        Propagate its subject to the let-binder so that
-                        later calls like `needsBoth v` can resolve proofs. *)
-                     (match rest_args with
-                      | real_arg :: _ ->
-                        (match subject_of_expr subject_env real_arg with
-                         | Some s -> (name, s) :: subject_env
-                         | None -> subject_env)
-                      | [] -> subject_env))
-               | [] -> subject_env)
-            | Some fn_name ->
-              (match List.assoc_opt fn_name funcs with
-               | Some info when (match info.fi_return with RetAttached _ -> true | _ -> false) ->
-                 (* Use the arg that corresponds to the return binding's param name, NOT
-                    always the first arg.  For single-param checks both are the same, but
-                    for multi-param checks like isInRange(lo,hi,n)->n:T:::P, the relevant
-                    arg is the one bound to `n` (3rd), not `lo` (1st). *)
-                 let binding_arg = match info.fi_return with
-                   | RetAttached { binding = b; _ } ->
-                     let rec find_idx i = function
-                       | [] -> None
-                       | (p : binding) :: _ when p.name = b.name ->
-                         if i < List.length args then Some (List.nth args i) else None
-                       | _ :: rest -> find_idx (i+1) rest
-                     in
-                     (match find_idx 0 info.fi_params with
-                      | Some arg -> Some arg
-                      | None -> (match args with x :: _ -> Some x | [] -> None))
-                   | _ -> (match args with x :: _ -> Some x | [] -> None)
-                 in
-                 (match binding_arg with
-                  | Some arg ->
-                    (match subject_of_expr subject_env arg with
-                     | Some s -> (name, s) :: subject_env
-                     | None -> subject_env)
-                  | None -> subject_env)
-               | _ -> subject_env)
-            | None ->
-              (* Combined check: (checkA && checkB) arg — no "check" wrapper.
-                 Propagate the argument subject to the let-binder. *)
-              (match head with
-               | EBinop { op = BAnd; _ } ->
-                 (match args with
-                  | subj_arg :: _ ->
-                    (match subject_of_expr subject_env subj_arg with
-                     | Some s -> (name, s) :: subject_env
-                     | None -> subject_env)
-                  | [] -> subject_env)
-               | _ -> subject_env))
-         | _ -> subject_env)
+      | None -> subject_env
     in
     let new_proofs = proofs_of_expr name funcs subject_env proof_env value in
     (* Collect all atom names used as arguments in a proof expression. *)
@@ -1120,41 +1030,9 @@ let rec check_expr_call_proofs
     value_errors @ declared_proof_errors @ check_expr_call_proofs subject_env' proof_env' funcs body
   | ELetProof { value_name; proof_name; proof_index; value; body; loc } ->
     let value_errors = check_expr_call_proofs subject_env proof_env funcs value in
-    let subject_env' = match subject_of_expr subject_env value with
+    let subject_env' = match attached_subject_of_expr funcs subject_env value with
       | Some subject -> (value_name, subject) :: subject_env
-      | None ->
-        (* For check-fn calls (RetAttached), propagate the subject of the
-           return-bound argument — same logic as the ELet handler. *)
-        (match value with
-         | EApp _ ->
-           let (head0, args0) = collect_call_head_and_args [] value in
-           let (_head, args) = normalize_explicit_check_call head0 args0 in
-           (match function_name_of_expr _head with
-            | Some fn_name ->
-              (match List.assoc_opt fn_name funcs with
-               | Some info when (match info.fi_return with RetAttached _ -> true | _ -> false) ->
-                 let binding_arg = match info.fi_return with
-                   | RetAttached { binding = b; _ } ->
-                     let rec find_idx i = function
-                       | [] -> None
-                       | (p : binding) :: _ when p.name = b.name ->
-                         if i < List.length args then Some (List.nth args i) else None
-                       | _ :: rest -> find_idx (i+1) rest
-                     in
-                     (match find_idx 0 info.fi_params with
-                      | Some arg -> Some arg
-                      | None -> (match args with x :: _ -> Some x | [] -> None))
-                   | _ -> (match args with x :: _ -> Some x | [] -> None)
-                 in
-                 (match binding_arg with
-                  | Some arg ->
-                    (match subject_of_expr subject_env arg with
-                     | Some s -> (value_name, s) :: subject_env
-                     | None -> subject_env)
-                  | None -> subject_env)
-               | _ -> subject_env)
-            | None -> subject_env)
-         | _ -> subject_env)
+      | None -> subject_env
     in
     (* Use proofs_of_expr (not carried_proofs_of_expr) so that function-call
        return proofs are included — carried_proofs_of_expr can't derive proofs
@@ -1226,80 +1104,9 @@ let rec check_expr_call_proofs
     value_errors @ no_proof_errors @ check_expr_call_proofs subject_env' proof_env' funcs body
   | ECase { scrut; arms; _ } ->
     let scrut_errors = check_expr_call_proofs subject_env proof_env funcs scrut in
-    (* For `case (establish_fn arg) of Something proof ->`, the `proof` binding
-       carries the inner proof from the establish function's Maybe (Fact P) return.
-       Also handles user ADT round-trips: `let m = Something p; case m of Something x ->`
-       where x should inherit p's proofs via subject aliasing. *)
-    (* Use a sentinel result name for non-variable scrutinees so that named-return
-       proofs like `Maybe (r: T ::: ForAll P r)` get a trackable subject.
-       For EVar scrutinees the result_name is irrelevant (carried_proofs_of_expr
-       uses the variable's own proof_env entry directly).  For call expressions the
-       sentinel will be substituted with the pattern-bound name below. *)
-    let scrut_result_name = match scrut with
-      | EVar { name; _ } -> name
-      | _ -> "_case_scrut"
-    in
-    let scrut_proofs = proofs_of_expr scrut_result_name funcs subject_env proof_env scrut in
     let arm_errors = List.concat_map (fun (arm : case_arm) ->
-      let proof_env', subject_env' = match arm.pattern with
-        | PCon { fields = [(_, PVar x)]; _ } ->
-          (* Any single-field constructor: propagate scrutinee's proofs and subject chain
-             to the bound variable x. This enables proof tracking through constructor
-             round-trips: `let m = Something p; case m of Something x -> requiresP x`.
-             For direct call scrutinees the sentinel result name is substituted with x
-             so that `ForAll P _case_scrut` becomes `ForAll P x`.
-             We fully resolve the subject chain (m→p→n) so that call-site substitution
-             maps the proof subject correctly (Positive n, not Positive p). *)
-          let scrut_proofs_for_x =
-            if scrut_result_name = "_case_scrut" then
-              List.map (Proof_kernel.pass_through (subst_proof [("_case_scrut", x)])) scrut_proofs
-            else scrut_proofs
-          in
-          let penv = if scrut_proofs_for_x <> [] then (x, scrut_proofs_for_x) :: proof_env else proof_env in
-          let senv =
-            (* Fully follow the subject_env chain to the final canonical subject.
-               e.g. m→p→n resolves to "n", which is what x's call-site subject must be.
-               When the chain doesn't extend (e.g. m has no subject alias), fall back to
-               the subject described by the carried proofs themselves — e.g. if scrut_proofs
-               contain `IsPositive raw`, use "raw" as x's subject so that `needPos x`
-               resolves to `IsPositive raw` (matching the carried proof). *)
-            let rec resolve_chain seen name =
-              if List.mem name seen then name  (* cycle guard *)
-              else match List.assoc_opt name subject_env with
-                | Some s when s <> name -> resolve_chain (name :: seen) s
-                | _ -> name
-            in
-            let chain_subj = match scrut with
-              | EVar { name; _ } -> resolve_chain [] name
-              | _ -> (match subject_of_expr subject_env scrut with Some s -> s | None -> x)
-            in
-            (* If the chain didn't extend beyond the scrutinee name, try to find
-               the ultimate subject from the proof's own argument list. *)
-            let final_subj =
-              if chain_subj = (match scrut with EVar { name; _ } -> name | _ -> "") then
-                (* Chain stopped at the scrutinee itself — try proof's last argument *)
-                let proof_subject = List.find_map (fun p ->
-                  match Proof_kernel.fact_of p with
-                  | PredApp { args = (_ :: _ as pargs); _ } ->
-                    let last = List.nth pargs (List.length pargs - 1) in
-                    (* Only use if it's a simple lowercase identifier (a subject name) *)
-                    if String.length last > 0 && last.[0] >= 'a' && last.[0] <= 'z'
-                       && not (String.contains last '.')
-                    then Some last
-                    else None
-                  | _ -> None
-                ) scrut_proofs_for_x in
-                (match proof_subject with
-                 | Some s -> resolve_chain [] s  (* follow the chain from the proof's subject *)
-                 | None -> chain_subj)
-              else chain_subj
-            in
-            if final_subj <> x then (x, final_subj) :: subject_env
-            else subject_env
-          in
-          (penv, senv)
-        | _ -> (proof_env, subject_env)
-      in
+      let proof_env', subject_env' = case_payload_proof_environments
+        funcs subject_env proof_env scrut arm.pattern in
       (* PFC-2 (a): propagate CONSTRUCTOR FIELD proofs to pattern binders,
          positionally.  `case t of Node l cur r -> …` gives `cur` the `value`
           field's `::: P` proof (subject renamed field_name -> binder).  Sound
@@ -1588,24 +1395,12 @@ let rec check_test_stmt_call_proofs
   match stmt with
   | TsLetProof { value_name; proof_names; value; _ } ->
     let value_errors = check_expr_call_proofs subject_env proof_env funcs value in
-    (* For proof variable tracking, we need a meaningful result name even when
-       value_name is "_".  Use the first argument's subject so that entity proofs
-       in RetNamedPack get the correct subject (e.g. Positive n99 not Positive _). *)
-    let first_arg_subject =
-      let (_, args) = collect_call_head_and_args [] value in
-      match args with
-      | arg :: _ -> subject_of_expr subject_env arg
-      | [] -> None
-    in
+    let subject = attached_subject_of_expr funcs subject_env value in
     let effective_name = if value_name = "_" then
-      match first_arg_subject with Some s -> s | None -> value_name
-    else value_name in
-    let subject_env' = match subject_of_expr subject_env value with
+      Option.value subject ~default:value_name else value_name in
+    let subject_env' = match subject with
       | Some subject -> (effective_name, subject) :: subject_env
-      | None ->
-        (match first_arg_subject with
-         | Some s -> (effective_name, s) :: subject_env
-         | None -> subject_env)
+      | None -> subject_env
     in
     let new_proofs = proofs_of_expr effective_name funcs subject_env' proof_env value in
     let proof_env' = List.fold_left (fun env pname ->
@@ -1619,82 +1414,9 @@ let rec check_test_stmt_call_proofs
       check_expr_call_proofs subject_env proof_env funcs value
       @ inline_proof_arg_errors_for_call loc funcs value
     in
-    let subject_env' = match subject_of_expr subject_env value with
+    let subject_env' = match attached_subject_of_expr funcs subject_env value with
       | Some subject -> (name, subject) :: subject_env
-      | None ->
-        (* For check/establish/named-pack function calls, propagate subjects.
-           Mirrors the ELet case in check_expr_call_proofs. *)
-        (match value with
-         | EApp _ ->
-           let (head, args) = collect_call_head_and_args [] value in
-           (match function_name_of_expr head with
-            | Some "check" ->
-              (* `check fn arg` — fn is first arg, real arg is second *)
-              (match args with
-               | fn_expr :: rest_args ->
-                 (match function_name_of_expr fn_expr with
-                  | Some fn_name ->
-                    (match List.assoc_opt fn_name funcs with
-                     | Some info when (match info.fi_return with RetAttached _ -> true | _ -> false) ->
-                       let binding_arg = match info.fi_return with
-                         | RetAttached { binding = b; _ } ->
-                           let rec find_idx i = function
-                             | [] -> None
-                             | (p : binding) :: _ when p.name = b.name ->
-                               if i < List.length rest_args then Some (List.nth rest_args i) else None
-                             | _ :: rest -> find_idx (i+1) rest
-                           in
-                           (match find_idx 0 info.fi_params with
-                            | Some arg -> Some arg
-                            | None -> match rest_args with x :: _ -> Some x | [] -> None)
-                         | _ -> match rest_args with x :: _ -> Some x | [] -> None
-                       in
-                       (match binding_arg with
-                        | Some arg ->
-                          (match subject_of_expr subject_env arg with
-                           | Some s -> (name, s) :: subject_env
-                           | None -> subject_env)
-                        | None -> subject_env)
-                     | _ -> subject_env)
-                  | None ->
-                    (* Compound check: fn_expr is EBinop (&&); use first real arg as subject *)
-                    (match rest_args with
-                     | arg :: _ ->
-                       (match subject_of_expr subject_env arg with
-                        | Some s -> (name, s) :: subject_env
-                        | None -> subject_env)
-                     | [] -> subject_env))
-               | [] -> subject_env)
-            | Some fn_name ->
-              (match List.assoc_opt fn_name funcs with
-               | Some info when (match info.fi_return with RetAttached _ | RetNamedPack _ -> true | _ -> false) ->
-                 (* For multi-parameter checks like checkInBounds(lo,hi,n)->n:T:::P,
-                    the subject of the result is the subject of the argument that
-                    corresponds to the return binding's param name (here `n`, index 2),
-                    NOT always the first argument.  Mirror the find_idx logic used in
-                    the ELet case of check_expr_call_proofs. *)
-                 let binding_arg = match info.fi_return with
-                   | RetAttached { binding = b; _ } ->
-                     let rec find_idx i = function
-                       | [] -> None
-                       | (p : binding) :: _ when p.name = b.name ->
-                         if i < List.length args then Some (List.nth args i) else None
-                       | _ :: rest -> find_idx (i+1) rest
-                     in
-                     (match find_idx 0 info.fi_params with
-                      | Some arg -> Some arg
-                      | None -> (match args with x :: _ -> Some x | [] -> None))
-                   | _ -> (match args with x :: _ -> Some x | [] -> None)
-                 in
-                 (match binding_arg with
-                  | Some arg ->
-                    (match subject_of_expr subject_env arg with
-                     | Some s -> (name, s) :: subject_env
-                     | None -> subject_env)
-                  | None -> subject_env)
-               | _ -> subject_env)
-            | None -> subject_env)
-         | _ -> subject_env)
+      | None -> subject_env
     in
     let new_proofs = proofs_of_expr name funcs subject_env proof_env value in
     let rec proof_arg_names = function
@@ -1785,37 +1507,14 @@ let rec check_test_stmt_call_proofs
     (cond_errors @ then_errors @ else_errors, subject_env, proof_env)
   | TsCase { scrut; arms; _ } ->
     let scrut_errors = check_expr_call_proofs subject_env proof_env funcs scrut in
-    let scrut_proofs = proofs_of_expr "_" funcs subject_env proof_env scrut in
     let arm_errors = List.concat_map (fun (arm : Ast.ts_case_arm) ->
       let parent_type_ctx = !field_proof_type_ctx in
       Fun.protect ~finally:(fun () -> field_proof_type_ctx := parent_type_ctx) (fun () ->
       Option.iter (fun (env, fields, ctors) ->
         let bindings = pattern_bindings (infer_expr_type env funcs fields ctors scrut) ctors arm.ts_pattern in
         field_proof_type_ctx := Some (bindings @ env, fields, ctors)) parent_type_ctx;
-      (* Propagate scrutinee proofs into the arm binding, same as ECase in
-         check_expr_call_proofs: `case m of Something v ->` gives v the proof of m. *)
-      let proof_env', subject_env' =
-        let penv, senv = match arm.ts_pattern with
-          | PCon { fields = [(_, PVar x)]; _ } ->
-            let penv = if scrut_proofs <> [] then (x, scrut_proofs) :: proof_env else proof_env in
-            let senv =
-              let rec resolve_chain seen name =
-                if List.mem name seen then name
-                else match List.assoc_opt name subject_env with
-                  | Some s when s <> name -> resolve_chain (name :: seen) s
-                  | _ -> name
-              in
-              let final_subj = match scrut with
-                | EVar { name; _ } -> resolve_chain [] name
-                | _ -> (match subject_of_expr subject_env scrut with Some s -> s | None -> x)
-              in
-              if final_subj <> x then (x, final_subj) :: subject_env else subject_env
-            in
-            (penv, senv)
-          | _ -> (proof_env, subject_env)
-        in
-        (penv, senv)
-      in
+      let proof_env', subject_env' = case_payload_proof_environments
+        funcs subject_env proof_env scrut arm.ts_pattern in
       let guard_errors = match arm.ts_guard with
         | Some g -> check_expr_call_proofs subject_env' proof_env' funcs g
         | None -> []

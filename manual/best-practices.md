@@ -664,6 +664,9 @@ such as `InBounds 1 100 amount`.
 An ordinary helper can also receive and return `Fact (InBounds 1 100 amount)`
 unchanged. The evidence keeps its original value and bounds; use `attachFact` when
 you need to attach it to that value. An optional proof must be unwrapped first.
+For `Maybe (value: T ::: P value)`, use the successful returned value in your
+record or entity. A validator may transform its input, so the returned proof
+cannot be attached to the original input merely because their types match.
 
 Review what stored values mean as well as their SQL column names and types. A
 record or ADT stored in `jsonb` can need a migration when its fields, constructors,
