@@ -24,7 +24,7 @@ func pgControlRoles(ctx context.Context, tx pgx.Tx, roles PgMigrationControlRole
 		return fmt.Errorf("migration control requires distinct valid control and worker roles")
 	}
 	if roles.Request != "" && (!pgMigrationIdentifier(roles.Request) || roles.Request == owner || roles.Request == worker) {
-		return fmt.Errorf("Worker migration topology requires distinct valid owner, worker and request roles")
+		return fmt.Errorf("worker migration topology requires distinct valid owner, worker and request roles")
 	}
 	var valid, canInstall, leaked bool
 	err := tx.QueryRow(ctx, `select

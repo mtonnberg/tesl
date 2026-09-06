@@ -280,9 +280,9 @@ let test_local_scan_excludes_external_files () =
 let test_local_scan_overlay_preserves_security_boundary () =
   let dir = Unix.realpath (fresh_dir ()) in
   let outside = fresh_dir () in
-  let external = Filename.concat outside "external.tesl" in
-  write_file external "module External exposing []\n";
-  Unix.symlink external (Filename.concat dir "external.tesl");
+  let external_path = Filename.concat outside "external.tesl" in
+  write_file external_path "module External exposing []\n";
+  Unix.symlink external_path (Filename.concat dir "external.tesl");
   Unix.symlink outside (Filename.concat dir "external");
   let future = Filename.concat dir "future.tesl" in
   let nested = Filename.concat dir "future/deep.tesl" in

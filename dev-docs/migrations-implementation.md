@@ -145,6 +145,27 @@ covered for both local bindings and function parameters.
 
 ## Slices under development
 
+- The separate Worker topology now has real PostgreSQL 17 and 18 coverage.
+  Request startup verifies control and entity catalogs in read-only snapshots
+  without CREATE or TEMP privilege; the worker owns expansion and grants entity
+  DML atomically. The broad PostgreSQL 17 runtime gate passes (149.337s), followed
+  by owner-isolation, credential, cancellation/restart and preflight regressions.
+  The PostgreSQL 18 Worker/catalog gate passes (16.650s) and runtime lint reports
+  zero issues. Two reviews found and corrected database-owner role reachability,
+  unsupported durable-facility startup and executor identity-check ordering.
+  Worker refuses queues, caches, email and SSE until their protected installation
+  exists; this is not evidence authorizing epoch closure. The full-app lesson84
+  gate and post-merge compiler checks are still pending.
+
+- Main's September security fixes are merged, preserving source overlays and the
+  bounded import scanner. A combined regression covers unsaved files/directories
+  while refusing external symlinks. The stored-value semantic revision advances
+  to 2 because proof-boundary checks changed; historical contract 1 is not silently
+  accepted as equivalent. Compiler-upgrade scenarios must be rerun against this
+  merged build before final acceptance. A deterministic editor test now covers
+  both a supplied Nix toolchain and unavailable-Nix fallback without depending on
+  the host's PostgreSQL environment; its mocked subset passes.
+
 - Compiler upgrades now have a production full-app regression. It builds actual A,
   B and C compilers from one isolated source tree: B changes only query source;
   C changes the stored-value semantic revision. A authors V1–V3 including a completed

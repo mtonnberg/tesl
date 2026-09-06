@@ -90,6 +90,7 @@ import Tesl.Database exposing [
   Postgres,
   PostgresConfig,
   TcpConnection,
+  MigrationTopology(..),
 ]
 import Tesl.Env exposing [envRead, envInt]
 import Tesl.App exposing [App]
@@ -104,6 +105,7 @@ database NoteDatabase = Database {
   backend: Postgres (PostgresConfig {
     namespace: "additive_notes"
     controlOwner: env "NOTES_CONTROL_OWNER"
+    topology: Embedded
     dbName: env "NOTES_DB_NAME"
     user: env "NOTES_DB_USER"
     password: env "NOTES_DB_PASSWORD"

@@ -75,6 +75,12 @@ let explicit_topology () = with_project (fun path ->
     check bool "topology is not an environment lookup" false
       (contains result ("EnvString(\"" ^ topology))) ["Worker"; "Embedded"])
 
+let constructor_group_emission () = with_project (fun path ->
+  List.iter (fun topology ->
+    let result = emit path (source ~imports:"MigrationTopology(..)" ("topology: " ^ topology)) in
+    check bool "the lessons' ADT import reaches Go emission" true
+      (contains result ("MigrationTopology: \"" ^ topology ^ "\""))) ["Worker"; "Embedded"])
+
 let default_topology () = with_project (fun path ->
   let result = emit path (source ~imports:"" "") in
   List.iter (fun field ->
@@ -103,12 +109,12 @@ let environment_connections () = with_project (fun path ->
   check bool "dynamic credentials do not imply an explicit topology" false (contains result "MigrationTopology:"))
 
 let constructor_imports () = with_project (fun path ->
-  accepts path (source ~imports:"Worker" "topology: Worker");
-  accepts path (source ~imports:"Embedded" "topology: Embedded");
-  accepts path (source ~imports:"MigrationTopology(..)" "topology: Worker");
+  ignore (emit path (source ~imports:"Worker" "topology: Worker"));
+  ignore (emit path (source ~imports:"Embedded" "topology: Embedded"));
+  ignore (emit path (source ~imports:"MigrationTopology(..)" "topology: Worker"));
   let all = source ~imports:"" "topology: Embedded" |>
     replace "import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]" "import Tesl.Database" in
-  accepts path all;
+  ignore (emit path all);
   refuses path (source ~imports:"" "topology: Worker") "requires importing `Worker`";
   refuses path (source ~imports:"MigrationTopology" "topology: Embedded") "requires importing `Embedded`";
   refuses path (source ~imports:"Embedded" "topology: Worker") "requires importing `Worker`")
@@ -187,6 +193,7 @@ let () =
   run "Migration topology configuration" [
     "emission", [
       test_case "explicit Worker and Embedded" `Quick explicit_topology;
+      test_case "ADT export emits both lesson topology choices" `Quick constructor_group_emission;
       test_case "omission retains runtime defaults" `Quick default_topology;
       test_case "literal roles and direct DSN" `Quick literal_connections;
       test_case "environment roles and DSN remain runtime values" `Quick environment_connections;

@@ -13170,7 +13170,7 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?(entity_bindings=[]) ?(mi
              the backend is read and where the connection is built. *)
           | "Database" | "Memory" | "DatabaseBackend" | "Postgres" | "PostgresConfig"
           | "PostgresConnection" | "TcpConnection" | "SocketConnection"
-          | "MigrationTopology" | "Worker" | "Embedded" -> ()
+          | "MigrationTopology" | "MigrationTopology(..)" | "Worker" | "Embedded" -> ()
           | other -> unsupported import.loc
             "Go backend does not emit the `Tesl.Database` export `%s`: the module is wired, that \
              export is not — test_go_stdlib_export_seam.ml holds the whole inventory" other) exposed

@@ -230,9 +230,10 @@ function makeVscode(files, debugCalls, taskCalls, workspacePath = repoRoot, opti
   };
 }
 
-function loadExtension(vscode, languageClients) {
+function loadExtension(vscode, languageClients, moduleOverrides = {}) {
   const originalLoad = Module._load;
   Module._load = function (request, parent, isMain) {
+    if (Object.hasOwn(moduleOverrides, request)) return moduleOverrides[request];
     if (request === "vscode") return vscode;
     if (request === "vscode-languageclient/node") {
       return {
@@ -262,7 +263,7 @@ async function activateWithFile(file, cleanup, workspacePath = repoRoot, options
   const taskCalls = [];
   const languageClients = [];
   const host = makeVscode([uri], debugCalls, taskCalls, workspacePath, options);
-  const extension = loadExtension(host.vscode, languageClients);
+  const extension = loadExtension(host.vscode, languageClients, options.moduleOverrides);
   const context = { extensionPath: __dirname, subscriptions: { push() {} } };
   extension.activate(context);
   await new Promise((resolve) => setImmediate(resolve));
@@ -649,28 +650,81 @@ async function testDapApiBreakpointHitsFromNestedWorkspaceCwd() {
   } }, async () => {});
 }
 
-async function testNestedWorkspaceUsesCheckoutTools() {
+async function testNestedWorkspaceUsesCheckoutTools(t) {
+  for (const nixAvailable of [true, false]) {
+    await t.test(nixAvailable ? "Nix supplies the checkout toolchain" : "failed Nix preserves the process toolchain",
+      () => checkNestedWorkspaceTools(nixAvailable));
+  }
+}
+
+async function checkNestedWorkspaceTools(nixAvailable) {
   const file = path.join(repoRoot, "example", "learn", "lesson32-api-tests.tesl");
   const workspacePath = path.join(repoRoot, "example", "learn");
-  const fixture = await activatedExistingFixture("example/learn/lesson32-api-tests.tesl", workspacePath);
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "tesl-nested-toolchain-"));
+  const go = path.join(directory, process.platform === "win32" ? "go.exe" : "go");
+  fs.writeFileSync(go, "fixture", { mode: 0o755 });
+  const compiler = path.join(repoRoot, "compiler", "_build", "default", "bin", "main.exe");
+  const nixCalls = [];
+  const environment = {
+    TESL_GO: go,
+    TESL_POSTGRES_HOST: "process-postgres.example",
+    TESL_POSTGRES_PORT: "6543",
+    TESL_POSTGRES_USER: "process-user",
+  };
+  const previousEnvironment = Object.fromEntries(Object.keys(environment).map(key => [key, process.env[key]]));
+  Object.assign(process.env, environment);
+  // Exercise nested checkout discovery without launching the developer's Nix
+  // shell, starting PostgreSQL, or depending on an ambient installed toolchain.
   try {
+    const fixture = await activateWithFile(file,
+      undefined, workspacePath, {
+        configuration: { compilerBinary: compiler, lspBinary: process.execPath },
+        moduleOverrides: {
+          "./toolchain": {
+            findInstallation: () => null,
+            findOnPath: (name) => name === "nix-shell" ? "nix-shell" : null,
+          },
+          child_process: {
+            ...require("child_process"),
+            spawnSync(command, args, options) {
+              nixCalls.push({ command, args, options });
+              if (!nixAvailable) return { status: 1, stdout: "", stderr: "Nix unavailable" };
+              return { status: 0, stdout: [
+                "__TESL_ENV__", `TESL_RESOLVED_GO=${go}`,
+                "TESL_POSTGRES_HOST=127.0.0.1", "TESL_POSTGRES_PORT=55432",
+                "TESL_POSTGRES_USER=tesl", "",
+              ].join("\n") };
+            },
+          },
+        },
+      });
     const descriptor = fixture.debugFactories[0].createDebugAdapterDescriptor({
       workspaceFolder: { uri: Uri.file(workspacePath) },
       configuration: { program: file },
     });
-    assert.match(descriptor.command, /^\/nix\/store\/.*\/bin\/go$/);
+    assert.strictEqual(descriptor.command, go);
     assert.deepStrictEqual(descriptor.args, ["run", "./cmd/tesl-dap"]);
     assert.strictEqual(descriptor.options.cwd, path.join(repoRoot, "runtime", "go"));
     assert.strictEqual(descriptor.options.env.TESL_REPO_ROOT, repoRoot);
-    assert.strictEqual(descriptor.options.env.TESL_POSTGRES_HOST, "127.0.0.1");
-    assert.strictEqual(descriptor.options.env.TESL_POSTGRES_PORT, "55432");
-    assert.strictEqual(descriptor.options.env.TESL_POSTGRES_USER, "tesl");
+    assert.strictEqual(descriptor.options.env.TESL_POSTGRES_HOST, nixAvailable ? "127.0.0.1" : environment.TESL_POSTGRES_HOST);
+    assert.strictEqual(descriptor.options.env.TESL_POSTGRES_PORT, nixAvailable ? "55432" : environment.TESL_POSTGRES_PORT);
+    assert.strictEqual(descriptor.options.env.TESL_POSTGRES_USER, nixAvailable ? "tesl" : environment.TESL_POSTGRES_USER);
     assert.strictEqual(
       descriptor.options.env.TESL_COMPILER,
-      path.join(repoRoot, "compiler", "_build", "default", "bin", "main.exe")
+      compiler
     );
+    assert.strictEqual(nixCalls.length, 1);
+    assert.strictEqual(nixCalls[0].command, "nix-shell");
+    assert.strictEqual(nixCalls[0].args[0], path.join(repoRoot, "shell.nix"));
+    assert.strictEqual(nixCalls[0].args[1], "--run");
+    assert.strictEqual(nixCalls[0].options.cwd, repoRoot);
+    assert.strictEqual(nixCalls[0].options.env.TESL_SKIP_AUTO_BUILD, "1");
   } finally {
-    fixture.cleanup();
+    for (const [key, value] of Object.entries(previousEnvironment)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    fs.rmSync(directory, { recursive: true, force: true });
   }
 }
 

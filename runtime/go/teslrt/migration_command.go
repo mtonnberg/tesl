@@ -138,7 +138,7 @@ func pgRunSchemaCommandContext(serviceContext context.Context, command pgSchemaC
 	if command.verb == "install" {
 		if roles.Request != "" {
 			if command.worker != roles.Worker || command.request != roles.Request {
-				return fmt.Errorf("Worker topology installation requires --worker %q --request %q matching the compiled database configuration", roles.Worker, roles.Request)
+				return fmt.Errorf("worker topology installation requires --worker %q --request %q matching the compiled database configuration", roles.Worker, roles.Request)
 			}
 		} else {
 			if command.request != "" {
