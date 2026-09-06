@@ -17,6 +17,15 @@ let total_bytes = ref 0
 let max_file_bytes = 4 * 1024 * 1024
 let max_total_bytes = 32 * 1024 * 1024
 
+(* Read raw bytes for reliable size checks, then give every platform the same
+   embedded text even when Git checked documentation out with CRLF endings. *)
+let normalize_newlines content =
+  let out = Buffer.create (String.length content) in
+  String.iteri (fun i c ->
+    if c <> '\r' || i + 1 = String.length content || content.[i + 1] <> '\n' then
+      Buffer.add_char out c) content;
+  Buffer.contents out
+
 let require_path kind path =
   let info = Unix.lstat path in
   if info.Unix.st_kind <> kind then
@@ -43,7 +52,7 @@ let emit oc key path =
     let grew = try ignore (input_char ic); true with End_of_file -> false in
     if grew then failwith ("gen_docs: documentation grew during read: " ^ path);
     total_bytes := !total_bytes + String.length content;
-    Printf.fprintf oc "  (%S,\n   %S);\n\n" key content)
+    Printf.fprintf oc "  (%S,\n   %S);\n\n" key (normalize_newlines content))
 
 
 (* The LSP writes transient validation copies named `tesl-lsp-<n>.tesl` into the

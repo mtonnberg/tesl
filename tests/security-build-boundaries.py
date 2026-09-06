@@ -24,6 +24,11 @@ def docs():
         baseline = [run(cmd, REPO) for cmd in commands]
         assert all(p.returncode == 0 for p in baseline), baseline
         assert baseline[0].stdout == baseline[1].stdout
+        for name in ['README.md', 'LANGUAGE-SPEC.md', 'INSTALL.md']:
+            (root / name).write_bytes(b'public documentation\r\n')
+        for cmd in commands:
+            result = run(cmd, REPO)
+            assert result.returncode == 0 and result.stdout == baseline[0].stdout, result
         secret = Path(temp) / 'secret'
         secret.write_text('HOST_SECRET_MUST_NOT_BE_EMBEDDED')
         target = root / 'example/learn/leak.md'
