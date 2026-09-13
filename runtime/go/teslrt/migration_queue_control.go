@@ -313,3 +313,7 @@ func pgUpgradeQueueCandidate(ctx context.Context, conn *pgx.Conn, h PgCompiledMi
 	}
 	return result, nil
 }
+
+func (c *pgQueueCandidatePreparation) inspect(ctx context.Context, tx pgx.Tx, namespace string, roles PgMigrationControlRoles) (PgMigrationControlState, error) {
+	return pgInspectQueueCandidate(ctx, tx, namespace, roles)
+}

@@ -22,6 +22,32 @@ let roots (m : module_form) = List.filter_map (function
         | _ -> None)
      | _ -> None)
   | _ -> None) m.decls
+(* Cost diagnostics use the checked current transform and exact entity ownership,
+   never a similarly spelled table or an unverified Migration syntax entry. *)
+let query_costs modules (transform : Migration_transform.t) =
+  let rows=Migration_transform.rows transform in
+  List.concat_map (fun (m:module_form) ->
+    let diagnostics=ref [] in
+    List.iter (Ast_visitor.iter (function
+      | ESqlQuery {query=QueryUpdate update;loc} ->
+        (match Validation_common.resolve_project_entity modules m update.entity with
+        | [identity] ->
+          (match List.find_opt (fun (row:Migration_transform.row) -> row.mapping.current.entity_name=identity) rows with
+          | None -> ()
+          | Some row ->
+            let key=row.mapping.current.primary_key in
+            let keyed=List.exists (function SqlPred {field;op=BEq;_} -> field=key | _ -> false) update.clauses in
+            if not keyed then begin
+              let errors=[{Migration_sparse.code="MIG031";loc;
+                message="this update fetches every matched row through Go during the migration window; key it by primary key `" ^ key ^ "`, or accept the cost proportional to matched rows";
+                related=[Location.dummy_loc (Migration_transform.root transform).source_file,"migration requiring the row transformation"]}] in
+              diagnostics := List.rev_append
+                (List.map (fun (d:F.diagnostic) -> {d with severity="warning"}) (D.diagnostics_of_errors errors)) !diagnostics
+            end)
+        | _ -> ())
+      | _ -> ())) (F.module_expression_roots m);
+    List.rev !diagnostics) modules
+
 let make ?(skip_dep_body=fun _ -> false) (entry : module_form) =
   let explicit = lazy (
     let graph = F.build_local_import_graph ~entry entry.source_file in
@@ -59,7 +85,18 @@ let make ?(skip_dep_body=fun _ -> false) (entry : module_form) =
               else failure "MIG028" (Location.dummy_loc edge.path)
                 "this queue-bearing application has legacy history with an unknown payload inventory; a later empty snapshot cannot establish absence in earlier deployed revisions" []
             | _ -> []) edges in
-        queue_diags @ queue_history_diags @ missing @ List.concat_map (fun (edge : H.migration_source) ->
+        let costs=match H.current_migration history with
+          | None -> []
+          | Some edge -> (match Parser.parse_module edge.path edge.contents with
+            | Err _ -> []
+            | Ok migration -> (match D.check ~compiler_abi:comparison_abi ~source:edge.contents migration with
+              | Ok (Some declaration) -> Option.fold ~none:[] ~some:(query_costs modules) (D.transforms declaration)
+              | _ -> [])) in
+        let contract_diags=List.concat_map(fun (contract:H.migration_source) ->
+          match Parser.parse_module contract.path contract.contents with
+          | Err e -> [F.diag_of_parse_error e]
+          | Ok m -> Migration_contract.diagnostics contract.contents m) (H.contracts history) in
+        costs @ queue_diags @ queue_history_diags @ contract_diags @ missing @ List.concat_map (fun (edge : H.migration_source) ->
           let seals = match Header.read ~file:edge.path edge.contents with
             | Error errors -> D.diagnostics_of_errors errors
             | Ok None -> failure "MIG013" (Location.dummy_loc edge.path)
@@ -71,7 +108,10 @@ let make ?(skip_dep_body=fun _ -> false) (entry : module_form) =
             match Parser.parse_module edge.path edge.contents with
             | Err error -> seals @ [F.diag_of_parse_error error]
             | Ok migration ->
-              seals @ F.check_module ~additional:check_declaration ~skip_dep_body:skip edge.contents migration
+              seals @ (match D.with_source_context ~source:edge.contents migration (fun () ->
+                F.check_module ~additional:check_declaration ~skip_dep_body:skip edge.contents migration) with
+                | Ok diagnostics -> diagnostics
+                | Error errors -> D.diagnostics_of_errors errors)
           end) edges
     end in
   fun source (m : module_form) ->
@@ -79,5 +119,31 @@ let make ?(skip_dep_body=fun _ -> false) (entry : module_form) =
     let money = !(Units_catalog.money_rate_aliases_active) in
     Fun.protect ~finally:(fun () ->
       Units_catalog.set_active_aliases aliases; Units_catalog.money_rate_aliases_active := money)
-      (fun () -> D.diagnostics source m @
+      (fun () -> D.diagnostics source m @ Migration_contract.diagnostics source m @
         List.concat_map (fun (d,root,family) -> check_history m d root family) (roots m))
+
+(** Explicit migration roots are checking dependencies of their importers too.
+    Each helper receives only its unique root's context, never a union of grants. *)
+let with_contexts ~source (entry:module_form) run =
+  try
+  let complexity=F.module_complexity_diagnostics entry in
+  if complexity<>[] then Error (List.map (fun (d:F.diagnostic) ->
+    {Migration_sparse.code=d.code;loc=Location.dummy_loc d.file;message=d.message;related=[]}) complexity)
+  else
+    let graph=F.build_local_import_graph ~entry entry.source_file in
+    let modules=(entry,source)::(Hashtbl.fold (fun path _ rest ->
+      if path=F.canonical_import_path entry.source_file then rest else
+      match F.parse_module_file path with None -> rest | Some m -> (m,Source_input.read path)::rest) graph []) in
+    let rec prepare acc = function
+      | [] -> D.with_prepared_list (List.rev acc) run
+      | (m,source)::rest ->
+        (match Migration_proof_context.without_context (fun () -> D.prepare ~compiler_abi:comparison_abi ~source m) with
+        | Error errors -> Error errors
+        | Ok None -> prepare acc rest
+        | Ok (Some p) -> prepare (p::acc) rest) in
+    prepare [] modules
+
+  with Sys_error message | Invalid_argument message -> Error [{Migration_sparse.code="MIG013";
+    loc=Location.dummy_loc entry.source_file;message;related=[]}]
+    | Unix.Unix_error (error,operation,file) -> Error [{Migration_sparse.code="MIG013";
+      loc=Location.dummy_loc file;message=operation ^ ": " ^ Unix.error_message error;related=[]}]

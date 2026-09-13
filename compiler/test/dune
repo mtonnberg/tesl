@@ -548,3 +548,65 @@
  (name test_migration_checked_graph)
  (modules test_migration_checked_graph)
  (libraries tesl_compiler_lib alcotest unix str))
+
+(test
+ (name test_migration_transform_link)
+ (modules test_migration_transform_link)
+ (libraries tesl_compiler_lib alcotest unix str))
+
+(test
+ (name test_migration_row_companion)
+ (modules test_migration_row_companion)
+ (libraries tesl_compiler_lib alcotest str unix))
+
+(test
+ (name test_migration_retained_storage)
+ (modules test_migration_retained_storage)
+ (libraries tesl_compiler_lib alcotest str unix))
+
+(test
+ (name test_migration_row_storage)
+ (modules test_migration_row_storage)
+ (libraries tesl_compiler_lib alcotest unix str yojson))
+
+(test
+ (name test_migration_behavior_multi)
+ (modules test_migration_behavior_multi)
+ (libraries tesl_compiler_lib alcotest str unix))
+
+(test
+ (name test_migration_row_forward)
+ (modules test_migration_row_forward)
+ (deps (source_tree fixtures/row-forward))
+ (libraries tesl_compiler_lib alcotest unix str))
+
+(test
+ (name test_migration_retype)
+ (modules test_migration_retype)
+ (libraries tesl_compiler_lib alcotest unix str yojson))
+
+(test
+ (name test_field_parser_errors)
+ (modules test_field_parser_errors)
+ (libraries tesl_compiler_lib alcotest))
+
+(test
+ (name test_migration_row_access)
+ (modules test_migration_row_access)
+ (libraries tesl_compiler_lib alcotest unix str))
+
+(test
+ (name test_migration_row_retype_physical)
+ (modules test_migration_row_retype_physical)
+ (libraries tesl_compiler_lib alcotest unix str))
+
+(test
+ (name test_migration_contract)
+ (modules test_migration_contract)
+ (libraries tesl_compiler_lib alcotest unix str))
+
+(test
+ (name test_migration_row_contract_abi)
+ (modules test_migration_row_contract_abi)
+ (deps test_migration_row_access.exe)
+ (libraries tesl_compiler_lib alcotest unix yojson))

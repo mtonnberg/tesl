@@ -371,6 +371,7 @@
         "interleave_test.go#TestScheduleMisuseFailsLoudly",
         "interleave_test.go#TestScheduleSelectsActorAndOccurrence",
         "interleave_test.go#TestScheduleTimeoutIncludesTraceAndDatabaseDump",
+        "postgres_required_test.go#TestCompiledLessonsRequireConfiguredPostgres",
         "process_test.go#TestProcessControllerPausesOnlyNamedArrival",
         "process_test.go#TestProcessControllerRefusesUnknownProtocol"
       ]
@@ -1476,6 +1477,7 @@
         "interleave_test.go#TestScheduleMisuseFailsLoudly",
         "interleave_test.go#TestScheduleSelectsActorAndOccurrence",
         "interleave_test.go#TestScheduleTimeoutIncludesTraceAndDatabaseDump",
+        "postgres_required_test.go#TestCompiledLessonsRequireConfiguredPostgres",
         "process_test.go#TestProcessControllerPausesOnlyNamedArrival",
         "process_test.go#TestProcessControllerRefusesUnknownProtocol"
       ]
@@ -2045,7 +2047,7 @@
     {
       "name": "TestControlUpgradeFixtureRefusesTampering",
       "file": "control_upgrade_app_test.go",
-      "line": 677,
+      "line": 699,
       "layer": "harness",
       "invariants": [
         "INV-FIXTURE-PROVENANCE"
@@ -2727,6 +2729,19 @@
       "named_failpoints": null
     },
     {
+      "name": "TestCompiledLessonsRequireConfiguredPostgres",
+      "file": "postgres_required_test.go",
+      "line": 15,
+      "layer": "harness",
+      "invariants": [
+        "INV-HARNESS"
+      ],
+      "transitions": [
+        "TR-SCHEDULE"
+      ],
+      "named_failpoints": null
+    },
+    {
       "name": "TestPostgresMajorGateChecksTheActualServer",
       "file": "postgres_test.go",
       "line": 127,
@@ -3064,7 +3079,7 @@
     {
       "name": "TestCompiledStorageUsesOwnedTypeBaseAndBuiltinBounds",
       "file": "storage_blackbox_test.go",
-      "line": 21,
+      "line": 22,
       "layer": "compiled-postgres",
       "invariants": [
         "INV-CATALOG-EVIDENCE"

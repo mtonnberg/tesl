@@ -40,6 +40,8 @@ val current : t -> schema
 val frozen : t -> schema list
 val completed_migrations : t -> migration_source list
 val current_migration : t -> migration_source option
+(** Optional reviewed contracts are complete discovery inputs, including their directory membership. *)
+val contracts : t -> migration_source list
 
 (** All source-byte preconditions, including private schema dependencies and
     migration modules. The caller must additionally guard file creations and

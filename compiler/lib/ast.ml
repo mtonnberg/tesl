@@ -58,6 +58,7 @@ type field_def = {
   type_expr : type_expr;
   proof_ann : proof_expr option;
   db_type   : string option;   (** @db(type) override *)
+  db_column : string option;   (** Compiler-owned @column("field__vN") storage identity. *)
   loc       : loc;
 }
 

@@ -349,7 +349,7 @@ func TestQueueOperationsNotificationCommitsWithEnqueue(t *testing.T) {
 	ctx, cancel = context.WithTimeout(f.ctx, time.Second)
 	defer cancel()
 	notification, err := f.worker.WaitForNotification(ctx)
-	if err != nil || notification.Channel != queueNotifyChannel || notification.Payload != "Notifications" {
+	if err != nil || notification == nil || notification.Channel != queueNotifyChannel || notification.Payload != "Notifications" {
 		t.Fatalf("notification %v: %v", notification, err)
 	}
 	if got := f.snapshot(t); strings.Contains(got, "rolled-back") {

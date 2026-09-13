@@ -156,6 +156,7 @@ func PreflightApplicationDatabases(databases ...*Database) error {
 type pgApplicationPreflight struct {
 	databases []*Database
 	codecs    []*pgQueueBackend
+	rows      []*pgRowRegistration
 }
 
 func pgPrepareApplicationDatabases(databases []*Database) (pgApplicationPreflight, error) {
@@ -183,6 +184,11 @@ func pgPrepareApplicationDatabases(databases []*Database) (pgApplicationPrefligh
 		if err != nil {
 			return pgApplicationPreflight{}, fmt.Errorf("database %q: %w", database.Name, err)
 		}
+		rows, err := pgCheckApplicationRowTransforms(database, history)
+		if err != nil {
+			return pgApplicationPreflight{}, fmt.Errorf("database %q: %w", database.Name, err)
+		}
+		pending.rows = append(pending.rows, rows...)
 		pending.databases = append(pending.databases, database)
 		pending.codecs = append(pending.codecs, checked...)
 	}
@@ -192,6 +198,9 @@ func pgPrepareApplicationDatabases(databases []*Database) (pgApplicationPrefligh
 func (pending pgApplicationPreflight) closeRegistrations() {
 	// Every writer is excluded until all closures have been published. No failed
 	// target can leave an earlier database or codec registry partially sealed.
+	for _, row := range pending.rows {
+		row.sealed = true
+	}
 	for _, backend := range pending.codecs {
 		backend.codecsMutex.Lock()
 		backend.queueCodecsClosed = true

@@ -8,12 +8,83 @@ non-normative. An unchecked row is not delivered.
 
 ## Current assessment and implementation order
 
-Reassessment, 2026-09-06: the feature is not near completion. Additive PostgreSQL
+Reassessment, 2026-09-12: the feature is not near completion. Additive PostgreSQL
 evolution and supported compiler upgrades are demonstrated with retained
 rows and unchanged application code in lesson 83. Compiler, source-edit and model
 tests are supporting evidence; they do not implement transforming migrations.
 Independent architecture and editor reviews confirmed that the next work must
 prioritize executable application scenarios over further editor machinery.
+
+As of 2026-09-13, the internal checked compiler route runs unchanged V1/V2
+application handlers through typed lazy conversion, dual writes and bounded
+multi-row updates on PostgreSQL. The cursor and MIG031 cost warning have two
+completed reviews; the integrated full compiler build and four application test
+groups pass (37.959s). This remains a private implementation route. Backfill,
+finality, live contraction and the next transforming revision are the current
+acceptance target. The public feature and the requested transforming todo
+showcase and lessons are not yet delivered. Their completion requires actual
+application traces through the full lifecycle, then the full gates and another
+review; additive example runs do not substitute for that evidence.
+
+Physical Retype and WriteBack are also integrated after two independent reviews.
+The real application tests use distinct record JSON keys and ADT constructors,
+including constructors without fields, while V1 and V2 handlers remain unchanged.
+The shared PostgreSQL runs pass both Retype scenarios (86.241s), all four cursor
+access groups (46.589s), and seventeen retained-layout groups. Runtime race checks
+and lint pass. A deliberately wrong reverse codec fails the expected old-column
+read, and freshly hashed substitutions fail the physical source binder. A common
+test-output helper was moved outside a build tag after the combined suites caught
+a native test compilation dependency. Pure settled descriptions and explicit
+prior-Contract prerequisites are source-bound metadata; they do not grant DDL or
+establish runtime finality. Live contraction remains the next acceptance target.
+
+Checked Contract source and its guarded CLI generator are integrated with the
+private atomic runtime registry after a second review. The compiler derives a
+global preparation prefix that relaxes obsolete required columns before settled
+inserts, followed by the exact reviewed cleanup. Current Contract edits invalidate
+captured source; starting another revision freezes the companion's presence and
+raw dependencies. The shared native Contract suite passes eighteen groups
+(27.700s), including source-absent generated binaries and freshly rehashed missing
+operations. Native CLI/source-edit race checks and both documentation gates pass.
+These results establish source authority and binding, not worker execution. The
+first full runtime trace now passes in the isolated lifecycle/settled union: actual
+worker backfill, a late V1 write, finality and same-process V2 reads and writes
+before and after removal. Its five access groups pass (66.406s). A separate
+record/ADT JSONB union passes both lazy/dual-write and full Contract scenarios
+(63.997s), including durable final-pass conversion and retired V1 HTTP 503. These
+were isolated application results. The lifecycle, settled access and JSONB
+Contract regressions are now integrated after independent reviews. The shared
+compiler build, runtime row race checks (1.740s), tagged lint and nil analysis pass;
+the fresh combined PostgreSQL application gate is running. Public activation and
+the next transforming revision remain separate requirements.
+
+The private lifecycle evidence includes actual lease renewal across a final pass,
+a healthy competing Worker, internal claim/CAS serialization retries and backend
+termination before and after atomic row/ABI/cursor publication. Distinct compiler
+A/B applications pass four completed-history and first-write/retirement races
+(72.738s compiler group, 20.727s native Go race run). A second review found normal
+batch completion could cancel a pending renewal and close a reusable connection;
+it now drains that bounded query. The same review found complete deletion of a
+retired version's shard inventory could evade an observed-row count; the reader
+now requires that version's complete inventory even when no rows remain. Both
+actual application regressions pass (15.870s), and removing either correction
+fails its precise regression. A later supplemental run timed out during batch
+commit and subsequent fixture setup under host contention; its cause was not
+captured, so it is not counted as a passing rerun. The shared combined gate is the
+current verification target.
+
+Staged NOT NULL validation is the next contraction gate. The compiler derives
+four internal operations from the existing one-field selector. This compiler and
+private registry union is integrated after independent reviews: the shared full
+compiler build and all 22 source-absent Contract groups pass (56.471s), runtime
+race checks pass (1.138s), and lint and both documentation gates pass. Three
+guard-removal mutants fail. A separate PostgreSQL 16–18 mechanism witness verifies concurrent
+updates during validation and scan-free final tightening. Neither result alone
+establishes the full staged application lifecycle. The separately frozen
+runtime union passes six actual application groups (93.656s), including all four
+DDL crash stages and three batch commit stages; eight catalog identity and proof
+validity cases pass. The runtime is now integrated, with its fresh combined
+application gate still pending before public activation.
 
 The compiler-upgrade design gate passed under stored-value contract
 revision 4: actual A/B/C executables retain data, a different compiler ABI may
@@ -74,7 +145,12 @@ returning branch preserves the same outer subject; an always-failing value has
 no returning continuation. It preserves `forgetFact` removal and rejects unrelated
 branch-local subjects. The old spelling-only alias negative now has paired valid
 alias and wrong-subject tests. The 233-case focused gate, including actual Go
-execution and all emission cases, passes; the repeated full union gate is pending.
+execution and all emission cases, passes. The resumed baseline compiler gate
+reported 10,815 passing cases and two native Go compilation timeouts with a cold
+cache; both affected suites pass on rerun after warming the runtime build. No
+other baseline failure was reported. The Same/linker union passed all
+10,879 reported cases across 236 successful suite reports, with the exhaustive
+proof suite enabled and no failure lines.
 An additional regression preserves proof returns from nullary `()` calls.
 Contract-4 databases are not relabeled or silently trusted. The earlier
 retained-database results remain historical evidence. Fresh revision-5 compiler
@@ -99,7 +175,110 @@ The checked-graph extraction shares complete source/type capture between schema
 inventories and the forthcoming transform linker, preserving the exact previous
 inventory digest. Its 90-group compiler union passes, including explicit role
 re-lowering, private proof/codec closure, unsaved imports and early complexity
-refusal. Migration proof context binding and callback linking remain pending.
+refusal. The checked proof context and semantic linker are now integrated.
+`Same` transports primitive self-subject field proofs only at verified final-row
+Copy/Rename projections. Prepared evidence remains distinct from checked
+descriptors; complete source/import-owner guards cover both transforming and
+additive-only roots. Independent review caught and fixed intermediate-constructor
+proof credit, conflicting import owners and stale additive preparation. The
+97-group source gate passes, including source-deleted native execution and two
+sealed adjacent history edges in an application.
+
+The semantic linker retains its exact checked source descriptor, complete
+old/new type and callback/fixture closures, verified Same identities and compiler
+ABI. Its 109-group union passes, including source/ABI drift, explicit From/To
+roles, private codec/proof dependencies and context isolation. Both patches have
+two completed source reviews. Their shared integration gate passes, as do the manual
+and documentation-integrity checks. Actual retained-PostgreSQL compiler upgrade,
+nine-release todo rollout and separate-worker lesson tests also pass (184.392s
+combined). These application runs still exercise additive/index migrations;
+they are not evidence of a working transforming executor.
+
+The compiler-generated row callback companion is now integrated. Complete source
+history assigns generations per entity and binds exact checked old/new types,
+private helpers and codecs to concrete typed callbacks. The 142-group focused
+compiler union passes, including actual Tesl Row/Reject execution after deleting
+source and loose metadata, proof-bearing Same helpers, multiple databases, and a
+full App that refuses unsupported startup before telemetry or network effects.
+Runtime registration/preflight race tests and lint pass. Three deliberate guard
+removals are caught by nine isolated regression witnesses, and canonical framing
+passes a 42,044-execution fuzz campaign. Compiler, runtime and the fuzz/CI follow-up
+have two completed reviews. The larger shared compiler gate passes all 10,902
+reported cases across 237 successful suite reports with exhaustive proofs enabled.
+The separate PostgreSQL migration gate found three fixture failures: mixed output
+streams, missing traceability metadata, and a process deadline shorter than the
+server drain interval. These are corrected. A subsequent rollout failure recorded
+an 8.5-second PostgreSQL COMMIT exceeding the test's three-second HTTP deadline;
+the request deadline is now fifteen seconds while separate ten-second per-node
+progress checks remain unchanged. Failure diagnostics sample actual PostgreSQL
+waits and blockers through a separate bounded connection. The disposable-cluster
+nine-release rollout passes (148.107s), as do the separate-worker lesson (28.794s),
+native storage/required-PostgreSQL cases (11.633s), and traceability gate (19.254s).
+The integrated baseline/storage/retained-plan compiler gate passes with exhaustive
+proofs enabled: 10,870 reported cases across 232 successful suite reports, with no
+failure lines. Some unchanged Dune targets were cached; this is a reported run
+count, not a count of the repository's test inventory. The disposable PostgreSQL
+application/harness lane also passes (490.495s). Its next lane exposed an obsolete
+Embedded queue fixture: the production refusal is correct, and the fixture now
+asserts that refusal without expecting unsupported claims. The corrected admission
+suite passes with race detection (19.334s); removing the refusal kills both new
+negative witnesses. Independent review is complete.
+
+The complete production control lane passes all 103 top-level groups (254.469s)
+within its unchanged 300-second watchdog. A concurrent diagnostic run had exhausted
+the aggregate budget; the repository runs these lanes sequentially. The baseline
+lane also passes (147.983s). The index retry fixture now pauses at the existing
+build-tagged boundary mechanism after the first durable release, verifies that
+attempt's exact error and cleanup, repairs the data, and resumes the same worker
+for attempt two. Its focused PostgreSQL race tests pass (11.772s) and two source
+reviews are complete. The complete fixed index lane passes sequentially on an
+isolated PostgreSQL cluster (96.248s), under the unchanged 300-second watchdog.
+These results do not claim a complete mandatory-script pass.
+The reviewed NilAway corrections reduce the full-module baseline from 31 diagnostic
+headers to zero, with runtime/CLI race and mutation evidence.
+
+The bounded V1-to-V2 physical/runtime foundation is now integrated after two
+source reviews. Its compiler-generated canonical physical history binds complete
+source owners, retained columns, exact index lineage and checked callback behavior.
+Build ABI remains a separate execution constraint. Source-only parsing grants no
+execution authority. Compiler mutation tests cover callback/helper/proof/codec/
+fixture/Same changes, and a separate two-entity test verifies that changing either
+callback invalidates both windows' shared behavior identity. Rehashed column/alias/
+index mutations and partial multi-database registration are rejected.
+
+The mandatory native suite now builds V1 before V2 and an independent compatible
+compiler B, using actual generated runtime files and untouched generated manifests.
+It passes on PostgreSQL with race detection (91.710s total, 56.543s native lane),
+covering worker expansion, retained-writer invalidation, typed lazy reads and writes,
+actual Tesl Reject, nine crash prefixes, preopened A/B pools, and concurrent
+read-then-write transactions. Reads do not latch an ABI. The first materializing
+write records it in the same transaction; even a caller that ignores a subsequent
+error cannot commit unlatchable data. A completed V1 worker reconnects after V2
+without replaying its old intent. Four narrow guard removals fail their intended
+regressions. Baseline/trigger race tests also pass (89.809s), and NilAway reports no
+findings. Standalone unused-code lint remains pending the application access layer.
+
+This internal foundation explicitly supports only the first V1-to-V2 window. Its
+protected format must be generalized before a public multi-migration release;
+backfill/finality, contraction, physical Retype and queue execution remain unfinished.
+The separate query integration has passed an initial actual Main/HTTP scenario
+with unchanged handlers, but is still under review with expanded regression tests.
+These results do not mark the complete transforming feature or documentation done.
+
+Typed Retype and WriteBack source support is also integrated. A checked reverse
+constructor retains the old nominal record type and its proof obligations; JSONB
+records/ADTs and optional SQL NULL values exercise actual PostgreSQL codecs. The
+runtime checks a one-to-one correspondence between every declared reverse field
+and its checked semantic closure. This is compiler/codec support; physical Retype
+execution remains a separate requirement. Malformed field types, annotations and
+proofs now report an error instead of silently discarding a field or its proof.
+The complete shared compiler build passes, including all AST consumers.
+
+The mandatory PostgreSQL workflow and local migration script explicitly run the
+source/target storage, Retype and actual generated forward-runtime suites. They
+inherit the required-database setting, so these checks cannot silently skip SQL.
+The gate correction has an independent source review. The full application access
+layer must join the same mandatory lane when its review is complete.
 
 The source prerequisite for queues is integrated: pure `queueSchema` declarations,
 complete payload/proof/codec closure, immutable family-relative identities,
@@ -222,11 +401,11 @@ and both reviews. The normative phase prerequisites remain in force.
 
 | Scenario | Current evidence / remaining work |
 |---|---|
-| Existing database survives a supported compiler upgrade | Current revision-4 A/B/C retained-database and pending-worker recovery scenario passes |
+| Existing database survives a supported compiler upgrade | Revision-5 A/B/C retained-database and pending-worker recovery passes; isolated completed-transform A/B app and first-write race regressions also pass |
 | Adopt/deploy the notes app; add fields and indexes | Additive/Worker lessons and the nine-release todo rolling/index gate pass; adoption remains |
-| Transform an entity while old/new apps keep serving | Planner/typing groundwork exists; compatibility, backfill and epoch closure remain |
-| Reject a row, repair it, retire old code and contract | Model coverage exists; production lifecycle remains |
-| Evolve a stored record/ADT without changing the HTTP API | Codec/storage traces exist; unified history, rewrite and pruning remain |
+| Transform an entity while old/new apps keep serving | Integrated lazy conversion, dual writes and cursor updates pass; isolated worker/finality/Contract traces pass; staged cleanup integration and the next transforming revision remain |
+| Reject a row, repair it, retire old code and contract | Actual row Reject rolls back whole updates; isolated worker/Contract crash recovery passes; quarantine, repair and full lifecycle integration remain |
+| Evolve a stored record/ADT without changing the HTTP API | Actual unchanged-app record/ADT lazy, dual-codec and isolated worker/Contract traces pass; nominal primary-key transport, public history and pruning remain |
 | Carry delayed, dead and in-flight jobs through a roll | Checked source/codec inventories and unpublished protected storage pass; claim integration, payload executor and effects remain |
 | Stage and promote uniqueness under concurrent writes | Production reservation, reconciliation and promotion remain |
 | Restore an old database, catch up, migrate offline and prune | Production orchestration and durable completion evidence remain |

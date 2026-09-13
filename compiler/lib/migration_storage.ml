@@ -9,10 +9,11 @@ let scalar_name = function
 type column = {field:I.stored_field;name:string;scalar:scalar;nullable:bool;primary_key:bool}
 type index = {name:string;columns:string list;unique:bool}
 type table = {entity:I.stored_entity;name:string;columns:column list;indexes:index list}
-type t = {inventory:I.t;tables:table list;digest:string}
+type t = {inventory:I.t;tables:table list;digest:string;node:node}
 let inventory t = t.inventory
 let tables t = t.tables
 let digest t = t.digest
+let node t = t.node
 exception Invalid of S.error
 let reject loc message = raise (Invalid {S.code="MIG016";loc;message;related=[]})
 let identifier loc name =
@@ -95,8 +96,10 @@ let table inventory entity =
   let scalar = override field.loc scalar ~bounded32 shape.db_type in
   let primary_key = field.name=entity.primary_key in
   if nullable && primary_key then reject field.loc "a PostgreSQL primary key cannot be nullable";
-  Some {field;name=identifier field.loc (Validation_common.sql_column_name field.name);scalar;nullable;primary_key})
+  Some {field;name=identifier field.loc (Option.value shape.db_column ~default:(Validation_common.sql_column_name field.name));scalar;nullable;primary_key})
   |> List.sort (fun (a : column) b -> String.compare a.name b.name) in
+ let seen=Hashtbl.create 8 in
+ List.iter (fun (c:column) -> if Hashtbl.mem seen c.name then reject c.field.loc "duplicate physical column identity" else Hashtbl.add seen c.name ()) columns;
  let field_name field = match List.find_opt (fun c -> c.field.name=field) columns with
   | Some c -> c.name | None -> reject entity.entity_loc "index references an unknown storage field" in
  let indexes = match I.entity_indexes inventory ~entity:entity.entity_name with
@@ -126,7 +129,7 @@ let describe inventory =
   let scalar (c : column) = Seq [Bytes c.name;Bytes (scalar_name c.scalar);bool c.nullable;bool c.primary_key] in
   let index (i : index) = Seq [Bytes i.name;Seq (List.map bytes i.columns);bool i.unique] in
   let storage t = Seq [Bytes t.name;Seq (List.map scalar t.columns);Seq (List.map index t.indexes)] in
-  let digest = Migration_canonical.digest Migration
-    (Seq [Bytes "postgres-storage-v1";I.snapshot inventory;Seq (List.map storage tables)]) in
-  Ok {inventory;tables;digest}
+  let node = Seq [Bytes "postgres-storage-v1";I.snapshot inventory;Seq (List.map storage tables)] in
+  let digest = Migration_canonical.digest Migration node in
+  Ok {inventory;tables;digest;node}
  with Invalid error -> Error [error]

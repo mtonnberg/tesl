@@ -76,3 +76,18 @@ func TestSourcePreviewRejectsUnsupportedJudgment(t *testing.T) {
 		})
 	}
 }
+
+func TestContractSourcePreviewUsesExistingGuards(t *testing.T) {
+	raw := bytes.Replace(previewVector(t), []byte(`"operation":"start"`), []byte(`"operation":"contract"`), 1)
+	preview, err := DecodePreview(raw)
+	if err != nil || preview == nil {
+		t.Fatal(err)
+	}
+	if preview.Operation() != "contract" || preview.Manifest().Digest() == "" {
+		t.Fatal("contract lost exact source guards")
+	}
+	raw = bytes.Replace(raw, []byte(`"manifest":`), []byte(`"untrustedManifest":`), 1)
+	if _, err := DecodePreview(raw); err == nil {
+		t.Fatal("contract bypassed exact envelope")
+	}
+}

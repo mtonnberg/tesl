@@ -18,6 +18,8 @@ type t = {
   frozen : schema list;
   completed_migrations : migration_source list;
   current_migration : migration_source option;
+  contracts : migration_source list;
+  contract_directory : (string * (int * string) list) option;
   source_inputs : (string * string) list;
   revision_directories : (string * (int * string) list) list;
   import_resolutions : (string * string * string) list;
@@ -27,6 +29,7 @@ let current history = history.current
 let frozen history = history.frozen
 let completed_migrations history = history.completed_migrations
 let current_migration history = history.current_migration
+let contracts history = history.contracts
 let source_inputs history = history.source_inputs
 
 exception Invalid of error
@@ -69,6 +72,25 @@ let scan ~optional directory =
   | exception Unix.Unix_error (Unix.ENOENT, _, _) when optional ->
     require_parent (Filename.dirname directory); []
 
+let contract_file_version path name =
+  let suffix = "-contract.tesl" in
+  let lower = String.lowercase_ascii name in
+  if not (Filename.check_suffix lower suffix && String.starts_with ~prefix:"v" lower) then None
+  else
+    let revision=String.sub name 0 (String.length name-String.length suffix) in
+    let digits=String.sub revision 1 (String.length revision-1) in
+    if digits="" || not (String.for_all (fun c -> c>='0' && c<='9') digits) then None
+    else if name<>lower then reject path "contract files must use canonical lowercase v<n>-contract.tesl spelling"
+    else file_version path (revision ^ ".tesl")
+let scan_contracts directory =
+  match Source_input.kind directory with
+  | Unix.S_DIR when Source_input.realpath directory=directory ->
+    Source_input.readdir directory |> Array.to_list |> List.filter_map(fun name ->
+      let path=Filename.concat directory name in
+      Option.map(fun version -> require_regular path;version,path) (contract_file_version path name)) |> List.sort compare
+  | _ -> reject directory "contract history directory is not canonical"
+  | exception Unix.Unix_error(Unix.ENOENT,_,_) -> require_parent(Filename.dirname directory);[]
+
 let protect anchor f =
   try Ok (f ()) with
   | Invalid error -> Error error
@@ -79,6 +101,8 @@ let protect anchor f =
       message=Printf.sprintf "%s: %s: %s" operation path (Unix.error_message error)}
 
 let check_inputs history =
+  Option.iter (fun (directory,entries) -> if scan_contracts directory<>entries then
+    reject ~kind:Changed_source directory "contract directory changed during discovery") history.contract_directory;
   List.iter (fun (path, digest) ->
     require_regular path;
     if Migration_hash.digest (Source_input.read path) <> digest then
@@ -105,6 +129,7 @@ let inspect ~stored_value_compatibility ~include_migrations ~compiler_abi ~proje
     let migration_dir = Filename.dirname (module_path (family ^ ".Migrate.V2")) in
     let snapshots = scan ~optional:false schema_dir in
     let migration_files = scan ~optional:true migration_dir in
+    let contract_files = if include_migrations then scan_contracts migration_dir else [] in
     let current_version = match List.rev snapshots with
       | [] -> 1
       | (2147483646, path) :: _ -> reject path
@@ -207,8 +232,15 @@ let inspect ~stored_value_compatibility ~include_migrations ~compiler_abi ~proje
         | Some source -> Some source
         | None -> let path = module_path (Printf.sprintf "%s.Migrate.V%d" family schema.version) in
           reject ~kind:Missing_source path (Printf.sprintf "missing completed migration V%d" schema.version)) frozen in
+    let contracts=List.map(fun (version,path) ->
+      if version<2 || version>current_version || find version=None then reject path "contract requires its exact existing migration";
+      let name=Printf.sprintf "%s.Migrate.V%dContract" family version in
+      visit_migration name;
+      let _,contents=read_module name in
+      {version;path;contents;source_digest=Migration_hash.digest contents}) contract_files in
     let source_inputs = Hashtbl.to_seq sources |> List.of_seq |> List.sort compare in
-    let history = {current; frozen; completed_migrations; current_migration=find current_version; source_inputs;
+    let history = {current; frozen; completed_migrations; current_migration=find current_version; contracts;
+      contract_directory=(if include_migrations then Some(migration_dir,contract_files) else None); source_inputs;
       import_resolutions=List.sort_uniq compare !import_resolutions;
       revision_directories=[schema_dir, snapshots; migration_dir, migration_files]} in
     check_inputs history;

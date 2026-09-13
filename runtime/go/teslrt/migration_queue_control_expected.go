@@ -93,8 +93,7 @@ func pgExpectedQueueCandidate(e *pgCatalogExpectations, owner, name string) (*pg
 		col("status", "text", true, "")
 		col("attempts", "int4", true, "0")
 		col("next_attempt_at", "timestamptz", true, "clock_timestamp()")
-		col("seq", "int8", true, "")
-		cols[len(cols)-1].identity = true
+		cols = append(cols, pgControlExpectedColumn{"seq", "int8", true, "", true})
 		col("locked_at", "timestamptz", false, "")
 		col("locked_by", "text", false, "")
 		col("claim_token", "text", false, "")

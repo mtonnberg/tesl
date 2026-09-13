@@ -87,6 +87,9 @@ func TestPgMigrationEmbeddedNestedScopesShareServiceAndRetainPool(t *testing.T) 
 			t.Fatalf("nested release stopped outer service: %p %d %v", generation, refs, initial.ctx.Err())
 		}
 	})
+	if pool == nil || pool.embedded == nil {
+		t.Fatal("outer database scope did not retain its pool and service")
+	}
 	if generation, refs := pgEmbeddedTestGeneration(pool.embedded); generation != nil || refs != 0 {
 		t.Fatalf("last scope left an executor owner: %p %d", generation, refs)
 	}
@@ -135,6 +138,9 @@ func TestPgMigrationEmbeddedOverlappingScopesKeepSharedOwnerAlive(t *testing.T) 
 		t.Fatalf("second scope failed: %v", failure)
 	case <-f.ctx.Done():
 		t.Fatal(f.ctx.Err())
+	}
+	if pool == nil || pool.embedded == nil || initial == nil {
+		t.Fatal("outer database scope did not retain its pool and generation")
 	}
 	generation, refs := pgEmbeddedTestGeneration(pool.embedded)
 	if generation != initial || refs != 1 || initial.ctx.Err() != nil {
@@ -340,6 +346,9 @@ func TestPgMigrationEmbeddedReconnectOutageRetriesAndCancellationIsNotSticky(t *
 		t.Fatal(f.ctx.Err())
 	}
 	generation, _ := pgEmbeddedTestGeneration(service)
+	if generation == nil {
+		t.Fatal("retry attempt has no active generation to cancel")
+	}
 	generation.stop()
 	select {
 	case err := <-done:

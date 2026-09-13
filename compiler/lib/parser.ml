@@ -2270,7 +2270,7 @@ and parse_app s =
          (* Parse an argument: use parse_postfix so x.field works as an arg *)
          let argument =
            if peek s = LBRACE && (match fn with
-               | EConstructor {name="Migration";args=[];_} -> true | _ -> false) then
+               | EConstructor {name=("Migration" | "Contract");args=[];_} -> true | _ -> false) then
              let before = s.migration_record_keys in
              Fun.protect ~finally:(fun () -> s.migration_record_keys <- before)
                (fun () -> s.migration_record_keys <- true; parse_postfix s)
@@ -2544,11 +2544,23 @@ and parse_record_literal s =
   skip_layout s;
   let fields = ref [] in
   let continue_ = ref true in
+  let field_error = ref None in
+  let failed error = field_error := Some error; continue_ := false in
+  let missing message = match err s message with Err error -> failed error | Ok _ -> assert false in
   while !continue_ && peek s <> RBRACE && peek s <> EOF do
     skip_layout s;
     if peek s = RBRACE then continue_ := false
     else begin
       match peek s with
+      | OF when s.migration_record_keys ->
+        advance s;
+        if peek s <> COLON then missing "expected : after record field" else begin
+          advance s;
+          match parse_expr s with
+          | Ok value -> fields := ("of",value) :: !fields; skip_layout s;
+            (match peek s with COMMA -> advance s; skip_layout s | _ -> ())
+          | Err error -> failed error
+        end
       | UIDENT first when s.migration_record_keys ->
         advance s;
         let name = ref first in
@@ -2556,7 +2568,7 @@ and parse_record_literal s =
           advance s;
           (match peek s with UIDENT part -> advance s; name := !name ^ "." ^ part | _ -> ())
         done;
-        if peek s <> COLON then continue_ := false
+        if peek s <> COLON then missing "expected : after record field"
         else begin
           advance s;
           match parse_expr s with
@@ -2564,7 +2576,7 @@ and parse_record_literal s =
             fields := (!name,value) :: !fields;
             skip_layout s;
             (match peek s with COMMA -> advance s; skip_layout s | _ -> ())
-          | Err _ -> continue_ := false
+          | Err error -> failed error
         end
       | STRING fname | INTERP (fname, _) ->
         (* String key in JSON-style literal: { "fieldName": value } *)
@@ -2578,8 +2590,8 @@ and parse_record_literal s =
             fields := (fname, v) :: !fields;
             skip_layout s;
             (match peek s with COMMA -> advance s; skip_layout s | _ -> ())
-          | Err _ -> continue_ := false
-        end else continue_ := false
+          | Err error -> failed error
+        end else missing "expected : after record field"
       | IDENT _
       (* Allow keyword tokens as record field names (e.g. email, smtp, and the
          config-block field keywords schema/database/backend/api). *)
@@ -2605,12 +2617,13 @@ and parse_record_literal s =
             (match peek s with
              | COMMA -> advance s; skip_layout s
              | _ -> ())
-          | Err e -> continue_ := false; ignore e
+          | Err e -> failed e
         end else
-          continue_ := false
-      | _ -> continue_ := false
+          missing "expected : or = after record field"
+      | _ -> missing "expected record field"
     end
   done;
+  let* () = match !field_error with Some error -> Err error | None -> Ok () in
   skip_layout s;
   let* _ = expect s RBRACE in
   let loc = span loc0 (current_loc s) in
@@ -3412,62 +3425,61 @@ let parse_field_defs_ext ~allow_indexes s =
   let fields = ref [] in
   let indexes = ref [] in
   let continue_ = ref true in
+  let field_error = ref None in
+  let reject e = field_error := Some e; continue_ := false in
+  let rec annotations db_type db_column =
+    if peek s <> AT then return (db_type, db_column) else begin
+      advance s;
+      let* name = expect_ident s in
+      let* _ = expect s LPAREN in
+      match name with
+      | "db" when db_type = None ->
+        let* value = expect_ident s in
+        let* _ = expect s RPAREN in
+        annotations (Some value) db_column
+      | "column" when allow_indexes && db_column = None ->
+        let* value = expect_string s in
+        let* _ = expect s RPAREN in
+        annotations db_type (Some value)
+      | _ -> err s "unknown, duplicate or non-entity storage annotation"
+    end in
+  let field () =
+    let loc0 = current_loc s in
+    let* name = expect_ident s in
+    let* _ = expect s COLON in
+    let* type_expr = parse_type_expr s in
+    let* proof_ann =
+      if peek s = PROOF_ANNOT then begin
+        advance s;
+        let* proof = parse_proof_expr s in
+        return (Some proof)
+      end else return None in
+    let* db_type, db_column = annotations None None in
+    return { name; type_expr; proof_ann; db_type; db_column;
+      loc = span loc0 (current_loc s) } in
   while !continue_ && peek s <> RBRACE && peek s <> EOF do
     skip_layout s;
     if peek s = RBRACE then continue_ := false
-    else if allow_indexes && at_entity_index s then begin
-      match parse_entity_index s with
-      | Ok ix ->
-        indexes := ix :: !indexes;
+    else begin
+      (if allow_indexes && at_entity_index s then
+         match parse_entity_index s with
+         | Ok ix -> indexes := ix :: !indexes
+         | Err e -> reject e
+       else match field () with
+         | Ok field -> fields := field :: !fields
+         | Err e -> reject e);
+      if !continue_ then begin
         skip_layout s;
         if peek s = COMMA then (advance s; skip_layout s)
-      | Err _ -> continue_ := false
-    end
-    else begin
-      let loc0 = current_loc s in
-      match expect_ident s with
-      | Ok fname ->
-        (match expect s COLON with
-         | Ok () ->
-           (match parse_type_expr s with
-            | Ok ty ->
-              (* optional proof annotation *)
-              let proof_ann =
-                if peek s = PROOF_ANNOT then begin
-                  advance s;
-                  match parse_proof_expr s with
-                  | Ok p -> Some p
-                  | Err _ -> None
-                end else None
-              in
-              (* optional @db(type) *)
-              let db_type =
-                if peek s = AT then begin
-                  advance s;
-                  match peek s with
-                  | IDENT "db" ->
-                    advance s;
-                    if peek s = LPAREN then begin
-                      advance s;
-                      match peek s with
-                      | IDENT t -> advance s; if peek s = RPAREN then advance s; Some t
-                      | _ -> None
-                    end else None
-                  | _ -> None
-                end else None
-              in
-              let loc = span loc0 (current_loc s) in
-              fields := { name = fname; type_expr = ty; proof_ann; db_type; loc } :: !fields;
-              skip_layout s;
-              if peek s = COMMA then (advance s; skip_layout s)
-            | Err _ -> continue_ := false)
-         | Err _ -> continue_ := false)
-      | Err _ -> continue_ := false
+      end
     end
   done;
-  skip_layout s;
-  let* _ = expect s RBRACE in
-  return (List.rev !fields, List.rev !indexes)
+  match !field_error with
+  | Some e -> Err e
+  | None ->
+    skip_layout s;
+    let* _ = expect s RBRACE in
+    return (List.rev !fields, List.rev !indexes)
 
 let parse_field_defs s =
   let* (fields, _) = parse_field_defs_ext ~allow_indexes:false s in
@@ -3650,7 +3662,7 @@ and parse_adt_variants_flat s =
                       end else None
                     in
                     let fd = { name = fname; type_expr = ty; proof_ann;
-                               db_type = None; loc = floc } in
+                               db_type = None; db_column = None; loc = floc } in
                     fields := fd :: !fields;
                     if peek s = COMMA then advance s
                   | Err _ -> brace_continue := false)
@@ -3679,7 +3691,7 @@ and parse_adt_variants_flat s =
                 if peek s = RPAREN then begin
                   advance s;
                   let fd = { name = fname; type_expr = ty; proof_ann;
-                             db_type = None; loc = floc } in
+                             db_type = None; db_column = None; loc = floc } in
                   fields := fd :: !fields
                 end else begin
                   s.pos <- saved; continue2 := false
@@ -3701,7 +3713,7 @@ and parse_adt_variants_flat s =
                end else None
              in
              let fd = { name = fname; type_expr = ty; proof_ann;
-                        db_type = None; loc = floc } in
+                        db_type = None; db_column = None; loc = floc } in
              fields := fd :: !fields
            | Err _ -> continue2 := false)
         | PIPE | NEWLINE | INDENT | DEDENT | EOF | RBRACE -> continue2 := false
@@ -3783,7 +3795,7 @@ and parse_adt_variant_line s =
                   end else None
                 in
                 fields := { name = fname; type_expr = ty; proof_ann;
-                            db_type = None; loc = floc } :: !fields;
+                            db_type = None; db_column = None; loc = floc } :: !fields;
                 if peek s = COMMA then advance s
               | Err _ -> brace_continue := false)
            | _ -> brace_continue := false)
@@ -3805,7 +3817,7 @@ and parse_adt_variant_line s =
            end else None
          in
          fields := { name = fname; type_expr = ty; proof_ann;
-                     db_type = None; loc = floc } :: !fields
+                     db_type = None; db_column = None; loc = floc } :: !fields
        | Err _ -> continue_ := false)
     | LPAREN ->
       (* Could be:
@@ -3831,7 +3843,7 @@ and parse_adt_variant_line s =
             if peek s = RPAREN then begin
               advance s;  (* consume ) *)
               fields := { name = fname; type_expr = ty; proof_ann;
-                          db_type = None; loc = floc } :: !fields
+                          db_type = None; db_column = None; loc = floc } :: !fields
             end else begin
               s.pos <- saved;
               (* Fall through to positional *)
@@ -3840,7 +3852,7 @@ and parse_adt_variant_line s =
                  let pos = List.length !fields in
                  let label = if pos = 0 then "value" else Printf.sprintf "value%d" (pos + 1) in
                  fields := { name = label; type_expr = ty2; proof_ann = None;
-                             db_type = None; loc = floc } :: !fields
+                             db_type = None; db_column = None; loc = floc } :: !fields
                | Err _ -> continue_ := false)
             end
           | Err _ ->
@@ -3850,7 +3862,7 @@ and parse_adt_variant_line s =
                let pos = List.length !fields in
                let label = if pos = 0 then "value" else Printf.sprintf "value%d" (pos + 1) in
                fields := { name = label; type_expr = ty; proof_ann = None;
-                           db_type = None; loc = floc } :: !fields
+                           db_type = None; db_column = None; loc = floc } :: !fields
              | Err _ -> continue_ := false))
        | _ ->
          s.pos <- saved;
@@ -3859,7 +3871,7 @@ and parse_adt_variant_line s =
             let pos = List.length !fields in
             let label = if pos = 0 then "value" else Printf.sprintf "value%d" (pos + 1) in
             fields := { name = label; type_expr = ty; proof_ann = None;
-                        db_type = None; loc = floc } :: !fields
+                        db_type = None; db_column = None; loc = floc } :: !fields
           | Err _ -> continue_ := false))
     | UIDENT _ ->
       (* Positional (unlabeled) field: each bare TypeName is ONE field.
@@ -3872,7 +3884,7 @@ and parse_adt_variant_line s =
          let pos = List.length !fields in
          let label = if pos = 0 then "value" else Printf.sprintf "value%d" (pos + 1) in
          fields := { name = label; type_expr = ty; proof_ann = None;
-                     db_type = None; loc = floc } :: !fields
+                     db_type = None; db_column = None; loc = floc } :: !fields
        | Err _ -> continue_ := false)
     | NEWLINE | DEDENT | EOF | PIPE -> continue_ := false
     | _ -> continue_ := false

@@ -146,7 +146,7 @@ func pgInstallMigrationControl(ctx context.Context, conn *pgx.Conn, namespace st
 // prepare is private unpublished control-format work. Production callers always
 // pass nil; an existing installation is only inspected, never prepared as fresh.
 func pgInstallMigrationControlPrepared(ctx context.Context, conn *pgx.Conn, namespace string, roles PgMigrationControlRoles, initialVersion int,
-	verify func(pgx.Tx, PgMigrationControlState) error, candidate *pgQueueCandidatePreparation) (PgMigrationControlState, error) {
+	verify func(pgx.Tx, PgMigrationControlState) error, candidate pgControlPreparation) (PgMigrationControlState, error) {
 	var state PgMigrationControlState
 	if !pgMigrationIdentifier(namespace) || strings.HasPrefix(namespace, "pg_") || initialVersion < 1 || initialVersion > 2147483646 {
 		return state, fmt.Errorf("invalid migration namespace or installation version")
@@ -166,7 +166,7 @@ func pgInstallMigrationControlPrepared(ctx context.Context, conn *pgx.Conn, name
 			}
 			if present {
 				if candidate != nil {
-					state, err = pgInspectQueueCandidate(ctx, tx, namespace, roles)
+					state, err = candidate.inspect(ctx, tx, namespace, roles)
 				} else {
 					state, err = pgInspectControl(ctx, tx, namespace, roles)
 				}
@@ -267,7 +267,7 @@ func pgInstallMigrationControlPrepared(ctx context.Context, conn *pgx.Conn, name
 			if err := candidate.prepareFresh(ctx, tx, state); err != nil {
 				return err
 			}
-			state, err = pgInspectQueueCandidate(ctx, tx, namespace, roles)
+			state, err = candidate.inspect(ctx, tx, namespace, roles)
 			if err != nil {
 				return err
 			}
@@ -326,6 +326,17 @@ func pgInspectControlMode(ctx context.Context, tx pgx.Tx, namespace string, role
 }
 
 func pgInspectControlCandidateMode(ctx context.Context, tx pgx.Tx, namespace string, roles PgMigrationControlRoles, readOnly, queueCandidate bool) (PgMigrationControlState, error) {
+	format := 0
+	if queueCandidate {
+		format = pgQueueCandidateFormat
+	}
+	return pgInspectControlProtocolMode(ctx, tx, namespace, roles, readOnly, format)
+}
+
+func pgInspectControlProtocolMode(ctx context.Context, tx pgx.Tx, namespace string, roles PgMigrationControlRoles, readOnly bool, selectedFormat int) (PgMigrationControlState, error) {
+	queueCandidate := selectedFormat == pgQueueCandidateFormat
+	rowBaseline := selectedFormat == pgRowControlFormat
+
 	var state PgMigrationControlState
 	inspectTable, principal := pgControlTableCatalog, roles.Worker
 	if readOnly {
@@ -352,14 +363,18 @@ func pgInspectControlCandidateMode(ctx context.Context, tx pgx.Tx, namespace str
 	if err := tx.QueryRow(ctx, "select format_version from "+quoteIdentifier(namespace)+".tesl_schema_meta where id=1").Scan(&format); err != nil {
 		return state, fmt.Errorf("migration control format is unavailable: %w", err)
 	}
-	if !pgSupportedMigrationControlFormat(format) && (!queueCandidate || format != pgQueueCandidateFormat) {
+	if !pgSupportedMigrationControlFormat(format) && (!queueCandidate || format != pgQueueCandidateFormat) && (!rowBaseline || format != pgRowControlFormat) {
 		return state, fmt.Errorf("unsupported migration control format %d; this binary supports formats 2 through %d with stored-value compatibility; no automatic upgrade is available", format, pgMigrationControlFormat)
 	}
 	baseFormat := format
-	if queueCandidate && format == pgQueueCandidateFormat {
+	if queueCandidate && format == pgQueueCandidateFormat || rowBaseline && format == pgRowControlFormat {
 		baseFormat = 3
 	}
-	for _, spec := range pgControlTablesForFormat(baseFormat)[1:] {
+	specs := pgControlTablesForFormat(baseFormat)
+	if len(specs) == 0 {
+		return state, fmt.Errorf("unsupported migration control format %d", baseFormat)
+	}
+	for _, spec := range specs[1:] {
 		if err := inspectTable(ctx, tx, namespace, roles.Owner, principal, spec); err != nil {
 			return state, err
 		}
@@ -368,12 +383,19 @@ func pgInspectControlCandidateMode(ctx context.Context, tx pgx.Tx, namespace str
 		if err := pgQueueCandidateCatalog(ctx, tx, namespace, roles); err != nil {
 			return state, err
 		}
+	} else if rowBaseline && format == pgRowControlFormat {
+		if err := pgRowControlCatalog(ctx, tx, namespace, roles); err != nil {
+			return state, err
+		}
 	} else if err := pgControlRelationSet(ctx, tx, namespace, roles.Owner, format); err != nil {
 		return state, err
 	}
 	functions := pgControlFunctionsForFormat(namespace, baseFormat)
 	if queueCandidate && format == pgQueueCandidateFormat {
 		functions = pgQueueCandidateControlFunctions(namespace)
+	}
+	if rowBaseline && format == pgRowControlFormat {
+		functions = pgRowControlFunctions(namespace)
 	}
 	for _, fn := range functions {
 		if err := pgControlFunctionCatalog(ctx, tx, namespace, roles, fn); err != nil {
@@ -403,7 +425,9 @@ func pgInspectControlCandidateMode(ctx context.Context, tx pgx.Tx, namespace str
 		state.InitialVersion < 1 || state.InitialVersion > 2147483646 || state.Current < 0 || state.Current > 2147483646 ||
 		state.MinVersion < 0 || state.MinVersion > state.Current || state.CompatFloor < 0 || state.CompatFloor > state.Current ||
 		(state.Current == 0 && (state.InstallingVersion != state.InitialVersion || state.MinVersion != 0 || state.CompatFloor != 0)) ||
-		(state.Current != 0 && (state.Current < state.InitialVersion || state.MinVersion != state.InitialVersion || state.InstallingVersion != 0 || state.CompatFloor != state.InitialVersion)) {
+		(state.Current != 0 && (state.Current < state.InitialVersion || state.InstallingVersion != 0 ||
+			(!rowBaseline && (state.MinVersion != state.InitialVersion || state.CompatFloor != state.InitialVersion)) ||
+			(rowBaseline && (state.MinVersion < state.InitialVersion || state.CompatFloor < state.InitialVersion || state.CompatFloor > state.MinVersion)))) {
 		return state, fmt.Errorf("migration control state is inconsistent or uses an unsupported format/protocol")
 	}
 	rows, err := tx.Query(ctx, "select version,seq,step,coalesce(snapshot_hash,''),artefact_hash,source_abi,fence_domain,stored_value_compatibility,protocol_level,epoch_preserving from "+ns+"tesl_schema_versions order by version,step,seq")

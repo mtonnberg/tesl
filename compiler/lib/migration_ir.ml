@@ -254,7 +254,9 @@ let lower_declaration ~scopes ~(resolve : resolver) ~typed_nodes ~module_name de
       let previous = !references in
       references := [];
       let node = tag "field" [Bytes f.name; surface_type env f.type_expr;
-        option (proof env) f.proof_ann; option bytes f.db_type] in
+        option (proof env) f.proof_ann; (match f.db_column with
+          | None -> option bytes f.db_type
+          | Some name -> tag "column-storage" [option bytes f.db_type;bytes name])] in
       let field_references = !references in
       references := field_references @ previous;
       if stored then stored_fields := (f.name, {

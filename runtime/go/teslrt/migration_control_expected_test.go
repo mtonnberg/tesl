@@ -175,10 +175,10 @@ func TestPgMigrationControlReadOnlyRejectsUnknownSpecifications(t *testing.T) {
 		{name: "unknown", columns: "id integer"},
 		{name: pgMigrationControlTables[0].name, columns: pgMigrationControlTables[0].columns + ", extra text"},
 	} {
-		if _, err := pgExpectedControlTable(nil, "owner", spec); err == nil || !strings.Contains(err.Error(), "unsupported") {
+		if _, err := pgExpectedControlTable(&pgCatalogExpectations{}, "owner", spec); err == nil || !strings.Contains(err.Error(), "unsupported migration control table specification") {
 			t.Fatalf("unknown closed specification was accepted: %v", err)
 		}
-		if err := pgControlTableCatalogReadOnly(context.Background(), nil, "notes", "owner", "request", spec); err == nil {
+		if err := pgControlTableCatalogReadOnly(context.Background(), pgNoSQLTransaction{}, "notes", "owner", "request", spec); err == nil || !strings.Contains(err.Error(), "unsupported migration control table specification") {
 			t.Fatal("unknown specification reached the database")
 		}
 	}

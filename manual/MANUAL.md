@@ -164,6 +164,7 @@ If you are writing tooling that deep-links into the manual, read that page first
 - **[Language Specification](../LANGUAGE-SPEC.md)** — complete grammar and semantics
 - **[Stable Anchor Scheme](anchors.md)** — anchor IDs for deep-linking
 - **[FAQ](FAQ.md)** — troubleshooting and common questions
+- **[Preparing migration cleanup](migration-contracts.md)** — reviewed Contract source and the order for preparing a rollout
 - **[Deploying a Tesl web API](deploy.md)** — `tesl build`, the Docker image, and database flavours
   (also `tesl help manual deploy`)
 - **[OpenAPI and DAST](openapi-dast.md)** — generate a server-specific OpenAPI 3.1 artifact and

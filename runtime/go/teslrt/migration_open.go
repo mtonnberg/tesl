@@ -175,9 +175,29 @@ func pgVerifyMigrationConnection(ctx context.Context, conn *pgx.Conn, db *Postgr
 		return err
 	}
 	expected := db.migration
-	if uuid != expected.databaseUUID || fence != expected.fenceNamespace || !pgSupportedMigrationControlFormat(format) || domain != "tesl-1" || protocol != 1 ||
+	if uuid != expected.databaseUUID || fence != expected.fenceNamespace || (expected.controlFormat == pgRowControlFormat && format != pgRowControlFormat || expected.controlFormat != pgRowControlFormat && !pgSupportedMigrationControlFormat(format)) || domain != "tesl-1" || protocol != 1 ||
 		currentUser != expected.worker || sessionUser != expected.worker {
 		return fmt.Errorf("migration connection identity, protocol or worker/request login changed")
+	}
+	if expected.controlFormat == pgRowControlFormat {
+		if expected.rowBaseline == nil {
+			return fmt.Errorf("missing immutable row connection baseline")
+		}
+		if err := pgControlSnapshotMode(ctx, conn, pgx.ReadOnly, func(tx pgx.Tx) error {
+			if err := pgControlRoles(ctx, tx, expected.roles, false); err != nil {
+				return err
+			}
+			state, _, err := pgReadRowBaselineState(ctx, tx, expected.rowBaseline, expected.roles, false)
+			if err != nil {
+				return err
+			}
+			if state.Current < expected.version || state.DatabaseUUID != expected.databaseUUID || state.FenceNamespace != expected.fenceNamespace {
+				return fmt.Errorf("row connection baseline identity/readiness changed")
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
 	}
 	if expected.roles.Request != "" {
 		if err := pgControlSnapshotMode(ctx, conn, pgx.ReadOnly, func(tx pgx.Tx) error {

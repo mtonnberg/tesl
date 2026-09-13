@@ -29,3 +29,8 @@ val fingerprint : previous:string -> current:string -> Ast.expr -> string option
     The result must parse; full type/proof/migration checks belong to the caller.
     No files are written. *)
 val replace : t -> (range * string) list -> (string,error) result
+
+(** Exact insertion point after a physically owned entity field's final token,
+    before separators or trailing comments. Used only by guarded storage-name
+    generation; reconstructed fields and record fields refuse. *)
+val field_storage_point : t -> Ast.field_def -> (range,error) result

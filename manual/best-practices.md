@@ -694,9 +694,13 @@ Keep migration declarations small: name the changed entities, and let the compil
 check that omitted entities are unchanged. An explicit `Same` must pass the
 compiler's semantic comparison. When a record and its codec share a name, that
 claim checks both; an unchanged record cannot conceal a changed codec. The current
-source checker covers additive declarations and literal defaults. The physical
+source checker covers additive declarations, literal defaults and checked
+`Migrate`/`Derived` row mappings. For a copied or renamed primitive field,
+verified `Same` can preserve its existing self-subject proof at the exact final
+row projection. It cannot justify a different field, stronger validation or a
+general conversion between nominal record types. The physical
 planner, additive executor, versioned application startup and SQL admission have
-regression coverage. Typed transformations and the complete migration lifecycle
+regression coverage. Executing row transformations and the complete migration lifecycle
 are still under development.
 
 A generated `todo "reason"` in a migration entity entry is an unresolved decision,
@@ -888,6 +892,8 @@ privileges and logs that fact. An installed Embedded grant profile cannot be
 silently converted to Worker. This initial Worker path supports additive entity
 changes; durable queue/outbox installation, background transformation jobs and
 retirement are still being implemented.
+
+For transforming migrations, prepare the reviewed [storage cleanup Contract](migration-contracts.md) before building the rollout binary.
 
 The separate worker can build a supported index on an existing table with
 `CREATE INDEX CONCURRENTLY`. A plain index does not hold up request readiness;

@@ -6,6 +6,7 @@ module H = Migration_history_sources
 module M = Migration_manifest
 module S = Migration_sparse
 module T = Migration_selection
+module RH = Migration_row_history
 type origin = {initial_version:int;steps:(E.step list,S.error list) result}
 type queue_payload = {job:string;contract:string;contract_hash:string}
 type queue_contract = {queue:string;payloads:queue_payload list}
@@ -16,8 +17,10 @@ type queue_binding = {application_queue:string;database_identity:string;family:s
 type database = {identity:string;family:string;namespace:string;current_version:int;origins:origin list;
  queue_versions:queue_version list}
 type t = {abi:A.t;databases:database list;inputs:(string * string) list;
- queue_bindings:queue_binding list;inventories:(string * Migration_inventory.t) list}
+ queue_bindings:queue_binding list;inventories:(string * Migration_inventory.t) list;
+ row_histories:(string * RH.t) list;contracts:(string * Migration_contract.t list) list;captured_modules:(module_form * string) list;validate:(unit -> unit)}
 let databases t = t.databases
+let contracts t = t.contracts
 let queue_bindings t = t.queue_bindings
 let queue_codec_records t =
  List.concat_map (fun (_,inventory) -> Migration_inventory.queue_contracts inventory |>
@@ -124,7 +127,7 @@ let verify_bindings expected modules = protect "<migration build>" (fun () ->
   "database history bindings changed during compilation; rebuild from one source snapshot";
  Option.iter (fun t -> if capture_queue_bindings modules t.databases t.inventories <> t.queue_bindings then
   reject ~code:"MIG013" (Location.dummy_loc "<migration build>") "queue history bindings changed during compilation") expected)
-let with_history ~entry ~source f = protect entry.source_file (fun () ->
+let capture_history ~source_only ~entry ~source f = protect entry.source_file (fun () ->
  let entry_file = Source_input.canonical_path entry.source_file in
  let graph = Frontend_check.build_local_import_graph ~entry entry_file in
  let modules = Hashtbl.to_seq_keys graph |> List.of_seq |> List.sort String.compare |> List.filter_map (fun file ->
@@ -149,7 +152,7 @@ let with_history ~entry ~source f = protect entry.source_file (fun () ->
    let guards = List.map (fun (_,_,_,_,_,selected) -> T.source_guard selected) targets in
    let inputs = List.concat_map (fun source_guard -> guard (M.source_files source_guard)) guards |> List.sort_uniq compare in
    let result = Source_input.with_pinned_files inputs (fun () ->
-   let inventories = ref [] in
+   let inventories = ref [] and row_histories=ref [] and contracts=ref [] in
    let databases = List.map (fun (identity,family,namespace,loc,root,selected) ->
     let h = history (H.discover_with_compatibility ~stored_value_compatibility:(Some stored_value_compatibility)
       ~compiler_abi:(A.id context) ~project_root:root ~family) in
@@ -169,15 +172,40 @@ let with_history ~entry ~source f = protect entry.source_file (fun () ->
     inventories := (identity,(H.current h).inventory) :: !inventories;
     let queue_versions=queue_versions schemas edges in
     let inventories = List.map (fun (s:H.schema) -> s.inventory) schemas in
-    let first = checked (E.generate ~initial_version:1 ~schemas:inventories ~edges) in
-    let origins = {initial_version=1;steps=Ok first} :: List.init (List.length schemas-1) (fun index ->
+    if source_only || H.contracts h<>[] then begin
+     let rows=checked(RH.check ~schemas:inventories ~edges) in
+     if source_only then row_histories := (identity,rows) :: !row_histories;
+     if H.contracts h<>[] then begin
+      let plan=checked(Migration_retained_storage.plan rows) in
+      let checked_contracts=List.map(fun (s:H.migration_source) ->
+       checked(Migration_contract.check ~plan ~namespace ~file:s.path ~source:s.contents)) (H.contracts h) in
+      contracts := (identity,checked_contracts) :: !contracts
+     end
+    end;
+    let first = E.generate ~initial_version:1 ~schemas:inventories ~edges in
+    if not source_only then ignore (checked first);
+    let origins = {initial_version=1;steps=first} :: List.init (List.length schemas-1) (fun index ->
      let initial_version=index+2 in
      {initial_version;steps=E.generate ~initial_version ~schemas:inventories ~edges}) in
     history (H.verify_unchanged h);
     {identity;family;namespace;current_version=(T.selection selected).current_version;origins;queue_versions}) targets in
    let inventories= !inventories in
    let queue_bindings=capture_queue_bindings modules databases inventories in
-   f (Some {abi=context;databases;inputs;queue_bindings;inventories})) in
+   let row_histories=List.sort compare !row_histories in
+   let linked_sources=List.concat_map (fun (_,rows) -> RH.captured_sources rows) row_histories in
+   let captured_modules=if not source_only then [] else List.map (fun (path,bytes) ->
+     match List.find_opt (fun (m,_) -> Source_input.canonical_path m.source_file=path) linked_sources with
+     | Some (m,captured) when captured=bytes -> m,bytes
+     | Some _ -> reject ~code:"MIG013" (Location.dummy_loc path) "linked module differs from captured history"
+     | None -> (if path=entry_file then entry else parse path bytes),bytes) inputs in
+   let validate () =
+    abi (A.verify context);
+    Source_input.without_pinned_files (fun () -> List.iter (fun source_guard -> guard (M.verify_source source_guard ~documents:[]);guard (M.verify_disk source_guard)) guards);
+    List.iter (fun (_,rows) -> ignore (checked (RH.revalidate rows))) row_histories in
+   let value={abi=context;databases;inputs;queue_bindings;inventories;row_histories;contracts=List.sort compare !contracts;captured_modules;validate} in
+   let result=f (Some value) in
+   List.iter (fun (_,rows) -> ignore (checked (RH.revalidate rows))) row_histories;
+   result) in
    List.iter (fun source_guard -> guard (M.verify_source source_guard ~documents:[]);guard (M.verify_disk source_guard)) guards;
    result))))
 
@@ -209,3 +237,29 @@ let queues_to_json ~quote t =
    (quote d.identity) (quote d.family) (quote d.namespace) d.current_version (array version d.queue_versions) (array origin d.origins) in
  Printf.sprintf {|{"version":1,"kind":"compiled-queue-history","compilerAbi":%s,"storedValueCompatibility":%s,"databases":%s}|}
   (quote (compiler_abi t)) (quote (stored_value_compatibility t)) (array database t.databases)
+
+
+let with_history ~entry ~source f = capture_history ~source_only:false ~entry ~source f
+
+type source_history = {program:t;active:bool ref}
+let with_source_history ~entry ~source f =
+ capture_history ~source_only:true ~entry ~source (function
+  | None -> f None
+  | Some program ->
+   let history={program;active=ref true} in
+   Fun.protect ~finally:(fun () -> history.active:=false) (fun () -> f (Some history)))
+let source_program source = source.program
+let source_modules source = source.program.captured_modules
+let row_histories source = source.program.row_histories
+let verify_source_history source modules = protect "<row source artifacts>" (fun () ->
+ if not !(source.active) then reject ~code:"MIG013" (Location.dummy_loc "<row source artifacts>")
+  "source-history artifact authority escaped its guarded capture scope";
+ source.program.validate ();
+ let originals=List.map fst source.program.captured_modules in
+ let expected=List.map (fun m -> match Migration_schema.lower_module ~modules:originals m with
+  | Ok lowered -> Migration_form.erase lowered
+  | Error errors -> reject ~code:"MIG013" (Location.dummy_loc m.source_file)
+    (String.concat "\n" (List.map (fun (e:Validation_common.validation_error) -> e.message) errors))) originals in
+ let order=List.sort (fun a b -> compare a.source_file b.source_file) in
+ if order expected <> order modules then reject ~code:"MIG013" (Location.dummy_loc "<row source artifacts>")
+  "row artifact graph differs from the complete captured and lowered source graph")

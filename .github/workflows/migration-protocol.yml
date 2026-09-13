@@ -78,7 +78,16 @@ jobs:
             export TESL_REPO_ROOT="$PWD"
             (cd compiler && dune build)
             (cd compiler && dune exec --no-build ./test/test_queue_candidate_app.exe)
+            (cd compiler && dune exec --no-build ./test/test_migration_row_companion.exe)
+            (cd compiler && dune exec --no-build ./test/test_migration_contract.exe)
+            (cd compiler && dune exec --no-build ./test/test_migration_row_storage.exe)
+            (cd compiler && dune exec --no-build ./test/test_migration_retype.exe)
+            (cd compiler && dune exec --no-build ./test/test_migration_row_forward.exe)
+            (cd compiler && dune exec --no-build ./test/test_migration_row_access.exe)
+            (cd compiler && dune exec --no-build ./test/test_migration_row_contract_abi.exe)
+            (cd compiler && dune exec --no-build ./test/test_migration_row_retype_physical.exe)
             cd runtime/go
+            go test -race -count=1 -timeout=300s -tags=tesl_migration_test ./teslrt -run "^(TestPgRowBaseline|TestRowBaseline|TestRowPhysical|TestPgRowForwardInvalidation)"
             go test -race -count=1 -timeout=900s -v ./internal/migrationtest
             go test -race -count=1 -timeout=300s -tags=tesl_migration_test ./teslrt -run "^TestPgMigration(Control|Expansion|Admission|Boot|Status|Install|StoredValueCompatibility|Compatibility|Worker)"
             go test -race -count=1 -timeout=300s -tags=tesl_migration_test ./teslrt -run "^(TestPgMigration(Index|FutureIndex|Embedded)|TestServe(Shutdown|ListenFailure))"

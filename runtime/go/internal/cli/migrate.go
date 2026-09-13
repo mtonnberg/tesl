@@ -18,6 +18,7 @@ const migrationUsage = `Usage: tesl migrate <entry.tesl> [--database D] [--resum
        tesl migrate generate <entry.tesl> [--database D] [--new-revision]
        tesl migrate generate <entry.tesl> --manifest-json [--database D] [--new-revision]
        tesl migrate recover-source --project-root DIR
+       tesl migrate contract <entry.tesl> --version N [--database D] [--manifest-json]
        tesl migrate plan <entry.tesl> [--database D] [--initial-version N]
 
 The guided flow prepares a new revision, waits for your saved schema changes,
@@ -71,7 +72,7 @@ func (app *App) migrate(ctx context.Context, args []string) error {
 	if strings.HasSuffix(rest[0], ".tesl") || rest[0] == "--" {
 		return app.migrationWizard(ctx, rest)
 	}
-	if rest[0] != "generate" || slices.Contains(rest, "--manifest-json") {
+	if (rest[0] != "generate" && rest[0] != "contract") || slices.Contains(rest, "--manifest-json") {
 		return app.compiler(ctx, args...)
 	}
 	return app.migrationGenerate(ctx, args, nil)
@@ -86,7 +87,7 @@ func (app *App) migrationGenerate(ctx context.Context, args []string, validate f
 	var output compilerOutput
 	child := *app
 	child.Stdout = &output
-	previewArgs := append([]string{"migrate", "generate", "--manifest-json"}, rest[1:]...)
+	previewArgs := append([]string{"migrate", rest[0], "--manifest-json"}, rest[1:]...)
 	if err := child.compiler(ctx, previewArgs...); err != nil {
 		if _, writeErr := app.Stdout.Write(output.Bytes()); writeErr != nil {
 			return writeErr

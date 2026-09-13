@@ -46,4 +46,17 @@ if (( $# == 0 )); then
   # Long-running index work and its application lifetime have independent
   # mandatory budgets; neither gate may skip unavailable PostgreSQL.
   go test -race -count=1 -timeout=300s -tags=tesl_migration_test ./teslrt -run '^(TestPgMigration(Index|FutureIndex|Embedded)|TestServe(Shutdown|ListenFailure))'
+  # Permanent generation baseline: marker/catalog/role guards and real backend deaths.
+  go test -race -count=1 -timeout=300s -tags=tesl_migration_test ./teslrt -run '^(TestPgRowBaseline|TestRowBaseline|TestRowPhysical|TestPgRowForwardInvalidation)'
+  (cd "$repo_root/compiler" && dune build test/test_migration_row_companion.exe && dune exec --no-build ./test/test_migration_row_companion.exe)
+  (cd "$repo_root/compiler" && dune build test/test_migration_contract.exe && dune exec --no-build ./test/test_migration_contract.exe)
+  # Typed source/target and reverse JSONB codecs must exercise real PostgreSQL.
+  (cd "$repo_root/compiler" && dune build test/test_migration_row_storage.exe && dune exec --no-build ./test/test_migration_row_storage.exe)
+  (cd "$repo_root/compiler" && dune build test/test_migration_retype.exe && dune exec --no-build ./test/test_migration_retype.exe)
+  # Actual separately compiled predecessor/successor executables, including a
+  # compatible second compiler build; no patched runtime or metadata fixtures.
+  (cd "$repo_root/compiler" && dune build test/test_migration_row_forward.exe && dune exec --no-build ./test/test_migration_row_forward.exe)
+  (cd "$repo_root/compiler" && dune build test/test_migration_row_access.exe && dune exec --no-build ./test/test_migration_row_access.exe)
+  (cd "$repo_root/compiler" && dune build test/test_migration_row_contract_abi.exe && dune exec --no-build ./test/test_migration_row_contract_abi.exe)
+  (cd "$repo_root/compiler" && dune build test/test_migration_row_retype_physical.exe && dune exec --no-build ./test/test_migration_row_retype_physical.exe)
 fi

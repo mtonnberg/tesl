@@ -68,7 +68,7 @@ func TestPgMigrationEmbeddedSIGTERMDuringUniqueStartup(t *testing.T) {
 		}
 	}()
 	pgEmbeddedIndexWaiting(t, f, nil)
-	job := pgIndexControlTestJobs(t, f)[0]
+	job := pgFirstIndexControlTestJob(t, f)
 	if job.Holder == "" || job.State != "building" {
 		t.Fatalf("child has no live build ownership: %+v", job)
 	}
@@ -87,7 +87,7 @@ func TestPgMigrationEmbeddedSIGTERMDuringUniqueStartup(t *testing.T) {
 	if tags := pgEmbeddedTestTags(t, f); len(tags) != 0 {
 		t.Fatalf("SIGTERM left a tagged backend/fence: %v", tags)
 	}
-	current := pgIndexControlTestJobs(t, f)[0]
+	current := pgFirstIndexControlTestJob(t, f)
 	if current.State == "valid" || current.Token != job.Token || current.Holder != job.Holder {
 		t.Fatalf("cancellation fabricated completion or replacement ownership: before=%+v after=%+v", job, current)
 	}
@@ -132,6 +132,9 @@ func TestPgMigrationEmbeddedSIGTERMBeforeServeIsNotLost(t *testing.T) {
 	stdin, err := command.StdinPipe()
 	if err != nil {
 		t.Fatal(err)
+	}
+	if stdin == nil {
+		t.Fatal("successful StdinPipe returned no pipe")
 	}
 	defer func() { _ = stdin.Close() }()
 	var output bytes.Buffer

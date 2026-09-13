@@ -355,12 +355,7 @@ let same_fact_copy_source = without_test
   |> replace "title: \"hello\"" "title: title ::: proof"
 let same_fact_copy_boundary () =
   project ~before:(same_fact_source old) ~after:(same_fact_source fresh) (fun _ _ path ->
-    let ds=errors path same_fact_copy_source in
-    check bool ("cross-version proof copy currently refuses: " ^ describe ds) true (ds<>[]);
-    check bool ("only the expected proof-ownership refusal remains: " ^ describe ds) true
-      (List.for_all (fun (d:Compile.diagnostic) -> d.code="V001" && Compile.string_contains d.message "Schema.Notes.VCurrent.ValidTitle") ds);
-    check bool ("the remaining boundary is ordinary proof ownership: " ^ describe ds) true
-      (List.exists (fun (d:Compile.diagnostic) -> Compile.string_contains d.message "ValidTitle") ds))
+    accepts path same_fact_copy_source)
 
 let native_project ~after ~source = project ~after (fun root save path ->
   if Sys.command "go version >/dev/null 2>&1"<>0 then skip ();
@@ -376,6 +371,227 @@ let native_project ~after ~source = project ~after (fun root save path ->
   | _ -> fail output)
 let native () = native_project ~after:fresh ~source
 let proof_native () = native_project ~after:proof_schema ~source:(proof_source ^ proof_tests)
+let prepared path source =
+  let m=match Parser.parse_module path source with Ok m -> m | Err e -> fail e.msg in
+  match D.prepare ~compiler_abi:"context-regression" ~source m with
+  | Ok (Some p) -> p | _ -> fail "expected prepared source"
+let guard_refuses p callback = match D.with_prepared p callback with
+  | Error errors -> check bool "coded source refusal" true (List.exists (fun (e:S.error) -> e.code="MIG013") errors)
+  | Ok _ -> fail "stale context callback ran"
+let split_helper save source =
+  let index=Str.search_forward (Str.regexp_string "fn convert") source 0 in
+  let head=String.sub source 0 index and body=String.sub source index (String.length source-index) in
+  let import_start=Str.search_forward (Str.regexp_string "import Tesl.Prelude") head 0 in
+  let migration_start=Str.search_forward (Str.regexp_string "migration =") head 0 in
+  let imports=String.sub head import_start (migration_start-import_start) in
+  let helper="module Schema.Notes.Migrate.Helpers exposing [convert, oldNote]\n" ^ imports ^ body in
+  let helper_path=save "migrations/notes/helpers.tesl" helper in
+  let root=head |> replace "import Tesl.Prelude" "import Schema.Notes.Migrate.Helpers exposing [convert, oldNote]\nimport Tesl.Prelude"
+    |> replace "exposing [migration, convert, oldNote]" "exposing [migration]" in
+  ignore (save "migrations/notes/v2.tesl" root);
+  root,helper_path,helper
+let same_helper_scope () = project ~before:(same_fact_source old) ~after:(same_fact_source fresh) (fun _ save path ->
+  let source,hpath,helper=split_helper save same_fact_copy_source in
+  refuses "V001" hpath helper;
+  accepts path source;
+  let p=prepared path source in
+  (match D.with_prepared p (fun () -> refuses "V001" hpath helper) with
+   | Ok () -> () | Error _ -> fail "nested standalone scope");
+  (try ignore (D.with_prepared p (fun () -> raise Exit)) with Exit -> ());
+  refuses "V001" hpath helper;
+  accepts path source)
+let same_intermediate () = project ~before:(same_fact_source old) ~after:(same_fact_source fresh) (fun _ _ path ->
+  let target="Schema.Notes.VCurrent.Note { id: old.id, owner: old.author, title: old.author, count: 0 }" in
+  let bad=replace "  Row (" ("  let discarded = " ^ target ^ "\n  Row (") same_fact_copy_source in
+  refuses "V001" path bad;
+  let another=replace "title: old.author" "title: another.title" target in
+  refuses "V001" path (replace "  Row (" ("  let another = oldNote()\n  let discarded = " ^ another ^ "\n  Row (") same_fact_copy_source);
+  refuses "MIG018" path (replace "title: old.title" "title: old.author" same_fact_copy_source))
+let same_missing_identity () = project ~before:(same_fact_source old) ~after:(same_fact_source fresh) (fun _ _ path ->
+  let ds=errors path (replace "same: [Same Schema.Notes.V1.ValidTitle Schema.Notes.VCurrent.ValidTitle]" "same: []" same_fact_copy_source) in
+  check bool "Same omission refuses" true (ds<>[]))
+let same_changed_predicate () = project ~before:(same_fact_source old)
+  ~after:(same_fact_source fresh |> replace "Fact (ValidTitle value) = ValidTitle value" "Fact (ValidTitle value) =\n  let changed = value ++ \"\"\n  ValidTitle value") (fun _ _ path ->
+    check bool "changed fact producer refuses Same" true (errors path same_fact_copy_source<>[]))
+let same_source_drift () = project ~before:(same_fact_source old) ~after:(same_fact_source fresh) (fun _ save path ->
+  let source,hpath,helper=split_helper save same_fact_copy_source in
+  let p=prepared path source in
+  write hpath (helper ^ "\n# changed helper bytes\n");
+  guard_refuses p (fun () -> fail "changed helper reached callback");
+  write hpath helper;
+  let p=prepared path source in
+  Sys.remove hpath;
+  guard_refuses p (fun () -> fail "deleted helper reached callback");
+  write hpath helper;
+  let p=prepared path source in
+  write path (source ^ "\n# saved root changed\n");
+  guard_refuses p (fun () -> fail "changed root reached callback"))
+let same_drift_during_callback () = project ~before:(same_fact_source old) ~after:(same_fact_source fresh) (fun _ save path ->
+  let source,hpath,helper=split_helper save same_fact_copy_source in
+  let p=prepared path source in
+  guard_refuses p (fun () -> write hpath (helper ^ "\n# changed during callback\n")))
+let same_shadow_import () = project ~before:(same_fact_source old) ~after:(same_fact_source fresh) (fun _ save path ->
+  let source,_,helper=split_helper save same_fact_copy_source in
+  let p=prepared path source in
+  ignore (save "migrations/notes/Schema.Notes.Migrate.Helpers.tesl" helper);
+  guard_refuses p (fun () -> fail "new import owner reached callback"))
+let same_unsaved_root () = project ~before:(same_fact_source old) ~after:(same_fact_source fresh) (fun _ _ path ->
+  accepts path same_fact_copy_source;
+  let p=prepared path same_fact_copy_source in
+  (match D.with_prepared p (fun () -> ()) with Ok () -> () | Error _ -> fail "legitimate supplied root buffer refused");
+  write path (same_fact_copy_source ^ "\n# later saved edit\n");
+  guard_refuses p (fun () -> fail "changed supplied-root backing file reached callback"))
+let same_native () = project ~before:(same_fact_source old) ~after:(same_fact_source fresh) (fun root save path ->
+  let source=same_fact_copy_source |> replace "\"hello\"" "\"hello 😀\"" in
+  let source,_,_=split_helper save source in
+  let source=source ^ {|test "contextual proof migration retains Unicode" {
+  case convert (oldNote()) of
+    Row row -> expect row.title == "hello 😀"
+    Reject reason -> expect False
+}
+|} in
+  ignore (save "migrations/notes/v2.tesl" source);
+  accepts path source;
+  let artifacts=match Compile.compile_go_file path with
+    | Compile.GoSuccess artifacts -> artifacts | Compile.GoFailure ds -> fail (describe ds) in
+  List.iter (fun (a:Emit_go.artifact) -> ignore (save ("out/" ^ a.path) a.contents)) artifacts;
+  List.iter (fun name -> remove (Filename.concat root name)) ["schema";"migrations";"tesl.toml"];
+  let command=Printf.sprintf "cd %s && GOMAXPROCS=2 go test -race -p 1 -count=1 -timeout=60s -v ./... 2>&1" (Filename.quote (Filename.concat root "out")) in
+  let channel=Unix.open_process_in command in let output=In_channel.input_all channel in
+  match Unix.close_process_in channel with
+  | Unix.WEXITED 0 -> check bool "native source test executed after deleting sources" true (Compile.string_contains output "--- PASS:")
+  | _ -> fail output)
+let no_transform_shadow () = project (fun _ save path ->
+  let after="module Schema.Notes.VCurrent exposing [Note]\nimport Tesl.Prelude exposing [String, Bool(..)]\nentity Note table \"notes\" primaryKey id { id: String, author: String, title: String, active: Bool }\n" in
+  ignore (save "schema/notes/v-current.tesl" after);
+  let helper="module Schema.Notes.Migrate.Helpers exposing [value]\nimport Tesl.Prelude exposing [String]\nfn value() -> String = \"ok\"\n" in
+  ignore (save "migrations/notes/helpers.tesl" helper);
+  let source="module Schema.Notes.Migrate.V2 exposing [migration]\nimport Tesl.Migration exposing [Migration, Entity(..), Rule(..)]\nimport Tesl.Prelude exposing [Bool(..)]\nimport Schema.Notes.V1\nimport Schema.Notes.VCurrent\nimport Schema.Notes.Migrate.Helpers exposing [value]\nmigration = Migration { from: Schema.Notes.V1, to: Schema.Notes.VCurrent, same: [], entities: { Note: Additive [Default active True] } }\n" in
+  ignore (save "migrations/notes/v2.tesl" source);
+  accepts path source;
+  let p=prepared path source in
+  ignore (save "migrations/notes/Schema.Notes.Migrate.Helpers.tesl" helper);
+  guard_refuses p (fun () -> fail "additive root lost its complete import graph"))
+
+let same_symlink_owner () = project ~before:(same_fact_source old) ~after:(same_fact_source fresh) (fun root save path ->
+  let source,hpath,helper=split_helper save same_fact_copy_source in
+  let first=save "migrations/notes/first-owner.tesl" helper in
+  let second=save "migrations/notes/second-owner.tesl" helper in
+  Sys.remove hpath; Unix.symlink first hpath;
+  let p=prepared path source in
+  Sys.remove hpath; Unix.symlink second hpath;
+  guard_refuses p (fun () -> fail "retargeted owner reached callback");
+  ignore root)
+let same_conflicting_owners () = project ~before:(same_fact_source old) ~after:(same_fact_source fresh) (fun _ save path ->
+  let source,_,helper=split_helper save same_fact_copy_source in
+  let nested="module Schema.Notes.Migrate.Nested.Other exposing [other]\nimport Tesl.Prelude exposing [String]\nimport Schema.Notes.Migrate.Helpers exposing [oldNote]\nfn other() -> String = \"other\"\n" in
+  ignore (save "migrations/notes/nested/other.tesl" nested);
+  ignore (save "migrations/notes/nested/Schema.Notes.Migrate.Helpers.tesl" helper);
+  let source=replace "import Tesl.Prelude" "import Schema.Notes.Migrate.Nested.Other exposing [other]\nimport Tesl.Prelude" source in
+  refuses "MIG013" path source)
+let same_kernel_arguments () =
+  let loc=Location.dummy_loc "kernel" in
+  let original=Ast.PredAnd {left=Ast.PredApp {pred="Old.Valid";args=["row.title";"\"literal\"";"other.id"];loc};
+    right=Ast.PredApp {pred="Unrelated.Valid";args=["row.title"];loc};loc} in
+  let fact=Proof_kernel.assume_param original in
+  let mapped=Proof_kernel.migration_same_predicate ~previous:"Old.Valid" ~current:"New.Valid" fact |> Proof_kernel.fact_of in
+  let expected=match original with Ast.PredAnd p ->
+    Ast.PredAnd {p with left=Ast.PredApp {pred="New.Valid";args=["row.title";"\"literal\"";"other.id"];loc}}
+    | _ -> assert false in
+  check bool "all subjects, literal arguments and conjunctions preserved" true (mapped=expected)
+let same_explicit_two_roots () = project ~before:(same_fact_source old) ~after:(same_fact_source fresh) (fun _ save path ->
+  let first,_,_=split_helper save same_fact_copy_source in
+  let second=replace "Schema.Notes" "Schema.Tasks" same_fact_copy_source in
+  ignore (save "schema/tasks/v1.tesl" (same_fact_source old |> replace "Schema.Notes" "Schema.Tasks"));
+  ignore (save "schema/tasks/v-current.tesl" (same_fact_source fresh |> replace "Schema.Notes" "Schema.Tasks"));
+  ignore (save "migrations/tasks/v2.tesl" second);
+  let app="module App exposing []\nimport Schema.Notes.Migrate.V2\nimport Schema.Tasks.Migrate.V2\n" in
+  let app_path=save "app.tesl" app in
+  accepts app_path app;
+  accepts path first;
+  ignore (save "migrations/tasks/v2.tesl" (replace "title: old.title" "title: old.author" second));
+  refuses "MIG018" app_path app;
+  accepts path first)
+let same_sealed_two_edges () = project ~before:(same_fact_source old) ~after:(same_fact_source fresh) (fun root save path ->
+  let context=Result.get_ok (Migration_abi.current ()) in
+  let abi=Migration_abi.id context and contract=Some (Migration_abi.stored_value_compatibility context) in
+  let load file=match Migration_inventory.load_with_compatibility ~stored_value_compatibility:contract ~compiler_abi:abi ~root_file:file with
+    | Ok inventory -> inventory | Error e -> fail e.message in
+  let seal file=match Migration_seal.create ~project_root:root (load file) with Ok s -> s | Error e -> fail e.message in
+  let header=match Migration_header.create ~previous:(seal (Filename.concat root "schema/notes/v1.tesl"))
+    ~current:(seal (Filename.concat root "schema/notes/v-current.tesl")) with Ok h -> h | Error _ -> fail "header" in
+  ignore (save "migrations/notes/v2.tesl" (Migration_header.encode header ^ same_fact_copy_source));
+  let apply manifest=List.iter (fun (e:Migration_manifest.edit) -> write e.path e.after) (Migration_manifest.edits manifest) in
+  (match Migration_generate.start_with_compatibility ~stored_value_compatibility:contract ~compiler_abi:abi
+    ~project_root:root ~family:"Schema.Notes" ~version:2 ~documents:[] with
+    | Ok preview -> apply preview.manifest
+    | Error errors -> fail (String.concat "\n" (List.map (fun (e:Migration_generate.error) -> e.message) errors)));
+  let current=same_fact_source fresh |> replace "count: Int" "count: Int, extra: Int" in
+  ignore (save "schema/notes/v-current.tesl" current);
+  let v3=Filename.concat root "migrations/notes/v3.tesl" in
+  let generated=Source_input.read v3 in
+  let i=Str.search_forward (Str.regexp_string "module ") generated 0 in
+  let prefix=String.sub generated 0 i in
+  let source=same_fact_copy_source |> replace "Migrate.V2" "Migrate.V3" |> replace "Schema.Notes.V1" "Schema.Notes.V2"
+    |> replace "Rename author owner" "" |> replace "owner: old.author" "owner: old.owner"
+    |> replace "count: 7" "count: old.count, extra: 7"
+    |> replace "author: \"writer\"" "owner: \"writer\""
+    |> replace "title: title ::: proof }" "title: title ::: proof, count: 3 }" in
+  write v3 (prefix ^ source);
+  (match Migration_generate.refresh_with_compatibility ~stored_value_compatibility:contract ~compiler_abi:abi
+    ~project_root:root ~family:"Schema.Notes" ~version:3 ~documents:[] with
+    | Ok preview -> apply preview.manifest
+    | Error errors -> fail (String.concat "\n" (List.map (fun (e:Migration_generate.error) -> e.message) errors)));
+  let app="module App exposing []\nimport Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]\nimport Schema.Notes.VCurrent\ndatabase Main = Database { schema: Schema.Notes.VCurrent, migrations: Schema.Notes.Migrate, backend: Postgres (PostgresConfig { namespace: \"notes\", dbName: \"unused\", user: \"unused\", password: \"unused\", connection: TcpConnection { host: \"127.0.0.1\", port: 5432 } }) }\n" in
+  let app_path=save "app.tesl" app in
+  accepts app_path app;
+  accepts path (Source_input.read path);
+  accepts v3 (Source_input.read v3);
+  match Compile.compile_go_file app_path with
+  | Compile.GoSuccess _ -> fail "transform executor remains deliberately unavailable"
+  | Compile.GoFailure diagnostics ->
+    check bool ("two checked edges reach execution boundary: " ^ describe diagnostics) true
+      (List.exists (fun (d:Compile.diagnostic) -> d.code="MIG016") diagnostics);
+    check bool "neither edge loses Same proof context" false
+      (List.exists (fun (d:Compile.diagnostic) -> d.code="V001") diagnostics))
+
+let same_overlay_snapshot () = project ~before:(same_fact_source old) ~after:(same_fact_source fresh) (fun root _ path ->
+  let context=Result.get_ok (Migration_abi.current ()) in
+  let supplied=same_fact_copy_source ^ "\n# unsaved editor buffer\n" in
+  Source_input.with_overlays ~project_root:root [path,supplied] (fun () ->
+    match Migration_abi.with_snapshot context (fun () ->
+      accepts path supplied;
+      let p=prepared path supplied in
+      match D.with_prepared p (fun () -> ()) with Ok () -> () | Error _ -> fail "nested source/ABI view") with
+    | Ok () -> () | Error e -> fail e.message))
+let same_renamed_proof () =
+  let before=same_fact_source old |> replace "author: String" "author: String ::: ValidTitle author" in
+  let after=same_fact_source fresh |> replace "owner: String" "owner: String ::: ValidTitle owner" in
+  project ~before ~after (fun _ _ path ->
+    let source=same_fact_copy_source
+      |> replace "  let title = \"hello\"" "  let author = \"writer\"\n  let authorProof = Schema.Notes.V1.titleProof author\n  let title = \"hello\""
+      |> replace "author: \"writer\"" "author: author ::: authorProof" in
+    accepts path source)
+
+let same_forget_projection () = project ~before:(same_fact_source old) ~after:(same_fact_source fresh) (fun _ _ path ->
+  let source=replace "String, Int, Bool(..)]" "String, Int, Bool(..), forgetFact]" same_fact_copy_source in
+  List.iter (fun value ->
+    let source=replace "  Row (" ("  let forgotten = " ^ value ^ "\n  Row (") source
+      |> replace "title: old.title" "title: forgotten" in
+    refuses "MIG018" path source)
+    ["forgetFact old.title";"if old.title == \"\" then\n    forgetFact old.title\n  else\n    old.title";
+     "if old.title == \"\" then\n    let clean = forgetFact old.title\n    clean\n  else\n    old.title"])
+let additive_prepared_drift () = project (fun _ save path ->
+  let after="module Schema.Notes.VCurrent exposing [Note]\nimport Tesl.Prelude exposing [String, Bool(..)]\nentity Note table \"notes\" primaryKey id { id: String, author: String, title: String, active: Bool }\n" in
+  ignore (save "schema/notes/v-current.tesl" after);
+  let source="module Schema.Notes.Migrate.V2 exposing [migration]\nimport Tesl.Migration exposing [Migration, Entity(..), Rule(..)]\nimport Tesl.Prelude exposing [Bool(..)]\nimport Schema.Notes.V1\nimport Schema.Notes.VCurrent\nmigration = Migration { from: Schema.Notes.V1, to: Schema.Notes.VCurrent, same: [], entities: { Note: Additive [Default active True] } }\n" in
+  ignore (save "migrations/notes/v2.tesl" source);
+  let p=prepared path source in
+  write path (source ^ "\n# changed prepared root\n");
+  match D.check_prepared p with
+  | Error errors -> check bool "prepared additive evidence must be revalidated" true (List.exists (fun (e:S.error) -> e.code="MIG013") errors)
+  | Ok _ -> fail "stale additive preparation became checked")
+
 let () = run "Transforming declarations" ["checked source",List.map (fun (name,f) -> test_case name `Quick f)
   ["original AST and exact mapping",basic;"exact nominal function signature",signature;
    "rename and unchanged projections",identities;"every successful return path",branches;
@@ -388,4 +604,23 @@ let () = run "Transforming declarations" ["checked source",List.map (fun (name,f
    "physical AST and unsaved source identity",source_identity;
    "stdlib HTTP checks cannot escape result boundary",primitive_failure;
    "dependency checking uses supplied root source",root_buffer_dependency;
-   "Same does not yet bridge proof ownership",same_fact_copy_boundary]]
+   "Same transports primitive field proof",same_fact_copy_boundary;
+   "Same helper scope and exception cleanup",same_helper_scope;
+   "Same refuses intermediate constructors and wrong projections",same_intermediate;
+   "Same requires explicit identity",same_missing_identity;
+   "Same checks complete fact producer",same_changed_predicate;
+   "Same revalidates helper deletion and root edits",same_source_drift;
+   "Same revalidates after callback",same_drift_during_callback;
+   "Same guards newly shadowing import owners",same_shadow_import;
+   "Same supports unsaved roots with backing-file guards",same_unsaved_root;
+   "Same actual native helper execution after source deletion",same_native;
+   "Additive roots pin helper import resolution",no_transform_shadow;
+   "Same guards symlink retargeting",same_symlink_owner;
+   "Same rejects inconsistent import owners",same_conflicting_owners;
+   "Same kernel preserves all predicate arguments",same_kernel_arguments;
+   "Same selects independent explicit roots",same_explicit_two_roots;
+   "Same selects two sealed adjacent history edges",same_sealed_two_edges;
+   "Same composes editor overlays and ABI snapshots",same_overlay_snapshot;
+   "Same transports renamed primitive field proof",same_renamed_proof;
+   "Same never revives forgotten projection aliases",same_forget_projection;
+   "Checking prepared additive evidence revalidates sources",additive_prepared_drift]]

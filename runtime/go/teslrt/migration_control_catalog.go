@@ -231,6 +231,9 @@ func pgControlFunctionSQL(namespace, owner string, fn pgMigrationControlFunction
 }
 
 func pgControlArgumentTypes(fn pgMigrationControlFunction) string {
+	if strings.TrimSpace(fn.arguments) == "" {
+		return ""
+	}
 	arguments := strings.Split(fn.arguments, ",")
 	for i, argument := range arguments {
 		fields := strings.Fields(argument)
@@ -280,7 +283,7 @@ func pgControlFunctionRoles(roles PgMigrationControlRoles, fn pgMigrationControl
 	principals := []string{roles.Worker}
 	requestCallable := false
 	switch fn.name {
-	case "tesl_admit", "tesl_heartbeat", "tesl_queue_admit", "tesl_queue_enqueue",
+	case "tesl_admit", "tesl_heartbeat", "tesl_row_processing", "tesl_row_check_abi", "tesl_queue_admit", "tesl_queue_enqueue",
 		"tesl_queue_claim", "tesl_queue_complete", "tesl_queue_renew", "tesl_queue_fail",
 		"tesl_queue_quarantine", "tesl_queue_count", "tesl_queue_dead_jobs", "tesl_queue_requeue":
 		requestCallable = true

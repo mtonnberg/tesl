@@ -5,3 +5,5 @@
     This checks current source, not database state or execution ABI authority. *)
 val make : ?skip_dep_body:(string -> bool) -> Ast.module_form ->
   string -> Ast.module_form -> Frontend_check.diagnostic list
+
+val with_contexts : source:string -> Ast.module_form -> (unit -> 'a) -> ('a,Migration_sparse.error list) result

@@ -421,6 +421,7 @@
     "model_test.go": "model",
     "pooler_test.go": "pooler",
     "postgres_test.go": "postgres",
+    "postgres_required_test.go": "harness",
     "process_test.go": "harness",
     "quarantine_postgres_test.go": "postgres",
     "quarantine_test.go": "model",

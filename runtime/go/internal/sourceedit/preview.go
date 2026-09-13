@@ -50,7 +50,7 @@ func DecodePreview(data []byte) (*Preview, error) {
 		return nil, err
 	}
 	const prefix = "tesl-source-abi-v1:"
-	if header.Version != 1 || header.Kind != "migration-source-preview" || header.OK == nil || !*header.OK || header.Compilable == nil || (header.Operation != "start" && header.Operation != "refresh") || !strings.HasPrefix(header.CompilerABI, prefix) || len(header.CompilerABI) != len(prefix)+64 || !validHex(strings.TrimPrefix(header.CompilerABI, prefix)) {
+	if header.Version != 1 || header.Kind != "migration-source-preview" || header.OK == nil || !*header.OK || header.Compilable == nil || (header.Operation != "start" && header.Operation != "refresh" && header.Operation != "contract") || !strings.HasPrefix(header.CompilerABI, prefix) || len(header.CompilerABI) != len(prefix)+64 || !validHex(strings.TrimPrefix(header.CompilerABI, prefix)) {
 		return nil, fmt.Errorf("compiler did not return a successful supported migration source preview")
 	}
 	if _, err := object(fields["selection"], "entryFile", "databaseFile", "database", "family", "schemaRoot", "previousVersion", "revisionBefore", "revisionAfter"); err != nil {

@@ -66,7 +66,7 @@ func TestPgMigrationIndexWorkerPreservesIndependentActiveBuild(t *testing.T) {
 	service := pgStartIndexTestService(t, f, 2, false, state, pgIndexTestSettings())
 	pgIndexTestReady(t, f, service)
 	pgIndexTestAwait(t, f, service, "repeated claims preserve actual independent progress", func() bool {
-		job := pgIndexControlTestJobs(t, f)[0]
+		job := pgFirstIndexControlTestJob(t, f)
 		if job.State != "pending" || job.Attempts != 0 {
 			t.Fatalf("active external build was classified as failed or rebuilt: %+v", job)
 		}

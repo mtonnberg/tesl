@@ -2,9 +2,10 @@
     arguments are checked by Migration_declaration against checked inventories. *)
 open Ast
 
-let type_names = ["Migration"; "Entity"; "Rule"; "Same"]
+let type_names = ["Migration"; "Entity"; "Rule"; "Same"; "Contract"; "Drop"; "Tighten"]
 let constructor_groups = ["Entity", ["Additive"; "Derived"; "Migrate"; "New"; "Drop"];
-                          "Rule", ["Default"; "Rename"]; "Same", ["Same"]]
+                          "Rule", ["Default"; "Rename"; "Retype"; "WriteBack"]; "Same", ["Same"];
+                          "Drop", ["Column"; "Storage"; "Index"; "Trigger"]; "Tighten", ["NotNull"]]
 let names = List.sort_uniq String.compare
   (type_names @ List.concat_map snd constructor_groups)
 
@@ -35,14 +36,18 @@ let imported_name (m : module_form) name =
 let is_declaration (m : module_form) (c : const_form) =
   imported_name m "Migration" && fst (application c.value) = "Migration"
 
+let is_contract (m:module_form) (c:const_form) =
+  imported_name m "Contract" && fst(application c.value)="Contract"
+let is_contextual_declaration m c = is_declaration m c || is_contract m c
+
 let runtime_declarations (m : module_form) =
-  List.filter (function DConst c -> not (is_declaration m c) | _ -> true) m.decls
+  List.filter (function DConst c -> not (is_contextual_declaration m c) | _ -> true) m.decls
 
 (** Called after contextual checking, before SCC renaming and emission. An
     exported declaration can be named by later contextual records but is not an
     exported runtime value. Ordinary uses fail because no value scheme is bound. *)
 let erase (m : module_form) =
   let erased = List.filter_map (function
-    | DConst c when is_declaration m c -> Some c.name | _ -> None) m.decls in
+    | DConst c when is_contextual_declaration m c -> Some c.name | _ -> None) m.decls in
   {m with decls=runtime_declarations m;exports=List.filter (function
     | ExportName name | ExportAdt name -> not (List.mem name erased)) m.exports}

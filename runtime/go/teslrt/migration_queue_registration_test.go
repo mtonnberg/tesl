@@ -96,6 +96,9 @@ func pgQueueRegistrationAdvance(t *testing.T, f *pgControlTestFixture, h PgCompi
 	}); err != nil {
 		t.Fatal(err)
 	}
+	if intents == nil {
+		t.Fatal("successful expansion snapshot returned no intent map")
+	}
 	if err := pgApplyExpansion(f.ctx, f.worker, plan, f.roles, v-1, intents); err != nil {
 		t.Fatal(err)
 	}

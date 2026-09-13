@@ -148,10 +148,10 @@ let check_call_proofs
     | None -> ()
     | Some required ->
       let unresolved = unresolved_subjects formal_names mapping required in
-      let carried = match carried_proofs_of_expr ~funcs subject_env proof_env arg with
-        | Some proofs -> List.map Proof_kernel.fact_of proofs
-        | None -> []
-      in
+      let carried = carried_proofs_of_expr ~funcs subject_env proof_env arg
+        |> Option.value ~default:[]
+        |> Migration_proof_context.transport ~constructor:func_name ~field:param.name arg
+        |> List.map Proof_kernel.fact_of in
       (match subject_of_expr subject_env arg with
        | None ->
          (match arg with

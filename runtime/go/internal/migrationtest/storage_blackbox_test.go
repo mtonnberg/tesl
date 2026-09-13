@@ -1,6 +1,7 @@
 package migrationtest
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -134,8 +135,10 @@ func main() {
 		"TESL_TEST_POSTGRES_SHARED_HOST="+config.Host,
 		fmt.Sprintf("TESL_TEST_POSTGRES_SHARED_PORT=%d", config.Port),
 		"TESL_TEST_POSTGRES_SHARED_USER="+f.worker, "PGPASSWORD="+config.Password, "TESL_FIXTURE_CONTROL_OWNER="+f.control)
-	if output, err := cmd.CombinedOutput(); err != nil || strings.TrimSpace(string(output)) != "ok" {
-		t.Fatalf("typed storage round trip: %v\n%s\n%s", err, output, f.dump())
+	var output, diagnostics bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &output, &diagnostics
+	if err := cmd.Run(); err != nil || strings.TrimSpace(output.String()) != "ok" {
+		t.Fatalf("typed storage round trip: %v\nstdout: %s\nstderr: %s\n%s", err, output.String(), diagnostics.String(), f.dump())
 	}
 	var catalog string
 	err = conn.QueryRow(f.ctx, `select string_agg(attname || ':' || format_type(atttypid, atttypmod), ',' order by attname)

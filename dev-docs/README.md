@@ -170,6 +170,7 @@ that checks manual coherence without building the compiler.
 | `10-common-patterns.md` | Gotchas, quick reference table, diagnostic commands |
 | `11-frontend-ir.md` | Generator-facing frontend IR stage and `emit_ir` architecture |
 | [Migration implementation](migrations-implementation.md) | Delivery gates, implemented prerequisites, regression evidence and remaining migration work |
+| [Checked Contract source](migration-contract-source.md) | Exact cleanup selectors, preparatory operations, source guards and runtime authority boundaries |
 | [Migration source writes](migration-source-writes.md) | Guarded native generation, compiler manifest consumption, concurrent saves and crash recovery |
 | [Migration planning](migration-planning.md) | Checked PostgreSQL source plans, retained storage, index compatibility and execution boundaries |
 | [Migration execution](migration-execution.md) | Protected installation, additive execution, regression evidence and pending startup/admission integration |

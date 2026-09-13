@@ -43,6 +43,17 @@ func pgIndexControlTestJobs(t *testing.T, f *pgControlTestFixture) []pgMigration
 	return jobs
 }
 
+// Keep first-job fixture assumptions explicit without requiring snapshots used
+// by other tests to contain a job.
+func pgFirstIndexControlTestJob(t *testing.T, f *pgControlTestFixture) pgMigrationIndexJob {
+	t.Helper()
+	jobs := pgIndexControlTestJobs(t, f)
+	if len(jobs) == 0 {
+		t.Fatal("expected a protected index job")
+	}
+	return jobs[0]
+}
+
 func TestPgMigrationControlIndexRegistrationIsImmutableAtomicProgress(t *testing.T) {
 	f := pgNewControlTest(t)
 	f.install(t, 1)

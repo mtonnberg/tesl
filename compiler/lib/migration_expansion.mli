@@ -22,3 +22,7 @@ val step_node : step -> Migration_canonical.node
 val step_hash : step -> string
 
 val step_to_json : ?include_catalog:bool -> quote:(string -> string) -> step -> string
+
+(** Validate a checked primitive default against its PostgreSQL carrier. *)
+val validate_assignment : Migration_storage.column -> Migration_canonical.node ->
+  (unit, Migration_sparse.error list) result

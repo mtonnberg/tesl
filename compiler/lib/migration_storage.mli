@@ -26,3 +26,6 @@ val tables : t -> table list
 (** Stable description identity includes the complete semantic inventory and the
     storage mapping version, not just SQL column names. *)
 val digest : t -> string
+
+(** Exact canonical payload used by digest; no alternate storage identity. *)
+val node : t -> Migration_canonical.node

@@ -5,18 +5,22 @@ module A = Migration_additive
 
 type rule =
   | Rename of { previous : string; current : string; loc : Location.loc }
+  | Retype of { field : string; loc : Location.loc }
+  | WriteBack of { previous : string; current : string; function_ref : Ast.expr; loc : Location.loc }
   | Default of A.default
 type mode = Derived | Migrate
 type entry = { entity : string; mode : mode; rules : rule list; loc : Location.loc }
 type value_source =
   | Copy of { previous : stored_field; current : stored_field }
   | Renamed of { previous : stored_field; current : stored_field }
+  | Retyped of { previous : stored_field; current : stored_field }
   | Empty_optional of stored_field
   | Constant of stored_field * node
   | Computed of stored_field
+type writeback = { previous : stored_field; current : stored_field; function_ref : Ast.expr; loc : Location.loc }
 type entity = {
   identity : string; previous : stored_entity; current : stored_entity;
-  mode : mode; values : value_source list; indexes_changed : bool;
+  mode : mode; values : value_source list; writebacks : writeback list; indexes_changed : bool;
 }
 type t = { coverage : S.t; entities : entity list }
 let entities t = t.entities
@@ -38,7 +42,7 @@ let renamed_contract renames field =
       Seq [Bytes "field"; Bytes (rename name); ty; subjects proof; storage]; dependencies]])
   | _ -> None
 
-let check coverage ~entries =
+let check ?version coverage ~entries =
   let before, after = S.inventories coverage in
   let errors = ref [] in
   let report code loc message related = errors := {S.code;loc;message;related} :: !errors in
@@ -82,6 +86,7 @@ let check coverage ~entries =
           | Some old, Some fresh when old.stored_field.contract = fresh.stored_field.contract -> ()
           | _ -> refuse "MIG009" entry.loc "online transformations cannot change the primary key's stored contract");
          let renamed = Hashtbl.create 8 and destinations = Hashtbl.create 8 and defaults = Hashtbl.create 8 in
+         let retyped = Hashtbl.create 8 and backwards = Hashtbl.create 8 in
          List.iter (function
            | Rename rule ->
              if Hashtbl.mem renamed rule.previous || Hashtbl.mem destinations rule.current || Hashtbl.mem defaults rule.current then
@@ -95,6 +100,20 @@ let check coverage ~entries =
                Hashtbl.add renamed rule.previous rule.current;
                Hashtbl.add destinations rule.current rule.previous
              end
+           | Retype rule ->
+             if entry.mode <> Migrate || not (List.mem_assoc rule.field current) then
+               refuse "MIG022" rule.loc "Retype requires an existing target field and Migrate row function"
+             else if rule.field = pair.current.primary_key then
+               refuse "MIG009" rule.loc "Retype cannot change the primary key"
+             else if Hashtbl.mem retyped rule.field then refuse "MIG023" rule.loc "duplicate Retype field"
+             else Hashtbl.add retyped rule.field rule.loc
+           | WriteBack rule ->
+             if entry.mode <> Migrate || not (List.mem_assoc rule.previous previous) || not (List.mem_assoc rule.current current) then
+               refuse "MIG022" rule.loc "WriteBack requires exact previous and current fields and Migrate"
+             else if rule.previous = pair.previous.primary_key || rule.current = pair.current.primary_key then
+               refuse "MIG009" rule.loc "WriteBack cannot change the primary key"
+             else if Hashtbl.mem backwards rule.previous then refuse "MIG023" rule.loc "duplicate WriteBack previous field"
+             else Hashtbl.add backwards rule.previous (rule.current,rule.function_ref,rule.loc)
            | Default rule ->
              if rule.entity <> identity || not (List.mem_assoc rule.field current) || List.mem_assoc rule.field previous then
                refuse "MIG022" rule.loc "Default requires a newly added field in this entity"
@@ -102,8 +121,21 @@ let check coverage ~entries =
                refuse "MIG023" rule.loc "duplicate or conflicting Default target"
              else Hashtbl.add defaults rule.field rule) entry.rules;
          let renames = Hashtbl.to_seq renamed |> List.of_seq in
+         let writebacks = Hashtbl.to_seq backwards |> List.of_seq |> List.filter_map (fun (old,(fresh,function_ref,loc)) ->
+           let paired = Option.value (Hashtbl.find_opt destinations fresh) ~default:fresh in
+           if Hashtbl.mem retyped fresh then begin
+             if old <> paired then refuse "MIG022" loc "WriteBack must name the exact previous field paired by Retype"
+           end else if old=fresh || List.mem_assoc old current || List.mem_assoc fresh previous || Hashtbl.mem destinations fresh then
+             refuse "MIG022" loc "WriteBack requires removed/added endpoints, or the exact Retype pair";
+           Some {previous=(List.assoc old previous).stored_field;current=(List.assoc fresh current).stored_field;function_ref;loc})
+           |> List.sort (fun (a:writeback) (b:writeback) -> String.compare a.previous.name b.previous.name) in
+         Hashtbl.iter (fun name loc ->
+           let old=Option.value (Hashtbl.find_opt destinations name) ~default:name in
+           if not (List.mem_assoc old previous) then refuse "MIG022" loc "Retype must replace a previous field (possibly paired by Rename)";
+           if not (List.exists (fun (w:writeback) -> w.previous.name=old && w.current.name=name) writebacks) then
+             refuse "MIG022" loc "online Retype currently requires WriteBack for the previous stored value") retyped;
          List.iter (fun (name, shape) ->
-           if not (List.mem_assoc name current) && not (Hashtbl.mem renamed name) then
+           if not (List.mem_assoc name current) && not (Hashtbl.mem renamed name) && not (Hashtbl.mem backwards name) then
              refuse "MIG022" shape.stored_field.loc ("removed field `" ^ name ^ "` needs a legacy-write rule; Rename alone cannot discard retained data")) previous;
          let values = List.filter_map (fun (name, shape) ->
            let field = shape.stored_field in
@@ -111,6 +143,20 @@ let check coverage ~entries =
              | Some old -> Some (true, List.assoc old previous)
              | None -> Option.map (fun old -> false, old) (List.assoc_opt name previous) in
            match source with
+           | Some (_, old) when Hashtbl.mem retyped name ->
+             let expected = Option.bind version (fun version -> if version<2 || version>2147483646 then None else
+               Some (Validation_common.sql_column_name name ^ "__v" ^ string_of_int version)) in
+             if expected=None || shape.db_column <> expected || shape.db_column=old.db_column then
+               refuse "MIG027" field.loc ("Retype storage must be the compiler-owned introducing-version column for `" ^ name ^ "`");
+             (* Physical naming alone is not a type change. Compare the complete
+                value/type/proof/codec closure with only its storage slot erased. *)
+             let without_storage = function
+               | Some (Seq [semantics;identity;Seq [Bytes "stored-field";Seq [Bytes "field";name;ty;proof;_];deps]]) ->
+                 Some (Seq [semantics;identity;Seq [Bytes "stored-field";Seq [Bytes "field";name;ty;proof];deps]])
+               | _ -> None in
+             if without_storage (renamed_contract renames old.stored_field) = without_storage (Some field.contract) then
+               refuse "MIG022" field.loc "Retype requires a changed stored type, proof or codec contract";
+             Some (Retyped {previous=old.stored_field;current=field})
            | Some (rename, old) ->
              if renamed_contract renames old.stored_field <> Some field.contract then begin
                refuse "MIG022" field.loc ("`" ^ name ^ "` changes its type, proof, codec or storage contract; an identity rule cannot transform that value"); None
@@ -119,6 +165,7 @@ let check coverage ~entries =
              end else if rename then Some (Renamed {previous=old.stored_field;current=field})
              else Some (Copy {previous=old.stored_field;current=field})
            | None ->
+             if shape.db_column<>None then refuse "MIG027" field.loc "new fields cannot claim Retype storage annotations";
              match Hashtbl.find_opt defaults name with
              | Some default ->
                (match A.literal default.value with
@@ -132,6 +179,6 @@ let check coverage ~entries =
            refuse "MIG016" entry.loc "this Derived entry has no identity transformation; use Additive for nullable additions and literal defaults";
          let indexes_changed = entity_indexes before ~entity:pair.previous.entity_name <>
            entity_indexes after ~entity:pair.current.entity_name in
-         Some {identity;previous=pair.previous;current=pair.current;mode=entry.mode;values;indexes_changed})
+         Some {identity;previous=pair.previous;current=pair.current;mode=entry.mode;values;writebacks;indexes_changed})
     | _ -> None) in
   if !errors = [] then Ok {coverage;entities=mapped} else Error (List.rev !errors)

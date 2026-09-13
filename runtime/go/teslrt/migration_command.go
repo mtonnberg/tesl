@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -18,6 +19,7 @@ import (
 type pgSchemaCommand struct {
 	verb, database, worker, request string
 	json                            bool
+	targetVersion                   int
 }
 
 func pgParseSchemaCommand(args []string) (pgSchemaCommand, bool, error) {
@@ -32,11 +34,23 @@ func pgParseSchemaCommand(args []string) (pgSchemaCommand, bool, error) {
 	if position < 0 {
 		return command, false, nil
 	}
-	if position != 0 || args[0] != "--schema" || len(args) < 2 || (args[1] != "status" && args[1] != "install" && args[1] != "worker") {
+	if position != 0 || args[0] != "--schema" || len(args) < 2 || (args[1] != "status" && args[1] != "install" && args[1] != "worker" && args[1] != "contract") {
 		return command, true, fmt.Errorf("usage: app --schema status [--database Module.Database] [--json]\n       app --schema install --worker ROLE [--request ROLE] [--database Module.Database] [--json]\n       app --schema worker [--database Module.Database] [--json]")
 	}
 	command.verb = args[1]
-	for i := 2; i < len(args); i++ {
+	start := 2
+	if command.verb == "contract" {
+		if len(args) < 3 || !strings.HasPrefix(args[2], "V") {
+			return command, true, fmt.Errorf("schema contract requires one target such as V2")
+		}
+		version, err := strconv.Atoi(strings.TrimPrefix(args[2], "V"))
+		if err != nil || version < 2 || version > 2147483646 || args[2] != "V"+strconv.Itoa(version) {
+			return command, true, fmt.Errorf("schema contract requires a canonical target V2 or later")
+		}
+		command.targetVersion = version
+		start = 3
+	}
+	for i := start; i < len(args); i++ {
 		switch args[i] {
 		case "--database":
 			if command.database != "" || i+1 == len(args) || strings.HasPrefix(args[i+1], "--") || args[i+1] == "" {
@@ -77,11 +91,13 @@ func pgSelectSchemaDatabase(selector string) (*Database, PgCompiledMigrationHist
 		history  PgCompiledMigrationHistory
 	}
 	var candidates []candidate
+	seen := map[*Database]bool{}
 	databaseIdentities.Range(func(_, value any) bool {
 		database, ok := value.(*Database)
-		if !ok {
+		if !ok || seen[database] {
 			return true
 		}
+		seen[database] = true
 		if history, versioned := database.CompiledMigrationHistory(); versioned {
 			candidates = append(candidates, candidate{database, history})
 		}
@@ -103,7 +119,7 @@ func pgSelectSchemaDatabase(selector string) (*Database, PgCompiledMigrationHist
 
 func pgRunSchemaCommand(command pgSchemaCommand, out io.Writer) (resultErr error) {
 	ctx := context.Background()
-	if command.verb == "worker" {
+	if command.verb == "worker" || command.verb == "contract" {
 		var stop context.CancelFunc
 		ctx, stop = signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 		defer stop()
@@ -119,10 +135,16 @@ func pgRunSchemaCommandContext(serviceContext context.Context, command pgSchemaC
 	if database.Config.Schema != history.Namespace {
 		return fmt.Errorf("migration namespace disagrees with connection")
 	}
-	if command.verb == "install" || command.verb == "worker" {
+	if command.verb == "install" || command.verb == "worker" || command.verb == "contract" {
 		if err := pgVerifyMigrationFacilities(database); err != nil {
 			return err
 		}
+	}
+	if pgHasRowCompanion(database) {
+		return pgRunRowSchemaCommand(serviceContext, command, out, database)
+	}
+	if command.verb == "contract" {
+		return fmt.Errorf("schema contract requires exact compiled row Contract history")
 	}
 	if _, err := history.ExpansionPlan(1); err != nil {
 		return err

@@ -83,6 +83,7 @@ type field_shape = {
   type_identity : Migration_canonical.node;
   proof_identity : Migration_canonical.node option;
   db_type : string option;
+  db_column : string option;
 }
 let field_shapes inventory =
   let open Migration_canonical in
@@ -92,9 +93,12 @@ let field_shapes inventory =
     | _ -> assert false (* Produced by the canonical field lowering. *) in
   List.map (fun entry -> match entry.definition with
     | Seq [Bytes "field"; Bytes _; type_identity; proof; database_type] ->
+      let database_type, db_column = match database_type with
+        | Seq [Bytes "column-storage"; database_type; Bytes name] -> database_type, Some name
+        | value -> value, None in
       let db_type = match optional database_type with
         | None -> None | Some (Bytes value) -> Some value | _ -> assert false in
-      {stored_field=entry.field;type_identity;proof_identity=optional proof;db_type}
+      {stored_field=entry.field;type_identity;proof_identity=optional proof;db_type;db_column}
     | _ -> assert false) inventory.fields
 
 let entity_indexes inventory ~entity =

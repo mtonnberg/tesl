@@ -7,7 +7,8 @@ import (
 	"testing"
 )
 
-func pgIndexCatalogTestTables() (*pgCatalogExpectations, *pgCatalogTable, *pgCatalogTable, pgMigrationIndexJob) {
+func pgIndexCatalogTestTables(t *testing.T) (*pgCatalogExpectations, *pgCatalogTable, *pgCatalogTable, pgMigrationIndexJob) {
+	t.Helper()
 	metadata := &pgCatalogExpectations{types: map[string]pgCatalogExpectedType{
 		"text": {name: "text", kind: "b", opclass: 3126},
 		"bool": {name: "bool", kind: "b", opclass: 10003},
@@ -18,11 +19,17 @@ func pgIndexCatalogTestTables() (*pgCatalogExpectations, *pgCatalogTable, *pgCat
 	}}
 	expected := *actual
 	expected.Columns = slices.Clone(actual.Columns)
+	if len(expected.Columns) != 2 {
+		t.Fatal("index fixture needs two columns")
+	}
 	expected.Columns[1].Number = 2 // A dropped old attribute is not index drift.
 	actual.Indexes = []pgCatalogIndex{{Name: "done__v2", Method: "btree", Immediate: true,
 		Keys: []int{3}, KeyCount: 1, AttributeCount: 1, Opclasses: []int64{10003}, Collations: []int64{0}, Options: []int64{0},
 		Valid: true, Ready: true, Live: true}}
 	expected.Indexes = slices.Clone(actual.Indexes)
+	if len(expected.Indexes) != 1 {
+		t.Fatal("index fixture needs one index")
+	}
 	expected.Indexes[0].Keys = []int{2}
 	job := pgMigrationIndexJob{Version: 2, Table: "todos", State: "valid",
 		Index: PgMigrationCatalogIndex{Name: "done__v2", Columns: []string{"done"}}}
@@ -34,7 +41,7 @@ func TestPgMigrationIndexCatalogReadiness(t *testing.T) {
 		for _, state := range []string{"pending", "building", "failed", "valid"} {
 			for _, physical := range []string{"absent", "initializing", "ready-invalid", "valid", "dead"} {
 				t.Run(strings.Join([]string{map[bool]string{false: "plain", true: "unique"}[unique], state, physical}, "/"), func(t *testing.T) {
-					metadata, actual, expected, job := pgIndexCatalogTestTables()
+					metadata, actual, expected, job := pgIndexCatalogTestTables(t)
 					job.Index.Unique, job.State = unique, state
 					actual.Indexes[0].Unique, expected.Indexes[0].Unique = unique, unique
 					switch physical {
@@ -87,7 +94,7 @@ func TestPgMigrationIndexCatalogRejectsSemanticMutations(t *testing.T) {
 	}
 	for name, mutate := range mutations {
 		t.Run(name, func(t *testing.T) {
-			metadata, actual, expected, job := pgIndexCatalogTestTables()
+			metadata, actual, expected, job := pgIndexCatalogTestTables(t)
 			job.State = "building" // Pending work grants no weaker semantic shape.
 			mutate(&actual.Indexes[0])
 			var report PgMigrationCatalogReport
@@ -100,7 +107,10 @@ func TestPgMigrationIndexCatalogRejectsSemanticMutations(t *testing.T) {
 }
 
 func TestPgMigrationIndexCatalogDoesNotHideUnrecordedIndexesOrMutateInputs(t *testing.T) {
-	metadata, actual, expected, job := pgIndexCatalogTestTables()
+	metadata, actual, expected, job := pgIndexCatalogTestTables(t)
+	if len(actual.Indexes) != 1 {
+		t.Fatal("index fixture needs one index")
+	}
 	unknown := actual.Indexes[0]
 	unknown.Name = "unrecorded"
 	actual.Indexes = append(actual.Indexes, unknown)
@@ -128,6 +138,9 @@ func TestPgMigrationFutureIndexRequiresSafeOldWriterDomain(t *testing.T) {
 					expected := &pgCatalogTable{}
 					if !newKey {
 						expected.Columns = slices.Clone(actual.Columns)
+					}
+					if len(actual.Columns) != 1 {
+						t.Fatal("index fixture needs one key column")
 					}
 					if defaulted {
 						actual.Columns[0].Default = new("true")

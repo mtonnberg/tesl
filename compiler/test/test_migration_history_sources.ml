@@ -222,11 +222,19 @@ let byte_guards () = with_project (fun root write ->
 
 let discovery_scope () = with_project (fun root write ->
   chain write;
-  (* Amendments need their own elaboration; unrelated files are not revisions. *)
+  (* Repair companions need separate elaboration; unrelated files are not revisions. *)
   List.iter (fun name -> ignore (write ("migrations/notes/" ^ name) "not a revision root"))
-    ["v3-contract.tesl"; "v3-repair-1.tesl"; "tests.tesl"; "v3.tesl.bak"];
+    ["v3-repair-1.tesl"; "tests.tesl"; "v3.tesl.bak"];
   ignore (write "schema/notes/notes.txt" "unrelated");
   check int "non-revision files do not allocate versions" 3 (current (get (discover root))).version;
+  let contract_path=write "migrations/notes/v3-contract.tesl" "not a revision root" in
+  (match discover root with Ok _->fail "malformed Contract companion ignored" | Error _->());
+  ignore(write "migrations/notes/v3-contract.tesl"
+    (header "NotesSchema.Migrate.V3Contract" ^ import "NotesSchema.Migrate.V3"));
+  let captured=get(discover root) in
+  check int "companion does not allocate a revision" 3 (current captured).version;
+  check int "companion is captured" 1 (List.length(contracts captured));
+  check bool "companion bytes join complete source guard" true (List.mem_assoc contract_path (source_inputs captured));
   (* Discovery does not misrepresent parsed migration code as type-checked code. *)
   ignore (write "migrations/notes/v3.tesl" (header "NotesSchema.Migrate.V3" ^ prelude ^ "fn bad() -> Int = \"no\"\n"));
   ignore (get (discover root)))

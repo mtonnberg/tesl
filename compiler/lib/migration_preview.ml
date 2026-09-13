@@ -1,7 +1,7 @@
 module A = Migration_abi
 module T = Migration_target
 module M = Migration_manifest
-type operation = Start | Refresh
+type operation = Start | Refresh | Contract
 type error = {loc:Location.loc;message:string;candidates:T.candidate list}
 type t = {operation:operation;selection:T.selection;revision_after:int;abi:A.t;
           manifest:M.t;diagnostics:Compile.diagnostic list}
@@ -45,12 +45,41 @@ let generate ~project_root ~entry_file ~database ~new_revision ~documents = prot
     {operation;selection=selected;revision_after;abi=context;manifest;diagnostics})) in
   (match verify preview ~documents with Ok () -> () | Error errors -> raise (Invalid errors));
   preview)
+let generate_contract ~project_root ~entry_file ~database ~version ~documents = protect entry_file (fun () ->
+ let context=abi(A.current()) in
+ let checked = function Ok value -> value | Error errors ->
+  raise(Invalid(List.map(fun(e:Migration_sparse.error)->{loc=e.loc;message=e.message;candidates=[]})errors)) in
+ let result=abi(A.with_snapshot context(fun () ->
+  let target_=target(T.resolve_with_compatibility
+   ~stored_value_compatibility:(Some(A.stored_value_compatibility context)) ~compiler_abi:(A.id context)
+   ~project_root ~entry_file ~database ~documents) in
+  let selection=T.selection target_ in
+  if version<2 || version>selection.current_version then raise(Invalid[{loc=Location.dummy_loc entry_file;message="contract version must name an existing transforming migration";candidates=[]}]);
+  let file=Filename.concat selection.migration_directory (Printf.sprintf "v%d-contract.tesl" version) in
+  (match Source_input.kind file with
+   | _ -> raise(Invalid[{loc=Location.dummy_loc file;message="contract source already exists; review the existing file; generating a contract never replaces reviewed authority";candidates=[]}])
+   | exception Unix.Unix_error(Unix.ENOENT,_,_) -> ());
+  let source=Source_input.read entry_file in
+  let entry=match Parser.parse_module entry_file source with Ok m -> m | Err e -> raise(Invalid[{loc=e.loc;message=e.msg;candidates=[]}]) in
+  let contents=checked(Migration_program.with_source_history ~entry ~source(function
+   | None -> raise(Invalid[{loc=Location.dummy_loc entry_file;message="contract generation requires a PostgreSQL database history";candidates=[]}])
+   | Some history ->
+     let rows=match List.assoc_opt selection.database_name (Migration_program.row_histories history) with
+      | Some rows -> rows | None -> raise(Invalid[{loc=Location.dummy_loc entry_file;message="selected database does not own a PostgreSQL row history";candidates=[]}]) in
+     checked(Migration_contract.source ~plan:(checked(Migration_retained_storage.plan rows)) ~version))) in
+  let edits=source_guard(M.create ~project_root ~reads:[] ~directories:[selection.migration_directory]
+    ~imports:[] ~documents ~writes:[file,contents]) in
+  let manifest=source_guard(M.combine (T.source_guard target_) edits ~documents) in
+  let diagnostics=Source_input.with_overlays ~project_root:(Option.value(Source_input.project_root())~default:project_root)
+   (M.overlays manifest) (fun () -> Compile.check_source entry_file (Source_input.read entry_file)) in
+  {operation=Contract;selection;revision_after=selection.current_version;abi=context;manifest;diagnostics})) in
+ (match verify result ~documents with Ok () -> () | Error errors -> raise(Invalid errors));result)
 let quote = Compile.json_encode_string
 let option_int = function None -> "null" | Some n -> string_of_int n
 let to_json p =
   let s = p.selection in
   Printf.sprintf {|{"version":1,"kind":"migration-source-preview","ok":true,"operation":%s,"compilerAbi":%s,"compilable":%b,"selection":{"entryFile":%s,"databaseFile":%s,"database":%s,"family":%s,"schemaRoot":%s,"previousVersion":%s,"revisionBefore":%d,"revisionAfter":%d},"diagnostics":%s,"manifest":%s}|}
-    (quote (match p.operation with Start -> "start" | Refresh -> "refresh"))
+    (quote (match p.operation with Start -> "start" | Refresh -> "refresh" | Contract -> "contract"))
     (quote (compiler_abi p)) (compilable p) (quote s.entry_file) (quote s.database_file)
     (quote s.database_name) (quote s.family) (quote s.schema_root) (option_int s.previous_version)
     s.current_version p.revision_after (Compile.diagnostics_to_json p.diagnostics) (M.to_json p.manifest)

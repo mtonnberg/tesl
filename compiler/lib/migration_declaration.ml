@@ -9,6 +9,8 @@ module R = Migration_transform_rules
 module T = Migration_transform
 
 type t = { coverage : S.t; additive : A.t; transforms : T.t option; version : int; source_seals : Migration_header.checked option }
+type prepared = { pcoverage : S.t; padditive : A.t; ptransforms : T.prepared option;
+  pversion : int; pseals : Migration_header.checked option; pgraph : T.captured }
 let coverage t = t.coverage
 let additive t = t.additive
 let transforms t = t.transforms
@@ -157,8 +159,10 @@ let entry_holes expression =
     | _ -> ()) expression;
   List.rev !holes
 
-let check ?stored_value_compatibility ~compiler_abi ~source (m : module_form) =
+let prepare ?stored_value_compatibility ~compiler_abi ~source (m : module_form) =
   try
+    (match Frontend_check.module_complexity_diagnostics m with
+     | [] -> () | d::_ -> reject d.code (Location.dummy_loc m.source_file) d.message);
     match checked (read_syntax m) with
     | None -> Ok None
     | Some {declaration;family;target;fields;previous_expr=_;current_expr;
@@ -202,6 +206,8 @@ let check ?stored_value_compatibility ~compiler_abi ~source (m : module_form) =
       let fixtures = match List.assoc_opt "fixtures" fields with
         | None -> [] | Some expression -> list "MIG020" expression in
       let before = previous.H.inventory and after = current.H.inventory in
+      let source_graph=checked (T.capture ~before ~after ~source m) in
+      checked (T.with_captured source_graph (fun () ->
       let queue_errors = Migration_queue.changes ~before ~after @
         Migration_queue.historical_capability ~before ~after (Option.map Migration_header.seals source_seals) in
       if queue_errors <> [] then raise (Invalid queue_errors);
@@ -243,18 +249,50 @@ let check ?stored_value_compatibility ~compiler_abi ~source (m : module_form) =
           let entity=normalize entity in
           let rules=List.map (fun expression -> match application expression with
             | "Rename",[previous;current] -> R.Rename {previous=field_name previous;current=field_name current;loc=at expression}
+            | "Retype",[field] -> R.Retype {field=field_name field;loc=at expression}
+            | "WriteBack",[previous;current;function_ref] -> R.WriteBack {previous=field_name previous;current=field_name current;function_ref;loc=at expression}
             | "Default",[field;value] -> R.Default {A.entity;field=field_name field;value=literal m value;loc=at expression}
-            | _ -> reject "MIG022" (at expression) "this transformation checker supports Rename and Default rules; Retype and legacy-write rules require their complete checker") rules in
+            | _ -> reject "MIG022" (at expression) "expected Rename, Default, Retype or WriteBack transformation rules") rules in
           {R.entity;mode;rules;loc}) in
-        let mapping=checked (R.check coverage ~entries) in
+        let mapping=checked (R.check ~version:target coverage ~entries) in
         let functions=List.map (fun (f:T.requested) -> {f with entity=normalize f.entity}) (List.rev !functions) in
-        Some (checked (T.check ~project_root ~source m mapping ~functions ~fixtures))
+        Some (checked (T.prepare ~project_root ~source m mapping ~functions ~fixtures))
       end in
       Option.iter (fun header -> ignore (checked (Migration_header.verify_unchanged header))) source_seals;
       Option.iter (fun located -> ignore (checked (Migration_closure.verify ~project_root
         ~root_file:(Validation_common.canonical_import_path m.source_file) ~source located))) closure;
-      Ok (Some {coverage;additive;transforms;version=target;source_seals})
+      Ok (Some {pcoverage=coverage;padditive=additive;ptransforms=transforms;pversion=target;pseals=source_seals;pgraph=source_graph})))
   with Invalid errors -> Error errors
+
+let with_prepared prepared run =
+  Result.join (T.with_captured prepared.pgraph (fun () -> match prepared.ptransforms with
+    | Some transforms -> T.with_prepared transforms run
+    | None -> Ok (Migration_proof_context.without_context run)))
+
+let check_prepared prepared =
+  Result.join (with_prepared prepared (fun () ->
+  let transforms=match prepared.ptransforms with
+    | None -> Ok None
+    | Some transforms -> Result.map Option.some (T.check_prepared transforms) in
+  Result.map (fun transforms -> {coverage=prepared.pcoverage;additive=prepared.padditive;
+    transforms;version=prepared.pversion;source_seals=prepared.pseals}) transforms))
+let with_prepared_list prepared run =
+  let rec guards = function
+    | [] -> T.with_prepared_list (List.filter_map (fun p -> p.ptransforms) prepared) run
+    | p::rest -> Result.join (T.with_captured p.pgraph (fun () -> guards rest)) in
+  guards prepared
+
+let with_source_context ~source m run =
+  match Migration_proof_context.without_context (fun () ->
+    prepare ~compiler_abi:"compiler-local-unsealed-comparison" ~source m) with
+  | Error errors -> Error errors
+  | Ok None -> Ok (Migration_proof_context.without_context run)
+  | Ok (Some prepared) -> with_prepared prepared run
+
+let check ?stored_value_compatibility ~compiler_abi ~source m =
+  Result.bind (prepare ?stored_value_compatibility ~compiler_abi ~source m) (function
+    | None -> Ok None
+    | Some prepared -> Result.map Option.some (check_prepared prepared))
 
 let diagnostics_of_errors errors =
   (* One surface Same can check a type and its same-named codec. Their closures

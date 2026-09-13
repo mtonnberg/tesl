@@ -51,7 +51,7 @@ func pgVerifyMigrationIndexJobs(plan PgMigrationExpansionPlan, intents map[int]*
 	}
 	for _, step := range plan.Steps {
 		intent := intents[step.Version]
-		if intent == nil {
+		if intent == nil || intent.Objects == nil {
 			continue
 		}
 		if len(intent.Objects) > len(step.Operations) {

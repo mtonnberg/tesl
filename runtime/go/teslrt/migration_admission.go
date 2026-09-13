@@ -13,6 +13,8 @@ import (
 // not authorize requests: admission is checked inside every SQL transaction.
 type pgMigrationAdmission struct {
 	version, fenceNamespace int
+	controlFormat           int
+	rowBaseline             *pgRowBaseline
 	databaseUUID            string
 	worker                  string
 	roles                   PgMigrationControlRoles

@@ -93,6 +93,7 @@ type field_shape = {
   type_identity : Migration_canonical.node;
   proof_identity : Migration_canonical.node option;
   db_type : string option;
+  db_column : string option;
 }
 (** Canonical, resolved logical field shape from the same checked lowering.
     These are not PostgreSQL catalog types or DDL permissions. *)

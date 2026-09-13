@@ -121,7 +121,7 @@ func (app *App) migrationWizardGenerate(ctx context.Context, options migrationWi
 	var output compilerOutput
 	child := *app
 	child.Stdout = &output
-	child.Stdin = nil // Compiler subprocesses must never consume wizard answers.
+	child.Stdin = strings.NewReader("") // Compiler subprocesses must never consume wizard answers.
 	// Reuse exactly the noninteractive guarded source writer, including manifest
 	// validation, durable recovery journal, and changed-input refusal semantics.
 	err = child.migrationGenerate(ctx, options.generateArgs(start), func(preview *sourceedit.Preview) error {
@@ -306,7 +306,7 @@ func (app *App) migrationWizard(ctx context.Context, args []string) error {
 		// Check the actual saved application after publication, including edits
 		// a user may have made since the compiler prepared the guarded manifest.
 		checker := *app
-		checker.Stdin = nil
+		checker.Stdin = strings.NewReader("")
 		if err := checker.compiler(ctx, "--check", report.Selection.EntryFile); err != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
@@ -342,7 +342,7 @@ func (app *App) migrationWizardPlan(ctx context.Context, options migrationWizard
 	var output compilerOutput
 	child := *app
 	child.Stdout = &output
-	child.Stdin = nil
+	child.Stdin = strings.NewReader("")
 	args := []string{"migrate", "plan"}
 	if options.database != "" {
 		args = append(args, "--database", options.database)

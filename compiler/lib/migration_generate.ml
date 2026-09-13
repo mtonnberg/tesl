@@ -272,6 +272,34 @@ let refresh_entities file source before after =
         body=inferred_entry requirements before syntax.declaration.loc identity entity}) in
     (source_result file (Merge.reconcile view ~collection:syntax.entities ~previous ~current ~existing ~desired)).source
 
+(* Explicit Retype rules select fields; generation owns their physical name.
+   This only proposes edits. The entire resulting migration is checked after
+   sealing, so an invalid rule or WriteBack never acquires execution authority. *)
+let retype_columns current migration =
+ let _,declaration=syntax migration.H.path migration.contents in
+ let entities=match declaration.entities with Ast.ERecord r -> r.fields | _ -> [] in
+ let requested=List.concat_map (fun (entity,value) ->
+  match Migration_form.application value with
+  | "Migrate",[_;Ast.EList rules] -> List.filter_map (fun rule -> match Migration_form.application rule with
+    | "Retype",[Ast.EVar field] -> Some (entity,field.name)
+    | _ -> None) rules.elems
+  | _ -> []) entities in
+ let members=I.stored_entities current.H.inventory in
+ let resolve name=List.filter (fun (e:I.stored_entity) ->
+  let relative=relative (I.root_module current.inventory) e.entity_name in
+  List.mem name [relative;e.entity_name;List.hd (List.rev (String.split_on_char '.' relative))]) members in
+ let requested=List.filter_map (fun (entity,field) -> match resolve entity with
+  | [entity] -> Some (entity.I.entity_name,field) | _ -> None) requested |> List.sort_uniq compare in
+ I.source_inputs current.inventory |> List.filter_map (fun (file,_) ->
+  let view=source_result file (Syntax.read ~file ~source:(Source_input.read file)) in
+  let owner=Syntax.module_ view in
+  let edits=List.concat_map (function Ast.DEntity e -> List.filter_map (fun (f:Ast.field_def) ->
+   if f.db_column<>None || not (List.mem (owner.module_name ^ "." ^ e.name,f.name) requested) then None else
+   let range=source_result file (Syntax.field_storage_point view f) in
+   let name=Validation_common.sql_column_name f.name ^ "__v" ^ string_of_int current.version in
+   Some (range," @column(" ^ Migration_row_companion.quote name ^ ")")) e.fields | _ -> []) owner.decls in
+  if edits=[] then None else Some (file,source_result file (Syntax.replace view edits)))
+
 let refresh_with_compatibility ~stored_value_compatibility ~compiler_abi ~project_root:root ~family ~version ~documents =
   try
     let h = history (H.discover_with_compatibility ~stored_value_compatibility ~compiler_abi ~project_root:root ~family) in
@@ -301,16 +329,19 @@ let refresh_with_compatibility ~stored_value_compatibility ~compiler_abi ~projec
     let previous_seal,_ = Header.recorded_seals header in
     let checked_previous = seal (S.verify_sources ~project_root:root previous_seal) in
     ignore (seal (S.verify_semantics ?stored_value_compatibility ~compiler_abi checked_previous));
-    let target_seal = seal (S.create ~project_root:root current.inventory) in
-    let header = sparse (Header.create ~previous:previous_seal ~current:target_seal) in
-    let source = refresh_same migration.path migration.contents previous.inventory current.inventory in
-    let source = refresh_entities migration.path source previous.inventory current.inventory in
-    let source = sparse (Header.replace ~file:migration.path ~source header) in
+    let column_writes=retype_columns current migration in
+    let source=overlay root column_writes (fun () ->
+      let target_inventory=inventory (I.load_with_compatibility ~stored_value_compatibility ~compiler_abi ~root_file:current.root_file) in
+      let target_seal = seal (S.create ~project_root:root target_inventory) in
+      let header = sparse (Header.create ~previous:previous_seal ~current:target_seal) in
+      let source = refresh_same migration.path migration.contents previous.inventory target_inventory in
+      let source = refresh_entities migration.path source previous.inventory target_inventory in
+      sparse (Header.replace ~file:migration.path ~source header)) in
     (* A completed edge's target is also the current edge's predecessor. The
        public source checker therefore sees both seals. Check completed bodies
        against the proposed refreshed header, after their own frozen seals have
        passed above; otherwise a legitimate VCurrent edit prevents V3+ refresh. *)
-    overlay root [migration.path,source] (fun () ->
+    overlay root (column_writes @ [migration.path,source]) (fun () ->
       List.iter (fun (edge : H.migration_source) -> check edge.path edge.contents) (H.completed_migrations h));
     let reads = List.map fst (H.source_inputs h) in
     let imports = List.concat_map (fun file ->
@@ -318,7 +349,7 @@ let refresh_with_compatibility ~stored_value_compatibility ~compiler_abi ~projec
       List.filter_map (fun (i : Ast.import_decl) ->
         if String.starts_with ~prefix:"Tesl." i.module_name then None else Some (file,i.module_name)) m.imports) reads in
     let source_manifest = manifest (M.create ~project_root:root ~reads ~imports ~documents
-      ~directories:[Filename.dirname current.root_file;Filename.dirname migration.path] ~writes:[migration.path,source]) in
+      ~directories:[Filename.dirname current.root_file;Filename.dirname migration.path] ~writes:(column_writes @ [migration.path,source])) in
     let diagnostics = overlay root (M.overlays source_manifest) (fun () -> Compile.check_source migration.path source) in
     history (H.verify_unchanged h);
     manifest (M.verify_source source_manifest ~documents);

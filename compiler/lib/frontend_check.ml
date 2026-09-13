@@ -595,12 +595,13 @@ let module_local_diags ?(additional = fun _ _ -> []) source (m : Ast.module_form
   match module_complexity_diagnostics m with
   | _ :: _ as diagnostics -> diagnostics
   | [] ->
+    Migration_proof_context.with_module m (fun () ->
     legacy_bool_diagnostics m.source_file source m
     @ regex_literal_diagnostics m
     @ type_diags_of source m
     @ List.map diag_of_proof_error (Proof_checker.check_module m)
     @ validation_diags_of source m
-    @ additional source m
+    @ additional source m)
 
 (* ── Cross-module structural validation (2026-07-08 multi-module audit) ─────
    `--check <entrypoint>` historically validated the entrypoint plus module

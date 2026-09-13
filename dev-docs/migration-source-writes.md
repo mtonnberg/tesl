@@ -25,6 +25,11 @@ connect to PostgreSQL, run application tests, build a release, or execute databa
 migrations. Explicit `generate`, `plan`, and `recover-source` commands retain their
 noninteractive behavior and JSON contracts.
 
+`tesl migrate contract app.tesl --version N` uses the same guarded publisher for
+a new immutable Contract companion. Add `--manifest-json` for its read-only
+proposal. See [checked Contract source](migration-contract-source.md) for exact
+selectors, automatically derived preparation, and source-freezing order.
+
 The wizard and ordinary generation share `migrationGenerate` and the same
 `sourceedit` publisher. An optional wizard validator checks the **exact decoded
 preview immediately before `Apply`**, rather than checking one preview and applying

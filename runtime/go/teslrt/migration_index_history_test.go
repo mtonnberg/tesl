@@ -5,7 +5,8 @@ import (
 	"testing"
 )
 
-func pgIndexHistoryTestInputs() (PgMigrationExpansionPlan, map[int]*pgExpansionIntent, pgMigrationIndexJob) {
+func pgIndexHistoryTestInputs(t *testing.T) (PgMigrationExpansionPlan, map[int]*pgExpansionIntent, pgMigrationIndexJob) {
+	t.Helper()
 	steps := pgPlanTestSteps()[:2]
 	plan := PgMigrationExpansionPlan{InitialVersion: 1, CurrentVersion: 2, SourceCompilerABI: pgTestSourceABI, Steps: steps}
 	intents := make(map[int]*pgExpansionIntent)
@@ -18,7 +19,11 @@ func pgIndexHistoryTestInputs() (PgMigrationExpansionPlan, map[int]*pgExpansionI
 	}
 	n := len(steps[1].Operations) - 1
 	op := steps[1].Operations[n]
-	id := intents[2].Objects[n]
+	intent := intents[2]
+	if intent == nil || n < 0 || n >= len(intent.Objects) {
+		t.Fatal("index fixture needs the V2 index operation and its object hash")
+	}
+	id := intent.Objects[n]
 	job := pgMigrationIndexJob{Version: 2, Ordinal: n, ID: id, ObjectHash: id, SourceABI: plan.SourceCompilerABI,
 		Table: op.Table, Index: *op.Index, State: "pending"}
 	return plan, intents, job
@@ -71,7 +76,7 @@ func TestPgMigrationIndexHistoryBindsExactOperation(t *testing.T) {
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			plan, intents, job := pgIndexHistoryTestInputs()
+			plan, intents, job := pgIndexHistoryTestInputs(t)
 			if err := pgVerifyMigrationIndexJobs(plan, intents, []pgMigrationIndexJob{job}, true); err != nil {
 				t.Fatalf("valid baseline: %v", err)
 			}
@@ -84,7 +89,7 @@ func TestPgMigrationIndexHistoryBindsExactOperation(t *testing.T) {
 }
 
 func TestPgMigrationIndexHistoryRequiresEveryCommittedJob(t *testing.T) {
-	plan, intents, job := pgIndexHistoryTestInputs()
+	plan, intents, job := pgIndexHistoryTestInputs(t)
 	if err := pgVerifyMigrationIndexJobs(plan, intents, nil, false); err == nil {
 		t.Fatal("recorded index operation without a protected job accepted")
 	}
@@ -92,7 +97,11 @@ func TestPgMigrationIndexHistoryRequiresEveryCommittedJob(t *testing.T) {
 		t.Fatal("duplicate job accepted")
 	}
 	// Uncommitted index work is not yet required to have a job.
-	intents[2].Objects = intents[2].Objects[:job.Ordinal]
+	intent := intents[2]
+	if intent == nil || job.Ordinal < 0 || job.Ordinal > len(intent.Objects) {
+		t.Fatal("index fixture has no matching V2 progress")
+	}
+	intent.Objects = intent.Objects[:job.Ordinal]
 	if err := pgVerifyMigrationIndexJobs(plan, intents, nil, false); err != nil {
 		t.Fatalf("future uncommitted operation unexpectedly needs a job: %v", err)
 	}
@@ -101,7 +110,7 @@ func TestPgMigrationIndexHistoryRequiresEveryCommittedJob(t *testing.T) {
 func TestPgMigrationIndexHistoryPinsExecutorAfterExpansionCompletes(t *testing.T) {
 	for _, state := range []string{"pending", "building", "failed", "valid"} {
 		t.Run(state, func(t *testing.T) {
-			plan, intents, job := pgIndexHistoryTestInputs()
+			plan, intents, job := pgIndexHistoryTestInputs(t)
 			plan.SourceCompilerABI = "tesl-source-abi-v1:" + strings.Repeat("b", 64)
 			job.State = state
 			if err := pgVerifyMigrationIndexJobs(plan, intents, []pgMigrationIndexJob{job}, false); err != nil {

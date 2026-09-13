@@ -353,6 +353,9 @@ func TestMigrationWizardTerminalReadCancelsWithoutAWaitingGoroutine(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
+	if read == nil || write == nil {
+		t.Fatal("successful Pipe returned no endpoints")
+	}
 	defer func() { _ = read.Close(); _ = write.Close() }()
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()

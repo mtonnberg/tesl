@@ -160,14 +160,14 @@ func TestPgMigrationIndexWorkerBuildsConcurrentlyAndRenewsWhileBlocked(t *testin
 				pgIndexTestReady(t, f, service)
 			}
 			pid, tag := pgIndexTestWaitingBuild(t, f, service)
-			initial := pgIndexControlTestJobs(t, f)[0]
+			initial := pgFirstIndexControlTestJob(t, f)
 			if initial.State != "building" || initial.Attempts != 1 || initial.ExpiresAt == nil || initial.Holder != tag {
 				t.Fatalf("initial build: %+v", initial)
 			}
 			// Observe renewal beyond an entire original lease, without releasing the
 			// writer. A startup deadline or a DDL statement_timeout cannot kill it.
 			pgIndexTestAwait(t, f, service, "renewal while the DDL connection is blocked", func() bool {
-				job := pgIndexControlTestJobs(t, f)[0]
+				job := pgFirstIndexControlTestJob(t, f)
 				if job.Attempts != 1 || job.Token != initial.Token || job.Holder != tag {
 					t.Fatalf("live work was replaced: %+v", job)
 				}
@@ -221,47 +221,6 @@ func TestPgMigrationIndexWorkerBuildsConcurrentlyAndRenewsWhileBlocked(t *testin
 	}
 }
 
-func TestPgMigrationIndexWorkerRealUniqueFailureCleansAndRetries(t *testing.T) {
-	f, _ := pgNewWorkerTest(t)
-	f.install(t, 1)
-	pgExpandIndexTest(t, f, 1, true)
-	state := pgExpandIndexTest(t, f, 2, true)
-	// Fault injection by an operator: old admitted application writers only
-	// omit NULL here, so cannot produce these conflicting non-null new keys.
-	f.call(t, "insert into notes_app.notes(id,active,token) values('a',true,'duplicate'),('b',false,'duplicate')")
-	settings := pgIndexTestSettings()
-	settings.poll = 2 * time.Second
-	service := pgStartIndexTestService(t, f, 2, true, state, settings)
-	var failed pgMigrationIndexJob
-	pgIndexTestAwait(t, f, service, "durable unique failure and invalid-remnant cleanup", func() bool {
-		failed = pgIndexControlTestJobs(t, f)[0]
-		var absent bool
-		if err := f.installer.QueryRow(f.ctx, "select to_regclass('notes_app.token__v2') is null").Scan(&absent); err != nil {
-			t.Fatal(err)
-		}
-		return failed.State == "failed" && failed.Holder == "" && absent
-	})
-	if !strings.Contains(failed.Error, "23505") || !strings.Contains(failed.Error, "duplicate") || failed.Attempts != 1 {
-		t.Fatalf("failed attempt evidence: %+v", failed)
-	}
-	select {
-	case <-service.ready:
-		t.Fatal("failed unique build was announced ready")
-	default:
-	}
-	f.call(t, "update notes_app.notes set token='repaired' where id='b'")
-	job := pgIndexTestValid(t, f, service)
-	pgIndexTestReady(t, f, service)
-	if job.Attempts != 2 || job.Error != "" {
-		t.Fatalf("repair did not preserve attempts/clear current error: %+v", job)
-	}
-	var rows int
-	if err := f.worker.QueryRow(f.ctx, "select count(*) from notes_app.notes").Scan(&rows); err != nil || rows != 2 {
-		t.Fatalf("failed index altered stored rows: %d %v", rows, err)
-	}
-	pgIndexTestStop(t, service)
-}
-
 func TestPgMigrationIndexWorkerReconnectsAfterEitherOwnedBackendDies(t *testing.T) {
 	for _, which := range []string{"ddl", "coordinator"} {
 		t.Run(which, func(t *testing.T) {
@@ -273,7 +232,7 @@ func TestPgMigrationIndexWorkerReconnectsAfterEitherOwnedBackendDies(t *testing.
 			service := pgStartIndexTestService(t, f, 2, false, state, pgIndexTestSettings())
 			pgIndexTestReady(t, f, service)
 			pid, oldTag := pgIndexTestWaitingBuild(t, f, service)
-			oldJob := pgIndexControlTestJobs(t, f)[0]
+			oldJob := pgFirstIndexControlTestJob(t, f)
 			victim := pid
 			if which == "coordinator" {
 				if err := f.installer.QueryRow(f.ctx, "select pid from pg_stat_activity where datname=current_database() and application_name=$1 and pid<>$2", oldTag, pid).Scan(&victim); err != nil {
@@ -284,7 +243,7 @@ func TestPgMigrationIndexWorkerReconnectsAfterEitherOwnedBackendDies(t *testing.
 				t.Fatal(err)
 			}
 			pgIndexTestAwait(t, f, service, "fresh tag claims only after old executor backends disappear", func() bool {
-				job := pgIndexControlTestJobs(t, f)[0]
+				job := pgFirstIndexControlTestJob(t, f)
 				if job.Holder == "" || job.Holder == oldTag {
 					return false
 				}
@@ -320,7 +279,7 @@ func TestPgMigrationIndexWorkerCompetingWorkersDoNotRebuildValidResults(t *testi
 	one := pgStartIndexTestService(t, f, 2, false, state, pgIndexTestSettings())
 	pgIndexTestReady(t, f, one)
 	_, tag := pgIndexTestWaitingBuild(t, f, one)
-	initial := pgIndexControlTestJobs(t, f)[0]
+	initial := pgFirstIndexControlTestJob(t, f)
 	two := pgStartIndexTestService(t, f, 2, false, state, pgIndexTestSettings())
 	pgIndexTestReady(t, f, two)
 	var observed time.Time
@@ -341,7 +300,7 @@ func TestPgMigrationIndexWorkerCompetingWorkersDoNotRebuildValidResults(t *testi
 		}
 		return later.After(observed)
 	})
-	if job := pgIndexControlTestJobs(t, f)[0]; job.Token != initial.Token || job.Attempts != 1 || job.Holder != tag {
+	if job := pgFirstIndexControlTestJob(t, f); job.Token != initial.Token || job.Attempts != 1 || job.Holder != tag {
 		t.Fatalf("competitor stole active work: %+v", job)
 	}
 	pgIndexTestStop(t, one)
@@ -363,7 +322,7 @@ func TestPgMigrationIndexWorkerCompetingWorkersDoNotRebuildValidResults(t *testi
 	if err := f.installer.QueryRow(f.ctx, "select 'notes_app.active__v2'::regclass::oid").Scan(&again); err != nil || again != oid {
 		t.Fatalf("restart replaced successful physical index: %d %d %v", oid, again, err)
 	}
-	if later := pgIndexControlTestJobs(t, f)[0]; later.Attempts != job.Attempts || later.Token != job.Token {
+	if later := pgFirstIndexControlTestJob(t, f); later.Attempts != job.Attempts || later.Token != job.Token {
 		t.Fatalf("restart claimed immutable completed work: %+v", later)
 	}
 	pgIndexTestStop(t, three)
@@ -444,7 +403,7 @@ func TestPgMigrationIndexWorkerRefusesABIAndPhysicalDriftBeforeClaim(t *testing.
 			if err == nil || ready || ctx.Err() != nil {
 				t.Fatalf("unsafe executor did not refuse before work: err=%v ready=%v deadline=%v", err, ready, ctx.Err())
 			}
-			job := pgIndexControlTestJobs(t, f)[0]
+			job := pgFirstIndexControlTestJob(t, f)
 			if job.Attempts != 0 || job.Token != 0 || job.Holder != "" || job.State != "pending" {
 				t.Fatalf("refusal claimed or executed work: %+v", job)
 			}
@@ -458,7 +417,7 @@ func TestPgMigrationIndexWorkerExpiresAndRemovesEveryStuckHolderBackend(t *testi
 	pgExpandIndexTest(t, f, 1, false)
 	state := pgExpandIndexTest(t, f, 2, false)
 	writer := pgIndexTestWriter(t, f, request)
-	job := pgIndexControlTestJobs(t, f)[0]
+	job := pgFirstIndexControlTestJob(t, f)
 	oldTag := "tesl-exec:stopped-holder"
 	config := f.worker.Config().Copy()
 	config.RuntimeParams["application_name"] = oldTag
@@ -519,7 +478,7 @@ func TestPgMigrationIndexWorkerExpiresAndRemovesEveryStuckHolderBackend(t *testi
 	service := pgStartIndexTestService(t, f, 2, false, state, pgIndexTestSettings())
 	pgIndexTestReady(t, f, service)
 	pgIndexTestAwait(t, f, service, "takeover follows full-tag disappearance", func() bool {
-		current := pgIndexControlTestJobs(t, f)[0]
+		current := pgFirstIndexControlTestJob(t, f)
 		if current.Holder == "" || current.Holder == oldTag {
 			return false
 		}

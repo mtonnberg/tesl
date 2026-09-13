@@ -36,3 +36,13 @@ type syntax = {
 val read_syntax : Ast.module_form -> (syntax option,Migration_sparse.error list) result
 val identity_claims : before:Migration_inventory.t -> after:Migration_inventory.t ->
   syntax -> (Migration_sparse.identity list,Migration_sparse.error list) result
+
+type prepared
+val prepare : ?stored_value_compatibility:string -> compiler_abi:string -> source:string -> Ast.module_form ->
+  (prepared option, Migration_sparse.error list) result
+val with_prepared : prepared -> (unit -> 'a) -> ('a,Migration_sparse.error list) result
+val check_prepared : prepared -> (t,Migration_sparse.error list) result
+
+val with_source_context : source:string -> Ast.module_form -> (unit -> 'a) -> ('a,Migration_sparse.error list) result
+
+val with_prepared_list : prepared list -> (unit -> 'a) -> ('a,Migration_sparse.error list) result

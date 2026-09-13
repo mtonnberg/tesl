@@ -38,7 +38,7 @@ func pgPrepareIndexJobCatalog(metadata *pgCatalogExpectations, actual, expected 
 			return nil, nil, false, err
 		}
 		if job.Version <= version {
-			if declared < 0 || !pgEquivalentMigrationIndex(actual, expected, shape, want.Indexes[declared]) {
+			if declared < 0 || want.Indexes == nil || !pgEquivalentMigrationIndex(actual, expected, shape, want.Indexes[declared]) {
 				return nil, nil, false, fmt.Errorf("protected index job differs from compiled catalog: %s.%s", job.Table, job.Index.Name)
 			}
 		} else if declared >= 0 || !pgFutureIndexSafeForWrites(actual, expected, job.Index) {
@@ -49,7 +49,7 @@ func pgPrepareIndexJobCatalog(metadata *pgCatalogExpectations, actual, expected 
 		}
 		position := slices.IndexFunc(live.Indexes, func(i pgCatalogIndex) bool { return i.Name == job.Index.Name })
 		valid := false
-		if position < 0 {
+		if position < 0 || live.Indexes == nil {
 			if job.State == "valid" {
 				report.Missing = append(report.Missing, PgMigrationCatalogIssue{job.Table, job.Index.Name, "completed index job has no physical index"})
 			}
@@ -109,7 +109,7 @@ func pgFutureIndexSafeForWrites(actual, expected *pgCatalogTable, index PgMigrat
 	allNewNull, bounded := true, true
 	for _, name := range index.Columns {
 		position := slices.IndexFunc(actual.Columns, func(c pgCatalogColumn) bool { return c.Name == name })
-		if position < 0 {
+		if position < 0 || actual.Columns == nil {
 			return false
 		}
 		column := actual.Columns[position]

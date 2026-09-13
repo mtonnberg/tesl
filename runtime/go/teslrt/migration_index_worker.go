@@ -378,6 +378,9 @@ func pgIndexWorkerRound(ctx context.Context, ddl, coordinator *pgx.Conn, tag str
 			return ctx.Err()
 		case err := <-finished:
 			finished = nil
+			if active == nil || stopJob == nil {
+				return pgIndexRefuse("index completion has no active job or cancellation scope")
+			}
 			stopJob()
 			stopJob = nil
 			if err != nil {
@@ -394,6 +397,7 @@ func pgIndexWorkerRound(ctx context.Context, ddl, coordinator *pgx.Conn, tag str
 				return errPgIndexLeaseLost
 			}
 			active = nil
+			migrationBoundary("index-after-release")
 			if err := refresh(false); err != nil {
 				return err
 			}

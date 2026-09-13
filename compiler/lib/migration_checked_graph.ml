@@ -7,7 +7,7 @@ type checked_module = {
   resolve : Migration_ir.resolver;
 }
 
-type t = { modules : checked_module list; sources : (string * string) list }
+type t = { modules : checked_module list; sources : (string * string) list; context : Migration_proof_context.t option }
 
 let names = function
   | DFunc f -> [Value, f.name]
@@ -66,7 +66,7 @@ let protect loc f =
   | Unix.Unix_error (error, operation, path) ->
     Error {loc; message=Printf.sprintf "%s: %s: %s" operation path (Unix.error_message error)}
 
-let check captured =
+let check ?context captured =
   let loc = match captured with
     | (m, _) :: _ -> Location.dummy_loc m.source_file
     | [] -> Location.dummy_loc "<migration-checked-graph>" in
@@ -93,10 +93,17 @@ let check captured =
       | Ok parsed when parsed = m -> ()
       | Ok _ -> reject loc ("captured migration AST does not match source: " ^ path)
       | Err error -> reject error.loc error.msg) captured;
+    List.iter (fun (m,_) -> List.iter (function
+      | DConst c when Migration_form.is_contract m c -> reject c.loc "Contract authority cannot enter a migration function graph"
+      | _ -> ()) m.decls) captured;
     let captured = List.sort (fun (a,_) (b,_) -> String.compare a.module_name b.module_name) captured in
     let forms = List.map fst captured in
     let sources = List.map (fun (m, source) -> m.source_file, source) captured |> List.sort compare in
-    Source_input.with_pinned_files sources (fun () ->
+    Option.iter (fun context -> Migration_proof_context.require_graph context captured) context;
+    let with_context f = match context with
+      | None -> Migration_proof_context.without_context f
+      | Some context -> Migration_proof_context.with_context context f in
+    with_context (fun () -> Source_input.with_pinned_files sources (fun () ->
       List.iter (fun m -> List.iter (fun (i : import_decl) ->
         if not (String.starts_with ~prefix:"Tesl." i.module_name) then
           match Hashtbl.find_opt names_seen i.module_name with
@@ -114,12 +121,14 @@ let check captured =
         List.map (fun (ns,name) -> (ns,m.module_name ^ "." ^ name),
           Global (m.module_name ^ "." ^ name)) (names d)) m.decls) forms in
       let modules = List.map (fun (m, source) ->
-        let diagnostics = Frontend_check.check_module ~skip_dep_body:(fun _ -> true) source m in
+        let diagnostics = Migration_proof_context.with_module m (fun () ->
+          Frontend_check.check_module ~skip_dep_body:(fun _ -> true) source m) in
         (match List.find_opt (fun (d : Frontend_check.diagnostic) -> d.severity = "error") diagnostics with
          | Some error -> reject (Location.make_loc error.file error.start_line
              error.start_col error.end_line error.end_col) error.message
          | None -> ());
-        let typed_nodes, errors = Checker.check_module_with_typed_nodes m in
+        let typed_nodes, errors = Migration_proof_context.with_module m (fun () ->
+          Checker.check_module_with_typed_nodes m) in
         (match errors with error :: _ -> reject error.loc error.message | [] -> ());
         let local = List.concat_map (fun d -> List.map (fun (ns,name) ->
           (ns,name), Global (m.module_name ^ "." ^ name)) (names d)) m.decls in
@@ -141,7 +150,8 @@ let check captured =
                | Some _ as result -> result
                | None -> builtin m ns name) in
         {form=m; typed_nodes; resolve}) captured in
-      {modules; sources}))
+      Option.iter Migration_proof_context.revalidate context;
+      {modules; sources; context})))
 
 let modules graph = List.map (fun m -> m.form) graph.modules
 let source_texts graph = graph.sources
@@ -150,11 +160,28 @@ let resolve graph ~owner =
   | Some m -> m.resolve
   | None -> fun _ _ -> None
 
-let lower ~scopes graph =
+let lower_selected ~scopes ~omit graph =
   let loc = Location.dummy_loc "<migration-checked-graph>" in
   protect loc (fun () ->
-    List.concat_map (fun checked -> List.map (fun declaration ->
+    Option.iter Migration_proof_context.revalidate graph.context;
+    let definitions = List.concat_map (fun checked -> List.filter_map (fun declaration ->
+      if omit checked.form declaration then None else
       match Migration_ir.define ~scopes ~resolve:checked.resolve
           ~typed_nodes:checked.typed_nodes checked.form declaration with
-      | Ok definition -> definition
-      | Error error -> raise (Invalid error)) checked.form.decls) graph.modules)
+      | Ok definition -> Some definition
+      | Error error -> raise (Invalid error)) checked.form.decls) graph.modules in
+    Option.iter Migration_proof_context.revalidate graph.context;
+    definitions)
+
+let lower ~scopes graph = lower_selected ~scopes ~omit:(fun _ _ -> false) graph
+
+let lower_transform ~scopes ~contextual:(owner, declaration) graph =
+  let matching = List.filter (fun checked -> checked.form == owner) graph.modules in
+  match matching with
+  | [checked] when Migration_form.is_declaration owner declaration &&
+      List.exists (function DConst candidate -> candidate == declaration | _ -> false) checked.form.decls ->
+    lower_selected ~scopes graph ~omit:(fun m -> function
+      | DConst candidate -> m == owner && candidate == declaration
+      | DTest _ -> true
+      | _ -> false)
+  | _ -> Error {loc=declaration.loc; message="transform contextual declaration is not an original checked graph node"}

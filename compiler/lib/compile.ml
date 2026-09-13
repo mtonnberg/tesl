@@ -8,11 +8,16 @@ open Ast
 include Frontend_check
 
 let check_module ?skip_dep_body source m =
+  match Migration_application.with_contexts ~source m (fun () ->
   let additional = Migration_application.make ?skip_dep_body m in
   let diagnostics = Frontend_check.check_module ~additional
     ?skip_dep_body source m in
   Migration_declaration.diagnostics_of_errors
-    (Migration_source_diagnostics.check_module_source source m) @ diagnostics
+    (Migration_source_diagnostics.check_module_source source m) @ diagnostics) with
+  | Ok diagnostics -> diagnostics
+  | Error errors -> Migration_declaration.diagnostics_of_errors errors @
+      Migration_proof_context.without_context (fun () -> Frontend_check.check_module ?skip_dep_body source m)
+
 
 let source_parse_diagnostics filename source error =
   Migration_declaration.diagnostics_of_errors
@@ -2796,9 +2801,10 @@ let compile_go_source ?(debug=false) ?(path="") filename source =
   match parse_module filename source with
   | Err error -> GoFailure (source_parse_diagnostics filename source error)
   | Ok m ->
-    let result = Migration_program.with_history ~entry:m ~source (fun history ->
+    let result = Result.join (Migration_application.with_contexts ~source m (fun () ->
+      Migration_program.with_history ~entry:m ~source (fun history ->
     let diags = check_module source m in
-    if diags <> [] then GoFailure (diags @ go_import_boundary_diags filename m)
+    if List.exists (fun (d:diagnostic) -> d.severity="error") diags then GoFailure (diags @ go_import_boundary_diags filename m)
     else
       (match local_dependency_modules path m with
        | GoDepsError message -> GoFailure [go_project_diag filename message]
@@ -2810,11 +2816,12 @@ let compile_go_source ?(debug=false) ?(path="") filename source =
            if dependency.source_file = m.source_file then []
            else
              match Source_input.read_text dependency.source_file with
-             | dependency_source -> check_module dependency_source dependency
+             | dependency_source -> Frontend_check.check_module
+                 ~additional:(Migration_application.make dependency) dependency_source dependency
              | exception Sys_error _ -> []) originals in
          let binding_diags = match Migration_program.verify_bindings history originals with
           | Ok () -> [] | Error es -> Migration_declaration.diagnostics_of_errors es in
-         if dependency_diags @ binding_diags <> [] then GoFailure (dependency_diags @ binding_diags)
+         if List.exists (fun (d:diagnostic) -> d.severity="error") (dependency_diags @ binding_diags) then GoFailure (dependency_diags @ binding_diags)
          else
             let mode = if debug then Emit_go.Debug else Emit_go.Release in
             let migration_families = Option.fold ~none:[] ~some:(fun p ->
@@ -2838,8 +2845,47 @@ let compile_go_source ?(debug=false) ?(path="") filename source =
                   "\nconst teslGeneratedQueueHistoryJSON = " ^ Emit_go.go_quote queue_json ^
                   "\n\nfunc init() {\n" ^ String.concat "" registrations ^ "\tregisterCompiledQueueHistory(teslGeneratedQueueHistoryJSON)\n}\n"}] in
              GoSuccess (artifacts @ metadata)
-           | Error errors -> GoFailure (List.map diag_of_go_emit_error errors))) in
+           | Error errors -> GoFailure (List.map diag_of_go_emit_error errors))))) in
     match result with Ok result -> result | Error es -> GoFailure (Migration_declaration.diagnostics_of_errors es)
+
+(** Internal compiler artifact seam for the checked source/typed-registration
+    prerequisite. No CLI path calls this, and its v4 source envelope is not an
+    executable expansion history. Public compilation continues to refuse retained
+    Transform/Reset operations until their physical protocol is implemented. *)
+let compile_row_source_artifacts ?(mode=Emit_go.Release) ?(storage=false) ?(physical=false) filename source =
+ match parse_module filename source with
+ | Err error -> GoFailure (source_parse_diagnostics filename source error)
+ | Ok entry ->
+  let result=Migration_program.with_source_history ~entry ~source (function
+   | None -> GoFailure [go_project_diag filename "row source artifacts require a versioned PostgreSQL database"]
+   | Some history ->
+    let captured=Migration_program.source_modules history in
+    let originals=List.map fst captured in
+    let contexts=List.concat_map (fun (_,rows) -> Migration_row_history.bindings rows |> List.map (fun binding ->
+     Migration_transform.proof_context (Migration_transform_link.checked_transform (Migration_row_history.link binding))))
+      (Migration_program.row_histories history) |> List.fold_left (fun acc context -> if List.memq context acc then acc else context::acc) [] in
+    let lifted_diags=List.concat_map (fun (m,_) -> List.filter_map (fun (import:Ast.import_decl) ->
+     if List.mem import.module_name go_lifted_module_names then Some (go_project_diag m.source_file
+       "row source artifacts do not yet bind lifted Tesl.CivilTime module emission") else None) m.imports) captured in
+    let diagnostics=lifted_diags @ Migration_proof_context.with_contexts contexts (fun () ->
+     List.concat_map (fun (m,bytes) -> Frontend_check.check_module ~additional:(Migration_application.make m) bytes m) captured) in
+    let binding_errors=match Migration_program.verify_bindings (Some (Migration_program.source_program history)) originals with
+     | Ok () -> [] | Error errors -> Migration_declaration.diagnostics_of_errors errors in
+    if List.exists (fun (d:diagnostic) -> d.severity="error") (diagnostics @ binding_errors) then GoFailure (diagnostics @ binding_errors) else
+    let lowered=List.map (fun m -> match Migration_schema.lower_module ~modules:originals m with
+     | Ok lowered -> Result.Ok (Migration_form.erase lowered)
+     | Error errors -> Error (List.map (fun (e:Validation_common.validation_error) -> go_project_diag filename e.message) errors)) originals in
+    let errors=List.concat_map (function Error errors -> errors | Ok _ -> []) lowered in
+    if errors<>[] then GoFailure errors else
+    let modules=List.filter_map (function Result.Ok m -> Some m | _ -> None) lowered in
+    let p=Migration_program.source_program history in
+    let migration_families=List.map (fun (d:Migration_program.database) -> d.identity,d.family) (Migration_program.databases p) in
+    match Emit_go.compile_project ~mode ~row_physical:physical ~row_storage:(storage || physical) ~row_source:history ~migration_families
+      ~migration_queues:(Migration_program.queue_bindings p)
+      ~queue_codec_records:(Migration_program.queue_codec_records p) ~entry modules with
+    | Ok artifacts -> GoSuccess artifacts
+    | Error errors -> GoFailure (List.map diag_of_go_emit_error errors)) in
+  match result with Ok output -> output | Error errors -> GoFailure (Migration_declaration.diagnostics_of_errors errors)
 
 let compile_go_file ?(debug=false) filename =
   let source = Source_input.read_text filename in

@@ -1027,8 +1027,8 @@ let check_entity_structure ?facts ?(extra_funcs=[]) (decls : top_decl list) : va
           (Printf.sprintf "entity `%s` has a table name PostgreSQL cannot preserve exactly" e.name);
       let columns = Hashtbl.create 8 in
       List.iter (fun (f : field_def) ->
-        let column = sql_column_name f.name in
-        if String.length column > 63 then
+        let column = Option.value f.db_column ~default:(sql_column_name f.name) in
+        if column = "" || String.length column > 63 || String.contains column '\000' then
           add "shorten the field name so its SQL column name is at most 63 bytes"
             (Printf.sprintf "field `%s.%s` maps to an overlong SQL column name `%s`" e.name f.name column);
         match Hashtbl.find_opt columns column with

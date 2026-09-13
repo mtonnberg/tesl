@@ -247,3 +247,6 @@ let step_to_json ?(include_catalog=true) ~quote s =
   s.version (quote s.snapshot_hash) (quote (step_hash s)) s.epoch_preserving
   (array json_operation s.operations)
   (if include_catalog then ",\"catalog\":" ^ array json_catalog s.catalog else "")
+
+let validate_assignment column value =
+ try assignment column value; Ok () with Invalid errors -> Error errors

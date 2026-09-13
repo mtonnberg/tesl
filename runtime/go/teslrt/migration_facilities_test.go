@@ -292,7 +292,7 @@ func TestPgMigrationWorkerFacilitiesGuardLazyStorageBeforePoolOrCachedReadiness(
 	pgRequireFacilityRefusal(t, runtime.prepareOn(connection, nil), "SSE")
 	pgRequireFacilityRefusal(t, createPubsubOutbox(ctx, connection), "SSE")
 	pgRequireFacilityRefusal(t, normalizeLegacyPubsubRows(connection), "SSE")
-	_, err := writePubsub(ctx, nil, connection, "Updates", "key", "{}")
+	_, err := writePubsub(ctx, pgNoSQLTransaction{}, connection, "Updates", "key", "{}")
 	pgRequireFacilityRefusal(t, err, "SSE")
 	listened, err := runtime.listen(connection)
 	pgRequireFacilityRefusal(t, err, "SSE")

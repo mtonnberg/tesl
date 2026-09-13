@@ -270,6 +270,17 @@ let registry : entry list = [
        The diagnostic identifies the first differing dependency.";
     manual = Some "best-practices#database-access" };
 
+  { code = "MIG031"; category = Migration;
+    title = "migration update cost is proportional to matched rows";
+    explanation =
+      "During a transformation window this update locks and fetches each matched \
+       row through the typed migration before writing it. One server-side cursor \
+       preserves the target snapshot; TESL_RMW_BATCH (default 2000) bounds each \
+       client batch within the same transaction. A primary-key equality bounds \
+       the match to one row. This warning is a suggested cost review, not a \
+       compile error or permission to change the predicate.";
+    manual = Some "best-practices#database-access" };
+
   (* ── Legacy Bool spelling (validation source, dedicated codes) ─────────── *)
   { code = "VBOOL001"; category = Type;
     title = "use `Bool`, not `Boolean`/`bool`";

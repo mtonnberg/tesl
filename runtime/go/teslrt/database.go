@@ -216,7 +216,11 @@ func WithDatabase(database *Database, body func()) {
 	var connection *PostgresDB
 	if history, versioned := database.CompiledMigrationHistory(); versioned {
 		var release func()
-		connection, release = openVersionedPostgres(database.Config, history)
+		if pgHasRowCompanion(database) {
+			connection, release = openRowPostgres(database)
+		} else {
+			connection, release = openVersionedPostgres(database.Config, history)
+		}
 		if release != nil {
 			defer release()
 		}

@@ -1187,7 +1187,7 @@ let load_imported_func_sigs (m : module_form) : (string * scheme) list =
               in
               (if include_plain then [ (fd.name, q_sch) ] else [])
               @ (if include_qualified then [ (qualified_name, q_sch) ] else [])
-            | DConst c when module_exports_name imported c.name && not (Migration_form.is_declaration imported c) ->
+            | DConst c when module_exports_name imported c.name && not (Migration_form.is_contextual_declaration imported c) ->
               (* #34: bind exported constants across the module boundary.  The
                  emitted Racket already `provide`s them; only the checker's
                  import env was missing the binding, so `import Lib exposing
@@ -8014,7 +8014,7 @@ let check_module_with_metadata_uncached ?typed_nodes ?(source_lines = [||]) (m :
     match decl with
     | DFunc fd ->
       check_func_decl ~user_fn_names ctx fd
-    | DConst c when Migration_form.is_declaration m c -> ()
+    | DConst c when Migration_form.is_contextual_declaration m c -> ()
     | DConst c ->
       let ty = infer_expr ctx c.value in
       (* Update the env with the inferred type *)

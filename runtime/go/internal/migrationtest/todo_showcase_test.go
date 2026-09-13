@@ -50,7 +50,10 @@ func TestCompiledTodoShowcaseRollingUpgrade(t *testing.T) {
 	db := newShowcaseDatabase(t, ctx, dsn)
 	db.install(t, binaries[1])
 	db.status(t, binaries[1], 1, 0)
-	client := &http.Client{Timeout: 3 * time.Second}
+	// This gate checks successful rolling operations, not a three-second disk
+	// latency SLA. Durable COMMIT can exceed that on a contended CI host; the
+	// separate ten-second per-node progress checks still bound rollout stalls.
+	client := &http.Client{Timeout: 15 * time.Second}
 	first := db.requestNode(t, binaries[1], "todo-v1-a")
 	db.requireWaiting(t, first)
 	worker := db.workerNode(t, binaries[1], 1)
@@ -73,7 +76,7 @@ func TestCompiledTodoShowcaseRollingUpgrade(t *testing.T) {
 			requireShowcaseTodo(t, ctx, client, server.URL, http.MethodPut, todo.ID, fmt.Sprintf(`{"title":%q,"completed":true}`, todo.Title), todo)
 		}
 	}
-	traffic := startShowcaseTraffic(ctx, client, server.URL)
+	traffic := startShowcaseTraffic(ctx, client, server.URL, db)
 	// Stop and join the writer before process cleanups even if a phase fails.
 	defer traffic.finish(t)
 	traffic.requireProgress(t, ctx, nodes[0].process.label, nodes[1].process.label)
@@ -300,6 +303,9 @@ func showcaseRequest(ctx context.Context, client *http.Client, base, method, pat
 	if err != nil {
 		return nil, "", err
 	}
+	if response == nil || response.Body == nil {
+		return nil, "", fmt.Errorf("showcase request returned no response body")
+	}
 	defer func() { _ = response.Body.Close() }()
 	data, err := io.ReadAll(io.LimitReader(response.Body, 2<<20))
 	if err != nil {
@@ -324,9 +330,10 @@ func requireShowcaseTodo(t *testing.T, ctx context.Context, client *http.Client,
 }
 
 type showcaseProxyNode struct {
-	process  *workerLessonProcess
-	proxy    *httputil.ReverseProxy
-	inflight sync.WaitGroup
+	process   *workerLessonProcess
+	proxy     *httputil.ReverseProxy
+	transport *http.Transport
+	inflight  sync.WaitGroup
 }
 
 // The test drives a real HTTP hop to each ordinary application process. Node
@@ -344,6 +351,9 @@ func newShowcaseProxyNode(t *testing.T, process *workerLessonProcess) *showcaseP
 		t.Fatal(err)
 	}
 	proxy := httputil.NewSingleHostReverseProxy(target)
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	proxy.Transport = transport
+	t.Cleanup(transport.CloseIdleConnections)
 	proxy.ModifyResponse = func(response *http.Response) error {
 		response.Header.Set("X-Showcase-Node", process.label)
 		return nil
@@ -351,7 +361,7 @@ func newShowcaseProxyNode(t *testing.T, process *workerLessonProcess) *showcaseP
 	proxy.ErrorHandler = func(response http.ResponseWriter, _ *http.Request, err error) {
 		http.Error(response, "showcase proxy: "+err.Error(), http.StatusBadGateway)
 	}
-	return &showcaseProxyNode{process: process, proxy: proxy}
+	return &showcaseProxyNode{process: process, proxy: proxy, transport: transport}
 }
 
 func (proxy *showcaseProxy) ServeHTTP(response http.ResponseWriter, request *http.Request) {
@@ -386,11 +396,13 @@ func (proxy *showcaseProxy) replace(t *testing.T, old, next *showcaseProxyNode) 
 		t.Fatal("attempted to replace a node outside the proxy")
 	}
 	old.inflight.Wait()
+	old.transport.CloseIdleConnections()
 	old.process.stop(t)
 }
 
 type showcaseTraffic struct {
 	mu        sync.Mutex
+	database  *showcaseDatabase
 	hits      map[string]map[string]int
 	completed map[string]showcaseTodo
 	err       error
@@ -399,8 +411,8 @@ type showcaseTraffic struct {
 	once      sync.Once
 }
 
-func startShowcaseTraffic(ctx context.Context, client *http.Client, base string) *showcaseTraffic {
-	traffic := &showcaseTraffic{hits: make(map[string]map[string]int), completed: make(map[string]showcaseTodo), stop: make(chan struct{}), done: make(chan struct{})}
+func startShowcaseTraffic(ctx context.Context, client *http.Client, base string, database *showcaseDatabase) *showcaseTraffic {
+	traffic := &showcaseTraffic{database: database, hits: make(map[string]map[string]int), completed: make(map[string]showcaseTodo), stop: make(chan struct{}), done: make(chan struct{})}
 	go func() {
 		defer close(traffic.done)
 		for sequence := 1; ; sequence++ {
@@ -430,12 +442,14 @@ func startShowcaseTraffic(ctx context.Context, client *http.Client, base string)
 						err = fmt.Errorf("continuous %s readback changed %s: %+v", operation.method, id, got)
 					}
 				}
-				traffic.mu.Lock()
 				if err != nil || node == "" {
-					traffic.err = errors.Join(err, fmt.Errorf("continuous rollout request failed for %s via node %q", id, node))
+					activity := database.activity()
+					traffic.mu.Lock()
+					traffic.err = errors.Join(err, fmt.Errorf("continuous rollout request failed for %s via node %q\nPostgreSQL activity: %s", id, node, activity))
 					traffic.mu.Unlock()
 					return
 				}
+				traffic.mu.Lock()
 				if traffic.hits[node] == nil {
 					traffic.hits[node] = make(map[string]int)
 				}
@@ -496,7 +510,7 @@ func (traffic *showcaseTraffic) requireProgress(t *testing.T, ctx context.Contex
 		}
 		select {
 		case <-bounded.Done():
-			t.Fatalf("continuous POST, PUT and readback traffic did not pass through every active node %v: %v", labels, bounded.Err())
+			t.Fatalf("continuous POST, PUT and readback traffic did not pass through every active node %v: %v\nPostgreSQL activity: %s", labels, bounded.Err(), traffic.database.activity())
 		case <-traffic.done:
 			t.Fatal("continuous traffic stopped before rollout completed")
 		case <-ticker.C:
@@ -527,6 +541,29 @@ type showcaseDatabase struct {
 	name, owner, worker, app, setup string
 	environment                     []string
 	uuid                            string
+}
+
+// Failure diagnostics use their own bounded read-only connection: the ordinary
+// observer may be busy in a simultaneous rollout step. Sample actual waits;
+// elapsed COMMIT time alone cannot distinguish lock waits from storage delays.
+func (db *showcaseDatabase) activity() string {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	conn, err := pgx.ConnectConfig(ctx, db.config.Copy())
+	if err != nil {
+		return fmt.Sprintf("unavailable: %v", err)
+	}
+	defer func() { _ = conn.Close(ctx) }()
+	var result string
+	err = conn.QueryRow(ctx, `select coalesce(json_agg(activity)::text,'[]') from (
+ select pid,application_name,state,wait_event_type,wait_event,query_start,xact_start,
+ pg_catalog.pg_blocking_pids(pid) as blockers,left(query,120) as query
+ from pg_catalog.pg_stat_activity where datname=current_database() and pid<>pg_backend_pid()
+ order by pid) activity`).Scan(&result)
+	if err != nil {
+		return fmt.Sprintf("unavailable: %v", err)
+	}
+	return result
 }
 
 func newShowcaseDatabase(t *testing.T, ctx context.Context, dsn string) *showcaseDatabase {

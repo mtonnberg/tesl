@@ -3,6 +3,7 @@
 package teslrt
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -22,7 +23,7 @@ func TestPgMigrationIndexWorkerValidCommitBeforeActorReturnDoesNotLoseLease(t *t
 	case <-f.ctx.Done():
 		t.Fatal(f.ctx.Err())
 	}
-	job := pgIndexControlTestJobs(t, f)[0]
+	job := pgFirstIndexControlTestJob(t, f)
 	if job.State != "valid" || job.Holder == "" || job.ExpiresAt == nil {
 		t.Fatalf("not paused after durable success: %+v", job)
 	}
@@ -41,7 +42,7 @@ func TestPgMigrationIndexWorkerValidCommitBeforeActorReturnDoesNotLoseLease(t *t
 	if err := f.installer.QueryRow(f.ctx, "select count(*) from pg_stat_activity where datname=current_database() and application_name=$1", job.Holder).Scan(&alive); err != nil || alive != 2 {
 		t.Fatalf("successful generation was torn down by a renewal race: %d %v", alive, err)
 	}
-	if current := pgIndexControlTestJobs(t, f)[0]; current.Token != job.Token || current.Attempts != job.Attempts || current.Holder != job.Holder {
+	if current := pgFirstIndexControlTestJob(t, f); current.Token != job.Token || current.Attempts != job.Attempts || current.Holder != job.Holder {
 		t.Fatalf("successful job was reclaimed: %+v", current)
 	}
 	resume()
@@ -68,7 +69,7 @@ func TestPgMigrationIndexWorkerReobservesCommittedCreateAfterConnectionLoss(t *t
 	if err := f.installer.QueryRow(f.ctx, "select 'notes_app.token__v2'::regclass::oid").Scan(&oid); err != nil {
 		t.Fatal(err)
 	}
-	initial := pgIndexControlTestJobs(t, f)[0]
+	initial := pgFirstIndexControlTestJob(t, f)
 	if initial.State != "building" || initial.Attempts != 1 {
 		t.Fatalf("create prematurely recorded completion: %+v", initial)
 	}
@@ -104,7 +105,7 @@ func TestPgMigrationIndexWorkerReobservesValidResultBeforeInvalidCleanup(t *test
 	case <-f.ctx.Done():
 		t.Fatal(f.ctx.Err())
 	}
-	failed := pgIndexControlTestJobs(t, f)[0]
+	failed := pgFirstIndexControlTestJob(t, f)
 	if failed.State != "failed" {
 		t.Fatalf("not paused before failed-remnant cleanup: %+v", failed)
 	}
@@ -161,7 +162,7 @@ func pgTestIndexRevocationBeforeDDL(t *testing.T, boundary string) {
 	// Administrative fault injection models revocation while a holder is
 	// paused. Each locked pre-DDL ownership barrier must refuse its old token,
 	// including the last check after the durable building transition.
-	job := pgIndexControlTestJobs(t, f)[0]
+	job := pgFirstIndexControlTestJob(t, f)
 	if _, err := f.installer.Exec(f.ctx, "update notes_app.tesl_schema_leases set token=token+1 where name='index:active__v2'"); err != nil {
 		t.Fatal(err)
 	}
@@ -173,7 +174,7 @@ func pgTestIndexRevocationBeforeDDL(t *testing.T, boundary string) {
 	case <-f.ctx.Done():
 		t.Fatal(f.ctx.Err())
 	}
-	current := pgIndexControlTestJobs(t, f)[0]
+	current := pgFirstIndexControlTestJob(t, f)
 	if current.Token <= job.Token+1 || current.Holder == job.Holder {
 		t.Fatalf("paused successor did not acquire new ownership: initial=%+v current=%+v", job, current)
 	}
@@ -197,6 +198,57 @@ func pgTestIndexRevocationBeforeDDL(t *testing.T, boundary string) {
 	// by the revoked actor would leave this counter unchanged and fail here.
 	if completed.Attempts != job.Attempts+1 {
 		t.Fatalf("revoked pre-DDL actor executed a build: %+v", completed)
+	}
+	pgIndexTestStop(t, service)
+}
+
+func TestPgMigrationIndexWorkerRealUniqueFailureCleansAndRetries(t *testing.T) {
+	f, _ := pgNewWorkerTest(t)
+	f.install(t, 1)
+	pgExpandIndexTest(t, f, 1, true)
+	state := pgExpandIndexTest(t, f, 2, true)
+	// Fault injection by an operator: old admitted application writers only
+	// omit NULL here, so cannot produce these conflicting non-null new keys.
+	f.call(t, "insert into notes_app.notes(id,active,token) values('a',true,'duplicate'),('b',false,'duplicate')")
+	// Stop after the first durable failure has released its lease. Polling the
+	// transient failed state races the worker's automatic retry on slow CI hosts.
+	arrived, resume := pgPauseExpansionBoundary(t, "index-after-release", 1)
+	service := pgStartIndexTestService(t, f, 2, true, state, pgIndexTestSettings())
+	defer resume()
+	select {
+	case <-arrived:
+	case <-service.done:
+		t.Fatalf("worker exited before releasing its first failed attempt: %v", service.err)
+	case <-f.ctx.Done():
+		t.Fatal("worker did not release its first failed attempt")
+	}
+	var failed pgMigrationIndexJob
+	pgIndexTestAwait(t, f, service, "durable unique failure and invalid-remnant cleanup", func() bool {
+		failed = pgFirstIndexControlTestJob(t, f)
+		var absent bool
+		if err := f.installer.QueryRow(f.ctx, "select to_regclass('notes_app.token__v2') is null").Scan(&absent); err != nil {
+			t.Fatal(err)
+		}
+		return failed.State == "failed" && failed.Holder == "" && absent
+	})
+	if !strings.Contains(failed.Error, "23505") || !strings.Contains(failed.Error, "duplicate") || failed.Attempts != 1 {
+		t.Fatalf("failed attempt evidence: %+v", failed)
+	}
+	select {
+	case <-service.ready:
+		t.Fatal("failed unique build was announced ready")
+	default:
+	}
+	f.call(t, "update notes_app.notes set token='repaired' where id='b'")
+	resume()
+	job := pgIndexTestValid(t, f, service)
+	pgIndexTestReady(t, f, service)
+	if job.Attempts != 2 || job.Error != "" {
+		t.Fatalf("repair did not preserve attempts/clear current error: %+v", job)
+	}
+	var rows int
+	if err := f.worker.QueryRow(f.ctx, "select count(*) from notes_app.notes").Scan(&rows); err != nil || rows != 2 {
+		t.Fatalf("failed index altered stored rows: %d %v", rows, err)
 	}
 	pgIndexTestStop(t, service)
 }

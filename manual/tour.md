@@ -437,6 +437,13 @@ proofs; `Reject reason` describes a row that could not be converted. Match both
 branches in helper tests. This result type is available for writing and testing
 converters; the transforming database executor remains under development.
 
+Within a checked migration, `Same` can preserve an unchanged primitive field's
+existing proof when the final `Row` copies or renames that exact field. For
+example, copying `old.title` can retain its verified title constraint across
+schema versions. Importing the helper alone grants no such permission. Changed
+constraints still require validation by their owning module; this support does
+not convert records or ADTs between versions.
+
 When a migration includes a recorded history header, the compiler checks every
 owned source file, including private helpers. A changed recorded `VCurrent`
 reports MIG001; a changed frozen file reports MIG013. A compiler ABI mismatch is

@@ -74,7 +74,7 @@ let check_contents ?(migration = false) (m : module_form) =
     | DDatabase d -> [forbidden d.loc "database declarations"]
     | DCapability c -> [forbidden c.loc "capability declarations"]
     | DConst c ->
-      if migration && Migration_form.is_declaration m c then
+      if migration && Migration_form.is_contextual_declaration m c then
         (* Contextual field/schema references are not executable operations.
            Migration_declaration checks every slot, including Default literals;
            ordinary constants and row-function bodies retain the effect gate. *)
@@ -240,7 +240,12 @@ let check_queue_schema_targets (m:module_form) =
     | _ -> None) m.decls
 
 let check_databases (m : module_form) =
-  match migration_family m.module_name with
+  let column_ownership=if schema_prefix m.module_name<>None then [] else
+    List.concat_map (function DEntity e -> List.filter_map (fun (f:field_def) ->
+      Option.map (fun _ -> make_error ~code:"MIG027" f.loc
+        "compiler-owned @column storage annotations require a versioned schema and a checked Retype history") f.db_column) e.fields
+      | _ -> []) m.decls in
+  column_ownership @ match migration_family m.module_name with
   | Some family ->
     check_contents ~migration:true m @ List.filter_map (fun (imp : import_decl) ->
       let owned = match schema_prefix imp.module_name, migration_family imp.module_name with

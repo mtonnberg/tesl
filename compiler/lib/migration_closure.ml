@@ -107,6 +107,13 @@ let collect ~project_root ~root_file ~source =
       ) m.imports
     end in
   visit root root_file source;
+  (* A Contract is a contextual companion, not a function imported by the row
+     transform. Freeze its presence and raw dependency closure with the completed
+     migration so later creation, removal, or edits cannot alter reviewed history. *)
+  let companion = root ^ "Contract" in
+  let companion_file = path project_root companion in
+  if Input.exists companion_file then
+    visit companion companion_file (Input.read companion_file);
   {root;sources=Hashtbl.to_seq found |> List.of_seq |> List.sort compare}
 let capture ~project_root ~root_file ~source = protect root_file (fun () ->
   collect ~project_root ~root_file ~source)
@@ -124,4 +131,4 @@ let verify ~project_root ~root_file ~source located = protect root_file (fun () 
     let contents = if file=root_file then without ~file source else Input.read file in
     if Hash.digest contents <> digest then reject file "recorded frozen migration source changed; restore it and make a forward revision") located.seal.sources;
   let actual = collect ~project_root ~root_file ~source in
-  if actual <> located.seal then reject root_file "frozen migration import closure changed")
+  if actual <> located.seal then reject root_file "frozen migration source or Contract companion closure changed; restore it and prepare the Contract before starting the next revision")

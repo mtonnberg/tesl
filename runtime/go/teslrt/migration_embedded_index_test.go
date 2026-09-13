@@ -134,7 +134,11 @@ func TestPgMigrationEmbeddedPlainIndexServesCRUDAndRestartsAfterScopeCancellatio
 	scope := pgStartEmbeddedTestScope(t, database)
 	pool := pgEmbeddedIndexEntered(t, f, scope)
 	pgEmbeddedIndexWaiting(t, f, scope)
-	job := pgIndexControlTestJobs(t, f)[0]
+	jobJobs := pgIndexControlTestJobs(t, f)
+	if len(jobJobs) != 1 {
+		t.Fatalf("expected one index job, got %v", jobJobs)
+	}
+	job := jobJobs[0]
 	if job.State == "valid" || job.Attempts != 1 {
 		t.Fatalf("plain scope did not become ready during its actual build: %+v", job)
 	}
@@ -159,8 +163,15 @@ func TestPgMigrationEmbeddedPlainIndexServesCRUDAndRestartsAfterScopeCancellatio
 	if err := blocker.Commit(f.ctx); err != nil {
 		t.Fatal(err)
 	}
-	pgEmbeddedTestAwait(t, f, func() bool { return pgIndexControlTestJobs(t, f)[0].State == "valid" })
-	completed := pgIndexControlTestJobs(t, f)[0]
+	pgEmbeddedTestAwait(t, f, func() bool {
+		jobs := pgIndexControlTestJobs(t, f)
+		return len(jobs) == 1 && jobs[0].State == "valid"
+	})
+	jobs := pgIndexControlTestJobs(t, f)
+	if len(jobs) != 1 {
+		t.Fatalf("expected one completed index job, got %v", jobs)
+	}
+	completed := jobs[0]
 	if completed.Holder == job.Holder || completed.Token <= job.Token {
 		t.Fatalf("restarted service did not fence its predecessor: before=%+v after=%+v", job, completed)
 	}
@@ -183,7 +194,11 @@ func TestPgMigrationEmbeddedUniqueIndexOutlivesStartupBudgetBeforePublishing(t *
 	database := pgEmbeddedIndexDatabase(t, f, true)
 	scope := pgStartEmbeddedTestScope(t, database)
 	pgEmbeddedIndexWaiting(t, f, scope)
-	initial := pgIndexControlTestJobs(t, f)[0]
+	initialJobs := pgIndexControlTestJobs(t, f)
+	if len(initialJobs) != 1 {
+		t.Fatalf("expected one index job, got %v", initialJobs)
+	}
+	initial := initialJobs[0]
 	var until time.Time
 	if err := f.installer.QueryRow(f.ctx, "select clock_timestamp()+interval '10.5 seconds'").Scan(&until); err != nil {
 		t.Fatal(err)
@@ -202,7 +217,11 @@ func TestPgMigrationEmbeddedUniqueIndexOutlivesStartupBudgetBeforePublishing(t *
 		}
 		return elapsed
 	})
-	renewed := pgIndexControlTestJobs(t, f)[0]
+	renewedJobs := pgIndexControlTestJobs(t, f)
+	if len(renewedJobs) != 1 {
+		t.Fatalf("expected one index job, got %v", renewedJobs)
+	}
+	renewed := renewedJobs[0]
 	if renewed.Token != initial.Token || renewed.ExpiresAt == nil || initial.ExpiresAt == nil || !renewed.ExpiresAt.After(*initial.ExpiresAt) {
 		t.Fatalf("long unique build lost ownership or did not renew: before=%+v after=%+v", initial, renewed)
 	}
@@ -210,7 +229,11 @@ func TestPgMigrationEmbeddedUniqueIndexOutlivesStartupBudgetBeforePublishing(t *
 		t.Fatal(err)
 	}
 	pool := pgEmbeddedIndexEntered(t, f, scope)
-	completed := pgIndexControlTestJobs(t, f)[0]
+	completedJobs := pgIndexControlTestJobs(t, f)
+	if len(completedJobs) != 1 {
+		t.Fatalf("expected one index job, got %v", completedJobs)
+	}
+	completed := completedJobs[0]
 	var valid bool
 	err := pool.pool.QueryRow(f.ctx, "select indisvalid and indisready and indislive from pg_catalog.pg_index where indexrelid='notes_app.token__v2'::regclass").Scan(&valid)
 	if err != nil || !valid || completed.State != "valid" {

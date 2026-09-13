@@ -242,8 +242,8 @@ func TestQueueProjectionBindsActualCodecsWithoutChangingLegacyWire(t *testing.T)
 		t.Fatal("legacy wire identity changed")
 	}
 	got[0].Job = "mutated"
-	again, _ := QueueSourceCodecs(q)
-	if again[0].Job != "Notify" {
+	again, err := QueueSourceCodecs(q)
+	if err != nil || len(again) != 1 || again[0].Job != "Notify" {
 		t.Fatal("metadata alias")
 	}
 	plainDB := NewDatabase("Plain", PostgresConfig{}, nil)
@@ -267,10 +267,16 @@ func TestQueueProjectionChecksEveryLinkedDatabaseBeforePublication(t *testing.T)
 	if err := json.Unmarshal([]byte(h.HistoryJSON), &expanded); err != nil {
 		t.Fatal(err)
 	}
+	if expanded == nil {
+		t.Fatal("projection fixture must decode to an object")
+	}
 	original := expanded["databases"].([]any)[0]
 	var extra map[string]any
 	if err := json.Unmarshal([]byte(queueProjectionJSON(t, original)), &extra); err != nil {
 		t.Fatal(err)
+	}
+	if extra == nil {
+		t.Fatal("projection fixture must decode to an object")
 	}
 	extra["database"], extra["family"], extra["namespace"] = second.Database, second.Family, second.Namespace
 	expanded["databases"] = append(expanded["databases"].([]any), extra)
@@ -279,6 +285,9 @@ func TestQueueProjectionChecksEveryLinkedDatabaseBeforePublication(t *testing.T)
 	var queueExtra map[string]any
 	if err := json.Unmarshal([]byte(queueProjectionJSON(t, queueProjectionDB(root))), &queueExtra); err != nil {
 		t.Fatal(err)
+	}
+	if queueExtra == nil {
+		t.Fatal("projection fixture must decode to an object")
 	}
 	queueExtra["database"], queueExtra["family"], queueExtra["namespace"] = second.Database, second.Family, second.Namespace
 	root["databases"] = append(root["databases"].([]any), queueExtra)

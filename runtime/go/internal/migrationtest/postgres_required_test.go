@@ -9,6 +9,7 @@ import (
 	"time"
 )
 
+// INV-HARNESS; TR-SCHEDULE.
 // Keep the native compiler-upgrade gate from passing merely because its
 // retained-database witness was skipped. Exercise the actual test entry points.
 func TestCompiledLessonsRequireConfiguredPostgres(t *testing.T) {

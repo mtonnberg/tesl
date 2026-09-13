@@ -546,6 +546,7 @@ type entity_info = {
   (* The package-level `var XTable = teslrt.NewTable[X]()`, qualified by its owner when
      referenced from another package. *)
   ent_table_var : string;
+  ent_row_access : (string * string list) option;
   ent_owner : string;
   ent_primary_key : string;
   (* The SQL table the entity names (`entity Note table "notes"`), and any `@db(type)` a field
@@ -553,6 +554,7 @@ type entity_info = {
      (`entity_columns`), which are not resolved until every type in the module is. *)
   ent_table_name : string;
   ent_db_types : (string * string) list;
+  ent_db_columns : (string * string) list;
   (* The declared indexes.  A plain one is a performance hint with no observable effect; a
      UNIQUE one is an invariant both stores enforce, so it reaches the emitted code. *)
   ent_indexes : entity_index list;
@@ -1188,12 +1190,16 @@ let typed_with_default type_of expr =
    cannot disagree about a type's Go name, its fields, or its identity — `go_type`
    equality is structural, and two separately-derived records would compare unequal even
    when they describe the same Tesl type. *)
+type row_storage_export = { storage_entity : string; storage_columns : column_info list; storage_decode : string; storage_encode : string }
+
 type module_exports = {
   ex_module : string;
   ex_package : string;
   ex_types : type_table;
   ex_signatures : (string, signature) Hashtbl.t;
   ex_codecs : codec_form list;
+  ex_taken : (string,unit) Hashtbl.t;
+  ex_row_storage : row_storage_export list;
 }
 
 (* Whether a compiled dependency is the module an import names.
@@ -2523,7 +2529,7 @@ let entity_columns (info : entity_info) =
            info.ent_tesl_name field)
     in
     { col_field = field;
-      col_name = camel_to_snake field;
+      col_name = Option.value (List.assoc_opt field info.ent_db_columns) ~default:(camel_to_snake field);
       col_sql_type = sql_type;
       col_nullable = maybe_element ty <> None;
       col_primary_key = field = info.ent_primary_key;
@@ -8443,7 +8449,12 @@ and sql_scan_carrier loc ty target =
     ("[]byte", Printf.sprintf "teslrt.MustDecodeColumnJSON(%s, %s)" target
        (qualified info.rec_owner (codec_decode_name info.rec_tesl_name)))
   | TAdt (info, args) when info.adt_tesl_name <> "Maybe" ->
-    ("[]byte", Printf.sprintf "%s(%s)" (sql_adt_column_decoder loc info args) target)
+    (match nominal_codec info.adt_owner info.adt_tesl_name with
+     | Some _ when args=[] ->
+       ("[]byte", Printf.sprintf "teslrt.MustDecodeColumnJSON(%s, %s)" target
+          (qualified info.adt_owner (codec_decode_name info.adt_tesl_name)))
+     | Some _ -> unsupported loc "stored generic ADT codecs need a checked instantiated decoder"
+     | None -> ("[]byte", Printf.sprintf "%s(%s)" (sql_adt_column_decoder loc info args) target))
   | _ ->
     (match maybe_element ty with
      | Some inner ->
@@ -8573,7 +8584,8 @@ and sql_adt_column_decoder loc (info : adt_info) args =
    answers rows uses the same one, so the column ORDER a select asks for and the order the
    scanner reads can only be the same order. *)
 and sql_scanner loc (info : entity_info) =
-  let name = "teslScan" ^ go_ident ~exported:true info.ent_tesl_name in
+  sql_scanner_as ("teslScan" ^ go_ident ~exported:true info.ent_tesl_name) loc info
+and sql_scanner_as name loc (info : entity_info) =
   if not (Hashtbl.mem pending_helpers name) then begin
     let columns = entity_columns info in
     let row = sql_row_type info in
@@ -8653,7 +8665,7 @@ and sql_scalar_scan loc ty ~optional =
 (* The `where` fragment, in the same clause shapes the memory predicate supports — so a query
    this backend emits at all is emitted for BOTH stores, and one can never silently read rows
    the other would not. *)
-and sql_where_text ?(joins=[]) ~indent signatures env loc (info : entity_info) binder clauses
+and sql_where_text ?column_renderer ?(joins=[]) ~indent signatures env loc (info : entity_info) binder clauses
     builder =
   let row_env = (binder, TRecord info.ent_row) :: env in
   let bind field expr =
@@ -8661,7 +8673,7 @@ and sql_where_text ?(joins=[]) ~indent signatures env loc (info : entity_info) b
     let value = sql_column_value ~indent signatures row_env loc info field expr in
     sql_placeholder builder (sql_bound_value loc ty value)
   in
-  let column field = sql_ident (sql_column_of loc info field).col_name in
+  let column field = match column_renderer with Some render -> render field | None -> sql_ident (sql_column_of loc info field).col_name in
   (* Same rule as the predicate beside it: `IS NULL` on a NOT NULL column is a constant, so
      the question is refused rather than answered. *)
   let nullable_column field =
@@ -8893,11 +8905,44 @@ and sql_plan_probed ~indent statement (builder : sql_arguments) probe (probe_bui
       (go_quote statement) (thunk builder.sql_args) (go_quote probe) (thunk probe_builder.sql_args) in
   if !current_debug then "teslrt.DebugPgSql(" ^ rendered ^ ")" else rendered
 
+and sql_access_ref info = match info.ent_row_access with
+ | Some (name,_) -> qualified info.ent_owner name
+ | None -> unsupported info.ent_loc "missing checked row access slot"
+and sql_row_query ~indent signatures env loc info binder clauses order limit offset =
+ let allowed=match info.ent_row_access with Some (_,fields) -> fields | None -> [] in
+ let fields=ref [] in
+ let column field =
+  if not (List.mem field allowed) then unsupported loc
+   "migration query on `%s.%s` needs an unchanged Copy or Rename field; querying a computed or retyped field during this window is not supported yet" info.ent_tesl_name field;
+  let index=List.length !fields in fields:= !fields @ [field];
+  "\000" ^ string_of_int index ^ "\000" in
+ let builder={sql_args=[]} in
+ let where=sql_where_text ~column_renderer:column ~indent signatures env loc info binder clauses builder in
+ let order=match order with None -> "" | Some (field,direction) -> " order by " ^ column field ^ " " ^ direction in
+ let text=where ^ order ^ sql_range_text limit offset in
+ let marker=Str.regexp "\000[0-9]+\000" in
+ let rec pieces at parts names =
+  match (try Some (Str.search_forward marker text at) with Not_found -> None) with
+  | None -> List.rev (String.sub text at (String.length text-at)::parts),List.rev names
+  | Some start -> let stop=Str.match_end () in
+    let index=int_of_string (String.sub text (start+1) (stop-start-2)) in
+    pieces stop (String.sub text at (start-at)::parts) (List.nth !fields index::names) in
+ let parts,names=pieces 0 [] [] in
+ let array xs="[]string{" ^ String.concat ", " (List.map go_quote xs) ^ "}" in
+ let args=if builder.sql_args=[] then "nil" else "func() []any { return []any{" ^ String.concat ", " builder.sql_args ^ "} }" in
+ "teslrt.PgRowSQL(" ^ array parts ^ ", " ^ array names ^ ", " ^ args ^ ")"
+
 and emit_sql_form ?(indent="") signatures env loc form =
   match form with
   | SqlSelect (seed, clauses) ->
     let info = entity_of_query loc seed.entity in
     let all_clauses = seed.static_clauses @ clauses in
+    List.iter (fun (join:Sql_query.sql_join) ->
+      let joined=entity_of_query loc join.join_entity in
+      if Option.is_some joined.ent_row_access then unsupported loc
+        "joining a transforming entity requires checked migration-aware join dispatch; this window does not support joins") seed.joins;
+    if Option.is_some info.ent_row_access && (seed.joins<>[] || seed.group_by<>[] || (match seed.kind with SelectMany | SelectOne -> false | _ -> true)) then
+      unsupported loc "migration-aware queries currently support select/selectOne without joins or aggregates";
     sql_check_where_field loc seed.where_field all_clauses;
     (* `groupBy` belongs to the GROUPED aggregates and to nothing else: on a plain `select`
        it would silently change what the query answers. *)
@@ -8953,6 +8998,11 @@ and emit_sql_form ?(indent="") signatures env loc form =
     (match seed.kind with
      | SelectMany ->
        (match pg with
+        | Some database when Option.is_some info.ent_row_access ->
+          Printf.sprintf "teslrt.DbRowSelect(%s, %s, %s, %s, %s, %s, %s)"
+            (sql_access_ref info) (db_ref database) table predicate
+            (match ordering () with None -> "nil" | Some less -> less) (range ())
+            (sql_row_query ~indent signatures env loc info seed.binder all_clauses seed.order seed.limit seed.offset)
         | Some database ->
           let builder = { sql_args = [] } in
           let statement =
@@ -8979,6 +9029,11 @@ and emit_sql_form ?(indent="") signatures env loc form =
          "Go backend: `limit`/`offset` on `selectOne` decides nothing (the checker refuses \
           this; reaching here means that rule was bypassed)";
        (match pg with
+        | Some database when Option.is_some info.ent_row_access ->
+          Printf.sprintf "teslrt.DbRowSelectOne(%s, %s, %s, %s, %s, %s)"
+            (sql_access_ref info) (db_ref database) table predicate
+            (match ordering () with None -> "nil" | Some less -> less)
+            (sql_row_query ~indent signatures env loc info seed.binder all_clauses seed.order (Some 1) None)
         | Some database ->
           let builder = { sql_args = [] } in
           let statement =
@@ -9252,6 +9307,10 @@ and emit_sql_form ?(indent="") signatures env loc form =
        Printf.sprintf "teslrt.TableInsert(%s, %s, %s, %s%s)"
          (sql_table_ref info) (go_quote info.ent_tesl_name) row (sql_key_conflict loc info)
          (sql_unique_arguments ~indent loc info)
+     | Some database when Option.is_some info.ent_row_access ->
+       Printf.sprintf "teslrt.DbRowInsert(%s, %s, %s, %s, %s, %s%s)"
+         (sql_access_ref info) (qualified database.db_owner database.db_go_var) (sql_table_ref info)
+         (go_quote info.ent_tesl_name) row (sql_key_conflict loc info) (sql_unique_arguments ~indent loc info)
      | Some database ->
        (* Each column is bound from the literal's OWN field expression rather than by reading
           it back out of the emitted struct: the two are the same value, and reading it back
@@ -9281,6 +9340,7 @@ and emit_sql_form ?(indent="") signatures env loc form =
      and not `sql_key_conflict`. *)
   | SqlUpsert upsert ->
     let info = entity_of_query loc upsert.entity in
+    if Option.is_some info.ent_row_access then unsupported loc "migration-aware entity operation requires a checked typed access adapter; use select, insert or update in this window";
     check_record_literal signatures env loc info.ent_row upsert.fields;
     let row_type = sql_row_type info in
     let row = emit_record_literal ~indent signatures env info.ent_row upsert.fields in
@@ -9371,6 +9431,10 @@ and emit_sql_form ?(indent="") signatures env loc form =
        Printf.sprintf "teslrt.TableInsertMany(%s, %s, %s, %s%s)"
          (sql_table_ref info) (go_quote info.ent_tesl_name) rows (sql_key_conflict loc info)
          (sql_unique_arguments ~indent loc info)
+     | Some database when Option.is_some info.ent_row_access ->
+       Printf.sprintf "teslrt.DbRowInsertMany(%s, %s, %s, %s, %s, %s%s)"
+         (sql_access_ref info) (qualified database.db_owner database.db_go_var) (sql_table_ref info)
+         (go_quote info.ent_tesl_name) rows (sql_key_conflict loc info) (sql_unique_arguments ~indent loc info)
      | Some database ->
        (* The rows are only known at run time, so the statement is fixed and its ARGUMENTS are
           read off each row — the one query whose plan cannot be a value.  One statement per
@@ -9413,6 +9477,19 @@ and emit_sql_form ?(indent="") signatures env loc form =
        Printf.sprintf "teslrt.%s(%s, %s, %s%s)"
          (if update.returning_one then "TableUpdateReturnOne" else "TableUpdate")
          (sql_table_ref info) predicate apply (sql_unique_arguments ~indent loc info)
+     | Some database when Option.is_some info.ent_row_access ->
+       let captured=List.mapi (fun index (field,value) ->
+         if mentions_variable update.binder value then unsupported loc "migration update SET cannot read the row";
+         let name="teslSet" ^ string_of_int index in
+         name,field,sql_column_value ~indent:inner signatures env loc info field value) update.updates in
+       let setup=List.map (fun (name,_,value) -> inner ^ name ^ " := " ^ value ^ "\n") captured |> String.concat "" in
+       let assigns=List.map (fun (name,field,_) -> "teslNext." ^ record_field_go_name field ^ " = " ^ name) captured |> String.concat "; " in
+       let query=sql_row_query ~indent:inner signatures env loc info update.binder update.clauses None None None in
+       let prepare=Printf.sprintf "func() (teslrt.PgRowQuery, func(%s) %s) {\n%s%sreturn %s, func(teslNext %s) %s { %s; return teslNext }\n%s}"
+         (sql_row_type info) (sql_row_type info) setup inner query (sql_row_type info) (sql_row_type info) assigns indent in
+       Printf.sprintf "teslrt.%s(%s, %s, %s, %s, %s, %s%s)"
+         (if update.returning_one then "DbRowUpdateReturnOne" else "DbRowUpdate")
+         (sql_access_ref info) (qualified database.db_owner database.db_go_var) (sql_table_ref info) predicate apply prepare (sql_unique_arguments ~indent loc info)
      | Some database ->
        (* A `set` value is a PARAMETER on the server, so there is no row to read from:
           `check_set_value_reads_row` refuses this shape for BOTH backends (the Legacy emitter
@@ -9469,6 +9546,7 @@ and emit_sql_form ?(indent="") signatures env loc form =
   | SqlDelete (seed, clauses) ->
     let info = entity_of_query loc seed.entity in
     sql_check_where_field loc seed.where_field clauses;
+    if Option.is_some info.ent_row_access then unsupported loc "migration-aware entity operation requires a checked typed access adapter; use select, insert or update in this window";
     let predicate = emit_sql_predicate ~indent signatures env loc info seed.binder clauses in
      let memory = if seed.with_result then "TableDeleteCount" else "TableDelete" in
      let server = if seed.with_result then "DbDeleteCount" else "DbDelete" in
@@ -10227,7 +10305,7 @@ let runtime_file_gates : (string * string list) list = [
      the reason the HTTP half does: it pulls a third-party driver and its whole dependency
      chain into a binary that would otherwise require nothing. *)
    "postgres", [ "postgres.go"; "database.go"; "dbquery.go"; "debug_sql.go"; "pgstores.go";
-                 "pgpubsub.go"; "migration_program.go"; "migration_queue_program.go"; "migration_queue_control.go"; "migration_queue_registration.go"; "migration_queue_registration_sql.go"; "migration_queue_control_spec.go"; "migration_queue_operations.go"; "migration_queue_runtime.go"; "migration_queue_control_expected.go"; "migration_control.go"; "migration_expand.go"; "migration_admission.go"; "migration_open.go"; "migration_status.go"; "migration_command.go"; "migration_expand_history.go"; "migration_control_spec.go"; "migration_control_catalog.go"; "migration_plan.go"; "migration_plan_wire.go"; "migration_plan_hash.go"; "migration_catalog.go"; "migration_catalog_trigger.go"; "migration_catalog_compare.go"; "migration_catalog_probe.go"; "migration_catalog_expected.go"; "migration_control_expected.go"; "migration_control_upgrade.go"; "migration_index_control.go"; "migration_index_catalog.go"; "migration_index_history.go"; "migration_index_worker.go"; "migration_embedded.go"; "migration_worker.go"; "migration_facilities.go"; "migration_literal.go"; "migration_boundary.go"; "migration_boundary_testbuild.go" ];
+                 "pgpubsub.go"; "migration_program.go"; "migration_row_history.go"; "migration_row_program.go"; "migration_row_storage.go"; "migration_row_writeback.go"; "migration_row_physical.go"; "migration_row_contract.go"; "migration_row_backfill.go"; "migration_row_backfill_worker.go"; "migration_row_contract_execute.go"; "migration_row_contract_spec.go"; "migration_row_lifecycle_expected.go"; "migration_row_lifecycle_read.go"; "migration_row_lifecycle_spec.go"; "migration_row_settled.go"; "migration_row_work_read.go"; "migration_row_worker.go"; "migration_row_worker_transaction.go"; "migration_row_not_null.go"; "migration_row_data.go"; "migration_row_access.go"; "migration_row_transaction.go"; "migration_row_forward.go"; "migration_row_forward_spec.go"; "migration_row_forward_catalog.go"; "migration_row_forward_execute.go"; "migration_row_baseline.go"; "migration_row_control.go"; "migration_row_control_spec.go"; "migration_row_control_expected.go"; "migration_row_open.go"; "migration_row_command.go";  "migration_queue_program.go"; "migration_queue_control.go"; "migration_queue_registration.go"; "migration_queue_registration_sql.go"; "migration_queue_control_spec.go"; "migration_queue_operations.go"; "migration_queue_runtime.go"; "migration_queue_control_expected.go"; "migration_control.go"; "migration_expand.go"; "migration_admission.go"; "migration_open.go"; "migration_status.go"; "migration_command.go"; "migration_expand_history.go"; "migration_control_spec.go"; "migration_control_catalog.go"; "migration_plan.go"; "migration_plan_wire.go"; "migration_plan_hash.go"; "migration_catalog.go"; "migration_catalog_trigger.go"; "migration_catalog_compare.go"; "migration_catalog_probe.go"; "migration_catalog_expected.go"; "migration_control_expected.go"; "migration_control_upgrade.go"; "migration_index_control.go"; "migration_index_catalog.go"; "migration_index_history.go"; "migration_index_worker.go"; "migration_embedded.go"; "migration_worker.go"; "migration_facilities.go"; "migration_literal.go"; "migration_boundary.go"; "migration_boundary_testbuild.go" ];
   (* `agent.go` ships only to a program that talks to a model.  Not a dependency argument —
      everything in it is standard library — but a runtime file a program has no use for is
      still surface a reader has to rule out, and the gate costs nothing. *)
@@ -10666,7 +10744,7 @@ let rec json_value_decoder ~package ~loc ~what ty =
     "Go backend cannot decode `%s` from JSON; give the type a `codec`" what
 
 let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) ?(apis=[])
-    ?(servers=[]) ?(capturers=[]) ?(consts=[]) ?(agents=[]) ?(capabilities=[]) ?(queue_codec_records=[]) ?(app_databases=[])
+    ?(row_storage_adapters=[]) ?(servers=[]) ?(capturers=[]) ?(consts=[]) ?(agents=[]) ?(capabilities=[]) ?(queue_codec_records=[]) ?(app_databases=[])
     module_path package signatures
     types (funcs : func_decl list) =
   Hashtbl.reset pending_helpers;
@@ -11956,6 +12034,21 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
     if boot_settings <> [] then
       Printf.bprintf body "\nfunc init() {\n%s\n}\n" (String.concat "\n" boot_settings);
     current_scope_in_hand := false) servers;
+  let rec require_row_storage_carrier loc ty =
+    match ty with
+    | TInt | TFloat | TString | TBool | TRecord _ -> ()
+    | TAdt (info,_) when info.adt_tesl_name <> "Maybe" -> ()
+    | TNewtype info -> require_row_storage_carrier loc info.base
+    | _ -> (match maybe_element ty with
+      | Some inner -> require_row_storage_carrier loc inner
+      | None -> unsupported loc "row storage adapters do not yet support this SQL carrier; ADT columns require a separately checked adapter") in
+  List.iter (fun (adapter,info) ->
+    List.iter (fun column -> require_row_storage_carrier info.ent_loc column.col_type) adapter.storage_columns;
+    ignore (sql_scanner_as adapter.storage_decode info.ent_loc info);
+    let values=List.map (fun (column:column_info) -> sql_bound_value info.ent_loc column.col_type
+      ("teslValue." ^ record_field_go_name column.col_field)) adapter.storage_columns in
+    Printf.bprintf body "\nfunc %s(teslValue %s) ([]any, error) {\n\treturn []any{%s}, nil\n}\n"
+      adapter.storage_encode (sql_row_type info) (String.concat ", " values)) row_storage_adapters;
   (* Comparator helpers the body referenced, in name order so the output is
      deterministic. *)
   Hashtbl.to_seq pending_helpers
@@ -13016,7 +13109,7 @@ let register_imported_module ~loc ~exposed ?(protected_names=[]) types signature
     ignore (found_type, found_value, loc))
     exposed
 
-let compile_module ?(mode=Release) ?(dependencies=[]) ?(entity_bindings=[]) ?(migration_families=[]) ?(migration_queues=[]) ?(queue_codec_records=[]) ?project_path (m : module_form) =
+let compile_module ?(row_access_entities=[]) ?(row_storage_entities=[]) ?(mode=Release) ?(dependencies=[]) ?(entity_bindings=[]) ?(migration_families=[]) ?(migration_queues=[]) ?(queue_codec_records=[]) ?project_path (m : module_form) =
   try
     List.iter (function
       | DDatabase { config_expr = Some config; loc; _ } ->
@@ -13764,10 +13857,14 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?(entity_bindings=[]) ?(mi
         ent_tesl_name = e.name;
         ent_row = row;
         ent_table_var = package_ident (e.name ^ "Table");
+        ent_row_access = Option.map (fun fields -> unique_ident taken ("TeslRowAccess" ^ e.name),fields)
+          (List.assoc_opt (m.module_name ^ "." ^ e.name) row_access_entities);
         ent_owner = package;
         ent_primary_key = e.primary_key;
         ent_table_name = e.table;
         ent_indexes = e.indexes;
+        ent_db_columns = List.filter_map (fun (field : field_def) ->
+          Option.map (fun name -> field.name, name) field.db_column) e.fields;
         ent_db_types =
           List.filter_map (fun (field : field_def) ->
             Option.map (fun ty -> (field.name, ty)) field.db_type) e.fields;
@@ -16229,8 +16326,22 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?(entity_bindings=[]) ?(mi
     in
     current_package := package;
     current_types := Some types;
+    let row_storage_adapters=List.filter_map (fun (expected:Migration_row_history.entity) ->
+      let full=expected.table.entity.entity_name and prefix=m.module_name ^ "." in
+      if not (String.starts_with ~prefix full) then None else
+      let local=String.sub full (String.length prefix) (String.length full-String.length prefix) in
+      if String.contains local '.' then None else
+      let info=match Hashtbl.find_opt types.entities local with Some info -> info | None -> unsupported (Location.dummy_loc m.source_file) "missing row storage entity" in
+      let columns=entity_columns info in
+      let actual=List.map (fun (c:column_info) -> c.col_field,c.col_name,(match String.uppercase_ascii c.col_sql_type with "DOUBLE PRECISION" -> "float8" | "BOOLEAN" -> "bool" | "INTEGER" -> "int4" | "BIGINT" -> "int8" | value -> String.lowercase_ascii value),c.col_nullable,c.col_primary_key) columns |> List.sort compare in
+      let checked=List.map (fun (c:Migration_storage.column) -> c.field.name,c.name,Migration_storage.scalar_name c.scalar,c.nullable,c.primary_key) expected.table.columns |> List.sort compare in
+      if actual<>checked then unsupported info.ent_loc "row storage projection differs from checked schema columns";
+      let adapter={storage_entity=full;storage_columns=columns;
+        storage_decode=unique_ident taken ("TeslDecodeRow" ^ info.ent_row.rec_go_name);
+        storage_encode=unique_ident taken ("TeslEncodeRow" ^ info.ent_row.rec_go_name)} in
+      Some (adapter,info)) row_storage_entities in
     let source =
-       module_source ~debug:(mode = Debug) ~imported_packages:!imported_packages ~codecs ~apis ~servers ~capturers ~app_databases
+       module_source ~row_storage_adapters ~debug:(mode = Debug) ~imported_packages:!imported_packages ~codecs ~apis ~servers ~capturers ~app_databases
         ~queue_codec_records:(List.filter_map (fun name ->
           let prefix=m.module_name ^ "." in
           if String.starts_with ~prefix name then
@@ -16408,7 +16519,7 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?(entity_bindings=[]) ?(mi
       end
     in
     Ok (artifacts, { ex_module = m.module_name; ex_package = package;
-                     ex_types = types; ex_signatures = signatures; ex_codecs = codecs })
+                     ex_types = types; ex_signatures = signatures; ex_codecs = codecs; ex_taken=Hashtbl.copy taken; ex_row_storage=List.map fst row_storage_adapters })
   with Unsupported error -> Error [error]
 
 (* Test seam for single-module callers that previously consumed one backend string. *)
@@ -16459,7 +16570,176 @@ let project_entity_bindings (modules : module_form list) =
     | _ -> ()) m.decls) modules;
   if !errors = [] then Ok !bindings else Error (List.rev !errors)
 
-let compile_project ?(mode=Release) ?(migration_families=[]) ?(migration_queues=[]) ?(queue_codec_records=[]) ~(entry : module_form) (modules : module_form list) =
+let compile_project ?(mode=Release) ?(row_storage=false) ?(row_physical=false) ?row_source ?(migration_families=[]) ?(migration_queues=[]) ?(queue_codec_records=[]) ~(entry : module_form) (modules : module_form list) =
+(* Internal source-only artifact companion. Names are taken from the very module
+   environments that emitted these exact captured declarations, never inferred
+   from a callback digest or from source spelling alone. *)
+let compiled_row_artifacts ~entry ~modules ~exports source =
+ let module P=Migration_program in
+ let module RH=Migration_row_history in
+ let project_path="tesl.generated/" ^ package_name entry.module_name in
+ let loc=Location.dummy_loc entry.source_file in
+ let require = function Some value -> value | None -> unsupported loc "row companion is missing an exact emitted declaration" in
+ let owner name= require (List.find_opt (fun e -> e.ex_module=name) exports) in
+ let split name=match List.rev (String.split_on_char '.' name) with
+  | short::rest -> String.concat "." (List.rev rest),short | _ -> assert false in
+ let entity (e:RH.entity)=
+  let module_name,name=split e.table.entity.entity_name in
+  let exported=owner module_name in
+  let info=require (Hashtbl.find_opt exported.ex_types.entities name) in
+  if info.ent_owner<>exported.ex_package || info.ent_table_name<>e.table.name then
+   unsupported loc "row companion entity differs from its checked source owner/table";
+  exported,info in
+ let go_type _database _version e =
+  let owner,info=entity e in project_path ^ "/internal/" ^ owner.ex_package,info.ent_row.rec_go_name in
+ List.iter (fun (_,history) -> match RH.require_migrate_callbacks history,RH.revalidate history with
+  | Ok (),Ok () -> ()
+  | Error errors,_ | _,Error errors -> unsupported loc "%s" (String.concat "\n" (List.map (fun (e:Migration_sparse.error) -> e.message) errors))) (P.row_histories source);
+ let p=P.source_program source in
+ let json=Migration_row_companion.base_json ~quote:Migration_row_companion.quote ~go_type source in
+ let adapter e =
+  let exported,_=entity e in
+  exported,require (List.find_opt (fun a -> a.storage_entity=e.RH.table.entity.entity_name) exported.ex_row_storage) in
+ let projection _database _version e = let _,a=adapter e in List.map (fun c -> c.col_field) a.storage_columns in
+ let row_json=Migration_row_companion.rows_json ?projection:(if row_storage then Some projection else None) ~quote:Migration_row_companion.quote source in
+ let physical_json=if not row_physical then None else
+  match Migration_retained_storage_json.to_json ~quote:Migration_row_companion.quote source with
+  | Ok json -> Some json
+  | Error errors -> unsupported loc "%s" (String.concat "\n" (List.map (fun (e:Migration_sparse.error) -> e.message) errors)) in
+ List.iter (fun (database:P.database) ->
+  if List.exists (fun (version:P.queue_version) -> version.contracts<>[]) database.queue_versions then
+   unsupported loc "row source artifacts do not yet support retained queue inventories") (P.databases p);
+ let bridges=ref [] and owners=ref [] in
+ let callbacks=List.filter_map (fun (database:P.database) ->
+  let module_name,name=split database.identity in
+  let exported=owner module_name in
+  let db=require (Hashtbl.find_opt exported.ex_types.databases name) in
+  if db.db_owner<>exported.ex_package then unsupported loc "row companion database owner changed";
+  owners:={path="internal/" ^ exported.ex_package ^ "/migration_row_owner_" ^ db.db_go_var ^ "_generated.go";
+   contents=Printf.sprintf "package %s\n\nimport teslrt %s\n\nvar _ = teslrt.RegisterDatabaseMigrationHistory(teslrt.RegisterDatabaseIdentity(%s, %s), %s)\n"
+    exported.ex_package (go_quote (project_path ^ "/internal/teslrt")) (go_quote database.identity) db.db_go_var (go_quote database.family)}::!owners;
+  let imports=ref ["teslrt",project_path ^ "/internal/teslrt"] in
+  let refname own name = if own=exported.ex_package then name else (
+   imports:=(own,project_path ^ "/internal/" ^ own)::!imports; own ^ "." ^ name) in
+  let rows=List.assoc database.identity (P.row_histories source) in
+  let declarations=List.mapi (fun index binding ->
+   let previous=RH.previous binding and current=RH.current binding in
+   let from_owner,from=entity previous and to_owner,target=entity current in
+   let from_info=from and target_info=target in
+   let from=refname from_owner.ex_package from.ent_row.rec_go_name in
+   let target=refname to_owner.ex_package target.ent_row.rec_go_name in
+   let checked=require (RH.row binding).function_binding in
+   (* Check the original binding against the captured module selected for emission.
+      Erasure only removes the contextual constant; this function is unchanged. *)
+   let original=require (List.find_opt (fun (m,_) -> m.module_name=checked.owner.module_name) (P.source_modules source)) |> fst in
+   if not (List.exists (function DFunc fn -> fn=checked.declaration | _ -> false) original.decls) then
+    unsupported checked.declaration.loc "row callback differs from the retained checked binding";
+   let emitted=require (List.find_opt (fun m -> m.module_name=checked.owner.module_name) modules) in
+   if not (List.exists (function DFunc fn -> fn=checked.declaration | _ -> false) emitted.decls) then
+    unsupported checked.declaration.loc "row callback was renamed or rewritten without a checked emitter binding";
+   let function_owner=owner checked.owner.module_name in
+   let signature=require (Hashtbl.find_opt function_owner.ex_signatures checked.declaration.name) in
+   if signature.sig_needs_scope then unsupported checked.declaration.loc "row callback unexpectedly requires runtime capabilities";
+   let bridge=unique_ident function_owner.ex_taken "TeslCompiledRowCallback" in
+   bridges:={path="internal/" ^ function_owner.ex_package ^ "/migration_row_" ^ bridge ^ "_generated.go";
+    contents="package " ^ function_owner.ex_package ^ "\n\nvar " ^ bridge ^ " = " ^ signature.go_name ^ "\n"}::!bridges;
+   let fn=refname function_owner.ex_package bridge in
+   let handle=unique_ident exported.ex_taken (db.db_go_var ^ "CompiledRowTransform" ^ string_of_int index) in
+   let declaration=Printf.sprintf "var %s = teslrt.RegisterCompiledRowTransform[%s, %s](\n\tteslrt.LookupCompiledRowTransform(teslrt.RegisterDatabaseMigrationHistory(teslrt.RegisterDatabaseIdentity(%s, %s), %s), %s, %d, %s), %s)\n"
+    handle from target (go_quote database.identity) db.db_go_var (go_quote database.family)
+    (go_quote database.family) (RH.migration_version binding) (go_quote current.identity) fn in
+   if not row_storage then declaration else
+   let decoder_owner,decoder=adapter previous and encoder_owner,encoder=adapter current in
+   let name=unique_ident exported.ex_taken (db.db_go_var ^ "CompiledRowStorage" ^ string_of_int index) in
+   let storage=declaration ^ Printf.sprintf "\nvar %s = teslrt.RegisterCompiledRowStorage[%s, %s](%s, %s, %s, %s, %s)\n"
+    name from target handle (refname decoder_owner.ex_package decoder.storage_decode) (refname encoder_owner.ex_package encoder.storage_encode) (refname encoder_owner.ex_package encoder.storage_decode) (refname decoder_owner.ex_package decoder.storage_encode) in
+   let storage=if not row_physical then storage else
+    let slot,_=require target_info.ent_row_access in
+    storage ^ Printf.sprintf "\nvar _ = teslrt.RegisterCompiledRowAccess[%s, %s](%s, %s%s)\n" from target name (refname to_owner.ex_package slot) (if mode=Debug then ", teslrt.DebugPgSql" else "") in
+   let row=RH.row binding in
+   if row.writebacks=[] then storage else begin
+    let callbacks=List.map (fun (w:Migration_transform.writeback_binding) ->
+     let checked=w.function_binding in
+     let emitted=require (List.find_opt (fun m -> m.module_name=checked.owner.module_name) modules) in
+     if not (List.exists (function DFunc f -> f=checked.declaration | _ -> false) emitted.decls) then
+      unsupported checked.declaration.loc "WriteBack differs from its exact checked source binding";
+     let own=owner checked.owner.module_name in
+     let signature=require (Hashtbl.find_opt own.ex_signatures checked.declaration.name) in
+     if signature.sig_needs_scope then unsupported checked.declaration.loc "WriteBack requires capabilities";
+     let bridge=unique_ident own.ex_taken "TeslCompiledWriteBackCallback" in
+     bridges:={path="internal/" ^ own.ex_package ^ "/migration_row_" ^ bridge ^ "_generated.go";
+      contents="package " ^ own.ex_package ^ "\n\nvar " ^ bridge ^ " = " ^ signature.go_name ^ "\n"}::!bridges;
+     w.mapping.previous.name,refname own.ex_package bridge) row.writebacks in
+    let values=List.map (fun (field,ty) ->
+     let value=match List.assoc_opt field callbacks with
+      | Some callback -> callback ^ "(row)"
+      | None ->
+       let current=List.find_map (function
+        | Migration_transform_rules.Copy p when p.previous.name=field -> Some p.current.name
+        | Migration_transform_rules.Renamed p when p.previous.name=field -> Some p.current.name
+        | _ -> None) row.mapping.values |> require in
+       let target_ty=require (List.assoc_opt current target_info.ent_row.rec_fields) in
+       if not (type_equal ty target_ty) then unsupported loc "WriteBack reverse identity needs exact nominal field types";
+       "row." ^ record_field_go_name current in
+     record_field_go_name field ^ ": " ^ value) from_info.ent_row.rec_fields in
+    let reverse=unique_ident exported.ex_taken (db.db_go_var ^ "CompiledRowWriteBack" ^ string_of_int index) in
+    storage ^ Printf.sprintf "\nvar %s = teslrt.RegisterCompiledRowWriteBack[%s, %s](%s, func(row %s) %s { return %s{%s} })\n"
+      reverse from target name target from from (String.concat ", " values)
+   end) (RH.bindings rows) in
+  let imports=List.sort_uniq compare !imports |> List.map (fun (alias,path) -> "\t" ^ alias ^ " " ^ go_quote path ^ "\n") |> String.concat "" in
+  if declarations=[] then None else Some {path="internal/" ^ exported.ex_package ^ "/migration_rows_" ^ db.db_go_var ^ "_generated.go";
+   contents="package " ^ exported.ex_package ^ "\n\nimport (\n" ^ imports ^ ")\n\n" ^ String.concat "\n" declarations}) (P.databases p) in
+ let registrations=List.map (fun (d:P.database) ->
+  Printf.sprintf "\tregisterCompiledMigrationHistory(%s, %s, %s, %d, %s, %s, teslGeneratedMigrationHistoryJSON)\n"
+   (go_quote d.identity) (go_quote d.family) (go_quote d.namespace) d.current_version
+   (go_quote (P.compiler_abi p)) (go_quote (P.stored_value_compatibility p))) (P.databases p) |> String.concat "" in
+ let slots=if not row_physical then [] else List.concat_map (fun exported ->
+  Hashtbl.fold (fun _ info acc -> match info.ent_row_access with
+   | Some (name,_) when info.ent_owner=exported.ex_package ->
+    {path="internal/" ^ exported.ex_package ^ "/migration_access_" ^ name ^ "_generated.go";
+     contents=Printf.sprintf "package %s\n\nimport teslrt %s\n\nvar %s = teslrt.NewPgRowAccessSlot[%s]()\n"
+      exported.ex_package (go_quote (project_path ^ "/internal/teslrt")) name info.ent_row.rec_go_name}::acc
+   | _ -> acc) exported.ex_types.entities []) exports in
+ let contract_json=if row_physical then Some(Migration_contract_json.to_json source) else None in
+ slots @ List.rev !owners @ List.rev !bridges @ callbacks @
+ Option.fold ~none:[] ~some:(fun json -> [{path="row-contract-history.json";contents=json ^ "\n"}]) contract_json @
+ Option.fold ~none:[] ~some:(fun json -> [{path="retained-physical-history.json";contents=json ^ "\n"}]) physical_json @ [
+  {path="migration-source-history.json";contents=json ^ "\n"};
+  {path="row-transform-history.json";contents=row_json ^ "\n"};
+  {path="internal/teslrt/migration_history_generated.go";contents="package teslrt\n\nconst teslGeneratedMigrationHistoryJSON = " ^ go_quote json ^
+   "\nconst teslGeneratedRowHistoryJSON = " ^ go_quote row_json ^
+   Option.fold ~none:"" ~some:(fun json -> "\nconst teslGeneratedPhysicalHistoryJSON = " ^ go_quote json) physical_json ^
+   Option.fold ~none:"" ~some:(fun json -> "\nconst teslGeneratedContractHistoryJSON = " ^ go_quote json) contract_json ^
+   "\n\nfunc init() {\n" ^ registrations ^ "\tregisterCompiledRowHistory(teslGeneratedRowHistoryJSON)\n" ^
+   (if row_physical then "\tregisterCompiledRowPhysicalHistory(teslGeneratedPhysicalHistoryJSON)\n\tregisterCompiledRowContractHistory(teslGeneratedContractHistoryJSON)\n" else "") ^ "}\n"}]
+
+ in
+  let row_storage_entities=if not row_storage then [] else match row_source with
+   | None -> []
+   | Some source -> Migration_program.row_histories source |> List.concat_map (fun (_,history) ->
+     Migration_row_history.versions history |> List.concat_map (fun version -> version.Migration_row_history.entities))
+     |> List.sort_uniq (fun a b -> String.compare a.Migration_row_history.table.entity.entity_name b.Migration_row_history.table.entity.entity_name) in
+  let row_access_entities=if not row_physical then [] else match row_source with None -> [] | Some source ->
+   Migration_program.row_histories source |> List.concat_map (fun (_,history) ->
+    Migration_row_history.bindings history |> List.map (fun binding ->
+     let row=Migration_row_history.row binding in
+     row.mapping.current.entity_name,List.filter_map (function
+      | Migration_transform_rules.Copy p -> Some p.current.name
+      | Migration_transform_rules.Renamed p -> Some p.current.name
+      | _ -> None) row.mapping.values)) in
+  let access_errors=if not row_physical then [] else match row_source with None -> [] | Some source ->
+   Migration_program.row_histories source |> List.concat_map (fun (_,history) ->
+    let versions=Migration_row_history.versions history in
+    let latest=List.hd (List.rev versions) in
+    let bindings=Migration_row_history.bindings history in
+    latest.entities |> List.filter_map (fun (entity:Migration_row_history.entity) ->
+     let own=List.filter (fun binding -> (Migration_row_history.current binding).identity=entity.identity) bindings in
+     if own=[] || (List.length own=1 && Migration_row_history.migration_version (List.hd own)=latest.version) then None else
+      Some {loc=Location.dummy_loc entry.source_file;message="migration-aware application queries currently require one transforming window ending at the current schema; additive tails and composed transformations require a checked typed access composition"})) in
+  let source_errors=access_errors @ (if row_physical && not row_storage then [{loc=Location.dummy_loc entry.source_file;message="physical row emission requires typed storage adapters"}] else []) @ (if row_storage && Option.is_none row_source then [{loc=Location.dummy_loc entry.source_file;message="row storage emission requires a checked source history"}] else []) @ Option.fold ~none:[] ~some:(fun source ->
+   match Migration_program.verify_source_history source modules with
+   | Ok () -> [] | Error errors -> List.map (fun (e:Migration_sparse.error) -> {loc=e.loc;message=e.message}) errors) row_source in
+  if source_errors<>[] then Error source_errors else
   let lowered = List.map (Migration_schema.lower_module ~modules) modules in
   let errors = List.concat_map (function
     | Ok _ -> []
@@ -16532,9 +16812,9 @@ let compile_project ?(mode=Release) ?(migration_families=[]) ?(migration_queues=
     let ordered = List.filter_map (fun name ->
       List.find_opt (fun (m : module_form) -> m.module_name = name) modules) ordered_names in
     let rec emit acc exports = function
-      | [] -> Ok (List.rev acc)
+      | [] -> (try Ok (List.rev acc @ Option.fold ~none:[] ~some:(compiled_row_artifacts ~entry ~modules ~exports) row_source) with Unsupported error -> Error [error])
       | (m : module_form) :: rest ->
-        (match compile_module ~mode ~dependencies:exports ~entity_bindings ~migration_families ~migration_queues ~queue_codec_records ~project_path m with
+        (match compile_module ~row_access_entities ~row_storage_entities ~mode ~dependencies:exports ~entity_bindings ~migration_families ~migration_queues ~queue_codec_records ~project_path m with
          | Error errors -> Error errors
          | Ok (artifacts, module_exports) ->
            emit (List.rev_append artifacts acc) (module_exports :: exports) rest)
@@ -16588,4 +16868,8 @@ let compile_project ?(mode=Release) ?(migration_families=[]) ?(migration_queues=
          if checksums = "" || List.exists (fun (a : artifact) -> a.path = "go.sum") rebuilt
          then rebuilt
          else rebuilt @ [{ path = "go.sum"; contents = checksums }] in
-       Ok rebuilt)
+       (match row_source with
+        | None -> Ok rebuilt
+        | Some source -> match Migration_program.verify_source_history source modules with
+          | Ok () -> Ok rebuilt
+          | Error errors -> Error (List.map (fun (e:Migration_sparse.error) -> {loc=e.loc;message=e.message}) errors)))

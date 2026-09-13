@@ -516,7 +516,10 @@ func (process *workerLessonProcess) stop(t *testing.T) {
 		_ = process.cmd.Process.Signal(os.Interrupt)
 		select {
 		case <-process.done:
-		case <-time.After(5 * time.Second):
+		// Serve permits a 15-second request drain. The harness must allow that
+		// interval before treating the process as stuck (including net/http's
+		// five-second grace for newly accepted, not-yet-active connections).
+		case <-time.After(20 * time.Second):
 			_ = process.cmd.Process.Kill()
 			<-process.done
 			t.Errorf("%s ignored graceful shutdown", process.label)
@@ -559,6 +562,9 @@ func workerLessonRequest(t *testing.T, ctx context.Context, client *http.Client,
 	response, err := client.Do(request)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if response == nil || response.Body == nil {
+		t.Fatal("worker lesson request returned no response body")
 	}
 	defer func() { _ = response.Body.Close() }()
 	data, err := io.ReadAll(io.LimitReader(response.Body, 4096))

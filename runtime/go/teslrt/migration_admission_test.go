@@ -112,18 +112,16 @@ func TestPgMigrationAdmissionCannotRecoverAndCommitARefusedTransaction(t *testin
 }
 
 func TestPgMigrationAdmissionProtectsQueueAndOutboxWrites(t *testing.T) {
-	for _, kind := range []string{"claim", "renew", "email claim", "publish", "transactional publish", "legacy dispatch", "pubsub prune"} {
+	for _, kind := range []string{"renew", "email claim", "publish", "transactional publish", "legacy dispatch", "pubsub prune"} {
 		t.Run(kind, func(t *testing.T) {
 			f, db := pgAdmissionTestDatabase(t)
 			declaration := &Database{open: db}
 			queue := &pgQueueBackend{pgStore: pgStore{database: declaration}, name: "jobs"}
-			queue.lastReclaim.Store(time.Now().Add(time.Hour).UnixNano()) // Exercise claim itself, not the preceding sweep.
-			ensureTable(db, jobsTable, jobsTableDDL)
+			pgAdmissionSeedLegacyJob(t, f, db)
 			ensureTable(db, outboxTable, outboxTableDDL)
 			if err := createPubsubOutbox(f.ctx, db); err != nil {
 				t.Fatal(err)
 			}
-			f.call(t, "insert into "+db.QualifiedTable(jobsTable)+"(id,queue,job_type,payload,status) values ('job','jobs','Job','{}','pending')")
 			f.call(t, "insert into "+db.QualifiedTable(outboxTable)+"(status,next_attempt_at) values ('pending',now())")
 			f.call(t, "insert into "+db.QualifiedTable(pubsubOutboxTable)+"(channel,key,payload,dispatch_seq,dispatched_at) values ('Events','key','{}',1,now()-interval '2 hours'),('Events','key','{}',null,null)")
 			var leaseBefore time.Time
@@ -138,8 +136,6 @@ func TestPgMigrationAdmissionProtectsQueueAndOutboxWrites(t *testing.T) {
 			var operationErr error
 			failure := recoverDebugSQLFailure(func() {
 				switch kind {
-				case "claim":
-					queue.dequeue(jobPending)
 				case "renew":
 					_, operationErr = queue.renewClaim(f.ctx, db, db.QualifiedTable(jobsTable), "job", "claim:1", time.Minute)
 				case "email claim":
@@ -179,6 +175,40 @@ func TestPgMigrationAdmissionProtectsQueueAndOutboxWrites(t *testing.T) {
 			}
 			if err := f.worker.QueryRow(f.ctx, "select count(*) from "+db.QualifiedTable(pubsubOutboxTable)+" where dispatch_seq is null").Scan(&pending); err != nil || pending != 1 {
 				t.Fatalf("retired dispatcher assigned a sequence: %d,%v", pending, err)
+			}
+		})
+	}
+}
+
+// Seed an existing legacy table directly so lower-level renewal/admission checks
+// remain covered. Public Embedded versioned queue bootstrap and claims must refuse;
+// this fixture setup grants no runtime queue capability.
+func pgAdmissionSeedLegacyJob(t *testing.T, f *pgControlTestFixture, db *PostgresDB) {
+	t.Helper()
+	for _, statement := range jobsTableDDL(db.QualifiedTable(jobsTable)) {
+		f.call(t, statement)
+	}
+	f.call(t, "insert into "+db.QualifiedTable(jobsTable)+"(id,queue,job_type,payload,status) values ('job','jobs','Job','{}','pending')")
+}
+
+func TestPgMigrationAdmissionRefusesUnsupportedLegacyQueueClaims(t *testing.T) {
+	for _, retired := range []bool{false, true} {
+		t.Run(fmt.Sprintf("retired=%t", retired), func(t *testing.T) {
+			f, db := pgAdmissionTestDatabase(t)
+			pgAdmissionSeedLegacyJob(t, f, db)
+			queue := &pgQueueBackend{pgStore: pgStore{database: &Database{open: db}}, name: "jobs"}
+			queue.lastReclaim.Store(time.Now().Add(time.Hour).UnixNano())
+			if retired {
+				pgAdmissionRetire(t, f, db)
+			}
+			failure := recoverDebugSQLFailure(func() { queue.dequeue(jobPending) })
+			if got, want := fmt.Sprint(failure), pgMigrationQueueStorageError(db.schema).Error(); got != want {
+				t.Fatalf("unsupported versioned queue did not refuse before claiming: got %q, want %q", got, want)
+			}
+			var unchanged int
+			if err := f.worker.QueryRow(f.ctx, "select count(*) from "+db.QualifiedTable(jobsTable)+
+				" where id='job' and status='pending' and claim_seq=0 and claim_token is null and lease_until is null").Scan(&unchanged); err != nil || unchanged != 1 {
+				t.Fatalf("unsupported queue changed the pending job: %d, %v", unchanged, err)
 			}
 		})
 	}

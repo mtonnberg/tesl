@@ -20,6 +20,8 @@ type database = {
 }
 type t
 val databases : t -> database list
+(** Exact source-authorized contracts, bound separately for each application database. *)
+val contracts : t -> (string * Migration_contract.t list) list
 val compiler_abi : t -> string
 val stored_value_compatibility : t -> string
 (** Capture application/history guards before invoking compilation. The supplied
@@ -41,3 +43,17 @@ val queues_to_json : quote:(string -> string) -> t -> string
 val queue_bindings : t -> queue_binding list
 
 val queue_codec_records : t -> string list
+
+(** Internal source-only capture. Unlike [with_history], retains unsupported
+    expansion errors, but cannot produce an executable expansion history. *)
+type source_history
+val with_source_history : entry:Ast.module_form -> source:string ->
+  (source_history option -> 'a) -> ('a,Migration_sparse.error list) result
+val source_program : source_history -> t
+val source_modules : source_history -> (Ast.module_form * string) list
+val row_histories : source_history -> (string * Migration_row_history.t) list
+
+(** Must run inside the capture callback. Revalidates complete source/ABI guards
+    and exact ownership-preserving lowered graph, including private helpers. *)
+val verify_source_history : source_history -> Ast.module_form list ->
+  (unit,Migration_sparse.error list) result

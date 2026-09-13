@@ -176,3 +176,14 @@ let replace t edits = protect (fun () ->
   let source = Buffer.contents output in
   (match Parser.parse_module t.file source with Ok _ -> () | Err e -> reject e.msg);
   source)
+
+let field_storage_point t (field:field_def) = protect (fun () ->
+  if not (List.exists (function DEntity e -> List.exists (fun f -> f==field) e.fields | _ -> false) t.ast.decls) then
+    reject "storage field does not belong to this exact entity source view";
+  let before (token:Lexer.full_token) point = (token.line,token.col)<(point.Location.line,point.col) in
+  let endpoint={field.loc.stop with col=field.loc.stop.col-1} in
+  let tokens=Array.to_list t.tokens |> List.filter (fun token ->
+    not (layout token.Lexer.tok) && not (before token field.loc.start) && before token endpoint) in
+  let last=match List.rev tokens with token::_ -> token | [] -> reject "entity field has no exact token endpoint" in
+  let point=token_end t last in
+  {start_byte=point;end_byte=point})

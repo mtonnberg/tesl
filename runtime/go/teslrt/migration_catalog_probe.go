@@ -18,7 +18,7 @@ import (
 
 func pgMigrationTypeSQL(name string) string {
 	switch name {
-	case "numeric", "float8", "text", "bool", "int4", "int8", "jsonb":
+	case "numeric", "float8", "text", "bool", "int2", "int4", "int8", "jsonb":
 		return "pg_catalog." + name
 	}
 	return ""
@@ -31,6 +31,9 @@ func pgMigrationConstantInput(typ string, value PgMigrationCatalogConstant) (str
 			return "", fmt.Errorf("migration numeric constant exceeds PostgreSQL capacity")
 		}
 		n, ok := new(big.Int).SetString(value.Value, 10)
+		if typ == "int2" && ok && n.IsInt64() && n.Int64() >= 1 && n.Int64() <= 32767 && n.String() == value.Value {
+			return value.Value, nil
+		}
 		if typ == "numeric" && ok && n.String() == value.Value && len(strings.TrimPrefix(value.Value, "-")) <= 131072 {
 			return value.Value, nil
 		}
@@ -67,7 +70,7 @@ func pgValidateMigrationCatalog(tables []PgMigrationCatalogTable) error {
 		columns := map[string]bool{}
 		primary := 0
 		for _, c := range table.Columns {
-			if !pgMigrationIdentifier(c.Name) || columns[c.Name] || pgMigrationTypeSQL(c.Type) == "" {
+			if !pgMigrationIdentifier(c.Name) || columns[c.Name] || c.Type == "int2" || pgMigrationTypeSQL(c.Type) == "" {
 				return fmt.Errorf("invalid expected migration column %s.%s", table.Name, c.Name)
 			}
 			columns[c.Name] = true
