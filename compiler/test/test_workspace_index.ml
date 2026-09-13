@@ -244,8 +244,37 @@ let symlinked_temporary_parent () =
         let edits = expect_safe index target "twice" in
         check int "rename remains safe through a symlinked temp parent" 5 (List.length edits))))
 
+let migration_source_ownership () =
+  let schema = "module NotesSchema.V2 exposing [double]\nimport Tesl.Prelude exposing [Int]\nfn double(n: Int) -> Int = n * 2\n" in
+  let helper = "module Migrations.Notes.V2.Helpers exposing [double]\nimport Tesl.Prelude exposing [Int]\nfn double(n: Int) -> Int = n * 2\n" in
+  List.iter (fun (path, source, extras) ->
+    with_project ((path, source) :: extras) (fun root ->
+      let file = Filename.concat root path in
+      let index = build file in complete index;
+      let target = selected index file 2 3 in
+      check bool "frozen symbol advertised read-only" true
+        (contains (symbol_json index target.symbol) {|"read_only":true|});
+      check bool "frozen declaration has explicit refusal" true
+        (match validate_rename index (Some target) "twice" index.id with
+         | Error reason -> contains reason "read-only" | Ok _ -> false);
+      check string "frozen bytes untouched" source (In_channel.with_open_bin file In_channel.input_all)))
+    ["schema/notes/v2.tesl", schema, [];
+     "migrations/notes/v2/helpers.tesl", helper, ["schema/notes/v2.tesl", schema]];
+  let caller = "module NotesSchema.V2 exposing [run]\nimport Tesl.Prelude exposing [Int]\nimport Lib exposing [double]\nfn run(n: Int) -> Int = double n\n" in
+  with_project ["schema/notes/lib.tesl", lib; "schema/notes/v2.tesl", caller] (fun root ->
+    let file = Filename.concat root "schema/notes/lib.tesl" in
+    let index = build file in complete index;
+    let target = selected index file 2 3 in
+    check bool "ordinary declaration remains mutable" false (source_read_only index file);
+    expect_refused index target "twice");
+  with_project ["schema/notes/v-current.tesl", Str.global_replace (Str.regexp_string "V2") "VCurrent" schema] (fun root ->
+    let file = Filename.concat root "schema/notes/v-current.tesl" in
+    let index = build file in complete index;
+    ignore (expect_safe index (selected index file 2 3) "twice"))
+
 let () = Alcotest.run "Workspace semantic index" ["identity and edits", List.map (fun (name, test) -> test_case name `Quick test)
-  ["symlinked temporary parent", symlinked_temporary_parent;
+  ["migration source ownership", migration_source_ownership;
+   "symlinked temporary parent", symlinked_temporary_parent;
    "interpolation local scope", interpolation_local_scope; "qualified import all", import_all; "interpolation escaped prefix", interpolation_escapes;
    "invalid rename identifiers", invalid_rename_names; "stable mirror identity", stable_mirror_identity;
    "manifest invalidation", manifest_change; "unsupported contexts explicit", invalid_context_is_partial;

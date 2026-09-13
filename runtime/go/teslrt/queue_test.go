@@ -158,6 +158,9 @@ func TestRequeueRefusesAnInFlightDeadJob(t *testing.T) {
 	Enqueue(queue, emailJob{Recipient: "y"})
 	ProcessNextJob(queue, func(any) JobOutcome { return JobOutcome{OK: false} })
 	stillDead := DeadJobs(queue)
+	if len(stillDead) != 1 {
+		t.Fatalf("expected one dead job before requeue, got %v", stillDead)
+	}
 	if !Requeue(stillDead[0]) || Requeue(stillDead[0]) {
 		t.Fatal("a dead job requeues exactly once")
 	}

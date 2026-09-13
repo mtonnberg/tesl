@@ -1,0 +1,41 @@
+module App exposing [FixtureDb, roundTrip]
+
+import Tesl.Prelude exposing [String]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.Int32 exposing [Int32.fromIntClamped]
+import Tesl.Env exposing [envInt]
+import Tesl.DB exposing [dbRead, dbWrite]
+import Tesl.Database exposing [Database, Postgres, PostgresConfig, MigrationConfig, TcpConnection]
+import StorageSchema.VCurrent exposing [Sample]
+import StorageSchema.VCurrent.Text
+
+database FixtureDb = Database {
+  schema: StorageSchema.VCurrent
+  migrations: StorageSchema.Migrate
+  backend: Postgres (PostgresConfig {
+    namespace: "storage_fixture"
+    migrations: MigrationConfig {
+      controlOwner: env "TESL_FIXTURE_CONTROL_OWNER"
+    }
+    dbName: env "TESL_FIXTURE_DATABASE"
+    user: env "TESL_TEST_POSTGRES_SHARED_USER"
+    password: env "PGPASSWORD"
+    connection: TcpConnection {
+      host: env "TESL_TEST_POSTGRES_SHARED_HOST"
+      port: envInt "TESL_TEST_POSTGRES_SHARED_PORT" 5432
+    }
+  })
+}
+
+fn roundTrip() -> String requires [dbRead Sample, dbWrite Sample] =
+  let label = StorageSchema.VCurrent.Text.Int32 "not a number: å"
+  let number = Int32.fromIntClamped 2147483647
+  let negative = Int32.fromIntClamped (-2147483648)
+  let _ = insert Sample { id: "round-trip", label: label, builtin: number, bounded: negative, wide: number }
+  case selectOne s from Sample where s.id == "round-trip" of
+    Something s ->
+      if s.label == label && s.builtin == number && s.bounded == negative && s.wide == number then
+        "ok"
+      else
+        "round-trip mismatch"
+    Nothing -> "missing row"

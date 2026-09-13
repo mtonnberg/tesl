@@ -85,8 +85,11 @@ type pgPubsub struct {
 	// channels by declared NAME. A name normally has one channel; a test standing two
 	// channels in for two instances registers two, and both receive.
 	channels map[string][]*SseChannel
-	// queues by declared name, woken on a `tesl_queue` notification naming them.
+	// queues by declared name, used only by the legacy listener.
 	queues map[string][]*Queue
+	// Protected notifications name the checked schema contract, not an App-local
+	// binding. Keep that routing separate even when the two names collide.
+	queueAliases map[string][]*Queue
 	// ready is set once the outbox table exists and the dispatch baseline is captured.
 	ready bool
 	// dispatchCursor is the highest commit-ordered dispatch sequence this process delivered.
@@ -111,6 +114,7 @@ var pgPubsubs sync.Map // *Database -> *pgPubsub
 // with the database's pub/sub runtime attached, and registered with that runtime under its
 // name so an event arriving from another instance finds it.
 func NewSseChannelOn(database *Database, name string) *SseChannel {
+	pgRegisterMigrationFacility(database, "SSE channel", name)
 	channel := NewSseChannel(name)
 	runtime := pubsubFor(database)
 	runtime.mutex.Lock()
@@ -125,6 +129,47 @@ func (runtime *pgPubsub) registerQueue(queue *Queue) {
 	runtime.mutex.Lock()
 	runtime.queues[queue.name] = append(runtime.queues[queue.name], queue)
 	runtime.mutex.Unlock()
+}
+
+// registerQueueAlias records only an already checked schema binding. It does
+// not rename the App queue or make an unversioned notification authoritative.
+func (runtime *pgPubsub) registerQueueAlias(identity string, queue *Queue) {
+	runtime.mutex.Lock()
+	defer runtime.mutex.Unlock()
+	if runtime.queueAliases == nil {
+		runtime.queueAliases = map[string][]*Queue{}
+	}
+	for _, registered := range runtime.queueAliases[identity] {
+		if registered == queue {
+			return
+		}
+	}
+	runtime.queueAliases[identity] = append(runtime.queueAliases[identity], queue)
+}
+
+func (runtime *pgPubsub) wakeQueueAlias(identity string) {
+	runtime.mutex.Lock()
+	queues := append([]*Queue(nil), runtime.queueAliases[identity]...)
+	runtime.mutex.Unlock()
+	for _, queue := range queues {
+		queue.Wake()
+	}
+}
+
+// A successful LISTEN/reconnect may have missed a committed notification. Wake
+// each checked queue once; its protected claim query remains the authority.
+func (runtime *pgPubsub) wakeAllQueueAliases() {
+	runtime.mutex.Lock()
+	queues := map[*Queue]struct{}{}
+	for _, aliases := range runtime.queueAliases {
+		for _, queue := range aliases {
+			queues[queue] = struct{}{}
+		}
+	}
+	runtime.mutex.Unlock()
+	for queue := range queues {
+		queue.Wake()
+	}
 }
 
 // wakeQueues rings every registered queue named by a `tesl_queue` notification.
@@ -192,12 +237,19 @@ func (runtime *pgPubsub) publish(channel, key string, encoded string) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), pgLeaseTimeout())
 	defer cancel()
-	if transaction := currentTransaction(); transaction != nil {
+	if transaction := currentTransactionFor(connection); transaction != nil {
+		if err := pgAdmitMigrationTransaction(ctx, transaction, connection, true); err != nil {
+			panic(pgFailure("publish", err))
+		}
 		if _, err := writePubsub(ctx, transaction, connection, channel, key, encoded); err != nil {
 			panic(pgFailure("publish", err))
 		}
 	} else {
-		transaction, err := connection.pool.Begin(ctx)
+		options := pgx.TxOptions{}
+		if connection.migration != nil {
+			options.IsoLevel = pgx.ReadCommitted
+		}
+		transaction, err := connection.pool.BeginTx(ctx, options)
 		if err != nil {
 			panic(pgFailure("publish: cannot begin", err))
 		}
@@ -207,6 +259,9 @@ func (runtime *pgPubsub) publish(channel, key string, encoded string) {
 				_ = transaction.Rollback(context.Background())
 			}
 		}()
+		if err := pgAdmitMigrationTransaction(ctx, transaction, connection, true); err != nil {
+			panic(pgFailure("publish", err))
+		}
 		if _, err := writePubsub(ctx, transaction, connection, channel, key, encoded); err != nil {
 			panic(pgFailure("publish", err))
 		}
@@ -220,6 +275,9 @@ func (runtime *pgPubsub) publish(channel, key string, encoded string) {
 
 func writePubsub(ctx context.Context, executor pgExecutor, connection *PostgresDB,
 	channel, key, encoded string) (int64, error) {
+	if err := pgVerifyMigrationFacilityConnection(connection, "SSE outbox"); err != nil {
+		return 0, err
+	}
 	if _, err := executor.Exec(ctx,
 		`select pg_advisory_xact_lock(hashtextextended(current_database() || ':' || $1, 0))`,
 		connection.QualifiedTable(pubsubOutboxTable)); err != nil {
@@ -247,6 +305,9 @@ func (runtime *pgPubsub) prepare(connection *PostgresDB) error {
 }
 
 func (runtime *pgPubsub) prepareOn(connection *PostgresDB, executor pgExecutor) error {
+	if err := pgVerifyMigrationFacilityConnection(connection, "SSE outbox"); err != nil {
+		return err
+	}
 	runtime.mutex.Lock()
 	defer runtime.mutex.Unlock()
 	if runtime.ready {
@@ -254,10 +315,16 @@ func (runtime *pgPubsub) prepareOn(connection *PostgresDB, executor pgExecutor) 
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), pgLeaseTimeout())
 	defer cancel()
-	if err := executor.QueryRow(ctx, `select coalesce(max("dispatch_seq"), 0) from `+
-		connection.QualifiedTable(pubsubOutboxTable)).Scan(&runtime.dispatchCursor); err != nil {
+	cursor, err := pgMigrationStatementOn(ctx, connection, executor, false, func(executor pgExecutor) (int64, error) {
+		var cursor int64
+		err := executor.QueryRow(ctx, `select coalesce(max("dispatch_seq"), 0) from `+connection.QualifiedTable(pubsubOutboxTable)).Scan(&cursor)
+		return cursor, err
+	})
+	if err != nil {
 		return err
 	}
+	runtime.dispatchCursor = cursor
+
 	runtime.ready = true
 	return nil
 }
@@ -266,6 +333,9 @@ func (runtime *pgPubsub) prepareOn(connection *PostgresDB, executor pgExecutor) 
 // idempotent upgrade from the original allocation-ordered outbox; they are not application
 // schema migration machinery.
 func createPubsubOutbox(ctx context.Context, connection *PostgresDB) error {
+	if err := pgVerifyMigrationFacilityConnection(connection, "SSE outbox"); err != nil {
+		return err
+	}
 	table := connection.QualifiedTable(pubsubOutboxTable)
 	statements := []string{
 		`create sequence if not exists ` + connection.QualifiedTable(pubsubDispatchSeq),
@@ -308,6 +378,9 @@ func createPubsubOutbox(ctx context.Context, connection *PostgresDB) error {
 // and before a runtime captures its baseline. Each transaction has a fresh lease and handles a
 // bounded batch, avoiding the old single 10-second context across an arbitrarily large outbox.
 func normalizeLegacyPubsubRows(connection *PostgresDB) error {
+	if err := pgVerifyMigrationFacilityConnection(connection, "SSE outbox"); err != nil {
+		return err
+	}
 	for {
 		ctx, cancel := context.WithTimeout(context.Background(), pgLeaseTimeout())
 		dispatched, err := dispatchLegacyPubsubPending(ctx, connection.pool, connection)
@@ -423,6 +496,12 @@ func (runtime *pgPubsub) pause(duration time.Duration) bool {
 // lives for the process, which is not what a pool's connections are for. `listened` reports
 // whether LISTEN was established, which is what resets the reconnect backoff.
 func (runtime *pgPubsub) listen(connection *PostgresDB) (listened bool, err error) {
+	if connection.queueRuntime != nil {
+		return runtime.listenQueue(connection)
+	}
+	if err := pgVerifyMigrationFacilityConnection(connection, "SSE listener"); err != nil {
+		return false, err
+	}
 	connectCtx, cancelConnect := context.WithTimeout(runtime.ctx, pgLeaseTimeout())
 	defer cancelConnect()
 	conn, err := pgx.ConnectConfig(connectCtx, connection.pool.Config().ConnConfig.Copy())
@@ -437,6 +516,9 @@ func (runtime *pgPubsub) listen(connection *PostgresDB) (listened bool, err erro
 		runtime.listener = nil
 		runtime.mutex.Unlock()
 	}()
+	if err := pgVerifyMigrationConnection(connectCtx, conn, connection); err != nil {
+		return false, err
+	}
 	if err := runtime.prepareOn(connection, conn); err != nil {
 		return false, err
 	}
@@ -507,6 +589,139 @@ func (runtime *pgPubsub) listen(connection *PostgresDB) (listened bool, err erro
 	}
 }
 
+// pgVerifyQueueCandidateConnection is private candidate admission, shared by
+// startup preparation and the queue-only listener. The caller owns an idle
+// read-committed, read-only transaction and publishes no binding before commit.
+// Ordinary format-3 connection validation remains unchanged and refuses format 4.
+func pgVerifyQueueCandidateConnection(ctx context.Context, tx pgx.Tx, db *PostgresDB, binding *pgQueueRuntime) error {
+	if db == nil || db.migration == nil || binding == nil || binding.database == nil {
+		return fmt.Errorf("queue listener: missing protected database binding")
+	}
+	expected := db.migration
+	login := expected.roles.Worker
+	if expected.roles.Request != "" {
+		login = expected.roles.Request
+	}
+	if login == "" || expected.worker != login {
+		return fmt.Errorf("queue listener: worker/request login changed from declared topology")
+	}
+	if binding.history.Namespace != db.schema || binding.history.CurrentVersion != expected.version ||
+		(db.queueRuntime != nil && db.queueRuntime != binding) {
+		return fmt.Errorf("queue listener: compiled database binding changed")
+	}
+	binding.database.mutex.RLock()
+	closed := binding.database.applicationPreflightClosed && binding.database.migrationFacilitiesClosed
+	history := binding.database.migrationHistory
+	matches := history != nil && *history == binding.history
+	binding.database.mutex.RUnlock()
+	if !closed || !matches {
+		return fmt.Errorf("queue listener: incomplete or changed application registration")
+	}
+	identity, exists := databaseIdentities.Load(binding.history.Database)
+	if !exists || identity != binding.database {
+		return fmt.Errorf("queue listener: database pointer does not own compiled identity")
+	}
+	if err := pgControlSession(ctx, tx); err != nil {
+		return err
+	}
+	var currentUser, sessionUser string
+	if err := tx.QueryRow(ctx, "select current_user, session_user").Scan(&currentUser, &sessionUser); err != nil {
+		return err
+	}
+	if expected.worker == "" || currentUser != expected.worker || sessionUser != expected.worker {
+		return fmt.Errorf("queue listener: worker/request login changed")
+	}
+	if err := pgControlRoles(ctx, tx, expected.roles, false); err != nil {
+		return err
+	}
+	state, err := pgInspectQueueCandidate(ctx, tx, db.schema, expected.roles)
+	if err != nil {
+		return err
+	}
+	if state.DatabaseUUID != expected.databaseUUID || state.FenceNamespace != expected.fenceNamespace {
+		return fmt.Errorf("queue listener: database identity differs from admission")
+	}
+	preparation := pgQueueCandidatePreparation{history: binding.history, roles: expected.roles}
+	if err := preparation.verify(ctx, tx, state); err != nil {
+		return err
+	}
+	return pgAdmitMigrationTransaction(ctx, tx, db, false)
+}
+
+// listenQueue never enters the SSE outbox preparation, sweep or prune paths.
+// PostgreSQL notifications are commit-ordered doorbells, not stored payloads.
+// A dedicated connection is rechecked against the complete protected catalog on
+// every reconnect; no connection ever passes the ordinary format-3 guard as 4.
+func (runtime *pgPubsub) listenQueue(db *PostgresDB) (bool, error) {
+	if db.queueRuntime == nil || db.queueRuntime.database != runtime.database || runtime.database.bound() != db {
+		return false, fmt.Errorf("queue listener: database is no longer bound")
+	}
+	connectCtx, cancelConnect := context.WithTimeout(runtime.ctx, pgLeaseTimeout())
+	defer cancelConnect()
+	config := db.pool.Config().ConnConfig.Copy()
+	// A config copied from a live connection can retain that connection's
+	// notification callback. This dedicated listener owns its own buffer.
+	config.OnNotification = nil
+	conn, err := pgx.ConnectConfig(connectCtx, config)
+	if err != nil {
+		return false, err
+	}
+	defer func() {
+		closeCtx, cancelClose := context.WithTimeout(context.Background(), pgLeaseTimeout())
+		defer cancelClose()
+		_ = conn.Close(closeCtx)
+		runtime.mutex.Lock()
+		runtime.listener = nil
+		runtime.mutex.Unlock()
+	}()
+	tx, err := conn.BeginTx(connectCtx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted, AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return false, err
+	}
+	defer func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), pgLeaseTimeout())
+		defer cancel()
+		_ = tx.Rollback(cleanupCtx)
+	}()
+	if err := pgVerifyQueueCandidateConnection(connectCtx, tx, db, db.queueRuntime); err != nil {
+		return false, err
+	}
+	if err := tx.Commit(connectCtx); err != nil {
+		return false, err
+	}
+	if _, err := conn.Exec(connectCtx, "listen "+quoteIdentifier(queueNotifyChannel)); err != nil {
+		return false, err
+	}
+	if runtime.database.bound() != db {
+		return false, fmt.Errorf("queue listener: database binding ended during connection")
+	}
+	runtime.mutex.Lock()
+	runtime.listener = conn
+	runtime.mutex.Unlock()
+	runtime.wakeAllQueueAliases()
+	for {
+		if runtime.database.bound() != db {
+			return true, nil
+		}
+		waitCtx, cancelWait := context.WithTimeout(runtime.ctx, pubsubBindPollInterval)
+		notification, err := conn.WaitForNotification(waitCtx)
+		cancelWait()
+		if runtime.database.bound() != db {
+			return true, nil
+		}
+		if err == nil {
+			if notification != nil && notification.Channel == queueNotifyChannel {
+				runtime.wakeQueueAlias(notification.Payload)
+			}
+			continue
+		}
+		if errors.Is(err, context.DeadlineExceeded) && runtime.ctx.Err() == nil {
+			continue
+		}
+		return true, err
+	}
+}
+
 type pubsubRow struct {
 	id               int64
 	dispatchSequence int64
@@ -523,7 +738,17 @@ type pgTransactionStarter interface {
 // draw sequence values, and commit before another cooperating publisher can draw one.
 func dispatchLegacyPubsubPending(ctx context.Context, starter pgTransactionStarter,
 	connection *PostgresDB) (int, error) {
-	transaction, err := starter.Begin(ctx)
+	var transaction pgx.Tx
+	var err error
+	if connection.migration == nil {
+		transaction, err = starter.Begin(ctx)
+	} else {
+		capable, ok := starter.(pgMigrationTransactionStarter)
+		if !ok {
+			return 0, fmt.Errorf("migration dispatch requires a transaction-capable connection")
+		}
+		transaction, err = capable.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	}
 	if err != nil {
 		return 0, err
 	}
@@ -533,6 +758,9 @@ func dispatchLegacyPubsubPending(ctx context.Context, starter pgTransactionStart
 			_ = transaction.Rollback(context.Background())
 		}
 	}()
+	if err := pgAdmitMigrationTransaction(ctx, transaction, connection, true); err != nil {
+		return 0, err
+	}
 	if _, err := transaction.Exec(ctx,
 		`select pg_advisory_xact_lock(hashtextextended(current_database() || ':' || $1, 0))`,
 		connection.QualifiedTable(pubsubOutboxTable)); err != nil {
@@ -579,21 +807,22 @@ func (runtime *pgPubsub) drainWithStats(conn *pgx.Conn, connection *PostgresDB) 
 			return stats, err
 		}
 		ctx, cancel := context.WithTimeout(runtime.ctx, pgLeaseTimeout())
-		rows, err := conn.Query(ctx, `select "id", "channel", "key", "payload"::text, "dispatch_seq" from `+
-			connection.QualifiedTable(pubsubOutboxTable)+
-			` where "dispatch_seq" > $1 order by "dispatch_seq" limit $2`,
-			runtime.cursor(), pubsubSweepBatch)
-		stats.fetchQueries++
-		if err != nil {
-			cancel()
-			return stats, err
-		}
-		batch, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (pubsubRow, error) {
-			var collected pubsubRow
-			err := row.Scan(&collected.id, &collected.channel, &collected.key, &collected.encoded,
-				&collected.dispatchSequence)
-			return collected, err
+		batch, err := pgMigrationStatementOn(ctx, connection, conn, false, func(executor pgExecutor) ([]pubsubRow, error) {
+			rows, err := executor.Query(ctx, `select "id", "channel", "key", "payload"::text, "dispatch_seq" from `+
+				connection.QualifiedTable(pubsubOutboxTable)+
+				` where "dispatch_seq" > $1 order by "dispatch_seq" limit $2`,
+				runtime.cursor(), pubsubSweepBatch)
+			if err != nil {
+				return nil, err
+			}
+			return pgx.CollectRows(rows, func(row pgx.CollectableRow) (pubsubRow, error) {
+				var collected pubsubRow
+				err := row.Scan(&collected.id, &collected.channel, &collected.key, &collected.encoded,
+					&collected.dispatchSequence)
+				return collected, err
+			})
 		})
+		stats.fetchQueries++
 		cancel()
 		if err != nil {
 			return stats, err
@@ -613,9 +842,11 @@ func (runtime *pgPubsub) drainWithStats(conn *pgx.Conn, connection *PostgresDB) 
 		}
 
 		ctx, cancel = context.WithTimeout(runtime.ctx, pgLeaseTimeout())
-		var legacyPending bool
-		err = conn.QueryRow(ctx, `select exists (select 1 from `+
-			connection.QualifiedTable(pubsubOutboxTable)+` where "dispatch_seq" is null)`).Scan(&legacyPending)
+		legacyPending, err := pgMigrationStatementOn(ctx, connection, conn, false, func(executor pgExecutor) (bool, error) {
+			var pending bool
+			err := executor.QueryRow(ctx, `select exists (select 1 from `+connection.QualifiedTable(pubsubOutboxTable)+` where "dispatch_seq" is null)`).Scan(&pending)
+			return pending, err
+		})
 		cancel()
 		stats.legacyChecks++
 		if err != nil {
@@ -650,9 +881,11 @@ func (runtime *pgPubsub) drain(conn *pgx.Conn, connection *PostgresDB) error {
 func (runtime *pgPubsub) prune(conn *pgx.Conn, connection *PostgresDB) error {
 	ctx, cancel := context.WithTimeout(runtime.ctx, pgLeaseTimeout())
 	defer cancel()
-	_, err := conn.Exec(ctx, `delete from `+connection.QualifiedTable(pubsubOutboxTable)+
-		` where "dispatched_at" < now() - make_interval(secs => $1)`,
-		pubsubOutboxRetention.Seconds())
+	_, err := pgMigrationStatementOn(ctx, connection, conn, true, func(executor pgExecutor) (struct{}, error) {
+		_, err := executor.Exec(ctx, `delete from `+connection.QualifiedTable(pubsubOutboxTable)+
+			` where "dispatched_at" < now() - make_interval(secs => $1)`, pubsubOutboxRetention.Seconds())
+		return struct{}{}, err
+	})
 	return err
 }
 

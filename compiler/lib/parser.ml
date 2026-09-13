@@ -25,6 +25,7 @@ type 'a result = Ok of 'a | Err of parse_error
 type stream = {
   tokens : Lexer.full_token array;
   mutable pos : int;
+  mutable migration_record_keys : bool;
   filename : string;
   mutable allow_test_multiline_request_continuations : bool;
   (* Captures the pack proof from the last `(T ? P)` parsed in type position.
@@ -35,7 +36,7 @@ type stream = {
 }
 
 let make_stream filename tokens =
-  { tokens = Array.of_list tokens; pos = 0; filename;
+  { tokens = Array.of_list tokens; pos = 0; filename; migration_record_keys = false;
     allow_test_multiline_request_continuations = false;
     last_type_pack_proof = None }
 
@@ -305,6 +306,18 @@ let parse_requires s =
     return []
 
 (** Try to parse something; backtrack on failure. *)
+let parse_module_path s =
+  (* One qualified name grammar for module names and constructor patterns. *)
+  let* first = expect_uident s in
+  let parts = ref [first] in
+  while peek s = DOT && (match peek2 s with UIDENT _ -> true | _ -> false) do
+    advance s;
+    (match peek s with
+     | UIDENT n -> advance s; parts := n :: !parts
+     | _ -> ())
+  done;
+  return (String.concat "." (List.rev !parts))
+
 let try_parse s f =
   let saved = s.pos in
   match f s with
@@ -345,6 +358,18 @@ and parse_proof_atom s =
          | Some n -> advance s; Ok n
          | None -> err s (Printf.sprintf "expected proof predicate, got %s" (tok_to_string (peek s))))
     in
+    (* Qualified predicates also occur inside opaque grouped ForAll arguments,
+       whose token rendering contains spaces around dots. Resolve the complete
+       namespace here, independently of adjacent-token preprocessing. *)
+    let rec qualified_predicate name =
+      if peek s <> DOT then Ok name else begin
+        advance s;
+        match peek s with
+        | UIDENT part | IDENT part ->
+          advance s; qualified_predicate (name ^ "." ^ part)
+        | _ -> err s "expected predicate name after module qualifier"
+      end in
+    let* pred_name = qualified_predicate pred_name in
     (* Collect argument names (identifiers, possibly raw *x, or parenthesized) *)
     let args = ref [] in
     let continue_ = ref true in
@@ -1511,9 +1536,11 @@ and parse_pattern s =
       | NOTHING ->
         let lloc = current_loc s in
         advance s; [("value", PNullary { ctor = "Nothing"; loc = lloc })]
-      | UIDENT nested ->
+      | UIDENT _ ->
         let lloc = current_loc s in
-        advance s; [("value", PNullary { ctor = nested; loc = lloc })]
+        (match parse_module_path s with
+         | Ok nested -> [("value", PNullary { ctor = nested; loc = span lloc (current_loc s) })]
+         | Err _ -> [])
       | MINUS ->
         (* Negative integer literal: Something -1 *)
         let lloc = current_loc s in
@@ -1531,8 +1558,8 @@ and parse_pattern s =
     let loc = span loc0 (current_loc s) in
     if fields = [] then return (PNullary { ctor = "Something"; loc })
     else return (PCon { ctor = "Something"; fields; loc })
-  | UIDENT ctor ->
-    advance s;
+  | UIDENT _ ->
+    let* ctor = parse_module_path s in
     (* Collect labeled field bindings: FieldName or { field = var, ... } *)
     let fields = ref [] in
     let continue_ = ref true in
@@ -1585,11 +1612,14 @@ and parse_pattern s =
              (if peek s = RPAREN then advance s);
              fields := (Printf.sprintf "_pos%d" pos, sub_pat) :: !fields
            | Err _ -> continue_ := false)
-        | UIDENT nested_ctor ->
+        | UIDENT _ ->
           (* Bare UIDENT in field position: a nullary nested constructor *)
-          advance s;
+          let lloc = current_loc s in
           let pos = List.length !fields in
-          fields := (Printf.sprintf "_pos%d" pos, PNullary { ctor = nested_ctor; loc = current_loc s }) :: !fields
+          (match parse_module_path s with
+           | Ok nested_ctor ->
+             fields := (Printf.sprintf "_pos%d" pos, PNullary { ctor = nested_ctor; loc = span lloc (current_loc s) }) :: !fields
+           | Err _ -> continue_ := false)
         | NOTHING ->
           (* Bare Nothing in field position: nullary Maybe constructor *)
           advance s;
@@ -2157,6 +2187,22 @@ and parse_app s =
        return (ESendEmail { email_name; to_; subject; body; loc })
      | _ -> err s "Email.send requires `to`, `subject`, and `body` fields")
   | fn ->
+  (* Default's first and Rename's first two arguments are entity fields, including otherwise
+     contextual spellings such as `select`, `enqueue`, `ok` and `of`. Consume
+     those binding tokens before ordinary expression parsing. Values and
+     malformed non-identifier arguments keep the normal expression grammar. *)
+  let* fn =
+    match fn with
+    | EConstructor {name=("Default" | "Rename") as name;args=[];loc}
+        when s.migration_record_keys && peek2 s <> DOT ->
+      let rec fields remaining args =
+        if remaining=0 || peek2 s=DOT then return (EConstructor {name;args;loc}) else
+        let field_loc = current_loc s in
+        match try_parse s expect_ident with
+        | Ok (Some field) -> fields (remaining-1) (args @ [EVar {name=field;loc=field_loc}])
+        | Ok None | Err _ -> return (EConstructor {name;args;loc}) in
+      fields (if name="Rename" then 2 else 1) []
+    | _ -> return fn in
   let rec loop in_test_request_continuation fn =
     (* ctor_multiline: true when the initial fn is a bare EConstructor.
        Enables indented argument continuation for multi-line constructor
@@ -2222,7 +2268,14 @@ and parse_app s =
       (match try_parse s (fun s ->
          let saved = s.pos in
          (* Parse an argument: use parse_postfix so x.field works as an arg *)
-         match parse_postfix s with
+         let argument =
+           if peek s = LBRACE && (match fn with
+               | EConstructor {name=("Migration" | "Contract");args=[];_} -> true | _ -> false) then
+             let before = s.migration_record_keys in
+             Fun.protect ~finally:(fun () -> s.migration_record_keys <- before)
+               (fun () -> s.migration_record_keys <- true; parse_postfix s)
+           else parse_postfix s in
+         match argument with
          | Ok e ->
            let starts_statement = match e with
              | EVar { name; _ } -> is_statement_starter_ident name
@@ -2413,8 +2466,16 @@ and parse_atom s =
     return (EVar { name = n; loc })
   | UIDENT n ->
     advance s;
+    (* A schema family may have several namespace segments. Keep the complete
+       uppercase path on the constructor; a following lowercase component is
+       still parsed by parse_postfix as qualified function access. *)
+    let name = ref n in
+    while peek s = DOT && (match peek2 s with UIDENT _ -> true | _ -> false) do
+      advance s;
+      (match peek s with UIDENT part -> advance s; name := !name ^ "." ^ part | _ -> ())
+    done;
     let loc = span loc0 (current_loc s) in
-    return (EConstructor { name = n; args = []; loc })
+    return (EConstructor { name = !name; args = []; loc })
   | LPAREN ->
     advance s;
     (* Check for unit () — zero-arg function call marker *)
@@ -2483,11 +2544,40 @@ and parse_record_literal s =
   skip_layout s;
   let fields = ref [] in
   let continue_ = ref true in
+  let field_error = ref None in
+  let failed error = field_error := Some error; continue_ := false in
+  let missing message = match err s message with Err error -> failed error | Ok _ -> assert false in
   while !continue_ && peek s <> RBRACE && peek s <> EOF do
     skip_layout s;
     if peek s = RBRACE then continue_ := false
     else begin
       match peek s with
+      | OF when s.migration_record_keys ->
+        advance s;
+        if peek s <> COLON then missing "expected : after record field" else begin
+          advance s;
+          match parse_expr s with
+          | Ok value -> fields := ("of",value) :: !fields; skip_layout s;
+            (match peek s with COMMA -> advance s; skip_layout s | _ -> ())
+          | Err error -> failed error
+        end
+      | UIDENT first when s.migration_record_keys ->
+        advance s;
+        let name = ref first in
+        while peek s = DOT && (match peek2 s with UIDENT _ -> true | _ -> false) do
+          advance s;
+          (match peek s with UIDENT part -> advance s; name := !name ^ "." ^ part | _ -> ())
+        done;
+        if peek s <> COLON then missing "expected : after record field"
+        else begin
+          advance s;
+          match parse_expr s with
+          | Ok value ->
+            fields := (!name,value) :: !fields;
+            skip_layout s;
+            (match peek s with COMMA -> advance s; skip_layout s | _ -> ())
+          | Err error -> failed error
+        end
       | STRING fname | INTERP (fname, _) ->
         (* String key in JSON-style literal: { "fieldName": value } *)
         advance s;
@@ -2500,8 +2590,8 @@ and parse_record_literal s =
             fields := (fname, v) :: !fields;
             skip_layout s;
             (match peek s with COMMA -> advance s; skip_layout s | _ -> ())
-          | Err _ -> continue_ := false
-        end else continue_ := false
+          | Err error -> failed error
+        end else missing "expected : after record field"
       | IDENT _
       (* Allow keyword tokens as record field names (e.g. email, smtp, and the
          config-block field keywords schema/database/backend/api). *)
@@ -2527,12 +2617,13 @@ and parse_record_literal s =
             (match peek s with
              | COMMA -> advance s; skip_layout s
              | _ -> ())
-          | Err e -> continue_ := false; ignore e
+          | Err e -> failed e
         end else
-          continue_ := false
-      | _ -> continue_ := false
+          missing "expected : or = after record field"
+      | _ -> missing "expected record field"
     end
   done;
+  let* () = match !field_error with Some error -> Err error | None -> Ok () in
   skip_layout s;
   let* _ = expect s RBRACE in
   let loc = span loc0 (current_loc s) in
@@ -2690,7 +2781,7 @@ and parse_enqueue_stmt s =
     | IDENT "enqueue" -> advance s; return ()
     | t -> err s (Printf.sprintf "expected enqueue statement, got %s" (tok_to_string t))
   in
-  let* job_type = expect_uident s in
+  let* job_type = parse_module_path s in
   let* payload = parse_expr s in
   let loc = span loc0 (current_loc s) in
   return (EEnqueue { job_type; payload = hint_expr_type job_type payload; loc })
@@ -3334,62 +3425,61 @@ let parse_field_defs_ext ~allow_indexes s =
   let fields = ref [] in
   let indexes = ref [] in
   let continue_ = ref true in
+  let field_error = ref None in
+  let reject e = field_error := Some e; continue_ := false in
+  let rec annotations db_type db_column =
+    if peek s <> AT then return (db_type, db_column) else begin
+      advance s;
+      let* name = expect_ident s in
+      let* _ = expect s LPAREN in
+      match name with
+      | "db" when db_type = None ->
+        let* value = expect_ident s in
+        let* _ = expect s RPAREN in
+        annotations (Some value) db_column
+      | "column" when allow_indexes && db_column = None ->
+        let* value = expect_string s in
+        let* _ = expect s RPAREN in
+        annotations db_type (Some value)
+      | _ -> err s "unknown, duplicate or non-entity storage annotation"
+    end in
+  let field () =
+    let loc0 = current_loc s in
+    let* name = expect_ident s in
+    let* _ = expect s COLON in
+    let* type_expr = parse_type_expr s in
+    let* proof_ann =
+      if peek s = PROOF_ANNOT then begin
+        advance s;
+        let* proof = parse_proof_expr s in
+        return (Some proof)
+      end else return None in
+    let* db_type, db_column = annotations None None in
+    return { name; type_expr; proof_ann; db_type; db_column;
+      loc = span loc0 (current_loc s) } in
   while !continue_ && peek s <> RBRACE && peek s <> EOF do
     skip_layout s;
     if peek s = RBRACE then continue_ := false
-    else if allow_indexes && at_entity_index s then begin
-      match parse_entity_index s with
-      | Ok ix ->
-        indexes := ix :: !indexes;
+    else begin
+      (if allow_indexes && at_entity_index s then
+         match parse_entity_index s with
+         | Ok ix -> indexes := ix :: !indexes
+         | Err e -> reject e
+       else match field () with
+         | Ok field -> fields := field :: !fields
+         | Err e -> reject e);
+      if !continue_ then begin
         skip_layout s;
         if peek s = COMMA then (advance s; skip_layout s)
-      | Err _ -> continue_ := false
-    end
-    else begin
-      let loc0 = current_loc s in
-      match expect_ident s with
-      | Ok fname ->
-        (match expect s COLON with
-         | Ok () ->
-           (match parse_type_expr s with
-            | Ok ty ->
-              (* optional proof annotation *)
-              let proof_ann =
-                if peek s = PROOF_ANNOT then begin
-                  advance s;
-                  match parse_proof_expr s with
-                  | Ok p -> Some p
-                  | Err _ -> None
-                end else None
-              in
-              (* optional @db(type) *)
-              let db_type =
-                if peek s = AT then begin
-                  advance s;
-                  match peek s with
-                  | IDENT "db" ->
-                    advance s;
-                    if peek s = LPAREN then begin
-                      advance s;
-                      match peek s with
-                      | IDENT t -> advance s; if peek s = RPAREN then advance s; Some t
-                      | _ -> None
-                    end else None
-                  | _ -> None
-                end else None
-              in
-              let loc = span loc0 (current_loc s) in
-              fields := { name = fname; type_expr = ty; proof_ann; db_type; loc } :: !fields;
-              skip_layout s;
-              if peek s = COMMA then (advance s; skip_layout s)
-            | Err _ -> continue_ := false)
-         | Err _ -> continue_ := false)
-      | Err _ -> continue_ := false
+      end
     end
   done;
-  skip_layout s;
-  let* _ = expect s RBRACE in
-  return (List.rev !fields, List.rev !indexes)
+  match !field_error with
+  | Some e -> Err e
+  | None ->
+    skip_layout s;
+    let* _ = expect s RBRACE in
+    return (List.rev !fields, List.rev !indexes)
 
 let parse_field_defs s =
   let* (fields, _) = parse_field_defs_ext ~allow_indexes:false s in
@@ -3572,7 +3662,7 @@ and parse_adt_variants_flat s =
                       end else None
                     in
                     let fd = { name = fname; type_expr = ty; proof_ann;
-                               db_type = None; loc = floc } in
+                               db_type = None; db_column = None; loc = floc } in
                     fields := fd :: !fields;
                     if peek s = COMMA then advance s
                   | Err _ -> brace_continue := false)
@@ -3601,7 +3691,7 @@ and parse_adt_variants_flat s =
                 if peek s = RPAREN then begin
                   advance s;
                   let fd = { name = fname; type_expr = ty; proof_ann;
-                             db_type = None; loc = floc } in
+                             db_type = None; db_column = None; loc = floc } in
                   fields := fd :: !fields
                 end else begin
                   s.pos <- saved; continue2 := false
@@ -3623,7 +3713,7 @@ and parse_adt_variants_flat s =
                end else None
              in
              let fd = { name = fname; type_expr = ty; proof_ann;
-                        db_type = None; loc = floc } in
+                        db_type = None; db_column = None; loc = floc } in
              fields := fd :: !fields
            | Err _ -> continue2 := false)
         | PIPE | NEWLINE | INDENT | DEDENT | EOF | RBRACE -> continue2 := false
@@ -3705,7 +3795,7 @@ and parse_adt_variant_line s =
                   end else None
                 in
                 fields := { name = fname; type_expr = ty; proof_ann;
-                            db_type = None; loc = floc } :: !fields;
+                            db_type = None; db_column = None; loc = floc } :: !fields;
                 if peek s = COMMA then advance s
               | Err _ -> brace_continue := false)
            | _ -> brace_continue := false)
@@ -3727,7 +3817,7 @@ and parse_adt_variant_line s =
            end else None
          in
          fields := { name = fname; type_expr = ty; proof_ann;
-                     db_type = None; loc = floc } :: !fields
+                     db_type = None; db_column = None; loc = floc } :: !fields
        | Err _ -> continue_ := false)
     | LPAREN ->
       (* Could be:
@@ -3753,7 +3843,7 @@ and parse_adt_variant_line s =
             if peek s = RPAREN then begin
               advance s;  (* consume ) *)
               fields := { name = fname; type_expr = ty; proof_ann;
-                          db_type = None; loc = floc } :: !fields
+                          db_type = None; db_column = None; loc = floc } :: !fields
             end else begin
               s.pos <- saved;
               (* Fall through to positional *)
@@ -3762,7 +3852,7 @@ and parse_adt_variant_line s =
                  let pos = List.length !fields in
                  let label = if pos = 0 then "value" else Printf.sprintf "value%d" (pos + 1) in
                  fields := { name = label; type_expr = ty2; proof_ann = None;
-                             db_type = None; loc = floc } :: !fields
+                             db_type = None; db_column = None; loc = floc } :: !fields
                | Err _ -> continue_ := false)
             end
           | Err _ ->
@@ -3772,7 +3862,7 @@ and parse_adt_variant_line s =
                let pos = List.length !fields in
                let label = if pos = 0 then "value" else Printf.sprintf "value%d" (pos + 1) in
                fields := { name = label; type_expr = ty; proof_ann = None;
-                           db_type = None; loc = floc } :: !fields
+                           db_type = None; db_column = None; loc = floc } :: !fields
              | Err _ -> continue_ := false))
        | _ ->
          s.pos <- saved;
@@ -3781,7 +3871,7 @@ and parse_adt_variant_line s =
             let pos = List.length !fields in
             let label = if pos = 0 then "value" else Printf.sprintf "value%d" (pos + 1) in
             fields := { name = label; type_expr = ty; proof_ann = None;
-                        db_type = None; loc = floc } :: !fields
+                        db_type = None; db_column = None; loc = floc } :: !fields
           | Err _ -> continue_ := false))
     | UIDENT _ ->
       (* Positional (unlabeled) field: each bare TypeName is ONE field.
@@ -3794,7 +3884,7 @@ and parse_adt_variant_line s =
          let pos = List.length !fields in
          let label = if pos = 0 then "value" else Printf.sprintf "value%d" (pos + 1) in
          fields := { name = label; type_expr = ty; proof_ann = None;
-                     db_type = None; loc = floc } :: !fields
+                     db_type = None; db_column = None; loc = floc } :: !fields
        | Err _ -> continue_ := false)
     | NEWLINE | DEDENT | EOF | PIPE -> continue_ := false
     | _ -> continue_ := false
@@ -4107,6 +4197,31 @@ let parse_database_form s =
   let loc = span loc0 (current_loc s) in
   return { name; backend = ""; schema = ""; entities = []; postgres = [];
            config_expr = Some (hint_expr_type type_name body); loc }
+
+(** Pure schema metadata. No expressions, handlers or connection options are
+    admitted here; those belong to the application's ordinary Queue. *)
+let parse_queue_schema_form s =
+  let loc0 = current_loc s in
+  let* name = expect_uident s in
+  let* _ = expect s LBRACE in
+  skip_layout s;
+  let* key = expect_ident s in
+  let* _ = if key = "jobs" then return () else err s "queueSchema requires only a jobs field" in
+  let* _ = expect s COLON in
+  skip_layout s;
+  let job s =
+    let loc = current_loc s in
+    let* name = expect_uident s in
+    let rec qualified name =
+      if peek s = DOT then begin
+        advance s;
+        let* part = expect_uident s in qualified (name ^ "." ^ part)
+      end else return (name,loc) in
+    qualified name in
+  let* jobs = parse_bracketed_list job s in
+  skip_layout s;
+  let* _ = expect s RBRACE in
+  return { name; jobs; loc = span loc0 (current_loc s) }
 
 (** Parse a queue block. *)
 let parse_queue_form s =
@@ -5394,7 +5509,7 @@ let parse_const_form s =
 let parse_module_header s =
   skip_layout s;
   let* _ = expect s MODULE in
-  let* name = expect_uident s in
+  let* name = parse_module_path s in
   let* _ = expect s EXPOSING in
   let* items = parse_bracketed_list (fun s ->
     match token_as_ident (peek s) with
@@ -5470,18 +5585,6 @@ let rec parse_imports s acc =
     parse_imports s (decl :: acc)
   end else
     return (List.rev acc)
-
-and parse_module_path s =
-  (* Parse dotted module name like Tesl.Dict or just Foo *)
-  let* first = expect_uident s in
-  let parts = ref [first] in
-  while peek s = DOT && (match peek2 s with UIDENT _ -> true | _ -> false) do
-    advance s;
-    (match peek s with
-     | UIDENT n -> advance s; parts := n :: !parts
-     | _ -> ())
-  done;
-  return (String.concat "." (List.rev !parts))
 
 (** Parse all top-level declarations. *)
 let rec parse_top_decls s acc =
@@ -5581,6 +5684,10 @@ and parse_top_decl s =
     advance s;
     let* e = parse_email_form s in
     return (DEmail e)
+  | IDENT "queueSchema" when (match peek2 s with UIDENT _ -> true | _ -> false) ->
+    advance s;
+    let* q = parse_queue_schema_form s in
+    return (DQueueSchema q)
   | QUEUE ->
     advance s;
     let* q = parse_queue_form s in
@@ -5652,7 +5759,7 @@ and parse_top_decl s =
             (* `secret Password = String` starts a declaration too.  The SAME
                two-token test as the parse arm, so a `let secret = …` inside a
                body is not mistaken for one. *)
-            | IDENT "secret" when (match peek2 s with UIDENT _ -> true | _ -> false) -> ()
+            | IDENT ("secret" | "queueSchema") when (match peek2 s with UIDENT _ -> true | _ -> false) -> ()
             | _ -> advance s; skip_to_top ()
           in
           skip_to_top ();
@@ -5783,7 +5890,10 @@ let attach_doc_comments source decls =
       DFunc { fd with doc = doc_above fd.loc.start.line }
     | d -> d) decls
 
+let lexer_failure_prefix = "lexer failure: "
+
 let rec parse_module filename source =
+  try
   let tokens = Lexer.tokenize filename source in
   let s = make_stream filename tokens in
 
@@ -5811,12 +5921,14 @@ let rec parse_module filename source =
   let decls = attach_doc_comments source decls in
 
   return { module_name; exports; imports; decls = decls @ doctest_decls; source_file = filename }
+  with Failure message ->
+    Err { msg = lexer_failure_prefix ^ message; loc = dummy_loc filename; fix = None }
 
 and parse_module_header_body s =
   let* _ = (match peek s with
     | MODULE  -> advance s; Ok ()
     | t -> err s (Printf.sprintf "expected `module` keyword, got %s" (tok_to_string t))) in
-  let* name = expect_uident s in
+  let* name = parse_module_path s in
   let* _ = expect s EXPOSING in
   let* items = parse_bracketed_list (fun s ->
     match token_as_ident (peek s) with
@@ -5853,7 +5965,7 @@ let starts_top_decl = function
 let starts_top_decl_at s =
   starts_top_decl (peek s)
   || (match peek s with
-      | IDENT "secret" -> (match peek2 s with UIDENT _ -> true | _ -> false)
+      | IDENT ("secret" | "queueSchema") -> (match peek2 s with UIDENT _ -> true | _ -> false)
       | _ -> false)
 
 (** Best-effort top-level declaration loop: collects every declaration that

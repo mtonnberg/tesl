@@ -188,11 +188,12 @@ func TestDebugPgSqlFailedQueryConsumesCaptureMapping(t *testing.T) {
 	ClearDebugSQLCapture()
 	defer ClearDebugSQLCapture()
 	key := goroutineID()
-	openTransactions.Store(key, &debugFailingTransaction{queryError: errors.New("query failed")})
+	database := &PostgresDB{}
+	openTransactions.Store(key, pgTransactionBinding{database: database, transaction: &debugFailingTransaction{queryError: errors.New("query failed")}})
 	defer openTransactions.Delete(key)
 	plan := DebugPgSql(PgSql("select failed", nil))
 	failure := recoverDebugSQLFailure(func() {
-		PgQueryPlan(&PostgresDB{}, plan, func(pgx.CollectableRow) (struct{}, error) { return struct{}{}, nil })
+		PgQueryPlan(database, plan, func(pgx.CollectableRow) (struct{}, error) { return struct{}{}, nil })
 	})
 	if failure == nil || !strings.Contains(fmt.Sprint(failure), "query failed") {
 		t.Fatalf("query failure = %v", failure)
@@ -207,10 +208,11 @@ func TestDebugPgSqlFailedExecConsumesCaptureMapping(t *testing.T) {
 	ClearDebugSQLCapture()
 	defer ClearDebugSQLCapture()
 	key := goroutineID()
-	openTransactions.Store(key, &debugFailingTransaction{execError: errors.New("exec failed")})
+	database := &PostgresDB{}
+	openTransactions.Store(key, pgTransactionBinding{database: database, transaction: &debugFailingTransaction{execError: errors.New("exec failed")}})
 	defer openTransactions.Delete(key)
 	plan := DebugPgSql(PgSql("update failed", nil))
-	failure := recoverDebugSQLFailure(func() { PgExecPlan(&PostgresDB{}, plan) })
+	failure := recoverDebugSQLFailure(func() { PgExecPlan(database, plan) })
 	if failure == nil || !strings.Contains(fmt.Sprint(failure), "exec failed") {
 		t.Fatalf("exec failure = %v", failure)
 	}
@@ -232,13 +234,14 @@ func TestDebugPgSqlReusablePlanConsumesConcurrentCaptureMappings(t *testing.T) {
 		go func(rowCount int) {
 			defer wait.Done()
 			key := goroutineID()
-			openTransactions.Store(key, &debugFailingTransaction{
+			database := &PostgresDB{}
+			openTransactions.Store(key, pgTransactionBinding{database: database, transaction: &debugFailingTransaction{
 				execTag:     pgconn.NewCommandTag(fmt.Sprintf("UPDATE %d", rowCount)),
 				execStarted: ready,
 				execRelease: execute,
-			})
+			}})
 			defer openTransactions.Delete(key)
-			PgExecPlan(&PostgresDB{}, plan)
+			PgExecPlan(database, plan)
 			plan.Capture(-1)
 			state := DebugRuntimeStateSnapshot()
 			if state.SQL == nil {

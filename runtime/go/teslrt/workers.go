@@ -1,6 +1,7 @@
 package teslrt
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"time"
@@ -16,35 +17,40 @@ func startWorkers(queue *Queue, handler func(any) JobOutcome, concurrency int, d
 	if concurrency < 1 {
 		concurrency = 1
 	}
+	scope := currentRuntimeWorkers()
+	ctx := context.Background()
+	if scope != nil {
+		ctx = scope.context()
+	}
 	for range concurrency {
-		go func() {
+		run := func() {
 			failures := 0
-			for {
+			for scope == nil || scope.beginIteration() {
 				if activity != nil {
 					activity(true)
 				}
 				outcome, ok := workerIteration(queue, handler, dead)
 				if !ok {
-					// The STORE failed — the database unreachable, a lease timed out, a
-					// row that will not decode — not the job. `runJob` already turns a
-					// job's own trap into a failed attempt; this guard is for the claim
-					// and completion themselves, which used to unwind the goroutine and,
-					// as an unrecovered panic, take the whole process with it: one
-					// database blip killed the HTTP server too. Racket's worker thread
-					// had the same `with-handlers`. Report, back off, try again.
+					// Store failures retain their existing retry behavior; shutdown
+					// interrupts this wait without canceling an active handler.
 					failures++
-					queue.waitForWork(workerBackoff(failures))
+					queue.waitForWorker(ctx, workerBackoff(failures))
 				} else {
 					failures = 0
 					if !outcome.Ran {
-						queue.waitForWork(queue.idleInterval())
+						queue.waitForWorker(ctx, queue.idleInterval())
 					}
 				}
 				if activity != nil {
 					activity(false)
 				}
 			}
-		}()
+		}
+		if scope == nil {
+			go run()
+		} else {
+			scope.start(run)
+		}
 	}
 	return struct{}{}
 }
@@ -88,4 +94,20 @@ func (queue *Queue) idleInterval() time.Duration {
 		return 5 * time.Second
 	}
 	return 50 * time.Millisecond
+}
+
+// A scoped worker must wake even if no job arrives and its normal polling/backoff
+// interval is long. The ordinary unscoped Memory loop keeps a Background context.
+func (queue *Queue) waitForWorker(ctx context.Context, fallback time.Duration) {
+	if ctx.Done() == nil {
+		queue.waitForWork(fallback)
+		return
+	}
+	timer := time.NewTimer(fallback)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+	case <-queue.wake:
+	case <-timer.C:
+	}
 }

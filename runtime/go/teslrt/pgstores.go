@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"runtime"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -91,6 +92,9 @@ var pgTablesReady sync.Map // pgTableKey -> *pgTableOnce
 // (the catalog's unique index wins where the `if not exists` check lost), so a duplicate-
 // object error is the OTHER instance's success and is tolerated.
 func ensureTable(db *PostgresDB, table string, statements func(qualified string) []string) {
+	if err := pgVerifyMigrationFacilityConnection(db, table); err != nil {
+		panic(err)
+	}
 	key := pgTableKey{db: db, table: table}
 	loaded, _ := pgTablesReady.LoadOrStore(key, &pgTableOnce{})
 	once, ok := loaded.(*pgTableOnce)
@@ -199,19 +203,24 @@ func jobsTableDDL(qualified string) []string {
 			"locked_at timestamptz, " +
 			"locked_by text, " +
 			"claim_token text, " +
+			"claim_seq bigint not null default 0, " +
+			"lease_until timestamptz, " +
 			"created_at timestamptz not null default now())",
 		"alter table " + qualified + " add column if not exists claim_token text",
+		"alter table " + qualified + " add column if not exists claim_seq bigint not null default 0",
+		"alter table " + qualified + " add column if not exists lease_until timestamptz",
 		"create index if not exists " + quoteIdentifier(jobsTable+"_claim_idx") +
 			" on " + qualified + " (queue, status, next_attempt_at, seq)",
 	}
 }
 
-// queueVisibilityTimeout is how long a `processing` job may go unfinished before another
-// instance may take it over — `TESL_QUEUE_VISIBILITY_TIMEOUT_MS`, default ten minutes. A
-// variable so the runtime's own tests can shrink it without waiting ten minutes for a
-// simulated crash to be noticed.
+// queueVisibilityTimeout is the lease length stamped into a new processing
+// claim — TESL_QUEUE_VISIBILITY_TIMEOUT_MS, default ten minutes. Healthy handlers
+// renew every third of this interval. A reclaimer uses the stored deadline, so
+// its own configuration cannot shorten another worker's live lease.
 var queueVisibilityTimeout = func() time.Duration {
-	return millisDuration(envPositiveInt("TESL_QUEUE_VISIBILITY_TIMEOUT_MS", 600000))
+	millis := int64(envPositiveInt("TESL_QUEUE_VISIBILITY_TIMEOUT_MS", 600000))
+	return time.Duration(min(millis, pgQueueMaximumMillis)) * time.Millisecond
 }
 
 // jobCodec is how one job type crosses the JSONB column: `encode` answers what
@@ -230,8 +239,10 @@ type pgQueueBackend struct {
 	initialDelay int
 	// codecs, in registration order; the emitter registers every job type of the queue
 	// before anything is enqueued.
-	codecsMutex sync.RWMutex
-	codecs      []jobCodec
+	codecsMutex       sync.RWMutex
+	codecs            []jobCodec
+	queueSchema       *pgQueueBinding
+	queueCodecsClosed bool
 	// codecByType remembers which codec took a Go type, so the probe below runs once per type.
 	codecByType sync.Map     // reflect.Type -> int (index into codecs)
 	lastReclaim atomic.Int64 // unix nanoseconds of this process's last stale-job sweep
@@ -242,12 +253,14 @@ type pgQueueBackend struct {
 // delay between retries); `initialDelaySeconds` is the declaration's `initialDelay`.
 func NewQueueOn(database *Database, name string, maxAttempts int, backoff string,
 	initialDelaySeconds int) *Queue {
+	pgRegisterMigrationFacility(database, "queue", name)
 	queue := NewQueue(name, maxAttempts)
 	if initialDelaySeconds < 0 {
 		initialDelaySeconds = 0
 	}
 	queue.backend = &pgQueueBackend{pgStore: pgStore{database: database}, name: name,
 		maxAttempts: queue.maxAttempts, backoff: backoff, initialDelay: initialDelaySeconds}
+	pgRegisterMigrationQueue(database, queue)
 	// The database's LISTEN loop (shared with pub/sub) rings this queue's doorbell when any
 	// instance commits an enqueue.
 	pubsubFor(database).registerQueue(queue)
@@ -270,8 +283,16 @@ func RegisterJobCodec(queue *Queue, typeName string, encode func(any) any,
 	if !durable {
 		return struct{}{}
 	}
+	pgMigrationRegistrations.Lock()
+	defer pgMigrationRegistrations.Unlock()
 	backend.codecsMutex.Lock()
 	defer backend.codecsMutex.Unlock()
+	if backend.queueCodecsClosed {
+		panic("queue schema: application startup codec registration is closed")
+	}
+	if backend.queueSchema != nil {
+		panic("queue schema: ordinary codec registration cannot replace checked codecs")
+	}
 	for index, existing := range backend.codecs {
 		if existing.typeName == typeName {
 			backend.codecs[index] = jobCodec{typeName: typeName, encode: encode, decode: decode}
@@ -345,6 +366,9 @@ func (backend *pgQueueBackend) table() (*PostgresDB, string) {
 }
 
 func (backend *pgQueueBackend) enqueue(payload any) string {
+	if client := backend.protectedQueue(); client != nil {
+		return client.enqueue(payload)
+	}
 	typeName, encoded := backend.encodePayload(payload)
 	db, table := backend.table()
 	id := UUIDv7()
@@ -365,6 +389,31 @@ type claimedJob struct {
 	payload    string
 	attempts   int
 	claimToken string
+}
+
+// A claim created inside a transaction is protected by that transaction's row
+// lock until it commits. Remember its exact transaction identity, not merely
+// "some transaction is open": a later transaction cannot revive an old lease.
+var queueTransactionClaims sync.Map // pgx.Tx -> *sync.Map of opaque claim tokens
+
+func rememberQueueTransactionClaim(token string) {
+	if tx := currentTransaction(); tx != nil {
+		claims, _ := queueTransactionClaims.LoadOrStore(tx, &sync.Map{})
+		claims.(*sync.Map).Store(token, struct{}{}) //nolint:forcetypeassert // private typed registry
+	}
+}
+
+func queueClaimOwnedByTransaction(token string) bool {
+	tx := currentTransaction()
+	if tx == nil {
+		return false
+	}
+	claims, found := queueTransactionClaims.Load(tx)
+	if !found {
+		return false
+	}
+	_, found = claims.(*sync.Map).Load(token) //nolint:forcetypeassert // private typed registry
+	return found
 }
 
 func scanClaimedJob(row pgx.CollectableRow) (claimedJob, error) {
@@ -392,9 +441,10 @@ func (backend *pgQueueBackend) reclaimStuck(db *PostgresDB, table string) {
 		return
 	}
 	PgExec(db, "update "+table+" set status = case when status = 'dead_processing' then 'dead' else 'pending' end, "+
-		"locked_at = null, locked_by = null, claim_token = null "+
+		"locked_at = null, locked_by = null, claim_token = null, lease_until = null "+
 		"where queue = $1 and status in ('processing', 'dead_processing') "+
-		"and locked_at < now() - ($2::bigint * interval '1 millisecond')",
+		"and case when strpos(coalesce(claim_token, ''), ':') > 0 then lease_until <= clock_timestamp() "+
+		"else locked_at < clock_timestamp() - ($2::bigint * interval '1 millisecond') end",
 		[]any{backend.name, queueVisibilityTimeout().Milliseconds()})
 }
 
@@ -405,6 +455,9 @@ func (backend *pgQueueBackend) reclaimStuck(db *PostgresDB, table string) {
 // and listed there but never claimed again by either worker, and one line on stderr says so.
 // The claim then moves on to the next row instead of answering "nothing to do".
 func (backend *pgQueueBackend) dequeue(status string) (string, any, int, string, bool) {
+	if client := backend.protectedQueue(); client != nil {
+		return client.dequeue(status)
+	}
 	db, table := backend.table()
 	backend.reclaimStuck(db, table)
 	processingStatus := jobProcessing
@@ -413,22 +466,30 @@ func (backend *pgQueueBackend) dequeue(status string) (string, any, int, string,
 	}
 	for {
 		claimToken := UUIDv7()
-		rows := PgQuery(db, "update "+table+" set status = $3, locked_at = now(), locked_by = $4, "+
-			"claim_token = $5 "+
+		rows := PgWriteQuery(db, "update "+table+" set status = $3, locked_at = now(), locked_by = $4, "+
+			"claim_token = $5 || ':' || (claim_seq + 1)::text, claim_seq = claim_seq + 1, "+
+			"lease_until = clock_timestamp() + ($6::bigint * interval '1 millisecond') "+
 			"where id = (select id from "+table+" where queue = $1 and status = $2 "+
 			"and next_attempt_at <= now() order by seq for update skip locked limit 1) "+
 			"returning id, job_type, payload::text, attempts, claim_token",
-			[]any{backend.name, status, processingStatus, instanceID(), claimToken}, scanClaimedJob)
+			[]any{backend.name, status, processingStatus, instanceID(), claimToken, queueVisibilityTimeout().Milliseconds()}, scanClaimedJob)
 		if len(rows) == 0 {
 			return "", nil, 0, "", false
 		}
 		claimed := rows[0]
+		migrationBoundary("queue-claim")
+		rememberQueueTransactionClaim(claimed.claimToken)
 		payload, err := backend.decodePayload(claimed.jobType, claimed.payload)
 		if err != nil {
-			changed := PgExec(db, "update "+table+" set status = 'dead', next_attempt_at = 'infinity', "+
-				"locked_at = null, locked_by = null, claim_token = null "+
-				"where id = $1 and status = $3 and claim_token = $2",
-				[]any{claimed.id, claimed.claimToken, processingStatus})
+			sequence, valid := queueClaimSequence(claimed.claimToken)
+			if !valid {
+				panic("database: invalid durable queue claim identity")
+			}
+			changed := PgExec(db, pgQueueLockedAttempt(table, "id = $1 and status = $3 and claim_token = $2 and claim_seq = $5")+
+				"update "+table+" j set status = 'dead', next_attempt_at = 'infinity', "+
+				"locked_at = null, locked_by = null, claim_token = null, lease_until = null "+
+				"from owned where j.id=owned.id and ($4::bool or owned.lease_until > clock_timestamp())",
+				[]any{claimed.id, claimed.claimToken, processingStatus, queueClaimOwnedByTransaction(claimed.claimToken), sequence})
 			if changed == 1 {
 				fmt.Fprintf(os.Stderr, "tesl: queue %s: job %s (job_type %s) cannot be decoded and was "+
 					"quarantined in the dead letter: %v\n", backend.name, claimed.id, claimed.jobType, err)
@@ -439,12 +500,127 @@ func (backend *pgQueueBackend) dequeue(status string) (string, any, int, string,
 	}
 }
 
+// Materialization forces the attempt row lock to finish before the outer DML
+// evaluates the lease clock. Checking the clock only in a DML WHERE can retain
+// pre-wait authority after an unchanged row lock outlives the lease. Conditions
+// here are closed runtime SQL; values remain separately bound parameters.
+func pgQueueLockedAttempt(table, condition string) string {
+	return "with owned as materialized (select id,lease_until from " + table +
+		" where " + condition + " for update) "
+}
+
 func (backend *pgQueueBackend) complete(id, claimToken string) bool {
+	if client := backend.protectedQueue(); client != nil {
+		return client.complete(id, claimToken)
+	}
+	migrationBoundary("queue-completion-begins")
+	sequence, valid := queueClaimSequence(claimToken)
+	if !valid {
+		return false
+	}
 	db, table := backend.table()
 	// Zero rows means this attempt's lease was replaced; its result is discarded.
-	return PgExec(db, "delete from "+table+
-		" where id = $1 and status in ('processing', 'dead_processing') and claim_token = $2",
-		[]any{id, claimToken}) == 1
+	return PgExec(db, pgQueueLockedAttempt(table,
+		"id = $1 and status in ('processing', 'dead_processing') and claim_token = $2 and claim_seq = $3")+
+		"delete from "+table+" j using owned where j.id=owned.id and ($4::bool or owned.lease_until > clock_timestamp())",
+		[]any{id, claimToken, sequence, queueClaimOwnedByTransaction(claimToken)}) == 1
+}
+
+// The opaque token carries both the random legacy attempt identity and the
+// monotone per-row sequence. Keeping the random component also fences an old
+// pre-sequence binary during a runtime upgrade.
+func queueClaimSequence(token string) (int64, bool) {
+	colon := strings.LastIndexByte(token, ':')
+	if colon < 1 {
+		return 0, false
+	}
+	sequence, err := strconv.ParseInt(token[colon+1:], 10, 64)
+	return sequence, err == nil && sequence > 0
+}
+
+// queueRenewals separates the production clock from the renewal protocol. Tests
+// deliver ticks explicitly, including cancellation and ownership-loss races.
+func queueRenewals(ctx context.Context, ticks <-chan time.Time,
+	renew func(context.Context) (bool, error), report func(error)) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case _, open := <-ticks:
+			if !open || ctx.Err() != nil {
+				return
+			}
+			owned, err := renew(ctx)
+			if err != nil || !owned {
+				if ctx.Err() == nil {
+					if err == nil {
+						err = fmt.Errorf("claim lease expired or was replaced")
+					}
+					report(err)
+				}
+				return
+			}
+		}
+	}
+}
+
+// keepClaim pins the backend and connection for the claim's lifetime, so a
+// goroutine never resolves a different process-global database binding. A claim
+// inside an explicit transaction already holds its row lock until completion;
+// a second connection cannot renew an uncommitted claim and must not be started.
+func (backend *pgQueueBackend) keepClaim(id, token string) func() {
+	client := backend.protectedQueue()
+	if currentTransactionFor(backend.connection()) != nil {
+		return func() {}
+	}
+	var db *PostgresDB
+	var table string
+	if client == nil {
+		db, table = backend.table()
+	}
+	lease := queueVisibilityTimeout()
+	interval := max(time.Millisecond, lease/3)
+	ctx, cancel := context.WithCancel(context.Background())
+	ticker := time.NewTicker(interval)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		defer ticker.Stop()
+		queueRenewals(ctx, ticker.C, func(ctx context.Context) (bool, error) {
+			if client != nil {
+				return client.renew(ctx, id, token, lease)
+			}
+			return backend.renewClaim(ctx, db, table, id, token, lease)
+		}, func(err error) {
+			fmt.Fprintf(os.Stderr, "tesl: queue %s: job %s lease renewal stopped: %v\n", backend.name, id, err)
+		})
+	}()
+	var stop sync.Once
+	return func() { stop.Do(func() { cancel(); <-done }) }
+}
+
+// Renewal is a compare-and-set. In particular, an expired lease is never
+// resurrected merely because the reclaim sweep has not reached it yet.
+func (backend *pgQueueBackend) renewClaim(ctx context.Context, db *PostgresDB,
+	table, id, token string, lease time.Duration) (bool, error) {
+	sequence, valid := queueClaimSequence(token)
+	if !valid {
+		return false, nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, pgLeaseTimeout())
+	defer cancel()
+	tag, err := pgMigrationStatement(ctx, db, true, func(executor pgExecutor) (pgconn.CommandTag, error) {
+		return executor.Exec(ctx, pgQueueLockedAttempt(table,
+			"id = $1 and queue = $2 and claim_token = $3 and status in ('processing', 'dead_processing') and claim_seq = $5")+
+			"update "+table+" j set locked_at = clock_timestamp(), "+
+			"lease_until = clock_timestamp() + ($4::bigint * interval '1 millisecond') "+
+			"from owned where j.id=owned.id and owned.lease_until > clock_timestamp()",
+			id, backend.name, token, lease.Milliseconds(), sequence)
+	})
+	if err == nil && tag.RowsAffected() == 1 {
+		migrationBoundary("queue-renewal")
+	}
+	return tag.RowsAffected() == 1, err
 }
 
 // retryDelaySeconds is the wait before attempt number `attempts`+1, given `attempts` failures:
@@ -474,6 +650,13 @@ func (backend *pgQueueBackend) retryDelaySeconds(attempts int) int64 {
 // fail records a failed attempt: back to `pending` after the backoff, or `dead` at
 // maxAttempts — claimable at once by the dead-letter worker.
 func (backend *pgQueueBackend) fail(id string, attempts int, claimToken string) bool {
+	if client := backend.protectedQueue(); client != nil {
+		return client.fail(id, attempts, claimToken)
+	}
+	sequence, valid := queueClaimSequence(claimToken)
+	if !valid {
+		return false
+	}
 	db, table := backend.table()
 	next := attempts + 1
 	status := jobPending
@@ -482,15 +665,20 @@ func (backend *pgQueueBackend) fail(id string, attempts int, claimToken string) 
 		status = jobDead
 		delay = 0
 	}
-	changed := PgExec(db, "update "+table+" set status = $2, attempts = $3, "+
+	changed := PgExec(db, pgQueueLockedAttempt(table,
+		"id = $1 and status = 'processing' and claim_token = $5 and claim_seq = $6")+
+		"update "+table+" j set status = $2, attempts = $3, "+
 		"next_attempt_at = now() + ($4::bigint * interval '1 second'), "+
-		"locked_at = null, locked_by = null, claim_token = null "+
-		"where id = $1 and status = 'processing' and claim_token = $5",
-		[]any{id, status, int32(min(next, 1<<30)), delay, claimToken}) // #nosec G115 -- clamped above
+		"locked_at = null, locked_by = null, claim_token = null, lease_until = null "+
+		"from owned where j.id=owned.id and ($7::bool or owned.lease_until > clock_timestamp())",
+		[]any{id, status, int32(min(next, 1<<30)), delay, claimToken, sequence, queueClaimOwnedByTransaction(claimToken)}) // #nosec G115 -- clamped above
 	return changed == 1
 }
 
 func (backend *pgQueueBackend) count(status string) int {
+	if client := backend.protectedQueue(); client != nil {
+		return client.count(status)
+	}
 	db, table := backend.table()
 	counted, exact := PgCount(db, "select count(*) from "+table+" where queue = $1 and status = $2",
 		[]any{backend.name, status}).Int64()
@@ -501,28 +689,47 @@ func (backend *pgQueueBackend) count(status string) int {
 }
 
 func (backend *pgQueueBackend) deadJobs(queue *Queue) []DeadJob {
-	db, table := backend.table()
-	ids := PgQuery(db, "select id from "+table+" where queue = $1 and status = 'dead' order by seq",
-		[]any{backend.name}, scanText)
-	dead := make([]DeadJob, 0, len(ids))
-	for _, id := range ids {
-		dead = append(dead, DeadJob{ID: id, queue: queue})
+	if client := backend.protectedQueue(); client != nil {
+		return client.deadJobs(queue)
 	}
-	return dead
+	db, table := backend.table()
+	// The legacy quarantine marker conflates absent codecs with invalid JSON.
+	// Preserve that uncertainty: never invent a source version or PayloadInvalid.
+	return PgQuery(db, "select id, job_type, attempts, next_attempt_at = 'infinity'::timestamptz from "+table+
+		" where queue = $1 and status = 'dead' order by seq", []any{backend.name}, func(row pgx.CollectableRow) (DeadJob, error) {
+		var id, jobType string
+		var attempts int32
+		var unresolved bool
+		if err := row.Scan(&id, &jobType, &attempts, &unresolved); err != nil {
+			return DeadJob{}, err
+		}
+		reason := "attempts-exhausted"
+		if unresolved {
+			reason = "legacy-unresolved"
+		}
+		return deadJobFromMetadata(queue, id, &jobType, nil, int(attempts), reason)
+	})
 }
 
 // requeue puts a dead job back in line with a fresh attempt count. Only a row that IS dead
 // moves — one a dead-letter worker has claimed is `dead_processing` and answers false, as the
-// in-memory store does for the same case.
+// in-memory store does for the same case. The live infinity predicate also blocks
+// a stale retryable DTO after the row has subsequently entered quarantine.
 func (backend *pgQueueBackend) requeue(id string) bool {
+	if client := backend.protectedQueue(); client != nil {
+		return client.requeue(id)
+	}
 	db, table := backend.table()
 	changed := PgExec(db, "update "+table+" set status = 'pending', attempts = 0, "+
-		"next_attempt_at = now(), locked_at = null, locked_by = null, claim_token = null "+
-		"where id = $1 and status = 'dead'", []any{id})
+		"next_attempt_at = now(), locked_at = null, locked_by = null, claim_token = null, lease_until = null "+
+		"where id = $1 and status = 'dead' and next_attempt_at <> 'infinity'::timestamptz", []any{id})
 	return changed == 1
 }
 
 func (backend *pgQueueBackend) reset() {
+	if backend.protectedQueue() != nil {
+		panic("queue: reset cannot erase protected migration history; use a disposable test database")
+	}
 	db, table := backend.table()
 	PgExec(db, "delete from "+table+" where queue = $1", []any{backend.name})
 }
@@ -569,6 +776,7 @@ type pgOutboxBackend struct {
 
 // NewOutboxOn is `email E = Email { database: D … }` for a Postgres-backed D.
 func NewOutboxOn(database *Database, settings SmtpSettings) *Outbox {
+	pgRegisterMigrationFacility(database, "email outbox", "")
 	outbox := NewOutbox(settings)
 	outbox.backend = &pgOutboxBackend{pgStore: pgStore{database: database}}
 	return outbox
@@ -692,7 +900,7 @@ func scanOutboxRow(row pgx.CollectableRow) (EmailMessage, error) {
 func (backend *pgOutboxBackend) claimDue(limit int) []EmailMessage {
 	db, table := backend.table()
 	claimToken := UUIDv7()
-	return PgQuery(db, "update "+table+" set locked_at = now(), claim_token = $3 where id in ("+
+	return PgWriteQuery(db, "update "+table+" set locked_at = now(), claim_token = $3 where id in ("+
 		"select id from "+table+" where status = 'pending' and next_attempt_at <= now() "+
 		"and (locked_at is null or locked_at < now() - ($2::bigint * interval '1 millisecond')) "+
 		"order by id for update skip locked limit $1) returning "+outboxColumns,
@@ -779,6 +987,7 @@ type pgCacheBackend struct {
 // cache plus the durable backend. `encode` and `decode` are the value type's JSON codec.
 func NewCacheOn[V any](database *Database, name string, defaultTTLSeconds int64,
 	encode func(V) any, decode func(any) (V, error)) *Cache[V] {
+	pgRegisterMigrationFacility(database, "cache", name)
 	cache := NewCache[V](defaultTTLSeconds)
 	// The typed codecs are adapted to `any` at the one place the type parameter is known.
 	cache.backend = &pgCacheBackend{pgStore: pgStore{database: database}, name: name,

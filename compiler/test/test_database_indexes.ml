@@ -87,7 +87,7 @@ import Tesl.DB exposing [dbWrite]
 
 let check src = with_source (prelude ^ src) (fun p -> run_cc ["--check"; p])
 
-let check_cross_module_index_collision () =
+let check_cross_module_index_collision ?(second = true) () =
   let dir = Filename.temp_dir "tesl-dbindex-imports" "" in
   let write name contents =
     Out_channel.with_open_text (Filename.concat dir name)
@@ -114,18 +114,21 @@ entity %s table "%s" primaryKey id {
       write "a.tesl" (entity_module "A" "AEntity" "a");
       write "b.tesl" (entity_module "B" "BEntity" "b");
       write "indexes.tesl"
-        {|module Indexes exposing []
-import Tesl.Prelude exposing []
+        (Printf.sprintf {|module Indexes exposing []
+import Tesl.Prelude exposing [String]
 import Tesl.DB exposing []
 import A exposing [AEntity]
-import B exposing [BEntity]
+%s
 
 database MainDb = Database {
   schema: "app"
-  entities: [AEntity, BEntity]
+  entities: [%s]
   backend: Memory
 }
-|};
+fn bareView(row: AEntity) -> String = row.id
+fn qualifiedView(row: A.AEntity) -> String = row.id
+|} (if second then "import B exposing [BEntity]" else "")
+          (if second then "AEntity, BEntity" else "AEntity"));
       run_cc ["--check"; Filename.concat dir "indexes.tesl"])
 
 let emit_go src =
@@ -267,8 +270,15 @@ let test_name_collision_across_imported_entities () =
   let code, out = check_cross_module_index_collision () in
   if code = 0 then
     failf "the same explicit index name in imported entities should be rejected";
-  if not (contains out "is already used by entity `AEntity`") then
-    failf "rejected, but not for the imported index-name collision:\n%s" out
+  if not (contains out "index name `shared_idx` on entity `B.BEntity` is already used by entity `A.AEntity`") then
+    failf "rejected, but not for the distinct imported owners' index-name collision:\n%s" out;
+  if count_occurrences out "index name `shared_idx`" <> 1 then
+    failf "each physical declaration must participate once, despite exposed aliases:\n%s" out
+
+let test_imported_index_has_one_physical_owner () =
+  let code, out = check_cross_module_index_collision ~second:false () in
+  if code <> 0 then
+    failf "one imported indexed entity must not collide with its exposed alias:\n%s" out
 
 let test_same_name_on_one_entity_collides () =
   should_fail "the same explicit index name twice on one entity"
@@ -445,6 +455,7 @@ let () =
       test_case "bad explicit name rejected"          `Quick test_bad_explicit_name;
       test_case "over-long explicit name rejected"    `Quick test_overlong_explicit_name;
       test_case "name collision across entities"      `Quick test_name_collision_across_entities;
+      test_case "imported aliases have one physical owner" `Quick test_imported_index_has_one_physical_owner;
       test_case "name collision across imports"       `Quick test_name_collision_across_imported_entities;
       test_case "name collision within one entity"    `Quick test_same_name_on_one_entity_collides;
     ];

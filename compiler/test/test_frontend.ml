@@ -1772,7 +1772,7 @@ fn greet(name: String) -> String =
 |} in
   check_contains "regression_string_interp" src "greet"
 
-(** Explicit HTTP adapters with matching signatures compile *)
+(** An unexecuted adapter cannot masquerade as boundary validation. *)
 let test_regression_http_adapters () =
   let src = module_ ~exports:"TestApi, decodeWire, encodeWire" {|
 record WireMsg {
@@ -1802,7 +1802,22 @@ api TestApi {
     -> Msg
 }
 |} in
-  check_contains "regression_http_adapters" src "TestApi"
+  let error = compile_err "regression_http_adapters" src in
+  if not (contains "body `via` validation is not implemented" error) then
+    Alcotest.failf "expected the unexecuted adapter refusal, got: %s" error;
+  let source = Str.global_replace
+    (Str.regexp_string "body req: Msg from WireMsg via decodeWire")
+    "body req: WireMsg" src in
+  let source = Str.global_replace
+    (Str.regexp_string "    response WireMsg via encodeWire\n    -> Msg")
+    "    -> WireMsg" source in
+  let source = source ^ {|
+handler post respond(req: WireMsg) -> WireMsg =
+  let domain = decodeWire req
+  encodeWire domain
+server TestServer for TestApi { respond }
+|} in
+  compile_ok "explicit_checked_handler_conversion" source
 
 (** record ::: invariant accepts a witnessed construction *)
 let test_regression_record_invariant () =

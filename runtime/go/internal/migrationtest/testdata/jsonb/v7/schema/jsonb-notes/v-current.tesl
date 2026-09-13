@@ -1,0 +1,36 @@
+module JsonbNotesSchema.VCurrent exposing [
+  Note,
+  Details,
+  Change(..),
+  ValidText,
+  validText,
+]
+
+import Tesl.Prelude exposing [String]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.String exposing [String.length]
+import Tesl.Json exposing [stringCodec]
+
+fact ValidText (text: String)
+check validText(text: String) -> text: String ::: ValidText text =
+  if String.length text > 0 then
+    ok text ::: ValidText text
+  else
+    fail 422 "empty text"
+
+record Details { text: String ::: ValidText text }
+codec Details {
+  toJson { text -> "title" with_codec stringCodec }
+  fromJson [
+    { text <- "title" with_codec stringCodec via validText }
+  ]
+}
+type Change
+  = Unchanged
+  | Changed details: Details
+entity Note table "notes" primaryKey id {
+  id: String
+  details: Details @db(jsonb)
+  backup: Maybe Details
+  change: Change
+}

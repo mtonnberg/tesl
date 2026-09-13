@@ -389,25 +389,81 @@ let elm_out_path_infers_api_module_name () =
         assert_contains ~label:"module header" generated "module Api.TodoApi exposing")
   )
 
-let elm_binding_forall_supports_compound_element_proofs () =
-  let src = {|module Api exposing [TodoApi]
+(* Incoming list proofs must come from actual codec checks. The element's
+   proof-bearing field and the list's own proof are independent and both survive
+   client generation. A raw `body ::: ForAll` promise is rejected below. *)
+let validated_todo_request_source ~compound ~extra_outer =
+  let element subject = "TodoId " ^ subject ^
+    (if compound then " && ContainsAnA " ^ subject else "") in
+  let outer subject = "NonEmpty " ^ subject ^
+    (if extra_outer then " && SomeOtherProof " ^ subject else "") in
+  Printf.sprintf {|module Api exposing [TodoApi]
 import Tesl.Prelude exposing [String, List]
+import Tesl.Json exposing [stringCodec, listCodec]
+import Tesl.List exposing [List.isEmpty]
+import Tesl.String exposing [String.startsWith, String.contains]
+fact TodoId(id: String)
+fact ContainsAnA(id: String)
+fact NonEmpty(xs: List TodoIdValue)
+fact SomeOtherProof(xs: List TodoIdValue)
+check validId(id: String) -> id: String ::: %s =
+  if String.startsWith id "todo-" && String.contains id "a" then
+    ok id ::: %s
+  else
+    fail 400 "invalid id"
+record TodoIdValue { id: String ::: %s }
+codec TodoIdValue {
+  toJson { id -> "id" with_codec stringCodec }
+  fromJson [ { id <- "id" with_codec stringCodec via validId } ]
+}
+check validBatch(values: List TodoIdValue) -> values: List TodoIdValue ::: %s =
+  if List.isEmpty values then
+    fail 400 "empty batch"
+  else
+    ok values ::: %s
+record TodoInput { newTodos: List TodoIdValue ::: %s }
+codec TodoInput {
+  toJson { newTodos -> "newTodos" with_codec listCodec }
+  fromJson [ { newTodos <- "newTodos" with_codec listCodec via validBatch } ]
+}
+api TodoApi { post "/list-test" body input: TodoInput -> String }
+|} (element "id") (element "id") (element "id")
+  (outer "values") (outer "values") (outer "newTodos")
 
-fact TodoId (s: String)
-fact ContainsAnA (s: String)
-fact NonEmpty (xs: List String)
+let elm_validated_request_supports_compound_element_proofs () =
+  let src = validated_todo_request_source ~compound:true ~extra_outer:false in
+  with_temp_file "tesl-r42-elm-checked-compound-" ".tesl" src (fun path ->
+    let out = generate_elm path in
+    assert_contains ~label:"compound element proof" out
+      {|{ id : Proven String (And TodoId ContainsAnA)|};
+    assert_contains ~label:"checked outer list proof" out
+      {|{ newTodos : Proven (List TodoIdValue) NonEmpty|};
+    assert_contains ~label:"declared decoded body signature" out
+      {|postListTest : TodoInput -> (Result Http.Error String -> msg) -> Cmd msg|};
+    assert_contains ~label:"element and list encoders unwrap their own proofs" out
+      {|( "newTodos", (E.list todoIdValueEncoder) (exorcise rec.newTodos) )|}
+  )
 
+let elm_raw_forall_body_is_refused () =
+  List.iter (fun annotation ->
+    let src = {|module Api exposing [TodoApi]
+import Tesl.Prelude exposing [String, List]
+fact TodoId(s: String)
+fact ContainsAnA(s: String)
+fact NonEmpty(xs: List String)
+fact SomeOtherProof(xs: List String)
 api TodoApi {
-  post "/list-test" body newTodos: List String ::: ForAll (TodoId && ContainsAnA) newTodos && NonEmpty newTodos -> String
+  post "/list-test" body newTodos: List String ::: |} ^ annotation ^ {| -> String
 }
 |} in
-  with_temp_file "tesl-r42-elm-forall-compound-" ".tesl" src (fun path ->
-    let out = generate_elm path in
-    assert_contains ~label:"compound forall body signature" out
-      {|postListTest : Proven (List ((Proven String (And TodoId ContainsAnA)))) NonEmpty -> (Result Http.Error String -> msg) -> Cmd msg|};
-    assert_contains ~label:"compound forall body encoder" out
-      {|body = Http.jsonBody ((E.list (\value -> E.string (exorcise value))) (exorcise newTodos))|}
-  )
+    with_temp_file "tesl-r42-elm-raw-body-" ".tesl" src (fun path ->
+      let code, out = run_compiler ["--generate-elm"; path] in
+      check bool "raw body proof refuses before client publication" true (code <> 0);
+      assert_contains ~label:"actual boundary refusal" out
+        "HTTP body decoding does not establish a top-level proof annotation";
+      assert_not_contains ~label:"no misleading client published" out "postListTest :"))
+    ["ForAll (TodoId && ContainsAnA) newTodos && NonEmpty newTodos";
+     "ForAll TodoId newTodos && NonEmpty newTodos && SomeOtherProof newTodos"]
 
 let elm_fromdb_filtering_preserves_remaining_conjunctions () =
   let src = {|module Api exposing [TodoApi]
@@ -620,25 +676,17 @@ let elm_exports_proof_types_without_exporting_proof_constructors () =
     assert_not_contains ~label:"forall constructor not exported" out "ForAll(..)"
   )
 
-let elm_body_forall_proof_surfaces_as_proven_elements_with_outer_list_proofs () =
-  let src = {|module Api exposing [TodoApi]
-import Tesl.Prelude exposing [String, List]
-
-fact TodoId (s: String)
-fact NonEmpty (xs: List String)
-fact SomeOtherProof (xs: List String)
-
-api TodoApi {
-  post "/list-test" body newTodos: List String ::: ForAll TodoId newTodos && NonEmpty newTodos && SomeOtherProof newTodos -> String
-}
-|} in
-  with_temp_file "tesl-r42-elm-forall-surface-" ".tesl" src (fun path ->
+let elm_validated_request_preserves_element_and_outer_list_proofs () =
+  let src = validated_todo_request_source ~compound:false ~extra_outer:true in
+  with_temp_file "tesl-r42-elm-checked-surface-" ".tesl" src (fun path ->
     let out = generate_elm path in
-    assert_contains ~label:"forall type constructor" out {|type ForAll p|};
-    assert_contains ~label:"forall body signature" out
-      {|postListTest : Proven (List ((Proven String TodoId))) (And NonEmpty SomeOtherProof) -> (Result Http.Error String -> msg) -> Cmd msg|};
-    assert_contains ~label:"forall body encoder" out
-      {|body = Http.jsonBody ((E.list (\value -> E.string (exorcise value))) (exorcise newTodos))|}
+    assert_contains ~label:"checked element proof" out {|{ id : Proven String TodoId|};
+    assert_contains ~label:"both outer list proofs" out
+      {|{ newTodos : Proven (List TodoIdValue) (And NonEmpty SomeOtherProof)|};
+    assert_contains ~label:"body encoder" out
+      {|body = Http.jsonBody (todoInputEncoder input)|};
+    assert_contains ~label:"proof-erasing element encoder" out
+      {|( "id", E.string (exorcise rec.id) )|}
   )
 
 let elm_client_surface_strips_fromdb_proofs () =
@@ -681,9 +729,10 @@ let () =
          test_case "Elm closes proof field decoder" `Quick elm_proof_field_decoder_closes_andthen;
          test_case "Elm reuses fact field decoder" `Quick elm_proof_record_decoder_uses_fact_field_decoder;
          test_case "Elm infers module name from --out path" `Quick elm_out_path_infers_api_module_name;
-         test_case "Elm binding ForAll supports compound element proofs" `Quick elm_binding_forall_supports_compound_element_proofs;
+         test_case "Elm validated request supports compound element proofs" `Quick elm_validated_request_supports_compound_element_proofs;
          test_case "Elm exports proof types without exporting proof constructors" `Quick elm_exports_proof_types_without_exporting_proof_constructors;
-         test_case "Elm body ForAll surfaces as proven elements plus outer list proofs" `Quick elm_body_forall_proof_surfaces_as_proven_elements_with_outer_list_proofs;
+         test_case "Elm validated request preserves element and outer list proofs" `Quick elm_validated_request_preserves_element_and_outer_list_proofs;
+         test_case "Elm refuses unvalidated whole-body ForAll annotations" `Quick elm_raw_forall_body_is_refused;
          test_case "Elm strips FromDb from client proof surfaces" `Quick elm_client_surface_strips_fromdb_proofs;
          test_case "Elm FromDb filtering preserves remaining conjunctions" `Quick elm_fromdb_filtering_preserves_remaining_conjunctions;
          test_case "Elm capture collisions rename only when needed" `Quick elm_capture_collision_renames_only_when_needed;

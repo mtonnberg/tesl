@@ -7,7 +7,7 @@ The executable fixtures are in `server_test.go`, `completion_test.go`,
 
 | Surface | Compiler contract | Current boundary |
 |---|---|---|
-| Push/pull diagnostics | `--check-json` | Includes imported-module diagnostics; all open overlays participate; no general unopened-workspace scheduler |
+| Push/pull diagnostics | `--check-json-v2` | Imported-module and related locations, manual links and action metadata; all open overlays participate; no general unopened-workspace scheduler |
 | Hover | Type/field/config queries and `--doc-json` | Compiler types and stdlib docs; no proof-flow explanation graph |
 | Definition/declaration | `--workspace-definition-json` | Compiler-owned project identities across imports; read-only lifted stdlib definitions; explicit incomplete-index errors |
 | Type definition | `--type-definition-json` | Existing same-file type lookup |
@@ -16,12 +16,12 @@ The executable fixtures are in `server_test.go`, `completion_test.go`,
 | Prepare rename/rename | `--workspace-references-json`, `--workspace-rename-json` | Rechecked staged project, binding/capture/type/proof checks and whole-input preconditions; requires an initially valid project and a client supporting transactional versioned edits |
 | Completion/resolve | `--completions-json`, `--doc-json` | Stdlib discovery, sibling exported types, auto-imports, receiver fields, partial parsing, revision checks |
 | Signature help | `--signature-help-json` | Callee parameters and active argument |
-| Code actions | Diagnostic fixes | Machine-applicable compiler edits; no general proof-preserving refactor preview |
+| Code actions | Diagnostic fixes and producer action metadata | Decisions/confirmation requests are excluded from ordinary quick fixes; `source.fixAll.tesl` rechecks buffers and returns a versioned single-document edit; guarded migration previews and per-file diffs are read-only; multi-file application remains pending |
 | Selection ranges | `--selection-range-json` | Nested source ranges |
 | Inlay hints | `--local-bindings-json` | Inferred binding types; no general expected-type/proof hint engine |
 | Document symbols and semantic tokens | `--semantic-json` | Document snapshot; full/range/delta token transport does not imply a workspace index |
 | Folding and document links | Go source/URI adapter | Editor presentation, not additional name/proof resolution |
-| Formatting | `--fmt` on an isolated source copy | Full-document replacement |
+| Formatting | `--format-json` with all open buffers | Full-document replacement; frozen migration source stays byte-identical |
 | Lifecycle | Open/change/save/close/watched-file notifications | Diagnostic generations and retained compiler ownership |
 | Request cancellation | `$/cancelRequest` to compiler context cancellation | Active/queued cancellation, late-result rejection, bounded queue; document handlers retain arrival order |
 

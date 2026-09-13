@@ -240,14 +240,20 @@ check checkBig(o: Order) -> o: Order ::: BigOrder o =
   else
     fail 400 "too small"
 
+record OrderInput { order: Order ::: BigOrder order }
+codec OrderInput {
+  toJson { order -> "order" }
+  fromJson [ { order <- "order" with_codec Order via checkBig } ]
+}
 api OrderApi {
-  post "/orders" body o: Order ::: BigOrder o -> String
+  post "/orders" body input: OrderInput -> String
 }
 |}
 
 (* Primitive base — the issue #13 scenario the delegation was built for. It
    still works, and now prints the definitions to copy. *)
 let primitive_base_src = {|module CyclePrimitive exposing [CodeApi]
+import Tesl.Json exposing [stringCodec]
 import Tesl.Prelude exposing [Bool(..), Int, String]
 import Tesl.String exposing [String.length]
 
@@ -262,8 +268,13 @@ check checkCode(s: String) -> s: String ::: ValidCode s =
   else
     fail 400 "bad code"
 
+record CodeInput { code: String ::: ValidCode code }
+codec CodeInput {
+  toJson { code -> "code" }
+  fromJson [ { code <- "code" with_codec stringCodec via checkCode } ]
+}
 api CodeApi {
-  post "/code" body payload: String ::: ValidCode payload -> String
+  post "/code" body input: CodeInput -> String
 }
 |}
 
@@ -271,6 +282,7 @@ api CodeApi {
    Elm, so an outside module can spell the underlying type and Elm unifies the
    two. The delegation survives — with the UNDERLYING type printed. *)
 let newtype_base_src = {|module CycleNewtype exposing [SlugApi]
+import Tesl.Json exposing [stringCodec]
 import Tesl.Prelude exposing [Bool(..), Int, String]
 import Tesl.String exposing [String.length]
 
@@ -287,13 +299,19 @@ check checkSlug(s: Slug) -> s: Slug ::: ValidSlug s =
   else
     fail 400 "bad slug"
 
+record SlugInput { slug: Slug ::: ValidSlug slug }
+codec SlugInput {
+  toJson { slug -> "slug" }
+  fromJson [ { slug <- "slug" with_codec stringCodec via checkSlug } ]
+}
 api SlugApi {
-  post "/slug" body slug: Slug ::: ValidSlug slug -> String
+  post "/slug" body input: SlugInput -> String
 }
 |}
 
 (* Compound but still core-nameable: `List String` is fine. *)
 let compound_core_base_src = {|module CycleCompound exposing [TagApi]
+import Tesl.Json exposing [listCodec]
 import Tesl.Prelude exposing [Bool(..), String, List]
 import Tesl.List exposing [List.member]
 
@@ -308,8 +326,13 @@ check mayRead(tags: List String) -> tags: List String ::: MayRead tags =
   else
     fail 403 "denied"
 
+record TagInput { tags: List String ::: MayRead tags }
+codec TagInput {
+  toJson { tags -> "tags" }
+  fromJson [ { tags <- "tags" with_codec listCodec via mayRead } ]
+}
 api TagApi {
-  post "/tags" body tags: List String ::: MayRead tags -> String
+  post "/tags" body input: TagInput -> String
 }
 |}
 

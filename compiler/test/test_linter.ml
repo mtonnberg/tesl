@@ -113,6 +113,27 @@ fn g(n: Int) -> Int =
   let diags = lint_src src in
   assert_has diags "W060"
 
+let test_w060_bulk_insert_uses_its_input () =
+  let src = {|
+module App exposing []
+import Tesl.Prelude exposing [Int, String, List]
+entity Note table "notes" primaryKey id { id: String }
+fn save() -> Int requires [dbWrite Note] =
+  let rows = [Note { id: "one" }]
+  let unused = 17
+  insertMany rows in Note
+fn saveAll(rows: List Note) -> Int requires [dbWrite Note] =
+  insertMany rows in Note
+|} in
+  (match Parser.parse_module "app.tesl" src with
+   | Err e -> Alcotest.fail e.msg | Ok _ -> ());
+  let diags = lint_src src in
+  assert_absent diags "W061";
+  let unused = List.filter (fun (d:Compile.diagnostic) -> d.code="W060") diags in
+  Alcotest.(check int) "only the truly unused binding is flagged" 1 (List.length unused);
+  Alcotest.(check bool) "bulk input is a use" true
+    (str_contains (List.hd unused).message "`unused`")
+
 (* ── W063: redundant re-check ───────────────────────────────────────────── *)
 
 let test_w063_redundant_recheck_fires () =
@@ -347,6 +368,8 @@ let () =
         test_w050_genuinely_unused_import_still_flagged;
     ];
     "W060-proof-decompose", [
+      Alcotest.test_case "bulk insertion uses its input binding and parameter" `Quick
+        test_w060_bulk_insert_uses_its_input;
       Alcotest.test_case "proof half not flagged as unused" `Quick
         test_w060_decompose_proof_half_not_unused;
       Alcotest.test_case "value half still flagged" `Quick

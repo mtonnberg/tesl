@@ -1,0 +1,245 @@
+module Lesson84WorkerMigrations exposing [
+  NoteDatabase,
+  NotesServer,
+  saveTitle,
+  findTitle,
+]
+
+# lesson: track=data order=860 needs=lesson83-additive-migrations
+# summary: Keep serving the same notes API while a separate schema worker owns migration DDL
+# Lesson 84 — Run migrations separately from requests
+#
+# This is the full notes application from lesson 83 with Worker deployment.
+# Its request login can read and write notes, but cannot change their tables or
+# publish migration lifecycle state. A separate process runs the SAME compiled
+# binary as a schema worker. Only that process receives the worker login.
+# Database connection settings belong here in the app, never in its pure schema.
+#
+# Run the ordinary unit and API tests, then the isolated deployment regression:
+#
+#   tesl test example/learn/lesson84-worker-migrations.tesl
+#   bash scripts/run-migration-tests.sh -run '^TestCompiledWorkerLessonRetainsRows$'
+#
+# The regression provisions a disposable database and four distinct identities:
+# a NOLOGIN control owner, a temporary installer, a request login, and a worker
+# login. It starts the request process before its worker and checks that requests
+# wait for storage readiness. It then runs V1 and V2 together, retains their data,
+# restarts the old binary, and verifies the request login cannot execute DDL or
+# migration lifecycle functions. It also verifies the worker starts no HTTP server.
+# It runs these API tests in both revisions and checks this app file is unchanged.
+#
+# For your deployment, an operator provisions those roles and configures the
+# NOTES_DB_* connection values, NOTES_CONTROL_OWNER, NOTES_REQUEST_ROLE, and
+# NOTES_WORKER_ROLE. Keep both role names identical across the installer, worker
+# and request processes; NOTES_DB_USER selects the login of each process.
+# With temporary installer membership in the control-owner role, install once:
+#
+#   NOTES_DB_USER=notes_setup ./app --schema install --worker notes_schema --request notes_app
+#
+# Here NOTES_WORKER_ROLE is notes_schema and NOTES_REQUEST_ROLE is notes_app.
+# Revoke the installer's control-owner membership before launching either process.
+# Launch these in separate terminals or containers with their own credentials:
+#
+#   NOTES_DB_USER=notes_schema ./app --schema worker --json
+#   NOTES_DB_USER=notes_app ./app
+#
+# The worker reports schema-worker-ready after it commits the required expansion,
+# then stays running until stopped. It runs no HTTP server or application jobs.
+# Requests wait for the required schema; they do not borrow the worker's credentials
+# or perform its DDL. A missing worker eventually produces a bounded startup error.
+# The worker command here uses the ordinary connection settings; ddlConnection
+# can supply a separate direct PostgreSQL DSN when requests use a pooler.
+#
+# Observe either version without applying a migration or starting HTTP:
+#
+#   NOTES_DB_USER=notes_app ./app --schema status --json
+#
+# Change only stored schema when adding a nullable category:
+#
+#   tesl migrate generate lesson84-worker-migrations.tesl --new-revision
+#   # In schema/worker-notes/v-current/notes.tesl, add category: Maybe String to Note.
+#   # Add category: Nothing to newNote's record, then refresh and inspect:
+#   tesl migrate generate lesson84-worker-migrations.tesl
+#   tesl migrate plan lesson84-worker-migrations.tesl
+#
+# Deploy the new worker and new request binary. The worker adds the nullable
+# column; existing rows and old inserts use SQL NULL. The V2 pure constructor
+# supplies Nothing for new inserts. Old and new requests keep the same routes,
+# validation, response JSON and handler source throughout this additive change.
+# Stop the old worker when replacing it; the new worker includes the full history.
+#
+# This lesson demonstrates additive migrations only. Deriving values, retyping
+# fields, transforming stored JSON, retiring old versions and deleting storage
+# require their own migration protocols; this example does not claim those paths.
+
+import Tesl.Prelude exposing [Bool(..), String]
+import Tesl.String exposing [String.repeat]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.DB exposing [dbRead, dbWrite]
+import Tesl.Database exposing [
+  Database,
+  Postgres,
+  PostgresConfig,
+  TcpConnection,
+  MigrationTopology(..),
+]
+import Tesl.Env exposing [envRead, envInt]
+import Tesl.App exposing [App]
+import Tesl.ApiTest exposing [statusOk]
+import Tesl.Json exposing [stringCodec]
+import WorkerNotesSchema.VCurrent exposing []
+import WorkerNotesSchema.VCurrent.Notes exposing [Note, tryTitle, newNote]
+
+database NoteDatabase = Database {
+  schema: WorkerNotesSchema.VCurrent
+  migrations: WorkerNotesSchema.Migrate
+  backend: Postgres (PostgresConfig {
+    namespace: "worker_notes"
+    controlOwner: env "NOTES_CONTROL_OWNER"
+    topology: Worker
+    requestRole: env "NOTES_REQUEST_ROLE"
+    workerRole: env "NOTES_WORKER_ROLE"
+    dbName: env "NOTES_DB_NAME"
+    user: env "NOTES_DB_USER"
+    password: env "NOTES_DB_PASSWORD"
+    connection: TcpConnection { host: env "NOTES_DB_HOST", port: envInt "NOTES_DB_PORT" 5432 }
+  })
+}
+
+# Schema construction establishes the current row shape; this function owns the write.
+fn saveTitle(id: String, raw: String) -> Bool requires [dbWrite Note] =
+  case tryTitle raw of
+    Nothing -> False
+    Something title ->
+      let notes = [newNote id title]
+      let _ = insertMany notes in Note
+      True
+
+fn findTitle(id: String) -> Maybe String requires [dbRead Note] =
+  case selectOne note from Note where note.id == id of
+    Nothing -> Nothing
+    Something note -> Something note.title
+
+record NewNote {
+  title: String
+}
+
+codec NewNote {
+  toJson_forbidden
+  fromJson [
+    {
+      title <- "title" with_codec stringCodec
+    }
+  ]
+}
+
+record NoteReply {
+  id: String
+  title: String
+}
+
+codec NoteReply {
+  toJson {
+    id -> "id" with_codec stringCodec
+    title -> "title" with_codec stringCodec
+  }
+  fromJson_forbidden
+}
+
+capturer noteIdCapture: id: String using stringCodec
+
+handler post createNote(id: String, body: NewNote) -> NoteReply
+  requires [dbRead Note, dbWrite Note] =
+  if saveTitle id body.title then
+    case findTitle id of
+      Nothing -> fail 404 "note not found"
+      Something title -> NoteReply { id: id, title: title }
+  else
+    fail 400 "title must be 1-80 characters after trimming"
+
+handler get getNote(id: String) -> NoteReply requires [dbRead Note] =
+  case findTitle id of
+    Nothing -> fail 404 "note not found"
+    Something title -> NoteReply { id: id, title: title }
+
+api NotesApi {
+  post "/notes/:id"
+    capture id: String via noteIdCapture
+    body body: NewNote
+    -> NoteReply
+
+  get "/notes/:id"
+    capture id: String via noteIdCapture
+    -> NoteReply
+}
+
+server NotesServer for NotesApi {
+  createNote
+  getNote
+  listenAddress Loopback
+}
+
+main() -> App requires [dbRead Note, dbWrite Note, envRead] =
+  App {
+    database: NoteDatabase
+    api: NotesServer
+    port: envInt "NOTES_HTTP_PORT" 8084
+  }
+
+api-test "the full app creates and retrieves a normalized note" for NotesServer requires [dbRead Note, dbWrite Note] {
+  let created = post "/notes/first" body { "title": "  First note  " }
+  expect statusOk created.status
+  expect created.body == { "id": "first", "title": "First note" }
+  let fetched = get "/notes/first"
+  expect fetched.status == 200
+  expect fetched.body == created.body
+}
+
+api-test "invalid input fails without creating a note" for NotesServer requires [dbRead Note, dbWrite Note] {
+  let rejected = post "/notes/invalid" body { "title": "   " }
+  expect rejected.status == 400
+  let missing = get "/notes/invalid"
+  expect missing.status == 404
+}
+
+api-test "a malformed request never reaches storage" for NotesServer requires [dbRead Note, dbWrite Note] {
+  let rejected = post "/notes/malformed" body { "title": 42 }
+  expect rejected.status == 400
+  let missing = get "/notes/malformed"
+  expect missing.status == 404
+}
+
+api-test "a new test starts with an empty database" for NotesServer requires [dbRead Note] {
+  let missing = get "/notes/first"
+  expect missing.status == 404
+}
+
+test "schema-owned validation trims a title before storing it" requires [dbRead Note, dbWrite Note] {
+  expect saveTitle "first" "  a schema has one owner  " == True
+  expect findTitle "first" == Something "a schema has one owner"
+}
+
+test "an invalid title does not insert a row" requires [dbRead Note, dbWrite Note] {
+  expect saveTitle "empty" "" == False
+  expect saveTitle "spaces" "   " == False
+  expect findTitle "empty" == Nothing
+  expect findTitle "spaces" == Nothing
+}
+
+test "the private schema helper defines the accepted title boundary" requires [dbRead Note, dbWrite Note] {
+  let limit = String.repeat "x" 80
+  let overLimit = String.repeat "x" 81
+  expect saveTitle "limit" limit == True
+  expect findTitle "limit" == Something limit
+  expect saveTitle "too-long" overLimit == False
+  expect findTitle "too-long" == Nothing
+}
+
+test "validation and storage preserve Unicode titles" requires [dbRead Note, dbWrite Note] {
+  expect saveTitle "unicode" "  Ändra schemat  " == True
+  expect findTitle "unicode" == Something "Ändra schemat"
+}
+
+test "a missing row stays missing" requires [dbRead Note] {
+  expect findTitle "never-written" == Nothing
+}

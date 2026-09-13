@@ -19,6 +19,10 @@ import (
 
 // A native helper works under Windows too: no shell, signals or Bash fixture.
 func TestMain(m *testing.M) {
+	if mode := os.Getenv("TESL_MIGRATION_PREVIEW_HELPER"); mode != "" {
+		migrationPreviewHelper(mode)
+		os.Exit(0)
+	}
 	if mode := os.Getenv("TESL_SESSION_TEST_HELPER"); mode != "" {
 		sessionHelper(mode)
 		os.Exit(0)

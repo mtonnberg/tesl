@@ -599,10 +599,20 @@ let cycle_adt_and_capturer_collisions_preserved () =
   in
   let a = parse "AdtA.tesl" adt_a_source in
   let b = parse "AdtB.tesl" adt_b_source in
-  let rewritten = Compile.alpha_rename_cycle_members ~targets:[a; b] [a; b] in
+  let hub = parse "AdtHub.tesl" adt_hub_source in
+  let consumer = parse "AdtConsumer.tesl" adt_consumer_source in
+  let graph = match Go_graph_lowering.lower ~entry:consumer [a; b; hub; consumer] with
+    | Ok graph -> graph
+    | Error message -> failf "complete cyclic graph failed to lower: %s" message
+  in
+  let rewritten = Go_graph_lowering.modules graph in
   List.iter (fun (module_name, expected_name, expected_checker) ->
-    let m = List.find (fun (m : Ast.module_form) -> m.module_name = module_name) rewritten in
-    match List.find_map (function Ast.DCapture c -> Some c | _ -> None) m.decls with
+    let owner = match Go_graph_lowering.owner graph module_name with
+      | Some owner -> owner | None -> failf "%s lost its emitted owner" module_name in
+    let m = List.find (fun (m : Ast.module_form) -> m.module_name = owner) rewritten in
+    match List.find_map (function
+      | Ast.DCapture c when c.loc.file = module_name ^ ".tesl" -> Some c
+      | _ -> None) m.decls with
     | Some c when c.name = expected_name && c.checker = Some expected_checker -> ()
     | Some c -> failf "%s capturer rewrite was %s via %s" module_name c.name
         (Option.value c.checker ~default:"<none>")

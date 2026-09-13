@@ -48,6 +48,7 @@ func TestCompilerCommandParity(t *testing.T) {
 		{[]string{"emit", "go", "a.tesl", "--out", "a directory"}, []string{"a.tesl", "--out", "a directory"}},
 		{[]string{"compile", "--backend", "go", "a.tesl", "--out", "generated"}, []string{"a.tesl", "--out", "generated"}},
 		{[]string{"agent-context", "a.tesl"}, []string{"agent-context", "a.tesl"}},
+		{[]string{"migrate", "generate", "a file.tesl", "--manifest-json", "--database", "App.Main", "--new-revision"}, []string{"migrate", "generate", "a file.tesl", "--manifest-json", "--database", "App.Main", "--new-revision"}},
 		{[]string{"search", "String -> Int"}, []string{"search", "String -> Int"}},
 		{[]string{"search", "--json", "String -> Int"}, []string{"search", "--json", "String -> Int"}},
 		{[]string{"--search-json", "String -> Int"}, []string{"--search-json", "String -> Int"}},

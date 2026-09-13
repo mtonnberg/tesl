@@ -1,0 +1,11 @@
+module Schema.Todo.VCurrent exposing [Notifications, NotifyJob, queueSchema]
+
+import Tesl.Prelude exposing [String]
+
+record NotifyJob { message: String }
+
+queueSchema Notifications {
+  jobs: [NotifyJob]
+}
+
+fn queueSchema(value: String) -> String = value

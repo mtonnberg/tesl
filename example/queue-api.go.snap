@@ -72,6 +72,8 @@ var MainDatabaseDatabase = teslrt.NewDatabase(
 	[]teslrt.PostgresTable{},
 )
 
+var _ = teslrt.RegisterDatabaseIdentity("teslmodqueueapi.MainDatabase", MainDatabaseDatabase)
+
 //line queue-api.tesl:62
 func sendEmailWorker(job SendEmail) SendEmail {
 //line queue-api.tesl:64

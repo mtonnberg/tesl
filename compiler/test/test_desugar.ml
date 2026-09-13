@@ -34,7 +34,13 @@ main() -> App requires [emailCap] =
   let main = match List.find_opt (function DFunc fd -> fd.kind = MainKind | _ -> false) parsed.decls with
     | Some (DFunc fd) -> fd
     | _ -> failwith "startup fixture has no main" in
+  if Desugar.app_database main <> Some "Store" then failwith "App activation metadata lost its database";
+  let wrapped = { main with body = ELet { name="startup"; declared_type=None;
+    declared_proof=None; value=ELit {lit=LInt 1;loc}; body=main.body; loc } } in
+  if Desugar.app_database wrapped <> Some "Store" then failwith "startup effects hid active database";
+  if Desugar.app_database {main with kind=FnKind} <> None then failwith "ordinary function became an App";
   let lowered = Desugar.lower_main_app parsed.decls main in
+  if Desugar.app_database lowered <> None then failwith "lowered scopes were mistaken for explicit App metadata";
   let rec app_head = function
     | EApp { fn; _ } -> app_head fn
     | EVar { name; _ } -> Some name

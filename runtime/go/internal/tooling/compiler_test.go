@@ -141,19 +141,35 @@ func TestClientRejectsOutputBomb(t *testing.T) {
 	}
 }
 
-func TestClientFormatsTemporarySourceAndSetsLogicalPath(t *testing.T) {
+func TestClientFormatsBoundedShadowSourceWithoutWritingWorkspace(t *testing.T) {
 	directory := t.TempDir()
+	project := t.TempDir()
+	file := filepath.Join(project, "demo.tesl")
+	if err := os.WriteFile(filepath.Join(project, "tesl.toml"), nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(file, []byte("disk source"), 0600); err != nil {
+		t.Fatal(err)
+	}
 	script := directory + "/compiler-helper.sh"
-	if err := os.WriteFile(script, []byte("#!/bin/sh\n[ \"$TESL_LOGICAL_PATH\" = \"/workspace/demo.tesl\" ] || exit 3\nprintf formatted > \"$2\"\n"), 0o700); err != nil {
+	if err := os.WriteFile(script, []byte(`#!/bin/sh
+test -z "$TESL_LOGICAL_PATH" || exit 3
+test "$1" = --format-json || exit 4
+test "$(cat "$2")" = 'unsaved source' || exit 5
+printf '{"version":1,"formatted":"formatted","readOnly":false,"reason":null}'
+`), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	client := Client{Executable: script}
-	formatted, result, err := client.FormatSource(context.Background(), "/workspace/demo.tesl", "source")
+	formatted, result, err := client.FormatSource(context.Background(), file, "unsaved source")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if string(formatted) != "formatted" || result.ExitCode != 0 {
 		t.Fatalf("formatted=%q exit=%d", formatted, result.ExitCode)
+	}
+	if actual, err := os.ReadFile(file); err != nil || string(actual) != "disk source" {
+		t.Fatal("formatter modified workspace bytes")
 	}
 }
 
@@ -276,6 +292,51 @@ func TestValidateCompilerJSONAcceptsValidDiagnosticEnvelope(t *testing.T) {
 	payload := `{"version":1,"diagnostics":[{"file":"/tmp/a.tesl","start":{"line":0,"col":0},"end":{"line":0,"col":1},"severity":"error","code":"E1","message":"bad","fix":{"kind":"multi","title":"Apply fixes","edits":[{"kind":"insert_line","line":0,"text":"import B"},{"kind":"replace_range","start_line":1,"start_col":0,"end_line":1,"end_col":3,"replacement":"new"}]},"source":"parser"}]}`
 	if err := ValidateCompilerJSON("--check-json", []byte(payload)); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestCompilerFormattingResponseRequiresCompleteOwnershipResult(t *testing.T) {
+	for _, payload := range []string{
+		`{"version":1,"formatted":"x"}`, `{"version":1,"readOnly":false,"reason":null}`,
+		`{"version":1,"formatted":"x","readOnly":true,"reason":null}`,
+		`{"version":1,"formatted":"x","readOnly":true,"reason":""}`,
+		`{"version":1,"formatted":"x","readOnly":false,"reason":"frozen"}`,
+		`{"version":2,"formatted":"x","readOnly":false,"reason":null}`,
+	} {
+		if err := ValidateCompilerJSON("--format-json", []byte(payload)); err == nil {
+			t.Fatalf("accepted incomplete ownership result: %s", payload)
+		}
+	}
+	for _, payload := range []string{
+		`{"version":1,"formatted":"x","readOnly":false,"reason":null}`,
+		`{"version":1,"formatted":"x","readOnly":true,"reason":"frozen snapshot"}`,
+	} {
+		if err := ValidateCompilerJSON("--format-json", []byte(payload)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if sessionFlag("--format-json") {
+		t.Fatal("formatting reused a cache without sibling ownership dependencies")
+	}
+}
+
+func TestClientRefusesFormatterRewritingReadOnlySource(t *testing.T) {
+	project := t.TempDir()
+	file := filepath.Join(project, "example.tesl")
+	if err := os.WriteFile(filepath.Join(project, "tesl.toml"), nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	script := filepath.Join(t.TempDir(), "compiler-helper.sh")
+	program := "#!/bin/sh\nprintf '%s' '{\"version\":1,\"formatted\":\"replacement\",\"readOnly\":true,\"reason\":\"frozen\"}'\n"
+	if err := os.WriteFile(script, []byte(program), 0700); err != nil {
+		t.Fatal(err)
+	}
+	client := Client{Executable: script}
+	if _, _, err := client.FormatSource(context.Background(), file, "original"); err == nil || !strings.Contains(err.Error(), "rewrite read-only") {
+		t.Fatalf("read-only source rewritten: %v", err)
+	}
+	if _, _, err := client.FormatSources(context.Background(), file, nil); err == nil {
+		t.Fatal("missing original source accepted")
 	}
 }
 

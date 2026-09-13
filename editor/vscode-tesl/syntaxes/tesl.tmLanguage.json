@@ -9,6 +9,8 @@
     { "include": "#proof-annotation" },
     { "include": "#pipe-operators" },
     { "include": "#operators" },
+    { "include": "#migration-declaration" },
+    { "include": "#queue-schema-declaration" },
     { "include": "#agent-declaration" },
     { "include": "#declaration-keywords" },
     { "include": "#control-keywords" },
@@ -71,6 +73,43 @@
     "operators": {
       "match": "&&|\\|\\||==|!=|<=|>=|->|=>|<>|<|>|\\+|-|\\*|/|%",
       "name": "keyword.operator.tesl"
+    },
+    "migration-declaration": {
+      "comment": "Migration authoring uses a contextual value declaration, not globally reserved identifiers. Scope migration/to/same only in `migration = Migration { ... }`; nested records keep their ordinary fields and comments/strings retain their own scopes.",
+      "name": "meta.migration.tesl",
+      "begin": "^[ \\t]*(migration)[ \\t]*(=)[ \\t]*((?:[A-Z][a-zA-Z0-9_]*\\.)*Migration)[ \\t]*(\\{)",
+      "beginCaptures": {
+        "1": { "name": "keyword.other.declaration.tesl" },
+        "2": { "name": "keyword.operator.tesl" },
+        "3": { "name": "entity.name.type.tesl" },
+        "4": { "name": "punctuation.section.block.begin.tesl" }
+      },
+      "end": "\\}|(?=^[a-zA-Z_])",
+      "endCaptures": { "0": { "name": "punctuation.section.block.end.tesl" } },
+      "patterns": [
+        { "include": "#migration-fields" },
+        { "include": "#migration-nested-record" },
+        { "include": "$self" }
+      ]
+    },
+    "migration-fields": {
+      "match": "\\b(from|to|same|entities)\\b(?=[ \\t]*:)",
+      "name": "keyword.other.tesl"
+    },
+    "migration-nested-record": {
+      "begin": "\\{",
+      "end": "\\}",
+      "patterns": [
+        { "include": "#migration-nested-record" },
+        { "include": "$self" }
+      ]
+    },
+    "queue-schema-declaration": {
+      "comment": "queueSchema is contextual pure metadata. Match the canonical top-level spelling; indented calls, fields and function names remain identifiers.",
+      "match": "^(queueSchema)\\b(?=[ \\t]+[A-Z][a-zA-Z0-9_]*[ \\t]*(?:\\{|$))",
+      "captures": {
+        "1": { "name": "keyword.other.declaration.tesl" }
+      }
     },
     "agent-declaration": {
       "comment": "`agent` is a contextual keyword — a declaration keyword only in `agent <Name> ...` at the top level. Elsewhere it is an ordinary identifier (e.g. a parameter named `agent: Agent`), so anchor to line start and require an uppercase name to follow.",

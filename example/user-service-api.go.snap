@@ -113,6 +113,8 @@ var UserDatabaseDatabase = teslrt.NewDatabase(
 	},
 )
 
+var _ = teslrt.RegisterDatabaseIdentity("teslmoduserserviceapi.UserDatabase", UserDatabaseDatabase)
+
 //line user-service-api.tesl:183
 func checkEmail(s string) teslrt.Check[string] {
 //line user-service-api.tesl:184

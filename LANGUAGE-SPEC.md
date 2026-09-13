@@ -358,6 +358,14 @@ This does **not** mean the runtime performs no validation. A handful of checks r
 
 The `:::` operator in expression context outside `establish`, `check`, and `auth` function bodies may only attach existing proof values. Using a raw GDP predicate expression (e.g. `value ::: IsPositive x`) in a `fn` or `handler` body is rejected at compile time. This closes the bypass path that would otherwise let any function kind fabricate a proof fact without passing through a validation boundary.
 
+A parameter `evidence: Fact (P n)` carries the declared proof about `n`. Ordinary
+functions may return this evidence unchanged, including through local aliases,
+calls and branches whose returned evidence satisfies the declared proposition.
+The assumption is indexed by the evidence holder and keeps the original subjects
+and literal arguments. It does not implicitly attach `P` to the raw value `n` or
+permit changing a subject or bound. `Maybe (Fact (P n))` does not provide an
+unconditional assumption; the wrapper must first be eliminated.
+
 ### 7.13 The `?` pack operator for named return values
 **Accepted design, Implemented.**
 
@@ -625,6 +633,528 @@ import Tesl.Bool exposing [Bool]   # error: import must come before all definiti
 ```
 
 **Module file resolution.** When a user module is imported (e.g. `import MyDomain`), the compiler looks for the file `my-domain.tesl` (PascalCase-to-kebab-case conversion) in the same directory as the importing file. If the file does not exist the compiler emits a clear error naming the path that was searched. This is a compile-time error, not a missing-name error downstream.
+
+Module headers may contain several uppercase namespace segments, for example
+`module Schema.Notes.VCurrent exposing [Note]`. Schema-family imports also resolve
+the conventional paths `schema/notes/v-current.tesl`, `schema/notes/v7.tesl`, and
+`schema/notes/v-current/shared.tesl` for `Schema.Notes.VCurrent.Shared`. The migration
+namespace `Schema.Notes.Migrate.V8` resolves to `migrations/notes/v8.tesl`. The family
+segment after `Schema` is converted to kebab case. Legacy `NotesSchema.*` uses the
+same paths by removing the `Schema` suffix. Both conventions are supported, but
+they are distinct source identities: a file must declare the exact imported name,
+and renaming an already sealed family does not preserve its provenance. Resolution searches ancestors of
+the importing file and stops at the nearest `tesl.toml`, `tesl.json`, or `.git`
+project boundary. Existing same-directory kebab-case and PascalCase files retain
+precedence. Qualified calls and type annotations retain the complete namespace;
+two versions' same-named functions or newtypes remain separate.
+
+**Schema content boundary.** Every schema module in a `Schema.Family.VCurrent` or
+`Schema.Family.V<n>` namespace (also legacy `FamilySchema.*`), including child modules, owns only
+entities, records, types, facts, codecs, and pure `fn`, `check`, and `establish`
+functions. This rule applies to the complete schema import closure, including
+unexported declarations. The rule applies to standalone compilation and unsaved
+editor buffers before any application binds the schema to a database. Its local imports must stay within the same family's
+version; `Tesl.*` imports are allowed. Database declarations and connection
+settings belong to the application, as do handlers, workers, `main`, capabilities,
+effects, and test blocks. During the legacy `Database.entities` transition, an
+entity imported from a schema family also selects this boundary. Ordinary
+application modules retain their existing rules.
+
+Modules in `Schema.Family.Migrate.*` (also legacy `FamilySchema.Migrate.*`) also exclude connection configuration,
+application declarations and effects. They may contain pure constants for
+migration records and fixtures, pure functions, supporting types, and ordinary
+`test` blocks over those functions. Such tests cannot declare capabilities or a
+database connection; undeclared effects still fail normal capability checking. Entity
+declarations belong in the schema. Imports stay within the same schema/migration
+family or `Tesl.*`. This applies to standalone checks and unsaved buffers too.
+Generated compatibility/support modules will require an explicit test-build
+boundary; a module name alone does not grant historical storage operations.
+
+Ordinary application modules, including their imported libraries and modules
+containing tests, cannot import a historical `Schema.Family.V<n>` root or child
+module (MIG015). They import `VCurrent`. Pure tests that construct historical
+values belong in the family's `Migrate` namespace; this does not grant access to
+the generated compatibility store.
+
+The application binds an imported entity to its database before any module's
+queries are generated. Query modules resolve that database by its compiled owner
+identity at runtime; the schema does not import the application or carry a DSN.
+Each versioned schema family has one database owner across the complete application
+import graph. Splitting different entities of that family between two database
+declarations is an error, as is combining different families in one database.
+Historical `V<n>` entities cannot be bound to a connection; use `VCurrent` for
+application data. These ownership checks also apply during the legacy
+`Database.entities` transition and to new, unsaved application files. Local
+application entities retain their legacy rules and are distinguished from
+same-named, qualified-only schema imports.
+
+**Frozen-copy reference rewrite.** Freezing replaces the version segment in the
+owned module header, imports, and qualified references (`NotesSchema.VCurrent`
+and its children become `NotesSchema.V<n>` and the corresponding children).
+Comments and string literal text are preserved byte for byte. References inside
+string interpolations are rewritten as expressions. Another family's references,
+longer identifiers such as `VCurrentExtra`, and a nested prefix such as
+`Wrapper.NotesSchema.VCurrent` are untouched. No formatter runs during this copy.
+The source-edit layer returns the complete proposed text; applying the manifest
+and verifying semantic history are separate checks.
+MIG015's single-document fix uses the same token ranges to replace the historical
+import and references to that revision with `VCurrent`. It operates on the checked
+source buffer, never a substituted disk copy; prose and literal text remain intact.
+The fix carries non-overlapping byte ranges, converted to UTF-16 by the LSP.
+
+**Canonical migration encoding, format 1.** Semantic hashes use a domain-separated
+tree of byte strings and ordered lists. A byte string is `s<N>:<bytes>`, where `N`
+is its UTF-8 byte count in unsigned decimal without leading zeroes. A list is
+`l<N>:<children>`, where `N` counts children and each child uses this same encoding.
+There is no whitespace or terminator between children. An empty string is `s0:`;
+an empty list is `l0:`. Lengths count bytes, never Unicode characters. The hash
+input is the encoding of `["tesl-migration-canonical", "1", domain, payload]`;
+SHA-256 renders as lowercase hexadecimal. Domains are `snapshot`, `migration`,
+`same`, `repair`, `contract`, and `provenance`; the same payload in two domains
+has different identity. This wire format is independent of OCaml's runtime and
+does not use an AST's printed source, memory representation, or source locations.
+
+Schema symbols are fully resolved before encoding. A schema reference encodes as
+`["schema", family, role, [remaining path segments]]`; other resolved global
+references encode as `["global", [path segments]]`. A standalone snapshot or
+`Same` closure uses role `snapshot`, replacing exactly its family's version
+segment. A migration/repair/contract closure uses roles `from` and `to`, determined
+by its contextual source and target modules. Those roles remain distinct: changing
+a call from the old helper to the new same-named helper must change the migration
+hash. Replacing `VCurrent` with its frozen `V<n>` keeps the role and hash unchanged.
+References to an unbound schema revision are errors. Local binders use a separate
+node kind and cannot impersonate global or schema references.
+
+Scalar nodes carry a type tag. Ints use signed canonical decimal with no leading
+zeroes and no negative zero; integer syntax and host integer width do not affect
+the encoding. Float literals use exactly 16 lowercase hexadecimal digits for their
+IEEE-754 binary64 bits, preserving negative zero. Non-finite literals are refused.
+Strings retain their decoded bytes without Unicode normalization; Bools encode as
+`true` or `false`. Field order is specified by each typed node's schema; consumers
+must not serialize unordered maps directly. These encoding primitives alone do
+not constitute semantic elaboration or a verified `Same` closure.
+
+The typed declaration layer uses tagged lists with a fixed field order. A reference
+is `["reference", namespace, identity]`, with namespace `value`, `type`, `predicate`,
+or `codec`. A compiler primitive has identity `["primitive", semantic-ABI-tag]`;
+an unresolved name or missing tag is an error. The compiler records every referenced
+declaration, including private helpers and predicates minted by checks. A declaration
+node by itself is not a closure: closure construction must additionally follow these
+references and include all owners that can mint a referenced fact.
+
+Every expression is `["expr", checked-type, operation]`. The checked type comes from
+that AST node's identity and final function-local type substitution; source spans
+are insufficient because distinct expressions can share a span. Named types use
+`["named", reference]`, applications `["apply", head, argument]`, and arrows
+`["arrow", domain, codomain]`. Inferred type variables are numbered by first
+occurrence in the final declaration tree, traversed from left to right. Declared
+type variables use a separate first-occurrence scope. Fresh-variable allocation
+in an earlier compiler operation cannot affect a persistent hash.
+
+An application spine uses `["call", callee, [arguments]]`; arguments retain source
+order and intermediate application syntax has no independent type instantiation.
+A zero-argument call uses `["call-zero", callee]`. The parser's empty-list sentinel
+is omitted only when the checked callee is not an arrow or unresolved variable;
+an actual empty-list argument remains an ordinary typed argument. Inline record
+construction uses `["construct-fields", constructor-reference, [[field, value], …]]`;
+the syntax-only constructor and record wrapper do not invent inferred types.
+
+Local value and proof binders use `["local", lexical-depth]`, with depth starting
+at zero. Parameter, let, lambda, case-pattern, and existential binders extend their
+lexical scope; sibling branches do not share bindings. Their spelling and locations
+are absent. Constructor subpatterns retain positional order; the surface AST's
+pattern keys are not field selectors and are omitted, matching type checking and
+Go emission. Declaration field names, argument order, case-arm order, guards, literal values,
+return proof shapes, check versus establish kind, rejection status/message, codec
+alternatives, table/column/index mappings, and explicit SQL type overrides are
+retained. Record fields, ADT variants, and indexes retain declaration order. Pure
+operations receive distinct tags; an effectful or not-yet-lowered form is refused
+instead of receiving a placeholder hash. Comments, documentation, inferred record
+type hints, and desugaring source locations are not semantic nodes.
+
+A semantic closure encodes as `["closure", [roots], [[definition-key, node], …]]`.
+Both roots and definitions are sorted by their complete encoded bytes and deduplicated;
+an ambiguous definition is an error, not a last-writer-wins map entry. Constructor
+references reach the defining newtype, ADT, record, or entity. Reaching a type also
+reaches its codecs; reaching a fact also reaches every schema-owned check or establish
+that can mint it. The initial owner analysis conservatively includes trusted functions
+that mention that predicate, so it can require additional revalidation but cannot
+omit an owner. Recursive helpers and fact/owner cycles are visited once. A missing
+non-primitive definition refuses the closure. Building this inventory requires all
+checked modules in the ownership boundary, including private declarations; an export
+list is not an inventory of semantic dependencies.
+
+The source-view inventory loader starts at a schema revision root and follows
+every owned local import, including private modules, diamonds and cycles. It
+applies the ordinary compiler judgment to every member and checks storage
+identities across the whole schema before publishing an abstract inventory.
+Imported interfaces are refreshed for each load; a changed source file cannot
+borrow an earlier load's type information. Changes detected across the load's
+checking passes refuse the inventory. Compiler-internal read-only overlays may
+provide unsaved dependencies and proposed frozen files. They use the same import,
+type, proof and validation checks and create no source files or directories.
+
+An inventory loaded with an explicit stored-value compatibility contract wraps its
+closure as `["stored-value-semantics", compatibility, closure]`. Legacy loads without
+that contract use `["compiler-semantics", compiler-abi, closure]`. Its builtin
+references identify the existing compiler's module and symbol; the outer identity
+covers execution semantics, including lowered operators, codecs and stdlib implementations.
+No historical lowering or separate primitive-version registry is retained.
+Even an empty inventory retains the actual executing compiler ABI. A snapshot roots every declaration;
+a per-type closure roots that declaration and its dependencies, including codecs
+of nested record/ADT fields. Thus an unchanged SQL `jsonb` column can have a
+different semantic closure. The inventory alone grants no persisted-value admission
+or authority to perform a cross-compiler data transition.
+
+**Stored-value compatibility contract.** The current contract is
+`tesl-stored-value-v1:<sha256>`, hashing the compiler-owned semantic revision and the
+active lifted stdlib source names and byte digests. It is separate from the exact
+whole-build source ABI. Keeping the semantic revision promises compatible type,
+proof/check/establish and erasure semantics, lowering, primitives, codecs and
+SQL-visible representations. Changes to those semantics require a new revision;
+compiler maintainers must review that decision and its regression evidence.
+This is a versioned compiler compatibility promise, not a proof that arbitrary
+compiler implementations are equivalent. Stdlib changes conservatively change the
+contract even when the application does not call the changed function.
+
+Production generation, planning and compilation obtain both identities from the
+actual compiler and captured stdlib; callers cannot select old semantics by supplying
+an old label. Ordinary diagnostics check source integrity and types under the current
+compiler. Production compilation additionally verifies the stored-value contract.
+Completed additive history can survive a build change only with the same supported
+contract, exact frozen sources, reproduced checked snapshot/storage identities and
+matching protected database history, progress and catalog. Pending expansion intents
+remain pinned to the original build ABI. Processing-ABI rules for transforming
+migrations and revalidation across different contracts remain separate requirements.
+
+**Snapshot source-seal formats.**
+A snapshot seal records the complete checked owned source closure independently
+of its semantic digest. New production seals use format 2:
+
+```text
+# tesl:snapshot-seal:v2 <schema-root> <creator-compiler-abi-hex> <stored-value-compatibility> <snapshot-sha256>
+# tesl:snapshot-source <owned-module> <source-sha256>
+...one source line per owned module, including the root...
+# tesl:snapshot-end
+```
+
+Tokens have one ASCII space between them. ABI bytes use lowercase hexadecimal;
+all SHA-256 digests use 64 lowercase hexadecimal digits. Source lines are sorted
+by their complete module names, with no duplicates, omissions or unowned entries.
+The root names exactly `Schema.Family.VCurrent` (or legacy `FamilySchema.VCurrent`) or a legal frozen revision. Sources
+must resolve to canonical regular files within that revision's ownership closure.
+Writers terminate each line with LF; readers also accept CRLF metadata.
+
+A source digest covers exact file bytes, including comments and line endings. The
+semantic digest uses the canonical Snapshot domain above, so it is insensitive to
+formatting and revision alpha-renaming. A freeze therefore preserves the semantic
+digest while recording the copied files' new byte digests. Source verification
+checks every recorded file, the complete import closure and canonical resolution;
+it does not require executing an older compiler. Semantic verification additionally
+requires the same explicit stored-value contract, applies the complete compiler
+judgment under the actual current compiler and compares the resulting snapshot
+digest. The recorded creator ABI remains unchanged. Legacy format 1 omits the
+compatibility token and uses `tesl:snapshot-seal:v1`; its semantic comparison still
+requires the exact recorded compiler ABI, even when a caller offers a new contract.
+Legacy records are never relabelled as format 2. A compatibility mismatch is distinct
+from edited source. Supplying an old ABI label does not reconstruct old semantics.
+
+These source records are not authenticated database history: editing the metadata
+and source together can change both. The persisted boot/execution checks provide
+the independent backstop. Neither a decoded seal nor verified source bytes grant
+authority to transport persisted proofs across ABIs, run DDL or prune history.
+Mandatory generated histories and runtime integration remain separate
+implementation steps.
+
+A migration history header encloses the predecessor and target snapshot seals in
+that order, using `# tesl:migration-history:v1`, `# tesl:migration-from`,
+`# tesl:migration-to` and the closing `# tesl:migration-history:end` comment lines.
+The header precedes the module declaration; ordinary leading comments are retained.
+Only one history header is allowed. Its roots must equal the Migration record's
+`from` and `to` references and describe adjacent revisions of one family. An edited
+recorded `VCurrent` source reports MIG001, while an edited recorded frozen source
+reports MIG013, including the changed private dependency's location. Malformed or
+incomplete metadata refuses instead of being treated as an absent header. Unsealed
+handwritten declarations still receive logical source checking during this initial
+implementation; an executable history plan must require seals for every edge.
+These integrity checks apply when checking the migration, a recorded schema file,
+or an application importing that schema. Unsaved source buffers participate in the
+same checks. A private-only import still checks the recorded revision root.
+
+**Source edit manifest format 1.**
+A manifest describes source operations, not executable database transitions. Its
+JSON object contains `version: 1`, `projectRoot`, `documents`, `inputs`,
+`directories`, `imports`, and `edits`. Paths are absolute canonical UTF-8 paths under one
+existing project. Each document has `path` and a signed 32-bit `version`. Each input
+has `path`, `sourceHash` and `diskHash`: SHA-256 of the complete source-view and
+saved bytes respectively, or null for absence. Directory entries carry the same
+two hashes over `tesl-directory-v1`, a NUL byte, sorted entry names separated by
+NUL, and a final NUL. An absent directory is null, distinct from an empty one.
+Every input/output parent and each explicit discovery directory is guarded.
+Each import precondition has `source`, `module`, `sourceResolved`, and
+`diskResolved`. It records separate resolution in the source view and on disk;
+each resolved path also gets a file precondition. Import guards are sorted by
+source path and module name. This detects resolution changes such as an existing
+dangling import candidate becoming available without changing the old dependency.
+
+Each edit has `path`, `beforeHex`, `afterHex` and `documentVersion`. Replacement
+bytes use lowercase hexadecimal so arbitrary source bytes survive JSON transport;
+the editor must separately check whether it can represent them. `beforeHex` is the
+source-view preimage, null for a new file. `documentVersion` is null for a closed
+file. Equal replacements are omitted but retain their input guards. File creations
+and replacements target `.tesl` files; duplicate outputs, symlinks, special files
+and file/directory conflicts refuse. Source hashes, saved hashes and document
+versions are separate preconditions: none substitutes for either of the others.
+The manifest identity is SHA-256 of its canonical compact JSON. Input, directory,
+document and edit lists are sorted by path. Manifest construction does not write
+files or establish that proposed programs compile; the generator must check the
+complete proposed source view, and application must recheck the preconditions.
+Independent manifests may be combined only with the same project and document
+versions. Composition preserves the original preconditions, deduplicates equal
+operations, rejects conflicting guards or edits, and checks combined output paths.
+It does not sequence dependent edits or take a new snapshot of changed inputs.
+In particular, application/database selection guards must survive composition
+with a schema-generation manifest.
+
+**Source preview command format 1.** `tesl migrate generate <entry>
+--manifest-json [--database D] [--new-revision]` returns a non-mutating
+`migration-source-preview` envelope. It contains the source manifest, selected
+application/database/family, revisions before and after, actual `compilerAbi`,
+operation (`start` or `refresh`), complete application diagnostics and `compilable`.
+`ok: true` and exit 0 mean a proposal was produced, including proposals with
+unresolved decisions and `compilable: false`. Selection/generation failure gives
+`ok: false`, exit 1, errors with selection candidates and `manifest: null`.
+Generation starts a revision for a new family and otherwise refreshes its current
+revision; `--new-revision` explicitly starts another. It selects the actual schema
+import, refusing a project/history root that would freeze another schema copy.
+`--project-root DIR` selects that canonical root explicitly. Repeated
+`--overlay FILE VERSION CONTENTS_FILE` options require this root and supply
+canonical source paths, signed 32-bit editor versions and exact buffer bytes from
+regular files. Virtual files remain virtual. Source, disk and editor guards remain
+separate. Physical database plans are not part of this API.
+
+**Saved-source application format 1.** The native CLI's plain `tesl migrate
+generate <entry>` consumes the same preview and writes its guarded saved-file
+edits. Its envelope uses `kind: migration-source-application` and adds
+`sourceTransaction` with `outcome`, `manifestHash`, `written`, `restored` and
+`recoveryRequired`. `ok` reports source application success independently of
+`compilable`; decision holes remain compilation errors. Open document versions,
+source/disk differences and stale guards refuse application. Publication uses
+individually atomic file operations and a durable guarded inverse; it is not an
+atomic replacement of the whole project. `tesl migrate recover-source
+--project-root DIR` restores unfinished publication or finishes terminal cleanup,
+returning `kind: migration-source-recovery`. Concurrent user edits are preserved
+and unresolved conflicts retain recovery state. Publication/recovery currently
+require Linux; other platforms refuse before writing. These commands grant no
+database execution authority.
+
+The command obtains a conservative source ABI identity from its build inputs,
+embedded runtime and captured lifted stdlib. It pins resource bytes and module
+resolution for the complete preview check and rejects later resource drift.
+This identity does not establish persisted processing-ABI admission or sound
+transport of stored proofs across compilers.
+
+**Source expansion plan format 1.** `tesl migrate plan <entry> [--database D] [--initial-version N]`
+returns read-only JSON with `kind: migration-plan-preview`, `ok`,
+`executable: false`, the actual `compilerAbi`, `planHash`, selected `database`,
+PostgreSQL `namespace`, `family`, `initialVersion` (default 1), and ordered `steps`
+from that initial installation version. The selected initial version must be a
+canonical decimal integer from 1 through the current source revision (at most
+2147483646). It is the database's first installed revision, not its admission
+floor. Planning still checks the complete source history from V1, then re-derives
+storage from the selected baseline; objects removed before installation and older
+omission-adapter defaults are not inherited. The plan hash binds this assumption.
+Each step carries
+its `version`, semantic/storage `snapshotHash`, `epochPreserving` classification,
+operations and the expected retained physical `catalog` at that revision. Catalog
+columns include their PostgreSQL carrier, nullability, primary-key status and
+installed constant default; catalog indexes retain their allocated physical names.
+Logical drops and removed indexes remain in later projections until contraction.
+Supported operations are `create-table`, `add-column`,
+`build-index-concurrently`, `retain-table` and `retain-index`. Constants preserve
+canonical integer text, float64 bits, booleans and strings. Index operations report
+window restrictions, concurrent-builder or contract requirements. Logical removal
+never releases retained storage names. Complete source/type/proof/history and Go
+codec emission checks precede planning; source/ABI guards are rechecked afterwards.
+The report is not live catalog evidence, an adoption judgment, persisted-proof
+admission, pruning authority or an executable migration. Database execution remains
+under implementation.
+
+**Generated-node ownership format 1.** A generated migration data expression may
+end its line with `# @tesl-gen <id> <fingerprint>`, after any separating comma.
+The identity uses ASCII letters, digits, `_`, `-`, `.`, `:`, or `/`; the fingerprint
+is a lowercase SHA-256 digest. It encodes the location-independent data AST under
+the `migration-generated-node-v1` domain, with the old and new schema roots renamed
+to `@from` and `@to`. Freezing VCurrent therefore preserves the fingerprint.
+This is syntax ownership for refresh, not semantic equality, authenticated history,
+or permission to execute a migration. Type, proof and history checks still apply.
+
+Matching markers and unchanged supported data expressions remain generator-owned.
+Changed expressions, malformed or mismatched markers, unsupported syntax and
+new comments inside the expression are protected as user-owned. Comments outside
+the expression are never overwritten to place a marker. Literal `#` characters
+inside strings are not comments. Annotation is idempotent, preserves commas and
+line endings, and refuses duplicate identities or insertion points. Exact editing
+ranges come from the token stream and a matching reparse of the same source view;
+diagnostic spans must not be used as replacement ranges. An AST object from a
+different view cannot address the source, even if its text is identical.
+
+Refresh reconciles individual direct members of `same` and `entities`, preserving
+all user-owned members and surrounding comments. Generated entity identities use
+the actual record key; changing it to another alias invalidates ownership. An
+obsolete generated member can be removed through its trailing marker, while an
+obsolete user member remains and receives the normal contextual diagnostic.
+Semantically equal generated data retains its original formatting. A Same claim
+is retained only when every eligible namespace sharing its spelling still checks;
+refresh does not restore deliberately omitted Same claims.
+
+The initial source refresh API handles New, Drop and proven additive adapters.
+Other entity decisions use `todo "reason"` in contextual entity data. Each such
+hole emits MIG003 and blocks compilation, including through imports and Go
+emission. A hole does not establish a value or proof. General row-function holes
+and transformations are not yet elaborated. Refresh returns full proposed-view
+diagnostics alongside its source manifest, so a preview containing holes is
+explicitly an incomplete program. It verifies frozen source and compatible semantic
+seals before replacing the undeployed current target; it cannot infer deployment
+state or authorize rewriting persisted history.
+
+Completing a source revision also seals the migration’s exact root and transitive
+private migration helper bytes. The root excludes only its own closure metadata
+block, so its schema seals, comments and tests remain covered. Completed
+declarations require both schema and migration closure seals. Verification checks
+canonical paths, exact source and import closure membership; changed helpers and
+missing seals emit MIG013 in direct queries and application builds. Starting or
+refreshing later revisions cannot rewrite these inputs. An unchanged frozen
+helper may be shared. These source records do not replace persisted history or
+prove execution compatibility across compiler ABIs.
+
+The field-impact projection has one location per declared entity field, including
+private entities in child modules. It uses the same typed lowering as the complete
+declaration. Each contract wraps `["stored-field", field-node, dependency-closure]`
+with the explicit stored-value semantics identity above, or the legacy compiler ABI
+when no compatibility contract was supplied.
+In this standalone field node, proof subjects referring to entity fields use
+`["field-subject", field-name]`; adding or reordering a sibling must not rename an
+existing proof subject by shifting its positional index. The complete declaration
+encoding above is unchanged. The location identity is
+`["stored-location", schema-entity-reference, field-name]`, with the same revision
+alpha-renaming as snapshots.
+
+Comparison reports added and removed locations, changed field definitions, and
+changed dependencies under unchanged field text. A record codec, nested ADT, or
+fact producer can therefore affect several entity fields while all their SQL types
+remain `jsonb`. An unreferenced record or codec has no stored location. Comparison
+refuses different schema families or compatibility contracts; legacy comparisons
+require the same compiler ABI. The ABI supplied to the loader
+identifies the compiler performing that load; it cannot request historical
+execution semantics. This field projection neither checks persisted history nor
+establishes rolling compatibility, physical catalog equivalence, a verified `Same`
+bridge, or permission to remove a decoder. Those remain planner/runtime duties.
+
+The entity-impact projection compares each declared entity's complete closure,
+including its table name, primary key and indexes. A change to one of these
+mappings must appear even when every field contract stays identical. Private
+entities participate; equal short names in different child modules remain distinct.
+Comparison folds out equal entities and distinguishes a changed entity declaration
+from a changed dependency under an unchanged declaration. Moving an entity to a
+different owning module is a removal and an addition, not an inferred rename.
+
+The inventory's internal `Same` verifier accepts only owned newtype, ADT, record,
+fact and codec declarations of the same kind in the same family and explicit
+compatibility contract (or the same compiler ABI for legacy inventories).
+It compares complete canonical trees, rather than trusting supplied hashes. An
+unequal pair reports the first differing dependency in canonical reference order,
+with the old and new declaration locations; added and removed dependencies are
+reported separately. The generator's candidate list includes private equal pairs
+and excludes entities, functions, constructor aliases and unmatched nominal names.
+Candidates do not override a developer's decision to omit a `Same` entry.
+
+**Contextual additive source declarations.** A canonical `Schema.Family.Migrate.V<n>` (or legacy `FamilySchema.Migrate.V<n>`)
+root contains exactly one `migration = Migration { ... }` declaration. Standalone
+pure functions and tests may live in helper modules of the same family. The initial
+`Tesl.Migration` vocabulary exposes `Migration`, `Entity(..)` (`Additive`, `New`,
+`Drop`), `Rule(..)` (`Default`), and `Same(..)`. These are contextual declarations,
+not runtime types or values. Their constants are absent from the ordinary value
+environment and are erased, including their runtime exports, before emission.
+
+`from`, `to`, `same`, and `entities` are required literal fields; `fixtures` may be
+absent or an empty list in this initial checker. Both schema roots must be imported
+directly. The complete checked saved schema chain determines adjacency and the
+target module's version; an unsaved migration buffer supplies its own declaration
+body. Entity keys may use uppercase or qualified owning names inside this folded
+record. Rule field references accept the entity's legal field names, including
+otherwise contextual spellings such as `select` and `ok`.
+
+`Same Old.Payload New.Payload` checks **every eligible namespace with that spelling**
+on both sides. For a record with a same-named codec, it verifies both declarations
+independently. This does not imply identities for differently named dependencies:
+contained facts and types still need their own claims. A changed codec therefore
+cannot hide behind the record's unchanged structure.
+
+This source judgment connects the sparse and additive checks below. It does not
+establish frozen seals, the persisted compiler execution ABI, physical plans,
+admission, transformations, or execution. Nonempty compatibility fixtures and
+transformation constructors still require their separate contextual judgments.
+
+**Internal sparse migration coverage.** Before checking a row function or deriving a
+single adapter, the coverage pass checks the record's coverage against both complete
+inventories. Entity identity is the owning module path relative to the schema
+revision plus the entity name. A short name is accepted only when it selects one
+identity in the union; an ambiguous short name must be qualified. A move to a
+different owning module is still an addition and removal, even if its table name
+is unchanged.
+
+A supplied identity pair is reverified against the actual inventories being
+compared. Duplicate pairs are errors, not additional evidence. For every stored
+field present in both revisions, the checker traverses its complete old and new
+semantic dependencies. Each matching type, fact and codec needs its own supplied
+identity pair. In particular, `Same` for an enclosing record does not imply a
+missing `Same` for a contained fact, and the first field that mentions a shared
+record does not discharge that record's other stored occurrences. Primitive types
+need no user identity pair. A dependency that exists only on one side is already
+a semantic field change; a declaration unreferenced by storage creates no stored
+obligation.
+
+An entity may be absent from the sparse record iff its complete entity contracts
+are equal **and** it has no missing stored identity pairs. Added entities require
+`New`, removed entities require `Drop`, and paired entities require a modification
+entry. An entry for an equal entity with no missing identity pairs is redundant.
+A missing stored identity pair forbids `Additive` even when the canonical closures
+are equal: the omission deliberately requests revalidation. These rules check
+coverage only. They do not validate a row function, derive a column adapter,
+classify index safety, authorize DDL or introduce cross-version proof casts.
+
+**Internal single-adapter row projection.** After sparse coverage, the additive row
+checker consumes that exact pair of inventories and its normalized entries. It
+cannot combine a coverage result with unrelated or subsequently loaded schemas.
+Every old field must remain, with an equal complete field contract; table and
+primary-key identity stay fixed. Every new field needs one value source. A
+proof-free field whose resolved outer type is the primitive `Maybe` receives
+`Nothing`. A new proof-free primitive `Int`, `Float`, `Bool` or `String` field may
+receive a same-typed literal through `Default`. Defaults cannot target existing or
+nullable fields, have conflicting duplicate targets, or compute a value. A new
+field with a proof, a nominal constructor, or another type requires further rule
+elaboration; this initial projection does not silently erase its type or proof.
+
+This projection supplies values for old rows and writers. It does not alter the
+ordinary complete-record construction rule: a current entity literal must supply
+new fields explicitly, including `Nothing` for a new optional field.
+
+The projection returns logical row value sources, not SQL or a compatibility
+certificate. Index changes are retained as a separate obligation, including when
+no field changed. PostgreSQL default assignment, physical column sets, all-version
+index safety, admission and execution remain subsequent planner checks. A valid
+logical literal alone does not prove that an existing SQL default or cast is safe.
+
+This internal equality evidence is abstract and compiler-local. It does not grant
+a type cast or prove that a persisted value was produced under this ABI. The
+contextual migration checker must additionally establish the adjacent revisions,
+the source-history identities and recorded execution semantics before introducing
+cross-version type identity. The general fact-ownership check applies to every
+argument of `Fact (P ...)` and `Maybe (Fact (P ...))`: application or migration
+modules cannot acquire a schema fact's minting authority by importing it, even
+when its predicate has several arguments. Qualified compiler AST references obey
+the same declaring-module restriction.
 
 Type-like declarations are module-scoped. If two modules both define a name such as `User`, `Task`, or `Status`, those declarations remain distinct even when they share the same surface spelling. Loading one module must not change the meaning of an unqualified type name in another module.
 
@@ -1078,7 +1608,20 @@ A `queue` is a **folded record** assigned with `=`. It pairs each job type with 
 
 A `queue` declaration creates a background job queue backed by the named `database`. Each `Job <JobType> <workerFn> (<dead-slot>)` entry folds a `record` type together with its normal worker function and an optional dead-letter worker (`(Something deadFn)` or `(Nothing)`).
 
-> **Durability (2026-09-02).** On a Postgres-backed database a `queue` is durable and shared: jobs are rows in `<schema>.tesl_jobs`, claimed with `FOR UPDATE SKIP LOCKED`, so any number of server instances work one queue; `enqueue` runs on the surrounding transaction; a failed job's `next_attempt_at` follows the declared `backoff`; a job whose instance died mid-run is reclaimed after the visibility timeout (`TESL_QUEUE_VISIBILITY_TIMEOUT_MS`, default 10 min). A stale normal claim returns to `pending`; a stale dead-letter claim returns to `dead`. The same holds for the `email` outbox (`tesl_email_outbox`), the `cache` (`tesl_cache`, `UNLOGGED`) and SSE pub/sub (`tesl_pubsub_outbox` + `LISTEN`/`NOTIFY` fan-out to every instance). The serial email worker claims one message immediately before each SMTP delivery, so queued messages do not consume their claim window waiting behind earlier deliveries. On a Memory-backed database all four stay in the process's memory: that is the development and test store. Workers are woken by `NOTIFY tesl_queue` from any instance over one shared LISTEN connection per process, with a 5 s fallback poll; the stale-claim sweep runs once a minute per process.
+> **Durability (2026-09-02).** On a Postgres-backed database a `queue` is durable and shared: jobs are rows in `<schema>.tesl_jobs`, claimed with `FOR UPDATE SKIP LOCKED`, so any number of server instances work one queue; `enqueue` runs on the surrounding transaction; a failed job's `next_attempt_at` follows the declared `backoff`; a job whose instance died mid-run is reclaimed after its stored lease expires (`TESL_QUEUE_VISIBILITY_TIMEOUT_MS` sets the lease length, default 10 min). A stale normal claim returns to `pending`; a stale dead-letter claim returns to `dead`. The same holds for the `email` outbox (`tesl_email_outbox`), the `cache` (`tesl_cache`, `UNLOGGED`) and SSE pub/sub (`tesl_pubsub_outbox` + `LISTEN`/`NOTIFY` fan-out to every instance). The serial email worker claims one message immediately before each SMTP delivery, so queued messages do not consume their claim window waiting behind earlier deliveries. On a Memory-backed database all four stay in the process's memory: that is the development and test store. Workers are woken by `NOTIFY tesl_queue` from any instance over one shared LISTEN connection per process, with a 5 s fallback poll; the stale-claim sweep runs once a minute per process.
+
+Queue claims carry a monotone per-row `claim_seq`, an opaque attempt token, and a
+database-clock `lease_until`. Pending and dead-letter handlers renew their claim
+every third of its lease length. Renewal, completion and retry compare the current
+attempt and require an unexpired lease outside the transaction that created the
+claim; an expired attempt cannot revive itself,
+delete another attempt's row or change its retry state. Renewal stops on ownership
+loss or a database error, and is cancelled and joined when the handler returns or
+traps. Claims processed inside their original explicit transaction already hold
+the row lock and may finish there after their timestamp expires; they do not start
+renewal on another connection. A later transaction cannot use this exception.
+External handler effects remain
+at-least-once: fencing queue state does not undo an HTTP call from an expired attempt.
 
 `retry` configures how failed worker jobs are retried. `maxAttempts: 1` (the default) means no retries. With `backoff: Exponential` and `initialDelay: N` the delay between retries doubles: N, 2N, 4N, … seconds. With `backoff: Fixed` the delay is always `initialDelay`.
 
@@ -1841,10 +2384,9 @@ This design is theoretically sound because:
 - The ghost witness pattern (GDP) shifts all fallibility to proof *acquisition* — the construction function itself is total.
 - HTTP boundaries are validated by the codec; application-internal construction is validated by requiring a pre-acquired proof as a ghost witness.
 
-**Explicit HTTP wire adapters.** An endpoint may name a different wire type with `body req: Domain from Wire via decodeWire` and `response Wire via encodeWire`. These adapters are part of the static boundary contract, not an escape hatch. The compiler requires:
-- `decodeWire` to be a declared Tesl function with exactly one raw `Wire` argument and a `Domain` return; if the endpoint body declares a proof, `decodeWire` must establish that proof itself unless the endpoint uses `body ... via (...)` to establish it at the boundary.
-- `encodeWire` to be a declared Tesl function with exactly one raw handler-result argument and a `Wire` return.
-- `Wire` to have the appropriate visible codec (`fromJson` for request bodies, `toJson` for responses), because `Wire` is still the type that crosses the HTTP boundary.
+**HTTP body proofs.** The runtime decodes the endpoint's declared body type. A record or ADT codec may establish its declared field proofs through validated decoder checks. The endpoint cannot establish a proof merely by annotating the entire incoming body: top-level body proof annotations and standalone `body ... via ...` clauses are rejected. For scalar or list input, perform the required check in the handler, then use the checked value. Validated capture and auth clauses retain their own producer checks.
+
+**Separate HTTP wire adapters are not implemented by the Go backend.** The forms `body req: Domain from Wire via decodeWire` and `response Wire via encodeWire` do not describe an executed request/response conversion. Do not use them to establish a boundary guarantee. Declare the actual decoded request and encoded response types, supply their codecs where required, and perform domain conversions through ordinary checked function calls in the handler.
 
 **`adtJson` shorthand for ADT types.** When a codec is needed solely to declare the standard `{"tag": "ConstructorName"}` JSON encoding for an ADT, use the `adtJson` shorthand:
 
@@ -1880,6 +2422,12 @@ The compiler enforces that:
 
 ### 11.8 Entities
 **Accepted design, Implemented but still evolving.**
+
+Table names must be nonempty, contain no NUL, and fit PostgreSQL's 63-byte
+identifier limit. Field names map to snake-case column names, preserving acronym
+groups (`userID` becomes `user_id`). The compiler rejects two fields that map to
+one column, or a mapped column name longer than 63 bytes. PostgreSQL's silent
+identifier truncation must never merge distinct declared storage identities.
 
 ```text
 <entity-decl> ::= "entity" <identifier>
@@ -1955,7 +2503,19 @@ In queries, `Maybe` fields require a `case` expression or the `isAssignedTo` / h
 | newtype over `Int` (e.g. `newtype Counter = Int`) | `NUMERIC` (same as bare `Int`) | NOT NULL |
 | newtype over another built-in (e.g. `newtype UserId = String`) | column type of the base | NOT NULL |
 | Any ADT | `JSONB` | NOT NULL |
+| Record with an explicit bidirectional codec | `JSONB` | NOT NULL |
 | `Maybe T` | column type of `T` (e.g. `Maybe Int` → `NUMERIC`, `Maybe <ADT>` → `JSONB`) | NULL |
+
+**Record JSONB columns.** A stored record requires an explicit codec with both
+`toJson` and `fromJson`, including when an explicit `@db(jsonb)` annotation is
+present. Its encoder determines stored keys and its checked decoder runs ordered
+alternatives and proof checks on every read. Records nested inside ADT columns
+use the same record codec. Codec resolution follows the record's declaring module,
+including private and transitively imported field types; an unrelated same-named
+record cannot supply its codec. SQL `NULL` in a `Maybe Record` column is `Nothing`;
+JSON `null` reaches the decoder and is rejected for a record. No read rewrites the
+stored JSON. Migration history, coordinated rewrites and evidence-backed removal
+of old decoders remain under development.
 
 > **Maybe columns compare as values (2026-09-02).** `p.field == x` and `p.field != x` on a `Maybe` column are emitted as `IS NOT DISTINCT FROM` / `IS DISTINCT FROM`, so `Nothing == Nothing` is true and `Nothing == Something v` is false on PostgreSQL exactly as on the Memory store. A query's row binder may not shadow a name already in scope (a parameter, a local or a function); the compiler refuses it, because the two backends would otherwise read the two names differently. Two module names that fold to one Go package name (`FooBar`, `Foobar`, `Foo_bar`) are refused for the same reason: one module's code would silently replace the other's.
 >
@@ -1982,6 +2542,14 @@ A `database` declaration is a folded record assigned with `=`:
                          "user"       ":" <expr>
                          "password"   ":" <expr>
                          [ "poolSize"  ":" <expr> ]
+                         [ "namespace" ":" <string-literal> ]
+                         [ "migrations" ":" "MigrationConfig" "{"
+                             [ "topology" ":" ("Worker" | "Embedded") ]
+                             [ "controlOwner" ":" <expr> ]
+                             [ "requestRole" ":" <expr> ]
+                             [ "workerRole" ":" <expr> ]
+                             [ "ddlConnection" ":" <expr> ]
+                           "}" ]
                          "connection" ":" <connection>
                        "}" ")"
                      | "Memory"
@@ -2009,6 +2577,96 @@ database MyDatabase = Database {
 The `backend` is either `Postgres (PostgresConfig { ... })` or `Memory`. The `port` in a `TcpConnection` carries a port-validity obligation: a literal must be in `1..65535` (or use `envInt "VAR" default`), otherwise it is a compile-time error.
 
 The optional `poolSize` is the connection-pool size: the maximum number of simultaneously open PostgreSQL connections (default 10). It is an `Int` field, so a literal or `envInt "VAR" default` both work — e.g. `poolSize: envInt "PG_POOL_SIZE" 20`. When every pooled connection is busy, a request waits (bounded, 10s by default, `TESL_PG_POOL_LEASE_TIMEOUT_MS` overrides) for a freed connection instead of failing immediately; if the wait times out the HTTP layer answers `503 Service Unavailable`.
+
+#### Schema module references
+**Ownership elaboration implemented; migration lifecycle in progress.**
+
+The versioned form selects ownership through a schema module:
+
+```tesl
+import NotesSchema.VCurrent exposing [Note]
+
+database NoteDatabase = Database {
+  schema: NotesSchema.VCurrent
+  migrations: NotesSchema.Migrate
+  backend: Postgres (PostgresConfig {
+    namespace: "notes_app"
+    dbName: env "POSTGRES_DB"
+    user: env "POSTGRES_USER"
+    password: env "POSTGRES_PASSWORD"
+    connection: TcpConnection { host: "localhost", port: 5432 }
+  })
+}
+```
+
+`ModuleRef` is a contextual elaboration category, not a value type or constructor.
+In `Database.schema`, a nullary qualified name is a module reference exactly when
+it names a directly imported `Schema.Family.VCurrent` root (or legacy `FamilySchema.VCurrent`). The import may expose
+no declarations. A frozen `V<n>`, child module, string, function result, local
+constructor or local variable cannot stand in for that root in the versioned form.
+In `Database.migrations`, the name must be that same family's `Schema.Family.Migrate` (or legacy `FamilySchema.Migrate`)
+prefix. It denotes the conventional migration directory, not an ordinary module
+import; an empty history need not already have a directory. Neither reference
+introduces a runtime expression or makes a private declaration visible to application
+code. Ordinary expression and type positions retain their existing name-resolution
+rules and cannot use a module as a value.
+
+Let `closure(S)` be the finite local import graph reachable from schema root `S`,
+including `S`. Its non-stdlib members must belong to `S` or its children and satisfy
+the schema-content boundary. Then `members(S)` is every entity declared in that
+closure, keyed by its declaring module and entity name, independently of exports.
+Cycles and repeated imports contribute an entity once. Two distinct members cannot
+name the same physical table. `Database { schema: S, migrations: M, backend: B }`
+owns exactly `members(S)`; supplying `entities:` as well is an error. A module root
+with no entities is valid. Ownership is checked over the whole application graph,
+so another database cannot own any part of the same family.
+
+Connection configuration remains in the application. `PostgresConfig.namespace`
+is the physical PostgreSQL schema name, required as a nonempty static string for
+the module-reference form. It is independent of the Tesl module and database
+declaration names; the compiler does not guess a physical namespace from either.
+Memory has no physical namespace. During source transition the existing string
+`Database.schema` plus explicit `entities:` form retains its meaning and cannot
+also specify `Database.migrations`, `PostgresConfig.namespace`, or
+`PostgresConfig.migrations` (including an empty `MigrationConfig {}`).
+The optional `PostgresConfig.migrations` field takes the typed configuration
+record `MigrationConfig` from `Tesl.Database`. It groups execution topology,
+control ownership, request/worker roles and the executor's connection override.
+`Database.migrations` separately names the source history. Import `MigrationConfig`
+explicitly or import all of `Tesl.Database`; all its fields are optional.
+The earlier flat spellings of those five settings remain readable for existing
+application fixtures, but may not be mixed with the grouped record. Editor
+completion and generated documentation offer the grouped form. Duplicate fields
+are errors.
+
+The optional `MigrationConfig.controlOwner` is a string or `env` expression
+naming the no-login role that owns migration control objects (default `tesl_control`).
+It is application configuration, independent of the schema's source history. The
+operator provisions it and installs the protected control interface; application
+startup does not create roles or adopt existing tables.
+
+`MigrationConfig.topology` selects `Worker` or `Embedded`, literal config-only
+constructors of `Tesl.Database.MigrationTopology`. Import the selected constructor
+or `MigrationTopology(..)`; neither constructor is an ordinary runtime value.
+An omitted topology selects Worker when `TESL_DEPLOYED` is present and Embedded
+otherwise. Embedded uses one combined request/executor login. Worker separates
+the `requestRole` (default `tesl_app`) from the entity-owning `workerRole` (default
+`tesl_schema`); these role fields require Worker at runtime. Both are strings or
+environment expressions, independent of the actual process login in `user`.
+`ddlConnection` is an optional string/environment DSN used by Embedded expansion
+and the compiled `--schema worker` and `--schema install` commands. It must be
+direct or session-affine; when omitted those operations use that process's normal
+connection. The installer supplies its own short-lived credentials, including in
+`ddlConnection` when configured. Worker request startup never uses that DSN and
+performs no DDL; it verifies committed storage through read-only snapshots before
+publishing its request pool. These connection and deployment settings are not
+stored schema declarations or authority to reinterpret frozen history.
+
+Elaboration produces an ownership binding and connection description separately
+from ordinary source visibility. Generated table metadata may name private schema
+entities, but that does not import their constructors or helpers into application
+scope. Version history, migration execution and readiness are additional phase-1
+checks; accepting an ownership binding alone does not establish them.
 
 ### 11.10 Capture declarations
 **Accepted design, Implemented.**
@@ -2047,14 +2705,12 @@ This creates a reusable capture kind that can later be referenced from API decla
 
 <api-endpoint-line> ::= <auth-line>
                       | <body-line>
-                      | <response-line>
                       | <capture-line>
                       | <return-line>
 
 <auth-line> ::= "auth" <binding> "via" <identifier>
 <capture-line> ::= "capture" <binding> "via" <identifier>
-<body-line> ::= "body" <binding> [ "from" <gdp-expr> "via" <identifier> ]
-<response-line> ::= "response" <gdp-expr> [ "via" <identifier> ]
+<body-line> ::= "body" <binding>
 <return-line> ::= "->" <return-spec>
 ```
 
@@ -2549,7 +3205,7 @@ There are two distinct `ok` forms, and they serve different purposes:
 
 - **`ok val ::: proof`** — canonical for `check` and `auth` functions. Produces a `check-ok` carrying the value, plus the proof fact(s) from `proof`. The `let x = check f(n)` form binds `x` as a named-value with the proof attached and the raw value preserved as the subject.
 
-- **Direct proof constructor** — the idiomatic form for `establish` functions. Return the proof predicate directly as a value, e.g. `IsPositive n` or `PriceExceedsQuantity price quantity`. An `establish` function must return `Fact (P args)` or `Maybe (Fact (P args))`. The body returns the proof constructor application directly:
+- **Direct proof constructor** — an `establish` returning `Fact (P args)` or `Maybe (Fact (P args))` constructs the detached proof directly, e.g. `IsPositive n` or `PriceExceedsQuantity price quantity`:
 
 ```tesl
 establish provePositive(n: Int) -> Fact (IsPositive n) =
@@ -2562,7 +3218,22 @@ establish validatePort(p: Int) -> Maybe (Fact (ValidPort p)) =
     Nothing
 ```
 
-**`establish` is total.** Unlike `check` functions, `establish` functions cannot use `fail` — they must always return a value. If the proof cannot be established, return `Nothing` (for `Maybe (Fact P)` return types). An `establish` body that uses `fail` is a compile-time error.
+An `establish` may instead return `Maybe (value: T ::: P value)`. Its success
+payload retains the ordinary value while its evidence erases. Every returning
+`Something` must carry all declared predicates on that payload; `Nothing` carries
+no obligation. A bare attachment (`n ::: P n`) may mint at this trusted boundary;
+HTTP-shaped `ok` syntax remains forbidden. Returning an unproven payload, evidence
+about another subject, or only one part of a conjunction is a compile error.
+
+```tesl
+establish tryPositive(n: Int) -> Maybe (value: Int ::: IsPositive value) =
+  if n > 0 then
+    Something (n ::: IsPositive n)
+  else
+    Nothing
+```
+
+**`establish` is total.** Unlike `check` functions, `establish` functions cannot use `fail` — they must always return a value. If the proof cannot be established, return `Nothing` for either optional return form. An `establish` body that uses `fail` is a compile-time error.
 
 Both `ok val ::: proof` and direct proof constructors work naturally with the proof system. However, they are **not interchangeable in general**:
 

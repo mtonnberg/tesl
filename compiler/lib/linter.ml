@@ -447,6 +447,9 @@ let lint_lambda_in_arg_position (file : string) (lines : string array) (out : li
 let rec collect_expr_names acc (e : Ast.expr) =
   match e with
   | EVar { name; _ } -> name :: acc
+  | ESqlQuery { query = QueryInsertMany (rows, entity); _ } ->
+    (* Bulk insertion stores these references as names, not child expressions. *)
+    rows :: entity :: acc
   | EField { obj; field; _ } ->
     let acc = collect_expr_names acc obj in
     (* Qualified name: Module.field *)
@@ -731,6 +734,7 @@ let collect_decl_names acc (d : Ast.top_decl) =
   | DWorkers wf ->
     let acc = wf.queue_name :: acc in
     List.fold_left (fun a (_, fn) -> fn :: a) acc wf.bindings
+  | DQueueSchema q -> List.map fst q.jobs @ acc
   | DCapability cf ->
     List.fold_left collect_capability_name acc cf.implies
 
@@ -2014,5 +2018,5 @@ let lint_file ?logical_path (filename : string) : Compile.diagnostic list =
     message            = d.message;
     fix                = d.fix;
     source             = "lint";
-    manual             = None;
+    metadata = None; manual = None;
   }) sorted

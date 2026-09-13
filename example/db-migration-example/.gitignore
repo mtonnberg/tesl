@@ -1,0 +1,4 @@
+.local/
+.local-schema-todo/
+frontend/elm-stuff/
+frontend/main.js

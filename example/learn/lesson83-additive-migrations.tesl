@@ -1,0 +1,254 @@
+module Lesson83AdditiveMigrations exposing [
+  NoteDatabase,
+  NotesServer,
+  saveTitle,
+  findTitle,
+]
+
+# lesson: track=data order=850 needs=lesson82-database-migrations
+# summary: Add a nullable column while the complete notes API keeps serving the same contract
+# Lesson 83 — An additive migration in a full app
+#
+# First run the ordinary unit and API tests:
+#
+#   tesl test example/learn/lesson83-additive-migrations.tesl
+#
+# Then run the complete PostgreSQL scenario from a repository development shell:
+#
+#   bash scripts/run-migration-tests.sh -run '^TestCompiledAdditiveLessonRetainsRows$'
+#
+# That regression creates a disposable PostgreSQL cluster and installs its control
+# objects through the compiled installer command with a temporary operator identity.
+# It compiles this exact app, writes a note over
+# HTTP, generates V2 in a temporary project, adds a nullable category, and starts
+# the new binary against the SAME database. It checks the retained note, new writes,
+# both running versions, and an old-binary restart. Your own database is untouched.
+# The wider deployment workflow, including adoption and typed transforms, is pending.
+# The companion lesson83-additive-migrations.md explains a compiler upgrade against
+# this same app and provides the retained-database A/B/C compiler regression command.
+#
+# For a fresh deployment, the operator provisions the control-owner and worker roles,
+# gives a temporary installer login membership in the control owner, and runs:
+#
+#   NOTES_DB_USER=notes_setup ./app --schema install --worker notes_worker
+#
+# The operator then revokes that membership and launches with NOTES_DB_USER=notes_worker.
+# The installer creates protected history; application boot creates entity storage.
+# To observe progress without starting the HTTP server or applying a migration:
+#
+#   ./app --schema status --json
+#
+# This uses the same connection settings as the app. Status is an observation;
+# each actual database operation still checks whether this binary is admitted.
+#
+# The three source files have different jobs:
+#
+#   lesson83-additive-migrations.tesl        connection, queries, HTTP API and tests
+#   schema/additive-notes/v-current.tesl    membership of the stored schema
+#   schema/additive-notes/v-current/notes.tesl   entity, validation and construction
+#
+# The application imports VCurrent, so it needs no new versioned imports. Its
+# request/reply records describe the API; Note describes stored data. A new storage
+# field need not become a new HTTP field.
+#
+# To make V2 in your own copy, generate the next revision, add
+# `category: Maybe String` to Note, and add `category: Nothing` to newNote's record.
+# Then refresh the generated migration and inspect the plan:
+#
+#   tesl migrate generate lesson83-additive-migrations.tesl --new-revision
+#   # Edit schema/additive-notes/v-current/notes.tesl as described above.
+#   tesl migrate generate lesson83-additive-migrations.tesl
+#   tesl migrate plan lesson83-additive-migrations.tesl
+#
+# The generated entry is Additive []: existing rows get SQL NULL. It retains a Same
+# claim for ValidTitle because that proof's meaning did not change. No row transform
+# or codec adapter is needed. PostgreSQL startup applies the checked column change
+# before the new app serves. An old binary's insert omits category, which is nullable,
+# so the old binary still writes valid rows after the change.
+#
+# newNote is a pure constructor in the schema. Both versions must construct a
+# COMPLETE current Note. V2's constructor supplies Nothing; SQL NULL supplies the
+# missing value for existing rows and old writers. Those are two separate duties.
+# The handler calls the same constructor through saveTitle in both versions.
+# The regression asserts this entire application file stays byte-identical: the
+# connection, queries, handlers, routes, codecs, unit tests and API tests all stay.
+#
+# This does not mean every migration can leave every handler untouched. If your app
+# must calculate and maintain a new value from a request, that behavior belongs in
+# application code and needs an application change. Here category has no API behavior.
+#
+# Runtime connection settings below belong to the APPLICATION, never its schema.
+# A normally launched app uses an operator-provisioned worker and installed control
+# objects. The isolated regression supplies these settings and runs real startup.
+
+import Tesl.Prelude exposing [Bool(..), String]
+import Tesl.String exposing [String.repeat]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.DB exposing [dbRead, dbWrite]
+import Tesl.Database exposing [
+  Database,
+  Postgres,
+  PostgresConfig, MigrationConfig,
+  TcpConnection,
+  MigrationTopology(..),
+]
+import Tesl.Env exposing [envRead, envInt]
+import Tesl.App exposing [App]
+import Tesl.ApiTest exposing [statusOk]
+import Tesl.Json exposing [stringCodec]
+import AdditiveNotesSchema.VCurrent exposing []
+import AdditiveNotesSchema.VCurrent.Notes exposing [Note, tryTitle, newNote]
+
+database NoteDatabase = Database {
+  schema: AdditiveNotesSchema.VCurrent
+  migrations: AdditiveNotesSchema.Migrate
+  backend: Postgres (PostgresConfig {
+    namespace: "additive_notes"
+    migrations: MigrationConfig {
+      controlOwner: env "NOTES_CONTROL_OWNER"
+      topology: Embedded
+    }
+    dbName: env "NOTES_DB_NAME"
+    user: env "NOTES_DB_USER"
+    password: env "NOTES_DB_PASSWORD"
+    connection: TcpConnection { host: env "NOTES_DB_HOST", port: envInt "NOTES_DB_PORT" 5432 }
+  })
+}
+
+# Schema construction establishes the current row shape; this function owns the write.
+fn saveTitle(id: String, raw: String) -> Bool requires [dbWrite Note] =
+  case tryTitle raw of
+    Nothing -> False
+    Something title ->
+      let notes = [newNote id title]
+      let _ = insertMany notes in Note
+      True
+
+fn findTitle(id: String) -> Maybe String requires [dbRead Note] =
+  case selectOne note from Note where note.id == id of
+    Nothing -> Nothing
+    Something note -> Something note.title
+
+record NewNote {
+  title: String
+}
+
+codec NewNote {
+  toJson_forbidden
+  fromJson [
+    {
+      title <- "title" with_codec stringCodec
+    }
+  ]
+}
+
+record NoteReply {
+  id: String
+  title: String
+}
+
+codec NoteReply {
+  toJson {
+    id -> "id" with_codec stringCodec
+    title -> "title" with_codec stringCodec
+  }
+  fromJson_forbidden
+}
+
+capturer noteIdCapture: id: String using stringCodec
+
+handler post createNote(id: String, body: NewNote) -> NoteReply
+  requires [dbRead Note, dbWrite Note] =
+  if saveTitle id body.title then
+    case findTitle id of
+      Nothing -> fail 404 "note not found"
+      Something title -> NoteReply { id: id, title: title }
+  else
+    fail 400 "title must be 1-80 characters after trimming"
+
+handler get getNote(id: String) -> NoteReply requires [dbRead Note] =
+  case findTitle id of
+    Nothing -> fail 404 "note not found"
+    Something title -> NoteReply { id: id, title: title }
+
+api NotesApi {
+  post "/notes/:id"
+    capture id: String via noteIdCapture
+    body body: NewNote
+    -> NoteReply
+
+  get "/notes/:id"
+    capture id: String via noteIdCapture
+    -> NoteReply
+}
+
+server NotesServer for NotesApi {
+  createNote
+  getNote
+  listenAddress Loopback
+}
+
+main() -> App requires [dbRead Note, dbWrite Note, envRead] =
+  App {
+    database: NoteDatabase
+    api: NotesServer
+    port: envInt "NOTES_HTTP_PORT" 8083
+  }
+
+api-test "the full app creates and retrieves a normalized note" for NotesServer requires [dbRead Note, dbWrite Note] {
+  let created = post "/notes/first" body { "title": "  First note  " }
+  expect statusOk created.status
+  expect created.body == { "id": "first", "title": "First note" }
+  let fetched = get "/notes/first"
+  expect fetched.status == 200
+  expect fetched.body == created.body
+}
+
+api-test "invalid input fails without creating a note" for NotesServer requires [dbRead Note, dbWrite Note] {
+  let rejected = post "/notes/invalid" body { "title": "   " }
+  expect rejected.status == 400
+  let missing = get "/notes/invalid"
+  expect missing.status == 404
+}
+
+api-test "a malformed request never reaches storage" for NotesServer requires [dbRead Note, dbWrite Note] {
+  let rejected = post "/notes/malformed" body { "title": 42 }
+  expect rejected.status == 400
+  let missing = get "/notes/malformed"
+  expect missing.status == 404
+}
+
+api-test "a new test starts with an empty database" for NotesServer requires [dbRead Note] {
+  let missing = get "/notes/first"
+  expect missing.status == 404
+}
+
+test "schema-owned validation trims a title before storing it" requires [dbRead Note, dbWrite Note] {
+  expect saveTitle "first" "  a schema has one owner  " == True
+  expect findTitle "first" == Something "a schema has one owner"
+}
+
+test "an invalid title does not insert a row" requires [dbRead Note, dbWrite Note] {
+  expect saveTitle "empty" "" == False
+  expect saveTitle "spaces" "   " == False
+  expect findTitle "empty" == Nothing
+  expect findTitle "spaces" == Nothing
+}
+
+test "the private schema helper defines the accepted title boundary" requires [dbRead Note, dbWrite Note] {
+  let limit = String.repeat "x" 80
+  let overLimit = String.repeat "x" 81
+  expect saveTitle "limit" limit == True
+  expect findTitle "limit" == Something limit
+  expect saveTitle "too-long" overLimit == False
+  expect findTitle "too-long" == Nothing
+}
+
+test "validation and storage preserve Unicode titles" requires [dbRead Note, dbWrite Note] {
+  expect saveTitle "unicode" "  Ändra schemat  " == True
+  expect findTitle "unicode" == Something "Ändra schemat"
+}
+
+test "a missing row stays missing" requires [dbRead Note] {
+  expect findTitle "never-written" == Nothing
+}

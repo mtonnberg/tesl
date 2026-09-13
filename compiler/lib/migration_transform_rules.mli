@@ -1,0 +1,38 @@
+(** Logical field mapping for transforming entries over the exact inventory pair
+    bound by sparse coverage. This judgment does not type or execute a row function,
+    assign generations, authorize proof transport, or produce an executable plan. *)
+type rule =
+  | Rename of { previous : string; current : string; loc : Location.loc }
+  | Retype of { field : string; loc : Location.loc }
+  | WriteBack of { previous : string; current : string; function_ref : Ast.expr; loc : Location.loc }
+  | Legacy of { field : string; value : Migration_additive.literal; loc : Location.loc }
+  | LegacyWith of { field : string; function_ref : Ast.expr; loc : Location.loc }
+  | Default of Migration_additive.default
+type mode = Derived | Migrate
+type entry = { entity : string; mode : mode; rules : rule list; loc : Location.loc }
+type value_source =
+  | Copy of { previous : Migration_inventory.stored_field; current : Migration_inventory.stored_field }
+  | Renamed of { previous : Migration_inventory.stored_field; current : Migration_inventory.stored_field }
+  | Retyped of { previous : Migration_inventory.stored_field; current : Migration_inventory.stored_field }
+  | Empty_optional of Migration_inventory.stored_field
+  | Constant of Migration_inventory.stored_field * Migration_canonical.node
+  | Computed of Migration_inventory.stored_field
+type writeback = { previous : Migration_inventory.stored_field; current : Migration_inventory.stored_field; function_ref : Ast.expr; loc : Location.loc }
+type legacy_value = Literal of Migration_additive.literal * Migration_canonical.node | Function of Ast.expr
+type legacy = { previous : Migration_inventory.stored_field; value : legacy_value; loc : Location.loc }
+type entity = {
+  identity : string;
+  previous : Migration_inventory.stored_entity;
+  current : Migration_inventory.stored_entity;
+  mode : mode;
+  values : value_source list;
+  writebacks : writeback list; legacies : legacy list;
+  indexes_changed : bool;
+}
+type t
+val check : ?version:int -> Migration_sparse.t -> entries:entry list ->
+  (t, Migration_sparse.error list) result
+val entities : t -> entity list
+(** Preserve the exact checked inventories and Same evidence for subsequent
+    row-function and physical-plan judgments. *)
+val coverage : t -> Migration_sparse.t

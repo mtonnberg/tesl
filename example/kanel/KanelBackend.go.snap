@@ -50,6 +50,8 @@ golang.org/x/text v0.41.0/go.mod h1:jvf1O8ajNzZqhSrQBPbutR/EB83Cc0CFrezNQIwbb5M=
 package teslmodkanelauth
 
 import (
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"tesl.generated/teslmodkanelbackend/internal/teslmodkanelmodels"
 	"tesl.generated/teslmodkanelbackend/internal/teslrt"
 )
@@ -75,9 +77,11 @@ func CookieAuth(request teslrt.HttpRequest) teslrt.Check[KanelSession] {
 			_ = userId
 			{
 //line KanelAuth.tesl:61
-				found := teslrt.TableSelectOne(teslmodkanelmodels.KanelUserTable, func(u teslmodkanelmodels.KanelUser) bool {
+				found := teslrt.DbSelectOne(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.KanelUserTable, func(u teslmodkanelmodels.KanelUser) bool {
 					return (u.Id == userId)
-				})
+				}, nil, teslrt.PgSql("select \"id\", \"email\", \"password_hash\", \"display_name\", \"created_at\" from \"kanel\".\"kanel_users\" where \"id\" = $1 limit 1", func() []any {
+					return []any{userId}
+				}), teslScanKanelUser)
 				_ = found
 //line KanelAuth.tesl:62
 				{
@@ -106,9 +110,11 @@ func CookieAuth(request teslrt.HttpRequest) teslrt.Check[KanelSession] {
 func CheckOrgMember(userId string, orgId string) teslrt.Check[string] {
 	{
 //line KanelAuth.tesl:78
-		membership := teslrt.TableSelectOne(teslmodkanelmodels.OrgMembershipTable, func(m teslmodkanelmodels.OrgMembership) bool {
+		membership := teslrt.DbSelectOne(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.OrgMembershipTable, func(m teslmodkanelmodels.OrgMembership) bool {
 			return (m.UserId == userId) && (m.OrgId == orgId)
-		})
+		}, nil, teslrt.PgSql("select \"id\", \"org_id\", \"user_id\", \"role\", \"joined_at\" from \"kanel\".\"kanel_org_memberships\" where \"user_id\" = $1 and \"org_id\" = $2 limit 1", func() []any {
+			return []any{userId, orgId}
+		}), teslScanOrgMembership)
 		_ = membership
 //line KanelAuth.tesl:79
 		{
@@ -131,9 +137,11 @@ func CheckOrgMember(userId string, orgId string) teslrt.Check[string] {
 func CheckOrgAdmin(userId string, orgId string) teslrt.Check[string] {
 	{
 //line KanelAuth.tesl:97
-		membership := teslrt.TableSelectOne(teslmodkanelmodels.OrgMembershipTable, func(m teslmodkanelmodels.OrgMembership) bool {
+		membership := teslrt.DbSelectOne(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.OrgMembershipTable, func(m teslmodkanelmodels.OrgMembership) bool {
 			return (m.UserId == userId) && (m.OrgId == orgId)
-		})
+		}, nil, teslrt.PgSql("select \"id\", \"org_id\", \"user_id\", \"role\", \"joined_at\" from \"kanel\".\"kanel_org_memberships\" where \"user_id\" = $1 and \"org_id\" = $2 limit 1", func() []any {
+			return []any{userId, orgId}
+		}), teslScanOrgMembership)
 		_ = membership
 //line KanelAuth.tesl:98
 		{
@@ -173,9 +181,11 @@ func CheckOrgAdmin(userId string, orgId string) teslrt.Check[string] {
 func CheckProjMember(userId string, projectId string, orgId string) teslrt.Check[string] {
 	{
 //line KanelAuth.tesl:117
-		orgMember := teslrt.TableSelectOne(teslmodkanelmodels.OrgMembershipTable, func(m teslmodkanelmodels.OrgMembership) bool {
+		orgMember := teslrt.DbSelectOne(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.OrgMembershipTable, func(m teslmodkanelmodels.OrgMembership) bool {
 			return (m.UserId == userId) && (m.OrgId == orgId)
-		})
+		}, nil, teslrt.PgSql("select \"id\", \"org_id\", \"user_id\", \"role\", \"joined_at\" from \"kanel\".\"kanel_org_memberships\" where \"user_id\" = $1 and \"org_id\" = $2 limit 1", func() []any {
+			return []any{userId, orgId}
+		}), teslScanOrgMembership)
 		_ = orgMember
 //line KanelAuth.tesl:118
 		{
@@ -197,9 +207,11 @@ func CheckProjMember(userId string, projectId string, orgId string) teslrt.Check
 					case teslmodkanelmodels.OrgRoleRoleMember:
 						{
 //line KanelAuth.tesl:126
-							projMember := teslrt.TableSelectOne(teslmodkanelmodels.ProjectMembershipTable, func(pm teslmodkanelmodels.ProjectMembership) bool {
+							projMember := teslrt.DbSelectOne(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.ProjectMembershipTable, func(pm teslmodkanelmodels.ProjectMembership) bool {
 								return (pm.UserId == userId) && (pm.ProjectId == projectId)
-							})
+							}, nil, teslrt.PgSql("select \"id\", \"project_id\", \"user_id\", \"joined_at\" from \"kanel\".\"kanel_project_memberships\" where \"user_id\" = $1 and \"project_id\" = $2 limit 1", func() []any {
+								return []any{userId, projectId}
+							}), teslScanProjectMembership)
 							_ = projMember
 //line KanelAuth.tesl:127
 							{
@@ -219,9 +231,11 @@ func CheckProjMember(userId string, projectId string, orgId string) teslrt.Check
 					case teslmodkanelmodels.OrgRoleRoleViewer:
 						{
 //line KanelAuth.tesl:132
-							projMember := teslrt.TableSelectOne(teslmodkanelmodels.ProjectMembershipTable, func(pm teslmodkanelmodels.ProjectMembership) bool {
+							projMember := teslrt.DbSelectOne(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.ProjectMembershipTable, func(pm teslmodkanelmodels.ProjectMembership) bool {
 								return (pm.UserId == userId) && (pm.ProjectId == projectId)
-							})
+							}, nil, teslrt.PgSql("select \"id\", \"project_id\", \"user_id\", \"joined_at\" from \"kanel\".\"kanel_project_memberships\" where \"user_id\" = $1 and \"project_id\" = $2 limit 1", func() []any {
+								return []any{userId, projectId}
+							}), teslScanProjectMembership)
 							_ = projMember
 //line KanelAuth.tesl:133
 							{
@@ -253,9 +267,11 @@ func CheckProjMember(userId string, projectId string, orgId string) teslrt.Check
 func CheckIssueAssignee(userId string, issueId string) teslrt.Check[string] {
 	{
 //line KanelAuth.tesl:146
-		issue := teslrt.TableSelectOne(teslmodkanelmodels.IssueTable, func(i teslmodkanelmodels.Issue) bool {
+		issue := teslrt.DbSelectOne(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.IssueTable, func(i teslmodkanelmodels.Issue) bool {
 			return (i.Id == issueId)
-		})
+		}, nil, teslrt.PgSql("select \"id\", \"project_id\", \"org_id\", \"title\", \"description\", \"status\", \"assignee_id\", \"reporter_id\", \"estimate\", \"due_at\", \"created_at\", \"updated_at\" from \"kanel\".\"kanel_issues\" where \"id\" = $1 limit 1", func() []any {
+			return []any{issueId}
+		}), teslScanIssue)
 		_ = issue
 //line KanelAuth.tesl:147
 		{
@@ -296,8 +312,138 @@ func CheckIssueAssignee(userId string, issueId string) teslrt.Check[string] {
 	}
 }
 
+func teslColumnIssueStatus_teslmodkanelmodels(teslText []byte) teslmodkanelmodels.IssueStatus {
+	teslParsed, teslParseErr := teslrt.ParseColumnJSON(teslText)
+	if teslParseErr != nil {
+		panic("database: a IssueStatus column holds text that is not JSON: " + teslParseErr.Error())
+	}
+	teslTag, teslTagErr := teslrt.DecodeStringField(teslParsed, "tag")
+	if teslTagErr != nil {
+		panic("database: a IssueStatus column holds " + teslTagErr.Error())
+	}
+	switch teslTag {
+	case "Backlog":
+		return teslmodkanelmodels.IssueStatus{Tag: teslmodkanelmodels.IssueStatusBacklog}
+	case "Todo":
+		return teslmodkanelmodels.IssueStatus{Tag: teslmodkanelmodels.IssueStatusTodo}
+	case "InProgress":
+		return teslmodkanelmodels.IssueStatus{Tag: teslmodkanelmodels.IssueStatusInProgress}
+	case "InReview":
+		return teslmodkanelmodels.IssueStatus{Tag: teslmodkanelmodels.IssueStatusInReview}
+	case "Done":
+		return teslmodkanelmodels.IssueStatus{Tag: teslmodkanelmodels.IssueStatusDone}
+	case "Cancelled":
+		return teslmodkanelmodels.IssueStatus{Tag: teslmodkanelmodels.IssueStatusCancelled}
+	}
+	panic("database: a IssueStatus column holds an unknown tag " + teslTag)
+}
+
+func teslColumnOrgRole_teslmodkanelmodels(teslText []byte) teslmodkanelmodels.OrgRole {
+	teslParsed, teslParseErr := teslrt.ParseColumnJSON(teslText)
+	if teslParseErr != nil {
+		panic("database: a OrgRole column holds text that is not JSON: " + teslParseErr.Error())
+	}
+	teslTag, teslTagErr := teslrt.DecodeStringField(teslParsed, "tag")
+	if teslTagErr != nil {
+		panic("database: a OrgRole column holds " + teslTagErr.Error())
+	}
+	switch teslTag {
+	case "RoleAdmin":
+		return teslmodkanelmodels.OrgRole{Tag: teslmodkanelmodels.OrgRoleRoleAdmin}
+	case "RoleMember":
+		return teslmodkanelmodels.OrgRole{Tag: teslmodkanelmodels.OrgRoleRoleMember}
+	case "RoleViewer":
+		return teslmodkanelmodels.OrgRole{Tag: teslmodkanelmodels.OrgRoleRoleViewer}
+	}
+	panic("database: a OrgRole column holds an unknown tag " + teslTag)
+}
+
 func teslKeyLessString(teslX, teslY string) bool {
 	return (teslX < teslY)
+}
+
+func teslScanIssue(teslRow pgx.CollectableRow) (teslmodkanelmodels.Issue, error) {
+	teslValue := teslmodkanelmodels.Issue{}
+	var teslColumn0 string
+	var teslColumn1 string
+	var teslColumn2 string
+	var teslColumn3 string
+	var teslColumn4 string
+	var teslColumn5 []byte
+	var teslColumn6 *string
+	var teslColumn7 string
+	var teslColumn8 pgtype.Numeric
+	var teslColumn9 *int64
+	var teslColumn10 int64
+	var teslColumn11 int64
+	if teslErr := teslRow.Scan(&teslColumn0, &teslColumn1, &teslColumn2, &teslColumn3, &teslColumn4, &teslColumn5, &teslColumn6, &teslColumn7, &teslColumn8, &teslColumn9, &teslColumn10, &teslColumn11); teslErr != nil {
+		return teslValue, teslErr
+	}
+	teslValue.Id = teslColumn0
+	teslValue.ProjectId = teslColumn1
+	teslValue.OrgId = teslColumn2
+	teslValue.Title = teslColumn3
+	teslValue.Description = teslColumn4
+	teslValue.Status = teslColumnIssueStatus_teslmodkanelmodels(teslColumn5)
+	teslValue.AssigneeId = teslrt.MaybeOfPointer(teslColumn6, func() string { return *teslColumn6 })
+	teslValue.ReporterId = teslColumn7
+	teslValue.Estimate = teslrt.PgIntOf(teslColumn8)
+	teslValue.DueAt = teslrt.MaybeOfPointer(teslColumn9, func() teslrt.PosixMillis { return teslrt.PosixMillis{Value: teslrt.FromInt64(*teslColumn9)} })
+	teslValue.CreatedAt = teslrt.PosixMillis{Value: teslrt.FromInt64(teslColumn10)}
+	teslValue.UpdatedAt = teslrt.PosixMillis{Value: teslrt.FromInt64(teslColumn11)}
+	return teslValue, nil
+}
+
+func teslScanKanelUser(teslRow pgx.CollectableRow) (teslmodkanelmodels.KanelUser, error) {
+	teslValue := teslmodkanelmodels.KanelUser{}
+	var teslColumn0 string
+	var teslColumn1 string
+	var teslColumn2 string
+	var teslColumn3 string
+	var teslColumn4 int64
+	if teslErr := teslRow.Scan(&teslColumn0, &teslColumn1, &teslColumn2, &teslColumn3, &teslColumn4); teslErr != nil {
+		return teslValue, teslErr
+	}
+	teslValue.Id = teslColumn0
+	teslValue.Email = teslColumn1
+	teslValue.PasswordHash = teslColumn2
+	teslValue.DisplayName = teslColumn3
+	teslValue.CreatedAt = teslrt.PosixMillis{Value: teslrt.FromInt64(teslColumn4)}
+	return teslValue, nil
+}
+
+func teslScanOrgMembership(teslRow pgx.CollectableRow) (teslmodkanelmodels.OrgMembership, error) {
+	teslValue := teslmodkanelmodels.OrgMembership{}
+	var teslColumn0 string
+	var teslColumn1 string
+	var teslColumn2 string
+	var teslColumn3 []byte
+	var teslColumn4 int64
+	if teslErr := teslRow.Scan(&teslColumn0, &teslColumn1, &teslColumn2, &teslColumn3, &teslColumn4); teslErr != nil {
+		return teslValue, teslErr
+	}
+	teslValue.Id = teslColumn0
+	teslValue.OrgId = teslColumn1
+	teslValue.UserId = teslColumn2
+	teslValue.Role = teslColumnOrgRole_teslmodkanelmodels(teslColumn3)
+	teslValue.JoinedAt = teslrt.PosixMillis{Value: teslrt.FromInt64(teslColumn4)}
+	return teslValue, nil
+}
+
+func teslScanProjectMembership(teslRow pgx.CollectableRow) (teslmodkanelmodels.ProjectMembership, error) {
+	teslValue := teslmodkanelmodels.ProjectMembership{}
+	var teslColumn0 string
+	var teslColumn1 string
+	var teslColumn2 string
+	var teslColumn3 int64
+	if teslErr := teslRow.Scan(&teslColumn0, &teslColumn1, &teslColumn2, &teslColumn3); teslErr != nil {
+		return teslValue, teslErr
+	}
+	teslValue.Id = teslColumn0
+	teslValue.ProjectId = teslColumn1
+	teslValue.UserId = teslColumn2
+	teslValue.JoinedAt = teslrt.PosixMillis{Value: teslrt.FromInt64(teslColumn3)}
+	return teslValue, nil
 }
 
 //tesl-snapshot: internal/teslmodkanelbackend/module.go
@@ -305,6 +451,8 @@ package teslmodkanelbackend
 
 import (
 	"errors"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"net/http"
 	"tesl.generated/teslmodkanelbackend/internal/teslmodkanelauth"
 	"tesl.generated/teslmodkanelbackend/internal/teslmodkanelbilling"
@@ -460,6 +608,8 @@ var KanelDatabaseDatabase = teslrt.NewDatabase(
 	},
 )
 
+var _ = teslrt.RegisterDatabaseIdentity("teslmodkanelbackend.KanelDatabase", KanelDatabaseDatabase)
+
 //line KanelBackend.tesl:192
 func notifyWorker(job KanelNotifyJob) KanelNotifyJob {
 //line KanelBackend.tesl:194
@@ -506,9 +656,11 @@ func addCommentAndNotifyHandler(session teslmodkanelauth.KanelSession, orgId str
 					_ = commentId
 					{
 //line KanelBackend.tesl:408
-						issue := teslrt.TableSelectOne(teslmodkanelmodels.IssueTable, func(i teslmodkanelmodels.Issue) bool {
+						issue := teslrt.DbSelectOne(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.IssueTable, func(i teslmodkanelmodels.Issue) bool {
 							return (i.Id == issueId) && (i.OrgId == orgId)
-						})
+						}, nil, teslrt.PgSql("select \"id\", \"project_id\", \"org_id\", \"title\", \"description\", \"status\", \"assignee_id\", \"reporter_id\", \"estimate\", \"due_at\", \"created_at\", \"updated_at\" from \"kanel\".\"kanel_issues\" where \"id\" = $1 and \"org_id\" = $2 limit 1", func() []any {
+							return []any{issueId, orgId}
+						}), teslScanIssue)
 						_ = issue
 //line KanelBackend.tesl:409
 						{
@@ -522,9 +674,11 @@ func addCommentAndNotifyHandler(session teslmodkanelauth.KanelSession, orgId str
 								_ = currentIssue
 								{
 //line KanelBackend.tesl:412
-									reporter := teslrt.TableSelectOne(teslmodkanelmodels.KanelUserTable, func(u teslmodkanelmodels.KanelUser) bool {
+									reporter := teslrt.DbSelectOne(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.KanelUserTable, func(u teslmodkanelmodels.KanelUser) bool {
 										return (u.Id == currentIssue.ReporterId)
-									})
+									}, nil, teslrt.PgSql("select \"id\", \"email\", \"password_hash\", \"display_name\", \"created_at\" from \"kanel\".\"kanel_users\" where \"id\" = $1 limit 1", func() []any {
+										return []any{currentIssue.ReporterId}
+									}), teslScanKanelUser)
 									_ = reporter
 //line KanelBackend.tesl:413
 									{
@@ -1415,7 +1569,7 @@ var KanelServer = teslrt.Server{
 				return teslrt.Fail(teslDecoded.Status(), teslDecoded.Message())
 			}
 			teslBody, _ := teslDecoded.Value()
-			return teslrt.Response{Status: 200, Body: teslEncode23(teslmodkanelbilling.CreateInvoiceHandler(session, orgId, teslBody))}
+			return teslrt.Response{Status: 200, Body: teslEncode22(teslmodkanelbilling.CreateInvoiceHandler(session, orgId, teslBody))}
 		},
 		"listInvoicesHandler": func(teslScope *teslrt.RequestScope, teslRequest *http.Request) teslrt.Response {
 			_ = teslScope
@@ -1438,7 +1592,7 @@ var KanelServer = teslrt.Server{
 				return teslrt.Fail(teslCapturedOrgId.Status(), teslCapturedOrgId.Message())
 			}
 			orgId, _ = teslCapturedOrgId.Value()
-			return teslrt.Response{Status: 200, Body: teslEncode24(teslmodkanelbilling.ListInvoicesHandler(session, orgId))}
+			return teslrt.Response{Status: 200, Body: teslEncode23(teslmodkanelbilling.ListInvoicesHandler(session, orgId))}
 		},
 		"getInvoiceHandler": func(teslScope *teslrt.RequestScope, teslRequest *http.Request) teslrt.Response {
 			_ = teslScope
@@ -1470,7 +1624,7 @@ var KanelServer = teslrt.Server{
 				return teslrt.Fail(teslCapturedInvoiceId.Status(), teslCapturedInvoiceId.Message())
 			}
 			invoiceId, _ = teslCapturedInvoiceId.Value()
-			return teslrt.Response{Status: 200, Body: teslEncode23(teslmodkanelbilling.GetInvoiceHandler(session, orgId, invoiceId))}
+			return teslrt.Response{Status: 200, Body: teslEncode22(teslmodkanelbilling.GetInvoiceHandler(session, orgId, invoiceId))}
 		},
 		"approveInvoiceHandler": func(teslScope *teslrt.RequestScope, teslRequest *http.Request) teslrt.Response {
 			_ = teslScope
@@ -1502,7 +1656,7 @@ var KanelServer = teslrt.Server{
 				return teslrt.Fail(teslCapturedInvoiceId.Status(), teslCapturedInvoiceId.Message())
 			}
 			invoiceId, _ = teslCapturedInvoiceId.Value()
-			return teslrt.Response{Status: 200, Body: teslEncode23(teslmodkanelbilling.ApproveInvoiceHandler(session, orgId, invoiceId))}
+			return teslrt.Response{Status: 200, Body: teslEncode22(teslmodkanelbilling.ApproveInvoiceHandler(session, orgId, invoiceId))}
 		},
 		"markSentHandler": func(teslScope *teslrt.RequestScope, teslRequest *http.Request) teslrt.Response {
 			_ = teslScope
@@ -1534,7 +1688,7 @@ var KanelServer = teslrt.Server{
 				return teslrt.Fail(teslCapturedInvoiceId.Status(), teslCapturedInvoiceId.Message())
 			}
 			invoiceId, _ = teslCapturedInvoiceId.Value()
-			return teslrt.Response{Status: 200, Body: teslEncode23(teslmodkanelbilling.MarkSentHandler(session, orgId, invoiceId))}
+			return teslrt.Response{Status: 200, Body: teslEncode22(teslmodkanelbilling.MarkSentHandler(session, orgId, invoiceId))}
 		},
 		"markPaidHandler": func(teslScope *teslrt.RequestScope, teslRequest *http.Request) teslrt.Response {
 			_ = teslScope
@@ -1566,7 +1720,7 @@ var KanelServer = teslrt.Server{
 				return teslrt.Fail(teslCapturedInvoiceId.Status(), teslCapturedInvoiceId.Message())
 			}
 			invoiceId, _ = teslCapturedInvoiceId.Value()
-			return teslrt.Response{Status: 200, Body: teslEncode23(teslmodkanelbilling.MarkPaidHandler(session, orgId, invoiceId))}
+			return teslrt.Response{Status: 200, Body: teslEncode22(teslmodkanelbilling.MarkPaidHandler(session, orgId, invoiceId))}
 		},
 	},
 	Streams: map[string]teslrt.StreamFunc{
@@ -1589,6 +1743,32 @@ var KanelServer = teslrt.Server{
 			teslrt.SseStreamParam(UserNotificationsChannel, "/events/users/:userId", "userId")(teslWriter, teslRequest)
 		},
 	},
+}
+
+func teslColumnIssueStatus_teslmodkanelmodels(teslText []byte) teslmodkanelmodels.IssueStatus {
+	teslParsed, teslParseErr := teslrt.ParseColumnJSON(teslText)
+	if teslParseErr != nil {
+		panic("database: a IssueStatus column holds text that is not JSON: " + teslParseErr.Error())
+	}
+	teslTag, teslTagErr := teslrt.DecodeStringField(teslParsed, "tag")
+	if teslTagErr != nil {
+		panic("database: a IssueStatus column holds " + teslTagErr.Error())
+	}
+	switch teslTag {
+	case "Backlog":
+		return teslmodkanelmodels.IssueStatus{Tag: teslmodkanelmodels.IssueStatusBacklog}
+	case "Todo":
+		return teslmodkanelmodels.IssueStatus{Tag: teslmodkanelmodels.IssueStatusTodo}
+	case "InProgress":
+		return teslmodkanelmodels.IssueStatus{Tag: teslmodkanelmodels.IssueStatusInProgress}
+	case "InReview":
+		return teslmodkanelmodels.IssueStatus{Tag: teslmodkanelmodels.IssueStatusInReview}
+	case "Done":
+		return teslmodkanelmodels.IssueStatus{Tag: teslmodkanelmodels.IssueStatusDone}
+	case "Cancelled":
+		return teslmodkanelmodels.IssueStatus{Tag: teslmodkanelmodels.IssueStatusCancelled}
+	}
+	panic("database: a IssueStatus column holds an unknown tag " + teslTag)
 }
 
 func teslEncode1(teslValue string) any {
@@ -1746,29 +1926,11 @@ func teslEncode21(teslValue []teslmodkanelmodels.TimeEntry) any {
 	}()
 }
 
-func teslEncode22(teslValue teslmodkanelmodels.InvoiceStatus) any {
-	return func() any {
-		switch teslValue.Tag {
-		case teslmodkanelmodels.InvoiceStatusDraft:
-			return map[string]any{"tag": "Draft"}
-		case teslmodkanelmodels.InvoiceStatusApproved:
-			return map[string]any{"tag": "Approved"}
-		case teslmodkanelmodels.InvoiceStatusSent:
-			return map[string]any{"tag": "Sent"}
-		case teslmodkanelmodels.InvoiceStatusPaid:
-			return map[string]any{"tag": "Paid"}
-		case teslmodkanelmodels.InvoiceStatusOverdue:
-			return map[string]any{"tag": "Overdue"}
-		}
-		panic("unreachable: checker guarantees case exhaustiveness")
-	}()
-}
-
-func teslEncode23(teslValue teslmodkanelmodels.Invoice) any {
+func teslEncode22(teslValue teslmodkanelmodels.Invoice) any {
 	return map[string]any{
 		"id":           teslEncode1(teslValue.Id),
 		"orgId":        teslEncode1(teslValue.OrgId),
-		"status":       teslEncode22(teslValue.Status),
+		"status":       teslmodkanelmodels.EncodeInvoiceStatusJSON(teslValue.Status),
 		"totalMinutes": teslEncode4(teslValue.TotalMinutes),
 		"notes":        teslEncode1(teslValue.Notes),
 		"createdAt":    teslEncode5(teslValue.CreatedAt),
@@ -1776,11 +1938,11 @@ func teslEncode23(teslValue teslmodkanelmodels.Invoice) any {
 	}
 }
 
-func teslEncode24(teslValue []teslmodkanelmodels.Invoice) any {
+func teslEncode23(teslValue []teslmodkanelmodels.Invoice) any {
 	return func() any {
 		teslOut := make([]any, len(teslValue))
 		for teslAt, teslItem := range teslValue {
-			teslOut[teslAt] = teslEncode23(teslItem)
+			teslOut[teslAt] = teslEncode22(teslItem)
 		}
 		return teslOut
 	}()
@@ -1844,6 +2006,56 @@ func teslEncode9(teslValue teslmodkanelmodels.OrgMembership) any {
 
 func teslEqualString(teslX, teslY string) bool {
 	return (teslX == teslY)
+}
+
+func teslScanIssue(teslRow pgx.CollectableRow) (teslmodkanelmodels.Issue, error) {
+	teslValue := teslmodkanelmodels.Issue{}
+	var teslColumn0 string
+	var teslColumn1 string
+	var teslColumn2 string
+	var teslColumn3 string
+	var teslColumn4 string
+	var teslColumn5 []byte
+	var teslColumn6 *string
+	var teslColumn7 string
+	var teslColumn8 pgtype.Numeric
+	var teslColumn9 *int64
+	var teslColumn10 int64
+	var teslColumn11 int64
+	if teslErr := teslRow.Scan(&teslColumn0, &teslColumn1, &teslColumn2, &teslColumn3, &teslColumn4, &teslColumn5, &teslColumn6, &teslColumn7, &teslColumn8, &teslColumn9, &teslColumn10, &teslColumn11); teslErr != nil {
+		return teslValue, teslErr
+	}
+	teslValue.Id = teslColumn0
+	teslValue.ProjectId = teslColumn1
+	teslValue.OrgId = teslColumn2
+	teslValue.Title = teslColumn3
+	teslValue.Description = teslColumn4
+	teslValue.Status = teslColumnIssueStatus_teslmodkanelmodels(teslColumn5)
+	teslValue.AssigneeId = teslrt.MaybeOfPointer(teslColumn6, func() string { return *teslColumn6 })
+	teslValue.ReporterId = teslColumn7
+	teslValue.Estimate = teslrt.PgIntOf(teslColumn8)
+	teslValue.DueAt = teslrt.MaybeOfPointer(teslColumn9, func() teslrt.PosixMillis { return teslrt.PosixMillis{Value: teslrt.FromInt64(*teslColumn9)} })
+	teslValue.CreatedAt = teslrt.PosixMillis{Value: teslrt.FromInt64(teslColumn10)}
+	teslValue.UpdatedAt = teslrt.PosixMillis{Value: teslrt.FromInt64(teslColumn11)}
+	return teslValue, nil
+}
+
+func teslScanKanelUser(teslRow pgx.CollectableRow) (teslmodkanelmodels.KanelUser, error) {
+	teslValue := teslmodkanelmodels.KanelUser{}
+	var teslColumn0 string
+	var teslColumn1 string
+	var teslColumn2 string
+	var teslColumn3 string
+	var teslColumn4 int64
+	if teslErr := teslRow.Scan(&teslColumn0, &teslColumn1, &teslColumn2, &teslColumn3, &teslColumn4); teslErr != nil {
+		return teslValue, teslErr
+	}
+	teslValue.Id = teslColumn0
+	teslValue.Email = teslColumn1
+	teslValue.PasswordHash = teslColumn2
+	teslValue.DisplayName = teslColumn3
+	teslValue.CreatedAt = teslrt.PosixMillis{Value: teslrt.FromInt64(teslColumn4)}
+	return teslValue, nil
 }
 
 // Declared in Tesl but not called within this module.  Tesl permits an unused
@@ -2208,11 +2420,17 @@ func TestTeslApi3(teslT *testing.T) {
 	}()
 //line KanelBackend.tesl:529
 //line KanelBackend.tesl:531
-	_ = teslrt.TableInsert(teslmodkanelmodels.KanelUserTable, "KanelUser", teslmodkanelmodels.KanelUser{Id: "usr-seeded", Email: "seeded@example.com", PasswordHash: "password123", DisplayName: "Seeded Alice", CreatedAt: teslrt.SecondsToPosix(teslrt.FromInt64(0))}, func(teslRow, teslNew teslmodkanelmodels.KanelUser) bool { return (teslRow.Id == teslNew.Id) })
+	_ = teslrt.DbInsert(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.KanelUserTable, "KanelUser", teslmodkanelmodels.KanelUser{Id: "usr-seeded", Email: "seeded@example.com", PasswordHash: "password123", DisplayName: "Seeded Alice", CreatedAt: teslrt.SecondsToPosix(teslrt.FromInt64(0))}, func(teslRow, teslNew teslmodkanelmodels.KanelUser) bool { return (teslRow.Id == teslNew.Id) }, "insert into \"kanel\".\"kanel_users\" (\"id\", \"email\", \"password_hash\", \"display_name\", \"created_at\") values ($1, $2, $3, $4, $5)", func(teslRow teslmodkanelmodels.KanelUser) []any {
+		return []any{teslRow.Id, teslRow.Email, teslRow.PasswordHash, teslRow.DisplayName, teslrt.PgBigint(teslRow.CreatedAt.Value)}
+	})
 //line KanelBackend.tesl:538
-	_ = teslrt.TableInsert(teslmodkanelmodels.OrgTable, "Org", teslmodkanelmodels.Org{Id: "org-seeded", Name: "Seeded Org", Slug: "seeded-org", CreatedAt: teslrt.SecondsToPosix(teslrt.FromInt64(0))}, func(teslRow, teslNew teslmodkanelmodels.Org) bool { return (teslRow.Id == teslNew.Id) })
+	_ = teslrt.DbInsert(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.OrgTable, "Org", teslmodkanelmodels.Org{Id: "org-seeded", Name: "Seeded Org", Slug: "seeded-org", CreatedAt: teslrt.SecondsToPosix(teslrt.FromInt64(0))}, func(teslRow, teslNew teslmodkanelmodels.Org) bool { return (teslRow.Id == teslNew.Id) }, "insert into \"kanel\".\"kanel_orgs\" (\"id\", \"name\", \"slug\", \"created_at\") values ($1, $2, $3, $4)", func(teslRow teslmodkanelmodels.Org) []any {
+		return []any{teslRow.Id, teslRow.Name, teslRow.Slug, teslrt.PgBigint(teslRow.CreatedAt.Value)}
+	})
 //line KanelBackend.tesl:544
-	_ = teslrt.TableInsert(teslmodkanelmodels.OrgMembershipTable, "OrgMembership", teslmodkanelmodels.OrgMembership{Id: "mem-seeded", OrgId: "org-seeded", UserId: "usr-seeded", Role: teslmodkanelmodels.OrgRole{Tag: teslmodkanelmodels.OrgRoleRoleAdmin}, JoinedAt: teslrt.SecondsToPosix(teslrt.FromInt64(0))}, func(teslRow, teslNew teslmodkanelmodels.OrgMembership) bool { return (teslRow.Id == teslNew.Id) })
+	_ = teslrt.DbInsert(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.OrgMembershipTable, "OrgMembership", teslmodkanelmodels.OrgMembership{Id: "mem-seeded", OrgId: "org-seeded", UserId: "usr-seeded", Role: teslmodkanelmodels.OrgRole{Tag: teslmodkanelmodels.OrgRoleRoleAdmin}, JoinedAt: teslrt.SecondsToPosix(teslrt.FromInt64(0))}, func(teslRow, teslNew teslmodkanelmodels.OrgMembership) bool { return (teslRow.Id == teslNew.Id) }, "insert into \"kanel\".\"kanel_org_memberships\" (\"id\", \"org_id\", \"user_id\", \"role\", \"joined_at\") values ($1, $2, $3, $4, $5)", func(teslRow teslmodkanelmodels.OrgMembership) []any {
+		return []any{teslRow.Id, teslRow.OrgId, teslRow.UserId, teslrt.EncodeJSONValue(teslmodkanelmodels.EncodeOrgRoleJSON(teslRow.Role)), teslrt.PgBigint(teslRow.JoinedAt.Value)}
+	})
 	{
 //line KanelBackend.tesl:553
 		userId := "usr-seeded"
@@ -2288,19 +2506,33 @@ func TestTeslApi4(teslT *testing.T) {
 	}()
 //line KanelBackend.tesl:568
 //line KanelBackend.tesl:570
-	_ = teslrt.TableInsert(teslmodkanelmodels.KanelUserTable, "KanelUser", teslmodkanelmodels.KanelUser{Id: "usr-reporter", Email: "reporter@example.com", PasswordHash: "password123", DisplayName: "Reporter", CreatedAt: teslrt.SecondsToPosix(teslrt.FromInt64(0))}, func(teslRow, teslNew teslmodkanelmodels.KanelUser) bool { return (teslRow.Id == teslNew.Id) })
+	_ = teslrt.DbInsert(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.KanelUserTable, "KanelUser", teslmodkanelmodels.KanelUser{Id: "usr-reporter", Email: "reporter@example.com", PasswordHash: "password123", DisplayName: "Reporter", CreatedAt: teslrt.SecondsToPosix(teslrt.FromInt64(0))}, func(teslRow, teslNew teslmodkanelmodels.KanelUser) bool { return (teslRow.Id == teslNew.Id) }, "insert into \"kanel\".\"kanel_users\" (\"id\", \"email\", \"password_hash\", \"display_name\", \"created_at\") values ($1, $2, $3, $4, $5)", func(teslRow teslmodkanelmodels.KanelUser) []any {
+		return []any{teslRow.Id, teslRow.Email, teslRow.PasswordHash, teslRow.DisplayName, teslrt.PgBigint(teslRow.CreatedAt.Value)}
+	})
 //line KanelBackend.tesl:577
-	_ = teslrt.TableInsert(teslmodkanelmodels.KanelUserTable, "KanelUser", teslmodkanelmodels.KanelUser{Id: "usr-commenter", Email: "commenter@example.com", PasswordHash: "password123", DisplayName: "Commenter", CreatedAt: teslrt.SecondsToPosix(teslrt.FromInt64(0))}, func(teslRow, teslNew teslmodkanelmodels.KanelUser) bool { return (teslRow.Id == teslNew.Id) })
+	_ = teslrt.DbInsert(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.KanelUserTable, "KanelUser", teslmodkanelmodels.KanelUser{Id: "usr-commenter", Email: "commenter@example.com", PasswordHash: "password123", DisplayName: "Commenter", CreatedAt: teslrt.SecondsToPosix(teslrt.FromInt64(0))}, func(teslRow, teslNew teslmodkanelmodels.KanelUser) bool { return (teslRow.Id == teslNew.Id) }, "insert into \"kanel\".\"kanel_users\" (\"id\", \"email\", \"password_hash\", \"display_name\", \"created_at\") values ($1, $2, $3, $4, $5)", func(teslRow teslmodkanelmodels.KanelUser) []any {
+		return []any{teslRow.Id, teslRow.Email, teslRow.PasswordHash, teslRow.DisplayName, teslrt.PgBigint(teslRow.CreatedAt.Value)}
+	})
 //line KanelBackend.tesl:584
-	_ = teslrt.TableInsert(teslmodkanelmodels.OrgTable, "Org", teslmodkanelmodels.Org{Id: "org-notify", Name: "Notify Org", Slug: "notify-org", CreatedAt: teslrt.SecondsToPosix(teslrt.FromInt64(0))}, func(teslRow, teslNew teslmodkanelmodels.Org) bool { return (teslRow.Id == teslNew.Id) })
+	_ = teslrt.DbInsert(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.OrgTable, "Org", teslmodkanelmodels.Org{Id: "org-notify", Name: "Notify Org", Slug: "notify-org", CreatedAt: teslrt.SecondsToPosix(teslrt.FromInt64(0))}, func(teslRow, teslNew teslmodkanelmodels.Org) bool { return (teslRow.Id == teslNew.Id) }, "insert into \"kanel\".\"kanel_orgs\" (\"id\", \"name\", \"slug\", \"created_at\") values ($1, $2, $3, $4)", func(teslRow teslmodkanelmodels.Org) []any {
+		return []any{teslRow.Id, teslRow.Name, teslRow.Slug, teslrt.PgBigint(teslRow.CreatedAt.Value)}
+	})
 //line KanelBackend.tesl:590
-	_ = teslrt.TableInsert(teslmodkanelmodels.OrgMembershipTable, "OrgMembership", teslmodkanelmodels.OrgMembership{Id: "mem-reporter", OrgId: "org-notify", UserId: "usr-reporter", Role: teslmodkanelmodels.OrgRole{Tag: teslmodkanelmodels.OrgRoleRoleAdmin}, JoinedAt: teslrt.SecondsToPosix(teslrt.FromInt64(0))}, func(teslRow, teslNew teslmodkanelmodels.OrgMembership) bool { return (teslRow.Id == teslNew.Id) })
+	_ = teslrt.DbInsert(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.OrgMembershipTable, "OrgMembership", teslmodkanelmodels.OrgMembership{Id: "mem-reporter", OrgId: "org-notify", UserId: "usr-reporter", Role: teslmodkanelmodels.OrgRole{Tag: teslmodkanelmodels.OrgRoleRoleAdmin}, JoinedAt: teslrt.SecondsToPosix(teslrt.FromInt64(0))}, func(teslRow, teslNew teslmodkanelmodels.OrgMembership) bool { return (teslRow.Id == teslNew.Id) }, "insert into \"kanel\".\"kanel_org_memberships\" (\"id\", \"org_id\", \"user_id\", \"role\", \"joined_at\") values ($1, $2, $3, $4, $5)", func(teslRow teslmodkanelmodels.OrgMembership) []any {
+		return []any{teslRow.Id, teslRow.OrgId, teslRow.UserId, teslrt.EncodeJSONValue(teslmodkanelmodels.EncodeOrgRoleJSON(teslRow.Role)), teslrt.PgBigint(teslRow.JoinedAt.Value)}
+	})
 //line KanelBackend.tesl:597
-	_ = teslrt.TableInsert(teslmodkanelmodels.OrgMembershipTable, "OrgMembership", teslmodkanelmodels.OrgMembership{Id: "mem-commenter", OrgId: "org-notify", UserId: "usr-commenter", Role: teslmodkanelmodels.OrgRole{Tag: teslmodkanelmodels.OrgRoleRoleMember}, JoinedAt: teslrt.SecondsToPosix(teslrt.FromInt64(0))}, func(teslRow, teslNew teslmodkanelmodels.OrgMembership) bool { return (teslRow.Id == teslNew.Id) })
+	_ = teslrt.DbInsert(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.OrgMembershipTable, "OrgMembership", teslmodkanelmodels.OrgMembership{Id: "mem-commenter", OrgId: "org-notify", UserId: "usr-commenter", Role: teslmodkanelmodels.OrgRole{Tag: teslmodkanelmodels.OrgRoleRoleMember}, JoinedAt: teslrt.SecondsToPosix(teslrt.FromInt64(0))}, func(teslRow, teslNew teslmodkanelmodels.OrgMembership) bool { return (teslRow.Id == teslNew.Id) }, "insert into \"kanel\".\"kanel_org_memberships\" (\"id\", \"org_id\", \"user_id\", \"role\", \"joined_at\") values ($1, $2, $3, $4, $5)", func(teslRow teslmodkanelmodels.OrgMembership) []any {
+		return []any{teslRow.Id, teslRow.OrgId, teslRow.UserId, teslrt.EncodeJSONValue(teslmodkanelmodels.EncodeOrgRoleJSON(teslRow.Role)), teslrt.PgBigint(teslRow.JoinedAt.Value)}
+	})
 //line KanelBackend.tesl:604
-	_ = teslrt.TableInsert(teslmodkanelmodels.ProjectTable, "Project", teslmodkanelmodels.Project{Id: "proj-notify", OrgId: "org-notify", Name: "Notify project", Description: "Exercise api tests", Archived: false, CreatedAt: teslrt.SecondsToPosix(teslrt.FromInt64(0))}, func(teslRow, teslNew teslmodkanelmodels.Project) bool { return (teslRow.Id == teslNew.Id) })
+	_ = teslrt.DbInsert(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.ProjectTable, "Project", teslmodkanelmodels.Project{Id: "proj-notify", OrgId: "org-notify", Name: "Notify project", Description: "Exercise api tests", Archived: false, CreatedAt: teslrt.SecondsToPosix(teslrt.FromInt64(0))}, func(teslRow, teslNew teslmodkanelmodels.Project) bool { return (teslRow.Id == teslNew.Id) }, "insert into \"kanel\".\"kanel_projects\" (\"id\", \"org_id\", \"name\", \"description\", \"archived\", \"created_at\") values ($1, $2, $3, $4, $5, $6)", func(teslRow teslmodkanelmodels.Project) []any {
+		return []any{teslRow.Id, teslRow.OrgId, teslRow.Name, teslRow.Description, teslRow.Archived, teslrt.PgBigint(teslRow.CreatedAt.Value)}
+	})
 //line KanelBackend.tesl:612
-	_ = teslrt.TableInsert(teslmodkanelmodels.IssueTable, "Issue", teslmodkanelmodels.Issue{Id: "iss-notify", ProjectId: "proj-notify", OrgId: "org-notify", Title: "Ship api-tests", Description: "Expand coverage", Status: teslmodkanelmodels.IssueStatus{Tag: teslmodkanelmodels.IssueStatusBacklog}, AssigneeId: teslrt.Maybe[string]{Tag: teslrt.MaybeNothing}, ReporterId: "usr-reporter", Estimate: teslrt.FromInt64(60), DueAt: teslrt.Maybe[teslrt.PosixMillis]{Tag: teslrt.MaybeNothing}, CreatedAt: teslrt.SecondsToPosix(teslrt.FromInt64(0)), UpdatedAt: teslrt.SecondsToPosix(teslrt.FromInt64(0))}, func(teslRow, teslNew teslmodkanelmodels.Issue) bool { return (teslRow.Id == teslNew.Id) })
+	_ = teslrt.DbInsert(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.IssueTable, "Issue", teslmodkanelmodels.Issue{Id: "iss-notify", ProjectId: "proj-notify", OrgId: "org-notify", Title: "Ship api-tests", Description: "Expand coverage", Status: teslmodkanelmodels.IssueStatus{Tag: teslmodkanelmodels.IssueStatusBacklog}, AssigneeId: teslrt.Maybe[string]{Tag: teslrt.MaybeNothing}, ReporterId: "usr-reporter", Estimate: teslrt.FromInt64(60), DueAt: teslrt.Maybe[teslrt.PosixMillis]{Tag: teslrt.MaybeNothing}, CreatedAt: teslrt.SecondsToPosix(teslrt.FromInt64(0)), UpdatedAt: teslrt.SecondsToPosix(teslrt.FromInt64(0))}, func(teslRow, teslNew teslmodkanelmodels.Issue) bool { return (teslRow.Id == teslNew.Id) }, "insert into \"kanel\".\"kanel_issues\" (\"id\", \"project_id\", \"org_id\", \"title\", \"description\", \"status\", \"assignee_id\", \"reporter_id\", \"estimate\", \"due_at\", \"created_at\", \"updated_at\") values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)", func(teslRow teslmodkanelmodels.Issue) []any {
+		return []any{teslRow.Id, teslRow.ProjectId, teslRow.OrgId, teslRow.Title, teslRow.Description, teslrt.EncodeJSONValue(teslmodkanelmodels.EncodeIssueStatusJSON(teslRow.Status)), teslrt.PgNull(teslRow.AssigneeId, func(teslValue string) any { return teslValue }), teslRow.ReporterId, teslrt.PgInt(teslRow.Estimate), teslrt.PgNull(teslRow.DueAt, func(teslValue teslrt.PosixMillis) any { return teslrt.PgBigint(teslValue.Value) }), teslrt.PgBigint(teslRow.CreatedAt.Value), teslrt.PgBigint(teslRow.UpdatedAt.Value)}
+	})
 	{
 //line KanelBackend.tesl:628
 		reporterId := "usr-reporter"
@@ -2430,19 +2662,33 @@ func TestTeslApi5(teslT *testing.T) {
 	}()
 //line KanelBackend.tesl:652
 //line KanelBackend.tesl:654
-	_ = teslrt.TableInsert(teslmodkanelmodels.KanelUserTable, "KanelUser", teslmodkanelmodels.KanelUser{Id: "usr-blocked", Email: "blocked@example.com", PasswordHash: "password123", DisplayName: "Blocked Reporter", CreatedAt: teslrt.SecondsToPosix(teslrt.FromInt64(0))}, func(teslRow, teslNew teslmodkanelmodels.KanelUser) bool { return (teslRow.Id == teslNew.Id) })
+	_ = teslrt.DbInsert(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.KanelUserTable, "KanelUser", teslmodkanelmodels.KanelUser{Id: "usr-blocked", Email: "blocked@example.com", PasswordHash: "password123", DisplayName: "Blocked Reporter", CreatedAt: teslrt.SecondsToPosix(teslrt.FromInt64(0))}, func(teslRow, teslNew teslmodkanelmodels.KanelUser) bool { return (teslRow.Id == teslNew.Id) }, "insert into \"kanel\".\"kanel_users\" (\"id\", \"email\", \"password_hash\", \"display_name\", \"created_at\") values ($1, $2, $3, $4, $5)", func(teslRow teslmodkanelmodels.KanelUser) []any {
+		return []any{teslRow.Id, teslRow.Email, teslRow.PasswordHash, teslRow.DisplayName, teslrt.PgBigint(teslRow.CreatedAt.Value)}
+	})
 //line KanelBackend.tesl:661
-	_ = teslrt.TableInsert(teslmodkanelmodels.KanelUserTable, "KanelUser", teslmodkanelmodels.KanelUser{Id: "usr-commenter", Email: "commenter@example.com", PasswordHash: "password123", DisplayName: "Commenter", CreatedAt: teslrt.SecondsToPosix(teslrt.FromInt64(0))}, func(teslRow, teslNew teslmodkanelmodels.KanelUser) bool { return (teslRow.Id == teslNew.Id) })
+	_ = teslrt.DbInsert(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.KanelUserTable, "KanelUser", teslmodkanelmodels.KanelUser{Id: "usr-commenter", Email: "commenter@example.com", PasswordHash: "password123", DisplayName: "Commenter", CreatedAt: teslrt.SecondsToPosix(teslrt.FromInt64(0))}, func(teslRow, teslNew teslmodkanelmodels.KanelUser) bool { return (teslRow.Id == teslNew.Id) }, "insert into \"kanel\".\"kanel_users\" (\"id\", \"email\", \"password_hash\", \"display_name\", \"created_at\") values ($1, $2, $3, $4, $5)", func(teslRow teslmodkanelmodels.KanelUser) []any {
+		return []any{teslRow.Id, teslRow.Email, teslRow.PasswordHash, teslRow.DisplayName, teslrt.PgBigint(teslRow.CreatedAt.Value)}
+	})
 //line KanelBackend.tesl:668
-	_ = teslrt.TableInsert(teslmodkanelmodels.OrgTable, "Org", teslmodkanelmodels.Org{Id: "org-failed-notify", Name: "Failed Notify Org", Slug: "failed-notify-org", CreatedAt: teslrt.SecondsToPosix(teslrt.FromInt64(0))}, func(teslRow, teslNew teslmodkanelmodels.Org) bool { return (teslRow.Id == teslNew.Id) })
+	_ = teslrt.DbInsert(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.OrgTable, "Org", teslmodkanelmodels.Org{Id: "org-failed-notify", Name: "Failed Notify Org", Slug: "failed-notify-org", CreatedAt: teslrt.SecondsToPosix(teslrt.FromInt64(0))}, func(teslRow, teslNew teslmodkanelmodels.Org) bool { return (teslRow.Id == teslNew.Id) }, "insert into \"kanel\".\"kanel_orgs\" (\"id\", \"name\", \"slug\", \"created_at\") values ($1, $2, $3, $4)", func(teslRow teslmodkanelmodels.Org) []any {
+		return []any{teslRow.Id, teslRow.Name, teslRow.Slug, teslrt.PgBigint(teslRow.CreatedAt.Value)}
+	})
 //line KanelBackend.tesl:674
-	_ = teslrt.TableInsert(teslmodkanelmodels.OrgMembershipTable, "OrgMembership", teslmodkanelmodels.OrgMembership{Id: "mem-blocked", OrgId: "org-failed-notify", UserId: "usr-blocked", Role: teslmodkanelmodels.OrgRole{Tag: teslmodkanelmodels.OrgRoleRoleAdmin}, JoinedAt: teslrt.SecondsToPosix(teslrt.FromInt64(0))}, func(teslRow, teslNew teslmodkanelmodels.OrgMembership) bool { return (teslRow.Id == teslNew.Id) })
+	_ = teslrt.DbInsert(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.OrgMembershipTable, "OrgMembership", teslmodkanelmodels.OrgMembership{Id: "mem-blocked", OrgId: "org-failed-notify", UserId: "usr-blocked", Role: teslmodkanelmodels.OrgRole{Tag: teslmodkanelmodels.OrgRoleRoleAdmin}, JoinedAt: teslrt.SecondsToPosix(teslrt.FromInt64(0))}, func(teslRow, teslNew teslmodkanelmodels.OrgMembership) bool { return (teslRow.Id == teslNew.Id) }, "insert into \"kanel\".\"kanel_org_memberships\" (\"id\", \"org_id\", \"user_id\", \"role\", \"joined_at\") values ($1, $2, $3, $4, $5)", func(teslRow teslmodkanelmodels.OrgMembership) []any {
+		return []any{teslRow.Id, teslRow.OrgId, teslRow.UserId, teslrt.EncodeJSONValue(teslmodkanelmodels.EncodeOrgRoleJSON(teslRow.Role)), teslrt.PgBigint(teslRow.JoinedAt.Value)}
+	})
 //line KanelBackend.tesl:681
-	_ = teslrt.TableInsert(teslmodkanelmodels.OrgMembershipTable, "OrgMembership", teslmodkanelmodels.OrgMembership{Id: "mem-commenter", OrgId: "org-failed-notify", UserId: "usr-commenter", Role: teslmodkanelmodels.OrgRole{Tag: teslmodkanelmodels.OrgRoleRoleMember}, JoinedAt: teslrt.SecondsToPosix(teslrt.FromInt64(0))}, func(teslRow, teslNew teslmodkanelmodels.OrgMembership) bool { return (teslRow.Id == teslNew.Id) })
+	_ = teslrt.DbInsert(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.OrgMembershipTable, "OrgMembership", teslmodkanelmodels.OrgMembership{Id: "mem-commenter", OrgId: "org-failed-notify", UserId: "usr-commenter", Role: teslmodkanelmodels.OrgRole{Tag: teslmodkanelmodels.OrgRoleRoleMember}, JoinedAt: teslrt.SecondsToPosix(teslrt.FromInt64(0))}, func(teslRow, teslNew teslmodkanelmodels.OrgMembership) bool { return (teslRow.Id == teslNew.Id) }, "insert into \"kanel\".\"kanel_org_memberships\" (\"id\", \"org_id\", \"user_id\", \"role\", \"joined_at\") values ($1, $2, $3, $4, $5)", func(teslRow teslmodkanelmodels.OrgMembership) []any {
+		return []any{teslRow.Id, teslRow.OrgId, teslRow.UserId, teslrt.EncodeJSONValue(teslmodkanelmodels.EncodeOrgRoleJSON(teslRow.Role)), teslrt.PgBigint(teslRow.JoinedAt.Value)}
+	})
 //line KanelBackend.tesl:688
-	_ = teslrt.TableInsert(teslmodkanelmodels.ProjectTable, "Project", teslmodkanelmodels.Project{Id: "proj-failed-notify", OrgId: "org-failed-notify", Name: "Failure project", Description: "Exercise dead-letter handling", Archived: false, CreatedAt: teslrt.SecondsToPosix(teslrt.FromInt64(0))}, func(teslRow, teslNew teslmodkanelmodels.Project) bool { return (teslRow.Id == teslNew.Id) })
+	_ = teslrt.DbInsert(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.ProjectTable, "Project", teslmodkanelmodels.Project{Id: "proj-failed-notify", OrgId: "org-failed-notify", Name: "Failure project", Description: "Exercise dead-letter handling", Archived: false, CreatedAt: teslrt.SecondsToPosix(teslrt.FromInt64(0))}, func(teslRow, teslNew teslmodkanelmodels.Project) bool { return (teslRow.Id == teslNew.Id) }, "insert into \"kanel\".\"kanel_projects\" (\"id\", \"org_id\", \"name\", \"description\", \"archived\", \"created_at\") values ($1, $2, $3, $4, $5, $6)", func(teslRow teslmodkanelmodels.Project) []any {
+		return []any{teslRow.Id, teslRow.OrgId, teslRow.Name, teslRow.Description, teslRow.Archived, teslrt.PgBigint(teslRow.CreatedAt.Value)}
+	})
 //line KanelBackend.tesl:696
-	_ = teslrt.TableInsert(teslmodkanelmodels.IssueTable, "Issue", teslmodkanelmodels.Issue{Id: "iss-failed-notify", ProjectId: "proj-failed-notify", OrgId: "org-failed-notify", Title: "Queue failure", Description: "Expect dead-letter delivery", Status: teslmodkanelmodels.IssueStatus{Tag: teslmodkanelmodels.IssueStatusBacklog}, AssigneeId: teslrt.Maybe[string]{Tag: teslrt.MaybeNothing}, ReporterId: "usr-blocked", Estimate: teslrt.FromInt64(30), DueAt: teslrt.Maybe[teslrt.PosixMillis]{Tag: teslrt.MaybeNothing}, CreatedAt: teslrt.SecondsToPosix(teslrt.FromInt64(0)), UpdatedAt: teslrt.SecondsToPosix(teslrt.FromInt64(0))}, func(teslRow, teslNew teslmodkanelmodels.Issue) bool { return (teslRow.Id == teslNew.Id) })
+	_ = teslrt.DbInsert(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.IssueTable, "Issue", teslmodkanelmodels.Issue{Id: "iss-failed-notify", ProjectId: "proj-failed-notify", OrgId: "org-failed-notify", Title: "Queue failure", Description: "Expect dead-letter delivery", Status: teslmodkanelmodels.IssueStatus{Tag: teslmodkanelmodels.IssueStatusBacklog}, AssigneeId: teslrt.Maybe[string]{Tag: teslrt.MaybeNothing}, ReporterId: "usr-blocked", Estimate: teslrt.FromInt64(30), DueAt: teslrt.Maybe[teslrt.PosixMillis]{Tag: teslrt.MaybeNothing}, CreatedAt: teslrt.SecondsToPosix(teslrt.FromInt64(0)), UpdatedAt: teslrt.SecondsToPosix(teslrt.FromInt64(0))}, func(teslRow, teslNew teslmodkanelmodels.Issue) bool { return (teslRow.Id == teslNew.Id) }, "insert into \"kanel\".\"kanel_issues\" (\"id\", \"project_id\", \"org_id\", \"title\", \"description\", \"status\", \"assignee_id\", \"reporter_id\", \"estimate\", \"due_at\", \"created_at\", \"updated_at\") values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)", func(teslRow teslmodkanelmodels.Issue) []any {
+		return []any{teslRow.Id, teslRow.ProjectId, teslRow.OrgId, teslRow.Title, teslRow.Description, teslrt.EncodeJSONValue(teslmodkanelmodels.EncodeIssueStatusJSON(teslRow.Status)), teslrt.PgNull(teslRow.AssigneeId, func(teslValue string) any { return teslValue }), teslRow.ReporterId, teslrt.PgInt(teslRow.Estimate), teslrt.PgNull(teslRow.DueAt, func(teslValue teslrt.PosixMillis) any { return teslrt.PgBigint(teslValue.Value) }), teslrt.PgBigint(teslRow.CreatedAt.Value), teslrt.PgBigint(teslRow.UpdatedAt.Value)}
+	})
 	{
 //line KanelBackend.tesl:712
 		reporterId := "usr-blocked"
@@ -2664,15 +2910,25 @@ func TestTeslApi6(teslT *testing.T) {
 	}()
 //line KanelBackend.tesl:748
 //line KanelBackend.tesl:750
-	_ = teslrt.TableInsert(teslmodkanelmodels.KanelUserTable, "KanelUser", teslmodkanelmodels.KanelUser{Id: "usr-status-test", Email: "statustest@example.com", PasswordHash: "password123", DisplayName: "Status Tester", CreatedAt: teslrt.SecondsToPosix(teslrt.FromInt64(0))}, func(teslRow, teslNew teslmodkanelmodels.KanelUser) bool { return (teslRow.Id == teslNew.Id) })
+	_ = teslrt.DbInsert(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.KanelUserTable, "KanelUser", teslmodkanelmodels.KanelUser{Id: "usr-status-test", Email: "statustest@example.com", PasswordHash: "password123", DisplayName: "Status Tester", CreatedAt: teslrt.SecondsToPosix(teslrt.FromInt64(0))}, func(teslRow, teslNew teslmodkanelmodels.KanelUser) bool { return (teslRow.Id == teslNew.Id) }, "insert into \"kanel\".\"kanel_users\" (\"id\", \"email\", \"password_hash\", \"display_name\", \"created_at\") values ($1, $2, $3, $4, $5)", func(teslRow teslmodkanelmodels.KanelUser) []any {
+		return []any{teslRow.Id, teslRow.Email, teslRow.PasswordHash, teslRow.DisplayName, teslrt.PgBigint(teslRow.CreatedAt.Value)}
+	})
 //line KanelBackend.tesl:757
-	_ = teslrt.TableInsert(teslmodkanelmodels.OrgTable, "Org", teslmodkanelmodels.Org{Id: "org-status-test", Name: "Status Test Org", Slug: "status-test-org", CreatedAt: teslrt.SecondsToPosix(teslrt.FromInt64(0))}, func(teslRow, teslNew teslmodkanelmodels.Org) bool { return (teslRow.Id == teslNew.Id) })
+	_ = teslrt.DbInsert(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.OrgTable, "Org", teslmodkanelmodels.Org{Id: "org-status-test", Name: "Status Test Org", Slug: "status-test-org", CreatedAt: teslrt.SecondsToPosix(teslrt.FromInt64(0))}, func(teslRow, teslNew teslmodkanelmodels.Org) bool { return (teslRow.Id == teslNew.Id) }, "insert into \"kanel\".\"kanel_orgs\" (\"id\", \"name\", \"slug\", \"created_at\") values ($1, $2, $3, $4)", func(teslRow teslmodkanelmodels.Org) []any {
+		return []any{teslRow.Id, teslRow.Name, teslRow.Slug, teslrt.PgBigint(teslRow.CreatedAt.Value)}
+	})
 //line KanelBackend.tesl:763
-	_ = teslrt.TableInsert(teslmodkanelmodels.OrgMembershipTable, "OrgMembership", teslmodkanelmodels.OrgMembership{Id: "mem-status-test", OrgId: "org-status-test", UserId: "usr-status-test", Role: teslmodkanelmodels.OrgRole{Tag: teslmodkanelmodels.OrgRoleRoleAdmin}, JoinedAt: teslrt.SecondsToPosix(teslrt.FromInt64(0))}, func(teslRow, teslNew teslmodkanelmodels.OrgMembership) bool { return (teslRow.Id == teslNew.Id) })
+	_ = teslrt.DbInsert(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.OrgMembershipTable, "OrgMembership", teslmodkanelmodels.OrgMembership{Id: "mem-status-test", OrgId: "org-status-test", UserId: "usr-status-test", Role: teslmodkanelmodels.OrgRole{Tag: teslmodkanelmodels.OrgRoleRoleAdmin}, JoinedAt: teslrt.SecondsToPosix(teslrt.FromInt64(0))}, func(teslRow, teslNew teslmodkanelmodels.OrgMembership) bool { return (teslRow.Id == teslNew.Id) }, "insert into \"kanel\".\"kanel_org_memberships\" (\"id\", \"org_id\", \"user_id\", \"role\", \"joined_at\") values ($1, $2, $3, $4, $5)", func(teslRow teslmodkanelmodels.OrgMembership) []any {
+		return []any{teslRow.Id, teslRow.OrgId, teslRow.UserId, teslrt.EncodeJSONValue(teslmodkanelmodels.EncodeOrgRoleJSON(teslRow.Role)), teslrt.PgBigint(teslRow.JoinedAt.Value)}
+	})
 //line KanelBackend.tesl:770
-	_ = teslrt.TableInsert(teslmodkanelmodels.ProjectTable, "Project", teslmodkanelmodels.Project{Id: "proj-status-test", OrgId: "org-status-test", Name: "Status Test Project", Description: "For testing status transitions", Archived: false, CreatedAt: teslrt.SecondsToPosix(teslrt.FromInt64(0))}, func(teslRow, teslNew teslmodkanelmodels.Project) bool { return (teslRow.Id == teslNew.Id) })
+	_ = teslrt.DbInsert(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.ProjectTable, "Project", teslmodkanelmodels.Project{Id: "proj-status-test", OrgId: "org-status-test", Name: "Status Test Project", Description: "For testing status transitions", Archived: false, CreatedAt: teslrt.SecondsToPosix(teslrt.FromInt64(0))}, func(teslRow, teslNew teslmodkanelmodels.Project) bool { return (teslRow.Id == teslNew.Id) }, "insert into \"kanel\".\"kanel_projects\" (\"id\", \"org_id\", \"name\", \"description\", \"archived\", \"created_at\") values ($1, $2, $3, $4, $5, $6)", func(teslRow teslmodkanelmodels.Project) []any {
+		return []any{teslRow.Id, teslRow.OrgId, teslRow.Name, teslRow.Description, teslRow.Archived, teslrt.PgBigint(teslRow.CreatedAt.Value)}
+	})
 //line KanelBackend.tesl:778
-	_ = teslrt.TableInsert(teslmodkanelmodels.IssueTable, "Issue", teslmodkanelmodels.Issue{Id: "iss-status-test", ProjectId: "proj-status-test", OrgId: "org-status-test", Title: "Transition test issue", Description: "Testing status machine", Status: teslmodkanelmodels.IssueStatus{Tag: teslmodkanelmodels.IssueStatusBacklog}, AssigneeId: teslrt.Maybe[string]{Tag: teslrt.MaybeNothing}, ReporterId: "usr-status-test", Estimate: teslrt.FromInt64(30), DueAt: teslrt.Maybe[teslrt.PosixMillis]{Tag: teslrt.MaybeNothing}, CreatedAt: teslrt.SecondsToPosix(teslrt.FromInt64(0)), UpdatedAt: teslrt.SecondsToPosix(teslrt.FromInt64(0))}, func(teslRow, teslNew teslmodkanelmodels.Issue) bool { return (teslRow.Id == teslNew.Id) })
+	_ = teslrt.DbInsert(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.IssueTable, "Issue", teslmodkanelmodels.Issue{Id: "iss-status-test", ProjectId: "proj-status-test", OrgId: "org-status-test", Title: "Transition test issue", Description: "Testing status machine", Status: teslmodkanelmodels.IssueStatus{Tag: teslmodkanelmodels.IssueStatusBacklog}, AssigneeId: teslrt.Maybe[string]{Tag: teslrt.MaybeNothing}, ReporterId: "usr-status-test", Estimate: teslrt.FromInt64(30), DueAt: teslrt.Maybe[teslrt.PosixMillis]{Tag: teslrt.MaybeNothing}, CreatedAt: teslrt.SecondsToPosix(teslrt.FromInt64(0)), UpdatedAt: teslrt.SecondsToPosix(teslrt.FromInt64(0))}, func(teslRow, teslNew teslmodkanelmodels.Issue) bool { return (teslRow.Id == teslNew.Id) }, "insert into \"kanel\".\"kanel_issues\" (\"id\", \"project_id\", \"org_id\", \"title\", \"description\", \"status\", \"assignee_id\", \"reporter_id\", \"estimate\", \"due_at\", \"created_at\", \"updated_at\") values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)", func(teslRow teslmodkanelmodels.Issue) []any {
+		return []any{teslRow.Id, teslRow.ProjectId, teslRow.OrgId, teslRow.Title, teslRow.Description, teslrt.EncodeJSONValue(teslmodkanelmodels.EncodeIssueStatusJSON(teslRow.Status)), teslrt.PgNull(teslRow.AssigneeId, func(teslValue string) any { return teslValue }), teslRow.ReporterId, teslrt.PgInt(teslRow.Estimate), teslrt.PgNull(teslRow.DueAt, func(teslValue teslrt.PosixMillis) any { return teslrt.PgBigint(teslValue.Value) }), teslrt.PgBigint(teslRow.CreatedAt.Value), teslrt.PgBigint(teslRow.UpdatedAt.Value)}
+	})
 	{
 //line KanelBackend.tesl:794
 		userId := "usr-status-test"
@@ -2760,6 +3016,8 @@ func teslResetTestState() {
 package teslmodkanelbilling
 
 import (
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"tesl.generated/teslmodkanelbackend/internal/teslmodkanelauth"
 	"tesl.generated/teslmodkanelbackend/internal/teslmodkanelmodels"
 	"tesl.generated/teslmodkanelbackend/internal/teslrt"
@@ -2769,9 +3027,11 @@ import (
 func CheckInvoiceDraft(invoiceId string) teslrt.Check[string] {
 	{
 //line KanelBilling.tesl:48
-		found := teslrt.TableSelectOne(teslmodkanelmodels.InvoiceTable, func(inv teslmodkanelmodels.Invoice) bool {
+		found := teslrt.DbSelectOne(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.InvoiceTable, func(inv teslmodkanelmodels.Invoice) bool {
 			return (inv.Id == invoiceId)
-		})
+		}, nil, teslrt.PgSql("select \"id\", \"org_id\", \"status\", \"total_minutes\", \"notes\", \"created_at\", \"approved_at\" from \"kanel\".\"kanel_invoices\" where \"id\" = $1 limit 1", func() []any {
+			return []any{invoiceId}
+		}), teslScanInvoice)
 		_ = found
 //line KanelBilling.tesl:49
 		{
@@ -2827,9 +3087,11 @@ func CreateInvoiceHandler(session teslmodkanelauth.KanelSession, orgId string, r
 		_ = _adminUserId
 		{
 //line KanelBilling.tesl:74
-			entryCount := teslrt.TableCount(teslmodkanelmodels.TimeEntryTable, func(te teslmodkanelmodels.TimeEntry) bool {
+			entryCount := teslrt.DbCount(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.TimeEntryTable, func(te teslmodkanelmodels.TimeEntry) bool {
 				return (te.OrgId == orgId) && (te.InvoiceId == "")
-			})
+			}, teslrt.PgSql("select count(*) from \"kanel\".\"kanel_time_entries\" where \"org_id\" = $1 and \"invoice_id\" = $2", func() []any {
+				return []any{orgId, ""}
+			}))
 			_ = entryCount
 //line KanelBilling.tesl:75
 			if teslrt.Equal(entryCount, teslrt.FromInt64(0)) {
@@ -2838,9 +3100,11 @@ func CreateInvoiceHandler(session teslmodkanelauth.KanelSession, orgId string, r
 			} else {
 				{
 //line KanelBilling.tesl:78
-					totalMinutes := teslrt.TableFold(teslmodkanelmodels.TimeEntryTable, func(te teslmodkanelmodels.TimeEntry) bool {
+					totalMinutes := teslrt.DbSum(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.TimeEntryTable, func(te teslmodkanelmodels.TimeEntry) bool {
 						return (te.OrgId == orgId) && (te.InvoiceId == "")
-					}, func(teslRow teslmodkanelmodels.TimeEntry) teslrt.Int { return teslRow.Minutes }, teslrt.Add, teslrt.FromInt64(0))
+					}, func(teslRow teslmodkanelmodels.TimeEntry) teslrt.Int { return teslRow.Minutes }, teslrt.Add, teslrt.FromInt64(0), teslrt.PgSql("select coalesce(sum(\"minutes\"), 0) from \"kanel\".\"kanel_time_entries\" where \"org_id\" = $1 and \"invoice_id\" = $2", func() []any {
+						return []any{orgId, ""}
+					}), teslScanTotalTeslrtInt)
 					_ = totalMinutes
 					{
 //line KanelBilling.tesl:79
@@ -2848,19 +3112,23 @@ func CreateInvoiceHandler(session teslmodkanelauth.KanelSession, orgId string, r
 						_ = invoiceId
 //line KanelBilling.tesl:80
 						var teslCommitted teslmodkanelmodels.Invoice
-						teslrt.WithMemoryTransaction(func() {
+						teslrt.WithTransaction(func() {
 							teslCommitted = func() teslmodkanelmodels.Invoice {
 								{
 //line KanelBilling.tesl:82
-									_ = teslrt.TableUpdate(teslmodkanelmodels.TimeEntryTable, func(te teslmodkanelmodels.TimeEntry) bool {
+									_ = teslrt.DbUpdate(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.TimeEntryTable, func(te teslmodkanelmodels.TimeEntry) bool {
 										return (te.OrgId == orgId) && (te.InvoiceId == "")
 									}, func(te teslmodkanelmodels.TimeEntry) teslmodkanelmodels.TimeEntry {
 										teslNext := te
 										teslNext.InvoiceId = invoiceId
 										return teslNext
-									})
+									}, teslrt.PgSql("update \"kanel\".\"kanel_time_entries\" set \"invoice_id\" = $1 where \"org_id\" = $2 and \"invoice_id\" = $3", func() []any {
+										return []any{invoiceId, orgId, ""}
+									}))
 //line KanelBilling.tesl:85
-									return teslrt.TableInsert(teslmodkanelmodels.InvoiceTable, "Invoice", teslmodkanelmodels.Invoice{Id: invoiceId, OrgId: orgId, Status: teslmodkanelmodels.InvoiceStatus{Tag: teslmodkanelmodels.InvoiceStatusDraft}, TotalMinutes: totalMinutes, Notes: req.Notes, CreatedAt: teslrt.NowMillis(), ApprovedAt: teslrt.SecondsToPosix(teslrt.FromInt64(0))}, func(teslRow, teslNew teslmodkanelmodels.Invoice) bool { return (teslRow.Id == teslNew.Id) })
+									return teslrt.DbInsert(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.InvoiceTable, "Invoice", teslmodkanelmodels.Invoice{Id: invoiceId, OrgId: orgId, Status: teslmodkanelmodels.InvoiceStatus{Tag: teslmodkanelmodels.InvoiceStatusDraft}, TotalMinutes: totalMinutes, Notes: req.Notes, CreatedAt: teslrt.NowMillis(), ApprovedAt: teslrt.SecondsToPosix(teslrt.FromInt64(0))}, func(teslRow, teslNew teslmodkanelmodels.Invoice) bool { return (teslRow.Id == teslNew.Id) }, "insert into \"kanel\".\"kanel_invoices\" (\"id\", \"org_id\", \"status\", \"total_minutes\", \"notes\", \"created_at\", \"approved_at\") values ($1, $2, $3, $4, $5, $6, $7)", func(teslRow teslmodkanelmodels.Invoice) []any {
+										return []any{teslRow.Id, teslRow.OrgId, teslrt.EncodeJSONValue(teslmodkanelmodels.EncodeInvoiceStatusJSON(teslRow.Status)), teslrt.PgInt(teslRow.TotalMinutes), teslRow.Notes, teslrt.PgBigint(teslRow.CreatedAt.Value), teslrt.PgBigint(teslRow.ApprovedAt.Value)}
+									})
 								}
 							}()
 						})
@@ -2880,9 +3148,11 @@ func GetInvoiceHandler(session teslmodkanelauth.KanelSession, orgId string, invo
 		_ = _adminUserId
 		{
 //line KanelBilling.tesl:104
-			found := teslrt.TableSelectOne(teslmodkanelmodels.InvoiceTable, func(inv teslmodkanelmodels.Invoice) bool {
+			found := teslrt.DbSelectOne(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.InvoiceTable, func(inv teslmodkanelmodels.Invoice) bool {
 				return (inv.Id == invoiceId) && (inv.OrgId == orgId)
-			})
+			}, nil, teslrt.PgSql("select \"id\", \"org_id\", \"status\", \"total_minutes\", \"notes\", \"created_at\", \"approved_at\" from \"kanel\".\"kanel_invoices\" where \"id\" = $1 and \"org_id\" = $2 limit 1", func() []any {
+				return []any{invoiceId, orgId}
+			}), teslScanInvoice)
 			_ = found
 //line KanelBilling.tesl:105
 			{
@@ -2911,9 +3181,11 @@ func ListInvoicesHandler(session teslmodkanelauth.KanelSession, orgId string) []
 		_adminUserId := teslrt.MustCheckRequest(teslmodkanelauth.CheckOrgAdmin(session.UserId, orgId))
 		_ = _adminUserId
 //line KanelBilling.tesl:115
-		return teslrt.TableSelect(teslmodkanelmodels.InvoiceTable, func(inv teslmodkanelmodels.Invoice) bool {
+		return teslrt.DbSelect(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.InvoiceTable, func(inv teslmodkanelmodels.Invoice) bool {
 			return (inv.OrgId == orgId)
-		})
+		}, nil, 0, -1, teslrt.PgSql("select \"id\", \"org_id\", \"status\", \"total_minutes\", \"notes\", \"created_at\", \"approved_at\" from \"kanel\".\"kanel_invoices\" where \"org_id\" = $1", func() []any {
+			return []any{orgId}
+		}), teslScanInvoice)
 	}
 }
 
@@ -2928,14 +3200,18 @@ func ApproveInvoiceHandler(session teslmodkanelauth.KanelSession, orgId string, 
 			draftInvoice := teslrt.MustCheckRequest(CheckInvoiceDraft(invoiceId))
 			_ = draftInvoice
 //line KanelBilling.tesl:125
-			return teslrt.TableUpdateReturnOne(teslmodkanelmodels.InvoiceTable, func(inv teslmodkanelmodels.Invoice) bool {
+			return teslrt.DbUpdateReturnOne(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.InvoiceTable, func(inv teslmodkanelmodels.Invoice) bool {
 				return (inv.Id == draftInvoice) && (inv.OrgId == orgId)
 			}, func(inv teslmodkanelmodels.Invoice) teslmodkanelmodels.Invoice {
 				teslNext := inv
 				teslNext.Status = teslmodkanelmodels.InvoiceStatus{Tag: teslmodkanelmodels.InvoiceStatusApproved}
 				teslNext.ApprovedAt = teslrt.NowMillis()
 				return teslNext
-			})
+			}, teslrt.PgSqlProbed("update \"kanel\".\"kanel_invoices\" set \"status\" = $1, \"approved_at\" = $2 where \"id\" = $3 and \"org_id\" = $4 and (select count(*) from \"kanel\".\"kanel_invoices\" where \"id\" = $3 and \"org_id\" = $4) = 1 returning \"id\", \"org_id\", \"status\", \"total_minutes\", \"notes\", \"created_at\", \"approved_at\"", func() []any {
+				return []any{teslrt.EncodeJSONValue(teslmodkanelmodels.EncodeInvoiceStatusJSON(teslmodkanelmodels.InvoiceStatus{Tag: teslmodkanelmodels.InvoiceStatusApproved})), teslrt.PgBigint(teslrt.NowMillis().Value), draftInvoice, orgId}
+			}, "select count(*) from \"kanel\".\"kanel_invoices\" where \"id\" = $1 and \"org_id\" = $2", func() []any {
+				return []any{draftInvoice, orgId}
+			}), teslScanInvoice)
 		}
 	}
 }
@@ -2948,9 +3224,11 @@ func MarkSentHandler(session teslmodkanelauth.KanelSession, orgId string, invoic
 		_ = _adminUserId
 		{
 //line KanelBilling.tesl:138
-			found := teslrt.TableSelectOne(teslmodkanelmodels.InvoiceTable, func(inv teslmodkanelmodels.Invoice) bool {
+			found := teslrt.DbSelectOne(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.InvoiceTable, func(inv teslmodkanelmodels.Invoice) bool {
 				return (inv.Id == invoiceId) && (inv.OrgId == orgId)
-			})
+			}, nil, teslrt.PgSql("select \"id\", \"org_id\", \"status\", \"total_minutes\", \"notes\", \"created_at\", \"approved_at\" from \"kanel\".\"kanel_invoices\" where \"id\" = $1 and \"org_id\" = $2 limit 1", func() []any {
+				return []any{invoiceId, orgId}
+			}), teslScanInvoice)
 			_ = found
 //line KanelBilling.tesl:139
 			{
@@ -2968,13 +3246,17 @@ func MarkSentHandler(session teslmodkanelauth.KanelSession, orgId string, invoic
 						switch teslScrut5.Tag {
 						case teslmodkanelmodels.InvoiceStatusApproved:
 //line KanelBilling.tesl:144
-							return teslrt.TableUpdateReturnOne(teslmodkanelmodels.InvoiceTable, func(i teslmodkanelmodels.Invoice) bool {
+							return teslrt.DbUpdateReturnOne(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.InvoiceTable, func(i teslmodkanelmodels.Invoice) bool {
 								return (i.Id == invoiceId)
 							}, func(i teslmodkanelmodels.Invoice) teslmodkanelmodels.Invoice {
 								teslNext := i
 								teslNext.Status = teslmodkanelmodels.InvoiceStatus{Tag: teslmodkanelmodels.InvoiceStatusSent}
 								return teslNext
-							})
+							}, teslrt.PgSqlProbed("update \"kanel\".\"kanel_invoices\" set \"status\" = $1 where \"id\" = $2 and (select count(*) from \"kanel\".\"kanel_invoices\" where \"id\" = $2) = 1 returning \"id\", \"org_id\", \"status\", \"total_minutes\", \"notes\", \"created_at\", \"approved_at\"", func() []any {
+								return []any{teslrt.EncodeJSONValue(teslmodkanelmodels.EncodeInvoiceStatusJSON(teslmodkanelmodels.InvoiceStatus{Tag: teslmodkanelmodels.InvoiceStatusSent})), invoiceId}
+							}, "select count(*) from \"kanel\".\"kanel_invoices\" where \"id\" = $1", func() []any {
+								return []any{invoiceId}
+							}), teslScanInvoice)
 						case teslmodkanelmodels.InvoiceStatusDraft:
 //line KanelBilling.tesl:148
 							panic(teslrt.RequestRejection{Status: 422, Message: "invoice must be approved before sending"})
@@ -3007,9 +3289,11 @@ func MarkPaidHandler(session teslmodkanelauth.KanelSession, orgId string, invoic
 		_ = _adminUserId
 		{
 //line KanelBilling.tesl:160
-			found := teslrt.TableSelectOne(teslmodkanelmodels.InvoiceTable, func(inv teslmodkanelmodels.Invoice) bool {
+			found := teslrt.DbSelectOne(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.InvoiceTable, func(inv teslmodkanelmodels.Invoice) bool {
 				return (inv.Id == invoiceId) && (inv.OrgId == orgId)
-			})
+			}, nil, teslrt.PgSql("select \"id\", \"org_id\", \"status\", \"total_minutes\", \"notes\", \"created_at\", \"approved_at\" from \"kanel\".\"kanel_invoices\" where \"id\" = $1 and \"org_id\" = $2 limit 1", func() []any {
+				return []any{invoiceId, orgId}
+			}), teslScanInvoice)
 			_ = found
 //line KanelBilling.tesl:161
 			{
@@ -3027,13 +3311,17 @@ func MarkPaidHandler(session teslmodkanelauth.KanelSession, orgId string, invoic
 						switch teslScrut5.Tag {
 						case teslmodkanelmodels.InvoiceStatusSent:
 //line KanelBilling.tesl:166
-							return teslrt.TableUpdateReturnOne(teslmodkanelmodels.InvoiceTable, func(i teslmodkanelmodels.Invoice) bool {
+							return teslrt.DbUpdateReturnOne(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.InvoiceTable, func(i teslmodkanelmodels.Invoice) bool {
 								return (i.Id == invoiceId)
 							}, func(i teslmodkanelmodels.Invoice) teslmodkanelmodels.Invoice {
 								teslNext := i
 								teslNext.Status = teslmodkanelmodels.InvoiceStatus{Tag: teslmodkanelmodels.InvoiceStatusPaid}
 								return teslNext
-							})
+							}, teslrt.PgSqlProbed("update \"kanel\".\"kanel_invoices\" set \"status\" = $1 where \"id\" = $2 and (select count(*) from \"kanel\".\"kanel_invoices\" where \"id\" = $2) = 1 returning \"id\", \"org_id\", \"status\", \"total_minutes\", \"notes\", \"created_at\", \"approved_at\"", func() []any {
+								return []any{teslrt.EncodeJSONValue(teslmodkanelmodels.EncodeInvoiceStatusJSON(teslmodkanelmodels.InvoiceStatus{Tag: teslmodkanelmodels.InvoiceStatusPaid})), invoiceId}
+							}, "select count(*) from \"kanel\".\"kanel_invoices\" where \"id\" = $1", func() []any {
+								return []any{invoiceId}
+							}), teslScanInvoice)
 						case teslmodkanelmodels.InvoiceStatusApproved:
 //line KanelBilling.tesl:170
 							panic(teslrt.RequestRejection{Status: 422, Message: "invoice must be sent before marking paid"})
@@ -3045,13 +3333,17 @@ func MarkPaidHandler(session teslmodkanelauth.KanelSession, orgId string, invoic
 							panic(teslrt.RequestRejection{Status: 422, Message: "invoice already paid"})
 						case teslmodkanelmodels.InvoiceStatusOverdue:
 //line KanelBilling.tesl:174
-							return teslrt.TableUpdateReturnOne(teslmodkanelmodels.InvoiceTable, func(i teslmodkanelmodels.Invoice) bool {
+							return teslrt.DbUpdateReturnOne(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.InvoiceTable, func(i teslmodkanelmodels.Invoice) bool {
 								return (i.Id == invoiceId)
 							}, func(i teslmodkanelmodels.Invoice) teslmodkanelmodels.Invoice {
 								teslNext := i
 								teslNext.Status = teslmodkanelmodels.InvoiceStatus{Tag: teslmodkanelmodels.InvoiceStatusPaid}
 								return teslNext
-							})
+							}, teslrt.PgSqlProbed("update \"kanel\".\"kanel_invoices\" set \"status\" = $1 where \"id\" = $2 and (select count(*) from \"kanel\".\"kanel_invoices\" where \"id\" = $2) = 1 returning \"id\", \"org_id\", \"status\", \"total_minutes\", \"notes\", \"created_at\", \"approved_at\"", func() []any {
+								return []any{teslrt.EncodeJSONValue(teslmodkanelmodels.EncodeInvoiceStatusJSON(teslmodkanelmodels.InvoiceStatus{Tag: teslmodkanelmodels.InvoiceStatusPaid})), invoiceId}
+							}, "select count(*) from \"kanel\".\"kanel_invoices\" where \"id\" = $1", func() []any {
+								return []any{invoiceId}
+							}), teslScanInvoice)
 						default:
 							panic("unreachable: checker guarantees case exhaustiveness")
 						}
@@ -3064,10 +3356,67 @@ func MarkPaidHandler(session teslmodkanelauth.KanelSession, orgId string, invoic
 	}
 }
 
+func teslColumnInvoiceStatus_teslmodkanelmodels(teslText []byte) teslmodkanelmodels.InvoiceStatus {
+	teslParsed, teslParseErr := teslrt.ParseColumnJSON(teslText)
+	if teslParseErr != nil {
+		panic("database: a InvoiceStatus column holds text that is not JSON: " + teslParseErr.Error())
+	}
+	teslTag, teslTagErr := teslrt.DecodeStringField(teslParsed, "tag")
+	if teslTagErr != nil {
+		panic("database: a InvoiceStatus column holds " + teslTagErr.Error())
+	}
+	switch teslTag {
+	case "Draft":
+		return teslmodkanelmodels.InvoiceStatus{Tag: teslmodkanelmodels.InvoiceStatusDraft}
+	case "Approved":
+		return teslmodkanelmodels.InvoiceStatus{Tag: teslmodkanelmodels.InvoiceStatusApproved}
+	case "Sent":
+		return teslmodkanelmodels.InvoiceStatus{Tag: teslmodkanelmodels.InvoiceStatusSent}
+	case "Paid":
+		return teslmodkanelmodels.InvoiceStatus{Tag: teslmodkanelmodels.InvoiceStatusPaid}
+	case "Overdue":
+		return teslmodkanelmodels.InvoiceStatus{Tag: teslmodkanelmodels.InvoiceStatusOverdue}
+	}
+	panic("database: a InvoiceStatus column holds an unknown tag " + teslTag)
+}
+
+func teslScanInvoice(teslRow pgx.CollectableRow) (teslmodkanelmodels.Invoice, error) {
+	teslValue := teslmodkanelmodels.Invoice{}
+	var teslColumn0 string
+	var teslColumn1 string
+	var teslColumn2 []byte
+	var teslColumn3 pgtype.Numeric
+	var teslColumn4 string
+	var teslColumn5 int64
+	var teslColumn6 int64
+	if teslErr := teslRow.Scan(&teslColumn0, &teslColumn1, &teslColumn2, &teslColumn3, &teslColumn4, &teslColumn5, &teslColumn6); teslErr != nil {
+		return teslValue, teslErr
+	}
+	teslValue.Id = teslColumn0
+	teslValue.OrgId = teslColumn1
+	teslValue.Status = teslColumnInvoiceStatus_teslmodkanelmodels(teslColumn2)
+	teslValue.TotalMinutes = teslrt.PgIntOf(teslColumn3)
+	teslValue.Notes = teslColumn4
+	teslValue.CreatedAt = teslrt.PosixMillis{Value: teslrt.FromInt64(teslColumn5)}
+	teslValue.ApprovedAt = teslrt.PosixMillis{Value: teslrt.FromInt64(teslColumn6)}
+	return teslValue, nil
+}
+
+func teslScanTotalTeslrtInt(teslRow pgx.Row) (teslrt.Int, error) {
+	var teslTotal pgtype.Numeric
+	var teslZero teslrt.Int
+	if teslErr := teslRow.Scan(&teslTotal); teslErr != nil {
+		return teslZero, teslErr
+	}
+	return teslrt.PgIntOf(teslTotal), nil
+}
+
 //tesl-snapshot: internal/teslmodkanelissues/module.go
 package teslmodkanelissues
 
 import (
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"tesl.generated/teslmodkanelbackend/internal/teslmodkanelauth"
 	"tesl.generated/teslmodkanelbackend/internal/teslmodkanelmodels"
 	"tesl.generated/teslmodkanelbackend/internal/teslrt"
@@ -3329,9 +3678,11 @@ func CheckTransition(from teslmodkanelmodels.IssueStatus, to teslmodkanelmodels.
 func CheckNotDone(issueId string) teslrt.Check[string] {
 	{
 //line KanelIssues.tesl:221
-		found := teslrt.TableSelectOne(teslmodkanelmodels.IssueTable, func(i teslmodkanelmodels.Issue) bool {
+		found := teslrt.DbSelectOne(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.IssueTable, func(i teslmodkanelmodels.Issue) bool {
 			return (i.Id == issueId)
-		})
+		}, nil, teslrt.PgSql("select \"id\", \"project_id\", \"org_id\", \"title\", \"description\", \"status\", \"assignee_id\", \"reporter_id\", \"estimate\", \"due_at\", \"created_at\", \"updated_at\" from \"kanel\".\"kanel_issues\" where \"id\" = $1 limit 1", func() []any {
+			return []any{issueId}
+		}), teslScanIssue)
 		_ = found
 //line KanelIssues.tesl:222
 		{
@@ -3380,9 +3731,11 @@ func CheckNotDone(issueId string) teslrt.Check[string] {
 func CheckCanClose(userId string, issueId string, orgId string) teslrt.Check[string] {
 	{
 //line KanelIssues.tesl:242
-		found := teslrt.TableSelectOne(teslmodkanelmodels.IssueTable, func(i teslmodkanelmodels.Issue) bool {
+		found := teslrt.DbSelectOne(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.IssueTable, func(i teslmodkanelmodels.Issue) bool {
 			return (i.Id == issueId)
-		})
+		}, nil, teslrt.PgSql("select \"id\", \"project_id\", \"org_id\", \"title\", \"description\", \"status\", \"assignee_id\", \"reporter_id\", \"estimate\", \"due_at\", \"created_at\", \"updated_at\" from \"kanel\".\"kanel_issues\" where \"id\" = $1 limit 1", func() []any {
+			return []any{issueId}
+		}), teslScanIssue)
 		_ = found
 //line KanelIssues.tesl:243
 		{
@@ -3408,9 +3761,11 @@ func CheckCanClose(userId string, issueId string, orgId string) teslrt.Check[str
 						} else {
 							{
 //line KanelIssues.tesl:251
-								membership := teslrt.TableSelectOne(teslmodkanelmodels.OrgMembershipTable, func(m teslmodkanelmodels.OrgMembership) bool {
+								membership := teslrt.DbSelectOne(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.OrgMembershipTable, func(m teslmodkanelmodels.OrgMembership) bool {
 									return (m.UserId == userId) && (m.OrgId == orgId)
-								})
+								}, nil, teslrt.PgSql("select \"id\", \"org_id\", \"user_id\", \"role\", \"joined_at\" from \"kanel\".\"kanel_org_memberships\" where \"user_id\" = $1 and \"org_id\" = $2 limit 1", func() []any {
+									return []any{userId, orgId}
+								}), teslScanOrgMembership)
 								_ = membership
 //line KanelIssues.tesl:252
 								{
@@ -3448,9 +3803,11 @@ func CheckCanClose(userId string, issueId string, orgId string) teslrt.Check[str
 					case teslrt.MaybeNothing:
 						{
 //line KanelIssues.tesl:261
-							membership := teslrt.TableSelectOne(teslmodkanelmodels.OrgMembershipTable, func(m teslmodkanelmodels.OrgMembership) bool {
+							membership := teslrt.DbSelectOne(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.OrgMembershipTable, func(m teslmodkanelmodels.OrgMembership) bool {
 								return (m.UserId == userId) && (m.OrgId == orgId)
-							})
+							}, nil, teslrt.PgSql("select \"id\", \"org_id\", \"user_id\", \"role\", \"joined_at\" from \"kanel\".\"kanel_org_memberships\" where \"user_id\" = $1 and \"org_id\" = $2 limit 1", func() []any {
+								return []any{userId, orgId}
+							}), teslScanOrgMembership)
 							_ = membership
 //line KanelIssues.tesl:262
 							{
@@ -3551,13 +3908,17 @@ func CreateProjectHandler(session teslmodkanelauth.KanelSession, orgId string, r
 						_ = projectId
 //line KanelIssues.tesl:296
 						var teslCommitted teslmodkanelmodels.Project
-						teslrt.WithMemoryTransaction(func() {
+						teslrt.WithTransaction(func() {
 							teslCommitted = func() teslmodkanelmodels.Project {
 								{
 //line KanelIssues.tesl:297
-									_ = teslrt.TableInsert(teslmodkanelmodels.ProjectMembershipTable, "ProjectMembership", teslmodkanelmodels.ProjectMembership{Id: memberId, ProjectId: projectId, UserId: session.UserId, JoinedAt: teslrt.NowMillis()}, func(teslRow, teslNew teslmodkanelmodels.ProjectMembership) bool { return (teslRow.Id == teslNew.Id) })
+									_ = teslrt.DbInsert(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.ProjectMembershipTable, "ProjectMembership", teslmodkanelmodels.ProjectMembership{Id: memberId, ProjectId: projectId, UserId: session.UserId, JoinedAt: teslrt.NowMillis()}, func(teslRow, teslNew teslmodkanelmodels.ProjectMembership) bool { return (teslRow.Id == teslNew.Id) }, "insert into \"kanel\".\"kanel_project_memberships\" (\"id\", \"project_id\", \"user_id\", \"joined_at\") values ($1, $2, $3, $4)", func(teslRow teslmodkanelmodels.ProjectMembership) []any {
+										return []any{teslRow.Id, teslRow.ProjectId, teslRow.UserId, teslrt.PgBigint(teslRow.JoinedAt.Value)}
+									})
 //line KanelIssues.tesl:303
-									return teslrt.TableInsert(teslmodkanelmodels.ProjectTable, "Project", teslmodkanelmodels.Project{Id: projectId, OrgId: orgId, Name: projName, Description: projDesc, Archived: false, CreatedAt: teslrt.NowMillis()}, func(teslRow, teslNew teslmodkanelmodels.Project) bool { return (teslRow.Id == teslNew.Id) })
+									return teslrt.DbInsert(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.ProjectTable, "Project", teslmodkanelmodels.Project{Id: projectId, OrgId: orgId, Name: projName, Description: projDesc, Archived: false, CreatedAt: teslrt.NowMillis()}, func(teslRow, teslNew teslmodkanelmodels.Project) bool { return (teslRow.Id == teslNew.Id) }, "insert into \"kanel\".\"kanel_projects\" (\"id\", \"org_id\", \"name\", \"description\", \"archived\", \"created_at\") values ($1, $2, $3, $4, $5, $6)", func(teslRow teslmodkanelmodels.Project) []any {
+										return []any{teslRow.Id, teslRow.OrgId, teslRow.Name, teslRow.Description, teslRow.Archived, teslrt.PgBigint(teslRow.CreatedAt.Value)}
+									})
 								}
 							}()
 						})
@@ -3576,9 +3937,11 @@ func ListProjectsHandler(session teslmodkanelauth.KanelSession, orgId string) []
 		userId := teslrt.MustCheckRequest(teslmodkanelauth.CheckOrgMember(session.UserId, orgId))
 		_ = userId
 //line KanelIssues.tesl:320
-		return teslrt.TableSelect(teslmodkanelmodels.ProjectTable, func(p teslmodkanelmodels.Project) bool {
+		return teslrt.DbSelect(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.ProjectTable, func(p teslmodkanelmodels.Project) bool {
 			return (p.OrgId == orgId) && !p.Archived
-		})
+		}, nil, 0, -1, teslrt.PgSql("select \"id\", \"org_id\", \"name\", \"description\", \"archived\", \"created_at\" from \"kanel\".\"kanel_projects\" where \"org_id\" = $1 and \"archived\" = $2", func() []any {
+			return []any{orgId, false}
+		}), teslScanProject)
 	}
 }
 
@@ -3590,9 +3953,11 @@ func GetProjectHandler(session teslmodkanelauth.KanelSession, orgId string, proj
 		_ = userId
 		{
 //line KanelIssues.tesl:329
-			found := teslrt.TableSelectOne(teslmodkanelmodels.ProjectTable, func(p teslmodkanelmodels.Project) bool {
+			found := teslrt.DbSelectOne(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.ProjectTable, func(p teslmodkanelmodels.Project) bool {
 				return (p.Id == projectId)
-			})
+			}, nil, teslrt.PgSql("select \"id\", \"org_id\", \"name\", \"description\", \"archived\", \"created_at\" from \"kanel\".\"kanel_projects\" where \"id\" = $1 limit 1", func() []any {
+				return []any{projectId}
+			}), teslScanProject)
 			_ = found
 //line KanelIssues.tesl:330
 			{
@@ -3622,9 +3987,11 @@ func ArchiveProjectHandler(session teslmodkanelauth.KanelSession, orgId string, 
 		_ = _adminUserId
 		{
 //line KanelIssues.tesl:341
-			found := teslrt.TableSelectOne(teslmodkanelmodels.ProjectTable, func(p teslmodkanelmodels.Project) bool {
+			found := teslrt.DbSelectOne(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.ProjectTable, func(p teslmodkanelmodels.Project) bool {
 				return (p.Id == projectId) && (p.OrgId == orgId)
-			})
+			}, nil, teslrt.PgSql("select \"id\", \"org_id\", \"name\", \"description\", \"archived\", \"created_at\" from \"kanel\".\"kanel_projects\" where \"id\" = $1 and \"org_id\" = $2 limit 1", func() []any {
+				return []any{projectId, orgId}
+			}), teslScanProject)
 			_ = found
 //line KanelIssues.tesl:342
 			{
@@ -3642,13 +4009,17 @@ func ArchiveProjectHandler(session teslmodkanelauth.KanelSession, orgId string, 
 						panic(teslrt.RequestRejection{Status: 422, Message: "project is already archived"})
 					} else {
 //line KanelIssues.tesl:348
-						return teslrt.TableUpdateReturnOne(teslmodkanelmodels.ProjectTable, func(proj teslmodkanelmodels.Project) bool {
+						return teslrt.DbUpdateReturnOne(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.ProjectTable, func(proj teslmodkanelmodels.Project) bool {
 							return (proj.Id == projectId)
 						}, func(proj teslmodkanelmodels.Project) teslmodkanelmodels.Project {
 							teslNext := proj
 							teslNext.Archived = true
 							return teslNext
-						})
+						}, teslrt.PgSqlProbed("update \"kanel\".\"kanel_projects\" set \"archived\" = $1 where \"id\" = $2 and (select count(*) from \"kanel\".\"kanel_projects\" where \"id\" = $2) = 1 returning \"id\", \"org_id\", \"name\", \"description\", \"archived\", \"created_at\"", func() []any {
+							return []any{true, projectId}
+						}, "select count(*) from \"kanel\".\"kanel_projects\" where \"id\" = $1", func() []any {
+							return []any{projectId}
+						}), teslScanProject)
 					}
 				default:
 					panic("unreachable: checker guarantees case exhaustiveness")
@@ -3678,9 +4049,11 @@ func CreateIssueHandler(session teslmodkanelauth.KanelSession, orgId string, pro
 					_ = estimate
 					{
 //line KanelIssues.tesl:366
-						project := teslrt.TableSelectOne(teslmodkanelmodels.ProjectTable, func(p teslmodkanelmodels.Project) bool {
+						project := teslrt.DbSelectOne(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.ProjectTable, func(p teslmodkanelmodels.Project) bool {
 							return (p.Id == projectId)
-						})
+						}, nil, teslrt.PgSql("select \"id\", \"org_id\", \"name\", \"description\", \"archived\", \"created_at\" from \"kanel\".\"kanel_projects\" where \"id\" = $1 limit 1", func() []any {
+							return []any{projectId}
+						}), teslScanProject)
 						_ = project
 //line KanelIssues.tesl:367
 						{
@@ -3702,7 +4075,9 @@ func CreateIssueHandler(session teslmodkanelauth.KanelSession, orgId string, pro
 										issueId := teslrt.GeneratePrefixedId("iss")
 										_ = issueId
 //line KanelIssues.tesl:374
-										return teslrt.TableInsert(teslmodkanelmodels.IssueTable, "Issue", teslmodkanelmodels.Issue{Id: issueId, ProjectId: projectId, OrgId: orgId, Title: title, Description: desc, Status: teslmodkanelmodels.IssueStatus{Tag: teslmodkanelmodels.IssueStatusBacklog}, AssigneeId: teslrt.Maybe[string]{Tag: teslrt.MaybeNothing}, ReporterId: session.UserId, Estimate: estimate, DueAt: teslrt.Maybe[teslrt.PosixMillis]{Tag: teslrt.MaybeNothing}, CreatedAt: teslrt.NowMillis(), UpdatedAt: teslrt.NowMillis()}, func(teslRow, teslNew teslmodkanelmodels.Issue) bool { return (teslRow.Id == teslNew.Id) })
+										return teslrt.DbInsert(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.IssueTable, "Issue", teslmodkanelmodels.Issue{Id: issueId, ProjectId: projectId, OrgId: orgId, Title: title, Description: desc, Status: teslmodkanelmodels.IssueStatus{Tag: teslmodkanelmodels.IssueStatusBacklog}, AssigneeId: teslrt.Maybe[string]{Tag: teslrt.MaybeNothing}, ReporterId: session.UserId, Estimate: estimate, DueAt: teslrt.Maybe[teslrt.PosixMillis]{Tag: teslrt.MaybeNothing}, CreatedAt: teslrt.NowMillis(), UpdatedAt: teslrt.NowMillis()}, func(teslRow, teslNew teslmodkanelmodels.Issue) bool { return (teslRow.Id == teslNew.Id) }, "insert into \"kanel\".\"kanel_issues\" (\"id\", \"project_id\", \"org_id\", \"title\", \"description\", \"status\", \"assignee_id\", \"reporter_id\", \"estimate\", \"due_at\", \"created_at\", \"updated_at\") values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)", func(teslRow teslmodkanelmodels.Issue) []any {
+											return []any{teslRow.Id, teslRow.ProjectId, teslRow.OrgId, teslRow.Title, teslRow.Description, teslrt.EncodeJSONValue(teslmodkanelmodels.EncodeIssueStatusJSON(teslRow.Status)), teslrt.PgNull(teslRow.AssigneeId, func(teslValue string) any { return teslValue }), teslRow.ReporterId, teslrt.PgInt(teslRow.Estimate), teslrt.PgNull(teslRow.DueAt, func(teslValue teslrt.PosixMillis) any { return teslrt.PgBigint(teslValue.Value) }), teslrt.PgBigint(teslRow.CreatedAt.Value), teslrt.PgBigint(teslRow.UpdatedAt.Value)}
+										})
 									}
 								}
 							default:
@@ -3723,9 +4098,11 @@ func ListIssuesHandler(session teslmodkanelauth.KanelSession, orgId string, proj
 		userId := teslrt.MustCheckRequest(teslmodkanelauth.CheckProjMember(session.UserId, projectId, orgId))
 		_ = userId
 //line KanelIssues.tesl:397
-		return teslrt.TableSelect(teslmodkanelmodels.IssueTable, func(i teslmodkanelmodels.Issue) bool {
+		return teslrt.DbSelect(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.IssueTable, func(i teslmodkanelmodels.Issue) bool {
 			return (i.ProjectId == projectId)
-		})
+		}, nil, 0, -1, teslrt.PgSql("select \"id\", \"project_id\", \"org_id\", \"title\", \"description\", \"status\", \"assignee_id\", \"reporter_id\", \"estimate\", \"due_at\", \"created_at\", \"updated_at\" from \"kanel\".\"kanel_issues\" where \"project_id\" = $1", func() []any {
+			return []any{projectId}
+		}), teslScanIssue)
 	}
 }
 
@@ -3737,9 +4114,11 @@ func GetIssueHandler(session teslmodkanelauth.KanelSession, orgId string, issueI
 		_ = userId
 		{
 //line KanelIssues.tesl:406
-			found := teslrt.TableSelectOne(teslmodkanelmodels.IssueTable, func(i teslmodkanelmodels.Issue) bool {
+			found := teslrt.DbSelectOne(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.IssueTable, func(i teslmodkanelmodels.Issue) bool {
 				return (i.Id == issueId) && (i.OrgId == orgId)
-			})
+			}, nil, teslrt.PgSql("select \"id\", \"project_id\", \"org_id\", \"title\", \"description\", \"status\", \"assignee_id\", \"reporter_id\", \"estimate\", \"due_at\", \"created_at\", \"updated_at\" from \"kanel\".\"kanel_issues\" where \"id\" = $1 and \"org_id\" = $2 limit 1", func() []any {
+				return []any{issueId, orgId}
+			}), teslScanIssue)
 			_ = found
 //line KanelIssues.tesl:407
 			{
@@ -3788,7 +4167,7 @@ func UpdateIssueHandler(session teslmodkanelauth.KanelSession, orgId string, iss
 							newAssignee := toMaybeString(req.AssigneeId)
 							_ = newAssignee
 //line KanelIssues.tesl:424
-							return teslrt.TableUpdateReturnOne(teslmodkanelmodels.IssueTable, func(i teslmodkanelmodels.Issue) bool {
+							return teslrt.DbUpdateReturnOne(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.IssueTable, func(i teslmodkanelmodels.Issue) bool {
 								return (i.Id == notDoneId)
 							}, func(i teslmodkanelmodels.Issue) teslmodkanelmodels.Issue {
 								teslNext := i
@@ -3798,7 +4177,11 @@ func UpdateIssueHandler(session teslmodkanelauth.KanelSession, orgId string, iss
 								teslNext.AssigneeId = newAssignee
 								teslNext.UpdatedAt = teslrt.NowMillis()
 								return teslNext
-							})
+							}, teslrt.PgSqlProbed("update \"kanel\".\"kanel_issues\" set \"title\" = $1, \"description\" = $2, \"estimate\" = $3, \"assignee_id\" = $4, \"updated_at\" = $5 where \"id\" = $6 and (select count(*) from \"kanel\".\"kanel_issues\" where \"id\" = $6) = 1 returning \"id\", \"project_id\", \"org_id\", \"title\", \"description\", \"status\", \"assignee_id\", \"reporter_id\", \"estimate\", \"due_at\", \"created_at\", \"updated_at\"", func() []any {
+								return []any{title, desc, teslrt.PgInt(estimate), teslrt.PgNull(newAssignee, func(teslValue string) any { return teslValue }), teslrt.PgBigint(teslrt.NowMillis().Value), notDoneId}
+							}, "select count(*) from \"kanel\".\"kanel_issues\" where \"id\" = $1", func() []any {
+								return []any{notDoneId}
+							}), teslScanIssue)
 						}
 					}
 				}
@@ -3815,9 +4198,11 @@ func UpdateIssueStatusHandler(session teslmodkanelauth.KanelSession, orgId strin
 		_ = userId
 		{
 //line KanelIssues.tesl:448
-			found := teslrt.TableSelectOne(teslmodkanelmodels.IssueTable, func(i teslmodkanelmodels.Issue) bool {
+			found := teslrt.DbSelectOne(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.IssueTable, func(i teslmodkanelmodels.Issue) bool {
 				return (i.Id == issueId) && (i.OrgId == orgId)
-			})
+			}, nil, teslrt.PgSql("select \"id\", \"project_id\", \"org_id\", \"title\", \"description\", \"status\", \"assignee_id\", \"reporter_id\", \"estimate\", \"due_at\", \"created_at\", \"updated_at\" from \"kanel\".\"kanel_issues\" where \"id\" = $1 and \"org_id\" = $2 limit 1", func() []any {
+				return []any{issueId, orgId}
+			}), teslScanIssue)
 			_ = found
 //line KanelIssues.tesl:449
 			{
@@ -3844,71 +4229,95 @@ func UpdateIssueStatusHandler(session teslmodkanelauth.KanelSession, orgId strin
 									_ = _closerId
 //line KanelIssues.tesl:457
 									var teslCommitted teslmodkanelmodels.Issue
-									teslrt.WithMemoryTransaction(func() {
+									teslrt.WithTransaction(func() {
 										teslCommitted = func() teslmodkanelmodels.Issue {
 //line KanelIssues.tesl:458
-											return teslrt.TableUpdateReturnOne(teslmodkanelmodels.IssueTable, func(i teslmodkanelmodels.Issue) bool {
+											return teslrt.DbUpdateReturnOne(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.IssueTable, func(i teslmodkanelmodels.Issue) bool {
 												return (i.Id == issueId)
 											}, func(i teslmodkanelmodels.Issue) teslmodkanelmodels.Issue {
 												teslNext := i
 												teslNext.Status = newStatus
 												teslNext.UpdatedAt = teslrt.NowMillis()
 												return teslNext
-											})
+											}, teslrt.PgSqlProbed("update \"kanel\".\"kanel_issues\" set \"status\" = $1, \"updated_at\" = $2 where \"id\" = $3 and (select count(*) from \"kanel\".\"kanel_issues\" where \"id\" = $3) = 1 returning \"id\", \"project_id\", \"org_id\", \"title\", \"description\", \"status\", \"assignee_id\", \"reporter_id\", \"estimate\", \"due_at\", \"created_at\", \"updated_at\"", func() []any {
+												return []any{teslrt.EncodeJSONValue(teslmodkanelmodels.EncodeIssueStatusJSON(newStatus)), teslrt.PgBigint(teslrt.NowMillis().Value), issueId}
+											}, "select count(*) from \"kanel\".\"kanel_issues\" where \"id\" = $1", func() []any {
+												return []any{issueId}
+											}), teslScanIssue)
 										}()
 									})
 									return teslCommitted
 								}
 							case teslmodkanelmodels.IssueStatusBacklog:
 //line KanelIssues.tesl:469
-								return teslrt.TableUpdateReturnOne(teslmodkanelmodels.IssueTable, func(i teslmodkanelmodels.Issue) bool {
+								return teslrt.DbUpdateReturnOne(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.IssueTable, func(i teslmodkanelmodels.Issue) bool {
 									return (i.Id == issueId)
 								}, func(i teslmodkanelmodels.Issue) teslmodkanelmodels.Issue {
 									teslNext := i
 									teslNext.Status = newStatus
 									teslNext.UpdatedAt = teslrt.NowMillis()
 									return teslNext
-								})
+								}, teslrt.PgSqlProbed("update \"kanel\".\"kanel_issues\" set \"status\" = $1, \"updated_at\" = $2 where \"id\" = $3 and (select count(*) from \"kanel\".\"kanel_issues\" where \"id\" = $3) = 1 returning \"id\", \"project_id\", \"org_id\", \"title\", \"description\", \"status\", \"assignee_id\", \"reporter_id\", \"estimate\", \"due_at\", \"created_at\", \"updated_at\"", func() []any {
+									return []any{teslrt.EncodeJSONValue(teslmodkanelmodels.EncodeIssueStatusJSON(newStatus)), teslrt.PgBigint(teslrt.NowMillis().Value), issueId}
+								}, "select count(*) from \"kanel\".\"kanel_issues\" where \"id\" = $1", func() []any {
+									return []any{issueId}
+								}), teslScanIssue)
 							case teslmodkanelmodels.IssueStatusTodo:
 //line KanelIssues.tesl:469
-								return teslrt.TableUpdateReturnOne(teslmodkanelmodels.IssueTable, func(i teslmodkanelmodels.Issue) bool {
+								return teslrt.DbUpdateReturnOne(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.IssueTable, func(i teslmodkanelmodels.Issue) bool {
 									return (i.Id == issueId)
 								}, func(i teslmodkanelmodels.Issue) teslmodkanelmodels.Issue {
 									teslNext := i
 									teslNext.Status = newStatus
 									teslNext.UpdatedAt = teslrt.NowMillis()
 									return teslNext
-								})
+								}, teslrt.PgSqlProbed("update \"kanel\".\"kanel_issues\" set \"status\" = $1, \"updated_at\" = $2 where \"id\" = $3 and (select count(*) from \"kanel\".\"kanel_issues\" where \"id\" = $3) = 1 returning \"id\", \"project_id\", \"org_id\", \"title\", \"description\", \"status\", \"assignee_id\", \"reporter_id\", \"estimate\", \"due_at\", \"created_at\", \"updated_at\"", func() []any {
+									return []any{teslrt.EncodeJSONValue(teslmodkanelmodels.EncodeIssueStatusJSON(newStatus)), teslrt.PgBigint(teslrt.NowMillis().Value), issueId}
+								}, "select count(*) from \"kanel\".\"kanel_issues\" where \"id\" = $1", func() []any {
+									return []any{issueId}
+								}), teslScanIssue)
 							case teslmodkanelmodels.IssueStatusInProgress:
 //line KanelIssues.tesl:469
-								return teslrt.TableUpdateReturnOne(teslmodkanelmodels.IssueTable, func(i teslmodkanelmodels.Issue) bool {
+								return teslrt.DbUpdateReturnOne(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.IssueTable, func(i teslmodkanelmodels.Issue) bool {
 									return (i.Id == issueId)
 								}, func(i teslmodkanelmodels.Issue) teslmodkanelmodels.Issue {
 									teslNext := i
 									teslNext.Status = newStatus
 									teslNext.UpdatedAt = teslrt.NowMillis()
 									return teslNext
-								})
+								}, teslrt.PgSqlProbed("update \"kanel\".\"kanel_issues\" set \"status\" = $1, \"updated_at\" = $2 where \"id\" = $3 and (select count(*) from \"kanel\".\"kanel_issues\" where \"id\" = $3) = 1 returning \"id\", \"project_id\", \"org_id\", \"title\", \"description\", \"status\", \"assignee_id\", \"reporter_id\", \"estimate\", \"due_at\", \"created_at\", \"updated_at\"", func() []any {
+									return []any{teslrt.EncodeJSONValue(teslmodkanelmodels.EncodeIssueStatusJSON(newStatus)), teslrt.PgBigint(teslrt.NowMillis().Value), issueId}
+								}, "select count(*) from \"kanel\".\"kanel_issues\" where \"id\" = $1", func() []any {
+									return []any{issueId}
+								}), teslScanIssue)
 							case teslmodkanelmodels.IssueStatusInReview:
 //line KanelIssues.tesl:469
-								return teslrt.TableUpdateReturnOne(teslmodkanelmodels.IssueTable, func(i teslmodkanelmodels.Issue) bool {
+								return teslrt.DbUpdateReturnOne(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.IssueTable, func(i teslmodkanelmodels.Issue) bool {
 									return (i.Id == issueId)
 								}, func(i teslmodkanelmodels.Issue) teslmodkanelmodels.Issue {
 									teslNext := i
 									teslNext.Status = newStatus
 									teslNext.UpdatedAt = teslrt.NowMillis()
 									return teslNext
-								})
+								}, teslrt.PgSqlProbed("update \"kanel\".\"kanel_issues\" set \"status\" = $1, \"updated_at\" = $2 where \"id\" = $3 and (select count(*) from \"kanel\".\"kanel_issues\" where \"id\" = $3) = 1 returning \"id\", \"project_id\", \"org_id\", \"title\", \"description\", \"status\", \"assignee_id\", \"reporter_id\", \"estimate\", \"due_at\", \"created_at\", \"updated_at\"", func() []any {
+									return []any{teslrt.EncodeJSONValue(teslmodkanelmodels.EncodeIssueStatusJSON(newStatus)), teslrt.PgBigint(teslrt.NowMillis().Value), issueId}
+								}, "select count(*) from \"kanel\".\"kanel_issues\" where \"id\" = $1", func() []any {
+									return []any{issueId}
+								}), teslScanIssue)
 							case teslmodkanelmodels.IssueStatusCancelled:
 //line KanelIssues.tesl:469
-								return teslrt.TableUpdateReturnOne(teslmodkanelmodels.IssueTable, func(i teslmodkanelmodels.Issue) bool {
+								return teslrt.DbUpdateReturnOne(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.IssueTable, func(i teslmodkanelmodels.Issue) bool {
 									return (i.Id == issueId)
 								}, func(i teslmodkanelmodels.Issue) teslmodkanelmodels.Issue {
 									teslNext := i
 									teslNext.Status = newStatus
 									teslNext.UpdatedAt = teslrt.NowMillis()
 									return teslNext
-								})
+								}, teslrt.PgSqlProbed("update \"kanel\".\"kanel_issues\" set \"status\" = $1, \"updated_at\" = $2 where \"id\" = $3 and (select count(*) from \"kanel\".\"kanel_issues\" where \"id\" = $3) = 1 returning \"id\", \"project_id\", \"org_id\", \"title\", \"description\", \"status\", \"assignee_id\", \"reporter_id\", \"estimate\", \"due_at\", \"created_at\", \"updated_at\"", func() []any {
+									return []any{teslrt.EncodeJSONValue(teslmodkanelmodels.EncodeIssueStatusJSON(newStatus)), teslrt.PgBigint(teslrt.NowMillis().Value), issueId}
+								}, "select count(*) from \"kanel\".\"kanel_issues\" where \"id\" = $1", func() []any {
+									return []any{issueId}
+								}), teslScanIssue)
 							default:
 								panic("unreachable: checker guarantees case exhaustiveness")
 							}
@@ -3925,7 +4334,9 @@ func UpdateIssueStatusHandler(session teslmodkanelauth.KanelSession, orgId strin
 //line KanelIssues.tesl:480
 func InsertCommentBody(commentId string, authorId string, orgId string, issueId string, body string) teslmodkanelmodels.IssueComment {
 //line KanelIssues.tesl:488
-	return teslrt.TableInsert(teslmodkanelmodels.IssueCommentTable, "IssueComment", teslmodkanelmodels.IssueComment{Id: commentId, IssueId: issueId, AuthorId: authorId, Body: body, CreatedAt: teslrt.NowMillis()}, func(teslRow, teslNew teslmodkanelmodels.IssueComment) bool { return (teslRow.Id == teslNew.Id) })
+	return teslrt.DbInsert(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.IssueCommentTable, "IssueComment", teslmodkanelmodels.IssueComment{Id: commentId, IssueId: issueId, AuthorId: authorId, Body: body, CreatedAt: teslrt.NowMillis()}, func(teslRow, teslNew teslmodkanelmodels.IssueComment) bool { return (teslRow.Id == teslNew.Id) }, "insert into \"kanel\".\"kanel_issue_comments\" (\"id\", \"issue_id\", \"author_id\", \"body\", \"created_at\") values ($1, $2, $3, $4, $5)", func(teslRow teslmodkanelmodels.IssueComment) []any {
+		return []any{teslRow.Id, teslRow.IssueId, teslRow.AuthorId, teslRow.Body, teslrt.PgBigint(teslRow.CreatedAt.Value)}
+	})
 }
 
 //line KanelIssues.tesl:496
@@ -3961,9 +4372,11 @@ func ListCommentsHandler(session teslmodkanelauth.KanelSession, orgId string, is
 		userId := teslrt.MustCheckRequest(teslmodkanelauth.CheckOrgMember(session.UserId, orgId))
 		_ = userId
 //line KanelIssues.tesl:518
-		return teslrt.TableSelect(teslmodkanelmodels.IssueCommentTable, func(c teslmodkanelmodels.IssueComment) bool {
+		return teslrt.DbSelect(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.IssueCommentTable, func(c teslmodkanelmodels.IssueComment) bool {
 			return (c.IssueId == issueId)
-		})
+		}, nil, 0, -1, teslrt.PgSql("select \"id\", \"issue_id\", \"author_id\", \"body\", \"created_at\" from \"kanel\".\"kanel_issue_comments\" where \"issue_id\" = $1", func() []any {
+			return []any{issueId}
+		}), teslScanIssueComment)
 	}
 }
 
@@ -3983,9 +4396,11 @@ func LogTimeHandler(session teslmodkanelauth.KanelSession, orgId string, issueId
 				_ = minutes
 				{
 //line KanelIssues.tesl:536
-					issue := teslrt.TableSelectOne(teslmodkanelmodels.IssueTable, func(i teslmodkanelmodels.Issue) bool {
+					issue := teslrt.DbSelectOne(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.IssueTable, func(i teslmodkanelmodels.Issue) bool {
 						return (i.Id == issueId)
-					})
+					}, nil, teslrt.PgSql("select \"id\", \"project_id\", \"org_id\", \"title\", \"description\", \"status\", \"assignee_id\", \"reporter_id\", \"estimate\", \"due_at\", \"created_at\", \"updated_at\" from \"kanel\".\"kanel_issues\" where \"id\" = $1 limit 1", func() []any {
+						return []any{issueId}
+					}), teslScanIssue)
 					_ = issue
 //line KanelIssues.tesl:537
 					{
@@ -4004,14 +4419,18 @@ func LogTimeHandler(session teslmodkanelauth.KanelSession, orgId string, issueId
 									entryId := teslrt.GeneratePrefixedId("te")
 									_ = entryId
 //line KanelIssues.tesl:542
-									return teslrt.TableInsert(teslmodkanelmodels.TimeEntryTable, "TimeEntry", teslmodkanelmodels.TimeEntry{Id: entryId, IssueId: notDoneId, UserId: session.UserId, OrgId: orgId, Minutes: minutes, Description: teslrt.StringTrim(req.Description), InvoiceId: "", LoggedAt: teslrt.NowMillis()}, func(teslRow, teslNew teslmodkanelmodels.TimeEntry) bool { return (teslRow.Id == teslNew.Id) })
+									return teslrt.DbInsert(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.TimeEntryTable, "TimeEntry", teslmodkanelmodels.TimeEntry{Id: entryId, IssueId: notDoneId, UserId: session.UserId, OrgId: orgId, Minutes: minutes, Description: teslrt.StringTrim(req.Description), InvoiceId: "", LoggedAt: teslrt.NowMillis()}, func(teslRow, teslNew teslmodkanelmodels.TimeEntry) bool { return (teslRow.Id == teslNew.Id) }, "insert into \"kanel\".\"kanel_time_entries\" (\"id\", \"issue_id\", \"user_id\", \"org_id\", \"minutes\", \"description\", \"invoice_id\", \"logged_at\") values ($1, $2, $3, $4, $5, $6, $7, $8)", func(teslRow teslmodkanelmodels.TimeEntry) []any {
+										return []any{teslRow.Id, teslRow.IssueId, teslRow.UserId, teslRow.OrgId, teslrt.PgInt(teslRow.Minutes), teslRow.Description, teslRow.InvoiceId, teslrt.PgBigint(teslRow.LoggedAt.Value)}
+									})
 								}
 							} else {
 								{
 //line KanelIssues.tesl:555
-									membership := teslrt.TableSelectOne(teslmodkanelmodels.OrgMembershipTable, func(m teslmodkanelmodels.OrgMembership) bool {
+									membership := teslrt.DbSelectOne(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.OrgMembershipTable, func(m teslmodkanelmodels.OrgMembership) bool {
 										return (m.UserId == session.UserId) && (m.OrgId == orgId)
-									})
+									}, nil, teslrt.PgSql("select \"id\", \"org_id\", \"user_id\", \"role\", \"joined_at\" from \"kanel\".\"kanel_org_memberships\" where \"user_id\" = $1 and \"org_id\" = $2 limit 1", func() []any {
+										return []any{session.UserId, orgId}
+									}), teslScanOrgMembership)
 									_ = membership
 //line KanelIssues.tesl:556
 									{
@@ -4033,7 +4452,9 @@ func LogTimeHandler(session teslmodkanelauth.KanelSession, orgId string, issueId
 														entryId := teslrt.GeneratePrefixedId("te")
 														_ = entryId
 //line KanelIssues.tesl:562
-														return teslrt.TableInsert(teslmodkanelmodels.TimeEntryTable, "TimeEntry", teslmodkanelmodels.TimeEntry{Id: entryId, IssueId: notDoneId, UserId: session.UserId, OrgId: orgId, Minutes: minutes, Description: teslrt.StringTrim(req.Description), InvoiceId: "", LoggedAt: teslrt.NowMillis()}, func(teslRow, teslNew teslmodkanelmodels.TimeEntry) bool { return (teslRow.Id == teslNew.Id) })
+														return teslrt.DbInsert(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.TimeEntryTable, "TimeEntry", teslmodkanelmodels.TimeEntry{Id: entryId, IssueId: notDoneId, UserId: session.UserId, OrgId: orgId, Minutes: minutes, Description: teslrt.StringTrim(req.Description), InvoiceId: "", LoggedAt: teslrt.NowMillis()}, func(teslRow, teslNew teslmodkanelmodels.TimeEntry) bool { return (teslRow.Id == teslNew.Id) }, "insert into \"kanel\".\"kanel_time_entries\" (\"id\", \"issue_id\", \"user_id\", \"org_id\", \"minutes\", \"description\", \"invoice_id\", \"logged_at\") values ($1, $2, $3, $4, $5, $6, $7, $8)", func(teslRow teslmodkanelmodels.TimeEntry) []any {
+															return []any{teslRow.Id, teslRow.IssueId, teslRow.UserId, teslRow.OrgId, teslrt.PgInt(teslRow.Minutes), teslRow.Description, teslRow.InvoiceId, teslrt.PgBigint(teslRow.LoggedAt.Value)}
+														})
 													}
 												case teslmodkanelmodels.OrgRoleRoleMember:
 //line KanelIssues.tesl:573
@@ -4068,10 +4489,170 @@ func ListTimeEntriesHandler(session teslmodkanelauth.KanelSession, orgId string,
 		userId := teslrt.MustCheckRequest(teslmodkanelauth.CheckOrgMember(session.UserId, orgId))
 		_ = userId
 //line KanelIssues.tesl:583
-		return teslrt.TableSelect(teslmodkanelmodels.TimeEntryTable, func(te teslmodkanelmodels.TimeEntry) bool {
+		return teslrt.DbSelect(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.TimeEntryTable, func(te teslmodkanelmodels.TimeEntry) bool {
 			return (te.IssueId == issueId)
-		})
+		}, nil, 0, -1, teslrt.PgSql("select \"id\", \"issue_id\", \"user_id\", \"org_id\", \"minutes\", \"description\", \"invoice_id\", \"logged_at\" from \"kanel\".\"kanel_time_entries\" where \"issue_id\" = $1", func() []any {
+			return []any{issueId}
+		}), teslScanTimeEntry)
 	}
+}
+
+func teslColumnIssueStatus_teslmodkanelmodels(teslText []byte) teslmodkanelmodels.IssueStatus {
+	teslParsed, teslParseErr := teslrt.ParseColumnJSON(teslText)
+	if teslParseErr != nil {
+		panic("database: a IssueStatus column holds text that is not JSON: " + teslParseErr.Error())
+	}
+	teslTag, teslTagErr := teslrt.DecodeStringField(teslParsed, "tag")
+	if teslTagErr != nil {
+		panic("database: a IssueStatus column holds " + teslTagErr.Error())
+	}
+	switch teslTag {
+	case "Backlog":
+		return teslmodkanelmodels.IssueStatus{Tag: teslmodkanelmodels.IssueStatusBacklog}
+	case "Todo":
+		return teslmodkanelmodels.IssueStatus{Tag: teslmodkanelmodels.IssueStatusTodo}
+	case "InProgress":
+		return teslmodkanelmodels.IssueStatus{Tag: teslmodkanelmodels.IssueStatusInProgress}
+	case "InReview":
+		return teslmodkanelmodels.IssueStatus{Tag: teslmodkanelmodels.IssueStatusInReview}
+	case "Done":
+		return teslmodkanelmodels.IssueStatus{Tag: teslmodkanelmodels.IssueStatusDone}
+	case "Cancelled":
+		return teslmodkanelmodels.IssueStatus{Tag: teslmodkanelmodels.IssueStatusCancelled}
+	}
+	panic("database: a IssueStatus column holds an unknown tag " + teslTag)
+}
+
+func teslColumnOrgRole_teslmodkanelmodels(teslText []byte) teslmodkanelmodels.OrgRole {
+	teslParsed, teslParseErr := teslrt.ParseColumnJSON(teslText)
+	if teslParseErr != nil {
+		panic("database: a OrgRole column holds text that is not JSON: " + teslParseErr.Error())
+	}
+	teslTag, teslTagErr := teslrt.DecodeStringField(teslParsed, "tag")
+	if teslTagErr != nil {
+		panic("database: a OrgRole column holds " + teslTagErr.Error())
+	}
+	switch teslTag {
+	case "RoleAdmin":
+		return teslmodkanelmodels.OrgRole{Tag: teslmodkanelmodels.OrgRoleRoleAdmin}
+	case "RoleMember":
+		return teslmodkanelmodels.OrgRole{Tag: teslmodkanelmodels.OrgRoleRoleMember}
+	case "RoleViewer":
+		return teslmodkanelmodels.OrgRole{Tag: teslmodkanelmodels.OrgRoleRoleViewer}
+	}
+	panic("database: a OrgRole column holds an unknown tag " + teslTag)
+}
+
+func teslScanIssue(teslRow pgx.CollectableRow) (teslmodkanelmodels.Issue, error) {
+	teslValue := teslmodkanelmodels.Issue{}
+	var teslColumn0 string
+	var teslColumn1 string
+	var teslColumn2 string
+	var teslColumn3 string
+	var teslColumn4 string
+	var teslColumn5 []byte
+	var teslColumn6 *string
+	var teslColumn7 string
+	var teslColumn8 pgtype.Numeric
+	var teslColumn9 *int64
+	var teslColumn10 int64
+	var teslColumn11 int64
+	if teslErr := teslRow.Scan(&teslColumn0, &teslColumn1, &teslColumn2, &teslColumn3, &teslColumn4, &teslColumn5, &teslColumn6, &teslColumn7, &teslColumn8, &teslColumn9, &teslColumn10, &teslColumn11); teslErr != nil {
+		return teslValue, teslErr
+	}
+	teslValue.Id = teslColumn0
+	teslValue.ProjectId = teslColumn1
+	teslValue.OrgId = teslColumn2
+	teslValue.Title = teslColumn3
+	teslValue.Description = teslColumn4
+	teslValue.Status = teslColumnIssueStatus_teslmodkanelmodels(teslColumn5)
+	teslValue.AssigneeId = teslrt.MaybeOfPointer(teslColumn6, func() string { return *teslColumn6 })
+	teslValue.ReporterId = teslColumn7
+	teslValue.Estimate = teslrt.PgIntOf(teslColumn8)
+	teslValue.DueAt = teslrt.MaybeOfPointer(teslColumn9, func() teslrt.PosixMillis { return teslrt.PosixMillis{Value: teslrt.FromInt64(*teslColumn9)} })
+	teslValue.CreatedAt = teslrt.PosixMillis{Value: teslrt.FromInt64(teslColumn10)}
+	teslValue.UpdatedAt = teslrt.PosixMillis{Value: teslrt.FromInt64(teslColumn11)}
+	return teslValue, nil
+}
+
+func teslScanIssueComment(teslRow pgx.CollectableRow) (teslmodkanelmodels.IssueComment, error) {
+	teslValue := teslmodkanelmodels.IssueComment{}
+	var teslColumn0 string
+	var teslColumn1 string
+	var teslColumn2 string
+	var teslColumn3 string
+	var teslColumn4 int64
+	if teslErr := teslRow.Scan(&teslColumn0, &teslColumn1, &teslColumn2, &teslColumn3, &teslColumn4); teslErr != nil {
+		return teslValue, teslErr
+	}
+	teslValue.Id = teslColumn0
+	teslValue.IssueId = teslColumn1
+	teslValue.AuthorId = teslColumn2
+	teslValue.Body = teslColumn3
+	teslValue.CreatedAt = teslrt.PosixMillis{Value: teslrt.FromInt64(teslColumn4)}
+	return teslValue, nil
+}
+
+func teslScanOrgMembership(teslRow pgx.CollectableRow) (teslmodkanelmodels.OrgMembership, error) {
+	teslValue := teslmodkanelmodels.OrgMembership{}
+	var teslColumn0 string
+	var teslColumn1 string
+	var teslColumn2 string
+	var teslColumn3 []byte
+	var teslColumn4 int64
+	if teslErr := teslRow.Scan(&teslColumn0, &teslColumn1, &teslColumn2, &teslColumn3, &teslColumn4); teslErr != nil {
+		return teslValue, teslErr
+	}
+	teslValue.Id = teslColumn0
+	teslValue.OrgId = teslColumn1
+	teslValue.UserId = teslColumn2
+	teslValue.Role = teslColumnOrgRole_teslmodkanelmodels(teslColumn3)
+	teslValue.JoinedAt = teslrt.PosixMillis{Value: teslrt.FromInt64(teslColumn4)}
+	return teslValue, nil
+}
+
+func teslScanProject(teslRow pgx.CollectableRow) (teslmodkanelmodels.Project, error) {
+	teslValue := teslmodkanelmodels.Project{}
+	var teslColumn0 string
+	var teslColumn1 string
+	var teslColumn2 string
+	var teslColumn3 string
+	var teslColumn4 bool
+	var teslColumn5 int64
+	if teslErr := teslRow.Scan(&teslColumn0, &teslColumn1, &teslColumn2, &teslColumn3, &teslColumn4, &teslColumn5); teslErr != nil {
+		return teslValue, teslErr
+	}
+	teslValue.Id = teslColumn0
+	teslValue.OrgId = teslColumn1
+	teslValue.Name = teslColumn2
+	teslValue.Description = teslColumn3
+	teslValue.Archived = teslColumn4
+	teslValue.CreatedAt = teslrt.PosixMillis{Value: teslrt.FromInt64(teslColumn5)}
+	return teslValue, nil
+}
+
+func teslScanTimeEntry(teslRow pgx.CollectableRow) (teslmodkanelmodels.TimeEntry, error) {
+	teslValue := teslmodkanelmodels.TimeEntry{}
+	var teslColumn0 string
+	var teslColumn1 string
+	var teslColumn2 string
+	var teslColumn3 string
+	var teslColumn4 pgtype.Numeric
+	var teslColumn5 string
+	var teslColumn6 string
+	var teslColumn7 int64
+	if teslErr := teslRow.Scan(&teslColumn0, &teslColumn1, &teslColumn2, &teslColumn3, &teslColumn4, &teslColumn5, &teslColumn6, &teslColumn7); teslErr != nil {
+		return teslValue, teslErr
+	}
+	teslValue.Id = teslColumn0
+	teslValue.IssueId = teslColumn1
+	teslValue.UserId = teslColumn2
+	teslValue.OrgId = teslColumn3
+	teslValue.Minutes = teslrt.PgIntOf(teslColumn4)
+	teslValue.Description = teslColumn5
+	teslValue.InvoiceId = teslColumn6
+	teslValue.LoggedAt = teslrt.PosixMillis{Value: teslrt.FromInt64(teslColumn7)}
+	return teslValue, nil
 }
 
 //tesl-snapshot: internal/teslmodkanelmodels/module.go
@@ -4735,6 +5316,7 @@ func DecodeNewInvoiceRequestJSON(teslJSON any) teslrt.Check[NewInvoiceRequest] {
 package teslmodkanelorg
 
 import (
+	"github.com/jackc/pgx/v5"
 	"tesl.generated/teslmodkanelbackend/internal/teslmodkanelauth"
 	"tesl.generated/teslmodkanelbackend/internal/teslmodkanelmodels"
 	"tesl.generated/teslmodkanelbackend/internal/teslrt"
@@ -4870,9 +5452,11 @@ func RegisterHandler(req RegisterRequest) teslmodkanelmodels.KanelUser {
 			} else {
 				{
 //line KanelOrg.tesl:166
-					existing := teslrt.TableSelectOne(teslmodkanelmodels.KanelUserTable, func(u teslmodkanelmodels.KanelUser) bool {
+					existing := teslrt.DbSelectOne(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.KanelUserTable, func(u teslmodkanelmodels.KanelUser) bool {
 						return (u.Email == email)
-					})
+					}, nil, teslrt.PgSql("select \"id\", \"email\", \"password_hash\", \"display_name\", \"created_at\" from \"kanel\".\"kanel_users\" where \"email\" = $1 limit 1", func() []any {
+						return []any{email}
+					}), teslScanKanelUser)
 					_ = existing
 //line KanelOrg.tesl:167
 					{
@@ -4887,7 +5471,9 @@ func RegisterHandler(req RegisterRequest) teslmodkanelmodels.KanelUser {
 								userId := teslrt.GeneratePrefixedId("usr")
 								_ = userId
 //line KanelOrg.tesl:171
-								return teslrt.TableInsert(teslmodkanelmodels.KanelUserTable, "KanelUser", teslmodkanelmodels.KanelUser{Id: userId, Email: email, PasswordHash: req.Password, DisplayName: name, CreatedAt: teslrt.NowMillis()}, func(teslRow, teslNew teslmodkanelmodels.KanelUser) bool { return (teslRow.Id == teslNew.Id) })
+								return teslrt.DbInsert(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.KanelUserTable, "KanelUser", teslmodkanelmodels.KanelUser{Id: userId, Email: email, PasswordHash: req.Password, DisplayName: name, CreatedAt: teslrt.NowMillis()}, func(teslRow, teslNew teslmodkanelmodels.KanelUser) bool { return (teslRow.Id == teslNew.Id) }, "insert into \"kanel\".\"kanel_users\" (\"id\", \"email\", \"password_hash\", \"display_name\", \"created_at\") values ($1, $2, $3, $4, $5)", func(teslRow teslmodkanelmodels.KanelUser) []any {
+									return []any{teslRow.Id, teslRow.Email, teslRow.PasswordHash, teslRow.DisplayName, teslrt.PgBigint(teslRow.CreatedAt.Value)}
+								})
 							}
 						default:
 							panic("unreachable: checker guarantees case exhaustiveness")
@@ -4907,9 +5493,11 @@ func LoginHandler(req LoginRequest) string {
 		_ = email
 		{
 //line KanelOrg.tesl:183
-			found := teslrt.TableSelectOne(teslmodkanelmodels.KanelUserTable, func(u teslmodkanelmodels.KanelUser) bool {
+			found := teslrt.DbSelectOne(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.KanelUserTable, func(u teslmodkanelmodels.KanelUser) bool {
 				return (u.Email == email)
-			})
+			}, nil, teslrt.PgSql("select \"id\", \"email\", \"password_hash\", \"display_name\", \"created_at\" from \"kanel\".\"kanel_users\" where \"email\" = $1 limit 1", func() []any {
+				return []any{email}
+			}), teslScanKanelUser)
 			_ = found
 //line KanelOrg.tesl:184
 			{
@@ -4949,9 +5537,11 @@ func CreateOrgHandler(session teslmodkanelauth.KanelSession, req teslmodkanelmod
 			_ = slug
 			{
 //line KanelOrg.tesl:205
-				existing := teslrt.TableSelectOne(teslmodkanelmodels.OrgTable, func(o teslmodkanelmodels.Org) bool {
+				existing := teslrt.DbSelectOne(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.OrgTable, func(o teslmodkanelmodels.Org) bool {
 					return (o.Slug == slug)
-				})
+				}, nil, teslrt.PgSql("select \"id\", \"name\", \"slug\", \"created_at\" from \"kanel\".\"kanel_orgs\" where \"slug\" = $1 limit 1", func() []any {
+					return []any{slug}
+				}), teslScanOrg)
 				_ = existing
 //line KanelOrg.tesl:206
 				{
@@ -4971,13 +5561,17 @@ func CreateOrgHandler(session teslmodkanelauth.KanelSession, req teslmodkanelmod
 								_ = memberId
 //line KanelOrg.tesl:211
 								var teslCommitted teslmodkanelmodels.Org
-								teslrt.WithMemoryTransaction(func() {
+								teslrt.WithTransaction(func() {
 									teslCommitted = func() teslmodkanelmodels.Org {
 										{
 //line KanelOrg.tesl:214
-											_ = teslrt.TableInsert(teslmodkanelmodels.OrgMembershipTable, "OrgMembership", teslmodkanelmodels.OrgMembership{Id: memberId, OrgId: orgId, UserId: session.UserId, Role: teslmodkanelmodels.OrgRole{Tag: teslmodkanelmodels.OrgRoleRoleAdmin}, JoinedAt: teslrt.NowMillis()}, func(teslRow, teslNew teslmodkanelmodels.OrgMembership) bool { return (teslRow.Id == teslNew.Id) })
+											_ = teslrt.DbInsert(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.OrgMembershipTable, "OrgMembership", teslmodkanelmodels.OrgMembership{Id: memberId, OrgId: orgId, UserId: session.UserId, Role: teslmodkanelmodels.OrgRole{Tag: teslmodkanelmodels.OrgRoleRoleAdmin}, JoinedAt: teslrt.NowMillis()}, func(teslRow, teslNew teslmodkanelmodels.OrgMembership) bool { return (teslRow.Id == teslNew.Id) }, "insert into \"kanel\".\"kanel_org_memberships\" (\"id\", \"org_id\", \"user_id\", \"role\", \"joined_at\") values ($1, $2, $3, $4, $5)", func(teslRow teslmodkanelmodels.OrgMembership) []any {
+												return []any{teslRow.Id, teslRow.OrgId, teslRow.UserId, teslrt.EncodeJSONValue(teslmodkanelmodels.EncodeOrgRoleJSON(teslRow.Role)), teslrt.PgBigint(teslRow.JoinedAt.Value)}
+											})
 //line KanelOrg.tesl:221
-											return teslrt.TableInsert(teslmodkanelmodels.OrgTable, "Org", teslmodkanelmodels.Org{Id: orgId, Name: orgName, Slug: slug, CreatedAt: teslrt.NowMillis()}, func(teslRow, teslNew teslmodkanelmodels.Org) bool { return (teslRow.Id == teslNew.Id) })
+											return teslrt.DbInsert(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.OrgTable, "Org", teslmodkanelmodels.Org{Id: orgId, Name: orgName, Slug: slug, CreatedAt: teslrt.NowMillis()}, func(teslRow, teslNew teslmodkanelmodels.Org) bool { return (teslRow.Id == teslNew.Id) }, "insert into \"kanel\".\"kanel_orgs\" (\"id\", \"name\", \"slug\", \"created_at\") values ($1, $2, $3, $4)", func(teslRow teslmodkanelmodels.Org) []any {
+												return []any{teslRow.Id, teslRow.Name, teslRow.Slug, teslrt.PgBigint(teslRow.CreatedAt.Value)}
+											})
 										}
 									}()
 								})
@@ -5001,9 +5595,11 @@ func GetOrgHandler(session teslmodkanelauth.KanelSession, orgId string) teslmodk
 		_ = _member
 		{
 //line KanelOrg.tesl:236
-			found := teslrt.TableSelectOne(teslmodkanelmodels.OrgTable, func(o teslmodkanelmodels.Org) bool {
+			found := teslrt.DbSelectOne(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.OrgTable, func(o teslmodkanelmodels.Org) bool {
 				return (o.Id == orgId)
-			})
+			}, nil, teslrt.PgSql("select \"id\", \"name\", \"slug\", \"created_at\" from \"kanel\".\"kanel_orgs\" where \"id\" = $1 limit 1", func() []any {
+				return []any{orgId}
+			}), teslScanOrg)
 			_ = found
 //line KanelOrg.tesl:237
 			{
@@ -5029,9 +5625,11 @@ func GetOrgHandler(session teslmodkanelauth.KanelSession, orgId string) teslmodk
 func fetchOrgByMembership(acc []teslmodkanelmodels.Org, m teslmodkanelmodels.OrgMembership) []teslmodkanelmodels.Org {
 	{
 //line KanelOrg.tesl:245
-		found := teslrt.TableSelectOne(teslmodkanelmodels.OrgTable, func(o teslmodkanelmodels.Org) bool {
+		found := teslrt.DbSelectOne(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.OrgTable, func(o teslmodkanelmodels.Org) bool {
 			return (o.Id == m.OrgId)
-		})
+		}, nil, teslrt.PgSql("select \"id\", \"name\", \"slug\", \"created_at\" from \"kanel\".\"kanel_orgs\" where \"id\" = $1 limit 1", func() []any {
+			return []any{m.OrgId}
+		}), teslScanOrg)
 		_ = found
 //line KanelOrg.tesl:246
 		{
@@ -5056,9 +5654,11 @@ func fetchOrgByMembership(acc []teslmodkanelmodels.Org, m teslmodkanelmodels.Org
 func ListMyOrgsHandler(session teslmodkanelauth.KanelSession) []teslmodkanelmodels.Org {
 	{
 //line KanelOrg.tesl:253
-		memberships := teslrt.TableSelect(teslmodkanelmodels.OrgMembershipTable, func(m teslmodkanelmodels.OrgMembership) bool {
+		memberships := teslrt.DbSelect(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.OrgMembershipTable, func(m teslmodkanelmodels.OrgMembership) bool {
 			return (m.UserId == session.UserId)
-		})
+		}, nil, 0, -1, teslrt.PgSql("select \"id\", \"org_id\", \"user_id\", \"role\", \"joined_at\" from \"kanel\".\"kanel_org_memberships\" where \"user_id\" = $1", func() []any {
+			return []any{session.UserId}
+		}), teslScanOrgMembership)
 		_ = memberships
 //line KanelOrg.tesl:254
 		return (func() []teslmodkanelmodels.Org {
@@ -5081,9 +5681,11 @@ func ListOrgMembersHandler(session teslmodkanelauth.KanelSession, orgId string) 
 		_member := teslrt.MustCheckRequest(teslmodkanelauth.CheckOrgMember(session.UserId, orgId))
 		_ = _member
 //line KanelOrg.tesl:292
-		return teslrt.TableSelect(teslmodkanelmodels.OrgMembershipTable, func(m teslmodkanelmodels.OrgMembership) bool {
+		return teslrt.DbSelect(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.OrgMembershipTable, func(m teslmodkanelmodels.OrgMembership) bool {
 			return (m.OrgId == orgId)
-		})
+		}, nil, 0, -1, teslrt.PgSql("select \"id\", \"org_id\", \"user_id\", \"role\", \"joined_at\" from \"kanel\".\"kanel_org_memberships\" where \"org_id\" = $1", func() []any {
+			return []any{orgId}
+		}), teslScanOrgMembership)
 	}
 }
 
@@ -5099,9 +5701,11 @@ func InviteMemberHandler(session teslmodkanelauth.KanelSession, orgId string, re
 			_ = email
 			{
 //line KanelOrg.tesl:303
-				found := teslrt.TableSelectOne(teslmodkanelmodels.KanelUserTable, func(u teslmodkanelmodels.KanelUser) bool {
+				found := teslrt.DbSelectOne(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.KanelUserTable, func(u teslmodkanelmodels.KanelUser) bool {
 					return (u.Email == email)
-				})
+				}, nil, teslrt.PgSql("select \"id\", \"email\", \"password_hash\", \"display_name\", \"created_at\" from \"kanel\".\"kanel_users\" where \"email\" = $1 limit 1", func() []any {
+					return []any{email}
+				}), teslScanKanelUser)
 				_ = found
 //line KanelOrg.tesl:304
 				{
@@ -5115,9 +5719,11 @@ func InviteMemberHandler(session teslmodkanelauth.KanelSession, orgId string, re
 						_ = targetUser
 						{
 //line KanelOrg.tesl:308
-							existing := teslrt.TableSelectOne(teslmodkanelmodels.OrgMembershipTable, func(m teslmodkanelmodels.OrgMembership) bool {
+							existing := teslrt.DbSelectOne(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.OrgMembershipTable, func(m teslmodkanelmodels.OrgMembership) bool {
 								return (m.UserId == targetUser.Id) && (m.OrgId == orgId)
-							})
+							}, nil, teslrt.PgSql("select \"id\", \"org_id\", \"user_id\", \"role\", \"joined_at\" from \"kanel\".\"kanel_org_memberships\" where \"user_id\" = $1 and \"org_id\" = $2 limit 1", func() []any {
+								return []any{targetUser.Id, orgId}
+							}), teslScanOrgMembership)
 							_ = existing
 //line KanelOrg.tesl:309
 							{
@@ -5132,7 +5738,9 @@ func InviteMemberHandler(session teslmodkanelauth.KanelSession, orgId string, re
 										memberId := teslrt.GeneratePrefixedId("mem")
 										_ = memberId
 //line KanelOrg.tesl:313
-										return teslrt.TableInsert(teslmodkanelmodels.OrgMembershipTable, "OrgMembership", teslmodkanelmodels.OrgMembership{Id: memberId, OrgId: orgId, UserId: targetUser.Id, Role: req.Role, JoinedAt: teslrt.NowMillis()}, func(teslRow, teslNew teslmodkanelmodels.OrgMembership) bool { return (teslRow.Id == teslNew.Id) })
+										return teslrt.DbInsert(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.OrgMembershipTable, "OrgMembership", teslmodkanelmodels.OrgMembership{Id: memberId, OrgId: orgId, UserId: targetUser.Id, Role: req.Role, JoinedAt: teslrt.NowMillis()}, func(teslRow, teslNew teslmodkanelmodels.OrgMembership) bool { return (teslRow.Id == teslNew.Id) }, "insert into \"kanel\".\"kanel_org_memberships\" (\"id\", \"org_id\", \"user_id\", \"role\", \"joined_at\") values ($1, $2, $3, $4, $5)", func(teslRow teslmodkanelmodels.OrgMembership) []any {
+											return []any{teslRow.Id, teslRow.OrgId, teslRow.UserId, teslrt.EncodeJSONValue(teslmodkanelmodels.EncodeOrgRoleJSON(teslRow.Role)), teslrt.PgBigint(teslRow.JoinedAt.Value)}
+										})
 									}
 								default:
 									panic("unreachable: checker guarantees case exhaustiveness")
@@ -5156,15 +5764,19 @@ func ChangeMemberRoleHandler(session teslmodkanelauth.KanelSession, orgId string
 		_ = _adminUserId
 		{
 //line KanelOrg.tesl:331
-			allAdmins := teslrt.TableSelect(teslmodkanelmodels.OrgMembershipTable, func(m teslmodkanelmodels.OrgMembership) bool {
+			allAdmins := teslrt.DbSelect(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.OrgMembershipTable, func(m teslmodkanelmodels.OrgMembership) bool {
 				return (m.OrgId == orgId) && m.Role.TeslEqual(teslmodkanelmodels.OrgRole{Tag: teslmodkanelmodels.OrgRoleRoleAdmin})
-			})
+			}, nil, 0, -1, teslrt.PgSql("select \"id\", \"org_id\", \"user_id\", \"role\", \"joined_at\" from \"kanel\".\"kanel_org_memberships\" where \"org_id\" = $1 and \"role\" = $2", func() []any {
+				return []any{orgId, teslrt.EncodeJSONValue(teslmodkanelmodels.EncodeOrgRoleJSON(teslmodkanelmodels.OrgRole{Tag: teslmodkanelmodels.OrgRoleRoleAdmin}))}
+			}), teslScanOrgMembership)
 			_ = allAdmins
 			{
 //line KanelOrg.tesl:332
-				targetMembership := teslrt.TableSelectOne(teslmodkanelmodels.OrgMembershipTable, func(m teslmodkanelmodels.OrgMembership) bool {
+				targetMembership := teslrt.DbSelectOne(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.OrgMembershipTable, func(m teslmodkanelmodels.OrgMembership) bool {
 					return (m.UserId == targetUserId) && (m.OrgId == orgId)
-				})
+				}, nil, teslrt.PgSql("select \"id\", \"org_id\", \"user_id\", \"role\", \"joined_at\" from \"kanel\".\"kanel_org_memberships\" where \"user_id\" = $1 and \"org_id\" = $2 limit 1", func() []any {
+					return []any{targetUserId, orgId}
+				}), teslScanOrgMembership)
 				_ = targetMembership
 //line KanelOrg.tesl:333
 				{
@@ -5187,32 +5799,44 @@ func ChangeMemberRoleHandler(session teslmodkanelauth.KanelSession, orgId string
 									panic(teslrt.RequestRejection{Status: 400, Message: "cannot demote the last admin \xe2\x80\x94 promote another member first"})
 								} else {
 //line KanelOrg.tesl:341
-									return teslrt.TableUpdateReturnOne(teslmodkanelmodels.OrgMembershipTable, func(m teslmodkanelmodels.OrgMembership) bool {
+									return teslrt.DbUpdateReturnOne(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.OrgMembershipTable, func(m teslmodkanelmodels.OrgMembership) bool {
 										return (m.UserId == targetUserId) && (m.OrgId == orgId)
 									}, func(m teslmodkanelmodels.OrgMembership) teslmodkanelmodels.OrgMembership {
 										teslNext := m
 										teslNext.Role = req.Role
 										return teslNext
-									})
+									}, teslrt.PgSqlProbed("update \"kanel\".\"kanel_org_memberships\" set \"role\" = $1 where \"user_id\" = $2 and \"org_id\" = $3 and (select count(*) from \"kanel\".\"kanel_org_memberships\" where \"user_id\" = $2 and \"org_id\" = $3) = 1 returning \"id\", \"org_id\", \"user_id\", \"role\", \"joined_at\"", func() []any {
+										return []any{teslrt.EncodeJSONValue(teslmodkanelmodels.EncodeOrgRoleJSON(req.Role)), targetUserId, orgId}
+									}, "select count(*) from \"kanel\".\"kanel_org_memberships\" where \"user_id\" = $1 and \"org_id\" = $2", func() []any {
+										return []any{targetUserId, orgId}
+									}), teslScanOrgMembership)
 								}
 							case teslmodkanelmodels.OrgRoleRoleMember:
 //line KanelOrg.tesl:346
-								return teslrt.TableUpdateReturnOne(teslmodkanelmodels.OrgMembershipTable, func(m teslmodkanelmodels.OrgMembership) bool {
+								return teslrt.DbUpdateReturnOne(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.OrgMembershipTable, func(m teslmodkanelmodels.OrgMembership) bool {
 									return (m.UserId == targetUserId) && (m.OrgId == orgId)
 								}, func(m teslmodkanelmodels.OrgMembership) teslmodkanelmodels.OrgMembership {
 									teslNext := m
 									teslNext.Role = req.Role
 									return teslNext
-								})
+								}, teslrt.PgSqlProbed("update \"kanel\".\"kanel_org_memberships\" set \"role\" = $1 where \"user_id\" = $2 and \"org_id\" = $3 and (select count(*) from \"kanel\".\"kanel_org_memberships\" where \"user_id\" = $2 and \"org_id\" = $3) = 1 returning \"id\", \"org_id\", \"user_id\", \"role\", \"joined_at\"", func() []any {
+									return []any{teslrt.EncodeJSONValue(teslmodkanelmodels.EncodeOrgRoleJSON(req.Role)), targetUserId, orgId}
+								}, "select count(*) from \"kanel\".\"kanel_org_memberships\" where \"user_id\" = $1 and \"org_id\" = $2", func() []any {
+									return []any{targetUserId, orgId}
+								}), teslScanOrgMembership)
 							case teslmodkanelmodels.OrgRoleRoleViewer:
 //line KanelOrg.tesl:351
-								return teslrt.TableUpdateReturnOne(teslmodkanelmodels.OrgMembershipTable, func(m teslmodkanelmodels.OrgMembership) bool {
+								return teslrt.DbUpdateReturnOne(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.OrgMembershipTable, func(m teslmodkanelmodels.OrgMembership) bool {
 									return (m.UserId == targetUserId) && (m.OrgId == orgId)
 								}, func(m teslmodkanelmodels.OrgMembership) teslmodkanelmodels.OrgMembership {
 									teslNext := m
 									teslNext.Role = req.Role
 									return teslNext
-								})
+								}, teslrt.PgSqlProbed("update \"kanel\".\"kanel_org_memberships\" set \"role\" = $1 where \"user_id\" = $2 and \"org_id\" = $3 and (select count(*) from \"kanel\".\"kanel_org_memberships\" where \"user_id\" = $2 and \"org_id\" = $3) = 1 returning \"id\", \"org_id\", \"user_id\", \"role\", \"joined_at\"", func() []any {
+									return []any{teslrt.EncodeJSONValue(teslmodkanelmodels.EncodeOrgRoleJSON(req.Role)), targetUserId, orgId}
+								}, "select count(*) from \"kanel\".\"kanel_org_memberships\" where \"user_id\" = $1 and \"org_id\" = $2", func() []any {
+									return []any{targetUserId, orgId}
+								}), teslScanOrgMembership)
 							default:
 								panic("unreachable: checker guarantees case exhaustiveness")
 							}
@@ -5234,9 +5858,11 @@ func RemoveMemberHandler(session teslmodkanelauth.KanelSession, orgId string, ta
 		_ = _adminUserId
 		{
 //line KanelOrg.tesl:363
-			targetMembership := teslrt.TableSelectOne(teslmodkanelmodels.OrgMembershipTable, func(m teslmodkanelmodels.OrgMembership) bool {
+			targetMembership := teslrt.DbSelectOne(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.OrgMembershipTable, func(m teslmodkanelmodels.OrgMembership) bool {
 				return (m.UserId == targetUserId) && (m.OrgId == orgId)
-			})
+			}, nil, teslrt.PgSql("select \"id\", \"org_id\", \"user_id\", \"role\", \"joined_at\" from \"kanel\".\"kanel_org_memberships\" where \"user_id\" = $1 and \"org_id\" = $2 limit 1", func() []any {
+				return []any{targetUserId, orgId}
+			}), teslScanOrgMembership)
 			_ = targetMembership
 //line KanelOrg.tesl:364
 			{
@@ -5255,9 +5881,11 @@ func RemoveMemberHandler(session teslmodkanelauth.KanelSession, orgId string, ta
 						case teslmodkanelmodels.OrgRoleRoleAdmin:
 							{
 //line KanelOrg.tesl:369
-								adminCount := teslrt.TableCount(teslmodkanelmodels.OrgMembershipTable, func(m teslmodkanelmodels.OrgMembership) bool {
+								adminCount := teslrt.DbCount(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.OrgMembershipTable, func(m teslmodkanelmodels.OrgMembership) bool {
 									return (m.OrgId == orgId) && m.Role.TeslEqual(teslmodkanelmodels.OrgRole{Tag: teslmodkanelmodels.OrgRoleRoleAdmin})
-								})
+								}, teslrt.PgSql("select count(*) from \"kanel\".\"kanel_org_memberships\" where \"org_id\" = $1 and \"role\" = $2", func() []any {
+									return []any{orgId, teslrt.EncodeJSONValue(teslmodkanelmodels.EncodeOrgRoleJSON(teslmodkanelmodels.OrgRole{Tag: teslmodkanelmodels.OrgRoleRoleAdmin}))}
+								}))
 								_ = adminCount
 //line KanelOrg.tesl:370
 								if teslrt.Compare(adminCount, teslrt.FromInt64(1)) <= 0 {
@@ -5266,9 +5894,11 @@ func RemoveMemberHandler(session teslmodkanelauth.KanelSession, orgId string, ta
 								} else {
 									{
 //line KanelOrg.tesl:373
-										_ = teslrt.TableDelete(teslmodkanelmodels.OrgMembershipTable, func(m teslmodkanelmodels.OrgMembership) bool {
+										_ = teslrt.DbDelete(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.OrgMembershipTable, func(m teslmodkanelmodels.OrgMembership) bool {
 											return (m.UserId == targetUserId) && (m.OrgId == orgId)
-										})
+										}, teslrt.PgSql("delete from \"kanel\".\"kanel_org_memberships\" where \"user_id\" = $1 and \"org_id\" = $2", func() []any {
+											return []any{targetUserId, orgId}
+										}))
 //line KanelOrg.tesl:374
 										return "removed"
 									}
@@ -5277,18 +5907,22 @@ func RemoveMemberHandler(session teslmodkanelauth.KanelSession, orgId string, ta
 						case teslmodkanelmodels.OrgRoleRoleMember:
 							{
 //line KanelOrg.tesl:376
-								_ = teslrt.TableDelete(teslmodkanelmodels.OrgMembershipTable, func(m teslmodkanelmodels.OrgMembership) bool {
+								_ = teslrt.DbDelete(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.OrgMembershipTable, func(m teslmodkanelmodels.OrgMembership) bool {
 									return (m.UserId == targetUserId) && (m.OrgId == orgId)
-								})
+								}, teslrt.PgSql("delete from \"kanel\".\"kanel_org_memberships\" where \"user_id\" = $1 and \"org_id\" = $2", func() []any {
+									return []any{targetUserId, orgId}
+								}))
 //line KanelOrg.tesl:377
 								return "removed"
 							}
 						case teslmodkanelmodels.OrgRoleRoleViewer:
 							{
 //line KanelOrg.tesl:379
-								_ = teslrt.TableDelete(teslmodkanelmodels.OrgMembershipTable, func(m teslmodkanelmodels.OrgMembership) bool {
+								_ = teslrt.DbDelete(teslrt.ResolveDatabaseIdentity("teslmodkanelbackend.KanelDatabase"), teslmodkanelmodels.OrgMembershipTable, func(m teslmodkanelmodels.OrgMembership) bool {
 									return (m.UserId == targetUserId) && (m.OrgId == orgId)
-								})
+								}, teslrt.PgSql("delete from \"kanel\".\"kanel_org_memberships\" where \"user_id\" = $1 and \"org_id\" = $2", func() []any {
+									return []any{targetUserId, orgId}
+								}))
 //line KanelOrg.tesl:380
 								return "removed"
 							}
@@ -5432,4 +6066,76 @@ func DecodeChangeMemberRoleRequestJSON(teslJSON any) teslrt.Check[ChangeMemberRo
 		return teslFirstFailure
 	}
 	return teslrt.Reject[ChangeMemberRoleRequest](400, "no decode alternative matched")
+}
+
+func teslColumnOrgRole_teslmodkanelmodels(teslText []byte) teslmodkanelmodels.OrgRole {
+	teslParsed, teslParseErr := teslrt.ParseColumnJSON(teslText)
+	if teslParseErr != nil {
+		panic("database: a OrgRole column holds text that is not JSON: " + teslParseErr.Error())
+	}
+	teslTag, teslTagErr := teslrt.DecodeStringField(teslParsed, "tag")
+	if teslTagErr != nil {
+		panic("database: a OrgRole column holds " + teslTagErr.Error())
+	}
+	switch teslTag {
+	case "RoleAdmin":
+		return teslmodkanelmodels.OrgRole{Tag: teslmodkanelmodels.OrgRoleRoleAdmin}
+	case "RoleMember":
+		return teslmodkanelmodels.OrgRole{Tag: teslmodkanelmodels.OrgRoleRoleMember}
+	case "RoleViewer":
+		return teslmodkanelmodels.OrgRole{Tag: teslmodkanelmodels.OrgRoleRoleViewer}
+	}
+	panic("database: a OrgRole column holds an unknown tag " + teslTag)
+}
+
+func teslScanKanelUser(teslRow pgx.CollectableRow) (teslmodkanelmodels.KanelUser, error) {
+	teslValue := teslmodkanelmodels.KanelUser{}
+	var teslColumn0 string
+	var teslColumn1 string
+	var teslColumn2 string
+	var teslColumn3 string
+	var teslColumn4 int64
+	if teslErr := teslRow.Scan(&teslColumn0, &teslColumn1, &teslColumn2, &teslColumn3, &teslColumn4); teslErr != nil {
+		return teslValue, teslErr
+	}
+	teslValue.Id = teslColumn0
+	teslValue.Email = teslColumn1
+	teslValue.PasswordHash = teslColumn2
+	teslValue.DisplayName = teslColumn3
+	teslValue.CreatedAt = teslrt.PosixMillis{Value: teslrt.FromInt64(teslColumn4)}
+	return teslValue, nil
+}
+
+func teslScanOrg(teslRow pgx.CollectableRow) (teslmodkanelmodels.Org, error) {
+	teslValue := teslmodkanelmodels.Org{}
+	var teslColumn0 string
+	var teslColumn1 string
+	var teslColumn2 string
+	var teslColumn3 int64
+	if teslErr := teslRow.Scan(&teslColumn0, &teslColumn1, &teslColumn2, &teslColumn3); teslErr != nil {
+		return teslValue, teslErr
+	}
+	teslValue.Id = teslColumn0
+	teslValue.Name = teslColumn1
+	teslValue.Slug = teslColumn2
+	teslValue.CreatedAt = teslrt.PosixMillis{Value: teslrt.FromInt64(teslColumn3)}
+	return teslValue, nil
+}
+
+func teslScanOrgMembership(teslRow pgx.CollectableRow) (teslmodkanelmodels.OrgMembership, error) {
+	teslValue := teslmodkanelmodels.OrgMembership{}
+	var teslColumn0 string
+	var teslColumn1 string
+	var teslColumn2 string
+	var teslColumn3 []byte
+	var teslColumn4 int64
+	if teslErr := teslRow.Scan(&teslColumn0, &teslColumn1, &teslColumn2, &teslColumn3, &teslColumn4); teslErr != nil {
+		return teslValue, teslErr
+	}
+	teslValue.Id = teslColumn0
+	teslValue.OrgId = teslColumn1
+	teslValue.UserId = teslColumn2
+	teslValue.Role = teslColumnOrgRole_teslmodkanelmodels(teslColumn3)
+	teslValue.JoinedAt = teslrt.PosixMillis{Value: teslrt.FromInt64(teslColumn4)}
+	return teslValue, nil
 }

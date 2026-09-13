@@ -54,6 +54,8 @@ var ChainDatabaseDatabase = teslrt.NewDatabase(
 	[]teslrt.PostgresTable{},
 )
 
+var _ = teslrt.RegisterDatabaseIdentity("teslmodfullchainemail.ChainDatabase", ChainDatabaseDatabase)
+
 //line email_fullchain.tesl:52
 func SendChainEmail(addr string, subject string) struct{} {
 //line email_fullchain.tesl:53

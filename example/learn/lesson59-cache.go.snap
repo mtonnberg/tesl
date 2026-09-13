@@ -45,6 +45,8 @@ var MainDBDatabase = teslrt.NewDatabase(
 	[]teslrt.PostgresTable{},
 )
 
+var _ = teslrt.RegisterDatabaseIdentity("teslmodlesson59cache.MainDB", MainDBDatabase)
+
 //line lesson59-cache.tesl:101
 func GetCachedProfile(userId string) teslrt.Maybe[string] {
 //line lesson59-cache.tesl:103

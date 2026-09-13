@@ -45,6 +45,8 @@ var TestDBDatabase = teslrt.NewDatabase(
 	[]teslrt.PostgresTable{},
 )
 
+var _ = teslrt.RegisterDatabaseIdentity("teslmodcachetests.TestDB", TestDBDatabase)
+
 //line cache-tests.tesl:51
 func getCached(k string) teslrt.Maybe[string] {
 //line cache-tests.tesl:52
