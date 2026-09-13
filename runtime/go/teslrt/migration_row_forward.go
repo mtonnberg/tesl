@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -14,12 +15,14 @@ type pgRowForwardOperation struct {
 	entity *pgRowPhysicalEntity
 	column *pgRowPhysicalColumn
 	window *pgRowPhysicalWindow
+	table  *PgMigrationCatalogTable
 }
 
 type pgRowForwardManifest struct {
 	previous                  *pgRowForwardManifest
 	predecessor               *pgRowPhysicalPlan
 	contraction               *pgRowPersistedContract
+	epoch                     *pgRowEpochRetirement
 	completed                 int
 	plan                      *pgRowPhysicalPlan
 	creatorABI, compatibility string
@@ -28,8 +31,8 @@ type pgRowForwardManifest struct {
 }
 
 func pgRowForwardOperations(previous, plan *pgRowPhysicalPlan) ([]pgRowForwardOperation, error) {
-	if previous == nil || plan == nil || plan.version != previous.version+1 || len(plan.windows) == 0 {
-		return nil, fmt.Errorf("row execution requires one adjacent checked transforming window")
+	if previous == nil || plan == nil || plan.version != previous.version+1 {
+		return nil, fmt.Errorf("row execution requires an adjacent checked physical revision")
 	}
 	if err := pgValidateRowPhysicalLineage(previous, plan); err != nil {
 		return nil, err
@@ -38,16 +41,28 @@ func pgRowForwardOperations(previous, plan *pgRowPhysicalPlan) ([]pgRowForwardOp
 	for i := range plan.entities {
 		entity := &plan.entities[i]
 		old := previous.entity(entity.identity)
-		if old == nil || !reflect.DeepEqual(old.indexes, entity.indexes) {
-			return nil, fmt.Errorf("bounded row expansion cannot change entity or index inventory")
+		if old == nil {
+			table := PgMigrationCatalogTable{Name: entity.table, Indexes: slices.Clone(entity.indexes)}
+			for _, column := range entity.columns {
+				table.Columns = append(table.Columns, column.catalog)
+			}
+			if err := pgValidateMigrationCatalog([]PgMigrationCatalogTable{table}); err != nil {
+				return nil, err
+			}
+			table.Columns = append(table.Columns, PgMigrationCatalogColumn{Name: "_tesl_v", Type: "int2", Default: &PgMigrationCatalogConstant{Kind: "int", Value: "1"}})
+			operations = append(operations, pgRowForwardOperation{entity: entity, table: &table})
+			continue
+		}
+		if !reflect.DeepEqual(old.indexes, entity.indexes) {
+			return nil, fmt.Errorf("row expansion requires a concurrent job for existing-table index changes")
 		}
 		for j := range entity.columns {
 			column := &entity.columns[j]
 			if old.column(column.catalog.Name) != nil {
 				continue
 			}
-			if !column.catalog.Nullable || column.catalog.PrimaryKey || column.introducedVersion != plan.version {
-				return nil, fmt.Errorf("bounded row expansion only introduces nullable retained columns")
+			if column.catalog.PrimaryKey || column.introducedVersion != plan.version || plan.window(entity.identity) != nil && !column.catalog.Nullable {
+				return nil, fmt.Errorf("bounded row expansion requires exact checked column introduction")
 			}
 			operations = append(operations, pgRowForwardOperation{entity: entity, column: column})
 		}
@@ -71,7 +86,7 @@ func pgReadRowForwardManifest(ctx context.Context, tx pgx.Tx, b *pgRowBaseline) 
 		return nil, err
 	}
 	ns := quoteIdentifier(b.history.Namespace) + "."
-	rows, err := tx.Query(ctx, "select version,predecessor_hash,contract,contract_hash,compiler_abi,stored_value_compatibility,operation_count from "+ns+"tesl_row_physical order by version")
+	rows, err := tx.Query(ctx, "select version,predecessor_hash,contract,contract_hash,compiler_abi,stored_value_compatibility,operation_count,epoch_preserving from "+ns+"tesl_row_physical order by version")
 	if err != nil {
 		return nil, err
 	}
@@ -82,9 +97,10 @@ func pgReadRowForwardManifest(ctx context.Context, tx pgx.Tx, b *pgRowBaseline) 
 	count := 0
 	for rows.Next() {
 		var version, operations int
+		var preserving bool
 		var prior, hash, abi, compatibility string
 		var contract []byte
-		if err := rows.Scan(&version, &prior, &contract, &hash, &abi, &compatibility, &operations); err != nil {
+		if err := rows.Scan(&version, &prior, &contract, &hash, &abi, &compatibility, &operations, &preserving); err != nil {
 			return nil, err
 		}
 		count++
@@ -94,6 +110,9 @@ func pgReadRowForwardManifest(ctx context.Context, tx pgx.Tx, b *pgRowBaseline) 
 		plan, err := pgParseRowPhysicalPlan(hex.EncodeToString(contract), hash)
 		if err != nil {
 			return nil, err
+		}
+		if preserving != (len(plan.windows) == 0) {
+			return nil, fmt.Errorf("physical epoch mode differs from checked window inventory")
 		}
 		if plan.version != version || plan.family != b.history.Family || plan.namespace != b.history.Namespace {
 			return nil, fmt.Errorf("persisted physical owner differs")
@@ -171,13 +190,29 @@ func pgReadRowForwardManifest(ctx context.Context, tx pgx.Tx, b *pgRowBaseline) 
 			return nil, err
 		}
 		manifest := manifests[version]
-		if manifest == nil || manifest.processingABI != "" || !strings.HasPrefix(abi, "tesl-source-abi-v1:") || !pgMigrationDigest(strings.TrimPrefix(abi, "tesl-source-abi-v1:")) {
+		if manifest == nil || len(manifest.plan.windows) == 0 || manifest.processingABI != "" || !strings.HasPrefix(abi, "tesl-source-abi-v1:") || !pgMigrationDigest(strings.TrimPrefix(abi, "tesl-source-abi-v1:")) {
 			return nil, fmt.Errorf("invalid processing ABI state")
 		}
 		manifest.processingABI = abi
 	}
 	if err := processing.Err(); err != nil {
 		return nil, err
+	}
+	processing.Close()
+	plans := map[int]*pgRowPhysicalPlan{1: b.physical}
+	for version, manifest := range manifests {
+		plans[version] = manifest.plan
+	}
+	epochs, err := pgReadRowEpochRetirements(ctx, tx, b, plans)
+	if err != nil {
+		return nil, err
+	}
+	for target, epoch := range epochs {
+		manifest := manifests[target]
+		if manifest == nil {
+			return nil, fmt.Errorf("epoch retirement references an absent additive target")
+		}
+		manifest.epoch = epoch
 	}
 	return result, nil
 }
@@ -253,7 +288,7 @@ func pgVerifyRowExpansionHistory(state PgMigrationControlState, b *pgRowBaseline
 			}
 			continue
 		}
-		if intent.Version != version || intent.SnapshotHash != m.plan.hash || intent.ArtifactHash != m.plan.hash || intent.SourceABI != m.creatorABI || intent.StoredValueCompatibility != m.compatibility || intent.EpochPreserving || intent.OperationCount != len(m.operations) {
+		if intent.Version != version || intent.SnapshotHash != m.plan.hash || intent.ArtifactHash != m.plan.hash || intent.SourceABI != m.creatorABI || intent.StoredValueCompatibility != m.compatibility || intent.EpochPreserving != (len(m.plan.windows) == 0) || intent.OperationCount != len(m.operations) {
 			return fmt.Errorf("future row intent differs from exact manifest")
 		}
 		if executor && state.Current < version && b.history.CurrentVersion == version && intent.SourceABI != b.history.SourceCompilerABI {
@@ -264,7 +299,7 @@ func pgVerifyRowExpansionHistory(state PgMigrationControlState, b *pgRowBaseline
 		if hasExpanded != (state.Current >= version) || hasExpanded && m.completed != intent.OperationCount {
 			return fmt.Errorf("published row expansion is incomplete")
 		}
-		if hasExpanded && (expanded.ArtifactHash != intent.ArtifactHash || expanded.SnapshotHash != intent.SnapshotHash || expanded.SourceABI != intent.SourceABI || expanded.StoredValueCompatibility != intent.StoredValueCompatibility || expanded.EpochPreserving == nil || *expanded.EpochPreserving) {
+		if hasExpanded && (expanded.ArtifactHash != intent.ArtifactHash || expanded.SnapshotHash != intent.SnapshotHash || expanded.SourceABI != intent.SourceABI || expanded.StoredValueCompatibility != intent.StoredValueCompatibility || expanded.EpochPreserving == nil || *expanded.EpochPreserving != intent.EpochPreserving) {
 			return fmt.Errorf("expanded lifecycle differs from exact manifest provenance")
 		}
 		if m.processingABI != "" && (!hasExpanded || b.history.CurrentVersion == version && b.history.SourceCompilerABI != m.processingABI && steps["retired"].Step == "") {
@@ -277,7 +312,29 @@ func pgVerifyRowExpansionHistory(state PgMigrationControlState, b *pgRowBaseline
 		if len(steps) != boolInt(hasExpanded)+boolInt(hasRetired)+boolInt(hasContracting)+boolInt(hasContracted) {
 			return fmt.Errorf("unknown row lifecycle step")
 		}
-		if c == nil {
+		if len(m.plan.windows) == 0 {
+			if c != nil || m.processingABI != "" {
+				return fmt.Errorf("additive revision cannot carry row processing or a destructive Contract")
+			}
+			if m.epoch == nil {
+				if hasRetired || hasContracting || hasContracted {
+					return fmt.Errorf("additive retirement lacks exact epoch evidence")
+				}
+			} else {
+				if !hasExpanded || !hasRetired || !hasContracting || !hasContracted {
+					return fmt.Errorf("epoch retirement lacks its complete additive slot lifecycle")
+				}
+				for _, step := range []PgMigrationControlVersion{retired, contracting, contracted} {
+					if step.ArtifactHash != m.epoch.hash || step.SnapshotHash != "" || step.SourceABI != m.epoch.executorABI || step.StoredValueCompatibility != m.compatibility || step.EpochPreserving != nil {
+						return fmt.Errorf("additive retirement provenance differs from exact epoch receipt")
+					}
+				}
+				expectedMin = max(expectedMin, m.epoch.through)
+				expectedFloor = max(expectedFloor, m.epoch.through)
+			}
+		} else if m.epoch != nil {
+			return fmt.Errorf("transforming revision cannot be an additive epoch slot")
+		} else if c == nil {
 			if hasRetired || hasContracting || hasContracted {
 				return fmt.Errorf("row lifecycle lacks checked Contract")
 			}
@@ -306,7 +363,7 @@ func pgVerifyRowExpansionHistory(state PgMigrationControlState, b *pgRowBaseline
 				expectedFloor = version
 			}
 		}
-		if version > 2 {
+		if m.plan.requiresContractVersion > 0 {
 			prior := manifests[m.plan.requiresContractVersion]
 			if prior == nil || prior.contraction == nil || prior.plan.version != version-1 {
 				return fmt.Errorf("next window lacks immediate checked contracted predecessor")

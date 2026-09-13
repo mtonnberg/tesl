@@ -23,7 +23,7 @@ func pgRowSettledMode(ctx context.Context, tx pgx.Tx, database *Database, window
 	if err := tx.QueryRow(ctx, "select "+pgx.Identifier{window.namespace, "tesl_admit"}.Sanitize()+"($1)", window.version).Scan(&floor); err != nil {
 		return false, &pgMigrationAdmissionError{cause: err}
 	}
-	if window.version == 1 || floor < window.version {
+	if len(window.windows) == 0 || floor < window.version {
 		return false, nil
 	}
 	settled, err := pgCompiledRowSettledPlan(database, window.version)

@@ -56,6 +56,12 @@ migration edits, `tesl check` reports any stale selectors and the exact
 selection it expects; review those changes before rebuilding. A purely additive
 migration does not need an empty Contract.
 
+A `Derived` migration can retain unchanged record and ADT fields, including
+optional records, when the generated `Same` declarations verify their stored
+representation. The compiler generates their copies and any reverse copies
+needed by `Legacy` or `LegacyWith`; keep the `Same` declarations for nested types
+and codecs too. `Nothing` continues to mean SQL NULL.
+
 For an unchanged record or ADT field, copy its original projection, such as
 `id: old.id` or `metadata: old.metadata`, and retain the generated `Same` entries
 for the type and its dependencies. A rename uses the same rule, for example
@@ -81,3 +87,36 @@ Contract names it as `Column Note author` (and removes any obsolete index).
 After cleanup, new inserts stop supplying the legacy value and the old column is
 removed. Removing a field and changing a field's type therefore use the same
 migration and cleanup workflow.
+
+
+An unchanged optional record or ADT field can also be copied in an explicit
+`Migrate` function: use the original row projection, such as
+`metadata: old.metadata`, and supply `Same` for its stored type and dependencies.
+This also works with `Rename`. `Nothing` stays SQL NULL, and `Something` keeps its
+original codec input. If the record, ADT or codec changes, use the explicit
+`Retype` migration described above. Application handlers keep using the current
+entity as usual.
+
+## Closing an additive epoch
+
+In the format5 runtime candidate, a purely additive migration needs no empty
+Contract. Older applications remain admitted until you explicitly close the
+additive epoch. Use the surviving version's compiled binary to preview and retire
+versions below it:
+
+```sh
+app --schema close-epoch --through V4 --dry-run --json
+app --schema close-epoch --through V4 --json
+```
+
+The preview lists recently registered older processes. Stop them and allow the
+thirty-second heartbeat window to expire before closing. `--force` records an
+explicit choice to retire processes that are still live or uncertain, but still
+waits for their active transactions; a timeout leaves admission unchanged. The
+surviving version continues serving, and retired versions receive HTTP 503.
+Closing the additive epoch is required before beginning its first transforming
+migration.
+
+This runtime path is still a candidate: ordinary public compiler activation and
+adoption of existing control-format3 deployments are separate prerequisites.
+The command cannot upgrade or recreate such a database.

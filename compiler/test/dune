@@ -622,6 +622,46 @@
  (libraries tesl_compiler_lib alcotest unix str))
 
 (test
+ (name test_migration_row_derived)
+ (modules test_migration_row_derived)
+ (libraries tesl_compiler_lib alcotest unix str))
+
+(test
  (name test_migration_nominal_copy)
  (modules test_migration_nominal_copy)
  (libraries tesl_compiler_lib alcotest unix str))
+
+(test
+ (name test_migration_nominal_derived)
+ (modules test_migration_nominal_derived)
+ (libraries tesl_compiler_lib alcotest unix str))
+
+(test
+ (name test_migration_nominal_optional)
+ (modules test_migration_nominal_optional)
+ (libraries tesl_compiler_lib alcotest str unix))
+
+(test
+ (name test_migration_row_scc)
+ (modules test_migration_row_scc)
+ (libraries tesl_compiler_lib alcotest unix str))
+
+(test
+ (name test_migration_row_additive)
+ (modules test_migration_row_additive)
+ (libraries tesl_compiler_lib alcotest unix str))
+
+(test
+ (name test_migration_row_tables)
+ (modules test_migration_row_tables)
+ (libraries tesl_compiler_lib alcotest unix str))
+
+(test
+ (name test_migration_row_civil)
+ (modules test_migration_row_civil)
+ (libraries tesl_compiler_lib alcotest unix str))
+
+(test
+ (name test_migration_additive_tail)
+ (modules test_migration_additive_tail)
+ (libraries tesl_compiler_lib alcotest unix str yojson))

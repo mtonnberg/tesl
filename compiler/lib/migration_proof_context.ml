@@ -1,5 +1,7 @@
 type nominal_type = { identity : string; declaration : Location.loc }
-type nominal_spec = { previous : nominal_type; current : nominal_type;
+type nominal_shape = Named of nominal_type | Primitive of string | Applied of nominal_shape * nominal_shape
+type nominal_spec = { previous : nominal_shape; current : nominal_shape;
+  previous_entity : nominal_type; previous_field : string;
   entity : nominal_type; types : (nominal_type * nominal_type) list }
 type site = { owner : Ast.module_form; constructor : string; field : string;
   argument : Ast.expr; projection : Proof_kernel.proven_fact list; predicates : (string * string) list;
@@ -39,11 +41,23 @@ let nominal ~constructor ~field argument =
       then Option.map (fun spec -> {context;site;spec}) site.nominal else None) context.sites
   | None -> None
 let accepts_nominal nominal ~actual ~expected =
-  match actual,expected with
-  | Type_system.TCon actual,Type_system.TCon expected ->
-    nominal.context.resolve_type nominal.site.owner actual=Some nominal.spec.previous.identity &&
-    nominal.context.resolve_type nominal.site.owner expected=Some nominal.spec.current.identity
-  | _ -> false
+  let rec matches shape ty = match shape,ty with
+    | Named wanted,Type_system.TCon actual ->
+      nominal.context.resolve_type nominal.site.owner actual=Some wanted.identity
+    | Primitive wanted,Type_system.TCon actual ->
+      (match nominal.context.resolve_type nominal.site.owner actual with
+       | Some identity -> identity=wanted
+       | None -> (* Inferred builtin constructors need not be imported by the
+                    module which merely projects another module's field. *)
+         let short=List.hd(List.rev(String.split_on_char '.' wanted)) in
+         let owners=List.filter_map (fun (home,names) ->
+           if List.mem short names then Some (home ^ "." ^ short) else None)
+           Type_system.tesl_module_exports |> List.sort_uniq compare in
+         owners=[wanted] && (actual=wanted || actual=short))
+    | Applied(head,arg),Type_system.TApp(actual_head,actual_arg) ->
+      matches head actual_head && matches arg actual_arg
+    | _ -> false in
+  matches nominal.spec.previous actual && matches nominal.spec.current expected
 let nominal_transports context =
   revalidate context;
   List.filter_map (fun site -> Option.map (fun spec -> {context;site;spec}) site.nominal) context.sites

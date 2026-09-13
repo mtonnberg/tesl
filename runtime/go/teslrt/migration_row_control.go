@@ -54,7 +54,7 @@ func (p *pgRowBaselinePreparation) prepareFresh(ctx context.Context, tx pgx.Tx, 
 		if err != nil {
 			return err
 		}
-		if _, err := tx.Exec(ctx, "insert into "+ns+"tesl_row_physical values(1,'',$1,$2,$3,$4,0)", contract, b.physical.hash, b.history.SourceCompilerABI, b.history.StoredValueCompatibility); err != nil {
+		if _, err := tx.Exec(ctx, "insert into "+ns+"tesl_row_physical values(1,'',$1,$2,$3,$4,0,true)", contract, b.physical.hash, b.history.SourceCompilerABI, b.history.StoredValueCompatibility); err != nil {
 			return err
 		}
 	}

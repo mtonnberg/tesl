@@ -72,10 +72,11 @@ let plan history = protect (fun () ->
   {source;projection;columns=order_columns (List.map (fun (f:field) -> f.physical) projection);
    indexes=add_indexes source [];marker_default_generation=1;rename_dual_writes=[];reverse_writes=[]} in
  let prior=ref [] in
- let previous_transform=ref None in
+ let pending_contract=ref None in
  let planned=List.map (fun (revision:RH.version) ->
   let transforming=List.exists (fun b -> RH.migration_version b=revision.version) (RH.bindings history) in
-  let requires_contract_version=if transforming then !previous_transform else None in
+  let requires_contract_version= !pending_contract in
+  pending_contract:=None;
   (* Planning states a prerequisite; it does not observe or authorize contraction. *)
   if requires_contract_version<>None then prior:=List.map settle_entity !prior;
   let windows=ref [] in
@@ -162,7 +163,7 @@ let plan history = protect (fun () ->
        rename_dual_writes=after.rename_dual_writes}::!windows) binding;
     after) revision.entities in
   prior:=entities;
-  if transforming then previous_transform:=Some revision.version;
+  if transforming then pending_contract:=Some revision.version;
   {version=revision.version;entities;windows=List.rev !windows;requires_contract_version}) (RH.versions history) in
  {history;versions=planned})
 

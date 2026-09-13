@@ -121,11 +121,12 @@ let additive_tail () = fixture [old;fresh;fresh ^ ", note: Maybe String"]
  [transform;"Note: Additive []",""] (fun _ _ h ->
  let p=get (P.plan h) in let e=note p 3 in
  check int "additive retains generation" 2 e.source.generation;
- check int "additive retains insert default" 1 e.marker_default_generation;
- check bool "prior target still physically nullable" true (column e "count").nullable;
+ check (option int) "additive requires immediately preceding Contract" (Some 2) (revision p 3).requires_contract_version;
+ check int "additive uses settled insert default" 2 e.marker_default_generation;
+ check bool "prior target is settled NOT NULL" false (column e "count").nullable;
  check bool "optional nullable" true (column e "note").nullable;
  check int "birth not schema generation" 3 (column e "note").introduced_version;
- check (list (pair string string)) "additive preserves required legacy writes" ["owner","author"] (List.map (fun (f,(c:P.column)) -> f,c.name) e.rename_dual_writes);
+ check (list (pair string string)) "additive starts after legacy writes retired" [] (List.map (fun (f,(c:P.column)) -> f,c.name) e.rename_dual_writes);
  check int "no additive window" 0 (List.length (revision p 3).windows))
 let two_transforms () = fixture [old;fresh;"id: String, editor: String, title: String, count: Int"]
  [transform;"Note: Migrate convert [Rename owner editor]","id: old.id, editor: old.owner, title: old.title, count: old.count"]
@@ -144,12 +145,15 @@ let alias_chain_through_additive () = fixture
   "Note: Migrate convert [Rename owner editor]","id: old.id, editor: old.owner, title: old.title, count: old.count, note: old.note";
   "Note: Additive []",""]
  (fun _ _ h -> let p=get (P.plan h) in
-  List.iter (fun n -> let e=note p n in
-   check (list (pair string string)) "current window alias survives following additive revision"
-    ["editor","owner"] (List.map (fun (f,(c:P.column)) -> f,c.name) e.rename_dual_writes);
-   check bool "contracted oldest column has no write obligation" false (List.exists (fun (c:P.column) -> c.name="author") e.columns)) [4;5];
-  check (option int) "additive tail uses actual last transforming contract" (Some 2) (revision p 4).requires_contract_version;
-  check (option int) "additive revision has no invented contract" None (revision p 5).requires_contract_version;
+  check (option int) "first additive consumes the earlier Contract" (Some 2) (revision p 3).requires_contract_version;
+  check (option int) "later transform does not reuse consumed Contract" None (revision p 4).requires_contract_version;
+  check (list (pair string string)) "new window retains only its own alias"
+   ["editor","owner"] (List.map (fun (f,(c:P.column)) -> f,c.name) (note p 4).rename_dual_writes);
+  check (option int) "next additive consumes new Contract" (Some 4) (revision p 5).requires_contract_version;
+  check (list (pair string string)) "additive has no retired aliases" []
+   (List.map (fun (f,(c:P.column)) -> f,c.name) (note p 5).rename_dual_writes);
+  List.iter (fun n -> check bool "oldest column is retired" false
+   (List.exists (fun (c:P.column) -> c.name="author") (note p n).columns)) [3;4;5];
   check int "additive revision has no separate window" 0 (List.length (revision p 5).windows))
 let unrelated_rename_keeps_aliases () = fixture
  [old;fresh;"id: String, owner: String, heading: String, count: Int";
@@ -227,9 +231,9 @@ let () = Alcotest.run "Retained row storage" ["physical lineage",[
  test_case "rename and computed columns coexist" `Quick rename;
  test_case "logical order is explicit" `Quick projection_order;
  test_case "projection completeness and owner refusals" `Quick projection_refusals;
- test_case "additive tail retains physical history" `Quick additive_tail;
+ test_case "additive tail requires settled predecessor" `Quick additive_tail;
  test_case "adjacent transforms require predecessor finality" `Quick two_transforms;
- test_case "contract prerequisite crosses additive revisions" `Quick alias_chain_through_additive;
+ test_case "each Contract prerequisite is consumed by its next revision" `Quick alias_chain_through_additive;
  test_case "new windows drop only contracted alias obligations" `Quick unrelated_rename_keeps_aliases;
  test_case "additive SQL default survives later transformation" `Quick additive_default;
  test_case "old field name reuse requires prior contract and new provenance" `Quick reuse;

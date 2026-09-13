@@ -197,6 +197,47 @@ let public_contract ()=with_plan(fun root _ file source ->
  write file broken;
  check bool "implicit app diagnoses malformed authority" true (List.exists(fun(d:Compile.diagnostic)->d.code="MIG022") (public_errors appfile app));
  check bool "standalone diagnoses malformed authority" true (List.exists(fun(d:Compile.diagnostic)->d.code="MIG022") (public_errors file broken)))
+let relative_contract_paths ()=with_plan(fun root _ file source ->
+ let cwd=Sys.getcwd () in
+ Fun.protect ~finally:(fun () -> Sys.chdir cwd) (fun () ->
+  Sys.chdir root;
+  List.iter (fun relative -> require_public_ok relative source)
+   ["migrations/work/v2-contract.tesl";"./migrations/work/v2-contract.tesl";
+    "./migrations/./work/./v2-contract.tesl"];
+  let refuses_path path =
+   write path source;
+   check bool "wrong relative owner remains MIG022" true
+    (List.exists(fun(d:Compile.diagnostic)->d.code="MIG022" &&
+      Compile.string_contains d.message "canonical schema-family path") (public_errors path source));
+   Sys.remove path in
+  List.iter refuses_path ["migrations/other/v2-contract.tesl";
+    "migrations/work/wrong-contract.tesl";"schema/work/v2-contract.tesl"];
+  let alias="migrations/alias" in
+  Unix.symlink "work" alias;
+  Fun.protect ~finally:(fun () -> Sys.remove alias) (fun () ->
+   check bool "symlink cannot relabel canonical family ownership" true
+    (public_errors "migrations/alias/v2-contract.tesl" source<>[]));
+  let copy=Filename.concat root "contract-copy.tesl" in
+  write copy source;Sys.remove file;Unix.symlink copy file;
+  Fun.protect ~finally:(fun () -> Sys.remove file;write file source;Sys.remove copy) (fun () ->
+   check bool "canonical spelling cannot conceal a symlink source" true
+    (List.exists(fun(d:Compile.diagnostic)->d.code="MIG013")
+      (public_errors "./migrations/work/v2-contract.tesl" source)));
+  let abi=match Migration_abi.current () with Ok a->Migration_abi.id a | Error e->fail e.message in
+  let ast=match Parser.parse_module "./migrations/work/v2-contract.tesl" source with Ok m->m | Err e->fail e.msg in
+  let checked=match get(Contract.check_module ~compiler_abi:abi ~source ast) with
+   | Some c->c | None->fail "relative Contract disappeared" in
+  check string "stored source guard is absolute" file (Contract.source_file checked);
+  ignore(get(Contract.revalidate checked));
+  Source_input.with_overlays ~project_root:root [file,source ^ "\n# changed overlay\n"] (fun () ->
+   (match Contract.revalidate checked with Ok _->fail "relative guard accepted changed overlay" | Error _->()));
+  let unsaved=source ^ "\n# unsaved reviewed Contract buffer\n" in
+  Source_input.with_overlays ~project_root:root [file,unsaved] (fun () ->
+   require_public_ok "./migrations/work/v2-contract.tesl" unsaved;
+   let ast=match Parser.parse_module "./migrations/work/v2-contract.tesl" unsaved with Ok m->m | Err e->fail e.msg in
+   let current=match get(Contract.check_module ~compiler_abi:abi ~source:unsaved ast) with
+    | Some c->c | None->fail "unsaved relative Contract disappeared" in
+   ignore(get(Contract.revalidate current)))))
 let program_capture ()=with_plan(fun root _ file _ ->
  let appfile=Filename.concat root "app.tesl" in write appfile app;
  let entry=match Parser.parse_module appfile app with Ok m -> m | Err e -> fail e.msg in
@@ -503,6 +544,7 @@ let ()=run "Checked source contracts" ["contract",[
  test_case "contextual source cannot hide runtime computations" `Quick runtime_shapes;
  test_case "source publication drift" `Quick drift;
  test_case "public standalone and implicit application diagnostics" `Quick public_contract;
+ test_case "relative Contract paths preserve canonical ownership and overlays" `Quick relative_contract_paths;
  test_case "guarded source program preserves exact contract owner" `Quick program_capture;
  test_case "guarded contract source preview and command" `Quick preview_contract;
  test_case "Rename exact columns and index association" `Quick rename_contract;

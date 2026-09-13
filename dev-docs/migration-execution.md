@@ -395,3 +395,67 @@ instrumentation; only the interruption executable uses the migration test hooks.
 control/executor/startup/admission tests when invoked without filtering arguments. The production
 tests and their crash hooks participate in the PostgreSQL 14–18 matrix. Crash hooks
 exist only in builds tagged `tesl_migration_test`.
+
+## Explicit additive epoch closure in the format5 candidate
+
+The private format5 compiler/runtime acceptance path leaves additive revisions
+expanded. It records no empty Contract and does not advance admission merely
+because another additive revision was installed. Before the first transforming
+revision, close the additive epoch through the current surviving application
+version with its ordinary compiled binary:
+
+```sh
+app --schema close-epoch --through V4 --dry-run --json
+app --schema close-epoch --through V4 --json
+```
+
+The command is currently bounded to a complete purely additive history with the
+same entity/index inventory. The preview identifies the exact database and
+retirement hash and lists recently registered retiring instances. A request pool
+registers one process-scoped heartbeat before publication and renews it over a
+separate Request connection every five seconds, including while idle or while
+its one-connection application pool is occupied. Each renewal has a five-second
+budget. Failed renewal, or a local observation older than fifteen seconds,
+refuses request admission; verified recovery can restore service. Pool destruction
+marks the monitor closed before cancellation and drains its connection cleanup.
+Returning from a WithDatabase scope does not destroy the cached pool.
+
+Default closure refuses retiring identities seen within thirty seconds. Stop old
+processes and wait, or explicitly use `--force` to record the decision to retire
+live/uncertain processes. Force still drains every retiring writer and compatible
+reader transaction; it cannot bypass a held fence. Acquisition is nonqueued and
+releases all keys when any key is busy, allowing surviving versions to continue.
+The complete closure is bounded by the existing lease timeout. It never replays
+an application callback and performs no user-table DDL.
+
+After the locks are held, a fresh control snapshot verifies owner UUID, fence,
+protocol, source-bound complete physical prefix and recent instances again. One
+transaction publishes the canonical retirement document, all retired/contracting/
+contracted target slots, and both minimum-version and compatibility floors.
+Closing through V4 from floor V1 accounts for targets V2, V3 and V4. Closing V2,
+then expanding additive V3/V4 and closing V4 preserves the exact prior-floor chain.
+Missing whole epoch rows, partial target slots, mismatched documents or a replaced
+database identity refuse. No row conversion or processing ABI latch is invented.
+
+This candidate is exercised through real emitted App binaries and ordinary schema
+commands. Public compiler activation, deployment of control format3 databases,
+post-transform additive tails and indexes on existing tables require their own
+checked paths; this command does not adopt or relabel an existing database.
+
+
+### New entities during an additive epoch
+
+The format5 candidate can add a checked new entity, including its declared indexes.
+Its exact CREATE TABLE, indexes, Request grants and operation receipt commit
+together. The table starts at generation1. Publication commits the expanded
+receipt and complete per-entity birth finality together; the original manifest
+creator remains the immutable provenance. Missing or altered birth evidence
+refuses observation. Birth creates no processing ABI latch, backfill shard or
+Contract authority. A later transforming version can use this recorded birth as
+its generation1 predecessor after the required explicit epoch closure.
+
+This path uses the checked physical catalog and preserves old application
+traffic. Existing-table index changes still require a separate concurrent-index
+protocol and are explicitly refused here. The native regression uses original
+source-deleted emitted App binaries; it does not claim public compiler activation
+or adoption of an existing control-format3 database.

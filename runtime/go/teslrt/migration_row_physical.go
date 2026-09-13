@@ -544,11 +544,9 @@ func pgBindRowPhysicalPlan(compiled *pgCompiledRowHistory, previous, plan *pgRow
 		return fmt.Errorf("physical plan has no exact compiled source")
 	}
 	expectedContract := 0
-	if len(plan.windows) > 0 {
-		for _, d := range compiled.inventory.Transforms {
-			if d.MigrationVersion < plan.version && d.MigrationVersion > expectedContract {
-				expectedContract = d.MigrationVersion
-			}
+	for _, d := range compiled.inventory.Transforms {
+		if d.MigrationVersion == plan.version-1 {
+			expectedContract = d.MigrationVersion
 		}
 	}
 	if plan.requiresContractVersion != expectedContract {

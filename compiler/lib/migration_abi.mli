@@ -15,6 +15,9 @@ val valid_stored_value_compatibility : string -> bool
     not attest a database's processing ABI or authorize an ABI drift override. *)
 val verify : t -> (unit,error) result
 val source_inputs : t -> (string * string) list
+(** Exact captured source bytes for a known lifted stdlib module. This accessor
+    does not consult the current filesystem or grant source proof authority. *)
+val lifted_source : t -> string -> (string * string) option
 
 (** Run generation against the captured resource bytes and resolution, preserving
     the application's source overlay root. Changed resource guards refuse the

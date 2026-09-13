@@ -178,7 +178,7 @@ func (a *pgRowTransactionAdmission) latchProcessing(ctx context.Context) error {
 	if window == nil || window.compiled == nil {
 		return fmt.Errorf("row processing requires its compiled window")
 	}
-	if a.entity.generation == 1 {
+	if window.window(a.entity.identity) == nil {
 		return nil
 	}
 	_, err := a.tx.Exec(ctx, "select "+pgx.Identifier{a.plan.namespace, "tesl_row_processing"}.Sanitize()+"($1,$2,$3)", window.version, window.compiled.history.SourceCompilerABI, window.hash)
@@ -194,7 +194,7 @@ func pgRowTransactionABI(ctx context.Context, tx pgx.Tx, plan *pgRowPhysicalPlan
 	if plan == nil || plan.compiled == nil {
 		return fmt.Errorf("row ABI admission requires its compiled window")
 	}
-	if plan.version == 1 {
+	if len(plan.windows) == 0 {
 		return nil
 	}
 	// The protected check also knows whether this exact window has retired.

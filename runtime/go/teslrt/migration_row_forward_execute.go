@@ -48,6 +48,21 @@ func pgExecuteRowForward(ctx context.Context, conn *pgx.Conn, b *pgRowBaseline, 
 	if initial.Current < plan.version-1 {
 		return result, fmt.Errorf("row transformation requires its installed final predecessor")
 	}
+	if initial.Current < plan.version && plan.requiresContractVersion > 0 {
+		contracted := false
+		// The complete baseline observer already verified these immutable
+		// receipts against their exact Contract. This early check explains a
+		// pending prerequisite; protected SQL rechecks it under the lock.
+		for _, receipt := range initial.Versions {
+			if receipt.Version == plan.requiresContractVersion && receipt.Step == "contracted" {
+				contracted = true
+				break
+			}
+		}
+		if !contracted {
+			return result, fmt.Errorf("schema V%d requires completed Contract V%d before expansion", plan.version, plan.requiresContractVersion)
+		}
+	}
 	ns := quoteIdentifier(b.history.Namespace) + "."
 	err = pgMigrationSessionLock(ctx, conn, initial.FenceNamespace, 2147483647, true, func() error {
 		completed := 0
@@ -77,14 +92,14 @@ func pgExecuteRowForward(ctx context.Context, conn *pgx.Conn, b *pgRowBaseline, 
 			return err
 		}
 		if err := pgExpansionTransaction(ctx, conn, func(tx pgx.Tx) error {
-			_, err := tx.Exec(ctx, "select "+ns+"tesl_register_row_physical($1,$2,$3,$4,$5,$6,$7)", plan.version, previous.hash, contract, plan.hash, b.history.SourceCompilerABI, b.history.StoredValueCompatibility, len(operations))
+			_, err := tx.Exec(ctx, "select "+ns+"tesl_register_row_physical($1,$2,$3,$4,$5,$6,$7,$8)", plan.version, previous.hash, contract, plan.hash, b.history.SourceCompilerABI, b.history.StoredValueCompatibility, len(operations), len(plan.windows) == 0)
 			return err
 		}); err != nil {
 			return err
 		}
 		migrationBoundary("row-forward-after-manifest")
 		if err := pgExpansionTransaction(ctx, conn, func(tx pgx.Tx) error {
-			_, err := tx.Exec(ctx, "select "+ns+"tesl_begin_expansion($1,$2,$2,$3,$4,$5,false)", plan.version, plan.hash, b.history.SourceCompilerABI, b.history.StoredValueCompatibility, len(operations))
+			_, err := tx.Exec(ctx, "select "+ns+"tesl_begin_expansion($1,$2,$2,$3,$4,$5,$6)", plan.version, plan.hash, b.history.SourceCompilerABI, b.history.StoredValueCompatibility, len(operations), len(plan.windows) == 0)
 			return err
 		}); err != nil {
 			return err
@@ -114,7 +129,17 @@ func pgExecuteRowForward(ctx context.Context, conn *pgx.Conn, b *pgRowBaseline, 
 		for i := completed; i < len(operations); i++ {
 			operation := operations[i]
 			if err := pgExpansionTransaction(ctx, conn, func(tx pgx.Tx) error {
-				if operation.column != nil {
+				if operation.table != nil {
+					table := operation.table
+					if err := pgExecuteExpansionOperation(ctx, tx, b.history.Namespace, PgMigrationExpansionOperation{Kind: "create-table", Table: table.Name, Columns: table.Columns, Indexes: table.Indexes}); err != nil {
+						return err
+					}
+					if roles.Request != "" {
+						if _, err := tx.Exec(ctx, "grant select,insert,update,delete on "+pgx.Identifier{b.history.Namespace, table.Name}.Sanitize()+" to "+quoteIdentifier(roles.Request)); err != nil {
+							return err
+						}
+					}
+				} else if operation.column != nil {
 					if err := pgExecuteExpansionOperation(ctx, tx, b.history.Namespace, PgMigrationExpansionOperation{Kind: "add-column", Table: operation.entity.table, Column: &operation.column.catalog}); err != nil {
 						return err
 					}
@@ -144,12 +169,26 @@ func pgExecuteRowForward(ctx context.Context, conn *pgx.Conn, b *pgRowBaseline, 
 					return fmt.Errorf("row publication admission changed while draining")
 				}
 				migrationBoundary("row-forward-before-publication")
-				_, err = tx.Exec(ctx, "select "+ns+"tesl_record_expanded($1)", plan.version)
+				if _, err := tx.Exec(ctx, "select "+ns+"tesl_record_expanded($1)", plan.version); err != nil {
+					return err
+				}
+				migrationBoundary("row-forward-after-expanded")
+				for ordinal, operation := range operations {
+					if operation.table == nil {
+						continue
+					}
+					if _, err := tx.Exec(ctx, "select "+ns+"tesl_row_record_birth($1,$2,$3,$4)", plan.version, ordinal, operation.entity.identity, pgMigrationObjectHash(plan.hash, ordinal)); err != nil {
+						return err
+					}
+				}
+				migrationBoundary("row-forward-after-births")
+				_, _, err = pgReadRowBaselineState(ctx, tx, b, roles, false)
 				return err
 			})
 		}); err != nil {
 			return err
 		}
+		migrationBoundary("row-forward-after-publication-commit")
 		return pgControlSnapshotMode(ctx, conn, pgx.ReadOnly, func(tx pgx.Tx) error {
 			var err error
 			result, _, err = pgReadRowBaselineState(ctx, tx, b, roles, false)

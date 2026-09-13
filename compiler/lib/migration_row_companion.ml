@@ -53,6 +53,17 @@ let base_json ~quote ~go_type source =
    (array (version d.identity) (RH.versions rows)) (array origin d.origins) in
  Printf.sprintf {|{"version":4,"kind":"compiled-migration-source-history","compilerAbi":%s,"storedValueCompatibility":%s,"databases":%s}|}
   (quote (P.compiler_abi p)) (quote (P.stored_value_compatibility p)) (array database (P.databases p))
+(* Current codecs describe checked stored rows after an earlier transformation.
+   They are not migration callbacks and carry no Same/conversion authority. The
+   initial route covers a wholly zero-window current revision only. *)
+let current_codecs history =
+ match List.rev (RH.versions history) with
+ | [] -> []
+ | current::_ when List.exists (fun b -> RH.migration_version b=current.version) (RH.bindings history) -> []
+ | current::_ -> current.entities |> List.filter (fun (entity:RH.entity)->entity.generation>1)
+   |> List.sort (fun (a:RH.entity) b->String.compare a.identity b.identity)
+   |> List.map (fun entity->current,entity)
+
 let rows_json ?projection ~quote source =
  let p=P.source_program source in
  let field mapping =
@@ -66,6 +77,7 @@ let rows_json ?projection ~quote source =
   let nullable=Option.fold ~none:"null" ~some:quote in
   target.name,Printf.sprintf {|{"target":%s,"kind":%s,"source":%s,"constant":%s}|}
    (quote target.name) (quote kind) (nullable source) (nullable constant) in
+ let has_current=Option.is_some projection && List.exists (fun (_,history)->current_codecs history<>[]) (P.row_histories source) in
  let has_legacies=List.exists (fun (_,h) -> List.exists (fun b -> (RH.row b).legacies<>[]) (RH.bindings h)) (P.row_histories source) in
  let has_writebacks=List.exists (fun (_,h) -> List.exists (fun b -> (RH.row b).writebacks<>[]) (RH.bindings h)) (P.row_histories source) in
  if (has_writebacks || has_legacies) && projection=None then invalid_arg "WriteBack artifacts require checked typed row storage adapters";
@@ -80,10 +92,10 @@ let rows_json ?projection ~quote source =
   let ordered=match projection with None -> "" | Some project ->
    Printf.sprintf {|,"sourceProjection":%s,"targetProjection":%s|}
     (array quote (project database (version-1) previous)) (array quote (project database version current)) in
-  let ordered=ordered ^ if not (has_writebacks || has_legacies) then "" else
+  let ordered=ordered ^ if not (has_current || has_writebacks || has_legacies) then "" else
    ",\"writeBacks\":" ^ array (fun (w:Migration_transform.writeback_binding) ->
      Printf.sprintf {|{"previous":%s,"current":%s}|} (quote w.mapping.previous.name) (quote w.mapping.current.name)) (RH.row b).writebacks in
-  let ordered=ordered ^ if not has_legacies then "" else
+  let ordered=ordered ^ if not (has_current || has_legacies) then "" else
     ",\"legacyWrites\":" ^ array (fun (w:Migration_transform.legacy_binding) -> quote w.mapping.previous.name) (RH.row b).legacies in
   Printf.sprintf {|{"migrationVersion":%d,"entity":%s,"table":%s,"mode":%s,"previousGeneration":%d,"targetGeneration":%d,"fromSchemaSnapshot":%s,"toSchemaSnapshot":%s,"fromStorageSnapshot":%s,"toStorageSnapshot":%s,"fromTypeContractHash":%s,"toTypeContractHash":%s,"sourceSchemaColumns":%s,"targetSchemaColumns":%s,"fieldMapping":%s,"transformContractFormat":"tesl-row-transform-v1","transformContract":%s,"transformContractHash":%s%s}|}
    version (quote current.identity) (quote current.table.name) (quote mode) previous.generation current.generation
@@ -93,7 +105,14 @@ let rows_json ?projection ~quote source =
    (array snd (List.sort compare (List.map field (RH.row b).mapping.values))) (quote contract) (quote hash) ordered in
  let database (d:P.database)=
   let history=List.assoc d.identity (P.row_histories source) in
-  Printf.sprintf {|{"database":%s,"family":%s,"namespace":%s,"currentVersion":%d,"transforms":%s}|}
-   (quote d.identity) (quote d.family) (quote d.namespace) d.current_version (array (transform d.identity history) (RH.bindings history)) in
+  let current=if not has_current then "" else
+   let project=Option.get projection in
+   ",\"currentCodecs\":" ^ array (fun ((version:RH.version),(entity:RH.entity))->
+    Printf.sprintf {|{"schemaVersion":%d,"entity":%s,"generation":%d,"schemaSnapshot":%s,"storageSnapshot":%s,"typeContractHash":%s,"projection":%s}|}
+     version.version (quote entity.identity) entity.generation (quote (schema_hash version))
+     (quote (S.digest version.storage)) (quote (type_hash entity))
+     (array quote (project d.identity version.version entity))) (current_codecs history) in
+  Printf.sprintf {|{"database":%s,"family":%s,"namespace":%s,"currentVersion":%d,"transforms":%s%s}|}
+   (quote d.identity) (quote d.family) (quote d.namespace) d.current_version (array (transform d.identity history) (RH.bindings history)) current in
  Printf.sprintf {|{"version":%d,"kind":"compiled-row-transform-history","compilerAbi":%s,"storedValueCompatibility":%s,"databases":%s}|}
-  (if has_legacies then 4 else if has_writebacks then 3 else if Option.is_some projection then 2 else 1) (quote (P.compiler_abi p)) (quote (P.stored_value_compatibility p)) (array database (P.databases p))
+  (if has_current then 5 else if has_legacies then 4 else if has_writebacks then 3 else if Option.is_some projection then 2 else 1) (quote (P.compiler_abi p)) (quote (P.stored_value_compatibility p)) (array database (P.databases p))

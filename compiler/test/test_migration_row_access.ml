@@ -297,7 +297,7 @@ let refused_queries () =
   match Compile.compile_row_source_artifacts ~storage:true ~physical:true file bytes with
    | Compile.GoSuccess _ -> fail ("unsafe legacy query accepted: " ^ label)
    | Compile.GoFailure ds -> check bool (label ^ "\n" ^ describe ds) true (List.exists (fun (d:Compile.diagnostic) -> Compile.string_contains d.message reason) ds))) cases
-let additive_tail_refuses ()=project (fun root save path ->
+let additive_tail_requires_contract ()=project (fun root save path ->
  let frozen=save "schema/notes/v2.tesl" (replace "Schema.Notes.VCurrent" "Schema.Notes.V2" fresh) in
  let header=match Migration_header.create ~previous:(seal root (Filename.concat root "schema/notes/v1.tesl")) ~current:(seal root frozen) with
   | Ok h -> h | Error errors -> fail (String.concat "\n" (List.map (fun (e:S.error) -> e.message) errors)) in
@@ -320,9 +320,9 @@ migration = Migration {
 |}));
  let file=save "app.tesl" app in accepts file app;
  match Compile.compile_row_source_artifacts ~storage:true ~physical:true file app with
- | Compile.GoSuccess _ -> fail "uncomposed additive tail silently used legacy queries"
+ | Compile.GoSuccess _ -> fail "additive successor accepted without its checked Contract V2 source"
  | Compile.GoFailure ds -> check bool (describe ds) true
-   (List.exists (fun (d:Compile.diagnostic) -> Compile.string_contains d.message "typed access composition") ds))
+   (List.exists (fun (d:Compile.diagnostic) -> d.code="V001" && d.message="V3 migration-aware queries require the exact checked Contract V2 source for their settled predecessor; generate and retain that Contract before starting the next revision") ds))
 let update_cost_diagnostics ()=project (fun root save path ->
  seal_edge root path;
  let file=save "app.tesl" app in
@@ -350,7 +350,7 @@ let native ()=
  Fun.protect ~finally:(fun () -> if Sys.getenv_opt "TESL_KEEP_ROW_ACCESS_TEST"=None then remove output) (fun () ->
   export output;
   command (Filename.concat (repository ()) "runtime/go") (Filename.concat output "postgres.log")
-   (Printf.sprintf "TESL_ROW_ACCESS_PROGRAMS=%s timeout 180s go test -p 1 -race -tags tesl_migration_test -timeout 150s ./teslrt -run '^TestPgRowAccessActualApp$' -count=1 -v" (Filename.quote output));
+   (Printf.sprintf "TESL_ROW_ACCESS_PROGRAMS=%s timeout 180s go test -p 1 -race -tags tesl_migration_test -timeout 150s ./teslrt -run '^TestPgRow(AccessActualApp|HeartbeatReusesVerifiedStartup)$' -count=1 -v" (Filename.quote output));
   Printf.printf "actual generated handler trace passed\n%!")
 let native_settled ?(test="TestPgRow(SettledActualApp|FinalityRenewsOutsideBatchesAndWaitsForOwnCAS|HealthyWorkerClaimSkipsActiveCAS|BackfillBackendKillPreservesAtomicProgress|StagedNullabilityAllowsWritesAndPublishesExactProof|StagedNullabilityCrashReceiptAtomicity|ContractPrepareHasOperationDeadline|PrepareRetriesCommittedProgressSnapshot|ClaimRetriesCommittedRenewalSnapshot|BackfillRetriesWriteAfterCASSnapshot|WorkerDrainsInFlightRenewalAfterBatchCommit|RetirementRequiresEntireFinalShardInventory)") ()=
  let output=Filename.temp_dir "tesl-row-settled-" "" in
@@ -610,7 +610,7 @@ let ()=match Sys.getenv_opt "TESL_ROW_REPEATED_EXPORT" with
  | None,None,None,Some root -> export root
  | None,None,None,None -> run "ordinary typed migration queries" ["access",[test_case "actual unchanged V1/V2 App handlers on PostgreSQL" `Quick native;
  test_case "computed, aggregate and both join directions refuse" `Quick refused_queries;
- test_case "additive tail cannot silently use legacy dispatch" `Quick additive_tail_refuses;
+ test_case "additive successor requires checked Contract V2 source" `Quick additive_tail_requires_contract;
  test_case "MIG031 uses checked ownership and primary-key equality" `Quick update_cost_diagnostics;
  test_case "same App serves across actual Contract" `Quick (native_settled ?test:None);
  test_case "old writer CAS miss preserves row and first ABI" `Quick (native_settled ~test:"TestPgRowWorkerCASMiss");

@@ -29,9 +29,11 @@ val captured_sources : t -> (Ast.module_form * string) list
 (** Recheck each retained link; the owning Program also checks the complete source
     manifest, including additive declarations and directory membership. *)
 val revalidate : t -> (unit,Migration_sparse.error list) result
-(** First internal artifact slice has real user callbacks only. No name is
-    fabricated for Derived; its generated typed adapter is a later judgment. *)
-val require_migrate_callbacks : t -> (unit,Migration_sparse.error list) result
+(** Check the exact callback/mode pairing retained by the checked history.
+    Migrate owns a real source function; Derived owns its checked mapping and
+    never fabricates a source callback. The emitter separately validates every
+    generated target field against its actual nominal type environment. *)
+val validate_adapter_modes : t -> (unit,Migration_sparse.error list) result
 val hex : string -> string
 val contract : Migration_canonical.domain -> Migration_canonical.node -> string * string
 

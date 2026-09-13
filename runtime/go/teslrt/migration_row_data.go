@@ -283,9 +283,8 @@ func pgMaterializePhysicalWrite[From, To any](a *pgRowTransactionAdmission, stor
 	result.values = append(result.values, int16(a.entity.generation))
 	return result, nil
 }
-func pgInsertPhysicalRow[From, To any](ctx context.Context, a *pgRowTransactionAdmission, storage *PgRowStorage[From, To], value To, capture ...func(PgPlan) PgPlan) error {
-	row, err := pgMaterializePhysicalWrite(a, storage, value)
-	if err != nil {
+func pgInsertMaterializedPhysicalRow(ctx context.Context, a *pgRowTransactionAdmission, row pgPhysicalWrite, capture ...func(PgPlan) PgPlan) error {
+	if err := a.check(true); err != nil {
 		return err
 	}
 	columns, parameters := []string{}, []string{}
@@ -332,6 +331,13 @@ func pgUpdateDecodedPhysicalRow[From, To any](ctx context.Context, a *pgRowTrans
 	if err != nil {
 		return false, err
 	}
+	return pgUpdateMaterializedPhysicalRow(ctx, a, before, row, capture...)
+}
+
+func pgUpdateMaterializedPhysicalRow(ctx context.Context, a *pgRowTransactionAdmission, before, row pgPhysicalWrite, capture ...func(PgPlan) PgPlan) (bool, error) {
+	if err := a.check(true); err != nil {
+		return false, err
+	}
 	assignments := []string{}
 	parameters := []any{}
 	for i, column := range row.columns {
@@ -352,7 +358,7 @@ func pgUpdateDecodedPhysicalRow[From, To any](ctx context.Context, a *pgRowTrans
 		defer func() { plan.Capture(count) }()
 	}
 	args := plan.arguments()
-	err = a.withWriter(ctx, func(tx pgx.Tx) error {
+	err := a.withWriter(ctx, func(tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx, sql, args...)
 		if err != nil {
 			return err

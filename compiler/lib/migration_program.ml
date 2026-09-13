@@ -151,7 +151,13 @@ let capture_history ~source_only ~entry ~source f = protect entry.source_file (f
     identity,family,namespace,loc,root,selected) selected in
    let guards = List.map (fun (_,_,_,_,_,selected) -> T.source_guard selected) targets in
    let inputs = List.concat_map (fun source_guard -> guard (M.source_files source_guard)) guards |> List.sort_uniq compare in
-   let result = Source_input.with_pinned_files inputs (fun () ->
+   let integrity = List.map (fun (_,_,_,_,root,selected) ->
+    checked(Migration_source_integrity.capture ~project_root:root
+      ~inputs:(guard(M.source_files(T.source_guard selected))))) targets in
+   let rec with_integrity captures run = match captures with
+    | [] -> run()
+    | capture::rest -> checked(Migration_source_integrity.with_captured capture (fun()->with_integrity rest run)) in
+   let result = with_integrity integrity (fun () -> Source_input.with_pinned_files inputs (fun () ->
    let inventories = ref [] and row_histories=ref [] and contracts=ref [] in
    let databases = List.map (fun (identity,family,namespace,loc,root,selected) ->
     let h = history (H.discover_with_compatibility ~stored_value_compatibility:(Some stored_value_compatibility)
@@ -198,14 +204,31 @@ let capture_history ~source_only ~entry ~source f = protect entry.source_file (f
      | Some (m,captured) when captured=bytes -> m,bytes
      | Some _ -> reject ~code:"MIG013" (Location.dummy_loc path) "linked module differs from captured history"
      | None -> (if path=entry_file then entry else parse path bytes),bytes) inputs in
+   (* Lifted Go modules belong to the ABI snapshot, not the application's
+      filesystem manifest. Select their bytes from that token before lowering;
+      never recollect a mutable resolver result as emitted authority. *)
+   let rec with_lifted captured pending seen = match pending with
+    | [] -> captured
+    | (m,_)::rest ->
+      let additions,seen=List.fold_left (fun (additions,seen) (import:import_decl) ->
+       if not(List.mem import.module_name Frontend_check.go_lifted_module_names) ||
+          List.mem import.module_name seen then additions,seen else
+       match A.lifted_source context import.module_name with
+       | None -> reject ~code:"MIG013" (Location.dummy_loc m.source_file)
+          "required Go stdlib module is absent from the captured compiler ABI"
+       | Some(path,bytes) -> (parse path bytes,bytes)::additions,import.module_name::seen)
+        ([],seen) m.imports in
+      with_lifted (captured @ List.rev additions) (rest @ List.rev additions) seen in
+   let captured_modules=with_lifted captured_modules captured_modules [] in
    let validate () =
     abi (A.verify context);
+    List.iter(fun capture->ignore(checked(Migration_source_integrity.revalidate capture))) integrity;
     Source_input.without_pinned_files (fun () -> List.iter (fun source_guard -> guard (M.verify_source source_guard ~documents:[]);guard (M.verify_disk source_guard)) guards);
     List.iter (fun (_,rows) -> ignore (checked (RH.revalidate rows))) row_histories in
    let value={abi=context;databases;inputs;queue_bindings;inventories;row_histories;contracts=List.sort compare !contracts;captured_modules;validate} in
    let result=f (Some value) in
    List.iter (fun (_,rows) -> ignore (checked (RH.revalidate rows))) row_histories;
-   result) in
+   result)) in
    List.iter (fun source_guard -> guard (M.verify_source source_guard ~documents:[]);guard (M.verify_disk source_guard)) guards;
    result))))
 
@@ -241,25 +264,25 @@ let queues_to_json ~quote t =
 
 let with_history ~entry ~source f = capture_history ~source_only:false ~entry ~source f
 
-type source_history = {program:t;active:bool ref}
+type source_history = {program:t;active:bool ref;lowering:(Go_graph_lowering.t,string) result Lazy.t}
 let with_source_history ~entry ~source f =
  capture_history ~source_only:true ~entry ~source (function
   | None -> f None
   | Some program ->
-   let history={program;active=ref true} in
+   let history={program;active=ref true;lowering=lazy(Go_graph_lowering.lower ~entry (List.map fst program.captured_modules))} in
    Fun.protect ~finally:(fun () -> history.active:=false) (fun () -> f (Some history)))
 let source_program source = source.program
 let source_modules source = source.program.captured_modules
 let row_histories source = source.program.row_histories
-let verify_source_history source modules = protect "<row source artifacts>" (fun () ->
+let source_lowering source = protect "<row source artifacts>" (fun () ->
  if not !(source.active) then reject ~code:"MIG013" (Location.dummy_loc "<row source artifacts>")
   "source-history artifact authority escaped its guarded capture scope";
  source.program.validate ();
- let originals=List.map fst source.program.captured_modules in
- let expected=List.map (fun m -> match Migration_schema.lower_module ~modules:originals m with
-  | Ok lowered -> Migration_form.erase lowered
-  | Error errors -> reject ~code:"MIG013" (Location.dummy_loc m.source_file)
-    (String.concat "\n" (List.map (fun (e:Validation_common.validation_error) -> e.message) errors))) originals in
+ match Lazy.force source.lowering with Ok graph -> graph | Error message ->
+ reject ~code:"MIG013" (Location.dummy_loc "<row source artifacts>") message)
+let verify_source_history source modules = protect "<row source artifacts>" (fun () ->
+ let graph=checked(source_lowering source) in
+ let expected=Go_graph_lowering.modules graph in
  let order=List.sort (fun a b -> compare a.source_file b.source_file) in
  if order expected <> order modules then reject ~code:"MIG013" (Location.dummy_loc "<row source artifacts>")
   "row artifact graph differs from the complete captured and lowered source graph")

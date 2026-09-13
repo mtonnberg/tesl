@@ -28,3 +28,18 @@ val with_prepared_list : prepared list -> (unit -> 'a) -> ('a,Migration_sparse.e
 type captured
 val capture : before:Migration_inventory.t -> after:Migration_inventory.t -> source:string -> Ast.module_form -> (captured,Migration_sparse.error list) result
 val with_captured : captured -> (unit -> 'a) -> ('a,Migration_sparse.error list) result
+
+(** Constructive nominal transport for an exact checked Derived Copy/Rename.
+    This is distinct from source-site evidence and cannot affect ordinary typing.
+    A row copied or fabricated by a caller has no certificates. Each certificate
+    retains the complete checked Same closure and source/import-owner guard. *)
+type nominal_mapping_spec = { previous_entity : Migration_proof_context.nominal_type;
+  current_entity : Migration_proof_context.nominal_type;
+  types : (Migration_proof_context.nominal_type * Migration_proof_context.nominal_type) list }
+type nominal_mapping
+val nominal_mappings : t -> row -> nominal_mapping list
+val same_nominal_mapping : nominal_mapping -> nominal_mapping -> bool
+val nominal_mapping_spec : nominal_mapping -> nominal_mapping_spec
+val nominal_mapping_owner : nominal_mapping -> string
+val nominal_mapping_fields : nominal_mapping -> Migration_inventory.stored_field * Migration_inventory.stored_field
+val revalidate_nominal_mapping : nominal_mapping -> unit

@@ -74,7 +74,7 @@ func pgBootTestDatabase(t *testing.T, f *pgControlTestFixture, version int) *Dat
 			<-initialization.done
 			if initialization.db != nil && initialization.db.pool.Config().ConnConfig.Database == conn.Database {
 				postgresConnectOnce.CompareAndDelete(key, value)
-				initialization.db.pool.Close()
+				initialization.db.closeRowPool()
 			}
 			return true
 		})

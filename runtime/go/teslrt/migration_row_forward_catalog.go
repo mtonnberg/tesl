@@ -99,7 +99,17 @@ func pgVerifyRowForwardCatalog(ctx context.Context, tx pgx.Tx, b *pgRowBaseline,
 			return fmt.Errorf("invalid expansion catalog prefix")
 		}
 		for _, operation := range manifest.operations[:prefix] {
-			if operation.column != nil {
+			if operation.table != nil {
+				for _, existing := range catalog {
+					if existing.Name == operation.table.Name {
+						return fmt.Errorf("new physical table already exists in retained catalog")
+					}
+				}
+				table := *operation.table
+				table.Columns = slices.Clone(table.Columns)
+				table.Indexes = slices.Clone(table.Indexes)
+				catalog = append(catalog, table)
+			} else if operation.column != nil {
 				found := false
 				for i := range catalog {
 					if catalog[i].Name == operation.entity.table {

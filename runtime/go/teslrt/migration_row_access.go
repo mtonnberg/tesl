@@ -21,9 +21,9 @@ type PgRowAccessSlot[Row any] struct {
 	owners map[*Database]*pgRowAccess[Row]
 }
 type pgRowAccess[Row any] struct {
-	registration *pgRowRegistration
-	selectRows   func(PgRowQuery, bool, bool, func([]Row) ([]Row, error)) ([]Row, error)
-	insert       func(Row) error
+	sealed     func() bool
+	selectRows func(PgRowQuery, bool, bool, func([]Row) ([]Row, error)) ([]Row, error)
+	insert     func(Row) error
 }
 
 func NewPgRowAccessSlot[Row any]() *PgRowAccessSlot[Row] {
@@ -145,27 +145,56 @@ func RegisterCompiledRowAccess[From, To any](storage *PgRowStorage[From, To], sl
 		panic("compiled row access slot already bound to database")
 	}
 	d := r.compiled.inventory.Transforms[r.index]
-	access := &pgRowAccess[To]{registration: r}
-	access.selectRows = func(query PgRowQuery, write, one bool, update func([]To) ([]To, error)) ([]To, error) {
+	data := pgRowAccessData[To]{
+		check: func(a *pgRowTransactionAdmission, write bool) error { return pgCheckRowData(a, storage, write) },
+		decode: func(a *pgRowTransactionAdmission, row pgx.CollectableRow) (To, error) {
+			return pgDecodePhysicalRow(a, storage, row)
+		},
+		materialize: func(a *pgRowTransactionAdmission, value To) (pgPhysicalWrite, error) {
+			return pgMaterializePhysicalWrite(a, storage, value)
+		},
+		statement: func(a *pgRowTransactionAdmission, q PgRowQuery) (string, error) { return q.statement(a, d) },
+	}
+	access := pgNewRowAccess(r.database, d.MigrationVersion, d.Entity, data, func() bool { return r.sealed }, capture)
+	if err := pgAttachRowBackfill(storage); err != nil {
+		panic(err)
+	}
+	slot.owners[r.database] = access
+	r.accessAttached = true
+	return slot
+}
+
+// Both transformation and current-only access use this one typed cursor and
+// transaction implementation. The callbacks remain concrete Row functions.
+type pgRowAccessData[Row any] struct {
+	check       func(*pgRowTransactionAdmission, bool) error
+	decode      func(*pgRowTransactionAdmission, pgx.CollectableRow) (Row, error)
+	materialize func(*pgRowTransactionAdmission, Row) (pgPhysicalWrite, error)
+	statement   func(*pgRowTransactionAdmission, PgRowQuery) (string, error)
+}
+
+func pgNewRowAccess[Row any](database *Database, version int, identity string, data pgRowAccessData[Row], sealed func() bool, capture []func(PgPlan) PgPlan) *pgRowAccess[Row] {
+	access := &pgRowAccess[Row]{sealed: sealed}
+	access.selectRows = func(query PgRowQuery, write, one bool, update func([]Row) ([]Row, error)) ([]Row, error) {
 		query = query.capturedArguments()
 		ctx, cancel := context.WithTimeout(context.Background(), pgLeaseTimeout())
 		defer cancel()
-		plan, err := pgCompiledRowPhysicalPlan(r.database, d.MigrationVersion)
+		plan, err := pgCompiledRowPhysicalPlan(database, version)
 		if err != nil {
 			return nil, err
 		}
-		entity := plan.entity(d.Entity)
-		return pgWithRowTransaction(ctx, r.database, plan, entity, write, func(a *pgRowTransactionAdmission) ([]To, error) {
-			if err := pgCheckRowData(a, storage, write); err != nil {
+		entity := plan.entity(identity)
+		return pgWithRowTransaction(ctx, database, plan, entity, write, func(a *pgRowTransactionAdmission) ([]Row, error) {
+			if err := data.check(a, write); err != nil {
 				return nil, err
 			}
-			tail, err := query.statement(a, d)
+			tail, err := data.statement(a, query)
 			if err != nil {
 				return nil, err
 			}
 			sql := pgPhysicalSelectColumns(a.plan, a.entity) + tail
 			if write {
-				return pgRowCursorUpdate(ctx, a, storage, sql+" for update", query.args, one, update, capture)
+				return pgRowCursorUpdateUsing(ctx, a, data, sql+" for update", query.args, one, update, capture)
 			}
 			plan := pgCapturedRowPlan(sql, query.args, capture)
 			count := 0
@@ -183,7 +212,7 @@ func RegisterCompiledRowAccess[From, To any](storage *PgRowStorage[From, To], sl
 			if err != nil {
 				return nil, err
 			}
-			values, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (To, error) { return pgDecodePhysicalRow(a, storage, row) })
+			values, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (Row, error) { return data.decode(a, row) })
 			if err != nil {
 				return nil, err
 			}
@@ -196,24 +225,23 @@ func RegisterCompiledRowAccess[From, To any](storage *PgRowStorage[From, To], sl
 			return values, nil
 		})
 	}
-	access.insert = func(value To) error {
+	access.insert = func(value Row) error {
 		ctx, cancel := context.WithTimeout(context.Background(), pgLeaseTimeout())
 		defer cancel()
-		plan, err := pgCompiledRowPhysicalPlan(r.database, d.MigrationVersion)
+		plan, err := pgCompiledRowPhysicalPlan(database, version)
 		if err != nil {
 			return err
 		}
-		_, err = pgWithRowTransaction(ctx, r.database, plan, plan.entity(d.Entity), true, func(a *pgRowTransactionAdmission) (struct{}, error) {
-			return struct{}{}, pgInsertPhysicalRow(ctx, a, storage, value, capture...)
+		_, err = pgWithRowTransaction(ctx, database, plan, plan.entity(identity), true, func(a *pgRowTransactionAdmission) (struct{}, error) {
+			row, err := data.materialize(a, value)
+			if err != nil {
+				return struct{}{}, err
+			}
+			return struct{}{}, pgInsertMaterializedPhysicalRow(ctx, a, row, capture...)
 		})
 		return err
 	}
-	if err := pgAttachRowBackfill(storage); err != nil {
-		panic(err)
-	}
-	slot.owners[r.database] = access
-	r.accessAttached = true
-	return slot
+	return access
 }
 
 // One portal owns the complete UPDATE target snapshot. FETCH bounds the Go row
@@ -233,7 +261,7 @@ func pgRowRMWBatch() (int, error) {
 	return n, nil
 }
 
-func pgRowCursorUpdate[From, To any](ctx context.Context, a *pgRowTransactionAdmission, storage *PgRowStorage[From, To], sql string, args func() []any, one bool, update func([]To) ([]To, error), capture []func(PgPlan) PgPlan) (result []To, err error) {
+func pgRowCursorUpdateUsing[Row any](ctx context.Context, a *pgRowTransactionAdmission, data pgRowAccessData[Row], sql string, args func() []any, one bool, update func([]Row) ([]Row, error), capture []func(PgPlan) PgPlan) (result []Row, err error) {
 	if err = a.check(true); err != nil {
 		return nil, err
 	}
@@ -274,7 +302,7 @@ func pgRowCursorUpdate[From, To any](ctx context.Context, a *pgRowTransactionAdm
 		if readErr != nil {
 			return nil, readErr
 		}
-		values, readErr := pgx.CollectRows(rows, func(row pgx.CollectableRow) (To, error) { return pgDecodePhysicalRow(a, storage, row) })
+		values, readErr := pgx.CollectRows(rows, func(row pgx.CollectableRow) (Row, error) { return data.decode(a, row) })
 		if fetch.Capture != nil {
 			fetch.Capture(len(values))
 		}
@@ -293,7 +321,15 @@ func pgRowCursorUpdate[From, To any](ctx context.Context, a *pgRowTransactionAdm
 			return nil, fmt.Errorf("typed update changed row count")
 		}
 		for i, value := range values {
-			if _, writeErr := pgUpdateDecodedPhysicalRow(ctx, a, storage, value, next[i], capture...); writeErr != nil {
+			before, writeErr := data.materialize(a, value)
+			if writeErr != nil {
+				return nil, writeErr
+			}
+			after, writeErr := data.materialize(a, next[i])
+			if writeErr != nil {
+				return nil, writeErr
+			}
+			if _, writeErr := pgUpdateMaterializedPhysicalRow(ctx, a, before, after, capture...); writeErr != nil {
 				return nil, writeErr
 			}
 		}
@@ -317,7 +353,7 @@ func (slot *PgRowAccessSlot[Row]) access(database *Database) *pgRowAccess[Row] {
 		panic("missing compiled typed entity access for database")
 	}
 	pgMigrationRegistrations.Lock()
-	closed := access.registration.sealed
+	closed := access.sealed != nil && access.sealed()
 	pgMigrationRegistrations.Unlock()
 	if !closed {
 		panic("compiled typed entity access requires application preflight")

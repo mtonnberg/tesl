@@ -145,6 +145,78 @@ let helper_importer () = with_project (fun _ path _ helper _ ->
   save (path "app.tesl") source;
   save helper (replace "42" "43" (read helper));
   ignore (code "MIG013" (path "app.tesl") source))
+let captured_foreign_helper () = with_project (fun _ path file helper _ ->
+  let current="module Schema.Current.VCurrent exposing [Current]\nimport Tesl.Prelude exposing [String]\nentity Current table \"current\" primaryKey id { id: String }\n" in
+  save (path "schema/current/v-current.tesl") current;
+  let source={|module App exposing []
+import Tesl.Prelude exposing [Int]
+import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
+import Schema.Current.VCurrent
+import NotesSchema.Migrate.Shared exposing [answer]
+database Main = Database {
+  schema: Schema.Current.VCurrent
+  migrations: Schema.Current.Migrate
+  backend: Postgres (PostgresConfig { namespace: "current", dbName: "unused", user: "unused", password: "unused", connection: TcpConnection { host: "127.0.0.1", port: 5432 } })
+}
+fn value() -> Int = answer()
+|} in
+  let entry=path "app.tesl" in save entry source;
+  let artifact ()=Compile.compile_row_source_artifacts ~storage:true ~physical:true entry source in
+  let build_ok ()=match artifact() with Compile.GoSuccess _->() | Compile.GoFailure ds->
+    fail(String.concat "\n" (List.map(fun(d:Compile.diagnostic)->d.code^": "^d.message)ds)) in
+  let build_refused ()=
+    check bool "agent-context refuses invalid foreign frozen source" true
+     (List.exists(fun(d:Compile.diagnostic)->d.code="MIG013") (Compile.agent_context_result_source entry source).diagnostics);
+    match artifact() with Compile.GoFailure ds->check bool "captured emission keeps same integrity judgment" true
+      (List.exists(fun(d:Compile.diagnostic)->d.code="MIG013")ds)
+     | Compile.GoSuccess _->fail "captured emission bypassed foreign frozen source integrity" in
+  build_ok();
+  let original=read helper in save helper (replace "42" "43" original);build_refused();save helper original;build_ok();
+  let sealed=read file in
+  let body=Str.search_forward(Str.regexp_string "module NotesSchema.Migrate.V2") sealed 0 in
+  save file(String.sub sealed body (String.length sealed-body));build_refused();save file sealed;build_ok();
+  let ast=match Parser.parse_module entry source with Ok m->m | Err e->fail e.msg in
+  let capture f=Migration_program.with_source_history ~entry:ast ~source (function
+   | None->fail "missing versioned source capture" | Some history->f history) in
+  let lowered history =
+   let originals=List.map fst(Migration_program.source_modules history) in
+   check bool "integrity-only root is not an emitted module" false
+    (List.exists(fun(m:Ast.module_form)->m.source_file=file)originals);
+   List.map(fun m->match Migration_schema.lower_module ~modules:originals m with
+    | Ok m->Migration_form.erase m | Error _->fail "lowering")originals in
+  let must_refuse ?(expected=file) label = function
+   | Error errors ->
+     check bool (label ^ " identifies integrity-only input") true
+      (List.exists(fun(e:Migration_sparse.error)->e.code="MIG013" && (e.loc.file=expected ||
+       (String.starts_with ~prefix:"symlink recorded schema" label &&
+        Compile.string_contains e.message expected && Compile.string_contains e.message "canonical regular file")))errors)
+   | Ok _ -> fail("integrity publication accepted " ^ label) in
+  let new_root=path "migrations/notes/v99.tesl" in
+  let recorded=path "schema/notes/v1.tesl" in
+  let recorded_bytes=read recorded in
+  let missing_frozen=path "schema/notes/v3.tesl" in
+  check bool "next frozen schema initially absent" false (Sys.file_exists missing_frozen);
+  let alias=path "schema/notes/alias.tesl" in write alias recorded_bytes;
+  List.iter(fun(label,expected,change,restore)->
+   Fun.protect ~finally:restore (fun()->
+    let entered=ref false in
+    let result=capture(fun history->
+     ignore(get(Migration_program.verify_source_history history(lowered history)));
+     check int "initial integrity judgment valid" 0(List.length(errors entry source));
+     entered:=true;change();
+     must_refuse ~expected (label ^ " before emission") (Migration_program.verify_source_history history(lowered history))) in
+    check bool "mutation happened after initial judgment" true !entered;
+    must_refuse ~expected (label ^ " on publication") result))
+   ["changed metadata",file,(fun()->write file(sealed ^ "\n# changed after judgment\n")),(fun()->write file sealed);
+    "removed metadata",file,(fun()->Sys.remove file),(fun()->write file sealed);
+    "new adjacent root",Filename.dirname file,(fun()->write new_root "module NotesSchema.Migrate.V99 exposing []\n"),(fun()->Sys.remove new_root);
+    "recorded schema dependency",recorded,(fun()->write recorded(recorded_bytes ^ "\n# changed recorded schema\n")),(fun()->write recorded recorded_bytes);
+    "new frozen snapshot",missing_frozen,(fun()->write missing_frozen recorded_bytes),(fun()->Sys.remove missing_frozen);
+    "symlink recorded schema",recorded,(fun()->Sys.remove recorded;Unix.symlink alias recorded),(fun()->Sys.remove recorded;write recorded recorded_bytes)];
+  ignore(get(capture(fun history->
+   Source_input.without_pinned_files(fun()->
+    Source_input.with_overlays ~project_root:(Option.get(Source_input.project_root())) [file,sealed ^ "\n# changed overlay\n"] (fun()->
+     must_refuse "changed metadata overlay" (Migration_program.verify_source_history history(lowered history))))))) )
 let unsaved_direct_query () = with_project (fun _ _ _ helper _ ->
   let original = read helper in
   Query_cache.set_enabled true;
@@ -215,7 +287,7 @@ let () = run "Frozen migration closure" ["raw source integrity",List.map (fun (n
    "unsaved helper bytes",unsaved_helper;"unsaved root bytes",unsaved_root;"malformed and duplicate metadata",incomplete_metadata;
    "metadata CRLF transport",header_spelling;"metadata cannot name another root",wrong_root;"current references cannot be frozen",capture_current;
    "cyclic helper closure",cyclic_private;"import shadowing changes resolution",import_resolution;
-   "direct queries and application emission",queries_and_app;"importing only the private helper",helper_importer;
+   "direct queries and application emission",queries_and_app;"importing only the private helper",helper_importer;"captured PostgreSQL app keeps foreign helper integrity",captured_foreign_helper;
    "unsaved direct helper query",unsaved_direct_query;"parse failures keep integrity diagnostics",broken_queries;
    "deleting recorded metadata still refuses",removed_metadata;"start and refresh refuse changed helpers",generation_refuses;
    "metadata path mismatch in direct queries",wrong_metadata_query;"relative root and helper queries",relative_query;

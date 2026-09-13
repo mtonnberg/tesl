@@ -2,7 +2,9 @@
     never persisted evidence or permission to cast a value. *)
 type t
 type nominal_type = { identity : string; declaration : Location.loc }
-type nominal_spec = { previous : nominal_type; current : nominal_type;
+type nominal_shape = Named of nominal_type | Primitive of string | Applied of nominal_shape * nominal_shape
+type nominal_spec = { previous : nominal_shape; current : nominal_shape;
+  previous_entity : nominal_type; previous_field : string;
   entity : nominal_type; types : (nominal_type * nominal_type) list }
 type site = { owner : Ast.module_form; constructor : string; field : string;
   argument : Ast.expr; projection : Proof_kernel.proven_fact list; predicates : (string * string) list;

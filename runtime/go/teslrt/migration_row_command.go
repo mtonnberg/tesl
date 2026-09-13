@@ -40,10 +40,10 @@ func pgRunRowSchemaCommand(serviceContext context.Context, command pgSchemaComma
 			roles.Worker = command.worker
 		}
 	}
-	if (command.verb == "worker" || command.verb == "contract") && roles.Request == "" {
+	if (command.verb == "worker" || command.verb == "contract" || command.verb == "close-epoch") && roles.Request == "" {
 		return fmt.Errorf("schema worker requires Worker migration topology")
 	}
-	if command.verb == "install" || command.verb == "worker" || command.verb == "contract" {
+	if command.verb == "install" || command.verb == "worker" || command.verb == "contract" || command.verb == "close-epoch" {
 		config, err = pgMigrationDDLConfig(database.Config)
 		if err != nil {
 			return err
@@ -89,6 +89,16 @@ func pgRunRowSchemaCommand(serviceContext context.Context, command pgSchemaComma
 		}
 		cancel()
 		return pgRunRowWorker(serviceContext, config, b, roles)
+	case "close-epoch":
+		preview, err := pgExecuteRowEpoch(ctx, conn, b, roles, command.targetVersion, command.force, command.dryRun)
+		if err != nil {
+			return err
+		}
+		if command.json {
+			return json.NewEncoder(out).Encode(preview)
+		}
+		_, err = fmt.Fprintf(out, "%s: %s through V%d; minimum V%d; %d recent retiring instances.\n", b.history.Database, preview.Kind, preview.ThroughVersion, preview.MinVersion, len(preview.RecentInstances))
+		return err
 	case "contract":
 		cancel()
 		state, err := pgExecuteRowContract(serviceContext, config, b, roles, command.targetVersion)

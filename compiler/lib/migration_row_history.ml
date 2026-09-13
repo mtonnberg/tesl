@@ -43,11 +43,12 @@ let revalidate t = protect (fun () -> List.iter (fun link -> ignore (ir (L.reval
 let captured_sources t =
   List.concat_map (fun link -> T.captured_sources (L.checked_transform link)) t.links
   |> List.sort_uniq (fun (a,source_a) (b,source_b) -> compare (a.Ast.source_file,source_a) (b.Ast.source_file,source_b))
-let require_migrate_callbacks t = protect (fun () ->
+let validate_adapter_modes t = protect (fun () ->
   List.iter (fun binding -> match binding.row.function_binding with
     | Some _ when binding.row.mapping.mode=R.Migrate -> ()
+    | None when binding.row.mapping.mode=R.Derived -> ()
     | _ -> reject binding.current.table.entity.entity_loc
-        "Derived source metadata requires a compiler-generated typed adapter before row companion emission") t.bindings)
+        "row adapter mode differs from its exact checked source binding") t.bindings)
 let check ~schemas ~edges = protect (fun () ->
   if schemas=[] || List.length edges+1<>List.length schemas then
     reject ~code:"MIG001" loc "row generations require complete source history from V1";

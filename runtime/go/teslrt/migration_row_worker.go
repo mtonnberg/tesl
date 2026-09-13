@@ -114,6 +114,9 @@ func pgPrepareRowWork(ctx context.Context, conn *pgx.Conn, b *pgRowBaseline, rol
 					return errRowWindowFinal
 				}
 			}
+			if len(plan.windows) == 0 && state.Current >= plan.version {
+				return errRowWindowFinal
+			}
 			if state.Current < plan.version {
 				return fmt.Errorf("backfill precedes physical expansion")
 			}

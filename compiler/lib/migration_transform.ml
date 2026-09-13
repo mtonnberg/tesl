@@ -12,8 +12,14 @@ type function_binding = { identity : string; owner : module_form; declaration : 
 type writeback_binding = { mapping : Migration_transform_rules.writeback; function_binding : function_binding }
 type legacy_binding = { mapping : Migration_transform_rules.legacy; function_binding : function_binding option }
 type row = { mapping : R.entity; function_binding : function_binding option; fixtures : function_binding list; writebacks : writeback_binding list; legacies : legacy_binding list }
+type nominal_mapping_spec = { previous_entity : Migration_proof_context.nominal_type;
+  current_entity : Migration_proof_context.nominal_type;
+  types : (Migration_proof_context.nominal_type * Migration_proof_context.nominal_type) list }
+type nominal_mapping = { mapping_row : row; mapping_previous : I.stored_field;
+  mapping_current : I.stored_field; mapping_spec : nominal_mapping_spec;
+  mapping_owner : module_form; mapping_context : Migration_proof_context.t }
 type prepared = { rules : R.t; rows : row list; source_inputs : (string * string) list;
-  sources : (module_form * string) list; root : module_form; context : Migration_proof_context.t }
+  sources : (module_form * string) list; root : module_form; context : Migration_proof_context.t; nominal_mappings : nominal_mapping list }
 type t = Checked of prepared
 let rows (Checked t) = t.rows
 let rules (Checked t) = t.rules
@@ -21,6 +27,14 @@ let source_inputs (Checked t) = t.source_inputs
 let captured_sources (Checked t) = t.sources
 let root (Checked t) = t.root
 let proof_context (Checked t) = t.context
+let nominal_mappings (Checked t) row =
+  Migration_proof_context.revalidate t.context;
+  List.filter (fun mapping -> mapping.mapping_row == row) t.nominal_mappings
+let same_nominal_mapping a b = a == b
+let nominal_mapping_spec mapping = mapping.mapping_spec
+let nominal_mapping_owner mapping = mapping.mapping_owner.module_name
+let nominal_mapping_fields mapping = mapping.mapping_previous,mapping.mapping_current
+let revalidate_nominal_mapping mapping = Migration_proof_context.revalidate mapping.mapping_context
 exception Invalid of S.error list
 let reject code loc message = raise (Invalid [{S.code;loc;message;related=[]}])
 let at = Checker.expr_loc
@@ -382,19 +396,31 @@ let prepare ~project_root:_ ~source root rules ~functions ~fixtures =
     let declaration name = List.find_opt (fun (d:I.declaration) ->
       d.namespace=IR.Type && d.qualified_name=name) (I.declarations before @ I.declarations after) in
     let field_type (field:I.stored_field) = List.find_map (fun owner ->
+      let rec shape = function
+        | TName {name;_} -> (match resolver modules owner IR.Type name with
+          | Some (IR.Global name) -> Option.bind (declaration name) (fun d ->
+            if List.mem d.I.declaration_kind [I.Record;I.Adt] then
+              Some(Migration_proof_context.Named(nominal_type d)) else None)
+          | Some (IR.Primitive name) -> Some(Migration_proof_context.Primitive name)
+          | _ -> None)
+        | TApp {head;arg;_} -> (match shape head,shape arg with
+          | Some head,Some arg -> Some(Migration_proof_context.Applied(head,arg))
+          | _ -> None)
+        | TVar _ | TFun _ | TTuple _ -> None in
       List.find_map (function DEntity entity when owner.module_name ^ "." ^ entity.name=field.entity ->
-        List.find_map (fun (f:field_def) -> if f.name<>field.name then None else
-          match f.type_expr with TName {name;_} ->
-            (match resolver modules owner IR.Type name with Some (IR.Global name) -> declaration name | _ -> None)
-          | _ -> None) entity.fields
+        List.find_map (fun (f:field_def) -> if f.name=field.name then shape f.type_expr else None) entity.fields
         | _ -> None) owner.decls) modules in
-    let nominal_copy (mapping:R.entity) previous current =
-      match field_type previous,field_type current,declaration mapping.current.entity_name with
-      | Some previous,Some current,Some entity when
-          List.mem previous.declaration_kind [I.Record;I.Adt] &&
-          List.mem current.declaration_kind [I.Record;I.Adt] &&
-          List.mem (nominal_type previous,nominal_type current) type_pairs ->
-        Some {Migration_proof_context.previous=nominal_type previous;current=nominal_type current;
+    let nominal_copy (mapping:R.entity) (previous:I.stored_field) current =
+      let rec nominals = function
+        | Migration_proof_context.Named name -> [name]
+        | Primitive _ -> []
+        | Applied(head,arg) -> nominals head @ nominals arg in
+      match field_type previous,field_type current,declaration mapping.previous.entity_name,declaration mapping.current.entity_name with
+      | Some previous_shape,Some current_shape,Some previous_entity,Some entity when
+          List.exists(fun(old,fresh)->List.mem old(nominals previous_shape) &&
+            List.mem fresh(nominals current_shape)) type_pairs ->
+        Some {Migration_proof_context.previous=previous_shape;current=current_shape;
+          previous_entity=nominal_type previous_entity;previous_field=previous.name;
           entity=nominal_type entity;types=type_pairs}
       | _ -> None in
     let primitive inventory (field:I.stored_field) =
@@ -444,10 +470,36 @@ let prepare ~project_root:_ ~source root rules ~functions ~fixtures =
           | _ -> ()) (Hashtbl.find accepted_rows binding.identity);
         !sites) rows in
     let resolve_type owner name=match resolver modules owner IR.Type name with
-      | Some (IR.Global identity) -> Some identity | _ -> None in
+      | Some (IR.Global identity) | Some (IR.Primitive identity) -> Some identity | _ -> None in
     let context=Migration_proof_context.create ~sources ~sites ~resolve_type ~revalidate:validate in
+    let field_nominals (field:I.stored_field) = List.concat_map (fun owner ->
+      let rec names = function
+        | TName {name;_} -> (match resolver modules owner IR.Type name with
+          | Some (IR.Global name) -> Option.to_list (declaration name)
+          | _ -> [])
+        | TApp {head;arg;_} -> names head @ names arg
+        | TVar _ | TFun _ | TTuple _ -> [] in
+      List.concat_map (function DEntity entity when owner.module_name ^ "." ^ entity.name=field.entity ->
+        List.concat_map (fun (f:field_def) -> if f.name=field.name then names f.type_expr else []) entity.fields
+        | _ -> []) owner.decls) modules in
+    let mapping_spec (mapping:R.entity) previous current =
+      let previous_types=field_nominals previous |> List.map nominal_type
+      and current_types=field_nominals current |> List.map nominal_type in
+      match declaration mapping.previous.entity_name,declaration mapping.current.entity_name with
+      | Some previous_entity,Some current_entity when List.exists (fun (old,fresh) ->
+          List.mem old previous_types && List.mem fresh current_types) type_pairs ->
+        Some {previous_entity=nominal_type previous_entity;current_entity=nominal_type current_entity;types=type_pairs}
+      | _ -> None in
+    let nominal_mappings=List.concat_map (fun row ->
+      if row.mapping.mode<>R.Derived then [] else
+      List.filter_map (function
+        | R.Copy {previous;current} | R.Renamed {previous;current} ->
+          Option.map (fun mapping_spec -> {mapping_row=row;mapping_previous=previous;
+            mapping_current=current;mapping_spec;mapping_owner=root;mapping_context=context})
+            (mapping_spec row.mapping previous current)
+        | _ -> None) row.mapping.values) rows in
     validate ();
-    Ok {rules;rows;source_inputs;sources;root;context}
+    Ok {rules;rows;source_inputs;sources;root;context;nominal_mappings}
   with Invalid errors -> Error errors
     | Sys_error message -> Error [{S.code="MIG010";loc=Location.dummy_loc root.source_file;message;related=[]}]
     | Unix.Unix_error (error,operation,file) -> Error [{S.code="MIG010";loc=Location.dummy_loc file;

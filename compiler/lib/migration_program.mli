@@ -57,3 +57,7 @@ val row_histories : source_history -> (string * Migration_row_history.t) list
     and exact ownership-preserving lowered graph, including private helpers. *)
 val verify_source_history : source_history -> Ast.module_form list ->
   (unit,Migration_sparse.error list) result
+
+(** Deterministic emission graph derived only from this active source capture.
+    Retains exact original ownership and expression correspondence across SCCs. *)
+val source_lowering : source_history -> (Go_graph_lowering.t,Migration_sparse.error list) result

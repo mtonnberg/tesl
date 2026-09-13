@@ -20,7 +20,7 @@ func TestPgRowAccessRequiresExactSealedOwner(t *testing.T) {
 	}
 	expect("missing compiled typed", func() { slot.access(owner) })
 	registration := &pgRowRegistration{database: owner}
-	slot.owners[owner] = &pgRowAccess[string]{registration: registration}
+	slot.owners[owner] = &pgRowAccess[string]{sealed: func() bool { return registration.sealed }}
 	expect("requires application preflight", func() { slot.access(owner) })
 	registration.sealed = true
 	if slot.access(owner) != slot.owners[owner] {

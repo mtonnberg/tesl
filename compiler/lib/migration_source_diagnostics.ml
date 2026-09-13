@@ -119,6 +119,14 @@ let is_migration_root file =
 let check_closure_source ?(skip_roots=[]) ?(overlay=true) ?query_file ~file source =
   let query_file = Option.value query_file ~default:file in
   let absolute = if Filename.is_relative file then Filename.concat (Sys.getcwd ()) file else file in
+  (* Keep the unfollowed alias witness, but `./` is only a spelling difference.
+     Never collapse `..` across a symlink or discard the unfollowed path. *)
+  let rec without_dot path =
+    let parent=Filename.dirname path in
+    if parent=path then path else
+    let parent=without_dot parent in
+    match Filename.basename path with "." -> parent | name -> Filename.concat parent name in
+  let absolute=without_dot absolute in
   let resolved = try Source_input.canonical_path file with Unix.Unix_error _ | Sys_error _ -> absolute in
   let candidates = List.sort_uniq compare [absolute;resolved] in
   List.concat_map (fun file ->

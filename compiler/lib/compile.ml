@@ -2455,227 +2455,6 @@ let diag_of_go_emit_error (error : Emit_go.emit_error) : diagnostic = {
    names.  Both callers need this: merging a cycle unions its members' outside imports
    (two members may import one module with different exposed lists), and rewriting an
    outside importer's references to collapsed members turns several imports into one. *)
-let merge_exposed_imports (left : Ast.import_decl) (right : Ast.import_decl) =
-  match left.names, right.names with
-  (* ImportAll is rejected by the Go emitter with its own message; keep it visible rather
-     than silently widening or narrowing the import. *)
-  | Ast.ImportAll, _ | _, Ast.ImportAll -> { left with names = Ast.ImportAll }
-  | Ast.ImportExposing ours, Ast.ImportExposing theirs ->
-    { left with names = Ast.ImportExposing
-                  (ours @ List.filter (fun name -> not (List.mem name ours)) theirs) }
-
-let rec add_merged_import acc (imp : Ast.import_decl) =
-  match acc with
-  | [] -> [imp]
-  | (existing : Ast.import_decl) :: rest when existing.module_name = imp.module_name ->
-    merge_exposed_imports existing imp :: rest
-  | existing :: rest -> existing :: add_merged_import rest imp
-
-(* Go collapses an SCC into one package. Preserve the source module namespaces by
-   alpha-renaming only the copied emission AST. '$' cannot occur in a Tesl identifier,
-   and [Emit_go.go_ident] escapes it deterministically. *)
-let alpha_rename_cycle_members ~(targets : Ast.module_form list)
-    (members : Ast.module_form list) =
-  let member_names = List.map (fun (m : Ast.module_form) -> m.module_name) members in
-  let symbols (m : Ast.module_form) =
-    List.concat_map (function
-      | Ast.DFunc f -> [f.name]
-      | Ast.DConst c -> [c.name]
-      | Ast.DRecord r -> [r.name]
-      | Ast.DEntity e -> [e.name]
-      | Ast.DFact f -> [f.name]
-      | Ast.DCapture c -> [c.name]
-      | Ast.DType (Ast.TypeNewtype { name; _ }) -> [name]
-      | Ast.DType (Ast.TypeAdt { name; variants; _ }) ->
-        name :: List.map (fun (v : Ast.adt_variant) -> v.ctor) variants
-      | _ -> []) m.decls
-  in
-  let owners = Hashtbl.create 16 in
-  List.iter (fun (m : Ast.module_form) -> List.iter (fun name ->
-    let prior = Option.value (Hashtbl.find_opt owners name) ~default:[] in
-    if not (List.mem m.module_name prior) then
-      Hashtbl.replace owners name (m.module_name :: prior)) (symbols m)) members;
-  let renamed = Hashtbl.create 16 in
-  List.iter (fun (m : Ast.module_form) -> List.iter (fun name ->
-    if List.length (Option.value (Hashtbl.find_opt owners name) ~default:[]) > 1 then
-      Hashtbl.replace renamed (m.module_name, name)
-        (Printf.sprintf "Scc$%s$%s" m.module_name name)) (symbols m)) members;
-  let adt_constructors (m : Ast.module_form) type_name =
-    List.find_map (function
-      | Ast.DType (Ast.TypeAdt { name; variants; _ }) when name = type_name ->
-        Some (List.map (fun (v : Ast.adt_variant) -> v.ctor) variants)
-      | _ -> None) m.decls
-    |> Option.value ~default:[]
-  in
-  let imported_ctor_owner module_name exposed_type ctor =
-    List.find_opt (fun (owner : Ast.module_form) -> owner.module_name = module_name)
-      members
-    |> Option.map (fun owner -> List.mem ctor (adt_constructors owner exposed_type))
-    |> Option.value ~default:false
-  in
-  let local_owner (m : Ast.module_form) name =
-    if List.mem name (symbols m) then Some m.module_name
-    else List.find_map (fun (imp : Ast.import_decl) ->
-      match imp.names with
-      | Ast.ImportAll -> None
-      | Ast.ImportExposing names ->
-        let exposes item =
-          item = name || item = name ^ "(..)"
-          || (String.length item >= 4
-              && String.sub item (String.length item - 4) 4 = "(..)"
-              && imported_ctor_owner imp.module_name
-                   (String.sub item 0 (String.length item - 4)) name)
-        in
-        if List.exists exposes names then Some imp.module_name else None) m.imports
-  in
-  let split_qualified name =
-    match String.rindex_opt name '.' with
-    | None -> None
-    | Some i -> Some (String.sub name 0 i,
-                       String.sub name (i + 1) (String.length name - i - 1))
-  in
-  let rename m name =
-    let owner, bare = match split_qualified name with
-      | Some pair -> pair
-      | None -> Option.value (local_owner m name) ~default:m.Ast.module_name, name
-    in
-    match Hashtbl.find_opt renamed (owner, bare) with
-    | Some generated -> generated
-    | None when List.mem owner member_names -> bare
-    | None -> name
-  in
-  let rec ty m = function
-    | Ast.TName ({ name; _ } as n) -> Ast.TName { n with name = rename m name }
-    | Ast.TVar _ as t -> t
-    | Ast.TApp ({ head; arg; _ } as t) -> Ast.TApp { t with head = ty m head; arg = ty m arg }
-    | Ast.TFun ({ dom; cod; _ } as t) -> Ast.TFun { t with dom = ty m dom; cod = ty m cod }
-    | Ast.TTuple ({ elems; _ } as t) -> Ast.TTuple { t with elems = List.map (ty m) elems }
-  in
-  let proof m =
-    let rec go = function
-      | Ast.PredApp ({ pred; _ } as p) -> Ast.PredApp { p with pred = rename m pred }
-      | Ast.PredAnd ({ left; right; _ } as p) ->
-        Ast.PredAnd { p with left = go left; right = go right }
-    in go
-  in
-  let binding m (b : Ast.binding) =
-    { b with type_expr = ty m b.type_expr; proof_ann = Option.map (proof m) b.proof_ann }
-  in
-  let field m (f : Ast.field_def) =
-    { f with type_expr = ty m f.type_expr; proof_ann = Option.map (proof m) f.proof_ann }
-  in
-  let rec ret m = function
-    | Ast.RetPlain ({ ty = t; _ } as r) -> Ast.RetPlain { r with ty = ty m t }
-    | Ast.RetAttached ({ binding = b; _ } as r) -> Ast.RetAttached { r with binding = binding m b }
-    | Ast.RetNamedPack ({ ty = t; entity_proof; other_proof; _ } as r) ->
-      Ast.RetNamedPack { r with ty = ty m t; entity_proof = Option.map (proof m) entity_proof;
-                               other_proof = Option.map (proof m) other_proof }
-    | Ast.RetForAll ({ elem_ty; proof = p; _ } as r) -> Ast.RetForAll { r with elem_ty = ty m elem_ty; proof = proof m p }
-    | Ast.RetMaybeForAll ({ elem_ty; proof = p; _ } as r) -> Ast.RetMaybeForAll { r with elem_ty = ty m elem_ty; proof = proof m p }
-    | Ast.RetSetForAll ({ elem_ty; proof = p; _ } as r) -> Ast.RetSetForAll { r with elem_ty = ty m elem_ty; proof = proof m p }
-    | Ast.RetMaybeSetForAll ({ elem_ty; proof = p; _ } as r) -> Ast.RetMaybeSetForAll { r with elem_ty = ty m elem_ty; proof = proof m p }
-    | Ast.RetForAllDictValues ({ key_ty; val_ty; proof = p; _ } as r) -> Ast.RetForAllDictValues { r with key_ty = ty m key_ty; val_ty = ty m val_ty; proof = proof m p }
-    | Ast.RetForAllDictKeys ({ key_ty; val_ty; proof = p; _ } as r) -> Ast.RetForAllDictKeys { r with key_ty = ty m key_ty; val_ty = ty m val_ty; proof = proof m p }
-    | Ast.RetMaybeAttached ({ outer_ty; binding = b; _ } as r) -> Ast.RetMaybeAttached { r with outer_ty = Option.map (ty m) outer_ty; binding = binding m b }
-    | Ast.RetExists ({ binding = b; body; _ } as r) -> Ast.RetExists { r with binding = binding m b; body = ret m body }
-  in
-  let rec pattern m = function
-    | Ast.PCon ({ ctor; fields; _ } as p) -> Ast.PCon { p with ctor = rename m ctor; fields = List.map (fun (n, p) -> n, pattern m p) fields }
-    | Ast.PNullary ({ ctor; _ } as p) -> Ast.PNullary { p with ctor = rename m ctor }
-    | (Ast.PVar _ | Ast.PWild | Ast.PLit _) as p -> p
-  in
-  let rec expr m e =
-    let e = Ast_visitor.map_children (expr m) e in
-    match e with
-    | Ast.EVar ({ name; _ } as v) -> Ast.EVar { v with name = rename m name }
-    | Ast.EField { obj = Ast.EConstructor { name = owner; args = []; _ }; field = name; loc }
-      when Hashtbl.mem renamed (owner, name) ->
-        Ast.EVar { name = Hashtbl.find renamed (owner, name); loc }
-    | Ast.EField { obj = Ast.EConstructor c; field; loc }
-      when c.args = [] && List.mem c.name member_names ->
-        Ast.EVar { name = field; loc }
-    | Ast.EConstructor ({ name; _ } as c) -> Ast.EConstructor { c with name = rename m name }
-    | Ast.EEnqueue ({ job_type; _ } as q) ->
-      Ast.EEnqueue { q with job_type = rename m job_type }
-    | Ast.EPublish ({ event_ctor; _ } as p) ->
-      Ast.EPublish { p with event_ctor = rename m event_ctor }
-    | Ast.ERecord ({ type_hint; _ } as r) -> Ast.ERecord { r with type_hint = Option.map (rename m) type_hint }
-    | Ast.ELet ({ declared_type; declared_proof; _ } as l) ->
-      Ast.ELet { l with declared_type = Option.map (ty m) declared_type;
-                        declared_proof = Option.map (proof m) declared_proof }
-    | Ast.EOk ({ proof = p; _ } as ok) -> Ast.EOk { ok with proof = proof m p }
-    | Ast.ELambda ({ params; _ } as l) ->
-      Ast.ELambda { l with params = List.map (binding m) params }
-    | Ast.ECase ({ arms; _ } as c) -> Ast.ECase { c with arms = List.map (fun (a : Ast.case_arm) -> { a with pattern = pattern m a.pattern }) arms }
-    | other -> other
-  in
-  let rec test_stmts m stmts = List.map (function
-    | Ast.TsLet ({ declared_type; value; declared_proof; _ } as s) -> Ast.TsLet { s with declared_type = Option.map (ty m) declared_type; value = expr m value; declared_proof = Option.map (proof m) declared_proof }
-    | Ast.TsLetProof ({ value; _ } as s) -> Ast.TsLetProof { s with value = expr m value }
-    | Ast.TsExpect ({ left; right; _ } as s) -> Ast.TsExpect { s with left = expr m left; right = Option.map (expr m) right }
-    | Ast.TsExpectFail ({ fn; arg; _ } as s) -> Ast.TsExpectFail { s with fn = expr m fn; arg = expr m arg }
-    | Ast.TsExpectHasProof ({ fn; arg; _ } as s) -> Ast.TsExpectHasProof { s with fn = expr m fn; arg = expr m arg }
-    | Ast.TsProperty ({ params; body; _ } as s) -> Ast.TsProperty { s with params = List.map (fun (p : Ast.property_param) -> { p with binding = binding m p.binding; where_clause = Option.map (expr m) p.where_clause; generator = Option.map (rename m) p.generator }) params; body = expr m body }
-    | Ast.TsIf ({ cond; then_stmts; else_stmts; _ } as s) -> Ast.TsIf { s with cond = expr m cond; then_stmts = test_stmts m then_stmts; else_stmts = test_stmts m else_stmts }
-    | Ast.TsCase ({ scrut; arms; _ } as s) -> Ast.TsCase { s with scrut = expr m scrut; arms = List.map (fun (a : Ast.ts_case_arm) -> { a with ts_pattern = pattern m a.ts_pattern; ts_guard = Option.map (expr m) a.ts_guard; ts_body = test_stmts m a.ts_body }) arms }
-    | Ast.TsExpr ({ e; _ } as s) -> Ast.TsExpr { s with e = expr m e }) stmts
-  in
-  let decl m = function
-    | Ast.DFunc f -> Ast.DFunc { f with name = rename m f.name; params = List.map (binding m) f.params; return_spec = ret m f.return_spec; body = expr m f.body }
-    | Ast.DConst c -> Ast.DConst { c with name = rename m c.name; value = expr m c.value }
-    | Ast.DRecord r -> Ast.DRecord { r with name = rename m r.name; fields = List.map (field m) r.fields;
-      invariant = Option.map (fun (i : Ast.record_invariant) -> { i with proof_text = proof m i.proof_text;
-        checker_name = Option.map (rename m) i.checker_name }) r.invariant }
-    | Ast.DEntity e -> Ast.DEntity { e with name = rename m e.name; fields = List.map (field m) e.fields }
-    | Ast.DDatabase d ->
-      let merged = List.hd (List.sort String.compare member_names) in
-      let entity name = match split_qualified name with
-        | Some (owner, _) when List.mem owner member_names -> merged ^ "." ^ rename m name
-        | _ -> rename m name in
-      Ast.DDatabase { d with entities = List.map entity d.entities;
-        config_expr = Option.map (expr m) d.config_expr }
-    | Ast.DFact f -> Ast.DFact { f with name = rename m f.name; params = List.map (binding m) f.params }
-    | Ast.DCapture c -> Ast.DCapture { c with name = rename m c.name;
-      binding = binding m c.binding; parser = rename m c.parser;
-      checker = Option.map (rename m) c.checker }
-    | Ast.DType (Ast.TypeNewtype t) -> Ast.DType (Ast.TypeNewtype { t with name = rename m t.name; base_type = ty m t.base_type })
-    | Ast.DType (Ast.TypeAdt t) -> Ast.DType (Ast.TypeAdt { t with name = rename m t.name; variants = List.map (fun (v : Ast.adt_variant) -> { v with ctor = rename m v.ctor; fields = List.map (field m) v.fields }) t.variants })
-    | Ast.DTest t -> Ast.DTest { t with stmts = test_stmts m t.stmts }
-    | Ast.DApiTest t -> Ast.DApiTest { t with seed_stmts = List.map (expr m) t.seed_stmts; stmts = test_stmts m t.stmts }
-    | Ast.DLoadTest t -> Ast.DLoadTest { t with seed_stmts = List.map (expr m) t.seed_stmts; request_stmts = test_stmts m t.request_stmts }
-    | d -> d
-  in
-  List.map (fun (m : Ast.module_form) ->
-    let import (i : Ast.import_decl) = match i.names with
-      | Ast.ImportAll -> i
-      | Ast.ImportExposing names -> { i with names = Ast.ImportExposing (List.map (fun name ->
-          let suffix = if String.length name >= 4 && String.sub name (String.length name - 4) 4 = "(..)" then "(..)" else "" in
-          let bare = if suffix = "" then name else String.sub name 0 (String.length name - 4) in
-          Option.value (Hashtbl.find_opt renamed (i.module_name, bare)) ~default:bare ^ suffix) names) }
-    in
-    { m with decls = List.map (decl m) m.decls; imports = List.map import m.imports;
-             exports = List.map (function Ast.ExportName n -> Ast.ExportName (rename m n) | Ast.ExportAdt n -> Ast.ExportAdt (rename m n)) m.exports }) targets
-
-let merge_cycle_members (members : Ast.module_form list) =
-  match List.sort (fun (left : Ast.module_form) (right : Ast.module_form) ->
-          String.compare left.module_name right.module_name) members with
-  | [] -> Error "Go backend found an empty import cycle"
-  | [single] -> Ok single
-  | first :: _ as sorted ->
-    let names = List.map (fun (m : Ast.module_form) -> m.module_name) sorted in
-    Ok { first with
-            (* Deliberately keeps the first member's name and source_file: the package is
-               named after it, and the file is only used for whole-module diagnostics. *)
-            decls = List.concat_map (fun (m : Ast.module_form) -> m.decls) sorted;
-            exports = List.concat_map (fun (m : Ast.module_form) -> m.exports) sorted;
-            imports =
-              (* An import of a fellow member disappears with the boundary; everything
-                 else is kept once. *)
-               List.fold_left (fun acc (m : Ast.module_form) ->
-                List.fold_left (fun acc (imp : Ast.import_decl) ->
-                  if List.mem imp.module_name names then acc
-                   else add_merged_import acc imp) acc m.imports) [] sorted }
-
 (* Every LOCAL module the entry imports, transitively, parsed and checked.  Import
    resolution is this module's job, not the emitter's: `build_local_import_graph` already
    knows how a module name becomes a file path, and it canonicalises so the same file
@@ -2710,62 +2489,13 @@ let local_dependency_modules entry_path (entry : Ast.module_form) =
                               (Filename.basename path));
           None
     in
-    let component_modules = List.map (List.filter_map parsed) components in
-    let originals = List.concat component_modules in
-    let ownership_modules = List.map (fun original ->
-      match Migration_schema.lower_module ~modules:originals original with
-      | Ok lowered -> Migration_form.erase lowered
-      | Error errors ->
-        if !failed = None then failed := Some (String.concat "\n"
-          (List.map (fun (e : Validation_common.validation_error) -> e.message) errors));
-        original) originals in
-    (* Rewrite consumers too: after an SCC import target is collapsed, an outside
-       module must ask that package for the generated owner-specific export. *)
-    let emit_modules = List.fold_left (fun targets members ->
-      if List.length members > 1 then alpha_rename_cycle_members ~targets members
-      else targets) ownership_modules component_modules in
-    let emitted_member (original : Ast.module_form) =
-      List.find (fun (candidate : Ast.module_form) ->
-        candidate.module_name = original.module_name) emit_modules
-    in
-    let collapsed = List.filter_map (fun members ->
-      if members = [] then None
-      else begin
-        let emit_members = List.map emitted_member members in
-        match merge_cycle_members emit_members with
-        | Ok merged ->
-          Some (merged, List.map (fun (m : Ast.module_form) -> m.module_name) members)
-        | Error message ->
-          if !failed = None then failed := Some message;
-          None
-       end) component_modules in
-    (* A module OUTSIDE the cycle imports a MEMBER by name, but the merged module answers
-       to only one name.  Rewriting those references here is what keeps the emitter free
-       of any cycle concept: after this, no module name refers to a collapsed member. *)
-    let rename_table = List.concat_map (fun ((merged : Ast.module_form), members) ->
-      List.filter_map (fun member ->
-        if member = merged.module_name then None else Some (member, merged.module_name))
-        members) collapsed in
-    let rewrite (m : Ast.module_form) =
-      { m with imports = List.fold_left (fun acc (imp : Ast.import_decl) ->
-          let target = match List.assoc_opt imp.module_name rename_table with
-            | Some merged_name -> merged_name
-            | None -> imp.module_name
-          in
-          (* A member importing its own merged self is the cycle boundary disappearing. *)
-          if target = m.module_name then acc
-          else add_merged_import acc { imp with module_name = target }) [] m.imports }
-    in
-    (match !failed with
-     | Some message -> GoDepsError message
-     | None ->
-       let emit = List.map (fun (merged, members) -> (rewrite merged, members)) collapsed in
-       let entry_emit =
-         match List.find_opt (fun (_, members) -> List.mem entry.module_name members) emit with
-         | Some (merged, _) -> merged
-         | None -> entry
-       in
-       GoDeps { emit = List.map fst emit; originals; entry_emit })
+    let originals = List.concat_map (List.filter_map parsed) components in
+    match !failed with
+    | Some message -> GoDepsError message
+    | None -> (match Go_graph_lowering.lower ~entry originals with
+      | Error message -> GoDepsError message
+      | Ok lowered -> GoDeps {emit=Go_graph_lowering.modules lowered; originals;
+          entry_emit=Go_graph_lowering.entry lowered})
 
 let go_project_diag file message = {
   file; start_line = 1; start_col = 1; end_line = 1; end_col = 1;
@@ -2861,23 +2591,23 @@ let compile_row_source_artifacts ?(mode=Emit_go.Release) ?(storage=false) ?(phys
    | Some history ->
     let captured=Migration_program.source_modules history in
     let originals=List.map fst captured in
+    let integrity_diags=match List.find_opt (fun (m,_) ->
+      Source_input.canonical_path m.Ast.source_file=Source_input.canonical_path entry.Ast.source_file) captured with
+     | None -> [go_project_diag filename "captured history lost its original entry source"]
+     | Some (original,bytes) -> Migration_declaration.diagnostics_of_errors
+       (Migration_source_diagnostics.check_module_source bytes original) in
     let contexts=List.concat_map (fun (_,rows) -> Migration_row_history.bindings rows |> List.map (fun binding ->
      Migration_transform.proof_context (Migration_transform_link.checked_transform (Migration_row_history.link binding))))
       (Migration_program.row_histories history) |> List.fold_left (fun acc context -> if List.memq context acc then acc else context::acc) [] in
-    let lifted_diags=List.concat_map (fun (m,_) -> List.filter_map (fun (import:Ast.import_decl) ->
-     if List.mem import.module_name go_lifted_module_names then Some (go_project_diag m.source_file
-       "row source artifacts do not yet bind lifted Tesl.CivilTime module emission") else None) m.imports) captured in
-    let diagnostics=lifted_diags @ Migration_proof_context.with_contexts contexts (fun () ->
+    let diagnostics=integrity_diags @ Migration_proof_context.with_contexts contexts (fun () ->
      List.concat_map (fun (m,bytes) -> Frontend_check.check_module ~additional:(Migration_application.make m) bytes m) captured) in
     let binding_errors=match Migration_program.verify_bindings (Some (Migration_program.source_program history)) originals with
      | Ok () -> [] | Error errors -> Migration_declaration.diagnostics_of_errors errors in
     if List.exists (fun (d:diagnostic) -> d.severity="error") (diagnostics @ binding_errors) then GoFailure (diagnostics @ binding_errors) else
-    let lowered=List.map (fun m -> match Migration_schema.lower_module ~modules:originals m with
-     | Ok lowered -> Result.Ok (Migration_form.erase lowered)
-     | Error errors -> Error (List.map (fun (e:Validation_common.validation_error) -> go_project_diag filename e.message) errors)) originals in
-    let errors=List.concat_map (function Error errors -> errors | Ok _ -> []) lowered in
-    if errors<>[] then GoFailure errors else
-    let modules=List.filter_map (function Result.Ok m -> Some m | _ -> None) lowered in
+    match Migration_program.source_lowering history with
+    | Error errors -> GoFailure (Migration_declaration.diagnostics_of_errors errors)
+    | Ok lowering ->
+    let modules=Go_graph_lowering.modules lowering and entry=Go_graph_lowering.entry lowering in
     let p=Migration_program.source_program history in
     let migration_families=List.map (fun (d:Migration_program.database) -> d.identity,d.family) (Migration_program.databases p) in
     match Emit_go.compile_project ~mode ~row_physical:physical ~row_storage:(storage || physical) ~row_source:history ~migration_families

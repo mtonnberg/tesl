@@ -178,17 +178,23 @@ identities before sealing the complete set at local application preflight. A
 sealed typed handle can evaluate the pure callback; it grants no SQL, row selection,
 persisted processing ABI, admission, or migration execution authority.
 
-This emitter slice requires Migrate callbacks. Derived metadata is checked, but
-emission refuses it until a compiler-generated typed identity adapter exists.
-Retained nonempty queue inventories and lifted `Tesl.CivilTime` modules also refuse
-explicitly here; public queue and ordinary Go compilation paths remain separate.
+Migrate retains its exact user callback. Derived instead generates a concrete
+typed adapter from the checked Copy/Rename/default/optional mapping, without
+inventing a source function or relaxing final-row proof rules. Primitive and
+nominal record/ADT fields, including optionals, are supported through checked
+mapping certificates. Nominal mappings retain the original codecs and exact
+field correspondence; source-site Same certificates cannot authorize a generated
+mapping. Direct stored List carriers still refuse with MIG016.
+Retained nonempty queue inventories refuse explicitly here; the public queue
+compilation path remains separate. Captured lifted `Tesl.CivilTime` emission is
+bound to the compiler ABI snapshot as described below.
 The native regressions cover actual Tesl Row/Reject branches, private helpers,
 Same-assisted proof copies, multiple database owners, reordered fields, quoted
 physical tables, and a new JSONB record field computed from an old primitive field with
 a checked output codec. That earlier test does not demonstrate existing-field
 JSONB migration. The checked Retype/WriteBack slice below now covers explicit
-nominal record and ADT reconstruction; physical shadow-column execution remains
-required by `roadmap/next/database-migrations.md`.
+nominal record and ADT reconstruction, with separate native regression coverage
+for physical shadow columns and their removal during Contract.
 
 ## Typed logical storage adapters
 
@@ -207,9 +213,9 @@ proof checks are available. The complete captured graph and ABI guards run befor
 and after emission. `RegisterCompiledRowStorage` attaches four concrete functions
 to the exact typed transform: From decoder/encoder and To decoder/encoder. No
 callback or record crosses an erased cast or a JSON conversion between nominal
-types. Primitive columns, primitive newtypes, optional columns and records with
-checked bidirectional JSON codecs are supported. Direct ADT column adapters refuse
-explicitly until their SQL codec path has separate checked coverage.
+types. Primitive columns, primitive newtypes, optional columns, records and ADTs
+with checked bidirectional JSON codecs are supported. Record and ADT adapters
+have separate native coverage, including optional values and SQL NULL.
 
 Opaque source and target projections retain independent identity even when their
 fields and SQL types coincide. `CheckOrder` requires the entire compiler order;
@@ -541,3 +547,98 @@ required columns before current-only inserts; the same current app process serve
 before and after cleanup. The actual PostgreSQL regression covers a constant text
 field plus a computed JSONB record field and an index on the removed text field.
 This is still the internal source route; public command activation is separate.
+
+### Compiler-generated Derived rows
+
+The source declaration and semantic link distinguish Derived from Migrate. Its
+registered typed function constructs every current field from the exact checked
+mapping and returns Row. Literal defaults preserve arbitrary integer precision
+and IEEE float bits, including negative zero; optional fields produce Nothing.
+An ordinary final-AST proof site is never fabricated for this compiler mapping.
+
+The source-deleted original V1/V2 App regression runs a Derived rename with
+worker backfill, late old-writer invalidation, final pass and Contract cleanup,
+then serves requests through the same V2 process. Reordered fields and distinct
+values exercise codec projection order; source and freshly rehashed metadata
+negatives reject wrong modes, fake callbacks and computed Derived fields.
+
+A separate generated native regression composes Derived with Legacy and private
+LegacyWith callbacks. It checks the complete reverse-closure inventory and runs
+the original old-row JSONB encoder, including its renamed codec field.
+
+### Nominal Derived mapping authority
+
+The checked Transform owns separate opaque certificates for each Derived
+Copy/Rename field that needs a Same nominal conversion. Each certificate binds
+the exact checked row object, original and current entity/field, complete Same
+type/codec closure, and captured source/import-owner graph. Prepared source and
+ordinary helper expressions receive no certificate. Whole-field types come from
+the exact emitted entity records, so `Maybe Metadata` needs no invented nominal
+declaration. The compiler emits private structural forward/inverse adapters in
+the original migration module and selects them by certificate identity.
+
+Records, ADTs, optional records, and nested nominal lists preserve original codec
+inputs, including fields omitted by a lossy encoder. Nothing remains SQL NULL;
+nullary ADT keys retain their JSON value. Direct stored List carriers remain
+outside the supported captured storage history (MIG016); nested lists are
+supported. Legacy and
+LegacyWith inverse construction uses the same exact mapping certificate.
+WriteBack retains its existing requirement for an explicit Migrate function.
+
+The dedicated regression suite checks copied/fabricated row rejection, ordinary
+nominal typing, independent check identities, changed source refusal, lossy
+forward/inverse values, and optional SQL NULL. Actual source-deleted record/ADT
+apps exercise the original key through Worker, late old writes, reverse writes,
+finality, and Contract cleanup with unchanged handlers.
+
+
+### Optional fields in explicit Migrate functions
+
+The exact final-row Copy/Rename source certificate carries the complete old and
+current stored-field type shapes. This includes `Maybe Record` and `Maybe ADT`:
+the builtin wrapper identity and every contained nominal owner must match the
+checked field, with complete Same closure. A same-spelled user `Maybe` is never
+a substitute. Missing imports for an inferred builtin are resolved through the
+compiler's unique stdlib export owner, after ordinary owner resolution.
+
+Forward and compiler-private reverse bridges select the actual emitted entity
+fields, including old entity identity and field name. `Nothing` remains SQL NULL;
+`Something` preserves original codec input, including hidden record data and
+constructors without fields. No helper, shadowed row binder, intermediate value,
+or different same-typed field inherits this authority. Ordinary nominal typing
+and predicate proof requirements remain separate. Direct stored List carriers
+still refuse with MIG016.
+
+`test_migration_nominal_optional` checks forward/inverse storage, exact predicate
+Same, wrapper shadowing, source graph changes, escaped captures, and unchanged
+record/ADT application handlers through PostgreSQL Worker and Contract. The
+native application receives only independently compiled binaries after deleting
+all emitted source and loose history JSON.
+
+### Captured migration helper import cycles
+
+Captured row artifact compilation uses the same deterministic Go graph lowering
+as ordinary compilation. Pure helper modules in an import cycle share one emitted
+package; colliding private names receive owner-qualified generated names. The
+checked original callback, source expressions, nominal Same certificates and
+codec owners remain bound to their corresponding emitted declarations. Before
+emission, the compiler compares the complete lowered graph with the graph derived
+from its guarded original source capture.
+
+The existing source restrictions still apply: a cycle containing a codec, database
+or application entry declaration is rejected with V001, as is lexical shadowing
+of an existing name. A cyclic migration helper can use codecs declared in separate
+acyclic schema modules. Lifted standard library input capture is a separate
+judgment, described below.
+
+### Lifted standard library source in captured emission
+
+The captured Go artifact path includes required `Tesl.CivilTime` source from the
+existing compiler ABI token. Its original source bytes and module identity join
+the exact checked emission graph. They remain ABI resources, separate from the
+application's project manifest; source overlays retain their original project
+root. The compiler verifies the ABI before emission and again at publication.
+Substituting a caller-created CivilTime AST or changing the captured stdlib
+refuses publication. Runtime-native stdlib modules are not emitted a second time.
+This closes the lifted-source gap in the internal artifact path; it does not
+activate the separate public migration compilation route.

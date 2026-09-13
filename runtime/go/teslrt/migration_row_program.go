@@ -40,13 +40,18 @@ func registerCompiledRowHistory(payload string) {
 	}
 	r := &pgMigrationWireReader{}
 	o := r.object(json.RawMessage(payload), "version", "kind", "compilerAbi", "storedValueCompatibility", "databases")
+	version := pgMigrationRead[int](r, o["version"])
 	dbs := pgMigrationRead[[]json.RawMessage](r, o["databases"])
 	if len(dbs) == 0 {
 		r.fail("row companion requires a database")
 	}
 	var linked []PgCompiledMigrationHistory
 	for _, raw := range dbs {
-		d := r.object(raw, "database", "family", "namespace", "currentVersion", "transforms")
+		fields := []string{"database", "family", "namespace", "currentVersion", "transforms"}
+		if version == 5 {
+			fields = append(fields, "currentCodecs")
+		}
+		d := r.object(raw, fields...)
 		family := pgMigrationRead[string](r, d["family"])
 		value, exists := compiledMigrationHistories.Load(family)
 		if !exists {

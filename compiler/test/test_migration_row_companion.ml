@@ -378,16 +378,16 @@ let marker_collision ()=baseline_project (fun _ save app ->
  match Compile.compile_row_source_artifacts app (read app) with
  | Compile.GoFailure ds -> check bool "reserved marker refusal" true (List.exists (fun (d:Compile.diagnostic) -> contains d.message "_tesl_v") ds)
  | _ -> fail "user column claimed generation marker")
-let derived_refusal ()=project (fun root save path ->
+let derived_adapter ()=project (fun root save path ->
  let body=source_body |> replace "entities: {}" "entities: { Note: Derived [Rename author owner, Default count 7] }" in
  ignore (reseal root path body);let app=save "app.tesl" app in
  get (capture root (fun source ->
   let h=List.assoc "App.Main" (P.row_histories source) in
   check (list int) "derived metadata judged" [1;2] (List.map (fun (v:RH.version) -> (List.hd v.entities).generation) (RH.versions h));
-  refuse (RH.require_migrate_callbacks h)));
+  get (RH.validate_adapter_modes h)));
  match Compile.compile_row_source_artifacts app (read app) with
- | Compile.GoFailure ds -> check bool "adapter refusal" true (List.exists (fun (d:Compile.diagnostic) -> contains d.message "Derived") ds)
- | _ -> fail "Derived fabricated callable adapter")
+ | Compile.GoFailure ds -> fail (describe ds)
+ | Compile.GoSuccess artifacts -> native ~source_root:root artifacts)
 let same_owner_databases ()=project (fun root save path ->
  seal_edge root path;
  let extra=String.sub app (Str.search_forward (Str.regexp_string "database Main") app 0)
@@ -793,7 +793,7 @@ let ()=run "checked source row companion" ["metadata",[
  test_case "escaped source history" `Quick escaped_source;
  test_case "private producer graph substitution" `Quick altered_graph;
  test_case "reserved marker" `Quick marker_collision;
- test_case "Derived requires typed adapter" `Quick derived_refusal;
+ test_case "Derived generates its checked typed adapter" `Quick derived_adapter;
  test_case "same-owner database boundary" `Quick same_owner_databases;
  test_case "additive after transform retains generation" `Quick after_transform_additive;
  test_case "final additive source drift" `Quick final_additive_drift;

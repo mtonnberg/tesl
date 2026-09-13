@@ -67,6 +67,7 @@ type PgRowSourceInventory struct {
 	CurrentVersion              int
 	Versions                    []PgRowSourceVersion
 	Transforms                  []PgRowTransformDescriptor
+	CurrentCodecs               []PgRowCurrentCodecDescriptor
 }
 
 // Canonical atoms are bytes, not necessarily UTF-8 strings. A closed tree parser
@@ -495,7 +496,7 @@ func pgRowDescriptor(r *pgMigrationWireReader, raw json.RawMessage, base PgRowSo
 	if !link.list(5) || !link.children[0].isAtom("checked-transform-link") || !link.children[1].isAtom("1") || !link.children[2].list(2) || !link.children[2].children[0].isAtom("compiler-abi") || !link.children[2].children[1].isAtom(abi) || link.children[3].atom || len(link.children[3].children) == 0 || link.children[4].atom {
 		r.fail("row transform semantic link or ABI mismatch")
 	}
-	if d.Mode != "migrate" || d.TransformContractFormat != "tesl-row-transform-v1" || d.MigrationVersion < 2 || d.MigrationVersion > len(base.Versions) {
+	if (d.Mode != "migrate" && d.Mode != "derived") || d.TransformContractFormat != "tesl-row-transform-v1" || d.MigrationVersion < 2 || d.MigrationVersion > len(base.Versions) {
 		r.fail("unsupported row transform or source version")
 		return d
 	}
@@ -556,7 +557,7 @@ func pgReadRowCompanion(history PgCompiledMigrationHistory, payload string) ([]P
 	r := &pgMigrationWireReader{}
 	o := r.object(json.RawMessage(payload), "version", "kind", "compilerAbi", "storedValueCompatibility", "databases")
 	version := pgMigrationRead[int](r, o["version"])
-	if (version != 1 && version != 2 && version != 3 && version != 4) || pgMigrationRead[string](r, o["kind"]) != "compiled-row-transform-history" || pgMigrationRead[string](r, o["compilerAbi"]) != history.SourceCompilerABI || pgMigrationRead[string](r, o["storedValueCompatibility"]) != history.StoredValueCompatibility {
+	if (version != 1 && version != 2 && version != 3 && version != 4 && version != 5) || pgMigrationRead[string](r, o["kind"]) != "compiled-row-transform-history" || pgMigrationRead[string](r, o["compilerAbi"]) != history.SourceCompilerABI || pgMigrationRead[string](r, o["storedValueCompatibility"]) != history.StoredValueCompatibility {
 		r.fail("row companion format or linked ABI mismatch")
 	}
 	dbs := pgMigrationRead[[]json.RawMessage](r, o["databases"])
@@ -564,7 +565,11 @@ func pgReadRowCompanion(history PgCompiledMigrationHistory, payload string) ([]P
 		r.fail("row companion database inventory is incomplete")
 	}
 	for i, raw := range dbs {
-		d := r.object(raw, "database", "family", "namespace", "currentVersion", "transforms")
+		fields := []string{"database", "family", "namespace", "currentVersion", "transforms"}
+		if version == 5 {
+			fields = append(fields, "currentCodecs")
+		}
+		d := r.object(raw, fields...)
 		if i >= len(base) {
 			break
 		}
@@ -592,6 +597,9 @@ func pgReadRowCompanion(history PgCompiledMigrationHistory, payload string) ([]P
 			}
 			delete(expected, key)
 			lastVersion, lastEntity = transform.MigrationVersion, transform.Entity
+		}
+		if version == 5 {
+			b.CurrentCodecs = pgReadRowCurrentCodecs(r, d["currentCodecs"], *b)
 		}
 		pgRowCheckColumnOrigins(r, *b, version)
 		if len(expected) != 0 {
@@ -773,13 +781,29 @@ func pgRowCheckLinkMapping(r *pgMigrationWireReader, link pgRowCanonical, family
 		}
 		matches++
 		pgRowCheckLinkedTypes(r, row.children[3], family, before, after)
-		validMode := row.children[6].list(2) && (len(descriptor.WriteBacks)+len(descriptor.LegacyWrites)) == 0 || row.children[6].list(3) && (len(descriptor.WriteBacks)+len(descriptor.LegacyWrites)) > 0
-		if row.children[4].atom || !validMode || !row.children[6].children[0].isAtom("migrate") {
+		mode := row.children[6]
+		migrate := descriptor.Mode == "migrate" && len(mode.children) > 0 && mode.children[0].isAtom("migrate")
+		derived := descriptor.Mode == "derived" && len(mode.children) > 0 && mode.children[0].isAtom("derived")
+		width := 2
+		if derived {
+			width = 1
+		}
+		if (len(descriptor.WriteBacks) + len(descriptor.LegacyWrites)) > 0 {
+			width++
+		}
+		if row.children[4].atom || (!migrate && !derived) || !mode.list(width) {
 			r.fail("row callback semantic mode mismatch")
 			continue
 		}
+		if derived {
+			for _, field := range descriptor.FieldMapping {
+				if field.Kind == "computed" || field.Kind == "retype" {
+					r.fail("Derived mapping cannot compute or retype a field")
+				}
+			}
+		}
 		if (len(descriptor.WriteBacks) + len(descriptor.LegacyWrites)) > 0 {
-			writes := row.children[6].children[2]
+			writes := mode.children[len(mode.children)-1]
 			if writes.atom || len(writes.children) != (len(descriptor.WriteBacks)+len(descriptor.LegacyWrites)) {
 				r.fail("WriteBack semantic closure inventory mismatch")
 			} else {

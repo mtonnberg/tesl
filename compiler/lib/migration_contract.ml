@@ -227,16 +227,26 @@ let revalidate t=protect(fun () ->
  let current=try Source_input.without_pinned_files(fun () -> Source_input.read t.source_file) with Sys_error message -> reject (Location.dummy_loc t.source_file) message in
  if Migration_hash.digest current<>t.source_digest then reject (Location.dummy_loc t.source_file) "contract source changed after checking")
 
+(* Resolve CLI-relative spelling without following a symlink or collapsing `..`
+   across one. The overlay's canonical-directory checks still reject aliases. *)
+let rec absolute_source_path file =
+ if Filename.is_relative file then absolute_source_path (Filename.concat (Sys.getcwd ()) file)
+ else let parent=Filename.dirname file in
+ if parent=file then file else
+ let parent=absolute_source_path parent in
+ match Filename.basename file with "." -> parent | name -> Filename.concat parent name
+
 let check_module ~compiler_abi ~source (m:module_form) = protect(fun () ->
  let present=List.exists(function DConst c -> Migration_form.is_contract m c | _ -> false) m.decls in
  let contract_root=match Validation_common.schema_module_parts m.module_name with
   | Some(_,"Migrate",[name]) -> Filename.check_suffix name "Contract" | _ -> false in
  if not present && not contract_root then None else
  let family,_=root m in
- let project_root=Filename.dirname(Filename.dirname(Filename.dirname m.source_file)) in
+ let file=absolute_source_path m.source_file in
+ let project_root=Filename.dirname(Filename.dirname(Filename.dirname file)) in
  let relative=Option.get(Validation_common.schema_module_relative_path m.module_name) in
- if Filename.concat project_root relative<>m.source_file then reject (Location.dummy_loc m.source_file) "contract source must use its canonical schema-family path";
- Source_input.with_overlays ~project_root:(Option.value(Source_input.project_root()) ~default:project_root) [m.source_file,source] (fun () ->
+ if Filename.concat project_root relative<>file then reject (Location.dummy_loc m.source_file) "contract source must use its canonical schema-family path";
+ Source_input.with_overlays ~project_root:(Option.value(Source_input.project_root()) ~default:project_root) [file,source] (fun () ->
   let h=match Migration_history_sources.discover ~compiler_abi ~project_root ~family with
    | Ok h -> h | Error e -> reject e.loc e.message in
   let schemas=Migration_history_sources.frozen h @ [Migration_history_sources.current h] |> List.map(fun(s:Migration_history_sources.schema)->s.inventory) in
@@ -245,7 +255,7 @@ let check_module ~compiler_abi ~source (m:module_form) = protect(fun () ->
    match checked(Migration_declaration.check ~compiler_abi ~source:s.contents ast) with Some d -> d | None -> reject (Location.dummy_loc s.path) "contract requires its checked migration declaration") in
   let history=checked(H.check ~schemas ~edges) in
   let plan=checked(R.plan history) in
-  Some(checked(check ~plan ~namespace:"contract_validation" ~file:m.source_file ~source))))
+  Some(checked(check ~plan ~namespace:"contract_validation" ~file ~source))))
 let diagnostics source m =
  let relevant=List.exists(function DConst c -> Migration_form.is_contract m c | _ -> false) m.decls ||
    (match Validation_common.schema_module_parts m.module_name with Some(_,"Migrate",[name]) -> Filename.check_suffix name "Contract" | _ -> false) in

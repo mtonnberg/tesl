@@ -154,9 +154,10 @@ func PreflightApplicationDatabases(databases ...*Database) error {
 // capability admission. Both run inside pgMigrationRegistrations. A complete
 // codec projection cannot make legacy queue storage safe for a versioned DB.
 type pgApplicationPreflight struct {
-	databases []*Database
-	codecs    []*pgQueueBackend
-	rows      []*pgRowRegistration
+	databases   []*Database
+	codecs      []*pgQueueBackend
+	rows        []*pgRowRegistration
+	currentRows []*pgRowCurrentRegistration
 }
 
 func pgPrepareApplicationDatabases(databases []*Database) (pgApplicationPreflight, error) {
@@ -188,6 +189,11 @@ func pgPrepareApplicationDatabases(databases []*Database) (pgApplicationPrefligh
 		if err != nil {
 			return pgApplicationPreflight{}, fmt.Errorf("database %q: %w", database.Name, err)
 		}
+		currentRows, err := pgCheckApplicationCurrentRows(database, history)
+		if err != nil {
+			return pgApplicationPreflight{}, fmt.Errorf("database %q: %w", database.Name, err)
+		}
+		pending.currentRows = append(pending.currentRows, currentRows...)
 		pending.rows = append(pending.rows, rows...)
 		pending.databases = append(pending.databases, database)
 		pending.codecs = append(pending.codecs, checked...)
@@ -198,6 +204,9 @@ func pgPrepareApplicationDatabases(databases []*Database) (pgApplicationPrefligh
 func (pending pgApplicationPreflight) closeRegistrations() {
 	// Every writer is excluded until all closures have been published. No failed
 	// target can leave an earlier database or codec registry partially sealed.
+	for _, row := range pending.currentRows {
+		row.sealed = true
+	}
 	for _, row := range pending.rows {
 		row.sealed = true
 	}

@@ -8,7 +8,72 @@ non-normative. An unchecked row is not delivered.
 
 ## Current assessment and implementation order
 
-The latest integrated increment preserves record and ADT primary keys through
+Before the latest epoch/heartbeat integration, the runtime/compiler union passed
+all 83 focused groups:
+application access (11), nominal keys (19), nominal Copy/Rename (5), primitive
+Derived (6), Retype/WriteBack (16), physical removal and JSONB Contract (3), and
+Contract source/CLI checks (23). This run includes the bounded preparation retry,
+Legacy, nominal reverse transport, Derived, and relative Contract path fixes.
+It resolves the earlier nominal fixture's incomplete runtime dependency evidence.
+The ordinary CLI prototype also passes an actual PostgreSQL lifecycle with V1
+built before freezing history, byte-identical V1/V2 application source, and the
+original source directory removed before execution. It covers Worker conversion,
+lazy reads without materialization, old/new writes, Contract, settled inserts,
+and retired V1 HTTP 503. A reusable exporter now reproduces that ordinary CLI
+workflow with pinned compiler/CLI binaries, original V1 provenance, and identical
+application-source hashes. Its newly built applications pass the PostgreSQL
+lifecycle gate (4.101s). This remains an isolated first-transform prototype.
+
+Nominal Derived mapping certificates are integrated after two source reviews.
+The final producer runs pass 36 affected groups; the fresh shared build and all
+20 composed groups pass: nine nominal Derived groups (74.841s), five nominal
+inverse groups (23.071s), and six primitive Derived groups (50.548s). These include
+actual unchanged record/ADT applications, Worker conversion, Contract, lossy
+codec inputs, optional records and SQL NULL, and nested lists. Direct stored List
+carriers still refuse with MIG016. Ordinary Migrate transport of optional
+records/ADTs is now integrated after two source reviews, 99 producer groups and
+all ten fresh shared groups (90.161s). The latter includes unchanged record/ADT
+applications through PostgreSQL Worker, late old writes, reverse writes and
+Contract. Whole-field nominal transport preserves original codec inputs and SQL
+NULL; wrong-field, helper, wrapper-shadow and missing-proof cases refuse.
+
+Public-path review found missing frozen foreign-helper integrity checks and
+unsupported cyclic/lifted ordinary-module emission. The deterministic integrity
+check is restored in the shared internal route after independent reviews and a
+fresh 28-group closure run (13.952s). The follow-up guarding adjacent foreign
+metadata between checking and publication is also integrated after independent
+reviews. Its immutable directory/source capture passes 127 producer groups and
+82 fresh shared groups, including ordinary compiled histories and scoped nominal
+mapping. Separate guard-removal mutants fail before emission and at publication;
+integrity-only metadata never becomes an emitted module. The isolated ordinary
+CLI workflow still builds both original versions with this guard. Deterministic
+captured helper-cycle lowering is also integrated after two source reviews and
+90 producer groups. Fresh shared validation passes the four SCC groups (28.211s)
+and all 21 module-system groups (10.503s), after updating an existing test to use
+the extracted graph API. It preserves original
+callback/expression ownership and the existing codec/database-cycle and lexical
+shadowing refusals. Captured lifted CivilTime support is integrated after two
+reviews; all five fresh shared groups pass (11.668s).
+Explicit additive-epoch closure and live request heartbeats are also integrated
+after two reviews. Their fresh shared native wrapper passes (95.326s), including
+ordinary compiled applications, explicit retirement, drain and heartbeat recovery.
+The broader shared application-access suite passes ten of eleven groups
+(252.486s), but a fresh V2 process fails startup with `database busy, try again`.
+That failure is under investigation; the combined regression gate is not green.
+The shared compiler build and nine optional transport source groups pass. The
+Retype and physical-removal reruns have not run after this integration.
+Public activation, mixed histories,
+adoption, queue execution, staged uniqueness, the transforming showcase and
+lessons, and final comprehensive gates remain open. Manual coherence and
+documentation integrity pass after the current assessment update. Those checks
+verify documentation structure; they do not replace the pending runtime gate.
+
+## Earlier integration evidence
+
+These records preserve the results and limitations at each earlier integration
+point. The current assessment above supersedes their pending-work statements.
+
+An earlier increment preserves record and ADT primary keys through
 exact `Same` evidence and an unchanged `old.id` projection. Two independent
 reviews, the shared full compiler build, tagged row race checks (1.800s), and
 all eighteen shared nominal-key groups pass (70.148s). The groups include actual
@@ -48,6 +113,26 @@ race checks (1.724s), tagged lint, production-only nil analysis and manual
 coherence pass. The integrated union is being rebuilt. These results remain on
 the internal compiler route; ordinary command activation and the full
 transforming showcase are not complete.
+
+General nominal Copy/Rename and compiler-owned reverse transport are integrated
+after final source reviews. Exact source-site certificates preserve unchanged
+record/ADT values, including codec-omitted fields and nested nil/empty lists,
+when another field requires Legacy or WriteBack. The producer's 137 focused
+groups pass; its earlier native runtime dependency gap is explicitly recorded,
+and fresh complete shared native acceptance remains required. Derived primitive
+adapters are also integrated after compiler/runtime reviews. All six isolated
+Derived groups pass (60.508s), including actual unchanged PostgreSQL applications
+and Derived plus Legacy/LegacyWith using the old JSONB codec. Five overlapping
+nominal inverse groups pass on the composed emitter. The shared compiler build
+passes; the next combined native run must cover this complete union. Nominal
+Derived values still require a distinct checked mapping certificate.
+
+The ordinary CLI path is being exercised in a separate checkout. It already
+builds the original V1 before any source freeze, then generates and builds V2
+with byte-identical application source. This isolated compiler change is not
+activated in the shared tree. Public activation still requires mixed additive
+histories, checked additive tails, explicit epoch closure, and deliberate
+control-format-3 adoption; a passing first-transform trace cannot replace them.
 
 Reassessment, 2026-09-12: the feature is not near completion. Additive PostgreSQL
 evolution and supported compiler upgrades are demonstrated with retained

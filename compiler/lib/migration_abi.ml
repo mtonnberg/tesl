@@ -36,6 +36,10 @@ let valid_stored_value_compatibility value =
   String.starts_with ~prefix value && String.length value = String.length prefix + 64 &&
   String.for_all (function '0'..'9' | 'a'..'f' -> true | _ -> false)
     (String.sub value (String.length prefix) 64)
+let lifted_source t module_name =
+ Option.bind (V.lifted_stdlib_basename module_name) (fun name ->
+  Option.map (fun resource -> resource.path,resource.source)
+   (List.find_opt (fun resource -> resource.name=name) t.resources))
 let source_inputs t = List.map (fun r -> r.path,r.digest) t.resources |> List.sort compare
 let frame values = String.concat "" (List.map (fun value -> string_of_int (String.length value) ^ ":" ^ value) values)
 let component label values = frame (label :: List.map (fun (name,value) -> frame [name;value]) (List.sort compare values))

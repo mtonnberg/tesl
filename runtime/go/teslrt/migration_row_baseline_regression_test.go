@@ -122,7 +122,7 @@ func TestPgRowBaselinePoolReconnectPinsPhysicalAndControlIdentity(t *testing.T) 
 				if opened == nil {
 					t.Fatal("pool missing")
 				}
-				defer opened.pool.Close()
+				defer opened.closeRowPool()
 				if got := PgCount(opened, `select count(*) from notes_app.notes`, nil); got.String() != "0" {
 					t.Fatal(got)
 				}
@@ -170,7 +170,7 @@ func TestPgRowBaselineEmbeddedAndEmptyInventory(t *testing.T) {
 			}
 			WithDatabase(db, func() {
 				opened := db.bound()
-				defer opened.pool.Close()
+				defer opened.closeRowPool()
 				var current int
 				if err := opened.pool.QueryRow(f.ctx, `select current from notes_app.tesl_schema_state`).Scan(&current); err != nil || current != 1 {
 					t.Fatal(current, err)
@@ -507,10 +507,10 @@ func TestPgRowBaselineSharedEnvelopeKeepsDatabaseOwnersSeparate(t *testing.T) {
 	one, two := makeDB(h), makeDB(other)
 	WithDatabase(one, func() {
 		firstPool := one.bound()
-		defer firstPool.pool.Close()
+		defer firstPool.closeRowPool()
 		WithDatabase(two, func() {
 			secondPool := two.bound()
-			defer secondPool.pool.Close()
+			defer secondPool.closeRowPool()
 			if firstPool == secondPool || firstPool.pool == secondPool.pool || firstPool.schema != "notes_app" || secondPool.schema != "other_app" {
 				t.Fatal("one shared source envelope aliased distinct Database owners")
 			}

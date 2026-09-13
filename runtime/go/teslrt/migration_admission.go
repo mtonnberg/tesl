@@ -33,6 +33,9 @@ func pgAdmitMigrationTransaction(ctx context.Context, tx pgx.Tx, db *PostgresDB,
 	if protocol == nil {
 		return nil
 	}
+	if err := db.rowHeartbeat.check(); err != nil {
+		return &pgMigrationAdmissionError{cause: err}
+	}
 	if write {
 		// This statement must finish before admission gets a fresh read-committed
 		// snapshot. The shared key lasts until commit/rollback, not just until DML.

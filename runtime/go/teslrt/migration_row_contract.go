@@ -260,10 +260,20 @@ func pgCompiledRowSettledPlan(database *Database, version int) (*pgRowPhysicalPl
 	if err := pgCheckRowOwner(database, compiled); err != nil {
 		return nil, err
 	}
-	if version == 1 {
-		physical := compiledRowPhysicalHistories[compiled]
-		if physical != nil && len(physical.versions) > 0 {
-			return physical.versions[0], nil
+	physical := compiledRowPhysicalHistories[compiled]
+	if physical != nil && version > 0 && version <= len(physical.versions) {
+		// A purely additive prefix has no retained conversion state to contract.
+		// Do not extend this judgment across an earlier transforming window:
+		// that requires its exact registered Contract and durable completion.
+		additivePrefix := true
+		for _, plan := range physical.versions[:version] {
+			if len(plan.windows) != 0 {
+				additivePrefix = false
+				break
+			}
+		}
+		if additivePrefix {
+			return physical.versions[version-1], nil
 		}
 	}
 	contract := compiledRowContracts[compiled][version]

@@ -70,7 +70,7 @@ func pgRowControlFunctions(namespace string) []pgMigrationControlFunction {
 		case "tesl_begin_expansion":
 			guard += ` if v=1 and not exists(select 1 from ` + ns + `tesl_row_versions baseline_version where baseline_version.version=v and baseline_version.catalog_hash=snap and baseline_version.inventory_hash=art and baseline_version.entity_count=ops and baseline_version.stored_value_compatibility=compatibility) then
  raise exception 'tesl: expansion does not match exact row baseline'; end if;
- if v>1 and (ep is distinct from false or not exists(select 1 from ` + ns + `tesl_row_physical where version=v and contract_hash=snap and contract_hash=art and compiler_abi=abi and stored_value_compatibility=compatibility and operation_count=ops)) then
+ if v>1 and (not exists(select 1 from ` + ns + `tesl_row_physical where version=v and contract_hash=snap and contract_hash=art and compiler_abi=abi and stored_value_compatibility=compatibility and operation_count=ops and epoch_preserving=ep)) then
  raise exception 'tesl: expansion does not match exact bounded row manifest'; end if;
 `
 		case "tesl_record_expansion_object":
@@ -93,8 +93,13 @@ func pgRowControlFunctions(namespace string) []pgMigrationControlFunction {
 `
 		}
 		body := fn.body
+		if fn.name == "tesl_heartbeat" {
+			body = strings.Replace(body, " admitted_floor :=", ` if v is null or v<1 or v>2147483646 then raise exception 'tesl: invalid row heartbeat version'; end if;
+ perform pg_catalog.pg_advisory_xact_lock_shared(-fence_ns,v) from `+ns+`tesl_schema_meta where id=1;
+ admitted_floor :=`, 1)
+		}
 		if fn.name == "tesl_begin_expansion" {
-			body = strings.Replace(body, "ep is distinct from true", "((v=1 and ep is distinct from true) or (v>1 and ep is distinct from false))", 1)
+			body = strings.Replace(body, "ep is distinct from true", "(v=1 and ep is distinct from true)", 1)
 		}
 		if fn.name == "tesl_record_expanded" {
 			body = strings.Replace(body, "1,'tesl-1',true,pg_catalog.current_setting", "1,'tesl-1',r.epoch_preserving,pg_catalog.current_setting", 1)
@@ -110,5 +115,5 @@ end`
 		}
 		functions[i].body = strings.Replace(body, "\nbegin\n", "\nbegin\n"+guard, 1)
 	}
-	return append(append(append(functions, pgRowForwardFunctions(namespace)...), pgRowBackfillFunctions(namespace)...), pgRowContractFunctions(namespace)...)
+	return append(append(append(append(functions, pgRowForwardFunctions(namespace)...), pgRowBackfillFunctions(namespace)...), pgRowContractFunctions(namespace)...), pgRowEpochFunctions(namespace)...)
 }

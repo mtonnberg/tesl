@@ -45,7 +45,11 @@ func CalibrationInsert[From, To any](ctx context.Context, db *Database, storage 
 			return
 		}
 		_, err = pgWithRowTransaction(ctx, db, p, e, true, func(a *pgRowTransactionAdmission) (struct{}, error) {
-			return struct{}{}, pgInsertPhysicalRow(ctx, a, storage, value)
+			row, err := pgMaterializePhysicalWrite(a, storage, value)
+			if err != nil {
+				return struct{}{}, err
+			}
+			return struct{}{}, pgInsertMaterializedPhysicalRow(ctx, a, row)
 		})
 	})
 	return

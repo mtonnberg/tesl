@@ -33,8 +33,28 @@ func pgVerifyRowWorkState(ctx context.Context, tx pgx.Tx, b *pgRowBaseline, stat
 	}
 	for m := forward; m != nil; m = m.previous {
 		manifests[m.plan.version] = m
+		// A newly created table has generation-one finality from its exact
+		// expansion publication. Seed the complete inventory even when every
+		// persisted birth record is absent.
+		for _, row := range state.Versions {
+			if row.Version != m.plan.version || row.Step != "expanded" {
+				continue
+			}
+			for ordinal, operation := range m.operations {
+				if operation.table == nil {
+					continue
+				}
+				entity := operation.entity.identity
+				expected[key(entity, 1)] = final{m.plan.version, 1, entity, m.plan.hash, pgMigrationObjectHash(m.plan.hash, ordinal), row.SourceABI}
+			}
+		}
 		for _, row := range state.Versions {
 			if row.Version != m.plan.version || row.Step != "retired" {
+				continue
+			}
+			if len(m.plan.windows) == 0 && m.epoch != nil && row.ArtifactHash == m.epoch.hash && row.SourceABI == m.epoch.executorABI {
+				// Closing an additive epoch changes admission only. Its exact
+				// receipt adds no entity generation or backfill obligation.
 				continue
 			}
 			if m.contraction == nil {

@@ -90,9 +90,12 @@ func openRowPostgres(database *Database) (*PostgresDB, func()) {
 func initializeRowPostgres(key string, initialization *postgresInitialization, poolConfig *pgxpool.Config, config PostgresConfig, b *pgRowBaseline, roles PgMigrationControlRoles) {
 	defer close(initialization.done)
 	var pool *pgxpool.Pool
+	var db *PostgresDB
 	defer func() {
 		if failure := recover(); failure != nil {
-			if pool != nil {
+			if db != nil {
+				db.closeRowPool()
+			} else if pool != nil {
 				pool.Close()
 			}
 			initialization.failure = failure
@@ -114,9 +117,11 @@ func initializeRowPostgres(key string, initialization *postgresInitialization, p
 		panic(pgFailure("database: cannot connect row baseline", err))
 	}
 	defer func() {
-		cleanup, cancel := context.WithTimeout(context.Background(), pgLeaseTimeout())
-		defer cancel()
-		_ = conn.Close(cleanup)
+		if conn != nil {
+			cleanup, cancel := context.WithTimeout(context.Background(), pgLeaseTimeout())
+			defer cancel()
+			_ = conn.Close(cleanup)
+		}
 	}()
 	var state PgMigrationControlState
 	if roles.Request == "" {
@@ -131,7 +136,7 @@ func initializeRowPostgres(key string, initialization *postgresInitialization, p
 	if roles.Request != "" {
 		principal = roles.Request
 	}
-	db := &PostgresDB{schema: b.history.Namespace, migration: &pgMigrationAdmission{version: b.history.CurrentVersion, fenceNamespace: state.FenceNamespace, databaseUUID: state.DatabaseUUID, worker: principal, roles: roles, controlFormat: pgRowControlFormat, rowBaseline: b}}
+	db = &PostgresDB{schema: b.history.Namespace, migration: &pgMigrationAdmission{version: b.history.CurrentVersion, fenceNamespace: state.FenceNamespace, databaseUUID: state.DatabaseUUID, worker: principal, roles: roles, controlFormat: pgRowControlFormat, rowBaseline: b}}
 	db.migration.rowObservation = &pgRowObservationCache{owner: db.migration}
 	poolConfig.AfterConnect = func(ctx context.Context, conn *pgx.Conn) error { return pgVerifyMigrationConnection(ctx, conn, db) }
 	pool, err = pgxpool.NewWithConfig(ctx, poolConfig)
@@ -142,5 +147,19 @@ func initializeRowPostgres(key string, initialization *postgresInitialization, p
 	if err := pool.Ping(ctx); err != nil {
 		panic(pgFailure("database: row pool admission refused", err))
 	}
+	migrationBoundary("row-startup-before-heartbeat")
+	var verifiedRequest *pgx.Conn
+	if roles.Request != "" {
+		// pgWaitForRowBaseline checked the complete catalog, immutable owner
+		// and exact Request login on this dedicated connection. Transfer its
+		// ownership instead of opening and fully checking a third connection.
+		// Inline's DDL connection is never transferred to a request monitor.
+		verifiedRequest, conn = conn, nil
+	}
+	db.rowHeartbeat, err = pgStartRowHeartbeat(ctx, db, poolConfig.ConnConfig, verifiedRequest)
+	if err != nil {
+		panic(pgFailure("database: row instance registration refused", err))
+	}
+	migrationBoundary("row-startup-after-heartbeat")
 	initialization.db = db
 }
