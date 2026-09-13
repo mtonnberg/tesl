@@ -17,7 +17,7 @@ route is not the same as delivering the public CLI and deployment workflow.
 | Additive migrations | PostgreSQL expansion, retained writers, Worker deployment, explicit epoch closure and heartbeats | Remaining mixed histories and a reliable complete regression gate |
 | Data transformations | Unchanged applications, lazy conversion, dual writes, backfill, repeated revisions, and Contract on the internal route | Public command activation and legacy installation adoption |
 | Removal and JSONB | Actual field removal and record/ADT conversion, including reverse compatibility, SQL NULL and retained writers | The same scenarios in the complete todo app and teaching lessons |
-| Ordinary CLI | Isolated original V1/V2/V3 lifecycle with unchanged application source | Integration, remaining compatibility cases and review |
+| Ordinary CLI | Public `tesl migrate` dispatch now reaches the native publisher when installed and retains compiler-owned read-only previews; isolated original V1/V2/V3 lifecycle with unchanged application source | Native publisher end-to-end adoption/rollback coverage, remaining compatibility cases and review |
 | Queue migration | Checked complete source inventories, strict source binding and integrated combined row/queue catalog | Execution and finality |
 | Staged uniqueness | Design and prerequisites | Implementation and application regressions |
 

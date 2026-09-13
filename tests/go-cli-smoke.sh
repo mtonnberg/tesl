@@ -65,6 +65,33 @@ printf '%s\n' '[project]' 'name = "go-cli-smoke"' 'entrypoint = "todo-api.tesl"'
   exit 1
 }
 
+# The legacy shell wrapper remains a public package. Migration previews are
+# compiler-owned and must work even when that package is used without the
+# native source-edit publisher.
+mkdir -p "$TMP/migration-project/schema/notes"
+printf '%s\n' '[project]' 'entrypoint = "app.tesl"' > "$TMP/migration-project/tesl.toml"
+printf '%s\n' \
+  'module App exposing []' \
+  'import Tesl.Database exposing [Database, Memory]' \
+  'import NotesSchema.VCurrent' \
+  'database Main = Database { schema: NotesSchema.VCurrent, migrations: NotesSchema.Migrate, backend: Memory }' \
+  > "$TMP/migration-project/app.tesl"
+printf '%s\n' \
+  'module NotesSchema.VCurrent exposing [Note]' \
+  'import Tesl.Prelude exposing [String]' \
+  'entity Note table "notes" primaryKey id { id: String }' \
+  > "$TMP/migration-project/schema/notes/v-current.tesl"
+migration_preview="$(cd "$TMP/migration-project" && run_cli migrate generate app.tesl --manifest-json)" || {
+  printf '%s\n' "$migration_preview" >&2
+  echo "go-cli-smoke: migration preview dispatch failed" >&2
+  exit 1
+}
+printf '%s\n' "$migration_preview" | grep -q '"kind":"migration-source-preview"' || {
+  printf '%s\n' "$migration_preview" >&2
+  echo "go-cli-smoke: migration preview returned the wrong protocol" >&2
+  exit 1
+}
+
 context="$TMP/context"
   (cd "$TMP/project" && run_cli build --container --no-docker --out "$context") || {
   echo "go-cli-smoke: Go Docker context staging failed" >&2

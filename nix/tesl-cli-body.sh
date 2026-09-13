@@ -1473,6 +1473,50 @@ case "$CMD" in
     # client preserves the public flags and endpoint discovery.
     exec "${TESL_DEBUG_ATTACH_BIN:-tesl-debug-attach}" "$@"
     ;;
+  migrate)
+    # Migration source publication needs the native Go CLI: it owns the
+    # guarded source-edit transaction and recovery journal.  Keep the legacy
+    # shell entry point useful for compiler-owned read-only previews when a
+    # native CLI is unavailable (for example, a minimal compiler-only install).
+    if [ -n "${TESL_NATIVE_CLI:-}" ]; then
+      [ -x "$TESL_NATIVE_CLI" ] || {
+        echo "tesl migrate: native CLI is not executable: $TESL_NATIVE_CLI" >&2
+        exit 1
+      }
+      exec "$TESL_NATIVE_CLI" migrate "$@"
+    fi
+    [ "$#" -gt 0 ] || {
+      echo "Usage: tesl migrate generate|plan|contract ... (source writes require the native CLI)" >&2
+      exit 1
+    }
+    case "$1" in
+      generate|plan|contract)
+        _MIGRATE_VERB="$1"
+        shift
+        case "$_MIGRATE_VERB" in
+          generate|contract)
+            case " $* " in
+              *" --manifest-json "*) ;;
+              *)
+                echo "tesl migrate $_MIGRATE_VERB: source writes require the native CLI; use --manifest-json for a preview" >&2
+                exit 2
+                ;;
+            esac
+            ;;
+        esac
+        _tesl_require_compiler
+        exec "$TESL_OCAML_COMPILER" migrate "$_MIGRATE_VERB" "$@"
+        ;;
+      recover-source)
+        echo "tesl migrate recover-source: source recovery requires the native CLI" >&2
+        exit 2
+        ;;
+      *)
+        echo "Usage: tesl migrate generate|plan|contract ... (source writes require the native CLI)" >&2
+        exit 2
+        ;;
+    esac
+    ;;
   compile)
     if [ "${1:-}" = "--backend" ]; then
       [ "${2:-}" = "go" ] || { echo "tesl emit go: only the Go backend is supported" >&2; exit 2; }

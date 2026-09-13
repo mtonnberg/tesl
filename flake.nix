@@ -174,7 +174,9 @@
         # Previous CLI retained as the black-box parity reference.
         cliBody = builtins.readFile ./nix/tesl-cli-body.sh;
 
-        tesl-go-cli = pkgs.writeShellScriptBin "tesl" (goRuntimePreamble + cliBody);
+        tesl-go-cli = pkgs.writeShellScriptBin "tesl" (goRuntimePreamble + ''
+          export TESL_NATIVE_CLI="${tesl-go-tools}/bin/tesl"
+        '' + cliBody);
 
         # Nix and native distributions share the Go command implementation.
         # The shell here only supplies the immutable Nix component paths.
