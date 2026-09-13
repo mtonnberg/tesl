@@ -129,14 +129,140 @@ func pgQueueIdentity(value string) bool {
 	return true
 }
 
+// A v3 artifact only records storage identities through executable origins.
+// A v4 source artifact additionally records every exact schema snapshot, even
+// for origins whose execution remains refused. Neither form establishes an
+// installed baseline; sourceSealInventory remains separate companion provenance.
+type pgQueueSourceDatabase struct {
+	database, family, namespace string
+	current                     int
+	versions                    []pgQueueSourceSnapshot
+}
+type pgQueueSourceSnapshot struct {
+	storage, schema string
+	definitions     map[string]pgRowCanonical // nil for the legacy v3 projection
+}
+
+func pgQueueSourceProjection(history PgCompiledMigrationHistory) ([]pgQueueSourceDatabase, error) {
+	if err := pgMigrationCheckJSON(history.HistoryJSON); err != nil {
+		return nil, err
+	}
+	r := &pgMigrationWireReader{}
+	root := r.object(json.RawMessage(history.HistoryJSON), "version", "kind", "compilerAbi", "storedValueCompatibility", "databases")
+	format := pgMigrationRead[int](r, root["version"])
+	if r.err != nil {
+		return nil, r.err
+	}
+	if format == 4 {
+		inventories, err := pgReadRowBase(history)
+		if err != nil {
+			return nil, err
+		}
+		result := make([]pgQueueSourceDatabase, 0, len(inventories))
+		for _, inventory := range inventories {
+			d := pgQueueSourceDatabase{database: inventory.Database, family: inventory.Family, namespace: inventory.Namespace, current: inventory.CurrentVersion}
+			for _, version := range inventory.Versions {
+				schema := pgRowDocument(r, version.SchemaContract, version.SchemaSnapshotHash, "snapshot")
+				_, definitions := pgRowClosure(r, schema, history.SourceCompilerABI, history.StoredValueCompatibility)
+				d.versions = append(d.versions, pgQueueSourceSnapshot{storage: version.StorageSnapshotHash, schema: version.SchemaSnapshotHash, definitions: definitions})
+			}
+			result = append(result, d)
+		}
+		return result, r.err
+	}
+	// Preserve the existing closed v3 grammar, all-origin replay and selected V1
+	// execution refusal. Do not weaken ExpansionPlan to accept source-only v4.
+	if _, err := history.ExpansionPlan(1); err != nil {
+		return nil, err
+	}
+	result := []pgQueueSourceDatabase{}
+	for _, raw := range pgMigrationRead[[]json.RawMessage](r, root["databases"]) {
+		object := r.object(raw, "database", "family", "namespace", "currentVersion", "origins")
+		d := pgQueueSourceDatabase{database: pgMigrationRead[string](r, object["database"]), family: pgMigrationRead[string](r, object["family"]), namespace: pgMigrationRead[string](r, object["namespace"]), current: pgMigrationRead[int](r, object["currentVersion"])}
+		d.versions = make([]pgQueueSourceSnapshot, d.current)
+		for i, rawOrigin := range pgMigrationRead[[]json.RawMessage](r, object["origins"]) {
+			_, steps, _ := r.origin(rawOrigin, i+1, d.current)
+			for _, step := range steps {
+				d.versions[step.Version-1].storage = step.SnapshotHash
+			}
+		}
+		result = append(result, d)
+	}
+	return result, r.err
+}
+
+func pgQueueCheckSourceVersion(r *pgMigrationWireReader, history PgCompiledMigrationHistory, family string, source pgQueueSourceSnapshot, version PgQueueSourceVersion) {
+	if source.storage != "" && source.storage != version.StorageSnapshotHash {
+		r.fail("queue inventory storage snapshot differs across linked origins")
+	}
+	if source.definitions == nil {
+		return
+	}
+	if source.schema != version.SchemaSnapshotHash {
+		r.fail("queue inventory schema snapshot differs from linked source")
+	}
+	expected := map[string]pgRowCanonical{}
+	for key, definition := range source.definitions {
+		if !definition.atom && len(definition.children) > 0 && definition.children[0].isAtom("queue-schema") {
+			expected[key] = definition
+		}
+	}
+	if len(expected) != len(version.Contracts) {
+		r.fail("queue inventory omits or adds a source queue-schema")
+	}
+	for _, contract := range version.Contracts {
+		reference := pgRowTypeReference(family, contract.Queue)
+		reference.children[1] = pgRowAtom("value")
+		definition, exists := expected[pgRowEncode(reference)]
+		if !exists || !definition.list(3) || !pgRowCanonicalEqual(definition.children[1], reference) || definition.children[2].atom {
+			r.fail("queue inventory owner differs from exact source queue-schema")
+			continue
+		}
+		members := map[string]bool{}
+		for _, member := range definition.children[2].children {
+			key := pgRowEncode(member)
+			if members[key] {
+				r.fail("source queue-schema has duplicate payloads")
+			}
+			members[key] = true
+		}
+		if len(members) != len(contract.Payloads) {
+			r.fail("queue payload inventory differs from source queue-schema")
+		}
+		for _, payload := range contract.Payloads {
+			reference := pgRowTypeReference(family, payload.Job)
+			if !members[pgRowEncode(reference)] {
+				r.fail("queue payload belongs to another source queue-schema")
+			}
+			document := pgRowDocument(r, payload.Contract, payload.ContractHash, "contract")
+			if !document.list(2) || !document.children[0].isAtom("queue-payload-v1") {
+				r.fail("queue payload canonical source domain differs")
+				continue
+			}
+			roots, definitions := pgRowClosure(r, document.children[1], history.SourceCompilerABI, history.StoredValueCompatibility)
+			if !roots.list(1) || !pgRowCanonicalEqual(roots.children[0], reference) {
+				r.fail("queue payload type root differs from exact source identity")
+			}
+			// The compiler owns reachability/proofs. This verifies its complete queue
+			// membership and binds every supplied closure definition to that snapshot.
+			for key, definition := range definitions {
+				original, exists := source.definitions[key]
+				if !exists || !pgRowCanonicalEqual(original, definition) {
+					r.fail("queue payload closure differs from exact source snapshot")
+				}
+			}
+		}
+	}
+}
+
 func pgReadQueueHistory(history PgCompiledMigrationHistory, payload string, initial int) (PgQueueSourceInventory, error) {
 	var empty PgQueueSourceInventory
 	if initial < 1 || initial > history.CurrentVersion {
 		return empty, fmt.Errorf("queue installation origin is outside linked history")
 	}
-	// ExpansionPlan validates every database and origin, including refused ones,
-	// and reconstructs source snapshots independently from the queue companion.
-	if _, err := history.ExpansionPlan(1); err != nil {
+	// Select a fully validated source projection, not execution permission.
+	base, err := pgQueueSourceProjection(history)
+	if err != nil {
 		return empty, err
 	}
 	if err := pgMigrationCheckJSON(payload); err != nil {
@@ -150,10 +276,8 @@ func pgReadQueueHistory(history PgCompiledMigrationHistory, payload string, init
 	if pgMigrationRead[string](r, root["compilerAbi"]) != history.SourceCompilerABI || pgMigrationRead[string](r, root["storedValueCompatibility"]) != history.StoredValueCompatibility {
 		r.fail("queue companion compiler provenance disagrees with linked history")
 	}
-	linkedRoot := r.object(json.RawMessage(history.HistoryJSON), "version", "kind", "compilerAbi", "storedValueCompatibility", "databases")
-	linked := pgMigrationRead[[]json.RawMessage](r, linkedRoot["databases"])
 	entries := pgMigrationRead[[]json.RawMessage](r, root["databases"])
-	if len(entries) != len(linked) {
+	if len(entries) != len(base) {
 		r.fail("queue companion omits or adds a linked database")
 	}
 	var selected PgQueueSourceInventory
@@ -165,8 +289,12 @@ func pgReadQueueHistory(history PgCompiledMigrationHistory, payload string, init
 		d := r.object(raw, "database", "family", "namespace", "currentVersion", "versions", "origins")
 		identity, family, namespace := pgMigrationRead[string](r, d["database"]), pgMigrationRead[string](r, d["family"]), pgMigrationRead[string](r, d["namespace"])
 		current := pgMigrationRead[int](r, d["currentVersion"])
-		base := r.object(linked[index], "database", "family", "namespace", "currentVersion", "origins")
-		if identity <= lastIdentity || identity != pgMigrationRead[string](r, base["database"]) || family != pgMigrationRead[string](r, base["family"]) || namespace != pgMigrationRead[string](r, base["namespace"]) || current != pgMigrationRead[int](r, base["currentVersion"]) {
+		if index >= len(base) {
+			r.fail("queue companion adds a linked database")
+			break
+		}
+		owner := base[index]
+		if identity <= lastIdentity || identity != owner.database || family != owner.family || namespace != owner.namespace || current != owner.current {
 			r.fail("queue companion connection identity, order or version disagrees with linked history")
 		}
 		lastIdentity = identity
@@ -217,6 +345,9 @@ func pgReadQueueHistory(history PgCompiledMigrationHistory, payload string, init
 			if v.Version != i+1 {
 				r.fail("queue inventory versions must be consecutive")
 			}
+			if i < len(owner.versions) {
+				pgQueueCheckSourceVersion(r, history, owner.family, owner.versions[i], v)
+			}
 		}
 		// Until jobs transformations exist, every pre-existing identity keeps
 		// its full contract through each revision. This checks old origins too;
@@ -245,7 +376,6 @@ func pgReadQueueHistory(history PgCompiledMigrationHistory, payload string, init
 			previous = currentContracts
 		}
 		origins := pgMigrationRead[[]json.RawMessage](r, d["origins"])
-		baseOrigins := pgMigrationRead[[]json.RawMessage](r, base["origins"])
 		if len(origins) != current {
 			r.fail("queue companion must describe every installation origin")
 		}
@@ -264,15 +394,7 @@ func pgReadQueueHistory(history PgCompiledMigrationHistory, payload string, init
 					r.fail("queue origin references another version inventory")
 				}
 			}
-			_, steps, _ := r.origin(baseOrigins[i], i+1, current)
-			for _, step := range steps {
-				if r.err != nil {
-					break
-				}
-				if versions[step.Version-1].StorageSnapshotHash != step.SnapshotHash {
-					r.fail("queue inventory storage snapshot differs across linked origins")
-				}
-			}
+
 		}
 		if identity == history.Database {
 			selected = PgQueueSourceInventory{Database: identity, Family: family, Namespace: namespace, InitialVersion: initial, CurrentVersion: current}

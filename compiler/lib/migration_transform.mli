@@ -9,6 +9,11 @@ type t
 val check : project_root:string -> source:string -> Ast.module_form -> Migration_transform_rules.t ->
   functions:requested list -> fixtures:Ast.expr list -> (t,Migration_sparse.error list) result
 val rows : t -> row list
+(** Exact checked return shape; Nothing is a failed generated fixture test. *)
+val fixture_optional : t -> row -> function_binding -> bool
+(** Revalidate complete fixture source contexts before and after one emission.
+    This guard installs no additional proof context and never replays the callback. *)
+val with_fixture_sources : t list -> (unit -> 'a) -> ('a,Migration_sparse.error list) result
 val rules : t -> Migration_transform_rules.t
 val source_inputs : t -> (string * string) list
 

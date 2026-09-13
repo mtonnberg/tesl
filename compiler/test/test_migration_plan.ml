@@ -151,6 +151,8 @@ let old_unique_index () = index_case (append_field schema "active: Bool")
  (replace "active: Bool }" "active: Bool\n unique index [active]\n}") true
 let new_nullable_unique () = index_case schema
  (replace "id: String }" "id: String, key: Maybe String\n unique index [key]\n}") false
+let new_nullable_plain () = index_case schema
+ (replace "id: String }" "id: String, key: Maybe String\n index [key]\n}") false
 let mixed_unique () = index_case schema
  (replace "id: String }" "id: String, key: Maybe String\n unique index [key, id]\n}") true
 let previously_added_column () = with_project (fun root path ->
@@ -383,6 +385,7 @@ let () = run "Migration expansion plan" ["checked complete history",List.map (fu
   "new table owns initial indexes",new_table;"drop retains storage and blocks reuse",retained_drop;
   "unbounded nonunique key narrows",old_text_index;"bounded nonunique key preserves",old_fixed_index;
   "old unique key narrows",old_unique_index;"new nullable unique preserves",new_nullable_unique;
+  "new nullable plain preserves with runtime readiness",new_nullable_plain;
   "mixed unique key narrows",mixed_unique;"every earlier admitted schema is considered",previously_added_column;
   "retained indexes are reused",retained_index;"implicit primary index collision",catalog_collision;
   "SQL carrier cannot hide semantics",semantic_change;"actual storage codec emission",codec_emission;

@@ -85,9 +85,11 @@ request login in another. A new request waits
 for its schema readiness; only then route traffic to it and drain an old one.
 Keep a healthy old process available throughout the rollout.
 
-A plain concurrent index may still be building when requests become ready.
-The separate worker continues and records its result. Requests never build the
-index. Worker interruption must preserve its job and verify the old PostgreSQL
+A plain index on a bounded key, such as this app's `completed: Bool`, may still be
+building when requests become ready. New versions wait for indexes on newly
+added unbounded keys and for required unique indexes; old versions keep serving.
+The separate worker builds the index and records completion. Worker interruption
+must preserve its job and verify the old PostgreSQL
 executor has stopped before a replacement takes ownership.
 
 [Deployment commands and role configuration](deploy/README.md) show the concrete

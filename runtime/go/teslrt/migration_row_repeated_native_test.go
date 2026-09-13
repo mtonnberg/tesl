@@ -58,7 +58,7 @@ func TestPgRowRepeatedActualApp(t *testing.T) {
 	stop()
 	v2 := pgStartRowAccessApp(t, f, root, "v2")
 	refused := pgForwardNativeRun(t, f, root, "v3", "worker", false)
-	if !strings.Contains(string(refused), "tesl: row manifest predecessor identity differs") {
+	if !strings.Contains(string(refused), "schema V3 requires completed Contract V2 before expansion") {
 		t.Fatalf("V3 refused for an unrelated reason: %s", refused)
 	}
 	var columns, floor int

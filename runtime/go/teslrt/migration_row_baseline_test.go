@@ -33,6 +33,7 @@ func pgRowBaselineFixtureConfigured(t *testing.T, f *pgControlTestFixture, chang
 	}
 	h.HistoryJSON = rowTestJSON(t, base)
 	db := rowTestRegister(t, h, companion)
+	rowTestRegisterQueueAbsenceIfEmpty(t, h)
 	config := f.worker.Config()
 	db.Config = PostgresConfig{DBName: config.Database, User: config.User, Host: config.Host, Port: int(config.Port), Schema: f.namespace, ControlOwner: f.roles.Owner, MigrationTopology: "Embedded", DDLConnection: config.ConnString()}
 	if f.roles.Request != "" {

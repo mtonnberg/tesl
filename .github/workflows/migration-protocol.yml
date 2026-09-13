@@ -77,6 +77,8 @@ jobs:
             fi
             export TESL_REPO_ROOT="$PWD"
             (cd compiler && dune build)
+            (cd compiler && dune exec --no-build ./test/test_migration_queue.exe)
+            (cd compiler && dune exec --no-build ./test/test_migration_fixtures.exe)
             (cd compiler && dune exec --no-build ./test/test_queue_candidate_app.exe)
             (cd compiler && dune exec --no-build ./test/test_migration_row_companion.exe)
             (cd compiler && dune exec --no-build ./test/test_migration_contract.exe)
@@ -84,8 +86,10 @@ jobs:
             (cd compiler && dune exec --no-build ./test/test_migration_retype.exe)
             (cd compiler && dune exec --no-build ./test/test_migration_row_forward.exe)
             (cd compiler && dune exec --no-build ./test/test_migration_row_access.exe)
+            (cd compiler && dune exec --no-build ./test/test_migration_delete.exe)
             (cd compiler && dune exec --no-build ./test/test_migration_row_additive.exe)
             (cd compiler && dune exec --no-build ./test/test_migration_row_tables.exe)
+            (cd compiler && dune exec --no-build ./test/test_migration_row_indexes.exe)
             (cd compiler && dune exec --no-build ./test/test_migration_additive_tail.exe)
             (cd compiler && dune exec --no-build ./test/test_migration_row_derived.exe)
             (cd compiler && dune exec --no-build ./test/test_migration_nominal_derived.exe)
@@ -97,7 +101,7 @@ jobs:
             (cd compiler && dune exec --no-build ./test/test_migration_row_contract_abi.exe)
             (cd compiler && dune exec --no-build ./test/test_migration_row_retype_physical.exe)
             cd runtime/go
-            go test -race -count=1 -timeout=300s -tags=tesl_migration_test ./teslrt -run "^(TestPgRowBaseline|TestRowBaseline|TestRowPhysical|TestPgRowForwardInvalidation)"
+            go test -race -count=1 -timeout=300s -tags=tesl_migration_test ./teslrt -run "^(TestPgRowBaseline|TestPgRowIndex|TestRowBaseline|TestRowPhysical|TestPgRowForwardInvalidation)"
             go test -race -count=1 -timeout=900s -v ./internal/migrationtest
             go test -race -count=1 -timeout=300s -tags=tesl_migration_test ./teslrt -run "^TestPgMigration(Control|Expansion|Admission|Boot|Status|Install|StoredValueCompatibility|Compatibility|Worker)"
             go test -race -count=1 -timeout=300s -tags=tesl_migration_test ./teslrt -run "^(TestPgMigration(Index|FutureIndex|Embedded)|TestServe(Shutdown|ListenFailure))"

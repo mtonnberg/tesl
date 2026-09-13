@@ -9690,12 +9690,17 @@ and emit_sql_form ?(indent="") signatures env loc form =
   | SqlDelete (seed, clauses) ->
     let info = entity_of_query loc seed.entity in
     sql_check_where_field loc seed.where_field clauses;
-    if Option.is_some info.ent_row_access then unsupported loc "migration-aware entity operation requires a checked typed access adapter; use select, insert or update in this window";
     let predicate = emit_sql_predicate ~indent signatures env loc info seed.binder clauses in
      let memory = if seed.with_result then "TableDeleteCount" else "TableDelete" in
      let server = if seed.with_result then "DbDeleteCount" else "DbDelete" in
-    (match info.ent_database with
+     (match info.ent_database with
      | None -> Printf.sprintf "teslrt.%s(%s, %s)" memory (sql_table_ref info) predicate
+     | Some database when Option.is_some info.ent_row_access ->
+       Printf.sprintf "teslrt.%s(%s, %s, %s, %s, %s)"
+         (if seed.with_result then "DbRowDeleteCount" else "DbRowDelete")
+         (sql_access_ref info) (qualified database.db_owner database.db_go_var)
+         (sql_table_ref info) predicate
+         (sql_row_query ~indent signatures env loc info seed.binder clauses None None None)
      | Some database ->
        let builder = { sql_args = [] } in
        let statement =
@@ -10449,7 +10454,7 @@ let runtime_file_gates : (string * string list) list = [
      the reason the HTTP half does: it pulls a third-party driver and its whole dependency
      chain into a binary that would otherwise require nothing. *)
    "postgres", [ "postgres.go"; "database.go"; "dbquery.go"; "debug_sql.go"; "pgstores.go";
-                 "pgpubsub.go"; "migration_program.go"; "migration_row_history.go"; "migration_row_program.go"; "migration_row_storage.go"; "migration_row_current_history.go"; "migration_row_current.go"; "migration_row_current_data.go";  "migration_row_writeback.go"; "migration_row_physical.go"; "migration_row_contract.go"; "migration_row_backfill.go"; "migration_row_backfill_worker.go"; "migration_row_contract_execute.go"; "migration_row_contract_spec.go"; "migration_row_lifecycle_expected.go"; "migration_row_lifecycle_read.go"; "migration_row_lifecycle_spec.go"; "migration_row_settled.go"; "migration_row_work_read.go"; "migration_row_worker.go"; "migration_row_worker_transaction.go"; "migration_row_not_null.go"; "migration_row_data.go"; "migration_row_access.go"; "migration_row_transaction.go"; "migration_row_forward.go"; "migration_row_forward_spec.go"; "migration_row_forward_catalog.go"; "migration_row_forward_execute.go"; "migration_row_baseline.go"; "migration_row_control.go"; "migration_row_control_spec.go"; "migration_row_control_expected.go"; "migration_row_open.go"; "migration_row_command.go"; "migration_row_epoch.go"; "migration_row_epoch_spec.go"; "migration_row_epoch_execute.go"; "migration_row_heartbeat.go";  "migration_queue_program.go"; "migration_queue_control.go"; "migration_queue_registration.go"; "migration_queue_registration_sql.go"; "migration_queue_control_spec.go"; "migration_queue_operations.go"; "migration_queue_runtime.go"; "migration_queue_control_expected.go"; "migration_control.go"; "migration_expand.go"; "migration_admission.go"; "migration_open.go"; "migration_status.go"; "migration_command.go"; "migration_expand_history.go"; "migration_control_spec.go"; "migration_control_catalog.go"; "migration_plan.go"; "migration_plan_wire.go"; "migration_plan_hash.go"; "migration_catalog.go"; "migration_catalog_trigger.go"; "migration_catalog_compare.go"; "migration_catalog_probe.go"; "migration_catalog_expected.go"; "migration_control_expected.go"; "migration_control_upgrade.go"; "migration_index_control.go"; "migration_index_catalog.go"; "migration_index_history.go"; "migration_index_worker.go"; "migration_embedded.go"; "migration_worker.go"; "migration_facilities.go"; "migration_literal.go"; "migration_boundary.go"; "migration_boundary_testbuild.go" ];
+                 "pgpubsub.go"; "migration_program.go"; "migration_row_history.go"; "migration_row_program.go"; "migration_row_storage.go"; "migration_row_current_history.go"; "migration_row_queue_control.go"; "migration_row_queue_inventory.go"; "migration_row_queue_spec.go"; "migration_row_current.go"; "migration_row_current_data.go";  "migration_row_writeback.go"; "migration_row_physical.go"; "migration_row_contract.go"; "migration_row_backfill.go"; "migration_row_backfill_worker.go"; "migration_row_contract_execute.go"; "migration_row_contract_spec.go"; "migration_row_lifecycle_expected.go"; "migration_row_lifecycle_read.go"; "migration_row_lifecycle_spec.go"; "migration_row_settled.go"; "migration_row_work_read.go"; "migration_row_worker.go"; "migration_row_worker_transaction.go"; "migration_row_not_null.go"; "migration_row_data.go"; "migration_row_access.go"; "migration_row_transaction.go"; "migration_row_index_plan.go"; "migration_row_index_history.go"; "migration_row_index_worker.go"; "migration_row_forward.go"; "migration_row_forward_spec.go"; "migration_row_forward_catalog.go"; "migration_row_forward_execute.go"; "migration_row_baseline.go"; "migration_row_adoption_inspect.go"; "migration_row_control.go"; "migration_row_control_spec.go"; "migration_row_control_expected.go"; "migration_row_open.go"; "migration_row_command.go"; "migration_row_epoch.go"; "migration_row_epoch_spec.go"; "migration_row_epoch_execute.go"; "migration_row_heartbeat.go";  "migration_queue_program.go"; "migration_queue_control.go"; "migration_queue_registration.go"; "migration_queue_registration_sql.go"; "migration_queue_control_spec.go"; "migration_queue_operations.go"; "migration_queue_runtime.go"; "migration_queue_control_expected.go"; "migration_control.go"; "migration_expand.go"; "migration_admission.go"; "migration_open.go"; "migration_status.go"; "migration_command.go"; "migration_expand_history.go"; "migration_control_spec.go"; "migration_control_catalog.go"; "migration_plan.go"; "migration_plan_wire.go"; "migration_plan_hash.go"; "migration_catalog.go"; "migration_catalog_trigger.go"; "migration_catalog_compare.go"; "migration_catalog_probe.go"; "migration_catalog_expected.go"; "migration_control_expected.go"; "migration_control_upgrade.go"; "migration_index_control.go"; "migration_index_catalog.go"; "migration_index_history.go"; "migration_index_worker.go"; "migration_embedded.go"; "migration_worker.go"; "migration_facilities.go"; "migration_literal.go"; "migration_boundary.go"; "migration_boundary_testbuild.go" ];
   (* `agent.go` ships only to a program that talks to a model.  Not a dependency argument —
      everything in it is standard library — but a runtime file a program has no use for is
      still surface a reader has to rule out, and the gate costs nothing. *)
@@ -16769,7 +16774,56 @@ let project_entity_bindings (modules : module_form list) =
     | _ -> ()) m.decls) modules;
   if !errors = [] then Ok !bindings else Error (List.rev !errors)
 
-let compile_project ?(mode=Release) ?(row_storage=false) ?(row_physical=false) ?row_source ?(migration_families=[]) ?(migration_queues=[]) ?(queue_codec_records=[]) ~(entry : module_form) (modules : module_form list) =
+let compile_project ?(mode=Release) ?(row_storage=false) ?(row_physical=false) ?(row_catalog_only=false) ?row_source ?fixture_graph ?(migration_fixtures=[]) ?(migration_families=[]) ?(migration_queues=[]) ?(queue_codec_records=[]) ~(entry : module_form) (modules : module_form list) =
+(* Generated tests consume exact checked fixture bindings. They execute only
+   under the ordinary test runner, never as registration/startup work. *)
+let fixture_artifacts graph exports checked =
+ let module T=Migration_transform in
+ let loc=Location.dummy_loc entry.source_file in
+ let require = function Some x->x | None->unsupported loc "migration fixture lost its exact emitted source binding" in
+ let project_path="tesl.generated/" ^ package_name entry.module_name in
+ let imports=ref [] in
+ let bridges=ref [] and references=Hashtbl.create 16 in
+ let function_ref (binding:T.function_binding) =
+  match Hashtbl.find_opt references binding.identity with Some name->name | None->
+  let emitted,declaration=require(Go_graph_lowering.function_binding graph ~owner:binding.owner binding.declaration) in
+  let exported=require(List.find_opt(fun e->e.ex_module=emitted.module_name)exports) in
+  let signature=require(Hashtbl.find_opt exported.ex_signatures declaration.name) in
+  if signature.sig_needs_scope then unsupported binding.declaration.loc "migration fixture unexpectedly requires runtime capabilities";
+  let name=unique_ident exported.ex_taken "TeslCompiledMigrationFixture" in
+  bridges:={path="internal/" ^ exported.ex_package ^ "/migration_fixture_" ^ name ^ "_generated.go";
+    contents="package " ^ exported.ex_package ^ "\n\nvar " ^ name ^ " = " ^ signature.go_name ^ "\n"}::!bridges;
+  imports:=(exported.ex_package,project_path ^ "/internal/" ^ exported.ex_package)::!imports;
+  let reference=exported.ex_package ^ "." ^ name in
+  Hashtbl.add references binding.identity reference;reference in
+ let bodies=ref [] and index=ref 0 in
+ List.iter(fun transform ->
+  Migration_proof_context.revalidate(T.proof_context transform);
+  List.iter(fun ((original:Ast.module_form),_) ->
+   match List.filter(fun(m:Ast.module_form)->m.source_file=original.source_file)
+     (Go_graph_lowering.original_modules graph) with
+   | [actual] when actual=original -> ()
+   | _ -> unsupported (Location.dummy_loc original.source_file) "migration fixture belongs to another complete emission graph")
+    (T.captured_sources transform);
+  List.iter(fun(row:T.row)->List.iter(fun fixture ->
+   let optional=T.fixture_optional transform row fixture in
+   let fixture_ref=function_ref fixture in
+   let callback=Option.map function_ref row.function_binding in
+   if optional || callback<>None then imports:=("teslrt",project_path ^ "/internal/teslrt")::!imports;
+   let description="migration fixture " ^ fixture.identity in
+   let name="TestTeslMigrationFixture" ^ string_of_int !index in incr index;
+   let unwrap=if optional then
+    Printf.sprintf "\tfixture := %s()\n\tif fixture.Tag != teslrt.MaybeSomething { t.Fatalf(\"%%s: fixture returned Nothing or an invalid Maybe tag\", %s) }\n\trow := fixture.SomethingValue\n" fixture_ref (go_quote description)
+    else "\trow := " ^ fixture_ref ^ "()\n" in
+   let invoke=match callback with None->"\t_ = row\n" | Some callback->
+    "\tresult := " ^ callback ^ "(row)\n\tswitch result.Tag {\n\tcase teslrt.MigratedRow, teslrt.MigratedReject:\n\tdefault: t.Fatal(\"migration fixture returned an invalid Migrated tag\")\n\t}\n" in
+   bodies:=(Printf.sprintf "func %s(t *testing.T) {\n\tif wanted := os.Getenv(\"TESL_TEST_NAME\"); wanted != \"\" && wanted != %s && wanted != %s { t.Skip(\"named test filter\") }\n\tif kind := os.Getenv(\"TESL_TEST_KIND\"); kind != \"\" && kind != \"test\" { t.Skip(\"test kind filter\") }\n\tdefer func() { if trapped := recover(); trapped != nil { t.Fatalf(\"%%s trapped: %%v\", %s, trapped) } }()\n%s%s}\n"
+    name (go_quote description) (go_quote name) (go_quote description) unwrap invoke)::!bodies
+  )row.fixtures)(T.rows transform)) checked;
+ if !bodies=[] then [] else
+ let imports=List.sort_uniq compare !imports |> List.map(fun(alias,path)->"\t" ^ alias ^ " " ^ go_quote path ^ "\n") |> String.concat "" in
+ List.rev !bridges @ [{path="internal/teslmigrationfixtures/fixtures_test.go";
+  contents="package teslmigrationfixtures\n\nimport (\n\t\"testing\"\n\t\"os\"\n" ^ imports ^ ")\n\n" ^ String.concat "\n" (List.rev !bodies)}] in
 (* Internal source-only artifact companion. Names are taken from the very module
    environments that emitted these exact captured declarations, never inferred
    from a callback digest or from source spelling alone. *)
@@ -16828,7 +16882,7 @@ let compiled_row_artifacts ~entry ~modules:_ ~exports source =
   | Ok json -> Some json
   | Error errors -> unsupported loc "%s" (String.concat "\n" (List.map (fun (e:Migration_sparse.error) -> e.message) errors)) in
  List.iter (fun (database:P.database) ->
-  if List.exists (fun (version:P.queue_version) -> version.contracts<>[]) database.queue_versions then
+  if not row_catalog_only && List.exists (fun (version:P.queue_version) -> version.contracts<>[]) database.queue_versions then
    unsupported loc "row source artifacts do not yet support retained queue inventories") (P.databases p);
  let bridges=ref [] and owners=ref [] in
  let callbacks=List.filter_map (fun (database:P.database) ->
@@ -17010,6 +17064,7 @@ let compiled_row_artifacts ~entry ~modules:_ ~exports source =
   let imports=List.sort_uniq compare !imports |> List.map (fun (alias,path) -> "\t" ^ alias ^ " " ^ go_quote path ^ "\n") |> String.concat "" in
   if declarations=[] then None else Some {path="internal/" ^ exported.ex_package ^ "/migration_rows_" ^ db.db_go_var ^ "_generated.go";
    contents="package " ^ exported.ex_package ^ "\n\nimport (\n" ^ imports ^ ")\n\n" ^ String.concat "\n" declarations}) (P.databases p) in
+ let queue_json=P.queues_to_json ~quote:go_quote p in
  let registrations=List.map (fun (d:P.database) ->
   Printf.sprintf "\tregisterCompiledMigrationHistory(%s, %s, %s, %d, %s, %s, teslGeneratedMigrationHistoryJSON)\n"
    (go_quote d.identity) (go_quote d.family) (go_quote d.namespace) d.current_version
@@ -17028,10 +17083,11 @@ let compiled_row_artifacts ~entry ~modules:_ ~exports source =
   {path="migration-source-history.json";contents=json ^ "\n"};
   {path="row-transform-history.json";contents=row_json ^ "\n"};
   {path="internal/teslrt/migration_history_generated.go";contents="package teslrt\n\nconst teslGeneratedMigrationHistoryJSON = " ^ go_quote json ^
+   "\nconst teslGeneratedQueueHistoryJSON = " ^ go_quote queue_json ^
    "\nconst teslGeneratedRowHistoryJSON = " ^ go_quote row_json ^
    Option.fold ~none:"" ~some:(fun json -> "\nconst teslGeneratedPhysicalHistoryJSON = " ^ go_quote json) physical_json ^
    Option.fold ~none:"" ~some:(fun json -> "\nconst teslGeneratedContractHistoryJSON = " ^ go_quote json) contract_json ^
-   "\n\nfunc init() {\n" ^ registrations ^ "\tregisterCompiledRowHistory(teslGeneratedRowHistoryJSON)\n" ^
+   "\n\nfunc init() {\n" ^ registrations ^ "\tregisterCompiledQueueHistory(teslGeneratedQueueHistoryJSON)\n\tregisterCompiledRowHistory(teslGeneratedRowHistoryJSON)\n" ^
    (if row_physical then "\tregisterCompiledRowPhysicalHistory(teslGeneratedPhysicalHistoryJSON)\n\tregisterCompiledRowContractHistory(teslGeneratedContractHistoryJSON)\n" else "") ^ "}\n"}]
 
  in
@@ -17102,13 +17158,21 @@ let compiled_row_artifacts ~entry ~modules:_ ~exports source =
    match Migration_program.verify_source_history source modules with
    | Ok () -> [] | Error errors -> List.map (fun (e:Migration_sparse.error) -> {loc=e.loc;message=e.message}) errors) row_source in
   if source_errors<>[] then Error source_errors else
-  let graph_result=match row_source with None->Ok None | Some source->
+  let graph_result=match row_source with None->Ok fixture_graph | Some source->
    (match Migration_program.source_lowering source with Ok graph->Ok(Some graph) | Error errors->
     Error(List.map(fun(e:Migration_sparse.error)->{loc=e.loc;message=e.message})errors)) in
   match graph_result with Error errors->Error errors | Ok emission_graph ->
   if Option.fold ~none:false ~some:(fun graph->Go_graph_lowering.entry graph<>entry) emission_graph then
    Error[{loc=Location.dummy_loc entry.source_file;message="row artifact entry differs from its exact checked emission owner"}] else
   let modules=Option.fold ~none:modules ~some:Go_graph_lowering.modules emission_graph in
+  let fixture_checks=match row_source with
+   | None -> migration_fixtures
+   | Some source -> Migration_program.row_histories source |> List.concat_map(fun(_,history)->
+      Migration_row_history.bindings history |> List.map(fun binding ->
+       Migration_transform_link.checked_transform(Migration_row_history.link binding)))
+     |> List.fold_left(fun found checked->if List.exists(fun old->Migration_transform.root old=Migration_transform.root checked)found then found else found@[checked]) [] in
+  match Migration_transform.with_fixture_sources fixture_checks (fun () ->
+
   let row_access_entities=List.map(fun(name,fields)->emitted_qualified emission_graph name,fields)row_access_entities in
   let migration_families=List.map(fun(name,family)->emitted_qualified emission_graph name,family)migration_families in
   let nominal_transports = Option.fold ~none:[] ~some:(fun source ->
@@ -17207,7 +17271,12 @@ let compiled_row_artifacts ~entry ~modules:_ ~exports source =
     let ordered = List.filter_map (fun name ->
       List.find_opt (fun (m : module_form) -> m.module_name = name) modules) ordered_names in
     let rec emit acc exports = function
-      | [] -> (try Ok (List.rev acc @ Option.fold ~none:[] ~some:(compiled_row_artifacts ~entry ~modules ~exports) row_source) with Unsupported error -> Error [error])
+      | [] -> (try
+        let fixtures=if fixture_checks=[] then [] else match emission_graph with
+          | Some graph->fixture_artifacts graph exports fixture_checks
+          | None->unsupported (Location.dummy_loc entry.source_file) "migration fixtures require their complete original source graph" in
+        Ok (List.rev acc @ fixtures @ Option.fold ~none:[] ~some:(compiled_row_artifacts ~entry ~modules ~exports) row_source)
+        with Unsupported error -> Error [error])
       | (m : module_form) :: rest ->
         (match compile_module_internal ?emission_graph ~nominal_mappings:(List.filter (fun mapping ->
           emitted_owner emission_graph (Migration_transform.nominal_mapping_owner mapping) = m.module_name) nominal_mappings) ~nominal_reverses:(List.filter (fun transport ->
@@ -17272,3 +17341,7 @@ let compiled_row_artifacts ~entry ~modules:_ ~exports source =
         | Some source -> match Migration_program.verify_source_history source modules with
           | Ok () -> Ok rebuilt
           | Error errors -> Error (List.map (fun (e:Migration_sparse.error) -> {loc=e.loc;message=e.message}) errors)))
+
+  ) with
+  | Ok result -> result
+  | Error errors -> Error(List.map(fun(e:Migration_sparse.error)->{loc=e.loc;message=e.message})errors)

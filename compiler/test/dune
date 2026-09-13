@@ -593,6 +593,7 @@
 (test
  (name test_migration_row_access)
  (modules test_migration_row_access)
+ (deps ../bin/main.exe)
  (libraries tesl_compiler_lib alcotest unix str))
 
 (test
@@ -665,3 +666,18 @@
  (name test_migration_additive_tail)
  (modules test_migration_additive_tail)
  (libraries tesl_compiler_lib alcotest unix str yojson))
+
+(test
+ (name test_migration_fixtures)
+ (modules test_migration_fixtures)
+ (libraries tesl_compiler_lib alcotest str unix))
+
+(test
+ (name test_migration_row_indexes)
+ (modules test_migration_row_indexes)
+ (libraries tesl_compiler_lib alcotest unix str))
+
+(test
+ (name test_migration_delete)
+ (modules test_migration_delete)
+ (libraries tesl_compiler_lib alcotest unix str))

@@ -23,6 +23,7 @@ func pgHasRowCompanion(database *Database) bool {
 func pgWaitForRowBaseline(ctx context.Context, conn *pgx.Conn, b *pgRowBaseline, roles PgMigrationControlRoles) (PgMigrationControlState, error) {
 	for {
 		var state PgMigrationControlState
+		indexReady := true
 		err := pgControlSnapshotMode(ctx, conn, pgx.ReadOnly, func(tx pgx.Tx) error {
 			if err := pgControlRoles(ctx, tx, roles, false); err != nil {
 				return err
@@ -35,14 +36,17 @@ func pgWaitForRowBaseline(ctx context.Context, conn *pgx.Conn, b *pgRowBaseline,
 				return fmt.Errorf("row request readiness requires exact Request login")
 			}
 			var err error
-			state, _, err = pgReadRowBaselineState(ctx, tx, b, roles, false)
+			state, _, err = pgReadRowBaselineState(ctx, tx, b, roles, false, &indexReady)
 			return err
 		})
 		if err != nil {
 			return PgMigrationControlState{}, err
 		}
-		if state.Current >= b.history.CurrentVersion {
+		if state.Current >= b.history.CurrentVersion && indexReady {
 			return state, nil
+		}
+		if !indexReady {
+			migrationBoundary("row-index-readiness-pending")
 		}
 		timer := time.NewTimer(100 * time.Millisecond)
 		select {

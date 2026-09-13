@@ -183,6 +183,36 @@ let bind_function modules root expression =
 let entity_type modules owner expected = function
   | TName {name;_} -> resolver modules owner IR.Type name=Some (IR.Global expected)
   | _ -> false
+let fixture_type modules owner expected = function
+  | TApp {head=TName {name;_};arg;_} when
+      resolver modules owner IR.Type name=Some (IR.Primitive "Tesl.Maybe.Maybe") &&
+      entity_type modules owner expected arg -> Some true
+  | ty when entity_type modules owner expected ty -> Some false
+  | _ -> None
+
+(* A classifier over the original checked row/binding only; callers cannot
+   substitute an equal-looking declaration or a different previous owner. *)
+let fixture_optional (Checked checked) row binding =
+  Migration_proof_context.revalidate checked.context;
+  if not (List.exists ((==) row) checked.rows && List.exists ((==) binding) row.fixtures) then
+    reject "MIG021" binding.declaration.loc "migration fixture lost its exact checked row binding";
+  match binding.declaration.return_spec with
+  | RetPlain result -> (match fixture_type (List.map fst checked.sources) binding.owner row.mapping.previous.entity_name result.ty with
+    | Some optional -> optional
+    | None -> reject "MIG021" binding.declaration.loc "migration fixture lost its checked return type")
+  | _ -> reject "MIG021" binding.declaration.loc "migration fixture lost its checked return type"
+
+(* A publication guard only: it installs no proof scope and never replays run. *)
+let with_fixture_sources checked run =
+  let verify () =
+    try List.iter(fun (Checked t)->Migration_proof_context.revalidate t.context)checked; Ok ()
+    with Invalid errors -> Error errors
+      | Invalid_argument message ->
+        let file=match checked with Checked t::_->t.root.source_file | []->"" in
+        Error [{S.code="MIG013";loc=Location.dummy_loc file;message;related=[]}] in
+  Result.bind (verify()) (fun ()->
+    let value=run() in Result.map(fun ()->value)(verify()))
+
 let result_type modules owner expected = function
   | RetPlain {ty=TApp {head=TName {name;_};arg;_};_} ->
     resolver modules owner IR.Type name=Some (IR.Primitive "Tesl.Migration.Migrated") && entity_type modules owner expected arg
@@ -345,9 +375,9 @@ let prepare ~project_root:_ ~source root rules ~functions ~fixtures =
     List.iter (fun fixture ->
       if fixture.declaration.params<>[] || not (List.exists (fun mapping ->
         match fixture.declaration.return_spec with
-        | RetPlain result -> entity_type modules fixture.owner mapping.R.previous.entity_name result.ty
+        | RetPlain result -> Option.is_some (fixture_type modules fixture.owner mapping.R.previous.entity_name result.ty)
         | _ -> false) mappings) then reject "MIG021" fixture.declaration.loc
-        "fixtures must be parameterless functions returning an exact previous entity in this transformation") fixture_functions;
+        "fixtures must be parameterless functions returning an exact previous entity or Maybe of that entity in this transformation") fixture_functions;
     let used = Hashtbl.create 8 in
     let accepted_rows=Hashtbl.create 8 in
     let rows = R.entities rules |> List.map (fun mapping ->
@@ -365,7 +395,7 @@ let prepare ~project_root:_ ~source root rules ~functions ~fixtures =
           Some binding in
       let fixtures = List.filter (fun binding ->
         binding.declaration.params=[] && match binding.declaration.return_spec with
-          | RetPlain r -> entity_type modules binding.owner mapping.previous.entity_name r.ty
+          | RetPlain r -> Option.is_some (fixture_type modules binding.owner mapping.previous.entity_name r.ty)
           | _ -> false) fixture_functions in
       List.iter (fun fixture -> Hashtbl.replace used fixture.identity ()) fixtures;
       if mapping.mode=R.Migrate && fixtures=[] then reject "MIG003" mapping.previous.entity_loc
@@ -374,7 +404,7 @@ let prepare ~project_root:_ ~source root rules ~functions ~fixtures =
       let legacies=List.map (bind_legacy modules root mapping.current.entity_name) mapping.legacies in
       {mapping;function_binding;fixtures;writebacks;legacies}) in
     List.iter (fun fixture -> if not (Hashtbl.mem used fixture.identity) then reject "MIG021" fixture.declaration.loc
-      "fixtures must be parameterless functions returning an exact previous entity in this transformation") fixture_functions;
+      "fixtures must be parameterless functions returning an exact previous entity or Maybe of that entity in this transformation") fixture_functions;
     let seen = Hashtbl.create 8 in
     List.iter (fun fixture -> if Hashtbl.mem seen fixture.identity then reject "MIG023" fixture.declaration.loc "duplicate migration fixture" else Hashtbl.add seen fixture.identity ()) fixture_functions;
     check_pure_closure modules (fixture_functions @ List.filter_map (fun (row:row) -> row.function_binding) rows @

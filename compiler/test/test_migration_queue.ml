@@ -314,7 +314,136 @@ let parser_recovery () = with_project (fun _ write ->
   | Some m ->
     check bool "recovers queueSchema boundary" true (List.exists (function Ast.DQueueSchema q -> q.name="Notifications" | _ -> false) m.decls);
     check bool "preserves later functions" true (List.exists (function Ast.DFunc f -> f.name="kept" | _ -> false) m.decls))
+let native_source_projection () =
+ let output=Filename.temp_dir "tesl-queue-source-projection-" "" in
+ Fun.protect ~finally:(fun()->remove output)(fun()->
+  List.iter(fun empty->with_project(fun root write->
+   let schema=replace "record Notify" "import Tesl.Json exposing [stringCodec]\nrecord Notify" source ^
+    "codec Notify { toJson { text -> \"text\" with_codec stringCodec } fromJson [ { text <- \"text\" with_codec stringCodec } ] }\n" in
+   let schema=if empty then replace "queueSchema Notifications { jobs: [Notify] }" "" schema |> replace "Notifications, " "" else schema in
+   let file=write "schema/todo/v-current.tesl" schema in accepts file schema;
+   let program=app |> replace "[Database, Memory]" "[Database, Postgres, PostgresConfig, TcpConnection]"
+    |> replace "backend: Memory" "backend: Postgres (PostgresConfig { namespace: \"todo\", dbName: \"unused\", user: \"unused\", password: \"\", connection: TcpConnection { host: \"127.0.0.1\", port: 5432 } })" in
+   let program=if empty then program
+    |> replace "queues: [Tasks]" "queues: []"
+    |> replace "queue Tasks requires [queueRead] = Queue { database: D, schema: Schema.Todo.VCurrent.Notifications,\n jobs: [Job Schema.Todo.VCurrent.Notify handle Nothing] }\n" ""
+    else program in
+   let entry=write "todo-app.tesl" program in accepts entry program;
+   let module P=Migration_program in
+   let capture prefix=let captured=P.with_source_history ~entry:(parse entry program) ~source:program(function
+    |None->fail "missing PostgreSQL source capture"
+    |Some source->
+     let p=P.source_program source in
+     let emit name bytes=Out_channel.with_open_bin (Filename.concat output name)(fun o->output_string o bytes) in
+     emit (prefix ^ "source.json") (Migration_row_companion.base_json ~quote:Migration_row_companion.quote
+       ~go_type:(fun _ _ _->fail "queue-only fixture unexpectedly needs entity emission") source);
+     emit (prefix ^ "queue.json") (P.queues_to_json ~quote:Migration_row_companion.quote p)) in
+   (match captured with Ok()->()|Error es->fail(String.concat "\n"(List.map(fun(e:Migration_sparse.error)->e.message)es))) in
+   capture (if empty then "empty-" else "");
+   if not empty then begin
+    freeze root;
+    let abi=Result.get_ok(Migration_abi.current()) in
+    let load path=match I.load_with_compatibility ~stored_value_compatibility:(Some(Migration_abi.stored_value_compatibility abi)) ~compiler_abi:(Migration_abi.id abi) ~root_file:path with Ok i->i|Error e->fail e.message in
+    let previous=load(Filename.concat root "schema/todo/v1.tesl") and current=load file in
+    let edge,body=write_edge root write previous current (seal root previous) in accepts edge body;
+    capture "history-"
+   end;
+
+   (* Source-only validation does not turn on captured queue emission. *)
+   if not empty then match Compile.compile_row_source_artifacts entry program with
+   |Compile.GoSuccess _->fail "source projection activated row queue artifacts"
+   |Compile.GoFailure ds->check bool (describes ds) true
+     (List.exists(fun(d:Compile.diagnostic)->Compile.string_contains d.message "retained queue inventories")ds))) [false;true];
+  (* All source scopes are gone. These files are test inputs, not installation or
+     callback authority. Runtime negatives mutate the actual compiler snapshots. *)
+  let repo=Sys.getenv "TESL_REPO_ROOT" in
+  let log=Filename.concat output "native.log" in
+  let status=Sys.command(Printf.sprintf "cd %s && TESL_QUEUE_SOURCE_FIXTURE=%s timeout 120s go test -p 1 -race -timeout 90s ./teslrt -run '^(TestQueueCompleteSourceProjection|TestRowQueueCompleteSourceBinding|TestRowQueueCandidateCatalogBoundaries)$' -count=1 -v > %s 2>&1"
+   (Filename.quote(Filename.concat repo "runtime/go"))(Filename.quote output)(Filename.quote log)) in
+  Option.iter(fun destination->mkdir destination; Array.iter(fun name->let bytes=In_channel.with_open_bin(Filename.concat output name)In_channel.input_all in Out_channel.with_open_bin(Filename.concat destination name)(fun o->output_string o bytes))(Sys.readdir output))(Sys.getenv_opt "TESL_QUEUE_SOURCE_EXPORT");
+  if status<>0 then fail(In_channel.with_open_bin log In_channel.input_all))
+
+let native_row_catalog_artifacts () =
+ let output=Filename.temp_dir "tesl-row-queue-catalog-" "" in
+ Fun.protect ~finally:(fun()->remove output)(fun()->
+  let emit prefix root entry program =
+   let artifacts=match Compile.compile_row_catalog_artifacts entry program with
+   | Compile.GoFailure ds -> fail(describes ds) | Compile.GoSuccess files -> files in
+   check bool "installer-only artifacts have no command entry" true
+    (List.for_all(fun(a:Emit_go.artifact)->not(String.starts_with ~prefix:"cmd/" a.path))artifacts);
+   let target=Filename.concat output prefix in
+   List.iter(fun(a:Emit_go.artifact)->
+    (* Complete runtime source is linked before the original source is removed.
+       Loose metadata files are unnecessary to the emitted initializer. *)
+    if not(Filename.check_suffix a.path ".json") then begin
+     let file=Filename.concat target a.path in mkdir(Filename.dirname file);
+     Out_channel.with_open_bin file(fun o->output_string o a.contents)
+    end)artifacts;
+   let test=Filename.concat target "internal/teslmodtodoapp/row_queue_catalog_test.go" in
+   mkdir(Filename.dirname test);
+   Out_channel.with_open_bin test(fun o->output_string o {|package teslmodtodoapp
+import (
+ "strings"
+ "testing"
+ teslrt "tesl.generated/teslmodtodoapp/internal/teslrt"
+)
+func TestOriginalRowQueueCatalog(t *testing.T) {
+ h,ok:=DDatabase.CompiledMigrationHistory()
+ if !ok {t.Fatal("missing actual database source")}
+ inventory,err:=h.QueueSourceInventory(1)
+ if err!=nil {t.Fatal(err)}
+ if len(inventory.Versions)!=h.CurrentVersion || len(inventory.Versions[0].Contracts)!=1 {t.Fatal("missing complete original queue inventory")}
+ if inventory.Versions[0].Contracts[0].Payloads[0].Job!="Notify" {t.Fatal("wrong original typed payload")}
+ if err:=teslrt.PreflightApplicationDatabases(DDatabase);err==nil || !strings.Contains(err.Error(),"versioned queues") {t.Fatal("ordinary app startup was enabled",err)}
+}
+|});
+   let repo=Sys.getenv "TESL_REPO_ROOT" in
+   List.iter(fun(name,destination)->let file=Filename.concat target destination in
+    let bytes=In_channel.with_open_bin(Filename.concat repo ("compiler/test/fixtures/row-queue-catalog/" ^ name))In_channel.input_all in
+    Out_channel.with_open_bin file(fun o->output_string o bytes))
+     ["bridge.go","internal/teslrt/row_queue_catalog_testing.go";"catalog_test.go","internal/teslmodtodoapp/row_queue_catalog_native_test.go"];
+   let log=Filename.concat target "build.log" in
+   let status=Sys.command(Printf.sprintf "cd %s && timeout 120s go test -p 1 -race -c -o catalog.test ./internal/teslmodtodoapp > %s 2>&1"(Filename.quote target)(Filename.quote log)) in
+   if status<>0 then fail(In_channel.with_open_bin log In_channel.input_all);
+   ignore root; target in
+  let targets=with_project(fun root write->
+   let schema=replace "record Notify" "import Tesl.Json exposing [stringCodec]\nrecord Notify" source ^
+    "codec Notify { toJson { text -> \"text\" with_codec stringCodec } fromJson [ { text <- \"text\" with_codec stringCodec } ] }\n" in
+   let schema=replace "Notify, Other]" "Notify, Other, Note]" schema ^ "entity Note table \"notes\" primaryKey id { id: String, title: String }\n" in
+   let file=write "schema/todo/v-current.tesl" schema in accepts file schema;
+   let program=app |> replace "[Database, Memory]" "[Database, Postgres, PostgresConfig, TcpConnection]"
+    |> replace "backend: Memory" "backend: Postgres (PostgresConfig { namespace: \"todo\", dbName: \"unused\", user: \"unused\", password: \"\", connection: TcpConnection { host: \"127.0.0.1\", port: 5432 } })" in
+   let entry=write "todo-app.tesl" program in accepts entry program;
+   let first=emit "v1" root entry program in
+   freeze root;
+   let abi=Result.get_ok(Migration_abi.current()) in
+   let load path=match I.load_with_compatibility ~stored_value_compatibility:(Some(Migration_abi.stored_value_compatibility abi)) ~compiler_abi:(Migration_abi.id abi) ~root_file:path with Ok i->i|Error e->fail e.message in
+   let previous=load(Filename.concat root "schema/todo/v1.tesl") and current=load file in
+   let edge,body=write_edge root write previous current(seal root previous) in accepts edge body;
+   let second=emit "v2" root entry program in
+   (match Compile.compile_row_source_artifacts entry program with
+   |Compile.GoSuccess _->fail "ordinary row artifacts accepted nonempty queues"
+   |Compile.GoFailure ds->check bool(describes ds)true(List.exists(fun(d:Compile.diagnostic)->Compile.string_contains d.message "retained queue inventories")ds));
+   [first;second]) in
+  (* with_project has removed every original Tesl source before native init. *)
+  Option.iter(fun destination->
+   let rec copy from target=if Sys.is_directory from then begin mkdir target;Array.iter(fun name->copy(Filename.concat from name)(Filename.concat target name))(Sys.readdir from)end else
+    let bytes=In_channel.with_open_bin from In_channel.input_all in Out_channel.with_open_bin target(fun o->output_string o bytes);Unix.chmod target (Unix.stat from).Unix.st_perm in
+   copy output destination)(Sys.getenv_opt "TESL_ROW_QUEUE_CATALOG_EXPORT");
+  List.iter(fun target->let log=Filename.concat target "native.log" in
+   let status=Sys.command(Printf.sprintf "cd %s && timeout 120s ./catalog.test -test.timeout=90s -test.run='^TestOriginalRowQueueCatalog$' -test.count=1 -test.v > %s 2>&1"(Filename.quote target)(Filename.quote log)) in
+   if status<>0 then fail(In_channel.with_open_bin log In_channel.input_all))targets;
+  if Sys.getenv_opt "TESL_MIGRATION_TEST_REQUIRE_POSTGRES"=Some "1" then begin
+   let first=List.hd targets and second=List.nth targets 1 in
+   let log=Filename.concat first "postgres.log" in
+   let status=Sys.command(Printf.sprintf "TESL_ROW_QUEUE_V2_TEST=%s timeout 120s %s -test.run='^TestRowQueueCatalogPostgres$' -test.timeout=100s -test.v > %s 2>&1"
+    (Filename.quote(Filename.concat second "catalog.test"))(Filename.quote(Filename.concat first "catalog.test"))(Filename.quote log)) in
+   if status<>0 then fail(In_channel.with_open_bin log In_channel.input_all)
+  end)
+
 let () = run "Queue schema prerequisite" ["contracts",[
+  test_case "original installer-only row queue artifacts" `Quick native_row_catalog_artifacts;
+  test_case "complete source projection and runtime refusal" `Quick native_source_projection;
   test_case "pure contextual parser" `Quick parser;
   test_case "purity and payload types" `Quick purity;
   test_case "canonical membership and Same" `Quick canonical;

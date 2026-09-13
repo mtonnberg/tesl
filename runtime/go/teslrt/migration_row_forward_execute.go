@@ -27,6 +27,11 @@ func pgExecuteRowForward(ctx context.Context, conn *pgx.Conn, b *pgRowBaseline, 
 	if err != nil {
 		return result, err
 	}
+	for _, operation := range operations {
+		if operation.index != nil && roles.Request == "" {
+			return result, fmt.Errorf("row concurrent indexes currently require Worker topology")
+		}
+	}
 	err = pgControlTransaction(ctx, conn, false, func(tx pgx.Tx) error {
 		if err := pgControlRoles(ctx, tx, roles, false); err != nil {
 			return err
@@ -39,7 +44,7 @@ func pgExecuteRowForward(ctx context.Context, conn *pgx.Conn, b *pgRowBaseline, 
 			return fmt.Errorf("row expansion requires exact Worker login")
 		}
 		var err error
-		initial, _, err = pgReadRowBaselineState(ctx, tx, b, roles, true)
+		initial, _, err = pgReadRowIndexExecutionState(ctx, tx, b, roles)
 		return err
 	})
 	if err != nil {
@@ -67,7 +72,7 @@ func pgExecuteRowForward(ctx context.Context, conn *pgx.Conn, b *pgRowBaseline, 
 	err = pgMigrationSessionLock(ctx, conn, initial.FenceNamespace, 2147483647, true, func() error {
 		completed := 0
 		err := pgControlTransaction(ctx, conn, false, func(tx pgx.Tx) error {
-			state, _, err := pgReadRowBaselineState(ctx, tx, b, roles, true)
+			state, _, err := pgReadRowIndexExecutionState(ctx, tx, b, roles)
 			if err != nil {
 				return err
 			}
@@ -93,7 +98,10 @@ func pgExecuteRowForward(ctx context.Context, conn *pgx.Conn, b *pgRowBaseline, 
 		}
 		if err := pgExpansionTransaction(ctx, conn, func(tx pgx.Tx) error {
 			_, err := tx.Exec(ctx, "select "+ns+"tesl_register_row_physical($1,$2,$3,$4,$5,$6,$7,$8)", plan.version, previous.hash, contract, plan.hash, b.history.SourceCompilerABI, b.history.StoredValueCompatibility, len(operations), len(plan.windows) == 0)
-			return err
+			if err != nil {
+				return err
+			}
+			return pgRegisterRowQueueSource(ctx, tx, b, plan)
 		}); err != nil {
 			return err
 		}
@@ -119,7 +127,17 @@ func pgExecuteRowForward(ctx context.Context, conn *pgx.Conn, b *pgRowBaseline, 
 			if err != nil {
 				return err
 			}
-			return pgVerifyRowExpansionHistory(state, b, intents, forward, true)
+			if err := pgVerifyRowExpansionHistory(state, b, intents, forward, true); err != nil {
+				return err
+			}
+			jobs, err := pgReadRowIndexJobs(ctx, tx, b, forward, intents, true)
+			if err != nil {
+				return err
+			}
+			if forward != nil {
+				forward.indexJobs = jobs
+			}
+			return nil
 		}); err != nil {
 			return err
 		}
@@ -143,13 +161,26 @@ func pgExecuteRowForward(ctx context.Context, conn *pgx.Conn, b *pgRowBaseline, 
 					if err := pgExecuteExpansionOperation(ctx, tx, b.history.Namespace, PgMigrationExpansionOperation{Kind: "add-column", Table: operation.entity.table, Column: &operation.column.catalog}); err != nil {
 						return err
 					}
+				} else if operation.index != nil {
+					if err := pgRegisterRowIndex(ctx, tx, b, roles, i, *operation.index); err != nil {
+						return err
+					}
+					intents, err := pgReadExpansionIntents(ctx, tx, b.history.Namespace)
+					if err != nil {
+						return err
+					}
+					forward.indexJobs, err = pgReadRowIndexJobs(ctx, tx, b, forward, intents, true)
+					if err != nil {
+						return err
+					}
 				} else {
 					if err := pgExecuteRowInvalidation(ctx, tx, b.history.Namespace, roles, pgRowInvalidationFor(b.history.Namespace, operation.entity, operation.window)); err != nil {
 						return err
 					}
 				}
 				migrationBoundary("row-forward-after-ddl")
-				if err := pgVerifyRowForwardCatalog(ctx, tx, b, roles, len(b.entities), forward, i+1); err != nil {
+				indexReady := true
+				if err := pgVerifyRowForwardCatalog(ctx, tx, b, roles, len(b.entities), forward, i+1, &indexReady); err != nil {
 					return err
 				}
 				_, err := tx.Exec(ctx, "select "+ns+"tesl_record_expansion_object($1,$2,$3)", plan.version, i, pgMigrationObjectHash(plan.hash, i))
@@ -161,7 +192,7 @@ func pgExecuteRowForward(ctx context.Context, conn *pgx.Conn, b *pgRowBaseline, 
 		}
 		if err := pgRowCompatibilityDrain(ctx, conn, result.FenceNamespace, result.MinVersion, result.Current, "row-forward", func() error {
 			return pgExpansionTransaction(ctx, conn, func(tx pgx.Tx) error {
-				fresh, _, err := pgReadRowBaselineState(ctx, tx, b, roles, true)
+				fresh, _, err := pgReadRowIndexExecutionState(ctx, tx, b, roles)
 				if err != nil {
 					return err
 				}
@@ -182,7 +213,7 @@ func pgExecuteRowForward(ctx context.Context, conn *pgx.Conn, b *pgRowBaseline, 
 					}
 				}
 				migrationBoundary("row-forward-after-births")
-				_, _, err = pgReadRowBaselineState(ctx, tx, b, roles, false)
+				_, _, err = pgReadRowIndexExecutionState(ctx, tx, b, roles)
 				return err
 			})
 		}); err != nil {
@@ -191,7 +222,7 @@ func pgExecuteRowForward(ctx context.Context, conn *pgx.Conn, b *pgRowBaseline, 
 		migrationBoundary("row-forward-after-publication-commit")
 		return pgControlSnapshotMode(ctx, conn, pgx.ReadOnly, func(tx pgx.Tx) error {
 			var err error
-			result, _, err = pgReadRowBaselineState(ctx, tx, b, roles, false)
+			result, _, err = pgReadRowIndexExecutionState(ctx, tx, b, roles)
 			return err
 		})
 	})

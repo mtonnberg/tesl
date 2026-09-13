@@ -8,6 +8,7 @@ end)
 type t = { originals:Ast.module_form list; modules:Ast.module_form list;
  entry:Ast.module_form; owners:(string * string) list;
  renamed:((string * string) * string) list; origins:Ast.expr Exprs.t }
+let original_modules t = t.originals
 let modules t = t.modules
 let entry t = t.entry
 let owner t name = List.assoc_opt name t.owners

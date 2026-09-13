@@ -72,23 +72,25 @@ func pgRunRowSchemaCommand(serviceContext context.Context, command pgSchemaComma
 		if err != nil {
 			return err
 		}
-		if command.json {
-			err = json.NewEncoder(out).Encode(struct {
-				Version        int    `json:"version"`
-				Kind           string `json:"kind"`
-				Database       string `json:"database"`
-				BinaryVersion  int    `json:"binaryVersion"`
-				CurrentVersion int    `json:"currentVersion"`
-				DatabaseUUID   string `json:"databaseUuid"`
-			}{1, "schema-worker-ready", b.history.Database, b.history.CurrentVersion, state.Current, state.DatabaseUUID})
-		} else {
-			_, err = fmt.Fprintf(out, "%s: schema worker ready at V%d (binary V%d).\n", b.history.Database, state.Current, b.history.CurrentVersion)
-		}
-		if err != nil {
-			return err
-		}
 		cancel()
-		return pgRunRowWorker(serviceContext, config, b, roles)
+		return pgRunRowIndexServices(serviceContext, conn, config, b, roles, state, func(state PgMigrationControlState) error {
+			if command.json {
+				err = json.NewEncoder(out).Encode(struct {
+					Version        int    `json:"version"`
+					Kind           string `json:"kind"`
+					Database       string `json:"database"`
+					BinaryVersion  int    `json:"binaryVersion"`
+					CurrentVersion int    `json:"currentVersion"`
+					DatabaseUUID   string `json:"databaseUuid"`
+				}{1, "schema-worker-ready", b.history.Database, b.history.CurrentVersion, state.Current, state.DatabaseUUID})
+			} else {
+				_, err = fmt.Fprintf(out, "%s: schema worker ready at V%d (binary V%d).\n", b.history.Database, state.Current, b.history.CurrentVersion)
+			}
+			if err != nil {
+				return err
+			}
+			return nil
+		})
 	case "close-epoch":
 		preview, err := pgExecuteRowEpoch(ctx, conn, b, roles, command.targetVersion, command.force, command.dryRun)
 		if err != nil {

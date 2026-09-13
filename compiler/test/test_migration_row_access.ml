@@ -343,7 +343,26 @@ let update_cost_diagnostics ()=project (fun root save path ->
  let disjunctive=replace "where note.id == (marked \"where-zero\")" "where note.id == \"one\" || note.id == \"two\"" app in
  check int "OR of primary keys is a multi-row match" 5 (List.length (warnings disjunctive));
  let conjunctive=replace "where note.id != (marked \"where-multi\")" "where note.id == \"one\" && note.title == \"edited\"" app in
- check int "primary-key equality with extra predicates is bounded" 3 (List.length (warnings conjunctive)))
+ check int "primary-key equality with extra predicates is bounded" 3 (List.length (warnings conjunctive));
+ let compiler=Filename.concat (repository ()) "compiler/_build/default/bin/main.exe" in
+ let cli files =
+  let log=Filename.concat root "check.log" in
+  let status=Sys.command(Printf.sprintf "NO_COLOR=1 %s --check %s > %s 2>&1"
+   (Filename.quote compiler) (String.concat " " (List.map Filename.quote files)) (Filename.quote log)) in
+  status,Source_input.read log in
+ let status,output=cli [file] in
+ check int ("warning-only --check must succeed: " ^ output) 0 status;
+ check bool "ordinary CLI still reports migration cost" true (Compile.string_contains output "warning[MIG031]");
+ let invalid=save "bad.tesl" {|module Bad exposing [bad]
+import Tesl.Prelude exposing [Int]
+fn bad() -> Int = "not an integer"
+|} in
+ let bad_context=Compile.agent_context_result_source invalid (Source_input.read invalid) in
+ check bool "negative CLI input has a real type error" false bad_context.ok;
+ let status,output=cli [file;invalid] in
+ check int "warnings cannot hide another file's error" 1 status;
+ check bool "mixed check retains warning" true (Compile.string_contains output "warning[MIG031]");
+ check bool "mixed check reports type error" true (Compile.string_contains output "error[T001]"))
 
 let native ()=
  let output=Filename.temp_dir "tesl-row-access-" "" in

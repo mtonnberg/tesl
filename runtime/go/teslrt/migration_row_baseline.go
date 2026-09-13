@@ -24,6 +24,7 @@ type pgRowBaseline struct {
 	history                               PgCompiledMigrationHistory
 	version                               PgRowSourceVersion
 	entities                              []pgRowBaselineEntity
+	queues                                []pgRowQueueSource
 	inventory, inventoryHash, catalogHash string
 	physical, target                      *pgRowPhysicalPlan
 }
@@ -46,30 +47,30 @@ func pgCompiledRowBaseline(database *Database) (*pgRowBaseline, error) {
 	}
 	database.mutex.RLock()
 	sealed := database.applicationPreflightClosed
-	facilityCount := len(database.migrationFacilities)
+	nonQueueFacilities := false
+	for facility := range database.migrationFacilities {
+		if facility.kind != "queue" {
+			nonQueueFacilities = true
+		}
+	}
 	database.mutex.RUnlock()
-	if !sealed || facilityCount != 0 {
-		return nil, fmt.Errorf("row baseline requires sealed complete App facility absence")
+	if !sealed || nonQueueFacilities {
+		return nil, fmt.Errorf("row baseline requires sealed complete App queue inventory and no unsupported facilities")
 	}
 	physical := compiledRowPhysicalHistories[compiled]
 	if history.CurrentVersion < 1 || history.CurrentVersion > 2147483646 || (history.CurrentVersion != 1 && physical == nil) || (physical == nil && (len(compiled.inventory.Versions) != 1 || len(compiled.inventory.Transforms) != 0)) {
 		return nil, fmt.Errorf("row baseline currently supports only fresh V1; data-transform execution is unavailable")
 	}
 	v := compiled.inventory.Versions[0]
+	queues, err := pgRowQueueSources(history)
+	if err != nil {
+		return nil, err
+	}
+	if len(queues) == 0 {
+		return nil, fmt.Errorf("missing complete original row queue source")
+	}
 	r := &pgMigrationWireReader{}
-	for _, sourceVersion := range compiled.inventory.Versions {
-		schema := pgRowDocument(r, sourceVersion.SchemaContract, sourceVersion.SchemaSnapshotHash, "snapshot")
-		_, definitions := pgRowClosure(r, schema, history.SourceCompilerABI, history.StoredValueCompatibility)
-		for _, definition := range definitions {
-			if !definition.atom && len(definition.children) > 0 && definition.children[0].isAtom("queue-schema") {
-				r.fail("row baseline requires complete empty queue-schema inventory")
-			}
-		}
-	}
-	if r.err != nil {
-		return nil, r.err
-	}
-	result := &pgRowBaseline{database: database, history: history, version: v}
+	result := &pgRowBaseline{database: database, history: history, version: v, queues: queues}
 	if physical != nil {
 		result.physical = physical.versions[0]
 		result.target = physical.versions[history.CurrentVersion-1]
@@ -132,7 +133,7 @@ func pgCompiledRowBaseline(database *Database) (*pgRowBaseline, error) {
 		inventoryEntries = append(inventoryEntries, pgRowList(pgRowAtom(entity.Entity), typeNode, physicalNode))
 	}
 	_, result.catalogHash = pgRowBaselineDocument(pgRowList(pgRowAtom("tesl-row-baseline-catalog-v1"), pgRowAtom(history.Family), pgRowList(physicalEntries...)))
-	result.inventory, result.inventoryHash = pgRowBaselineDocument(pgRowList(pgRowAtom("tesl-row-baseline-inventory-v1"), pgRowAtom(history.Family), pgRowAtom("1"), pgRowAtom(v.SchemaSnapshotHash), pgRowAtom(v.StorageSnapshotHash), pgRowAtom(history.StoredValueCompatibility), pgRowList(inventoryEntries...), pgRowList(pgRowAtom("complete-queues"), pgRowList()), pgRowList(pgRowAtom("complete-facilities"), pgRowList())))
+	result.inventory, result.inventoryHash = pgRowBaselineDocument(pgRowList(pgRowAtom("tesl-row-baseline-inventory-v1"), pgRowAtom(history.Family), pgRowAtom("1"), pgRowAtom(v.SchemaSnapshotHash), pgRowAtom(v.StorageSnapshotHash), pgRowAtom(history.StoredValueCompatibility), pgRowList(inventoryEntries...), queues[0].queues, queues[0].facilities))
 	return result, nil
 }
 func pgRowBoolNode(value bool) pgRowCanonical {
@@ -191,7 +192,7 @@ func ExecutePgCompiledRowBaseline(ctx context.Context, conn *pgx.Conn, database 
 	return pgExecuteRowBaseline(ctx, conn, baseline, roles)
 }
 
-func pgReadRowBaselineState(ctx context.Context, tx pgx.Tx, b *pgRowBaseline, roles PgMigrationControlRoles, executor bool) (PgMigrationControlState, int, error) {
+func pgReadRowBaselineState(ctx context.Context, tx pgx.Tx, b *pgRowBaseline, roles PgMigrationControlRoles, executor bool, indexReady ...*bool) (PgMigrationControlState, int, error) {
 	state, err := pgInspectRowControl(ctx, tx, b.history.Namespace, roles)
 	if err != nil {
 		return state, 0, err
@@ -210,7 +211,14 @@ func pgReadRowBaselineState(ctx context.Context, tx pgx.Tx, b *pgRowBaseline, ro
 	if err := pgVerifyRowExpansionHistory(state, b, intents, forward, executor); err != nil {
 		return state, 0, err
 	}
-	if err := pgVerifyRowWorkState(ctx, tx, b, state, forward); err != nil {
+	indexJobs, err := pgReadRowIndexJobs(ctx, tx, b, forward, intents, executor)
+	if err != nil {
+		return state, 0, err
+	}
+	if forward != nil {
+		forward.indexJobs = indexJobs
+	}
+	if err := pgVerifyRowWorkState(ctx, tx, b, state, forward, len(indexJobs)); err != nil {
 		return state, 0, err
 	}
 	count := 0
@@ -223,7 +231,7 @@ func pgReadRowBaselineState(ctx context.Context, tx pgx.Tx, b *pgRowBaseline, ro
 			completed = len(intent.Objects)
 		}
 	}
-	if err := pgVerifyRowForwardCatalog(ctx, tx, b, roles, count, forward, completed); err != nil {
+	if err := pgVerifyRowForwardCatalog(ctx, tx, b, roles, count, forward, completed, indexReady...); err != nil {
 		return state, 0, err
 	}
 	return state, count, nil

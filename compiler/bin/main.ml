@@ -1157,7 +1157,7 @@ let () =
        argument (Compile.check_files dedupes by canonical path). *)
     let all_diags = Compile.check_files filenames in
     List.iter print_diagnostic all_diags;
-    exit (if all_diags = [] then 0 else 1)
+    exit (if List.exists (fun (d : Compile.diagnostic) -> d.severity = "error") all_diags then 1 else 0)
 
   | ("--check-batch" :: filenames) when filenames <> [] ->
     (* WS4: batch check N explicit files in ONE process, sharing the imported-

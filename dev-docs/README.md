@@ -179,6 +179,8 @@ that checks manual coherence without building the compiler.
 | [Row generation prototype](migration-row-generations-candidate.md) | Test-only invalidation triggers and production integration requirements |
 | [Frozen queue schemas](queue-schema-prerequisite.md) | Complete source inventories, stable queue identities and immutable history |
 | [Compiled queue history](queue-history-projection.md) | Linked queue contracts and application registration checks |
+| [Combined row and queue catalog](row-queue-catalog.md) | Complete source inventories, atomic registration and unpublished format-5 catalog boundaries |
+| [Row concurrent index worker](row-index-worker.md) | Checked additive index registration, worker lifecycle and old/current writer readiness |
 | [Queue control candidate](queue-control-format4-candidate.md) | Unpublished protected storage, catalog checks and registration protocol |
 | [Protected queue operations](queue-operations-candidate.md) | Unpublished fenced claims, renewal, completion and retry operations |
 | [Dead-letter metadata](dead-letter-metadata.md) | Opaque job diagnostics and operator-facing metadata |
@@ -234,3 +236,4 @@ Where to start, by task:
 | `nix/tesl-cli-body.sh` | The installed `tesl` CLI wrapper (verb dispatch); the flake builds `tesl` from it |
 | `scripts/run-go-test-manifest.sh` | Authoritative Go execution of every tracked `tests/*.tesl` source |
 | `runtime/go/teslrt/*_test.go` | Go runtime and integration coverage |
+- [Row adoption design](row-adoption-design.md)

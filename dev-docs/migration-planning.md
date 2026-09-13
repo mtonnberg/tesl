@@ -142,7 +142,13 @@ review; the executor uses the trusted recorded installation version.
 The initial compatibility classifier accepts a plain index over supported fixed
 width built-in carriers, or an index whose every old key is NULL because every
 column is newly introduced, nullable, default-free and absent from every earlier
-admitted source schema. Composite keys containing an old-written column and
+admitted source schema. For unbounded new keys, the introducing version and every
+later version wait until both the physical index and its protected job are valid,
+just as they do for a unique index. Older versions keep serving. This prevents a
+new writer from creating oversized keys during an incomplete build: a failed
+second scan can otherwise leave an invalid but maintained index that rejects an
+old writer's non-HOT update of unrelated old fields. Plain indexes over supported
+fixed-width keys do not acquire this readiness dependency. Composite keys containing an old-written column and
 defaulted new columns do not pass the latter test. Unbounded text/numeric keys and
 old-written unique keys require epoch closure. A removed index that still imposes
 uniqueness or unproven key restrictions also reports its retained write restriction

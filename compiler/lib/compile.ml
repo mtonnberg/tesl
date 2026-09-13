@@ -2467,22 +2467,27 @@ type go_dependencies =
      module named after a different member, and the emitter needs that one to derive the
      Go module path. *)
   | GoDeps of { emit : Ast.module_form list; originals : Ast.module_form list;
-                entry_emit : Ast.module_form }
+                entry_emit : Ast.module_form; lowering : Go_graph_lowering.t option;
+                sources : (Ast.module_form * string) list }
   | GoDepsError of string
 
-let local_dependency_modules entry_path (entry : Ast.module_form) =
-  if entry_path = "" || Filename.check_suffix entry_path ">" then GoDeps { emit = [entry]; originals = [entry]; entry_emit = entry }
+let local_dependency_modules ?entry_source entry_path (entry : Ast.module_form) =
+  if entry_path = "" || Filename.check_suffix entry_path ">" then GoDeps { emit = [entry]; originals = [entry]; entry_emit = entry; lowering=None; sources=Option.to_list(Option.map(fun source->entry,source)entry_source) }
   else
     let graph = build_local_import_graph ~lifted:go_lifted_module_names ~entry entry_path in
     let entry_canon = canonical_import_path entry_path in
     (* One node per SCC: a cycle becomes ONE Go package, so the emitter never sees the
        members separately. *)
     let components = tarjan_sccs graph in
-    let failed = ref None in
+    let failed = ref None and captured=ref [] in
     let parsed path =
-      if path = entry_canon then Some entry
-      else match parse_module_file path with
-        | Some m -> Some m
+      let parsed=if path=entry_canon then
+          Option.map(fun bytes->entry,bytes)(match entry_source with Some _ as source->source | None->Some(Source_input.read_text path))
+        else try let bytes=Source_input.read_text path in
+          match parse_module path bytes with Ok m->Some(m,bytes) | Err _->None
+        with Sys_error _->None in
+      match parsed with
+        | Some(m,bytes) -> captured:=(m,bytes)::!captured;Some m
         | None ->
           if !failed = None then
             failed := Some (Printf.sprintf "Go backend could not parse imported module %s"
@@ -2495,7 +2500,7 @@ let local_dependency_modules entry_path (entry : Ast.module_form) =
     | None -> (match Go_graph_lowering.lower ~entry originals with
       | Error message -> GoDepsError message
       | Ok lowered -> GoDeps {emit=Go_graph_lowering.modules lowered; originals;
-          entry_emit=Go_graph_lowering.entry lowered})
+          entry_emit=Go_graph_lowering.entry lowered; lowering=Some lowered; sources=List.rev !captured})
 
 let go_project_diag file message = {
   file; start_line = 1; start_col = 1; end_line = 1; end_col = 1;
@@ -2526,6 +2531,18 @@ let go_import_boundary_diags (filename : string) (m : Ast.module_form) =
              imp.module_name name imp.module_name name))) names
     | _ -> []) m.imports
 
+(* Fixtures are executable tests only after the same full declaration judgment
+   used by diagnostics. Keep original owners for the Go graph binding. *)
+let checked_migration_fixtures sources =
+ let rec collect acc = function
+  | [] -> Result.Ok (List.rev acc)
+  | ((m:Ast.module_form),bytes)::rest ->
+    Result.bind (Migration_declaration.check ~compiler_abi:"compiler-local-unsealed-comparison" ~source:bytes m) (fun declaration ->
+      let acc=match Option.bind declaration Migration_declaration.transforms with
+       | Some checked when List.exists(fun(row:Migration_transform.row)->row.fixtures<>[])(Migration_transform.rows checked)->checked::acc
+       | _->acc in collect acc rest) in
+ collect [] sources
+
 let compile_go_source ?(debug=false) ?(path="") filename source =
   let path = if path = "" then filename else path in
   match parse_module filename source with
@@ -2536,9 +2553,9 @@ let compile_go_source ?(debug=false) ?(path="") filename source =
     let diags = check_module source m in
     if List.exists (fun (d:diagnostic) -> d.severity="error") diags then GoFailure (diags @ go_import_boundary_diags filename m)
     else
-      (match local_dependency_modules path m with
+      (match local_dependency_modules ~entry_source:source path m with
        | GoDepsError message -> GoFailure [go_project_diag filename message]
-       | GoDeps { emit = modules; originals; entry_emit } ->
+       | GoDeps { emit = modules; originals; entry_emit; lowering; sources=captured_sources } ->
          (* Each dependency is checked in its own right: an importer only sees names its
             dependency exports, so a dependency that does not compile must not be
             emitted as if it did. *)
@@ -2558,7 +2575,11 @@ let compile_go_source ?(debug=false) ?(path="") filename source =
               List.map (fun (d:Migration_program.database) -> d.identity,d.family) (Migration_program.databases p)) history in
             let migration_queues=Option.fold ~none:[] ~some:Migration_program.queue_bindings history in
             let queue_codec_records=Option.fold ~none:[] ~some:Migration_program.queue_codec_records history in
-            match Emit_go.compile_project ~mode ~migration_families ~migration_queues ~queue_codec_records ~entry:entry_emit modules with
+            match checked_migration_fixtures captured_sources with
+            | Error errors -> GoFailure (Migration_declaration.diagnostics_of_errors errors)
+            | Ok migration_fixtures ->
+            let fixture_graph=if migration_fixtures=[] then None else lowering in
+            match Emit_go.compile_project ~mode ?fixture_graph ~migration_fixtures ~migration_families ~migration_queues ~queue_codec_records ~entry:entry_emit modules with
            | Ok artifacts ->
              let metadata = match history with None -> [] | Some history ->
               let json = Migration_program.to_json ~quote:json_encode_string history in
@@ -2582,7 +2603,7 @@ let compile_go_source ?(debug=false) ?(path="") filename source =
     prerequisite. No CLI path calls this, and its v4 source envelope is not an
     executable expansion history. Public compilation continues to refuse retained
     Transform/Reset operations until their physical protocol is implemented. *)
-let compile_row_source_artifacts ?(mode=Emit_go.Release) ?(storage=false) ?(physical=false) filename source =
+let compile_row_captured_artifacts ~catalog_only ?(mode=Emit_go.Release) ?(storage=false) ?(physical=false) filename source =
  match parse_module filename source with
  | Err error -> GoFailure (source_parse_diagnostics filename source error)
  | Ok entry ->
@@ -2610,12 +2631,21 @@ let compile_row_source_artifacts ?(mode=Emit_go.Release) ?(storage=false) ?(phys
     let modules=Go_graph_lowering.modules lowering and entry=Go_graph_lowering.entry lowering in
     let p=Migration_program.source_program history in
     let migration_families=List.map (fun (d:Migration_program.database) -> d.identity,d.family) (Migration_program.databases p) in
-    match Emit_go.compile_project ~mode ~row_physical:physical ~row_storage:(storage || physical) ~row_source:history ~migration_families
+    match Emit_go.compile_project ~mode ~row_catalog_only:catalog_only ~row_physical:physical ~row_storage:(storage || physical) ~row_source:history ~migration_families
       ~migration_queues:(Migration_program.queue_bindings p)
       ~queue_codec_records:(Migration_program.queue_codec_records p) ~entry modules with
-    | Ok artifacts -> GoSuccess artifacts
+    | Ok artifacts -> GoSuccess (if catalog_only then List.filter (fun (artifact:Emit_go.artifact) -> not (String.starts_with ~prefix:"cmd/" artifact.path)) artifacts else artifacts)
     | Error errors -> GoFailure (List.map diag_of_go_emit_error errors)) in
   match result with Ok output -> output | Error errors -> GoFailure (Migration_declaration.diagnostics_of_errors errors)
+
+let compile_row_source_artifacts ?mode ?storage ?physical filename source =
+ compile_row_captured_artifacts ~catalog_only:false ?mode ?storage ?physical filename source
+
+(* Internal installer/catalog tests only. It shares the exact capture/checking
+   path and emits no command entry point. Ordinary row App emission retains its
+   queue capability refusal. No CLI flag selects this route. *)
+let compile_row_catalog_artifacts filename source =
+ compile_row_captured_artifacts ~catalog_only:true ~storage:true ~physical:true filename source
 
 let compile_go_file ?(debug=false) filename =
   let source = Source_input.read_text filename in

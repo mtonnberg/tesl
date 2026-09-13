@@ -8,6 +8,26 @@ non-normative. An unchecked row is not delivered.
 
 ## Current assessment and implementation order
 
+The feature is not ready for general use. The core row-migration engine has
+substantial PostgreSQL application coverage, but passing its internal compiler
+route is not the same as delivering the public CLI and deployment workflow.
+
+| Area | What is demonstrated | What remains |
+| --- | --- | --- |
+| Additive migrations | PostgreSQL expansion, retained writers, Worker deployment, explicit epoch closure and heartbeats | Remaining mixed histories and a reliable complete regression gate |
+| Data transformations | Unchanged applications, lazy conversion, dual writes, backfill, repeated revisions, and Contract on the internal route | Public command activation and legacy installation adoption |
+| Removal and JSONB | Actual field removal and record/ADT conversion, including reverse compatibility, SQL NULL and retained writers | The same scenarios in the complete todo app and teaching lessons |
+| Ordinary CLI | Isolated original V1/V2/V3 lifecycle with unchanged application source | Integration, remaining compatibility cases and review |
+| Queue migration | Checked complete source inventories, strict source binding and integrated combined row/queue catalog | Execution and finality |
+| Staged uniqueness | Design and prerequisites | Implementation and application regressions |
+
+The next acceptance milestones are the ordinary application workflow and its
+full migration lifecycle, followed by combined queue execution and staged
+uniqueness. Concurrent-index safety, row-history index execution, checked migration
+fixtures, typed deletion, and read-only legacy-adoption inspection are integrated;
+the adoption inspector deliberately does not authorize a transition. The final manual, lessons, showcase,
+comprehensive regression run and second review remain completion requirements.
+
 Before the latest epoch/heartbeat integration, the runtime/compiler union passed
 all 83 focused groups:
 application access (11), nominal keys (19), nominal Copy/Rename (5), primitive
@@ -23,6 +43,14 @@ and retired V1 HTTP 503. A reusable exporter now reproduces that ordinary CLI
 workflow with pinned compiler/CLI binaries, original V1 provenance, and identical
 application-source hashes. Its newly built applications pass the PostgreSQL
 lifecycle gate (4.101s). This remains an isolated first-transform prototype.
+The refreshed ordinary workflow also passes with three original versions
+(7.44s; 8.462s including the Go race suite). It covers the first transformation,
+Contract, and a subsequent optional-field addition, including an original V2
+writer preserving V3 data. V1 is built before freezing history, all three
+application-source hashes match, and the original source directory is absent
+during execution. Public dispatch is still isolated; this trace predates the
+combined queue catalog and does not establish general mixed-history or legacy
+adoption support.
 
 Nominal Derived mapping certificates are integrated after two source reviews.
 The final producer runs pass 36 affected groups; the fresh shared build and all
@@ -57,12 +85,114 @@ reviews; all five fresh shared groups pass (11.668s).
 Explicit additive-epoch closure and live request heartbeats are also integrated
 after two reviews. Their fresh shared native wrapper passes (95.326s), including
 ordinary compiled applications, explicit retirement, drain and heartbeat recovery.
-The broader shared application-access suite passes ten of eleven groups
-(252.486s), but a fresh V2 process fails startup with `database busy, try again`.
-That failure is under investigation; the combined regression gate is not green.
-The shared compiler build and nine optional transport source groups pass. The
-Retype and physical-removal reruns have not run after this integration.
-Public activation, mixed histories,
+The broader shared application-access suite initially passed ten of eleven groups
+(252.486s): a fresh V2 process exhausted its existing 400ms startup budget during
+the extra heartbeat connection verification. The corrected startup transfers its
+already verified Request connection to the heartbeat, preserving the deadline and
+full reconnect verification. Two reviews, original-app tests, and a precise
+connection-count mutant cover ownership and cleanup. The fresh shared compiler
+build and affected application/heartbeat group now pass (58.492s).
+The shared compiler build and nine optional transport source groups pass. After
+current-codec and queue-source integration, all 16 Retype/WriteBack groups pass
+(71.332s), as do all three physical-removal/JSONB groups (81.772s). The forward
+protocol wrapper passes (67.718s), covering independently compiled ABI ordering,
+crash prefixes and cancellation rollback. Its first rerun hit the Unix socket
+path-length limit in a test fixture under the external scratch directory; using
+the existing configurable socket root fixes that fixture without changing its
+cancellation assertions or production code.
+Current-codec composition for an additive successor after Contract is integrated,
+with an independent codec-owner field-order witness. Original V1/V2/V3 apps pass
+the PostgreSQL lifecycle (7.49s), including late V2 writes, defaults, SQL NULL,
+rollback and no invented backfill or ABI pin; three independent repeats pass.
+One earlier run timed out during Contract V2. Its cause remains unexplained and
+its failure is retained alongside the later passes. The reliability gate remains
+open. New-entity expansion is also integrated: original apps pass table/index
+creation, complete birth-provenance validation, later transformation, Contract,
+and five publication/crash cases (25.750s). Its missing-birth guard mutant fails.
+Fresh shared validation passes all six additive-successor groups (32.013s) and
+the new-table lifecycle wrapper (40.039s). An earlier shared run timed out while
+creating its test database during a 110-second PostgreSQL checkpoint, before
+application startup. The private cluster was moved to external scratch storage
+and restarted with the same configuration and test deadlines before these passes.
+This fixture-setup incident is separate from the unresolved Contract timeout.
+Optional nominal JSONB successor coverage is integrated after two reviews. Its
+original record and ADT applications pass (14.258s), including distinct
+retained-writer updates that preserve both new payloads. The fresh shared build
+and all eight combined successor groups pass (154.095s, including compilation of
+the original applications). Queue source projection is also integrated after two
+reviews and two guard-removal tests; all 22 fresh shared groups pass (12.785s).
+That projection binds complete source inventories and preserves the legacy
+reader's refusals. It does not activate queue execution with row migrations.
+
+The ordinary CLI workflow exposed a warning-exit regression: `tesl check` returned
+failure for an otherwise valid application carrying only MIG031. It now bases its
+exit status on error severity, preserving printed warnings. The new real-process
+regression fails on the previous implementation and passes with the fix; it also
+checks a mixed warning/error invocation. The focused check and all 37 diagnostic
+groups pass after independent source review.
+
+Concurrent-index review found a real readiness bug in the public additive
+protocol. New writers could populate an unbounded key before its concurrent
+index was valid; a failed second scan could then make the maintained invalid
+index reject an old writer's unrelated-field update. Introducing and later
+versions now wait for both physical and protected completion. Earlier versions
+keep serving, and bounded plain indexes retain their existing readiness behavior.
+The actual PostgreSQL failure and a precise guard-removal regression are recorded.
+Two independent reviews, fresh shared runtime race checks (3.528s native, 1.050s
+unit), and all 34 compiler planner groups (19.998s) pass. The native fixture uses
+the real format-3 executor, Request readiness and index worker with a sealed
+test history; this is not evidence of row-format-5 index execution. Existing
+executables do not acquire the new readiness rule retroactively.
+
+The row-history index observer is integrated after independent review. It binds
+every index job to its checked physical operation and accounts for both index
+and row-shard leases. Fresh shared unit and PostgreSQL observation checks pass
+(1.740s and 2.728s). Its separate worker-execution candidate passes original
+application readiness, failed-build recovery and atomic registration checks, but
+review found that an idle old-version worker could indefinitely block Contract.
+That candidate remains isolated pending a lifecycle fix and regression with the
+old worker kept alive. Original nonphysical V1 worker compatibility also needs
+preserving in that candidate.
+
+The combined row/queue catalog is integrated after independent review. Every
+original row application carries its complete queue inventory, including explicit
+emptiness. Protected registration binds the physical contract to its source
+schema and storage identities atomically; a precise guard-removal test detects
+unrelated identities. All 23 fresh shared queue groups pass (22.146s) after fixture
+integration. This changes the unpublished format-5 candidate layout; it does not
+upgrade existing catalogs or activate queue dispatch, transformation or finality.
+
+Checked migration fixtures now run through ordinary generated tests, including
+fixtures returning the builtin Maybe of the exact previous entity. Nothing and
+traps fail by fixture name. Both Row and Reject are valid smoke-test outcomes;
+business assertions remain the author's responsibility. Emission checks the
+complete original captured source graph, including imported helper bodies, and
+retains the original proof context. Independent review found and fixed an
+equal-owner/different-helper-body gap. The integrated compiler build and all 14
+fixture, 43 transformation, 21 linker and 21 module-system groups pass, as do the
+composed runtime unit race checks. Generated fixture tests run after their Tesl
+source files are removed.
+
+The broader shared application suite passed ten of eleven groups (296.289s).
+The repeated-window group stopped on a stale expected diagnostic: the runtime
+now refuses premature V3 expansion at its explicit Contract-V2 preflight, before
+the older physical-manifest check. Updating that exact expectation preserves
+the assertions that no new columns or compatibility floor are published. The
+complete repeated-application scenario then passes (57.100s including source
+rebuild), after independent review of the test correction. This is separate
+from the historical unexplained Contract timeout retained above.
+
+Migration-aware deletes are now supported for transforming entities. The checked
+compiler emits a typed delete adapter for `delete` and
+`deleteAndReturnResult`, using only Copy/Rename predicate fields. The runtime
+executes one admitted parameterized DELETE, returns its command-tag count, and
+does not decode rows, invoke conversion callbacks, or latch row-processing ABI.
+The source tests cover computed/Retype refusals; the original source-deleted V1/V2
+applications pass PostgreSQL delete, rejection-row removal, count-zero/count-many,
+operand effects, old-writer deletion, rollback, timeout and post-Contract
+retirement checks (Go race 11.231s). The same handler remains unchanged.
+
+Public activation, remaining mixed-history combinations,
 adoption, queue execution, staged uniqueness, the transforming showcase and
 lessons, and final comprehensive gates remain open. Manual coherence and
 documentation integrity pass after the current assessment update. Those checks

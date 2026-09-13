@@ -58,10 +58,11 @@ under `deploy/` arrange these processes and their proxy. Python does not interpr
 the migration or execute its DDL; those operations belong to the compiled worker.
 The same separation applies if your deployment system uses Helm.
 
-A plain index can keep building after `schema-worker-ready`. New request
-processes can serve because the index is not required to make their rows valid.
-For a required unique index, readiness waits for PostgreSQL's valid index and
-Tesl's recorded completion. In either case, leave the schema worker supervised.
+This index on `completed: Bool` can keep building after `schema-worker-ready`.
+For an index on newly added unbounded keys, such as `String`, newer request
+processes wait for PostgreSQL's valid index and Tesl's recorded completion while
+older processes keep serving. A required unique index also waits for both.
+Leave the schema worker supervised in each case.
 
 Do not infer compatibility from the word “plain.” PostgreSQL can reject a wide
 indexed text value even without a uniqueness constraint. The compiler's plan

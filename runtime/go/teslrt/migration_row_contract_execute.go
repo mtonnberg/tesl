@@ -90,6 +90,13 @@ func pgRowContractState(ctx context.Context, conn *pgx.Conn, b *pgRowBaseline, r
 		if err != nil {
 			return err
 		}
+		var indexes bool
+		if err := tx.QueryRow(ctx, "select exists(select 1 from "+pgx.Identifier{b.history.Namespace, "tesl_schema_index"}.Sanitize()+")").Scan(&indexes); err != nil {
+			return err
+		}
+		if indexes {
+			return fmt.Errorf("row Contract with index jobs requires its checked terminal lifecycle")
+		}
 		return nil
 	})
 	return state, err

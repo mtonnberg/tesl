@@ -3,6 +3,8 @@
     emitted declarations and expression correspondence; it grants no proof. *)
 type t
 val lower : entry:Ast.module_form -> Ast.module_form list -> (t,string) result
+(** Exact original AST inventory, before any Go-only lowering. *)
+val original_modules : t -> Ast.module_form list
 val modules : t -> Ast.module_form list
 val entry : t -> Ast.module_form
 val owner : t -> string -> string option

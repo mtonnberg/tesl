@@ -12,6 +12,17 @@ import (
 // must first verify the control format, immutable history and job provenance.
 func pgPrepareIndexJobCatalog(metadata *pgCatalogExpectations, actual, expected *pgCatalogTable,
 	jobs []pgMigrationIndexJob, version int, report *PgMigrationCatalogReport) (*pgCatalogTable, *pgCatalogTable, bool, error) {
+	return pgPrepareIndexJobCatalogForAdmission(metadata, actual, expected, jobs, version, version, report)
+}
+
+// Row observation may reconstruct a newer full physical catalog while retaining
+// an older application's write capability. Shape ownership and readiness must
+// therefore use distinct exact versions; ordinary format3 callers use one.
+func pgPrepareIndexJobCatalogForAdmission(metadata *pgCatalogExpectations, actual, expected *pgCatalogTable,
+	jobs []pgMigrationIndexJob, version, admissionVersion int, report *PgMigrationCatalogReport) (*pgCatalogTable, *pgCatalogTable, bool, error) {
+	if admissionVersion < 0 || admissionVersion > version {
+		return nil, nil, false, fmt.Errorf("index catalog admission exceeds its checked shape revision")
+	}
 	live, want := *actual, *expected
 	live.Indexes, want.Indexes = slices.Clone(actual.Indexes), slices.Clone(expected.Indexes)
 	ready := true
@@ -65,7 +76,7 @@ func pgPrepareIndexJobCatalog(metadata *pgCatalogExpectations, actual, expected 
 			}
 			live.Indexes = slices.Delete(live.Indexes, position, position+1)
 		}
-		if job.Index.Unique && job.Version <= version && (!valid || job.State != "valid") {
+		if pgIndexRequiresValidForWrites(actual, job.Index) && job.Version <= admissionVersion && (!valid || job.State != "valid") {
 			ready = false
 		}
 	}
@@ -100,10 +111,40 @@ func pgIndexJobCatalogShape(job pgMigrationIndexJob) error {
 	return nil
 }
 
+// Current writers must not populate an unbounded new key while a concurrent
+// build is incomplete. A failed second scan leaves a maintained invalid index
+// that can reject an old writer's non-HOT update of unrelated old columns.
+// Unique indexes need the same gate for their existing enforcement promise.
+func pgIndexRequiresValidForWrites(actual *pgCatalogTable, index PgMigrationCatalogIndex) bool {
+	if index.Unique || actual == nil || len(index.Columns) == 0 {
+		return true
+	}
+	for _, name := range index.Columns {
+		position := slices.IndexFunc(actual.Columns, func(c pgCatalogColumn) bool { return c.Name == name })
+		if position < 0 {
+			return true
+		}
+		column := actual.Columns[position]
+		if column.TypeNamespace != "pg_catalog" || column.TypeKind != "b" || column.Typmod != -1 ||
+			column.Generated != "" || column.Identity != "" || column.Collation != column.TypeCollation {
+			return true
+		}
+		switch column.Type {
+		case "bool", "int4", "int8", "float8":
+		default:
+			return true
+		}
+	}
+	return false
+}
+
 // An older binary cannot trust a future compiler's ONLINE classification alone.
 // It independently checks the actual key domain: old writes must either omit
 // every key into default-free NULLs, or the plain index must use only bounded
-// builtin scalar keys. No expressions, nondefault opclasses or collations are
+// builtin scalar keys. The NULL case also requires every version that knows the
+// new key to wait for physical and protected completion via the readiness gate
+// above; omitted old INSERT keys alone do not protect old non-HOT UPDATEs.
+// No expressions, nondefault opclasses or collations are
 // introduced through this allowance; shape comparison enforces that separately.
 func pgFutureIndexSafeForWrites(actual, expected *pgCatalogTable, index PgMigrationCatalogIndex) bool {
 	allNewNull, bounded := true, true

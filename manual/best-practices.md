@@ -896,9 +896,11 @@ retirement are still being implemented.
 For transforming migrations, prepare the reviewed [storage cleanup Contract](migration-contracts.md) before building the rollout binary.
 
 The separate worker can build a supported index on an existing table with
-`CREATE INDEX CONCURRENTLY`. A plain index does not hold up request readiness;
-the worker keeps running until PostgreSQL has finished and Tesl has recorded its
-result. A required unique index waits for both checks. Keep the worker supervised
+`CREATE INDEX CONCURRENTLY`. A plain index on a bounded key, such as `Bool`, can
+keep building after requests become ready. An index on newly added unbounded
+keys, such as `String` or JSONB values, holds new versions until PostgreSQL has
+finished and Tesl has recorded completion; older versions keep serving. A
+required unique index also waits for both checks. Keep the worker supervised
 during a rollout: after interruption, its replacement verifies the old database
 executor has stopped before claiming the job. An index that could reject writes
 from an admitted old binary still requires a compatibility decision. Embedded
@@ -909,7 +911,7 @@ Compiler updates can also change Tesl's own migration bookkeeping tables. The
 current runtime reads exact supported formats 2 and 3 and installs format 3 on new
 databases. A control-format upgrade also requires a compatible stored-value
 contract; changing bookkeeping does not revalidate previously stored proofs.
-The current compiler uses semantic revision 4 and refuses revision-2/3 data. That
+The current compiler uses semantic revision 5 and refuses incompatible stored-value contracts. That
 cross-contract revalidation path is still being implemented.
 For a compatible format-2 database, first deploy the bridge request binaries, finish
 any pending expansion with its original worker, and stop that worker. Run the new

@@ -41,9 +41,9 @@ func pgExpectedRowControl(e *pgCatalogExpectations, owner, name string) (*pgCata
 		check("(inventory_authority = 'complete'::text)", "inventory_authority")
 		hash("inventory_hash")
 		check("(queue_authority = 'complete'::text)", "queue_authority")
-		check("(queue_count = 0)", "queue_count")
+		check("(queue_count >= 0)", "queue_count")
 		check("(facility_authority = 'complete'::text)", "facility_authority")
-		check("(facility_count = 0)", "facility_count")
+		check("(facility_count >= 0)", "facility_count")
 		digest("inventory", "inventory_hash")
 	case "tesl_row_versions":
 		col("version", "int4")
@@ -65,8 +65,8 @@ func pgExpectedRowControl(e *pgCatalogExpectations, owner, name string) (*pgCata
 			hash(n)
 		}
 		check("(entity_count >= 0)", "entity_count")
-		check("(queue_count = 0)", "queue_count")
-		check("(facility_count = 0)", "facility_count")
+		check("(queue_count >= 0)", "queue_count")
+		check("(facility_count >= 0)", "facility_count")
 		check("(compiler_abi ~ '^tesl-source-abi-v1:[0-9a-f]{64}$'::text)", "compiler_abi")
 		check("(stored_value_compatibility ~ '^tesl-stored-value-v1:[0-9a-f]{64}$'::text)", "stored_value_compatibility")
 		digest("schema_snapshot", "schema_snapshot_hash")
@@ -107,6 +107,18 @@ func pgExpectedRowControl(e *pgCatalogExpectations, owner, name string) (*pgCata
 		con("p", "", "version")
 		check("((version >= 2) AND (version <= 2147483646))", "version")
 		check("(compiler_abi ~ '^tesl-source-abi-v1:[0-9a-f]{64}$'::text)", "compiler_abi")
+	case "tesl_row_queue_sources":
+		col("version", "int4")
+		col("source_binding", "bytea")
+		col("source_binding_hash", "text")
+		col("inventory_hash", "text")
+		col("expansion_hash", "text")
+		con("p", "", "version")
+		bounded("version")
+		hash("source_binding_hash")
+		hash("inventory_hash")
+		hash("expansion_hash")
+		digest("source_binding", "source_binding_hash")
 	case "tesl_row_entities":
 		col("version", "int4")
 		col("entity", "text")
@@ -142,7 +154,10 @@ func pgRowControlCatalog(ctx context.Context, tx pgx.Tx, namespace string, roles
 	if err != nil {
 		return err
 	}
-	names := []string{}
+	names := []string{"tesl_jobs_seq_seq"}
+	for _, spec := range pgQueueCandidateTables(namespace) {
+		names = append(names, spec.name)
+	}
 	for _, spec := range pgMigrationControlTables {
 		names = append(names, spec.name)
 	}
@@ -155,6 +170,9 @@ func pgRowControlCatalog(ctx context.Context, tx pgx.Tx, namespace string, roles
 	}
 	if extra {
 		return fmt.Errorf("unrecorded protected relation in row format 5")
+	}
+	if err := pgVerifyQueueCandidateTables(ctx, tx, namespace, roles, metadata); err != nil {
+		return err
 	}
 	for _, spec := range pgRowControlTables() {
 		expected, err := pgExpectedRowControl(metadata, roles.Owner, spec.name)

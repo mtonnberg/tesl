@@ -59,9 +59,24 @@ constants. An optional `establish` can return a newly proved field or lead to an
 explicit `Reject`; proof authority stays with the schema's fact owner.
 
 Every `Migrate` entry requires at least one parameterless fixture function
-returning its exact previous entity. Duplicates, unrelated entities, and functions
-with arguments are refused. These are representative source fixtures, not yet
-the full generated compatibility, dual-write, decoder, or PostgreSQL harness.
+returning its exact previous entity or `Maybe` of that exact entity. The optional
+form lets a fixture use the previous schema's actual `establish` API without
+asserting a proof. Only the builtin `Tesl.Maybe.Maybe` wrapper qualifies;
+duplicates, unrelated entities, nested wrappers and arguments remain refused.
+
+`tesl test migrations/family/v2.tesl` executes one generated smoke test per
+fixture, alongside the developer's ordinary tests. `Nothing` fails that fixture
+by name; it is never skipped. A direct row or `Something row` invokes the exact
+checked migration callback. Both `Row` and `Reject` are legitimate outcomes;
+assert the intended values or rejection reason in ordinary source tests. A trap
+or invalid result tag fails the smoke test. Fixture tests honor the normal named
+and kind filters and run only under the test command, never at application
+startup. Their private function bridges retain original owner and source-graph
+checks. The canonical descriptor already includes each complete fixture
+signature and body, so this does not introduce a new semantic wire format.
+
+These tests establish fixture inhabitation and callback execution, not the full
+generated compatibility, dual-write, decoder, or PostgreSQL harness.
 `Derived` has no user row callback: its descriptor retains the compiler-owned
 identity/default/empty-optional mapping.
 
@@ -328,8 +343,9 @@ pointer. Callback, storage, WriteBack and access completeness are checked before
 atomic application preflight seals any owner. Missing, duplicate, foreign and
 late bindings cannot fall through to the old SQL path.
 
-Ordinary `select`, `selectOne`, `insert`, `insertMany`, `update` and
-`updateAndReturnOne` use these statically typed closures. SQL query fragments
+Ordinary `select`, `selectOne`, `insert`, `insertMany`, `update`,
+`updateAndReturnOne`, `delete` and `deleteAndReturnResult` use these statically
+typed closures. SQL query fragments
 retain explicit logical field holes until the admitted retained physical plan
 resolves them. Copy and Rename predicates/orderings use storage whose value is
 valid for both generations. Computed/Retype predicates, aggregates and joins in
@@ -342,7 +358,9 @@ multi-row update declares one server-side NO SCROLL cursor over SELECT FOR UPDAT
 FETCH uses TESL_RMW_BATCH (default 2000); each result is drained and closed before
 that batch is written in the same admitted transaction. The original cursor owns
 one target snapshot, so rows inserted between batches cannot enter the update.
-Ordinary updates retain only the current batch; updateAndReturnOne fetches at
+Deletes use the same checked predicate projection and write transaction, but do
+not decode or run a row conversion callback; PostgreSQL's command tag supplies
+the count. Ordinary updates retain only the current batch; updateAndReturnOne fetches at
 most two rows to reject ambiguity before writing. Each SET operand is captured once,
 then WHERE operands are evaluated once, including zero-match updates. Reject,
 decode errors and SQL write errors roll back the whole update and a tentative

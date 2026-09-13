@@ -173,6 +173,12 @@ func pgQueueCandidateCatalog(ctx context.Context, tx pgx.Tx, namespace string, r
 	if extra {
 		return fmt.Errorf("unrecorded protected relation in candidate format 4")
 	}
+	return pgVerifyQueueCandidateTables(ctx, tx, namespace, roles, meta)
+}
+
+// Shared closed table/sequence/ACL validator. Callers separately validate their
+// entire protected relation inventory; this helper never ignores extra names.
+func pgVerifyQueueCandidateTables(ctx context.Context, tx pgx.Tx, namespace string, roles PgMigrationControlRoles, meta *pgCatalogExpectations) error {
 	if err := pgQueueCandidateForeignKeys(ctx, tx, namespace); err != nil {
 		return err
 	}

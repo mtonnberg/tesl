@@ -35,7 +35,10 @@ func (p *pgRowBaselinePreparation) prepareFresh(ctx context.Context, tx pgx.Tx, 
 		}
 		migrationBoundary("row-baseline-table-" + spec.name)
 	}
-	if _, err := tx.Exec(ctx, "insert into "+ns+"tesl_row_baseline values(1,1,'fresh-install','complete',$1,$2,'complete',0,'complete',0)", []byte(b.inventory), b.inventoryHash); err != nil {
+	if err := pgCreateRowQueueBaseline(ctx, tx, b, p.roles); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, "insert into "+ns+"tesl_row_baseline values(1,1,'fresh-install','complete',$1,$2,'complete',$3,'complete',$3)", []byte(b.inventory), b.inventoryHash, len(b.queues[0].version.Contracts)); err != nil {
 		return err
 	}
 	schema, err := pgRowBaselineHex(b.version.SchemaContract)
@@ -46,7 +49,7 @@ func (p *pgRowBaselinePreparation) prepareFresh(ctx context.Context, tx pgx.Tx, 
 	if err != nil {
 		return err
 	}
-	if _, err := tx.Exec(ctx, "insert into "+ns+"tesl_row_versions values(1,$1,$2,$3,$4,$5,$6,$7,$8,0,0,$9,$10)", b.history.Family, schema, b.version.SchemaSnapshotHash, storage, b.version.StorageSnapshotHash, b.inventoryHash, b.catalogHash, len(b.entities), b.history.SourceCompilerABI, b.history.StoredValueCompatibility); err != nil {
+	if _, err := tx.Exec(ctx, "insert into "+ns+"tesl_row_versions values(1,$1,$2,$3,$4,$5,$6,$7,$8,$11,$11,$9,$10)", b.history.Family, schema, b.version.SchemaSnapshotHash, storage, b.version.StorageSnapshotHash, b.inventoryHash, b.catalogHash, len(b.entities), b.history.SourceCompilerABI, b.history.StoredValueCompatibility, len(b.queues[0].version.Contracts)); err != nil {
 		return err
 	}
 	if b.physical != nil {
@@ -107,6 +110,9 @@ func pgVerifyRowBaseline(ctx context.Context, tx pgx.Tx, b *pgRowBaseline, state
 		return fmt.Errorf("row baseline installation identity differs")
 	}
 	ns := quoteIdentifier(b.history.Namespace) + "."
+	if err := pgVerifyRowQueueBaseline(ctx, tx, b, state); err != nil {
+		return err
+	}
 	var inventory []byte
 	var hash string
 	var initial, queueCount, facilityCount int
@@ -114,7 +120,7 @@ func pgVerifyRowBaseline(ctx context.Context, tx pgx.Tx, b *pgRowBaseline, state
 	if err := tx.QueryRow(ctx, "select initial_version,established_by,inventory_authority,inventory,inventory_hash,queue_authority,queue_count,facility_authority,facility_count from "+ns+"tesl_row_baseline where id=1").Scan(&initial, &established, &authority, &inventory, &hash, &queueAuthority, &queueCount, &facilityAuthority, &facilityCount); err != nil {
 		return err
 	}
-	if initial != 1 || established != "fresh-install" || authority != "complete" || queueAuthority != "complete" || queueCount != 0 || facilityAuthority != "complete" || facilityCount != 0 || hash != b.inventoryHash || !bytes.Equal(inventory, []byte(b.inventory)) {
+	if initial != 1 || established != "fresh-install" || authority != "complete" || queueAuthority != "complete" || queueCount != len(b.queues[0].version.Contracts) || facilityAuthority != "complete" || facilityCount != len(b.queues[0].version.Contracts) || hash != b.inventoryHash || !bytes.Equal(inventory, []byte(b.inventory)) {
 		return fmt.Errorf("persisted complete row/facility baseline differs from source")
 	}
 	var version, entityCount int
@@ -131,14 +137,14 @@ func pgVerifyRowBaseline(ctx context.Context, tx pgx.Tx, b *pgRowBaseline, state
 	if err != nil {
 		return err
 	}
-	if version != 1 || family != b.history.Family || schemaHash != b.version.SchemaSnapshotHash || storageHash != b.version.StorageSnapshotHash || !bytes.Equal(schema, expectedSchema) || !bytes.Equal(storage, expectedStorage) || inventoryHash != b.inventoryHash || catalogHash != b.catalogHash || entityCount != len(b.entities) || queueCount != 0 || facilityCount != 0 || !strings.HasPrefix(sourceABI, "tesl-source-abi-v1:") || !pgMigrationDigest(strings.TrimPrefix(sourceABI, "tesl-source-abi-v1:")) || compatibility != b.history.StoredValueCompatibility {
+	if version != 1 || family != b.history.Family || schemaHash != b.version.SchemaSnapshotHash || storageHash != b.version.StorageSnapshotHash || !bytes.Equal(schema, expectedSchema) || !bytes.Equal(storage, expectedStorage) || inventoryHash != b.inventoryHash || catalogHash != b.catalogHash || entityCount != len(b.entities) || queueCount != len(b.queues[0].version.Contracts) || facilityCount != len(b.queues[0].version.Contracts) || !strings.HasPrefix(sourceABI, "tesl-source-abi-v1:") || !pgMigrationDigest(strings.TrimPrefix(sourceABI, "tesl-source-abi-v1:")) || compatibility != b.history.StoredValueCompatibility {
 		return fmt.Errorf("persisted row source version differs")
 	}
-	var versions, entities, indexJobs, leases int
-	if err := tx.QueryRow(ctx, "select (select count(*) from "+ns+"tesl_row_versions),(select count(*) from "+ns+"tesl_row_entities),(select count(*) from "+ns+"tesl_schema_index),(select count(*) from "+ns+"tesl_schema_leases)").Scan(&versions, &entities, &indexJobs, &leases); err != nil {
+	var versions, entities int
+	if err := tx.QueryRow(ctx, "select (select count(*) from "+ns+"tesl_row_versions),(select count(*) from "+ns+"tesl_row_entities)").Scan(&versions, &entities); err != nil {
 		return err
 	}
-	if versions != 1 || entities != len(b.entities) || indexJobs != 0 {
+	if versions != 1 || entities != len(b.entities) {
 		return fmt.Errorf("persisted row baseline inventory is incomplete or unsupported")
 	}
 	rows, err := tx.Query(ctx, "select version,entity,table_name,generation,insert_generation,type_contract,type_contract_hash,physical_storage,physical_storage_hash,ordinal,operation_hash from "+ns+"tesl_row_entities order by ordinal")
@@ -197,15 +203,21 @@ func pgVerifyRowPhysicalCatalog(ctx context.Context, tx pgx.Tx, b *pgRowBaseline
 	for _, entity := range b.entities[:count] {
 		catalog = append(catalog, entity.catalog)
 	}
-	return pgVerifyRowCatalogSet(ctx, tx, b, roles, catalog, nil, nil)
+	return pgVerifyRowCatalogSet(ctx, tx, b, roles, catalog, nil, nil, nil)
 }
 
-func pgVerifyRowCatalogSet(ctx context.Context, tx pgx.Tx, b *pgRowBaseline, roles PgMigrationControlRoles, catalog []PgMigrationCatalogTable, triggers map[string]pgRowInvalidation, checks map[string]map[string]pgRowNotNullProof) error {
+func pgVerifyRowCatalogSet(ctx context.Context, tx pgx.Tx, b *pgRowBaseline, roles PgMigrationControlRoles, catalog []PgMigrationCatalogTable, triggers map[string]pgRowInvalidation, checks map[string]map[string]pgRowNotNullProof, indexJobs []pgMigrationIndexJob, indexReady ...*bool) error {
+	if len(indexReady) > 1 || len(indexReady) == 1 && indexReady[0] == nil {
+		return fmt.Errorf("invalid row index readiness observation")
+	}
 	metadata, err := pgReadCatalogExpectations(ctx, tx)
 	if err != nil {
 		return err
 	}
-	names := []string{}
+	names := []string{"tesl_jobs_seq_seq"}
+	for _, spec := range pgQueueCandidateTables(b.history.Namespace) {
+		names = append(names, spec.name)
+	}
 	for _, spec := range pgMigrationControlTables {
 		names = append(names, spec.name)
 	}
@@ -232,6 +244,26 @@ func pgVerifyRowCatalogSet(ctx context.Context, tx pgx.Tx, b *pgRowBaseline, rol
 				}
 				actual.Triggers = []string{}
 				actual.TriggerDefinitions = nil
+			}
+		}
+		if actual != nil && len(indexJobs) != 0 {
+			var report PgMigrationCatalogReport
+			var ready bool
+			local := b.target
+			if local == nil {
+				local = b.physical
+			}
+			actual, expected, ready, err = pgPrepareRowIndexCatalog(metadata, actual, expected, local, indexJobs, &report)
+			if err != nil {
+				return err
+			}
+			if len(indexReady) == 1 {
+				*indexReady[0] = *indexReady[0] && ready
+			} else if !ready {
+				return fmt.Errorf("row concurrent-index request readiness is pending")
+			}
+			if len(report.Missing) != 0 || len(report.Drift) != 0 {
+				return fmt.Errorf("row concurrent-index catalog differs: %v %v", report.Missing, report.Drift)
 			}
 		}
 		if actual == nil || !reflect.DeepEqual(pgCanonicalMigrationTable(actual), pgCanonicalMigrationTable(expected)) {

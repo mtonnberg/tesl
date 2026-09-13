@@ -75,7 +75,7 @@ func CalibrationUpdate[From, To any](ctx context.Context, db *Database, storage 
 func CalibrationCancelAfterDML[From, To any](db *Database, storage *PgRowStorage[From, To], value To) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	directory, err := os.MkdirTemp("", "row-cancel-")
+	directory, err := os.MkdirTemp(os.Getenv("TESL_MIGRATION_TEST_SOCKET_ROOT"), "row-cancel-")
 	if err != nil {
 		return err
 	}

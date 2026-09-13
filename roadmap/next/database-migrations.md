@@ -2318,9 +2318,12 @@ compiler must prove that every key produced by every admitted old schema fits th
 selected index's supported limits and uses total, supported key operations, or that
 old writes produce only harmless NULL keys (all relevant columns are new, nullable,
 default-free and not backfilled). Without that proof, the plan is `ROLL-WINDOW RISK`
-and window-narrowing, so expansion first closes the additive epoch. This does not
-add a uniqueness readiness gate to a plain index. It does make the possible old-write
-failure visible before deployment. Staged uniqueness's preparatory index obeys the
+and window-narrowing, so expansion first closes the additive epoch. For newly introduced unbounded keys, the introducing version and every later
+version remain unready until both the physical index and its protected job are
+valid; older versions continue serving. Old INSERT omission alone is insufficient:
+a failed second concurrent scan can leave a maintained invalid index that rejects
+an old non-HOT UPDATE of unrelated fields. A plain index over supported fixed-width
+keys has no such readiness dependency. Unique-index readiness is unchanged. Staged uniqueness's preparatory index obeys the
 same rule. A narrow, fixed-width key can pass this proof; unbounded `String` or
 arbitrary-precision `Int` storage does not pass merely from its type name.
 

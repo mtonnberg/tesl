@@ -12,9 +12,9 @@ func pgRowControlTables() []pgMigrationControlTable {
  inventory bytea not null,
  inventory_hash text not null check(inventory_hash ~ '^[0-9a-f]{64}$'),
  queue_authority text not null check(queue_authority='complete'),
- queue_count integer not null check(queue_count=0),
+ queue_count integer not null check(queue_count>=0),
  facility_authority text not null check(facility_authority='complete'),
- facility_count integer not null check(facility_count=0),
+ facility_count integer not null check(facility_count>=0),
  check(pg_catalog.encode(pg_catalog.sha256(inventory),'hex')=inventory_hash)`},
 		{"tesl_row_versions", `
  version integer primary key check(version between 1 and 2147483646),
@@ -26,12 +26,19 @@ func pgRowControlTables() []pgMigrationControlTable {
  inventory_hash text not null check(inventory_hash ~ '^[0-9a-f]{64}$'),
  catalog_hash text not null check(catalog_hash ~ '^[0-9a-f]{64}$'),
  entity_count integer not null check(entity_count>=0),
- queue_count integer not null check(queue_count=0),
- facility_count integer not null check(facility_count=0),
+ queue_count integer not null check(queue_count>=0),
+ facility_count integer not null check(facility_count>=0),
  compiler_abi text not null check(compiler_abi ~ '^tesl-source-abi-v1:[0-9a-f]{64}$'),
  stored_value_compatibility text not null check(stored_value_compatibility ~ '^tesl-stored-value-v1:[0-9a-f]{64}$'),
  check(pg_catalog.encode(pg_catalog.sha256(schema_snapshot),'hex')=schema_snapshot_hash),
  check(pg_catalog.encode(pg_catalog.sha256(storage_snapshot),'hex')=storage_snapshot_hash)`},
+		{"tesl_row_queue_sources", `
+ version integer primary key check(version between 1 and 2147483646),
+ source_binding bytea not null,
+ source_binding_hash text not null check(source_binding_hash ~ '^[0-9a-f]{64}$'),
+ inventory_hash text not null check(inventory_hash ~ '^[0-9a-f]{64}$'),
+ expansion_hash text not null check(expansion_hash ~ '^[0-9a-f]{64}$'),
+ check(pg_catalog.encode(pg_catalog.sha256(source_binding),'hex')=source_binding_hash)`},
 		{"tesl_row_entities", `
  version integer not null check(version between 1 and 2147483646),
  entity text not null,
@@ -62,9 +69,13 @@ func pgRowControlFunctions(namespace string) []pgMigrationControlFunction {
  raise exception 'tesl: row V2 has no protected physical manifest'; end if;
  if not exists(select 1 from ` + ns + `tesl_row_baseline b join ` + ns + `tesl_row_versions baseline_version on baseline_version.version=b.initial_version and baseline_version.inventory_hash=b.inventory_hash
  where b.id=1 and b.initial_version=1 and b.established_by='fresh-install' and b.inventory_authority='complete'
- and b.queue_authority='complete' and b.queue_count=0 and b.facility_authority='complete' and b.facility_count=0
- and baseline_version.queue_count=0 and baseline_version.facility_count=0 and baseline_version.entity_count=(select count(*) from ` + ns + `tesl_row_entities where version=1)) then
+ and b.queue_authority='complete' and b.queue_count=baseline_version.queue_count and b.facility_authority='complete' and b.facility_count=baseline_version.facility_count
+ and baseline_version.queue_count=(select count(*) from ` + ns + `tesl_queue_contracts where version=1) and baseline_version.facility_count=baseline_version.queue_count and baseline_version.entity_count=(select count(*) from ` + ns + `tesl_row_entities where version=1)) then
  raise exception 'tesl: row baseline inventory is incomplete'; end if;
+ if not exists(select 1 from ` + ns + `tesl_row_queue_sources q join ` + ns + `tesl_queue_versions source on source.version=q.version and source.inventory_hash=q.inventory_hash
+ where q.version=v and q.expansion_hash=case when v=1 then (select catalog_hash from ` + ns + `tesl_row_versions where version=1) else (select contract_hash from ` + ns + `tesl_row_physical where version=v) end) then
+ raise exception 'tesl: row expansion requires its exact complete queue source inventory'; end if;
+ perform ` + ns + `tesl_queue_inventory_json(v);
 `
 		switch fn.name {
 		case "tesl_begin_expansion":
@@ -115,5 +126,8 @@ end`
 		}
 		functions[i].body = strings.Replace(body, "\nbegin\n", "\nbegin\n"+guard, 1)
 	}
-	return append(append(append(append(functions, pgRowForwardFunctions(namespace)...), pgRowBackfillFunctions(namespace)...), pgRowContractFunctions(namespace)...), pgRowEpochFunctions(namespace)...)
+	functions = append(functions, pgQueueRegistrationFunctions(namespace)...)
+	functions = append(functions, pgQueueOperationFunctions(namespace)...)
+	functions = append(functions, pgRowQueueFunctions(namespace)...)
+	return append(append(append(append(functions, pgRowForwardFunctions(namespace)...), pgRowBackfillFunctions(namespace)...), pgRowContractFunctions(namespace)...), append(pgRowEpochFunctions(namespace), pgRowIndexFunctions(namespace)...)...)
 }

@@ -24,6 +24,7 @@ type pgRowAccess[Row any] struct {
 	sealed     func() bool
 	selectRows func(PgRowQuery, bool, bool, func([]Row) ([]Row, error)) ([]Row, error)
 	insert     func(Row) error
+	deleteRows func(PgRowQuery) (int64, error)
 }
 
 func NewPgRowAccessSlot[Row any]() *PgRowAccessSlot[Row] {
@@ -223,6 +224,36 @@ func pgNewRowAccess[Row any](database *Database, version int, identity string, d
 				captured = true
 			}
 			return values, nil
+		})
+	}
+	// Deleting an admitted row does not need to decode or transform it. Use
+	// the same checked predicate projection and write transaction as updates,
+	// including caller-owned rollback and retirement/compatibility fences.
+	access.deleteRows = func(query PgRowQuery) (int64, error) {
+		query = query.capturedArguments()
+		ctx, cancel := context.WithTimeout(context.Background(), pgLeaseTimeout())
+		defer cancel()
+		plan, err := pgCompiledRowPhysicalPlan(database, version)
+		if err != nil {
+			return 0, err
+		}
+		return pgWithRowTransaction(ctx, database, plan, plan.entity(identity), true, func(a *pgRowTransactionAdmission) (int64, error) {
+			if err := data.check(a, true); err != nil {
+				return 0, err
+			}
+			tail, err := data.statement(a, query)
+			if err != nil {
+				return 0, err
+			}
+			sql := "delete from " + pgx.Identifier{a.plan.namespace, a.entity.table}.Sanitize() + tail
+			statement := pgCapturedRowPlan(sql, query.args, capture)
+			arguments := statement.arguments()
+			migrationBoundary("row-delete-before-exec")
+			tag, err := a.tx.Exec(ctx, statement.SQL, arguments...)
+			if statement.Capture != nil {
+				statement.Capture(int(tag.RowsAffected()))
+			}
+			return tag.RowsAffected(), err
 		})
 	}
 	access.insert = func(value Row) error {
@@ -448,4 +479,22 @@ func DbRowInsertMany[Row any](slot *PgRowAccessSlot[Row], database *Database, ta
 		}
 	}
 	return struct{}{}
+}
+
+// DbRowDelete and DbRowDeleteCount share one server statement. Its command tag
+// supplies the count; there is no read/convert/delete race and no row ABI latch.
+func DbRowDelete[Row any](slot *PgRowAccessSlot[Row], database *Database, table *Table[Row], match func(Row) bool, query PgRowQuery) struct{} {
+	DbRowDeleteCount(slot, database, table, match, query)
+	return struct{}{}
+}
+
+func DbRowDeleteCount[Row any](slot *PgRowAccessSlot[Row], database *Database, table *Table[Row], match func(Row) bool, query PgRowQuery) Int {
+	if database.bound() == nil {
+		return TableDeleteCount(table, match)
+	}
+	count, err := slot.access(database).deleteRows(query)
+	if err != nil {
+		panic(pgFailure("database", err))
+	}
+	return FromInt64(count)
 }

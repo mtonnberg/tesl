@@ -8,7 +8,7 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-func pgVerifyRowWorkState(ctx context.Context, tx pgx.Tx, b *pgRowBaseline, state PgMigrationControlState, forward *pgRowForwardManifest) error {
+func pgVerifyRowWorkState(ctx context.Context, tx pgx.Tx, b *pgRowBaseline, state PgMigrationControlState, forward *pgRowForwardManifest, indexLeaseCount int) error {
 	type final struct {
 		version, generation               int
 		entity, physical, retirement, abi string
@@ -154,7 +154,7 @@ func pgVerifyRowWorkState(ctx context.Context, tx pgx.Tx, b *pgRowBaseline, stat
 	if err := tx.QueryRow(ctx, "select count(*) from "+ns+"tesl_schema_leases").Scan(&leases); err != nil {
 		return err
 	}
-	if leases != total {
+	if indexLeaseCount < 0 || leases != total+indexLeaseCount {
 		return fmt.Errorf("orphan row worker lease")
 	}
 	return nil

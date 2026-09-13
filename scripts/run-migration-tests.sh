@@ -47,7 +47,9 @@ if (( $# == 0 )); then
   # mandatory budgets; neither gate may skip unavailable PostgreSQL.
   go test -race -count=1 -timeout=300s -tags=tesl_migration_test ./teslrt -run '^(TestPgMigration(Index|FutureIndex|Embedded)|TestServe(Shutdown|ListenFailure))'
   # Permanent generation baseline: marker/catalog/role guards and real backend deaths.
-  go test -race -count=1 -timeout=300s -tags=tesl_migration_test ./teslrt -run '^(TestPgRowBaseline|TestRowBaseline|TestRowPhysical|TestPgRowForwardInvalidation)'
+  go test -race -count=1 -timeout=300s -tags=tesl_migration_test ./teslrt -run '^(TestPgRowBaseline|TestPgRowIndex|TestRowBaseline|TestRowPhysical|TestPgRowForwardInvalidation)'
+  (cd "$repo_root/compiler" && dune build test/test_migration_queue.exe && dune exec --no-build ./test/test_migration_queue.exe)
+  (cd "$repo_root/compiler" && dune build test/test_migration_fixtures.exe && dune exec --no-build ./test/test_migration_fixtures.exe)
   (cd "$repo_root/compiler" && dune build test/test_migration_row_companion.exe && dune exec --no-build ./test/test_migration_row_companion.exe)
   (cd "$repo_root/compiler" && dune build test/test_migration_contract.exe && dune exec --no-build ./test/test_migration_contract.exe)
   # Typed source/target and reverse JSONB codecs must exercise real PostgreSQL.
@@ -57,8 +59,10 @@ if (( $# == 0 )); then
   # compatible second compiler build; no patched runtime or metadata fixtures.
   (cd "$repo_root/compiler" && dune build test/test_migration_row_forward.exe && dune exec --no-build ./test/test_migration_row_forward.exe)
   (cd "$repo_root/compiler" && dune build test/test_migration_row_access.exe && dune exec --no-build ./test/test_migration_row_access.exe)
+  (cd "$repo_root/compiler" && dune build test/test_migration_delete.exe && dune exec --no-build ./test/test_migration_delete.exe)
   (cd "$repo_root/compiler" && dune build test/test_migration_row_additive.exe && dune exec --no-build ./test/test_migration_row_additive.exe)
   (cd "$repo_root/compiler" && dune build test/test_migration_row_tables.exe && dune exec --no-build ./test/test_migration_row_tables.exe)
+  (cd "$repo_root/compiler" && dune build test/test_migration_row_indexes.exe && dune exec --no-build ./test/test_migration_row_indexes.exe)
   (cd "$repo_root/compiler" && dune build test/test_migration_additive_tail.exe && dune exec --no-build ./test/test_migration_additive_tail.exe)
   (cd "$repo_root/compiler" && dune build test/test_migration_row_derived.exe && dune exec --no-build ./test/test_migration_row_derived.exe)
   (cd "$repo_root/compiler" && dune build test/test_migration_nominal_derived.exe && dune exec --no-build ./test/test_migration_nominal_derived.exe)

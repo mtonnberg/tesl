@@ -92,8 +92,21 @@ func pgRunMigrationIndexWorker(ctx context.Context, ddl *pgx.Conn, config *pgx.C
 	return pgRunMigrationIndexWorkerWithSettings(ctx, ddl, config, history, roles, expected, onReady, settings)
 }
 
+// Explicit source authority; row mode is only constructed from a checked row
+// baseline. Format3 callers continue to use the original public wrappers.
+type pgIndexWorkerSource struct {
+	PgCompiledMigrationHistory
+	row *pgRowBaseline
+}
+
 func pgRunMigrationIndexWorkerWithSettings(ctx context.Context, ddl *pgx.Conn, config *pgx.ConnConfig,
 	history PgCompiledMigrationHistory, roles PgMigrationControlRoles, expected PgMigrationControlState,
+	onReady func(PgMigrationControlState) error, settings pgIndexWorkerSettings) error {
+	return pgRunIndexWorkerSource(ctx, ddl, config, pgIndexWorkerSource{PgCompiledMigrationHistory: history}, roles, expected, onReady, settings)
+}
+
+func pgRunIndexWorkerSource(ctx context.Context, ddl *pgx.Conn, config *pgx.ConnConfig,
+	history pgIndexWorkerSource, roles PgMigrationControlRoles, expected PgMigrationControlState,
 	onReady func(PgMigrationControlState) error, settings pgIndexWorkerSettings) error {
 	if config == nil || ddl == nil || ddl.IsClosed() || ddl.PgConn().TxStatus() != 'I' {
 		return pgIndexRefuse("migration index worker requires an exclusively owned idle DDL connection")
@@ -102,11 +115,24 @@ func pgRunMigrationIndexWorkerWithSettings(ctx context.Context, ddl *pgx.Conn, c
 		settings.poll <= 0 || settings.query <= 0 || settings.cleanup <= 0 {
 		return pgIndexRefuse("invalid migration index worker timing")
 	}
-	if _, err := history.ExpansionPlan(expected.InitialVersion); err != nil {
-		return err
+	if history.row == nil {
+		if _, err := history.ExpansionPlan(expected.InitialVersion); err != nil {
+			return err
+		}
+		if expected.Format != 3 {
+			return pgIndexRefuse("migration index worker requires control format3")
+		}
+	} else {
+		if expected.Format != 5 || history.row.database == nil || history.row.target == nil || history.row.target.compiled == nil {
+			return pgIndexRefuse("row index worker requires exact checked format5 source")
+		}
+		bound, err := pgCompiledRowPhysicalPlan(history.row.database, history.CurrentVersion)
+		if err != nil || bound != history.row.target || history.row.history != history.PgCompiledMigrationHistory {
+			return pgIndexRefuse("row index worker source owner differs")
+		}
 	}
-	if expected.Format != 3 || expected.DatabaseUUID == "" || expected.Current < history.CurrentVersion || expected.InstallingVersion != 0 {
-		return pgIndexRefuse("migration index worker requires completed expansion under control format 3")
+	if expected.DatabaseUUID == "" || expected.Current < history.CurrentVersion || expected.InstallingVersion != 0 {
+		return pgIndexRefuse("index worker requires completed expansion")
 	}
 	announced := false
 	for {
@@ -144,8 +170,14 @@ func pgRunMigrationIndexWorkerWithSettings(ctx context.Context, ddl *pgx.Conn, c
 				if err != nil {
 					return err
 				}
+				if history.row != nil {
+					return nil
+				}
 				return pgIndexWorkerRound(ctx, ddl, coordinator, tag, history, roles, expected, onReady, &announced, settings)
 			})
+			if roundErr == nil && history.row != nil {
+				roundErr = pgIndexWorkerRound(ctx, ddl, coordinator, tag, history, roles, expected, onReady, &announced, settings)
+			}
 		}
 		// The round joins its DDL actor before returning. No pgx connection is
 		// closed or reused while another goroutine owns an operation on it.
@@ -182,7 +214,7 @@ func pgRunMigrationIndexWorkerWithSettings(ctx context.Context, ddl *pgx.Conn, c
 	}
 }
 
-func pgIndexPrepareSession(ctx context.Context, conn *pgx.Conn, tag string, history PgCompiledMigrationHistory,
+func pgIndexPrepareSession(ctx context.Context, conn *pgx.Conn, tag string, history pgIndexWorkerSource,
 	roles PgMigrationControlRoles, expected PgMigrationControlState) error {
 	var current, session, uuid, domain string
 	var format, fence, protocol int
@@ -191,7 +223,7 @@ func pgIndexPrepareSession(ctx context.Context, conn *pgx.Conn, tag string, hist
 		Scan(&current, &session, &uuid, &format, &fence, &domain, &protocol); err != nil {
 		return err
 	}
-	if current != roles.Worker || session != roles.Worker || uuid != expected.DatabaseUUID || format != 3 ||
+	if current != roles.Worker || session != roles.Worker || uuid != expected.DatabaseUUID || format != expected.Format ||
 		fence != expected.FenceNamespace || domain != expected.FenceDomain || protocol != 1 {
 		return pgIndexRefuse("migration index executor identity, format, fence or worker login differs")
 	}
@@ -207,8 +239,11 @@ type pgIndexWorkerSnapshot struct {
 	ready bool
 }
 
-func pgIndexSnapshot(ctx context.Context, conn *pgx.Conn, history PgCompiledMigrationHistory,
+func pgIndexSnapshot(ctx context.Context, conn *pgx.Conn, history pgIndexWorkerSource,
 	roles PgMigrationControlRoles, expected PgMigrationControlState) (snapshot pgIndexWorkerSnapshot, err error) {
+	if history.row != nil {
+		return pgRowIndexSnapshot(ctx, conn, history, roles, expected)
+	}
 	err = pgControlSnapshotMode(ctx, conn, pgx.ReadOnly, func(tx pgx.Tx) error {
 		if err := pgControlRoles(ctx, tx, roles, false); err != nil {
 			return pgIndexInspectionFailure(err)
@@ -261,7 +296,7 @@ func pgIndexSnapshot(ctx context.Context, conn *pgx.Conn, history PgCompiledMigr
 	return snapshot, err
 }
 
-func pgIndexWorkerRound(ctx context.Context, ddl, coordinator *pgx.Conn, tag string, history PgCompiledMigrationHistory,
+func pgIndexWorkerRound(ctx context.Context, ddl, coordinator *pgx.Conn, tag string, history pgIndexWorkerSource,
 	roles PgMigrationControlRoles, expected PgMigrationControlState, onReady func(PgMigrationControlState) error,
 	announced *bool, settings pgIndexWorkerSettings) (resultErr error) {
 	poll := time.NewTicker(settings.poll)
@@ -363,7 +398,12 @@ func pgIndexWorkerRound(ctx context.Context, ddl, coordinator *pgx.Conn, tag str
 			completion := finished
 			go func(job pgMigrationIndexJob) {
 				defer cancelJob()
-				completion <- pgIndexExecuteJob(jobContext, ddl, tag, history, roles, expected, job, settings)
+				execute := func() error { return pgIndexExecuteJob(jobContext, ddl, tag, history, roles, expected, job, settings) }
+				if history.row != nil {
+					completion <- pgMigrationSessionLock(jobContext, ddl, expected.FenceNamespace, history.CurrentVersion, false, execute)
+				} else {
+					completion <- execute()
+				}
 			}(job)
 			return nil
 		}
@@ -442,7 +482,7 @@ func pgIndexWorkerRound(ctx context.Context, ddl, coordinator *pgx.Conn, tag str
 // Signalling is still not proof of death: claim independently refuses every
 // surviving backend with the old full tag, and the caller polls until it can
 // actually obtain a new token.
-func pgIndexReapExpiredHolder(ctx context.Context, conn *pgx.Conn, history PgCompiledMigrationHistory,
+func pgIndexReapExpiredHolder(ctx context.Context, conn *pgx.Conn, history pgIndexWorkerSource,
 	roles PgMigrationControlRoles, job pgMigrationIndexJob) error {
 	tx, err := conn.Begin(ctx)
 	if err != nil {
@@ -585,7 +625,7 @@ func pgIndexObserve(ctx context.Context, conn *pgx.Conn, namespace, owner string
 	return observation, err
 }
 
-func pgIndexOwnedSnapshot(ctx context.Context, conn *pgx.Conn, tag string, history PgCompiledMigrationHistory,
+func pgIndexOwnedSnapshot(ctx context.Context, conn *pgx.Conn, tag string, history pgIndexWorkerSource,
 	roles PgMigrationControlRoles, expected PgMigrationControlState, job pgMigrationIndexJob, settings pgIndexWorkerSettings) error {
 	query, cancel := context.WithTimeout(ctx, settings.query)
 	defer cancel()
@@ -614,7 +654,7 @@ func pgIndexOwnedSnapshot(ctx context.Context, conn *pgx.Conn, tag string, histo
 	return pgIndexRefuse("owned index job disappeared")
 }
 
-func pgIndexExecuteJob(ctx context.Context, conn *pgx.Conn, tag string, history PgCompiledMigrationHistory,
+func pgIndexExecuteJob(ctx context.Context, conn *pgx.Conn, tag string, history pgIndexWorkerSource,
 	roles PgMigrationControlRoles, expected PgMigrationControlState, job pgMigrationIndexJob, settings pgIndexWorkerSettings) error {
 	return pgIndexJobLock(ctx, conn, pgMigrationDDLJobKey(expected.DatabaseUUID, job.ID), func() error {
 		migrationBoundary("index-job-lock")
@@ -690,7 +730,7 @@ func pgIndexExecuteJob(ctx context.Context, conn *pgx.Conn, tag string, history 
 	})
 }
 
-func pgIndexCleanInvalid(ctx context.Context, conn *pgx.Conn, tag string, history PgCompiledMigrationHistory,
+func pgIndexCleanInvalid(ctx context.Context, conn *pgx.Conn, tag string, history pgIndexWorkerSource,
 	roles PgMigrationControlRoles, expected PgMigrationControlState, job pgMigrationIndexJob, settings pgIndexWorkerSettings) (bool, error) {
 	if err := pgIndexOwnedSnapshot(ctx, conn, tag, history, roles, expected, job, settings); err != nil {
 		return false, err
@@ -749,7 +789,7 @@ func pgIndexRecordFailure(ctx context.Context, conn *pgx.Conn, namespace string,
 	return pgIndexRecord(ctx, conn, namespace, job, "failed", &detail)
 }
 
-func pgIndexPublishProgress(ctx context.Context, conn *pgx.Conn, history PgCompiledMigrationHistory, job pgMigrationIndexJob, pid uint32, tag string) error {
+func pgIndexPublishProgress(ctx context.Context, conn *pgx.Conn, history pgIndexWorkerSource, job pgMigrationIndexJob, pid uint32, tag string) error {
 	var blocks, total, tuples int64
 	err := conn.QueryRow(ctx, `select blocks_done,blocks_total,tuples_done from pg_catalog.pg_stat_progress_create_index
  where pid=$1 and datid=(select oid from pg_catalog.pg_database where datname=pg_catalog.current_database())`, pid).Scan(&blocks, &total, &tuples)
@@ -772,7 +812,7 @@ func pgIndexPublishProgress(ctx context.Context, conn *pgx.Conn, history PgCompi
 // bounded cleanup connection confirms that no old executor statement or fence
 // survives before a replacement generation may claim work. It never signals a
 // backend in another database or under another login.
-func pgIndexRemoveTaggedSessions(config *pgx.ConnConfig, history PgCompiledMigrationHistory, roles PgMigrationControlRoles,
+func pgIndexRemoveTaggedSessions(config *pgx.ConnConfig, history pgIndexWorkerSource, roles PgMigrationControlRoles,
 	expected PgMigrationControlState, tag string, budget time.Duration) error {
 	ctx, cancel := context.WithTimeout(context.Background(), budget)
 	defer cancel()

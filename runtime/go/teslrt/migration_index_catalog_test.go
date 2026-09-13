@@ -173,3 +173,65 @@ func TestPgMigrationFutureIndexRequiresSafeOldWriterDomain(t *testing.T) {
 		})
 	}
 }
+
+func TestPgMigrationIndexUnboundedRequiresBothValidityRecords(t *testing.T) {
+	for _, typ := range []string{"text", "numeric", "jsonb"} {
+		for _, state := range []string{"pending", "building", "failed", "valid"} {
+			for _, physical := range []string{"absent", "initializing", "ready-invalid", "valid", "dead"} {
+				metadata, actual, expected, job := pgIndexCatalogTestTables(t)
+				metadata.types[typ] = pgCatalogExpectedType{name: typ, kind: "b", opclass: 3126}
+				actual.Columns[1].Type = typ
+				expected.Columns[1].Type = typ
+				actual.Columns[1].Required = false
+				expected.Columns[1].Required = false
+				actual.Indexes[0].Opclasses = []int64{3126}
+				expected.Indexes[0].Opclasses = []int64{3126}
+				job.State = state
+				switch physical {
+				case "absent":
+					actual.Indexes = nil
+				case "initializing":
+					actual.Indexes[0].Valid = false
+					actual.Indexes[0].Ready = false
+				case "ready-invalid":
+					actual.Indexes[0].Valid = false
+				case "dead":
+					actual.Indexes[0].Live = false
+				}
+				for _, version := range []int{1, 2, 3} {
+					own := *expected
+					if version == 1 {
+						own.Columns = own.Columns[:1]
+						own.Indexes = nil
+					}
+					var report PgMigrationCatalogReport
+					_, _, ready, err := pgPrepareIndexJobCatalog(metadata, actual, &own, []pgMigrationIndexJob{job}, version, &report)
+					want := version == 1 || physical == "valid" && state == "valid"
+					if err != nil || ready != want {
+						t.Fatal(typ, state, physical, version, ready, want, err)
+					}
+				}
+			}
+		}
+	}
+}
+
+func TestPgMigrationIndexValidityRequirementRefusesUnknownDomain(t *testing.T) {
+	for _, typ := range []string{"bool", "int4", "int8", "float8", "text", "numeric", "jsonb", "uuid"} {
+		actual := &pgCatalogTable{Columns: []pgCatalogColumn{{Name: "key", Type: typ, TypeNamespace: "pg_catalog", TypeKind: "b", Typmod: -1}}}
+		want := !slices.Contains([]string{"bool", "int4", "int8", "float8"}, typ)
+		if got := pgIndexRequiresValidForWrites(actual, PgMigrationCatalogIndex{Columns: []string{"key"}}); got != want {
+			t.Fatal(typ, got, want)
+		}
+		if !pgIndexRequiresValidForWrites(actual, PgMigrationCatalogIndex{Columns: []string{"absent"}}) {
+			t.Fatal("missing key waived readiness")
+		}
+		actual.Columns[0].TypeNamespace = "foreign"
+		if !pgIndexRequiresValidForWrites(actual, PgMigrationCatalogIndex{Columns: []string{"key"}}) {
+			t.Fatal("foreign domain waived readiness")
+		}
+	}
+	if !pgIndexRequiresValidForWrites(nil, PgMigrationCatalogIndex{}) {
+		t.Fatal("nil catalog waived readiness")
+	}
+}

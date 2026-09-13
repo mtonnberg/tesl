@@ -71,7 +71,7 @@ func pgVerifyRowInvalidation(ctx context.Context, tx pgx.Tx, namespace string, r
 	return nil
 }
 
-func pgVerifyRowForwardCatalog(ctx context.Context, tx pgx.Tx, b *pgRowBaseline, roles PgMigrationControlRoles, baselineCount int, forward *pgRowForwardManifest, completed int) error {
+func pgVerifyRowForwardCatalog(ctx context.Context, tx pgx.Tx, b *pgRowBaseline, roles PgMigrationControlRoles, baselineCount int, forward *pgRowForwardManifest, completed int, indexReady ...*bool) error {
 	if forward == nil {
 		return pgVerifyRowPhysicalCatalog(ctx, tx, b, roles, baselineCount)
 	}
@@ -120,6 +120,18 @@ func pgVerifyRowForwardCatalog(ctx context.Context, tx pgx.Tx, b *pgRowBaseline,
 				}
 				if !found {
 					return fmt.Errorf("physical operation targets missing baseline entity")
+				}
+			} else if operation.index != nil {
+				found := false
+				for i := range catalog {
+					if catalog[i].Name == operation.index.table {
+						catalog[i].Indexes = append(slices.Clone(catalog[i].Indexes), operation.index.index)
+						found = true
+						break
+					}
+				}
+				if !found {
+					return fmt.Errorf("row index targets missing retained table")
 				}
 			} else if operation.window != nil {
 				triggers[operation.entity.table] = pgRowInvalidationFor(b.history.Namespace, operation.entity, operation.window)
@@ -245,5 +257,5 @@ func pgVerifyRowForwardCatalog(ctx context.Context, tx pgx.Tx, b *pgRowBaseline,
 		}
 	}
 
-	return pgVerifyRowCatalogSet(ctx, tx, b, roles, catalog, triggers, checks)
+	return pgVerifyRowCatalogSet(ctx, tx, b, roles, catalog, triggers, checks, forward.indexJobs, indexReady...)
 }

@@ -32,7 +32,8 @@ func TestPgRowSettledActualApp(t *testing.T) {
 		return pgCallRowAccessApp(t, f.ctx, base, method, path, status)
 	}
 	run("v1", "install")
-	run("v1", "worker")
+	stopOriginalWorker, originalWorkerDone := pgStartSettledWorker(t, f, root, "v1")
+	defer stopOriginalWorker()
 	v1 := pgStartRowAccessApp(t, f, root, "v1")
 	call(v1, "POST", "/one", 200)
 	call(v1, "POST", "/two", 200)
@@ -94,6 +95,11 @@ func TestPgRowSettledActualApp(t *testing.T) {
 		t.Fatalf("original window update did not pause: %v", err)
 	case <-time.After(10 * time.Second):
 		t.Fatal("window update never reached captured-argument boundary")
+	}
+	select {
+	case err := <-originalWorkerDone:
+		t.Fatalf("original V1 worker exited before Contract: %v", err)
+	default:
 	}
 	contract := pgForwardNativeCommand(f, root, "v2", "contract")
 	contract.Env = append(contract.Env, socket)
@@ -204,6 +210,11 @@ func TestPgRowSettledActualApp(t *testing.T) {
 		t.Fatal("settled typed update failed", title, memo, err)
 	}
 	call(v1, "PUT", "/one", 503)
+	select {
+	case err := <-originalWorkerDone:
+		t.Fatalf("original V1 worker exited across Contract: %v", err)
+	default:
+	}
 	t.Log("same V2 applications served across actual finality/contract, kept unrelated requests live while barrier busy, and used settled read/write projections after exact drops")
 }
 

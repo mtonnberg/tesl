@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
-	"reflect"
 	"slices"
 	"strings"
 
@@ -16,6 +15,7 @@ type pgRowForwardOperation struct {
 	column *pgRowPhysicalColumn
 	window *pgRowPhysicalWindow
 	table  *PgMigrationCatalogTable
+	index  *pgRowConcurrentIndex
 }
 
 type pgRowForwardManifest struct {
@@ -28,6 +28,7 @@ type pgRowForwardManifest struct {
 	creatorABI, compatibility string
 	processingABI             string
 	operations                []pgRowForwardOperation
+	indexJobs                 []pgMigrationIndexJob
 }
 
 func pgRowForwardOperations(previous, plan *pgRowPhysicalPlan) ([]pgRowForwardOperation, error) {
@@ -36,6 +37,14 @@ func pgRowForwardOperations(previous, plan *pgRowPhysicalPlan) ([]pgRowForwardOp
 	}
 	if err := pgValidateRowPhysicalLineage(previous, plan); err != nil {
 		return nil, err
+	}
+	var indexes []pgRowConcurrentIndex
+	if len(plan.windows) == 0 {
+		var err error
+		indexes, err = pgDeriveRowConcurrentIndexes(previous, plan)
+		if err != nil {
+			return nil, err
+		}
 	}
 	operations := []pgRowForwardOperation{}
 	for i := range plan.entities {
@@ -53,7 +62,7 @@ func pgRowForwardOperations(previous, plan *pgRowPhysicalPlan) ([]pgRowForwardOp
 			operations = append(operations, pgRowForwardOperation{entity: entity, table: &table})
 			continue
 		}
-		if !reflect.DeepEqual(old.indexes, entity.indexes) {
+		if len(plan.windows) != 0 && !slices.EqualFunc(old.indexes, entity.indexes, func(a, b PgMigrationCatalogIndex) bool { return a.Name == b.Name && pgPhysicalIndexEqual(a, b) }) {
 			return nil, fmt.Errorf("row expansion requires a concurrent job for existing-table index changes")
 		}
 		for j := range entity.columns {
@@ -66,6 +75,10 @@ func pgRowForwardOperations(previous, plan *pgRowPhysicalPlan) ([]pgRowForwardOp
 			}
 			operations = append(operations, pgRowForwardOperation{entity: entity, column: column})
 		}
+	}
+	for i := range indexes {
+		index := &indexes[i]
+		operations = append(operations, pgRowForwardOperation{entity: plan.entity(index.entity), index: index})
 	}
 	for i := range plan.windows {
 		window := &plan.windows[i]

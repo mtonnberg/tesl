@@ -83,6 +83,26 @@ func pgControlFunctionsForFormat(namespace string, format int) []pgMigrationCont
 // locally known jobs; their descriptors are subsequently checked against actual
 // catalog semantics and the reader's own admitted schema.
 func pgReadMigrationIndexJobs(ctx context.Context, tx pgx.Tx, namespace string, intents map[int]*pgExpansionIntent) ([]pgMigrationIndexJob, error) {
+	jobs, err := pgReadMigrationIndexJobRows(ctx, tx, namespace, intents)
+	if err != nil {
+		return nil, err
+	}
+	ns := quoteIdentifier(namespace) + "."
+	var orphan bool
+	if err := tx.QueryRow(ctx, `select exists(select 1 from `+ns+`tesl_schema_leases l where not exists
+ (select 1 from `+ns+`tesl_schema_index j where l.name='index:' || j.index_name))`).Scan(&orphan); err != nil {
+		return nil, err
+	}
+	if orphan {
+		return nil, fmt.Errorf("migration index lease has no matching immutable job")
+	}
+	return jobs, nil
+}
+
+// Read and validate every joined job/lease row. Callers separately account for
+// the complete lease table: format3 permits only index leases, row5 also has
+// independently verified row-shard leases.
+func pgReadMigrationIndexJobRows(ctx context.Context, tx pgx.Tx, namespace string, intents map[int]*pgExpansionIntent) ([]pgMigrationIndexJob, error) {
 	ns := quoteIdentifier(namespace) + "."
 	rows, err := tx.Query(ctx, `select j.version,j.ordinal,j.id,j.table_name,j.index_name,j.key_columns,j.is_unique,
  j.state,j.terminal_version,j.attempts,j.error,l.name,coalesce(l.holder,''),l.token,l.expires_at,
@@ -144,14 +164,6 @@ func pgReadMigrationIndexJobs(ctx context.Context, tx pgx.Tx, namespace string, 
 		return nil, err
 	}
 	rows.Close()
-	var orphan bool
-	if err := tx.QueryRow(ctx, `select exists(select 1 from `+ns+`tesl_schema_leases l where not exists
- (select 1 from `+ns+`tesl_schema_index j where l.name='index:' || j.index_name))`).Scan(&orphan); err != nil {
-		return nil, err
-	}
-	if orphan {
-		return nil, fmt.Errorf("migration index lease has no matching immutable job")
-	}
 	return jobs, nil
 }
 

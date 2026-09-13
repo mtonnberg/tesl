@@ -99,3 +99,27 @@ payload changes, ordering and duplicates, codec ownership and overwrite refusal,
 concurrent registration, immutable accessors, and ordinary Memory/unversioned
 codec behavior. These tests provide no evidence of safe mixed-version claims;
 the protected runtime protocol needs its own PostgreSQL tests.
+
+## Complete row source envelopes
+
+The queue source reader also accepts the internal complete source envelope v4.
+It validates every base database, schema/storage snapshot and origin, including
+origins explicitly refused for execution. Queue inventories must exactly cover
+each snapshot's queue-schema declarations and payload members. Each payload's
+single type root and every supplied closure definition must match that snapshot.
+The compiler owns semantic reachability and proof checking; the reader checks
+identity and definition containment, as the row source reader does.
+
+The existing v3 source route retains its strict all-origin ExpansionPlan replay
+and selected-origin refusals. Its format does not contain complete schema
+contracts, so it does not acquire v4's stronger snapshot-containment claim.
+Complete, unknown and unrecorded source-seal provenance remain distinct from
+persisted installation authority, including for a genuinely empty source.
+
+This source projection does not emit or activate queues through the row artifact
+route, accept a queue control format in a row opener, or remove the row facility
+absence requirement. Mixed row/queue catalog installation, verified legacy
+adoption and queue finality before floor advancement remain separate gates.
+`test_migration_queue` passes actual captured source envelopes (including a private
+codec and frozen history) to pure Go metadata checks after deleting Tesl sources;
+its hash-recomputed substitutions must fail before any runtime admission.

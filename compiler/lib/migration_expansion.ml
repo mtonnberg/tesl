@@ -148,6 +148,10 @@ let derive ~initial_version baseline edges =
       List.iter (fun (index : P.index) ->
        supported_index table.entity.entity_loc index;
        if not (List.exists (equivalent_index index) retained) then begin
+        (* The runtime keeps every version that can write these keys unready
+           until both the physical index and protected job are valid. Without
+           that gate, a failed second scan can break old non-HOT updates even
+           though old INSERT statements omit every new key. *)
         let all_new_null = List.for_all (fun name ->
           let c = List.find (fun (c : P.column) -> c.name=name) table.columns in
           c.nullable && Option.fold ~none:false ~some:(fun (a : Migration_additive.entity) ->

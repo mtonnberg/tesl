@@ -235,12 +235,35 @@ migration = Migration {
  entities: { Note: Additive [Default priority 4] }
 }
 |}
+let jsonb_tail_schema kind =
+ let declarations,value=match kind with
+ | "record" -> {|import Tesl.Json exposing [stringCodec]
+record Metadata { value: String }
+codec Metadata {
+ toJson { value -> "storedKey" with_codec stringCodec }
+ fromJson [ { value <- "storedKey" with_codec stringCodec } ]
+}
+|}, "Something (Metadata { value: id ++ \"/payload\" })"
+ | "adt" -> {|type Metadata =
+ | Named value: String
+ | Absent
+codec Metadata { adtJson }
+fn payload(id: String) -> Metadata =
+ if id == "four" then
+  Absent
+ else
+  Named { value: id ++ "/payload" }
+|}, "Something (payload id)"
+ | _ -> fail "unknown JSONB fixture" in
+ tail_schema |> replace "entity Note" (declarations ^ "entity Note")
+ |> replace "priority: Int" "priority: Int, payload: Maybe Metadata"
+ |> replace "priority: 4" ("priority: 4, payload: " ^ value)
 let apply_source_manifest manifest =
  let check = function Ok ()->()|Error errors->fail(String.concat "\n" (List.map(fun(e:Migration_manifest.error)->e.message)errors)) in
  check(Migration_manifest.verify_source manifest ~documents:[]);
  check(Migration_manifest.verify_disk manifest);
  List.iter(fun(e:Migration_manifest.edit)->write e.path e.after)(Migration_manifest.edits manifest)
-let with_tail_project ?(contract=true) ?(on_version=(fun _ _ -> ())) f = project(fun root save path ->
+let with_tail_project ?(contract=true) ?(after=tail_schema) ?(on_version=(fun _ _ -> ())) f = project(fun root save path ->
  seal_edge root path;if contract then install_contract root path;
  let app_file=save "app.tesl" app in accepts app_file app;
  on_version 2 app_file;
@@ -250,7 +273,7 @@ let with_tail_project ?(contract=true) ?(on_version=(fun _ _ -> ())) f = project
   ~stored_value_compatibility:(Some(Migration_abi.stored_value_compatibility abi))
   ~compiler_abi:(Migration_abi.id abi) ~project_root:root ~family:"Schema.Notes" ~version:2 ~documents:[]) in
  apply_source_manifest preview.manifest;
- let current_file=save "schema/notes/v-current.tesl" tail_schema in
+ let current_file=save "schema/notes/v-current.tesl" after in
  let refreshed=get(Migration_generate.refresh_with_compatibility
   ~stored_value_compatibility:(Some(Migration_abi.stored_value_compatibility abi))
   ~compiler_abi:(Migration_abi.id abi) ~project_root:root ~family:"Schema.Notes" ~version:3 ~documents:[]) in
@@ -280,6 +303,17 @@ let settled_prerequisite () = with_tail_project(fun _ _ entry->with_plan entry(f
  check bool "retired physical field stays removed" false(List.exists(fun(c:L.column)->c.name="author")entity.columns);
  check int "no obsolete dual-write aliases" 0(List.length entity.rename_dual_writes);
  check bool "completed computed field is required" false (List.find(fun(c:L.column)->c.name="count")entity.columns).nullable))
+let jsonb_source () = List.iter(fun kind->with_tail_project ~after:(jsonb_tail_schema kind)(fun _ _ entry->
+ match Compile.compile_row_source_artifacts ~storage:true ~physical:true entry app with
+ |Compile.GoSuccess artifacts->
+  Option.iter(fun root->List.iter(fun(a:Emit_go.artifact)->write(Filename.concat (Filename.concat root kind) a.path)a.contents)artifacts)(Sys.getenv_opt "TESL_MIXED_TAIL_JSONB_ARTIFACTS");
+  let rows=List.find(fun(a:Emit_go.artifact)->a.path="row-transform-history.json")artifacts in
+  let open Yojson.Basic.Util in
+  let db=Yojson.Basic.from_string rows.contents |> member "databases" |> to_list |> List.hd in
+  let codec=db |> member "currentCodecs" |> to_list |> List.hd in
+  check bool (kind ^ " optional JSONB uses current codec") true
+   (codec |> member "projection" |> to_list |> List.map to_string |> List.mem "payload")
+ |Compile.GoFailure ds->fail(describe ds))) ["record";"adt"]
 let artifacts entry = match Compile.compile_row_source_artifacts ~storage:true ~physical:true entry app with
  |Compile.GoSuccess artifacts->artifacts
  |Compile.GoFailure ds->fail("accepted mixed history lacks current access:\n" ^ describe ds)
@@ -332,16 +366,16 @@ let original_format () =
   let db=json |> member "databases" |> to_list |> List.hd in
   check bool "old format has no current codec field" true(db |> member "currentCodecs" = `Null))
   (fun _ _ _->())
-let export_programs destination =
+let export_programs ?(after=tail_schema) destination =
  let emit version entry=List.iter(fun(a:Emit_go.artifact)->write(Filename.concat (Filename.concat destination ("v" ^ string_of_int version)) a.path)a.contents)(artifacts entry) in
  let root=Filename.temp_dir "tesl-mixed-original-v1-" "" in
  Fun.protect ~finally:(fun()->remove root)(fun()->
   write(Filename.concat root "tesl.toml") "";
   write(Filename.concat root "schema/notes/v-current.tesl")(replace "Schema.Notes.V1" "Schema.Notes.VCurrent" old);
   let entry=Filename.concat root "app.tesl" in write entry app;accepts entry app;emit 1 entry);
- with_tail_project ~on_version:emit(fun _ _ entry->emit 3 entry)
-let build_programs destination =
- export_programs destination;
+ with_tail_project ~after ~on_version:emit(fun _ _ entry->emit 3 entry)
+let build_programs ?(after=tail_schema) destination =
+ export_programs ~after destination;
  (* Every source fixture has now left its scope and been removed. Only original
     emitted Go inputs remain; standalone JSON is not an input to these binaries. *)
  List.iter(fun version->
@@ -363,18 +397,31 @@ let actual_app () =
   let command=Printf.sprintf "cd %s && TESL_ROW_CURRENT_PROGRAMS=%s timeout 150s go test -p 1 -race -tags tesl_migration_test -timeout 120s ./teslrt -run '^TestPgRowCurrentAdditiveSuccessorOrdinaryApp$' -count=1 -v > %s 2>&1"
    (Filename.quote(Filename.concat root "runtime/go"))(Filename.quote output)(Filename.quote log) in
   if Sys.command command<>0 then fail(Source_input.read log))
-let export_source destination = with_tail_project(fun root _ entry ->
+let export_source ?(after=tail_schema) destination = with_tail_project ~after(fun root _ entry ->
  let rec copy rel = let path=Filename.concat root rel in
   if Sys.is_directory path then Array.iter(fun n->copy(Filename.concat rel n))(Sys.readdir path)
   else write(Filename.concat destination rel)(Source_input.read path) in
  copy "";accepts entry app)
+let jsonb_after () = match Sys.getenv_opt "TESL_MIXED_TAIL_JSONB_KIND" with
+ |None->tail_schema |Some kind->jsonb_tail_schema kind
+let actual_jsonb_app () =
+ let output=Filename.temp_dir "tesl-current-jsonb-programs-" "" in
+ Fun.protect ~finally:(fun()->remove output)(fun()->
+  List.iter(fun kind->build_programs ~after:(jsonb_tail_schema kind)(Filename.concat output kind))["record";"adt"];
+  let root=match Sys.getenv_opt "TESL_REPO_ROOT" with Some root->Unix.realpath root |None->fail "TESL_REPO_ROOT required" in
+  let log=Filename.concat output "postgres-jsonb.log" in
+  let command=Printf.sprintf "cd %s && TESL_ROW_CURRENT_JSONB_PROGRAMS=%s timeout 180s go test -p 1 -race -tags tesl_migration_test -timeout 150s ./teslrt -run '^TestPgRowCurrentOptionalJSONBOrdinaryApp$' -count=1 -v > %s 2>&1"
+   (Filename.quote(Filename.concat root "runtime/go"))(Filename.quote output)(Filename.quote log) in
+  if Sys.command command<>0 then fail(Source_input.read log))
 let () = match Sys.getenv_opt "TESL_MIXED_TAIL_PROGRAMS",Sys.getenv_opt "TESL_MIXED_TAIL_SOURCE" with
- |Some destination,_->build_programs destination
- |None,Some destination->export_source destination
+ |Some destination,_->build_programs ~after:(jsonb_after()) destination
+ |None,Some destination->export_source ~after:(jsonb_after()) destination
  |None,None->run "mixed additive successor" ["prerequisite",[
  test_case "accepted additive successor is derived from settled Contract" `Quick settled_prerequisite;
  test_case "actual unchanged App requires current codec access" `Quick current_artifact;
  test_case "missing source Contract remains refused" `Quick missing_contract;
  test_case "predecessor format remains unchanged" `Quick original_format;
- test_case "current storage requires physical mode before emission" `Quick storage_only_refused];
- "native application",[test_case "original V1 transform V2 additive V3 apps" `Quick actual_app]]
+ test_case "current storage requires physical mode before emission" `Quick storage_only_refused;
+ test_case "optional original record and ADT codec current rows" `Quick jsonb_source];
+ "native application",[test_case "original V1 transform V2 additive V3 apps" `Quick actual_app;
+ test_case "optional current record and ADT original apps" `Quick actual_jsonb_app]]

@@ -43,7 +43,7 @@ func TestPgRowBaselineCatalogDriftRefusesEveryEntrypoint(t *testing.T) {
 		{"marker function default", `alter table notes_app.notes alter column _tesl_v set default length('x')`},
 		{"marker identity", `alter table notes_app.notes alter column _tesl_v drop default; alter table notes_app.notes alter column _tesl_v add generated always as identity`},
 		{"extra column", `alter table notes_app.notes add column extra text`},
-		{"extra queue relation", `create table notes_app.tesl_jobs(id integer)`},
+		{"queue relation shape", `alter table notes_app.tesl_jobs add column unexpected integer`},
 		{"extra relation", `create table notes_app.extra(id integer)`},
 		{"extra function", `create function notes_app.extra() returns integer language sql as 'select 1'`},
 		{"entity generation", `update notes_app.tesl_row_entities set generation=2`},
