@@ -5,6 +5,8 @@ type rule =
   | Rename of { previous : string; current : string; loc : Location.loc }
   | Retype of { field : string; loc : Location.loc }
   | WriteBack of { previous : string; current : string; function_ref : Ast.expr; loc : Location.loc }
+  | Legacy of { field : string; value : Migration_additive.literal; loc : Location.loc }
+  | LegacyWith of { field : string; function_ref : Ast.expr; loc : Location.loc }
   | Default of Migration_additive.default
 type mode = Derived | Migrate
 type entry = { entity : string; mode : mode; rules : rule list; loc : Location.loc }
@@ -16,13 +18,15 @@ type value_source =
   | Constant of Migration_inventory.stored_field * Migration_canonical.node
   | Computed of Migration_inventory.stored_field
 type writeback = { previous : Migration_inventory.stored_field; current : Migration_inventory.stored_field; function_ref : Ast.expr; loc : Location.loc }
+type legacy_value = Literal of Migration_additive.literal * Migration_canonical.node | Function of Ast.expr
+type legacy = { previous : Migration_inventory.stored_field; value : legacy_value; loc : Location.loc }
 type entity = {
   identity : string;
   previous : Migration_inventory.stored_entity;
   current : Migration_inventory.stored_entity;
   mode : mode;
   values : value_source list;
-  writebacks : writeback list;
+  writebacks : writeback list; legacies : legacy list;
   indexes_changed : bool;
 }
 type t

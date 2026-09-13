@@ -137,6 +137,25 @@ type signature = {
 let current_package = ref ""
 let current_debug = ref false
 
+(* Only compile_project installs these, after verifying the exact original-to-lowered
+   graph. The public single-module emitter always runs with an empty scope. *)
+let current_nominal_transports : Migration_proof_context.nominal list ref = ref []
+
+let nominal_location = function
+  | TRecord info -> Some info.rec_loc
+  | TAdt (info, _) -> Some info.adt_loc
+  | _ -> None
+
+let nominal_field_transport info field argument actual expected =
+  List.find_opt (fun transport ->
+    let spec = Migration_proof_context.nominal_spec transport in
+    Migration_proof_context.nominal_field transport = field
+    && Migration_proof_context.nominal_argument transport = argument
+    && spec.entity.declaration = info.rec_loc
+    && nominal_location actual = Some spec.previous.declaration
+    && nominal_location expected = Some spec.current.declaration)
+    !current_nominal_transports
+
 let debug_frame_id package (fd : func_decl) =
   Digest.to_hex (Digest.string (Printf.sprintf "%s:%s:%s:%d:%d"
     package fd.name fd.loc.file fd.loc.start.line fd.loc.start.col))
@@ -1200,6 +1219,7 @@ type module_exports = {
   ex_codecs : codec_form list;
   ex_taken : (string,unit) Hashtbl.t;
   ex_row_storage : row_storage_export list;
+  ex_nominal_reverses : (Migration_proof_context.nominal * string) list;
 }
 
 (* Whether a compiled dependency is the module an import names.
@@ -1809,6 +1829,84 @@ let remember_helper ~prefix ~signature ~body =
     Hashtbl.replace pending_helpers name
       (Printf.sprintf "\nfunc %s%s {\n\treturn %s\n}\n" name signature body);
     name
+
+(* A checked Same type transports values structurally, preserving the original
+   nominal codec's input. Encoding/decoding here would be wrong for lossy codecs.
+   Every changed nominal owner must occur in the checked complete Same closure. *)
+let nominal_pair ~reverse transport previous current =
+  let spec = Migration_proof_context.nominal_spec transport in
+  List.exists (fun (before, after) ->
+    let before, after = if reverse then after,before else before,after in
+    nominal_location previous = Some before.Migration_proof_context.declaration
+    && nominal_location current = Some after.Migration_proof_context.declaration)
+    spec.types
+
+let rec nominal_bridge ?(reverse=false) transport loc previous current value =
+  if type_equal previous current then value else
+  let previous_go, current_go = go_type previous, go_type current in
+  let key = "nominal-key:" ^ previous_go ^ "->" ^ current_go in
+  let name = match Hashtbl.find_opt helper_names key with
+    | Some name -> name
+    | None ->
+      let name = Printf.sprintf "teslNominalKey%d" (Hashtbl.length helper_names + 1) in
+      Hashtbl.add helper_names key name;
+      (* Reserve before recursively lowering a recursive ADT's payload. *)
+      Hashtbl.add pending_helpers name "";
+      let field from_ty to_ty expression = nominal_bridge ~reverse transport loc from_ty to_ty expression in
+      let body = match previous, current with
+      | TRecord before, TRecord after when nominal_pair ~reverse transport previous current ->
+        if List.map fst before.rec_fields <> List.map fst after.rec_fields then
+          unsupported loc "checked nominal key record fields changed during lowering";
+        String.concat "" (List.map2 (fun (field_name, from_ty) (_, to_ty) ->
+          Printf.sprintf "\tteslResult.%s = %s\n" (record_field_go_name field_name)
+            (field from_ty to_ty ("teslValue." ^ record_field_go_name field_name)))
+          before.rec_fields after.rec_fields) ^ "\treturn\n"
+      | TAdt (before, from_args), TAdt (after, to_args)
+        when nominal_pair ~reverse transport previous current
+          || (before.adt_builtin && after.adt_builtin && before.adt_go_name = after.adt_go_name) ->
+        if List.map (fun v -> v.var_ctor) before.adt_variants <>
+           List.map (fun v -> v.var_ctor) after.adt_variants then
+          unsupported loc "checked nominal key ADT variants changed during lowering";
+        let variants = List.map2 (fun from_variant to_variant ->
+          let from_fields = variant_field_types before from_args from_variant
+          and to_fields = variant_field_types after to_args to_variant in
+          if List.map fst from_fields <> List.map fst to_fields then
+            unsupported loc "checked nominal key ADT fields changed during lowering";
+          let assignments = List.map2 (fun (field_name, from_ty) (_, to_ty) ->
+            let expression = "teslValue." ^ variant_field_path before from_variant field_name in
+            let expression = if adt_self_payload before from_variant field_name then
+                "teslrt.Unboxed(" ^ expression ^ ")" else expression in
+            let expression = field from_ty to_ty expression in
+            let expression = if adt_self_payload after to_variant field_name then
+                "teslrt.Boxed(" ^ expression ^ ")" else expression in
+            Printf.sprintf "%s: %s"
+              (if adt_boxed after then go_ident ~exported:true field_name
+               else variant_field_literal_name to_variant field_name) expression)
+            from_fields to_fields in
+          let assignments = if assignments = [] || not (adt_boxed after) then assignments
+            else [Printf.sprintf "%s: &%s{%s}" (variant_payload_field to_variant)
+              (qualified after.adt_owner (variant_payload_type after to_variant) ^
+                (if to_args=[] then "" else "[" ^ String.concat ", " (List.map go_type to_args) ^ "]"))
+              (String.concat ", " assignments)] in
+          let assignments = if single_variant after <> None then assignments else
+              (adt_tag_field ^ ": " ^ qualified after.adt_owner to_variant.var_tag)::assignments in
+          let result = Printf.sprintf "return %s{%s}" current_go (String.concat ", " assignments) in
+          if single_variant before <> None then "\t" ^ result ^ "\n" else
+            Printf.sprintf "\tcase %s:\n\t\t%s\n" (qualified before.adt_owner from_variant.var_tag) result)
+          before.adt_variants after.adt_variants in
+        if single_variant before <> None then String.concat "" variants else
+          "\tswitch teslValue." ^ adt_tag_field ^ " {\n" ^ String.concat "" variants ^
+          "\t}\n\tpanic(\"invalid checked nominal key variant\")\n"
+      | TList from_ty, TList to_ty ->
+        "\tif teslValue == nil { return nil }\n" ^
+        Printf.sprintf "\tteslResult = make(%s, len(teslValue))\n" current_go ^
+        Printf.sprintf "\tfor teslIndex, teslElement := range teslValue {\n\t\tteslResult[teslIndex] = %s\n\t}\n\treturn\n"
+          (field from_ty to_ty "teslElement")
+      | _ -> unsupported loc "checked nominal key transport does not support `%s` to `%s`" previous_go current_go in
+      Hashtbl.replace pending_helpers name
+        (Printf.sprintf "\nfunc %s(teslValue %s) (teslResult %s) {\n%s}\n" name previous_go current_go body);
+      name in
+  Printf.sprintf "%s(%s)" name value
 
 (* The helper's name must be INJECTIVE over Go types: stripping punctuation alone made
    `[]teslrt.Int` and `teslrt.Int` collide on `TeslrtInt`, so a `List (List Int)`
@@ -5298,7 +5396,7 @@ and check_record_literal signatures env loc info fields =
         info.rec_tesl_name name
     | Some value ->
       let got = type_of_arg signatures env want value in
-      if type_unequal got want then
+      if type_unequal got want && Option.is_none (nominal_field_transport info name value got want) then
         unsupported (Checker.expr_loc value)
           "Go backend record field `%s.%s` has an unsupported value type"
           info.rec_tesl_name name)
@@ -8183,8 +8281,13 @@ and emit_record_literal ?(indent="") signatures env info fields =
       | Some value -> value
       | None -> invalid_arg "record literal validated before emission"
     in
-    Printf.sprintf "%s: %s" (record_field_go_name name)
-      (emit_expr ~expected:field_ty ~indent signatures env value)) info.rec_fields in
+    let actual = type_of_arg signatures env field_ty value in
+    let emitted = match nominal_field_transport info name value actual field_ty with
+      | None -> emit_expr ~expected:field_ty ~indent signatures env value
+      | Some transport ->
+        nominal_bridge transport (Checker.expr_loc value) actual field_ty
+          (emit_expr ~indent signatures env value) in
+    Printf.sprintf "%s: %s" (record_field_go_name name) emitted) info.rec_fields in
   (* Qualified for the same reason `go_type` qualifies: a record declared by another
      package is constructed through that package's name. *)
   Printf.sprintf "%s{%s}" (qualified info.rec_owner info.rec_go_name)
@@ -10744,7 +10847,7 @@ let rec json_value_decoder ~package ~loc ~what ty =
     "Go backend cannot decode `%s` from JSON; give the type a `codec`" what
 
 let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) ?(apis=[])
-    ?(row_storage_adapters=[]) ?(servers=[]) ?(capturers=[]) ?(consts=[]) ?(agents=[]) ?(capabilities=[]) ?(queue_codec_records=[]) ?(app_databases=[])
+    ?(row_storage_adapters=[]) ?(nominal_reverse_adapters=[]) ?(servers=[]) ?(capturers=[]) ?(consts=[]) ?(agents=[]) ?(capabilities=[]) ?(queue_codec_records=[]) ?(app_databases=[])
     module_path package signatures
     types (funcs : func_decl list) =
   Hashtbl.reset pending_helpers;
@@ -12049,6 +12152,15 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
       ("teslValue." ^ record_field_go_name column.col_field)) adapter.storage_columns in
     Printf.bprintf body "\nfunc %s(teslValue %s) ([]any, error) {\n\treturn []any{%s}, nil\n}\n"
       adapter.storage_encode (sql_row_type info) (String.concat ", " values)) row_storage_adapters;
+  (* Inverses exist only for exact source-site certificates selected by a checked
+     Legacy/WriteBack whole-row constructor. They use this original module's
+     emitted type environment and preserve every codec input field. *)
+  List.iter (fun ((transport,name),previous,current) ->
+    Migration_proof_context.revalidate_nominal transport;
+    let loc=(Migration_proof_context.nominal_spec transport).previous.declaration in
+    let value=nominal_bridge ~reverse:true transport loc current previous "teslValue" in
+    Printf.bprintf body "\nfunc %s(teslValue %s) %s {\n\treturn %s\n}\n"
+      name (go_type current) (go_type previous) value) nominal_reverse_adapters;
   (* Comparator helpers the body referenced, in name order so the output is
      deterministic. *)
   Hashtbl.to_seq pending_helpers
@@ -13109,7 +13221,10 @@ let register_imported_module ~loc ~exposed ?(protected_names=[]) types signature
     ignore (found_type, found_value, loc))
     exposed
 
-let compile_module ?(row_access_entities=[]) ?(row_storage_entities=[]) ?(mode=Release) ?(dependencies=[]) ?(entity_bindings=[]) ?(migration_families=[]) ?(migration_queues=[]) ?(queue_codec_records=[]) ?project_path (m : module_form) =
+let compile_module_internal ?(nominal_reverses=[]) ?(nominal_transports=[]) ?(row_access_entities=[]) ?(row_storage_entities=[]) ?(mode=Release) ?(dependencies=[]) ?(entity_bindings=[]) ?(migration_families=[]) ?(migration_queues=[]) ?(queue_codec_records=[]) ?project_path (m : module_form) =
+  let previous_transports = !current_nominal_transports in
+  Fun.protect ~finally:(fun () -> current_nominal_transports := previous_transports) (fun () ->
+  current_nominal_transports := nominal_transports;
   try
     List.iter (function
       | DDatabase { config_expr = Some config; loc; _ } ->
@@ -16340,8 +16455,23 @@ let compile_module ?(row_access_entities=[]) ?(row_storage_entities=[]) ?(mode=R
         storage_decode=unique_ident taken ("TeslDecodeRow" ^ info.ent_row.rec_go_name);
         storage_encode=unique_ident taken ("TeslEncodeRow" ^ info.ent_row.rec_go_name)} in
       Some (adapter,info)) row_storage_entities in
+    let nominal_reverse_adapters=List.map (fun transport ->
+      Migration_proof_context.revalidate_nominal transport;
+      if not (List.exists (Migration_proof_context.same_nominal transport) nominal_transports) then
+        unsupported (Location.dummy_loc m.source_file) "nominal inverse lost its exact checked source site";
+      let spec=Migration_proof_context.nominal_spec transport in
+      let exact (identity:Migration_proof_context.nominal_type) =
+        let candidates=Hashtbl.fold (fun _ info acc ->
+          if info.rec_loc=identity.declaration then TRecord info::acc else acc) types.records [] @
+          Hashtbl.fold (fun _ info acc ->
+            if info.adt_loc=identity.declaration then TAdt(info,[])::acc else acc) types.adts [] in
+        match candidates with
+        | first::rest when List.for_all (type_equal first) rest -> first
+        | _ -> unsupported identity.declaration "nominal inverse lost its exact emitted declaration owner" in
+      let name=unique_ident taken "TeslCompiledNominalInverse" in
+      (transport,name),exact spec.previous,exact spec.current) nominal_reverses in
     let source =
-       module_source ~row_storage_adapters ~debug:(mode = Debug) ~imported_packages:!imported_packages ~codecs ~apis ~servers ~capturers ~app_databases
+       module_source ~row_storage_adapters ~nominal_reverse_adapters ~debug:(mode = Debug) ~imported_packages:!imported_packages ~codecs ~apis ~servers ~capturers ~app_databases
         ~queue_codec_records:(List.filter_map (fun name ->
           let prefix=m.module_name ^ "." in
           if String.starts_with ~prefix name then
@@ -16519,8 +16649,11 @@ let compile_module ?(row_access_entities=[]) ?(row_storage_entities=[]) ?(mode=R
       end
     in
     Ok (artifacts, { ex_module = m.module_name; ex_package = package;
-                     ex_types = types; ex_signatures = signatures; ex_codecs = codecs; ex_taken=Hashtbl.copy taken; ex_row_storage=List.map fst row_storage_adapters })
-  with Unsupported error -> Error [error]
+                     ex_types = types; ex_signatures = signatures; ex_codecs = codecs; ex_taken=Hashtbl.copy taken; ex_row_storage=List.map fst row_storage_adapters; ex_nominal_reverses=List.map (fun (binding,_,_) -> binding) nominal_reverse_adapters })
+  with Unsupported error -> Error [error])
+
+let compile_module ?row_access_entities ?row_storage_entities ?mode ?dependencies ?entity_bindings ?migration_families ?migration_queues ?queue_codec_records ?project_path m =
+  compile_module_internal ?row_access_entities ?row_storage_entities ?mode ?dependencies ?entity_bindings ?migration_families ?migration_queues ?queue_codec_records ?project_path m
 
 (* Test seam for single-module callers that previously consumed one backend string. *)
 let compile_to_string ?(root_path = "") (m : module_form) =
@@ -16619,6 +16752,7 @@ let compiled_row_artifacts ~entry ~modules ~exports source =
    contents=Printf.sprintf "package %s\n\nimport teslrt %s\n\nvar _ = teslrt.RegisterDatabaseMigrationHistory(teslrt.RegisterDatabaseIdentity(%s, %s), %s)\n"
     exported.ex_package (go_quote (project_path ^ "/internal/teslrt")) (go_quote database.identity) db.db_go_var (go_quote database.family)}::!owners;
   let imports=ref ["teslrt",project_path ^ "/internal/teslrt"] in
+  let legacy_math=lazy (let alias=unique_ident exported.ex_taken "migrationmath" in imports:=(alias,"math")::!imports;alias) in
   let refname own name = if own=exported.ex_package then name else (
    imports:=(own,project_path ^ "/internal/" ^ own)::!imports; own ^ "." ^ name) in
   let rows=List.assoc database.identity (P.row_histories source) in
@@ -16657,9 +16791,8 @@ let compiled_row_artifacts ~entry ~modules ~exports source =
     let slot,_=require target_info.ent_row_access in
     storage ^ Printf.sprintf "\nvar _ = teslrt.RegisterCompiledRowAccess[%s, %s](%s, %s%s)\n" from target name (refname to_owner.ex_package slot) (if mode=Debug then ", teslrt.DebugPgSql" else "") in
    let row=RH.row binding in
-   if row.writebacks=[] then storage else begin
-    let callbacks=List.map (fun (w:Migration_transform.writeback_binding) ->
-     let checked=w.function_binding in
+   if row.writebacks=[] && row.legacies=[] then storage else begin
+    let reverse_callback (checked:Migration_transform.function_binding) =
      let emitted=require (List.find_opt (fun m -> m.module_name=checked.owner.module_name) modules) in
      if not (List.exists (function DFunc f -> f=checked.declaration | _ -> false) emitted.decls) then
       unsupported checked.declaration.loc "WriteBack differs from its exact checked source binding";
@@ -16669,18 +16802,48 @@ let compiled_row_artifacts ~entry ~modules ~exports source =
      let bridge=unique_ident own.ex_taken "TeslCompiledWriteBackCallback" in
      bridges:={path="internal/" ^ own.ex_package ^ "/migration_row_" ^ bridge ^ "_generated.go";
       contents="package " ^ own.ex_package ^ "\n\nvar " ^ bridge ^ " = " ^ signature.go_name ^ "\n"}::!bridges;
-     w.mapping.previous.name,refname own.ex_package bridge) row.writebacks in
+     refname own.ex_package bridge ^ "(row)" in
+    let callbacks=List.map (fun (w:Migration_transform.writeback_binding) ->
+      w.mapping.previous.name,reverse_callback w.function_binding) row.writebacks @
+      List.map (fun (w:Migration_transform.legacy_binding) ->
+       let value=match w.mapping.value,w.function_binding with
+        | Migration_transform_rules.Function _,Some binding -> reverse_callback binding
+        | Migration_transform_rules.Literal (literal,_),None -> (match literal with
+          | Migration_additive.Integer n -> "teslrt.MustParseDecimal(" ^ go_quote n ^ ")"
+          | Migration_additive.Floating n -> Printf.sprintf "%s.Float64frombits(0x%016Lx)" (Lazy.force legacy_math) (Int64.bits_of_float n)
+          | Migration_additive.Text text -> go_quote text
+          | Migration_additive.Boolean value -> if value then "true" else "false")
+        | _ -> unsupported loc "Legacy lost its exact checked value binding" in
+       w.mapping.previous.name,value) row.legacies in
     let values=List.map (fun (field,ty) ->
      let value=match List.assoc_opt field callbacks with
-      | Some callback -> callback ^ "(row)"
+      | Some callback -> callback
       | None ->
        let current=List.find_map (function
         | Migration_transform_rules.Copy p when p.previous.name=field -> Some p.current.name
         | Migration_transform_rules.Renamed p when p.previous.name=field -> Some p.current.name
         | _ -> None) row.mapping.values |> require in
        let target_ty=require (List.assoc_opt current target_info.ent_row.rec_fields) in
-       if not (type_equal ty target_ty) then unsupported loc "WriteBack reverse identity needs exact nominal field types";
-       "row." ^ record_field_go_name current in
+       let value="row." ^ record_field_go_name current in
+       if type_equal ty target_ty then value else
+       let certificates=RH.link binding |> Migration_transform_link.checked_transform
+         |> Migration_transform.proof_context |> Migration_proof_context.nominal_transports in
+       let inverse=List.find_map (fun exported ->
+         List.find_map (fun (transport,name) ->
+           let spec=Migration_proof_context.nominal_spec transport in
+           let original=match Migration_proof_context.nominal_argument transport with
+             | EField {obj=EVar {name;_};field=previous;_} ->
+               previous=field && name=(List.hd checked.declaration.params).name
+             | _ -> false in
+           if List.exists (Migration_proof_context.same_nominal transport) certificates && original &&
+             Migration_proof_context.nominal_module transport=checked.owner.module_name &&
+             Migration_proof_context.nominal_field transport=current &&
+             spec.entity.identity=row.mapping.current.entity_name &&
+             nominal_location ty=Some spec.previous.declaration && nominal_location target_ty=Some spec.current.declaration
+           then Some (exported.ex_package,name) else None) exported.ex_nominal_reverses) exports in
+       (match inverse with
+        | Some (own,name) -> refname own name ^ "(" ^ value ^ ")"
+        | None -> unsupported loc "WriteBack reverse identity requires the exact checked nominal Copy/Rename site") in
      record_field_go_name field ^ ": " ^ value) from_info.ent_row.rec_fields in
     let reverse=unique_ident exported.ex_taken (db.db_go_var ^ "CompiledRowWriteBack" ^ string_of_int index) in
     storage ^ Printf.sprintf "\nvar %s = teslrt.RegisterCompiledRowWriteBack[%s, %s](%s, func(row %s) %s { return %s{%s} })\n"
@@ -16728,18 +16891,70 @@ let compiled_row_artifacts ~entry ~modules ~exports source =
       | Migration_transform_rules.Renamed p -> Some p.current.name
       | _ -> None) row.mapping.values)) in
   let access_errors=if not row_physical then [] else match row_source with None -> [] | Some source ->
-   Migration_program.row_histories source |> List.concat_map (fun (_,history) ->
-    let versions=Migration_row_history.versions history in
+   let module RH=Migration_row_history in
+   let module R=Migration_retained_storage in
+   let module K=Migration_retained_storage_canonical in
+   let module C=Migration_contract in
+   let program=Migration_program.source_program source in
+   Migration_program.row_histories source |> List.concat_map (fun (identity,history) ->
+    let versions=RH.versions history in
     let latest=List.hd (List.rev versions) in
-    let bindings=Migration_row_history.bindings history in
-    latest.entities |> List.filter_map (fun (entity:Migration_row_history.entity) ->
-     let own=List.filter (fun binding -> (Migration_row_history.current binding).identity=entity.identity) bindings in
-     if own=[] || (List.length own=1 && Migration_row_history.migration_version (List.hd own)=latest.version) then None else
-      Some {loc=Location.dummy_loc entry.source_file;message="migration-aware application queries currently require one transforming window ending at the current schema; additive tails and composed transformations require a checked typed access composition"})) in
+    let bindings=RH.bindings history in
+    let current_errors=latest.entities |> List.filter_map (fun (entity:RH.entity) ->
+     let own=List.filter (fun binding -> (RH.current binding).identity=entity.identity) bindings in
+     let current=List.filter (fun binding -> RH.migration_version binding=latest.version &&
+       (RH.current binding).table.entity.entity_name=entity.table.entity.entity_name) own in
+     if own=[] || List.length current=1 then None else
+      Some {loc=Location.dummy_loc entry.source_file;message="migration-aware application queries require an exact transforming binding ending at the current schema; additive tails require a checked typed access composition"}) in
+    let error message={loc=Location.dummy_loc entry.source_file;message} in
+    let sparse errors=List.map (fun (e:Migration_sparse.error)->{loc=e.loc;message=e.message}) errors in
+    let prerequisite_errors=match R.plan history with
+     | Error errors -> sparse errors
+     | Ok plan ->
+      let database=List.find (fun (d:Migration_program.database)->d.identity=identity) (Migration_program.databases program) in
+      let contracts=Option.value (List.assoc_opt identity (Migration_program.contracts program)) ~default:[] in
+      R.versions plan |> List.concat_map (fun (version:R.version)->match version.requires_contract_version with
+       | None -> []
+       | Some required ->
+        let candidates=List.filter (fun c->C.version c=required) contracts in
+        let missing ()=[error (Printf.sprintf "V%d migration-aware queries require the exact checked Contract V%d source for their settled predecessor; generate and retain that Contract before starting the next revision" version.version required)] in
+        (* Source approval and runtime completion are independent judgments.
+           This binds the immutable source Contract; deployment must still prove
+           its protected completion before publishing the next window. *)
+        match candidates,List.find_opt (fun (v:R.version)->v.version=required) (R.versions plan) with
+        | [contract],Some previous when required=version.version-1 && C.family contract=database.family && C.namespace contract=database.namespace ->
+         (match R.settled_version plan ~version:required with
+          | Error errors -> sparse errors
+          | Ok settled ->
+           let window_node=K.version_node ~family:database.family ~namespace:database.namespace plan in
+           let settled_node=K.settled_node ~family:database.family ~namespace:database.namespace plan in
+           if window_node (C.window contract)=window_node previous && settled_node (C.settled contract)=settled_node settled then []
+           else missing ())
+        | _ -> missing ()) in
+    current_errors @ prerequisite_errors) in
   let source_errors=access_errors @ (if row_physical && not row_storage then [{loc=Location.dummy_loc entry.source_file;message="physical row emission requires typed storage adapters"}] else []) @ (if row_storage && Option.is_none row_source then [{loc=Location.dummy_loc entry.source_file;message="row storage emission requires a checked source history"}] else []) @ Option.fold ~none:[] ~some:(fun source ->
    match Migration_program.verify_source_history source modules with
    | Ok () -> [] | Error errors -> List.map (fun (e:Migration_sparse.error) -> {loc=e.loc;message=e.message}) errors) row_source in
   if source_errors<>[] then Error source_errors else
+  let nominal_transports = Option.fold ~none:[] ~some:(fun source ->
+    Migration_program.row_histories source |> List.concat_map (fun (_, history) ->
+      Migration_row_history.bindings history |> List.concat_map (fun binding ->
+        Migration_row_history.link binding |> Migration_transform_link.checked_transform
+        |> Migration_transform.proof_context |> Migration_proof_context.nominal_transports))) row_source in
+  let nominal_reverses=Option.fold ~none:[] ~some:(fun source ->
+    Migration_program.row_histories source |> List.concat_map (fun (_,history) ->
+      Migration_row_history.bindings history |> List.concat_map (fun binding ->
+        let row=Migration_row_history.row binding in
+        if row.writebacks=[] && row.legacies=[] then [] else
+        let context=Migration_row_history.link binding |> Migration_transform_link.checked_transform
+          |> Migration_transform.proof_context in
+        Migration_proof_context.nominal_transports context |> List.filter (fun transport ->
+          let spec=Migration_proof_context.nominal_spec transport in
+          spec.entity.identity=row.mapping.current.entity_name &&
+          List.exists (function
+            | Migration_transform_rules.Copy {current;_} | Migration_transform_rules.Renamed {current;_} ->
+              current.name=Migration_proof_context.nominal_field transport
+            | _ -> false) row.mapping.values)))) row_source in
   let lowered = List.map (Migration_schema.lower_module ~modules) modules in
   let errors = List.concat_map (function
     | Ok _ -> []
@@ -16814,7 +17029,10 @@ let compiled_row_artifacts ~entry ~modules ~exports source =
     let rec emit acc exports = function
       | [] -> (try Ok (List.rev acc @ Option.fold ~none:[] ~some:(compiled_row_artifacts ~entry ~modules ~exports) row_source) with Unsupported error -> Error [error])
       | (m : module_form) :: rest ->
-        (match compile_module ~row_access_entities ~row_storage_entities ~mode ~dependencies:exports ~entity_bindings ~migration_families ~migration_queues ~queue_codec_records ~project_path m with
+        (match compile_module_internal ~nominal_reverses:(List.filter (fun transport ->
+          Migration_proof_context.nominal_module transport = m.module_name) nominal_reverses) ~nominal_transports:(List.filter (fun transport ->
+          Migration_proof_context.nominal_module transport = m.module_name) nominal_transports)
+          ~row_access_entities ~row_storage_entities ~mode ~dependencies:exports ~entity_bindings ~migration_families ~migration_queues ~queue_codec_records ~project_path m with
          | Error errors -> Error errors
          | Ok (artifacts, module_exports) ->
            emit (List.rev_append artifacts acc) (module_exports :: exports) rest)

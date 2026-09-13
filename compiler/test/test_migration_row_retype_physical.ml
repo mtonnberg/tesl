@@ -225,6 +225,15 @@ func TestCompilerSettledAndReverseBindings(t *testing.T) {
  if err!=nil||derived.compiled!=nil||derived.hash!=""||derived.contract!=""{t.Fatal("pure predecessor shape acquired authority",err)}
  if _,err=pgParseRowPhysicalPlan(encoded,digest);err==nil{t.Fatal("settled entered retained parser")}
  if _,err=pgParseRowSettledPlan(window.contract,window.hash);err==nil{t.Fatal("window entered settled parser")}
+ // A known ordinary Retype/WriteBack v2 plan cannot claim the new Legacy
+ // format merely by adding its optional prerequisite field and a fresh hash.
+ document,_,err:=pgReadRowCanonical(window.contract);if err!=nil{t.Fatal(err)}
+ promoted:=document.children[3]
+ if !promoted.list(8)||!promoted.children[0].isAtom("tesl-retained-physical-version-v2"){t.Fatal("requires authentic Retype v2 source plan")}
+ promoted.children[0]=pgRowAtom("tesl-retained-physical-version-v4")
+ promoted.children=append(promoted.children,pgRowList())
+ raw,promotedHash:=pgRowBaselineDocument(promoted)
+ if _,err:=pgParseRowPhysicalPlan(hex.EncodeToString([]byte(raw)),promotedHash);err==nil {t.Fatal("v4 without any Legacy obligation accepted")}
  // Every mutant is freshly encoded and hashed, so none fails only an old digest.
  settledMutants:=map[string]func(*pgRowCanonical){
   "wrong-nullability":func(n *pgRowCanonical){for i:=range n.children[6].children[0].children[5].children {c:=&n.children[6].children[0].children[5].children[i];if c.children[0].isAtom("metadata__v2"){c.children[2]=pgRowList(pgRowAtom("bool"),pgRowAtom("true"))}}},
@@ -257,9 +266,9 @@ func TestCompilerSettledAndReverseBindings(t *testing.T) {
 }
 |} contract hash
 
-let export ?(before=old) ?(after=fresh) ?(body=source) destination=project ~before ~after (fun root save path ->
+let export ?(before=old) ?(after=fresh) ?(body=source) ?(application=app) ?(binding_test=true) destination=project ~before ~after (fun root save path ->
  seal_edge ~body root path;let edge=Source_input.read path in
- let file=save "app.tesl" app in
+ let file=save "app.tesl" application in
  let build version=
   if version="v2" then (
    let plan=checked_plan path in
@@ -276,7 +285,7 @@ let export ?(before=old) ?(after=fresh) ?(body=source) destination=project ~befo
   write (Filename.concat output "cmd/access-test/main.go") driver;
   write (Filename.concat output "internal/teslmodapp/access_effects_test_bridge.go") (fixture "effects.go");
   command output (Filename.concat output "build.log") "timeout 120s go build -race -tags tesl_migration_test -o app ./cmd/access-test";
-  if version="v2" then (
+  if version="v2" && binding_test then (
    write (Filename.concat output "internal/teslrt/physical_binding_test.go") (settled_test path);
    command output (Filename.concat output "binding.log") "timeout 120s go test -race -count=1 ./internal/teslrt") in
  remove path;remove (Filename.concat root "schema/notes/v1.tesl");
@@ -337,6 +346,27 @@ fn downgrade(value: Schema.Notes.VCurrent.Metadata) -> Schema.Notes.V1.Metadata 
   Schema.Notes.VCurrent.Missing -> Schema.Notes.V1.Absent
 |} in
  native_case ~before ~after ~body "adt" ()
-let ()=run "physical Retype and WriteBack" ["PostgreSQL",[
+let legacy_app () =
+ let before=old |> replace {|unique index [title] as "notes_title_unique"|} {|index [author] as "legacy_author_idx"
+ unique index [title] as "notes_title_unique"|} in
+ let after=fresh
+  |> replace {|metadata: Metadata @column("metadata__v2"), |} ""
+  |> replace "owner: String, " ""
+  |> replace "metadata: makeMetadata id, " ""
+  |> replace {|owner: "writer", |} "" in
+ let body=source
+  |> replace "Rename author owner, Retype metadata, WriteBack metadata metadata backward" {|Legacy author "former", LegacyWith metadata backward|}
+  |> replace {|metadata: Schema.Notes.VCurrent.Metadata { text: old.metadata.text, extra: "migrated" }, |} ""
+  |> replace "owner: old.author, " ""
+  |> replace "text: row.metadata.text" "text: row.title"
+  |> replace {|row.owner == "writer"|} {|row.title == "hello"|} in
+ let application=app |> replace {|  set note.metadata = makeMetadata "edited-metadata"|} "" in
+ let output=Filename.temp_dir "tesl-row-legacy-" "" in
+ Fun.protect ~finally:(fun()->if Sys.getenv_opt "TESL_KEEP_ROW_LEGACY_TEST"=None then remove output)(fun()->
+  export ~before ~after ~body ~application ~binding_test:false output;
+  command(Filename.concat(repository())"runtime/go")(Filename.concat output "postgres.log")
+    (Printf.sprintf "TESL_ROW_LEGACY_PROGRAMS=%s timeout 180s go test -p 1 -race -tags tesl_migration_test -timeout 150s ./teslrt -run '^TestPgRowLegacyContractApp$' -count=1 -v" (Filename.quote output)))
+
+let ()=run "physical Retype and WriteBack" ["PostgreSQL",[test_case "logical removal primitive and JSONB old-field compatibility" `Quick legacy_app;
  test_case "unchanged V1/V2 App with distinct JSONB record codecs" `Quick (native_case "record");
  test_case "unchanged V1/V2 App with distinct JSONB ADT constructors" `Quick adt]]

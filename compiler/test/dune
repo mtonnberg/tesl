@@ -610,3 +610,18 @@
  (modules test_migration_row_contract_abi)
  (deps test_migration_row_access.exe)
  (libraries tesl_compiler_lib alcotest unix yojson))
+
+(test
+ (name test_migration_nominal_pk)
+ (modules test_migration_nominal_pk)
+ (libraries tesl_compiler_lib alcotest unix str))
+
+(test
+ (name test_migration_legacy_boundaries)
+ (modules test_migration_legacy_boundaries)
+ (libraries tesl_compiler_lib alcotest unix str))
+
+(test
+ (name test_migration_nominal_copy)
+ (modules test_migration_nominal_copy)
+ (libraries tesl_compiler_lib alcotest unix str))

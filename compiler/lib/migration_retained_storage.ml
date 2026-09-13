@@ -9,7 +9,7 @@ module I = Migration_inventory
 type column = {name:string;scalar:S.scalar;nullable:bool;primary_key:bool;
                default:E.default;introduced_version:int}
 type field = {logical:S.column;physical:column}
-type reverse_write = {previous:string;current:string;physical:column}
+type reverse_write = {previous:string;current:string option;physical:column}
 type entity = {source:RH.entity;columns:column list;projection:field list;
                indexes:S.index list;marker_default_generation:int;
                rename_dual_writes:(string * column) list;reverse_writes:reverse_write list}
@@ -91,11 +91,17 @@ let plan history = protect (fun () ->
     let reverse_writes=ref (match binding with None -> before.reverse_writes | Some _ -> []) in
     Option.iter (fun binding ->
      List.iter (fun (write:Migration_transform.writeback_binding) ->
-      let previous=write.mapping.previous.name and current=write.mapping.current.name in
+      let previous=write.mapping.previous.name and current=Some write.mapping.current.name in
       let add physical = reverse_writes:={previous;current;physical}::!reverse_writes in
       add (field before previous).physical;
       List.iter (fun (owner,physical) -> if owner=previous then add physical) before.rename_dual_writes)
-     (RH.row binding).writebacks) binding;
+     (RH.row binding).writebacks;
+     List.iter (fun (write:Migration_transform.legacy_binding) ->
+      let previous=write.mapping.previous.name in
+      let add physical = reverse_writes:={previous;current=None;physical}::!reverse_writes in
+      add (field before previous).physical;
+      List.iter (fun (owner,physical) -> if owner=previous then add physical) before.rename_dual_writes)
+     (RH.row binding).legacies) binding;
     let columns=ref before.columns in
     let add (logical:S.column) nullable default =
      if List.exists (fun (c:column) -> c.name=logical.name) !columns then

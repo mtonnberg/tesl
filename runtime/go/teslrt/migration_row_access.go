@@ -96,7 +96,7 @@ func (q PgRowQuery) statement(a *pgRowTransactionAdmission, d PgRowTransformDesc
 		if a == nil || a.plan == nil || a.entity == nil {
 			return "", fmt.Errorf("migration query requires its admitted entity projection")
 		}
-		old, err := pgCompiledRowPhysicalPlan(a.database, a.plan.version-1)
+		old, err := pgCompiledRowPredecessorPlan(a.database, a.plan.version)
 		if err != nil {
 			return "", err
 		}

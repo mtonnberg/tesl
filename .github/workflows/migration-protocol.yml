@@ -84,6 +84,8 @@ jobs:
             (cd compiler && dune exec --no-build ./test/test_migration_retype.exe)
             (cd compiler && dune exec --no-build ./test/test_migration_row_forward.exe)
             (cd compiler && dune exec --no-build ./test/test_migration_row_access.exe)
+            (cd compiler && dune exec --no-build ./test/test_migration_nominal_pk.exe)
+            (cd compiler && dune exec --no-build ./test/test_migration_nominal_copy.exe)
             (cd compiler && dune exec --no-build ./test/test_migration_row_contract_abi.exe)
             (cd compiler && dune exec --no-build ./test/test_migration_row_retype_physical.exe)
             cd runtime/go

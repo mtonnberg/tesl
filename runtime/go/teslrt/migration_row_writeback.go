@@ -22,7 +22,7 @@ func RegisterCompiledRowWriteBack[From, To any](storage *PgRowStorage[From, To],
 	if r.sealed || pgMigrationClosedFamilies[r.compiled.history.Family] {
 		panic("database: WriteBack attachment is closed")
 	}
-	if !r.storageAttached || len(r.compiled.inventory.Transforms[r.index].WriteBacks) == 0 {
+	if !r.storageAttached || len(r.compiled.inventory.Transforms[r.index].WriteBacks)+len(r.compiled.inventory.Transforms[r.index].LegacyWrites) == 0 {
 		panic("database: WriteBack requires its exact compiled storage descriptor")
 	}
 	if r.writeBackAttached {

@@ -40,7 +40,7 @@ type pgExpansionBoundaryPause struct {
 // effects by adopting or removing a physical object.
 func pgPauseExpansionBoundaries(t *testing.T, boundaries []pgExpansionBoundary) []pgExpansionBoundaryPause {
 	t.Helper()
-	dir, err := os.MkdirTemp("", "tesl-expand-")
+	dir, err := os.MkdirTemp(os.Getenv("TESL_MIGRATION_TEST_SOCKET_ROOT"), "tesl-expand-")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -10,7 +10,8 @@ module C = Migration_canonical
 type requested = { entity : string; function_ref : expr; loc : Location.loc }
 type function_binding = { identity : string; owner : module_form; declaration : func_decl }
 type writeback_binding = { mapping : Migration_transform_rules.writeback; function_binding : function_binding }
-type row = { mapping : R.entity; function_binding : function_binding option; fixtures : function_binding list; writebacks : writeback_binding list }
+type legacy_binding = { mapping : Migration_transform_rules.legacy; function_binding : function_binding option }
+type row = { mapping : R.entity; function_binding : function_binding option; fixtures : function_binding list; writebacks : writeback_binding list; legacies : legacy_binding list }
 type prepared = { rules : R.t; rows : row list; source_inputs : (string * string) list;
   sources : (module_form * string) list; root : module_form; context : Migration_proof_context.t }
 type t = Checked of prepared
@@ -182,31 +183,46 @@ let rec same_type modules owner old_owner a b = match a,b with
       | Some x,Some y -> x=y | _ -> false)
   | TApp x,TApp y -> same_type modules owner old_owner x.head y.head && same_type modules owner old_owner x.arg y.arg
   | _ -> false
-let bind_writeback modules root entity (mapping:R.writeback) =
-  let binding=bind_function modules root mapping.function_ref in
+let reverse_field ~rule modules (previous:I.stored_field) loc =
   let old_owner,field=match List.concat_map (fun owner -> List.concat_map (function
-    | DEntity e when owner.module_name ^ "." ^ e.name=mapping.previous.entity ->
-      List.filter_map (fun (f:field_def) -> if f.name=mapping.previous.name then Some (owner,f) else None) e.fields
+    | DEntity e when owner.module_name ^ "." ^ e.name=previous.entity ->
+      List.filter_map (fun (f:field_def) -> if f.name=previous.name then Some (owner,f) else None) e.fields
     | _ -> []) owner.decls) modules with
-    | [one] -> one | _ -> reject "MIG021" mapping.loc "WriteBack lost its exact previous field owner" in
+    | [one] -> one | _ -> reject "MIG021" loc (rule ^ " lost its exact previous field owner") in
   (* Per-field reverse functions cannot re-establish a predicate relating two
      fields after one value has changed. Keep that proof obligation explicit;
      nested records are constructed and checked by the user's typed function. *)
-  List.iter (function DEntity e when old_owner.module_name ^ "." ^ e.name=mapping.previous.entity ->
+  List.iter (function DEntity e when old_owner.module_name ^ "." ^ e.name=previous.entity ->
     List.iter (fun (f:field_def) ->
       let rec local = function
         | PredApp p -> List.for_all ((=) f.name) p.args
         | PredAnd p -> local p.left && local p.right in
       if Option.fold ~none:false ~some:(fun proof -> not (local proof)) f.proof_ann then
-        reject "MIG021" f.loc ("WriteBack cannot establish the previous entity's cross-field predicate on `" ^ f.name ^
+        reject "MIG021" f.loc (rule ^ " cannot establish the previous entity's cross-field predicate on `" ^ f.name ^
           "`; this schema requires a checked whole-entity reverse proof, which is not supported yet")) e.fields
     | _ -> ()) old_owner.decls;
+  old_owner,field
+
+let bind_reverse_function ~rule modules root entity previous loc expression =
+  let binding=bind_function modules root expression in
+  let old_owner,field=reverse_field ~rule modules previous loc in
   (match binding.declaration.params,binding.declaration.return_spec with
    | [parameter],RetPlain result when parameter.proof_ann=None && field.proof_ann=None &&
        entity_type modules binding.owner entity parameter.type_expr &&
        same_type modules binding.owner old_owner result.ty field.type_expr -> ()
-   | _ -> reject "MIG021" mapping.loc "WriteBack requires exactly To.Entity -> previous field type; direct field proof returns are not supported yet");
-  {mapping;function_binding=binding}
+   | _ -> reject "MIG021" loc (rule ^ " requires exactly To.Entity -> previous field type; direct field proof returns are not supported yet"));
+  binding
+
+let bind_writeback modules root entity (mapping:R.writeback) : writeback_binding =
+  {mapping;function_binding=bind_reverse_function ~rule:"WriteBack" modules root entity mapping.previous mapping.loc mapping.function_ref}
+let bind_legacy modules root entity (mapping:R.legacy) : legacy_binding =
+  let function_binding=match mapping.value with
+    | R.Literal _ ->
+      let _,field=reverse_field ~rule:"Legacy" modules mapping.previous mapping.loc in
+      if field.proof_ann<>None then reject "MIG021" mapping.loc "Legacy cannot fabricate a previous field proof";
+      None
+    | R.Function expression -> Some (bind_reverse_function ~rule:"LegacyWith" modules root entity mapping.previous mapping.loc expression) in
+  {mapping;function_binding}
 
 let check_returns modules binding mapping =
   let accepted=ref [] in
@@ -341,13 +357,15 @@ let prepare ~project_root:_ ~source root rules ~functions ~fixtures =
       if mapping.mode=R.Migrate && fixtures=[] then reject "MIG003" mapping.previous.entity_loc
         (Printf.sprintf "%s requires a representative fixture `fn old%s() -> %s`; add it to fixtures" mapping.identity mapping.identity mapping.previous.entity_name);
       let writebacks=List.map (bind_writeback modules root mapping.current.entity_name) mapping.writebacks in
-      {mapping;function_binding;fixtures;writebacks}) in
+      let legacies=List.map (bind_legacy modules root mapping.current.entity_name) mapping.legacies in
+      {mapping;function_binding;fixtures;writebacks;legacies}) in
     List.iter (fun fixture -> if not (Hashtbl.mem used fixture.identity) then reject "MIG021" fixture.declaration.loc
       "fixtures must be parameterless functions returning an exact previous entity in this transformation") fixture_functions;
     let seen = Hashtbl.create 8 in
     List.iter (fun fixture -> if Hashtbl.mem seen fixture.identity then reject "MIG023" fixture.declaration.loc "duplicate migration fixture" else Hashtbl.add seen fixture.identity ()) fixture_functions;
     check_pure_closure modules (fixture_functions @ List.filter_map (fun (row:row) -> row.function_binding) rows @
-      List.concat_map (fun (row:row) -> List.map (fun (w:writeback_binding) -> w.function_binding) row.writebacks) rows);
+      List.concat_map (fun (row:row) -> List.map (fun (w:writeback_binding) -> w.function_binding) row.writebacks @
+        List.filter_map (fun (w:legacy_binding) -> w.function_binding) row.legacies) rows);
     let captured_graph=checked_capture ~source root sources in
     let source_inputs=captured_graph.inputs in
     let validate=captured_graph.validate in
@@ -355,6 +373,30 @@ let prepare ~project_root:_ ~source root rules ~functions ~fixtures =
       let old,fresh=I.same_declarations same in
       if old.namespace=IR.Predicate && fresh.namespace=IR.Predicate then
         Some (old.qualified_name,fresh.qualified_name) else None) in
+    let nominal_type (declaration:I.declaration) : Migration_proof_context.nominal_type =
+      {identity=declaration.qualified_name;declaration=declaration.source_loc} in
+    let type_pairs=S.identities (R.coverage rules) |> List.filter_map (fun same ->
+      let previous,current=I.same_declarations same in
+      if previous.namespace=IR.Type && current.namespace=IR.Type then
+        Some (nominal_type previous,nominal_type current) else None) in
+    let declaration name = List.find_opt (fun (d:I.declaration) ->
+      d.namespace=IR.Type && d.qualified_name=name) (I.declarations before @ I.declarations after) in
+    let field_type (field:I.stored_field) = List.find_map (fun owner ->
+      List.find_map (function DEntity entity when owner.module_name ^ "." ^ entity.name=field.entity ->
+        List.find_map (fun (f:field_def) -> if f.name<>field.name then None else
+          match f.type_expr with TName {name;_} ->
+            (match resolver modules owner IR.Type name with Some (IR.Global name) -> declaration name | _ -> None)
+          | _ -> None) entity.fields
+        | _ -> None) owner.decls) modules in
+    let nominal_copy (mapping:R.entity) previous current =
+      match field_type previous,field_type current,declaration mapping.current.entity_name with
+      | Some previous,Some current,Some entity when
+          List.mem previous.declaration_kind [I.Record;I.Adt] &&
+          List.mem current.declaration_kind [I.Record;I.Adt] &&
+          List.mem (nominal_type previous,nominal_type current) type_pairs ->
+        Some {Migration_proof_context.previous=nominal_type previous;current=nominal_type current;
+          entity=nominal_type entity;types=type_pairs}
+      | _ -> None in
     let primitive inventory (field:I.stored_field) =
       match List.find_opt (fun (s:I.field_shape) -> s.stored_field.entity=field.entity && s.stored_field.name=field.name) (I.field_shapes inventory) with
       | Some shape -> (match shape.type_identity with
@@ -389,16 +431,21 @@ let prepare ~project_root:_ ~source root rules ~functions ~fixtures =
           match constructor with
           | Some constructor when resolver modules binding.owner IR.Type constructor=Some (IR.Global row.mapping.current.entity_name) ->
             List.iter (function
-              | R.Copy {previous;current} | R.Renamed {previous;current}
-                  when primitive before previous && primitive after current ->
+              | R.Copy {previous;current} | R.Renamed {previous;current} ->
+                let nominal=nominal_copy row.mapping previous current in
                 (match List.assoc_opt current.name fields with
                 | Some (EField {obj=EVar {name;_};field;_} as argument)
-                    when name=(List.hd binding.declaration.params).name && field=previous.name -> sites := {Migration_proof_context.owner=binding.owner;constructor;field=current.name;argument;projection=projection previous argument;predicates=pairs} :: !sites
+                    when name=(List.hd binding.declaration.params).name && field=previous.name &&
+                      (nominal<>None || primitive before previous && primitive after current) ->
+                    sites := {Migration_proof_context.owner=binding.owner;constructor;field=current.name;
+                      argument;projection=projection previous argument;predicates=pairs;nominal} :: !sites
                 | _ -> ())
               | _ -> ()) row.mapping.values
           | _ -> ()) (Hashtbl.find accepted_rows binding.identity);
         !sites) rows in
-    let context=Migration_proof_context.create ~sources ~sites ~revalidate:validate in
+    let resolve_type owner name=match resolver modules owner IR.Type name with
+      | Some (IR.Global identity) -> Some identity | _ -> None in
+    let context=Migration_proof_context.create ~sources ~sites ~resolve_type ~revalidate:validate in
     validate ();
     Ok {rules;rows;source_inputs;sources;root;context}
   with Invalid errors -> Error errors

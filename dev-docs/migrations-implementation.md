@@ -8,6 +8,47 @@ non-normative. An unchecked row is not delivered.
 
 ## Current assessment and implementation order
 
+The latest integrated increment preserves record and ADT primary keys through
+exact `Same` evidence and an unchanged `old.id` projection. Two independent
+reviews, the shared full compiler build, tagged row race checks (1.800s), and
+all eighteen shared nominal-key groups pass (70.148s). The groups include actual
+PostgreSQL Worker and Contract applications, source removal before execution,
+lossy codecs, nullary ADTs, and rejected attempts to move the identity proof to
+another field, helper or intermediate constructor.
+
+The runtime and compiler/access support for repeated transforming revisions are
+integrated after two reviews. The independently generated V1/V2/V3 trace covers
+the original V2 process reading and writing generation 3, a caller-owned
+transaction delaying publication without replayed effects, size-one pool
+observation while holding an SQL row lock, and old-reader HTTP 503 after
+retirement. Its isolated final eleven groups pass (250.597s). The shared run
+passes ten of eleven groups (253.208s), including the repeated application trace,
+but a competing Worker exits with SQLSTATE 40001 during shard registration. This
+is a real regression, not a passing combined gate. A deterministic application
+test reproduces progress committing after the registration snapshot. The narrow
+internal registration retry and test are integrated after two reviews; removing
+only that retry reproduces the failure. The subsequent shared eleven-group run
+passes (276.392s). A follow-up review found that Contract, unlike Worker, passed a
+long-lived service context to preparation. A single operation deadline now bounds
+both callers' entire retry loop. Its actual application regression passes with
+the two worker cases (14.406s); the unbounded predecessor fails the new deadline
+test by completing Contract after expiry. That follow-up is integrated after two
+reviews; its final shared union run remains pending.
+
+Logical field removal via `Legacy` and `LegacyWith` is integrated after the
+second compiler and runtime reviews. Its exact corrected source passes all 138
+affected groups, including the three actual PostgreSQL removal/record/ADT
+Contract scenarios (75.777s) and sixteen Retype/WriteBack groups (70.634s).
+Coverage includes primitive and JSONB compatibility values, unchanged handlers,
+late old writers, obsolete column/index removal, exact old nominal callback
+ownership, closure drift and old cross-field proof boundaries. Review found two
+closed-format validation gaps; both fixes have precise guard-removal mutants
+that fail the intended freshly hashed regression. Full compiler build, runtime
+race checks (1.724s), tagged lint, production-only nil analysis and manual
+coherence pass. The integrated union is being rebuilt. These results remain on
+the internal compiler route; ordinary command activation and the full
+transforming showcase are not complete.
+
 Reassessment, 2026-09-12: the feature is not near completion. Additive PostgreSQL
 evolution and supported compiler upgrades are demonstrated with retained
 rows and unchanged application code in lesson 83. Compiler, source-edit and model
@@ -55,8 +96,12 @@ record/ADT JSONB union passes both lazy/dual-write and full Contract scenarios
 were isolated application results. The lifecycle, settled access and JSONB
 Contract regressions are now integrated after independent reviews. The shared
 compiler build, runtime row race checks (1.740s), tagged lint and nil analysis pass;
-the fresh combined PostgreSQL application gate is running. Public activation and
-the next transforming revision remain separate requirements.
+the fresh combined PostgreSQL application gate passes all nine groups (204.595s).
+Its ten lifecycle/native race cases pass together (116.080s), including every
+review correction. The shared record/ADT full Contract suite also passes both
+groups (67.581s), the four A/B compatibility races pass (74.350s compiler group),
+and all 22 Contract source groups pass (42.473s). Public activation and the next
+transforming revision remain separate requirements.
 
 The private lifecycle evidence includes actual lease renewal across a final pass,
 a healthy competing Worker, internal claim/CAS serialization retries and backend
@@ -70,8 +115,8 @@ now requires that version's complete inventory even when no rows remain. Both
 actual application regressions pass (15.870s), and removing either correction
 fails its precise regression. A later supplemental run timed out during batch
 commit and subsequent fixture setup under host contention; its cause was not
-captured, so it is not counted as a passing rerun. The shared combined gate is the
-current verification target.
+captured, so it is not counted as a passing rerun. The subsequent shared combined
+gate passes with the original deadlines; the earlier failure remains recorded.
 
 Staged NOT NULL validation is the next contraction gate. The compiler derives
 four internal operations from the existing one-field selector. This compiler and
@@ -83,8 +128,8 @@ updates during validation and scan-free final tightening. Neither result alone
 establishes the full staged application lifecycle. The separately frozen
 runtime union passes six actual application groups (93.656s), including all four
 DDL crash stages and three batch commit stages; eight catalog identity and proof
-validity cases pass. The runtime is now integrated, with its fresh combined
-application gate still pending before public activation.
+validity cases pass. The runtime is now integrated and its fresh combined
+application gate passes. Public activation remains a separate requirement.
 
 The compiler-upgrade design gate passed under stored-value contract
 revision 4: actual A/B/C executables retain data, a different compiler ABI may

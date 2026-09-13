@@ -248,7 +248,7 @@ func pgCheckApplicationRowTransforms(database *Database, history PgCompiledMigra
 		if len(compiled.inventory.Transforms[i].SourceProjection) != 0 && !registration.storageAttached {
 			return nil, fmt.Errorf("compiled row storage adapter bindings are incomplete")
 		}
-		if len(compiled.inventory.Transforms[i].WriteBacks) != 0 && !registration.writeBackAttached {
+		if len(compiled.inventory.Transforms[i].WriteBacks)+len(compiled.inventory.Transforms[i].LegacyWrites) != 0 && !registration.writeBackAttached {
 			return nil, fmt.Errorf("compiled WriteBack adapter bindings are incomplete")
 		}
 		if compiledRowPhysicalHistories[compiled] != nil && !registration.accessAttached {

@@ -16,7 +16,7 @@ func TestRowABIAdmissionErrorIsExact(t *testing.T) {
 			t.Fatal("exact ABI refusal omitted admission classification", got)
 		}
 	}
-	for _, err := range []error{nil, errors.New(pinned.Message), &pgconn.PgError{Code: "P0001", Message: "user callback failure"}, &pgconn.PgError{Code: "42501", Message: pinned.Message}, &pgconn.PgError{Code: "P0001", Message: pinned.Message + " extra"}} {
+	for _, err := range []error{nil, errors.New(pinned.Message), &pgconn.PgError{Code: "P0001", Message: "user callback failure"}, &pgconn.PgError{Code: "P0001", Message: "tesl: schema version 2 is retired (min_version 3)"}, &pgconn.PgError{Code: "42501", Message: pinned.Message}, &pgconn.PgError{Code: "P0001", Message: pinned.Message + " extra"}} {
 		if got := pgRowABIAdmissionError(err); got != err {
 			t.Fatal("unrelated error reclassified", err, got)
 		}

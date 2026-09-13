@@ -101,28 +101,43 @@ func pgClaimRowLease(ctx context.Context, conn *pgx.Conn, b *pgRowBaseline, role
 // also represents disjoint ranges; histogram-based splitting and parallel shard
 // scheduling are a separate extension to this first complete lifecycle runner.
 func pgPrepareRowWork(ctx context.Context, conn *pgx.Conn, b *pgRowBaseline, roles PgMigrationControlRoles, plan *pgRowPhysicalPlan) error {
-	return pgRowControlWrite(ctx, conn, func(tx pgx.Tx) error {
-		state, _, err := pgReadRowBaselineState(ctx, tx, b, roles, false)
-		if err != nil {
-			return err
-		}
-		for _, row := range state.Versions {
-			if row.Version == plan.version && row.Step == "retired" {
-				return errRowWindowFinal
-			}
-		}
-		if state.Current < plan.version {
-			return fmt.Errorf("backfill precedes physical expansion")
-		}
-		for _, window := range plan.windows {
-			if _, err := tx.Exec(ctx, "select "+pgx.Identifier{plan.namespace, "tesl_register_row_shard"}.Sanitize()+"($1,$2,$3,$4,null,null,$5)", plan.version, window.entity, int16(window.targetGeneration), int16(0), pgRowLeaseName(window.entity, window.targetGeneration, 0)); err != nil {
+	ctx, cancel := context.WithTimeout(ctx, pgLeaseTimeout())
+	defer cancel()
+	for {
+		err := pgRowControlWrite(ctx, conn, func(tx pgx.Tx) error {
+			state, _, err := pgReadRowBaselineState(ctx, tx, b, roles, false)
+			if err != nil {
 				return err
 			}
-		}
-		return nil
-	})
-}
+			for _, row := range state.Versions {
+				if row.Version == plan.version && row.Step == "retired" {
+					return errRowWindowFinal
+				}
+			}
+			if state.Current < plan.version {
+				return fmt.Errorf("backfill precedes physical expansion")
+			}
+			migrationBoundary("row-worker-before-prepare-shards")
+			for _, window := range plan.windows {
+				if _, err := tx.Exec(ctx, "select "+pgx.Identifier{plan.namespace, "tesl_register_row_shard"}.Sanitize()+"($1,$2,$3,$4,null,null,$5)", plan.version, window.entity, int16(window.targetGeneration), int16(0), pgRowLeaseName(window.entity, window.targetGeneration, 0)); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
 
+		var server *pgconn.PgError
+		if !errors.As(err, &server) || server.Code != "40001" || ctx.Err() != nil || conn.IsClosed() {
+			return err
+		}
+		// An existing shard can receive committed progress after this complete
+		// snapshot and before INSERT ON CONFLICT. Only the rolled-back internal
+		// registration is retried; no row conversion or application body ran.
+		if err := pgIndexWait(ctx, 10*time.Millisecond); err != nil {
+			return err
+		}
+	}
+}
 func pgWithRowLeaseRenewal(service context.Context, coordinator *pgx.Conn, plan *pgRowPhysicalPlan, lease pgRowLeaseAdmission, run func(context.Context) error) (resultErr error) {
 	ctx, cancel := context.WithCancel(service)
 	defer cancel()

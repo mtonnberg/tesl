@@ -42,7 +42,7 @@ func pgAttachRowBackfill[From, To any](storage *PgRowStorage[From, To]) error {
 		if plan == nil || entity == nil || plan.compiled != r.compiled || plan.version != d.MigrationVersion || entity.identity != d.Entity || entity.generation != d.TargetGeneration || limit < 1 || limit > 10000 {
 			return nil, fmt.Errorf("backfill read differs from typed window")
 		}
-		previous, err := pgCompiledRowPhysicalPlan(r.database, plan.version-1)
+		previous, err := pgCompiledRowPredecessorPlan(r.database, plan.version)
 		if err != nil {
 			return nil, err
 		}

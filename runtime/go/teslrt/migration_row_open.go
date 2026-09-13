@@ -132,6 +132,7 @@ func initializeRowPostgres(key string, initialization *postgresInitialization, p
 		principal = roles.Request
 	}
 	db := &PostgresDB{schema: b.history.Namespace, migration: &pgMigrationAdmission{version: b.history.CurrentVersion, fenceNamespace: state.FenceNamespace, databaseUUID: state.DatabaseUUID, worker: principal, roles: roles, controlFormat: pgRowControlFormat, rowBaseline: b}}
+	db.migration.rowObservation = &pgRowObservationCache{owner: db.migration}
 	poolConfig.AfterConnect = func(ctx context.Context, conn *pgx.Conn) error { return pgVerifyMigrationConnection(ctx, conn, db) }
 	pool, err = pgxpool.NewWithConfig(ctx, poolConfig)
 	if err != nil {

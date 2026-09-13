@@ -134,13 +134,19 @@ func pgExecuteRowForward(ctx context.Context, conn *pgx.Conn, b *pgRowBaseline, 
 			}
 			migrationBoundary("row-forward-after-receipt")
 		}
-		if err := pgExpansionTransaction(ctx, conn, func(tx pgx.Tx) error {
-			if _, _, err := pgReadRowBaselineState(ctx, tx, b, roles, true); err != nil {
+		if err := pgRowCompatibilityDrain(ctx, conn, result.FenceNamespace, result.MinVersion, result.Current, "row-forward", func() error {
+			return pgExpansionTransaction(ctx, conn, func(tx pgx.Tx) error {
+				fresh, _, err := pgReadRowBaselineState(ctx, tx, b, roles, true)
+				if err != nil {
+					return err
+				}
+				if fresh.Current != result.Current || fresh.MinVersion != result.MinVersion || fresh.DatabaseUUID != result.DatabaseUUID {
+					return fmt.Errorf("row publication admission changed while draining")
+				}
+				migrationBoundary("row-forward-before-publication")
+				_, err = tx.Exec(ctx, "select "+ns+"tesl_record_expanded($1)", plan.version)
 				return err
-			}
-			migrationBoundary("row-forward-before-publication")
-			_, err := tx.Exec(ctx, "select "+ns+"tesl_record_expanded($1)", plan.version)
-			return err
+			})
 		}); err != nil {
 			return err
 		}

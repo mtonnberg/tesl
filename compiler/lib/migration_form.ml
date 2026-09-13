@@ -4,7 +4,7 @@ open Ast
 
 let type_names = ["Migration"; "Entity"; "Rule"; "Same"; "Contract"; "Drop"; "Tighten"]
 let constructor_groups = ["Entity", ["Additive"; "Derived"; "Migrate"; "New"; "Drop"];
-                          "Rule", ["Default"; "Rename"; "Retype"; "WriteBack"]; "Same", ["Same"];
+                          "Rule", ["Default"; "Rename"; "Retype"; "WriteBack"; "Legacy"; "LegacyWith"]; "Same", ["Same"];
                           "Drop", ["Column"; "Storage"; "Index"; "Trigger"]; "Tighten", ["NotNull"]]
 let names = List.sort_uniq String.compare
   (type_names @ List.concat_map snd constructor_groups)

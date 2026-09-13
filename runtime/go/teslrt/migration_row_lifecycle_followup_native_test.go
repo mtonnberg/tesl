@@ -3,6 +3,7 @@
 package teslrt
 
 import (
+	"context"
 	"os"
 	"strings"
 	"testing"
@@ -52,6 +53,7 @@ func TestPgRowWorkerDrainsInFlightRenewalAfterBatchCommit(t *testing.T) {
 	deadline := time.Now().Add(12 * time.Second)
 	for !blocked() {
 		if time.Now().After(deadline) {
+			pgLogRowLifecycleWaits(t, f)
 			t.Fatal("renewal never blocked behind lease")
 		}
 		time.Sleep(20 * time.Millisecond)
@@ -67,6 +69,7 @@ func TestPgRowWorkerDrainsInFlightRenewalAfterBatchCommit(t *testing.T) {
 			break
 		}
 		if time.Now().After(deadline) {
+			pgLogRowLifecycleWaits(t, f)
 			t.Fatal("batch failed to commit before renewal drain")
 		}
 		time.Sleep(10 * time.Millisecond)
@@ -125,4 +128,15 @@ func TestPgRowRetirementRequiresEntireFinalShardInventory(t *testing.T) {
 	if err == nil || !strings.Contains(string(output), "row work inventory is incomplete") {
 		t.Fatal("complete final shard deletion bypassed exact reader", err, string(output))
 	}
+}
+
+// Failure-only observation: preserve deadlines and protocol behavior while
+// distinguishing server lock waits from machine/IO saturation in CI.
+func pgLogRowLifecycleWaits(t *testing.T, f *pgControlTestFixture) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	var snapshot string
+	err := f.worker.QueryRow(ctx, `select coalesce(jsonb_agg(jsonb_build_object('pid',pid,'state',state,'waitType',wait_event_type,'waitEvent',wait_event,'blockers',pg_blocking_pids(pid),'query',left(query,180))),'[]'::jsonb)::text from pg_stat_activity where datname=current_database() and usename=current_user`).Scan(&snapshot)
+	t.Log("row lifecycle backend observation", snapshot, err)
 }

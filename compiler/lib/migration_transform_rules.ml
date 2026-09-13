@@ -7,6 +7,8 @@ type rule =
   | Rename of { previous : string; current : string; loc : Location.loc }
   | Retype of { field : string; loc : Location.loc }
   | WriteBack of { previous : string; current : string; function_ref : Ast.expr; loc : Location.loc }
+  | Legacy of { field : string; value : Migration_additive.literal; loc : Location.loc }
+  | LegacyWith of { field : string; function_ref : Ast.expr; loc : Location.loc }
   | Default of A.default
 type mode = Derived | Migrate
 type entry = { entity : string; mode : mode; rules : rule list; loc : Location.loc }
@@ -18,9 +20,11 @@ type value_source =
   | Constant of stored_field * node
   | Computed of stored_field
 type writeback = { previous : stored_field; current : stored_field; function_ref : Ast.expr; loc : Location.loc }
+type legacy_value = Literal of Migration_additive.literal * Migration_canonical.node | Function of Ast.expr
+type legacy = { previous : stored_field; value : legacy_value; loc : Location.loc }
 type entity = {
   identity : string; previous : stored_entity; current : stored_entity;
-  mode : mode; values : value_source list; writebacks : writeback list; indexes_changed : bool;
+  mode : mode; values : value_source list; writebacks : writeback list; legacies : legacy list; indexes_changed : bool;
 }
 type t = { coverage : S.t; entities : entity list }
 let entities t = t.entities
@@ -86,7 +90,13 @@ let check ?version coverage ~entries =
           | Some old, Some fresh when old.stored_field.contract = fresh.stored_field.contract -> ()
           | _ -> refuse "MIG009" entry.loc "online transformations cannot change the primary key's stored contract");
          let renamed = Hashtbl.create 8 and destinations = Hashtbl.create 8 and defaults = Hashtbl.create 8 in
-         let retyped = Hashtbl.create 8 and backwards = Hashtbl.create 8 in
+         let retyped = Hashtbl.create 8 and backwards = Hashtbl.create 8 and legacy = Hashtbl.create 8 in
+         let add_legacy name value loc =
+           if Hashtbl.mem legacy name then refuse "MIG023" loc "duplicate legacy field"
+           else if name=pair.previous.primary_key then refuse "MIG009" loc "Legacy cannot change the primary key"
+           else if not (List.mem_assoc name previous) || List.mem_assoc name current then
+             refuse "MIG022" loc "Legacy requires an old-only field"
+           else Hashtbl.add legacy name (value,loc) in
          List.iter (function
            | Rename rule ->
              if Hashtbl.mem renamed rule.previous || Hashtbl.mem destinations rule.current || Hashtbl.mem defaults rule.current then
@@ -114,12 +124,23 @@ let check ?version coverage ~entries =
                refuse "MIG009" rule.loc "WriteBack cannot change the primary key"
              else if Hashtbl.mem backwards rule.previous then refuse "MIG023" rule.loc "duplicate WriteBack previous field"
              else Hashtbl.add backwards rule.previous (rule.current,rule.function_ref,rule.loc)
+           | Legacy rule ->
+             (match List.assoc_opt rule.field previous, A.literal rule.value with
+              | Some shape, Ok (ty,value) when shape.proof_identity=None && shape.type_identity=A.primitive ty ->
+                add_legacy rule.field (Literal (rule.value,value)) rule.loc
+              | _ -> refuse "MIG022" rule.loc "Legacy requires a primitive literal of the exact unproven previous type; use LegacyWith for a checked constructor")
+           | LegacyWith rule -> add_legacy rule.field (Function rule.function_ref) rule.loc
            | Default rule ->
              if rule.entity <> identity || not (List.mem_assoc rule.field current) || List.mem_assoc rule.field previous then
                refuse "MIG022" rule.loc "Default requires a newly added field in this entity"
              else if Hashtbl.mem defaults rule.field || Hashtbl.mem destinations rule.field then
                refuse "MIG023" rule.loc "duplicate or conflicting Default target"
              else Hashtbl.add defaults rule.field rule) entry.rules;
+         let legacies=Hashtbl.to_seq legacy |> List.of_seq |> List.map (fun (name,(value,loc)) ->
+           if Hashtbl.mem renamed name || Hashtbl.mem backwards name || Hashtbl.mem retyped name then
+             refuse "MIG023" loc "Legacy conflicts with Rename, WriteBack or Retype";
+           {previous=(List.assoc name previous).stored_field;value;loc})
+           |> List.sort (fun (a:legacy) b -> String.compare a.previous.name b.previous.name) in
          let renames = Hashtbl.to_seq renamed |> List.of_seq in
          let writebacks = Hashtbl.to_seq backwards |> List.of_seq |> List.filter_map (fun (old,(fresh,function_ref,loc)) ->
            let paired = Option.value (Hashtbl.find_opt destinations fresh) ~default:fresh in
@@ -135,7 +156,7 @@ let check ?version coverage ~entries =
            if not (List.exists (fun (w:writeback) -> w.previous.name=old && w.current.name=name) writebacks) then
              refuse "MIG022" loc "online Retype currently requires WriteBack for the previous stored value") retyped;
          List.iter (fun (name, shape) ->
-           if not (List.mem_assoc name current) && not (Hashtbl.mem renamed name) && not (Hashtbl.mem backwards name) then
+           if not (List.mem_assoc name current) && not (Hashtbl.mem renamed name) && not (Hashtbl.mem backwards name) && not (Hashtbl.mem legacy name) then
              refuse "MIG022" shape.stored_field.loc ("removed field `" ^ name ^ "` needs a legacy-write rule; Rename alone cannot discard retained data")) previous;
          let values = List.filter_map (fun (name, shape) ->
            let field = shape.stored_field in
@@ -175,10 +196,10 @@ let check ?version coverage ~entries =
              | None when entry.mode = Migrate -> Some (Computed field)
              | None when A.nullable shape && shape.proof_identity = None -> Some (Empty_optional field)
              | None -> refuse "MIG016" field.loc ("Derived cannot compute `" ^ name ^ "`; provide Migrate with a checked row function"); None) current in
-         if entry.mode = Derived && Hashtbl.length renamed = 0 then
+         if entry.mode = Derived && Hashtbl.length renamed = 0 && legacies=[] then
            refuse "MIG016" entry.loc "this Derived entry has no identity transformation; use Additive for nullable additions and literal defaults";
          let indexes_changed = entity_indexes before ~entity:pair.previous.entity_name <>
            entity_indexes after ~entity:pair.current.entity_name in
-         Some {identity;previous=pair.previous;current=pair.current;mode=entry.mode;values;writebacks;indexes_changed})
+         Some {identity;previous=pair.previous;current=pair.current;mode=entry.mode;values;writebacks;legacies;indexes_changed})
     | _ -> None) in
   if !errors = [] then Ok {coverage;entities=mapped} else Error (List.rev !errors)

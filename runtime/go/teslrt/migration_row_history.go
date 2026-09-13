@@ -48,6 +48,7 @@ type PgRowFieldMapping struct {
 type PgRowWriteBackMapping struct{ Previous, Current string }
 
 type PgRowTransformDescriptor struct {
+	LegacyWrites                                                      []string
 	WriteBacks                                                        []PgRowWriteBackMapping
 	MigrationVersion                                                  int
 	Entity, Table, Mode                                               string
@@ -469,8 +470,11 @@ func pgRowDescriptor(r *pgMigrationWireReader, raw json.RawMessage, base PgRowSo
 	if version >= 2 {
 		fields = append(fields, "sourceProjection", "targetProjection")
 	}
-	if version == 3 {
+	if version >= 3 {
 		fields = append(fields, "writeBacks")
+	}
+	if version >= 4 {
+		fields = append(fields, "legacyWrites")
 	}
 	o := r.object(raw, fields...)
 	d := PgRowTransformDescriptor{MigrationVersion: pgMigrationRead[int](r, o["migrationVersion"]), Entity: pgMigrationRead[string](r, o["entity"]), Table: pgMigrationRead[string](r, o["table"]), Mode: pgMigrationRead[string](r, o["mode"]), PreviousGeneration: pgMigrationRead[int](r, o["previousGeneration"]), TargetGeneration: pgMigrationRead[int](r, o["targetGeneration"]), FromSchemaSnapshot: pgMigrationRead[string](r, o["fromSchemaSnapshot"]), ToSchemaSnapshot: pgMigrationRead[string](r, o["toSchemaSnapshot"]), FromStorageSnapshot: pgMigrationRead[string](r, o["fromStorageSnapshot"]), ToStorageSnapshot: pgMigrationRead[string](r, o["toStorageSnapshot"]), FromTypeContractHash: pgMigrationRead[string](r, o["fromTypeContractHash"]), ToTypeContractHash: pgMigrationRead[string](r, o["toTypeContractHash"]), SourceSchemaColumns: pgRowColumns(r, o["sourceSchemaColumns"]), TargetSchemaColumns: pgRowColumns(r, o["targetSchemaColumns"]), FieldMapping: pgMigrationReadArray(r, o["fieldMapping"], func(raw json.RawMessage) PgRowFieldMapping { return pgRowMapping(r, raw) }), TransformContractFormat: pgMigrationRead[string](r, o["transformContractFormat"]), TransformContract: pgMigrationRead[string](r, o["transformContract"]), TransformContractHash: pgMigrationRead[string](r, o["transformContractHash"])}
@@ -478,11 +482,14 @@ func pgRowDescriptor(r *pgMigrationWireReader, raw json.RawMessage, base PgRowSo
 		d.SourceProjection = pgRowProjectionFields(r, o["sourceProjection"], d.SourceSchemaColumns)
 		d.TargetProjection = pgRowProjectionFields(r, o["targetProjection"], d.TargetSchemaColumns)
 	}
-	if version == 3 {
+	if version >= 3 {
 		d.WriteBacks = pgMigrationReadArray(r, o["writeBacks"], func(raw json.RawMessage) PgRowWriteBackMapping {
 			item := r.object(raw, "previous", "current")
 			return PgRowWriteBackMapping{Previous: pgMigrationRead[string](r, item["previous"]), Current: pgMigrationRead[string](r, item["current"])}
 		})
+	}
+	if version >= 4 {
+		d.LegacyWrites = pgMigrationRead[[]string](r, o["legacyWrites"])
 	}
 	link := pgRowDocument(r, d.TransformContract, d.TransformContractHash, "migration")
 	if !link.list(5) || !link.children[0].isAtom("checked-transform-link") || !link.children[1].isAtom("1") || !link.children[2].list(2) || !link.children[2].children[0].isAtom("compiler-abi") || !link.children[2].children[1].isAtom(abi) || link.children[3].atom || len(link.children[3].children) == 0 || link.children[4].atom {
@@ -515,7 +522,7 @@ func pgRowDescriptor(r *pgMigrationWireReader, raw json.RawMessage, base PgRowSo
 			r.fail("row field mapping requires sorted distinct target fields")
 		}
 		last = m.Target
-		if m.Kind == "retype" && version != 3 {
+		if m.Kind == "retype" && version < 3 {
 			r.fail("Retype requires a v3 checked WriteBack companion")
 		}
 		if m.Source != nil {
@@ -528,7 +535,7 @@ func pgRowDescriptor(r *pgMigrationWireReader, raw json.RawMessage, base PgRowSo
 			r.fail("empty optional row target is not nullable")
 		}
 	}
-	if version == 3 {
+	if version >= 3 {
 		pgRowCheckWriteBacks(r, d, before, after)
 	}
 	pgRowCheckLinkMapping(r, link, base.Family, d, a, b)
@@ -549,7 +556,7 @@ func pgReadRowCompanion(history PgCompiledMigrationHistory, payload string) ([]P
 	r := &pgMigrationWireReader{}
 	o := r.object(json.RawMessage(payload), "version", "kind", "compilerAbi", "storedValueCompatibility", "databases")
 	version := pgMigrationRead[int](r, o["version"])
-	if (version != 1 && version != 2 && version != 3) || pgMigrationRead[string](r, o["kind"]) != "compiled-row-transform-history" || pgMigrationRead[string](r, o["compilerAbi"]) != history.SourceCompilerABI || pgMigrationRead[string](r, o["storedValueCompatibility"]) != history.StoredValueCompatibility {
+	if (version != 1 && version != 2 && version != 3 && version != 4) || pgMigrationRead[string](r, o["kind"]) != "compiled-row-transform-history" || pgMigrationRead[string](r, o["compilerAbi"]) != history.SourceCompilerABI || pgMigrationRead[string](r, o["storedValueCompatibility"]) != history.StoredValueCompatibility {
 		r.fail("row companion format or linked ABI mismatch")
 	}
 	dbs := pgMigrationRead[[]json.RawMessage](r, o["databases"])
@@ -766,27 +773,48 @@ func pgRowCheckLinkMapping(r *pgMigrationWireReader, link pgRowCanonical, family
 		}
 		matches++
 		pgRowCheckLinkedTypes(r, row.children[3], family, before, after)
-		validMode := row.children[6].list(2) && len(descriptor.WriteBacks) == 0 || row.children[6].list(3) && len(descriptor.WriteBacks) > 0
+		validMode := row.children[6].list(2) && (len(descriptor.WriteBacks)+len(descriptor.LegacyWrites)) == 0 || row.children[6].list(3) && (len(descriptor.WriteBacks)+len(descriptor.LegacyWrites)) > 0
 		if row.children[4].atom || !validMode || !row.children[6].children[0].isAtom("migrate") {
 			r.fail("row callback semantic mode mismatch")
 			continue
 		}
-		if len(descriptor.WriteBacks) > 0 {
+		if (len(descriptor.WriteBacks) + len(descriptor.LegacyWrites)) > 0 {
 			writes := row.children[6].children[2]
-			if writes.atom || len(writes.children) != len(descriptor.WriteBacks) {
+			if writes.atom || len(writes.children) != (len(descriptor.WriteBacks)+len(descriptor.LegacyWrites)) {
 				r.fail("WriteBack semantic closure inventory mismatch")
 			} else {
-				remaining := make(map[string]string, len(descriptor.WriteBacks))
+				remaining := make(map[string]string, (len(descriptor.WriteBacks) + len(descriptor.LegacyWrites)))
 				for _, mapping := range descriptor.WriteBacks {
 					remaining[mapping.Previous] = mapping.Current
 				}
+				for _, field := range descriptor.LegacyWrites {
+					remaining[field] = ""
+				}
 				for _, w := range writes.children {
+					if w.list(3) && (w.children[0].isAtom("legacy") || w.children[0].isAtom("legacy-with")) && w.children[1].atom {
+						expected, present := remaining[w.children[1].value]
+						if !present || expected != "" {
+							r.fail("legacy semantic endpoints are not a bijection")
+							continue
+						}
+						delete(remaining, w.children[1].value)
+						if w.children[0].isAtom("legacy-with") {
+							roots, _ := pgRowClosure(r, pgRowList(pgRowAtom("compiler-semantics"), link.children[2].children[1], w.children[2]), link.children[2].children[1].value, "")
+							if !roots.list(1) {
+								r.fail("LegacyWith requires one checked function closure root")
+							}
+						} else {
+							// The literal is checked against its exact previous scalar below.
+							pgRowCheckLegacyLiteral(r, descriptor, w.children[1].value, w.children[2])
+						}
+						continue
+					}
 					if !w.list(4) || !w.children[0].isAtom("write-back") || !w.children[1].atom {
 						r.fail("WriteBack endpoints disagree with checked semantic closures")
 						continue
 					}
 					expected, present := remaining[w.children[1].value]
-					if !present || !w.children[2].isAtom(expected) {
+					if !present || expected == "" || !w.children[2].isAtom(expected) {
 						r.fail("WriteBack semantic closure endpoints are not a bijection")
 						continue
 					}
@@ -979,6 +1007,16 @@ func pgRowCheckWriteBacks(r *pgMigrationWireReader, d PgRowTransformDescriptor, 
 			r.fail("WriteBack target lacks a checked computed or Retype mapping")
 		}
 	}
+	last = ""
+	for _, field := range d.LegacyWrites {
+		old, present := before[field]
+		_, current := after[field]
+		if !present || current || old.PrimaryKey || covered[field] || field <= last {
+			r.fail("invalid Legacy old-only endpoint")
+		}
+		covered[field] = true
+		last = field
+	}
 	for field := range before {
 		if !covered[field] {
 			r.fail("row adapter omits an old field's write-back value")
@@ -1028,4 +1066,25 @@ func pgRowCheckColumnOrigins(r *pgMigrationWireReader, base PgRowSourceInventory
 			}
 		}
 	}
+}
+
+func pgRowCheckLegacyLiteral(r *pgMigrationWireReader, d PgRowTransformDescriptor, field string, value pgRowCanonical) {
+	if !value.list(2) || !value.children[0].atom || !value.children[1].atom {
+		r.fail("invalid Legacy canonical literal")
+		return
+	}
+	for _, column := range d.SourceSchemaColumns {
+		if column.Field != field {
+			continue
+		}
+		if column.Nullable || column.PrimaryKey {
+			r.fail("Legacy literal requires an exact primitive previous field")
+			return
+		}
+		if _, err := pgMigrationConstantInput(column.Type, PgMigrationCatalogConstant{Kind: value.children[0].value, Value: value.children[1].value}); err != nil {
+			r.fail("Legacy literal differs from previous representation: " + err.Error())
+		}
+		return
+	}
+	r.fail("Legacy literal has no previous field")
 }

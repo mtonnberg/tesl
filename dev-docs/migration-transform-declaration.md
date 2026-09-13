@@ -106,7 +106,7 @@ For example, `old.title` can satisfy the identical `To.ValidTitle` predicate whe
 the migration explicitly supplies the checked `Same` pair. This derives the
 previous entity's field evidence and changes only the qualified predicate owner;
 subjects, arguments, and conjunctions remain intact. Intermediate constructors,
-other row receivers, computed projections, nominal values, and annotations about
+other row receivers, computed projections, nominal values outside the key judgment below, and annotations about
 sibling fields receive no such grant. Proof strengthening still needs a new
 validation step.
 
@@ -135,7 +135,7 @@ require their own checked inputs. Persisted processing must
 pin the exact execution ABI on the first committed target-generation write; the
 semantic link alone does not permit a different compiler build to resume that work.
 
-`Revalidate`, `Legacy`, `LegacyWith`, reset execution,
+`Revalidate`, reset execution,
 persisted row generations, lazy reads, backfill, concurrent old writes,
 dual writes, and contract cleanup remain
 separate required judgments.
@@ -234,8 +234,8 @@ This is a logical codec/projection prerequisite. It allocates no retained or
 shadow physical columns and grants no row selection, generation installation,
 transaction, admission or migration execution authority. Reconstructing an
 existing field without Retype remains rejected with MIG018 because Copy requires
-its exact original projection. Same transport still covers bounded primitive
-fields; the Retype judgment below uses explicit nominal constructors.
+its exact original projection. Same transports primitive field proofs and the exact nominal field copies
+described below; Retype uses explicit nominal constructors.
 
 ## Retained physical storage planning
 
@@ -352,9 +352,13 @@ inserts, multiple locked rows, late old writes, Rename predicates, first-write
 rollback, timeout recovery, precise debug capture and operand evaluation order.
 Original Tesl sources and loose metadata are absent when these programs run.
 
-This first physical query slice requires one transforming window ending at the
-current schema. An additive tail or composed transformations explicitly require
-another checked typed access plan; they cannot silently reuse legacy dispatch.
+The physical query slice requires one exact transforming binding ending at the
+current schema. A later window also requires the checked predecessor Contract
+source, bound to this database and its exact window and settled descriptions.
+Keeping that source does not prove deployment completion: the protected runtime
+receipt must independently authorize opening the next window. An additive tail
+still requires a checked typed access composition; it cannot silently reuse
+legacy dispatch.
 Physical Retype/WriteBack materialization and checked window-to-settled dispatch
 are described below. MIG031 warns when a rewritten update lacks a primary-key equality. It names the
 checked migration and explains the matched-row cost; the suggested warning does
@@ -437,19 +441,103 @@ pass rescans the keyspace and preserves that newer source value before retiremen
 This is separate from a successful write, which publishes row, ABI, and progress
 in the same transaction.
 
-Nominal record/ADT primary keys remain an unresolved transforming-query gate.
-A verified `Same` entry does not currently transport a revision-local nominal
-record value: copying `old.id` fails ordinary nominal type checking, while
-reconstructing a current key fails MIG018's exact original projection requirement.
-Importing one shared external key type is forbidden by the sealed schema boundary.
-This needs an explicit checked nominal transport design; it must not be bypassed
-with a JSON roundtrip or an erased native cast. Built-in `List String` also lacks
-a checked migration storage carrier (MIG016), so it does not avoid that boundary.
+An unchanged record or ADT field can be copied as the exact original row
+projection when the migration supplies the complete verified `Same` closure.
+The checker grants this only at successful final `Row` entity constructors. It
+keeps the original projection's nominal type; ordinary helpers, intermediate
+constructors, reconstructed copied values, another field or receiver, and shadowed row
+parameters do not receive a conversion. Copy and Rename use the same judgment for
+primary and non-primary fields. A shared external key type still cannot escape the sealed
+schema boundary, and `List String` still lacks a checked primary-key storage
+carrier (MIG016).
 
-The native V1 fixture demonstrates the narrower supported case: original private
-record codecs store and read several distinct JSONB object keys. Injected JSON
-literal `null` is a malformed key for that codec and the real handler refuses it.
-No generated JSONB-key transforming worker coverage is claimed. A separate real
+Go lowering consumes opaque site metadata only after Program validates the exact
+captured source graph against the lowered modules. Each changed nominal owner
+must match a verified declaration pair. Record fields and ADT variants/payloads
+are copied through concrete typed helpers, including supported nested lists.
+No JSON roundtrip or native cast performs the transport. In particular, a lossy
+codec may omit a field: the typed copy preserves its original value rather than
+substituting the decoder's default. Unsupported nested representations refuse
+emission; this does not widen ordinary nominal unification.
+
+The mandatory native regression retains separately compiled V1/V2 applications,
+then deletes their Tesl sources, generated Go and loose metadata. Record and ADT
+keys (including a nullary variant) pass through an actual Worker, durable JSONB
+cursor/progress/ABI publication, a late old writer, lazy reads and the explicit
+final pass before Contract. The same handlers continue after cleanup; the retired
+V1 writer refuses. Tests compare actual encoded SQL key values as well as codec
+input, and cover changed codecs, exact graph substitution and expired captures.
+
+A separate real
 PostgreSQL carrier assertion demonstrates why worker cursor SQL uses direct
 JSONB comparison: SQL NULL means an absent cursor, whereas JSON literal `null`
 is an ordered JSONB value; `jsonb_populate_record` would erase that distinction.
+
+
+Compiler-synthesized Legacy/WriteBack reverse rows reuse the exact source-site
+certificate for each copied nominal field. The original migration module emits
+a private inverse structural helper using its concrete old/current owner tables;
+export metadata retains the opaque context-and-site identity. The reverse-row
+constructor checks that identity, original parameter/field, target entity/field,
+and both declaration locations before selecting the helper. Only verified Same
+pairs are inverted; source checking grants no inverse cast to ordinary code.
+Derived adapters require their own checked mapping authority and cannot invent a
+source expression site. The original-to-lowered graph guard and pre/post source
+revalidation continue to enclose both directions.
+
+### Repeated current bindings
+
+The internal artifact regression freezes V2 through the normal migration
+generator, updates VCurrent, then generates the V3 edge. Its unchanged App
+handlers use the current nominal entity slot while the artifact retains separate
+checked V2 and V3 callback/storage bindings. Copy and Rename query fragments use
+the exact registered settled predecessor projection. Computed predicates remain
+refused.
+
+The native fixture compiles original V1, V2 and V3 applications, with checked
+Contracts present before the relevant build, then deletes their Tesl sources and
+loose metadata. V3 publication refuses before the actual V2 Contract completes.
+The same V2 servers then read and write generation-3 rows through their original
+nominal codecs. Membership comes from the exact verified immediate successor and
+its preserved projection, within a live admitted transaction; an unrecorded
+marker is refused even when its number is larger.
+
+Publication waits for an original V2 `transaction` that has already read data
+and emitted an observable effect before its update. The effect executes once,
+and other admitted requests continue. The second actual Contract also waits for
+a retained V2 reader before dropping its old column, while V3 requests continue.
+The retired reader returns admission status 503; the same V3 process serves CRUD
+after cleanup. A fresh size-one request pool with a caller-held row lock verifies
+that catalog observation neither borrows another pool slot nor changes the
+caller's transaction isolation. Public transforming feature activation remains
+independent of this internal checked artifact route.
+
+
+## Logical field removal and old-reader values
+
+The checked source route accepts `Legacy field literal` and `LegacyWith field fn`
+for an old-only field. Legacy supplies a primitive constant of its exact previous
+unproven type; LegacyWith names an owned pure function with the exact signature
+`To.Entity -> From` field type. Neither rule invents a new-field endpoint. They
+cannot change a primary key or overlap Rename, WriteBack, Retype or another legacy
+rule. Both reverse forms refuse old cross-field predicates that the per-field
+adapter cannot establish. Nested nominal values use ordinary checked constructors
+in the original owner; they are encoded by the original private storage codec.
+
+The linker includes each literal or complete helper closure in both source and
+ABI-independent behavior identities. Row companion format 4 contains a distinct
+`legacyWrites` inventory, while formats 1–3 remain closed. Retained physical
+format 4 records each legacy obligation as `[previous logical field, old physical
+column]`; ordinary WriteBack keeps its three-part mapping. The optional exact
+preceding Contract version is represented separately. Parsing and compiler binding
+independently require each previous field's complete physical lineage. The runtime
+receives one typed reverse row constructor, requires its registration before
+preflight, and encodes old-only values through the previous source adapter.
+
+The current logical row omits removed fields. During coexistence, backfill and new
+writes supply their legacy values so original readers remain valid. Contract then
+removes the old columns and their obsolete indexes. Its preparation relaxes old
+required columns before current-only inserts; the same current app process serves
+before and after cleanup. The actual PostgreSQL regression covers a constant text
+field plus a computed JSONB record field and an index on the removed text field.
+This is still the internal source route; public command activation is separate.

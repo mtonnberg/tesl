@@ -11,7 +11,7 @@ type column = {
   introduced_version : int;
 }
 type field = { logical : Migration_storage.column; physical : column }
-type reverse_write = { previous:string; current:string; physical:column }
+type reverse_write = { previous:string; current:string option; physical:column }
 type entity = {
   source : Migration_row_history.entity;
   columns : column list;

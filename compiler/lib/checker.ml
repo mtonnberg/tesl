@@ -2613,6 +2613,12 @@ let normalized_preds_of_proof (subject : string) (p : proof_expr)
   in
   List.sort_uniq compare (go [] p)
 
+let migration_nominal_field ctx constructor field argument actual expected =
+  match Migration_proof_context.nominal ~constructor ~field argument with
+  | None -> false
+  | Some transport -> Migration_proof_context.accepts_nominal transport
+      ~actual:(apply !(ctx.subst) actual) ~expected:(apply !(ctx.subst) expected)
+
 let rec infer_expr ctx (e : expr) : ty =
   (* GitHub #29: type a grouped aggregate (selectCountBy / selectSumBy) from
      the FULL query expression: List (Tuple2 K V) where K is the groupBy key
@@ -3241,7 +3247,8 @@ let rec infer_expr ctx (e : expr) : ty =
       match List.assoc_opt field_name rd.rd_fields with
       | Some field_ty ->
         let actual = infer_expr ctx value_expr in
-        unify_at ctx (expr_loc value_expr) actual field_ty
+        if not (migration_nominal_field ctx rname field_name value_expr actual field_ty) then
+          unify_at ctx (expr_loc value_expr) actual field_ty
       | None ->
         add_error ctx rloc
           (Printf.sprintf "record type `%s` has no field `%s`" rname field_name);
@@ -3947,7 +3954,8 @@ let rec infer_expr ctx (e : expr) : ty =
             reject_check_result_in_value_position ctx ~position:"a record field" value_expr;
             match List.assoc_opt field_name rd.rd_fields with
             | Some field_ty -> ignore (infer_expr ctx value_expr |> fun actual ->
-                unify_at ctx (expr_loc value_expr) actual field_ty; actual)
+                if not (migration_nominal_field ctx type_name field_name value_expr actual field_ty) then
+                  unify_at ctx (expr_loc value_expr) actual field_ty; actual)
             | None ->
               add_error ctx (expr_loc value_expr)
                 (Printf.sprintf "record type `%s` has no field `%s`" type_name field_name);
@@ -5175,11 +5183,17 @@ and check_expr ctx (e : expr) (expected : expectation) : ty =
       reject_check_result_in_value_position ctx ~position:"a record field" value_expr;
       match List.assoc_opt field_name rd.rd_fields with
       | Some field_ty ->
-        ignore (check_expr ctx value_expr
-          (push_expectation ~origin:rloc
-            ~role:(RecordField (rname, field_name))
-            ~reason:(record_field_reason rname field_name)
-            field_ty expected))
+        (match Migration_proof_context.nominal ~constructor:rname ~field:field_name value_expr with
+         | Some transport ->
+           let actual=infer_expr ctx value_expr in
+           if not (Migration_proof_context.accepts_nominal transport
+             ~actual:(apply !(ctx.subst) actual) ~expected:(apply !(ctx.subst) field_ty)) then
+             unify_at ctx (expr_loc value_expr) actual field_ty
+         | None -> ignore (check_expr ctx value_expr
+            (push_expectation ~origin:rloc
+              ~role:(RecordField (rname, field_name))
+              ~reason:(record_field_reason rname field_name)
+              field_ty expected)))
       | None ->
         add_error ctx rloc
           (Printf.sprintf "record type `%s` has no field `%s`" rname field_name);

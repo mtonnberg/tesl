@@ -27,38 +27,54 @@ func pgRowContractFor(database *Database, version int) (*pgRowContract, error) {
 
 // A try-lock never queues an exclusive waiter ahead of new short requests.
 // Arbitrary application transaction bodies are never replayed by contraction.
-func pgRowCompatibilityDrain(ctx context.Context, conn *pgx.Conn, fence, version int, run func() error) (result error) {
-	migrationBoundary("row-contract-before-compatibility-barrier")
+func pgRowCompatibilityDrain(ctx context.Context, conn *pgx.Conn, fence, from, to int, boundary string, run func() error) (result error) {
+	migrationBoundary(boundary + "-before-compatibility-barrier")
 	for {
-		var acquired bool
-		if err := conn.QueryRow(ctx, "select pg_catalog.pg_try_advisory_lock($1::integer,$2::integer)", -fence, version).Scan(&acquired); err != nil {
+		acquired := []int{}
+		release := func() error {
 			cleanup, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			_ = conn.Close(cleanup)
+			for i := len(acquired) - 1; i >= 0; i-- {
+				var ok bool
+				if err := conn.QueryRow(cleanup, "select pg_catalog.pg_advisory_unlock($1::integer,$2::integer)", -fence, acquired[i]).Scan(&ok); err != nil {
+					_ = conn.Close(cleanup)
+					return err
+				} else if !ok {
+					_ = conn.Close(cleanup)
+					return fmt.Errorf("compatibility lock lost")
+				}
+			}
+			return nil
+		}
+		busy := false
+		for version := from; version <= to; version++ {
+			var ok bool
+			if err := conn.QueryRow(ctx, "select pg_catalog.pg_try_advisory_lock($1::integer,$2::integer)", -fence, version).Scan(&ok); err != nil {
+				cleanup, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				_ = conn.Close(cleanup)
+				return err
+			}
+			if !ok {
+				busy = true
+				break
+			}
+			acquired = append(acquired, version)
+		}
+		if !busy {
+			defer func() { result = errors.Join(result, release()) }()
+			return run()
+		}
+		// Release every earlier key before backing off. A long reader of one
+		// version must not prevent new short requests of a different version.
+		if err := release(); err != nil {
 			return err
 		}
-		if acquired {
-			break
-		}
-		migrationBoundary("row-contract-compatibility-busy")
+		migrationBoundary(boundary + "-compatibility-busy")
 		if err := pgIndexWait(ctx, 25*time.Millisecond); err != nil {
 			return err
 		}
 	}
-	defer func() {
-		cleanup, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		var released bool
-		err := conn.QueryRow(cleanup, "select pg_catalog.pg_advisory_unlock($1::integer,$2::integer)", -fence, version).Scan(&released)
-		if err != nil || !released {
-			if err == nil {
-				err = fmt.Errorf("compatibility lock lost")
-			}
-			result = errors.Join(result, err)
-			_ = conn.Close(cleanup)
-		}
-	}()
-	return run()
 }
 func pgRowRetiringFences(ctx context.Context, conn *pgx.Conn, fence, from, to int, run func() error) error {
 	if from >= to {
@@ -191,7 +207,7 @@ func pgExecuteRowContract(ctx context.Context, config *pgx.ConnConfig, b *pgRowB
 		if err = pgRowContractOperations(ctx, conn, b, roles, c, 0, c.preparationCount); err != nil {
 			return err
 		}
-		if err = pgRowCompatibilityDrain(ctx, conn, state.FenceNamespace, version, func() error {
+		if err = pgRowCompatibilityDrain(ctx, conn, state.FenceNamespace, state.CompatFloor, version, "row-contract", func() error {
 			return pgRowControlWrite(ctx, conn, func(tx pgx.Tx) error {
 				if _, _, err := pgReadRowBaselineState(ctx, tx, b, roles, false); err != nil {
 					return err

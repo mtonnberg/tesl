@@ -18,6 +18,7 @@ type pgMigrationAdmission struct {
 	databaseUUID            string
 	worker                  string
 	roles                   PgMigrationControlRoles
+	rowObservation          *pgRowObservationCache
 }
 
 type pgMigrationAdmissionError struct{ cause error }
@@ -88,6 +89,18 @@ func pgMigrationStatementOn[T any](ctx context.Context, db *PostgresDB, executor
 				resultErr = errors.Join(resultErr, fmt.Errorf("rollback migration request: %w", err))
 			}
 		}()
+	}
+	if db.migration.controlFormat == pgRowControlFormat {
+		// Format 5 readers and writers pin their SQL representation before any
+		// operation. This also covers unchanged entities using the ordinary path.
+		if _, err := tx.Exec(ctx, "select pg_catalog.pg_advisory_xact_lock_shared($1::integer,$2::integer)", -db.migration.fenceNamespace, db.migration.version); err != nil {
+			return value, err
+		}
+		if !write {
+			if err := pgAdmitMigrationTransaction(ctx, tx, db, false); err != nil {
+				return value, err
+			}
+		}
 	}
 	if write {
 		if err := pgAdmitMigrationTransaction(ctx, tx, db, true); err != nil {

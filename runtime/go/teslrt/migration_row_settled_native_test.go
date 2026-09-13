@@ -259,7 +259,11 @@ func pgStartSettledWorker(t *testing.T, f *pgControlTestFixture, root, version s
 // is paused. The older expansion helper deliberately handles only one at a time.
 func pgPauseConcurrentRowBoundaries(t *testing.T, boundaries []pgExpansionBoundary) []pgExpansionBoundaryPause {
 	t.Helper()
-	dir := t.TempDir()
+	dir, err := os.MkdirTemp(os.Getenv("TESL_MIGRATION_TEST_SOCKET_ROOT"), "tesl-row-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	socket := filepath.Join(dir, "control.sock")
 	listener, err := net.Listen("unix", socket)
 	if err != nil {

@@ -57,6 +57,8 @@ if (( $# == 0 )); then
   # compatible second compiler build; no patched runtime or metadata fixtures.
   (cd "$repo_root/compiler" && dune build test/test_migration_row_forward.exe && dune exec --no-build ./test/test_migration_row_forward.exe)
   (cd "$repo_root/compiler" && dune build test/test_migration_row_access.exe && dune exec --no-build ./test/test_migration_row_access.exe)
+  (cd "$repo_root/compiler" && dune build test/test_migration_nominal_pk.exe && dune exec --no-build ./test/test_migration_nominal_pk.exe)
+  (cd "$repo_root/compiler" && dune build test/test_migration_nominal_copy.exe && dune exec --no-build ./test/test_migration_nominal_copy.exe)
   (cd "$repo_root/compiler" && dune build test/test_migration_row_contract_abi.exe && dune exec --no-build ./test/test_migration_row_contract_abi.exe)
   (cd "$repo_root/compiler" && dune build test/test_migration_row_retype_physical.exe && dune exec --no-build ./test/test_migration_row_retype_physical.exe)
 fi

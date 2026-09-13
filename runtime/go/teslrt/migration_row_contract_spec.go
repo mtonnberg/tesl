@@ -69,8 +69,9 @@ begin
  if exists(select 1 from ` + ns + `tesl_schema_versions where version=v and step='contracting' and artefact_hash=digest) then return; end if;
  if (select count(*) from ` + ns + `tesl_row_contract_objects where version=v)<c.preparation_count then raise exception 'tesl: Contract preparation is incomplete'; end if;
  select fence_ns into fence from ` + ns + `tesl_schema_meta where id=1;
- if not exists(select 1 from pg_catalog.pg_locks where locktype='advisory' and pid=pg_catalog.pg_backend_pid() and granted
- and classid=(4294967296::bigint-fence)::oid and objid=v::oid and objsubid=2 and mode='ExclusiveLock') then
+ if exists(select 1 from pg_catalog.generate_series(s.compat_floor,v) retiring_version(value)
+ where not exists(select 1 from pg_catalog.pg_locks where locktype='advisory' and pid=pg_catalog.pg_backend_pid() and granted
+ and classid=(4294967296::bigint-fence)::oid and objid=retiring_version.value::oid and objsubid=2 and mode='ExclusiveLock')) then
  raise exception 'tesl: Contract requires drained compatibility plans'; end if;
  select stored_value_compatibility into compatibility from ` + ns + `tesl_row_physical where version=v;
  insert into ` + ns + `tesl_schema_versions(version,step,artefact_hash,source_abi,stored_value_compatibility,protocol_level,fence_domain,executed_by)

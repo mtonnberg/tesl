@@ -78,7 +78,17 @@ func pgRowControlFunctions(namespace string) []pgMigrationControlFunction {
  raise exception 'tesl: object does not match exact row baseline'; end if;
 `
 		case "tesl_record_expanded":
-			guard += ` if exists(select 1 from ` + ns + `tesl_row_entities e where e.version=v and not exists(select 1 from ` + ns + `tesl_schema_expansion_objects o where o.version=e.version and o.ordinal=e.ordinal and o.operation_hash=e.operation_hash)) then
+			guard += ` if v>1 and exists (
+ select 1 from ` + ns + `tesl_schema_state publication_state
+ cross join ` + ns + `tesl_schema_meta publication_meta
+ cross join lateral pg_catalog.generate_series(publication_state.min_version,publication_state.current) publication_version(value)
+ where publication_state.id=1 and publication_meta.id=1 and publication_state.current<v
+ and not exists(select 1 from pg_catalog.pg_locks publication_lock where publication_lock.locktype='advisory'
+ and publication_lock.pid=pg_catalog.pg_backend_pid() and publication_lock.granted
+ and publication_lock.classid=(4294967296::bigint-publication_meta.fence_ns)::oid
+ and publication_lock.objid=publication_version.value::oid and publication_lock.objsubid=2 and publication_lock.mode='ExclusiveLock')) then
+ raise exception 'tesl: expansion requires drained compatibility plans'; end if;
+ if exists(select 1 from ` + ns + `tesl_row_entities e where e.version=v and not exists(select 1 from ` + ns + `tesl_schema_expansion_objects o where o.version=e.version and o.ordinal=e.ordinal and o.operation_hash=e.operation_hash)) then
  raise exception 'tesl: row baseline objects are incomplete'; end if;
 `
 		}

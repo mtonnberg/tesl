@@ -592,8 +592,52 @@ let additive_prepared_drift () = project (fun _ save path ->
   | Error errors -> check bool "prepared additive evidence must be revalidated" true (List.exists (fun (e:S.error) -> e.code="MIG013") errors)
   | Ok _ -> fail "stale additive preparation became checked")
 
+let legacy_source = without_test
+  |> replace "owner: old.author, " ""
+  |> replace "Rename author owner" "Legacy author \"retired\""
+let legacy_fresh = replace "owner: String, " "" fresh
+let legacy_constant () = project ~after:legacy_fresh (fun _ _ path ->
+  let d=checked path legacy_source in
+  let row=List.hd (T.rows (Option.get (D.transforms d))) in
+  check int "one explicit old-only obligation" 1 (List.length row.legacies);
+  check bool "no fictional new field" true (row.writebacks=[]);
+  let w=List.hd row.legacies in
+  check string "exact previous endpoint" "author" w.mapping.previous.name;
+  check bool "literal has no fabricated function" true (w.function_binding=None);
+  accepts path (Formatter.format_source legacy_source);
+  List.iter (fun (rule,code) -> refuses code path (replace "Legacy author \"retired\"" rule legacy_source))
+   ["Legacy author 7","MIG022";"Legacy title \"retired\"","MIG022";
+    "Legacy missing \"retired\"","MIG022";"Legacy id \"retired\"","MIG009";
+    "Legacy author \"retired\", Legacy author \"again\"","MIG023";
+    "Legacy author \"retired\", WriteBack author count backward","MIG023"])
+let legacy_computed_source = legacy_source
+  |> replace "Legacy author \"retired\"" "LegacyWith author backward"
+  |> fun source -> source ^ "\nfn backward(row: Schema.Notes.VCurrent.Note) -> String = row.title\n"
+let legacy_computed () = project ~after:legacy_fresh (fun _ _ path ->
+  let row=List.hd (T.rows (Option.get (D.transforms (checked path legacy_computed_source)))) in
+  check string "exact legacy callback owner" "Schema.Notes.Migrate.V2.backward"
+    (Option.get (List.hd row.legacies).function_binding).identity;
+  List.iter (fun (a,b) -> refuses "MIG021" path (replace a b legacy_computed_source))
+    ["row: Schema.Notes.VCurrent.Note","row: Schema.Notes.V1.Note";
+     "-> String = row.title","-> Int = 7";
+     "LegacyWith author backward","LegacyWith author missing"];
+  refuses "MIG023" path (replace "LegacyWith author backward" "LegacyWith author backward, Legacy author \"retired\"" legacy_computed_source))
+let legacy_derived () = project ~after:(replace ", count: Int" "" legacy_fresh) (fun _ _ path ->
+  let source=legacy_source |> replace "Migrate convert" "Derived" |> replace ", count: 7" "" in
+  let row=List.hd (T.rows (Option.get (D.transforms (checked path source)))) in
+  check bool "source-derived deletion is an identity transformation" true (row.function_binding=None && List.length row.legacies=1))
+let legacy_conflict () = project (fun _ _ path ->
+  List.iter (fun rules -> refuses "MIG023" path (replace "Rename author owner" rules without_test))
+    ["Rename author owner, Legacy author \"retired\"";
+     "Legacy author \"retired\", Rename author owner";
+     "Rename author owner, LegacyWith author backward"])
+
 let () = run "Transforming declarations" ["checked source",List.map (fun (name,f) -> test_case name `Quick f)
-  ["original AST and exact mapping",basic;"exact nominal function signature",signature;
+  ["legacy constant exact old-only endpoint",legacy_constant;
+   "legacy computed exact source callback",legacy_computed;
+   "legacy Derived source judgment",legacy_derived;
+   "legacy rule order cannot hide conflicts",legacy_conflict;
+   "original AST and exact mapping",basic;"exact nominal function signature",signature;
    "rename and unchanged projections",identities;"every successful return path",branches;
    "representative owned fixtures",fixtures;"all installation origins refuse execution",runtime_guard;
    "Derived owns its identity adapter",derived;"actual emitted pure function test",native;

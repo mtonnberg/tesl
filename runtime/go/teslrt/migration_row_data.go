@@ -160,7 +160,7 @@ func pgDecodePhysicalRow[From, To any](a *pgRowTransactionAdmission, storage *Pg
 		return value, err
 	}
 	descriptor := a.plan.compiled.inventory.Transforms[storage.transform.registration.index]
-	if int(marker) == a.entity.generation {
+	if a.acceptsCurrentGeneration(int(marker)) {
 		projection, err := pgPhysicalProjection(row, a.entity, a.entity, storage.target)
 		if err != nil {
 			return value, err
@@ -170,7 +170,7 @@ func pgDecodePhysicalRow[From, To any](a *pgRowTransactionAdmission, storage *Pg
 			return value, err
 		}
 	} else if int(marker) == descriptor.PreviousGeneration {
-		previous, err := pgCompiledRowPhysicalPlan(a.database, a.plan.version-1)
+		previous, err := pgCompiledRowPredecessorPlan(a.database, a.plan.version)
 		if err != nil {
 			return value, err
 		}

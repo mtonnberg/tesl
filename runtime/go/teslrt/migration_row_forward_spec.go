@@ -72,11 +72,11 @@ end`},
 		{"tesl_row_check_abi", "v integer, abi text, physical_hash text", "void", "volatile", `
 declare recorded text; fence integer;
 begin
- perform ` + ns + `tesl_admit(v);
  if v is null or v<2 or v>2147483646 or abi is null or abi !~ '^tesl-source-abi-v1:[0-9a-f]{64}$' or physical_hash is null or
  not exists(select 1 from ` + ns + `tesl_row_physical where version=v and contract_hash=physical_hash) then
  raise exception 'tesl: row read requires exact installed physical manifest'; end if;
  if exists(select 1 from ` + ns + `tesl_schema_versions where version=v and step='retired') then return; end if;
+ perform ` + ns + `tesl_admit(v);
  select compiler_abi into recorded from ` + ns + `tesl_row_processing where version=v;
  if found then
  if recorded is distinct from abi then raise exception 'tesl: transforming generation compiler ABI is pinned'; end if;

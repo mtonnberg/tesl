@@ -12,7 +12,10 @@ import (
 // observations. Structural parsing also serves old binaries reading a protected
 // future manifest; only separate private registration binds execution authority.
 type pgRowPhysicalField struct{ logical, physical string }
-type pgRowPhysicalReverse struct{ previous, current, physical string }
+type pgRowPhysicalReverse struct {
+	previous, current, physical string
+	legacy                      bool
+}
 type pgRowPhysicalColumn struct {
 	catalog           PgMigrationCatalogColumn
 	introducedVersion int
@@ -68,7 +71,7 @@ func pgParseRowPhysicalShape(contract, hash string, settled bool) (*pgRowPhysica
 		}
 	} else {
 		valid := n.list(8) && (n.children[0].isAtom("tesl-retained-physical-version-v1") || n.children[0].isAtom("tesl-retained-physical-version-v2"))
-		valid = valid || (n.list(9) && n.children[0].isAtom("tesl-retained-physical-version-v3"))
+		valid = valid || (n.list(9) && (n.children[0].isAtom("tesl-retained-physical-version-v3") || n.children[0].isAtom("tesl-retained-physical-version-v4")))
 		if !valid {
 			return nil, fmt.Errorf("invalid retained physical document")
 		}
@@ -104,19 +107,34 @@ func pgParseRowPhysicalShape(contract, hash string, settled bool) (*pgRowPhysica
 	if !pgMigrationIdentifier(plan.namespace) || !pgMigrationFamily(plan.family) || !pgMigrationDigest(plan.schemaSnapshotHash) || !pgMigrationDigest(plan.storageSnapshotHash) {
 		r.fail("invalid physical owner")
 	}
+	legacyFormat := n.children[0].isAtom("tesl-retained-physical-version-v4")
 	requiresContract := n.children[0].isAtom("tesl-retained-physical-version-v3")
+	prerequisite := pgRowCanonical{}
 	if requiresContract {
-		plan.requiresContractVersion = number(n.children[8], 2147483646)
+		prerequisite = n.children[8]
+	}
+	if legacyFormat {
+		optional := sequence(n.children[8])
+		if len(optional) > 1 {
+			r.fail("invalid legacy Contract prerequisite")
+		}
+		if len(optional) == 1 {
+			requiresContract = true
+			prerequisite = optional[0]
+		}
+	}
+	if requiresContract {
+		plan.requiresContractVersion = number(prerequisite, 2147483646)
 		if plan.requiresContractVersion >= plan.version {
 			r.fail("physical contract prerequisite must precede expansion")
 		}
 	}
-	reverseFormat := requiresContract || n.children[0].isAtom("tesl-retained-physical-version-v2")
+	reverseFormat := legacyFormat || requiresContract || n.children[0].isAtom("tesl-retained-physical-version-v2")
 	entityWidth := 9
 	if reverseFormat {
 		entityWidth = 10
 	}
-	hasReverse := false
+	hasReverse, hasLegacy := false, false
 	names, tables, relations := map[string]bool{}, map[string]bool{}, map[string]bool{}
 	for _, raw := range sequence(n.children[6]) {
 		if !raw.list(entityWidth) {
@@ -196,15 +214,25 @@ func pgParseRowPhysicalShape(contract, hash string, settled bool) (*pgRowPhysica
 		if reverseFormat {
 			prior := ""
 			for _, raw := range sequence(c[9]) {
-				if !raw.list(3) {
+				if !raw.list(3) && (!legacyFormat || !raw.list(2)) {
 					r.fail("invalid reverse physical binding")
 					continue
 				}
-				write := pgRowPhysicalReverse{previous: atom(raw.children[0]), current: atom(raw.children[1]), physical: atom(raw.children[2])}
+				write := pgRowPhysicalReverse{previous: atom(raw.children[0]), physical: atom(raw.children[len(raw.children)-1]), legacy: raw.list(2)}
+				if !write.legacy {
+					write.current = atom(raw.children[1])
+				} else {
+					hasLegacy = true
+				}
 				key := write.previous + "\x00" + write.current + "\x00" + write.physical
 				column, exists := columns[write.physical]
 				target, current := logical[write.current]
-				if !pgRowName(write.previous) || !current || !exists || physical[write.physical] || column.PrimaryKey || columns[target].PrimaryKey || key <= prior {
+				_, stillCurrent := logical[write.previous]
+				validTarget := current && !columns[target].PrimaryKey
+				if write.legacy {
+					validTarget = !stillCurrent
+				}
+				if !pgRowName(write.previous) || !validTarget || !exists || physical[write.physical] || column.PrimaryKey || key <= prior {
 					r.fail("invalid reverse physical owner")
 				}
 				prior = key
@@ -268,6 +296,9 @@ func pgParseRowPhysicalShape(contract, hash string, settled bool) (*pgRowPhysica
 	}
 	if r.err != nil {
 		return nil, r.err
+	}
+	if legacyFormat && !hasLegacy {
+		return nil, fmt.Errorf("legacy physical format requires an explicit legacy obligation")
 	}
 	if reverseFormat && !requiresContract && !hasReverse {
 		return nil, fmt.Errorf("reverse physical format has no reverse bindings")
@@ -417,7 +448,7 @@ func pgValidateRowPhysicalLineage(previous, plan *pgRowPhysicalPlan) error {
 			}
 			for _, field := range old.projection {
 				owner := field.logical
-				reverse := false
+				reverse, legacy := false, false
 				if entity.field(owner) != field.physical {
 					owner = ""
 					for _, alias := range entity.aliases {
@@ -427,8 +458,12 @@ func pgValidateRowPhysicalLineage(previous, plan *pgRowPhysicalPlan) error {
 					}
 					if owner == "" {
 						for _, write := range entity.reverseWrites {
-							if write.previous == field.logical && write.physical == field.physical && old.column(entity.field(write.current)) == nil {
-								owner, reverse = write.current, true
+							if write.previous == field.logical && write.physical == field.physical {
+								if write.legacy && entity.field(field.logical) == "" {
+									owner, reverse, legacy = field.logical, true, true
+								} else if !write.legacy && old.column(entity.field(write.current)) == nil {
+									owner, reverse = write.current, true
+								}
 							}
 						}
 					}
@@ -436,7 +471,7 @@ func pgValidateRowPhysicalLineage(previous, plan *pgRowPhysicalPlan) error {
 						return fmt.Errorf("physical window must preserve, rename or reverse every predecessor projection")
 					}
 					if reverse {
-						expectedReverse = append(expectedReverse, pgRowPhysicalReverse{previous: field.logical, current: owner, physical: field.physical})
+						expectedReverse = append(expectedReverse, pgRowPhysicalReverse{previous: field.logical, current: owner, physical: field.physical, legacy: legacy})
 					} else {
 						expectedAliases = append(expectedAliases, pgRowPhysicalField{logical: owner, physical: field.physical})
 					}
@@ -448,7 +483,7 @@ func pgValidateRowPhysicalLineage(previous, plan *pgRowPhysicalPlan) error {
 				for _, alias := range old.aliases {
 					if alias.logical == field.logical {
 						if reverse {
-							expectedReverse = append(expectedReverse, pgRowPhysicalReverse{previous: field.logical, current: owner, physical: alias.physical})
+							expectedReverse = append(expectedReverse, pgRowPhysicalReverse{previous: field.logical, current: owner, physical: alias.physical, legacy: legacy})
 						} else {
 							expectedAliases = append(expectedAliases, pgRowPhysicalField{logical: owner, physical: alias.physical})
 						}
@@ -461,6 +496,11 @@ func pgValidateRowPhysicalLineage(previous, plan *pgRowPhysicalPlan) error {
 				}
 				return strings.Compare(a.physical, b.physical)
 			})
+			for i := range expectedReverse {
+				if expectedReverse[i].legacy {
+					expectedReverse[i].current = ""
+				}
+			}
 			pgSortRowPhysicalReverse(expectedReverse)
 			if !slices.Equal(expectedReverse, entity.reverseWrites) {
 				return fmt.Errorf("physical window changed exact reverse obligations")
@@ -664,6 +704,18 @@ func pgBindRowPhysicalPlan(compiled *pgCompiledRowHistory, previous, plan *pgRow
 			for _, alias := range old.aliases {
 				if alias.logical == write.Previous {
 					reverse = append(reverse, pgRowPhysicalReverse{previous: write.Previous, current: write.Current, physical: alias.physical})
+				}
+			}
+		}
+		for _, field := range descriptor.LegacyWrites {
+			from := old.column(old.field(field))
+			if from == nil || from.catalog.PrimaryKey || retained.field(field) != "" {
+				return fmt.Errorf("legacy reverse callback lacks exact old-only physical owner")
+			}
+			reverse = append(reverse, pgRowPhysicalReverse{previous: field, physical: from.catalog.Name, legacy: true})
+			for _, alias := range old.aliases {
+				if alias.logical == field {
+					reverse = append(reverse, pgRowPhysicalReverse{previous: field, physical: alias.physical, legacy: true})
 				}
 			}
 		}

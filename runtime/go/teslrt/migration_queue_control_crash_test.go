@@ -23,7 +23,7 @@ import (
 // on another connection, then the installer backend is killed before resumption.
 func pgQueueCandidateCrash(t *testing.T, f *pgControlTestFixture, boundary string, run func(*pgx.Conn) error) {
 	t.Helper()
-	dir, err := os.MkdirTemp("", "tesl-q4-crash-")
+	dir, err := os.MkdirTemp(os.Getenv("TESL_MIGRATION_TEST_SOCKET_ROOT"), "tesl-q4-crash-")
 	if err != nil {
 		t.Fatal(err)
 	}

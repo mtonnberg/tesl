@@ -88,7 +88,7 @@ let emit file = match Compile.compile_row_source_artifacts ~storage:true file (S
 let artifact path values=(List.find (fun (a:Emit_go.artifact) -> a.path=path) values).contents
 let native ?source_root ?(extra_tests=[]) ?(test="") artifacts =
  let root=Filename.temp_dir "tesl-row-native-" "" in
- Fun.protect ~finally:(fun () -> remove root) (fun () ->
+ Fun.protect ~finally:(fun () -> if Sys.getenv_opt "TESL_KEEP_LEGACY_NATIVE_TEST"=None then remove root else Printf.printf "Retained native fixture: %s\n%!" root) (fun () ->
   List.iter (fun (a:Emit_go.artifact) -> if not (Filename.check_suffix a.path ".json") then
    write (Filename.concat root a.path) a.contents) artifacts;
   List.iter (fun (path,source) -> write (Filename.concat root path) source) extra_tests;
@@ -471,7 +471,120 @@ let unary_reverse_copy () =
  project ~before:(schema old) ~after:(schema fresh) (fun root save path ->
   reseal root path body; let file=save "app.tesl" app in
   accepts file (Source_input.read file); native ~source_root:root (emit file))
-let ()=run "checked Retype and WriteBack" ["retype",[
+let legacy_wire_tests={|package teslrt
+import("encoding/hex";"encoding/json";"strings";"testing")
+func TestLegacyDescriptorAndSemanticAuthority(t *testing.T){
+ history:=compiledRowHistories["Schema.Notes"].history
+ if _,err:=pgReadRowCompanion(history,teslGeneratedRowHistoryJSON);err!=nil{t.Fatal("original checked legacy descriptor",err)}
+ mutate:=func(name,reason string,fn func(map[string]any,map[string]any)){
+  t.Run(name,func(t *testing.T){
+   var root map[string]any
+   if err:=json.Unmarshal([]byte(teslGeneratedRowHistoryJSON),&root);err!=nil{t.Fatal(err)}
+   d:=root["databases"].([]any)[0].(map[string]any)["transforms"].([]any)[0].(map[string]any)
+   fn(root,d)
+   raw,err:=json.Marshal(root);if err!=nil{t.Fatal(err)}
+   _,err=pgReadRowCompanion(history,string(raw))
+   if err==nil||!strings.Contains(err.Error(),reason){t.Fatal("wrong legacy refusal",err)}
+  })
+ }
+ mutate("omitted-old-field","omits an old field",func(_,d map[string]any){d["legacyWrites"]=[]any{}})
+ mutate("current-field","invalid Legacy",func(_,d map[string]any){d["legacyWrites"]=[]any{"title"}})
+ mutate("primary-key","invalid Legacy",func(_,d map[string]any){d["legacyWrites"]=[]any{"id"}})
+ mutate("unknown","invalid Legacy",func(_,d map[string]any){d["legacyWrites"]=[]any{"unknown"}})
+ mutate("duplicate","invalid Legacy",func(_,d map[string]any){d["legacyWrites"]=[]any{"metadata","metadata"}})
+ mutate("older-format-is-closed","unexpected",func(root,_ map[string]any){root["version"]=3})
+ semantic:=func(d map[string]any,fn func(*pgRowCanonical)){
+  document,_,err:=pgReadRowCanonical(d["transformContract"].(string));if err!=nil{t.Fatal(err)}
+  writes:=&document.children[3].children[3].children[0].children[6].children[2]
+  if len(writes.children)!=1||!writes.children[0].children[0].isAtom("legacy-with"){t.Fatal("expected exact original LegacyWith closure")}
+  fn(&writes.children[0])
+  raw,digest:=pgRowBaselineDocument(document.children[3])
+  d["transformContract"],d["transformContractHash"]=hex.EncodeToString([]byte(raw)),digest
+ }
+ mutate("fresh-hash-foreign-endpoint","legacy semantic endpoints",func(_,d map[string]any){semantic(d,func(w *pgRowCanonical){w.children[1]=pgRowAtom("title")})})
+ mutate("fresh-hash-wrong-literal-carrier","Legacy literal differs",func(_,d map[string]any){semantic(d,func(w *pgRowCanonical){w.children[0]=pgRowAtom("legacy");w.children[2]=pgRowList(pgRowAtom("string"),pgRowAtom("not-jsonb"))})})
+ mutate("fresh-hash-legacy-as-empty-writeback","WriteBack semantic closure endpoints",func(_,d map[string]any){semantic(d,func(w *pgRowCanonical){*w=pgRowList(pgRowAtom("write-back"),w.children[1],pgRowAtom(""),w.children[2])})})
+ mutate("fresh-hash-missing-function","closure",func(_,d map[string]any){semantic(d,func(w *pgRowCanonical){w.children[2]=pgRowList()})})
+}
+|}
+
+let legacy_codegen () =
+ let before=old |> replace "id: String, metadata: Metadata" "id: String, title: String, metadata: Metadata" in
+ let after=fresh |> replace {|metadata: Metadata @column("metadata__v2"), id: String|} "id: String, title: String" in
+ let body=source |> replace "Retype metadata, WriteBack metadata metadata backward" "LegacyWith metadata backward"
+  |> replace {|metadata: Schema.Notes.VCurrent.Metadata { text: old.metadata.text, extra: "new" }|} "title: old.title"
+  |> replace "row.metadata.text" "row.title"
+  |> replace {|id: "one", metadata:|} {|id: "one", title: "retained", metadata:|} in
+ project ~before ~after (fun root save path -> reseal root path body;
+  let file=save "app.tesl" app in accepts file (Source_input.read file);
+  let artifacts=match Compile.compile_row_source_artifacts ~storage:true ~physical:true file (Source_input.read file) with
+   | Compile.GoSuccess artifacts->artifacts|Compile.GoFailure ds->fail(describe ds) in
+  let test={|package teslmodapp
+import (
+ "testing"
+ "encoding/json"
+ rt "tesl.generated/teslmodapp/internal/teslrt"
+ fresh "tesl.generated/teslmodapp/internal/teslmodschemanotesvcurrent"
+)
+func TestActualLegacyJSONBCodec(t *testing.T) {
+ if err:=rt.PreflightApplicationDatabases(MainDatabase);err!=nil{t.Fatal(err)}
+ value:=fresh.Note{Id:"one",Title:"new-row"}
+ reverse,err:=MainDatabaseCompiledRowWriteBack0.Reverse(value)
+ if err!=nil||reverse.Metadata.Text!="new-row"||reverse.Title!="new-row"{t.Fatal("actual checked LegacyWith callback",reverse,err)}
+ encoded,err:=MainDatabaseCompiledRowWriteBack0.Encode(value);if err!=nil{t.Fatal(err)}
+ projection,err:=MainDatabaseCompiledRowStorage0.SourceProjection().CheckOrder([]string{"id","title","metadata"});if err!=nil{t.Fatal(err)}
+ params,err:=encoded.Parameters(projection);if err!=nil||len(params)!=3{t.Fatal("old codec projection",params,err)}
+ var metadata map[string]string
+ if err:=json.Unmarshal([]byte(params[2].(string)),&metadata);err!=nil{t.Fatal(err)}
+ if metadata["oldText"]!="new-row"||len(metadata)!=1{t.Fatal("legacy value used wrong codec",metadata)}
+}
+|} in
+  native ~source_root:root ~test ~extra_tests:["internal/teslrt/legacy_wire_test.go",legacy_wire_tests] artifacts)
+
+let legacy_constants () =
+ let before={|module Schema.Notes.V1 exposing [Note]
+import Tesl.Prelude exposing [String, Int, Bool(..)]
+import Tesl.Float exposing [Float]
+entity Note table "notes" primaryKey id { id: String, title: String, label: String, big: Int, enabled: Bool, amount: Float }
+|} in
+ let after={|module Schema.Notes.VCurrent exposing [Note]
+import Tesl.Prelude exposing [String]
+entity Note table "notes" primaryKey id { id: String, title: String }
+|} in
+ let body={|module Schema.Notes.Migrate.V2 exposing [migration, oldNote]
+import Tesl.Migration exposing [Migration, Entity(..), Rule(..), Migrated(..)]
+import Tesl.Prelude exposing [Bool(..)]
+import Schema.Notes.V1
+import Schema.Notes.VCurrent
+migration = Migration {
+ from: Schema.Notes.V1
+ to: Schema.Notes.VCurrent
+ same: []
+ fixtures: [oldNote]
+ entities: { Note: Migrate convert [Legacy label "ä old", Legacy big 123456789012345678901234567890, Legacy enabled True, Legacy amount -0.0] }
+}
+fn convert(old: Schema.Notes.V1.Note) -> Migrated Schema.Notes.VCurrent.Note =
+ Row (Schema.Notes.VCurrent.Note { id: old.id, title: old.title })
+fn oldNote() -> Schema.Notes.V1.Note =
+ Schema.Notes.V1.Note { id: "one", title: "retained", label: "old", big: 7, enabled: False, amount: 1.5 }
+|} in
+ project ~before ~after (fun root save path -> reseal root path body;
+  let file=save "app.tesl" app in accepts file (Source_input.read file);
+  let test={|package teslmodapp
+import (
+ "testing"
+ "math"
+ rt "tesl.generated/teslmodapp/internal/teslrt"
+ fresh "tesl.generated/teslmodapp/internal/teslmodschemanotesvcurrent"
+)
+func TestActualLegacyConstants(t *testing.T) {
+ if err:=rt.PreflightApplicationDatabases(MainDatabase);err!=nil{t.Fatal(err)}
+ old,err:=MainDatabaseCompiledRowWriteBack0.Reverse(fresh.Note{Id:"one",Title:"new"})
+ if err!=nil||old.Id!="one"||old.Title!="new"||old.Label!="ä old"||old.Big.String()!="123456789012345678901234567890"||!old.Enabled||math.Float64bits(old.Amount)!=0x8000000000000000 {t.Fatal("legacy literals changed type/value/IEEE bits",old,err)}
+}
+|} in native ~source_root:root ~test (emit file))
+
+let ()=run "checked Retype and WriteBack" ["retype",[test_case "Legacy scalar constants retain exact values and signed zero" `Quick legacy_constants;test_case "LegacyWith generated exact old JSONB codec" `Quick legacy_codegen;
  test_case "nominal JSONB actual PostgreSQL bidirectional codecs" `Quick record;
  test_case "rule and exact nominal signature refusals" `Quick negatives;
  test_case "nominal ADT PostgreSQL bidirectional codecs" `Quick adt;

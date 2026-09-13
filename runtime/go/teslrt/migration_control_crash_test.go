@@ -24,7 +24,7 @@ func TestPgMigrationControlCrashBeforeAndAfterCommit(t *testing.T) {
 			f := pgNewControlTest(t)
 			// Keep the Unix path below the kernel limit independently of the
 			// test's descriptive name and its temporary directory suffix.
-			dir, err := os.MkdirTemp("", "tesl-control-crash-")
+			dir, err := os.MkdirTemp(os.Getenv("TESL_MIGRATION_TEST_SOCKET_ROOT"), "tesl-control-crash-")
 			if err != nil {
 				t.Fatal(err)
 			}

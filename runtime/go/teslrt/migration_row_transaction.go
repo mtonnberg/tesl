@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -17,15 +18,16 @@ import (
 // path. A parsed durable manifest never creates one, and it cannot outlive the
 // admitted callback or be reused on another database/connection.
 type pgRowTransactionAdmission struct {
-	tx       pgx.Tx
-	database *Database
-	protocol *pgMigrationAdmission
-	plan     *pgRowPhysicalPlan
-	window   *pgRowPhysicalPlan
-	entity   *pgRowPhysicalEntity
-	write    bool
-	active   atomic.Bool
-	backfill *pgRowLeaseAdmission
+	tx                 pgx.Tx
+	database           *Database
+	protocol           *pgMigrationAdmission
+	plan               *pgRowPhysicalPlan
+	window             *pgRowPhysicalPlan
+	entity             *pgRowPhysicalEntity
+	write              bool
+	active             atomic.Bool
+	backfill           *pgRowLeaseAdmission
+	currentGenerations map[int]bool
 }
 
 func pgWithRowTransaction[T any](ctx context.Context, database *Database, plan *pgRowPhysicalPlan, entity *pgRowPhysicalEntity, write bool, run func(*pgRowTransactionAdmission) (T, error)) (value T, err error) {
@@ -72,12 +74,7 @@ func pgWithRowTransaction[T any](ctx context.Context, database *Database, plan *
 		if !write {
 			migrationBoundary("row-read-after-abi")
 		}
-		// Compatibility uses (-fenceNamespace, version), disjoint from writer
-		// (fenceNamespace, version) and ABI (fenceNamespace, -version) keys.
-		// Acquire after first-ABI coordination and before the fresh floor read.
-		if _, err := tx.Exec(ctx, "select pg_catalog.pg_advisory_xact_lock_shared($1::integer,$2::integer)", -db.migration.fenceNamespace, plan.version); err != nil {
-			return value, err
-		}
+		// The outer format-5 statement pinned compatibility before admission.
 		activePlan, activeEntity := plan, entity
 		settled, err := pgRowSettledMode(ctx, tx, database, plan)
 		if err != nil {
@@ -94,6 +91,11 @@ func pgWithRowTransaction[T any](ctx context.Context, database *Database, plan *
 			}
 		}
 		token := &pgRowTransactionAdmission{tx: tx, database: database, protocol: db.migration, plan: activePlan, window: plan, entity: activeEntity, write: write}
+		generations, err := pgRowCurrentGenerations(ctx, tx, db, plan, activePlan, activeEntity)
+		if err != nil {
+			return value, err
+		}
+		token.currentGenerations = generations
 		token.active.Store(true)
 		completed := false
 		defer func() {
@@ -210,4 +212,154 @@ func pgRowABIAdmissionError(err error) error {
 		return &pgMigrationAdmissionError{cause: err}
 	}
 	return err
+}
+
+// Future marker membership is observation authority for this exact, live codec
+// projection only. It neither selects future callbacks nor grants SQL plans.
+func (a *pgRowTransactionAdmission) acceptsCurrentGeneration(marker int) bool {
+	return a != nil && a.check(false) == nil && (marker == a.entity.generation || a.currentGenerations[marker])
+}
+
+type pgRowObservedRevision struct {
+	current, minimum, floor, lifecycle, receipts int
+	activeHash, databaseUUID                     string
+}
+
+type pgRowObservationCache struct {
+	owner       *pgMigrationAdmission
+	mu          sync.Mutex
+	observation *pgRowGenerationObservation
+}
+
+type pgRowGenerationObservation struct {
+	key                 pgRowObservedRevision
+	predecessor, target *pgRowPhysicalPlan
+}
+
+func pgRowObservedRevisionAt(ctx context.Context, tx pgx.Tx, namespace, activeHash string) (pgRowObservedRevision, error) {
+	ns := quoteIdentifier(namespace) + "."
+	key := pgRowObservedRevision{activeHash: activeHash}
+	err := tx.QueryRow(ctx, "select s.current,s.min_version,s.compat_floor,(select count(*) from "+ns+"tesl_schema_versions),(select count(*) from "+ns+"tesl_row_contract_objects),m.database_uuid::text from "+ns+"tesl_schema_state s cross join "+ns+"tesl_schema_meta m where s.id=1 and m.id=1").Scan(&key.current, &key.minimum, &key.floor, &key.lifecycle, &key.receipts, &key.databaseUUID)
+	return key, err
+}
+
+// A full catalog/history observation needs one repeatable-read snapshot. The
+// caller's application transaction keeps its original isolation and locks. An
+// independent request-role connection avoids borrowing a second pool slot.
+// One immutable observation belongs to this exact admitted Database connection;
+// a lifecycle change replaces it rather than growing a global phase cache.
+func pgRowObserveGeneration(ctx context.Context, tx pgx.Tx, db *PostgresDB, window, active *pgRowPhysicalPlan) (*pgRowGenerationObservation, error) {
+	ctx, cancel := context.WithTimeout(ctx, pgLeaseTimeout())
+	defer cancel()
+	protocol := db.migration
+	cache := protocol.rowObservation
+	if cache == nil || cache.owner != protocol {
+		return nil, fmt.Errorf("row observation cache belongs to another admission")
+	}
+	for !cache.mu.TryLock() {
+		if err := pgIndexWait(ctx, 5*time.Millisecond); err != nil {
+			return nil, err
+		}
+	}
+	defer cache.mu.Unlock()
+	for {
+		if err := pgAdmitMigrationTransaction(ctx, tx, db, false); err != nil {
+			return nil, err
+		}
+		key, err := pgRowObservedRevisionAt(ctx, tx, window.namespace, active.hash)
+		if err != nil {
+			return nil, err
+		}
+		if key.databaseUUID != protocol.databaseUUID {
+			return nil, fmt.Errorf("row observation database identity changed")
+		}
+		if key.current <= window.version {
+			return nil, nil
+		}
+		if !active.settled || key.current != window.version+1 {
+			return nil, fmt.Errorf("future row generation requires an exact adjacent settled predecessor")
+		}
+		if cached := cache.observation; cached != nil && cached.key == key {
+			return cached, nil
+		}
+		var observed *pgRowGenerationObservation
+		inspectErr := func() (result error) {
+			conn, err := pgx.ConnectConfig(ctx, db.pool.Config().ConnConfig.Copy())
+			if err != nil {
+				return err
+			}
+			defer func() {
+				cleanup, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				result = errors.Join(result, conn.Close(cleanup))
+			}()
+			return pgControlSnapshotMode(ctx, conn, pgx.ReadOnly, func(snapshot pgx.Tx) error {
+				snapshotKey, err := pgRowObservedRevisionAt(ctx, snapshot, window.namespace, active.hash)
+				if err != nil {
+					return err
+				}
+				state, _, err := pgReadRowBaselineState(ctx, snapshot, protocol.rowBaseline, protocol.roles, false)
+				if err != nil {
+					return err
+				}
+				if state.DatabaseUUID != protocol.databaseUUID {
+					return fmt.Errorf("future observation belongs to another database")
+				}
+				forward, err := pgReadRowForwardManifest(ctx, snapshot, protocol.rowBaseline)
+				if err != nil {
+					return err
+				}
+				if forward == nil || forward.plan == nil || forward.plan.version != snapshotKey.current || forward.predecessor == nil || forward.predecessor.hash != active.hash || forward.predecessor.contract != active.contract || forward.plan.requiresContractVersion != window.version {
+					return fmt.Errorf("future row generation has no exact settled lineage")
+				}
+				observed = &pgRowGenerationObservation{key: snapshotKey, predecessor: forward.predecessor, target: forward.plan}
+				return nil
+			})
+		}()
+		// A retirement may publish while an old reader is pinned. Diagnose its
+		// fresh admission first; never use a failed or mismatched observation.
+		if err := pgAdmitMigrationTransaction(ctx, tx, db, false); err != nil {
+			return nil, err
+		}
+		fresh, err := pgRowObservedRevisionAt(ctx, tx, window.namespace, active.hash)
+		if err != nil {
+			return nil, err
+		}
+		if fresh != key {
+			continue
+		}
+		if inspectErr != nil {
+			return nil, inspectErr
+		}
+		if observed == nil || observed.key != fresh {
+			return nil, fmt.Errorf("future row observation changed during admission")
+		}
+		cache.observation = observed
+		return observed, nil
+	}
+}
+
+func pgRowCurrentGenerations(ctx context.Context, tx pgx.Tx, db *PostgresDB, window, active *pgRowPhysicalPlan, entity *pgRowPhysicalEntity) (map[int]bool, error) {
+	observation, err := pgRowObserveGeneration(ctx, tx, db, window, active)
+	if err != nil || observation == nil {
+		return nil, err
+	}
+	// Full history verification above checked the complete Contract, finality and
+	// committed physical catalog. Recheck this projection rather than accepting a
+	// generation merely because its marker is numerically newer.
+	next := observation.target.entity(entity.identity)
+	prior := observation.predecessor.entity(entity.identity)
+	if next == nil || prior == nil || prior.typeContractHash != entity.typeContractHash || prior.table != entity.table || next.table != entity.table {
+		return nil, fmt.Errorf("future row entity identity differs")
+	}
+	if err := pgValidateRowPhysicalLineage(observation.predecessor, observation.target); err != nil {
+		return nil, err
+	}
+	for _, field := range entity.projection {
+		old, retained := entity.column(field.physical), next.column(field.physical)
+		if prior.field(field.logical) != field.physical || old == nil || retained == nil || old.catalog.Type != retained.catalog.Type || old.catalog.PrimaryKey != retained.catalog.PrimaryKey {
+			return nil, fmt.Errorf("future row generation changed an admitted codec projection")
+		}
+	}
+	return map[int]bool{next.generation: true}, nil
 }

@@ -89,12 +89,16 @@ let link transform = protect (fun () ->
       let mapping = row.mapping in
       let previous = IR.Type,IR.Global mapping.previous.entity_name in
       let current = IR.Type,IR.Global mapping.current.entity_name in
+      let writes=(List.map (fun (w:T.writeback_binding) -> tag "write-back" [field w.mapping.previous;field w.mapping.current;
+          closure [IR.Value,IR.Global w.function_binding.identity]]) row.writebacks @
+        List.map (fun (w:T.legacy_binding) -> match w.mapping.value,w.function_binding with
+          | R.Literal (_,value),None -> tag "legacy" [field w.mapping.previous;value]
+          | R.Function _,Some binding -> tag "legacy-with" [field w.mapping.previous;closure [IR.Value,IR.Global binding.identity]]
+          | _ -> reject "legacy value lost its exact checked binding") row.legacies) |> ordered in
+      let writes=if writes=[] then [] else [Seq writes] in
       let callback = match row.function_binding with
-        | None -> tag "derived" []
-        | Some binding ->
-          let writes=List.map (fun (w:T.writeback_binding) -> tag "write-back" [field w.mapping.previous;field w.mapping.current;
-            closure [IR.Value,IR.Global w.function_binding.identity]]) row.writebacks |> ordered in
-          tag "migrate" ([closure [IR.Value,IR.Global binding.identity]] @ if writes=[] then [] else [Seq writes]) in
+        | None -> tag "derived" writes
+        | Some binding -> tag "migrate" (closure [IR.Value,IR.Global binding.identity] :: writes) in
       let fixtures = List.map (fun (binding : T.function_binding) ->
         closure [IR.Value,IR.Global binding.identity]) row.fixtures |> ordered in
       tag "entity-transform" [

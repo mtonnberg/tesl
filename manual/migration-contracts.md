@@ -55,3 +55,29 @@ command refuses to overwrite an existing Contract. After undeployed schema or
 migration edits, `tesl check` reports any stale selectors and the exact
 selection it expects; review those changes before rebuilding. A purely additive
 migration does not need an empty Contract.
+
+For an unchanged record or ADT field, copy its original projection, such as
+`id: old.id` or `metadata: old.metadata`, and retain the generated `Same` entries
+for the type and its dependencies. A rename uses the same rule, for example
+`details: old.metadata`. Tesl preserves the value across the frozen schema types,
+including fields omitted by a lossy JSONB codec. A primary key must always keep
+its original identity; reconstructing a new key is rejected.
+
+When another field uses `Legacy` or `WriteBack`, Tesl also preserves these copied
+values while constructing the old row for compatible writes. This needs no
+extra conversion function. Ordinary functions still distinguish the two schema
+types, and your handlers continue to use the current schema as before.
+
+
+When removing a logical field, the old app still needs a value for it during the
+rollout. Use `Legacy author "former"` for a fixed value, or
+`LegacyWith metadata legacyMetadata` for a function that constructs the old field
+from the new row. The function returns the old schema's field type, so a removed
+JSONB record still uses its original codec. The migration supplies these values
+for converted rows and new writes; choose values the old app can safely read.
+
+Your current entity and handlers no longer use the removed field. The generated
+Contract names it as `Column Note author` (and removes any obsolete index).
+After cleanup, new inserts stop supplying the legacy value and the old column is
+removed. Removing a field and changing a field's type therefore use the same
+migration and cleanup workflow.
