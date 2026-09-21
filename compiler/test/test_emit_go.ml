@@ -4093,6 +4093,195 @@ let test_pg_columns_with_go () =
       (contains module_go {|assignee\" is null|});
     gate_emitted ~env "tesl-go-pg-columns" emitted
 
+(* Issue #108: record-bearing ADTs must decode from persisted JSON, including
+   nested records and records with their own wire codec. *)
+let record_column_source = {|module PersistedRecord exposing [store, setState, readState, remove, State]
+import Tesl.Prelude exposing [String, Int, Unit]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.DB exposing [dbRead, dbWrite]
+import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
+import Tesl.Json exposing [stringCodec]
+
+record Evidence { label: String, count: Int }
+record Attempt { id: String, evidence: Evidence }
+record Named { id: String }
+codec Named {
+  toJson { id -> "identifier" with_codec stringCodec }
+  fromJson [{ id <- "identifier" with_codec stringCodec }]
+}
+type State =
+  | Queued
+  | Running attempt: Attempt
+  | Tagged named: Named
+codec State { adtJson }
+
+entity Work table "work" primaryKey id { id: String, state: State }
+database RecordDb = Database {
+  schema: "gorecordcolumnprobe"
+  entities: [Work]
+  backend: Postgres (PostgresConfig {
+    dbName: env "TESL_TEST_POSTGRES_SHARED_ADMIN_DATABASE"
+    user: env "TESL_TEST_POSTGRES_SHARED_USER"
+    password: env "PGPASSWORD"
+    connection: TcpConnection {
+      host: env "TESL_TEST_POSTGRES_SHARED_HOST"
+      port: envInt "TESL_TEST_POSTGRES_SHARED_PORT" 5432
+    }
+  })
+}
+fn store(id: String, state: State) -> Work requires [dbWrite Work] =
+  insert Work { id: id, state: state }
+fn setState(id: String, state: State) -> Unit requires [dbWrite Work] =
+  update w in Work
+    where w.id == id
+    set w.state = state
+fn readState(id: String) -> State requires [dbRead Work] =
+  case selectOne w from Work where w.id == id of
+    Nothing -> Queued
+    Something w -> w.state
+
+fn remove(id: String) -> Unit requires [dbWrite Work] =
+  delete w from Work where w.id == id
+|}
+
+let test_record_columns_with_go () =
+  let emitted = emit_ok "<record-column>" record_column_source in
+  let regressions : Emit_go.artifact = {
+    path = "internal/teslmodpersistedrecord/record_column_test.go";
+    contents = {|package teslmodpersistedrecord
+
+import (
+	"fmt"
+	"os"
+	"os/exec"
+	"strconv"
+	"testing"
+	"time"
+
+	"tesl.generated/teslmodpersistedrecord/internal/teslrt"
+)
+
+func runningState() State {
+	return State{Tag: StateRunning, RunningAttempt: Attempt{
+		Id: "attempt-1", Evidence: Evidence{Label: "accepted", Count: teslrt.MustParseDecimal("123456789012345678901234567890")},
+	}}
+}
+
+func TestRecordColumnDecode(t *testing.T) {
+	cases := []struct {
+		wire string
+		want State
+	}{
+		{`{"tag":"Queued"}`, State{Tag: StateQueued}},
+		{`{"tag":"Running","fields":{"attempt":{"id":"attempt-1","evidence":{"label":"accepted","count":123456789012345678901234567890}}}}`, runningState()},
+		{`{"tag":"Tagged","fields":{"named":{"identifier":"named-1"}}}`, State{Tag: StateTagged, TaggedNamed: Named{Id: "named-1"}}},
+	}
+	for _, tc := range cases {
+		for _, stored := range []string{tc.wire, strconv.Quote(tc.wire)} {
+			got := teslColumnState([]byte(stored))
+			if !got.TeslEqual(tc.want) {
+				t.Fatalf("column decode: got %#v, want %#v", got, tc.want)
+			}
+		}
+		raw, err := teslrt.ParseJSON([]byte(tc.wire))
+		if err != nil {
+			t.Fatal(err)
+		}
+		decoded := DecodeStateJSON(raw)
+		value, ok := decoded.Value()
+		if !ok || !value.TeslEqual(tc.want) {
+			t.Fatalf("HTTP codec disagrees with storage: %s", decoded.Message())
+		}
+		if got, want := teslrt.EncodeJSONValue(EncodeStateJSON(tc.want)), teslrt.EncodeJSONValue(raw); got != want {
+			t.Fatalf("encoding: got %s, want %s", got, want)
+		}
+	}
+}
+
+func TestMalformedRecordColumn(t *testing.T) {
+	for _, wire := range []string{
+		`{"tag":"Missing"}`,
+		`{"tag":"Running","fields":{"attempt":null}}`,
+		`{"tag":"Running","fields":{"attempt":[]}}`,
+		`{"tag":"Running","fields":{"attempt":{}}}`,
+		`{"tag":"Running","fields":{"attempt":{"id":1,"evidence":{"label":"x","count":1}}}}`,
+		`{"tag":"Running","fields":{"attempt":{"id":"x","evidence":null}}}`,
+		`{"tag":"Running","fields":{"attempt":{"id":"x","evidence":{"label":"x"}}}}`,
+		`{"tag":"Running","fields":{"attempt":{"id":"x","evidence":{"label":"x","count":"1"}}}}`,
+		`{"tag":"Running","fields":{"attempt":{"id":"x","evidence":{"label":"x","count":1},"extra":1}}}`,
+		`{"tag":"Tagged","fields":{"named":{"id":"wrong-key"}}}`,
+	} {
+		t.Run(wire, func(t *testing.T) {
+			defer func() {
+				if recover() == nil {
+					t.Fatal("malformed stored record did not panic")
+				}
+			}()
+			_ = teslColumnState([]byte(wire))
+		})
+	}
+}
+
+func TestRecordColumnPostgresRestart(t *testing.T) {
+	if os.Getenv("TESL_TEST_POSTGRES_SHARED_HOST") == "" {
+		t.Skip("no shared PostgreSQL configured")
+	}
+	if phase := os.Getenv("TESL_RECORD_COLUMN_PHASE"); phase != "" {
+		id := os.Getenv("TESL_RECORD_COLUMN_ID")
+		teslrt.WithDatabase(RecordDbDatabase, func() {
+			assertState := func(suffix string, want State) {
+				t.Helper()
+				if got := ReadState(id + suffix); !got.TeslEqual(want) {
+					t.Fatalf("%s after restart: got %#v, want %#v", suffix, got, want)
+				}
+			}
+			switch phase {
+			case "insert":
+				Store(id+"queued", State{Tag: StateQueued})
+				Store(id+"running", runningState())
+			case "update":
+				assertState("queued", State{Tag: StateQueued})
+				assertState("running", runningState())
+				SetState(id+"queued", runningState())
+				SetState(id+"running", State{Tag: StateTagged, TaggedNamed: Named{Id: "updated"}})
+			case "read":
+				assertState("queued", runningState())
+				assertState("running", State{Tag: StateTagged, TaggedNamed: Named{Id: "updated"}})
+			case "cleanup":
+				Remove(id + "queued")
+				Remove(id + "running")
+			default:
+				t.Fatalf("unknown child phase %q", phase)
+			}
+		})
+		return
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := fmt.Sprintf("record-%d-", time.Now().UnixNano())
+	run := func(phase string) {
+		t.Helper()
+		cmd := exec.Command(executable, "-test.run=^TestRecordColumnPostgresRestart$")
+		cmd.Env = append(os.Environ(), "TESL_RECORD_COLUMN_PHASE="+phase, "TESL_RECORD_COLUMN_ID="+id)
+		if output, err := cmd.CombinedOutput(); err != nil {
+			t.Errorf("%s process: %v\n%s", phase, err, output)
+		}
+	}
+	t.Cleanup(func() { run("cleanup") })
+	for _, phase := range []string{"insert", "update", "read"} {
+		run(phase)
+		if t.Failed() {
+			return
+		}
+	}
+}
+|};
+  } in
+  let env = Option.value (live_postgres_env ()) ~default:[] in
+  gate_emitted ~env "tesl-go-record-column" (regressions :: emitted)
+
 (* ─── The `server` clause surface ─────────────────────────────────────────────
    `Ast.server_form` carries 16 fields, and the direct Go emitter must account for all of them. It
    read TEN.  The six it ignored were not refused — they were DROPPED, which is the one failure
@@ -13117,6 +13306,7 @@ let emission_tests =
       test_case "Go corpus compiles to Go" `Slow test_go_corpus_with_go;
       test_case "fresh module passes Go gates" `Slow test_generated_module_with_go;
       test_case "payload ADT JSON codecs" `Slow test_payload_adt_codecs_with_go;
+      test_case "record payload ADT columns" `Slow test_record_columns_with_go;
     ]
 
 let () =
