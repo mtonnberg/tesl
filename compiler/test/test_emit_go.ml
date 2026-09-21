@@ -7848,6 +7848,173 @@ test "ADTs and case" {
 }
 |}
 
+(* Issue #106: payload codecs must preserve their tagged wire representation at
+   decodeAs, structured agent, nested codec and HTTP boundaries. *)
+let payload_adt_codec_source = {|module PayloadCodec exposing []
+import Tesl.Prelude exposing [String, Int, Bool(..), List]
+import Tesl.Float exposing [Float]
+import Tesl.Agent exposing [Agent, aiProvider, mockProvider, decodeAs, askFor]
+import Tesl.ApiTest exposing [statusOk]
+
+type Reference = Place placeId: String | Offset meters: Int bearing: Float relative: Bool | Unknown
+codec Reference { adtJson }
+
+record Reply { reference: Reference }
+codec Reply {
+  toJson { reference -> "reference" with_codec Reference }
+  fromJson [{ reference <- "reference" with_codec Reference }]
+}
+
+type Route = Stops refs: List Reference | Direct ref: Reference
+codec Route { adtJson }
+
+type Tree = Leaf value: Int | Branch left: Tree right: Tree
+codec Tree { adtJson }
+
+type Wide = First a: String b: String c: String d: String e: String | Second a: String b: String c: String d: String e: String
+codec Wide { adtJson }
+
+type Only = MkOnly value: Int
+codec Only { adtJson }
+
+test "decode payloads and preserve enum forms" {
+  expect decodeAs "Reference" "{\"tag\":\"Place\",\"fields\":{\"placeId\":\"x\"}}" == Place "x"
+  expect decodeAs "Reference" "{\"tag\":\"Offset\",\"fields\":{\"meters\":123456789012345678901234567890,\"bearing\":45.5,\"relative\":true}}" == Offset 123456789012345678901234567890 45.5 True
+  expect decodeAs "Reference" "\"Unknown\"" == Unknown
+  expect decodeAs "Reference" "{\"tag\":\"Unknown\"}" == Unknown
+  expect decodeAs "Only" "{\"tag\":\"MkOnly\",\"fields\":{\"value\":3}}" == MkOnly 3
+}
+
+test "reject malformed payloads" {
+  expectFail decodeAs "Reference" "{\"tag\":\"Missing\",\"fields\":{}}"
+  expectFail decodeAs "Reference" "\"Place\""
+  expectFail decodeAs "Reference" "{\"tag\":\"Place\"}"
+  expectFail decodeAs "Reference" "{\"tag\":\"Place\",\"fields\":null}"
+  expectFail decodeAs "Reference" "{\"tag\":\"Place\",\"fields\":{}}"
+  expectFail decodeAs "Reference" "{\"tag\":\"Place\",\"fields\":{\"placeId\":1}}"
+  expectFail decodeAs "Reference" "{\"tag\":\"Offset\",\"fields\":{\"meters\":1,\"bearing\":45.5}}"
+  expectFail decodeAs "Reference" "{\"tag\":\"Offset\",\"fields\":{\"meters\":1.5,\"bearing\":45.5,\"relative\":true}}"
+  expectFail decodeAs "Reference" "{\"tag\":\"Offset\",\"fields\":{\"meters\":1,\"bearing\":\"north\",\"relative\":true}}"
+  expectFail decodeAs "Reference" "{\"tag\":\"Offset\",\"fields\":{\"meters\":1,\"bearing\":45.5,\"relative\":1}}"
+  expectFail decodeAs "Route" "{\"tag\":\"Stops\",\"fields\":{\"refs\":[{\"tag\":\"Place\"}]}}"
+}
+
+fn decodeReply(json: String) -> Reply = decodeAs "Reply" json
+
+test "structured agent output retries invalid variant payloads" requires [aiProvider] {
+  let agent = Agent {
+    provider: mockProvider ["{\"reference\":{\"tag\":\"Place\"}}", "{\"reference\":{\"tag\":\"Place\",\"fields\":{\"placeId\":\"x\"}}}"]
+    systemPrompt: "Return a reference."
+    maxTokens: 32
+    tools: []
+  }
+  let reply = askFor agent "place" decodeReply 2
+  expect reply.reference == Place "x"
+}
+
+handler post echoReference(ref: Reference) -> Reference = ref
+handler post echoReply(reply: Reply) -> Reply = reply
+handler post echoRoute(route: Route) -> Route = route
+handler post echoTree(tree: Tree) -> Tree = tree
+handler post echoWide(wide: Wide) -> Wide = wide
+handler post echoOnly(only: Only) -> Only = only
+
+api EchoApi {
+  post "/reference" body ref: Reference -> Reference
+  post "/reply" body reply: Reply -> Reply
+  post "/route" body route: Route -> Route
+  post "/tree" body tree: Tree -> Tree
+  post "/wide" body wide: Wide -> Wide
+  post "/only" body only: Only -> Only
+}
+server EchoServer for EchoApi { echoReference echoReply echoRoute echoTree echoWide echoOnly }
+
+api-test "payload codecs round trip across API bodies and responses" for EchoServer requires [] {
+  let place = post "/reference" body { tag: "Place", fields: { placeId: "x" } }
+  expect statusOk place.status
+  expect place.body.tag == "Place"
+  expect place.body.fields.placeId == "x"
+  let offset = post "/reference" body { tag: "Offset", fields: { meters: 123456789012345678901234567890, bearing: 45.5, relative: True } }
+  expect statusOk offset.status
+  expect offset.body.tag == "Offset"
+  expect offset.body.fields.meters == 123456789012345678901234567890
+  expect offset.body.fields.bearing == 45.5
+  expect offset.body.fields.relative == True
+  let unknown = post "/reference" body { tag: "Unknown" }
+  expect statusOk unknown.status
+  expect unknown.body.tag == "Unknown"
+  let reply = post "/reply" body { reference: { tag: "Place", fields: { placeId: "x" } } }
+  expect statusOk reply.status
+  expect reply.body.reference.tag == "Place"
+  expect reply.body.reference.fields.placeId == "x"
+  let route = post "/route" body { tag: "Stops", fields: { refs: [{ tag: "Place", fields: { placeId: "x" } }, { tag: "Unknown" }] } }
+  expect statusOk route.status
+  expect route.body.tag == "Stops"
+  let direct = post "/route" body { tag: "Direct", fields: { ref: { tag: "Place", fields: { placeId: "y" } } } }
+  expect statusOk direct.status
+  expect direct.body.fields.ref.tag == "Place"
+  expect direct.body.fields.ref.fields.placeId == "y"
+  let tree = post "/tree" body { tag: "Branch", fields: { left: { tag: "Leaf", fields: { value: 1 } }, right: { tag: "Branch", fields: { left: { tag: "Leaf", fields: { value: 2 } }, right: { tag: "Leaf", fields: { value: 3 } } } } } }
+  expect statusOk tree.status
+  expect tree.body.tag == "Branch"
+  expect tree.body.fields.left.fields.value == 1
+  expect tree.body.fields.right.fields.left.fields.value == 2
+  expect tree.body.fields.right.fields.right.fields.value == 3
+  let wide = post "/wide" body { tag: "Second", fields: { a: "a", b: "b", c: "c", d: "d", e: "e" } }
+  expect statusOk wide.status
+  expect wide.body.tag == "Second"
+  expect wide.body.fields.a == "a"
+  expect wide.body.fields.e == "e"
+  let only = post "/only" body { tag: "MkOnly", fields: { value: 3 } }
+  expect statusOk only.status
+  expect only.body.tag == "MkOnly"
+  expect only.body.fields.value == 3
+}
+|}
+
+let test_payload_adt_codecs_with_go () =
+  let emitted = emit_ok "<payload-adt-codec>" payload_adt_codec_source in
+  let round_trips : Emit_go.artifact = {
+    path = "internal/teslmodpayloadcodec/roundtrip_test.go";
+    contents = {|package teslmodpayloadcodec
+
+import (
+	"testing"
+
+	"tesl.generated/teslmodpayloadcodec/internal/teslrt"
+)
+
+func assertCodecRoundTrip[T any](t *testing.T, wire string, decode func(any) teslrt.Check[T], encode func(T) any) {
+	t.Helper()
+	raw, err := teslrt.ParseJSON([]byte(wire))
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded := decode(raw)
+	if !decoded.OK() {
+		t.Fatal(decoded.Message())
+	}
+	value, _ := decoded.Value()
+	got := teslrt.EncodeJSONValue(encode(value))
+	want := teslrt.EncodeJSONValue(raw)
+	if got != want {
+		t.Fatalf("round trip: got %s, want %s", got, want)
+	}
+}
+
+func TestPayloadWireRoundTrips(t *testing.T) {
+	assertCodecRoundTrip(t, `{"tag":"Place","fields":{"placeId":"x"}}`, DecodeReferenceJSON, EncodeReferenceJSON)
+	assertCodecRoundTrip(t, `{"tag":"Offset","fields":{"meters":123456789012345678901234567890,"bearing":45.5,"relative":true}}`, DecodeReferenceJSON, EncodeReferenceJSON)
+	assertCodecRoundTrip(t, `{"tag":"Unknown"}`, DecodeReferenceJSON, EncodeReferenceJSON)
+	assertCodecRoundTrip(t, `{"reference":{"tag":"Place","fields":{"placeId":"x"}}}`, DecodeReplyJSON, EncodeReplyJSON)
+	assertCodecRoundTrip(t, `{"tag":"Stops","fields":{"refs":[{"tag":"Place","fields":{"placeId":"x"}},{"tag":"Unknown"}]}}`, DecodeRouteJSON, EncodeRouteJSON)
+	assertCodecRoundTrip(t, `{"tag":"First","fields":{"a":"a","b":"b","c":"c","d":"d","e":"e"}}`, DecodeWideJSON, EncodeWideJSON)
+	assertCodecRoundTrip(t, `{"tag":"Second","fields":{"a":"a","b":"b","c":"c","d":"d","e":"e"}}`, DecodeWideJSON, EncodeWideJSON)
+}
+|};
+  } in
+  gate_emitted "tesl-go-payload-adt-codec" (round_trips :: emitted)
+
 let test_adts_with_go () =
   let emitted = match Compile.compile_go_source "<go-adts>" adt_source with
     | Compile.GoSuccess artifacts -> artifacts
@@ -12949,6 +13116,7 @@ let emission_tests =
       test_case "partial record literal fails before emission" `Quick test_missing_record_field_never_reaches_emitter;
       test_case "Go corpus compiles to Go" `Slow test_go_corpus_with_go;
       test_case "fresh module passes Go gates" `Slow test_generated_module_with_go;
+      test_case "payload ADT JSON codecs" `Slow test_payload_adt_codecs_with_go;
     ]
 
 let () =
