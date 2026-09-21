@@ -8398,15 +8398,6 @@ and sql_scan_carrier loc ty target =
         String, Bool), a newtype over one, an instant, an ADT as JSON, or a `Maybe` of any of \
         those" (go_type ty))
 
-(* The reader for an ADT COLUMN.  The stored shape is the value's own wire shape — `{"tag": …}`
-   for a constructor with no fields — so reading it back is a tag lookup.  A constructor that
-   CARRIES fields is refused rather than half-read: decoding those needs the generic decoder,
-   which does not derive an ADT yet, and a column that silently lost its payload is worse than
-   one that does not compile.
-
-   An unknown tag TRAPS.  It means the column holds a value this build has no constructor for —
-   data written by an incompatible schema — and `dsl/sql.tesl` takes the same line for a stored
-   currency code it cannot resolve. *)
 (* Reading ONE payload field of an ADT column back out of its JSON.
    The wire shape is the one the response encoder writes and `dsl/types.tesl` writes —
    `{"tag": …, "fields": {…}}`.  The DOCUMENT around it may be either of the two shapes a Tesl
@@ -8430,6 +8421,29 @@ and sql_adt_field_decoder loc ty raw =
   | TNewtype newtype ->
     Printf.sprintf "%s{Value: %s}" (qualified newtype.owner newtype.go_name)
       (sql_adt_field_decoder loc newtype.base raw)
+  | TRecord info ->
+    let body =
+      match codec_owner info.rec_tesl_name with
+      | Some _ ->
+        (* Match the encoder's use of the record's own codec, including renamed
+           keys and validation. A stored decode failure is corruption, not a 400. *)
+        Printf.sprintf
+          "\tteslDecoded := %s(teslRaw)\n\tif !teslDecoded.OK() {\n\t\tpanic(\"database: \" + teslDecoded.Message())\n\t}\n\tteslValue, _ := teslDecoded.Value()\n\treturn teslValue\n"
+          (codec_decode_ref info.rec_tesl_name)
+      | None ->
+        let fields = List.map (fun (field, field_ty) ->
+          Printf.sprintf "%s: %s" (record_field_go_name field)
+            (sql_adt_field_decoder loc field_ty
+               (Printf.sprintf "teslFields[%s]" (go_quote field)))) info.rec_fields in
+        Printf.sprintf
+          "\tteslFields, teslErr := teslrt.DecodeObjectShape(teslRaw, %s, []string{%s})\n\tif teslErr != nil {\n\t\tpanic(\"database: \" + teslErr.Error())\n\t}\n\treturn %s{%s}\n"
+          (go_quote info.rec_tesl_name)
+          (String.concat ", " (List.map (fun (field, _) -> go_quote field) info.rec_fields))
+          (go_type ty) (String.concat ", " fields)
+    in
+    let decoder = remember_helper_stmts ~prefix:"teslColumnRecord"
+      ~signature:(Printf.sprintf "(teslRaw any) %s" (go_type ty)) ~body in
+    Printf.sprintf "%s(%s)" decoder raw
   | TAdt (nested, _) when nested.adt_tesl_name <> "Maybe" ->
     (* A nested ADT decodes through its OWN column decoder, so one rule covers any depth. *)
     Printf.sprintf "%s(teslrt.MustEncodeJSON(%s))" (sql_adt_column_decoder loc nested) raw
@@ -8440,7 +8454,7 @@ and sql_adt_field_decoder loc ty raw =
          raw (go_type inner) (sql_adt_field_decoder loc inner "teslInner")
      | None -> unsupported loc
        "Go backend: an ADT column's constructor field of type `%s` has no column decoder — a \
-        stored variant may carry scalars, newtypes over them, nested ADTs and `Maybe`s of \
+        stored variant may carry scalars, newtypes over them, records, nested ADTs and `Maybe`s of \
         those" (go_type ty))
 
 and sql_adt_column_decoder loc (info : adt_info) =
@@ -11329,6 +11343,15 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
       end
     | _ -> ()
   in
+  (* An adtJson decoder also references derived decoders for record payloads,
+     even when no HTTP endpoint takes those records directly. *)
+  List.iter (fun (codec : codec_form) ->
+    match codec.from_json, Hashtbl.find_opt types.adts codec.type_name with
+    | FromJsonAdt, Some info ->
+      List.iter (fun variant ->
+        List.iter (fun (_, ty) -> derive_decoder codec.loc ty) variant.var_fields)
+        info.adt_variants
+    | _ -> ()) codecs;
   List.iter (fun (api : api_form) ->
     List.iter (fun (endpoint : api_endpoint) ->
       match endpoint.kind with
