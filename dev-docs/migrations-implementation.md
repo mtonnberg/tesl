@@ -45,12 +45,17 @@ closure, including its forced mode.
 This adds protected SQL definitions to the fresh format5 catalog. Older catalog
 definitions fail exact verification; there is no automatic installed-catalog
 upgrade. The earlier complete default-gate result above predates this table-Drop
-slice. Focused compiler/parser/SQL tests and the actual V1/V2 PostgreSQL application
+slice. Focused compiler/parser/SQL tests and the actual V1/V2/V3 PostgreSQL application
 pass, including overlap, an admitted old writer, a crash after the committed drop
 receipt, fresh V2 installation, dependency refusal and restart. The extended five
 scenarios also verify V3 refusal before Contract, successful successor deployment,
 and refusal of an unexplained missing table without changing protected state
-(65.555s, race detector). The broader regression gate is still being completed.
+(64.952s, race detector), including refusal of Embedded execution before protected
+state changes. The broader regression gate is still being completed. Its first
+run reached the worker lesson and found a diagnostic assertion tied to the old
+expansion path; the new origin check correctly refused the same wrong login.
+The assertion now checks the required Worker identity without depending on the
+internal expansion stage.
 
 Fresh format-5 Worker applications now link the checked queue runtime for
 additive histories. Public compilation emits the row/queue companions from V1;
@@ -1438,7 +1443,7 @@ covered for both local bindings and function parameters.
   issue in this slice. The Change Schema command, general fix-all provider and
   phase-3 typed-hole workflow remain pending.
 
-- Source plans now take `--initial-version N` and derive storage from the
+- Read-only source plans now take `--initial-version N` and derive storage from the
   database's first installation revision. They still validate every source edge
   from V1. Later installations omit earlier dropped tables and omission defaults;
   a reintroduced index is rebuilt when it did not exist at installation, with
@@ -1451,6 +1456,8 @@ covered for both local bindings and function parameters.
   217 groups; its remaining SSE listener test passed on rerun with local socket
   access. Vet, staticcheck and lint pass. This remains read-only source planning;
   the executor must obtain installation identity from trusted control state.
+  The current compiled row executor starts from V1 and does not execute these
+  alternate-origin previews.
   Physical derivation is now shared through `Migration_expansion`, independent
   of the compiler driver. Thirty plan regression groups pass, including rejection
   of swapped/missing edges and mixed ABI inventories, and stable canonical prior

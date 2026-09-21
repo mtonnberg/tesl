@@ -397,7 +397,7 @@ func TestCompiledWorkerLessonRetainsRows(t *testing.T) {
 		login, reason string
 		args          []string
 	}{
-		{requestRole, "row expansion requires exact Worker login", []string{"--schema", "worker", "--json"}},
+		{requestRole, "requires exact Worker login", []string{"--schema", "worker", "--json"}},
 		{worker, "row request readiness requires exact Request login", nil},
 	} {
 		refusalCtx, stopRefusal := context.WithTimeout(ctx, 10*time.Second)

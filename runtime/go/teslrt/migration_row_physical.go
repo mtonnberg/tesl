@@ -741,7 +741,7 @@ func pgBindRowPhysicalPlan(compiled *pgCompiledRowHistory, previous, plan *pgRow
 					return fmt.Errorf("callback copy changed physical identity")
 				}
 				if mapping.Kind == "revalidate" && !pgPhysicalColumnEqual(*from, *target) {
-					return fmt.Errorf("Revalidate changed retained physical storage")
+					return fmt.Errorf("revalidate changed retained physical storage")
 				}
 				if mapping.Kind == "rename" {
 					if old.column(target.catalog.Name) != nil {

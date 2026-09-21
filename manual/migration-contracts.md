@@ -1,8 +1,8 @@
 # Preparing storage cleanup after a migration
 
 A transforming migration temporarily keeps the storage needed by the old app.
-A **Contract** describes the cleanup after all rows have migrated and old writers
-have been retired. Prepare it with the migration, before building the rollout:
+A **Contract** describes the cleanup after all required row work has finished and
+old writers have been retired. Prepare it with the migration, before building the rollout:
 
 ```sh
 tesl migrate contract app.tesl --version 2
@@ -46,9 +46,15 @@ generates that distinction for you.
 
 Generating a Contract only writes a checked source proposal. It does not run DDL,
 finish backfill, retire a process, or prove that cleanup is safe now. The compiled
-worker must establish the required row generations and retirement floor before
+worker must establish any required row generations and the retirement floor before
 executing the checked cleanup. Keep the Contract in the versioned source history;
 starting the next revision freezes it with the completed migration.
+
+Removing an entire entity uses `drops: [Table Archive]`. This bounded Worker-only
+operation retains the old table until Contract retires its users, then deletes
+the table and its data. It needs no conversion callbacks, backfill or final row
+generations. See [lesson 91](../example/learn/lesson91-removing-a-table.md) for the
+supported scope, dependency handling and restart behavior.
 
 For scripts, add `--manifest-json` to preview the same guarded source edit. The
 command refuses to overwrite an existing Contract. After undeployed schema or

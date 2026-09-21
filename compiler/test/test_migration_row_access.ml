@@ -371,12 +371,21 @@ let native ()=
   command (Filename.concat (repository ()) "runtime/go") (Filename.concat output "postgres.log")
    (Printf.sprintf "TESL_ROW_ACCESS_PROGRAMS=%s timeout 180s go test -p 1 -race -tags tesl_migration_test -timeout 150s ./teslrt -run '^TestPgRow(AccessActualApp|HeartbeatReusesVerifiedStartup)$' -count=1 -v" (Filename.quote output));
   Printf.printf "actual generated handler trace passed\n%!")
-let native_settled ?(test="TestPgRow(SettledActualApp|FinalityRenewsOutsideBatchesAndWaitsForOwnCAS|HealthyWorkerClaimSkipsActiveCAS|BackfillBackendKillPreservesAtomicProgress|StagedNullabilityAllowsWritesAndPublishesExactProof|StagedNullabilityCrashReceiptAtomicity|ContractPrepareHasOperationDeadline|PrepareRetriesCommittedProgressSnapshot|ClaimRetriesCommittedRenewalSnapshot|BackfillRetriesWriteAfterCASSnapshot|WorkerDrainsInFlightRenewalAfterBatchCommit|RetirementRequiresEntireFinalShardInventory)") ()=
+let native_settled ?test ()=
+ (* Keep independent lifecycle groups within the existing process deadline.
+    One shared deadline previously expired after successful earlier tests had
+    consumed its budget; every Go test retains its own operation deadlines. *)
+ let tests=match test with Some test->[test] | None->[
+  "TestPgRow(SettledActualApp|FinalityRenewsOutsideBatchesAndWaitsForOwnCAS|HealthyWorkerClaimSkipsActiveCAS|ContractPrepareHasOperationDeadline)";
+  "TestPgRow(BackfillBackendKillPreservesAtomicProgress|StagedNullabilityAllowsWritesAndPublishesExactProof|StagedNullabilityCrashReceiptAtomicity)";
+  "TestPgRow(PrepareRetriesCommittedProgressSnapshot|ClaimRetriesCommittedRenewalSnapshot|BackfillRetriesWriteAfterCASSnapshot|WorkerDrainsInFlightRenewalAfterBatchCommit|RetirementRequiresEntireFinalShardInventory)"
+ ] in
  let output=Filename.temp_dir "tesl-row-settled-" "" in
  Fun.protect ~finally:(fun () -> if Sys.getenv_opt "TESL_KEEP_ROW_SETTLED_TEST"=None then remove output) (fun () ->
   export ~contracts:true output;
-  command (Filename.concat (repository ()) "runtime/go") (Filename.concat output "postgres.log")
-   (Printf.sprintf "TESL_ROW_SETTLED_PROGRAMS=%s timeout 210s go test -p 1 -race -tags tesl_migration_test -timeout 180s ./teslrt -run %s -count=1 -v" (Filename.quote output) (Filename.quote ("^" ^ test ^ "$"))))
+  List.iteri(fun index test ->
+   command (Filename.concat (repository ()) "runtime/go") (Filename.concat output (Printf.sprintf "postgres-%d.log" index))
+    (Printf.sprintf "TESL_ROW_SETTLED_PROGRAMS=%s timeout 210s go test -p 1 -race -tags tesl_migration_test -timeout 180s ./teslrt -run %s -count=1 -v" (Filename.quote output) (Filename.quote ("^" ^ test ^ "$")))) tests)
 
 let key_type = {|module Types.Key exposing [Key, makeKey]
 import Tesl.Prelude exposing [String]

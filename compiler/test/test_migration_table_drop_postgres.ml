@@ -66,7 +66,7 @@ let export destination =
    |> String.split_on_char '\n' |> List.filter(fun line->not(Compile.string_contains line "encoding/json" || Compile.string_contains line "TestAccessEffects"))
    |> String.concat "\n"
    |> replace "if err := rt.PreflightApplicationDatabases"
-      "if os.Args[1] == \"embedded\" { app.MainDatabase.Config.MigrationTopology=\"Embedded\"; app.MainDatabase.Config.RequestRole=\"\"; app.MainDatabase.Config.WorkerRole=\"\" }\n if err := rt.PreflightApplicationDatabases"
+      "if os.Args[1] == \"embedded\" { app.MainDatabase.Config.MigrationTopology=\"Embedded\"; app.MainDatabase.Config.RequestRole=\"\"; app.MainDatabase.Config.WorkerRole=\"\"; os.Args[1]=\"observe\" }\n if err := rt.PreflightApplicationDatabases"
    |> replace "handled, code := rt.RunSchemaCommand"
       "if os.Args[1] == \"contract\" { args=[]string{\"--schema\",\"contract\",\"V2\",\"--json\"} }\n handled, code := rt.RunSchemaCommand" in
   write(Filename.concat out "cmd/access-test/main.go")driver;

@@ -149,7 +149,12 @@ Equivalent retained indexes are reused regardless of name. Removed indexes stay
 recorded as retained storage; subsequent unchanged revisions do not repeat the
 removal operation.
 
-The initial version is the revision at which the database was first installed,
+The following alternate-origin behavior belongs to the read-only source planner.
+The compiled row executor currently installs the authoritative V1 origin and
+requires intermediate expansion and Contract prerequisites; it does not execute
+these alternate-origin previews.
+
+In this preview, the initial version is the revision at which the database was first installed,
 not its present version or admission floor. A database installed at V3 never
 creates a table already dropped in V2 and does not inherit a default added solely
 to adapt V1 writers. The planner derives the physical chain again from the chosen
