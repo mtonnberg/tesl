@@ -90,7 +90,7 @@ func pgExecuteRowEpoch(parent context.Context, conn *pgx.Conn, b *pgRowBaseline,
 		if err != nil {
 			return result, err
 		}
-		if plan == nil || len(plan.windows) != 0 || plan.requiresContractVersion != 0 || plan.settled {
+		if plan == nil || !pgRowEpochPreserving(plan) || plan.requiresContractVersion != 0 || plan.settled {
 			return result, fmt.Errorf("close epoch requires purely additive compiled history")
 		}
 		plans[version] = plan
@@ -106,6 +106,9 @@ func pgExecuteRowEpoch(parent context.Context, conn *pgx.Conn, b *pgRowBaseline,
 	observe := func(tx pgx.Tx) (PgMigrationControlState, error) {
 		state, _, err := pgReadRowBaselineState(ctx, tx, b, roles, false)
 		if err != nil {
+			return state, err
+		}
+		if err := pgCheckRowQueueRetirement(ctx, tx, b.history.Namespace); err != nil {
 			return state, err
 		}
 		if state.Current != through || state.InstallingVersion != 0 || state.MinVersion != state.CompatFloor {

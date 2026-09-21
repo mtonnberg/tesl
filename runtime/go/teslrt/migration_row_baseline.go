@@ -46,6 +46,7 @@ func pgCompiledRowBaseline(database *Database) (*pgRowBaseline, error) {
 		return nil, err
 	}
 	database.mutex.RLock()
+	config := database.Config
 	sealed := database.applicationPreflightClosed
 	nonQueueFacilities := false
 	for facility := range database.migrationFacilities {
@@ -54,6 +55,15 @@ func pgCompiledRowBaseline(database *Database) (*pgRowBaseline, error) {
 		}
 	}
 	database.mutex.RUnlock()
+	if len(compiled.inventory.Retirements) > 0 {
+		roles, err := pgMigrationRoles(config, config.User)
+		if err != nil {
+			return nil, err
+		}
+		if roles.Request == "" {
+			return nil, fmt.Errorf("table Drop requires Worker migration topology")
+		}
+	}
 	if !sealed || nonQueueFacilities {
 		return nil, fmt.Errorf("row baseline requires sealed complete App queue inventory and no unsupported facilities")
 	}
@@ -238,9 +248,20 @@ func pgReadRowBaselineState(ctx context.Context, tx pgx.Tx, b *pgRowBaseline, ro
 }
 
 func pgExecuteRowBaseline(ctx context.Context, conn *pgx.Conn, b *pgRowBaseline, roles PgMigrationControlRoles) (PgMigrationControlState, error) {
+	// A newer binary still installs the authoritative V1 origin. Publish that
+	// complete baseline before attempting its successor; never infer an empty
+	// predecessor from the absence of application tables on a fresh install.
+	state, err := pgExecuteRowOrigin(ctx, conn, b, roles)
+	if err != nil {
+		return state, err
+	}
 	if b.target != nil && b.target.version > 1 {
 		return pgExecuteRowForward(ctx, conn, b, roles)
 	}
+	return state, nil
+}
+
+func pgExecuteRowOrigin(ctx context.Context, conn *pgx.Conn, b *pgRowBaseline, roles PgMigrationControlRoles) (PgMigrationControlState, error) {
 	var initial, result PgMigrationControlState
 	err := pgControlTransaction(ctx, conn, false, func(tx pgx.Tx) error {
 		if err := pgControlRoles(ctx, tx, roles, false); err != nil {
@@ -254,7 +275,11 @@ func pgExecuteRowBaseline(ctx context.Context, conn *pgx.Conn, b *pgRowBaseline,
 			return fmt.Errorf("row baseline expansion requires exact Worker login")
 		}
 		var err error
-		initial, _, err = pgReadRowBaselineState(ctx, tx, b, roles, true)
+		// A newer binary may restart while its checked concurrent index is
+		// unfinished. Observe its exact catalog without imposing request readiness
+		// on the executor responsible for completing that index.
+		ready := true
+		initial, _, err = pgReadRowBaselineState(ctx, tx, b, roles, true, &ready)
 		return err
 	})
 	if err != nil {
@@ -265,7 +290,8 @@ func pgExecuteRowBaseline(ctx context.Context, conn *pgx.Conn, b *pgRowBaseline,
 			if err := pgControlRoles(ctx, tx, roles, false); err != nil {
 				return err
 			}
-			state, count, err := pgReadRowBaselineState(ctx, tx, b, roles, true)
+			ready := true
+			state, count, err := pgReadRowBaselineState(ctx, tx, b, roles, true, &ready)
 			if err != nil {
 				return err
 			}

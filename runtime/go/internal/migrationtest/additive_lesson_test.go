@@ -31,7 +31,7 @@ func TestCompiledAdditiveLessonRetainsRows(t *testing.T) {
 
 // INV-ADDITIVE-READ, INV-ADDITIVE-WRITE, INV-CATALOG-EVIDENCE; TR-BOOT-EXPAND, TR-READ, TR-WRITE.
 func TestCompiledMigrationCompilerUpgradeRetainsRows(t *testing.T) {
-	testCompiledAdditiveLesson(t, true, Event{Name: "expansion-after-commit", Actor: "compiler-a", Occurrence: 1})
+	testCompiledAdditiveLesson(t, true, Event{Name: "row-forward-after-intent", Actor: "compiler-a", Occurrence: 1})
 }
 
 func testCompiledAdditiveLesson(t *testing.T, upgrade bool, interruption Event) {
@@ -133,7 +133,10 @@ func testCompiledAdditiveLesson(t *testing.T, upgrade bool, interruption Event) 
 		// C has no frozen source yet: its freshly compiled V1 is valid in
 		// isolation, but cannot interpret a database established by A.
 		revisions = append([]revision{{5, 1, incompatibleCompiler, ""}}, revisions...)
-		revisions = append(revisions, revision{6, 3, compiler, "archived"}, revision{3, 3, compatibleCompiler, ""}, revision{4, 4, compatibleCompiler, "label"})
+		// B's exact V2 build tests takeover of A's unfinished V2. A V3 build
+		// correctly refuses an unfinished V2 predecessor before reaching that
+		// execution-ABI check, so it cannot prove the same property.
+		revisions = append(revisions, revision{8, 2, compatibleCompiler, ""}, revision{6, 3, compiler, "archived"}, revision{3, 3, compatibleCompiler, ""}, revision{4, 4, compatibleCompiler, "label"})
 	}
 	var frozenByA map[string][]byte
 	for _, revision := range revisions {
@@ -416,7 +419,7 @@ func testCompiledAdditiveLesson(t *testing.T, upgrade bool, interruption Event) 
 	status(2, 1) // The newer command does not run its pending expansion.
 	if upgrade {
 		interruptLessonExpansion(t, ctx, binaries[7], applicationEnvironment, interruption)
-		assertMigrationStartupRefuses(t, ctx, binaries[3], applicationEnvironment, installer, "abi")
+		assertMigrationStartupRefuses(t, ctx, binaries[8], applicationEnvironment, installer, "abi")
 	}
 	current, stopCurrent := start(2)
 	defer stopCurrent()
@@ -487,7 +490,9 @@ func testCompiledAdditiveLesson(t *testing.T, upgrade bool, interruption Event) 
 			}
 		}
 		assertMigrationBuildProvenance(t, ctx, installer, before.SourceCompilerABI, after.SourceCompilerABI, after.StoredValueCompatibility)
-		assertMigrationStartupRefuses(t, ctx, binaries[5], applicationEnvironment, installer, "stored-value")
+		// The incompatible stored-value contract changes even the exact empty
+		// queue baseline identity; refusal must precede any durable mutation.
+		assertMigrationStartupRefuses(t, ctx, binaries[5], applicationEnvironment, installer, "row queue baseline is not the exact complete fresh origin")
 		if err := installer.QueryRow(ctx, "select count(*),count(*) filter(where category is null and archived is null and label is null) from additive_notes.lesson_migration_notes").Scan(&rows, &nulls); err != nil || rows != 7 || nulls != 7 {
 			t.Fatalf("compiler upgrade changed retained rows or omission defaults: %d %d %v", rows, nulls, err)
 		}

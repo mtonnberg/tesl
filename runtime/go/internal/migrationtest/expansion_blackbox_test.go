@@ -120,11 +120,14 @@ entity Note table "notes" primaryKey id { id: String%s }
 import("context";"encoding/json";"os";"time";"github.com/jackc/pgx/v5";fixture %q;%q)
 func main(){
  ctx,cancel:=context.WithTimeout(context.Background(),20*time.Second);defer cancel()
- history,ok:=fixture.MainDatabase.CompiledMigrationHistory();if !ok {panic("missing linked history")}
+ if err:=teslrt.PreflightApplicationDatabases(fixture.MainDatabase);err!=nil {panic(err)}
+ _,ok:=fixture.MainDatabase.CompiledMigrationHistory();if !ok {panic("missing linked history")}
  config,err:=pgx.ParseConfig(os.Getenv("TESL_EXPANSION_DSN"));if err!=nil {panic(err)}
- config.Database=os.Getenv("TESL_EXPANSION_DATABASE");config.User=os.Getenv("TESL_EXPANSION_WORKER")
+ config.Database=os.Getenv("TESL_EXPANSION_DATABASE");if len(os.Args)==1 {config.User=os.Getenv("TESL_EXPANSION_WORKER")}
  conn,err:=pgx.ConnectConfig(ctx,config);if err!=nil {panic(err)};defer conn.Close(ctx)
- state,err:=teslrt.ExecutePgMigrationExpansion(ctx,conn,history,teslrt.PgMigrationControlRoles{Owner:os.Getenv("TESL_EXPANSION_OWNER"),Worker:os.Getenv("TESL_EXPANSION_WORKER")})
+ roles:=teslrt.PgMigrationControlRoles{Owner:os.Getenv("TESL_EXPANSION_OWNER"),Worker:os.Getenv("TESL_EXPANSION_WORKER")}
+ var state teslrt.PgMigrationControlState
+ if len(os.Args)>1 {state,err=teslrt.InstallPgCompiledRowBaseline(ctx,conn,fixture.MainDatabase,roles)} else {state,err=teslrt.ExecutePgCompiledRowBaseline(ctx,conn,fixture.MainDatabase,roles)}
  if err!=nil {panic(err)};if err:=json.NewEncoder(os.Stdout).Encode(state);err!=nil {panic(err)}
 }
 `, fields[1]+"/internal/teslmodapp", fields[1]+"/internal/teslrt")
@@ -179,9 +182,15 @@ func main(){
 	if _, err := installer.Exec(ctx, "grant create on schema public to "+roles.Owner); err != nil {
 		t.Fatal(err)
 	}
-	seed, err := teslrt.InstallPgMigrationControl(ctx, installer, "notes_app", roles, 1)
+	install := exec.CommandContext(ctx, binaries[0], "install")
+	install.Env = append(os.Environ(), "TESL_EXPANSION_DSN="+dsn, "TESL_EXPANSION_DATABASE="+name, "TESL_EXPANSION_OWNER="+roles.Owner, "TESL_EXPANSION_WORKER="+roles.Worker)
+	installed, err := install.CombinedOutput()
+	var seed teslrt.PgMigrationControlState
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("install compiler-linked V1 row baseline: %v\n%s", err, installed)
+	}
+	if err := json.Unmarshal(installed, &seed); err != nil || seed.DatabaseUUID == "" || seed.InitialVersion != 1 || seed.Format != 5 {
+		t.Fatalf("invalid installed identity: %s %v", installed, err)
 	}
 	config.User = roles.Worker
 	for _, version := range []int{1, 2, 3, 1, 2, 3} {

@@ -136,7 +136,12 @@ let source_metadata ()=project (fun root save path ->
  check bool "canonical derived mode" true (Compile.string_contains wire "\"mode\":\"derived\"");
  check bool "no fabricated callback bridge" false (List.exists(fun(a:Emit_go.artifact)->Compile.string_contains a.path "TeslCompiledRowCallback")all);
  match Compile.compile_go_source file app with
- | Compile.GoFailure _ -> () | _ -> fail "Derived gained public execution before activation")
+ | Compile.GoSuccess artifacts ->
+   check bool "public derived row companion" true
+     (List.exists (fun (a:Emit_go.artifact) -> a.path = "retained-physical-history.json") artifacts);
+   check bool "public derived source history" true
+     (List.exists (fun (a:Emit_go.artifact) -> a.path = "row-transform-history.json") artifacts)
+ | Compile.GoFailure ds -> fail (describe ds))
 let refusals ()=List.iter(fun(label,changed,code)->project(fun root save path->
  write path changed;
  let ds=errors path changed in

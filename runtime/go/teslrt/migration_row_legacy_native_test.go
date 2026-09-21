@@ -148,3 +148,82 @@ func TestPgRowLegacyContractApp(t *testing.T) {
 	run("v2", "contract")
 	t.Log("preexisting logical-field removal worker backfill, late old write, finality, pre-DDL current-only writes, same-process post-Contract queries and idempotent resume passed")
 }
+
+// The same compiler-generated handlers run on both sides of logical removal.
+// This trace keeps the rollback window open and exercises failed writes before
+// first materialization, then old/new writers after durable materialization.
+func TestPgRowLegacyWindowWrites(t *testing.T) {
+	root := os.Getenv("TESL_ROW_LEGACY_PROGRAMS")
+	if root == "" {
+		t.Skip("compiler-generated Legacy applications required")
+	}
+	f, request := pgNewWorkerTest(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	t.Cleanup(cancel)
+	f.ctx = ctx
+	f.namespace = "notes"
+	run := func(version, mode string) { pgForwardNativeRun(t, f, root, version, mode, true) }
+	call := func(base, method, path string, status int) string {
+		return pgCallRowAccessApp(t, ctx, base, method, path, status)
+	}
+	snapshot := func() string {
+		t.Helper()
+		var result string
+		if err := request.QueryRow(ctx, `select jsonb_build_object(
+   'rows',(select jsonb_agg(to_jsonb(r) order by id) from notes.notes r),
+   'processing',(select jsonb_agg(to_jsonb(p) order by version) from notes.tesl_row_processing p))::text`).Scan(&result); err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
+	run("v1", "install")
+	run("v1", "worker")
+	v1 := pgStartRowAccessApp(t, f, root, "v1")
+	run("v2", "worker")
+	v2 := pgStartRowAccessApp(t, f, root, "v2")
+	call(v1, "POST", "/one", 200)
+	call(v1, "POST", "/two", 200)
+	before := snapshot()
+	call(v2, "PUT", "/conflict", 500)
+	if after := snapshot(); after != before {
+		t.Fatalf("failed bulk removal update changed data, reverse compatibility columns, marker or processing ABI:\nbefore %s\nafter %s", before, after)
+	}
+	// Even the old binary must see byte-identical removed values after rollback.
+	body := call(v1, "GET", "/all", 200)
+	if !strings.Contains(body, `"author":"writer"`) || !strings.Contains(body, `"oldText":"one"`) || strings.Contains(body, "former") {
+		t.Fatal("failed update leaked removed-field reverse values", body)
+	}
+	call(v2, "PUT", "/all", 200)
+	var converted int
+	if err := request.QueryRow(ctx, `select count(*) from notes.notes where _tesl_v=2 and author='former' and metadata=jsonb_build_object('oldText',title) and memo='all-edited'`).Scan(&converted); err != nil || converted != 2 {
+		t.Fatal("successful bulk update omitted reverse compatibility storage", converted, err)
+	}
+	call(v2, "PUT", "/one", 200)
+	var title, legacy, author string
+	if err := request.QueryRow(ctx, `select title,metadata->>'oldText',author from notes.notes where id='one'`).Scan(&title, &legacy, &author); err != nil || title != "edited" || legacy != title || author != "former" {
+		t.Fatal("LegacyWith did not recompute removed JSONB on current update", title, legacy, author, err)
+	}
+	body = call(v1, "GET", "/all", 200)
+	if !strings.Contains(body, `"oldText":"edited"`) {
+		t.Fatal("old codec cannot decode current reverse update", body)
+	}
+	call(v1, "POST", "/three", 200)
+	call(v2, "PUT", "/all", 200)
+	if err := request.QueryRow(ctx, `select count(*) from notes.notes where _tesl_v=2 and author='former' and metadata=jsonb_build_object('oldText',title) and memo='all-edited'`).Scan(&converted); err != nil || converted != 3 {
+		t.Fatal("late old insert did not join current reverse update", converted, err)
+	}
+	call(v2, "POST", "/absent", 200)
+	body = call(v1, "GET", "/all", 200)
+	if !strings.Contains(body, `"oldText":"absent"`) {
+		t.Fatal("current insert is not old-decodable", body)
+	}
+	// A Reject late in the scan must roll back already materialized/updated rows,
+	// just as a SQL constraint failure does. Keep exact old payload bytes intact.
+	call(v1, "POST", "/reject", 200)
+	before = snapshot()
+	call(v2, "PUT", "/all", 500)
+	if after := snapshot(); after != before {
+		t.Fatalf("migration Reject partially committed removal reverse writes:\nbefore %s\nafter %s", before, after)
+	}
+	call(v1, "GET", "/all", 200)
+}

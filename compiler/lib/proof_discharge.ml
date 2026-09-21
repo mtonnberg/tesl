@@ -138,8 +138,18 @@ let rec normalize (kind : func_kind) (rs : return_spec) : obligation list =
     return type declares.  Relocated here to co-locate with the obligation
     model above; the per-form dispatch below is being incrementally rewired
     to consume [normalize].  Behaviour is unchanged by the move. *)
+(* Field evidence is nominal: resolving its receiver must use the lexical type
+   environment at the exact expression, never another branch's bindings or the
+   function's final outer let-chain. Restore the caller's context on all exits. *)
+let with_field_type_context fields_by_type ctors type_env f =
+  let saved = !field_proof_type_ctx in
+  Fun.protect ~finally:(fun () -> field_proof_type_ctx := saved) (fun () ->
+    field_proof_type_ctx := Some (type_env, fields_by_type, ctors);
+    f ())
+
 let return_context_operations ~funcs ~fields_by_type ~ctors =
   let extend_let_envs type_env subject_env proof_env name value =
+    with_field_type_context fields_by_type ctors type_env (fun () ->
     (* Special case: forgetFact strips all proofs — do not propagate subject chain,
        and add an explicit empty proof entry to prevent alias resolution from
        finding the original's proofs. *)
@@ -190,7 +200,7 @@ let return_context_operations ~funcs ~fields_by_type ~ctors =
       | Some ty -> (name, ty) :: type_env
       | None -> type_env
     in
-    (type_env', subject_env', proof_env')
+    (type_env', subject_env', proof_env'))
   in
   let extend_case_envs subject_env proof_env scrut scrut_proofs pat =
     match pat with
@@ -214,6 +224,7 @@ let return_context_operations ~funcs ~fields_by_type ~ctors =
      leaf check over this ONE traversal, so how a returned value's environment
      evolves is defined in exactly one place. *)
   let rec return_leaves type_env subject_env proof_env (e : expr) =
+    with_field_type_context fields_by_type ctors type_env (fun () ->
     match e with
     | ELet { name; value; body; _ } ->
       (match returning_let_envs type_env subject_env proof_env name value with
@@ -260,7 +271,7 @@ let return_context_operations ~funcs ~fields_by_type ~ctors =
     | EWithDatabase { body; _ } | EWithCapabilities { body; _ } | EWithTransaction { body; _ } ->
       return_leaves type_env subject_env proof_env body
     | EFail _ -> []
-    | _ -> [ (type_env, subject_env, proof_env, e) ]
+    | _ -> [ (type_env, subject_env, proof_env, e) ])
   and returning_let_envs type_env subject_env proof_env name value =
     match return_leaves type_env subject_env proof_env value with
     | [] -> None (* An always-aborting value never reaches its continuation. *)
@@ -582,7 +593,8 @@ let check_fn_return_proof_annotations
         (* Every returning leaf must carry the declared proof at its own subject
            (the FromDb producing-site gate is applied by the caller).  Uses the
            shared [return_leaves] traversal. *)
-        List.for_all (fun (_te, se, pe, e) ->
+        List.for_all (fun (te, se, pe, e) ->
+          with_field_type_context fields_by_type ctors te (fun () ->
           let result_subject = match subject_of_expr se e with
             | Some s -> s | None -> default_subj in
           let required_here = match binder with
@@ -591,7 +603,7 @@ let check_fn_return_proof_annotations
           let carried =
             List.map Proof_kernel.fact_of
               (proofs_of_expr result_subject funcs se pe e) in
-          proof_matches required_here carried)
+          proof_matches required_here carried))
           (return_leaves type_env0 subject_env proof_env fd.body)
       in
       (match fd.return_spec with

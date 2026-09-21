@@ -4,6 +4,7 @@
 type rule =
   | Rename of { previous : string; current : string; loc : Location.loc }
   | Retype of { field : string; loc : Location.loc }
+  | Revalidate of { field : string; function_ref : Ast.expr; loc : Location.loc }
   | WriteBack of { previous : string; current : string; function_ref : Ast.expr; loc : Location.loc }
   | Legacy of { field : string; value : Migration_additive.literal; loc : Location.loc }
   | LegacyWith of { field : string; function_ref : Ast.expr; loc : Location.loc }
@@ -14,6 +15,7 @@ type value_source =
   | Copy of { previous : Migration_inventory.stored_field; current : Migration_inventory.stored_field }
   | Renamed of { previous : Migration_inventory.stored_field; current : Migration_inventory.stored_field }
   | Retyped of { previous : Migration_inventory.stored_field; current : Migration_inventory.stored_field }
+  | Revalidated of { previous : Migration_inventory.stored_field; current : Migration_inventory.stored_field; function_ref : Ast.expr; loc : Location.loc }
   | Empty_optional of Migration_inventory.stored_field
   | Constant of Migration_inventory.stored_field * Migration_canonical.node
   | Computed of Migration_inventory.stored_field

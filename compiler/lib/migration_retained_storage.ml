@@ -16,7 +16,7 @@ type entity = {source:RH.entity;columns:column list;projection:field list;
 type window = {binding:RH.binding;before:entity;after:entity;
                requires_final_generation:int;invalidation_columns:column list;
                rename_dual_writes:(string * column) list}
-type version = {version:int;entities:entity list;windows:window list;requires_contract_version:int option}
+type version = {version:int;entities:entity list;windows:window list;retirements:entity list;requires_contract_version:int option}
 type t = {history:RH.t;versions:version list}
 type projection = {entity:entity;fields:field list}
 let history t = t.history
@@ -72,13 +72,19 @@ let plan history = protect (fun () ->
   {source;projection;columns=order_columns (List.map (fun (f:field) -> f.physical) projection);
    indexes=add_indexes source [];marker_default_generation=1;rename_dual_writes=[];reverse_writes=[]} in
  let prior=ref [] in
- let pending_contract=ref None in
+ let pending_contract=ref None and prior_retirements=ref [] in
  let planned=List.map (fun (revision:RH.version) ->
   let transforming=List.exists (fun b -> RH.migration_version b=revision.version) (RH.bindings history) in
   let requires_contract_version= !pending_contract in
   pending_contract:=None;
   (* Planning states a prerequisite; it does not observe or authorize contraction. *)
-  if requires_contract_version<>None then prior:=List.map settle_entity !prior;
+  if requires_contract_version<>None then prior:=List.filter (fun e ->
+    not (List.mem e.source.identity !prior_retirements)) !prior |> List.map settle_entity;
+  let retirements=RH.retirements history |> List.filter_map (fun (r:RH.retirement) ->
+    if r.version<>revision.version then None else
+    match List.find_opt (fun e -> e.source.identity=r.previous.identity) !prior with
+    | Some e -> Some e
+    | None -> reject loc "table retirement has no exact retained predecessor") in
   let windows=ref [] in
   let edge=List.find_opt (fun d -> D.version d=revision.version) (RH.declarations history) in
   let entities=List.map (fun (source:RH.entity) ->
@@ -127,10 +133,11 @@ let plan history = protect (fun () ->
       let mapping=(RH.row binding).mapping in
       let target = function
        | R.Copy {current;_} | R.Renamed {current;_} | R.Empty_optional current
-       | R.Constant (current,_) | R.Computed current | R.Retyped {current;_} -> current.I.name in
+       | R.Constant (current,_) | R.Computed current | R.Retyped {current;_}
+       | R.Revalidated {current;_} -> current.I.name in
       (match List.find_opt (fun m -> target m=logical.field.name) mapping.values with
        | Some (R.Retyped _) -> add logical true E.Null
-       | Some (R.Copy {previous;_}) -> copy logical previous.name
+       | Some (R.Copy {previous;_} | R.Revalidated {previous;_}) -> copy logical previous.name
        | Some (R.Renamed {previous;_}) ->
         let old=field before previous.name in
         if not (same_carrier old.logical logical) then
@@ -162,15 +169,17 @@ let plan history = protect (fun () ->
        invalidation_columns=order_columns (List.map (fun (f:field) -> f.physical) before.projection);
        rename_dual_writes=after.rename_dual_writes}::!windows) binding;
     after) revision.entities in
-  prior:=entities;
-  if transforming then pending_contract:=Some revision.version;
-  {version=revision.version;entities;windows=List.rev !windows;requires_contract_version}) (RH.versions history) in
+  let entities=List.sort (fun a b -> compare a.source.identity b.source.identity) (entities @ retirements) in
+  prior:=entities;prior_retirements:=List.map (fun e -> e.source.identity) retirements;
+  if transforming || retirements<>[] then pending_contract:=Some revision.version;
+  {version=revision.version;entities;windows=List.rev !windows;retirements;requires_contract_version}) (RH.versions history) in
  {history;versions=planned})
 
 let project t ~version ~entity ~logical_fields = protect (fun () ->
  let revision=match List.find_opt (fun v -> v.version=version) t.versions with
   | Some v -> v | None -> reject loc "projection names a revision outside its retained history" in
- let owner=match List.find_opt (fun e -> e.source.identity=entity) revision.entities with
+ let owner=match List.find_opt (fun e -> e.source.identity=entity &&
+  not (List.exists (fun retired -> retired.source.identity=entity) revision.retirements)) revision.entities with
   | Some e -> e | None -> reject loc "projection names an entity outside its retained revision" in
  let expected=List.map (fun f -> f.logical.field.name) owner.projection |> List.sort String.compare in
  if List.sort String.compare logical_fields<>expected then
@@ -180,5 +189,6 @@ let project t ~version ~entity ~logical_fields = protect (fun () ->
 let settled_version t ~version = protect (fun () ->
  let retained=match List.find_opt (fun v -> v.version=version) t.versions with
   | Some v -> v | None -> reject loc "settled projection names a revision outside its retained history" in
- let entities=List.map settle_entity retained.entities in
- {version;entities;windows=[];requires_contract_version=None})
+ let entities=List.filter (fun e -> not (List.exists (fun retired ->
+  retired.source.identity=e.source.identity) retained.retirements)) retained.entities |> List.map settle_entity in
+ {version;entities;windows=[];retirements=[];requires_contract_version=None})

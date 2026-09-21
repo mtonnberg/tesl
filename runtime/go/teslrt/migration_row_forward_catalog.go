@@ -162,6 +162,13 @@ func pgVerifyRowForwardCatalog(ctx context.Context, tx pgx.Tx, b *pgRowBaseline,
 				return fmt.Errorf("row Contract references missing physical table")
 			}
 			switch op.children[0].value {
+			case "drop-table":
+				if len(triggers[entity.table].name) != 0 || len(checks[entity.table]) != 0 {
+					return fmt.Errorf("table retirement retains active transformation objects")
+				}
+				catalog = slices.DeleteFunc(catalog, func(candidate PgMigrationCatalogTable) bool {
+					return candidate.Name == entity.table
+				})
 			case "add-not-null-check", "validate-not-null-check", "drop-not-null-check":
 				inventory := checks[entity.table]
 				if inventory == nil {

@@ -486,7 +486,13 @@ func TestPgRowBaselineSharedEnvelopeKeepsDatabaseOwnersSeparate(t *testing.T) {
 		registerCompiledMigrationHistory(history.Database, history.Family, history.Namespace, 1, history.SourceCompilerABI, history.StoredValueCompatibility, history.HistoryJSON)
 	}
 	registerCompiledRowHistory(rowTestJSON(t, companion))
+	// The shared source envelope proves both databases have no queue declarations.
+	// Register that complete inventory independently of the row companion.
+	rowTestRegisterQueueAbsenceIfEmpty(t, h)
 	t.Cleanup(func() {
+		compiledQueueHistories.Lock()
+		delete(compiledQueueHistories.families, other.Family)
+		compiledQueueHistories.Unlock()
 		pgMigrationRegistrations.Lock()
 		defer pgMigrationRegistrations.Unlock()
 		delete(compiledRowRegistrations, compiledRowHistories[other.Family])

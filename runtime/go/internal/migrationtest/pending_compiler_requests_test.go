@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -13,8 +12,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/jackc/pgx/v5"
 )
 
 // INV-ADDITIVE-READ, INV-ADDITIVE-WRITE, INV-CATALOG-EVIDENCE; TR-BOOT-EXPAND, TR-READ, TR-WRITE.
@@ -35,12 +32,12 @@ func testPendingCompatibleCompilerRequests(t *testing.T, ctx context.Context, ro
 	requireShowcaseTodo(t, ctx, client, first.base, http.MethodPost, retained.ID, `{"title":"Established by compiler A"}`, retained)
 	first.stop(t)
 
-	directory, err := os.MkdirTemp("", "tesl-pending-compiler-")
+	directory, err := os.MkdirTemp(os.Getenv("TESL_MIGRATION_TEST_SOCKET_TMPDIR"), "tesl-pending-compiler-")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(directory) })
-	boundary := Event{Name: "expansion-after-commit", Actor: "pending-compiler-b", Occurrence: 1}
+	boundary := Event{Name: "row-forward-after-intent", Actor: "pending-compiler-b", Occurrence: 1}
 	schedule := NewSchedule(nil)
 	if err := schedule.Pause(boundary); err != nil {
 		t.Fatal(err)
@@ -86,27 +83,11 @@ func testPendingCompatibleCompilerRequests(t *testing.T, ctx context.Context, ro
 	db.status(t, apps.a1, 1, 1)
 	newRequest := db.requestNode(t, apps.b2, "pending-b-request")
 	db.requireWaiting(t, newRequest)
-	var firstInstance string
-	var firstSnapshot time.Time
-	workerLessonWait(t, ctx, oldWorker, "old idle worker observing B's pending intent", func() bool {
-		var instance string
-		var completed time.Time
-		// The coordinator publishes its heartbeat only after its checked index
-		// snapshot. A fresh heartbeat proves this pending intent was observed.
-		err := db.observer.QueryRow(ctx, `select instance,last_seen from todo_app.tesl_schema_instances
- where version=1 and instance like 'tesl-exec:%' order by last_seen desc limit 1`).Scan(&instance, &completed)
-		if errors.Is(err, pgx.ErrNoRows) {
-			return false
-		}
-		if err != nil {
-			t.Fatal(err)
-		}
-		if firstInstance == "" {
-			firstInstance, firstSnapshot = instance, completed
-			return false
-		}
-		return instance == firstInstance && completed.After(firstSnapshot)
-	})
+	// V1 has no row or index work: its worker deliberately remains quiescent
+	// without a coordinator heartbeat. Keep it alive throughout the request,
+	// status, crash and refused-takeover checks below; the durable snapshot
+	// proves it never acquires authority over B's unfinished expansion.
+	oldWorker.assertAlive(t)
 
 	// The live B worker holds the expansion boot lock. Kill it at the committed
 	// intent, then observe its PostgreSQL backend disappear before asking A2 to
@@ -142,7 +123,7 @@ func testPendingCompatibleCompilerRequests(t *testing.T, ctx context.Context, ro
 	command.Env = db.login(db.worker)
 	output, refusal := command.CombinedOutput()
 	stop()
-	if refusal == nil || refuse.Err() == context.DeadlineExceeded || !bytes.Contains(output, []byte("unfinished migration compiler ABI differs")) ||
+	if refusal == nil || refuse.Err() == context.DeadlineExceeded || !bytes.Contains(output, []byte("unfinished row expansion compiler ABI differs")) ||
 		bytes.Contains(output, []byte("schema-worker-ready")) {
 		t.Fatalf("A executor gained authority over B's pending work: %v\n%s", refusal, output)
 	}

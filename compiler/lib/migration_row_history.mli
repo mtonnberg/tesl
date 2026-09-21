@@ -13,6 +13,7 @@ type version = {
   storage : Migration_storage.t;
   entities : entity list;
 }
+type retirement = { version:int; previous:entity }
 type binding
 val migration_version : binding -> int
 val previous : binding -> entity
@@ -23,6 +24,7 @@ val row : binding -> Migration_transform.row
 type t
 val check : schemas:Migration_inventory.t list -> edges:Migration_declaration.t list ->
   (t,Migration_sparse.error list) result
+val retirements : t -> retirement list
 val versions : t -> version list
 val bindings : t -> binding list
 val captured_sources : t -> (Ast.module_form * string) list

@@ -8,25 +8,343 @@ non-normative. An unchecked row is not delivered.
 
 ## Current assessment and implementation order
 
+Breaking column changes have focused live coverage: primitive/JSONB removal,
+proof strengthening, proof weakening and complete proof removal. Proof changes
+use separate retained columns and exact historical proof-bearing reverse writes;
+same-column replacement remains refused. See the detailed evidence below and
+[lesson 90](../example/learn/lesson90-changing-field-proofs.md).
+
+The complete default `scripts/run-migration-tests.sh` now passes in a single
+execution on PostgreSQL 17.10: the application harness, three runtime groups and
+29 compiler-driven suites (253 cases), with race detection in the Go lifecycles.
+This includes the full Todo V1–V9 rolling deployment and V1–V13 transforming
+application. Optional pooler/replica/owned-cluster tiers and the other PostgreSQL
+majors were not enabled in this run. Earlier partial-run evidence below is
+historical; this result closes the default combined-gate gap, not the remaining
+implementation work or repository-wide CI/review gates.
+
+Whole-entity `Drop` now has a bounded implementation: one ordinary table with
+unchanged surviving entities under Worker topology. Explicit source-v5 and physical-v5 descriptors bind
+the removed identity to both source snapshots and the exact retained predecessor
+shape. Its `tesl-table-contract-v1` authority uses `Table Entity`, has no row
+transforms/final generations, and removes only the reviewed table. Existing
+non-Drop source/physical encodings remain unchanged. Lifetime entity/table-name
+reuse, the last entity, mixed changes, queue-bearing histories, previously
+transformed removed entities and removed tables with protected concurrent-index
+jobs remain refused. See [lesson 91](../example/learn/lesson91-removing-a-table.md).
+
+Contract verifies operation receipts before locking a potentially deleted table;
+pending DDL uses `DROP TABLE ... RESTRICT` and commits its receipt atomically.
+Known external dependencies refuse before Contract intent or retirement. A new
+administrative dependency created afterwards may leave an already retired,
+resumable Contract; it never authorizes cascading deletion. The protected SQL
+validator independently binds the complete unchanged survivor inventory, exact
+drop operation and empty finality. Table retirement cannot use additive epoch
+closure, including its forced mode.
+
+This adds protected SQL definitions to the fresh format5 catalog. Older catalog
+definitions fail exact verification; there is no automatic installed-catalog
+upgrade. The earlier complete default-gate result above predates this table-Drop
+slice. Focused compiler/parser/SQL tests and the actual V1/V2 PostgreSQL application
+pass, including overlap, an admitted old writer, a crash after the committed drop
+receipt, fresh V2 installation, dependency refusal and restart. The extended five
+scenarios also verify V3 refusal before Contract, successful successor deployment,
+and refusal of an unexplained missing table without changing protected state
+(65.555s, race detector). The broader regression gate is still being completed.
+
+Fresh format-5 Worker applications now link the checked queue runtime for
+additive histories. Public compilation emits the row/queue companions from V1;
+preflight requires exact database ownership, complete codecs and an additive
+physical history. Pool admission retains the row verifier, and dedicated queue
+listeners verify the same source, database identity and Request login when they
+connect or reconnect. Legacy lazy table creation remains forbidden. Embedded
+queues, transforming queue-bearing histories and queue retirement remain refused.
+
+Public source-capture errors also propagate directly instead of selecting the
+legacy emission path. A frontend-valid schema that collides with the reserved
+row-generation marker now has a focused public-compiler refusal regression.
+The queue compiler suite passes all 24 cases against mandatory PostgreSQL
+(22.475s), and all 43 transformation compiler cases pass after this routing
+change (14.407s). Existing queue runtime, operation and listener suites pass
+with the race detector (35 cases, 41.085s).
+
+The ordinary generated V1/V2 application regression passes (32.527s). It uses
+public compilation, installation and migration workers, with identical application
+source and the original source tree removed before execution. It verifies retained
+pending/delayed/dead jobs, atomic entity-and-enqueue rollback, old-version claim
+isolation, stale attempts and mutation-free forced/dry-run epoch refusal. The real
+App then accepts HTTP work, runs its emitted typed handler, reconnects after its
+dedicated LISTEN backend is terminated, and shuts down without creating legacy
+facility tables. This mandatory PostgreSQL case is in `run-migration-tests.sh`.
+Nested ADT payloads and long-running lease renewal are not exercised by this
+particular application fixture; existing lower-level renewal coverage does not
+replace future application-level coverage of those combinations.
+Independent review and a second final review found no blocker in this bounded
+integration. Build checks and documentation integrity pass.
+
+The broader PostgreSQL audit exposed a real regression in ordinary Embedded
+applications: the new row-history route refused concurrent indexes. Row startup
+now attaches the existing scope-owned Embedded executor with its exact checked
+row source. Connection transfer, readiness, cached scope acquisition and shutdown
+retain the shared executor lifecycle. The original compiled additive application
+passes again (67.20s), and shared executor/shutdown regressions pass with race
+detection (27.33s). The complete V1–V9 rolling Todo regression also passes
+(289.95s), including interrupted DDL and recovery under request traffic; the
+Worker lesson passes (40.99s).
+
+Other broad-run failures identified obsolete format-3 test drivers, failpoint
+names and privilege probes, plus Unix socket path overflow under a long external
+temporary directory. The repaired standalone expansion (30.36s), typed storage
+round trip (9.82s) and shared database-owner baseline (3.07s) pass against real
+PostgreSQL with race detection. Refusal snapshots now include durable row/queue
+metadata and stable lease names, distinguish absent tables from empty tables,
+and exclude volatile heartbeats and lease claims. Socket paths use the configured
+short directory while builds and database data stay on the selected temporary
+disk. The aggregate migration-test package budget is 30 minutes to accommodate
+the complete compiled histories; individual scenario deadlines are unchanged.
+These repaired cases do not by themselves establish a clean complete gate.
+
+The repaired cross-compiler application lifecycle passes against PostgreSQL with
+race detection (171.40s), including an interrupted migration, a matching-version
+compiler ABI refusal, preserved durable metadata, and successful completion by
+the original compiler. The control-format application regression also passes
+(28.57s). Its legacy format-2 to format-3 bridge remains supported; these results
+do not authorize format-3 to format-5 adoption. An original V1 row worker remains
+quiescent, so the test checks its live request service rather than claiming that
+it executes or observes a newer migration intent.
+
+All remaining compiler gate sections have now completed against mandatory private
+PostgreSQL: deletion/additive/new-table/index/additive-tail scenarios (15 cases),
+derived/nominal/optional/captured-dependency scenarios (34 cases), and nominal
+keys/Copy/cross-compiler retirement/physical Retype/Revalidate scenarios (48
+cases). The earlier sections also completed, with stale negative diagnostic
+expectations corrected and rerun separately. This is evidence from the broad run
+plus focused repair reruns and disjoint gate sections, not a single clean execution
+of the entire script. The final runtime review found no Embedded ownership or
+cancellation blocker. Documentation integrity, `dune build @check`, and protocol
+traceability pass.
+
+Read-only source planning now handles transforming entity-only histories through
+`planType: "row-history"`, retaining `kind: "migration-plan-preview"`, version 1
+and `executable: false`. It validates the complete V1 history and reports tables,
+generations, row/column mappings, runtime proof enforcement, codec observations
+and exact checked Contract source summaries. The native guided CLI validates the
+selected database/family/current revision and displays the current step and any
+required prior Contract. Additive preview shape remains unchanged.
+
+The row report explicitly sets `persistedStateObserved`,
+`inPlaceRewriteAuthorized` and `decoderPruningAuthorized` to false. Codec reports
+separate encoder syntax, ordered decoder alternatives and dependency-closure
+changes, with `adapterOnlyEligible: false` in every case. Append-only alternatives
+are not a compatibility proof or permission to rewrite data or prune decoders.
+Typed `Retype` plus `WriteBack`, retained physical storage and checked Contract
+cleanup remain the conservative representation-change path. Row previews with a
+later installation origin, combined queue history, persisted finality and
+pruning authorization remain outside this source-only feature.
+
+The planner suite passes all 37 cases, including the complete V1–V13 todo
+history, same-column proof revalidation, source/Contract change guards and
+callback identity changes that leave field mappings unchanged. Eight codec
+classifier groups cover decoder order, encoder direction, nested dependencies
+and every affected stored occurrence. The guided CLI also consumes a real
+compiler preview of the sealed lesson 89 app without changing its source.
+The live PostgreSQL JSONB oracle passes with race detection (24.55s), including
+conflicting old/new keys in records, optional records and nested ADTs, unchanged
+storage after reads, and an explicit bridge rewrite. That oracle uses unversioned
+codec applications; it does not establish production same-column rewrite finality.
+Independent review and a second review found no blocker in this preview/report
+slice. Documentation integrity and protocol traceability checks pass.
+
+The September 20 public-path review restored entry diagnostics and a shared
+captured-module judgment before Go emission. Regressions reject malformed
+migration configuration, ill-typed private dependencies, and invalid unused
+migration bodies. The live Todo lifecycle also exposed two integration gaps:
+the test omitted additive epoch closure before V10, and Contract rejected even
+valid indexes retained from V8. The test now closes the epoch with the V9 worker
+while V9 requests keep serving. Contract verifies the complete protected index
+inventory and catalog, then permits only valid indexes retained unchanged by the
+settled plan. Pending, building, failed, missing, changed and removed index cases
+remain refusals. The focused observer and retention regressions pass against
+PostgreSQL 17 with the Go race detector. The complete V1–V13 lifecycle also passes
+(382.54s in the final reviewed run), including a non-default retained priority of 4 becoming weight 5,
+record-to-ADT conversion, V12 reads and writes of a V13-created row, and physical
+Contract cleanup. The final review added reads of both rows and stored-value
+assertions for both ADT constructors after the old JSONB column is dropped;
+those assertions pass in the final run. Independent review found no remaining
+blockers in the retained-index fix or the complex lifecycle assertions.
+The current transformation compiler suite passes all 43 cases, including public
+binary generation, optional proof/rejection execution, source integrity and
+`Same` proof transport. The public dependency/body refusal regressions and
+migration topology suite also pass. These focused results do not replace the
+complete repository or private-PostgreSQL gates.
+
 The feature is not ready for general use. The core row-migration engine has
-substantial PostgreSQL application coverage, but passing its internal compiler
-route is not the same as delivering the public CLI and deployment workflow.
+substantial PostgreSQL application coverage, and ordinary application builds now
+link checked row-transform companions. Queue payload transformations and retirement,
+staged uniqueness and adoption remain separate deliverables. The default combined
+private-PostgreSQL gate has since passed as recorded above.
+The initial `Revalidate` implementation admits adding a single-field proof to an
+unproved primitive field, retaining its exact value and physical column. The
+target-owned optional establish must return its original input, and the row
+initializer must use that establish's scoped `Something` binder. Generated field
+metadata explicitly records `proofEnforcement: runtime-only`; SQL CHECK synthesis
+and same-column replacement of an existing proof remain unfinished. A new proof
+does not imply an older proof for future writes. Existing proofs can instead
+change through retained-column Retype and proof-aware WriteBack, described below.
+
+The reviewed initial path passes 18 compiler regression groups and two actual
+PostgreSQL application lifecycles with the race detector (69.635s together).
+The baseline builds byte-identical application source against V1 and V2 from
+[lesson 89](../example/learn/lesson89-proof-revalidation.md). It verifies rejected
+rows retain generation 1, lazy reads do not claim materialization, repair allows
+worker completion, changed old writes invalidate the proof, and Contract refuses
+retirement until repair succeeds. The second lifecycle combines Revalidate with
+Legacy, changes an old-only field through V1, verifies V2 reconstructs that field
+for old readers without changing the proven title, and drops the old storage at
+Contract. The generated artifact explicitly states runtime-only enforcement;
+forged, missing or SQL-CHECK enforcement claims are rejected. Query projection,
+wire guards, public lesson tests, documentation integrity and protocol traceability
+checks pass. Independent reviews found no remaining blocker in this initial path.
+
+Breaking primitive proof changes now accept attached scalar results from
+`WriteBack` and `LegacyWith`, provided their underlying type and exact historical
+proof match. Predicate identities are resolved in each source owner; return
+subjects are alpha-renamed, and conjunction structure is checked recursively.
+Ordinary frontend proof discharge remains authoritative: no migration exception
+can manufacture evidence. Cross-field entity predicates still refuse scalar
+reverse callbacks.
+
+The new reverse-proof matrix passes 18 cases: exact and alpha-renamed evidence,
+conjunctions, wrong owners/subjects/types, missing or forged evidence, and removal
+of a proven field. Three independently compiled PostgreSQL V1/V2 scenarios pass
+with race detection (74.023s): strengthening rejects old-valid rows until repair;
+weakening preserves a newly accepted value separately from its explicitly
+old-valid reverse representation; removing the proof admits even an empty new
+value while preserving proven old storage. A rejected bulk update leaves the
+complete row/physical-column/generation/processing/shard snapshot unchanged.
+The lifecycles cover late old writes, current writes,
+old/current reads, Contract and physical column removal. The identical app source
+uses unchanged `id` for ordering because Retype fields remain query-restricted.
+The existing Retype/WriteBack suite passes all 16 groups against mandatory
+PostgreSQL (87.550s); transformation (43) and Revalidate (18) checks also pass.
+The removal suite additionally passes the new retained-window writes scenario
+alongside its original Contract lifecycle (37.283s), including primitive/JSONB
+removal, current-write LegacyWith regeneration, late old inserts, and exact
+rollback after failed bulk writes. These are focused gates, not evidence of a
+completed repository-wide migration gate.
+Two independent reviews found no blocker in historical-proof matching or the
+compiled lifecycle coverage. Bulk snapshots establish atomic observed outcomes;
+they do not inject failure after a specified row update. The compiler now retains each branch's lexical receiver type when checking a
+returned proven field, including a let-bound projection alias. Scoped contexts
+restore on every exit; unrelated types, raw siblings, shadowing and forgotten
+proofs still refuse. Ten focused cases and the broader proof/fail-closed suites
+pass (1,279 Alcotest cases plus the proof-kind registry check). A direct
+function-call receiver still needs a local binding for stable subject identity;
+no arbitrary call-result identity or proof-checking exemption was introduced.
+The migration reverse-proof matrix now passes 19 cases including that local
+projection in a reverse callback.
+The final review also prompted a post-Contract empty-string assertion for proof
+removal; both affected PostgreSQL scenarios pass again (54.842s). The unchanged
+strengthening case was deliberately excluded from that final two-case rerun.
+
+Removing a proven scalar field now also has an actual compiled PostgreSQL
+LegacyWith lifecycle (35.158s, race detector). New inserts and updates establish
+the old field proof, late old writes invalidate the generation, a failed bulk
+unique update leaves complete row/progress snapshots unchanged, and a new empty
+memo receives an explicit valid old-title fallback. Contract removes the old
+column, preserves the empty current value, refuses old requests and restarts
+idempotently. This complements the earlier primitive/JSONB removal tests.
+
+Lesson 90 now includes a runnable `example/learn/db-proof-change/` PostgreSQL
+Worker app, frozen/current schemas, CLI-generated seals and Contract, and three
+migration tests. All five Tesl source files pass agent-context and the source
+migration tests pass. The live proof-change fixture reads these exact files,
+resealing the checked histories for each isolated build. All three live
+PostgreSQL scenarios pass from these lesson files (80.169s, race detector).
+
+The post-gate follow-up makes that lesson's fallback return a proven field from
+a branch-local record binding. The exact lesson source tests pass, and all three
+live proof-change variants pass again (78.853s, race detector). Weakening/removal
+now explicitly test an unrelated old `memo` update: it invalidates the whole row,
+and the new reader reconstructs the valid old fallback instead of the newer-only
+value. Lazy reads leave the stored target bytes and old generation untouched.
+This is the documented limit of lossy WriteBack, not a lossless round-trip
+guarantee. Exact retention requires retiring old writers before admitting values
+they cannot represent.
+
+Refresh now explains the supported Retype/WriteBack route when an existing
+primitive field's proof contract changes, including establish/helper changes
+without a spelling change. It keeps an unresolved `todo`; it never invents a
+reverse callback or authorizes a migration. All 21 refresh cases pass, including
+exclusions for primary keys, cross-field proofs, changed physical columns and
+nominal codec carriers. Both the guidance and overlap follow-ups received
+independent final review without remaining blockers.
+
+The broader `dune build @check` now passes. Its earlier missing-interface and
+Yojson failures came from the first test stanza implicitly including modules
+owned by other stanzas; an explicit module list fixes that ownership. This
+compile check does not execute the full repository suite, and the broader
+migration completion gates below remain open.
+
+Same-column JSONB fallback rewriting is also unfinished. The demonstrated JSONB
+path uses typed `Retype` with a separate
+physical column and a reverse adapter; it does not establish support for every
+codec-history transition.
 
 | Area | What is demonstrated | What remains |
 | --- | --- | --- |
 | Additive migrations | PostgreSQL expansion, retained writers, Worker deployment, explicit epoch closure and heartbeats | Remaining mixed histories and a reliable complete regression gate |
-| Data transformations | Unchanged applications, lazy conversion, dual writes, backfill, repeated revisions, and Contract on the internal route | Public command activation and legacy installation adoption |
-| Removal and JSONB | Actual field removal and record/ADT conversion, including reverse compatibility, SQL NULL and retained writers | The same scenarios in the complete todo app and teaching lessons |
-| Ordinary CLI | Public `tesl migrate` dispatch now reaches the native publisher when installed and retains compiler-owned read-only previews; isolated original V1/V2/V3 lifecycle with unchanged application source | Native publisher end-to-end adoption/rollback coverage, remaining compatibility cases and review |
-| Queue migration | Checked complete source inventories, strict source binding and integrated combined row/queue catalog | Execution and finality |
+| Data transformations | Unchanged applications, lazy conversion, dual writes, backfill, repeated revisions, Contract, and generated physical row companions | Legacy installation adoption, mixed-history breadth and the complete private-PostgreSQL gate |
+| Removal and JSONB | Actual field removal and record/ADT conversion, including reverse compatibility, SQL NULL, retained writers, and the V10–V13 todo showcase | Adoption remains separate; the compiled Todo V1→V13 PostgreSQL lifecycle is covered by `TestCompiledTodoComplexHistoryPostgres` in the private cluster gate |
+| Proof and codec evolution | Typed `Retype` and reverse writes; checked same-value primitive `Revalidate` with explicit runtime-only enforcement | Same-column proof replacement, SQL CHECK synthesis, and same-column fallback rewrite/finality |
+| Ordinary CLI | Public `tesl migrate` dispatch reaches the native publisher; ordinary builds link checked row transforms and retain compiler-owned previews | Native publisher end-to-end adoption/rollback coverage and remaining compatibility cases |
+| Queue migration | Checked source inventories, combined row/queue catalog and fresh additive Worker application execution | Payload transformations, retirement/restamping and finality |
 | Staged uniqueness | Design and prerequisites | Implementation and application regressions |
 
-The next acceptance milestones are the ordinary application workflow and its
-full migration lifecycle, followed by combined queue execution and staged
+The next acceptance milestones are the full private-PostgreSQL lifecycle for the
+ordinary application workflow, followed by combined queue execution and staged
 uniqueness. Concurrent-index safety, row-history index execution, checked migration
-fixtures, typed deletion, and read-only legacy-adoption inspection are integrated;
-the adoption inspector deliberately does not authorize a transition. The final manual, lessons, showcase,
-comprehensive regression run and second review remain completion requirements.
+fixtures, typed deletion, read-only legacy-adoption inspection, and public row
+transform linking are integrated; the adoption inspector deliberately does not
+authorize a transition. The manual, lessons, showcase and comprehensive regression
+run are kept as completion requirements.
+
+The first queue execution milestone is fresh-install, additive mixed
+entity/queue applications on format 5; transforming job syntax remains separate.
+Attempt fencing already exists in `pgstores.go`; the queue roadmap's original
+job-ID-only completion warning describes the pre-fix implementation. The missing
+boundary was ordinary format-5 queue pool, listener and backend integration;
+the Worker application path now supplies it. The format-5 queue admission
+function verifies the fresh baseline,
+complete source prefix, canonical inventory bindings and exact completed physical
+expansion receipts. Claim, retry, renewal and completion retain the existing
+attempt-fenced lifecycle; the format-4 candidate functions remain unchanged.
+Those protected-SQL checks also remain directly covered by the earlier private
+installer fixture, independently of the ordinary application regression.
+
+The complete queue compiler suite passes (23 cases, 22.479s), including actual
+generated V1/V2 PostgreSQL artifacts using the private installer boundary. The
+SQL tests cover V2 claiming a retained V1 job, stale-attempt rejection after
+reclaim, post-fence retirement observation, exact metadata tampering, and
+unchanged durable state after direct SQL and forced/dry-run epoch refusals.
+The format-4 operation/runtime suites also pass with race detection (31 cases,
+33.854s); their shared attempt/lease behavior remains unchanged.
+
+Queue-bearing history now explicitly refuses close-epoch, retirement, Contract
+registration and the compatibility switch. The command path checks before
+registering an intent; protected SQL checks again after acquiring the state lock.
+An empty job table and `--force` do not bypass the inventory-based refusal.
+Queue-free retirement remains verified: three runtime epoch cases pass (2.238s),
+the actual additive application closes its epoch (103.505s), and three physical
+Retype/WriteBack/Contract application cases pass (107.426s). Independent review
+and the final review found no blocker in this bounded queue prerequisite.
+Until queue finality exists, moving the admission floor could otherwise strand
+pending, delayed or dead jobs. The experimental format-5 function catalog changes
+in this slice; an earlier experimental catalog is refused by exact verification,
+not silently upgraded. Merely accepting a new format number does not supply
+inventory, codec and admission checks. Keep
+changed-payload MIG028 refusals and queue-bearing retirement/Contract refusals
+until their respective execution and restamping lifecycles are implemented.
 
 Before the latest epoch/heartbeat integration, the runtime/compiler union passed
 all 83 focused groups:
@@ -192,11 +510,14 @@ applications pass PostgreSQL delete, rejection-row removal, count-zero/count-man
 operand effects, old-writer deletion, rollback, timeout and post-Contract
 retirement checks (Go race 11.231s). The same handler remains unchanged.
 
-Public activation, remaining mixed-history combinations,
-adoption, queue execution, staged uniqueness, the transforming showcase and
-lessons, and final comprehensive gates remain open. Manual coherence and
-documentation integrity pass after the current assessment update. Those checks
-verify documentation structure; they do not replace the pending runtime gate.
+Remaining mixed-history combinations, adoption, queue execution, staged
+uniqueness and the final comprehensive private-PostgreSQL gates remain open.
+The transforming todo showcase, its lessons and public compiler linking are now
+present. `TestCompiledTodoComplexHistoryPostgres` is part of
+`scripts/run-migration-tests.sh` and skips only when no PostgreSQL DSN is supplied;
+the private CI cluster therefore exercises the complete sequential V1→V13 rollout.
+Manual coherence and documentation integrity must still pass after each
+documentation change.
 
 ## Earlier integration evidence
 
@@ -241,8 +562,9 @@ closed-format validation gaps; both fixes have precise guard-removal mutants
 that fail the intended freshly hashed regression. Full compiler build, runtime
 race checks (1.724s), tagged lint, production-only nil analysis and manual
 coherence pass. The integrated union is being rebuilt. These results remain on
-the internal compiler route; ordinary command activation and the full
-transforming showcase are not complete.
+the internal compiler route; ordinary application builds now link the same checked
+row companion, and the transforming todo showcase is present. Its complete
+private-PostgreSQL rollout remains an environment-gated acceptance item.
 
 General nominal Copy/Rename and compiler-owned reverse transport are integrated
 after final source reviews. Exact source-site certificates preserve unchanged
@@ -637,9 +959,9 @@ regression calls the actual emitted todo handler with valid batches and invalid
 IDs in every batch position; all ten cases pass.
 
 The production Worker request/executor split and concurrent index worker pass
-their PostgreSQL regression gates. The next production work is protected durable
-runtime storage, followed by a predecessor protocol that understands recorded
-generation/trigger objects, safe additive epoch closure and the first typed full-app transformation. Current
+their PostgreSQL regression gates. The protected row protocol now understands
+recorded generation/trigger objects and the public compiler links its typed row
+companion. Current
 additive binaries reject unknown control formats and triggers; they cannot be
 treated as compatible transforming predecessors without that bridge. Queues and
 outboxes require real versioned storage/restamping, or an explicit restricted
@@ -663,14 +985,17 @@ and both reviews. The normative phase prerequisites remain in force.
 |---|---|
 | Existing database survives a supported compiler upgrade | Revision-5 A/B/C retained-database and pending-worker recovery passes; isolated completed-transform A/B app and first-write race regressions also pass |
 | Adopt/deploy the notes app; add fields and indexes | Additive/Worker lessons and the nine-release todo rolling/index gate pass; adoption remains |
-| Transform an entity while old/new apps keep serving | Integrated lazy conversion, dual writes and cursor updates pass; isolated worker/finality/Contract traces pass; staged cleanup integration and the next transforming revision remain |
+| Transform an entity while old/new apps keep serving | Public V10–V13 todo source links derived, removal, record JSONB and ADT row companions; fixtures and generated Go tests pass; `TestCompiledTodoComplexHistoryPostgres` covers the sequential private PostgreSQL worker, provisional/final backfill and Contract lifecycle |
 | Reject a row, repair it, retire old code and contract | Actual row Reject rolls back whole updates; isolated worker/Contract crash recovery passes; quarantine, repair and full lifecycle integration remain |
-| Evolve a stored record/ADT without changing the HTTP API | Actual unchanged-app record/ADT lazy, dual-codec and isolated worker/Contract traces pass; nominal primary-key transport, public history and pruning remain |
+| Evolve a stored record/ADT without changing the HTTP API | V12/V13 todo migrations convert record and ADT JSONB while app handlers and API tests stay unchanged; the complex private PostgreSQL test covers retained readers/writers and both Contracts; nominal primary-key transport and pruning remain |
 | Carry delayed, dead and in-flight jobs through a roll | Checked source/codec inventories and unpublished protected storage pass; claim integration, payload executor and effects remain |
 | Stage and promote uniqueness under concurrent writes | Production reservation, reconciliation and promotion remain |
 | Restore an old database, catch up, migrate offline and prune | Production orchestration and durable completion evidence remain |
 
 Storage-only lessons must assert byte-identical handlers, routes and API contracts.
+The todo showcase now has runnable scenario lessons for derived backfills,
+field removal, record JSONB conversion and record-to-ADT retyping
+([85](../example/learn/lesson85-derived-backfill.md)–[88](../example/learn/lesson88-jsonb-adt-retype.md)).
 JSONB evolution uses the same migration history and transformation engine as rows;
 a fallback decoder alone is not completion or permission to prune old decoders.
 
@@ -723,7 +1048,12 @@ cluster rolling-update recipe. Regression tests must compile the actual history,
 retain data across revisions, verify unchanged handlers for storage-only changes,
 and continuously exercise the load-balanced HTTP API during replacement. Startup
 readiness, worker interruption/recovery, invalid input and request-role isolation
-are explicit assertions. This showcase is under construction, not yet delivered.
+are explicit assertions. The additive showcase covers continuous rolling traffic.
+Lessons 85–88 and `TestCompiledTodoComplexHistoryPostgres` additionally exercise
+the V10–V13 transformations, retained readers/writers, worker backfill and
+Contracts against the same app. The complex test checks requests at lifecycle
+boundaries with overlapping versions; continuous traffic across transforming
+rollouts remains an acceptance gap.
 
 The maintainer also requires full-application scenarios: migrations are difficult
 to learn if examples show only entities and row functions. Lessons 1–4 and 6 will

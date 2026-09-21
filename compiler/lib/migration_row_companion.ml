@@ -30,6 +30,7 @@ let schema_hash v=C.digest C.Snapshot (I.snapshot v.RH.schema)
 let type_hash e=snd (RH.contract C.Contract e.RH.type_contract)
 let base_json ~quote ~go_type source =
  let p=P.source_program source in
+ let has_retirements=List.exists (fun (_,h) -> RH.retirements h<>[]) (P.row_histories source) in
  let entity database version (e:RH.entity) =
   let contract,hash=RH.contract C.Contract e.type_contract in
   let package,name=go_type database version e in
@@ -48,11 +49,17 @@ let base_json ~quote ~go_type source =
  | Error errors -> Printf.sprintf {|{"initialVersion":%d,"steps":null,"errors":%s}|} o.initial_version (array error errors) in
  let database (d:P.database)=
   let rows=List.assoc d.identity (P.row_histories source) in
-  Printf.sprintf {|{"database":%s,"family":%s,"namespace":%s,"currentVersion":%d,"versions":%s,"origins":%s}|}
+  let retirements=if not has_retirements then "" else
+   ",\"retirements\":" ^ array (fun (r:RH.retirement) ->
+    let schema n=List.find (fun (v:RH.version) -> v.version=n) (RH.versions rows) in
+    Printf.sprintf {|{"migrationVersion":%d,"entity":%s,"fromSchemaSnapshot":%s,"toSchemaSnapshot":%s}|}
+     r.version (quote r.previous.identity) (quote (schema_hash (schema (r.version-1))))
+     (quote (schema_hash (schema r.version)))) (RH.retirements rows) in
+  Printf.sprintf {|{"database":%s,"family":%s,"namespace":%s,"currentVersion":%d,"versions":%s,"origins":%s%s}|}
    (quote d.identity) (quote d.family) (quote d.namespace) d.current_version
-   (array (version d.identity) (RH.versions rows)) (array origin d.origins) in
- Printf.sprintf {|{"version":4,"kind":"compiled-migration-source-history","compilerAbi":%s,"storedValueCompatibility":%s,"databases":%s}|}
-  (quote (P.compiler_abi p)) (quote (P.stored_value_compatibility p)) (array database (P.databases p))
+   (array (version d.identity) (RH.versions rows)) (array origin d.origins) retirements in
+ Printf.sprintf {|{"version":%d,"kind":"compiled-migration-source-history","compilerAbi":%s,"storedValueCompatibility":%s,"databases":%s}|}
+  (if has_retirements then 5 else 4) (quote (P.compiler_abi p)) (quote (P.stored_value_compatibility p)) (array database (P.databases p))
 (* Current codecs describe checked stored rows after an earlier transformation.
    They are not migration callbacks and carry no Same/conversion authority. The
    initial route covers a wholly zero-window current revision only. *)
@@ -73,10 +80,12 @@ let rows_json ?projection ~quote source =
   | R.Empty_optional current -> current,"empty-optional",None,None
   | R.Constant (current,value) -> current,"default",None,Some (RH.hex (C.encode value))
   | R.Retyped {previous;current} -> current,"retype",Some previous.name,None
+  | R.Revalidated {previous;current;_} -> current,"revalidate",Some previous.name,None
   | R.Computed current -> current,"computed",None,None in
   let nullable=Option.fold ~none:"null" ~some:quote in
-  target.name,Printf.sprintf {|{"target":%s,"kind":%s,"source":%s,"constant":%s}|}
-   (quote target.name) (quote kind) (nullable source) (nullable constant) in
+  let enforcement=if kind="revalidate" then ",\"proofEnforcement\":\"runtime-only\"" else "" in
+  target.name,Printf.sprintf {|{"target":%s,"kind":%s,"source":%s,"constant":%s%s}|}
+   (quote target.name) (quote kind) (nullable source) (nullable constant) enforcement in
  let has_current=Option.is_some projection && List.exists (fun (_,history)->current_codecs history<>[]) (P.row_histories source) in
  let has_legacies=List.exists (fun (_,h) -> List.exists (fun b -> (RH.row b).legacies<>[]) (RH.bindings h)) (P.row_histories source) in
  let has_writebacks=List.exists (fun (_,h) -> List.exists (fun b -> (RH.row b).writebacks<>[]) (RH.bindings h)) (P.row_histories source) in

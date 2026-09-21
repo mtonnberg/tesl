@@ -5,10 +5,23 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
 )
+
+// Socket paths need a short base even when bulk test artifacts use an external
+// TMPDIR whose mount path alone nearly fills sockaddr_un.
+func processTestSocket(t *testing.T) string {
+	t.Helper()
+	directory, err := os.MkdirTemp(os.Getenv("TESL_MIGRATION_TEST_SOCKET_TMPDIR"), "tesl-process-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(directory) })
+	return filepath.Join(directory, "control.sock")
+}
 
 // INV-HARNESS; TR-SCHEDULE.
 func TestProcessControllerPausesOnlyNamedArrival(t *testing.T) {
@@ -19,7 +32,7 @@ func TestProcessControllerPausesOnlyNamedArrival(t *testing.T) {
 	if err := s.Pause(event); err != nil {
 		t.Fatal(err)
 	}
-	socket := filepath.Join(t.TempDir(), "control.sock")
+	socket := processTestSocket(t)
 	p, err := ListenProcesses(ctx, socket, s)
 	if err != nil {
 		t.Fatal(err)
@@ -74,7 +87,7 @@ func TestProcessControllerPausesOnlyNamedArrival(t *testing.T) {
 
 // INV-HARNESS; TR-SCHEDULE.
 func TestProcessControllerRefusesUnknownProtocol(t *testing.T) {
-	socket := filepath.Join(t.TempDir(), "control.sock")
+	socket := processTestSocket(t)
 	p, err := ListenProcesses(context.Background(), socket, NewSchedule(nil))
 	if err != nil {
 		t.Fatal(err)

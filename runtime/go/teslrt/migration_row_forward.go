@@ -31,6 +31,10 @@ type pgRowForwardManifest struct {
 	indexJobs                 []pgMigrationIndexJob
 }
 
+func pgRowEpochPreserving(plan *pgRowPhysicalPlan) bool {
+	return plan != nil && len(plan.windows) == 0 && len(plan.retirements) == 0
+}
+
 func pgRowForwardOperations(previous, plan *pgRowPhysicalPlan) ([]pgRowForwardOperation, error) {
 	if previous == nil || plan == nil || plan.version != previous.version+1 {
 		return nil, fmt.Errorf("row execution requires an adjacent checked physical revision")
@@ -39,7 +43,7 @@ func pgRowForwardOperations(previous, plan *pgRowPhysicalPlan) ([]pgRowForwardOp
 		return nil, err
 	}
 	var indexes []pgRowConcurrentIndex
-	if len(plan.windows) == 0 {
+	if pgRowEpochPreserving(plan) {
 		var err error
 		indexes, err = pgDeriveRowConcurrentIndexes(previous, plan)
 		if err != nil {
@@ -124,7 +128,7 @@ func pgReadRowForwardManifest(ctx context.Context, tx pgx.Tx, b *pgRowBaseline) 
 		if err != nil {
 			return nil, err
 		}
-		if preserving != (len(plan.windows) == 0) {
+		if preserving != pgRowEpochPreserving(plan) {
 			return nil, fmt.Errorf("physical epoch mode differs from checked window inventory")
 		}
 		if plan.version != version || plan.family != b.history.Family || plan.namespace != b.history.Namespace {
@@ -301,7 +305,7 @@ func pgVerifyRowExpansionHistory(state PgMigrationControlState, b *pgRowBaseline
 			}
 			continue
 		}
-		if intent.Version != version || intent.SnapshotHash != m.plan.hash || intent.ArtifactHash != m.plan.hash || intent.SourceABI != m.creatorABI || intent.StoredValueCompatibility != m.compatibility || intent.EpochPreserving != (len(m.plan.windows) == 0) || intent.OperationCount != len(m.operations) {
+		if intent.Version != version || intent.SnapshotHash != m.plan.hash || intent.ArtifactHash != m.plan.hash || intent.SourceABI != m.creatorABI || intent.StoredValueCompatibility != m.compatibility || intent.EpochPreserving != pgRowEpochPreserving(m.plan) || intent.OperationCount != len(m.operations) {
 			return fmt.Errorf("future row intent differs from exact manifest")
 		}
 		if executor && state.Current < version && b.history.CurrentVersion == version && intent.SourceABI != b.history.SourceCompilerABI {
@@ -325,7 +329,7 @@ func pgVerifyRowExpansionHistory(state PgMigrationControlState, b *pgRowBaseline
 		if len(steps) != boolInt(hasExpanded)+boolInt(hasRetired)+boolInt(hasContracting)+boolInt(hasContracted) {
 			return fmt.Errorf("unknown row lifecycle step")
 		}
-		if len(m.plan.windows) == 0 {
+		if pgRowEpochPreserving(m.plan) {
 			if c != nil || m.processingABI != "" {
 				return fmt.Errorf("additive revision cannot carry row processing or a destructive Contract")
 			}

@@ -227,6 +227,37 @@ migration = Migration { from: %s, to: %s, same: [], entities: {} }
 |} (I.root_module before) (I.root_module after) (I.root_module before) (I.root_module after) in
   let source=Migration_header.encode header ^ body in
   write "migrations/todo/v2.tesl" source,source
+let public_queue_row_boundary () = with_project (fun root write ->
+  let schema=source |> replace "record Notify" "import Tesl.Json exposing [stringCodec]\nrecord Notify"
+    |> replace "Notify, Other]" "Notify, Other, Note]" in
+  let schema=schema ^ {|codec Notify { toJson { text -> "text" with_codec stringCodec } fromJson [ { text <- "text" with_codec stringCodec } ] }
+entity Note table "notes" primaryKey id { id: String, title: String }
+|} in
+  let file=write "schema/todo/v-current.tesl" schema in accepts file schema;
+  let program=app |> replace "[Database, Memory]" "[Database, Postgres, PostgresConfig, TcpConnection]"
+    |> replace "backend: Memory" "backend: Postgres (PostgresConfig { namespace: \"todo\", dbName: \"unused\", user: \"unused\", password: \"\", connection: TcpConnection { host: \"127.0.0.1\", port: 5432 } })" in
+  let entry=write "todo-app.tesl" program in accepts entry program;
+  (match Compile.compile_go_file entry with
+   | Compile.GoFailure ds -> fail(describes ds)
+   | Compile.GoSuccess artifacts -> check bool "ordinary mixed app carries checked physical history" true
+       (List.exists(fun(a:Emit_go.artifact)->Filename.basename a.path="retained-physical-history.json")artifacts));
+  freeze root;
+  let abi=Result.get_ok(Migration_abi.current()) in
+  let load file=match I.load_with_compatibility ~stored_value_compatibility:(Some(Migration_abi.stored_value_compatibility abi))
+    ~compiler_abi:(Migration_abi.id abi) ~root_file:file with Ok i->i | Error e->fail e.message in
+  let previous=load(Filename.concat root "schema/todo/v1.tesl") in
+  let changed=replace "title: String" "headline: String" schema in
+  ignore(write "schema/todo/v-current.tesl" changed); accepts file changed;
+  let current=load file in
+  let edge,body=write_edge root write previous current(seal root previous) in
+  let body=body |> replace "[Migration, Same(..)]" "[Migration, Same(..), Entity(..), Rule(..)]"
+    |> replace "entities: {}" "entities: { Note: Derived [Rename title headline] }" in
+  ignore(write "migrations/todo/v2.tesl" body); accepts edge body;
+  match Compile.compile_go_file entry with
+  | Compile.GoSuccess _ -> fail "queue-bearing transformation emitted before queue retirement exists"
+  | Compile.GoFailure ds -> check bool (describes ds) true
+      (List.exists(fun(d:Compile.diagnostic)->d.code="V001" && Compile.string_contains d.message
+        "queue-bearing row history currently requires additive entity migrations")ds))
 let frontend_edges () =
   List.iter (fun after -> pair source after (fun root write before after previous ->
     let path,edge=write_edge root write before after previous in
@@ -349,11 +380,12 @@ let native_source_projection () =
     capture "history-"
    end;
 
-   (* Source-only validation does not turn on captured queue emission. *)
+   (* Queue emission carries the checked source companion; runtime topology
+      admission remains a separate requirement. *)
    if not empty then match Compile.compile_row_source_artifacts entry program with
-   |Compile.GoSuccess _->fail "source projection activated row queue artifacts"
-   |Compile.GoFailure ds->check bool (describes ds) true
-     (List.exists(fun(d:Compile.diagnostic)->Compile.string_contains d.message "retained queue inventories")ds))) [false;true];
+   |Compile.GoSuccess artifacts->check bool "queue-only history has its checked row companion" true
+     (List.exists(fun(a:Emit_go.artifact)->Filename.basename a.path="row-transform-history.json")artifacts)
+   |Compile.GoFailure ds->fail(describes ds))) [false;true];
   (* All source scopes are gone. These files are test inputs, not installation or
      callback authority. Runtime negatives mutate the actual compiler snapshots. *)
   let repo=Sys.getenv "TESL_REPO_ROOT" in
@@ -422,8 +454,9 @@ func TestOriginalRowQueueCatalog(t *testing.T) {
    let edge,body=write_edge root write previous current(seal root previous) in accepts edge body;
    let second=emit "v2" root entry program in
    (match Compile.compile_row_source_artifacts entry program with
-   |Compile.GoSuccess _->fail "ordinary row artifacts accepted nonempty queues"
-   |Compile.GoFailure ds->check bool(describes ds)true(List.exists(fun(d:Compile.diagnostic)->Compile.string_contains d.message "retained queue inventories")ds));
+   |Compile.GoSuccess artifacts->check bool "mixed queue history has its checked row companion" true
+     (List.exists(fun(a:Emit_go.artifact)->Filename.basename a.path="row-transform-history.json")artifacts)
+   |Compile.GoFailure ds->fail(describes ds));
    [first;second]) in
   (* with_project has removed every original Tesl source before native init. *)
   Option.iter(fun destination->
@@ -442,6 +475,7 @@ func TestOriginalRowQueueCatalog(t *testing.T) {
   end)
 
 let () = run "Queue schema prerequisite" ["contracts",[
+  test_case "public mixed queue app and transforming boundary" `Quick public_queue_row_boundary;
   test_case "original installer-only row queue artifacts" `Quick native_row_catalog_artifacts;
   test_case "complete source projection and runtime refusal" `Quick native_source_projection;
   test_case "pure contextual parser" `Quick parser;

@@ -48,9 +48,10 @@ module Lesson82DatabaseMigrations exposing [
 # same API tests: the handlers change only when the app's behavior requires it.
 # Adding a stored derived value that the app must maintain is one such case.
 #
-# This first part exercises ownership and proof-checked writes. The migration
-# planner and executor are still being implemented; this example does not yet
-# demonstrate adoption, column reconciliation, or rolling deployment.
+# This first part exercises ownership and proof-checked writes. The todo
+# migration example extends the same separation through derived, removal and
+# JSONB transformations; this lesson keeps the first boundary small enough to
+# read in one sitting.
 
 import Tesl.Prelude exposing [Bool(..), String]
 import Tesl.String exposing [String.repeat]

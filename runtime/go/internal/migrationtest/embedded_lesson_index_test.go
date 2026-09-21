@@ -21,7 +21,7 @@ import (
 func testCompiledEmbeddedIndexLifecycle(t *testing.T, ctx context.Context, observer *pgx.Conn,
 	binary, taggedBinary string, environment []string, current, oldest string) {
 	t.Helper()
-	directory, err := os.MkdirTemp("", "tesl-embedded-lesson-")
+	directory, err := os.MkdirTemp(os.Getenv("TESL_MIGRATION_TEST_SOCKET_TMPDIR"), "tesl-embedded-lesson-")
 	if err != nil {
 		t.Fatal(err)
 	}

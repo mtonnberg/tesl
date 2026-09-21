@@ -6,9 +6,33 @@
 selected PostgreSQL connection. It reads source only. The version-1
 `migration-plan-preview` response has `ok`, `executable: false`, `compilerAbi`,
 `planHash`, the selected database and namespace, `initialVersion` (default 1),
-and ordered `steps` from that initial installation version.
+and ordered `steps` from that initial installation version for additive histories.
+Transforming histories use the separate row-history shape below.
 Errors preserve the response kind and carry MIG/type diagnostics. Neither a
 successful report nor `epochPreserving` grants execution or admission authority.
+
+## Transforming source histories
+
+Transforming entity-only histories add `planType: "row-history"` and currently
+require `initialVersion: 1`. Their consecutive steps include retained `tables`
+with physical columns and generations; `transforms` with source/target
+field-column mappings, generation requirements and optional runtime-only proof
+enforcement; `codecChanges`; a nullable checked `contract` source summary; and
+`requiresContractVersion` when a prior Contract is required. The native guided
+CLI displays the current revision after checking the selected database, family
+and complete revision sequence.
+
+This remains a source preview: `persistedStateObserved`,
+`inPlaceRewriteAuthorized` and `decoderPruningAuthorized` are false. Contract
+source hashes and operation counts do not attest persisted receipts or finality.
+Codec reports distinguish encoder syntax, ordered decoder alternative changes
+and dependency-closure changes. An unchanged encoder node can still depend on a
+changed nested codec. An appended decoder preserves the old alternatives' prefix,
+but is not directional compatibility evidence; `adapterOnlyEligible` remains
+false. No report permits a same-column rewrite or legacy-decoder pruning.
+Representation changes continue through typed `Retype`/`WriteBack`, retained
+physical storage and checked Contract cleanup. Combined row/queue previews and
+later row-history installation origins are refused.
 
 ## Checked inputs
 

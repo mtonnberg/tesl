@@ -434,8 +434,9 @@ and codecs. `Same` asks the compiler to verify an identity; it cannot assert one
 Pure row helpers can return `Migrated NewRow`, imported from `Tesl.Migration`
 with `Migrated(..)`. `Row value` contains a fully typed value with all required
 proofs; `Reject reason` describes a row that could not be converted. Match both
-branches in helper tests. This result type is available for writing and testing
-converters; the transforming database executor remains under development.
+branches in helper tests. Ordinary PostgreSQL application builds link the checked
+row companion and worker callback for these transformations; queue payload
+transforms and mixed-history adoption remain separate runtime work.
 
 Within a checked migration, `Same` can preserve an unchanged primitive field's
 existing proof when the final `Row` copies or renames that exact field. For
@@ -456,10 +457,19 @@ work remains pinned to the original build. A different contract requires explici
 revalidation; editing recorded history is not a substitute.
 
 The current implementation checks source ownership and history, plans physical
-storage and runs supported additive changes during PostgreSQL startup. An operator
-must first install protected control state. Source generation and checking alone
-do not execute database work. Typed transformations and the remaining deployment
-lifecycle are still under development.
+storage, and runs supported additive and row transformations through the compiled
+PostgreSQL schema worker. An operator must first install protected control state.
+Source generation and checking alone do not execute database work; deploy the
+generated worker and keep the old request binaries admitted until its backfill is
+ready. Queue payload transforms, staged uniqueness and legacy installation
+adoption remain under development.
+
+`tesl migrate plan app.tesl` also previews transforming entity-only histories from
+V1: table generations, row mappings and storage columns, proof enforcement,
+codec changes and checked Contracts. The guided migration command summarizes the
+current revision and any prior Contract requirement. This source-only report
+has `executable: false`; it supplies no persisted finality, in-place rewrite or
+legacy-decoder removal authorization.
 
 [Lesson 82](../example/learn/lesson82-database-migrations.tesl) runs a complete
 notes HTTP app with this separation. Its schema owns the stored entity and title
@@ -479,13 +489,19 @@ when topology is omitted, the presence of `TESL_DEPLOYED` selects Worker.
 
 Records and ADTs stored as JSONB also have a schema, even when the SQL column
 type stays `jsonb`. A codec's `fromJson [current, legacy]` alternatives can read
-both record representations today. This does not prove rolling compatibility: an old
-reader may reject the new encoder's output. Nor does deploying a newer version
-rewrite untouched stored JSON. Keep required legacy decoders until the old
-representations have been eliminated from every occurrence, including nullable
-columns and records nested in ADTs. The migration planner's integration with
-these adapters, typed transformations and verified decoder removal is still
-under development.
+both record representations, but this does not rewrite untouched stored JSON or
+prove that an old reader accepts the new encoder's output. Use a checked `Retype`
+or `Migrate` callback for a representation change, retain the old codec for
+reverse writes, and remove it only through a Contract after old readers and rows
+are gone. The todo migration example demonstrates both record and ADT JSONB
+transitions while keeping its handlers unchanged.
+
+A first proof on an existing primitive field also needs a migration.
+[Lesson 89](../example/learn/lesson89-proof-revalidation.md) runs a complete notes
+app whose handlers stay unchanged while `Revalidate` checks retained titles.
+Invalid old values need repair; retained old writers can still introduce them
+until Contract retires those versions. This enforces a runtime proof without
+adding a SQL `CHECK` constraint.
 
 Tesl derives the database schema directly from your `entity` and `database` declarations. On first
 run it creates any missing tables automatically — no separate migration file needed to get started:

@@ -235,7 +235,7 @@ func interruptLessonExpansion(t *testing.T, ctx context.Context, binary string, 
 	t.Helper()
 	// Stop after the actual A executor commits its immutable intent, before
 	// any DDL. B must not resume it even though its stored-value contract agrees.
-	directory, err := os.MkdirTemp("", "tesl-upgrade-crash-")
+	directory, err := os.MkdirTemp(os.Getenv("TESL_MIGRATION_TEST_SOCKET_TMPDIR"), "tesl-upgrade-crash-")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -286,19 +286,15 @@ func interruptLessonExpansion(t *testing.T, ctx context.Context, binary string, 
 
 func migrationUpgradeSnapshot(t *testing.T, ctx context.Context, conn *pgx.Conn) string {
 	t.Helper()
-	var snapshot string
+	control := migrationApplicationControlSnapshot(t, ctx, conn, "additive_notes")
+	var application string
 	err := conn.QueryRow(ctx, `select jsonb_build_object(
- 'meta',(select jsonb_agg(to_jsonb(m) order by id) from additive_notes.tesl_schema_meta m),
- 'state',(select jsonb_agg(to_jsonb(s) order by id) from additive_notes.tesl_schema_state s),
- 'history',(select jsonb_agg(to_jsonb(v) order by version,step,seq) from additive_notes.tesl_schema_versions v),
- 'intents',(select jsonb_agg(to_jsonb(e) order by version) from additive_notes.tesl_schema_expansions e),
- 'objects',(select jsonb_agg(to_jsonb(o) order by version,ordinal) from additive_notes.tesl_schema_expansion_objects o),
  'rows',(select jsonb_agg(to_jsonb(n) order by id) from additive_notes.lesson_migration_notes n),
- 'columns',(select jsonb_agg(to_jsonb(c) order by table_name,ordinal_position) from information_schema.columns c where table_schema='additive_notes'))::text`).Scan(&snapshot)
+ 'columns',(select jsonb_agg(to_jsonb(c) order by table_name,ordinal_position) from information_schema.columns c where table_schema='additive_notes'))::text`).Scan(&application)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return snapshot
+	return control + "\n" + application
 }
 
 func assertMigrationStartupRefuses(t *testing.T, ctx context.Context, binary string, environment []string, conn *pgx.Conn, reason string) {

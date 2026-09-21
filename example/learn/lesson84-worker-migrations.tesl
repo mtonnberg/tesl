@@ -27,6 +27,8 @@ module Lesson84WorkerMigrations exposing [
 # restarts the old binary, and verifies the request login cannot execute DDL or
 # migration lifecycle functions. It also verifies the worker starts no HTTP server.
 # It runs these API tests in both revisions and checks this app file is unchanged.
+# The todo showcase keeps this worker/request split for its derived, removal and
+# JSONB migrations as well.
 #
 # For your deployment, an operator provisions those roles and configures the
 # NOTES_DB_* connection values, NOTES_CONTROL_OWNER, NOTES_REQUEST_ROLE, and

@@ -52,6 +52,35 @@ if ! printf '%s\n' "$test_output" | grep -q '^ok'; then
   exit 1
 fi
 
+# The todo showcase is the public regression for non-additive history. Keep it
+# in this cheap Go CLI gate so a compiler can never regress to emitting only the
+# additive envelope for a checked Derived/Migrate/Retype history. The command
+# runs every migration fixture (including V10→V13) and the unchanged app tests.
+complex_output="$(run_cli test "$REPO_ROOT/example/db-migration-example/todo-app.tesl" 2>&1)" || {
+  printf '%s\n' "$complex_output" >&2
+  echo "go-cli-smoke: complex todo migration history failed" >&2
+  exit 1
+}
+for migration_package in teslmodschematodomigratev10 teslmodschematodomigratev11 \
+  teslmodschematodomigratev12 teslmodschematodomigratev13; do
+  if ! printf '%s\n' "$complex_output" | grep -q "$migration_package"; then
+    printf '%s\n' "$complex_output" >&2
+    echo "go-cli-smoke: complex todo history omitted $migration_package" >&2
+    exit 1
+  fi
+done
+
+revalidate_output="$(run_cli test "$REPO_ROOT/example/learn/db-revalidation/app.tesl" 2>&1)" || {
+  printf '%s\n' "$revalidate_output" >&2
+  echo "go-cli-smoke: proof revalidation lesson failed" >&2
+  exit 1
+}
+if ! printf '%s\n' "$revalidate_output" | grep -q '^PASS'; then
+  printf '%s\n' "$revalidate_output" >&2
+  echo "go-cli-smoke: proof revalidation fixtures were omitted" >&2
+  exit 1
+fi
+
 mkdir -p "$TMP/project"
 cp "$REPO_ROOT/example/todo-api.tesl" "$TMP/project/todo-api.tesl"
 printf '%s\n' '[project]' 'name = "go-cli-smoke"' 'entrypoint = "todo-api.tesl"' > "$TMP/project/tesl.toml"

@@ -1,5 +1,7 @@
-(** Source-only transformation judgment. Physical planning still refuses these
-    entries; this descriptor grants no callback, generation or persisted authority. *)
+(** Checked transformation judgment. The descriptor carries the typed callback
+    and closure evidence consumed by the physical row planner; persisted
+    authority is granted only after the owning Program seals the complete
+    source and contract history. *)
 open Ast
 module S = Migration_sparse
 module R = Migration_transform_rules
@@ -219,9 +221,7 @@ let result_type modules owner expected = function
   | _ -> false
 
 (* Signature equality is nominal in each original owner, never a comparison of
-   surface spelling or a coercion through JSON. Proof-bearing nested types remain
-   ordinary checked constructors; direct field predicates need a dedicated
-   return-evidence judgment and are refused here. *)
+   surface spelling or a coercion through JSON. *)
 let rec same_type modules owner old_owner a b = match a,b with
   | TName x,TName y -> (match resolver modules owner IR.Type x.name, resolver modules old_owner IR.Type y.name with
       | Some x,Some y -> x=y | _ -> false)
@@ -250,11 +250,34 @@ let reverse_field ~rule modules (previous:I.stored_field) loc =
 let bind_reverse_function ~rule modules root entity previous loc expression =
   let binding=bind_function modules root expression in
   let old_owner,field=reverse_field ~rule modules previous loc in
+  (* The ordinary frontend checks how the function obtains its return evidence.
+     Here bind that evidence to this exact historical field, before proof erasure
+     in the generated reverse constructor. Matching spelling alone would accept
+     a different schema's fact. Cross-field predicates remain rejected above. *)
+  let rec same_proof subject actual expected = match actual,expected with
+   | PredApp actual,PredApp expected ->
+     actual.args=List.map(fun name -> if name=field.name then subject else name)expected.args &&
+     (match resolver modules binding.owner IR.Predicate actual.pred,
+            resolver modules old_owner IR.Predicate expected.pred with
+      | Some actual,Some expected -> actual=expected
+      | _ -> false)
+   | PredAnd actual,PredAnd expected ->
+     same_proof subject actual.left expected.left && same_proof subject actual.right expected.right
+   | _ -> false in
+  let result_matches = function
+   | RetPlain result when field.proof_ann=None ->
+     same_type modules binding.owner old_owner result.ty field.type_expr
+   | RetAttached result ->
+     same_type modules binding.owner old_owner result.binding.type_expr field.type_expr &&
+     (match result.binding.proof_ann,field.proof_ann with
+      | Some actual,Some expected -> same_proof result.binding.name actual expected
+      | _ -> false)
+   | _ -> false in
   (match binding.declaration.params,binding.declaration.return_spec with
-   | [parameter],RetPlain result when parameter.proof_ann=None && field.proof_ann=None &&
+   | [parameter],result when parameter.proof_ann=None &&
        entity_type modules binding.owner entity parameter.type_expr &&
-       same_type modules binding.owner old_owner result.ty field.type_expr -> ()
-   | _ -> reject "MIG021" loc (rule ^ " requires exactly To.Entity -> previous field type; direct field proof returns are not supported yet"));
+       result_matches result -> ()
+   | _ -> reject "MIG021" loc (rule ^ " requires exactly To.Entity -> previous field type, with the exact previous field proof when present"));
   binding
 
 let bind_writeback modules root entity (mapping:R.writeback) : writeback_binding =
@@ -268,7 +291,7 @@ let bind_legacy modules root entity (mapping:R.legacy) : legacy_binding =
     | R.Function expression -> Some (bind_reverse_function ~rule:"LegacyWith" modules root entity mapping.previous mapping.loc expression) in
   {mapping;function_binding}
 
-let check_returns modules binding mapping =
+let check_returns modules root binding mapping =
   let accepted=ref [] in
   let old = (List.hd binding.declaration.params).name in
   let shadow name loc = if name=old then reject "MIG018" loc "the original row parameter cannot be shadowed in a migration" in
@@ -303,7 +326,7 @@ let check_returns modules binding mapping =
           | EUnop {op=UNeg;arg=ELit {lit=LFloat f;_};_} -> C.float (-. f)
           | _ -> Error "not an exact literal" in
         if literal value<>Ok expected then reject "MIG018" (at value) ("`" ^ field.name ^ "` must use its declared Default literal")
-      | R.Empty_optional _ | R.Computed _ | R.Retyped _ -> ()) mapping.R.values in
+      | R.Empty_optional _ | R.Computed _ | R.Retyped _ | R.Revalidated _ -> ()) mapping.R.values in
   let row value = match value with
     | ERecord {type_hint=Some name;fields;loc}
         when resolver modules binding.owner IR.Type name=Some (IR.Global mapping.R.current.entity_name) -> literal fields loc; accepted := value :: !accepted
@@ -319,7 +342,11 @@ let check_returns modules binding mapping =
       | "Row",[value] when resolver modules binding.owner IR.Value "Row"=Some (IR.Primitive "Tesl.Migration.Row") -> row value
       | "Reject",[_] when resolver modules binding.owner IR.Value "Reject"=Some (IR.Primitive "Tesl.Migration.Reject") -> ()
       | _ -> reject "MIG018" (at value) "every row-function result must be an explicit Row target literal or Reject reason") in
-  returns binding.declaration.body; List.rev !accepted
+  returns binding.declaration.body;
+  (match Migration_revalidate.check ~resolve:(resolver modules) ~modules ~root
+      ~owner:binding.owner ~declaration:binding.declaration ~mapping with
+   | Ok () -> () | Error errors -> raise (Invalid errors));
+  List.rev !accepted
 
 (* A row result is a non-propagating boundary. Follow named executable
    dependencies with their declaration-owner scope; HTTP checks must not become
@@ -391,7 +418,7 @@ let prepare ~project_root:_ ~source root rules ~functions ~fixtures =
            | [parameter] when parameter.proof_ann=None && entity_type modules binding.owner mapping.previous.entity_name parameter.type_expr &&
                result_type modules binding.owner mapping.current.entity_name binding.declaration.return_spec -> ()
            | _ -> reject "MIG021" request.loc (Printf.sprintf "%s requires exactly `%s -> Migrated %s`" mapping.identity mapping.previous.entity_name mapping.current.entity_name));
-          Hashtbl.add accepted_rows binding.identity (check_returns modules binding mapping);
+          Hashtbl.add accepted_rows binding.identity (check_returns modules root binding mapping);
           Some binding in
       let fixtures = List.filter (fun binding ->
         binding.declaration.params=[] && match binding.declaration.return_spec with

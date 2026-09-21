@@ -1,0 +1,124 @@
+# tesl:migration-history:v1
+# tesl:migration-from
+# tesl:snapshot-seal:v3 Schema.Todo.V12 7465736c2d736f757263652d6162692d76313a63613638306234663266366333346163626435653832366332306161623732616365353837646139313536636163336531626134356265363462386234306163 tesl-stored-value-v1:9b265343069c361d3879d623b69de5081f934ec0f2f8826dc0efeda951384a30 b03f4888f4480cf1d5fb38435c7a4ac1ef081a8dc56a58a3962777411156c6fe queue-inventory-v1
+# tesl:snapshot-source Schema.Todo.V12 3bd6964422001da07833aad145bdc39480edb28848302422a7f88914232597ce
+# tesl:snapshot-end
+# tesl:migration-to
+# tesl:snapshot-seal:v3 Schema.Todo.VCurrent 7465736c2d736f757263652d6162692d76313a63613638306234663266366333346163626435653832366332306161623732616365353837646139313536636163336531626134356265363462386234306163 tesl-stored-value-v1:9b265343069c361d3879d623b69de5081f934ec0f2f8826dc0efeda951384a30 a28a7fc8636ce5fbfd63eeaabf3ef05b862a13c6ea8bec32bc90984aefbe5ada queue-inventory-v1
+# tesl:snapshot-source Schema.Todo.VCurrent 860078b9cf1f51cfc2af298a1b8fd46ea564bb5d6fa9aeb8ee322a4ac8ab2739
+# tesl:snapshot-end
+# tesl:migration-history:end
+module Schema.Todo.Migrate.V13 exposing [migration]
+import Tesl.Migration exposing [Migration, Entity(..), Rule(..), Same(..), Migrated(..)]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.Prelude exposing [Bool(..), Int, String]
+import Schema.Todo.V12
+import Schema.Todo.VCurrent
+
+migration = Migration {
+  from: Schema.Todo.V12
+  to: Schema.Todo.VCurrent
+  same: [Same Schema.Todo.V12.ValidTitle Schema.Todo.VCurrent.ValidTitle]
+  fixtures: [previousImported, previousCreated]
+  entities: { Todo: Migrate tagPriorityInfo [Retype priorityInfo, WriteBack priorityInfo priorityInfo previousInfo] }
+}
+
+fn tagPriorityInfo(old: Schema.Todo.V12.Todo) -> Migrated Schema.Todo.VCurrent.Todo =
+  Row (Schema.Todo.VCurrent.Todo {
+    id: old.id
+    title: old.title
+    completed: old.completed
+    details: old.details
+    dueAt: old.dueAt
+    projectId: old.projectId
+    priorityWeight: old.priorityWeight
+    priorityInfo: upgradeInfo old.priorityInfo
+    reminderAt: old.reminderAt
+  })
+
+# The old stored record is nonempty. Preserve its weight and every imported
+# origin string; classify only the exact constructor-owned "created" value.
+fn upgradeInfo(old: Schema.Todo.V12.PriorityInfo) -> Schema.Todo.VCurrent.PriorityInfo =
+  if old.origin == "created" then
+    Schema.Todo.VCurrent.Created { weight: old.weight }
+  else
+    Schema.Todo.VCurrent.Imported { weight: old.weight, source: old.origin }
+
+# Return the exact frozen V12 record. Its original codec owns old-column writes.
+fn previousInfo(current: Schema.Todo.VCurrent.Todo) -> Schema.Todo.V12.PriorityInfo =
+  case current.priorityInfo of
+    Schema.Todo.VCurrent.Created { weight } ->
+      Schema.Todo.V12.PriorityInfo { weight: weight, origin: "created" }
+    Schema.Todo.VCurrent.Imported { weight, source } ->
+      Schema.Todo.V12.PriorityInfo { weight: weight, origin: source }
+
+fn previousRecord(weight: Int, origin: String) -> Maybe Schema.Todo.V12.Todo =
+  case Schema.Todo.V12.tryTitle "Convert a real stored record" of
+    Nothing -> Nothing
+    Something title -> Something (Schema.Todo.V12.Todo {
+      id: origin
+      title: title
+      completed: False
+      details: Nothing
+      dueAt: Nothing
+      projectId: Nothing
+      priorityWeight: weight
+      priorityInfo: Schema.Todo.V12.PriorityInfo { weight: weight, origin: origin }
+      reminderAt: Nothing
+    })
+
+fn previousImported() -> Maybe Schema.Todo.V12.Todo =
+  previousRecord 4 "migrated-v11"
+
+fn previousCreated() -> Maybe Schema.Todo.V12.Todo =
+  previousRecord 2 "created"
+
+test "nonempty imported record becomes tagged data and reverses exactly" {
+  case previousImported() of
+    Nothing -> expect False
+    Something old ->
+      case tagPriorityInfo old of
+        Reject reason -> expect False
+        Row current ->
+          case current.priorityInfo of
+            Schema.Todo.VCurrent.Created { weight } -> expect False
+            Schema.Todo.VCurrent.Imported { weight, source } ->
+              expect weight == 4
+              expect source == "migrated-v11"
+          let previous = previousInfo current
+          expect previous.weight == old.priorityInfo.weight
+          expect previous.origin == old.priorityInfo.origin
+          expect current.priorityWeight == old.priorityWeight
+          expect current.title == old.title
+          expect current.id == old.id
+}
+
+test "nonempty created record uses its own tag and old record codec shape" {
+  case previousCreated() of
+    Nothing -> expect False
+    Something old ->
+      case tagPriorityInfo old of
+        Reject reason -> expect False
+        Row current ->
+          case current.priorityInfo of
+            Schema.Todo.VCurrent.Imported { weight, source } -> expect False
+            Schema.Todo.VCurrent.Created { weight } -> expect weight == 2
+          let previous = previousInfo current
+          expect previous.weight == 2
+          expect previous.origin == "created"
+          expect previous.weight == old.priorityInfo.weight
+          expect previous.origin == old.priorityInfo.origin
+}
+
+test "unchanged app constructor writes Created and remains V12 compatible" {
+  case Schema.Todo.VCurrent.tryTitle "New tagged work" of
+    Nothing -> expect False
+    Something title ->
+      let current = Schema.Todo.VCurrent.newTodo "new-adt" title
+      case current.priorityInfo of
+        Schema.Todo.VCurrent.Imported { weight, source } -> expect False
+        Schema.Todo.VCurrent.Created { weight } -> expect weight == 1
+      let previous = previousInfo current
+      expect previous.weight == 1
+      expect previous.origin == "created"
+}

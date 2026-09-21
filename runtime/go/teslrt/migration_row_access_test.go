@@ -110,3 +110,21 @@ func TestPgRowQueryMissingProjectionRefusesBeforeResolution(t *testing.T) {
 		}
 	}
 }
+
+func TestPgRowQueryRevalidateStillRequiresAdmittedProjection(t *testing.T) {
+	source := "title"
+	query := PgRowSQL([]string{" where ", "=$1 order by ", " asc"}, []string{"title", "title"}, nil)
+	for _, kind := range []string{"revalidate", "retype", "computed"} {
+		descriptor := PgRowTransformDescriptor{FieldMapping: []PgRowFieldMapping{{Kind: kind, Source: &source, Target: source}}}
+		for _, token := range []*pgRowTransactionAdmission{nil, {}, {plan: &pgRowPhysicalPlan{}}} {
+			_, err := query.statement(token, descriptor)
+			want := "unchanged stored field"
+			if kind == "revalidate" {
+				want = "admitted entity projection"
+			}
+			if err == nil || !strings.Contains(err.Error(), want) {
+				t.Fatalf("%s predicate authority: got %v, want %s", kind, err, want)
+			}
+		}
+	}
+}

@@ -354,8 +354,29 @@ func (app *App) migrationWizardPlan(ctx context.Context, options migrationWizard
 		OK               bool
 		Database, Family string
 		Errors           []migrationWizardDiagnostic
+		PlanType         string
+		Executable       *bool
+		InitialVersion   int
 		Steps            []struct {
-			Version         int
+			Version                 int
+			RequiresContractVersion *int
+			Tables                  []struct {
+				Entity, Table string
+				Generation    int
+			}
+			Transforms []struct {
+				Entity, Table, Mode                                   string
+				FromGeneration, ToGeneration, RequiresFinalGeneration int
+				Fields                                                []struct {
+					Target, Kind, TargetColumn             string
+					Source, SourceColumn, ProofEnforcement *string
+				}
+			}
+			CodecChanges []json.RawMessage
+			Contract     *struct {
+				SourceFile, SourceHash string
+				OperationCount         int
+			}
 			EpochPreserving bool
 			Operations      []struct {
 				Kind, Table string
@@ -379,18 +400,78 @@ func (app *App) migrationWizardPlan(ctx context.Context, options migrationWizard
 		}
 		return fmt.Errorf("migration sources compile, but PostgreSQL planning is not ready: %w", err)
 	}
-	if plan.Version != 1 || plan.Kind != "migration-plan-preview" || !plan.OK {
+	if plan.Version != 1 || plan.Kind != "migration-plan-preview" || !plan.OK ||
+		plan.Executable == nil || *plan.Executable || (plan.PlanType != "" && plan.PlanType != "row-history") {
 		return fmt.Errorf("compiler did not return a successful supported migration plan")
 	}
 	if plan.Database != options.selection.Database || plan.Family != options.selection.Family ||
 		len(plan.Steps) == 0 || plan.Steps[len(plan.Steps)-1].Version != current {
 		return fmt.Errorf("guided migration plan selection changed after the saved application check; review the current source before deploying")
 	}
+	if plan.PlanType == "row-history" {
+		if plan.InitialVersion != 1 || len(plan.Steps) != current {
+			return fmt.Errorf("row-history preview must cover every selected revision from V1")
+		}
+		for index, step := range plan.Steps {
+			if step.Version != index+1 || step.Tables == nil ||
+				(step.RequiresContractVersion != nil && (*step.RequiresContractVersion < 1 || *step.RequiresContractVersion >= step.Version)) {
+				return fmt.Errorf("row-history preview has an invalid or incomplete revision sequence")
+			}
+		}
+	}
 	if _, err := fmt.Fprintf(app.Stdout, "Application checks passed. PostgreSQL plan for %s V%d:\n", plan.Database, current); err != nil {
 		return err
 	}
 	for _, step := range plan.Steps {
 		if step.Version != current {
+			continue
+		}
+		if plan.PlanType == "row-history" {
+			if step.RequiresContractVersion != nil {
+				if _, err := fmt.Fprintf(app.Stdout, "  Requires the prior Contract for V%d before this revision.\n", *step.RequiresContractVersion); err != nil {
+					return err
+				}
+			}
+			for _, table := range step.Tables {
+				if _, err := fmt.Fprintf(app.Stdout, "  entity %s: table %s, generation %d\n", strconv.Quote(table.Entity), strconv.Quote(table.Table), table.Generation); err != nil {
+					return err
+				}
+			}
+			for _, transform := range step.Transforms {
+				if _, err := fmt.Fprintf(app.Stdout, "  %s %s: generation %d -> %d; required final generation %d\n", transform.Mode, strconv.Quote(transform.Entity), transform.FromGeneration, transform.ToGeneration, transform.RequiresFinalGeneration); err != nil {
+					return err
+				}
+				for _, field := range transform.Fields {
+					source, storage := "<computed>", "<none>"
+					if field.Source != nil {
+						source = strconv.Quote(*field.Source)
+					}
+					if field.SourceColumn != nil {
+						storage = strconv.Quote(*field.SourceColumn)
+					}
+					if _, err := fmt.Fprintf(app.Stdout, "    %s %s -> %s; storage %s -> %s", field.Kind, source, strconv.Quote(field.Target), storage, strconv.Quote(field.TargetColumn)); err != nil {
+						return err
+					}
+					if field.ProofEnforcement != nil {
+						if _, err := fmt.Fprintf(app.Stdout, "; proof enforcement: %s", strconv.Quote(*field.ProofEnforcement)); err != nil {
+							return err
+						}
+					}
+					if _, err := fmt.Fprintln(app.Stdout); err != nil {
+						return err
+					}
+				}
+			}
+			if step.Contract != nil {
+				if _, err := fmt.Fprintf(app.Stdout, "  Checked Contract source: %s (%d operations)\n", strconv.Quote(step.Contract.SourceFile), step.Contract.OperationCount); err != nil {
+					return err
+				}
+			}
+			if len(step.CodecChanges) > 0 {
+				if _, err := fmt.Fprintf(app.Stdout, "  %d stored codec change reports; review the full migrate plan output.\n", len(step.CodecChanges)); err != nil {
+					return err
+				}
+			}
 			continue
 		}
 		for _, operation := range step.Operations {
@@ -404,6 +485,11 @@ func (app *App) migrationWizardPlan(ctx context.Context, options migrationWizard
 			if _, err := fmt.Fprintf(app.Stdout, "  %s %s\n", operation.Kind, strconv.Quote(object)); err != nil {
 				return err
 			}
+		}
+	}
+	if plan.PlanType == "row-history" {
+		if _, err := fmt.Fprintln(app.Stdout, "This is a source preview, not persisted finality or decoder-removal evidence."); err != nil {
+			return err
 		}
 	}
 	_, err = fmt.Fprintln(app.Stdout, "\nReview the migration and run your application tests, then build the release.\nFor Worker deployments, start the release with --schema worker and wait for\nschema-worker-ready before rolling out request processes. Use installer credentials\nwith --schema install when provisioning or explicitly upgrading control metadata.\nThis session prepared source files; it did not connect to PostgreSQL.")

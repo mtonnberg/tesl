@@ -5,6 +5,7 @@ func pgRowEpochFunctions(namespace string) []pgMigrationControlFunction {
 	return []pgMigrationControlFunction{{"tesl_close_row_epoch", "old_min integer, through_version integer, uuid text, fence integer, physical_hashes text[], doc bytea, digest text, abi text, forced boolean", "void", "volatile", `
 declare s ` + ns + `tesl_schema_state%rowtype; compatibility text; old integer;
 begin
+ if exists(select 1 from ` + ns + `tesl_queue_contracts) then raise exception 'tesl: queue-bearing history retirement is not supported'; end if;
  if old_min is null or old_min<1 or through_version is null or through_version<=old_min or through_version>2147483646 or
  physical_hashes is null or pg_catalog.array_lower(physical_hashes,1) is distinct from 1 or pg_catalog.cardinality(physical_hashes)<>through_version or
  doc is null or digest is null or digest !~ '^[0-9a-f]{64}$' or pg_catalog.encode(pg_catalog.sha256(doc),'hex') is distinct from digest or
@@ -13,6 +14,8 @@ begin
  if not exists(select 1 from ` + ns + `tesl_schema_meta where id=1 and database_uuid::text=uuid and fence_ns=fence and format_version=5 and initial_version=1 and max_observed_protocol=1 and retirement_protocol_floor=1 and fence_domain='tesl-1') then
  raise exception 'tesl: additive epoch owner or protocol differs'; end if;
  select * into s from ` + ns + `tesl_schema_state where id=1 for update;
+ -- Recheck after the state lock serializes concurrent queue registration.
+ if exists(select 1 from ` + ns + `tesl_queue_contracts) then raise exception 'tesl: queue-bearing history retirement is not supported'; end if;
  if not found or s.current<>through_version or s.min_version<>old_min or s.compat_floor<>old_min or s.installing_version is not null then
  raise exception 'tesl: additive epoch admission state changed'; end if;
  if (select count(*) from ` + ns + `tesl_row_physical)<>through_version or

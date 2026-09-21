@@ -397,8 +397,8 @@ func TestCompiledWorkerLessonRetainsRows(t *testing.T) {
 		login, reason string
 		args          []string
 	}{
-		{requestRole, "configured worker identity", []string{"--schema", "worker", "--json"}},
-		{worker, "configured request identity", nil},
+		{requestRole, "row expansion requires exact Worker login", []string{"--schema", "worker", "--json"}},
+		{worker, "row request readiness requires exact Request login", nil},
 	} {
 		refusalCtx, stopRefusal := context.WithTimeout(ctx, 10*time.Second)
 		refused := exec.CommandContext(refusalCtx, binaries[2], mismatch.args...)
@@ -423,18 +423,59 @@ func TestCompiledWorkerLessonRetainsRows(t *testing.T) {
 
 func workerLessonControlSnapshot(t *testing.T, ctx context.Context, conn *pgx.Conn) string {
 	t.Helper()
-	var snapshot string
-	err := conn.QueryRow(ctx, `select jsonb_build_object(
- 'meta',(select jsonb_agg(to_jsonb(m) order by id) from worker_notes.tesl_schema_meta m),
- 'state',(select jsonb_agg(to_jsonb(s) order by id) from worker_notes.tesl_schema_state s),
- 'history',(select jsonb_agg(to_jsonb(v) order by version,step,seq) from worker_notes.tesl_schema_versions v),
- 'intents',(select jsonb_agg(to_jsonb(e) order by version) from worker_notes.tesl_schema_expansions e),
- 'objects',(select jsonb_agg(to_jsonb(o) order by version,ordinal) from worker_notes.tesl_schema_expansion_objects o),
- 'columns',(select jsonb_agg(to_jsonb(c) order by table_name,ordinal_position) from information_schema.columns c where table_schema='worker_notes'))::text`).Scan(&snapshot)
+	return migrationApplicationControlSnapshot(t, ctx, conn, "worker_notes")
+}
+
+// Observe all durable migration metadata in one snapshot. An absent legacy
+// control table is null; a present empty table is [], so creation/removal cannot
+// disappear from no-mutation comparisons. Live instance heartbeats and lease ownership/renewals are excluded; lease
+// names remain part of the durable control inventory.
+func migrationApplicationControlSnapshot(t *testing.T, ctx context.Context, conn *pgx.Conn, namespace string) string {
+	t.Helper()
+	tx, err := conn.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return snapshot
+	defer func() { _ = tx.Rollback(context.Background()) }()
+	snapshot := map[string]json.RawMessage{}
+	tables := []string{
+		"tesl_schema_meta", "tesl_schema_state", "tesl_schema_versions",
+		"tesl_schema_expansions", "tesl_schema_expansion_objects", "tesl_schema_index", "tesl_schema_leases",
+		"tesl_row_baseline", "tesl_row_versions", "tesl_row_queue_sources", "tesl_row_entities",
+		"tesl_row_physical", "tesl_row_epochs", "tesl_row_processing",
+		"tesl_schema_backfill_shards", "tesl_row_finality", "tesl_row_contracts", "tesl_row_contract_objects",
+		"tesl_queue_baseline", "tesl_queue_versions", "tesl_queue_contracts", "tesl_queue_payloads",
+	}
+	for _, table := range tables {
+		relation := pgx.Identifier{namespace, table}.Sanitize()
+		var exists bool
+		if err := tx.QueryRow(ctx, "select to_regclass($1) is not null", relation).Scan(&exists); err != nil {
+			t.Fatal(err)
+		}
+		if !exists {
+			snapshot[table] = json.RawMessage("null")
+			continue
+		}
+		var rows string
+		from := relation
+		if table == "tesl_schema_leases" {
+			from = "(select name from " + relation + ")"
+		}
+		if err := tx.QueryRow(ctx, "select coalesce(jsonb_agg(to_jsonb(r) order by to_jsonb(r)::text),'[]'::jsonb)::text from "+from+" r").Scan(&rows); err != nil {
+			t.Fatal(err)
+		}
+		snapshot[table] = json.RawMessage(rows)
+	}
+	var columns string
+	if err := tx.QueryRow(ctx, "select coalesce(jsonb_agg(to_jsonb(c) order by table_name,ordinal_position),'[]'::jsonb)::text from information_schema.columns c where table_schema=$1", namespace).Scan(&columns); err != nil {
+		t.Fatal(err)
+	}
+	snapshot["columns"] = json.RawMessage(columns)
+	encoded, err := json.Marshal(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(encoded)
 }
 
 type workerLessonProcess struct {

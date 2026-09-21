@@ -538,7 +538,37 @@ let staged_physical_fields ()=
    (Compile.string_contains source "NotNull Note scoreValue");
   refuse plan file (replace source "NotNull Note scoreValue" "NotNull Note score_value");
   refuse plan file (replace source "NotNull Note scoreValue" "NotNull Note optional"))
+let table_retirement () =
+ let old_source=schema "Schema.Work.V1" "" in
+ let new_source={|module Schema.Work.VCurrent exposing [Note]
+import Tesl.Prelude exposing [String]
+entity Note table "notes" primaryKey id { id: String, title: String }
+|} in
+ let migration_source={|module Schema.Work.Migrate.V2 exposing [migration]
+import Tesl.Migration exposing [Migration, Entity(..)]
+import Schema.Work.V1
+import Schema.Work.VCurrent
+migration = Migration { from: Schema.Work.V1, to: Schema.Work.VCurrent,
+ same: [], fixtures: [], entities: { Task: Drop } }
+|} in
+ with_plan ~old_source ~new_source ~migration_source (fun _ plan file source ->
+  require_public_ok file source;
+  let c=accept plan file source in
+  check bool "source requires exact table" true (Compile.string_contains source "drops: [Table Task]");
+  check (list(pair string int)) "no invented generation finality" [] (Contract.final_generations c);
+  check int "only exact table DDL" 1 (List.length (Contract.operations c));
+  (match Contract.canonical c with C.Seq(C.Bytes tag::_) -> check string "distinct table authority" "tesl-table-contract-v1" tag | _ -> fail "canonical Contract");
+  check (list string) "old table retained during overlap" ["Note";"Task"]
+    (List.map(fun(e:R.entity)->e.source.identity)(Contract.window c).entities);
+  check (list string) "settled table absent" ["Note"]
+    (List.map(fun(e:R.entity)->e.source.identity)(Contract.settled c).entities);
+  let other=get(Contract.check ~plan ~namespace:"other" ~file ~source) in
+  check bool "namespace binds retirement" false (Contract.digest c=Contract.digest other);
+  List.iter(fun replacement->refuse plan file (replace source "Table Task" replacement))
+    ["";"Table Note";"Table Task, Table Task";"Trigger Task";"Column Task title"];
+  refuse plan file (replace source "tighten: []" "tighten: [Table Task]"))
 let ()=run "Checked source contracts" ["contract",[
+ test_case "pure table retirement exact authority and no fabricated row finality" `Quick table_retirement;
  test_case "complete checked artifact and settled descriptions" `Quick positive;
  test_case "omitted duplicate foreign and unsupported authority" `Quick omissions;
  test_case "contextual source cannot hide runtime computations" `Quick runtime_shapes;

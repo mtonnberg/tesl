@@ -138,3 +138,16 @@ func TeslTestRowQueueHeaderCases(ctx context.Context, conn *pgx.Conn, database *
 	}
 	return nil
 }
+
+func TeslTestRowQueueRetirementGuard(ctx context.Context, conn *pgx.Conn) error {
+	return pgCheckRowQueueRetirement(ctx, conn, "todo")
+}
+
+func TeslTestRowQueueEpochGuard(ctx context.Context, conn *pgx.Conn, database *Database, roles PgMigrationControlRoles, force, dry bool) error {
+	b, err := pgCompiledRowBaseline(database)
+	if err != nil {
+		return err
+	}
+	_, err = pgExecuteRowEpoch(ctx, conn, b, roles, 2, force, dry)
+	return err
+}

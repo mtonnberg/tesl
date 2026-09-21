@@ -2531,6 +2531,79 @@ let go_import_boundary_diags (filename : string) (m : Ast.module_form) =
              imp.module_name name imp.module_name name))) names
     | _ -> []) m.imports
 
+(* Validate the captured bytes and every dependency before either public or
+   internal row emission. Import signatures alone do not validate hidden bodies. *)
+let checked_row_source_diagnostics filename entry history =
+    let captured=Migration_program.source_modules history in
+    let originals=List.map fst captured in
+    let integrity_diags=match List.find_opt (fun (m,_) ->
+      Source_input.canonical_path m.Ast.source_file=Source_input.canonical_path entry.Ast.source_file) captured with
+     | None -> [go_project_diag filename "captured history lost its original entry source"]
+     | Some (original,bytes) -> Migration_declaration.diagnostics_of_errors
+       (Migration_source_diagnostics.check_module_source bytes original) in
+    let contexts=List.concat_map (fun (_,rows) -> Migration_row_history.bindings rows |> List.map (fun binding ->
+     Migration_transform.proof_context (Migration_transform_link.checked_transform (Migration_row_history.link binding))))
+      (Migration_program.row_histories history) |> List.fold_left (fun acc context -> if List.memq context acc then acc else context::acc) [] in
+    let diagnostics=integrity_diags @ Migration_proof_context.with_contexts contexts (fun () ->
+     List.concat_map (fun (m,bytes) -> Frontend_check.check_module ~additional:(Migration_application.make m) bytes m) captured) in
+    let binding_errors=match Migration_program.verify_bindings (Some (Migration_program.source_program history)) originals with
+     | Ok () -> [] | Error errors -> Migration_declaration.diagnostics_of_errors errors in
+    diagnostics @ binding_errors
+
+(* Every checked PostgreSQL history needs the physical row companion in the
+   ordinary application artifact.  Transforming edges obviously need it, but
+   additive prefixes do too: a later transforming release must be able to use
+   the retained representation without an unsafe implicit format-3 adoption.
+   Route the complete source history through the guarded row path from V1. *)
+let compile_public_row_source ?(debug=false) filename source entry =
+  let mode = if debug then Emit_go.Debug else Emit_go.Release in
+  let result = Migration_program.with_source_history ~entry ~source (function
+    | None -> GoFailure [go_project_diag filename "row migration emission requires a versioned PostgreSQL database"]
+    | Some captured ->
+      let diagnostics = checked_row_source_diagnostics filename entry captured in
+      if List.exists (fun (d:diagnostic) -> d.severity="error") diagnostics then
+        GoFailure diagnostics
+      else
+      let graph_result = Migration_program.source_lowering captured in
+      (match graph_result with
+       | Error errors -> GoFailure (Migration_declaration.diagnostics_of_errors errors)
+       | Ok graph ->
+         let program = Migration_program.source_program captured in
+         let modules = Go_graph_lowering.modules graph in
+         let entry_module = Go_graph_lowering.entry graph in
+         let migration_families = List.map (fun (d : Migration_program.database) ->
+           d.identity, d.family) (Migration_program.databases program) in
+         let migration_queues = Migration_program.queue_bindings program in
+         let queue_codec_records = Migration_program.queue_codec_records program in
+         match Emit_go.compile_project ~mode ~row_storage:true ~row_physical:true
+           ~row_source:captured ~fixture_graph:graph
+           ~migration_families ~migration_queues ~queue_codec_records
+           ~entry:entry_module modules with
+         | Ok artifacts ->
+           (* Preserve the ordinary public metadata files as well as the row
+              companions.  The runtime links the checked source envelope, but
+              release tooling and inspection commands still consume these
+              compact expansion/queue previews. *)
+           let json = Migration_program.to_json ~quote:json_encode_string program in
+           let queue_json = Migration_program.queues_to_json ~quote:json_encode_string program in
+           GoSuccess (artifacts @
+             [{Emit_go.path="migration-history.json";contents=json ^ "\n"};
+              {Emit_go.path="queue-history.json";contents=queue_json ^ "\n"}])
+         | Error errors -> GoFailure (List.map diag_of_go_emit_error errors))) in
+  match result with
+  | Ok output -> output
+  | Error errors -> GoFailure (Migration_declaration.diagnostics_of_errors errors)
+
+let public_row_history_needs_physical entry source =
+  Migration_program.with_source_history ~entry ~source (function
+    | None -> false
+    | Some captured ->
+      (* Every versioned PostgreSQL binary participates in the row baseline
+         protocol.  Additive histories still have no transform bindings, but
+         emitting their physical companion lets a later transforming release
+         advance the same database without an out-of-band format upgrade. *)
+      Migration_program.row_histories captured <> [])
+
 (* Fixtures are executable tests only after the same full declaration judgment
    used by diagnostics. Keep original owners for the Go graph binding. *)
 let checked_migration_fixtures sources =
@@ -2548,6 +2621,13 @@ let compile_go_source ?(debug=false) ?(path="") filename source =
   match parse_module filename source with
   | Err error -> GoFailure (source_parse_diagnostics filename source error)
   | Ok m ->
+    let entry_diags = check_module source m @ go_import_boundary_diags filename m in
+    if List.exists (fun (d:diagnostic) -> d.severity="error") entry_diags then
+      GoFailure entry_diags
+    else match public_row_history_needs_physical m source with
+    | Error errors -> GoFailure (Migration_declaration.diagnostics_of_errors errors)
+    | Ok true -> compile_public_row_source ~debug filename source m
+    | Ok false ->
     let result = Result.join (Migration_application.with_contexts ~source m (fun () ->
       Migration_program.with_history ~entry:m ~source (fun history ->
     let diags = check_module source m in
@@ -2599,10 +2679,10 @@ let compile_go_source ?(debug=false) ?(path="") filename source =
            | Error errors -> GoFailure (List.map diag_of_go_emit_error errors))))) in
     match result with Ok result -> result | Error es -> GoFailure (Migration_declaration.diagnostics_of_errors es)
 
-(** Internal compiler artifact seam for the checked source/typed-registration
-    prerequisite. No CLI path calls this, and its v4 source envelope is not an
-    executable expansion history. Public compilation continues to refuse retained
-    Transform/Reset operations until their physical protocol is implemented. *)
+(** Checked source/typed-registration artifact seam.  The public compiler uses
+    the same path automatically for versioned entity-only PostgreSQL histories;
+    the
+    catalog-only mode remains reserved for compiler/runtime integration tests. *)
 let compile_row_captured_artifacts ~catalog_only ?(mode=Emit_go.Release) ?(storage=false) ?(physical=false) filename source =
  match parse_module filename source with
  | Err error -> GoFailure (source_parse_diagnostics filename source error)
@@ -2610,21 +2690,8 @@ let compile_row_captured_artifacts ~catalog_only ?(mode=Emit_go.Release) ?(stora
   let result=Migration_program.with_source_history ~entry ~source (function
    | None -> GoFailure [go_project_diag filename "row source artifacts require a versioned PostgreSQL database"]
    | Some history ->
-    let captured=Migration_program.source_modules history in
-    let originals=List.map fst captured in
-    let integrity_diags=match List.find_opt (fun (m,_) ->
-      Source_input.canonical_path m.Ast.source_file=Source_input.canonical_path entry.Ast.source_file) captured with
-     | None -> [go_project_diag filename "captured history lost its original entry source"]
-     | Some (original,bytes) -> Migration_declaration.diagnostics_of_errors
-       (Migration_source_diagnostics.check_module_source bytes original) in
-    let contexts=List.concat_map (fun (_,rows) -> Migration_row_history.bindings rows |> List.map (fun binding ->
-     Migration_transform.proof_context (Migration_transform_link.checked_transform (Migration_row_history.link binding))))
-      (Migration_program.row_histories history) |> List.fold_left (fun acc context -> if List.memq context acc then acc else context::acc) [] in
-    let diagnostics=integrity_diags @ Migration_proof_context.with_contexts contexts (fun () ->
-     List.concat_map (fun (m,bytes) -> Frontend_check.check_module ~additional:(Migration_application.make m) bytes m) captured) in
-    let binding_errors=match Migration_program.verify_bindings (Some (Migration_program.source_program history)) originals with
-     | Ok () -> [] | Error errors -> Migration_declaration.diagnostics_of_errors errors in
-    if List.exists (fun (d:diagnostic) -> d.severity="error") (diagnostics @ binding_errors) then GoFailure (diagnostics @ binding_errors) else
+    let diagnostics=checked_row_source_diagnostics filename entry history in
+    if List.exists (fun (d:diagnostic) -> d.severity="error") diagnostics then GoFailure diagnostics else
     match Migration_program.source_lowering history with
     | Error errors -> GoFailure (Migration_declaration.diagnostics_of_errors errors)
     | Ok lowering ->

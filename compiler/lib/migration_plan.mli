@@ -1,9 +1,14 @@
-(** Read-only PostgreSQL expansion planning for complete checked source histories.
-    This checks every revision from V1, then describes storage from the selected
-    initial installation version, including subsequently retained dropped storage.
-    It does not inspect a database, attest persisted history, admit an application
-    or authorize execution. Index work on existing tables requires the concurrent
-    builder; window-narrowing steps require explicit epoch closure. *)
+(** Read-only PostgreSQL planning for complete checked source histories.
+    Additive previews describe storage from the selected initial installation
+    version. Transforming, entity-only histories expose a row-history preview
+    from V1 with retained tables, generations, field mappings, runtime proof
+    enforcement, codec observations and checked Contract source summaries.
+    Neither form inspects a database, attests persisted receipts/finality, admits
+    an application or authorizes execution, in-place rewrites or decoder pruning.
+    Codec observations are not compatibility proofs; typed Retype/WriteBack and
+    retained physical storage remain the conservative representation-change path.
+    Existing-table indexes require concurrent building; narrowing a compatibility
+    window requires the corresponding checked epoch/Contract lifecycle. *)
 type default = Migration_expansion.default = Null | Constant of Migration_canonical.node
 type operation = Migration_expansion.operation =
   | Create_table of Migration_storage.table
@@ -19,6 +24,8 @@ type t
 val generate : project_root:string -> entry_file:string -> database:string option -> initial_version:int ->
   documents:Migration_manifest.document list -> (t,Migration_sparse.error list) result
 val selection : t -> Migration_target.selection
+(** Additive expansion steps. Retained-row previews expose their separate
+    source-only table/transform/codec descriptions through [to_json]. *)
 val steps : t -> step list
 val digest : t -> string
 val compiler_abi : t -> string

@@ -50,6 +50,7 @@ let value_names result =
     | R.Empty_optional field -> "empty:" ^ field.name
     | R.Constant (field,_) -> "constant:" ^ field.name
     | R.Retyped {previous;current} -> "retype:" ^ previous.name ^ ":" ^ current.name
+    | R.Revalidated {previous;current;_} -> "revalidate:" ^ previous.name ^ ":" ^ current.name
     | R.Computed field -> "computed:" ^ field.name) e.values)
 let succeeds coverage entries = match R.check coverage ~entries with
   | Ok result -> result

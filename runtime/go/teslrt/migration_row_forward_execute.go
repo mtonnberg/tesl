@@ -27,11 +27,6 @@ func pgExecuteRowForward(ctx context.Context, conn *pgx.Conn, b *pgRowBaseline, 
 	if err != nil {
 		return result, err
 	}
-	for _, operation := range operations {
-		if operation.index != nil && roles.Request == "" {
-			return result, fmt.Errorf("row concurrent indexes currently require Worker topology")
-		}
-	}
 	err = pgControlTransaction(ctx, conn, false, func(tx pgx.Tx) error {
 		if err := pgControlRoles(ctx, tx, roles, false); err != nil {
 			return err
@@ -97,7 +92,7 @@ func pgExecuteRowForward(ctx context.Context, conn *pgx.Conn, b *pgRowBaseline, 
 			return err
 		}
 		if err := pgExpansionTransaction(ctx, conn, func(tx pgx.Tx) error {
-			_, err := tx.Exec(ctx, "select "+ns+"tesl_register_row_physical($1,$2,$3,$4,$5,$6,$7,$8)", plan.version, previous.hash, contract, plan.hash, b.history.SourceCompilerABI, b.history.StoredValueCompatibility, len(operations), len(plan.windows) == 0)
+			_, err := tx.Exec(ctx, "select "+ns+"tesl_register_row_physical($1,$2,$3,$4,$5,$6,$7,$8)", plan.version, previous.hash, contract, plan.hash, b.history.SourceCompilerABI, b.history.StoredValueCompatibility, len(operations), pgRowEpochPreserving(plan))
 			if err != nil {
 				return err
 			}
@@ -107,7 +102,7 @@ func pgExecuteRowForward(ctx context.Context, conn *pgx.Conn, b *pgRowBaseline, 
 		}
 		migrationBoundary("row-forward-after-manifest")
 		if err := pgExpansionTransaction(ctx, conn, func(tx pgx.Tx) error {
-			_, err := tx.Exec(ctx, "select "+ns+"tesl_begin_expansion($1,$2,$2,$3,$4,$5,$6)", plan.version, plan.hash, b.history.SourceCompilerABI, b.history.StoredValueCompatibility, len(operations), len(plan.windows) == 0)
+			_, err := tx.Exec(ctx, "select "+ns+"tesl_begin_expansion($1,$2,$2,$3,$4,$5,$6)", plan.version, plan.hash, b.history.SourceCompilerABI, b.history.StoredValueCompatibility, len(operations), pgRowEpochPreserving(plan))
 			return err
 		}); err != nil {
 			return err

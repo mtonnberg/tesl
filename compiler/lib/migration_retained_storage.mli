@@ -39,6 +39,9 @@ type window = {
 }
 type version = {
  version : int; entities : entity list; windows : window list;
+ (** Exact retained-only predecessor entities, absent from this revision's logical
+     source. They remain in [entities] until the reviewed table Contract runs. *)
+ retirements : entity list;
  (** A later transforming expansion uses the settled predecessor shape and
      requires the exact checked contract receipt for this earlier transformation.
      An intervening additive revision does not invent another contract. *)

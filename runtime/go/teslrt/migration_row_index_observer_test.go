@@ -10,7 +10,8 @@ import (
 
 // This is a PostgreSQL primitive/observer test using the existing format3 job
 // functions and pure row descriptors. It is not a generated row5 index worker
-// acceptance test; row5 index execution remains explicitly refused.
+// acceptance test. It also exercises Contract's retained-index completion gate
+// after the same exact job and catalog observations used by the full observer.
 func TestPgRowIndexProtectedJobObserver(t *testing.T) {
 	f := pgNewControlTest(t)
 	f.install(t, 1)
@@ -21,6 +22,7 @@ func TestPgRowIndexProtectedJobObserver(t *testing.T) {
 	manifest, _, _ := rowIndexManifest(t)
 	manifest.plan.hash, manifest.creatorABI = strings.Repeat("b", 64), pgTestSourceABI
 	baseline := &pgRowBaseline{history: PgCompiledMigrationHistory{Namespace: f.namespace, CurrentVersion: 1, SourceCompilerABI: pgTestSourceABI}}
+	contract := false
 	read := func(catalog bool) error {
 		return pgControlSnapshotMode(f.ctx, f.worker, pgx.ReadOnly, func(tx pgx.Tx) error {
 			intents, err := pgReadExpansionIntents(f.ctx, tx, f.namespace)
@@ -57,6 +59,9 @@ func TestPgRowIndexProtectedJobObserver(t *testing.T) {
 			if !ready || len(report.Missing)+len(report.Drift) != 0 {
 				return fmt.Errorf("catalog state differs: %+v", report)
 			}
+			if contract {
+				return pgRequireRowContractIndexesComplete(f.ctx, tx, f.namespace)
+			}
 			return nil
 		})
 	}
@@ -66,6 +71,37 @@ func TestPgRowIndexProtectedJobObserver(t *testing.T) {
 	f.call(t, "create index concurrently note_id_lookup on notes_app.notes(id)")
 	if err := read(true); err != nil {
 		t.Fatal("exact actual concurrent index refused", err)
+	}
+	contract = true
+	for _, state := range []string{"pending", "building", "failed"} {
+		var detail any
+		if state == "failed" {
+			detail = "test build failure"
+		}
+		if _, err := f.installer.Exec(f.ctx, "update notes_app.tesl_schema_index set state=$1,attempts=1,error=$2", state, detail); err != nil {
+			t.Fatal(err)
+		}
+		if err := read(true); err == nil || !strings.Contains(err.Error(), "requires all retained index jobs to be valid") {
+			t.Fatal("Contract accepted unfinished protected index despite a valid physical index", state, err)
+		}
+	}
+	if _, err := f.installer.Exec(f.ctx, "update notes_app.tesl_schema_index set state='valid',error=null"); err != nil {
+		t.Fatal(err)
+	}
+	if err := read(true); err != nil {
+		t.Fatal("Contract refused exact completed retained index", err)
+	}
+	f.call(t, "drop index notes_app.note_id_lookup")
+	if err := read(true); err == nil {
+		t.Fatal("Contract accepted completed job with missing physical index")
+	}
+	f.call(t, "create index note_id_lookup on notes_app.notes(key)")
+	if err := read(true); err == nil {
+		t.Fatal("Contract accepted completed job with foreign index shape")
+	}
+	f.call(t, "drop index notes_app.note_id_lookup; create index note_id_lookup on notes_app.notes(id)")
+	if err := read(true); err != nil {
+		t.Fatal("Contract refused restored exact retained index", err)
 	}
 	if _, err := f.installer.Exec(f.ctx, "update notes_app.tesl_schema_index set table_name='foreign'"); err != nil {
 		t.Fatal(err)

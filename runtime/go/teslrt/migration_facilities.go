@@ -79,8 +79,8 @@ func pgRegisterMigrationQueue(database *Database, queue *Queue) {
 }
 
 // This is a local capability restriction, not a persisted footprint or proof
-// that old binaries cannot use durable facilities. Worker runtime tables have no
-// protected installation protocol yet, so a new Worker instance must declare none.
+// that old binaries cannot use durable facilities. Only checked Worker row queues
+// have a protected runtime; other facilities retain their capability refusal.
 // Closing registration and inspecting declarations share one lock: a constructor
 // racing with preflight either makes preflight refuse or itself refuses before
 // creating a backend. Neither side can introduce a facility after validation.
@@ -102,28 +102,61 @@ func pgCheckMigrationFacilities(database *Database) (bool, error) {
 		return false, nil
 	}
 	database.mutex.RLock()
-	defer database.mutex.RUnlock()
-	if database.migrationHistory == nil {
+	history := database.migrationHistory
+	config := database.Config
+	facilities := make([]pgMigrationFacility, 0, len(database.migrationFacilities))
+	for facility := range database.migrationFacilities {
+		facilities = append(facilities, facility)
+	}
+	database.mutex.RUnlock()
+	if history == nil {
 		return false, nil
 	}
-	roles, err := pgMigrationRoles(database.Config, database.Config.User)
+	roles, err := pgMigrationRoles(config, config.User)
 	if err != nil {
 		return false, fmt.Errorf("database %q: %w", database.Name, err)
 	}
 	if roles.Request == "" {
-		for facility := range database.migrationFacilities {
+		for _, facility := range facilities {
 			if facility.kind == "queue" {
 				return false, pgMigrationQueueStorageError(database.Name)
 			}
 		}
 		return false, nil
 	}
-	if len(database.migrationFacilities) != 0 {
-		facilities := make([]pgMigrationFacility, 0, len(database.migrationFacilities))
-		for facility := range database.migrationFacilities {
-			facilities = append(facilities, facility)
+	if len(facilities) == 0 {
+		return true, nil
+	}
+	for _, facility := range facilities {
+		if facility.kind != "queue" {
+			return false, pgMigrationFacilitiesError(database.Name, facilities)
 		}
+	}
+	// The caller already owns pgMigrationRegistrations. Never reenter the public
+	// row lookup here, and do not hold database.mutex while checking codec owners.
+	compiled := compiledRowHistories[history.Family]
+	if compiled == nil {
 		return false, pgMigrationFacilitiesError(database.Name, facilities)
+	}
+	if err := pgCheckRowOwner(database, compiled); err != nil {
+		return false, err
+	}
+	if len(compiled.inventory.Transforms) != 0 {
+		return false, fmt.Errorf("versioned queues currently require an additive row history")
+	}
+	physical := compiledRowPhysicalHistories[compiled]
+	if history.CurrentVersion > 1 && physical == nil {
+		return false, fmt.Errorf("versioned queues require complete retained physical history")
+	}
+	if physical != nil {
+		for _, plan := range physical.versions {
+			if len(plan.windows) != 0 || plan.requiresContractVersion != 0 {
+				return false, fmt.Errorf("versioned queues currently require an additive row history")
+			}
+		}
+	}
+	if _, err := pgCheckApplicationQueueCodecs(database, *history); err != nil {
+		return false, err
 	}
 	return true, nil
 }

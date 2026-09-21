@@ -82,6 +82,34 @@ func pgRowRetiringFences(ctx context.Context, conn *pgx.Conn, fence, from, to in
 	}
 	return pgMigrationSessionLock(ctx, conn, fence, from, true, func() error { return pgRowRetiringFences(ctx, conn, fence, from+1, to, run) })
 }
+
+// Known external dependencies refuse before any Contract intent or floor
+// mutation. RESTRICT remains mandatory at DDL time: an administrative dependency
+// introduced after this snapshot can still make a retired Contract resumable.
+func pgRowTableContractDependencies(ctx context.Context, conn *pgx.Conn, c *pgRowContract) error {
+	for _, retirement := range c.window.retirements {
+		entity := c.window.entity(retirement.entity)
+		if entity == nil {
+			return fmt.Errorf("table retirement lost its physical predecessor")
+		}
+		var dependent bool
+		err := conn.QueryRow(ctx, `select exists(
+   select 1 from pg_catalog.pg_depend d
+   join pg_catalog.pg_class target on target.oid=pg_catalog.to_regclass($1)
+   join pg_catalog.pg_type row_type on row_type.oid=target.reltype
+   where d.deptype='n' and (
+    (d.refclassid='pg_catalog.pg_class'::regclass and d.refobjid=target.oid) or
+    (d.refclassid='pg_catalog.pg_type'::regclass and d.refobjid in (row_type.oid,row_type.typarray))))`, pgx.Identifier{c.window.namespace, entity.table}.Sanitize()).Scan(&dependent)
+		if err != nil {
+			return err
+		}
+		if dependent {
+			return fmt.Errorf("table Contract refuses external dependencies on %s", entity.table)
+		}
+	}
+	return nil
+}
+
 func pgRowContractState(ctx context.Context, conn *pgx.Conn, b *pgRowBaseline, roles PgMigrationControlRoles, c *pgRowContract) (PgMigrationControlState, error) {
 	var state PgMigrationControlState
 	err := pgControlTransaction(ctx, conn, false, func(tx pgx.Tx) error {
@@ -90,16 +118,63 @@ func pgRowContractState(ctx context.Context, conn *pgx.Conn, b *pgRowBaseline, r
 		if err != nil {
 			return err
 		}
-		var indexes bool
-		if err := tx.QueryRow(ctx, "select exists(select 1 from "+pgx.Identifier{b.history.Namespace, "tesl_schema_index"}.Sanitize()+")").Scan(&indexes); err != nil {
+		if err := pgRequireRowContractIndexesComplete(ctx, tx, b.history.Namespace); err != nil {
 			return err
 		}
-		if indexes {
-			return fmt.Errorf("row Contract with index jobs requires its checked terminal lifecycle")
+		intents, err := pgReadExpansionIntents(ctx, tx, b.history.Namespace)
+		if err != nil {
+			return err
 		}
-		return nil
+		jobs, err := pgReadMigrationIndexJobRows(ctx, tx, b.history.Namespace, intents)
+		if err != nil {
+			return err
+		}
+		return pgVerifyRowContractRetainedIndexes(c, jobs)
 	})
 	return state, err
+}
+
+func pgVerifyRowContractRetainedIndexes(c *pgRowContract, jobs []pgMigrationIndexJob) error {
+	for _, job := range jobs {
+		if c == nil || c.window == nil || c.settled == nil || job.State != "valid" {
+			return fmt.Errorf("row Contract requires a checked settled plan and valid retained indexes")
+		}
+		before := slices.IndexFunc(c.window.entities, func(e pgRowPhysicalEntity) bool { return e.table == job.Table })
+		after := slices.IndexFunc(c.settled.entities, func(e pgRowPhysicalEntity) bool { return e.table == job.Table })
+		if before < 0 || after < 0 {
+			return fmt.Errorf("row Contract removing an indexed table requires its checked index terminal lifecycle")
+		}
+		old, settled := c.window.entities[before], c.settled.entities[after]
+		if old.identity != settled.identity || !slices.ContainsFunc(settled.indexes, func(i PgMigrationCatalogIndex) bool {
+			return i.Name == job.Index.Name && pgPhysicalIndexEqual(i, job.Index)
+		}) {
+			return fmt.Errorf("row Contract changing a retained index requires its checked terminal lifecycle")
+		}
+		for _, key := range job.Index.Columns {
+			x := slices.IndexFunc(old.columns, func(c pgRowPhysicalColumn) bool { return c.catalog.Name == key })
+			y := slices.IndexFunc(settled.columns, func(c pgRowPhysicalColumn) bool { return c.catalog.Name == key })
+			if x < 0 || y < 0 || !pgPhysicalColumnEqual(old.columns[x], settled.columns[y]) {
+				return fmt.Errorf("row Contract changing a retained index key requires its checked terminal lifecycle")
+			}
+		}
+	}
+	return nil
+}
+
+// Call only after pgReadRowBaselineState has checked the complete protected job
+// inventory, receipts, leases and actual catalog in this same snapshot. Retained
+// valid indexes do not prevent unrelated row contraction. Incomplete builds do:
+// Contract must not retire an index worker while its DDL is still outstanding.
+// Index removal (the terminal state) still requires its own checked lifecycle.
+func pgRequireRowContractIndexesComplete(ctx context.Context, tx pgx.Tx, namespace string) error {
+	var unfinished bool
+	if err := tx.QueryRow(ctx, "select exists(select 1 from "+pgx.Identifier{namespace, "tesl_schema_index"}.Sanitize()+" where state <> 'valid')").Scan(&unfinished); err != nil {
+		return err
+	}
+	if unfinished {
+		return fmt.Errorf("row Contract requires all retained index jobs to be valid")
+	}
+	return nil
 }
 func pgRowHasStep(state PgMigrationControlState, version int, step string) bool {
 	for _, r := range state.Versions {
@@ -149,9 +224,15 @@ func pgExecuteRowContract(ctx context.Context, config *pgx.ConnConfig, b *pgRowB
 		if err != nil {
 			return err
 		}
+		if err := pgCheckRowQueueRetirement(ctx, conn, b.history.Namespace); err != nil {
+			return err
+		}
 		if pgRowHasStep(state, version, "contracted") {
 			result = state
 			return nil
+		}
+		if err := pgRowTableContractDependencies(ctx, conn, c); err != nil {
+			return err
 		}
 		document, err := pgRowBaselineHex(c.contract)
 		if err != nil {
@@ -173,12 +254,16 @@ func pgExecuteRowContract(ctx context.Context, config *pgx.ConnConfig, b *pgRowB
 		}
 		migrationBoundary("row-contract-after-intent")
 		if !pgRowHasStep(state, version, "retired") {
-			if err = pgPrepareRowWork(ctx, conn, b, roles, c.window); err != nil {
-				return err
+			if len(c.window.windows) > 0 {
+				if err = pgPrepareRowWork(ctx, conn, b, roles, c.window); err != nil {
+					return err
+				}
 			}
 			if err = pgRowRetiringFences(ctx, conn, state.FenceNamespace, state.MinVersion, version, func() error {
-				if err := pgRowFinalPass(ctx, conn, settings, b, roles, c); err != nil {
-					return err
+				if len(c.window.windows) > 0 {
+					if err := pgRowFinalPass(ctx, conn, settings, b, roles, c); err != nil {
+						return err
+					}
 				}
 				migrationBoundary("row-contract-before-retirement")
 				// Fence before opening the repeatable-read snapshot: a first
@@ -319,28 +404,25 @@ func pgRowContractOperations(ctx context.Context, conn *pgx.Conn, b *pgRowBaseli
 		for {
 			lockBusy := false
 			err := pgExpansionTransaction(ctx, conn, func(tx pgx.Tx) error {
-				mode := "ACCESS EXCLUSIVE"
-				if op.children[0].value == "validate-not-null-check" {
-					mode = "SHARE UPDATE EXCLUSIVE"
+				// Verify committed receipts and their catalog post-state before
+				// attempting a relation lock: a completed DROP has no relation.
+				readIntent := func() (*pgRowPersistedContract, error) {
+					if _, _, err := pgReadRowBaselineState(ctx, tx, b, roles, false); err != nil {
+						return nil, err
+					}
+					contracts, err := pgReadRowContracts(ctx, tx, b)
+					if err != nil {
+						return nil, err
+					}
+					persisted := contracts[c.window.version]
+					if persisted == nil || persisted.hash != c.hash {
+						return nil, fmt.Errorf("row Contract execution lost exact intent")
+					}
+					return persisted, nil
 				}
-				// No queued exclusive lock: release this transaction and back off
-				// if a long reader is active. Verify the exact proof only AFTER
-				// this lock, closing catalog-to-DDL replacement races.
-				if _, err := tx.Exec(ctx, "lock table "+table+" in "+mode+" mode nowait"); err != nil {
-					var server *pgconn.PgError
-					lockBusy = errors.As(err, &server) && server.Code == "55P03"
-					return err
-				}
-				if _, _, err := pgReadRowBaselineState(ctx, tx, b, roles, false); err != nil {
-					return err
-				}
-				contracts, err := pgReadRowContracts(ctx, tx, b)
+				persisted, err := readIntent()
 				if err != nil {
 					return err
-				}
-				persisted := contracts[c.window.version]
-				if persisted == nil || persisted.hash != c.hash {
-					return fmt.Errorf("row Contract execution lost exact intent")
 				}
 				if persisted.completed > i {
 					return nil
@@ -348,8 +430,30 @@ func pgRowContractOperations(ctx context.Context, conn *pgx.Conn, b *pgRowBaseli
 				if persisted.completed != i {
 					return fmt.Errorf("row Contract receipt prefix differs")
 				}
+				mode := "ACCESS EXCLUSIVE"
+				if op.children[0].value == "validate-not-null-check" {
+					mode = "SHARE UPDATE EXCLUSIVE"
+				}
+				// No queued exclusive lock: release this transaction and back off
+				// if a long reader is active. Reverify the exact proof AFTER
+				// this lock, closing catalog-to-DDL replacement races.
+				if _, err := tx.Exec(ctx, "lock table "+table+" in "+mode+" mode nowait"); err != nil {
+					var server *pgconn.PgError
+					lockBusy = errors.As(err, &server) && server.Code == "55P03"
+					return err
+				}
+				// Recheck after the NOWAIT lock closes catalog-to-DDL races.
+				persisted, err = readIntent()
+				if err != nil {
+					return err
+				}
+				if persisted.completed != i {
+					return fmt.Errorf("row Contract receipt prefix changed under relation lock")
+				}
 				var sql string
 				switch op.children[0].value {
+				case "drop-table":
+					sql = "drop table " + table + " restrict"
 				case "add-not-null-check":
 					proof := pgRowNotNullProofNode(op.children[3])
 					sql = "alter table " + table + " add constraint " + quoteIdentifier(proof.name) + " check (" + quoteIdentifier(proof.physical) + " is not null) not valid"

@@ -434,6 +434,7 @@
     "additive_lesson_test.go": "compiled-postgres",
     "worker_lesson_test.go": "compiled-postgres",
     "todo_showcase_test.go": "compiled-postgres",
+    "todo_showcase_test.go#TestTodoTransformStageSources": "harness",
     "control_upgrade_app_test.go": "compiled-postgres",
     "control_upgrade_app_test.go#TestControlUpgradeFixtureRefusesTampering": "harness"
   }

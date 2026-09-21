@@ -84,7 +84,7 @@ func (q PgRowQuery) statement(a *pgRowTransactionAdmission, d PgRowTransformDesc
 		}
 		previous := ""
 		for _, m := range d.FieldMapping {
-			if m.Target == name && (m.Kind == "copy" || m.Kind == "rename") {
+			if m.Target == name && (m.Kind == "copy" || m.Kind == "rename" || m.Kind == "revalidate") {
 				if m.Source != nil {
 					previous = *m.Source
 				}
@@ -102,6 +102,8 @@ func (q PgRowQuery) statement(a *pgRowTransactionAdmission, d PgRowTransformDesc
 			return "", err
 		}
 		source := old.entity(a.entity.identity)
+		// Revalidate preserves the value and column; selected rows still pass
+		// through the generation-aware decoder and checked proof callback.
 		// Rename retains a historical physical column, while newly added computed
 		// fields cannot be queried until a later checked predicate planner exists.
 		if source == nil {

@@ -62,12 +62,18 @@ type PgRowTransformDescriptor struct {
 	TransformContractFormat, TransformContract, TransformContractHash string
 }
 
+type PgRowRetirementDescriptor struct {
+	MigrationVersion                             int
+	Entity, FromSchemaSnapshot, ToSchemaSnapshot string
+}
+
 type PgRowSourceInventory struct {
 	Database, Family, Namespace string
 	CurrentVersion              int
 	Versions                    []PgRowSourceVersion
 	Transforms                  []PgRowTransformDescriptor
 	CurrentCodecs               []PgRowCurrentCodecDescriptor
+	Retirements                 []PgRowRetirementDescriptor
 }
 
 // Canonical atoms are bytes, not necessarily UTF-8 strings. A closed tree parser
@@ -314,7 +320,8 @@ func pgReadRowBase(history PgCompiledMigrationHistory) ([]PgRowSourceInventory, 
 	}
 	r := &pgMigrationWireReader{}
 	root := r.object(json.RawMessage(history.HistoryJSON), "version", "kind", "compilerAbi", "storedValueCompatibility", "databases")
-	if pgMigrationRead[int](r, root["version"]) != 4 || pgMigrationRead[string](r, root["kind"]) != "compiled-migration-source-history" ||
+	sourceVersion := pgMigrationRead[int](r, root["version"])
+	if (sourceVersion != 4 && sourceVersion != 5) || pgMigrationRead[string](r, root["kind"]) != "compiled-migration-source-history" ||
 		pgMigrationRead[string](r, root["compilerAbi"]) != history.SourceCompilerABI || pgMigrationRead[string](r, root["storedValueCompatibility"]) != history.StoredValueCompatibility ||
 		!strings.HasPrefix(history.SourceCompilerABI, "tesl-source-abi-v1:") || !pgMigrationDigest(strings.TrimPrefix(history.SourceCompilerABI, "tesl-source-abi-v1:")) || !pgStoredValueCompatibility(history.StoredValueCompatibility) {
 		r.fail("row source envelope differs from linked compiler metadata")
@@ -322,7 +329,11 @@ func pgReadRowBase(history PgCompiledMigrationHistory) ([]PgRowSourceInventory, 
 	last := ""
 	families := map[string]bool{}
 	result := pgMigrationReadArray(r, root["databases"], func(raw json.RawMessage) PgRowSourceInventory {
-		o := r.object(raw, "database", "family", "namespace", "currentVersion", "versions", "origins")
+		fields := []string{"database", "family", "namespace", "currentVersion", "versions", "origins"}
+		if sourceVersion == 5 {
+			fields = append(fields, "retirements")
+		}
+		o := r.object(raw, fields...)
 		d := PgRowSourceInventory{Database: pgMigrationRead[string](r, o["database"]), Family: pgMigrationRead[string](r, o["family"]), Namespace: pgMigrationRead[string](r, o["namespace"]), CurrentVersion: pgMigrationRead[int](r, o["currentVersion"])}
 		if d.Database <= last || !pgMigrationFamily(d.Family) || families[d.Family] || !pgMigrationIdentifier(d.Namespace) || d.CurrentVersion < 1 || d.CurrentVersion > 2147483646 {
 			r.fail("invalid or duplicate row source database")
@@ -349,6 +360,35 @@ func pgReadRowBase(history PgCompiledMigrationHistory) ([]PgRowSourceInventory, 
 		if len(d.Versions) != d.CurrentVersion {
 			r.fail("row source versions must be complete")
 		}
+		retirements := map[int]PgRowRetirementDescriptor{}
+		if sourceVersion == 5 {
+			lastVersion := 1
+			d.Retirements = pgMigrationReadArray(r, o["retirements"], func(raw json.RawMessage) PgRowRetirementDescriptor {
+				item := r.object(raw, "migrationVersion", "entity", "fromSchemaSnapshot", "toSchemaSnapshot")
+				retirement := PgRowRetirementDescriptor{MigrationVersion: pgMigrationRead[int](r, item["migrationVersion"]), Entity: pgMigrationRead[string](r, item["entity"]), FromSchemaSnapshot: pgMigrationRead[string](r, item["fromSchemaSnapshot"]), ToSchemaSnapshot: pgMigrationRead[string](r, item["toSchemaSnapshot"])}
+				v := retirement.MigrationVersion
+				if v <= lastVersion || v > len(d.Versions) || !pgQueueIdentity(retirement.Entity) || !pgMigrationDigest(retirement.FromSchemaSnapshot) || !pgMigrationDigest(retirement.ToSchemaSnapshot) {
+					r.fail("invalid or unordered row source retirement")
+				} else if retirement.FromSchemaSnapshot != d.Versions[v-2].SchemaSnapshotHash || retirement.ToSchemaSnapshot != d.Versions[v-1].SchemaSnapshotHash {
+					r.fail("row source retirement differs from adjacent schema identity")
+				}
+				lastVersion = v
+				retirements[v] = retirement
+				return retirement
+			})
+		}
+		if len(d.Retirements) > 0 {
+			for _, version := range d.Versions {
+				schema := pgRowDocument(r, version.SchemaContract, version.SchemaSnapshotHash, "snapshot")
+				_, definitions := pgRowClosure(r, schema, history.SourceCompilerABI, history.StoredValueCompatibility)
+				for _, definition := range definitions {
+					if !definition.atom && len(definition.children) > 0 && definition.children[0].isAtom("queue-schema") {
+						r.fail("table retirement cannot coexist with a historical queue schema")
+					}
+				}
+			}
+		}
+		lifetime := map[string]bool{}
 		previous := map[string]PgRowSourceEntity{}
 		tables := map[string]string{}
 		for i, v := range d.Versions {
@@ -358,6 +398,10 @@ func pgReadRowBase(history PgCompiledMigrationHistory) ([]PgRowSourceInventory, 
 			next := map[string]PgRowSourceEntity{}
 			for _, entity := range v.Entities {
 				old, exists := previous[entity.Entity]
+				if !exists && lifetime[entity.Entity] {
+					r.fail("retired row entity identity cannot be reused")
+				}
+				lifetime[entity.Entity] = true
 				if !exists && entity.Generation != 1 || exists && (old.Table != entity.Table || entity.Generation < old.Generation || entity.Generation > old.Generation+1) {
 					r.fail("row entity generation/table history is inconsistent")
 				}
@@ -366,9 +410,78 @@ func pgReadRowBase(history PgCompiledMigrationHistory) ([]PgRowSourceInventory, 
 				}
 				tables[entity.Table], next[entity.Entity] = entity.Entity, entity
 			}
+			removed := []string{}
 			for name := range previous {
 				if _, exists := next[name]; !exists {
-					r.fail("row source lifecycle does not yet support dropping entities")
+					removed = append(removed, name)
+				}
+			}
+			retirement, retiring := retirements[v.Version]
+			if len(removed) != 0 || retiring {
+				if !retiring || len(removed) != 1 || removed[0] != retirement.Entity || len(next) == 0 || len(previous) != len(next)+1 {
+					r.fail("row source entity disappearance requires exact bounded retirement")
+				} else {
+					if previous[retirement.Entity].Generation != 1 {
+						r.fail("table retirement cannot remove previously transformed entity")
+					}
+					for name, entity := range next {
+						old, exists := previous[name]
+						if !exists || old.Table != entity.Table || old.Generation != entity.Generation || old.TypeContractHash != entity.TypeContractHash || !slices.Equal(old.Columns, entity.Columns) {
+							r.fail("table retirement requires unchanged surviving entities")
+						}
+					}
+					// Storage includes indexes as well as field carriers. Excluding
+					// the retired table must leave exactly the current storage.
+					before := pgRowDocument(r, d.Versions[i-1].StorageContract, d.Versions[i-1].StorageSnapshotHash, "migration")
+					after := pgRowDocument(r, v.StorageContract, v.StorageSnapshotHash, "migration")
+					if !before.list(3) || !after.list(3) || before.children[2].atom || after.children[2].atom {
+						r.fail("table retirement lacks exact adjacent storage")
+					} else {
+						// Later index additions have a protected concurrent-index
+						// lifecycle; this first Drop route handles birth indexes only.
+						retiredTable := previous[retirement.Entity].Table
+						var currentIndexes pgRowCanonical
+						for _, table := range before.children[2].children {
+							if table.list(3) && table.children[0].isAtom(retiredTable) {
+								currentIndexes = table.children[2]
+							}
+						}
+						for priorVersion := 0; priorVersion < i; priorVersion++ {
+							if _, exists := pgRowFindEntity(d.Versions[priorVersion], retirement.Entity); !exists {
+								continue
+							}
+							birth := pgRowDocument(r, d.Versions[priorVersion].StorageContract, d.Versions[priorVersion].StorageSnapshotHash, "migration")
+							if !birth.list(3) || birth.children[2].atom {
+								r.fail("table retirement lacks birth storage")
+								break
+							}
+							for _, table := range birth.children[2].children {
+								if table.list(3) && table.children[0].isAtom(retiredTable) {
+									for _, index := range currentIndexes.children {
+										found := false
+										for _, original := range table.children[2].children {
+											if pgRowCanonicalEqual(index, original) {
+												found = true
+											}
+										}
+										if !found {
+											r.fail("table retirement cannot remove later concurrent indexes")
+										}
+									}
+								}
+							}
+							break
+						}
+						retained := []pgRowCanonical{}
+						for _, table := range before.children[2].children {
+							if !table.list(3) || !table.children[0].isAtom(previous[retirement.Entity].Table) {
+								retained = append(retained, table)
+							}
+						}
+						if !pgRowCanonicalEqual(pgRowList(retained...), after.children[2]) {
+							r.fail("table retirement changes surviving storage")
+						}
+					}
 				}
 			}
 			previous = next
@@ -437,14 +550,27 @@ func pgRowFindEntity(version PgRowSourceVersion, name string) (PgRowSourceEntity
 }
 
 func pgRowMapping(r *pgMigrationWireReader, raw json.RawMessage) PgRowFieldMapping {
-	o := r.object(raw, "target", "kind", "source", "constant")
+	var header struct {
+		Kind string `json:"kind"`
+	}
+	if err := json.Unmarshal(raw, &header); err != nil {
+		r.fail("invalid row mapping")
+	}
+	fields := []string{"target", "kind", "source", "constant"}
+	if header.Kind == "revalidate" {
+		fields = append(fields, "proofEnforcement")
+	}
+	o := r.object(raw, fields...)
+	if header.Kind == "revalidate" && pgMigrationRead[string](r, o["proofEnforcement"]) != "runtime-only" {
+		r.fail("Revalidate currently requires explicit runtime-only proof enforcement")
+	}
 	m := PgRowFieldMapping{Target: pgMigrationRead[string](r, o["target"]), Kind: pgMigrationRead[string](r, o["kind"]), Source: pgRowNullableString(r, o["source"]), Constant: pgRowNullableString(r, o["constant"])}
 	if !pgRowName(m.Target) {
 		r.fail("invalid row mapping target")
 	}
 	switch m.Kind {
-	case "copy", "rename", "retype":
-		if m.Source == nil || !pgRowName(*m.Source) || m.Constant != nil || m.Kind == "copy" && *m.Source != m.Target || m.Kind == "rename" && *m.Source == m.Target {
+	case "copy", "rename", "retype", "revalidate":
+		if m.Source == nil || !pgRowName(*m.Source) || m.Constant != nil || (m.Kind == "copy" || m.Kind == "revalidate") && *m.Source != m.Target || m.Kind == "rename" && *m.Source == m.Target {
 			r.fail("invalid row source mapping")
 		}
 	case "empty-optional", "computed":
@@ -531,6 +657,9 @@ func pgRowDescriptor(r *pgMigrationWireReader, raw json.RawMessage, base PgRowSo
 			if !exists || m.Kind != "retype" && (old.Type != c.Type || old.Nullable != c.Nullable) {
 				r.fail("row copied field disagrees with source representation")
 			}
+			if m.Kind == "revalidate" {
+				pgRowCheckRevalidateColumn(r, d.Mode, old, c)
+			}
 		}
 		if m.Kind == "empty-optional" && !c.Nullable {
 			r.fail("empty optional row target is not nullable")
@@ -541,6 +670,16 @@ func pgRowDescriptor(r *pgMigrationWireReader, raw json.RawMessage, base PgRowSo
 	}
 	pgRowCheckLinkMapping(r, link, base.Family, d, a, b)
 	return d
+}
+
+// Proof semantics belong to the compiler-bound old/new closures and callback.
+// This wire operation grants no permission to change a persisted representation
+// or reuse stored bytes as evidence of the stronger proof without that callback.
+func pgRowCheckRevalidateColumn(r *pgMigrationWireReader, mode string, old, target PgRowSchemaColumn) {
+	if mode != "migrate" || old != target || old.PrimaryKey || old.Nullable ||
+		!slices.Contains([]string{"numeric", "float8", "text", "bool", "int4", "int8"}, old.Type) {
+		r.fail("Revalidate requires a Migrate callback and identical nonnullable primitive non-key storage")
+	}
 }
 
 func pgReadRowCompanion(history PgCompiledMigrationHistory, payload string) ([]PgRowSourceInventory, error) {
@@ -797,8 +936,8 @@ func pgRowCheckLinkMapping(r *pgMigrationWireReader, link pgRowCanonical, family
 		}
 		if derived {
 			for _, field := range descriptor.FieldMapping {
-				if field.Kind == "computed" || field.Kind == "retype" {
-					r.fail("Derived mapping cannot compute or retype a field")
+				if field.Kind == "computed" || field.Kind == "retype" || field.Kind == "revalidate" {
+					r.fail("Derived mapping cannot compute, retype or revalidate a field")
 				}
 			}
 		}

@@ -18,7 +18,7 @@ type catalog_column = Migration_expansion.catalog_column = {column:P.column;defa
 type catalog_table = Migration_expansion.catalog_table = {name:string;columns:catalog_column list;indexes:P.index list}
 type step = Migration_expansion.step = {version:int;snapshot_hash:string;operations:operation list;epoch_preserving:bool;
              catalog:catalog_table list}
-type t = {selection:T.selection;namespace:string;initial_version:int;steps:step list;digest:string;abi:A.t;guard:M.t}
+type t = {selection:T.selection;namespace:string;initial_version:int;steps:step list;row_steps:string option;digest:string;abi:A.t;guard:M.t}
 let selection p = p.selection
 let steps p = p.steps
 let digest p = p.digest
@@ -82,21 +82,44 @@ let generate ~project_root ~entry_file ~database ~initial_version ~documents = p
     if D.version edge<>index+2 then reject ~code:"MIG020" (Location.dummy_loc s.path) "source history must start at V1 and remain consecutive";
     if D.source_seals edge=None then reject ~code:"MIG013" (Location.dummy_loc s.path) "physical planning requires the recorded schema source seals";
     edge) sources in
-  let steps = checked (Migration_expansion.generate ~initial_version
-    ~schemas:(List.map (fun (s : H.schema) -> s.inventory) schemas) ~edges) in
+  let transforming=List.exists (fun edge -> Option.is_some (D.transforms edge)) edges in
+  let steps,row_steps = if not transforming then
+    checked (Migration_expansion.generate ~initial_version
+     ~schemas:(List.map (fun (s : H.schema) -> s.inventory) schemas) ~edges),None
+   else begin
+    if initial_version<>1 then reject connection.loc
+      "retained-row previews require the complete V1 baseline; later installation/adoption is not authorized by a source preview";
+    let source=Source_input.read entry_file in
+    let entry=parsed entry_file source in
+    let json=checked(Migration_program.with_source_history ~entry ~source (function
+     | None -> reject connection.loc "retained-row preview requires a checked PostgreSQL history"
+     | Some captured ->
+       let program=Migration_program.source_program captured in
+       if Migration_program.queue_bindings program<>[] then reject connection.loc
+         "combined row/queue execution planning is not implemented";
+       let rows=match List.assoc_opt selection.database_name (Migration_program.row_histories captured) with
+        | Some rows -> rows | None -> reject connection.loc "selected database has no retained-row history" in
+       let contracts=Option.value (List.assoc_opt selection.database_name (Migration_program.contracts program)) ~default:[] in
+       checked(Migration_row_plan_preview.describe ~quote:Compile.json_encode_string ~contracts rows))) in
+    [],Some json
+   end in
   history (H.verify_unchanged h);
   let digest = Migration_canonical.digest Migration (Seq [Bytes "postgres-expansion-plan-v1";Bytes (A.id context);
     Bytes selection.family;Bytes selection.database_name;Bytes namespace;Bytes (string_of_int initial_version);
-    Seq (List.map Migration_expansion.step_node steps)]) in
-  {selection;namespace;initial_version;steps;digest;abi=context;guard=T.source_guard selected})) in
+    (match row_steps with None -> Seq (List.map Migration_expansion.step_node steps)
+     | Some json -> Seq [Bytes "retained-row-preview-v1";Bytes json])]) in
+  {selection;namespace;initial_version;steps;row_steps;digest;abi=context;guard=T.source_guard selected})) in
  checked (verify result ~documents); result)
 
 let quote = Compile.json_encode_string
 let array f xs = "[" ^ String.concat "," (List.map f xs) ^ "]"
 let to_json p =
  let step = Migration_expansion.step_to_json ~quote in
- Printf.sprintf {|{"version":1,"kind":"migration-plan-preview","ok":true,"executable":false,"compilerAbi":%s,"planHash":%s,"database":%s,"namespace":%s,"family":%s,"initialVersion":%d,"steps":%s}|}
-  (quote (compiler_abi p)) (quote p.digest) (quote p.selection.database_name) (quote p.namespace) (quote p.selection.family) p.initial_version (array step p.steps)
+ let extra,steps=match p.row_steps with
+  | None -> "",array step p.steps
+  | Some json -> ",\"planType\":\"row-history\",\"persistedStateObserved\":false,\"inPlaceRewriteAuthorized\":false,\"decoderPruningAuthorized\":false",json in
+ Printf.sprintf {|{"version":1,"kind":"migration-plan-preview","ok":true,"executable":false,"compilerAbi":%s,"planHash":%s,"database":%s,"namespace":%s,"family":%s,"initialVersion":%d,"steps":%s%s}|}
+  (quote (compiler_abi p)) (quote p.digest) (quote p.selection.database_name) (quote p.namespace) (quote p.selection.family) p.initial_version steps extra
 let errors_to_json errors =
  let error (e : S.error) = Printf.sprintf {|{"code":%s,"file":%s,"line":%d,"col":%d,"message":%s}|}
   (quote e.code) (quote e.loc.file) e.loc.start.line e.loc.start.col (quote e.message) in

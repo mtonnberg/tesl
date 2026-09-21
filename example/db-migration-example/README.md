@@ -1,71 +1,75 @@
 # Field Notes: a todo app with database migrations
 
-A PostgreSQL todo app with an Elm frontend. Its request handlers, routes, public
-JSON, connection configuration and application tests stay identical while the
-storage schema evolves. The response is always `{ id, title, completed }`.
+This is a complete PostgreSQL todo app with an Elm frontend. It shows the shape
+of a real application while its storage moves through thirteen revisions. The
+HTTP response stays `{ id, title, completed }`; the connection, handlers, routes,
+frontend and application tests are independent of the migration modules.
 
-**Start with [todo-app.tesl](todo-app.tesl), then read
-[how to update the database](how-to-update-the-db.md).**
+Start with [todo-app.tesl](todo-app.tesl), then follow the concise
+[database update guide](how-to-update-the-db.md).
 
-| Location | Your concern |
+| Location | What it contains |
 | --- | --- |
-| [todo-app.tesl](todo-app.tesl) | Connections, handlers, routes and application tests |
-| [schema/todo/v-current.tesl](schema/todo/v-current.tesl) | All current entities, stored facts and pure constructors |
-| [migrations/todo/](migrations/todo/) | Reviewed rules for moving between schema versions |
-| [frontend/](frontend/) | The Elm interface and stable HTTP contract |
-| [deploy/](deploy/) | Local deployment demonstration and historical test fixtures |
+| [todo-app.tesl](todo-app.tesl) | PostgreSQL connection, handlers, routes and app tests |
+| [schema/todo/](schema/todo/) | Frozen snapshots and `v-current.tesl` |
+| [migrations/todo/](migrations/todo/) | Typed transitions and reviewed Contracts |
+| [frontend/](frontend/) | Elm UI using the stable HTTP contract |
+| [deploy/](deploy/) | Optional local cluster, proxy and rolling-update fixtures |
 
-Database connections and handlers do not belong in schema modules. A storage
-change usually touches the current schema and its migration; adding an app
-feature may also change the handlers and UI.
-Each accepted snapshot is one `schema/todo/vN.tesl` file beside the current one.
-In the app's database block, `Database.migrations` selects that history.
-`PostgresConfig.connection` describes the connection, while its `migrations:
-MigrationConfig { ... }` record groups the schema worker and role settings.
+The schema and migration modules contain no database connection, handler or
+application capability. They are pure, versioned data definitions and row
+functions. The application imports `Schema.Todo.VCurrent`; its `Database`
+declaration selects `Schema.Todo.Migrate` and groups PostgreSQL migration roles
+under `PostgresConfig.migrations`.
 
 ## Run it
 
-Use the repository development environment, with Go, PostgreSQL, Python 3,
-Elm 0.19.1 and the built compiler:
+With the repository toolchain, Go, PostgreSQL, Python 3 and Elm installed:
 
 ```sh
 cd compiler && dune build && cd ..
 bash example/db-migration-example/deploy/run-cluster.sh
 ```
 
-Open **http://127.0.0.1:8085**. Create, edit, complete, filter and delete todos
-while the demo rolls two request processes through the saved releases. A real
-HTTP reverse proxy keeps each healthy old process serving until its replacement
-is ready and its in-flight requests have drained. CRUD probes run throughout.
+Open **http://127.0.0.1:8085**. The proxy keeps two request processes available
+while a schema worker applies the next revision. Create, edit, complete, filter
+and delete todos during the rollout.
 
-The Python and shell files under `deploy/` arrange that local cluster; Tesl's
-compiled schema worker performs the migrations. They are not migration code and
-are not needed in your own application. You might use Helm or something
-yourself in a real world scenario. [Deployment details](deploy/README.md)
-include credentials, standalone commands, logs and cleanup.
+The files in `deploy/` arrange this local demonstration. Tesl's compiled worker
+performs the migration; the scripts are replaceable infrastructure and are not
+required by an application using migrations.
 
-## The storage changes
+## What the history demonstrates
 
-The sequence repeats common nullable additions, creates another entity, adds a
-required field with a typed default, and adds a concurrent index to the populated
-todo table. [The version table](how-to-update-the-db.md#the-saved-example-history)
-explains what each change means for retained rows and old writers.
+V2–V9 repeat nullable fields, a new entity, a defaulted required field and a
+concurrent index. V10–V13 cover the cases that are easy to get wrong:
 
-Derived-field backfills, record/ADT JSONB transformations, repair and physical
-contraction need further scenarios as their runtime support lands. A new JSON
-codec alone does not migrate retained JSON.
+- a derived backfill from retained data;
+- removal with a reverse `LegacyWith` value and a checked Contract;
+- a record stored as JSONB whose payload needs explicit conversion;
+- an ADT retype with constructor-specific reverse values, a new physical column
+  and cleanup of the old representation.
+
+Each migration has pure fixtures and tests. `tesl test` compiles those fixtures
+alongside the unchanged app tests; generated Go tests exercise the row adapters,
+source history and physical metadata. A new codec alone never rewrites an old
+JSONB value.
 
 ## Tests
 
 ```sh
+tesl check example/db-migration-example/todo-app.tesl
 tesl test example/db-migration-example/todo-app.tesl
 python3 example/db-migration-example/deploy/test-workflow.py
 bash scripts/run-migration-tests.sh -run '^TestCompiledTodoShowcaseRollingUpgrade$'
+bash scripts/run-migration-tests.sh -run '^TestCompiledTodoComplexHistoryPostgres$'
 ```
 
-The app tests cover CRUD, title proofs and limits, invalid-update preservation,
-malformed JSON, duplicate/missing IDs and idempotent deletion. The native
-PostgreSQL regression builds standalone releases, checks that app and frozen
-source bytes stay unchanged, retains real rows through rolling requests, and
-interrupts both a table expansion and a blocked concurrent index worker. The
-local walkthrough is separate from that regression gate.
+The first two commands are the fast source and generated-fixture checks. The
+deployment workflow uses real PostgreSQL when configured and verifies retained
+rows, old/new writers, worker interruption and rolling request traffic. The
+native regression is separate from the optional local proxy walkthrough.
+The complex-history regression advances V1→V13 with overlapping request versions,
+non-default retained values, field removal, JSONB record/ADT conversion, reverse
+writes and physical cleanup. It checks requests at lifecycle boundaries;
+continuous rollout traffic is currently covered by the additive regression.

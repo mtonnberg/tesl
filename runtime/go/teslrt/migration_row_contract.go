@@ -34,19 +34,86 @@ func pgRowIndexNode(index PgMigrationCatalogIndex) pgRowCanonical {
 	return pgRowList(pgRowAtom(index.Name), pgRowList(cols...), pgRowList(pgRowAtom("bool"), pgRowAtom(strconv.FormatBool(index.Unique))))
 }
 
+func pgRowPhysicalEntityNode(e pgRowPhysicalEntity) pgRowCanonical {
+	columns, indexes := []pgRowCanonical{}, []pgRowCanonical{}
+	for _, c := range e.columns {
+		columns = append(columns, pgRowColumnNode(c))
+	}
+	for _, index := range e.indexes {
+		indexes = append(indexes, pgRowIndexNode(index))
+	}
+	pairs := func(fields []pgRowPhysicalField) pgRowCanonical {
+		nodes := []pgRowCanonical{}
+		for _, f := range fields {
+			nodes = append(nodes, pgRowList(pgRowAtom(f.logical), pgRowAtom(f.physical)))
+		}
+		return pgRowList(nodes...)
+	}
+	reverse := []pgRowCanonical{}
+	for _, w := range e.reverseWrites {
+		fields := []pgRowCanonical{pgRowAtom(w.previous)}
+		if !w.legacy {
+			fields = append(fields, pgRowAtom(w.current))
+		}
+		reverse = append(reverse, pgRowList(append(fields, pgRowAtom(w.physical))...))
+	}
+	return pgRowList(pgRowAtom(e.identity), pgRowAtom(e.table), pgRowAtom(strconv.Itoa(e.generation)), pgRowAtom(strconv.Itoa(e.insertGeneration)), pgRowAtom(e.typeContractHash), pgRowList(columns...), pairs(e.projection), pgRowList(indexes...), pairs(e.aliases), pgRowList(reverse...))
+}
+func pgRowRetirementNode(retirement pgRowPhysicalRetirement) pgRowCanonical {
+	return pgRowList(pgRowAtom(retirement.entity), pgRowAtom(retirement.fromSchemaHash), pgRowAtom(retirement.toSchemaHash))
+}
+func pgRowTableRetirementBehavior(window *pgRowPhysicalPlan) string {
+	nodes := []pgRowCanonical{}
+	for _, retirement := range window.retirements {
+		nodes = append(nodes, pgRowRetirementNode(retirement))
+	}
+	payload := pgRowList(pgRowAtom("tesl-table-retirement-v1"), pgRowAtom(window.family), pgRowAtom(window.namespace), pgRowAtom(strconv.Itoa(window.version)), pgRowList(nodes...))
+	doc := pgRowList(pgRowAtom("tesl-migration-canonical"), pgRowAtom("1"), pgRowAtom("contract"), payload)
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(pgRowEncode(doc))))
+}
+func pgParseTableContract(result *pgRowContract, n pgRowCanonical) (*pgRowContract, error) {
+	window, settled := result.window, result.settled
+	if len(window.windows) != 0 || len(window.retirements) != 1 || len(settled.windows) != 0 || len(settled.retirements) != 0 || len(settled.entities) == 0 || len(window.entities) != len(settled.entities)+1 || !n.children[8].list(0) || !n.children[5].isAtom(pgRowTableRetirementBehavior(window)) {
+		return nil, fmt.Errorf("table Contract requires exact pure retirement and empty final generations")
+	}
+	retirement := window.retirements[0]
+	before := window.entity(retirement.entity)
+	if before == nil || settled.entity(retirement.entity) != nil || len(before.aliases) != 0 || len(before.reverseWrites) != 0 {
+		return nil, fmt.Errorf("table Contract lacks an exact retired-only predecessor")
+	}
+	for _, after := range settled.entities {
+		prior := window.entity(after.identity)
+		if prior == nil || !pgRowCanonicalEqual(pgRowPhysicalEntityNode(*prior), pgRowPhysicalEntityNode(after)) {
+			return nil, fmt.Errorf("table Contract changes a surviving entity")
+		}
+	}
+	expected := pgRowList(pgRowAtom("drop-table"), pgRowAtom(before.identity), pgRowPhysicalEntityNode(*before))
+	if !pgRowCanonicalEqual(n.children[9], pgRowList(expected)) {
+		return nil, fmt.Errorf("table Contract exact ordered operation inventory differs")
+	}
+	result.operations = []pgRowCanonical{expected}
+	return result, nil
+}
+
 // Observation validates the complete known transition grammar. It neither binds
 // local code nor marks rows final. The exact canonical operation order is the
 // compiler's per-entity indexes, invalidation, columns, tightenings, marker order.
 func pgParseRowContract(encoded, hash string, window, settled *pgRowPhysicalPlan) (*pgRowContract, error) {
 	r := &pgMigrationWireReader{}
 	n := pgRowDocument(r, encoded, hash, "contract")
-	if r.err != nil || !n.list(10) || !n.children[0].isAtom("tesl-row-contract-v1") || window == nil || settled == nil || window.settled || !settled.settled || window.version != settled.version || window.version < 2 || len(window.windows) == 0 {
+	if r.err != nil || !n.list(10) || (!n.children[0].isAtom("tesl-row-contract-v1") && !n.children[0].isAtom("tesl-table-contract-v1")) || window == nil || settled == nil || window.settled || !settled.settled || window.version != settled.version || window.version < 2 {
 		return nil, fmt.Errorf("invalid checked row Contract document")
 	}
 	if !n.children[1].isAtom(window.family) || !n.children[2].isAtom(window.namespace) || !n.children[3].isAtom(strconv.Itoa(window.version)) || !n.children[4].isAtom(window.schemaSnapshotHash) || !n.children[6].isAtom(window.hash) || !n.children[7].isAtom(settled.hash) || n.children[8].atom || n.children[9].atom {
 		return nil, fmt.Errorf("row Contract owner, source or physical identity differs")
 	}
 	result := &pgRowContract{window: window, settled: settled, contract: encoded, hash: hash, finalGenerations: map[string]int{}}
+	if n.children[0].isAtom("tesl-table-contract-v1") {
+		return pgParseTableContract(result, n)
+	}
+	if len(window.windows) == 0 || len(window.retirements) != 0 {
+		return nil, fmt.Errorf("row Contract requires transforming windows without table retirement")
+	}
 	finals := []pgRowCanonical{}
 	for _, w := range window.windows {
 		if !n.children[5].isAtom(w.transformBehaviorHash) {
@@ -267,7 +334,7 @@ func pgCompiledRowSettledPlan(database *Database, version int) (*pgRowPhysicalPl
 		// that requires its exact registered Contract and durable completion.
 		additivePrefix := true
 		for _, plan := range physical.versions[:version] {
-			if len(plan.windows) != 0 {
+			if len(plan.windows) != 0 || len(plan.retirements) != 0 {
 				additivePrefix = false
 				break
 			}

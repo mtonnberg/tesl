@@ -210,13 +210,56 @@ let refresh_same file source before after =
   (source_result file (Merge.reconcile view ~collection:syntax.same ~previous ~current
     ~existing ~desired:(List.filter_map Fun.id desired))).source
 let required = function E.Paired {contract_changed=false;missing_identities=[];_} -> false | _ -> true
-let decision_body before identity (errors : E.error list) =
+(* Guidance only: these candidates never replace the unresolved decision or
+   authorize an adapter. Compare complete contracts so changes to a fact's
+   establish/helper closure are visible even when field syntax is unchanged. *)
+let existing_proof_guidance before after identity =
+  let open Migration_canonical in
+  let shapes inventory = I.field_shapes inventory |> List.filter (fun shape ->
+    relative (I.root_module inventory) shape.I.stored_field.entity = identity) in
+  let old = shapes before and fresh = shapes after in
+  let rec local_proof field = function
+    | Seq [Bytes "predicate"; _; Seq args] -> List.for_all (function
+      | Seq [Bytes "subject"; Seq [Bytes "field-subject"; Bytes name]; Seq []] -> name=field
+      | _ -> false) args
+    | Seq [Bytes "and"; left; right] -> local_proof field left && local_proof field right
+    | _ -> false in
+  let local_fields fields = List.for_all (fun shape ->
+    Option.fold ~none:true ~some:(local_proof shape.I.stored_field.name) shape.proof_identity) fields in
+  let no_codec inventory shape =
+    match I.stored_dependencies inventory ~entity:shape.I.stored_field.entity ~field:shape.stored_field.name with
+    | Some dependencies -> not (List.exists (fun d -> d.I.declaration_kind=I.Codec_declaration) dependencies)
+    | None -> false in
+  let non_key inventory shape = List.exists (fun entity ->
+    entity.I.entity_name=shape.I.stored_field.entity && entity.primary_key<>shape.stored_field.name)
+    (I.stored_entities inventory) in
+  if not (local_fields old && local_fields fresh) then [] else
+  fresh |> List.filter_map (fun current ->
+    match List.find_opt (fun previous -> previous.I.stored_field.name=current.I.stored_field.name) old with
+    | Some previous when previous.proof_identity<>None &&
+        previous.stored_field.contract<>current.stored_field.contract &&
+        previous.type_identity=current.type_identity && previous.db_type=current.db_type &&
+        previous.db_column=current.db_column && non_key before previous && non_key after current &&
+        no_codec before previous && no_codec after current &&
+        List.exists (fun name -> current.type_identity=Migration_additive.primitive name)
+          ["Tesl.Prelude.Int"; "Tesl.Float.Float"; "Tesl.Prelude.Bool"; "Tesl.Prelude.String"] ->
+      let field=current.stored_field.name in
+      Some ("stored proof contract changed for " ^ identity ^ "." ^ field ^
+        ": use Migrate with Retype " ^ field ^ " and WriteBack " ^ field ^ " " ^ field ^
+        " <reverseFn>; the reverse function must return the exact historical field type and proof from " ^
+        previous.stored_field.entity ^ "." ^ field ^
+        ". Refresh generates the new storage column after these explicit rules are supplied. " ^
+        "This route supports field-local proofs only; whole-entity cross-field reverse proofs are unsupported. " ^
+        "Revalidate only supports adding a first proof to an unproven primitive field")
+    | _ -> None)
+let decision_body before after identity (errors : E.error list) =
   let fields = I.stored_fields before |> List.filter (fun (f : I.stored_field) -> relative (I.root_module before) f.entity = identity)
     |> List.map (fun (f : I.stored_field) -> f.name) |> List.sort String.compare in
   let reason = identity ^ ": " ^ String.concat "; " (List.map (fun (e : E.error) -> e.message) errors) ^
-    "; old row fields: " ^ String.concat ", " fields in
+    "; old row fields: " ^ String.concat ", " fields ^
+    String.concat "" (List.map (fun guidance -> "; " ^ guidance) (existing_proof_guidance before after identity)) in
   "todo " ^ Compile.json_encode_string reason
-let inferred_entry requirements before loc identity entity =
+let inferred_entry requirements before after loc identity entity =
   match entity with
   | E.Added _ -> "New"
   | E.Removed _ -> "Drop"
@@ -232,7 +275,7 @@ let inferred_entry requirements before loc identity entity =
     let checked = match E.check_requirements requirements ~entries ~loc with
       | Error errors -> Error errors
       | Ok coverage -> Result.map (fun _ -> ()) (Migration_additive.check coverage ~defaults:[]) in
-    (match checked with Ok () -> "Additive []" | Error errors -> decision_body before identity errors)
+    (match checked with Ok () -> "Additive []" | Error errors -> decision_body before after identity errors)
 let refresh_entities file source before after =
   let view,syntax = syntax file source in
   let previous = I.root_module before and current = I.root_module after in
@@ -269,7 +312,7 @@ let refresh_entities file source before after =
       let key = match List.find_opt (fun (_,_,name) -> name = Some identity) selected with
         | Some (key,_,_) -> key | None -> identity in
       Some {Merge.id="entity:" ^ key;key=Some key;
-        body=inferred_entry requirements before syntax.declaration.loc identity entity}) in
+        body=inferred_entry requirements before after syntax.declaration.loc identity entity}) in
     (source_result file (Merge.reconcile view ~collection:syntax.entities ~previous ~current ~existing ~desired)).source
 
 (* Explicit Retype rules select fields; generation owns their physical name.

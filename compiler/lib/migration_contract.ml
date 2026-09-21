@@ -6,7 +6,7 @@ module K = Migration_retained_storage_canonical
 module S = Migration_sparse
 module I = Migration_inventory
 
-type selector = Column of string * string | Storage of string * string
+type selector = Table of string | Column of string * string | Storage of string * string
  | Index of string * string | Trigger of string | Not_null of string * string
 
 type operation = { selector:selector option; node:C.node }
@@ -35,10 +35,10 @@ let find_version plan version =
  match List.find_opt (fun (v:R.version) -> v.version=version) (R.versions plan) with
  | Some v -> v
  | None -> reject (Location.dummy_loc "<contract>") "contract target is outside its checked history"
-let describe plan version =
+let describe ?(namespace="") plan version =
  ignore (checked (H.revalidate (R.history plan)));
  let window=find_version plan version in
- if window.windows=[] then reject (Location.dummy_loc "<contract>")
+ if window.windows=[] && window.retirements=[] then reject (Location.dummy_loc "<contract>")
   "this version has no transforming window; an empty additive contract is unnecessary";
  let settled=checked (R.settled_version plan ~version) in
  let previous=find_version plan (version-1) in
@@ -46,8 +46,17 @@ let describe plan version =
  let schema=List.find (fun (v:H.version) -> v.version=version) (H.versions (R.history plan)) in
  let snapshot=C.digest C.Snapshot (I.snapshot schema.schema) in
  let behaviors=List.map (fun (w:R.window) -> Migration_transform_link.behavior_digest (H.link w.binding)) window.windows |> List.sort_uniq compare in
- let behavior=match behaviors with [hash] -> hash | _ -> reject (Location.dummy_loc "<contract>") "contract windows do not share one exact checked migration" in
+ let behavior=match behaviors,window.retirements with
+ | [hash],[] -> hash
+ | [],(_::_ as retired) ->
+   let from=C.digest C.Snapshot (I.snapshot (List.find (fun (v:H.version) -> v.version=version-1) (H.versions (R.history plan))).schema) in
+   C.digest C.Contract (seq [atom "tesl-table-retirement-v1";atom family;atom namespace;integer version;
+     seq (List.map (fun (e:R.entity) -> seq [atom e.source.identity;atom from;atom snapshot]) retired)])
+ | _ -> reject (Location.dummy_loc "<contract>") "contract requires one exact transforming migration or a pure table retirement" in
  let per_entity=List.map (fun (before:R.entity) ->
+  if List.exists (fun (e:R.entity) -> e.source.identity=before.source.identity) window.retirements then
+   [],[{selector=Some(Table before.source.identity);node=seq [atom "drop-table";atom before.source.identity;K.entity ~reverse:true before]}]
+  else
   let after=match List.find_opt (fun (e:R.entity) -> e.source.identity=before.source.identity) settled.entities with
    | Some e -> e | None -> reject before.source.table.entity.entity_loc "contract cannot silently omit an entity" in
   let identity=before.source.identity in
@@ -107,6 +116,7 @@ let name_source name = match Lexer.tokenize "<contract-name>" name |> List.filte
  | [{Lexer.tok=Token.IDENT value;_}] when value=name -> name
  | _ -> quote_source name
 let selector_source = function
+ | Table e -> "Table " ^ e
  | Column(e,f) -> "Column " ^ e ^ " " ^ name_source f
  | Storage(e,f) -> "Storage " ^ e ^ " " ^ quote_source f
  | Index(e,f) -> "Index " ^ e ^ " " ^ name_source f
@@ -139,12 +149,13 @@ let elements = function EList {elems;_} -> elems
  | e -> reject (at e) "Contract object inventory must be a literal list"
 let object_name = function ELit {lit=LString name;_} -> name | e -> bare e
 let selector e = match Migration_form.application e with
+ | "Table",[entity] -> Table(bare entity)
  | "Column",[entity;field] -> Column(bare entity,object_name field)
  | "Storage",[entity;ELit {lit=LString physical;_}] -> Storage(bare entity,physical)
  | "Index",[entity;name] -> Index(bare entity,object_name name)
  | "Trigger",[entity] -> Trigger(bare entity)
  | "NotNull",[entity;field] -> Not_null(bare entity,object_name field)
- | _ -> reject (at e) "expected Column, Storage, Index, Trigger or NotNull with exact literal operands"
+ | _ -> reject (at e) "expected Table, Column, Storage, Index, Trigger or NotNull with exact literal operands"
 let root m = match Validation_common.schema_module_parts m.module_name with
  | Some(family,"Migrate",[name]) when Filename.check_suffix name "Contract" ->
    let revision=String.sub name 0 (String.length name-8) in
@@ -172,7 +183,7 @@ let check ~plan ~namespace ~file ~source = protect (fun () ->
  let m=match Parser.parse_module file source with Ok m -> m | Err e -> reject e.loc e.msg in
  (match Frontend_check.module_complexity_diagnostics m with [] -> () | d::_ -> reject (Location.dummy_loc file) d.message);
  let family,version=root m in
- let d=describe plan version in
+ let d=describe ~namespace plan version in
  if family<>d.family then reject (Location.dummy_loc file) "contract belongs to another checked schema family";
  let decl=match m.decls with [DConst c] when c.name="contract" -> c
  | _ -> reject (Location.dummy_loc file) "a contract module contains only its reviewed `contract` declaration" in
@@ -203,7 +214,8 @@ let check ~plan ~namespace ~file ~source = protect (fun () ->
  let window_hash=snd (H.contract C.Migration (K.version_node ~family ~namespace plan d.window)) in
  let d={d with operations=staged_nullability ~family ~namespace ~version ~window_hash d.operations} in
  let settled_encoded,settled_hash=H.contract C.Migration (K.settled_node ~family ~namespace plan d.settled) in
- let canonical=seq [atom "tesl-row-contract-v1";atom family;atom namespace;integer version;
+ let table_retirement=d.window.retirements<>[] in
+ let canonical=seq [atom (if table_retirement then "tesl-table-contract-v1" else "tesl-row-contract-v1");atom family;atom namespace;integer version;
   atom d.snapshot;atom d.behavior;atom window_hash;atom settled_hash;
   seq(List.map (fun (e,g) -> seq[atom e;integer g]) d.final_generations);
   seq(List.map (fun o -> o.node) d.operations)] in

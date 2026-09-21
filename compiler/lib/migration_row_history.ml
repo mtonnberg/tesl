@@ -10,12 +10,14 @@ module C = Migration_canonical
 type entity = {identity:string;generation:int;table:P.table;type_contract:C.node}
 type version = {version:int;schema:I.t;storage:P.t;entities:entity list}
 type binding = {version:int;previous:entity;current:entity;link:L.t;row:T.row}
-type t = {versions:version list;bindings:binding list;links:L.t list;edges:D.t list}
+type retirement = {version:int;previous:entity}
+type t = {retirements:retirement list;versions:version list;bindings:binding list;links:L.t list;edges:D.t list}
+let retirements t = t.retirements
 let versions t = t.versions
 let bindings t = t.bindings
 let declarations t = t.edges
 let migration_version (b:binding) = b.version
-let previous b = b.previous
+let previous (b:binding) = b.previous
 let current b = b.current
 let link b = b.link
 let row b = b.row
@@ -89,12 +91,31 @@ let check ~schemas ~edges = protect (fun () ->
   if List.exists (fun (f:I.field_shape) -> f.db_column<>None) (I.field_shapes first) then
     reject ~code:"MIG027" loc "baseline fields cannot claim compiler-owned Retype columns";
   let baseline=describe 1 first in
-  let versions=ref [baseline] and bindings=ref [] and links=ref [] in
+  let versions=ref [baseline] and bindings=ref [] and links=ref [] and retirements=ref [] in
   let previous=ref baseline in
   List.iter2 (fun schema edge ->
     let mapping=S.entities (D.coverage edge) in
+    let removed=List.filter_map (function S.Removed entity -> Some entity | _ -> None) mapping in
+    if removed<>[] then begin
+      if List.length removed<>1 || List.exists (fun (_,kind) -> kind<>S.Drop) (S.entries (D.coverage edge)) then
+        reject loc "table Drop requires exactly one removed entity and unchanged surviving entities";
+      if I.stored_entities schema=[] then reject loc "table Drop cannot remove the last entity";
+      if List.exists (fun schema -> I.queue_contracts schema<>[]) schemas then
+        reject loc "queue-bearing history does not support table Drop";
+      List.iter (fun (entity:I.stored_entity) ->
+        let identity=relative (!previous).schema entity.entity_name in
+        let old=List.find (fun (e:entity) -> e.identity=identity) (!previous).entities in
+        if List.exists (fun (b:binding) -> b.current.identity=identity) !bindings then
+          reject entity.entity_loc "table Drop of a previously transformed entity is not supported";
+        let born=List.find (fun (v:version) -> List.exists (fun (e:entity) -> e.identity=identity) v.entities) (List.rev !versions) in
+        let initial=List.find (fun (e:entity) -> e.identity=identity) born.entities in
+        if List.exists (fun (v:version) -> List.exists (fun (e:entity) -> e.identity=identity &&
+          List.exists (fun index -> not (List.mem index initial.table.indexes)) e.table.indexes) v.entities) !versions then
+          reject entity.entity_loc "table Drop with retained concurrent index jobs requires a checked terminal index lifecycle";
+        retirements:={version=D.version edge;previous=old}::!retirements) removed
+    end;
     List.iter (function
-      | S.Removed entity -> reject entity.entity_loc "row generation metadata does not yet support dropped or reintroduced entity lifecycles"
+      | S.Removed _ -> ()
       | S.Added entity ->
         let identity=relative schema entity.entity_name in
         if Hashtbl.mem generations identity then reject entity.entity_loc "row history cannot restart a retained entity generation";
@@ -105,7 +126,8 @@ let check ~schemas ~edges = protect (fun () ->
     let checked_link=Option.map (fun transform -> ir (L.link transform)) (D.transforms edge) in
     let rows=Option.fold ~none:[] ~some:(fun link -> T.rows (L.checked_transform link)) checked_link in
     List.iter (fun (identity,kind) -> match kind with
-      | S.Reset | S.Drop -> reject loc "row generation metadata does not yet support reset/drop lifecycle operations"
+      | S.Reset -> reject loc "row generation metadata does not yet support reset lifecycle operations"
+      | S.Drop -> ()
       | S.Transform ->
         let candidates=List.filter (fun (row:T.row) -> row.mapping.identity=identity) rows in
         (match candidates with
@@ -139,5 +161,5 @@ let check ~schemas ~edges = protect (fun () ->
         if fresh.generation<>old.generation+1 then reject loc "linked row callback does not advance exactly one entity generation";
         bindings:={version=next.version;previous=old;current=fresh;link;row}::!bindings) rows) checked_link;
     versions:=next::!versions;previous:=next) (List.tl schemas) edges;
-  let result={versions=List.rev !versions;bindings=List.sort (fun a b -> compare (a.version,a.current.identity) (b.version,b.current.identity)) !bindings;links=List.rev !links;edges} in
+  let result={retirements=List.rev !retirements;versions=List.rev !versions;bindings=List.sort (fun (a:binding) (b:binding) -> compare (a.version,a.current.identity) (b.version,b.current.identity)) !bindings;links=List.rev !links;edges} in
   ignore (checked (revalidate result));result)

@@ -2,16 +2,19 @@ package teslrt
 
 func pgRowContractFunctions(namespace string) []pgMigrationControlFunction {
 	ns := quoteIdentifier(namespace) + "."
-	return []pgMigrationControlFunction{
+	return append(pgRowTableContractFunctions(namespace), []pgMigrationControlFunction{
 		{"tesl_register_row_contract", "v integer, prior text, doc bytea, digest text, window_hash text, settled_doc bytea, settled_digest text, ops integer, preparations integer, abi text", "void", "volatile", `
 declare r ` + ns + `tesl_row_contracts%rowtype; s ` + ns + `tesl_schema_state%rowtype; previous text;
 begin
+ if exists(select 1 from ` + ns + `tesl_queue_contracts) then raise exception 'tesl: queue-bearing history retirement is not supported'; end if;
  if v is null or v<2 or doc is null or digest is null or digest !~ '^[0-9a-f]{64}$' or
  pg_catalog.encode(pg_catalog.sha256(doc),'hex') is distinct from digest or settled_doc is null or
  settled_digest is null or settled_digest !~ '^[0-9a-f]{64}$' or pg_catalog.encode(pg_catalog.sha256(settled_doc),'hex') is distinct from settled_digest or
  abi is null or abi !~ '^tesl-source-abi-v1:[0-9a-f]{64}$' or ops is null or ops<0 or preparations is null or preparations<0 or preparations>ops then
  raise exception 'tesl: invalid checked Contract intent'; end if;
  select * into s from ` + ns + `tesl_schema_state where id=1 for update;
+ -- Recheck after the state lock serializes concurrent queue registration.
+ if exists(select 1 from ` + ns + `tesl_queue_contracts) then raise exception 'tesl: queue-bearing history retirement is not supported'; end if;
  if not found or s.current<v or s.min_version>v then raise exception 'tesl: Contract target is not admitted'; end if;
  if not exists(select 1 from ` + ns + `tesl_row_physical p where p.version=v and p.contract_hash=window_hash) then
  raise exception 'tesl: Contract window differs from installed manifest'; end if;
@@ -25,14 +28,26 @@ begin
  r.operation_count is distinct from ops or r.preparation_count is distinct from preparations then raise exception 'tesl: immutable Contract intent differs'; end if;
 end`},
 		{"tesl_retire_row_window", "v integer, digest text, retirement text, entities text[], generations smallint[], executor_abi text", "void", "volatile", `
-declare s ` + ns + `tesl_schema_state%rowtype; c ` + ns + `tesl_row_contracts%rowtype; compatibility text; fence integer; old integer; i integer;
+declare s ` + ns + `tesl_schema_state%rowtype; c ` + ns + `tesl_row_contracts%rowtype; compatibility text; fence integer; old integer; i integer; table_retirement boolean;
 begin
+ if exists(select 1 from ` + ns + `tesl_queue_contracts) then raise exception 'tesl: queue-bearing history retirement is not supported'; end if;
  select * into s from ` + ns + `tesl_schema_state where id=1 for update;
+ -- Recheck after the state lock serializes concurrent queue registration.
+ if exists(select 1 from ` + ns + `tesl_queue_contracts) then raise exception 'tesl: queue-bearing history retirement is not supported'; end if;
  select * into c from ` + ns + `tesl_row_contracts where version=v;
  if not found or c.contract_hash is distinct from digest or retirement is null or retirement !~ '^[0-9a-f]{64}$' or
  executor_abi is null or executor_abi !~ '^tesl-source-abi-v1:[0-9a-f]{64}$' or
- entities is null or generations is null or pg_catalog.cardinality(entities)=0 or pg_catalog.cardinality(entities)<>pg_catalog.cardinality(generations) then
+ entities is null or generations is null or pg_catalog.cardinality(entities)<>pg_catalog.cardinality(generations) then
  raise exception 'tesl: retirement requires exact Contract and final generation inventory'; end if;
+ table_retirement:=` + ns + `tesl_row_table_contract_valid(c.contract,
+  (select contract from ` + ns + `tesl_row_physical where version=v),c.settled,
+  (select coalesce((select previous.settled from ` + ns + `tesl_row_contracts previous
+   where previous.version=v-1 and exists(select 1 from ` + ns + `tesl_schema_versions receipt
+    where receipt.version=previous.version and receipt.step='contracted' and receipt.artefact_hash=previous.contract_hash)),physical.contract)
+   from ` + ns + `tesl_row_physical physical where physical.version=v-1),v);
+ if pg_catalog.cardinality(entities)=0 then
+  if table_retirement is distinct from true or c.operation_count<>1 or c.preparation_count<>0 then raise exception 'tesl: empty final inventory requires exact pure table Contract'; end if;
+ elsif table_retirement then raise exception 'tesl: table Contract cannot fabricate row finality'; end if;
  if exists(select 1 from ` + ns + `tesl_schema_versions where version=v and step='retired' and artefact_hash=retirement) then return; end if;
  select fence_ns into fence from ` + ns + `tesl_schema_meta where id=1;
  perform pg_catalog.pg_advisory_xact_lock(fence,-v);
@@ -61,7 +76,10 @@ end`},
 		{"tesl_begin_row_contract", "v integer, digest text", "void", "volatile", `
 declare s ` + ns + `tesl_schema_state%rowtype; c ` + ns + `tesl_row_contracts%rowtype; fence integer; compatibility text;
 begin
+ if exists(select 1 from ` + ns + `tesl_queue_contracts) then raise exception 'tesl: queue-bearing history retirement is not supported'; end if;
  select * into s from ` + ns + `tesl_schema_state where id=1 for update;
+ -- Recheck after the state lock serializes concurrent queue registration.
+ if exists(select 1 from ` + ns + `tesl_queue_contracts) then raise exception 'tesl: queue-bearing history retirement is not supported'; end if;
  select * into c from ` + ns + `tesl_row_contracts where version=v;
  if not found or c.contract_hash is distinct from digest or s.min_version<v or
  not exists(select 1 from ` + ns + `tesl_schema_versions where version=v and step='retired') then
@@ -111,5 +129,5 @@ begin
  insert into ` + ns + `tesl_schema_versions(version,step,artefact_hash,source_abi,stored_value_compatibility,protocol_level,fence_domain,executed_by)
  values(v,'contracted',digest,(select source_abi from ` + ns + `tesl_schema_versions where version=v and step='retired'),compatibility,1,'tesl-1',pg_catalog.current_setting('application_name'));
 end`},
-	}
+	}...)
 }

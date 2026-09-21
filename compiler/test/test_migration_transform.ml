@@ -295,9 +295,12 @@ database Main = Database {
   let file=save "app.tesl" app in
   accepts file app;
   List.iter (fun debug -> match Compile.compile_go_source ~debug file app with
-    | Compile.GoSuccess _ -> fail "public binary emitted a partially executable transform history"
-    | Compile.GoFailure errors -> check bool ("actual sealed app refuses at execution boundary: " ^ describe errors) true
-        (List.exists (fun (d:Compile.diagnostic) -> d.code="MIG016" && Compile.string_contains d.message "transformation executor") errors)) [false;true])
+    | Compile.GoFailure errors -> fail ("public compiler rejected a checked transform history: " ^ describe errors)
+    | Compile.GoSuccess artifacts ->
+        check bool "public compiler emits retained physical metadata for transforms" true
+          (List.exists (fun (artifact:Emit_go.artifact) -> Filename.basename artifact.path = "retained-physical-history.json") artifacts);
+        check bool "public compiler emits row transform metadata for transforms" true
+          (List.exists (fun (artifact:Emit_go.artifact) -> Filename.basename artifact.path = "row-transform-history.json") artifacts)) [false;true])
 let source_identity () = project (fun root save path ->
   let parsed=match Parser.parse_module path without_test with Ok m -> m | Err e -> fail e.msg in
   let original=List.find_map (function Ast.DFunc f when f.name="convert" -> Some f | _ -> None) parsed.decls |> Option.get in
@@ -548,12 +551,16 @@ let same_sealed_two_edges () = project ~before:(same_fact_source old) ~after:(sa
   accepts path (Source_input.read path);
   accepts v3 (Source_input.read v3);
   match Compile.compile_go_file app_path with
-  | Compile.GoSuccess _ -> fail "transform executor remains deliberately unavailable"
+  | Compile.GoSuccess _ -> fail "two transforming revisions emitted without the required predecessor Contract"
   | Compile.GoFailure diagnostics ->
-    check bool ("two checked edges reach execution boundary: " ^ describe diagnostics) true
-      (List.exists (fun (d:Compile.diagnostic) -> d.code="MIG016") diagnostics);
+    check bool "two transforming revisions require the exact predecessor Contract" true
+      (List.exists (fun (d:Compile.diagnostic) -> d.code="V001" &&
+        Compile.string_contains d.message "exact checked Contract V2") diagnostics);
     check bool "neither edge loses Same proof context" false
-      (List.exists (fun (d:Compile.diagnostic) -> d.code="V001") diagnostics))
+      (List.exists (fun (d:Compile.diagnostic) -> d.code="V001" &&
+        not (Compile.string_contains d.message "exact checked Contract V2")) diagnostics);
+    check bool "missing Contract is reported instead of an unsupported-transform refusal" false
+      (List.exists (fun (d:Compile.diagnostic) -> d.code="MIG016") diagnostics))
 
 let same_overlay_snapshot () = project ~before:(same_fact_source old) ~after:(same_fact_source fresh) (fun root _ path ->
   let context=Result.get_ok (Migration_abi.current ()) in
@@ -644,7 +651,7 @@ let () = run "Transforming declarations" ["checked source",List.map (fun (name,f
    "optional new-field proof",proof_checked;"direct imports retain owner",imports;"pure owned executable closure",purity;
    "contextual rule validation",rules;"contextual field spellings",contextual_fields;
    "existing proof cannot strengthen by identity",proof_strengthening;"actual optional proof and rejection execution",proof_native;
-   "public binary generation refuses sealed transforms",public_backend_guard;
+   "public binary generation links sealed transforms",public_backend_guard;
    "physical AST and unsaved source identity",source_identity;
    "stdlib HTTP checks cannot escape result boundary",primitive_failure;
    "dependency checking uses supplied root source",root_buffer_dependency;

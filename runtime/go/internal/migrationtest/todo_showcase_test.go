@@ -22,6 +22,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	teslcli "tesl.dev/runtime/go/internal/cli"
 	"tesl.dev/runtime/go/teslrt"
 )
 
@@ -87,8 +88,10 @@ func TestCompiledTodoShowcaseRollingUpgrade(t *testing.T) {
 		db.requireWaiting(t, next)
 		traffic.requireProgress(t, ctx, nodes[0].process.label, nodes[1].process.label)
 		if version == 4 {
+			// The retained-row executor pauses inside the CREATE transaction,
+			// before catalog verification, object receipt and commit.
 			crashShowcaseExpansion(t, db, interrupted,
-				Event{Name: "expansion-after-ddl", Actor: "todo-v4-worker", Occurrence: 1}, traffic,
+				Event{Name: "row-forward-after-ddl", Actor: "todo-v4-worker", Occurrence: 1}, traffic,
 				nodes[0].process.label, nodes[1].process.label)
 			next.assertNoHTTP(t)
 		}
@@ -143,6 +146,310 @@ func TestCompiledTodoShowcaseRollingUpgrade(t *testing.T) {
 		requireShowcaseList(t, ctx, client, node.process.base, retained)
 	}
 	db.requireFinalStorage(t, len(retained))
+}
+
+// INV-GENERATION, INV-FINAL, INV-CONTRACT, INV-JSONB-COMPATIBILITY,
+// INV-JSONB-RETENTION;
+// TR-BACKFILL, TR-CONTRACT.
+// Transforming releases are sequential by design. Bootstrap V1 and advance
+// through the archived V1..V9 executables, then run the current app through
+// V10, V11, V12 and V13. Each worker reaches its target generation and durable
+// provisional state before the Contract; the Contract performs the final pass
+// before the next worker is admitted. This is the same order a production
+// rolling deployment must use.
+func TestCompiledTodoComplexHistoryPostgres(t *testing.T) {
+	dsn := os.Getenv("TESL_MIGRATION_TEST_DSN")
+	if dsn == "" {
+		if os.Getenv("TESL_MIGRATION_TEST_REQUIRE_POSTGRES") == "1" {
+			t.Fatal("TESL_MIGRATION_TEST_REQUIRE_POSTGRES=1 requires TESL_MIGRATION_TEST_DSN")
+		}
+		t.Skip("run scripts/run-migration-tests.sh")
+	}
+	root := os.Getenv("TESL_REPO_ROOT")
+	if root == "" {
+		var err error
+		root, err = filepath.Abs("../../../..")
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Minute)
+	t.Cleanup(cancel)
+	archived, _ := buildShowcaseRevisions(t, ctx, root)
+	transforming := buildTodoTransformRevisions(t, ctx, root)
+	db := newShowcaseDatabase(t, ctx, dsn)
+	db.install(t, archived[1])
+	client := &http.Client{Timeout: 15 * time.Second}
+	var worker, request *workerLessonProcess
+	for version := 1; version <= 9; version++ {
+		worker = db.workerNode(t, archived[version], version)
+		request = db.requestNode(t, archived[version], fmt.Sprintf("todo-complex-v%d", version))
+		requireShowcaseReady(t, ctx, client, request)
+		if version < 9 {
+			request.stop(t)
+			worker.stop(t)
+		}
+	}
+	old := showcaseTodo{ID: "complex-old", Title: "Retained through every transform"}
+	requireShowcaseTodo(t, ctx, client, request.base, http.MethodPost, old.ID,
+		fmt.Sprintf(`{"title":%q}`, old.Title), old)
+	// Seed a non-default retained value before the transforming window. A
+	// broken backfill that substitutes the current constructor's weight=1
+	// must not pass this regression.
+	if _, err := db.observer.Exec(ctx, "update todo_app.todos set priority=4 where id=$1", old.ID); err != nil {
+		t.Fatal(err)
+	}
+	worker.stop(t)
+	// Every retiring V1..V8 process has been joined; V9 keeps serving. Force
+	// only bypasses recent heartbeat warnings; retirement still takes fences.
+	closeEpoch := exec.CommandContext(ctx, archived[9], "--schema", "close-epoch", "--through", "V9", "--force", "--json")
+	closeEpoch.Env = db.login(db.worker)
+	if data, err := closeEpoch.CombinedOutput(); err != nil {
+		t.Fatalf("close the additive epoch before V10: %v\n%s", err, data)
+	} else {
+		var result struct {
+			Kind string `json:"kind"`
+		}
+		if err := json.Unmarshal(data, &result); err != nil || result.Kind != "schema-epoch-closed" {
+			t.Fatalf("unexpected epoch closure: %s (%v)", data, err)
+		}
+	}
+
+	newTodo := showcaseTodo{ID: "complex-new", Title: "Created by V13"}
+	for version := 10; version <= 13; version++ {
+		t.Logf("sequentially applying transforming Todo V%d", version)
+		oldRequest := request
+		worker = db.workerNode(t, transforming[version], version)
+		requireShowcaseReady(t, ctx, client, oldRequest)
+		request = db.requestNode(t, transforming[version], fmt.Sprintf("todo-complex-v%d", version))
+		requireShowcaseReady(t, ctx, client, request)
+		// HTTP readiness only proves that the new version may be admitted.  The
+		// row worker publishes that event before it scans the table, so wait for
+		// its durable provisional receipt before asserting converted values.
+		waitShowcaseBackfillProvisional(t, db, version, version-8)
+		waitShowcaseGeneration(t, db, old.ID, version-8)
+		// Exercise a real predecessor writer while the transforming worker is
+		// active.  The HTTP shape remains the same, but the old binary owns the
+		// previous physical row representation and must be admitted to write it.
+		requireShowcaseTodo(t, ctx, client, oldRequest.base, http.MethodGet, old.ID, "", old)
+		requireShowcaseTodo(t, ctx, client, oldRequest.base, http.MethodPut, old.ID,
+			fmt.Sprintf(`{"title":%q,"completed":false}`, old.Title), old)
+		waitShowcaseGeneration(t, db, old.ID, version-8)
+		requireShowcaseTodo(t, ctx, client, request.base, http.MethodGet, old.ID, "", old)
+
+		switch version {
+		case 10:
+			assertTodoNumericTransform(t, db, old.ID, "4", "5")
+		case 11:
+			assertTodoNumericTransform(t, db, old.ID, "4", "5")
+		case 12:
+			assertTodoRecordTransform(t, db, old.ID)
+		case 13:
+			assertTodoADTTransform(t, db, old.ID)
+			requireShowcaseTodo(t, ctx, client, request.base, http.MethodPost, newTodo.ID,
+				fmt.Sprintf(`{"title":%q}`, newTodo.Title), newTodo)
+			waitShowcaseGeneration(t, db, newTodo.ID, 5)
+			assertTodoADTWriteBack(t, db, newTodo.ID)
+			// Read and update a successor-created row through the real V12
+			// decoder, then check that both stored representations still agree.
+			requireShowcaseTodo(t, ctx, client, oldRequest.base, http.MethodGet, newTodo.ID, "", newTodo)
+			newTodo.Title = "Edited by the retained V12 writer"
+			requireShowcaseTodo(t, ctx, client, oldRequest.base, http.MethodPut, newTodo.ID,
+				fmt.Sprintf(`{"title":%q,"completed":false}`, newTodo.Title), newTodo)
+			waitShowcaseGeneration(t, db, newTodo.ID, 5)
+			requireShowcaseTodo(t, ctx, client, request.base, http.MethodGet, newTodo.ID, "", newTodo)
+			assertTodoADTWriteBack(t, db, newTodo.ID)
+		}
+
+		oldRequest.stop(t)
+		worker.stop(t)
+		db.contract(t, transforming[version], version)
+		waitShowcaseBackfillFinal(t, db, version, version-8)
+		if version == 11 {
+			db.requireColumnAbsent(t, "priority")
+		}
+		if version == 13 {
+			db.requireColumnAbsent(t, "priority_info")
+		}
+	}
+	db.requireColumnPresent(t, "priority_info__v13")
+	// The surviving application must decode both origins after Contract has
+	// physically removed the previous JSONB representation.
+	requireShowcaseTodo(t, ctx, client, request.base, http.MethodGet, old.ID, "", old)
+	requireShowcaseTodo(t, ctx, client, request.base, http.MethodGet, newTodo.ID, "", newTodo)
+	assertTodoADTTransform(t, db, old.ID)
+	var created []byte
+	if err := db.observer.QueryRow(ctx, "select priority_info__v13::text from todo_app.todos where id=$1", newTodo.ID).Scan(&created); err != nil {
+		t.Fatal(err)
+	}
+	var tagged struct {
+		Tag    string `json:"tag"`
+		Fields struct {
+			Weight int `json:"weight"`
+		} `json:"fields"`
+	}
+	if err := json.Unmarshal(created, &tagged); err != nil || tagged.Tag != "Created" || tagged.Fields.Weight != 1 {
+		t.Fatalf("Contract changed successor-created ADT: %s (%v)", created, err)
+	}
+	request.stop(t)
+}
+
+func buildTodoTransformRevisions(t *testing.T, ctx context.Context, root string) map[int]string {
+	t.Helper()
+	base := filepath.Join(root, "example", "db-migration-example")
+	compiler := os.Getenv("TESL_COMPILER")
+	if compiler == "" {
+		compiler = filepath.Join(root, "compiler", "_build", "default", "bin", "main.exe")
+	}
+	result := make(map[int]string, 4)
+	for version := 10; version <= 13; version++ {
+		t.Logf("building and testing transforming Todo V%d", version)
+		stage := filepath.Join(t.TempDir(), fmt.Sprintf("todo-stage-v%d", version))
+		writeTodoTransformStage(t, base, stage, version)
+		environment := append([]string(nil), os.Environ()...)
+		for index := len(environment) - 1; index >= 0; index-- {
+			name, _, ok := strings.Cut(environment[index], "=")
+			if ok && (name == "TESL_REPO_ROOT" || name == "TESL_COMPILER") {
+				environment = append(environment[:index], environment[index+1:]...)
+			}
+		}
+		environment = append(environment, "TESL_REPO_ROOT="+root, "TESL_COMPILER="+compiler)
+		tool := teslcli.New()
+		tool.Directory, tool.Environment = stage, environment
+		tool.Resolver.Getenv = func(key string) string {
+			// The staged compiler is an explicit test input.  Scan from the end
+			// so an inherited TESL_COMPILER/TESL_REPO_ROOT cannot shadow it.
+			for index := len(environment) - 1; index >= 0; index-- {
+				entry := environment[index]
+				name, value, ok := strings.Cut(entry, "=")
+				if ok && name == key {
+					return value
+				}
+			}
+			return ""
+		}
+		var output bytes.Buffer
+		tool.Stdout, tool.Stderr = &output, &output
+		if err := tool.Run(ctx, []string{"migrate", "generate", "todo-app.tesl"}); err != nil {
+			t.Fatalf("refresh staged V%d migration: %v\n%s", version, err, output.String())
+		}
+		generated := filepath.Join(t.TempDir(), fmt.Sprintf("todo-transform-v%d-go", version))
+		command := exec.CommandContext(ctx, compiler, "--backend", "go", filepath.Join(stage, "todo-app.tesl"), "--out", generated)
+		command.Dir, command.Env = root, environment
+		if data, err := command.CombinedOutput(); err != nil {
+			t.Fatalf("emit staged V%d todo app: %v\n%s", version, err, data)
+		}
+		for _, artifact := range []string{"migration-source-history.json", "retained-physical-history.json", "row-transform-history.json", "row-contract-history.json"} {
+			if _, err := os.Stat(filepath.Join(generated, artifact)); err != nil {
+				t.Fatalf("staged V%d public build omitted %s: %v", version, artifact, err)
+			}
+		}
+		unit := exec.CommandContext(ctx, "go", "test", "-p", "1", "./...")
+		unit.Dir, unit.Env = generated, environment
+		if data, err := unit.CombinedOutput(); err != nil {
+			t.Fatalf("staged V%d todo tests: %v\n%s", version, err, data)
+		}
+		binary := filepath.Join(t.TempDir(), fmt.Sprintf("todo-v%d-transform", version))
+		build := exec.CommandContext(ctx, "go", "build", "-race", "-o", binary, "./cmd/app")
+		build.Dir, build.Env = generated, environment
+		if data, err := build.CombinedOutput(); err != nil {
+			t.Fatalf("build staged V%d todo app: %v\n%s", version, err, data)
+		}
+		result[version] = binary
+	}
+	return result
+}
+
+// INV-JSONB-COMPATIBILITY; TR-TRACEABILITY-CHECK.
+// Keep release reconstruction covered even when PostgreSQL is unavailable.
+func TestTodoTransformStageSources(t *testing.T) {
+	root, err := filepath.Abs("../../../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := filepath.Join(root, "example", "db-migration-example")
+	for version := 10; version <= 13; version++ {
+		t.Run(fmt.Sprintf("V%d", version), func(t *testing.T) {
+			stage := t.TempDir()
+			writeTodoTransformStage(t, base, stage, version)
+			current, err := os.ReadFile(filepath.Join(stage, "schema/todo/v-current.tesl"))
+			if err != nil || !bytes.Contains(current, []byte("module Schema.Todo.VCurrent exposing")) {
+				t.Fatalf("invalid current schema: %v", err)
+			}
+			app, err := os.ReadFile(filepath.Join(stage, "todo-app.tesl"))
+			original, originalErr := os.ReadFile(filepath.Join(base, "todo-app.tesl"))
+			if err != nil || originalErr != nil || !bytes.Equal(app, original) {
+				t.Fatalf("release staging changed the application: %v, %v", err, originalErr)
+			}
+			if version == 13 && !bytes.Contains(current, []byte(`@column("priority_info__v13")`)) {
+				t.Fatal("V13 lost its retyped physical storage")
+			}
+		})
+	}
+}
+
+func writeTodoTransformStage(t *testing.T, base, stage string, version int) {
+	t.Helper()
+	copyFile := func(relative string) {
+		data, err := os.ReadFile(filepath.Join(base, relative))
+		if err != nil {
+			t.Fatalf("read Todo stage input %s: %v", relative, err)
+		}
+		path := filepath.Join(stage, relative)
+		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, data, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	copyFile("todo-app.tesl")
+	copyFile("tesl.toml")
+	for current := 1; current < version; current++ {
+		copyFile(fmt.Sprintf("schema/todo/v%d.tesl", current))
+	}
+	currentFile := fmt.Sprintf("v%d.tesl", version)
+	if version == 13 {
+		currentFile = "v-current.tesl"
+	}
+	current, err := os.ReadFile(filepath.Join(base, "schema", "todo", currentFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	current = []byte(strings.Replace(string(current), fmt.Sprintf("module Schema.Todo.V%d ", version), "module Schema.Todo.VCurrent ", 1))
+	path := filepath.Join(stage, "schema/todo/v-current.tesl")
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, current, 0600); err != nil {
+		t.Fatal(err)
+	}
+	for migration := 2; migration < version; migration++ {
+		copyFile(fmt.Sprintf("migrations/todo/v%d.tesl", migration))
+	}
+	migration, err := os.ReadFile(filepath.Join(base, "migrations", "todo", fmt.Sprintf("v%d.tesl", version)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if version < 13 {
+		migration = []byte(strings.Replace(string(migration), fmt.Sprintf("Schema.Todo.V%d", version), "Schema.Todo.VCurrent", -1))
+		if start := strings.Index(string(migration), "# tesl:frozen-migration:v1"); start >= 0 {
+			text := string(migration)
+			if end := strings.Index(text, "# tesl:frozen-migration:end"); end >= 0 {
+				migration = []byte(text[:start] + text[end+len("# tesl:frozen-migration:end"):])
+			}
+		}
+	}
+	path = filepath.Join(stage, "migrations/todo", fmt.Sprintf("v%d.tesl", version))
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, migration, 0600); err != nil {
+		t.Fatal(err)
+	}
+	for contract := 10; contract <= version; contract++ {
+		copyFile(fmt.Sprintf("migrations/todo/v%d-contract.tesl", contract))
+	}
 }
 
 func buildShowcaseRevisions(t *testing.T, ctx context.Context, root string) (map[int]string, string) {
@@ -202,6 +509,11 @@ func buildShowcaseRevisions(t *testing.T, ctx context.Context, root string) (map
 		}
 		requireShowcaseReleaseSources(t, example, filepath.Join(output, "source"), version, originals)
 		generated := filepath.Join(output, "go")
+		for _, artifact := range []string{"migration-source-history.json", "retained-physical-history.json"} {
+			if _, err := os.Stat(filepath.Join(generated, artifact)); err != nil {
+				t.Fatalf("V%d public build omitted the format-5 %s companion: %v", version, artifact, err)
+			}
+		}
 		unit := exec.CommandContext(ctx, "go", "test", "-race", "-count=1", "./internal/teslmodtodoapp")
 		unit.Dir = generated
 		if data, err := unit.CombinedOutput(); err != nil {
@@ -706,6 +1018,152 @@ func (db *showcaseDatabase) workerNode(t *testing.T, binary string, version int)
 	return worker
 }
 
+func (db *showcaseDatabase) contract(t *testing.T, binary string, version int) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(db.ctx, 30*time.Second)
+	defer cancel()
+	command := exec.CommandContext(ctx, binary, "--schema", "contract", fmt.Sprintf("V%d", version), "--json")
+	command.Env = db.login(db.worker)
+	data, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("Todo V%d Contract: %v\n%s", version, err, data)
+	}
+	var result struct {
+		Kind string `json:"kind"`
+	}
+	if err := json.Unmarshal(data, &result); err != nil || result.Kind != "schema-contracted" {
+		t.Fatalf("Todo V%d Contract returned unexpected result: %s (%v)", version, data, err)
+	}
+}
+
+func waitShowcaseGeneration(t *testing.T, db *showcaseDatabase, id string, generation int) {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		var marker int
+		err := db.observer.QueryRow(db.ctx, "select _tesl_v from todo_app.todos where id=$1", id).Scan(&marker)
+		if err == nil && marker == generation {
+			return
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	var marker int
+	err := db.observer.QueryRow(db.ctx, "select _tesl_v from todo_app.todos where id=$1", id).Scan(&marker)
+	t.Fatalf("Todo row %q did not reach generation %d (marker=%d, err=%v)", id, generation, marker, err)
+}
+
+func waitShowcaseBackfillProvisional(t *testing.T, db *showcaseDatabase, version, generation int) {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		var state string
+		err := db.observer.QueryRow(db.ctx, `select state
+ from todo_app.tesl_schema_backfill_shards
+ where version=$1 and entity='Todo' and target_generation=$2 and shard=0`, version, generation).Scan(&state)
+		if err == nil && state == "provisional" {
+			return
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	var state string
+	err := db.observer.QueryRow(db.ctx, `select state
+ from todo_app.tesl_schema_backfill_shards
+ where version=$1 and entity='Todo' and target_generation=$2 and shard=0`, version, generation).Scan(&state)
+	t.Fatalf("Todo V%d backfill did not reach provisional state (state=%q, err=%v)", version, state, err)
+}
+
+func waitShowcaseBackfillFinal(t *testing.T, db *showcaseDatabase, version, generation int) {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		var state string
+		err := db.observer.QueryRow(db.ctx, `select state
+ from todo_app.tesl_schema_backfill_shards
+ where version=$1 and entity='Todo' and target_generation=$2 and shard=0`, version, generation).Scan(&state)
+		if err == nil && state == "final" {
+			return
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	var state string
+	err := db.observer.QueryRow(db.ctx, `select state
+ from todo_app.tesl_schema_backfill_shards
+ where version=$1 and entity='Todo' and target_generation=$2 and shard=0`, version, generation).Scan(&state)
+	t.Fatalf("Todo V%d Contract did not record final backfill state (state=%q, err=%v)", version, state, err)
+}
+
+func assertTodoNumericTransform(t *testing.T, db *showcaseDatabase, id, priority, weight string) {
+	t.Helper()
+	var gotPriority, gotWeight string
+	err := db.observer.QueryRow(db.ctx, "select priority::text, priority_weight::text from todo_app.todos where id=$1", id).Scan(&gotPriority, &gotWeight)
+	if err != nil || gotPriority != priority || gotWeight != weight {
+		t.Fatalf("Todo numeric transform for %q: priority=%s weight=%s (%v)", id, gotPriority, gotWeight, err)
+	}
+}
+
+func assertTodoRecordTransform(t *testing.T, db *showcaseDatabase, id string) {
+	t.Helper()
+	var value []byte
+	if err := db.observer.QueryRow(db.ctx, "select priority_info::text from todo_app.todos where id=$1", id).Scan(&value); err != nil {
+		t.Fatalf("Todo record transform for %q: %v", id, err)
+	}
+	var record map[string]any
+	if err := json.Unmarshal(value, &record); err != nil || record["weight"] != float64(5) || record["origin"] != "migrated-v11" {
+		t.Fatalf("Todo record transform for %q: got %s (%v)", id, value, err)
+	}
+}
+
+func assertTodoADTTransform(t *testing.T, db *showcaseDatabase, id string) {
+	t.Helper()
+	var value []byte
+	if err := db.observer.QueryRow(db.ctx, "select priority_info__v13::text from todo_app.todos where id=$1", id).Scan(&value); err != nil {
+		t.Fatalf("Todo ADT transform for %q: %v", id, err)
+	}
+	var tagged map[string]any
+	if err := json.Unmarshal(value, &tagged); err != nil || tagged["tag"] != "Imported" {
+		t.Fatalf("Todo ADT transform for %q: got %s (%v)", id, value, err)
+	}
+	fields, ok := tagged["fields"].(map[string]any)
+	if !ok || fields["weight"] != float64(5) || fields["source"] != "migrated-v11" {
+		t.Fatalf("Todo ADT transform for %q lost provenance: %s", id, value)
+	}
+}
+
+func assertTodoADTWriteBack(t *testing.T, db *showcaseDatabase, id string) {
+	t.Helper()
+	var oldValue, currentValue []byte
+	if err := db.observer.QueryRow(db.ctx, "select priority_info::text, priority_info__v13::text from todo_app.todos where id=$1", id).Scan(&oldValue, &currentValue); err != nil {
+		t.Fatalf("Todo ADT reverse write for %q: %v", id, err)
+	}
+	var oldRecord, currentTagged map[string]any
+	if err := json.Unmarshal(oldValue, &oldRecord); err != nil || oldRecord["weight"] != float64(1) || oldRecord["origin"] != "created" {
+		t.Fatalf("Todo ADT reverse write for %q has wrong old record: %s (%v)", id, oldValue, err)
+	}
+	if err := json.Unmarshal(currentValue, &currentTagged); err != nil || currentTagged["tag"] != "Created" {
+		t.Fatalf("Todo ADT reverse write for %q has wrong current tag: %s (%v)", id, currentValue, err)
+	}
+	fields, ok := currentTagged["fields"].(map[string]any)
+	if !ok || fields["weight"] != float64(1) {
+		t.Fatalf("Todo ADT reverse write for %q has wrong current fields: %s", id, currentValue)
+	}
+}
+
+func (db *showcaseDatabase) requireColumnAbsent(t *testing.T, column string) {
+	t.Helper()
+	var exists bool
+	if err := db.observer.QueryRow(db.ctx, "select exists(select 1 from information_schema.columns where table_schema='todo_app' and table_name='todos' and column_name=$1)", column).Scan(&exists); err != nil || exists {
+		t.Fatalf("Todo Contract left column %q present: %t (%v)", column, exists, err)
+	}
+}
+
+func (db *showcaseDatabase) requireColumnPresent(t *testing.T, column string) {
+	t.Helper()
+	var exists bool
+	if err := db.observer.QueryRow(db.ctx, "select exists(select 1 from information_schema.columns where table_schema='todo_app' and table_name='todos' and column_name=$1)", column).Scan(&exists); err != nil || !exists {
+		t.Fatalf("Todo Contract removed required column %q: %t (%v)", column, exists, err)
+	}
+}
+
 func requireShowcaseReady(t *testing.T, ctx context.Context, client *http.Client, process *workerLessonProcess) {
 	t.Helper()
 	workerLessonWait(t, ctx, process, "todo HTTP readiness", func() bool {
@@ -723,20 +1181,7 @@ func requireShowcaseReady(t *testing.T, ctx context.Context, client *http.Client
 
 func (db *showcaseDatabase) controlSnapshot(t *testing.T) string {
 	t.Helper()
-	var snapshot string
-	err := db.observer.QueryRow(db.ctx, `select jsonb_build_object(
- 'meta',(select jsonb_agg(to_jsonb(m) order by id) from todo_app.tesl_schema_meta m),
- 'state',(select jsonb_agg(to_jsonb(s) order by id) from todo_app.tesl_schema_state s),
- 'history',(select jsonb_agg(to_jsonb(v) order by version,step,seq) from todo_app.tesl_schema_versions v),
- 'intents',(select jsonb_agg(to_jsonb(e) order by version) from todo_app.tesl_schema_expansions e),
- 'objects',(select jsonb_agg(to_jsonb(o) order by version,ordinal) from todo_app.tesl_schema_expansion_objects o),
- 'indexes',(select jsonb_agg(to_jsonb(i) order by id) from todo_app.tesl_schema_index i),
- 'leases',(select jsonb_agg(to_jsonb(l) order by name) from todo_app.tesl_schema_leases l),
- 'columns',(select jsonb_agg(to_jsonb(c) order by table_name,ordinal_position) from information_schema.columns c where table_schema='todo_app'))::text`).Scan(&snapshot)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return snapshot
+	return migrationApplicationControlSnapshot(t, db.ctx, db.observer, "todo_app")
 }
 
 func (db *showcaseDatabase) requireWaiting(t *testing.T, process *workerLessonProcess) {
@@ -770,7 +1215,7 @@ func (db *showcaseDatabase) requireWaiting(t *testing.T, process *workerLessonPr
 
 func crashShowcaseExpansion(t *testing.T, db *showcaseDatabase, binary string, boundary Event, traffic *showcaseTraffic, labels ...string) {
 	t.Helper()
-	directory, err := os.MkdirTemp("", "todo-crash-")
+	directory, err := os.MkdirTemp(os.Getenv("TESL_MIGRATION_TEST_SOCKET_TMPDIR"), "todo-crash-")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -850,7 +1295,7 @@ func (db *showcaseDatabase) requireRequestPrivileges(t *testing.T) {
 		"select todo_app.tesl_begin_expansion(8,null,null,null,null,0,true)",
 		"select todo_app.tesl_record_expansion_object(8,0,null)",
 		"select todo_app.tesl_record_expanded(8)",
-		"select todo_app.tesl_register_index('spoof',7,0,'todos','request_created',array['title'],false)",
+		"select todo_app.tesl_register_row_index('spoof',7,0,'todos','request_created',array['title'],false,'spoof-physical-hash')",
 		"select todo_app.tesl_claim_index('spoof',7,'abi',30000)",
 		"select todo_app.tesl_renew_index('spoof',1,30000)",
 		"select todo_app.tesl_release_index('spoof',1)",

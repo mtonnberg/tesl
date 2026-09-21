@@ -109,6 +109,11 @@ exactly what you are missing.
 | 840 | [`lesson82-database-migrations`](../example/learn/lesson82-database-migrations.tesl) | Run a notes API whose handlers and connection stay outside its versioned schema | [`lesson18-database-sql-and-proofs`](../example/learn/lesson18-database-sql-and-proofs.tesl) — Declare a table with entity and query it in typed SQL whose results carry a proof that they came from the database<br>[`lesson05-intro-to-proofs`](../example/learn/lesson05-intro-to-proofs.tesl) — A check function stamps a value as validated, and the stamp travels with it through the type system<br>[`lesson32-api-tests`](../example/learn/lesson32-api-tests.tesl) — Test a whole HTTP endpoint from Tesl: seeded state, request bodies and JSON response assertions |
 | 850 | [`lesson83-additive-migrations`](../example/learn/lesson83-additive-migrations.tesl) | Add a nullable column while the complete notes API keeps serving the same contract | [`lesson82-database-migrations`](../example/learn/lesson82-database-migrations.tesl) — Run a notes API whose handlers and connection stay outside its versioned schema |
 | 860 | [`lesson84-worker-migrations`](../example/learn/lesson84-worker-migrations.tesl) | Keep serving the same notes API while a separate schema worker owns migration DDL | [`lesson83-additive-migrations`](../example/learn/lesson83-additive-migrations.tesl) — Add a nullable column while the complete notes API keeps serving the same contract |
+| 870 | [`lesson85-derived-backfill`](../example/learn/lesson85-derived-backfill.md) | Backfill a derived value from retained rows while a full todo app keeps its handlers unchanged | [`lesson84-worker-migrations`](../example/learn/lesson84-worker-migrations.tesl) — Keep serving the same notes API while a separate schema worker owns migration DDL |
+| 880 | [`lesson86-removing-fields`](../example/learn/lesson86-removing-fields.md) | Remove a field with `LegacyWith` and a checked cleanup Contract after old writers drain | [`lesson85-derived-backfill`](../example/learn/lesson85-derived-backfill.md) — Backfill a derived value from retained rows |
+| 890 | [`lesson87-jsonb-record-migration`](../example/learn/lesson87-jsonb-record-migration.md) | Convert a record stored as JSONB with an explicit typed migration and old codec | [`lesson86-removing-fields`](../example/learn/lesson86-removing-fields.md) — Remove a field with `LegacyWith` and a checked cleanup Contract |
+| 900 | [`lesson88-jsonb-adt-retype`](../example/learn/lesson88-jsonb-adt-retype.md) | Retype JSONB from a record to an ADT and reverse it for old writers | [`lesson87-jsonb-record-migration`](../example/learn/lesson87-jsonb-record-migration.md) — Convert a record stored as JSONB with an explicit typed migration |
+| 910 | [`lesson89-proof-revalidation`](../example/learn/lesson89-proof-revalidation.md) | Add a first proof to retained primitive data while the full notes app keeps its handlers unchanged | [`lesson85-derived-backfill`](../example/learn/lesson85-derived-backfill.md) — Backfill retained data and finish with Contract |
 
 ### Async — queues, workers, streaming
 
@@ -177,6 +182,11 @@ A few lessons have a longer prose companion alongside the code:
 - [`lesson72-units.md`](../example/learn/lesson72-units.md) — Lesson 72: Units — Compile-Time Dimensions, Runtime Floats
 - [`lesson83-additive-migrations.md`](../example/learn/lesson83-additive-migrations.md) — Updating the compiler while the notes app keeps serving
 - [`lesson84-worker-migrations.md`](../example/learn/lesson84-worker-migrations.md) — Adding an index while the application keeps serving
+- [`lesson85-derived-backfill.md`](../example/learn/lesson85-derived-backfill.md) — Backfilling a derived value from retained rows
+- [`lesson86-removing-fields.md`](../example/learn/lesson86-removing-fields.md) — Removing a field while old writers drain
+- [`lesson87-jsonb-record-migration.md`](../example/learn/lesson87-jsonb-record-migration.md) — Migrating a record stored as JSONB
+- [`lesson88-jsonb-adt-retype.md`](../example/learn/lesson88-jsonb-adt-retype.md) — Retyping JSONB from a record to an ADT
+- [`lesson89-proof-revalidation.md`](../example/learn/lesson89-proof-revalidation.md) — Add a proof to retained data, reject invalid rows and repair before Contract
 
 ---
 

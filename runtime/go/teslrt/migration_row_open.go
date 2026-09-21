@@ -79,8 +79,11 @@ func openRowPostgres(database *Database) (*PostgresDB, func()) {
 	}
 	if loaded {
 		<-initialization.done
-	} else {
-		initializeRowPostgres(key, initialization, poolConfig, config, baseline, roles)
+	}
+	// The initial scope owns the embedded executor before publication.
+	var release func()
+	if !loaded {
+		release = initializeRowPostgres(key, initialization, poolConfig, config, baseline, roles)
 	}
 	if initialization.failure != nil {
 		panic(initialization.failure)
@@ -88,15 +91,25 @@ func openRowPostgres(database *Database) (*PostgresDB, func()) {
 	if initialization.db == nil {
 		panic("database: row initialization did not publish a pool")
 	}
-	return initialization.db, nil
+	if loaded && initialization.db.embedded != nil {
+		release, err = initialization.db.embedded.acquire()
+		if err != nil {
+			panic(pgFailure("database: Embedded row migration service refused", err))
+		}
+	}
+	return initialization.db, release
 }
 
-func initializeRowPostgres(key string, initialization *postgresInitialization, poolConfig *pgxpool.Config, config PostgresConfig, b *pgRowBaseline, roles PgMigrationControlRoles) {
+func initializeRowPostgres(key string, initialization *postgresInitialization, poolConfig *pgxpool.Config, config PostgresConfig, b *pgRowBaseline, roles PgMigrationControlRoles) (release func()) {
 	defer close(initialization.done)
 	var pool *pgxpool.Pool
 	var db *PostgresDB
 	defer func() {
 		if failure := recover(); failure != nil {
+			if release != nil {
+				release()
+				release = nil
+			}
 			if db != nil {
 				db.closeRowPool()
 			} else if pool != nil {
@@ -106,7 +119,18 @@ func initializeRowPostgres(key string, initialization *postgresInitialization, p
 			postgresConnectOnce.CompareAndDelete(key, initialization)
 		}
 	}()
-	ctx, cancel := context.WithTimeout(context.Background(), pgLeaseTimeout())
+	serviceContext := context.Background()
+	stopService := func() {}
+	if roles.Request == "" {
+		serviceContext, stopService = pgEmbeddedContext()
+	}
+	transferred := false
+	defer func() {
+		if !transferred {
+			stopService()
+		}
+	}()
+	ctx, cancel := context.WithTimeout(serviceContext, pgLeaseTimeout())
 	defer cancel()
 	startup := poolConfig.ConnConfig.Copy()
 	if roles.Request == "" {
@@ -142,13 +166,43 @@ func initializeRowPostgres(key string, initialization *postgresInitialization, p
 	}
 	db = &PostgresDB{schema: b.history.Namespace, migration: &pgMigrationAdmission{version: b.history.CurrentVersion, fenceNamespace: state.FenceNamespace, databaseUUID: state.DatabaseUUID, worker: principal, roles: roles, controlFormat: pgRowControlFormat, rowBaseline: b}}
 	db.migration.rowObservation = &pgRowObservationCache{owner: db.migration}
+	if len(b.queues[len(b.queues)-1].version.Contracts) > 0 {
+		if roles.Request == "" {
+			panic(pgMigrationQueueStorageError(b.database.Name))
+		}
+		db.queueRuntime = &pgQueueRuntime{database: b.database, history: b.history}
+	}
+	if roles.Request == "" {
+		indexes, err := pgRowHasConcurrentIndexes(b)
+		if err != nil {
+			panic(err)
+		}
+		if indexes {
+			settings, err := pgIndexWorkerConfiguration()
+			if err != nil {
+				panic(err)
+			}
+			cancel()
+			transferred = true
+			owned := conn
+			conn = nil
+			db.embedded, release, err = pgStartEmbeddedRowIndexService(serviceContext, stopService, owned, startup, b, roles, state, settings)
+			if err != nil {
+				panic(pgFailure("database: Embedded row migration service refused", err))
+			}
+		}
+	}
+	// Index readiness may outlive the short DDL startup budget. Pool admission
+	// and heartbeat registration receive a fresh, bounded context.
+	poolContext, stopPool := context.WithTimeout(serviceContext, pgLeaseTimeout())
+	defer stopPool()
 	poolConfig.AfterConnect = func(ctx context.Context, conn *pgx.Conn) error { return pgVerifyMigrationConnection(ctx, conn, db) }
-	pool, err = pgxpool.NewWithConfig(ctx, poolConfig)
+	pool, err = pgxpool.NewWithConfig(poolContext, poolConfig)
 	if err != nil {
 		panic(pgFailure("database: cannot open row pool", err))
 	}
 	db.pool = pool
-	if err := pool.Ping(ctx); err != nil {
+	if err := pool.Ping(poolContext); err != nil {
 		panic(pgFailure("database: row pool admission refused", err))
 	}
 	migrationBoundary("row-startup-before-heartbeat")
@@ -160,10 +214,11 @@ func initializeRowPostgres(key string, initialization *postgresInitialization, p
 		// Inline's DDL connection is never transferred to a request monitor.
 		verifiedRequest, conn = conn, nil
 	}
-	db.rowHeartbeat, err = pgStartRowHeartbeat(ctx, db, poolConfig.ConnConfig, verifiedRequest)
+	db.rowHeartbeat, err = pgStartRowHeartbeat(poolContext, db, poolConfig.ConnConfig, verifiedRequest)
 	if err != nil {
 		panic(pgFailure("database: row instance registration refused", err))
 	}
 	migrationBoundary("row-startup-after-heartbeat")
 	initialization.db = db
+	return release
 }

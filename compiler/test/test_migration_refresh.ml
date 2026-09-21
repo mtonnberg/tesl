@@ -249,7 +249,82 @@ entity Note table "notes" primaryKey id { id: String, amount: Int ::: Positive a
     let output = preview_source path p in
     check int "stale fact identity is removed" 0 (same_count (migration path) output);
     check bool "proof decision identifies fact" true (contains output "Positive");
-    check bool "proof decision identifies stored occurrence" true (contains output "amount"))
+    check bool "proof decision identifies stored occurrence" true (contains output "amount");
+    check bool "decision remains unresolved" true (contains output "todo ");
+    check bool "changed establish body suggests supported isolated storage" true
+      (contains output "Retype amount and WriteBack amount amount <reverseFn>");
+    check bool "reverse evidence names exact historical field" true
+      (contains output "NotesSchema.V1.Notes.Note.amount");
+    check bool "storage is generated after explicit rules" true
+      (contains output "Refresh generates the new storage column after these explicit rules are supplied");
+    check bool "does not suggest existing-proof Revalidate" true
+      (contains output "Revalidate only supports adding a first proof");
+    check bool "does not promise cross-field support" true
+      (contains output "whole-entity cross-field reverse proofs are unsupported"));
+  with_project ~source (fun root path ->
+    change path (replace "amount: Int ::: Positive amount }"
+      "amount: Int ::: Positive amount, required: Int }" source);
+    let p = get (refresh root) in assert_codes ["MIG003"] p;
+    let output = preview_source path p in
+    check bool "missing default stays unresolved" true (contains output "todo ");
+    check bool "unchanged proof is not classified as changed" false
+      (contains output "stored proof contract changed");
+    check bool "unrelated missing default does not suggest reverse proof" false
+      (contains output "<reverseFn>"))
+let proof_guidance_exclusions () =
+  let primitive = {|module NotesSchema.VCurrent.Notes exposing [Note]
+import Tesl.Prelude exposing [Int, String]
+fact Positive (n: Int)
+fact Stronger (n: Int)
+entity Note table "notes" primaryKey id { id: String, amount: Int ::: Positive amount }
+|} in
+  let check_guidance label expected before after =
+    with_project ~source:before (fun root path ->
+      accepts (path "schema/notes/v-current/notes.tesl") before;
+      change path after;
+      (* The edited schema is deliberately not resealed until refresh. Its
+         current module may therefore report stale-history MIG001, but no
+         unrelated syntax, type or proof diagnostic may mask this fixture. *)
+      let context = Compile.agent_context_result_source
+        (path "schema/notes/v-current/notes.tesl") after in
+      check (list string) (label ^ ": changed fixture has no unrelated errors") []
+        (List.filter (fun code -> code <> "MIG001") (codes context.diagnostics));
+      let p = get (refresh root) in
+      assert_codes ["MIG003"] p;
+      let output = preview_source path p in
+      check bool (label ^ ": decision remains unresolved") true (contains output "todo ");
+      check bool (label ^ ": proof-specific guidance") expected
+        (contains output "stored proof contract changed");
+      check bool (label ^ ": reverse-function recommendation") expected
+        (contains output "<reverseFn>")) in
+  let strengthen = replace "Positive amount" "Stronger amount" in
+  let keyed = replace "primaryKey id" "primaryKey amount" primitive in
+  check_guidance "proven primary key" false keyed (strengthen keyed);
+  let cross = primitive
+    |> replace "fact Positive" "fact Related (a: Int, b: Int)\nfact Positive"
+    |> replace "amount: Int ::: Positive amount }"
+      "amount: Int ::: Positive amount, other: Int ::: Related other amount }" in
+  check_guidance "cross-field sibling proof" false cross (strengthen cross);
+  let column = strengthen primitive
+    |> replace "amount: Int ::: Stronger amount" "amount: Int ::: Stronger amount @column(\"amount_elsewhere\")" in
+  check_guidance "changed physical column" false primitive column;
+  check_guidance "removed proof" true primitive
+    (replace "amount: Int ::: Positive amount" "amount: Int" primitive);
+  let nominal = {|module NotesSchema.VCurrent.Notes exposing [Note]
+import Tesl.Prelude exposing [String]
+import Tesl.Json exposing [stringCodec]
+record Payload { text: String }
+codec Payload {
+  toJson { text -> "text" with_codec stringCodec }
+  fromJson [ { text <- "text" with_codec stringCodec } ]
+}
+fact Trusted (value: Payload)
+fact Stronger (value: Payload)
+entity Note table "notes" primaryKey id { id: String, payload: Payload ::: Trusted payload }
+|} in
+  check_guidance "nominal JSONB codec carrier" false nominal
+    (replace "Trusted payload" "Stronger payload" nominal)
+
 let later_revision () = with_project (fun root path ->
   change path (replace "title: String }" "title: String, caption: Maybe String }" child);
   materialize (get (refresh root)).manifest;
@@ -280,4 +355,5 @@ let () = run "Migration refresh previews" ["checked source merge",List.map (fun 
    "generated decision becomes additive after schema correction",hole_becomes_additive;
    "invalid schema and user helper still receive full checks",invalid_source;
    "changed private fact requires stored-value revalidation",changed_fact;
+   "proof guidance excludes unsupported carriers and identities",proof_guidance_exclusions;
    "later revision refresh checks completed history in proposed view",later_revision]]

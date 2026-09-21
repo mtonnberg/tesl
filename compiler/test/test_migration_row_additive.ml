@@ -138,6 +138,17 @@ let export output =
  let current=file "schema/notes/v-current.tesl" in
  let build version =
   accepts (file "app.tesl");
+  (* The public compiler path must use the same format-5 source companion as
+     this internal artifact seam, including for an additive-only prefix.  A
+     later transforming release cannot safely adopt a format-3 database by
+     name, so this is the regression guard for the V1/V2 handoff. *)
+  let public_artifacts = match Compile.compile_go_file (file "app.tesl") with
+   | Compile.GoSuccess artifacts -> artifacts
+   | Compile.GoFailure ds -> fail (describe ds) in
+  check bool "public additive history emits retained physical metadata" true
+    (List.exists (fun (a:Emit_go.artifact) -> a.path="retained-physical-history.json") public_artifacts);
+  check bool "public additive history emits row source metadata" true
+    (List.exists (fun (a:Emit_go.artifact) -> a.path="migration-source-history.json") public_artifacts);
   (* The common public compile route remains gated separately. This uses checked
      source emission but runs the ordinary generated main and schema CLI. *)
   let artifacts=match Compile.compile_row_source_artifacts ~storage:true ~physical:true

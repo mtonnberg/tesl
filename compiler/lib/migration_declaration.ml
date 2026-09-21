@@ -250,11 +250,12 @@ let prepare ?stored_value_compatibility ~compiler_abi ~source (m : module_form) 
           let rules=List.map (fun expression -> match application expression with
             | "Rename",[previous;current] -> R.Rename {previous=field_name previous;current=field_name current;loc=at expression}
             | "Retype",[field] -> R.Retype {field=field_name field;loc=at expression}
+            | "Revalidate",[field;function_ref] -> R.Revalidate {field=field_name field;function_ref;loc=at expression}
             | "WriteBack",[previous;current;function_ref] -> R.WriteBack {previous=field_name previous;current=field_name current;function_ref;loc=at expression}
             | "Legacy",[field;value] -> R.Legacy {field=field_name field;value=literal m value;loc=at expression}
             | "LegacyWith",[field;function_ref] -> R.LegacyWith {field=field_name field;function_ref;loc=at expression}
             | "Default",[field;value] -> R.Default {A.entity;field=field_name field;value=literal m value;loc=at expression}
-            | _ -> reject "MIG022" (at expression) "expected Rename, Default, Retype, WriteBack, Legacy or LegacyWith transformation rules") rules in
+            | _ -> reject "MIG022" (at expression) "expected Rename, Default, Retype, Revalidate, WriteBack, Legacy or LegacyWith transformation rules") rules in
           {R.entity;mode;rules;loc}) in
         let mapping=checked (R.check ~version:target coverage ~entries) in
         let functions=List.map (fun (f:T.requested) -> {f with entity=normalize f.entity}) (List.rev !functions) in

@@ -17,7 +17,7 @@ import (
 type pgEmbeddedIndexService struct {
 	mutex      sync.Mutex
 	config     *pgx.ConnConfig
-	history    PgCompiledMigrationHistory
+	history    pgIndexWorkerSource
 	roles      PgMigrationControlRoles
 	expected   PgMigrationControlState
 	settings   pgIndexWorkerSettings
@@ -45,6 +45,20 @@ func pgEmbeddedContext() (context.Context, context.CancelFunc) {
 func pgStartEmbeddedIndexService(ctx context.Context, stop context.CancelFunc, conn *pgx.Conn, config *pgx.ConnConfig,
 	history PgCompiledMigrationHistory, roles PgMigrationControlRoles, expected PgMigrationControlState,
 	settings pgIndexWorkerSettings) (*pgEmbeddedIndexService, func(), error) {
+	return pgStartEmbeddedIndexSource(ctx, stop, conn, config, pgIndexWorkerSource{PgCompiledMigrationHistory: history}, roles, expected, settings)
+}
+
+// Row authority stays bound to the checked baseline across scope generations;
+// the shared worker rechecks its physical source, catalog and login on startup.
+func pgStartEmbeddedRowIndexService(ctx context.Context, stop context.CancelFunc, conn *pgx.Conn, config *pgx.ConnConfig,
+	baseline *pgRowBaseline, roles PgMigrationControlRoles, expected PgMigrationControlState,
+	settings pgIndexWorkerSettings) (*pgEmbeddedIndexService, func(), error) {
+	return pgStartEmbeddedIndexSource(ctx, stop, conn, config, pgIndexWorkerSource{PgCompiledMigrationHistory: baseline.history, row: baseline}, roles, expected, settings)
+}
+
+func pgStartEmbeddedIndexSource(ctx context.Context, stop context.CancelFunc, conn *pgx.Conn, config *pgx.ConnConfig,
+	history pgIndexWorkerSource, roles PgMigrationControlRoles, expected PgMigrationControlState,
+	settings pgIndexWorkerSettings) (*pgEmbeddedIndexService, func(), error) {
 	service := &pgEmbeddedIndexService{config: config.Copy(), history: history, roles: roles, expected: expected, settings: settings}
 	service.mutex.Lock()
 	generation := service.startLocked(ctx, stop, conn)
@@ -66,7 +80,7 @@ func (service *pgEmbeddedIndexService) run(generation *pgEmbeddedIndexGeneration
 		conn, err = service.connect(generation.ctx)
 	}
 	if err == nil && conn != nil {
-		err = pgRunMigrationIndexWorkerWithSettings(generation.ctx, conn, service.config, service.history, service.roles, service.expected,
+		err = pgRunIndexWorkerSource(generation.ctx, conn, service.config, service.history, service.roles, service.expected,
 			func(PgMigrationControlState) error {
 				if err := generation.ctx.Err(); err != nil {
 					return err

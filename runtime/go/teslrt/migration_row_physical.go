@@ -34,6 +34,7 @@ type pgRowPhysicalWindow struct {
 	fromSchemaHash, toSchemaHash, transformBehaviorHash           string
 	invalidation                                                  []string
 }
+type pgRowPhysicalRetirement struct{ entity, fromSchemaHash, toSchemaHash string }
 type pgRowPhysicalPlan struct {
 	compiled                                *pgCompiledRowHistory
 	settled                                 bool
@@ -43,6 +44,7 @@ type pgRowPhysicalPlan struct {
 	schemaSnapshotHash, storageSnapshotHash string
 	entities                                []pgRowPhysicalEntity
 	windows                                 []pgRowPhysicalWindow
+	retirements                             []pgRowPhysicalRetirement
 	contract, hash                          string
 }
 type pgCompiledRowPhysicalHistory struct {
@@ -62,7 +64,7 @@ func pgParseRowSettledPlan(contract, hash string) (*pgRowPhysicalPlan, error) {
 func pgParseRowPhysicalShape(contract, hash string, settled bool) (*pgRowPhysicalPlan, error) {
 	r := &pgMigrationWireReader{}
 	n := pgRowDocument(r, contract, hash, "migration")
-	if r.err != nil || (!n.list(8) && !n.list(9)) {
+	if r.err != nil || (!n.list(8) && !n.list(9) && !n.list(10)) {
 		return nil, fmt.Errorf("invalid retained physical document")
 	}
 	if settled {
@@ -72,6 +74,7 @@ func pgParseRowPhysicalShape(contract, hash string, settled bool) (*pgRowPhysica
 	} else {
 		valid := n.list(8) && (n.children[0].isAtom("tesl-retained-physical-version-v1") || n.children[0].isAtom("tesl-retained-physical-version-v2"))
 		valid = valid || (n.list(9) && (n.children[0].isAtom("tesl-retained-physical-version-v3") || n.children[0].isAtom("tesl-retained-physical-version-v4")))
+		valid = valid || (n.list(10) && n.children[0].isAtom("tesl-retained-physical-version-v5"))
 		if !valid {
 			return nil, fmt.Errorf("invalid retained physical document")
 		}
@@ -107,13 +110,14 @@ func pgParseRowPhysicalShape(contract, hash string, settled bool) (*pgRowPhysica
 	if !pgMigrationIdentifier(plan.namespace) || !pgMigrationFamily(plan.family) || !pgMigrationDigest(plan.schemaSnapshotHash) || !pgMigrationDigest(plan.storageSnapshotHash) {
 		r.fail("invalid physical owner")
 	}
+	retirementFormat := n.children[0].isAtom("tesl-retained-physical-version-v5")
 	legacyFormat := n.children[0].isAtom("tesl-retained-physical-version-v4")
 	requiresContract := n.children[0].isAtom("tesl-retained-physical-version-v3")
 	prerequisite := pgRowCanonical{}
 	if requiresContract {
 		prerequisite = n.children[8]
 	}
-	if legacyFormat {
+	if legacyFormat || retirementFormat {
 		optional := sequence(n.children[8])
 		if len(optional) > 1 {
 			r.fail("invalid legacy Contract prerequisite")
@@ -129,7 +133,7 @@ func pgParseRowPhysicalShape(contract, hash string, settled bool) (*pgRowPhysica
 			r.fail("physical contract prerequisite must precede expansion")
 		}
 	}
-	reverseFormat := legacyFormat || requiresContract || n.children[0].isAtom("tesl-retained-physical-version-v2")
+	reverseFormat := retirementFormat || legacyFormat || requiresContract || n.children[0].isAtom("tesl-retained-physical-version-v2")
 	entityWidth := 9
 	if reverseFormat {
 		entityWidth = 10
@@ -294,13 +298,28 @@ func pgParseRowPhysicalShape(contract, hash string, settled bool) (*pgRowPhysica
 	if !slices.IsSortedFunc(plan.windows, func(a, b pgRowPhysicalWindow) int { return strings.Compare(a.entity, b.entity) }) {
 		r.fail("physical windows require canonical order")
 	}
+	if retirementFormat {
+		for _, raw := range sequence(n.children[9]) {
+			if !raw.list(3) {
+				return nil, fmt.Errorf("invalid physical table retirement")
+			}
+			retirement := pgRowPhysicalRetirement{entity: atom(raw.children[0]), fromSchemaHash: atom(raw.children[1]), toSchemaHash: atom(raw.children[2])}
+			if !names[retirement.entity] || !pgMigrationDigest(retirement.fromSchemaHash) || retirement.toSchemaHash != plan.schemaSnapshotHash {
+				r.fail("invalid physical retirement binding")
+			}
+			plan.retirements = append(plan.retirements, retirement)
+		}
+		if plan.version < 2 || len(plan.retirements) != 1 || len(plan.entities) < 2 || len(plan.windows) != 0 || hasReverse || hasLegacy {
+			r.fail("physical table retirement requires one removal and unchanged survivors")
+		}
+	}
 	if r.err != nil {
 		return nil, r.err
 	}
 	if legacyFormat && !hasLegacy {
 		return nil, fmt.Errorf("legacy physical format requires an explicit legacy obligation")
 	}
-	if reverseFormat && !requiresContract && !hasReverse {
+	if reverseFormat && !retirementFormat && !requiresContract && !hasReverse {
 		return nil, fmt.Errorf("reverse physical format has no reverse bindings")
 	}
 	if settled {
@@ -362,6 +381,26 @@ func pgPhysicalIndexEqual(a, b PgMigrationCatalogIndex) bool {
 	return a.Name == b.Name && a.Unique == b.Unique && slices.Equal(a.Columns, b.Columns)
 }
 
+func pgPhysicalEntityEqual(a, b *pgRowPhysicalEntity) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	if a.identity != b.identity || a.table != b.table || a.typeContractHash != b.typeContractHash || a.generation != b.generation || a.insertGeneration != b.insertGeneration || !slices.Equal(a.projection, b.projection) || !slices.Equal(a.aliases, b.aliases) || !slices.Equal(a.reverseWrites, b.reverseWrites) || len(a.columns) != len(b.columns) || len(a.indexes) != len(b.indexes) {
+		return false
+	}
+	for i := range a.columns {
+		if !pgPhysicalColumnEqual(a.columns[i], b.columns[i]) {
+			return false
+		}
+	}
+	for i := range a.indexes {
+		if !pgPhysicalIndexEqual(a.indexes[i], b.indexes[i]) {
+			return false
+		}
+	}
+	return true
+}
+
 // Validate a complete retained lineage, including the physical obligations a
 // later logical schema omits. This does not grant permission to execute DDL.
 func pgValidateRowPhysicalLineage(previous, plan *pgRowPhysicalPlan) error {
@@ -380,6 +419,20 @@ func pgValidateRowPhysicalLineage(previous, plan *pgRowPhysicalPlan) error {
 		}
 	} else if previous.version+1 != plan.version || previous.family != plan.family || previous.namespace != plan.namespace {
 		return fmt.Errorf("physical plan has no exact adjacent predecessor")
+	}
+	if len(plan.retirements) > 0 {
+		if previous == nil || len(plan.retirements) != 1 || len(plan.windows) != 0 || len(previous.windows) != 0 || len(previous.retirements) != 0 || len(plan.entities) != len(previous.entities) || len(plan.entities) < 2 {
+			return fmt.Errorf("table retirement requires a settled unchanged predecessor")
+		}
+		retirement := plan.retirements[0]
+		if retirement.fromSchemaHash != previous.schemaSnapshotHash || retirement.toSchemaHash != plan.schemaSnapshotHash || previous.entity(retirement.entity) == nil {
+			return fmt.Errorf("table retirement predecessor identity differs")
+		}
+		for i := range plan.entities {
+			if !pgPhysicalEntityEqual(&plan.entities[i], previous.entity(plan.entities[i].identity)) {
+				return fmt.Errorf("table retirement changed retained physical entity")
+			}
+		}
 	}
 	for _, entity := range plan.entities {
 		var old *pgRowPhysicalEntity
@@ -549,6 +602,11 @@ func pgBindRowPhysicalPlan(compiled *pgCompiledRowHistory, previous, plan *pgRow
 			expectedContract = d.MigrationVersion
 		}
 	}
+	for _, retirement := range compiled.inventory.Retirements {
+		if retirement.MigrationVersion == plan.version-1 {
+			expectedContract = retirement.MigrationVersion
+		}
+	}
 	if plan.requiresContractVersion != expectedContract {
 		return fmt.Errorf("physical expansion contract prerequisite differs from complete checked history")
 	}
@@ -563,8 +621,22 @@ func pgBindRowPhysicalPlan(compiled *pgCompiledRowHistory, previous, plan *pgRow
 		return err
 	}
 	source := compiled.inventory.Versions[plan.version-1]
-	if source.Version != plan.version || source.SchemaSnapshotHash != plan.schemaSnapshotHash || source.StorageSnapshotHash != plan.storageSnapshotHash || len(source.Entities) != len(plan.entities) {
+	if source.Version != plan.version || source.SchemaSnapshotHash != plan.schemaSnapshotHash || source.StorageSnapshotHash != plan.storageSnapshotHash || len(source.Entities)+len(plan.retirements) != len(plan.entities) {
 		return fmt.Errorf("physical plan source snapshot differs")
+	}
+	expectedRetirements := []pgRowPhysicalRetirement{}
+	for _, d := range compiled.inventory.Retirements {
+		if d.MigrationVersion == plan.version {
+			expectedRetirements = append(expectedRetirements, pgRowPhysicalRetirement{entity: d.Entity, fromSchemaHash: d.FromSchemaSnapshot, toSchemaHash: d.ToSchemaSnapshot})
+		}
+	}
+	if !slices.Equal(expectedRetirements, plan.retirements) {
+		return fmt.Errorf("physical retirement differs from exact source authority")
+	}
+	for _, retirement := range plan.retirements {
+		if _, exists := pgRowFindEntity(source, retirement.entity); exists {
+			return fmt.Errorf("retained-only entity remains in current logical source")
+		}
 	}
 	reader := &pgMigrationWireReader{}
 	sourceStorage := pgRowDocument(reader, source.StorageContract, source.StorageSnapshotHash, "migration")
@@ -656,7 +728,7 @@ func pgBindRowPhysicalPlan(compiled *pgCompiledRowHistory, previous, plan *pgRow
 			if target == nil {
 				return fmt.Errorf("callback target lacks physical projection")
 			}
-			if mapping.Kind == "copy" || mapping.Kind == "rename" {
+			if mapping.Kind == "copy" || mapping.Kind == "rename" || mapping.Kind == "revalidate" {
 				if mapping.Source == nil {
 					return fmt.Errorf("callback copy lacks source")
 				}
@@ -665,8 +737,11 @@ func pgBindRowPhysicalPlan(compiled *pgCompiledRowHistory, previous, plan *pgRow
 				if from == nil || from.catalog.Type != target.catalog.Type {
 					return fmt.Errorf("callback copy changed SQL carrier")
 				}
-				if mapping.Kind == "copy" && target.catalog.Name != name {
+				if (mapping.Kind == "copy" || mapping.Kind == "revalidate") && target.catalog.Name != name {
 					return fmt.Errorf("callback copy changed physical identity")
+				}
+				if mapping.Kind == "revalidate" && !pgPhysicalColumnEqual(*from, *target) {
+					return fmt.Errorf("Revalidate changed retained physical storage")
 				}
 				if mapping.Kind == "rename" {
 					if old.column(target.catalog.Name) != nil {
@@ -888,10 +963,18 @@ func pgBindRowSettledPlan(compiled *pgCompiledRowHistory, window, settled *pgRow
 	if compiled == nil || window == nil || settled == nil || window.compiled != compiled || window.settled || !settled.settled || settled.compiled != nil ||
 		settled.family != window.family || settled.namespace != window.namespace || settled.version != window.version ||
 		settled.schemaSnapshotHash != window.schemaSnapshotHash || settled.storageSnapshotHash != window.storageSnapshotHash ||
-		len(settled.entities) != len(window.entities) || len(settled.windows) != 0 || settled.version < 1 || settled.version > len(compiled.inventory.Versions) {
+		len(settled.entities)+len(window.retirements) != len(window.entities) || len(settled.windows) != 0 || len(settled.retirements) != 0 || settled.version < 1 || settled.version > len(compiled.inventory.Versions) {
 		return fmt.Errorf("settled physical description has no exact compiled window")
 	}
 	source := compiled.inventory.Versions[settled.version-1]
+	if len(settled.entities) != len(source.Entities) {
+		return fmt.Errorf("settled entity inventory differs from current source")
+	}
+	for _, retirement := range window.retirements {
+		if settled.entity(retirement.entity) != nil {
+			return fmt.Errorf("settled plan retains retired entity")
+		}
+	}
 	reader := &pgMigrationWireReader{}
 	storage := pgRowDocument(reader, source.StorageContract, source.StorageSnapshotHash, "migration")
 	if reader.err != nil || !storage.list(3) || storage.children[2].atom {
@@ -967,6 +1050,7 @@ func pgRowSettledSourceShape(compiled *pgCompiledRowHistory, window *pgRowPhysic
 	result.hash = ""
 	result.contract = ""
 	result.windows = nil
+	result.retirements = nil
 	result.entities = nil
 	source := compiled.inventory.Versions[window.version-1]
 	reader := &pgMigrationWireReader{}

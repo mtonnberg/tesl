@@ -183,7 +183,11 @@ let retained_index () = with_project ~initial:(replace "label: String }" "label:
  check (list string) "fresh current install uses baseline name" ["renamed_index"]
   (List.map (fun (i : Migration_storage.index) -> i.name) (List.hd (last born3).catalog).indexes))
 let catalog_collision () = with_project ~initial:(replace "label: String }" "label: String\n index [label] as \"notes_pkey\"\n}" (append_field schema "label: String"))
- (fun root _ -> refused "MIG016" (plan root))
+ (fun root _ -> match plan root with
+  | Ok _ -> fail "implicit primary index collision accepted"
+  | Error errors -> check bool "public physical emitter rejects the exact relation collision" true
+    (List.exists (fun (e:Migration_sparse.error) -> e.code="V001" &&
+      e.message="retained PostgreSQL relation name cannot be reused: notes_pkey") errors))
 let origin_index_collision () =
  let initial = replace "active: Bool }" "active: Bool\n index [active] as \"later\"\n}" (append_field schema "active: Bool") in
  with_project ~initial (fun root path ->
@@ -244,16 +248,25 @@ let app_failure () = with_project (fun root path ->
  save (path "app.tesl") (replace "import Tesl.Database" "import Tesl.Prelude exposing [Int]\nimport Tesl.Database" app ^ "fn broken() -> Int = \"wrong\"\n");
  refused "T001" (plan root))
 let invalid_defaults () = with_project (fun root path ->
+ let rejected field = match plan root with
+  | Ok _ -> fail ("unsupported PostgreSQL default accepted: " ^ field)
+  | Error errors -> check bool ("public physical emitter validates default carrier: " ^ field) true
+    (List.exists (fun (e:Migration_sparse.error) -> e.code="V001" &&
+      e.message="Default does not fit the supported PostgreSQL carrier for " ^ field) errors) in
  generate root;edit_schema path (fun s -> append_field s "rank: Int, label: String");generate root;
  set_entities path 2 ("{ Note: Additive [Default rank 42, Default label \"" ^ String.make 1 '\000' ^ "\"] }");
- refused "MIG016" (plan root);
+ rejected "label";
  set_entities path 2 ("{ Note: Additive [Default rank " ^ "1" ^ String.make 131072 '0' ^ ", Default label \"ok\"] }");
- refused "MIG016" (plan root))
+ rejected "rank")
 let index_key_limit () =
  let names = List.init 33 (fun i -> "key" ^ string_of_int i) in
  let fields = String.concat ", " (List.map (fun name -> name ^ ": Maybe Bool") names) in
  with_project ~initial:(replace "id: String }" ("id: String, " ^ fields ^ "\n index [" ^ String.concat ", " names ^ "]\n}") schema)
-  (fun root _ -> refused "MIG016" (plan root))
+  (fun root _ -> match plan root with
+   | Ok _ -> fail "33-column B-tree index accepted"
+   | Error errors -> check bool "public physical emitter rejects the exact B-tree limit" true
+     (List.exists (fun (e:Migration_sparse.error) -> e.code="V001" &&
+       e.message="retained B-tree index requires 1 to 32 columns") errors))
 let overlays () = with_project (fun root path ->
  let file = path "schema/notes/v-current.tesl" in
  let documents = [{M.path=file;version=4}] in
@@ -273,7 +286,11 @@ let earlier_default_validation () = with_project (fun root path ->
  set_entities path 2 ("{ Note: Additive [Default label \"" ^ String.make 1 '\000' ^ "\"] }");
  (* Source/type checking can accept this literal; PostgreSQL assignment cannot.
     A fresh V2 would not install it, but must still reject the unusable history. *)
- refused "MIG016" (plan ~initial_version:2 root))
+ match plan ~initial_version:2 root with
+ | Ok _ -> fail "late installation accepted unusable earlier default"
+ | Error errors -> check bool "public physical emitter still validates earlier defaults" true
+   (List.exists (fun (e:Migration_sparse.error) -> e.code="V001" &&
+     e.message="Default does not fit the supported PostgreSQL carrier for label") errors))
 let expansion_chain_boundary () = with_project (fun root path ->
  generate root;edit_schema path (fun s -> append_field s "caption: Maybe String");generate root;
  generate ~next:true root;edit_schema path (fun s -> append_field s "active: Maybe Bool");generate root;
@@ -380,6 +397,78 @@ let complete_step_vectors () = with_project (fun root _ ->
   ["98c1b95a7d9cba37b698e711bd35e87986a0aecb4cc578a8e0369d865dd17176";
    "3ab826b6198a44531229be7f371e5c8b642ea83a001a6d410d03d2c3200e0bd3";
    "f856c9a5d896d4b0b008d8a03b564fd36af23e6299f7dd59c3c0bc600faa77f8"] (List.map E.step_hash steps))
+let retained_fixture relative app check_preview =
+ let root=Filename.concat (Option.get (Sys.getenv_opt "TESL_REPO_ROOT")) relative in
+ let generate initial_version=P.generate ~project_root:root ~entry_file:(Filename.concat root app)
+  ~database:None ~initial_version ~documents:[] in
+ let p=get(generate 1) in
+ let open Yojson.Basic.Util in
+ let json=Yojson.Basic.from_string(P.to_json p) in
+ check string "separate preview protocol" "row-history" (json |> member "planType" |> to_string);
+ List.iter(fun name -> check bool name false (json |> member name |> to_bool))
+  ["executable";"persistedStateObserved";"inPlaceRewriteAuthorized";"decoderPruningAuthorized"];
+ check string "stable complete plan" (P.to_json p) (P.to_json(get(generate 1)));
+ check bool "no executable additive steps" true (P.steps p=[]);
+ refused "MIG016" (generate 2);
+ check_preview (json |> member "steps" |> to_list)
+let revalidate_preview () = retained_fixture "example/learn/db-revalidation" "app.tesl" (fun steps ->
+ let open Yojson.Basic.Util in
+ check int "full history" 2 (List.length steps);
+ let step=List.nth steps 1 in
+ let columns=step |> member "tables" |> to_list |> List.hd |> member "columns" |> to_list in
+ let id=List.find(fun c->c |> member "name" |> to_string="id") columns in
+ check bool "physical primary key" true (id |> member "primaryKey" |> to_bool);
+ let transform=step |> member "transforms" |> to_list |> List.hd in
+ let field=transform |> member "fields" |> to_list |> List.find(fun f -> f |> member "kind" |> to_string = "revalidate") in
+ check string "runtime-only proof" "runtime-only" (field |> member "proofEnforcement" |> to_string);
+ check string "same physical column" (field |> member "sourceColumn" |> to_string) (field |> member "targetColumn" |> to_string);
+ check int "old generation" 1 (transform |> member "fromGeneration" |> to_int);
+ check int "new generation" 2 (transform |> member "toGeneration" |> to_int);
+ check int "callback identity" 64 (String.length(transform |> member "transformContractHash" |> to_string));
+ check int "schema identity" 64 (String.length(step |> member "schemaSnapshotHash" |> to_string));
+ check int "Contract source identity" 64 (String.length(step |> member "contract" |> member "sourceHash" |> to_string)))
+let todo_preview () = retained_fixture "example/db-migration-example" "todo-app.tesl" (fun steps ->
+ let open Yojson.Basic.Util in
+ check (list int) "every released revision" (List.init 13 (fun i->i+1)) (List.map(fun x->x |> member "version" |> to_int) steps);
+ let step=List.nth steps 12 in
+ let tables=step |> member "tables" |> to_list in
+ let todo=List.find(fun t->t |> member "table" |> to_string="todos") tables in
+ let indexes=todo |> member "indexes" |> to_list in
+ check bool "retained completed index" true (List.exists(fun i->
+  i |> member "columns" |> to_list = [`String "completed"] && not(i |> member "unique" |> to_bool)) indexes);
+ check int "preceding Contract requirement" 12 (step |> member "requiresContractVersion" |> to_int);
+ let transforms=step |> member "transforms" |> to_list in
+ let fields=List.concat_map(fun t->t |> member "fields" |> to_list) transforms in
+ let field=List.find(fun f->f |> member "kind" |> to_string="retype") fields in
+ check bool "JSONB retype has separate storage" true (member "sourceColumn" field <> member "targetColumn" field);
+ let codecs=step |> member "codecChanges" |> to_list |> List.concat_map(fun r->r |> member "codecs" |> to_list) in
+ check bool "record to ADT codec change visible" true (codecs<>[]);
+ List.iter(fun codec -> check bool "no codec-only authorization" false (codec |> member "adapterOnlyEligible" |> to_bool)) codecs;
+ check bool "encoder change visible" true (List.exists(fun c->c |> member "encoderSyntaxChanged" |> to_bool) codecs);
+ check bool "old writer reverse mapping visible" true (List.exists(fun t->t |> member "writeBacks" |> to_list <> []) transforms);
+ check bool "removed field reported" true (List.exists(fun s -> s |> member "transforms" |> to_list |> List.exists(fun t->t |> member "legacyFields" |> to_list <> [])) steps))
+let row_preview_source_guards () =
+ let source_root=Filename.concat (Option.get(Sys.getenv_opt "TESL_REPO_ROOT")) "example/learn/db-revalidation" in
+ let root=Filename.temp_file "tesl-row-plan-" ".dir" in Sys.remove root;Unix.mkdir root 0o700;
+ Fun.protect ~finally:(fun()->remove root) (fun()->
+ let files=["tesl.toml";"app.tesl";"schema/notes/v1.tesl";"schema/notes/v-current.tesl";
+  "migrations/notes/v2.tesl";"migrations/notes/v2-contract.tesl"] in
+ List.iter(fun name->write (Filename.concat root name) (read(Filename.concat source_root name))) files;
+ let p=get(plan root) in
+ List.iter(fun name ->
+  let file=Filename.concat root name in let original=read file in
+  save file (original ^ "\n# source guard edit\n");
+  refused "MIG013" (P.verify p ~documents:[]);
+  save file original;get(P.verify p ~documents:[]))
+  ["app.tesl";"schema/notes/v1.tesl";"schema/notes/v-current.tesl";"migrations/notes/v2.tesl";"migrations/notes/v2-contract.tesl"];
+ let migration=Filename.concat root "migrations/notes/v2.tesl" in
+ save migration (replace "empty title" "title was empty" (read migration));
+ let changed=get(plan root) in
+ check bool "callback behavior binds plan identity" true (P.digest p<>P.digest changed);
+ let callback p=let open Yojson.Basic.Util in
+  Yojson.Basic.from_string(P.to_json p) |> member "steps" |> to_list |> List.rev |> List.hd
+  |> member "transforms" |> to_list |> List.hd |> member "transformContractHash" |> to_string in
+ check bool "callback change cannot hide behind identical field mappings" true (callback p<>callback changed))
 let () = run "Migration expansion plan" ["checked complete history",List.map (fun (name,f) -> test_case name `Quick f)
  ["baseline identity and namespace",baseline;"consecutive additive history",additive_chain;"constant assignment",defaults;
   "new table owns initial indexes",new_table;"drop retains storage and blocks reuse",retained_drop;
@@ -405,4 +494,7 @@ let () = run "Migration expansion plan" ["checked complete history",List.map (fu
   "late installation checks earlier unsupported defaults",earlier_default_validation;
   "per-step identities bind meaning and survive later builds",step_identity;
   "step canonical identity golden vector",step_identity_vector;
-  "all-operation cross-language identity vectors",complete_step_vectors]]
+  "all-operation cross-language identity vectors",complete_step_vectors;
+  "proof revalidation source-only preview",revalidate_preview;
+  "complete todo retained history preview",todo_preview;
+  "row preview guards every source and Contract",row_preview_source_guards]]

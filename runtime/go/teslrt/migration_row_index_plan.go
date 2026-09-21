@@ -13,7 +13,7 @@ type pgRowConcurrentIndex struct {
 }
 
 func pgDeriveRowConcurrentIndexes(previous, plan *pgRowPhysicalPlan) ([]pgRowConcurrentIndex, error) {
-	if previous == nil || plan == nil || plan.version < 2 || plan.version > 2147483646 || len(plan.windows) != 0 {
+	if previous == nil || plan == nil || plan.version < 2 || plan.version > 2147483646 || !pgRowEpochPreserving(plan) {
 		return nil, fmt.Errorf("concurrent row indexes require an adjacent additive physical revision")
 	}
 	if err := pgValidateRowPhysicalLineage(previous, plan); err != nil {

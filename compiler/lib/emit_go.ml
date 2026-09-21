@@ -9057,7 +9057,7 @@ and sql_row_query ~indent signatures env loc info binder clauses order limit off
  let fields=ref [] in
  let column field =
   if not (List.mem field allowed) then unsupported loc
-   "migration query on `%s.%s` needs an unchanged Copy or Rename field; querying a computed or retyped field during this window is not supported yet" info.ent_tesl_name field;
+   "migration query on `%s.%s` needs a value-preserving Copy, Rename or Revalidate field; querying a computed or retyped field during this window is not supported yet" info.ent_tesl_name field;
   let index=List.length !fields in fields:= !fields @ [field];
   "\000" ^ string_of_int index ^ "\000" in
  let builder={sql_args=[]} in
@@ -10454,7 +10454,7 @@ let runtime_file_gates : (string * string list) list = [
      the reason the HTTP half does: it pulls a third-party driver and its whole dependency
      chain into a binary that would otherwise require nothing. *)
    "postgres", [ "postgres.go"; "database.go"; "dbquery.go"; "debug_sql.go"; "pgstores.go";
-                 "pgpubsub.go"; "migration_program.go"; "migration_row_history.go"; "migration_row_program.go"; "migration_row_storage.go"; "migration_row_current_history.go"; "migration_row_queue_control.go"; "migration_row_queue_inventory.go"; "migration_row_queue_spec.go"; "migration_row_current.go"; "migration_row_current_data.go";  "migration_row_writeback.go"; "migration_row_physical.go"; "migration_row_contract.go"; "migration_row_backfill.go"; "migration_row_backfill_worker.go"; "migration_row_contract_execute.go"; "migration_row_contract_spec.go"; "migration_row_lifecycle_expected.go"; "migration_row_lifecycle_read.go"; "migration_row_lifecycle_spec.go"; "migration_row_settled.go"; "migration_row_work_read.go"; "migration_row_worker.go"; "migration_row_worker_transaction.go"; "migration_row_not_null.go"; "migration_row_data.go"; "migration_row_access.go"; "migration_row_transaction.go"; "migration_row_index_plan.go"; "migration_row_index_history.go"; "migration_row_index_worker.go"; "migration_row_forward.go"; "migration_row_forward_spec.go"; "migration_row_forward_catalog.go"; "migration_row_forward_execute.go"; "migration_row_baseline.go"; "migration_row_adoption_inspect.go"; "migration_row_control.go"; "migration_row_control_spec.go"; "migration_row_control_expected.go"; "migration_row_open.go"; "migration_row_command.go"; "migration_row_epoch.go"; "migration_row_epoch_spec.go"; "migration_row_epoch_execute.go"; "migration_row_heartbeat.go";  "migration_queue_program.go"; "migration_queue_control.go"; "migration_queue_registration.go"; "migration_queue_registration_sql.go"; "migration_queue_control_spec.go"; "migration_queue_operations.go"; "migration_queue_runtime.go"; "migration_queue_control_expected.go"; "migration_control.go"; "migration_expand.go"; "migration_admission.go"; "migration_open.go"; "migration_status.go"; "migration_command.go"; "migration_expand_history.go"; "migration_control_spec.go"; "migration_control_catalog.go"; "migration_plan.go"; "migration_plan_wire.go"; "migration_plan_hash.go"; "migration_catalog.go"; "migration_catalog_trigger.go"; "migration_catalog_compare.go"; "migration_catalog_probe.go"; "migration_catalog_expected.go"; "migration_control_expected.go"; "migration_control_upgrade.go"; "migration_index_control.go"; "migration_index_catalog.go"; "migration_index_history.go"; "migration_index_worker.go"; "migration_embedded.go"; "migration_worker.go"; "migration_facilities.go"; "migration_literal.go"; "migration_boundary.go"; "migration_boundary_testbuild.go" ];
+                 "pgpubsub.go"; "migration_program.go"; "migration_row_history.go"; "migration_row_program.go"; "migration_row_storage.go"; "migration_row_current_history.go"; "migration_row_queue_control.go"; "migration_row_queue_inventory.go"; "migration_row_queue_spec.go"; "migration_row_current.go"; "migration_row_current_data.go";  "migration_row_writeback.go"; "migration_row_physical.go"; "migration_row_contract.go"; "migration_row_backfill.go"; "migration_row_backfill_worker.go"; "migration_row_contract_execute.go"; "migration_row_contract_spec.go"; "migration_row_contract_table_spec.go"; "migration_row_lifecycle_expected.go"; "migration_row_lifecycle_read.go"; "migration_row_lifecycle_spec.go"; "migration_row_settled.go"; "migration_row_work_read.go"; "migration_row_worker.go"; "migration_row_worker_transaction.go"; "migration_row_not_null.go"; "migration_row_data.go"; "migration_row_access.go"; "migration_row_transaction.go"; "migration_row_index_plan.go"; "migration_row_index_history.go"; "migration_row_index_worker.go"; "migration_row_forward.go"; "migration_row_forward_spec.go"; "migration_row_forward_catalog.go"; "migration_row_forward_execute.go"; "migration_row_baseline.go"; "migration_row_adoption_inspect.go"; "migration_row_control.go"; "migration_row_control_spec.go"; "migration_row_control_expected.go"; "migration_row_open.go"; "migration_row_command.go"; "migration_row_epoch.go"; "migration_row_epoch_spec.go"; "migration_row_epoch_execute.go"; "migration_row_heartbeat.go";  "migration_queue_program.go"; "migration_queue_control.go"; "migration_queue_registration.go"; "migration_queue_registration_sql.go"; "migration_queue_control_spec.go"; "migration_queue_operations.go"; "migration_queue_runtime.go"; "migration_queue_control_expected.go"; "migration_control.go"; "migration_expand.go"; "migration_admission.go"; "migration_open.go"; "migration_status.go"; "migration_command.go"; "migration_expand_history.go"; "migration_control_spec.go"; "migration_control_catalog.go"; "migration_plan.go"; "migration_plan_wire.go"; "migration_plan_hash.go"; "migration_catalog.go"; "migration_catalog_trigger.go"; "migration_catalog_compare.go"; "migration_catalog_probe.go"; "migration_catalog_expected.go"; "migration_control_expected.go"; "migration_control_upgrade.go"; "migration_index_control.go"; "migration_index_catalog.go"; "migration_index_history.go"; "migration_index_worker.go"; "migration_embedded.go"; "migration_worker.go"; "migration_facilities.go"; "migration_literal.go"; "migration_boundary.go"; "migration_boundary_testbuild.go" ];
   (* `agent.go` ships only to a program that talks to a model.  Not a dependency argument —
      everything in it is standard library — but a runtime file a program has no use for is
      still surface a reader has to rule out, and the gate costs nothing. *)
@@ -16883,7 +16883,9 @@ let compiled_row_artifacts ~entry ~modules:_ ~exports source =
   | Error errors -> unsupported loc "%s" (String.concat "\n" (List.map (fun (e:Migration_sparse.error) -> e.message) errors)) in
  List.iter (fun (database:P.database) ->
   if not row_catalog_only && List.exists (fun (version:P.queue_version) -> version.contracts<>[]) database.queue_versions then
-   unsupported loc "row source artifacts do not yet support retained queue inventories") (P.databases p);
+   match List.assoc_opt database.identity (P.row_histories source) with
+   | Some history when RH.bindings history=[] -> ()
+   | _ -> unsupported loc "queue-bearing row history currently requires additive entity migrations; queue retirement is not implemented") (P.databases p);
  let bridges=ref [] and owners=ref [] in
  let callbacks=List.filter_map (fun (database:P.database) ->
   let module_name,name=split database.identity in
@@ -16930,7 +16932,7 @@ let compiled_row_artifacts ~entry ~modules:_ ~exports source =
      let target_name = function
        | R.Copy p -> p.current.name | R.Renamed p -> p.current.name
        | R.Empty_optional f | R.Constant (f,_) | R.Computed f -> f.name
-       | R.Retyped p -> p.current.name in
+       | R.Retyped p -> p.current.name | R.Revalidated p -> p.current.name in
      if List.length values<>List.length target_info.ent_row.rec_fields then
        unsupported loc "Derived mapping lost its complete target inventory";
      let fields=List.map (fun (field,ty) ->
@@ -16955,7 +16957,7 @@ let compiled_row_artifacts ~entry ~modules:_ ~exports source =
             | "bool",TBool when value="true" || value="false" -> value
             | "float64",TFloat -> Printf.sprintf "%s.Float64frombits(0x%s)" (Lazy.force math) value
             | _ -> unsupported loc "Derived default differs from its checked primitive type")
-         | R.Constant _ | R.Computed _ | R.Retyped _ ->
+         | R.Constant _ | R.Computed _ | R.Retyped _ | R.Revalidated _ ->
            unsupported loc "Derived mapping contains a value requiring an explicit checked row function" in
        record_field_go_name field ^ ": " ^ value) target_info.ent_row.rec_fields in
      Printf.sprintf "func(row %s) teslrt.Migrated[%s] { return teslrt.Migrated[%s]{Tag: teslrt.MigratedRow, RowValue: %s{%s}} }"
@@ -17003,6 +17005,7 @@ let compiled_row_artifacts ~entry ~modules:_ ~exports source =
        let current=List.find_map (function
         | Migration_transform_rules.Copy p when p.previous.name=field -> Some p.current.name
         | Migration_transform_rules.Renamed p when p.previous.name=field -> Some p.current.name
+        | Migration_transform_rules.Revalidated p when p.previous.name=field -> Some p.current.name
         | _ -> None) row.mapping.values |> require in
        let target_ty=require (List.assoc_opt current target_info.ent_row.rec_fields) in
        let value="row." ^ record_field_go_name current in
@@ -17103,6 +17106,7 @@ let compiled_row_artifacts ~entry ~modules:_ ~exports source =
      row.mapping.current.entity_name,List.filter_map (function
       | Migration_transform_rules.Copy p -> Some p.current.name
       | Migration_transform_rules.Renamed p -> Some p.current.name
+      | Migration_transform_rules.Revalidated p -> Some p.current.name
       | _ -> None) row.mapping.values) in
     transforming @ List.map (fun (_,entity)->entity.Migration_row_history.table.entity.entity_name,
       List.map (fun (column:Migration_storage.column)->column.field.name) entity.table.columns)

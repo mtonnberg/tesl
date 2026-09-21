@@ -6,6 +6,7 @@ module A = Migration_additive
 type rule =
   | Rename of { previous : string; current : string; loc : Location.loc }
   | Retype of { field : string; loc : Location.loc }
+  | Revalidate of { field : string; function_ref : Ast.expr; loc : Location.loc }
   | WriteBack of { previous : string; current : string; function_ref : Ast.expr; loc : Location.loc }
   | Legacy of { field : string; value : Migration_additive.literal; loc : Location.loc }
   | LegacyWith of { field : string; function_ref : Ast.expr; loc : Location.loc }
@@ -16,6 +17,7 @@ type value_source =
   | Copy of { previous : stored_field; current : stored_field }
   | Renamed of { previous : stored_field; current : stored_field }
   | Retyped of { previous : stored_field; current : stored_field }
+  | Revalidated of { previous : stored_field; current : stored_field; function_ref : Ast.expr; loc : Location.loc }
   | Empty_optional of stored_field
   | Constant of stored_field * node
   | Computed of stored_field
@@ -90,6 +92,7 @@ let check ?version coverage ~entries =
           | Some old, Some fresh when old.stored_field.contract = fresh.stored_field.contract -> ()
           | _ -> refuse "MIG009" entry.loc "online transformations cannot change the primary key's stored contract");
          let renamed = Hashtbl.create 8 and destinations = Hashtbl.create 8 and defaults = Hashtbl.create 8 in
+         let revalidated = Hashtbl.create 8 in
          let retyped = Hashtbl.create 8 and backwards = Hashtbl.create 8 and legacy = Hashtbl.create 8 in
          let add_legacy name value loc =
            if Hashtbl.mem legacy name then refuse "MIG023" loc "duplicate legacy field"
@@ -117,6 +120,14 @@ let check ?version coverage ~entries =
                refuse "MIG009" rule.loc "Retype cannot change the primary key"
              else if Hashtbl.mem retyped rule.field then refuse "MIG023" rule.loc "duplicate Retype field"
              else Hashtbl.add retyped rule.field rule.loc
+           | Revalidate rule ->
+             if entry.mode <> Migrate || not (List.mem_assoc rule.field previous) || not (List.mem_assoc rule.field current) then
+               refuse "MIG022" rule.loc "Revalidate requires the same field in both versions and Migrate"
+             else if rule.field = pair.current.primary_key then
+               refuse "MIG009" rule.loc "Revalidate cannot change the primary key"
+             else if Hashtbl.mem revalidated rule.field then
+               refuse "MIG023" rule.loc "duplicate Revalidate field"
+             else Hashtbl.add revalidated rule.field (rule.function_ref,rule.loc)
            | WriteBack rule ->
              if entry.mode <> Migrate || not (List.mem_assoc rule.previous previous) || not (List.mem_assoc rule.current current) then
                refuse "MIG022" rule.loc "WriteBack requires exact previous and current fields and Migrate"
@@ -136,6 +147,18 @@ let check ?version coverage ~entries =
              else if Hashtbl.mem defaults rule.field || Hashtbl.mem destinations rule.field then
                refuse "MIG023" rule.loc "duplicate or conflicting Default target"
              else Hashtbl.add defaults rule.field rule) entry.rules;
+         (* Inspect the original rules, not only accepted mappings: conflicts
+            must be rejected in either order, including malformed endpoints. *)
+         Hashtbl.iter (fun name (_,loc) ->
+           if List.exists (function
+             | Rename r -> r.previous=name || r.current=name
+             | Retype r -> r.field=name
+             | Default r -> r.field=name
+             | WriteBack r -> r.previous=name || r.current=name
+             | Legacy r -> r.field=name
+             | LegacyWith r -> r.field=name
+             | Revalidate _ -> false) entry.rules then
+             refuse "MIG023" loc "Revalidate conflicts with other rules for the same field") revalidated;
          let legacies=Hashtbl.to_seq legacy |> List.of_seq |> List.map (fun (name,(value,loc)) ->
            if Hashtbl.mem renamed name || Hashtbl.mem backwards name || Hashtbl.mem retyped name then
              refuse "MIG023" loc "Legacy conflicts with Rename, WriteBack or Retype";
@@ -164,6 +187,19 @@ let check ?version coverage ~entries =
              | Some old -> Some (true, List.assoc old previous)
              | None -> Option.map (fun old -> false, old) (List.assoc_opt name previous) in
            match source with
+           | Some (_, old) when Hashtbl.mem revalidated name ->
+             let function_ref,loc = Hashtbl.find revalidated name in
+             let primitive = List.exists (fun ty -> shape.type_identity=A.primitive ty)
+               ["Tesl.Prelude.Int";"Tesl.Float.Float";"Tesl.Prelude.Bool";"Tesl.Prelude.String"] in
+             let codec_dependencies inventory field = dependencies inventory field
+               |> Option.map (List.filter (fun d -> d.declaration_kind=Codec_declaration)) in
+             if not primitive || old.type_identity<>shape.type_identity ||
+                old.db_type<>shape.db_type || old.db_column<>shape.db_column ||
+                codec_dependencies before old.stored_field<>Some [] || codec_dependencies after field<>Some [] then
+               refuse "MIG022" loc "Revalidate requires the same primitive scalar type, codec and storage in both versions";
+             if old.proof_identity<>None || shape.proof_identity=None || old.stored_field.contract=field.contract then
+               refuse "MIG022" loc "Revalidate requires a newly introduced target proof on an unproven previous field";
+             Some (Revalidated {previous=old.stored_field;current=field;function_ref;loc})
            | Some (_, old) when Hashtbl.mem retyped name ->
              let expected = Option.bind version (fun version -> if version<2 || version>2147483646 then None else
                Some (Validation_common.sql_column_name name ^ "__v" ^ string_of_int version)) in

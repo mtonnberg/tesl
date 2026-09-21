@@ -153,7 +153,7 @@ func pgQueueSourceProjection(history PgCompiledMigrationHistory) ([]pgQueueSourc
 	if r.err != nil {
 		return nil, r.err
 	}
-	if format == 4 {
+	if format == 4 || format == 5 {
 		inventories, err := pgReadRowBase(history)
 		if err != nil {
 			return nil, err

@@ -140,12 +140,12 @@ let routes ()=project(fun _ _ _ file->
  List.iter(fun needle->check bool needle true(Compile.string_contains output needle))["teslrt.DbRowDelete(";"teslrt.DbRowDeleteCount(";"teslrt.PgRowSQL(";"delete-operand"];
  let renamed=replace "note.title == \"same\"" "note.owner == \"writer\"" app in
  accepts file renamed;ignore(artifacts file renamed))
-let refused file text=
+let refused field file text=
  accepts file text;
  match emit file text with
  | GoSuccess _->fail "unchecked delete predicate emitted"
- | GoFailure ds->check bool (describe ds) true(List.exists(fun(d:Compile.diagnostic)->Compile.string_contains d.message "unchanged Copy or Rename")ds)
-let computed_refuses ()=project(fun _ _ _ file->refused file(replace "note.title == \"same\"" "note.count == 7" app))
+ | GoFailure ds->check bool (describe ds) true(List.exists(fun(d:Compile.diagnostic)->d.code = "V001" && d.message = "migration query on `Note." ^ field ^ "` needs a value-preserving Copy, Rename or Revalidate field; querying a computed or retyped field during this window is not supported yet")ds)
+let computed_refuses ()=project(fun _ _ _ file->refused "count" file(replace "note.title == \"same\"" "note.count == 7" app))
 let retyped_refuses ()=
  let before=replace "author: String" "author: String, rank: Int" old |> replace "author: \"writer\"" "author: \"writer\", rank: 3" in
  let after=replace "owner: String, count: Int" "owner: String, count: Int, rank: String @column(\"rank__v2\")" fresh |> replace "owner: \"writer\", count: 7" "owner: \"writer\", count: 7, rank: \"three\"" in
@@ -153,7 +153,7 @@ let retyped_refuses ()=
   |> replace "count: 7 })" "count: 7, rank: \"three\" })"
   |> fun s->s ^ "\nfn previousRank(current: Schema.Notes.VCurrent.Note) -> Int = 3\n" in
  let migration=replace "import Tesl.Maybe" "import Tesl.Prelude exposing [Int]\nimport Tesl.Maybe" migration in
- project ~before ~after ~migration(fun _ _ _ file->refused file(replace "note.title == \"same\"" "note.rank == \"three\"" app))
+ project ~before ~after ~migration(fun _ _ _ file->refused "rank" file(replace "note.title == \"same\"" "note.rank == \"three\"" app))
 let install_contract root path=
  let abi=Result.get_ok(Migration_abi.current())in let text=read path in
  let ast=match Parser.parse_module path text with Ok x->x|Err e->fail e.msg in

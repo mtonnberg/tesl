@@ -208,7 +208,8 @@
         "index_postgres_test.go#TestPostgresSuccessorIndexWorkerSurvivesCreatingVersionRetirement",
         "model_test.go#TestEpochClosesBeforeTransformAndContractPrecedesNextExpand",
         "read_ordering_test.go#TestPostgresTemplateCoordinatorDeathAtRetirementCommit",
-        "read_ordering_test.go#TestPostgresTemplateQueryFirstAdmissionAcrossRetirement"
+        "read_ordering_test.go#TestPostgresTemplateQueryFirstAdmissionAcrossRetirement",
+        "todo_showcase_test.go#TestCompiledTodoComplexHistoryPostgres"
       ]
     },
     {
@@ -315,7 +316,8 @@
         "postgres_test.go#TestPostgresTemplateRefusesMissingFloorPrerequisites",
         "quarantine_postgres_test.go#TestPostgresAbortQuarantineRechecksCurrentRow",
         "quarantine_test.go#TestQuarantineAfterAbortRechecksChangedOrDeletedRows",
-        "quarantine_test.go#TestRepairChainRunsOnlyOnRejectedRowsAndStopsAtFirstAcceptance"
+        "quarantine_test.go#TestRepairChainRunsOnlyOnRejectedRowsAndStopsAtFirstAcceptance",
+        "todo_showcase_test.go#TestCompiledTodoComplexHistoryPostgres"
       ]
     },
     {
@@ -359,7 +361,8 @@
       ],
       "tests": [
         "model_test.go#TestAdversarialTraces",
-        "model_test.go#TestProvisionalBackfillCannotAuthorizeRetirement"
+        "model_test.go#TestProvisionalBackfillCannotAuthorizeRetirement",
+        "todo_showcase_test.go#TestCompiledTodoComplexHistoryPostgres"
       ]
     },
     {
@@ -514,7 +517,9 @@
       "statement": "A new JSONB fallback decoder accepting old data does not imply that admitted old readers can decode new writes; compiled readers and writers are checked in both directions. Decoder compatibility also does not establish that admitted SQL predicates retain their meaning after the encoded JSONB value changes.",
       "model_paths": null,
       "tests": [
-        "jsonb_blackbox_test.go#TestCompiledJSONBCodecsRequireBothDirectionsAndRewriteEvidence"
+        "jsonb_blackbox_test.go#TestCompiledJSONBCodecsRequireBothDirectionsAndRewriteEvidence",
+        "todo_showcase_test.go#TestCompiledTodoComplexHistoryPostgres",
+        "todo_showcase_test.go#TestTodoTransformStageSources"
       ]
     },
     {
@@ -522,7 +527,8 @@
       "statement": "Reads and later deployments leave untouched legacy JSONB representations intact; removing their decoder requires rewrite evidence after incompatible old writers are excluded.",
       "model_paths": null,
       "tests": [
-        "jsonb_blackbox_test.go#TestCompiledJSONBCodecsRequireBothDirectionsAndRewriteEvidence"
+        "jsonb_blackbox_test.go#TestCompiledJSONBCodecsRequireBothDirectionsAndRewriteEvidence",
+        "todo_showcase_test.go#TestCompiledTodoComplexHistoryPostgres"
       ]
     },
     {
@@ -846,7 +852,8 @@
         "model_test.go#TestProvisionalBackfillCannotAuthorizeRetirement",
         "quarantine_postgres_test.go#TestPostgresAbortQuarantineRechecksCurrentRow",
         "quarantine_test.go#TestQuarantineEvidenceCorruptionAndRowRevisionOverflowAreRefused",
-        "quarantine_test.go#TestRepairChainRunsOnlyOnRejectedRowsAndStopsAtFirstAcceptance"
+        "quarantine_test.go#TestRepairChainRunsOnlyOnRejectedRowsAndStopsAtFirstAcceptance",
+        "todo_showcase_test.go#TestCompiledTodoComplexHistoryPostgres"
       ]
     },
     {
@@ -975,7 +982,8 @@
         "model_test.go#TestEpochClosesBeforeTransformAndContractPrecedesNextExpand",
         "model_test.go#TestModelChecksCompleteVersionEvidenceAndImmutableClassification",
         "read_ordering_test.go#TestPostgresTemplateCoordinatorDeathAtRetirementCommit",
-        "read_ordering_test.go#TestPostgresTemplateQueryFirstAdmissionAcrossRetirement"
+        "read_ordering_test.go#TestPostgresTemplateQueryFirstAdmissionAcrossRetirement",
+        "todo_showcase_test.go#TestCompiledTodoComplexHistoryPostgres"
       ]
     },
     {
@@ -1510,6 +1518,7 @@
       "statement": "Validate source metadata and regenerate the deterministic coverage map.",
       "model_paths": null,
       "tests": [
+        "todo_showcase_test.go#TestTodoTransformStageSources",
         "traceability_test.go#TestProtocolTraceability",
         "traceability_test.go#TestTraceabilityRejectsMissingAndMisclassifiedCoverage"
       ]
@@ -1570,7 +1579,7 @@
         "TR-WRITE"
       ],
       "named_failpoints": [
-        "expansion-after-commit"
+        "row-forward-after-intent"
       ]
     },
     {
@@ -2047,7 +2056,7 @@
     {
       "name": "TestControlUpgradeFixtureRefusesTampering",
       "file": "control_upgrade_app_test.go",
-      "line": 699,
+      "line": 695,
       "layer": "harness",
       "invariants": [
         "INV-FIXTURE-PROVENANCE"
@@ -2803,7 +2812,7 @@
     {
       "name": "TestProcessControllerPausesOnlyNamedArrival",
       "file": "process_test.go",
-      "line": 14,
+      "line": 27,
       "layer": "harness",
       "invariants": [
         "INV-HARNESS"
@@ -2818,7 +2827,7 @@
     {
       "name": "TestProcessControllerRefusesUnknownProtocol",
       "file": "process_test.go",
-      "line": 76,
+      "line": 89,
       "layer": "harness",
       "invariants": [
         "INV-HARNESS"
@@ -3092,7 +3101,7 @@
     {
       "name": "TestCompiledTodoShowcaseRollingUpgrade",
       "file": "todo_showcase_test.go",
-      "line": 31,
+      "line": 32,
       "layer": "compiled-postgres",
       "invariants": [
         "INV-ADDITIVE-READ",
@@ -3106,8 +3115,39 @@
         "TR-WRITE"
       ],
       "named_failpoints": [
-        "expansion-after-ddl"
+        "row-forward-after-ddl"
       ]
+    },
+    {
+      "name": "TestCompiledTodoComplexHistoryPostgres",
+      "file": "todo_showcase_test.go",
+      "line": 160,
+      "layer": "compiled-postgres",
+      "invariants": [
+        "INV-CONTRACT",
+        "INV-FINAL",
+        "INV-GENERATION",
+        "INV-JSONB-COMPATIBILITY",
+        "INV-JSONB-RETENTION"
+      ],
+      "transitions": [
+        "TR-BACKFILL",
+        "TR-CONTRACT"
+      ],
+      "named_failpoints": null
+    },
+    {
+      "name": "TestTodoTransformStageSources",
+      "file": "todo_showcase_test.go",
+      "line": 365,
+      "layer": "harness",
+      "invariants": [
+        "INV-JSONB-COMPATIBILITY"
+      ],
+      "transitions": [
+        "TR-TRACEABILITY-CHECK"
+      ],
+      "named_failpoints": null
     },
     {
       "name": "TestProtocolTraceability",

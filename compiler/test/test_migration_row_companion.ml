@@ -291,8 +291,12 @@ let source_companion () = project (fun root save path ->
  check bool "explicit generics" true (contains generated "RegisterCompiledRowTransform[teslmodschemanotesv1.Note, teslmodschemanotesvcurrent.Note]");
  check bool "private function reference" true (contains generated "teslmodschemanotesmigratev2.TeslCompiledRowCallback");
  match Compile.compile_go_file app with
- | Compile.GoSuccess _ -> fail "public compile acquired Transform execution authority"
- | Compile.GoFailure diagnostics -> check bool "public execution refusal" true (List.exists (fun (d:Compile.diagnostic) -> d.code="MIG016") diagnostics))
+ | Compile.GoFailure diagnostics -> fail ("public compile rejected the captured transform history: " ^ Compile.diagnostics_to_json diagnostics)
+ | Compile.GoSuccess artifacts ->
+   check bool "public compile emits retained physical metadata" true
+     (List.exists (fun (a:Emit_go.artifact) -> a.path="retained-physical-history.json") artifacts);
+   check bool "public compile emits row transform metadata" true
+     (List.exists (fun (a:Emit_go.artifact) -> a.path="row-transform-history.json") artifacts))
 let storage_node ()=project (fun root _ _ ->
  let schema=load (Filename.concat root "schema/notes/v-current.tesl") in
  let storage=get (Migration_storage.describe schema) in
@@ -332,6 +336,36 @@ let refuse = function Ok _ -> fail "expected refusal" | Error _ -> ()
 let baseline_project f = project (fun root save path ->
  remove path;remove (Filename.concat root "schema/notes/v1.tesl");
  let app=save "app.tesl" app in f root save app)
+let public_dependency_validation ()=baseline_project (fun _ save file ->
+ let dependency=save "helper.tesl" {|module Helper exposing [answer]
+import Tesl.Prelude exposing [Int, String]
+fn answer() -> Int = 42
+fn hidden() -> Int = "invalid private body"
+|} in
+ let app_source=Str.global_replace (Str.regexp_string "import Tesl.Database")
+   "import Helper exposing [answer]\nimport Tesl.Database" app in
+ ignore (save "app.tesl" app_source);
+ (* The entry sees a valid exported signature, but the captured dependency has
+    an invalid private body and must never reach Go emission. *)
+ match Compile.compile_go_file file with
+ | Compile.GoSuccess _ -> fail "public row compiler emitted an invalid dependency"
+ | Compile.GoFailure diagnostics ->
+   check bool "dependency frontend error preserved" true
+     (List.exists (fun (d:Compile.diagnostic) ->
+       d.severity="error" && d.file=dependency && d.code="T001") diagnostics))
+let public_migration_body_validation ()=project (fun root save migration_file ->
+ seal_edge root migration_file;
+ write migration_file (Source_input.read migration_file ^
+   "\nfn unusedPrivateBody() -> Int = \"invalid migration body\"\n");
+ let file=save "app.tesl" app in
+ (* The migration module is discovered through database history, not an
+    ordinary application import. Its unreferenced bodies still need checking. *)
+ match Compile.compile_go_file file with
+ | Compile.GoSuccess _ -> fail "public row compiler emitted an invalid migration body"
+ | Compile.GoFailure diagnostics ->
+   check bool "captured migration frontend error preserved" true
+     (List.exists (fun (d:Compile.diagnostic) ->
+       d.severity="error" && d.file=migration_file && d.code="T001") diagnostics))
 let native_empty_test = {|package teslmodapp
 import (
  "testing"
@@ -378,6 +412,15 @@ let marker_collision ()=baseline_project (fun _ save app ->
  match Compile.compile_row_source_artifacts app (read app) with
  | Compile.GoFailure ds -> check bool "reserved marker refusal" true (List.exists (fun (d:Compile.diagnostic) -> contains d.message "_tesl_v") ds)
  | _ -> fail "user column claimed generation marker")
+let public_source_capture_failure ()=baseline_project (fun _ save app ->
+ let schema=replace "count" "_tesl_v" fresh in
+ let file=save "schema/notes/v-current.tesl" schema in
+ accepts file schema;
+ match Compile.compile_go_file app with
+ | Compile.GoSuccess _ -> fail "source-history refusal fell back to legacy public emission"
+ | Compile.GoFailure ds -> check bool (describe ds) true
+   (List.exists (fun (d:Compile.diagnostic) -> d.code="MIG016" &&
+     d.message="the permanent row generation marker `_tesl_v` is reserved; a user column cannot claim its physical name") ds))
 let derived_adapter ()=project (fun root save path ->
  let body=source_body |> replace "entities: {}" "entities: { Note: Derived [Rename author owner, Default count 7] }" in
  ignore (reseal root path body);let app=save "app.tesl" app in
@@ -558,9 +601,10 @@ let lifted_module_boundary ()=project (fun root save path ->
  let app=save "app.tesl" (replace "import Tesl.Database" "import Tesl.CivilTime exposing []\nimport Tesl.Database" app) in
  accepts app (read app);
  match Compile.compile_row_source_artifacts app (read app) with
- | Compile.GoFailure ds -> check bool "lifted owner explicitly refused" true
-   (List.exists (fun (d:Compile.diagnostic) -> contains d.message "lifted Tesl.CivilTime") ds)
- | _ -> fail "uncaptured lifted module emitted")
+ | Compile.GoFailure ds -> fail ("captured lifted module was rejected: " ^ describe ds)
+ | Compile.GoSuccess artifacts ->
+   check bool "captured lifted module is emitted" true
+     (List.exists (fun (a:Emit_go.artifact) -> contains a.path "civil") artifacts))
 
 let full_application_native ()=project (fun root save path ->
  seal_edge root path;
@@ -786,7 +830,10 @@ let ()=run "checked source row companion" ["metadata",[
  test_case "complete source and real emitted binding" `Quick source_companion;
  test_case "existing canonical storage identity" `Quick storage_node;
  test_case "generation smallint bounds" `Quick generation_bounds;
+ test_case "public source capture failure never falls back to legacy" `Quick public_source_capture_failure;
  test_case "V1 Worker application handlers against PostgreSQL" `Quick full_v1_worker_application_native;
+ test_case "public row validates captured migration bodies" `Quick public_migration_body_validation;
+ test_case "public row validates private dependency bodies" `Quick public_dependency_validation;
  test_case "baseline native zero rows" `Quick baseline_native;
  test_case "additive native zero rows" `Quick additive_native;
  test_case "baseline source drift" `Quick source_drift;
@@ -805,5 +852,5 @@ let ()=run "checked source row companion" ["metadata",[
  test_case "JSONB record computation and existing-field boundary" `Quick jsonb_record_native;
  test_case "pinned baseline overlay drift" `Quick overlay_source_guard;
  test_case "supplied unsaved root accepted" `Quick unsaved_root_source;
- test_case "lifted module explicit boundary" `Quick lifted_module_boundary;
+ test_case "lifted module captured by the public companion" `Quick lifted_module_boundary;
  test_case "full App/Main refuses before startup and connection" `Quick full_application_native]]

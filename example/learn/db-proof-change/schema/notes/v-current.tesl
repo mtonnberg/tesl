@@ -1,0 +1,13 @@
+module Schema.Notes.VCurrent exposing [Note, tryTitle, Allowed]
+import Tesl.Prelude exposing [String, Bool(..)]
+import Tesl.Maybe exposing [Maybe(..)]
+fact Allowed (value: String)
+establish tryTitle(value: String) -> Maybe (v: String ::: Allowed v) =
+if value == "" then
+  Nothing
+else
+  if value == "blocked" then
+    Nothing
+  else
+    Something (value ::: Allowed value)
+entity Note table "notes" primaryKey id { id: String, title: String ::: Allowed title @column("title__v2"), memo: String }

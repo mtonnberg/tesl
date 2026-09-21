@@ -199,11 +199,11 @@ func TestCompiledControlFormatUpgrade(t *testing.T) {
 		t.Fatalf("original binary did not persist its actual compiler identity: %v (%v)", provenance, err)
 	}
 	before := controlUpgradeSnapshot(t, ctx, observer, false)
-	// Contract 3 cannot interpret the original contract-2 rows. Request,
-	// status and installer recognize this catalog and reach semantic refusal;
-	// the current worker requires the format upgrade before inspecting history.
+	// The current compiler emits format5 row history. It cannot adopt this
+	// established format2 origin. The authentic bridge below still performs
+	// the original supported 2 -> 3 upgrade, without altering its old history.
 	assertCurrentControlUpgradeRefusals(t, ctx, observer, currentBinary, login, worker, requestRole, setup, owner,
-		"format2", "persisted stored-value compatibility differs at V1", false, installArgs)
+		"format2", "row baseline requires bounded format5 fresh V1 origin", false, installArgs)
 	if _, err := observer.Exec(ctx, "grant "+owner+" to "+setup); err != nil {
 		t.Fatal(err)
 	}
@@ -337,16 +337,12 @@ func assertCurrentControlUpgradeRefusals(t *testing.T, ctx context.Context, obse
 		t.Fatalf("installer must be detached before current request/worker/status refusals: membership=%v (%v)", installerMember, err)
 	}
 	before := controlUpgradeRefusalSnapshot(t, ctx, observer, includeFormat3)
-	workerExpected := expected
-	if !includeFormat3 {
-		workerExpected = "migration control format 2 requires the installer upgrade before worker expansion"
-	}
 	for _, command := range []struct {
 		label, role, expected string
 		args                  []string
 	}{
 		{"request", requestRole, expected, nil},
-		{"worker", worker, workerExpected, []string{"--schema", "worker", "--json"}},
+		{"worker", worker, expected, []string{"--schema", "worker", "--json"}},
 		{"status", requestRole, expected, []string{"--schema", "status", "--json"}},
 		{"installer", setup, expected, installArgs},
 	} {

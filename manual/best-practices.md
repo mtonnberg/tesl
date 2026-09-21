@@ -698,10 +698,57 @@ source checker covers additive declarations, literal defaults and checked
 `Migrate`/`Derived` row mappings. For a copied or renamed primitive field,
 verified `Same` can preserve its existing self-subject proof at the exact final
 row projection. It cannot justify a different field, stronger validation or a
-general conversion between nominal record types. The physical
-planner, additive executor, versioned application startup and SQL admission have
-regression coverage. Executing row transformations and the complete migration lifecycle
-are still under development.
+general conversion between nominal record types. The physical planner, additive
+executor, versioned application startup and SQL admission have regression
+coverage. Ordinary PostgreSQL builds also emit the checked physical row
+companion and typed worker callbacks for `Migrate`, `Derived`, `Legacy` and
+`Retype`. Run the worker before routing new requests; queue payload transforms,
+staged uniqueness and legacy installation adoption remain under development.
+
+To add the first proof to an existing primitive field, use
+`Revalidate field Schema.YourEntity.VCurrent.tryField` with `Migrate`. The
+schema-owned optional `establish` must return the original value with its proof,
+and the migration must put that exact `Something` binder into the new row.
+This keeps the existing column; it does not normalize or rewrite the value.
+An old writer can still store values the new proof rejects, so repair rejected
+rows before Contract retires the old version. Current enforcement is explicitly
+runtime-only: generated metadata does not claim a PostgreSQL CHECK constraint.
+Changing an existing proof, a codec, or a field's type requires a different
+supported transition; this initial Revalidate path refuses those changes.
+
+For an existing primitive field proof, use `Retype` with a new physical column
+and `WriteBack` for the old column. The reverse function returns the old scalar
+with its **exact historical proof**, including its predicate owner and subject;
+an ordinary unproved scalar or the new proof is insufficient. Re-establish the
+old proof explicitly. `LegacyWith` uses the same rule when removing a proven
+field. Conjunctions must match the historical proof structure exactly.
+When returning a proven field from a helper result, bind the record first
+(`let previous = previousNote()`), then return `previous.title`. This also works
+inside a `case` branch; the receiver's exact type and field proof are preserved.
+
+A stronger proof may reject existing rows: repair them before Contract. A weaker
+proof may admit values an older app cannot accept: choose an explicit old-valid
+representation in the reverse function while preserving the new value in its
+own column. This guarantees an old-valid representation, not a lossless round
+trip: even an unrelated old update can invalidate the whole row, causing the
+new app to rebuild it from the fallback and lose the newer-only value. If exact
+retention is required, drain and retire old writers before allowing values the
+old schema cannot represent. Cover unrelated old updates in overlap tests.
+Contract retires old writers and drops retained storage. This path
+does not replace a proof in place or synthesize SQL CHECK constraints, and
+cross-field entity predicates remain unsupported for scalar reverse callbacks.
+During the compatibility window, use stable fields such as an unchanged primary
+key for SQL filtering and ordering; migrated values have query restrictions.
+See [changing field proofs](../example/learn/lesson90-changing-field-proofs.md).
+
+To remove an entire entity, the initial supported route is a separate `Drop`
+revision with one removed ordinary table and unchanged surviving entities.
+The old table remains available during overlap; the generated `Table Entity`
+Contract retires old versions before physically deleting the table and its data.
+This requires no row conversion or invented backfill. Known views, foreign keys
+or other external dependencies refuse Contract before retirement; deletion never
+cascades. See [removing a table](../example/learn/lesson91-removing-a-table.md) for
+the supported boundaries, fresh-catalog requirement and retry behavior.
 
 A generated `todo "reason"` in a migration entity entry is an unresolved decision,
 reported as MIG003. It blocks compilation and has no runtime value. Read the
@@ -935,7 +982,7 @@ it does not start the server or apply a pending migration. JSON goes to stdout,
 and errors go to stderr with a nonzero exit status. Inspection is an observation,
 not permission to skip the admission checks on subsequent requests.
 
-For a PostgreSQL database, inspect the checked expansion history with:
+For a PostgreSQL database, inspect the checked source history with:
 
 ```sh
 tesl migrate plan app.tesl --database App.Main
@@ -951,7 +998,7 @@ an index over unbounded text may reject a wide value that older code writes.
 The report explains these cases. JSONB codec changes still require a migration
 decision even when the column remains JSONB.
 
-If the database was first installed at a later revision, pass that version:
+For an additive history first installed at a later revision, pass that version:
 `tesl migrate plan app.tesl --initial-version 3`. This is its original installation
 version, not today's deployment version. A fresh V3 database does not have tables
 removed in V2, while a database upgraded from V1 still retains them. The planner
@@ -959,10 +1006,31 @@ checks the whole source history in both cases and reports storage from the chose
 initial version. The default is V1; this command does not read the database to
 discover its installation history.
 
-The plan checks the complete application, including storage codec emission. It
-does not connect to PostgreSQL or compare its live catalog, and reports
-`executable: false` while database execution is under implementation. A source
-plan is not evidence that stored rows have migrated.
+Transforming entity-only histories instead produce a `row-history` preview from
+V1. Each step describes retained tables and generations, field mappings with
+source and target columns, runtime-only proof enforcement where applicable,
+codec-change observations and checked Contract source. A required prior Contract
+is explicit; the preview does not assert that it has been deployed or completed.
+Later initial installation versions and combined row/queue previews remain
+unsupported for this path.
+
+Both forms check the complete application, including storage codec emission, and
+report `executable: false`. They do not connect to PostgreSQL, compare its live
+catalog or read persisted receipts. Encoder syntax, decoder ordering and codec
+dependency changes are observations, not proof of directional compatibility.
+Even an append-only decoder report does not authorize an adapter-only upgrade,
+in-place rewrite or removal of a legacy decoder. For representation changes,
+use the supported typed `Retype`/`WriteBack` path with retained physical storage
+and checked Contract cleanup. The generated worker performs the database work;
+a source preview is not evidence that stored rows have migrated or reached
+finality.
+
+Before the first transforming release, close the preceding additive epoch using
+that additive release's worker binary: `tesl run app.tesl --schema close-epoch
+--through V9 --json` for a V1–V9 history. Preview with `--dry-run`, retire V1–V8,
+and let their heartbeats expire before closing. V9 can keep serving during this
+step. The command permanently excludes earlier versions; it does not replace
+the transforming release's later Contract and final backfill.
 
 In the editor, a frozen-source error links to the migration that recorded the
 snapshot. Those links use unsaved buffers too. Migration decisions require an
@@ -1315,9 +1383,22 @@ they describe the listing's snapshot, so later worker activity can make it stale
 been claimed or removed. Only `AttemptsExhausted` entries may be retried this way.
 Legacy PostgreSQL quarantines cannot reliably distinguish a missing codec from
 an invalid payload, so they report `LegacyUnresolved`. The API does not expose
-raw JSON as a current typed job. Versioned PostgreSQL queue migration dispatch
-remains unavailable until its protected storage and migration path are enabled;
-adding these inspection types does not enable it.
+raw JSON as a current typed job.
+
+For a fresh versioned PostgreSQL database, Worker topology supports queues whose
+payload records belong to the database's schema and are listed in a
+`queueSchema` declaration. Bind the application queue's `schema` field to that
+declaration. Ordinary builds include the frozen payload inventory and codecs;
+older workers cannot claim jobs stamped by a newer application version. A newer
+worker can process an older job when its payload contract is unchanged.
+
+This currently supports additive histories: add new payload identities instead
+of changing an existing payload's fields, proofs or codec. Incompatible changes
+are compile errors. Queue-bearing histories cannot yet close an epoch, retire a
+version or run Contract, even with an empty queue or `--force`. Embedded topology,
+adopting an existing unversioned queue, and payload transformations remain
+unsupported. The migration Worker handles schema changes; the queue workers in
+`App.queues` run your job handlers.
 
 ### 4b. Outbound HTTP (stubbing what your code calls)
 

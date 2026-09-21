@@ -279,8 +279,8 @@ let refused_queries () =
  let member="\nentity Member table \"members\" primaryKey id { id: String, name: String }\n" in
  let schema s=(replace "[Note, makeNote]" "[Note, makeNote, Member]" s) ^ member in
  let cases=[
-  "computed predicate","select note from Note where note.count == 7","List Note","unchanged Copy or Rename";
-  "computed ordering","select note from Note order note.count asc","List Note","unchanged Copy or Rename";
+  "computed predicate","select note from Note where note.count == 7","List Note","value-preserving Copy, Rename or Revalidate";
+  "computed ordering","select note from Note order note.count asc","List Note","value-preserving Copy, Rename or Revalidate";
   "aggregate","selectCount note from Note","Int","without joins or aggregates";
   "forward join","select note from Note\n  innerJoin Member on note.owner Member.name","List Note","without joins or aggregates";
   "reverse join","select member from Member\n  innerJoin Note on member.name Note.owner","List Member","joining a transforming entity";
@@ -584,7 +584,7 @@ let repeated_binding_guards () =
  match Compile.compile_row_source_artifacts ~storage:true ~physical:true app_file unsafe with
  | Compile.GoSuccess _->fail "V3 computed predicate silently gained legacy SQL"
  | Compile.GoFailure ds->check bool (describe ds) true
-   (List.exists(fun(d:Compile.diagnostic)->Compile.string_contains d.message "unchanged Copy or Rename")ds))
+   (List.exists(fun(d:Compile.diagnostic)->d.code="V001" && Compile.string_contains d.message "value-preserving Copy, Rename or Revalidate")ds))
 
 let export_repeated destination =
  export ~contracts:true ~repeated:true destination;

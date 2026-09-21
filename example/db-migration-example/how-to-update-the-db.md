@@ -1,132 +1,149 @@
 # How to update the database
 
-Work in `example/db-migration-example/`. Read
-[todo-app.tesl](todo-app.tesl) once: the database connection and handlers live
-there. Then focus on two things:
+Work in `example/db-migration-example/`. The application file contains the
+connection, handlers, routes and API tests. A database change normally touches
+only the current schema and one migration:
 
-- **The current schema** describes the rows the new binary uses.
-- **The migration** explains how that schema can coexist with retained rows and
-  older binaries. Review it as code, including any rule you must supply.
+- `schema/todo/v-current.tesl` is the row shape used by the new binary.
+- `migrations/todo/vN.tesl` is the reviewed, typed transition from the previous
+  frozen row shape.
+- `migrations/todo/vN-contract.tesl` is the separately reviewed cleanup after
+  old binaries and old rows no longer need compatibility storage.
 
-`Database.migrations` selects the history. The separate `MigrationConfig` inside
-`PostgresConfig.migrations` configures its execution and database roles. Those
-deployment settings normally stay the same when you change an entity.
+`Database.migrations` names the history. The PostgreSQL `MigrationConfig` groups
+worker and role settings; it is application configuration and does not belong in
+a schema or migration module.
 
-## 1. Start the guided workflow
+## 1. Open a revision
+
+The guided command prepares a new frozen snapshot and migration:
 
 ```sh
 tesl migrate todo-app.tesl
 ```
 
-The interactive CLI freezes the accepted schema, opens a new version, and tells
-you which file to edit. Save your changes, then continue in the terminal. It
-refreshes the migration, shows diagnostics and any decisions still required,
-and displays the checked plan. You remain responsible for the migration rules.
+Edit the file it names, save it, and continue in the terminal. Use `--resume`
+only for an opened revision that has not been deployed. After a revision is
+deployed, start the next revision; never rewrite a frozen snapshot or completed
+migration.
 
-Use `tesl migrate todo-app.tesl --resume` only to continue an **undeployed** current
-revision. Once a revision has been deployed, start a new one instead.
+For a scriptable workflow, the equivalent commands are:
 
-Edit **[schema/todo/v-current.tesl](schema/todo/v-current.tesl)**. This one file
-contains Todo, Project, their facts and constructors. For example, add
-`snoozedUntil: Maybe PosixMillis` to Todo and supply `Nothing` in its constructor.
-The connection and handlers can stay untouched because their public DTO does not
-expose this storage field. Frozen predecessors describe accepted old versions;
-leave them unchanged.
-
-## 2. Review the migration, not just the new entity
-
-Generation refreshes the editable migration against the actual saved source.
-A stale-target diagnostic before refreshing means the schema and its migration
-still describe different edits. Inspect the generated file under
-`migrations/todo/` and the plan.
-
-A nullable addition has a useful SQL default already: NULL, read as `Nothing`.
-For a required field, decide where the value comes from. V7 supplies this rule:
-
-```tesl
-"Todo": Additive [Default priority 0]
+```sh
+tesl migrate generate todo-app.tesl --new-revision
+# edit schema/todo/v-current.tesl
+tesl migrate generate todo-app.tesl
 ```
 
-It gives existing rows and old binaries' future inserts a priority of zero.
-The new constructor also supplies zero, but changing the constructor alone
-cannot update retained rows or old writers. A derived value needs a real row
-transformation; choosing an arbitrary constant does not solve that problem.
+The connection and handlers stay in `todo-app.tesl`. Frozen files under
+`schema/todo/vN.tesl` are historical inputs and should not be edited.
 
-The title proof stays unchanged in this example. Checked `Same` entries record
-that fact across versions; they do not authorize arbitrary new code to assert
-old stored values satisfy a different proof.
+## 2. Choose the migration operation
 
-## 3. Test and build
+Use the smallest operation that describes the stored-value change.
+
+| Change | Migration shape | What to check |
+| --- | --- | --- |
+| Nullable field | `Additive []` | Existing SQL NULL decodes as `Nothing`; current constructors include `Nothing`. |
+| Required field with a constant | `Additive [Default field value]` | The default covers retained rows and inserts from admitted old writers. |
+| Required or derived value from an old row | `Migrate callback []` | Return a complete new row for every old row, or `Reject reason`; test both paths. |
+| Remove a field | `Migrate callback [Legacy ...]` | Keep the old column and reverse value until a checked Contract drops it. |
+| Record/ADT JSONB representation | `Migrate callback [Retype ...]` | Convert the typed old value explicitly; preserve the old codec for reverse writes. |
+| Physical cleanup | `vN-contract.tesl` | Name the exact `Column`, `Storage`, `Index` or `Trigger` to drop and any `NotNull` tightening. |
+
+Changing a codec does not rewrite existing JSONB. A typed migration must read the
+old value and write the new representation. Keep the old decoder and reverse
+adapter while an older binary can still read or write the row.
+
+The example deliberately exercises each case:
+
+- V10 derives `priorityWeight` from the retained `priority` value.
+- V11 removes `priority`, reconstructs it for V10 writers with `LegacyWith`,
+  and drops the old column only in its Contract.
+- V12 converts an integer into a JSONB `PriorityInfo` record with provenance.
+- V13 retypes that record into an ADT, writes a new physical JSONB column, and
+  reverses both constructors with `WriteBack` before its Contract removes the
+  old storage.
+
+## 3. Check the source and run the tests
+
+Run Tesl commands from the example directory (or pass the full path):
 
 ```sh
 tesl check todo-app.tesl
 tesl test todo-app.tesl
-tesl build --local
-```
-
-With your development PostgreSQL connection configured and its schema worker
-running (step 4), try the app:
-
-```sh
 tesl run todo-app.tesl
 ```
 
-Add a regression that starts with real rows from the previous binary, runs the
-migration, and exercises old/new reads and writes. Test interruption and restart
-where the operation can span multiple transactions. The existing native todo
-regression provides that pattern; replay archives under `deploy/releases/` are
-its historical fixtures, not another migration mechanism.
+`tesl test` runs the migration fixtures as generated tests, including `Row` and
+`Reject`, old codecs, reverse values and the unchanged application tests. The
+compiled application contains the checked row callback and physical companion;
+the handlers do not need a migration branch.
 
-## 4. Deploy the worker, then roll request processes
+`tesl migrate plan todo-app.tesl` previews this complete history without connecting
+to PostgreSQL. Transforming histories report table generations, row mappings,
+source/target columns, proof enforcement, codec changes and checked Contracts.
+The guided command also summarizes the current revision and any required prior
+Contract. Both additive and transforming previews have `executable: false`.
 
-For local development, run `tesl run todo-app.tesl --schema worker --json` with
-the schema worker login in one terminal and `tesl run todo-app.tesl` with the
-request login in another. A new request waits
-for its schema readiness; only then route traffic to it and drain an old one.
-Keep a healthy old process available throughout the rollout.
+These are source descriptions, not persisted receipts or proof that rows have
+migrated. Codec reports do not authorize an in-place rewrite or removing a legacy
+decoder. This example uses typed `Retype` plus `WriteBack`, separate retained
+storage and checked Contract cleanup for the record-to-ADT change. Run the tests
+and deployed worker to verify the actual migration lifecycle.
 
-A plain index on a bounded key, such as this app's `completed: Bool`, may still be
-building when requests become ready. New versions wait for indexes on newly
-added unbounded keys and for required unique indexes; old versions keep serving.
-The separate worker builds the index and records completion. Worker interruption
-must preserve its job and verify the old PostgreSQL
-executor has stopped before a replacement takes ownership.
+## 4. Roll out with a worker
 
-[Deployment commands and role configuration](deploy/README.md) show the concrete
-local setup. The deployed executable contains its checked migration history;
-source files and the compiler are not required on application nodes.
-
-## The same workflow without prompts
-
-These commands perform the same freeze, edit, refresh and review steps as the
-interactive command. Use them for scripts or when you prefer explicit commands;
-you do not need to run them again after completing the guided workflow.
+Before the first transforming release (V10 here), retire V1–V8 and close the
+additive epoch using the retained **V9 source/binary** and worker login:
 
 ```sh
-# Freeze the accepted version and open a new current target.
-tesl migrate generate todo-app.tesl --new-revision
-# Edit and save schema/todo/v-current.tesl, then:
-tesl migrate generate todo-app.tesl
-tesl check todo-app.tesl
-tesl migrate plan todo-app.tesl
+tesl run todo-app.tesl --schema close-epoch --through V9 --dry-run --json
+tesl run todo-app.tesl --schema close-epoch --through V9 --json
 ```
 
-For an already-open, undeployed revision, continue from the edit/refresh steps.
-Do not run the new-revision command again merely to clear a diagnostic.
+Run those commands from the V9 release, before deploying V10. V9 requests can
+continue serving. If closure reports recent older instances, stop them and wait
+for their heartbeats to expire. Closure permanently prevents V1–V8 from returning.
 
-## The saved example history
+Build the same Tesl source into the request and worker processes. In development
+you can run them separately:
 
-| Version | Change | Meaning for retained rows and old writers |
+```sh
+tesl run todo-app.tesl --schema worker --json   # worker login / DDL
+tesl run todo-app.tesl                         # request login / DML
+```
+
+The worker prepares physical storage, runs typed row transformations and records
+the generation. Request processes wait for readiness and continue using the same
+handlers. Keep an admitted old request process serving until the worker has
+backfilled the rows and the new process is ready; then drain it. Prepare and run
+the matching Contract only after old processes are gone and the readiness floor
+has settled.
+
+The deployment scripts under [deploy/](deploy/) demonstrate one possible local
+PostgreSQL cluster and rolling proxy. They are infrastructure examples, not a
+Tesl migration requirement; a production deployment can use Helm or another
+orchestrator.
+
+## The saved history
+
+| Version | Change | Compatibility detail |
 | --- | --- | --- |
-| V1 | Todo with a proven title and completion flag | Baseline |
-| V2 | Add `details: Maybe String` | SQL NULL becomes `Nothing` |
-| V3 | Add `dueAt: Maybe PosixMillis` | Repeat the nullable addition with a timestamp |
-| V4 | Add Project and its initial `archived` index | Create the new table and initial index together |
-| V5 | Add `projectId: Maybe String` to Todo | Another optional text field |
-| V6 | Add `description: Maybe String` to Project | Repeat the same change on the other entity |
-| V7 | Add `priority: Int` with `Default priority 0` | Retained rows and old inserts receive zero |
-| V8 | Add a plain index on Todo's `completed` field | Build concurrently while requests keep reading and writing |
-| V9 | Add `reminderAt: Maybe PosixMillis` | Repeat the common nullable timestamp addition after index completion |
+| V1 | Todo with proven title and completion flag | Baseline |
+| V2 | Add `details: Maybe String` | SQL NULL reads as `Nothing` |
+| V3 | Add `dueAt: Maybe PosixMillis` | Nullable timestamp addition |
+| V4 | Add `Project` and its `archived` index | New table and index |
+| V5 | Add `projectId: Maybe String` to Todo | Optional reference |
+| V6 | Add `description: Maybe String` to Project | Optional text |
+| V7 | Add `priority: Int` with `Default priority 0` | Old rows and old inserts get zero |
+| V8 | Add an index on `Todo.completed` | Worker builds it while requests serve |
+| V9 | Add `reminderAt: Maybe PosixMillis` | Another nullable timestamp |
+| V10 | Derive `priorityWeight = priority + 1` | Typed backfill from retained rows |
+| V11 | Remove `priority` | `LegacyWith` keeps V10 writes valid until Contract |
+| V12 | Add JSONB `PriorityInfo` record | Explicit record conversion and provenance |
+| V13 | Retype `PriorityInfo` record to an ADT | `WriteBack`, new physical storage and Contract |
 
-These storage-only additions do not automatically become UI features. The stable
-public DTO is the reason the handlers can stay unchanged.
+The public response remains `{ id, title, completed }` throughout. Storage-only
+changes therefore leave the handlers, routes, frontend and API tests untouched;
+only the versioned schema and migration source evolve.

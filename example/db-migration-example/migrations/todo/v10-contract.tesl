@@ -1,0 +1,12 @@
+module Schema.Todo.Migrate.V10Contract exposing [contract]
+import Tesl.Migration exposing [Contract, Drop(..), Tighten(..)]
+import Schema.Todo.Migrate.V10
+
+# Reviewed source authority only; execute explicitly after the rolling update.
+# Marker defaults are derived from this migration's checked generation transition.
+contract = Contract {
+  of: Schema.Todo.Migrate.V10
+  drops: [Trigger Todo]
+  tighten: [NotNull Todo priorityWeight]
+  promote: []
+}

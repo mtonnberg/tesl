@@ -589,8 +589,9 @@ func (runtime *pgPubsub) listen(connection *PostgresDB) (listened bool, err erro
 	}
 }
 
-// pgVerifyQueueCandidateConnection is private candidate admission, shared by
-// startup preparation and the queue-only listener. The caller owns an idle
+// pgVerifyQueueCandidateConnection validates the queue-only listener and private
+// candidate pool. Row5 uses its complete checked baseline; format4 retains its
+// independent candidate inspection. The caller owns an idle
 // read-committed, read-only transaction and publishes no binding before commit.
 // Ordinary format-3 connection validation remains unchanged and refuses format 4.
 func pgVerifyQueueCandidateConnection(ctx context.Context, tx pgx.Tx, db *PostgresDB, binding *pgQueueRuntime) error {
@@ -633,6 +634,20 @@ func pgVerifyQueueCandidateConnection(ctx context.Context, tx pgx.Tx, db *Postgr
 	}
 	if err := pgControlRoles(ctx, tx, expected.roles, false); err != nil {
 		return err
+	}
+	if expected.controlFormat == pgRowControlFormat {
+		baseline := expected.rowBaseline
+		if expected.roles.Request == "" || baseline == nil || baseline.database != binding.database || baseline.history != binding.history {
+			return fmt.Errorf("queue listener: row baseline owner or Worker topology changed")
+		}
+		state, _, err := pgReadRowBaselineState(ctx, tx, baseline, expected.roles, false)
+		if err != nil {
+			return err
+		}
+		if state.Format != pgRowControlFormat || state.DatabaseUUID != expected.databaseUUID || state.FenceNamespace != expected.fenceNamespace || state.Current < expected.version {
+			return fmt.Errorf("queue listener: row baseline identity or readiness changed")
+		}
+		return pgAdmitMigrationTransaction(ctx, tx, db, false)
 	}
 	state, err := pgInspectQueueCandidate(ctx, tx, db.schema, expected.roles)
 	if err != nil {

@@ -81,6 +81,7 @@ let link transform = protect (fun () ->
       | R.Copy {previous;current} -> tag "copy" [field previous;field current]
       | R.Renamed {previous;current} -> tag "rename" [field previous;field current]
       | R.Retyped {previous;current} -> tag "retype" [field previous;field current]
+      | R.Revalidated {previous;current;_} -> tag "revalidate" [field previous;field current]
       | R.Empty_optional current -> tag "empty-optional" [field current]
       | R.Constant (current,literal) -> tag "default" [field current;literal]
       | R.Computed current -> tag "computed" [field current] in

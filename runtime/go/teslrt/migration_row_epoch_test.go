@@ -34,6 +34,15 @@ func TestRowEpochRetirementIdentityAndCompletePrefix(t *testing.T) {
 	if _, _, err := pgRowEpochDocument(b, state, 1, 3, false, plans); err == nil {
 		t.Fatal("a transforming predecessor was treated as an additive epoch")
 	}
+	// A pure table Drop has no row transform windows, but is destructive and
+	// requires its exact table Contract rather than additive epoch retirement.
+	plans[2].windows = nil
+	plans[2].retirements = []pgRowPhysicalRetirement{{entity: "Archive"}}
+	for _, force := range []bool{false, true} {
+		if _, _, err := pgRowEpochDocument(b, state, 1, 3, force, plans); err == nil || !strings.Contains(err.Error(), "purely additive physical prefix") {
+			t.Fatal("table retirement was treated as an additive epoch", force, err)
+		}
+	}
 	if _, _, err := pgRowEpochDocument(b, state, 1, 2147483646, false, plans); err == nil {
 		t.Fatal("unbounded missing prefix accepted")
 	}
@@ -64,6 +73,27 @@ func TestRowEpochCommandScope(t *testing.T) {
 		_, handled, err := pgParseSchemaCommand(args)
 		if err == nil || !handled {
 			t.Fatalf("invalid close-epoch command accepted: %v", args)
+		}
+	}
+}
+
+func TestPgRowEpochEmptyQueueInventoryDoesNotBlockRetirement(t *testing.T) {
+	f, _ := pgNewWorkerTest(t)
+	db := pgRowBaselineFixture(t, f)
+	pgRowBaselineReady(t, f, db)
+	if err := pgCheckRowQueueRetirement(f.ctx, f.worker, f.namespace); err != nil {
+		t.Fatal("complete queue-free inventory blocked", err)
+	}
+	// The queue tables exist even for queue-free apps. Their mere presence
+	// must not turn the queue safety boundary into an entity retirement ban.
+	for _, statement := range []string{
+		`select notes_app.tesl_close_row_epoch(null,null,null,null,null,null,null,null,true)`,
+		`select notes_app.tesl_retire_row_window(null,null,null,null,null,null)`,
+		`select notes_app.tesl_begin_row_contract(null,null)`,
+	} {
+		_, err := f.worker.Exec(f.ctx, statement)
+		if err == nil || strings.Contains(err.Error(), "queue-bearing history") {
+			t.Fatalf("queue-free call did not reach normal retirement validation: %s: %v", statement, err)
 		}
 	}
 }

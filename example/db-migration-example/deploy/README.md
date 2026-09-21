@@ -17,6 +17,14 @@ round-robins API calls without retrying writes. Each new node must become ready
 before replacing an old node; old requests drain before its process stops.
 Continuous create/update/read/delete probes check every rollout.
 
+The saved proxy rollout currently replays the archived V1→V9 additive releases.
+The V10→V13 derived, removal and JSONB transformations are covered separately by
+`TestCompiledTodoComplexHistoryPostgres`: it stages each release, overlaps old
+and new request processes, verifies converted values and reverse writes, and
+executes each Contract on PostgreSQL. They are not yet included in this proxy
+replay. The complex-history test checks requests at lifecycle boundaries;
+continuous traffic during those transformations remains a separate coverage gap.
+
 Ctrl-C stops the app processes. PostgreSQL and its data remain under
 `example/db-migration-example/.local-schema-todo-v5/`. Logs and the saved binaries are printed
 when the demo starts. Stop the owned database separately:
@@ -107,6 +115,11 @@ Frontend compilation is independent:
 `bash example/db-migration-example/deploy/build-frontend.sh`.
 Backend tests do not require an Elm package download.
 
-The local deployment and fixture regressions are:
+The source reconstruction and proxy regressions are:
 `python3 example/db-migration-example/deploy/test-workflow.py`.
-The deeper PostgreSQL acceptance gate is documented in the main README.
+The real PostgreSQL migration acceptance gate is the runtime suite invoked by
+`scripts/run-migration-tests.sh`; it requires the repository development
+toolchain and owns an isolated PostgreSQL cluster. The V10→V13 generated
+history is also exercised by `tesl test
+example/db-migration-example/todo-app.tesl` and the public Go compile check
+described in the main README.

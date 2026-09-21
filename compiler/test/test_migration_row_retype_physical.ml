@@ -365,7 +365,7 @@ let legacy_app () =
  Fun.protect ~finally:(fun()->if Sys.getenv_opt "TESL_KEEP_ROW_LEGACY_TEST"=None then remove output)(fun()->
   export ~before ~after ~body ~application ~binding_test:false output;
   command(Filename.concat(repository())"runtime/go")(Filename.concat output "postgres.log")
-    (Printf.sprintf "TESL_ROW_LEGACY_PROGRAMS=%s timeout 180s go test -p 1 -race -tags tesl_migration_test -timeout 150s ./teslrt -run '^TestPgRowLegacyContractApp$' -count=1 -v" (Filename.quote output)))
+    (Printf.sprintf "TESL_ROW_LEGACY_PROGRAMS=%s timeout 180s go test -p 1 -race -tags tesl_migration_test -timeout 150s ./teslrt -run '^TestPgRowLegacy(ContractApp|WindowWrites)$' -count=1 -v" (Filename.quote output)))
 
 let ()=run "physical Retype and WriteBack" ["PostgreSQL",[test_case "logical removal primitive and JSONB old-field compatibility" `Quick legacy_app;
  test_case "unchanged V1/V2 App with distinct JSONB record codecs" `Quick (native_case "record");

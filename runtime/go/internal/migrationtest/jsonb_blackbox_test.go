@@ -279,6 +279,48 @@ and backup = details and change #> '{fields,details}' = details
 from migration_jsonb.notes where id='bridge-new'`).Scan(&bridgeKeys); err != nil || !bridgeKeys {
 		t.Fatalf("bridge did not preserve both representations in every occurrence: %v (%v)", bridgeKeys, err)
 	}
+	// Both decoders can succeed while disagreeing on the logical value. This
+	// unversioned codec oracle pins declared fallback precedence; it is not
+	// production migration authorization to rewrite or prune either decoder.
+	if _, err = conn.Exec(f.ctx, `insert into migration_jsonb.notes(id,details,backup,change)
+values ('conflicting-keys',
+ '{"title":"old main","body":"new main å🙂"}'::jsonb,
+ '{"title":"old backup","body":"new backup"}'::jsonb,
+ '{"tag":"Changed","fields":{"details":{"title":"old nested","body":"new nested"}}}'::jsonb)`); err != nil {
+		t.Fatal(err)
+	}
+	storedOccurrences := func() string {
+		t.Helper()
+		var stored string
+		if err := conn.QueryRow(f.ctx, `select jsonb_build_array(details,backup,change)::text
+from migration_jsonb.notes where id='conflicting-keys'`).Scan(&stored); err != nil {
+			t.Fatal(err)
+		}
+		return stored
+	}
+	originalOccurrences := storedOccurrences()
+	for _, version := range []string{"v7", "v8", "v8-bridge", "v9"} {
+		want := "new main å🙂"
+		if version == "v7" {
+			want = "old main"
+		}
+		request(version, "GET", "conflicting-keys", "", "200", want)
+		if got := storedOccurrences(); got != originalOccurrences {
+			t.Fatalf("%s decoder mutated stored conflicting representations: %s, want %s", version, got, originalOccurrences)
+		}
+	}
+	request("v8-bridge", "PUT", "conflicting-keys", "", "200", "new main å🙂")
+	var resolved bool
+	if err = conn.QueryRow(f.ctx, `select
+ details = '{"title":"new main å🙂","body":"new main å🙂"}'::jsonb and
+ backup = '{"title":"new backup","body":"new backup"}'::jsonb and
+ change = '{"tag":"Changed","fields":{"details":{"title":"new nested","body":"new nested"}}}'::jsonb
+from migration_jsonb.notes where id='conflicting-keys'`).Scan(&resolved); err != nil || !resolved {
+		t.Fatalf("bridge rewrite did not honor first decoder independently in every occurrence: %v (%v); %s", resolved, err, storedOccurrences())
+	}
+	for _, version := range []string{"v7", "v8", "v8-bridge", "v9"} {
+		request(version, "GET", "conflicting-keys", "", "200", "new main å🙂")
+	}
 	// A compatible codec still cannot justify pruning while old writers remain:
 	// this late V7 write introduces another legacy-only value after the rewrite.
 	request("v7", "POST", "late-old", `{"text":"late value"}`, "200", "late value")

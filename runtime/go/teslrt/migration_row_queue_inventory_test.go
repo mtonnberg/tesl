@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -104,8 +105,8 @@ func TestRowQueueCandidateCatalogBoundaries(t *testing.T) {
 			t.Fatalf("duplicate protected function %s", fn.name)
 		}
 		seen[fn.name] = true
-		if fn.name == "tesl_queue_admit" && !strings.Contains(fn.body, "format_version=4") {
-			t.Fatal("candidate queue dispatch was activated for row5")
+		if fn.name == "tesl_queue_admit" && !strings.Contains(fn.body, "format_version=5") {
+			t.Fatal("row queue admission lacks exact format5 authority")
 		}
 	}
 	if !seen["tesl_register_row_queue_source"] || !seen["tesl_queue_inventory_hash"] || !seen["tesl_queue_admit"] {
@@ -166,4 +167,23 @@ func rowTestRegisterQueueAbsenceIfEmpty(t *testing.T, history PgCompiledMigratio
 		delete(compiledQueueHistories.families, history.Family)
 		compiledQueueHistories.Unlock()
 	})
+}
+
+func TestRowQueueLifecyclePreservesFormat4Operations(t *testing.T) {
+	legacy, row := pgQueueOperationFunctions("test"), pgRowQueueOperationFunctions("test")
+	if len(legacy) != len(row) {
+		t.Fatal("row operations changed lifecycle inventory")
+	}
+	for i, fn := range legacy {
+		if fn.name == "tesl_queue_admit" {
+			if !strings.Contains(fn.body, "format_version=4") || strings.Contains(fn.body, "tesl_row_queue_sources") {
+				t.Fatal("format4 admission changed")
+			}
+			if row[i].name != fn.name || !strings.Contains(row[i].body, "format_version=5") {
+				t.Fatal("missing distinct row admission")
+			}
+		} else if !reflect.DeepEqual(fn, row[i]) {
+			t.Fatalf("row lifecycle differs for %s", fn.name)
+		}
+	}
 }

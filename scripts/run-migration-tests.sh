@@ -10,6 +10,9 @@ for tool in "${required_tools[@]}"; do
   command -v "$tool" >/dev/null || { echo "migration tests require $tool (nix develop)" >&2; exit 1; }
 done
 migration_tmp="$(mktemp -d "${TMPDIR:-/tmp}/tesl-migration.XXXXXXXX")"
+# PostgreSQL's Unix socket filename is limited to 107 bytes on Linux. Keep the
+# data/build files on TMPDIR, while allowing a short socket-only directory.
+migration_socket=""
 cleanup() {
   local status=$?
   if (( status != 0 )) && [[ -f "$migration_tmp/postgres.log" ]]; then
@@ -22,23 +25,31 @@ cleanup() {
     tail -100 "$migration_tmp/postgres.log" >&2
   fi
   pg_ctl -D "$migration_tmp/data" -m immediate -w stop >/dev/null 2>&1 || true
+  if [[ -n "$migration_socket" ]]; then rmdir -- "$migration_socket" 2>/dev/null || true; fi
   rm -rf -- "$migration_tmp"
   return "$status"
 }
 trap cleanup EXIT INT TERM
-mkdir "$migration_tmp/socket"
+migration_socket="$(mktemp -d "${TESL_MIGRATION_TEST_SOCKET_TMPDIR:-$migration_tmp}/socket.XXXXXXXX")"
+# Event-control sockets in compiled applications and runtime crash tests need
+# the same short-path treatment as PostgreSQL itself.
+export TESL_MIGRATION_TEST_SOCKET_TMPDIR="${TESL_MIGRATION_TEST_SOCKET_TMPDIR:-$migration_tmp}"
+export TESL_MIGRATION_TEST_SOCKET_ROOT="${TESL_MIGRATION_TEST_SOCKET_ROOT:-$TESL_MIGRATION_TEST_SOCKET_TMPDIR}"
 initdb -D "$migration_tmp/data" -U migration_installer --auth=trust --no-locale --encoding=UTF8 >"$migration_tmp/init.log"
 # A private Unix socket removes port-allocation races and network exposure.
-pg_ctl -D "$migration_tmp/data" -l "$migration_tmp/postgres.log" -o "-k $migration_tmp/socket -h '' -c max_connections=40 -c log_min_duration_statement=1000 -c log_lock_waits=on -c log_checkpoints=on" -w start >/dev/null
-export TESL_MIGRATION_TEST_DSN="host=$migration_tmp/socket user=migration_installer dbname=postgres"
+pg_ctl -D "$migration_tmp/data" -l "$migration_tmp/postgres.log" -o "-k $migration_socket -h '' -c max_connections=40 -c log_min_duration_statement=1000 -c log_lock_waits=on -c log_checkpoints=on" -w start >/dev/null
+export TESL_MIGRATION_TEST_DSN="host=$migration_socket user=migration_installer dbname=postgres"
 export TESL_MIGRATION_TEST_REQUIRE_POSTGRES=1
-export TESL_TEST_POSTGRES_SHARED_HOST="$migration_tmp/socket"
+export TESL_TEST_POSTGRES_SHARED_HOST="$migration_socket"
 export TESL_TEST_POSTGRES_SHARED_PORT=5432
 export TESL_TEST_POSTGRES_SHARED_USER=migration_installer
 export TESL_TEST_POSTGRES_SHARED_ADMIN_DATABASE=postgres
 export TESL_REPO_ROOT="$repo_root"
 cd "$repo_root/runtime/go"
-go test -race -count=1 -timeout=900s ./internal/migrationtest "$@"
+# This package builds and runs both the archived rolling releases and the full
+# V1–V13 transforming application. Keep individual scenario deadlines intact,
+# but allow their sequential sum to finish after repairing earlier short exits.
+go test -race -count=1 -timeout=1800s ./internal/migrationtest "$@"
 if (( $# == 0 )); then
   # Production control/executor APIs and their crash tests use the same
   # isolated cluster and supported-major matrix as the independent harness.
@@ -47,8 +58,9 @@ if (( $# == 0 )); then
   # mandatory budgets; neither gate may skip unavailable PostgreSQL.
   go test -race -count=1 -timeout=300s -tags=tesl_migration_test ./teslrt -run '^(TestPgMigration(Index|FutureIndex|Embedded)|TestServe(Shutdown|ListenFailure))'
   # Permanent generation baseline: marker/catalog/role guards and real backend deaths.
-  go test -race -count=1 -timeout=300s -tags=tesl_migration_test ./teslrt -run '^(TestPgRowBaseline|TestPgRowIndex|TestRowBaseline|TestRowPhysical|TestPgRowForwardInvalidation)'
+  go test -race -count=1 -timeout=300s -tags=tesl_migration_test ./teslrt -run '^(TestPgRowBaseline|TestPgRowIndex|TestPgRowEpoch|TestRowBaseline|TestRowPhysical|TestPgRowForwardInvalidation)'
   (cd "$repo_root/compiler" && dune build test/test_migration_queue.exe && dune exec --no-build ./test/test_migration_queue.exe)
+  (cd "$repo_root/compiler" && dune build test/test_migration_queue_application.exe && dune exec --no-build ./test/test_migration_queue_application.exe)
   (cd "$repo_root/compiler" && dune build test/test_migration_fixtures.exe && dune exec --no-build ./test/test_migration_fixtures.exe)
   (cd "$repo_root/compiler" && dune build test/test_migration_row_companion.exe && dune exec --no-build ./test/test_migration_row_companion.exe)
   (cd "$repo_root/compiler" && dune build test/test_migration_contract.exe && dune exec --no-build ./test/test_migration_contract.exe)
@@ -73,4 +85,13 @@ if (( $# == 0 )); then
   (cd "$repo_root/compiler" && dune build test/test_migration_nominal_copy.exe && dune exec --no-build ./test/test_migration_nominal_copy.exe)
   (cd "$repo_root/compiler" && dune build test/test_migration_row_contract_abi.exe && dune exec --no-build ./test/test_migration_row_contract_abi.exe)
   (cd "$repo_root/compiler" && dune build test/test_migration_row_retype_physical.exe && dune exec --no-build ./test/test_migration_row_retype_physical.exe)
+  (cd "$repo_root/compiler" && dune build test/test_migration_revalidate.exe && dune exec --no-build ./test/test_migration_revalidate.exe)
+  (cd "$repo_root/compiler" && dune build test/test_migration_revalidate_postgres.exe && dune exec --no-build ./test/test_migration_revalidate_postgres.exe)
+  (cd "$repo_root/compiler" && dune build test/test_migration_reverse_proof.exe && dune exec --no-build ./test/test_migration_reverse_proof.exe)
+  (cd "$repo_root/compiler" && dune build test/test_migration_proof_retype_postgres.exe && dune exec --no-build ./test/test_migration_proof_retype_postgres.exe)
+  (cd "$repo_root/compiler" && dune build test/test_migration_proof_removal_postgres.exe && dune exec --no-build ./test/test_migration_proof_removal_postgres.exe)
+  (cd "$repo_root/compiler" && dune build test/test_proof_return_field_scope.exe && dune exec --no-build ./test/test_proof_return_field_scope.exe)
+  (cd "$repo_root/compiler" && dune build test/test_migration_table_drop.exe && dune exec --no-build ./test/test_migration_table_drop.exe)
+  (cd "$repo_root/compiler" && dune build test/test_migration_table_drop_postgres.exe && dune exec --no-build ./test/test_migration_table_drop_postgres.exe)
+  go test -race -count=1 -timeout=120s -tags=tesl_migration_test ./teslrt -run '^(TestRowRetirement|TestRowTableContract|TestPgRowTableContract|TestPgRowTableDrop)'
 fi

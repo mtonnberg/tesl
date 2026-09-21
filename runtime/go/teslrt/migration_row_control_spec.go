@@ -57,8 +57,8 @@ func pgRowControlTables() []pgMigrationControlTable {
 	}, append(pgRowForwardTables(), pgRowLifecycleTables()...)...)
 }
 
-// The original V1 binary knows this bounded V2 manifest protocol. Queue/index
-// jobs and later transforming windows remain refused. Legacy formats are unchanged.
+// Format5 binds each version to its original baseline and checked expansion
+// manifest. Queue SQL admission is separate from ordinary App activation.
 func pgRowControlFunctions(namespace string) []pgMigrationControlFunction {
 	ns := quoteIdentifier(namespace) + "."
 	functions := pgMigrationControlFunctionsV2(namespace)
@@ -127,7 +127,7 @@ end`
 		functions[i].body = strings.Replace(body, "\nbegin\n", "\nbegin\n"+guard, 1)
 	}
 	functions = append(functions, pgQueueRegistrationFunctions(namespace)...)
-	functions = append(functions, pgQueueOperationFunctions(namespace)...)
+	functions = append(functions, pgRowQueueOperationFunctions(namespace)...)
 	functions = append(functions, pgRowQueueFunctions(namespace)...)
 	return append(append(append(append(functions, pgRowForwardFunctions(namespace)...), pgRowBackfillFunctions(namespace)...), pgRowContractFunctions(namespace)...), append(pgRowEpochFunctions(namespace), pgRowIndexFunctions(namespace)...)...)
 }

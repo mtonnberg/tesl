@@ -1,4 +1,4 @@
-module Schema.Todo.VCurrent exposing [Todo, ValidTitle, tryTitle, newTodo, Project, newProject]
+module Schema.Todo.VCurrent exposing [Todo, PriorityInfo(..), ValidTitle, tryTitle, newTodo, Project, newProject]
 
 import Tesl.Prelude exposing [Bool(..), Int, String]
 import Tesl.String exposing [String.length, String.trim]
@@ -15,6 +15,11 @@ establish tryTitle(raw: String) -> Maybe (title: String ::: ValidTitle title) =
   else
     Nothing
 
+type PriorityInfo =
+  | Imported weight: Int source: String
+  | Created weight: Int
+codec PriorityInfo { adtJson }
+
 entity Todo table "todos" primaryKey id {
   id: String
   title: String ::: ValidTitle title
@@ -23,13 +28,14 @@ entity Todo table "todos" primaryKey id {
   details: Maybe String
   dueAt: Maybe PosixMillis
   projectId: Maybe String
-  priority: Int
+  priorityWeight: Int
+  priorityInfo: PriorityInfo @column("priority_info__v13")
   reminderAt: Maybe PosixMillis
 }
 
 # Storage-only additions change this constructor, leaving request handlers alone.
 fn newTodo(id: String, title: String ::: ValidTitle title) -> Todo =
-  Todo { id: id, title: title, completed: False, details: Nothing, dueAt: Nothing, projectId: Nothing, priority: 0, reminderAt: Nothing }
+  Todo { id: id, title: title, completed: False, details: Nothing, dueAt: Nothing, projectId: Nothing, priorityWeight: 1, priorityInfo: Created { weight: 1 }, reminderAt: Nothing }
 
 entity Project table "projects" primaryKey id {
   id: String

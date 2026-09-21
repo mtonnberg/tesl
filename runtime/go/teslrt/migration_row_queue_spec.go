@@ -13,9 +13,13 @@ begin
  if doc is null then raise exception 'tesl: missing physical source header'; end if;
  size:=pg_catalog.octet_length(doc);pos:=pg_catalog.octet_length(prefix);
  if size>67108864 or size<pos+3 or pg_catalog.substring(doc,1,pos)<>prefix or pg_catalog.get_byte(doc,pos)<>108 then raise exception 'tesl: invalid physical source document prefix'; end if;
- width:=pg_catalog.get_byte(doc,pos+1)-48;
- if width not in (8,9) or pg_catalog.get_byte(doc,pos+2)<>58 then raise exception 'tesl: unsupported physical source document width'; end if;
- pos:=pos+3;
+ if size>=pos+4 and pg_catalog.substring(doc,pos+1,4)=pg_catalog.convert_to('l10:','UTF8') then
+  width:=10;pos:=pos+4;
+ else
+  width:=pg_catalog.get_byte(doc,pos+1)-48;
+  if width not in (8,9) or pg_catalog.get_byte(doc,pos+2)<>58 then raise exception 'tesl: unsupported physical source document width'; end if;
+  pos:=pos+3;
+ end if;
  for i in 1..6 loop
   if pos>=size or pg_catalog.get_byte(doc,pos)<>115 then raise exception 'tesl: physical source header atom required'; end if;
   pos:=pos+1;start_pos:=pos;count_bytes:=0;
@@ -31,6 +35,7 @@ begin
  end loop;
  if (width=8 and fields[1] not in ('tesl-retained-physical-version-v1','tesl-retained-physical-version-v2')) or
     (width=9 and fields[1] not in ('tesl-retained-physical-version-v3','tesl-retained-physical-version-v4')) or
+    (width=10 and fields[1]<>'tesl-retained-physical-version-v5') or
     fields[2]!~'^(Schema\.[A-Z][A-Za-z0-9_]*|[A-Z][A-Za-z0-9_]*Schema)$' or
     pg_catalog.octet_length(fields[3])<1 or pg_catalog.octet_length(fields[3])>63 or
     fields[4]!~'^[1-9][0-9]{0,9}$' or fields[5]!~'^[0-9a-f]{64}$' or fields[6]!~'^[0-9a-f]{64}$' then raise exception 'tesl: invalid physical source header fields'; end if;
@@ -78,4 +83,87 @@ begin
  end loop;
  insert into ` + ns + `tesl_row_queue_sources values(v,binding,binding_hash,inventory_hash,expansion_hash);
 end`}}
+}
+
+// Keep the private format4 lifecycle byte-for-byte unchanged. Row5 selects a
+// different admission proof; all attempt ownership and lease operations share
+// the same implementation after that proof succeeds.
+func pgRowQueueOperationFunctions(namespace string) []pgMigrationControlFunction {
+	functions := pgQueueOperationFunctions(namespace)
+	ns := quoteIdentifier(namespace) + "."
+	for i := range functions {
+		if functions[i].name != "tesl_queue_admit" {
+			continue
+		}
+		functions[i].body = `
+declare fence integer; floor integer; n integer; family text; compatibility text;
+ original ` + ns + `tesl_row_versions%rowtype; source ` + ns + `tesl_queue_versions%rowtype;
+ binding ` + ns + `tesl_row_queue_sources%rowtype; physical ` + ns + `tesl_row_physical%rowtype;
+ contracts jsonb; previous jsonb:='[]'::jsonb; expected bytea; source_header jsonb;
+ expected_expansion text; expected_artifact text; expected_abi text;
+begin
+ if pg_catalog.current_setting('transaction_isolation')<>'read committed' then raise exception 'tesl: queue operations require read committed isolation'; end if;
+ if v is null or v<1 or v>2147483646 or q is null or q='' then raise exception 'tesl: invalid queue operation identity'; end if;
+ select fence_ns into fence from ` + ns + `tesl_schema_meta where id=1 and format_version=5 and initial_version=1;
+ if not found then raise exception 'tesl: protected row queue format is not installed'; end if;
+ -- Keep the post-wait state read in separate volatile SPI statements.
+ perform pg_catalog.pg_advisory_xact_lock_shared(fence,v);
+ perform ` + ns + `tesl_admit(v);
+ select min_version into floor from ` + ns + `tesl_schema_state where id=1;
+ if not found or floor<1 or floor>v then raise exception 'tesl: invalid queue admission state'; end if;
+ select * into original from ` + ns + `tesl_row_versions where version=1;
+ if not found then raise exception 'tesl: missing original row queue source'; end if;
+ family:=original.family; compatibility:=original.stored_value_compatibility;
+ if not exists(select 1 from ` + ns + `tesl_row_baseline b where b.id=1 and b.initial_version=1
+ and b.established_by='fresh-install' and b.inventory_authority='complete' and b.inventory_hash=original.inventory_hash
+ and b.queue_authority='complete' and b.queue_count=original.queue_count and b.facility_authority='complete'
+ and b.facility_count=original.facility_count and original.facility_count=original.queue_count
+ and original.queue_count=(select count(*) from ` + ns + `tesl_queue_contracts where version=1)) then
+ raise exception 'tesl: incomplete original row queue baseline'; end if;
+ if not exists(select 1 from ` + ns + `tesl_queue_baseline b join ` + ns + `tesl_queue_versions s on s.version=1 and s.inventory_hash=b.inventory_hash
+ where b.id=1 and b.initial_version=1 and b.inventory_authority='complete' and b.established_by='fresh-install') then
+ raise exception 'tesl: queue installation baseline is unknown or incomplete'; end if;
+ for n in 1..v loop
+  select * into source from ` + ns + `tesl_queue_versions where version=n;
+  if not found then raise exception 'tesl: row queue source prefix is incomplete'; end if;
+  select * into binding from ` + ns + `tesl_row_queue_sources where version=n;
+  if not found then raise exception 'tesl: row queue source binding is missing'; end if;
+  contracts:=` + ns + `tesl_queue_inventory_json(n);
+  if source.stored_value_compatibility<>compatibility or source.inventory_hash<>binding.inventory_hash
+   or ` + ns + `tesl_queue_inventory_hash(family,n,source.storage_snapshot_hash,source.schema_snapshot_hash,compatibility,contracts)<>source.inventory_hash
+   or not ` + ns + `tesl_queue_inventory_preserves(previous,contracts) then
+   raise exception 'tesl: row queue semantic inventory differs'; end if;
+  previous:=contracts;
+  expected:=pg_catalog.convert_to('l4:s24:tesl-migration-canonicals1:1s9:migrationl7:s24:tesl-row-queue-source-v1','UTF8')
+   ||` + ns + `tesl_queue_bytes(pg_catalog.convert_to(family,'UTF8'))||` + ns + `tesl_queue_bytes(pg_catalog.convert_to(n::text,'UTF8'))
+   ||` + ns + `tesl_queue_bytes(pg_catalog.convert_to(source.schema_snapshot_hash,'UTF8'))||` + ns + `tesl_queue_bytes(pg_catalog.convert_to(source.storage_snapshot_hash,'UTF8'))
+   ||` + ns + `tesl_queue_bytes(pg_catalog.convert_to(compatibility,'UTF8'))||` + ns + `tesl_queue_bytes(pg_catalog.convert_to(source.inventory_hash,'UTF8'));
+  if binding.source_binding<>expected or binding.source_binding_hash<>pg_catalog.encode(pg_catalog.sha256(expected),'hex') then
+   raise exception 'tesl: row queue canonical source binding differs'; end if;
+  if n=1 then
+   if source.schema_snapshot_hash<>original.schema_snapshot_hash or source.storage_snapshot_hash<>original.storage_snapshot_hash or source.compiler_abi<>original.compiler_abi then
+    raise exception 'tesl: row queue original source differs'; end if;
+   expected_expansion:=original.catalog_hash; expected_artifact:=original.inventory_hash; expected_abi:=original.compiler_abi;
+  else
+   select * into physical from ` + ns + `tesl_row_physical where version=n;
+   if not found then raise exception 'tesl: row queue physical receipt is missing'; end if;
+   source_header:=` + ns + `tesl_row_physical_source_header(physical.contract);
+   if source_header->>'family'<>family or source_header->>'namespace'<>pg_catalog.convert_from(pg_catalog.decode('` + hex.EncodeToString([]byte(namespace)) + `','hex'),'UTF8')
+    or source_header->>'version'<>n::text or source_header->>'schema'<>source.schema_snapshot_hash or source_header->>'storage'<>source.storage_snapshot_hash
+    or physical.stored_value_compatibility<>compatibility or source.compiler_abi<>physical.compiler_abi then
+    raise exception 'tesl: row queue physical source differs'; end if;
+   expected_expansion:=physical.contract_hash; expected_artifact:=physical.contract_hash; expected_abi:=physical.compiler_abi;
+  end if;
+  if binding.expansion_hash<>expected_expansion or not exists(select 1 from ` + ns + `tesl_schema_expansions e
+   join ` + ns + `tesl_schema_versions s on s.version=e.version and s.step='expanded'
+   where e.version=n and e.snapshot_hash=expected_expansion and e.artefact_hash=expected_artifact
+    and e.source_abi=expected_abi and e.stored_value_compatibility=compatibility
+    and s.snapshot_hash=e.snapshot_hash and s.artefact_hash=e.artefact_hash and s.source_abi=e.source_abi and s.stored_value_compatibility=e.stored_value_compatibility) then
+   raise exception 'tesl: row queue has no exact completed expansion receipt'; end if;
+ end loop;
+ if not exists(select 1 from ` + ns + `tesl_queue_contracts where version=v and queue=q) then raise exception 'tesl: queue contract has no installed inventory'; end if;
+ return floor;
+end`
+	}
+	return functions
 }

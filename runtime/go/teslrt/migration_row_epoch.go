@@ -11,6 +11,22 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+// Queue payload retirement has a separate protocol. Even an empty job table
+// cannot establish safety: old writers and leased attempts can still publish
+// work, and dead payloads retain their source identity. Refuse by inventory.
+func pgCheckRowQueueRetirement(ctx context.Context, query interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+}, namespace string) error {
+	var queued bool
+	if err := query.QueryRow(ctx, "select exists(select 1 from "+quoteIdentifier(namespace)+".tesl_queue_contracts)").Scan(&queued); err != nil {
+		return err
+	}
+	if queued {
+		return fmt.Errorf("queue-bearing history retirement is not supported")
+	}
+	return nil
+}
+
 // An epoch receipt is observation of a completed admission transition. It never
 // grants a row codec, a processing ABI, or permission to execute a SQL plan.
 type pgRowEpochRetirement struct {
@@ -26,7 +42,7 @@ func pgRowEpochDocument(b *pgRowBaseline, state PgMigrationControlState, from, t
 	prefix := make([]pgRowCanonical, 0, through)
 	for version := 1; version <= through; version++ {
 		plan := plans[version]
-		if plan == nil || plan.version != version || plan.family != b.history.Family || plan.namespace != b.history.Namespace || len(plan.windows) != 0 || plan.requiresContractVersion != 0 || plan.settled || !pgMigrationDigest(plan.hash) {
+		if plan == nil || plan.version != version || plan.family != b.history.Family || plan.namespace != b.history.Namespace || !pgRowEpochPreserving(plan) || plan.requiresContractVersion != 0 || plan.settled || !pgMigrationDigest(plan.hash) {
 			return "", "", fmt.Errorf("epoch retirement requires a complete purely additive physical prefix")
 		}
 		prefix = append(prefix, pgRowList(pgRowAtom(strconv.Itoa(version)), pgRowAtom(plan.hash)))

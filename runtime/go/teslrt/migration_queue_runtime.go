@@ -10,9 +10,9 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// Private format-4 binding. No production opener publishes this yet: its
-// installation and upgrade protocol must pass the generated-app gate first.
-// A checked source declaration alone is not permission to use durable jobs.
+// Immutable owner binding for protected queues. Production row5 startup attaches
+// this only after complete registration and baseline admission; the separate
+// format4 constructor remains private. Source metadata alone grants no access.
 type pgQueueRuntime struct {
 	database *Database
 	history  PgCompiledMigrationHistory
@@ -90,6 +90,12 @@ func (backend *pgQueueBackend) protectedQueue() *pgQueueClient {
 		binding.history != runtime.history || binding.version != db.migration.version ||
 		binding.history.Namespace != db.schema || backend.maxAttempts < 1 || backend.maxAttempts > 2147483647 || len(binding.codecs) != len(binding.contract.Payloads) {
 		panic("queue: protected database has no matching closed queue binding")
+	}
+	if db.migration.controlFormat == pgRowControlFormat {
+		baseline := db.migration.rowBaseline
+		if db.migration.roles.Request == "" || baseline == nil || baseline.database != runtime.database || baseline.history != runtime.history {
+			panic("queue: row runtime lost its checked Worker baseline")
+		}
 	}
 	return &pgQueueClient{db: db, binding: binding, backend: backend}
 }

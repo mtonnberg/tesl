@@ -23,7 +23,8 @@ module Lesson83AdditiveMigrations exposing [
 # HTTP, generates V2 in a temporary project, adds a nullable category, and starts
 # the new binary against the SAME database. It checks the retained note, new writes,
 # both running versions, and an old-binary restart. Your own database is untouched.
-# The wider deployment workflow, including adoption and typed transforms, is pending.
+# The todo showcase applies the same workflow to typed backfills, removal and
+# JSONB representation changes; this lesson isolates the additive case first.
 # The companion lesson83-additive-migrations.md explains a compiler upgrade against
 # this same app and provides the retained-database A/B/C compiler regression command.
 #
