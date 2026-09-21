@@ -10557,6 +10557,13 @@ let rec json_value_decoder ~package ~loc ~what ty =
     Printf.sprintf
       "func(teslRaw any) (%s, error) {\n\t\tteslNested := %s(teslRaw)\n\t\tif !teslNested.OK() {\n\t\t\treturn %s{}, errors.New(teslNested.Message())\n\t\t}\n\t\tteslValue, _ := teslNested.Value()\n\t\treturn teslValue, nil\n\t}"
       (go_type ty) (codec_decode_ref nested.rec_tesl_name) (go_type ty)
+  | TAdt (nested, _) when List.mem nested.adt_tesl_name !current_codec_types
+                         || codec_owner nested.adt_tesl_name <> None ->
+    remember_helper_stmts ~prefix:"teslDecode"
+      ~signature:(Printf.sprintf "(teslRaw any) (%s, error)" (go_type ty))
+      ~body:(Printf.sprintf
+        "\tteslNested := %s(teslRaw)\n\tif !teslNested.OK() {\n\t\treturn %s{}, errors.New(teslNested.Message())\n\t}\n\tteslValue, _ := teslNested.Value()\n\treturn teslValue, nil\n"
+        (codec_decode_ref nested.adt_tesl_name) (go_type ty))
   | _ -> unsupported loc
     "Go backend cannot decode `%s` from JSON; give the type a `codec`" what
 
@@ -11006,8 +11013,8 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
            unsupported codec.loc "Go backend codec `%s` has no field `%s`" type_name name)
       | None -> unsupported codec.loc "Go backend codec `%s` needs a record type" type_name
     in
-    (* Encode: a record becomes a sorted-key map; an `adtJson` type becomes the
-       constructor name as a JSON string. *)
+    (* Encode records and ADTs as sorted-key maps. Payload variants carry their
+       named fields under `fields`; nullary variants keep the tag-only shape. *)
     (match codec.to_json with
      | ToJsonForbidden -> ()
      | ToJsonAdt ->
@@ -11016,14 +11023,21 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
           Printf.bprintf body "\nfunc %s(teslValue %s) any {\n\tswitch teslValue.%s {\n"
             (codec_encode_name type_name) (go_type go_ty) adt_tag_field;
           List.iter (fun variant ->
-            if variant.var_fields <> [] then unsupported codec.loc
-              "Go backend `adtJson` needs constructors without payloads (`%s`)" variant.var_ctor;
-            (* The wire shape is `{"tag": "Ctor"}`, which is what Legacy's generated `adtJson`
-               encoder writes — a bare constructor STRING (which this emitted before) reads
-               back as a different value on the other backend, and the two disagreed about
-               every response carrying an enum. *)
-            Printf.bprintf body "\tcase %s:\n\t\treturn map[string]any{\"tag\": %S}\n"
-              (qualified info.adt_owner variant.var_tag) variant.var_ctor) info.adt_variants;
+            Printf.bprintf body "\tcase %s:\n"
+              (qualified info.adt_owner variant.var_tag);
+            match variant.var_fields with
+            | [] ->
+              Printf.bprintf body "\t\treturn map[string]any{\"tag\": %S}\n"
+                variant.var_ctor
+            | fields ->
+              let entries = List.map (fun (name, ty) ->
+                let value = "teslValue." ^ variant_field_path info variant name in
+                let value = if adt_self_payload info variant name then
+                    Printf.sprintf "teslrt.Unboxed(%s)" value else value in
+                name, Printf.sprintf "%s(%s)" (value_encoder ty) value) fields in
+              Printf.bprintf body
+                "\t\treturn map[string]any{\"tag\": %S, \"fields\": map[string]any{\n%s\n\t\t}}\n"
+                variant.var_ctor (aligned_map_entries "\t\t\t" entries)) info.adt_variants;
           Printf.bprintf body "\t}\n\tpanic(\"unreachable: checker guarantees case exhaustiveness\")\n}\n"
         | _ -> unsupported codec.loc "Go backend `adtJson` needs an ADT type")
      | ToJsonFields entries ->
@@ -11063,9 +11077,35 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
             "\nfunc %s(teslJSON any) teslrt.Check[%s] {\n\tteslName, teslErr := teslrt.DecodeAdtTag(teslJSON)\n\tif teslErr != nil {\n\t\treturn teslrt.Reject[%s](400, teslErr.Error())\n\t}\n\tswitch teslName {\n"
             (codec_decode_name type_name) (go_type go_ty) (go_type go_ty);
           List.iter (fun variant ->
-            Printf.bprintf body "\tcase %S:\n\t\treturn teslrt.Accept(%s{%s: %s})\n"
-              variant.var_ctor (go_type go_ty) adt_tag_field
-              (qualified info.adt_owner variant.var_tag)) info.adt_variants;
+            Printf.bprintf body "\tcase %S:\n" variant.var_ctor;
+            if variant.var_fields <> [] then
+              Printf.bprintf body
+                "\t\tteslFields, teslFieldsErr := teslrt.JSONFieldValue(teslJSON, \"fields\")\n\t\tif teslFieldsErr != nil {\n\t\t\treturn teslrt.RejectShape[%s](teslFieldsErr.Error())\n\t\t}\n"
+                (go_type go_ty);
+            let assignments = List.mapi (fun index (name, ty) ->
+              let binder = Printf.sprintf "teslField%d" index in
+              Printf.bprintf body
+                "\t\t%sRaw, %sErr := teslrt.JSONFieldValue(teslFields, %s)\n\t\tif %sErr != nil {\n\t\t\treturn teslrt.RejectShape[%s](%sErr.Error())\n\t\t}\n\t\t%s, %sDecodeErr := %s(%sRaw)\n\t\tif %sDecodeErr != nil {\n\t\t\treturn teslrt.RejectShape[%s](%sDecodeErr.Error())\n\t\t}\n"
+                binder binder (go_quote name) binder (go_type go_ty) binder
+                binder binder
+                (json_value_decoder ~package ~loc:codec.loc
+                   ~what:(type_name ^ "." ^ variant.var_ctor ^ "." ^ name) ty
+                 |> String.split_on_char '\n' |> String.concat "\n\t")
+                binder binder (go_type go_ty) binder;
+              let value = if adt_self_payload info variant name then
+                  Printf.sprintf "teslrt.Boxed(%s)" binder else binder in
+              Printf.sprintf "%s: %s"
+                (if adt_boxed info then go_ident ~exported:true name
+                 else variant_field_literal_name variant name) value) variant.var_fields in
+            let assignments =
+              if assignments = [] || not (adt_boxed info) then assignments
+              else [Printf.sprintf "%s: &%s{%s}" (variant_payload_field variant)
+                      (variant_payload_type info variant) (String.concat ", " assignments)] in
+            Printf.bprintf body "\t\treturn teslrt.Accept(%s{%s})\n"
+              (go_type go_ty)
+              (String.concat ", "
+                 ((adt_tag_field ^ ": " ^ qualified info.adt_owner variant.var_tag)
+                  :: assignments))) info.adt_variants;
           Printf.bprintf body
             "\t}\n\treturn teslrt.Reject[%s](400, \"expected one of the %s constructors, got \"+teslName)\n}\n"
             (go_type go_ty) type_name
