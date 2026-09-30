@@ -108,9 +108,6 @@ func pgExecuteRowEpoch(parent context.Context, conn *pgx.Conn, b *pgRowBaseline,
 		if err != nil {
 			return state, err
 		}
-		if err := pgCheckRowQueueRetirement(ctx, tx, b.history.Namespace); err != nil {
-			return state, err
-		}
 		if state.Current != through || state.InstallingVersion != 0 || state.MinVersion != state.CompatFloor {
 			return state, fmt.Errorf("close epoch requires a fully expanded additive admission state")
 		}

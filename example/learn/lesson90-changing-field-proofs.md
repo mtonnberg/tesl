@@ -146,9 +146,11 @@ schema cannot represent. Test unrelated old updates as well as title updates.
 
 During this window, filtering or sorting on a retyped field is currently
 refused. These applications sort by unchanged `id`; they still read and update
-the logical `title` field. Same-column `Revalidate` remains limited to adding a
-first proof to an unproved primitive field; it does not replace an existing
-proof.
+the logical `title` field. Same-column `Revalidate` can add a first proof or
+strengthen a field with a conjunction that preserves every historical proof
+through exact `Same` evidence. It cannot replace changed historical evidence;
+see [lesson 94](lesson94-same-column-proof-strengthening.md) for that bounded
+same-column path.
 
 The [live lifecycle assertions](../../runtime/go/teslrt/migration_row_proof_retype_native_test.go)
 cover rejection, repair, writes from both revisions, weaker-rule fallback,

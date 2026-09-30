@@ -33,6 +33,13 @@ val with_prepared_list : prepared list -> (unit -> 'a) -> ('a,Migration_sparse.e
 type captured
 val capture : before:Migration_inventory.t -> after:Migration_inventory.t -> source:string -> Ast.module_form -> (captured,Migration_sparse.error list) result
 val with_captured : captured -> (unit -> 'a) -> ('a,Migration_sparse.error list) result
+val captured_source_texts : captured -> (Ast.module_form * string) list
+
+(** Resolve direct source-owned function references and check their reachable
+    purity. This alone grants neither frontend checking nor execution authority. *)
+val bind_pure_functions : Ast.module_form list -> Ast.module_form -> Ast.expr list ->
+  (function_binding list,Migration_sparse.error list) result
+val fixture_type : Ast.module_form list -> Ast.module_form -> string -> Ast.type_expr -> bool option
 
 (** Constructive nominal transport for an exact checked Derived Copy/Rename.
     This is distinct from source-site evidence and cannot affect ordinary typing.

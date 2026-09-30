@@ -8,12 +8,14 @@ module A = Migration_additive
 module R = Migration_transform_rules
 module T = Migration_transform
 
-type t = { coverage : S.t; additive : A.t; transforms : T.t option; version : int; source_seals : Migration_header.checked option }
+type t = { coverage : S.t; additive : A.t; transforms : T.t option; queue_transforms : Migration_queue_transform.t list; version : int; source_seals : Migration_header.checked option }
 type prepared = { pcoverage : S.t; padditive : A.t; ptransforms : T.prepared option;
-  pversion : int; pseals : Migration_header.checked option; pgraph : T.captured }
+   pversion : int; pseals : Migration_header.checked option; pgraph : T.captured;
+   pqueue_transforms : Migration_queue_transform.t list; pproject_root : string }
 let coverage t = t.coverage
 let additive t = t.additive
 let transforms t = t.transforms
+let queue_transforms t = t.queue_transforms
 let version t = t.version
 let source_seals t = t.source_seals
 exception Invalid of S.error list
@@ -132,7 +134,7 @@ let read_syntax (m : module_form) =
       let fields = match application declaration.value with
         | "Migration", [expression] -> record "MIG020" expression
         | _ -> reject "MIG020" declaration.loc "expected `migration = Migration { from, to, same, entities }`" in
-      List.iter (fun (name,value) -> if not (List.mem name ["from";"to";"same";"entities";"fixtures"]) then
+      List.iter (fun (name,value) -> if not (List.mem name ["from";"to";"same";"entities";"fixtures";"jobs"]) then
         reject "MIG020" (at value) ("unknown Migration field `" ^ name ^ "`")) fields;
       let required name = match List.assoc_opt name fields with
         | Some value -> value
@@ -158,6 +160,78 @@ let entry_holes expression =
       holes := {S.code="MIG003";loc;message="unresolved migration decision: " ^ reason;related=[]} :: !holes
     | _ -> ()) expression;
   List.rev !holes
+
+(* Source checking of explicit job decisions is independent of executable
+   application history. The Program/Go boundaries still refuse these edges
+   until protected conversion and repair registration exists. *)
+let prepare_queue_decisions ~project_root ~before ~after ~previous_file ~current_file
+    ~version ~graph ~root ~fixtures jobs =
+  match jobs with
+  | None ->
+    let errors=Migration_queue.changes ~before ~after in
+    if errors<>[] then raise(Invalid errors);
+    [],fixtures
+  | Some expression ->
+    let holes=entry_holes expression in
+    if holes<>[] then raise(Invalid holes);
+    let entries=record "MIG028" expression in
+    let payloads inventory = I.queue_contracts inventory |> List.concat_map(fun q ->
+      List.map(fun p -> Migration_queue.wire_identity inventory p.I.payload_name,
+        (Migration_queue.wire_identity inventory q.I.queue_name,p))q.payloads) in
+    let old=payloads before and fresh=payloads after in
+    List.iter(fun q ->
+      let identity=Migration_queue.wire_identity before q.I.queue_name in
+      if not(List.exists(fun current -> Migration_queue.wire_identity after current.I.queue_name=identity)(I.queue_contracts after)) then
+        reject "MIG028" q.queue_loc "jobs: does not yet support queue removal or renaming") (I.queue_contracts before);
+    let selected=Hashtbl.create 8 in
+    List.iter(fun(name,value)->
+      let matches=List.filter(fun(identity,(_,payload))->
+        let short=List.hd(List.rev(String.split_on_char '.' identity)) in
+        List.mem name [identity;short;payload.I.payload_name;I.root_module after ^ "." ^ identity])old in
+      match matches with
+      | [identity,_] ->
+        if Hashtbl.mem selected identity then reject "MIG023" (at value) "duplicate queue payload decision";
+        Hashtbl.add selected identity value
+      | _ -> reject "MIG028" (at value) "jobs: must name one exact previous payload; qualify ambiguous names") entries;
+    let modules=List.map fst(T.captured_source_texts graph) in
+    let fixture_bindings=checked(T.bind_pure_functions modules root fixtures) in
+    let used=Hashtbl.create 8 in
+    let context=match Migration_abi.current() with Ok c->c|Error e->reject "MIG013" (Location.dummy_loc e.path) e.message in
+    let load path=match I.load_with_compatibility ~compiler_abi:(Migration_abi.id context)
+      ~stored_value_compatibility:(Some(Migration_abi.stored_value_compatibility context)) ~root_file:path with
+      | Ok i->i|Error e->reject "MIG028" e.loc e.message in
+    let before_checked=lazy(load previous_file) and after_checked=lazy(load current_file) in
+    let decisions=List.filter_map(fun(identity,(queue,(previous:I.queue_payload)))->
+      match List.assoc_opt identity fresh with
+      | None -> reject "MIG028" previous.payload_loc "jobs: does not yet support payload removal or renaming"
+      | Some(current_queue,current) when current_queue<>queue ->
+        reject "MIG028" current.payload_loc "jobs: cannot move a payload between queues"
+      | Some(_,current) ->
+        match Hashtbl.find_opt selected identity with
+        | None when previous.payload_contract=current.payload_contract -> None
+        | None -> reject "MIG028" current.payload_loc ("changed queue payload `" ^ identity ^ "` requires an explicit jobs: Migrate decision")
+        | Some value when previous.payload_contract=current.payload_contract ->
+          reject "MIG028" (at value) "unchanged queue payloads must not carry a conversion"
+        | Some value ->
+          let callback=match application value with
+            | "Migrate",[callback] -> callback
+            | _ -> reject "MIG028" (at value) "jobs: currently expects Migrate followed by a typed conversion function" in
+          let binding=List.hd(checked(T.bind_pure_functions modules root [callback])) in
+          if binding.owner.module_name=root.module_name then reject "MIG028" (at callback)
+            "queue conversion callbacks currently belong in a pure migration helper module";
+          let selected_fixtures=List.filter_map(fun(expr,(f:T.function_binding))->
+            match f.declaration.return_spec with
+            | RetPlain result when f.declaration.params=[] && Option.is_some(T.fixture_type modules f.owner previous.payload_name result.ty) ->
+              Hashtbl.replace used f.identity ();
+              Some(EVar{name=f.identity;loc=at expr})
+            | _ -> None) (List.combine fixtures fixture_bindings) in
+          let source=snd(List.find(fun(owner,_)->owner==binding.owner)(T.captured_source_texts graph)) in
+          Some(checked(Migration_queue_transform.check ~project_root
+            ~before:(Lazy.force before_checked) ~after:(Lazy.force after_checked) ~version ~queue ~job:identity
+            ~source binding.owner ~callback:(EVar{name=binding.declaration.name;loc=at callback}) ~fixtures:selected_fixtures))) old in
+    let remaining=List.combine fixtures fixture_bindings |> List.filter_map(fun(expr,(binding:T.function_binding))->
+      if Hashtbl.mem used binding.identity then None else Some expr) in
+    decisions,remaining
 
 let prepare ?stored_value_compatibility ~compiler_abi ~source (m : module_form) =
   try
@@ -208,9 +282,16 @@ let prepare ?stored_value_compatibility ~compiler_abi ~source (m : module_form) 
       let before = previous.H.inventory and after = current.H.inventory in
       let source_graph=checked (T.capture ~before ~after ~source m) in
       checked (T.with_captured source_graph (fun () ->
-      let queue_errors = Migration_queue.changes ~before ~after @
-        Migration_queue.historical_capability ~before ~after (Option.map Migration_header.seals source_seals) in
+      let queue_errors = Migration_queue.historical_capability ~before ~after (Option.map Migration_header.seals source_seals) in
       if queue_errors <> [] then raise (Invalid queue_errors);
+      let view_root=Option.value(Source_input.project_root()) ~default:project_root in
+      (* The supplied root may be an unsaved buffer. Adjacent metadata readers
+         must see that same source view, not a pinned-only view that disappears
+         when an integrity guard checks the caller's source preconditions. *)
+      let queue_transforms,fixtures=Source_input.with_overlays ~project_root:view_root [m.source_file,source] (fun () ->
+        prepare_queue_decisions ~project_root ~before ~after
+          ~previous_file:previous.root_file ~current_file:current.root_file ~version:target
+          ~graph:source_graph ~root:m ~fixtures (List.assoc_opt "jobs" fields)) in
       let identities = identities before after (list "MIG024" same) in
       let definitions = record "MIG002" entities in
       let rules = ref [] in
@@ -264,13 +345,25 @@ let prepare ?stored_value_compatibility ~compiler_abi ~source (m : module_form) 
       Option.iter (fun header -> ignore (checked (Migration_header.verify_unchanged header))) source_seals;
       Option.iter (fun located -> ignore (checked (Migration_closure.verify ~project_root
         ~root_file:(Validation_common.canonical_import_path m.source_file) ~source located))) closure;
-      Ok (Some {pcoverage=coverage;padditive=additive;ptransforms=transforms;pversion=target;pseals=source_seals;pgraph=source_graph})))
+      Ok (Some {pcoverage=coverage;padditive=additive;ptransforms=transforms;pversion=target;pseals=source_seals;pgraph=source_graph;pqueue_transforms=queue_transforms;pproject_root=project_root})))
   with Invalid errors -> Error errors
 
-let with_prepared prepared run =
-  Result.join (T.with_captured prepared.pgraph (fun () -> match prepared.ptransforms with
+let rec with_queue_conversions conversions run = match conversions with
+  | [] -> run ()
+  | checked::rest -> Result.join(Migration_queue_transform.with_checked checked (fun () -> with_queue_conversions rest run))
+
+let with_captured_queues prepared run =
+  Result.join(T.with_captured prepared.pgraph (fun () ->
+    if prepared.pqueue_transforms=[] then run () else
+    (* Validate the caller before installing the checked overlay. Otherwise a
+       captured helper could conceal a real edit made after preparation. *)
+    Source_input.with_overlays ~project_root:(Option.value(Source_input.project_root()) ~default:prepared.pproject_root)
+      (List.map(fun(m,source)->m.source_file,source)(T.captured_source_texts prepared.pgraph))
+      (fun()->with_queue_conversions prepared.pqueue_transforms run)))
+
+let with_prepared prepared run = with_captured_queues prepared (fun () -> match prepared.ptransforms with
     | Some transforms -> T.with_prepared transforms run
-    | None -> Ok (Migration_proof_context.without_context run)))
+    | None -> Ok (Migration_proof_context.without_context run))
 
 let check_prepared prepared =
   Result.join (with_prepared prepared (fun () ->
@@ -278,11 +371,11 @@ let check_prepared prepared =
     | None -> Ok None
     | Some transforms -> Result.map Option.some (T.check_prepared transforms) in
   Result.map (fun transforms -> {coverage=prepared.pcoverage;additive=prepared.padditive;
-    transforms;version=prepared.pversion;source_seals=prepared.pseals}) transforms))
+    transforms;queue_transforms=prepared.pqueue_transforms;version=prepared.pversion;source_seals=prepared.pseals}) transforms))
 let with_prepared_list prepared run =
   let rec guards = function
     | [] -> T.with_prepared_list (List.filter_map (fun p -> p.ptransforms) prepared) run
-    | p::rest -> Result.join (T.with_captured p.pgraph (fun () -> guards rest)) in
+    | p::rest -> with_captured_queues p (fun () -> guards rest) in
   guards prepared
 
 let with_source_context ~source m run =

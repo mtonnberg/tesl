@@ -2,10 +2,12 @@
 
 > Audience: contributors implementing and verifying frozen queue schemas.
 
-This is the compiler prerequisite for `roadmap/next/queue-payload-migrations.md`.
-It does not enable versioned PostgreSQL queues. Guarded queue startup still refuses
-until protected runtime storage, version-aware claims, claim-attempt fencing,
-visible decode failures, and retirement are implemented.
+This records the compiler prerequisite for `roadmap/next/queue-payload-migrations.md`.
+Fresh format-5 Worker applications now support unchanged versioned payloads,
+fenced attempts and atomic additive-epoch retirement; see
+[lesson 95](../example/learn/lesson95-retiring-unchanged-queue-payloads.md).
+Changed payloads still refuse public compilation until the transformation and
+typed-repair execution protocol is complete.
 
 ## Source ownership
 
@@ -90,8 +92,8 @@ missing evidence.
 
 These are source integrity records, with the existing persisted history backstop
 still required. They are neither an authentication mechanism nor permission to
-claim or transform durable jobs. Compiled runtime history does not yet carry the
-new claim-ready inventory protocol.
+claim or transform durable jobs. The compiled runtime companion and protected
+installed baseline provide the separate inventory/admission checks.
 
 In particular, an initial deployed V1 may have no source seal. Its first freeze
 checks the source visible now; it cannot prove that the deployed application
@@ -99,7 +101,70 @@ never had an older queue declaration that has since been removed. Runtime
 activation must require persisted baseline inventory evidence or explicit legacy
 adoption. A metadata-only control-format upgrade cannot manufacture that evidence.
 
+## Checked payload-conversion source
+
+`Migration_queue_transform` is an internal compiler component for the next
+transforming boundary. Its opaque result binds one exact retained queue/payload
+identity across adjacent schema revisions. The callback must be an ordinary
+pure function of precisely `Old.Payload -> Migrated New.Payload`. Its fixtures
+return the exact old record, directly or in the builtin `Maybe`; user-defined
+lookalike `Maybe` and `Migrated` types do not qualify.
+
+The complete captured source graph passes the normal frontend, including private
+helpers and test bodies. The result's canonical identity binds both explicit
+codec closures, both payload contracts, the callback's transitive closure, every
+fixture, the compiler ABI and stored-value contract. Schema roles are normalized
+so freezing `VCurrent` to its named revision preserves the semantic identity.
+New payload proofs must be established through ordinary proof checking.
+
+Source, import-resolution and adjacent migration-directory guards are checked
+before and after lowering/publication callbacks. `with_checked` encloses the
+side-effect-free artifact construction; callers publish files afterward. A stale
+source view never replays the callback. There is no implicit `Same` proof grant
+and no permission to restamp a changed job.
+
+Public `Migration.jobs` source checking now consumes this evidence, initially
+through directly imported pure helper-module callbacks and exact old-payload
+fixtures. It requires explicit coverage of changed retained payloads, rejects
+duplicate/unknown/unchanged entries, and keeps source buffers authoritative.
+The runtime still needs to bind these exact decoders, encoder and callback to installed source,
+claim/finality and typed-repair receipts. A successfully checked pure conversion
+does not bypass MIG028, including when ordinary migration diagnostics run inside
+its guarded source scope without an explicit decision. Even an explicit checked
+decision is refused by physical planning and application builds. The component currently handles a changed payload with
+the same queue and job identities; rename, removal and IgnoreOld are separate.
+
+## Generated pure adapters
+
+`Compile.compile_queue_conversion_artifacts` is an internal artifact seam with
+no CLI activation. It guards the complete source during ordinary Go emission,
+then uses the actual lowering graph and emitted environments to bind types,
+codecs and callback symbols, including helper cycles and alpha-renamed symbols.
+The runtime source registration validates the closed canonical descriptor and
+its source/codec/signature relationships before publishing the entire batch.
+Bindings require the exact generated nominal types and named wrapper functions.
+
+The adapter returns immutable converted, rejected or invalid-source outcomes,
+retaining original bytes and source identity. Target bytes must decode under
+the target codec. Traps, bad result tags and encoder failures yield no usable
+output. Generated fixture tests cover direct and optional old records; Nothing
+is a named failure, while both Row and Reject are valid smoke results.
+
+This registry is not the database's installed queue binding. No queue claims,
+payload writes, repair records or retirement transitions use these adapters
+yet, and public changed-payload compilation still refuses. The standalone
+internal adapter artifact includes the PostgreSQL runtime's canonical source
+reader, but opens no database connection.
+
 ## Regression gates
+
+`test_migration_queue_transform` covers source certificates, exact ownership and
+signatures, builtin result/fixture identities, codec directions, proof checking,
+source/overlay/publication guards and freezing invariance. Its generated-code
+tests run the actual frozen decoder, conversion and target encoder/decoder with
+the source files absent. It also checks that this source evidence cannot activate
+changed-payload migration. See
+[lesson 96](../example/learn/lesson96-typed-queue-conversion.md).
 
 `test_migration_queue` checks the contextual parser and recovery boundary,
 purity, payload types and visibility, sorted membership and revision-relative
@@ -107,5 +172,5 @@ purity, payload types and visibility, sorted membership and revision-relative
 bindings, deleted bindings, late additions, genuine freeze/refresh history, and
 legacy empty-versus-unknown propagation. Existing migration inventory, source
 seal, header, generation, refresh, application, and program suites remain gates.
-Native mixed-version queue claims and retirement tests are still required with
+Native mixed-version queue claims and retirement tests are required with
 the runtime implementation; these compiler tests cannot substitute for them.

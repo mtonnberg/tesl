@@ -96,11 +96,7 @@ func pgRowQueueOperationFunctions(namespace string) []pgMigrationControlFunction
 			continue
 		}
 		functions[i].body = `
-declare fence integer; floor integer; n integer; family text; compatibility text;
- original ` + ns + `tesl_row_versions%rowtype; source ` + ns + `tesl_queue_versions%rowtype;
- binding ` + ns + `tesl_row_queue_sources%rowtype; physical ` + ns + `tesl_row_physical%rowtype;
- contracts jsonb; previous jsonb:='[]'::jsonb; expected bytea; source_header jsonb;
- expected_expansion text; expected_artifact text; expected_abi text;
+declare fence integer; floor integer; ` + pgRowQueueVerificationDeclarations(namespace) + `
 begin
  if pg_catalog.current_setting('transaction_isolation')<>'read committed' then raise exception 'tesl: queue operations require read committed isolation'; end if;
  if v is null or v<1 or v>2147483646 or q is null or q='' then raise exception 'tesl: invalid queue operation identity'; end if;
@@ -111,6 +107,31 @@ begin
  perform ` + ns + `tesl_admit(v);
  select min_version into floor from ` + ns + `tesl_schema_state where id=1;
  if not found or floor<1 or floor>v then raise exception 'tesl: invalid queue admission state'; end if;
+ if exists(select 1 from ` + ns + `tesl_jobs where schema_version<floor and status<>'quarantined') then
+  raise exception 'tesl: non-quarantined queue job is below the admission floor'; end if;
+ ` + pgRowQueueVerificationSQL(namespace, "v") + `
+ if not exists(select 1 from ` + ns + `tesl_queue_contracts where version=v and queue=q) then raise exception 'tesl: queue contract has no installed inventory'; end if;
+ return floor;
+end`
+	}
+	return functions
+}
+
+// Source verification grants no admission and takes no request fence. Sharing
+// this fragment lets retirement validate under its drained repeatable-read
+// snapshot without weakening queue operations' post-wait READ COMMITTED rule.
+func pgRowQueueVerificationDeclarations(namespace string) string {
+	ns := quoteIdentifier(namespace) + "."
+	return `n integer; family text; compatibility text;
+ original ` + ns + `tesl_row_versions%rowtype; source ` + ns + `tesl_queue_versions%rowtype;
+ binding ` + ns + `tesl_row_queue_sources%rowtype; physical ` + ns + `tesl_row_physical%rowtype;
+ contracts jsonb; previous jsonb:='[]'::jsonb; expected bytea; source_header jsonb;
+ expected_expansion text; expected_artifact text; expected_abi text;`
+}
+
+func pgRowQueueVerificationSQL(namespace, version string) string {
+	ns := quoteIdentifier(namespace) + "."
+	return `
  select * into original from ` + ns + `tesl_row_versions where version=1;
  if not found then raise exception 'tesl: missing original row queue source'; end if;
  family:=original.family; compatibility:=original.stored_value_compatibility;
@@ -123,7 +144,7 @@ begin
  if not exists(select 1 from ` + ns + `tesl_queue_baseline b join ` + ns + `tesl_queue_versions s on s.version=1 and s.inventory_hash=b.inventory_hash
  where b.id=1 and b.initial_version=1 and b.inventory_authority='complete' and b.established_by='fresh-install') then
  raise exception 'tesl: queue installation baseline is unknown or incomplete'; end if;
- for n in 1..v loop
+ for n in 1..` + version + ` loop
   select * into source from ` + ns + `tesl_queue_versions where version=n;
   if not found then raise exception 'tesl: row queue source prefix is incomplete'; end if;
   select * into binding from ` + ns + `tesl_row_queue_sources where version=n;
@@ -161,9 +182,5 @@ begin
     and s.snapshot_hash=e.snapshot_hash and s.artefact_hash=e.artefact_hash and s.source_abi=e.source_abi and s.stored_value_compatibility=e.stored_value_compatibility) then
    raise exception 'tesl: row queue has no exact completed expansion receipt'; end if;
  end loop;
- if not exists(select 1 from ` + ns + `tesl_queue_contracts where version=v and queue=q) then raise exception 'tesl: queue contract has no installed inventory'; end if;
- return floor;
-end`
-	}
-	return functions
+ `
 }

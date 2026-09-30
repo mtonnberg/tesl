@@ -1,7 +1,9 @@
 package teslmodtodoapp
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"github.com/jackc/pgx/v5"
 	"io"
@@ -89,6 +91,11 @@ func TestQueueApplicationStage(t *testing.T) {
 }
 
 func TestQueueApplication(t *testing.T) {
+	t.Run("retirement-and-crashes", func(t *testing.T) { queueApplication(t, false) })
+	t.Run("quarantine-refuses-retirement", func(t *testing.T) { queueApplication(t, true) })
+}
+
+func queueApplication(t *testing.T, quarantineOnly bool) {
 	host := os.Getenv("TESL_TEST_POSTGRES_SHARED_HOST")
 	if host == "" {
 		if os.Getenv("TESL_MIGRATION_TEST_REQUIRE_POSTGRES") == "1" {
@@ -229,22 +236,307 @@ func TestQueueApplication(t *testing.T) {
 	var before, after string
 	snapshot := func() string {
 		var s string
-		if err := observer.QueryRow(ctx, `select jsonb_build_object('state',(select to_jsonb(s) from todo.tesl_schema_state s),'history',(select jsonb_agg(to_jsonb(v) order by version,step,seq) from todo.tesl_schema_versions v),'epochs',(select jsonb_agg(to_jsonb(e)) from todo.tesl_row_epochs e))::text`).Scan(&s); err != nil {
+		if err := observer.QueryRow(ctx, `select jsonb_build_object('state',(select to_jsonb(s) from todo.tesl_schema_state s),'history',(select jsonb_agg(to_jsonb(v) order by version,step,seq) from todo.tesl_schema_versions v),'epochs',(select jsonb_agg(to_jsonb(e)) from todo.tesl_row_epochs e),'jobs',(select jsonb_agg(to_jsonb(j) order by id) from todo.tesl_jobs j))::text`).Scan(&s); err != nil {
 			t.Fatal(err)
 		}
 		return s
 	}
 	before = snapshot()
-	for _, flags := range [][]string{{}, {"--force"}, {"--dry-run"}, {"--force", "--dry-run"}} {
+	for _, flags := range [][]string{{"--dry-run"}, {"--force", "--dry-run"}} {
 		args := append([]string{"--schema", "close-epoch", "--through", "V2", "--json"}, flags...)
 		out, err := command(2, worker, "app", args...).CombinedOutput()
-		if err == nil || !strings.Contains(string(out), "queue-bearing history retirement is not supported") {
-			t.Fatalf("queue epoch not refused %v: %v %s", flags, err, out)
+		if err != nil || !strings.Contains(string(out), "schema-epoch-preview") {
+			t.Fatalf("queue epoch preview %v: %v %s", flags, err, out)
 		}
 	}
 	after = snapshot()
 	if before != after {
-		t.Fatal("refused epoch changed durable state", before, after)
+		t.Fatal("epoch preview changed durable state", before, after)
+	}
+	// Even a payload byte edit with a freshly recomputed table digest cannot
+	// borrow the immutable source inventory's authority to move admission.
+	var sourceBytes []byte
+	var sourceDigest string
+	if err := observer.QueryRow(ctx, `select contract,contract_hash from todo.tesl_queue_payloads where version=1 and queue='Notifications' and job_type='Notify'`).Scan(&sourceBytes, &sourceDigest); err != nil {
+		t.Fatal(err)
+	}
+	forgedBytes := bytes.Replace(sourceBytes, []byte("text"), []byte("next"), 1)
+	if bytes.Equal(forgedBytes, sourceBytes) {
+		t.Fatal("source contract has no expected field name to mutate canonically")
+	}
+	if tag, err := observer.Exec(ctx, `update todo.tesl_queue_payloads set contract=$1,contract_hash=encode(sha256($1::bytea),'hex') where version=1 and queue='Notifications' and job_type='Notify'`, forgedBytes); err != nil || tag.RowsAffected() != 1 {
+		t.Fatal("failed to construct freshly hashed catalog substitution", tag, err)
+	}
+	out, err := command(2, worker, "app", "--schema", "close-epoch", "--through", "V2", "--force", "--json").CombinedOutput()
+	if err == nil || (!strings.Contains(string(out), "inventory") && !strings.Contains(string(out), "source binding")) {
+		t.Fatalf("resigned foreign payload authorized retirement: %v %s", err, out)
+	}
+	if after = snapshot(); before != after {
+		t.Fatal("refused forged inventory changed floor, jobs or receipts")
+	}
+	if tag, err := observer.Exec(ctx, `update todo.tesl_queue_payloads set contract=$1,contract_hash=$2 where version=1 and queue='Notifications' and job_type='Notify'`, sourceBytes, sourceDigest); err != nil || tag.RowsAffected() != 1 {
+		t.Fatal("could not restore original immutable queue catalog", tag, err)
+	}
+	// Two attempts on old payloads: retirement must preserve a surviving
+	// claimant, but cannot invalidate an old claimant before its lease expires.
+	enqueue := func(id string) {
+		if _, err := requestSQL.Exec(ctx, `select todo.tesl_queue_enqueue(1,'Notifications','Notify',$1,jsonb_build_object('text',$1::text))`, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	claim := func(version int, id string) (string, int64) {
+		var actual, token string
+		var seq int64
+		if err := requestSQL.QueryRow(ctx, `select job_id,token,attempt_seq from todo.tesl_queue_claim($1,'Notifications','pending',$2,300000)`, version, id).Scan(&actual, &token, &seq); err != nil || actual != id {
+			t.Fatal("claim wrong old payload", actual, id, err)
+		}
+		return token, seq
+	}
+	enqueue("surviving")
+	survivingToken, survivingSeq := claim(2, "surviving")
+	enqueue("retiring")
+	retiringToken, retiringSeq := claim(1, "retiring")
+	deadClaim := func(version int, id string) (string, int64) {
+		enqueue(id)
+		if _, err := observer.Exec(ctx, `update todo.tesl_jobs set status='dead',dead_reason='attempts-exhausted' where id=$1`, id); err != nil {
+			t.Fatal(err)
+		}
+		var actual, token string
+		var seq int64
+		if err := requestSQL.QueryRow(ctx, `select job_id,token,attempt_seq from todo.tesl_queue_claim($1,'Notifications','dead',$2,300000)`, version, id).Scan(&actual, &token, &seq); err != nil || actual != id {
+			t.Fatal("claim wrong old dead payload", actual, id, err)
+		}
+		return token, seq
+	}
+	survivingDeadToken, survivingDeadSeq := deadClaim(2, "surviving-dead")
+	retiringDeadToken, retiringDeadSeq := deadClaim(1, "retiring-dead")
+	if quarantineOnly {
+		enqueue("quarantined")
+		token, sequence := claim(1, "quarantined")
+		if err := requestSQL.QueryRow(ctx, `select todo.tesl_queue_quarantine(1,'Notifications','quarantined',$1,$2)`, token, sequence).Scan(&owned); err != nil || !owned {
+			t.Fatal("could not quarantine original payload", owned, err)
+		}
+		before = snapshot()
+		out, err := command(2, worker, "app", "--schema", "close-epoch", "--through", "V2", "--force", "--json").CombinedOutput()
+		if err == nil || !strings.Contains(string(out), "quarantined queue payload requires typed repair") {
+			t.Fatalf("quarantine did not block forced retirement: %v %s", err, out)
+		}
+		if err := requestSQL.QueryRow(ctx, `select todo.tesl_queue_requeue(2,'Notifications','quarantined')`).Scan(&owned); err != nil || owned {
+			t.Fatal("ordinary requeue bypassed typed repair", owned, err)
+		}
+		if after = snapshot(); before != after {
+			t.Fatal("refused retirement/requeue changed quarantined bytes, source stamp or admission")
+		}
+		return
+	}
+	stage(1, "seed")
+	if _, err := observer.Exec(ctx, `update todo.tesl_jobs set status='dead',dead_reason='attempts-exhausted' where payload->>'text'='dead'`); err != nil {
+		t.Fatal(err)
+	}
+	before = snapshot()
+	out, err = command(2, worker, "app", "--schema", "close-epoch", "--through", "V2", "--force", "--json").CombinedOutput()
+	if err == nil || !strings.Contains(string(out), "retiring queue attempts are still leased") {
+		t.Fatalf("live old attempt did not block retirement: %v %s", err, out)
+	}
+	if after = snapshot(); before != after {
+		t.Fatal("leased-attempt refusal changed durable state")
+	}
+	// Calibrate lease expiry without changing token, sequence or payload.
+	if _, err := observer.Exec(ctx, `update todo.tesl_jobs set lease_until=clock_timestamp()-interval '1 second' where id in ('retiring','retiring-dead')`); err != nil {
+		t.Fatal(err)
+	}
+	var survivingBefore, jobsBefore string
+	if err := observer.QueryRow(ctx, `select jsonb_agg(to_jsonb(j)-'schema_version' order by id)::text from todo.tesl_jobs j where id in ('surviving','surviving-dead')`).Scan(&survivingBefore); err != nil {
+		t.Fatal(err)
+	}
+	if err := observer.QueryRow(ctx, `select jsonb_agg(to_jsonb(j)-'schema_version' order by id)::text from todo.tesl_jobs j where status in ('pending','dead')`).Scan(&jobsBefore); err != nil {
+		t.Fatal(err)
+	}
+	crashEpoch := func(boundary string, oldFence pgx.Tx, inspect func()) {
+		t.Helper()
+		dir, err := os.MkdirTemp(os.Getenv("TESL_MIGRATION_TEST_SOCKET_TMPDIR"), "qe-")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer os.RemoveAll(dir)
+		socket := filepath.Join(dir, "s")
+		listener, err := net.Listen("unix", socket)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer listener.Close()
+		arrived := make(chan net.Conn, 1)
+		busy := make(chan struct{}, 1)
+		listenerDone := make(chan struct{})
+		go func() {
+			defer close(listenerDone)
+			for {
+				connection, err := listener.Accept()
+				if err != nil {
+					return
+				}
+				_ = connection.SetDeadline(time.Now().Add(10 * time.Second))
+				var event struct{ Name string }
+				if err := json.NewDecoder(connection).Decode(&event); err == nil {
+					if event.Name == boundary {
+						arrived <- connection
+						return
+					}
+					if event.Name == "row-epoch-compatibility-busy" {
+						select {
+						case busy <- struct{}{}:
+						default:
+						}
+					}
+				}
+				_, _ = io.WriteString(connection, "continue\n")
+				_ = connection.Close()
+			}
+		}()
+		defer func() { _ = listener.Close(); <-listenerDone }()
+		cmd := command(2, worker, "app", "--schema", "close-epoch", "--through", "V2", "--force", "--json")
+		cmd.Env = append(cmd.Env, "TESL_MIGRATION_TEST_SOCKET="+socket)
+		log, err := os.CreateTemp(t.TempDir(), "epoch-")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer log.Close()
+		cmd.Stdout, cmd.Stderr = log, log
+		if err := cmd.Start(); err != nil {
+			t.Fatal(err)
+		}
+		done := make(chan error, 1)
+		go func() { done <- cmd.Wait(); close(done) }()
+		defer func() { _ = cmd.Process.Kill(); <-done }()
+		if oldFence != nil {
+			select {
+			case <-busy:
+				if after = snapshot(); before != after {
+					t.Fatal("epoch advanced while an old queue transaction held the writer fence")
+				}
+				if err := oldFence.Commit(ctx); err != nil {
+					t.Fatal("old queue transaction failed to finish", err)
+				}
+			case err := <-done:
+				t.Fatalf("epoch bypassed old queue transaction: %v", err)
+			case <-time.After(15 * time.Second):
+				t.Fatal("epoch did not observe old queue transaction")
+			}
+		}
+		select {
+		case connection := <-arrived:
+			defer connection.Close()
+			inspect()
+			if err := cmd.Process.Kill(); err != nil {
+				t.Fatal(err)
+			}
+			<-done
+		case err := <-done:
+			b, _ := os.ReadFile(log.Name())
+			t.Fatalf("epoch ended before %s: %v %s", boundary, err, b)
+		case <-time.After(15 * time.Second):
+			t.Fatalf("epoch did not reach %s", boundary)
+		}
+	}
+	before = snapshot()
+	oldFence, err := requestSQL.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer oldFence.Rollback(context.Background())
+	if err := oldFence.QueryRow(ctx, `select todo.tesl_queue_count(1,'Notifications','pending')`).Scan(&count); err != nil {
+		t.Fatal("old queue operation failed to hold its retirement fence", err)
+	}
+	crashEpoch("row-epoch-after-publication", oldFence, func() {
+		if after = snapshot(); before != after {
+			t.Fatal("uncommitted restamping/floor escaped transaction")
+		}
+	})
+	if after = snapshot(); before != after {
+		t.Fatal("crash before commit retained partial restamping or admission")
+	}
+	crashEpoch("row-epoch-after-commit", nil, func() {})
+	var minimum, floor, oldJobs int
+	if err := observer.QueryRow(ctx, `select min_version,compat_floor,(select count(*) from todo.tesl_jobs where schema_version<2) from todo.tesl_schema_state`).Scan(&minimum, &floor, &oldJobs); err != nil || minimum != 2 || floor != 2 || oldJobs != 0 {
+		t.Fatal("floor published without queue finality", minimum, floor, oldJobs, err)
+	}
+	// An administrator-created stranded stamp cannot be ignored merely because
+	// ordinary claim predicates would skip it. Both read and write admission
+	// must expose the inconsistent durable state until it is repaired.
+	if tag, err := observer.Exec(ctx, `update todo.tesl_jobs set schema_version=1 where id='surviving'`); err != nil || tag.RowsAffected() != 1 {
+		t.Fatal("fixture failed to forge existing job", tag, err)
+	}
+	for _, sql := range []string{
+		`select todo.tesl_queue_count(2,'Notifications','dead')`,
+		`select todo.tesl_queue_enqueue(2,'Notifications','Notify','must-not-enqueue','{}'::jsonb)`,
+	} {
+		if _, err := requestSQL.Exec(ctx, sql); err == nil || !strings.Contains(err.Error(), "non-quarantined queue job is below the admission floor") {
+			t.Fatalf("stranded payload escaped admission: %s: %v", sql, err)
+		}
+	}
+	if tag, err := observer.Exec(ctx, `update todo.tesl_jobs set schema_version=2 where id='surviving'`); err != nil || tag.RowsAffected() != 1 {
+		t.Fatal("fixture failed to restore job version", tag, err)
+	}
+	// A quarantined historical payload is deliberately inspectable below the
+	// admission floor. It is not claimable or requeueable as a current typed job.
+	if tag, err := observer.Exec(ctx, `insert into todo.tesl_jobs(id,queue,job_type,payload,schema_version,status,dead_reason)
+		values('visible-quarantine','Notifications','Notify','{}'::jsonb,1,'quarantined','payload-invalid')`); err != nil || tag.RowsAffected() != 1 {
+		t.Fatal("could not model an administrator-retained quarantine", tag, err)
+	}
+	var seenVersion int
+	var seenReason string
+	if err := requestSQL.QueryRow(ctx, `select source_version,reason from todo.tesl_queue_dead_jobs(2,'Notifications') where job_id='visible-quarantine'`).Scan(&seenVersion, &seenReason); err != nil || seenVersion != 1 || seenReason != "payload-invalid" {
+		t.Fatal("retained quarantine was silently hidden", seenVersion, seenReason, err)
+	}
+	if err := requestSQL.QueryRow(ctx, `select todo.tesl_queue_requeue(2,'Notifications','visible-quarantine')`).Scan(&owned); err != nil || owned {
+		t.Fatal("retained quarantine became a current typed job", owned, err)
+	}
+	if tag, err := observer.Exec(ctx, `delete from todo.tesl_jobs where id='visible-quarantine'`); err != nil || tag.RowsAffected() != 1 {
+		t.Fatal("could not clear adversarial quarantine fixture", tag, err)
+	}
+	var survivingAfter, jobsAfter string
+	if err := observer.QueryRow(ctx, `select jsonb_agg(to_jsonb(j)-'schema_version' order by id)::text from todo.tesl_jobs j where id in ('surviving','surviving-dead')`).Scan(&survivingAfter); err != nil || survivingAfter != survivingBefore {
+		t.Fatal("surviving claim identity/lease changed", survivingBefore, survivingAfter, err)
+	}
+	if err := observer.QueryRow(ctx, `select jsonb_agg(to_jsonb(j)-'schema_version' order by id)::text from todo.tesl_jobs j where status in ('pending','dead') and id not in ('retiring','retiring-dead')`).Scan(&jobsAfter); err != nil || jobsBefore != jobsAfter {
+		t.Fatal("restamping changed pending/delayed/dead payload or scheduling", jobsBefore, jobsAfter, err)
+	}
+	if err := requestSQL.QueryRow(ctx, `select todo.tesl_queue_complete(2,'Notifications','surviving',$1,$2)`, survivingToken, survivingSeq).Scan(&owned); err != nil || !owned {
+		t.Fatal("surviving claimant could not finish after restamping", owned, err)
+	}
+	if err := requestSQL.QueryRow(ctx, `select todo.tesl_queue_complete(2,'Notifications','surviving-dead',$1,$2)`, survivingDeadToken, survivingDeadSeq).Scan(&owned); err != nil || !owned {
+		t.Fatal("surviving dead-letter claimant could not finish", owned, err)
+	}
+	if _, err := requestSQL.Exec(ctx, `select todo.tesl_queue_complete(1,'Notifications','retiring',$1,$2)`, retiringToken, retiringSeq); err == nil {
+		t.Fatal("retired claimant completed")
+	}
+	if _, err := requestSQL.Exec(ctx, `select todo.tesl_queue_enqueue(1,'Notifications','Notify','late','{}'::jsonb)`); err == nil {
+		t.Fatal("retired producer enqueued")
+	}
+	// Expired old attempts are claimable under a new attempt, never the old one.
+	var reclaimedToken string
+	var reclaimedSeq int64
+	if err := requestSQL.QueryRow(ctx, `select token,attempt_seq from todo.tesl_queue_claim(2,'Notifications','pending','reclaimed',30000)`).Scan(&reclaimedToken, &reclaimedSeq); err != nil || reclaimedSeq <= retiringSeq || reclaimedToken == retiringToken {
+		t.Fatal("expired old attempt was not replaced", reclaimedSeq, err)
+	}
+	if err := requestSQL.QueryRow(ctx, `select todo.tesl_queue_complete(2,'Notifications','retiring',$1,$2)`, reclaimedToken, reclaimedSeq).Scan(&owned); err != nil || !owned {
+		t.Fatal("replacement did not own retired attempt's job", owned, err)
+	}
+	if err := requestSQL.QueryRow(ctx, `select token,attempt_seq from todo.tesl_queue_claim(2,'Notifications','dead','reclaimed-dead',30000)`).Scan(&reclaimedToken, &reclaimedSeq); err != nil || reclaimedSeq <= retiringDeadSeq || reclaimedToken == retiringDeadToken {
+		t.Fatal("expired dead-letter attempt was not replaced", reclaimedSeq, err)
+	}
+	if err := requestSQL.QueryRow(ctx, `select todo.tesl_queue_complete(2,'Notifications','retiring-dead',$1,$2)`, reclaimedToken, reclaimedSeq).Scan(&owned); err != nil || !owned {
+		t.Fatal("replacement did not own old dead-letter job", owned, err)
+	}
+	if _, err := observer.Exec(ctx, `update todo.tesl_jobs set next_attempt_at=clock_timestamp()-interval '1 second' where payload->>'text'='delayed'`); err != nil {
+		t.Fatal(err)
+	}
+	stage(2, "v2")
+	stage(2, "finish")
+	before = snapshot()
+	run(command(2, worker, "app", "--schema", "close-epoch", "--through", "V2", "--force", "--json"))
+	if after = snapshot(); before != after {
+		t.Fatal("completed epoch retry changed durable state")
 	}
 	// Run the ordinary generated App, including its emitted worker and LISTEN
 	// lifecycle. This is separate from deterministic public-API test stages.

@@ -250,7 +250,7 @@ let existing_proof_guidance before after identity =
         previous.stored_field.entity ^ "." ^ field ^
         ". Refresh generates the new storage column after these explicit rules are supplied. " ^
         "This route supports field-local proofs only; whole-entity cross-field reverse proofs are unsupported. " ^
-        "Revalidate only supports adding a first proof to an unproven primitive field")
+         "Revalidate supports adding a first proof, or a field-local conjunction preserving every historical proof through exact Same evidence; it cannot replace changed historical evidence")
     | _ -> None)
 let decision_body before after identity (errors : E.error list) =
   let fields = I.stored_fields before |> List.filter (fun (f : I.stored_field) -> relative (I.root_module before) f.entity = identity)
@@ -318,29 +318,49 @@ let refresh_entities file source before after =
 (* Explicit Retype rules select fields; generation owns their physical name.
    This only proposes edits. The entire resulting migration is checked after
    sealing, so an invalid rule or WriteBack never acquires execution authority. *)
-let retype_columns current migration =
+let retype_columns previous current migration =
  let _,declaration=syntax migration.H.path migration.contents in
  let entities=match declaration.entities with Ast.ERecord r -> r.fields | _ -> [] in
  let requested=List.concat_map (fun (entity,value) ->
   match Migration_form.application value with
   | "Migrate",[_;Ast.EList rules] -> List.filter_map (fun rule -> match Migration_form.application rule with
-    | "Retype",[Ast.EVar field] -> Some (entity,field.name)
+    | "Retype",[Ast.EVar field] ->
+      let sources=List.filter_map (fun rule -> match Migration_form.application rule with
+        | "Rename",[Ast.EVar old;Ast.EVar fresh] when fresh.name=field.name -> Some old.name
+        | _ -> None) rules.elems in
+      (* Ambiguous explicit mappings remain compiler diagnostics, never a
+         reason to edit a schema field speculatively. *)
+      (match sources with [] -> Some (entity,field.name,field.name)
+       | [old] -> Some (entity,field.name,old) | _ -> None)
     | _ -> None) rules.elems
   | _ -> []) entities in
  let members=I.stored_entities current.H.inventory in
  let resolve name=List.filter (fun (e:I.stored_entity) ->
   let relative=relative (I.root_module current.inventory) e.entity_name in
   List.mem name [relative;e.entity_name;List.hd (List.rev (String.split_on_char '.' relative))]) members in
- let requested=List.filter_map (fun (entity,field) -> match resolve entity with
-  | [entity] -> Some (entity.I.entity_name,field) | _ -> None) requested |> List.sort_uniq compare in
+ let requested=List.filter_map (fun (entity,field,old) -> match resolve entity with
+  | [entity] -> Some ((entity.I.entity_name,field),old) | _ -> None) requested |> List.sort_uniq compare in
+ let previous_shapes=I.field_shapes previous.H.inventory in
  I.source_inputs current.inventory |> List.filter_map (fun (file,_) ->
   let view=source_result file (Syntax.read ~file ~source:(Source_input.read file)) in
   let owner=Syntax.module_ view in
   let edits=List.concat_map (function Ast.DEntity e -> List.filter_map (fun (f:Ast.field_def) ->
-   if f.db_column<>None || not (List.mem (owner.module_name ^ "." ^ e.name,f.name) requested) then None else
-   let range=source_result file (Syntax.field_storage_point view f) in
-   let name=Validation_common.sql_column_name f.name ^ "__v" ^ string_of_int current.version in
-   Some (range," @column(" ^ Migration_row_companion.quote name ^ ")")) e.fields | _ -> []) owner.decls in
+    let entity=owner.module_name ^ "." ^ e.name in
+    match List.assoc_opt (entity,f.name) requested with
+    | None -> None
+    | Some old ->
+      let name=Validation_common.sql_column_name f.name ^ "__v" ^ string_of_int current.version in
+      let inherited=List.exists (fun shape ->
+        relative (I.root_module previous.inventory) shape.I.stored_field.entity = relative (I.root_module current.inventory) entity &&
+        shape.stored_field.name=old && shape.db_column=f.db_column) previous_shapes in
+      (match f.db_column with
+       | None ->
+         let range=source_result file (Syntax.field_storage_point view f) in
+         Some (range," @column(" ^ Migration_row_companion.quote name ^ ")")
+       | Some column when column<>name && inherited ->
+         let range=source_result file (Syntax.field_storage_value view f) in
+         Some (range,Migration_row_companion.quote name)
+       | Some _ -> None)) e.fields | _ -> []) owner.decls in
   if edits=[] then None else Some (file,source_result file (Syntax.replace view edits)))
 
 let refresh_with_compatibility ~stored_value_compatibility ~compiler_abi ~project_root:root ~family ~version ~documents =
@@ -372,7 +392,7 @@ let refresh_with_compatibility ~stored_value_compatibility ~compiler_abi ~projec
     let previous_seal,_ = Header.recorded_seals header in
     let checked_previous = seal (S.verify_sources ~project_root:root previous_seal) in
     ignore (seal (S.verify_semantics ?stored_value_compatibility ~compiler_abi checked_previous));
-    let column_writes=retype_columns current migration in
+    let column_writes=retype_columns previous current migration in
     let source=overlay root column_writes (fun () ->
       let target_inventory=inventory (I.load_with_compatibility ~stored_value_compatibility ~compiler_abi ~root_file:current.root_file) in
       let target_seal = seal (S.create ~project_root:root target_inventory) in

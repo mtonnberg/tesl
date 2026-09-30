@@ -180,7 +180,40 @@ let native () = project (fun root save path ->
     check bool "reject test executed" true (Compile.string_contains output "--- PASS: TestTesl1");
     check bool "native tests passed" true (Compile.string_contains output "--- PASS:")
   | _ -> fail output)
-let () = run "Revalidate" ["checked source and execution", List.map (fun (name,f) -> test_case name `Quick f)
+let strengthening_schema = after
+  |> replace "NonEmpty, tryTitle" "NonEmpty, Allowed, tryTitle"
+  |> replace "fact NonEmpty (value: String)" "fact NonEmpty (value: String)\nfact Allowed (value: String)"
+  |> replace "NonEmpty v)" "NonEmpty v && Allowed v)"
+  |> replace {|value != ""|} {|(value != "") && (value != "forbidden")|}
+  |> replace "Something (value ::: NonEmpty value)" "Something (value ::: NonEmpty value && Allowed value)"
+let strengthening_source = source
+  |> replace "Rule(..), Migrated(..)" "Rule(..), Same(..), Migrated(..)"
+  |> replace "same: []" "same: [Same Schema.Notes.V1.NonEmpty Schema.Notes.VCurrent.NonEmpty, Same Schema.Notes.V1.Allowed Schema.Notes.VCurrent.Allowed]"
+  |> replace "fn oldNote() -> Schema.Notes.V1.Note =\n  Schema.Notes.V1.Note { id: \"retained\", title: \"hello\", other: \"other\" }"
+    "fn oldNote() -> Maybe Schema.Notes.V1.Note =\n  case Schema.Notes.V1.tryTitle \"hello\" of\n    Nothing -> Nothing\n    Something title -> Something (Schema.Notes.V1.Note { id: \"retained\", title: title, other: \"other\" })"
+let strengthening ?(change=Fun.id) ?(old_change=Fun.id) ?(new_change=Fun.id) ?code () =
+  let previous=replace "Schema.Notes.VCurrent" "Schema.Notes.V1" strengthening_schema |> old_change in
+  let current=strengthening_schema |> replace "title: String ::: NonEmpty title" "title: String ::: NonEmpty title && Allowed title" |> new_change in
+  project ~previous ~current (fun _ _ path ->
+    let body=change strengthening_source in
+    match code with None -> accepts path body | Some code -> refuses ~code path body)
+let () = run "Revalidate" ["strengthening",[
+  test_case "same-column conjunction retains historical proof" `Quick (fun () -> strengthening ());
+  test_case "first validation can establish a conjunction" `Quick (fun () ->
+    let current=strengthening_schema |> replace "title: String ::: NonEmpty title" "title: String ::: NonEmpty title && Allowed title" in
+    project ~current (fun _ _ path -> accepts path source));
+  test_case "missing historical Same refuses strengthening" `Quick (fun () -> strengthening ~code:"MIG022"
+    ~change:(replace "Same Schema.Notes.V1.NonEmpty Schema.Notes.VCurrent.NonEmpty, " "") ());
+  test_case "changed historical producer cannot claim Same" `Quick (fun () -> strengthening ~code:"MIG024"
+    ~new_change:(replace {|value != "forbidden"|} {|value != "changed"|}) ());
+  test_case "strengthening cannot return another field" `Quick (fun () -> strengthening ~code:"MIG018"
+    ~change:(replace "tryTitle old.title" "tryTitle old.other") ());
+  test_case "strengthening cannot discard the scoped proof binder" `Quick (fun () -> strengthening ~code:"MIG018"
+    ~change:(replace "title: validated" "title: old.title") ());
+  test_case "same-column weakening refuses old proof loss" `Quick (fun () -> strengthening ~code:"MIG022"
+    ~old_change:(replace "title: String ::: NonEmpty title" "title: String ::: NonEmpty title && Allowed title")
+    ~new_change:(replace "title: String ::: NonEmpty title && Allowed title" "title: String ::: NonEmpty title") ());
+ ];"checked source and execution", List.map (fun (name,f) -> test_case name `Quick f)
   ["checked mapping and formatting",checked_mapping;"wrong projection",wrong_projection;
    "wrong result",wrong_result;"shadowed binder",shadowed_binder;
    "nested case shadows proof binder",nested_case_shadow;"establish case shadows input",establish_case_shadow;

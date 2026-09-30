@@ -5153,7 +5153,9 @@ and parse_test_stmt_items s =
                           stmts
                         | INDENT ->
                           advance s;
-                          let stmts = match parse_test_body_until_with_skip s skip_layout
+                          (* DEDENT ends this arm. Consuming it as whitespace
+                             absorbs the next pattern into the previous body. *)
+                          let stmts = match parse_test_body_until_with_skip s skip_newlines
                                               (fun tok -> tok = DEDENT || tok = EOF) with
                             | Ok ss -> ss | Err _ -> []
                           in

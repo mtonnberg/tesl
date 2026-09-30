@@ -21,7 +21,47 @@ let accepts path source =
 let command directory log text =
  if Sys.command (Printf.sprintf "cd %s && %s > %s 2>&1" (Filename.quote directory) text (Filename.quote log))<>0 then
   fail (text ^ "\n" ^ Source_input.read log)
-let export ?(legacy=false) destination =
+let export ?(legacy=false) ?(strengthening=false) destination =
+  let proof_schema={|module Schema.Notes.VCurrent exposing [Note, tryTitle, tryPrior, Prior, NonEmpty]
+import Tesl.Prelude exposing [String, Bool(..)]
+import Tesl.Maybe exposing [Maybe(..)]
+fact Prior (value: String)
+fact NonEmpty (value: String)
+establish tryPrior(value: String) -> Maybe (v: String ::: Prior v) =
+  if value != "old-forbidden" then
+    Something (value ::: Prior value)
+  else
+    Nothing
+establish tryTitle(value: String) -> Maybe (v: String ::: Prior v && NonEmpty v) =
+  if (value != "old-forbidden") && (value != "") then
+    Something (value ::: Prior value && NonEmpty value)
+  else
+    Nothing
+entity Note table "notes" primaryKey id { id: String, title: String ::: Prior title, memo: String }
+|} in
+  let old=if strengthening then replace "Schema.Notes.VCurrent" "Schema.Notes.V1" proof_schema else old in
+  let fresh=if strengthening then replace "title: String ::: Prior title" "title: String ::: Prior title && NonEmpty title" proof_schema else fresh in
+  let migration=if strengthening then {|module Schema.Notes.Migrate.V2 exposing [migration, oldNote]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.Migration exposing [Migration, Entity(..), Rule(..), Same(..), Migrated(..)]
+import Schema.Notes.V1
+import Schema.Notes.VCurrent
+migration = Migration {
+ from: Schema.Notes.V1
+ to: Schema.Notes.VCurrent
+ same: [Same Schema.Notes.V1.Prior Schema.Notes.VCurrent.Prior, Same Schema.Notes.V1.NonEmpty Schema.Notes.VCurrent.NonEmpty]
+ fixtures: [oldNote]
+ entities: { Note: Migrate convert [Revalidate title Schema.Notes.VCurrent.tryTitle] }
+}
+fn convert(old: Schema.Notes.V1.Note) -> Migrated Schema.Notes.VCurrent.Note =
+ case Schema.Notes.VCurrent.tryTitle old.title of
+  Nothing -> Reject "empty title"
+  Something title -> Row (Schema.Notes.VCurrent.Note { id: old.id, title: title, memo: old.memo })
+fn oldNote() -> Maybe Schema.Notes.V1.Note =
+ case Schema.Notes.V1.tryPrior "retained" of
+  Nothing -> Nothing
+  Something title -> Something (Schema.Notes.V1.Note { id: "one", title: title, memo: "base" })
+|} else migration in
  let old=if legacy then replace "memo: String }" "memo: String, obsolete: String }" old else old in
  let migration=if legacy then migration
   |> replace "[Revalidate title Schema.Notes.VCurrent.tryTitle]" "[Revalidate title Schema.Notes.VCurrent.tryTitle, Legacy obsolete \"retired\"]"
@@ -32,7 +72,8 @@ let export ?(legacy=false) destination =
  let save p source=let path=Filename.concat root p in write path source;accepts path source;path in
  write (Filename.concat root "tesl.toml") "";
  let current=save "schema/notes/v-current.tesl" (replace "Schema.Notes.V1" "Schema.Notes.VCurrent" old) in
- let build version =
+  let build version =
+   let app=if strengthening && version="v1" then replace "tryTitle" "tryPrior" app else app in
   let app=if legacy && version="v1" then app
     |> replace "memo: \"base\" }" "memo: \"base\", obsolete: \"original\" }"
     |> replace "set note.memo = \"touched\"" "set note.memo = \"touched\"\n    set note.obsolete = \"changed-by-old\"" else app in
@@ -65,13 +106,15 @@ let export ?(legacy=false) destination =
  let plan=get(Migration_retained_storage.plan history) in
  ignore(save "migrations/notes/v2-contract.tesl" (get(Migration_contract.source ~plan ~version:2)));
  build "v2")
-let native legacy () =
+let native ?(strengthening=false) legacy () =
  let out=Filename.temp_dir "tesl-revalidate-app-" "" in
- Fun.protect ~finally:(fun()->remove out) (fun()->export ~legacy out;
+  Fun.protect ~finally:(fun()->remove out) (fun()->export ~legacy ~strengthening out;
   command (Filename.concat(repository())"runtime/go") (Filename.concat out "postgres.log")
    (Printf.sprintf "TESL_ROW_REVALIDATE_LEGACY=%s TESL_ROW_REVALIDATE_PROGRAMS=%s timeout 180s go test -p 1 -race -tags tesl_migration_test -timeout 150s ./teslrt -run '^TestPgRowRevalidateActualApp$' -count=1 -v" (if legacy then "1" else "0") (Filename.quote out)))
 let () = match Sys.getenv_opt "TESL_ROW_REVALIDATE_EXPORT" with
  | Some destination -> export destination
  | None -> run "Revalidate PostgreSQL application" ["postgres",[
     test_case "old writers reject repair and Contract" `Quick (native false);
-    test_case "Revalidate and Legacy reverse writes" `Quick (native true)]]
+     test_case "Revalidate and Legacy reverse writes" `Quick (native true);
+     test_case "same-column proof strengthening retains exact old proof" `Quick (native ~strengthening:true false);
+     test_case "same-column strengthening and removed-field reverse writes" `Quick (native ~strengthening:true true)]]

@@ -34,3 +34,7 @@ val replace : t -> (range * string) list -> (string,error) result
     before separators or trailing comments. Used only by guarded storage-name
     generation; reconstructed fields and record fields refuse. *)
 val field_storage_point : t -> Ast.field_def -> (range,error) result
+
+(** Exact quoted string token of an existing @column annotation on a physically
+    owned entity field. Keeps annotation layout, other annotations and comments. *)
+val field_storage_value : t -> Ast.field_def -> (range,error) result

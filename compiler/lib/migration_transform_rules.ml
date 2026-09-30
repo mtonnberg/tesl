@@ -197,8 +197,18 @@ let check ?version coverage ~entries =
                 old.db_type<>shape.db_type || old.db_column<>shape.db_column ||
                 codec_dependencies before old.stored_field<>Some [] || codec_dependencies after field<>Some [] then
                refuse "MIG022" loc "Revalidate requires the same primitive scalar type, codec and storage in both versions";
-             if old.proof_identity<>None || shape.proof_identity=None || old.stored_field.contract=field.contract then
-               refuse "MIG022" loc "Revalidate requires a newly introduced target proof on an unproven previous field";
+             let rec leaves = function Seq [Bytes "and";left;right] -> leaves left @ leaves right | proof -> [proof] in
+             let preserves_previous = match old.proof_identity,shape.proof_identity with
+               | None,Some _ -> true
+               | Some prior,Some target ->
+                 List.for_all (fun proof -> List.mem proof (leaves target)) (leaves prior) &&
+                 (match dependencies before old.stored_field,dependencies after field with
+                  | Some old,Some fresh -> List.for_all (fun old ->
+                      List.exists (fun current -> List.mem (key old,key current) verified) fresh) old
+                  | _ -> false)
+               | _ -> false in
+             if not preserves_previous || old.stored_field.contract=field.contract then
+               refuse "MIG022" loc "Revalidate requires a new target proof and preserves every previous proof through exact Same evidence";
              Some (Revalidated {previous=old.stored_field;current=field;function_ref;loc})
            | Some (_, old) when Hashtbl.mem retyped name ->
              let expected = Option.bind version (fun version -> if version<2 || version>2147483646 then None else

@@ -21,6 +21,12 @@ val resolve : t -> owner:string -> Migration_ir.resolver
 val lower : scopes:Migration_canonical.scope list -> t ->
   (Migration_ir.definition list, Migration_ir.error) result
 
+(** Lower a checked pure helper graph, omitting only ordinary test declarations.
+    Every test body has already passed the frontend. Contextual migration or
+    Contract declarations and unsupported constants are not omitted. *)
+val lower_helpers : scopes:Migration_canonical.scope list -> t ->
+  (Migration_ir.definition list, Migration_ir.error) result
+
 (** The transform linker may omit its exact checked contextual declaration and
     ordinary tests after the complete graph passed frontend validation. All other
     unsupported declarations still fail. Original owner/declaration identity is

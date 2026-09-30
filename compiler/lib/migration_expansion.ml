@@ -206,8 +206,10 @@ let generate ~initial_version ~schemas ~edges =
   (* Logical checking is deliberately ahead of runtime transformation support.
      Inspect EVERY retained edge before selecting a fresh installation origin:
      choosing a later origin must not silently skip an unsupported transform. *)
-  List.iter (fun (edge : D.t) ->
-    List.iter (fun (entity,kind) -> match kind with
+   List.iter (fun (edge : D.t) ->
+     if D.queue_transforms edge<>[] then reject ~code:"MIG028" loc
+       "checked queue conversions cannot be treated as additive physical history";
+     List.iter (fun (entity,kind) -> match kind with
       | S.Transform | S.Reset -> reject
           (Location.dummy_loc (match I.source_inputs (snd (S.inventories (D.coverage edge))) with
             | (file,_)::_ -> file | [] -> ""))

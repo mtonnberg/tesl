@@ -41,7 +41,15 @@ deletion.
    change to an existing job type. Cross-version claiming may not ship before this —
    without a frozen history the compiler has no authoritative previous shape.
 2. **Migration surface (later):** `jobs:`, `Migrate`, `Rename`, `IgnoreOld`, fixtures,
-   the transforming retirement pass that re-encodes payloads.
+    the transforming retirement pass that re-encodes payloads.
+
+The unchanged-payload retirement prerequisite now executes for fresh format-5
+additive Worker histories. Epoch closure atomically restamps jobs and advances
+admission, retaining surviving attempts and releasing expired retiring attempts.
+It refuses live old leases and quarantines. This first path is one bounded
+transaction, not a background batch protocol; changed-payload transformation and
+typed repairs remain unimplemented. See
+[lesson 95](../../example/learn/lesson95-retiring-unchanged-queue-payloads.md).
 
 ## Design sketch (to be specified)
 
@@ -104,5 +112,25 @@ deletion.
 
 ## Open
 
-- Whether job types live in the schema module or their own module kind.
+### Recovery decision (maintainer direction, 2026-09-26)
+
+Rejected transformations retain their original payload and source version in
+quarantine and block retirement. Recovery uses a **typed repair migration**:
+an additional checked repair revision retries conversion of that historical
+payload into the target schema. It must not edit the already-deployed migration
+or relabel the quarantined payload as a current value. Dropping those jobs
+requires a separate explicit `IgnoreOld` migration decision, with the normal
+count and audit record; an operator discard command is not part of this choice.
+
+Before execution can be enabled, bind the repair's source/target identities and
+immutable callback closure to durable repair progress. Tests must prove that a
+failed or interrupted repair preserves the original payload/version, successful
+repair is resumable without double conversion, and the admission floor cannot
+advance while any required conversion remains rejected. Existing queue guards
+remain necessary until that runtime protocol and its typed callback dispatch
+are implemented. This records the recovery policy, not delivered queue execution.
+
+- The prerequisite implementation already places job records in the ordinary
+  versioned schema closure and lists them in `queueSchema`; no new module kind
+  is needed for this implementation.
 - Elaboration rules for `jobs:` in LANGUAGE-SPEC alongside `Migration`.

@@ -177,13 +177,25 @@ let replace t edits = protect (fun () ->
   (match Parser.parse_module t.file source with Ok _ -> () | Err e -> reject e.msg);
   source)
 
-let field_storage_point t (field:field_def) = protect (fun () ->
+let field_tokens t (field:field_def) =
   if not (List.exists (function DEntity e -> List.exists (fun f -> f==field) e.fields | _ -> false) t.ast.decls) then
     reject "storage field does not belong to this exact entity source view";
   let before (token:Lexer.full_token) point = (token.line,token.col)<(point.Location.line,point.col) in
   let endpoint={field.loc.stop with col=field.loc.stop.col-1} in
-  let tokens=Array.to_list t.tokens |> List.filter (fun token ->
-    not (layout token.Lexer.tok) && not (before token field.loc.start) && before token endpoint) in
+  Array.to_list t.tokens |> List.filter (fun token ->
+    not (layout token.Lexer.tok) && not (before token field.loc.start) && before token endpoint)
+let field_storage_point t field = protect (fun () ->
+  let tokens=field_tokens t field in
   let last=match List.rev tokens with token::_ -> token | [] -> reject "entity field has no exact token endpoint" in
   let point=token_end t last in
   {start_byte=point;end_byte=point})
+let field_storage_value t field = protect (fun () ->
+  let rec locate = function
+    | {Lexer.tok=Token.AT;_} :: {Lexer.tok=Token.IDENT "column";_} ::
+      {Lexer.tok=Token.LPAREN;_} :: ({Lexer.tok=Token.STRING name;_} as value) ::
+      {Lexer.tok=Token.RPAREN;_} :: _ ->
+      if field.db_column<>Some name then reject "storage annotation differs from its parsed field";
+      {start_byte=offset t value;end_byte=token_end t value}
+    | _::rest -> locate rest
+    | [] -> reject "entity field has no storage annotation value" in
+  locate (field_tokens t field))

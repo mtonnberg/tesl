@@ -144,7 +144,9 @@ let with_captured captured run =
     captured.validate ();
     let result=Source_input.with_pinned_files (List.map (fun (m,body) -> Validation_common.canonical_import_path m.source_file,body) captured.sources) run in
     captured.validate (); Ok result
-  with Invalid_argument message -> Error [{S.code="MIG013";loc=Location.dummy_loc captured.captured_root.source_file;message;related=[]}]
+   with Invalid_argument message -> Error [{S.code="MIG013";loc=Location.dummy_loc captured.captured_root.source_file;message;related=[]}]
+
+let captured_source_texts captured = captured.sources
 
 let resolver modules (m:module_form) namespace name =
   let local = List.concat_map names m.decls in
@@ -389,6 +391,13 @@ let check_pure_closure modules bindings =
         | _ -> ()) owner.decls) modules
     end in
   List.iter (fun binding -> definition binding.identity) bindings
+
+let bind_pure_functions modules root references =
+  try
+    let bindings = List.map (bind_function modules root) references in
+    check_pure_closure modules bindings;
+    Ok bindings
+  with Invalid errors -> Error errors
 
 let prepare ~project_root:_ ~source root rules ~functions ~fixtures =
   try

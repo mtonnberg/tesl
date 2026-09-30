@@ -5,7 +5,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"reflect"
+	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -642,4 +645,327 @@ func QueueSourceCodecs(queue *Queue) ([]PgQueueCodecSource, error) {
 		result = append(result, codec)
 	}
 	return result, nil
+}
+
+// Queue conversion sources and their pure adapters are deliberately separate
+// from installed queue bindings. Registration here grants no database access,
+// claim, restamping, repair or retirement authority.
+type pgQueueConversionSourceSpec struct {
+	document, digest, callbackIdentity                           string
+	oldType, newType, decoder, converter, encoder, targetDecoder string
+}
+
+type pgQueueConversionSource struct {
+	spec                   pgQueueConversionSourceSpec
+	family, queue, job     string
+	fromVersion, toVersion int
+}
+
+var compiledQueueConversionSources = struct {
+	sync.RWMutex
+	byDigest map[string]*pgQueueConversionSource
+}{byDigest: map[string]*pgQueueConversionSource{}}
+
+func pgReadQueueConversionSource(spec pgQueueConversionSourceSpec) (*pgQueueConversionSource, error) {
+	r := &pgMigrationWireReader{}
+	node := pgRowDocument(r, spec.document, spec.digest, "migration")
+	if r.err != nil {
+		return nil, r.err
+	}
+	if !node.list(13) || !node.children[0].isAtom("checked-queue-transform-source-v1") {
+		return nil, fmt.Errorf("queue conversion source has an unsupported closed format")
+	}
+	for i := 1; i <= 6; i++ {
+		if !node.children[i].atom {
+			return nil, fmt.Errorf("queue conversion source header is not scalar")
+		}
+	}
+	abi, compatibility := node.children[1].value, node.children[2].value
+	family, queue, job := node.children[3].value, node.children[5].value, node.children[6].value
+	version, err := strconv.Atoi(node.children[4].value)
+	if err != nil || strconv.Itoa(version) != node.children[4].value || version < 2 || version > 2147483646 ||
+		!pgMigrationFamily(family) || !pgQueueIdentity(queue) || !pgQueueIdentity(job) ||
+		!strings.HasPrefix(abi, "tesl-source-abi-v1:") || !pgMigrationDigest(strings.TrimPrefix(abi, "tesl-source-abi-v1:")) ||
+		!strings.HasPrefix(compatibility, "tesl-stored-value-v1:") || !pgMigrationDigest(strings.TrimPrefix(compatibility, "tesl-stored-value-v1:")) {
+		return nil, fmt.Errorf("queue conversion source identity is invalid")
+	}
+	if !strings.HasPrefix(spec.callbackIdentity, family+".Migrate.") {
+		return nil, fmt.Errorf("queue conversion callback belongs to another family")
+	}
+	for _, part := range strings.Split(spec.callbackIdentity, ".") {
+		if !pgRowName(part) {
+			return nil, fmt.Errorf("queue conversion callback identity is invalid")
+		}
+	}
+	for _, name := range []string{spec.oldType, spec.newType, spec.decoder, spec.converter, spec.encoder, spec.targetDecoder} {
+		if !strings.HasPrefix(name, "tesl.generated/") || !strings.Contains(name, "/internal/") || strings.ContainsAny(name, "\x00\r\n") {
+			return nil, fmt.Errorf("queue conversion has an invalid emitted binding")
+		}
+	}
+	if pgRowCanonicalEqual(node.children[7], node.children[8]) {
+		return nil, fmt.Errorf("unchanged queue payload cannot claim conversion authority")
+	}
+	reference := pgRowTypeReference(family, job)
+	from := pgRowProjectRole(reference, family, "from")
+	to := pgRowProjectRole(reference, family, "to")
+	named := func(ref pgRowCanonical) pgRowCanonical { return pgRowList(pgRowAtom("named"), ref) }
+	primitive := func(name string) pgRowCanonical {
+		return named(pgRowList(pgRowAtom("reference"), pgRowAtom("type"), pgRowList(pgRowAtom("primitive"), pgRowAtom(name))))
+	}
+	rawClosure := func(body pgRowCanonical) (pgRowCanonical, map[string]pgRowCanonical) {
+		return pgRowClosure(r, pgRowList(pgRowAtom("compiler-semantics"), pgRowAtom(abi), body), abi, compatibility)
+	}
+	sourceDefinitions := map[string]pgRowCanonical{}
+	oldDefinitions := map[string]pgRowCanonical{}
+	for i, role := range []string{"from", "to"} {
+		roots, definitions := pgRowClosure(r, node.children[7+i], abi, compatibility)
+		body := definitions[pgRowEncode(reference)]
+		if !roots.list(1) || !pgRowCanonicalEqual(roots.children[0], reference) || !body.list(4) || !body.children[0].isAtom("record-declaration") || !pgRowCanonicalEqual(body.children[1], reference) {
+			r.fail("queue conversion payload has another nominal source owner")
+		}
+		codecReference := pgRowProjectRole(reference, family, role)
+		codecReference.children[1] = pgRowAtom("codec")
+		codecRoots, codecDefinitions := rawClosure(node.children[9+i])
+		if !codecRoots.list(1) || !pgRowCanonicalEqual(codecRoots.children[0], codecReference) {
+			r.fail("queue conversion codec has another source owner")
+		}
+		expected := map[string]pgRowCanonical{}
+		for key, value := range definitions {
+			// The key is framed canonical text. Project the original definitions
+			// directly rather than performing text substitutions in user literals.
+			if value.atom || len(value.children) < 2 || pgRowEncode(value.children[1]) != key {
+				r.fail("queue payload has an invalid declaration")
+				continue
+			}
+			projected := pgRowProjectRole(value, family, role)
+			expected[pgRowEncode(projected.children[1])] = projected
+			sourceDefinitions[pgRowEncode(projected.children[1])] = projected
+		}
+		if i == 0 {
+			oldDefinitions = expected
+		}
+		for key, value := range codecDefinitions {
+			if original, ok := expected[key]; !ok || !pgRowCanonicalEqual(original, value) {
+				r.fail("queue conversion codec differs from its exact payload contract")
+			}
+		}
+		if len(codecDefinitions) != len(expected) {
+			r.fail("queue conversion codec omits an exact payload dependency")
+		}
+		codec := codecDefinitions[pgRowEncode(codecReference)]
+		if !codec.list(5) || !codec.children[0].isAtom("codec") || !pgRowCanonicalEqual(codec.children[1], codecReference) || !pgRowCanonicalEqual(codec.children[2], pgRowProjectRole(reference, family, role)) ||
+			codec.children[3].atom || len(codec.children[3].children) == 0 || !codec.children[3].children[0].isAtom("fields") ||
+			codec.children[4].atom || len(codec.children[4].children) < 2 || !codec.children[4].children[0].isAtom("alternatives") {
+			r.fail("queue conversion requires complete record codecs")
+		}
+	}
+	function := func(closure pgRowCanonical) (pgRowCanonical, pgRowCanonical) {
+		roots, definitions := rawClosure(closure)
+		for key, value := range definitions {
+			if expected, known := sourceDefinitions[key]; known && !pgRowCanonicalEqual(expected, value) {
+				r.fail("queue conversion function changed a source type or codec definition")
+			}
+		}
+		if !roots.list(1) {
+			r.fail("queue conversion requires one callback root")
+			return pgRowCanonical{}, pgRowCanonical{}
+		}
+		body := definitions[pgRowEncode(roots.children[0])]
+		if !body.list(6) || !body.children[0].isAtom("function") || !body.children[2].isAtom("fn") || !pgRowCanonicalEqual(body.children[1], roots.children[0]) {
+			r.fail("queue conversion requires an ordinary checked function")
+		}
+		return roots.children[0], body
+	}
+	callbackRoot, callback := function(node.children[11])
+	_, callbackDefinitions := rawClosure(node.children[11])
+	for key, expected := range sourceDefinitions {
+		if actual, found := callbackDefinitions[key]; !found || !pgRowCanonicalEqual(actual, expected) {
+			r.fail("queue conversion callback omits an exact source dependency")
+		}
+	}
+	parts := []pgRowCanonical{}
+	for _, part := range strings.Split(spec.callbackIdentity, ".") {
+		parts = append(parts, pgRowAtom(part))
+	}
+	expectedCallback := pgRowList(pgRowAtom("reference"), pgRowAtom("value"), pgRowList(pgRowAtom("global"), pgRowList(parts...)))
+	expectedResult := pgRowList(pgRowAtom("plain"), pgRowList(pgRowAtom("apply"), primitive("Tesl.Migration.Migrated"), named(to)))
+	if !pgRowCanonicalEqual(callbackRoot, expectedCallback) || !callback.list(6) || !callback.children[3].list(1) ||
+		!callback.children[3].children[0].list(4) || !callback.children[3].children[0].children[0].isAtom("binding") ||
+		!pgRowCanonicalEqual(callback.children[3].children[0].children[1], pgRowList(pgRowAtom("local"), pgRowAtom("0"))) ||
+		!pgRowCanonicalEqual(callback.children[3].children[0].children[2], named(from)) ||
+		!callback.children[3].children[0].children[3].list(1) || !callback.children[3].children[0].children[3].children[0].isAtom("none") ||
+		!pgRowCanonicalEqual(callback.children[4], expectedResult) {
+		r.fail("queue conversion callback signature differs from its payloads")
+	}
+	fixtures := node.children[12]
+	if fixtures.atom || len(fixtures.children) == 0 {
+		r.fail("queue conversion source has no checked fixture")
+	}
+	fixtureRoots := map[string]bool{}
+	for _, fixture := range fixtures.children {
+		root, body := function(fixture)
+		_, definitions := rawClosure(fixture)
+		for key, expected := range oldDefinitions {
+			if actual, found := definitions[key]; !found || !pgRowCanonicalEqual(actual, expected) {
+				r.fail("queue conversion fixture omits an exact old payload dependency")
+			}
+		}
+		key := pgRowEncode(root)
+		if fixtureRoots[key] {
+			r.fail("duplicate queue conversion fixture")
+		}
+		fixtureRoots[key] = true
+		direct := pgRowList(pgRowAtom("plain"), named(from))
+		optional := pgRowList(pgRowAtom("plain"), pgRowList(pgRowAtom("apply"), primitive("Tesl.Maybe.Maybe"), named(from)))
+		if !body.list(6) || !body.children[3].list(0) || (!pgRowCanonicalEqual(body.children[4], direct) && !pgRowCanonicalEqual(body.children[4], optional)) {
+			r.fail("queue conversion fixture has another source payload")
+		}
+	}
+	if r.err != nil {
+		return nil, r.err
+	}
+	return &pgQueueConversionSource{spec: spec, family: family, queue: queue, job: job, fromVersion: version - 1, toVersion: version}, nil
+}
+
+func registerCompiledQueueConversionSources(specs []pgQueueConversionSourceSpec) {
+	pending := map[string]*pgQueueConversionSource{}
+	for _, spec := range specs {
+		value, err := pgReadQueueConversionSource(spec)
+		if err != nil {
+			panic(err)
+		}
+		if _, exists := pending[spec.digest]; exists {
+			panic("duplicate queue conversion source")
+		}
+		pending[spec.digest] = value
+	}
+	compiledQueueConversionSources.Lock()
+	defer compiledQueueConversionSources.Unlock()
+	for key, value := range pending {
+		if old, exists := compiledQueueConversionSources.byDigest[key]; exists && old.spec != value.spec {
+			panic("conflicting queue conversion source")
+		}
+	}
+	for key, value := range pending {
+		compiledQueueConversionSources.byDigest[key] = value
+	}
+}
+
+// QueueConversionResult is an immutable pure conversion outcome, not permission
+// to change a durable job. The zero value never represents accepted data.
+type QueueConversionResult struct {
+	kind, original, payload, reason string
+	source                          *pgQueueConversionSource
+}
+
+func (r QueueConversionResult) Kind() string     { return r.kind }
+func (r QueueConversionResult) Original() string { return r.original }
+func (r QueueConversionResult) Payload() string  { return r.payload }
+func (r QueueConversionResult) Reason() string   { return r.reason }
+func (r QueueConversionResult) SourceDigest() string {
+	if r.source == nil {
+		return ""
+	}
+	return r.source.spec.digest
+}
+func (r QueueConversionResult) SourceVersion() int {
+	if r.source == nil {
+		return 0
+	}
+	return r.source.fromVersion
+}
+func (r QueueConversionResult) TargetVersion() int {
+	if r.source == nil {
+		return 0
+	}
+	return r.source.toVersion
+}
+
+type CompiledQueueConversion[Old, Current any] struct {
+	source       *pgQueueConversionSource
+	decode       func(any) Check[Old]
+	convert      func(Old) Migrated[Current]
+	encode       func(Current) any
+	targetDecode func(any) Check[Current]
+}
+
+func (c *CompiledQueueConversion[Old, Current]) SourceVersion() int {
+	if c == nil || c.source == nil {
+		return 0
+	}
+	return c.source.fromVersion
+}
+
+// BindCompiledQueueConversion accepts only the exact generated types and named
+// wrappers recorded by the compiler-owned registration. Arbitrary callbacks and
+// zero values cannot acquire even this pure adapter binding.
+func BindCompiledQueueConversion[Old, Current any](digest string, decode func(any) Check[Old], convert func(Old) Migrated[Current], encode func(Current) any, targetDecode func(any) Check[Current]) (*CompiledQueueConversion[Old, Current], error) {
+	compiledQueueConversionSources.RLock()
+	source := compiledQueueConversionSources.byDigest[digest]
+	compiledQueueConversionSources.RUnlock()
+	if source == nil {
+		return nil, fmt.Errorf("queue conversion source is not linked")
+	}
+	typeName := func(t reflect.Type) string { return t.PkgPath() + "." + t.Name() }
+	if typeName(reflect.TypeFor[Old]()) != source.spec.oldType || typeName(reflect.TypeFor[Current]()) != source.spec.newType {
+		return nil, fmt.Errorf("queue conversion nominal types differ from linked source")
+	}
+	for _, binding := range []struct {
+		value any
+		name  string
+	}{{decode, source.spec.decoder}, {convert, source.spec.converter}, {encode, source.spec.encoder}, {targetDecode, source.spec.targetDecoder}} {
+		value := reflect.ValueOf(binding.value)
+		if value.IsNil() {
+			return nil, fmt.Errorf("queue conversion callback is missing")
+		}
+		fn := runtime.FuncForPC(value.Pointer())
+		if fn == nil || fn.Name() != binding.name {
+			return nil, fmt.Errorf("queue conversion callback differs from its emitted source binding")
+		}
+	}
+	return &CompiledQueueConversion[Old, Current]{source, decode, convert, encode, targetDecode}, nil
+}
+
+func (c *CompiledQueueConversion[Old, Current]) Convert(sourceVersion int, bytes []byte) (result QueueConversionResult, err error) {
+	if c == nil || c.source == nil || c.decode == nil || c.convert == nil || c.encode == nil || c.targetDecode == nil {
+		return result, fmt.Errorf("queue conversion is not bound")
+	}
+	if sourceVersion != c.source.fromVersion {
+		return result, fmt.Errorf("queue conversion source version differs")
+	}
+	defer func() {
+		if recover() != nil {
+			result = QueueConversionResult{}
+			err = fmt.Errorf("queue conversion trapped")
+		}
+	}()
+	original := string(bytes)
+	result = QueueConversionResult{kind: "payload-invalid", original: original, source: c.source}
+	parsed, parseErr := ParseJSON([]byte(original))
+	if parseErr != nil {
+		return result, nil
+	}
+	old, ok := c.decode(parsed).Value()
+	if !ok {
+		return result, nil
+	}
+	converted := c.convert(old)
+	switch converted.Tag {
+	case MigratedReject:
+		result.kind, result.reason = "migration-rejected", converted.RejectReason
+		return result, nil
+	case MigratedRow:
+		encoded, encodeErr := json.Marshal(c.encode(converted.RowValue))
+		if encodeErr != nil {
+			return QueueConversionResult{}, fmt.Errorf("queue conversion target encoding failed")
+		}
+		raw, decodeErr := ParseJSON(encoded)
+		if decodeErr != nil || !c.targetDecode(raw).OK() {
+			return QueueConversionResult{}, fmt.Errorf("queue conversion target codec rejected its encoded value")
+		}
+		result.kind, result.payload = "converted", string(encoded)
+		return result, nil
+	default:
+		return QueueConversionResult{}, fmt.Errorf("queue conversion returned an invalid result tag")
+	}
 }

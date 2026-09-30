@@ -86,7 +86,7 @@ let seal_edge root path =
 let emit file = match Compile.compile_row_source_artifacts ~storage:true file (Source_input.read file) with
  | Compile.GoSuccess a -> a | Compile.GoFailure d -> fail (describe d)
 let artifact path values=(List.find (fun (a:Emit_go.artifact) -> a.path=path) values).contents
-let native ?source_root ?(extra_tests=[]) ?(test="") artifacts =
+let native ?source_root ?(extra_tests=[]) ?(test="") ?(expected_tests=[]) artifacts =
  let root=Filename.temp_dir "tesl-row-native-" "" in
  Fun.protect ~finally:(fun () -> if Sys.getenv_opt "TESL_KEEP_LEGACY_NATIVE_TEST"=None then remove root else Printf.printf "Retained native fixture: %s\n%!" root) (fun () ->
   List.iter (fun (a:Emit_go.artifact) -> if not (Filename.check_suffix a.path ".json") then
@@ -100,8 +100,11 @@ let native ?source_root ?(extra_tests=[]) ?(test="") artifacts =
   Fun.protect ~finally:(fun () -> List.iter (fun (path,bytes) -> write path bytes) hidden) (fun () ->
   if test<>"" then write (Filename.concat root "internal/teslmodapp/migration_registration_test.go") test;
   let log=Filename.concat root "native.log" in
-  let status=Sys.command (Printf.sprintf "cd %s && timeout 180s go test -p 1 -race -timeout=120s -count=1 ./... > %s 2>&1" (Filename.quote root) (Filename.quote log)) in
-  if status<>0 then fail (In_channel.with_open_bin log In_channel.input_all)))
+   let status=Sys.command (Printf.sprintf "cd %s && timeout 180s go test -v -p 1 -race -timeout=120s -count=1 ./... > %s 2>&1" (Filename.quote root) (Filename.quote log)) in
+   let output=In_channel.with_open_bin log In_channel.input_all in
+   if status<>0 then fail output;
+   List.iter(fun name->check bool ("generated business test executed: " ^ name) true
+     (contains output ("--- PASS: " ^ name ^ " (")))expected_tests))
 
 let replace a b s=Str.global_replace (Str.regexp_string a) b s
 let reseal root path body =
@@ -239,7 +242,101 @@ let semantic_writeback ()=project (fun root save path ->
   |> member "databases" |> to_list |> List.hd |> member "transforms" |> to_list |> List.hd |> member "transformContractHash" |> to_string in
  let first=hash (emit file) in
  reseal root path (replace "text: row.metadata.text" "text: row.metadata.text ++ \"-changed\"" source);
- check bool "WriteBack body closure affects callback identity" false (first=hash (emit file)))
+  check bool "WriteBack body closure affects callback identity" false (first=hash (emit file)))
+let repeated_generated_column ?(rename=false) ?(column="metadata__v2") ?(rules=None)
+    ?(reverse="row.metadata.detail") ?(layout=Fun.id) ?(expected_errors=[]) ?(execute=false) ()=project (fun root save path ->
+ seal_edge root path;
+ let abi=Result.get_ok (Migration_abi.current ()) in
+ let get=function Ok x->x|Error es->fail(String.concat "\n" (List.map(fun(e:Migration_generate.error)->e.message)es)) in
+ let apply manifest=List.iter(fun(e:Migration_manifest.edit)->write e.path e.after;
+   ignore(Compile.agent_context_result_source e.path e.after))(Migration_manifest.edits manifest) in
+ let frozen=get(Migration_generate.start_with_compatibility
+   ~stored_value_compatibility:(Some(Migration_abi.stored_value_compatibility abi))
+   ~compiler_abi:(Migration_abi.id abi) ~project_root:root ~family:"Schema.Notes" ~version:2 ~documents:[]) in
+ apply frozen.manifest;
+ let history=List.map(fun relative->let file=Filename.concat root relative in file,Source_input.read file)
+   ["schema/notes/v1.tesl";"schema/notes/v2.tesl";"migrations/notes/v2.tesl"] in
+ let target_field=if rename then "details" else "metadata" in
+ let target=save "schema/notes/v-current.tesl" (fresh |> replace "extra: String" "detail: String"
+   |> replace "extra ->" "detail ->" |> replace "extra <-" "detail <-"
+   |> replace "metadata__v2" column
+   |> replace "metadata: Metadata" (target_field ^ ": Metadata") |> layout) in
+ let body=(source ^ {|
+test "second conversion keeps the previous detail and key" {
+  let old = oldNote()
+  case convert old of
+    Row row ->
+      expect row.id == old.id
+      expect row.metadata.detail == "kept"
+      expect row.metadata.text == "old"
+    Reject _ -> expect False
+}
+test "reverse conversion preserves empty and Unicode values" {
+  let old = Schema.Notes.V2.Note { id: "ä", metadata: Schema.Notes.V2.Metadata { text: "", extra: "雪" } }
+  case convert old of
+    Row row ->
+      let previous = backward row
+      expect previous.text == ""
+      expect previous.extra == "雪"
+      expect row.id == "ä"
+    Reject _ -> expect False
+}
+test "new writes have the exact immediately previous representation" {
+  let row = Schema.Notes.VCurrent.Note { id: "new", metadata: Schema.Notes.VCurrent.Metadata { text: "current", detail: "written" } }
+  let previous = backward row
+  expect previous.text == "current"
+  expect previous.extra == "written"
+}
+|}) |> replace "import Tesl.Prelude exposing [String]" "import Tesl.Prelude exposing [String, Bool(..)]"
+   |> replace "Migrate.V2" "Migrate.V3" |> replace "Schema.Notes.V1" "Schema.Notes.V2"
+   |> replace "extra: \"new\"" "detail: old.metadata.extra"
+   |> replace "{ text: row.metadata.text }" ("{ text: row.metadata.text, extra: " ^ reverse ^ " }")
+   |> replace "{ text: \"old\" }" "{ text: \"old\", extra: \"kept\" }"
+   |> replace "metadata: Schema.Notes.VCurrent.Metadata" (target_field ^ ": Schema.Notes.VCurrent.Metadata")
+   |> replace "row.metadata" ("row." ^ target_field)
+   |> replace "Retype metadata, WriteBack metadata metadata backward"
+      (Option.value rules ~default:((if rename then "Rename metadata details, " else "") ^
+       "Retype " ^ target_field ^ ", WriteBack metadata " ^ target_field ^ " backward")) in
+ let next=Filename.concat root "migrations/notes/v3.tesl" in
+ let header=match Migration_header.create ~previous:(seal root (Filename.concat root "schema/notes/v2.tesl")) ~current:(seal root target) with
+   | Ok h->Migration_header.encode h|_->fail "missing generated V3 header" in
+ write next (header ^ body);
+ let refresh ()=get(Migration_generate.refresh_with_compatibility
+   ~stored_value_compatibility:(Some(Migration_abi.stored_value_compatibility abi))
+   ~compiler_abi:(Migration_abi.id abi) ~project_root:root ~family:"Schema.Notes" ~version:3 ~documents:[]) in
+ let preview=refresh () in
+ let actual_errors=List.filter_map(fun(d:Compile.diagnostic)->if d.severity="error" then Some d.code else None)preview.diagnostics in
+ if expected_errors=[] then check (list string) (describe preview.diagnostics) [] actual_errors
+ else List.iter(fun code->check bool (describe preview.diagnostics) true (List.mem code actual_errors))expected_errors;
+ let edits=Migration_manifest.overlays preview.manifest in
+ let target_edit=List.assoc_opt target edits in
+ let advances=column="metadata__v2" && rules=None in
+ check bool "only explicit Retype advances inherited storage" advances (Option.is_some target_edit);
+ if advances then check string "only storage value changes; surrounding source survives"
+   (Source_input.read target |> replace "\"metadata__v2\"" ("\"" ^ target_field ^ "__v3\"")) (Option.get target_edit);
+ check bool "preview preserves saved annotation" true (contains (Source_input.read target) column);
+ check string "repeated preview has stable identity" (Migration_manifest.digest preview.manifest)
+   (Migration_manifest.digest (refresh ()).manifest);
+ let saved=Source_input.read target in
+ write target (saved ^ "# concurrent editor change\n");
+ check bool "schema edit after preview invalidates publication" true
+   (Result.is_error(Migration_manifest.verify_disk preview.manifest));
+ write target saved;
+ (match Migration_manifest.verify_disk preview.manifest with
+  | Ok ()->() | Error _->fail "restored preimage should match preview");
+ apply preview.manifest;
+ List.iter(fun(file,bytes)->check string "all frozen source bytes preserved" bytes (Source_input.read file))history;
+ check int "second refresh has no edits" 0 (List.length(Migration_manifest.edits (refresh ()).manifest));
+ if expected_errors=[] then begin
+   accepts next (Source_input.read next);
+   if execute then match Compile.compile_go_file next with
+     | Compile.GoFailure ds->fail(String.concat "\n" (List.map(fun(d:Compile.diagnostic)->
+         Printf.sprintf "%s:%d:%d %s" d.file d.start_line d.start_col d.message)ds))
+     | Compile.GoSuccess artifacts->native ~source_root:root
+         ~expected_tests:["TestTesl0";"TestTesl1";"TestTesl2"] artifacts
+ end
+ else (match Compile.compile_go_source next (Source_input.read next) with
+   | Compile.GoFailure _ -> () | Compile.GoSuccess _ -> fail "invalid reverse migration emitted code"))
 let proof_nullable () =
  let binding_test={|package teslrt
 import (
@@ -588,7 +685,8 @@ let ()=run "checked Retype and WriteBack" ["retype",[test_case "Legacy scalar co
  test_case "nominal JSONB actual PostgreSQL bidirectional codecs" `Quick record;
  test_case "rule and exact nominal signature refusals" `Quick negatives;
  test_case "nominal ADT PostgreSQL bidirectional codecs" `Quick adt;
- test_case "guarded refresh generates Retype storage identity" `Quick generated_column;
+  test_case "guarded refresh generates Retype storage identity" `Quick generated_column;
+  test_case "second Retype advances inherited storage identity" `Quick (fun ()->repeated_generated_column ());
  test_case "WriteBack semantic closure is hashed" `Quick semantic_writeback;
  test_case "private proof codecs nullable JSONB and actual Reject" `Quick proof_nullable;
  test_case "WriteBack registration completeness and retry" `Quick writeback_registration;
@@ -598,4 +696,36 @@ let ()=run "checked Retype and WriteBack" ["retype",[test_case "Legacy scalar co
  test_case "exact field source ownership and annotation syntax" `Quick storage_source_ownership;
  test_case "old cross-field reverse proof boundary" `Quick cross_field_reverse_boundary;
  test_case "unary copied proof with generated reverse constructor" `Quick unary_reverse_copy;
- test_case "malformed final storage annotations refuse" `Quick malformed_storage_annotations]]
+  test_case "malformed final storage annotations refuse" `Quick malformed_storage_annotations];
+ "repeat",[
+  test_case "compiled repeated conversion and reverse writes preserve values" `Quick
+    (fun ()->repeated_generated_column ~execute:true ());
+  test_case "compiled repeated Rename conversion and reverse writes preserve values" `Quick
+    (fun ()->repeated_generated_column ~rename:true ~execute:true ());
+  test_case "Rename plus repeated Retype uses exact previous endpoint" `Quick
+    (fun ()->repeated_generated_column ~rename:true ());
+  test_case "already current storage stays idempotent" `Quick
+    (fun ()->repeated_generated_column ~column:"metadata__v3" ());
+  test_case "custom storage stays visible as an error" `Quick
+    (fun ()->repeated_generated_column ~column:"hand_owned" ~expected_errors:["MIG027"] ());
+  test_case "wrong historical generation is not silently repaired" `Quick
+    (fun ()->repeated_generated_column ~column:"metadata__v1" ~expected_errors:["MIG027"] ());
+  test_case "future storage generation is not silently repaired" `Quick
+    (fun ()->repeated_generated_column ~column:"metadata__v4" ~expected_errors:["MIG027"] ());
+  test_case "no Retype never changes inherited storage" `Quick
+    (fun ()->repeated_generated_column ~rules:(Some "") ~expected_errors:["MIG022"] ());
+  test_case "duplicate Rename never selects a storage source" `Quick
+    (fun ()->repeated_generated_column ~rename:true
+      ~rules:(Some "Rename metadata details, Rename metadata details, Retype details, WriteBack metadata details backward")
+      ~expected_errors:["MIG023"] ());
+  test_case "new storage does not authorize an ill-typed reverse function" `Quick
+    (fun ()->repeated_generated_column ~reverse:"42" ~expected_errors:["T001"] ());
+  test_case "CRLF and Unicode comments survive storage advance" `Quick
+    (fun ()->repeated_generated_column ~layout:(fun s->s
+      |> replace {|metadata: Metadata @column("metadata__v2"), id: String|}
+        "\n\tmetadata: Metadata @column(\"metadata__v2\") # keep ä\n\tid: String\n"
+      |> replace "\n" "\r\n") ());
+  test_case "db override before column survives storage advance" `Quick
+    (fun ()->repeated_generated_column ~layout:(replace "@column(" "@db(jsonb) @column(") ());
+  test_case "db override after column survives storage advance" `Quick
+    (fun ()->repeated_generated_column ~layout:(replace {|@column("metadata__v2")|} {|@column("metadata__v2") @db(jsonb)|}) ())]]

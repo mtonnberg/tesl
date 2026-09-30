@@ -8,6 +8,228 @@ non-normative. An unchecked row is not delivered.
 
 ## Current assessment and implementation order
 
+### Integration review and delivery target
+
+The row migrations and unchanged-payload queue retirement have executable
+PostgreSQL lifecycles. Checked queue converters and their pure byte adapters
+also execute, but **changed queued payloads are not deployable**. Repeated
+source/adapter test successes must not be counted as completion of that feature.
+
+The next acceptance target is one ordinary V1/V2 queue application built from
+frozen source, with no test-only metadata patches: enqueue an old-shaped job,
+deploy its checked converter, claim/convert/process it with V2, reject another
+job without losing its original bytes, repair that job through a separately
+checked repair revision, and retire V1 only after finality. Keep that target on
+the critical path rather than expanding unrelated source-reporting surfaces.
+
+The required integration boundaries, in order, are:
+
+1. Public checked `jobs:` coverage and generated adapter linkage for the exact
+   database/family/queue/job edge; a shape change narrows the admission window.
+2. Protected, immutable registration tying the conversion hash to both installed
+   schema/payload contracts and the database identity. A pure adapter digest is
+   not this authority.
+3. An attempt-fenced apply operation that compares the original job identity,
+   source version, payload and active conversion before publishing new bytes and
+   their version together. Stale attempts, backend death and concurrent updates
+   must not publish partial conversion or permit handler effects afterward.
+4. Quarantine on checked rejection, preserving original bytes/version; typed
+   repair revisions use new immutable identities rather than editing history.
+5. Bounded finalization of pending, delayed, dead and processing jobs before the
+   retirement floor commits. Then enable the public path and run the complete
+   private-PostgreSQL gate.
+
+The adapter review found a concrete gap: a freshly rehashed fixture closure could
+omit the old payload definition while retaining its return signature. The new
+regression failed on that omission before the fix. The runtime reader now
+requires every fixture's complete, exact old-payload dependency set. Direct,
+proof-bearing and optional generated fixture cases pass after the correction.
+The evidence below records earlier milestones; it does not supersede these
+remaining integration requirements.
+
+### Implementation and verification evidence
+
+The first integration boundary now connects `Migration.jobs` source decisions
+to the existing checked converter evidence. Changed retained payloads require
+explicit `Migrate` coverage; helper ownership, nominal fixtures, duplicate
+aliases and decision holes are checked. Queue and entity fixtures remain
+separate. The source checker handles unsaved/formatter buffers and preserves
+outer project views without masking later helper edits. Application codegen and
+both physical planners retain explicit MIG028 refusals, including later-origin
+planning, until protected registration and execution are implemented.
+
+Review verification passes the 35-case conversion suite plus its additional
+mixed queue/entity fixture case, all 24 queue-source cases against mandatory
+private PostgreSQL, 43 existing transformation cases, 23 declaration cases and
+21 refresh cases. The fixture-dependency omission was first reproduced as an
+accepted freshly rehashed invalid descriptor, then refused by the corrected
+reader. These focused results cover this integration boundary; they are not a
+new full-gate result or evidence of durable payload conversion.
+
+Checked queue conversions now have compiler-owned pure runtime adapters through
+the internal `compile_queue_conversion_artifacts` seam. Emission binds exact
+original declarations through the Go lowering graph rather than guessing names.
+Runtime registration validates canonical payload/codec/callback/fixture bindings
+and publishes source batches atomically; binding checks generated nominal types
+and named wrappers. Conversion distinguishes malformed old payloads, explicit
+Reject and accepted target bytes. Outcomes preserve original bytes and source
+identity; traps and target codec failures yield no usable output. Automatic
+fixture tests reject Nothing by name and accept deliberate Reject as a smoke
+outcome. The expanded suite also covers helper cycles and stale emission.
+All 32 conversion-source/adapter cases pass (142.618s), including generated
+runtime metadata mutations with fresh hashes and registration atomicity.
+The four pipeline unit groups pass with the race detector; all 24 queue source
+cases, 14 existing migration-fixture cases and three runtime-file-gate cases
+also pass. Compiler and documentation checks pass. This is focused verification;
+the earlier complete migration gate predates the adapter-emission work.
+
+This is byte-adapter execution, not durable queue mutation or deployment
+activation. Typed repair receipts, protected conversion of claimed jobs and
+transforming retirement are still required. Runtime gate tests also uncovered
+an existing missing Dune dependency for `migration_row_contract_table_spec.go`;
+it is now explicit, and all six embedded-runtime seam checks pass.
+
+`Migration_queue_transform` now constructs opaque checked source evidence for
+a same-identity payload conversion across adjacent revisions. It binds the exact
+nominal callback signature, both explicit codec closures, payload contracts,
+pure helper closure, fixtures and compiler/stored-value identities. Complete
+frontend checking precedes lowering; source/import/directory guards protect
+publication, including unsaved overlays. This component does not register a
+runtime converter or admit public changed-payload builds. MIG028 remains intact.
+All 27 source-checker regression cases pass; generated Go tests run the actual
+old decoder, typed conversion and target codec after deleting the original
+source tree, including proof-bearing accepted/rejected values. The neighboring
+checked-graph and transform-link suites pass (7 and 21 cases). The new suite is
+part of the default migration gate; the previous complete gate predates this
+component. Lesson 96 explains the pure conversion/testing boundary.
+
+The corrected September 27 default `scripts/run-migration-tests.sh` gate passes
+in a single private PostgreSQL 17.10 execution: the compiled V1–V13 application
+harness (1014.959s), four race-detected runtime groups, and all 31 compiler
+suites, including the expanded physical Retype, proof-strengthening and
+unchanged-payload queue retirement cases. The first attempted combined run
+failed because a Worker verifier directly read `tesl_jobs`, which the Worker
+role cannot access. That verifier was removed; the protected SQL admission
+boundary now checks non-quarantined below-floor jobs instead. The final gate
+passed after this correction. The later focused fixture also checks a held
+old-version queue transaction across epoch closure and historical quarantine
+visibility; its compiled application run passes (58.361s). This evidence does
+not establish transforming payloads, typed queue repair or same-column codec
+rewrite finality.
+
+The same-column codec decision is explicit: encoder-changing codecs retain
+old-format writes during overlap and rewrite only after old writers are
+fenced; pruning a legacy decoder additionally needs a checked all-row
+completion proof. No such rewrite authority exists yet. The executable path
+remains Retype/WriteBack with distinct storage.
+
+Queue-bearing additive epoch closure now has an atomic same-contract retirement
+path. Protected SQL verifies the complete row/queue source prefix and exact
+payload bytes/hashes, then restamps pending, delayed and dead jobs together with
+the epoch receipt and floor advance. Surviving processing/dead-processing claims
+retain all attempt and lease fields. Live retiring claims refuse; expired old
+claims return to pending/dead with ownership cleared and sequences retained.
+Quarantines block closure and keep their original payload/version. Row Contracts
+and transforming queue histories retain their separate refusal guards.
+Protected queue read/write admission now also refuses any non-quarantined job
+stamp below the admitted floor. An adversarial direct catalog edit and both refused
+request operations are exercised by the compiled application fixture; no
+request-role direct table access was added. A below-floor quarantine remains
+visible as dead-letter metadata and cannot be requeued. The fixture additionally holds a
+real old-version queue transaction across the closing command, observes the
+busy fence, and checks that no floor or job receipt publishes until release;
+the subsequent before-commit crash still rolls the restamp back. Both focused
+application scenarios pass again (57.731s, Go race detector).
+The final application fixture also mutates a historical payload field in its
+canonical contract, recomputes the table digest, and verifies that exact
+source-inventory checking refuses the close-epoch command without changing
+admission or jobs. It restores the catalog before proceeding through both
+crash windows. Both compiled scenarios pass with the race detector (72.793s).
+
+Queue source verification is shared as a SQL fragment, not an admission bypass.
+Queue operations still require post-fence READ COMMITTED admission; epoch
+publication uses its existing drained repeatable-read control transaction.
+Concurrent surviving writes can cause serialization refusal and whole-operation
+rollback. This initial path is one bounded atomic operation, not a resumable
+background batch protocol. Earlier experimental catalog definitions fail exact
+verification; no installed-catalog upgrade is supplied here.
+
+The ordinary compiled V1/V2 queue application passes both retirement/crash and
+quarantine-refusal scenarios against private PostgreSQL with race detection
+(56.538s). It covers pending/delayed/dead states, surviving and retiring claims
+in both processing modes, exact scheduling/payload/claim preservation, crashes
+before/after commit, old-version refusal and idempotent retry. The queue compiler
+suite passes all 24 cases (34.707s), broader queue/admission/epoch runtime checks
+pass (88.416s), and the queue-free additive/transforming application still passes
+(107.818s). The prior repeated-Retype native test now carries its required build
+tag, restoring untagged runtime test compilation. Lesson 95 documents the new
+queue lifecycle. These focused results do not replace a complete migration gate.
+
+Same-column primitive Revalidate now accepts a field-local conjunction that
+preserves all previous proof predicates through exact verified Same evidence.
+It also accepts a conjunction as the first proof. The target establish still
+returns its unchanged input with exactly the required subject-bound evidence;
+the row constructor must use that establish's scoped Something binder. Existing
+proof replacement, weakening, changed historical producers and codec changes
+remain refused on this path. Lesson 94 documents the supported transition.
+The source suite passes 25 cases and refresh passes 21. All four private
+PostgreSQL Revalidate lifecycles pass with race detection (104.392s), including
+old writers, rejected rows, repair, Contract and strengthening combined with
+Legacy. These are focused results, not a rerun of the entire migration gate.
+
+Queue recovery direction is now explicit in the queue roadmap: rejected jobs
+keep their original bytes/version and require a typed repair migration;
+discard requires a separate IgnoreOld decision. Typed queue callback dispatch,
+repair authority, transforming retirement/restamping and same-column codec rewrite finality
+still need implementation before their execution guards can be lifted.
+
+The repeated-Retype source workflow now also has a mandatory PostgreSQL lifecycle
+in `test_migration_row_retype_physical.ml`. Original V1 is publicly compiled
+before freezing history; guarded generation produces V2 and V3, each with a
+checked Contract, and the application source is byte-identical in all builds.
+The source tree is removed before executing the three binaries. The test covers
+two windows, premature V3 refusal, distinct JSONB codecs and columns, late V2
+inserts/updates, non-materializing lazy reads, atomic failed bulk writes,
+conversion rejection blocking retirement, repair through the retained V2 app,
+both physical Contracts, old-reader refusal and settled restart. Lesson 92 now
+links this live trace. All four physical Retype/removal compiler groups pass
+against private PostgreSQL 17 with race detection (171.692s). A follow-up adds
+assertions preserving the different existing/new-row counts through both
+windows. That run exhausted the base fixture's 30-second whole-scenario budget
+at the final Contract restart. This three-version scenario now has its own
+bounded 75-second context, following the existing multi-stage worker fixtures;
+operation deadlines are unchanged. The final focused case passes (70.928s,
+including public compilation). The earlier combined-gate result below predates
+this additional case.
+
+Repeated Retype refresh now advances an inherited `@column` from the exact
+previous field to the new introducing version, including Rename plus Retype.
+Previously a second change to the same field retained its old annotation and
+failed with MIG027. Custom, wrong-generation and ambiguous mappings remain
+diagnosed rather than silently repaired. The guarded preview preserves frozen
+history, source layout and publication preconditions. Lesson 92 documents this
+workflow; lesson 93 collects the breaking-change test matrix.
+
+The regression expansion adds fourteen Retype cases and six exact storage-edit
+cases. Two cases execute the generated forward/reverse business tests with the
+original Tesl sources absent. Those tests exposed a test-parser bug: skipping
+all layout at the end of an indented case arm consumed the next arm. The parser
+now retains that boundary, with two additional parser cases covering multiline,
+commented, braced and nested arms. These changes complete this refresh path;
+the remaining feature-wide deliverables listed below are still open.
+The full Retype suite passes all 30 cases against mandatory PostgreSQL, including
+the new generated-code tests with race detection (108.972s). The source-edit
+suite passes 19 cases, refresh 21, and parser 62. Documentation integrity,
+generated lesson-index coherence and manual coherence pass.
+
+The September 25 default private-PostgreSQL gate completed in one execution on
+PostgreSQL 17.10: the application harness (1100.809s), four runtime groups and 31
+compiler suites (280 cases), including the expanded Retype suite and table Drop.
+Go execution uses the race detector. This closes the outstanding combined-gate
+verification for the currently supported paths. Pooler/replica/owned-cluster
+optional tiers, other PostgreSQL majors and feature-wide unfinished work are not
+covered by this result.
+
 Breaking column changes have focused live coverage: primitive/JSONB removal,
 proof strengthening, proof weakening and complete proof removal. Proof changes
 use separate retained columns and exact historical proof-bearing reverse writes;
@@ -303,7 +525,7 @@ codec-history transition.
 | Removal and JSONB | Actual field removal and record/ADT conversion, including reverse compatibility, SQL NULL, retained writers, and the V10–V13 todo showcase | Adoption remains separate; the compiled Todo V1→V13 PostgreSQL lifecycle is covered by `TestCompiledTodoComplexHistoryPostgres` in the private cluster gate |
 | Proof and codec evolution | Typed `Retype` and reverse writes; checked same-value primitive `Revalidate` with explicit runtime-only enforcement | Same-column proof replacement, SQL CHECK synthesis, and same-column fallback rewrite/finality |
 | Ordinary CLI | Public `tesl migrate` dispatch reaches the native publisher; ordinary builds link checked row transforms and retain compiler-owned previews | Native publisher end-to-end adoption/rollback coverage and remaining compatibility cases |
-| Queue migration | Checked source inventories, combined row/queue catalog and fresh additive Worker application execution | Payload transformations, retirement/restamping and finality |
+| Queue migration | Checked source inventories, combined row/queue catalog, fresh additive Worker application execution and atomic same-contract epoch retirement | Payload transformations, typed repairs and transforming retirement/finality |
 | Staged uniqueness | Design and prerequisites | Implementation and application regressions |
 
 The next acceptance milestones are the full private-PostgreSQL lifecycle for the

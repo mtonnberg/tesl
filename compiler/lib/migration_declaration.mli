@@ -1,17 +1,18 @@
 (** Contextual source checking for Migration declarations. This binds sparse
-    coverage, additive adapters and the initial checked Transform mapping/row AST
-    to the exact adjacent schemas. Present headers receive source-integrity checks.
+    coverage, additive adapters, row mappings and queue conversion source evidence
+    to exact adjacent schemas. Present headers receive source-integrity checks.
     An explicit compatibility contract verifies seal semantics under the caller
     ABI; ordinary diagnostics do not make that persisted execution judgment.
-    Transform callbacks still require typed semantic closure elaboration and a
-    complete executor. Physical planning refuses every retained Transform/Reset
-    edge, even when a later fresh-install origin would otherwise skip it. *)
+    Source evidence alone never grants persisted execution authority. Queue
+    transformations remain refused by physical planning, including later origins,
+    until their protected execution and repair protocol is complete. *)
 type t
 val check : ?stored_value_compatibility:string -> compiler_abi:string -> source:string -> Ast.module_form ->
   (t option, Migration_sparse.error list) result
 val coverage : t -> Migration_sparse.t
 val additive : t -> Migration_additive.t
 val transforms : t -> Migration_transform.t option
+val queue_transforms : t -> Migration_queue_transform.t list
 val version : t -> int
 val source_seals : t -> Migration_header.checked option
 val diagnostics : string -> Ast.module_form -> Frontend_check.diagnostic list

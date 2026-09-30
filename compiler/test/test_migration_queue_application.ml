@@ -57,7 +57,7 @@ let integration () =
   List.iter(fun(a:Emit_go.artifact)->write(Filename.concat target a.path)a.contents)files;
   write(Filename.concat target "internal/teslmodtodoapp/queue_application_test.go") (read(Filename.concat repo "compiler/test/fixtures/queue-application/application_test.go"));
   let log=Filename.concat target "build.log" in
-  let command=Printf.sprintf "cd %s && go build -race -o app ./cmd/app && go test -race -c -o application.test ./internal/teslmodtodoapp" (Filename.quote target) in
+   let command=Printf.sprintf "cd %s && go build -race -tags tesl_migration_test -o app ./cmd/app && go test -race -tags tesl_migration_test -c -o application.test ./internal/teslmodtodoapp" (Filename.quote target) in
   if Sys.command(command^" > "^Filename.quote log^" 2>&1")<>0 then fail(read log);
   target in
  let v1=emit "v1" in

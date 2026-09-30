@@ -34,6 +34,13 @@ Representation changes continue through typed `Retype`/`WriteBack`, retained
 physical storage and checked Contract cleanup. Combined row/queue previews and
 later row-history installation origins are refused.
 
+The decided future encoder-changing same-column path keeps old-format writes
+through the rolling window. Only after old writers are fenced may a checked
+pass rewrite stored values; decoder pruning requires a durable all-row
+completion proof. The source-only `codecChanges` report grants none of those
+permissions. Until that execution protocol exists, use separate retained
+storage with `Retype`/`WriteBack`.
+
 ## Checked inputs
 
 `Migration_expansion` contains the shared physical derivation over already checked

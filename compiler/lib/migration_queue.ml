@@ -24,7 +24,7 @@ let changes ~before ~after =
         match List.assoc_opt identity payloads with
         | None -> Some (error payload.payload_loc ("queue payload `" ^ identity ^ "` was removed, renamed or moved from `" ^ name ^ "`; declare a new payload identity without deleting its predecessor until jobs migrations are available"))
         | Some p when p.payload_contract <> payload.payload_contract ->
-          Some (error p.payload_loc ("queue payload `" ^ identity ^ "` changed its frozen shape, proof or codec closure; jobs migrations are not implemented"))
+          Some (error p.payload_loc ("queue payload `" ^ identity ^ "` changed its frozen shape, proof or codec closure; provide a checked jobs: Migrate decision (protected transformation execution is not available yet)"))
         | Some _ -> None) q.payloads) old
 
 let historical_capability ~before ~after seals =

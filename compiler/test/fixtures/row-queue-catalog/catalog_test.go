@@ -353,9 +353,12 @@ func rowQueueRetirementRefuses(t *testing.T, ctx context.Context, observer, work
 		return s
 	}
 	before := snapshot()
+	for _, forced := range []string{"false", "true"} {
+		if _, err := worker.Exec(ctx, "select todo.tesl_close_row_epoch(null,null,null,null,null,null,null,null,"+forced+")"); err == nil || !strings.Contains(err.Error(), "invalid additive epoch retirement") {
+			t.Fatalf("malformed queue epoch accepted: %v", err)
+		}
+	}
 	for _, sql := range []string{
-		"select todo.tesl_close_row_epoch(null,null,null,null,null,null,null,null,false)",
-		"select todo.tesl_close_row_epoch(null,null,null,null,null,null,null,null,true)",
 		"select todo.tesl_retire_row_window(null,null,null,null,null,null)",
 		"select todo.tesl_begin_row_contract(null,null)",
 		"select todo.tesl_register_row_contract(null,null,null,null,null,null,null,null,null,null)",
@@ -369,10 +372,8 @@ func rowQueueRetirementRefuses(t *testing.T, ctx context.Context, observer, work
 	}
 	if version == 2 {
 		for _, force := range []bool{false, true} {
-			for _, dry := range []bool{false, true} {
-				if err := teslrt.TeslTestRowQueueEpochGuard(ctx, worker, DDatabase, roles, force, dry); err == nil || !strings.Contains(err.Error(), "queue-bearing history retirement is not supported") {
-					t.Fatalf("epoch force=%t dry=%t: %v", force, dry, err)
-				}
+			if err := teslrt.TeslTestRowQueueEpochGuard(ctx, worker, DDatabase, roles, force, true); err != nil {
+				t.Fatalf("additive queue epoch preview force=%t: %v", force, err)
 			}
 		}
 	}
@@ -382,7 +383,7 @@ func rowQueueRetirementRefuses(t *testing.T, ctx context.Context, observer, work
 }
 
 // The owner injection calibrates admission's post-wait snapshot independently
-// of the deliberately unsupported queue-retirement commands above.
+// of the additive queue-epoch application lifecycle.
 func rowQueueAdmissionAfterFence(t *testing.T, ctx context.Context, admin, request *pgx.Conn) {
 	t.Helper()
 	tx, err := admin.Begin(ctx)

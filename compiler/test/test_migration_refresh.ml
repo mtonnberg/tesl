@@ -257,8 +257,8 @@ entity Note table "notes" primaryKey id { id: String, amount: Int ::: Positive a
       (contains output "NotesSchema.V1.Notes.Note.amount");
     check bool "storage is generated after explicit rules" true
       (contains output "Refresh generates the new storage column after these explicit rules are supplied");
-    check bool "does not suggest existing-proof Revalidate" true
-      (contains output "Revalidate only supports adding a first proof");
+     check bool "Revalidate guidance requires exact retained historical evidence" true
+       (contains output "field-local conjunction preserving every historical proof through exact Same evidence; it cannot replace changed historical evidence");
     check bool "does not promise cross-field support" true
       (contains output "whole-entity cross-field reverse proofs are unsupported"));
   with_project ~source (fun root path ->

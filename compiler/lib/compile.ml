@@ -2609,14 +2609,19 @@ let public_row_history_needs_physical entry source =
 let checked_migration_fixtures sources =
  let rec collect acc = function
   | [] -> Result.Ok (List.rev acc)
-  | ((m:Ast.module_form),bytes)::rest ->
-    Result.bind (Migration_declaration.check ~compiler_abi:"compiler-local-unsealed-comparison" ~source:bytes m) (fun declaration ->
-      let acc=match Option.bind declaration Migration_declaration.transforms with
+   | ((m:Ast.module_form),bytes)::rest ->
+     Result.bind (Migration_declaration.check ~compiler_abi:"compiler-local-unsealed-comparison" ~source:bytes m) (fun declaration ->
+       match declaration with
+       | Some checked when Migration_declaration.queue_transforms checked<>[] ->
+         Error [{Migration_sparse.code="MIG028";loc=Location.dummy_loc m.source_file;
+           message="queue conversions are source-checked but protected transformation and repair execution is not available";related=[]}]
+       | _ ->
+       let acc=match Option.bind declaration Migration_declaration.transforms with
        | Some checked when List.exists(fun(row:Migration_transform.row)->row.fixtures<>[])(Migration_transform.rows checked)->checked::acc
        | _->acc in collect acc rest) in
  collect [] sources
 
-let compile_go_source ?(debug=false) ?(path="") filename source =
+let compile_go_source_internal ?(debug=false) ?(path="") ~queue_conversions filename source =
   let path = if path = "" then filename else path in
   match parse_module filename source with
   | Err error -> GoFailure (source_parse_diagnostics filename source error)
@@ -2658,8 +2663,8 @@ let compile_go_source ?(debug=false) ?(path="") filename source =
             match checked_migration_fixtures captured_sources with
             | Error errors -> GoFailure (Migration_declaration.diagnostics_of_errors errors)
             | Ok migration_fixtures ->
-            let fixture_graph=if migration_fixtures=[] then None else lowering in
-            match Emit_go.compile_project ~mode ?fixture_graph ~migration_fixtures ~migration_families ~migration_queues ~queue_codec_records ~entry:entry_emit modules with
+             let fixture_graph=if migration_fixtures=[] && queue_conversions=[] then None else lowering in
+             match Emit_go.compile_project ~mode ?fixture_graph ~migration_fixtures ~queue_conversions ~migration_families ~migration_queues ~queue_codec_records ~entry:entry_emit modules with
            | Ok artifacts ->
              let metadata = match history with None -> [] | Some history ->
               let json = Migration_program.to_json ~quote:json_encode_string history in
@@ -2678,6 +2683,21 @@ let compile_go_source ?(debug=false) ?(path="") filename source =
              GoSuccess (artifacts @ metadata)
            | Error errors -> GoFailure (List.map diag_of_go_emit_error errors))))) in
     match result with Ok result -> result | Error es -> GoFailure (Migration_declaration.diagnostics_of_errors es)
+
+let compile_go_source ?debug ?path filename source =
+  compile_go_source_internal ?debug ?path ~queue_conversions:[] filename source
+
+(* Pure queue-conversion artifact seam, with no CLI activation or database
+   transition. Every original source and compiler resource is guarded through
+   complete ordinary frontend checking and exact Go symbol binding. *)
+let compile_queue_conversion_artifacts checked =
+  let module Q=Migration_queue_transform in
+  match Q.with_checked checked (fun () ->
+    let root=Q.root checked in
+    let source=Source_input.read root.source_file in
+    compile_go_source_internal ~queue_conversions:[checked] root.source_file source) with
+  | Ok result -> result
+  | Error errors -> GoFailure(Migration_declaration.diagnostics_of_errors errors)
 
 (** Checked source/typed-registration artifact seam.  The public compiler uses
     the same path automatically for versioned entity-only PostgreSQL histories;

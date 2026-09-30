@@ -520,6 +520,11 @@
  (libraries tesl_compiler_lib alcotest str unix))
 
 (test
+ (name test_migration_queue_transform)
+ (modules test_migration_queue_transform)
+ (libraries tesl_compiler_lib alcotest str unix))
+
+(test
  (name test_dead_job_metadata)
  (modules test_dead_job_metadata)
  (libraries tesl_compiler_lib alcotest str unix))

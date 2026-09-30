@@ -116,6 +116,29 @@ let disjoint_edits () =
   refuses (S.replace t [insertion," ";insertion," "]);
   refuses (S.replace t [range,"Additive ["])
 let malformed () = refuses (S.read ~file:"/tmp/migration.tesl" ~source:"module Broken exposing [")
+let storage_view annotation = view ("module Schema.Notes.VCurrent exposing [Note]\n" ^
+  "import Tesl.Prelude exposing [String]\n" ^
+  "entity Note table \"notes\" primaryKey id { id: String, title: String " ^ annotation ^ " }\n")
+let storage_field t = List.find_map (function Ast.DEntity e ->
+  List.find_opt (fun (f:Ast.field_def)->f.name="title") e.fields | _->None) (S.module_ t).decls |> Option.get
+let storage_value annotation () =
+  let t=storage_view annotation in
+  let range=get(S.field_storage_value t (storage_field t)) in
+  check string "exact quoted storage name" {|"title__v2"|} (S.text t range);
+  check string "only the quoted storage name changes"
+    (replace {|"title__v2"|} {|"title__v3"|} (S.source t))
+    (get(S.replace t [range,{|"title__v3"|}]))
+let storage_ownership () =
+  let t=storage_view {|@column("title__v2")|} in
+  let other=storage_view {|@column("title__v2")|} in
+  refuses(S.field_storage_value t (storage_field other));
+  let field=storage_field t in
+  refuses(S.field_storage_value t {field with db_column=Some "forged"});
+  let unannotated=storage_view "" in
+  refuses(S.field_storage_value unannotated (storage_field unannotated));
+  let record=view "module App exposing []\nrecord Note { title: String }\n" in
+  let field=List.find_map(function Ast.DRecord {fields=field::_;_}->Some field|_->None)(S.module_ record).decls |> Option.get in
+  refuses(S.field_storage_value record field)
 let () = run "Migration source syntax" ["precise edits",List.map (fun (name,f) -> test_case name `Quick f)
   ["expression boundaries exclude comments and separators",exact_boundaries;
    "leaf ranges preserve raw literal spellings",nested_leaf_ranges;"CRLF and tab byte offsets",crlf_tabs;
@@ -124,4 +147,11 @@ let () = run "Migration source syntax" ["precise edits",List.map (fun (name,f) -
    "stale or reconstructed AST cannot address source",stale_ast;"unsupported expressions remain user-owned",unsupported;
    "formatting preserves syntax fingerprints",formatting_identity;"body changes invalidate fingerprints",semantic_edits;
    "schema role renaming",role_renaming;"disjoint edits and rejected overlap",disjoint_edits;
-   "malformed source refuses editing",malformed]]
+    "malformed source refuses editing",malformed];
+ "storage edits",[
+   test_case "exact annotation string" `Quick (storage_value {|@column("title__v2")|});
+   test_case "annotation spacing" `Quick (storage_value {|@column ( "title__v2" )|});
+   test_case "preceding db annotation" `Quick (storage_value {|@db(text) @column("title__v2")|});
+   test_case "following db annotation" `Quick (storage_value {|@column("title__v2") @db(text)|});
+   test_case "following comment" `Quick (storage_value "@column(\"title__v2\") # preserve ä\n");
+   test_case "foreign, reconstructed, unannotated and record fields refuse" `Quick storage_ownership]]

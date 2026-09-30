@@ -16774,7 +16774,99 @@ let project_entity_bindings (modules : module_form list) =
     | _ -> ()) m.decls) modules;
   if !errors = [] then Ok !bindings else Error (List.rev !errors)
 
-let compile_project ?(mode=Release) ?(row_storage=false) ?(row_physical=false) ?(row_catalog_only=false) ?row_source ?fixture_graph ?(migration_fixtures=[]) ?(migration_families=[]) ?(migration_queues=[]) ?(queue_codec_records=[]) ~(entry : module_form) (modules : module_form list) =
+let compile_project ?(mode=Release) ?(row_storage=false) ?(row_physical=false) ?(row_catalog_only=false) ?row_source ?fixture_graph ?(migration_fixtures=[]) ?(queue_conversions=[]) ?(migration_families=[]) ?(migration_queues=[]) ?(queue_codec_records=[]) ~(entry : module_form) (modules : module_form list) =
+let queue_conversion_artifacts graph exports conversions =
+ let module Q=Migration_queue_transform in
+ let loc=Location.dummy_loc entry.source_file in
+ let require=function Some value->value|None->unsupported loc "queue conversion lost its exact emitted source binding" in
+ let project="tesl.generated/" ^ package_name entry.module_name in
+ let package="teslqueueconversions" in
+ let prefix=project ^ "/internal/" ^ package ^ "." in
+ let imports=ref [] and test_imports=ref [] and bridges=ref [] and bodies=ref [] and registrations=ref [] and tests=ref [] in
+ let imported ?(into=imports) exported =
+  into:=(exported.ex_package,project ^ "/internal/" ^ exported.ex_package)::!into;
+  exported.ex_package in
+ let function_bridge into label (binding:Migration_transform.function_binding) =
+  let owner,declaration=require(Go_graph_lowering.function_binding graph ~owner:binding.owner binding.declaration) in
+  let exported=require(List.find_opt(fun e->e.ex_module=owner.module_name)exports) in
+  let signature=require(Hashtbl.find_opt exported.ex_signatures declaration.name) in
+  if signature.sig_needs_scope then unsupported declaration.loc "queue conversion unexpectedly requires runtime capabilities";
+  let bridge=unique_ident exported.ex_taken label in
+  bridges:={path="internal/" ^ exported.ex_package ^ "/queue_callback_" ^ bridge ^ "_generated.go";
+    contents="package " ^ exported.ex_package ^ "\n\nvar " ^ bridge ^ " = " ^ signature.go_name ^ "\n"}::!bridges;
+  (imported ~into exported) ^ "." ^ bridge in
+ let record identity =
+  let owner,name=match List.rev(String.split_on_char '.' identity) with
+   | name::owner->String.concat "." (List.rev owner),name|_->assert false in
+  let owner,name=require(Go_graph_lowering.symbol graph ~owner name) in
+  let exported=require(List.find_opt(fun e->e.ex_module=owner)exports) in
+  let info=require(Hashtbl.find_opt exported.ex_types.records name) in
+  let codec=require(List.find_opt(fun (c:codec_form)->c.type_name=name)exported.ex_codecs) in
+  if codec.to_json=ToJsonForbidden || codec.from_json=FromJsonForbidden then
+   unsupported loc "queue conversion codec direction disappeared during lowering";
+  let alias=imported exported in
+  alias ^ "." ^ info.rec_go_name,project ^ "/internal/" ^ alias ^ "." ^ info.rec_go_name,
+  alias ^ "." ^ codec_decode_name codec.type_name,alias ^ "." ^ codec_encode_name codec.type_name,exported in
+ List.iteri(fun index checked ->
+  let emitted=Q.with_checked checked (fun () ->
+   List.iter(fun((original:module_form),_)->
+    match List.filter(fun(m:module_form)->m.source_file=original.source_file)(Go_graph_lowering.original_modules graph) with
+    | [actual] when actual=original -> ()
+    | _->unsupported loc "queue conversion belongs to another complete emission graph") (Q.source_texts checked);
+   let binding=Q.callback checked in
+   let callback=function_bridge imports "TeslCompiledQueueCallback" binding in
+   let old_name,new_name=Q.payload_names checked in
+   let old_ty,old_identity,old_decode,old_encode,old_export=record old_name in
+   let new_ty,new_identity,new_decode,new_encode,_=record new_name in
+   ignore(imported ~into:test_imports old_export);
+   List.iteri(fun fixture_index (fixture:Migration_transform.function_binding) ->
+    let reference=function_bridge test_imports "TeslCompiledQueueFixture" fixture in
+    let optional=match fixture.declaration.return_spec with RetPlain {ty=TApp _;_}->true|_->false in
+    let description=go_quote("queue conversion fixture " ^ fixture.identity) in
+    let unwrap=if optional then
+      "fixture := " ^ reference ^ "()\n if fixture.Tag != teslrt.MaybeSomething { t.Fatalf(\"%s: fixture returned Nothing or invalid Maybe\", " ^ description ^ ") }\n row := fixture.SomethingValue\n"
+     else "row := " ^ reference ^ "()\n" in
+    tests:=(Printf.sprintf {|func TestTeslQueueConversionFixture%d_%d(t *testing.T) {
+ if wanted:=os.Getenv("TESL_TEST_NAME");wanted!=""&&wanted!=%s&&wanted!="TestTeslQueueConversionFixture%d_%d" {t.Skip("named test filter")}
+ if kind:=os.Getenv("TESL_TEST_KIND");kind!=""&&kind!="test" {t.Skip("test kind filter")}
+ defer func(){if value:=recover();value!=nil {t.Fatalf("%%s trapped",%s)}}()
+ %s
+ encoded,err:=json.Marshal(%s(row));if err!=nil {t.Fatalf("%%s: frozen fixture encoding failed",%s)}
+ result,err:=Conversion%d.Convert(Conversion%d.SourceVersion(),encoded)
+ if err!=nil||(result.Kind()!="converted"&&result.Kind()!="migration-rejected") {t.Fatalf("%%s: fixture conversion failed: %%v",%s,err)}
+}
+|} index fixture_index description index fixture_index description unwrap old_encode description index index description)::!tests) (Q.fixtures checked);
+   let suffix=string_of_int index in
+   let decoder="decodeOld" ^ suffix and converter="convert" ^ suffix and encoder="encodeNew" ^ suffix and target_decoder="decodeNew" ^ suffix in
+   let document,digest=Migration_row_history.contract Migration_canonical.Migration (Q.semantic checked) in
+   if digest<>Q.digest checked then unsupported loc "queue source digest changed during emission";
+   registrations:=(Printf.sprintf "{document:%s,digest:%s,callbackIdentity:%s,oldType:%s,newType:%s,decoder:%s,converter:%s,encoder:%s,targetDecoder:%s},\n"
+    (go_quote document) (go_quote digest) (go_quote binding.identity) (go_quote old_identity) (go_quote new_identity)
+    (go_quote(prefix ^ decoder)) (go_quote(prefix ^ converter)) (go_quote(prefix ^ encoder)) (go_quote(prefix ^ target_decoder)))::!registrations;
+   bodies:=(Printf.sprintf {|func %s(raw any) teslrt.Check[%s] { return %s(raw) }
+func %s(value %s) teslrt.Migrated[%s] { return %s(value) }
+func %s(value %s) any { return %s(value) }
+func %s(raw any) teslrt.Check[%s] { return %s(raw) }
+var Conversion%d = func() *teslrt.CompiledQueueConversion[%s,%s] {
+ value,err:=teslrt.BindCompiledQueueConversion(%s,%s,%s,%s,%s)
+ if err!=nil {panic(err)}
+ return value
+}()
+|} decoder old_ty old_decode converter old_ty new_ty callback encoder new_ty new_encode
+    target_decoder new_ty new_decode index old_ty new_ty (go_quote digest) decoder converter encoder target_decoder)::!bodies) in
+  match emitted with Ok ()->()|Error errors->unsupported loc "%s" (String.concat "\n" (List.map(fun(e:Migration_sparse.error)->e.message)errors))) conversions;
+ let imports=List.sort_uniq compare !imports |> List.map(fun(alias,path)->"\t" ^ alias ^ " " ^ go_quote path ^ "\n") |> String.concat "" in
+ let test_imports=List.sort_uniq compare !test_imports |> List.map(fun(alias,path)->"\t" ^ alias ^ " " ^ go_quote path ^ "\n") |> String.concat "" in
+ let runtime=Embedded_go_runtime.files |> List.filter_map(fun(name,contents)->
+  if List.mem name (runtime_gate_files "postgres") && (name<>"debug_sql.go" || mode=Debug) then
+   Some {path="internal/teslrt/" ^ name;contents} else None) in
+ List.rev !bridges @ runtime @ [
+  {path="internal/" ^ package ^ "/conversions_generated.go";
+   contents="package " ^ package ^ "\n\nimport (\n\tteslrt " ^ go_quote(project ^ "/internal/teslrt") ^ "\n" ^ imports ^ ")\n\n" ^ String.concat "\n" (List.rev !bodies)};
+  {path="internal/teslrt/queue_conversion_sources_generated.go";
+   contents="package teslrt\n\nfunc init() { registerCompiledQueueConversionSources([]pgQueueConversionSourceSpec{\n" ^ String.concat "" (List.rev !registrations) ^ "}) }\n"};
+  {path="internal/" ^ package ^ "/fixtures_generated_test.go";
+   contents="package " ^ package ^ "\n\nimport (\n\"encoding/json\"\n\"os\"\n\"testing\"\n teslrt " ^ go_quote(project ^ "/internal/teslrt") ^ "\n" ^ test_imports ^ ")\n\nvar _ = teslrt.MaybeNothing\n\n" ^ String.concat "\n" (List.rev !tests)}] in
 (* Generated tests consume exact checked fixture bindings. They execute only
    under the ordinary test runner, never as registration/startup work. *)
 let fixture_artifacts graph exports checked =
@@ -17279,7 +17371,10 @@ let compiled_row_artifacts ~entry ~modules:_ ~exports source =
         let fixtures=if fixture_checks=[] then [] else match emission_graph with
           | Some graph->fixture_artifacts graph exports fixture_checks
           | None->unsupported (Location.dummy_loc entry.source_file) "migration fixtures require their complete original source graph" in
-        Ok (List.rev acc @ fixtures @ Option.fold ~none:[] ~some:(compiled_row_artifacts ~entry ~modules ~exports) row_source)
+        let conversions=if queue_conversions=[] then [] else match emission_graph with
+          | Some graph->queue_conversion_artifacts graph exports queue_conversions
+          | None->unsupported (Location.dummy_loc entry.source_file) "queue conversions require their complete original source graph" in
+        Ok (List.rev acc @ fixtures @ conversions @ Option.fold ~none:[] ~some:(compiled_row_artifacts ~entry ~modules ~exports) row_source)
         with Unsupported error -> Error [error])
       | (m : module_form) :: rest ->
         (match compile_module_internal ?emission_graph ~nominal_mappings:(List.filter (fun mapping ->
@@ -17316,8 +17411,8 @@ let compiled_row_artifacts ~entry ~modules:_ ~exports source =
          List.exists references
            [ "teslrt.HashPassword"; "teslrt.CheckPassword"; "teslrt.NeedsRehash";
              "teslrt.PasswordHash" ] in
-       let needs_postgres =
-         List.exists references [ "teslrt.NewDatabase"; "teslrt.WithDatabase"; "teslrt.PgSql" ] in
+        let needs_postgres = queue_conversions<>[] ||
+          List.exists references [ "teslrt.NewDatabase"; "teslrt.WithDatabase"; "teslrt.PgSql" ] in
        let needs_debug = List.exists (fun (a : artifact) ->
          a.path = "internal/teslrt/debug_file_windows.go") deduped in
        let requires =

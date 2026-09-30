@@ -44,6 +44,15 @@ the same name while the migration uses a new physical column. Cleanup then names
 old storage explicitly, for example `Storage Note "metadata"`. The compiler
 generates that distinction for you.
 
+For another Retype of the same field in a later revision, keep its inherited
+`@column` annotation while writing the new rules. Refresh advances that name to
+the new introducing version when it matches the exact previous field; it also
+handles an explicit Rename followed by Retype. Complete the previous Contract
+before deploying the next transforming version. See
+[lesson 92](../example/learn/lesson92-repeated-retypes.md) for the source workflow
+and [lesson 93](../example/learn/lesson93-testing-breaking-migrations.md) for the
+non-additive test matrix.
+
 Generating a Contract only writes a checked source proposal. It does not run DDL,
 finish backfill, retire a process, or prove that cleanup is safe now. The compiled
 worker must establish any required row generations and the retirement floor before
@@ -123,6 +132,12 @@ surviving version continues serving, and retired versions receive HTTP 503.
 Closing the additive epoch is required before beginning its first transforming
 migration.
 
-This runtime path is still a candidate: ordinary public compiler activation and
-adoption of existing control-format3 deployments are separate prerequisites.
-The command cannot upgrade or recreate such a database.
+For unchanged queue payload contracts, closure also restamps retained jobs before
+the floor advances. Live old claim leases and quarantined payloads block it even
+with `--force`; surviving claimants retain their attempt identity. See
+[lesson 95](../example/learn/lesson95-retiring-unchanged-queue-payloads.md) for the
+supported states, atomic retry behavior and current limits.
+
+This runtime path requires a matching fresh format-5 catalog. Adoption of
+existing control-format3 deployments is separate work; the command cannot
+upgrade or recreate such a database.

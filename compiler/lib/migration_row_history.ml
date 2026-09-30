@@ -72,6 +72,8 @@ let check ~schemas ~edges = protect (fun () ->
       adjacent (expected+1) rest later
     | _ -> reject ~code:"MIG001" loc "incomplete row generation history" in
   adjacent 2 schemas edges;
+  if List.exists(fun edge -> D.queue_transforms edge<>[])edges then
+    reject ~code:"MIG028" loc "checked queue conversions require protected transformation and repair execution before physical planning";
   let generations=Hashtbl.create 16 and relation_owners=Hashtbl.create 16 in
   let describe version schema =
     let storage=checked (P.describe schema) in

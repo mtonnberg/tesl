@@ -367,6 +367,96 @@ let legacy_app () =
   command(Filename.concat(repository())"runtime/go")(Filename.concat output "postgres.log")
     (Printf.sprintf "TESL_ROW_LEGACY_PROGRAMS=%s timeout 180s go test -p 1 -race -tags tesl_migration_test -timeout 150s ./teslrt -run '^TestPgRowLegacy(ContractApp|WindowWrites)$' -count=1 -v" (Filename.quote output)))
 
+let repeated_export destination = project (fun root save path ->
+ remove path; remove (Filename.concat root "schema/notes/v1.tesl");
+ let current=save "schema/notes/v-current.tesl" (replace "Schema.Notes.V1" "Schema.Notes.VCurrent" old) in
+ let application=app |> replace {|put "/one" -> String|} {|put "/one" -> String
+ put "/repair" -> String|}
+   |> replace "handler put editOne()" {|handler put repair() -> String requires [dbWrite Note] =
+  update note in Note
+    where note.id == "reject"
+    set note.metadata = makeMetadata "repaired"
+  "repaired"
+handler put editOne()|}
+   |> replace "editOne, editAll" "editOne, repair, editAll" in
+ let file=save "app.tesl" application in
+ let abi=Result.get_ok(Migration_abi.current()) in
+ let get=function Ok x->x|Error es->fail(String.concat "\n" (List.map(fun(e:Migration_generate.error)->e.message)es)) in
+ let apply manifest=
+   (match Migration_manifest.verify_disk manifest with Ok ()->()|Error _->fail "stale generated migration manifest");
+   List.iter(fun(e:Migration_manifest.edit)->write e.path e.after;
+     ignore(Compile.agent_context_result_source e.path e.after))(Migration_manifest.edits manifest) in
+ let start version=apply (get(Migration_generate.start_with_compatibility
+   ~stored_value_compatibility:(Some(Migration_abi.stored_value_compatibility abi))
+   ~compiler_abi:(Migration_abi.id abi) ~project_root:root ~family:"Schema.Notes" ~version ~documents:[])).manifest in
+ let refresh version body schema =
+   let edge=Filename.concat root (Printf.sprintf "migrations/notes/v%d.tesl" version) in
+   let header=match Migration_header.read ~file:edge (Source_input.read edge) with
+    | Ok(Some h)->let previous,current=Migration_header.recorded_seals h in
+      Migration_header.encode (Result.get_ok(Migration_header.create ~previous ~current))
+    | _->fail "missing generated migration header" in
+   write current schema; ignore(Compile.agent_context_result_source current schema);
+   write edge (header ^ body); ignore(Compile.agent_context_result_source edge (header ^ body));
+   let preview=get(Migration_generate.refresh_with_compatibility
+     ~stored_value_compatibility:(Some(Migration_abi.stored_value_compatibility abi))
+     ~compiler_abi:(Migration_abi.id abi) ~project_root:root ~family:"Schema.Notes" ~version ~documents:[]) in
+   check bool (describe preview.diagnostics) false
+     (List.exists(fun(d:Compile.diagnostic)->d.severity="error")preview.diagnostics);
+   apply preview.manifest;
+   let plan=checked_plan edge in
+   let contract=Result.get_ok(Migration_contract.source ~plan ~version) in
+   let contract_file=Filename.concat root (Printf.sprintf "migrations/notes/v%d-contract.tesl" version) in
+   write contract_file contract; accepts contract_file contract in
+ let build version =
+   check string "identical application in every release" application (Source_input.read file);
+   accepts file application;
+   let artifacts=match Compile.compile_go_file file with Compile.GoSuccess a->a|Compile.GoFailure ds->fail(describe ds) in
+   let output=Filename.concat destination ("v" ^ string_of_int version) in
+   List.iter(fun(a:Emit_go.artifact)->if not(Filename.check_suffix a.path ".json") then
+     write(Filename.concat output a.path)a.contents)artifacts;
+   let driver=replace {|args := []string{"--schema", os.Args[1], "--json"}|}
+     (Printf.sprintf {|args := []string{"--schema", os.Args[1], "--json"}
+ if os.Args[1]=="contract" { args=[]string{"--schema","contract","V%d","--json"} }|} version) (fixture "main.go") in
+   write(Filename.concat output "cmd/access-test/main.go")driver;
+   write(Filename.concat output "internal/teslmodapp/access_effects_test_bridge.go")(fixture "effects.go");
+   command output (Filename.concat output "build.log") "timeout 120s go build -race -tags tesl_migration_test -o app ./cmd/access-test" in
+ build 1; start 1;
+ refresh 2 source (replace {| @column("metadata__v2")|} "" fresh); build 2; start 2;
+ let third=fresh |> replace "extra: String" "detail: String" |> replace "extra ->" "detail ->"
+   |> replace "extra <-" "detail <-" |> replace {|"newText"|} {|"thirdText"|}
+   |> replace {|"detail"|} {|"thirdDetail"|} |> replace {|extra: "made"|} {|detail: "made-v3"|} in
+ let body={|module Schema.Notes.Migrate.V3 exposing [migration, oldNote]
+import Tesl.Migration exposing [Migration, Entity(..), Rule(..), Migrated(..)]
+import Schema.Notes.V2
+import Schema.Notes.VCurrent
+migration = Migration {
+ from: Schema.Notes.V2
+ to: Schema.Notes.VCurrent
+ same: []
+ fixtures: [oldNote]
+ entities: { Note: Migrate convert [Retype metadata, WriteBack metadata metadata backward] }
+}
+fn convert(old: Schema.Notes.V2.Note) -> Migrated Schema.Notes.VCurrent.Note =
+ if old.metadata.text == "reject" then
+  Reject "repeated source rejected"
+ else
+  Row (Schema.Notes.VCurrent.Note { metadata: Schema.Notes.VCurrent.Metadata { text: old.metadata.text, detail: old.metadata.extra }, id: old.id, owner: old.owner, title: old.title, count: old.count, memo: old.memo })
+fn backward(row: Schema.Notes.VCurrent.Note) -> Schema.Notes.V2.Metadata =
+ Schema.Notes.V2.Metadata { text: row.metadata.text, extra: row.metadata.detail }
+fn oldNote() -> Schema.Notes.V2.Note = Schema.Notes.V2.makeNote "retained"
+|} in
+ refresh 3 body third;
+ check bool "public refresh advances inherited physical storage" true
+   (Compile.string_contains (Source_input.read current) {|@column("metadata__v3")|});
+ build 3)
+let repeated_app () =
+ let output=Filename.temp_dir "tesl-repeated-retype-" "" in
+ Fun.protect ~finally:(fun()->if Sys.getenv_opt "TESL_KEEP_ROW_RETYPE_PHYSICAL_TEST"=None then remove output)(fun()->
+   repeated_export output;
+   command(Filename.concat(repository())"runtime/go")(Filename.concat output "postgres.log")
+     (Printf.sprintf "TESL_ROW_REPEATED_RETYPE_PROGRAMS=%s timeout 180s go test -p 1 -race -tags tesl_migration_test -timeout 150s ./teslrt -run '^TestPgRowRepeatedRetypeApp$' -count=1 -v" (Filename.quote output)))
+
 let ()=run "physical Retype and WriteBack" ["PostgreSQL",[test_case "logical removal primitive and JSONB old-field compatibility" `Quick legacy_app;
- test_case "unchanged V1/V2 App with distinct JSONB record codecs" `Quick (native_case "record");
- test_case "unchanged V1/V2 App with distinct JSONB ADT constructors" `Quick adt]]
+  test_case "unchanged V1/V2 App with distinct JSONB record codecs" `Quick (native_case "record");
+  test_case "unchanged V1/V2 App with distinct JSONB ADT constructors" `Quick adt;
+  test_case "public V1/V2/V3 repeated Retype and two Contracts" `Quick repeated_app]]

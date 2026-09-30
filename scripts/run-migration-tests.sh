@@ -60,6 +60,8 @@ if (( $# == 0 )); then
   # Permanent generation baseline: marker/catalog/role guards and real backend deaths.
   go test -race -count=1 -timeout=300s -tags=tesl_migration_test ./teslrt -run '^(TestPgRowBaseline|TestPgRowIndex|TestPgRowEpoch|TestRowBaseline|TestRowPhysical|TestPgRowForwardInvalidation)'
   (cd "$repo_root/compiler" && dune build test/test_migration_queue.exe && dune exec --no-build ./test/test_migration_queue.exe)
+  (cd "$repo_root/compiler" && dune build test/test_migration_queue_transform.exe && dune exec --no-build ./test/test_migration_queue_transform.exe)
+  go test -race -count=1 -timeout=60s ./teslrt -run '^TestQueueConversionPipeline'
   (cd "$repo_root/compiler" && dune build test/test_migration_queue_application.exe && dune exec --no-build ./test/test_migration_queue_application.exe)
   (cd "$repo_root/compiler" && dune build test/test_migration_fixtures.exe && dune exec --no-build ./test/test_migration_fixtures.exe)
   (cd "$repo_root/compiler" && dune build test/test_migration_row_companion.exe && dune exec --no-build ./test/test_migration_row_companion.exe)

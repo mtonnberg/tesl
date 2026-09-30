@@ -11,9 +11,11 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// Queue payload retirement has a separate protocol. Even an empty job table
+// Transforming queue payload retirement has a separate protocol. Even an empty job table
 // cannot establish safety: old writers and leased attempts can still publish
 // work, and dead payloads retain their source identity. Refuse by inventory.
+// Purely additive epoch closure uses its own atomic, exact-contract restamping
+// path; this guard still protects row Contracts and compatibility switches.
 func pgCheckRowQueueRetirement(ctx context.Context, query interface {
 	QueryRow(context.Context, string, ...any) pgx.Row
 }, namespace string) error {

@@ -1096,6 +1096,30 @@ establish frozen seals, the persisted compiler execution ABI, physical plans,
 admission, transformations, or execution. Nonempty compatibility fixtures and
 transformation constructors still require their separate contextual judgments.
 
+**Contextual queue decisions (source checking only).** A Migration may additionally
+contain a literal `jobs` record. Each entry is `Payload: Migrate helperFunction`
+for a changed payload retaining the same family-relative queue and job identities.
+Every changed retained payload requires an entry; unchanged payloads must be
+omitted. Keys may be exact relative or qualified names, or unambiguous short names.
+Duplicate aliases are MIG023. Missing, unknown, moved, removed or renamed payload
+coverage is MIG028. Queue removal and `IgnoreOld` are not supported by this initial
+judgment. A contextual `todo` remains MIG003.
+
+The function must be a pure, directly visible function in a migration helper
+module, with exactly `Old.Payload -> Migrated New.Payload`. Representative
+parameterless fixtures in `fixtures` return that exact old record or builtin
+`Maybe Old.Payload`; the helper must be able to resolve their references.
+Queue fixtures are kept separate from entity fixtures by exact nominal return
+type. Full helper/proof/codec checking and source guards produce checked queue
+conversion evidence; unsaved migration buffers remain the authoritative source
+view. No implicit Same grant is introduced.
+
+Source diagnostics may accept a complete `jobs` decision, but ordinary Go
+application builds and both physical planning paths still report MIG028 until
+protected transformation and typed-repair execution are available. Choosing a
+later installation origin cannot skip that refusal. This source judgment does
+not authorize job claims, rewrites, deletion or retirement.
+
 **Internal sparse migration coverage.** Before checking a row function or deriving a
 single adapter, the coverage pass checks the record's coverage against both complete
 inventories. Entity identity is the owning module path relative to the schema

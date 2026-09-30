@@ -38,7 +38,7 @@ let check ~resolve ~modules ~root ~owner ~(declaration:func_decl) ~mapping =
    | _ -> false in
   let rules=List.filter_map (function
    | R.Revalidated {previous;current;function_ref;loc} ->
-    let target_owner,target=field current and _,prior=field previous in
+    let target_owner,target=field current in
     let identity=match symbol root I.Value (name function_ref) with
      | Some (I.Global identity) -> identity
      | _ -> reject "MIG022" loc "Revalidate must name the target schema's establish" in
@@ -47,18 +47,23 @@ let check ~resolve ~modules ~root ~owner ~(declaration:func_decl) ~mapping =
      | _ -> None) target_owner.decls with
      | [f] when f.kind=EstablishKind && f.capabilities=[] && f.http_methods=[] -> f
      | _ -> reject "MIG022" loc "Revalidate requires a pure establish owned by the target field's schema module" in
-    let input=match fn.params,fn.return_spec,target.proof_ann with
-     | [parameter],RetMaybeAttached {outer_ty=None;binding=result;_},Some (PredApp proof)
-       when prior.proof_ann=None && parameter.proof_ann=None &&
-         proof.args=[target.name] &&
-         same_type target_owner parameter.type_expr target_owner target.type_expr &&
-         same_type target_owner result.type_expr target_owner target.type_expr ->
-       (match result.proof_ann with
-        | Some (PredApp returned) when returned.args=[result.name] &&
-          resolve target_owner I.Predicate returned.pred=resolve target_owner I.Predicate proof.pred &&
-          Option.is_some (resolve target_owner I.Predicate proof.pred) -> parameter.name
+     let rec same_proof result actual expected = match actual,expected with
+       | PredApp actual,PredApp expected ->
+         expected.args=[target.name] && actual.args=[result] &&
+         resolve target_owner I.Predicate actual.pred=resolve target_owner I.Predicate expected.pred &&
+         Option.is_some(resolve target_owner I.Predicate expected.pred)
+       | PredAnd actual,PredAnd expected ->
+         same_proof result actual.left expected.left && same_proof result actual.right expected.right
+       | _ -> false in
+     let input=match fn.params,fn.return_spec,target.proof_ann with
+      | [parameter],RetMaybeAttached {outer_ty=None;binding=result;_},Some proof
+        when parameter.proof_ann=None &&
+          same_type target_owner parameter.type_expr target_owner target.type_expr &&
+          same_type target_owner result.type_expr target_owner target.type_expr ->
+        (match result.proof_ann with
+         | Some returned when same_proof result.name returned proof -> parameter.name
         | _ -> reject "MIG022" loc "Revalidate establish must return Maybe of the exact target field proof")
-     | _ -> reject "MIG022" loc "Revalidate requires an unproved primitive predecessor and a single-subject optional target proof" in
+      | _ -> reject "MIG022" loc "Revalidate requires a primitive field and optional field-local target proofs" in
     let no_shadow names loc = if List.mem input names || List.exists (fun name ->
       primitive target_owner "Tesl.Maybe.Something" name ||
       primitive target_owner "Tesl.Maybe.Nothing" name) names then

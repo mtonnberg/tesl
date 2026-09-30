@@ -2,6 +2,20 @@
 
 > Audience: contributors implementing and verifying migration catalogs.
 
+## Current additions
+
+The initial catalog-only slice below is historical. Fresh format-5 additive
+Worker applications now execute through public compilation. Additive epoch
+closure also supports atomic same-contract queue restamping, preserving surviving
+attempts and refusing live old leases and quarantines. Source validation is a
+shared SQL fragment used by both admission and retirement, without weakening
+ordinary queue operations' READ COMMITTED fence rule. See
+[lesson 95](../example/learn/lesson95-retiring-unchanged-queue-payloads.md).
+Transforming queue histories, typed repairs and installed-catalog upgrades remain
+separate work.
+
+## Initial catalog-only slice
+
 This slice changes the **unpublished row format 5 candidate**. Public format 3
 and private queue format 4 retain their existing catalog, admission functions,
 and refusals. It does not upgrade an installed catalog. An older private row5
