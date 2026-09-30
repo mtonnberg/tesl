@@ -605,6 +605,14 @@ codec SafeNote {
 }
 |}
 
+let test_adt_codec_proof_payload_rejected () =
+  assert_validation_error {|module Forge exposing []
+import Tesl.Prelude exposing [String]
+fact IsAdmin (user: String)
+type Command = Delete user: String ::: IsAdmin user
+codec Command { adtJson }
+|} "adtJson cannot decode proof-annotated payload fields"
+
 (* ── 4. Call-site proof satisfaction ────────────────────────────────────── *)
 
 let test_call_with_checked_arg_ok () =
@@ -1748,6 +1756,7 @@ let () =
       Alcotest.test_case "proof missing via" `Quick test_codec_proof_missing_via;
       Alcotest.test_case "conjunctive proof coverage" `Quick test_codec_conjunctive_proof_requires_full_coverage;
       Alcotest.test_case "conjunctive via chain ok" `Quick test_codec_conjunctive_proof_via_chain_ok;
+      Alcotest.test_case "adtJson proof payload rejected" `Quick test_adt_codec_proof_payload_rejected;
     ];
     "call-site-proofs", [
       Alcotest.test_case "checked arg ok" `Quick test_call_with_checked_arg_ok;
