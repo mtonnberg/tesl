@@ -605,6 +605,24 @@ codec SafeNote {
 }
 |}
 
+let test_adt_json_rejects_nested_unvalidated_proof_record () =
+  assert_validation_error {|module Foo exposing []
+import Tesl.Prelude exposing [String]
+fact Admin (role: String)
+record Claim { role: String ::: Admin role }
+type Command = Run claim: Claim
+codec Command { adtJson }
+|} "generically decodes record 'Claim'"
+
+let test_persisted_adt_rejects_nested_unvalidated_invariant_record () =
+  assert_validation_error {|module Foo exposing []
+import Tesl.Prelude exposing [Int]
+fact Ordered (low: Int) (high: Int)
+record Range { low: Int, high: Int } ::: Ordered low high
+type Payload = Put value: Range
+entity Row table "rows" primary key id { id: Int, payload: Payload }
+|} "generically decodes record 'Range'"
+
 (* ── 4. Call-site proof satisfaction ────────────────────────────────────── *)
 
 let test_call_with_checked_arg_ok () =
@@ -1748,6 +1766,8 @@ let () =
       Alcotest.test_case "proof missing via" `Quick test_codec_proof_missing_via;
       Alcotest.test_case "conjunctive proof coverage" `Quick test_codec_conjunctive_proof_requires_full_coverage;
       Alcotest.test_case "conjunctive via chain ok" `Quick test_codec_conjunctive_proof_via_chain_ok;
+      Alcotest.test_case "adtJson rejects nested unvalidated proof record" `Quick test_adt_json_rejects_nested_unvalidated_proof_record;
+      Alcotest.test_case "persisted ADT rejects nested unvalidated invariant record" `Quick test_persisted_adt_rejects_nested_unvalidated_invariant_record;
     ];
     "call-site-proofs", [
       Alcotest.test_case "checked arg ok" `Quick test_call_with_checked_arg_ok;
