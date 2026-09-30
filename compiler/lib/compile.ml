@@ -3863,11 +3863,15 @@ let check_files (filenames : string list) : diagnostic list =
    body record, a fact used as a `Proven` phantom).  Emitting only the
    entrypoint's decls therefore produced clients that reference types they
    never define.  Merge every transitively imported local module's CLIENT-
-   RELEVANT decls into the entrypoint before emitting: type definitions plus
+   RELEVANT, explicitly imported decls into the entrypoint before emitting:
+   type definitions plus
    the check/auth/establish functions the emitters consult to classify facts
    (client-side validator vs server-only).  Runtime/API surface decls (api,
    server, database, queue, …) are NOT merged — only the entrypoint defines
-   the client's endpoints.  Names already defined by the entrypoint win. *)
+   the client's endpoints.  A declaration must be exported by its defining
+   module and named in the importing module's exposing list; this preserves the
+   visibility boundary already enforced by the checker.  Names already defined
+   by the entrypoint win. *)
 let merge_imported_client_decls (entry : Ast.module_form) : Ast.module_form =
   let is_client_decl = function
     | Ast.DFact _ | Ast.DType _ | Ast.DRecord _ | Ast.DEntity _
@@ -3892,6 +3896,17 @@ let merge_imported_client_decls (entry : Ast.module_form) : Ast.module_form =
     | Some k -> Hashtbl.replace seen_names k ()
     | None -> ()
   ) entry.Ast.decls;
+  let exported_names (m : Ast.module_form) =
+    List.map (function
+      | Ast.ExportName name | Ast.ExportAdt name -> name
+    ) m.Ast.exports
+  in
+  let visible_through (imp : Ast.import_decl) (m : Ast.module_form) name =
+    List.mem name (exported_names m)
+    && match imp.Ast.names with
+       | Ast.ImportAll -> true
+       | Ast.ImportExposing names -> List.mem name names
+  in
   let rec walk (m : Ast.module_form) : Ast.top_decl list =
     List.concat_map (fun (imp : Ast.import_decl) ->
       let path =
@@ -3909,8 +3924,13 @@ let merge_imported_client_decls (entry : Ast.module_form) : Ast.module_form =
               List.filter (fun d ->
                 is_client_decl d
                 && (match decl_key d with
-                    | Some k when Hashtbl.mem seen_names k -> false
-                    | Some k -> Hashtbl.replace seen_names k (); true
+                    | Some k ->
+                      let name = String.sub k (String.index k ':' + 1)
+                        (String.length k - String.index k ':' - 1) in
+                      if Hashtbl.mem seen_names k
+                         || not (visible_through imp im name)
+                      then false
+                      else (Hashtbl.replace seen_names k (); true)
                     | None -> false)
               ) im.Ast.decls
             in
