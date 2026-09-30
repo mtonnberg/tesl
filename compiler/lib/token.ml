@@ -10,7 +10,7 @@ type t =
   | BIGINT  of string    (** canonical decimal digits, no sign; magnitude outside native OCaml int range *)
   | FLOAT   of float
   | STRING  of string    (** plain string, escapes already resolved *)
-  | INTERP  of string    (** raw interpolated-string source, e.g. "hi ${x}!" *)
+  | INTERP  of string * int array (** decoded content and byte offsets from its opening quote *)
   | TRUE
   | FALSE
   (* ── Identifiers ────────────────────────────────────────────────────────── *)
@@ -140,7 +140,7 @@ let pp fmt t =
   let s = match t with
     | INDENT -> "INDENT" | DEDENT -> "DEDENT" | NEWLINE -> "NEWLINE"
     | INT n -> string_of_int n | BIGINT s -> s | FLOAT f -> string_of_float f
-    | STRING s -> Printf.sprintf "%S" s | INTERP s -> Printf.sprintf "INTERP(%S)" s
+    | STRING s -> Printf.sprintf "%S" s | INTERP (s, _) -> Printf.sprintf "INTERP(%S)" s
     | TRUE -> "true" | FALSE -> "false"
     | IDENT s -> s | UIDENT s -> s
     | HASH_LANG -> "#lang" | TESL -> "tesl"

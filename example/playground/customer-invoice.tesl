@@ -1,0 +1,33 @@
+module CustomerInvoice exposing [Invoice, ForCustomer, checkCustomer, invoiceLabel, showInvoice]
+
+import Tesl.Prelude exposing [String]
+
+# A familiar ownership mix-up: a valid invoice ID, but the wrong customer.
+record Invoice { id: String, customer: String }
+fact ForCustomer (invoice: Invoice, customer: String)
+
+check checkCustomer(invoice: Invoice, customer: String)
+  -> invoice: Invoice ::: ForCustomer invoice customer =
+  if invoice.customer == customer then
+    ok invoice ::: ForCustomer invoice customer
+  else
+    fail 404 "Invoice does not belong to this customer"
+
+# Every caller must supply the check for THIS invoice and THIS customer.
+fn invoiceLabel(invoice: Invoice ::: ForCustomer invoice customer, customer: String) -> String =
+  "Invoice ${invoice.id} for ${customer}"
+
+# In a service, obtain customer from trusted authentication, not user input.
+fn showInvoice(raw: Invoice, customer: String) -> String =
+  let invoice = check checkCustomer raw customer
+  invoiceLabel invoice customer
+
+test "invoice belongs to the requested customer" {
+  let invoice = Invoice { id: "inv-42", customer: "acme" }
+  expect showInvoice invoice "acme" == "Invoice inv-42 for acme"
+}
+
+test "another customer is rejected" {
+  let invoice = Invoice { id: "inv-42", customer: "acme" }
+  expectFail check checkCustomer invoice "other-customer"
+}

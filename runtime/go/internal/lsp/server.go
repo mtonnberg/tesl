@@ -45,18 +45,21 @@ type document struct {
 }
 
 type Server struct {
-	compiler          Compiler
-	documents         map[string]document
-	semanticTokens    map[string]semanticTokenState
-	nextTokenID       uint64
-	shutdown          bool
-	diagnosticMu      sync.Mutex
-	diagnosticRuns    map[string]diagnosticRun
-	diagnosticWG      sync.WaitGroup
-	diagnosticSets    map[string]map[string][]map[string]any
-	nextDiagnostic    uint64
-	diagnosticLocksMu sync.Mutex
-	diagnosticLocks   map[string]*sync.Mutex
+	compiler                Compiler
+	workspaceEditsSupported bool
+	documents               map[string]document
+	semanticTokens          map[string]semanticTokenState
+	nextTokenID             uint64
+	fileChangeVersion       uint64
+	shutdown                bool
+	requests                *requestStream
+	diagnosticMu            sync.Mutex
+	diagnosticRuns          map[string]diagnosticRun
+	diagnosticWG            sync.WaitGroup
+	diagnosticSets          map[string]map[string][]map[string]any
+	nextDiagnostic          uint64
+	diagnosticLocksMu       sync.Mutex
+	diagnosticLocks         map[string]*sync.Mutex
 	// beforeDiagnosticPublish is used by race tests to pause between a query and
 	// its lifecycle check. Production servers leave it nil.
 	beforeDiagnosticPublish func()
@@ -113,32 +116,63 @@ func (server *Server) diagnosticLock(uri string) *sync.Mutex {
 // Run serves one LSP session. It returns the process exit status required by
 // the LSP protocol: exit before shutdown is a failure.
 func (server *Server) Run(ctx context.Context, input io.Reader, output io.Writer) int {
-	reader := protocol.NewReader(input)
+	ctx, cancel := context.WithCancel(ctx)
+	defer func() {
+		cancel()
+		server.waitDiagnostics()
+		if closer, ok := server.compiler.(interface{ Close() error }); ok {
+			_ = closer.Close()
+		}
+	}()
+	server.requests = newRequestStream(ctx, input)
+	defer server.requests.close(input)
 	writer := protocol.NewWriter(output)
 	for {
-		message, err := reader.Read()
-		if errors.Is(err, io.EOF) {
-			return 0
-		}
-		if err != nil {
-			if writeErr := server.writeError(writer, nil, parseError, err.Error()); writeErr != nil {
-				return 1
-			}
-			// A framing error can leave an unread body in the stream. Continuing
-			// could interpret body bytes as a new header, so terminate safely.
+		if err := server.requests.failed(); err != nil {
+			_ = server.writeError(writer, nil, invalidRequest, err.Error())
 			return 1
 		}
-		request, err := protocol.DecodeRequest(message)
-		if err != nil {
-			if writeErr := server.writeError(writer, nil, invalidRequest, err.Error()); writeErr != nil {
+		var item incomingRequest
+		select {
+		case <-server.requests.ctx.Done():
+			if err := server.requests.failed(); err != nil {
+				_ = server.writeError(writer, nil, invalidRequest, err.Error())
+				return 1
+			}
+			return 0
+		case next, ok := <-server.requests.messages:
+			if !ok {
+				if err := server.requests.failed(); err != nil {
+					_ = server.writeError(writer, nil, invalidRequest, err.Error())
+					return 1
+				}
+				return 0
+			}
+			item = next
+		}
+		if item.err != nil {
+			server.requests.finish(item)
+			if writeErr := server.writeError(writer, nil, item.code, item.err.Error()); writeErr != nil || item.terminal {
 				return 1
 			}
 			continue
 		}
+		request := item.request
 		isNotification := len(request.ID) == 0
-		status, err := server.handle(ctx, request, writer)
+		requestCtx := ctx
+		if item.pending != nil {
+			requestCtx = item.pending.ctx
+		}
+		status := -1
+		var err error
+		if item.pending != nil && requestCtx.Err() != nil {
+			err = server.writeError(writer, request.ID, requestCancelled, "request cancelled")
+		} else {
+			status, err = server.handle(requestCtx, request, writer)
+		}
 		if err != nil {
 			if isNotification {
+				server.requests.finish(item)
 				continue
 			}
 			code := internalError
@@ -147,9 +181,11 @@ func (server *Server) Run(ctx context.Context, input io.Reader, output io.Writer
 				code = protocolErr.code
 			}
 			if writeErr := server.writeError(writer, request.ID, code, err.Error()); writeErr != nil {
+				server.requests.finish(item)
 				return 1
 			}
 		}
+		server.requests.finish(item)
 		if status >= 0 {
 			return status
 		}
@@ -159,7 +195,26 @@ func (server *Server) Run(ctx context.Context, input io.Reader, output io.Writer
 func (server *Server) handle(ctx context.Context, request protocol.Request, writer *protocol.Writer) (int, error) {
 	switch request.Method {
 	case "initialize":
-		return -1, server.writeResult(writer, request.ID, initializeResult())
+		var params struct {
+			Capabilities struct {
+				Workspace struct {
+					WorkspaceEdit struct {
+						DocumentChanges bool   `json:"documentChanges"`
+						FailureHandling string `json:"failureHandling"`
+					} `json:"workspaceEdit"`
+				} `json:"workspace"`
+			} `json:"capabilities"`
+		}
+		if err := json.Unmarshal(request.Params, &params); err != nil {
+			return -1, &requestError{code: invalidRequest, message: "invalid initialize params"}
+		}
+		edit := params.Capabilities.Workspace.WorkspaceEdit
+		server.workspaceEditsSupported = edit.DocumentChanges && (edit.FailureHandling == "transactional" || edit.FailureHandling == "textOnlyTransactional")
+		result := initializeResult()
+		if !server.workspaceEditsSupported {
+			result["capabilities"].(map[string]any)["renameProvider"] = false
+		}
+		return -1, server.writeResult(writer, request.ID, result)
 	case "initialized":
 		return -1, nil
 	case "shutdown":
@@ -533,6 +588,7 @@ func (server *Server) didChangeWatchedFiles(ctx context.Context, raw json.RawMes
 			return errors.New("workspace/didChangeWatchedFiles: invalid params")
 		}
 	}
+	server.fileChangeVersion++
 	server.scheduleAllDiagnostics(ctx, writer)
 	return nil
 }
@@ -644,7 +700,7 @@ func (server *Server) queryAt(ctx context.Context, raw json.RawMessage, flag str
 	return payload, doc, err
 }
 
-func (server *Server) queryDocumentPosition(ctx context.Context, doc document, position protocol.Position, flag string) ([]byte, error) {
+func (server *Server) queryDocumentPosition(ctx context.Context, doc document, position protocol.Position, flag string, extra ...string) ([]byte, error) {
 	index := protocol.NewLineIndex(doc.Text)
 	offset, err := index.Offset(position)
 	if err != nil {
@@ -655,8 +711,8 @@ func (server *Server) queryDocumentPosition(ctx context.Context, doc document, p
 		return nil, err
 	}
 	byteColumn := offset - lineStart
-	payload, _, err := server.querySourceJSON(ctx, flag, doc, server.sourceOverlays(),
-		strconv.Itoa(position.Line), strconv.Itoa(byteColumn))
+	arguments := append([]string{strconv.Itoa(position.Line), strconv.Itoa(byteColumn)}, extra...)
+	payload, _, err := server.querySourceJSON(ctx, flag, doc, server.sourceOverlays(), arguments...)
 	return payload, err
 }
 
@@ -717,46 +773,25 @@ type compilerLocation struct {
 	Kind    string `json:"kind"`
 }
 
-type definitionResponse struct {
-	Version    int               `json:"version"`
-	Definition *compilerLocation `json:"definition"`
-}
-
-func (server *Server) writeDefinition(ctx context.Context, id json.RawMessage, raw json.RawMessage, writer *protocol.Writer) error {
-	payload, doc, err := server.queryAt(ctx, raw, "--definition-json")
-	if err != nil {
-		return server.writeError(writer, id, internalError, err.Error())
-	}
-	var response definitionResponse
-	if err := decodeVersioned("--definition-json", payload, &response); err != nil {
-		return server.writeError(writer, id, internalError, err.Error())
-	}
-	if response.Definition == nil {
-		return server.writeResult(writer, id, nil)
-	}
-	location := map[string]any{
-		"uri": protocol.PathToURI(response.Definition.File),
-		"range": map[string]protocol.Position{
-			"start": sourceLocationPosition(doc, response.Definition.Line, response.Definition.Col),
-			"end":   sourceLocationPosition(doc, response.Definition.EndLine, response.Definition.EndCol),
-		},
-	}
-	return server.writeResult(writer, id, location)
-}
-
 type completionResponse struct {
 	Version     int                  `json:"version"`
 	Completions []compilerCompletion `json:"completions"`
 }
 
 type compilerCompletion struct {
-	Label  string `json:"label"`
-	Detail string `json:"detail"`
-	Kind   string `json:"kind"`
+	Label          string          `json:"label"`
+	Detail         string          `json:"detail"`
+	Kind           string          `json:"kind"`
+	Module         *string         `json:"module"`
+	Documentation  *string         `json:"documentation"`
+	RequiresImport bool            `json:"requires_import"`
+	TextEdit       json.RawMessage `json:"text_edit"`
+	ImportEdit     json.RawMessage `json:"import_edit"`
+	SortText       string          `json:"sort_text"`
 }
 
 func (server *Server) writeCompletion(ctx context.Context, id json.RawMessage, raw json.RawMessage, writer *protocol.Writer) error {
-	payload, _, err := server.queryAt(ctx, raw, "--completions-json")
+	payload, doc, err := server.queryAt(ctx, raw, "--completions-json")
 	if err != nil {
 		return server.writeError(writer, id, internalError, err.Error())
 	}
@@ -765,13 +800,44 @@ func (server *Server) writeCompletion(ctx context.Context, id json.RawMessage, r
 		return server.writeError(writer, id, internalError, err.Error())
 	}
 	items := make([]map[string]any, 0, len(response.Completions))
+	snapshot := server.completionSnapshot()
 	for _, completion := range response.Completions {
-		items = append(items, map[string]any{
+		item := map[string]any{
 			"label":  completion.Label,
 			"detail": completion.Detail,
 			"kind":   completionKind(completion.Kind),
-			"data":   map[string]string{"name": completion.Label},
-		})
+			"data":   map[string]any{"name": completion.Label, "uri": doc.URI, "version": doc.Version, "snapshot": snapshot, "compilerMetadata": completion.SortText != ""},
+		}
+		if completion.SortText != "" {
+			item["sortText"] = completion.SortText
+		}
+		if completion.Module != nil && *completion.Module != "" {
+			item["detail"] = completion.Detail + " · " + *completion.Module
+			if completion.RequiresImport {
+				hint := "import required"
+				if len(completion.ImportEdit) > 0 && string(completion.ImportEdit) != "null" {
+					hint = "auto-import"
+				}
+				item["detail"] = item["detail"].(string) + " (" + hint + ")"
+			}
+		}
+		if completion.Documentation != nil {
+			item["documentation"] = map[string]string{"kind": "plaintext", "value": *completion.Documentation}
+		}
+		if edit, err := server.completionEdit(doc, completion.TextEdit, true); err != nil {
+			return server.writeError(writer, id, internalError, err.Error())
+		} else if edit != nil {
+			item["textEdit"] = edit
+		}
+		if edit, err := server.completionEdit(doc, completion.ImportEdit, false); err != nil {
+			return server.writeError(writer, id, internalError, err.Error())
+		} else if edit != nil {
+			if primary, ok := item["textEdit"].(map[string]any); ok && completionEditsOverlap(primary, edit) {
+				return server.writeError(writer, id, internalError, "compiler: overlapping completion edits")
+			}
+			item["additionalTextEdits"] = []map[string]any{edit}
+		}
+		items = append(items, item)
 	}
 	return server.writeResult(writer, id, map[string]any{"isIncomplete": false, "items": items})
 }
@@ -783,6 +849,26 @@ func (server *Server) writeCompletionDocumentation(ctx context.Context, id json.
 	}
 	if item == nil {
 		return server.writeResult(writer, id, json.RawMessage(raw))
+	}
+	if data, ok := item["data"].(map[string]any); ok {
+		if value, exists := data["snapshot"]; exists {
+			snapshot, valid := value.(string)
+			if !valid || snapshot != server.completionSnapshot() {
+				return server.writeError(writer, id, -32801, "completion workspace changed; request fresh completions")
+			}
+		}
+		if uri, ok := data["uri"].(string); ok {
+			doc, found := server.documents[uri]
+			version, valid := data["version"].(float64)
+			if !found || !valid || version != float64(doc.Version) {
+				return server.writeError(writer, id, -32801, "completion source changed; request fresh completions")
+			}
+		}
+		if owned, _ := data["compilerMetadata"].(bool); owned {
+			// In particular, a local symbol sharing a stdlib name must not
+			// acquire that library symbol's documentation during resolve.
+			return server.writeResult(writer, id, item)
+		}
 	}
 	label, _ := item["label"].(string)
 	if label == "" || server.compiler == nil {
@@ -877,68 +963,6 @@ func (server *Server) writeTypeDefinition(ctx context.Context, id json.RawMessag
 type referencesResponse struct {
 	Version     int                `json:"version"`
 	Occurrences []compilerLocation `json:"occurrences"`
-}
-
-func (server *Server) writeReferences(ctx context.Context, id json.RawMessage, raw json.RawMessage, writer *protocol.Writer) error {
-	payload, doc, err := server.queryAt(ctx, raw, "--occurrences-json")
-	if err != nil {
-		return server.writeError(writer, id, internalError, err.Error())
-	}
-	var response referencesResponse
-	if err := decodeVersioned("--occurrences-json", payload, &response); err != nil {
-		return server.writeError(writer, id, internalError, err.Error())
-	}
-	locations := make([]map[string]any, 0, len(response.Occurrences))
-	for _, occurrence := range response.Occurrences {
-		locations = append(locations, compilerLocationToLSPForDocument(doc, occurrence))
-	}
-	return server.writeResult(writer, id, locations)
-}
-
-func (server *Server) writePrepareRename(ctx context.Context, id json.RawMessage, raw json.RawMessage, writer *protocol.Writer) error {
-	payload, doc, err := server.queryAt(ctx, raw, "--occurrences-json")
-	if err != nil {
-		return server.writeResult(writer, id, nil)
-	}
-	var response referencesResponse
-	if err := decodeVersioned("--occurrences-json", payload, &response); err != nil {
-		return server.writeResult(writer, id, nil)
-	}
-	var params positionParams
-	if err := json.Unmarshal(raw, &params); err != nil {
-		return server.writeResult(writer, id, nil)
-	}
-	for _, occurrence := range response.Occurrences {
-		location := compilerLocationToLSPForDocument(doc, occurrence)
-		rangeValue, ok := location["range"].(map[string]protocol.Position)
-		if ok && positionInRange(params.Position, rangeValue) {
-			return server.writeResult(writer, id, map[string]any{"range": rangeValue})
-		}
-	}
-	return server.writeResult(writer, id, nil)
-}
-
-func (server *Server) writeRename(ctx context.Context, id json.RawMessage, raw json.RawMessage, writer *protocol.Writer) error {
-	var params renameParams
-	if err := json.Unmarshal(raw, &params); err != nil || params.TextDocument.URI == "" || params.NewName == "" {
-		return server.writeResult(writer, id, nil)
-	}
-	payload, doc, err := server.queryAt(ctx, raw, "--occurrences-json")
-	if err != nil {
-		return server.writeResult(writer, id, nil)
-	}
-	var response referencesResponse
-	if err := decodeVersioned("--occurrences-json", payload, &response); err != nil || len(response.Occurrences) == 0 {
-		return server.writeResult(writer, id, nil)
-	}
-	edits := make([]map[string]any, 0, len(response.Occurrences))
-	for _, occurrence := range response.Occurrences {
-		location := compilerLocationToLSPForDocument(doc, occurrence)
-		edits = append(edits, map[string]any{"range": location["range"], "newText": params.NewName})
-	}
-	return server.writeResult(writer, id, map[string]any{
-		"changes": map[string][]map[string]any{doc.URI: edits},
-	})
 }
 
 type fixPayload struct {
@@ -1709,14 +1733,6 @@ func compilerLocationToLSP(doc document, location compilerLocation) map[string]a
 	}
 }
 
-func compilerLocationToLSPForDocument(doc document, location compilerLocation) map[string]any {
-	result := compilerLocationToLSP(doc, location)
-	if location.File == "" || samePath(location.File, doc.Path) {
-		result["uri"] = doc.URI
-	}
-	return result
-}
-
 func decodeVersioned(flag string, payload []byte, destination any) error {
 	if err := tooling.ValidateCompilerJSON(flag, payload); err != nil {
 		return err
@@ -1741,6 +1757,16 @@ func completionKind(kind string) int {
 		return 3
 	case "field":
 		return 10
+	case "type":
+		return 7
+	case "constructor":
+		return 4
+	case "module":
+		return 9
+	case "capability":
+		return 21
+	case "fact":
+		return 8
 	default:
 		return 6
 	}
@@ -1965,6 +1991,9 @@ func (server *Server) publish(uri string, diagnostics []map[string]any, writer *
 }
 
 func (server *Server) writeResult(writer *protocol.Writer, id json.RawMessage, result any) error {
+	if server.requests.complete(id) {
+		return server.writeError(writer, id, requestCancelled, "request cancelled")
+	}
 	response, err := protocol.NewResultResponse(id, result)
 	if err != nil {
 		return err
@@ -1973,6 +2002,9 @@ func (server *Server) writeResult(writer *protocol.Writer, id json.RawMessage, r
 }
 
 func (server *Server) writeError(writer *protocol.Writer, id json.RawMessage, code int, message string) error {
+	if server.requests.complete(id) {
+		code, message = requestCancelled, "request cancelled"
+	}
 	response, err := protocol.NewErrorResponse(id, code, message, nil)
 	if err != nil {
 		return err
@@ -2003,9 +2035,5 @@ func samePath(left, right string) bool {
 // CompilerFromEnvironment builds the shipped command's default compiler
 // client. Keeping discovery here avoids Racket-specific path logic in the LSP.
 func CompilerFromEnvironment() tooling.Client {
-	executable := os.Getenv("TESL_COMPILER")
-	if executable == "" {
-		executable = "tesl"
-	}
-	return tooling.Client{Executable: executable}
+	return tooling.CompilerFromEnvironment()
 }

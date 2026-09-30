@@ -17,6 +17,8 @@ let assert_contains ~name haystack needle =
   if not (contains needle haystack) then
     Alcotest.failf "%s: expected to find\n  %S\nin:\n%s" name needle haystack
 
+let assert_json_file ~name json filename =
+  assert_contains ~name json ("\"file\":" ^ json_encode_string filename)
 
 let assert_not_contains ~name haystack needle =
   if contains needle haystack then
@@ -38,7 +40,10 @@ let write_text_file path contents =
   Out_channel.with_open_text path (fun oc -> output_string oc contents)
 
 let with_temp_file prefix contents f =
-  let path = Filename.temp_file prefix ".tesl" in
+  (* Exercise JSON escaping on Unix too; Windows paths already contain
+     backslashes, but cannot contain literal quotes in a filename. *)
+  let special = if Sys.win32 then "å with spaces-" else "å with spaces-\\\"-" in
+  let path = Filename.temp_file (prefix ^ special) ".tesl" in
   Fun.protect
     ~finally:(fun () -> if Sys.file_exists path then Sys.remove path)
     (fun () ->
@@ -297,7 +302,7 @@ let test_parser_diagnostic_json_contract () =
   assert_structured_range ~name:"parser contract" d;
   let json = diagnostics_to_json diags in
   assert_contains ~name:"parser json version" json "\"version\":1";
-  assert_contains ~name:"parser json file" json filename;
+  assert_json_file ~name:"parser json file" json filename;
   assert_contains ~name:"parser json source" json "\"source\":\"parser\"";
   assert_contains ~name:"parser json code" json "\"code\":\"E000\"";
   assert_contains ~name:"parser json fix" json "\"fix\":null"
@@ -311,6 +316,16 @@ let test_type_diagnostic_json_contract () =
   let json = diagnostics_to_json diags in
   assert_contains ~name:"type json source" json "\"source\":\"type-checker\"";
   assert_contains ~name:"type json code" json "\"code\":\"T001\""
+
+let test_diagnostic_json_file_escaping () =
+  (* Literal expectations keep the path assertions independent of the encoder. *)
+  List.iter (fun (filename, encoded) ->
+    let json = diagnostics_to_json (check_source filename parser_error_src) in
+    assert_contains ~name:"escaped diagnostic filename" json ("\"file\":" ^ encoded)) [
+    ({|C:\Users\Tesl tools å\main.tesl|}, {|"C:\\Users\\Tesl tools å\\main.tesl"|});
+    ({|/tmp/Tesl "quoted"\tools å/main.tesl|}, {|"/tmp/Tesl \"quoted\"\\tools å/main.tesl"|});
+    ("/tmp/line\nbreak\tname.tesl", {|"/tmp/line\nbreak\tname.tesl"|});
+  ]
 
 let test_validation_diagnostic_json_contract () =
   let diags = check_source "/tmp/validation-contract.tesl" validation_error_src in
@@ -378,7 +393,7 @@ let test_cli_check_json_parser_contract () =
     let exit_code, stdout = run_check_json path in
     Alcotest.(check int) "exit code" 1 exit_code;
     assert_contains ~name:"cli parser version" stdout "\"version\":1";
-    assert_contains ~name:"cli parser file" stdout path;
+    assert_json_file ~name:"cli parser file" stdout path;
     assert_contains ~name:"cli parser source" stdout "\"source\":\"parser\"";
     assert_contains ~name:"cli parser code" stdout "\"code\":\"E000\"";
     assert_contains ~name:"cli parser fix" stdout "\"fix\":null";
@@ -394,7 +409,7 @@ let test_cli_check_json_includes_lint_warning () =
        → 1" behaviour, which reddened warning-only files in CI/editors. *)
     Alcotest.(check int) "exit code" 0 exit_code;
     assert_contains ~name:"cli lint version" stdout "\"version\":1";
-    assert_contains ~name:"cli lint file" stdout path;
+    assert_json_file ~name:"cli lint file" stdout path;
     assert_contains ~name:"cli lint source" stdout "\"source\":\"lint\"";
     assert_contains ~name:"cli lint code" stdout "\"code\":\"W010\"";
     assert_contains ~name:"cli lint severity" stdout "\"severity\":\"warning\"";
@@ -407,7 +422,7 @@ let test_cli_check_json_codec_unknown_type_contract () =
     let exit_code, stdout = run_check_json path in
     Alcotest.(check int) "exit code" 1 exit_code;
     assert_contains ~name:"codec unknown type version" stdout "\"version\":1";
-    assert_contains ~name:"codec unknown type file" stdout path;
+    assert_json_file ~name:"codec unknown type file" stdout path;
     assert_contains ~name:"codec unknown type message" stdout "codec 'Missing' refers to unknown type 'Missing'")
 
 let test_cli_json_queries_total_on_lexer_failure () =
@@ -521,7 +536,7 @@ let test_cli_definition_json_top_level_contract () =
     let exit_code, stdout = run_definition_json path 7 2 in
     Alcotest.(check int) "exit code" 0 exit_code;
     assert_contains ~name:"definition version" stdout "\"version\":1";
-    assert_contains ~name:"definition file" stdout path;
+    assert_json_file ~name:"definition file" stdout path;
     assert_contains ~name:"definition line" stdout "\"line\":2";
     assert_contains ~name:"definition col" stdout "\"col\":3")
 
@@ -530,7 +545,7 @@ let test_cli_definition_json_local_contract () =
     let exit_code, stdout = run_definition_json path 4 2 in
     Alcotest.(check int) "exit code" 0 exit_code;
     assert_contains ~name:"local definition version" stdout "\"version\":1";
-    assert_contains ~name:"local definition file" stdout path;
+    assert_json_file ~name:"local definition file" stdout path;
     assert_contains ~name:"local definition line" stdout "\"line\":3")
 
 let test_cli_definition_json_parser_contract () =
@@ -546,7 +561,7 @@ let test_cli_occurrences_json_top_level_contract () =
     Alcotest.(check int) "exit code" 0 exit_code;
     assert_contains ~name:"occurrences version" stdout "\"version\":1";
     assert_contains ~name:"occurrences field" stdout "\"occurrences\":[";
-    assert_contains ~name:"occurrences file" stdout path;
+    assert_json_file ~name:"occurrences file" stdout path;
     assert_contains ~name:"occurrences helper def line" stdout "\"line\":2";
     assert_contains ~name:"occurrences helper use line" stdout "\"line\":7")
 
@@ -611,7 +626,7 @@ let test_cli_type_at_json_top_level_contract () =
     Alcotest.(check int) "exit code" 0 exit_code;
     assert_contains ~name:"type_at version" stdout "\"version\":1";
     assert_contains ~name:"type_at field" stdout "\"type_at\":{";
-    assert_contains ~name:"type_at file" stdout path;
+    assert_json_file ~name:"type_at file" stdout path;
     assert_contains ~name:"type_at helper use line" stdout "\"line\":7";
     assert_contains ~name:"type_at helper type" stdout "\"type\":\"Int -> Int\"")
 
@@ -719,6 +734,7 @@ let () =
   Alcotest.run "Diagnostics" [
     "contract", [
       Alcotest.test_case "parser diagnostic json" `Quick test_parser_diagnostic_json_contract;
+      Alcotest.test_case "diagnostic JSON filename escaping" `Quick test_diagnostic_json_file_escaping;
       Alcotest.test_case "type diagnostic json" `Quick test_type_diagnostic_json_contract;
       Alcotest.test_case "type diagnostic argument locality" `Quick test_type_diagnostic_argument_locality;
       Alcotest.test_case "type diagnostic local let locality" `Quick test_type_diagnostic_local_let_locality;

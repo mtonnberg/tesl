@@ -157,7 +157,7 @@ func reservedIPv4Label(v4 net.IP) string {
 	}
 	first, second, third := v4[0], v4[1], v4[2]
 	switch {
-	case first == 192 && second == 0 && third == 0:
+	case first == 192 && second == 0 && third == 0 && v4[3] != 9 && v4[3] != 10:
 		return "reserved 192.0.0.0/24 (IETF protocol assignments)"
 	case first == 192 && second == 0 && third == 2:
 		return "documentation 192.0.2.0/24 (TEST-NET-1)"
@@ -170,6 +170,52 @@ func reservedIPv4Label(v4 net.IP) string {
 	default:
 		return ""
 	}
+}
+
+// Both literal-host checks and resolved-address egress use this table. These
+// special-use prefixes are non-global in the IANA IPv6 special-purpose registry:
+// https://www.iana.org/assignments/iana-ipv6-special-registry/
+func reservedIPv6GroupsLabel(groups [8]int) string {
+	switch first := groups[0]; {
+	case first == 0x0100 && groups[1] == 0 && groups[2] == 0 && groups[3] == 0:
+		return "discard-only 100::/64"
+	case first == 0x0100 && groups[1] == 0 && groups[2] == 0 && groups[3] == 1:
+		return "dummy prefix 100:0:0:1::/64"
+	case first == 0x2001 && groups[1] == 2 && groups[2] == 0:
+		return "benchmarking 2001:2::/48"
+	case first == 0x2001 && groups[1] < 0x0200:
+		// IETF protocol assignments are non-global unless a more-specific
+		// allocation says otherwise. Preserve those public exceptions.
+		if groups[1] == 3 || (groups[1] == 4 && groups[2] == 0x112) ||
+			groups[1]&0xfff0 == 0x20 || groups[1]&0xfff0 == 0x30 {
+			return ""
+		}
+		if groups[1] == 1 && groups[2] == 0 && groups[3] == 0 &&
+			groups[4] == 0 && groups[5] == 0 && groups[6] == 0 &&
+			groups[7] >= 1 && groups[7] <= 3 {
+			return ""
+		}
+		return "reserved 2001::/23 (IETF protocol assignments)"
+	case first == 0x2001 && groups[1] == 0x0db8:
+		return "documentation 2001:db8::/32"
+	case first == 0x3fff && groups[1]&0xf000 == 0:
+		return "documentation 3fff::/20"
+	case first == 0x5f00:
+		return "segment routing 5f00::/16"
+	default:
+		return ""
+	}
+}
+
+func reservedIPv6Label(full net.IP) string {
+	if len(full) != net.IPv6len {
+		return ""
+	}
+	var groups [8]int
+	for index := range groups {
+		groups[index] = int(full[index*2])<<8 | int(full[index*2+1])
+	}
+	return reservedIPv6GroupsLabel(groups)
 }
 
 func ipv6Class(full net.IP) addressClass {
@@ -188,6 +234,8 @@ func ipv6Class(full net.IP) addressClass {
 		return classPrivate // fc00::/7 unique-local
 	case group0&0xff00 == 0xff00:
 		return classMulticast // ff00::/8
+	case reservedIPv6Label(full) != "":
+		return classReserved
 	default:
 		return classPublic
 	}
@@ -231,6 +279,9 @@ func IPForbiddenReason(address string) string {
 		return "IPv6 multicast ff00::/8"
 	case classReserved:
 		if label := reservedIPv4Label(v4); label != "" {
+			return label
+		}
+		if label := reservedIPv6Label(net.ParseIP(address)); label != "" {
 			return label
 		}
 		return "unrecognized address form (fail-closed)"

@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Tesl verified content bundle v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["payload", "content_sha256", "run", "sha256"],
+  "properties": {
+    "payload": {
+      "type": "object",
+      "required": ["schema_version", "preview", "source", "compiler", "catalog", "files", "examples", "reference", "errors"],
+      "properties": {
+        "schema_version": {"const": 1},
+        "preview": {"type": "boolean"},
+        "source": {"type": "object", "required": ["repository", "commit", "tree_sha256", "dirty"]},
+        "compiler": {"type": "object", "required": ["sha256", "source_tree_sha256"]},
+        "catalog": {"type": "object", "required": ["schema_version", "examples", "documents", "reference_queries", "error_codes"]},
+        "files": {"type": "object", "additionalProperties": {"type": "object", "required": ["sha256", "text"]}},
+        "examples": {"type": "object", "additionalProperties": {"type": "object", "required": ["broken_source", "broken_sha256", "regions", "verification"]}},
+        "reference": {"type": "object"},
+        "errors": {"type": "object"}
+      }
+    },
+    "content_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "run": {"type": "object", "required": ["created_at", "commands"]},
+    "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+  }
+}

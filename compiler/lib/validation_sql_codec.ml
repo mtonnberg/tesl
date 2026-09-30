@@ -411,8 +411,35 @@ let check_codec_proof_coverage ?facts ?(extra_funcs=[]) (decls : top_decl list) 
       ) fields in
       if field_proofs = [] then None else Some (name, field_proofs)
   ) decls in
+  (* [adtJson] has no syntax for attaching trusted validators to payload
+     fields.  Decoding a proof-annotated field structurally would therefore
+     construct a value whose proof was never established.  Keep payload ADTs
+     available for ordinary fields, but fail closed for this case until the
+     codec can name validators for every required proof. *)
+  let adt_proof_fields = List.filter_map (function
+    | DType (TypeAdt { name; variants; _ }) ->
+      let fields = List.concat_map (fun (variant : adt_variant) ->
+        List.filter_map (fun (field : field_def) ->
+          match field.proof_ann with
+          | Some _ -> Some (variant.ctor, field.name)
+          | None -> None
+        ) variant.fields
+      ) variants in
+      if fields = [] then None else Some (name, fields)
+    | _ -> None
+  ) decls in
   let errors = ref [] in
   List.iter (fun (cf : codec_form) ->
+      (match cf.from_json, List.assoc_opt cf.type_name adt_proof_fields with
+       | FromJsonAdt, Some fields ->
+         let rendered_fields = List.map (fun (ctor, field) -> ctor ^ "." ^ field) fields in
+         errors := make_error cf.loc
+           ~hint:"adtJson cannot validate payload proofs; remove the field proof or use a trusted decoding boundary that establishes it"
+           (Printf.sprintf
+              "codec '%s': adtJson cannot decode proof-annotated payload fields (%s) without trusted validation"
+              cf.name (String.concat ", " rendered_fields))
+           :: !errors
+       | _ -> ());
       (match List.assoc_opt cf.name record_proofs with
        | None -> ()
        | Some field_requirements ->

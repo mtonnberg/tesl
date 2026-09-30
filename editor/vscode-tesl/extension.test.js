@@ -150,7 +150,10 @@ function makeVscode(files, debugCalls, taskCalls, workspacePath = repoRoot, opti
       isTrusted: options.isTrusted !== false,
       workspaceFolders: [workspaceFolder],
       textDocuments: [],
-      getConfiguration: () => ({ get: () => "" }),
+      getConfiguration: () => ({
+        get: (key) => options.workspaceConfiguration?.[key] || options.configuration?.[key] || "",
+        inspect: (key) => ({ globalValue: options.configuration?.[key], workspaceValue: options.workspaceConfiguration?.[key] }),
+      }),
       getWorkspaceFolder: () => workspaceFolder,
       findFiles: async () => files,
       createFileSystemWatcher: () => ({
@@ -227,14 +230,16 @@ function makeVscode(files, debugCalls, taskCalls, workspacePath = repoRoot, opti
   };
 }
 
-function loadExtension(vscode) {
+function loadExtension(vscode, languageClients) {
   const originalLoad = Module._load;
   Module._load = function (request, parent, isMain) {
     if (request === "vscode") return vscode;
     if (request === "vscode-languageclient/node") {
       return {
         LanguageClient: class {
-          constructor() {}
+          constructor(id, name, serverOptions, clientOptions) {
+            languageClients.push({ id, name, serverOptions, clientOptions });
+          }
           start() { return Promise.resolve(); }
           stop() { return Promise.resolve(); }
         },
@@ -255,8 +260,9 @@ async function activateWithFile(file, cleanup, workspacePath = repoRoot, options
   const uri = Uri.file(file);
   const debugCalls = [];
   const taskCalls = [];
+  const languageClients = [];
   const host = makeVscode([uri], debugCalls, taskCalls, workspacePath, options);
-  const extension = loadExtension(host.vscode);
+  const extension = loadExtension(host.vscode, languageClients);
   const context = { extensionPath: __dirname, subscriptions: { push() {} } };
   extension.activate(context);
   await new Promise((resolve) => setImmediate(resolve));
@@ -266,6 +272,7 @@ async function activateWithFile(file, cleanup, workspacePath = repoRoot, options
     uri,
     debugCalls,
     taskCalls,
+    languageClients,
     cleanup: cleanup || (() => {}),
   };
 }
@@ -488,11 +495,17 @@ async function withDapSession({ source, file: existingFile, breakpointLine, laun
     },
   });
   const state = { nextSeq: 1, pending: new Map(), events: new Map(), buffer: Buffer.alloc(0) };
+  let stderr = "";
+  let finished = false;
   const fail = (error) => {
     for (const pending of state.pending.values()) pending.reject(error);
     for (const event of state.events.values()) event.reject(error);
   };
+  const timeout = setTimeout(() => fail(new Error(`DAP scenario timed out\n${stderr}`)), 60000);
   child.on("error", fail);
+  child.on("exit", (code, signal) => {
+    if (!finished) fail(new Error(`DAP exited before scenario completed (${code ?? signal})\n${stderr}`));
+  });
   child.stdout.on("data", (data) => {
     state.buffer = Buffer.concat([state.buffer, data]);
     while (true) {
@@ -514,6 +527,10 @@ async function withDapSession({ source, file: existingFile, breakpointLine, laun
           else pending.resolve(message);
         }
       } else if (message.type === "event") {
+        if (message.event === "output") stderr = (stderr + (message.body?.output || "")).slice(-8192);
+        if (message.event === "terminated" && state.events.has("stopped")) {
+          fail(new Error(`Debug program terminated before reaching its breakpoint\n${stderr}`));
+        }
         const event = state.events.get(message.event);
         if (event) {
           state.events.delete(message.event);
@@ -522,7 +539,7 @@ async function withDapSession({ source, file: existingFile, breakpointLine, laun
       }
     }
   });
-  child.stderr.on("data", () => {});
+  child.stderr.on("data", data => { stderr = (stderr + data).slice(-8192); });
   try {
     await dapRequest(child, state, "initialize", {
       adapterID: "tesl",
@@ -544,6 +561,8 @@ async function withDapSession({ source, file: existingFile, breakpointLine, laun
     await inspect((command, args) => dapRequest(child, state, command, args));
     await dapRequest(child, state, "disconnect");
   } finally {
+    finished = true;
+    clearTimeout(timeout);
     if (process.platform === "win32") child.kill();
     else {
       try { process.kill(-child.pid, "SIGKILL"); } catch (_e) { child.kill(); }
@@ -666,7 +685,7 @@ async function testTerminalCommandsUseArgumentVectors() {
     file,
     () => fs.rmSync(directory, { recursive: true, force: true }),
     directory,
-    { enableTests: false }
+    { enableTests: false, configuration: installedToolFixture(directory) }
   );
   const testName = 'name $(touch injected-test) `tick` "double" \'single\' whitespace';
   const windowsFile = 'C:\\workspace with spaces\\$(calc)\\`tick`\\"quoted".tesl';
@@ -708,7 +727,7 @@ async function testFunctionInputUsesArgumentsAndFilesystemCleanup() {
     file,
     () => fs.rmSync(directory, { recursive: true, force: true }),
     directory,
-    { enableTests: false, inputValues: [callExpr, expected] }
+    { enableTests: false, inputValues: [callExpr, expected], configuration: installedToolFixture(directory) }
   );
   try {
     await fixture.commands.get("tesl.runFunctionWithInput")(fixture.uri);
@@ -740,7 +759,7 @@ async function testUntrustedWorkspaceCannotExecute() {
     file,
     () => fs.rmSync(directory, { recursive: true, force: true }),
     directory,
-    { isTrusted: false, inputValues: ["dangerous", "0"] }
+    { isTrusted: false, inputValues: ["dangerous", "0"], configuration: installedToolFixture(directory) }
   );
   try {
     fixture.vscode.window.activeTextEditor = { document: { fileName: file } };
@@ -774,12 +793,85 @@ async function testUntrustedWorkspaceCannotExecute() {
   }
 }
 
+// Task construction and trust tests need a selected installation, but never
+// execute it. Keep them independent of a developer's PATH or Nix profile.
+function installedToolFixture(directory) {
+  const root = path.join(directory, "toolchain");
+  fs.mkdirSync(path.join(root, "bin"), { recursive: true });
+  fs.mkdirSync(path.join(root, "share", "tesl"), { recursive: true });
+  const manifest = { version: 1, toolchain_version: "test", source_revision: "fixture", components: {} };
+  for (const name of ["tesl", "compiler", "tesl-lsp", "tesl-dap"]) {
+    const relative = `bin/${name}${process.platform === "win32" ? ".exe" : ""}`;
+    fs.writeFileSync(path.join(root, relative), "fixture", { mode: 0o755 });
+    manifest.components[name] = { path: relative, version: "test" };
+  }
+  fs.writeFileSync(path.join(root, "share", "tesl", "toolchain.json"), JSON.stringify(manifest));
+  return { toolchainRoot: root };
+}
+
+async function testManagedSelectionPinsLanguageServerDebuggerAndTasksUntilReload() {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "tesl-managed-editor-"));
+  const root = path.join(directory, "managed å");
+  const configuration = { toolchainRoot: root };
+  const file = path.join(directory, "app.tesl");
+  fs.writeFileSync(file, "module App exposing []\n");
+  const suffix = process.platform === "win32" ? ".exe" : "";
+  const versions = ["0.3.1", "0.3.2"];
+  for (const version of versions) {
+    const inputs = path.join(directory, version);
+    fs.mkdirSync(inputs);
+    const portable = installedToolFixture(inputs).toolchainRoot;
+    const manifestPath = path.join(portable, "share", "tesl", "toolchain.json");
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    manifest.toolchain_version = version;
+    for (const item of Object.values(manifest.components)) item.version = version;
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+    fs.mkdirSync(path.join(root, "versions"), { recursive: true });
+    fs.renameSync(portable, path.join(root, "versions", version));
+  }
+  fs.mkdirSync(path.join(root, "bin"));
+  for (const name of ["tesl", "tesl-lsp", "tesl-dap"]) {
+    fs.writeFileSync(path.join(root, "bin", name + suffix), "managed shim", { mode: 0o755 });
+  }
+  fs.writeFileSync(path.join(root, ".tesl-install.json"), JSON.stringify({
+    version: 1, kind: "tesl-managed-installation", launcher_sha256: "a".repeat(64),
+  }));
+  const select = (version) => fs.writeFileSync(path.join(root, "state.json"), JSON.stringify({
+    version: 1, active_version: version, previous_version: "", generation: versions.indexOf(version) + 1,
+  }));
+  const activate = () => activateWithFile(file, undefined, directory, { enableTests: false, configuration });
+  try {
+    select(versions[0]);
+    const fixture = await activate();
+    assert.equal(fixture.languageClients.length, 1);
+    const lsp = fixture.languageClients[0].serverOptions;
+    assert.equal(lsp.command, path.join(root, "bin", "tesl-lsp" + suffix));
+    assert.equal(lsp.options.env.TESL_INSTALL_VERSION, versions[0]);
+    select(versions[1]);
+    await fixture.commands.get("tesl.runTests")(fixture.uri);
+    const task = fixture.taskCalls[0].task.execution;
+    assert.equal(task.process, path.join(root, "bin", "tesl" + suffix));
+    assert.equal(task.options.env.TESL_INSTALL_VERSION, versions[0]);
+    assert.equal(task.options.env.TESL_COMPILER, path.join(root, "versions", versions[0], "bin", "compiler" + suffix));
+    const dap = fixture.debugFactories[0].createDebugAdapterDescriptor({ configuration: { program: file } });
+    assert.equal(dap.command, path.join(root, "bin", "tesl-dap" + suffix));
+    assert.equal(dap.options.env.TESL_INSTALL_VERSION, versions[0]);
+    assert.equal(dap.options.env.TESL_COMPILER, task.options.env.TESL_COMPILER);
+    const reloaded = await activate();
+    assert.equal(reloaded.languageClients[0].serverOptions.options.env.TESL_INSTALL_VERSION, versions[1]);
+    await reloaded.commands.get("tesl.runTests")(reloaded.uri);
+    assert.equal(reloaded.taskCalls[0].task.execution.options.env.TESL_INSTALL_VERSION, versions[1]);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+}
+
 function testManifestRequiresTrustForExecution() {
   const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, "package.json"), "utf8"));
   assert.deepStrictEqual(manifest.capabilities.untrustedWorkspaces, {
     supported: "limited",
     description: "Language features remain available, but running tests, programs, and debuggers requires Workspace Trust.",
-    restrictedConfigurations: ["tesl.lspBinary", "tesl.dapBinary"],
+    restrictedConfigurations: ["tesl.lspBinary", "tesl.dapBinary", "tesl.toolchainRoot"],
   });
   assert.ok(
     manifest.contributes.commands.every((command) => command.enablement === "isWorkspaceTrusted")
@@ -806,3 +898,79 @@ test("terminal commands pass adversarial POSIX and Windows values as argv", test
 test("function input is an argv value and temporary cleanup does not use a shell", testFunctionInputUsesArgumentsAndFilesystemCleanup);
 test("untrusted workspaces cannot execute Tesl tasks or debug sessions", testUntrustedWorkspaceCannotExecute);
 test("manifest requires Workspace Trust for execution commands", testManifestRequiresTrustForExecution);
+test("managed installations pin LSP, debugger and tasks until editor reload", testManagedSelectionPinsLanguageServerDebuggerAndTasksUntilReload);
+
+test("opening a trusted workspace does not select its compiler executable", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "tesl-lsp-unselected-"));
+  const file = path.join(directory, "app.tesl");
+  const compiler = path.join(directory, "compiler", "_build", "default", "bin", "main.exe");
+  fs.mkdirSync(path.dirname(compiler), { recursive: true });
+  fs.writeFileSync(compiler, "untrusted executable");
+  fs.writeFileSync(file, "module App exposing []\n");
+  const fixture = await activateWithFile(file,
+    () => fs.rmSync(directory, { recursive: true, force: true }), directory,
+    { isTrusted: true, configuration: { lspBinary: process.execPath } });
+  try {
+    assert.strictEqual(fixture.languageClients.length, 1);
+    assert.notStrictEqual(fixture.languageClients[0].serverOptions.options.env.TESL_COMPILER, compiler);
+  } finally { fixture.cleanup(); }
+});
+
+test("user-selected development compiler overrides a global installation across editor workflows", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "tesl-local-development-"));
+  const configuration = installedToolFixture(directory);
+  const compiler = path.join(directory, "compiler", "_build", "default", "bin", "main.exe");
+  const dapSource = path.join(directory, "runtime", "go", "cmd", "tesl-dap", "main.go");
+  const file = path.join(directory, "app.tesl");
+  for (const target of [compiler, dapSource, file]) {
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, "fixture");
+  }
+  configuration.compilerBinary = compiler;
+  const fixture = await activateWithFile(file,
+    () => fs.rmSync(directory, { recursive: true, force: true }), directory,
+    { configuration, enableTests: false });
+  try {
+    const lsp = fixture.languageClients[0].serverOptions;
+    await fixture.commands.get("tesl.runTests")(fixture.uri);
+    const task = fixture.taskCalls[0].task.execution;
+    const dap = fixture.debugFactories[0].createDebugAdapterDescriptor({ configuration: { program: file } });
+    for (const env of [lsp.options.env, task.options.env, dap.options.env]) {
+      assert.equal(env.TESL_COMPILER, compiler);
+      assert.equal(env.TESL_OCAML_COMPILER, compiler);
+      assert.equal(env.TESL_REPO_ROOT, directory);
+      assert.equal(env.TESL_STDLIB_DIR, path.join(directory, "tesl"));
+    }
+    assert.notEqual(lsp.command, compiler);
+    assert.notEqual(dap.command, compiler);
+    const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, "package.json"), "utf8"));
+    assert.equal(manifest.contributes.configuration.properties["tesl.compilerBinary"].scope, "machine");
+  } finally { fixture.cleanup(); }
+});
+
+test("repository settings cannot select a development compiler", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "tesl-repository-setting-"));
+  const configuration = installedToolFixture(directory);
+  const file = path.join(directory, "app.tesl");
+  const compiler = path.join(directory, "attacker-compiler");
+  fs.writeFileSync(file, "module App exposing []\n");
+  fs.writeFileSync(compiler, "untrusted executable");
+  const fixture = await activateWithFile(file,
+    () => fs.rmSync(directory, { recursive: true, force: true }), directory,
+    { isTrusted: true, enableTests: false, configuration, workspaceConfiguration: { compilerBinary: compiler } });
+  try {
+    assert.notEqual(fixture.languageClients[0].serverOptions.options.env.TESL_COMPILER, compiler);
+    await fixture.commands.get("tesl.runTests")(fixture.uri);
+    assert.notEqual(fixture.taskCalls[0].task.execution.options.env.TESL_COMPILER, compiler);
+  } finally { fixture.cleanup(); }
+});
+
+test("development compiler settings reject repository-relative paths", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "tesl-relative-setting-"));
+  const configuration = { ...installedToolFixture(directory), compilerBinary: "compiler/_build/default/bin/main.exe" };
+  const file = path.join(directory, "app.tesl");
+  fs.writeFileSync(file, "module App exposing []\n");
+  try {
+    await assert.rejects(activateWithFile(file, undefined, directory, { configuration }), /must be an absolute path/);
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});

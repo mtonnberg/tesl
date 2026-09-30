@@ -110,6 +110,23 @@ func TestLoopbackInEverySpelling(t *testing.T) {
 	}
 }
 
+func TestForbiddenHostRefusesSpecialUseAddresses(t *testing.T) {
+	for _, host := range []string{
+		"192.0.2.1", "198.18.0.1", "198.51.100.1", "203.0.113.1",
+		"[100::1]", "[2001:db8::1]", "0xc0000201", "3221225985",
+		"[::ffff:192.0.2.1]", "[::192.0.2.1]", "[2001:DB8:ffff:ffff:ffff:ffff:ffff:ffff]",
+	} {
+		if !NetIsForbiddenHost(host) {
+			t.Errorf("NetIsForbiddenHost(%q) = false for a special-use address", host)
+		}
+	}
+	for _, host := range []string{"8.8.8.8", "[2606:4700:4700::1111]"} {
+		if NetIsForbiddenHost(host) {
+			t.Errorf("NetIsForbiddenHost(%q) = true for a public address", host)
+		}
+	}
+}
+
 // Where BOTH parsers accept a literal, they must mean the same address — including the IPv6
 // spellings where a hand-rolled parser is most likely to drift (`::`, embedded IPv4, leading
 // zeros, upper case).
@@ -159,7 +176,7 @@ func TestClassAgreesWithNetipPredicates(t *testing.T) {
 		"127.0.0.1", "127.255.255.254", "10.0.0.1", "172.16.0.1", "172.31.255.254",
 		"192.168.0.1", "169.254.0.1", "224.0.0.1", "239.255.255.255", "0.0.0.0",
 		"8.8.8.8", "172.32.0.1", "11.0.0.1",
-		"::1", "fe80::1", "fc00::1", "ff02::1", "::", "2001:db8::1",
+		"::1", "fe80::1", "fc00::1", "ff02::1", "::", "2606:4700:4700::1111",
 	} {
 		parsed, err := netip.ParseAddr(literal)
 		if err != nil {
@@ -388,6 +405,12 @@ func TestOctetBoundarySweepAgainstNetip(t *testing.T) {
 				t.Fatalf("%q: %v", literal, err)
 			}
 			class := ClassifyHost(literal).Tag
+			if literal == "192.0.0.1" {
+				if class != HostClassInvalid {
+					t.Errorf("IETF protocol assignment classified public: %s", literal)
+				}
+				continue
+			}
 			if class == HostClassInvalid || class == HostClassDomainName {
 				t.Errorf("ClassifyHost(%q) = %v for a canonical dotted quad", literal, class)
 				continue

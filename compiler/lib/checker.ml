@@ -112,8 +112,8 @@ type ctx = {
   ord_eq_calls : (string * ty list * Location.loc) list ref;
   (** Module-wide: (callee-name, resolved arg types, call loc) recorded at each
       direct call, discharged after the module is checked. *)
-  server_tools_env : (string * (string option * server_tools_endpoint list)) list;
-  (** `serverTools` static surface: server name → (the user TYPE name bound by
+  server_tools_env : (string * (type_expr option * server_tools_endpoint list)) list;
+  (** `serverTools` static surface: server name → (the complete user type bound by
       the api's `auth` lines (None when no non-SSE endpoint declares auth), the
       non-SSE endpoints with their tool names + normalized auth predicates).
       Server names are declarative configuration, not expression values (the
@@ -888,37 +888,38 @@ let resolve_local_import_path = Validation_common.resolve_local_import_path
    check*, and in a whole-project / batch run the same shared module is
    re-parsed by every file that imports it.
 
-   This cache memoizes the read+parse by resolved path.  The compiler is a
-   one-shot process and never mutates source files mid-run, so caching by path
-   is sound: a given path always parses to the same result.  The cache is
-   purely a performance optimization — every call site behaves exactly as
-   before (same [Parser.result], same handling of a missing file), so emitted
-   output and diagnostics are byte-identical.
-
-   [clear_import_parse_cache] is exposed for tests / long-lived hosts that may
-   want a fresh slate; the normal CLI never needs to call it. *)
-let import_parse_cache : (string, module_form Parser.result option) Hashtbl.t =
+   Reuse parses by content, never just path or mtime: a long-lived query host
+   can observe edits, deleted/recreated imports, or same-size atomic saves.
+   Reading before lookup also prevents caching a missing file forever. Cache
+   retention is bounded; larger modules remain valid but are parsed uncached. *)
+let import_parse_cache : (string, string * module_form Parser.result) Hashtbl.t =
   Hashtbl.create 32
 
-let clear_import_parse_cache () = Hashtbl.reset import_parse_cache
+let import_cache_bytes = ref 0
+let clear_import_parse_cache () =
+  Hashtbl.reset import_parse_cache;
+  import_cache_bytes := 0
 
-(** Read + parse a locally-imported module at [path], memoized by path.
+(** Read + parse a locally-imported module at [path], memoized by content.
     Returns [None] if the file does not exist (so callers can keep their
     existing "skip missing import" behavior), otherwise [Some result] where
     [result] is the parse outcome ([Ok]/[Err]) exactly as
     [Parser.parse_module] would return it for a fresh read. *)
 let parse_local_import_module (path : string) : module_form Parser.result option =
-  match Hashtbl.find_opt import_parse_cache path with
-  | Some cached -> cached
-  | None ->
-    let result =
-      if not (Sys.file_exists path) then None
-      else
-        let source = In_channel.with_open_text path In_channel.input_all in
-        Some (Parser.parse_module path source)
-    in
-    Hashtbl.replace import_parse_cache path result;
-    result
+  if not (Sys.file_exists path) then (Hashtbl.remove import_parse_cache path; None)
+  else
+    let source = In_channel.with_open_bin path In_channel.input_all in
+    match Hashtbl.find_opt import_parse_cache path with
+    | Some (previous, parsed) when previous = source -> Some parsed
+    | _ ->
+      let parsed = Parser.parse_module path source in
+      let size = String.length source in
+      if size <= 1024 * 1024 then (
+        if Hashtbl.length import_parse_cache >= 256
+           || !import_cache_bytes + size > 8 * 1024 * 1024 then clear_import_parse_cache ();
+        Hashtbl.replace import_parse_cache path (source, parsed);
+        import_cache_bytes := !import_cache_bytes + size);
+      Some parsed
 
 let load_imported_func_kinds (m : module_form) : (string * func_kind) list =
   let is_tesl_module name =
@@ -2769,9 +2770,8 @@ let rec infer_expr ctx (e : expr) : ty =
         | Some (auth_ty_opt, endpoints) ->
           let user_ty = infer_expr ctx user_arg in
           (match auth_ty_opt with
-           | Some auth_ty_name ->
-             unify_at ctx (expr_loc user_arg) user_ty
-               (ty_of_type_expr (TName { name = auth_ty_name; loc }))
+           | Some auth_ty ->
+             unify_at ctx (expr_loc user_arg) user_ty (ty_of_type_expr auth_ty)
            | None -> ());
           (match user_arg with
            | EVar { name = uname; _ } ->
@@ -2855,9 +2855,8 @@ let rec infer_expr ctx (e : expr) : ty =
         | Some (auth_ty_opt, endpoints) ->
           let user_ty = infer_expr ctx user_arg in
           (match auth_ty_opt with
-           | Some auth_ty_name ->
-             unify_at ctx (expr_loc user_arg) user_ty
-               (ty_of_type_expr (TName { name = auth_ty_name; loc }))
+           | Some auth_ty ->
+             unify_at ctx (expr_loc user_arg) user_ty (ty_of_type_expr auth_ty)
            | None -> ());
           (match user_arg with
            | EVar { name = uname; _ } ->
@@ -6385,6 +6384,7 @@ let tesl_module_predicate_exports : (string * string list) list = [
   ("Tesl.Int32",   ["IsNonNegative"; "IsNonZero"]);
   ("Tesl.Float",   ["FloatNonZero"; "FloatNonNegative"]);
   ("Tesl.Dict",    ["HasKey"]);
+  ("Tesl.Money",   ["SameCurrency"; "NonNegativeMoney"; "RateFor"]);
   ("Tesl.CivilTime",
    ["IsDayOfMonth"; "IsMonthNumber"; "IsDayOfYear"; "IsWeekNumber";
     "IsWeekdayNumber"; "IsMonthLength"; "DayOfMonth"; "SameCalendar"]);
@@ -6961,14 +6961,18 @@ let check_fact_name_distinctness (m : module_form) : type_error list =
   let imported_stdlib_preds =
     collect_explicitly_imported_stdlib_predicates m @ signature_stdlib_preds in
   let stdlib_errors =
-    List.filter_map (fun (name, loc) ->
-      if List.mem name imported_stdlib_preds then
+    List.sort_uniq compare imported_stdlib_preds
+    |> List.filter_map (fun name ->
+      match Hashtbl.find_opt owners name with
+      | Some user_owners ->
+        let loc = try Hashtbl.find import_loc_of name
+          with Not_found -> Location.dummy_loc m.source_file in
         Some { loc; message = Printf.sprintf
-          "fact `%s` shadows the imported stdlib proof predicate `%s`; a proof \
-           predicate has a single owning module. Drop the local `fact %s` and use \
-           the imported one, or rename this fact." name name name; fix = None }
-      else None
-    ) local_facts
+          "proof predicate `%s` is owned by both imported stdlib module and user \
+           module(s) %s; a proof predicate has a single owning module. Rename the \
+           user-module fact, or do not import it into this scope."
+          name (String.concat ", " (List.sort compare user_owners)); fix = None }
+      | None -> None)
   in
   ambiguity_errors @ stdlib_errors
 
@@ -7407,7 +7411,7 @@ let check_ord_eq_calls ctx =
          ) constraints)
   ) !(ctx.ord_eq_calls)
 
-let check_module_with_metadata ?(source_lines = [||]) (m : module_form) : local_binding_info list * expr_type_info list * field_access_info list * (Location.loc * string) list * (Location.loc * (string * string list)) list * (Location.loc * (string * string list)) list * type_error list =
+let check_module_with_metadata_uncached ?(source_lines = [||]) (m : module_form) : local_binding_info list * expr_type_info list * field_access_info list * (Location.loc * string) list * (Location.loc * (string * string list)) list * (Location.loc * (string * string list)) list * type_error list =
   reset_counter ();
   (* First-Class Units: activate the quantity alias TYPE names this module
      imports from Tesl.Units.  Deliberately NOT restored on exit — the emit
@@ -7588,9 +7592,7 @@ let check_module_with_metadata ?(source_lines = [||]) (m : module_form) : local_
            let auth_ty = List.find_map (fun (ep : Ast.api_endpoint) ->
              match ep.auth with
              | Some (a : Ast.api_auth) ->
-               (match a.binding.type_expr with
-                | TName { name; _ } -> Some name
-                | _ -> None)
+               Some a.binding.type_expr
              | None -> None) non_sse in
            Some (srv.name, (auth_ty, endpoints)))
       | _ -> None) m.decls in
@@ -7837,14 +7839,16 @@ let check_module_with_metadata ?(source_lines = [||]) (m : module_form) : local_
      Per-endpoint predicate INCLUSION (who gets the admin-gated endpoints) is
      decided at each call site by the infer_expr arm; these are the rules that
      do not depend on the caller. *)
-  (if not ctx.server_tools_shadowed then begin
+  (if not ctx.server_tools_shadowed || not ctx.human_actions_shadowed then begin
     let method_str = function
       | Ast.GET -> "get" | Ast.POST -> "post" | Ast.PUT -> "put"
       | Ast.DELETE -> "delete" | Ast.PATCH -> "patch" | Ast.SSE -> "sse" in
     let used_servers : (string * Location.loc) list ref = ref [] in
     let rec walk_st (e : Ast.expr) : unit =
       (match e with
-       | EApp { fn = EApp { fn = EVar { name = "serverTools"; _ }; arg = server_ref; _ }; loc; _ } ->
+       | EApp { fn = EApp { fn = EVar { name; _ }; arg = server_ref; _ }; loc; _ }
+         when (name = "serverTools" && not ctx.server_tools_shadowed)
+           || (name = "humanActions" && not ctx.human_actions_shadowed) ->
          (match server_ref with
           | EConstructor { name; args = []; _ } | EVar { name; _ } ->
             if not (List.mem_assoc name !used_servers) then
@@ -7877,9 +7881,7 @@ let check_module_with_metadata ?(source_lines = [||]) (m : module_form) : local_
         let auth_tys = List.filter_map (fun (ep : Ast.api_endpoint) ->
           match ep.auth with
           | Some (a : Ast.api_auth) ->
-            Some (ep, (match a.binding.type_expr with
-                       | TName { name; _ } -> name
-                       | _ -> "?"))
+            Some (ep, ty_of_type_expr a.binding.type_expr)
           | None -> None) eps in
         (match auth_tys with
          | (_, first_ty) :: rest ->
@@ -7890,7 +7892,7 @@ let check_module_with_metadata ?(source_lines = [||]) (m : module_form) : local_
                   endpoints authenticate a `%s` — serverTools partially applies ONE \
                   user value, so every authed endpoint of the api must bind the same \
                   user type"
-                 sname (method_str ep.method_) ep.path ty first_ty)) rest
+                 sname (method_str ep.method_) ep.path (pp_ty ty) (pp_ty first_ty))) rest
          | [] -> ());
         (* capture params arrive as model JSON — agent-prim whitelist (B4) *)
         List.iter (fun (ep : Ast.api_endpoint) ->
@@ -8151,6 +8153,71 @@ let check_module_with_metadata ?(source_lines = [||]) (m : module_form) : local_
    List.rev !(ctx.server_tools_sites),
    List.rev !(ctx.human_actions_sites),
    import_errors @ export_errors @ fact_ownership_errors @ List.rev !(ctx.errors))
+
+(* Exact transitive source inputs for a checked module. Resolving every edge
+   again observes create/delete and kebab-case precedence changes, including
+   changes to the selected bundled stdlib. Broken parses remain inputs too.
+   Bytes, not mtimes or a lossy hash, identify cached semantic results. This
+   bounded scan only reads/parses imports; it never recursively type-checks them.
+   If the graph cannot be represented safely, the ordinary checker runs uncached. *)
+let module_semantic_inputs (m : module_form) =
+  let inputs = Hashtbl.create 32 in
+  let bytes = ref 0 in
+  let rec visit (m : module_form) =
+    List.iter (fun (imp : import_decl) ->
+      let path = if String.starts_with ~prefix:"Tesl." imp.module_name
+        then lifted_stdlib_source_path imp.module_name
+        else Some (resolve_local_import_path m.source_file imp.module_name) in
+      (* A missing lifted source cannot contribute metadata. Its later creation
+         adds the resolved path/bytes to the key, so that result is invalidated. *)
+      match path with
+      | None -> ()
+      | Some path ->
+        let canonical = Validation_common.canonical_import_path path in
+        if not (Hashtbl.mem inputs canonical) then begin
+          if Hashtbl.length inputs >= 512 then raise Exit;
+          Hashtbl.add inputs canonical None;
+          if Sys.file_exists path then begin
+            if (Unix.stat path).Unix.st_size > 1024 * 1024 then raise Exit;
+            let source = In_channel.with_open_bin path In_channel.input_all in
+            bytes := !bytes + String.length source;
+            if String.length source > 1024 * 1024 || !bytes > 16 * 1024 * 1024 then raise Exit;
+            Hashtbl.replace inputs canonical (Some source);
+            (* Use the same content-aware parser as import checking. Refuse to
+               cache if the file changed between the two reads. *)
+            let parsed = parse_local_import_module path in
+            if In_channel.with_open_bin path In_channel.input_all <> source then raise Exit;
+            match parsed with Some (Parser.Ok imported) -> visit imported | _ -> ()
+          end
+        end) m.imports
+  in
+  try
+    visit m;
+    Some (Hashtbl.fold (fun path source rows -> (path, source) :: rows) inputs [] |> List.sort compare)
+  with Exit | Sys_error _ | Unix.Unix_error _ | Failure _ -> None
+
+(* Read-only session queries may reuse metadata, including inferred types and
+   structured type errors. Preserve the units state that downstream queries
+   observe even when the checker itself is skipped. *)
+let cached_module_metadata = Query_cache.memo ~retain_across_snapshots:true ~limit:128 ~max_weight:(16 * 1024 * 1024)
+  ~value_weight:(fun value -> String.length (Marshal.to_string value []))
+  ~weight:(fun (inputs, lines, m) -> List.fold_left (fun n (path, source) -> n + String.length path
+      + Option.fold ~none:0 ~some:String.length source) 0 inputs
+    + Array.fold_left (fun n s -> n + String.length s) 0 lines
+    + String.length (Marshal.to_string m [Marshal.No_sharing]))
+  (fun (inputs, source_lines, m) ->
+    let result = check_module_with_metadata_uncached ~source_lines m in
+    if module_semantic_inputs m <> Some inputs then
+      failwith "semantic imports changed during checking";
+    result)
+
+let check_module_with_metadata ?(source_lines = [||]) (m : module_form) =
+  let result = if not !Query_cache.enabled then check_module_with_metadata_uncached ~source_lines m
+    else match module_semantic_inputs m with
+    | Some inputs -> cached_module_metadata (inputs, source_lines, m)
+    | None -> check_module_with_metadata_uncached ~source_lines m in
+  ignore (activate_units_aliases_for m);
+  result
 
 let check_module_with_local_bindings (m : module_form) : local_binding_info list * type_error list =
   let local_bindings, _, _, _, _, _, errors = check_module_with_metadata m in

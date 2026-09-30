@@ -9,7 +9,7 @@ import subprocess
 
 
 ROOT = Path(__file__).resolve().parents[1]
-PAGE = ROOT / "playground" / "index.html"
+EDITOR = ROOT / "playground" / "editor.js"
 
 
 class FirstSpan(HTMLParser):
@@ -22,7 +22,7 @@ class FirstSpan(HTMLParser):
             self.attrs = dict(attrs)
 
 
-source = PAGE.read_text(encoding="utf-8")
+source = EDITOR.read_text(encoding="utf-8")
 match = re.search(r"^const esc = s => (.*?);$", source, re.DOTALL | re.MULTILINE)
 assert match, "playground esc helper not found"
 

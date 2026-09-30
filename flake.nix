@@ -9,6 +9,7 @@
   outputs = { self, nixpkgs, flake-utils }:
     flake-utils.lib.eachDefaultSystem (system:
       let
+        toolchainInputs = import ./nix/toolchain-inputs.nix;
         # Go is PINNED to a patch release nixpkgs has not packaged yet.
         #
         # `govulncheck` is a mandatory gate (ci.sh phase 2a), and go1.26.4 — what
@@ -25,15 +26,7 @@
         #
         # Remove this the moment nixpkgs carries go1.26.6 or newer — `nix flake update
         # nixpkgs` then gives the same result with no local patch to maintain.
-        goOverlay = final: prev: {
-          go = prev.go.overrideAttrs (old: rec {
-            version = "1.26.6";
-            src = final.fetchurl {
-              url = "https://go.dev/dl/go${version}.src.tar.gz";
-              sha256 = "1c9czy9wnbp9h89qkzsm0xrp9i57gvnb7nbssx419448qra1qwm0";
-            };
-          });
-        };
+        goOverlay = import ./nix/go-overlay.nix;
         pkgs = import nixpkgs { inherit system; overlays = [ goOverlay ]; };
         staticcheck = pkgs.buildGoModule rec {
           pname = "staticcheck";
@@ -54,7 +47,7 @@
         # Dependencies: ocaml, dune_3, findlib (all stdlib — no opam packages).
         tesl-compiler = pkgs.stdenv.mkDerivation {
           pname   = "tesl-compiler";
-          version = "0.3.1";
+          version = toolchainInputs.version;
 
           src = ./.;
 
@@ -63,6 +56,8 @@
           buildPhase   = "(cd compiler && dune build bin/main.exe)";
           installPhase = ''
             install -Dm755 compiler/_build/default/bin/main.exe $out/bin/tesl-compiler
+            mkdir -p $out/share/tesl/stdlib
+            cp tesl/*.tesl $out/share/tesl/stdlib/
             
             # Install documentation files
             mkdir -p $out/share/tesl/doc
@@ -100,7 +95,7 @@
         # fallback.
         tesl-templates = pkgs.stdenv.mkDerivation {
           pname   = "tesl-templates";
-          version = "0.3.1";
+          version = toolchainInputs.version;
 
           src = pkgs.lib.cleanSourceWith {
             src    = ./templates;
@@ -120,11 +115,16 @@
         # ── Go editor/debug/MCP tools ─────────────────────────────────────────
         tesl-go-tools = pkgs.buildGoModule {
           pname = "tesl-go-tools";
-          version = "0.3.1";
+          version = toolchainInputs.version;
           src = ./.;
           modRoot = "runtime/go";
-          vendorHash = "sha256-SMXMkfkj5ehtjri4CCWPMwOyLIGcaoSgBv8k4DVG86c=";
+          vendorHash = "sha256-oIqFfFUrXs+7Nn3y8Ch5elfHBqvsqgbEr325EBs3soA=";
+          ldflags = [
+            "-X=tesl.dev/runtime/go/internal/toolchain.buildVersion=${toolchainInputs.version}"
+            "-X=tesl.dev/runtime/go/internal/toolchain.buildRevision=${self.rev or "worktree"}"
+          ];
           subPackages = [
+            "cmd/tesl"
             "cmd/tesl-dap"
             "cmd/tesl-debug-attach"
             "cmd/tesl-debug-inspect"
@@ -157,23 +157,30 @@
 
         # Go-only shipped profile.
         goRuntimePreamble = ''
-           export TESL_VERSION="0.3.1"
+           export TESL_VERSION="${toolchainInputs.version}"
           export TESL_OCAML_COMPILER="${tesl-compiler}/bin/tesl-compiler"
           export TESL_DEFAULT_BACKEND="''${TESL_DEFAULT_BACKEND:-go}"
           export TESL_TEMPLATES_DIR="${tesl-templates}/share/tesl-templates"
           export TESL_DEBUG_ATTACH_BIN="${tesl-go-tools}/bin/tesl-debug-attach"
           export TESL_DEBUG_INSPECT_BIN="${tesl-go-tools}/bin/tesl-debug-inspect"
           export TESL_GO="${pkgs.go}/bin/go"
+          export TESL_STDLIB_DIR="${tesl-compiler}/share/tesl/stdlib"
+          export TESL_POSTGRES_BIN="${pkgs.postgresql}/bin"
           export TESL_ZAP="${pkgs.zap}/bin/zap"
           export TESL_NUCLEI="${pkgs.nuclei}/bin/nuclei"
           export PATH="${gnuUserland}:$PATH"
         '';
 
-        # ── CLI body (shared between installed and dev wrappers) ──────────────
-        # Everything after the preamble — the case statement and helpers.
+        # Previous CLI retained as the black-box parity reference.
         cliBody = builtins.readFile ./nix/tesl-cli-body.sh;
 
         tesl-go-cli = pkgs.writeShellScriptBin "tesl" (goRuntimePreamble + cliBody);
+
+        # Nix and native distributions share the Go command implementation.
+        # The shell here only supplies the immutable Nix component paths.
+        tesl-native-cli = pkgs.writeShellScriptBin "tesl" (goRuntimePreamble + ''
+          exec ${tesl-go-tools}/bin/tesl "$@"
+        '');
         
         # ── Dev tesl CLI ──────────────────────────────────────────────────────
         # Used inside devShells.default so developers run against their local
@@ -189,7 +196,9 @@
            export TESL_ZAP="''${TESL_ZAP:-${pkgs.zap}/bin/zap}"
            export TESL_NUCLEI="''${TESL_NUCLEI:-${pkgs.nuclei}/bin/nuclei}"
            export PATH="${gnuUserland}:$PATH"
-        '' + cliBody);
+        '' + ''
+          exec ${tesl-go-tools}/bin/tesl "$@"
+        '');
 
         # ── tesl-lsp wrapper ──────────────────────────────────────────────────
          # Sets TESL_COMPILER for the Go LSP without needing TESL_REPO_ROOT. An
@@ -224,13 +233,19 @@
         # ── Combined default: CLI + LSP + MCP in one profile install ───────────
         tesl-full = pkgs.symlinkJoin {
           name = "tesl";
-          paths = [ tesl-go-cli tesl-compiler tesl-lsp tesl-mcp tesl-debug-tools ] ++ dastTools;
+          paths = [ tesl-native-cli tesl-compiler tesl-lsp tesl-mcp tesl-debug-tools ] ++ dastTools;
         };
 
       in {
         # ── Packages ──────────────────────────────────────────────────────────
           packages = {
-           inherit tesl-compiler tesl-go-cli tesl-lsp tesl-mcp tesl-go-tools tesl-debug-tools tesl-full staticcheck;
+           inherit tesl-compiler tesl-go-cli tesl-native-cli tesl-lsp tesl-mcp tesl-go-tools tesl-debug-tools tesl-full staticcheck;
+          release-plan = pkgs.writeText "tesl-release-plan.json" (builtins.toJSON
+            (import ./nix/release-plan.nix {
+              inherit pkgs;
+              revision = self.rev or "worktree";
+              sourceDateEpoch = self.lastModified or 0;
+            }));
           default = tesl-full;
           # Reusable PostgreSQL so the managed-PG lifecycle (`tesl db`) can source
           # initdb / pg_ctl / createdb via nix without entering a dev shell.
@@ -239,7 +254,7 @@
 
         # ── Apps (for `nix run github:mtonnberg/tesl`) ────────────────────────
         apps = {
-          default  = { type = "app"; program = "${tesl-go-cli}/bin/tesl"; };
+          default  = { type = "app"; program = "${tesl-native-cli}/bin/tesl"; };
           tesl-lsp = { type = "app"; program = "${tesl-lsp}/bin/tesl-lsp"; };
           tesl-mcp = { type = "app"; program = "${tesl-mcp}/bin/tesl-mcp"; };
         };
@@ -269,6 +284,7 @@
             # JavaScript for the browser playground.  Opt-in — the jsoo stanza is
             # gated on the release profile (compiler/playground/dune), so nothing
             # in the normal dev/CI path needs these.
+            elmPackages.elm
             ocamlPackages.js_of_ocaml
             ocamlPackages.js_of_ocaml-compiler
             # Integration test mock servers

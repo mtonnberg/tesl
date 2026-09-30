@@ -16,18 +16,31 @@ compiler-query client.
 | Tool | Args | Wraps | Notes |
 |------|------|-------|-------|
 | `tesl.agent_context` | `{file}` | `--agent-context-json` | **PRIMARY** — read after every edit. `{ok, summary, diagnostics, symbols, proof_obligations}` in one compact snapshot. |
+| `tesl.search` | `{query}` | `--search-json` | Builtin names, descriptions, modules or exact type shapes (e.g. `String -> Int`). Up to 20 results with imports and requirement metadata. 256 UTF-8 bytes maximum; discovery does not prove callability. |
 | `tesl.check` | `{file}` | `--check-json` | Coded diagnostics + suggested fixes. |
 | `tesl.type_at` | `{file, line, col}` | `--type-at-json` | 0-based line, 0-based col. |
 | `tesl.signature` | `{file, line, col}` | `--signature-help-json` | 0-based line, 0-based col. |
 | `tesl.completions` | `{file, line, col}` | `--completions-json` | 0-based line, 0-based col. |
 | `tesl.definition` | `{file, line, col}` | `--definition-json` | 0-based line, 0-based col. |
 | `tesl.references` | `{file, line, col}` | `--occurrences-json` | 0-based line, 0-based col. Same-file occurrences. |
+| `tesl.workspace_definition` | `{file, line, col}` | `--workspace-definition-json` | Cross-file compiler identity, definition, snapshot and exact input hashes; zero-based UTF-8 byte columns. |
+| `tesl.workspace_references` | `{file, line, col}` | `--workspace-references-json` | Compiler-resolved workspace references, including exposing clauses. Inspect `complete` and `problems`; partial indexes never authorize a rename. |
+| `tesl.workspace_rename` | `{file, line, col, new_name, expected_snapshot}` | `--workspace-rename-json` | Checked proposal against the semantic snapshot returned by workspace navigation. Returns all file edits and source preconditions; never applies edits. |
 | `tesl.proof_obligations` | `{file}` | `--agent-context-json` (sliced) | Just the `proof_obligations` array. |
 | `tesl.debug_inspect` | `{file, breakpoints \| break_at, mode?, timeout_ms?}` | `tesl debug-inspect` | Headless debugger — **you set the breakpoints**, incl. conditional & hit-count. |
 | `tesl.debug_attach` | `{project?, action?, break_at?, when?, hit?, timeout_ms?}` | `tesl debug-attach` | Live attach to a running `tesl run --debug` app — arm/re-arm with zero relaunches; the app keeps serving. Actions: `once` (default), `snapshot`, `ping`, `detach`. |
 
 Every tool's text response is the compiler's already-compact JSON, passed through
 verbatim — no re-pretty-printing (token economy).
+
+Workspace rename requires a complete, initially type/proof-valid project. The
+compiler stages the candidate edits, verifies unchanged binding identities and
+reruns type/proof checks. Read-only dependency declarations, stale snapshots and
+conflicts return `safe:false` with no edits. Before returning a safe proposal, MCP
+rechecks all input bytes and the current workspace snapshot. Applying clients must
+revalidate the entire snapshot and apply all edits together; they must not apply a
+subset. Existing same-file tools retain their schemas. Full scope, limits and
+coordinate contracts are in [the editor protocol](../protocol.md#compiler-workspace-navigation-and-checked-rename-proposals).
 
 ### `tesl.debug_inspect`
 

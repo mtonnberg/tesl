@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"tesl.dev/runtime/go/internal/protocol"
+	"tesl.dev/runtime/go/internal/toolchain"
 	"tesl.dev/runtime/go/internal/tooling"
 )
 
@@ -41,12 +42,8 @@ type jsonRPCRequest struct {
 }
 
 func main() {
-	compiler, err := discoverCompiler()
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "tesl-mcp:", err)
-		os.Exit(1)
-	}
-	server := &server{compiler: tooling.Client{Executable: compiler}}
+	server := &server{compiler: tooling.CompilerFromEnvironment()}
+	defer func() { _ = server.compiler.Close() }()
 	reader := protocol.NewLineReader(os.Stdin)
 	writer := protocol.NewLineWriter(os.Stdout)
 	for {
@@ -126,6 +123,12 @@ func (server *server) callTool(ctx context.Context, name string, arguments map[s
 	var args []string
 	queryClient := server.compiler
 	switch name {
+	case "tesl.search":
+		query, ok := arguments["query"].(string)
+		if !ok || len(query) > 256 {
+			return nil, errors.New("query must be a string of at most 256 UTF-8 bytes")
+		}
+		args = []string{"--search-json", query}
 	case "tesl.agent_context", "tesl.proof_obligations":
 		if file == "" {
 			return nil, errors.New("file is required")
@@ -146,6 +149,17 @@ func (server *server) callTool(ctx context.Context, name string, arguments map[s
 		args = sourceQueryArgs("--definition-json", file, line, col)
 	case "tesl.references":
 		args = sourceQueryArgs("--occurrences-json", file, line, col)
+	case "tesl.workspace_definition":
+		args = sourceQueryArgs("--workspace-definition-json", file, line, col)
+	case "tesl.workspace_references":
+		args = sourceQueryArgs("--workspace-references-json", file, line, col)
+	case "tesl.workspace_rename":
+		name, nameOK := arguments["new_name"].(string)
+		snapshot, snapshotOK := arguments["expected_snapshot"].(string)
+		if !nameOK || name == "" || !snapshotOK || snapshot == "" {
+			return nil, errors.New("new_name and expected_snapshot are required")
+		}
+		args = append(sourceQueryArgs("--workspace-rename-json", file, line, col), name, snapshot)
 	case "tesl.debug_inspect":
 		if file == "" {
 			return nil, errors.New("file is required")
@@ -178,6 +192,28 @@ func (server *server) callTool(ctx context.Context, name string, arguments map[s
 	payload, _, err := queryClient.QueryJSON(ctx, args...)
 	if err != nil {
 		return nil, err
+	}
+	if name == "tesl.workspace_rename" {
+		var proposal tooling.WorkspaceResponse
+		if err := json.Unmarshal(payload, &proposal); err != nil {
+			return nil, err
+		}
+		if proposal.Rename != nil && proposal.Rename.Safe {
+			if _, err := tooling.WorkspaceInputTexts(ctx, proposal, nil); err != nil {
+				return nil, err
+			}
+			fresh, _, err := queryClient.QueryFileJSON(ctx, "--workspace-references-json", file, strconv.Itoa(line), strconv.Itoa(col))
+			if err != nil {
+				return nil, err
+			}
+			var current tooling.WorkspaceResponse
+			if err := json.Unmarshal(fresh, &current); err != nil {
+				return nil, err
+			}
+			if !current.Complete || current.Snapshot != proposal.Snapshot {
+				return nil, errors.New("workspace changed while checking rename inputs")
+			}
+		}
 	}
 	if name == "tesl.proof_obligations" {
 		var envelope struct {
@@ -305,19 +341,17 @@ func debugInspectArgs(arguments map[string]any, timeout time.Duration) []string 
 }
 
 func debugInspectCommand() string {
-	if command := os.Getenv("TESL_DEBUG_INSPECT_BIN"); command != "" {
-		return command
-	}
-	command, err := exec.LookPath("tesl-debug-inspect")
-	if err != nil {
-		return ""
-	}
+	command, _ := toolchain.Default().Resolve("tesl-debug-inspect")
 	return command
 }
 
 func toolDefinitions() []map[string]any {
 	types := map[string]any{"type": "object", "required": []string{"file"}, "properties": map[string]any{"file": map[string]string{"type": "string"}}}
 	position := map[string]any{"type": "object", "required": []string{"file", "line", "col"}, "properties": map[string]any{"file": map[string]string{"type": "string"}, "line": map[string]string{"type": "integer"}, "col": map[string]string{"type": "integer"}}}
+	rename := map[string]any{"type": "object", "required": []string{"file", "line", "col", "new_name", "expected_snapshot"}, "properties": map[string]any{
+		"file": map[string]string{"type": "string"}, "line": map[string]any{"type": "integer", "minimum": 0}, "col": map[string]any{"type": "integer", "minimum": 0},
+		"new_name": map[string]string{"type": "string"}, "expected_snapshot": map[string]string{"type": "string"},
+	}}
 	debugInspect := map[string]any{
 		"type":     "object",
 		"required": []string{"file"},
@@ -350,6 +384,9 @@ func toolDefinitions() []map[string]any {
 		},
 	}
 	return []map[string]any{
+		{"name": "tesl.search", "description": "Discover builtins by name, description or exact type shape. Requirements still apply; proof metadata is unavailable. Query is at most 256 UTF-8 bytes.",
+			"inputSchema": map[string]any{"type": "object", "required": []string{"query"}, "properties": map[string]any{"query": map[string]any{"type": "string", "maxLength": 256}}},
+			"annotations": map[string]bool{"readOnlyHint": true, "destructiveHint": false, "openWorldHint": false}},
 		{"name": "tesl.agent_context", "description": "Compact compiler context after an edit.", "inputSchema": types},
 		{"name": "tesl.check", "description": "Compiler diagnostics and fixes.", "inputSchema": types},
 		{"name": "tesl.type_at", "description": "Type at a source position.", "inputSchema": position},
@@ -357,6 +394,9 @@ func toolDefinitions() []map[string]any {
 		{"name": "tesl.completions", "description": "Completion candidates.", "inputSchema": position},
 		{"name": "tesl.definition", "description": "Same-file definition.", "inputSchema": position},
 		{"name": "tesl.references", "description": "Same-file occurrences.", "inputSchema": position},
+		{"name": "tesl.workspace_definition", "description": "Compiler-resolved cross-file definition and immutable workspace snapshot; UTF-8 byte positions.", "inputSchema": position},
+		{"name": "tesl.workspace_references", "description": "Cross-file semantic references, including import/export clauses, with explicit completeness and source preconditions.", "inputSchema": position},
+		{"name": "tesl.workspace_rename", "description": "Check a workspace rename proposal against expected_snapshot from workspace navigation. Returns edits and all source preconditions; never changes files. Incomplete indexes and binding conflicts are refused.", "inputSchema": rename},
 		{"name": "tesl.proof_obligations", "description": "Unproven compiler obligations.", "inputSchema": types},
 		{"name": "tesl.debug_inspect", "description": "Run a debug target to an agent-selected breakpoint.", "inputSchema": debugInspect},
 		{"name": "tesl.debug_attach", "description": "Attach to a running debug target.", "inputSchema": debugAttach},
@@ -365,7 +405,7 @@ func toolDefinitions() []map[string]any {
 
 func isSourceQueryTool(name string) bool {
 	switch name {
-	case "tesl.type_at", "tesl.signature", "tesl.completions", "tesl.definition", "tesl.references":
+	case "tesl.type_at", "tesl.signature", "tesl.completions", "tesl.definition", "tesl.references", "tesl.workspace_definition", "tesl.workspace_references", "tesl.workspace_rename":
 		return true
 	default:
 		return false
@@ -380,24 +420,10 @@ func toolError(message string) map[string]any {
 }
 
 func discoverCompiler() (string, error) {
-	if value := os.Getenv("TESL_COMPILER"); value != "" {
-		return value, nil
-	}
-	if root := os.Getenv("TESL_REPO_ROOT"); root != "" {
-		candidate := filepath.Join(root, "compiler", "_build", "default", "bin", "main.exe")
-		if _, err := os.Stat(candidate); err == nil { // #nosec G703 -- root is the explicit local repository root.
-			return candidate, nil
-		}
-	}
-	if value, err := exec.LookPath("tesl-compiler"); err == nil {
-		return value, nil
-	}
-	if value, err := exec.LookPath("tesl"); err == nil {
-		return value, nil
-	}
 	// Keep MCP alive without a compiler. Tool calls return contained MCP errors;
 	// initialize/tools/list remain usable for clients inspecting capabilities.
-	return "", nil
+	value, _ := toolchain.Default().Resolve("compiler")
+	return value, nil
 }
 
 func numberArgument(arguments map[string]any, name string) int {

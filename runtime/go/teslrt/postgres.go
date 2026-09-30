@@ -94,6 +94,7 @@ type PostgresDB struct {
 	pool           *pgxpool.Pool
 	schema         string
 	bootstrapMutex sync.Mutex
+	outboxReady    bool // protected by bootstrapMutex; runtime DDL runs before first binding
 }
 
 type postgresInitialization struct {
@@ -296,11 +297,18 @@ func (db *PostgresDB) bootstrap(ctx context.Context, tables []PostgresTable) {
 			}
 		}
 	}
-	if err := createPubsubOutbox(ctx, db); err != nil {
-		panic("database: cannot create the pub/sub outbox: " + err.Error())
-	}
-	if err := normalizeLegacyPubsubRows(db); err != nil {
-		panic("database: cannot upgrade the pub/sub outbox: " + err.Error())
+	// Even ALTER ... ADD COLUMN IF NOT EXISTS takes ACCESS EXCLUSIVE. Repeating
+	// runtime upgrades on every WithDatabase can block behind an ordinary outbox
+	// reader/publisher, including this process's own active dispatcher. New
+	// application declarations above still bootstrap against the retained pool.
+	if !db.outboxReady {
+		if err := createPubsubOutbox(ctx, db); err != nil {
+			panic("database: cannot create the pub/sub outbox: " + err.Error())
+		}
+		if err := normalizeLegacyPubsubRows(db); err != nil {
+			panic("database: cannot upgrade the pub/sub outbox: " + err.Error())
+		}
+		db.outboxReady = true
 	}
 }
 

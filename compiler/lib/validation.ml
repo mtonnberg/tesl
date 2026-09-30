@@ -31,6 +31,14 @@ let check_module (m : module_form) : validation_error list =
      load_imported_type_decls).  The harvest contains no walkable bodies, so
      passes that iterate DFunc/DTest bodies validate exactly the same code. *)
   let decls_with_imported_types = decls @ load_imported_type_decls m in
+  (* Inline captures cross the same HTTP proof boundary as named capturers.
+     Reuse their lowered metadata here, before validation can admit a proof. *)
+  let inline_captures = ref [] in
+  let capture_counter = ref 0 in
+  List.iter (function
+    | DApi api -> ignore (Desugar.desugar_api_inline_captures inline_captures capture_counter api)
+    | _ -> ()) decls;
+  let capture_decls = List.map (fun c -> DCapture c) !inline_captures in
   let imported_funcs = load_imported_func_info m in
   let cap_map = build_local_cap_map decls @ load_imported_cap_map m in
   (* Module-level facts computed ONCE and threaded through the passes that would
@@ -65,8 +73,8 @@ let check_module (m : module_form) : validation_error list =
      indexes, and the harvest carries no walkable bodies so the same code is
      traversed either way. *)
   @ (TDatabase @: check_upsert_conflict_target decls_with_imported_types)
-  @ (TCodec @: check_capture_codec_types decls_with_imported_types)
-  @ (TProof @: check_capture_proof_via ~facts decls)
+  @ (TCodec @: check_capture_codec_types (decls_with_imported_types @ capture_decls))
+  @ (TProof @: check_capture_proof_via ~facts (decls @ capture_decls))
   @ (TProof @: check_auth_proof_via ~facts decls)
   @ (TProof @: check_endpoint_proof_subject_binding decls)
   @ (TStructural @: check_api_endpoint_structure ~facts decls)

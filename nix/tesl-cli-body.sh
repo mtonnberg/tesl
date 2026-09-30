@@ -213,7 +213,7 @@ _tesl_test_go_file() {
     return 1
   fi
   (cd "$out" && TESL_TEST_NAME="$test_name" TESL_TEST_KIND="$test_kind" \
-    "${TESL_GO:-go}" test ./...)
+    "${TESL_GO:-go}" test -buildvcs=false ./...)
   status=$?
   rm -rf "$root"
   return "$status"
@@ -237,7 +237,7 @@ _tesl_run_go_file() {
     return 2
   fi
   binary="$root/tesl-app"
-  (cd "$out" && "${TESL_GO:-go}" build -o "$binary" ./cmd/app) || { rm -rf "$root"; return 1; }
+  (cd "$out" && "${TESL_GO:-go}" build -buildvcs=false -o "$binary" ./cmd/app) || { rm -rf "$root"; return 1; }
   if [ "$debug" = "1" ]; then
     TESL_DEBUG=1 TESL_DEBUG_ROOT="$project" "$binary" "$@"
   else
@@ -278,7 +278,7 @@ $dep"
       out="$root/go"
       echo "[tesl watch] Compiling Go module..."
       if "$TESL_OCAML_COMPILER" "$file" --out "$out" && [ -d "$out/cmd/app" ] && \
-          (cd "$out" && "${TESL_GO:-go}" build -o "$root/tesl-app" ./cmd/app); then
+          (cd "$out" && "${TESL_GO:-go}" build -buildvcs=false -o "$root/tesl-app" ./cmd/app); then
         binary="$root/tesl-app"
         echo "[tesl watch] Starting Go app..."
         "$binary" "$@" &
@@ -1055,6 +1055,34 @@ EOF
   } > "$dest/.vscode/launch.json"
 }
 
+# Substitute template values as data; never put manifest text in an awk/sed program.
+_tesl_render_template() {
+  TESL_TEMPLATE_NAME="$2" TESL_TEMPLATE_PORT="${3:-}" \
+  TESL_TEMPLATE_REVISION="${4:-}" TESL_TEMPLATE_CREATED="${5:-}" \
+  TESL_TEMPLATE_SOURCE="${6:-}" awk '
+    function replace_literal(text, token, value, result, at) {
+      result = ""
+      while ((at = index(text, token)) > 0) {
+        result = result substr(text, 1, at - 1) value
+        text = substr(text, at + length(token))
+      }
+      return result text
+    }
+    {
+      line = replace_literal($0, "__APP_NAME__", ENVIRON["TESL_TEMPLATE_NAME"])
+      line = replace_literal(line, "__PORT__", ENVIRON["TESL_TEMPLATE_PORT"])
+      line = replace_literal(line, "__REVISION__", ENVIRON["TESL_TEMPLATE_REVISION"])
+      line = replace_literal(line, "__CREATED__", ENVIRON["TESL_TEMPLATE_CREATED"])
+      print replace_literal(line, "__SOURCE__", ENVIRON["TESL_TEMPLATE_SOURCE"])
+    }' "$1"
+}
+
+_tesl_validate_template_name() {
+  case "$1" in
+    *[!a-zA-Z0-9._-]*|'') echo 'tesl: project name must contain only letters, digits, dots, underscores or hyphens' >&2; return 1 ;;
+  esac
+}
+
 # ── tesl init ──────────────────────────────────────────────────────────────
 _tesl_init() {
   local NAME="" TEMPLATE="" PGMODE="" YES=0 NOGIT=0 ans
@@ -1090,6 +1118,7 @@ _tesl_init() {
   fi
   case "$TEMPLATE" in api|minimal) ;; *) echo "tesl init: unknown template '$TEMPLATE' (api|minimal)" >&2; return 1 ;; esac
 
+  _tesl_validate_template_name "$NAME" || return 1
   local DEFAULT_PG; if [ "$TEMPLATE" = "api" ]; then DEFAULT_PG="managed"; else DEFAULT_PG="none"; fi
   if [ -z "$PGMODE" ]; then
     if [ "$YES" = "1" ] || [ "$TEMPLATE" = "minimal" ]; then PGMODE="$DEFAULT_PG"; else
@@ -1121,7 +1150,7 @@ _tesl_init() {
   mkdir -p "$DEST"
   local f
   for f in app.tesl tesl.toml README.md; do
-    sed "s/__APP_NAME__/$NAME/g" "$TPL_DIR/$f" > "$DEST/$f"
+    _tesl_render_template "$TPL_DIR/$f" "$NAME" > "$DEST/$f"
   done
 
   if [ "$PGMODE" != "$DEFAULT_PG" ]; then
@@ -1246,10 +1275,10 @@ _tesl_build_go() {
   local entry="$1" name="$2" requested_out="$3" out
   out="$(_tesl_compile_go_file "$entry" "$requested_out")" || return 1
   if [ -d "$out/cmd/app" ]; then
-    (cd "$out" && "${TESL_GO:-go}" build -trimpath -o "$out/tesl-app" ./cmd/app) || return 1
+    (cd "$out" && "${TESL_GO:-go}" build -buildvcs=false -trimpath -o "$out/tesl-app" ./cmd/app) || return 1
     echo "tesl build: $name built Go binary — $entry → $out/tesl-app"
   else
-    (cd "$out" && "${TESL_GO:-go}" build ./...) || return 1
+    (cd "$out" && "${TESL_GO:-go}" build -buildvcs=false ./...) || return 1
     echo "tesl build: $name compiled Go module — $entry → $out"
   fi
 }
@@ -1287,6 +1316,12 @@ _tesl_build() {
   PORT="$(tesl_manifest_get "$MANIFEST" env PORT 2>/dev/null || true)"; PORT="${PORT:-8086}"
   DBMODE="$(tesl_manifest_get "$MANIFEST" database mode 2>/dev/null || true)"; DBMODE="${DBMODE:-none}"
   TARGET="$(tesl_manifest_get "$MANIFEST" deploy target 2>/dev/null || true)"
+
+  _tesl_validate_template_name "$NAME" || return 1
+  case "$PORT" in ''|*[!0-9]*) echo 'tesl build: invalid application port' >&2; return 1 ;; esac
+  if [ "${#PORT}" -gt 5 ] || [ "$PORT" -lt 1 ] || [ "$PORT" -gt 65535 ]; then
+    echo 'tesl build: application port must be in 1..65535' >&2; return 1
+  fi
 
   [ -f "$ENTRY" ] || { echo "tesl build: entrypoint '$ENTRY' not found" >&2; return 1; }
 
@@ -1340,7 +1375,7 @@ _tesl_build_go_container() {
     return 2
   }
   go="${TESL_GO:-go}"
-  (cd "$generated" && GOOS=linux CGO_ENABLED=0 "$go" build -trimpath -o "$ctx/tesl-app" ./cmd/app) || {
+  (cd "$generated" && GOOS=linux CGO_ENABLED=0 "$go" build -buildvcs=false -trimpath -o "$ctx/tesl-app" ./cmd/app) || {
     echo "tesl build --backend go: failed to build $entry for Linux" >&2
     return 1
   }
@@ -1361,11 +1396,7 @@ _tesl_build_go_container() {
   [ -n "$revision" ] || revision="unknown"
   created="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   source="https://github.com/mtonnberg/tesl"
-  sed -e "s|__APP_NAME__|$name|g" \
-       -e "s|__PORT__|$port|g" \
-       -e "s|__REVISION__|$revision|g" \
-       -e "s|__CREATED__|$created|g" \
-       -e "s|__SOURCE__|$source|g" "$template" > "$ctx/Dockerfile"
+  _tesl_render_template "$template" "$name" "$port" "$revision" "$created" "$source" > "$ctx/Dockerfile" || return 1
   cat > "$ctx/.dockerignore" <<'EOF'
 *
 !tesl-app
@@ -1711,7 +1742,7 @@ case "$CMD" in
     echo "tesl ${TESL_VERSION:-dev}"
     [ -n "${TESL_OCAML_COMPILER:-}" ] && echo "compiler: $TESL_OCAML_COMPILER"
     ;;
-  doc|--doc-json|explain)
+  doc|--doc-json|explain|search|--search-json|--catalog-json)
     # `tesl doc` / `tesl doc <name>` / `tesl doc Tesl.<Module>` / `tesl explain <CODE>`
     # are pure compiler surfaces, so they forward verbatim.
     #
@@ -1776,6 +1807,8 @@ Documentation:
   tesl help manual full                                        Show ALL documentation (for LLMs)
   tesl help examples                                           List all examples
   tesl help search <query>                                     Search documentation
+  tesl search [--json] QUERY                                   Find builtins by name/type
+  tesl --catalog-json                                         Export builtin catalog
 
 Editor / Language Server (LSP) flags:
   tesl check-json          <file.tesl>                   Type-check, diagnostics as IR-2 JSON

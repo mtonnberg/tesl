@@ -14,15 +14,20 @@ If the server was started with `tesl run --debug <file.tesl>`, attach to it live
 arm/re-arm breakpoints as often as you like, the server keeps serving throughout:
 
 ```bash
+umask 077
+TESL_ATTACH_STATE="$(mktemp -d "${TMPDIR:-/tmp}/tesl-attach.XXXXXX")" || exit 1
+trap 'rm -rf -- "$TESL_ATTACH_STATE"' EXIT
+
 tesl run --debug path/to/server.tesl &          # once; keep it running all session
 until curl -sf -o /dev/null "http://localhost:PORT/health"; do sleep 0.2; done
 
 # arm a breakpoint, wait for the stop, print it, auto-resume + detach:
 tesl debug-attach --break-at path/to/server.tesl:HANDLER_LINE --once \
-     --timeout-ms 30000 > /tmp/tesl-bp.json &
+     --timeout-ms 30000 > "$TESL_ATTACH_STATE/breakpoint.json" 2> "$TESL_ATTACH_STATE/breakpoint.err" &
+ATTACH_PID=$!
 sleep 0.5
 curl -s "http://localhost:PORT/users/alice"     # triggers the breakpoint
-wait; jq . /tmp/tesl-bp.json                    # {event:"stopped", locals, domain, sql}
+wait "$ATTACH_PID"; jq . "$TESL_ATTACH_STATE/breakpoint.json"                    # {event:"stopped", locals, domain, sql}
 ```
 
 Repeat the `debug-attach` step with a *different* line/condition — **no server
@@ -52,10 +57,13 @@ reaches it — so your `curl` is what activates it.
 2. **Launch the server under the inspector in the background** — it serves and waits:
    ```bash
    # start PostgreSQL first if the server is DB-backed:  bash scripts/postgres-start.sh
+   umask 077
+   TESL_INSPECT_STATE="$(mktemp -d "${TMPDIR:-/tmp}/tesl-inspect.XXXXXX")" || exit 1
+   trap 'rm -rf -- "$TESL_INSPECT_STATE"' EXIT
    TESL_REPO_ROOT="$PWD" \
      tesl debug-inspect path/to/server.tesl \
        --break-at "HANDLER_LINE: userId == \"alice\"" \
-       --mode program  > /tmp/tesl-bp.json 2>/tmp/tesl-bp.err &
+       --mode program > "$TESL_INSPECT_STATE/breakpoint.json" 2> "$TESL_INSPECT_STATE/breakpoint.err" &
    INSPECT_PID=$!
    ```
    (`tesl` = `compiler/_build/default/bin/main.exe`.) Use a plain `--break-at HANDLER_LINE`
@@ -71,7 +79,7 @@ reaches it — so your `curl` is what activates it.
    breakpoint fires:
    ```bash
    wait "$INSPECT_PID" 2>/dev/null
-   cat /tmp/tesl-bp.json | jq .     # { stopped, source, breakpoint, locals, domain, sql }
+   jq . "$TESL_INSPECT_STATE/breakpoint.json"     # { stopped, source, breakpoint, locals, domain, sql }
    ```
    `locals` is the handler's bindings (proof-unwrapped); `sql` is the exact parameterized
    statement that handler ran; `domain` is every live queue/cache/SSE-client/email/worker.

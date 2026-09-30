@@ -119,9 +119,91 @@ let t_module_surface_nonempty () =
     Alcotest.failf "modules with an empty doc surface: %s"
       (String.concat ", " empty)
 
+let t_search_relevance () =
+  let fixture = Filename.concat (Filename.dirname Sys.executable_name) "search-queries.tsv" in
+  let rows = In_channel.with_open_text fixture In_channel.input_all
+    |> String.split_on_char '\n'
+    |> List.filter (fun s -> s <> "" && s.[0] <> '#') in
+  Alcotest.(check int) "versioned query count" 20 (List.length rows);
+  List.iter (fun row -> match String.split_on_char '\t' row with
+    | [query; expected] ->
+      let result = Builtin_search.search query in
+      Alcotest.(check (option string)) query None result.error;
+      let top5 = result.results |> List.filteri (fun i _ -> i < 5) |> List.map (fun e -> e.Stdlib_docs.name) in
+      if not (List.mem expected top5) then
+        Alcotest.failf "%s: wanted %s in top 5; got %s" query expected (String.concat ", " top5)
+    | _ -> Alcotest.failf "bad relevance fixture: %s" row) rows
+
+let t_search_type_boundaries () =
+  let open Type_system in
+  let matches q t = Builtin_search.matches (Builtin_search.parse_type q) t in
+  let a = TVar 42 and b = TVar 99 in
+  let cases = [
+    "alpha-renaming", true, "x -> x", TFun (a, a);
+    "repeated vs independent", false, "x -> x", TFun (a, b);
+    "independent vs repeated", false, "x -> y", TFun (a, a);
+    "nominal identity", false, "Int -> String", TFun (TCon "Int32", TCon "String");
+    "no specialization", false, "a -> a", TFun (TCon "Int", TCon "Int");
+    "argument order", false, "String -> Int -> Bool", TFun (TCon "Int", TFun (TCon "String", TCon "Bool"));
+    "arity", false, "String -> Int", TFun (TCon "String", TFun (TCon "String", TCon "Int"));
+    "nested application", true, "List (Maybe x) -> x", TFun (TApp (TCon "List", TApp (TCon "Maybe", a)), a);
+    "nested nominal identity", false, "List (Maybe x) -> x", TFun (TApp (TCon "List", TApp (TCon "Either", a)), a);
+  ] in
+  List.iter (fun (name, expected, query, ty) -> Alcotest.(check bool) name expected (matches query ty)) cases;
+  List.iter (fun query ->
+    let result = Builtin_search.search query in
+    if result.error = None then Alcotest.failf "unsupported query accepted: %s" query)
+    ["String -> ->"; ":: (String) )"; ":: String)"; ":: _"; "s: String -> Int";
+     "String ::: Safe -> Int"; "String -> Int requires [time]"; String.make 257 'a';
+     ":: " ^ String.make 25 '(' ^ "a" ^ String.make 25 ')'];
+  List.iter (fun query ->
+    let result = Builtin_search.search query in
+    Alcotest.(check bool) (query ^ " completion") true result.completion;
+    Alcotest.(check bool) (query ^ " suggestions") true (result.total > 0);
+    Alcotest.(check bool) (query ^ " no error") true (result.error = None))
+    ["Float ->"; "Float -> F"; ":: (Float -> F"; ":: (Float -> Float"];
+  Alcotest.(check bool) "known nominal stays exact" false (Builtin_search.search "Float -> Float").completion;
+  Alcotest.(check int) "earlier nominal never relaxed" 0 (Builtin_search.search "F -> Float").total;
+  Alcotest.(check int) "no invented types" 0 (Builtin_search.search "UnknownNominal -> Int").total;
+  Alcotest.(check int) "combined name and type" 1 (Builtin_search.search "String.length :: String -> Int").total;
+  Alcotest.(check int) "unquantified scheme variables cannot become query generics" 0
+    (Builtin_search.search "Dict.map :: (a -> b) -> Dict k a -> Dict k b").total;
+  Alcotest.(check int) "text-only syntax excluded" 0 (Builtin_search.search "List.map :: (a -> b) -> List a -> List b").total
+
+let t_search_metadata () =
+  let entry name = match (Builtin_search.search name).results with
+    | e :: _ -> e | [] -> Alcotest.failf "missing %s" name in
+  let now = Builtin_search.entry_json (entry "nowMillis") in
+  List.iter (fun needle -> if not (contains now needle) then Alcotest.failf "lost metadata: %s" needle)
+    [ {|"capabilities":["time"]|}; {|"proofs_status":"unavailable"|} ];
+  let length = Builtin_search.entry_json (entry "String.length") in
+  List.iter (fun needle -> if not (contains length needle) then Alcotest.failf "lost metadata: %s" needle)
+    [ {|"parameter_labels":["s"]|}; "import Tesl.String exposing [String.length]"; {|"tag":"fun"|} ];
+  let map = Builtin_search.entry_json (entry "List.map") in
+  List.iter (fun needle -> if not (contains map needle) then Alcotest.failf "lost unknown: %s" needle)
+    [ {|"type":null|}; {|"structural_status":"text-only"|}; {|"capabilities_status":"unavailable"|}; "requires c" ];
+  if not (contains (Builtin_search.entry_json (entry "Dict.map")) {|"structural_status":"incomplete-scheme"|}) then
+    Alcotest.fail "the current Dict.map scheme omits its key variable from quantification; expose that limitation";
+  let ids = List.map Builtin_search.id Builtin_search.entries in
+  Alcotest.(check int) "unique stable IDs" (List.length ids) (List.length (List.sort_uniq compare ids));
+  let e = entry "String.length" in
+  let timezone = entry "europestockholm" in
+  if not (List.mem "EuropeStockholm" timezone.aliases) then
+    Alcotest.fail "generated aliases must be exported and participate in catalog identity";
+  if Builtin_search.entry_json e = Builtin_search.entry_json {e with doc = e.doc ^ " changed"} then
+    Alcotest.fail "catalog identity input ignores documentation changes";
+  Alcotest.(check string) "allocation-independent type identity"
+    (Builtin_search.canonical_type Type_system.(TFun (TVar 1, TVar 2)))
+    (Builtin_search.canonical_type Type_system.(TFun (TVar 90, TVar 10)))
+
 let () =
   Alcotest.run "Stdlib-Docs"
-    [ ( "seam",
+    [ ( "search",
+        [ Alcotest.test_case "20 relevance queries" `Quick t_search_relevance;
+          Alcotest.test_case "type boundary and malformed query suite" `Quick t_search_type_boundaries;
+          Alcotest.test_case "requirements and catalog identity" `Quick t_search_metadata;
+        ] );
+      ( "seam",
         [ Alcotest.test_case "every stdlib name documented" `Quick t_coverage;
           Alcotest.test_case "every entry renders" `Quick t_all_entries_render;
           Alcotest.test_case "module surfaces non-empty" `Quick t_module_surface_nonempty;

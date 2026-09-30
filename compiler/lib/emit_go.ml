@@ -1007,11 +1007,21 @@ let server_listen_addresses : (string, string) Hashtbl.t = Hashtbl.create 4
    password storage (see `password.go`).  Pinned here rather than fetched, so an emitted project
    builds without a network round trip deciding what it got, and checked against
    `runtime/go/go.sum` by a seam test so the two cannot drift. *)
+let windows_dependency_go_sum =
+  "golang.org/x/sys v0.47.0 h1:o7XGOvZQCADBQQ4Y7VNq2dRWQR7JmOUW8Kxx4ZsNgWs=\n\
+   golang.org/x/sys v0.47.0/go.mod h1:4GL1E5IUh+htKOUEOaiffhrAeqysfVGipDYzABqnCmw=\n"
+
 let password_dependency_go_sum =
   "golang.org/x/crypto v0.55.0 h1:+KWHjbgOaAQ66dh/YlkZKHlz9ZUlq61AFirAR9ntP8M=\n\
-   golang.org/x/crypto v0.55.0/go.mod h1:uq0V9dE/fzQuJtbnL+2EhWOE63vo164FY8xqEnV9xis=\n\
-   golang.org/x/sys v0.47.0 h1:o7XGOvZQCADBQQ4Y7VNq2dRWQR7JmOUW8Kxx4ZsNgWs=\n\
-   golang.org/x/sys v0.47.0/go.mod h1:4GL1E5IUh+htKOUEOaiffhrAeqysfVGipDYzABqnCmw=\n"
+   golang.org/x/crypto v0.55.0/go.mod h1:uq0V9dE/fzQuJtbnL+2EhWOE63vo164FY8xqEnV9xis=\n"
+  ^ windows_dependency_go_sum
+
+(* Windows debug-token ACLs use x/sys directly, even for a program that stores
+   no passwords. Keep both single-module and project manifests in agreement. *)
+let platform_dependencies ~password ~debug =
+  (if password then "\nrequire golang.org/x/crypto v0.55.0\n" else "")
+  ^ (if debug then "\nrequire golang.org/x/sys v0.47.0\n"
+     else if password then "\nrequire golang.org/x/sys v0.47.0 // indirect\n" else "")
 
 (* The pinned PostgreSQL driver, for a program that declares a Postgres-backed database.  Same
    discipline as `password_dependency_go_sum`: written here rather than fetched, so an emitted
@@ -8388,15 +8398,6 @@ and sql_scan_carrier loc ty target =
         String, Bool), a newtype over one, an instant, an ADT as JSON, or a `Maybe` of any of \
         those" (go_type ty))
 
-(* The reader for an ADT COLUMN.  The stored shape is the value's own wire shape — `{"tag": …}`
-   for a constructor with no fields — so reading it back is a tag lookup.  A constructor that
-   CARRIES fields is refused rather than half-read: decoding those needs the generic decoder,
-   which does not derive an ADT yet, and a column that silently lost its payload is worse than
-   one that does not compile.
-
-   An unknown tag TRAPS.  It means the column holds a value this build has no constructor for —
-   data written by an incompatible schema — and `dsl/sql.tesl` takes the same line for a stored
-   currency code it cannot resolve. *)
 (* Reading ONE payload field of an ADT column back out of its JSON.
    The wire shape is the one the response encoder writes and `dsl/types.tesl` writes —
    `{"tag": …, "fields": {…}}`.  The DOCUMENT around it may be either of the two shapes a Tesl
@@ -8420,6 +8421,29 @@ and sql_adt_field_decoder loc ty raw =
   | TNewtype newtype ->
     Printf.sprintf "%s{Value: %s}" (qualified newtype.owner newtype.go_name)
       (sql_adt_field_decoder loc newtype.base raw)
+  | TRecord info ->
+    let body =
+      match codec_owner info.rec_tesl_name with
+      | Some _ ->
+        (* Match the encoder's use of the record's own codec, including renamed
+           keys and validation. A stored decode failure is corruption, not a 400. *)
+        Printf.sprintf
+          "\tteslDecoded := %s(teslRaw)\n\tif !teslDecoded.OK() {\n\t\tpanic(\"database: \" + teslDecoded.Message())\n\t}\n\tteslValue, _ := teslDecoded.Value()\n\treturn teslValue\n"
+          (codec_decode_ref info.rec_tesl_name)
+      | None ->
+        let fields = List.map (fun (field, field_ty) ->
+          Printf.sprintf "%s: %s" (record_field_go_name field)
+            (sql_adt_field_decoder loc field_ty
+               (Printf.sprintf "teslFields[%s]" (go_quote field)))) info.rec_fields in
+        Printf.sprintf
+          "\tteslFields, teslErr := teslrt.DecodeObjectShape(teslRaw, %s, []string{%s})\n\tif teslErr != nil {\n\t\tpanic(\"database: \" + teslErr.Error())\n\t}\n\treturn %s{%s}\n"
+          (go_quote info.rec_tesl_name)
+          (String.concat ", " (List.map (fun (field, _) -> go_quote field) info.rec_fields))
+          (go_type ty) (String.concat ", " fields)
+    in
+    let decoder = remember_helper_stmts ~prefix:"teslColumnRecord"
+      ~signature:(Printf.sprintf "(teslRaw any) %s" (go_type ty)) ~body in
+    Printf.sprintf "%s(%s)" decoder raw
   | TAdt (nested, _) when nested.adt_tesl_name <> "Maybe" ->
     (* A nested ADT decodes through its OWN column decoder, so one rule covers any depth. *)
     Printf.sprintf "%s(teslrt.MustEncodeJSON(%s))" (sql_adt_column_decoder loc nested) raw
@@ -8430,7 +8454,7 @@ and sql_adt_field_decoder loc ty raw =
          raw (go_type inner) (sql_adt_field_decoder loc inner "teslInner")
      | None -> unsupported loc
        "Go backend: an ADT column's constructor field of type `%s` has no column decoder — a \
-        stored variant may carry scalars, newtypes over them, nested ADTs and `Maybe`s of \
+        stored variant may carry scalars, newtypes over them, records, nested ADTs and `Maybe`s of \
         those" (go_type ty))
 
 and sql_adt_column_decoder loc (info : adt_info) =
@@ -10547,6 +10571,13 @@ let rec json_value_decoder ~package ~loc ~what ty =
     Printf.sprintf
       "func(teslRaw any) (%s, error) {\n\t\tteslNested := %s(teslRaw)\n\t\tif !teslNested.OK() {\n\t\t\treturn %s{}, errors.New(teslNested.Message())\n\t\t}\n\t\tteslValue, _ := teslNested.Value()\n\t\treturn teslValue, nil\n\t}"
       (go_type ty) (codec_decode_ref nested.rec_tesl_name) (go_type ty)
+  | TAdt (nested, _) when List.mem nested.adt_tesl_name !current_codec_types
+                         || codec_owner nested.adt_tesl_name <> None ->
+    remember_helper_stmts ~prefix:"teslDecode"
+      ~signature:(Printf.sprintf "(teslRaw any) (%s, error)" (go_type ty))
+      ~body:(Printf.sprintf
+        "\tteslNested := %s(teslRaw)\n\tif !teslNested.OK() {\n\t\treturn %s{}, errors.New(teslNested.Message())\n\t}\n\tteslValue, _ := teslNested.Value()\n\treturn teslValue, nil\n"
+        (codec_decode_ref nested.adt_tesl_name) (go_type ty))
   | _ -> unsupported loc
     "Go backend cannot decode `%s` from JSON; give the type a `codec`" what
 
@@ -10996,8 +11027,8 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
            unsupported codec.loc "Go backend codec `%s` has no field `%s`" type_name name)
       | None -> unsupported codec.loc "Go backend codec `%s` needs a record type" type_name
     in
-    (* Encode: a record becomes a sorted-key map; an `adtJson` type becomes the
-       constructor name as a JSON string. *)
+    (* Encode records and ADTs as sorted-key maps. Payload variants carry their
+       named fields under `fields`; nullary variants keep the tag-only shape. *)
     (match codec.to_json with
      | ToJsonForbidden -> ()
      | ToJsonAdt ->
@@ -11006,14 +11037,21 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
           Printf.bprintf body "\nfunc %s(teslValue %s) any {\n\tswitch teslValue.%s {\n"
             (codec_encode_name type_name) (go_type go_ty) adt_tag_field;
           List.iter (fun variant ->
-            if variant.var_fields <> [] then unsupported codec.loc
-              "Go backend `adtJson` needs constructors without payloads (`%s`)" variant.var_ctor;
-            (* The wire shape is `{"tag": "Ctor"}`, which is what Legacy's generated `adtJson`
-               encoder writes — a bare constructor STRING (which this emitted before) reads
-               back as a different value on the other backend, and the two disagreed about
-               every response carrying an enum. *)
-            Printf.bprintf body "\tcase %s:\n\t\treturn map[string]any{\"tag\": %S}\n"
-              (qualified info.adt_owner variant.var_tag) variant.var_ctor) info.adt_variants;
+            Printf.bprintf body "\tcase %s:\n"
+              (qualified info.adt_owner variant.var_tag);
+            match variant.var_fields with
+            | [] ->
+              Printf.bprintf body "\t\treturn map[string]any{\"tag\": %S}\n"
+                variant.var_ctor
+            | fields ->
+              let entries = List.map (fun (name, ty) ->
+                let value = "teslValue." ^ variant_field_path info variant name in
+                let value = if adt_self_payload info variant name then
+                    Printf.sprintf "teslrt.Unboxed(%s)" value else value in
+                name, Printf.sprintf "%s(%s)" (value_encoder ty) value) fields in
+              Printf.bprintf body
+                "\t\treturn map[string]any{\"tag\": %S, \"fields\": map[string]any{\n%s\n\t\t}}\n"
+                variant.var_ctor (aligned_map_entries "\t\t\t" entries)) info.adt_variants;
           Printf.bprintf body "\t}\n\tpanic(\"unreachable: checker guarantees case exhaustiveness\")\n}\n"
         | _ -> unsupported codec.loc "Go backend `adtJson` needs an ADT type")
      | ToJsonFields entries ->
@@ -11053,9 +11091,35 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
             "\nfunc %s(teslJSON any) teslrt.Check[%s] {\n\tteslName, teslErr := teslrt.DecodeAdtTag(teslJSON)\n\tif teslErr != nil {\n\t\treturn teslrt.Reject[%s](400, teslErr.Error())\n\t}\n\tswitch teslName {\n"
             (codec_decode_name type_name) (go_type go_ty) (go_type go_ty);
           List.iter (fun variant ->
-            Printf.bprintf body "\tcase %S:\n\t\treturn teslrt.Accept(%s{%s: %s})\n"
-              variant.var_ctor (go_type go_ty) adt_tag_field
-              (qualified info.adt_owner variant.var_tag)) info.adt_variants;
+            Printf.bprintf body "\tcase %S:\n" variant.var_ctor;
+            if variant.var_fields <> [] then
+              Printf.bprintf body
+                "\t\tteslFields, teslFieldsErr := teslrt.JSONFieldValue(teslJSON, \"fields\")\n\t\tif teslFieldsErr != nil {\n\t\t\treturn teslrt.RejectShape[%s](teslFieldsErr.Error())\n\t\t}\n"
+                (go_type go_ty);
+            let assignments = List.mapi (fun index (name, ty) ->
+              let binder = Printf.sprintf "teslField%d" index in
+              Printf.bprintf body
+                "\t\t%sRaw, %sErr := teslrt.JSONFieldValue(teslFields, %s)\n\t\tif %sErr != nil {\n\t\t\treturn teslrt.RejectShape[%s](%sErr.Error())\n\t\t}\n\t\t%s, %sDecodeErr := %s(%sRaw)\n\t\tif %sDecodeErr != nil {\n\t\t\treturn teslrt.RejectShape[%s](%sDecodeErr.Error())\n\t\t}\n"
+                binder binder (go_quote name) binder (go_type go_ty) binder
+                binder binder
+                (json_value_decoder ~package ~loc:codec.loc
+                   ~what:(type_name ^ "." ^ variant.var_ctor ^ "." ^ name) ty
+                 |> String.split_on_char '\n' |> String.concat "\n\t")
+                binder binder (go_type go_ty) binder;
+              let value = if adt_self_payload info variant name then
+                  Printf.sprintf "teslrt.Boxed(%s)" binder else binder in
+              Printf.sprintf "%s: %s"
+                (if adt_boxed info then go_ident ~exported:true name
+                 else variant_field_literal_name variant name) value) variant.var_fields in
+            let assignments =
+              if assignments = [] || not (adt_boxed info) then assignments
+              else [Printf.sprintf "%s: &%s{%s}" (variant_payload_field variant)
+                      (variant_payload_type info variant) (String.concat ", " assignments)] in
+            Printf.bprintf body "\t\treturn teslrt.Accept(%s{%s})\n"
+              (go_type go_ty)
+              (String.concat ", "
+                 ((adt_tag_field ^ ": " ^ qualified info.adt_owner variant.var_tag)
+                  :: assignments))) info.adt_variants;
           Printf.bprintf body
             "\t}\n\treturn teslrt.Reject[%s](400, \"expected one of the %s constructors, got \"+teslName)\n}\n"
             (go_type go_ty) type_name
@@ -11279,6 +11343,15 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
       end
     | _ -> ()
   in
+  (* An adtJson decoder also references derived decoders for record payloads,
+     even when no HTTP endpoint takes those records directly. *)
+  List.iter (fun (codec : codec_form) ->
+    match codec.from_json, Hashtbl.find_opt types.adts codec.type_name with
+    | FromJsonAdt, Some info ->
+      List.iter (fun variant ->
+        List.iter (fun (_, ty) -> derive_decoder codec.loc ty) variant.var_fields)
+        info.adt_variants
+    | _ -> ()) codecs;
   List.iter (fun (api : api_form) ->
     List.iter (fun (endpoint : api_endpoint) ->
       match endpoint.kind with
@@ -15932,10 +16005,9 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
       in
       List.exists mentions [ "teslrt.NewDatabase"; "teslrt.WithDatabase"; "teslrt.PgPlan" ]
     in
+    let debug_runtime = mode = Debug && needs_runtime in
     let dependency_requires =
-      (if password_runtime then
-         "\nrequire golang.org/x/crypto v0.55.0\n\nrequire golang.org/x/sys v0.47.0 // indirect\n"
-       else "")
+      platform_dependencies ~password:password_runtime ~debug:debug_runtime
       ^ (if postgres_runtime then postgres_dependency_go_mod else "")
     in
     let artifacts = [
@@ -15957,9 +16029,10 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
                 "package main\n\nimport (\n\t%s\n)\n\n// The entry point Tesl's `main` describes: its `App { … }` record was lowered into the\n// startup chain (activate each queue's workers, then serve), so this is the whole program.\nfunc main() {\n%s\t_ = %s.Main()\n}\n"
                 main_imports main_startup package } ]
        else [])
-    @ (if password_runtime || postgres_runtime then
+    @ (if password_runtime || postgres_runtime || debug_runtime then
            [ { path = "go.sum";
-               contents = (if password_runtime then password_dependency_go_sum else "")
+               contents = (if password_runtime then password_dependency_go_sum
+                           else if debug_runtime then windows_dependency_go_sum else "")
                           ^ (if postgres_runtime then postgres_dependency_go_sum else "") } ]
          else []) in
     let artifacts = match tests_source with
@@ -16018,7 +16091,7 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
         in
         artifacts @ List.filter_map (fun (name, contents) ->
            if (not serves_http) && List.mem name http_only then None
-            else if List.mem name ["debug.go"; "debug_control.go"; "debug_state.go"; "debug_sql.go"] && mode <> Debug then None
+            else if List.mem name ["debug.go"; "debug_control.go"; "debug_file_unix.go"; "debug_file_windows.go"; "debug_state.go"; "debug_sql.go"] && mode <> Debug then None
            else if (not has_load_tests) && List.mem name load_test_only then None
           else if (not postgres_runtime) && List.mem name postgres_only then None
           else if (not uses_agent) && List.mem name agent_only then None
@@ -16152,13 +16225,14 @@ let compile_project ?(mode=Release) ~(entry : module_form) (modules : module_for
              "teslrt.PasswordHash" ] in
        let needs_postgres =
          List.exists references [ "teslrt.NewDatabase"; "teslrt.WithDatabase"; "teslrt.PgSql" ] in
+       let needs_debug = List.exists (fun (a : artifact) ->
+         a.path = "internal/teslrt/debug_file_windows.go") deduped in
        let requires =
-         (if needs_password then
-            "\nrequire golang.org/x/crypto v0.55.0\n\nrequire golang.org/x/sys v0.47.0 // indirect\n"
-          else "")
+         platform_dependencies ~password:needs_password ~debug:needs_debug
          ^ (if needs_postgres then postgres_dependency_go_mod else "") in
        let checksums =
-         (if needs_password then password_dependency_go_sum else "")
+         (if needs_password then password_dependency_go_sum
+          else if needs_debug then windows_dependency_go_sum else "")
          ^ (if needs_postgres then postgres_dependency_go_sum else "") in
        let rebuilt = List.filter_map (fun (artifact : artifact) ->
          if artifact.path = "go.mod" then

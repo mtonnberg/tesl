@@ -1817,9 +1817,9 @@ and parse_stringish_expr s =
   | STRING str ->
     advance s;
     return (ELit { lit = LString str; loc = loc0 })
-  | INTERP raw ->
+  | INTERP (raw, offsets) ->
     advance s;
-    let segs = parse_interp_string raw loc0 in
+    let segs = parse_interp_string raw offsets loc0 in
     return (ELit { lit = LInterp segs; loc = loc0 })
   | t -> err s (Printf.sprintf "expected string literal or interpolation, got %s" (tok_to_string t))
 
@@ -2374,9 +2374,9 @@ and parse_atom s =
   | STRING str ->
     advance s;
     return (ELit { lit = LString str; loc = loc0 })
-  | INTERP raw ->
+  | INTERP (raw, offsets) ->
     advance s;
-    let segs = parse_interp_string raw loc0 in
+    let segs = parse_interp_string raw offsets loc0 in
     return (ELit { lit = LInterp segs; loc = loc0 })
   | NOTHING ->
     advance s;
@@ -2488,7 +2488,7 @@ and parse_record_literal s =
     if peek s = RBRACE then continue_ := false
     else begin
       match peek s with
-      | STRING fname | INTERP fname ->
+      | STRING fname | INTERP (fname, _) ->
         (* String key in JSON-style literal: { "fieldName": value } *)
         advance s;
         let sep_ok = match peek s with
@@ -2587,7 +2587,7 @@ and parse_list_literal s =
 (** Parse an interpolated string into segments.
     Input: raw string content WITHOUT outer quotes, WITH ${...} markers.
     Example: "Hello, ${name}! Count: ${*n}" *)
-and parse_interp_string raw _loc =
+and parse_interp_string raw offsets loc =
   let n = String.length raw in
   let segs = ref [] in
   let buf = Buffer.create 32 in
@@ -2604,13 +2604,14 @@ and parse_interp_string raw _loc =
       while !j < n && raw.[!j] <> '}' do incr j done;
       let inner = String.sub raw (!i + 2) (!j - !i - 2) in
       (* Parse the inner expression *)
-      let inner_tokens = Lexer.tokenize "<interp>" inner in
-      let inner_stream = make_stream "<interp>" inner_tokens in
+      let inner_tokens = Lexer.interpolation_tokens loc.file loc.start.line loc.start.col
+        raw offsets (!i + 2) inner in
+      let inner_stream = make_stream loc.file inner_tokens in
       (match parse_expr inner_stream with
        | Ok e -> segs := IExpr e :: !segs
        | Err _ ->
          (* Fallback: emit as variable reference *)
-         let e = EVar { name = String.trim inner; loc = dummy_loc "<interp>" } in
+         let e = EVar { name = String.trim inner; loc = current_loc inner_stream } in
          segs := IExpr e :: !segs);
       i := !j + 1
     end else begin
