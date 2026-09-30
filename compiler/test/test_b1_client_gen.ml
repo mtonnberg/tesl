@@ -275,8 +275,21 @@ let elm_posix_field_tolerant_decoder () =
    in endpoint signatures without ever DEFINING them (uncompilable client). *)
 let issue36_lib = {|module Lib exposing [NameSafe, isName, NewThing]
 import Tesl.Prelude exposing [String]
-import Tesl.String exposing [String.length]
+import Tesl.String exposing [String.length, String.startsWith]
 import Tesl.Json exposing [stringCodec]
+
+fact InternalPrefix (value: String)
+
+check internalPrefix(value: String) -> value: String ::: InternalPrefix value =
+  if String.startsWith value "sk_live_PRIVATE" then
+    ok value ::: InternalPrefix value
+  else
+    fail 400 "wrong prefix"
+
+record InternalDatabaseShape {
+  credentialHash: String,
+  internalTenantId: String
+}
 
 fact NameSafe (name: String)
 
@@ -337,7 +350,13 @@ let elm_imported_types_emitted () =
     if not (contains "type alias NewThing" out) then
       failf "imported record NewThing referenced but not defined (#36):\n%s" out;
     if not (contains "type NameSafe" out) then
-      failf "imported fact NameSafe referenced but not defined (#36):\n%s" out)
+      failf "imported fact NameSafe referenced but not defined (#36):\n%s" out;
+    List.iter (fun private_marker ->
+      if contains private_marker out then
+        failf "private imported declaration leaked into Elm client (%s):\n%s"
+          private_marker out
+    ) ["InternalPrefix"; "sk_live_PRIVATE"; "InternalDatabaseShape";
+       "credentialHash"; "internalTenantId"])
 
 let ts_imported_types_emitted () =
   with_issue36_project (fun main ->
@@ -346,7 +365,13 @@ let ts_imported_types_emitted () =
     if not (contains "NewThingSchema" out) then
       failf "imported record NewThing schema missing from TS client (#36):\n%s" out;
     if not (contains "NameSafeSchema" out) then
-      failf "imported fact NameSafe schema missing from TS client (#36):\n%s" out)
+      failf "imported fact NameSafe schema missing from TS client (#36):\n%s" out;
+    List.iter (fun private_marker ->
+      if contains private_marker out then
+        failf "private imported declaration leaked into TS client (%s):\n%s"
+          private_marker out
+    ) ["InternalPrefix"; "sk_live_PRIVATE"; "InternalDatabaseShape";
+       "credentialHash"; "internalTenantId"])
 
 (* ── mountPath reaches the request URL but never the generated names (#75) ──
    `mountPath` is a deployment concern.  The generators derive function and type
