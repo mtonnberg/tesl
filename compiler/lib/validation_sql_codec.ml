@@ -412,6 +412,65 @@ let check_codec_proof_coverage ?facts ?(extra_funcs=[]) (decls : top_decl list) 
       if field_proofs = [] then None else Some (name, field_proofs)
   ) decls in
   let errors = ref [] in
+  (* Generic decoders must never manufacture a value whose erased proofs have
+     not been established.  This matters transitively: [adtJson] and the SQL
+     ADT column decoder both recurse into record payloads.  A record's own
+     explicit decoder is the only safe route, because the checks below verify
+     its field [via] coverage (and the completeness pass verifies invariants). *)
+  let records = List.filter_map (function
+    | DRecord r -> Some (r.name, r)
+    | _ -> None) decls in
+  let adts = List.filter_map (function
+    | DType (TypeAdt { name; variants; _ }) -> Some (name, variants)
+    | _ -> None) decls in
+  let has_explicit_decoder name =
+    List.exists (fun (cf : codec_form) ->
+      cf.type_name = name && match cf.from_json with FromJsonAlts _ -> true | _ -> false)
+      codecs in
+  let rec unsafe_records seen ty =
+    match ty with
+    | TName { name; _ } ->
+      if List.mem name seen then [] else
+      (match List.assoc_opt name records, List.assoc_opt name adts with
+       | Some r, _ ->
+         (* Field proofs are covered by an explicit decoder's checked [via]
+            chain below.  Until invariant cross-check coverage is itself
+            proven, invariants remain fail-closed even when a codec exists. *)
+         let unsafe = r.invariant <> None
+           || (List.exists (fun (f : field_def) -> f.proof_ann <> None) r.fields
+               && not (has_explicit_decoder name)) in
+         (if unsafe then [name] else [])
+         @ List.concat_map (fun (f : field_def) -> unsafe_records (name :: seen) f.type_expr) r.fields
+       | None, Some variants ->
+         List.concat_map (fun (v : adt_variant) ->
+           List.concat_map (fun (f : field_def) -> unsafe_records (name :: seen) f.type_expr) v.fields)
+           variants
+       | None, None -> [])
+    | TApp { head; arg; _ } -> unsafe_records seen head @ unsafe_records seen arg
+    | TFun { dom; cod; _ } -> unsafe_records seen dom @ unsafe_records seen cod
+    | TTuple { elems; _ } -> List.concat_map (unsafe_records seen) elems
+    | TVar _ -> [] in
+  let reject_unsafe_generic_decode loc boundary ty =
+    List.iter (fun record_name ->
+      errors := make_error loc
+        ~hint:(Printf.sprintf
+          "declare `codec %s` with `fromJson` and validate every proof-bearing field with `via` (and the record invariant with a cross-check)"
+          record_name)
+        (Printf.sprintf
+          "%s generically decodes record '%s', whose proofs or invariant cannot be established by shape decoding"
+          boundary record_name)
+        :: !errors)
+      (List.sort_uniq String.compare (unsafe_records [] ty)) in
+  List.iter (fun (cf : codec_form) ->
+    match cf.from_json with
+    | FromJsonAdt -> reject_unsafe_generic_decode cf.loc (Printf.sprintf "codec '%s'" cf.name)
+        (TName { name = cf.type_name; loc = cf.loc })
+    | FromJsonForbidden | FromJsonAlts _ -> ()) codecs;
+  List.iter (function
+    | DEntity e -> List.iter (fun (f : field_def) ->
+        reject_unsafe_generic_decode f.loc (Printf.sprintf "persisted field '%s.%s'" e.name f.name)
+          f.type_expr) e.fields
+    | _ -> ()) decls;
   List.iter (fun (cf : codec_form) ->
       (match List.assoc_opt cf.name record_proofs with
        | None -> ()
