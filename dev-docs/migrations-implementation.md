@@ -49,6 +49,28 @@ remaining integration requirements.
 
 ### Implementation and verification evidence
 
+The full default `scripts/run-migration-tests.sh` gate now passes after the public
+`Migration.jobs` compilation hookup. It ran against its own mandatory PostgreSQL
+cluster and includes the application harness (1133.341s), runtime race suites,
+all 37 queue-conversion cases, all 24 queue-source cases, public V1/V2 queue
+deployment, all 14 migration-fixture cases, and the remaining row, proof,
+contract and retirement suites through the final runtime group. The complete
+local log is `/tmp/opencode/tesl-public-jobs-migration-gate-complete.log`.
+An earlier attempt reached the shell's one-hour timeout; the complete rerun
+finished successfully with a longer shell budget. This verifies the current
+source/adapters and existing deployment paths; installed changed-payload
+conversion, typed repair and transforming retirement still require implementation.
+
+After the WIP checkpoint, standalone `Migration.jobs` compilation now collects
+checked queue converters alongside row fixtures and emits their adapters and
+automatic fixture tests through the ordinary compiler route. It publishes no
+database history and the application/physical-planner guards still refuse
+changed queued payloads. A new source-deleted generated-project regression
+executes the publicly compiled adapter, automatic fixture and metadata-substitution
+tests. The existing 14 migration-fixture cases pass as well. This completes the
+declaration-to-test-artifact link; protected database registration and mutation
+remain the next integration boundary.
+
 The first integration boundary now connects `Migration.jobs` source decisions
 to the existing checked converter evidence. Changed retained payloads require
 explicit `Migrate` coverage; helper ownership, nominal fixtures, duplicate

@@ -2606,20 +2606,18 @@ let public_row_history_needs_physical entry source =
 
 (* Fixtures are executable tests only after the same full declaration judgment
    used by diagnostics. Keep original owners for the Go graph binding. *)
-let checked_migration_fixtures sources =
- let rec collect acc = function
-  | [] -> Result.Ok (List.rev acc)
-   | ((m:Ast.module_form),bytes)::rest ->
-     Result.bind (Migration_declaration.check ~compiler_abi:"compiler-local-unsealed-comparison" ~source:bytes m) (fun declaration ->
-       match declaration with
-       | Some checked when Migration_declaration.queue_transforms checked<>[] ->
-         Error [{Migration_sparse.code="MIG028";loc=Location.dummy_loc m.source_file;
-           message="queue conversions are source-checked but protected transformation and repair execution is not available";related=[]}]
-       | _ ->
-       let acc=match Option.bind declaration Migration_declaration.transforms with
-       | Some checked when List.exists(fun(row:Migration_transform.row)->row.fixtures<>[])(Migration_transform.rows checked)->checked::acc
-       | _->acc in collect acc rest) in
- collect [] sources
+let checked_migration_artifacts sources =
+ let rec collect rows queues = function
+  | [] -> Result.Ok (List.rev rows,List.rev queues)
+  | ((m:Ast.module_form),bytes)::rest ->
+    Result.bind (Migration_declaration.check ~compiler_abi:"compiler-local-unsealed-comparison" ~source:bytes m) (fun declaration ->
+      let rows=match Option.bind declaration Migration_declaration.transforms with
+       | Some checked when List.exists(fun(row:Migration_transform.row)->row.fixtures<>[])(Migration_transform.rows checked)->checked::rows
+       | _->rows in
+      let queues=Option.fold ~none:queues ~some:(fun checked ->
+        List.rev_append(Migration_declaration.queue_transforms checked)queues) declaration in
+      collect rows queues rest) in
+ collect [] [] sources
 
 let compile_go_source_internal ?(debug=false) ?(path="") ~queue_conversions filename source =
   let path = if path = "" then filename else path in
@@ -2660,9 +2658,10 @@ let compile_go_source_internal ?(debug=false) ?(path="") ~queue_conversions file
               List.map (fun (d:Migration_program.database) -> d.identity,d.family) (Migration_program.databases p)) history in
             let migration_queues=Option.fold ~none:[] ~some:Migration_program.queue_bindings history in
             let queue_codec_records=Option.fold ~none:[] ~some:Migration_program.queue_codec_records history in
-            match checked_migration_fixtures captured_sources with
-            | Error errors -> GoFailure (Migration_declaration.diagnostics_of_errors errors)
-            | Ok migration_fixtures ->
+            match checked_migration_artifacts captured_sources with
+             | Error errors -> GoFailure (Migration_declaration.diagnostics_of_errors errors)
+             | Ok (migration_fixtures,declared_queue_conversions) ->
+             let queue_conversions=queue_conversions @ declared_queue_conversions in
              let fixture_graph=if migration_fixtures=[] && queue_conversions=[] then None else lowering in
              match Emit_go.compile_project ~mode ?fixture_graph ~migration_fixtures ~queue_conversions ~migration_families ~migration_queues ~queue_codec_records ~entry:entry_emit modules with
            | Ok artifacts ->

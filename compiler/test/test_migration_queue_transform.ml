@@ -292,8 +292,12 @@ let checked_jobs () = with_job_declaration(fun _ save file _ ->
    refuses ~code:"MIG028" (Migration_expansion.generate ~initial_version:initial ~schemas:[before;after] ~edges:[declaration])) [1;2];
  refuses ~code:"MIG028" (Migration_row_history.check ~schemas:[before;after] ~edges:[declaration]);
  (match Compile.compile_go_file file with
-  | Compile.GoSuccess _ -> fail "checked jobs leaked executable history"
-  | Compile.GoFailure ds -> check bool (Compile.diagnostics_to_json ds) true (List.exists(fun(d:Compile.diagnostic)->d.code="MIG028")ds));
+  | Compile.GoSuccess artifacts ->
+    check bool "ordinary migration compilation links only the pure converter" true
+      (List.exists(fun(a:Emit_go.artifact)->a.path="internal/teslqueueconversions/conversions_generated.go")artifacts);
+    check bool "pure compilation creates no installed database history" false
+      (List.exists(fun(a:Emit_go.artifact)->a.path="migration-history.json" || a.path="row-transform-history.json")artifacts)
+  | Compile.GoFailure ds -> fail(Compile.diagnostics_to_json ds));
  let app={|module App exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Maybe exposing [Maybe(..)]
@@ -355,7 +359,13 @@ fn oldNote() -> Schema.Mail.V1.Note = Schema.Mail.V1.Note { id: "one", title: "r
   let d=Option.get(get(Migration_declaration.check ~compiler_abi:"compiler-local-unsealed-comparison" ~source (parse file source))) in
   let queues=Migration_declaration.queue_transforms d and rows=Migration_transform.rows(Option.get(Migration_declaration.transforms d)) in
   check int "one queue fixture" 1 (List.length(Q.fixtures(List.hd queues)));
-  check int "one entity fixture" 1 (List.length(List.hd rows).fixtures))
+  check int "one entity fixture" 1 (List.length(List.hd rows).fixtures);
+  match Compile.compile_go_file file with
+  | Compile.GoFailure ds -> fail(Compile.diagnostics_to_json ds)
+  | Compile.GoSuccess artifacts ->
+    List.iter(fun path->check bool ("public compilation retains " ^ path) true
+      (List.exists(fun(a:Emit_go.artifact)->a.path=path)artifacts))
+      ["internal/teslmigrationfixtures/fixtures_test.go";"internal/teslqueueconversions/fixtures_generated_test.go"])
 let wire_tests = {|package teslmodschemamailmigratehelpers
 import (
  "encoding/json"
@@ -528,6 +538,22 @@ import Schema.Mail.Migrate.Helpers exposing [basePriority]
 fn priority() -> Int = basePriority()
 |}) in
  native ~body ~setup ()
+let public_job_tests () = with_job_declaration(fun root save file _ ->
+ let source=read file in
+ let declaration=Option.get(get(Migration_declaration.check ~compiler_abi:"compiler-local-unsealed-comparison" ~source (parse file source))) in
+ let conversion=List.hd(Migration_declaration.queue_transforms declaration) in
+ let artifacts=match Compile.compile_go_file file with
+  | Compile.GoSuccess a->a | Compile.GoFailure ds->fail(Compile.diagnostics_to_json ds) in
+ List.iter(fun(a:Emit_go.artifact)->ignore(save ("out/" ^ a.path)a.contents))artifacts;
+ let project_path=replace "tesl.generated/teslmodschemamailmigratehelpers/" "tesl.generated/teslmodschemamailmigratev2/" in
+ ignore(save "out/internal/teslqueueconversions/conversions_test.go" (project_path(adapter_tests(Q.digest conversion))));
+ ignore(save "out/internal/teslrt/queue_conversion_metadata_test.go" metadata_tests);
+ List.iter(fun name->remove(Filename.concat root name))["schema";"migrations";"tesl.toml"];
+ let command=Printf.sprintf "cd %s && go test -race -p 1 -count=1 -timeout=60s -v ./... 2>&1" (Filename.quote(Filename.concat root "out")) in
+ let channel=Unix.open_process_in command in let output=In_channel.input_all channel in
+ (match Unix.close_process_in channel with Unix.WEXITED 0->()|_->fail output);
+ List.iter(fun name->check bool output true (Compile.string_contains output ("--- PASS: " ^ name)))
+  ["TestCompiledQueueAdapter";"TestTeslQueueConversionFixture0_0";"TestQueueConversionMetadataRefusesSubstitution"])
 let () = run "sealed queue conversion source" ["source",List.map(fun(name,f)->test_case name `Quick f)
  ["checked callback fixture and stable identity",valid;
   "exact adjacent queue and payload identities",identities;
@@ -565,4 +591,5 @@ let () = run "sealed queue conversion source" ["source",List.map(fun(name,f)->te
   "public jobs source checks without inventing execution",checked_jobs;
   "jobs coverage, ownership and fixture diagnostics",jobs_negative;
   "jobs source views cannot mask edited helpers",jobs_guard;
-  "queue and entity fixtures retain independent nominal owners",mixed_job_row_fixtures]]
+  "queue and entity fixtures retain independent nominal owners",mixed_job_row_fixtures;
+  "public jobs compilation runs generated tests without source",public_job_tests]]

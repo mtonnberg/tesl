@@ -1114,6 +1114,8 @@ type. Full helper/proof/codec checking and source guards produce checked queue
 conversion evidence; unsaved migration buffers remain the authoritative source
 view. No implicit Same grant is introduced.
 
+Standalone migration compilation emits pure queue adapters and their fixture
+tests from checked `jobs` decisions. It creates no installed database history.
 Source diagnostics may accept a complete `jobs` decision, but ordinary Go
 application builds and both physical planning paths still report MIG028 until
 protected transformation and typed-repair execution are available. Choosing a

@@ -137,7 +137,9 @@ the same queue and job identities; rename, removal and IgnoreOld are separate.
 ## Generated pure adapters
 
 `Compile.compile_queue_conversion_artifacts` is an internal artifact seam with
-no CLI activation. It guards the complete source during ordinary Go emission,
+no database activation. Ordinary standalone migration compilation now collects
+the same checked evidence from `Migration.jobs` and emits the adapters and
+fixture tests directly. Both routes guard the complete source during Go emission,
 then uses the actual lowering graph and emitted environments to bind types,
 codecs and callback symbols, including helper cycles and alpha-renamed symbols.
 The runtime source registration validates the closed canonical descriptor and
