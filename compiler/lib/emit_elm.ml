@@ -134,32 +134,37 @@ and elm_type_arg te = elm_paren_if_applied (elm_type_of_type_expr te)
    and NEITHER module compiles.
 
    Only types built from `elm/core` names are safe to put in that signature. *)
-let rec elm_client_nameable_type ~newtype_base te =
-  match te with
-  | TName { name = "String" | "Int" | "Integer" | "Float" | "Real" | "Bool"
-                 | "Int32" | "PosixMillis" | "Unit"
-            (* Opaque stdlib secrets erase to a bare String. *)
-                 | "PasswordHash" | "Secret" | "Signature" | "JwtToken"; _ } ->
-    Some (elm_type_of_type_expr te)
-  (* A dimensioned quantity erases to Float; Money / MoneyRate do NOT — they
-     become module-local `type alias`es. *)
-  | TName { name; _ } when Ir.is_money_rate_type_name name -> None
-  | TName { name; _ } when Ir.is_quantity_type_name name -> Some "Float"
-  (* A `newtype` emits a TRANSPARENT `type alias` in the generated module, so
-     the outside module can spell the UNDERLYING type instead and Elm unifies
-     the two.  The alias name itself is still off limits — importing it is the
-     cycle. *)
-  | TName { name; _ } ->
-    (match newtype_base name with
-     | Some base -> elm_client_nameable_type ~newtype_base base
-     | None -> None)
-  | TApp { head = TName { name = ("List" | "Maybe") as head_name; _ }; arg; _ } ->
-    (match elm_client_nameable_type ~newtype_base arg with
-     | Some inner -> Some (elm_type_application head_name inner)
-     | None -> None)
-  (* A `Set` renders as `List value` — `value` is the generator's own
-     placeholder, not a type anyone can write. *)
-  | _ -> None
+let elm_client_nameable_type ~newtype_base te =
+  let rec resolve seen te =
+    match te with
+    | TName { name = "String" | "Int" | "Integer" | "Float" | "Real" | "Bool"
+                   | "Int32" | "PosixMillis" | "Unit"
+              (* Opaque stdlib secrets erase to a bare String. *)
+                   | "PasswordHash" | "Secret" | "Signature" | "JwtToken"; _ } ->
+      Some (elm_type_of_type_expr te)
+    (* A dimensioned quantity erases to Float; Money / MoneyRate do NOT — they
+       become module-local `type alias`es. *)
+    | TName { name; _ } when Ir.is_money_rate_type_name name -> None
+    | TName { name; _ } when Ir.is_quantity_type_name name -> Some "Float"
+    (* A `newtype` emits a TRANSPARENT `type alias` in the generated module, so
+       the outside module can spell the UNDERLYING type instead and Elm unifies
+       the two.  The alias name itself is still off limits — importing it is the
+       cycle. *)
+    | TName { name; _ } ->
+      if List.mem name seen then None
+      else
+        (match newtype_base name with
+         | Some base -> resolve (name :: seen) base
+         | None -> None)
+    | TApp { head = TName { name = ("List" | "Maybe") as head_name; _ }; arg; _ } ->
+      (match resolve seen arg with
+       | Some inner -> Some (elm_type_application head_name inner)
+       | None -> None)
+    (* A `Set` renders as `List value` — `value` is the generator's own
+       placeholder, not a type anyone can write. *)
+    | _ -> None
+  in
+  resolve [] te
 
 let elm_type_nameable_outside_module ~newtype_base te =
   elm_client_nameable_type ~newtype_base te <> None
