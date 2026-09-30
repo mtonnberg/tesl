@@ -49,6 +49,71 @@ remaining integration requirements.
 
 ### Implementation and verification evidence
 
+Typed queue repair now has a real PostgreSQL execution candidate, beyond the pure
+artifacts. The private candidate installer owns a fresh namespace for one checked
+queue transition, reuses the actual `tesl_jobs` definition, and stores the real
+compiler-emitted payload contracts and conversion/repair descriptors. Restricted
+Worker operations run the compiled callback under a row lock, then atomically
+publish payload/version/quarantine changes with immutable per-job receipts.
+Installer-only repair registration can follow an existing rejection without
+rewriting the original migration. Replays consult durable receipts before
+executing callbacks, including after reconnect.
+
+The mandatory private-PostgreSQL run passes all 52 conversion/repair cases,
+including six generated Go database groups with original source files removed.
+The database witnesses cover preserved delayed/dead scheduling and attempts,
+rejection followed by two repair revisions, actual backend death before commit,
+post-commit replay, concurrent workers, abandoned/stale transaction attempts,
+atomic registration failure, cross-database and rehashed contract substitution,
+malformed payload quarantine and a waiting old enqueue across retirement.
+Review reproduced a request-role execution leak caused by PostgreSQL default
+function grants; explicit revocation plus exact function/grant validation fixes
+it, and the adversarial PostgreSQL case passes afterward. Compiler `@check`,
+runtime file gates, embedding consistency and pipeline race tests also pass.
+
+This is an isolated execution candidate, not format-5 application activation.
+Its installation identity and floor are candidate-owned; full application
+source/expansion receipts, catalog integration, production dispatch and live
+lease/retirement integration remain the next boundary. Public changed-payload
+deployment still refuses. The historical full migration gate below predates this
+work; it is not claimed as current whole-tree coverage.
+
+Public `QueueRepair` declarations now connect the checked repair lineage to
+ordinary diagnostics, formatting and standalone compilation. The declaration
+names an exported, directly imported predecessor, exact job identity, consecutive
+repair revision, typed callback and fixtures. Checking follows and captures the
+complete predecessor chain, rejects cycles and wrong identities, honors unsaved
+source, and omits only checked contextual declarations during callback lowering.
+Generated fixture tests run the original conversion and every repair in order;
+an accepted predecessor fixture fails instead of bypassing rejection. Public
+source-deleted compiled tests cover this path. This completes the public pure
+repair artifact link; the subsequent database candidate is recorded above.
+Application integration remains incomplete.
+
+Verification passes all 51 queue-conversion/repair cases, 23 declaration cases,
+43 transformation cases, 14 fixture cases, 21 refresh cases, runtime pipeline
+race tests, compiler `@check`, runtime file gates and embedding consistency.
+The documentation catalog gate exposed 13 existing undocumented migration names;
+their checked rule/contract descriptions are now included alongside QueueRepair,
+and all 13 stdlib documentation/search groups pass. The full private-PostgreSQL
+gate recorded below has not been rerun after the repair changes.
+
+After WIP commit `7c02ddb`, typed repairs have an internal checked source and pure
+execution path. Repair certificates bind an immutable predecessor digest and
+consecutive repair revision to a new callback, preserving exact historical and
+target contracts/codecs. Generated artifacts include the complete lineage;
+runtime registration checks it atomically, and repair accepts only its exact
+predecessor's rejected outcome. Source-deleted generated tests exercise rejection,
+another rejection and successful repair, retaining the original bytes/version.
+They also cover wrong predecessors, revision gaps, altered contracts, callback
+reuse, direct-conversion bypass and freshly rehashed descriptor substitutions.
+Runtime tests cover traps and invalid output without usable partial results.
+The 42-case queue-conversion suite and runtime pipeline race tests pass. These
+repairs were initially internal pure artifacts; the public declaration hookup is
+recorded above. The later PostgreSQL candidate adds durable mutations and receipts
+in isolation; it does not enable ordinary application deployment.
+The full-gate result below predates this repair work.
+
 The full default `scripts/run-migration-tests.sh` gate now passes after the public
 `Migration.jobs` compilation hookup. It ran against its own mandatory PostgreSQL
 cluster and includes the application harness (1133.341s), runtime race suites,

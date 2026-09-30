@@ -522,6 +522,7 @@
 (test
  (name test_migration_queue_transform)
  (modules test_migration_queue_transform)
+ (deps (glob_files fixtures/queue-repair-postgres/*))
  (libraries tesl_compiler_lib alcotest str unix))
 
 (test

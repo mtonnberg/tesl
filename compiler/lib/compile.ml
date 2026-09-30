@@ -2616,7 +2616,8 @@ let checked_migration_artifacts sources =
        | _->rows in
       let queues=Option.fold ~none:queues ~some:(fun checked ->
         List.rev_append(Migration_declaration.queue_transforms checked)queues) declaration in
-      collect rows queues rest) in
+      Result.bind (Migration_queue_repair.check ~source:bytes m) (fun repair ->
+        collect rows (Option.fold ~none:queues ~some:(fun repair->repair::queues)repair) rest)) in
  collect [] [] sources
 
 let compile_go_source_internal ?(debug=false) ?(path="") ~queue_conversions filename source =
@@ -2661,7 +2662,11 @@ let compile_go_source_internal ?(debug=false) ?(path="") ~queue_conversions file
             match checked_migration_artifacts captured_sources with
              | Error errors -> GoFailure (Migration_declaration.diagnostics_of_errors errors)
              | Ok (migration_fixtures,declared_queue_conversions) ->
-             let queue_conversions=queue_conversions @ declared_queue_conversions in
+             let seen=Hashtbl.create 8 in
+             let queue_conversions=queue_conversions @ declared_queue_conversions
+               |> List.concat_map Migration_queue_transform.lineage |> List.filter(fun conversion ->
+                 let digest=Migration_queue_transform.digest conversion in
+                 if Hashtbl.mem seen digest then false else (Hashtbl.add seen digest ();true)) in
              let fixture_graph=if migration_fixtures=[] && queue_conversions=[] then None else lowering in
              match Emit_go.compile_project ~mode ?fixture_graph ~migration_fixtures ~queue_conversions ~migration_families ~migration_queues ~queue_codec_records ~entry:entry_emit modules with
            | Ok artifacts ->
@@ -2694,7 +2699,7 @@ let compile_queue_conversion_artifacts checked =
   match Q.with_checked checked (fun () ->
     let root=Q.root checked in
     let source=Source_input.read root.source_file in
-    compile_go_source_internal ~queue_conversions:[checked] root.source_file source) with
+     compile_go_source_internal ~queue_conversions:(Q.lineage checked) root.source_file source) with
   | Ok result -> result
   | Error errors -> GoFailure(Migration_declaration.diagnostics_of_errors errors)
 

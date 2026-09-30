@@ -554,6 +554,300 @@ let public_job_tests () = with_job_declaration(fun root save file _ ->
  (match Unix.close_process_in channel with Unix.WEXITED 0->()|_->fail output);
  List.iter(fun name->check bool output true (Compile.string_contains output ("--- PASS: " ^ name)))
   ["TestCompiledQueueAdapter";"TestTeslQueueConversionFixture0_0";"TestQueueConversionMetadataRefusesSubstitution"])
+let repair_helper = helper ^ {|
+fn repair(old: Schema.Mail.V1.Delivery) -> Migrated Schema.Mail.VCurrent.Delivery =
+ Reject "needs another repair"
+fn repairAgain(old: Schema.Mail.V1.Delivery) -> Migrated Schema.Mail.VCurrent.Delivery =
+ Row (Schema.Mail.VCurrent.Delivery { body: "repaired", priority: 9 })
+fn repairJob() -> Schema.Mail.V1.Delivery = Schema.Mail.V1.Delivery { text: "" }
+|}
+let repairs (make : ?version:int -> ?queue:string -> ?job:string -> ?callback:string -> ?fixtures:string list -> unit -> (Q.t,Migration_sparse.error list) result) =
+ let original=get(make()) in
+ let first=get(Q.check_repair ~rejected:original ~revision:1 (get(make ~callback:"repair" ~fixtures:["repairJob"] ()))) in
+ let second=get(Q.check_repair ~rejected:first ~revision:2 (get(make ~callback:"repairAgain" ~fixtures:["repairJob"] ()))) in
+ original,first,second
+let repair_identity () = project ~body:repair_helper (fun _ _ _ make ->
+ let original,first,second=repairs make in
+ check int "separate repair sequence" 2 (Q.repair_revision second);
+ check (list string) "complete immutable predecessor lineage"
+   [Q.digest original;Q.digest first;Q.digest second] (List.map Q.digest(Q.lineage second));
+ check bool "repair is distinct from an ordinary conversion" false
+   (Q.digest first=Q.digest(get(make ~callback:"repair" ~fixtures:["repairJob"] ())));
+ let _,again,_=repairs make in check string "stable repair identity" (Q.digest first) (Q.digest again))
+let repair_revision_refusals () = project ~body:repair_helper (fun _ _ _ make ->
+ let original,first,_=repairs make in
+ let replacement=get(make ~callback:"repairAgain" ~fixtures:["repairJob"] ()) in
+ List.iter(fun revision->refuses ~code:"MIG028" (Q.check_repair ~rejected:original ~revision replacement)) [-1;0;2;2147483647];
+ refuses ~code:"MIG028" (Q.check_repair ~rejected:first ~revision:1 replacement);
+ refuses ~code:"MIG028" (Q.check_repair ~rejected:first ~revision:2 original);
+ refuses ~code:"MIG028" (Q.check_repair ~rejected:original ~revision:1 original);
+ refuses ~code:"MIG028" (Q.check_repair ~rejected:first ~revision:2 first))
+let repair_contract_refusal () = project ~body:repair_helper (fun root save _ make ->
+ let target=save "schema/mail/v2.tesl" (fresh |> replace "VCurrent" "V2"
+   |> replace {|body -> "message"|} {|body -> "changed"|}) in
+ let source=repair_helper |> replace "Migrate.Helpers" "Migrate.Different" |> replace "VCurrent" "V2" in
+ let file=save "migrations/mail/different.tesl" source in
+ let original=get(make()) in
+ let replacement=get(Q.check ~project_root:root ~before:(load(Filename.concat root "schema/mail/v1.tesl"))
+   ~after:(load target) ~version:2 ~queue:"Jobs" ~job:"Delivery" ~source (parse file source)
+   ~callback:(ref_ file "repair") ~fixtures:[ref_ file "repairJob"]) in
+ refuses ~code:"MIG028" (Q.check_repair ~rejected:original ~revision:1 replacement))
+let repair_history_guard () = project ~body:repair_helper (fun _ _ file make ->
+ let _,_,second=repairs make in
+ write file (replace {|Reject "empty job"|} {|Reject "edited deployed history"|} repair_helper);
+ refuses ~code:"MIG013" (Q.with_checked second Fun.id))
+let repair_native () = project ~body:repair_helper (fun root save _ make ->
+ let _,_,second=repairs make in
+ let artifacts=match Compile.compile_queue_conversion_artifacts second with
+  | Compile.GoSuccess a->a | Compile.GoFailure ds->fail(Compile.diagnostics_to_json ds) in
+ List.iter(fun(a:Emit_go.artifact)->ignore(save ("out/" ^ a.path)a.contents))artifacts;
+ ignore(save "out/internal/teslqueueconversions/repair_test.go" {|package teslqueueconversions
+import (
+ "testing"
+ rt "tesl.generated/teslmodschemamailmigratehelpers/internal/teslrt"
+)
+func TestTypedRepairLineage(t *testing.T) {
+ input:=[]byte(" {\n\"oldText\":\"\" } ")
+ original:=string(input)
+ rejected,err:=Conversion0.Convert(1,input)
+ if err!=nil||rejected.Kind()!="migration-rejected" {t.Fatal(rejected,err)}
+ input[0]='!'
+ again,err:=Conversion1.Repair(rejected)
+ if err!=nil||again.Kind()!="migration-rejected"||again.Reason()!="needs another repair"||again.Original()!=original||again.Payload()!=""||again.SourceVersion()!=1||again.TargetVersion()!=2 {t.Fatal(again,err)}
+ repaired,err:=Conversion2.Repair(again)
+ if err!=nil||repaired.Kind()!="converted"||repaired.Payload()!=`{"message":"repaired","priority":9}`||repaired.Original()!=original||repaired.SourceVersion()!=1||repaired.TargetVersion()!=2 {t.Fatal(repaired,err)}
+ if rejected.Original()!=original||rejected.Reason()!="empty job"||rejected.Payload()!="" {t.Fatal("repair changed original rejection")}
+ if repaired.SourceDigest()==again.SourceDigest()||again.SourceDigest()==rejected.SourceDigest() {t.Fatal("repair lost revision identity")}
+ for _,result:=range []rt.QueueConversionResult{{},rejected,repaired} {
+  if got,err:=Conversion2.Repair(result);err==nil||got.Kind()!=""||got.SourceDigest()!="" {t.Fatal("wrong repair predecessor produced usable output",got,err)}
+ }
+ accepted,_:=Conversion0.Convert(1,[]byte(`{"oldText":"valid"}`))
+ invalid,_:=Conversion0.Convert(1,[]byte(`{"oldText":false}`))
+ for _,result:=range []rt.QueueConversionResult{{},accepted,invalid,again,repaired} {
+  if got,err:=Conversion1.Repair(result);err==nil||got.Kind()!="" {t.Fatal("non-rejection or wrong predecessor repaired",got,err)}
+ }
+ if _,err:=Conversion0.Repair(rejected);err==nil {t.Fatal("ordinary conversion became a repair")}
+ if _,err:=Conversion1.Convert(1,[]byte(original));err==nil {t.Fatal("repair bypassed predecessor")}
+ if _,err:=Conversion2.Convert(1,[]byte(original));err==nil {t.Fatal("later repair bypassed predecessor")}
+}
+|});
+ ignore(save "out/internal/teslrt/repair_metadata_test.go" {|package teslrt
+import (
+ "encoding/hex"
+ "strings"
+ "testing"
+)
+func TestTypedRepairMetadata(t *testing.T) {
+ var first,second pgQueueConversionSourceSpec
+ for _,s:=range compiledQueueConversionSources.byDigest {
+  if s.repairRevision==1 {first=s.spec};if s.repairRevision==2 {second=s.spec}
+ }
+ if first.digest==""||second.digest=="" {t.Fatal("missing emitted repairs")}
+ for _,name:=range []string{"missing-parent","skip-revision","zero-revision","noncanonical-revision","overflow-revision","changed-target-version","changed-queue","same-callback","ancestor-callback","nested-repair"} {
+  t.Run(name,func(t *testing.T){
+   spec:=first
+   document,_,err:=pgReadRowCanonical(spec.document);if err!=nil {t.Fatal(err)}
+   n:=&document.children[3]
+   switch name {
+   case "missing-parent":n.children[1]=pgRowAtom(strings.Repeat("0",64))
+   case "skip-revision":n.children[2]=pgRowAtom("2")
+   case "zero-revision":n.children[2]=pgRowAtom("0")
+   case "noncanonical-revision":n.children[2]=pgRowAtom("01")
+   case "overflow-revision":n.children[2]=pgRowAtom("2147483647")
+   case "changed-target-version":n.children[3].children[4]=pgRowAtom("3")
+   case "changed-queue":n.children[3].children[5]=pgRowAtom("Other")
+   case "same-callback":
+    parent:=compiledQueueConversionSources.byDigest[n.children[1].value]
+    n.children[3]=parent.conversion;spec.callbackIdentity=parent.spec.callbackIdentity
+   case "ancestor-callback":
+    ancestor:=compiledQueueConversionSources.byDigest[n.children[1].value]
+    n.children[1]=pgRowAtom(first.digest);n.children[2]=pgRowAtom("2")
+    n.children[3]=ancestor.conversion;spec.callbackIdentity=ancestor.spec.callbackIdentity
+   case "nested-repair":nested,_,err:=pgReadRowCanonical(second.document);if err!=nil {t.Fatal(err)};n.children[3]=nested.children[3]
+   }
+   raw,hash:=pgRowBaselineDocument(*n);spec.document,spec.digest=hex.EncodeToString([]byte(raw)),hash
+   before:=len(compiledQueueConversionSources.byDigest)
+   func(){defer func(){if recover()==nil {t.Fatal("rehashed invalid repair registered")}}()
+    registerCompiledQueueConversionSources([]pgQueueConversionSourceSpec{spec})
+   }()
+   if len(compiledQueueConversionSources.byDigest)!=before||compiledQueueConversionSources.byDigest[hash]!=nil {t.Fatal("failed repair registration published source")}
+  })
+ }
+}
+func TestTypedRepairRegistrationIsAtomicAndOrderIndependent(t *testing.T) {
+ saved:=compiledQueueConversionSources.byDigest
+ defer func(){compiledQueueConversionSources.byDigest=saved}()
+ var specs [3]pgQueueConversionSourceSpec
+ for _,s:=range saved {specs[s.repairRevision]=s.spec}
+ compiledQueueConversionSources.byDigest=map[string]*pgQueueConversionSource{}
+ registerCompiledQueueConversionSources([]pgQueueConversionSourceSpec{specs[2],specs[1],specs[0]})
+ if len(compiledQueueConversionSources.byDigest)!=3 {t.Fatal("reverse-order repair batch lost its predecessor")}
+ compiledQueueConversionSources.byDigest=map[string]*pgQueueConversionSource{}
+ document,_,err:=pgReadRowCanonical(specs[2].document);if err!=nil {t.Fatal(err)}
+ document.children[3].children[1]=pgRowAtom(strings.Repeat("0",64))
+ raw,hash:=pgRowBaselineDocument(document.children[3]);specs[2].document,specs[2].digest=hex.EncodeToString([]byte(raw)),hash
+ func(){defer func(){if recover()==nil {t.Fatal("invalid repair batch accepted")}}()
+  registerCompiledQueueConversionSources(specs[:])
+ }()
+ if len(compiledQueueConversionSources.byDigest)!=0 {t.Fatal("invalid repair published valid predecessor prefix")}
+}
+|});
+ List.iter(fun name->remove(Filename.concat root name))["schema";"migrations";"tesl.toml"];
+ let command=Printf.sprintf "cd %s && go test -race -p 1 -count=1 -timeout=60s -v ./... 2>&1" (Filename.quote(Filename.concat root "out")) in
+ let channel=Unix.open_process_in command in let output=In_channel.input_all channel in
+ (match Unix.close_process_in channel with Unix.WEXITED 0->()|_->fail output);
+ List.iter(fun name->check bool output true (Compile.string_contains output ("--- PASS: " ^ name)))
+  ["TestTypedRepairLineage";"TestTypedRepairMetadata";"TestTypedRepairRegistrationIsAtomicAndOrderIndependent";"TestTeslQueueConversionFixture1_0";"TestTeslQueueConversionFixture2_0"])
+let public_repair_source = {|module Schema.Mail.Migrate.Repair1 exposing [repair]
+import Tesl.Migration exposing [QueueRepair]
+import Schema.Mail.Migrate.V2
+import Schema.Mail.Migrate.Helpers
+repair = QueueRepair {
+ predecessor: Schema.Mail.Migrate.V2.migration
+ job: "Delivery"
+ revision: 1
+ migrate: Schema.Mail.Migrate.Helpers.repair
+ fixtures: [Schema.Mail.Migrate.Helpers.repairJob]
+}
+|}
+let public_second_repair = public_repair_source
+ |> replace "Migrate.Repair1" "Migrate.Repair2"
+ |> replace "Migrate.V2.migration" "Migrate.Repair1.repair"
+ |> replace "import Schema.Mail.Migrate.V2" "import Schema.Mail.Migrate.Repair1"
+ |> replace "revision: 1" "revision: 2"
+ |> replace "migrate: Schema.Mail.Migrate.Helpers.repair" "migrate: Schema.Mail.Migrate.Helpers.repairAgain"
+let public_local_repair_source = {|module Schema.Mail.Migrate.Repair1 exposing [repair]
+import Tesl.Prelude exposing [String, Int]
+import Tesl.Migration exposing [QueueRepair, Migrated(..)]
+import Schema.Mail.V1
+import Schema.Mail.VCurrent
+import Schema.Mail.Migrate.V2
+
+repair = QueueRepair {
+ predecessor: Schema.Mail.Migrate.V2.migration
+ job: "Delivery"
+ revision: 1
+ migrate: repairEmpty
+ fixtures: [emptyJob]
+}
+
+fn repairEmpty(old: Schema.Mail.V1.Delivery) -> Migrated Schema.Mail.VCurrent.Delivery =
+ Row (Schema.Mail.VCurrent.Delivery { body: "repaired", priority: 9 })
+
+fn emptyJob() -> Schema.Mail.V1.Delivery =
+ Schema.Mail.V1.Delivery { text: "" }
+|}
+let with_public_repair run =
+ let helper_source=repair_helper |> replace "exposing [convert, oldJob]" "exposing [convert, oldJob, repair, repairAgain, repairJob]" in
+ with_job_declaration ~helper_source (fun root save parent _ ->
+  let first=save "migrations/mail/repair1.tesl" public_repair_source in
+  let second=save "migrations/mail/repair2.tesl" public_second_repair in
+  run root save parent first second)
+let public_repair_checked () = with_public_repair(fun _ _ _ first second ->
+ List.iter(fun file->let source=read file in
+  let context=Compile.agent_context_result_source file source in check bool context.json true context.ok;
+  let formatted=Formatter.format_source source in
+  check string "repair format stable" formatted (Formatter.format_source formatted);
+  let context=Compile.agent_context_result_source file formatted in check bool context.json true context.ok) [first;second];
+ let source=read second in
+ let repair=Option.get(get(Migration_queue_repair.check ~source (parse second source))) in
+ check int "public repair retains complete lineage" 3 (List.length(Q.lineage repair));
+ let unsaved=replace "revision: 2" "revision: 3" source in
+ let context=Compile.agent_context_result_source second unsaved in
+ check bool "unsaved repair revision is authoritative" true
+   (List.exists(fun(d:Compile.diagnostic)->d.code="MIG028")context.diagnostics))
+let public_repair_invalid () = with_public_repair(fun _ _ parent first _ ->
+ let refuse code source=refuses ~code (Migration_queue_repair.check ~source (parse first source)) in
+ List.iter(fun(code,source)->refuse code source)
+  ["MIG028",replace "revision: 1" "revision: 2" public_repair_source;
+   "MIG028",replace "revision: 1" "revision: 0" public_repair_source;
+   "MIG028",replace "\"Delivery\"" "\"Other\"" public_repair_source;
+   "MIG028",replace "migrate: Schema.Mail.Migrate.Helpers.repair" "migrate: Schema.Mail.Migrate.Helpers.convert" public_repair_source;
+   "MIG020",replace " job: \"Delivery\"" " unknown: \"Delivery\"" public_repair_source;
+   "MIG023",replace " revision: 1" " revision: 1\n revision: 1" public_repair_source;
+   "MIG020",replace "import Schema.Mail.Migrate.V2\n" "" public_repair_source;
+   "MIG003",replace "[Schema.Mail.Migrate.Helpers.repairJob]" "[]" public_repair_source;
+   "MIG021",replace "migrate: Schema.Mail.Migrate.Helpers.repair" "migrate: Schema.Mail.Migrate.Helpers.oldJob" public_repair_source];
+ write parent (replace "exposing [migration]" "exposing []" (read parent));
+ refuse "MIG020" public_repair_source)
+let public_repair_cycle () = with_public_repair(fun _ _ _ first _ ->
+ let source=public_repair_source |> replace "Migrate.V2.migration" "Migrate.Repair2.repair"
+   |> replace "import Schema.Mail.Migrate.V2" "import Schema.Mail.Migrate.Repair2" in
+ write first source;
+ refuses ~code:"MIG020" (Migration_queue_repair.check ~source (parse first source)))
+let public_repair_guards () = with_public_repair(fun _ _ parent _ second ->
+ let source=read second in
+ let repair=Option.get(get(Migration_queue_repair.check ~source (parse second source))) in
+ write parent (replace "Helpers.convert" "Helpers.repair" (read parent));
+ refuses ~code:"MIG013" (Q.with_checked repair Fun.id))
+let public_repair_exact_source () = with_public_repair(fun project_root _ parent first _ ->
+ let parent_source=read parent and source=read first in
+ let parent_module=parse parent parent_source and root=parse first source in
+ let original=Option.get(get(Migration_declaration.check ~compiler_abi:"compiler-local-unsealed-comparison" ~source:parent_source parent_module))
+   |> Migration_declaration.queue_transforms |> List.hd in
+ let declarations m=List.filter_map(function Ast.DConst c when Migration_form.is_contextual_declaration m c -> Some c | _ -> None)m.Ast.decls in
+ let contextual_declarations=[parent_module,parent_source ^ "\n# drift\n",List.hd(declarations parent_module);
+   root,source,List.hd(declarations root)] in
+ refuses ~code:"MIG013" (Q.check_repair_source ~project_root ~contextual_declarations ~rejected:original
+   ~revision:1 ~source root ~callback:(ref_ first "Schema.Mail.Migrate.Helpers.repair")
+   ~fixtures:[ref_ first "Schema.Mail.Migrate.Helpers.repairJob"]))
+let public_repair_native ?(accepted_fixture=false) ?(local_repair=false) () = with_public_repair(fun root save _ first second ->
+ let second=if local_repair then (write first public_local_repair_source;first) else second in
+ if accepted_fixture then write second (replace "[Schema.Mail.Migrate.Helpers.repairJob]" "[Schema.Mail.Migrate.Helpers.oldJob]" (read second));
+ let artifacts=match Compile.compile_go_file second with
+  | Compile.GoSuccess artifacts->artifacts | Compile.GoFailure ds->fail(Compile.diagnostics_to_json ds) in
+ List.iter(fun(a:Emit_go.artifact)->ignore(save ("out/" ^ a.path)a.contents))artifacts;
+ check bool "pure repair does not publish installed history" false
+  (List.exists(fun(a:Emit_go.artifact)->a.path="migration-history.json" || a.path="row-transform-history.json")artifacts);
+ List.iter(fun name->remove(Filename.concat root name))["schema";"migrations";"tesl.toml"];
+ let command=Printf.sprintf "cd %s && go test -race -p 1 -count=1 -timeout=60s -v ./... 2>&1" (Filename.quote(Filename.concat root "out")) in
+ let channel=Unix.open_process_in command in let output=In_channel.input_all channel in
+ let status=Unix.close_process_in channel in
+ if accepted_fixture then begin
+  check bool "repair fixtures must reach a predecessor rejection" false (status=Unix.WEXITED 0);
+  check bool output true (Compile.string_contains output "repair predecessor failed")
+ end else begin
+  (match status with Unix.WEXITED 0->()|_->fail output);
+  List.iter(fun name->check bool output true (Compile.string_contains output ("--- PASS: " ^ name)))
+   (["TestTeslQueueConversionFixture0_0";"TestTeslQueueConversionFixture1_0"] @
+    if local_repair then [] else ["TestTeslQueueConversionFixture2_0"])
+ end)
+let public_repair_import_boundary () = with_public_repair(fun _ save _ first second ->
+ let source=(read second |> replace "import Tesl.Migration" "import Tesl.Prelude exposing [Int]\nimport Tesl.Migration") ^ "\nfn leaked() -> Int = repair\n" in
+ let context=Compile.agent_context_result_source second source in
+ check bool "repair declaration is not a runtime value" false context.ok;
+ write first (replace "revision: 1" "revision: 2" (read first));
+ let context=Compile.agent_context_result_source second (read second) in
+ check bool context.json true (List.exists(fun(d:Compile.diagnostic)->d.code="MIG028")context.diagnostics);
+ write first public_repair_source;
+ ignore(save "migrations/mail/unchecked.tesl" {|module Schema.Mail.Migrate.Unchecked exposing [migration]
+import Tesl.Migration exposing [Migration]
+migration = Migration { invalid: 1 }
+|});
+ let source=public_second_repair |> replace "import Tesl.Migration" "import Schema.Mail.Migrate.Unchecked\nimport Tesl.Migration" in
+ refuses ~code:"MIG028" (Migration_queue_repair.check ~source (parse second source)))
+let public_repair_postgres () = with_public_repair(fun root save _ _ second ->
+ let source=read second in
+ let repair=Option.get(get(Migration_queue_repair.check ~source (parse second source))) in
+ let artifacts=match Compile.compile_go_file second with
+  | Compile.GoSuccess artifacts->artifacts | Compile.GoFailure ds->fail(Compile.diagnostics_to_json ds) in
+ List.iter(fun(a:Emit_go.artifact)->ignore(save ("out/" ^ a.path)a.contents))artifacts;
+ let fixture name=
+  let candidates=List.map(fun prefix->Filename.concat prefix ("fixtures/queue-repair-postgres/" ^ name))
+    ["compiler/test";"test";".";Filename.dirname Sys.executable_name] in
+  let path=List.find Sys.file_exists candidates in read path in
+ ignore(save "out/internal/teslrt/queue_repair_postgres_bridge_test_support.go" (fixture "bridge.go"));
+ ignore(save "out/internal/teslqueueconversions/repair_postgres_test.go"
+   (fixture "repair_test.go" |> replace "@@DIGEST@@" (Q.digest repair)));
+ List.iter(fun name->remove(Filename.concat root name))["schema";"migrations";"tesl.toml"];
+ let command=Printf.sprintf "cd %s && go test -race -p 1 -count=1 -timeout=180s -v ./internal/teslqueueconversions 2>&1" (Filename.quote(Filename.concat root "out")) in
+ let channel=Unix.open_process_in command in let output=In_channel.input_all channel in
+ (match Unix.close_process_in channel with Unix.WEXITED 0->()|_->fail output);
+ if Sys.getenv_opt "TESL_MIGRATION_TEST_REQUIRE_POSTGRES"=Some "1" then
+  List.iter(fun name->check bool output true (Compile.string_contains output ("--- PASS: " ^ name)))
+   ["TestPostgresTypedQueueRepair";"TestPostgresRepairTransactionsAndOwnership";
+    "TestPostgresRepairRegistrationAfterRejection";"TestPostgresRepairRefusesDifferentBindings";
+    "TestPostgresMalformedPayloadCannotBecomeTypedRepair";"TestPostgresActiveClaimsAreNotRewritten"])
 let () = run "sealed queue conversion source" ["source",List.map(fun(name,f)->test_case name `Quick f)
  ["checked callback fixture and stable identity",valid;
   "exact adjacent queue and payload identities",identities;
@@ -592,4 +886,19 @@ let () = run "sealed queue conversion source" ["source",List.map(fun(name,f)->te
   "jobs coverage, ownership and fixture diagnostics",jobs_negative;
   "jobs source views cannot mask edited helpers",jobs_guard;
   "queue and entity fixtures retain independent nominal owners",mixed_job_row_fixtures;
-  "public jobs compilation runs generated tests without source",public_job_tests]]
+  "public jobs compilation runs generated tests without source",public_job_tests;
+  "repair identity extends immutable conversion lineage",repair_identity;
+  "repair revisions cannot replace or skip history",repair_revision_refusals;
+  "repair cannot replace the target codec",repair_contract_refusal;
+  "repair publication guards rejected callback history",repair_history_guard;
+  "generated typed repair chain runs without source",repair_native;
+  "public repair declarations and unsaved buffers",public_repair_checked;
+  "public repair declaration ownership and signature refusals",public_repair_invalid;
+  "public repair predecessor cycle refuses",public_repair_cycle;
+  "public repair captures predecessor declaration source",public_repair_guards;
+  "public compiled repair lineage runs without source",(fun()->public_repair_native());
+  "public repair fixture must reproduce predecessor rejection",(fun()->public_repair_native ~accepted_fixture:true());
+  "public repair import and contextual value boundaries",public_repair_import_boundary;
+  "public repair lesson local callback executes",(fun()->public_repair_native ~local_repair:true());
+  "public repair binds exact checked predecessor bytes",public_repair_exact_source;
+  "compiled typed repair executes atomic PostgreSQL updates",public_repair_postgres]]

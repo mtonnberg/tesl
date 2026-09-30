@@ -659,6 +659,9 @@ type pgQueueConversionSource struct {
 	spec                   pgQueueConversionSourceSpec
 	family, queue, job     string
 	fromVersion, toVersion int
+	parentDigest           string
+	repairRevision         int
+	conversion             pgRowCanonical
 }
 
 var compiledQueueConversionSources = struct {
@@ -671,6 +674,19 @@ func pgReadQueueConversionSource(spec pgQueueConversionSourceSpec) (*pgQueueConv
 	node := pgRowDocument(r, spec.document, spec.digest, "migration")
 	if r.err != nil {
 		return nil, r.err
+	}
+	parentDigest, repairRevision := "", 0
+	if node.list(4) && node.children[0].isAtom("checked-queue-repair-source-v1") {
+		if !node.children[1].atom || !pgMigrationDigest(node.children[1].value) || !node.children[2].atom {
+			return nil, fmt.Errorf("queue repair predecessor or revision is invalid")
+		}
+		parentDigest = node.children[1].value
+		var err error
+		repairRevision, err = strconv.Atoi(node.children[2].value)
+		if err != nil || repairRevision < 1 || repairRevision > 2147483646 || strconv.Itoa(repairRevision) != node.children[2].value {
+			return nil, fmt.Errorf("queue repair revision is invalid")
+		}
+		node = node.children[3]
 	}
 	if !node.list(13) || !node.children[0].isAtom("checked-queue-transform-source-v1") {
 		return nil, fmt.Errorf("queue conversion source has an unsupported closed format")
@@ -824,7 +840,8 @@ func pgReadQueueConversionSource(spec pgQueueConversionSourceSpec) (*pgQueueConv
 	if r.err != nil {
 		return nil, r.err
 	}
-	return &pgQueueConversionSource{spec: spec, family: family, queue: queue, job: job, fromVersion: version - 1, toVersion: version}, nil
+	return &pgQueueConversionSource{spec: spec, family: family, queue: queue, job: job, fromVersion: version - 1, toVersion: version,
+		parentDigest: parentDigest, repairRevision: repairRevision, conversion: node}, nil
 }
 
 func registerCompiledQueueConversionSources(specs []pgQueueConversionSourceSpec) {
@@ -844,6 +861,39 @@ func registerCompiledQueueConversionSources(specs []pgQueueConversionSourceSpec)
 	for key, value := range pending {
 		if old, exists := compiledQueueConversionSources.byDigest[key]; exists && old.spec != value.spec {
 			panic("conflicting queue conversion source")
+		}
+		if value.parentDigest != "" {
+			parent := pending[value.parentDigest]
+			if parent == nil {
+				parent = compiledQueueConversionSources.byDigest[value.parentDigest]
+			}
+			if parent == nil || parent.repairRevision+1 != value.repairRevision {
+				panic("queue repair has no exact immutable predecessor")
+			}
+			// Each revision introduces a new callback; a later repair must not
+			// silently reuse an earlier deployed conversion declaration.
+			for ancestor := parent; ancestor != nil; {
+				if ancestor.spec.callbackIdentity == value.spec.callbackIdentity {
+					panic("queue repair reused a deployed callback")
+				}
+				digest := ancestor.parentDigest
+				if digest == "" {
+					break
+				}
+				next := pending[digest]
+				if next == nil {
+					next = compiledQueueConversionSources.byDigest[digest]
+				}
+				if next == nil || next.repairRevision+1 != ancestor.repairRevision {
+					panic("queue repair has an incomplete or non-monotone lineage")
+				}
+				ancestor = next
+			}
+			for i := 0; i < 11; i++ {
+				if !pgRowCanonicalEqual(parent.conversion.children[i], value.conversion.children[i]) {
+					panic("queue repair changed its frozen source or target contract")
+				}
+			}
 		}
 	}
 	for key, value := range pending {
@@ -927,6 +977,24 @@ func BindCompiledQueueConversion[Old, Current any](digest string, decode func(an
 }
 
 func (c *CompiledQueueConversion[Old, Current]) Convert(sourceVersion int, bytes []byte) (result QueueConversionResult, err error) {
+	if c != nil && c.source != nil && c.source.parentDigest != "" {
+		return result, fmt.Errorf("queue repair requires its predecessor's rejected outcome")
+	}
+	return c.convertBytes(sourceVersion, bytes)
+}
+
+// Repair retries only an opaque rejection from the exact preceding conversion
+// or repair revision. It always decodes the original historical bytes. Like
+// Convert, this pure operation grants no permission to mutate a durable job.
+func (c *CompiledQueueConversion[Old, Current]) Repair(rejected QueueConversionResult) (QueueConversionResult, error) {
+	if c == nil || c.source == nil || c.source.parentDigest == "" || rejected.kind != "migration-rejected" ||
+		rejected.source == nil || rejected.source.spec.digest != c.source.parentDigest {
+		return QueueConversionResult{}, fmt.Errorf("queue repair requires its exact predecessor's rejection")
+	}
+	return c.convertBytes(rejected.SourceVersion(), []byte(rejected.original))
+}
+
+func (c *CompiledQueueConversion[Old, Current]) convertBytes(sourceVersion int, bytes []byte) (result QueueConversionResult, err error) {
 	if c == nil || c.source == nil || c.decode == nil || c.convert == nil || c.encode == nil || c.targetDecode == nil {
 		return result, fmt.Errorf("queue conversion is not bound")
 	}

@@ -21,10 +21,12 @@ val resolve : t -> owner:string -> Migration_ir.resolver
 val lower : scopes:Migration_canonical.scope list -> t ->
   (Migration_ir.definition list, Migration_ir.error) result
 
-(** Lower a checked pure helper graph, omitting only ordinary test declarations.
-    Every test body has already passed the frontend. Contextual migration or
-    Contract declarations and unsupported constants are not omitted. *)
-val lower_helpers : scopes:Migration_canonical.scope list -> t ->
+(** Lower a checked pure helper graph, omitting ordinary test declarations.
+     A source repair checker can additionally name its contextual Migration and
+     QueueRepair declarations by exact original owner/node identity. The caller
+     must have checked these separately; no proof or installed authority is
+     conferred. Contract declarations and other constants remain refused. *)
+val lower_helpers : ?contextual:(Ast.module_form * Ast.const_form) list -> scopes:Migration_canonical.scope list -> t ->
   (Migration_ir.definition list, Migration_ir.error) result
 
 (** The transform linker may omit its exact checked contextual declaration and

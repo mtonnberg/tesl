@@ -1116,6 +1116,17 @@ view. No implicit Same grant is introduced.
 
 Standalone migration compilation emits pure queue adapters and their fixture
 tests from checked `jobs` decisions. It creates no installed database history.
+Standalone typed repairs use `repair = QueueRepair { predecessor, job, revision,
+migrate, fixtures }`, explicitly imported from `Tesl.Migration`, in a pure helper
+module under the schema family's `Migrate` namespace. `predecessor` names a
+directly imported, exported `migration` or `repair` declaration; `job` is the
+exact revision-relative payload identity string. Positive repair revisions are
+consecutive from 1, independently of schema versions, with at most 128 revisions
+per checked chain. Each introduces a new callback consuming the original frozen
+payload and returning `Migrated` of the same target payload. Source/target
+contracts, codecs and queue identity remain exact. Fixtures must reproduce each
+predecessor's rejection before the repair test can run. `QueueRepair` is contextual
+source syntax, not a runtime value or permission to mutate quarantined jobs.
 Source diagnostics may accept a complete `jobs` decision, but ordinary Go
 application builds and both physical planning paths still report MIG028 until
 protected transformation and typed-repair execution are available. Choosing a

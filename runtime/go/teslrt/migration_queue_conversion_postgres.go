@@ -1,0 +1,497 @@
+package teslrt
+
+// This is an unpublished, isolated PostgreSQL execution candidate. It owns a
+// fresh namespace and one checked queue transition, not a format-5 application
+// database. No production installer or queue opener selects this protocol.
+// Keeping the executor real (roles, transactions, jobs and receipts) lets its
+// database invariants be tested before application-history integration.
+import (
+	"bytes"
+	"context"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"strings"
+
+	"github.com/jackc/pgx/v5"
+)
+
+type pgQueueConversionDB struct{ namespace, identity string }
+type pgQueueConversionStored struct {
+	Kind     string
+	Replayed bool
+}
+type pgQueueConversionExecutable interface {
+	queueConversionSource() *pgQueueConversionSource
+	Convert(int, []byte) (QueueConversionResult, error)
+	Repair(QueueConversionResult) (QueueConversionResult, error)
+}
+
+func pgQueueConversionCandidateRollback(tx pgx.Tx) {
+	ctx, cancel := context.WithTimeout(context.Background(), pgLeaseTimeout())
+	defer cancel()
+	_ = tx.Rollback(ctx)
+}
+
+func (c *CompiledQueueConversion[Old, Current]) queueConversionSource() *pgQueueConversionSource {
+	if c == nil {
+		return nil
+	}
+	return c.source
+}
+
+func pgQueueConversionCandidateTables(namespace string) []pgMigrationControlTable {
+	ns := quoteIdentifier(namespace) + "."
+	jobs := ""
+	for _, table := range pgQueueCandidateTables(namespace) {
+		if table.name == "tesl_jobs" {
+			jobs = table.columns
+		}
+	}
+	return []pgMigrationControlTable{
+		{"tesl_queue_conversion_scope", `
+ id smallint primary key check(id=1), identity uuid not null,
+ database_oid oid not null, database_name text not null,
+ family text not null, queue text not null, job_type text not null,
+ from_version integer not null, to_version integer not null,
+ floor integer not null, root_digest text not null,
+ check(from_version>=1 and to_version=from_version+1 and to_version<=2147483646),
+ check(floor in (from_version,to_version))`},
+		{"tesl_queue_payloads", `
+ version integer not null, queue text not null, job_type text not null,
+ contract bytea not null, contract_hash text not null,
+ primary key(version,queue,job_type),
+ check(pg_catalog.encode(pg_catalog.sha256(contract),'hex')=contract_hash)`},
+		{"tesl_queue_conversion_sources", `
+ digest text primary key, document bytea not null, parent_digest text references ` + ns + `tesl_queue_conversion_sources(digest),
+ revision integer not null unique check(revision>=0),
+ check(pg_catalog.encode(pg_catalog.sha256(document),'hex')=digest),
+ check((revision=0 and parent_digest is null) or (revision>0 and parent_digest is not null))`},
+		{"tesl_jobs", jobs},
+		{"tesl_queue_conversion_receipts", `
+ job_id text not null, source_digest text not null references ` + ns + `tesl_queue_conversion_sources(digest),
+ kind text not null check(kind in ('converted','migration-rejected','payload-invalid')),
+ original text not null, payload jsonb, reason text not null,
+ resume_status text not null check(resume_status in ('pending','dead')),
+ attempt_seq bigint not null check(attempt_seq>0),
+ primary key(job_id,source_digest),
+ check((kind='converted' and payload is not null) or (kind<>'converted' and payload is null))`},
+		{"tesl_queue_conversion_attempts", `
+ job_id text primary key references ` + ns + `tesl_jobs(id),
+ source_digest text not null references ` + ns + `tesl_queue_conversion_sources(digest),
+ attempt_seq bigint not null, transaction_id xid8 not null,
+ original text not null, reason text not null,
+ resume_status text not null check(resume_status in ('pending','dead'))`},
+	}
+}
+
+func pgQueueConversionCandidateFunctions(namespace string) []pgMigrationControlFunction {
+	ns := quoteIdentifier(namespace) + "."
+	guard := `
+ if pg_catalog.current_setting('transaction_isolation')<>'read committed' then
+  raise exception 'tesl: queue conversion requires read committed'; end if;
+ select * into s from ` + ns + `tesl_queue_conversion_scope where id=1 for share;
+ if not found or expected is null or s.identity<>expected or s.database_name<>pg_catalog.current_database()
+  or s.database_oid<>(select oid from pg_catalog.pg_database where datname=pg_catalog.current_database()) then
+  raise exception 'tesl: queue conversion database identity differs'; end if;
+`
+	return []pgMigrationControlFunction{
+		{"tesl_queue_conversion_enqueue", "expected uuid, v integer, job_id text, body jsonb, wanted text, due text", "void", "volatile", `
+declare s ` + ns + `tesl_queue_conversion_scope%rowtype;
+begin` + guard + `
+ if v is null or v not in (s.from_version,s.to_version) or v<s.floor or job_id is null or job_id=''
+  or body is null or wanted is null or wanted not in ('pending','dead') or due is null then
+  raise exception 'tesl: invalid queue conversion enqueue'; end if;
+ if exists(select 1 from ` + ns + `tesl_queue_conversion_receipts r where r.job_id=tesl_queue_conversion_enqueue.job_id) then
+  raise exception 'tesl: completed job identity cannot be reused'; end if;
+ insert into ` + ns + `tesl_jobs(id,queue,job_type,payload,schema_version,status,dead_reason,next_attempt_at)
+ values(job_id,s.queue,s.job_type,body,v,wanted,case when wanted='dead' then 'attempts-exhausted' end,due::timestamptz);
+end`},
+		{"tesl_queue_conversion_begin", "expected uuid, digest text, job_id text, binding jsonb", "TABLE(original text, reason text, attempt_seq bigint, transaction_id text, outcome text)", "volatile", `
+declare s ` + ns + `tesl_queue_conversion_scope%rowtype;
+ source ` + ns + `tesl_queue_conversion_sources%rowtype; j ` + ns + `tesl_jobs%rowtype;
+ prior ` + ns + `tesl_queue_conversion_receipts%rowtype; resume text; old_reason text:='';
+begin` + guard + `
+ select * into source from ` + ns + `tesl_queue_conversion_sources c where c.digest=tesl_queue_conversion_begin.digest;
+ if not found then raise exception 'tesl: conversion source is not installed'; end if;
+ if source.document is distinct from pg_catalog.decode(binding->>'document','hex')
+  or source.parent_digest is distinct from (binding->>'parent') or source.revision::text is distinct from (binding->>'revision')
+  or s.family is distinct from (binding->>'family') or s.queue is distinct from (binding->>'queue')
+  or s.job_type is distinct from (binding->>'job') or s.from_version::text is distinct from (binding->>'from')
+  or s.to_version::text is distinct from (binding->>'to') or s.root_digest is distinct from (binding->>'root')
+  or not exists(select 1 from ` + ns + `tesl_queue_payloads p where p.version=s.from_version and p.queue=s.queue and p.job_type=s.job_type and p.contract=pg_catalog.decode(binding->>'old','hex'))
+  or not exists(select 1 from ` + ns + `tesl_queue_payloads p where p.version=s.to_version and p.queue=s.queue and p.job_type=s.job_type and p.contract=pg_catalog.decode(binding->>'new','hex')) then
+  raise exception 'tesl: installed queue conversion binding differs'; end if;
+ select * into j from ` + ns + `tesl_jobs q where q.id=job_id for update skip locked;
+ if not found then return; end if;
+ select * into prior from ` + ns + `tesl_queue_conversion_receipts r where r.job_id=j.id and r.source_digest=digest;
+ if found then
+  return query select prior.original,prior.reason,prior.attempt_seq,''::text,prior.kind; return;
+ end if;
+ if j.queue<>s.queue or j.job_type<>s.job_type or j.schema_version<>s.from_version or j.schema_version<s.floor then
+  raise exception 'tesl: conversion job has another source identity'; end if;
+ if source.revision=0 then
+  if j.status not in ('pending','dead') then raise exception 'tesl: conversion requires an unclaimed source job'; end if;
+  resume:=j.status;
+ else
+  select * into prior from ` + ns + `tesl_queue_conversion_receipts r where r.job_id=j.id and r.source_digest=source.parent_digest;
+  if not found or prior.kind<>'migration-rejected' or j.status<>'quarantined' or j.dead_reason<>'migration-rejected'
+   or prior.original<>j.payload::text or prior.attempt_seq>j.claim_seq
+   or exists(select 1 from ` + ns + `tesl_queue_conversion_receipts newer where newer.job_id=j.id and newer.attempt_seq>prior.attempt_seq) then
+   raise exception 'tesl: repair requires its exact durable predecessor rejection'; end if;
+  resume:=prior.resume_status; old_reason:=prior.reason;
+ end if;
+ update ` + ns + `tesl_jobs q set claim_seq=q.claim_seq+1 where q.id=j.id returning q.claim_seq into j.claim_seq;
+ insert into ` + ns + `tesl_queue_conversion_attempts(job_id,source_digest,attempt_seq,transaction_id,original,reason,resume_status)
+ values(j.id,digest,j.claim_seq,pg_catalog.pg_current_xact_id(),j.payload::text,old_reason,resume)
+ on conflict on constraint tesl_queue_conversion_attempts_pkey do update set
+  source_digest=excluded.source_digest,attempt_seq=excluded.attempt_seq,transaction_id=excluded.transaction_id,
+  original=excluded.original,reason=excluded.reason,resume_status=excluded.resume_status;
+ return query select j.payload::text,old_reason,j.claim_seq,pg_catalog.pg_current_xact_id()::text,''::text;
+end`},
+		{"tesl_queue_conversion_finish", "expected uuid, digest text, job_id text, attempt_seq bigint, transaction_id text, original text, kind text, body jsonb, reason text", "boolean", "volatile", `
+declare s ` + ns + `tesl_queue_conversion_scope%rowtype;
+ a ` + ns + `tesl_queue_conversion_attempts%rowtype; j ` + ns + `tesl_jobs%rowtype;
+begin` + guard + `
+ if transaction_id is distinct from pg_catalog.pg_current_xact_id()::text then return false; end if;
+ select * into j from ` + ns + `tesl_jobs q where q.id=job_id for update;
+ if not found then return false; end if;
+ select * into a from ` + ns + `tesl_queue_conversion_attempts p where p.job_id=j.id;
+ if not found or a.source_digest is distinct from digest or a.attempt_seq is distinct from attempt_seq
+  or a.transaction_id<>pg_catalog.pg_current_xact_id() or a.original is distinct from original
+  or j.claim_seq<>a.attempt_seq or j.schema_version<>s.from_version or j.schema_version<s.floor
+  or j.queue<>s.queue or j.job_type<>s.job_type or j.payload::text<>a.original
+  or j.status not in ('pending','dead','quarantined') then return false; end if;
+ if kind is null or kind not in ('converted','migration-rejected','payload-invalid') or reason is null
+  or (kind='converted')<>(body is not null) then raise exception 'tesl: invalid conversion outcome'; end if;
+ insert into ` + ns + `tesl_queue_conversion_receipts(job_id,source_digest,kind,original,payload,reason,resume_status,attempt_seq)
+ values(j.id,digest,kind,original,body,reason,a.resume_status,a.attempt_seq);
+ update ` + ns + `tesl_jobs q set
+  payload=case when kind='converted' then body else q.payload end,
+  schema_version=case when kind='converted' then s.to_version else q.schema_version end,
+  status=case when kind='converted' then a.resume_status else 'quarantined' end,
+  dead_reason=case when kind<>'converted' then kind when a.resume_status='dead' then 'attempts-exhausted' end,
+  dead_detail=case when kind='migration-rejected' then pg_catalog.left(reason,256) end
+ where q.id=j.id;
+ delete from ` + ns + `tesl_queue_conversion_attempts p where p.job_id=j.id;
+ return true;
+end`},
+		{"tesl_queue_conversion_retire", "expected uuid", "boolean", "volatile", `
+declare s ` + ns + `tesl_queue_conversion_scope%rowtype;
+begin
+ if pg_catalog.current_setting('transaction_isolation')<>'read committed' then raise exception 'tesl: retirement requires read committed'; end if;
+ select * into s from ` + ns + `tesl_queue_conversion_scope where id=1 for update;
+ if not found or expected is null or s.identity<>expected or s.database_name<>pg_catalog.current_database()
+  or s.database_oid<>(select oid from pg_catalog.pg_database where datname=pg_catalog.current_database()) then
+  raise exception 'tesl: queue conversion database identity differs'; end if;
+ if exists(select 1 from ` + ns + `tesl_jobs where schema_version<s.to_version) then return false; end if;
+ update ` + ns + `tesl_queue_conversion_scope set floor=s.to_version where id=1;
+ return true;
+end`},
+	}
+}
+
+func pgQueueConversionPayloadContract(source *pgQueueConversionSource, target bool) []byte {
+	i := 7
+	if target {
+		i++
+	}
+	return []byte(pgRowEncode(pgRowList(pgRowAtom("tesl-migration-canonical"), pgRowAtom("1"), pgRowAtom("contract"),
+		pgRowList(pgRowAtom("queue-payload-v1"), source.conversion.children[i]))))
+}
+
+func pgQueueConversionCandidateBinding(source *pgQueueConversionSource) ([]byte, error) {
+	compiledQueueConversionSources.RLock()
+	root := source
+	for root != nil && root.parentDigest != "" {
+		root = compiledQueueConversionSources.byDigest[root.parentDigest]
+	}
+	compiledQueueConversionSources.RUnlock()
+	if root == nil {
+		return nil, fmt.Errorf("missing compiled queue conversion predecessor")
+	}
+	var parent any
+	if source.parentDigest != "" {
+		parent = source.parentDigest
+	}
+	return json.Marshal(map[string]any{"document": source.spec.document, "parent": parent, "revision": source.repairRevision,
+		"family": source.family, "queue": source.queue, "job": source.job, "from": source.fromVersion, "to": source.toVersion,
+		"root": root.spec.digest, "old": hex.EncodeToString(pgQueueConversionPayloadContract(source, false)),
+		"new": hex.EncodeToString(pgQueueConversionPayloadContract(source, true))})
+}
+
+func pgQueueConversionCandidateLineage(finalDigest string) ([]*pgQueueConversionSource, error) {
+	compiledQueueConversionSources.RLock()
+	defer compiledQueueConversionSources.RUnlock()
+	var lineage []*pgQueueConversionSource
+	for source := compiledQueueConversionSources.byDigest[finalDigest]; source != nil; source = compiledQueueConversionSources.byDigest[source.parentDigest] {
+		lineage = append(lineage, source)
+		if len(lineage) > 129 {
+			return nil, fmt.Errorf("queue conversion candidate exceeds 128 repair revisions")
+		}
+	}
+	if len(lineage) == 0 || lineage[len(lineage)-1].repairRevision != 0 || len(lineage) != lineage[0].repairRevision+1 {
+		return nil, fmt.Errorf("queue conversion candidate requires a complete linked lineage")
+	}
+	return lineage, nil
+}
+
+// Install only into a fresh isolated namespace. Payload contracts and every
+// callback identity come from the actual linked compiler descriptors. This is
+// deliberately not an upgrade or an installer for application format 5.
+func pgInstallQueueConversionCandidate(ctx context.Context, conn *pgx.Conn, namespace string, roles PgMigrationControlRoles, finalDigest string) (pgQueueConversionDB, error) {
+	var scope pgQueueConversionDB
+	lineage, err := pgQueueConversionCandidateLineage(finalDigest)
+	if err != nil {
+		return scope, err
+	}
+	root := lineage[len(lineage)-1]
+	if namespace == "" || len(namespace) > 63 || strings.IndexByte(namespace, 0) >= 0 {
+		return scope, fmt.Errorf("invalid queue conversion namespace")
+	}
+	if roles.Request == "" {
+		return scope, fmt.Errorf("queue conversion candidate requires an isolated request role")
+	}
+	tx, err := conn.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	if err != nil {
+		return scope, err
+	}
+	defer pgQueueConversionCandidateRollback(tx)
+	if err := pgControlRoles(ctx, tx, roles, true); err != nil {
+		return scope, err
+	}
+	ns := quoteIdentifier(namespace) + "."
+	if _, err := tx.Exec(ctx, "create schema "+quoteIdentifier(namespace)+" authorization "+quoteIdentifier(roles.Owner)); err != nil {
+		return scope, err
+	}
+	if _, err := tx.Exec(ctx, "set local role "+quoteIdentifier(roles.Owner)); err != nil {
+		return scope, err
+	}
+	for _, table := range pgQueueConversionCandidateTables(namespace) {
+		if _, err := tx.Exec(ctx, "create table "+ns+quoteIdentifier(table.name)+" ("+table.columns+")"); err != nil {
+			return scope, err
+		}
+	}
+	for _, objects := range []string{"tables", "sequences"} {
+		if _, err := tx.Exec(ctx, "revoke all on all "+objects+" in schema "+quoteIdentifier(namespace)+" from public,"+quoteIdentifier(roles.Worker)+","+quoteIdentifier(roles.Request)); err != nil {
+			return scope, err
+		}
+	}
+	for i, version := range []int{root.fromVersion, root.toVersion} {
+		contract := pgQueueConversionPayloadContract(root, i == 1)
+		if _, err := tx.Exec(ctx, "insert into "+ns+"tesl_queue_payloads values($1,$2,$3,$4,pg_catalog.encode(pg_catalog.sha256($4),'hex'))", version, root.queue, root.job, contract); err != nil {
+			return scope, err
+		}
+	}
+	for i := len(lineage) - 1; i >= 0; i-- {
+		source := lineage[i]
+		if _, err := pgReadQueueConversionSource(source.spec); err != nil {
+			return scope, err
+		}
+		doc, err := hex.DecodeString(source.spec.document)
+		if err != nil {
+			return scope, err
+		}
+		var parent any
+		if source.parentDigest != "" {
+			parent = source.parentDigest
+		}
+		if _, err := tx.Exec(ctx, "insert into "+ns+"tesl_queue_conversion_sources values($1,$2,$3,$4)", source.spec.digest, doc, parent, source.repairRevision); err != nil {
+			return scope, err
+		}
+	}
+	scope = pgQueueConversionDB{namespace: namespace}
+	if err := tx.QueryRow(ctx, "insert into "+ns+`tesl_queue_conversion_scope
+ select 1,pg_catalog.gen_random_uuid(),oid,datname,$1,$2,$3,$4,$5,$4,$6 from pg_catalog.pg_database where datname=pg_catalog.current_database()
+ returning identity::text`, root.family, root.queue, root.job, root.fromVersion, root.toVersion, root.spec.digest).Scan(&scope.identity); err != nil {
+		return pgQueueConversionDB{}, err
+	}
+	for _, fn := range pgQueueConversionCandidateFunctions(namespace) {
+		if _, err := tx.Exec(ctx, pgControlFunctionSQL(namespace, roles.Owner, fn)); err != nil {
+			return pgQueueConversionDB{}, err
+		}
+		name := ns + quoteIdentifier(fn.name) + "(" + pgControlArgumentTypes(fn) + ")"
+		if _, err := tx.Exec(ctx, "revoke all on function "+name+" from public,"+quoteIdentifier(roles.Worker)+","+quoteIdentifier(roles.Request)); err != nil {
+			return pgQueueConversionDB{}, err
+		}
+		role := roles.Worker
+		if fn.name == "tesl_queue_conversion_enqueue" {
+			role = roles.Request
+		}
+		if _, err := tx.Exec(ctx, "grant execute on function "+name+" to "+quoteIdentifier(role)); err != nil {
+			return pgQueueConversionDB{}, err
+		}
+		if err := pgControlFunctionCatalog(ctx, tx, namespace, PgMigrationControlRoles{Owner: roles.Owner, Worker: role}, fn); err != nil {
+			return pgQueueConversionDB{}, err
+		}
+	}
+	if _, err := tx.Exec(ctx, "revoke all on schema "+quoteIdentifier(namespace)+" from public; grant usage on schema "+quoteIdentifier(namespace)+" to "+quoteIdentifier(roles.Worker)+","+quoteIdentifier(roles.Request)); err != nil {
+		return pgQueueConversionDB{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return pgQueueConversionDB{}, err
+	}
+	return scope, nil
+}
+
+// A later deployment appends checked repairs under the short-lived installer
+// identity. Existing source rows are compared byte-for-byte, never rewritten.
+func pgRegisterQueueRepairCandidate(ctx context.Context, conn *pgx.Conn, scope pgQueueConversionDB, roles PgMigrationControlRoles, digest string) error {
+	lineage, err := pgQueueConversionCandidateLineage(digest)
+	if err != nil {
+		return err
+	}
+	root := lineage[len(lineage)-1]
+	tx, err := conn.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	if err != nil {
+		return err
+	}
+	defer pgQueueConversionCandidateRollback(tx)
+	if err := pgControlRoles(ctx, tx, roles, true); err != nil {
+		return err
+	}
+	if exists, err := pgControlNamespace(ctx, tx, scope.namespace, roles.Owner, roles.Worker); err != nil {
+		return err
+	} else if !exists {
+		return fmt.Errorf("queue repair candidate namespace is missing")
+	}
+	if _, err := tx.Exec(ctx, "set local role "+quoteIdentifier(roles.Owner)); err != nil {
+		return err
+	}
+	ns := quoteIdentifier(scope.namespace) + "."
+	var family, queue, job, baseline string
+	var from, to, floor int
+	err = tx.QueryRow(ctx, "select family,queue,job_type,from_version,to_version,floor,root_digest from "+ns+`tesl_queue_conversion_scope
+ where id=1 and identity=$1 and database_name=pg_catalog.current_database()
+ and database_oid=(select oid from pg_catalog.pg_database where datname=pg_catalog.current_database()) for update`, scope.identity).
+		Scan(&family, &queue, &job, &from, &to, &floor, &baseline)
+	if err != nil {
+		return err
+	}
+	if family != root.family || queue != root.queue || job != root.job || from != root.fromVersion || to != root.toVersion || baseline != root.spec.digest {
+		return fmt.Errorf("queue repair differs from installed transition")
+	}
+	for i, version := range []int{from, to} {
+		var contract []byte
+		if err := tx.QueryRow(ctx, "select contract from "+ns+"tesl_queue_payloads where version=$1 and queue=$2 and job_type=$3", version, queue, job).Scan(&contract); err != nil {
+			return err
+		}
+		if !bytes.Equal(contract, pgQueueConversionPayloadContract(root, i == 1)) {
+			return fmt.Errorf("queue repair payload contract differs from installed source")
+		}
+	}
+	for i := len(lineage) - 1; i >= 0; i-- {
+		source := lineage[i]
+		if _, err := pgReadQueueConversionSource(source.spec); err != nil {
+			return err
+		}
+		document, err := hex.DecodeString(source.spec.document)
+		if err != nil {
+			return err
+		}
+		var existing, parent string
+		var installed []byte
+		err = tx.QueryRow(ctx, "select digest,document,coalesce(parent_digest,'') from "+ns+"tesl_queue_conversion_sources where revision=$1", source.repairRevision).Scan(&existing, &installed, &parent)
+		if err == nil {
+			if existing != source.spec.digest || !bytes.Equal(installed, document) || parent != source.parentDigest {
+				return fmt.Errorf("immutable installed queue repair history differs")
+			}
+			continue
+		}
+		if err != pgx.ErrNoRows {
+			return err
+		}
+		if source.repairRevision == 0 || floor != from {
+			return fmt.Errorf("queue repair cannot replace its baseline or revive a retired source")
+		}
+		var count, maximum int
+		if err := tx.QueryRow(ctx, "select count(*),coalesce(max(revision),-1) from "+ns+"tesl_queue_conversion_sources").Scan(&count, &maximum); err != nil {
+			return err
+		}
+		if count != source.repairRevision || maximum+1 != source.repairRevision {
+			return fmt.Errorf("queue repair installed prefix is incomplete")
+		}
+		if _, err := tx.Exec(ctx, "insert into "+ns+"tesl_queue_conversion_sources values($1,$2,$3,$4)", source.spec.digest, document, source.parentDigest, source.repairRevision); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
+}
+
+// One job and its immutable receipt commit together. A lost connection or
+// callback error rolls back the row lock, attempt and outcome. Replays consult
+// the receipt before invoking the callback. Caller-owned transactions permit
+// deterministic before/after-commit and competing-worker tests.
+func pgApplyQueueConversionCandidateTx(ctx context.Context, tx pgx.Tx, scope pgQueueConversionDB, conversion pgQueueConversionExecutable, jobID string) (pgQueueConversionStored, error) {
+	var stored pgQueueConversionStored
+	if conversion == nil {
+		return stored, fmt.Errorf("queue conversion executable is missing")
+	}
+	source := conversion.queueConversionSource()
+	if source == nil || scope.namespace == "" || scope.identity == "" {
+		return stored, fmt.Errorf("queue conversion database binding is missing")
+	}
+	ns := quoteIdentifier(scope.namespace) + "."
+	var original, reason, transaction, outcome string
+	var sequence int64
+	binding, err := pgQueueConversionCandidateBinding(source)
+	if err != nil {
+		return stored, err
+	}
+	err = tx.QueryRow(ctx, "select * from "+ns+"tesl_queue_conversion_begin($1,$2,$3,$4::jsonb)", scope.identity, source.spec.digest, jobID, string(binding)).
+		Scan(&original, &reason, &sequence, &transaction, &outcome)
+	if err == pgx.ErrNoRows {
+		return pgQueueConversionStored{Kind: "unavailable"}, nil
+	}
+	if err != nil {
+		return stored, err
+	}
+	if outcome != "" {
+		return pgQueueConversionStored{Kind: outcome, Replayed: true}, nil
+	}
+	var result QueueConversionResult
+	if source.parentDigest == "" {
+		result, err = conversion.Convert(source.fromVersion, []byte(original))
+	} else {
+		compiledQueueConversionSources.RLock()
+		parent := compiledQueueConversionSources.byDigest[source.parentDigest]
+		compiledQueueConversionSources.RUnlock()
+		result, err = conversion.Repair(QueueConversionResult{kind: "migration-rejected", original: original, reason: reason, source: parent})
+	}
+	if err != nil {
+		return stored, err
+	}
+	if result.SourceDigest() != source.spec.digest || result.Original() != original {
+		return stored, fmt.Errorf("conversion outcome lost its database source binding")
+	}
+	var payload any
+	if result.Kind() == "converted" {
+		payload = result.Payload()
+	}
+	var applied bool
+	err = tx.QueryRow(ctx, "select "+ns+"tesl_queue_conversion_finish($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9)",
+		scope.identity, source.spec.digest, jobID, sequence, transaction, original, result.Kind(), payload, result.Reason()).Scan(&applied)
+	if err != nil {
+		return stored, err
+	}
+	if !applied {
+		return stored, fmt.Errorf("queue conversion attempt lost ownership")
+	}
+	return pgQueueConversionStored{Kind: result.Kind()}, nil
+}
+
+func pgApplyQueueConversionCandidate(ctx context.Context, conn *pgx.Conn, scope pgQueueConversionDB, conversion pgQueueConversionExecutable, jobID string) (pgQueueConversionStored, error) {
+	tx, err := conn.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	if err != nil {
+		return pgQueueConversionStored{}, err
+	}
+	defer pgQueueConversionCandidateRollback(tx)
+	result, err := pgApplyQueueConversionCandidateTx(ctx, tx, scope, conversion, jobID)
+	if err != nil {
+		return pgQueueConversionStored{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return pgQueueConversionStored{}, err
+	}
+	return result, nil
+}

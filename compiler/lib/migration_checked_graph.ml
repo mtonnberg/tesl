@@ -175,8 +175,12 @@ let lower_selected ~scopes ~omit graph =
 
 let lower ~scopes graph = lower_selected ~scopes ~omit:(fun _ _ -> false) graph
 
-let lower_helpers ~scopes graph =
-  lower_selected ~scopes ~omit:(fun _ -> function DTest _ -> true | _ -> false) graph
+let lower_helpers ?(contextual=[]) ~scopes graph =
+  lower_selected ~scopes ~omit:(fun m -> function
+    | DTest _ -> true
+    | DConst c -> List.exists(fun(owner,declaration)->owner==m && declaration==c)contextual &&
+        (Migration_form.is_declaration m c || Migration_form.is_queue_repair m c)
+    | _ -> false) graph
 
 let lower_transform ~scopes ~contextual:(owner, declaration) graph =
   let matching = List.filter (fun checked -> checked.form == owner) graph.modules in

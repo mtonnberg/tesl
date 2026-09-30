@@ -119,7 +119,7 @@ let make ?(skip_dep_body=fun _ -> false) (entry : module_form) =
     let money = !(Units_catalog.money_rate_aliases_active) in
     Fun.protect ~finally:(fun () ->
       Units_catalog.set_active_aliases aliases; Units_catalog.money_rate_aliases_active := money)
-      (fun () -> D.diagnostics source m @ Migration_contract.diagnostics source m @
+      (fun () -> D.diagnostics source m @ Migration_contract.diagnostics source m @ Migration_queue_repair.diagnostics source m @
         List.concat_map (fun (d,root,family) -> check_history m d root family) (roots m))
 
 (** Explicit migration roots are checking dependencies of their importers too.

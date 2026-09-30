@@ -2,7 +2,7 @@
     arguments are checked by Migration_declaration against checked inventories. *)
 open Ast
 
-let type_names = ["Migration"; "Entity"; "Rule"; "Same"; "Contract"; "Drop"; "Tighten"]
+let type_names = ["Migration"; "Entity"; "Rule"; "Same"; "Contract"; "Drop"; "Tighten"; "QueueRepair"]
 let constructor_groups = ["Entity", ["Additive"; "Derived"; "Migrate"; "New"; "Drop"];
                           "Rule", ["Default"; "Rename"; "Retype"; "Revalidate"; "WriteBack"; "Legacy"; "LegacyWith"]; "Same", ["Same"];
                           "Drop", ["Table"; "Column"; "Storage"; "Index"; "Trigger"]; "Tighten", ["NotNull"]]
@@ -38,7 +38,9 @@ let is_declaration (m : module_form) (c : const_form) =
 
 let is_contract (m:module_form) (c:const_form) =
   imported_name m "Contract" && fst(application c.value)="Contract"
-let is_contextual_declaration m c = is_declaration m c || is_contract m c
+let is_queue_repair (m:module_form) (c:const_form) =
+  imported_name m "QueueRepair" && fst(application c.value)="QueueRepair"
+let is_contextual_declaration m c = is_declaration m c || is_contract m c || is_queue_repair m c
 
 let runtime_declarations (m : module_form) =
   List.filter (function DConst c -> not (is_contextual_declaration m c) | _ -> true) m.decls

@@ -1,11 +1,10 @@
 # Lesson 96 — Test a typed conversion of an old queued payload
 
 You can test a queue conversion as an ordinary pure Tesl function before it is
-connected to durable queue processing. The compiler now has an internal checker
-and adapter emitter that bind such a function to its exact old/new payload and
-codec closures.
-**Changed-payload deployment, repair revisions and transforming retirement are
-not enabled yet.** The running queue still refuses those changes with MIG028.
+connected to durable queue processing. The compiler binds conversion and repair
+functions to their exact old/new payload types and codecs and emits fixture tests.
+**Changed-payload deployment, durable quarantine repair and transforming retirement
+are not enabled yet.** The running queue still refuses those changes with MIG028.
 
 For retirement of unchanged payloads, use
 [lesson 95](lesson95-retiring-unchanged-queue-payloads.md).
@@ -109,6 +108,60 @@ The emitter also generates fixture smoke tests. A fixture returning `Nothing`
 fails by fixture name. Both a converted value and a deliberate `Reject` are
 valid smoke outcomes, so keep the business assertions above.
 
+## Declare a typed repair revision
+
+Keep the rejected migration unchanged. Add a separate source file,
+`migrations/mail/repair1.tesl`, naming its exported declaration:
+
+```tesl
+module Schema.Mail.Migrate.Repair1 exposing [repair]
+import Tesl.Prelude exposing [String, Int]
+import Tesl.Migration exposing [QueueRepair, Migrated(..)]
+import Schema.Mail.V1
+import Schema.Mail.VCurrent
+import Schema.Mail.Migrate.V2
+
+repair = QueueRepair {
+  predecessor: Schema.Mail.Migrate.V2.migration
+  job: "Delivery"
+  revision: 1
+  migrate: repairEmpty
+  fixtures: [emptyJob]
+}
+
+fn repairEmpty(old: Schema.Mail.V1.Delivery) -> Migrated Schema.Mail.VCurrent.Delivery =
+  Row (Schema.Mail.VCurrent.Delivery { body: "repaired", priority: 9 })
+
+fn emptyJob() -> Schema.Mail.V1.Delivery =
+  Schema.Mail.V1.Delivery { text: "" }
+```
+
+Here `"repaired"` is an explicit application policy for an old empty message.
+The callback still consumes `V1.Delivery`; it cannot pretend the rejected bytes
+already contain a current payload. Run:
+
+```sh
+tesl agent-context migrations/mail/repair1.tesl
+tesl test migrations/mail/repair1.tesl
+```
+
+The fixture test first runs the predecessor on `emptyJob()`, requires its
+rejection, then runs the repair and checks the resulting target encoding. A
+fixture accepted by the predecessor fails the repair test. Another deliberate
+`Reject` remains a valid smoke outcome; add business assertions for cases your
+repair must accept.
+
+A subsequent repair names `Schema.Mail.Migrate.Repair1.repair` as its predecessor,
+imports that module directly, and uses `revision: 2` with a new callback. It still
+consumes the original `V1` payload and targets the same schema as revision 1.
+Revision gaps, cycles, another job, private predecessor declarations, callback
+reuse and changed payload contracts are refused. The source checker supports
+chains of up to 128 repair revisions.
+
+These commands check and test pure repair artifacts. They do not update stored
+quarantined jobs; durable repair registration and crash-safe progress are still
+the next runtime integration boundary.
+
 ## Run the regression
 
 The complete schemas, helper functions and negative cases are in
@@ -129,4 +182,27 @@ The suite also checks exact runtime bindings, freshly rehashed metadata
 substitutions, malformed payloads, helper-module cycles, optional fixtures and
 failure before stale source evidence can be emitted. Connecting these pure
 adapters to protected durable claims, typed repair receipts and transforming
-retirement is the next implementation boundary.
+retirement in ordinary applications is the next implementation boundary.
+
+## Real PostgreSQL execution tests
+
+The compiler regression now includes an isolated PostgreSQL execution candidate.
+It compiles the public repair declarations, deletes their original source files,
+and runs the generated converters against real `tesl_jobs` rows with restricted
+database roles. The tests verify that rejection retains the original payload and
+version, later repairs can be registered and executed, and successful repair
+updates the stored payload/version with a durable receipt in the same transaction.
+
+The database tests also kill a PostgreSQL backend before commit, reconnect after
+commit, race competing workers, reject stale attempts, preserve delayed/dead-job
+state, and check that quarantines block the candidate's retirement floor. Run the
+private-cluster migration gate to include the mandatory database witnesses:
+
+```sh
+nix develop --command bash scripts/run-migration-tests.sh
+```
+
+This candidate exercises actual database mutations, but it has its own isolated
+installation and admission floor. It is not yet connected to ordinary format-5
+application deployment or the running queue's lease protocol. The `tesl test`
+commands earlier in this lesson still run the pure generated fixtures.

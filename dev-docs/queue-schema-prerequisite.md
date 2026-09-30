@@ -152,13 +152,103 @@ the target codec. Traps, bad result tags and encoder failures yield no usable
 output. Generated fixture tests cover direct and optional old records; Nothing
 is a named failure, while both Row and Reject are valid smoke results.
 
-This registry is not the database's installed queue binding. No queue claims,
-payload writes, repair records or retirement transitions use these adapters
-yet, and public changed-payload compilation still refuses. The standalone
+This registry is not the application's installed queue binding. Production queue
+claims, payload writes, repair records and retirement transitions do not use it
+yet; the isolated PostgreSQL candidate below does. Public changed-payload
+application compilation still refuses. The standalone
 internal adapter artifact includes the PostgreSQL runtime's canonical source
 reader, but opens no database connection.
 
+## Typed repair source and execution boundary
+
+The internal `Migration_queue_transform.check_repair` judgment extends a checked
+conversion with a numbered repair revision. Revision 1 names the original
+conversion; each later revision names the immediately preceding repair. Its
+canonical descriptor binds that predecessor digest, revision number, and the
+replacement callback/fixture closure. The source and target schema versions,
+queue/job identities, payload contracts and codecs must remain exact. A repair
+must introduce a callback declaration not used anywhere earlier in its lineage.
+Source publication guards include every predecessor; editing the deployed
+conversion cannot silently authorize a repair.
+
+`Compile.compile_queue_conversion_artifacts` emits the complete lineage. The
+runtime validates all predecessors before publishing the registry batch, even
+if descriptors arrive in reverse order. `CompiledQueueConversion.Repair` accepts
+only an opaque `migration-rejected` outcome from its exact predecessor, decodes
+its original historical bytes, invokes the new checked callback, and encodes and
+checks the target value. Another rejection preserves the original bytes and
+source version while identifying the new repair revision. A trap, invalid tag
+or failed encoding returns no usable result. Ordinary `Convert` cannot bypass
+the repair's predecessor requirement. Repair fixture tests execute the full
+lineage, so a fixture must actually reach rejection at each predecessor.
+
+Public `QueueRepair` declarations now feed this judgment through ordinary source
+diagnostics and standalone compilation. Each helper module owns one `repair`
+declaration with `predecessor`, `job`, `revision`, `migrate` and `fixtures` fields.
+The predecessor must be a directly imported, exported `migration` or `repair`
+declaration in the same family. `job` is the exact revision-relative payload
+identity string. The checker resolves the complete chain (at most 128 repair
+revisions), checks the original `Migration.jobs` decision, captures predecessor
+declarations and respects unsaved buffers. Only those checked contextual nodes
+are omitted from callback IR; unrelated contextual declarations still refuse.
+Ordinary emission deduplicates the complete lineage before runtime registration.
+See lesson 96 for a complete `tesl test` example.
+
+There is no durable quarantine command. Pure calls can be repeated; they provide no
+exactly-once database guarantee. Application-bound repair registration, durable
+progress, attempt-fenced updates, crash/restart recovery and retirement finality
+remain required before deployment can be enabled; the candidate below exercises
+those database mechanics in isolation.
+
 ## Regression gates
+
+### PostgreSQL conversion and repair execution candidate
+
+`runtime/go/teslrt/migration_queue_conversion_postgres.go` now executes compiled
+conversions and repair revisions against real PostgreSQL jobs. Its private
+installer owns a fresh, isolated namespace containing one checked transition;
+it is **not** an application format-5 installer or upgrade. It reuses the actual
+`tesl_jobs` table definition and installs payload contracts and source descriptors
+from the linked compiler registry, rather than constructing substitute callbacks
+or patching application history metadata.
+
+The candidate provides:
+
+- An installation UUID plus database OID/name binding, exact queue/job and version
+  checks, and byte-exact source/target contract and descriptor checks.
+- Installer-only append of repair revisions after an existing durable rejection.
+  Registration verifies the entire existing prefix and rolls back an incomplete
+  batch. It cannot rewrite an installed callback or revive a retired source.
+- Restricted request/worker roles and security-definer operations. Default grants
+  on tables, sequences and functions are explicitly revoked before the intended
+  grants are applied; installed function definitions and execution grants are checked.
+- Per-job READ COMMITTED transactions with row locks, transaction-ID/sequence
+  attempt fencing, and immutable outcome receipts. The compiled frozen decoder,
+  callback and target encoder/decoder execute inside that transaction. The payload,
+  version, quarantine state and receipt commit together. A replay returns the
+  receipt before calling the converter again.
+- Original stored JSONB text and source-version retention on rejection. Successful
+  repair restores the original pending/dead status and preserves retry attempts and
+  schedule. Malformed payloads cannot acquire typed-repair authority.
+- A candidate admission floor that advances only when no old-stamped jobs remain.
+  Rejected and malformed jobs block it; waiting old enqueues reread the committed
+  floor after the exclusive retirement lock.
+
+The source-deleted generated-project fixture in
+`compiler/test/fixtures/queue-repair-postgres/` exercises real roles and database
+connections. Six Go test groups cover persisted conversion/repair, delayed and
+dead jobs, pre-commit backend termination, post-commit replay after reconnect,
+competing workers, abandoned/stale attempts, progressive repair registration and
+rollback, foreign database/contract bindings, malformed payloads, live-claim
+refusal and retirement fencing. The full `scripts/run-migration-tests.sh` gate supplies its private
+PostgreSQL cluster and requires these witnesses; they cannot silently skip there.
+
+This candidate handles unclaimed pending/dead jobs and their typed quarantines,
+one transaction per job. Integration with format-5 source/expansion receipts,
+closed application catalogs, production worker dispatch, live queue leases,
+batch scheduling and application retirement remains necessary. The ordinary
+changed-payload application guards therefore still refuse deployment. The
+candidate's floor is not the application control schema's admission floor.
 
 `test_migration_queue_transform` covers source certificates, exact ownership and
 signatures, builtin result/fixture identities, codec directions, proof checking,

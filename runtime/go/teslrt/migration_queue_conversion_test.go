@@ -143,3 +143,66 @@ func TestQueueConversionPipelineRefusesBeforeCallingUnboundCode(t *testing.T) {
 		}
 	}
 }
+
+func TestQueueConversionPipelineRepairPreservesRejectedInput(t *testing.T) {
+	var originalCalls [4]int
+	original := queueConversionPipeline(&originalCalls)
+	rejected, err := original.Convert(1, []byte(" {\n\"old\":\"reject\" } "))
+	if err != nil || rejected.Kind() != "migration-rejected" {
+		t.Fatal(rejected, err)
+	}
+	snapshot := rejected
+	for _, failure := range []string{"reject", "decode-trap", "callback-trap", "encode-trap", "target-trap", "unencodable", "invalid-target", "invalid-tag", "success"} {
+		t.Run(failure, func(t *testing.T) {
+			var calls [4]int
+			repair := queueConversionPipeline(&calls)
+			repair.source.parentDigest = original.source.spec.digest
+			repair.source.spec.digest = "repair-source"
+			repair.source.repairRevision = 1
+			repair.convert = func(old queueConversionTestOld) Migrated[queueConversionTestNew] {
+				calls[1]++
+				if old.text != "reject" {
+					t.Fatal("repair decoded another payload")
+				}
+				return Migrated[queueConversionTestNew]{Tag: MigratedRow, RowValue: queueConversionTestNew{"repaired"}}
+			}
+			switch failure {
+			case "reject":
+				repair.convert = original.convert
+			case "decode-trap":
+				repair.decode = func(any) Check[queueConversionTestOld] { panic("private repair detail") }
+			case "callback-trap":
+				repair.convert = func(queueConversionTestOld) Migrated[queueConversionTestNew] { panic("private repair detail") }
+			case "encode-trap":
+				repair.encode = func(queueConversionTestNew) any { panic("private repair detail") }
+			case "target-trap":
+				repair.targetDecode = func(any) Check[queueConversionTestNew] { panic("private repair detail") }
+			case "unencodable":
+				repair.encode = func(queueConversionTestNew) any { return func() {} }
+			case "invalid-target":
+				repair.encode = func(queueConversionTestNew) any { return map[string]any{"wrong": "shape"} }
+			case "invalid-tag":
+				repair.convert = func(queueConversionTestOld) Migrated[queueConversionTestNew] {
+					return Migrated[queueConversionTestNew]{Tag: MigratedTag(77)}
+				}
+			}
+			result, err := repair.Repair(rejected)
+			if rejected != snapshot {
+				t.Fatal("repair modified predecessor rejection")
+			}
+			if failure == "reject" || failure == "success" {
+				if err != nil || result.SourceDigest() != "repair-source" || result.Original() != rejected.Original() || result.SourceVersion() != 1 || result.TargetVersion() != 2 {
+					t.Fatal("repair lost historical provenance", result, err)
+				}
+				if failure == "reject" && (result.Kind() != "migration-rejected" || result.Payload() != "") {
+					t.Fatal("rejected repair acquired target bytes", result)
+				}
+				if failure == "success" && (result.Kind() != "converted" || result.Payload() != `{"new":"repaired"}` || calls != [4]int{1, 1, 1, 1}) {
+					t.Fatal("repair skipped typed pipeline", result, calls)
+				}
+			} else if err == nil || result != (QueueConversionResult{}) || strings.Contains(err.Error(), "private repair detail") {
+				t.Fatal("failed repair published usable output or private detail", result, err)
+			}
+		})
+	}
+}

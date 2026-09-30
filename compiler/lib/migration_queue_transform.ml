@@ -19,6 +19,8 @@ type t = {
   root : module_form;
   previous_payload : string;
   current_payload : string;
+  rejected : t option;
+  repair_revision : int;
 }
 let semantic t = t.semantic
 let digest t = t.digest
@@ -27,6 +29,11 @@ let fixtures t = t.fixtures
 let root t = t.root
 let source_texts t = T.captured_source_texts t.captured
 let payload_names t = t.previous_payload,t.current_payload
+let repair_revision t = t.repair_revision
+let rec lineage t = Option.fold ~none:[] ~some:lineage t.rejected @ [t]
+let conversion_semantic t = match t.semantic with
+  | C.Seq [C.Bytes "checked-queue-repair-source-v1";_;_;conversion] -> conversion
+  | conversion -> conversion
 exception Invalid of S.error list
 let reject code loc message = raise (Invalid [{S.code;loc;message;related=[]}])
 let checked = function Ok x -> x | Error errors -> raise (Invalid errors)
@@ -37,17 +44,18 @@ let protect loc run = try Ok(run ()) with
   | Invalid_argument message | Sys_error message | Failure message -> Error [{S.code="MIG013";loc;message;related=[]}]
   | Unix.Unix_error(error,operation,path) -> Error [{S.code="MIG013";loc;message=operation ^ ": " ^ path ^ ": " ^ Unix.error_message error;related=[]}]
 
-let with_checked t run =
+let rec with_checked t run =
   let loc = t.callback.declaration.loc in
   protect loc (fun () ->
     abi(A.verify t.abi);
-    let result = Migration_proof_context.without_context (fun () ->
+    let guarded () = Migration_proof_context.without_context (fun () ->
       checked(Integrity.with_captured t.integrity (fun () ->
         checked(T.with_captured t.captured (fun () -> abi(A.with_snapshot t.abi run)))))) in
+    let result=match t.rejected with None -> guarded () | Some parent -> checked(with_checked parent guarded) in
     abi(A.verify t.abi);
     result)
 
-let check ~project_root ~before ~after ~version ~queue ~job ~source root ~callback ~fixtures =
+let check_conversion ~contextual_declarations ~project_root ~before ~after ~version ~queue ~job ~source root ~callback ~fixtures =
   let loc = Location.dummy_loc root.source_file in
   protect loc (fun () ->
     let context = abi(A.current ()) in
@@ -74,8 +82,11 @@ let check ~project_root ~before ~after ~version ~queue ~job ~source root ~callba
     let old=payload before and fresh=payload after in
     if old.payload_contract=fresh.payload_contract then
       reject "MIG028" loc "unchanged queue payloads do not require a conversion";
-    let captured=checked(T.capture ~before ~after ~source root) in
-    let sources=T.captured_source_texts captured in
+     let captured=checked(T.capture ~before ~after ~source root) in
+     let sources=T.captured_source_texts captured in
+     List.iter(fun(owner,bytes,_)->
+       if not(List.exists(fun(actual,source)->actual=owner && source=bytes)sources) then
+         reject "MIG013" loc "checked repair predecessor source changed before capture") contextual_declarations;
     let integrity=checked(Integrity.capture ~project_root
       ~inputs:(List.map(fun(m,source)->m.source_file,source)sources)) in
     checked(Integrity.with_captured integrity (fun () ->
@@ -118,7 +129,10 @@ let check ~project_root ~before ~after ~version ~queue ~job ~source root ~callba
         | _ -> reject "MIG028" payload.payload_loc "queue conversion requires complete explicit frozen and target codecs" in
       codec old; codec fresh;
       let scopes=C.[{family;revision=previous;role=From_role};{family;revision=current;role=To_role}] in
-      let definitions=ir(G.lower_helpers ~scopes graph) in
+       let contextual=List.concat_map(fun m->List.filter_map(function
+         | DConst c when List.exists(fun(owner,_,declaration)->owner=m && declaration=c)contextual_declarations -> Some(m,c)
+         | _ -> None)m.decls) modules in
+       let definitions=ir(G.lower_helpers ~contextual ~scopes graph) in
       let closure roots=ir(IR.closure ~scopes ~definitions ~roots) in
       let tag name children=C.Seq(C.Bytes name::children) in
       let semantic=tag "checked-queue-transform-source-v1" [
@@ -130,5 +144,52 @@ let check ~project_root ~before ~after ~version ~queue ~job ~source root ~callba
         closure [IR.Value,IR.Global callback.identity];
         C.Seq(List.map(fun (f:T.function_binding) -> closure [IR.Value,IR.Global f.identity]) fixtures)] in
       {semantic;digest=C.digest C.Migration semantic;callback;fixtures;captured;integrity;abi=context;
-       root;previous_payload=old.payload_name;current_payload=fresh.payload_name}))))))
+        root;previous_payload=old.payload_name;current_payload=fresh.payload_name;rejected=None;repair_revision=0}))))))
   )
+
+let check = check_conversion ~contextual_declarations:[]
+
+(* Repairs extend an immutable conversion lineage, not the schema-version
+   sequence. Every revision still consumes the original historical payload. *)
+let check_repair ~rejected ~revision replacement =
+  let loc=replacement.callback.declaration.loc in
+  protect loc (fun () -> checked(with_checked rejected (fun () ->
+    checked(with_checked replacement (fun () ->
+      if replacement.rejected<>None || revision<1 || revision>2147483646 || revision<>rejected.repair_revision+1 then
+        reject "MIG028" loc "queue repair requires the next revision and an ordinary checked replacement conversion";
+      let endpoints t=match conversion_semantic t with
+        | C.Seq parts -> List.filteri(fun i _ -> i<11)parts
+        | _ -> assert false in
+      if endpoints rejected<>endpoints replacement then
+        reject "MIG028" loc "queue repair must preserve the exact frozen source and target payloads, codecs, queue and schema versions";
+      if List.exists(fun ancestor->ancestor.callback.identity=replacement.callback.identity)(lineage rejected) then
+        reject "MIG028" loc "queue repair requires a new callback declaration; deployed conversion history is immutable";
+      let semantic=C.Seq [C.Bytes "checked-queue-repair-source-v1";C.Bytes rejected.digest;
+        C.Bytes(string_of_int revision);replacement.semantic] in
+      {replacement with semantic;digest=C.digest C.Migration semantic;
+        rejected=Some rejected;repair_revision=revision})))))
+
+let queue_job t = match conversion_semantic t with
+  | C.Seq (_::_::_::_::_::C.Bytes queue::C.Bytes job::_) -> queue,job
+  | _ -> assert false
+
+let check_repair_source ~project_root ~contextual_declarations ~rejected ~revision ~source root ~callback ~fixtures =
+  let loc=Location.dummy_loc root.source_file in
+  protect loc (fun () -> checked(with_checked rejected (fun () ->
+    let context=abi(A.current()) in
+    let load payload =
+      let name=match Validation_common.schema_module_parts payload with
+        | Some(family,version,_) -> family ^ "." ^ version
+        | _ -> assert false in
+      let root_file=Validation_common.resolve_local_import_path root.source_file name in
+      match I.load_with_compatibility ~compiler_abi:(A.id context)
+        ~stored_value_compatibility:(Some(A.stored_value_compatibility context)) ~root_file with
+      | Ok inventory -> inventory
+      | Error error -> reject "MIG013" error.loc error.message in
+    let version=match conversion_semantic rejected with
+      | C.Seq (_::_::_::_::C.Bytes version::_) -> int_of_string version
+      | _ -> assert false in
+    let queue,job=queue_job rejected in
+    let replacement=checked(check_conversion ~contextual_declarations ~project_root ~before:(load rejected.previous_payload)
+      ~after:(load rejected.current_payload) ~version ~queue ~job ~source root ~callback ~fixtures) in
+    checked(check_repair ~rejected ~revision replacement))))
