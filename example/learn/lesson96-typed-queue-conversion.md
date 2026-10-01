@@ -204,5 +204,21 @@ nix develop --command bash scripts/run-migration-tests.sh
 
 This candidate exercises actual database mutations, but it has its own isolated
 installation and admission floor. It is not yet connected to ordinary format-5
-application deployment or the running queue's lease protocol. The `tesl test`
+application deployment or production worker dispatch. The `tesl test`
 commands earlier in this lesson still run the pure generated fixtures.
+
+The candidate now also reuses the running queue's protected claim, retry, renew
+and completion SQL with its own admission check. Tests take a rejected old job
+through repair, decode it with the current generated codec, and complete it through
+that shared queue protocol. Repair receipts remain replayable after completion
+deletes the job. Expired claims can be recovered for conversion; live claims and
+the original claiming transaction keep their ownership rights. Production pool
+opening, application history binding and automatic worker dispatch remain pending.
+
+The candidate worker now also discovers eligible jobs in bounded batches rather
+than taking a hand-written list of IDs. It commits each job independently and
+resumes from database receipts after interruption. Tests cover competing workers,
+skipped locks, delayed/dead work, successive repair revisions and failure after
+an earlier job committed. An empty work scan does not prove retirement is safe:
+live claims or quarantined jobs can still block the admission floor. Wiring these
+worker turns into the production scheduler remains pending.

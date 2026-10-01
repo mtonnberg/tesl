@@ -233,20 +233,42 @@ The candidate provides:
 - A candidate admission floor that advances only when no old-stamped jobs remain.
   Rejected and malformed jobs block it; waiting old enqueues reread the committed
   floor after the exclusive retirement lock.
+- Shared production queue claim/renew/fail/complete/quarantine/inspection SQL,
+  with candidate-specific admission. A transaction-local identity and compiled
+  contract binding prevent stale or foreign connection contexts from claiming
+  jobs. Old workers cannot claim converted payloads; new workers cannot claim
+  incompatible old payloads before conversion.
+- Recovery of expired processing/dead-processing claims under the job lock.
+  Live claims and the original claiming transaction remain protected. An expired
+  claim's release and conversion roll back together, and stale claimant tokens
+  cannot renew or complete the converted job.
+- Receipt replay after normal queue completion deletes the job. Abandoned
+  conversion attempts cascade on deletion, so they cannot block a handler's
+  legitimate completion; conversion receipts remain immutable and independent.
+- Bounded dispatch turns that discover work through indexed `FOR UPDATE SKIP
+  LOCKED` selection. A turn processes at most 1–256 jobs for one checked source,
+  with a transaction per job and separate converted/rejected/invalid/replayed
+  counts. Durable receipts exclude already processed jobs and identify the exact
+  rejection eligible for a repair. Delayed and retry-scheduled jobs are included.
+  The within-turn cursor is not persisted: a new turn can discover earlier locked
+  jobs or new arrivals. `NoEligible` is never permission to advance the floor.
 
 The source-deleted generated-project fixture in
 `compiler/test/fixtures/queue-repair-postgres/` exercises real roles and database
-connections. Six Go test groups cover persisted conversion/repair, delayed and
+connections. Fourteen Go test groups cover persisted conversion/repair, delayed and
 dead jobs, pre-commit backend termination, post-commit replay after reconnect,
 competing workers, abandoned/stale attempts, progressive repair registration and
-rollback, foreign database/contract bindings, malformed payloads, live-claim
-refusal and retirement fencing. The full `scripts/run-migration-tests.sh` gate supplies its private
+rollback, foreign database/contract bindings, malformed payloads, active and
+expired claims, typed consumption and completion, post-deletion replay and
+retirement fencing, bounded work discovery, concurrent batches and restart after
+a partial batch failure. The full `scripts/run-migration-tests.sh` gate supplies its private
 PostgreSQL cluster and requires these witnesses; they cannot silently skip there.
 
-This candidate handles unclaimed pending/dead jobs and their typed quarantines,
-one transaction per job. Integration with format-5 source/expansion receipts,
-closed application catalogs, production worker dispatch, live queue leases,
-batch scheduling and application retirement remains necessary. The ordinary
+This candidate handles unclaimed or expired pending/dead jobs and their typed
+quarantines, one transaction per job. Integration with format-5 source/expansion
+receipts, closed application catalogs, production scheduling of these worker
+turns and application retirement remains necessary. Its global scope lock
+is not the application's per-version admission fence. The ordinary
 changed-payload application guards therefore still refuse deployment. The
 candidate's floor is not the application control schema's admission floor.
 

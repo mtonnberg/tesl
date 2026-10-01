@@ -14,6 +14,12 @@ import (
 )
 
 type QueueConversionDBResultForTest = pgQueueConversionStored
+type QueueConversionBatchForTest = pgQueueConversionBatch
+type QueueClaimForTest struct {
+	ID, Payload, Token string
+	Version, Attempts  int32
+	Sequence           int64
+}
 type QueueConversionDBFixture struct {
 	Context                           context.Context
 	Installer, Worker, Other, Request *pgx.Conn
@@ -112,6 +118,14 @@ func (f *QueueConversionDBFixture) Apply(conn *pgx.Conn, c pgQueueConversionExec
 	return pgApplyQueueConversionCandidate(f.Context, conn, f.Scope, c, id)
 }
 
+func (f *QueueConversionDBFixture) Batch(ctx context.Context, conn *pgx.Conn, c pgQueueConversionExecutable, limit int) (pgQueueConversionBatch, error) {
+	return pgRunQueueConversionCandidateBatch(ctx, conn, f.Scope, c, limit)
+}
+
+func (f *QueueConversionDBFixture) SelectWork(tx pgx.Tx, c pgQueueConversionExecutable, after int64) (string, int64, error) {
+	return pgSelectQueueConversionCandidateTx(f.Context, tx, f.Scope, c.queueConversionSource(), after)
+}
+
 func OpenQueueConversionRootForTest(t *testing.T, c pgQueueConversionExecutable) *QueueConversionDBFixture {
 	t.Helper()
 	return OpenQueueConversionDBForTest(t, c.queueConversionSource().spec.digest)
@@ -190,4 +204,124 @@ func (f *QueueConversionDBFixture) Snapshot(t *testing.T, id string) string {
 		t.Fatal(fmt.Errorf("snapshot %s: %w", id, err))
 	}
 	return snapshot
+}
+
+func (f *QueueConversionDBFixture) QueueClaim(conn *pgx.Conn, version int, wanted string, lease int64) (QueueClaimForTest, bool, error) {
+	tx, err := conn.BeginTx(f.Context, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	if err != nil {
+		return QueueClaimForTest{}, false, err
+	}
+	defer pgQueueConversionCandidateRollback(tx)
+	queue, err := pgQueueConversionCandidateQueueContext(f.Context, tx, f.Scope)
+	if err != nil {
+		return QueueClaimForTest{}, false, err
+	}
+	rows, err := tx.Query(f.Context, "select job_id,job_type,payload::text,source_version,attempts,token,attempt_seq from mail.tesl_queue_claim($1,$2,$3,$4,$5)", version, queue, wanted, "candidate-handler", lease)
+	if err != nil {
+		return QueueClaimForTest{}, false, err
+	}
+	claims, err := pgx.CollectRows(rows, pgScanQueueRuntimeClaim)
+	if err != nil {
+		return QueueClaimForTest{}, false, err
+	}
+	if err := tx.Commit(f.Context); err != nil {
+		return QueueClaimForTest{}, false, err
+	}
+	if len(claims) == 0 {
+		return QueueClaimForTest{}, false, nil
+	}
+	if len(claims) != 1 {
+		return QueueClaimForTest{}, false, fmt.Errorf("multiple claims")
+	}
+	c := claims[0]
+	return QueueClaimForTest{c.id, c.payload, c.token, c.version, c.attempts, c.sequence}, true, nil
+}
+
+func (f *QueueConversionDBFixture) QueueBoolean(conn *pgx.Conn, version int, operation string, rest ...any) (bool, error) {
+	tx, err := conn.BeginTx(f.Context, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	if err != nil {
+		return false, err
+	}
+	defer pgQueueConversionCandidateRollback(tx)
+	queue, err := pgQueueConversionCandidateQueueContext(f.Context, tx, f.Scope)
+	if err != nil {
+		return false, err
+	}
+	args := append([]any{version, queue}, rest...)
+	parameters := make([]string, len(args))
+	for i := range args {
+		parameters[i] = fmt.Sprintf("$%d", i+1)
+	}
+	var result bool
+	err = tx.QueryRow(f.Context, "select mail."+quoteIdentifier("tesl_queue_"+operation)+"("+strings.Join(parameters, ",")+")", args...).Scan(&result)
+	if err != nil {
+		return false, err
+	}
+	if err := tx.Commit(f.Context); err != nil {
+		return false, err
+	}
+	return result, nil
+}
+
+func (f *QueueConversionDBFixture) AbandonConversion(t *testing.T, c pgQueueConversionExecutable, id string) {
+	t.Helper()
+	source := c.queueConversionSource()
+	binding, err := pgQueueConversionCandidateBinding(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx, err := f.Worker.Begin(f.Context)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pgQueueConversionCandidateRollback(tx)
+	if _, err := tx.Exec(f.Context, "select * from mail.tesl_queue_conversion_begin($1,$2,$3,$4::jsonb)", f.Scope.identity, source.spec.digest, id, string(binding)); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(f.Context); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func (f *QueueConversionDBFixture) ClaimTransactionOutlivesLease(t *testing.T, c pgQueueConversionExecutable, id string) {
+	t.Helper()
+	tx, err := f.Worker.BeginTx(f.Context, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pgQueueConversionCandidateRollback(tx)
+	queue, err := pgQueueConversionCandidateQueueContext(f.Context, tx, f.Scope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var claimed, token string
+	var sequence int64
+	err = tx.QueryRow(f.Context, "select job_id,token,attempt_seq from mail.tesl_queue_claim(1,$1,'pending','transaction-owner',1)", queue).Scan(&claimed, &token, &sequence)
+	if err != nil || claimed != id {
+		t.Fatal(claimed, err)
+	}
+	if _, err := tx.Exec(f.Context, "select pg_catalog.pg_sleep(0.02)"); err != nil {
+		t.Fatal(err)
+	}
+	if result, err := f.Apply(f.Other, c, id); err != nil || result.Kind != "unavailable" {
+		t.Fatal("another transaction stole an active claim", result, err)
+	}
+	savepoint, err := tx.Begin(f.Context)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.ApplyTx(savepoint, c, id); err == nil {
+		t.Fatal("conversion revoked its own transaction's claim")
+	}
+	if err := savepoint.Rollback(f.Context); err != nil {
+		t.Fatal(err)
+	}
+	var completed bool
+	err = tx.QueryRow(f.Context, "select mail.tesl_queue_complete(1,$1,$2,$3,$4)", queue, id, token, sequence).Scan(&completed)
+	if err != nil || !completed {
+		t.Fatal("transaction-local completion right was lost", completed, err)
+	}
+	if err := tx.Commit(f.Context); err != nil {
+		t.Fatal(err)
+	}
 }

@@ -49,6 +49,55 @@ remaining integration requirements.
 
 ### Implementation and verification evidence
 
+The PostgreSQL candidate now has bounded worker dispatch for a checked conversion
+or repair revision. It discovers eligible jobs through a protected, indexed
+`FOR UPDATE SKIP LOCKED` selection operation; callers no longer supply job IDs.
+Each selected job commits independently, up to a requested limit of 1–256 jobs.
+Receipts exclude previously processed outcomes, including rejections, so a worker
+does not repeatedly retry the same rejected conversion. Repair selection requires
+the exact latest predecessor rejection. Delayed/retry-scheduled and dead jobs are
+included without changing their handler schedule.
+
+The cursor exists only within a dispatch turn. Restart starts from the beginning
+and consults durable receipts, allowing earlier locked jobs and later arrivals to
+be found. `NoEligible` reports a scan result, not finality: locked or live-claimed
+jobs and quarantines can still block retirement. Errors return confirmed progress
+from earlier committed jobs; uncertain commits are resolved from receipts on
+retry. Cancellation is checked before each BEGIN; a regression reproduced a
+closed worker connection when pgx received an already-canceled context, and the
+pre-transaction check fixes that case.
+
+Four additional PostgreSQL groups cover bounded automatic conversion and repair,
+restart without a saved cursor, concurrent workers, an earlier skipped row,
+per-job failure after a committed prefix, invalid bounds, cancellation and request
+role refusal. The expired-claim tests also use automatic batch selection. These
+are candidate worker turns, not a production scheduler or format-5 activation.
+
+After WIP commit `201aa9b`, the PostgreSQL candidate now composes conversion and
+repair with the existing protected queue operation SQL. Claim, renew, fail,
+complete, quarantine and inspection functions are reused; candidate-specific
+admission binds a transaction-local installation identity and the exact compiled
+source/target contracts. Context does not survive transaction commit.
+
+Database-first regressions exposed three integration gaps before their fixes:
+abandoned conversion attempts blocked ordinary completion through a foreign key,
+receipt replay stopped working after a handler deleted its job, and expired
+processing/dead-processing claims could not be converted. Attempt rows now cascade
+on job deletion while immutable receipts remain independent; replay consults
+receipts even without a job. Conversion recovers expired claims under the job
+lock, preserves their pending/dead disposition, advances the attempt sequence,
+and rolls back the release with the conversion if the transaction fails. Live
+claims and the claiming transaction's completion right remain protected.
+
+Ten generated PostgreSQL groups now pass, including an actual old claim/fail,
+rejection/repair chain, current-codec decode, current claim/renew/complete and
+receipt replay after deletion/reconnect. They also cover stale old completion,
+expired pending/dead claims, active transactions beyond lease expiry, admission
+context leakage and altered/cross-database bindings. The ordinary public V1/V2
+queue application regression passes against its own private PostgreSQL cluster.
+Application format-5 history/expansion binding and production dispatch are still
+not connected to this candidate; its admission implementation remains isolated.
+
 Typed queue repair now has a real PostgreSQL execution candidate, beyond the pure
 artifacts. The private candidate installer owns a fresh namespace for one checked
 queue transition, reuses the actual `tesl_jobs` definition, and stores the real

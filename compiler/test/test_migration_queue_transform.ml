@@ -847,7 +847,11 @@ let public_repair_postgres () = with_public_repair(fun root save _ _ second ->
   List.iter(fun name->check bool output true (Compile.string_contains output ("--- PASS: " ^ name)))
    ["TestPostgresTypedQueueRepair";"TestPostgresRepairTransactionsAndOwnership";
     "TestPostgresRepairRegistrationAfterRejection";"TestPostgresRepairRefusesDifferentBindings";
-    "TestPostgresMalformedPayloadCannotBecomeTypedRepair";"TestPostgresActiveClaimsAreNotRewritten"])
+    "TestPostgresMalformedPayloadCannotBecomeTypedRepair";"TestPostgresActiveClaimsAreNotRewritten";
+    "TestPostgresRepairedJobRunsThroughQueueLifecycle";"TestPostgresAbandonedConversionDoesNotBlockQueueCompletion";
+    "TestPostgresExpiredQueueClaimCanBeConverted";"TestPostgresClaimTransactionKeepsCompletionRight";
+    "TestPostgresAutomaticConversionAndRepairBatches";"TestPostgresBatchSelectionAndCompetingWorkers";
+    "TestPostgresBatchFailurePreservesCommittedPrefix";"TestPostgresBatchBoundsCancellationAndLiveClaims"])
 let () = run "sealed queue conversion source" ["source",List.map(fun(name,f)->test_case name `Quick f)
  ["checked callback fixture and stable identity",valid;
   "exact adjacent queue and payload identities",identities;

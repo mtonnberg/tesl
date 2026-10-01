@@ -1,6 +1,8 @@
 package teslqueueconversions
 
 import (
+	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -281,6 +283,9 @@ func TestPostgresRepairRefusesDifferentBindings(t *testing.T) {
 	if _, err := f.Apply(otherDB.Worker, Conversion0, "job"); err == nil {
 		t.Fatal("binding replayed against another database")
 	}
+	if _, _, err := f.QueueClaim(otherDB.Request, 1, "pending", 60000); err == nil {
+		t.Fatal("queue context replayed against another database")
+	}
 	if before != f.Snapshot(t, "job") || otherBefore != otherDB.Snapshot(t, "job") {
 		t.Fatal("cross-database refusal changed jobs")
 	}
@@ -302,6 +307,9 @@ func TestPostgresRepairRefusesDifferentBindings(t *testing.T) {
 			if _, err := f.Apply(f.Worker, Conversion0, "job"); err == nil {
 				t.Fatal("different installed binding executed")
 			}
+			if _, _, err := f.QueueClaim(f.Request, 1, "pending", 60000); err == nil {
+				t.Fatal("queue claim ignored changed binding")
+			}
 			if err := f.Register(f.Installer, Conversion2); err == nil {
 				t.Fatal("different installed binding registered")
 			}
@@ -319,6 +327,9 @@ func TestPostgresRepairRefusesDifferentBindings(t *testing.T) {
 	}
 	if _, err := f.Apply(f.Worker, Conversion0, "job"); err == nil {
 		t.Fatal("rehashed foreign payload contract executed")
+	}
+	if _, _, err := f.QueueClaim(f.Request, 1, "pending", 60000); err == nil {
+		t.Fatal("queue claim ignored rehashed payload contract")
 	}
 	if err := f.Register(f.Installer, Conversion2); err == nil {
 		t.Fatal("rehashed foreign payload contract registered")
@@ -404,5 +415,359 @@ func TestPostgresActiveClaimsAreNotRewritten(t *testing.T) {
 	}
 	if done, err := f.Retire(f.Worker); err != nil || done {
 		t.Fatal("live old claims did not block candidate retirement", done, err)
+	}
+}
+
+func TestPostgresRepairedJobRunsThroughQueueLifecycle(t *testing.T) {
+	f := rt.OpenQueueConversionDBForTest(t, finalRepairDigest)
+	if err := f.Enqueue("job", `{"oldText":""}`, "pending", time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := f.QueueClaim(f.Request, 2, "pending", 60000); err != nil || ok {
+		t.Fatal("new worker claimed incompatible old payload", ok, err)
+	}
+	old, ok, err := f.QueueClaim(f.Request, 1, "pending", 60000)
+	if err != nil || !ok || old.Version != 1 {
+		t.Fatal(old, ok, err)
+	}
+	if _, err := f.Request.Exec(f.Context, "select mail.tesl_queue_admit(1,'Jobs')"); err == nil {
+		t.Fatal("queue context leaked past transaction commit")
+	}
+	if failed, err := f.QueueBoolean(f.Request, 1, "fail", old.ID, old.Token, old.Sequence, 2, int64(0)); err != nil || !failed {
+		t.Fatal(failed, err)
+	}
+	for _, conversion := range []func() error{
+		func() error { _, err := f.Apply(f.Worker, Conversion0, "job"); return err },
+		func() error { _, err := f.Apply(f.Worker, Conversion1, "job"); return err },
+		func() error { _, err := f.Apply(f.Worker, Conversion2, "job"); return err },
+	} {
+		if err := conversion(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, ok, err := f.QueueClaim(f.Request, 1, "pending", 60000); err != nil || ok {
+		t.Fatal("old worker claimed repaired payload", ok, err)
+	}
+	current, ok, err := f.QueueClaim(f.Request, 2, "pending", 60000)
+	if err != nil || !ok || current.Version != 2 || current.Attempts != 1 {
+		t.Fatal(current, ok, err)
+	}
+	raw, err := rt.ParseJSON([]byte(current.Payload))
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, valid := decodeNew0(raw).Value()
+	if !valid || job.Body != "repaired" || job.Priority.String() != "9" {
+		t.Fatal("current handler received wrong typed payload", job, valid)
+	}
+	if done, err := f.QueueBoolean(f.Request, 1, "complete", old.ID, old.Token, old.Sequence); err != nil || done {
+		t.Fatal("old attempt completed current work", done, err)
+	}
+	if done, err := f.Retire(f.Worker); err != nil || !done {
+		t.Fatal("surviving claimant blocked retirement", done, err)
+	}
+	if renewed, err := f.QueueBoolean(f.Request, 2, "renew", current.ID, current.Token, current.Sequence, int64(60000)); err != nil || !renewed {
+		t.Fatal(renewed, err)
+	}
+	if done, err := f.QueueBoolean(f.Request, 2, "complete", current.ID, current.Token, current.Sequence); err != nil || !done {
+		t.Fatal(done, err)
+	}
+	var jobs, receipts int
+	if err := f.Installer.QueryRow(f.Context, "select (select count(*) from mail.tesl_jobs),(select count(*) from mail.tesl_queue_conversion_receipts)").Scan(&jobs, &receipts); err != nil || jobs != 0 || receipts != 3 {
+		t.Fatal("completion lost repair history", jobs, receipts, err)
+	}
+	f.RestartWorker(t)
+	result, err := f.Apply(f.Worker, Conversion2, "job")
+	if err != nil || !result.Replayed || result.Kind != "converted" {
+		t.Fatal("completion erased durable repair outcome", result, err)
+	}
+}
+
+func TestPostgresAbandonedConversionDoesNotBlockQueueCompletion(t *testing.T) {
+	f := rt.OpenQueueConversionDBForTest(t, finalRepairDigest)
+	if err := f.Enqueue("job", `{"oldText":"kept"}`, "pending", time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	f.AbandonConversion(t, Conversion0, "job")
+	claim, ok, err := f.QueueClaim(f.Request, 1, "pending", 60000)
+	if err != nil || !ok {
+		t.Fatal(claim, ok, err)
+	}
+	if done, err := f.QueueBoolean(f.Request, 1, "complete", claim.ID, claim.Token, claim.Sequence); err != nil || !done {
+		t.Fatal("abandoned conversion blocked ordinary completion", done, err)
+	}
+	var attempts int
+	if err := f.Installer.QueryRow(f.Context, "select count(*) from mail.tesl_queue_conversion_attempts").Scan(&attempts); err != nil || attempts != 0 {
+		t.Fatal("orphan conversion attempt", attempts, err)
+	}
+}
+
+func TestPostgresExpiredQueueClaimCanBeConverted(t *testing.T) {
+	for _, status := range []string{"pending", "dead"} {
+		t.Run(status, func(t *testing.T) {
+			f := rt.OpenQueueConversionDBForTest(t, finalRepairDigest)
+			if err := f.Enqueue("job", `{"oldText":"kept"}`, status, time.Now().UTC()); err != nil {
+				t.Fatal(err)
+			}
+			claim, ok, err := f.QueueClaim(f.Request, 1, status, 40)
+			if err != nil || !ok {
+				t.Fatal(claim, ok, err)
+			}
+			deadline := time.Now().Add(5 * time.Second)
+			for {
+				var expired bool
+				if err := f.Installer.QueryRow(f.Context, "select lease_until<=pg_catalog.clock_timestamp() from mail.tesl_jobs where id='job'").Scan(&expired); err != nil {
+					t.Fatal(err)
+				}
+				if expired {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatal("claim did not expire")
+				}
+				time.Sleep(5 * time.Millisecond)
+			}
+			before := f.Snapshot(t, "job")
+			tx, err := f.Worker.Begin(f.Context)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result, err := f.ApplyTx(tx, Conversion0, "job"); err != nil || result.Kind != "converted" {
+				t.Fatal("expired claim prevented conversion", result, err)
+			}
+			if err := tx.Rollback(f.Context); err != nil {
+				t.Fatal(err)
+			}
+			if before != f.Snapshot(t, "job") {
+				t.Fatal("rollback did not restore expired claimant")
+			}
+			if progress, err := f.Batch(f.Context, f.Worker, Conversion0, 256); err != nil || progress.Converted != 1 || !progress.NoEligible {
+				t.Fatal("batch did not discover the expired claim", progress, err)
+			}
+			for _, operation := range []string{"complete", "renew"} {
+				args := []any{claim.ID, claim.Token, claim.Sequence}
+				if operation == "renew" {
+					args = append(args, int64(60000))
+				}
+				if changed, err := f.QueueBoolean(f.Request, 1, operation, args...); err != nil || changed {
+					t.Fatal("expired old claimant changed converted job", operation, changed, err)
+				}
+			}
+			current, ok, err := f.QueueClaim(f.Request, 2, status, 60000)
+			if err != nil || !ok || current.Sequence <= claim.Sequence {
+				t.Fatal(current, ok, err)
+			}
+			if done, err := f.QueueBoolean(f.Request, 2, "complete", current.ID, current.Token, current.Sequence); err != nil || !done {
+				t.Fatal(done, err)
+			}
+		})
+	}
+}
+
+func TestPostgresClaimTransactionKeepsCompletionRight(t *testing.T) {
+	f := rt.OpenQueueConversionDBForTest(t, finalRepairDigest)
+	if err := f.Enqueue("job", `{"oldText":"kept"}`, "pending", time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	f.ClaimTransactionOutlivesLease(t, Conversion0, "job")
+	var jobs, receipts int
+	if err := f.Installer.QueryRow(f.Context, "select (select count(*) from mail.tesl_jobs),(select count(*) from mail.tesl_queue_conversion_receipts)").Scan(&jobs, &receipts); err != nil || jobs != 0 || receipts != 0 {
+		t.Fatal("conversion interfered with active handler transaction", jobs, receipts, err)
+	}
+}
+
+func TestPostgresAutomaticConversionAndRepairBatches(t *testing.T) {
+	f := rt.OpenQueueConversionDBForTest(t, finalRepairDigest)
+	due := time.Date(2099, 1, 2, 3, 4, 5, 0, time.UTC)
+	for _, job := range []struct{ id, body, status string }{
+		{"accepted", `{"oldText":"kept"}`, "pending"},
+		{"rejected", `{"oldText":""}`, "pending"},
+		{"dead", `{"oldText":""}`, "dead"},
+		{"invalid", `{"oldText":false}`, "pending"},
+	} {
+		if err := f.Enqueue(job.id, job.body, job.status, due); err != nil {
+			t.Fatal(err)
+		}
+	}
+	p, err := f.Batch(f.Context, f.Worker, Conversion0, 2)
+	if err != nil || p.Selected != 2 || p.Converted != 1 || p.Rejected != 1 || p.NoEligible {
+		t.Fatal("bounded first turn", p, err)
+	}
+	f.RestartWorker(t)
+	p, err = f.Batch(f.Context, f.Worker, Conversion0, 256)
+	if err != nil || p.Selected != 2 || p.Rejected != 1 || p.Invalid != 1 || !p.NoEligible {
+		t.Fatal("restart did not resume from receipts", p, err)
+	}
+	p, err = f.Batch(f.Context, f.Worker, Conversion0, 256)
+	if err != nil || p.Selected != 0 || !p.NoEligible {
+		t.Fatal("rejected jobs caused a conversion hot loop", p, err)
+	}
+	p, err = f.Batch(f.Context, f.Worker, Conversion1, 256)
+	if err != nil || p.Selected != 2 || p.Rejected != 2 || !p.NoEligible {
+		t.Fatal("repair did not discover exact rejections", p, err)
+	}
+	p, err = f.Batch(f.Context, f.Worker, Conversion1, 256)
+	if err != nil || p.Selected != 0 || !p.NoEligible {
+		t.Fatal("repair repeated its own rejection", p, err)
+	}
+	p, err = f.Batch(f.Context, f.Worker, Conversion2, 256)
+	if err != nil || p.Selected != 2 || p.Converted != 2 || !p.NoEligible {
+		t.Fatal("later repair did not discover work", p, err)
+	}
+	for _, id := range []string{"accepted", "rejected", "dead"} {
+		var body, status string
+		var version int
+		var scheduled time.Time
+		if err := f.Installer.QueryRow(f.Context, "select payload::text,schema_version,status,next_attempt_at from mail.tesl_jobs where id=$1", id).Scan(&body, &version, &status, &scheduled); err != nil {
+			t.Fatal(err)
+		}
+		raw, err := rt.ParseJSON([]byte(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		value, ok := decodeNew0(raw).Value()
+		if !ok || version != 2 || !scheduled.Equal(due) {
+			t.Fatal("batch lost typed payload or schedule", id, value, version, scheduled)
+		}
+		if (id == "dead") != (status == "dead") {
+			t.Fatal("batch changed dead-job disposition", id, status)
+		}
+	}
+	if _, ok, err := f.QueueClaim(f.Request, 2, "pending", 60000); err != nil || ok {
+		t.Fatal("conversion made delayed work runnable early", ok, err)
+	}
+	if done, err := f.Retire(f.Worker); err != nil || done {
+		t.Fatal("NoEligible was treated as finality despite malformed quarantine", done, err)
+	}
+}
+
+func TestPostgresBatchSelectionAndCompetingWorkers(t *testing.T) {
+	f := rt.OpenQueueConversionDBForTest(t, finalRepairDigest)
+	for _, id := range []string{"first", "second", "third"} {
+		if err := f.Enqueue(id, `{"oldText":"kept"}`, "pending", time.Now().UTC()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tx, err := f.Worker.Begin(f.Context)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(context.Background())
+	id, _, err := f.SelectWork(tx, Conversion0, 0)
+	if err != nil || id != "first" {
+		t.Fatal(id, err)
+	}
+	p, err := f.Batch(f.Context, f.Other, Conversion0, 256)
+	if err != nil || p.Converted != 2 || !p.NoEligible {
+		t.Fatal("competing batch did not skip locked work", p, err)
+	}
+	if err := tx.Rollback(f.Context); err != nil {
+		t.Fatal(err)
+	}
+	p, err = f.Batch(f.Context, f.Worker, Conversion0, 256)
+	if err != nil || p.Converted != 1 || !p.NoEligible {
+		t.Fatal("within-turn cursor lost earlier locked work", p, err)
+	}
+	for i := 0; i < 12; i++ {
+		if err := f.Enqueue(fmt.Sprintf("race-%02d", i), `{"oldText":"kept"}`, "pending", time.Now().UTC()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	type result struct {
+		progress rt.QueueConversionBatchForTest
+		err      error
+	}
+	results := make(chan result, 2)
+	for _, conn := range []*pgx.Conn{f.Worker, f.Other} {
+		go func(conn *pgx.Conn) { p, err := f.Batch(f.Context, conn, Conversion0, 256); results <- result{p, err} }(conn)
+	}
+	total := 0
+	for range 2 {
+		r := <-results
+		if r.err != nil {
+			t.Fatal(r.err)
+		}
+		total += r.progress.Converted
+	}
+	if total != 12 {
+		t.Fatal("competing workers lost or duplicated conversion", total)
+	}
+	var receipts int
+	if err := f.Installer.QueryRow(f.Context, "select count(*) from mail.tesl_queue_conversion_receipts").Scan(&receipts); err != nil || receipts != 15 {
+		t.Fatal(receipts, err)
+	}
+}
+
+func TestPostgresBatchFailurePreservesCommittedPrefix(t *testing.T) {
+	f := rt.OpenQueueConversionDBForTest(t, finalRepairDigest)
+	for _, id := range []string{"first", "fault", "last"} {
+		if err := f.Enqueue(id, `{"oldText":"kept"}`, "pending", time.Now().UTC()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	before := f.Snapshot(t, "fault")
+	if _, err := f.Installer.Exec(f.Context, "alter table mail.tesl_queue_conversion_receipts add constraint fail_job check(job_id<>'fault')"); err != nil {
+		t.Fatal(err)
+	}
+	p, err := f.Batch(f.Context, f.Worker, Conversion0, 256)
+	if err == nil || p.Selected != 1 || p.Converted != 1 || p.NoEligible {
+		t.Fatal("batch did not report its committed prefix", p, err)
+	}
+	if before != f.Snapshot(t, "fault") {
+		t.Fatal("failed job retained a partial attempt or outcome")
+	}
+	var receipts int
+	if err := f.Installer.QueryRow(f.Context, "select count(*) from mail.tesl_queue_conversion_receipts").Scan(&receipts); err != nil || receipts != 1 {
+		t.Fatal("earlier committed receipt was lost", receipts, err)
+	}
+	if _, err := f.Installer.Exec(f.Context, "alter table mail.tesl_queue_conversion_receipts drop constraint fail_job"); err != nil {
+		t.Fatal(err)
+	}
+	f.RestartWorker(t)
+	p, err = f.Batch(f.Context, f.Worker, Conversion0, 256)
+	if err != nil || p.Converted != 2 || !p.NoEligible {
+		t.Fatal("batch restart did not resume failed and later work", p, err)
+	}
+}
+
+func TestPostgresBatchBoundsCancellationAndLiveClaims(t *testing.T) {
+	f := rt.OpenQueueConversionDBForTest(t, finalRepairDigest)
+	if err := f.Enqueue("job", `{"oldText":"kept"}`, "pending", time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	before := f.Snapshot(t, "job")
+	for _, limit := range []int{-1, 0, 257} {
+		if p, err := f.Batch(f.Context, f.Worker, Conversion0, limit); err == nil || p.Selected != 0 {
+			t.Fatal("invalid batch bound", p, err)
+		}
+	}
+	ctx, cancel := context.WithCancel(f.Context)
+	cancel()
+	if p, err := f.Batch(ctx, f.Worker, Conversion0, 256); err == nil || p.Selected != 0 {
+		t.Fatal("canceled worker published progress", p, err)
+	}
+	if p, err := f.Batch(f.Context, f.Request, Conversion0, 256); err == nil || p.Selected != 0 {
+		t.Fatal("request role ran migration work", p, err)
+	}
+	if before != f.Snapshot(t, "job") {
+		t.Fatal("invalid or canceled dispatch changed a job")
+	}
+	claim, ok, err := f.QueueClaim(f.Request, 1, "pending", 60000)
+	if err != nil || !ok {
+		t.Fatal(claim, ok, err)
+	}
+	p, err := f.Batch(f.Context, f.Worker, Conversion0, 256)
+	if err != nil || p.Selected != 0 || !p.NoEligible {
+		t.Fatal("batch stole a live claim", p, err)
+	}
+	if done, err := f.Retire(f.Worker); err != nil || done {
+		t.Fatal("idle batch authorized retirement over a live claimant", done, err)
+	}
+	if done, err := f.QueueBoolean(f.Request, 1, "fail", claim.ID, claim.Token, claim.Sequence, 2, int64(0)); err != nil || !done {
+		t.Fatal(done, err)
+	}
+	p, err = f.Batch(f.Context, f.Worker, Conversion0, 256)
+	if err != nil || p.Converted != 1 || !p.NoEligible {
+		t.Fatal("released claim was not discovered", p, err)
 	}
 }
