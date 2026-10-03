@@ -4,8 +4,11 @@ package teslrt
 // contracts, SQL functions and mutation path are the actual runtime ones.
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
+	"net/url"
 	"os"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -29,6 +32,14 @@ type QueueConversionDBFixture struct {
 }
 
 func OpenQueueConversionDBForTest(t *testing.T, digest string) *QueueConversionDBFixture {
+	return openQueueConversionDBForTest(t, digest, false)
+}
+
+func OpenApplicationQueueForTest(t *testing.T) *QueueConversionDBFixture {
+	return openQueueConversionDBForTest(t, "", true)
+}
+
+func openQueueConversionDBForTest(t *testing.T, digest string, application bool) *QueueConversionDBFixture {
 	t.Helper()
 	dsn := os.Getenv("TESL_MIGRATION_TEST_DSN")
 	if dsn == "" {
@@ -85,14 +96,20 @@ func OpenQueueConversionDBForTest(t *testing.T, digest string) *QueueConversionD
 		t.Fatal(err)
 	}
 	// Operator defaults must not silently widen the candidate's role boundary.
-	for _, objects := range []string{"tables", "sequences", "functions"} {
+	var defaultGrantObjects []string
+	if !application {
+		defaultGrantObjects = []string{"tables", "sequences", "functions"}
+	}
+	for _, objects := range defaultGrantObjects {
 		if _, err := f.Installer.Exec(ctx, "alter default privileges for role "+quoteIdentifier(roles.Owner)+" grant all on "+objects+" to "+quoteIdentifier(roles.Worker)+","+quoteIdentifier(roles.Request)); err != nil {
 			t.Fatal(err)
 		}
 	}
-	f.Scope, err = pgInstallQueueConversionCandidate(ctx, f.Installer, "mail", roles, digest)
-	if err != nil {
-		t.Fatal(err)
+	if !application {
+		f.Scope, err = pgInstallQueueConversionCandidate(ctx, f.Installer, "mail", roles, digest)
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 	worker := config.Copy()
 	worker.User = roles.Worker
@@ -111,7 +128,100 @@ func OpenQueueConversionDBForTest(t *testing.T, digest string) *QueueConversionD
 	if err != nil {
 		t.Fatal(err)
 	}
+	// All execution witnesses start from a Worker-verified handle, not the
+	// privileged installer's return value.
+	if application {
+		if _, err := f.Installer.Exec(ctx, "grant create on schema public to "+quoteIdentifier(roles.Owner)); err != nil {
+			t.Fatal(err)
+		}
+		dsn := url.URL{Scheme: "postgresql", User: url.User(config.User), Path: "/" + config.Database,
+			RawQuery: url.Values{"host": {config.Host}, "port": {fmt.Sprint(config.Port)}, "sslmode": {"disable"}}.Encode()}
+		base := append(os.Environ(), "Q_DB="+name, "Q_HOST="+config.Host, "Q_PORT="+fmt.Sprint(config.Port),
+			"Q_OWNER="+roles.Owner, "Q_WORKER="+roles.Worker, "Q_REQUEST="+roles.Request, "Q_DDL="+dsn.String())
+		binary := os.Getenv("QUEUE_REPAIR_V1_APP")
+		if binary == "" {
+			t.Fatal("compiled V1 application is missing")
+		}
+		install := exec.CommandContext(ctx, binary, "--schema", "install", "--worker", roles.Worker, "--request", roles.Request, "--json")
+		install.Env = append(append([]string{}, base...), "Q_USER="+config.User)
+		if output, err := install.CombinedOutput(); err != nil {
+			t.Fatalf("ordinary V1 install: %v\n%s", err, output)
+		}
+		log, err := os.CreateTemp(t.TempDir(), "application-worker-")
+		if err != nil {
+			t.Fatal(err)
+		}
+		process := exec.CommandContext(ctx, binary, "--schema", "worker", "--json")
+		dsn.User = url.User(roles.Worker)
+		process.Env = append(append([]string{}, base...), "Q_USER="+roles.Worker, "Q_DDL="+dsn.String())
+		process.Stdout = log
+		process.Stderr = log
+		if err := process.Start(); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = process.Process.Kill(); _ = process.Wait(); _ = log.Close() })
+		deadline := time.Now().Add(30 * time.Second)
+		for {
+			output, err := os.ReadFile(log.Name())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(output), "schema-worker-ready") {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("V1 worker did not expand baseline: %s", output)
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	} else if err := f.Reopen(f.Worker, digest); err != nil {
+		t.Fatal(err)
+	}
 	return f
+}
+
+func (f *QueueConversionDBFixture) StageApplication(conn *pgx.Conn, digest string) error {
+	return pgStageRowQueueConversions(f.Context, conn, "mail", f.roles, digest)
+}
+
+func (f *QueueConversionDBFixture) StageApplicationTarget(conn *pgx.Conn) error {
+	plan, err := pgParseRowPhysicalPlan(testQueueTargetDocument, testQueueTargetHash)
+	if err != nil {
+		return err
+	}
+	if pgRowEpochPreserving(plan) {
+		return fmt.Errorf("queue transformation incorrectly preserved the additive epoch")
+	}
+	return pgStageRowQueueTarget(f.Context, conn, "mail", f.roles, testQueueTargetDocument, testQueueTargetHash)
+}
+
+func (f *QueueConversionDBFixture) MutateApplicationTarget(t *testing.T, kind string) error {
+	t.Helper()
+	doc, _, err := pgReadRowCanonical(testQueueTargetDocument)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := &doc.children[3]
+	switch kind {
+	case "schema":
+		n.children[4] = pgRowAtom(strings.Repeat("0", 64))
+	case "storage":
+		n.children[5] = pgRowAtom(strings.Repeat("0", 64))
+	case "namespace":
+		n.children[2] = pgRowAtom("foreign")
+	case "callback":
+		n.children[8].children[0].children[2] = pgRowAtom(strings.Repeat("0", 64))
+	case "missing":
+		n.children[8] = pgRowList()
+	case "duplicate":
+		n.children[8].children = append(n.children[8].children, n.children[8].children[0])
+	case "reverse":
+		n.children[8].children[0].children[3], n.children[8].children[0].children[4] = n.children[8].children[0].children[4], n.children[8].children[0].children[3]
+	default:
+		t.Fatal("unknown target mutation")
+	}
+	raw, hash := pgRowBaselineDocument(*n)
+	return pgStageRowQueueTarget(f.Context, f.Installer, "mail", f.roles, hex.EncodeToString([]byte(raw)), hash)
 }
 
 func (f *QueueConversionDBFixture) Apply(conn *pgx.Conn, c pgQueueConversionExecutable, id string) (pgQueueConversionStored, error) {
@@ -193,6 +303,77 @@ func (f *QueueConversionDBFixture) RestartWorker(t *testing.T) {
 	var err error
 	f.Worker, err = pgx.ConnectConfig(f.Context, f.Config)
 	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func (f *QueueConversionDBFixture) ForgetScope() { f.Scope = pgQueueConversionDB{} }
+
+func (f *QueueConversionDBFixture) Reopen(conn *pgx.Conn, digest string) error {
+	scope, err := pgOpenQueueConversionCandidate(f.Context, conn, "mail", f.roles, digest)
+	if err == nil {
+		f.Scope = scope
+	}
+	return err
+}
+
+func (f *QueueConversionDBFixture) RevokeTemporary(t *testing.T) {
+	t.Helper()
+	if _, err := f.Installer.Exec(f.Context, "revoke temporary on database "+quoteIdentifier(f.Config.Database)+" from "+quoteIdentifier(f.roles.Worker)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func (f *QueueConversionDBFixture) WorkerProcessEnvironment() []string {
+	// ConnString retains pgx's original parsed input, even after Config.User and
+	// Config.Database change. Serialize the actual Worker endpoint explicitly.
+	dsn := url.URL{Scheme: "postgresql", User: url.User(f.Config.User), Path: "/" + f.Config.Database,
+		RawQuery: url.Values{"host": {f.Config.Host}, "port": {fmt.Sprint(f.Config.Port)}, "sslmode": {"disable"}}.Encode()}
+	return []string{"TESL_QUEUE_REPAIR_CHILD=1", "TESL_QUEUE_REPAIR_WORKER_DSN=" + dsn.String(),
+		"TESL_QUEUE_REPAIR_OWNER=" + f.roles.Owner, "TESL_QUEUE_REPAIR_WORKER=" + f.roles.Worker, "TESL_QUEUE_REPAIR_REQUEST=" + f.roles.Request}
+}
+
+func ReopenQueueWorkerProcessForTest(t *testing.T, digest string) *QueueConversionDBFixture {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	t.Cleanup(cancel)
+	conn, err := pgx.Connect(ctx, os.Getenv("TESL_QUEUE_REPAIR_WORKER_DSN"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close(context.Background()) })
+	roles := PgMigrationControlRoles{Owner: os.Getenv("TESL_QUEUE_REPAIR_OWNER"), Worker: os.Getenv("TESL_QUEUE_REPAIR_WORKER"), Request: os.Getenv("TESL_QUEUE_REPAIR_REQUEST")}
+	scope, err := pgOpenQueueConversionCandidate(ctx, conn, "mail", roles, digest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &QueueConversionDBFixture{Context: ctx, Worker: conn, Scope: scope, roles: roles}
+}
+
+func (f *QueueConversionDBFixture) MutateCatalog(t *testing.T, kind string) {
+	t.Helper()
+	statements := map[string]string{
+		"column":        "alter table mail.tesl_queue_conversion_scope add column extra integer",
+		"relation":      "create table mail.unrecorded(id integer)",
+		"function":      "create function mail.unrecorded() returns integer language sql as 'select 1'",
+		"function-body": "create or replace function mail.tesl_queue_conversion_snapshot() returns jsonb language plpgsql stable security definer set search_path='' as 'begin raise exception ''snapshot must not execute''; end'",
+		"cascade":       "alter table mail.tesl_queue_conversion_attempts drop constraint tesl_queue_conversion_attempts_job_id_fkey; alter table mail.tesl_queue_conversion_attempts add foreign key(job_id) references mail.tesl_jobs(id)",
+		"trigger":       "alter table mail.tesl_jobs disable trigger all",
+		"sequence":      "alter sequence mail.tesl_jobs_seq_seq cache 2",
+		"check":         "alter table mail.tesl_queue_conversion_receipts drop constraint tesl_queue_conversion_receipts_kind_check",
+		"column-grant":  "grant update(payload) on mail.tesl_jobs to " + quoteIdentifier(f.roles.Worker),
+		"schema-grant":  "grant create on schema mail to " + quoteIdentifier(f.roles.Worker),
+		"payload":       "update mail.tesl_queue_payloads set contract=pg_catalog.convert_to('other','UTF8'),contract_hash=pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to('other','UTF8')),'hex') where version=1",
+		"source":        "update mail.tesl_queue_conversion_sources set document=pg_catalog.convert_to('other','UTF8'),digest=pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to('other','UTF8')),'hex') where revision=2",
+		"parent":        "update mail.tesl_queue_conversion_sources set parent_digest=(select digest from mail.tesl_queue_conversion_sources where revision=0) where revision=2",
+		"database":      "update mail.tesl_queue_conversion_scope set database_oid=0",
+		"floor":         "update mail.tesl_queue_conversion_scope set floor=to_version",
+	}
+	statement, ok := statements[kind]
+	if !ok {
+		t.Fatal("unknown catalog mutation")
+	}
+	if _, err := f.Installer.Exec(f.Context, statement); err != nil {
 		t.Fatal(err)
 	}
 }

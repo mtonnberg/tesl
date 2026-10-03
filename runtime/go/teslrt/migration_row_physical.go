@@ -1,6 +1,7 @@
 package teslrt
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"slices"
@@ -35,6 +36,7 @@ type pgRowPhysicalWindow struct {
 	invalidation                                                  []string
 }
 type pgRowPhysicalRetirement struct{ entity, fromSchemaHash, toSchemaHash string }
+type pgRowPhysicalQueueConversion struct{ queue, job, digest, oldContract, newContract string }
 type pgRowPhysicalPlan struct {
 	compiled                                *pgCompiledRowHistory
 	settled                                 bool
@@ -45,6 +47,7 @@ type pgRowPhysicalPlan struct {
 	entities                                []pgRowPhysicalEntity
 	windows                                 []pgRowPhysicalWindow
 	retirements                             []pgRowPhysicalRetirement
+	queueConversions                        []pgRowPhysicalQueueConversion
 	contract, hash                          string
 }
 type pgCompiledRowPhysicalHistory struct {
@@ -75,6 +78,7 @@ func pgParseRowPhysicalShape(contract, hash string, settled bool) (*pgRowPhysica
 		valid := n.list(8) && (n.children[0].isAtom("tesl-retained-physical-version-v1") || n.children[0].isAtom("tesl-retained-physical-version-v2"))
 		valid = valid || (n.list(9) && (n.children[0].isAtom("tesl-retained-physical-version-v3") || n.children[0].isAtom("tesl-retained-physical-version-v4")))
 		valid = valid || (n.list(10) && n.children[0].isAtom("tesl-retained-physical-version-v5"))
+		valid = valid || (n.list(9) && n.children[0].isAtom("tesl-retained-physical-version-v6"))
 		if !valid {
 			return nil, fmt.Errorf("invalid retained physical document")
 		}
@@ -111,6 +115,31 @@ func pgParseRowPhysicalShape(contract, hash string, settled bool) (*pgRowPhysica
 		r.fail("invalid physical owner")
 	}
 	retirementFormat := n.children[0].isAtom("tesl-retained-physical-version-v5")
+	queueFormat := n.children[0].isAtom("tesl-retained-physical-version-v6")
+	if queueFormat {
+		seen := map[string]bool{}
+		for _, entry := range sequence(n.children[8]) {
+			if !entry.list(5) {
+				r.fail("invalid physical queue conversion")
+				continue
+			}
+			c := pgRowPhysicalQueueConversion{atom(entry.children[0]), atom(entry.children[1]), atom(entry.children[2]), atom(entry.children[3]), atom(entry.children[4])}
+			if !pgQueueIdentity(c.queue) || !pgQueueIdentity(c.job) || !pgMigrationDigest(c.digest) || seen[c.job] || c.oldContract == c.newContract {
+				r.fail("invalid or duplicate physical queue transition")
+			}
+			seen[c.job] = true
+			for _, contract := range []string{c.oldContract, c.newContract} {
+				raw, err := hex.DecodeString(contract)
+				if err != nil || hex.EncodeToString(raw) != contract || pgQueueCanonicalContract(raw) != nil {
+					r.fail("invalid physical queue payload contract")
+				}
+			}
+			plan.queueConversions = append(plan.queueConversions, c)
+		}
+		if plan.version != 2 || len(plan.queueConversions) == 0 || len(sequence(n.children[7])) != 0 {
+			r.fail("queue physical plan requires a V2 queue-only transition")
+		}
+	}
 	legacyFormat := n.children[0].isAtom("tesl-retained-physical-version-v4")
 	requiresContract := n.children[0].isAtom("tesl-retained-physical-version-v3")
 	prerequisite := pgRowCanonical{}

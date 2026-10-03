@@ -3,6 +3,8 @@ package teslqueueconversions
 import (
 	"context"
 	"fmt"
+	"os"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -769,5 +771,194 @@ func TestPostgresBatchBoundsCancellationAndLiveClaims(t *testing.T) {
 	p, err = f.Batch(f.Context, f.Worker, Conversion0, 256)
 	if err != nil || p.Converted != 1 || !p.NoEligible {
 		t.Fatal("released claim was not discovered", p, err)
+	}
+}
+
+func TestPostgresWorkerReopensWithoutInstaller(t *testing.T) {
+	f := rt.OpenQueueConversionDBForTest(t, finalRepairDigest)
+	if err := f.Enqueue("job", `{"oldText":""}`, "pending", time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Apply(f.Worker, Conversion0, "job"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Apply(f.Worker, Conversion1, "job"); err != nil {
+		t.Fatal(err)
+	}
+	before := f.Snapshot(t, "job")
+	f.RevokeTemporary(t)
+	f.RestartWorker(t)
+	f.ForgetScope()
+	if err := f.Reopen(f.Request, finalRepairDigest); err == nil {
+		t.Fatal("request login opened Worker authority")
+	}
+	if err := f.Reopen(f.Installer, finalRepairDigest); err == nil {
+		t.Fatal("installer impersonated Worker startup")
+	}
+	if err := f.Reopen(f.Worker, finalRepairDigest); err != nil {
+		t.Fatal(err)
+	}
+	if before != f.Snapshot(t, "job") {
+		t.Fatal("opening Worker mutated durable state")
+	}
+	p, err := f.Batch(f.Context, f.Worker, Conversion2, 256)
+	if err != nil || p.Converted != 1 {
+		t.Fatal("reopened Worker could not resume repair", p, err)
+	}
+}
+
+func TestPostgresWorkerReopenRejectsCatalogAndSourceDrift(t *testing.T) {
+	for _, kind := range []string{"column", "relation", "function", "function-body", "cascade", "trigger", "sequence", "check", "column-grant", "schema-grant", "payload", "source", "parent", "database", "floor"} {
+		t.Run(kind, func(t *testing.T) {
+			f := rt.OpenQueueConversionDBForTest(t, finalRepairDigest)
+			if err := f.Enqueue("job", `{"oldText":"kept"}`, "pending", time.Now().UTC()); err != nil {
+				t.Fatal(err)
+			}
+			before := f.Snapshot(t, "job")
+			f.MutateCatalog(t, kind)
+			f.ForgetScope()
+			err := f.Reopen(f.Worker, finalRepairDigest)
+			if err == nil {
+				t.Fatal("altered catalog or source acquired a Worker handle")
+			}
+			if strings.Contains(err.Error(), "snapshot must not execute") {
+				t.Fatal("opener executed unverified snapshot body", err)
+			}
+			if before != f.Snapshot(t, "job") {
+				t.Fatal("failed reopen changed jobs or progress")
+			}
+		})
+	}
+}
+
+func TestPostgresWorkerReopensInNewProcess(t *testing.T) {
+	f := rt.OpenQueueConversionDBForTest(t, finalRepairDigest)
+	if err := f.Enqueue("job", `{"oldText":""}`, "pending", time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Apply(f.Worker, Conversion0, "job"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Apply(f.Worker, Conversion1, "job"); err != nil {
+		t.Fatal(err)
+	}
+	f.RevokeTemporary(t)
+	f.ForgetScope()
+	binary, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := exec.CommandContext(f.Context, binary, "-test.run=^TestPostgresWorkerProcessChild$", "-test.v")
+	for _, value := range os.Environ() {
+		if strings.HasPrefix(value, "TESL_MIGRATION_TEST_DSN=") || strings.HasPrefix(value, "TESL_TEST_POSTGRES_SHARED_") || strings.HasPrefix(value, "PG") {
+			continue
+		}
+		command.Env = append(command.Env, value)
+	}
+	command.Env = append(command.Env, f.WorkerProcessEnvironment()...)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("fresh worker: %v\n%s", err, output)
+	}
+	if !strings.Contains(string(output), "--- PASS: TestPostgresWorkerProcessChild") {
+		t.Fatalf("child did not run: %s", output)
+	}
+	var version, receipts int
+	if err := f.Installer.QueryRow(f.Context, "select schema_version,(select count(*) from mail.tesl_queue_conversion_receipts) from mail.tesl_jobs where id='job'").Scan(&version, &receipts); err != nil || version != 2 || receipts != 3 {
+		t.Fatal("new process did not commit typed repair", version, receipts, err)
+	}
+}
+
+func TestPostgresWorkerProcessChild(t *testing.T) {
+	if os.Getenv("TESL_QUEUE_REPAIR_CHILD") != "1" {
+		t.Skip("launched by process restart witness")
+	}
+	if os.Getenv("TESL_MIGRATION_TEST_DSN") != "" {
+		t.Fatal("installer connection leaked into worker process")
+	}
+	f := rt.ReopenQueueWorkerProcessForTest(t, finalRepairDigest)
+	p, err := f.Batch(f.Context, f.Worker, Conversion2, 256)
+	if err != nil || p.Converted != 1 || !p.NoEligible {
+		t.Fatal(p, err)
+	}
+}
+
+func TestPostgresApplicationStagesExactQueueRepairHistory(t *testing.T) {
+	f := rt.OpenApplicationQueueForTest(t)
+	if _, err := f.Request.Exec(f.Context, "select mail.tesl_queue_enqueue(1,'Jobs','Delivery','job',$1::jsonb)", `{"oldText":""}`); err != nil {
+		t.Fatal(err)
+	}
+	var original string
+	if err := f.Installer.QueryRow(f.Context, "select pg_catalog.to_jsonb(j)::text from mail.tesl_jobs j where id='job'").Scan(&original); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.StageApplication(f.Worker, finalRepairDigest); err == nil {
+		t.Fatal("Worker staged installer-owned application history")
+	}
+	if err := f.StageApplication(f.Request, finalRepairDigest); err == nil {
+		t.Fatal("Request staged application history")
+	}
+	if _, err := f.Installer.Exec(f.Context, "alter table mail.tesl_row_queue_conversion_staging add constraint fail_later check(revision<2)"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.StageApplication(f.Installer, finalRepairDigest); err == nil {
+		t.Fatal("unexpected catalog accepted")
+	}
+	if _, err := f.Installer.Exec(f.Context, "alter table mail.tesl_row_queue_conversion_staging drop constraint fail_later"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.StageApplication(f.Installer, finalRepairDigest); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.StageApplication(f.Installer, finalRepairDigest); err != nil {
+		t.Fatal("exact staging replay failed", err)
+	}
+	if err := f.StageApplicationTarget(f.Worker); err == nil {
+		t.Fatal("Worker registered a staged target")
+	}
+	for _, kind := range []string{"schema", "storage", "namespace", "callback", "missing", "duplicate", "reverse"} {
+		if err := f.MutateApplicationTarget(t, kind); err == nil {
+			t.Fatal("rehashed foreign target accepted", kind)
+		}
+	}
+	if err := f.StageApplicationTarget(f.Installer); err != nil {
+		t.Fatal("checked target did not bind to installed app", err)
+	}
+	if err := f.StageApplicationTarget(f.Installer); err != nil {
+		t.Fatal("target staging replay failed", err)
+	}
+	var version, physical int
+	if err := f.Worker.QueryRow(f.Context, "select current,(select count(*) from mail.tesl_row_physical) from mail.tesl_schema_state where id=1").Scan(&version, &physical); err != nil || version != 1 || physical != 1 {
+		t.Fatal("target staging accidentally published an expansion", version, physical, err)
+	}
+	var count int
+	if err := f.Worker.QueryRow(f.Context, `select count(*) from mail.tesl_row_queue_conversion_staging c
+ join mail.tesl_schema_meta m on m.database_uuid=c.database_uuid and m.fence_ns=c.fence_ns
+ join mail.tesl_row_queue_sources q on q.version=c.from_version and q.inventory_hash=c.inventory_hash and q.expansion_hash=c.expansion_hash
+ join mail.tesl_queue_payloads p on p.version=c.from_version and p.queue=c.queue and p.job_type=c.job_type and p.contract=c.old_contract
+ where c.from_version=1 and c.to_version=2`).Scan(&count); err != nil || count != 3 {
+		t.Fatal("staging lost installed application authority", count, err)
+	}
+	if _, err := f.Worker.Exec(f.Context, "delete from mail.tesl_row_queue_conversion_staging"); err == nil {
+		t.Fatal("Worker rewrote staged history")
+	}
+	var current string
+	if err := f.Installer.QueryRow(f.Context, "select pg_catalog.to_jsonb(j)::text from mail.tesl_jobs j where id='job'").Scan(&current); err != nil || current != original {
+		t.Fatal("staging changed a live V1 job", current, err)
+	}
+	// Rebinding to another installation identity must not pass as an idempotent
+	// replay, even when callback and payload hashes still match.
+	if _, err := f.Installer.Exec(f.Context, "update mail.tesl_row_queue_conversion_staging set database_uuid=pg_catalog.gen_random_uuid() where revision=2"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.StageApplication(f.Installer, finalRepairDigest); err == nil {
+		t.Fatal("foreign staged database identity accepted")
+	}
+	// An old catalog is rejected; this API never silently installs missing tables.
+	if _, err := f.Installer.Exec(f.Context, "drop table mail.tesl_row_queue_conversion_staging"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.StageApplication(f.Installer, finalRepairDigest); err == nil {
+		t.Fatal("old database catalog silently adopted")
 	}
 }

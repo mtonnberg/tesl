@@ -41,7 +41,10 @@ let relative inventory name =
   let prefix=I.root_module inventory ^ "." in
   if not (String.starts_with ~prefix name) then reject loc "entity is outside its checked source snapshot";
   String.sub name (String.length prefix) (String.length name-String.length prefix)
-let revalidate t = protect (fun () -> List.iter (fun link -> ignore (ir (L.revalidate link))) t.links)
+let revalidate t = protect (fun () ->
+  List.iter (fun link -> ignore (ir (L.revalidate link))) t.links;
+  List.iter(fun edge -> List.iter(fun conversion -> ignore(checked(Migration_queue_transform.with_checked conversion Fun.id)))
+    (D.queue_transforms edge))t.edges)
 let captured_sources t =
   List.concat_map (fun link -> T.captured_sources (L.checked_transform link)) t.links
   |> List.sort_uniq (fun (a,source_a) (b,source_b) -> compare (a.Ast.source_file,source_a) (b.Ast.source_file,source_b))
@@ -51,7 +54,7 @@ let validate_adapter_modes t = protect (fun () ->
     | None when binding.row.mapping.mode=R.Derived -> ()
     | _ -> reject binding.current.table.entity.entity_loc
         "row adapter mode differs from its exact checked source binding") t.bindings)
-let check ~schemas ~edges = protect (fun () ->
+let check_internal ~queue_expansion ~schemas ~edges = protect (fun () ->
   if schemas=[] || List.length edges+1<>List.length schemas then
     reject ~code:"MIG001" loc "row generations require complete source history from V1";
   let first=List.hd schemas in
@@ -72,7 +75,12 @@ let check ~schemas ~edges = protect (fun () ->
       adjacent (expected+1) rest later
     | _ -> reject ~code:"MIG001" loc "incomplete row generation history" in
   adjacent 2 schemas edges;
-  if List.exists(fun edge -> D.queue_transforms edge<>[])edges then
+   if queue_expansion then begin
+     if List.length schemas<>2 || List.length edges<>1 ||
+        D.queue_transforms(List.hd edges)=[] || S.entries(D.coverage(List.hd edges))<>[] then
+       reject ~code:"MIG028" loc "initial queue physical planning requires one V1/V2 queue-only edge with unchanged entities"
+   end;
+   if not queue_expansion && List.exists(fun edge -> D.queue_transforms edge<>[])edges then
     reject ~code:"MIG028" loc "checked queue conversions require protected transformation and repair execution before physical planning";
   let generations=Hashtbl.create 16 and relation_owners=Hashtbl.create 16 in
   let describe version schema =
@@ -164,4 +172,7 @@ let check ~schemas ~edges = protect (fun () ->
         bindings:={version=next.version;previous=old;current=fresh;link;row}::!bindings) rows) checked_link;
     versions:=next::!versions;previous:=next) (List.tl schemas) edges;
   let result={retirements=List.rev !retirements;versions=List.rev !versions;bindings=List.sort (fun (a:binding) (b:binding) -> compare (a.version,a.current.identity) (b.version,b.current.identity)) !bindings;links=List.rev !links;edges} in
-  ignore (checked (revalidate result));result)
+   ignore (checked (revalidate result));result)
+
+let check = check_internal ~queue_expansion:false
+let check_queue_expansion = check_internal ~queue_expansion:true

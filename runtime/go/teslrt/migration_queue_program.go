@@ -688,8 +688,16 @@ func pgReadQueueConversionSource(spec pgQueueConversionSourceSpec) (*pgQueueConv
 		}
 		node = node.children[3]
 	}
-	if !node.list(13) || !node.children[0].isAtom("checked-queue-transform-source-v1") {
+	if !(node.list(13) && node.children[0].isAtom("checked-queue-transform-source-v1")) &&
+		!(node.list(17) && node.children[0].isAtom("checked-queue-transform-source-v2")) {
 		return nil, fmt.Errorf("queue conversion source has an unsupported closed format")
+	}
+	if node.list(17) {
+		for _, hash := range node.children[13:] {
+			if !hash.atom || !pgMigrationDigest(hash.value) {
+				return nil, fmt.Errorf("queue conversion schema snapshot binding is invalid")
+			}
+		}
 	}
 	for i := 1; i <= 6; i++ {
 		if !node.children[i].atom {
@@ -892,6 +900,14 @@ func registerCompiledQueueConversionSources(specs []pgQueueConversionSourceSpec)
 			for i := 0; i < 11; i++ {
 				if !pgRowCanonicalEqual(parent.conversion.children[i], value.conversion.children[i]) {
 					panic("queue repair changed its frozen source or target contract")
+				}
+			}
+			if len(parent.conversion.children) != len(value.conversion.children) {
+				panic("queue repair changed snapshot binding format")
+			}
+			for i := 13; i < len(value.conversion.children); i++ {
+				if !pgRowCanonicalEqual(parent.conversion.children[i], value.conversion.children[i]) {
+					panic("queue repair changed full schema snapshot bindings")
 				}
 			}
 		}

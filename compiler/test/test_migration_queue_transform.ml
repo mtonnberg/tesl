@@ -737,9 +737,11 @@ fn repairEmpty(old: Schema.Mail.V1.Delivery) -> Migrated Schema.Mail.VCurrent.De
 fn emptyJob() -> Schema.Mail.V1.Delivery =
  Schema.Mail.V1.Delivery { text: "" }
 |}
-let with_public_repair run =
+let with_public_repair ?(entities=false) run =
  let helper_source=repair_helper |> replace "exposing [convert, oldJob]" "exposing [convert, oldJob, repair, repairAgain, repairJob]" in
- with_job_declaration ~helper_source (fun root save parent _ ->
+ let entity="\nentity Note table \"notes\" primaryKey id { id: String, title: String }\n" in
+ let before=if entities then old ^ entity else old and after=if entities then fresh ^ entity else fresh in
+ with_job_declaration ~before ~after ~helper_source (fun root save parent _ ->
   let first=save "migrations/mail/repair1.tesl" public_repair_source in
   let second=save "migrations/mail/repair2.tesl" public_second_repair in
   run root save parent first second)
@@ -826,7 +828,27 @@ migration = Migration { invalid: 1 }
 |});
  let source=public_second_repair |> replace "import Tesl.Migration" "import Schema.Mail.Migrate.Unchecked\nimport Tesl.Migration" in
  refuses ~code:"MIG028" (Migration_queue_repair.check ~source (parse second source)))
-let public_repair_postgres () = with_public_repair(fun root save _ _ second ->
+let repair_baseline_app = {|module App exposing []
+import Tesl.Prelude exposing [String]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.Env exposing [env, envInt, envRead]
+import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection, MigrationConfig, Worker]
+import Tesl.Queue exposing [Queue, FromQueue, queueRead]
+import Tesl.App exposing [App]
+import Schema.Mail.VCurrent exposing [Delivery]
+database D = Database { schema: Schema.Mail.VCurrent, migrations: Schema.Mail.Migrate,
+ backend: Postgres (PostgresConfig { namespace: "mail", dbName: env "Q_DB", user: env "Q_USER", password: "",
+ connection: TcpConnection { host: env "Q_HOST", port: envInt "Q_PORT" 5432 },
+ migrations: MigrationConfig { topology: Worker, controlOwner: env "Q_OWNER", requestRole: env "Q_REQUEST", workerRole: env "Q_WORKER", ddlConnection: env "Q_DDL" } }) }
+queue Tasks requires [queueRead] = Queue { database: D, schema: Schema.Mail.VCurrent.Jobs,
+ jobs: [Job Schema.Mail.VCurrent.Delivery handle Nothing] }
+worker handle(job: Delivery ::: FromQueue (Id == jobId) job) = job
+handler get health() -> String = "ready"
+api Api { get "/" -> String }
+server Web for Api { health }
+main() -> App requires [queueRead, envRead] = App { database: D, queues: [Tasks], api: Web, port: 8080 }
+|}
+let public_repair_postgres () = with_public_repair ~entities:true (fun root save parent _ second ->
  let source=read second in
  let repair=Option.get(get(Migration_queue_repair.check ~source (parse second source))) in
  let artifacts=match Compile.compile_go_file second with
@@ -839,8 +861,29 @@ let public_repair_postgres () = with_public_repair(fun root save _ _ second ->
  ignore(save "out/internal/teslrt/queue_repair_postgres_bridge_test_support.go" (fixture "bridge.go"));
  ignore(save "out/internal/teslqueueconversions/repair_postgres_test.go"
    (fixture "repair_test.go" |> replace "@@DIGEST@@" (Q.digest repair)));
+ let edge_source=read parent in
+ let abi=Result.get_ok(Migration_abi.current()) in
+ let edge=Option.get(get(Migration_declaration.check ~stored_value_compatibility:(Migration_abi.stored_value_compatibility abi) ~compiler_abi:(Migration_abi.id abi) ~source:edge_source (parse parent edge_source))) in
+ let history=get(Migration_row_history.check_queue_expansion
+   ~schemas:[load(Filename.concat root "schema/mail/v1.tesl");load(Filename.concat root "schema/mail/v-current.tesl")] ~edges:[edge]) in
+ let plan=get(Migration_retained_storage.plan history) in
+ let target=List.hd(List.rev(Migration_retained_storage.versions plan)) in
+ let target_doc,target_hash=Migration_row_history.contract Migration_canonical.Migration
+   (Migration_retained_storage_canonical.version_node ~family:"Schema.Mail" ~namespace:"mail" plan target) in
+ ignore(save "out/internal/teslrt/queue_target_test_constants.go"
+   (Printf.sprintf "package teslrt\nconst testQueueTargetDocument = %s\nconst testQueueTargetHash = %s\n" (Emit_go.go_quote target_doc)(Emit_go.go_quote target_hash)));
+ ignore(save "baseline/tesl.toml" "");
+ ignore(save "baseline/schema/mail/v-current.tesl" ((old |> replace "Schema.Mail.V1" "Schema.Mail.VCurrent") ^ "\nentity Note table \"notes\" primaryKey id { id: String, title: String }\n"));
+ let app=save "baseline/app.tesl" repair_baseline_app in
+ let baseline=match Compile.compile_go_file app with
+  | Compile.GoSuccess artifacts->artifacts | Compile.GoFailure ds->fail(Compile.diagnostics_to_json ds) in
+ List.iter(fun(a:Emit_go.artifact)->ignore(save ("out/baseline/" ^ a.path)a.contents))baseline;
+ let build=Printf.sprintf "cd %s && go build -race -o app ./cmd/app 2>&1" (Filename.quote(Filename.concat root "out/baseline")) in
+ let channel=Unix.open_process_in build in let output=In_channel.input_all channel in
+ (match Unix.close_process_in channel with Unix.WEXITED 0->()|_->fail output);
+ remove(Filename.concat root "baseline");
  List.iter(fun name->remove(Filename.concat root name))["schema";"migrations";"tesl.toml"];
- let command=Printf.sprintf "cd %s && go test -race -p 1 -count=1 -timeout=180s -v ./internal/teslqueueconversions 2>&1" (Filename.quote(Filename.concat root "out")) in
+ let command=Printf.sprintf "cd %s && QUEUE_REPAIR_V1_APP=%s go test -race -p 1 -count=1 -timeout=240s -v ./internal/teslqueueconversions 2>&1" (Filename.quote(Filename.concat root "out")) (Filename.quote(Filename.concat root "out/baseline/app")) in
  let channel=Unix.open_process_in command in let output=In_channel.input_all channel in
  (match Unix.close_process_in channel with Unix.WEXITED 0->()|_->fail output);
  if Sys.getenv_opt "TESL_MIGRATION_TEST_REQUIRE_POSTGRES"=Some "1" then
@@ -851,7 +894,9 @@ let public_repair_postgres () = with_public_repair(fun root save _ _ second ->
     "TestPostgresRepairedJobRunsThroughQueueLifecycle";"TestPostgresAbandonedConversionDoesNotBlockQueueCompletion";
     "TestPostgresExpiredQueueClaimCanBeConverted";"TestPostgresClaimTransactionKeepsCompletionRight";
     "TestPostgresAutomaticConversionAndRepairBatches";"TestPostgresBatchSelectionAndCompetingWorkers";
-    "TestPostgresBatchFailurePreservesCommittedPrefix";"TestPostgresBatchBoundsCancellationAndLiveClaims"])
+    "TestPostgresBatchFailurePreservesCommittedPrefix";"TestPostgresBatchBoundsCancellationAndLiveClaims";
+    "TestPostgresWorkerReopensWithoutInstaller";"TestPostgresWorkerReopenRejectsCatalogAndSourceDrift";
+    "TestPostgresWorkerReopensInNewProcess";"TestPostgresApplicationStagesExactQueueRepairHistory"])
 let () = run "sealed queue conversion source" ["source",List.map(fun(name,f)->test_case name `Quick f)
  ["checked callback fixture and stable identity",valid;
   "exact adjacent queue and payload identities",identities;

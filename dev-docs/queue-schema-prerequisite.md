@@ -202,6 +202,46 @@ those database mechanics in isolation.
 
 ## Regression gates
 
+### Fresh application staging
+
+Fresh ordinary application installations now include
+`tesl_row_queue_conversion_staging` in their closed control catalog. The private
+runtime operation `pgStageRowQueueConversions` uses the short-lived installer
+role to append compiler-linked conversion and repair descriptors. It first
+validates the application catalog, takes real queue admission and its version
+fence, and serializes against schema-state changes. Each record binds the
+database UUID/fence namespace, source/target versions, queue/job identity, repair
+revision and predecessor, complete source descriptor, source inventory/expansion
+hashes and exact old/new payload contracts. Conflicting replay refuses.
+
+This first application path stages against the installed current source version.
+It changes no queued payloads, source versions, admission floor or expansion
+receipts. Future target activation must verify its own checked physical expansion
+and target queue inventory against these staged records. Staging alone grants
+neither Worker mutation authority nor changed-payload application compilation.
+
+An internal queue-only physical planning path now produces a retained physical
+v6 target descriptor for V1/V2 with unchanged entities. It includes conversion
+digests and both payload contracts, and is classified as a narrowing transition
+despite having no row windows. Conversion source v2 additionally includes complete
+source/target schema and storage snapshot hashes; repair revisions preserve them.
+
+`pgStageRowQueueTarget` registers that descriptor in the application's separate
+`tesl_row_queue_target_staging` table after comparing entity layout, complete staged
+conversion coverage, snapshot hashes, exact callback source bytes and installed
+database/fence identity. It leaves the real physical/expansion history at V1.
+The target queue inventory and completed expansion still must be published through
+their protected lifecycle before any ordinary application conversion runs.
+
+The PostgreSQL witness uses a separately compiled ordinary V1 application and its
+public installer/worker commands, with original sources deleted. It creates the
+job through the ordinary protected queue API, verifies staged database and
+expansion identities, and confirms that the job remains unchanged.
+
+Per maintainer direction this development change is fresh-install-first. The
+existing format-5 catalog has been extended; old databases missing the staging
+table fail the exact catalog check. There is no implicit upgrade/adoption path.
+
 ### PostgreSQL conversion and repair execution candidate
 
 `runtime/go/teslrt/migration_queue_conversion_postgres.go` now executes compiled
@@ -252,21 +292,30 @@ The candidate provides:
   rejection eligible for a repair. Delayed and retry-scheduled jobs are included.
   The within-turn cursor is not persisted: a new turn can discover earlier locked
   jobs or new arrivals. `NoEligible` is never permission to advance the floor.
+- A read-only Worker opener for a fresh process. It verifies the complete
+  relation/function inventory, independent table descriptors, FK targets and RI
+  triggers, sequence definitions, owner/privilege boundaries and the exact linked
+  repair history before returning an execution handle. It requires the real Worker
+  login and exact installed repair head, but no installer handle, source files or
+  TEMP privilege. It also rejects a floor above existing old-stamped jobs.
 
 The source-deleted generated-project fixture in
 `compiler/test/fixtures/queue-repair-postgres/` exercises real roles and database
-connections. Fourteen Go test groups cover persisted conversion/repair, delayed and
+connections. Seventeen parent Go test groups cover persisted conversion/repair, delayed and
 dead jobs, pre-commit backend termination, post-commit replay after reconnect,
 competing workers, abandoned/stale attempts, progressive repair registration and
 rollback, foreign database/contract bindings, malformed payloads, active and
 expired claims, typed consumption and completion, post-deletion replay and
 retirement fencing, bounded work discovery, concurrent batches and restart after
-a partial batch failure. The full `scripts/run-migration-tests.sh` gate supplies its private
+a partial batch failure, read-only reopening, catalog/source corruption and a
+fresh worker subprocess resuming a repair. All fixtures obtain their execution
+handle through the Worker opener after installation. The full
+`scripts/run-migration-tests.sh` gate supplies its private
 PostgreSQL cluster and requires these witnesses; they cannot silently skip there.
 
 This candidate handles unclaimed or expired pending/dead jobs and their typed
 quarantines, one transaction per job. Integration with format-5 source/expansion
-receipts, closed application catalogs, production scheduling of these worker
+receipts, the application's complete catalog, production scheduling of these worker
 turns and application retirement remains necessary. Its global scope lock
 is not the application's per-version admission fence. The ordinary
 changed-payload application guards therefore still refuse deployment. The

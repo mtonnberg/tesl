@@ -243,6 +243,10 @@ func pgQueueCandidateACL(ctx context.Context, tx pgx.Tx, namespace, name string,
 	if name == "tesl_jobs" {
 		readers = []string{}
 	}
+	return pgQueueTableACL(ctx, tx, namespace, name, readers)
+}
+
+func pgQueueTableACL(ctx context.Context, tx pgx.Tx, namespace, name string, readers []string) error {
 	var unsafe bool
 	err := tx.QueryRow(ctx, `select exists(select 1 from pg_catalog.aclexplode(coalesce(c.relacl,pg_catalog.acldefault('r',c.relowner))) a where a.grantee<>c.relowner and (a.is_grantable or a.privilege_type<>'SELECT' or not exists(select 1 from pg_catalog.pg_roles r where r.oid=a.grantee and r.rolname=any($3::text[])))) or exists(select 1 from pg_catalog.pg_attribute col cross join lateral pg_catalog.aclexplode(col.attacl) a where col.attrelid=c.oid and a.grantee<>c.relowner) or exists(select 1 from pg_catalog.pg_roles r where r.rolname=any($3::text[]) and not pg_catalog.has_table_privilege(r.oid,c.oid,'SELECT')) from pg_catalog.pg_class c join pg_catalog.pg_namespace n on n.oid=c.relnamespace where n.nspname=$1 and c.relname=$2`, namespace, name, readers).Scan(&unsafe)
 	if err != nil {
@@ -268,7 +272,13 @@ func pgQueueCandidateForeignKeys(ctx context.Context, tx pgx.Tx, ns string) erro
 	for _, s := range pgQueueCandidateTables(ns) {
 		tables = append(tables, s.name)
 	}
-	rows, err := tx.Query(ctx, `select c.relname, array(select a.attname::text from unnest(k.conkey) with ordinality x(n,o) join pg_catalog.pg_attribute a on a.attrelid=c.oid and a.attnum=x.n order by x.o),tc.relname,array(select a.attname::text from unnest(k.confkey) with ordinality x(n,o) join pg_catalog.pg_attribute a on a.attrelid=tc.oid and a.attnum=x.n order by x.o), tn.nspname=$1 and k.confmatchtype='s' and k.confupdtype='a' and k.confdeltype='a' and not k.condeferrable and not k.condeferred and k.convalidated and coalesce((pg_catalog.to_jsonb(k)->>'conenforced')::boolean,true) and k.conparentid=0 and k.conislocal and k.coninhcount=0 from pg_catalog.pg_constraint k join pg_catalog.pg_class c on c.oid=k.conrelid join pg_catalog.pg_namespace n on n.oid=c.relnamespace join pg_catalog.pg_class tc on tc.oid=k.confrelid join pg_catalog.pg_namespace tn on tn.oid=tc.relnamespace where n.nspname=$1 and c.relname=any($2::text[]) and k.contype='f'`, ns, tables)
+	return pgQueueForeignKeyCatalog(ctx, tx, ns, tables, pgQueueCandidateFKs, []string{})
+}
+
+// Cascading edges are explicit source.target pairs; no live database declaration
+// can choose a deletion policy or authorize ignoring an RI trigger.
+func pgQueueForeignKeyCatalog(ctx context.Context, tx pgx.Tx, ns string, tables []string, expected []pgQueueCandidateFK, cascades []string) error {
+	rows, err := tx.Query(ctx, `select c.relname, array(select a.attname::text from unnest(k.conkey) with ordinality x(n,o) join pg_catalog.pg_attribute a on a.attrelid=c.oid and a.attnum=x.n order by x.o),tc.relname,array(select a.attname::text from unnest(k.confkey) with ordinality x(n,o) join pg_catalog.pg_attribute a on a.attrelid=tc.oid and a.attnum=x.n order by x.o), tn.nspname=$1 and k.confmatchtype='s' and k.confupdtype='a' and k.confdeltype::text=case when (c.relname||'.'||tc.relname)=any($3::text[]) then 'c' else 'a' end and not k.condeferrable and not k.condeferred and k.convalidated and coalesce((pg_catalog.to_jsonb(k)->>'conenforced')::boolean,true) and k.conparentid=0 and k.conislocal and k.coninhcount=0 from pg_catalog.pg_constraint k join pg_catalog.pg_class c on c.oid=k.conrelid join pg_catalog.pg_namespace n on n.oid=c.relnamespace join pg_catalog.pg_class tc on tc.oid=k.confrelid join pg_catalog.pg_namespace tn on tn.oid=tc.relnamespace where n.nspname=$1 and c.relname=any($2::text[]) and k.contype='f'`, ns, tables, cascades)
 	if err != nil {
 		return err
 	}
@@ -292,7 +302,7 @@ func pgQueueCandidateForeignKeys(ctx context.Context, tx pgx.Tx, ns string) erro
 		return err
 	}
 	want := []string{}
-	for _, fk := range pgQueueCandidateFKs {
+	for _, fk := range expected {
 		want = append(want, fmt.Sprint(fk))
 	}
 	slices.Sort(found)
@@ -325,11 +335,15 @@ func pgQueueCandidateForeignKeys(ctx context.Context, tx pgx.Tx, ns string) erro
 		return err
 	}
 	want = []string{}
-	for _, fk := range pgQueueCandidateFKs {
+	for _, fk := range expected {
+		deleteFunction := "RI_FKey_noaction_del"
+		if slices.Contains(cascades, fk.Table+"."+fk.Target) {
+			deleteFunction = "RI_FKey_cascade_del"
+		}
 		for _, tr := range []struct {
 			table, fn string
 			typ       int
-		}{{fk.Table, "RI_FKey_check_ins", 5}, {fk.Table, "RI_FKey_check_upd", 17}, {fk.Target, "RI_FKey_noaction_del", 9}, {fk.Target, "RI_FKey_noaction_upd", 17}} {
+		}{{fk.Table, "RI_FKey_check_ins", 5}, {fk.Table, "RI_FKey_check_upd", 17}, {fk.Target, deleteFunction, 9}, {fk.Target, "RI_FKey_noaction_upd", 17}} {
 			want = append(want, strings.Join([]string{tr.table, fk.Table, fk.Target, tr.fn, fmt.Sprint(tr.typ)}, "|"))
 		}
 	}

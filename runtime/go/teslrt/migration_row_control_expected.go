@@ -23,6 +23,47 @@ func pgExpectedRowControl(e *pgCatalogExpectations, owner, name string) (*pgCata
 	digest := func(value, hash string) { check("(encode(sha256("+value+"), 'hex'::text) = "+hash+")", value, hash) }
 	bounded := func(n string) { check("(("+n+" >= 1) AND ("+n+" <= 2147483646))", n) }
 	switch name {
+	case "tesl_row_queue_target_staging":
+		col("version", "int4")
+		col("database_uuid", "uuid")
+		col("fence_ns", "int4")
+		col("predecessor_hash", "text")
+		col("contract", "bytea")
+		col("contract_hash", "text")
+		col("compiler_abi", "text")
+		col("stored_value_compatibility", "text")
+		con("p", "", "version")
+		check("(version = 2)", "version")
+		bounded("fence_ns")
+		hash("predecessor_hash")
+		digest("contract", "contract_hash")
+		check("(compiler_abi ~ '^tesl-source-abi-v1:[0-9a-f]{64}$'::text)", "compiler_abi")
+		check("(stored_value_compatibility ~ '^tesl-stored-value-v1:[0-9a-f]{64}$'::text)", "stored_value_compatibility")
+	case "tesl_row_queue_conversion_staging":
+		col("database_uuid", "uuid")
+		for _, n := range []string{"fence_ns", "from_version", "to_version"} {
+			col(n, "int4")
+		}
+		col("queue", "text")
+		col("job_type", "text")
+		col("revision", "int4")
+		col("source_digest", "text")
+		col("source_document", "bytea")
+		col("parent_digest", "text")
+		col("inventory_hash", "text")
+		col("expansion_hash", "text")
+		col("old_contract", "bytea")
+		col("new_contract", "bytea")
+		con("p", "", "from_version", "queue", "job_type", "revision")
+		con("u", "", "source_digest")
+		bounded("fence_ns")
+		bounded("from_version")
+		check("((to_version = (from_version + 1)) AND (to_version <= 2147483646))", "to_version", "from_version")
+		check("((revision >= 0) AND (revision <= 128))", "revision")
+		digest("source_document", "source_digest")
+		check("(((revision = 0) AND (parent_digest = ''::text)) OR ((revision > 0) AND (parent_digest ~ '^[0-9a-f]{64}$'::text)))", "revision", "parent_digest")
+		hash("inventory_hash")
+		hash("expansion_hash")
 	case "tesl_row_baseline":
 		col("id", "int2")
 		col("initial_version", "int4")

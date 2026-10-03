@@ -23,7 +23,11 @@ val row : binding -> Migration_transform.row
 
 type t
 val check : schemas:Migration_inventory.t list -> edges:Migration_declaration.t list ->
-  (t,Migration_sparse.error list) result
+   (t,Migration_sparse.error list) result
+(** Internal queue-only target planning. Public application emission remains
+    gated until the installed expansion/dispatch protocol consumes this plan. *)
+val check_queue_expansion : schemas:Migration_inventory.t list -> edges:Migration_declaration.t list ->
+   (t,Migration_sparse.error list) result
 val retirements : t -> retirement list
 val versions : t -> version list
 val bindings : t -> binding list

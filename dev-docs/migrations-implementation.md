@@ -22,6 +22,13 @@ job without losing its original bytes, repair that job through a separately
 checked repair revision, and retire V1 only after finality. Keep that target on
 the critical path rather than expanding unrelated source-reporting surfaces.
 
+Compatibility direction: prioritize a fresh-install ordinary-application rollout.
+The maintainer accepts breaking the old control catalog rather than spending
+substantial effort on in-place upgrades. Existing databases lacking required
+catalog objects must fail inspection; do not silently adopt them or invent empty
+history. A small compatibility fix is acceptable, but an upgrade project is not
+on this path.
+
 The required integration boundaries, in order, are:
 
 1. Public checked `jobs:` coverage and generated adapter linkage for the exact
@@ -48,6 +55,85 @@ The evidence below records earlier milestones; it does not supersede these
 remaining integration requirements.
 
 ### Implementation and verification evidence
+
+Queue target staging now binds a compiler-generated physical descriptor to the
+actual application's source installation and staged conversion set. The internal
+`Migration_row_history.check_queue_expansion` path is limited to one V1/V2
+queue-only edge with unchanged entities; public physical planning remains gated.
+Its retained physical v6 descriptor includes exact queue/job identities,
+conversion digests and old/new payload contracts. Runtime classification treats
+it as narrowing, even though it has no row-generation windows.
+
+Conversion source v2 certificates additionally bind full source/target schema and
+storage snapshot hashes. Repairs cannot change those bindings. This prevents a
+valid payload converter from authorizing a different complete schema, including
+unrelated entity changes. Application source staging now checks the complete
+installed source snapshot too. Target staging checks the existing entity layout,
+all snapshot hashes, complete conversion coverage, compiler/stored-value identity,
+database UUID/fence and staged source bytes before recording an immutable target
+binding in `tesl_row_queue_target_staging`.
+
+The source-deleted ordinary V1 application witness generates the target descriptor
+from actual checked schema/migration sources. PostgreSQL tests reject freshly
+rehashed altered schema/storage hashes, namespace, callback identity, missing or
+duplicate decisions and reversed payload contracts. Exact registration and replay
+pass without changing jobs or publishing V2. The complete 52-case conversion/repair
+suite passes with PostgreSQL required, along with baseline/physical runtime race
+tests and the ordinary V1/V2 unchanged-payload application regression.
+
+This records a pre-expansion target binding, not a completed target expansion.
+Publishing the target queue inventory and expansion receipt, consuming this binding
+in ordinary worker dispatch, and application retirement finality remain necessary
+before removing the public changed-payload gate. New installations include the
+target staging table; older catalogs are refused rather than silently upgraded.
+
+The normal fresh application installer now creates an independently checked
+`tesl_row_queue_conversion_staging` table. An installer-only runtime operation
+appends the original compiled conversion and repair lineage while bound to the
+application's actual database UUID, fence namespace, admitted source version,
+complete queue inventory, expansion receipt and exact old payload contract.
+The new payload contract and complete source descriptor are retained for later
+target-expansion validation. Replays compare all fields rather than rewriting
+deployed source, and Worker/Request roles cannot mutate staging rows.
+
+The generated PostgreSQL fixture now compiles a separate ordinary V1 application,
+deletes its original Tesl sources, runs its public `--schema install` and
+`--schema worker` commands, and enqueues a real V1 job through its protected queue
+API. Staging binds all three source/repair records to that application's catalog
+without changing the job. Tests reject unauthorized roles, unexpected catalogs,
+foreign staged database identity and a missing staging table. The latter is the
+intentional fresh-install compatibility boundary: registration does not create
+or upgrade missing application catalog objects. Existing row-baseline and queue
+candidate/operation race suites plus the public V1/V2 unchanged-payload application
+regression pass with the extended catalog.
+
+This is pre-expansion staging, not active conversion authority. It currently
+requires the source version to be the installed current version. The target
+application's checked physical expansion still needs to consume this staging
+and bind its exact target inventory before dispatch can be enabled. Changed
+queued payloads therefore remain gated in ordinary application compilation.
+
+WIP commit `6fd12f0` records the shared queue lifecycle and bounded batch worker.
+The next boundary now has a read-only Worker opener that reconstructs its
+candidate execution handle without retaining installer state. It authenticates
+the Worker login, verifies the complete relation/function set, independently
+described columns/constraints/indexes, exact FK targets and RI triggers (including
+the attempt-row cascade), sequence semantics and protected grants. Only then does
+it call the verified read-only snapshot function and compare the database identity,
+exact installed repair head, full source descriptors and payload contracts with
+the linked compiler artifacts. An admission floor above remaining old jobs refuses.
+
+All execution fixtures now start through that opener. Three additional PostgreSQL
+groups cover opening without TEMP privilege, fifteen catalog/source corruption
+cases, and a new worker process that resumes a rejected job using only Worker
+connection information. The latter test caught pgx's original-DSN retention after
+Config.User/Database changes; the fixture now serializes the actual Worker
+endpoint and strips installer connection environment variables. The complete
+52-case conversion/repair suite passes with PostgreSQL required (17 parent database
+groups plus the process child), as do the existing queue candidate/operation race
+tests and public V1/V2 queue application regression. This closes candidate restart
+and catalog verification; format-5 application history/expansion integration and
+production scheduling remain pending.
 
 The PostgreSQL candidate now has bounded worker dispatch for a checked conversion
 or repair revision. It discovers eligible jobs through a protected, indexed

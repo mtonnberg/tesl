@@ -32,7 +32,7 @@ type pgRowForwardManifest struct {
 }
 
 func pgRowEpochPreserving(plan *pgRowPhysicalPlan) bool {
-	return plan != nil && len(plan.windows) == 0 && len(plan.retirements) == 0
+	return plan != nil && len(plan.windows) == 0 && len(plan.retirements) == 0 && len(plan.queueConversions) == 0
 }
 
 func pgRowForwardOperations(previous, plan *pgRowPhysicalPlan) ([]pgRowForwardOperation, error) {

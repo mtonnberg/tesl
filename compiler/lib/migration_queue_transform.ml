@@ -135,14 +135,17 @@ let check_conversion ~contextual_declarations ~project_root ~before ~after ~vers
        let definitions=ir(G.lower_helpers ~contextual ~scopes graph) in
       let closure roots=ir(IR.closure ~scopes ~definitions ~roots) in
       let tag name children=C.Seq(C.Bytes name::children) in
-      let semantic=tag "checked-queue-transform-source-v1" [
+       let semantic=tag "checked-queue-transform-source-v2" [
         C.Bytes(A.id context); C.Bytes(A.stored_value_compatibility context);
         C.Bytes family; C.Bytes(string_of_int version); C.Bytes queue; C.Bytes job;
         old.payload_contract; fresh.payload_contract;
         closure [IR.Codec,IR.Global old.payload_name];
         closure [IR.Codec,IR.Global fresh.payload_name];
         closure [IR.Value,IR.Global callback.identity];
-        C.Seq(List.map(fun (f:T.function_binding) -> closure [IR.Value,IR.Global f.identity]) fixtures)] in
+         C.Seq(List.map(fun (f:T.function_binding) -> closure [IR.Value,IR.Global f.identity]) fixtures);
+         C.Bytes(C.digest C.Snapshot (I.snapshot before));C.Bytes(C.digest C.Snapshot (I.snapshot after));
+         C.Bytes(Migration_storage.digest(checked(Migration_storage.describe before)));
+         C.Bytes(Migration_storage.digest(checked(Migration_storage.describe after)))] in
       {semantic;digest=C.digest C.Migration semantic;callback;fixtures;captured;integrity;abi=context;
         root;previous_payload=old.payload_name;current_payload=fresh.payload_name;rejected=None;repair_revision=0}))))))
   )
@@ -158,7 +161,7 @@ let check_repair ~rejected ~revision replacement =
       if replacement.rejected<>None || revision<1 || revision>2147483646 || revision<>rejected.repair_revision+1 then
         reject "MIG028" loc "queue repair requires the next revision and an ordinary checked replacement conversion";
       let endpoints t=match conversion_semantic t with
-        | C.Seq parts -> List.filteri(fun i _ -> i<11)parts
+        | C.Seq parts -> List.filteri(fun i _ -> i<11 || i>=13)parts
         | _ -> assert false in
       if endpoints rejected<>endpoints replacement then
         reject "MIG028" loc "queue repair must preserve the exact frozen source and target payloads, codecs, queue and schema versions";

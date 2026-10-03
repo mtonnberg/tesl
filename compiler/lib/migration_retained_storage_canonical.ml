@@ -29,13 +29,23 @@ let version_node ~family ~namespace plan (version:R.version) =
  atom (hash (version.version-1));atom (hash version.version);
  atom (Migration_transform_link.behavior_digest (H.link w.binding));
  list (List.map (fun (c:R.column) -> atom c.name) w.invalidation_columns)] in
- let retirement=version.retirements<>[] in
+  let retirement=version.retirements<>[] in
+  let queue_conversions=H.declarations history |> List.filter(fun d->Migration_declaration.version d=version.version)
+    |> List.concat_map Migration_declaration.queue_transforms in
+  let queue=queue_conversions<>[] in
  let reverse=retirement || version.requires_contract_version<>None || List.exists (fun (e:R.entity) -> e.reverse_writes<>[]) version.entities in
  let legacy=List.exists (fun (e:R.entity) -> List.exists (fun (w:R.reverse_write) -> w.current=None) e.reverse_writes) version.entities in
- list ([atom (if retirement then "tesl-retained-physical-version-v5" else if legacy then "tesl-retained-physical-version-v4" else if version.requires_contract_version<>None then "tesl-retained-physical-version-v3" else if reverse then "tesl-retained-physical-version-v2" else "tesl-retained-physical-version-v1");atom family;atom namespace;int version.version;
+  list ([atom (if queue then "tesl-retained-physical-version-v6" else if retirement then "tesl-retained-physical-version-v5" else if legacy then "tesl-retained-physical-version-v4" else if version.requires_contract_version<>None then "tesl-retained-physical-version-v3" else if reverse then "tesl-retained-physical-version-v2" else "tesl-retained-physical-version-v1");atom family;atom namespace;int version.version;
  atom (hash version.version);atom (S.digest (schema version.version).storage);
  list (List.map (entity ~reverse) version.entities);list (List.map window version.windows)] @
- (if retirement then [list (Option.fold ~none:[] ~some:(fun v -> [int v]) version.requires_contract_version);
+  (if queue then [list(List.map(fun conversion ->
+     let queue,job=Migration_queue_transform.queue_job conversion in
+     let payloads=match Migration_queue_transform.semantic conversion with
+       | C.Seq parts -> List.nth parts 7,List.nth parts 8
+       | _ -> assert false in
+     let payload node=fst(H.contract C.Contract (list [atom "queue-payload-v1";node])) in
+     list [atom queue;atom job;atom(Migration_queue_transform.digest conversion);atom(payload(fst payloads));atom(payload(snd payloads))])queue_conversions)]
+   else if retirement then [list (Option.fold ~none:[] ~some:(fun v -> [int v]) version.requires_contract_version);
     list (List.map (fun (e:R.entity) -> list [atom e.source.identity;atom (hash (version.version-1));atom (hash version.version)]) version.retirements)]
   else if legacy then [list (Option.fold ~none:[] ~some:(fun v -> [int v]) version.requires_contract_version)]
   else Option.fold ~none:[] ~some:(fun v -> [int v]) version.requires_contract_version))

@@ -222,3 +222,28 @@ skipped locks, delayed/dead work, successive repair revisions and failure after
 an earlier job committed. An empty work scan does not prove retirement is safe:
 live claims or quarantined jobs can still block the admission floor. Wiring these
 worker turns into the production scheduler remains pending.
+
+A fresh-process regression now discards the installation handle and starts a new
+worker using only its Worker connection. The worker opens a read-only transaction,
+checks the complete candidate catalog and exact compiler-linked repair history,
+then resumes the stored rejection. It needs neither installer credentials nor
+temporary-table privileges. Adversarial tests alter tables, functions, grants,
+foreign-key behavior, source descriptors and the admission floor; reopening refuses
+them before returning an execution handle. This remains the isolated candidate
+opener, not the ordinary format-5 application pool opener.
+
+The integration tests now also install a separate ordinary V1 application with
+its public installer/worker commands. The checked conversion and repair history
+can be staged in that application's protected catalog, tied to its actual
+database identity, installed payload contract and expansion receipt. Staging
+leaves existing V1 jobs untouched. Activating V2 still requires binding the
+successor's physical expansion and queue inventory to that history; this step is
+not yet enabled. The extended application catalog currently requires a fresh
+installation rather than an upgrade of databases created by earlier builds.
+
+The checked target physical descriptor can now also be staged and matched against
+the installed application's entity layout and complete schema/storage snapshots.
+The compiler marks a queue-payload change as narrowing even when entity storage is
+unchanged. Database tests reject altered descriptors with recomputed hashes and
+verify that staging does not accidentally publish V2. Publishing that expansion
+and enabling ordinary worker dispatch remain pending.

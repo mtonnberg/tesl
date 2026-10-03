@@ -116,6 +116,14 @@ func pgQueueConversionCandidateFunctions(namespace string) []pgMigrationControlF
   raise exception 'tesl: installed queue conversion binding differs'; end if;
 `
 	functions := []pgMigrationControlFunction{
+		{"tesl_queue_conversion_snapshot", "", "jsonb", "stable", `
+begin
+ return pg_catalog.jsonb_build_object(
+  'scope',(select pg_catalog.to_jsonb(s) from ` + ns + `tesl_queue_conversion_scope s where id=1),
+  'below_floor',exists(select 1 from ` + ns + `tesl_jobs j cross join ` + ns + `tesl_queue_conversion_scope s where s.id=1 and j.schema_version<s.floor),
+  'sources',(select coalesce(pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object('digest',digest,'document',pg_catalog.encode(document,'hex'),'parent',coalesce(parent_digest,''),'revision',revision) order by revision),'[]'::jsonb) from ` + ns + `tesl_queue_conversion_sources),
+  'payloads',(select coalesce(pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object('version',version,'queue',queue,'job',job_type,'contract',pg_catalog.encode(contract,'hex'),'hash',contract_hash) order by version),'[]'::jsonb) from ` + ns + `tesl_queue_payloads));
+end`},
 		{"tesl_queue_conversion_next", "expected uuid, digest text, binding jsonb, after_sequence bigint", "TABLE(job_id text, work_seq bigint)", "volatile", `
 declare s ` + ns + `tesl_queue_conversion_scope%rowtype;
  source ` + ns + `tesl_queue_conversion_sources%rowtype;
@@ -395,7 +403,7 @@ func pgInstallQueueConversionCandidate(ctx context.Context, conn *pgx.Conn, name
 		if source.parentDigest != "" {
 			parent = source.parentDigest
 		}
-		if _, err := tx.Exec(ctx, "insert into "+ns+"tesl_queue_conversion_sources values($1,$2,$3,$4)", source.spec.digest, doc, parent, source.repairRevision); err != nil {
+		if _, err := tx.Exec(ctx, "insert into "+ns+"tesl_queue_conversion_sources(digest,document,parent_digest,revision) values($1,$2,$3,$4)", source.spec.digest, doc, parent, source.repairRevision); err != nil {
 			return scope, err
 		}
 	}
@@ -413,12 +421,7 @@ func pgInstallQueueConversionCandidate(ctx context.Context, conn *pgx.Conn, name
 		if _, err := tx.Exec(ctx, "revoke all on function "+name+" from public,"+quoteIdentifier(roles.Worker)+","+quoteIdentifier(roles.Request)); err != nil {
 			return pgQueueConversionDB{}, err
 		}
-		functionRoles := roles
-		if fn.name == "tesl_queue_conversion_enqueue" {
-			functionRoles = PgMigrationControlRoles{Owner: roles.Owner, Worker: roles.Request}
-		} else if strings.HasPrefix(fn.name, "tesl_queue_conversion_") {
-			functionRoles.Request = ""
-		}
+		functionRoles := pgQueueConversionFunctionRoles(roles, fn)
 		for _, role := range pgControlFunctionRoles(functionRoles, fn) {
 			if _, err := tx.Exec(ctx, "grant execute on function "+name+" to "+quoteIdentifier(role)); err != nil {
 				return pgQueueConversionDB{}, err
@@ -435,6 +438,16 @@ func pgInstallQueueConversionCandidate(ctx context.Context, conn *pgx.Conn, name
 		return pgQueueConversionDB{}, err
 	}
 	return scope, nil
+}
+
+func pgQueueConversionFunctionRoles(roles PgMigrationControlRoles, fn pgMigrationControlFunction) PgMigrationControlRoles {
+	if fn.name == "tesl_queue_conversion_enqueue" {
+		return PgMigrationControlRoles{Owner: roles.Owner, Worker: roles.Request}
+	}
+	if strings.HasPrefix(fn.name, "tesl_queue_conversion_") {
+		roles.Request = ""
+	}
+	return roles
 }
 
 // A later deployment appends checked repairs under the short-lived installer
@@ -514,7 +527,7 @@ func pgRegisterQueueRepairCandidate(ctx context.Context, conn *pgx.Conn, scope p
 		if count != source.repairRevision || maximum+1 != source.repairRevision {
 			return fmt.Errorf("queue repair installed prefix is incomplete")
 		}
-		if _, err := tx.Exec(ctx, "insert into "+ns+"tesl_queue_conversion_sources values($1,$2,$3,$4)", source.spec.digest, document, source.parentDigest, source.repairRevision); err != nil {
+		if _, err := tx.Exec(ctx, "insert into "+ns+"tesl_queue_conversion_sources(digest,document,parent_digest,revision) values($1,$2,$3,$4)", source.spec.digest, document, source.parentDigest, source.repairRevision); err != nil {
 			return err
 		}
 	}
