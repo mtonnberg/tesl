@@ -56,6 +56,39 @@ remaining integration requirements.
 
 ### Implementation and verification evidence
 
+After WIP commit `cf06bca`, conversions and typed repairs now mutate jobs in the
+ordinary application's real control/queue database through an internal Worker
+dispatch boundary. It requires the exact completed V2 physical expansion,
+registered target inventory, staged compiler source and real database UUID.
+Each mutation takes the actual source-version retirement fence and rechecks target
+queue admission; the isolated candidate's scope/floor tables are not installed or
+used in the application. The tested selection/attempt/receipt code is shared.
+
+Fresh application catalogs include private queue conversion receipt/attempt
+tables, with independent read-only descriptors and no direct Worker/Request read
+or write grants. Normal completion cleans up abandoned attempts while preserving
+outcome receipts, and enqueue refuses reuse of audited job IDs. The immutable
+staging and protected apply checks own source identity; the work tables do not
+introduce foreign-key triggers into the existing queue/control catalog.
+
+A generated PostgreSQL witness installs the ordinary compiled V1 app, publishes
+the checked target, rejects a stored V1 job, registers later repairs, rejects
+again, rolls back a successful repair, then commits it. The normal protected
+queue protocol claims the repaired V2 payload, checks its generated codec and
+completes the job. Repair replay survives reconnect and deletion. Tests also prove
+unpublished/unstaged and Request dispatch refusals, database identity checks,
+quarantine requeue refusal, the real source fence, abandoned-attempt cleanup and
+raw historical payload privacy. All 53 conversion/repair cases pass with mandatory
+PostgreSQL, including the three-upgrade candidate witness; affected runtime race
+suites and the public V1/V2 unchanged-payload app regression pass too.
+
+Public changed-payload application emission and automatic schema-worker scheduling
+are still gated, as is complete application retirement finality. The dispatch
+opener currently handles the initial queue-only V1/V2 edge. This delivers actual
+application-bound mutation through an internal API, not a completed public rollout
+or three ordinary application deployments. The full migration gate has not been
+rerun after these changes.
+
 The PostgreSQL execution candidate now has a same-database three-upgrade witness:
 V1 → V2 → V3 → V4, with incompatible payload fields and JSON codecs at every edge.
 The compiler emits three separate binaries from checked historical/target schemas

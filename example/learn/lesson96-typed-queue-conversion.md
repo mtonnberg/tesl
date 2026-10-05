@@ -290,3 +290,22 @@ This proves repeated upgrades in the database execution candidate. It does not y
 prove three ordinary application deployments; public changed-payload dispatch and
 the complete application retirement path remain gated. The private-cluster
 migration gate includes this test with PostgreSQL required.
+
+## Execute repairs on the application queue
+
+The integration witness now also executes conversions and repairs against the
+ordinary installed application's own `tesl_jobs` table after publishing the
+checked successor. Its internal Worker opener verifies the completed expansion,
+database identity, payload inventory and exact staged repair lineage. Mutation
+uses the real application version fences, not the isolated candidate floor.
+
+The test takes a stored job through rejection, a separately registered rejecting
+repair, rollback of a successful repair, and a committed repair. It then checks
+the generated V2 codec and uses the normal protected queue API to claim and
+complete the job. The receipt still replays after reconnect and job deletion.
+Private work tables keep historical payloads unavailable to direct Request or
+Worker queries; normal completion clears abandoned attempts.
+
+This crosses the application-database mutation boundary. Selecting these operations
+from ordinary changed-payload application builds and automatic schema-worker
+scheduling, and completing application retirement finality, remain pending.

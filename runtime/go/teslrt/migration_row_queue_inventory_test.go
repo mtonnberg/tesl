@@ -182,6 +182,19 @@ func TestRowQueueLifecyclePreservesFormat4Operations(t *testing.T) {
 			if row[i].name != fn.name || !strings.Contains(row[i].body, "format_version=5") {
 				t.Fatal("missing distinct row admission")
 			}
+		} else if fn.name == "tesl_queue_enqueue" || fn.name == "tesl_queue_complete" {
+			// Row applications additionally prevent reuse of audited job IDs and
+			// clean up abandoned conversion attempts at normal completion. The
+			// PostgreSQL application witness exercises those effects; the public
+			// queue call shape and all other lifecycle bodies stay shared.
+			actual := row[i]
+			actual.body = fn.body
+			if !reflect.DeepEqual(fn, actual) {
+				t.Fatalf("row queue call shape changed for %s", fn.name)
+			}
+			if !strings.Contains(row[i].body, "tesl_row_queue_conversion_") {
+				t.Fatalf("row queue audit integration missing for %s", fn.name)
+			}
 		} else if !reflect.DeepEqual(fn, row[i]) {
 			t.Fatalf("row lifecycle differs for %s", fn.name)
 		}

@@ -263,7 +263,32 @@ Per maintainer direction this development change is fresh-install-first. The
 existing format-5 catalog has been extended; old databases missing the staging
 table fail the exact catalog check. There is no implicit upgrade/adoption path.
 
-### PostgreSQL conversion and repair execution candidate
+## Database execution
+
+### Application-bound mutation
+
+`pgOpenRowQueueConversion` now obtains an internal Worker execution handle from
+the ordinary application's completed V2 expansion, staged compiler lineage and
+registered payload inventory. It does not create candidate scope/source tables.
+The shared per-job and bounded-batch executors dispatch to application-specific
+protected operations, which lock the real source-version retirement fence and
+recheck target admission before mutation. The initial scope is queue-only V1/V2.
+
+The application keeps immutable outcomes and transient attempts in private
+`tesl_row_queue_conversion_receipts` and `tesl_row_queue_conversion_attempts`.
+Worker/Request have no direct payload-reading grants on these tables. Their
+source binding is checked by the protected operations against immutable staging;
+normal completion explicitly removes transient attempts, and audited job IDs
+cannot be reused. Receipt replay remains possible after normal job deletion.
+
+The generated ordinary-app PostgreSQL witness now runs rejection and separately
+registered repairs against real application jobs, checks rollback and reconnect,
+then decodes/claims/completes the V2 payload through the existing queue protocol.
+It also tests the real source fence, privacy and unauthorized dispatch. Public
+changed-payload emission, automatic Worker scheduling and full application
+retirement remain pending; this is an internal execution entry point.
+
+### Isolated repeated-upgrade execution
 
 The candidate now supports adjacent repeated upgrades after retiring the prior
 source. Repair revisions are scoped to their `from_version`, not global slots.

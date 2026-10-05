@@ -4,12 +4,23 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"slices"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 )
 
 // Independent read-only catalog expectations; Request needs no TEMP privilege.
 func pgExpectedRowControl(e *pgCatalogExpectations, owner, name string) (*pgCatalogTable, error) {
+	if pgRowQueueWorkTable(name) {
+		table, err := pgExpectedQueueConversionTable(e, owner, strings.Replace(name, "tesl_row_queue_", "tesl_queue_", 1))
+		if err != nil {
+			return nil, err
+		}
+		table.Name = name
+		table.Constraints = slices.DeleteFunc(table.Constraints, func(c pgCatalogConstraint) bool { return c.Kind == "f" })
+		return table, nil
+	}
 	columns := []pgControlExpectedColumn{}
 	constraints := []pgControlExpectedConstraint{}
 	col := func(n, typ string) {
@@ -231,9 +242,24 @@ func pgRowControlCatalog(ctx context.Context, tx pgx.Tx, namespace string, roles
 		if roles.Request != "" {
 			principals = append(principals, roles.Request)
 		}
-		for _, principal := range principals {
-			if err := pgControlTableACL(ctx, tx, namespace, spec.name, principal); err != nil {
+		if pgRowQueueWorkTable(spec.name) {
+			if spec.name == "tesl_row_queue_conversion_attempts" {
+				var namedKey bool
+				if err := tx.QueryRow(ctx, `select exists(select 1 from pg_catalog.pg_constraint k join pg_catalog.pg_class c on c.oid=k.conrelid join pg_catalog.pg_namespace n on n.oid=c.relnamespace where n.nspname=$1 and c.relname=$2 and k.conname='tesl_row_queue_conversion_attempts_pkey' and k.contype='p')`, namespace, spec.name).Scan(&namedKey); err != nil {
+					return err
+				}
+				if !namedKey {
+					return fmt.Errorf("application queue attempt key was renamed")
+				}
+			}
+			if err := pgQueueTableACL(ctx, tx, namespace, spec.name, []string{}); err != nil {
 				return err
+			}
+		} else {
+			for _, principal := range principals {
+				if err := pgControlTableACL(ctx, tx, namespace, spec.name, principal); err != nil {
+					return err
+				}
 			}
 		}
 		seqs, err := pgReadControlSequences(ctx, tx, namespace, spec.name, roles.Worker)

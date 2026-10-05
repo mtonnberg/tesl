@@ -30,10 +30,22 @@ func (p *pgRowBaselinePreparation) prepareFresh(ctx context.Context, tx pgx.Tx, 
 		return err
 	}
 	for _, spec := range pgRowControlTables() {
-		if _, err := tx.Exec(ctx, "create table "+ns+quoteIdentifier(spec.name)+"("+spec.columns+"); grant select on "+ns+quoteIdentifier(spec.name)+" to "+readers); err != nil {
+		statement := "create table " + ns + quoteIdentifier(spec.name) + "(" + spec.columns + ")"
+		if !pgRowQueueWorkTable(spec.name) {
+			statement += "; grant select on " + ns + quoteIdentifier(spec.name) + " to " + readers
+		}
+		if _, err := tx.Exec(ctx, statement); err != nil {
 			return err
 		}
+		if pgRowQueueWorkTable(spec.name) {
+			if _, err := tx.Exec(ctx, "revoke all on "+ns+quoteIdentifier(spec.name)+" from public,"+readers); err != nil {
+				return err
+			}
+		}
 		migrationBoundary("row-baseline-table-" + spec.name)
+	}
+	if _, err := tx.Exec(ctx, "create index tesl_row_queue_conversion_latest on "+ns+"tesl_row_queue_conversion_receipts(job_id,attempt_seq)"); err != nil {
+		return err
 	}
 	if err := pgCreateRowQueueBaseline(ctx, tx, b, p.roles); err != nil {
 		return err

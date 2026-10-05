@@ -249,6 +249,18 @@ func (f *QueueConversionDBFixture) PublishApplicationTarget() error {
 	return pgPublishRowQueueTarget(f.Context, f.Worker, "mail", f.roles, target, testQueueTargetDocument, testQueueTargetHash)
 }
 
+func (f *QueueConversionDBFixture) OpenApplicationDispatch(conn *pgx.Conn, digest string) error {
+	scope, err := pgOpenRowQueueConversion(f.Context, conn, "mail", f.roles, digest)
+	if err == nil {
+		f.Scope = scope
+	}
+	return err
+}
+
+func (f *QueueConversionDBFixture) OpenApplicationRoot(conn *pgx.Conn, c pgQueueConversionExecutable) error {
+	return f.OpenApplicationDispatch(conn, c.queueConversionSource().spec.digest)
+}
+
 func (f *QueueConversionDBFixture) MutateApplicationTarget(t *testing.T, kind string) error {
 	t.Helper()
 	doc, _, err := pgReadRowCanonical(testQueueTargetDocument)
@@ -488,7 +500,11 @@ func (f *QueueConversionDBFixture) MutateCatalog(t *testing.T, kind string) {
 func (f *QueueConversionDBFixture) Snapshot(t *testing.T, id string) string {
 	t.Helper()
 	var snapshot string
-	err := f.Installer.QueryRow(f.Context, `select pg_catalog.jsonb_build_object('job',pg_catalog.to_jsonb(j),'receipts',coalesce((select pg_catalog.jsonb_agg(pg_catalog.to_jsonb(r) order by r.attempt_seq) from mail.tesl_queue_conversion_receipts r where r.job_id=j.id),'[]'::jsonb),'attempt',(select pg_catalog.to_jsonb(a) from mail.tesl_queue_conversion_attempts a where a.job_id=j.id))::text from mail.tesl_jobs j where j.id=$1`, id).Scan(&snapshot)
+	query := `select pg_catalog.jsonb_build_object('job',pg_catalog.to_jsonb(j),'receipts',coalesce((select pg_catalog.jsonb_agg(pg_catalog.to_jsonb(r) order by r.attempt_seq) from mail.tesl_queue_conversion_receipts r where r.job_id=j.id),'[]'::jsonb),'attempt',(select pg_catalog.to_jsonb(a) from mail.tesl_queue_conversion_attempts a where a.job_id=j.id))::text from mail.tesl_jobs j where j.id=$1`
+	if f.Scope.application {
+		query = strings.ReplaceAll(query, "tesl_queue_conversion_", "tesl_row_queue_conversion_")
+	}
+	err := f.Installer.QueryRow(f.Context, query, id).Scan(&snapshot)
 	if err != nil {
 		t.Fatal(fmt.Errorf("snapshot %s: %w", id, err))
 	}
@@ -564,7 +580,7 @@ func (f *QueueConversionDBFixture) AbandonConversion(t *testing.T, c pgQueueConv
 		t.Fatal(err)
 	}
 	defer pgQueueConversionCandidateRollback(tx)
-	if _, err := tx.Exec(f.Context, "select * from mail.tesl_queue_conversion_begin($1,$2,$3,$4::jsonb)", f.Scope.identity, source.spec.digest, id, string(binding)); err != nil {
+	if _, err := tx.Exec(f.Context, "select * from "+f.Scope.function("begin")+"($1,$2,$3,$4::jsonb)", f.Scope.identity, source.spec.digest, id, string(binding)); err != nil {
 		t.Fatal(err)
 	}
 	if err := tx.Commit(f.Context); err != nil {

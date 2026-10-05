@@ -16,7 +16,19 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-type pgQueueConversionDB struct{ namespace, identity, rootDigest string }
+type pgQueueConversionDB struct {
+	namespace, identity, rootDigest string
+	application                     bool
+}
+
+func (s pgQueueConversionDB) function(name string) string {
+	prefix := "tesl_queue_conversion_"
+	if s.application {
+		prefix = "tesl_row_queue_conversion_"
+	}
+	return quoteIdentifier(s.namespace) + "." + quoteIdentifier(prefix+name)
+}
+
 type pgQueueConversionStored struct {
 	Kind     string
 	Replayed bool
@@ -97,9 +109,9 @@ func pgQueueConversionCandidateTables(namespace string) []pgMigrationControlTabl
 	}
 }
 
-func pgQueueConversionCandidateFunctions(namespace string) []pgMigrationControlFunction {
+func pgQueueConversionScopeGuard(namespace string) string {
 	ns := quoteIdentifier(namespace) + "."
-	guard := `
+	return `
  if pg_catalog.current_setting('transaction_isolation')<>'read committed' then
   raise exception 'tesl: queue conversion requires read committed'; end if;
  select * into s from ` + ns + `tesl_queue_conversion_scope where id=1 for share;
@@ -107,6 +119,11 @@ func pgQueueConversionCandidateFunctions(namespace string) []pgMigrationControlF
   or s.database_oid<>(select oid from pg_catalog.pg_database where datname=pg_catalog.current_database()) then
   raise exception 'tesl: queue conversion database identity differs'; end if;
 `
+}
+
+func pgQueueConversionCandidateFunctions(namespace string) []pgMigrationControlFunction {
+	ns := quoteIdentifier(namespace) + "."
+	guard := pgQueueConversionScopeGuard(namespace)
 	bindingGuard := `
  if source.document is distinct from pg_catalog.decode(binding->>'document','hex')
   or source.parent_digest is distinct from (binding->>'parent') or source.revision::text is distinct from (binding->>'revision')
@@ -648,14 +665,13 @@ func pgApplyQueueConversionCandidateTx(ctx context.Context, tx pgx.Tx, scope pgQ
 	if source == nil || scope.namespace == "" || scope.identity == "" {
 		return stored, fmt.Errorf("queue conversion database binding is missing")
 	}
-	ns := quoteIdentifier(scope.namespace) + "."
 	var original, reason, transaction, outcome string
 	var sequence int64
 	binding, err := pgQueueConversionCandidateBinding(source)
 	if err != nil {
 		return stored, err
 	}
-	err = tx.QueryRow(ctx, "select * from "+ns+"tesl_queue_conversion_begin($1,$2,$3,$4::jsonb)", scope.identity, source.spec.digest, jobID, string(binding)).
+	err = tx.QueryRow(ctx, "select * from "+scope.function("begin")+"($1,$2,$3,$4::jsonb)", scope.identity, source.spec.digest, jobID, string(binding)).
 		Scan(&original, &reason, &sequence, &transaction, &outcome)
 	if err == pgx.ErrNoRows {
 		return pgQueueConversionStored{Kind: "unavailable"}, nil
@@ -686,8 +702,13 @@ func pgApplyQueueConversionCandidateTx(ctx context.Context, tx pgx.Tx, scope pgQ
 		payload = result.Payload()
 	}
 	var applied bool
-	err = tx.QueryRow(ctx, "select "+ns+"tesl_queue_conversion_finish($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9)",
-		scope.identity, source.spec.digest, jobID, sequence, transaction, original, result.Kind(), payload, result.Reason()).Scan(&applied)
+	args := []any{scope.identity, source.spec.digest, jobID, sequence, transaction, original, result.Kind(), payload, result.Reason()}
+	parameters := "$1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9"
+	if scope.application {
+		args = append(args, string(binding))
+		parameters += ",$10::jsonb"
+	}
+	err = tx.QueryRow(ctx, "select "+scope.function("finish")+"("+parameters+")", args...).Scan(&applied)
 	if err != nil {
 		return stored, err
 	}
@@ -723,7 +744,7 @@ func pgSelectQueueConversionCandidateTx(ctx context.Context, tx pgx.Tx, scope pg
 	}
 	var id string
 	var sequence int64
-	err = tx.QueryRow(ctx, "select * from "+quoteIdentifier(scope.namespace)+".tesl_queue_conversion_next($1,$2,$3::jsonb,$4)",
+	err = tx.QueryRow(ctx, "select * from "+scope.function("next")+"($1,$2,$3::jsonb,$4)",
 		scope.identity, source.spec.digest, string(binding), after).Scan(&id, &sequence)
 	return id, sequence, err
 }

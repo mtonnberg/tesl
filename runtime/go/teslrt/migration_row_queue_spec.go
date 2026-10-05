@@ -1,6 +1,9 @@
 package teslrt
 
-import "encoding/hex"
+import (
+	"encoding/hex"
+	"strings"
+)
 
 func pgRowQueueFunctions(namespace string) []pgMigrationControlFunction {
 	ns := quoteIdentifier(namespace) + "."
@@ -128,6 +131,12 @@ func pgRowQueueOperationFunctions(namespace string) []pgMigrationControlFunction
 	functions := pgQueueOperationFunctions(namespace)
 	ns := quoteIdentifier(namespace) + "."
 	for i := range functions {
+		if functions[i].name == "tesl_queue_complete" {
+			functions[i].body = strings.Replace(functions[i].body, " delete from "+ns+"tesl_jobs j", " delete from "+ns+"tesl_row_queue_conversion_attempts a where a.job_id=tesl_queue_complete.job_id;\n delete from "+ns+"tesl_jobs j", 1)
+		}
+		if functions[i].name == "tesl_queue_enqueue" {
+			functions[i].body = strings.Replace(functions[i].body, " insert into "+ns+"tesl_jobs", " if exists(select 1 from "+ns+"tesl_row_queue_conversion_receipts r where r.job_id=tesl_queue_enqueue.job_id) then raise exception 'tesl: converted job identity cannot be reused'; end if;\n insert into "+ns+"tesl_jobs", 1)
+		}
 		if functions[i].name != "tesl_queue_admit" {
 			continue
 		}

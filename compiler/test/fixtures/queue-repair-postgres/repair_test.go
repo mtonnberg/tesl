@@ -1067,3 +1067,122 @@ func TestPostgresApplicationPreparesCheckedSuccessorInventory(t *testing.T) {
 		t.Fatal("pending successor mutated old job", body, stamp, err)
 	}
 }
+
+func TestPostgresApplicationConvertsRepairsAndCompletesStoredJob(t *testing.T) {
+	f := rt.OpenApplicationQueueForTest(t)
+	if err := f.StageApplicationRoot(f.Installer, Conversion0); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.StageApplicationTarget(f.Installer); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Request.Exec(f.Context, "select mail.tesl_queue_enqueue(1,'Jobs','Delivery','job',$1::jsonb)", `{"oldText":""}`); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.OpenApplicationDispatch(f.Worker, finalRepairDigest); err == nil {
+		t.Fatal("unpublished or unstaged repair acquired dispatch authority")
+	}
+	if err := f.PublishApplicationTarget(); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.OpenApplicationDispatch(f.Request, finalRepairDigest); err == nil {
+		t.Fatal("Request acquired migration dispatch authority")
+	}
+	if err := f.OpenApplicationRoot(f.Worker, Conversion0); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.WrongDatabase(Conversion0, "job"); err == nil {
+		t.Fatal("application conversion ignored database identity")
+	}
+	result, err := f.Apply(f.Worker, Conversion0, "job")
+	if err != nil || result.Kind != "migration-rejected" {
+		t.Fatal("published application did not reject its stored old payload", result, err)
+	}
+	var payload, reason string
+	var version int
+	if err := f.Installer.QueryRow(f.Context, "select payload::text,schema_version,dead_reason from mail.tesl_jobs where id='job'").Scan(&payload, &version, &reason); err != nil || payload != `{"oldText": ""}` || version != 1 || reason != "migration-rejected" {
+		t.Fatal("application rejection lost historical bytes", payload, version, reason, err)
+	}
+	if done, err := f.QueueBoolean(f.Request, 2, "requeue", "job"); err != nil || done {
+		t.Fatal("quarantined application job bypassed typed repair", done, err)
+	}
+	if _, err := f.Request.Exec(f.Context, "select mail.tesl_queue_enqueue(1,'Jobs','Delivery','abandoned',$1::jsonb)", `{"oldText":"kept"}`); err != nil {
+		t.Fatal(err)
+	}
+	f.AbandonConversion(t, Conversion0, "abandoned")
+	claim, ok, err := f.QueueClaim(f.Request, 1, "pending", 60000)
+	if err != nil || !ok || claim.ID != "abandoned" {
+		t.Fatal(claim, ok, err)
+	}
+	if done, err := f.QueueBoolean(f.Request, 1, "complete", claim.ID, claim.Token, claim.Sequence); err != nil || !done {
+		t.Fatal("abandoned application attempt blocked normal completion", done, err)
+	}
+	if err := f.StageApplication(f.Installer, finalRepairDigest); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.OpenApplicationDispatch(f.Worker, finalRepairDigest); err != nil {
+		t.Fatal(err)
+	}
+	if p, err := f.Batch(f.Context, f.Worker, Conversion1, 256); err != nil || p.Rejected != 1 {
+		t.Fatal("application repair could not find its rejection", p, err)
+	}
+	before := f.Snapshot(t, "job")
+	tx, err := f.Worker.Begin(f.Context)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r, err := f.ApplyTx(tx, Conversion2, "job"); err != nil || r.Kind != "converted" {
+		t.Fatal(r, err)
+	}
+	var fence int
+	var acquired bool
+	if err := f.Installer.QueryRow(f.Context, "select fence_ns from mail.tesl_schema_meta where id=1").Scan(&fence); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Request.QueryRow(f.Context, "select pg_catalog.pg_try_advisory_xact_lock($1::integer,1)", fence).Scan(&acquired); err != nil || acquired {
+		t.Fatal("application repair did not hold the real source retirement fence", acquired, err)
+	}
+	if err := tx.Rollback(f.Context); err != nil {
+		t.Fatal(err)
+	}
+	if before != f.Snapshot(t, "job") {
+		t.Fatal("application repair rollback changed jobs or receipts")
+	}
+	if p, err := f.Batch(f.Context, f.Worker, Conversion2, 256); err != nil || p.Converted != 1 {
+		t.Fatal("application repair did not update real jobs", p, err)
+	}
+	f.RestartWorker(t)
+	if err := f.OpenApplicationDispatch(f.Worker, finalRepairDigest); err != nil {
+		t.Fatal(err)
+	}
+	if r, err := f.Apply(f.Worker, Conversion2, "job"); err != nil || !r.Replayed || r.Kind != "converted" {
+		t.Fatal("application repair receipt did not survive reconnect", r, err)
+	}
+	for _, conn := range []*pgx.Conn{f.Request, f.Worker} {
+		if _, err := conn.Exec(f.Context, "select original from mail.tesl_row_queue_conversion_receipts"); err == nil {
+			t.Fatal("raw historical payload leaked through control-table grants")
+		}
+	}
+	current, ok, err := f.QueueClaim(f.Request, 2, "pending", 60000)
+	if err != nil || !ok || current.Version != 2 {
+		t.Fatal("normal queue protocol did not claim repaired application job", current, ok, err)
+	}
+	raw, err := rt.ParseJSON([]byte(current.Payload))
+	if err != nil {
+		t.Fatal(err)
+	}
+	value, valid := decodeNew0(raw).Value()
+	if !valid || value.Body != "repaired" || value.Priority.String() != "9" {
+		t.Fatal("wrong typed application payload", value, valid)
+	}
+	if done, err := f.QueueBoolean(f.Request, 2, "complete", current.ID, current.Token, current.Sequence); err != nil || !done {
+		t.Fatal(done, err)
+	}
+	if r, err := f.Apply(f.Worker, Conversion2, "job"); err != nil || !r.Replayed || r.Kind != "converted" {
+		t.Fatal("normal application completion erased conversion receipt", r, err)
+	}
+	if _, err := f.Request.Exec(f.Context, "select mail.tesl_queue_enqueue(2,'Jobs','Delivery','job',$1::jsonb)", `{"message":"reused","priority":9}`); err == nil {
+		t.Fatal("completed application job identity reused its historical repair receipt")
+	}
+	f.ApplicationStatus(t)
+}
