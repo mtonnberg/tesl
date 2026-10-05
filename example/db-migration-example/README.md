@@ -8,6 +8,11 @@ frontend and application tests are independent of the migration modules.
 Start with [todo-app.tesl](todo-app.tesl), then follow the concise
 [database update guide](how-to-update-the-db.md).
 
+For a smaller two-step non-additive walkthrough, see
+[the V1 → V2 → V3 JSONB Retype example](../db-three-upgrades/README.md). It runs
+ordinary application binaries, overlap writes, rejection/repair and both Contracts
+on a private PostgreSQL database.
+
 | Location | What it contains |
 | --- | --- |
 | [todo-app.tesl](todo-app.tesl) | PostgreSQL connection, handlers, routes and app tests |

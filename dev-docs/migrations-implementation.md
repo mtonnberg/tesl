@@ -56,6 +56,23 @@ remaining integration requirements.
 
 ### Implementation and verification evidence
 
+WIP commit `0a36c5b` records internal application queue retirement. A new runnable
+ordinary row-data example now lives in `example/db-three-upgrades/`. It builds
+V1/V2/V3 through public compiler APIs, freezes and refreshes sources using guarded
+manifests, generates exact Contracts, runs generated Go tests and emits standalone
+application binaries. Both upgrades replace a JSONB record's shape/codec through
+typed Retype/WriteBack mappings; the application handlers are shared.
+
+The example's private-PostgreSQL runner passed the complete ordinary lifecycle on
+one database: V1 install/worker/HTTP seed, V2 expansion with rejection blocking
+Contract, admitted predecessor repair, late V1 write, V2 Contract/floor/physical
+cleanup, then the same non-additive lifecycle for V2/V3. It verifies exact retained
+metadata and generated `metadata__v2`/`metadata__v3` columns. Source checks report no
+errors/warnings, and all three generated release test suites pass with race
+detection. The default migration gate now includes this runner. This is a working
+public-command example of row migrations; queued-payload public rollout remains
+the separate integration gap described above.
+
 After WIP commit `1dc82cc`, the initial queue-only application edge now has a
 protected retirement operation and independently verified durable receipt. It
 drains both real V1 writer and compatibility-plan domains, locks application

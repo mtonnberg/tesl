@@ -1,0 +1,66 @@
+module App exposing []
+import Tesl.Prelude exposing [String, List]
+import Tesl.Env exposing [env, envInt, envRead]
+import Tesl.DB exposing [dbRead, dbWrite]
+import Tesl.Database exposing [
+  Database,
+  Postgres,
+  PostgresConfig,
+  TcpConnection,
+  MigrationConfig,
+  Worker,
+]
+import Tesl.App exposing [App]
+import Schema.Notes.VCurrent exposing [Note, makeNote, makeMetadata]
+
+database Main = Database {
+schema: Schema.Notes.VCurrent
+migrations: Schema.Notes.Migrate
+backend: Postgres (PostgresConfig {
+  namespace: "notes"
+  dbName: env "DEMO_DB"
+  user: env "DEMO_USER"
+  password: ""
+  connection: TcpConnection { host: env "DEMO_HOST", port: envInt "DEMO_PORT" 5432 }
+  migrations: MigrationConfig {
+  topology: Worker
+  controlOwner: env "DEMO_OWNER"
+  requestRole: env "DEMO_REQUEST"
+  workerRole: env "DEMO_WORKER"
+  ddlConnection: env "DEMO_DDL"
+  }
+})
+}
+
+api NotesApi {
+get "/health" -> String
+get "/notes" -> List Note
+post "/seed" -> String
+put "/edit" -> String
+put "/block" -> String
+put "/repair" -> String
+}
+handler get health() -> String = "ready"
+handler get notes() -> List Note requires [dbRead Note] = select note from Note order note.id asc
+handler post seedNote() -> String requires [dbWrite Note] =
+  let rows = [makeNote "one" "kept"]
+  let _ = insertMany rows in Note
+  "created"
+handler put edit() -> String requires [dbWrite Note] =
+  update note in Note
+    where note.id == "one"
+    set note.metadata = makeMetadata "edited"
+  "edited"
+handler put block() -> String requires [dbWrite Note] =
+  update note in Note
+    where note.id == "one"
+    set note.metadata = makeMetadata "blocked"
+  "blocked"
+handler put repair() -> String requires [dbWrite Note] =
+  update note in Note
+    where note.id == "one"
+    set note.metadata = makeMetadata "repaired"
+  "repaired"
+server NotesServer for NotesApi { health, notes, seedNote, edit, block, repair }
+main() -> App requires [dbRead Note, dbWrite Note, envRead] =
+App { database: Main, api: NotesServer, port: envInt "DEMO_HTTP_PORT" 8097 }

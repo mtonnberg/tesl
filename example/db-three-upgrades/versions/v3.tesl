@@ -1,0 +1,12 @@
+module Schema.Notes.VCurrent exposing [Note, Metadata, makeNote, makeMetadata]
+import Tesl.Prelude exposing [String, Int]
+import Tesl.Json exposing [stringCodec, intCodec]
+
+record Metadata { body: String, origin: String, revision: Int }
+codec Metadata {
+toJson { body -> "body" with_codec stringCodec, origin -> "origin" with_codec stringCodec, revision -> "revision" with_codec intCodec }
+fromJson [ { body <- "body" with_codec stringCodec, origin <- "origin" with_codec stringCodec, revision <- "revision" with_codec intCodec } ]
+}
+entity Note table "notes" primaryKey id { id: String, metadata: Metadata }
+fn makeMetadata(text: String) -> Metadata = Metadata { body: text, origin: "writer-v3", revision: 3 }
+fn makeNote(id: String, text: String) -> Note = Note { id: id, metadata: makeMetadata text }

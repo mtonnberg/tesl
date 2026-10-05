@@ -3,7 +3,7 @@
 # developer's application database or modifies a shared cluster's login roles.
 set -euo pipefail
 repo_root="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)"
-required_tools=(initdb pg_ctl go)
+required_tools=(initdb pg_ctl go python3)
 if [[ ${TESL_MIGRATION_TEST_POOLERS:-0} == 1 ]]; then required_tools+=(pgbouncer); fi
 if [[ ${TESL_MIGRATION_TEST_CLUSTER_CRASH:-0} == 1 ]]; then required_tools+=(pg_basebackup); fi
 for tool in "${required_tools[@]}"; do
@@ -96,4 +96,5 @@ if (( $# == 0 )); then
   (cd "$repo_root/compiler" && dune build test/test_migration_table_drop.exe && dune exec --no-build ./test/test_migration_table_drop.exe)
   (cd "$repo_root/compiler" && dune build test/test_migration_table_drop_postgres.exe && dune exec --no-build ./test/test_migration_table_drop_postgres.exe)
   go test -race -count=1 -timeout=120s -tags=tesl_migration_test ./teslrt -run '^(TestRowRetirement|TestRowTableContract|TestPgRowTableContract|TestPgRowTableDrop)'
+  python3 "$repo_root/example/db-three-upgrades/run.py" --output "$migration_tmp/three-upgrades-example"
 fi
