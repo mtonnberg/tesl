@@ -16868,10 +16868,12 @@ var Conversion%d = func() *teslrt.CompiledQueueConversion[%s,%s] {
  List.rev !bridges @ runtime @ [
   {path="internal/" ^ package ^ "/conversions_generated.go";
    contents="package " ^ package ^ "\n\nimport (\n\tteslrt " ^ go_quote(project ^ "/internal/teslrt") ^ "\n" ^ imports ^ ")\n\n" ^ String.concat "\n" (List.rev !bodies)};
-  {path="internal/teslrt/queue_conversion_sources_generated.go";
+   {path="internal/teslrt/queue_conversion_sources_generated.go";
    contents="package teslrt\n\nfunc init() { registerCompiledQueueConversionSources([]pgQueueConversionSourceSpec{\n" ^ String.concat "" (List.rev !registrations) ^ "}) }\n"};
   {path="internal/" ^ package ^ "/fixtures_generated_test.go";
-   contents="package " ^ package ^ "\n\nimport (\n\"encoding/json\"\n\"os\"\n\"testing\"\n teslrt " ^ go_quote(project ^ "/internal/teslrt") ^ "\n" ^ test_imports ^ ")\n\nvar _ = teslrt.MaybeNothing\n\n" ^ String.concat "\n" (List.rev !tests)}] in
+    contents="package " ^ package ^ "\n\nimport (\n\"encoding/json\"\n\"os\"\n\"testing\"\n teslrt " ^ go_quote(project ^ "/internal/teslrt") ^ "\n" ^ test_imports ^ ")\n\nvar _ = teslrt.MaybeNothing\n\n" ^ String.concat "\n" (List.rev !tests)}] @
+    (if Option.is_some row_source then [{path="internal/" ^ package_name entry.module_name ^ "/queue_conversions_link_generated.go";
+     contents="package " ^ package_name entry.module_name ^ "\n\nimport _ " ^ go_quote(project ^ "/internal/" ^ package) ^ "\n"}] else []) in
 (* Generated tests consume exact checked fixture bindings. They execute only
    under the ordinary test runner, never as registration/startup work. *)
 let fixture_artifacts graph exports checked =

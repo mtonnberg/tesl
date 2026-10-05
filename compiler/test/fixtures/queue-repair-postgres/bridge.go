@@ -8,6 +8,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net"
+	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
@@ -42,7 +44,11 @@ func OpenApplicationQueueForTest(t *testing.T) *QueueConversionDBFixture {
 	return openQueueConversionDBForTest(t, "", true)
 }
 
-func openQueueConversionDBForTest(t *testing.T, digest string, application bool) *QueueConversionDBFixture {
+func OpenPublicApplicationQueueForTest(t *testing.T) *QueueConversionDBFixture {
+	return openQueueConversionDBForTest(t, "", true, true)
+}
+
+func openQueueConversionDBForTest(t *testing.T, digest string, application bool, checkFresh ...bool) *QueueConversionDBFixture {
 	t.Helper()
 	dsn := os.Getenv("TESL_MIGRATION_TEST_DSN")
 	if dsn == "" {
@@ -142,6 +148,15 @@ func openQueueConversionDBForTest(t *testing.T, digest string, application bool)
 		base := append(os.Environ(), "Q_DB="+name, "Q_HOST="+config.Host, "Q_PORT="+fmt.Sprint(config.Port),
 			"Q_OWNER="+roles.Owner, "Q_WORKER="+roles.Worker, "Q_REQUEST="+roles.Request, "Q_DDL="+dsn.String())
 		f.applicationEnv = base
+		if len(checkFresh) > 0 && checkFresh[0] {
+			if err := f.InstallPublicSuccessor(); err == nil {
+				t.Fatal("public V2 install invented a fresh V1 predecessor")
+			}
+			var present bool
+			if err := f.Installer.QueryRow(ctx, "select to_regnamespace('mail') is not null").Scan(&present); err != nil || present {
+				t.Fatal("refused fresh V2 install created application metadata", present, err)
+			}
+		}
 		binary := os.Getenv("QUEUE_REPAIR_V1_APP")
 		if binary == "" {
 			t.Fatal("compiled V1 application is missing")
@@ -238,6 +253,114 @@ func (f *QueueConversionDBFixture) ApplicationStatus(t *testing.T) {
 	command.Env = append(append([]string{}, f.applicationEnv...), "Q_USER="+f.roles.Request)
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("ordinary V1 status refused prepared successor: %v\n%s", err, output)
+	}
+}
+
+func (f *QueueConversionDBFixture) InstallPublicSuccessor(repaired ...bool) error {
+	binary := os.Getenv("QUEUE_REPAIR_V2_APP")
+	if len(repaired) > 0 && repaired[0] {
+		binary = os.Getenv("QUEUE_REPAIR_REPAIRED_APP")
+	}
+	if binary == "" {
+		return fmt.Errorf("compiled public successor is missing")
+	}
+	config := f.Installer.Config()
+	dsn := url.URL{Scheme: "postgresql", User: url.User(config.User), Path: "/" + config.Database, RawQuery: url.Values{"host": {config.Host}, "port": {fmt.Sprint(config.Port)}, "sslmode": {"disable"}}.Encode()}
+	install := exec.CommandContext(f.Context, binary, "--schema", "install", "--worker", f.roles.Worker, "--request", f.roles.Request, "--json")
+	install.Env = append(append([]string{}, f.applicationEnv...), "Q_USER="+config.User, "Q_DDL="+dsn.String())
+	if output, err := install.CombinedOutput(); err != nil {
+		return fmt.Errorf("public V2 install: %w\n%s", err, output)
+	}
+	return nil
+}
+
+func (f *QueueConversionDBFixture) ContractPublicSuccessor() error {
+	config := f.Installer.Config()
+	dsn := url.URL{Scheme: "postgresql", User: url.User(f.roles.Worker), Path: "/" + config.Database, RawQuery: url.Values{"host": {config.Host}, "port": {fmt.Sprint(config.Port)}, "sslmode": {"disable"}}.Encode()}
+	command := exec.CommandContext(f.Context, os.Getenv("QUEUE_REPAIR_REPAIRED_APP"), "--schema", "contract", "V2", "--json")
+	command.Env = append(append([]string{}, f.applicationEnv...), "Q_USER="+f.roles.Worker, "Q_DDL="+dsn.String())
+	if output, err := command.CombinedOutput(); err != nil {
+		return fmt.Errorf("public queue Contract: %w\n%s", err, output)
+	}
+	return nil
+}
+
+func (f *QueueConversionDBFixture) StartPublicSuccessorWorker(t *testing.T, repaired ...bool) func() {
+	t.Helper()
+	if err := f.InstallPublicSuccessor(repaired...); err != nil {
+		t.Fatal(err)
+	}
+	binary := os.Getenv("QUEUE_REPAIR_V2_APP")
+	if len(repaired) > 0 && repaired[0] {
+		binary = os.Getenv("QUEUE_REPAIR_REPAIRED_APP")
+	}
+	config := f.Installer.Config()
+	dsn := url.URL{Scheme: "postgresql", User: url.User(config.User), Path: "/" + config.Database, RawQuery: url.Values{"host": {config.Host}, "port": {fmt.Sprint(config.Port)}, "sslmode": {"disable"}}.Encode()}
+	dsn.User = url.User(f.roles.Worker)
+	log, err := os.CreateTemp(t.TempDir(), "public-queue-worker-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	process := exec.CommandContext(f.Context, binary, "--schema", "worker", "--json")
+	process.Env = append(append([]string{}, f.applicationEnv...), "Q_USER="+f.roles.Worker, "Q_DDL="+dsn.String())
+	process.Stdout = log
+	process.Stderr = log
+	if err := process.Start(); err != nil {
+		t.Fatal(err)
+	}
+	stop := func() { _ = process.Process.Kill(); _ = process.Wait(); _ = log.Close() }
+	t.Cleanup(stop)
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		output, err := os.ReadFile(log.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(output), "schema-worker-ready") {
+			return stop
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("public successor worker did not publish: %s", output)
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+}
+
+func (f *QueueConversionDBFixture) StartPublicSuccessorRequest(t *testing.T) {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	_ = listener.Close()
+	log, err := os.CreateTemp(t.TempDir(), "public-queue-request-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	process := exec.CommandContext(f.Context, os.Getenv("QUEUE_REPAIR_V2_APP"))
+	process.Env = append(append([]string{}, f.applicationEnv...), "Q_USER="+f.roles.Request, "Q_HTTP_PORT="+fmt.Sprint(port))
+	process.Stdout = log
+	process.Stderr = log
+	if err := process.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = process.Process.Kill(); _ = process.Wait(); _ = log.Close() })
+	deadline := time.Now().Add(15 * time.Second)
+	client := &http.Client{Timeout: time.Second}
+	for {
+		response, err := client.Get(fmt.Sprintf("http://127.0.0.1:%d/", port))
+		if err == nil {
+			_ = response.Body.Close()
+			if response.StatusCode == 200 {
+				return
+			}
+		}
+		if time.Now().After(deadline) {
+			output, _ := os.ReadFile(log.Name())
+			t.Fatalf("public successor request did not admit: %s", output)
+		}
+		time.Sleep(25 * time.Millisecond)
 	}
 }
 

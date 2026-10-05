@@ -62,7 +62,11 @@ func registerCompiledQueueHistory(payload string) {
 	entries := pgMigrationRead[[]json.RawMessage](r, root["databases"])
 	pending := map[string]pgQueueHistoryRegistration{}
 	for _, raw := range entries {
-		d := r.object(raw, "database", "family", "namespace", "currentVersion", "versions", "origins")
+		keys := []string{"database", "family", "namespace", "currentVersion", "versions", "origins"}
+		if pgMigrationRead[int](r, root["version"]) == 2 {
+			keys = append(keys, "transitions")
+		}
+		d := r.object(raw, keys...)
 		family := pgMigrationRead[string](r, d["family"])
 		linked, ok := compiledMigrationHistories.Load(family)
 		if !ok {
@@ -273,7 +277,8 @@ func pgReadQueueHistory(history PgCompiledMigrationHistory, payload string, init
 	}
 	r := &pgMigrationWireReader{}
 	root := r.object(json.RawMessage(payload), "version", "kind", "compilerAbi", "storedValueCompatibility", "databases")
-	if pgMigrationRead[int](r, root["version"]) != 1 || pgMigrationRead[string](r, root["kind"]) != "compiled-queue-history" {
+	format := pgMigrationRead[int](r, root["version"])
+	if (format != 1 && format != 2) || pgMigrationRead[string](r, root["kind"]) != "compiled-queue-history" {
 		r.fail("unsupported queue companion format")
 	}
 	if pgMigrationRead[string](r, root["compilerAbi"]) != history.SourceCompilerABI || pgMigrationRead[string](r, root["storedValueCompatibility"]) != history.StoredValueCompatibility {
@@ -289,7 +294,11 @@ func pgReadQueueHistory(history PgCompiledMigrationHistory, payload string, init
 		if r.err != nil {
 			break
 		}
-		d := r.object(raw, "database", "family", "namespace", "currentVersion", "versions", "origins")
+		keys := []string{"database", "family", "namespace", "currentVersion", "versions", "origins"}
+		if format == 2 {
+			keys = append(keys, "transitions")
+		}
+		d := r.object(raw, keys...)
 		identity, family, namespace := pgMigrationRead[string](r, d["database"]), pgMigrationRead[string](r, d["family"]), pgMigrationRead[string](r, d["namespace"])
 		current := pgMigrationRead[int](r, d["currentVersion"])
 		if index >= len(base) {
@@ -352,9 +361,25 @@ func pgReadQueueHistory(history PgCompiledMigrationHistory, payload string, init
 				pgQueueCheckSourceVersion(r, history, owner.family, owner.versions[i], v)
 			}
 		}
-		// Until jobs transformations exist, every pre-existing identity keeps
-		// its full contract through each revision. This checks old origins too;
-		// only new identities are additive, and an empty array is explicit.
+		transitions := map[int]*pgRowPhysicalPlan{}
+		if format == 2 {
+			for _, raw := range pgMigrationRead[[]json.RawMessage](r, d["transitions"]) {
+				t := r.object(raw, "contract", "hash")
+				plan, err := pgParseRowPhysicalPlan(pgMigrationRead[string](r, t["contract"]), pgMigrationRead[string](r, t["hash"]))
+				if err != nil {
+					r.fail("invalid queue source transition")
+					continue
+				}
+				if plan.family != family || plan.namespace != namespace || plan.version != 2 || len(versions) != 2 || transitions[plan.version] != nil || !pgQueuePhysicalTransitionMatches(versions[0], versions[1], plan) {
+					r.fail("queue source transition differs from exact adjacent inventories")
+					continue
+				}
+				transitions[plan.version] = plan
+			}
+		}
+		// Every changed pre-existing identity requires a complete checked physical
+		// transition. This checks old origins too; only new identities are additive,
+		// and an empty array is explicit. Metadata grants no database authority.
 		previous := map[string]map[string]PgQueueSourcePayload{}
 		for _, version := range versions {
 			currentContracts := map[string]map[string]PgQueueSourcePayload{}
@@ -371,7 +396,7 @@ func pgReadQueueHistory(history PgCompiledMigrationHistory, payload string, init
 					r.fail("queue contract was removed across source versions")
 				}
 				for job, payload := range jobs {
-					if fresh, exists := next[job]; !exists || fresh != payload {
+					if fresh, exists := next[job]; !exists || fresh != payload && transitions[version.Version] == nil {
 						r.fail("queue payload contract changed across source versions")
 					}
 				}

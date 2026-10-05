@@ -10,7 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// Bind an internally checked queue-only target physical descriptor to the actual
+// Bind a compiler-checked queue-only target physical descriptor to the actual
 // installed application and staged callbacks. This does not insert an expansion
 // receipt, publish V2, alter jobs or grant dispatch. Activation must consume the
 // exact target binding rather than treating a standalone payload as a schema.
@@ -132,6 +132,48 @@ func mustQueueConversionDocument(source *pgQueueConversionSource) []byte {
 	// The registry admitted these exact hex bytes before publication.
 	raw, _ := hex.DecodeString(source.spec.document)
 	return raw
+}
+
+// Select only executable repairs rooted in this binary's exact physical edge.
+// Refuse competing repair branches before any installer transaction is opened.
+func pgCompiledRowQueueInstallSources(b *pgRowBaseline) ([]string, error) {
+	compiledQueueConversionExecutables.RLock()
+	sources := make([]*pgQueueConversionSource, 0, len(compiledQueueConversionExecutables.byDigest))
+	for _, executable := range compiledQueueConversionExecutables.byDigest {
+		sources = append(sources, executable.queueConversionSource())
+	}
+	compiledQueueConversionExecutables.RUnlock()
+	result := make([]string, 0, len(b.target.queueConversions))
+	for _, conversion := range b.target.queueConversions {
+		latest, revision := conversion.digest, 0
+		seen := map[int]string{}
+		for _, source := range sources {
+			if source.family != b.history.Family || source.queue != conversion.queue || source.job != conversion.job || source.toVersion != b.target.version {
+				continue
+			}
+			lineage, err := pgQueueConversionCandidateLineage(source.spec.digest)
+			if err != nil {
+				return nil, err
+			}
+			if lineage[len(lineage)-1].spec.digest != conversion.digest {
+				return nil, fmt.Errorf("compiled queue repair differs from the physical edge's exact root")
+			}
+			for _, ancestor := range lineage {
+				if prior, ok := seen[ancestor.repairRevision]; ok && prior != ancestor.spec.digest {
+					return nil, fmt.Errorf("compiled queue repairs contain competing immutable revisions")
+				}
+				seen[ancestor.repairRevision] = ancestor.spec.digest
+			}
+			if source.repairRevision > revision {
+				latest, revision = source.spec.digest, source.repairRevision
+			}
+		}
+		if _, ok := seen[0]; !ok {
+			return nil, fmt.Errorf("queue installation lacks its compiler-linked executable root")
+		}
+		result = append(result, latest)
+	}
+	return result, nil
 }
 
 // Stage immutable compiler-owned conversions in an actual fresh application

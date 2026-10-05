@@ -12,15 +12,17 @@ non-normative. An unchecked row is not delivered.
 
 The row migrations and unchanged-payload queue retirement have executable
 PostgreSQL lifecycles. Checked queue converters and their pure byte adapters
-also execute, but **changed queued payloads are not deployable**. Repeated
-source/adapter test successes must not be counted as completion of that feature.
+also execute. The initial queue-only V1/V2 edge now compiles and runs through
+ordinary installation/worker commands, including retained conversion, rejection,
+separately compiled repair deployment and `--schema contract V2` retirement.
+Repeated ordinary queue upgrades and mixed histories remain incomplete.
 
-The next acceptance target is one ordinary V1/V2 queue application built from
+The public-command regression now covers one ordinary V1/V2 queue application built from
 frozen source, with no test-only metadata patches: enqueue an old-shaped job,
 deploy its checked converter, claim/convert/process it with V2, reject another
 job without losing its original bytes, repair that job through a separately
-checked repair revision, and retire V1 only after finality. Keep that target on
-the critical path rather than expanding unrelated source-reporting surfaces.
+checked repair revision, and retire V1 only after finality. The next acceptance
+target is repeated ordinary queue deployments on the same database.
 
 Compatibility direction: prioritize a fresh-install ordinary-application rollout.
 The maintainer accepts breaking the old control catalog rather than spending
@@ -55,6 +57,40 @@ The evidence below records earlier milestones; it does not supersede these
 remaining integration requirements.
 
 ### Implementation and verification evidence
+
+WIP commit `ba79df7` records the runnable ordinary three-release row example.
+The first public queued-payload scope now builds an ordinary V2 application for
+one queue-only V1/V2 edge, unchanged entities and exact queue/job membership. The
+captured graph retains original queue helper bindings; emission links its typed
+adapter package into the actual application, and queue companion v2 carries exact
+physical transition descriptors. Runtime companion validation checks the changed
+inventories against those descriptors instead of accepting arbitrary changed
+contracts or weakening the v1 companion's unchanged-payload rule.
+
+The ordinary V2 install command verifies an already-expanded V1 installation and
+stages the checked conversion/target using installer authority. It refuses a
+missing/unexpanded predecessor before creating a replacement baseline. The normal
+Worker command publishes the exact target and runs bounded compiler-bound turns
+under Worker authority. A generated test builds real V1 and V2 application
+binaries, deletes their sources, invokes their public install/worker commands,
+and verifies a retained payload is converted while an old-valid rejected payload
+remains at V1. A normal V2 Request application also starts and serves HTTP after
+publication. There are no patched source-history literals or Main bypasses.
+
+All 53 conversion/repair cases, 24 queue-source cases, affected queue/source/
+baseline/physical runtime race suites, the existing public V1/V2 application
+regression, compiler `@check`, embedding and runtime file gates pass. Mixed row/
+queue transformations, membership changes on this narrowing edge and later
+queue edges remain gated. Explicitly imported repair modules now link complete
+typed lineages into ordinary V2 applications. The installer selects an unambiguous
+executable lineage rooted in the exact physical decision and stages revisions;
+the public Worker applies them. `--schema contract V2` checks the complete installed
+history and recent retiring instances before and under the actual writer/compatibility
+drain, then invokes atomic queue finality. The extended source-deleted regression
+checks fresh V2 refusal, installation replay, staged-authority corruption, a separate
+repaired deployment, rejection/recent-instance Contract refusal, retirement replay,
+post-retirement restart and old enqueue refusal.
+The complete default migration gate has not been rerun for this public hookup.
 
 WIP commit `0a36c5b` records internal application queue retirement. A new runnable
 ordinary row-data example now lives in `example/db-three-upgrades/`. It builds

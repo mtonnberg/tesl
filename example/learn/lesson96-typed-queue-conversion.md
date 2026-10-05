@@ -3,8 +3,9 @@
 You can test a queue conversion as an ordinary pure Tesl function before it is
 connected to durable queue processing. The compiler binds conversion and repair
 functions to their exact old/new payload types and codecs and emits fixture tests.
-**Changed-payload deployment, durable quarantine repair and transforming retirement
-are not enabled yet.** The running queue still refuses those changes with MIG028.
+The initial queue-only V1/V2 application rollout now compiles and runs through
+public installer/worker commands, separately deployed typed repairs, and
+`--schema contract V2`. Later/mixed queue histories still refuse with MIG028.
 
 For retirement of unchanged payloads, use
 [lesson 95](lesson95-retiring-unchanged-queue-payloads.md).
@@ -68,9 +69,9 @@ deletion out of scope.
 `agent-context` can validate this source decision. Compiling the standalone
 migration through the ordinary compiler also emits its pure conversion adapters
 and generated fixture tests, so `tesl test migrations/mail/v2.tesl` can exercise
-them. Building the application or
-asking for an executable physical history still refuses with MIG028 until the
-protected execution and repair protocol is complete.
+them. Ordinary application builds also support the initial queue-only V1/V2 edge
+with unchanged entities and retained queue/job membership; the deployment steps
+are below.
 
 The internal source checker requires:
 
@@ -306,21 +307,52 @@ complete the job. The receipt still replays after reconnect and job deletion.
 Private work tables keep historical payloads unavailable to direct Request or
 Worker queries; normal completion clears abandoned attempts.
 
-This crosses the application-database mutation boundary. Selecting these operations
-from ordinary changed-payload application builds and automatic schema-worker
-scheduling, and completing application retirement finality, remain pending.
+This crosses the application-database mutation boundary used by the ordinary
+queue-only V1/V2 application rollout.
 
 The internal Worker turn now discovers staged migration/repair digests itself and
 resolves them to compiler-bound typed adapters. Tests run migration, rejecting
 repair and successful repair using successive one-job turns, without passing a
 callback or job ID to the dispatcher. A staged descriptor without linked code is
-refused before mutation. Wiring this entry point into ordinary changed-payload
-application builds and the public worker service remains pending.
+refused before mutation. The public schema worker uses this scheduling entry point.
+
+The initial public conversion path is now available for unchanged entities and
+retained queue/job membership. Install and expand the V1 app first, then use the
+V2 binary's normal installer command to stage the checked edge and its Worker
+command to publish and convert retained jobs. Tests start both the real Worker
+and a normal V2 HTTP Request application after publication. Rejection remains
+durable V1 quarantine.
+
+To deploy a checked repair, explicitly import its module in the V2 application:
+
+```tesl
+import Schema.Mail.Migrate.Repair1
+```
+
+Rebuild the application, run its ordinary `--schema install` as the installer,
+then run the repaired binary's `--schema worker` with Worker credentials. The
+installer appends the complete immutable repair lineage; the worker retries the
+original rejected payload. Keep every previous declaration unchanged. Competing
+repair branches and repairs rooted in another physical edge are refused.
+
+After repairs succeed, stop V1 request/worker instances and wait 30 seconds for
+their last heartbeat to age out. Then run the repaired V2 binary as Worker:
+
+```sh
+./app --schema contract V2 --json
+```
+
+Contract refuses while old payloads, claims or attempts remain, or a V1 instance
+has recently reported. On success it drains the actual source-writer and
+compatibility locks and commits the finality receipt and both admission floors
+together. Repeating install/Contract and restarting the V2 worker remain checked;
+a new repair cannot be installed after retirement.
 
 The internal application retirement test now closes this queue-only edge under
 the real V1 writer and compatibility locks. Pending old jobs, quarantines and
 rejecting repairs block the floor. After successful repair, the receipt and
 admission floors advance together; the old writer is refused and a surviving
 V2 claimant can still renew and complete. Read-only V1 status inspection verifies
-the retired history without reading raw queue payloads. Selecting this path from
-the public compiler/worker and retirement commands remains the next integration.
+the retired history without reading raw queue payloads. The public-command witness
+also checks rejection blocking Contract, separately compiled repair deployment,
+recent-instance refusal, retirement replay and post-retirement worker restart.

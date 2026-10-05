@@ -1127,11 +1127,23 @@ payload and returning `Migrated` of the same target payload. Source/target
 contracts, codecs and queue identity remain exact. Fixtures must reproduce each
 predecessor's rejection before the repair test can run. `QueueRepair` is contextual
 source syntax, not a runtime value or permission to mutate quarantined jobs.
-Source diagnostics may accept a complete `jobs` decision, but ordinary Go
-application builds and both physical planning paths still report MIG028 until
-protected transformation and typed-repair execution are available. Choosing a
-later installation origin cannot skip that refusal. This source judgment does
-not authorize job claims, rewrites, deletion or retirement.
+Ordinary Go application builds now support the initial queue-only V1/V2 edge
+with unchanged stored entities and exact retained queue/job membership. The
+application emits compiler-bound byte adapters and a checked physical transition
+in the queue companion. Upgrade installation requires an expanded V1 predecessor;
+the normal Worker command publishes the checked target and runs bounded conversion
+turns. A rejected payload remains quarantined at its original version. Mixed
+entity/queue changes, further queue edges and queue/job additions or removals on
+this narrowing edge remain refused with MIG028. Additive physical planning does
+not infer conversion authority from a later installation origin. Explicitly
+importing the checked `QueueRepair` module into the V2 application links its complete
+lineage. Reinstalling that binary stages consecutive immutable repair revisions;
+its Worker retries the original quarantined bytes. Competing repair branches are
+refused. `--schema contract V2` retires this queue-only edge after all old payloads,
+claims and attempts are gone and no retiring instance has reported in the preceding
+30 seconds. It drains both source-writer and compatibility domains and atomically
+records finality and both admission floors. Installed repair and retirement replay
+is checked; a new repair cannot be appended after retirement.
 
 **Internal sparse migration coverage.** Before checking a row function or deriving a
 single adapter, the coverage pass checks the record's coverage against both complete

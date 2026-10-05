@@ -6,8 +6,8 @@ This records the compiler prerequisite for `roadmap/next/queue-payload-migration
 Fresh format-5 Worker applications now support unchanged versioned payloads,
 fenced attempts and atomic additive-epoch retirement; see
 [lesson 95](../example/learn/lesson95-retiring-unchanged-queue-payloads.md).
-Changed payloads still refuse public compilation until the transformation and
-typed-repair execution protocol is complete.
+Changed payloads now support the initial queue-only V1/V2 application rollout,
+typed repair deployment and Contract; later/mixed queue edges remain gated.
 
 ## Source ownership
 
@@ -264,6 +264,39 @@ existing format-5 catalog has been extended; old databases missing the staging
 table fail the exact catalog check. There is no implicit upgrade/adoption path.
 
 ## Database execution
+
+### Initial public queue upgrade
+
+Ordinary application builds now emit adapters for one queue-only V1/V2 edge with
+unchanged entities and exact retained queue/job membership. The entry package links
+the generated adapters so the runtime has typed executables at worker startup.
+Queue companion v2 includes checked physical transition documents; its reader
+compares complete adjacent inventories and payload contracts before accepting a
+changed source description. Companion v1 retains its original restrictions.
+
+Install/expand the V1 application first. Run the V2 application's `--schema install`
+with the short-lived installer and the compiled Worker/Request role configuration
+to stage the exact conversion and target. Then run its normal `--schema worker`
+with Worker DDL credentials to publish and process retained jobs. Conversion
+receipts and rejection quarantine use the application database's real fences.
+The V2 Request process can start after publication. Fresh installation directly
+from the V2 upgrade binary and an unexpanded predecessor are explicitly refused.
+
+Explicitly import a `QueueRepair` module into the V2 application and rebuild to
+deploy repairs. Its normal installer stages the complete consecutive lineage,
+and its Worker discovers and executes the checked revisions. Competing branches
+and roots differing from the exact physical decision refuse before staging.
+After retirement, installation can replay existing linked sources but cannot append
+a new revision.
+
+`--schema contract V2` selects the checked queue-only retirement path. It refuses
+old payloads, claims and attempts and retiring instances reporting within 30 seconds;
+the recent-instance check is repeated under the source-writer and compatibility
+drain. Receipt and both admission floors commit atomically. A restarted Worker
+validates the completed history instead of attempting to register the transition
+again. Subsequent queue upgrades and mixed row/queue transforms remain pending.
+The generated PostgreSQL witness uses ordinary compiled V1, V2 and repaired-V2
+applications and public commands with original sources absent.
 
 ### Application-bound mutation
 

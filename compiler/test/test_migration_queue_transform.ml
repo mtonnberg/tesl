@@ -316,11 +316,12 @@ api Api { get "/" -> String }
 server Web for Api { health }
 main() -> App requires [queueRead] = App { database: D, queues: [Tasks], api: Web, port: 8080 }
 |} in
- let appfile=save "app.tesl" app in
- (match Compile.compile_go_file appfile with
-  | Compile.GoSuccess _ -> fail "application deployed checked jobs before protected execution"
-  | Compile.GoFailure ds -> check bool (Compile.diagnostics_to_json ds) true
-     (List.exists(fun(d:Compile.diagnostic)->d.code="MIG028" && Compile.string_contains d.message "protected transformation")ds)))
+  let appfile=save "app.tesl" app in
+  (match Compile.compile_go_file appfile with
+   | Compile.GoSuccess artifacts ->
+     check bool "ordinary initial queue-only app links typed adapters" true
+       (List.exists(fun(a:Emit_go.artifact)->a.path="internal/teslmodapp/queue_conversions_link_generated.go")artifacts)
+   | Compile.GoFailure ds -> fail(Compile.diagnostics_to_json ds)))
 let jobs_negative () = with_job_declaration(fun _ save file header ->
  List.iter(fun(label,change,code)->
    let source=header ^ change job_declaration in
@@ -846,7 +847,7 @@ worker handle(job: Delivery ::: FromQueue (Id == jobId) job) = job
 handler get health() -> String = "ready"
 api Api { get "/" -> String }
 server Web for Api { health }
-main() -> App requires [queueRead, envRead] = App { database: D, queues: [Tasks], api: Web, port: 8080 }
+main() -> App requires [queueRead, envRead] = App { database: D, queues: [Tasks], api: Web, port: envInt "Q_HTTP_PORT" 8080 }
 |}
 let public_repair_postgres () = with_public_repair ~entities:true (fun root save parent _ second ->
  let source=read second in
@@ -882,7 +883,21 @@ let public_repair_postgres () = with_public_repair ~entities:true (fun root save
    (quote(Migration_storage.digest (Result.get_ok(Migration_storage.describe inventory))))(String.concat "," contracts) in
  ignore(save "out/internal/teslrt/queue_target_test_constants.go"
    (Printf.sprintf "package teslrt\nconst testQueueTargetDocument = %s\nconst testQueueTargetHash = %s\nconst testQueueTargetInventory = %s\n" (Emit_go.go_quote target_doc)(Emit_go.go_quote target_hash)(quote inventory_json)));
- ignore(save "baseline/tesl.toml" "");
+ let successor_entry=save "app.tesl" repair_baseline_app in
+ let successor=match Compile.compile_go_file successor_entry with
+  | Compile.GoSuccess artifacts->artifacts | Compile.GoFailure ds->fail(Compile.diagnostics_to_json ds) in
+ List.iter(fun(a:Emit_go.artifact)->ignore(save ("out/successor/" ^ a.path)a.contents))successor;
+ let command=Printf.sprintf "cd %s && go build -race -o app ./cmd/app 2>&1" (Filename.quote(Filename.concat root "out/successor")) in
+  let channel=Unix.open_process_in command in let output=In_channel.input_all channel in
+  (match Unix.close_process_in channel with Unix.WEXITED 0->()|_->fail output);
+  let repaired_entry=save "app.tesl" (repair_baseline_app |> replace "import Tesl.Prelude" "import Schema.Mail.Migrate.Repair2\nimport Tesl.Prelude") in
+  let repaired=match Compile.compile_go_file repaired_entry with
+   | Compile.GoSuccess artifacts->artifacts | Compile.GoFailure ds->fail(Compile.diagnostics_to_json ds) in
+  List.iter(fun(a:Emit_go.artifact)->ignore(save ("out/repaired/" ^ a.path)a.contents))repaired;
+  let command=Printf.sprintf "cd %s && go build -race -o app ./cmd/app 2>&1" (Filename.quote(Filename.concat root "out/repaired")) in
+  let channel=Unix.open_process_in command in let output=In_channel.input_all channel in
+  (match Unix.close_process_in channel with Unix.WEXITED 0->()|_->fail output);
+  ignore(save "baseline/tesl.toml" "");
  ignore(save "baseline/schema/mail/v-current.tesl" ((old |> replace "Schema.Mail.V1" "Schema.Mail.VCurrent") ^ "\nentity Note table \"notes\" primaryKey id { id: String, title: String }\n"));
  let app=save "baseline/app.tesl" repair_baseline_app in
  let baseline=match Compile.compile_go_file app with
@@ -893,7 +908,7 @@ let public_repair_postgres () = with_public_repair ~entities:true (fun root save
  (match Unix.close_process_in channel with Unix.WEXITED 0->()|_->fail output);
  remove(Filename.concat root "baseline");
  List.iter(fun name->remove(Filename.concat root name))["schema";"migrations";"tesl.toml"];
- let command=Printf.sprintf "cd %s && QUEUE_REPAIR_V1_APP=%s go test -race -p 1 -count=1 -timeout=240s -v ./internal/teslqueueconversions 2>&1" (Filename.quote(Filename.concat root "out")) (Filename.quote(Filename.concat root "out/baseline/app")) in
+  let command=Printf.sprintf "cd %s && QUEUE_REPAIR_V1_APP=%s QUEUE_REPAIR_V2_APP=%s QUEUE_REPAIR_REPAIRED_APP=%s go test -race -p 1 -count=1 -timeout=300s -v ./internal/teslqueueconversions 2>&1" (Filename.quote(Filename.concat root "out")) (Filename.quote(Filename.concat root "out/baseline/app")) (Filename.quote(Filename.concat root "out/successor/app")) (Filename.quote(Filename.concat root "out/repaired/app")) in
  let channel=Unix.open_process_in command in let output=In_channel.input_all channel in
  (match Unix.close_process_in channel with Unix.WEXITED 0->()|_->fail output);
  if Sys.getenv_opt "TESL_MIGRATION_TEST_REQUIRE_POSTGRES"=Some "1" then
@@ -908,7 +923,8 @@ let public_repair_postgres () = with_public_repair ~entities:true (fun root save
     "TestPostgresWorkerReopensWithoutInstaller";"TestPostgresWorkerReopenRejectsCatalogAndSourceDrift";
     "TestPostgresWorkerReopensInNewProcess";"TestPostgresApplicationStagesExactQueueRepairHistory";
     "TestPostgresApplicationPreparesCheckedSuccessorInventory";"TestPostgresApplicationConvertsRepairsAndCompletesStoredJob";
-    "TestPostgresApplicationWorkerTurnFindsCompilerBoundCallbacks";"TestPostgresApplicationQueueRetirementBlocksUntilRepair"])
+    "TestPostgresApplicationWorkerTurnFindsCompilerBoundCallbacks";"TestPostgresApplicationQueueRetirementBlocksUntilRepair";
+    "TestPostgresPublicQueueWorkerConvertsRetainedPayload"])
 let upgrade_schema fields encoder decoder = Printf.sprintf {|module Schema.Mail.VCurrent exposing [Delivery, Jobs]
 import Tesl.Prelude exposing [String, Int]
 import Tesl.Json exposing [stringCodec, intCodec]

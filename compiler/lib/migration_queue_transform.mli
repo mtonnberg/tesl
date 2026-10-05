@@ -1,7 +1,7 @@
 (** Sealed source evidence for a same-identity queue payload conversion.
     This is not installed decoder, claim, repair or retirement authority.
-    Public changed-payload compilation remains refused until those protocols
-    consume and verify the complete descriptor. *)
+    The scoped public queue-only V1/V2 protocol separately consumes and verifies
+    the complete descriptor against the installed application. *)
 type t
 val check : project_root:string -> before:Migration_inventory.t -> after:Migration_inventory.t ->
   version:int -> queue:string -> job:string -> source:string -> Ast.module_form ->

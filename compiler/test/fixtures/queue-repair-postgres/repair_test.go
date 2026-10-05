@@ -1305,3 +1305,98 @@ func TestPostgresApplicationQueueRetirementBlocksUntilRepair(t *testing.T) {
 	}
 	f.ApplicationStatus(t)
 }
+
+func TestPostgresPublicQueueWorkerConvertsRetainedPayload(t *testing.T) {
+	f := rt.OpenPublicApplicationQueueForTest(t)
+	if _, err := f.Request.Exec(f.Context, "select mail.tesl_queue_enqueue(1,'Jobs','Delivery','public-kept',$1::jsonb)", `{"oldText":"kept"}`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Request.Exec(f.Context, "select mail.tesl_queue_enqueue(1,'Jobs','Delivery','public-rejected',$1::jsonb)", `{"oldText":""}`); err != nil {
+		t.Fatal(err)
+	}
+	stopWorker := f.StartPublicSuccessorWorker(t)
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		var converted, rejected int
+		if err := f.Installer.QueryRow(f.Context, "select count(*) filter(where schema_version=2 and payload->>'message'='kept'),count(*) filter(where schema_version=1 and status='quarantined' and dead_reason='migration-rejected') from mail.tesl_jobs").Scan(&converted, &rejected); err != nil {
+			t.Fatal(err)
+		}
+		if converted == 1 && rejected == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("public worker did not convert/reject retained jobs", converted, rejected)
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	stopWorker()
+	var receipts int
+	if err := f.Installer.QueryRow(f.Context, "select count(*) from mail.tesl_row_queue_conversion_receipts").Scan(&receipts); err != nil || receipts != 2 {
+		t.Fatal("public conversion did not retain its exact receipts", receipts, err)
+	}
+	if err := f.InstallPublicSuccessor(); err != nil {
+		t.Fatal("published public installation replay failed", err)
+	}
+	if _, err := f.Installer.Exec(f.Context, "update mail.tesl_row_queue_conversion_staging set fence_ns=fence_ns+1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.InstallPublicSuccessor(); err == nil {
+		t.Fatal("public install replay accepted altered installed source authority")
+	}
+	if _, err := f.Installer.Exec(f.Context, "update mail.tesl_row_queue_conversion_staging set fence_ns=fence_ns-1"); err != nil {
+		t.Fatal(err)
+	}
+	var after int
+	if err := f.Installer.QueryRow(f.Context, "select count(*) from mail.tesl_row_queue_conversion_receipts").Scan(&after); err != nil || after != receipts {
+		t.Fatal("installation replay changed durable conversion receipts", after, err)
+	}
+	f.StartPublicSuccessorRequest(t)
+	f.ApplicationStatus(t)
+	if err := f.ContractPublicSuccessor(); err == nil || !strings.Contains(err.Error(), "blocked by old payloads") {
+		t.Fatal("public queue Contract did not block rejected payload", err)
+	}
+	stopRepair := f.StartPublicSuccessorWorker(t, true)
+	deadline = time.Now().Add(15 * time.Second)
+	for {
+		var repaired int
+		if err := f.Installer.QueryRow(f.Context, "select count(*) from mail.tesl_jobs where id='public-rejected' and schema_version=2 and payload->>'message'='repaired' and status='pending'").Scan(&repaired); err != nil {
+			t.Fatal(err)
+		}
+		if repaired == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("public repaired deployment did not convert original quarantined payload")
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	stopRepair()
+	if err := f.InstallPublicSuccessor(true); err != nil {
+		t.Fatal("public repair install replay failed", err)
+	}
+	if _, err := f.Installer.Exec(f.Context, "insert into mail.tesl_schema_instances values('public-old',1,1,clock_timestamp(),1)"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.ContractPublicSuccessor(); err == nil || !strings.Contains(err.Error(), "recent retiring instances") {
+		t.Fatal("public queue Contract ignored recent V1 instance", err)
+	}
+	if _, err := f.Installer.Exec(f.Context, "update mail.tesl_schema_instances set last_seen=clock_timestamp()-interval '31 seconds' where instance='public-old'"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.ContractPublicSuccessor(); err != nil {
+		t.Fatal("public queue Contract did not retire repaired edge", err)
+	}
+	if err := f.ContractPublicSuccessor(); err != nil {
+		t.Fatal("public queue Contract replay failed", err)
+	}
+	var floor, compatibility int
+	if err := f.Installer.QueryRow(f.Context, "select min_version,compat_floor from mail.tesl_schema_state").Scan(&floor, &compatibility); err != nil || floor != 2 || compatibility != 2 {
+		t.Fatal("public retirement did not advance both admission floors", floor, compatibility, err)
+	}
+	stopRestart := f.StartPublicSuccessorWorker(t, true)
+	stopRestart()
+	if _, err := f.Request.Exec(f.Context, "select mail.tesl_queue_enqueue(1,'Jobs','Delivery','public-after-retirement',$1::jsonb)", `{"oldText":"late"}`); err == nil {
+		t.Fatal("public retirement still admitted V1 enqueue")
+	}
+	f.ApplicationStatus(t)
+}

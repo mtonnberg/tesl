@@ -2564,19 +2564,29 @@ let compile_public_row_source ?(debug=false) filename source entry =
       if List.exists (fun (d:diagnostic) -> d.severity="error") diagnostics then
         GoFailure diagnostics
       else
-      let graph_result = Migration_program.source_lowering captured in
+      let repairs_result = List.fold_left (fun result (m,bytes) ->
+        Result.bind result (fun repairs ->
+          Result.map (fun repair -> Option.fold ~none:repairs ~some:(fun repair -> repair::repairs) repair)
+            (Migration_queue_repair.check ~source:bytes m))) (Ok []) (Migration_program.source_modules captured) in
+      let graph_result = Result.bind repairs_result (fun repairs ->
+        Result.map (fun graph -> graph,repairs) (Migration_program.source_lowering captured)) in
       (match graph_result with
        | Error errors -> GoFailure (Migration_declaration.diagnostics_of_errors errors)
-       | Ok graph ->
+       | Ok (graph,repairs) ->
          let program = Migration_program.source_program captured in
          let modules = Go_graph_lowering.modules graph in
          let entry_module = Go_graph_lowering.entry graph in
          let migration_families = List.map (fun (d : Migration_program.database) ->
            d.identity, d.family) (Migration_program.databases program) in
          let migration_queues = Migration_program.queue_bindings program in
-         let queue_codec_records = Migration_program.queue_codec_records program in
-         match Emit_go.compile_project ~mode ~row_storage:true ~row_physical:true
-           ~row_source:captured ~fixture_graph:graph
+          let queue_codec_records = Migration_program.queue_codec_records program in
+           let queue_roots=Migration_program.row_histories captured |> List.concat_map(fun(_,rows)->
+             Migration_row_history.declarations rows |> List.concat_map Migration_declaration.queue_transforms) in
+           let queue_conversions=queue_roots @ repairs |> List.concat_map Migration_queue_transform.lineage
+             |> List.sort_uniq (fun a b -> String.compare (Migration_queue_transform.digest a) (Migration_queue_transform.digest b)) in
+          match Emit_go.compile_project ~mode ~row_storage:true ~row_physical:true
+            ~row_source:captured ~fixture_graph:graph
+            ~queue_conversions
            ~migration_families ~migration_queues ~queue_codec_records
            ~entry:entry_module modules with
          | Ok artifacts ->

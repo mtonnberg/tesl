@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -62,12 +63,114 @@ func pgRunRowSchemaCommand(serviceContext context.Context, command pgSchemaComma
 	}()
 	switch command.verb {
 	case "install":
+		if b.target != nil && len(b.target.queueConversions) > 0 {
+			if err := pgControlTransaction(ctx, conn, false, func(tx pgx.Tx) error {
+				if err := pgControlRoles(ctx, tx, roles, true); err != nil {
+					return err
+				}
+				state, err := pgInspectRowControl(ctx, tx, b.history.Namespace, roles)
+				if err != nil {
+					return err
+				}
+				if state.Current != 1 && state.Current != 2 {
+					return fmt.Errorf("queue upgrade installation requires an expanded V1 predecessor")
+				}
+				return nil
+			}); err != nil {
+				return err
+			}
+		}
 		state, err := InstallPgCompiledRowBaseline(ctx, conn, database, roles)
 		if err != nil {
 			return err
 		}
+		if b.target != nil && len(b.target.queueConversions) > 0 {
+			digests, err := pgCompiledRowQueueInstallSources(b)
+			if err != nil {
+				return err
+			}
+			if state.Current == 1 || state.MinVersion < 2 {
+				for _, digest := range digests {
+					if err := pgStageRowQueueConversions(ctx, conn, b.history.Namespace, roles, digest); err != nil {
+						return err
+					}
+				}
+			} else if err := pgControlTransaction(ctx, conn, false, func(tx pgx.Tx) error {
+				for _, digest := range digests {
+					compiledQueueConversionSources.RLock()
+					source := compiledQueueConversionSources.byDigest[digest]
+					compiledQueueConversionSources.RUnlock()
+					var matches bool
+					if err := tx.QueryRow(ctx, "select exists(select 1 from "+quoteIdentifier(b.history.Namespace)+".tesl_row_queue_conversion_staging where source_digest=$1 and source_document=$2 and database_uuid::text=$3 and fence_ns=$4)", digest, mustQueueConversionDocument(source), state.DatabaseUUID, state.FenceNamespace).Scan(&matches); err != nil {
+						return err
+					}
+					if !matches {
+						return fmt.Errorf("retired queue installation cannot append a new repair revision")
+					}
+				}
+				return nil
+			}); err != nil {
+				return err
+			}
+			if state.Current == 1 {
+				if err := pgStageRowQueueTarget(ctx, conn, b.history.Namespace, roles, b.target.contract, b.target.hash); err != nil {
+					return err
+				}
+			}
+		}
 		return pgWriteSchemaInstallation(out, command.json, b.history, state, roles)
 	case "worker":
+		if b.target != nil && len(b.target.queueConversions) > 0 {
+			if b.target.version != 2 || len(b.queues) != 2 {
+				return fmt.Errorf("queue worker requires the initial queue-only V1/V2 edge")
+			}
+			var state PgMigrationControlState
+			if err := pgControlTransaction(ctx, conn, false, func(tx pgx.Tx) error {
+				if err := pgControlRoles(ctx, tx, roles, false); err != nil {
+					return err
+				}
+				var worker bool
+				if err := tx.QueryRow(ctx, "select current_user=$1 and session_user=$1", roles.Worker).Scan(&worker); err != nil {
+					return err
+				}
+				if !worker {
+					return fmt.Errorf("queue worker requires exact Worker login")
+				}
+				var err error
+				state, _, err = pgReadRowBaselineState(ctx, tx, b, roles, true)
+				return err
+			}); err != nil {
+				return err
+			}
+			if state.Current != 2 {
+				if err := pgPublishRowQueueTarget(ctx, conn, b.history.Namespace, roles, b.queues[1].version, b.target.contract, b.target.hash); err != nil {
+					return err
+				}
+			}
+			cancel()
+			if command.json {
+				if err := json.NewEncoder(out).Encode(struct {
+					Kind           string `json:"kind"`
+					CurrentVersion int    `json:"currentVersion"`
+				}{"schema-worker-ready", 2}); err != nil {
+					return err
+				}
+			} else if _, err := fmt.Fprintln(out, "schema queue worker ready at V2"); err != nil {
+				return err
+			}
+			for serviceContext.Err() == nil {
+				if _, err := pgRunRowQueueConversionTurn(serviceContext, conn, b.history.Namespace, roles, 256); err != nil {
+					if serviceContext.Err() != nil {
+						return nil
+					}
+					return err
+				}
+				if err := pgIndexWait(serviceContext, 250*time.Millisecond); err != nil {
+					return nil
+				}
+			}
+			return nil
+		}
 		state, err := pgExecuteRowBaseline(ctx, conn, b, roles)
 		if err != nil {
 			return err
@@ -102,8 +205,13 @@ func pgRunRowSchemaCommand(serviceContext context.Context, command pgSchemaComma
 		_, err = fmt.Fprintf(out, "%s: %s through V%d; minimum V%d; %d recent retiring instances.\n", b.history.Database, preview.Kind, preview.ThroughVersion, preview.MinVersion, len(preview.RecentInstances))
 		return err
 	case "contract":
-		cancel()
-		state, err := pgExecuteRowContract(serviceContext, config, b, roles, command.targetVersion)
+		var state PgMigrationControlState
+		if b.target != nil && len(b.target.queueConversions) > 0 {
+			state, err = pgExecuteRowQueueContract(ctx, conn, b, roles, command.targetVersion)
+		} else {
+			cancel()
+			state, err = pgExecuteRowContract(serviceContext, config, b, roles, command.targetVersion)
+		}
 		if err != nil {
 			return err
 		}

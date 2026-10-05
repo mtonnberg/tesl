@@ -46,7 +46,8 @@ let revalidate t = protect (fun () ->
   List.iter(fun edge -> List.iter(fun conversion -> ignore(checked(Migration_queue_transform.with_checked conversion Fun.id)))
     (D.queue_transforms edge))t.edges)
 let captured_sources t =
-  List.concat_map (fun link -> T.captured_sources (L.checked_transform link)) t.links
+  (List.concat_map (fun link -> T.captured_sources (L.checked_transform link)) t.links @
+   List.concat_map(fun edge->List.concat_map Migration_queue_transform.source_texts(D.queue_transforms edge))t.edges)
   |> List.sort_uniq (fun (a,source_a) (b,source_b) -> compare (a.Ast.source_file,source_a) (b.Ast.source_file,source_b))
 let validate_adapter_modes t = protect (fun () ->
   List.iter (fun binding -> match binding.row.function_binding with
@@ -78,7 +79,12 @@ let check_internal ~queue_expansion ~schemas ~edges = protect (fun () ->
    if queue_expansion then begin
      if List.length schemas<>2 || List.length edges<>1 ||
         D.queue_transforms(List.hd edges)=[] || S.entries(D.coverage(List.hd edges))<>[] then
-       reject ~code:"MIG028" loc "initial queue physical planning requires one V1/V2 queue-only edge with unchanged entities"
+       reject ~code:"MIG028" loc "initial queue physical planning requires one V1/V2 queue-only edge with unchanged entities";
+     let membership inventory=I.queue_contracts inventory |> List.map(fun q ->
+       Migration_queue.wire_identity inventory q.I.queue_name,
+       List.map(fun p->Migration_queue.wire_identity inventory p.I.payload_name)q.payloads |> List.sort compare) |> List.sort compare in
+     if membership(List.hd schemas)<>membership(List.nth schemas 1) then
+       reject ~code:"MIG028" loc "initial queue conversion rollout retains exact queue/job membership; additions or removals require a separate supported edge"
    end;
    if not queue_expansion && List.exists(fun edge -> D.queue_transforms edge<>[])edges then
     reject ~code:"MIG028" loc "checked queue conversions require protected transformation and repair execution before physical planning";

@@ -124,6 +124,10 @@ func pgRowQueueRetirementDocument(ctx context.Context, tx pgx.Tx, namespace stri
 }
 
 func pgRetireRowQueue(ctx context.Context, conn *pgx.Conn, namespace string, roles PgMigrationControlRoles) (bool, error) {
+	return pgRetireRowQueueChecked(ctx, conn, namespace, roles, nil)
+}
+
+func pgRetireRowQueueChecked(ctx context.Context, conn *pgx.Conn, namespace string, roles PgMigrationControlRoles, check func(pgx.Tx, PgMigrationControlState) error) (bool, error) {
 	var initial PgMigrationControlState
 	err := pgControlTransaction(ctx, conn, false, func(tx pgx.Tx) error {
 		if err := pgControlRoles(ctx, tx, roles, false); err != nil {
@@ -138,6 +142,9 @@ func pgRetireRowQueue(ctx context.Context, conn *pgx.Conn, namespace string, rol
 		}
 		var err error
 		initial, err = pgInspectRowControl(ctx, tx, namespace, roles)
+		if err == nil && check != nil {
+			err = check(tx, initial)
+		}
 		return err
 	})
 	if err != nil {
@@ -156,6 +163,11 @@ func pgRetireRowQueue(ctx context.Context, conn *pgx.Conn, namespace string, rol
 			if state.DatabaseUUID != initial.DatabaseUUID || state.FenceNamespace != initial.FenceNamespace || state.Current != initial.Current || state.MinVersion != initial.MinVersion {
 				return fmt.Errorf("queue retirement admission changed while draining")
 			}
+			if check != nil {
+				if err := check(tx, state); err != nil {
+					return err
+				}
+			}
 			retirement, err := pgRowQueueRetirementDocument(ctx, tx, namespace, state)
 			if err != nil {
 				return err
@@ -168,6 +180,42 @@ func pgRetireRowQueue(ctx context.Context, conn *pgx.Conn, namespace string, rol
 		})
 	})
 	return done, err
+}
+
+func pgExecuteRowQueueContract(ctx context.Context, conn *pgx.Conn, b *pgRowBaseline, roles PgMigrationControlRoles, version int) (PgMigrationControlState, error) {
+	var result PgMigrationControlState
+	if version != 2 || b.history.CurrentVersion != version || b.target == nil || b.target.version != version || len(b.target.queueConversions) == 0 || len(b.target.windows) != 0 {
+		return result, fmt.Errorf("queue Contract requires the current compiled queue-only V2 edge")
+	}
+	check := func(tx pgx.Tx, state PgMigrationControlState) error {
+		if _, _, err := pgReadRowBaselineState(ctx, tx, b, roles, false); err != nil {
+			return err
+		}
+		if state.MinVersion >= version {
+			return nil
+		}
+		var recent bool
+		if err := tx.QueryRow(ctx, "select exists(select 1 from "+quoteIdentifier(b.history.Namespace)+".tesl_schema_instances where version>=$1 and version<$2 and last_seen>pg_catalog.clock_timestamp()-interval '30 seconds')", state.MinVersion, version).Scan(&recent); err != nil {
+			return err
+		}
+		if recent {
+			return fmt.Errorf("queue Contract has recent retiring instances; stop them and wait 30 seconds")
+		}
+		return nil
+	}
+	done, err := pgRetireRowQueueChecked(ctx, conn, b.history.Namespace, roles, check)
+	if err != nil {
+		return result, err
+	}
+	if !done {
+		return result, fmt.Errorf("queue Contract is blocked by old payloads, claims or conversion attempts; complete the checked repairs first")
+	}
+	err = pgControlTransaction(ctx, conn, false, func(tx pgx.Tx) error {
+		var err error
+		result, _, err = pgReadRowBaselineState(ctx, tx, b, roles, false)
+		return err
+	})
+	return result, err
 }
 
 func pgReadRowQueueRetirements(ctx context.Context, tx pgx.Tx, b *pgRowBaseline, state PgMigrationControlState) (map[int]*pgRowQueueRetirement, error) {

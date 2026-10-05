@@ -33,7 +33,10 @@ func pgRowQueueSources(history PgCompiledMigrationHistory) ([]pgRowQueueSource, 
 			return nil, fmt.Errorf("row queue source version order differs")
 		}
 		if i > 0 && !pgQueueInventoryPreserves(inventory.Versions[i-1], version) {
-			return nil, fmt.Errorf("row queue payload removal, move or transformation is unsupported")
+			physical := compiledRowPhysicalHistories[compiledRowHistories[history.Family]]
+			if i != 1 || physical == nil || len(physical.versions) != 2 || !pgQueuePhysicalTransitionMatches(inventory.Versions[i-1], version, physical.versions[i]) {
+				return nil, fmt.Errorf("row queue transformation lacks its exact compiler-linked queue-only physical history")
+			}
 		}
 		value, err := pgRowQueueSourceBinding(history, version)
 		if err != nil {
@@ -42,6 +45,47 @@ func pgRowQueueSources(history PgCompiledMigrationHistory) ([]pgRowQueueSource, 
 		result = append(result, value)
 	}
 	return result, nil
+}
+
+func pgQueuePhysicalTransitionMatches(before, after PgQueueSourceVersion, plan *pgRowPhysicalPlan) bool {
+	if plan == nil || plan.version != 2 || len(plan.windows) != 0 || len(plan.queueConversions) == 0 || plan.schemaSnapshotHash != after.SchemaSnapshotHash || plan.storageSnapshotHash != after.StorageSnapshotHash {
+		return false
+	}
+	old, fresh := map[string]PgQueueSourcePayload{}, map[string]PgQueueSourcePayload{}
+	for _, q := range before.Contracts {
+		for _, p := range q.Payloads {
+			old[q.Queue+"\x00"+p.Job] = p
+		}
+	}
+	for _, q := range after.Contracts {
+		for _, p := range q.Payloads {
+			fresh[q.Queue+"\x00"+p.Job] = p
+		}
+	}
+	if len(old) != len(fresh) {
+		return false
+	}
+	changed := map[string]bool{}
+	for key, p := range old {
+		next, ok := fresh[key]
+		if !ok {
+			return false
+		}
+		if next != p {
+			changed[key] = true
+		}
+	}
+	if len(changed) != len(plan.queueConversions) {
+		return false
+	}
+	for _, c := range plan.queueConversions {
+		key := c.queue + "\x00" + c.job
+		if !changed[key] || old[key].Contract != c.oldContract || fresh[key].Contract != c.newContract {
+			return false
+		}
+		delete(changed, key)
+	}
+	return len(changed) == 0
 }
 
 func pgRowQueueSourceBinding(history PgCompiledMigrationHistory, version PgQueueSourceVersion) (pgRowQueueSource, error) {

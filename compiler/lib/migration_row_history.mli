@@ -24,8 +24,9 @@ val row : binding -> Migration_transform.row
 type t
 val check : schemas:Migration_inventory.t list -> edges:Migration_declaration.t list ->
    (t,Migration_sparse.error list) result
-(** Internal queue-only target planning. Public application emission remains
-    gated until the installed expansion/dispatch protocol consumes this plan. *)
+(** Scoped initial queue-only V1/V2 planning with unchanged entities and retained
+    queue/job membership. Used by ordinary source capture; additive planning and
+    mixed/later queue edges do not acquire this capability. *)
 val check_queue_expansion : schemas:Migration_inventory.t list -> edges:Migration_declaration.t list ->
    (t,Migration_sparse.error list) result
 val retirements : t -> retirement list
