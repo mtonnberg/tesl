@@ -52,7 +52,7 @@ func pgRowQueueConversionFunctions(namespace string) []pgMigrationControlFunctio
   and v.snapshot_hash=p.contract_hash and v.source_abi=p.compiler_abi and v.stored_value_compatibility=p.stored_value_compatibility
  join pg_catalog.pg_database d on d.datname=pg_catalog.current_database()
  where m.id=1 and m.format_version=5 and m.database_uuid=expected and c.database_uuid=m.database_uuid and c.fence_ns=m.fence_ns
-  and c.from_version=1 and c.to_version=2 and st.current=c.to_version;
+   and c.from_version=c.to_version-1 and c.to_version>=2 and st.current=c.to_version;
  if not found then raise exception 'tesl: application queue conversion has no exact completed expansion'; end if;
  -- Hold both real version fence domains required for mutation: source
  -- retirement cannot race this transaction, and target admission is rechecked.
@@ -96,8 +96,8 @@ func pgOpenRowQueueConversion(ctx context.Context, conn *pgx.Conn, namespace str
 		return pgQueueConversionDB{}, err
 	}
 	root := lineage[len(lineage)-1]
-	if root.fromVersion != 1 || root.toVersion != 2 {
-		return pgQueueConversionDB{}, fmt.Errorf("application queue dispatch currently requires the checked V1/V2 edge")
+	if root.fromVersion < 1 || root.toVersion != root.fromVersion+1 {
+		return pgQueueConversionDB{}, fmt.Errorf("application queue dispatch requires an adjacent checked edge")
 	}
 	tx, err := conn.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
 	if err != nil {
@@ -140,11 +140,11 @@ func pgOpenRowQueueConversion(ctx context.Context, conn *pgx.Conn, namespace str
 		return pgQueueConversionDB{}, fmt.Errorf("application queue callback differs from the completed physical target")
 	}
 	history := PgCompiledMigrationHistory{Family: plan.family, Namespace: namespace, SourceCompilerABI: abi, StoredValueCompatibility: compatibility}
-	before, err := pgReadQueueCandidateInventory(ctx, tx, history, 1)
+	before, err := pgReadQueueCandidateInventory(ctx, tx, history, root.fromVersion)
 	if err != nil {
 		return pgQueueConversionDB{}, err
 	}
-	after, err := pgReadQueueCandidateInventory(ctx, tx, history, 2)
+	after, err := pgReadQueueCandidateInventory(ctx, tx, history, root.toVersion)
 	if err != nil {
 		return pgQueueConversionDB{}, err
 	}

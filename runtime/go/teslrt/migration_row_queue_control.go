@@ -19,8 +19,8 @@ func pgStageRowQueueTarget(ctx context.Context, conn *pgx.Conn, namespace string
 	if err != nil {
 		return err
 	}
-	if plan.namespace != namespace || plan.version != 2 || len(plan.queueConversions) == 0 || len(plan.windows) != 0 || len(plan.retirements) != 0 || plan.requiresContractVersion != 0 {
-		return fmt.Errorf("queue target staging requires an exact V2 queue-only physical descriptor")
+	if plan.namespace != namespace || plan.version < 2 || len(plan.queueConversions) == 0 || len(plan.windows) != 0 || len(plan.retirements) != 0 || plan.requiresContractVersion != 0 {
+		return fmt.Errorf("queue target staging requires an exact adjacent queue-only physical descriptor")
 	}
 	tx, err := conn.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
@@ -40,7 +40,7 @@ func pgStageRowQueueTarget(ctx context.Context, conn *pgx.Conn, namespace string
 	ns := quoteIdentifier(namespace) + "."
 	for _, conversion := range plan.queueConversions {
 		var floor int
-		if err := tx.QueryRow(ctx, "select "+ns+"tesl_queue_admit(1,$1)", conversion.queue).Scan(&floor); err != nil {
+		if err := tx.QueryRow(ctx, "select "+ns+"tesl_queue_admit($1,$2)", plan.version-1, conversion.queue).Scan(&floor); err != nil {
 			return err
 		}
 	}
@@ -48,12 +48,12 @@ func pgStageRowQueueTarget(ctx context.Context, conn *pgx.Conn, namespace string
 	if err := tx.QueryRow(ctx, "select current from "+ns+"tesl_schema_state where id=1 for update").Scan(&current); err != nil {
 		return err
 	}
-	if current != 1 {
-		return fmt.Errorf("queue target staging requires the installed V1 source")
+	if current != plan.version-1 || state.MinVersion != current || state.CompatFloor != current {
+		return fmt.Errorf("queue target staging requires the fully retired adjacent source")
 	}
 	var priorDoc []byte
 	var priorHash, abi, compatibility, family string
-	if err := tx.QueryRow(ctx, "select p.contract,p.contract_hash,p.compiler_abi,p.stored_value_compatibility,r.family from "+ns+"tesl_row_physical p cross join "+ns+"tesl_row_versions r where p.version=1 and r.version=1").Scan(&priorDoc, &priorHash, &abi, &compatibility, &family); err != nil {
+	if err := tx.QueryRow(ctx, "select p.contract,p.contract_hash,p.compiler_abi,p.stored_value_compatibility,r.family from "+ns+"tesl_row_physical p cross join "+ns+"tesl_row_versions r where p.version=$1 and r.version=1", current).Scan(&priorDoc, &priorHash, &abi, &compatibility, &family); err != nil {
 		return err
 	}
 	prior, err := pgParseRowPhysicalPlan(hex.EncodeToString(priorDoc), priorHash)
@@ -64,7 +64,7 @@ func pgStageRowQueueTarget(ctx context.Context, conn *pgx.Conn, namespace string
 		return fmt.Errorf("queue target changed the installed entity storage")
 	}
 	var staged int
-	if err := tx.QueryRow(ctx, "select count(*) from "+ns+"tesl_row_queue_conversion_staging where from_version=1 and revision=0").Scan(&staged); err != nil {
+	if err := tx.QueryRow(ctx, "select count(*) from "+ns+"tesl_row_queue_conversion_staging where from_version=$1 and revision=0", current).Scan(&staged); err != nil {
 		return err
 	}
 	if staged != len(plan.queueConversions) {
@@ -74,7 +74,7 @@ func pgStageRowQueueTarget(ctx context.Context, conn *pgx.Conn, namespace string
 		compiledQueueConversionSources.RLock()
 		source := compiledQueueConversionSources.byDigest[conversion.digest]
 		compiledQueueConversionSources.RUnlock()
-		if source == nil || source.parentDigest != "" || source.family != family || source.queue != conversion.queue || source.job != conversion.job || source.fromVersion != 1 || source.toVersion != 2 || source.conversion.children[2].value != compatibility || source.conversion.children[1].value != abi {
+		if source == nil || source.parentDigest != "" || source.family != family || source.queue != conversion.queue || source.job != conversion.job || source.fromVersion != current || source.toVersion != plan.version || source.conversion.children[2].value != compatibility || source.conversion.children[1].value != abi {
 			return fmt.Errorf("queue target has no exact compiler-linked conversion")
 		}
 		if !source.conversion.list(17) || source.conversion.children[13].value != prior.schemaSnapshotHash || source.conversion.children[14].value != plan.schemaSnapshotHash || source.conversion.children[15].value != prior.storageSnapshotHash || source.conversion.children[16].value != plan.storageSnapshotHash {
@@ -92,10 +92,10 @@ func pgStageRowQueueTarget(ctx context.Context, conn *pgx.Conn, namespace string
 			return fmt.Errorf("queue target payload differs from its checked conversion")
 		}
 		var matches bool
-		err = tx.QueryRow(ctx, "select s.database_uuid::text=$1 and s.fence_ns=$2 and s.to_version=2 and s.source_digest=$3 and s.source_document=$4 and s.old_contract=$5 and s.new_contract=$6 and s.inventory_hash=q.inventory_hash and s.expansion_hash=q.expansion_hash and s.old_contract=p.contract from "+ns+`tesl_row_queue_conversion_staging s
+		err = tx.QueryRow(ctx, "select s.database_uuid::text=$1 and s.fence_ns=$2 and s.to_version=$10 and s.source_digest=$3 and s.source_document=$4 and s.old_contract=$5 and s.new_contract=$6 and s.inventory_hash=q.inventory_hash and s.expansion_hash=q.expansion_hash and s.old_contract=p.contract from "+ns+`tesl_row_queue_conversion_staging s
  join `+ns+`tesl_row_queue_sources q on q.version=s.from_version
  join `+ns+`tesl_queue_payloads p on p.version=s.from_version and p.queue=s.queue and p.job_type=s.job_type
- where s.from_version=1 and s.queue=$7 and s.job_type=$8 and s.revision=0`, state.DatabaseUUID, state.FenceNamespace, source.spec.digest, mustQueueConversionDocument(source), old, fresh, source.queue, source.job).Scan(&matches)
+  where s.from_version=$9 and s.queue=$7 and s.job_type=$8 and s.revision=0`, state.DatabaseUUID, state.FenceNamespace, source.spec.digest, mustQueueConversionDocument(source), old, fresh, source.queue, source.job, current, plan.version).Scan(&matches)
 		if err != nil {
 			return err
 		}
@@ -110,9 +110,9 @@ func pgStageRowQueueTarget(ctx context.Context, conn *pgx.Conn, namespace string
 	if err != nil {
 		return err
 	}
-	args := []any{state.DatabaseUUID, state.FenceNamespace, priorHash, raw, digest, abi, compatibility}
+	args := []any{state.DatabaseUUID, state.FenceNamespace, priorHash, raw, digest, abi, compatibility, plan.version}
 	var matches bool
-	err = tx.QueryRow(ctx, "select database_uuid::text=$1 and fence_ns=$2 and predecessor_hash=$3 and contract=$4 and contract_hash=$5 and compiler_abi=$6 and stored_value_compatibility=$7 from "+ns+"tesl_row_queue_target_staging where version=2", args...).Scan(&matches)
+	err = tx.QueryRow(ctx, "select database_uuid::text=$1 and fence_ns=$2 and predecessor_hash=$3 and contract=$4 and contract_hash=$5 and compiler_abi=$6 and stored_value_compatibility=$7 from "+ns+"tesl_row_queue_target_staging where version=$8", args...).Scan(&matches)
 	if err == nil {
 		if !matches {
 			return fmt.Errorf("immutable queue target staging differs")
@@ -122,7 +122,7 @@ func pgStageRowQueueTarget(ctx context.Context, conn *pgx.Conn, namespace string
 	if err != pgx.ErrNoRows {
 		return err
 	}
-	if _, err := tx.Exec(ctx, "insert into "+ns+"tesl_row_queue_target_staging(version,database_uuid,fence_ns,predecessor_hash,contract,contract_hash,compiler_abi,stored_value_compatibility) values(2,$1,$2,$3,$4,$5,$6,$7)", args...); err != nil {
+	if _, err := tx.Exec(ctx, "insert into "+ns+"tesl_row_queue_target_staging(version,database_uuid,fence_ns,predecessor_hash,contract,contract_hash,compiler_abi,stored_value_compatibility) values($8,$1,$2,$3,$4,$5,$6,$7)", args...); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
@@ -213,7 +213,7 @@ func pgStageRowQueueConversions(ctx context.Context, conn *pgx.Conn, namespace s
 	if err := tx.QueryRow(ctx, "select current,min_version from "+ns+"tesl_schema_state where id=1 for update").Scan(&current, &lockedFloor); err != nil {
 		return err
 	}
-	if (current != root.fromVersion && current != root.toVersion) || lockedFloor != floor {
+	if (current != root.fromVersion && current != root.toVersion) || lockedFloor != floor || lockedFloor != root.fromVersion || state.CompatFloor != root.fromVersion {
 		return fmt.Errorf("queue conversion staging requires its admitted source or exact published target")
 	}
 	if current == root.toVersion {
@@ -469,13 +469,13 @@ func mustQueueContractBytes(encoded string) []byte {
 
 // Prepare the protected successor physical manifest and complete queue inventory
 // atomically from the staged target. This does not publish the expansion or grant
-// V2 admission. The unchanged-entity V2 scope keeps all physical operations at zero.
+// Target admission. Unchanged entities keep all physical operations at zero.
 func pgPrepareRowQueueTarget(ctx context.Context, conn *pgx.Conn, namespace string, roles PgMigrationControlRoles, target PgQueueSourceVersion, document, digest string) error {
 	plan, err := pgParseRowPhysicalPlan(document, digest)
 	if err != nil {
 		return err
 	}
-	if plan.namespace != namespace || plan.version != 2 || target.Version != 2 || len(plan.queueConversions) == 0 || target.SchemaSnapshotHash != plan.schemaSnapshotHash || target.StorageSnapshotHash != plan.storageSnapshotHash {
+	if plan.namespace != namespace || plan.version < 2 || target.Version != plan.version || len(plan.queueConversions) == 0 || target.SchemaSnapshotHash != plan.schemaSnapshotHash || target.StorageSnapshotHash != plan.storageSnapshotHash {
 		return fmt.Errorf("queue successor inventory differs from checked target")
 	}
 	tx, err := conn.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
@@ -505,7 +505,7 @@ func pgPrepareRowQueueTarget(ctx context.Context, conn *pgx.Conn, namespace stri
 	var raw []byte
 	var uuid string
 	var fence int
-	if err := tx.QueryRow(ctx, "select predecessor_hash,compiler_abi,stored_value_compatibility,contract,database_uuid::text,fence_ns from "+ns+"tesl_row_queue_target_staging where version=2 and contract_hash=$1", digest).Scan(&prior, &abi, &compatibility, &raw, &uuid, &fence); err != nil {
+	if err := tx.QueryRow(ctx, "select predecessor_hash,compiler_abi,stored_value_compatibility,contract,database_uuid::text,fence_ns from "+ns+"tesl_row_queue_target_staging where version=$2 and contract_hash=$1", digest, plan.version).Scan(&prior, &abi, &compatibility, &raw, &uuid, &fence); err != nil {
 		return err
 	}
 	if uuid != state.DatabaseUUID || fence != state.FenceNamespace || hex.EncodeToString(raw) != document {
@@ -520,20 +520,20 @@ func pgPrepareRowQueueTarget(ctx context.Context, conn *pgx.Conn, namespace stri
 	if err != nil {
 		return err
 	}
-	if _, err := tx.Exec(ctx, "select "+ns+"tesl_register_row_physical(2,$1,$2,$3,$4,$5,0,false)", prior, raw, digest, abi, compatibility); err != nil {
+	if _, err := tx.Exec(ctx, "select "+ns+"tesl_register_row_physical($6,$1,$2,$3,$4,$5,0,false)", prior, raw, digest, abi, compatibility, plan.version); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(ctx, "select "+ns+"tesl_register_row_queue_source($1,2,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,$11)", plan.family, target.StorageSnapshotHash, target.SchemaSnapshotHash, abi, compatibility, target.SourceSealInventory, source.inventoryHash, string(contracts), []byte(source.binding), source.bindingHash, digest); err != nil {
+	if _, err := tx.Exec(ctx, "select "+ns+"tesl_register_row_queue_source($1,$12,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,$11)", plan.family, target.StorageSnapshotHash, target.SchemaSnapshotHash, abi, compatibility, target.SourceSealInventory, source.inventoryHash, string(contracts), []byte(source.binding), source.bindingHash, digest, plan.version); err != nil {
 		return err
 	}
-	before, err := pgReadQueueCandidateInventory(ctx, tx, history, 1)
+	before, err := pgReadQueueCandidateInventory(ctx, tx, history, plan.version-1)
 	if err != nil {
 		return err
 	}
 	if err := pgVerifyRowQueueTransition(ctx, tx, namespace, state, before.Version, target); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(ctx, "select "+ns+"tesl_begin_expansion(2,$1,$1,$2,$3,0,false)", digest, abi, compatibility); err != nil {
+	if _, err := tx.Exec(ctx, "select "+ns+"tesl_begin_expansion($4,$1,$1,$2,$3,0,false)", digest, abi, compatibility, plan.version); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
@@ -554,8 +554,8 @@ func pgPublishRowQueueTarget(ctx context.Context, conn *pgx.Conn, namespace stri
 	}); err != nil {
 		return err
 	}
-	if initial.Current != 1 && initial.Current != 2 {
-		return fmt.Errorf("queue target publication requires V1 or its exact V2 replay")
+	if initial.Current != target.Version-1 && initial.Current != target.Version {
+		return fmt.Errorf("queue target publication requires its adjacent source or exact target replay")
 	}
 	ns := quoteIdentifier(namespace) + "."
 	return pgRowCompatibilityDrain(ctx, conn, initial.FenceNamespace, initial.MinVersion, initial.Current, "queue-target", func() error {
@@ -571,7 +571,7 @@ func pgPublishRowQueueTarget(ctx context.Context, conn *pgx.Conn, namespace stri
 			var physicalHash string
 			var preserving bool
 			var ops int
-			if err := tx.QueryRow(ctx, "select contract,contract_hash,epoch_preserving,operation_count from "+ns+"tesl_row_physical where version=2").Scan(&physicalDoc, &physicalHash, &preserving, &ops); err != nil {
+			if err := tx.QueryRow(ctx, "select contract,contract_hash,epoch_preserving,operation_count from "+ns+"tesl_row_physical where version=$1", target.Version).Scan(&physicalDoc, &physicalHash, &preserving, &ops); err != nil {
 				return err
 			}
 			if hex.EncodeToString(physicalDoc) != document || physicalHash != digest || preserving || ops != 0 {
@@ -582,11 +582,11 @@ func pgPublishRowQueueTarget(ctx context.Context, conn *pgx.Conn, namespace stri
 				return err
 			}
 			history := PgCompiledMigrationHistory{Family: family, Namespace: namespace, SourceCompilerABI: abi, StoredValueCompatibility: compatibility}
-			before, err := pgReadQueueCandidateInventory(ctx, tx, history, 1)
+			before, err := pgReadQueueCandidateInventory(ctx, tx, history, target.Version-1)
 			if err != nil {
 				return err
 			}
-			after, err := pgReadQueueCandidateInventory(ctx, tx, history, 2)
+			after, err := pgReadQueueCandidateInventory(ctx, tx, history, target.Version)
 			if err != nil {
 				return err
 			}
@@ -596,7 +596,7 @@ func pgPublishRowQueueTarget(ctx context.Context, conn *pgx.Conn, namespace stri
 			if err := pgVerifyRowQueueTransition(ctx, tx, namespace, state, before.Version, after.Version); err != nil {
 				return err
 			}
-			_, err = tx.Exec(ctx, "select "+ns+"tesl_record_expanded(2)")
+			_, err = tx.Exec(ctx, "select "+ns+"tesl_record_expanded($1)", target.Version)
 			return err
 		})
 	})

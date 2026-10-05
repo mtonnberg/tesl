@@ -370,7 +370,7 @@ func pgReadQueueHistory(history PgCompiledMigrationHistory, payload string, init
 					r.fail("invalid queue source transition")
 					continue
 				}
-				if plan.family != family || plan.namespace != namespace || plan.version != 2 || len(versions) != 2 || transitions[plan.version] != nil || !pgQueuePhysicalTransitionMatches(versions[0], versions[1], plan) {
+				if plan.family != family || plan.namespace != namespace || plan.version < 2 || plan.version > len(versions) || transitions[plan.version] != nil || !pgQueuePhysicalTransitionMatches(versions[plan.version-2], versions[plan.version-1], plan) {
 					r.fail("queue source transition differs from exact adjacent inventories")
 					continue
 				}

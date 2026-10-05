@@ -6,8 +6,8 @@ This records the compiler prerequisite for `roadmap/next/queue-payload-migration
 Fresh format-5 Worker applications now support unchanged versioned payloads,
 fenced attempts and atomic additive-epoch retirement; see
 [lesson 95](../example/learn/lesson95-retiring-unchanged-queue-payloads.md).
-Changed payloads now support the initial queue-only V1/V2 application rollout,
-typed repair deployment and Contract; later/mixed queue edges remain gated.
+Changed payloads support consecutive queue-only application upgrades, typed repair
+deployment and Contract. Mixed entity/queue changes and membership changes remain gated.
 
 ## Source ownership
 
@@ -267,7 +267,7 @@ table fail the exact catalog check. There is no implicit upgrade/adoption path.
 
 ### Initial public queue upgrade
 
-Ordinary application builds now emit adapters for one queue-only V1/V2 edge with
+Ordinary application builds emit adapters for consecutive queue-only edges with
 unchanged entities and exact retained queue/job membership. The entry package links
 the generated adapters so the runtime has typed executables at worker startup.
 Queue companion v2 includes checked physical transition documents; its reader
@@ -294,9 +294,13 @@ old payloads, claims and attempts and retiring instances reporting within 30 sec
 the recent-instance check is repeated under the source-writer and compatibility
 drain. Receipt and both admission floors commit atomically. A restarted Worker
 validates the completed history instead of attempting to register the transition
-again. Subsequent queue upgrades and mixed row/queue transforms remain pending.
-The generated PostgreSQL witness uses ordinary compiled V1, V2 and repaired-V2
-applications and public commands with original sources absent.
+again. Each later queue upgrade requires its exact fully retired adjacent predecessor;
+source and retirement authority remain edge-scoped. Mixed row/queue transforms
+remain pending. The generated PostgreSQL witness uses ordinary compiled V1, V2 and
+repaired-V2 applications and public commands with original sources absent. The
+runnable [three-upgrade example](../example/queue-three-upgrades/README.md) separately
+builds and executes original V1 plus normal/repaired V2, V3 and V4 applications,
+including late enqueue, immutable prior-receipt verification and typed V4 completion.
 
 ### Application-bound mutation
 

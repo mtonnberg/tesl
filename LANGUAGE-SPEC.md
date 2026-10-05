@@ -1127,19 +1127,20 @@ payload and returning `Migrated` of the same target payload. Source/target
 contracts, codecs and queue identity remain exact. Fixtures must reproduce each
 predecessor's rejection before the repair test can run. `QueueRepair` is contextual
 source syntax, not a runtime value or permission to mutate quarantined jobs.
-Ordinary Go application builds now support the initial queue-only V1/V2 edge
+Ordinary Go application builds now support consecutive queue-only edges
 with unchanged stored entities and exact retained queue/job membership. The
 application emits compiler-bound byte adapters and a checked physical transition
-in the queue companion. Upgrade installation requires an expanded V1 predecessor;
+in the queue companion. The initial upgrade requires an expanded V1 predecessor;
+each subsequent upgrade requires its exact fully retired adjacent predecessor.
 the normal Worker command publishes the checked target and runs bounded conversion
 turns. A rejected payload remains quarantined at its original version. Mixed
-entity/queue changes, further queue edges and queue/job additions or removals on
+entity/queue changes and queue/job additions or removals on
 this narrowing edge remain refused with MIG028. Additive physical planning does
 not infer conversion authority from a later installation origin. Explicitly
-importing the checked `QueueRepair` module into the V2 application links its complete
+importing the checked `QueueRepair` module into the target application links its complete
 lineage. Reinstalling that binary stages consecutive immutable repair revisions;
 its Worker retries the original quarantined bytes. Competing repair branches are
-refused. `--schema contract V2` retires this queue-only edge after all old payloads,
+refused. `--schema contract Vn` retires the current queue-only edge after all old payloads,
 claims and attempts are gone and no retiring instance has reported in the preceding
 30 seconds. It drains both source-writer and compatibility domains and atomically
 records finality and both admission floors. Installed repair and retirement replay

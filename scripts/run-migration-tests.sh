@@ -97,4 +97,5 @@ if (( $# == 0 )); then
   (cd "$repo_root/compiler" && dune build test/test_migration_table_drop_postgres.exe && dune exec --no-build ./test/test_migration_table_drop_postgres.exe)
   go test -race -count=1 -timeout=120s -tags=tesl_migration_test ./teslrt -run '^(TestRowRetirement|TestRowTableContract|TestPgRowTableContract|TestPgRowTableDrop)'
   python3 "$repo_root/example/db-three-upgrades/run.py" --output "$migration_tmp/three-upgrades-example"
+  python3 "$repo_root/example/queue-three-upgrades/run.py" --output "$migration_tmp/queue-three-upgrades-example"
 fi

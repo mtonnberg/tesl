@@ -1,6 +1,6 @@
 (** Sealed source evidence for a same-identity queue payload conversion.
     This is not installed decoder, claim, repair or retirement authority.
-    The scoped public queue-only V1/V2 protocol separately consumes and verifies
+    The scoped public consecutive queue-only protocol separately consumes and verifies
     the complete descriptor against the installed application. *)
 type t
 val check : project_root:string -> before:Migration_inventory.t -> after:Migration_inventory.t ->

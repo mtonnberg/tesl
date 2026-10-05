@@ -136,8 +136,8 @@ func pgParseRowPhysicalShape(contract, hash string, settled bool) (*pgRowPhysica
 			}
 			plan.queueConversions = append(plan.queueConversions, c)
 		}
-		if plan.version != 2 || len(plan.queueConversions) == 0 || len(sequence(n.children[7])) != 0 {
-			r.fail("queue physical plan requires a V2 queue-only transition")
+		if plan.version < 2 || len(plan.queueConversions) == 0 || len(sequence(n.children[7])) != 0 {
+			r.fail("queue physical plan requires an adjacent queue-only transition")
 		}
 	}
 	legacyFormat := n.children[0].isAtom("tesl-retained-physical-version-v4")

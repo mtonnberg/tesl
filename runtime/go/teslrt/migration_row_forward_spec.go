@@ -47,7 +47,8 @@ begin
  raise exception 'tesl: row manifest predecessor is not final baseline'; end if;
  select * into p from ` + ns + `tesl_row_physical where version=v-1;
  if not found or p.stored_value_compatibility is distinct from compatibility or
- not ((p.epoch_preserving and p.contract_hash=prior and exists(select 1 from ` + ns + `tesl_schema_versions where version=v-1 and step='expanded')) or exists(select 1 from ` + ns + `tesl_row_contracts c join ` + ns + `tesl_schema_versions prior_version on prior_version.version=c.version and prior_version.step='contracted' and prior_version.artefact_hash=c.contract_hash where c.version=v-1 and c.settled_hash=prior)) then
+  not ((p.epoch_preserving and p.contract_hash=prior and exists(select 1 from ` + ns + `tesl_schema_versions where version=v-1 and step='expanded')) or exists(select 1 from ` + ns + `tesl_row_contracts c join ` + ns + `tesl_schema_versions prior_version on prior_version.version=c.version and prior_version.step='contracted' and prior_version.artefact_hash=c.contract_hash where c.version=v-1 and c.settled_hash=prior)
+   or (p.contract_hash=prior and s.min_version=v-1 and s.compat_floor=v-1 and exists(select 1 from ` + ns + `tesl_row_queue_retirements c join ` + ns + `tesl_schema_versions prior_version on prior_version.version=c.version and prior_version.step='contracted' and prior_version.artefact_hash=c.retirement_hash and prior_version.source_abi=c.compiler_abi where c.version=v-1))) then
  raise exception 'tesl: row manifest predecessor identity differs'; end if;
  if not preserving and s.min_version<v-1 then raise exception 'tesl: close additive epoch first: app --schema close-epoch --through V%',v-1; end if;
  if s.current=v and not exists(select 1 from ` + ns + `tesl_row_physical where version=v) then

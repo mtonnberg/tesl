@@ -34,7 +34,7 @@ func pgRowQueueSources(history PgCompiledMigrationHistory) ([]pgRowQueueSource, 
 		}
 		if i > 0 && !pgQueueInventoryPreserves(inventory.Versions[i-1], version) {
 			physical := compiledRowPhysicalHistories[compiledRowHistories[history.Family]]
-			if i != 1 || physical == nil || len(physical.versions) != 2 || !pgQueuePhysicalTransitionMatches(inventory.Versions[i-1], version, physical.versions[i]) {
+			if physical == nil || i >= len(physical.versions) || !pgQueuePhysicalTransitionMatches(inventory.Versions[i-1], version, physical.versions[i]) {
 				return nil, fmt.Errorf("row queue transformation lacks its exact compiler-linked queue-only physical history")
 			}
 		}
@@ -48,7 +48,7 @@ func pgRowQueueSources(history PgCompiledMigrationHistory) ([]pgRowQueueSource, 
 }
 
 func pgQueuePhysicalTransitionMatches(before, after PgQueueSourceVersion, plan *pgRowPhysicalPlan) bool {
-	if plan == nil || plan.version != 2 || len(plan.windows) != 0 || len(plan.queueConversions) == 0 || plan.schemaSnapshotHash != after.SchemaSnapshotHash || plan.storageSnapshotHash != after.StorageSnapshotHash {
+	if plan == nil || before.Version < 1 || after.Version != before.Version+1 || plan.version != after.Version || len(plan.windows) != 0 || len(plan.queueConversions) == 0 || plan.schemaSnapshotHash != after.SchemaSnapshotHash || plan.storageSnapshotHash != after.StorageSnapshotHash {
 		return false
 	}
 	old, fresh := map[string]PgQueueSourcePayload{}, map[string]PgQueueSourcePayload{}

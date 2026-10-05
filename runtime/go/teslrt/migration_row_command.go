@@ -72,8 +72,8 @@ func pgRunRowSchemaCommand(serviceContext context.Context, command pgSchemaComma
 				if err != nil {
 					return err
 				}
-				if state.Current != 1 && state.Current != 2 {
-					return fmt.Errorf("queue upgrade installation requires an expanded V1 predecessor")
+				if (state.Current != b.target.version-1 && state.Current != b.target.version) || (state.Current == b.target.version-1 && (state.MinVersion != state.Current || state.CompatFloor != state.Current)) {
+					return fmt.Errorf("queue upgrade installation requires its fully retired adjacent predecessor")
 				}
 				return nil
 			}); err != nil {
@@ -89,7 +89,7 @@ func pgRunRowSchemaCommand(serviceContext context.Context, command pgSchemaComma
 			if err != nil {
 				return err
 			}
-			if state.Current == 1 || state.MinVersion < 2 {
+			if state.Current == b.target.version-1 || state.MinVersion < b.target.version {
 				for _, digest := range digests {
 					if err := pgStageRowQueueConversions(ctx, conn, b.history.Namespace, roles, digest); err != nil {
 						return err
@@ -112,7 +112,7 @@ func pgRunRowSchemaCommand(serviceContext context.Context, command pgSchemaComma
 			}); err != nil {
 				return err
 			}
-			if state.Current == 1 {
+			if state.Current == b.target.version-1 {
 				if err := pgStageRowQueueTarget(ctx, conn, b.history.Namespace, roles, b.target.contract, b.target.hash); err != nil {
 					return err
 				}
@@ -121,8 +121,8 @@ func pgRunRowSchemaCommand(serviceContext context.Context, command pgSchemaComma
 		return pgWriteSchemaInstallation(out, command.json, b.history, state, roles)
 	case "worker":
 		if b.target != nil && len(b.target.queueConversions) > 0 {
-			if b.target.version != 2 || len(b.queues) != 2 {
-				return fmt.Errorf("queue worker requires the initial queue-only V1/V2 edge")
+			if b.target.version < 2 || len(b.queues) != b.target.version {
+				return fmt.Errorf("queue worker requires a complete consecutive queue-only history")
 			}
 			var state PgMigrationControlState
 			if err := pgControlTransaction(ctx, conn, false, func(tx pgx.Tx) error {
@@ -142,8 +142,8 @@ func pgRunRowSchemaCommand(serviceContext context.Context, command pgSchemaComma
 			}); err != nil {
 				return err
 			}
-			if state.Current != 2 {
-				if err := pgPublishRowQueueTarget(ctx, conn, b.history.Namespace, roles, b.queues[1].version, b.target.contract, b.target.hash); err != nil {
+			if state.Current != b.target.version {
+				if err := pgPublishRowQueueTarget(ctx, conn, b.history.Namespace, roles, b.queues[b.target.version-1].version, b.target.contract, b.target.hash); err != nil {
 					return err
 				}
 			}
@@ -152,10 +152,10 @@ func pgRunRowSchemaCommand(serviceContext context.Context, command pgSchemaComma
 				if err := json.NewEncoder(out).Encode(struct {
 					Kind           string `json:"kind"`
 					CurrentVersion int    `json:"currentVersion"`
-				}{"schema-worker-ready", 2}); err != nil {
+				}{"schema-worker-ready", b.target.version}); err != nil {
 					return err
 				}
-			} else if _, err := fmt.Fprintln(out, "schema queue worker ready at V2"); err != nil {
+			} else if _, err := fmt.Fprintf(out, "schema queue worker ready at V%d\n", b.target.version); err != nil {
 				return err
 			}
 			for serviceContext.Err() == nil {

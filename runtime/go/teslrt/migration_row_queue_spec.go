@@ -90,7 +90,7 @@ end`},
 begin
  if ` + ns + `tesl_queue_inventory_preserves(old_contracts,new_contracts)
   and not exists(select 1 from ` + ns + `tesl_row_queue_target_staging where version=v) then return true; end if;
- if v is distinct from 2 then return false; end if;
+  if v is null or v<2 or v>2147483646 then return false; end if;
  if not exists(select 1 from ` + ns + `tesl_row_queue_target_staging t
  join ` + ns + `tesl_schema_meta m on m.id=1 and m.database_uuid=t.database_uuid and m.fence_ns=t.fence_ns
  join ` + ns + `tesl_row_physical p on p.version=t.version and p.contract=t.contract and p.contract_hash=t.contract_hash

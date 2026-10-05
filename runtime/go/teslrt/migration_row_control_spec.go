@@ -54,7 +54,7 @@ func pgRowControlTables() []pgMigrationControlTable {
  check((revision=0 and parent_digest='') or (revision>0 and parent_digest ~ '^[0-9a-f]{64}$')),
  check(inventory_hash ~ '^[0-9a-f]{64}$'), check(expansion_hash ~ '^[0-9a-f]{64}$')`},
 		{"tesl_row_queue_target_staging", `
- version integer primary key check(version=2), database_uuid uuid not null,
+ version integer primary key check(version between 2 and 2147483646), database_uuid uuid not null,
  fence_ns integer not null check(fence_ns between 1 and 2147483646),
  predecessor_hash text not null check(predecessor_hash ~ '^[0-9a-f]{64}$'),
  contract bytea not null, contract_hash text not null,

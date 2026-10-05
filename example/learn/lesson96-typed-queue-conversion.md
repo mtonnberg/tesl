@@ -3,9 +3,9 @@
 You can test a queue conversion as an ordinary pure Tesl function before it is
 connected to durable queue processing. The compiler binds conversion and repair
 functions to their exact old/new payload types and codecs and emits fixture tests.
-The initial queue-only V1/V2 application rollout now compiles and runs through
+Consecutive queue-only application upgrades now compile and run through
 public installer/worker commands, separately deployed typed repairs, and
-`--schema contract V2`. Later/mixed queue histories still refuse with MIG028.
+`--schema contract Vn`. Mixed entity/queue changes still refuse with MIG028.
 
 For retirement of unchanged payloads, use
 [lesson 95](lesson95-retiring-unchanged-queue-payloads.md).
@@ -316,7 +316,7 @@ repair and successful repair using successive one-job turns, without passing a
 callback or job ID to the dispatcher. A staged descriptor without linked code is
 refused before mutation. The public schema worker uses this scheduling entry point.
 
-The initial public conversion path is now available for unchanged entities and
+The public conversion path is available for unchanged entities and
 retained queue/job membership. Install and expand the V1 app first, then use the
 V2 binary's normal installer command to stage the checked edge and its Worker
 command to publish and convert retained jobs. Tests start both the real Worker
@@ -347,6 +347,13 @@ has recently reported. On success it drains the actual source-writer and
 compatibility locks and commits the finality receipt and both admission floors
 together. Repeating install/Contract and restarting the V2 worker remain checked;
 a new repair cannot be installed after retirement.
+
+Further queue-only upgrades require the exact retired adjacent predecessor;
+its immutable receipt and physical/source inventory are checked before staging
+the new edge. The runnable [three-upgrade example](../queue-three-upgrades/README.md)
+builds original V1 and separate normal/repaired V2, V3 and V4 binaries, then runs
+all three public lifecycles on one database. Its final ordinary Request application
+processes the retained jobs using the V4 codec, while the original receipt survives.
 
 The internal application retirement test now closes this queue-only edge under
 the real V1 writer and compatibility locks. Pending old jobs, quarantines and

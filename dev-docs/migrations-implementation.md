@@ -15,14 +15,15 @@ PostgreSQL lifecycles. Checked queue converters and their pure byte adapters
 also execute. The initial queue-only V1/V2 edge now compiles and runs through
 ordinary installation/worker commands, including retained conversion, rejection,
 separately compiled repair deployment and `--schema contract V2` retirement.
-Repeated ordinary queue upgrades and mixed histories remain incomplete.
+Repeated ordinary queue upgrades now execute through public commands; mixed
+entity/queue histories remain incomplete.
 
 The public-command regression now covers one ordinary V1/V2 queue application built from
 frozen source, with no test-only metadata patches: enqueue an old-shaped job,
 deploy its checked converter, claim/convert/process it with V2, reject another
 job without losing its original bytes, repair that job through a separately
-checked repair revision, and retire V1 only after finality. The next acceptance
-target is repeated ordinary queue deployments on the same database.
+checked repair revision, and retire V1 only after finality. A separate runnable
+example now exercises three consecutive ordinary queue deployments on one database.
 
 Compatibility direction: prioritize a fresh-install ordinary-application rollout.
 The maintainer accepts breaking the old control catalog rather than spending
@@ -57,6 +58,28 @@ The evidence below records earlier milestones; it does not supersede these
 remaining integration requirements.
 
 ### Implementation and verification evidence
+
+After `e5cc6cb` (the mixed V1–V4 row-data example), the public queue protocol now
+consumes consecutive unchanged-entity edges. The source planner and companion
+reader bind every adjacent inventory to its physical descriptor. Source/target
+staging, publication, conversion and retirement use the actual edge versions;
+retirement receipts remain canonical and edge-scoped. Physical registration accepts
+a non-additive queue predecessor only with its exact completed retirement, both
+floors and retained physical hash. Installed history re-verifies all earlier
+receipts and lineages, including after later retirement and job deletion.
+
+`example/queue-three-upgrades/` builds seven standalone binaries through guarded
+public source previews: original V1 and normal/repaired V2, V3 and V4. Its private
+PostgreSQL runner passes three ordinary conversion → rejection → repair → Contract
+cycles, late predecessor arrivals, unretired successor refusal, fresh rehashed
+retirement substitution refusal, Contract replay and Worker restart. The retained
+payload's numeric meaning advances 7 → 17 → 27, all six descriptors and three
+retirement receipts remain, and the UUID/original receipt stay unchanged. The
+ordinary V4 HTTP Request process executes its typed handler and acknowledges all
+seven jobs; receipts survive completion. No candidate bridge or patched source
+history grants execution. The default migration gate now includes this example
+alongside the varied non-additive row-data example. Mixed entity/queue changes and
+membership changes remain gated; the full default gate has not yet been rerun.
 
 WIP commit `ba79df7` records the runnable ordinary three-release row example.
 WIP commit `ef9c032` records the initial public queue V1/V2 conversion, repair
