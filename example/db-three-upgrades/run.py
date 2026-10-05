@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build and exercise ordinary V1/V2/V3 Retype applications on private PostgreSQL."""
+"""Exercise three distinct non-additive upgrades with ordinary V1–V4 applications."""
 import argparse
 import hashlib
 import json
@@ -65,7 +65,7 @@ def build_versions(output, compiler, env):
     current = source / "schema/notes/v-current.tesl"
     shutil.copyfile(EXAMPLE / "schema/notes/v-current.tesl", current)
     entry = source / "app.tesl"
-    for version in (1, 2, 3):
+    for version in (1, 2, 3, 4):
         if version > 1:
             apply_preview(compiler, entry, env, "generate", "--new-revision")
             shutil.copyfile(EXAMPLE / f"versions/v{version}.tesl", current)
@@ -86,7 +86,7 @@ def build_versions(output, compiler, env):
         command([compiler, "--backend", "go", entry, "--out", release / "go"], env=env)
         command(["go", "test", "-race", "-p", "1", "./..."], cwd=release / "go", env=env, timeout=180)
         command(["go", "build", "-race", "-o", release / "app", "./cmd/app"], cwd=release / "go", env=env)
-        if version > 1:
+        if version in (2, 3):
             expected = f'metadata__v{version}'
             if expected not in current.read_text():
                 raise RuntimeError(f"refresh did not select {expected}")
@@ -176,6 +176,12 @@ def exercise(output, env):
         eventually(ready)
         return proc, number
 
+    def note(number, identity="one"):
+        return next(row for row in request(number, "GET", "/notes") if row["id"] == identity)
+
+    def columns():
+        return json.loads(sql("select json_agg(column_name order by ordinal_position) from information_schema.columns where table_schema='notes' and table_name='notes'"))
+
     try:
         sql("create role demo_owner nologin; create role demo_worker login; create role demo_request login")
         sql("create database three_upgrades")
@@ -186,9 +192,11 @@ def exercise(output, env):
         worker, _ = serve(1, True)
         old, old_port = serve(1)
         assert request(old_port, "POST", "/seed") == "created"
-        assert request(old_port, "GET", "/notes")[0]["metadata"] == {"oldText": "kept"}
-        for version in (2, 3):
-            assert request(old_port, "PUT", "/block") == "blocked"
+        assert note(old_port)["metadata"] == {"oldText": "kept"}
+        for version in (2, 3, 4):
+            title_change = version == 4
+            prefix = "/title-" if title_change else "/"
+            assert request(old_port, "PUT", prefix + "block") == "blocked"
             stop(worker)
             worker, _ = serve(version, True)
             current_proc, current_port = serve(version)
@@ -202,33 +210,71 @@ def exercise(output, env):
                 raise RuntimeError(f"Contract failed for an unexpected reason: {diagnostic}")
             if sql("select min_version from notes.tesl_schema_state") != str(version - 1):
                 raise RuntimeError("failed Contract advanced the admission floor")
+            if sql("select compat_floor from notes.tesl_schema_state") != str(version - 1):
+                raise RuntimeError("failed Contract advanced the compatibility floor")
             # Repair through the still-admitted predecessor, exercising reverse
             # writes/invalidation rather than manually editing stored metadata.
-            assert request(old_port, "PUT", "/repair") == "repaired"
+            assert request(old_port, "PUT", prefix + "repair") == "repaired"
             def readable():
-                rows = request(current_port, "GET", "/notes")
-                value = rows[0]["metadata"]
+                row = note(current_port)
+                if title_change:
+                    return row["title"] == "repaired"
+                value = row["metadata"]
                 return value.get("message" if version == 2 else "body") == "repaired"
             eventually(readable)
-            assert request(old_port, "PUT", "/edit") == "edited"
+            assert request(old_port, "PUT", prefix + "edit") == "edited"
             def edited():
-                value = request(current_port, "GET", "/notes")[0]["metadata"]
+                row = note(current_port)
+                if title_change:
+                    return row["title"] == "edited"
+                value = row["metadata"]
                 return value.get("message" if version == 2 else "body") == "edited"
             eventually(edited)
+            assert note(current_port)["owner"] == "original-owner"
+            if version == 2:
+                assert note(old_port)["author"] == note(current_port)["owner"]
+                assert request(old_port, "POST", "/late") == "created"
+                eventually(lambda: note(current_port, "late")["owner"] == "original-owner")
+            if version == 3:
+                if "memo" not in columns():
+                    raise RuntimeError("removed field disappeared before Contract")
+                assert request(current_port, "POST", "/current") == "created"
+                assert note(old_port, "current")["memo"] == "legacy-default"
+                assert note(old_port)["memo"] == "retained-memo"
+                assert "memo" not in note(current_port)
+            if version == 4:
+                before = note(current_port)
+                assert request(current_port, "PUT", "/title-block") == "invalid"
+                assert note(current_port) == before
             stop(old)
             schema(version, "demo_worker", "contract", f"V{version}")
             assert sql("select min_version from notes.tesl_schema_state") == str(version)
-            columns = json.loads(sql("select json_agg(column_name order by ordinal_position) from information_schema.columns where table_schema='notes' and table_name='notes'"))
-            if f"metadata__v{version}" not in columns or ("metadata" if version == 2 else "metadata__v2") in columns:
-                raise RuntimeError(f"wrong physical cleanup: {columns}")
-            value = request(current_port, "GET", "/notes")[0]["metadata"]
+            assert sql("select compat_floor from notes.tesl_schema_state") == str(version)
+            physical = columns()
+            if "owner" not in physical or "author" in physical:
+                raise RuntimeError(f"Contract did not finish the renamed field: {physical}")
+            if version in (2, 3) and (f"metadata__v{version}" not in physical or ("metadata" if version == 2 else "metadata__v2") in physical):
+                raise RuntimeError(f"wrong physical cleanup: {physical}")
+            if version >= 3 and "memo" in physical:
+                raise RuntimeError(f"Contract retained the removed field: {physical}")
+            if version == 4 and ("metadata__v3" not in physical or "metadata__v4" in physical):
+                raise RuntimeError(f"proof-only upgrade unnecessarily replaced JSONB: {physical}")
+            value = note(current_port)["metadata"]
             expected = {"message": "edited", "detail": "migrated-v2"} if version == 2 else {
                 "body": "edited", "origin": "writer-v2", "revision": 3}
             if value != expected:
                 raise RuntimeError(f"migration lost retained metadata: {value!r}; expected {expected!r}")
-            print(f"V{version - 1} → V{version}: rejection, repair, late old write and Contract passed", flush=True)
+            # Exact replay and surviving-version restart consume the same receipts.
+            schema(version, "demo_worker", "contract", f"V{version}")
+            stop(worker)
+            worker, _ = serve(version, True)
+            assert note(current_port)["owner"] == "original-owner"
+            kind = {2: "Retype/WriteBack + Rename", 3: "Retype/WriteBack + Legacy removal", 4: "proof Revalidate"}[version]
+            print(f"V{version - 1} → V{version}: {kind}; rejection, repair, overlap and Contract passed", flush=True)
             old, old_port = current_proc, current_port
-        print("PASS: ordinary V1 → V2 → V3 non-additive rollout on one PostgreSQL database", flush=True)
+        assert sql("select count(*) from notes.notes") == "3"
+        assert sql("select string_agg(version::text,',' order by version) from notes.tesl_schema_versions where step='contracted' and version>1") == "2,3,4"
+        print("PASS: ordinary V1 → V2 → V3 → V4 mixed non-additive rollout on one PostgreSQL database", flush=True)
     finally:
         for proc, log in reversed(processes):
             stop(proc); log.close()
@@ -250,8 +296,8 @@ def main():
         parser.error("output directory must not already exist")
     env = dict(os.environ, TESL_REPO_ROOT=str(REPO))
     if args.run_built:
-        if not all((output / f"v{version}/app").is_file() for version in (1, 2, 3)):
-            parser.error("--run-built requires existing V1/V2/V3 release binaries")
+        if not all((output / f"v{version}/app").is_file() for version in (1, 2, 3, 4)):
+            parser.error("--run-built requires existing V1/V2/V3/V4 release binaries")
     else:
         output.mkdir(parents=True)
         build_versions(output, args.compiler.absolute(), env)

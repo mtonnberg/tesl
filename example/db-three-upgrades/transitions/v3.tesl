@@ -1,5 +1,6 @@
 module Schema.Notes.Migrate.V3 exposing [migration, fixture]
 import Tesl.Migration exposing [Migration, Entity(..), Rule(..), Migrated(..)]
+import Tesl.Maybe exposing [Maybe(..)]
 import Schema.Notes.V2
 import Schema.Notes.VCurrent
 
@@ -7,7 +8,7 @@ migration = Migration {
 from: Schema.Notes.V2
 to: Schema.Notes.VCurrent
 same: []
-entities: { Note: Migrate convert [Retype metadata, WriteBack metadata metadata backward] }
+entities: { Note: Migrate convert [Legacy memo "legacy-default", Retype metadata, WriteBack metadata metadata backward] }
 fixtures: [fixture]
 }
 fn convert(old: Schema.Notes.V2.Note) -> Migrated Schema.Notes.VCurrent.Note =
@@ -15,9 +16,11 @@ if old.metadata.text == "blocked" then
   Reject "blocked V2 metadata"
 else
   Row (Schema.Notes.VCurrent.Note {
-  id: old.id
+   id: old.id
+   owner: old.owner
+   title: old.title
   metadata: Schema.Notes.VCurrent.Metadata { body: old.metadata.text, origin: old.metadata.detail, revision: 3 }
   })
 fn backward(row: Schema.Notes.VCurrent.Note) -> Schema.Notes.V2.Metadata =
 Schema.Notes.V2.Metadata { text: row.metadata.body, detail: row.metadata.origin }
-fn fixture() -> Schema.Notes.V2.Note = Schema.Notes.V2.makeNote "fixture" "kept"
+fn fixture() -> Maybe Schema.Notes.V2.Note = Schema.Notes.V2.makeNote "fixture" "kept"

@@ -1,0 +1,25 @@
+module Schema.Notes.VCurrent exposing [Note, Metadata, makeNote, makeMetadata, tryTitle, AllowedTitle]
+import Tesl.Prelude exposing [String, Int, Bool(..)]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.Json exposing [stringCodec, intCodec]
+
+record Metadata { body: String, origin: String, revision: Int }
+codec Metadata {
+  toJson { body -> "body" with_codec stringCodec, origin -> "origin" with_codec stringCodec, revision -> "revision" with_codec intCodec }
+  fromJson [ { body <- "body" with_codec stringCodec, origin <- "origin" with_codec stringCodec, revision <- "revision" with_codec intCodec } ]
+}
+fact AllowedTitle (value: String)
+establish tryTitle(value: String) -> Maybe (v: String ::: AllowedTitle v) =
+  if value == "" then
+    Nothing
+  else
+    if value == "blocked" then
+      Nothing
+    else
+      Something (value ::: AllowedTitle value)
+entity Note table "notes" primaryKey id { id: String, metadata: Metadata @column("metadata__v3"), owner: String, title: String ::: AllowedTitle title }
+fn makeMetadata(text: String) -> Metadata = Metadata { body: text, origin: "writer-v3", revision: 3 }
+fn makeNote(id: String, text: String) -> Maybe Note =
+  case tryTitle text of
+    Nothing -> Nothing
+    Something title -> Something (Note { id: id, metadata: makeMetadata text, owner: "writer-v4", title: title })

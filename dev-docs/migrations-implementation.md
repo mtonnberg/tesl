@@ -59,6 +59,21 @@ remaining integration requirements.
 ### Implementation and verification evidence
 
 WIP commit `ba79df7` records the runnable ordinary three-release row example.
+WIP commit `ef9c032` records the initial public queue V1/V2 conversion, repair
+deployment and retirement integration. The ordinary row example has subsequently
+been expanded to four releases and three distinct non-additive upgrades on one
+database: V2 combines JSONB Retype/WriteBack with an author/owner Rename; V3 combines
+another Retype with memo removal and an explicit Legacy default; V4 revalidates a
+plain title into an AllowedTitle proof while retaining the exact V3 JSONB column
+and a verified Same metadata/codec dependency. Its public-command runner verifies
+rejection blocking both floors, admitted predecessor repair and writes, renamed
+old inserts, legacy defaults on new inserts, physical cleanup, proof-producing
+write refusal, Contract replay and Worker restart after each retirement. All four
+source releases and generated race-test suites build; the private PostgreSQL
+rollout passes. This expands row-data coverage; repeated public queue edges remain
+the next integration milestone. The default migration gate already invokes this
+example but has not been rerun in full for these changes.
+
 The first public queued-payload scope now builds an ordinary V2 application for
 one queue-only V1/V2 edge, unchanged entities and exact queue/job membership. The
 captured graph retains original queue helper bindings; emission links its typed
