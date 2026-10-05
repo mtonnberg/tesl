@@ -66,10 +66,12 @@ func pgExpectedQueueConversionTable(e *pgCatalogExpectations, owner, name string
 		col("document", "bytea", true)
 		col("parent_digest", "text", false)
 		col("revision", "int4", true)
+		col("from_version", "int4", true)
 		constraint("p", "", "digest")
-		constraint("u", "", "revision")
+		constraint("u", "", "from_version", "revision")
 		constraint("f", "", "parent_digest")
 		check("(revision >= 0)", "revision")
+		check("((from_version >= 1) AND (from_version <= 2147483646))", "from_version")
 		check("(encode(sha256(document), 'hex'::text) = digest)", "document", "digest")
 		check("(((revision = 0) AND (parent_digest IS NULL)) OR ((revision > 0) AND (parent_digest IS NOT NULL)))", "revision", "parent_digest")
 	case "tesl_queue_conversion_receipts":

@@ -74,7 +74,9 @@ func pgQueueConversionCandidateTables(namespace string) []pgMigrationControlTabl
  check(pg_catalog.encode(pg_catalog.sha256(contract),'hex')=contract_hash)`},
 		{"tesl_queue_conversion_sources", `
  digest text primary key, document bytea not null, parent_digest text references ` + ns + `tesl_queue_conversion_sources(digest),
- revision integer not null unique check(revision>=0),
+ revision integer not null check(revision>=0),
+ from_version integer not null check(from_version between 1 and 2147483646),
+ unique(from_version,revision),
  check(pg_catalog.encode(pg_catalog.sha256(document),'hex')=digest),
  check((revision=0 and parent_digest is null) or (revision>0 and parent_digest is not null))`},
 		{"tesl_jobs", jobs},
@@ -121,8 +123,8 @@ begin
  return pg_catalog.jsonb_build_object(
   'scope',(select pg_catalog.to_jsonb(s) from ` + ns + `tesl_queue_conversion_scope s where id=1),
   'below_floor',exists(select 1 from ` + ns + `tesl_jobs j cross join ` + ns + `tesl_queue_conversion_scope s where s.id=1 and j.schema_version<s.floor),
-  'sources',(select coalesce(pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object('digest',digest,'document',pg_catalog.encode(document,'hex'),'parent',coalesce(parent_digest,''),'revision',revision) order by revision),'[]'::jsonb) from ` + ns + `tesl_queue_conversion_sources),
-  'payloads',(select coalesce(pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object('version',version,'queue',queue,'job',job_type,'contract',pg_catalog.encode(contract,'hex'),'hash',contract_hash) order by version),'[]'::jsonb) from ` + ns + `tesl_queue_payloads));
+  'sources',(select coalesce(pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object('digest',digest,'document',pg_catalog.encode(document,'hex'),'parent',coalesce(parent_digest,''),'revision',revision) order by revision),'[]'::jsonb) from ` + ns + `tesl_queue_conversion_sources where from_version=(select from_version from ` + ns + `tesl_queue_conversion_scope where id=1)),
+  'payloads',(select coalesce(pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object('version',version,'queue',queue,'job',job_type,'contract',pg_catalog.encode(contract,'hex'),'hash',contract_hash) order by version),'[]'::jsonb) from ` + ns + `tesl_queue_payloads where version between (select from_version from ` + ns + `tesl_queue_conversion_scope where id=1) and (select to_version from ` + ns + `tesl_queue_conversion_scope where id=1)));
 end`},
 		{"tesl_queue_conversion_next", "expected uuid, digest text, binding jsonb, after_sequence bigint", "TABLE(job_id text, work_seq bigint)", "volatile", `
 declare s ` + ns + `tesl_queue_conversion_scope%rowtype;
@@ -403,7 +405,7 @@ func pgInstallQueueConversionCandidate(ctx context.Context, conn *pgx.Conn, name
 		if source.parentDigest != "" {
 			parent = source.parentDigest
 		}
-		if _, err := tx.Exec(ctx, "insert into "+ns+"tesl_queue_conversion_sources(digest,document,parent_digest,revision) values($1,$2,$3,$4)", source.spec.digest, doc, parent, source.repairRevision); err != nil {
+		if _, err := tx.Exec(ctx, "insert into "+ns+"tesl_queue_conversion_sources(digest,document,parent_digest,revision,from_version) values($1,$2,$3,$4,$5)", source.spec.digest, doc, parent, source.repairRevision, source.fromVersion); err != nil {
 			return scope, err
 		}
 	}
@@ -448,6 +450,105 @@ func pgQueueConversionFunctionRoles(roles PgMigrationControlRoles, fn pgMigratio
 		roles.Request = ""
 	}
 	return roles
+}
+
+// Advance the isolated execution protocol to an adjacent checked transition
+// only after the previous source is retired. Keep all payload contracts, source
+// descriptors and job receipts: an upgrade never reuses revision slots from a
+// different edge or replaces the installation identity.
+func pgUpgradeQueueConversionCandidate(ctx context.Context, conn *pgx.Conn, namespace string, roles PgMigrationControlRoles, identity, digest string) (pgQueueConversionDB, error) {
+	var scope pgQueueConversionDB
+	lineage, err := pgQueueConversionCandidateLineage(digest)
+	if err != nil {
+		return scope, err
+	}
+	if len(lineage) != 1 {
+		return scope, fmt.Errorf("queue upgrade installs the new root; register repairs separately")
+	}
+	root := lineage[0]
+	tx, err := conn.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	if err != nil {
+		return scope, err
+	}
+	defer pgQueueConversionCandidateRollback(tx)
+	if err := pgControlSession(ctx, tx); err != nil {
+		return scope, err
+	}
+	if err := pgControlRoles(ctx, tx, roles, true); err != nil {
+		return scope, err
+	}
+	if exists, err := pgControlNamespace(ctx, tx, namespace, roles.Owner, roles.Worker); err != nil {
+		return scope, err
+	} else if !exists {
+		return scope, fmt.Errorf("queue upgrade namespace is missing")
+	}
+	if err := pgQueueConversionCandidateCatalog(ctx, tx, namespace, roles); err != nil {
+		return scope, err
+	}
+	if _, err := tx.Exec(ctx, "set local role "+quoteIdentifier(roles.Owner)); err != nil {
+		return scope, err
+	}
+	ns := quoteIdentifier(namespace) + "."
+	var from, to, floor int
+	var family, queue, job, previousDigest string
+	if err := tx.QueryRow(ctx, "select from_version,to_version,floor,family,queue,job_type,root_digest from "+ns+`tesl_queue_conversion_scope
+ where id=1 and identity=$1 and database_name=pg_catalog.current_database()
+ and database_oid=(select oid from pg_catalog.pg_database where datname=pg_catalog.current_database()) for update`, identity).Scan(&from, &to, &floor, &family, &queue, &job, &previousDigest); err != nil {
+		return scope, err
+	}
+	if family != root.family || queue != root.queue || job != root.job {
+		return scope, fmt.Errorf("queue upgrade changed its retained owner")
+	}
+	if from == root.fromVersion && to == root.toVersion && previousDigest == digest {
+		var same bool
+		if err := tx.QueryRow(ctx, "select document=$1 and revision=0 and from_version=$2 and parent_digest is null from "+ns+"tesl_queue_conversion_sources where digest=$3", mustQueueConversionDocument(root), root.fromVersion, digest).Scan(&same); err != nil {
+			return scope, err
+		}
+		if !same {
+			return scope, fmt.Errorf("immutable queue upgrade replay differs")
+		}
+	} else {
+		if root.fromVersion != to || floor != to {
+			return scope, fmt.Errorf("queue upgrade requires adjacent, retired predecessor")
+		}
+		var old []byte
+		if err := tx.QueryRow(ctx, "select contract from "+ns+"tesl_queue_payloads where version=$1 and queue=$2 and job_type=$3", to, queue, job).Scan(&old); err != nil {
+			return scope, err
+		}
+		if !bytes.Equal(old, pgQueueConversionPayloadContract(root, false)) {
+			return scope, fmt.Errorf("queue upgrade historical decoder differs from retained target payload")
+		}
+		var prior []byte
+		if err := tx.QueryRow(ctx, "select document from "+ns+"tesl_queue_conversion_sources where digest=$1 and revision=0 and from_version=$2", previousDigest, from).Scan(&prior); err != nil {
+			return scope, err
+		}
+		r := &pgMigrationWireReader{}
+		n := pgRowDocument(r, hex.EncodeToString(prior), previousDigest, "migration")
+		if r.err != nil || !n.list(17) || !root.conversion.list(17) || n.children[14].value != root.conversion.children[13].value || n.children[16].value != root.conversion.children[15].value || !pgRowCanonicalEqual(n.children[2], root.conversion.children[2]) {
+			return scope, fmt.Errorf("queue upgrade full historical schema/storage binding differs")
+		}
+		var stale bool
+		if err := tx.QueryRow(ctx, "select exists(select 1 from "+ns+"tesl_jobs where schema_version<$1)", to).Scan(&stale); err != nil {
+			return scope, err
+		}
+		if stale {
+			return scope, fmt.Errorf("queue upgrade has jobs below its retired source")
+		}
+		target := pgQueueConversionPayloadContract(root, true)
+		if _, err := tx.Exec(ctx, "insert into "+ns+"tesl_queue_payloads(version,queue,job_type,contract,contract_hash) values($1,$2,$3,$4,pg_catalog.encode(pg_catalog.sha256($4),'hex'))", root.toVersion, queue, job, target); err != nil {
+			return scope, err
+		}
+		if _, err := tx.Exec(ctx, "insert into "+ns+"tesl_queue_conversion_sources(digest,document,parent_digest,revision,from_version) values($1,$2,null,0,$3)", digest, mustQueueConversionDocument(root), root.fromVersion); err != nil {
+			return scope, err
+		}
+		if _, err := tx.Exec(ctx, "update "+ns+"tesl_queue_conversion_scope set from_version=$1,to_version=$2,root_digest=$3 where id=1", root.fromVersion, root.toVersion, digest); err != nil {
+			return scope, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return scope, err
+	}
+	return pgQueueConversionDB{namespace: namespace, identity: identity, rootDigest: digest}, nil
 }
 
 // A later deployment appends checked repairs under the short-lived installer
@@ -507,7 +608,7 @@ func pgRegisterQueueRepairCandidate(ctx context.Context, conn *pgx.Conn, scope p
 		}
 		var existing, parent string
 		var installed []byte
-		err = tx.QueryRow(ctx, "select digest,document,coalesce(parent_digest,'') from "+ns+"tesl_queue_conversion_sources where revision=$1", source.repairRevision).Scan(&existing, &installed, &parent)
+		err = tx.QueryRow(ctx, "select digest,document,coalesce(parent_digest,'') from "+ns+"tesl_queue_conversion_sources where revision=$1 and from_version=$2", source.repairRevision, root.fromVersion).Scan(&existing, &installed, &parent)
 		if err == nil {
 			if existing != source.spec.digest || !bytes.Equal(installed, document) || parent != source.parentDigest {
 				return fmt.Errorf("immutable installed queue repair history differs")
@@ -521,13 +622,13 @@ func pgRegisterQueueRepairCandidate(ctx context.Context, conn *pgx.Conn, scope p
 			return fmt.Errorf("queue repair cannot replace its baseline or revive a retired source")
 		}
 		var count, maximum int
-		if err := tx.QueryRow(ctx, "select count(*),coalesce(max(revision),-1) from "+ns+"tesl_queue_conversion_sources").Scan(&count, &maximum); err != nil {
+		if err := tx.QueryRow(ctx, "select count(*),coalesce(max(revision),-1) from "+ns+"tesl_queue_conversion_sources where from_version=$1", root.fromVersion).Scan(&count, &maximum); err != nil {
 			return err
 		}
 		if count != source.repairRevision || maximum+1 != source.repairRevision {
 			return fmt.Errorf("queue repair installed prefix is incomplete")
 		}
-		if _, err := tx.Exec(ctx, "insert into "+ns+"tesl_queue_conversion_sources(digest,document,parent_digest,revision) values($1,$2,$3,$4)", source.spec.digest, document, source.parentDigest, source.repairRevision); err != nil {
+		if _, err := tx.Exec(ctx, "insert into "+ns+"tesl_queue_conversion_sources(digest,document,parent_digest,revision,from_version) values($1,$2,$3,$4,$5)", source.spec.digest, document, source.parentDigest, source.repairRevision, source.fromVersion); err != nil {
 			return err
 		}
 	}

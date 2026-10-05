@@ -171,8 +171,21 @@ func pgStageRowQueueConversions(ctx context.Context, conn *pgx.Conn, namespace s
 	if err := tx.QueryRow(ctx, "select current,min_version from "+ns+"tesl_schema_state where id=1 for update").Scan(&current, &lockedFloor); err != nil {
 		return err
 	}
-	if current != root.fromVersion || lockedFloor != floor {
-		return fmt.Errorf("queue conversion staging requires its exact currently installed source version")
+	if (current != root.fromVersion && current != root.toVersion) || lockedFloor != floor {
+		return fmt.Errorf("queue conversion staging requires its admitted source or exact published target")
+	}
+	if current == root.toVersion {
+		var authorized bool
+		if err := tx.QueryRow(ctx, "select exists(select 1 from "+ns+`tesl_row_queue_target_staging t
+ join `+ns+`tesl_row_physical p on p.version=t.version and p.contract=t.contract and p.contract_hash=t.contract_hash
+ join `+ns+`tesl_schema_versions v on v.version=t.version and v.step='expanded' and v.artefact_hash=t.contract_hash
+ join `+ns+`tesl_row_queue_conversion_staging c on c.to_version=t.version and c.revision=0
+ where t.version=$1 and t.database_uuid::text=$2 and t.fence_ns=$3 and c.source_digest=$4 and c.source_document=$5)`, root.toVersion, state.DatabaseUUID, state.FenceNamespace, root.spec.digest, mustQueueConversionDocument(root)).Scan(&authorized); err != nil {
+			return err
+		}
+		if !authorized {
+			return fmt.Errorf("repair staging requires the immutable root of the completed queue expansion")
+		}
 	}
 	var family, compatibility, inventory, expansion, schemaSnapshot, storageSnapshot string
 	var old []byte
@@ -324,7 +337,9 @@ func pgVerifyRowQueueBaseline(ctx context.Context, tx pgx.Tx, b *pgRowBaseline, 
 			return fmt.Errorf("row queue inventory differs from local checked source")
 		}
 		if i > 0 && !pgQueueInventoryPreserves(previous, recorded.Version) {
-			return fmt.Errorf("row queue recorded payload was removed, moved or changed")
+			if err := pgVerifyRowQueueTransition(ctx, tx, b.history.Namespace, state, previous, recorded.Version); err != nil {
+				return err
+			}
 		}
 		if i == 0 {
 			if item.expansion != b.catalogHash || expected.inventoryHash != source.inventoryHash {
@@ -347,6 +362,202 @@ func pgVerifyRowQueueBaseline(ctx context.Context, tx pgx.Tx, b *pgRowBaseline, 
 		previous = recorded.Version
 	}
 	return nil
+}
+
+func pgVerifyRowQueueTransition(ctx context.Context, tx pgx.Tx, namespace string, state PgMigrationControlState, before, after PgQueueSourceVersion) error {
+	ns := quoteIdentifier(namespace) + "."
+	oldJSON, err := pgQueueRegistrationJSON(before.Contracts)
+	if err != nil {
+		return err
+	}
+	newJSON, err := pgQueueRegistrationJSON(after.Contracts)
+	if err != nil {
+		return err
+	}
+	var valid bool
+	if err := tx.QueryRow(ctx, "select "+ns+"tesl_row_queue_transition_valid($1::jsonb,$2::jsonb,$3)", string(oldJSON), string(newJSON), after.Version).Scan(&valid); err != nil {
+		return err
+	}
+	if !valid {
+		return fmt.Errorf("row queue recorded transition lacks exact staged authority")
+	}
+	var raw []byte
+	var hash string
+	if err := tx.QueryRow(ctx, "select contract,contract_hash from "+ns+"tesl_row_queue_target_staging where version=$1", after.Version).Scan(&raw, &hash); err != nil {
+		return err
+	}
+	plan, err := pgParseRowPhysicalPlan(hex.EncodeToString(raw), hash)
+	if err != nil {
+		return err
+	}
+	if plan.version != after.Version || pgRowEpochPreserving(plan) || plan.schemaSnapshotHash != after.SchemaSnapshotHash || plan.storageSnapshotHash != after.StorageSnapshotHash {
+		return fmt.Errorf("staged queue target differs from its registered inventory")
+	}
+	for _, c := range plan.queueConversions {
+		payload := func(v PgQueueSourceVersion, expected string) bool {
+			for _, q := range v.Contracts {
+				if q.Queue == c.queue {
+					for _, p := range q.Payloads {
+						if p.Job == c.job {
+							return p.Contract == expected
+						}
+					}
+				}
+			}
+			return false
+		}
+		if !payload(before, c.oldContract) || !payload(after, c.newContract) {
+			return fmt.Errorf("registered queue inventory differs from its physical conversion payloads")
+		}
+		var matches bool
+		if err := tx.QueryRow(ctx, "select database_uuid::text=$1 and fence_ns=$2 and source_digest=$3 and old_contract=$4 and new_contract=$5 from "+ns+"tesl_row_queue_conversion_staging where from_version=$6 and queue=$7 and job_type=$8 and revision=0", state.DatabaseUUID, state.FenceNamespace, c.digest, mustQueueContractBytes(c.oldContract), mustQueueContractBytes(c.newContract), before.Version, c.queue, c.job).Scan(&matches); err != nil {
+			return err
+		}
+		if !matches {
+			return fmt.Errorf("physical queue decision differs from immutable staged source")
+		}
+	}
+	return nil
+}
+
+func mustQueueContractBytes(encoded string) []byte {
+	raw, _ := hex.DecodeString(encoded) // Admitted by the canonical physical parser.
+	return raw
+}
+
+// Prepare the protected successor physical manifest and complete queue inventory
+// atomically from the staged target. This does not publish the expansion or grant
+// V2 admission. The unchanged-entity V2 scope keeps all physical operations at zero.
+func pgPrepareRowQueueTarget(ctx context.Context, conn *pgx.Conn, namespace string, roles PgMigrationControlRoles, target PgQueueSourceVersion, document, digest string) error {
+	plan, err := pgParseRowPhysicalPlan(document, digest)
+	if err != nil {
+		return err
+	}
+	if plan.namespace != namespace || plan.version != 2 || target.Version != 2 || len(plan.queueConversions) == 0 || target.SchemaSnapshotHash != plan.schemaSnapshotHash || target.StorageSnapshotHash != plan.storageSnapshotHash {
+		return fmt.Errorf("queue successor inventory differs from checked target")
+	}
+	tx, err := conn.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	if err != nil {
+		return err
+	}
+	defer pgQueueConversionCandidateRollback(tx)
+	if err := pgControlSession(ctx, tx); err != nil {
+		return err
+	}
+	if err := pgControlRoles(ctx, tx, roles, false); err != nil {
+		return err
+	}
+	var worker bool
+	if err := tx.QueryRow(ctx, "select current_user=$1 and session_user=$1", roles.Worker).Scan(&worker); err != nil {
+		return err
+	}
+	if !worker {
+		return fmt.Errorf("queue target preparation requires exact Worker login")
+	}
+	state, err := pgInspectRowControl(ctx, tx, namespace, roles)
+	if err != nil {
+		return err
+	}
+	ns := quoteIdentifier(namespace) + "."
+	var prior, abi, compatibility string
+	var raw []byte
+	var uuid string
+	var fence int
+	if err := tx.QueryRow(ctx, "select predecessor_hash,compiler_abi,stored_value_compatibility,contract,database_uuid::text,fence_ns from "+ns+"tesl_row_queue_target_staging where version=2 and contract_hash=$1", digest).Scan(&prior, &abi, &compatibility, &raw, &uuid, &fence); err != nil {
+		return err
+	}
+	if uuid != state.DatabaseUUID || fence != state.FenceNamespace || hex.EncodeToString(raw) != document {
+		return fmt.Errorf("queue target staging belongs to another installation or descriptor")
+	}
+	contracts, err := pgQueueRegistrationJSON(target.Contracts)
+	if err != nil {
+		return err
+	}
+	history := PgCompiledMigrationHistory{Family: plan.family, Namespace: namespace, SourceCompilerABI: abi, StoredValueCompatibility: compatibility}
+	source, err := pgRowQueueSourceBinding(history, target)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, "select "+ns+"tesl_register_row_physical(2,$1,$2,$3,$4,$5,0,false)", prior, raw, digest, abi, compatibility); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, "select "+ns+"tesl_register_row_queue_source($1,2,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,$11)", plan.family, target.StorageSnapshotHash, target.SchemaSnapshotHash, abi, compatibility, target.SourceSealInventory, source.inventoryHash, string(contracts), []byte(source.binding), source.bindingHash, digest); err != nil {
+		return err
+	}
+	before, err := pgReadQueueCandidateInventory(ctx, tx, history, 1)
+	if err != nil {
+		return err
+	}
+	if err := pgVerifyRowQueueTransition(ctx, tx, namespace, state, before.Version, target); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, "select "+ns+"tesl_begin_expansion(2,$1,$1,$2,$3,0,false)", digest, abi, compatibility); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+// Complete the zero-DDL queue-only expansion using the application's normal
+// compatibility drain and protected publication function. New-version admission
+// starts only at this commit; preparation and target staging alone cannot admit it.
+func pgPublishRowQueueTarget(ctx context.Context, conn *pgx.Conn, namespace string, roles PgMigrationControlRoles, target PgQueueSourceVersion, document, digest string) error {
+	if err := pgPrepareRowQueueTarget(ctx, conn, namespace, roles, target, document, digest); err != nil {
+		return err
+	}
+	var initial PgMigrationControlState
+	if err := pgControlTransaction(ctx, conn, false, func(tx pgx.Tx) error {
+		var err error
+		initial, err = pgInspectRowControl(ctx, tx, namespace, roles)
+		return err
+	}); err != nil {
+		return err
+	}
+	if initial.Current != 1 && initial.Current != 2 {
+		return fmt.Errorf("queue target publication requires V1 or its exact V2 replay")
+	}
+	ns := quoteIdentifier(namespace) + "."
+	return pgRowCompatibilityDrain(ctx, conn, initial.FenceNamespace, initial.MinVersion, initial.Current, "queue-target", func() error {
+		return pgExpansionTransaction(ctx, conn, func(tx pgx.Tx) error {
+			state, err := pgInspectRowControl(ctx, tx, namespace, roles)
+			if err != nil {
+				return err
+			}
+			if state.DatabaseUUID != initial.DatabaseUUID || state.FenceNamespace != initial.FenceNamespace || state.Current != initial.Current || state.MinVersion != initial.MinVersion {
+				return fmt.Errorf("queue target admission changed while draining")
+			}
+			var physicalDoc []byte
+			var physicalHash string
+			var preserving bool
+			var ops int
+			if err := tx.QueryRow(ctx, "select contract,contract_hash,epoch_preserving,operation_count from "+ns+"tesl_row_physical where version=2").Scan(&physicalDoc, &physicalHash, &preserving, &ops); err != nil {
+				return err
+			}
+			if hex.EncodeToString(physicalDoc) != document || physicalHash != digest || preserving || ops != 0 {
+				return fmt.Errorf("queue target publication lost its exact narrowing manifest")
+			}
+			var family, abi, compatibility string
+			if err := tx.QueryRow(ctx, "select family,compiler_abi,stored_value_compatibility from "+ns+"tesl_row_versions where version=1").Scan(&family, &abi, &compatibility); err != nil {
+				return err
+			}
+			history := PgCompiledMigrationHistory{Family: family, Namespace: namespace, SourceCompilerABI: abi, StoredValueCompatibility: compatibility}
+			before, err := pgReadQueueCandidateInventory(ctx, tx, history, 1)
+			if err != nil {
+				return err
+			}
+			after, err := pgReadQueueCandidateInventory(ctx, tx, history, 2)
+			if err != nil {
+				return err
+			}
+			if !reflect.DeepEqual(after.Version, target) {
+				return fmt.Errorf("queue target inventory changed before publication")
+			}
+			if err := pgVerifyRowQueueTransition(ctx, tx, namespace, state, before.Version, after.Version); err != nil {
+				return err
+			}
+			_, err = tx.Exec(ctx, "select "+ns+"tesl_record_expanded(2)")
+			return err
+		})
+	})
 }
 
 // Internal installer-only boundary: validates and closes the exact generated

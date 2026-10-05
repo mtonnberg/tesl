@@ -4,7 +4,9 @@ package teslrt
 // contracts, SQL functions and mutation path are the actual runtime ones.
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"os"
@@ -29,6 +31,7 @@ type QueueConversionDBFixture struct {
 	Scope                             pgQueueConversionDB
 	Config                            *pgx.ConnConfig
 	roles                             PgMigrationControlRoles
+	applicationEnv                    []string
 }
 
 func OpenQueueConversionDBForTest(t *testing.T, digest string) *QueueConversionDBFixture {
@@ -138,6 +141,7 @@ func openQueueConversionDBForTest(t *testing.T, digest string, application bool)
 			RawQuery: url.Values{"host": {config.Host}, "port": {fmt.Sprint(config.Port)}, "sslmode": {"disable"}}.Encode()}
 		base := append(os.Environ(), "Q_DB="+name, "Q_HOST="+config.Host, "Q_PORT="+fmt.Sprint(config.Port),
 			"Q_OWNER="+roles.Owner, "Q_WORKER="+roles.Worker, "Q_REQUEST="+roles.Request, "Q_DDL="+dsn.String())
+		f.applicationEnv = base
 		binary := os.Getenv("QUEUE_REPAIR_V1_APP")
 		if binary == "" {
 			t.Fatal("compiled V1 application is missing")
@@ -184,6 +188,10 @@ func (f *QueueConversionDBFixture) StageApplication(conn *pgx.Conn, digest strin
 	return pgStageRowQueueConversions(f.Context, conn, "mail", f.roles, digest)
 }
 
+func (f *QueueConversionDBFixture) StageApplicationRoot(conn *pgx.Conn, c pgQueueConversionExecutable) error {
+	return f.StageApplication(conn, c.queueConversionSource().spec.digest)
+}
+
 func (f *QueueConversionDBFixture) StageApplicationTarget(conn *pgx.Conn) error {
 	plan, err := pgParseRowPhysicalPlan(testQueueTargetDocument, testQueueTargetHash)
 	if err != nil {
@@ -193,6 +201,52 @@ func (f *QueueConversionDBFixture) StageApplicationTarget(conn *pgx.Conn) error 
 		return fmt.Errorf("queue transformation incorrectly preserved the additive epoch")
 	}
 	return pgStageRowQueueTarget(f.Context, conn, "mail", f.roles, testQueueTargetDocument, testQueueTargetHash)
+}
+
+func (f *QueueConversionDBFixture) PrepareApplicationTarget(conn *pgx.Conn, mutation string) error {
+	var target PgQueueSourceVersion
+	if err := json.Unmarshal([]byte(testQueueTargetInventory), &target); err != nil {
+		return err
+	}
+	switch mutation {
+	case "":
+	case "schema":
+		target.SchemaSnapshotHash = strings.Repeat("0", 64)
+	case "missing":
+		target.Contracts = []PgQueueSourceContract{}
+	case "unchanged":
+		compiledQueueConversionSources.RLock()
+		for _, s := range compiledQueueConversionSources.byDigest {
+			if s.repairRevision == 0 {
+				c := pgQueueConversionPayloadContract(s, false)
+				target.Contracts[0].Payloads[0].Contract = hex.EncodeToString(c)
+				target.Contracts[0].Payloads[0].ContractHash = fmt.Sprintf("%x", sha256.Sum256(c))
+			}
+		}
+		compiledQueueConversionSources.RUnlock()
+	case "additional":
+		target.Contracts[0].Payloads = append(target.Contracts[0].Payloads, PgQueueSourcePayload{Job: "Other", Contract: target.Contracts[0].Payloads[0].Contract, ContractHash: target.Contracts[0].Payloads[0].ContractHash})
+	default:
+		return fmt.Errorf("unknown successor mutation")
+	}
+	return pgPrepareRowQueueTarget(f.Context, conn, "mail", f.roles, target, testQueueTargetDocument, testQueueTargetHash)
+}
+
+func (f *QueueConversionDBFixture) ApplicationStatus(t *testing.T) {
+	t.Helper()
+	command := exec.CommandContext(f.Context, os.Getenv("QUEUE_REPAIR_V1_APP"), "--schema", "status", "--json")
+	command.Env = append(append([]string{}, f.applicationEnv...), "Q_USER="+f.roles.Request)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("ordinary V1 status refused prepared successor: %v\n%s", err, output)
+	}
+}
+
+func (f *QueueConversionDBFixture) PublishApplicationTarget() error {
+	var target PgQueueSourceVersion
+	if err := json.Unmarshal([]byte(testQueueTargetInventory), &target); err != nil {
+		return err
+	}
+	return pgPublishRowQueueTarget(f.Context, f.Worker, "mail", f.roles, target, testQueueTargetDocument, testQueueTargetHash)
 }
 
 func (f *QueueConversionDBFixture) MutateApplicationTarget(t *testing.T, kind string) error {
@@ -248,7 +302,61 @@ func (f *QueueConversionDBFixture) ApplyTx(tx pgx.Tx, c pgQueueConversionExecuta
 	return pgApplyQueueConversionCandidateTx(f.Context, tx, f.Scope, c, id)
 }
 func (f *QueueConversionDBFixture) Enqueue(id, body, status string, due time.Time) error {
-	_, err := f.Request.Exec(f.Context, "select mail.tesl_queue_conversion_enqueue($1,1,$2,$3::jsonb,$4,$5)", f.Scope.identity, id, body, status, due.Format(time.RFC3339Nano))
+	return f.EnqueueAt(1, id, body, status, due)
+}
+
+func (f *QueueConversionDBFixture) EnqueueAt(version int, id, body, status string, due time.Time) error {
+	_, err := f.Request.Exec(f.Context, "select mail.tesl_queue_conversion_enqueue($1,$2,$3,$4::jsonb,$5,$6)", f.Scope.identity, version, id, body, status, due.Format(time.RFC3339Nano))
+	return err
+}
+
+func (f *QueueConversionDBFixture) UpgradeProcessEnvironment() []string {
+	config := f.Installer.Config()
+	dsn := url.URL{Scheme: "postgresql", User: url.User(config.User), Path: "/" + config.Database,
+		RawQuery: url.Values{"host": {config.Host}, "port": {fmt.Sprint(config.Port)}, "sslmode": {"disable"}}.Encode()}
+	return append(f.WorkerProcessEnvironment(), "TESL_QUEUE_UPGRADE_INSTALLER_DSN="+dsn.String(), "TESL_QUEUE_UPGRADE_IDENTITY="+f.Scope.identity)
+}
+
+func UpgradeQueueProcessForTest(t *testing.T, c pgQueueConversionExecutable) (*QueueConversionDBFixture, error) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	t.Cleanup(cancel)
+	roles := PgMigrationControlRoles{Owner: os.Getenv("TESL_QUEUE_REPAIR_OWNER"), Worker: os.Getenv("TESL_QUEUE_REPAIR_WORKER"), Request: os.Getenv("TESL_QUEUE_REPAIR_REQUEST")}
+	config, err := pgx.ParseConfig(os.Getenv("TESL_QUEUE_REPAIR_WORKER_DSN"))
+	if err != nil {
+		return nil, err
+	}
+	f := &QueueConversionDBFixture{Context: ctx, roles: roles, Config: config}
+	t.Cleanup(func() {
+		for _, conn := range []*pgx.Conn{f.Installer, f.Worker, f.Request} {
+			if conn != nil {
+				_ = conn.Close(context.Background())
+			}
+		}
+	})
+	f.Installer, err = pgx.Connect(ctx, os.Getenv("TESL_QUEUE_UPGRADE_INSTALLER_DSN"))
+	if err != nil {
+		return nil, err
+	}
+	f.Worker, err = pgx.ConnectConfig(ctx, config)
+	if err != nil {
+		return nil, err
+	}
+	request := config.Copy()
+	request.User = roles.Request
+	f.Request, err = pgx.ConnectConfig(ctx, request)
+	if err != nil {
+		return nil, err
+	}
+	f.Scope, err = pgUpgradeQueueConversionCandidate(ctx, f.Installer, "mail", roles, os.Getenv("TESL_QUEUE_UPGRADE_IDENTITY"), c.queueConversionSource().spec.digest)
+	return f, err
+}
+
+func (f *QueueConversionDBFixture) ReplayUpgrade(c pgQueueConversionExecutable) error {
+	scope, err := pgUpgradeQueueConversionCandidate(f.Context, f.Installer, "mail", f.roles, f.Scope.identity, c.queueConversionSource().spec.digest)
+	if err == nil {
+		f.Scope = scope
+	}
 	return err
 }
 func (f *QueueConversionDBFixture) Retire(conn *pgx.Conn) (bool, error) {

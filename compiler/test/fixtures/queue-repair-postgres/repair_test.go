@@ -962,3 +962,108 @@ func TestPostgresApplicationStagesExactQueueRepairHistory(t *testing.T) {
 		t.Fatal("old database catalog silently adopted")
 	}
 }
+
+func TestPostgresApplicationPreparesCheckedSuccessorInventory(t *testing.T) {
+	f := rt.OpenApplicationQueueForTest(t)
+	if err := f.StageApplicationRoot(f.Installer, Conversion0); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.StageApplicationTarget(f.Installer); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Request.Exec(f.Context, "select mail.tesl_queue_enqueue(1,'Jobs','Delivery','job',$1::jsonb)", `{"oldText":""}`); err != nil {
+		t.Fatal(err)
+	}
+	for _, conn := range []*pgx.Conn{f.Installer, f.Request} {
+		if err := f.PrepareApplicationTarget(conn, ""); err == nil {
+			t.Fatal("non-Worker prepared successor")
+		}
+	}
+	for _, mutation := range []string{"schema", "missing", "unchanged", "additional"} {
+		if err := f.PrepareApplicationTarget(f.Worker, mutation); err == nil {
+			t.Fatal("different target inventory registered", mutation)
+		}
+		var versions, physical int
+		if err := f.Worker.QueryRow(f.Context, "select (select count(*) from mail.tesl_queue_versions),(select count(*) from mail.tesl_row_physical)").Scan(&versions, &physical); err != nil || versions != 1 || physical != 1 {
+			t.Fatal("failed registration left partial successor", versions, physical, err)
+		}
+	}
+	if err := f.PrepareApplicationTarget(f.Worker, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.PrepareApplicationTarget(f.Worker, ""); err != nil {
+		t.Fatal("exact successor replay failed", err)
+	}
+	var current, versions, physical int
+	var preserving bool
+	if err := f.Worker.QueryRow(f.Context, "select current,(select count(*) from mail.tesl_queue_versions),(select count(*) from mail.tesl_row_physical),(select epoch_preserving from mail.tesl_row_physical where version=2) from mail.tesl_schema_state where id=1").Scan(&current, &versions, &physical, &preserving); err != nil || current != 1 || versions != 2 || physical != 2 || preserving {
+		t.Fatal("successor preparation lost its pending narrowing state", current, versions, physical, preserving, err)
+	}
+	if _, err := f.Request.Exec(f.Context, "select mail.tesl_queue_admit(2,'Jobs')"); err == nil {
+		t.Fatal("pending target acquired V2 admission")
+	}
+	f.ApplicationStatus(t)
+	// A V1 transaction retaining a compiled compatibility plan must be drained
+	// before the narrowing successor becomes visible to new requests.
+	var fence int
+	if err := f.Worker.QueryRow(f.Context, "select fence_ns from mail.tesl_schema_meta where id=1").Scan(&fence); err != nil {
+		t.Fatal(err)
+	}
+	reader, err := f.Request.Begin(f.Context)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Rollback(context.Background())
+	if _, err := reader.Exec(f.Context, "select pg_catalog.pg_advisory_xact_lock_shared($1::integer,1)", -fence); err != nil {
+		t.Fatal(err)
+	}
+	published := make(chan error, 1)
+	go func() { published <- f.PublishApplicationTarget() }()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		var draining bool
+		if err := f.Installer.QueryRow(f.Context, "select exists(select 1 from pg_catalog.pg_stat_activity where pid=$1 and query like '%pg_try_advisory_lock%')", f.Worker.PgConn().PID()).Scan(&draining); err != nil {
+			t.Fatal(err)
+		}
+		if draining {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("publication never reached compatibility drain")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	select {
+	case err := <-published:
+		t.Fatal("publication crossed a live compatibility plan", err)
+	default:
+	}
+	if err := f.Installer.QueryRow(f.Context, "select current from mail.tesl_schema_state where id=1").Scan(&current); err != nil || current != 1 {
+		t.Fatal("successor published before drain", current, err)
+	}
+	if err := reader.Rollback(f.Context); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-published; err != nil {
+		t.Fatal("successor publication failed", err)
+	}
+	if err := f.PublishApplicationTarget(); err != nil {
+		t.Fatal("successor publication replay failed", err)
+	}
+	if err := f.StageApplication(f.Installer, finalRepairDigest); err != nil {
+		t.Fatal("separate repair deployment could not append after V2 publication", err)
+	}
+	if err := f.StageApplication(f.Installer, finalRepairDigest); err != nil {
+		t.Fatal("published repair staging replay failed", err)
+	}
+	var floor int
+	if err := f.Request.QueryRow(f.Context, "select mail.tesl_queue_admit(2,'Jobs')").Scan(&floor); err != nil || floor != 1 {
+		t.Fatal("published successor did not acquire bounded admission", floor, err)
+	}
+	f.ApplicationStatus(t)
+	var body string
+	var stamp int
+	if err := f.Installer.QueryRow(f.Context, "select payload::text,schema_version from mail.tesl_jobs where id='job'").Scan(&body, &stamp); err != nil || stamp != 1 || body != `{"oldText": ""}` {
+		t.Fatal("pending successor mutated old job", body, stamp, err)
+	}
+}

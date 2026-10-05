@@ -56,6 +56,73 @@ remaining integration requirements.
 
 ### Implementation and verification evidence
 
+The PostgreSQL execution candidate now has a same-database three-upgrade witness:
+V1 → V2 → V3 → V4, with incompatible payload fields and JSON codecs at every edge.
+The compiler emits three separate binaries from checked historical/target schemas
+and typed migration/repair callbacks; the original sources are gone before the
+binaries execute. Each edge migrates retained jobs, rejects old-valid payloads,
+registers a rejecting repair and then a successful repair, reconnects/reopens the
+Worker, replays its receipt, and retires the old version only after conversion.
+
+This required edge-scoped repair slots: the source table now keys uniqueness by
+`(from_version, revision)`, preserving all older descriptors and receipts. An
+installer-only adjacent upgrade compares the new frozen decoder contract and
+full historical schema/storage snapshots to the previous target, requires its
+completed retirement floor, and atomically appends the new target/root while
+preserving database identity. A skipped version or an unretired predecessor is
+refused without changing the installation. Workers reopen against only the
+active edge, while historical records remain available for audit.
+
+The test retains one delayed job through all three computed transformations
+(priority 7 → importance 17 → rank 27), plus a dead job with seven prior attempts.
+Rejection and repeated rejection preserve original bytes/source stamps at every
+edge. The final database retains four payload contracts, nine source/repair
+descriptors and twenty outcome receipts; the first V1 conversion receipt remains
+byte-identical after later upgrades. Old writers and the old binary's opener are
+fenced. All 53 conversion/repair cases pass with PostgreSQL required, plus runtime
+file gates, embedding checks and compiler `@check`.
+
+This is a repeated-upgrade test of the real PostgreSQL execution candidate. It is
+not three ordinary application deployments: application target planning/publication
+currently handles the initial queue-only V1/V2 edge, and ordinary changed-payload
+dispatch/retirement remains the integration gap. The full migration gate has not
+been rerun after these changes.
+
+WIP commit `d9729e0` records the verified opener, source/target staging and internal
+queue-only physical planning. Successor preparation now registers the real
+application's V2 physical manifest, complete queue inventory and expansion intent
+atomically from the staged target. Protected SQL requires exact staged authority
+for changed payloads; the existing unchanged/additive path remains available.
+The first narrowing path retains queue/job membership and refuses additions,
+removals, unstaged changes and unused staged decisions. Read-only observation
+also checks the physical descriptor's exact conversion/payload bindings.
+
+The internal publication operation uses the existing compatibility-plan drain and
+`tesl_record_expanded`, rechecking installation identity, manifest, target inventory
+and conversion authority under the publication transaction. Its zero-DDL V2
+descriptor is explicitly non-epoch-preserving. Preparation alone does not admit
+V2; the completed expansion commits that admission. A repeated publication
+verifies and returns the same immutable history rather than replacing it.
+
+Repair staging can also append revisions after that exact V2 expansion has been
+published, while the historical source remains admitted. This requires the same
+immutable conversion root, staged target, physical manifest and completed
+expansion receipt; it cannot create a new root against an already-published
+target. The application witness stages only the root before publication, then
+appends both repair revisions afterward without editing deployed history.
+
+The generated ordinary-V1 application witness now prepares and publishes the
+compiler-generated successor inventory. It rejects unauthorized identities and
+altered inventories without leaving partial physical/source registration. It
+checks V1 status through the public binary before and after publication, V2
+admission only after commit, preservation of existing V1 jobs, exact replay and
+waiting for an outstanding V1 compatibility plan. All 52 conversion/repair cases
+pass with mandatory PostgreSQL (19 parent DB groups), along with affected
+baseline/physical/queue-operation race suites and the public unchanged-payload
+V1/V2 application regression. This is internal Worker publication: ordinary
+compiled changed-payload V2 dispatch and application retirement are still gated.
+No old-database upgrade path was added.
+
 Queue target staging now binds a compiler-generated physical descriptor to the
 actual application's source installation and staged conversion set. The internal
 `Migration_row_history.check_queue_expansion` path is limited to one V1/V2

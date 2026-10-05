@@ -34,7 +34,7 @@ begin
   pos:=pos+count_bytes;
  end loop;
  if (width=8 and fields[1] not in ('tesl-retained-physical-version-v1','tesl-retained-physical-version-v2')) or
-    (width=9 and fields[1] not in ('tesl-retained-physical-version-v3','tesl-retained-physical-version-v4')) or
+     (width=9 and fields[1] not in ('tesl-retained-physical-version-v3','tesl-retained-physical-version-v4','tesl-retained-physical-version-v6')) or
     (width=10 and fields[1]<>'tesl-retained-physical-version-v5') or
     fields[2]!~'^(Schema\.[A-Z][A-Za-z0-9_]*|[A-Z][A-Za-z0-9_]*Schema)$' or
     pg_catalog.octet_length(fields[3])<1 or pg_catalog.octet_length(fields[3])>63 or
@@ -71,7 +71,7 @@ begin
  end if;
  if v<>s.current+1 or v<2 or physical.compiler_abi<>creator_abi then raise exception 'tesl: row queue registration must follow the complete installed prefix'; end if;
  if (select count(*) from ` + ns + `tesl_queue_versions)<>v-1 or (select count(*) from ` + ns + `tesl_row_queue_sources)<>v-1 then raise exception 'tesl: row queue prefix inventory is incomplete'; end if;
- if not ` + ns + `tesl_queue_inventory_preserves(` + ns + `tesl_queue_inventory_json(v-1),contracts) then raise exception 'tesl: existing queue payload requires a migration'; end if;
+  if not ` + ns + `tesl_row_queue_transition_valid(` + ns + `tesl_queue_inventory_json(v-1),contracts,v) then raise exception 'tesl: existing queue payload requires exact staged migration authority'; end if;
  for q in select * from pg_catalog.jsonb_array_elements(contracts) loop payloads:=payloads+pg_catalog.jsonb_array_length(q->'payloads'); end loop;
  insert into ` + ns + `tesl_queue_versions(version,storage_snapshot_hash,schema_snapshot_hash,inventory_hash,source_seal_inventory,compiler_abi,stored_value_compatibility,contract_count,payload_count)
  values(v,storage_snapshot,schema_snapshot,inventory_hash,source_seal,creator_abi,compatibility,pg_catalog.jsonb_array_length(contracts),payloads);
@@ -82,6 +82,42 @@ begin
   end loop;
  end loop;
  insert into ` + ns + `tesl_row_queue_sources values(v,binding,binding_hash,inventory_hash,expansion_hash);
+end`},
+		{"tesl_row_queue_transition_valid", "old_contracts jsonb, new_contracts jsonb, v integer", "boolean", "stable", `
+begin
+ if ` + ns + `tesl_queue_inventory_preserves(old_contracts,new_contracts)
+  and not exists(select 1 from ` + ns + `tesl_row_queue_target_staging where version=v) then return true; end if;
+ if v is distinct from 2 then return false; end if;
+ if not exists(select 1 from ` + ns + `tesl_row_queue_target_staging t
+ join ` + ns + `tesl_schema_meta m on m.id=1 and m.database_uuid=t.database_uuid and m.fence_ns=t.fence_ns
+ join ` + ns + `tesl_row_physical p on p.version=t.version and p.contract=t.contract and p.contract_hash=t.contract_hash
+  and p.compiler_abi=t.compiler_abi and p.stored_value_compatibility=t.stored_value_compatibility
+  and p.predecessor_hash=t.predecessor_hash and p.operation_count=0 and not p.epoch_preserving
+ where t.version=v) then return false; end if;
+ -- First path retains the complete queue/job membership; additions and
+ -- removals need their own full source authority, not a changed-payload receipt.
+ if exists(select 1 from pg_catalog.jsonb_array_elements(new_contracts) nq
+  cross join lateral pg_catalog.jsonb_array_elements(nq->'payloads') np
+  where not exists(select 1 from pg_catalog.jsonb_array_elements(old_contracts) oq
+    cross join lateral pg_catalog.jsonb_array_elements(oq->'payloads') op
+    where nq->>'queue'=oq->>'queue' and np->>'job'=op->>'job')) then return false; end if;
+ if exists(select 1 from pg_catalog.jsonb_array_elements(old_contracts) oq
+  cross join lateral pg_catalog.jsonb_array_elements(oq->'payloads') op
+  where not exists(select 1 from pg_catalog.jsonb_array_elements(new_contracts) nq
+    cross join lateral pg_catalog.jsonb_array_elements(nq->'payloads') np
+    where nq->>'queue'=oq->>'queue' and np->>'job'=op->>'job'
+     and (np=op or exists(select 1 from ` + ns + `tesl_row_queue_conversion_staging c
+      join ` + ns + `tesl_schema_meta m on m.id=1 and m.database_uuid=c.database_uuid and m.fence_ns=c.fence_ns
+      join ` + ns + `tesl_row_queue_sources source on source.version=c.from_version and source.inventory_hash=c.inventory_hash and source.expansion_hash=c.expansion_hash
+      where c.from_version=v-1 and c.to_version=v and c.revision=0 and c.queue=oq->>'queue' and c.job_type=op->>'job'
+       and c.old_contract=pg_catalog.decode(op->>'contract','hex') and c.new_contract=pg_catalog.decode(np->>'contract','hex'))))) then return false; end if;
+ if exists(select 1 from ` + ns + `tesl_row_queue_conversion_staging c where c.from_version=v-1 and c.revision=0
+  and not exists(select 1 from pg_catalog.jsonb_array_elements(old_contracts) oq cross join lateral pg_catalog.jsonb_array_elements(oq->'payloads') op
+   join pg_catalog.jsonb_array_elements(new_contracts) nq on nq->>'queue'=oq->>'queue'
+   cross join lateral pg_catalog.jsonb_array_elements(nq->'payloads') np
+   where oq->>'queue'=c.queue and op->>'job'=c.job_type and np->>'job'=c.job_type and np<>op
+    and c.old_contract=pg_catalog.decode(op->>'contract','hex') and c.new_contract=pg_catalog.decode(np->>'contract','hex'))) then return false; end if;
+ return true;
 end`}}
 }
 
@@ -152,7 +188,7 @@ func pgRowQueueVerificationSQL(namespace, version string) string {
   contracts:=` + ns + `tesl_queue_inventory_json(n);
   if source.stored_value_compatibility<>compatibility or source.inventory_hash<>binding.inventory_hash
    or ` + ns + `tesl_queue_inventory_hash(family,n,source.storage_snapshot_hash,source.schema_snapshot_hash,compatibility,contracts)<>source.inventory_hash
-   or not ` + ns + `tesl_queue_inventory_preserves(previous,contracts) then
+    or (n>1 and not ` + ns + `tesl_row_queue_transition_valid(previous,contracts,n)) then
    raise exception 'tesl: row queue semantic inventory differs'; end if;
   previous:=contracts;
   expected:=pg_catalog.convert_to('l4:s24:tesl-migration-canonicals1:1s9:migrationl7:s24:tesl-row-queue-source-v1','UTF8')

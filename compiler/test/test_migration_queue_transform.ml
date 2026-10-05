@@ -67,14 +67,14 @@ let ref_ file name = Ast.EVar {name;loc=Location.dummy_loc file}
 let without_tests source =
   let stop=Str.search_forward (Str.regexp_string "test \"") source 0 in
   String.sub source 0 stop
-let project ?(before=old) ?(after=fresh) ?(body=helper) run =
+let project ?(source_version=1) ?(before=old) ?(after=fresh) ?(body=helper) run =
  let root=Filename.temp_dir "tesl-queue-transform-" "" in
  Fun.protect ~finally:(fun()->remove root)(fun()->
    let save relative bytes=let p=Filename.concat root relative in write p bytes; p in
    ignore(save "tesl.toml" "");
-   let previous=save "schema/mail/v1.tesl" before and current=save "schema/mail/v-current.tesl" after in
+    let previous=save (Printf.sprintf "schema/mail/v%d.tesl" source_version) before and current=save "schema/mail/v-current.tesl" after in
    let file=save "migrations/mail/helpers.tesl" body in
-   let check ?(version=2) ?(queue="Jobs") ?(job="Delivery") ?(callback="convert") ?(fixtures=["oldJob"]) () =
+    let check ?(version=source_version+1) ?(queue="Jobs") ?(job="Delivery") ?(callback="convert") ?(fixtures=["oldJob"]) () =
      let source=Source_input.read file in
      Q.check ~project_root:root ~before:(load previous) ~after:(load current) ~version ~queue ~job ~source (parse file source)
        ~callback:(ref_ file callback) ~fixtures:(List.map(ref_ file)fixtures) in
@@ -870,8 +870,18 @@ let public_repair_postgres () = with_public_repair ~entities:true (fun root save
  let target=List.hd(List.rev(Migration_retained_storage.versions plan)) in
  let target_doc,target_hash=Migration_row_history.contract Migration_canonical.Migration
    (Migration_retained_storage_canonical.version_node ~family:"Schema.Mail" ~namespace:"mail" plan target) in
+ let inventory=(List.hd(List.rev(Migration_row_history.versions history))).schema in
+ let quote=Emit_go.go_quote in
+ let contracts=Migration_inventory.queue_contracts inventory |> List.map(fun q ->
+   let payloads=List.map(fun p->let contract,hash=Migration_row_history.contract Migration_canonical.Contract
+     (Migration_canonical.Seq[Migration_canonical.Bytes "queue-payload-v1";p.Migration_inventory.payload_contract]) in
+     Printf.sprintf {|{"Job":%s,"Contract":%s,"ContractHash":%s}|} (quote(Migration_queue.wire_identity inventory p.payload_name))(quote contract)(quote hash))q.Migration_inventory.payloads in
+   Printf.sprintf {|{"Queue":%s,"Payloads":[%s]}|} (quote(Migration_queue.wire_identity inventory q.queue_name))(String.concat "," payloads)) in
+ let inventory_json=Printf.sprintf {|{"Version":2,"SchemaSnapshotHash":%s,"StorageSnapshotHash":%s,"SourceSealInventory":"complete","Contracts":[%s]}|}
+   (quote(Migration_canonical.digest Migration_canonical.Snapshot (Migration_inventory.snapshot inventory)))
+   (quote(Migration_storage.digest (Result.get_ok(Migration_storage.describe inventory))))(String.concat "," contracts) in
  ignore(save "out/internal/teslrt/queue_target_test_constants.go"
-   (Printf.sprintf "package teslrt\nconst testQueueTargetDocument = %s\nconst testQueueTargetHash = %s\n" (Emit_go.go_quote target_doc)(Emit_go.go_quote target_hash)));
+   (Printf.sprintf "package teslrt\nconst testQueueTargetDocument = %s\nconst testQueueTargetHash = %s\nconst testQueueTargetInventory = %s\n" (Emit_go.go_quote target_doc)(Emit_go.go_quote target_hash)(quote inventory_json)));
  ignore(save "baseline/tesl.toml" "");
  ignore(save "baseline/schema/mail/v-current.tesl" ((old |> replace "Schema.Mail.V1" "Schema.Mail.VCurrent") ^ "\nentity Note table \"notes\" primaryKey id { id: String, title: String }\n"));
  let app=save "baseline/app.tesl" repair_baseline_app in
@@ -896,7 +906,81 @@ let public_repair_postgres () = with_public_repair ~entities:true (fun root save
     "TestPostgresAutomaticConversionAndRepairBatches";"TestPostgresBatchSelectionAndCompetingWorkers";
     "TestPostgresBatchFailurePreservesCommittedPrefix";"TestPostgresBatchBoundsCancellationAndLiveClaims";
     "TestPostgresWorkerReopensWithoutInstaller";"TestPostgresWorkerReopenRejectsCatalogAndSourceDrift";
-    "TestPostgresWorkerReopensInNewProcess";"TestPostgresApplicationStagesExactQueueRepairHistory"])
+    "TestPostgresWorkerReopensInNewProcess";"TestPostgresApplicationStagesExactQueueRepairHistory";
+    "TestPostgresApplicationPreparesCheckedSuccessorInventory"])
+let upgrade_schema fields encoder decoder = Printf.sprintf {|module Schema.Mail.VCurrent exposing [Delivery, Jobs]
+import Tesl.Prelude exposing [String, Int]
+import Tesl.Json exposing [stringCodec, intCodec]
+record Delivery { %s }
+codec Delivery { toJson { %s } fromJson [ { %s } ] }
+queueSchema Jobs { jobs: [Delivery] }
+|} fields encoder decoder
+let third_schema=upgrade_schema "content: String, importance: Int, tag: String"
+ {|content -> "content" with_codec stringCodec, importance -> "importance" with_codec intCodec, tag -> "tag" with_codec stringCodec|}
+ {|content <- "content" with_codec stringCodec, importance <- "importance" with_codec intCodec, tag <- "tag" with_codec stringCodec|}
+let fourth_schema=upgrade_schema "message: String, rank: Int, audit: String"
+ {|message -> "message" with_codec stringCodec, rank -> "rank" with_codec intCodec, audit -> "audit" with_codec stringCodec|}
+ {|message <- "message" with_codec stringCodec, rank <- "rank" with_codec intCodec, audit <- "audit" with_codec stringCodec|}
+let upgrade_helpers stage =
+ let old_name=Printf.sprintf "Schema.Mail.V%d" stage in
+ let subject,accepted,repaired,old_value,rejected_value=match stage with
+  | 1 -> "text","body: old.text, priority: 7","body: \"repaired\", priority: 9","text: \"kept\"","text: \"\""
+  | 2 -> "body","content: old.body, importance: old.priority + 10, tag: \"v3\"",
+    "content: \"repaired\", importance: old.priority + 10, tag: \"v3\"",
+    "body: \"kept\", priority: 7","body: \"\", priority: 3"
+  | _ -> "content","message: old.content, rank: old.importance + 10, audit: old.tag",
+    "message: \"repaired\", rank: old.importance + 10, audit: old.tag",
+    "content: \"kept\", importance: 17, tag: \"v3\"","content: \"\", importance: 5, tag: \"v3\"" in
+ Printf.sprintf {|module Schema.Mail.Migrate.Helpers exposing [convert, oldJob, repair, repairAgain, repairJob]
+import Tesl.Prelude exposing [String, Int, Bool(..)]
+import Tesl.Migration exposing [Migrated(..)]
+import %s
+import Schema.Mail.VCurrent
+fn convert(old: %s.Delivery) -> Migrated Schema.Mail.VCurrent.Delivery =
+ if old.%s == "" then
+  Reject "empty job"
+ else
+  Row (Schema.Mail.VCurrent.Delivery { %s })
+fn repair(old: %s.Delivery) -> Migrated Schema.Mail.VCurrent.Delivery = Reject "needs another repair"
+fn repairAgain(old: %s.Delivery) -> Migrated Schema.Mail.VCurrent.Delivery =
+ Row (Schema.Mail.VCurrent.Delivery { %s })
+fn oldJob() -> %s.Delivery = %s.Delivery { %s }
+fn repairJob() -> %s.Delivery = %s.Delivery { %s }
+|} old_name old_name subject accepted old_name old_name repaired old_name old_name old_value old_name old_name rejected_value
+let three_non_additive_upgrades () =
+ let out=Filename.temp_dir "tesl-three-queue-upgrades-" "" in
+ Fun.protect ~finally:(fun()->remove out)(fun()->
+  let fixture name=
+   let candidates=List.map(fun prefix->Filename.concat prefix ("fixtures/queue-repair-postgres/" ^ name))
+    ["compiler/test";"test";".";Filename.dirname Sys.executable_name] in
+   read(List.find Sys.file_exists candidates) in
+  let binaries=List.init 3 (fun index ->
+   let stage=index+1 in
+   let before,after=match stage with
+    | 1 -> old,fresh
+    | 2 -> (fresh |> replace "VCurrent" "V2"),third_schema
+    | _ -> (third_schema |> replace "VCurrent" "V3"),fourth_schema in
+   project ~source_version:stage ~before ~after ~body:(upgrade_helpers stage) (fun _ _ _ make ->
+    let _,_,repair=repairs make in
+    let artifacts=match Compile.compile_queue_conversion_artifacts repair with
+     | Compile.GoSuccess a->a | Compile.GoFailure ds->fail(Compile.diagnostics_to_json ds) in
+    let target=Filename.concat out (string_of_int stage) in
+    List.iter(fun(a:Emit_go.artifact)->write(Filename.concat target a.path)a.contents)artifacts;
+    write(Filename.concat target "internal/teslrt/upgrade_bridge.go") (fixture "bridge.go");
+    write(Filename.concat target "internal/teslrt/unused_application_test_constants.go")
+      "package teslrt\nconst testQueueTargetDocument=\"\"\nconst testQueueTargetHash=\"\"\nconst testQueueTargetInventory=\"\"\n";
+    write(Filename.concat target "internal/teslqueueconversions/three_upgrades_test.go")
+      (fixture "three_upgrades_test.go" |> replace "const upgradeStage = 0" ("const upgradeStage = " ^ string_of_int stage) |> replace "@@DIGEST@@" (Q.digest repair));
+    let command=Printf.sprintf "cd %s && go test -race -p 1 -c -o upgrade.test ./internal/teslqueueconversions 2>&1" (Filename.quote target) in
+    let channel=Unix.open_process_in command in let output=In_channel.input_all channel in
+    (match Unix.close_process_in channel with Unix.WEXITED 0->()|_->fail output);
+    Filename.concat target "upgrade.test")) in
+  let command=Printf.sprintf "QUEUE_UPGRADE_BINARY_2=%s QUEUE_UPGRADE_BINARY_3=%s %s -test.run '^TestThreeNonAdditiveQueueUpgrades$' -test.timeout=180s -test.v 2>&1"
+    (Filename.quote(List.nth binaries 1))(Filename.quote(List.nth binaries 2))(Filename.quote(List.hd binaries)) in
+  let channel=Unix.open_process_in command in let output=In_channel.input_all channel in
+  (match Unix.close_process_in channel with Unix.WEXITED 0->()|_->fail output);
+  if Sys.getenv_opt "TESL_MIGRATION_TEST_REQUIRE_POSTGRES"=Some "1" then
+   check bool output true (Compile.string_contains output "--- PASS: TestThreeNonAdditiveQueueUpgrades"))
 let () = run "sealed queue conversion source" ["source",List.map(fun(name,f)->test_case name `Quick f)
  ["checked callback fixture and stable identity",valid;
   "exact adjacent queue and payload identities",identities;
@@ -950,4 +1034,5 @@ let () = run "sealed queue conversion source" ["source",List.map(fun(name,f)->te
   "public repair import and contextual value boundaries",public_repair_import_boundary;
   "public repair lesson local callback executes",(fun()->public_repair_native ~local_repair:true());
   "public repair binds exact checked predecessor bytes",public_repair_exact_source;
-  "compiled typed repair executes atomic PostgreSQL updates",public_repair_postgres]]
+  "compiled typed repair executes atomic PostgreSQL updates",public_repair_postgres;
+  "three non-additive PostgreSQL upgrades preserve jobs and repair history",three_non_additive_upgrades]]

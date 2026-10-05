@@ -247,3 +247,46 @@ The compiler marks a queue-payload change as narrowing even when entity storage 
 unchanged. Database tests reject altered descriptors with recomputed hashes and
 verify that staging does not accidentally publish V2. Publishing that expansion
 and enabling ordinary worker dispatch remain pending.
+
+The internal Worker integration now prepares the complete successor queue inventory
+and publishes its expansion through the ordinary application control protocol.
+Tests prove that pending registration does not admit V2, publication waits for old
+compatibility plans, and V2 admission starts after its completed expansion commits.
+The public V1 status command can inspect both states, and existing V1 jobs remain
+untouched. The remaining integration is ordinary changed-payload V2 compilation,
+conversion dispatch and retirement; this internal publication operation is not
+yet selected by the application's public worker command.
+
+The same database witness now registers repair revisions after publishing that
+successor. Their root must match the conversion already bound to the completed
+expansion, and the old source version must still be admitted. This allows a later
+repair deployment to extend immutable history rather than editing the original
+migration. Actual application-bound conversion dispatch is the next step.
+
+## Three successive non-additive upgrades
+
+`three_upgrades_test.go` runs three separately compiled migration/repair binaries
+against the **same PostgreSQL database**, with original source files removed:
+
+| Upgrade | New payload shape | Retained job's computed value |
+|---|---|---|
+| V1 → V2 | `body`, `priority` | `"kept"`, `7` |
+| V2 → V3 | `content`, `importance`, `tag` | `"kept"`, `17`, `"v3"` |
+| V3 → V4 | `message`, `rank`, `audit` | `"kept"`, `27`, `"v3"` |
+
+Each target codec is incompatible with its predecessor. At every upgrade, an
+old-valid payload is rejected, the first separately registered repair rejects
+again, and the second repair succeeds. Rejections preserve the original bytes
+and version; retirement stays blocked until the repair completes. Worker restart
+and receipt replay are tested at each edge.
+
+A delayed job and a dead job survive the entire chain with their scheduling and
+attempt counts intact. The database retains all four payload contracts, nine
+conversion/repair descriptors and twenty outcome receipts. Repair revision numbers
+are local to each migration edge, so later revisions cannot overwrite earlier
+history. Skipping a version or upgrading before retirement is refused.
+
+This proves repeated upgrades in the database execution candidate. It does not yet
+prove three ordinary application deployments; public changed-payload dispatch and
+the complete application retirement path remain gated. The private-cluster
+migration gate includes this test with PostgreSQL required.

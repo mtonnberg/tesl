@@ -233,6 +233,27 @@ database/fence identity. It leaves the real physical/expansion history at V1.
 The target queue inventory and completed expansion still must be published through
 their protected lifecycle before any ordinary application conversion runs.
 
+The internal Worker path now consumes that target binding: `pgPrepareRowQueueTarget`
+registers the exact physical manifest, complete successor queue inventory and
+expansion intent in one transaction. Changed payloads require matching staged
+old/new contracts and database/source identities. The initial narrowing path
+retains all queue/job membership and rejects additions/removals and unused
+conversion decisions. Preparation still grants no successor admission.
+
+`pgPublishRowQueueTarget` then drains the application's existing compatibility-plan
+domain, verifies the same target and inventory under the publication transaction,
+and completes the protected expansion receipt. V2 becomes admitted at that commit,
+with a non-epoch-preserving expansion. V1 jobs are not rewritten by publication.
+An ordinary V1 binary can inspect the pending and published successor, and replay
+preserves immutable receipts. This remains an internal Worker boundary; normal
+changed-payload V2 emission, conversion dispatch and retirement are not enabled.
+
+Installer-only repair staging may append revisions after the exact V2 expansion
+has completed, provided V1 remains admitted and the staged conversion root,
+physical target and completed expansion receipt still match. The database test
+registers the root first, publishes V2, then registers the separate repair lineage.
+It never relabels the old job or rewrites the original deployed conversion.
+
 The PostgreSQL witness uses a separately compiled ordinary V1 application and its
 public installer/worker commands, with original sources deleted. It creates the
 job through the ordinary protected queue API, verifies staged database and
@@ -243,6 +264,23 @@ existing format-5 catalog has been extended; old databases missing the staging
 table fail the exact catalog check. There is no implicit upgrade/adoption path.
 
 ### PostgreSQL conversion and repair execution candidate
+
+The candidate now supports adjacent repeated upgrades after retiring the prior
+source. Repair revisions are scoped to their `from_version`, not global slots.
+Upgrade compares the next frozen codec and complete historical snapshots with
+the previous target and preserves all payload contracts, source descriptors,
+outcome receipts and installation identity. It installs the new root only;
+repair revisions are registered separately after rejection. Reopening selects
+the active edge without deleting older audit history.
+
+`three_upgrades_test.go` runs separately compiled V1/V2, V2/V3 and V3/V4 binaries
+against one private PostgreSQL database after deleting their original sources.
+Every transition changes the JSON shape. All three perform rejection, two repair
+revisions, restart/replay and retirement. Delayed/dead jobs traverse the whole
+chain, with exact computed values, schedules and attempt counts retained. Skipped
+and unretired upgrades refuse; twenty outcome receipts and nine source descriptors
+survive. This is an execution-candidate witness; it does not claim three ordinary
+application deployments, whose public dispatch remains gated.
 
 `runtime/go/teslrt/migration_queue_conversion_postgres.go` now executes compiled
 conversions and repair revisions against real PostgreSQL jobs. Its private
@@ -301,7 +339,7 @@ The candidate provides:
 
 The source-deleted generated-project fixture in
 `compiler/test/fixtures/queue-repair-postgres/` exercises real roles and database
-connections. Seventeen parent Go test groups cover persisted conversion/repair, delayed and
+connections. Nineteen parent Go test groups cover persisted conversion/repair, delayed and
 dead jobs, pre-commit backend termination, post-commit replay after reconnect,
 competing workers, abandoned/stale attempts, progressive repair registration and
 rollback, foreign database/contract bindings, malformed payloads, active and
