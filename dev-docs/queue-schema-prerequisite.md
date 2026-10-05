@@ -297,6 +297,27 @@ tests these turns without supplying callback pointers, including one-job budgets
 repair discovery after reconnect, idle receipt-based scans and Request refusal.
 The public schema-worker service does not select this turn yet.
 
+### Application queue-only retirement
+
+`pgRetireRowQueue` closes the initial published queue-only V1/V2 edge under the
+real application writer and compatibility fences. It constructs a canonical
+retirement binding the database UUID/fence, complete target physical/inventory
+hashes, ordered source/repair digests and execution ABI. Protected SQL verifies
+that exact binding and the exclusive source locks before checking finality.
+Old-stamped jobs (including quarantines), retiring claimants and outstanding
+attempts prevent the floor advance. A surviving V2 claimant remains valid.
+
+Success records `tesl_row_queue_retirements`, the exact retired/contracting/
+contracted lifecycle slots, and both application admission floors in one commit.
+The unchanged entity generations are retained; no destructive row Contract is
+invented. Read-only observers verify the receipt and slot provenance, using a
+protected boolean finality helper so Request logins never read raw job payloads.
+
+The PostgreSQL application witness exercises rejection/repair blocking, successful
+retirement, exact replay, V1 writer refusal and V2 renewal/completion after the
+floor moves. This remains an internal operation: public compiler/worker/retirement
+commands and recent-instance policy have not selected this path yet.
+
 ### Isolated repeated-upgrade execution
 
 The candidate now supports adjacent repeated upgrades after retiring the prior

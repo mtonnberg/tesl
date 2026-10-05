@@ -1232,3 +1232,76 @@ func TestPostgresApplicationWorkerTurnFindsCompilerBoundCallbacks(t *testing.T) 
 		t.Fatal("resolved typed code did not publish target payload", body, stamp, err)
 	}
 }
+
+func TestPostgresApplicationQueueRetirementBlocksUntilRepair(t *testing.T) {
+	f := rt.OpenApplicationQueueForTest(t)
+	if err := f.StageApplicationRoot(f.Installer, Conversion0); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.StageApplicationTarget(f.Installer); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.PublishApplicationTarget(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Request.Exec(f.Context, "select mail.tesl_queue_enqueue(1,'Jobs','Delivery','retire',$1::jsonb)", `{"oldText":""}`); err != nil {
+		t.Fatal(err)
+	}
+	if done, err := f.RetireApplication(f.Request); err == nil || done {
+		t.Fatal("Request retired application history", done, err)
+	}
+	if done, err := f.RetireApplication(f.Worker); err != nil || done {
+		t.Fatal("pending old job did not block retirement", done, err)
+	}
+	if p, err := f.ApplicationTurn(f.Worker, 1); err != nil || p.Rejected != 1 {
+		t.Fatal(p, err)
+	}
+	if done, err := f.RetireApplication(f.Worker); err != nil || done {
+		t.Fatal("quarantine did not block retirement", done, err)
+	}
+	if err := f.StageApplication(f.Installer, finalRepairDigest); err != nil {
+		t.Fatal(err)
+	}
+	if p, err := f.ApplicationTurn(f.Worker, 1); err != nil || p.Rejected != 1 {
+		t.Fatal(p, err)
+	}
+	if done, err := f.RetireApplication(f.Worker); err != nil || done {
+		t.Fatal("rejected repair did not block retirement", done, err)
+	}
+	if p, err := f.ApplicationTurn(f.Worker, 1); err != nil || p.Converted != 1 {
+		t.Fatal(p, err)
+	}
+	if err := f.OpenApplicationDispatch(f.Worker, finalRepairDigest); err != nil {
+		t.Fatal(err)
+	}
+	claim, ok, err := f.QueueClaim(f.Request, 2, "pending", 60000)
+	if err != nil || !ok {
+		t.Fatal(claim, ok, err)
+	}
+	if done, err := f.RetireApplication(f.Worker); err != nil || !done {
+		t.Fatal("surviving V2 claim blocked completed retirement", done, err)
+	}
+	if done, err := f.RetireApplication(f.Worker); err != nil || !done {
+		t.Fatal("retirement replay failed", done, err)
+	}
+	var floor, compat, receipts int
+	if err := f.Worker.QueryRow(f.Context, "select min_version,compat_floor,(select count(*) from mail.tesl_schema_versions where version=2 and step in ('retired','contracting','contracted')) from mail.tesl_schema_state where id=1").Scan(&floor, &compat, &receipts); err != nil || floor != 2 || compat != 2 || receipts != 3 {
+		t.Fatal("queue retirement did not atomically advance real floors/receipts", floor, compat, receipts, err)
+	}
+	if _, err := f.Request.Exec(f.Context, "select mail.tesl_queue_enqueue(1,'Jobs','Delivery','late',$1::jsonb)", `{"oldText":"late"}`); err == nil {
+		t.Fatal("retired V1 writer enqueued a job")
+	}
+	if err := f.StageApplication(f.Installer, finalRepairDigest); err == nil {
+		t.Fatal("retired source accepted repair registration")
+	}
+	if p, err := f.ApplicationTurn(f.Worker, 256); err != nil || p.Selected != 0 {
+		t.Fatal("retired edge still scheduled work", p, err)
+	}
+	if renewed, err := f.QueueBoolean(f.Request, 2, "renew", claim.ID, claim.Token, claim.Sequence, int64(60000)); err != nil || !renewed {
+		t.Fatal("retirement revoked surviving V2 lease", renewed, err)
+	}
+	if completed, err := f.QueueBoolean(f.Request, 2, "complete", claim.ID, claim.Token, claim.Sequence); err != nil || !completed {
+		t.Fatal(completed, err)
+	}
+	f.ApplicationStatus(t)
+}

@@ -265,6 +265,10 @@ func (f *QueueConversionDBFixture) ApplicationTurn(conn *pgx.Conn, limit int) (p
 	return pgRunRowQueueConversionTurn(f.Context, conn, "mail", f.roles, limit)
 }
 
+func (f *QueueConversionDBFixture) RetireApplication(conn *pgx.Conn) (bool, error) {
+	return pgRetireRowQueue(f.Context, conn, "mail", f.roles)
+}
+
 func (f *QueueConversionDBFixture) ApplicationTurnWithoutCode(c pgQueueConversionExecutable) (pgQueueConversionBatch, error) {
 	digest := c.queueConversionSource().spec.digest
 	compiledQueueConversionExecutables.Lock()

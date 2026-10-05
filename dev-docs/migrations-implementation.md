@@ -56,6 +56,37 @@ remaining integration requirements.
 
 ### Implementation and verification evidence
 
+After WIP commit `1dc82cc`, the initial queue-only application edge now has a
+protected retirement operation and independently verified durable receipt. It
+drains both real V1 writer and compatibility-plan domains, locks application
+state, checks the exact completed target and canonical source/repair lineage,
+and refuses while old-stamped jobs, retiring claimants or transient conversion
+attempts remain. On success it atomically records queue retirement and terminal
+lifecycle slots and advances the real `min_version`/`compat_floor` to V2. No row
+generation or destructive entity Contract is fabricated for unchanged entities.
+
+Read-only observation verifies the queue receipt against the full installed
+physical/source history and its complete lifecycle. Finality uses a protected
+boolean SQL helper instead of reading raw job rows from Request authority. The
+new database test reproduced that privacy-boundary error before the fix. The
+per-entity finality reader now recognizes exact queue-only retirement while
+retaining generation-one entity finality.
+
+The ordinary-app PostgreSQL witness proves that pending jobs, quarantine and a
+rejecting repair block retirement; a successful typed repair permits it even
+with a live surviving V2 claimant. Replay is idempotent, retired V1 enqueue and
+repair registration refuse, the worker turn becomes idle, and V2 lease renewal
+and normal completion still succeed. The public V1 status binary can inspect
+the retired history. All 53 conversion/repair cases pass with mandatory
+PostgreSQL, plus affected runtime baseline/physical/queue/epoch race suites,
+the public unchanged-payload application regression and embedding/build gates.
+
+This is internal queue-only V1/V2 finality. Public changed-payload emission,
+schema-worker/retirement command integration and operator recent-instance policy
+remain pending; it is not a general mixed row/queue Contract or repeated ordinary
+application rollout. Older catalogs are still refused rather than upgraded.
+The full migration gate has not been rerun after these changes.
+
 WIP commit `39c516b` records application-bound conversion/repair mutation and its
 real version fences. A bounded application Worker turn now discovers staged
 digests from the published target and resolves them through the compiler-bound

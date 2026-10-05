@@ -316,3 +316,11 @@ repair and successful repair using successive one-job turns, without passing a
 callback or job ID to the dispatcher. A staged descriptor without linked code is
 refused before mutation. Wiring this entry point into ordinary changed-payload
 application builds and the public worker service remains pending.
+
+The internal application retirement test now closes this queue-only edge under
+the real V1 writer and compatibility locks. Pending old jobs, quarantines and
+rejecting repairs block the floor. After successful repair, the receipt and
+admission floors advance together; the old writer is refused and a surviving
+V2 claimant can still renew and complete. Read-only V1 status inspection verifies
+the retired history without reading raw queue payloads. Selecting this path from
+the public compiler/worker and retirement commands remains the next integration.

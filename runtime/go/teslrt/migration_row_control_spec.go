@@ -76,7 +76,7 @@ func pgRowControlTables() []pgMigrationControlTable {
  primary key(version,entity),unique(version,table_name),unique(version,ordinal),
  check(pg_catalog.encode(pg_catalog.sha256(type_contract),'hex')=type_contract_hash),
  check(pg_catalog.encode(pg_catalog.sha256(physical_storage),'hex')=physical_storage_hash)`},
-	}, append(append(pgRowForwardTables(), pgRowLifecycleTables()...), pgRowQueueWorkTables()...)...)
+	}, append(append(append(pgRowForwardTables(), pgRowLifecycleTables()...), pgRowQueueWorkTables()...), pgRowQueueRetirementTables()...)...)
 }
 
 // Format5 binds each version to its original baseline and checked expansion
@@ -152,5 +152,6 @@ end`
 	functions = append(functions, pgRowQueueOperationFunctions(namespace)...)
 	functions = append(functions, pgRowQueueFunctions(namespace)...)
 	functions = append(functions, pgRowQueueConversionFunctions(namespace)...)
+	functions = append(functions, pgRowQueueRetirementFunctions(namespace)...)
 	return append(append(append(append(functions, pgRowForwardFunctions(namespace)...), pgRowBackfillFunctions(namespace)...), pgRowContractFunctions(namespace)...), append(pgRowEpochFunctions(namespace), pgRowIndexFunctions(namespace)...)...)
 }

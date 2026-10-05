@@ -34,6 +34,16 @@ func pgExpectedRowControl(e *pgCatalogExpectations, owner, name string) (*pgCata
 	digest := func(value, hash string) { check("(encode(sha256("+value+"), 'hex'::text) = "+hash+")", value, hash) }
 	bounded := func(n string) { check("(("+n+" >= 1) AND ("+n+" <= 2147483646))", n) }
 	switch name {
+	case "tesl_row_queue_retirements":
+		col("version", "int4")
+		col("retirement", "bytea")
+		col("retirement_hash", "text")
+		col("compiler_abi", "text")
+		con("p", "", "version")
+		check("(version = 2)", "version")
+		hash("retirement_hash")
+		check("(compiler_abi ~ '^tesl-source-abi-v1:[0-9a-f]{64}$'::text)", "compiler_abi")
+		digest("retirement", "retirement_hash")
 	case "tesl_row_queue_target_staging":
 		col("version", "int4")
 		col("database_uuid", "uuid")

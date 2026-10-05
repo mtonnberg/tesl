@@ -23,6 +23,7 @@ type pgRowForwardManifest struct {
 	predecessor               *pgRowPhysicalPlan
 	contraction               *pgRowPersistedContract
 	epoch                     *pgRowEpochRetirement
+	queueRetirement           *pgRowQueueRetirement
 	completed                 int
 	plan                      *pgRowPhysicalPlan
 	creatorABI, compatibility string
@@ -231,6 +232,21 @@ func pgReadRowForwardManifest(ctx context.Context, tx pgx.Tx, b *pgRowBaseline) 
 		}
 		manifest.epoch = epoch
 	}
+	var queueState PgMigrationControlState
+	if err := tx.QueryRow(ctx, "select database_uuid::text,fence_ns from "+ns+"tesl_schema_meta where id=1").Scan(&queueState.DatabaseUUID, &queueState.FenceNamespace); err != nil {
+		return nil, err
+	}
+	queueRetirements, err := pgReadRowQueueRetirements(ctx, tx, b, queueState)
+	if err != nil {
+		return nil, err
+	}
+	for target, retirement := range queueRetirements {
+		manifest := manifests[target]
+		if manifest == nil || len(manifest.plan.queueConversions) == 0 {
+			return nil, fmt.Errorf("queue retirement references an absent queue transition")
+		}
+		manifest.queueRetirement = retirement
+	}
 	return result, nil
 }
 
@@ -351,6 +367,26 @@ func pgVerifyRowExpansionHistory(state PgMigrationControlState, b *pgRowBaseline
 			}
 		} else if m.epoch != nil {
 			return fmt.Errorf("transforming revision cannot be an additive epoch slot")
+		} else if len(m.plan.queueConversions) > 0 {
+			if c != nil || m.processingABI != "" {
+				return fmt.Errorf("queue-only retirement cannot carry row work or a destructive Contract")
+			}
+			if m.queueRetirement == nil {
+				if hasRetired || hasContracting || hasContracted {
+					return fmt.Errorf("queue lifecycle lacks its exact retirement receipt")
+				}
+			} else {
+				if !hasExpanded || !hasRetired || !hasContracting || !hasContracted {
+					return fmt.Errorf("queue retirement lacks its complete slot lifecycle")
+				}
+				for _, step := range []PgMigrationControlVersion{retired, contracting, contracted} {
+					if step.ArtifactHash != m.queueRetirement.hash || step.SourceABI != m.queueRetirement.abi || step.SnapshotHash != "" || step.StoredValueCompatibility != m.compatibility || step.EpochPreserving != nil {
+						return fmt.Errorf("queue retirement provenance differs")
+					}
+				}
+				expectedMin = version
+				expectedFloor = version
+			}
 		} else if c == nil {
 			if hasRetired || hasContracting || hasContracted {
 				return fmt.Errorf("row lifecycle lacks checked Contract")
