@@ -669,6 +669,11 @@ var compiledQueueConversionSources = struct {
 	byDigest map[string]*pgQueueConversionSource
 }{byDigest: map[string]*pgQueueConversionSource{}}
 
+var compiledQueueConversionExecutables = struct {
+	sync.RWMutex
+	byDigest map[string]pgQueueConversionExecutable
+}{byDigest: map[string]pgQueueConversionExecutable{}}
+
 func pgReadQueueConversionSource(spec pgQueueConversionSourceSpec) (*pgQueueConversionSource, error) {
 	r := &pgMigrationWireReader{}
 	node := pgRowDocument(r, spec.document, spec.digest, "migration")
@@ -989,7 +994,11 @@ func BindCompiledQueueConversion[Old, Current any](digest string, decode func(an
 			return nil, fmt.Errorf("queue conversion callback differs from its emitted source binding")
 		}
 	}
-	return &CompiledQueueConversion[Old, Current]{source, decode, convert, encode, targetDecode}, nil
+	value := &CompiledQueueConversion[Old, Current]{source, decode, convert, encode, targetDecode}
+	compiledQueueConversionExecutables.Lock()
+	compiledQueueConversionExecutables.byDigest[digest] = value
+	compiledQueueConversionExecutables.Unlock()
+	return value, nil
 }
 
 func (c *CompiledQueueConversion[Old, Current]) Convert(sourceVersion int, bytes []byte) (result QueueConversionResult, err error) {

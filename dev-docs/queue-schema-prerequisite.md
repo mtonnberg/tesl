@@ -288,6 +288,15 @@ It also tests the real source fence, privacy and unauthorized dispatch. Public
 changed-payload emission, automatic Worker scheduling and full application
 retirement remain pending; this is an internal execution entry point.
 
+`pgRunRowQueueConversionTurn` is a bounded scheduling entry point. It discovers
+staged sources for the published/admitted edge, resolves their digests to adapters
+registered by `BindCompiledQueueConversion`, and processes a total budget of
+1–256 job transactions across the stages. Metadata alone cannot supply code:
+missing executables refuse before dispatch. The real application witness now
+tests these turns without supplying callback pointers, including one-job budgets,
+repair discovery after reconnect, idle receipt-based scans and Request refusal.
+The public schema-worker service does not select this turn yet.
+
 ### Isolated repeated-upgrade execution
 
 The candidate now supports adjacent repeated upgrades after retiring the prior

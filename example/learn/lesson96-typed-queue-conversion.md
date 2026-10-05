@@ -309,3 +309,10 @@ Worker queries; normal completion clears abandoned attempts.
 This crosses the application-database mutation boundary. Selecting these operations
 from ordinary changed-payload application builds and automatic schema-worker
 scheduling, and completing application retirement finality, remain pending.
+
+The internal Worker turn now discovers staged migration/repair digests itself and
+resolves them to compiler-bound typed adapters. Tests run migration, rejecting
+repair and successful repair using successive one-job turns, without passing a
+callback or job ID to the dispatcher. A staged descriptor without linked code is
+refused before mutation. Wiring this entry point into ordinary changed-payload
+application builds and the public worker service remains pending.

@@ -261,6 +261,24 @@ func (f *QueueConversionDBFixture) OpenApplicationRoot(conn *pgx.Conn, c pgQueue
 	return f.OpenApplicationDispatch(conn, c.queueConversionSource().spec.digest)
 }
 
+func (f *QueueConversionDBFixture) ApplicationTurn(conn *pgx.Conn, limit int) (pgQueueConversionBatch, error) {
+	return pgRunRowQueueConversionTurn(f.Context, conn, "mail", f.roles, limit)
+}
+
+func (f *QueueConversionDBFixture) ApplicationTurnWithoutCode(c pgQueueConversionExecutable) (pgQueueConversionBatch, error) {
+	digest := c.queueConversionSource().spec.digest
+	compiledQueueConversionExecutables.Lock()
+	saved := compiledQueueConversionExecutables.byDigest[digest]
+	delete(compiledQueueConversionExecutables.byDigest, digest)
+	compiledQueueConversionExecutables.Unlock()
+	defer func() {
+		compiledQueueConversionExecutables.Lock()
+		compiledQueueConversionExecutables.byDigest[digest] = saved
+		compiledQueueConversionExecutables.Unlock()
+	}()
+	return f.ApplicationTurn(f.Worker, 1)
+}
+
 func (f *QueueConversionDBFixture) MutateApplicationTarget(t *testing.T, kind string) error {
 	t.Helper()
 	doc, _, err := pgReadRowCanonical(testQueueTargetDocument)

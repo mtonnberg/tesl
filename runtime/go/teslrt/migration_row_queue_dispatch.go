@@ -165,3 +165,85 @@ func pgOpenRowQueueConversion(ctx context.Context, conn *pgx.Conn, namespace str
 	}
 	return pgQueueConversionDB{namespace: namespace, identity: state.DatabaseUUID, rootDigest: root.spec.digest, application: true}, nil
 }
+
+// One scheduling turn discovers staged code from the application database and
+// resolves only compiler-bound typed executables. The budget bounds total job
+// transactions across roots and repairs, not just work in an individual stage.
+// The public schema-worker integration can use this without exposing adapter
+// pointers or treating source metadata as executable authority.
+func pgRunRowQueueConversionTurn(ctx context.Context, conn *pgx.Conn, namespace string, roles PgMigrationControlRoles, limit int) (pgQueueConversionBatch, error) {
+	var progress pgQueueConversionBatch
+	if limit < 1 || limit > pgQueueConversionBatchLimit {
+		return progress, fmt.Errorf("application queue turn requires a budget between 1 and %d", pgQueueConversionBatchLimit)
+	}
+	if err := ctx.Err(); err != nil {
+		return progress, err
+	}
+	tx, err := conn.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return progress, err
+	}
+	defer pgQueueConversionCandidateRollback(tx)
+	if err := pgControlSession(ctx, tx); err != nil {
+		return progress, err
+	}
+	if err := pgControlRoles(ctx, tx, roles, false); err != nil {
+		return progress, err
+	}
+	var worker bool
+	if err := tx.QueryRow(ctx, "select current_user=$1 and session_user=$1", roles.Worker).Scan(&worker); err != nil {
+		return progress, err
+	}
+	if !worker {
+		return progress, fmt.Errorf("application queue turn requires exact Worker login")
+	}
+	state, err := pgInspectRowControl(ctx, tx, namespace, roles)
+	if err != nil {
+		return progress, err
+	}
+	ns := quoteIdentifier(namespace) + "."
+	rows, err := tx.Query(ctx, "select source_digest from "+ns+"tesl_row_queue_conversion_staging where to_version=$1 and from_version>= $2 order by queue,job_type,revision", state.Current, state.MinVersion)
+	if err != nil {
+		return progress, err
+	}
+	digests, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return progress, err
+	}
+	var executables []pgQueueConversionExecutable
+	compiledQueueConversionExecutables.RLock()
+	for _, digest := range digests {
+		executable := compiledQueueConversionExecutables.byDigest[digest]
+		if executable == nil {
+			compiledQueueConversionExecutables.RUnlock()
+			return progress, fmt.Errorf("application queue callback %s is not linked as checked executable code", digest)
+		}
+		executables = append(executables, executable)
+	}
+	compiledQueueConversionExecutables.RUnlock()
+	if err := tx.Commit(ctx); err != nil {
+		return progress, err
+	}
+	progress.NoEligible = true
+	for _, executable := range executables {
+		if progress.Selected == limit {
+			progress.NoEligible = false
+			break
+		}
+		scope, err := pgOpenRowQueueConversion(ctx, conn, namespace, roles, executable.queueConversionSource().spec.digest)
+		if err != nil {
+			return progress, err
+		}
+		batch, err := pgRunQueueConversionCandidateBatch(ctx, conn, scope, executable, limit-progress.Selected)
+		progress.Selected += batch.Selected
+		progress.Converted += batch.Converted
+		progress.Rejected += batch.Rejected
+		progress.Invalid += batch.Invalid
+		progress.Replayed += batch.Replayed
+		progress.NoEligible = progress.NoEligible && batch.NoEligible
+		if err != nil {
+			return progress, err
+		}
+	}
+	return progress, nil
+}

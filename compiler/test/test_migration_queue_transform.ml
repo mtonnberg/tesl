@@ -907,7 +907,8 @@ let public_repair_postgres () = with_public_repair ~entities:true (fun root save
     "TestPostgresBatchFailurePreservesCommittedPrefix";"TestPostgresBatchBoundsCancellationAndLiveClaims";
     "TestPostgresWorkerReopensWithoutInstaller";"TestPostgresWorkerReopenRejectsCatalogAndSourceDrift";
     "TestPostgresWorkerReopensInNewProcess";"TestPostgresApplicationStagesExactQueueRepairHistory";
-    "TestPostgresApplicationPreparesCheckedSuccessorInventory";"TestPostgresApplicationConvertsRepairsAndCompletesStoredJob"])
+    "TestPostgresApplicationPreparesCheckedSuccessorInventory";"TestPostgresApplicationConvertsRepairsAndCompletesStoredJob";
+    "TestPostgresApplicationWorkerTurnFindsCompilerBoundCallbacks"])
 let upgrade_schema fields encoder decoder = Printf.sprintf {|module Schema.Mail.VCurrent exposing [Delivery, Jobs]
 import Tesl.Prelude exposing [String, Int]
 import Tesl.Json exposing [stringCodec, intCodec]

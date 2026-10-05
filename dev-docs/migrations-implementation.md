@@ -56,6 +56,28 @@ remaining integration requirements.
 
 ### Implementation and verification evidence
 
+WIP commit `39c516b` records application-bound conversion/repair mutation and its
+real version fences. A bounded application Worker turn now discovers staged
+digests from the published target and resolves them through the compiler-bound
+typed executable registry, instead of accepting adapter pointers from a caller.
+The binding constructor registers only adapters whose nominal types and named
+wrappers match the checked source descriptor. A staged digest without linked
+executable code refuses before any job transaction runs.
+
+The turn budget bounds total job transactions across migration and repair stages.
+Committed receipts prevent hot-loop retries of the same rejection. PostgreSQL
+tests use one-job turns to run the original rejection, a later rejecting repair,
+and then the successful repair after reconnect; completed turns become idle.
+Request logins and metadata-only callback entries are refused. All 53 compiler/
+generated execution cases pass with PostgreSQL required, including the actual
+application mutation and three-upgrade candidate tests, plus pipeline race tests,
+compiler `@check`, runtime file gates and embedding checks.
+
+This is the scheduling entry point, not its public integration. Ordinary
+changed-payload app emission and selection of this turn by the schema-worker
+service remain gated until the complete application retirement path is ready.
+The full migration gate has not been rerun after these changes.
+
 After WIP commit `cf06bca`, conversions and typed repairs now mutate jobs in the
 ordinary application's real control/queue database through an internal Worker
 dispatch boundary. It requires the exact completed V2 physical expansion,

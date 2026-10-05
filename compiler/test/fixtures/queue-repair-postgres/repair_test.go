@@ -1186,3 +1186,49 @@ func TestPostgresApplicationConvertsRepairsAndCompletesStoredJob(t *testing.T) {
 	}
 	f.ApplicationStatus(t)
 }
+
+func TestPostgresApplicationWorkerTurnFindsCompilerBoundCallbacks(t *testing.T) {
+	f := rt.OpenApplicationQueueForTest(t)
+	if err := f.StageApplicationRoot(f.Installer, Conversion0); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.StageApplicationTarget(f.Installer); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.PublishApplicationTarget(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Request.Exec(f.Context, "select mail.tesl_queue_enqueue(1,'Jobs','Delivery','turn',$1::jsonb)", `{"oldText":""}`); err != nil {
+		t.Fatal(err)
+	}
+	if p, err := f.ApplicationTurnWithoutCode(Conversion0); err == nil || p.Selected != 0 || !strings.Contains(err.Error(), "not linked as checked executable code") {
+		t.Fatal("source metadata became executable authority", p, err)
+	}
+	if p, err := f.ApplicationTurn(f.Request, 1); err == nil || p.Selected != 0 {
+		t.Fatal("Request scheduled migration code", p, err)
+	}
+	if p, err := f.ApplicationTurn(f.Worker, 1); err != nil || p.Selected != 1 || p.Rejected != 1 {
+		t.Fatal("worker did not resolve the staged migration callback", p, err)
+	}
+	if p, err := f.ApplicationTurn(f.Worker, 256); err != nil || p.Selected != 0 || !p.NoEligible {
+		t.Fatal("unrepaired rejection became a hot loop", p, err)
+	}
+	if err := f.StageApplication(f.Installer, finalRepairDigest); err != nil {
+		t.Fatal(err)
+	}
+	f.RestartWorker(t)
+	if p, err := f.ApplicationTurn(f.Worker, 1); err != nil || p.Selected != 1 || p.Rejected != 1 {
+		t.Fatal("first bounded repair turn", p, err)
+	}
+	if p, err := f.ApplicationTurn(f.Worker, 1); err != nil || p.Selected != 1 || p.Converted != 1 {
+		t.Fatal("second bounded repair turn", p, err)
+	}
+	if p, err := f.ApplicationTurn(f.Worker, 256); err != nil || p.Selected != 0 || !p.NoEligible {
+		t.Fatal("completed worker turn was not idle", p, err)
+	}
+	var body string
+	var stamp int
+	if err := f.Installer.QueryRow(f.Context, "select payload::text,schema_version from mail.tesl_jobs where id='turn'").Scan(&body, &stamp); err != nil || stamp != 2 || body != `{"message": "repaired", "priority": 9}` {
+		t.Fatal("resolved typed code did not publish target payload", body, stamp, err)
+	}
+}
