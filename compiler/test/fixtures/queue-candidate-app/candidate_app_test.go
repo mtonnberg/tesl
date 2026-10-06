@@ -52,10 +52,11 @@ func TestCompiledCandidateApplication(t *testing.T) {
 			t.Fatal("loose metadata must be absent", path, err)
 		}
 	}
-	// This must fail before serving, connecting, starting workers or sealing the
-	// declarations. The test bridge below is deliberately not production Main.
-	if refusal := teslrt.CandidatePanicForTest(func() { Main() }); !strings.Contains(refusal, "Worker migration topology does not yet support") {
-		t.Fatal("public Main unexpectedly enabled candidate queues", refusal)
+	// Public startup is supported, but these deliberate placeholder credentials
+	// cannot authorize an installed application. The bridge tests an isolated
+	// candidate below; it must not silently bypass the real baseline opener.
+	if refusal := teslrt.CandidatePanicForTest(func() { Main() }); !strings.Contains(refusal, "cannot connect row baseline") {
+		t.Fatal("public Main did not enforce its actual database startup", refusal)
 	}
 	codecs, err := teslrt.QueueSourceCodecs(TasksQueue)
 	if err != nil || len(codecs) != 2 || codecs[0].Job != "Audit" || codecs[1].Job != "Notify" {

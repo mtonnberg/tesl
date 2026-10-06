@@ -159,6 +159,21 @@ let () =
   let learn_dir = Filename.concat example_dir "learn" in
   walk_dir learn_dir "example/learn/" [".tesl"; ".md"] oc;
 
+  (* The migration lessons link these runnable multi-release examples. Keep their
+     bounded source/reference trees available to installed help too. Never follow
+     symlinks or include generated output directories. *)
+  let rec migration_example dir key =
+    ignore (require_path Unix.S_DIR dir);
+    walk_dir dir key [".md"; ".tesl"; ".py"; ".toml"] oc;
+    List.iter (fun child ->
+      let path = Filename.concat dir child in
+      if Sys.file_exists path then migration_example path (key ^ child ^ "/"))
+      ["schema"; "notes"; "mail"; "versions"; "transitions"] in
+  List.iter (fun name ->
+    let dir = Filename.concat example_dir name in
+    if Sys.file_exists dir then migration_example dir ("example/" ^ name ^ "/"))
+    ["db-three-upgrades"; "queue-three-upgrades"];
+
   (* example/intro/ — the prose "TLDR of the whole language" newcomer track (D17).
      Previously NOT embedded, so `tesl help` in a packaged binary could not serve
      the intro slides even though examples.md links them. *)

@@ -347,7 +347,7 @@ let export_application ?(legacy=false) ~adt destination =
   let driver=replace "handled, code := rt.RunSchemaCommand" "if os.Args[1] == \"contract\" { args=[]string{\"--schema\",\"contract\",\"V2\",\"--json\"} }\n handled, code := rt.RunSchemaCommand" driver in
   write(Filename.concat output "cmd/access-test/main.go")driver;
   command output (Filename.concat output "build.log") "timeout 150s go build -p 1 -race -tags tesl_migration_test -o app ./cmd/access-test";
-  command output (Filename.concat output "lint.log") "golangci-lint run --build-tags tesl_migration_test --timeout 3m ./internal/teslmod* ./cmd/access-test" in
+  command output (Filename.concat output "lint.log") "golangci-lint run --allow-serial-runners --build-tags tesl_migration_test --timeout 3m ./internal/teslmod* ./cmd/access-test" in
  remove path;remove before;write after(make_schema "VCurrent" false);build "v1";
  write before(make_schema "V1" false);write after(make_schema "VCurrent" true);write path edge;
  install_contract root path;build "v2";

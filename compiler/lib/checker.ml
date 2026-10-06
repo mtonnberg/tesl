@@ -2783,7 +2783,10 @@ let rec infer_expr ctx (e : expr) : ty =
           let actual = infer_expr ctx value in
           unify_at ctx (expr_loc value) actual (field_type insert.entity field)) insert.fields;
         TCon insert.entity
-      | QueryInsertMany _ -> t_unit
+       | QueryInsertMany (rows, entity) ->
+         let actual = infer_expr ctx (EVar {name=rows;loc=expr_loc e}) in
+         unify_at ctx (expr_loc e) actual (t_list (TCon entity));
+         t_unit
       | QueryUpsert upsert ->
         List.iter (fun (field, value) ->
           let actual = infer_expr ctx value in
@@ -2791,7 +2794,9 @@ let rec infer_expr ctx (e : expr) : ty =
         t_unit
       | QueryUpdate update ->
         List.iter (infer_clause update.binder update.entity) update.clauses;
-        List.iter (fun (_, value) -> ignore (infer_expr ctx value)) update.updates;
+         List.iter (fun (field, value) ->
+           let actual = infer_expr ctx value in
+           unify_at ctx (expr_loc value) actual (field_type update.entity field)) update.updates;
         if update.returning_one then TCon update.entity else t_unit
       | QueryDelete (seed, dynamic) ->
         List.iter (infer_clause seed.binder seed.entity) dynamic;

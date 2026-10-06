@@ -59,6 +59,31 @@ remaining integration requirements.
 
 ### Implementation and verification evidence
 
+R05-01–R05-08 follow-up now has implemented fixes and 119 passing adversarial cases,
+with no expected failures. Unchanged queued jobs are privately audited and
+restamped during fenced non-additive retirement; old/surviving claims and rollback
+have direct coverage. Generated migration callbacks share fuel/depth/cooperative
+deadline budgets; actual tail/mutual recursion refuses without publication. Public
+status reports bounded queue blocker codes/actions, repair revisions and recent
+instances without exposing retained payloads. Relative overlay handling, stale
+tests, lint coordination and executor cleanup identity are repaired. The complete
+compiler suite passes. All mandatory migration phases passed across a completed
+prefix and resumed tail after a user interruption; this is not described as an
+uninterrupted full-gate invocation. Logs and exact dispositions are in the root
+`db-migration-review-05-evidence.md`; the executive report is decision-oriented.
+
+Review 05 starts from `3081667`; its assessment and execution inventory are
+`db-migration-review-05.md` and `db-migration-review-05-exec.md` at the repository
+root. It adds 107 adversarial cases: 106 pass, one explicitly expected failure
+reproduces an unchanged delayed job blocking queue-only retirement beside a changed
+payload. Shared SQL checking now enforces assignment/insertMany types and destination
+field proofs, including sibling-proof invalidation and exact joint assignment
+subjects. Lesson 96 was rewritten and linked runnable examples are now embedded
+for installed help. The earlier full-gate pass below predates these review fixes:
+the review's broad compiler run reproduced seven baseline failures plus a concurrent
+linter collision, and its migration rerun observed an intermittent embedded-index
+cleanup assertion (isolated retry passed). Do not report those runs as all green.
+
 WIP commit `84782f8` records repeated public queue upgrades. The complete default
 `scripts/run-migration-tests.sh` gate now passes on private PostgreSQL, including
 the compiled V1–V13 Todo history, all 53 queue conversion/repair cases, all 24 queue

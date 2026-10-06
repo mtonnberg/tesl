@@ -239,6 +239,23 @@ func pgRunRowSchemaCommand(serviceContext context.Context, command pgSchemaComma
 			_, err = fmt.Fprintf(out, "%s: row generation baseline is not installed.\n", b.history.Database)
 		} else {
 			_, err = fmt.Fprintf(out, "%s: format 5; database V%d; %d/%d marker-bearing entities.\n", b.history.Database, status.CurrentVersion, pgRowStatusCompleted(status), len(b.entities))
+			if err == nil && len(status.Queues) > 0 {
+				var queues struct {
+					Blockers []struct {
+						Code   string `json:"code"`
+						Count  int64  `json:"count"`
+						Action string `json:"action"`
+					} `json:"blockers"`
+				}
+				if decodeErr := json.Unmarshal(status.Queues, &queues); decodeErr != nil {
+					return decodeErr
+				}
+				for _, blocker := range queues.Blockers {
+					if _, err = fmt.Fprintf(out, "%s: %d; %s.\n", blocker.Code, blocker.Count, blocker.Action); err != nil {
+						break
+					}
+				}
+			}
 		}
 		return err
 	}
@@ -267,9 +284,37 @@ func pgRowSchemaStatus(ctx context.Context, conn *pgx.Conn, b *pgRowBaseline, ro
 		status.InitialVersion, status.CurrentVersion = state.InitialVersion, state.Current
 		status.MinVersion, status.CompatFloor, status.InstallingVersion = state.MinVersion, state.CompatFloor, state.InstallingVersion
 		status.FormatVersion, status.ProtocolFloor, status.MaxObservedProtocol, status.FenceNamespace = state.Format, state.RetirementProtocolFloor, state.MaxObservedProtocol, state.FenceNamespace
+		if err := tx.QueryRow(ctx, "select "+quoteIdentifier(b.history.Namespace)+".tesl_row_queue_status()").Scan(&status.Queues); err != nil {
+			return err
+		}
+		instances, err := tx.Query(ctx, "select instance,version,protocol_level,last_seen,compat_floor_seen from "+quoteIdentifier(b.history.Namespace)+".tesl_schema_instances where last_seen>pg_catalog.clock_timestamp()-interval '30 seconds' order by version,instance limit 100")
+		if err != nil {
+			return err
+		}
+		status.Instances, err = pgx.CollectRows(instances, func(row pgx.CollectableRow) (PgMigrationInstanceStatus, error) {
+			var item PgMigrationInstanceStatus
+			err := row.Scan(&item.Instance, &item.Version, &item.Protocol, &item.LastSeen, &item.CompatFloorSeen)
+			item.LastSeen = item.LastSeen.UTC()
+			return item, err
+		})
+		if err != nil {
+			return err
+		}
 		intents, err := pgReadExpansionIntents(ctx, tx, b.history.Namespace)
 		if err != nil {
 			return err
+		}
+		// pgReadRowBaselineState already verified the row-specific index and
+		// lease inventory. The legacy verifier interprets row-shard leases as
+		// orphan index leases; only project the verified rows here.
+		jobs, err := pgReadMigrationIndexJobRows(ctx, tx, b.history.Namespace, intents)
+		if err != nil {
+			return err
+		}
+		for _, job := range jobs {
+			status.Indexes = append(status.Indexes, PgMigrationIndexStatus{ID: job.ID, Name: job.Index.Name,
+				Table: job.Table, Version: job.Version, State: job.State, SourceCompilerABI: job.SourceABI,
+				Attempts: job.Attempts, Holder: job.Holder, Token: job.Token, ExpiresAt: job.ExpiresAt, Error: job.Error})
 		}
 		for version := 1; version <= b.history.CurrentVersion; version++ {
 			intent := intents[version]

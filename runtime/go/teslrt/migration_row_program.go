@@ -1,6 +1,7 @@
 package teslrt
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"reflect"
@@ -205,14 +206,25 @@ func RegisterCompiledRowTransform[From, To any](ref PgRowTransformSourceRef, fn 
 // Run is available only after atomic application preflight has verified and
 // sealed every required binding. A callback rejection is an ordinary result;
 // unknown result tags are errors and can never be treated as accepted rows.
-func (transform *PgRowTransform[From, To]) Run(from From) (Migrated[To], error) {
+func (transform *PgRowTransform[From, To]) Run(from From, contexts ...context.Context) (result Migrated[To], err error) {
 	pgMigrationRegistrations.Lock()
 	ready := transform != nil && transform.registration != nil && transform.registration.sealed && transform.callback != nil
 	pgMigrationRegistrations.Unlock()
 	if !ready {
 		return Migrated[To]{}, fmt.Errorf("row callback is not sealed by application preflight")
 	}
-	result := transform.callback(from)
+	defer func() {
+		if trapped := recover(); trapped != nil {
+			result = Migrated[To]{}
+			err = fmt.Errorf("row conversion trapped")
+			if failure, bounded := trapped.(migrationExecutionFailure); bounded {
+				err = failure
+			}
+		}
+	}()
+	defer BeginMigrationExecution(contexts...)()
+	result = transform.callback(from)
+	MigrationStep()
 	if result.Tag != MigratedRow && result.Tag != MigratedReject {
 		return Migrated[To]{}, fmt.Errorf("row callback returned an invalid Migrated tag")
 	}

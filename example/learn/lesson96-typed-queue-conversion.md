@@ -1,22 +1,23 @@
-# Lesson 96 — Test a typed conversion of an old queued payload
+# Lesson 96 — Convert, repair and retire queued payloads
 
-You can test a queue conversion as an ordinary pure Tesl function before it is
-connected to durable queue processing. The compiler binds conversion and repair
-functions to their exact old/new payload types and codecs and emits fixture tests.
-Consecutive queue-only application upgrades now compile and run through
-public installer/worker commands, separately deployed typed repairs, and
-`--schema contract Vn`. Mixed entity/queue changes still refuse with MIG028.
+Consecutive **queue-only** upgrades can deploy through ordinary compiled Tesl
+applications, `--schema install`, `--schema worker` and `--schema contract Vn`.
+Each upgrade retains exact queue/job membership and unchanged stored entities.
+The initial upgrade needs an expanded V1 database; later upgrades need their exact
+fully retired adjacent predecessor. Mixed row/queue changes, job renames/removals,
+`IgnoreOld`, and adoption of older control catalogs remain unsupported.
 
-For retirement of unchanged payloads, use
+For a complete executable example, use
+[queue-three-upgrades](../queue-three-upgrades/README.md). It builds original V1
+and separate normal/repaired V2, V3 and V4 binaries and runs them on one private
+PostgreSQL database. For unchanged-payload additive retirement, use
 [lesson 95](lesson95-retiring-unchanged-queue-payloads.md).
 
-## Describe what the old value means in the new schema
+## 1. Describe the old value's new meaning
 
-The regression uses an old `Delivery { text: String }` and a new
-`Delivery { body: String, priority: Int }`. Their JSON codecs deliberately differ:
-the old codec reads `oldText`; the new one writes `message` and `priority`.
-
-An ordinary migration helper performs the business conversion:
+The old record is `Delivery { text: String }`; its codec stores `oldText`.
+The new record is `Delivery { body: String, priority: Int }`; its codec stores
+`message` and `priority`. Use a pure migration helper with exact nominal types:
 
 ```tesl
 fn convert(old: Schema.Mail.V1.Delivery) -> Migrated Schema.Mail.VCurrent.Delivery =
@@ -29,10 +30,26 @@ fn oldJob() -> Schema.Mail.V1.Delivery =
   Schema.Mail.V1.Delivery { text: "retained" }
 ```
 
-The return type proves which schema owns the new record. Test the business
-meaning too: the text must survive, the priority must be deliberate, and an
-empty old value must take the intended rejection path. A rejected conversion
-does not delete or repair a durable job by itself.
+Put these decisions in the ordinary `Migration` record, importing the helper and
+both schema roots directly:
+
+```tesl
+fixtures: [Schema.Mail.Migrate.Helpers.oldJob]
+jobs: { Delivery: Migrate Schema.Mail.Migrate.Helpers.convert }
+```
+
+Every changed retained payload requires a decision; unchanged payloads must not
+invent one. The compiler checks callback purity, old/new nominal ownership,
+complete codecs, fixtures, proof obligations, and the entire helper dependency
+graph. A newly proven target field must obtain its proof through the target
+schema's ordinary `establish` function.
+
+The compiler's certificate binds the callback, fixture and codec closures, both
+complete schema/storage snapshots and compiler identity. It is source evidence;
+installed database identity, expansion receipts and fenced operations separately
+grant runtime authority.
+
+## 2. Test the business rule as well as the types
 
 ```tesl
 test "old text and chosen priority survive" {
@@ -44,75 +61,55 @@ test "old text and chosen priority survive" {
 }
 ```
 
-If a new field carries a proof, establish that proof through the target schema's
-ordinary `establish` function. Returning an old unproved string does not satisfy
-a newly proven field. The regression has a second converter that rejects an
-old-valid value when it fails the new proof.
+Run `tesl agent-context migrations/mail/v2.tesl` after edits and
+`tesl test migrations/mail/v2.tesl` to execute the generated fixtures. Fixtures
+return the exact old record, directly or in the builtin `Maybe`; `Nothing` fails
+by fixture name. A deliberate `Reject` is a valid smoke-test outcome. Therefore
+fixtures alone do **not** prove conversion success or preservation of business
+meaning. Include explicit success, rejection and round-trip assertions.
 
-## Bind the conversion to what was checked
+Purity is **not totality**. Recursive functions can type check; generated migration
+code now has an operational execution budget: 100,000 function-entry/loop steps,
+128 nested calls and a two-second cooperative deadline. Nested helpers share the
+budget rather than renewing it. Queue attempts and row backfill also honor supplied
+cancellation contexts. Exhaustion returns an error without a usable conversion or
+late publication. This is not a static termination proof, memory sandbox or hard
+preemption of an individual intrinsic call. Keep conversions bounded and test
+large/adversarial values.
 
-The migration source checker now accepts an explicit decision pointing to the
-pure helper and its old-payload fixture:
+## 3. Deploy the checked edge
 
-```tesl
-fixtures: [Schema.Mail.Migrate.Helpers.oldJob]
-jobs: { Delivery: Migrate Schema.Mail.Migrate.Helpers.convert }
+First install and expand V1. Build V2 from its checked history. With the same
+compiled database/role configuration, run:
+
+```sh
+# Short-lived installer connection:
+./v2/app --schema install --worker WORKER_ROLE --request REQUEST_ROLE --json
+# Worker connection:
+./v2/app --schema worker --json
 ```
 
-These fields belong in the ordinary `Migration { ... }` record, with direct
-imports of the old/current schema roots and helper module. A changed retained
-payload needs an entry; an unchanged payload must be omitted. Duplicate aliases,
-missing fixtures and wrong callback types are diagnosed. The initial source
-surface requires helper-module callbacks and keeps queue/record renames and
-deletion out of scope.
+Installation stages the immutable conversion and target; staging alone does not
+admit V2. Worker publication drains the compatibility domain and records the exact
+expanded target before new requests start. The Worker then discovers eligible jobs
+in bounded turns (up to 256 job transactions), resolving staged digests to linked
+typed adapters. Each job commits independently; committed receipts support restart.
 
-`agent-context` can validate this source decision. Compiling the standalone
-migration through the ordinary compiler also emits its pure conversion adapters
-and generated fixture tests, so `tesl test migrations/mail/v2.tesl` can exercise
-them. Ordinary application builds also support the initial queue-only V1/V2 edge
-with unchanged entities and retained queue/job membership; the deployment steps
-are below.
-
-The internal source checker requires:
-
-- The same queue/job identities in adjacent schema revisions of one family.
-- A pure callback with exactly `Old.Payload -> Migrated New.Payload`.
-- Complete explicit old and new codecs.
-- Representative fixtures returning the exact old payload, optionally in the
-  builtin `Maybe`.
-- A fully checked source graph, including private helpers and test bodies.
-
-Its opaque source certificate includes the callback and codec dependencies,
-fixtures, compiler ABI and stored-value contract. Source and import changes
-invalidate publication; freezing an unchanged `VCurrent` preserves semantic
-identity. This certificate is compiler evidence, not a database receipt or
-permission to claim, rewrite or retire a job.
-
-## Execute the generated byte adapter
-
-The migration artifact route emits a pure runtime adapter with compiler-owned
-type and function bindings. It accepts only its exact source schema version and
-returns one of three outcomes:
-
-| Outcome | Meaning |
+| Outcome | Durable behavior |
 |---|---|
-| `payload-invalid` | The original bytes do not decode with the frozen codec |
-| `migration-rejected` | The typed converter returned `Reject`; original bytes and the reason are retained |
-| `converted` | The target encoder produced bytes that the target decoder accepts |
+| `converted` | Target bytes and schema version publish with their receipt |
+| `migration-rejected` | Original payload/version stay in quarantine, with reason |
+| `payload-invalid` | Frozen decoder cannot interpret the historical payload; typed repair cannot pretend it is valid |
+| Trap/encoding error | No usable conversion outcome is published for that attempt |
 
-Outcomes retain immutable original bytes and the conversion's source identity
-and versions. A trap, invalid result tag, encoding failure or rejected target
-encoding returns an error without a usable output. None of these outcomes
-acknowledges, restamps or deletes a stored job.
+Delayed and dead jobs participate without running their business handlers; retry
+counts, disposition and schedules are retained. Live claims are not rewritten.
+Claim tokens prevent a stale attempt from acknowledging another attempt's job.
+An empty Worker scan is not a finality proof.
 
-The emitter also generates fixture smoke tests. A fixture returning `Nothing`
-fails by fixture name. Both a converted value and a deliberate `Reject` are
-valid smoke outcomes, so keep the business assertions above.
+## 4. Repair a rejected historical value
 
-## Declare a typed repair revision
-
-Keep the rejected migration unchanged. Add a separate source file,
-`migrations/mail/repair1.tesl`, naming its exported declaration:
+Keep the deployed migration unchanged. Add `migrations/mail/repair1.tesl`:
 
 ```tesl
 module Schema.Mail.Migrate.Repair1 exposing [repair]
@@ -129,237 +126,81 @@ repair = QueueRepair {
   migrate: repairEmpty
   fixtures: [emptyJob]
 }
-
 fn repairEmpty(old: Schema.Mail.V1.Delivery) -> Migrated Schema.Mail.VCurrent.Delivery =
   Row (Schema.Mail.VCurrent.Delivery { body: "repaired", priority: 9 })
-
 fn emptyJob() -> Schema.Mail.V1.Delivery =
   Schema.Mail.V1.Delivery { text: "" }
 ```
 
-Here `"repaired"` is an explicit application policy for an old empty message.
-The callback still consumes `V1.Delivery`; it cannot pretend the rejected bytes
-already contain a current payload. Run:
+`"repaired"` is an explicit application policy, not an automatically inferred
+correction. The callback still consumes original `V1.Delivery`. Run:
 
 ```sh
 tesl agent-context migrations/mail/repair1.tesl
 tesl test migrations/mail/repair1.tesl
 ```
 
-The fixture test first runs the predecessor on `emptyJob()`, requires its
-rejection, then runs the repair and checks the resulting target encoding. A
-fixture accepted by the predecessor fails the repair test. Another deliberate
-`Reject` remains a valid smoke outcome; add business assertions for cases your
-repair must accept.
+The generated test requires the fixture to reproduce predecessor rejection before
+running the repair. Another `Reject` remains a valid smoke outcome. To require
+success, add a business assertion. Revision 2 names the directly imported,
+exported `Repair1.repair`, keeps both endpoints/codecs unchanged and uses a new
+callback identity. Gaps, cycles, reused callbacks and competing branches refuse.
+The checked source chain is bounded to 128 repair revisions.
 
-A subsequent repair names `Schema.Mail.Migrate.Repair1.repair` as its predecessor,
-imports that module directly, and uses `revision: 2` with a new callback. It still
-consumes the original `V1` payload and targets the same schema as revision 1.
-Revision gaps, cycles, another job, private predecessor declarations, callback
-reuse and changed payload contracts are refused. The source checker supports
-chains of up to 128 repair revisions.
-
-These commands check and test pure repair artifacts. They do not update stored
-quarantined jobs; durable repair registration and crash-safe progress are still
-the next runtime integration boundary.
-
-## Run the regression
-
-The complete schemas, helper functions and negative cases are in
-[`test_migration_queue_transform.ml`](../../compiler/test/test_migration_queue_transform.ml).
-From the repository root:
-
-```sh
-nix develop --command bash -c 'dune exec --root compiler ./test/test_migration_queue_transform.exe'
-```
-
-The generated-code cases remove their original source files before execution.
-They test the actual frozen decoder, typed conversion, target encoder and target
-decoder, including Unicode, rejection, malformed old JSON and proof-bearing
-results. They also verify that the two wire shapes really are incompatible, so
-a test cannot accidentally pass by feeding old bytes straight to a new decoder.
-
-The suite also checks exact runtime bindings, freshly rehashed metadata
-substitutions, malformed payloads, helper-module cycles, optional fixtures and
-failure before stale source evidence can be emitted. Connecting these pure
-adapters to protected durable claims, typed repair receipts and transforming
-retirement in ordinary applications is the next implementation boundary.
-
-## Real PostgreSQL execution tests
-
-The compiler regression now includes an isolated PostgreSQL execution candidate.
-It compiles the public repair declarations, deletes their original source files,
-and runs the generated converters against real `tesl_jobs` rows with restricted
-database roles. The tests verify that rejection retains the original payload and
-version, later repairs can be registered and executed, and successful repair
-updates the stored payload/version with a durable receipt in the same transaction.
-
-The database tests also kill a PostgreSQL backend before commit, reconnect after
-commit, race competing workers, reject stale attempts, preserve delayed/dead-job
-state, and check that quarantines block the candidate's retirement floor. Run the
-private-cluster migration gate to include the mandatory database witnesses:
-
-```sh
-nix develop --command bash scripts/run-migration-tests.sh
-```
-
-This candidate exercises actual database mutations, but it has its own isolated
-installation and admission floor. It is not yet connected to ordinary format-5
-application deployment or production worker dispatch. The `tesl test`
-commands earlier in this lesson still run the pure generated fixtures.
-
-The candidate now also reuses the running queue's protected claim, retry, renew
-and completion SQL with its own admission check. Tests take a rejected old job
-through repair, decode it with the current generated codec, and complete it through
-that shared queue protocol. Repair receipts remain replayable after completion
-deletes the job. Expired claims can be recovered for conversion; live claims and
-the original claiming transaction keep their ownership rights. Production pool
-opening, application history binding and automatic worker dispatch remain pending.
-
-The candidate worker now also discovers eligible jobs in bounded batches rather
-than taking a hand-written list of IDs. It commits each job independently and
-resumes from database receipts after interruption. Tests cover competing workers,
-skipped locks, delayed/dead work, successive repair revisions and failure after
-an earlier job committed. An empty work scan does not prove retirement is safe:
-live claims or quarantined jobs can still block the admission floor. Wiring these
-worker turns into the production scheduler remains pending.
-
-A fresh-process regression now discards the installation handle and starts a new
-worker using only its Worker connection. The worker opens a read-only transaction,
-checks the complete candidate catalog and exact compiler-linked repair history,
-then resumes the stored rejection. It needs neither installer credentials nor
-temporary-table privileges. Adversarial tests alter tables, functions, grants,
-foreign-key behavior, source descriptors and the admission floor; reopening refuses
-them before returning an execution handle. This remains the isolated candidate
-opener, not the ordinary format-5 application pool opener.
-
-The integration tests now also install a separate ordinary V1 application with
-its public installer/worker commands. The checked conversion and repair history
-can be staged in that application's protected catalog, tied to its actual
-database identity, installed payload contract and expansion receipt. Staging
-leaves existing V1 jobs untouched. Activating V2 still requires binding the
-successor's physical expansion and queue inventory to that history; this step is
-not yet enabled. The extended application catalog currently requires a fresh
-installation rather than an upgrade of databases created by earlier builds.
-
-The checked target physical descriptor can now also be staged and matched against
-the installed application's entity layout and complete schema/storage snapshots.
-The compiler marks a queue-payload change as narrowing even when entity storage is
-unchanged. Database tests reject altered descriptors with recomputed hashes and
-verify that staging does not accidentally publish V2. Publishing that expansion
-and enabling ordinary worker dispatch remain pending.
-
-The internal Worker integration now prepares the complete successor queue inventory
-and publishes its expansion through the ordinary application control protocol.
-Tests prove that pending registration does not admit V2, publication waits for old
-compatibility plans, and V2 admission starts after its completed expansion commits.
-The public V1 status command can inspect both states, and existing V1 jobs remain
-untouched. The remaining integration is ordinary changed-payload V2 compilation,
-conversion dispatch and retirement; this internal publication operation is not
-yet selected by the application's public worker command.
-
-The same database witness now registers repair revisions after publishing that
-successor. Their root must match the conversion already bound to the completed
-expansion, and the old source version must still be admitted. This allows a later
-repair deployment to extend immutable history rather than editing the original
-migration. Actual application-bound conversion dispatch is the next step.
-
-## Three successive non-additive upgrades
-
-`three_upgrades_test.go` runs three separately compiled migration/repair binaries
-against the **same PostgreSQL database**, with original source files removed:
-
-| Upgrade | New payload shape | Retained job's computed value |
-|---|---|---|
-| V1 → V2 | `body`, `priority` | `"kept"`, `7` |
-| V2 → V3 | `content`, `importance`, `tag` | `"kept"`, `17`, `"v3"` |
-| V3 → V4 | `message`, `rank`, `audit` | `"kept"`, `27`, `"v3"` |
-
-Each target codec is incompatible with its predecessor. At every upgrade, an
-old-valid payload is rejected, the first separately registered repair rejects
-again, and the second repair succeeds. Rejections preserve the original bytes
-and version; retirement stays blocked until the repair completes. Worker restart
-and receipt replay are tested at each edge.
-
-A delayed job and a dead job survive the entire chain with their scheduling and
-attempt counts intact. The database retains all four payload contracts, nine
-conversion/repair descriptors and twenty outcome receipts. Repair revision numbers
-are local to each migration edge, so later revisions cannot overwrite earlier
-history. Skipping a version or upgrading before retirement is refused.
-
-This proves repeated upgrades in the database execution candidate. It does not yet
-prove three ordinary application deployments; public changed-payload dispatch and
-the complete application retirement path remain gated. The private-cluster
-migration gate includes this test with PostgreSQL required.
-
-## Execute repairs on the application queue
-
-The integration witness now also executes conversions and repairs against the
-ordinary installed application's own `tesl_jobs` table after publishing the
-checked successor. Its internal Worker opener verifies the completed expansion,
-database identity, payload inventory and exact staged repair lineage. Mutation
-uses the real application version fences, not the isolated candidate floor.
-
-The test takes a stored job through rejection, a separately registered rejecting
-repair, rollback of a successful repair, and a committed repair. It then checks
-the generated V2 codec and uses the normal protected queue API to claim and
-complete the job. The receipt still replays after reconnect and job deletion.
-Private work tables keep historical payloads unavailable to direct Request or
-Worker queries; normal completion clears abandoned attempts.
-
-This crosses the application-database mutation boundary used by the ordinary
-queue-only V1/V2 application rollout.
-
-The internal Worker turn now discovers staged migration/repair digests itself and
-resolves them to compiler-bound typed adapters. Tests run migration, rejecting
-repair and successful repair using successive one-job turns, without passing a
-callback or job ID to the dispatcher. A staged descriptor without linked code is
-refused before mutation. The public schema worker uses this scheduling entry point.
-
-The public conversion path is available for unchanged entities and
-retained queue/job membership. Install and expand the V1 app first, then use the
-V2 binary's normal installer command to stage the checked edge and its Worker
-command to publish and convert retained jobs. Tests start both the real Worker
-and a normal V2 HTTP Request application after publication. Rejection remains
-durable V1 quarantine.
-
-To deploy a checked repair, explicitly import its module in the V2 application:
+Explicitly import the latest repair module in the V2 application, rebuild, rerun
+its normal installer, and run the repaired binary's schema Worker:
 
 ```tesl
 import Schema.Mail.Migrate.Repair1
 ```
 
-Rebuild the application, run its ordinary `--schema install` as the installer,
-then run the repaired binary's `--schema worker` with Worker credentials. The
-installer appends the complete immutable repair lineage; the worker retries the
-original rejected payload. Keep every previous declaration unchanged. Competing
-repair branches and repairs rooted in another physical edge are refused.
+The installer appends the complete immutable lineage. The Worker retries the
+original rejected bytes and retains earlier receipts. Running `tesl test` only
+tests pure fixtures; it does not mutate durable jobs. A new revision cannot be
+installed after retirement.
 
-After repairs succeed, stop V1 request/worker instances and wait 30 seconds for
-their last heartbeat to age out. Then run the repaired V2 binary as Worker:
+## 5. Retire the old version
+
+Stop V1 processes and wait for their last heartbeat to age past 30 seconds. Using
+Worker credentials, run the current binary:
 
 ```sh
-./app --schema contract V2 --json
+./v2-repaired/app --schema contract V2 --json
 ```
 
-Contract refuses while old payloads, claims or attempts remain, or a V1 instance
-has recently reported. On success it drains the actual source-writer and
-compatibility locks and commits the finality receipt and both admission floors
-together. Repeating install/Contract and restarting the V2 worker remain checked;
-a new repair cannot be installed after retirement.
+This queue-only Contract needs no row-cleanup source declaration. It refuses
+before target expansion and while old payloads, claims, conversion attempts or
+recent retiring instances remain. It drains source-writer and compatibility locks,
+then atomically records finality and advances both admission floors. Replay and
+Worker restart revalidate the history. Later edges retain earlier receipts.
 
-Further queue-only upgrades require the exact retired adjacent predecessor;
-its immutable receipt and physical/source inventory are checked before staging
-the new edge. The runnable [three-upgrade example](../queue-three-upgrades/README.md)
-builds original V1 and separate normal/repaired V2, V3 and V4 binaries, then runs
-all three public lifecycles on one database. Its final ordinary Request application
-processes the retained jobs using the V4 codec, while the original receipt survives.
+An old delayed unchanged job beside a changed payload is restamped by Contract,
+without running its handler or changing its bytes, retry count or schedule. This
+work is audited in the same transaction as retirement. Live retiring claims still
+block; expired old claims are released, and surviving claims retain completion
+rights. Any changed/rejected/malformed blocker prevents partial restamping. Do not
+delete or manually relabel jobs to manufacture finality.
 
-The internal application retirement test now closes this queue-only edge under
-the real V1 writer and compatibility locks. Pending old jobs, quarantines and
-rejecting repairs block the floor. After successful repair, the receipt and
-admission floors advance together; the old writer is refused and a surviving
-V2 claimant can still renew and complete. Read-only V1 status inspection verifies
-the retired history without reading raw queue payloads. The public-command witness
-also checks rejection blocking Contract, separately compiled repair deployment,
-recent-instance refusal, retirement replay and post-retirement worker restart.
+`--schema status --json` reports bounded per-job-type counts, installed repair
+revisions, old claims, conversion attempts and recent retiring instances. It emits
+stable blocker codes and actions; human status prints them too. Historical payload
+bytes and arbitrary rejection text are not disclosed. More than 100 job types is
+explicitly marked `complete: false`. Malformed historical payloads still lack a
+typed repair path; the planned `IgnoreOld` policy is not yet available.
+
+## Executable coverage
+
+- [Three ordinary queue upgrades](../queue-three-upgrades/README.md): public
+  install/Worker/repair/Contract, late writes, immutable receipts, restart and
+  final typed handler completion.
+- [Varied row-data upgrades](../db-three-upgrades/README.md): Rename,
+  Retype/WriteBack, Legacy removal and proof Revalidate across four releases.
+- `compiler/test/test_migration_queue_transform.ml`: source/type/proof checks,
+  generated byte adapters, PostgreSQL concurrency, crash and claim boundaries.
+- `scripts/test-db-migration-review-05.py`: adversarial public-command, catalog,
+  SQL proof/type, payload and documentation tests. Known failures are explicit.
+
+The complete private-PostgreSQL gate is `nix develop --command bash
+scripts/run-migration-tests.sh`. Checkout tooling and Go/PostgreSQL are required
+to build the examples; an installed compiler's embedded lesson is reference text,
+not a bundled PostgreSQL service.

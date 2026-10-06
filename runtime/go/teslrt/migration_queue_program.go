@@ -1052,22 +1052,29 @@ func (c *CompiledQueueConversion[Old, Current]) convertBytes(sourceVersion int, 
 		return result, fmt.Errorf("queue conversion source version differs")
 	}
 	defer func() {
-		if recover() != nil {
+		if trapped := recover(); trapped != nil {
 			result = QueueConversionResult{}
 			err = fmt.Errorf("queue conversion trapped")
+			if failure, bounded := trapped.(migrationExecutionFailure); bounded {
+				err = failure
+			}
 		}
 	}()
+	defer BeginMigrationExecution()()
 	original := string(bytes)
 	result = QueueConversionResult{kind: "payload-invalid", original: original, source: c.source}
 	parsed, parseErr := ParseJSON([]byte(original))
+	MigrationStep()
 	if parseErr != nil {
 		return result, nil
 	}
 	old, ok := c.decode(parsed).Value()
+	MigrationStep()
 	if !ok {
 		return result, nil
 	}
 	converted := c.convert(old)
+	MigrationStep()
 	switch converted.Tag {
 	case MigratedReject:
 		result.kind, result.reason = "migration-rejected", converted.RejectReason
@@ -1082,6 +1089,7 @@ func (c *CompiledQueueConversion[Old, Current]) convertBytes(sourceVersion int, 
 			return QueueConversionResult{}, fmt.Errorf("queue conversion target codec rejected its encoded value")
 		}
 		result.kind, result.payload = "converted", string(encoded)
+		MigrationStep()
 		return result, nil
 	default:
 		return QueueConversionResult{}, fmt.Errorf("queue conversion returned an invalid result tag")

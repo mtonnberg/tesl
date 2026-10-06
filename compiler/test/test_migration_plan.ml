@@ -120,7 +120,7 @@ let new_table () = with_project (fun root path ->
  let p = get (plan root) in
  check bool "new table creates its indexes before admission" true (match (last p).operations with
   [P.Create_table t] -> t.name="tags" && List.length t.indexes=1 | _ -> false))
-let retained_drop () = with_project (fun root path ->
+let retained_drop () = with_project ~initial:(schema ^ "\nentity Survivor table \"survivors\" primaryKey id { id: String }\n") (fun root path ->
  generate root;
  edit_schema path (replace "entity Note table \"notes\" primaryKey id { id: String }" "");
  edit_schema path (replace "exposing [Note]" "exposing []");generate root;
@@ -128,8 +128,8 @@ let retained_drop () = with_project (fun root path ->
  check bool "drop retains physical table" true ((last p).operations=[P.Retain_table "notes"]);
  check bool "dropped storage remains in catalog" true ((last p).catalog=(List.hd (P.steps p)).catalog);
  let born = get (plan ~initial_version:2 root) in
- check bool "later installation never creates already dropped storage" true
-  ((last born).catalog=[] && (last born).operations=[]);
+  check bool "later installation never creates already dropped storage" true
+   (List.for_all (fun (table:P.catalog_table) -> table.name<>"notes") (last born).catalog);
  generate ~next:true root;
  edit_schema path (fun s -> s ^ "entity Replacement table \"notes\" primaryKey id { id: String }\n");generate root;
  List.iter (fun initial_version -> refused "MIG016" (plan ~initial_version root)) [1;2;3])

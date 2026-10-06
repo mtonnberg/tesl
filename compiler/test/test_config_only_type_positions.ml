@@ -318,7 +318,8 @@ module SS = Set.Make (String)
 (* The exact literal that lived in the retired emit_racket.ml before the refactor to
    {!Stdlib_config_names} (2026-07-09).  test_stdlib_runtime_binding.ml keys
    the runtime provide-existence seam off this set, so the refactored value
-   must stay set-identical. *)
+   must stay set-identical after the explicitly reviewed migration additions
+   below. New runtime-bearing constructors must not be suppressed accidentally. *)
 let pre_refactor_literal =
   [ "Database"; "DatabaseBackend"; "Postgres"; "Memory"; "PostgresConfig"; "MigrationConfig";
     "PostgresConnection"; "TcpConnection"; "SocketConnection";
@@ -338,6 +339,8 @@ let pre_refactor_literal =
     (* Phase 4: the SsoProvider type + its inline-lowered value constructors. *)
     "SsoProvider"; "Github"; "Google" ]
   @ ["Migration"; "Entity"; "Rule"; "Same"; "Additive"; "Derived"; "Migrate"; "New"; "Drop"; "Default"; "Rename"]
+  @ ["Column"; "Contract"; "Index"; "Legacy"; "LegacyWith"; "NotNull"; "QueueRepair";
+     "Retype"; "Revalidate"; "Storage"; "Table"; "Tighten"; "Trigger"; "WriteBack"]
   @ Tz_zones.ctor_names
   @ Currencies.ctor_names
   @ List.map fst Units_catalog.aliases

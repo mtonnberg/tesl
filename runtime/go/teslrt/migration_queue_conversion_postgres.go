@@ -684,11 +684,15 @@ func pgApplyQueueConversionCandidateTx(ctx context.Context, tx pgx.Tx, scope pgQ
 	}
 	var result QueueConversionResult
 	if source.parentDigest == "" {
+		stopExecution := BeginMigrationExecution(ctx)
+		defer stopExecution()
 		result, err = conversion.Convert(source.fromVersion, []byte(original))
 	} else {
 		compiledQueueConversionSources.RLock()
 		parent := compiledQueueConversionSources.byDigest[source.parentDigest]
 		compiledQueueConversionSources.RUnlock()
+		stopExecution := BeginMigrationExecution(ctx)
+		defer stopExecution()
 		result, err = conversion.Repair(QueueConversionResult{kind: "migration-rejected", original: original, reason: reason, source: parent})
 	}
 	if err != nil {

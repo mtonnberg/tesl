@@ -816,12 +816,15 @@ func pgIndexRemoveTaggedSessions(config *pgx.ConnConfig, history pgIndexWorkerSo
 	expected PgMigrationControlState, tag string, budget time.Duration) error {
 	ctx, cancel := context.WithTimeout(context.Background(), budget)
 	defer cancel()
-	conn, err := pgx.ConnectConfig(ctx, config.Copy())
+	cleanupConfig := config.Copy()
+	cleanupTag := "tesl-cleanup:" + UUIDv7()
+	cleanupConfig.RuntimeParams["application_name"] = cleanupTag
+	conn, err := pgx.ConnectConfig(ctx, cleanupConfig)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = conn.Close(ctx) }()
-	if err := pgIndexPrepareSession(ctx, conn, tag, history, roles, expected); err != nil {
+	if err := pgIndexPrepareSession(ctx, conn, cleanupTag, history, roles, expected); err != nil {
 		return err
 	}
 	for {
@@ -831,7 +834,9 @@ func pgIndexRemoveTaggedSessions(config *pgx.ConnConfig, history pgIndexWorkerSo
 			return err
 		}
 		if remaining == 0 {
-			return conn.Close(ctx) // The cleanup backend is the last member of this tag.
+			// All executor-tagged backends are gone. The read-only cleanup
+			// session is not an executor and must never masquerade as one.
+			return conn.Close(ctx)
 		}
 		if _, err := conn.Exec(ctx, `select pg_catalog.pg_terminate_backend(pid) from pg_catalog.pg_stat_activity
  where datname=pg_catalog.current_database() and usename=$1 and application_name=$2 and pid<>pg_catalog.pg_backend_pid()`, roles.Worker, tag); err != nil {

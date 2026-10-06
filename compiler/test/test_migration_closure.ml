@@ -249,7 +249,8 @@ let relative_query () = with_project (fun root _ file helper _ ->
   let cwd = Sys.getcwd () in
   Fun.protect ~finally:(fun () -> Unix.chdir cwd) (fun () ->
     Unix.chdir root;
-    check int "relative completed root" 0 (List.length (errors "migrations/notes/v2.tesl" (read file)));
+    let diagnostics = errors "migrations/notes/v2.tesl" (read file) in
+    check int ("relative completed root: " ^ Compile.diagnostics_to_json diagnostics) 0 (List.length diagnostics);
     check int "relative private helper" 0 (List.length (errors "migrations/notes/shared.tesl" (read helper)))))
 let unsaved_restored_root () = with_project (fun _ _ file _ _ ->
   let original = read file in

@@ -12,7 +12,7 @@ import (
 
 // Independent read-only catalog expectations; Request needs no TEMP privilege.
 func pgExpectedRowControl(e *pgCatalogExpectations, owner, name string) (*pgCatalogTable, error) {
-	if pgRowQueueWorkTable(name) {
+	if pgRowQueueWorkTable(name) && name != "tesl_row_queue_restamps" {
 		table, err := pgExpectedQueueConversionTable(e, owner, strings.Replace(name, "tesl_row_queue_", "tesl_queue_", 1))
 		if err != nil {
 			return nil, err
@@ -34,6 +34,23 @@ func pgExpectedRowControl(e *pgCatalogExpectations, owner, name string) (*pgCata
 	digest := func(value, hash string) { check("(encode(sha256("+value+"), 'hex'::text) = "+hash+")", value, hash) }
 	bounded := func(n string) { check("(("+n+" >= 1) AND ("+n+" <= 2147483646))", n) }
 	switch name {
+	case "tesl_row_queue_restamps":
+		col("job_id", "text")
+		col("from_version", "int4")
+		col("to_version", "int4")
+		col("queue", "text")
+		col("job_type", "text")
+		col("contract_hash", "text")
+		col("payload_hash", "text")
+		col("retirement_hash", "text")
+		col("claim_seq", "int8")
+		con("p", "", "job_id", "from_version")
+		check("(from_version >= 1)", "from_version")
+		check("((to_version = (from_version + 1)) AND (to_version <= 2147483646))", "to_version", "from_version")
+		hash("contract_hash")
+		hash("payload_hash")
+		hash("retirement_hash")
+		check("(claim_seq >= 0)", "claim_seq")
 	case "tesl_row_queue_retirements":
 		col("version", "int4")
 		col("retirement", "bytea")

@@ -1272,8 +1272,51 @@ let check_record_field_proof_construction
          walk_expr type_env subject_env proof_env subject;
          walk_expr type_env subject_env proof_env body
        | EStartEmailWorker _ -> ()
-       | ESqlQuery { query; _ } ->
-         Ast_visitor.fold_sql_query
+       | ESqlQuery { query; loc } ->
+         (* SQL writes construct persisted entity fields too. Merely walking
+            their value expressions loses the destination's proof obligation. *)
+         let destination = match query with
+           | QueryInsert insert -> Some (insert.entity, insert.fields)
+           | QueryUpsert upsert -> Some (upsert.entity, upsert.fields)
+           | QueryUpdate update -> Some (update.entity, update.updates)
+           | QuerySelect _ | QueryDelete _ | QueryInsertMany _ -> None in
+         Option.iter (fun (entity, fields) ->
+           let annotated = Option.value ~default:[] (List.assoc_opt entity rec_bindings) in
+           let definitions = List.find_map (function
+             | DEntity d when d.name=entity -> Some d.fields
+             | _ -> None) decls |> Option.value ~default:[] in
+           let updated = match query with
+             | QueryUpdate update -> List.map fst update.updates
+             | QueryUpsert upsert -> upsert.do_update
+             | _ -> [] in
+           let rec subjects = function
+             | PredApp p -> p.args
+             | PredAnd p -> subjects p.left @ subjects p.right in
+           List.iter (fun (b:binding) ->
+             if not (List.mem b.name updated) &&
+                Option.fold ~none:false ~some:(fun proof ->
+                  List.exists (fun subject -> List.mem subject updated) (subjects proof)) b.proof_ann then
+               errors := make_error loc
+                 (Printf.sprintf "SQL write changes a subject of `%s.%s`'s proof without re-establishing that field; update all dependent proof fields together" entity b.name) :: !errors;
+             if List.mem b.name updated then
+               Option.iter (fun proof -> List.iter (fun subject ->
+                 if List.exists (fun (f:field_def) -> f.name=subject) definitions &&
+                    not (List.mem subject updated) &&
+                    not (match query with QueryUpsert upsert -> List.mem subject upsert.conflict | _ -> false) then
+                   errors := make_error loc
+                     (Printf.sprintf "SQL write cannot assume stored sibling `%s.%s` equals the proof subject; assign dependent fields together" entity subject) :: !errors
+               ) (subjects proof)) b.proof_ann
+           ) annotated;
+           (* Include plain supplied fields in the substitution map: evidence
+              about a sibling must bind to that sibling's actual assigned value. *)
+           let bindings = List.filter_map (fun (f:field_def) ->
+             if not (List.mem_assoc f.name fields) then None else
+             Some (Option.value ~default:{name=f.name;type_expr=f.type_expr;proof_ann=None;loc=f.loc}
+               (List.find_opt (fun (b:binding) -> b.name=f.name) annotated))) definitions in
+           let args = List.map (fun (b:binding) -> List.assoc b.name fields) bindings in
+           errors := check_call_proofs ~funcs loc entity bindings args subject_env proof_env @ !errors
+         ) destination;
+          Ast_visitor.fold_sql_query
            (fun () child -> walk_expr type_env subject_env proof_env child)
            () query
      in

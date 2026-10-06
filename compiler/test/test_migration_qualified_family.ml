@@ -213,8 +213,8 @@ let boundaries () = with_project (fun root path ->
   let alias = replace "Schema.Todo" "TodoSchema" app in
   (match Compile.compile_go_source (path "app.tesl") alias with
    | Compile.GoFailure ds -> check bool (diagnostics ds) true
-       (List.exists (fun (d:Compile.diagnostic) -> d.code="MIG020" &&
-         Compile.string_contains d.message "target import TodoSchema.VCurrent resolves to a module declaring Schema.Todo.VCurrent") ds)
+        (List.exists (fun (d:Compile.diagnostic) -> d.code="V001" &&
+          Compile.string_contains d.message "schema module `TodoSchema.VCurrent` resolves to a file declaring `Schema.Todo.VCurrent`") ds)
    | _ -> fail "legacy spelling was accepted as an alias for the qualified source");
   let schema_file=path "schema/todo/v-current.tesl" in
   save schema_file (schema ^ "import Tesl.Database exposing [Database, Memory]\ndatabase Illegal = Database { entities: [], backend: Memory }\n");

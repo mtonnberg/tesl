@@ -28,7 +28,7 @@ func pgRowQueueWorkTables() []pgMigrationControlTable {
 }
 
 func pgRowQueueWorkTable(name string) bool {
-	return name == "tesl_row_queue_conversion_receipts" || name == "tesl_row_queue_conversion_attempts"
+	return name == "tesl_row_queue_conversion_receipts" || name == "tesl_row_queue_conversion_attempts" || name == "tesl_row_queue_restamps"
 }
 
 // Reuse the tested selection/attempt/publication machinery, replacing only its

@@ -16,7 +16,16 @@ func pgRowQueueRetirementTables() []pgMigrationControlTable {
  version integer primary key check(version between 2 and 2147483646), retirement bytea not null,
  retirement_hash text not null check(retirement_hash ~ '^[0-9a-f]{64}$'),
  compiler_abi text not null check(compiler_abi ~ '^tesl-source-abi-v1:[0-9a-f]{64}$'),
- check(pg_catalog.encode(pg_catalog.sha256(retirement),'hex')=retirement_hash)`}}
+  check(pg_catalog.encode(pg_catalog.sha256(retirement),'hex')=retirement_hash)`},
+		{"tesl_row_queue_restamps", `
+ job_id text not null, from_version integer not null check(from_version>=1),
+ to_version integer not null check(to_version=from_version+1 and to_version<=2147483646),
+ queue text not null, job_type text not null,
+ contract_hash text not null check(contract_hash ~ '^[0-9a-f]{64}$'),
+ payload_hash text not null check(payload_hash ~ '^[0-9a-f]{64}$'),
+ retirement_hash text not null check(retirement_hash ~ '^[0-9a-f]{64}$'),
+ claim_seq bigint not null check(claim_seq>=0),
+ primary key(job_id,from_version)`}}
 }
 
 func pgRowQueueRetirementFunctions(namespace string) []pgMigrationControlFunction {
@@ -69,7 +78,34 @@ begin
   ||` + ns + `tesl_queue_bytes(pg_catalog.convert_to(p.contract_hash,'UTF8'))||` + ns + `tesl_queue_bytes(pg_catalog.convert_to(inventory,'UTF8'))
   ||pg_catalog.convert_to('l'||count_sources::text||':','UTF8')||source_bytes||` + ns + `tesl_queue_bytes(pg_catalog.convert_to(abi,'UTF8'));
  if doc<>expected then raise exception 'tesl: queue retirement differs from exact source/target lineage'; end if;
-  if not ` + ns + `tesl_row_queue_final(s.current) then return false; end if;
+  -- Fence domains are held, then lock the complete old job set. Preflight every
+  -- blocker BEFORE restamping: a false result must publish no partial progress.
+  perform j.id from ` + ns + `tesl_jobs j where j.schema_version<s.current order by j.seq for update;
+  if exists(select 1 from ` + ns + `tesl_jobs j where j.schema_version<s.current and
+   (j.schema_version<>s.current-1 or j.status='quarantined'
+    or (j.status in ('processing','dead_processing') and j.claimed_by_version<s.current and j.lease_until>pg_catalog.clock_timestamp())
+    or not exists(select 1 from ` + ns + `tesl_queue_payloads old join ` + ns + `tesl_queue_payloads target
+     on target.version=s.current and target.queue=old.queue and target.job_type=old.job_type
+      and target.contract=old.contract and target.contract_hash=old.contract_hash
+     where old.version=j.schema_version and old.queue=j.queue and old.job_type=j.job_type)))
+   or exists(select 1 from ` + ns + `tesl_row_queue_conversion_attempts a join ` + ns + `tesl_row_queue_conversion_staging staged_source on staged_source.source_digest=a.source_digest where staged_source.from_version<s.current)
+   then return false; end if;
+  insert into ` + ns + `tesl_row_queue_restamps(job_id,from_version,to_version,queue,job_type,contract_hash,payload_hash,retirement_hash,claim_seq)
+  select j.id,j.schema_version,s.current,j.queue,j.job_type,old_payload.contract_hash,
+   pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(j.payload::text,'UTF8')),'hex'),digest,j.claim_seq
+  from ` + ns + `tesl_jobs j join ` + ns + `tesl_queue_payloads old_payload on old_payload.version=j.schema_version and old_payload.queue=j.queue and old_payload.job_type=j.job_type
+  where j.schema_version<s.current;
+  update ` + ns + `tesl_jobs j set schema_version=s.current,
+   status=case when j.status='processing' and j.claimed_by_version<s.current then 'pending'
+               when j.status='dead_processing' and j.claimed_by_version<s.current then 'dead' else j.status end,
+   locked_at=case when j.claimed_by_version<s.current then null else j.locked_at end,
+   locked_by=case when j.claimed_by_version<s.current then null else j.locked_by end,
+   claim_token=case when j.claimed_by_version<s.current then null else j.claim_token end,
+   claimed_by_version=case when j.claimed_by_version<s.current then null else j.claimed_by_version end,
+   claim_xid=case when j.claimed_by_version<s.current then null else j.claim_xid end,
+   lease_until=case when j.claimed_by_version<s.current then null else j.lease_until end
+  where j.schema_version<s.current;
+  if not ` + ns + `tesl_row_queue_final(s.current) then raise exception 'tesl: queue restamping lost finality'; end if;
   select * into r from ` + ns + `tesl_row_queue_retirements where version=s.current;
  if found then
    if r.retirement<>doc or r.retirement_hash<>digest or r.compiler_abi<>abi or s.min_version<>s.current or s.compat_floor<>s.current then raise exception 'tesl: immutable queue retirement differs'; end if;
@@ -82,6 +118,47 @@ begin
  from unnest(array['retired','contracting','contracted']) step;
   update ` + ns + `tesl_schema_state set min_version=s.current,compat_floor=s.current where id=1;
  return true;
+end`}, {"tesl_row_queue_restamps_valid", "", "boolean", "stable", `
+begin
+ return not exists(select 1 from ` + ns + `tesl_row_queue_restamps a
+  where not exists(select 1 from ` + ns + `tesl_row_queue_retirements r where r.version=a.to_version and r.retirement_hash=a.retirement_hash)
+   or not exists(select 1 from ` + ns + `tesl_queue_payloads old join ` + ns + `tesl_queue_payloads target
+    on target.version=a.to_version and target.queue=old.queue and target.job_type=old.job_type and target.contract=old.contract and target.contract_hash=old.contract_hash
+    where old.version=a.from_version and old.queue=a.queue and old.job_type=a.job_type and old.contract_hash=a.contract_hash));
+end`}, {"tesl_row_queue_status", "", "jsonb", "stable", `
+declare s ` + ns + `tesl_schema_state%rowtype; jobs jsonb; total_types bigint;
+ old_count bigint; rejected_count bigint; invalid_count bigint; live_count bigint; attempt_count bigint; recent_count bigint; restamp_count bigint;
+ blockers jsonb:='[]'::jsonb;
+begin
+ select * into s from ` + ns + `tesl_schema_state where id=1;
+ if not found then raise exception 'tesl: queue status requires installed state'; end if;
+ select count(*),count(*) filter(where dead_reason='migration-rejected'),count(*) filter(where dead_reason='payload-invalid'),
+  count(*) filter(where status in ('processing','dead_processing') and claimed_by_version<s.current and lease_until>pg_catalog.clock_timestamp())
+ into old_count,rejected_count,invalid_count,live_count from ` + ns + `tesl_jobs where schema_version<s.current;
+ select count(*) filter(where dead_reason='migration-rejected'),count(*) filter(where dead_reason='payload-invalid')
+  into rejected_count,invalid_count from ` + ns + `tesl_jobs;
+ select count(*) into attempt_count from ` + ns + `tesl_row_queue_conversion_attempts;
+ select count(*) into recent_count from ` + ns + `tesl_schema_instances where version>=s.min_version and version<s.current and last_seen>pg_catalog.clock_timestamp()-interval '30 seconds';
+ select count(*) into restamp_count from ` + ns + `tesl_row_queue_restamps;
+ select count(*) into total_types from ` + ns + `tesl_queue_payloads where version=s.current;
+ select coalesce(pg_catalog.jsonb_agg(x.item order by x.queue collate "C",x.job_type collate "C"),'[]'::jsonb) into jobs from (
+  select p.queue,p.job_type,pg_catalog.jsonb_build_object('queue',p.queue,'jobType',p.job_type,
+   'oldPayloads',(select count(*) from ` + ns + `tesl_jobs j where j.queue=p.queue and j.job_type=p.job_type and j.schema_version<s.current),
+   'rejected',(select count(*) from ` + ns + `tesl_jobs j where j.queue=p.queue and j.job_type=p.job_type and j.dead_reason='migration-rejected'),
+   'invalid',(select count(*) from ` + ns + `tesl_jobs j where j.queue=p.queue and j.job_type=p.job_type and j.dead_reason='payload-invalid'),
+   'repairRevision',coalesce((select max(c.revision) from ` + ns + `tesl_row_queue_conversion_staging c where c.to_version=s.current and c.queue=p.queue and c.job_type=p.job_type),0),
+   'unchanged',exists(select 1 from ` + ns + `tesl_queue_payloads old where old.version=s.current-1 and old.queue=p.queue and old.job_type=p.job_type and old.contract=p.contract and old.contract_hash=p.contract_hash)) as item
+  from ` + ns + `tesl_queue_payloads p where p.version=s.current order by p.queue collate "C",p.job_type collate "C" limit 100
+ ) x;
+ if rejected_count>0 then blockers:=blockers||pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_object('code','QUEUE_MIGRATION_REJECTED','count',rejected_count,'action','Deploy a new checked QueueRepair revision; preserve the original payload')); end if;
+ if invalid_count>0 then blockers:=blockers||pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_object('code','QUEUE_PAYLOAD_INVALID','count',invalid_count,'action','Historical decoder rejected the bytes; typed repair cannot fabricate the old record')); end if;
+ if live_count>0 then blockers:=blockers||pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_object('code','QUEUE_RETIRING_CLAIMS','count',live_count,'action','Stop old claimants and wait for leases to expire')); end if;
+ if attempt_count>0 then blockers:=blockers||pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_object('code','QUEUE_CONVERSION_ATTEMPTS','count',attempt_count,'action','Wait for or restart the schema Worker')); end if;
+ if recent_count>0 then blockers:=blockers||pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_object('code','RECENT_RETIRING_INSTANCES','count',recent_count,'action','Stop old processes and wait for the 30-second heartbeat window')); end if;
+ if old_count>rejected_count+invalid_count+live_count then blockers:=blockers||pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_object('code','QUEUE_OLD_PAYLOADS','count',old_count-rejected_count-invalid_count-live_count,'action','Run the current schema Worker; Contract restamps identical unchanged payloads')); end if;
+ return pg_catalog.jsonb_build_object('currentVersion',s.current,'oldPayloads',old_count,'rejected',rejected_count,'invalid',invalid_count,
+  'liveRetiringClaims',live_count,'conversionAttempts',attempt_count,'recentRetiringInstances',recent_count,'restamped',restamp_count,
+  'totalJobTypes',total_types,'complete',total_types<=100,'jobs',jobs,'blockers',blockers);
 end`}}
 }
 
@@ -227,6 +304,13 @@ func pgExecuteRowQueueContract(ctx context.Context, conn *pgx.Conn, b *pgRowBase
 
 func pgReadRowQueueRetirements(ctx context.Context, tx pgx.Tx, b *pgRowBaseline, state PgMigrationControlState) (map[int]*pgRowQueueRetirement, error) {
 	result := map[int]*pgRowQueueRetirement{}
+	var valid bool
+	if err := tx.QueryRow(ctx, "select "+quoteIdentifier(b.history.Namespace)+".tesl_row_queue_restamps_valid()").Scan(&valid); err != nil {
+		return nil, err
+	}
+	if !valid {
+		return nil, fmt.Errorf("queue restamp audit differs from its completed retirement and exact contracts")
+	}
 	rows, err := tx.Query(ctx, "select version,retirement,retirement_hash,compiler_abi from "+quoteIdentifier(b.history.Namespace)+".tesl_row_queue_retirements order by version")
 	if err != nil {
 		return nil, err

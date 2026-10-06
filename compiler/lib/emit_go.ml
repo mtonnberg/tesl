@@ -811,6 +811,8 @@ let proof_op_functions : (string, string) Hashtbl.t = Hashtbl.create 8
    `proof_op_functions`, for the same reason: the declaration is what the emitter needs and
    the expression walker has only a name. *)
 let current_functions : (string, func_decl) Hashtbl.t = Hashtbl.create 16
+let current_migration_metering = ref false
+let current_migration_owned_module = ref false
 
 (* The type parameters a GENERIC function declares, by function name: the Tesl type variable
    paired with the Go type-parameter name it renders as.  `fn isEmpty(xs: List a) -> Bool`
@@ -11270,7 +11272,12 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
           (scope_parameter
            @ List.map (fun (name, ty) -> local_ident name ^ " " ^ go_type ty) params
            @ dictionaries))
-       (go_type result);
+        (go_type result);
+    if !current_migration_metering then begin
+      if !current_migration_owned_module then
+        Buffer.add_string body "\tdefer teslrt.BeginMigrationExecution()()\n";
+      Buffer.add_string body "\tdefer teslrt.MigrationEnter()()\n"
+    end;
     (* This belongs in Main, before the lowered database scope and all user
        startup effects. The cmd wrapper handles selected schema commands first;
        direct Main calls receive the same App-local preflight. *)
@@ -12243,6 +12250,9 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
         List.iter (fun name -> Printf.bprintf body "\t_ = %s\n" name) names;
         Buffer.add_string body ")\n"));
   let body = Buffer.contents body in
+  let body = if not !current_migration_metering then body else
+    Str.global_substitute (Str.regexp "^[ \t]*for[^\n]*{[ \t]*\n")
+      (fun text -> Str.matched_string text ^ "\tteslrt.MigrationStep()\n") body in
   let imports =
     (if contains_go_code body "strconv." then ["strconv"] else [])
     @ (if contains_go_code body "fmt." then ["fmt"] else [])
@@ -13276,9 +13286,12 @@ let register_imported_module ~loc ~exposed ?(protected_names=[]) types signature
     ignore (found_type, found_value, loc))
     exposed
 
-let compile_module_internal ?emission_graph ?(nominal_mappings=[]) ?(nominal_reverses=[]) ?(nominal_transports=[]) ?(row_access_entities=[]) ?(row_storage_entities=[]) ?(mode=Release) ?(dependencies=[]) ?(entity_bindings=[]) ?(migration_families=[]) ?(migration_queues=[]) ?(queue_codec_records=[]) ?project_path (m : module_form) =
+let compile_module_internal ?(migration_metered=false) ?emission_graph ?(nominal_mappings=[]) ?(nominal_reverses=[]) ?(nominal_transports=[]) ?(row_access_entities=[]) ?(row_storage_entities=[]) ?(mode=Release) ?(dependencies=[]) ?(entity_bindings=[]) ?(migration_families=[]) ?(migration_queues=[]) ?(queue_codec_records=[]) ?project_path (m : module_form) =
   let previous_transports = !current_nominal_transports and previous_graph= !current_emission_graph in
-  Fun.protect ~finally:(fun () -> current_nominal_transports := previous_transports;current_emission_graph:=previous_graph) (fun () ->
+  let previous_meter = !current_migration_metering and previous_owned = !current_migration_owned_module in
+  Fun.protect ~finally:(fun () -> current_migration_metering:=previous_meter;current_migration_owned_module:=previous_owned;current_nominal_transports := previous_transports;current_emission_graph:=previous_graph) (fun () ->
+  current_migration_metering := migration_metered;
+  current_migration_owned_module := Option.is_some (Migration_schema.migration_family m.module_name);
   current_nominal_transports := nominal_transports;current_emission_graph:=emission_graph;
   try
     List.iter (function
@@ -17384,7 +17397,7 @@ let compiled_row_artifacts ~entry ~modules:_ ~exports source =
         Ok (List.rev acc @ fixtures @ conversions @ Option.fold ~none:[] ~some:(compiled_row_artifacts ~entry ~modules ~exports) row_source)
         with Unsupported error -> Error [error])
       | (m : module_form) :: rest ->
-        (match compile_module_internal ?emission_graph ~nominal_mappings:(List.filter (fun mapping ->
+         (match compile_module_internal ~migration_metered:(Option.is_some row_source || queue_conversions<>[] || fixture_checks<>[]) ?emission_graph ~nominal_mappings:(List.filter (fun mapping ->
           emitted_owner emission_graph (Migration_transform.nominal_mapping_owner mapping) = m.module_name) nominal_mappings) ~nominal_reverses:(List.filter (fun transport ->
           emitted_owner emission_graph (Migration_proof_context.nominal_module transport) = m.module_name) nominal_reverses) ~nominal_transports:(List.filter (fun transport ->
           emitted_owner emission_graph (Migration_proof_context.nominal_module transport) = m.module_name) nominal_transports)

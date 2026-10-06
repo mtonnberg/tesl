@@ -863,7 +863,7 @@ let command_available command =
    missing linter has to be a failure rather than a silent pass. *)
 let required_go_gates = [
   "staticcheck", "staticcheck ./...";
-  "golangci-lint", "golangci-lint run ./...";
+  "golangci-lint", "golangci-lint run --allow-serial-runners ./...";
   "gosec", "gosec -quiet ./...";
   "govulncheck", "govulncheck ./...";
   "nilaway", "nilaway ./...";

@@ -1,5 +1,8 @@
 # Preparing storage cleanup after a migration
 
+For credentials, deployment order, public blocker codes and recovery actions, see
+[operating a checked migration](migration-operations.md).
+
 A transforming migration temporarily keeps the storage needed by the old app.
 A **Contract** describes the cleanup after all required row work has finished and
 old writers have been retired. Prepare it with the migration, before building the rollout:

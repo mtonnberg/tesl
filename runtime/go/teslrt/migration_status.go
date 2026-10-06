@@ -2,6 +2,7 @@ package teslrt
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"time"
@@ -34,6 +35,7 @@ type PgMigrationStatus struct {
 	Expansions               []PgMigrationExpansionStatus `json:"expansions"`
 	Instances                []PgMigrationInstanceStatus  `json:"instances"`
 	Indexes                  []PgMigrationIndexStatus     `json:"indexes"`
+	Queues                   json.RawMessage              `json:"queues,omitempty"`
 }
 
 type PgMigrationIndexStatus struct {

@@ -288,7 +288,7 @@ let prepare ?stored_value_compatibility ~compiler_abi ~source (m : module_form) 
       (* The supplied root may be an unsaved buffer. Adjacent metadata readers
          must see that same source view, not a pinned-only view that disappears
          when an integrity guard checks the caller's source preconditions. *)
-      let queue_transforms,fixtures=Source_input.with_overlays ~project_root:view_root [m.source_file,source] (fun () ->
+      let queue_transforms,fixtures=Source_input.with_overlays ~project_root:view_root [Source_input.canonical_path m.source_file,source] (fun () ->
         prepare_queue_decisions ~project_root ~before ~after
           ~previous_file:previous.root_file ~current_file:current.root_file ~version:target
           ~graph:source_graph ~root:m ~fixtures (List.assoc_opt "jobs" fields)) in

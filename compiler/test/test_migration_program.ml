@@ -428,8 +428,9 @@ func TestLinkedQueueProjection(t *testing.T) {
   MainDatabase.Config.MigrationTopology=topology
   var failure any
   func(){defer func(){failure=recover()}();Main()}()
-  want:=topology+" migration topology does not yet support"
-  if failure==nil || !strings.Contains(fmt.Sprint(failure),want) || strings.Contains(fmt.Sprint(failure),"private-queued-connection") {t.Fatal("complete metadata enabled production queues",topology,failure)}
+   want:="invalid PostgreSQL configuration"
+   if topology=="Embedded" {want="Embedded migration topology does not yet support versioned queues"}
+   if failure==nil || !strings.Contains(fmt.Sprint(failure),want) || strings.Contains(fmt.Sprint(failure),"private-queued-connection") {t.Fatal("linked queues did not enforce configured database startup",topology,failure)}
  }
 }
 |} in

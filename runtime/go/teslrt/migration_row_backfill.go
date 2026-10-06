@@ -137,7 +137,7 @@ func pgAttachRowBackfill[From, To any](storage *PgRowStorage[From, To]) error {
 			}
 			item := pgRowBackfillItem{cursor: append(json.RawMessage(nil), keyJSON...)}
 			item.convert = func() (pgRowBackfillCommit, error) {
-				migrated, err := storage.transform.Run(source)
+				migrated, err := storage.transform.Run(source, ctx)
 				if err != nil {
 					return nil, err
 				}
