@@ -59,6 +59,22 @@ remaining integration requirements.
 
 ### Implementation and verification evidence
 
+WIP commit `84782f8` records repeated public queue upgrades. The complete default
+`scripts/run-migration-tests.sh` gate now passes on private PostgreSQL, including
+the compiled V1–V13 Todo history, all 53 queue conversion/repair cases, all 24 queue
+source cases, ordinary unchanged-payload queue deployment, row generation and
+Contract suites, proof revalidation/Retype/removal, whole-table Drop, and both
+ordinary V1–V4 example runners. The kernel/application package completed in
+1240.993 seconds; the independently rerun complex Todo history passed in 468.624
+seconds. The complete local log is `.tesl-stuff/full-migration-gate-active.log`.
+
+An earlier complete attempt reached the package's existing 30-minute deadline;
+the first isolated retry encountered a large overnight clock gap during compiler
+emission. Neither attempt established a migration assertion failure. A subsequent
+active-host isolated run and the full default gate both passed without changing
+test deadlines or implementation. Earlier logs remain separate from the passing
+log; a timeout is not counted as passing coverage.
+
 After `e5cc6cb` (the mixed V1–V4 row-data example), the public queue protocol now
 consumes consecutive unchanged-entity edges. The source planner and companion
 reader bind every adjacent inventory to its physical descriptor. Source/target
@@ -79,7 +95,8 @@ ordinary V4 HTTP Request process executes its typed handler and acknowledges all
 seven jobs; receipts survive completion. No candidate bridge or patched source
 history grants execution. The default migration gate now includes this example
 alongside the varied non-additive row-data example. Mixed entity/queue changes and
-membership changes remain gated; the full default gate has not yet been rerun.
+membership changes remain gated. The full default gate verification is recorded
+above.
 
 WIP commit `ba79df7` records the runnable ordinary three-release row example.
 WIP commit `ef9c032` records the initial public queue V1/V2 conversion, repair
