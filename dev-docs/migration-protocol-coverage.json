@@ -38,7 +38,8 @@
         "model_test.go#TestABIChangeRefusedAfterFirstBatchOrProvisionalPass",
         "model_test.go#TestApplicationTargetWriteLocksABIBeforeBackfillStarts",
         "model_test.go#TestModelDetectsCorruptedABIEvidence",
-        "model_test.go#TestModelRefusesCounterAndClockOverflowAtomically"
+        "model_test.go#TestModelRefusesCounterAndClockOverflowAtomically",
+        "queue_compiler_upgrade_test.go#TestCompiledQueueCompilerUpgradeRetainsPayloads"
       ]
     },
     {
@@ -262,7 +263,8 @@
         "model.go:542"
       ],
       "tests": [
-        "model_test.go#TestRetiringClaimantExpiresAndLateOutcomesAreRejected"
+        "model_test.go#TestRetiringClaimantExpiresAndLateOutcomesAreRejected",
+        "queue_compiler_upgrade_test.go#TestCompiledQueueCompilerUpgradeRetainsPayloads"
       ]
     },
     {
@@ -398,6 +400,7 @@
         "model_test.go#TestModelChecksCompleteVersionEvidenceAndImmutableClassification",
         "postgres_test.go#TestPostgresTemplateLifecycleRetry",
         "quarantine_postgres_test.go#TestPostgresAbortQuarantineRechecksCurrentRow",
+        "queue_compiler_upgrade_test.go#TestCompiledQueueCompilerUpgradeRetainsPayloads",
         "read_ordering_test.go#TestPostgresTemplateCoordinatorDeathAtRetirementCommit",
         "repair_test.go#TestPostgresRepairHistoryAgainstReferenceTraces",
         "repair_test.go#TestRepairPrefixesPreserveRollbackButRequireCompleteExecutor"
@@ -609,6 +612,7 @@
         "model_test.go#TestCrashAfterRestampBeforeFloorCommitIsResumable",
         "model_test.go#TestSurvivingClaimantRestampPreservesAttemptAndLease",
         "postgres_test.go#TestPostgresTemplateRefusesMissingFloorPrerequisites",
+        "queue_compiler_upgrade_test.go#TestCompiledQueueCompilerUpgradeRetainsPayloads",
         "repair_test.go#TestDeadJobCannotBeClaimedWithoutExplicitReplay"
       ]
     },
@@ -679,6 +683,7 @@
         "model.go:586"
       ],
       "tests": [
+        "queue_compiler_upgrade_test.go#TestCompiledQueueCompilerUpgradeRetainsPayloads",
         "repair_test.go#TestHistoricalRepairIsAppendOnlyAndSurvivesCrash",
         "repair_test.go#TestPostgresRepairHistoryAgainstReferenceTraces",
         "repair_test.go#TestRepairPrefixesPreserveRollbackButRequireCompleteExecutor",
@@ -955,7 +960,8 @@
         "model.go:383"
       ],
       "tests": [
-        "model_test.go#TestRetiringClaimantExpiresAndLateOutcomesAreRejected"
+        "model_test.go#TestRetiringClaimantExpiresAndLateOutcomesAreRejected",
+        "queue_compiler_upgrade_test.go#TestCompiledQueueCompilerUpgradeRetainsPayloads"
       ]
     },
     {
@@ -981,6 +987,7 @@
         "lifecycle_test.go#TestPostgresTemplateRejectsIllegalLifecycleEdges",
         "model_test.go#TestEpochClosesBeforeTransformAndContractPrecedesNextExpand",
         "model_test.go#TestModelChecksCompleteVersionEvidenceAndImmutableClassification",
+        "queue_compiler_upgrade_test.go#TestCompiledQueueCompilerUpgradeRetainsPayloads",
         "read_ordering_test.go#TestPostgresTemplateCoordinatorDeathAtRetirementCommit",
         "read_ordering_test.go#TestPostgresTemplateQueryFirstAdmissionAcrossRetirement",
         "todo_showcase_test.go#TestCompiledTodoComplexHistoryPostgres"
@@ -1029,7 +1036,8 @@
         "model.go:336"
       ],
       "tests": [
-        "model_test.go#TestSurvivingClaimantRestampPreservesAttemptAndLease"
+        "model_test.go#TestSurvivingClaimantRestampPreservesAttemptAndLease",
+        "queue_compiler_upgrade_test.go#TestCompiledQueueCompilerUpgradeRetainsPayloads"
       ]
     },
     {
@@ -2922,6 +2930,25 @@
         "TR-BACKFILL",
         "TR-INVALIDATE",
         "TR-QUARANTINE-REFRESH"
+      ],
+      "named_failpoints": null
+    },
+    {
+      "name": "TestCompiledQueueCompilerUpgradeRetainsPayloads",
+      "file": "queue_compiler_upgrade_test.go",
+      "line": 18,
+      "layer": "compiled-postgres",
+      "invariants": [
+        "INV-ABI",
+        "INV-DECODER",
+        "INV-HISTORY",
+        "INV-QUEUE-FLOOR",
+        "INV-REPAIR-HISTORY"
+      ],
+      "transitions": [
+        "TR-COMPLETE",
+        "TR-CONTRACT",
+        "TR-ENQUEUE"
       ],
       "named_failpoints": null
     },

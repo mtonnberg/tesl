@@ -59,6 +59,20 @@ remaining integration requirements.
 
 ### Implementation and verification evidence
 
+After review-fix WIP commit `a125d9c`, compatible cross-compiler queue new-edge
+rollout is verified by `TestCompiledQueueCompilerUpgradeRetainsPayloads`. Actual
+A/B/C compilers are built from isolated source: B changes query implementation
+only, C changes the declared stored-value contract. The first test reproduced
+new-edge staging incorrectly pinned to the predecessor creator ABI. Staging now
+consumes exact prior snapshots/physical identity/compatibility while pinning the
+new edge to its compiler-linked executable ABI. All converters in an edge must
+agree; immutable root/target registration still refuses active-edge substitution.
+The A-frozen V1 → B-built V2–V4 public conversion/repair/retirement/completion run
+passes. A separate probe denies B replacement of A's active V2 and permits B V3
+after A retires V2; C refuses without changing installed data. The extended witness
+passed in 283.350 seconds. Broader same-version substitution and scale/fairness
+remain separate scope, not inferred from this result.
+
 R05-01–R05-08 follow-up now has implemented fixes and 119 passing adversarial cases,
 with no expected failures. Unchanged queued jobs are privately audited and
 restamped during fenced non-additive retirement; old/surviving claims and rollback

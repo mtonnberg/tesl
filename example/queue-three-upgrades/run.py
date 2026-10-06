@@ -17,7 +17,8 @@ COMMON = runpy.run_path(str(EXAMPLE.parent / "db-three-upgrades/run.py"))
 command, apply_preview, eventually = (COMMON[n] for n in ("command", "apply_preview", "eventually"))
 
 
-def build(output, compiler, env):
+def build(output, compiler, env, upgrade_compiler=None, incompatible_compiler=None):
+    original_compiler = compiler
     source = output / "source"
     shutil.copytree(EXAMPLE / "schema", source / "schema")
     shutil.copyfile(EXAMPLE / "tesl.toml", source / "tesl.toml")
@@ -25,22 +26,35 @@ def build(output, compiler, env):
     entry = source / "app.tesl"
     entry.write_text(app)
 
-    def release(name):
+    def release(name, release_source=None, release_compiler=None):
+        selected_source = source if release_source is None else release_source
+        selected_compiler = compiler if release_compiler is None else release_compiler
+        selected_entry = selected_source / "app.tesl"
         target = output / name
         target.mkdir()
-        for file in sorted(source.rglob("*.tesl")):
-            context = json.loads(command([compiler, "agent-context", file], env=env))
+        for file in sorted(selected_source.rglob("*.tesl")):
+            context = json.loads(command([selected_compiler, "agent-context", file], env=env))
             if not context["ok"]:
                 raise RuntimeError(json.dumps(context))
-        shutil.copytree(source, target / "source")
-        command([compiler, "--backend", "go", entry, "--out", target / "go"], env=env)
+        shutil.copytree(selected_source, target / "source")
+        command([selected_compiler, "--backend", "go", selected_entry, "--out", target / "go"], env=env)
         command(["go", "test", "-race", "-p", "1", "./..."], cwd=target / "go", env=env, timeout=180)
         command(["go", "build", "-race", "-o", target / "app", "./cmd/app"], cwd=target / "go", env=env)
         print(f"Built {name}", flush=True)
 
     release("v1")
+    frozen_original = None
+    if incompatible_compiler is not None:
+        incompatible_source = output / "incompatible-source"
+        shutil.copytree(source, incompatible_source)
+        release("v1-incompatible", incompatible_source, incompatible_compiler)
     for version in (2, 3, 4):
         apply_preview(compiler, entry, env, "generate", "--new-revision")
+        if version == 2 and upgrade_compiler is not None:
+            # A freezes its original schema/closure. B must consume those exact
+            # bytes; do not rebuild V1 or substitute compiler-owned history.
+            compiler = upgrade_compiler
+            frozen_original = (source / "schema/mail/v1.tesl").read_bytes()
         shutil.copyfile(EXAMPLE / f"versions/v{version}.tesl", source / "schema/mail/v-current.tesl")
         helper = f"Schema.Mail.Migrate.Convert{version}"
         old = f"Schema.Mail.V{version - 1}"
@@ -81,6 +95,8 @@ migration = Migration {{
 }}
 ''')
         apply_preview(compiler, entry, env, "generate")
+        if version == 2 and upgrade_compiler is not None:
+            release("v2-original-compiler", release_compiler=original_compiler)
         release(f"v{version}")
         repair = f"Schema.Mail.Migrate.Repair{version}"
         (source / f"migrations/mail/repair{version}.tesl").write_text(f'''module {repair} exposing [repair]
@@ -92,6 +108,8 @@ repair = QueueRepair {{ predecessor: Schema.Mail.Migrate.V{version}.migration, j
         entry.write_text(app.replace("import Tesl.Prelude", f"import {repair}\nimport Tesl.Prelude"))
         release(f"v{version}-repair")
         entry.write_text(app)
+        if frozen_original is not None and (source / "schema/mail/v1.tesl").read_bytes() != frozen_original:
+            raise RuntimeError("compiler upgrade rewrote the original frozen V1 source")
 
 
 def exercise(output, env):
@@ -104,9 +122,9 @@ def exercise(output, env):
         return command(["psql", "-X", "-v", "ON_ERROR_STOP=1", "-Atc", statement], env=dict(base, PGUSER=login)).strip()
 
     def app_env(login):
-        return dict(env, DEMO_HOST=str(cluster), DEMO_PORT="5432", DEMO_DB="queue_upgrades", DEMO_USER=login,
+        return dict(env, DEMO_HOST=str(cluster), DEMO_PORT="5432", DEMO_DB=base["PGDATABASE"], DEMO_USER=login,
                     DEMO_OWNER="demo_owner", DEMO_WORKER="demo_worker", DEMO_REQUEST="demo_request",
-                    DEMO_DDL=f"host={cluster} dbname=queue_upgrades user={login}", DEMO_HTTP_PORT="8097")
+                    DEMO_DDL=f"host={cluster} dbname={base['PGDATABASE']} user={login}", DEMO_HTTP_PORT="8097")
 
     def schema(release, login, *args, refuse=False):
         result = subprocess.run([str(output / release / "app"), "--schema", *args, "--json"], env=app_env(login), text=True, capture_output=True, timeout=60)
@@ -157,6 +175,11 @@ def exercise(output, env):
         active = worker("v1")
         identity = sql("select database_uuid::text from mail.tesl_schema_meta")
         enqueue(1, "retained", {"oldText": "kept"})
+        if (output / "v1-incompatible/app").exists():
+            before = sql("select row_to_json(s)::text from mail.tesl_schema_state s")
+            install("v1-incompatible", refuse=True)
+            assert sql("select row_to_json(s)::text from mail.tesl_schema_state s") == before
+            assert sql("select payload->>'oldText' from mail.tesl_jobs where id='retained'") == "kept"
         first_receipt = None
         for version in (2, 3, 4):
             stop(active)
@@ -220,6 +243,37 @@ def exercise(output, env):
         eventually(serving)
         eventually(lambda: sql("select count(*) from mail.tesl_jobs") == "0")
         assert sql("select string_agg(row_to_json(r)::text,'|' order by source_digest) from mail.tesl_row_queue_conversion_receipts r where job_id='retained' and original::jsonb ? 'oldText'") == first_receipt
+        if (output / "v2-original-compiler/app").exists():
+            # A different compatible compiler may create a new edge, but cannot
+            # substitute executable identity for A's already active V2 edge.
+            sql("create database queue_pinned")
+            sql("grant create on database queue_pinned to demo_owner")
+            base["PGDATABASE"] = "queue_pinned"
+            sql("grant create on schema public to demo_owner")
+            install("v1")
+            original_worker = worker("v1")
+            stop(original_worker)
+            enqueue(1, "pinned", {"oldText": "original"})
+            install("v2-original-compiler")
+            original_worker = worker("v2-original-compiler")
+            eventually(lambda: sql("select schema_version=2 from mail.tesl_jobs where id='pinned'") == "t")
+            stop(original_worker)
+            before = sql("select row_to_json(s)::text from mail.tesl_schema_state s")
+            receipt = sql("select row_to_json(r)::text from mail.tesl_row_queue_conversion_receipts r")
+            install("v2", refuse=True)
+            schema("v2", "demo_worker", "worker", refuse=True)
+            assert sql("select row_to_json(s)::text from mail.tesl_schema_state s") == before
+            assert sql("select row_to_json(r)::text from mail.tesl_row_queue_conversion_receipts r") == receipt
+            schema("v2-original-compiler", "demo_worker", "contract", "V2")
+            pinned_uuid = sql("select database_uuid::text from mail.tesl_schema_meta")
+            install("v3")
+            later_worker = worker("v3")
+            eventually(lambda: sql("select schema_version=3 from mail.tesl_jobs where id='pinned'") == "t")
+            stop(later_worker)
+            assert json.loads(sql("select payload from mail.tesl_jobs where id='pinned'")) == {"content": "original", "importance": 17, "tag": "v3"}
+            schema("v3", "demo_worker", "contract", "V3")
+            assert sql("select database_uuid::text from mail.tesl_schema_meta") == pinned_uuid
+            print("Compatible compiler B cannot replace compiler A's active edge; incompatible C refuses", flush=True)
         print("PASS: three ordinary non-additive queue upgrades on one PostgreSQL database", flush=True)
     finally:
         for proc, log in reversed(processes):
@@ -233,6 +287,9 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--run-built", action="store_true")
     parser.add_argument("--build-only", action="store_true")
+    parser.add_argument("--compiler", type=Path, default=REPO / "compiler/_build/default/bin/main.exe")
+    parser.add_argument("--upgrade-compiler", type=Path, help="freeze V1 with --compiler, then build V2–V4 with this compiler")
+    parser.add_argument("--incompatible-compiler", type=Path, help="build a fresh V1 whose stored-value incompatibility must refuse the installed database")
     args = parser.parse_args()
     output = args.output.absolute()
     if args.run_built and args.build_only:
@@ -242,7 +299,9 @@ def main():
     env = dict(os.environ, TESL_REPO_ROOT=str(REPO))
     if not args.run_built:
         output.mkdir(parents=True)
-        build(output, REPO / "compiler/_build/default/bin/main.exe", env)
+        build(output, args.compiler.absolute(), env,
+              None if args.upgrade_compiler is None else args.upgrade_compiler.absolute(),
+              None if args.incompatible_compiler is None else args.incompatible_compiler.absolute())
     if not args.build_only:
         exercise(output, env)
 

@@ -76,6 +76,27 @@ rerunning the same release inventory is supported. The privacy test checks the
 
 ## Original result summary and execution history
 
+### Later R05-09 verification
+
+Review fixes were committed as `a125d9c`. The next actual compiler A/B/C queue
+regression first failed at V2 installation with `queue target has no exact
+compiler-linked conversion` (`.tesl-stuff/queue-compiler-upgrade-first.log`). The
+staging ABI was tied to the wrong edge. After correction, the full public rollout
+passed in 254.976 seconds; the extended active-edge pinning/post-retirement new-edge
+probe passed in 283.350 seconds (`.tesl-stuff/queue-compiler-upgrade-pinning.log`).
+The final run, including exact frozen-byte assertions and the protocol traceability
+gate, passed in 257.002 seconds (`.tesl-stuff/queue-compiler-upgrade-final.log`).
+The same-compiler generated PostgreSQL conversion/repair suite also passed after
+the fix (`.tesl-stuff/queue-compiler-upgrade-same-compiler.log`, 117.820 seconds).
+
+The test independently reads emitted queue-history headers and requires A/B source
+ABIs to differ, A/B stored-value contracts to agree and C's to differ. A freezes V1
+before switching compilers; frozen bytes are checked after each later release.
+The runner also rejects C at the installed database without state/payload changes.
+The source tree used for compiler variants is isolated; emitted metadata is never
+patched. The protocol inventory classifies this as compiled-PostgreSQL evidence
+and its deterministic coverage map was regenerated and checked.
+
 - **107 new individually named test cases** in
   `scripts/test-db-migration-review-05.py`.
 - **106 pass; 1 explicit expected failure** (R05-03, unchanged delayed-job

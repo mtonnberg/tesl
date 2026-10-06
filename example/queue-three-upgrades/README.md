@@ -70,3 +70,22 @@ For varied row-data upgrades (Rename, Legacy removal, Retype/WriteBack and proof
 Revalidate), see [the database example](../db-three-upgrades/README.md).
 
 The default `scripts/run-migration-tests.sh` gate includes both examples.
+
+## Different compiler builds
+
+The runner also accepts `--compiler PATH`, `--upgrade-compiler PATH` and
+`--incompatible-compiler PATH`. With an upgrade compiler, A builds V1 and freezes
+its source before B builds the later releases. Frozen V1 bytes must remain exact.
+The optional incompatible compiler builds a fresh V1 whose installer must refuse
+the original database without changing admission or retained payloads.
+
+`TestCompiledQueueCompilerUpgradeRetainsPayloads` builds actual A/B/C compilers
+in an isolated source tree: B has a query-only implementation change and the same
+stored-value compatibility; C declares incompatible stored-value semantics. The
+test runs the full public three-upgrade lifecycle, then uses a separate database
+to prove B cannot replace A's active V2 executable. After A retires V2, B can
+register and complete V3. The new edge is pinned to B; A's predecessor receipts
+are immutable observations. No emitted compiler identity or history is patched.
+
+This tests a compatible new-edge compiler upgrade, not unrestricted substitution
+of any binary or runtime into an active processing generation.

@@ -41,8 +41,25 @@ returning usable outcomes. Queue attempts and row backfill accept their operatio
 cancellation context. Exhaustion returns an error without publishing a late result.
 
 This is not process isolation, a memory sandbox, or hard preemption of one
-intrinsic call. These limits remain explicit. Cross-compiler queue rollout and
-large-history/fairness evidence remain R05-09/R05-10 work.
+intrinsic call. These limits remain explicit. Compatible new-edge compiler rollout
+is addressed in the follow-up below; large-history/fairness remains R05-10 work.
+
+### R05-09 follow-up: compatible new-edge compiler rollout verified
+
+After review-fix commit `a125d9c`, a real compiler A/B/C regression reproduced a
+staging defect: the new converter ABI was required to equal the completed
+predecessor's creator ABI. Staging now retains the predecessor's exact physical
+identity/snapshots and stored-value contract, while pinning the new edge to its
+linked executable compiler. All new-edge converters must agree on that ABI.
+
+`TestCompiledQueueCompilerUpgradeRetainsPayloads` passes an A-installed/frozen V1
+through B-built V2–V4 conversion, repair, retirement and typed completion. A/B have
+different source ABIs and identical stored-value compatibility; C is rejected at
+the runtime boundary. A separate probe verifies B cannot replace A's active V2,
+but can create V3 after A retires V2. Frozen V1 bytes and installed receipt/UUID
+identity are preserved. The tested new-edge upgrade gap is closed; arbitrary
+same-version substitution, catalog adoption and R05-10 scale/fairness are not
+claimed by this witness.
 
 ## Original review verdict and discovery evidence
 

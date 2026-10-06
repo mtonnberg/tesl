@@ -52,8 +52,8 @@ func pgStageRowQueueTarget(ctx context.Context, conn *pgx.Conn, namespace string
 		return fmt.Errorf("queue target staging requires the fully retired adjacent source")
 	}
 	var priorDoc []byte
-	var priorHash, abi, compatibility, family string
-	if err := tx.QueryRow(ctx, "select p.contract,p.contract_hash,p.compiler_abi,p.stored_value_compatibility,r.family from "+ns+"tesl_row_physical p cross join "+ns+"tesl_row_versions r where p.version=$1 and r.version=1", current).Scan(&priorDoc, &priorHash, &abi, &compatibility, &family); err != nil {
+	var priorHash, compatibility, family string
+	if err := tx.QueryRow(ctx, "select p.contract,p.contract_hash,p.stored_value_compatibility,r.family from "+ns+"tesl_row_physical p cross join "+ns+"tesl_row_versions r where p.version=$1 and r.version=1", current).Scan(&priorDoc, &priorHash, &compatibility, &family); err != nil {
 		return err
 	}
 	prior, err := pgParseRowPhysicalPlan(hex.EncodeToString(priorDoc), priorHash)
@@ -70,12 +70,23 @@ func pgStageRowQueueTarget(ctx context.Context, conn *pgx.Conn, namespace string
 	if staged != len(plan.queueConversions) {
 		return fmt.Errorf("queue target does not cover the complete staged conversion set")
 	}
+	var abi string
 	for _, conversion := range plan.queueConversions {
 		compiledQueueConversionSources.RLock()
 		source := compiledQueueConversionSources.byDigest[conversion.digest]
 		compiledQueueConversionSources.RUnlock()
-		if source == nil || source.parentDigest != "" || source.family != family || source.queue != conversion.queue || source.job != conversion.job || source.fromVersion != current || source.toVersion != plan.version || source.conversion.children[2].value != compatibility || source.conversion.children[1].value != abi {
+		if source == nil || source.parentDigest != "" || source.family != family || source.queue != conversion.queue || source.job != conversion.job || source.fromVersion != current || source.toVersion != plan.version || source.conversion.children[2].value != compatibility {
 			return fmt.Errorf("queue target has no exact compiler-linked conversion")
+		}
+		// The source snapshot/contract is stable under stored-value compatibility;
+		// its completed predecessor's creator ABI is immutable observation. The
+		// NEW edge is pinned to its actual linked executable compiler, not to the
+		// compiler that produced a different, already completed edge.
+		creator := source.conversion.children[1].value
+		if abi == "" {
+			abi = creator
+		} else if abi != creator {
+			return fmt.Errorf("queue target mixes executable compiler ABIs")
 		}
 		if !source.conversion.list(17) || source.conversion.children[13].value != prior.schemaSnapshotHash || source.conversion.children[14].value != plan.schemaSnapshotHash || source.conversion.children[15].value != prior.storageSnapshotHash || source.conversion.children[16].value != plan.storageSnapshotHash {
 			return fmt.Errorf("queue target differs from its full checked schema/storage snapshots")

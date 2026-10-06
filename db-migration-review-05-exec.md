@@ -49,7 +49,7 @@ complete operational solution is not.
 | Callback execution bounds | Operational policy implemented | Fuel/depth/cooperative deadlines stop generated recursion and loops without publication. No static totality or hard intrinsic-preemption claim. |
 | Operator experience | Public blocker diagnosis implemented; further polish possible | Status reports counts, repair revisions, claims, attempts and recent instances with stable codes/actions, without exposing retained bytes. |
 | Lessons and embedded reference | Improved, not complete | Lesson 96 is now a current workflow; linked examples are available in installed help. A unified operator guide is still needed. |
-| Long-term compatibility and scale | Insufficient evidence | Fresh-install-first is deliberate. Cross-compiler queue deployments, large histories and multi-job fairness need explicit acceptance tests. |
+| Long-term compatibility and scale | Compatible new-edge compiler rollout verified; broader scope remains limited | Actual A/B/C tests cover new queue edges and active-edge refusal. Fresh-install-first is deliberate; large histories, fairness and arbitrary binary substitution remain outside that evidence. |
 
 This is **a functioning scoped system undergoing hardening**, not a design-only
 prototype. It is also not a general solution to every schema evolution pattern.
@@ -134,9 +134,10 @@ creation, reads, updates, upserts, decoding and subsequent migrations.
 ### The examples now prove useful things, but not everything their names might suggest
 
 The row example tests different non-additive changes across releases; the queue
-example proves repeated public conversion/repair/retirement. They do not yet prove
-arbitrary mixed histories, every production topology, migration across different
-compiler builds, or bounded performance on large data/history. Keep using examples
+example proves repeated public conversion/repair/retirement. Actual compiler A/B/C
+coverage now additionally proves compatible new-edge rollout and active-edge
+refusal. This does not establish arbitrary mixed histories, every production
+topology, unrestricted binary substitution or bounded performance on large data/history. Keep using examples
 as acceptance scenarios, with each guarantee and excluded dimension named.
 
 ### Verification quality needs attention alongside implementation quality
@@ -159,7 +160,7 @@ that distinction visible is part of making the gate trustworthy.
 | How far should the progress guarantee extend beyond the fixed subset? | Broader composition creates new overlap and claim states | Preserve audited restamping/finality; require a full lifecycle acceptance scenario for each scope expansion. |
 | Is stronger isolation needed beyond the implemented execution budget? | Cooperative bounds do not hard-preempt a single intrinsic or constrain all memory allocation | Keep fuel/depth/deadline enforcement now; measure intrinsic and large-input behavior before deciding on process isolation or a stricter language subset. |
 | How does an operator recover malformed historical data? | Typed repair correctly requires a decodable old value, but cannot handle every corruption | Keep malformed bytes distinct from business rejection. Specify supported recovery or explicit audited loss; do not add an untracked force/discard escape hatch. |
-| What does a normal compiler upgrade promise to a long-lived database? | Same-build V1–V4 demonstrations do not answer cross-compiler queue compatibility | Add a separately built compiler A/B queue acceptance scenario and publish which compatibility identities are stable. |
+| How far should compiler compatibility extend beyond the tested new-edge upgrade? | Actual A/B/C rollout now passes, but does not establish arbitrary same-version binary substitution | Keep stored-value compatibility separate from pinned active execution identity; specify any additional supported substitution through its own acceptance scenario. |
 | Which mixed history is the next supported unit? | Users will combine additive changes, row transformations and queue evolution | Start with a concrete application scenario and its compatibility obligations; generalize only after the current lifecycle closes correctly. |
 | What additional operator detail is necessary? | Aggregate blocker codes now exist, but malformed-data recovery and large inventories remain difficult | Extend bounded inspection only where a concrete recovery workflow needs it; preserve payload privacy and explicit completeness flags. |
 | How much retained history can the system support efficiently? | Catalog checks, repair chains and receipts grow over time | Measure inspection/dispatch cost and fairness before choosing caching, pruning or larger batch policies. |
@@ -181,8 +182,9 @@ defects as if they were still missing. I recommend:
    workflows and complete a unified credential/recovery guide.
 5. **Keep gates reproducible.** Preserve the repaired expectations and cleanup
    synchronization; obtain an uninterrupted full run when the host permits it.
-6. **Then expand composition and compatibility.** Add cross-compiler queue rollout
-   and a representative mixed-history application before widening the public scope.
+6. **Then expand composition and compatibility.** Keep the new compiler A/B/C
+   queue regression mandatory and add a representative mixed-history application
+   before widening the public scope.
 
 Exit evidence should be a small set of end-to-end guarantees, not a target test
 count: accepted histories finish when their stated business preconditions hold;
