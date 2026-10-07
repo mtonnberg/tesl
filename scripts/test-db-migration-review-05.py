@@ -18,6 +18,7 @@ import tempfile
 import time
 import unittest
 import runpy
+import threading
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = None
@@ -85,8 +86,8 @@ class Lab:
         log.close()
 
     @staticmethod
-    def wait(predicate, process=None):
-        until = time.monotonic() + 25
+    def wait(predicate, process=None, timeout=25):
+        until = time.monotonic() + timeout
         while time.monotonic() < until:
             if predicate():
                 return
@@ -155,6 +156,135 @@ codec Unchanged {
     def close(self):
         run(["pg_ctl", "-D", self.cluster / "data", "-m", "immediate", "-w", "stop"])
         shutil.rmtree(self.cluster)
+
+    def build_fairness_payloads(self):
+        """Two independently changed job types, emitted as ordinary applications."""
+        source = CONFIG.artifacts / "fair/source"
+        shutil.copytree(CONFIG.artifacts / "queue/v1/source", source)
+        def add_other(text, version):
+            fields = 'text: String' if version == 1 else 'body: String, priority: Int'
+            codec = 'text -> "oldText" with_codec stringCodec' if version == 1 else 'body -> "message" with_codec stringCodec, priority -> "priority" with_codec intCodec'
+            decoder = 'text <- "oldText" with_codec stringCodec' if version == 1 else 'body <- "message" with_codec stringCodec, priority <- "priority" with_codec intCodec'
+            return text.replace("exposing [Delivery, Jobs]", "exposing [Delivery, Jobs, Other]").replace("jobs: [Delivery]", "jobs: [Delivery, Other]") + f'\nrecord Other {{ {fields} }}\ncodec Other {{ toJson {{ {codec} }} fromJson [ {{ {decoder} }} ] }}\n'
+        current = source / "schema/mail/v-current.tesl"
+        current.write_text(add_other(current.read_text(), 1))
+        entry = source / "app.tesl"
+        entry.write_text(entry.read_text().replace("jobs: [Job Schema.Mail.VCurrent.Delivery handle Nothing]", "jobs: [Job Schema.Mail.VCurrent.Delivery handle Nothing, Job Schema.Mail.VCurrent.Other handleOther Nothing]") + '\nworker handleOther(job: Schema.Mail.VCurrent.Other ::: FromQueue (Id == jobId) job) = job\n')
+        def emit(version):
+            target = CONFIG.artifacts / f"fair/v{version}"
+            for file in source.rglob("*.tesl"):
+                require(run([CONFIG.compiler, "agent-context", file], env=self.env))
+            require(run([CONFIG.compiler, "--backend", "go", entry, "--out", target / "go"], env=self.env))
+            require(run(["go", "build", "-race", "-o", target / "app", "./cmd/app"], cwd=target / "go", env=self.env))
+        emit(1)
+        preview = runpy.run_path(str(ROOT / "example/db-three-upgrades/run.py"))["apply_preview"]
+        preview(CONFIG.compiler, entry, self.env, "generate", "--new-revision")
+        current.write_text(add_other((CONFIG.artifacts / "queue/v2/source/schema/mail/v-current.tesl").read_text(), 2))
+        helper = source / "migrations/mail/convert2.tesl"
+        text = (CONFIG.artifacts / "queue/v2/source/migrations/mail/convert2.tesl").read_text()
+        text = text.replace("exposing [convert, repair, oldJob, rejectedJob]", "exposing [convert, repair, oldJob, rejectedJob, convertOther, otherJob]")
+        text += '\nfn convertOther(old: Schema.Mail.V1.Other) -> Migrated Schema.Mail.VCurrent.Other =\n  Row (Schema.Mail.VCurrent.Other { body: old.text, priority: 11 })\nfn otherJob() -> Schema.Mail.V1.Other = Schema.Mail.V1.Other { text: "other" }\n'
+        helper.write_text(text)
+        edge = source / "migrations/mail/v2.tesl"
+        body = (CONFIG.artifacts / "queue/v2/source/migrations/mail/v2.tesl").read_text().split("module ", 1)[1]
+        body = body.replace("Delivery: Migrate Schema.Mail.Migrate.Convert2.convert", "Delivery: Migrate Schema.Mail.Migrate.Convert2.convert, Other: Migrate Schema.Mail.Migrate.Convert2.convertOther")
+        body = body.replace("[Schema.Mail.Migrate.Convert2.oldJob]", "[Schema.Mail.Migrate.Convert2.oldJob, Schema.Mail.Migrate.Convert2.otherJob]")
+        edge.write_text(edge.read_text().split("module ", 1)[0] + "module " + body)
+        preview(CONFIG.compiler, entry, self.env, "generate")
+        emit(2)
+
+
+class SchedulerReview(unittest.TestCase):
+    def setUp(self):
+        if not (CONFIG.artifacts / "fair/v2/app").exists():
+            LAB.build_fairness_payloads()
+        self.db = "review_fairness"
+        LAB.sql("postgres", f"create database {self.db}")
+        self.addCleanup(lambda: LAB.sql("postgres", f"drop database {self.db} with (force)"))
+        LAB.sql("postgres", f"grant create on database {self.db} to review_owner")
+        LAB.sql(self.db, "grant create on schema public to review_owner")
+        require(LAB.install(self.db, "v1", "fair"))
+        LAB.stop(*LAB.start(self.db, "v1", "fair"))
+        require(LAB.install(self.db, "v2", "fair"))
+
+    def fill(self, prefix, count=512):
+        LAB.sql(self.db, f"select mail.tesl_queue_enqueue(1,'Jobs','Delivery',{literal(prefix)}||n::text,'{{\"oldText\":\"busy\"}}') from generate_series(1,{count}) n", "review_request")
+
+    def test_120_busy_first_type_does_not_starve_later_type(self):
+        self.fill("initial-", 1024)
+        LAB.sql(self.db, "select mail.tesl_queue_enqueue(1,'Jobs','Other','rare','{\"oldText\":\"rare-value\"}')", "review_request")
+        stop = threading.Event()
+        errors = []
+        def producer():
+            iteration = 0
+            try:
+                while not stop.is_set():
+                    old = int(LAB.sql(self.db, "select count(*) from mail.tesl_jobs where job_type='Delivery' and schema_version=1"))
+                    if old < 512:
+                        self.fill(f"refill-{iteration}-")
+                        iteration += 1
+                    stop.wait(.05)
+            except BaseException as error:
+                errors.append(error)
+        thread = threading.Thread(target=producer)
+        thread.start()
+        process = log = None
+        try:
+            process, log = LAB.start(self.db, "v2", "fair")
+            LAB.wait(lambda: LAB.sql(self.db, "select schema_version=2 from mail.tesl_jobs where id='rare'") == "t", process)
+            self.assertEqual(json.loads(LAB.sql(self.db, "select payload from mail.tesl_jobs where id='rare'")), {"message": "rare-value", "priority": 11})
+            self.assertGreater(int(LAB.sql(self.db, "select count(*) from mail.tesl_jobs where job_type='Delivery' and schema_version=1")), 0)
+        finally:
+            stop.set()
+            thread.join(timeout=10)
+            if process is not None:
+                LAB.stop(process, log)
+        self.assertFalse(thread.is_alive())
+        self.assertFalse(errors, errors)
+
+    def test_121_restart_uses_durable_service_order(self):
+        self.fill("before-restart-", 768)
+        process, log = LAB.start(self.db, "v2", "fair")
+        try:
+            LAB.wait(lambda: LAB.sql(self.db, "select count(*)>0 from mail.tesl_row_queue_conversion_receipts") == "t", process)
+        finally:
+            LAB.stop(process, log)
+        self.fill("after-restart-", 768)
+        LAB.sql(self.db, "select mail.tesl_queue_enqueue(1,'Jobs','Other','restart-rare','{\"oldText\":\"restart\"}')", "review_request")
+        process, log = LAB.start(self.db, "v2", "fair")
+        try:
+            LAB.wait(lambda: LAB.sql(self.db, "select schema_version=2 from mail.tesl_jobs where id='restart-rare'") == "t", process)
+            self.assertGreater(int(LAB.sql(self.db, "select count(*) from mail.tesl_jobs where job_type='Delivery' and schema_version=1")), 0)
+        finally:
+            LAB.stop(process, log)
+
+    def test_122_growing_receipt_history_keeps_indexed_service_lookup(self):
+        self.fill("history-", 1024)
+        started = time.monotonic()
+        process, log = LAB.start(self.db, "v2", "fair")
+        try:
+            # A 1,024-transaction workload has its own budget; this is not an
+            # assertion that the ordinary one-job readiness deadline must scale.
+            LAB.wait(lambda: LAB.sql(self.db, "select count(*)=1024 from mail.tesl_row_queue_conversion_receipts") == "t", process, timeout=120)
+        finally:
+            LAB.stop(process, log)
+        original = LAB.sql(self.db, "select count(*)::text||','||max(attempt_seq)::text from mail.tesl_row_queue_conversion_receipts")
+        digest = LAB.sql(self.db, "select source_digest from mail.tesl_row_queue_conversion_staging where job_type='Delivery'")
+        LAB.sql(self.db, "analyze mail.tesl_row_queue_conversion_receipts")
+        plan = json.loads(LAB.sql(self.db, f"explain (analyze,buffers,format json) select attempt_seq from mail.tesl_row_queue_conversion_receipts where source_digest={literal(digest)} order by attempt_seq desc limit 1"))[0]
+        rendered = json.dumps(plan)
+        self.assertIn("tesl_row_queue_conversion_fair", rendered)
+        self.assertNotIn("Seq Scan", rendered)
+        before = self.state_for_scheduler()
+        for _ in range(3):
+            self.assertTrue(LAB.sql(self.db, "select source_digest from mail.tesl_row_queue_dispatch_sources()", "review_worker"))
+        self.assertEqual(LAB.sql(self.db, "select count(*)::text||','||max(attempt_seq)::text from mail.tesl_row_queue_conversion_receipts"), original)
+        self.assertEqual(self.state_for_scheduler(), before)
+        (CONFIG.output / "scheduler-history-plan.json").write_text(json.dumps(plan, indent=2) + "\n")
+        (CONFIG.output / "scheduler-history-workload.json").write_text(json.dumps({"rows": 1024, "seconds": time.monotonic()-started}, indent=2) + "\n")
+
+    def state_for_scheduler(self):
+        return LAB.sql(self.db, "select row_to_json(s)::text from mail.tesl_schema_state s")
 
 
 class KnownGaps(unittest.TestCase):
@@ -493,6 +623,7 @@ CORRUPTIONS = [
     ("26_retired_missing_receipt", "delete from mail.tesl_row_queue_retirements"),
     ("27_retired_repair_gap", "delete from mail.tesl_row_queue_conversion_staging where revision=1"),
     ("28_retired_wrong_lifecycle", "update mail.tesl_schema_versions set artefact_hash=repeat('a',64) where version=2 and step='contracted'"),
+    ("123_missing_fairness_index", "drop index mail.tesl_row_queue_conversion_fair"),
 ]
 
 
@@ -806,7 +937,7 @@ def main():
         LAB.prepare()
         suite = unittest.TestSuite()
         names = []
-        for cls in (DatabaseReview, SourceReview, KnownGaps, EmbeddedDocsReview):
+        for cls in (DatabaseReview, SourceReview, KnownGaps, EmbeddedDocsReview, SchedulerReview):
             for name in unittest.defaultTestLoader.getTestCaseNames(cls):
                 if CONFIG.match in name:
                     suite.addTest(cls(name))

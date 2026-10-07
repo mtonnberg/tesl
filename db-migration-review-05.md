@@ -21,7 +21,8 @@ evidence.** The feature is materially healthier than at the initial review:
 | R05-07 | Bounded embedding of linked examples and detached-binary retrieval tests | Installed help retrieves README, runner and templates |
 | R05-08 | Protected read-only aggregate queue status, blocker codes/actions, repair revisions, recent instances and index projection | Request-role status distinguishes blockers, preserves state and withholds original payloads |
 
-The suite has grown to **119 cases, all passing, with no expected failures**. Four
+The suite has grown to **123 cases with passing evidence and no expected failures**
+(122 in one invocation, followed by the added catalog-refusal case). Four
 runtime budget tests are additional, not folded into that count. The initial
 107-case results below are historical discovery evidence, not the current verdict.
 
@@ -42,7 +43,7 @@ cancellation context. Exhaustion returns an error without publishing a late resu
 
 This is not process isolation, a memory sandbox, or hard preemption of one
 intrinsic call. These limits remain explicit. Compatible new-edge compiler rollout
-is addressed in the follow-up below; large-history/fairness remains R05-10 work.
+is addressed in the follow-up below; R05-10 now has bounded fairness/history evidence.
 
 ### R05-09 follow-up: compatible new-edge compiler rollout verified
 
@@ -60,6 +61,30 @@ but can create V3 after A retires V2. Frozen V1 bytes and installed receipt/UUID
 identity are preserved. The tested new-edge upgrade gap is closed; arbitrary
 same-version substitution, catalog adoption and R05-10 scale/fairness are not
 claimed by this witness.
+
+### R05-10 follow-up: durable service ordering and bounded history evidence
+
+An ordinary two-job-type application reproduced starvation: continuously replenished
+Delivery work exhausted each fixed-order turn while Other made no progress within
+25 seconds. Dispatch now divides the remaining 1–256-job turn budget among remaining
+descriptors and orders sources by their latest durable receipt sequence. Restart
+therefore retains service ordering without a process-local cursor. The protected,
+read-only selector uses a backward `(source_digest, attempt_seq)` index lookup;
+catalog verification independently requires that index and the selector function.
+
+Cases 120–123 verify continuous replenishment, restart with old backlog remaining,
+indexed lookup after 1,024 actual conversion receipts, and missing-index refusal
+without state changes. The 1,024-transaction workload took 41.086 seconds on this
+shared host; this is a regression measurement, not a throughput target. The full
+122-case suite and generated/application PostgreSQL group passed, followed by the
+new case 123 and focused runtime race/catalog checks.
+
+The reproduced two-type starvation defect is addressed. R05-10 remains partial:
+million-job/history scale, inventories larger than the turn budget, formal latency
+bounds, memory limits and broad throughput acceptance have not been established.
+Receipt ordering is scheduling evidence, never finality; Contract retains its
+independent fences and blocker checks. Fresh catalogs contain the new index;
+development catalogs missing it explicitly refuse.
 
 ## Original review verdict and discovery evidence
 

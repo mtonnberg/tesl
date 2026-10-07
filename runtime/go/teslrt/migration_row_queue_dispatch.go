@@ -85,6 +85,17 @@ func pgRowQueueConversionFunctions(namespace string) []pgMigrationControlFunctio
 		}
 		result = append(result, fn)
 	}
+	result = append(result, pgMigrationControlFunction{"tesl_row_queue_dispatch_sources", "", "TABLE(source_digest text)", "stable", `
+begin
+ -- Receipt sequence is durable least-recently-served evidence, not a work
+ -- cursor or finality claim. Backward index lookup avoids scanning old history.
+ return query select c.source_digest from ` + ns + `tesl_row_queue_conversion_staging c
+ cross join ` + ns + `tesl_schema_state st
+ left join lateral (select r.attempt_seq from ` + ns + `tesl_row_queue_conversion_receipts r
+  where r.source_digest=c.source_digest order by r.attempt_seq desc limit 1) served on true
+ where st.id=1 and c.to_version=st.current and c.from_version>=st.min_version
+ order by coalesce(served.attempt_seq,0),c.queue collate "C",c.job_type collate "C",c.revision;
+end`})
 	return result
 }
 
@@ -197,12 +208,11 @@ func pgRunRowQueueConversionTurn(ctx context.Context, conn *pgx.Conn, namespace 
 	if !worker {
 		return progress, fmt.Errorf("application queue turn requires exact Worker login")
 	}
-	state, err := pgInspectRowControl(ctx, tx, namespace, roles)
-	if err != nil {
+	if _, err := pgInspectRowControl(ctx, tx, namespace, roles); err != nil {
 		return progress, err
 	}
 	ns := quoteIdentifier(namespace) + "."
-	rows, err := tx.Query(ctx, "select source_digest from "+ns+"tesl_row_queue_conversion_staging where to_version=$1 and from_version>= $2 order by queue,job_type,revision", state.Current, state.MinVersion)
+	rows, err := tx.Query(ctx, "select source_digest from "+ns+"tesl_row_queue_dispatch_sources()")
 	if err != nil {
 		return progress, err
 	}
@@ -225,7 +235,7 @@ func pgRunRowQueueConversionTurn(ctx context.Context, conn *pgx.Conn, namespace 
 		return progress, err
 	}
 	progress.NoEligible = true
-	for _, executable := range executables {
+	for index, executable := range executables {
 		if progress.Selected == limit {
 			progress.NoEligible = false
 			break
@@ -234,7 +244,10 @@ func pgRunRowQueueConversionTurn(ctx context.Context, conn *pgx.Conn, namespace 
 		if err != nil {
 			return progress, err
 		}
-		batch, err := pgRunQueueConversionCandidateBatch(ctx, conn, scope, executable, limit-progress.Selected)
+		remaining := limit - progress.Selected
+		stages := len(executables) - index
+		quantum := (remaining + stages - 1) / stages
+		batch, err := pgRunQueueConversionCandidateBatch(ctx, conn, scope, executable, quantum)
 		progress.Selected += batch.Selected
 		progress.Converted += batch.Converted
 		progress.Rejected += batch.Rejected

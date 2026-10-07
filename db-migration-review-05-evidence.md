@@ -74,6 +74,40 @@ rerunning the same release inventory is supported. The privacy test checks the
   projection. The row-specific verifier remains authoritative; the legacy lease
   verifier is not applied to row-shard leases.
 
+## R05-10 fairness follow-up (2026-10-07)
+
+Current inventory: **123 named cases with passing evidence**, zero expected failures.
+The 122-case suite passed together; case 123 was subsequently added and passed
+separately. This is not a claim of a new uninterrupted default migration-gate run.
+
+| Case / check | Oracle / result | Evidence |
+|---|---|---|
+| 120, before fix | Later type fails its 25-second progress deadline while the first type is replenished | `.tesl-stuff/review05-fairness-before.log` |
+| 120, fixed | Later type progresses with continuous first-type load | `.tesl-stuff/review05-fairness-fixed.log` |
+| 121 | Restart preserves durable service order; rare type progresses with old backlog remaining | `.tesl-stuff/review05-fairness-regressions.log` |
+| 122 | 1,024 actual conversion receipts; last-service lookup uses fairness index without sequential scan; repeated selector calls are read-only | `.tesl-stuff/review05-history-index/` and `.tesl-stuff/review05-history-index.log` |
+| All 122 cases | Passed in 322.158 seconds | `.tesl-stuff/review05-fairness-regressions.log` |
+| Generated/application conversion and repair PostgreSQL group | Passed in 128.346 seconds | `.tesl-stuff/review05-fairness-regressions.log` |
+| 123 | Drop required fairness index; public status refuses without state changes | `.tesl-stuff/review05-fairness-index-refusal/{result,inventory,provenance}.json` |
+| Focused runtime/catalog race checks | `Test(RowQueue\|PgRowBaseline\|QueueConversion)` passed in 93.246 seconds, private PostgreSQL, migration test tag | Terminal verification, 2026-10-07 |
+| Compiler build and runtime embedding | Build passed; six byte-identity/dependency tests and three runtime-gate tests passed | Terminal verification, 2026-10-07 |
+| Updated installed guide and lesson | Four detached-binary checks passed after regenerating embedded docs | `.tesl-stuff/review05-fairness-installed-docs/{result,inventory,provenance}.json` |
+| Formatting and diff | Go formatting clean; `git diff --check` passed | Terminal verification, 2026-10-07 |
+
+The bulk-history case initially used the 25-second single-job progress deadline and
+timed out. It now has its own 120-second workload budget; single-job fairness
+deadlines remain 25 seconds. The recorded 1,024-transaction workload took 41.086
+seconds. These measurements establish a regression workload and indexed selection,
+not a production throughput promise or bounded total catalog-verification cost.
+
+Dispatch uses durable last-receipt ordering and a share of the remaining turn
+budget per descriptor. A protected stable selector and independently checked
+`tesl_row_queue_conversion_fair (source_digest, attempt_seq)` index implement the
+ordering without granting Worker direct historical-table access. Missing required
+objects refuse; no old-catalog adoption is implied. Million-job/history scale,
+more-than-budget descriptor counts, formal fairness latency and memory bounds
+remain follow-up work.
+
 ## Original result summary and execution history
 
 ### Later R05-09 verification

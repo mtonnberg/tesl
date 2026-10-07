@@ -47,6 +47,9 @@ func (p *pgRowBaselinePreparation) prepareFresh(ctx context.Context, tx pgx.Tx, 
 	if _, err := tx.Exec(ctx, "create index tesl_row_queue_conversion_latest on "+ns+"tesl_row_queue_conversion_receipts(job_id,attempt_seq)"); err != nil {
 		return err
 	}
+	if _, err := tx.Exec(ctx, "create index tesl_row_queue_conversion_fair on "+ns+"tesl_row_queue_conversion_receipts(source_digest,attempt_seq)"); err != nil {
+		return err
+	}
 	if err := pgCreateRowQueueBaseline(ctx, tx, b, p.roles); err != nil {
 		return err
 	}

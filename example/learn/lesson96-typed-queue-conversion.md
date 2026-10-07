@@ -95,6 +95,13 @@ expanded target before new requests start. The Worker then discovers eligible jo
 in bounded turns (up to 256 job transactions), resolving staged digests to linked
 typed adapters. Each job commits independently; committed receipts support restart.
 
+When several job types change, a turn shares its remaining budget among conversion
+descriptors and visits sources in durable least-recently-served receipt order.
+Restart retains that ordering. Two-type continuous-load tests verify that a busy
+first type does not starve a later type; this is not a wall-clock latency guarantee
+for every inventory size. See the [operator guide](../../manual/migration-operations.md)
+for scheduling evidence and scope.
+
 | Outcome | Durable behavior |
 |---|---|
 | `converted` | Target bytes and schema version publish with their receipt |

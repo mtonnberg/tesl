@@ -19,6 +19,13 @@ func pgExpectedRowControl(e *pgCatalogExpectations, owner, name string) (*pgCata
 		}
 		table.Name = name
 		table.Constraints = slices.DeleteFunc(table.Constraints, func(c pgCatalogConstraint) bool { return c.Kind == "f" })
+		if name == "tesl_row_queue_conversion_receipts" {
+			index, err := e.index("tesl_row_queue_conversion_fair", table, []string{"source_digest", "attempt_seq"}, false, false, false)
+			if err != nil {
+				return nil, err
+			}
+			table.Indexes = append(table.Indexes, index)
+		}
 		return table, nil
 	}
 	columns := []pgControlExpectedColumn{}

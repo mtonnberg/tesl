@@ -71,6 +71,20 @@ and schedule, preserves surviving claims, releases expired retiring claims, and
 records restamps in the same transaction as retirement. Rollback restores jobs,
 audit and admission floors together.
 
+## Queue conversion progress across job types
+
+Each Worker conversion turn selects at most 1–256 jobs. It shares the remaining
+budget among remaining conversion descriptors and visits sources in durable
+least-recently-served receipt order. A continuously busy first job type therefore
+does not monopolize the tested two-type workload; restarting retains service
+ordering. A source with no eligible work yields capacity to subsequent sources.
+
+This ordering is a scheduling policy, not a finality cursor or a wall-clock latency
+guarantee. Inspect blockers and use Contract to establish retirement. The protected
+selector requires the verified receipt lookup index; a development catalog missing
+it refuses explicitly. Current evidence covers two changed job types and 1,024
+conversion receipts, rather than production-scale inventories or throughput.
+
 ## When callback execution stops
 
 Generated migration graphs share an operational budget: 100,000 entry/loop steps,

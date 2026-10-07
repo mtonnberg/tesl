@@ -15,7 +15,9 @@ lifecycle, rather than adding more migration forms.**
 unchanged queued work can retire beside changed work; callback recursion is
 operationally bounded; status explains blockers through protected public tools;
 and stale gates and installed documentation gaps have been repaired. The current
-adversarial suite has **119 passing cases and no expected failures**.
+adversarial suite has **123 cases with passing evidence and no expected failures**
+(122 together, then the added catalog-refusal case). Follow-up work also verifies
+compatible new-edge compiler rollout and fixes reproduced two-type starvation.
 
 The feature has progressed from compiler checks and isolated runtime candidates
 to real, repeated application deployments. Four-release examples now exercise
@@ -48,8 +50,8 @@ complete operational solution is not.
 | Type/proof foundation | Shared defects fixed; complete compiler suite passes | SQL writes enforce destination types and proof dependencies; positive and adversarial controls pass. |
 | Callback execution bounds | Operational policy implemented | Fuel/depth/cooperative deadlines stop generated recursion and loops without publication. No static totality or hard intrinsic-preemption claim. |
 | Operator experience | Public blocker diagnosis implemented; further polish possible | Status reports counts, repair revisions, claims, attempts and recent instances with stable codes/actions, without exposing retained bytes. |
-| Lessons and embedded reference | Improved, not complete | Lesson 96 is now a current workflow; linked examples are available in installed help. A unified operator guide is still needed. |
-| Long-term compatibility and scale | Compatible new-edge compiler rollout verified; broader scope remains limited | Actual A/B/C tests cover new queue edges and active-edge refusal. Fresh-install-first is deliberate; large histories, fairness and arbitrary binary substitution remain outside that evidence. |
+| Lessons and embedded reference | Current workflow and unified operator guide available | Installed help includes lesson 96, linked examples and the role/blocker/recovery guide. |
+| Long-term compatibility and scale | Compatible new-edge rollout and bounded fairness verified; broader scale remains limited | Actual A/B/C tests cover new queue edges and active-edge refusal. Two-type load/restart and 1,024-receipt indexed lookup pass; production-scale latency and arbitrary binary substitution remain unproven. |
 
 This is **a functioning scoped system undergoing hardening**, not a design-only
 prototype. It is also not a general solution to every schema evolution pattern.
@@ -143,7 +145,7 @@ as acceptance scenarios, with each guarantee and excluded dimension named.
 ### Verification quality needs attention alongside implementation quality
 
 The initial 107-case suite exposed a failing requirement; the extended suite
-now has 119 passing cases without expected failures. Baseline compiler failures were
+now has 123 cases with passing evidence without expected failures. Baseline compiler failures were
 repaired and the complete compiler suite passes. Cleanup now uses a separate
 non-executor identity, while still waiting for all actual executor backends.
 
@@ -181,10 +183,15 @@ defects as if they were still missing. I recommend:
 4. **Polish operations.** Validate the new blocker/actions against real operator
    workflows and complete a unified credential/recovery guide.
 5. **Keep gates reproducible.** Preserve the repaired expectations and cleanup
-   synchronization; obtain an uninterrupted full run when the host permits it.
+synchronization; obtain an uninterrupted full run when the host permits it.
 6. **Then expand composition and compatibility.** Keep the new compiler A/B/C
    queue regression mandatory and add a representative mixed-history application
    before widening the public scope.
+
+R05-10 now has a concrete scheduling fix: durable least-recently-served receipt
+ordering and per-descriptor turn quotas. Keep its continuous-load, restart and
+catalog-refusal regressions mandatory. Next set latency/history-size targets and
+measure larger inventories and retained history before claiming production scale.
 
 Exit evidence should be a small set of end-to-end guarantees, not a target test
 count: accepted histories finish when their stated business preconditions hold;
