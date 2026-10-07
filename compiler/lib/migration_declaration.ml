@@ -195,6 +195,15 @@ let prepare_queue_decisions ~project_root ~before ~after ~previous_file ~current
       | _ -> reject "MIG028" (at value) "jobs: must name one exact previous payload; qualify ambiguous names") entries;
     let modules=List.map fst(T.captured_source_texts graph) in
     let fixture_bindings=checked(T.bind_pure_functions modules root fixtures) in
+    (* Resolve each signature once in this captured source scope. Re-resolving
+       every fixture for every payload multiplies expensive export lookup. The
+       converter factory still independently checks the selected exact types. *)
+    let classified_fixtures=List.combine fixtures fixture_bindings |> List.map(fun(expr,(f:T.function_binding))->
+      let payload=match f.declaration.return_spec with
+        | RetPlain result when f.declaration.params=[] ->
+          Option.map fst(T.fixture_payload modules f.owner result.ty)
+        | _ -> None in
+      expr,f,payload) in
     let used=Hashtbl.create 8 in
     let context=match Migration_abi.current() with Ok c->c|Error e->reject "MIG013" (Location.dummy_loc e.path) e.message in
     let load path=match I.load_with_compatibility ~compiler_abi:(Migration_abi.id context)
@@ -219,12 +228,12 @@ let prepare_queue_decisions ~project_root ~before ~after ~previous_file ~current
           let binding=List.hd(checked(T.bind_pure_functions modules root [callback])) in
           if binding.owner.module_name=root.module_name then reject "MIG028" (at callback)
             "queue conversion callbacks currently belong in a pure migration helper module";
-          let selected_fixtures=List.filter_map(fun(expr,(f:T.function_binding))->
-            match f.declaration.return_spec with
-            | RetPlain result when f.declaration.params=[] && Option.is_some(T.fixture_type modules f.owner previous.payload_name result.ty) ->
+          let selected_fixtures=List.filter_map(fun(expr,(f:T.function_binding),payload)->
+            match payload with
+            | Some identity when identity=previous.payload_name ->
               Hashtbl.replace used f.identity ();
               Some(EVar{name=f.identity;loc=at expr})
-            | _ -> None) (List.combine fixtures fixture_bindings) in
+            | _ -> None) classified_fixtures in
           let source=snd(List.find(fun(owner,_)->owner==binding.owner)(T.captured_source_texts graph)) in
           Some(checked(Migration_queue_transform.check ~project_root
             ~before:(Lazy.force before_checked) ~after:(Lazy.force after_checked) ~version ~queue ~job:identity

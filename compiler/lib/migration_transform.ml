@@ -187,11 +187,19 @@ let bind_function modules root expression =
 let entity_type modules owner expected = function
   | TName {name;_} -> resolver modules owner IR.Type name=Some (IR.Global expected)
   | _ -> false
-let fixture_type modules owner expected = function
+let fixture_payload modules owner ty =
+  let nominal optional = function
+    | TName {name;_} -> (match resolver modules owner IR.Type name with
+        | Some (IR.Global identity) -> Some (identity,optional)
+        | _ -> None)
+    | _ -> None in
+  match ty with
   | TApp {head=TName {name;_};arg;_} when
-      resolver modules owner IR.Type name=Some (IR.Primitive "Tesl.Maybe.Maybe") &&
-      entity_type modules owner expected arg -> Some true
-  | ty when entity_type modules owner expected ty -> Some false
+      resolver modules owner IR.Type name=Some (IR.Primitive "Tesl.Maybe.Maybe") -> nominal true arg
+  | ty -> nominal false ty
+let fixture_type modules owner expected ty =
+  match fixture_payload modules owner ty with
+  | Some (identity,optional) when identity=expected -> Some optional
   | _ -> None
 
 (* A classifier over the original checked row/binding only; callers cannot

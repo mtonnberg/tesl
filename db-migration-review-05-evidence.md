@@ -130,6 +130,46 @@ the private cluster left by the first interruption was explicitly stopped. No
 Repeated per-converter graph capture/check/lowering is visible in source and is a
 profiling candidate, not yet a measured root cause.
 
+### Preparation profiling and local routing optimization after `b2f664f`
+
+Native stack snapshots (five interruptions seven seconds apart, not a statistical
+CPU profile) found fixture routing repeatedly resolving return types through
+`Migration_transform.resolver` and export-list membership. Perf events were denied
+by the host; GDB ran the compiler as its own child and captured the suspended OCaml
+stack. `.tesl-stuff/review05-preparation-stack-samples.log` retains those snapshots.
+
+The retained optimization adds `fixture_payload` and classifies each fixture once
+within the declaration's captured source view. Exact nominal identity then routes
+it to the old payload. For 257 parameterless fixtures and 257 old types, this reduces
+the routing classifier from 66,049 pair checks to 257 signature resolutions. This
+is a work-count change, not a measured end-to-end speedup. Builtin Maybe and ordinary
+owned return types retain the same classification; the converter factory still
+checks each selected fixture independently.
+
+| Final retained implementation check | Result | Evidence |
+|---|---|---|
+| Queue source cases 0–50 | All 51 passed, 232.897 seconds | `.tesl-stuff/review05-routing-final-checks.log` |
+| Shared row transformation suite | All 43 passed, 16.471 seconds | Same log |
+| Fresh current-compiler 17-type public workload | Passed, 95.664 seconds including rebuild | `.tesl-stuff/review05-routing-postgres-checks.log`; `.tesl-stuff/review05-routing-17-descriptors-final/` |
+| Generated/application PostgreSQL conversion and repair group | Passed, 122.710 seconds | `.tesl-stuff/review05-routing-postgres-checks.log` |
+| Same-compiler cached 17-type replay | Passed, 40.179 seconds while bounded large preview also ran | `.tesl-stuff/review05-routing-cache-replay/` |
+| Final 257-type preparation-only probe | No result within 90 seconds; timeout exit 124; peak RSS 266,164 KiB | Terminal verification; `.tesl-stuff/review05-routing-final-257-preview.json` is empty |
+
+An earlier source-test invocation hit its outer 240-second timeout after case 45;
+the complete final 51-case invocation above passed. Rebuilding the cached 17-type
+fixture initially exposed the compiler's existing-output refusal. The builder now
+uses fresh generated directories and accepts a cache only when its compiler hash
+matches; final replay verifies that path.
+
+Exploratory graph/inventory/content-hash caches were not retained. Their intermediate
+257-type run failed the 600-second preparation deadline (`review05-257-descriptors-optimized.log`,
+629.871 seconds including setup), and bounded later probes still timed out. Stack
+snapshots from those trials are in `review05-preparation-shared-samples.log` and
+`review05-preparation-inventory-samples.log`; they show whole-inventory closure and
+source hashing as further hot paths. Those trials are diagnostic evidence, not
+verification of the retained implementation. No complete default gate or 257-type
+runtime fairness pass is claimed.
+
 ## Original result summary and execution history
 
 ### Later R05-09 verification

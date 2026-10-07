@@ -179,10 +179,12 @@ codec Unchanged {
         entry.write_text(entry.read_text().replace("jobs: [Job Schema.Mail.VCurrent.Delivery handle Nothing]", "jobs: [Job Schema.Mail.VCurrent.Delivery handle Nothing, " + jobs + "]") + handlers)
         def emit(version):
             target = CONFIG.artifacts / family / f"v{version}"
+            target.mkdir(parents=True, exist_ok=True)
+            generated = Path(tempfile.mkdtemp(prefix=f"build-v{version}-", dir=target_family)) / "go"
             for file in source.rglob("*.tesl"):
                 require(run([CONFIG.compiler, "agent-context", file], env=self.env, timeout=build_timeout))
-            require(run([CONFIG.compiler, "--backend", "go", entry, "--out", target / "go"], env=self.env, timeout=build_timeout))
-            require(run(["go", "build", "-race", "-o", target / "app", "./cmd/app"], cwd=target / "go", env=self.env, timeout=build_timeout))
+            require(run([CONFIG.compiler, "--backend", "go", entry, "--out", generated], env=self.env, timeout=build_timeout))
+            require(run(["go", "build", "-race", "-o", target / "app", "./cmd/app"], cwd=generated, env=self.env, timeout=build_timeout))
         emit(1)
         preview = runpy.run_path(str(ROOT / "example/db-three-upgrades/run.py"))["apply_preview"]
         preview(CONFIG.compiler, entry, self.env, "generate", "--new-revision", timeout=build_timeout)
@@ -202,12 +204,15 @@ codec Unchanged {
         edge.write_text(edge.read_text().split("module ", 1)[0] + "module " + body)
         preview(CONFIG.compiler, entry, self.env, "generate", timeout=build_timeout)
         emit(2)
+        (target_family / "compiler.sha256").write_text(hashlib.sha256(CONFIG.compiler.read_bytes()).hexdigest() + "\n")
 
 
 class SchedulerReview(unittest.TestCase):
     def setUp(self):
         self.family = f"fair-many-{CONFIG.scheduler_types}" if self._testMethodName.startswith("test_124_") else "fair"
-        if not (CONFIG.artifacts / self.family / "v2/app").exists():
+        stamp = CONFIG.artifacts / self.family / "compiler.sha256"
+        compiler_hash = hashlib.sha256(CONFIG.compiler.read_bytes()).hexdigest()
+        if not (CONFIG.artifacts / self.family / "v2/app").exists() or not stamp.exists() or stamp.read_text().strip() != compiler_hash:
             LAB.build_fairness_payloads(self.family, CONFIG.scheduler_types - 1 if self.family.startswith("fair-many-") else 1)
         self.db = "review_fairness"
         LAB.sql("postgres", f"create database {self.db}")

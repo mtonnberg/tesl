@@ -195,6 +195,11 @@ measure larger inventories and retained history before claiming production scale
 The 17-type acceptance workload now passes. Preparation of a 257-type application
 did not complete within the longer command window; profile compiler preparation
 before making a greater-than-turn-budget scheduling claim.
+Profiling now identifies repeated fixture-signature resolution as one avoidable
+cost; the local routing pass resolves each signature once and preserves exact
+ownership/source checks. Its compiler and public 17-type regressions pass. Larger
+preparation remains blocked by repeated whole-graph and inventory work; set measured
+targets before adopting a shared captured-judgment design or broader memoization.
 
 Exit evidence should be a small set of end-to-end guarantees, not a target test
 count: accepted histories finish when their stated business preconditions hold;

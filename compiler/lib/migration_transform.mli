@@ -40,6 +40,7 @@ val captured_source_texts : captured -> (Ast.module_form * string) list
 val bind_pure_functions : Ast.module_form list -> Ast.module_form -> Ast.expr list ->
   (function_binding list,Migration_sparse.error list) result
 val fixture_type : Ast.module_form list -> Ast.module_form -> string -> Ast.type_expr -> bool option
+val fixture_payload : Ast.module_form list -> Ast.module_form -> Ast.type_expr -> (string * bool) option
 
 (** Constructive nominal transport for an exact checked Derived Copy/Rename.
     This is distinct from source-site evidence and cannot affect ordinary typing.

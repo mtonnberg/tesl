@@ -88,7 +88,33 @@ A 257-type probe did not complete preparation: the original 120-second preparati
 deadline expired, and a longer attempt hit the outer 660-second command deadline.
 It therefore supplies no runtime scheduling result. Source inspection identifies
 repeated per-converter capture/check/lowering in `prepare_queue_decisions` and
-`check_conversion` as a preparation-cost candidate; attribution still needs profiling.
+`check_conversion` as a preparation-cost candidate. The later profiling follow-up
+below identifies specific hot paths without claiming a full timing attribution.
+
+#### Preparation profiling after `b2f664f`
+
+Five interrupted native stack snapshots exposed repeated fixture-signature
+resolution in `prepare_queue_decisions`: every old payload walked every fixture
+and repeated export lookup. Fixture routing now resolves the nominal return type
+once per fixture inside the same captured source scope, then selects by exact
+identity. For the 257-type fixture, the routing pass resolves 257 signatures
+instead of 66,049 payload/fixture pairs. Parameterless-function, builtin Maybe,
+ownership and independent converter checks still apply.
+
+Subsequent snapshots reached whole-helper lowering, inventory closure derivation
+and repeated content hashing. Broader graph/inventory/hash memoization trials did
+not complete the large preparation workload within their deadlines and were
+removed. The retained change is the local routing optimization; a final 257-type
+preview still exceeded a bounded 90-second probe. No wall-clock speedup or 257-type
+runtime result is claimed.
+
+The final implementation passes all 51 non-PostgreSQL queue-source cases, 43 row
+transformation cases and the generated/application PostgreSQL conversion/repair
+group. The 17-type workload also passes after rebuilding with the current compiler.
+The fixture cache now records the compiler binary hash and emits into fresh build
+directories so stale or interrupted outputs cannot masquerade as new evidence.
+Next quantify and consolidate repeated whole-graph work under an explicit shared
+captured judgment, with source-mutation tests at its publication boundary.
 
 The reproduced two-type starvation defect is addressed. R05-10 remains partial:
 million-job/history scale, inventories larger than the turn budget, formal latency
