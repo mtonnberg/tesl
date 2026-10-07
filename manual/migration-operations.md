@@ -61,6 +61,9 @@ actions. JSON includes per-job-type old/rejected/invalid counts, installed repai
 revision and whether the source payload contract is unchanged. No historical
 payload bytes or arbitrary callback reason text is returned. The first 100 job
 types are reported; `complete: false` explicitly marks a larger inventory.
+The `rejected`/`invalid` counts include current-version operational quarantines.
+Their migration blocker entries count only historical payloads that prevent
+retirement; a current-version quarantine does not hide unrelated old work.
 
 | Code | Meaning | Supported next action |
 |---|---|---|

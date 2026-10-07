@@ -127,14 +127,15 @@ begin
     where old.version=a.from_version and old.queue=a.queue and old.job_type=a.job_type and old.contract_hash=a.contract_hash));
 end`}, {"tesl_row_queue_status", "", "jsonb", "stable", `
 declare s ` + ns + `tesl_schema_state%rowtype; jobs jsonb; total_types bigint;
- old_count bigint; rejected_count bigint; invalid_count bigint; live_count bigint; attempt_count bigint; recent_count bigint; restamp_count bigint;
+  old_count bigint; rejected_count bigint; invalid_count bigint; live_count bigint; attempt_count bigint; recent_count bigint; restamp_count bigint;
+  old_rejected_count bigint; old_invalid_count bigint;
  blockers jsonb:='[]'::jsonb;
 begin
  select * into s from ` + ns + `tesl_schema_state where id=1;
  if not found then raise exception 'tesl: queue status requires installed state'; end if;
  select count(*),count(*) filter(where dead_reason='migration-rejected'),count(*) filter(where dead_reason='payload-invalid'),
   count(*) filter(where status in ('processing','dead_processing') and claimed_by_version<s.current and lease_until>pg_catalog.clock_timestamp())
- into old_count,rejected_count,invalid_count,live_count from ` + ns + `tesl_jobs where schema_version<s.current;
+  into old_count,old_rejected_count,old_invalid_count,live_count from ` + ns + `tesl_jobs where schema_version<s.current;
  select count(*) filter(where dead_reason='migration-rejected'),count(*) filter(where dead_reason='payload-invalid')
   into rejected_count,invalid_count from ` + ns + `tesl_jobs;
  select count(*) into attempt_count from ` + ns + `tesl_row_queue_conversion_attempts;
@@ -150,12 +151,12 @@ begin
    'unchanged',exists(select 1 from ` + ns + `tesl_queue_payloads old where old.version=s.current-1 and old.queue=p.queue and old.job_type=p.job_type and old.contract=p.contract and old.contract_hash=p.contract_hash)) as item
   from ` + ns + `tesl_queue_payloads p where p.version=s.current order by p.queue collate "C",p.job_type collate "C" limit 100
  ) x;
- if rejected_count>0 then blockers:=blockers||pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_object('code','QUEUE_MIGRATION_REJECTED','count',rejected_count,'action','Deploy a new checked QueueRepair revision; preserve the original payload')); end if;
- if invalid_count>0 then blockers:=blockers||pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_object('code','QUEUE_PAYLOAD_INVALID','count',invalid_count,'action','Historical decoder rejected the bytes; typed repair cannot fabricate the old record')); end if;
+  if old_rejected_count>0 then blockers:=blockers||pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_object('code','QUEUE_MIGRATION_REJECTED','count',old_rejected_count,'action','Deploy a new checked QueueRepair revision; preserve the original payload')); end if;
+  if old_invalid_count>0 then blockers:=blockers||pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_object('code','QUEUE_PAYLOAD_INVALID','count',old_invalid_count,'action','Historical decoder rejected the bytes; typed repair cannot fabricate the old record')); end if;
  if live_count>0 then blockers:=blockers||pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_object('code','QUEUE_RETIRING_CLAIMS','count',live_count,'action','Stop old claimants and wait for leases to expire')); end if;
  if attempt_count>0 then blockers:=blockers||pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_object('code','QUEUE_CONVERSION_ATTEMPTS','count',attempt_count,'action','Wait for or restart the schema Worker')); end if;
  if recent_count>0 then blockers:=blockers||pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_object('code','RECENT_RETIRING_INSTANCES','count',recent_count,'action','Stop old processes and wait for the 30-second heartbeat window')); end if;
- if old_count>rejected_count+invalid_count+live_count then blockers:=blockers||pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_object('code','QUEUE_OLD_PAYLOADS','count',old_count-rejected_count-invalid_count-live_count,'action','Run the current schema Worker; Contract restamps identical unchanged payloads')); end if;
+  if old_count>old_rejected_count+old_invalid_count+live_count then blockers:=blockers||pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_object('code','QUEUE_OLD_PAYLOADS','count',old_count-old_rejected_count-old_invalid_count-live_count,'action','Run the current schema Worker; Contract restamps identical unchanged payloads')); end if;
  return pg_catalog.jsonb_build_object('currentVersion',s.current,'oldPayloads',old_count,'rejected',rejected_count,'invalid',invalid_count,
   'liveRetiringClaims',live_count,'conversionAttempts',attempt_count,'recentRetiringInstances',recent_count,'restamped',restamp_count,
   'totalJobTypes',total_types,'complete',total_types<=100,'jobs',jobs,'blockers',blockers);
