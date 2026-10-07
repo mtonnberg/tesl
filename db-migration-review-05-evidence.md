@@ -170,6 +170,54 @@ source hashing as further hot paths. Those trials are diagnostic evidence, not
 verification of the retained implementation. No complete default gate or 257-type
 runtime fairness pass is claimed.
 
+### Shared source judgment and bounded wrapper filenames after `f5097a4`
+
+`Migration_queue_transform.check_many` checks one captured helper graph under the
+existing source, saved-disk, directory/import and compiler-ABI guards. It derives
+the common adjacent inventories and helper IR once, validates each member's exact
+nominal signature/fixture/codec, and returns the whole list only after postchecks.
+Declaration grouping uses the original helper owner and restores inventory order.
+Single-converter and contextual repair paths use a one-member judgment. There is
+no cross-operation source cache or new runtime authority.
+
+| Evidence | Result | Location |
+|---|---|---|
+| 257-type preparation-only preview | `ok: true`, `compilable: true`, empty diagnostics; 78.42 seconds, peak RSS 219,420 KiB | `.tesl-stuff/review05-shared-source-257-preview.json`; terminal timing |
+| Initial complete build | Preparation passed; V2 emission refused `File name too long`; 382.444 seconds including setup/build | `.tesl-stuff/review05-shared-source-257.log` |
+| Numbered wrapper fix | Both 257-type V1/V2 race binaries built; V2 installation then refused `context deadline exceeded`; total 487.548 seconds | `.tesl-stuff/review05-shared-source-257-filenames.log`; binary hashes in `.tesl-stuff/review05-shared-source-257-filenames/provenance.json` |
+| New compiler cases 53–57 | All five passed, 1.032 seconds in final run | `.tesl-stuff/review05-shared-source-final-checks.log` |
+| Earlier queue source cases 0–50 | All 51 passed, 223.970 seconds | Same log |
+| Shared row transformation suite | All 43 passed, 17.092 seconds | Same log |
+| Fresh current-compiler 17-type public workload | Passed, 66.093 seconds including rebuild | Same log; `.tesl-stuff/review05-shared-source-17-final/` |
+| Generated/application PostgreSQL conversion/repair group | Passed, 120.453 seconds | Same log |
+| 257-type install with `TESL_PG_POOL_LEASE_TIMEOUT_MS=30000` | Did not finish inside unchanged 45-second outer schema-command limit; total case time 70.260 seconds; no runtime fairness result | `.tesl-stuff/review05-shared-source-257-budget30.log`; recorded budget in output provenance |
+| V2 metadata initialization, no database work | Invalid schema command exits 2 after 10.96 seconds; peak RSS 276,568 KiB | `.tesl-stuff/review05-shared-source-257-init.log` |
+| Final formatting rebuild | Compiler build and five batch cases passed; fresh 17-type workload passed in 60.331 seconds with default 10-second command budget | `.tesl-stuff/review05-shared-source-final-format.log`; `.tesl-stuff/review05-shared-source-final-format/` |
+
+The five new cases cover independent versus batch certificate bytes and request
+order, invalid late callback/fixture refusal, source mutation before publication,
+source mutation inside publication invalidating a peer, and separate helper groups
+retaining owners/order while refusing a changed second helper. They are additional
+compiler regressions, not additions to the 124-case adversarial runner inventory.
+
+The filename failure was caused by `unique_ident` repeatedly extending the same
+bridge seed with underscores. Emission now seeds symbols with a serial and uses
+that bounded serial for the filename; package symbol collision avoidance remains.
+Existing emitted native source/proof/repair tests and the actual 257-type Go builds
+verify linking, rather than only inspecting filename spelling.
+
+Init tracing reports 7,629 ms for the generated runtime package (396,699,208 bytes
+allocated, 3,006,908 allocations) and 3,278 ms for the application package
+(149,006,144 bytes allocated, 894,399 allocations). Those are cumulative allocation
+counts, not retained memory. This probe has no database connection and establishes
+an initialization cost independently of staging. The default `pgLeaseTimeout` is
+10 seconds; the schema command uses that budget after initialization. Per-converter
+staging also repeats complete catalog inspection in separate transactions. Further
+profiling must distinguish these costs before choosing a guarded staging batch.
+Timeouts and failed larger configurations remain explicit; default 17-type runtime
+acceptance passes, but 257-type installation/fairness and a full default gate remain
+unverified.
+
 ## Original result summary and execution history
 
 ### Later R05-09 verification

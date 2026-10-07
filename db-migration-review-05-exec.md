@@ -51,7 +51,7 @@ complete operational solution is not.
 | Callback execution bounds | Operational policy implemented | Fuel/depth/cooperative deadlines stop generated recursion and loops without publication. No static totality or hard intrinsic-preemption claim. |
 | Operator experience | Public blocker diagnosis implemented; further polish possible | Status reports counts, repair revisions, claims, attempts and recent instances with stable codes/actions, without exposing retained bytes. |
 | Lessons and embedded reference | Current workflow and unified operator guide available | Installed help includes lesson 96, linked examples and the role/blocker/recovery guide. |
-| Long-term compatibility and scale | Compatible new-edge rollout and bounded fairness verified; broader scale remains limited | Actual A/B/C tests cover new queue edges and active-edge refusal. Two-type load/restart, 17-type backlog progress and 1,024-receipt indexed lookup pass. A 257-type preparation probe exceeded its build window; production-scale latency remains unproven. |
+| Long-term compatibility and scale | Compatible new-edge rollout and bounded fairness verified; broader scale remains limited | Actual A/B/C tests cover new queue edges and active-edge refusal. Two-type load/restart, 17-type backlog progress and 1,024-receipt indexed lookup pass. A 257-type source/binary build now passes; installation remains over budget, so production-scale latency is unproven. |
 
 This is **a functioning scoped system undergoing hardening**, not a design-only
 prototype. It is also not a general solution to every schema evolution pattern.
@@ -200,6 +200,12 @@ cost; the local routing pass resolves each signature once and preserves exact
 ownership/source checks. Its compiler and public 17-type regressions pass. Larger
 preparation remains blocked by repeated whole-graph and inventory work; set measured
 targets before adopting a shared captured-judgment design or broader memoization.
+The guarded shared source judgment has now landed in the working tree: a 257-type
+preview completes in 78.42 seconds and both release binaries build after fixing
+overlong generated filenames. Five new identity/ownership/source-mutation cases
+and existing compiler/PostgreSQL regressions pass. The next measured boundary is
+257-type installation and metadata initialization; the runtime fairness claim
+remains limited to the passing 17-type workload.
 
 Exit evidence should be a small set of end-to-end guarantees, not a target test
 count: accepted histories finish when their stated business preconditions hold;

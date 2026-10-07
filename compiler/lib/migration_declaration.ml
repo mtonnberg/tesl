@@ -210,7 +210,7 @@ let prepare_queue_decisions ~project_root ~before ~after ~previous_file ~current
       ~stored_value_compatibility:(Some(Migration_abi.stored_value_compatibility context)) ~root_file:path with
       | Ok i->i|Error e->reject "MIG028" e.loc e.message in
     let before_checked=lazy(load previous_file) and after_checked=lazy(load current_file) in
-    let decisions=List.filter_map(fun(identity,(queue,(previous:I.queue_payload)))->
+    let requests=List.filter_map(fun(identity,(queue,(previous:I.queue_payload)))->
       match List.assoc_opt identity fresh with
       | None -> reject "MIG028" previous.payload_loc "jobs: does not yet support payload removal or renaming"
       | Some(current_queue,current) when current_queue<>queue ->
@@ -235,9 +235,23 @@ let prepare_queue_decisions ~project_root ~before ~after ~previous_file ~current
               Some(EVar{name=f.identity;loc=at expr})
             | _ -> None) classified_fixtures in
           let source=snd(List.find(fun(owner,_)->owner==binding.owner)(T.captured_source_texts graph)) in
-          Some(checked(Migration_queue_transform.check ~project_root
-            ~before:(Lazy.force before_checked) ~after:(Lazy.force after_checked) ~version ~queue ~job:identity
-            ~source binding.owner ~callback:(EVar{name=binding.declaration.name;loc=at callback}) ~fixtures:selected_fixtures))) old in
+          let request:Migration_queue_transform.request={queue;job=identity;
+            callback=EVar{name=binding.declaration.name;loc=at callback};fixtures=selected_fixtures} in
+          Some(identity,binding.owner,source,request)) old in
+    let groups=ref [] in
+    List.iter(fun(identity,owner,source,request)->
+      match List.find_opt(fun(actual,_,_)->actual==owner)!groups with
+      | Some(_,_,group)->group:=(identity,request):: !group
+      | None->groups:=(owner,source,ref[identity,request]):: !groups)requests;
+    let checked_requests=Hashtbl.create 8 in
+    List.iter(fun(owner,source,group)->
+      let group=List.rev !group in
+      let results=checked(Migration_queue_transform.check_many ~project_root
+        ~before:(Lazy.force before_checked) ~after:(Lazy.force after_checked) ~version
+        ~source owner ~requests:(List.map snd group)) in
+      List.iter2(fun(identity,_)result->Hashtbl.add checked_requests identity result)group results)(List.rev !groups);
+    (* Preserve the original inventory order across helper-owner groups. *)
+    let decisions=List.map(fun(identity,_,_,_)->Hashtbl.find checked_requests identity)requests in
     let remaining=List.combine fixtures fixture_bindings |> List.filter_map(fun(expr,(binding:T.function_binding))->
       if Hashtbl.mem used binding.identity then None else Some expr) in
     decisions,remaining

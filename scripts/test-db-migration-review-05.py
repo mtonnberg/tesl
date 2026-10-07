@@ -990,6 +990,7 @@ def main():
         provenance["binaries"] = {str(p.relative_to(CONFIG.artifacts)): hashlib.sha256(p.read_bytes()).hexdigest()
                                  for p in sorted(CONFIG.artifacts.glob("*/*/app"))}
         provenance["schedulerTypes"] = CONFIG.scheduler_types
+        provenance["poolLeaseTimeoutMS"] = LAB.env.get("TESL_PG_POOL_LEASE_TIMEOUT_MS", "10000")
         (CONFIG.output / "provenance.json").write_text(json.dumps(provenance, indent=2) + "\n")
         (CONFIG.output / "result.json").write_text(json.dumps({"run": result.testsRun, "failures": [t.id() for t, _ in result.failures], "errors": [t.id() for t, _ in result.errors], "expectedFailures": [t.id() for t, _ in result.expectedFailures]}, indent=2) + "\n")
         raise SystemExit(0 if result.wasSuccessful() else 1)

@@ -998,6 +998,95 @@ let three_non_additive_upgrades () =
   (match Unix.close_process_in channel with Unix.WEXITED 0->()|_->fail output);
   if Sys.getenv_opt "TESL_MIGRATION_TEST_REQUIRE_POSTGRES"=Some "1" then
    check bool output true (Compile.string_contains output "--- PASS: TestThreeNonAdditiveQueueUpgrades"))
+let batch_project run =
+ let before=old |> replace "jobs: [Delivery]" "jobs: [Delivery, Other]" in
+ let before=before ^ {|codec Other {
+  toJson { text -> "otherOld" with_codec stringCodec }
+  fromJson [ { text <- "otherOld" with_codec stringCodec } ]
+ }
+ |} in
+ let after=fresh |> replace "exposing [Delivery, Jobs]" "exposing [Delivery, Other, Jobs]"
+   |> replace "jobs: [Delivery]" "jobs: [Delivery, Other]" in
+ let after=after ^ {|record Other { body: String, priority: Int }
+ codec Other {
+  toJson { body -> "otherNew" with_codec stringCodec, priority -> "priority" with_codec intCodec }
+  fromJson [ { body <- "otherNew" with_codec stringCodec, priority <- "priority" with_codec intCodec } ]
+ }
+ |} in
+ let body=without_tests helper |> replace "exposing [convert, oldJob]" "exposing [convert, oldJob, convertOther, otherJob]" in
+ let body=body ^ {|fn convertOther(old: Schema.Mail.V1.Other) -> Migrated Schema.Mail.VCurrent.Other =
+  Row (Schema.Mail.VCurrent.Other { body: old.text, priority: 9 })
+ fn otherJob() -> Schema.Mail.V1.Other = Schema.Mail.V1.Other { text: "other" }
+ |} in
+ project ~before ~after ~body(fun root save file make ->
+  let before=load(Filename.concat root "schema/mail/v1.tesl")
+  and after=load(Filename.concat root "schema/mail/v-current.tesl") in
+  let request job callback fixture:Q.request={queue="Jobs";job;callback=ref_ file callback;fixtures=[ref_ file fixture]} in
+  let requests=[request "Other" "convertOther" "otherJob";request "Delivery" "convert" "oldJob"] in
+  let batch requests=let source=Source_input.read file in
+   Q.check_many ~project_root:root ~before ~after ~version:2 ~source (parse file source) ~requests in
+  run save file make requests batch)
+let batch_identity () = batch_project(fun _ _ make requests batch ->
+ let descriptors=get(batch requests) in
+ check int "one descriptor per request" 2 (List.length descriptors);
+ let name=function Ast.EVar{name;_}->name | _->fail "batch test requires a named function" in
+ List.iter2(fun(request:Q.request) descriptor ->
+  let single=get(make ~job:request.job ~callback:(name request.callback)
+   ~fixtures:(List.map name request.fixtures) ()) in
+  check string "batch preserves independent certificate bytes" (Q.digest single) (Q.digest descriptor);
+  check bool "batch preserves exact semantic node" true (Q.semantic single=Q.semantic descriptor)) requests descriptors)
+let batch_refusals () = batch_project(fun _ _ _ requests batch ->
+ let first=List.hd requests and last=List.nth requests 1 in
+ refuses ~code:"MIG003" (batch [first;{last with fixtures=[]}]);
+ refuses ~code:"MIG021" (batch [first;{last with callback=first.callback}]);
+ refuses ~code:"MIG021" (batch [first;{last with fixtures=first.fixtures}]))
+let batch_source_guard () = batch_project(fun save file _ requests batch ->
+ let descriptors=get(batch requests) in
+ ignore(save "migrations/mail/helpers.tesl" (read file ^ "\n# changed after shared judgment\n"));
+ let calls=ref 0 in
+ List.iter(fun descriptor->refuses ~code:"MIG013" (Q.with_checked descriptor(fun()->incr calls)))descriptors;
+ check int "every shared descriptor refuses before publication" 0 !calls)
+let batch_post_guard () = batch_project(fun save file _ requests batch ->
+ let descriptors=get(batch requests) in
+ let calls=ref 0 in
+ refuses ~code:"MIG013" (Q.with_checked (List.hd descriptors)(fun()->
+  incr calls;ignore(save "migrations/mail/helpers.tesl" (read file ^ "\n# changed inside publication\n"))));
+ check int "publication body ran only once" 1 !calls;
+ refuses ~code:"MIG013" (Q.with_checked (List.nth descriptors 1)(fun()->incr calls));
+ check int "peer cannot publish after source mutation" 1 !calls)
+let grouped_declaration_guard () = batch_project(fun save file make _ _ ->
+ let root=Filename.dirname(Filename.dirname(Filename.dirname file)) in
+ let second={|module Schema.Mail.Migrate.Second exposing [convertOther, otherJob]
+ import Tesl.Prelude exposing [String, Int]
+ import Tesl.Migration exposing [Migrated(..)]
+ import Schema.Mail.V1
+ import Schema.Mail.VCurrent
+ fn convertOther(old: Schema.Mail.V1.Other) -> Migrated Schema.Mail.VCurrent.Other =
+  Row (Schema.Mail.VCurrent.Other { body: old.text, priority: 9 })
+ fn otherJob() -> Schema.Mail.V1.Other = Schema.Mail.V1.Other { text: "other" }
+ |} in
+ let second_file=save "migrations/mail/second.tesl" second in
+ let before=load(Filename.concat root "schema/mail/v1.tesl")
+ and after=load(Filename.concat root "schema/mail/v-current.tesl") in
+ let seal inventory=match Migration_seal.create ~project_root:root inventory with
+  | Ok s->s | Error e->fail e.message in
+ let header=Migration_header.encode(get(Migration_header.create ~previous:(seal before) ~current:(seal after))) in
+ let body=job_declaration
+  |> replace "import Schema.Mail.Migrate.Helpers" "import Schema.Mail.Migrate.Helpers\nimport Schema.Mail.Migrate.Second"
+  |> replace "fixtures: [Schema.Mail.Migrate.Helpers.oldJob]" "fixtures: [Schema.Mail.Migrate.Second.otherJob, Schema.Mail.Migrate.Helpers.oldJob]"
+  |> replace "jobs: { Delivery:" "jobs: { Other: Migrate Schema.Mail.Migrate.Second.convertOther, Delivery:" in
+ let source=header ^ body in
+ let path=save "migrations/mail/v2.tesl" source in
+ let prepared=Option.get(get(Migration_declaration.prepare ~compiler_abi:"compiler-local-unsealed-comparison" ~source (parse path source))) in
+ let declaration=get(Migration_declaration.check_prepared prepared) in
+ let descriptors=Migration_declaration.queue_transforms declaration in
+ check (list string) "grouping preserves inventory order and distinct owners"
+  ["Schema.Mail.Migrate.Helpers.convert";"Schema.Mail.Migrate.Second.convertOther"]
+  (List.map(fun descriptor->(Q.callback descriptor).identity)descriptors);
+ check string "first group preserves independent identity" (Q.digest(get(make()))) (Q.digest(List.hd descriptors));
+ ignore(save "migrations/mail/second.tesl" (read second_file ^ "\n# changed second owner\n"));
+ refuses ~code:"MIG013" (Migration_declaration.check_prepared prepared))
+
 let () = run "sealed queue conversion source" ["source",List.map(fun(name,f)->test_case name `Quick f)
  ["checked callback fixture and stable identity",valid;
   "exact adjacent queue and payload identities",identities;
@@ -1052,4 +1141,9 @@ let () = run "sealed queue conversion source" ["source",List.map(fun(name,f)->te
   "public repair lesson local callback executes",(fun()->public_repair_native ~local_repair:true());
   "public repair binds exact checked predecessor bytes",public_repair_exact_source;
   "compiled typed repair executes atomic PostgreSQL updates",public_repair_postgres;
-  "three non-additive PostgreSQL upgrades preserve jobs and repair history",three_non_additive_upgrades]]
+  "three non-additive PostgreSQL upgrades preserve jobs and repair history",three_non_additive_upgrades;
+  "shared judgment preserves independent converter identities and order",batch_identity;
+  "shared judgment refuses any invalid converter or fixture",batch_refusals;
+  "shared judgment guards every descriptor before publication",batch_source_guard;
+  "shared judgment postguard invalidates unpublished peers",batch_post_guard;
+  "declaration helper groups preserve owners and refuse changed peers",grouped_declaration_guard]]

@@ -3,6 +3,10 @@
     The scoped public consecutive queue-only protocol separately consumes and verifies
     the complete descriptor against the installed application. *)
 type t
+type request = { queue : string; job : string; callback : Ast.expr; fixtures : Ast.expr list }
+val check_many : project_root:string -> before:Migration_inventory.t -> after:Migration_inventory.t ->
+  version:int -> source:string -> Ast.module_form -> requests:request list ->
+  (t list,Migration_sparse.error list) result
 val check : project_root:string -> before:Migration_inventory.t -> after:Migration_inventory.t ->
   version:int -> queue:string -> job:string -> source:string -> Ast.module_form ->
   callback:Ast.expr -> fixtures:Ast.expr list -> (t,Migration_sparse.error list) result

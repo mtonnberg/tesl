@@ -116,6 +116,40 @@ directories so stale or interrupted outputs cannot masquerade as new evidence.
 Next quantify and consolidate repeated whole-graph work under an explicit shared
 captured judgment, with source-mutation tests at its publication boundary.
 
+#### Shared source judgment after `f5097a4`
+
+That shared judgment is now implemented. Declaration preparation groups requests
+by their original helper owner, checks each captured helper graph once, and derives
+the adjacent queue inventories, helper IR and snapshot/storage digests once per
+group. Every request retains its own exact payload, callback, fixture and codec
+checks. The complete group returns only after the source/ABI postconditions pass;
+each resulting opaque descriptor retains its publication guards. Original inventory
+order is restored across helper groups. Ordinary single-converter and contextual
+repair checking use the same factory with one request.
+
+The 257-type preparation preview now completes: **78.42 seconds**, 219,420 KiB peak
+RSS, `ok: true`, `compilable: true`, no diagnostics. The first complete build then
+reproduced an emitter defect: unary collision suffixes made callback-wrapper
+filenames exceed the filesystem component limit. Wrappers now use numbered symbol
+seeds and bounded project-unique serial filenames. Both ordinary, race-instrumented
+257-type V1/V2 binaries subsequently built successfully.
+
+Five new compiler cases verify byte-identical single/batch certificates, whole-group
+refusal for invalid members, pre/post source mutation, and separate helper ownership
+and publication guards. All 51 earlier non-PostgreSQL queue-source cases, 43 row
+transformation cases, the generated/application PostgreSQL group, and the fresh
+17-type public workload also pass.
+
+**The remaining large-inventory boundary is installation.** The 257-type V2 install
+exceeds the default command deadline. A separately recorded 30-second pool/command
+budget also fails to finish within the runner's 45-second outer limit; the runtime
+progress oracle remains 25 seconds. Thus no greater-than-turn-budget fairness pass
+is claimed. Go init tracing additionally measures 10.96 seconds before rejecting
+an invalid schema command, with substantial metadata initialization allocation.
+Next profile initialization and the repeated complete catalog inspections in
+per-converter staging; preserve admission fences and independently checked catalog
+identity when consolidating work.
+
 The reproduced two-type starvation defect is addressed. R05-10 remains partial:
 million-job/history scale, inventories larger than the turn budget, formal latency
 bounds, memory limits and broad throughput acceptance have not been established.

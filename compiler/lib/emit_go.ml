@@ -16796,6 +16796,7 @@ let queue_conversion_artifacts graph exports conversions =
  let package="teslqueueconversions" in
  let prefix=project ^ "/internal/" ^ package ^ "." in
  let imports=ref [] and test_imports=ref [] and bridges=ref [] and bodies=ref [] and registrations=ref [] and tests=ref [] in
+ let bridge_count=ref 0 in
  let imported ?(into=imports) exported =
   into:=(exported.ex_package,project ^ "/internal/" ^ exported.ex_package)::!into;
   exported.ex_package in
@@ -16804,8 +16805,12 @@ let queue_conversion_artifacts graph exports conversions =
   let exported=require(List.find_opt(fun e->e.ex_module=owner.module_name)exports) in
   let signature=require(Hashtbl.find_opt exported.ex_signatures declaration.name) in
   if signature.sig_needs_scope then unsupported declaration.loc "queue conversion unexpectedly requires runtime capabilities";
-  let bridge=unique_ident exported.ex_taken label in
-  bridges:={path="internal/" ^ exported.ex_package ^ "/queue_callback_" ^ bridge ^ "_generated.go";
+  let suffix=string_of_int !bridge_count in
+  incr bridge_count;
+  let bridge=unique_ident exported.ex_taken (label ^ suffix) in
+  (* Package-wide collision avoidance may lengthen a symbol. Artifact filenames
+     instead use a bounded, project-unique serial so large inventories still emit. *)
+  bridges:={path="internal/" ^ exported.ex_package ^ "/queue_callback_" ^ suffix ^ "_generated.go";
     contents="package " ^ exported.ex_package ^ "\n\nvar " ^ bridge ^ " = " ^ signature.go_name ^ "\n"}::!bridges;
   (imported ~into exported) ^ "." ^ bridge in
  let record identity =
