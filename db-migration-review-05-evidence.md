@@ -76,9 +76,10 @@ rerunning the same release inventory is supported. The privacy test checks the
 
 ## R05-10 fairness follow-up (2026-10-07)
 
-Current inventory: **123 named cases with passing evidence**, zero expected failures.
+Current inventory: **124 named cases with passing evidence**, zero expected failures.
 The 122-case suite passed together; case 123 was subsequently added and passed
 separately. This is not a claim of a new uninterrupted default migration-gate run.
+Case 124 was added after `664428b` and passed separately with 17 types.
 
 | Case / check | Oracle / result | Evidence |
 |---|---|---|
@@ -93,6 +94,10 @@ separately. This is not a claim of a new uninterrupted default migration-gate ru
 | Compiler build and runtime embedding | Build passed; six byte-identity/dependency tests and three runtime-gate tests passed | Terminal verification, 2026-10-07 |
 | Updated installed guide and lesson | Four detached-binary checks passed after regenerating embedded docs | `.tesl-stuff/review05-fairness-installed-docs/{result,inventory,provenance}.json` |
 | Formatting and diff | Go formatting clean; `git diff --check` passed | Terminal verification, 2026-10-07 |
+| 124, 17-type public application | Every type converted before busy head drained; 1,008 old head jobs remained; initial build/run 88.703 seconds | `.tesl-stuff/review05-17-descriptors/` |
+| Scheduler and catalog follow-up | Cases 12, 120–124 passed together in 105.551 seconds, including final binary provenance | `.tesl-stuff/review05-inventory-regressions/` |
+| Configurable fresh fixture build | Case 124 passed with three types in 33.308 seconds | `.tesl-stuff/review05-3-descriptors/` |
+| Updated installed operations guide | Four detached documentation checks passed after compiler rebuild | `.tesl-stuff/review05-inventory-installed-docs/` |
 
 The bulk-history case initially used the 25-second single-job progress deadline and
 timed out. It now has its own 120-second workload budget; single-job fairness
@@ -107,6 +112,23 @@ ordering without granting Worker direct historical-table access. Missing require
 objects refuse; no old-catalog adoption is implied. Million-job/history scale,
 more-than-budget descriptor counts, formal fairness latency and memory bounds
 remain follow-up work.
+
+The extended fixture builder creates independent nominal types, codecs, converters,
+fixtures and handlers, freezes V1 through the normal compiler workflow and builds
+ordinary race-instrumented V1/V2 binaries. Case 124 defaults to 17 types;
+`--scheduler-types 257` selects the greater-than-256-turn-budget probe. Generated
+source trees are fresh on rebuild, count-specific binary directories prevent cache
+mix-ups, and final provenance includes binaries built during the test.
+
+The initial 257-type probe was interrupted by a 120-second outer command timeout
+after V1 built. A preparation-only retry then exceeded the helper's 120-second
+deadline; a longer retry hit the 660-second outer command deadline before publishing
+a result. The process check afterward found no remaining compiler/probe process;
+the private cluster left by the first interruption was explicitly stopped. No
+257-type runtime fairness result is claimed. The extended builder has a separate
+600-second per-command setup budget; the runtime progress oracle remains 25 seconds.
+Repeated per-converter graph capture/check/lowering is visible in source and is a
+profiling candidate, not yet a measured root cause.
 
 ## Original result summary and execution history
 

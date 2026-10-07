@@ -82,8 +82,9 @@ ordering. A source with no eligible work yields capacity to subsequent sources.
 This ordering is a scheduling policy, not a finality cursor or a wall-clock latency
 guarantee. Inspect blockers and use Contract to establish retirement. The protected
 selector requires the verified receipt lookup index; a development catalog missing
-it refuses explicitly. Current evidence covers two changed job types and 1,024
-conversion receipts, rather than production-scale inventories or throughput.
+it refuses explicitly. Current evidence covers two-type load/restart, 17-type
+backlog progress and 1,024 conversion receipts, rather than production-scale
+inventories or throughput.
 
 ## When callback execution stops
 

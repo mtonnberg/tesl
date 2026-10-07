@@ -15,8 +15,8 @@ lifecycle, rather than adding more migration forms.**
 unchanged queued work can retire beside changed work; callback recursion is
 operationally bounded; status explains blockers through protected public tools;
 and stale gates and installed documentation gaps have been repaired. The current
-adversarial suite has **123 cases with passing evidence and no expected failures**
-(122 together, then the added catalog-refusal case). Follow-up work also verifies
+adversarial suite has **124 cases with passing evidence and no expected failures**
+(122 together, then added catalog-refusal and multi-type cases). Follow-up work also verifies
 compatible new-edge compiler rollout and fixes reproduced two-type starvation.
 
 The feature has progressed from compiler checks and isolated runtime candidates
@@ -51,7 +51,7 @@ complete operational solution is not.
 | Callback execution bounds | Operational policy implemented | Fuel/depth/cooperative deadlines stop generated recursion and loops without publication. No static totality or hard intrinsic-preemption claim. |
 | Operator experience | Public blocker diagnosis implemented; further polish possible | Status reports counts, repair revisions, claims, attempts and recent instances with stable codes/actions, without exposing retained bytes. |
 | Lessons and embedded reference | Current workflow and unified operator guide available | Installed help includes lesson 96, linked examples and the role/blocker/recovery guide. |
-| Long-term compatibility and scale | Compatible new-edge rollout and bounded fairness verified; broader scale remains limited | Actual A/B/C tests cover new queue edges and active-edge refusal. Two-type load/restart and 1,024-receipt indexed lookup pass; production-scale latency and arbitrary binary substitution remain unproven. |
+| Long-term compatibility and scale | Compatible new-edge rollout and bounded fairness verified; broader scale remains limited | Actual A/B/C tests cover new queue edges and active-edge refusal. Two-type load/restart, 17-type backlog progress and 1,024-receipt indexed lookup pass. A 257-type preparation probe exceeded its build window; production-scale latency remains unproven. |
 
 This is **a functioning scoped system undergoing hardening**, not a design-only
 prototype. It is also not a general solution to every schema evolution pattern.
@@ -145,7 +145,7 @@ as acceptance scenarios, with each guarantee and excluded dimension named.
 ### Verification quality needs attention alongside implementation quality
 
 The initial 107-case suite exposed a failing requirement; the extended suite
-now has 123 cases with passing evidence without expected failures. Baseline compiler failures were
+now has 124 cases with passing evidence without expected failures. Baseline compiler failures were
 repaired and the complete compiler suite passes. Cleanup now uses a separate
 non-executor identity, while still waiting for all actual executor backends.
 
@@ -192,6 +192,9 @@ R05-10 now has a concrete scheduling fix: durable least-recently-served receipt
 ordering and per-descriptor turn quotas. Keep its continuous-load, restart and
 catalog-refusal regressions mandatory. Next set latency/history-size targets and
 measure larger inventories and retained history before claiming production scale.
+The 17-type acceptance workload now passes. Preparation of a 257-type application
+did not complete within the longer command window; profile compiler preparation
+before making a greater-than-turn-budget scheduling claim.
 
 Exit evidence should be a small set of end-to-end guarantees, not a target test
 count: accepted histories finish when their stated business preconditions hold;

@@ -157,55 +157,66 @@ codec Unchanged {
         run(["pg_ctl", "-D", self.cluster / "data", "-m", "immediate", "-w", "stop"])
         shutil.rmtree(self.cluster)
 
-    def build_fairness_payloads(self):
-        """Two independently changed job types, emitted as ordinary applications."""
-        source = CONFIG.artifacts / "fair/source"
-        shutil.copytree(CONFIG.artifacts / "queue/v1/source", source)
+    def build_fairness_payloads(self, family="fair", extra_types=1):
+        """Independently changed nominal job types, emitted as ordinary applications."""
+        names = ["Other"] if extra_types == 1 else [f"Other{n:03}" for n in range(extra_types)]
+        target_family = CONFIG.artifacts / family
+        target_family.mkdir(exist_ok=True)
+        # Preserve interrupted inputs; a retry starts in a fresh generated tree.
+        source = Path(tempfile.mkdtemp(prefix="source-", dir=target_family))
+        shutil.copytree(CONFIG.artifacts / "queue/v1/source", source, dirs_exist_ok=True)
+        build_timeout = 600 if extra_types > 1 else 90
         def add_other(text, version):
             fields = 'text: String' if version == 1 else 'body: String, priority: Int'
             codec = 'text -> "oldText" with_codec stringCodec' if version == 1 else 'body -> "message" with_codec stringCodec, priority -> "priority" with_codec intCodec'
             decoder = 'text <- "oldText" with_codec stringCodec' if version == 1 else 'body <- "message" with_codec stringCodec, priority <- "priority" with_codec intCodec'
-            return text.replace("exposing [Delivery, Jobs]", "exposing [Delivery, Jobs, Other]").replace("jobs: [Delivery]", "jobs: [Delivery, Other]") + f'\nrecord Other {{ {fields} }}\ncodec Other {{ toJson {{ {codec} }} fromJson [ {{ {decoder} }} ] }}\n'
+            return text.replace("exposing [Delivery, Jobs]", "exposing [Delivery, Jobs, " + ", ".join(names) + "]").replace("jobs: [Delivery]", "jobs: [Delivery, " + ", ".join(names) + "]") + "".join(f'\nrecord {name} {{ {fields} }}\ncodec {name} {{ toJson {{ {codec} }} fromJson [ {{ {decoder} }} ] }}\n' for name in names)
         current = source / "schema/mail/v-current.tesl"
         current.write_text(add_other(current.read_text(), 1))
         entry = source / "app.tesl"
-        entry.write_text(entry.read_text().replace("jobs: [Job Schema.Mail.VCurrent.Delivery handle Nothing]", "jobs: [Job Schema.Mail.VCurrent.Delivery handle Nothing, Job Schema.Mail.VCurrent.Other handleOther Nothing]") + '\nworker handleOther(job: Schema.Mail.VCurrent.Other ::: FromQueue (Id == jobId) job) = job\n')
+        jobs = ", ".join(f"Job Schema.Mail.VCurrent.{name} handle{name} Nothing" for name in names)
+        handlers = "".join(f'\nworker handle{name}(job: Schema.Mail.VCurrent.{name} ::: FromQueue (Id == jobId) job) = job\n' for name in names)
+        entry.write_text(entry.read_text().replace("jobs: [Job Schema.Mail.VCurrent.Delivery handle Nothing]", "jobs: [Job Schema.Mail.VCurrent.Delivery handle Nothing, " + jobs + "]") + handlers)
         def emit(version):
-            target = CONFIG.artifacts / f"fair/v{version}"
+            target = CONFIG.artifacts / family / f"v{version}"
             for file in source.rglob("*.tesl"):
-                require(run([CONFIG.compiler, "agent-context", file], env=self.env))
-            require(run([CONFIG.compiler, "--backend", "go", entry, "--out", target / "go"], env=self.env))
-            require(run(["go", "build", "-race", "-o", target / "app", "./cmd/app"], cwd=target / "go", env=self.env))
+                require(run([CONFIG.compiler, "agent-context", file], env=self.env, timeout=build_timeout))
+            require(run([CONFIG.compiler, "--backend", "go", entry, "--out", target / "go"], env=self.env, timeout=build_timeout))
+            require(run(["go", "build", "-race", "-o", target / "app", "./cmd/app"], cwd=target / "go", env=self.env, timeout=build_timeout))
         emit(1)
         preview = runpy.run_path(str(ROOT / "example/db-three-upgrades/run.py"))["apply_preview"]
-        preview(CONFIG.compiler, entry, self.env, "generate", "--new-revision")
+        preview(CONFIG.compiler, entry, self.env, "generate", "--new-revision", timeout=build_timeout)
         current.write_text(add_other((CONFIG.artifacts / "queue/v2/source/schema/mail/v-current.tesl").read_text(), 2))
         helper = source / "migrations/mail/convert2.tesl"
         text = (CONFIG.artifacts / "queue/v2/source/migrations/mail/convert2.tesl").read_text()
-        text = text.replace("exposing [convert, repair, oldJob, rejectedJob]", "exposing [convert, repair, oldJob, rejectedJob, convertOther, otherJob]")
-        text += '\nfn convertOther(old: Schema.Mail.V1.Other) -> Migrated Schema.Mail.VCurrent.Other =\n  Row (Schema.Mail.VCurrent.Other { body: old.text, priority: 11 })\nfn otherJob() -> Schema.Mail.V1.Other = Schema.Mail.V1.Other { text: "other" }\n'
+        exports = ", ".join(f"convert{name}, fixture{name}" for name in names)
+        text = text.replace("exposing [convert, repair, oldJob, rejectedJob]", "exposing [convert, repair, oldJob, rejectedJob, " + exports + "]")
+        text += "".join(f'\nfn convert{name}(old: Schema.Mail.V1.{name}) -> Migrated Schema.Mail.VCurrent.{name} =\n  Row (Schema.Mail.VCurrent.{name} {{ body: old.text, priority: 11 }})\nfn fixture{name}() -> Schema.Mail.V1.{name} = Schema.Mail.V1.{name} {{ text: "other" }}\n' for name in names)
         helper.write_text(text)
         edge = source / "migrations/mail/v2.tesl"
         body = (CONFIG.artifacts / "queue/v2/source/migrations/mail/v2.tesl").read_text().split("module ", 1)[1]
-        body = body.replace("Delivery: Migrate Schema.Mail.Migrate.Convert2.convert", "Delivery: Migrate Schema.Mail.Migrate.Convert2.convert, Other: Migrate Schema.Mail.Migrate.Convert2.convertOther")
-        body = body.replace("[Schema.Mail.Migrate.Convert2.oldJob]", "[Schema.Mail.Migrate.Convert2.oldJob, Schema.Mail.Migrate.Convert2.otherJob]")
+        conversions = ", ".join(f"{name}: Migrate Schema.Mail.Migrate.Convert2.convert{name}" for name in names)
+        fixtures = ", ".join(f"Schema.Mail.Migrate.Convert2.fixture{name}" for name in names)
+        body = body.replace("Delivery: Migrate Schema.Mail.Migrate.Convert2.convert", "Delivery: Migrate Schema.Mail.Migrate.Convert2.convert, " + conversions)
+        body = body.replace("[Schema.Mail.Migrate.Convert2.oldJob]", "[Schema.Mail.Migrate.Convert2.oldJob, " + fixtures + "]")
         edge.write_text(edge.read_text().split("module ", 1)[0] + "module " + body)
-        preview(CONFIG.compiler, entry, self.env, "generate")
+        preview(CONFIG.compiler, entry, self.env, "generate", timeout=build_timeout)
         emit(2)
 
 
 class SchedulerReview(unittest.TestCase):
     def setUp(self):
-        if not (CONFIG.artifacts / "fair/v2/app").exists():
-            LAB.build_fairness_payloads()
+        self.family = f"fair-many-{CONFIG.scheduler_types}" if self._testMethodName.startswith("test_124_") else "fair"
+        if not (CONFIG.artifacts / self.family / "v2/app").exists():
+            LAB.build_fairness_payloads(self.family, CONFIG.scheduler_types - 1 if self.family.startswith("fair-many-") else 1)
         self.db = "review_fairness"
         LAB.sql("postgres", f"create database {self.db}")
         self.addCleanup(lambda: LAB.sql("postgres", f"drop database {self.db} with (force)"))
         LAB.sql("postgres", f"grant create on database {self.db} to review_owner")
         LAB.sql(self.db, "grant create on schema public to review_owner")
-        require(LAB.install(self.db, "v1", "fair"))
-        LAB.stop(*LAB.start(self.db, "v1", "fair"))
-        require(LAB.install(self.db, "v2", "fair"))
+        require(LAB.install(self.db, "v1", self.family))
+        LAB.stop(*LAB.start(self.db, "v1", self.family))
+        require(LAB.install(self.db, "v2", self.family))
 
     def fill(self, prefix, count=512):
         LAB.sql(self.db, f"select mail.tesl_queue_enqueue(1,'Jobs','Delivery',{literal(prefix)}||n::text,'{{\"oldText\":\"busy\"}}') from generate_series(1,{count}) n", "review_request")
@@ -285,6 +296,20 @@ class SchedulerReview(unittest.TestCase):
 
     def state_for_scheduler(self):
         return LAB.sql(self.db, "select row_to_json(s)::text from mail.tesl_schema_state s")
+
+    def test_124_multi_type_inventory_progresses_before_busy_head_drains(self):
+        count = CONFIG.scheduler_types
+        self.fill("many-busy-", 1024)
+        LAB.sql(self.db, f"select mail.tesl_queue_enqueue(1,'Jobs','Other'||lpad(i::text,3,'0'),'many-'||i::text,'{{\"oldText\":\"many\"}}') from generate_series(0,{count - 2}) i", "review_request")
+        process, log = LAB.start(self.db, "v2", self.family)
+        try:
+            LAB.wait(lambda: LAB.sql(self.db, f"select count(distinct job_type)={count} from mail.tesl_jobs where schema_version=2") == "t", process)
+            self.assertEqual(LAB.sql(self.db, "select count(*) from mail.tesl_row_queue_conversion_staging"), str(count))
+            self.assertGreater(int(LAB.sql(self.db, "select count(*) from mail.tesl_jobs where schema_version=1")), 0)
+            self.assertEqual(json.loads(LAB.sql(self.db, f"select payload from mail.tesl_jobs where job_type='Other{count - 2:03}' and schema_version=2 limit 1")), {"message": "many", "priority": 11})
+            (CONFIG.output / "scheduler-inventory-workload.json").write_text(json.dumps({"types": count, "oldHeadRemaining": int(LAB.sql(self.db, "select count(*) from mail.tesl_jobs where job_type='Delivery' and schema_version=1"))}, indent=2) + "\n")
+        finally:
+            LAB.stop(process, log)
 
 
 class KnownGaps(unittest.TestCase):
@@ -925,7 +950,10 @@ def main():
     parser.add_argument("--build", action="store_true")
     parser.add_argument("--compiler", type=Path, default=ROOT / "compiler/_build/default/bin/main.exe")
     parser.add_argument("--match", default="", help="run named cases containing this substring")
+    parser.add_argument("--scheduler-types", type=int, default=17, help="job types for case 124 (3–257)")
     CONFIG = parser.parse_args()
+    if not 3 <= CONFIG.scheduler_types <= 257:
+        parser.error("--scheduler-types must be between 3 and 257")
     CONFIG.artifacts = CONFIG.artifacts.resolve()
     CONFIG.output = CONFIG.output.resolve()
     CONFIG.output.mkdir(parents=True, exist_ok=True)
@@ -952,6 +980,12 @@ def main():
         (CONFIG.output / "provenance.json").write_text(json.dumps(provenance, indent=2) + "\n")
         (CONFIG.output / "inventory.json").write_text(json.dumps(names, indent=2) + "\n")
         result = unittest.TextTestRunner(verbosity=2).run(suite)
+        # Some cases build their own releases; include those binaries in final
+        # provenance rather than recording only the inputs present at startup.
+        provenance["binaries"] = {str(p.relative_to(CONFIG.artifacts)): hashlib.sha256(p.read_bytes()).hexdigest()
+                                 for p in sorted(CONFIG.artifacts.glob("*/*/app"))}
+        provenance["schedulerTypes"] = CONFIG.scheduler_types
+        (CONFIG.output / "provenance.json").write_text(json.dumps(provenance, indent=2) + "\n")
         (CONFIG.output / "result.json").write_text(json.dumps({"run": result.testsRun, "failures": [t.id() for t, _ in result.failures], "errors": [t.id() for t, _ in result.errors], "expectedFailures": [t.id() for t, _ in result.expectedFailures]}, indent=2) + "\n")
         raise SystemExit(0 if result.wasSuccessful() else 1)
     finally:

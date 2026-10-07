@@ -21,8 +21,8 @@ evidence.** The feature is materially healthier than at the initial review:
 | R05-07 | Bounded embedding of linked examples and detached-binary retrieval tests | Installed help retrieves README, runner and templates |
 | R05-08 | Protected read-only aggregate queue status, blocker codes/actions, repair revisions, recent instances and index projection | Request-role status distinguishes blockers, preserves state and withholds original payloads |
 
-The suite has grown to **123 cases with passing evidence and no expected failures**
-(122 in one invocation, followed by the added catalog-refusal case). Four
+The suite has grown to **124 cases with passing evidence and no expected failures**
+(122 in one invocation, followed by catalog-refusal and multi-type cases). Four
 runtime budget tests are additional, not folded into that count. The initial
 107-case results below are historical discovery evidence, not the current verdict.
 
@@ -78,6 +78,17 @@ without state changes. The 1,024-transaction workload took 41.086 seconds on thi
 shared host; this is a regression measurement, not a throughput target. The full
 122-case suite and generated/application PostgreSQL group passed, followed by the
 new case 123 and focused runtime race/catalog checks.
+
+After commit `664428b`, case 124 extended the public workload to 17 changed nominal
+types: every type progresses while 1,008 of the first type's 1,024 old jobs remain.
+The initial build/run passed in 88.703 seconds. The runner can vary this workload
+with `--scheduler-types`; fresh generated trees preserve interrupted build inputs.
+
+A 257-type probe did not complete preparation: the original 120-second preparation
+deadline expired, and a longer attempt hit the outer 660-second command deadline.
+It therefore supplies no runtime scheduling result. Source inspection identifies
+repeated per-converter capture/check/lowering in `prepare_queue_decisions` and
+`check_conversion` as a preparation-cost candidate; attribution still needs profiling.
 
 The reproduced two-type starvation defect is addressed. R05-10 remains partial:
 million-job/history scale, inventories larger than the turn budget, formal latency

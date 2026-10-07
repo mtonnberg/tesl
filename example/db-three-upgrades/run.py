@@ -25,8 +25,8 @@ def command(args, *, env=None, cwd=None, timeout=120):
     return result.stdout
 
 
-def apply_preview(compiler, entry, env, *args):
-    preview = json.loads(command([compiler, "migrate", *args, entry, "--manifest-json"], env=env))
+def apply_preview(compiler, entry, env, *args, timeout=120):
+    preview = json.loads(command([compiler, "migrate", *args, entry, "--manifest-json"], env=env, timeout=timeout))
     if not preview.get("ok") or not preview.get("compilable"):
         raise RuntimeError(json.dumps(preview, indent=2))
     manifest = preview["manifest"]
