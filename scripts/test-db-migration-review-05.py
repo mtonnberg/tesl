@@ -209,7 +209,7 @@ codec Unchanged {
 
 class SchedulerReview(unittest.TestCase):
     def setUp(self):
-        self.family = f"fair-many-{CONFIG.scheduler_types}" if self._testMethodName.startswith("test_124_") else "fair"
+        self.family = f"fair-many-{CONFIG.scheduler_types}" if self._testMethodName.startswith(("test_124_", "test_127_")) else "fair"
         stamp = CONFIG.artifacts / self.family / "compiler.sha256"
         compiler_hash = hashlib.sha256(CONFIG.compiler.read_bytes()).hexdigest()
         if not (CONFIG.artifacts / self.family / "v2/app").exists() or not stamp.exists() or stamp.read_text().strip() != compiler_hash:
@@ -315,6 +315,60 @@ class SchedulerReview(unittest.TestCase):
             (CONFIG.output / "scheduler-inventory-workload.json").write_text(json.dumps({"types": count, "oldHeadRemaining": int(LAB.sql(self.db, "select count(*) from mail.tesl_jobs where job_type='Delivery' and schema_version=1"))}, indent=2) + "\n")
         finally:
             LAB.stop(process, log)
+
+    def staging_state(self):
+        return LAB.sql(self.db, "select coalesce(json_agg(s order by queue,job_type,revision),'[]')::text from mail.tesl_row_queue_conversion_staging s")
+
+    def test_125_late_staging_mismatch_rolls_back_earlier_batch_member(self):
+        # Installer attempts Delivery before Other. A fault in the latter must
+        # roll back the former's insert, not publish a partial staging batch.
+        LAB.sql(self.db, "delete from mail.tesl_row_queue_target_staging; delete from mail.tesl_row_queue_conversion_staging where job_type='Delivery'; update mail.tesl_row_queue_conversion_staging set fence_ns=fence_ns+1 where job_type='Other'")
+        before = self.staging_state(), self.state_for_scheduler()
+        result = LAB.install(self.db, "v2", self.family)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("immutable application queue conversion staging differs", result.stderr)
+        self.assertEqual((self.staging_state(), self.state_for_scheduler()), before)
+        self.assertEqual(LAB.sql(self.db, "select count(*) from mail.tesl_row_queue_target_staging"), "0")
+
+    def test_126_concurrent_staging_batches_replay_exact_history(self):
+        expected = self.staging_state()
+        LAB.sql(self.db, "delete from mail.tesl_row_queue_target_staging; delete from mail.tesl_row_queue_conversion_staging")
+        results, errors = [], []
+        def install():
+            try:
+                results.append(LAB.install(self.db, "v2", self.family))
+            except BaseException as error:
+                errors.append(error)
+        threads = [threading.Thread(target=install) for _ in range(2)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=50)
+        self.assertFalse(any(thread.is_alive() for thread in threads))
+        self.assertFalse(errors, errors)
+        self.assertEqual(len(results), 2)
+        for result in results:
+            require(result)
+        self.assertEqual(self.staging_state(), expected)
+        require(LAB.install(self.db, "v2", self.family))
+        self.assertEqual(self.staging_state(), expected)
+        self.assertEqual(LAB.sql(self.db, "select count(*) from mail.tesl_row_queue_target_staging"), "1")
+
+    def test_127_large_inventory_install_replays_before_expansion(self):
+        count = CONFIG.scheduler_types
+        self.assertEqual(LAB.sql(self.db, "select count(*) from mail.tesl_row_queue_conversion_staging where revision=0"), str(count))
+        self.assertEqual(LAB.sql(self.db, "select current::text||','||min_version::text||','||compat_floor::text from mail.tesl_schema_state"), "1,1,1")
+        self.assertEqual(LAB.sql(self.db, "select count(*) from mail.tesl_row_physical where version=2"), "0")
+        before = self.staging_state(), self.state_for_scheduler()
+        target = LAB.sql(self.db, "select row_to_json(t)::text from mail.tesl_row_queue_target_staging t")
+        self.assertTrue(target)
+        started = time.monotonic()
+        require(LAB.install(self.db, "v2", self.family))
+        elapsed = time.monotonic() - started
+        self.assertEqual((self.staging_state(), self.state_for_scheduler()), before)
+        self.assertEqual(LAB.sql(self.db, "select row_to_json(t)::text from mail.tesl_row_queue_target_staging t"), target)
+        self.assertEqual(LAB.sql(self.db, "select count(*) from mail.tesl_jobs"), "0")
+        (CONFIG.output / "scheduler-install-workload.json").write_text(json.dumps({"types": count, "replaySeconds": elapsed, "commandBudgetMS": LAB.env.get("TESL_PG_POOL_LEASE_TIMEOUT_MS", "10000")}, indent=2) + "\n")
 
 
 class KnownGaps(unittest.TestCase):

@@ -21,8 +21,8 @@ evidence.** The feature is materially healthier than at the initial review:
 | R05-07 | Bounded embedding of linked examples and detached-binary retrieval tests | Installed help retrieves README, runner and templates |
 | R05-08 | Protected read-only aggregate queue status, blocker codes/actions, repair revisions, recent instances and index projection | Request-role status distinguishes blockers, preserves state and withholds original payloads |
 
-The suite has grown to **124 cases with passing evidence and no expected failures**
-(122 in one invocation, followed by catalog-refusal and multi-type cases). Four
+The suite has grown to **127 cases with passing evidence and no expected failures**
+(122 in one invocation, followed by catalog-refusal, multi-type and staging cases). Four
 runtime budget tests are additional, not folded into that count. The initial
 107-case results below are historical discovery evidence, not the current verdict.
 
@@ -149,6 +149,41 @@ an invalid schema command, with substantial metadata initialization allocation.
 Next profile initialization and the repeated complete catalog inspections in
 per-converter staging; preserve admission fences and independently checked catalog
 identity when consolidating work.
+
+#### Registered projection and bounded installation after `0f19866`
+
+Measured installation failed before staging any converter. A CPU profile identified
+repeated decoding of immutable linked queue metadata; the database log's initial
+inspection spanned about 0.23 seconds. The registered companion now retains its
+fully validated V1 source projection and serves independent deep copies for each
+requested origin. Exact linked-history identity, all-origin validation, atomic
+registration, absent-metadata refusal and independent live database checks remain.
+A race regression mutates every returned slice level across concurrent origins,
+compares with the strict reader, and rejects substituted linked bytes.
+
+That change advanced the same default-budget probe from zero to 25 staged sources
+and reduced wall time from 38.98 to 19.36 seconds. Staging now uses bounded groups
+of at most 32 sources per transaction: one exact catalog inspection, then each
+source's complete lineage, installed snapshot and immutable replay checks. A late
+member failure rolls back its entire group. Completed earlier groups remain
+durable and replayable; staging still grants no expansion or dispatch authority.
+Admission is shared only for the same queue/version while its actual transaction
+fences and the state-row lock remain held. Target staging likewise admits each
+distinct queue once while checking every converter.
+
+**257-type installation and exact replay now pass with the default 10-second
+command budget.** Case 127 verifies all 257 staged roots and the exact target,
+unchanged V1 admission/floors, no V2 physical publication and no jobs. The replay
+process took 15.43 seconds including initialization before the internal command
+budget starts. Cases 125/126 cover late-member rollback and concurrent replay.
+The earlier 17-type runtime workload, PostgreSQL conversion/repair and embedding
+gates pass with the new runtime.
+
+The 257-type full fairness scenario now reaches fixture enqueueing, where 1,024
+protected enqueue calls exceed the existing 90-second setup limit. No 257-type
+runtime fairness pass is claimed. The next boundary is repeated admission cost
+in public enqueue and conversion operations; measure these paths before changing
+their transaction/finality guarantees.
 
 The reproduced two-type starvation defect is addressed. R05-10 remains partial:
 million-job/history scale, inventories larger than the turn budget, formal latency

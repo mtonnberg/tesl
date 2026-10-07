@@ -90,8 +90,9 @@ func pgRunRowSchemaCommand(serviceContext context.Context, command pgSchemaComma
 				return err
 			}
 			if state.Current == b.target.version-1 || state.MinVersion < b.target.version {
-				for _, digest := range digests {
-					if err := pgStageRowQueueConversions(ctx, conn, b.history.Namespace, roles, digest); err != nil {
+				for start := 0; start < len(digests); start += pgRowQueueStagingBatchLimit {
+					end := min(start+pgRowQueueStagingBatchLimit, len(digests))
+					if err := pgStageRowQueueConversionBatch(ctx, conn, b.history.Namespace, roles, digests[start:end]); err != nil {
 						return err
 					}
 				}

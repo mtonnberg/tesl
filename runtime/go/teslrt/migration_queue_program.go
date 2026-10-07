@@ -15,7 +15,7 @@ import (
 
 // PgQueueSourceInventory is checked source information, never installed
 // baseline authority, permission to claim a job, or evidence of legacy adoption.
-// All returned slices are independent copies parsed from immutable linked bytes.
+// All returned slices are independent copies of fully validated immutable linked bytes.
 type PgQueueSourceInventory struct {
 	Database, Family, Namespace    string
 	InitialVersion, CurrentVersion int
@@ -36,6 +36,9 @@ type PgQueueSourcePayload struct{ Job, Contract, ContractHash string }
 type pgQueueHistoryRegistration struct {
 	history PgCompiledMigrationHistory
 	json    string
+	// Complete V1 projection, validated before atomic registry publication. Never
+	// exposed directly: callers may mutate their independent returned slices.
+	inventory *PgQueueSourceInventory
 }
 
 var queueSchemaOwners = struct {
@@ -74,13 +77,14 @@ func registerCompiledQueueHistory(payload string) {
 			break
 		}
 		history := linked.(PgCompiledMigrationHistory)
-		if _, err := pgReadQueueHistory(history, payload, 1); err != nil {
+		inventory, err := pgReadQueueHistory(history, payload, 1)
+		if err != nil {
 			panic(err)
 		}
 		if _, exists := pending[family]; exists {
 			r.fail("duplicate queue companion family")
 		}
-		pending[family] = pgQueueHistoryRegistration{history: history, json: payload}
+		pending[family] = pgQueueHistoryRegistration{history: history, json: payload, inventory: &inventory}
 	}
 	if r.err != nil {
 		panic(r.err)
@@ -94,7 +98,7 @@ func registerCompiledQueueHistory(payload string) {
 		if _, exists := compiledQueueHistories.families[family]; !exists && pgMigrationClosedFamilies[family] {
 			panic("database: application startup queue history registration is closed")
 		}
-		if previous, exists := compiledQueueHistories.families[family]; exists && previous != registration {
+		if previous, exists := compiledQueueHistories.families[family]; exists && (previous.history != registration.history || previous.json != registration.json) {
 			panic("database: conflicting compiled queue history for " + family)
 		}
 	}
@@ -116,7 +120,23 @@ func (history PgCompiledMigrationHistory) QueueSourceInventory(initialVersion in
 	if registration.history != history {
 		return PgQueueSourceInventory{}, fmt.Errorf("compiled queue inventory belongs to another linked database history")
 	}
-	return pgReadQueueHistory(history, registration.json, initialVersion)
+	if initialVersion < 1 || initialVersion > history.CurrentVersion {
+		return PgQueueSourceInventory{}, fmt.Errorf("queue installation origin is outside linked history")
+	}
+	if registration.inventory == nil {
+		return PgQueueSourceInventory{}, fmt.Errorf("compiled queue inventory has no validated projection")
+	}
+	result := *registration.inventory
+	result.InitialVersion = initialVersion
+	result.Versions = slices.Clone(result.Versions[initialVersion-1:])
+	for i := range result.Versions {
+		version := &result.Versions[i]
+		version.Contracts = slices.Clone(version.Contracts)
+		for j := range version.Contracts {
+			version.Contracts[j].Payloads = slices.Clone(version.Contracts[j].Payloads)
+		}
+	}
+	return result, nil
 }
 
 func pgQueueIdentity(value string) bool {

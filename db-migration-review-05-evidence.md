@@ -76,10 +76,12 @@ rerunning the same release inventory is supported. The privacy test checks the
 
 ## R05-10 fairness follow-up (2026-10-07)
 
-Current inventory: **124 named cases with passing evidence**, zero expected failures.
+Current inventory: **127 named cases with passing evidence**, zero expected failures.
 The 122-case suite passed together; case 123 was subsequently added and passed
 separately. This is not a claim of a new uninterrupted default migration-gate run.
 Case 124 was added after `664428b` and passed separately with 17 types.
+Cases 125–127 were added after `0f19866`; focused staging and 257-type installation
+results are recorded below. A configured 257-type case 124 still fails setup.
 
 | Case / check | Oracle / result | Evidence |
 |---|---|---|
@@ -217,6 +219,57 @@ profiling must distinguish these costs before choosing a guarded staging batch.
 Timeouts and failed larger configurations remain explicit; default 17-type runtime
 acceptance passes, but 257-type installation/fairness and a full default gate remain
 unverified.
+
+### Immutable source projection and guarded staging after `0f19866`
+
+The initial SQL-duration probe found zero staged rows at failure, not a partially
+completed per-converter loop. A generated application's test-only command wrapper
+captured a CPU profile of the real `RunSchemaCommand` path after package init.
+The race build showed repeated queue-history decoding in codec/facility preflight
+and baseline preparation. `.tesl-stuff/review05-install-profile/` holds the CPU
+profile and database log. Its default-budget attempt took 38.98 seconds; the logged
+initial database inspection ran from 15:51:40.385 to 15:51:40.619. A subsequent CPU
+profile run took 38.50 seconds including initialization, with zero staged rows.
+
+The registry now retains the projection returned by full successful companion
+validation. `QueueSourceInventory` still requires exact linked-history identity
+and a valid origin, then clones every mutable slice level. This is immutable source
+metadata reuse, never cached database authority. All-origin and malformed-source
+validation still run before atomic registration. A new Go race regression verifies
+strict-reader equivalence, concurrent caller mutations across origins, replay, and
+refusal of altered linked bytes and a future origin.
+
+After projection reuse, the default probe took 19.36 seconds and committed 25
+staged sources before deadline (`review05-install-projection-profile/`). Bounded
+32-source staging transactions next committed 32. SQL timing for that intermediate
+run measured 51 `tesl_queue_admit` calls totaling 7,709.765 ms; max 174.542 ms
+(`review05-install-batch-profile/`). Admission is now reused for an exact queue/version
+only inside the transaction retaining its actual fences and state-row lock. Each
+source still checks its own lineage, complete snapshots and immutable installed
+bytes; each later group re-verifies the catalog. Target staging deduplicates its
+same-version queue admissions too, while checking every descriptor. Intermediate
+attempts and failures remain recorded in `review05-registered-projection-257.log`,
+`review05-staging-batch-257.log`, and `review05-staging-admission-257*.log`.
+
+| Final verification | Result | Evidence |
+|---|---|---|
+| Case 125: late staging mismatch | Original Delivery insert rolls back when Other has an immutable fence mismatch; no floor/target changes | `.tesl-stuff/review05-staging-final/` |
+| Case 126: concurrent installer batches | Both installers succeed; exact history/target preserved through subsequent replay | Same directory |
+| Case 127, 257 types | Install and replay pass with default 10,000 ms command budget; complete case 41.810 seconds; replay 15.429 seconds including pre-budget initialization | `.tesl-stuff/review05-staging-install-257-final/` |
+| Focused cases 12, 120–127, default 17-type inventory | All nine passed, 165.351 seconds | `.tesl-stuff/review05-staging-final-checks.log`; `.tesl-stuff/review05-staging-final/` |
+| Queue projection and application-preflight race regressions | Passed, 4.825 seconds | Same log |
+| Generated/application PostgreSQL conversion/repair group | Passed, 108.202 seconds | Same log |
+| Embedded runtime seam and runtime gates | All six seam and three gate checks passed | Same log |
+| Installed operator documentation | Four detached-binary checks passed after documenting staging groups and regenerating embedded docs; formatting and diff checks clean | `.tesl-stuff/review05-staging-installed-docs/`; terminal verification |
+| Full 257-type case 124 | Installation succeeds; 1,024 protected enqueue calls exceed 90-second setup deadline; total build/case 511.258 seconds | `.tesl-stuff/review05-staging-target-257.log` |
+
+Case 127 verifies 257 exact root staging records, immutable target replay, unchanged
+`current/minVersion/compatFloor = 1/1/1`, no published V2 physical descriptor and no
+jobs. It establishes installation, not runtime conversion completion. Default
+17-type progress and the 25-second fairness oracle remain passing and unchanged.
+The first profiling tool invocation itself exceeded its outer deadline; its private
+cluster was explicitly stopped before the completed probe. The complete 127-case
+runner and default migration gate have not been rerun together for these changes.
 
 ## Original result summary and execution history
 

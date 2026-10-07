@@ -169,6 +169,47 @@ func TestQueueProjectionRejectsTamperedOrIncompleteEnvelope(t *testing.T) {
 		}
 	})
 }
+
+func TestQueueProjectionRegisteredCopiesAreIndependentAcrossOrigins(t *testing.T) {
+	h, root := queueProjectionFixture(t)
+	registerQueueProjection(t, h, root)
+	// An exact replay is still permitted even though its newly parsed projection
+	// has a different in-memory address.
+	registerQueueProjection(t, h, root)
+	var wg sync.WaitGroup
+	for initial := 1; initial <= h.CurrentVersion; initial++ {
+		wg.Add(1)
+		go func(initial int) {
+			defer wg.Done()
+			for i := 0; i < 20; i++ {
+				got, err := h.QueueSourceInventory(initial)
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				want, err := pgReadQueueHistory(h, queueProjectionJSON(t, root), initial)
+				if err != nil || !reflect.DeepEqual(got, want) {
+					t.Errorf("registered projection differs from checked reader: %v", err)
+					return
+				}
+				got.Database = "caller-owned"
+				got.Versions[0].Version = -1
+				got.Versions[0].Contracts[0].Queue = "caller-owned"
+				got.Versions[0].Contracts[0].Payloads[0].Contract = "caller-owned"
+				got.Versions[0].Contracts = nil
+			}
+		}(initial)
+	}
+	wg.Wait()
+	changed := h
+	changed.HistoryJSON += " "
+	if _, err := changed.QueueSourceInventory(1); err == nil {
+		t.Fatal("equal-looking substituted linked bytes reused projection")
+	}
+	if _, err := h.QueueSourceInventory(h.CurrentVersion + 1); err == nil {
+		t.Fatal("future origin reused projection")
+	}
+}
 func TestQueueProjectionPublicationIsAtomic(t *testing.T) {
 	h, r := queueProjectionFixture(t)
 	registerCompiledMigrationHistory(h.Database, h.Family, h.Namespace, h.CurrentVersion, h.SourceCompilerABI, h.StoredValueCompatibility, h.HistoryJSON)

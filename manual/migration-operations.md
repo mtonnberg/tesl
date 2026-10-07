@@ -42,6 +42,12 @@ See [cleanup contracts](migration-contracts.md) for row rules and additive epoch
 closure; [lesson 96](../example/learn/lesson96-typed-queue-conversion.md) for queue
 conversion, separately deployed repair and retirement.
 
+Queue conversion installation stages at most 32 source lineages per transaction.
+A failure rolls back its current group; earlier committed groups remain immutable
+and an exact retry reuses them. Staging alone leaves admission floors and payloads
+unchanged. Catalog verification and admission fences are renewed for each group;
+sharing validation inside one transaction never authorizes a later transaction.
+
 ## Diagnose queue blockers without reading raw historical tables
 
 ```sh

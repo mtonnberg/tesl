@@ -38,11 +38,18 @@ func pgStageRowQueueTarget(ctx context.Context, conn *pgx.Conn, namespace string
 		return err
 	}
 	ns := quoteIdentifier(namespace) + "."
+	admitted := make(map[string]bool)
 	for _, conversion := range plan.queueConversions {
+		if admitted[conversion.queue] {
+			continue
+		}
 		var floor int
 		if err := tx.QueryRow(ctx, "select "+ns+"tesl_queue_admit($1,$2)", plan.version-1, conversion.queue).Scan(&floor); err != nil {
 			return err
 		}
+		// All conversions share plan.version; the queue's transaction fences
+		// remain held until commit while every member is checked below.
+		admitted[conversion.queue] = true
 	}
 	var current int
 	if err := tx.QueryRow(ctx, "select current from "+ns+"tesl_schema_state where id=1 for update").Scan(&current); err != nil {
@@ -193,11 +200,31 @@ func pgCompiledRowQueueInstallSources(b *pgRowBaseline) ([]string, error) {
 // Only the short-lived installer can append these rows; Worker/Request can read
 // them but cannot invent or replace staged callbacks.
 func pgStageRowQueueConversions(ctx context.Context, conn *pgx.Conn, namespace string, roles PgMigrationControlRoles, digest string) error {
-	lineage, err := pgQueueConversionCandidateLineage(digest)
-	if err != nil {
-		return err
+	return pgStageRowQueueConversionBatch(ctx, conn, namespace, roles, []string{digest})
+}
+
+const pgRowQueueStagingBatchLimit = 32
+
+type pgRowQueueStagingAdmission struct {
+	version int
+	queue   string
+}
+
+// Share one independently verified catalog and installation snapshot only inside
+// this bounded transaction. Each source retains exact lineage/payload checks and
+// admission fences; no verified database state is cached across commits.
+func pgStageRowQueueConversionBatch(ctx context.Context, conn *pgx.Conn, namespace string, roles PgMigrationControlRoles, digests []string) error {
+	if len(digests) == 0 || len(digests) > pgRowQueueStagingBatchLimit {
+		return fmt.Errorf("queue staging batch requires 1–32 source digests")
 	}
-	root := lineage[len(lineage)-1]
+	lineages := make([][]*pgQueueConversionSource, 0, len(digests))
+	for _, digest := range digests {
+		lineage, err := pgQueueConversionCandidateLineage(digest)
+		if err != nil {
+			return err
+		}
+		lineages = append(lineages, lineage)
+	}
 	tx, err := conn.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return err
@@ -213,12 +240,33 @@ func pgStageRowQueueConversions(ctx context.Context, conn *pgx.Conn, namespace s
 	if err != nil {
 		return err
 	}
+	admitted := make(map[pgRowQueueStagingAdmission]int)
+	for _, lineage := range lineages {
+		if err := pgStageRowQueueLineage(ctx, tx, namespace, roles, state, lineage, admitted); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, "reset role"); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
+}
+
+func pgStageRowQueueLineage(ctx context.Context, tx pgx.Tx, namespace string, roles PgMigrationControlRoles, state PgMigrationControlState, lineage []*pgQueueConversionSource, admitted map[pgRowQueueStagingAdmission]int) error {
+	root := lineage[len(lineage)-1]
 	ns := quoteIdentifier(namespace) + "."
 	// Admission takes the real application's version fence and validates every
 	// source inventory and completed expansion in its installed prefix.
-	var floor int
-	if err := tx.QueryRow(ctx, "select "+ns+"tesl_queue_admit($1,$2)", root.fromVersion, root.queue).Scan(&floor); err != nil {
-		return err
+	// The transaction retains the actual admission fences and then the state-row
+	// lock. Staging adds no admitted history, so another payload in this same
+	// queue/version can reuse that admission until commit. Never reuse across txs.
+	key := pgRowQueueStagingAdmission{root.fromVersion, root.queue}
+	floor, ok := admitted[key]
+	if !ok {
+		if err := tx.QueryRow(ctx, "select "+ns+"tesl_queue_admit($1,$2)", root.fromVersion, root.queue).Scan(&floor); err != nil {
+			return err
+		}
+		admitted[key] = floor
 	}
 	var current, lockedFloor int
 	if err := tx.QueryRow(ctx, "select current,min_version from "+ns+"tesl_schema_state where id=1 for update").Scan(&current, &lockedFloor); err != nil {
@@ -242,7 +290,7 @@ func pgStageRowQueueConversions(ctx context.Context, conn *pgx.Conn, namespace s
 	}
 	var family, compatibility, inventory, expansion, schemaSnapshot, storageSnapshot string
 	var old []byte
-	err = tx.QueryRow(ctx, "select r.family,q.stored_value_compatibility,b.inventory_hash,b.expansion_hash,p.contract,q.schema_snapshot_hash,q.storage_snapshot_hash from "+ns+`tesl_row_versions r
+	err := tx.QueryRow(ctx, "select r.family,q.stored_value_compatibility,b.inventory_hash,b.expansion_hash,p.contract,q.schema_snapshot_hash,q.storage_snapshot_hash from "+ns+`tesl_row_versions r
  join `+ns+`tesl_queue_versions q on q.version=$1
  join `+ns+`tesl_row_queue_sources b on b.version=q.version
  join `+ns+`tesl_queue_payloads p on p.version=q.version and p.queue=$2 and p.job_type=$3
@@ -292,7 +340,7 @@ func pgStageRowQueueConversions(ctx context.Context, conn *pgx.Conn, namespace s
 			return err
 		}
 	}
-	return tx.Commit(ctx)
+	return nil
 }
 
 func pgCreateRowQueueBaseline(ctx context.Context, tx pgx.Tx, b *pgRowBaseline, roles PgMigrationControlRoles) error {

@@ -15,8 +15,8 @@ lifecycle, rather than adding more migration forms.**
 unchanged queued work can retire beside changed work; callback recursion is
 operationally bounded; status explains blockers through protected public tools;
 and stale gates and installed documentation gaps have been repaired. The current
-adversarial suite has **124 cases with passing evidence and no expected failures**
-(122 together, then added catalog-refusal and multi-type cases). Follow-up work also verifies
+adversarial suite has **127 cases with passing evidence and no expected failures**
+(122 together, then added catalog-refusal, multi-type and staging cases). Follow-up work also verifies
 compatible new-edge compiler rollout and fixes reproduced two-type starvation.
 
 The feature has progressed from compiler checks and isolated runtime candidates
@@ -51,7 +51,7 @@ complete operational solution is not.
 | Callback execution bounds | Operational policy implemented | Fuel/depth/cooperative deadlines stop generated recursion and loops without publication. No static totality or hard intrinsic-preemption claim. |
 | Operator experience | Public blocker diagnosis implemented; further polish possible | Status reports counts, repair revisions, claims, attempts and recent instances with stable codes/actions, without exposing retained bytes. |
 | Lessons and embedded reference | Current workflow and unified operator guide available | Installed help includes lesson 96, linked examples and the role/blocker/recovery guide. |
-| Long-term compatibility and scale | Compatible new-edge rollout and bounded fairness verified; broader scale remains limited | Actual A/B/C tests cover new queue edges and active-edge refusal. Two-type load/restart, 17-type backlog progress and 1,024-receipt indexed lookup pass. A 257-type source/binary build now passes; installation remains over budget, so production-scale latency is unproven. |
+| Long-term compatibility and scale | Compatible new-edge rollout and bounded fairness verified; broader scale remains limited | Actual A/B/C tests cover new queue edges and active-edge refusal. Two-type load/restart, 17-type backlog progress and 1,024-receipt indexed lookup pass. 257-type build/install/replay now pass; bulk enqueue setup remains over budget, so large-inventory runtime fairness is unproven. |
 
 This is **a functioning scoped system undergoing hardening**, not a design-only
 prototype. It is also not a general solution to every schema evolution pattern.
@@ -145,7 +145,7 @@ as acceptance scenarios, with each guarantee and excluded dimension named.
 ### Verification quality needs attention alongside implementation quality
 
 The initial 107-case suite exposed a failing requirement; the extended suite
-now has 124 cases with passing evidence without expected failures. Baseline compiler failures were
+now has 127 cases with passing evidence without expected failures. Baseline compiler failures were
 repaired and the complete compiler suite passes. Cleanup now uses a separate
 non-executor identity, while still waiting for all actual executor backends.
 
@@ -206,6 +206,13 @@ overlong generated filenames. Five new identity/ownership/source-mutation cases
 and existing compiler/PostgreSQL regressions pass. The next measured boundary is
 257-type installation and metadata initialization; the runtime fairness claim
 remains limited to the passing 17-type workload.
+Installation is now verified for 257 types at the default command budget. The fixes
+reuse fully validated immutable source metadata through independent copies and
+stage bounded 32-source groups under real transaction fences, with rollback and
+concurrent replay regressions. The next quantified boundary is protected enqueue
+and conversion cost: the full 257-type workload now times out while enqueueing its
+1,024-job backlog. Preserve the distinction between installation completion and
+runtime scheduling acceptance.
 
 Exit evidence should be a small set of end-to-end guarantees, not a target test
 count: accepted histories finish when their stated business preconditions hold;
