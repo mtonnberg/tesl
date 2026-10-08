@@ -38,6 +38,7 @@ type pgQueueConversionStored struct {
 // live-claimed, malformed or rejected jobs can still prevent retirement.
 type pgQueueConversionBatch struct {
 	Selected, Converted, Rejected, Invalid, Replayed int
+	Failed                                           int
 	NoEligible                                       bool
 }
 
@@ -652,10 +653,11 @@ func pgRegisterQueueRepairCandidate(ctx context.Context, conn *pgx.Conn, scope p
 	return tx.Commit(ctx)
 }
 
-// One job and its immutable receipt commit together. A lost connection or
-// callback error rolls back the row lock, attempt and outcome. Replays consult
-// the receipt before invoking the callback. Caller-owned transactions permit
-// deterministic before/after-commit and competing-worker tests.
+// One job and its immutable receipt commit together. A lost connection rolls
+// back the row lock, attempt and outcome. Application callback faults can instead
+// commit a separate diagnostic, never a conversion/rejection receipt or payload
+// change. Replays consult durable evidence before invoking the callback.
+// Caller-owned transactions permit deterministic rollback/ownership tests.
 func pgApplyQueueConversionCandidateTx(ctx context.Context, tx pgx.Tx, scope pgQueueConversionDB, conversion pgQueueConversionExecutable, jobID string) (pgQueueConversionStored, error) {
 	var stored pgQueueConversionStored
 	if conversion == nil {
@@ -696,6 +698,20 @@ func pgApplyQueueConversionCandidateTx(ctx context.Context, tx pgx.Tx, scope pgQ
 		result, err = conversion.Repair(QueueConversionResult{kind: "migration-rejected", original: original, reason: reason, source: parent})
 	}
 	if err != nil {
+		if scope.application && ctx.Err() == nil {
+			if code := pgQueueExecutionFailureCode(err); code != "" {
+				var recorded bool
+				err = tx.QueryRow(ctx, "select "+scope.function("fail")+"($1,$2,$3,$4,$5,$6,$7,$8::jsonb)",
+					scope.identity, source.spec.digest, jobID, sequence, transaction, original, code, string(binding)).Scan(&recorded)
+				if err != nil {
+					return stored, err
+				}
+				if !recorded {
+					return stored, fmt.Errorf("queue failure observation lost attempt ownership")
+				}
+				return pgQueueConversionStored{Kind: "execution-failed"}, nil
+			}
+		}
 		return stored, err
 	}
 	if result.SourceDigest() != source.spec.digest || result.Original() != original {
@@ -787,7 +803,7 @@ func pgRunQueueConversionCandidateBatch(ctx context.Context, conn *pgx.Conn, sco
 			if err != nil {
 				return false, 0, pgQueueConversionStored{}, fmt.Errorf("queue conversion job %s: %w", id, err)
 			}
-			if result.Kind != "converted" && result.Kind != "migration-rejected" && result.Kind != "payload-invalid" {
+			if result.Kind != "converted" && result.Kind != "migration-rejected" && result.Kind != "payload-invalid" && !(scope.application && result.Kind == "execution-failed") {
 				return false, 0, pgQueueConversionStored{}, fmt.Errorf("selected queue conversion job %s lost its locked source", id)
 			}
 			if err := tx.Commit(ctx); err != nil {
@@ -815,6 +831,8 @@ func pgRunQueueConversionCandidateBatch(ctx context.Context, conn *pgx.Conn, sco
 			progress.Rejected++
 		case "payload-invalid":
 			progress.Invalid++
+		case "execution-failed":
+			progress.Failed++
 		}
 	}
 	return progress, nil

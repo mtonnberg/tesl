@@ -458,6 +458,37 @@ func (f *QueueConversionDBFixture) Register(conn *pgx.Conn, c pgQueueConversionE
 func (f *QueueConversionDBFixture) ApplyTx(tx pgx.Tx, c pgQueueConversionExecutable, id string) (pgQueueConversionStored, error) {
 	return pgApplyQueueConversionCandidateTx(f.Context, tx, f.Scope, c, id)
 }
+
+type cancelledQueueConversionForTest struct {
+	pgQueueConversionExecutable
+	cancel context.CancelFunc
+}
+
+func (c cancelledQueueConversionForTest) Convert(int, []byte) (QueueConversionResult, error) {
+	c.cancel()
+	return QueueConversionResult{}, migrationExecutionFailure{"context canceled"}
+}
+
+func (f *QueueConversionDBFixture) AssertCancelledExecutionRollsBack(t *testing.T, c pgQueueConversionExecutable, id string) {
+	t.Helper()
+	var before string
+	if err := f.Installer.QueryRow(f.Context, "select row_to_json(j)::text from mail.tesl_jobs j where id=$1", id).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(f.Context)
+	defer cancel()
+	if _, err := pgApplyQueueConversionCandidate(ctx, f.Worker, f.Scope, cancelledQueueConversionForTest{c, cancel}, id); err == nil {
+		t.Fatal("cancellation became durable callback failure")
+	}
+	var after string
+	var attempts, failures, receipts int
+	if err := f.Installer.QueryRow(f.Context, "select row_to_json(j)::text,(select count(*) from mail.tesl_row_queue_conversion_attempts),(select count(*) from mail.tesl_row_queue_conversion_failures),(select count(*) from mail.tesl_row_queue_conversion_receipts) from mail.tesl_jobs j where id=$1", id).Scan(&after, &attempts, &failures, &receipts); err != nil {
+		t.Fatal(err)
+	}
+	if before != after || attempts != 0 || failures != 0 || receipts != 0 {
+		t.Fatal("cancellation published job state, diagnostic or outcome", attempts, failures, receipts)
+	}
+}
 func (f *QueueConversionDBFixture) Enqueue(id, body, status string, due time.Time) error {
 	return f.EnqueueAt(1, id, body, status, due)
 }

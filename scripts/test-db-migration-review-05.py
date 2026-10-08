@@ -42,6 +42,9 @@ def literal(value):
 class Lab:
     def __init__(self):
         self.cluster = Path(tempfile.mkdtemp(prefix="review05-", dir="/tmp"))
+        # Keep only the short Unix socket/log path in /tmp. Database/WAL files
+        # belong on the output filesystem, not a quota-limited shared tmpfs.
+        self.data = Path(tempfile.mkdtemp(prefix="postgres-data-", dir=CONFIG.output))
         self.env = dict(os.environ, TESL_REPO_ROOT=str(ROOT))
         self.count = 0
 
@@ -97,8 +100,8 @@ class Lab:
         raise AssertionError("bounded progress deadline expired")
 
     def prepare(self):
-        require(run(["initdb", "-D", self.cluster / "data", "-U", "review_installer", "--auth=trust", "--no-locale", "--encoding=UTF8"]))
-        require(run(["pg_ctl", "-D", self.cluster / "data", "-l", self.cluster / "postgres.log", "-o", f"-k {self.cluster} -h ''", "-w", "start"]))
+        require(run(["initdb", "-D", self.data, "-U", "review_installer", "--auth=trust", "--no-locale", "--encoding=UTF8"]))
+        require(run(["pg_ctl", "-D", self.data, "-l", self.cluster / "postgres.log", "-o", f"-k {self.cluster} -h ''", "-w", "start"]))
         self.sql("postgres", "create role review_owner nologin; create role review_worker login; create role review_request login")
         self.sql("postgres", "create database review_v1")
         self.sql("postgres", "grant create on database review_v1 to review_owner")
@@ -154,7 +157,10 @@ codec Unchanged {
         emit(2)
 
     def close(self):
-        run(["pg_ctl", "-D", self.cluster / "data", "-m", "immediate", "-w", "stop"])
+        run(["pg_ctl", "-D", self.data, "-m", "immediate", "-w", "stop"])
+        if (self.cluster / "postgres.log").exists():
+            shutil.copyfile(self.cluster / "postgres.log", CONFIG.output / "postgres.log")
+        shutil.rmtree(self.data)
         shutil.rmtree(self.cluster)
 
     def build_fairness_payloads(self, family="fair", extra_types=1):
@@ -621,24 +627,26 @@ class DatabaseReview(unittest.TestCase):
         require(run(["go", "build", "-race", "-o", target / "app", "./cmd/app"], cwd=target / "go", env=LAB.env))
         return label
 
-    def assert_budget_stops(self, mutual=False):
+    def assert_budget_records_failure(self, mutual=False):
         label = self.budget_binary(mutual)
         self.enqueue({"oldText": "keep"})
         original = LAB.sql(self.db, "select payload::text from mail.tesl_jobs")
         require(LAB.install(self.db, label))
-        result = LAB.schema(self.db, label, "worker")
-        self.assertRefused(result)
-        self.assertIn("migration execution stopped", result.stderr)
+        process, log = LAB.start(self.db, label)
+        try:
+            LAB.wait(lambda: LAB.sql(self.db, "select count(*) from mail.tesl_row_queue_conversion_failures where code='execution-budget'") == "1", process)
+        finally:
+            LAB.stop(process, log)
         self.assertEqual(LAB.sql(self.db, "select payload::text from mail.tesl_jobs"), original)
         self.assertEqual(LAB.sql(self.db, "select schema_version||','||status from mail.tesl_jobs"), "1,pending")
         self.assertEqual(LAB.sql(self.db, "select count(*) from mail.tesl_row_queue_conversion_receipts"), "0")
         self.assertEqual(LAB.sql(self.db, "select count(*) from mail.tesl_row_queue_conversion_attempts"), "0")
 
-    def test_114_budget_tail_recursion_stops_without_publication(self):
-        self.assert_budget_stops()
+    def test_114_budget_tail_recursion_records_failure_without_conversion(self):
+        self.assert_budget_records_failure()
 
-    def test_115_budget_mutual_recursion_stops_without_stack_overflow(self):
-        self.assert_budget_stops(True)
+    def test_115_budget_mutual_recursion_records_failure_without_stack_overflow(self):
+        self.assert_budget_records_failure(True)
 
     def test_116_public_status_distinguishes_repair_and_invalid_bytes(self):
         self.enqueue({"oldText": ""}, "rejected")

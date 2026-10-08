@@ -923,6 +923,7 @@ let public_repair_postgres () = with_public_repair ~entities:true (fun root save
     "TestPostgresWorkerReopensWithoutInstaller";"TestPostgresWorkerReopenRejectsCatalogAndSourceDrift";
     "TestPostgresWorkerReopensInNewProcess";"TestPostgresApplicationStagesExactQueueRepairHistory";
     "TestPostgresApplicationPreparesCheckedSuccessorInventory";"TestPostgresApplicationConvertsRepairsAndCompletesStoredJob";
+    "TestPostgresApplicationCancellationIsNotExecutionFailure";
     "TestPostgresApplicationWorkerTurnFindsCompilerBoundCallbacks";"TestPostgresApplicationQueueRetirementBlocksUntilRepair";
     "TestPostgresPublicQueueWorkerConvertsRetainedPayload"])
 let upgrade_schema fields encoder decoder = Printf.sprintf {|module Schema.Mail.VCurrent exposing [Delivery, Jobs]

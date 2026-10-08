@@ -23,6 +23,15 @@ The most important next work is **a coherent outcome and recovery protocol for
 callbacks that trap or exhaust their execution budget**, followed by measured
 large-inventory enqueue/conversion costs. More syntax should not precede those.
 
+### Current follow-up after `2d70dae`
+
+The initial review and fail-stop reproduction below are preserved as discovery
+evidence. The application queue Worker now records recognized execution failures
+separately and continues healthy work. The updated suite has **87 passing cases**;
+the existing 127-case suite also passes. General typed callback-failure recovery
+remains open, but durable diagnosis, restart suppression, and a limited existing
+predecessor-processing recovery route now have regression evidence.
+
 ## 1. Scope, method and authority model
 
 Reviewed the path from checked source and retained history to generated adapters,
@@ -64,7 +73,7 @@ all source constructions, all compiler upgrades or every PostgreSQL deployment.
 | ID | Severity / classification | Finding | Disposition |
 |---|---|---|---|
 | R11-01 | Medium, confirmed correctness defect | Current-version quarantine was counted as a historical retirement blocker and could hide unrelated old backlog | **Fixed**, cases 044/045 reproduce both symptoms and now pass |
-| R11-02 | High operational gap | A data-dependent exhausted callback stops the entire schema Worker, leaves no durable conversion outcome, and repeats on restart | **Confirmed and open**, new case 074; no unsafe partial publication observed |
+| R11-02 | High operational gap | Initially, a data-dependent exhausted callback stopped the whole Worker without durable diagnosis | **Partially addressed after `2d70dae`**: failure audit, peer progress and predecessor-processing witness pass; general typed recovery remains open |
 | R11-03 | High scale-acceptance gap | 257-type build/install/replay is verified, but the full workload does not reach conversion because bulk protected enqueue exceeds its setup deadline | **Open**, prior measured evidence retained; no large-inventory fairness claim |
 | R11-04 | Medium verification gap | A broad fresh targeted set passes, but no fresh uninterrupted default migration gate has completed for this review | **Open evidence item**, do not substitute counts for the complete gate |
 | R11-05 | Explicit product scope, not a new defect | Fresh-catalog-first, consecutive queue-only histories and limited malformed-data recovery are narrower than a general migration product | **Retain clear refusal and documentation**; expansion requires separate lifecycle evidence |
@@ -140,6 +149,43 @@ Recommended next design:
 Do not equate trapping with `Reject`, edit installed converters in place, or treat
 restarts as recovery evidence. Choosing continuation versus fail-stop is a product
 decision; a passing type check does not decide it.
+
+#### Follow-up: distinct failure evidence and healthy-peer progress
+
+The application path now distinguishes three recognized pure-adapter faults:
+`execution-budget`, `execution-trap` and `invalid-result`. A new private immutable
+`tesl_row_queue_conversion_failures` table binds each observation to the job,
+checked source digest, attempt sequence and original payload hash. It never stores
+arbitrary callback exception text or grants a converted/business-rejected result.
+
+Publication reuses the real completed-edge/source admission fences and requires
+the exact active transaction, attempt, source binding, original payload and job
+ownership. The failure record and attempt cleanup commit together. The monotone
+claim sequence advances, while payload, schema version, retry count, schedule,
+pending/dead disposition and conversion receipts remain unchanged. Cancellation,
+SQL errors, binding errors and lost connections keep the rollback path; they are
+not classified by matching an error-message string.
+
+Selection and begin/replay suppress the same failed source on the same bytes for
+that job. Healthy jobs of the same type and other types continue. Both global and
+per-type protected status include `executionFailed`; the distinct blocker
+`QUEUE_MIGRATION_EXECUTION_FAILED` replaces the ineffective restart instruction
+for these jobs. The old row still blocks Contract: an empty scan does not become
+finality. The failure audit is independently catalog/ACL checked and prevents
+audited-ID reuse after completion.
+
+Case 075 demonstrates one bounded recovery route already authorized by the
+existing protocol: while the predecessor is admitted and the original job remains
+processable, its normal protected claim/complete path consumes that job. Contract
+then succeeds and replays, while the failure audit survives. This is **not** a new
+callback-repair policy, permission to discard data, or a solution for every failed
+repair/quarantine. A failed callback is not silently turned into `Reject`, and
+`QueueRepair` still requires its exact business-rejection predecessor.
+
+The isolated experimental conversion candidate retains its prior error/rollback
+behavior; the new durable diagnostic is scoped to the application protocol.
+Fresh control catalogs include the table/function; old development catalogs with
+missing or mismatched objects refuse under the existing fresh-catalog-first policy.
 
 ### R11-03 — scale improvements are real; the acceptance boundary is still visible
 
@@ -256,6 +302,15 @@ representative fixtures, reverse-write behavior and the chosen recovery policy.
 | 061–073 | 13 | Three positive row releases plus ten destructive rule/proof/history mutations | Valid source accepted; invalid obligations rejected |
 | 074 | 1 | Data-dependent callback exhaustion with healthy peer | Fail-stop/no-publication characterized; restart and status limitation exposed |
 
+The original 074 oracle above describes the committed review baseline. Its current
+follow-up oracle requires durable failure evidence, unchanged original data,
+same-type and cross-type healthy progress, restart stability and blocked Contract.
+New cases 075–087 add predecessor completion/retirement without erasing audit;
+private audit access; rollback; stale attempt, foreign transaction, changed bytes
+and substituted binding refusal; Request-role exclusion; ACL/missing-table drift;
+dead-job schedule/count preservation; concurrent Workers; and independent evidence
+for identical bytes on another job ID. The current new suite therefore totals 87.
+
 There are no expected-failure markers or skipped cases in the final new suite.
 Positive controls and limitation-characterization cases are explicitly included;
 the count is not presented as 74 independent proofs of production readiness.
@@ -275,6 +330,33 @@ the count is not presented as 74 independent proofs of production readiness.
 | Focused runtime PostgreSQL/race checks | `Test(QueueProjection\|PgRowBaseline\|RowQueue\|QueueRuntime)` passed, 170.464s | Same log |
 | Generated/application PostgreSQL conversion/repair group | Passed, 125.900s | Same log; selected compiler source case 51 |
 | Embedded runtime and runtime gates | Six seam and three gate checks passed | Same log |
+
+### Follow-up verification after `2d70dae`
+
+| Check | Result | Evidence |
+|---|---|---|
+| First complete follow-up suite | 85/85 passed, 246.934s; existing 127/127 passed, 394.432s | `.tesl-stuff/review11-failure-final.log`; `review11-failure-final/`, `review11-failure-existing/` |
+| Generated PostgreSQL conversion/repair group including cancellation | Passed, 139.400s | Same log |
+| Pure adapter/budget race tests | Passed, 1.757s; traps/invalid results have fixed categories, unbound errors do not | `.tesl-stuff/review11-failure-final-gates.log` |
+| Final new suite with concurrency/identity extensions | **87/87 passed, 202.211s** | `.tesl-stuff/review11-failure-final-disk.log`; `review11-failure-final-87-disk/` |
+| Existing adversarial suite on disk-backed cluster | **127/127 passed, 355.655s** | Same log; `review11-failure-existing-disk/` |
+| Focused PostgreSQL/race baseline, queue and runtime checks | Passed, 112.564s | Same log |
+| Embedded runtime and gate file sets | Six seam and three gate tests passed | Same log |
+| Required cancellation witness and ordinary queue V1–V4 lifecycle | Generated PostgreSQL group passed, 117.704s, with cancellation asserted as a named required pass; all three ordinary queue rollout edges passed | `.tesl-stuff/review11-failure-cancellation-required.log` |
+| Direct failed-attempt replay and installed docs | Extended case 074 passed in 26.864s, including a committed protected begin/replay that acquires no new attempt; four detached-doc checks and formatting passed | `.tesl-stuff/review11-failure-replay-final.log` |
+
+The first attempt to run the extended suite failed in PostgreSQL database cloning
+with `Disk quota exceeded` and `checkpoint request failed` on shared `/tmp`; it
+did not reach the new concurrency cases. The review harness now puts database/WAL
+files under its output directory, keeps only the short socket/log path in `/tmp`,
+and preserves `postgres.log`. The full rerun above passed without changing the
+operation deadlines. These targeted results are not a new uninterrupted full gate.
+
+The cancellation witness is a required named pass in compiler source group 51.
+It cancels after an attempt is begun, requires exact pre/post job equality and zero
+attempt/failure/receipt rows, then converts that same job successfully afterward.
+Pure adapter tests additionally require sanitized stable classifications for traps
+and invalid results, and no execution-fault classification for unbound versions.
 
 These local `.tesl-stuff` artifacts are ignored evidence outputs, not committed
 fixtures. The repository runners and examples reproduce the scenarios. Provenance

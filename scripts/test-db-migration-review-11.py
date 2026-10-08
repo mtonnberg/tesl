@@ -35,7 +35,8 @@ class DatabaseCase(unittest.TestCase):
     def snapshot(self):
         tables = ["tesl_schema_state", "tesl_schema_versions", "tesl_row_queue_conversion_staging",
                   "tesl_row_queue_target_staging", "tesl_row_queue_conversion_receipts",
-                  "tesl_row_queue_conversion_attempts", "tesl_row_queue_retirements", "tesl_row_queue_restamps", "tesl_jobs"]
+                  "tesl_row_queue_conversion_attempts", "tesl_row_queue_conversion_failures",
+                  "tesl_row_queue_retirements", "tesl_row_queue_restamps", "tesl_jobs"]
         return {table: LAB.sql(self.db, f"select coalesce(jsonb_agg(to_jsonb(t) order by to_jsonb(t)::text),'[]') from mail.{table} t") for table in tables}
 
     def refused(self, result):
@@ -398,19 +399,156 @@ class ExecutionReview(DatabaseCase):
         require(LAB.install(cls.template, "v1", cls.family))
         LAB.stop(*LAB.start(cls.template, "v1", cls.family))
 
-    def test_074_poisoned_type_stops_peer_without_publishing(self):
+    def run_poison(self, dead=False, concurrent=False):
         self.enqueue(payload={"oldText": "poison"})
+        if dead:
+            LAB.sql(self.db, "update mail.tesl_jobs set status='dead',dead_reason='attempts-exhausted',attempts=7,next_attempt_at='2099-01-01' where id='old'")
+        self.enqueue(identity="same-type-healthy")
         LAB.sql(self.db, "select mail.tesl_queue_enqueue(1,'Jobs','Other','healthy','{\"oldText\":\"healthy\"}')", "review_request")
         require(LAB.install(self.db, self.release, self.family))
-        for _ in range(2):
-            result = LAB.schema(self.db, self.release, "worker", family=self.family)
-            self.refused(result)
-            self.assertIn("migration execution stopped", result.stderr)
-            self.assertEqual(LAB.sql(self.db, "select count(*) from mail.tesl_jobs where schema_version=1 and status='pending'"), "2")
-            self.assertEqual(LAB.sql(self.db, "select count(*) from mail.tesl_row_queue_conversion_attempts"), "0")
-            self.assertEqual(LAB.sql(self.db, "select count(*) from mail.tesl_row_queue_conversion_receipts"), "0")
+        workers = []
+        try:
+            for _ in range(2 if concurrent else 1):
+                workers.append(LAB.start(self.db, self.release, self.family))
+            process, _ = workers[0]
+            LAB.wait(lambda: LAB.sql(self.db, "select (select count(*) from mail.tesl_row_queue_conversion_failures)=1 and (select count(*) from mail.tesl_row_queue_conversion_receipts)=2") == "t", process)
+        finally:
+            for process, log in workers:
+                LAB.stop(process, log)
+
+    def test_074_poisoned_job_is_durable_while_healthy_peers_progress(self):
+        self.run_poison()
+        self.assertEqual(LAB.sql(self.db, "select schema_version||','||status||','||(payload='{\"oldText\":\"poison\"}'::jsonb)::text from mail.tesl_jobs where id='old'"), "1,pending,true")
+        self.assertEqual(LAB.sql(self.db, "select count(*) from mail.tesl_jobs where schema_version=2"), "2")
+        self.assertEqual(LAB.sql(self.db, "select code from mail.tesl_row_queue_conversion_failures"), "execution-budget")
+        self.assertEqual(LAB.sql(self.db, "select count(*) from mail.tesl_row_queue_conversion_attempts"), "0")
+        before = self.snapshot()
+        process, log = LAB.start(self.db, self.release, self.family)
+        try:
+            time.sleep(.7)
+            self.assertIsNone(process.poll(), Path(log.name).read_text())
+        finally:
+            LAB.stop(process, log)
+        self.assertEqual(self.snapshot(), before)
+        LAB.sql(self.db, self.failure_sql(replay=True), "review_worker")
+        self.assertEqual(self.snapshot(), before)
         status = json.loads(require(LAB.schema(self.db, self.release, "status", family=self.family, role="review_request")))["queues"]
-        self.assertEqual({item["code"] for item in status["blockers"]}, {"QUEUE_OLD_PAYLOADS"})
+        self.assertEqual(status["executionFailed"], 1)
+        self.assertEqual({item["code"] for item in status["blockers"]}, {"QUEUE_MIGRATION_EXECUTION_FAILED"})
+        self.assertNotIn("poison", json.dumps(status))
+        self.refused(LAB.schema(self.db, self.release, "contract", "V2", family=self.family))
+
+    def test_075_predecessor_processing_resolves_failure_without_erasing_audit(self):
+        self.run_poison()
+        audit = LAB.sql(self.db, "select row_to_json(f)::text from mail.tesl_row_queue_conversion_failures f")
+        claim = self.claim(1)
+        self.assertEqual(claim["job_id"], "old")
+        self.assertEqual(LAB.sql(self.db, f"select mail.tesl_queue_complete(1,'Jobs','old',{literal(claim['token'])},{claim['attempt_seq']})", "review_request"), "t")
+        require(LAB.schema(self.db, self.release, "contract", "V2", family=self.family))
+        require(LAB.schema(self.db, self.release, "contract", "V2", family=self.family))
+        self.assertEqual(LAB.sql(self.db, "select row_to_json(f)::text from mail.tesl_row_queue_conversion_failures f"), audit)
+        status = json.loads(require(LAB.schema(self.db, self.release, "status", family=self.family, role="review_request")))["queues"]
+        self.assertEqual(status["executionFailed"], 0)
+        self.refused(LAB.sql(self.db, "select mail.tesl_queue_enqueue(2,'Jobs','Delivery','old','{\"message\":\"reused\",\"priority\":7}')", "review_request", ok=False))
+
+    def test_076_failure_audit_is_private_and_cannot_be_deleted_by_worker(self):
+        self.run_poison()
+        before = self.snapshot()
+        for role in ("review_worker", "review_request"):
+            self.refused(LAB.sql(self.db, "select * from mail.tesl_row_queue_conversion_failures", role, ok=False))
+            self.refused(LAB.sql(self.db, "delete from mail.tesl_row_queue_conversion_failures", role, ok=False))
+        self.assertEqual(self.snapshot(), before)
+
+    def failure_sql(self, change="", commit=False, replay=False):
+        # Observer constructs the exact public binding; mutation itself uses Worker.
+        binding = LAB.sql(self.db, "select jsonb_build_object('document',encode(c.source_document,'hex'),'parent',nullif(c.parent_digest,''),'revision',c.revision,'family',r.family,'queue',c.queue,'job',c.job_type,'from',c.from_version,'to',c.to_version,'root',c.source_digest,'old',encode(c.old_contract,'hex'),'new',encode(c.new_contract,'hex')) from mail.tesl_row_queue_conversion_staging c cross join mail.tesl_row_versions r where c.job_type='Delivery' and r.version=1")
+        uuid, digest = json.loads(LAB.sql(self.db, "select json_build_array(m.database_uuid::text,c.source_digest) from mail.tesl_schema_meta m cross join mail.tesl_row_queue_conversion_staging c where c.job_type='Delivery'"))
+        if replay:
+            return f"""begin; do $block$ declare a record; begin
+select * into a from mail.tesl_row_queue_conversion_begin({literal(uuid)}::uuid,{literal(digest)},'old',{literal(binding)}::jsonb);
+if a.outcome is distinct from 'execution-failed' or a.transaction_id is distinct from '' then raise exception 'failure replay acquired a new attempt'; end if;
+end $block$; commit;"""
+        return f"""begin;
+do $block$ declare a record; accepted boolean; b jsonb:={literal(binding)}::jsonb; ident uuid:={literal(uuid)}::uuid; d text:={literal(digest)}; begin
+ select * into a from mail.tesl_row_queue_conversion_begin(ident,d,'probe',b);
+ {change}
+ accepted:=mail.tesl_row_queue_conversion_fail(ident,d,'probe',a.attempt_seq,a.transaction_id,a.original,'execution-trap',b);
+ if accepted is distinct from {'true' if not change else 'false'} then raise exception 'wrong failure publication result'; end if;
+end $block$; {'commit' if commit else 'rollback'};"""
+
+    def prepare_probe(self):
+        self.run_poison()
+        self.enqueue(identity="probe")
+
+    def test_077_failure_publication_rolls_back_with_transaction(self):
+        self.prepare_probe()
+        before = self.snapshot()
+        LAB.sql(self.db, self.failure_sql(), "review_worker")
+        self.assertEqual(self.snapshot(), before)
+
+    def test_078_failure_publication_refuses_stale_attempt(self):
+        self.prepare_probe()
+        before = self.snapshot()
+        LAB.sql(self.db, self.failure_sql("a.attempt_seq:=a.attempt_seq+1;"), "review_worker")
+        self.assertEqual(self.snapshot(), before)
+
+    def test_079_failure_publication_refuses_foreign_transaction(self):
+        self.prepare_probe()
+        before = self.snapshot()
+        LAB.sql(self.db, self.failure_sql("a.transaction_id:='0';"), "review_worker")
+        self.assertEqual(self.snapshot(), before)
+
+    def test_080_failure_publication_refuses_changed_original(self):
+        self.prepare_probe()
+        before = self.snapshot()
+        LAB.sql(self.db, self.failure_sql("a.original:=a.original||' ';"), "review_worker")
+        self.assertEqual(self.snapshot(), before)
+
+    def test_081_failure_publication_refuses_substituted_binding(self):
+        self.prepare_probe()
+        before = self.snapshot()
+        LAB.sql(self.db, self.failure_sql("b:=jsonb_set(b,'{document}','\"00\"');"), "review_worker")
+        self.assertEqual(self.snapshot(), before)
+
+    def test_082_failure_publication_requires_worker_execute_privilege(self):
+        self.prepare_probe()
+        before = self.snapshot()
+        self.refused(LAB.sql(self.db, self.failure_sql(), "review_request", ok=False))
+        self.assertEqual(self.snapshot(), before)
+
+    def test_083_failure_audit_grant_drift_refuses_public_status(self):
+        self.run_poison()
+        LAB.sql(self.db, "grant select on mail.tesl_row_queue_conversion_failures to review_request")
+        before = self.snapshot()
+        self.refused(LAB.schema(self.db, self.release, "status", family=self.family, role="review_request"))
+        self.assertEqual(self.snapshot(), before)
+
+    def test_084_missing_failure_audit_refuses_public_status(self):
+        self.run_poison()
+        before = LAB.sql(self.db, "select row_to_json(s)::text from mail.tesl_schema_state s")
+        LAB.sql(self.db, "drop table mail.tesl_row_queue_conversion_failures")
+        self.refused(LAB.schema(self.db, self.release, "status", family=self.family, role="review_request"))
+        self.assertEqual(LAB.sql(self.db, "select row_to_json(s)::text from mail.tesl_schema_state s"), before)
+
+    def test_085_failed_dead_job_keeps_schedule_attempts_and_disposition(self):
+        self.run_poison(dead=True)
+        self.assertEqual(LAB.sql(self.db, "select schema_version||','||status||','||attempts||','||dead_reason||','||(next_attempt_at='2099-01-01'::timestamptz)::text from mail.tesl_jobs where id='old'"), "1,dead,7,attempts-exhausted,true")
+
+    def test_086_concurrent_workers_do_not_duplicate_failure_evidence(self):
+        self.run_poison(concurrent=True)
+        self.assertEqual(LAB.sql(self.db, "select claim_seq from mail.tesl_jobs where id='old'"), "1")
+        self.assertEqual(LAB.sql(self.db, "select count(*) from mail.tesl_row_queue_conversion_failures"), "1")
+
+    def test_087_same_bytes_on_another_job_need_independent_failure_evidence(self):
+        self.run_poison()
+        self.enqueue(identity="second-poison", payload={"oldText": "poison"})
+        process, log = LAB.start(self.db, self.release, self.family)
+        try:
+            LAB.wait(lambda: LAB.sql(self.db, "select count(*) from mail.tesl_row_queue_conversion_failures") == "2", process)
+        finally:
+            LAB.stop(process, log)
+        self.assertEqual(LAB.sql(self.db, "select count(distinct job_id) from mail.tesl_row_queue_conversion_failures"), "2")
+        self.assertEqual(LAB.sql(self.db, "select count(*) from mail.tesl_jobs where schema_version=1"), "2")
 
 
 def main():

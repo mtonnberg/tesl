@@ -91,7 +91,7 @@ func TestQueueConversionPipelineTrapsDoNotReturnPartialOutput(t *testing.T) {
 				converter.targetDecode = func(any) Check[queueConversionTestNew] { panic("private payload sentinel") }
 			}
 			result, err := converter.Convert(1, []byte(`{"old":"kept"}`))
-			if err == nil || strings.Contains(err.Error(), "sentinel") || result.Kind() != "" || result.Payload() != "" || result.SourceDigest() != "" {
+			if err == nil || pgQueueExecutionFailureCode(err) != "execution-trap" || strings.Contains(err.Error(), "sentinel") || result.Kind() != "" || result.Payload() != "" || result.SourceDigest() != "" {
 				t.Fatal("trap leaked detail or a usable result", result, err)
 			}
 		})
@@ -114,7 +114,7 @@ func TestQueueConversionPipelineEncodingAndTagRefusals(t *testing.T) {
 				converter.encode = func(queueConversionTestNew) any { return map[string]any{"wrong": "shape"} }
 			}
 			result, err := converter.Convert(1, []byte(`{"old":"kept"}`))
-			if err == nil || result.Kind() != "" || result.Payload() != "" {
+			if err == nil || pgQueueExecutionFailureCode(err) != "invalid-result" || result.Kind() != "" || result.Payload() != "" {
 				t.Fatal("invalid target acquired output", result, err)
 			}
 		})
@@ -125,7 +125,7 @@ func TestQueueConversionPipelineRefusesBeforeCallingUnboundCode(t *testing.T) {
 	var calls [4]int
 	converter := queueConversionPipeline(&calls)
 	for _, version := range []int{-1, 0, 2, 99} {
-		if _, err := converter.Convert(version, []byte(`{"old":"kept"}`)); err == nil {
+		if _, err := converter.Convert(version, []byte(`{"old":"kept"}`)); err == nil || pgQueueExecutionFailureCode(err) != "" {
 			t.Fatal("foreign source accepted", version)
 		}
 	}

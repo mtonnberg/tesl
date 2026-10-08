@@ -24,11 +24,17 @@ func pgRowQueueWorkTables() []pgMigrationControlTable {
  attempt_seq bigint not null, transaction_id xid8 not null,
  original text not null, reason text not null,
  resume_status text not null check(resume_status in ('pending','dead'))`},
+		{"tesl_row_queue_conversion_failures", `
+ job_id text not null, source_digest text not null,
+ attempt_seq bigint not null check(attempt_seq>0),
+ payload_hash text not null check(payload_hash ~ '^[0-9a-f]{64}$'),
+ code text not null check(code in ('execution-budget','execution-trap','invalid-result')),
+ primary key(job_id,source_digest,attempt_seq)`},
 	}
 }
 
 func pgRowQueueWorkTable(name string) bool {
-	return name == "tesl_row_queue_conversion_receipts" || name == "tesl_row_queue_conversion_attempts" || name == "tesl_row_queue_restamps"
+	return name == "tesl_row_queue_conversion_receipts" || name == "tesl_row_queue_conversion_attempts" || name == "tesl_row_queue_restamps" || name == "tesl_row_queue_conversion_failures"
 }
 
 // Reuse the tested selection/attempt/publication machinery, replacing only its
@@ -82,6 +88,48 @@ func pgRowQueueConversionFunctions(namespace string) []pgMigrationControlFunctio
 			// Finish also gets a compiler binding; the isolated protocol keeps
 			// its existing signature. Both routes fence the same exact attempt.
 			fn.arguments += ", binding jsonb"
+			prefix, _, found := strings.Cut(fn.body, " if kind is null")
+			if !found {
+				panic("application queue failure lost its exact finish guard")
+			}
+			result = append(result, pgMigrationControlFunction{"tesl_row_queue_conversion_fail",
+				"expected uuid, digest text, job_id text, attempt_seq bigint, transaction_id text, original text, code text, binding jsonb", "boolean", "volatile", prefix + `
+ if not exists(select 1 from ` + ns + `tesl_row_queue_conversion_staging c where c.source_digest=digest
+  and c.database_uuid=expected and c.fence_ns=s.fence and c.queue=s.queue and c.job_type=s.job_type
+  and c.from_version=s.from_version and c.to_version=s.to_version
+  and binding=pg_catalog.jsonb_build_object('document',pg_catalog.encode(c.source_document,'hex'),
+   'parent',nullif(c.parent_digest,''),'revision',c.revision,'family',s.family,'queue',c.queue,'job',c.job_type,
+   'from',c.from_version,'to',c.to_version,'root',s.root_digest,
+   'old',pg_catalog.encode(c.old_contract,'hex'),'new',pg_catalog.encode(c.new_contract,'hex'))) then return false; end if;
+ if code is null or code not in ('execution-budget','execution-trap','invalid-result') then
+  raise exception 'tesl: invalid queue execution failure code'; end if;
+ insert into ` + ns + `tesl_row_queue_conversion_failures(job_id,source_digest,attempt_seq,payload_hash,code)
+ values(j.id,digest,a.attempt_seq,pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(a.original,'UTF8')),'hex'),code);
+ delete from ` + ns + `tesl_row_queue_conversion_attempts p where p.job_id=j.id;
+ return true;
+end`})
+		}
+		if fn.name == "tesl_row_queue_conversion_next" {
+			anchor := " and ((source.revision=0"
+			if !strings.Contains(fn.body, anchor) {
+				panic("application queue failure lost its selection guard")
+			}
+			fn.body = strings.Replace(fn.body, anchor, ` and not exists(select 1 from `+ns+`tesl_row_queue_conversion_failures failure
+  where failure.job_id=j.id and failure.source_digest=digest and failure.attempt_seq<=j.claim_seq
+   and failure.payload_hash=pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(j.payload::text,'UTF8')),'hex'))
+`+anchor, 1)
+		}
+		if fn.name == "tesl_row_queue_conversion_begin" {
+			anchor := " if source.revision=0 then"
+			if !strings.Contains(fn.body, anchor) {
+				panic("application queue failure lost its begin guard")
+			}
+			fn.body = strings.Replace(fn.body, anchor, ` if exists(select 1 from `+ns+`tesl_row_queue_conversion_failures failure
+  where failure.job_id=j.id and failure.source_digest=digest and failure.attempt_seq<=j.claim_seq
+   and failure.payload_hash=pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(j.payload::text,'UTF8')),'hex')) then
+  return query select j.payload::text,''::text,j.claim_seq,''::text,'execution-failed'::text; return;
+ end if;
+`+anchor, 1)
 		}
 		result = append(result, fn)
 	}
@@ -252,6 +300,7 @@ func pgRunRowQueueConversionTurn(ctx context.Context, conn *pgx.Conn, namespace 
 		progress.Converted += batch.Converted
 		progress.Rejected += batch.Rejected
 		progress.Invalid += batch.Invalid
+		progress.Failed += batch.Failed
 		progress.Replayed += batch.Replayed
 		progress.NoEligible = progress.NoEligible && batch.NoEligible
 		if err != nil {

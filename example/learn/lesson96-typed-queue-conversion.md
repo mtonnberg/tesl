@@ -107,12 +107,19 @@ for scheduling evidence and scope.
 | `converted` | Target bytes and schema version publish with their receipt |
 | `migration-rejected` | Original payload/version stay in quarantine, with reason |
 | `payload-invalid` | Frozen decoder cannot interpret the historical payload; typed repair cannot pretend it is valid |
-| Trap/encoding error | No usable conversion outcome is published for that attempt |
+| Trap/budget/encoding error | No conversion result publishes; the application Worker records separate failure evidence, preserves the old job, and continues healthy peers |
 
 Delayed and dead jobs participate without running their business handlers; retry
 counts, disposition and schedules are retained. Live claims are not rewritten.
 Claim tokens prevent a stale attempt from acknowledging another attempt's job.
 An empty Worker scan is not a finality proof.
+
+For execution failure, public status reports `QUEUE_MIGRATION_EXECUTION_FAILED`
+and `executionFailed` counts. Restart suppresses retries of the same checked source
+on the same original bytes. This is not business rejection and does not authorize
+`QueueRepair`. An admitted predecessor may still process a processable old job
+through its normal handler; completion keeps the audit. General typed recovery
+for failed callbacks is still outside scope. See the operator guide for limits.
 
 ## 4. Repair a rejected historical value
 

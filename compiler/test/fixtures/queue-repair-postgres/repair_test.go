@@ -1068,6 +1068,30 @@ func TestPostgresApplicationPreparesCheckedSuccessorInventory(t *testing.T) {
 	}
 }
 
+func TestPostgresApplicationCancellationIsNotExecutionFailure(t *testing.T) {
+	f := rt.OpenApplicationQueueForTest(t)
+	if err := f.StageApplicationRoot(f.Installer, Conversion0); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.StageApplicationTarget(f.Installer); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.PublishApplicationTarget(); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.OpenApplicationRoot(f.Worker, Conversion0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Request.Exec(f.Context, "select mail.tesl_queue_enqueue(1,'Jobs','Delivery','cancelled',$1::jsonb)", `{"oldText":"kept"}`); err != nil {
+		t.Fatal(err)
+	}
+	f.AssertCancelledExecutionRollsBack(t, Conversion0, "cancelled")
+	result, err := f.Apply(f.Worker, Conversion0, "cancelled")
+	if err != nil || result.Kind != "converted" {
+		t.Fatal("cancellation poisoned subsequent conversion", result, err)
+	}
+}
+
 func TestPostgresApplicationConvertsRepairsAndCompletesStoredJob(t *testing.T) {
 	f := rt.OpenApplicationQueueForTest(t)
 	if err := f.StageApplicationRoot(f.Installer, Conversion0); err != nil {

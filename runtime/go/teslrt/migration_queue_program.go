@@ -1005,6 +1005,24 @@ type CompiledQueueConversion[Old, Current any] struct {
 	targetDecode func(any) Check[Current]
 }
 
+// Only errors produced after entering the exact bound pure adapter may become
+// operational failure evidence. Binding, SQL and cancellation errors are not
+// callback outcomes and must keep their ordinary rollback behavior.
+type queueConversionExecutionError struct{ code, message string }
+
+func (e queueConversionExecutionError) Error() string { return e.message }
+
+func pgQueueExecutionFailureCode(err error) string {
+	switch failure := err.(type) {
+	case migrationExecutionFailure:
+		return "execution-budget"
+	case queueConversionExecutionError:
+		return failure.code
+	default:
+		return ""
+	}
+}
+
 func (c *CompiledQueueConversion[Old, Current]) SourceVersion() int {
 	if c == nil || c.source == nil {
 		return 0
@@ -1074,7 +1092,7 @@ func (c *CompiledQueueConversion[Old, Current]) convertBytes(sourceVersion int, 
 	defer func() {
 		if trapped := recover(); trapped != nil {
 			result = QueueConversionResult{}
-			err = fmt.Errorf("queue conversion trapped")
+			err = queueConversionExecutionError{"execution-trap", "queue conversion trapped"}
 			if failure, bounded := trapped.(migrationExecutionFailure); bounded {
 				err = failure
 			}
@@ -1102,16 +1120,16 @@ func (c *CompiledQueueConversion[Old, Current]) convertBytes(sourceVersion int, 
 	case MigratedRow:
 		encoded, encodeErr := json.Marshal(c.encode(converted.RowValue))
 		if encodeErr != nil {
-			return QueueConversionResult{}, fmt.Errorf("queue conversion target encoding failed")
+			return QueueConversionResult{}, queueConversionExecutionError{"invalid-result", "queue conversion target encoding failed"}
 		}
 		raw, decodeErr := ParseJSON(encoded)
 		if decodeErr != nil || !c.targetDecode(raw).OK() {
-			return QueueConversionResult{}, fmt.Errorf("queue conversion target codec rejected its encoded value")
+			return QueueConversionResult{}, queueConversionExecutionError{"invalid-result", "queue conversion target codec rejected its encoded value"}
 		}
 		result.kind, result.payload = "converted", string(encoded)
 		MigrationStep()
 		return result, nil
 	default:
-		return QueueConversionResult{}, fmt.Errorf("queue conversion returned an invalid result tag")
+		return QueueConversionResult{}, queueConversionExecutionError{"invalid-result", "queue conversion returned an invalid result tag"}
 	}
 }

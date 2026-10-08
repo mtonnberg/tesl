@@ -23,6 +23,12 @@ unrestricted production-readiness claim: one poisoned conversion can still halt
 the shared Worker without a useful durable recovery diagnosis, and large-inventory
 runtime throughput/fairness remains unverified.
 
+**Follow-up after `2d70dae`:** durable callback-failure diagnosis and peer progress
+are now implemented and verified. The new suite has grown to 87 passing cases,
+alongside the 127 existing cases. An admitted predecessor can resolve a still-
+processable failed job without erasing the audit. General typed callback-failure
+recovery and large-inventory runtime acceptance remain open.
+
 ## 1. Decision-oriented status
 
 | Area | Assessment | Implication |
@@ -32,9 +38,9 @@ runtime throughput/fairness remains unverified.
 | Queue conversion, repair and retirement | Real repeated deployments pass within restricted history rules | Keep the consecutive queue-only model until broader composition has its own full-lifecycle witness. |
 | Permissions, catalog integrity and replay | Strong targeted adversarial results | Weakened SQL functions/indexes/grants and mismatched staging refuse; batch retries preserve exact history. |
 | Status correctness | New defect fixed | Current-version quarantine remains visible without falsely blocking retirement or hiding old backlog. |
-| Callback failure recovery | Important open operational gap | Budget exhaustion preserves data, but can stop healthy peer progress and repeat on every restart. |
+| Callback failure recovery | Diagnosis and peer isolation implemented; general typed recovery remains open | Recognized execution faults retain original data and durable evidence; healthy jobs proceed. A limited admitted-predecessor processing route is verified. |
 | Scale | Measurable progress, incomplete acceptance | 257-type install/replay passes; protected bulk enqueue still prevents the full fairness workload reaching conversion. |
-| Verification | Broad fresh evidence; full-gate result still pending | 201 Python cases and focused gates pass; no new uninterrupted default migration gate or whole-compiler run is claimed. |
+| Verification | Broad fresh evidence; full-gate result still pending | Follow-up evidence covers 214 Python cases and focused gates; no new uninterrupted default migration gate or whole-compiler run is claimed. |
 
 ## 2. What this review found
 
@@ -64,11 +70,23 @@ The existing typed repair protocol handles business rejection. This failure does
 not produce that rejection, so its recovery cannot be assumed. The passing test
 characterizes the limitation; it does not certify healthy progress.
 
-**Highest-priority decision:** define how operational failure is recorded,
-diagnosed and recovered while retaining exact source identity and original data.
-Also decide whether healthy peer types should continue. This should be expressed
-as an auditable protocol with explicit retirement obligations, not an operator
-escape hatch or an edit to deployed history.
+That was the committed review's behavior. The follow-up now records a distinct
+immutable execution-failure audit and suppresses automatic retries of the same
+checked source/bytes for that job. Healthy jobs, including peers of the same type,
+continue. Protected status explains the failure; old work still blocks retirement.
+Cancellation and database errors remain rollback events, not callback verdicts.
+
+An end-to-end test also exercises existing predecessor claim/completion while that
+version remains admitted: the original job is processed, Contract succeeds, and
+the audit survives. This covers still-processable old work. It does not invent a
+business rejection, reinterpret `QueueRepair`, or solve all failed repairs and
+quarantines. The remaining decision is the general typed remediation protocol.
+
+**Highest-priority remaining decision:** define typed callback-failure remediation
+that consumes this new evidence while retaining exact source identity and original
+data. Healthy-peer continuation is now implemented and tested. General remediation
+should be an auditable protocol with explicit retirement obligations, not an
+operator escape hatch or an edit to deployed history.
 
 ### Open: large-inventory installation is ahead of runtime acceptance
 

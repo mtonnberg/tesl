@@ -12,7 +12,7 @@ import (
 
 // Independent read-only catalog expectations; Request needs no TEMP privilege.
 func pgExpectedRowControl(e *pgCatalogExpectations, owner, name string) (*pgCatalogTable, error) {
-	if pgRowQueueWorkTable(name) && name != "tesl_row_queue_restamps" {
+	if name == "tesl_row_queue_conversion_receipts" || name == "tesl_row_queue_conversion_attempts" {
 		table, err := pgExpectedQueueConversionTable(e, owner, strings.Replace(name, "tesl_row_queue_", "tesl_queue_", 1))
 		if err != nil {
 			return nil, err
@@ -41,6 +41,16 @@ func pgExpectedRowControl(e *pgCatalogExpectations, owner, name string) (*pgCata
 	digest := func(value, hash string) { check("(encode(sha256("+value+"), 'hex'::text) = "+hash+")", value, hash) }
 	bounded := func(n string) { check("(("+n+" >= 1) AND ("+n+" <= 2147483646))", n) }
 	switch name {
+	case "tesl_row_queue_conversion_failures":
+		col("job_id", "text")
+		col("source_digest", "text")
+		col("attempt_seq", "int8")
+		col("payload_hash", "text")
+		col("code", "text")
+		con("p", "", "job_id", "source_digest", "attempt_seq")
+		check("(attempt_seq > 0)", "attempt_seq")
+		hash("payload_hash")
+		check("(code = ANY (ARRAY['execution-budget'::text, 'execution-trap'::text, 'invalid-result'::text]))", "code")
 	case "tesl_row_queue_restamps":
 		col("job_id", "text")
 		col("from_version", "int4")
