@@ -171,8 +171,12 @@ let () =
       ["schema"; "notes"; "mail"; "versions"; "transitions"] in
   List.iter (fun name ->
     let dir = Filename.concat example_dir name in
-    if Sys.file_exists dir then migration_example dir ("example/" ^ name ^ "/"))
-    ["db-three-upgrades"; "queue-three-upgrades"];
+    if Sys.file_exists dir then begin
+      migration_example dir ("example/" ^ name ^ "/");
+      if name="db-twenty-releases" then
+        emit oc ("example/" ^ name ^ "/postgres_api_test.go") (Filename.concat dir "postgres_api_test.go")
+    end)
+    ["db-three-upgrades"; "queue-three-upgrades"; "db-twenty-releases"];
 
   (* example/intro/ — the prose "TLDR of the whole language" newcomer track (D17).
      Previously NOT embedded, so `tesl help` in a packaged binary could not serve

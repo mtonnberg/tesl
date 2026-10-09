@@ -100,4 +100,5 @@ if (( $# == 0 )); then
   python3 "$repo_root/example/queue-three-upgrades/run.py" --output "$migration_tmp/review05-releases/queue"
   python3 "$repo_root/scripts/test-db-migration-review-05.py" --artifacts "$migration_tmp/review05-releases" --output "$migration_tmp/review05-results"
   python3 "$repo_root/scripts/test-db-migration-review-11.py" --artifacts "$migration_tmp/review05-releases" --output "$migration_tmp/review11-results"
+  python3 "$repo_root/example/db-twenty-releases/run.py" --output "$migration_tmp/twenty-releases"
 fi

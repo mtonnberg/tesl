@@ -79,6 +79,34 @@ func TestPgRowCurrentDescriptorCannotReplaceActiveTransform(t *testing.T) {
 		t.Fatal("current codec replaced an active migration window")
 	}
 }
+
+func TestPgRowCurrentDescriptorSurvivesAnotherEntityTransform(t *testing.T) {
+	base, descriptor := currentCodecFixture()
+	peer := base.Versions[2].Entities[0]
+	peer.Entity, peer.Table, peer.Generation = "Other", "others", 3
+	base.Versions[2].Entities = append(base.Versions[2].Entities, peer)
+	base.Transforms = append(base.Transforms, PgRowTransformDescriptor{MigrationVersion: 3, Entity: "Other", TargetGeneration: 3})
+	for _, tc := range []struct {
+		name  string
+		input []any
+		valid bool
+	}{{"unchanged peer retained", []any{descriptor}, true}, {"unchanged peer missing", []any{}, false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			raw, err := json.Marshal(tc.input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			reader := &pgMigrationWireReader{}
+			got := pgReadRowCurrentCodecs(reader, raw, base)
+			if (reader.err == nil) != tc.valid {
+				t.Fatalf("peer descriptor validation: %v", reader.err)
+			}
+			if tc.valid && (len(got) != 1 || got[0].Entity != "Note" || got[0].Generation != 2) {
+				t.Fatal("wrong current owner", got)
+			}
+		})
+	}
+}
 func TestPgRowCurrentRequiresEveryCurrentEntity(t *testing.T) {
 	base, d := currentCodecFixture()
 	other := base.Versions[2].Entities[0]

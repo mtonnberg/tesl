@@ -21,6 +21,15 @@ var migrationOccurrences = struct {
 // Each arrival uses its own connection. A paused actor must not hold a Go mutex
 // that prevents another goroutine from reaching the competing boundary.
 func migrationBoundary(name string) {
+	// Some tests measure a short request lease, not startup catalog latency.
+	// Arm that existing runtime budget only after verified startup completes.
+	if name == "row-startup-after-heartbeat" {
+		if timeout := os.Getenv("TESL_MIGRATION_TEST_REQUEST_TIMEOUT_MS"); timeout != "" {
+			if err := os.Setenv("TESL_PG_POOL_LEASE_TIMEOUT_MS", timeout); err != nil {
+				panic(err)
+			}
+		}
+	}
 	socket := os.Getenv("TESL_MIGRATION_TEST_SOCKET")
 	if socket == "" {
 		return

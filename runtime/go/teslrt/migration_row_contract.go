@@ -342,6 +342,22 @@ func pgCompiledRowSettledPlan(database *Database, version int) (*pgRowPhysicalPl
 		if additivePrefix {
 			return physical.versions[version-1], nil
 		}
+		current := physical.versions[version-1]
+		if pgRowEpochPreserving(current) {
+			// An additive tail is already a complete physical projection. Earlier
+			// transformations still need their exact registered Contracts; durable
+			// completion is independently required by expansion/admission checks.
+			for _, plan := range physical.versions[:version] {
+				if len(plan.windows) == 0 && len(plan.retirements) == 0 {
+					continue
+				}
+				prior := compiledRowContracts[compiled][plan.version]
+				if prior == nil || prior.compiled != compiled || prior.window != plan || prior.settled.compiled != compiled {
+					return nil, fmt.Errorf("additive tail lacks its exact earlier Contract source")
+				}
+			}
+			return current, nil
+		}
 	}
 	contract := compiledRowContracts[compiled][version]
 	if contract == nil || contract.compiled != compiled || contract.settled.compiled != compiled {

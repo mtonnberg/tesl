@@ -62,12 +62,14 @@ let base_json ~quote ~go_type source =
   (if has_retirements then 5 else 4) (quote (P.compiler_abi p)) (quote (P.stored_value_compatibility p)) (array database (P.databases p))
 (* Current codecs describe checked stored rows after an earlier transformation.
    They are not migration callbacks and carry no Same/conversion authority. The
-   initial route covers a wholly zero-window current revision only. *)
+   Each entity needs its own zero-window projection; another table's active
+   transformation must not erase that current typed access. *)
 let current_codecs history =
  match List.rev (RH.versions history) with
  | [] -> []
- | current::_ when List.exists (fun b -> RH.migration_version b=current.version) (RH.bindings history) -> []
- | current::_ -> current.entities |> List.filter (fun (entity:RH.entity)->entity.generation>1)
+ | current::_ -> current.entities |> List.filter (fun (entity:RH.entity)->entity.generation>1 &&
+     not(List.exists(fun binding->RH.migration_version binding=current.version &&
+       (RH.current binding).identity=entity.identity)(RH.bindings history)))
    |> List.sort (fun (a:RH.entity) b->String.compare a.identity b.identity)
    |> List.map (fun entity->current,entity)
 

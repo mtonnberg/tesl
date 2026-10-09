@@ -41,6 +41,9 @@ missing old catalog objects cause refusal, not automatic adoption.
 See [cleanup contracts](migration-contracts.md) for row rules and additive epoch
 closure; [lesson 96](../example/learn/lesson96-typed-queue-conversion.md) for queue
 conversion, separately deployed repair and retirement.
+For a longer multi-table history, run the
+[twenty-release project tracker](../example/db-twenty-releases/README.md): its 95
+Tesl API tests run on the retained PostgreSQL database at the corresponding release.
 
 Queue conversion installation stages at most 32 source lineages per transaction.
 A failure rolls back its current group; earlier committed groups remain immutable

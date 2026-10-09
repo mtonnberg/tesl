@@ -276,7 +276,8 @@ func pgRowObserveGeneration(ctx context.Context, tx pgx.Tx, db *PostgresDB, wind
 		if key.current <= window.version {
 			return nil, nil
 		}
-		if !active.settled || key.current != window.version+1 {
+		additivePredecessor := active == window && pgRowEpochPreserving(active)
+		if (!active.settled && !additivePredecessor) || key.current != window.version+1 {
 			return nil, fmt.Errorf("future row generation requires an exact adjacent settled predecessor")
 		}
 		if cached := cache.observation; cached != nil && cached.key == key {
@@ -309,7 +310,11 @@ func pgRowObserveGeneration(ctx context.Context, tx pgx.Tx, db *PostgresDB, wind
 				if err != nil {
 					return err
 				}
-				if forward == nil || forward.plan == nil || forward.plan.version != snapshotKey.current || forward.predecessor == nil || forward.predecessor.hash != active.hash || forward.predecessor.contract != active.contract || forward.plan.requiresContractVersion != window.version {
+				required := window.version
+				if additivePredecessor {
+					required = 0
+				}
+				if forward == nil || forward.plan == nil || forward.plan.version != snapshotKey.current || forward.predecessor == nil || forward.predecessor.hash != active.hash || forward.predecessor.contract != active.contract || forward.plan.requiresContractVersion != required {
 					return fmt.Errorf("future row generation has no exact settled lineage")
 				}
 				observed = &pgRowGenerationObservation{key: snapshotKey, predecessor: forward.predecessor, target: forward.plan}

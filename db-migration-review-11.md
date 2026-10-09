@@ -32,6 +32,137 @@ the existing 127-case suite also passes. General typed callback-failure recovery
 remains open, but durable diagnosis, restart suppression, and a limited existing
 predecessor-processing recovery route now have regression evidence.
 
+### Twenty-release continuation after `2a034d3`
+
+**The full default migration gate passed uninterrupted before the subsequent
+queue scale optimization**, including a freshly
+generated and built **V1–V20 multi-table application** with **95 Tesl API tests
+bound to the retained PostgreSQL database**. This supersedes R11-04's pending
+gate evidence for this tree. Log: `.tesl-stuff/twenty-releases-full-gate-retry.log`.
+
+The runnable scenario is [`example/db-twenty-releases/`](example/db-twenty-releases/README.md).
+Projects, Tasks and Members begin at V1; Audit is introduced at V6. Nine
+transforming releases are interleaved with nullable-field/table additions, ending
+with two distinct tables transformed together at V20. Cases exercise Rename,
+Retype/WriteBack twice on task metadata, Legacy/LegacyWith field removal and title
+proof Revalidate. Each release adds a data cohort, and every later release checks
+all cohorts before and after finality. Final counts are 21 Projects, 21 Tasks,
+21 Members and 16 Audit rows, on one unchanged database UUID.
+
+The simulation verifies predecessor/successor writes during overlap, reads from
+both versions, deliberate rejection and predecessor repair at V7/V13/V15,
+Contract replay, additive close-epoch dry-run/replay, refusal to use close-epoch
+in place of a transforming Contract, and surviving Request restart. Independent
+post-finality SQL fixtures seed valid non-default optional fields to detect lossy
+copying in later releases. Business cohorts and edits use ordinary HTTP handlers.
+The test-only Go launcher binds generated Tesl `api-test` bodies to PostgreSQL;
+the router, handlers, generated test bodies and migration identities are unchanged.
+
+This exposed and fixed three composition defects that narrower examples missed:
+
+1. **Current codecs were suppressed database-wide if any table transformed.**
+   V7 retyped Task while Project already had an earlier rename. Current-codec
+   selection and admission now require a zero-window projection **per entity**;
+   they still refuse a current codec for the entity with an active transform.
+   After a peer Contract, the exact registered settled plan and unchanged entity
+   projection must match before using that codec.
+2. **Additive epoch closure required the entire historical prefix to be additive.**
+   V6 followed completed Project Contract V5. Epoch closure now binds the entire
+   original prefix but requires only the admitted tail to be additive. Earlier
+   transforming revisions require exact completed Contracts/object counts and
+   independently verified lifecycle evidence. Missing/active prerequisites still
+   refuse; gaps between epoch receipts must be filled by completed Contracts.
+3. **Future-generation observation required a predecessor marked `settled`.**
+   An already complete additive-tail binary failed during the next transforming
+   overlap. It may now observe the exact adjacent successor only when its own
+   original plan is additive; full predecessor bytes, identity, projection and
+   required-Contract relationships remain checked.
+
+The first full gate attempt failed a lease-renewal test whose 30-second outer
+fixture included deliberate 12-second and 6-second pauses plus process setup.
+That scenario now has a dedicated 90-second outer budget; lease, operation and
+boundary deadlines are unchanged. A focused retry separately exposed a short
+400ms request-timeout test applying that budget to startup. Its test-only boundary
+hook now arms the same 400ms budget after verified startup. The complete 11-case
+access suite then passed (465.978s), followed by the uninterrupted full gate.
+
+Evidence:
+
+- `.tesl-stuff/twenty-releases-final.log`: twenty built releases and complete
+  V1–V20 rollout, followed by `.tesl-stuff/twenty-releases-access-and-controls.log`
+  for the stronger finality negative controls and second complete rollout.
+- `.tesl-stuff/twenty-releases-final/`: archived source/binary hashes, per-release
+  PostgreSQL API output, retained database UUID and rollout timings.
+- `.tesl-stuff/twenty-releases-full-gate-retry.log`: main compiled application/kernel
+  package (1436.768s), all subsequent mandatory sections, 127 review-05 cases,
+  87 review-11 cases, both V1–V4 examples, and freshly built V1–V20/95 API tests.
+No phase was resumed or skipped to claim this full-gate pass.
+
+This establishes a longer mixed **row** history, not unrestricted mixed row/queue
+non-additive evolution or high-volume capacity. General typed callback-failure
+remediation and 257-type queue runtime acceptance remain separate work.
+
+### Queue scale continuation
+
+`scripts/measure-migration-queue-scale.py` now separates protected-enqueue setup
+from the 25-second runtime progress target. It enqueues the same 1,024 head jobs
+plus one job for each of 256 later types through normal Request-role operations,
+using at most 32 calls per setup transaction. It measures a bounded longer
+observation without converting that observation limit into a passing SLA.
+
+The race build progressed only about 70 types in 600 seconds. An ordinary Go
+release build progressed 80/257 types in 600.12 seconds, with 1,023 head jobs still
+pending; enqueue setup took 201.98 seconds. This confirms the cost is not chiefly
+the race detector. Source inspection identified repeated nested expansion of the
+same JSON payload inventories in `tesl_row_queue_transition_valid`.
+
+The verifier now materializes the old/new payload relations once **per statement**,
+preserving its exact membership, contract, staging, installation and source-inventory
+comparisons. This is not a cross-transaction admission cache. Nine new protected-SQL
+controls cover exact acceptance, missing/renamed membership, changed source bytes,
+unchanged contracts attempting to consume staged conversion, foreign installation,
+and substituted inventory identity. The complete new suite is now 96 cases and
+passed in 246.302 seconds on freshly built releases.
+
+With this optimization the ordinary release build progressed 228 types in 600.34
+seconds. A subsequent bounded observation reached **all 257 types in 685.73 seconds**,
+with **1,023 head jobs still pending** and the Worker alive. It therefore demonstrates
+eventual service beyond the 256-job turn boundary under this finite workload, but
+**does not meet the unchanged 25-second latency target** or prove fairness under
+arbitrary arrival patterns. Setup remained about 202 seconds. Next profile full
+per-source dispatch validation and protected per-job admission before changing them.
+
+Evidence: `.tesl-stuff/twenty-queue-scale-257{,-release}.log`,
+`twenty-queue-scale-materialized-release.log`,
+`twenty-queue-scale-materialized-complete.log`, and each named output directory's
+`measurement.json` (compiler/binary hashes, runtime budget, per-half-second progress).
+The SQL-regression run is `.tesl-stuff/twenty-scale-transition-checks.log`.
+
+The distinct typed remediation proposal is
+[`dev-docs/queue-execution-recovery.md`](dev-docs/queue-execution-recovery.md).
+It explicitly requires a checked failure-reproducing fixture, immutable predecessor
+and callback identity, exact byte/attempt ownership, a separately audited result,
+and retirement verification. Source spelling and failure-code policy are not yet
+implemented; existing `QueueRepair` has not been silently broadened.
+
+A second full-gate attempt on the optimized tree passed the main compiled-app
+package (1340.515s), the early runtime groups, the complete 58-case conversion
+source suite, and the 11-case typed access suite (433.993s), then stalled during
+nominal-primary-key legacy fixture 18 until the three-hour outer command limit.
+No assertion failure was printed at that point. Its isolated rerun passed in
+97.442 seconds (`.tesl-stuff/twenty-nominal-pk-retry.log`); the stall's root cause
+has not been established. The second attempt is recorded in
+`.tesl-stuff/twenty-releases-full-gate-final.log`, not relabeled as an uninterrupted
+pass. The earlier uninterrupted run verifies the twenty-release composition fixes;
+the later SQL optimization additionally has the fresh 96-case and scale evidence
+above. A fresh complete final-tree gate remains an outstanding verification item.
+
+Final focused checks on the optimized runtime also passed: the existing 127-case
+suite (391.705s), generated/application PostgreSQL conversion/repair group
+(116.953s), six embedding seam tests and three runtime-gate tests. A 17-type
+ordinary-build measurement verified payload contents and unchanged admission
+`2,1,1`, not just type counts. Log: `.tesl-stuff/twenty-scale-final-checks.log`.
+
 ## 1. Scope, method and authority model
 
 Reviewed the path from checked source and retained history to generated adapters,
@@ -75,7 +206,7 @@ all source constructions, all compiler upgrades or every PostgreSQL deployment.
 | R11-01 | Medium, confirmed correctness defect | Current-version quarantine was counted as a historical retirement blocker and could hide unrelated old backlog | **Fixed**, cases 044/045 reproduce both symptoms and now pass |
 | R11-02 | High operational gap | Initially, a data-dependent exhausted callback stopped the whole Worker without durable diagnosis | **Partially addressed after `2d70dae`**: failure audit, peer progress and predecessor-processing witness pass; general typed recovery remains open |
 | R11-03 | High scale-acceptance gap | 257-type build/install/replay is verified, but the full workload does not reach conversion because bulk protected enqueue exceeds its setup deadline | **Open**, prior measured evidence retained; no large-inventory fairness claim |
-| R11-04 | Medium verification gap | A broad fresh targeted set passes, but no fresh uninterrupted default migration gate has completed for this review | **Open evidence item**, do not substitute counts for the complete gate |
+| R11-04 | Medium verification gap | At initial review, a fresh uninterrupted default migration gate was missing | **Addressed in the twenty-release continuation**; complete gate including the new scenario passes |
 | R11-05 | Explicit product scope, not a new defect | Fresh-catalog-first, consecutive queue-only histories and limited malformed-data recovery are narrower than a general migration product | **Retain clear refusal and documentation**; expansion requires separate lifecycle evidence |
 
 ### R11-01 — status confused operational quarantine with retirement blockers

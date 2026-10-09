@@ -29,18 +29,35 @@ alongside the 127 existing cases. An admitted predecessor can resolve a still-
 processable failed job without erasing the audit. General typed callback-failure
 recovery and large-inventory runtime acceptance remain open.
 
+**Twenty-release continuation after `2a034d3`:** the default migration gate passed
+uninterrupted before the later queue SQL optimization, including a real **V1–V20 four-table application history and 95
+PostgreSQL-backed Tesl API tests**. That longer scenario found and fixed three
+composition defects around unchanged-table codecs, additive epochs after completed
+Contracts, and predecessor reads during the next transformation. The feature now
+has substantially stronger evidence for a long-lived mixed row-migration history.
+
+**Queue scale continuation:** bounded measurement now reaches all 257 job types
+while 1,023 jobs of the first type remain pending. It takes 685.73 seconds in an
+ordinary release build, so the 25-second progress target is still open. A
+statement-local SQL optimization improved progress substantially without caching
+admission across transactions; nine new verifier controls bring the new suite to
+96 passing cases. The typed callback-remediation protocol is documented as a
+proposal, not an implemented authority.
+The subsequent full-gate attempt stalled in a nominal-PK fixture; its isolated
+retry passed, but a complete final-tree run is still pending.
+
 ## 1. Decision-oriented status
 
 | Area | Assessment | Implication |
 |---|---|---|
 | Frozen source, nominal types and proof obligations | Strong implemented foundation | Preserve it; ordinary writers and historical codecs remain part of the safety argument. |
-| Row migration lifecycle | Real V1–V4 deployments pass | Retype/WriteBack, Rename, Legacy removal and proof Revalidate work in the tested scope. |
+| Row migration lifecycle | Real V1–V20 multi-table deployment and 95 API tests pass | Interleaved additive and transforming releases preserve twenty data cohorts across four tables, overlap, rejection/repair, retirement and restart. |
 | Queue conversion, repair and retirement | Real repeated deployments pass within restricted history rules | Keep the consecutive queue-only model until broader composition has its own full-lifecycle witness. |
 | Permissions, catalog integrity and replay | Strong targeted adversarial results | Weakened SQL functions/indexes/grants and mismatched staging refuse; batch retries preserve exact history. |
 | Status correctness | New defect fixed | Current-version quarantine remains visible without falsely blocking retirement or hiding old backlog. |
 | Callback failure recovery | Diagnosis and peer isolation implemented; general typed recovery remains open | Recognized execution faults retain original data and durable evidence; healthy jobs proceed. A limited admitted-predecessor processing route is verified. |
-| Scale | Measurable progress, incomplete acceptance | 257-type install/replay passes; protected bulk enqueue still prevents the full fairness workload reaching conversion. |
-| Verification | Broad fresh evidence; full-gate result still pending | Follow-up evidence covers 214 Python cases and focused gates; no new uninterrupted default migration gate or whole-compiler run is claimed. |
+| Scale | Eventual 257-type service measured; latency acceptance remains open | Bounded protected setup completes; all 257 types progress with the busy head still pending, but 685.73s misses the unchanged 25s target. |
+| Verification | Twenty-release tree passed the full gate; later SQL optimization has targeted evidence | The uninterrupted pass includes both V1–V4 examples, 214 adversarial cases and V1–V20/95 API tests. A later full run stalled in nominal-PK fixture 18; isolated retry passed. Final-tree full-gate completion remains pending. |
 
 ## 2. What this review found
 
@@ -147,8 +164,9 @@ scenario and its proof/fencing/recovery obligations.
 2. **Establish scale targets.** Measure startup, enqueue, idle/active conversion,
    history growth and repair depth with both race and ordinary release builds.
    Finish the 257-type runtime scenario with stated latency and resource budgets.
-3. **Complete the full gate.** Run the entire mandatory gate uninterrupted on the
-   final tree. Review 11's new suite is now wired into it.
+3. **Preserve the now-green full gate.** Keep review 11 and the twenty-release
+   simulation mandatory; finish a fresh complete run after the later queue SQL
+   optimization. Its isolated nominal-PK retry passed, but that is not a full gate.
 4. **Then widen composition.** Choose a representative mixed-history application
    and require full overlap, claim, repair, restart and retirement evidence.
 

@@ -96,7 +96,7 @@ func RegisterCompiledRowCurrentStorage[Row any](ref PgRowCurrentSourceRef, codec
 	}
 	plan := physical.versions[d.SchemaVersion-1]
 	entity := plan.entity(d.Entity)
-	if plan.compiled != ref.compiled || plan.settled || len(plan.windows) != 0 || entity == nil || entity.generation != d.Generation || entity.typeContractHash != d.TypeContractHash || plan.schemaSnapshotHash != d.SchemaSnapshot || plan.storageSnapshotHash != d.StorageSnapshot || len(entity.aliases) != 0 || len(entity.reverseWrites) != 0 || len(entity.columns) != len(entity.projection) || entity.insertGeneration != entity.generation {
+	if plan.compiled != ref.compiled || plan.settled || plan.window(d.Entity) != nil || entity == nil || entity.generation != d.Generation || entity.typeContractHash != d.TypeContractHash || plan.schemaSnapshotHash != d.SchemaSnapshot || plan.storageSnapshotHash != d.StorageSnapshot || len(entity.aliases) != 0 || len(entity.reverseWrites) != 0 || len(entity.columns) != len(entity.projection) || entity.insertGeneration != entity.generation {
 		panic("database: current row codec requires a complete zero-window physical projection")
 	}
 	registrations := compiledRowCurrentRegistrations[ref.compiled]
@@ -125,8 +125,16 @@ func (storage *PgRowCurrentStorage[Row]) check(a *pgRowTransactionAdmission, wri
 		return fmt.Errorf("current row codec requires sealed application preflight")
 	}
 	r := storage.registration
-	if a.database != r.database || a.plan != r.plan || a.window != r.plan || a.entity != r.entity {
+	if a.database != r.database || a.window != r.plan {
 		return fmt.Errorf("current row operation requires its exact admitted current projection")
+	}
+	if a.plan != r.plan {
+		settled, err := pgCompiledRowSettledPlan(r.database, r.plan.version)
+		if err != nil || a.plan != settled || a.entity != settled.entity(r.entity.identity) || !reflect.DeepEqual(a.entity, r.entity) {
+			return fmt.Errorf("current row operation lost its unchanged projection after peer retirement")
+		}
+	} else if a.entity != r.entity {
+		return fmt.Errorf("current row operation requires its exact admitted entity")
 	}
 	return nil
 }

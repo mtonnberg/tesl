@@ -163,7 +163,7 @@ codec Unchanged {
         shutil.rmtree(self.data)
         shutil.rmtree(self.cluster)
 
-    def build_fairness_payloads(self, family="fair", extra_types=1):
+    def build_fairness_payloads(self, family="fair", extra_types=1, race=True):
         """Independently changed nominal job types, emitted as ordinary applications."""
         names = ["Other"] if extra_types == 1 else [f"Other{n:03}" for n in range(extra_types)]
         target_family = CONFIG.artifacts / family
@@ -190,7 +190,7 @@ codec Unchanged {
             for file in source.rglob("*.tesl"):
                 require(run([CONFIG.compiler, "agent-context", file], env=self.env, timeout=build_timeout))
             require(run([CONFIG.compiler, "--backend", "go", entry, "--out", generated], env=self.env, timeout=build_timeout))
-            require(run(["go", "build", "-race", "-o", target / "app", "./cmd/app"], cwd=generated, env=self.env, timeout=build_timeout))
+            require(run(["go", "build", *(["-race"] if race else []), "-o", target / "app", "./cmd/app"], cwd=generated, env=self.env, timeout=build_timeout))
         emit(1)
         preview = runpy.run_path(str(ROOT / "example/db-three-upgrades/run.py"))["apply_preview"]
         preview(CONFIG.compiler, entry, self.env, "generate", "--new-revision", timeout=build_timeout)

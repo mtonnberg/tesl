@@ -3,6 +3,7 @@
 package teslrt
 
 import (
+	"context"
 	"os"
 	"testing"
 	"time"
@@ -14,6 +15,12 @@ func TestPgRowFinalityRenewsOutsideBatchesAndWaitsForOwnCAS(t *testing.T) {
 		t.Skip("actual compiler-generated V1/V2 Contract apps required")
 	}
 	f, request := pgNewWorkerTest(t)
+	// This scenario deliberately holds execution for 12s + 6s, in addition to
+	// installing and launching three native processes. Give the whole scenario
+	// its own budget; lease, operation and per-boundary deadlines stay unchanged.
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	t.Cleanup(cancel)
+	f.ctx = ctx
 	f.namespace = "notes"
 	pgForwardNativeRun(t, f, root, "v1", "install", true)
 	pgForwardNativeRun(t, f, root, "v1", "worker", true)

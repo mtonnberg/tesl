@@ -99,28 +99,30 @@ begin
  where t.version=v) then return false; end if;
  -- First path retains the complete queue/job membership; additions and
  -- removals need their own full source authority, not a changed-payload receipt.
- if exists(select 1 from pg_catalog.jsonb_array_elements(new_contracts) nq
-  cross join lateral pg_catalog.jsonb_array_elements(nq->'payloads') np
-  where not exists(select 1 from pg_catalog.jsonb_array_elements(old_contracts) oq
-    cross join lateral pg_catalog.jsonb_array_elements(oq->'payloads') op
-    where nq->>'queue'=oq->>'queue' and np->>'job'=op->>'job')) then return false; end if;
- if exists(select 1 from pg_catalog.jsonb_array_elements(old_contracts) oq
-  cross join lateral pg_catalog.jsonb_array_elements(oq->'payloads') op
-  where not exists(select 1 from pg_catalog.jsonb_array_elements(new_contracts) nq
-    cross join lateral pg_catalog.jsonb_array_elements(nq->'payloads') np
-    where nq->>'queue'=oq->>'queue' and np->>'job'=op->>'job'
-     and (np=op or exists(select 1 from ` + ns + `tesl_row_queue_conversion_staging c
+  -- Expand each already-validated inventory once per statement. Repeated nested
+  -- JSON-array scans used to multiply complete payload documents per staged job.
+  -- This is no admission cache: all exact comparisons run in this snapshot.
+  return (with old_payloads as materialized (
+    select q->>'queue' as queue,p->>'job' as job,p as payload
+    from pg_catalog.jsonb_array_elements(old_contracts) q
+    cross join lateral pg_catalog.jsonb_array_elements(q->'payloads') p),
+   new_payloads as materialized (
+    select q->>'queue' as queue,p->>'job' as job,p as payload
+    from pg_catalog.jsonb_array_elements(new_contracts) q
+    cross join lateral pg_catalog.jsonb_array_elements(q->'payloads') p)
+   select not exists(select 1 from new_payloads np where not exists(
+    select 1 from old_payloads op where op.queue=np.queue and op.job=np.job))
+   and not exists(select 1 from old_payloads op where not exists(
+    select 1 from new_payloads np where np.queue=op.queue and np.job=op.job
+     and (np.payload=op.payload or exists(select 1 from ` + ns + `tesl_row_queue_conversion_staging c
       join ` + ns + `tesl_schema_meta m on m.id=1 and m.database_uuid=c.database_uuid and m.fence_ns=c.fence_ns
       join ` + ns + `tesl_row_queue_sources source on source.version=c.from_version and source.inventory_hash=c.inventory_hash and source.expansion_hash=c.expansion_hash
-      where c.from_version=v-1 and c.to_version=v and c.revision=0 and c.queue=oq->>'queue' and c.job_type=op->>'job'
-       and c.old_contract=pg_catalog.decode(op->>'contract','hex') and c.new_contract=pg_catalog.decode(np->>'contract','hex'))))) then return false; end if;
- if exists(select 1 from ` + ns + `tesl_row_queue_conversion_staging c where c.from_version=v-1 and c.revision=0
-  and not exists(select 1 from pg_catalog.jsonb_array_elements(old_contracts) oq cross join lateral pg_catalog.jsonb_array_elements(oq->'payloads') op
-   join pg_catalog.jsonb_array_elements(new_contracts) nq on nq->>'queue'=oq->>'queue'
-   cross join lateral pg_catalog.jsonb_array_elements(nq->'payloads') np
-   where oq->>'queue'=c.queue and op->>'job'=c.job_type and np->>'job'=c.job_type and np<>op
-    and c.old_contract=pg_catalog.decode(op->>'contract','hex') and c.new_contract=pg_catalog.decode(np->>'contract','hex'))) then return false; end if;
- return true;
+      where c.from_version=v-1 and c.to_version=v and c.revision=0 and c.queue=op.queue and c.job_type=op.job
+       and c.old_contract=pg_catalog.decode(op.payload->>'contract','hex') and c.new_contract=pg_catalog.decode(np.payload->>'contract','hex')))))
+   and not exists(select 1 from ` + ns + `tesl_row_queue_conversion_staging c where c.from_version=v-1 and c.revision=0
+    and not exists(select 1 from old_payloads op join new_payloads np on np.queue=op.queue and np.job=op.job
+     where op.queue=c.queue and op.job=c.job_type and np.payload<>op.payload
+      and c.old_contract=pg_catalog.decode(op.payload->>'contract','hex') and c.new_contract=pg_catalog.decode(np.payload->>'contract','hex'))));
 end`}}
 }
 

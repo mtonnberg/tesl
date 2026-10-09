@@ -81,7 +81,7 @@ func pgExecuteRowEpoch(parent context.Context, conn *pgx.Conn, b *pgRowBaseline,
 	ctx, cancel := context.WithTimeout(parent, pgLeaseTimeout())
 	defer cancel()
 	result = pgRowEpochPreview{Version: 1, Kind: "schema-epoch-preview", Database: b.history.Database, ThroughVersion: through, Forced: force, DryRun: dryRun, RecentInstances: []PgMigrationInstanceStatus{}}
-	if through != b.history.CurrentVersion || b.target == nil || b.target.version != through {
+	if through != b.history.CurrentVersion || b.target == nil || b.target.version != through || !pgRowEpochPreserving(b.target) {
 		return result, fmt.Errorf("close epoch requires the current compiled additive version")
 	}
 	plans := map[int]*pgRowPhysicalPlan{}
@@ -90,8 +90,8 @@ func pgExecuteRowEpoch(parent context.Context, conn *pgx.Conn, b *pgRowBaseline,
 		if err != nil {
 			return result, err
 		}
-		if plan == nil || !pgRowEpochPreserving(plan) || plan.requiresContractVersion != 0 || plan.settled {
-			return result, fmt.Errorf("close epoch requires purely additive compiled history")
+		if plan == nil || plan.settled {
+			return result, fmt.Errorf("close epoch requires complete original compiled history")
 		}
 		plans[version] = plan
 	}

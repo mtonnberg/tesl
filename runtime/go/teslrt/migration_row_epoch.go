@@ -44,8 +44,9 @@ func pgRowEpochDocument(b *pgRowBaseline, state PgMigrationControlState, from, t
 	prefix := make([]pgRowCanonical, 0, through)
 	for version := 1; version <= through; version++ {
 		plan := plans[version]
-		if plan == nil || plan.version != version || plan.family != b.history.Family || plan.namespace != b.history.Namespace || !pgRowEpochPreserving(plan) || plan.requiresContractVersion != 0 || plan.settled || !pgMigrationDigest(plan.hash) {
-			return "", "", fmt.Errorf("epoch retirement requires a complete purely additive physical prefix")
+		if plan == nil || plan.version != version || plan.family != b.history.Family || plan.namespace != b.history.Namespace || plan.settled || !pgMigrationDigest(plan.hash) ||
+			(version > from && (!pgRowEpochPreserving(plan) || plan.requiresContractVersion > from)) {
+			return "", "", fmt.Errorf("epoch retirement requires a complete physical prefix and purely additive admitted tail")
 		}
 		prefix = append(prefix, pgRowList(pgRowAtom(strconv.Itoa(version)), pgRowAtom(plan.hash)))
 	}
@@ -66,6 +67,30 @@ func pgReadRowEpochRetirements(ctx context.Context, tx pgx.Tx, b *pgRowBaseline,
 	if err := tx.QueryRow(ctx, "select database_uuid::text,fence_ns from "+ns+"tesl_schema_meta where id=1").Scan(&state.DatabaseUUID, &state.FenceNamespace); err != nil {
 		return nil, err
 	}
+	// Gaps between additive epochs are permitted only for exact completed row
+	// Contracts. The enclosing history verifier independently checks their full
+	// source, object prefix, settled catalog and lifecycle provenance.
+	closed := map[int]bool{}
+	contractRows, err := tx.Query(ctx, "select c.version,c.window_hash from "+ns+"tesl_row_contracts c join "+ns+"tesl_schema_versions v on v.version=c.version and v.step='contracted' and v.artefact_hash=c.contract_hash")
+	if err != nil {
+		return nil, err
+	}
+	for contractRows.Next() {
+		var version int
+		var hash string
+		if err := contractRows.Scan(&version, &hash); err != nil {
+			contractRows.Close()
+			return nil, err
+		}
+		if plan := plans[version]; plan != nil && !pgRowEpochPreserving(plan) && plan.hash == hash {
+			closed[version] = true
+		}
+	}
+	if err := contractRows.Err(); err != nil {
+		contractRows.Close()
+		return nil, err
+	}
+	contractRows.Close()
 	rows, err := tx.Query(ctx, "select old_min,through_version,retirement,retirement_hash,compiler_abi,forced from "+ns+"tesl_row_epochs order by through_version")
 	if err != nil {
 		return nil, err
@@ -84,6 +109,9 @@ func pgReadRowEpochRetirements(ctx context.Context, tx pgx.Tx, b *pgRowBaseline,
 			return nil, err
 		}
 		epoch.document = hex.EncodeToString(raw)
+		for expectedFrom < epoch.from && closed[expectedFrom+1] {
+			expectedFrom++
+		}
 		if epoch.from != expectedFrom || epoch.document != document || epoch.hash != hash || !strings.HasPrefix(epoch.executorABI, "tesl-source-abi-v1:") || !pgMigrationDigest(strings.TrimPrefix(epoch.executorABI, "tesl-source-abi-v1:")) {
 			return nil, fmt.Errorf("epoch receipt differs from exact additive retirement chain")
 		}

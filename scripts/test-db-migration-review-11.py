@@ -551,6 +551,43 @@ end $block$; {'commit' if commit else 'rollback'};"""
         self.assertEqual(LAB.sql(self.db, "select count(*) from mail.tesl_jobs where schema_version=1"), "2")
 
 
+class TransitionReview(DatabaseCase):
+    def inventories(self):
+        return [json.loads(LAB.sql(self.db, f"select mail.tesl_queue_inventory_json({version})")) for version in (1, 2)]
+
+    def valid(self, before, after):
+        return LAB.sql(self.db, f"select mail.tesl_row_queue_transition_valid({literal(json.dumps(before))}::jsonb,{literal(json.dumps(after))}::jsonb,2)", "review_request") == "t"
+
+    def test_096_exact_transition_stays_valid_and_read_only(self):
+        before, after = self.inventories()
+        state = self.snapshot()
+        self.assertTrue(self.valid(before, after))
+        self.assertEqual(self.snapshot(), state)
+
+
+def transition_case(mutation):
+    def test(self):
+        before, after = self.inventories()
+        mutation(self, before, after)
+        state = self.snapshot()
+        self.assertFalse(self.valid(before, after))
+        self.assertEqual(self.snapshot(), state)
+    return test
+
+
+for number, (name, mutation) in enumerate([
+    ("missing_old_member", lambda self, before, after: before[0]["payloads"].clear()),
+    ("missing_target_member", lambda self, before, after: after[0]["payloads"].clear()),
+    ("target_job_substituted", lambda self, before, after: after[0]["payloads"][0].update(job="Other")),
+    ("target_queue_substituted", lambda self, before, after: after[0].update(queue="OtherQueue")),
+    ("source_contract_substituted", lambda self, before, after: before[0]["payloads"][0].update(contract="00")),
+    ("unchanged_cannot_consume_staged_converter", lambda self, before, after: after[0].update(payloads=before[0]["payloads"])),
+    ("foreign_staging_identity", lambda self, before, after: LAB.sql(self.db, "update mail.tesl_row_queue_conversion_staging set database_uuid=gen_random_uuid()")),
+    ("staged_source_inventory_substituted", lambda self, before, after: LAB.sql(self.db, "update mail.tesl_row_queue_conversion_staging set inventory_hash=repeat('a',64)")),
+], 88):
+    setattr(TransitionReview, f"test_{number:03}_transition_{name}", transition_case(mutation))
+
+
 def main():
     global CONFIG, LAB
     parser = argparse.ArgumentParser(description=__doc__)
@@ -572,7 +609,7 @@ def main():
         LAB.prepare()
         suite = unittest.TestSuite()
         names = []
-        for cls in (CatalogReview, RoleReview, StagingReview, LifecycleReview, SourceReview, RowSourceReview, ExecutionReview):
+        for cls in (CatalogReview, RoleReview, StagingReview, LifecycleReview, SourceReview, RowSourceReview, ExecutionReview, TransitionReview):
             for name in unittest.defaultTestLoader.getTestCaseNames(cls):
                 if CONFIG.match in name:
                     suite.addTest(cls(name))

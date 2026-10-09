@@ -18,10 +18,16 @@ begin
  if (select count(*) from ` + ns + `tesl_row_physical)<>through_version or
  exists(select 1 from pg_catalog.generate_series(1,through_version) physical_version(value) where not exists(
  select 1 from ` + ns + `tesl_row_physical p join ` + ns + `tesl_schema_versions receipt on receipt.version=p.version and receipt.step='expanded'
- where p.version=physical_version.value and p.epoch_preserving and p.contract_hash=physical_hashes[physical_version.value])) or
- exists(select 1 from ` + ns + `tesl_row_processing) or exists(select 1 from ` + ns + `tesl_row_contracts) or
- exists(select 1 from ` + ns + `tesl_schema_backfill_shards) then
- raise exception 'tesl: close epoch requires complete purely additive published history'; end if;
+ where p.version=physical_version.value and p.contract_hash=physical_hashes[physical_version.value]
+ and (p.epoch_preserving or (p.version<=old_min and exists(
+  select 1 from ` + ns + `tesl_row_contracts c join ` + ns + `tesl_schema_versions done
+   on done.version=c.version and done.step='contracted' and done.artefact_hash=c.contract_hash
+  where c.version=p.version and c.window_hash=p.contract_hash
+   and (select count(*) from ` + ns + `tesl_row_contract_objects o where o.version=c.version)=c.operation_count))))) or
+ exists(select 1 from ` + ns + `tesl_row_processing where version>old_min) or
+ exists(select 1 from ` + ns + `tesl_row_contracts where version>old_min) or
+ exists(select 1 from ` + ns + `tesl_schema_backfill_shards where version>old_min or state<>'final') then
+ raise exception 'tesl: close epoch requires completed prior Contracts and a purely additive admitted tail'; end if;
  for old in old_min..through_version-1 loop
  if not exists(select 1 from pg_catalog.pg_locks where locktype='advisory' and pid=pg_catalog.pg_backend_pid() and granted and
  classid=fence::oid and objid=old::oid and objsubid=2 and mode='ExclusiveLock') or

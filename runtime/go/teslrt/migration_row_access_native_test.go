@@ -81,7 +81,7 @@ func TestPgRowAccessActualApp(t *testing.T) {
 	if err := request.QueryRow(f.ctx, "select _tesl_v,count,title from notes.notes where id='one'").Scan(&marker, &count, &title); err != nil || marker != 2 || count != 7 || title != "edited" {
 		t.Fatal("handler locked RMW", marker, count, title, err)
 	}
-	timeoutApp := start("v2", "TESL_PG_POOL_LEASE_TIMEOUT_MS=400")
+	timeoutApp := start("v2", "TESL_MIGRATION_TEST_REQUEST_TIMEOUT_MS=400")
 	locked, err := request.Begin(f.ctx)
 	if err != nil {
 		t.Fatal(err)

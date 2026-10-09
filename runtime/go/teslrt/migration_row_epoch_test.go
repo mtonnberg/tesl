@@ -34,12 +34,23 @@ func TestRowEpochRetirementIdentityAndCompletePrefix(t *testing.T) {
 	if _, _, err := pgRowEpochDocument(b, state, 1, 3, false, plans); err == nil {
 		t.Fatal("a transforming predecessor was treated as an additive epoch")
 	}
+	// A description may bind a closed transforming prefix without treating it
+	// as an additive slot. Runtime publication separately requires its Contract.
+	plans[3].requiresContractVersion = 2
+	if _, _, err := pgRowEpochDocument(b, state, 2, 3, false, plans); err != nil {
+		t.Fatal("additive tail lost its complete transforming prefix", err)
+	}
+	plans[3].requiresContractVersion = 3
+	if _, _, err := pgRowEpochDocument(b, state, 2, 3, false, plans); err == nil {
+		t.Fatal("unclosed prerequisite inside additive tail accepted")
+	}
+	plans[3].requiresContractVersion = 0
 	// A pure table Drop has no row transform windows, but is destructive and
 	// requires its exact table Contract rather than additive epoch retirement.
 	plans[2].windows = nil
 	plans[2].retirements = []pgRowPhysicalRetirement{{entity: "Archive"}}
 	for _, force := range []bool{false, true} {
-		if _, _, err := pgRowEpochDocument(b, state, 1, 3, force, plans); err == nil || !strings.Contains(err.Error(), "purely additive physical prefix") {
+		if _, _, err := pgRowEpochDocument(b, state, 1, 3, force, plans); err == nil || !strings.Contains(err.Error(), "purely additive admitted tail") {
 			t.Fatal("table retirement was treated as an additive epoch", force, err)
 		}
 	}

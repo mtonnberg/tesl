@@ -17,13 +17,14 @@ func pgExpectedRowCurrentCodecs(base PgRowSourceInventory) map[string]PgRowSourc
 	if len(base.Versions) == 0 {
 		return expected
 	}
+	transforming := map[string]bool{}
 	for _, d := range base.Transforms {
 		if d.MigrationVersion == base.CurrentVersion {
-			return expected
+			transforming[d.Entity] = true
 		}
 	}
 	for _, e := range base.Versions[len(base.Versions)-1].Entities {
-		if e.Generation > 1 {
+		if e.Generation > 1 && !transforming[e.Entity] {
 			expected[e.Entity] = e
 		}
 	}
