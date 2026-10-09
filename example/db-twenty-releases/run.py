@@ -94,7 +94,9 @@ def build(output, compiler, env, through, resume=False, from_built=None):
         print(f"Built V{version}: {RELEASES[version]} ({record['seconds']:.2f}s)", flush=True)
 
 
-def exercise(output, env, through):
+def exercise(artifacts, env, through, evidence=None, seed_tasks=0):
+    output = evidence or artifacts
+    output.mkdir(parents=True, exist_ok=True)
     data = Path(tempfile.mkdtemp(prefix="postgres-data-", dir=output))
     sockets = Path(tempfile.mkdtemp(prefix="tracker20-", dir="/tmp"))
     processes, evidence = [], []
@@ -106,7 +108,7 @@ def exercise(output, env, through):
                     LIVED_OWNER="lived_owner", LIVED_WORKER="lived_worker", LIVED_REQUEST="lived_request",
                     LIVED_DDL=f"host={sockets} dbname=tracker20 user={role}", LIVED_HTTP_PORT=str(port))
     def schema(version, role, *args, ok=True):
-        result = subprocess.run([str(output / f"v{version}/app"), "--schema", *args, "--json"], env=appenv(role), text=True, capture_output=True, timeout=60)
+        result = subprocess.run([str(artifacts / f"v{version}/app"), "--schema", *args, "--json"], env=appenv(role), text=True, capture_output=True, timeout=60)
         if ok and result.returncode:
             raise RuntimeError(f"V{version} {' '.join(args)}:\n{result.stdout}\n{result.stderr}")
         return result
@@ -132,7 +134,7 @@ def exercise(output, env, through):
             sock.bind(("127.0.0.1", 0))
             port = sock.getsockname()[1]
         log = open(output / f"v{version}-{'worker' if worker else 'request'}.log", "w+")
-        args = [str(output / f"v{version}/app")]
+        args = [str(artifacts / f"v{version}/app")]
         if worker:
             args += ["--schema", "worker", "--json"]
         proc = subprocess.Popen(args, env=appenv("lived_worker" if worker else "lived_request", port), stdout=log, stderr=log)
@@ -212,10 +214,15 @@ def exercise(output, env, through):
         request(current_port, "POST", "/projects/seed-project", {"name": "Original project"})
         request(current_port, "POST", "/members/seed-member", {"name": "Original member"})
         request(current_port, "POST", "/tasks/seed-task", {"projectId": "seed-project", "title": "Seed task", "content": "seed-content"})
+        seeded = time.monotonic()
+        for index in range(seed_tasks):
+            request(current_port, "POST", f"/tasks/stress-{index:06}", {"projectId": "seed-project", "title": "Stress task", "content": "stress-content"})
+        (output / "seed-workload.json").write_text(json.dumps({"extraTasks": seed_tasks, "seedSeconds": time.monotonic()-seeded, "artifacts": str(artifacts)}, indent=2)+"\n")
         expected = "seed-content"
         identity = sql("select database_uuid::text from tracker.tesl_schema_meta")
         for version in range(1, through+1):
             began = time.monotonic()
+            (output / f"v{version}").mkdir(exist_ok=True)
             predecessor, previous_port = (current, current_port) if version > 1 else (None, None)
             if version > 1:
                 edit(previous_port, f"before-v{version}")
@@ -240,7 +247,7 @@ def exercise(output, env, through):
             if version == 6:
                 request(current_port, "POST", "/audits/seed-audit", {"name": "Original audit"})
             api_env = dict(appenv("lived_request"), LIVED_API_DATABASE="1", LIVED_EXPECT_CONTENT=expected)
-            tests = command([output / f"v{version}/api.test", "-test.run", "^TestTeslApi", "-test.v", "-test.timeout=60s"], env=api_env, timeout=90)
+            tests = command([artifacts / f"v{version}/api.test", "-test.run", "^TestTeslApi", "-test.v", "-test.timeout=60s"], env=api_env, timeout=90)
             (output / f"v{version}/api-postgres.log").write_text(tests)
             count = 4 if version < 6 else 5
             if "postgres-api-tests: retained database bound" not in tests or tests.count("--- PASS: TestTeslApi") != count or "--- SKIP:" in tests:
@@ -269,12 +276,19 @@ def exercise(output, env, through):
             stop(current)
             current, current_port = start(version)
             verify_cohorts(current_port, version)
-            record = {"version": version, "change": RELEASES[version], "apiTests": count, "cohorts": version, "seconds": time.monotonic()-began, "databaseUUID": identity}
+            if seed_tasks:
+                for index in sorted({0, seed_tasks//2, seed_tasks-1}):
+                    item = request(current_port, "GET", f"/tasks/stress-{index:06}")
+                    assert item["title"] == "Stress task" and item["content"] == "stress-content", item
+                metadata = "metadata" if version < 7 else "metadata__v7" if version < 13 else "metadata__v13"
+                key = "text" if version < 13 else "body"
+                assert int(sql(f"select count(*) from tracker.tasks where id like 'stress-%' and title='Stress task' and {metadata}->>'{key}'='stress-content'")) == seed_tasks
+            record = {"version": version, "change": RELEASES[version], "apiTests": count, "cohorts": version, "extraTasks": seed_tasks, "seconds": time.monotonic()-began, "databaseUUID": identity}
             evidence.append(record)
             (output / "rollout.json").write_text(json.dumps(evidence, indent=2)+"\n")
             print(f"PASS V{version}: {count} Tesl API tests, {version} retained cohorts, overlap, finality and restart", flush=True)
         counts = {table: int(sql(f"select count(*) from tracker.{table}")) for table in ("projects", "tasks", "members")}
-        assert all(value == through+1 for value in counts.values()), counts
+        assert counts == {"projects": through+1, "members": through+1, "tasks": through+1+seed_tasks}, counts
         if through >= 6:
             assert int(sql("select count(*) from tracker.audits")) == through-4
         print(f"PASS: V1–V{through} retained multi-table PostgreSQL lifecycle", flush=True)
@@ -296,9 +310,13 @@ def main():
     parser.add_argument("--run-built", action="store_true")
     parser.add_argument("--resume-build", action="store_true")
     parser.add_argument("--recompile-from", type=Path, help="rebuild exact hash-verified source snapshots from a prior run")
+    parser.add_argument("--seed-tasks", type=int, default=0, help="additional V1 tasks created through HTTP for row-volume measurement (0–10000)")
+    parser.add_argument("--evidence", type=Path, help="separate rollout logs from immutable built releases")
     args = parser.parse_args()
     if not 1 <= args.through <= 20 or args.build_only and args.run_built:
         parser.error("choose 1–20 versions and either build-only or run-built")
+    if not 0 <= args.seed_tasks <= 10000:
+        parser.error("--seed-tasks must be between 0 and 10000")
     output, compiler = args.output.resolve(), args.compiler.resolve()
     if output.exists() and not (args.run_built or args.resume_build):
         parser.error("use a new output directory, --run-built or --resume-build")
@@ -307,7 +325,7 @@ def main():
     if not args.run_built:
         build(output, compiler, env, args.through, args.resume_build, args.recompile_from.resolve() if args.recompile_from else None)
     if not args.build_only:
-        exercise(output, env, args.through)
+        exercise(output, env, args.through, args.evidence.resolve() if args.evidence else None, args.seed_tasks)
 
 
 if __name__ == "__main__":

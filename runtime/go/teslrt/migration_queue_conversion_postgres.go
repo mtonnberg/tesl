@@ -38,7 +38,7 @@ type pgQueueConversionStored struct {
 // live-claimed, malformed or rejected jobs can still prevent retirement.
 type pgQueueConversionBatch struct {
 	Selected, Converted, Rejected, Invalid, Replayed int
-	Failed                                           int
+	Failed, Discarded                                int
 	NoEligible                                       bool
 }
 
@@ -318,6 +318,7 @@ func pgQueueConversionCandidateBinding(source *pgQueueConversionSource) ([]byte,
 	}
 	return json.Marshal(map[string]any{"document": source.spec.document, "parent": parent, "revision": source.repairRevision,
 		"family": source.family, "queue": source.queue, "job": source.job, "from": source.fromVersion, "to": source.toVersion,
+		"policy": source.policy, "discardReason": source.discardReason,
 		"root": root.spec.digest, "old": hex.EncodeToString(pgQueueConversionPayloadContract(source, false)),
 		"new": hex.EncodeToString(pgQueueConversionPayloadContract(source, true))})
 }
@@ -667,6 +668,9 @@ func pgApplyQueueConversionCandidateTx(ctx context.Context, tx pgx.Tx, scope pgQ
 	if source == nil || scope.namespace == "" || scope.identity == "" {
 		return stored, fmt.Errorf("queue conversion database binding is missing")
 	}
+	if !scope.application && (source.policy == "execution-failed" || source.policy == "unconverted") {
+		return stored, fmt.Errorf("operational remediation requires the checked application history")
+	}
 	var original, reason, transaction, outcome string
 	var sequence int64
 	binding, err := pgQueueConversionCandidateBinding(source)
@@ -684,6 +688,17 @@ func pgApplyQueueConversionCandidateTx(ctx context.Context, tx pgx.Tx, scope pgQ
 	if outcome != "" {
 		return pgQueueConversionStored{Kind: outcome, Replayed: true}, nil
 	}
+	if scope.application && source.policy == "unconverted" {
+		var discarded bool
+		err := tx.QueryRow(ctx, "select "+scope.function("discard")+"($1,$2,$3,$4,$5,$6,$7::jsonb)", scope.identity, source.spec.digest, jobID, sequence, transaction, original, string(binding)).Scan(&discarded)
+		if err != nil {
+			return stored, err
+		}
+		if !discarded {
+			return stored, fmt.Errorf("queue discard lost exact attempt ownership")
+		}
+		return pgQueueConversionStored{Kind: "discarded"}, nil
+	}
 	var result QueueConversionResult
 	if source.parentDigest == "" {
 		stopExecution := BeginMigrationExecution(ctx)
@@ -695,7 +710,11 @@ func pgApplyQueueConversionCandidateTx(ctx context.Context, tx pgx.Tx, scope pgQ
 		compiledQueueConversionSources.RUnlock()
 		stopExecution := BeginMigrationExecution(ctx)
 		defer stopExecution()
-		result, err = conversion.Repair(QueueConversionResult{kind: "migration-rejected", original: original, reason: reason, source: parent})
+		kind := "migration-rejected"
+		if source.policy == "execution-failed" {
+			kind = "execution-failed"
+		}
+		result, err = conversion.Repair(QueueConversionResult{kind: kind, original: original, reason: reason, source: parent})
 	}
 	if err != nil {
 		if scope.application && ctx.Err() == nil {
@@ -803,7 +822,7 @@ func pgRunQueueConversionCandidateBatch(ctx context.Context, conn *pgx.Conn, sco
 			if err != nil {
 				return false, 0, pgQueueConversionStored{}, fmt.Errorf("queue conversion job %s: %w", id, err)
 			}
-			if result.Kind != "converted" && result.Kind != "migration-rejected" && result.Kind != "payload-invalid" && !(scope.application && result.Kind == "execution-failed") {
+			if result.Kind != "converted" && result.Kind != "migration-rejected" && result.Kind != "payload-invalid" && !(scope.application && (result.Kind == "execution-failed" || result.Kind == "discarded")) {
 				return false, 0, pgQueueConversionStored{}, fmt.Errorf("selected queue conversion job %s lost its locked source", id)
 			}
 			if err := tx.Commit(ctx); err != nil {
@@ -833,6 +852,8 @@ func pgRunQueueConversionCandidateBatch(ctx context.Context, conn *pgx.Conn, sco
 			progress.Invalid++
 		case "execution-failed":
 			progress.Failed++
+		case "discarded":
+			progress.Discarded++
 		}
 	}
 	return progress, nil

@@ -26,6 +26,20 @@ bounds a development probe; the default and acceptance target are 20.
 incomplete artifacts. `--recompile-from OLD_OUTPUT` re-emits hash-verified source
 snapshots with the current compiler; it does not modify emitted identities.
 
+For a controlled row-volume probe, reuse the same binaries, retain more V1 Tasks,
+and write evidence separately:
+
+```sh
+python3 example/db-twenty-releases/run.py --output .tesl-stuff/tracker-twenty \
+  --run-built --seed-tasks 1000 --evidence .tesl-stuff/tracker-twenty-volume1000
+```
+
+The extra Tasks are created through the V1 HTTP API and retained through every
+release. All 95 API tests still run. After each finality boundary, typed HTTP reads
+sample them and SQL checks the complete retained set. `seed-workload.json` records
+seeding time; `rollout.json` records the extra-row count and phase timings. This
+is a modest volume comparison, not a million-row throughput or latency guarantee.
+
 The runner owns its PostgreSQL cluster and roles. Data/WAL live under the output
 directory; only a short socket path is allocated under `/tmp`. It never
 reuses a developer's application database. Heavy runs on a shared host can use
@@ -80,7 +94,8 @@ revalidates its complete history. Pure converter fixtures run before deployment.
   observer **after** finality. Later releases must preserve them through retyping,
   renaming and unrelated-table changes. These fixture writes are distinct from the
   application's ordinary HTTP cohort creation and edits.
-- Final counts are 21 Projects, 21 Tasks, 21 Members and 16 Audit rows. Deleted
+- Default final counts are 21 Projects, 21 Tasks, 21 Members and 16 Audit rows
+  (plus `--seed-tasks` Tasks when requested). Deleted
   temporary tasks and rejected/duplicate requests must not add rows.
 
 The generated test launcher has one reviewed test-only change: its `m.Run()` call

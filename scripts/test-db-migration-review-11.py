@@ -36,6 +36,7 @@ class DatabaseCase(unittest.TestCase):
         tables = ["tesl_schema_state", "tesl_schema_versions", "tesl_row_queue_conversion_staging",
                   "tesl_row_queue_target_staging", "tesl_row_queue_conversion_receipts",
                   "tesl_row_queue_conversion_attempts", "tesl_row_queue_conversion_failures",
+                  "tesl_row_queue_discards",
                   "tesl_row_queue_retirements", "tesl_row_queue_restamps", "tesl_jobs"]
         return {table: LAB.sql(self.db, f"select coalesce(jsonb_agg(to_jsonb(t) order by to_jsonb(t)::text),'[]') from mail.{table} t") for table in tables}
 
@@ -172,6 +173,15 @@ class StagingReview(DatabaseCase):
         before = self.snapshot()
         self.refused(self.install("review_request"))
         self.assertEqual(self.snapshot(), before)
+
+    def test_112_shared_open_checks_late_source_before_earlier_job_mutation(self):
+        LAB.sql(self.db, "select mail.tesl_queue_enqueue(1,'Jobs','Delivery','head','{\"oldText\":\"kept\"}')", "review_request")
+        LAB.sql(self.db, "update mail.tesl_row_queue_conversion_staging set policy='rejected' where job_type='Other000'")
+        before = LAB.sql(self.db, "select row_to_json(j)::text from mail.tesl_jobs j")
+        result = LAB.schema(self.db, "v2", "worker", family=self.family)
+        self.refused(result)
+        self.assertEqual(LAB.sql(self.db, "select row_to_json(j)::text from mail.tesl_jobs j"), before)
+        self.assertEqual(LAB.sql(self.db, "select count(*) from mail.tesl_row_queue_conversion_receipts"), "0")
 
 
 def staging_case(field, value):
@@ -461,7 +471,7 @@ class ExecutionReview(DatabaseCase):
 
     def failure_sql(self, change="", commit=False, replay=False):
         # Observer constructs the exact public binding; mutation itself uses Worker.
-        binding = LAB.sql(self.db, "select jsonb_build_object('document',encode(c.source_document,'hex'),'parent',nullif(c.parent_digest,''),'revision',c.revision,'family',r.family,'queue',c.queue,'job',c.job_type,'from',c.from_version,'to',c.to_version,'root',c.source_digest,'old',encode(c.old_contract,'hex'),'new',encode(c.new_contract,'hex')) from mail.tesl_row_queue_conversion_staging c cross join mail.tesl_row_versions r where c.job_type='Delivery' and r.version=1")
+        binding = LAB.sql(self.db, "select jsonb_build_object('document',encode(c.source_document,'hex'),'parent',nullif(c.parent_digest,''),'revision',c.revision,'family',r.family,'queue',c.queue,'job',c.job_type,'from',c.from_version,'to',c.to_version,'root',c.source_digest,'policy',c.policy,'discardReason',c.discard_reason,'old',encode(c.old_contract,'hex'),'new',encode(c.new_contract,'hex')) from mail.tesl_row_queue_conversion_staging c cross join mail.tesl_row_versions r where c.job_type='Delivery' and r.version=1")
         uuid, digest = json.loads(LAB.sql(self.db, "select json_build_array(m.database_uuid::text,c.source_digest) from mail.tesl_schema_meta m cross join mail.tesl_row_queue_conversion_staging c where c.job_type='Delivery'"))
         if replay:
             return f"""begin; do $block$ declare a record; begin
@@ -551,6 +561,264 @@ end $block$; {'commit' if commit else 'rollback'};"""
         self.assertEqual(LAB.sql(self.db, "select count(*) from mail.tesl_jobs where schema_version=1"), "2")
 
 
+class RemediationReview(ExecutionReview):
+    template = "review11_remediation_v1"
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.remedies = {}
+        for kind in ("recover", "discard"):
+            target = Path(tempfile.mkdtemp(prefix=kind+"-", dir=CONFIG.artifacts / cls.family))
+            shutil.copytree(CONFIG.artifacts / cls.family / cls.release / "source", target / "source")
+            module = "Schema.Mail.Migrate.Remediation"
+            text = f'''module {module} exposing [repair]
+import Tesl.Prelude exposing [String, Int]
+import Tesl.Migration exposing [QueueRepair, Migrated(..)]
+import Schema.Mail.Migrate.V2
+import Schema.Mail.V1
+import Schema.Mail.VCurrent
+'''
+            if kind == "recover":
+                text += '''repair = QueueRepair {
+ predecessor: Schema.Mail.Migrate.V2.migration
+ job: "Delivery"
+ revision: 1
+ on: "execution-failed"
+ migrate: recover
+ fixtures: [poisonFixture]
+}
+fn recover(old: Schema.Mail.V1.Delivery) -> Migrated Schema.Mail.VCurrent.Delivery =
+ Row (Schema.Mail.VCurrent.Delivery { body: old.text, priority: 17 })
+fn poisonFixture() -> Schema.Mail.V1.Delivery = Schema.Mail.V1.Delivery { text: "poison" }
+'''
+            else:
+                text += '''repair = QueueRepair {
+ predecessor: Schema.Mail.Migrate.V2.migration
+ job: "Delivery"
+ revision: 1
+ on: "unconverted"
+ discard: "Obsolete notifications from the retired release"
+}
+'''
+            file = target / "source/migrations/mail/remediation.tesl"
+            file.write_text(text)
+            entry = target / "source/app.tesl"
+            entry.write_text(entry.read_text().replace("module App exposing []", "module App exposing []\nimport " + module))
+            require(old.run([CONFIG.compiler, "agent-context", entry], env=LAB.env))
+            require(old.run([CONFIG.compiler, "--backend", "go", entry, "--out", target / "go"], env=LAB.env))
+            require(old.run(["go", "test", "-race", "-p", "1", "./..."], cwd=target / "go", env=LAB.env, timeout=180))
+            require(old.run(["go", "build", "-race", "-o", target / "app", "./cmd/app"], cwd=target / "go", env=LAB.env))
+            cls.remedies[kind] = target.name
+        # A recovery may make a genuine business rejection. Keep that distinct
+        # from its predecessor's execution failure and exercise a later repair.
+        for kind in ("recover-reject", "repair-after-recovery"):
+            parent = cls.remedies["recover"] if kind == "recover-reject" else cls.remedies["recover-reject"]
+            target = Path(tempfile.mkdtemp(prefix=kind+"-", dir=CONFIG.artifacts / cls.family))
+            shutil.copytree(CONFIG.artifacts / cls.family / parent / "source", target / "source")
+            entry = target / "source/app.tesl"
+            if kind == "recover-reject":
+                file = target / "source/migrations/mail/remediation.tesl"
+                file.write_text(file.read_text().replace("Row (Schema.Mail.VCurrent.Delivery { body: old.text, priority: 17 })", 'Reject "requires review"'))
+            else:
+                file = target / "source/migrations/mail/finish.tesl"
+                file.write_text('''module Schema.Mail.Migrate.Finish exposing [repair]
+import Tesl.Prelude exposing [String, Int]
+import Tesl.Migration exposing [QueueRepair, Migrated(..)]
+import Schema.Mail.Migrate.Remediation
+import Schema.Mail.V1
+import Schema.Mail.VCurrent
+repair = QueueRepair {
+ predecessor: Schema.Mail.Migrate.Remediation.repair
+ job: "Delivery"
+ revision: 2
+ migrate: finish
+ fixtures: [poisonFixture]
+}
+fn finish(old: Schema.Mail.V1.Delivery) -> Migrated Schema.Mail.VCurrent.Delivery =
+ Row (Schema.Mail.VCurrent.Delivery { body: old.text, priority: 29 })
+fn poisonFixture() -> Schema.Mail.V1.Delivery = Schema.Mail.V1.Delivery { text: "poison" }
+''')
+                entry.write_text(entry.read_text().replace("module App exposing []", "module App exposing []\nimport Schema.Mail.Migrate.Finish"))
+            require(old.run([CONFIG.compiler, "agent-context", entry], env=LAB.env))
+            require(old.run([CONFIG.compiler, "--backend", "go", entry, "--out", target / "go"], env=LAB.env))
+            require(old.run(["go", "test", "-race", "-p", "1", "./..."], cwd=target / "go", env=LAB.env, timeout=180))
+            require(old.run(["go", "build", "-race", "-o", target / "app", "./cmd/app"], cwd=target / "go", env=LAB.env))
+            cls.remedies[kind] = target.name
+
+    def run_remedy(self, kind, predicate):
+        release = self.remedies[kind]
+        require(LAB.install(self.db, release, self.family))
+        process, log = LAB.start(self.db, release, self.family)
+        try:
+            LAB.wait(predicate, process)
+        finally:
+            LAB.stop(process, log)
+
+    def test_097_remediation_corrected_converter_preserves_original_failure_and_retires(self):
+        self.run_poison()
+        failure = LAB.sql(self.db, "select row_to_json(f)::text from mail.tesl_row_queue_conversion_failures f")
+        self.run_remedy("recover", lambda: LAB.sql(self.db, "select schema_version=2 from mail.tesl_jobs where id='old'") == "t")
+        self.assertEqual(json.loads(LAB.sql(self.db, "select payload from mail.tesl_jobs where id='old'")), {"message": "poison", "priority": 17})
+        self.assertEqual(LAB.sql(self.db, "select row_to_json(f)::text from mail.tesl_row_queue_conversion_failures f"), failure)
+        require(LAB.schema(self.db, self.remedies["recover"], "contract", "V2", family=self.family))
+        require(LAB.install(self.db, self.remedies["recover"], self.family))
+        before = self.snapshot()
+        require(LAB.schema(self.db, self.remedies["recover"], "contract", "V2", family=self.family))
+        self.assertEqual(self.snapshot(), before)
+
+    def test_098_remediation_discard_handles_malformed_and_failed_old_jobs_only(self):
+        self.run_poison()
+        self.enqueue(identity="invalid", payload={"oldText": 42})
+        self.enqueue(identity="late-valid")
+        failure = LAB.sql(self.db, "select row_to_json(f)::text from mail.tesl_row_queue_conversion_failures f")
+        require(LAB.install(self.db, self.remedies["discard"], self.family))
+        status = json.loads(require(LAB.schema(self.db, self.remedies["discard"], "status", family=self.family, role="review_request")))["queues"]
+        self.assertEqual(status["discardPlans"][0]["pendingJobs"], 3)
+        self.run_remedy("discard", lambda: LAB.sql(self.db, "select count(*) from mail.tesl_row_queue_discards") == "3")
+        self.assertEqual(LAB.sql(self.db, "select count(*) from mail.tesl_jobs where schema_version=2"), "2")
+        self.assertEqual(LAB.sql(self.db, "select count(*) from mail.tesl_jobs where schema_version=1"), "0")
+        self.assertEqual(LAB.sql(self.db, "select row_to_json(f)::text from mail.tesl_row_queue_conversion_failures f"), failure)
+        require(LAB.schema(self.db, self.remedies["discard"], "contract", "V2", family=self.family))
+        before = self.snapshot()
+        require(LAB.install(self.db, self.remedies["discard"], self.family))
+        require(LAB.schema(self.db, self.remedies["discard"], "contract", "V2", family=self.family))
+        self.assertEqual(self.snapshot(), before)
+        self.refused(LAB.sql(self.db, "select mail.tesl_queue_enqueue(2,'Jobs','Delivery','invalid','{}')", "review_request", ok=False))
+
+    def test_099_remediation_discard_waits_for_live_claim_then_resumes_after_expiry(self):
+        self.run_poison()
+        claim = self.claim(1)
+        self.assertEqual(claim["job_id"], "old")
+        require(LAB.install(self.db, self.remedies["discard"], self.family))
+        before = LAB.sql(self.db, "select row_to_json(j)::text from mail.tesl_jobs j where id='old'")
+        process, log = LAB.start(self.db, self.remedies["discard"], self.family)
+        try:
+            time.sleep(.7)
+            self.assertIsNone(process.poll(), Path(log.name).read_text())
+            self.assertEqual(LAB.sql(self.db, "select count(*) from mail.tesl_row_queue_discards"), "0")
+            self.assertEqual(LAB.sql(self.db, "select row_to_json(j)::text from mail.tesl_jobs j where id='old'"), before)
+            self.refused(LAB.schema(self.db, self.remedies["discard"], "contract", "V2", family=self.family))
+            LAB.sql(self.db, "update mail.tesl_jobs set lease_until=clock_timestamp()-interval '1 second' where id='old'")
+            LAB.wait(lambda: LAB.sql(self.db, "select count(*) from mail.tesl_row_queue_discards") == "1", process)
+        finally:
+            LAB.stop(process, log)
+        require(LAB.schema(self.db, self.remedies["discard"], "contract", "V2", family=self.family))
+
+    def test_100_remediation_recovery_requires_original_failure_not_business_rejection(self):
+        self.run_poison()
+        self.enqueue(identity="rejected", payload={"oldText": ""})
+        self.run_remedy("recover", lambda: LAB.sql(self.db, "select count(*) from mail.tesl_row_queue_conversion_receipts where job_id in ('old','rejected')") == "2")
+        self.assertEqual(LAB.sql(self.db, "select schema_version||','||dead_reason from mail.tesl_jobs where id='rejected'"), "1,migration-rejected")
+        self.assertEqual(LAB.sql(self.db, "select count(*) from mail.tesl_row_queue_conversion_receipts where job_id='rejected'"), "1")
+        self.refused(LAB.schema(self.db, self.remedies["recover"], "contract", "V2", family=self.family))
+
+    def discard_sql(self, commit=False, mutate="", expected=True):
+        binding = LAB.sql(self.db, "select jsonb_build_object('document',encode(c.source_document,'hex'),'parent',nullif(c.parent_digest,''),'revision',c.revision,'family',r.family,'queue',c.queue,'job',c.job_type,'from',c.from_version,'to',c.to_version,'root',(select source_digest from mail.tesl_row_queue_conversion_staging where revision=0 and job_type=c.job_type),'policy',c.policy,'discardReason',c.discard_reason,'old',encode(c.old_contract,'hex'),'new',encode(c.new_contract,'hex')) from mail.tesl_row_queue_conversion_staging c cross join mail.tesl_row_versions r where c.policy='unconverted' and r.version=1")
+        uuid, digest = json.loads(LAB.sql(self.db, "select json_build_array(m.database_uuid::text,c.source_digest) from mail.tesl_schema_meta m cross join mail.tesl_row_queue_conversion_staging c where c.policy='unconverted'"))
+        return f"""begin; do $block$ declare a record; accepted boolean; b jsonb:={literal(binding)}::jsonb; ident uuid:={literal(uuid)}::uuid; d text:={literal(digest)}; begin
+ select * into a from mail.tesl_row_queue_conversion_begin(ident,d,'old',b);
+ {mutate}
+ accepted:=mail.tesl_row_queue_conversion_discard(ident,d,'old',a.attempt_seq,a.transaction_id,a.original,b);
+ if accepted is distinct from {'true' if expected else 'false'} then raise exception 'wrong discard publication result'; end if;
+ end $block$; {'commit' if commit else 'rollback'};"""
+
+    def prepare_discard(self):
+        self.run_poison()
+        require(LAB.install(self.db, self.remedies["discard"], self.family))
+
+    def test_101_remediation_discard_rollback_preserves_job_and_audits(self):
+        self.prepare_discard()
+        before = self.snapshot()
+        LAB.sql(self.db, self.discard_sql(), "review_worker")
+        self.assertEqual(self.snapshot(), before)
+
+    def test_102_remediation_discard_refuses_stale_attempt(self):
+        self.prepare_discard()
+        before = self.snapshot()
+        LAB.sql(self.db, self.discard_sql(mutate="a.attempt_seq:=a.attempt_seq+1;", expected=False), "review_worker")
+        self.assertEqual(self.snapshot(), before)
+
+    def test_103_remediation_discard_refuses_changed_original(self):
+        self.prepare_discard()
+        before = self.snapshot()
+        LAB.sql(self.db, self.discard_sql(mutate="a.original:=a.original||' ';", expected=False), "review_worker")
+        self.assertEqual(self.snapshot(), before)
+
+    def test_104_remediation_discard_refuses_request_role(self):
+        self.prepare_discard()
+        before = self.snapshot()
+        self.refused(LAB.sql(self.db, self.discard_sql(commit=True), "review_request", ok=False))
+        self.assertEqual(self.snapshot(), before)
+
+    def test_105_remediation_policy_tamper_refuses_worker_before_deletion(self):
+        self.prepare_discard()
+        LAB.sql(self.db, "update mail.tesl_row_queue_conversion_staging set discard_reason='substituted' where policy='unconverted'")
+        before = self.snapshot()
+        self.refused(LAB.schema(self.db, self.remedies["discard"], "worker", family=self.family))
+        self.assertEqual(self.snapshot(), before)
+
+    def test_106_remediation_invalid_policy_declarations_refuse(self):
+        for before, after in [('on: "unconverted"', 'on: "anything"'), ('revision: 1', 'revision: 3'),
+                              ('discard: "Obsolete notifications from the retired release"', 'discard: ""'),
+                              ('on: "unconverted"', 'on: "execution-failed"')]:
+            with self.subTest(after=after):
+                target = Path(tempfile.mkdtemp(prefix="invalid-remediation-", dir=CONFIG.output))
+                shutil.copytree(CONFIG.artifacts / self.family / self.remedies["discard"] / "source", target / "source")
+                file = target / "source/migrations/mail/remediation.tesl"
+                file.write_text(file.read_text().replace(before, after, 1))
+                result = old.run([CONFIG.compiler, "agent-context", target / "source/app.tesl"], env=LAB.env)
+                context = json.loads(result.stdout)
+                self.assertFalse(context["ok"], context)
+                self.assertTrue(any(d["code"].startswith("MIG") for d in context["diagnostics"]), context)
+
+    def test_107_remediation_recovery_fixture_must_reproduce_execution_failure(self):
+        target = Path(tempfile.mkdtemp(prefix="wrong-witness-", dir=CONFIG.output))
+        shutil.copytree(CONFIG.artifacts / self.family / self.remedies["recover"] / "source", target / "source")
+        file = target / "source/migrations/mail/remediation.tesl"
+        file.write_text(file.read_text().replace('text: "poison"', 'text: "healthy"'))
+        require(old.run([CONFIG.compiler, "agent-context", target / "source/app.tesl"], env=LAB.env))
+        require(old.run([CONFIG.compiler, "--backend", "go", target / "source/app.tesl", "--out", target / "go"], env=LAB.env))
+        result = old.run(["go", "test", "-race", "-p", "1", "./internal/teslqueueconversions"], cwd=target / "go", env=LAB.env, timeout=180)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("execution-failed outcome", result.stdout+result.stderr)
+
+    def test_108_remediation_competing_discard_cannot_replace_installed_recovery(self):
+        self.run_poison()
+        require(LAB.install(self.db, self.remedies["recover"], self.family))
+        before = self.snapshot()
+        self.refused(LAB.install(self.db, self.remedies["discard"], self.family))
+        self.assertEqual(self.snapshot(), before)
+
+    def test_109_remediation_discard_cannot_revive_after_retirement(self):
+        self.run_poison()
+        self.run_remedy("recover", lambda: LAB.sql(self.db, "select schema_version=2 from mail.tesl_jobs where id='old'") == "t")
+        require(LAB.schema(self.db, self.remedies["recover"], "contract", "V2", family=self.family))
+        before = self.snapshot()
+        self.refused(LAB.install(self.db, self.remedies["discard"], self.family))
+        self.assertEqual(self.snapshot(), before)
+
+    def test_110_remediation_audits_are_private_to_both_long_lived_roles(self):
+        self.prepare_discard()
+        self.run_remedy("discard", lambda: LAB.sql(self.db, "select count(*) from mail.tesl_row_queue_discards") == "1")
+        before = self.snapshot()
+        for role in ("review_request", "review_worker"):
+            self.refused(LAB.sql(self.db, "select * from mail.tesl_row_queue_discards", role, ok=False))
+            self.refused(LAB.sql(self.db, "delete from mail.tesl_row_queue_discards", role, ok=False))
+        self.assertEqual(self.snapshot(), before)
+
+    def test_111_remediation_business_repair_consumes_recovery_rejection(self):
+        self.run_poison()
+        self.run_remedy("recover-reject", lambda: LAB.sql(self.db, "select count(*) from mail.tesl_row_queue_conversion_receipts where job_id='old' and kind='migration-rejected'") == "1")
+        rejection = LAB.sql(self.db, "select row_to_json(r)::text from mail.tesl_row_queue_conversion_receipts r where job_id='old'")
+        self.refused(LAB.schema(self.db, self.remedies["recover-reject"], "contract", "V2", family=self.family))
+        self.run_remedy("repair-after-recovery", lambda: LAB.sql(self.db, "select schema_version=2 from mail.tesl_jobs where id='old'") == "t")
+        self.assertEqual(json.loads(LAB.sql(self.db, "select payload from mail.tesl_jobs where id='old'")), {"message": "poison", "priority": 29})
+        self.assertEqual(LAB.sql(self.db, "select row_to_json(r)::text from mail.tesl_row_queue_conversion_receipts r where job_id='old' and kind='migration-rejected'"), rejection)
+        self.assertEqual(LAB.sql(self.db, "select count(*) from mail.tesl_row_queue_conversion_failures"), "1")
+        require(LAB.schema(self.db, self.remedies["repair-after-recovery"], "contract", "V2", family=self.family))
+
+
 class TransitionReview(DatabaseCase):
     def inventories(self):
         return [json.loads(LAB.sql(self.db, f"select mail.tesl_queue_inventory_json({version})")) for version in (1, 2)]
@@ -609,8 +877,10 @@ def main():
         LAB.prepare()
         suite = unittest.TestSuite()
         names = []
-        for cls in (CatalogReview, RoleReview, StagingReview, LifecycleReview, SourceReview, RowSourceReview, ExecutionReview, TransitionReview):
+        for cls in (CatalogReview, RoleReview, StagingReview, LifecycleReview, SourceReview, RowSourceReview, ExecutionReview, TransitionReview, RemediationReview):
             for name in unittest.defaultTestLoader.getTestCaseNames(cls):
+                if cls is RemediationReview and name not in cls.__dict__:
+                    continue
                 if CONFIG.match in name:
                     suite.addTest(cls(name))
                     names.append(cls.__name__ + "." + name)

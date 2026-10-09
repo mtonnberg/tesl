@@ -23,7 +23,114 @@ The most important next work is **a coherent outcome and recovery protocol for
 callbacks that trap or exhaust their execution budget**, followed by measured
 large-inventory enqueue/conversion costs. More syntax should not precede those.
 
-### Current follow-up after `2d70dae`
+### Current remediation follow-up after `4662e3f`
+
+The maintainer subsequently required **both** corrected conversion and audited
+discard, rather than leaving unresolved old work without a completion route.
+Both policies now use the existing contextual `QueueRepair` declaration:
+
+- Omitted `on` / `on: "rejected"` retains the existing business-rejection contract.
+- `on: "execution-failed"` requires the exact predecessor's operational failure
+  and a new typed converter. Generated fixtures actually execute the predecessor
+  and must reproduce that outcome; a healthy predecessor is not sufficient.
+- `on: "unconverted", discard: "reason"` explicitly authorizes every remaining
+  original-version job of the named type on that transition. It requires no
+  decoder, so malformed historical bytes have an audited resolution route. It
+  is terminal, cannot carry a callback/fixtures, and leaves target-version jobs alone.
+
+Each revision appends to exact immutable source history and is staged by the
+installer, separately from Worker execution. The Worker checks the full source
+binding and actual attempt/transaction ownership under admission fences. Live
+claims remain protected; expiration permits the ordinary fenced reclaim path.
+Discard commits its deletion and private audit together. Audits retain job,
+source decision digest, attempt, payload hash and authored reason; prior failure
+and conversion receipts survive. Audited job IDs cannot be reused. Status exposes
+bounded discard plans and affected/live-claim counts before the Worker runs.
+
+The full **111-case review suite passed in 487.557s** on fresh releases, including
+the corrected-converter → business rejection → ordinary repair chain. Tests
+097–111 cover both policies, exact replay/retirement, malformed bytes, live claims,
+rollback, stale attempts, changed bytes, role restrictions, tampered policy,
+invalid declarations, wrong fixture outcomes, competing revisions and refusal
+after retirement. The existing **127 cases passed in 298.322s**; all **58 compiler
+queue-source/PostgreSQL cases** passed in 339.949s, focused runtime race checks in
+105.988s, and six embedding seam / three runtime-gate checks passed.
+Logs: `.tesl-stuff/remediation-final.log` and
+`.tesl-stuff/remediation-existing-final.log`. The first existing-suite run exposed
+one stale test using `discard` as an unknown field; it now uses `forceAll` and
+still requires MIG020. No safety assertion was removed.
+
+This supersedes the earlier general-recovery deferral in the historical review.
+The separate `QueueRecovery` constructor proposal remains in `roadmap/later` as
+superseded design context. [Queue remediation](manual/queue-remediation.md) is the
+active operator reference. Fresh-catalog-first and same-edge executable identity
+restrictions remain; these changes do not add catalog adoption or an implicit
+expiry policy. No new full default-gate result is claimed for this follow-up.
+
+### Shared queue verification and row-volume measurements
+
+Following the remediation implementation, source opening now shares one verified
+read-only snapshot across at most 32 converter descriptors. Each descriptor's
+complete lineage is still compared; every job remains independently transactional
+and rechecks live admission, source binding and attempt ownership. No database
+authority is cached across snapshot groups. Case 112 injects a late source-policy
+mismatch and proves that earlier work in the group is not mutated. A Go boundary
+test refuses empty/oversized batches and unregistered sources before database access.
+
+This bounded change gives only a modest improvement: 246/257 types progressed in
+600s, compared with 228/257 in the previous materialized-SQL measurement. The
+remaining repeated per-job admission/inventory work is still material. The
+25-second target remains unfulfilled at 257 types.
+
+Final verification of remediation plus shared opening passed **112 review cases
+in 496.829s**, all **127 existing cases in 353.793s**, all **58 compiler queue-source
+and PostgreSQL cases in 341.354s**, protocol traceability, six embedding seam tests
+and three runtime-gate tests. Log: `.tesl-stuff/remediation-shared-final.log`.
+
+Controlled ordinary-build measurements, with the same 1,024-job busy head:
+
+| Registered/changed types | Enqueue setup | Time until every type progresses | Head remaining |
+|---:|---:|---:|---:|
+| 3 | 3.40s | 3.07s | 938 |
+| 17 | 11.55s | 3.07s | 1,008 |
+| 257 | 198.92s | Not complete at 600s; 246 types progressed | 1,023 |
+
+At 17 types, increasing the head backlog fourfold to 4,096 jobs increased enqueue
+time to 46.11s but left time-to-first-service across types at 3.09s (4,080 head
+jobs remained). The fairness scheduler allocates different per-type quanta, so the
+three-type run converts more head jobs before serving all peers; these are not
+equal-work throughput measurements. They nevertheless show a strong inventory-width
+cost and an approximately linear enqueue-volume cost. All measured payload and
+admission invariants passed. Logs: `remediation-scale-type-matrix.log`,
+`remediation-scale-job-matrix.log`, `remediation-shared-open-scale257.log` under
+`.tesl-stuff`, with per-run hashes and samples in the corresponding directories.
+
+The inventory-width cost involves **total registered types**, not merely the number
+of changed converters: protected enqueue validates the complete source inventory
+even before conversions run. More changed types additionally cause more descriptor
+opens/scheduler visits. More jobs multiply the per-job work. This benchmark changes
+all its types, so it does not independently quantify the changed/unchanged split.
+
+The row path is structurally different: typed physical plans are registered, and
+future-generation observations are reused while their lifecycle identity remains
+unchanged. Full history/catalog work is concentrated at startup and changed
+observation boundaries, rather than the queue path's repeated whole-inventory
+admission. That is a source-level distinction, not a large-database SLA.
+
+A volume probe reused the exact previously verified V1–V20 race binaries and added
+1,000 Tasks via the V1 HTTP API (5.14s seeding). All 95 API tests and all twenty
+deployments passed with those Tasks retained and checked after every finality
+boundary. V7/V13/V15 full phase times were 29.34/41.49/42.87s versus
+28.02/39.42/40.31s in the earlier small-row run. These single-run phase timings
+include startup, overlap, assertions and retirement: they are not isolated backfill
+timings. They show no queue-like amplification at this modest row count; millions
+of rows, hundreds of tables, expensive predicates and contention remain unmeasured.
+Evidence: `.tesl-stuff/remediation-row-volume1000.log` and
+`remediation-row-volume1000/{seed-workload,rollout}.json`. The reused binaries predate
+the queue-remediation changes; this isolates row volume rather than certifying
+those binaries as the latest queue implementation.
+
+### Historical diagnostic follow-up after `2d70dae`
 
 The initial review and fail-stop reproduction below are preserved as discovery
 evidence. The application queue Worker now records recognized execution failures
@@ -139,11 +246,14 @@ Evidence: `.tesl-stuff/twenty-queue-scale-257{,-release}.log`,
 The SQL-regression run is `.tesl-stuff/twenty-scale-transition-checks.log`.
 
 The distinct typed remediation proposal is
-[`dev-docs/queue-execution-recovery.md`](dev-docs/queue-execution-recovery.md).
+[`roadmap/later/queue-execution-recovery.md`](roadmap/later/queue-execution-recovery.md).
 It explicitly requires a checked failure-reproducing fixture, immutable predecessor
 and callback identity, exact byte/attempt ownership, a separately audited result,
 and retirement verification. Source spelling and failure-code policy are not yet
 implemented; existing `QueueRepair` has not been silently broadened.
+Maintainer direction subsequently deferred this proposal: it is not a prerequisite
+for the scoped database-migration release. Durable unresolved jobs still block
+retirement; no guaranteed-completion or implicit-discard promise is made.
 
 A second full-gate attempt on the optimized tree passed the main compiled-app
 package (1340.515s), the early runtime groups, the complete 58-case conversion
@@ -204,7 +314,7 @@ all source constructions, all compiler upgrades or every PostgreSQL deployment.
 | ID | Severity / classification | Finding | Disposition |
 |---|---|---|---|
 | R11-01 | Medium, confirmed correctness defect | Current-version quarantine was counted as a historical retirement blocker and could hide unrelated old backlog | **Fixed**, cases 044/045 reproduce both symptoms and now pass |
-| R11-02 | High operational gap | Initially, a data-dependent exhausted callback stopped the whole Worker without durable diagnosis | **Partially addressed after `2d70dae`**: failure audit, peer progress and predecessor-processing witness pass; general typed recovery remains open |
+| R11-02 | High operational gap | Initially, a data-dependent exhausted callback stopped the whole Worker without durable diagnosis | **Addressed in the scoped application protocol**: failure audit/peer progress plus explicit corrected-converter and audited-discard revisions pass; see latest follow-up |
 | R11-03 | High scale-acceptance gap | 257-type build/install/replay is verified, but the full workload does not reach conversion because bulk protected enqueue exceeds its setup deadline | **Open**, prior measured evidence retained; no large-inventory fairness claim |
 | R11-04 | Medium verification gap | At initial review, a fresh uninterrupted default migration gate was missing | **Addressed in the twenty-release continuation**; complete gate including the new scenario passes |
 | R11-05 | Explicit product scope, not a new defect | Fresh-catalog-first, consecutive queue-only histories and limited malformed-data recovery are narrower than a general migration product | **Retain clear refusal and documentation**; expansion requires separate lifecycle evidence |

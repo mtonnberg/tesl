@@ -41,6 +41,15 @@ func pgExpectedRowControl(e *pgCatalogExpectations, owner, name string) (*pgCata
 	digest := func(value, hash string) { check("(encode(sha256("+value+"), 'hex'::text) = "+hash+")", value, hash) }
 	bounded := func(n string) { check("(("+n+" >= 1) AND ("+n+" <= 2147483646))", n) }
 	switch name {
+	case "tesl_row_queue_discards":
+		col("job_id", "text")
+		col("source_digest", "text")
+		col("attempt_seq", "int8")
+		col("payload_hash", "text")
+		col("reason", "text")
+		con("p", "", "job_id", "source_digest")
+		check("(attempt_seq > 0)", "attempt_seq")
+		hash("payload_hash")
 	case "tesl_row_queue_conversion_failures":
 		col("job_id", "text")
 		col("source_digest", "text")
@@ -109,6 +118,9 @@ func pgExpectedRowControl(e *pgCatalogExpectations, owner, name string) (*pgCata
 		col("expansion_hash", "text")
 		col("old_contract", "bytea")
 		col("new_contract", "bytea")
+		col("policy", "text")
+		col("discard_reason", "text")
+		check("(policy = ANY (ARRAY['convert'::text, 'rejected'::text, 'execution-failed'::text, 'unconverted'::text]))", "policy")
 		con("p", "", "from_version", "queue", "job_type", "revision")
 		con("u", "", "source_digest")
 		bounded("fence_ns")

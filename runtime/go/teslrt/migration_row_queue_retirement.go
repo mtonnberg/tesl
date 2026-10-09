@@ -133,7 +133,7 @@ end`}, {"tesl_row_queue_status", "", "jsonb", "stable", `
 declare s ` + ns + `tesl_schema_state%rowtype; jobs jsonb; total_types bigint;
   old_count bigint; rejected_count bigint; invalid_count bigint; live_count bigint; attempt_count bigint; recent_count bigint; restamp_count bigint;
   old_rejected_count bigint; old_invalid_count bigint;
- failed_count bigint; ready_count bigint;
+ failed_count bigint; ready_count bigint; discarded_count bigint; discard_plans jsonb;
  blockers jsonb:='[]'::jsonb;
 begin
  select * into s from ` + ns + `tesl_schema_state where id=1;
@@ -151,6 +151,14 @@ begin
  select count(*) into attempt_count from ` + ns + `tesl_row_queue_conversion_attempts;
  select count(*) into recent_count from ` + ns + `tesl_schema_instances where version>=s.min_version and version<s.current and last_seen>pg_catalog.clock_timestamp()-interval '30 seconds';
  select count(*) into restamp_count from ` + ns + `tesl_row_queue_restamps;
+ select count(*) into discarded_count from ` + ns + `tesl_row_queue_discards;
+ select coalesce(pg_catalog.jsonb_agg(x.item),'[]'::jsonb) into discard_plans from (
+  select pg_catalog.jsonb_build_object('queue',c.queue,'jobType',c.job_type,'fromVersion',c.from_version,'toVersion',c.to_version,
+   'revision',c.revision,'reason',c.discard_reason,
+   'pendingJobs',(select count(*) from ` + ns + `tesl_jobs j where j.queue=c.queue and j.job_type=c.job_type and j.schema_version=c.from_version),
+   'liveClaims',(select count(*) from ` + ns + `tesl_jobs j where j.queue=c.queue and j.job_type=c.job_type and j.schema_version=c.from_version and j.status in ('processing','dead_processing') and j.lease_until>pg_catalog.clock_timestamp())) as item
+  from ` + ns + `tesl_row_queue_conversion_staging c where c.policy='unconverted' and c.to_version>=s.min_version
+  order by c.to_version,c.queue collate "C",c.job_type collate "C" limit 100) x;
  select count(*) into total_types from ` + ns + `tesl_queue_payloads where version=s.current;
  select coalesce(pg_catalog.jsonb_agg(x.item order by x.queue collate "C",x.job_type collate "C"),'[]'::jsonb) into jobs from (
   select p.queue,p.job_type,pg_catalog.jsonb_build_object('queue',p.queue,'jobType',p.job_type,
@@ -163,15 +171,16 @@ begin
   from ` + ns + `tesl_queue_payloads p where p.version=s.current order by p.queue collate "C",p.job_type collate "C" limit 100
  ) x;
   if old_rejected_count>0 then blockers:=blockers||pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_object('code','QUEUE_MIGRATION_REJECTED','count',old_rejected_count,'action','Deploy a new checked QueueRepair revision; preserve the original payload')); end if;
-  if old_invalid_count>0 then blockers:=blockers||pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_object('code','QUEUE_PAYLOAD_INVALID','count',old_invalid_count,'action','Historical decoder rejected the bytes; typed repair cannot fabricate the old record')); end if;
+  if old_invalid_count>0 then blockers:=blockers||pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_object('code','QUEUE_PAYLOAD_INVALID','count',old_invalid_count,'action','Historical decoder rejected the bytes; typed repair cannot fabricate the old record. Preserve the bytes or deploy an explicit checked unconverted discard decision')); end if;
  if live_count>0 then blockers:=blockers||pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_object('code','QUEUE_RETIRING_CLAIMS','count',live_count,'action','Stop old claimants and wait for leases to expire')); end if;
  if attempt_count>0 then blockers:=blockers||pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_object('code','QUEUE_CONVERSION_ATTEMPTS','count',attempt_count,'action','Wait for or restart the schema Worker')); end if;
  if recent_count>0 then blockers:=blockers||pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_object('code','RECENT_RETIRING_INSTANCES','count',recent_count,'action','Stop old processes and wait for the 30-second heartbeat window')); end if;
- if failed_count>0 then blockers:=blockers||pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_object('code','QUEUE_MIGRATION_EXECUTION_FAILED','count',failed_count,'action','Checked execution failed; automatic retries of the same source and bytes are suspended. Preserve the source history. An admitted predecessor may process the original job; typed callback-failure recovery is not yet supported')); end if;
+ if failed_count>0 then blockers:=blockers||pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_object('code','QUEUE_MIGRATION_EXECUTION_FAILED','count',failed_count,'action','Checked execution failed; deploy QueueRepair on execution-failed with a corrected converter, or explicitly authorize unconverted discard. An admitted predecessor may also process the original job; preserve source history')); end if;
  if ready_count>0 then blockers:=blockers||pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_object('code','QUEUE_OLD_PAYLOADS','count',ready_count,'action','Run the current schema Worker; Contract restamps identical unchanged payloads')); end if;
  return pg_catalog.jsonb_build_object('currentVersion',s.current,'oldPayloads',old_count,'rejected',rejected_count,'invalid',invalid_count,
    'liveRetiringClaims',live_count,'conversionAttempts',attempt_count,'executionFailed',failed_count,'recentRetiringInstances',recent_count,'restamped',restamp_count,
-  'totalJobTypes',total_types,'complete',total_types<=100,'jobs',jobs,'blockers',blockers);
+   'totalJobTypes',total_types,'complete',total_types<=100,'jobs',jobs,'blockers',blockers,
+   'discarded',discarded_count,'discardPlans',discard_plans,'discardPlansComplete',(select count(*)<=100 from ` + ns + `tesl_row_queue_conversion_staging where policy='unconverted' and to_version>=s.min_version));
 end`}}
 }
 

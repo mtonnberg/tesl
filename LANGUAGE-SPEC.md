@@ -1124,8 +1124,36 @@ exact revision-relative payload identity string. Positive repair revisions are
 consecutive from 1, independently of schema versions, with at most 128 revisions
 per checked chain. Each introduces a new callback consuming the original frozen
 payload and returning `Migrated` of the same target payload. Source/target
-contracts, codecs and queue identity remain exact. Fixtures must reproduce each
-predecessor's rejection before the repair test can run. `QueueRepair` is contextual
+contracts, codecs and queue identity remain exact. With omitted `on` (or
+`on: "rejected"`), fixtures must reproduce each predecessor's business rejection
+before the repair test can run. `on: "execution-failed"` explicitly consumes an
+operational failure from the exact predecessor; fixtures must execute that
+predecessor and observe a recognized execution failure before testing the corrected
+converter. An accepted value or business rejection does not satisfy that policy.
+At runtime, a durable latest applicable failure record, original bytes, attempt
+and installation binding are independently required. A recovery may itself reject;
+a subsequent ordinary repair consumes that new business rejection.
+
+`QueueRepair { predecessor, job, revision, on: "unconverted", discard: "reason" }`
+is an explicit terminal decision to discard **all remaining original-version jobs
+of that named type** on the same published transition. `migrate` and `fixtures` must
+be absent. The nonempty reason is limited to 256 UTF-8 bytes. This policy needs no
+historical decoder success and therefore covers malformed bytes as well as valid,
+rejected and execution-failed old work. It leaves target-version jobs untouched.
+It appends immutable checked history rather than editing the deployed converter;
+no later revision may extend a discard decision. It is not the proposed `IgnoreOld`
+schema-change constructor and does not permit queue/job membership changes.
+
+Installer staging remains separate from execution. Protected status reports
+bounded `discardPlans` with affected old-job and live-claim counts before the
+Worker is run; counts are a snapshot, not a bound on later admitted old writes.
+The Worker must wait for active claims, or preserve their normal completion rights;
+expired claims can be released under the existing ownership rules. Each deletion
+and its immutable audit (job, decision digest, attempt, payload hash and reason)
+commit together. Discard supersedes earlier converters of the same edge/type,
+prevents audited job-ID reuse, and grants no bypass of Contract's finality checks.
+
+`QueueRepair` is contextual
 source syntax, not a runtime value or permission to mutate quarantined jobs.
 Ordinary Go application builds now support consecutive queue-only edges
 with unchanged stored entities and exact retained queue/job membership. The
@@ -1139,7 +1167,8 @@ this narrowing edge remain refused with MIG028. Additive physical planning does
 not infer conversion authority from a later installation origin. Explicitly
 importing the checked `QueueRepair` module into the target application links its complete
 lineage. Reinstalling that binary stages consecutive immutable repair revisions;
-its Worker retries the original quarantined bytes. Competing repair branches are
+its Worker applies the explicitly selected policy to original source-version work.
+Competing repair/remediation branches are
 refused. `--schema contract Vn` retires the current queue-only edge after all old payloads,
 claims and attempts are gone and no retiring instance has reported in the preceding
 30 seconds. It drains both source-writer and compatibility domains and atomically

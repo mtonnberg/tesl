@@ -1,9 +1,21 @@
 # Typed recovery from queue conversion execution failure — proposed next protocol
 
-Status: **design proposal, not implemented source authority**. The application
+Status: **superseded proposal for a separate language construct**. After initial
+deferral, the maintainer required both corrected conversion and audited discard
+to close the lifecycle. They are implemented through explicit `QueueRepair.on`
+policies, not a new `QueueRecovery` keyword. See
+[`manual/queue-remediation.md`](../../manual/queue-remediation.md) for the active
+surface. The historical proposal below remains design context, not independent
+source authority. The application
 runtime already records execution-failure evidence and continues healthy peers.
 This document specifies the remaining typed remediation boundary; it does not
 authorize a new syntax, callback, operator override or catalog adoption.
+
+The scope limitation remains explicit: an unconvertible durable job that cannot
+be processed by an admitted predecessor can block retirement. Queue ephemerality
+does not authorize silent deletion or an admission-floor bypass. The database
+migration feature may ship with this documented refusal/recovery boundary, without
+claiming guaranteed completion for every accepted callback and historical value.
 
 ## Current evidence and why business repair is insufficient
 

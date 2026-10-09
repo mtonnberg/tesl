@@ -912,7 +912,7 @@ SOURCE_ATTACKS = [
     ("70_repair_revision_gap", "migrations/mail/repair2.tesl", "revision: 1", "revision: 3", "MIG028"),
     ("71_repair_foreign_job", "migrations/mail/repair2.tesl", 'job: "Delivery"', 'job: "Other"', "MIG028"),
     ("72_repair_reuses_root_callback", "migrations/mail/repair2.tesl", "Convert2.repair", "Convert2.convert", "MIG028"),
-    ("73_repair_unknown_field", "migrations/mail/repair2.tesl", "revision: 1", "revision: 1, discard: True", "MIG020"),
+    ("73_repair_unknown_field", "migrations/mail/repair2.tesl", "revision: 1", "revision: 1, forceAll: True", "MIG020"),
     ("74_repair_missing_fixture", "migrations/mail/repair2.tesl", "[Schema.Mail.Migrate.Convert2.rejectedJob]", "[]", "MIG003"),
     ("75_repair_unqualified_parent", "migrations/mail/repair2.tesl", "Schema.Mail.Migrate.V2.migration", "migration", "MIG020"),
     ("76_repair_not_runtime_value", "migrations/mail/repair2.tesl", "repair = QueueRepair", "other = QueueRepair", "MIG020"),

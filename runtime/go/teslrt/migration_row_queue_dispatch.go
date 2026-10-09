@@ -30,11 +30,15 @@ func pgRowQueueWorkTables() []pgMigrationControlTable {
  payload_hash text not null check(payload_hash ~ '^[0-9a-f]{64}$'),
  code text not null check(code in ('execution-budget','execution-trap','invalid-result')),
  primary key(job_id,source_digest,attempt_seq)`},
+		{"tesl_row_queue_discards", `
+ job_id text not null, source_digest text not null, attempt_seq bigint not null check(attempt_seq>0),
+ payload_hash text not null check(payload_hash ~ '^[0-9a-f]{64}$'), reason text not null,
+ primary key(job_id,source_digest)`},
 	}
 }
 
 func pgRowQueueWorkTable(name string) bool {
-	return name == "tesl_row_queue_conversion_receipts" || name == "tesl_row_queue_conversion_attempts" || name == "tesl_row_queue_restamps" || name == "tesl_row_queue_conversion_failures"
+	return name == "tesl_row_queue_conversion_receipts" || name == "tesl_row_queue_conversion_attempts" || name == "tesl_row_queue_restamps" || name == "tesl_row_queue_conversion_failures" || name == "tesl_row_queue_discards"
 }
 
 // Reuse the tested selection/attempt/publication machinery, replacing only its
@@ -66,7 +70,22 @@ func pgRowQueueConversionFunctions(namespace string) []pgMigrationControlFunctio
  perform ` + ns + `tesl_queue_admit(s.to_version,s.queue);
  select min_version into s.floor from ` + ns + `tesl_schema_state where id=1 for share;
 `
-	sources := `(select source_digest as digest,source_document as document,nullif(parent_digest,'') as parent_digest,revision,from_version from ` + ns + `tesl_row_queue_conversion_staging)`
+	sources := `(select source_digest as digest,source_document as document,nullif(parent_digest,'') as parent_digest,revision,from_version,policy,discard_reason from ` + ns + `tesl_row_queue_conversion_staging)`
+	exactBinding := `exists(select 1 from ` + ns + `tesl_row_queue_conversion_staging c where c.source_digest=digest
+  and c.database_uuid=expected and c.fence_ns=s.fence and c.queue=s.queue and c.job_type=s.job_type
+  and c.from_version=s.from_version and c.to_version=s.to_version
+  and binding=pg_catalog.jsonb_build_object('document',pg_catalog.encode(c.source_document,'hex'),
+   'parent',nullif(c.parent_digest,''),'revision',c.revision,'family',s.family,'queue',c.queue,'job',c.job_type,
+   'from',c.from_version,'to',c.to_version,'root',s.root_digest,'policy',c.policy,'discardReason',c.discard_reason,
+   'old',pg_catalog.encode(c.old_contract,'hex'),'new',pg_catalog.encode(c.new_contract,'hex')))`
+	failureEligible := `exists(select 1 from ` + ns + `tesl_row_queue_conversion_failures f
+ where f.job_id=j.id and f.source_digest=source.parent_digest and f.attempt_seq<=j.claim_seq
+ and f.payload_hash=pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(j.payload::text,'UTF8')),'hex')
+ and not exists(select 1 from ` + ns + `tesl_row_queue_conversion_receipts newer where newer.job_id=j.id and newer.attempt_seq>f.attempt_seq)
+ and not exists(select 1 from ` + ns + `tesl_row_queue_conversion_failures newer where newer.job_id=j.id and newer.attempt_seq>f.attempt_seq))`
+	superseded := `exists(select 1 from ` + ns + `tesl_row_queue_conversion_staging later
+ where later.from_version=s.from_version and later.queue=s.queue and later.job_type=s.job_type
+ and later.policy='unconverted' and later.revision>source.revision)`
 	var result []pgMigrationControlFunction
 	for _, fn := range pgQueueConversionCandidateFunctions(namespace) {
 		if fn.name != "tesl_queue_conversion_next" && fn.name != "tesl_queue_conversion_begin" && fn.name != "tesl_queue_conversion_finish" {
@@ -84,6 +103,15 @@ func pgRowQueueConversionFunctions(namespace string) []pgMigrationControlFunctio
 		fn.body = strings.ReplaceAll(fn.body, "tesl_queue_conversion_attempts", "tesl_row_queue_conversion_attempts")
 		fn.body = strings.ReplaceAll(fn.body, fn.name, "tesl_row_queue_conversion_"+strings.TrimPrefix(fn.name, "tesl_queue_conversion_"))
 		fn.name = "tesl_row_queue_conversion_" + strings.TrimPrefix(fn.name, "tesl_queue_conversion_")
+		if fn.name == "tesl_row_queue_conversion_next" || fn.name == "tesl_row_queue_conversion_begin" {
+			bindingEnd := "raise exception 'tesl: installed queue conversion binding differs'; end if;"
+			if !strings.Contains(fn.body, bindingEnd) {
+				panic("missing queue binding guard")
+			}
+			fn.body = strings.Replace(fn.body, bindingEnd, bindingEnd+`
+ if not `+exactBinding+` then raise exception 'tesl: remediation source policy differs'; end if;
+ if `+superseded+` then return; end if;`, 1)
+		}
 		if fn.name == "tesl_row_queue_conversion_finish" {
 			// Finish also gets a compiler binding; the isolated protocol keeps
 			// its existing signature. Both routes fence the same exact attempt.
@@ -92,15 +120,9 @@ func pgRowQueueConversionFunctions(namespace string) []pgMigrationControlFunctio
 			if !found {
 				panic("application queue failure lost its exact finish guard")
 			}
+			prefix += " if not " + exactBinding + " then return false; end if;\n"
 			result = append(result, pgMigrationControlFunction{"tesl_row_queue_conversion_fail",
 				"expected uuid, digest text, job_id text, attempt_seq bigint, transaction_id text, original text, code text, binding jsonb", "boolean", "volatile", prefix + `
- if not exists(select 1 from ` + ns + `tesl_row_queue_conversion_staging c where c.source_digest=digest
-  and c.database_uuid=expected and c.fence_ns=s.fence and c.queue=s.queue and c.job_type=s.job_type
-  and c.from_version=s.from_version and c.to_version=s.to_version
-  and binding=pg_catalog.jsonb_build_object('document',pg_catalog.encode(c.source_document,'hex'),
-   'parent',nullif(c.parent_digest,''),'revision',c.revision,'family',s.family,'queue',c.queue,'job',c.job_type,
-   'from',c.from_version,'to',c.to_version,'root',s.root_digest,
-   'old',pg_catalog.encode(c.old_contract,'hex'),'new',pg_catalog.encode(c.new_contract,'hex'))) then return false; end if;
  if code is null or code not in ('execution-budget','execution-trap','invalid-result') then
   raise exception 'tesl: invalid queue execution failure code'; end if;
  insert into ` + ns + `tesl_row_queue_conversion_failures(job_id,source_digest,attempt_seq,payload_hash,code)
@@ -108,6 +130,16 @@ func pgRowQueueConversionFunctions(namespace string) []pgMigrationControlFunctio
  delete from ` + ns + `tesl_row_queue_conversion_attempts p where p.job_id=j.id;
  return true;
 end`})
+			result = append(result, pgMigrationControlFunction{"tesl_row_queue_conversion_discard",
+				"expected uuid, digest text, job_id text, attempt_seq bigint, transaction_id text, original text, binding jsonb", "boolean", "volatile", prefix + `
+ if binding->>'policy' is distinct from 'unconverted' or coalesce(binding->>'discardReason','')='' then return false; end if;
+ insert into ` + ns + `tesl_row_queue_discards(job_id,source_digest,attempt_seq,payload_hash,reason)
+ values(j.id,digest,a.attempt_seq,pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(a.original,'UTF8')),'hex'),binding->>'discardReason');
+ delete from ` + ns + `tesl_row_queue_conversion_attempts p where p.job_id=j.id;
+ delete from ` + ns + `tesl_jobs q where q.id=j.id;
+ return true;
+end`})
+			fn.body = strings.Replace(fn.body, " if kind is null", " if not "+exactBinding+" or binding->>'policy'='unconverted' then return false; end if;\n if kind is null", 1)
 		}
 		if fn.name == "tesl_row_queue_conversion_next" {
 			anchor := " and ((source.revision=0"
@@ -118,6 +150,9 @@ end`})
   where failure.job_id=j.id and failure.source_digest=digest and failure.attempt_seq<=j.claim_seq
    and failure.payload_hash=pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(j.payload::text,'UTF8')),'hex'))
 `+anchor, 1)
+			fn.body = strings.Replace(fn.body, " and ((source.revision=0", " and (source.policy<>'execution-failed' or "+failureEligible+")\n and (((source.revision=0 or source.policy in ('execution-failed','unconverted'))", 1)
+			fn.body = strings.Replace(fn.body, "j.status in ('pending','dead')", "(j.status in ('pending','dead') or (source.policy in ('execution-failed','unconverted') and j.status='quarantined'))", 1)
+			fn.body = strings.Replace(fn.body, "source.revision>0 and j.status", "source.policy='rejected' and source.revision>0 and j.status", 1)
 		}
 		if fn.name == "tesl_row_queue_conversion_begin" {
 			anchor := " if source.revision=0 then"
@@ -130,6 +165,13 @@ end`})
   return query select j.payload::text,''::text,j.claim_seq,''::text,'execution-failed'::text; return;
  end if;
 `+anchor, 1)
+			fn.body = strings.Replace(fn.body, " if not has_job then return; end if;", ` if not has_job then
+ if exists(select 1 from `+ns+`tesl_row_queue_discards d where d.job_id=tesl_row_queue_conversion_begin.job_id and d.source_digest=digest) then
+  return query select ''::text,''::text,0::bigint,''::text,'discarded'::text; end if;
+ return; end if;`, 1)
+			fn.body = strings.Replace(fn.body, anchor, " if source.policy='execution-failed' and not "+failureEligible+" then raise exception 'tesl: recovery requires exact latest execution failure'; end if;\n if source.revision=0 or source.policy in ('execution-failed','unconverted') then", 1)
+			fn.body = strings.Replace(fn.body, "if j.status not in ('pending','dead')", "if j.status not in ('pending','dead') and not(source.policy in ('execution-failed','unconverted') and j.status='quarantined')", 1)
+			fn.body = strings.Replace(fn.body, "resume:=j.status;", "resume:=case when j.status='quarantined' then coalesce((select r.resume_status from "+ns+"tesl_row_queue_conversion_receipts r where r.job_id=j.id order by r.attempt_seq desc limit 1),'dead') else j.status end;", 1)
 		}
 		result = append(result, fn)
 	}
@@ -150,38 +192,59 @@ end`})
 // A checked Worker handle grants only one published application edge. The
 // caller must still use the exact linked typed adapter for each job transaction.
 func pgOpenRowQueueConversion(ctx context.Context, conn *pgx.Conn, namespace string, roles PgMigrationControlRoles, digest string) (pgQueueConversionDB, error) {
-	lineage, err := pgQueueConversionCandidateLineage(digest)
+	scopes, err := pgOpenRowQueueConversions(ctx, conn, namespace, roles, []string{digest})
 	if err != nil {
 		return pgQueueConversionDB{}, err
 	}
-	root := lineage[len(lineage)-1]
+	return scopes[0], nil
+}
+
+const pgRowQueueOpenBatchLimit = 32
+
+// One bounded read-only snapshot checks shared installation/catalog/transition
+// evidence once. Every lineage is still compared exactly. No database authority
+// is cached across this snapshot: every job's protected operations re-admit under
+// the actual source/target fences and check current attempt ownership.
+func pgOpenRowQueueConversions(ctx context.Context, conn *pgx.Conn, namespace string, roles PgMigrationControlRoles, digests []string) ([]pgQueueConversionDB, error) {
+	if len(digests) == 0 || len(digests) > pgRowQueueOpenBatchLimit {
+		return nil, fmt.Errorf("queue open requires 1–32 checked sources")
+	}
+	lineages := make([][]*pgQueueConversionSource, 0, len(digests))
+	for _, digest := range digests {
+		lineage, err := pgQueueConversionCandidateLineage(digest)
+		if err != nil {
+			return nil, err
+		}
+		lineages = append(lineages, lineage)
+	}
+	root := lineages[0][len(lineages[0])-1]
 	if root.fromVersion < 1 || root.toVersion != root.fromVersion+1 {
-		return pgQueueConversionDB{}, fmt.Errorf("application queue dispatch requires an adjacent checked edge")
+		return nil, fmt.Errorf("application queue dispatch requires an adjacent checked edge")
 	}
 	tx, err := conn.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
 	if err != nil {
-		return pgQueueConversionDB{}, err
+		return nil, err
 	}
 	defer pgQueueConversionCandidateRollback(tx)
 	if err := pgControlSession(ctx, tx); err != nil {
-		return pgQueueConversionDB{}, err
+		return nil, err
 	}
 	if err := pgControlRoles(ctx, tx, roles, false); err != nil {
-		return pgQueueConversionDB{}, err
+		return nil, err
 	}
 	var worker bool
 	if err := tx.QueryRow(ctx, "select current_user=$1 and session_user=$1", roles.Worker).Scan(&worker); err != nil {
-		return pgQueueConversionDB{}, err
+		return nil, err
 	}
 	if !worker {
-		return pgQueueConversionDB{}, fmt.Errorf("application queue dispatch requires exact Worker login")
+		return nil, fmt.Errorf("application queue dispatch requires exact Worker login")
 	}
 	state, err := pgInspectRowControl(ctx, tx, namespace, roles)
 	if err != nil {
-		return pgQueueConversionDB{}, err
+		return nil, err
 	}
 	if state.Current != root.toVersion {
-		return pgQueueConversionDB{}, fmt.Errorf("application queue dispatch requires its published target")
+		return nil, fmt.Errorf("application queue dispatch requires its published target")
 	}
 	ns := quoteIdentifier(namespace) + "."
 	var document []byte
@@ -189,40 +252,48 @@ func pgOpenRowQueueConversion(ctx context.Context, conn *pgx.Conn, namespace str
 	if err := tx.QueryRow(ctx, "select t.contract,t.contract_hash,t.compiler_abi,t.stored_value_compatibility from "+ns+`tesl_row_queue_target_staging t
  join `+ns+`tesl_schema_versions v on v.version=t.version and v.step='expanded' and v.artefact_hash=t.contract_hash
  where t.version=$1 and t.database_uuid::text=$2 and t.fence_ns=$3`, root.toVersion, state.DatabaseUUID, state.FenceNamespace).Scan(&document, &hash, &abi, &compatibility); err != nil {
-		return pgQueueConversionDB{}, err
+		return nil, err
 	}
 	plan, err := pgParseRowPhysicalPlan(hex.EncodeToString(document), hash)
 	if err != nil {
-		return pgQueueConversionDB{}, err
+		return nil, err
 	}
-	if plan.family != root.family || plan.namespace != namespace || pgRowEpochPreserving(plan) || !root.conversion.list(17) || root.conversion.children[14].value != plan.schemaSnapshotHash || root.conversion.children[16].value != plan.storageSnapshotHash {
-		return pgQueueConversionDB{}, fmt.Errorf("application queue callback differs from the completed physical target")
+	for _, lineage := range lineages {
+		candidate := lineage[len(lineage)-1]
+		if candidate.fromVersion != root.fromVersion || candidate.toVersion != root.toVersion || plan.family != candidate.family || plan.namespace != namespace || pgRowEpochPreserving(plan) || !candidate.conversion.list(17) || candidate.conversion.children[14].value != plan.schemaSnapshotHash || candidate.conversion.children[16].value != plan.storageSnapshotHash {
+			return nil, fmt.Errorf("application queue callback differs from the completed physical target")
+		}
 	}
 	history := PgCompiledMigrationHistory{Family: plan.family, Namespace: namespace, SourceCompilerABI: abi, StoredValueCompatibility: compatibility}
 	before, err := pgReadQueueCandidateInventory(ctx, tx, history, root.fromVersion)
 	if err != nil {
-		return pgQueueConversionDB{}, err
+		return nil, err
 	}
 	after, err := pgReadQueueCandidateInventory(ctx, tx, history, root.toVersion)
 	if err != nil {
-		return pgQueueConversionDB{}, err
+		return nil, err
 	}
 	if err := pgVerifyRowQueueTransition(ctx, tx, namespace, state, before.Version, after.Version); err != nil {
-		return pgQueueConversionDB{}, err
+		return nil, err
 	}
-	for _, source := range lineage {
-		var matches bool
-		if err := tx.QueryRow(ctx, "select database_uuid::text=$1 and fence_ns=$2 and source_digest=$3 and source_document=$4 and parent_digest=$5 and old_contract=$6 and new_contract=$7 from "+ns+"tesl_row_queue_conversion_staging where from_version=$8 and queue=$9 and job_type=$10 and revision=$11", state.DatabaseUUID, state.FenceNamespace, source.spec.digest, mustQueueConversionDocument(source), source.parentDigest, pgQueueConversionPayloadContract(source, false), pgQueueConversionPayloadContract(source, true), root.fromVersion, root.queue, root.job, source.repairRevision).Scan(&matches); err != nil {
-			return pgQueueConversionDB{}, err
+	scopes := make([]pgQueueConversionDB, 0, len(lineages))
+	for _, lineage := range lineages {
+		root := lineage[len(lineage)-1]
+		for _, source := range lineage {
+			var matches bool
+			if err := tx.QueryRow(ctx, "select database_uuid::text=$1 and fence_ns=$2 and source_digest=$3 and source_document=$4 and parent_digest=$5 and old_contract=$6 and new_contract=$7 and policy=$12 and discard_reason=$13 from "+ns+"tesl_row_queue_conversion_staging where from_version=$8 and queue=$9 and job_type=$10 and revision=$11", state.DatabaseUUID, state.FenceNamespace, source.spec.digest, mustQueueConversionDocument(source), source.parentDigest, pgQueueConversionPayloadContract(source, false), pgQueueConversionPayloadContract(source, true), root.fromVersion, root.queue, root.job, source.repairRevision, source.policy, source.discardReason).Scan(&matches); err != nil {
+				return nil, err
+			}
+			if !matches {
+				return nil, fmt.Errorf("application repair lineage differs from its compiler-linked source")
+			}
 		}
-		if !matches {
-			return pgQueueConversionDB{}, fmt.Errorf("application repair lineage differs from its compiler-linked source")
-		}
+		scopes = append(scopes, pgQueueConversionDB{namespace: namespace, identity: state.DatabaseUUID, rootDigest: root.spec.digest, application: true})
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return pgQueueConversionDB{}, err
+		return nil, err
 	}
-	return pgQueueConversionDB{namespace: namespace, identity: state.DatabaseUUID, rootDigest: root.spec.digest, application: true}, nil
+	return scopes, nil
 }
 
 // One scheduling turn discovers staged code from the application database and
@@ -283,15 +354,25 @@ func pgRunRowQueueConversionTurn(ctx context.Context, conn *pgx.Conn, namespace 
 		return progress, err
 	}
 	progress.NoEligible = true
+	var scopes []pgQueueConversionDB
 	for index, executable := range executables {
 		if progress.Selected == limit {
 			progress.NoEligible = false
 			break
 		}
-		scope, err := pgOpenRowQueueConversion(ctx, conn, namespace, roles, executable.queueConversionSource().spec.digest)
-		if err != nil {
-			return progress, err
+		if index%pgRowQueueOpenBatchLimit == 0 {
+			end := min(index+pgRowQueueOpenBatchLimit, len(executables))
+			digests := make([]string, 0, end-index)
+			for _, item := range executables[index:end] {
+				digests = append(digests, item.queueConversionSource().spec.digest)
+			}
+			var err error
+			scopes, err = pgOpenRowQueueConversions(ctx, conn, namespace, roles, digests)
+			if err != nil {
+				return progress, err
+			}
 		}
+		scope := scopes[index%pgRowQueueOpenBatchLimit]
 		remaining := limit - progress.Selected
 		stages := len(executables) - index
 		quantum := (remaining + stages - 1) / stages
@@ -301,6 +382,7 @@ func pgRunRowQueueConversionTurn(ctx context.Context, conn *pgx.Conn, namespace 
 		progress.Rejected += batch.Rejected
 		progress.Invalid += batch.Invalid
 		progress.Failed += batch.Failed
+		progress.Discarded += batch.Discarded
 		progress.Replayed += batch.Replayed
 		progress.NoEligible = progress.NoEligible && batch.NoEligible
 		if err != nil {

@@ -5,6 +5,14 @@ commands and logs: [db-migration-review-11.md](db-migration-review-11.md).
 
 ## Bottom line
 
+**Latest remediation decision:** following the maintainer's request for both
+preservation and explicit loss policies, `QueueRepair` now supports
+`on: "execution-failed"` for corrected conversion and `on: "unconverted"` with a
+reason for audited discard. Both complete real deployment/retirement witnesses;
+112 review cases and 127 existing cases pass, including shared-opening checks. The separate recovery-keyword
+proposal is superseded, not a release blocker. Historical assessments below are
+retained with this update taking precedence.
+
 **The architecture is sound enough to keep investing in. The next milestone
 should complete failure recovery and establish practical scale limits—not add
 more migration forms.**
@@ -55,7 +63,7 @@ retry passed, but a complete final-tree run is still pending.
 | Queue conversion, repair and retirement | Real repeated deployments pass within restricted history rules | Keep the consecutive queue-only model until broader composition has its own full-lifecycle witness. |
 | Permissions, catalog integrity and replay | Strong targeted adversarial results | Weakened SQL functions/indexes/grants and mismatched staging refuse; batch retries preserve exact history. |
 | Status correctness | New defect fixed | Current-version quarantine remains visible without falsely blocking retirement or hiding old backlog. |
-| Callback failure recovery | Diagnosis and peer isolation implemented; general typed recovery remains open | Recognized execution faults retain original data and durable evidence; healthy jobs proceed. A limited admitted-predecessor processing route is verified. |
+| Callback failure recovery | Explicit recovery and discard now implemented and tested | New typed revisions consume exact operational failure, or deliberately discard obsolete old work with immutable audit. Healthy peers continue; active claims and Contract fences remain authoritative. |
 | Scale | Eventual 257-type service measured; latency acceptance remains open | Bounded protected setup completes; all 257 types progress with the busy head still pending, but 685.73s misses the unchanged 25s target. |
 | Verification | Twenty-release tree passed the full gate; later SQL optimization has targeted evidence | The uninterrupted pass includes both V1–V4 examples, 214 adversarial cases and V1–V20/95 API tests. A later full run stalled in nominal-PK fixture 18; isolated retry passed. Final-tree full-gate completion remains pending. |
 
@@ -99,11 +107,15 @@ the audit survives. This covers still-processable old work. It does not invent a
 business rejection, reinterpret `QueueRepair`, or solve all failed repairs and
 quarantines. The remaining decision is the general typed remediation protocol.
 
-**Highest-priority remaining decision:** define typed callback-failure remediation
+**Deferred decision:** define typed callback-failure remediation
 that consumes this new evidence while retaining exact source identity and original
 data. Healthy-peer continuation is now implemented and tested. General remediation
 should be an auditable protocol with explicit retirement obligations, not an
 operator escape hatch or an edit to deployed history.
+The maintainer has moved this proposal to
+[`roadmap/later`](roadmap/later/queue-execution-recovery.md). It does not block the
+scoped database-migration release, provided unresolved durable jobs remain an
+explicit retirement blocker and the product does not promise universal completion.
 
 ### Open: large-inventory installation is ahead of runtime acceptance
 
@@ -157,10 +169,9 @@ scenario and its proof/fencing/recovery obligations.
 
 ## 5. Recommended order of work
 
-1. **Complete operational failure recovery.** Produce one end-to-end witness where
-   a poison callback stops safely, status explains it, an immutable remediation is
-   deployed, healthy work has the chosen progress behavior, and Contract eventually
-   completes without discarding authority or original data.
+1. **Preserve the bounded recovery scope.** Durable failure diagnosis and healthy
+   peer continuation are implemented. General typed remediation is deferred to
+   `roadmap/later`; unresolved old jobs must continue to block retirement.
 2. **Establish scale targets.** Measure startup, enqueue, idle/active conversion,
    history growth and repair depth with both race and ordinary release builds.
    Finish the 257-type runtime scenario with stated latency and resource budgets.

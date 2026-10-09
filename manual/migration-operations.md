@@ -71,8 +71,8 @@ retirement; a current-version quarantine does not hide unrelated old work.
 | Code | Meaning | Supported next action |
 |---|---|---|
 | `QUEUE_MIGRATION_REJECTED` | A decoded historical record failed business conversion | Add a new checked QueueRepair revision, rebuild/import it into the target app, install it, run that repaired Worker |
-| `QUEUE_PAYLOAD_INVALID` | Frozen decoder cannot interpret the bytes | Investigate the original representation; typed repair cannot invent a valid old record; general audited discard/adoption is not yet implemented |
-| `QUEUE_MIGRATION_EXECUTION_FAILED` | A bound callback/codec trapped, exhausted its budget or produced an unusable result | Inspect the checked policy; same-source/same-byte retries are suspended. An admitted predecessor may process a still-processable original job. Typed callback-failure recovery is not yet supported |
+| `QUEUE_PAYLOAD_INVALID` | Frozen decoder cannot interpret the bytes | Investigate the representation or explicitly authorize an `on: "unconverted"` discard revision; typed repair cannot fabricate the old value |
+| `QUEUE_MIGRATION_EXECUTION_FAILED` | A bound callback/codec trapped, exhausted its budget or produced an unusable result | Deploy an `on: "execution-failed"` corrected converter or an explicit `on: "unconverted"` discard revision. An admitted predecessor may also process a still-processable original job |
 | `QUEUE_RETIRING_CLAIMS` | Old claimant still owns a live lease | Stop retiring claimants and wait for lease expiry; do not edit claim tokens |
 | `QUEUE_CONVERSION_ATTEMPTS` | Conversion work is still recorded | Wait for or restart the correct schema Worker; preserve installed history |
 | `RECENT_RETIRING_INSTANCES` | Old processes reported within the heartbeat window | Stop them and wait; queue Contract has no force bypass |
@@ -121,17 +121,19 @@ a business `Reject` or permission to bypass Contract.
 Where the original job is still processable and its predecessor remains admitted,
 the application's existing predecessor handler may claim and complete it normally.
 Completion retains the audit; its job ID cannot be reused. Once old work and all
-other blockers are gone, Contract can retire. This route does not resolve every
-failed repair or quarantined payload. A general typed recovery policy for callback
-failure remains unimplemented. Do not edit installed conversion history or delete
-the audit to manufacture a retry. Purity/type checking is not a static termination
+other blockers are gone, Contract can retire. For work that must survive, append a
+checked `QueueRepair` with `on: "execution-failed"`; for obsolete old work, append
+an explicit `on: "unconverted"` discard decision. See [queue remediation](queue-remediation.md)
+for fixture, inspection, claim and audit obligations. Do not edit installed history
+or delete the audit to manufacture a retry. Purity/type checking is not a static termination
 proof; the budget is not hard intrinsic preemption or a memory sandbox.
 
 ## Current scope
 
 Row and queue examples each demonstrate repeated non-additive upgrades. Queue
 histories retain membership and unchanged stored entities; unrestricted mixed
-row/queue evolution, old-catalog adoption, and general `IgnoreOld`/malformed-data
-recovery remain outside the supported surface. Consult the current language spec
+row/queue evolution, old-catalog adoption, and the general `IgnoreOld` schema-change
+constructor remain outside the supported surface. Explicit discard revisions can
+remove malformed old jobs; they do not reconstruct a typed value. Consult the current language spec
 and executable examples rather than contributor milestone history when choosing
 an operation.

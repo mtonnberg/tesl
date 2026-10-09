@@ -43,7 +43,7 @@ let check ~source (entry:module_form) =
         | _ -> reject "MIG020" declaration.loc "expected `repair = QueueRepair { predecessor, job, revision, migrate, fixtures }`" in
       let names=Hashtbl.create 8 in
       List.iter(fun(name,value)->
-        if not(List.mem name ["predecessor";"job";"revision";"migrate";"fixtures"]) then
+         if not(List.mem name ["predecessor";"job";"revision";"migrate";"fixtures";"on";"discard"]) then
           reject "MIG020" (at value) ("unknown QueueRepair field `" ^ name ^ "`");
         if Hashtbl.mem names name then reject "MIG023" (at value) ("duplicate QueueRepair field `" ^ name ^ "`");
         Hashtbl.add names name ())fields;
@@ -61,9 +61,22 @@ let check ~source (entry:module_form) =
         reject "MIG020" (at expression) "QueueRepair job requires an exact payload identity string" in
       let revision=match field "revision" with ELit {lit=LInt value;_} when value>0 && value<=2147483646 -> value | expression ->
         reject "MIG028" (at expression) "QueueRepair revision requires a positive integer no greater than 2147483646" in
-      let fixtures=match field "fixtures" with EList {elems;_}->elems | expression ->
-        reject "MIG020" (at expression) "QueueRepair fixtures requires a literal list" in
-      let callback=field "migrate" in
+       let policy=match List.assoc_opt "on" fields with
+         | None -> Q.Rejected
+         | Some(ELit{lit=LString "rejected";_})->Q.Rejected
+         | Some(ELit{lit=LString "execution-failed";_})->Q.Execution_failed
+         | Some(ELit{lit=LString "unconverted";_})->Q.Discard
+         | Some expression -> reject "MIG028" (at expression) "QueueRepair on must be rejected, execution-failed or unconverted" in
+       let discard_reason=match policy,List.assoc_opt "discard" fields with
+         | Q.Discard,Some(ELit{lit=LString reason;_}) when reason<>"" && String.length reason<=256 -> Some reason
+         | Q.Discard,_ -> reject "MIG028" declaration.loc "unconverted remediation requires an explicit nonempty discard reason (at most 256 bytes)"
+         | _,Some expression -> reject "MIG028" (at expression) "discard requires on: \"unconverted\""
+         | _,None -> None in
+       if policy=Q.Discard && (List.mem_assoc "migrate" fields || List.mem_assoc "fixtures" fields) then
+         reject "MIG028" declaration.loc "discard is an explicit whole old-job-type decision, not a typed converter or fixture";
+       let fixtures=if policy=Q.Discard then [] else match field "fixtures" with EList {elems;_}->elems | expression ->
+         reject "MIG020" (at expression) "QueueRepair fixtures requires a literal list" in
+       let callback=if policy=Q.Discard then None else Some(field "migrate") in
       Source_input.with_overlays ~project_root:(Option.value(Source_input.project_root()) ~default:project_root)
         [path,source] (fun () ->
         let parent_path=Validation_common.resolve_local_import_path path owner |> Validation_common.canonical_import_path in
@@ -87,7 +100,11 @@ let check ~source (entry:module_form) =
           | _ -> reject "MIG020" (at predecessor) "repair predecessor must name `migration` or `repair`" in
         if snd(Q.queue_job rejected)<>job then reject "MIG028" (at predecessor) "repair job differs from its predecessor";
         let contextual_declarations=(m,source,declaration)::contextual_declarations in
-        Some(checked(Q.check_repair_source ~project_root ~contextual_declarations ~rejected ~revision ~source m ~callback ~fixtures),contextual_declarations)) in
+         let repair=match discard_reason,callback with
+           | Some reason,None->Q.check_discard_source ~project_root ~contextual_declarations ~rejected ~revision ~reason ~source m
+           | None,Some callback->Q.check_repair_source ~policy ~project_root ~contextual_declarations ~rejected ~revision ~source m ~callback ~fixtures
+           | _->assert false in
+         Some(checked repair,contextual_declarations)) in
   try
     Ok(Option.map fst(visit [] source entry))
   with Invalid errors -> Error errors

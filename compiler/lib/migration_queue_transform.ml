@@ -9,6 +9,8 @@ module S = Migration_sparse
 module Integrity = Migration_source_integrity
 
 type request = { queue : string; job : string; callback : expr; fixtures : expr list }
+type policy = Convert | Rejected | Execution_failed | Discard
+let policy_name = function Convert->"convert" | Rejected->"rejected" | Execution_failed->"execution-failed" | Discard->"unconverted"
 
 type t = {
   semantic : C.node;
@@ -23,6 +25,8 @@ type t = {
   current_payload : string;
   rejected : t option;
   repair_revision : int;
+  policy : policy;
+  discard_reason : string;
 }
 let semantic t = t.semantic
 let digest t = t.digest
@@ -32,9 +36,11 @@ let root t = t.root
 let source_texts t = T.captured_source_texts t.captured
 let payload_names t = t.previous_payload,t.current_payload
 let repair_revision t = t.repair_revision
+let policy t = t.policy
 let rec lineage t = Option.fold ~none:[] ~some:lineage t.rejected @ [t]
 let conversion_semantic t = match t.semantic with
   | C.Seq [C.Bytes "checked-queue-repair-source-v1";_;_;conversion] -> conversion
+  | C.Seq [C.Bytes "checked-queue-remediation-source-v1";_;_;_;_;conversion] -> conversion
   | conversion -> conversion
 exception Invalid of S.error list
 let reject code loc message = raise (Invalid [{S.code;loc;message;related=[]}])
@@ -162,7 +168,7 @@ let check_conversions ~contextual_declarations ~project_root ~before ~after ~ver
           C.Bytes(Lazy.force before_snapshot);C.Bytes(Lazy.force after_snapshot);
           C.Bytes(Lazy.force before_storage);C.Bytes(Lazy.force after_storage)] in
       {semantic;digest=C.digest C.Migration semantic;callback;fixtures;captured;integrity;abi=context;
-        root;previous_payload=old.payload_name;current_payload=fresh.payload_name;rejected=None;repair_revision=0})endpoints))))))
+        root;previous_payload=old.payload_name;current_payload=fresh.payload_name;rejected=None;repair_revision=0;policy=Convert;discard_reason=""})endpoints))))))
   )
 
 let check_conversion ~contextual_declarations ~project_root ~before ~after ~version ~queue ~job ~source root ~callback ~fixtures =
@@ -173,29 +179,32 @@ let check_many = check_conversions ~contextual_declarations:[]
 
 (* Repairs extend an immutable conversion lineage, not the schema-version
    sequence. Every revision still consumes the original historical payload. *)
-let check_repair ~rejected ~revision replacement =
+let check_repair ?(policy=Rejected) ?(discard_reason="") ~rejected ~revision replacement =
   let loc=replacement.callback.declaration.loc in
   protect loc (fun () -> checked(with_checked rejected (fun () ->
     checked(with_checked replacement (fun () ->
-      if replacement.rejected<>None || revision<1 || revision>2147483646 || revision<>rejected.repair_revision+1 then
-        reject "MIG028" loc "queue repair requires the next revision and an ordinary checked replacement conversion";
+       if replacement.rejected<>None || revision<1 || revision>2147483646 || revision<>rejected.repair_revision+1 then
+         reject "MIG028" loc "queue repair requires the next revision and an ordinary checked replacement conversion";
+       if rejected.policy=Discard || policy=Convert then reject "MIG028" loc "discard is a terminal queue remediation decision";
       let endpoints t=match conversion_semantic t with
         | C.Seq parts -> List.filteri(fun i _ -> i<11 || i>=13)parts
         | _ -> assert false in
       if endpoints rejected<>endpoints replacement then
         reject "MIG028" loc "queue repair must preserve the exact frozen source and target payloads, codecs, queue and schema versions";
-      if List.exists(fun ancestor->ancestor.callback.identity=replacement.callback.identity)(lineage rejected) then
+       if policy<>Discard && List.exists(fun ancestor->ancestor.callback.identity=replacement.callback.identity)(lineage rejected) then
         reject "MIG028" loc "queue repair requires a new callback declaration; deployed conversion history is immutable";
-      let semantic=C.Seq [C.Bytes "checked-queue-repair-source-v1";C.Bytes rejected.digest;
-        C.Bytes(string_of_int revision);replacement.semantic] in
-      {replacement with semantic;digest=C.digest C.Migration semantic;
-        rejected=Some rejected;repair_revision=revision})))))
+       let semantic=if policy=Rejected then C.Seq [C.Bytes "checked-queue-repair-source-v1";C.Bytes rejected.digest;
+         C.Bytes(string_of_int revision);replacement.semantic] else
+         C.Seq [C.Bytes "checked-queue-remediation-source-v1";C.Bytes rejected.digest;C.Bytes(string_of_int revision);
+           C.Bytes(policy_name policy);C.Bytes discard_reason;replacement.semantic] in
+       {replacement with semantic;digest=C.digest C.Migration semantic;
+         rejected=Some rejected;repair_revision=revision;policy;discard_reason})))))
 
 let queue_job t = match conversion_semantic t with
   | C.Seq (_::_::_::_::_::C.Bytes queue::C.Bytes job::_) -> queue,job
   | _ -> assert false
 
-let check_repair_source ~project_root ~contextual_declarations ~rejected ~revision ~source root ~callback ~fixtures =
+let check_repair_source ?(policy=Rejected) ~project_root ~contextual_declarations ~rejected ~revision ~source root ~callback ~fixtures =
   let loc=Location.dummy_loc root.source_file in
   protect loc (fun () -> checked(with_checked rejected (fun () ->
     let context=abi(A.current()) in
@@ -214,4 +223,26 @@ let check_repair_source ~project_root ~contextual_declarations ~rejected ~revisi
     let queue,job=queue_job rejected in
     let replacement=checked(check_conversion ~contextual_declarations ~project_root ~before:(load rejected.previous_payload)
       ~after:(load rejected.current_payload) ~version ~queue ~job ~source root ~callback ~fixtures) in
-    checked(check_repair ~rejected ~revision replacement))))
+    checked(check_repair ~policy ~rejected ~revision replacement))))
+
+let check_discard_source ~project_root ~contextual_declarations ~rejected ~revision ~reason ~source root =
+  let loc=Location.dummy_loc root.source_file in
+  protect loc(fun()->checked(with_checked rejected(fun()->
+    if reason="" || String.length reason>256 || not(String.is_valid_utf_8 reason) || String.contains reason '\000' then reject "MIG028" loc "discard requires a nonempty PostgreSQL text reason of at most 256 UTF-8 bytes";
+    let context=abi(A.current()) in
+    let load payload =
+      let name=match Validation_common.schema_module_parts payload with Some(f,v,_)->f ^ "." ^ v | _->assert false in
+      let root_file=Validation_common.resolve_local_import_path root.source_file name in
+      match I.load_with_compatibility ~compiler_abi:(A.id context) ~stored_value_compatibility:(Some(A.stored_value_compatibility context)) ~root_file with
+      | Ok inventory->inventory | Error e->reject "MIG013" e.loc e.message in
+    let captured=checked(T.capture ~before:(load rejected.previous_payload) ~after:(load rejected.current_payload) ~source root) in
+    let sources=T.captured_source_texts captured in
+    List.iter(fun(owner,bytes,_)->if not(List.exists(fun(actual,text)->actual=owner && text=bytes)sources) then
+      reject "MIG013" loc "discard predecessor source changed before capture")contextual_declarations;
+    let integrity=checked(Integrity.capture ~project_root ~inputs:(List.map(fun(m,text)->m.source_file,text)sources)) in
+    checked(Integrity.with_captured integrity(fun()->checked(T.with_captured captured(fun()->
+      ignore(ir(G.check sources));
+      let semantic=conversion_semantic rejected in
+      let replacement={rejected with semantic;digest=C.digest C.Migration semantic;captured;integrity;abi=context;root;
+        fixtures=[];rejected=None;repair_revision=0;policy=Convert;discard_reason=""} in
+      checked(check_repair ~policy:Discard ~discard_reason:reason ~rejected ~revision replacement))))))))

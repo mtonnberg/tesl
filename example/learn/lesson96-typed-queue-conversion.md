@@ -116,10 +116,12 @@ An empty Worker scan is not a finality proof.
 
 For execution failure, public status reports `QUEUE_MIGRATION_EXECUTION_FAILED`
 and `executionFailed` counts. Restart suppresses retries of the same checked source
-on the same original bytes. This is not business rejection and does not authorize
-`QueueRepair`. An admitted predecessor may still process a processable old job
-through its normal handler; completion keeps the audit. General typed recovery
-for failed callbacks is still outside scope. See the operator guide for limits.
+on the same original bytes. This is not business rejection: a corrected converter
+must explicitly use `QueueRepair` with `on: "execution-failed"`. Obsolete work can
+instead receive an immutable `on: "unconverted"` discard revision. An admitted
+predecessor may also process a processable old job through its normal handler.
+All routes preserve prior audits. See [queue remediation](../../manual/queue-remediation.md)
+for the source declarations, affected-job inspection and claim/retirement rules.
 
 ## 4. Repair a rejected historical value
 

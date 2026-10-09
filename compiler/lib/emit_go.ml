@@ -16846,8 +16846,8 @@ let queue_conversion_artifacts graph exports conversions =
       else "row := " ^ reference ^ "()\n" in
      let invocation=Q.lineage checked |> List.mapi(fun step ancestor ->
        let ancestor_index=require(List.find_index(fun candidate->Q.digest candidate=Q.digest ancestor)conversions) in
-       if step=0 then Printf.sprintf "result,err:=Conversion%d.Convert(Conversion%d.SourceVersion(),encoded)\n" ancestor_index ancestor_index
-       else Printf.sprintf "if err!=nil {t.Fatalf(\"repair predecessor failed: %%v\",err)}\n result,err=Conversion%d.Repair(result)\n" ancestor_index)
+        if step=0 then Printf.sprintf "result,err:=Conversion%d.AttemptConvert(Conversion%d.SourceVersion(),encoded)\n" ancestor_index ancestor_index
+        else Printf.sprintf "if err!=nil {t.Fatalf(\"repair predecessor failed: %%v\",err)}\n result,err=Conversion%d.AttemptRepair(result)\n" ancestor_index)
        |> String.concat "" in
     tests:=(Printf.sprintf {|func TestTeslQueueConversionFixture%d_%d(t *testing.T) {
  if wanted:=os.Getenv("TESL_TEST_NAME");wanted!=""&&wanted!=%s&&wanted!="TestTeslQueueConversionFixture%d_%d" {t.Skip("named test filter")}

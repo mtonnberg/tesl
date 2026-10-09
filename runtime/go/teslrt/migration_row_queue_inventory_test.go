@@ -133,6 +133,14 @@ func TestRowQueueCatalogInstallerRefusesMissingSource(t *testing.T) {
 	}
 }
 
+func TestRowQueueOpenBatchBoundsRefuseBeforeDatabaseAccess(t *testing.T) {
+	for _, digests := range [][]string{nil, make([]string, pgRowQueueOpenBatchLimit+1), {"unregistered-source"}} {
+		if _, err := pgOpenRowQueueConversions(context.Background(), nil, "mail", PgMigrationControlRoles{}, digests); err == nil {
+			t.Fatal("invalid batch acquired a database scope")
+		}
+	}
+}
+
 // Synthetic row protocol fixtures must explicitly carry complete empty source
 // metadata too. This is test input construction, never a production fallback.
 func rowTestRegisterQueueAbsenceIfEmpty(t *testing.T, history PgCompiledMigrationHistory) {

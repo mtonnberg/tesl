@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"unicode/utf8"
 )
 
 // PgQueueSourceInventory is checked source information, never installed
@@ -706,6 +707,7 @@ type pgQueueConversionSource struct {
 	fromVersion, toVersion int
 	parentDigest           string
 	repairRevision         int
+	policy, discardReason  string
 	conversion             pgRowCanonical
 }
 
@@ -726,7 +728,9 @@ func pgReadQueueConversionSource(spec pgQueueConversionSourceSpec) (*pgQueueConv
 		return nil, r.err
 	}
 	parentDigest, repairRevision := "", 0
-	if node.list(4) && node.children[0].isAtom("checked-queue-repair-source-v1") {
+	policy, discardReason := "convert", ""
+	remediation := node.list(6) && node.children[0].isAtom("checked-queue-remediation-source-v1")
+	if node.list(4) && node.children[0].isAtom("checked-queue-repair-source-v1") || remediation {
 		if !node.children[1].atom || !pgMigrationDigest(node.children[1].value) || !node.children[2].atom {
 			return nil, fmt.Errorf("queue repair predecessor or revision is invalid")
 		}
@@ -736,7 +740,19 @@ func pgReadQueueConversionSource(spec pgQueueConversionSourceSpec) (*pgQueueConv
 		if err != nil || repairRevision < 1 || repairRevision > 2147483646 || strconv.Itoa(repairRevision) != node.children[2].value {
 			return nil, fmt.Errorf("queue repair revision is invalid")
 		}
-		node = node.children[3]
+		policy = "rejected"
+		if remediation {
+			if !node.children[3].atom || !node.children[4].atom {
+				return nil, fmt.Errorf("queue remediation policy must be scalar")
+			}
+			policy, discardReason = node.children[3].value, node.children[4].value
+			if policy != "execution-failed" && policy != "unconverted" || policy == "execution-failed" && discardReason != "" || policy == "unconverted" && (discardReason == "" || len(discardReason) > 256 || !utf8.ValidString(discardReason) || strings.ContainsRune(discardReason, 0)) {
+				return nil, fmt.Errorf("invalid explicit queue remediation policy")
+			}
+			node = node.children[5]
+		} else {
+			node = node.children[3]
+		}
 	}
 	if !(node.list(13) && node.children[0].isAtom("checked-queue-transform-source-v1")) &&
 		!(node.list(17) && node.children[0].isAtom("checked-queue-transform-source-v2")) {
@@ -899,7 +915,7 @@ func pgReadQueueConversionSource(spec pgQueueConversionSourceSpec) (*pgQueueConv
 		return nil, r.err
 	}
 	return &pgQueueConversionSource{spec: spec, family: family, queue: queue, job: job, fromVersion: version - 1, toVersion: version,
-		parentDigest: parentDigest, repairRevision: repairRevision, conversion: node}, nil
+		parentDigest: parentDigest, repairRevision: repairRevision, conversion: node, policy: policy, discardReason: discardReason}, nil
 }
 
 func registerCompiledQueueConversionSources(specs []pgQueueConversionSourceSpec) {
@@ -928,10 +944,13 @@ func registerCompiledQueueConversionSources(specs []pgQueueConversionSourceSpec)
 			if parent == nil || parent.repairRevision+1 != value.repairRevision {
 				panic("queue repair has no exact immutable predecessor")
 			}
+			if parent.policy == "unconverted" {
+				panic("queue discard is a terminal remediation revision")
+			}
 			// Each revision introduces a new callback; a later repair must not
 			// silently reuse an earlier deployed conversion declaration.
 			for ancestor := parent; ancestor != nil; {
-				if ancestor.spec.callbackIdentity == value.spec.callbackIdentity {
+				if value.policy != "unconverted" && ancestor.spec.callbackIdentity == value.spec.callbackIdentity {
 					panic("queue repair reused a deployed callback")
 				}
 				digest := ancestor.parentDigest
@@ -1075,11 +1094,37 @@ func (c *CompiledQueueConversion[Old, Current]) Convert(sourceVersion int, bytes
 // or repair revision. It always decodes the original historical bytes. Like
 // Convert, this pure operation grants no permission to mutate a durable job.
 func (c *CompiledQueueConversion[Old, Current]) Repair(rejected QueueConversionResult) (QueueConversionResult, error) {
-	if c == nil || c.source == nil || c.source.parentDigest == "" || rejected.kind != "migration-rejected" ||
+	if c != nil && c.source != nil && c.source.policy == "unconverted" {
+		return QueueConversionResult{}, fmt.Errorf("queue discard has no typed callback execution")
+	}
+	wanted := "migration-rejected"
+	if c != nil && c.source != nil && c.source.policy == "execution-failed" {
+		wanted = "execution-failed"
+	}
+	if c == nil || c.source == nil || c.source.parentDigest == "" || rejected.kind != wanted ||
 		rejected.source == nil || rejected.source.spec.digest != c.source.parentDigest {
-		return QueueConversionResult{}, fmt.Errorf("queue repair requires its exact predecessor's rejection")
+		return QueueConversionResult{}, fmt.Errorf("queue repair requires its exact predecessor's %s outcome", wanted)
 	}
 	return c.convertBytes(rejected.SourceVersion(), []byte(rejected.original))
+}
+
+// Fixture evaluation exposes a source-bound operational failure, not database
+// authority. Ordinary Convert/Repair keep their error contract.
+func (c *CompiledQueueConversion[Old, Current]) AttemptConvert(version int, original []byte) (QueueConversionResult, error) {
+	result, err := c.Convert(version, original)
+	return c.observeFixtureFailure(string(original), result, err)
+}
+
+func (c *CompiledQueueConversion[Old, Current]) AttemptRepair(prior QueueConversionResult) (QueueConversionResult, error) {
+	result, err := c.Repair(prior)
+	return c.observeFixtureFailure(prior.original, result, err)
+}
+
+func (c *CompiledQueueConversion[Old, Current]) observeFixtureFailure(original string, result QueueConversionResult, err error) (QueueConversionResult, error) {
+	if err != nil && pgQueueExecutionFailureCode(err) != "" {
+		return QueueConversionResult{kind: "execution-failed", original: original, reason: pgQueueExecutionFailureCode(err), source: c.source}, nil
+	}
+	return result, err
 }
 
 func (c *CompiledQueueConversion[Old, Current]) convertBytes(sourceVersion int, bytes []byte) (result QueueConversionResult, err error) {

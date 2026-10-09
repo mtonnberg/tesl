@@ -48,6 +48,8 @@ func pgRowControlTables() []pgMigrationControlTable {
  source_digest text not null, source_document bytea not null, parent_digest text not null,
  inventory_hash text not null, expansion_hash text not null,
  old_contract bytea not null, new_contract bytea not null,
+ policy text not null check(policy in ('convert','rejected','execution-failed','unconverted')),
+ discard_reason text not null,
  primary key(from_version,queue,job_type,revision),
  unique(source_digest),
  check(pg_catalog.encode(pg_catalog.sha256(source_document),'hex')=source_digest),

@@ -317,9 +317,9 @@ func pgStageRowQueueLineage(ctx context.Context, tx pgx.Tx, namespace string, ro
 			return err
 		}
 		args := []any{state.DatabaseUUID, state.FenceNamespace, root.fromVersion, root.toVersion, root.queue, root.job, source.repairRevision,
-			source.spec.digest, document, source.parentDigest, inventory, expansion, old, pgQueueConversionPayloadContract(source, true)}
+			source.spec.digest, document, source.parentDigest, inventory, expansion, old, pgQueueConversionPayloadContract(source, true), source.policy, source.discardReason}
 		var matches bool
-		err = tx.QueryRow(ctx, "select database_uuid::text=$1 and fence_ns=$2 and from_version=$3 and to_version=$4 and queue=$5 and job_type=$6 and revision=$7 and source_digest=$8 and source_document=$9 and parent_digest=$10 and inventory_hash=$11 and expansion_hash=$12 and old_contract=$13 and new_contract=$14 from "+ns+"tesl_row_queue_conversion_staging where from_version=$3 and queue=$5 and job_type=$6 and revision=$7", args...).Scan(&matches)
+		err = tx.QueryRow(ctx, "select database_uuid::text=$1 and fence_ns=$2 and from_version=$3 and to_version=$4 and queue=$5 and job_type=$6 and revision=$7 and source_digest=$8 and source_document=$9 and parent_digest=$10 and inventory_hash=$11 and expansion_hash=$12 and old_contract=$13 and new_contract=$14 and policy=$15 and discard_reason=$16 from "+ns+"tesl_row_queue_conversion_staging where from_version=$3 and queue=$5 and job_type=$6 and revision=$7", args...).Scan(&matches)
 		if err == nil {
 			if !matches {
 				return fmt.Errorf("immutable application queue conversion staging differs")
@@ -336,7 +336,7 @@ func pgStageRowQueueLineage(ctx context.Context, tx pgx.Tx, namespace string, ro
 		if count != source.repairRevision {
 			return fmt.Errorf("application queue repair staging prefix is incomplete")
 		}
-		if _, err := tx.Exec(ctx, "insert into "+ns+"tesl_row_queue_conversion_staging(database_uuid,fence_ns,from_version,to_version,queue,job_type,revision,source_digest,source_document,parent_digest,inventory_hash,expansion_hash,old_contract,new_contract) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)", args...); err != nil {
+		if _, err := tx.Exec(ctx, "insert into "+ns+"tesl_row_queue_conversion_staging(database_uuid,fence_ns,from_version,to_version,queue,job_type,revision,source_digest,source_document,parent_digest,inventory_hash,expansion_hash,old_contract,new_contract,policy,discard_reason) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)", args...); err != nil {
 			return err
 		}
 	}
