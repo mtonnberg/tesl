@@ -349,6 +349,15 @@ func TestQueueRegistrationCanonicalSQLMatchesGo(t *testing.T) {
 		return []byte(pgMigrationSeq(pgMigrationBytes("tesl-migration-canonical"), pgMigrationBytes("1"), pgMigrationBytes("contract"), pgMigrationSeq(pgMigrationBytes("queue-payload-v1"), x)))
 	}
 	cases := [][]byte{nil, {}, raw, append(append([]byte{}, raw...), 0), raw[:len(raw)-1], wrap("l0:"), wrap("s0:"), wrap("s3:雪"), wrap("s2:雪"), wrap("s03:foo"), wrap("l2:s1:xs1:y"), wrap("l99999999999999999999:"), wrap("l1:" + strings.Repeat("l1:", 509) + "s0:"), wrap("l1:" + strings.Repeat("l1:", 510) + "s0:"), wrap("l1:" + strings.Repeat("l1:", 511) + "s0:")}
+	for size := 0; size <= 130; size++ {
+		cases = append(cases, wrap(fmt.Sprintf("s%d:%s", size, strings.Repeat("x", size))), wrap(fmt.Sprintf("s0%d:%s", size, strings.Repeat("x", size))))
+	}
+	for i := range raw {
+		mutated := append([]byte{}, raw...)
+		mutated[i] ^= 1
+		cases = append(cases, raw[:i], mutated)
+	}
+	cases = append(cases, wrap("s1:"+string([]byte{0})), wrap("s1:"+string([]byte{255})), wrap("s9:"), wrap("s99:"), wrap("s100:"), wrap("l9:"), wrap("l99:"), wrap("l100:"))
 	for i, data := range cases {
 		var got bool
 		if err := f.worker.QueryRow(f.ctx, "select notes_app.tesl_queue_contract_valid($1::bytea)", data).Scan(&got); err != nil {
@@ -369,6 +378,54 @@ func TestQueueRegistrationCanonicalSQLMatchesGo(t *testing.T) {
 		var got string
 		if err := f.worker.QueryRow(f.ctx, "select notes_app.tesl_queue_inventory_hash($1,$2,$3,$4,$5,$6::jsonb)", h.Family, v.Version, v.StorageSnapshotHash, v.SchemaSnapshotHash, h.StoredValueCompatibility, queueProjectionJSON(t, pgQueueRegistrationWire(t, v))).Scan(&got); err != nil || got != want {
 			t.Fatalf("SQL/Go digest %s/%s %v", got, want, err)
+		}
+	}
+}
+
+func TestQueueInventoryPreservationSetSemantics(t *testing.T) {
+	f, request, _, _ := pgQueueRegistrationSetup(t)
+	for _, conn := range []*pgx.Conn{f.worker, request} {
+		for _, sql := range []string{
+			"select * from notes_app.tesl_queue_inventory_checked(1)",
+			"select notes_app.tesl_queue_inventory_digest('Family',1,repeat('a',64),repeat('b',64),'tesl-stored-value-v1:'||repeat('c',64),'l0:'::bytea)",
+		} {
+			if _, err := conn.Exec(f.ctx, sql); err == nil || !strings.Contains(err.Error(), "permission denied") {
+				t.Fatalf("application principal reached owner-only validation intermediate: %v", err)
+			}
+		}
+	}
+	// Independent relational oracle: preserve every original (queue, entire
+	// payload) member. Deliberately exercise duplicate/null helper inputs too;
+	// the caller's stricter canonical-inventory validator is a separate boundary.
+	query := `select notes_app.tesl_queue_inventory_preserves($1::jsonb,$2::jsonb),
+ not exists(select 1 from jsonb_array_elements($1::jsonb) oq
+ cross join lateral jsonb_array_elements(oq->'payloads') op
+ where not exists(select 1 from jsonb_array_elements($2::jsonb) nq
+ cross join lateral jsonb_array_elements(nq->'payloads') np
+ where nq->>'queue'=oq->>'queue' and np=op))`
+	inputs := []string{
+		`[]`, `[{"queue":"Jobs","payloads":[]}]`,
+		`[{"queue":"Jobs","payloads":[{"job":"A","contract":"x"}]}]`,
+		`[{"queue":"Jobs","payloads":[{"contract":"x","job":"A"}]}]`,
+		`[{"queue":"Jobs","payloads":[{"job":"A","contract":"y"}]}]`,
+		`[{"queue":"Other","payloads":[{"job":"A","contract":"x"}]}]`,
+		`[{"queue":"Jobs","payloads":[{"job":"A","contract":"x"},{"job":"B","contract":"z"}]}]`,
+		`[{"queue":"Jobs","payloads":[{"job":"A","contract":"x"},{"job":"A","contract":"x"}]}]`,
+		`[{"payloads":[{"job":"A","contract":"x"}]}]`,
+		`[{"queue":null,"payloads":[{"job":"A","contract":"x"}]}]`,
+		`[{"queue":"Jobs","payloads":[null]}]`,
+		`[{"queue":"Jobs","payloads":[{"job":"A","contract":"x","extra":true}]}]`,
+		`[{"queue":"Jobs","payloads":[{"job":"A","contract":"x"}]},{"queue":"Other","payloads":[{"job":"B","contract":"z"}]}]`,
+	}
+	for i, old := range inputs {
+		for j, fresh := range inputs {
+			var got, want bool
+			if err := f.worker.QueryRow(f.ctx, query, old, fresh).Scan(&got, &want); err != nil {
+				t.Fatal(i, j, err)
+			}
+			if got != want {
+				t.Fatalf("old=%s new=%s got=%v want=%v", old, fresh, got, want)
+			}
 		}
 	}
 }

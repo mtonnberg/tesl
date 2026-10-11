@@ -43,29 +43,45 @@ begin
 end`},
 		{"tesl_queue_contract_valid", "value bytea", "boolean", "immutable", `
 declare prefix bytea := pg_catalog.convert_to('l4:s24:tesl-migration-canonicals1:1s8:contractl2:s16:queue-payload-v1','UTF8');
- pos integer:=0; size integer; tag integer; digit integer; count_node bigint; start_pos integer;
- remaining integer[]:=array[1]; depth integer:=1;
+ pos integer:=0; size integer; tag integer; digit integer; second_digit integer; count_node bigint; start_pos integer;
+ remaining integer[]:=array[0,0,1]; depth integer:=3;
 begin
  if value is null then return false; end if;
  size:=pg_catalog.octet_length(value);
  if size>67108864 or pg_catalog.substring(value,1,pg_catalog.octet_length(prefix))<>prefix then return false; end if;
+ -- The checked fixed wrapper has consumed all but its final payload child.
+ -- Keep its three stack levels so the historical depth limit stays identical.
+ pos:=pg_catalog.octet_length(prefix);
  -- Iterative framing validation avoids PostgreSQL call-stack depth limits.
  while depth>0 loop
    if pos>=size then return false; end if;
    remaining[depth]:=remaining[depth]-1;
    tag:=pg_catalog.get_byte(value,pos);pos:=pos+1;
    if tag not in (108,115) then return false; end if;
-   start_pos:=pos;count_node:=0;
-   while pos<size loop
-     digit:=pg_catalog.get_byte(value,pos);
-     exit when digit<48 or digit>57;
-     count_node:=count_node*10+digit-48;
-     if count_node>size then return false; end if;
+   if pos>=size then return false; end if;
+   digit:=pg_catalog.get_byte(value,pos);
+   if digit<48 or digit>57 then return false; end if;
+   -- Most canonical atom lengths/list arities have one or two digits. Avoid
+   -- interpreting a PL/pgSQL loop for those without relaxing numeric framing.
+   if pos+1<size and pg_catalog.get_byte(value,pos+1)=58 then
+     count_node:=digit-48;pos:=pos+2;
+   elsif pos+2<size and pg_catalog.get_byte(value,pos+2)=58 then
+     second_digit:=pg_catalog.get_byte(value,pos+1);
+     if digit=48 or second_digit<48 or second_digit>57 then return false; end if;
+     count_node:=(digit-48)*10+second_digit-48;pos:=pos+3;
+   else
+     start_pos:=pos;count_node:=0;
+     while pos<size loop
+       digit:=pg_catalog.get_byte(value,pos);
+       exit when digit<48 or digit>57;
+       count_node:=count_node*10+digit-48;
+       if count_node>size then return false; end if;
+       pos:=pos+1;
+     end loop;
+     if pos=start_pos or pos>=size or pg_catalog.get_byte(value,pos)<>58 or
+       (pos-start_pos>1 and pg_catalog.get_byte(value,start_pos)=48) then return false; end if;
      pos:=pos+1;
-   end loop;
-   if pos=start_pos or pos>=size or pg_catalog.get_byte(value,pos)<>58 or
-     (pos-start_pos>1 and pg_catalog.get_byte(value,start_pos)=48) then return false; end if;
-   pos:=pos+1;
+   end if;
    if tag=115 then
      if count_node>size-pos then return false; end if;
      pos:=pos+count_node::integer;
@@ -79,13 +95,13 @@ begin
 end`},
 		{"tesl_queue_inventory_node", "contracts jsonb", "bytea", "immutable", `
 declare q jsonb; p jsonb; qid text; jid text; lastq text:=''; lastj text; seen text[]:=array[]::text[];
- qbytes bytea:=''::bytea; pbytes bytea; raw bytea; ctext text; hash text; answer bytea;
+ qbytes bytea:=''::bytea; pbytes bytea; chunks bytea[]; raw bytea; ctext text; hash text; answer bytea;
 begin
  if contracts is null or pg_catalog.jsonb_typeof(contracts)<>'array' or pg_catalog.octet_length(contracts::text)>67108864 then
    raise exception 'tesl: invalid queue inventory array';
  end if;
  for q in select * from pg_catalog.jsonb_array_elements(contracts) loop
-   if pg_catalog.jsonb_typeof(q)<>'object' or (select pg_catalog.count(*) from pg_catalog.jsonb_object_keys(q))<>2 or not(q ?& array['queue','payloads']) or
+   if pg_catalog.jsonb_typeof(q)<>'object' or q-array['queue','payloads']<>'{}'::jsonb or not(q ?& array['queue','payloads']) or
       pg_catalog.jsonb_typeof(q->'queue')<>'string' or pg_catalog.jsonb_typeof(q->'payloads')<>'array' then
      raise exception 'tesl: invalid queue inventory contract';
    end if;
@@ -93,9 +109,9 @@ begin
    if qid !~ '^[A-Z][A-Za-z0-9_]*([.][A-Z][A-Za-z0-9_]*)*$' or qid collate "C"<=lastq collate "C" or pg_catalog.jsonb_array_length(q->'payloads')=0 then
      raise exception 'tesl: unsorted, duplicate or empty queue contract';
    end if;
-   lastq:=qid;lastj:='';pbytes:=''::bytea;
+   lastq:=qid;lastj:='';chunks:=array[]::bytea[];
    for p in select * from pg_catalog.jsonb_array_elements(q->'payloads') loop
-     if pg_catalog.jsonb_typeof(p)<>'object' or (select pg_catalog.count(*) from pg_catalog.jsonb_object_keys(p))<>3 or not(p ?& array['job','contract','contractHash']) or
+     if pg_catalog.jsonb_typeof(p)<>'object' or p-array['job','contract','contractHash']<>'{}'::jsonb or not(p ?& array['job','contract','contractHash']) or
        pg_catalog.jsonb_typeof(p->'job')<>'string' or pg_catalog.jsonb_typeof(p->'contract')<>'string' or pg_catalog.jsonb_typeof(p->'contractHash')<>'string' then
        raise exception 'tesl: invalid queue inventory payload';
      end if;
@@ -108,9 +124,11 @@ begin
      if not ` + ns + `tesl_queue_contract_valid(raw) or pg_catalog.encode(pg_catalog.sha256(raw),'hex')<>hash then
        raise exception 'tesl: queue payload canonical bytes or digest differ';
      end if;
-     pbytes:=pbytes||pg_catalog.convert_to('l4:','UTF8')||` + ns + `tesl_queue_bytes(pg_catalog.convert_to(jid,'UTF8'))||
-       ` + ns + `tesl_queue_bytes(pg_catalog.convert_to('tesl-queue-payload-v1','UTF8'))||` + ns + `tesl_queue_bytes(raw)||` + ns + `tesl_queue_bytes(pg_catalog.convert_to(hash,'UTF8'));
+     chunks:=pg_catalog.array_append(chunks,pg_catalog.convert_to('l4:','UTF8')||` + ns + `tesl_queue_bytes(pg_catalog.convert_to(jid,'UTF8'))||
+       ` + ns + `tesl_queue_bytes(pg_catalog.convert_to('tesl-queue-payload-v1','UTF8'))||` + ns + `tesl_queue_bytes(raw)||` + ns + `tesl_queue_bytes(pg_catalog.convert_to(hash,'UTF8')));
    end loop;
+   select pg_catalog.string_agg(part,''::bytea order by ordinal) into pbytes
+    from pg_catalog.unnest(chunks) with ordinality as pieces(part,ordinal);
    qbytes:=qbytes||pg_catalog.convert_to('l2:','UTF8')||` + ns + `tesl_queue_bytes(pg_catalog.convert_to(qid,'UTF8'))||
      pg_catalog.convert_to('l'||pg_catalog.jsonb_array_length(q->'payloads')::text||':','UTF8')||pbytes;
  end loop;
@@ -118,27 +136,45 @@ begin
  return answer;
 end`},
 		{"tesl_queue_inventory_hash", "family text, v integer, storage_snapshot text, schema_snapshot text, compatibility text, contracts jsonb", "text", "immutable", `
+begin
+ return ` + ns + `tesl_queue_inventory_digest(family,v,storage_snapshot,schema_snapshot,compatibility,` + ns + `tesl_queue_inventory_node(contracts));
+end`},
+		{"tesl_queue_inventory_digest", "family text, v integer, storage_snapshot text, schema_snapshot text, compatibility text, node bytea", "text", "immutable", `
 declare body bytea;
 begin
- if family is null or family='' or v is null or v<1 or v>2147483646 or storage_snapshot is null or storage_snapshot !~ '^[0-9a-f]{64}$' or
+ if node is null or family is null or family='' or v is null or v<1 or v>2147483646 or storage_snapshot is null or storage_snapshot !~ '^[0-9a-f]{64}$' or
    schema_snapshot is null or schema_snapshot !~ '^[0-9a-f]{64}$' or compatibility is null or compatibility !~ '^tesl-stored-value-v1:[0-9a-f]{64}$' then
    raise exception 'tesl: invalid queue semantic inventory binding';
  end if;
  body:=pg_catalog.convert_to('l7:','UTF8')||` + ns + `tesl_queue_bytes(pg_catalog.convert_to('tesl-queue-inventory-v1','UTF8'))||
    ` + ns + `tesl_queue_bytes(pg_catalog.convert_to(family,'UTF8'))||` + ns + `tesl_queue_bytes(pg_catalog.convert_to(v::text,'UTF8'))||
    ` + ns + `tesl_queue_bytes(pg_catalog.convert_to(storage_snapshot,'UTF8'))||` + ns + `tesl_queue_bytes(pg_catalog.convert_to(schema_snapshot,'UTF8'))||
-   ` + ns + `tesl_queue_bytes(pg_catalog.convert_to(compatibility,'UTF8'))||` + ns + `tesl_queue_inventory_node(contracts);
+   ` + ns + `tesl_queue_bytes(pg_catalog.convert_to(compatibility,'UTF8'))||node;
  return pg_catalog.encode(pg_catalog.sha256(body),'hex');
 end`},
 		{"tesl_queue_inventory_preserves", "old_contracts jsonb, new_contracts jsonb", "boolean", "immutable", `
 begin
- return not exists(select 1 from pg_catalog.jsonb_array_elements(old_contracts) oq
-   cross join lateral pg_catalog.jsonb_array_elements(oq->'payloads') op
-   where not exists(select 1 from pg_catalog.jsonb_array_elements(new_contracts) nq
-     cross join lateral pg_catalog.jsonb_array_elements(nq->'payloads') np
-     where nq->>'queue'=oq->>'queue' and np=op));
+ -- Preserve full payload equality, not merely job names/hashes. Set difference
+ -- avoids repeatedly expanding large JSON arrays for every old member. Exclude
+ -- SQL-NULL new queue names: ordinary '=' never matches a NULL old name either.
+ return (with previous as materialized (
+   select oq->>'queue' as queue,op as payload
+   from pg_catalog.jsonb_array_elements(old_contracts) oq
+   cross join lateral pg_catalog.jsonb_array_elements(oq->'payloads') op)
+  select case when not exists(select 1 from previous) then true else not exists(
+   select queue,payload from previous
+   except
+   select nq->>'queue',np from pg_catalog.jsonb_array_elements(new_contracts) nq
+   cross join lateral pg_catalog.jsonb_array_elements(nq->'payloads') np
+   where nq->>'queue' is not null) end);
 end`},
 		{"tesl_queue_inventory_json", "v integer", "jsonb", "stable", `
+declare answer jsonb;
+begin
+ select checked.contracts into answer from ` + ns + `tesl_queue_inventory_checked(v) checked;
+ return answer;
+end`},
+		{"tesl_queue_inventory_checked", "v integer", "TABLE(contracts jsonb, node bytea)", "stable", `
 declare answer jsonb; r ` + ns + `tesl_queue_versions%rowtype; cc bigint; pc bigint; declared_pc bigint;
 begin
  select * into r from ` + ns + `tesl_queue_versions where version=v;
@@ -153,8 +189,7 @@ begin
    (select coalesce(pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object('job',p.job_type,'contract',pg_catalog.encode(p.contract,'hex'),'contractHash',p.contract_hash) order by p.job_type collate "C"),'[]'::jsonb)
     from ` + ns + `tesl_queue_payloads p where p.version=q.version and p.queue=q.queue)) order by q.queue collate "C"),'[]'::jsonb)
  into answer from ` + ns + `tesl_queue_contracts q where q.version=v;
- perform ` + ns + `tesl_queue_inventory_node(answer);
- return answer;
+ return query select answer,` + ns + `tesl_queue_inventory_node(answer);
 end`},
 		{"tesl_queue_verify_inventory", "family text", "void", "stable", `
 declare origin integer; current_v integer; expected integer; limit_v integer; original_hash text; original_compat text;

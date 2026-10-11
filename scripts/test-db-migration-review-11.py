@@ -99,7 +99,12 @@ for number, (name, sql) in enumerate(CATALOG, 1):
 
 
 class RoleReview(DatabaseCase):
-    pass
+    def test_115_application_roles_cannot_call_partial_admission_helper(self):
+        before = self.snapshot()
+        for role in ("review_request", "review_worker"):
+            self.refused(LAB.sql(self.db, "select mail.tesl_row_admit_version(2)", role, ok=False))
+            self.refused(LAB.sql(self.db, "select * from mail.tesl_queue_inventory_checked(2)", role, ok=False))
+        self.assertEqual(self.snapshot(), before)
 
 
 DENIED = [
@@ -489,6 +494,55 @@ end $block$; {'commit' if commit else 'rollback'};"""
     def prepare_probe(self):
         self.run_poison()
         self.enqueue(identity="probe")
+
+    def root_binding(self):
+        binding = LAB.sql(self.db, "select jsonb_build_object('document',encode(c.source_document,'hex'),'parent',nullif(c.parent_digest,''),'revision',c.revision,'family',r.family,'queue',c.queue,'job',c.job_type,'from',c.from_version,'to',c.to_version,'root',c.source_digest,'policy',c.policy,'discardReason',c.discard_reason,'old',encode(c.old_contract,'hex'),'new',encode(c.new_contract,'hex')) from mail.tesl_row_queue_conversion_staging c cross join mail.tesl_row_versions r where c.job_type='Delivery' and c.revision=0 and r.version=1")
+        uuid, digest = json.loads(LAB.sql(self.db, "select json_build_array(m.database_uuid::text,c.source_digest) from mail.tesl_schema_meta m cross join mail.tesl_row_queue_conversion_staging c where c.job_type='Delivery' and c.revision=0"))
+        return literal(uuid), literal(digest), literal(binding)
+
+    def test_113_publication_requires_current_transaction_attempt(self):
+        self.prepare_probe()
+        uuid, digest, binding = self.root_binding()
+        before = self.snapshot()
+        args = f"{uuid}::uuid,{digest},'probe',1,pg_current_xact_id()::text,'{{\"oldText\": \"retained\"}}'"
+        for call in (
+            f"mail.tesl_row_queue_conversion_finish({args},'converted','{{\"message\":\"retained\",\"priority\":7}}'::jsonb,'',{binding}::jsonb)",
+            f"mail.tesl_row_queue_conversion_fail({args},'execution-trap',{binding}::jsonb)",
+            f"mail.tesl_row_queue_conversion_discard({args},{binding}::jsonb)",
+        ):
+            self.assertEqual(LAB.sql(self.db, "select " + call, "review_worker"), "f")
+        self.assertEqual(self.snapshot(), before)
+
+    def test_114_selection_is_not_permission_to_skip_fresh_admission(self):
+        self.prepare_probe()
+        uuid, digest, binding = self.root_binding()
+        self.assertEqual(LAB.sql(self.db, f"select count(*) from mail.tesl_row_queue_conversion_next({uuid}::uuid,{digest},{binding}::jsonb,0)", "review_worker"), "1")
+        LAB.sql(self.db, "update mail.tesl_queue_versions set inventory_hash=repeat('a',64) where version=1")
+        before = self.snapshot()
+        self.refused(LAB.sql(self.db, f"select * from mail.tesl_row_queue_conversion_begin({uuid}::uuid,{digest},'probe',{binding}::jsonb)", "review_worker", ok=False))
+        self.assertEqual(self.snapshot(), before)
+
+    def test_116_committed_attempt_cannot_authorize_a_later_transaction(self):
+        self.prepare_probe()
+        uuid, digest, binding = self.root_binding()
+        attempt = json.loads(LAB.sql(self.db, f"select row_to_json(a) from mail.tesl_row_queue_conversion_begin({uuid}::uuid,{digest},'probe',{binding}::jsonb) a", "review_worker"))
+        before = self.snapshot()
+        for xid in (literal(attempt["transaction_id"]), "pg_current_xact_id()::text"):
+            result = LAB.sql(self.db, f"select mail.tesl_row_queue_conversion_finish({uuid}::uuid,{digest},'probe',{attempt['attempt_seq']},{xid},{literal(attempt['original'])},'converted','{{\"message\":\"retained\",\"priority\":7}}'::jsonb,'',{binding}::jsonb)", "review_worker")
+            self.assertEqual(result, "f")
+        self.assertEqual(self.snapshot(), before)
+
+    def test_117_rolled_back_attempt_cannot_authorize_same_transaction(self):
+        self.prepare_probe()
+        uuid, digest, binding = self.root_binding()
+        before = self.snapshot()
+        result = LAB.sql(self.db, f"""begin; savepoint before_attempt;
+select * from mail.tesl_row_queue_conversion_begin({uuid}::uuid,{digest},'probe',{binding}::jsonb);
+rollback to savepoint before_attempt;
+select mail.tesl_row_queue_conversion_finish({uuid}::uuid,{digest},'probe',1,pg_current_xact_id()::text,'{{"oldText": "retained"}}','converted','{{"message":"retained","priority":7}}'::jsonb,'',{binding}::jsonb);
+rollback;""", "review_worker")
+        self.assertIn("f", result.splitlines())
+        self.assertEqual(self.snapshot(), before)
 
     def test_077_failure_publication_rolls_back_with_transaction(self):
         self.prepare_probe()

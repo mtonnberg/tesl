@@ -29,6 +29,7 @@ def main():
     parser.add_argument("--backlog", type=int, default=1024)
     parser.add_argument("--observe-seconds", type=int, default=600)
     parser.add_argument("--release-build", action="store_true", help="measure ordinary Go build without race instrumentation")
+    parser.add_argument("--function-profile", action="store_true", help="record PostgreSQL function costs in this private test cluster")
     args = parser.parse_args()
     if not 3 <= args.types <= 257 or not 1 <= args.backlog <= 4096 or not 25 <= args.observe_seconds <= 1200:
         parser.error("types must be 3–257, backlog 1–4096, observation 25–1200 seconds")
@@ -52,6 +53,9 @@ def main():
         result["compilerSha256"] = compiler_hash
         result["binaries"] = {v: hashlib.sha256((args.artifacts / family / v / "app").read_bytes()).hexdigest() for v in ("v1", "v2")}
         lab.prepare()
+        if args.function_profile:
+            lab.sql("postgres", "alter system set track_functions='all'")
+            lab.sql("postgres", "select pg_reload_conf()")
         lab.sql("postgres", f"create database {db}")
         lab.sql("postgres", f"grant create on database {db} to review_owner")
         lab.sql(db, "grant create on schema public to review_owner")
@@ -68,6 +72,8 @@ def main():
         for start in range(0, args.types-1, 32):
             lab.sql(db, f"select mail.tesl_queue_enqueue(1,'Jobs','Other'||lpad(n::text,3,'0'),'rare-'||n::text,'{{\"oldText\":\"rare\"}}') from generate_series({start},{min(start+31,args.types-2)}) n", "review_request")
         result["enqueueSeconds"] = time.monotonic()-started
+        if args.function_profile:
+            lab.sql(db, "select pg_stat_reset()")
         started = time.monotonic()
         worker = lab.start(db, "v2", family)
         result["workerStartupSeconds"] = time.monotonic()-started
@@ -91,6 +97,11 @@ def main():
         result["admission"] = lab.sql(db, "select current||','||min_version||','||compat_floor from mail.tesl_schema_state")
         if not result["payloadsCorrect"] or result["admission"] != "2,1,1":
             raise RuntimeError("scale workload lost payload or admission invariants")
+        if args.function_profile:
+            lab.stop(*worker)
+            worker = None
+            time.sleep(1)
+            result["functionProfile"] = json.loads(lab.sql(db, "select coalesce(json_agg(x),'[]') from (select funcname,calls,total_time,self_time from pg_stat_user_functions where schemaname='mail' order by self_time desc) x"))
         print(json.dumps({k:v for k,v in result.items() if k != "samples"}, indent=2), flush=True)
     finally:
         if worker:

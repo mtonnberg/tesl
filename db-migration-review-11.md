@@ -7,6 +7,15 @@ are subsequent working-tree changes. See the
 
 ## Bottom line
 
+**Latest performance follow-up after `3242931`:** two ordinary-release runs of the
+257-type/1,024-head workload reached all types in **24.535s and 24.549s**, preserving
+payloads and admission floors and retaining busy-head work. This supersedes the
+earlier 685.73s and partial-progress measurements below. The unchanged 25-second
+check passes these samples with little margin; no production SLA is claimed.
+Enqueue setup is now about 44–45s. The final 117-case review suite, 127 existing
+cases and focused compiler/PostgreSQL/runtime gates pass. Details and safety
+obligations are in [queue admission performance](dev-docs/queue-admission-performance.md).
+
 **Keep the architecture. The supported lifecycle has strong identity, proof,
 fencing and replay properties, but operational completion remains narrower than
 source acceptance.** This is a functioning scoped migration system, not merely

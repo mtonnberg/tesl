@@ -5,6 +5,13 @@ commands and logs: [db-migration-review-11.md](db-migration-review-11.md).
 
 ## Bottom line
 
+**Latest performance result:** after `3242931`, repeated inventory work was reduced
+without changing per-job commits or ownership/finality obligations. The 257-type
+reference workload now reaches all types in **24.54s and 24.55s**, versus 685.73s
+previously—about 28× faster. The 25-second check passes with a small margin, not a
+general SLA. Enqueue setup remains about 45s. All 117 review cases and 127 existing
+cases pass; a fresh complete default gate remains pending for this follow-up.
+
 **Latest remediation decision:** following the maintainer's request for both
 preservation and explicit loss policies, `QueueRepair` now supports
 `on: "execution-failed"` for corrected conversion and `on: "unconverted"` with a

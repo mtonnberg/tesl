@@ -86,6 +86,7 @@ func pgRowControlTables() []pgMigrationControlTable {
 func pgRowControlFunctions(namespace string) []pgMigrationControlFunction {
 	ns := quoteIdentifier(namespace) + "."
 	functions := pgMigrationControlFunctionsV2(namespace)
+	var internal []pgMigrationControlFunction
 	for i, fn := range functions {
 		guard := ` if v is null or v<1 or v>2147483646 or not exists(select 1 from ` + ns + `tesl_schema_meta where id=1 and format_version=5 and initial_version=1) then
  raise exception 'tesl: unsupported bounded format5 row version'; end if;
@@ -149,7 +150,16 @@ func pgRowControlFunctions(namespace string) []pgMigrationControlFunction {
 end`
 		}
 		functions[i].body = strings.Replace(body, "\nbegin\n", "\nbegin\n"+guard, 1)
+		if fn.name == "tesl_admit" {
+			versionOnly := functions[i]
+			versionOnly.name = "tesl_row_admit_version"
+			// Queue admission validates every complete inventory itself immediately
+			// afterward. Retain all other live version/baseline admission checks.
+			versionOnly.body = strings.Replace(versionOnly.body, " perform "+ns+"tesl_queue_inventory_json(v);", "", 1)
+			internal = append(internal, versionOnly)
+		}
 	}
+	functions = append(functions, internal...)
 	functions = append(functions, pgQueueRegistrationFunctions(namespace)...)
 	functions = append(functions, pgRowQueueOperationFunctions(namespace)...)
 	functions = append(functions, pgRowQueueFunctions(namespace)...)

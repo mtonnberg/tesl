@@ -280,6 +280,12 @@ func pgControlFunctionCatalog(ctx context.Context, tx pgx.Tx, namespace string, 
 }
 
 func pgControlFunctionRoles(roles PgMigrationControlRoles, fn pgMigrationControlFunction) []string {
+	switch fn.name {
+	case "tesl_queue_inventory_checked", "tesl_queue_inventory_digest", "tesl_row_admit_version":
+		// Internal composition helpers: only the owner-definer wrappers may
+		// consume these intermediate values. Never application-supplied authority.
+		return []string{roles.Owner}
+	}
 	principals := []string{roles.Worker}
 	requestCallable := false
 	switch fn.name {

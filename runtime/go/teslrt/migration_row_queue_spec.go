@@ -16,6 +16,9 @@ begin
  if doc is null then raise exception 'tesl: missing physical source header'; end if;
  size:=pg_catalog.octet_length(doc);pos:=pg_catalog.octet_length(prefix);
  if size>67108864 or size<pos+3 or pg_catalog.substring(doc,1,pos)<>prefix or pg_catalog.get_byte(doc,pos)<>108 then raise exception 'tesl: invalid physical source document prefix'; end if;
+ -- Materialize a possibly TOAST-compressed stored descriptor once. Otherwise
+ -- each byte accessor below may repeatedly decompress the entire large plan.
+ doc:=doc||''::bytea;
  if size>=pos+4 and pg_catalog.substring(doc,pos+1,4)=pg_catalog.convert_to('l10:','UTF8') then
   width:=10;pos:=pos+4;
  else
@@ -88,8 +91,8 @@ begin
 end`},
 		{"tesl_row_queue_transition_valid", "old_contracts jsonb, new_contracts jsonb, v integer", "boolean", "stable", `
 begin
- if ` + ns + `tesl_queue_inventory_preserves(old_contracts,new_contracts)
-  and not exists(select 1 from ` + ns + `tesl_row_queue_target_staging where version=v) then return true; end if;
+ if not exists(select 1 from ` + ns + `tesl_row_queue_target_staging where version=v)
+  and ` + ns + `tesl_queue_inventory_preserves(old_contracts,new_contracts) then return true; end if;
   if v is null or v<2 or v>2147483646 then return false; end if;
  if not exists(select 1 from ` + ns + `tesl_row_queue_target_staging t
  join ` + ns + `tesl_schema_meta m on m.id=1 and m.database_uuid=t.database_uuid and m.fence_ns=t.fence_ns
@@ -109,20 +112,22 @@ begin
    new_payloads as materialized (
     select q->>'queue' as queue,p->>'job' as job,p as payload
     from pg_catalog.jsonb_array_elements(new_contracts) q
-    cross join lateral pg_catalog.jsonb_array_elements(q->'payloads') p)
-   select not exists(select 1 from new_payloads np where not exists(
-    select 1 from old_payloads op where op.queue=np.queue and op.job=np.job))
-   and not exists(select 1 from old_payloads op where not exists(
-    select 1 from new_payloads np where np.queue=op.queue and np.job=op.job
-     and (np.payload=op.payload or exists(select 1 from ` + ns + `tesl_row_queue_conversion_staging c
-      join ` + ns + `tesl_schema_meta m on m.id=1 and m.database_uuid=c.database_uuid and m.fence_ns=c.fence_ns
-      join ` + ns + `tesl_row_queue_sources source on source.version=c.from_version and source.inventory_hash=c.inventory_hash and source.expansion_hash=c.expansion_hash
-      where c.from_version=v-1 and c.to_version=v and c.revision=0 and c.queue=op.queue and c.job_type=op.job
-       and c.old_contract=pg_catalog.decode(op.payload->>'contract','hex') and c.new_contract=pg_catalog.decode(np.payload->>'contract','hex')))))
-   and not exists(select 1 from ` + ns + `tesl_row_queue_conversion_staging c where c.from_version=v-1 and c.revision=0
-    and not exists(select 1 from old_payloads op join new_payloads np on np.queue=op.queue and np.job=op.job
-     where op.queue=c.queue and op.job=c.job_type and np.payload<>op.payload
-      and c.old_contract=pg_catalog.decode(op.payload->>'contract','hex') and c.new_contract=pg_catalog.decode(np.payload->>'contract','hex'))));
+   cross join lateral pg_catalog.jsonb_array_elements(q->'payloads') p),
+  pairs as materialized (
+   select coalesce(op.queue,np.queue) as queue,coalesce(op.job,np.job) as job,
+    op.payload as old_payload,np.payload as new_payload
+   from old_payloads op full join new_payloads np on np.queue=op.queue and np.job=op.job),
+  roots as materialized (
+   select c.* from ` + ns + `tesl_row_queue_conversion_staging c
+   join ` + ns + `tesl_schema_meta m on m.id=1 and m.database_uuid=c.database_uuid and m.fence_ns=c.fence_ns
+   join ` + ns + `tesl_row_queue_sources source on source.version=c.from_version and source.inventory_hash=c.inventory_hash and source.expansion_hash=c.expansion_hash
+   where c.from_version=v-1 and c.to_version=v and c.revision=0)
+  select not exists(select 1 from pairs p where p.old_payload is null or p.new_payload is null
+   or (p.old_payload<>p.new_payload and not exists(select 1 from roots c where c.queue=p.queue and c.job_type=p.job
+    and c.old_contract=pg_catalog.decode(p.old_payload->>'contract','hex') and c.new_contract=pg_catalog.decode(p.new_payload->>'contract','hex'))))
+  and not exists(select 1 from ` + ns + `tesl_row_queue_conversion_staging c where c.from_version=v-1 and c.revision=0
+   and not exists(select 1 from pairs p where p.queue=c.queue and p.job=c.job_type and p.old_payload<>p.new_payload
+    and c.old_contract=pg_catalog.decode(p.old_payload->>'contract','hex') and c.new_contract=pg_catalog.decode(p.new_payload->>'contract','hex'))));
 end`}}
 }
 
@@ -152,7 +157,7 @@ begin
  if not found then raise exception 'tesl: protected row queue format is not installed'; end if;
  -- Keep the post-wait state read in separate volatile SPI statements.
  perform pg_catalog.pg_advisory_xact_lock_shared(fence,v);
- perform ` + ns + `tesl_admit(v);
+  perform ` + ns + `tesl_row_admit_version(v);
  select min_version into floor from ` + ns + `tesl_schema_state where id=1;
  if not found or floor<1 or floor>v then raise exception 'tesl: invalid queue admission state'; end if;
  if exists(select 1 from ` + ns + `tesl_jobs where schema_version<floor and status<>'quarantined') then
@@ -173,7 +178,7 @@ func pgRowQueueVerificationDeclarations(namespace string) string {
 	return `n integer; family text; compatibility text;
  original ` + ns + `tesl_row_versions%rowtype; source ` + ns + `tesl_queue_versions%rowtype;
  binding ` + ns + `tesl_row_queue_sources%rowtype; physical ` + ns + `tesl_row_physical%rowtype;
- contracts jsonb; previous jsonb:='[]'::jsonb; expected bytea; source_header jsonb;
+  contracts jsonb; inventory_node bytea; previous jsonb:='[]'::jsonb; expected bytea; source_header jsonb;
  expected_expansion text; expected_artifact text; expected_abi text;`
 }
 
@@ -197,9 +202,9 @@ func pgRowQueueVerificationSQL(namespace, version string) string {
   if not found then raise exception 'tesl: row queue source prefix is incomplete'; end if;
   select * into binding from ` + ns + `tesl_row_queue_sources where version=n;
   if not found then raise exception 'tesl: row queue source binding is missing'; end if;
-  contracts:=` + ns + `tesl_queue_inventory_json(n);
+   select checked.contracts,checked.node into contracts,inventory_node from ` + ns + `tesl_queue_inventory_checked(n) checked;
   if source.stored_value_compatibility<>compatibility or source.inventory_hash<>binding.inventory_hash
-   or ` + ns + `tesl_queue_inventory_hash(family,n,source.storage_snapshot_hash,source.schema_snapshot_hash,compatibility,contracts)<>source.inventory_hash
+    or ` + ns + `tesl_queue_inventory_digest(family,n,source.storage_snapshot_hash,source.schema_snapshot_hash,compatibility,inventory_node)<>source.inventory_hash
     or (n>1 and not ` + ns + `tesl_row_queue_transition_valid(previous,contracts,n)) then
    raise exception 'tesl: row queue semantic inventory differs'; end if;
   previous:=contracts;

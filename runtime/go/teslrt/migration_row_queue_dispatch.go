@@ -95,7 +95,20 @@ func pgRowQueueConversionFunctions(namespace string) []pgMigrationControlFunctio
 		if !strings.Contains(fn.body, originalGuard) {
 			panic("application queue conversion lost its closed scope guard")
 		}
-		fn.body = strings.Replace(fn.body, originalGuard, guard, 1)
+		operationGuard := guard
+		if fn.name == "tesl_queue_conversion_next" || fn.name == "tesl_queue_conversion_finish" {
+			// NEXT only selects/locks an ID; BEGIN must independently perform full
+			// admission before minting an attempt. FINISH (including failure and
+			// discard below) requires that private attempt's exact current xid,
+			// sequence, source binding and original bytes. BEGIN retains the source
+			// and target fences plus the state-row share lock until transaction end.
+			// Reacquire/check those live domains here, but do not reconstruct the
+			// complete immutable inventory a second/third time for the same job.
+			operationGuard = strings.Replace(operationGuard,
+				" perform "+ns+"tesl_queue_admit(s.to_version,s.queue);",
+				" perform pg_catalog.pg_advisory_xact_lock_shared(s.fence,s.to_version);", 1)
+		}
+		fn.body = strings.Replace(fn.body, originalGuard, operationGuard, 1)
 		fn.body = strings.ReplaceAll(fn.body, "s "+ns+"tesl_queue_conversion_scope%rowtype", "s record")
 		fn.body = strings.ReplaceAll(fn.body, "source "+ns+"tesl_queue_conversion_sources%rowtype", "source record")
 		fn.body = strings.ReplaceAll(fn.body, "from "+ns+"tesl_queue_conversion_sources c", "from "+sources+" c")
