@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -43,7 +44,9 @@ func realMigrationApp(t *testing.T) *App {
 		t.Fatal(err)
 	}
 	app, _ := fakeApp(t)
-	app.Environment = os.Environ()
+	// This fixture models a developer's terminal. CI refusal has its own test;
+	// inheriting the harness's CI flag would prevent every scripted interaction.
+	app.Environment = slices.DeleteFunc(os.Environ(), func(value string) bool { return strings.HasPrefix(value, "CI=") })
 	app.Resolver.Getenv = func(key string) string {
 		if key == "TESL_COMPILER" {
 			return compiler
@@ -269,7 +272,7 @@ func TestMigrationNativePlanIsReadOnlyAndCoversCompleteHistory(t *testing.T) {
 	}
 }
 
-func TestMigrationCompiledExpansionAllOperations(t *testing.T) {
+func TestMigrationPlanAllOperationsAndRefusesUnsupportedComposition(t *testing.T) {
 	app := realMigrationApp(t)
 	writeProjectFile(t, app.Directory, "app.tesl", migrationPostgresApp)
 	schema := `module NotesSchema.VCurrent exposing [Note]
@@ -312,7 +315,6 @@ entity Note table "notes" primaryKey id {
 	if _, err := migrationRun(t, app, "generate", "app.tesl", "--new-revision"); err != nil {
 		t.Fatal(err)
 	}
-	schema = strings.ReplaceAll(schema, audit, "")
 	schema = strings.Replace(schema, `index [active] as "active_index"`, `unique index [active] as "active_unique"`, 1)
 	writeProjectFile(t, app.Directory, "schema/notes/v-current.tesl", schema)
 	migrationCheck(t, app, "schema/notes/v-current.tesl", false)
@@ -320,51 +322,34 @@ entity Note table "notes" primaryKey id {
 		t.Fatal(err)
 	}
 	migrationCheck(t, app, "app.tesl", true)
-	output := filepath.Join(t.TempDir(), "generated")
-	if err := app.Run(context.Background(), []string{"compile", "app.tesl", "--out", output}); err != nil {
+	// Table removal is a separate edge with unchanged surviving entities.
+	if _, err := migrationRun(t, app, "generate", "app.tesl", "--new-revision"); err != nil {
 		t.Fatal(err)
 	}
-	historyBytes, err := os.ReadFile(filepath.Join(output, "migration-history.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var metadata struct{ StoredValueCompatibility string }
-	if err := json.Unmarshal(historyBytes, &metadata); err != nil {
+	schema = strings.ReplaceAll(schema, audit, "")
+	writeProjectFile(t, app.Directory, "schema/notes/v-current.tesl", schema)
+	if _, err := migrationRun(t, app, "generate", "app.tesl"); err != nil {
 		t.Fatal(err)
 	}
 	seen := map[string]bool{}
-	for origin := 1; origin <= 3; origin++ {
+	for origin := 1; origin <= 4; origin++ {
 		preview, err := migrationRun(t, app, "plan", "app.tesl", "--initial-version", fmt.Sprint(origin))
 		if err != nil {
+			t.Fatalf("plan: %v\n%s\n%s", err, app.Stdout, app.Stderr)
+		}
+		if string(preview["executable"]) != "false" {
+			t.Fatal("source-only preview claimed database execution authority")
+		}
+		var steps []teslrt.PgMigrationExpansionStep
+		if err := json.Unmarshal(preview["steps"], &steps); err != nil {
 			t.Fatal(err)
 		}
-		var abi string
-		if err := json.Unmarshal(preview["compilerAbi"], &abi); err != nil {
-			t.Fatal(err)
+		if len(steps) != 5-origin {
+			t.Fatal("preview omitted retained steps")
 		}
-		history := teslrt.PgCompiledMigrationHistory{Database: "App.Main", Family: "NotesSchema", Namespace: "notes_app", CurrentVersion: 3,
-			SourceCompilerABI: abi, StoredValueCompatibility: metadata.StoredValueCompatibility, HistoryJSON: string(historyBytes)}
-		plan, err := history.ExpansionPlan(origin)
-		if err != nil {
-			t.Fatal(err)
-		}
-		var expected []struct {
-			Version                int
-			SnapshotHash, StepHash string
-			EpochPreserving        bool
-			Catalog                []teslrt.PgMigrationCatalogTable
-		}
-		if err := json.Unmarshal(preview["steps"], &expected); err != nil {
-			t.Fatal(err)
-		}
-		if len(expected) != len(plan.Steps) {
-			t.Fatal("runtime omitted steps")
-		}
-		for i, step := range plan.Steps {
-			want := expected[i]
-			if step.Version != want.Version || step.SnapshotHash != want.SnapshotHash || step.StepHash != want.StepHash ||
-				step.EpochPreserving != want.EpochPreserving || !reflect.DeepEqual(step.Catalog, want.Catalog) {
-				t.Fatalf("compiler/runtime disagreement at origin V%d step V%d: %+v / %+v", origin, step.Version, step, want)
+		for i, step := range steps {
+			if step.Version != origin+i || step.SnapshotHash == "" || step.StepHash == "" || len(step.Catalog) == 0 {
+				t.Fatalf("incomplete preview at origin V%d: %+v", origin, step)
 			}
 			for _, op := range step.Operations {
 				seen[op.Kind] = true
@@ -375,6 +360,18 @@ entity Note table "notes" primaryKey id {
 		if !seen[kind] {
 			t.Errorf("fixture did not exercise %s", kind)
 		}
+	}
+	// Physical execution deliberately refuses a table Drop combined with a
+	// changed surviving entity. Planning those operations is not permission to
+	// install them, nor to relabel current row history as legacy format 3.
+	schema = strings.Replace(schema, `unique index [active] as "active_unique"`, `index [active] as "another_index"`, 1)
+	writeProjectFile(t, app.Directory, "schema/notes/v-current.tesl", schema)
+	if _, err := migrationRun(t, app, "generate", "app.tesl"); err != nil {
+		t.Fatal(err)
+	}
+	output := filepath.Join(t.TempDir(), "generated")
+	if err := app.Run(context.Background(), []string{"compile", "app.tesl", "--out", output}); err == nil || !strings.Contains(app.Stderr.(*bytes.Buffer).String(), "MIG016") {
+		t.Fatalf("unsupported composition emitted: %v\n%s\n%s", err, app.Stdout, app.Stderr)
 	}
 	if got, err := os.ReadFile(filepath.Join(app.Directory, "app.tesl")); err != nil || string(got) != migrationPostgresApp {
 		t.Fatalf("migration changed the connection owner: %v", err)
@@ -414,9 +411,9 @@ import ("encoding/json"; "os"; fixture %q)
 func main() {
  history, ok := fixture.MainDatabase.CompiledMigrationHistory()
  if !ok { panic("missing linked migration history") }
- plan, err := history.ExpansionPlan(1)
+ inventory, err := history.RowSourceInventory()
  if err != nil { panic(err) }
- if len(plan.Steps) != 1 || len(plan.Steps[0].Catalog) != 1 { panic("incomplete standalone plan") }
+ if len(inventory.Versions) != 1 || len(inventory.Versions[0].Entities) != 1 { panic("incomplete standalone source history") }
  if err := json.NewEncoder(os.Stdout).Encode(history); err != nil { panic(err) }
 }
 `, fields[1]+"/internal/teslmodconfig")
@@ -429,8 +426,14 @@ func main() {
 	if output, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("compile history probe: %v\n%s", err, output)
 	}
-	if err := os.Remove(filepath.Join(generated, "migration-history.json")); err != nil {
-		t.Fatal(err)
+	sidecars, err := filepath.Glob(filepath.Join(generated, "*-history.json"))
+	if err != nil || len(sidecars) == 0 {
+		t.Fatal("missing history sidecars", err)
+	}
+	for _, sidecar := range sidecars {
+		if err := os.Remove(sidecar); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if err := os.RemoveAll(app.Directory); err != nil {
 		t.Fatal(err)

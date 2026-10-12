@@ -40,7 +40,7 @@ func TestPgRowRetypePhysicalActualApp(t *testing.T) {
 			t.Fatal(err)
 		}
 		cmd := pgForwardNativeCommand(f, root, version, "serve")
-		cmd.Env = append(cmd.Env, "ROW_PORT="+port, "TESL_PG_POOL_LEASE_TIMEOUT_MS="+strconv.Itoa(timeout))
+		cmd.Env = append(cmd.Env, "ROW_PORT="+port, "TESL_MIGRATION_TEST_REQUEST_TIMEOUT_MS="+strconv.Itoa(timeout))
 		var output pgRowAppOutput
 		cmd.Stdout = &output
 		cmd.Stderr = &output

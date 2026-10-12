@@ -3166,7 +3166,7 @@
     {
       "name": "TestTodoTransformStageSources",
       "file": "todo_showcase_test.go",
-      "line": 365,
+      "line": 368,
       "layer": "harness",
       "invariants": [
         "INV-JSONB-COMPATIBILITY"

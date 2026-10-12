@@ -36,7 +36,10 @@ func TestQueueRuntimeWorkerLifetimeDrainsBeforeUnbind(t *testing.T) {
 		for _, fail := range []bool{false, true} {
 			t.Run(fmt.Sprintf("dead=%v/handler_failure=%v", dead, fail), func(t *testing.T) {
 				f := pgNewQueueRuntimeTest(t, 3, 3)
-				t.Setenv("TESL_QUEUE_VISIBILITY_TIMEOUT_MS", "120")
+				// Renewal includes real protected PostgreSQL admission. Give that
+				// round trip room on shared runners; the assertions below still
+				// cross the observed lease deadline within their three-second bound.
+				t.Setenv("TESL_QUEUE_VISIBILITY_TIMEOUT_MS", "1000")
 				entered, release := make(chan struct{}), make(chan struct{})
 				persistenceEntered := make(chan string, 1)
 				persistenceRelease := make(chan struct{})

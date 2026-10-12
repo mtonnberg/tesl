@@ -110,10 +110,13 @@ func TestPgRowAdoptionCompletedAnchorBoundary(t *testing.T) {
 func TestPgRowAdoptionSummaryIsDiagnosticCopy(t *testing.T) {
 	inspection := PgRowAdoptionInspection{summary: PgRowAdoptionSummary{AnchorVersion: 7, LegacyInitialVersion: 4, Tables: []PgRowAdoptionTable{{Table: "notes", Generation: 1}}, SourceSealInventory: []string{"unknown"}}}
 	copy := inspection.Summary()
+	if len(copy.Tables) != 1 || len(copy.SourceSealInventory) != 1 {
+		t.Fatal("summary omitted fixture provenance")
+	}
 	copy.Tables[0].Generation = 99
 	copy.SourceSealInventory[0] = "complete"
 	again := inspection.Summary()
-	if again.AnchorVersion != 7 || again.LegacyInitialVersion != 4 || again.Tables[0].Generation != 1 || again.SourceSealInventory[0] != "unknown" {
+	if again.AnchorVersion != 7 || again.LegacyInitialVersion != 4 || len(again.Tables) != 1 || len(again.SourceSealInventory) != 1 || again.Tables[0].Generation != 1 || again.SourceSealInventory[0] != "unknown" {
 		t.Fatal("summary mutation changed diagnostic provenance", again)
 	}
 }

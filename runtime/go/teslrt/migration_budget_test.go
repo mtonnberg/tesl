@@ -36,6 +36,9 @@ func TestMigrationBudgetStopsLoopAndClearsScope(t *testing.T) {
 func TestMigrationBudgetNestedScopeDoesNotRenewFuel(t *testing.T) {
 	defer BeginMigrationExecution()()
 	budget := migrationCurrentBudget()
+	if budget == nil {
+		t.Fatal("execution did not establish a budget")
+	}
 	budget.fuel = 1
 	defer BeginMigrationExecution()()
 	MigrationStep()
@@ -62,6 +65,9 @@ func TestMigrationBudgetCancellationAndRecursion(t *testing.T) {
 func TestMigrationBudgetDoesNotInheritAcrossGoroutines(t *testing.T) {
 	defer BeginMigrationExecution()()
 	budget := migrationCurrentBudget()
+	if budget == nil {
+		t.Fatal("execution did not establish a budget")
+	}
 	budget.fuel = 0
 	done := make(chan bool, 1)
 	go func() { MigrationStep(); done <- migrationCurrentBudget() == nil }()

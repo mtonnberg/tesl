@@ -163,7 +163,9 @@ func TestPgRowJSONKeyBaselineAndCarrier(t *testing.T) {
 		t.Fatal(err)
 	}
 	pgCallRowAccessApp(t, f.ctx, app, "GET", "/all", 500)
-	if !strings.Contains(output.String(), "a record column failed its codec: no decode alternative matched") {
+	observed, stopObservation := context.WithTimeout(f.ctx, 3*time.Second)
+	defer stopObservation()
+	if !output.WaitContains(observed, "a record column failed its codec: no decode alternative matched") {
 		t.Fatal("malformed JSON null did not reach original record codec", output.String())
 	}
 	var abi, shards, contracts, floor int

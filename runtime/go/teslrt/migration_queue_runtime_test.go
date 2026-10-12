@@ -50,7 +50,7 @@ func pgNewQueueRuntimeCodecsTest(t *testing.T, current, latest int, two bool) *p
 	t.Cleanup(listener.Close)
 	RegisterQueueSchema(queue, database, h.Family, "Notifications", current)
 	source, err := h.QueueSourceInventory(current)
-	if err != nil {
+	if err != nil || len(source.Versions) == 0 || len(source.Versions[0].Contracts) == 0 || len(source.Versions[0].Contracts[0].Payloads) == 0 {
 		t.Fatal(err)
 	}
 	payloads := source.Versions[0].Contracts[0].Payloads

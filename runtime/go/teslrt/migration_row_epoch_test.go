@@ -36,6 +36,9 @@ func TestRowEpochRetirementIdentityAndCompletePrefix(t *testing.T) {
 	}
 	// A description may bind a closed transforming prefix without treating it
 	// as an additive slot. Runtime publication separately requires its Contract.
+	if plans[3] == nil {
+		t.Fatal("epoch fixture omitted its surviving plan")
+	}
 	plans[3].requiresContractVersion = 2
 	if _, _, err := pgRowEpochDocument(b, state, 2, 3, false, plans); err != nil {
 		t.Fatal("additive tail lost its complete transforming prefix", err)

@@ -1,78 +1,67 @@
 # Database migrations — executive review 11
 
-Date: 2026-10-07. Baseline: **`ebca5fe` (`wip`)**. Technical findings, test inventory,
+Original review: 2026-10-07, baseline **`ebca5fe` (`wip`)**. Current assessment:
+2026-10-12, including readiness fixes after **`f436e7f`**. Technical discovery history, test inventory,
 commands and logs: [db-migration-review-11.md](db-migration-review-11.md).
+The [delivery status](dev-docs/migration-delivery-status.md) maps the implementation
+to the original roadmap and final acceptance gates.
 
 ## Bottom line
+
+**Local acceptance is green:** authoritative `./ci.sh` completed with all 24 phases
+OK, no skips and exit 0 in 12,489 seconds. The same invocation includes all 47
+migration phases, 244 adversarial cases and V1–V20. Log:
+`.tesl-stuff/readiness-ci-final-gate.log`. Hosted PostgreSQL matrix results remain
+required; the broader original roadmap stays open.
 
 **Latest performance result:** after `3242931`, repeated inventory work was reduced
 without changing per-job commits or ownership/finality obligations. The 257-type
 reference workload now reaches all types in **24.54s and 24.55s**, versus 685.73s
 previously—about 28× faster. The 25-second check passes with a small margin, not a
 general SLA. Enqueue setup remains about 45s. All 117 review cases and 127 existing
-cases pass; a fresh complete default gate remains pending for this follow-up.
+cases pass in the complete gate above. The performance samples retain their
+original binary provenance; they are not a new Go 1.26.9 throughput measurement.
 
 **Latest remediation decision:** following the maintainer's request for both
 preservation and explicit loss policies, `QueueRepair` now supports
 `on: "execution-failed"` for corrected conversion and `on: "unconverted"` with a
-reason for audited discard. Both complete real deployment/retirement witnesses;
-112 review cases and 127 existing cases pass, including shared-opening checks. The separate recovery-keyword
-proposal is superseded, not a release blocker. Historical assessments below are
-retained with this update taking precedence.
+reason for audited discard. Both complete real deployment/retirement witnesses.
+The separate recovery-keyword proposal is superseded, not a release blocker.
 
-**The architecture is sound enough to keep investing in. The next milestone
-should complete failure recovery and establish practical scale limits—not add
-more migration forms.**
+**Ready for scoped PR review. Local validation is complete; hosted matrix checks
+and explicit delivery scope govern the merge decision.**
 
 The system now demonstrates genuine repeated deployments, exact immutable history,
 typed conversion and repair, separate operating roles, overlap, retirement and
 restart. Recent performance work also gets 257-type applications through build,
 installation and replay.
 
-This review added **74 adversarial/control cases** and reran **127 existing cases
-against fresh releases**. All 201 pass. Both row and queue V1–V4 applications and
-focused runtime/PostgreSQL gates pass. A confirmed status defect was fixed.
+The latest focused evidence is **117 review cases plus 127 existing adversarial
+cases**, 58 compiler queue-source/PostgreSQL cases and focused runtime race and
+embedding checks. A confirmed status defect and poisoned-callback progress failure
+were fixed. Explicit typed recovery and audited discard now have deployment and
+retirement witnesses.
 
-Those results justify **scoped fresh-install evaluation**. They do not justify an
-unrestricted production-readiness claim: one poisoned conversion can still halt
-the shared Worker without a useful durable recovery diagnosis, and large-inventory
-runtime throughput/fairness remains unverified.
-
-**Follow-up after `2d70dae`:** durable callback-failure diagnosis and peer progress
-are now implemented and verified. The new suite has grown to 87 passing cases,
-alongside the 127 existing cases. An admitted predecessor can resolve a still-
-processable failed job without erasing the audit. General typed callback-failure
-recovery and large-inventory runtime acceptance remain open.
-
-**Twenty-release continuation after `2a034d3`:** the default migration gate passed
-uninterrupted before the later queue SQL optimization, including a real **V1–V20 four-table application history and 95
-PostgreSQL-backed Tesl API tests**. That longer scenario found and fixed three
-composition defects around unchanged-table codecs, additive epochs after completed
-Contracts, and predecessor reads during the next transformation. The feature now
-has substantially stronger evidence for a long-lived mixed row-migration history.
-
-**Queue scale continuation:** bounded measurement now reaches all 257 job types
-while 1,023 jobs of the first type remain pending. It takes 685.73 seconds in an
-ordinary release build, so the 25-second progress target is still open. A
-statement-local SQL optimization improved progress substantially without caching
-admission across transactions; nine new verifier controls bring the new suite to
-96 passing cases. The typed callback-remediation protocol is documented as a
-proposal, not an implemented authority.
-The subsequent full-gate attempt stalled in a nominal-PK fixture; its isolated
-retry passed, but a complete final-tree run is still pending.
+A historical uninterrupted default gate includes a real **V1–V20 four-table
+application history and 95 PostgreSQL-backed Tesl API tests**. It found and fixed
+three composition defects around unchanged-table codecs, additive epochs after
+completed Contracts and predecessor reads during the next transformation. That
+full pass predates the latest queue remediation/admission work. A later run stalled
+in nominal-PK fixture 18; its isolated retry passed. The final authoritative run
+now includes all that work and passes uninterrupted.
 
 ## 1. Decision-oriented status
 
 | Area | Assessment | Implication |
 |---|---|---|
 | Frozen source, nominal types and proof obligations | Strong implemented foundation | Preserve it; ordinary writers and historical codecs remain part of the safety argument. |
-| Row migration lifecycle | Real V1–V20 multi-table deployment and 95 API tests pass | Interleaved additive and transforming releases preserve twenty data cohorts across four tables, overlap, rejection/repair, retirement and restart. |
+| Row migration lifecycle | Real V1–V20 multi-table deployment and 95 API cases pass | Interleaved additive and transforming releases preserve twenty data cohorts across four tables, overlap, rejection/repair, retirement and restart. |
 | Queue conversion, repair and retirement | Real repeated deployments pass within restricted history rules | Keep the consecutive queue-only model until broader composition has its own full-lifecycle witness. |
 | Permissions, catalog integrity and replay | Strong targeted adversarial results | Weakened SQL functions/indexes/grants and mismatched staging refuse; batch retries preserve exact history. |
 | Status correctness | New defect fixed | Current-version quarantine remains visible without falsely blocking retirement or hiding old backlog. |
 | Callback failure recovery | Explicit recovery and discard now implemented and tested | New typed revisions consume exact operational failure, or deliberately discard obsolete old work with immutable audit. Healthy peers continue; active claims and Contract fences remain authoritative. |
-| Scale | Eventual 257-type service measured; latency acceptance remains open | Bounded protected setup completes; all 257 types progress with the busy head still pending, but 685.73s misses the unchanged 25s target. |
-| Verification | Twenty-release tree passed the full gate; later SQL optimization has targeted evidence | The uninterrupted pass includes both V1–V4 examples, 214 adversarial cases and V1–V20/95 API tests. A later full run stalled in nominal-PK fixture 18; isolated retry passed. Final-tree full-gate completion remains pending. |
+| Scale | Two ordinary-build samples meet the 25s reference target | 24.535s/24.549s, with busy-head work remaining. Small margin; contention and broader workloads remain unmeasured. This is separate from the pinned p99 release gate. |
+| Verification | Authoritative local CI passes all 24 phases | Includes the complete 47-phase migration runner, both V1–V4 examples, 244 adversarial cases and V1–V20/95 API cases. Hosted supported-major results remain pending. |
 
 ## 2. What this review found
 
@@ -88,53 +77,39 @@ reproduce both failures and verify the correction through protected public tools
 This was an operator-correctness defect, not an observed data-loss or unsafe-
 retirement defect.
 
-### Open: preserving failed data is not the same as recovering it
+### Fixed within the documented policy: execution failure and recovery
 
-A new test supplies a converter that passes its ordinary fixtures but recurses on
-one specific historical value. The execution budget stops it safely. However:
-
-- The shared schema Worker exits before converting a healthy peer type.
-- Restart hits the same poison value again.
-- No durable conversion outcome records the operational failure.
-- Status only says old payloads remain and recommends running the Worker.
-
-The existing typed repair protocol handles business rejection. This failure does
-not produce that rejection, so its recovery cannot be assumed. The passing test
-characterizes the limitation; it does not certify healthy progress.
-
-That was the committed review's behavior. The follow-up now records a distinct
-immutable execution-failure audit and suppresses automatic retries of the same
+A converter that passed ordinary fixtures but recursed on one historical value
+originally stopped the shared Worker without a useful diagnosis. The follow-up
+records a distinct immutable execution-failure audit and suppresses automatic retries of the same
 checked source/bytes for that job. Healthy jobs, including peers of the same type,
 continue. Protected status explains the failure; old work still blocks retirement.
 Cancellation and database errors remain rollback events, not callback verdicts.
 
 An end-to-end test also exercises existing predecessor claim/completion while that
 version remains admitted: the original job is processed, Contract succeeds, and
-the audit survives. This covers still-processable old work. It does not invent a
-business rejection, reinterpret `QueueRepair`, or solve all failed repairs and
-quarantines. The remaining decision is the general typed remediation protocol.
+the audit survives. New typed `on: "execution-failed"` revisions now also consume
+the exact failure/source/original-byte identity. Explicit `on: "unconverted"`
+discard revisions resolve obsolete work, including malformed bytes, without
+decoding it and with immutable audit. These policies preserve active claims and
+Contract obligations. The separate recovery-keyword proposal is superseded.
+See [queue remediation](manual/queue-remediation.md) for the authored decisions and
+fixture requirements. Execution budgets still do not prove termination or bound
+memory, and unresolved old work still blocks retirement.
 
-**Deferred decision:** define typed callback-failure remediation
-that consumes this new evidence while retaining exact source identity and original
-data. Healthy-peer continuation is now implemented and tested. General remediation
-should be an auditable protocol with explicit retirement obligations, not an
-operator escape hatch or an edit to deployed history.
-The maintainer has moved this proposal to
-[`roadmap/later`](roadmap/later/queue-execution-recovery.md). It does not block the
-scoped database-migration release, provided unresolved durable jobs remain an
-explicit retirement blocker and the product does not promise universal completion.
-
-### Open: large-inventory installation is ahead of runtime acceptance
+### Measured: large-inventory progress; broader scale acceptance remains open
 
 The recent optimizations have concrete value: shared compiler checking, bounded
 filenames, validated metadata reuse, and fenced staging groups get 257 types through
 installation and exact replay. They preserve the important safety boundaries.
 
-The full workload still fails while enqueueing 1,024 jobs through protected APIs.
-These are race-instrumented measurements on a shared host, so they are not a
-production throughput benchmark. They do show that a complete lifecycle at that
-inventory size has not been established. Increasing deadlines alone would not
-answer the throughput or fairness question.
+The full ordinary-build workload now enqueues 1,024 head jobs plus 256 rare jobs
+and reaches first conversion for every type within the unchanged 25-second target
+in two runs. Profiling identified repeated inventory set comparison, parsing and
+transaction-local validation as the dominant costs. The final implementation
+retains full admission at Begin and exact transaction-bound publication authority.
+See [performance evidence](dev-docs/queue-admission-performance.md). This measures
+first progress, not full backlog drain, retirement at that scale or a production SLA.
 
 ## 3. Architectural judgment
 
@@ -166,7 +141,8 @@ Other boundaries remain visible:
 - Consecutive queue-only non-additive histories with retained membership and
   unchanged stored entities.
 - No unrestricted mixed row/queue history claim.
-- No general malformed-byte recovery or implemented `IgnoreOld`/audited discard.
+- Malformed bytes can be explicitly discarded with audit, not reconstructed as
+  typed values. General schema-level `IgnoreOld` remains unsupported.
 - No arbitrary active-edge compiler replacement.
 - No static termination proof, memory sandbox or hard intrinsic preemption.
 
@@ -176,16 +152,15 @@ scenario and its proof/fencing/recovery obligations.
 
 ## 5. Recommended order of work
 
-1. **Preserve the bounded recovery scope.** Durable failure diagnosis and healthy
-   peer continuation are implemented. General typed remediation is deferred to
-   `roadmap/later`; unresolved old jobs must continue to block retirement.
-2. **Establish scale targets.** Measure startup, enqueue, idle/active conversion,
-   history growth and repair depth with both race and ordinary release builds.
-   Finish the 257-type runtime scenario with stated latency and resource budgets.
-3. **Preserve the now-green full gate.** Keep review 11 and the twenty-release
-   simulation mandatory; finish a fresh complete run after the later queue SQL
-   optimization. Its isolated nominal-PK retry passed, but that is not a full gate.
-4. **Then widen composition.** Choose a representative mixed-history application
+1. **Preserve acceptance and obtain hosted results.** The shared complete migration
+   runner and authoritative CI pass locally. Keep phase timings/failure diagnostics
+   and require the configured PostgreSQL matrix before merging.
+2. **Reconcile the release contract.** Keep the original roadmap open. The
+   [delivery matrix](dev-docs/migration-delivery-status.md) names missing operator,
+   editor, durable-facility, composition and pinned-performance requirements.
+3. **Broaden performance evidence.** Measure contention, history growth, repair
+   depth and expensive callbacks. Preserve the separate pinned p99 release gate.
+4. **Widen composition with an explicit witness.** Choose a representative mixed-history application
    and require full overlap, claim, repair, restart and retirement evidence.
 
 ## Overall recommendation

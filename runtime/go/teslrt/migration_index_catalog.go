@@ -121,7 +121,7 @@ func pgIndexRequiresValidForWrites(actual *pgCatalogTable, index PgMigrationCata
 	}
 	for _, name := range index.Columns {
 		position := slices.IndexFunc(actual.Columns, func(c pgCatalogColumn) bool { return c.Name == name })
-		if position < 0 {
+		if len(actual.Columns) == 0 || position < 0 || position >= len(actual.Columns) {
 			return true
 		}
 		column := actual.Columns[position]

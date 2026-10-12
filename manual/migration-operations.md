@@ -96,8 +96,11 @@ This ordering is a scheduling policy, not a finality cursor or a wall-clock late
 guarantee. Inspect blockers and use Contract to establish retirement. The protected
 selector requires the verified receipt lookup index; a development catalog missing
 it refuses explicitly. Current evidence covers two-type load/restart, 17-type
-backlog progress and 1,024 conversion receipts, rather than production-scale
-inventories or throughput.
+backlog progress, 1,024 conversion receipts and a 257-type reference workload.
+The latter reaches every type in 24.535s and 24.549s after Worker readiness, with
+busy-head work still pending; enqueue setup is approximately 45s separately.
+See the [performance report](../dev-docs/queue-admission-performance.md) for exact
+workload, binary provenance and limits. This is not a production throughput SLA.
 
 ## When callback execution stops
 

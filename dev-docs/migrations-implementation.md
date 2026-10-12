@@ -8,6 +8,14 @@ non-normative. An unchecked row is not delivered.
 
 ## Current assessment and implementation order
 
+The [delivery status](migration-delivery-status.md) is the current roadmap-to-code
+assessment and acceptance checklist. It records the V1–V20 row evidence, implemented
+execution recovery/audited discard, 257-type performance result, shared CI runner
+and remaining release gates. The readiness pass completed authoritative `./ci.sh`
+with all 24 phases OK, no skips and exit 0; its complete migration runner passed
+all 47 phases. Historical verification entries below retain their
+original scope and do not establish a passing gate on the latest tree.
+
 ### Integration review and delivery target
 
 The row migrations and unchanged-payload queue retirement have executable

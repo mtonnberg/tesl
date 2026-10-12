@@ -1,7 +1,7 @@
 package teslrt
 
 // This file is copied only into an emitted test project. It installs the private
-// candidate using the compiler's registered history, and never creates a
+// current baseline using the compiler's registered history, and never creates a
 // history literal, payload contract, codec, public opener, or Main bypass.
 import (
 	"context"
@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type CompiledCandidateFixture struct {
@@ -74,7 +73,7 @@ func OpenCompiledCandidateForTest(t *testing.T, database *Database) *CompiledCan
 		defer stop()
 		pubsubFor(database).Close()
 		if f.Request != nil {
-			f.Request.pool.Close()
+			f.Request.closeRowPool()
 		}
 		if worker != nil {
 			_ = worker.Close(clean)
@@ -115,7 +114,14 @@ func OpenCompiledCandidateForTest(t *testing.T, database *Database) *CompiledCan
 	if _, err := f.Installer.Exec(ctx, "grant create on schema public to "+quoteIdentifier(roles.Owner)); err != nil {
 		t.Fatal(err)
 	}
-	state, err := pgInstallQueueCandidate(ctx, f.Installer, history, roles)
+	// Current compiler emission carries the checked row companion. It must not
+	// be relabelled as legacy format-3 input to the isolated format-4 candidate.
+	if _, err := pgInstallQueueCandidate(ctx, f.Installer, history, roles); err == nil {
+		t.Fatal("legacy candidate accepted current row history")
+	}
+	database.Config = PostgresConfig{Schema: history.Namespace, DBName: name, User: roles.Request, Host: config.Host, Port: int(config.Port),
+		MigrationTopology: "Worker", ControlOwner: roles.Owner, WorkerRole: roles.Worker, RequestRole: roles.Request}
+	state, err := InstallPgCompiledRowBaseline(ctx, f.Installer, database, roles)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,41 +131,27 @@ func OpenCompiledCandidateForTest(t *testing.T, database *Database) *CompiledCan
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan, err := history.ExpansionPlan(1)
+	if _, err := ExecutePgCompiledRowBaseline(ctx, worker, database, roles); err != nil {
+		t.Fatal(err)
+	}
+	// Use ordinary admission/heartbeat/queue dispatch, not a test-created handle
+	// claiming that verification already happened.
+	f.Request, _ = openRowPostgres(database)
+	if state.Format != pgRowControlFormat || f.Request.migration.controlFormat != pgRowControlFormat {
+		t.Fatal("application did not use the current baseline")
+	}
+	requestConfig := config.Copy()
+	requestConfig.User = roles.Request
+	request, err := pgx.ConnectConfig(ctx, requestConfig)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := pgApplyExpansion(ctx, worker, plan, roles, 0, map[int]*pgExpansionIntent{}); err != nil {
-		t.Fatal(err)
-	}
-	database.Config = PostgresConfig{Schema: history.Namespace, DBName: name, User: roles.Request, Host: config.Host, Port: int(config.Port),
-		MigrationTopology: "Worker", ControlOwner: roles.Owner, WorkerRole: roles.Worker, RequestRole: roles.Request}
-	// The source-only transaction is already exercised by App preflight tests.
-	// It closes the actual emitted Queue pointers and codecs; production preflight
-	// still refuses the candidate, as the separate generated Main assertion proves.
-	pgMigrationRegistrations.Lock()
-	pending, prepareErr := pgPrepareApplicationDatabases([]*Database{database})
-	if prepareErr == nil {
-		pending.closeRegistrations()
-	}
-	pgMigrationRegistrations.Unlock()
-	if prepareErr != nil {
-		t.Fatal(prepareErr)
-	}
-	poolConfig, err := pgxpool.ParseConfig("")
-	if err != nil {
-		t.Fatal(err)
-	}
-	poolConfig.ConnConfig = config.Copy()
-	poolConfig.ConnConfig.User = roles.Request
-	poolConfig.MaxConns = 4
-	f.Request, err = pgOpenQueueCandidateRuntime(ctx, database, poolConfig, &pgMigrationAdmission{
-		version: history.CurrentVersion, databaseUUID: state.DatabaseUUID, fenceNamespace: state.FenceNamespace, worker: roles.Request, roles: roles})
-	if err != nil {
-		t.Fatal(err)
+	defer func() { _ = request.Close(ctx) }()
+	if _, err := InstallPgCompiledRowBaseline(ctx, request, database, roles); err == nil {
+		t.Fatal("Request login acquired installer authority")
 	}
 	var authority string
-	if err := f.Installer.QueryRow(ctx, "select inventory_authority from "+pgx.Identifier{history.Namespace, "tesl_queue_baseline"}.Sanitize()).Scan(&authority); err != nil || authority != "complete" {
+	if err := f.Installer.QueryRow(ctx, "select inventory_authority from "+pgx.Identifier{history.Namespace, "tesl_row_baseline"}.Sanitize()).Scan(&authority); err != nil || authority != "complete" {
 		t.Fatal("fresh installation failed to establish persisted baseline", authority, err)
 	}
 	return f

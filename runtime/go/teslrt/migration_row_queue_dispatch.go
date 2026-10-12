@@ -385,7 +385,11 @@ func pgRunRowQueueConversionTurn(ctx context.Context, conn *pgx.Conn, namespace 
 				return progress, err
 			}
 		}
-		scope := scopes[index%pgRowQueueOpenBatchLimit]
+		offset := index % pgRowQueueOpenBatchLimit
+		if len(scopes) == 0 || offset >= len(scopes) {
+			return progress, fmt.Errorf("queue descriptor opening returned an incomplete batch")
+		}
+		scope := scopes[offset]
 		remaining := limit - progress.Selected
 		stages := len(executables) - index
 		quantum := (remaining + stages - 1) / stages

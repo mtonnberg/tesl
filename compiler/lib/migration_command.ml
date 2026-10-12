@@ -14,7 +14,7 @@ Editor overlays require --project-root and one saved contents file per open docu
 Use the native tesl CLI for guarded source writes and interrupted-source recovery.
 plan reports PostgreSQL expansion and retained storage across the checked history.
 --initial-version selects the first installed revision (default 1), not the current floor.
-Database execution is not yet available.
+Database execution uses the compiled application's --schema commands; see manual/migration-operations.
 |}
 exception Invalid of P.error list
 exception Plan_invalid of Migration_sparse.error list

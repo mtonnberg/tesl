@@ -261,7 +261,11 @@ func (c *pgQueueCandidatePreparation) verify(ctx context.Context, tx pgx.Tx, sta
 		// An old admitted binary validates future inventories structurally and against
 		// protected provenance, without inventing checked source for those versions.
 		if version <= c.history.CurrentVersion {
-			want := source.Versions[version-state.InitialVersion]
+			offset := version - state.InitialVersion
+			if len(source.Versions) == 0 || offset < 0 || offset >= len(source.Versions) {
+				return fmt.Errorf("candidate queue source inventory is incomplete at V%d", version)
+			}
+			want := source.Versions[offset]
 			want.SourceSealInventory = v.SourceSealInventory
 			if !reflect.DeepEqual(want, v) {
 				return fmt.Errorf("candidate queue inventory is incomplete or differs from linked source at V%d", version)

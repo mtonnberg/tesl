@@ -19,6 +19,12 @@ Its review history — the review passes, mechanisms tried and withdrawn, and wh
 [`database-migrations-history.md`](database-migrations-history.md) and is not
 normative; where the two disagree, this file and its "Target mechanisms" table win.
 
+Current implementation and acceptance evidence are tracked in
+[migration delivery status](../../dev-docs/migration-delivery-status.md).
+The fresh-install-first compatibility policy and implemented recovery decisions
+are recorded there. This roadmap remains open; successful scoped examples do not
+mark its remaining operator, composition, editor or performance gates complete.
+
 The bar (maintainer, 2026-09-02): migrations must ship as a solved problem, not a
 toy. That rules out "run the migration, then deploy" as the story, because with a
 rolling deploy that ordering does not exist.

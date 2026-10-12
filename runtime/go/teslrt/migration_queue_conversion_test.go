@@ -26,7 +26,7 @@ func queueConversionPipeline(calls *[4]int) *CompiledQueueConversion[queueConver
 			if old.text == "reject" {
 				return Migrated[queueConversionTestNew]{Tag: MigratedReject, RejectReason: "checked rejection"}
 			}
-			return Migrated[queueConversionTestNew]{Tag: MigratedRow, RowValue: queueConversionTestNew{old.text}}
+			return Migrated[queueConversionTestNew]{Tag: MigratedRow, RowValue: queueConversionTestNew(old)}
 		},
 		encode: func(value queueConversionTestNew) any { calls[2]++; return map[string]any{"new": value.text} },
 		targetDecode: func(raw any) Check[queueConversionTestNew] {

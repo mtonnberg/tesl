@@ -31,6 +31,9 @@ func LookupCompiledRowCurrent(database *Database, family string, version int, en
 	pgMigrationRegistrations.Lock()
 	defer pgMigrationRegistrations.Unlock()
 	compiled := compiledRowHistories[family]
+	if compiled == nil {
+		panic("database: missing compiled current row history")
+	}
 	if err := pgCheckRowOwner(database, compiled); err != nil {
 		panic(err)
 	}

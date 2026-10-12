@@ -9,6 +9,9 @@ import (
 func rowIndexManifest(t *testing.T) (*pgRowForwardManifest, map[int]*pgExpansionIntent, []pgMigrationIndexJob) {
 	t.Helper()
 	previous, plan := rowIndexPlanPair()
+	if len(plan.entities) != 1 {
+		t.Fatal("index fixture omitted its entity")
+	}
 	plan.hash = strings.Repeat("1", 64)
 	plan.entities[0].indexes = []PgMigrationCatalogIndex{{Name: "note_id_lookup", Columns: []string{"id"}}}
 	operations, err := pgRowForwardOperations(previous, plan)
@@ -95,6 +98,9 @@ func TestRowIndexCompleteJobProvenance(t *testing.T) {
 			}
 		})
 	}
+	if intents[2] == nil {
+		t.Fatal("index fixture omitted its expansion intent")
+	}
 	intents[2].Objects = nil
 	if err := pgVerifyRowIndexJobs(manifest, intents, nil, 0, ""); err != nil {
 		t.Fatal("uncommitted index acquired job obligation", err)
@@ -137,6 +143,9 @@ func TestRowIndexCatalogOriginalReaderAndExactState(t *testing.T) {
 
 func TestRowIndexFutureNullDomainUsesLocalColumns(t *testing.T) {
 	metadata, actual, expected, job := pgIndexCatalogTestTables(t)
+	if len(actual.Columns) != 2 || len(expected.Columns) != 2 || len(actual.Indexes) != 1 || len(expected.Indexes) != 1 {
+		t.Fatal("index fixture shape changed")
+	}
 	local := &pgRowPhysicalPlan{version: 1, entities: []pgRowPhysicalEntity{{table: "todos", columns: []pgRowPhysicalColumn{{catalog: PgMigrationCatalogColumn{Name: "id"}}}}}}
 	actual.Columns[1].Type, expected.Columns[1].Type = "text", "text"
 	actual.Columns[1].Required, expected.Columns[1].Required = false, false
@@ -175,6 +184,9 @@ func TestRowIndexFutureNullDomainUsesLocalColumns(t *testing.T) {
 				t.Fatal("future actual domain no longer guarantees omitted null key", err)
 			}
 		})
+	}
+	if len(local.entities) != 1 {
+		t.Fatal("catalog verification changed the local fixture")
 	}
 	local.entities[0].columns = append(local.entities[0].columns, pgRowPhysicalColumn{catalog: PgMigrationCatalogColumn{Name: "done"}})
 	if _, _, _, err := pgPrepareRowIndexCatalog(metadata, actual, expected, local, []pgMigrationIndexJob{job}, &report); err == nil {

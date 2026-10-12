@@ -188,7 +188,7 @@ A few lessons have a longer prose companion alongside the code:
 - [`lesson93-testing-breaking-migrations.md`](../example/learn/lesson93-testing-breaking-migrations.md) — Lesson 93 — Test breaking database changes across a rolling deployment
 - [`lesson94-same-column-proof-strengthening.md`](../example/learn/lesson94-same-column-proof-strengthening.md) — Lesson 94 — Strengthen a proof without replacing its column
 - [`lesson95-retiring-unchanged-queue-payloads.md`](../example/learn/lesson95-retiring-unchanged-queue-payloads.md) — Lesson 95 — Retire old producers without stranding queued work
-- [`lesson96-typed-queue-conversion.md`](../example/learn/lesson96-typed-queue-conversion.md) — Lesson 96 — Test a typed conversion of an old queued payload
+- [`lesson96-typed-queue-conversion.md`](../example/learn/lesson96-typed-queue-conversion.md) — Lesson 96 — Convert, repair and retire queued payloads
 
 ---
 

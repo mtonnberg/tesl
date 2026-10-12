@@ -24,6 +24,20 @@ The dedicated runner and matrix set `TESL_MIGRATION_TEST_REQUIRE_POSTGRES=1`:
 missing or unavailable PostgreSQL must fail those runtime gates rather than
 silently turning them into a skipped-test success.
 
+The matrix and authoritative CI now call the same script without selection
+arguments, including the compiler queue/proof suites, adversarial reviews and
+V1–V20 application. Matrix lanes put matching-major PostgreSQL tools on PATH for
+all private clusters. Arguments to the script select only kernel tests and are
+not a full-gate run.
+
+`TESL_MIGRATION_TEST_OUTPUT` selects a retained evidence directory (otherwise the
+runner prints a new temporary directory). It contains phase logs, `phases.tsv`
+with elapsed seconds/exit statuses, and the PostgreSQL log. Compiler/example
+outer deadlines turn a stuck child into a named phase failure; existing test
+deadlines are unchanged. See the
+[delivery status](../../../../dev-docs/migration-delivery-status.md) for current
+CI budgets, scope and acceptance evidence.
+
 `TestCompiledMigrationCompilerUpgradeRetainsRows` builds actual compiler A/B/C
 variants in an isolated source copy. B changes only a query source comment; C
 changes the explicit stored-value semantic revision. It runs the complete lesson83

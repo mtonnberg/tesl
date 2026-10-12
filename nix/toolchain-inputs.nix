@@ -3,8 +3,8 @@
 {
   version = "0.3.1";
   go = {
-    version = "1.26.6";
-    sourceHash = "sha256-oHIcVMaIkBRI13rZs+x+p8R0cwdV/4kTgukuy5P/LLE=";
+    version = "1.26.9";
+    sourceHash = "sha256-lzXX3Ntls10/pXfwQGRzfAO4nPGitx5uaf4vPG+f1Mo=";
   };
   # OCaml's native MSVC port needs these build sources. Pins match the upstream
   # opam flexdll.0.44 and conf-winpthreads.20240209-1 source declarations.

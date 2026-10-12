@@ -141,7 +141,7 @@ func pgVerifyRowContractRetainedIndexes(c *pgRowContract, jobs []pgMigrationInde
 		}
 		before := slices.IndexFunc(c.window.entities, func(e pgRowPhysicalEntity) bool { return e.table == job.Table })
 		after := slices.IndexFunc(c.settled.entities, func(e pgRowPhysicalEntity) bool { return e.table == job.Table })
-		if before < 0 || after < 0 {
+		if len(c.window.entities) == 0 || len(c.settled.entities) == 0 || before < 0 || after < 0 || before >= len(c.window.entities) || after >= len(c.settled.entities) {
 			return fmt.Errorf("row Contract removing an indexed table requires its checked index terminal lifecycle")
 		}
 		old, settled := c.window.entities[before], c.settled.entities[after]
@@ -153,7 +153,7 @@ func pgVerifyRowContractRetainedIndexes(c *pgRowContract, jobs []pgMigrationInde
 		for _, key := range job.Index.Columns {
 			x := slices.IndexFunc(old.columns, func(c pgRowPhysicalColumn) bool { return c.catalog.Name == key })
 			y := slices.IndexFunc(settled.columns, func(c pgRowPhysicalColumn) bool { return c.catalog.Name == key })
-			if x < 0 || y < 0 || !pgPhysicalColumnEqual(old.columns[x], settled.columns[y]) {
+			if len(old.columns) == 0 || len(settled.columns) == 0 || x < 0 || y < 0 || x >= len(old.columns) || y >= len(settled.columns) || !pgPhysicalColumnEqual(old.columns[x], settled.columns[y]) {
 				return fmt.Errorf("row Contract changing a retained index key requires its checked terminal lifecycle")
 			}
 		}
@@ -278,7 +278,11 @@ func pgExecuteRowContract(ctx context.Context, config *pgx.ConnConfig, b *pgRowB
 						slices.Sort(entities)
 						generations := make([]int16, len(entities))
 						for i, e := range entities {
-							generations[i] = int16(c.finalGenerations[e])
+							generation, err := pgRowGenerationMarker(c.finalGenerations[e])
+							if err != nil {
+								return err
+							}
+							generations[i] = generation
 							var remaining bool
 							if err := tx.QueryRow(ctx, "select exists(select 1 from "+pgx.Identifier{c.window.namespace, c.window.entity(e).table}.Sanitize()+" where _tesl_v<$1)", generations[i]).Scan(&remaining); err != nil {
 								return err

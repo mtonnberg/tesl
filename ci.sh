@@ -119,7 +119,7 @@ phase_started_at=$SECONDS
 
 # ── Phase registry / progress bar ────────────────────────────────────────────
 # We know the phase count up front so each phase can print "[N/T] <name>".
-TOTAL_PHASES=23
+TOTAL_PHASES=24
 PHASE_NUM=0
 # Parallel arrays: name / status (OK|FAIL|SKIP) / elapsed seconds.
 PHASE_NAMES=()
@@ -245,7 +245,9 @@ clear_shared_postgres_env() {
 
 cleanup_shared_postgres() {
     if [ -n "$shared_postgres_boot_pid" ]; then
-        wait "$shared_postgres_boot_pid" >/dev/null 2>&1 || true
+        if wait "$shared_postgres_boot_pid" >/dev/null 2>&1; then
+            shared_postgres_started=1
+        fi
         shared_postgres_boot_pid=""
     fi
     if [ "$shared_postgres_started" -eq 1 ] && [ -n "$shared_postgres_data_dir" ] && command -v pg_ctl >/dev/null 2>&1; then
@@ -314,7 +316,7 @@ start_shared_postgres_async() {
     fi
     (
         if [ ! -d "$shared_postgres_data_dir" ]; then
-            initdb -D "$shared_postgres_data_dir" -A trust -U "$shared_postgres_user" --locale=C >/dev/null 2>&1 || exit 1
+            initdb -D "$shared_postgres_data_dir" -A trust -U "$shared_postgres_user" --locale=C --encoding=UTF8 >/dev/null 2>&1 || exit 1
         fi
         # Bound the wait with a 60-second timeout.  On WSL2 and some CI
         # environments pg_ctl -w can block indefinitely on socket readiness.
@@ -598,7 +600,9 @@ else
     # bounded worker count. Unset compiler overrides so dune uses its own
     # freshly-built binary rather than a stale one.
     _test_log=$(mktemp "${TMPDIR:-/tmp}/tesl-dune-test.XXXXXX")
-    if ( cd "$COMPILER_DIR" && unset TESL_OCAML_COMPILER TESL_BIN && dune test -j "$TESL_CI_JOBS" ) 2>&1 | tee "$_test_log"; then
+    # Stream each test's progress so an unfinished subprocess is identifiable.
+    # Bound the aggregate as well as the individual native fixture commands.
+    if ( cd "$COMPILER_DIR" && unset TESL_OCAML_COMPILER TESL_BIN && timeout --kill-after=30s 7200 dune test --no-buffer -j "$TESL_CI_JOBS" ) 2>&1 | tee "$_test_log"; then
         phase_end OK
     else
         mapfile -t _fail_ids < <(grep -aoE "\[FAIL\][^│]*" "$_test_log" | _normalize_fail_id | sort -u)
@@ -653,8 +657,11 @@ if [ "$go_gate_fail" -eq 0 ]; then
           printf "unformatted Go files:\n%s\n" "$_unformatted" >&2
           exit 1
       fi
-      go test -count=1 ./... &&
-      go test -race -count=1 ./... &&
+      # The runtime package now includes the full native protocol inventory.
+      # Its sequential sum can exceed Go's implicit ten-minute package timeout;
+      # individual fixture/operation deadlines still bound each scenario.
+      go test -count=1 -timeout=1800s ./... &&
+      go test -race -count=1 -timeout=1800s ./... &&
       bash "$SCRIPT_DIR/scripts/run-migration-tests.sh" &&
       # Fuzz targets go through scripts/go-fuzz-target.sh: it retries ONLY the Go fuzz
       # engine's own -fuzztime deadline race ("context deadline exceeded", no crasher
@@ -678,7 +685,7 @@ if [ "$go_gate_fail" -eq 0 ]; then
       golangci-lint run ./... &&
       gosec -quiet ./... &&
       govulncheck ./... &&
-      nilaway ./...
+      GOMEMLIMIT=3GiB nilaway ./...
     ) || go_gate_fail=1
 fi
 if [ "$go_gate_fail" -eq 0 ] && [ -f "$SCRIPT_DIR/tests/go-cli-smoke.sh" ]; then

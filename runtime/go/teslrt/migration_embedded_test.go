@@ -273,6 +273,9 @@ func TestPgMigrationEmbeddedCanceledInitialOwnerNeverPublishes(t *testing.T) {
 	if err == nil || release != nil || !strings.Contains(fmt.Sprint(err), "canceled") {
 		t.Fatalf("canceled owner published readiness: %v %v", release != nil, err)
 	}
+	if service == nil {
+		t.Fatal("canceled startup did not retain its service result")
+	}
 	if generation, refs := pgEmbeddedTestGeneration(service); generation != nil || refs != 0 {
 		t.Fatalf("canceled owner leaked references: %p %d", generation, refs)
 	}
@@ -391,6 +394,9 @@ func TestPgMigrationEmbeddedPermanentAuthenticationFailureDoesNotRetry(t *testin
 	var rejected *pgconn.PgError
 	if release != nil || !errors.As(err, &rejected) || rejected.Code != "28000" {
 		t.Fatalf("permanent PostgreSQL login refusal lost: %v", err)
+	}
+	if service == nil {
+		t.Fatal("failed startup did not retain its service result")
 	}
 	if release, err := service.acquire(); release != nil || err == nil {
 		t.Fatal("permanent login failure was retried")

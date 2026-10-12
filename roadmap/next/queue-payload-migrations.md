@@ -43,13 +43,14 @@ deletion.
 2. **Migration surface (later):** `jobs:`, `Migrate`, `Rename`, `IgnoreOld`, fixtures,
     the transforming retirement pass that re-encodes payloads.
 
-The unchanged-payload retirement prerequisite now executes for fresh format-5
-additive Worker histories. Epoch closure atomically restamps jobs and advances
-admission, retaining surviving attempts and releasing expired retiring attempts.
-It refuses live old leases and quarantines. This first path is one bounded
-transaction, not a background batch protocol; changed-payload transformation and
-typed repairs remain unimplemented. See
-[lesson 95](../../example/learn/lesson95-retiring-unchanged-queue-payloads.md).
+Current implementation (2026-10-11): fresh format-5 Worker histories support
+unchanged-payload restamping and consecutive checked `jobs:` transformations,
+business repair, execution-failure recovery and explicit audited discard. They
+retain queue membership and unchanged stored entities. General mixed row/queue
+evolution, membership rename/removal and the schema-level `IgnoreOld` constructor
+remain open. See [delivery status](../../dev-docs/migration-delivery-status.md),
+[lesson 95](../../example/learn/lesson95-retiring-unchanged-queue-payloads.md) and
+[lesson 96](../../example/learn/lesson96-typed-queue-conversion.md).
 
 ## Design sketch (to be specified)
 
@@ -122,13 +123,15 @@ or relabel the quarantined payload as a current value. Dropping those jobs
 requires a separate explicit `IgnoreOld` migration decision, with the normal
 count and audit record; an operator discard command is not part of this choice.
 
-Before execution can be enabled, bind the repair's source/target identities and
-immutable callback closure to durable repair progress. Tests must prove that a
-failed or interrupted repair preserves the original payload/version, successful
-repair is resumable without double conversion, and the admission floor cannot
-advance while any required conversion remains rejected. Existing queue guards
-remain necessary until that runtime protocol and its typed callback dispatch
-are implemented. This records the recovery policy, not delivered queue execution.
+These bindings and typed business repairs now execute through the public Worker
+path. The subsequent maintainer decision to support both preservation and explicit
+loss is implemented through `QueueRepair`: `on: "execution-failed"` consumes exact
+source-bound execution-failure evidence; `on: "unconverted"` with a reason discards
+the named edge's remaining original jobs with immutable audit, including malformed
+bytes. Active claims and retirement obligations remain enforced. See
+[queue remediation](../../manual/queue-remediation.md) for the checked fixture and
+policy rules. This supersedes the earlier requirement to use `IgnoreOld` for that
+recovery decision; general schema membership changes still need their own surface.
 
 - The prerequisite implementation already places job records in the ordinary
   versioned schema closure and lists them in `queueSchema`; no new module kind

@@ -128,6 +128,9 @@ func (history PgCompiledMigrationHistory) QueueSourceInventory(initialVersion in
 		return PgQueueSourceInventory{}, fmt.Errorf("compiled queue inventory has no validated projection")
 	}
 	result := *registration.inventory
+	if len(result.Versions) == 0 || len(result.Versions) != history.CurrentVersion {
+		return PgQueueSourceInventory{}, fmt.Errorf("compiled queue projection has an incomplete version inventory")
+	}
 	result.InitialVersion = initialVersion
 	result.Versions = slices.Clone(result.Versions[initialVersion-1:])
 	for i := range result.Versions {
@@ -578,6 +581,9 @@ func RegisterQueueSchema(queue *Queue, database *Database, family, identity stri
 	if err != nil {
 		panic(err)
 	}
+	if len(inventory.Versions) != 1 {
+		panic("queue schema: current source inventory must contain one version")
+	}
 	var contract *PgQueueSourceContract
 	for _, candidate := range inventory.Versions[0].Contracts {
 		if candidate.Queue == identity {
@@ -754,8 +760,8 @@ func pgReadQueueConversionSource(spec pgQueueConversionSourceSpec) (*pgQueueConv
 			node = node.children[3]
 		}
 	}
-	if !(node.list(13) && node.children[0].isAtom("checked-queue-transform-source-v1")) &&
-		!(node.list(17) && node.children[0].isAtom("checked-queue-transform-source-v2")) {
+	if (!node.list(13) || !node.children[0].isAtom("checked-queue-transform-source-v1")) &&
+		(!node.list(17) || !node.children[0].isAtom("checked-queue-transform-source-v2")) {
 		return nil, fmt.Errorf("queue conversion source has an unsupported closed format")
 	}
 	if node.list(17) {

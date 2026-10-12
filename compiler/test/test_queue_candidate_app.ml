@@ -1,6 +1,7 @@
 (** A compiled full App is the witness: schema/job identities, codecs, HTTP
     handlers and workers all come from Tesl. The Go bridge only provisions a
-    private PostgreSQL candidate and supplies deterministic scheduling. *)
+    private PostgreSQL database through the current baseline and supplies
+    deterministic scheduling. The historical fixture name is retained. *)
 open Alcotest
 
 let rec mkdir path =

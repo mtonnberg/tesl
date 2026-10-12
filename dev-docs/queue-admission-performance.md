@@ -1,5 +1,7 @@
 # Queue admission performance — measured continuation after `3242931`
 
+> Audience: contributors reviewing queue admission optimizations and their evidence.
+
 ## Result and scope
 
 The ordinary-release 257-type workload now reaches first conversion for every
@@ -109,7 +111,9 @@ improvement over the simpler existing stack representation.
 
 The new function catalog is part of the existing fresh-catalog-first development
 protocol. This does not add automatic adoption of an older installed catalog.
-No fresh complete default-gate pass is claimed for this performance follow-up.
+The subsequent [readiness pass](migration-delivery-status.md) completed the full
+authoritative gate, including these regressions. The timings here retain their
+original binary provenance and are not a new throughput measurement after that pass.
 
 ## Recorded runs
 

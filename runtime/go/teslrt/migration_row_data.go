@@ -280,7 +280,11 @@ func pgMaterializePhysicalWrite[From, To any](a *pgRowTransactionAdmission, stor
 		}
 	}
 	result.columns = append(result.columns, "_tesl_v")
-	result.values = append(result.values, int16(a.entity.generation))
+	marker, err := pgRowGenerationMarker(a.entity.generation)
+	if err != nil {
+		return pgPhysicalWrite{}, err
+	}
+	result.values = append(result.values, marker)
 	return result, nil
 }
 func pgInsertMaterializedPhysicalRow(ctx context.Context, a *pgRowTransactionAdmission, row pgPhysicalWrite, capture ...func(PgPlan) PgPlan) error {
@@ -337,6 +341,9 @@ func pgUpdateDecodedPhysicalRow[From, To any](ctx context.Context, a *pgRowTrans
 func pgUpdateMaterializedPhysicalRow(ctx context.Context, a *pgRowTransactionAdmission, before, row pgPhysicalWrite, capture ...func(PgPlan) PgPlan) (bool, error) {
 	if err := a.check(true); err != nil {
 		return false, err
+	}
+	if len(row.values) == 0 || len(row.values) != len(row.columns) {
+		return false, fmt.Errorf("row update requires a complete nonempty materialized projection")
 	}
 	assignments := []string{}
 	parameters := []any{}

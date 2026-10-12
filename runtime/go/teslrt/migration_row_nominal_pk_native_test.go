@@ -3,6 +3,7 @@
 package teslrt
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,6 +20,12 @@ func TestPgRowNominalPrimaryKeyLifecycle(t *testing.T) {
 		t.Run(kind, func(t *testing.T) {
 			root := filepath.Join(programs, kind)
 			f, request := pgNewWorkerTest(t)
+			// Two application boots, bounded worker pauses and Contract are one
+			// scenario. Keep their own deadlines, rather than killing the final
+			// command at the generic fixture's 30-second aggregate deadline.
+			ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+			t.Cleanup(cancel)
+			f.ctx = ctx
 			f.namespace = "notes"
 			run := func(version, mode string) { pgForwardNativeRun(t, f, root, version, mode, true) }
 			run("v1", "install")

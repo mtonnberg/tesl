@@ -16,6 +16,9 @@ func TestRowContractRetainedIndexes(t *testing.T) {
 		return &pgRowContract{window: m.plan, settled: &settled}, jobs
 	}
 	c, jobs := fixture()
+	if c == nil || c.settled == nil || len(c.settled.entities) == 0 || len(c.settled.entities[0].columns) == 0 {
+		t.Fatal("retained-index fixture omitted its settled entity")
+	}
 	// Removing a different column is safe while retaining an earlier index.
 	c.settled.entities[0].columns = c.settled.entities[0].columns[:1]
 	if err := pgVerifyRowContractRetainedIndexes(c, jobs); err != nil {

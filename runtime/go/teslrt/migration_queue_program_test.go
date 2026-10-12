@@ -85,7 +85,7 @@ func TestQueueProjectionSourceIsNotBaselineAuthority(t *testing.T) {
 		}
 	}
 	got, err := h.QueueSourceInventory(1)
-	if err != nil {
+	if err != nil || len(got.Versions) != 3 || len(got.Versions[0].Contracts) == 0 || len(got.Versions[0].Contracts[0].Payloads) == 0 {
 		t.Fatal(err)
 	}
 	if got.Versions[0].SourceSealInventory != "unrecorded" || got.Versions[1].SourceSealInventory != "unknown" || got.Versions[2].SourceSealInventory != "complete" {
@@ -93,7 +93,7 @@ func TestQueueProjectionSourceIsNotBaselineAuthority(t *testing.T) {
 	}
 	got.Versions[0].Contracts[0].Payloads[0].Contract = "mutated"
 	again, err := h.QueueSourceInventory(1)
-	if err != nil || again.Versions[0].Contracts[0].Payloads[0].Contract == "mutated" {
+	if err != nil || len(again.Versions) == 0 || len(again.Versions[0].Contracts) == 0 || len(again.Versions[0].Contracts[0].Payloads) == 0 || again.Versions[0].Contracts[0].Payloads[0].Contract == "mutated" {
 		t.Fatal("mutable linked inventory", err)
 	}
 	if _, err := h.QueueSourceInventory(0); err == nil {

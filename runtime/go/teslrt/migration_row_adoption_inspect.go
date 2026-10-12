@@ -106,6 +106,9 @@ func pgCompiledLegacyRowAdoptionSource(database *Database) (pgLegacyRowAdoptionS
 // current legacy source. It does not make a format3 application row5-capable.
 func InspectPgCompiledRowAdoption(ctx context.Context, conn *pgx.Conn, database *Database) (PgRowAdoptionInspection, error) {
 	var result PgRowAdoptionInspection
+	if database == nil {
+		return result, fmt.Errorf("row adoption inspection requires a compiled database")
+	}
 	source, err := pgCompiledLegacyRowAdoptionSource(database)
 	if err != nil {
 		return result, err

@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-repo_root=${TESL_REPO_ROOT:-$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)}
+repo_root=${TESL_REPO_ROOT:-$(CDPATH='' cd -- "$(dirname "$0")/.." && pwd)}
 compiler=${TESL_OCAML_COMPILER:-$repo_root/compiler/_build/default/bin/main.exe}
 manifest="$repo_root/tests/protocol/go-corpus-build.json"
 jobs=${TESL_CI_JOBS:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || printf '4')}
+mode=${1:---build}
 
 [[ -x "$compiler" ]] || { printf 'Go corpus: compiler not executable: %s\n' "$compiler" >&2; exit 77; }
 [[ "$jobs" =~ ^[1-9][0-9]*$ ]] || { printf 'Go corpus: invalid TESL_CI_JOBS=%s\n' "$jobs" >&2; exit 2; }
@@ -38,19 +39,46 @@ for root in example tests templates; do
   }
 done
 
+# These tracked files are release-recipe inputs, not independent compilation
+# units: transition bodies acquire canonical paths and frozen predecessors only
+# through the guarded generator. Count all inputs, then build every release below.
+assembled=(example/db-three-upgrades example/queue-three-upgrades)
+for project in "${assembled[@]}"; do
+  actual=0
+  for source in "${sources[@]}"; do [[ $source == "$project/"* ]] && actual=$((actual + 1)); done
+  wanted=$(jq -er --arg project "$project" '.assembled_examples[$project]' "$manifest")
+  (( actual == wanted )) || {
+    printf 'Go corpus recipe inventory mismatch: %s actual=%s expected=%s\n' "$project" "$actual" "$wanted" >&2
+    exit 1
+  }
+done
+
 if [[ ${1:-} == --list ]]; then
   printf '%s\n' "${sources[@]}"
   printf 'Go corpus OK (%s tracked recursive sources)\n' "${#sources[@]}" >&2
   exit 0
 fi
-[[ $# -eq 0 || ${1:-} == --build ]] || {
-  printf 'usage: run-go-corpus-build.sh [--list|--build]\n' >&2
+[[ $# -eq 0 || $# -eq 1 && ( $mode == --build || $mode == --run-examples ) ]] || {
+  printf 'usage: run-go-corpus-build.sh [--list|--build|--run-examples]\n' >&2
   exit 2
 }
 
 output_root=$(mktemp -d "${TMPDIR:-/tmp}/tesl-go-corpus.XXXXXXXX")
 trap 'rm -rf "$output_root"' EXIT
-printf '%s\0' "${sources[@]}" | xargs -0 -n1 -P "$jobs" bash -c '
+mkdir -p "$output_root/modules"
+standalone=()
+selected_count=0
+for source in "${sources[@]}"; do
+  if [[ $mode == --run-examples && $source != example/* ]]; then continue; fi
+  selected_count=$((selected_count + 1))
+  case "$source" in
+    example/db-three-upgrades/*|example/queue-three-upgrades/*) ;;
+    *) standalone+=("$source") ;;
+  esac
+done
+# Positional arguments expand in each child shell.
+# shellcheck disable=SC2016
+printf '%s\0' "${standalone[@]}" | xargs -0 -n1 -P "$jobs" bash -c '
   source=$4
   key=$(printf "%s" "$source" | sha256sum | cut -d" " -f1)
   case "$source" in
@@ -59,13 +87,23 @@ printf '%s\0' "${sources[@]}" | xargs -0 -n1 -P "$jobs" bash -c '
       ;;
     *) "$1" --backend go "$2/$source" --out "$3/$key" >/dev/null ;;
   esac
-' _ "$compiler" "$repo_root" "$output_root"
+' _ "$compiler" "$repo_root" "$output_root/modules"
 
-mapfile -t outputs < <(printf '%s\n' "$output_root"/*)
+mapfile -t outputs < <(printf '%s\n' "$output_root/modules"/*)
+# Positional arguments and the session-key default expand in each child shell.
+# shellcheck disable=SC2016
 printf '%s\0' "${outputs[@]}" | xargs -0 -n1 -P "$jobs" bash -c '
-  cd "$1"
-  go test -run "^$" ./... >/dev/null
-' _
+  cd "$1" || exit 1
+  if [[ $0 == --run-examples ]]; then
+    LESSON80_SESSION_KEY="${LESSON80_SESSION_KEY:-anything}" go test -count=1 ./... >/dev/null
+  else
+    go test -run "^$" ./... >/dev/null
+  fi
+' "$mode"
 
-printf 'Go corpus OK (%s tracked sources checked; %s generated modules and their tests build; jobs=%s)\n' \
-  "${#sources[@]}" "${#outputs[@]}" "$jobs" >&2
+for project in "${assembled[@]}"; do
+  python3 "$repo_root/$project/run.py" --build-only --output "$output_root/${project##*/}"
+done
+
+printf 'Go corpus OK (%s tracked sources checked; %s standalone modules and %s assembled release histories build with their tests; jobs=%s)\n' \
+  "$selected_count" "${#outputs[@]}" "${#assembled[@]}" "$jobs" >&2

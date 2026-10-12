@@ -179,6 +179,9 @@ func TestPgMigrationIndexUnboundedRequiresBothValidityRecords(t *testing.T) {
 		for _, state := range []string{"pending", "building", "failed", "valid"} {
 			for _, physical := range []string{"absent", "initializing", "ready-invalid", "valid", "dead"} {
 				metadata, actual, expected, job := pgIndexCatalogTestTables(t)
+				if len(actual.Columns) != 2 || len(expected.Columns) != 2 || len(actual.Indexes) != 1 || len(expected.Indexes) != 1 {
+					t.Fatal("index fixture shape changed")
+				}
 				metadata.types[typ] = pgCatalogExpectedType{name: typ, kind: "b", opclass: 3126}
 				actual.Columns[1].Type = typ
 				expected.Columns[1].Type = typ
@@ -201,6 +204,9 @@ func TestPgMigrationIndexUnboundedRequiresBothValidityRecords(t *testing.T) {
 				for _, version := range []int{1, 2, 3} {
 					own := *expected
 					if version == 1 {
+						if len(own.Columns) == 0 {
+							t.Fatal("predecessor fixture omitted its primary key")
+						}
 						own.Columns = own.Columns[:1]
 						own.Indexes = nil
 					}
@@ -225,6 +231,9 @@ func TestPgMigrationIndexValidityRequirementRefusesUnknownDomain(t *testing.T) {
 		}
 		if !pgIndexRequiresValidForWrites(actual, PgMigrationCatalogIndex{Columns: []string{"absent"}}) {
 			t.Fatal("missing key waived readiness")
+		}
+		if len(actual.Columns) != 1 {
+			t.Fatal("readiness check changed the fixture columns")
 		}
 		actual.Columns[0].TypeNamespace = "foreign"
 		if !pgIndexRequiresValidForWrites(actual, PgMigrationCatalogIndex{Columns: []string{"key"}}) {

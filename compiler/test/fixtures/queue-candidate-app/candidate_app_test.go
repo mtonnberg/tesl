@@ -53,8 +53,8 @@ func TestCompiledCandidateApplication(t *testing.T) {
 		}
 	}
 	// Public startup is supported, but these deliberate placeholder credentials
-	// cannot authorize an installed application. The bridge tests an isolated
-	// candidate below; it must not silently bypass the real baseline opener.
+	// cannot authorize an installed application. The bridge provisions a private
+	// current baseline below; it must not bypass the real baseline opener.
 	if refusal := teslrt.CandidatePanicForTest(func() { Main() }); !strings.Contains(refusal, "cannot connect row baseline") {
 		t.Fatal("public Main did not enforce its actual database startup", refusal)
 	}
@@ -64,9 +64,6 @@ func TestCompiledCandidateApplication(t *testing.T) {
 	}
 	f := teslrt.OpenCompiledCandidateForTest(t, StoreDatabase)
 	f.Bind(func() {
-		if refusal := teslrt.CandidatePanicForTest(func() { Main() }); !strings.Contains(refusal, "Worker migration topology does not yet support") {
-			t.Fatal("installed candidate enabled public Main", refusal)
-		}
 		t.Run("HTTP handlers and both emitted codecs", func(t *testing.T) {
 			candidatePost(t, "/notify", "invalid-http", "", 400)
 			if teslrt.PendingJobCount(TasksQueue).String() != "0" {

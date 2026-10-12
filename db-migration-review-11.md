@@ -7,6 +7,13 @@ are subsequent working-tree changes. See the
 
 ## Bottom line
 
+**Readiness update (2026-10-12):** authoritative `./ci.sh` now passes all 24 phases,
+without skips, in one invocation on Go 1.26.9. It includes all 47 migration phases,
+244 adversarial cases and V1–V20. `.tesl-stuff/readiness-ci-final-gate.log` records
+exit 0. See [delivery status](dev-docs/migration-delivery-status.md) for the exact
+scope and hosted/performance gates still open. Historical discovery assessments
+below do not supersede that current status.
+
 **Latest performance follow-up after `3242931`:** two ordinary-release runs of the
 257-type/1,024-head workload reached all types in **24.535s and 24.549s**, preserving
 payloads and admission floors and retaining busy-head work. This supersedes the
@@ -127,7 +134,7 @@ observation boundaries, rather than the queue path's repeated whole-inventory
 admission. That is a source-level distinction, not a large-database SLA.
 
 A volume probe reused the exact previously verified V1–V20 race binaries and added
-1,000 Tasks via the V1 HTTP API (5.14s seeding). All 95 API tests and all twenty
+1,000 Tasks via the V1 HTTP API (5.14s seeding). All 95 API cases and all twenty
 deployments passed with those Tasks retained and checked after every finality
 boundary. V7/V13/V15 full phase times were 29.34/41.49/42.87s versus
 28.02/39.42/40.31s in the earlier small-row run. These single-run phase timings
@@ -211,7 +218,7 @@ Evidence:
   PostgreSQL API output, retained database UUID and rollout timings.
 - `.tesl-stuff/twenty-releases-full-gate-retry.log`: main compiled application/kernel
   package (1436.768s), all subsequent mandatory sections, 127 review-05 cases,
-  87 review-11 cases, both V1–V4 examples, and freshly built V1–V20/95 API tests.
+  87 review-11 cases, both V1–V4 examples, and freshly built V1–V20/95 API cases.
 No phase was resumed or skipped to claim this full-gate pass.
 
 This establishes a longer mixed **row** history, not unrestricted mixed row/queue

@@ -15,9 +15,15 @@ func TestRowNewTableOperationAndOrigins(t *testing.T) {
 	plan := *previous
 	plan.version = 2
 	plan.entities = slices.Clone(previous.entities)
+	if len(previous.entities) == 0 {
+		t.Fatal("physical fixture omitted its entity")
+	}
 	added := previous.entities[0]
 	added.identity, added.table = "Added", "added"
 	added.columns = slices.Clone(added.columns)
+	if len(added.columns) == 0 {
+		t.Fatal("physical fixture omitted its columns")
+	}
 	for i := range added.columns {
 		added.columns[i].introducedVersion = 2
 	}
@@ -28,7 +34,7 @@ func TestRowNewTableOperationAndOrigins(t *testing.T) {
 		t.Fatal("new entity did not derive one create operation", err)
 	}
 	table := operations[0].table
-	if table.Name != "added" || len(table.Indexes) != 1 {
+	if table.Name != "added" || len(table.Indexes) != 1 || len(table.Columns) == 0 {
 		t.Fatal("new table lost its exact index inventory")
 	}
 	marker := table.Columns[len(table.Columns)-1]
@@ -40,6 +46,9 @@ func TestRowNewTableOperationAndOrigins(t *testing.T) {
 		t.Fatal("invented historical generation authorized table creation")
 	}
 	plan.entities[len(plan.entities)-1].generation = 1
+	if len(plan.entities[len(plan.entities)-1].columns) == 0 {
+		t.Fatal("operation derivation changed the new table columns")
+	}
 	plan.entities[len(plan.entities)-1].columns[0].introducedVersion = 1
 	if _, err := pgRowForwardOperations(previous, &plan); err == nil {
 		t.Fatal("old column origin authorized new table")
@@ -55,6 +64,9 @@ func TestRowExistingTableIndexRequiresConcurrentJob(t *testing.T) {
 	plan := *previous
 	plan.version = 2
 	plan.entities = slices.Clone(previous.entities)
+	if len(plan.entities) == 0 || len(plan.entities[0].columns) == 0 {
+		t.Fatal("physical fixture omitted its entity or columns")
+	}
 	plan.entities[0].indexes = append(slices.Clone(plan.entities[0].indexes), PgMigrationCatalogIndex{Name: "later_index", Columns: []string{plan.entities[0].columns[0].catalog.Name}})
 	if _, err := pgRowForwardOperations(previous, &plan); err == nil {
 		t.Fatal("existing table index escaped concurrent job requirement")

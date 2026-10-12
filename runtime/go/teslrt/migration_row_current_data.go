@@ -40,6 +40,9 @@ func (storage *PgRowCurrentStorage[Row]) materialize(a *pgRowTransactionAdmissio
 	if err != nil {
 		return pgPhysicalWrite{}, err
 	}
+	if len(values) == 0 || len(values) != len(storage.projection.fields) {
+		return pgPhysicalWrite{}, fmt.Errorf("current materialization requires a complete nonempty projection")
+	}
 	logical := map[string]any{}
 	for i, field := range storage.projection.fields {
 		logical[field] = values[i]
@@ -65,7 +68,11 @@ func (storage *PgRowCurrentStorage[Row]) materialize(a *pgRowTransactionAdmissio
 		}
 	}
 	result.columns = append(result.columns, "_tesl_v")
-	result.values = append(result.values, int16(a.entity.generation))
+	marker, err := pgRowGenerationMarker(a.entity.generation)
+	if err != nil {
+		return pgPhysicalWrite{}, err
+	}
+	result.values = append(result.values, marker)
 	return result, nil
 }
 

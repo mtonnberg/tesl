@@ -9,6 +9,15 @@ import (
 	"strings"
 )
 
+// Keep the plan's positive-smallint proof local to every narrowing conversion
+// used for a persisted marker, shard registration or retirement parameter.
+func pgRowGenerationMarker(generation int) (int16, error) {
+	if generation < 1 || generation > 32767 {
+		return 0, fmt.Errorf("row generation is outside the positive smallint domain")
+	}
+	return int16(generation), nil
+}
+
 // Physical descriptions are immutable compiler-linked plans, not live catalog
 // observations. Structural parsing also serves old binaries reading a protected
 // future manifest; only separate private registration binds execution authority.

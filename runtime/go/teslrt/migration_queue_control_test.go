@@ -262,7 +262,7 @@ func TestQueueCandidateCatalogAndInventoryTamperRefused(t *testing.T) {
 func TestQueueCandidateCanonicalInventoryBinding(t *testing.T) {
 	h := pgQueueCandidateTestHistory(t, false)
 	source, err := h.QueueSourceInventory(1)
-	if err != nil {
+	if err != nil || len(source.Versions) == 0 || len(source.Versions[0].Contracts) == 0 {
 		t.Fatal(err)
 	}
 	v := source.Versions[0]
@@ -298,7 +298,7 @@ func TestQueueCandidateCreatorABIAndSealProvenanceRemainHistorical(t *testing.T)
 		t.Fatal(err)
 	}
 	source, err := a.QueueSourceInventory(1)
-	if err != nil {
+	if err != nil || len(source.Versions) == 0 {
 		t.Fatal(err)
 	}
 	originalHash, err := pgQueueCandidateInventoryHash(a, source.Versions[0])

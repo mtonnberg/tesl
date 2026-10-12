@@ -27,84 +27,49 @@ jobs:
   protocol:
     name: PostgreSQL ${{ matrix.postgres }} protocol and race tests
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Full shared gate: compiler/PostgreSQL suites, adversarial reviews and V1–V20.
+    # Individual scenario deadlines stay in the runner; this bounds their sum.
+    timeout-minutes: 240
+    env:
+      TESL_CI_JOBS: '2'
+      GOMAXPROCS: '2'
+      GOFLAGS: '-p=2'
     strategy:
       fail-fast: false
       matrix:
         postgres: ${{ fromJSON(github.event_name == 'schedule' && '[14,15,16,17,18]' || '[14,18]') }}
-    services:
-      postgres:
-        image: postgres:${{ matrix.postgres }}
-        env:
-          POSTGRES_HOST_AUTH_METHOD: trust
-        ports:
-          - 127.0.0.1:5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 12
     steps:
       - uses: actions/checkout@v4
       - uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25
         with:
           extra-conf: |
             experimental-features = nix-command flakes
-      - name: Execute protocol templates against the reference model
+      - name: Execute the complete migration gate on matching-major private clusters
         env:
-          TESL_MIGRATION_TEST_DSN: host=127.0.0.1 port=5432 user=postgres dbname=postgres
+          TESL_MIGRATION_TEST_OUTPUT: ${{ runner.temp }}/migration-evidence
           TESL_MIGRATION_TEST_POOLERS: '1'
           TESL_MIGRATION_TEST_CLUSTER_CRASH: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && '1' || '0' }}
           TESL_MIGRATION_TEST_TRACE_SCALE: ${{ github.event_name == 'schedule' && '8' || '1' }}
           POSTGRES_MAJOR: ${{ matrix.postgres }}
           TESL_MIGRATION_TEST_POSTGRES_MAJOR: ${{ matrix.postgres }}
           TESL_MIGRATION_TEST_REQUIRE_POSTGRES: '1'
-          TESL_TEST_POSTGRES_SHARED_HOST: 127.0.0.1
-          TESL_TEST_POSTGRES_SHARED_PORT: '5432'
-          TESL_TEST_POSTGRES_SHARED_USER: postgres
-          TESL_TEST_POSTGRES_SHARED_ADMIN_DATABASE: postgres
         run: |
-          if [ "$TESL_MIGRATION_TEST_CLUSTER_CRASH" = 1 ]; then
-            nixpkgs_rev="$(jq -r '.nodes.nixpkgs.locked.rev' flake.lock)"
-            cluster_toolchain="$(nix build --no-link --print-out-paths "github:NixOS/nixpkgs/$nixpkgs_rev#postgresql_$POSTGRES_MAJOR^out")"
-            test -x "$cluster_toolchain/bin/pg_ctl"
-            export TESL_MIGRATION_CLUSTER_BIN="$cluster_toolchain/bin"
-          fi
+          nixpkgs_rev="$(jq -r '.nodes.nixpkgs.locked.rev' flake.lock)"
+          cluster_toolchain="$(nix build --no-link --print-out-paths "github:NixOS/nixpkgs/$nixpkgs_rev#postgresql_$POSTGRES_MAJOR^out")"
+          test -x "$cluster_toolchain/bin/pg_ctl"
+          export TESL_MIGRATION_CLUSTER_BIN="$cluster_toolchain/bin"
+          # Variables in the quoted script expand inside the Nix shell.
+          # shellcheck disable=SC2016
           nix develop --command bash -c '
             set -euo pipefail
-            if [ -n "${TESL_MIGRATION_CLUSTER_BIN:-}" ]; then
-              export PATH="$TESL_MIGRATION_CLUSTER_BIN:$PATH"
-            fi
+            export PATH="$TESL_MIGRATION_CLUSTER_BIN:$PATH"
             export TESL_REPO_ROOT="$PWD"
-            (cd compiler && dune build)
-            (cd compiler && dune exec --no-build ./test/test_migration_queue.exe)
-            (cd compiler && dune exec --no-build ./test/test_migration_fixtures.exe)
-            (cd compiler && dune exec --no-build ./test/test_queue_candidate_app.exe)
-            (cd compiler && dune exec --no-build ./test/test_migration_row_companion.exe)
-            (cd compiler && dune exec --no-build ./test/test_migration_contract.exe)
-            (cd compiler && dune exec --no-build ./test/test_migration_row_storage.exe)
-            (cd compiler && dune exec --no-build ./test/test_migration_retype.exe)
-            (cd compiler && dune exec --no-build ./test/test_migration_row_forward.exe)
-            (cd compiler && dune exec --no-build ./test/test_migration_row_access.exe)
-            (cd compiler && dune exec --no-build ./test/test_migration_delete.exe)
-            (cd compiler && dune exec --no-build ./test/test_migration_row_additive.exe)
-            (cd compiler && dune exec --no-build ./test/test_migration_row_tables.exe)
-            (cd compiler && dune exec --no-build ./test/test_migration_row_indexes.exe)
-            (cd compiler && dune exec --no-build ./test/test_migration_additive_tail.exe)
-            (cd compiler && dune exec --no-build ./test/test_migration_row_derived.exe)
-            (cd compiler && dune exec --no-build ./test/test_migration_nominal_derived.exe)
-            (cd compiler && dune exec --no-build ./test/test_migration_nominal_optional.exe)
-            (cd compiler && dune exec --no-build ./test/test_migration_row_scc.exe)
-            (cd compiler && dune exec --no-build ./test/test_migration_row_civil.exe)
-            (cd compiler && dune exec --no-build ./test/test_migration_nominal_pk.exe)
-            (cd compiler && dune exec --no-build ./test/test_migration_nominal_copy.exe)
-            (cd compiler && dune exec --no-build ./test/test_migration_row_contract_abi.exe)
-            (cd compiler && dune exec --no-build ./test/test_migration_row_retype_physical.exe)
-            cd runtime/go
-            go test -race -count=1 -timeout=300s -tags=tesl_migration_test ./teslrt -run "^(TestPgRowBaseline|TestPgRowIndex|TestRowBaseline|TestRowPhysical|TestPgRowForwardInvalidation)"
-            go test -race -count=1 -timeout=900s -v ./internal/migrationtest
-            go test -race -count=1 -timeout=300s -tags=tesl_migration_test ./teslrt -run "^TestPgMigration(Control|Expansion|Admission|Boot|Status|Install|StoredValueCompatibility|Compatibility|Worker)"
-            go test -race -count=1 -timeout=300s -tags=tesl_migration_test ./teslrt -run "^(TestPgMigration(Index|FutureIndex|Embedded)|TestServe(Shutdown|ListenFailure))"
-            go test -race -count=1 -timeout=300s -tags=tesl_migration_test ./teslrt -run "^(TestQueue|TestDurableQueue|TestAppPreflight|TestDeadJob|TestDurableDeadJob|TestWorkerLifetime)"
-            go test -race -count=1 -timeout=300s -tags=tesl_migration_test ./teslrt -run "^(TestPgMigration(TriggerCatalog|RowGeneration)|TestMigrationRowGeneration)"
+            bash scripts/run-migration-tests.sh
           '
+      - name: Retain phase results and failure diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: migration-pg${{ matrix.postgres }}-${{ github.sha }}
+          path: ${{ runner.temp }}/migration-evidence
+          if-no-files-found: warn

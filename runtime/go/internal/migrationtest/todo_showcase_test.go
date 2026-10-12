@@ -190,6 +190,9 @@ func TestCompiledTodoComplexHistoryPostgres(t *testing.T) {
 			worker.stop(t)
 		}
 	}
+	if worker == nil || request == nil {
+		t.Fatal("additive rollout did not retain its V9 processes")
+	}
 	old := showcaseTodo{ID: "complex-old", Title: "Retained through every transform"}
 	requireShowcaseTodo(t, ctx, client, request.base, http.MethodPost, old.ID,
 		fmt.Sprintf(`{"title":%q}`, old.Title), old)
@@ -432,7 +435,7 @@ func writeTodoTransformStage(t *testing.T, base, stage string, version int) {
 		t.Fatal(err)
 	}
 	if version < 13 {
-		migration = []byte(strings.Replace(string(migration), fmt.Sprintf("Schema.Todo.V%d", version), "Schema.Todo.VCurrent", -1))
+		migration = []byte(strings.ReplaceAll(string(migration), fmt.Sprintf("Schema.Todo.V%d", version), "Schema.Todo.VCurrent"))
 		if start := strings.Index(string(migration), "# tesl:frozen-migration:v1"); start >= 0 {
 			text := string(migration)
 			if end := strings.Index(text, "# tesl:frozen-migration:end"); end >= 0 {

@@ -103,7 +103,7 @@ func TestRowRetirementSourceAuthority(t *testing.T) {
 func rowRetirementPhysicalFixture(t *testing.T) (*pgRowPhysicalPlan, pgRowCanonical) {
 	seed := rowPhysicalSeed(t).Databases[0].Versions[0]
 	previous, err := pgParseRowPhysicalPlan(seed.Contract, seed.Hash)
-	if err != nil {
+	if err != nil || len(previous.entities) == 0 {
 		t.Fatal(err)
 	}
 	old := previous.entities[0]

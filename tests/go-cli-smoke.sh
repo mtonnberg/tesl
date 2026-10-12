@@ -2,9 +2,9 @@
 # Focused Go CLI smoke. Full ci.sh remains the release gate; this script keeps
 # the Go-backed CLI paths cheap to exercise during the migration.
 
-set -uo pipefail
+set -euo pipefail
 
-REPO_ROOT="${TESL_REPO_ROOT:-$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)}"
+REPO_ROOT="${TESL_REPO_ROOT:-$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)}"
 BODY="$REPO_ROOT/nix/tesl-cli-body.sh"
 COMPILER="${TESL_OCAML_COMPILER:-$REPO_ROOT/compiler/_build/default/bin/main.exe}"
 
@@ -75,11 +75,13 @@ revalidate_output="$(run_cli test "$REPO_ROOT/example/learn/db-revalidation/app.
   echo "go-cli-smoke: proof revalidation lesson failed" >&2
   exit 1
 }
-if ! printf '%s\n' "$revalidate_output" | grep -q '^PASS'; then
-  printf '%s\n' "$revalidate_output" >&2
-  echo "go-cli-smoke: proof revalidation fixtures were omitted" >&2
-  exit 1
-fi
+for fixture_package in teslmigrationfixtures teslmodschemanotesmigratev2; do
+  if ! printf '%s\n' "$revalidate_output" | grep -Eq "^ok[[:space:]]+[^[:space:]]*/internal/${fixture_package}[[:space:]]"; then
+    printf '%s\n' "$revalidate_output" >&2
+    echo "go-cli-smoke: proof revalidation omitted successful $fixture_package tests" >&2
+    exit 1
+  fi
+done
 
 mkdir -p "$TMP/project"
 cp "$REPO_ROOT/example/todo-api.tesl" "$TMP/project/todo-api.tesl"
@@ -165,7 +167,7 @@ mcp_bin="$TMP/tesl-mcp"
 }
 inspect_output=""
 inspect_ok=false
-for attempt in 1 2 3; do
+for _attempt in 1 2 3; do
   if inspect_output="$(TESL_DEBUG_INSPECT_BIN="$inspect_bin" run_cli debug-inspect example/learn/lesson61-step-debugging.tesl --break-at 193 --mode test --timeout-ms 10000 2>&1)" &&
      printf '%s\n' "$inspect_output" | grep -q '"stopped":true'; then
     inspect_ok=true

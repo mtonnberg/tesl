@@ -42,7 +42,7 @@ func pgQueueRegistrationSource(t *testing.T, current int) (PgCompiledMigrationHi
 func pgQueueRegistrationVersion(t *testing.T, h PgCompiledMigrationHistory, initial, version int) PgQueueSourceVersion {
 	t.Helper()
 	source, err := h.QueueSourceInventory(initial)
-	if err != nil {
+	if err != nil || len(source.Versions) == 0 || version < initial || version-initial >= len(source.Versions) {
 		t.Fatal(err)
 	}
 	return source.Versions[version-initial]
@@ -341,6 +341,9 @@ func TestQueueRegistrationUnknownUpgradeCannotAuthorizeEvenEmptySource(t *testin
 func TestQueueRegistrationCanonicalSQLMatchesGo(t *testing.T) {
 	f, _, h, _ := pgQueueRegistrationSetup(t)
 	v := pgQueueRegistrationVersion(t, h, 1, 1)
+	if len(v.Contracts) == 0 || len(v.Contracts[0].Payloads) == 0 {
+		t.Fatal("canonical inventory fixture omitted its payload")
+	}
 	raw, err := hex.DecodeString(v.Contracts[0].Payloads[0].Contract)
 	if err != nil {
 		t.Fatal(err)

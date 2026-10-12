@@ -312,52 +312,6 @@ func CheckIssueAssignee(userId string, issueId string) teslrt.Check[string] {
 	}
 }
 
-func teslColumnIssueStatus_teslmodkanelmodels(teslText []byte) teslmodkanelmodels.IssueStatus {
-	teslParsed, teslParseErr := teslrt.ParseColumnJSON(teslText)
-	if teslParseErr != nil {
-		panic("database: a IssueStatus column holds text that is not JSON: " + teslParseErr.Error())
-	}
-	teslTag, teslTagErr := teslrt.DecodeStringField(teslParsed, "tag")
-	if teslTagErr != nil {
-		panic("database: a IssueStatus column holds " + teslTagErr.Error())
-	}
-	switch teslTag {
-	case "Backlog":
-		return teslmodkanelmodels.IssueStatus{Tag: teslmodkanelmodels.IssueStatusBacklog}
-	case "Todo":
-		return teslmodkanelmodels.IssueStatus{Tag: teslmodkanelmodels.IssueStatusTodo}
-	case "InProgress":
-		return teslmodkanelmodels.IssueStatus{Tag: teslmodkanelmodels.IssueStatusInProgress}
-	case "InReview":
-		return teslmodkanelmodels.IssueStatus{Tag: teslmodkanelmodels.IssueStatusInReview}
-	case "Done":
-		return teslmodkanelmodels.IssueStatus{Tag: teslmodkanelmodels.IssueStatusDone}
-	case "Cancelled":
-		return teslmodkanelmodels.IssueStatus{Tag: teslmodkanelmodels.IssueStatusCancelled}
-	}
-	panic("database: a IssueStatus column holds an unknown tag " + teslTag)
-}
-
-func teslColumnOrgRole_teslmodkanelmodels(teslText []byte) teslmodkanelmodels.OrgRole {
-	teslParsed, teslParseErr := teslrt.ParseColumnJSON(teslText)
-	if teslParseErr != nil {
-		panic("database: a OrgRole column holds text that is not JSON: " + teslParseErr.Error())
-	}
-	teslTag, teslTagErr := teslrt.DecodeStringField(teslParsed, "tag")
-	if teslTagErr != nil {
-		panic("database: a OrgRole column holds " + teslTagErr.Error())
-	}
-	switch teslTag {
-	case "RoleAdmin":
-		return teslmodkanelmodels.OrgRole{Tag: teslmodkanelmodels.OrgRoleRoleAdmin}
-	case "RoleMember":
-		return teslmodkanelmodels.OrgRole{Tag: teslmodkanelmodels.OrgRoleRoleMember}
-	case "RoleViewer":
-		return teslmodkanelmodels.OrgRole{Tag: teslmodkanelmodels.OrgRoleRoleViewer}
-	}
-	panic("database: a OrgRole column holds an unknown tag " + teslTag)
-}
-
 func teslKeyLessString(teslX, teslY string) bool {
 	return (teslX < teslY)
 }
@@ -384,7 +338,7 @@ func teslScanIssue(teslRow pgx.CollectableRow) (teslmodkanelmodels.Issue, error)
 	teslValue.OrgId = teslColumn2
 	teslValue.Title = teslColumn3
 	teslValue.Description = teslColumn4
-	teslValue.Status = teslColumnIssueStatus_teslmodkanelmodels(teslColumn5)
+	teslValue.Status = teslrt.MustDecodeColumnJSON(teslColumn5, teslmodkanelmodels.DecodeIssueStatusJSON)
 	teslValue.AssigneeId = teslrt.MaybeOfPointer(teslColumn6, func() string { return *teslColumn6 })
 	teslValue.ReporterId = teslColumn7
 	teslValue.Estimate = teslrt.PgIntOf(teslColumn8)
@@ -425,7 +379,7 @@ func teslScanOrgMembership(teslRow pgx.CollectableRow) (teslmodkanelmodels.OrgMe
 	teslValue.Id = teslColumn0
 	teslValue.OrgId = teslColumn1
 	teslValue.UserId = teslColumn2
-	teslValue.Role = teslColumnOrgRole_teslmodkanelmodels(teslColumn3)
+	teslValue.Role = teslrt.MustDecodeColumnJSON(teslColumn3, teslmodkanelmodels.DecodeOrgRoleJSON)
 	teslValue.JoinedAt = teslrt.PosixMillis{Value: teslrt.FromInt64(teslColumn4)}
 	return teslValue, nil
 }
@@ -1745,32 +1699,6 @@ var KanelServer = teslrt.Server{
 	},
 }
 
-func teslColumnIssueStatus_teslmodkanelmodels(teslText []byte) teslmodkanelmodels.IssueStatus {
-	teslParsed, teslParseErr := teslrt.ParseColumnJSON(teslText)
-	if teslParseErr != nil {
-		panic("database: a IssueStatus column holds text that is not JSON: " + teslParseErr.Error())
-	}
-	teslTag, teslTagErr := teslrt.DecodeStringField(teslParsed, "tag")
-	if teslTagErr != nil {
-		panic("database: a IssueStatus column holds " + teslTagErr.Error())
-	}
-	switch teslTag {
-	case "Backlog":
-		return teslmodkanelmodels.IssueStatus{Tag: teslmodkanelmodels.IssueStatusBacklog}
-	case "Todo":
-		return teslmodkanelmodels.IssueStatus{Tag: teslmodkanelmodels.IssueStatusTodo}
-	case "InProgress":
-		return teslmodkanelmodels.IssueStatus{Tag: teslmodkanelmodels.IssueStatusInProgress}
-	case "InReview":
-		return teslmodkanelmodels.IssueStatus{Tag: teslmodkanelmodels.IssueStatusInReview}
-	case "Done":
-		return teslmodkanelmodels.IssueStatus{Tag: teslmodkanelmodels.IssueStatusDone}
-	case "Cancelled":
-		return teslmodkanelmodels.IssueStatus{Tag: teslmodkanelmodels.IssueStatusCancelled}
-	}
-	panic("database: a IssueStatus column holds an unknown tag " + teslTag)
-}
-
 func teslEncode1(teslValue string) any {
 	return teslValue
 }
@@ -2030,7 +1958,7 @@ func teslScanIssue(teslRow pgx.CollectableRow) (teslmodkanelmodels.Issue, error)
 	teslValue.OrgId = teslColumn2
 	teslValue.Title = teslColumn3
 	teslValue.Description = teslColumn4
-	teslValue.Status = teslColumnIssueStatus_teslmodkanelmodels(teslColumn5)
+	teslValue.Status = teslrt.MustDecodeColumnJSON(teslColumn5, teslmodkanelmodels.DecodeIssueStatusJSON)
 	teslValue.AssigneeId = teslrt.MaybeOfPointer(teslColumn6, func() string { return *teslColumn6 })
 	teslValue.ReporterId = teslColumn7
 	teslValue.Estimate = teslrt.PgIntOf(teslColumn8)
@@ -3356,30 +3284,6 @@ func MarkPaidHandler(session teslmodkanelauth.KanelSession, orgId string, invoic
 	}
 }
 
-func teslColumnInvoiceStatus_teslmodkanelmodels(teslText []byte) teslmodkanelmodels.InvoiceStatus {
-	teslParsed, teslParseErr := teslrt.ParseColumnJSON(teslText)
-	if teslParseErr != nil {
-		panic("database: a InvoiceStatus column holds text that is not JSON: " + teslParseErr.Error())
-	}
-	teslTag, teslTagErr := teslrt.DecodeStringField(teslParsed, "tag")
-	if teslTagErr != nil {
-		panic("database: a InvoiceStatus column holds " + teslTagErr.Error())
-	}
-	switch teslTag {
-	case "Draft":
-		return teslmodkanelmodels.InvoiceStatus{Tag: teslmodkanelmodels.InvoiceStatusDraft}
-	case "Approved":
-		return teslmodkanelmodels.InvoiceStatus{Tag: teslmodkanelmodels.InvoiceStatusApproved}
-	case "Sent":
-		return teslmodkanelmodels.InvoiceStatus{Tag: teslmodkanelmodels.InvoiceStatusSent}
-	case "Paid":
-		return teslmodkanelmodels.InvoiceStatus{Tag: teslmodkanelmodels.InvoiceStatusPaid}
-	case "Overdue":
-		return teslmodkanelmodels.InvoiceStatus{Tag: teslmodkanelmodels.InvoiceStatusOverdue}
-	}
-	panic("database: a InvoiceStatus column holds an unknown tag " + teslTag)
-}
-
 func teslScanInvoice(teslRow pgx.CollectableRow) (teslmodkanelmodels.Invoice, error) {
 	teslValue := teslmodkanelmodels.Invoice{}
 	var teslColumn0 string
@@ -3394,7 +3298,7 @@ func teslScanInvoice(teslRow pgx.CollectableRow) (teslmodkanelmodels.Invoice, er
 	}
 	teslValue.Id = teslColumn0
 	teslValue.OrgId = teslColumn1
-	teslValue.Status = teslColumnInvoiceStatus_teslmodkanelmodels(teslColumn2)
+	teslValue.Status = teslrt.MustDecodeColumnJSON(teslColumn2, teslmodkanelmodels.DecodeInvoiceStatusJSON)
 	teslValue.TotalMinutes = teslrt.PgIntOf(teslColumn3)
 	teslValue.Notes = teslColumn4
 	teslValue.CreatedAt = teslrt.PosixMillis{Value: teslrt.FromInt64(teslColumn5)}
@@ -4497,52 +4401,6 @@ func ListTimeEntriesHandler(session teslmodkanelauth.KanelSession, orgId string,
 	}
 }
 
-func teslColumnIssueStatus_teslmodkanelmodels(teslText []byte) teslmodkanelmodels.IssueStatus {
-	teslParsed, teslParseErr := teslrt.ParseColumnJSON(teslText)
-	if teslParseErr != nil {
-		panic("database: a IssueStatus column holds text that is not JSON: " + teslParseErr.Error())
-	}
-	teslTag, teslTagErr := teslrt.DecodeStringField(teslParsed, "tag")
-	if teslTagErr != nil {
-		panic("database: a IssueStatus column holds " + teslTagErr.Error())
-	}
-	switch teslTag {
-	case "Backlog":
-		return teslmodkanelmodels.IssueStatus{Tag: teslmodkanelmodels.IssueStatusBacklog}
-	case "Todo":
-		return teslmodkanelmodels.IssueStatus{Tag: teslmodkanelmodels.IssueStatusTodo}
-	case "InProgress":
-		return teslmodkanelmodels.IssueStatus{Tag: teslmodkanelmodels.IssueStatusInProgress}
-	case "InReview":
-		return teslmodkanelmodels.IssueStatus{Tag: teslmodkanelmodels.IssueStatusInReview}
-	case "Done":
-		return teslmodkanelmodels.IssueStatus{Tag: teslmodkanelmodels.IssueStatusDone}
-	case "Cancelled":
-		return teslmodkanelmodels.IssueStatus{Tag: teslmodkanelmodels.IssueStatusCancelled}
-	}
-	panic("database: a IssueStatus column holds an unknown tag " + teslTag)
-}
-
-func teslColumnOrgRole_teslmodkanelmodels(teslText []byte) teslmodkanelmodels.OrgRole {
-	teslParsed, teslParseErr := teslrt.ParseColumnJSON(teslText)
-	if teslParseErr != nil {
-		panic("database: a OrgRole column holds text that is not JSON: " + teslParseErr.Error())
-	}
-	teslTag, teslTagErr := teslrt.DecodeStringField(teslParsed, "tag")
-	if teslTagErr != nil {
-		panic("database: a OrgRole column holds " + teslTagErr.Error())
-	}
-	switch teslTag {
-	case "RoleAdmin":
-		return teslmodkanelmodels.OrgRole{Tag: teslmodkanelmodels.OrgRoleRoleAdmin}
-	case "RoleMember":
-		return teslmodkanelmodels.OrgRole{Tag: teslmodkanelmodels.OrgRoleRoleMember}
-	case "RoleViewer":
-		return teslmodkanelmodels.OrgRole{Tag: teslmodkanelmodels.OrgRoleRoleViewer}
-	}
-	panic("database: a OrgRole column holds an unknown tag " + teslTag)
-}
-
 func teslScanIssue(teslRow pgx.CollectableRow) (teslmodkanelmodels.Issue, error) {
 	teslValue := teslmodkanelmodels.Issue{}
 	var teslColumn0 string
@@ -4565,7 +4423,7 @@ func teslScanIssue(teslRow pgx.CollectableRow) (teslmodkanelmodels.Issue, error)
 	teslValue.OrgId = teslColumn2
 	teslValue.Title = teslColumn3
 	teslValue.Description = teslColumn4
-	teslValue.Status = teslColumnIssueStatus_teslmodkanelmodels(teslColumn5)
+	teslValue.Status = teslrt.MustDecodeColumnJSON(teslColumn5, teslmodkanelmodels.DecodeIssueStatusJSON)
 	teslValue.AssigneeId = teslrt.MaybeOfPointer(teslColumn6, func() string { return *teslColumn6 })
 	teslValue.ReporterId = teslColumn7
 	teslValue.Estimate = teslrt.PgIntOf(teslColumn8)
@@ -4606,7 +4464,7 @@ func teslScanOrgMembership(teslRow pgx.CollectableRow) (teslmodkanelmodels.OrgMe
 	teslValue.Id = teslColumn0
 	teslValue.OrgId = teslColumn1
 	teslValue.UserId = teslColumn2
-	teslValue.Role = teslColumnOrgRole_teslmodkanelmodels(teslColumn3)
+	teslValue.Role = teslrt.MustDecodeColumnJSON(teslColumn3, teslmodkanelmodels.DecodeOrgRoleJSON)
 	teslValue.JoinedAt = teslrt.PosixMillis{Value: teslrt.FromInt64(teslColumn4)}
 	return teslValue, nil
 }
@@ -6068,26 +5926,6 @@ func DecodeChangeMemberRoleRequestJSON(teslJSON any) teslrt.Check[ChangeMemberRo
 	return teslrt.Reject[ChangeMemberRoleRequest](400, "no decode alternative matched")
 }
 
-func teslColumnOrgRole_teslmodkanelmodels(teslText []byte) teslmodkanelmodels.OrgRole {
-	teslParsed, teslParseErr := teslrt.ParseColumnJSON(teslText)
-	if teslParseErr != nil {
-		panic("database: a OrgRole column holds text that is not JSON: " + teslParseErr.Error())
-	}
-	teslTag, teslTagErr := teslrt.DecodeStringField(teslParsed, "tag")
-	if teslTagErr != nil {
-		panic("database: a OrgRole column holds " + teslTagErr.Error())
-	}
-	switch teslTag {
-	case "RoleAdmin":
-		return teslmodkanelmodels.OrgRole{Tag: teslmodkanelmodels.OrgRoleRoleAdmin}
-	case "RoleMember":
-		return teslmodkanelmodels.OrgRole{Tag: teslmodkanelmodels.OrgRoleRoleMember}
-	case "RoleViewer":
-		return teslmodkanelmodels.OrgRole{Tag: teslmodkanelmodels.OrgRoleRoleViewer}
-	}
-	panic("database: a OrgRole column holds an unknown tag " + teslTag)
-}
-
 func teslScanKanelUser(teslRow pgx.CollectableRow) (teslmodkanelmodels.KanelUser, error) {
 	teslValue := teslmodkanelmodels.KanelUser{}
 	var teslColumn0 string
@@ -6135,7 +5973,7 @@ func teslScanOrgMembership(teslRow pgx.CollectableRow) (teslmodkanelmodels.OrgMe
 	teslValue.Id = teslColumn0
 	teslValue.OrgId = teslColumn1
 	teslValue.UserId = teslColumn2
-	teslValue.Role = teslColumnOrgRole_teslmodkanelmodels(teslColumn3)
+	teslValue.Role = teslrt.MustDecodeColumnJSON(teslColumn3, teslmodkanelmodels.DecodeOrgRoleJSON)
 	teslValue.JoinedAt = teslrt.PosixMillis{Value: teslrt.FromInt64(teslColumn4)}
 	return teslValue, nil
 }

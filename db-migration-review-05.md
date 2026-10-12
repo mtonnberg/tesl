@@ -569,5 +569,5 @@ of one metadata hash test.
 6. Add cross-compiler queue and additive→transforming→additive application tests,
    then multi-job fairness and large-history performance tests.
 7. Keep observed failures, expected failures and untested design requirements
-   separate in release evidence. "107 tests" is an inventory, not a completion
+   separate in release evidence. "107 cases" is an inventory, not a completion
    percentage for this domain.

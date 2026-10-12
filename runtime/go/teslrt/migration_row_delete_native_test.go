@@ -127,7 +127,7 @@ func TestPgRowDeleteOriginalApplications(t *testing.T) {
 		t.Fatal("caller-owned transaction published delete before failure", first, err)
 	}
 	// The existing operation deadline applies to a locked physical DELETE too.
-	limited, _ := pgRowDeleteApp(t, f, root, "v2", "TESL_PG_POOL_LEASE_TIMEOUT_MS=400")
+	limited, _ := pgRowDeleteApp(t, f, root, "v2", "TESL_MIGRATION_TEST_REQUEST_TIMEOUT_MS=400")
 	blocker, err := request.Begin(ctx)
 	if err != nil {
 		t.Fatal(err)

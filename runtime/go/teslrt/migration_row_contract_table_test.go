@@ -12,11 +12,13 @@ func tableContractFixture() (*pgRowPhysicalPlan, *pgRowPhysicalPlan, pgRowCanoni
 	entity := func(name string) pgRowPhysicalEntity {
 		return pgRowPhysicalEntity{identity: name, table: strings.ToLower(name), generation: 1, insertGeneration: 1, typeContractHash: strings.Repeat("a", 64), columns: []pgRowPhysicalColumn{{catalog: PgMigrationCatalogColumn{Name: "id", Type: "text", PrimaryKey: true}, introducedVersion: 1}}, projection: []pgRowPhysicalField{{logical: "id", physical: "id"}}}
 	}
-	window := &pgRowPhysicalPlan{family: "Schema.Notes", namespace: "notes", version: 2, schemaSnapshotHash: strings.Repeat("b", 64), storageSnapshotHash: strings.Repeat("c", 64), entities: []pgRowPhysicalEntity{entity("Archive"), entity("Note")}, retirements: []pgRowPhysicalRetirement{{entity: "Archive", fromSchemaHash: strings.Repeat("d", 64), toSchemaHash: strings.Repeat("b", 64)}}}
+	retirement := pgRowPhysicalRetirement{entity: "Archive", fromSchemaHash: strings.Repeat("d", 64), toSchemaHash: strings.Repeat("b", 64)}
+	archive, note := entity("Archive"), entity("Note")
+	window := &pgRowPhysicalPlan{family: "Schema.Notes", namespace: "notes", version: 2, schemaSnapshotHash: strings.Repeat("b", 64), storageSnapshotHash: strings.Repeat("c", 64), entities: []pgRowPhysicalEntity{archive, note}, retirements: []pgRowPhysicalRetirement{retirement}}
 	settled := *window
 	settled.settled = true
 	settled.retirements = nil
-	settled.entities = append([]pgRowPhysicalEntity{}, window.entities[1:]...)
+	settled.entities = []pgRowPhysicalEntity{note}
 	basic := func(tag string, version int, schema string, entities []pgRowPhysicalEntity, reverse bool) pgRowCanonical {
 		nodes := []pgRowCanonical{}
 		for _, e := range entities {
@@ -29,16 +31,16 @@ func tableContractFixture() (*pgRowPhysicalPlan, *pgRowPhysicalPlan, pgRowCanoni
 		return pgRowList(pgRowAtom(tag), pgRowAtom(window.family), pgRowAtom(window.namespace), pgRowAtom(fmt.Sprint(version)), pgRowAtom(schema), pgRowAtom(window.storageSnapshotHash), pgRowList(nodes...), pgRowList())
 	}
 	physical := basic("tesl-retained-physical-version-v5", 2, window.schemaSnapshotHash, window.entities, true)
-	physical.children = append(physical.children, pgRowList(), pgRowList(pgRowRetirementNode(window.retirements[0])))
+	physical.children = append(physical.children, pgRowList(), pgRowList(pgRowRetirementNode(retirement)))
 	final := basic("tesl-settled-physical-version-v1", 2, window.schemaSnapshotHash, settled.entities, false)
-	prior := basic("tesl-retained-physical-version-v1", 1, window.retirements[0].fromSchemaHash, window.entities, false)
+	prior := basic("tesl-retained-physical-version-v1", 1, retirement.fromSchemaHash, window.entities, false)
 	encode := func(n pgRowCanonical) (string, string) {
 		raw, hash := pgRowBaselineDocument(n)
 		return hex.EncodeToString([]byte(raw)), hash
 	}
 	window.contract, window.hash = encode(physical)
 	settled.contract, settled.hash = encode(final)
-	contract := pgRowList(pgRowAtom("tesl-table-contract-v1"), pgRowAtom(window.family), pgRowAtom(window.namespace), pgRowAtom("2"), pgRowAtom(window.schemaSnapshotHash), pgRowAtom(pgRowTableRetirementBehavior(window)), pgRowAtom(window.hash), pgRowAtom(settled.hash), pgRowList(), pgRowList(pgRowList(pgRowAtom("drop-table"), pgRowAtom("Archive"), pgRowPhysicalEntityNode(window.entities[0]))))
+	contract := pgRowList(pgRowAtom("tesl-table-contract-v1"), pgRowAtom(window.family), pgRowAtom(window.namespace), pgRowAtom("2"), pgRowAtom(window.schemaSnapshotHash), pgRowAtom(pgRowTableRetirementBehavior(window)), pgRowAtom(window.hash), pgRowAtom(settled.hash), pgRowList(), pgRowList(pgRowList(pgRowAtom("drop-table"), pgRowAtom("Archive"), pgRowPhysicalEntityNode(archive))))
 	return window, &settled, contract, physical, final, prior
 }
 func tableContractBytes(n pgRowCanonical) ([]byte, string) {

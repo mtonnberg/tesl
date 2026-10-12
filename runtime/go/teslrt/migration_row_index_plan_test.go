@@ -17,8 +17,8 @@ func rowIndexPlanPair() (*pgRowPhysicalPlan, *pgRowPhysicalPlan) {
 	previous := &pgRowPhysicalPlan{family: "App", namespace: "notes", version: 1, entities: []pgRowPhysicalEntity{entity}}
 	plan := *previous
 	plan.version = 2
-	plan.entities = slices.Clone(previous.entities)
-	plan.entities[0].columns = slices.Clone(entity.columns)
+	entity.columns = slices.Clone(entity.columns)
+	plan.entities = []pgRowPhysicalEntity{entity}
 	return previous, &plan
 }
 
@@ -107,6 +107,9 @@ func TestRowConcurrentIndexRefusesUnsafeAndMalformedPlans(t *testing.T) {
 
 func TestRowConcurrentIndexRetainedAndNewTableInventory(t *testing.T) {
 	previous, plan := rowIndexPlanPair()
+	if len(previous.entities) != 1 || len(plan.entities) != 1 {
+		t.Fatal("index fixture omitted its entity")
+	}
 	previous.entities[0].indexes = []PgMigrationCatalogIndex{{Name: "existing_key", Columns: []string{"key"}}}
 	plan.entities[0].indexes = slices.Clone(previous.entities[0].indexes)
 	added := pgRowPhysicalEntity{identity: "Added", table: "added", generation: 1, insertGeneration: 1,
@@ -117,6 +120,9 @@ func TestRowConcurrentIndexRetainedAndNewTableInventory(t *testing.T) {
 	if err != nil || len(indexes) != 0 {
 		t.Fatal("unchanged or empty-table indexes became concurrent jobs", indexes, err)
 	}
+	if len(plan.entities) != 2 || len(plan.entities[1].indexes) != 1 {
+		t.Fatal("derivation changed the new-table fixture")
+	}
 	plan.entities[1].indexes[0].Name = "existing_key"
 	if _, err := pgDeriveRowConcurrentIndexes(previous, plan); err == nil {
 		t.Fatal("cross-table relation collision accepted")
@@ -125,6 +131,9 @@ func TestRowConcurrentIndexRetainedAndNewTableInventory(t *testing.T) {
 
 func TestRowConcurrentIndexCompleteInventory(t *testing.T) {
 	previous, plan := rowIndexPlanPair()
+	if len(plan.entities) != 1 {
+		t.Fatal("index fixture omitted its entity")
+	}
 	plan.entities[0].columns = append(plan.entities[0].columns, pgRowPhysicalColumn{catalog: PgMigrationCatalogColumn{Name: "fresh", Type: "jsonb", Nullable: true}, introducedVersion: 2})
 	plan.entities[0].indexes = []PgMigrationCatalogIndex{
 		{Name: "first_lookup", Columns: []string{"id"}},
@@ -133,6 +142,9 @@ func TestRowConcurrentIndexCompleteInventory(t *testing.T) {
 	indexes, err := pgDeriveRowConcurrentIndexes(previous, plan)
 	if err != nil || len(indexes) != 2 || indexes[0].index.Name != "first_lookup" || indexes[1].index.Name != "second_lookup" {
 		t.Fatal("complete ordered inventory lost", indexes, err)
+	}
+	if len(plan.entities) != 1 || len(plan.entities[0].indexes) != 2 {
+		t.Fatal("derivation changed its source inventory")
 	}
 	plan.entities[0].indexes[1].Columns = []string{"key"}
 	indexes, err = pgDeriveRowConcurrentIndexes(previous, plan)

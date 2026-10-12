@@ -86,25 +86,41 @@ func MakeOrderLine(price teslrt.Int, quantity teslrt.Int, recordProof struct{}) 
 	return OrderLine{Price: price, Quantity: quantity}
 }
 
-//line lesson12-records-with-proofs.tesl:250
+//line lesson12-records-with-proofs.tesl:251
+func orderLineProof(price teslrt.Int, quantity teslrt.Int) struct{} {
+	{
+//line lesson12-records-with-proofs.tesl:252
+		checked := teslrt.MustCheck(CheckPriceExceedsQuantity(price, quantity))
+		_ = checked
+		{
+//line lesson12-records-with-proofs.tesl:253
+			witness := struct{}{}
+			_ = witness
+//line lesson12-records-with-proofs.tesl:254
+			return witness
+		}
+	}
+}
+
+//line lesson12-records-with-proofs.tesl:256
 func shouldWork_ConfusingForTheCallerButNorRealError(price teslrt.Int, quantity teslrt.Int, recordProof struct{}) OrderLine {
 	{
-//line lesson12-records-with-proofs.tesl:251
+//line lesson12-records-with-proofs.tesl:257
 		p := teslrt.MustCheck(CheckPositiveInt(teslrt.FromInt64(10)))
 		_ = p
 		{
-//line lesson12-records-with-proofs.tesl:252
+//line lesson12-records-with-proofs.tesl:258
 			q := teslrt.MustCheck(CheckPositiveInt(teslrt.FromInt64(3)))
 			_ = q
 			{
-//line lesson12-records-with-proofs.tesl:253
+//line lesson12-records-with-proofs.tesl:259
 				pq := teslrt.MustCheck(CheckPriceExceedsQuantity(p, q))
 				_ = pq
 				{
-//line lesson12-records-with-proofs.tesl:254
+//line lesson12-records-with-proofs.tesl:260
 					proodd := struct{}{}
 					_ = proodd
-//line lesson12-records-with-proofs.tesl:255
+//line lesson12-records-with-proofs.tesl:261
 					return OrderLine{Price: p, Quantity: q}
 				}
 			}
@@ -112,9 +128,9 @@ func shouldWork_ConfusingForTheCallerButNorRealError(price teslrt.Int, quantity 
 	}
 }
 
-//line lesson12-records-with-proofs.tesl:262
+//line lesson12-records-with-proofs.tesl:268
 func ProcessOrder(order OrderLine) string {
-//line lesson12-records-with-proofs.tesl:263
+//line lesson12-records-with-proofs.tesl:269
 	return ("order: price=" + order.Price.String() + ", qty=" + order.Quantity.String())
 }
 
@@ -392,43 +408,43 @@ func TestTesl4(teslT *testing.T) {
 		}
 	}()
 	{
-//line lesson12-records-with-proofs.tesl:266
+//line lesson12-records-with-proofs.tesl:272
 		rawP := teslrt.FromInt64(10)
 		_ = rawP
 		{
-//line lesson12-records-with-proofs.tesl:267
+//line lesson12-records-with-proofs.tesl:273
 			p := teslrt.MustCheck(CheckPositiveInt(rawP))
 			_ = p
 			{
-//line lesson12-records-with-proofs.tesl:268
+//line lesson12-records-with-proofs.tesl:274
 				rawQ := teslrt.FromInt64(3)
 				_ = rawQ
 				{
-//line lesson12-records-with-proofs.tesl:269
+//line lesson12-records-with-proofs.tesl:275
 					q := teslrt.MustCheck(CheckPositiveInt(rawQ))
 					_ = q
 					{
-//line lesson12-records-with-proofs.tesl:270
+//line lesson12-records-with-proofs.tesl:276
 						pq := teslrt.MustCheck(CheckPriceExceedsQuantity(p, q))
 						_ = pq
 						{
-//line lesson12-records-with-proofs.tesl:271
-							order := MakeOrderLine(p, q, struct{}{})
+//line lesson12-records-with-proofs.tesl:277
+							order := MakeOrderLine(p, q, orderLineProof(p, q))
 							_ = order
 							{
-//line lesson12-records-with-proofs.tesl:272
+//line lesson12-records-with-proofs.tesl:278
 								orderAlt := OrderLine{Price: p, Quantity: q}
 								_ = orderAlt
 								teslLeft7 := order.Price
-//line lesson12-records-with-proofs.tesl:273
+//line lesson12-records-with-proofs.tesl:279
 								if !teslrt.Equal(teslLeft7, teslrt.FromInt64(10)) {
-//line lesson12-records-with-proofs.tesl:273
+//line lesson12-records-with-proofs.tesl:279
 									teslT.Fatal("Tesl expectation failed")
 								}
 								teslLeft8 := order.Quantity
-//line lesson12-records-with-proofs.tesl:274
+//line lesson12-records-with-proofs.tesl:280
 								if !teslrt.Equal(teslLeft8, teslrt.FromInt64(3)) {
-//line lesson12-records-with-proofs.tesl:274
+//line lesson12-records-with-proofs.tesl:280
 									teslT.Fatal("Tesl expectation failed")
 								}
 							}
@@ -453,22 +469,22 @@ func TestTesl5(teslT *testing.T) {
 		}
 	}()
 	{
-//line lesson12-records-with-proofs.tesl:280
+//line lesson12-records-with-proofs.tesl:286
 		rawP := teslrt.FromInt64(3)
 		_ = rawP
 		{
-//line lesson12-records-with-proofs.tesl:281
+//line lesson12-records-with-proofs.tesl:287
 			p := teslrt.MustCheck(CheckPositiveInt(rawP))
 			_ = p
 			{
-//line lesson12-records-with-proofs.tesl:282
+//line lesson12-records-with-proofs.tesl:288
 				rawQ := teslrt.FromInt64(10)
 				_ = rawQ
 				{
-//line lesson12-records-with-proofs.tesl:283
+//line lesson12-records-with-proofs.tesl:289
 					q := teslrt.MustCheck(CheckPositiveInt(rawQ))
 					_ = q
-//line lesson12-records-with-proofs.tesl:284
+//line lesson12-records-with-proofs.tesl:290
 					if (CheckPriceExceedsQuantity(p, q)).OK() {
 						teslT.Fatal("expected Tesl check failure")
 					}

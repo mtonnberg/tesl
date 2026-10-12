@@ -165,6 +165,8 @@ If you are writing tooling that deep-links into the manual, read that page first
 - **[Stable Anchor Scheme](anchors.md)** — anchor IDs for deep-linking
 - **[FAQ](FAQ.md)** — troubleshooting and common questions
 - **[Preparing migration cleanup](migration-contracts.md)** — reviewed Contract source and the order for preparing a rollout
+- **[Operating checked migrations](migration-operations.md)** — roles, deployment order, status, retirement and supported scope
+- **[Queue remediation](queue-remediation.md)** — typed execution-failure recovery and explicit audited discard
 - **[Deploying a Tesl web API](deploy.md)** — `tesl build`, the Docker image, and database flavours
   (also `tesl help manual deploy`)
 - **[OpenAPI and DAST](openapi-dast.md)** — generate a server-specific OpenAPI 3.1 artifact and

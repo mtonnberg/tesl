@@ -164,6 +164,9 @@ func (c *pgQueueCandidatePreparation) prepareFresh(ctx context.Context, tx pgx.T
 	if err != nil {
 		return err
 	}
+	if len(inv.Versions) != 1 {
+		return fmt.Errorf("fresh queue candidate requires exactly one source version")
+	}
 	v := inv.Versions[0]
 	hash, err := pgQueueCandidateInventoryHash(c.history, v)
 	if err != nil {

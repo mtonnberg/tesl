@@ -822,7 +822,7 @@ func pgRunQueueConversionCandidateBatch(ctx context.Context, conn *pgx.Conn, sco
 			if err != nil {
 				return false, 0, pgQueueConversionStored{}, fmt.Errorf("queue conversion job %s: %w", id, err)
 			}
-			if result.Kind != "converted" && result.Kind != "migration-rejected" && result.Kind != "payload-invalid" && !(scope.application && (result.Kind == "execution-failed" || result.Kind == "discarded")) {
+			if result.Kind != "converted" && result.Kind != "migration-rejected" && result.Kind != "payload-invalid" && (!scope.application || (result.Kind != "execution-failed" && result.Kind != "discarded")) {
 				return false, 0, pgQueueConversionStored{}, fmt.Errorf("selected queue conversion job %s lost its locked source", id)
 			}
 			if err := tx.Commit(ctx); err != nil {

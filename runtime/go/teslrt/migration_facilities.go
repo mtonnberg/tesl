@@ -290,6 +290,9 @@ func pgCheckApplicationQueueCodecs(database *Database, history PgCompiledMigrati
 	if err != nil {
 		return nil, err
 	}
+	if len(inventory.Versions) != 1 {
+		return nil, fmt.Errorf("current queue inventory must contain exactly one version")
+	}
 	contracts := inventory.Versions[0].Contracts
 	if len(owners) != len(contracts) || len(queueNames) != len(contracts) || len(queues) != len(contracts) {
 		return nil, fmt.Errorf("queue schema application bindings are missing or incomplete")

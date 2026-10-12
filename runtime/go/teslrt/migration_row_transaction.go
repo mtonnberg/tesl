@@ -262,6 +262,9 @@ func pgRowObserveGeneration(ctx context.Context, tx pgx.Tx, db *PostgresDB, wind
 		}
 	}
 	defer cache.mu.Unlock()
+	if tx == nil || window == nil || active == nil {
+		return nil, fmt.Errorf("row observation requires a transaction and exact physical plans")
+	}
 	for {
 		if err := pgAdmitMigrationTransaction(ctx, tx, db, false); err != nil {
 			return nil, err

@@ -81,7 +81,8 @@ import Tesl.DB exposing [dbRead, dbWrite]
 import Tesl.Database exposing [
   Database,
   Postgres,
-  PostgresConfig, MigrationConfig,
+  PostgresConfig,
+  MigrationConfig,
   TcpConnection,
   MigrationTopology(..),
 ]

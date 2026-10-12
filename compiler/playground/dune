@@ -18,6 +18,11 @@
  ; -warn-error +8 to match the compiler library's fail-closed discipline.
  (flags (:standard -warn-error +8))
  (modes js)
+ (js_of_ocaml
+  ; The browser uses the mounted virtual filesystem. Compact calls plus the
+  ; pinned final minifier preserve the existing 2 MB shipped-bundle ceiling.
+  (flags (:standard --target-env browser --opt 3 --no-inline))
+  (javascript_files vfs_realpath.js))
  ; ── Why this stanza is gated on the RELEASE profile ──────────────────────────
  ; An empty `(alias (name default))` override does NOT work, and that was the
  ; first attempt: "Library js_of_ocaml not found" is raised while dune RESOLVES

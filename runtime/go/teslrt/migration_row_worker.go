@@ -122,7 +122,11 @@ func pgPrepareRowWork(ctx context.Context, conn *pgx.Conn, b *pgRowBaseline, rol
 			}
 			migrationBoundary("row-worker-before-prepare-shards")
 			for _, window := range plan.windows {
-				if _, err := tx.Exec(ctx, "select "+pgx.Identifier{plan.namespace, "tesl_register_row_shard"}.Sanitize()+"($1,$2,$3,$4,null,null,$5)", plan.version, window.entity, int16(window.targetGeneration), int16(0), pgRowLeaseName(window.entity, window.targetGeneration, 0)); err != nil {
+				generation, err := pgRowGenerationMarker(window.targetGeneration)
+				if err != nil {
+					return err
+				}
+				if _, err := tx.Exec(ctx, "select "+pgx.Identifier{plan.namespace, "tesl_register_row_shard"}.Sanitize()+"($1,$2,$3,$4,null,null,$5)", plan.version, window.entity, generation, int16(0), pgRowLeaseName(window.entity, window.targetGeneration, 0)); err != nil {
 					return err
 				}
 			}
