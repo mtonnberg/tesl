@@ -23,6 +23,34 @@ missing old catalog objects cause refusal, not automatic adoption.
 
 ## The deployment sequence
 
+### Preview in CI
+
+```sh
+tesl migrate generate app.tesl --manifest-json
+```
+
+This emits the compiler-owned guarded edit preview without writing source files
+or connecting to the application database. CI can retain it as a review artifact,
+alongside compilation and migration fixture results. Editor-side apply is not
+needed to use this workflow.
+
+### What runs automatically today
+
+Once deployed and configured, the schema Worker performs supported next-step
+expansion and backfill/queue conversion. Request processes wait for verified
+readiness. Installation/staging, explicit Contract and required epoch closure
+still have separate commands; the runtime does not yet coordinate the entire
+deploy-to-latest sequence or general catch-up across multiple missing versions.
+
+Contract is the retirement/finalization step: establish final data and queue
+state, fence out retiring versions, then perform the reviewed cleanup. Automatic
+Contract execution means scheduling that same checked operation when safe.
+It does not by itself provide installation, conversion or multi-version catch-up.
+Those complete automatic deployment/catch-up paths are required release work;
+see [delivery requirements](../dev-docs/migration-delivery-status.md#clarified-release-requirements-maintainer-2026-10-12).
+
+### Current explicit-command sequence
+
 1. Preserve the old release and frozen source. Prepare the next transition through
    the guarded compiler workflow; run `agent-context` and business/fixture tests.
 2. For row cleanup, generate and review the exact Contract source before building
@@ -140,3 +168,10 @@ constructor remain outside the supported surface. Explicit discard revisions can
 remove malformed old jobs; they do not reconstruct a typed value. Consult the current language spec
 and executable examples rather than contributor milestone history when choosing
 an operation.
+
+Changing a queue job's record is different from changing an entity table. A checked
+`jobs:` migration can change an `InvoiceJob` payload while stored entities remain
+unchanged. Changing an `Order` entity in a queue-bearing database is the current
+composition restriction. It applies to retained history too: two separate
+releases do not yet bypass it. The required release workflow will support that
+ordered split and explain it in diagnostics; it is not an available workaround today.

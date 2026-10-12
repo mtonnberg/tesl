@@ -54,6 +54,14 @@ remain open. See [delivery status](../../dev-docs/migration-delivery-status.md),
 
 ## Design sketch (to be specified)
 
+**Release sequencing decision (maintainer, 2026-10-12):** two ordered migrations
+are acceptable when row and queue-payload changes cannot share an edge. The
+compiler must explain which changes conflict, how to split/order them and what to
+run next. The sequence must be supported by deployment/catch-up, including retained
+jobs; merely splitting files cannot work around the current retained-row-history
+refusal. Simultaneous unrestricted row/queue transformation is not required for
+this release. See the [release requirements](../../dev-docs/migration-delivery-status.md#clarified-release-requirements-maintainer-2026-10-12).
+
 - Job record types are declared in a schema-kind module (the schema module itself, or
   a `jobs module` revision), so they are frozen, hashed and diffed like entities and
   covered by the `Same` closure rule.

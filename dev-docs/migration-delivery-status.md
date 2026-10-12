@@ -2,21 +2,58 @@
 
 > Audience: contributors reviewing the migration PR and its release evidence.
 
-Assessment: 2026-10-12, including the working-tree readiness pass after `f436e7f`.
+Assessment: 2026-10-12. Verified implementation: `84ef00d`; release requirements
+were clarified subsequently below.
 
 ## Delivery contract
 
 The implemented surface supports **original-V1, fresh-install PostgreSQL histories**
 with checked row transformations and restricted Worker-topology queue histories.
 **Local authoritative acceptance is green: 24/24 phases, no skips, exit 0.**
-The bounded implementation is ready for PR review. Hosted supported-major checks
-and completion of the original roadmap remain open. This document does not waive the
+Those results establish the implemented surface. The maintainer's clarified
+release requirements below still require deployment automation, catch-up and
+ordered row/queue composition before release acceptance. Hosted supported-major
+checks also remain open. This document does not waive the
 [normative roadmap's requirements](../roadmap/next/database-migrations.md#target-mechanisms-after-phase-4-authoritative-summary).
 
 The maintainer explicitly accepted fresh-catalog-first development. Missing or
 incompatible installed objects must refuse, rather than be adopted or supplied
 with invented history. In-place upgrades of older development catalogs are outside
 this delivery contract. Other missing roadmap requirements remain open work.
+
+## Clarified release requirements (maintainer, 2026-10-12)
+
+| Requirement | Release decision and present state |
+|---|---|
+| CI preview | Required workflow, already available through compiler-owned non-mutating `tesl migrate generate app.tesl --manifest-json`. Editor preview is sufficient; applying edits inside the editor is not a merge blocker. |
+| Automatic production migration | Required. Deploying checked migration history must drive the necessary installation/staging, expansion, backfill/conversion and reviewed retirement steps without manual per-version schema commands. The configured schema Worker already performs supported next-step expansion and backfill; the complete deployment coordinator is not implemented. |
+| Catch-up from any earlier supported schema version | Required. A deployment targeting Vn must advance a valid database at Vk through every missing checked step, whether one or many versions behind, without requiring operators to deploy each intermediate application binary. Current runtime expansion/queue staging is adjacent-edge execution, not general catch-up. |
+| Ordered row/queue changes | Two ordered migrations are acceptable. Simultaneous non-additive row and queue-payload changes in one edge are not required. The ordered sequence must actually work, with a friendly diagnostic explaining conflicting changes, the required split/order and the next commands. Today the retained-history guard still refuses transforming row history in a queue-bearing database, even across separate releases; supporting that sequence remains required work. |
+| Other operator/editor conveniences | Dedicated offline application, pruning, rebase/repair scaffolding, grant/deployment-recipe generation, extra quarantine/pause tooling and editor apply are not merge blockers for this release. Named automatic Contract modes are an implementation choice; executing necessary reviewed Contracts automatically is part of the deployment/catch-up requirement. |
+
+**What catch-up must prove.** Keep the exact recorded history and run missing
+transitions in order, including required intermediate Contracts and epoch closures.
+Resume interrupted work from durable state and immutable receipts. A single new
+deployment must be able to consume two separately authored row/queue migration
+steps; splitting the source must not force an operator to ship intermediate images.
+The final catalog, rows, queue payloads and admission state must match the supported
+one-version-at-a-time path. This extends upgrades within the owned protocol; it
+does not invent absent history or adopt incompatible old development catalogs.
+
+**Automatic execution still observes compatibility.** Installer and Worker
+authority remain separate from Request authority. Incompatible old writers and
+claimants must be excluded/drained before their representations are retired; a
+version gap is not permission to bypass those fences. Readiness waits when needed.
+Multi-version catch-up may therefore require a drained interval; uninterrupted
+traffic across incompatible skipped versions is not established by this requirement.
+Failed proofs or conversion remain explicit, actionable blockers consumed by the
+authored repair/discard policy, rather than implicit data loss.
+
+Acceptance witnesses must include a one-step production deployment, V1-to-latest
+and intermediate-to-latest catch-up containing both additive and transforming
+steps, restart from partial progress, and two ordered row/queue changes with
+retained jobs. The combined-change diagnostic must prescribe that tested sequence.
+The already passing adjacent-deployment examples alone do not establish these gates.
 
 ## Implemented behavior and its evidence
 
@@ -43,10 +80,10 @@ samples are not a production SLA or evidence for the separate p99 admission gate
 
 | Requirement | Current boundary |
 |---|---|
-| General mixed applications | Non-additive row transformations alongside versioned queues refuse. Queue membership removal/rename and general `IgnoreOld` remain unsupported. |
+| Ordered row/queue applications | Non-additive row transformations alongside versioned queues refuse, including retained history from separate releases. The required first delivery may use two ordered migrations with actionable diagnostics; unrestricted simultaneous changes are not required. Queue membership removal/rename and general `IgnoreOld` remain unsupported. |
 | Other durable facilities | Worker migration topology refuses durable caches, email outboxes and SSE facilities; Embedded topology refuses versioned queues. |
-| Operator workflow | Public application verbs are `status`, `install`, `worker`, `contract`, `close-epoch`. Catch-up, offline application, quarantine tooling, pause/resume, deployment/grant generation and automatic Contract modes are not delivered. `close-epoch --dry-run` is not the general data dry-run. |
-| Source/editor workflow | Native CLI has generation, plan, Contract and source-write recovery. Rebase/prune/repair scaffolding remains outstanding. Editor preview exists; apply remains disabled pending a checked snapshot/acknowledgement barrier. |
+| Operator workflow | Public application verbs are `status`, `install`, `worker`, `contract`, `close-epoch`. Automatic deployment completion and general catch-up remain release blockers. Other operator conveniences above remain roadmap work without blocking this release. `close-epoch --dry-run` is not the general data dry-run. |
+| Source/editor workflow | Native CLI has generation, plan, Contract and source-write recovery; non-mutating previews can run in CI. Editor apply and rebase/prune/repair scaffolding remain follow-up work, not merge blockers. |
 | Staged uniqueness | The specified staging/promotion declaration and per-key promotion guard remain outstanding. Ordinary index execution does not establish that workflow. |
 | Release-scale acceptance | Dedicated pinned read/write p99 measurements and the prescribed large-table/rolling-write workloads remain unfulfilled. The 1,000-extra-row experiment is not the 10M/100M-row gate. |
 | Complete traceability | The current checked inventory explicitly lists uncovered normative scopes. Finite model checks and a green partial coverage map do not complete whole-feature correspondence. |
@@ -192,6 +229,7 @@ check, never the complete gate.
    refusal/unchanged-state assertions when optimizing.
 4. Preserve the passing authoritative gate and obtain hosted supported-major CI
    results. A failed prefix or isolated retry cannot replace a complete invocation.
-5. Agree explicitly whether a merge delivers this bounded surface or completes
-   the original roadmap. The latter requires the outstanding rows above; the
-   roadmap remains open in either case until those requirements are fulfilled.
+5. Complete the clarified release requirements: automatic deployment, arbitrary
+   version-gap catch-up and the supported ordered row/queue path with constructive
+   diagnostics. Keep the other operator/editor items as nonblocking follow-up;
+   completing this release still does not close every original roadmap item.

@@ -25,6 +25,20 @@ The fresh-install-first compatibility policy and implemented recovery decisions
 are recorded there. This roadmap remains open; successful scoped examples do not
 mark its remaining operator, composition, editor or performance gates complete.
 
+**Release clarification (maintainer, 2026-10-12).** Production deployment must
+automatically execute the required checked migrations and catch up a valid owned
+database from any earlier schema version, replaying all missing steps and required
+Contracts. Two ordered migrations for row and queue changes are acceptable, with
+a constructive compiler diagnostic explaining the split and order; that sequence
+must work in a queue-bearing history. A latest deployment must not require manually
+shipping each intermediate binary. CI-accessible non-mutating preview is sufficient
+for the editor workflow. Editor apply and the other operator conveniences (offline
+application, pruning, rebase/scaffolding and ancillary management commands) remain
+roadmap work but are not blockers for this release. This changes the release cut,
+not the proof, history, privilege, fencing or data-loss obligations. See
+[clarified release requirements](../../dev-docs/migration-delivery-status.md#clarified-release-requirements-maintainer-2026-10-12)
+for current implementation gaps and acceptance witnesses.
+
 The bar (maintainer, 2026-09-02): migrations must ship as a solved problem, not a
 toy. That rules out "run the migration, then deploy" as the story, because with a
 rolling deploy that ordering does not exist.

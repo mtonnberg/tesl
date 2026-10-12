@@ -28,8 +28,17 @@ preservation and explicit loss policies, `QueueRepair` now supports
 reason for audited discard. Both complete real deployment/retirement witnesses.
 The separate recovery-keyword proposal is superseded, not a release blocker.
 
-**Ready for scoped PR review. Local validation is complete; hosted matrix checks
-and explicit delivery scope govern the merge decision.**
+**Local validation is complete. The clarified release still requires automatic
+deployment, catch-up and an executable ordered row/queue migration path.**
+
+**Subsequent release clarification:** automatic production migration and catch-up
+from any earlier supported schema version are required. Two ordered row/queue
+migrations are acceptable with a constructive diagnostic, but the current
+retained-history refusal still needs implementation work to make that sequence
+possible. CI preview is sufficient; editor apply and other operator conveniences
+are not merge blockers. Thus green local CI establishes the implemented scope,
+not completion of the clarified release. The [delivery requirements](dev-docs/migration-delivery-status.md#clarified-release-requirements-maintainer-2026-10-12)
+record the updated acceptance criteria.
 
 The system now demonstrates genuine repeated deployments, exact immutable history,
 typed conversion and repair, separate operating roles, overlap, retirement and
