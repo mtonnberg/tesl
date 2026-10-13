@@ -64,14 +64,35 @@ uses the normal transaction fences, and never implies `--force`. Data rejection
 blocks retirement and preserves the admitted repair path; repair the source and
 rerun the same command. Process interruption resumes from durable receipts.
 
-Success reports `schema-caught-up` at the latest expanded version. The latest
-window remains open for ordinary Worker backfill and Request use; its own Contract
-is still explicit. Queue-conversion gaps are not supported by this command.
+For row-only histories, success reports `schema-caught-up` at the latest expanded
+version. That final row window remains open for ordinary Worker backfill and
+Request use; its own Contract is still explicit.
+
+For supported **queue-only payload histories**, use the newest binary for both
+deployment operations, with separate credentials:
+
+```sh
+# Installer credentials: install the retained V1 origin if needed and stage edges.
+app --schema install --worker WORKER_ROLE --request REQUEST_ROLE --json
+# Worker credentials: execute the staged history and retire every queue edge.
+app --schema catch-up --json
+```
+
+Installation stages immutable future source/target proposals in bounded groups.
+Staging grants no version admission, conversion attempt or expansion receipt.
+Activation still requires the actual adjacent predecessor and its finality.
+Queue catch-up converts retained jobs and completes every queue-conversion edge
+it executes. When the target itself changes queue payloads, its Contract also
+completes before success, establishing the latest admission floor. It refuses
+live old claims, recent retiring instances, rejected/invalid payloads, and missing
+staged or executable repair authority. Include every needed historical
+`QueueRepair` declaration in the newest artifact, install it, and rerun catch-up.
 
 Request processes wait for verified readiness. Installation/staging, explicit
 Contract commands remain available, alongside the row catch-up coordinator. The
-runtime does not yet coordinate installation/staging and queue finality as one
-complete deploy-to-latest lifecycle.
+runtime does not yet wire the separate Installer and Worker operations into one
+automatic production deployment. Ordered row transformations in queue-bearing
+histories remain unsupported.
 
 Contract is the retirement/finalization step: establish final data and queue
 state, fence out retiring versions, then perform the reviewed cleanup. Automatic

@@ -124,6 +124,15 @@ func pgStageRowQueueTarget(ctx context.Context, conn *pgx.Conn, namespace string
 	if _, err := tx.Exec(ctx, "set local role "+quoteIdentifier(roles.Owner)); err != nil {
 		return err
 	}
+	if err := pgRecordRowQueueTarget(ctx, tx, namespace, state, plan, priorHash, abi, compatibility); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func pgRecordRowQueueTarget(ctx context.Context, tx pgx.Tx, namespace string, state PgMigrationControlState, plan *pgRowPhysicalPlan, priorHash, abi, compatibility string) error {
+	ns := quoteIdentifier(namespace) + "."
+	document, digest := plan.contract, plan.hash
 	raw, err := hex.DecodeString(document)
 	if err != nil {
 		return err
@@ -135,7 +144,7 @@ func pgStageRowQueueTarget(ctx context.Context, conn *pgx.Conn, namespace string
 		if !matches {
 			return fmt.Errorf("immutable queue target staging differs")
 		}
-		return tx.Commit(ctx)
+		return nil
 	}
 	if err != pgx.ErrNoRows {
 		return err
@@ -143,7 +152,7 @@ func pgStageRowQueueTarget(ctx context.Context, conn *pgx.Conn, namespace string
 	if _, err := tx.Exec(ctx, "insert into "+ns+"tesl_row_queue_target_staging(version,database_uuid,fence_ns,predecessor_hash,contract,contract_hash,compiler_abi,stored_value_compatibility) values($8,$1,$2,$3,$4,$5,$6,$7)", args...); err != nil {
 		return err
 	}
-	return tx.Commit(ctx)
+	return nil
 }
 
 func mustQueueConversionDocument(source *pgQueueConversionSource) []byte {
@@ -307,6 +316,15 @@ func pgStageRowQueueLineage(ctx context.Context, tx pgx.Tx, namespace string, ro
 	if _, err := tx.Exec(ctx, "set local role "+quoteIdentifier(roles.Owner)); err != nil {
 		return err
 	}
+	return pgRecordRowQueueLineage(ctx, tx, namespace, state, lineage, inventory, expansion, old)
+}
+
+// The caller proves either installed-source admission or a sealed retained
+// proposal. This writer only appends an exact immutable staging prefix; it grants
+// neither an expansion receipt nor authority to execute a conversion.
+func pgRecordRowQueueLineage(ctx context.Context, tx pgx.Tx, namespace string, state PgMigrationControlState, lineage []*pgQueueConversionSource, inventory, expansion string, old []byte) error {
+	root := lineage[len(lineage)-1]
+	ns := quoteIdentifier(namespace) + "."
 	for i := len(lineage) - 1; i >= 0; i-- {
 		source := lineage[i]
 		if _, err := pgReadQueueConversionSource(source.spec); err != nil {

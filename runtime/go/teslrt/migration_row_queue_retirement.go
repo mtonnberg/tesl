@@ -286,10 +286,22 @@ func pgRetireRowQueueChecked(ctx context.Context, conn *pgx.Conn, namespace stri
 }
 
 func pgExecuteRowQueueContract(ctx context.Context, conn *pgx.Conn, b *pgRowBaseline, roles PgMigrationControlRoles, version int) (PgMigrationControlState, error) {
-	var result PgMigrationControlState
 	if version < 2 || b.history.CurrentVersion != version || b.target == nil || b.target.version != version || len(b.target.queueConversions) == 0 || len(b.target.windows) != 0 {
-		return result, fmt.Errorf("queue Contract requires the current compiled queue-only edge")
+		return PgMigrationControlState{}, fmt.Errorf("queue Contract requires the current compiled queue-only edge")
 	}
+	return pgExecuteRowQueueContractOn(ctx, conn, b, roles, version)
+}
+
+func pgExecuteRowQueueContractOn(ctx context.Context, conn *pgx.Conn, b *pgRowBaseline, roles PgMigrationControlRoles, version int) (PgMigrationControlState, error) {
+	var result PgMigrationControlState
+	window, err := pgRowExecutionWindow(b, version)
+	if err != nil {
+		return result, err
+	}
+	if window.target != b.target || version < 2 || len(window.target.queueConversions) == 0 || len(window.target.windows) != 0 {
+		return result, fmt.Errorf("queue Contract requires its exact selected queue-only edge")
+	}
+	b = window
 	check := func(tx pgx.Tx, state PgMigrationControlState) error {
 		if state.Current != version || state.InstallingVersion != 0 {
 			return fmt.Errorf("queue Contract requires its expanded current target")

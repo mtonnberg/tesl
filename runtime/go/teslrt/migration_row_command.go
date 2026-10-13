@@ -84,61 +84,13 @@ func pgRunRowSchemaCommand(serviceContext context.Context, command pgSchemaComma
 		_, err = fmt.Fprintf(out, "%s: schema caught up to V%d; minimum V%d.\n", b.history.Database, state.Current, state.MinVersion)
 		return err
 	case "install":
-		if b.target != nil && len(b.target.queueConversions) > 0 {
-			if err := pgControlTransaction(ctx, conn, false, func(tx pgx.Tx) error {
-				if err := pgControlRoles(ctx, tx, roles, true); err != nil {
-					return err
-				}
-				state, err := pgInspectRowControl(ctx, tx, b.history.Namespace, roles)
-				if err != nil {
-					return err
-				}
-				if (state.Current != b.target.version-1 && state.Current != b.target.version) || (state.Current == b.target.version-1 && (state.MinVersion != state.Current || state.CompatFloor != state.Current)) {
-					return fmt.Errorf("queue upgrade installation requires its fully retired adjacent predecessor")
-				}
-				return nil
-			}); err != nil {
-				return err
-			}
-		}
 		state, err := InstallPgCompiledRowBaseline(ctx, conn, database, roles)
 		if err != nil {
 			return err
 		}
-		if b.target != nil && len(b.target.queueConversions) > 0 {
-			digests, err := pgCompiledRowQueueInstallSources(b)
-			if err != nil {
-				return err
-			}
-			if state.Current == b.target.version-1 || state.MinVersion < b.target.version {
-				for start := 0; start < len(digests); start += pgRowQueueStagingBatchLimit {
-					end := min(start+pgRowQueueStagingBatchLimit, len(digests))
-					if err := pgStageRowQueueConversionBatch(ctx, conn, b.history.Namespace, roles, digests[start:end]); err != nil {
-						return err
-					}
-				}
-			} else if err := pgControlTransaction(ctx, conn, false, func(tx pgx.Tx) error {
-				for _, digest := range digests {
-					compiledQueueConversionSources.RLock()
-					source := compiledQueueConversionSources.byDigest[digest]
-					compiledQueueConversionSources.RUnlock()
-					var matches bool
-					if err := tx.QueryRow(ctx, "select exists(select 1 from "+quoteIdentifier(b.history.Namespace)+".tesl_row_queue_conversion_staging where source_digest=$1 and source_document=$2 and database_uuid::text=$3 and fence_ns=$4)", digest, mustQueueConversionDocument(source), state.DatabaseUUID, state.FenceNamespace).Scan(&matches); err != nil {
-						return err
-					}
-					if !matches {
-						return fmt.Errorf("retired queue installation cannot append a new repair revision")
-					}
-				}
-				return nil
-			}); err != nil {
-				return err
-			}
-			if state.Current == b.target.version-1 {
-				if err := pgStageRowQueueTarget(ctx, conn, b.history.Namespace, roles, b.target.contract, b.target.hash); err != nil {
-					return err
-				}
-			}
+		cancel()
+		if err := pgStageRowQueueHistory(serviceContext, conn, b, roles); err != nil {
+			return err
 		}
 		return pgWriteSchemaInstallation(out, command.json, b.history, state, roles)
 	case "worker":

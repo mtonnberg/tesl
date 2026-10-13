@@ -149,12 +149,19 @@ func openQueueConversionDBForTest(t *testing.T, digest string, application bool,
 			"Q_OWNER="+roles.Owner, "Q_WORKER="+roles.Worker, "Q_REQUEST="+roles.Request, "Q_DDL="+dsn.String())
 		f.applicationEnv = base
 		if len(checkFresh) > 0 && checkFresh[0] {
-			if err := f.InstallPublicSuccessor(); err == nil {
-				t.Fatal("public V2 install invented a fresh V1 predecessor")
+			if err := f.InstallPublicSuccessor(); err != nil {
+				t.Fatal("public V2 install could not stage its retained V1 origin", err)
 			}
-			var present bool
-			if err := f.Installer.QueryRow(ctx, "select to_regnamespace('mail') is not null").Scan(&present); err != nil || present {
-				t.Fatal("refused fresh V2 install created application metadata", present, err)
+			var initial, current, published int
+			if err := f.Installer.QueryRow(ctx, "select m.initial_version,s.current,(select count(*) from mail.tesl_schema_versions where version=2) from mail.tesl_schema_meta m,mail.tesl_schema_state s").Scan(&initial, &current, &published); err != nil || initial != 1 || current != 0 || published != 0 {
+				t.Fatal("future staging fabricated an installed or admitted predecessor", initial, current, published, err)
+			}
+			var queue string
+			if err := f.Installer.QueryRow(ctx, "select queue from mail.tesl_queue_contracts where version=1 order by queue limit 1").Scan(&queue); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := f.Request.Exec(ctx, "select mail.tesl_queue_admit(2,$1)", queue); err == nil {
+				t.Fatal("future staging admitted unpublished V2")
 			}
 		}
 		binary := os.Getenv("QUEUE_REPAIR_V1_APP")

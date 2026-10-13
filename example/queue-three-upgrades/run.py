@@ -6,8 +6,10 @@ import os
 from pathlib import Path
 import runpy
 import shutil
+import socket
 import subprocess
 import tempfile
+import time
 import urllib.request
 
 EXAMPLE = Path(__file__).resolve().parent
@@ -40,6 +42,8 @@ def build(output, compiler, env, upgrade_compiler=None, incompatible_compiler=No
         command([selected_compiler, "--backend", "go", selected_entry, "--out", target / "go"], env=env)
         command(["go", "test", "-race", "-p", "1", "./..."], cwd=target / "go", env=env, timeout=180)
         command(["go", "build", "-race", "-o", target / "app", "./cmd/app"], cwd=target / "go", env=env)
+        if name == "v4":
+            command(["go", "build", "-race", "-tags", "tesl_migration_test", "-o", target / "app-test", "./cmd/app"], cwd=target / "go", env=env)
         print(f"Built {name}", flush=True)
 
     release("v1")
@@ -110,9 +114,11 @@ repair = QueueRepair {{ predecessor: Schema.Mail.Migrate.V{version}.migration, j
         entry.write_text(app)
         if frozen_original is not None and (source / "schema/mail/v1.tesl").read_bytes() != frozen_original:
             raise RuntimeError("compiler upgrade rewrote the original frozen V1 source")
+    entry.write_text(app.replace("import Tesl.Prelude", "import Schema.Mail.Migrate.Repair2\nimport Schema.Mail.Migrate.Repair3\nimport Schema.Mail.Migrate.Repair4\nimport Tesl.Prelude"))
+    release("v4-catchup-repair")
 
 
-def exercise(output, env):
+def exercise(output, env, catchup_from=None, crash=None):
     cluster = Path(tempfile.mkdtemp(prefix="tesl-queue-three-"))
     data = cluster / "data"
     processes = []
@@ -161,6 +167,36 @@ def exercise(output, env):
         encoded = json.dumps(payload).replace("'", "''")
         sql(f"select mail.tesl_queue_enqueue({version},'Jobs','Delivery','{identity}','{encoded}'::jsonb)", "demo_request")
 
+    def interrupt_at(boundary, mode, login, *args):
+        path = cluster / "boundary.sock"
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
+            listener.bind(str(path))
+            listener.listen(16)
+            listener.settimeout(1)
+            log = open(output / f"catchup-{boundary}.log", "w+")
+            proc = subprocess.Popen([str(output / "v4/app-test"), "--schema", mode, *args, "--json"],
+                                    env=dict(app_env(login), TESL_MIGRATION_TEST_SOCKET=str(path)), stdout=log, stderr=log)
+            processes.append((proc, log))
+            deadline = time.monotonic() + 60
+            while time.monotonic() < deadline:
+                if proc.poll() is not None:
+                    log.seek(0)
+                    raise RuntimeError(f"process exited before {boundary}: {log.read()}")
+                try:
+                    connection, _ = listener.accept()
+                except TimeoutError:
+                    continue
+                with connection:
+                    connection.settimeout(5)
+                    with connection.makefile("rb") as stream:
+                        event = json.loads(stream.readline())
+                    if event["name"] == boundary:
+                        proc.kill()
+                        proc.wait(timeout=5)
+                        return
+                    connection.sendall(b"continue\n")
+            raise RuntimeError(f"process did not reach {boundary}")
+
     try:
         command(["initdb", "-D", data, "-U", "demo_installer", "--auth=trust", "--no-locale", "--encoding=UTF8"])
         command(["pg_ctl", "-D", data, "-l", cluster / "postgres.log", "-o", f"-k {cluster} -h ''", "-w", "start"])
@@ -169,12 +205,82 @@ def exercise(output, env):
         sql("grant create on database queue_upgrades to demo_owner")
         base["PGDATABASE"] = "queue_upgrades"
         sql("grant create on schema public to demo_owner")
-        install("v2", refuse=True)
+        schema("v2", "demo_request", "install", "--worker", "demo_worker", "--request", "demo_request", refuse=True)
         assert sql("select to_regnamespace('mail') is null") == "t"
+        if catchup_from == 0:
+            install("v4")
+            assert sql("select current from mail.tesl_schema_state") == "0"
+            result = json.loads(schema("v4", "demo_worker", "catch-up"))
+            assert result["currentVersion"] == 4 and result["minVersion"] == 4, result
+            assert sql("select initial_version from mail.tesl_schema_meta") == "1"
+            assert sql("select count(*) from mail.tesl_row_queue_retirements") == "3"
+            print("PASS: latest V4 queue artifact installs original V1 and catches up on a fresh database", flush=True)
+            return
         install("v1")
         active = worker("v1")
         identity = sql("select database_uuid::text from mail.tesl_schema_meta")
         enqueue(1, "retained", {"oldText": "kept"})
+        if catchup_from is not None:
+            stop(active)
+            for version in range(2, catchup_from + 1):
+                install(f"v{version}")
+                active = worker(f"v{version}")
+                eventually(lambda: sql(f"select schema_version={version} from mail.tesl_jobs where id='retained'") == "t")
+                stop(active)
+                schema(f"v{version}", "demo_worker", "contract", f"V{version}")
+            before = sql("select row_to_json(s)::text from mail.tesl_schema_state s")
+            refused = schema("v4", "demo_worker", "catch-up", refuse=True)
+            assert "staged authority" in refused, refused
+            assert sql("select row_to_json(s)::text from mail.tesl_schema_state s") == before
+            schema("v4", "demo_worker", "install", "--worker", "demo_worker", "--request", "demo_request", refuse=True)
+            if crash == "queue-catchup-after-staging-batch":
+                interrupt_at(crash, "install", "demo_installer", "--worker", "demo_worker", "--request", "demo_request")
+                assert sql("select row_to_json(s)::text from mail.tesl_schema_state s") == before
+            install("v4")
+            install("v4")
+            assert sql("select row_to_json(s)::text from mail.tesl_schema_state s") == before
+            if catchup_from == 2:
+                assert sql("select job_id from mail.tesl_queue_claim(2,'Jobs','pending','catchup-old-claimant',15000)", "demo_request") == "retained"
+                claimed = sql("select payload::text from mail.tesl_jobs where id='retained'")
+                refused = schema("v4", "demo_worker", "catch-up", refuse=True)
+                assert "claims" in refused, refused
+                assert sql("select min_version from mail.tesl_schema_state") == "2"
+                assert sql("select payload::text from mail.tesl_jobs where id='retained'") == claimed
+                time.sleep(16)
+            if catchup_from == 3:
+                # Use the real Request heartbeat operation, then let it expire;
+                # never mutate the protected instance table to bypass the guard.
+                sql("set application_name='tesl-app:queue-catchup-old'; select mail.tesl_heartbeat(3,1,3)", "demo_request")
+                refused = schema("v4", "demo_worker", "catch-up", refuse=True)
+                assert "stop those" in refused, refused
+                assert sql("select row_to_json(s)::text from mail.tesl_schema_state s") == before
+                time.sleep(31)
+            if crash is not None and crash != "queue-catchup-after-staging-batch":
+                interrupt_at(crash, "catch-up", "demo_worker")
+            if catchup_from == 1 and crash is None:
+                enqueue(1, "rejected", {"oldText": ""})
+                refused = schema("v4", "demo_worker", "catch-up", refuse=True)
+                assert "QueueRepair" in refused, refused
+                assert sql("select min_version from mail.tesl_schema_state") == "1"
+                assert json.loads(sql("select payload from mail.tesl_jobs where id='rejected'")) == {"oldText": ""}
+                install("v4-catchup-repair")
+                repair_state = sql("select row_to_json(s)::text from mail.tesl_schema_state s")
+                refused = schema("v4", "demo_worker", "catch-up", refuse=True)
+                assert "not linked" in refused, refused
+                assert sql("select row_to_json(s)::text from mail.tesl_schema_state s") == repair_state
+            release = "v4-catchup-repair" if catchup_from == 1 and crash is None else "v4"
+            result = json.loads(schema(release, "demo_worker", "catch-up"))
+            assert result["currentVersion"] == 4 and result["minVersion"] == 4, result
+            assert json.loads(sql("select payload from mail.tesl_jobs where id='retained'")) == {"message": "kept", "rank": 27, "audit": "v3"}
+            assert sql("select count(*) from mail.tesl_row_queue_conversion_receipts where job_id='retained' and kind='converted'") == "3"
+            assert sql("select database_uuid::text from mail.tesl_schema_meta") == identity
+            receipts = sql("select json_agg(r order by job_id,source_digest) from mail.tesl_row_queue_conversion_receipts r")
+            assert json.loads(schema(release, "demo_worker", "catch-up")) == result
+            assert sql("select json_agg(r order by job_id,source_digest) from mail.tesl_row_queue_conversion_receipts r") == receipts
+            print(f"PASS: V{catchup_from} → V4 queue catch-up using only the latest binary; payloads, source receipts and replay preserved", flush=True)
+            if crash is not None:
+                print(f"PASS: queue catch-up resumes process death at {crash}", flush=True)
+            return
         if (output / "v1-incompatible/app").exists():
             before = sql("select row_to_json(s)::text from mail.tesl_schema_state s")
             install("v1-incompatible", refuse=True)
@@ -197,8 +303,11 @@ def exercise(output, env):
             schema(f"v{version}", "demo_worker", "contract", f"V{version}", refuse=True)
             assert sql("select min_version::text||','||compat_floor::text from mail.tesl_schema_state") == f"{version - 1},{version - 1}"
             if version < 4:
-                install(f"v{version + 1}", refuse=True)
-                assert sql(f"select count(*) from mail.tesl_row_queue_conversion_staging where to_version={version + 1}") == "0"
+                install(f"v{version + 1}")
+                # Future staging grants no activation or admission before the
+                # actual predecessor has completed conversion and retirement.
+                schema(f"v{version + 1}", "demo_worker", "worker", refuse=True)
+                assert sql("select current from mail.tesl_schema_state") == str(version)
             stop(active)
             install(f"v{version}-repair")
             active = worker(f"v{version}-repair")
@@ -220,8 +329,9 @@ def exercise(output, env):
                 original = sql(f"select encode(retirement,'hex')||','||retirement_hash from mail.tesl_row_queue_retirements where version={version}")
                 document, digest = original.split(",")
                 sql(f"update mail.tesl_row_queue_retirements set retirement=retirement||convert_to('changed','UTF8'),retirement_hash=encode(sha256(retirement||convert_to('changed','UTF8')),'hex') where version={version}")
+                staged = sql(f"select count(*) from mail.tesl_row_queue_conversion_staging where to_version={version + 1}")
                 install(f"v{version + 1}", refuse=True)
-                assert sql(f"select count(*) from mail.tesl_row_queue_conversion_staging where to_version={version + 1}") == "0"
+                assert sql(f"select count(*) from mail.tesl_row_queue_conversion_staging where to_version={version + 1}") == staged
                 sql(f"update mail.tesl_row_queue_retirements set retirement=decode('{document}','hex'),retirement_hash='{digest}' where version={version}")
             print(f"V{version - 1} → V{version}: public conversion, rejection, repair, retirement and restart passed", flush=True)
         assert json.loads(sql("select payload from mail.tesl_jobs where id='retained'")) == {"message": "kept", "rank": 27, "audit": "v3"}
@@ -266,12 +376,9 @@ def exercise(output, env):
             assert sql("select row_to_json(r)::text from mail.tesl_row_queue_conversion_receipts r") == receipt
             schema("v2-original-compiler", "demo_worker", "contract", "V2")
             pinned_uuid = sql("select database_uuid::text from mail.tesl_schema_meta")
-            install("v3")
-            later_worker = worker("v3")
-            eventually(lambda: sql("select schema_version=3 from mail.tesl_jobs where id='pinned'") == "t")
-            stop(later_worker)
-            assert json.loads(sql("select payload from mail.tesl_jobs where id='pinned'")) == {"content": "original", "importance": 17, "tag": "v3"}
-            schema("v3", "demo_worker", "contract", "V3")
+            install("v4")
+            schema("v4", "demo_worker", "catch-up")
+            assert json.loads(sql("select payload from mail.tesl_jobs where id='pinned'")) == {"message": "original", "rank": 27, "audit": "v3"}
             assert sql("select database_uuid::text from mail.tesl_schema_meta") == pinned_uuid
             print("Compatible compiler B cannot replace compiler A's active edge; incompatible C refuses", flush=True)
         print("PASS: three ordinary non-additive queue upgrades on one PostgreSQL database", flush=True)
@@ -279,6 +386,8 @@ def exercise(output, env):
         for proc, log in reversed(processes):
             stop(proc); log.close()
         subprocess.run(["pg_ctl", "-D", str(data), "-m", "immediate", "-w", "stop"], capture_output=True)
+        if (cluster / "postgres.log").exists():
+            shutil.copyfile(cluster / "postgres.log", output / f"postgres-{catchup_from if catchup_from is not None else 'adjacent'}.log")
         shutil.rmtree(cluster)
 
 
@@ -287,6 +396,7 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--run-built", action="store_true")
     parser.add_argument("--build-only", action="store_true")
+    parser.add_argument("--catch-up-only", action="store_true")
     parser.add_argument("--compiler", type=Path, default=REPO / "compiler/_build/default/bin/main.exe")
     parser.add_argument("--upgrade-compiler", type=Path, help="freeze V1 with --compiler, then build V2–V4 with this compiler")
     parser.add_argument("--incompatible-compiler", type=Path, help="build a fresh V1 whose stored-value incompatibility must refuse the installed database")
@@ -303,7 +413,12 @@ def main():
               None if args.upgrade_compiler is None else args.upgrade_compiler.absolute(),
               None if args.incompatible_compiler is None else args.incompatible_compiler.absolute())
     if not args.build_only:
-        exercise(output, env)
+        if not args.catch_up_only:
+            exercise(output, env)
+        for version in (0, 1, 2, 3):
+            exercise(output, env, catchup_from=version)
+        for boundary in ("queue-catchup-after-staging-batch", "queue-catchup-after-turn", "queue-catchup-after-retirement"):
+            exercise(output, env, catchup_from=1, crash=boundary)
 
 
 if __name__ == "__main__":

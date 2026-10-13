@@ -143,7 +143,7 @@ func pgSelectSchemaDatabase(selector string) (*Database, PgCompiledMigrationHist
 
 func pgRunSchemaCommand(command pgSchemaCommand, out io.Writer) (resultErr error) {
 	ctx := context.Background()
-	if command.verb == "worker" || command.verb == "catch-up" || command.verb == "contract" || command.verb == "close-epoch" {
+	if command.verb == "install" || command.verb == "worker" || command.verb == "catch-up" || command.verb == "contract" || command.verb == "close-epoch" {
 		var stop context.CancelFunc
 		ctx, stop = signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 		defer stop()
