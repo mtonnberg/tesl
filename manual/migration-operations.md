@@ -37,10 +37,20 @@ needed to use this workflow.
 ### What runs automatically today
 
 Once deployed and configured, the schema Worker performs supported next-step
-expansion and backfill/queue conversion. Request processes wait for verified
-readiness. Installation/staging, explicit Contract and required epoch closure
-still have separate commands; the runtime does not yet coordinate the entire
-deploy-to-latest sequence or general catch-up across multiple missing versions.
+expansion and backfill/queue conversion. It also catches up across **wholly additive
+missing row revisions**: a V4 Worker can apply retained V2, V3 and V4 steps to a V1
+database without deploying the V2/V3 applications. A latest additive artifact can
+install its genuine retained V1 baseline and use the same path on a new database.
+
+Each step retains its exact source identity, normal fences and durable receipts;
+restart resumes incomplete work. Required indexes still gate readiness, and old
+compatible applications remain admitted. A gap containing a transforming or queue
+conversion step is refused before advancing its missing additive suffix; it still
+needs the general catch-up/finality coordinator.
+
+Request processes wait for verified readiness. Installation/staging, explicit
+Contract and required epoch closure still have separate commands; the runtime
+does not yet coordinate the entire deploy-to-latest lifecycle.
 
 Contract is the retirement/finalization step: establish final data and queue
 state, fence out retiring versions, then perform the reviewed cleanup. Automatic

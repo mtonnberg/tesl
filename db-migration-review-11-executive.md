@@ -40,6 +40,13 @@ are not merge blockers. Thus green local CI establishes the implemented scope,
 not completion of the clarified release. The [delivery requirements](dev-docs/migration-delivery-status.md#clarified-release-requirements-maintainer-2026-10-12)
 record the updated acceptance criteria.
 
+**Implementation continuation after `b5cddb9`:** additive catch-up now executes
+missing checked row revisions using the latest Worker, with restart, concurrency,
+source/ABI refusal and index-readiness witnesses. Compatible row/queue compiler
+upgrades still pass. Transforming/queue catch-up and automatic finality remain
+required work. See the delivery status for the targeted evidence; the earlier full
+CI pass is not claimed for this continuation.
+
 The system now demonstrates genuine repeated deployments, exact immutable history,
 typed conversion and repair, separate operating roles, overlap, retirement and
 restart. Recent performance work also gets 257-type applications through build,

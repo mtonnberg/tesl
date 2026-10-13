@@ -135,6 +135,19 @@ func pgReadRowForwardManifest(ctx context.Context, tx pgx.Tx, b *pgRowBaseline) 
 		if plan.version != version || plan.family != b.history.Family || plan.namespace != b.history.Namespace {
 			return nil, fmt.Errorf("persisted physical owner differs")
 		}
+		// Additive steps have ABI-independent physical descriptions. Bind the
+		// entire known additive prefix before using it for catch-up. Historical
+		// queue transitions carry creator-linked callback identities instead;
+		// their existing source/retirement observers verify those identities.
+		if version > 1 && version <= b.history.CurrentVersion && pgRowEpochPreserving(plan) {
+			local, err := pgCompiledRowPhysicalPlan(b.database, version)
+			if err != nil {
+				return nil, err
+			}
+			if local.hash != plan.hash || local.contract != plan.contract {
+				return nil, fmt.Errorf("persisted physical V%d differs from retained compiled history", version)
+			}
+		}
 		if version == 1 {
 			if prior != "" || operations != 0 || plan.hash != b.physical.hash || plan.contract != b.physical.contract {
 				return nil, fmt.Errorf("immutable physical V1 anchor differs from compiled source")
@@ -324,7 +337,10 @@ func pgVerifyRowExpansionHistory(state PgMigrationControlState, b *pgRowBaseline
 		if intent.Version != version || intent.SnapshotHash != m.plan.hash || intent.ArtifactHash != m.plan.hash || intent.SourceABI != m.creatorABI || intent.StoredValueCompatibility != m.compatibility || intent.EpochPreserving != pgRowEpochPreserving(m.plan) || intent.OperationCount != len(m.operations) {
 			return fmt.Errorf("future row intent differs from exact manifest")
 		}
-		if executor && state.Current < version && b.history.CurrentVersion == version && intent.SourceABI != b.history.SourceCompilerABI {
+		// A historical execution view adds an ABI obligation for its selected
+		// step; it never removes the real application's current-version check.
+		localWindow := b.history.CurrentVersion == version || b.target != nil && b.target.version == version
+		if executor && state.Current < version && localWindow && intent.SourceABI != b.history.SourceCompilerABI {
 			return fmt.Errorf("unfinished row expansion compiler ABI differs")
 		}
 		m.completed = len(intent.Objects)
@@ -335,7 +351,7 @@ func pgVerifyRowExpansionHistory(state PgMigrationControlState, b *pgRowBaseline
 		if hasExpanded && (expanded.ArtifactHash != intent.ArtifactHash || expanded.SnapshotHash != intent.SnapshotHash || expanded.SourceABI != intent.SourceABI || expanded.StoredValueCompatibility != intent.StoredValueCompatibility || expanded.EpochPreserving == nil || *expanded.EpochPreserving != intent.EpochPreserving) {
 			return fmt.Errorf("expanded lifecycle differs from exact manifest provenance")
 		}
-		if m.processingABI != "" && (!hasExpanded || b.history.CurrentVersion == version && b.history.SourceCompilerABI != m.processingABI && steps["retired"].Step == "") {
+		if m.processingABI != "" && (!hasExpanded || localWindow && b.history.SourceCompilerABI != m.processingABI && steps["retired"].Step == "") {
 			return fmt.Errorf("processing ABI differs from current transforming application")
 		}
 		c := m.contraction

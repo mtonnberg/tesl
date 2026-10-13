@@ -218,6 +218,244 @@ func pgRowAdditiveInstalled(t *testing.T) (string, *pgControlTestFixture) {
 	stop()
 	return root, f
 }
+
+func TestPgRowAdditiveCatchupFromRetainedVersions(t *testing.T) {
+	for _, from := range []int{1, 2, 3} {
+		t.Run(fmt.Sprintf("V%d-to-V4", from), func(t *testing.T) {
+			root, f := pgRowAdditiveInstalled(t)
+			v1 := pgRowAdditiveApp(t, f, root, "v1")
+			pgCallRowAccessApp(t, f.ctx, v1, "POST", "/one", 200)
+			for version := 2; version <= from; version++ {
+				name := "v2"
+				if version == 3 {
+					name = "a3"
+				}
+				pgRowAdditiveWorker(t, f, root, name)()
+			}
+			var uuid string
+			if err := f.installer.QueryRow(f.ctx, "select database_uuid::text from notes.tesl_schema_meta").Scan(&uuid); err != nil {
+				t.Fatal(err)
+			}
+			// The latest ordinary Worker must execute missing revisions itself.
+			// No intermediate executable is deployed for this part of the test.
+			pgRowAdditiveWorker(t, f, root, "a4")()
+			current := pgRowAdditiveApp(t, f, root, "a4")
+			pgCallRowAccessApp(t, f.ctx, v1, "POST", "/two", 200)
+			pgCallRowAccessApp(t, f.ctx, v1, "GET", "/all", 200)
+			body := pgCallRowAccessApp(t, f.ctx, current, "GET", "/all", 200)
+			for _, field := range []string{`"priority":9`, `"stage":3`, `"extra":4`} {
+				if strings.Count(body, field) != 2 {
+					t.Fatalf("catch-up lost an intermediate default %s: %s", field, body)
+				}
+			}
+			var version, minimum, floor, rows, expanded, processed int
+			var actualUUID string
+			if err := f.installer.QueryRow(f.ctx, `select current,min_version,compat_floor,
+ (select database_uuid::text from notes.tesl_schema_meta),
+ (select count(*) from notes.notes where _tesl_v=1 and priority=9 and stage=3 and extra=4 and memo is null),
+ (select count(*) from notes.tesl_schema_versions where step='expanded'),
+ (select count(*) from notes.tesl_row_processing) from notes.tesl_schema_state`).Scan(&version, &minimum, &floor, &actualUUID, &rows, &expanded, &processed); err != nil || version != 4 || minimum != 1 || floor != 1 || actualUUID != uuid || rows != 2 || expanded != 4 || processed != 0 {
+				t.Fatal("catch-up state/identity differs", version, minimum, floor, actualUUID, rows, expanded, processed, err)
+			}
+			var before, after string
+			query := "select jsonb_agg(to_jsonb(v) order by version,step)::text from notes.tesl_schema_versions v"
+			if err := f.installer.QueryRow(f.ctx, query).Scan(&before); err != nil {
+				t.Fatal(err)
+			}
+			pgRowAdditiveWorker(t, f, root, "a4")()
+			if err := f.installer.QueryRow(f.ctx, query).Scan(&after); err != nil || after != before {
+				t.Fatal("catch-up replay changed immutable lifecycle", err)
+			}
+		})
+	}
+}
+
+func TestPgRowAdditiveCatchupRefusesTransformingGap(t *testing.T) {
+	root, f := pgRowAdditiveInstalled(t)
+	out, err := pgRowAdditiveCommand(f, root, "v3", "--schema", "worker", "--json").CombinedOutput()
+	if err == nil || !strings.Contains(string(out), "non-additive V3") {
+		t.Fatalf("unsupported gap did not explain the blocking step: %v %s", err, out)
+	}
+	var version, plans, expansions, columns int
+	if err := f.installer.QueryRow(f.ctx, `select current,
+ (select count(*) from notes.tesl_row_physical),
+ (select count(*) from notes.tesl_schema_expansions),
+ (select count(*) from information_schema.columns where table_schema='notes' and table_name='notes' and column_name='priority')
+ from notes.tesl_schema_state`).Scan(&version, &plans, &expansions, &columns); err != nil || version != 1 || plans != 1 || expansions != 1 || columns != 0 {
+		t.Fatal("unsupported gap partially advanced its additive prefix", version, plans, expansions, columns, err)
+	}
+}
+
+func TestPgRowAdditiveCatchupBootstrapFromLatest(t *testing.T) {
+	root := os.Getenv("TESL_ROW_ADDITIVE_PROGRAMS")
+	if root == "" {
+		t.Skip("compiler-generated additive programs required")
+	}
+	f, _ := pgNewWorkerTest(t)
+	f.namespace = "notes"
+	install := pgRowAdditiveCommand(f, root, "a4", "--schema", "install", "--worker", f.roles.Worker, "--request", f.roles.Request, "--json")
+	if out, err := install.CombinedOutput(); err != nil {
+		t.Fatalf("latest artifact could not install its actual V1 origin: %v %s", err, out)
+	}
+	pgRowAdditiveWorker(t, f, root, "a4")()
+	var origin, current, minimum, floor, expanded int
+	if err := f.installer.QueryRow(f.ctx, `select m.initial_version,s.current,s.min_version,s.compat_floor,
+ (select count(*) from notes.tesl_schema_versions where step='expanded')
+ from notes.tesl_schema_meta m,notes.tesl_schema_state s`).Scan(&origin, &current, &minimum, &floor, &expanded); err != nil || origin != 1 || current != 4 || minimum != 1 || floor != 1 || expanded != 4 {
+		t.Fatal("latest bootstrap skipped its original history", origin, current, minimum, floor, expanded, err)
+	}
+	app := pgRowAdditiveApp(t, f, root, "a4")
+	pgCallRowAccessApp(t, f.ctx, app, "POST", "/one", 200)
+	body := pgCallRowAccessApp(t, f.ctx, app, "GET", "/all", 200)
+	if !strings.Contains(body, `"extra":4`) {
+		t.Fatal("latest application did not use its final checked projection", body)
+	}
+}
+
+func TestPgRowAdditiveCatchupRefusesDifferentRetainedSource(t *testing.T) {
+	root, f := pgRowAdditiveInstalled(t)
+	pgRowAdditiveWorker(t, f, root, "fork-v2")()
+	out, err := pgRowAdditiveCommand(f, root, "a4", "--schema", "worker", "--json").CombinedOutput()
+	if err == nil || !strings.Contains(string(out), "V2 differs from retained compiled history") {
+		t.Fatalf("latest binary adopted a different historical default: %v %s", err, out)
+	}
+	var version, plans int
+	if err := f.installer.QueryRow(f.ctx, "select current,(select count(*) from notes.tesl_row_physical) from notes.tesl_schema_state").Scan(&version, &plans); err != nil || version != 2 || plans != 2 {
+		t.Fatal("source refusal published another revision", version, plans, err)
+	}
+}
+
+func TestPgRowAdditiveCatchupResumesInterruptedStep(t *testing.T) {
+	for _, test := range []struct {
+		boundary   string
+		foreignABI bool
+	}{
+		{"row-forward-after-receipt", false},
+		{"row-forward-after-publication-commit", false},
+		{"row-forward-after-receipt", true},
+	} {
+		t.Run(fmt.Sprintf("%s/foreign-abi=%v", test.boundary, test.foreignABI), func(t *testing.T) {
+			root, f := pgRowAdditiveInstalled(t)
+			v1 := pgRowAdditiveApp(t, f, root, "v1")
+			pgCallRowAccessApp(t, f.ctx, v1, "POST", "/one", 200)
+			pauses := pgPauseConcurrentRowBoundaries(t, []pgExpansionBoundary{{test.boundary, 1}})
+			defer pauses[0].resume()
+			cmd := pgRowAdditiveCommand(f, root, "a4", "--schema", "worker", "--json")
+			cmd.Env = append(cmd.Env, "TESL_MIGRATION_TEST_SOCKET="+os.Getenv("TESL_MIGRATION_TEST_SOCKET"))
+			var output pgRowAppOutput
+			cmd.Stdout, cmd.Stderr = &output, &output
+			if err := cmd.Start(); err != nil {
+				t.Fatal(err)
+			}
+			done := make(chan error, 1)
+			go func() { done <- cmd.Wait(); close(done) }()
+			t.Cleanup(func() { _ = cmd.Process.Kill(); <-done })
+			select {
+			case <-pauses[0].arrived:
+			case err := <-done:
+				t.Fatalf("catch-up exited before the requested boundary: %v %s", err, output.String())
+			case <-time.After(15 * time.Second):
+				t.Fatal("catch-up did not reach its intermediate boundary", output.String())
+			}
+			if err := cmd.Process.Kill(); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+				t.Fatal("interrupted catch-up did not exit")
+			}
+			var version int
+			if err := f.installer.QueryRow(f.ctx, "select current from notes.tesl_schema_state").Scan(&version); err != nil || version > 2 {
+				t.Fatal("catch-up escaped its paused intermediate step", version, err)
+			}
+			if test.foreignABI {
+				// Fault injection preserves matching manifest/intent provenance but
+				// represents an unfinished V2 owned by a different executor ABI.
+				// V4's step selection must not overlook that historical latch.
+				tx, err := f.installer.Begin(f.ctx)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer func() { _ = tx.Rollback(context.Background()) }()
+				abi := "tesl-source-abi-v1:" + strings.Repeat("e", 64)
+				for _, statement := range []string{
+					"update notes.tesl_row_physical set compiler_abi=$1 where version=2",
+					"update notes.tesl_schema_expansions set source_abi=$1 where version=2",
+					"update notes.tesl_queue_versions set compiler_abi=$1 where version=2",
+				} {
+					if _, err := tx.Exec(f.ctx, statement, abi); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if err := tx.Commit(f.ctx); err != nil {
+					t.Fatal(err)
+				}
+				out, err := pgRowAdditiveCommand(f, root, "a4", "--schema", "worker", "--json").CombinedOutput()
+				if err == nil || !strings.Contains(string(out), "unfinished row expansion compiler ABI differs") {
+					t.Fatalf("historical execution ABI was substituted: %v %s", err, out)
+				}
+				var plans int
+				if err := f.installer.QueryRow(f.ctx, "select current,(select count(*) from notes.tesl_row_physical) from notes.tesl_schema_state").Scan(&version, &plans); err != nil || version != 1 || plans != 2 {
+					t.Fatal("ABI refusal advanced history", version, plans, err)
+				}
+				return
+			}
+			pgRowAdditiveWorker(t, f, root, "a4")()
+			var rows, expansions int
+			if err := f.installer.QueryRow(f.ctx, `select current,
+ (select count(*) from notes.notes where id='one' and _tesl_v=1 and priority=9 and stage=3 and extra=4),
+ (select count(*) from notes.tesl_schema_versions where step='expanded') from notes.tesl_schema_state`).Scan(&version, &rows, &expansions); err != nil || version != 4 || rows != 1 || expansions != 4 {
+				t.Fatal("catch-up did not resume its durable prefix exactly", version, rows, expansions, err)
+			}
+			pgCallRowAccessApp(t, f.ctx, v1, "GET", "/all", 200)
+		})
+	}
+}
+
+func TestPgRowAdditiveCatchupConcurrentTargets(t *testing.T) {
+	root, f := pgRowAdditiveInstalled(t)
+	pauses := pgPauseConcurrentRowBoundaries(t, []pgExpansionBoundary{{"row-forward-after-publication-commit", 1}})
+	defer pauses[0].resume()
+	first := pgRowAdditiveCommand(f, root, "a3", "--schema", "worker", "--json")
+	first.Env = append(first.Env, "TESL_MIGRATION_TEST_SOCKET="+os.Getenv("TESL_MIGRATION_TEST_SOCKET"))
+	a, _ := pgRowAdditiveProcess(t, first)
+	select {
+	case <-pauses[0].arrived:
+	case <-time.After(15 * time.Second):
+		t.Fatal("first catch-up did not reach V2 publication", a.String())
+	}
+	b, _ := pgRowAdditiveProcess(t, pgRowAdditiveCommand(f, root, "a4", "--schema", "worker", "--json"))
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		var waiting bool
+		if err := f.installer.QueryRow(f.ctx, "select exists(select 1 from pg_catalog.pg_stat_activity where usename=$1 and wait_event_type='Lock')", f.roles.Worker).Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+		if waiting {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("competing target did not wait on the existing boot fence", b.String())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	pauses[0].resume()
+	ready, cancel := context.WithTimeout(f.ctx, 15*time.Second)
+	defer cancel()
+	for _, output := range []*pgRowAppOutput{a, b} {
+		if !output.WaitContains(ready, `"kind":"schema-worker-ready"`) {
+			t.Fatal("concurrent catch-up did not reach readiness", output.String())
+		}
+	}
+	var current, expanded, plans int
+	if err := f.installer.QueryRow(f.ctx, `select current,
+ (select count(*) from notes.tesl_schema_versions where step='expanded'),
+ (select count(*) from notes.tesl_row_physical) from notes.tesl_schema_state`).Scan(&current, &expanded, &plans); err != nil || current != 4 || expanded != 4 || plans != 4 {
+		t.Fatal("concurrent catch-up duplicated or skipped a revision", current, expanded, plans, err)
+	}
+}
+
 func TestPgRowAdditiveDefaultAndEpochDrift(t *testing.T) {
 	root, f := pgRowAdditiveInstalled(t)
 	stop := pgRowAdditiveWorker(t, f, root, "v2")

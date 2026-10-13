@@ -61,6 +61,57 @@ func TestPgRowIndexOrdinaryMain(t *testing.T) {
 	}
 }
 
+func TestPgRowIndexCatchupBuildsIntermediateJobs(t *testing.T) {
+	root := os.Getenv("TESL_ROW_INDEX_PROGRAMS")
+	if root == "" {
+		t.Skip("compiler-generated original index applications required")
+	}
+	f, _ := pgNewWorkerTest(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	t.Cleanup(cancel)
+	f.ctx, f.namespace = ctx, "notes"
+	install := pgRowAdditiveCommand(f, root, "v1", "--schema", "install", "--worker", f.roles.Worker, "--request", f.roles.Request, "--json")
+	if out, err := install.CombinedOutput(); err != nil {
+		t.Fatalf("install: %v %s", err, out)
+	}
+	pgRowAdditiveWorker(t, f, root, "v1")()
+	v1 := pgRowAdditiveApp(t, f, root, "v1")
+	pgCallRowAccessApp(t, ctx, v1, "POST", "/one", 200)
+	pauses := pgPauseConcurrentRowBoundaries(t, []pgExpansionBoundary{{"index-before-create", 1}})
+	defer pauses[0].resume()
+	cmd := pgRowAdditiveCommand(f, root, "v3", "--schema", "worker", "--json")
+	cmd.Env = append(cmd.Env, "TESL_MIGRATION_TEST_SOCKET="+os.Getenv("TESL_MIGRATION_TEST_SOCKET"), "TESL_SCHEMA_POLL_S=1")
+	output, _ := pgRowAdditiveProcess(t, cmd)
+	select {
+	case <-pauses[0].arrived:
+	case <-time.After(15 * time.Second):
+		t.Fatal("latest worker did not reach retained index work", output.String())
+	}
+	if strings.Contains(output.String(), `"kind":"schema-worker-ready"`) {
+		t.Fatal("catch-up published readiness before its required index", output.String())
+	}
+	// Retained V1 remains a valid reader/writer during additive catch-up.
+	pgCallRowAccessApp(t, ctx, v1, "PUT", "/edit", 200)
+	pauses[0].resume()
+	ready, stopReady := context.WithTimeout(ctx, 15*time.Second)
+	defer stopReady()
+	if !output.WaitContains(ready, `"kind":"schema-worker-ready"`) {
+		t.Fatal("latest worker did not finish both retained index jobs", output.String())
+	}
+	var version, minimum, jobs, valid int
+	if err := f.worker.QueryRow(ctx, `select current,min_version,
+ (select count(*) from notes.tesl_schema_index),
+ (select count(*) from notes.tesl_schema_index where state='valid') from notes.tesl_schema_state`).Scan(&version, &minimum, &jobs, &valid); err != nil || version != 3 || minimum != 1 || jobs != 2 || valid != 2 {
+		t.Fatal("catch-up lost an intermediate index or changed admission", version, minimum, jobs, valid, err)
+	}
+	v3 := pgRowAdditiveApp(t, f, root, "v3")
+	pgCallRowAccessApp(t, ctx, v3, "POST", "/two", 200)
+	body := pgCallRowAccessApp(t, ctx, v3, "GET", "/all", 200)
+	if !strings.Contains(body, `"active":true`) || !strings.Contains(body, `"Something"`) {
+		t.Fatal("catch-up lost old writes or latest row shape", body)
+	}
+}
+
 // Both admission observations use untouched original Main binaries. The native
 // blocker and cancellation affect ordinary database work, never control rows.
 func TestPgRowIndexPendingFailedAndValidOrdinaryMain(t *testing.T) {

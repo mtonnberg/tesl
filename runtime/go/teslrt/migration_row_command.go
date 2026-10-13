@@ -172,11 +172,13 @@ func pgRunRowSchemaCommand(serviceContext context.Context, command pgSchemaComma
 			}
 			return nil
 		}
-		state, err := pgExecuteRowBaseline(ctx, conn, b, roles)
+		// Connection setup has a bounded startup budget; a history walk uses
+		// the service lifetime with a fresh bounded budget for each checked edge.
+		cancel()
+		state, err := pgExecuteRowBaseline(serviceContext, conn, b, roles)
 		if err != nil {
 			return err
 		}
-		cancel()
 		return pgRunRowIndexServices(serviceContext, conn, config, b, roles, state, func(state PgMigrationControlState) error {
 			if command.json {
 				err = json.NewEncoder(out).Encode(struct {

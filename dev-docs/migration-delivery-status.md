@@ -2,15 +2,16 @@
 
 > Audience: contributors reviewing the migration PR and its release evidence.
 
-Assessment: 2026-10-12. Verified implementation: `84ef00d`; release requirements
-were clarified subsequently below.
+Assessment baseline: `84ef00d`. Requirements were committed in `b5cddb9`;
+the additive catch-up continuation and its verification are recorded below.
 
 ## Delivery contract
 
 The implemented surface supports **original-V1, fresh-install PostgreSQL histories**
 with checked row transformations and restricted Worker-topology queue histories.
-**Local authoritative acceptance is green: 24/24 phases, no skips, exit 0.**
-Those results establish the implemented surface. The maintainer's clarified
+**Baseline `84ef00d` passed local authoritative acceptance: 24/24 phases, no skips,
+exit 0.** The additive continuation has the targeted evidence below; a fresh full
+gate has not yet been run for these runtime changes. The maintainer's clarified
 release requirements below still require deployment automation, catch-up and
 ordered row/queue composition before release acceptance. Hosted supported-major
 checks also remain open. This document does not waive the
@@ -26,8 +27,8 @@ this delivery contract. Other missing roadmap requirements remain open work.
 | Requirement | Release decision and present state |
 |---|---|
 | CI preview | Required workflow, already available through compiler-owned non-mutating `tesl migrate generate app.tesl --manifest-json`. Editor preview is sufficient; applying edits inside the editor is not a merge blocker. |
-| Automatic production migration | Required. Deploying checked migration history must drive the necessary installation/staging, expansion, backfill/conversion and reviewed retirement steps without manual per-version schema commands. The configured schema Worker already performs supported next-step expansion and backfill; the complete deployment coordinator is not implemented. |
-| Catch-up from any earlier supported schema version | Required. A deployment targeting Vn must advance a valid database at Vk through every missing checked step, whether one or many versions behind, without requiring operators to deploy each intermediate application binary. Current runtime expansion/queue staging is adjacent-edge execution, not general catch-up. |
+| Automatic production migration | Required. Deploying checked migration history must drive the necessary installation/staging, expansion, backfill/conversion and reviewed retirement steps without manual per-version schema commands. The Worker executes supported next steps and wholly additive missing row revisions; the complete deployment/finality coordinator is not implemented. |
+| Catch-up from any earlier supported schema version | Required. A deployment targeting Vn must advance a valid database at Vk through every missing checked step without intermediate application deployments. Wholly additive row gaps now execute; gaps requiring data conversion, epoch closure or intermediate Contract/queue finality still need the general coordinator. |
 | Ordered row/queue changes | Two ordered migrations are acceptable. Simultaneous non-additive row and queue-payload changes in one edge are not required. The ordered sequence must actually work, with a friendly diagnostic explaining conflicting changes, the required split/order and the next commands. Today the retained-history guard still refuses transforming row history in a queue-bearing database, even across separate releases; supporting that sequence remains required work. |
 | Other operator/editor conveniences | Dedicated offline application, pruning, rebase/repair scaffolding, grant/deployment-recipe generation, extra quarantine/pause tooling and editor apply are not merge blockers for this release. Named automatic Contract modes are an implementation choice; executing necessary reviewed Contracts automatically is part of the deployment/catch-up requirement. |
 
@@ -54,6 +55,51 @@ and intermediate-to-latest catch-up containing both additive and transforming
 steps, restart from partial progress, and two ordered row/queue changes with
 retained jobs. The combined-change diagnostic must prescribe that tested sequence.
 The already passing adjacent-deployment examples alone do not establish these gates.
+
+## Additive catch-up continuation
+
+The configured schema Worker now walks a wholly additive missing suffix in
+version order. It preflights that suffix before advancing its first missing step,
+selects each exact compiler-linked plan, and preserves the actual application's
+owner, declared version, ABI and complete source history. It never fabricates an
+older application identity. Each edge has its own bounded execution budget under
+the Worker's cancelable service lifetime.
+
+Known additive physical history is compared with retained compiled source, so a
+genuine alternative V2 with a different default cannot be silently adopted by V4.
+An unfinished historical edge also retains its creator-ABI restriction. Historical
+queue descriptors contain creator-linked callback identities, so they continue to
+use their existing source/retirement verification rather than byte equality with
+a newer compiler's recompiled descriptor. The actual A/B/C compiler witnesses
+verify that compatible new-edge queue and row upgrades still work.
+
+Verified public-application scenarios:
+
+- V1/V2/V3 databases advanced by the V4 Worker; old V1 reads/writes remain valid,
+  intermediate defaults and database UUID survive, and replay preserves receipts.
+- Fresh setup using only the latest additive artifact still records/executes V1
+  through V4, rather than inventing a V4 installation origin.
+- Process death after an intermediate receipt or publication resumes correctly.
+- Conflicting retained source and a consistent foreign-ABI unfinished step refuse
+  before later publication; a transforming gap does not partially advance V2.
+- Concurrent V3/V4 Workers serialize through the existing boot fence and record
+  each revision once.
+- V3 catches up V1 while building both intermediate/final index jobs; readiness
+  remains blocked until required indexes are valid.
+
+Evidence: `.tesl-stuff/catchup-additive-red.log` reproduces the old predecessor
+refusal. `catchup-row-regressions.log` passes the extended additive application
+suite (198.856s), additive-tail, new-table and index suites. The stronger index
+catch-up/readiness witness passes in `catchup-index-readiness.log` (72.096s).
+`catchup-compiler-compat-verified.log` passes both real cross-compiler witnesses
+(435.468s). The final additive rerun, retaining both actual-current and historical
+execution ABI checks, passes in `catchup-additive-final.log` (200.037s).
+Runtime/model race tests and vet/staticcheck/lint/gosec/Nilaway pass in
+`catchup-runtime-analysis-final.log`.
+
+This completes additive catch-up, not automatic transforming finality. The next
+execution work is selecting checked historical Contract/epoch operations under
+their proper admission windows, then composing ordered row/queue changes.
 
 ## Implemented behavior and its evidence
 
@@ -95,6 +141,9 @@ Retained historical lowerings are not the implemented execution model. Arbitrary
 active-edge compiler substitution remains refused.
 
 ## Acceptance evidence
+
+The full-gate rows below describe baseline `84ef00d`; the additive continuation
+above has separate targeted evidence and must not inherit that earlier full pass.
 
 | Gate | Recorded state |
 |---|---|

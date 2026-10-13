@@ -149,11 +149,8 @@ let export output =
     (List.exists (fun (a:Emit_go.artifact) -> a.path="retained-physical-history.json") public_artifacts);
   check bool "public additive history emits row source metadata" true
     (List.exists (fun (a:Emit_go.artifact) -> a.path="migration-source-history.json") public_artifacts);
-  (* The common public compile route remains gated separately. This uses checked
-     source emission but runs the ordinary generated main and schema CLI. *)
-  let artifacts=match Compile.compile_row_source_artifacts ~storage:true ~physical:true
-    (file "app.tesl") app with
-   | Compile.GoSuccess a -> a | Compile.GoFailure ds -> fail (describe ds) in
+   (* Execute the actual public emission, including its linked source history. *)
+   let artifacts=public_artifacts in
   let destination=Filename.concat output version in
   List.iter (fun (a:Emit_go.artifact) -> if not (Filename.check_suffix a.path ".json") then write (Filename.concat destination a.path) a.contents) artifacts;
   check bool "ordinary main emitted" true (Sys.file_exists (Filename.concat destination "cmd/app/main.go"));
@@ -163,8 +160,14 @@ let export output =
  let v1=file "schema/notes/v1.tesl" in
  write v1 (schema 1 |> replace "Schema.Notes.VCurrent" "Schema.Notes.V1");
  write current (schema 2);
- edge root (file "migrations/notes/v2.tesl") v1 current (additive "Schema.Notes.VCurrent") false;
- build "v2";
+  edge root (file "migrations/notes/v2.tesl") v1 current (additive "Schema.Notes.VCurrent") false;
+  build "v2";
+  (* A genuine alternative V2 with the same schema shape but a different
+     historical default must not be adopted by V4's retained source. *)
+  edge root (file "migrations/notes/v2.tesl") v1 current
+    (additive "Schema.Notes.VCurrent" |> replace "Default priority 9" "Default priority 8") false;
+  build "fork-v2";
+  edge root (file "migrations/notes/v2.tesl") v1 current (additive "Schema.Notes.VCurrent") false;
  let v2=file "schema/notes/v2.tesl" in
  write v2 (schema 2 |> replace "Schema.Notes.VCurrent" "Schema.Notes.V2");
  edge root (file "migrations/notes/v2.tesl") v1 v2 (additive "Schema.Notes.V2") true;
@@ -189,7 +192,7 @@ let compilation () =
   export output;
   let repo=match Sys.getenv_opt "TESL_REPO_ROOT" with Some p -> Unix.realpath p | None -> fail "TESL_REPO_ROOT required" in
   let log=Filename.concat output "postgres.log" in
-  let command=Printf.sprintf "cd %s && TESL_ROW_ADDITIVE_PROGRAMS=%s timeout 210s go test -p 1 -race -tags tesl_migration_test -timeout 180s ./teslrt -run '^TestPgRowAdditive' -count=1 -v > %s 2>&1"
+   let command=Printf.sprintf "cd %s && TESL_ROW_ADDITIVE_PROGRAMS=%s timeout 330s go test -p 1 -race -tags tesl_migration_test -timeout 300s ./teslrt -run '^TestPgRowAdditive' -count=1 -v > %s 2>&1"
    (Filename.quote (Filename.concat repo "runtime/go")) (Filename.quote output) (Filename.quote log) in
   if Sys.command command<>0 then fail (Source_input.read log))
 let () = match Sys.getenv_opt "TESL_ROW_ADDITIVE_EXPORT" with

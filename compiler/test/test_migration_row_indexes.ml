@@ -109,10 +109,7 @@ let export output =
  let current=file "schema/notes/v-current.tesl" in
  let build version =
   accepts (file "app.tesl");
-  (* The common public compile route remains gated separately. This uses checked
-     source emission but runs the ordinary generated main and schema CLI. *)
-  let artifacts=match Compile.compile_row_source_artifacts ~storage:true ~physical:true
-    (file "app.tesl") app with
+   let artifacts=match Compile.compile_go_file (file "app.tesl") with
    | Compile.GoSuccess a -> a | Compile.GoFailure ds -> fail (describe ds) in
   let destination=Filename.concat output version in
   List.iter (fun (a:Emit_go.artifact) -> if not (Filename.check_suffix a.path ".json") then write (Filename.concat destination a.path) a.contents) artifacts;

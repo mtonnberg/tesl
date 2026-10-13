@@ -251,14 +251,62 @@ func pgExecuteRowBaseline(ctx context.Context, conn *pgx.Conn, b *pgRowBaseline,
 	// A newer binary still installs the authoritative V1 origin. Publish that
 	// complete baseline before attempting its successor; never infer an empty
 	// predecessor from the absence of application tables on a fresh install.
-	state, err := pgExecuteRowOrigin(ctx, conn, b, roles)
+	origin, stopOrigin := context.WithTimeout(ctx, pgLeaseTimeout())
+	state, err := pgExecuteRowOrigin(origin, conn, b, roles)
+	stopOrigin()
 	if err != nil {
 		return state, err
 	}
 	if b.target != nil && b.target.version > 1 {
-		return pgExecuteRowForward(ctx, conn, b, roles)
+		steps, err := pgRowCatchupSteps(b, state.Current)
+		if err != nil {
+			return state, err
+		}
+		for _, step := range steps {
+			if state.Current >= step.target.version {
+				continue // A concurrently verified publisher may have advanced further.
+			}
+			bounded, stop := context.WithTimeout(ctx, pgLeaseTimeout())
+			state, err = pgExecuteRowForward(bounded, conn, step, roles)
+			stop()
+			if err != nil {
+				return state, err
+			}
+		}
 	}
 	return state, nil
+}
+
+// Select immutable, compiler-linked execution windows without changing the
+// application's declared version, owner, ABI or full retained source history.
+// Preflight the entire missing suffix before publishing its first revision.
+// Transforming gaps require a separate coordinator for intermediate finality;
+// they must not be partially advanced by this additive catch-up path.
+func pgRowCatchupSteps(b *pgRowBaseline, current int) ([]*pgRowBaseline, error) {
+	if b == nil || b.database == nil || b.target == nil || current < 1 {
+		return nil, fmt.Errorf("row catch-up requires an installed baseline and exact compiled target")
+	}
+	verified, err := pgCompiledRowBaseline(b.database)
+	if err != nil {
+		return nil, err
+	}
+	if verified.history != b.history || verified.inventoryHash != b.inventoryHash || verified.catalogHash != b.catalogHash || verified.physical != b.physical || verified.target != b.target {
+		return nil, fmt.Errorf("row catch-up source identity differs from the compiled application")
+	}
+	var steps []*pgRowBaseline
+	for version := current + 1; version <= b.history.CurrentVersion; version++ {
+		plan, err := pgCompiledRowPhysicalPlan(b.database, version)
+		if err != nil {
+			return nil, err
+		}
+		if current < b.history.CurrentVersion-1 && !pgRowEpochPreserving(plan) {
+			return nil, fmt.Errorf("automatic catch-up from V%d to V%d reaches non-additive V%d; this path currently supports additive steps only, and data conversion or retirement must complete through the reviewed intermediate Worker/Contract lifecycle", current, b.history.CurrentVersion, version)
+		}
+		step := *verified
+		step.target = plan
+		steps = append(steps, &step)
+	}
+	return steps, nil
 }
 
 func pgExecuteRowOrigin(ctx context.Context, conn *pgx.Conn, b *pgRowBaseline, roles PgMigrationControlRoles) (PgMigrationControlState, error) {
