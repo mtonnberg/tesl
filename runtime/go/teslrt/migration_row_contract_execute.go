@@ -204,6 +204,27 @@ func pgExecuteRowContract(ctx context.Context, config *pgx.ConnConfig, b *pgRowB
 		defer cancel()
 		resultErr = errors.Join(resultErr, conn.Close(cleanup))
 	}()
+	return pgExecuteRowContractOn(ctx, conn, settings, b, roles, version, false)
+}
+
+// The catch-up coordinator lends its boot-locked connection. Normal explicit
+// Contract still uses its own connection and current-version-only wrapper above.
+func pgExecuteRowContractOn(ctx context.Context, conn *pgx.Conn, settings *pgx.ConnConfig, b *pgRowBaseline, roles PgMigrationControlRoles, version int, requireDrained bool) (result PgMigrationControlState, resultErr error) {
+	window, err := pgRowExecutionWindow(b, version)
+	if err != nil {
+		return result, err
+	}
+	if window.target != b.target {
+		return result, fmt.Errorf("row Contract requires its exact selected execution window")
+	}
+	b = window
+	c, err := pgRowContractFor(b.database, version)
+	if err != nil {
+		return result, err
+	}
+	if c.window != b.target {
+		return result, fmt.Errorf("row Contract source differs from selected execution window")
+	}
 	var current, session string
 	if err = conn.QueryRow(ctx, "select current_user,session_user").Scan(&current, &session); err != nil {
 		return result, err
@@ -230,6 +251,11 @@ func pgExecuteRowContract(ctx context.Context, config *pgx.ConnConfig, b *pgRowB
 		if pgRowHasStep(state, version, "contracted") {
 			result = state
 			return nil
+		}
+		if requireDrained {
+			if err := pgRowCatchupRequiresDrained(ctx, conn, b.history.Namespace, state.MinVersion, version); err != nil {
+				return err
+			}
 		}
 		if err := pgRowTableContractDependencies(ctx, conn, c); err != nil {
 			return err
@@ -260,6 +286,11 @@ func pgExecuteRowContract(ctx context.Context, config *pgx.ConnConfig, b *pgRowB
 				}
 			}
 			if err = pgRowRetiringFences(ctx, conn, state.FenceNamespace, state.MinVersion, version, func() error {
+				if requireDrained {
+					if err := pgRowCatchupRequiresDrained(ctx, conn, b.history.Namespace, state.MinVersion, version); err != nil {
+						return err
+					}
+				}
 				if len(c.window.windows) > 0 {
 					if err := pgRowFinalPass(ctx, conn, settings, b, roles, c); err != nil {
 						return err

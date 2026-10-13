@@ -29,11 +29,11 @@ func pgRowIndexSnapshot(ctx context.Context, conn *pgx.Conn, source pgIndexWorke
 			return pgIndexInspectionFailure(err)
 		}
 		state := snapshot.state
-		if state.Format != 5 || state.DatabaseUUID != expected.DatabaseUUID || state.FenceNamespace != expected.FenceNamespace || state.FenceDomain != expected.FenceDomain || state.Current < source.CurrentVersion || state.MinVersion > source.CurrentVersion {
+		if state.Format != 5 || state.DatabaseUUID != expected.DatabaseUUID || state.FenceNamespace != expected.FenceNamespace || state.FenceDomain != expected.FenceDomain || state.Current < source.executionVersion() || state.MinVersion > source.executionVersion() {
 			return pgIndexRefuse("row index installation identity or admission changed")
 		}
 		var floor int
-		if err := tx.QueryRow(ctx, "select "+pgx.Identifier{source.Namespace, "tesl_admit"}.Sanitize()+"($1)", source.CurrentVersion).Scan(&floor); err != nil {
+		if err := tx.QueryRow(ctx, "select "+pgx.Identifier{source.Namespace, "tesl_admit"}.Sanitize()+"($1)", source.executionVersion()).Scan(&floor); err != nil {
 			return pgIndexInspectionFailure(err)
 		}
 		intents, err := pgReadExpansionIntents(ctx, tx, source.Namespace)

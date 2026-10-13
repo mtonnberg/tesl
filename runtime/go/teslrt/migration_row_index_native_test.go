@@ -62,6 +62,12 @@ func TestPgRowIndexOrdinaryMain(t *testing.T) {
 }
 
 func TestPgRowIndexCatchupBuildsIntermediateJobs(t *testing.T) {
+	for _, mode := range []string{"worker", "catch-up"} {
+		t.Run(mode, func(t *testing.T) { pgTestRowIndexCatchupBuildsIntermediateJobs(t, mode) })
+	}
+}
+
+func pgTestRowIndexCatchupBuildsIntermediateJobs(t *testing.T, mode string) {
 	root := os.Getenv("TESL_ROW_INDEX_PROGRAMS")
 	if root == "" {
 		t.Skip("compiler-generated original index applications required")
@@ -79,7 +85,7 @@ func TestPgRowIndexCatchupBuildsIntermediateJobs(t *testing.T) {
 	pgCallRowAccessApp(t, ctx, v1, "POST", "/one", 200)
 	pauses := pgPauseConcurrentRowBoundaries(t, []pgExpansionBoundary{{"index-before-create", 1}})
 	defer pauses[0].resume()
-	cmd := pgRowAdditiveCommand(f, root, "v3", "--schema", "worker", "--json")
+	cmd := pgRowAdditiveCommand(f, root, "v3", "--schema", mode, "--json")
 	cmd.Env = append(cmd.Env, "TESL_MIGRATION_TEST_SOCKET="+os.Getenv("TESL_MIGRATION_TEST_SOCKET"), "TESL_SCHEMA_POLL_S=1")
 	output, _ := pgRowAdditiveProcess(t, cmd)
 	select {
@@ -87,7 +93,11 @@ func TestPgRowIndexCatchupBuildsIntermediateJobs(t *testing.T) {
 	case <-time.After(15 * time.Second):
 		t.Fatal("latest worker did not reach retained index work", output.String())
 	}
-	if strings.Contains(output.String(), `"kind":"schema-worker-ready"`) {
+	readyKind := `"kind":"schema-worker-ready"`
+	if mode == "catch-up" {
+		readyKind = `"kind":"schema-caught-up"`
+	}
+	if strings.Contains(output.String(), readyKind) {
 		t.Fatal("catch-up published readiness before its required index", output.String())
 	}
 	// Retained V1 remains a valid reader/writer during additive catch-up.
@@ -95,7 +105,7 @@ func TestPgRowIndexCatchupBuildsIntermediateJobs(t *testing.T) {
 	pauses[0].resume()
 	ready, stopReady := context.WithTimeout(ctx, 15*time.Second)
 	defer stopReady()
-	if !output.WaitContains(ready, `"kind":"schema-worker-ready"`) {
+	if !output.WaitContains(ready, readyKind) {
 		t.Fatal("latest worker did not finish both retained index jobs", output.String())
 	}
 	var version, minimum, jobs, valid int
@@ -109,6 +119,48 @@ func TestPgRowIndexCatchupBuildsIntermediateJobs(t *testing.T) {
 	body := pgCallRowAccessApp(t, ctx, v3, "GET", "/all", 200)
 	if !strings.Contains(body, `"active":true`) || !strings.Contains(body, `"Something"`) {
 		t.Fatal("catch-up lost old writes or latest row shape", body)
+	}
+}
+
+func TestPgRowIndexCatchupCancellationCannotReportSuccess(t *testing.T) {
+	root := os.Getenv("TESL_ROW_INDEX_PROGRAMS")
+	if root == "" {
+		t.Skip("compiler-generated original index applications required")
+	}
+	f, _ := pgNewWorkerTest(t)
+	f.namespace = "notes"
+	if out, err := pgRowAdditiveCommand(f, root, "v1", "--schema", "install", "--worker", f.roles.Worker, "--request", f.roles.Request, "--json").CombinedOutput(); err != nil {
+		t.Fatalf("install: %v %s", err, out)
+	}
+	pgRowAdditiveWorker(t, f, root, "v1")()
+	pauses := pgPauseConcurrentRowBoundaries(t, []pgExpansionBoundary{{"index-before-create", 1}})
+	defer pauses[0].resume()
+	cmd := pgRowAdditiveCommand(f, root, "v3", "--schema", "catch-up", "--json")
+	cmd.Env = append(cmd.Env, "TESL_MIGRATION_TEST_SOCKET="+os.Getenv("TESL_MIGRATION_TEST_SOCKET"))
+	var output pgRowAppOutput
+	cmd.Stdout, cmd.Stderr = &output, &output
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case <-pauses[0].arrived:
+	case err := <-done:
+		t.Fatalf("catch-up exited before index pause: %v %s", err, output.String())
+	case <-f.ctx.Done():
+		_ = cmd.Process.Kill()
+		<-done
+		t.Fatal("catch-up did not reach index pause", output.String())
+	}
+	if err := cmd.Process.Signal(os.Interrupt); err != nil {
+		t.Fatal(err)
+	}
+	// The boundary remains blocked until the cancellation has been delivered.
+	time.Sleep(50 * time.Millisecond)
+	pauses[0].resume()
+	if err := <-done; err == nil || strings.Contains(output.String(), `"kind":"schema-caught-up"`) {
+		t.Fatal("cancelled finite index work reported successful catch-up", err, output.String())
 	}
 }
 

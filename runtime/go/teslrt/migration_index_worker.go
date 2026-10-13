@@ -47,6 +47,7 @@ func (e *pgIndexWorkerRefusal) Unwrap() error { return e.cause }
 
 var errPgIndexLeaseLost = errors.New("migration index ownership was lost")
 var errPgIndexSessionLost = errors.New("migration index executor session was lost")
+var errPgIndexComplete = errors.New("retained migration indexes are complete")
 
 func pgIndexRefuse(format string, args ...any) error {
 	return &pgIndexWorkerRefusal{fmt.Errorf(format, args...)}
@@ -96,7 +97,17 @@ func pgRunMigrationIndexWorker(ctx context.Context, ddl *pgx.Conn, config *pgx.C
 // baseline. Format3 callers continue to use the original public wrappers.
 type pgIndexWorkerSource struct {
 	PgCompiledMigrationHistory
-	row *pgRowBaseline
+	row        *pgRowBaseline
+	untilValid bool
+}
+
+// Execution admission may select a retained row plan. The embedded history
+// continues to describe the real binary, including its current version and ABI.
+func (source pgIndexWorkerSource) executionVersion() int {
+	if source.row != nil && source.row.target != nil {
+		return source.row.target.version
+	}
+	return source.CurrentVersion
 }
 
 func pgRunMigrationIndexWorkerWithSettings(ctx context.Context, ddl *pgx.Conn, config *pgx.ConnConfig,
@@ -116,6 +127,9 @@ func pgRunIndexWorkerSource(ctx context.Context, ddl *pgx.Conn, config *pgx.Conn
 		return pgIndexRefuse("invalid migration index worker timing")
 	}
 	if history.row == nil {
+		if history.untilValid {
+			return pgIndexRefuse("finite index execution requires checked row history")
+		}
 		if _, err := history.ExpansionPlan(expected.InitialVersion); err != nil {
 			return err
 		}
@@ -126,12 +140,12 @@ func pgRunIndexWorkerSource(ctx context.Context, ddl *pgx.Conn, config *pgx.Conn
 		if expected.Format != 5 || history.row.database == nil || history.row.target == nil || history.row.target.compiled == nil {
 			return pgIndexRefuse("row index worker requires exact checked format5 source")
 		}
-		bound, err := pgCompiledRowPhysicalPlan(history.row.database, history.CurrentVersion)
-		if err != nil || bound != history.row.target || history.row.history != history.PgCompiledMigrationHistory {
+		bound, err := pgRowExecutionWindow(history.row, history.executionVersion())
+		if err != nil || bound.target != history.row.target || history.row.history != history.PgCompiledMigrationHistory {
 			return pgIndexRefuse("row index worker source owner differs")
 		}
 	}
-	if expected.DatabaseUUID == "" || expected.Current < history.CurrentVersion || expected.InstallingVersion != 0 {
+	if expected.DatabaseUUID == "" || expected.Current < history.executionVersion() || expected.InstallingVersion != 0 {
 		return pgIndexRefuse("index worker requires completed expansion")
 	}
 	announced := false
@@ -152,10 +166,10 @@ func pgRunIndexWorkerSource(ctx context.Context, ddl *pgx.Conn, config *pgx.Conn
 			cancel()
 		}
 		if roundErr == nil {
-			roundErr = pgMigrationSessionLock(ctx, ddl, expected.FenceNamespace, history.CurrentVersion, false, func() error {
+			roundErr = pgMigrationSessionLock(ctx, ddl, expected.FenceNamespace, history.executionVersion(), false, func() error {
 				admit, cancel := context.WithTimeout(ctx, settings.query)
 				var floor int
-				err := ddl.QueryRow(admit, "select "+pgx.Identifier{history.Namespace, "tesl_admit"}.Sanitize()+"($1)", history.CurrentVersion).Scan(&floor)
+				err := ddl.QueryRow(admit, "select "+pgx.Identifier{history.Namespace, "tesl_admit"}.Sanitize()+"($1)", history.executionVersion()).Scan(&floor)
 				cancel()
 				if err != nil {
 					return err
@@ -194,7 +208,13 @@ func pgRunIndexWorkerSource(ctx context.Context, ddl *pgx.Conn, config *pgx.Conn
 		closeCancel()
 		ddl = nil
 		cleanupErr := pgIndexRemoveTaggedSessions(generation, history, roles, expected, tag, settings.cleanup)
+		if errors.Is(roundErr, errPgIndexComplete) {
+			return cleanupErr
+		}
 		if ctx.Err() != nil {
+			if history.untilValid {
+				return errors.Join(ctx.Err(), cleanupErr)
+			}
 			return cleanupErr
 		}
 		if !pgIndexCanReconnect(roundErr) {
@@ -209,6 +229,9 @@ func pgRunIndexWorkerSource(ctx context.Context, ddl *pgx.Conn, config *pgx.Conn
 			cleanupErr = pgIndexRemoveTaggedSessions(generation, history, roles, expected, tag, settings.cleanup)
 		}
 		if err := pgIndexWait(ctx, settings.poll); err != nil {
+			if history.untilValid {
+				return err
+			}
 			return nil
 		}
 	}
@@ -333,9 +356,16 @@ func pgIndexWorkerRound(ctx context.Context, ddl, coordinator *pgx.Conn, tag str
 		if err != nil {
 			return err
 		}
-		if _, err := coordinator.Exec(query, "select "+pgx.Identifier{history.Namespace, "tesl_heartbeat"}.Sanitize()+"($1,1,$2)",
-			history.CurrentVersion, snapshot.state.CompatFloor); err != nil {
-			return err
+		// A finite deployment executor holds the same real per-job fences but
+		// is not an application instance of the historical version it executes.
+		if !history.untilValid {
+			if _, err := coordinator.Exec(query, "select "+pgx.Identifier{history.Namespace, "tesl_heartbeat"}.Sanitize()+"($1,1,$2)",
+				history.executionVersion(), snapshot.state.CompatFloor); err != nil {
+				return err
+			}
+		}
+		if history.untilValid && active == nil && !slices.ContainsFunc(snapshot.jobs, func(job pgMigrationIndexJob) bool { return job.State != "valid" }) {
+			return errPgIndexComplete
 		}
 		if snapshot.ready && !*announced {
 			if onReady != nil {
@@ -366,7 +396,7 @@ func pgIndexWorkerRound(ctx context.Context, ddl, coordinator *pgx.Conn, tag str
 			return nil
 		}
 		for _, job := range snapshot.jobs {
-			if job.Version > history.CurrentVersion || job.State == "valid" {
+			if job.Version > history.executionVersion() || job.State == "valid" {
 				continue
 			}
 			if job.Holder != "" && job.Holder != tag && job.ExpiresAt != nil {
@@ -384,7 +414,7 @@ func pgIndexWorkerRound(ctx context.Context, ddl, coordinator *pgx.Conn, tag str
 			}
 			var token int64
 			if err := coordinator.QueryRow(query, "select "+pgx.Identifier{history.Namespace, "tesl_claim_index"}.Sanitize()+"($1,$2,$3,$4)",
-				job.ID, history.CurrentVersion, history.SourceCompilerABI, settings.lease.Milliseconds()).Scan(&token); err != nil {
+				job.ID, history.executionVersion(), history.SourceCompilerABI, settings.lease.Milliseconds()).Scan(&token); err != nil {
 				return err
 			}
 			if token == 0 {
@@ -400,7 +430,7 @@ func pgIndexWorkerRound(ctx context.Context, ddl, coordinator *pgx.Conn, tag str
 				defer cancelJob()
 				execute := func() error { return pgIndexExecuteJob(jobContext, ddl, tag, history, roles, expected, job, settings) }
 				if history.row != nil {
-					completion <- pgMigrationSessionLock(jobContext, ddl, expected.FenceNamespace, history.CurrentVersion, false, execute)
+					completion <- pgMigrationSessionLock(jobContext, ddl, expected.FenceNamespace, history.executionVersion(), false, execute)
 				} else {
 					completion <- execute()
 				}
@@ -491,7 +521,7 @@ func pgIndexReapExpiredHolder(ctx context.Context, conn *pgx.Conn, history pgInd
 	defer func() { _ = tx.Rollback(ctx) }()
 	var expired bool
 	if err := tx.QueryRow(ctx, "select "+pgx.Identifier{history.Namespace, "tesl_lock_expired_index_holder"}.Sanitize()+"($1,$2,$3,$4,$5)",
-		job.ID, job.Holder, job.Token, history.CurrentVersion, history.SourceCompilerABI).Scan(&expired); err != nil {
+		job.ID, job.Holder, job.Token, history.executionVersion(), history.SourceCompilerABI).Scan(&expired); err != nil {
 		return err
 	}
 	if expired {

@@ -44,13 +44,34 @@ install its genuine retained V1 baseline and use the same path on a new database
 
 Each step retains its exact source identity, normal fences and durable receipts;
 restart resumes incomplete work. Required indexes still gate readiness, and old
-compatible applications remain admitted. A gap containing a transforming or queue
-conversion step is refused before advancing its missing additive suffix; it still
-needs the general catch-up/finality coordinator.
+compatible applications remain admitted. For gaps containing row transformations,
+run the newest binary's finite deployment command with Worker credentials:
+
+```sh
+app --schema catch-up --json
+```
+
+It executes retained row expansions, finishes retained index jobs, closes required
+additive epochs, and runs reviewed intermediate Contracts. No intermediate
+application deployment is needed. The binary must contain the complete frozen
+history, typed conversions and required Contract declarations. Installation remains
+a separate Installer operation; on a new database, the latest artifact installs
+its genuine retained V1 before catch-up.
+
+Stop incompatible application/worker instances and wait 30 seconds after their
+last heartbeat before catch-up. The command refuses recent retiring instances,
+uses the normal transaction fences, and never implies `--force`. Data rejection
+blocks retirement and preserves the admitted repair path; repair the source and
+rerun the same command. Process interruption resumes from durable receipts.
+
+Success reports `schema-caught-up` at the latest expanded version. The latest
+window remains open for ordinary Worker backfill and Request use; its own Contract
+is still explicit. Queue-conversion gaps are not supported by this command.
 
 Request processes wait for verified readiness. Installation/staging, explicit
-Contract and required epoch closure still have separate commands; the runtime
-does not yet coordinate the entire deploy-to-latest lifecycle.
+Contract commands remain available, alongside the row catch-up coordinator. The
+runtime does not yet coordinate installation/staging and queue finality as one
+complete deploy-to-latest lifecycle.
 
 Contract is the retirement/finalization step: establish final data and queue
 state, fence out retiring versions, then perform the reviewed cleanup. Automatic

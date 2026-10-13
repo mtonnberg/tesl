@@ -11,6 +11,76 @@ import (
 	"time"
 )
 
+func TestPgRowRepeatedRetypeCatchupRestart(t *testing.T) {
+	root := os.Getenv("TESL_ROW_REPEATED_RETYPE_PROGRAMS")
+	if root == "" {
+		t.Skip("compiler-generated V1/V2/V3 programs required")
+	}
+	for _, boundary := range []string{"row-forward-after-receipt", "row-contract-after-retirement", "row-contract-after-receipt", "row-catchup-after-step"} {
+		t.Run(boundary, func(t *testing.T) {
+			f, request := pgNewWorkerTest(t)
+			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			t.Cleanup(cancel)
+			f.ctx, f.namespace = ctx, "notes"
+			pgForwardNativeRun(t, f, root, "v1", "install", true)
+			pgForwardNativeRun(t, f, root, "v1", "worker", true)
+			// Ordinary Request DML seeds bytes in the exact V1 codec. No control
+			// state or heartbeat is fabricated to make retirement pass.
+			if _, err := request.Exec(ctx, `insert into notes.notes(id,metadata,author,title,memo) values ('one','{"oldText":"retained"}','writer','one','base')`); err != nil {
+				t.Fatal(err)
+			}
+			pauses := pgPauseConcurrentRowBoundaries(t, []pgExpansionBoundary{{boundary, 1}})
+			defer pauses[0].resume()
+			cmd := pgForwardNativeCommand(f, root, "v3", "catch-up")
+			cmd.Env = append(cmd.Env, "TESL_MIGRATION_TEST_SOCKET="+os.Getenv("TESL_MIGRATION_TEST_SOCKET"))
+			var output pgRowAppOutput
+			cmd.Stdout, cmd.Stderr = &output, &output
+			if err := cmd.Start(); err != nil {
+				t.Fatal(err)
+			}
+			done := make(chan error, 1)
+			go func() { done <- cmd.Wait() }()
+			select {
+			case <-pauses[0].arrived:
+			case err := <-done:
+				t.Fatalf("catch-up exited before interruption: %v %s", err, output.String())
+			case <-ctx.Done():
+				_ = cmd.Process.Kill()
+				<-done
+				t.Fatal("catch-up did not reach interruption", output.String())
+			}
+			var concurrent *pgRowAppOutput
+			if boundary == "row-contract-after-retirement" {
+				concurrent, _ = pgRowAdditiveProcess(t, pgForwardNativeCommand(f, root, "v3", "catch-up"))
+				waiting, stop := context.WithTimeout(ctx, 100*time.Millisecond)
+				if concurrent.WaitContains(waiting, `"kind":"schema-caught-up"`) {
+					stop()
+					_ = cmd.Process.Kill()
+					<-done
+					t.Fatal("competing coordinator bypassed the held boot fence")
+				}
+				stop()
+			}
+			_ = cmd.Process.Kill()
+			<-done
+			pauses[0].resume()
+			out := pgForwardNativeRun(t, f, root, "v3", "catch-up", true)
+			if !strings.Contains(string(out), `"currentVersion":3`) {
+				t.Fatal("catch-up failed to report latest target", string(out))
+			}
+			if concurrent != nil && !concurrent.WaitContains(ctx, `"kind":"schema-caught-up"`) {
+				t.Fatal("competing coordinator could not resume the same history", concurrent.String())
+			}
+			var current, minimum, generation int
+			var text, detail string
+			if err := request.QueryRow(ctx, `select s.current,s.min_version,n._tesl_v,n.metadata__v2->>'newText',n.metadata__v2->>'detail' from notes.tesl_schema_state s,notes.notes n where n.id='one'`).Scan(&current, &minimum, &generation, &text, &detail); err != nil || current != 3 || minimum != 2 || generation != 2 || text != "retained" || detail != "migrated" {
+				t.Fatal("interrupted historical conversion lost retained source", current, minimum, generation, text, detail, err)
+			}
+			pgForwardNativeRun(t, f, root, "v3", "catch-up", true)
+		})
+	}
+}
+
 // All three binaries come from public compilation and guarded source generation.
 // The compiler fixture removes their original source tree before this runs.
 func TestPgRowRepeatedRetypeApp(t *testing.T) {

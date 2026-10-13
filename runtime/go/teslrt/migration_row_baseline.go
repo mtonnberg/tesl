@@ -300,13 +300,39 @@ func pgRowCatchupSteps(b *pgRowBaseline, current int) ([]*pgRowBaseline, error) 
 			return nil, err
 		}
 		if current < b.history.CurrentVersion-1 && !pgRowEpochPreserving(plan) {
-			return nil, fmt.Errorf("automatic catch-up from V%d to V%d reaches non-additive V%d; this path currently supports additive steps only, and data conversion or retirement must complete through the reviewed intermediate Worker/Contract lifecycle", current, b.history.CurrentVersion, version)
+			return nil, fmt.Errorf("worker catch-up from V%d to V%d reaches non-additive V%d; run app --schema catch-up with Worker credentials to execute retained conversions and reviewed intermediate Contracts before starting this worker", current, b.history.CurrentVersion, version)
 		}
 		step := *verified
 		step.target = plan
 		steps = append(steps, &step)
 	}
 	return steps, nil
+}
+
+// A historical execution window is a view over the complete linked program,
+// not a fabricated historical application registration. All source material is
+// reconstructed from the sealed owner; only the selected physical step changes.
+func pgRowExecutionWindow(b *pgRowBaseline, version int) (*pgRowBaseline, error) {
+	if b == nil || b.database == nil || b.target == nil {
+		return nil, fmt.Errorf("historical execution requires an exact compiled row owner")
+	}
+	verified, err := pgCompiledRowBaseline(b.database)
+	if err != nil {
+		return nil, err
+	}
+	bound, err := pgCompiledRowPhysicalPlan(b.database, b.target.version)
+	if err != nil {
+		return nil, err
+	}
+	if b.history != verified.history || b.physical != verified.physical || b.inventoryHash != verified.inventoryHash || b.catalogHash != verified.catalogHash || bound != b.target {
+		return nil, fmt.Errorf("historical execution source differs from its sealed owner")
+	}
+	plan, err := pgCompiledRowPhysicalPlan(b.database, version)
+	if err != nil {
+		return nil, err
+	}
+	verified.target = plan
+	return verified, nil
 }
 
 func pgExecuteRowOrigin(ctx context.Context, conn *pgx.Conn, b *pgRowBaseline, roles PgMigrationControlRoles) (PgMigrationControlState, error) {

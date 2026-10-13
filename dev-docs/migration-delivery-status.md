@@ -3,14 +3,15 @@
 > Audience: contributors reviewing the migration PR and its release evidence.
 
 Assessment baseline: `84ef00d`. Requirements were committed in `b5cddb9`;
-the additive catch-up continuation and its verification are recorded below.
+additive catch-up was committed in `137ddd1`. Row-transforming catch-up and its
+targeted verification are recorded below.
 
 ## Delivery contract
 
 The implemented surface supports **original-V1, fresh-install PostgreSQL histories**
 with checked row transformations and restricted Worker-topology queue histories.
 **Baseline `84ef00d` passed local authoritative acceptance: 24/24 phases, no skips,
-exit 0.** The additive continuation has the targeted evidence below; a fresh full
+exit 0.** The catch-up continuations have the targeted evidence below; a fresh full
 gate has not yet been run for these runtime changes. The maintainer's clarified
 release requirements below still require deployment automation, catch-up and
 ordered row/queue composition before release acceptance. Hosted supported-major
@@ -27,8 +28,8 @@ this delivery contract. Other missing roadmap requirements remain open work.
 | Requirement | Release decision and present state |
 |---|---|
 | CI preview | Required workflow, already available through compiler-owned non-mutating `tesl migrate generate app.tesl --manifest-json`. Editor preview is sufficient; applying edits inside the editor is not a merge blocker. |
-| Automatic production migration | Required. Deploying checked migration history must drive the necessary installation/staging, expansion, backfill/conversion and reviewed retirement steps without manual per-version schema commands. The Worker executes supported next steps and wholly additive missing row revisions; the complete deployment/finality coordinator is not implemented. |
-| Catch-up from any earlier supported schema version | Required. A deployment targeting Vn must advance a valid database at Vk through every missing checked step without intermediate application deployments. Wholly additive row gaps now execute; gaps requiring data conversion, epoch closure or intermediate Contract/queue finality still need the general coordinator. |
+| Automatic production migration | Required. Deploying checked migration history must drive the necessary installation/staging, expansion, backfill/conversion and reviewed retirement steps without manual per-version schema commands. The Worker executes additive gaps; the finite `--schema catch-up` command now coordinates retained row conversions, indexes, intermediate Contracts and epoch closure. Installation/staging and queue coordination remain required work. |
+| Catch-up from any earlier supported schema version | Required. A deployment targeting Vn must advance a valid database at Vk through every missing checked step without intermediate application deployments. Additive and row-transforming gaps now execute with the latest artifact; queue gaps and ordered row/queue histories remain open. |
 | Ordered row/queue changes | Two ordered migrations are acceptable. Simultaneous non-additive row and queue-payload changes in one edge are not required. The ordered sequence must actually work, with a friendly diagnostic explaining conflicting changes, the required split/order and the next commands. Today the retained-history guard still refuses transforming row history in a queue-bearing database, even across separate releases; supporting that sequence remains required work. |
 | Other operator/editor conveniences | Dedicated offline application, pruning, rebase/repair scaffolding, grant/deployment-recipe generation, extra quarantine/pause tooling and editor apply are not merge blockers for this release. Named automatic Contract modes are an implementation choice; executing necessary reviewed Contracts automatically is part of the deployment/catch-up requirement. |
 
@@ -97,9 +98,52 @@ execution ABI checks, passes in `catchup-additive-final.log` (200.037s).
 Runtime/model race tests and vet/staticcheck/lint/gosec/Nilaway pass in
 `catchup-runtime-analysis-final.log`.
 
-This completes additive catch-up, not automatic transforming finality. The next
-execution work is selecting checked historical Contract/epoch operations under
-their proper admission windows, then composing ordered row/queue changes.
+## Row-transforming catch-up continuation
+
+The newest application's `--schema catch-up [--database Module.Database] [--json]`
+is a finite Worker-topology deployment command. It reconstructs each historical
+execution window from the sealed owner, preserving the real binary's declared
+version, ABI and complete history. One boot-locked coordinator runs retained
+expansion, finite index completion, required additive epoch closure and reviewed
+intermediate Contracts. Typed historical backfill uses the original checked
+codecs/callbacks and normal lease ownership, budgets, receipts and fences.
+
+Recent incompatible instances refuse before advancement, with stop/wait/rerun
+instructions; retirement rechecks under its actual fences. Catch-up never forces
+retirement. Finite index actors use the historical execution admission but do not
+register as historical application instances. All retained indexes must be valid
+before proceeding, even if some do not gate request readiness.
+
+The final version is expanded and index-ready; its own Contract is not required
+to report `schema-caught-up`. Installation remains an Installer command, and the
+latest ordinary Worker owns ongoing backfill. Queue-conversion gaps are explicitly
+refused. Ordered row/queue composition and complete production deployment wiring
+remain release work.
+
+Verified evidence (logs under `.tesl-stuff/`):
+
+- `catchup-transforming-scenarios.log`: ordinary adjacent V1–V4 rollout plus V4-only
+  catch-up from V1/V2/V3, Retype/WriteBack, Legacy removal, proof Revalidate, live
+  instance refusal, rejected-data repair and immutable-receipt replay.
+- `catchup-transforming-native.log`: concurrent-index suite (128.167s), including
+  finite historical index execution; full Retype/WriteBack suite (296.311s), with
+  crashes after expansion receipt, retirement, Contract receipt and publication.
+- `catchup-transforming-concurrent.log`: repeated-Retype/restart rerun (163.417s),
+  including competing latest coordinators serialized through the boot fence.
+- `catchup-transforming-analysis.log`: additive suite (246.221s), including latest
+  bootstrap and historical unforced epoch closure; runtime race tests (35.667s).
+  A subsequent command used an incorrect model package path; the corrected run is
+  `catchup-transforming-static.log`: migrationtest race tests (12.576s), vet,
+  staticcheck, golangci-lint and Nilaway pass.
+- `catchup-transforming-compiler-compat.log`: real cross-compiler row and queue
+  upgrade witnesses pass (462.736s).
+- `catchup-transforming-cancellation.log`: final index suite (106.719s) also
+  proves cancellation cannot report `schema-caught-up` with unfinished jobs;
+  runtime race tests (35.896s), vet and gosec pass.
+- `catchup-transforming-doc-sync.log`: snapshots, traceability, document integrity
+  and manual coherence pass.
+
+These are targeted results, not a new full authoritative CI pass.
 
 ## Implemented behavior and its evidence
 
@@ -128,7 +172,7 @@ samples are not a production SLA or evidence for the separate p99 admission gate
 |---|---|
 | Ordered row/queue applications | Non-additive row transformations alongside versioned queues refuse, including retained history from separate releases. The required first delivery may use two ordered migrations with actionable diagnostics; unrestricted simultaneous changes are not required. Queue membership removal/rename and general `IgnoreOld` remain unsupported. |
 | Other durable facilities | Worker migration topology refuses durable caches, email outboxes and SSE facilities; Embedded topology refuses versioned queues. |
-| Operator workflow | Public application verbs are `status`, `install`, `worker`, `contract`, `close-epoch`. Automatic deployment completion and general catch-up remain release blockers. Other operator conveniences above remain roadmap work without blocking this release. `close-epoch --dry-run` is not the general data dry-run. |
+| Operator workflow | Public application verbs are `status`, `install`, `worker`, `catch-up`, `contract`, `close-epoch`. Row catch-up is implemented; automatic deployment completion and queue catch-up remain release blockers. Other operator conveniences above remain roadmap work without blocking this release. `close-epoch --dry-run` is not the general data dry-run. |
 | Source/editor workflow | Native CLI has generation, plan, Contract and source-write recovery; non-mutating previews can run in CI. Editor apply and rebase/prune/repair scaffolding remain follow-up work, not merge blockers. |
 | Staged uniqueness | The specified staging/promotion declaration and per-key promotion guard remain outstanding. Ordinary index execution does not establish that workflow. |
 | Release-scale acceptance | Dedicated pinned read/write p99 measurements and the prescribed large-table/rolling-write workloads remain unfulfilled. The 1,000-extra-row experiment is not the 10M/100M-row gate. |

@@ -454,7 +454,7 @@ let repeated_app () =
  Fun.protect ~finally:(fun()->if Sys.getenv_opt "TESL_KEEP_ROW_RETYPE_PHYSICAL_TEST"=None then remove output)(fun()->
    repeated_export output;
    command(Filename.concat(repository())"runtime/go")(Filename.concat output "postgres.log")
-     (Printf.sprintf "TESL_ROW_REPEATED_RETYPE_PROGRAMS=%s timeout 180s go test -p 1 -race -tags tesl_migration_test -timeout 150s ./teslrt -run '^TestPgRowRepeatedRetypeApp$' -count=1 -v" (Filename.quote output)))
+      (Printf.sprintf "TESL_ROW_REPEATED_RETYPE_PROGRAMS=%s timeout 330s go test -p 1 -race -tags tesl_migration_test -timeout 300s ./teslrt -run '^TestPgRowRepeatedRetype(App|CatchupRestart)$' -count=1 -v" (Filename.quote output)))
 
 let ()=run "physical Retype and WriteBack" ["PostgreSQL",[test_case "logical removal primitive and JSONB old-field compatibility" `Quick legacy_app;
   test_case "unchanged V1/V2 App with distinct JSONB record codecs" `Quick (native_case "record");

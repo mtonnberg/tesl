@@ -30,6 +30,8 @@ func TestSchemaCommandRejectsBadArgumentsBeforeConnection(t *testing.T) {
 		{"--schema", "install"}, {"--schema", "install", "--worker"}, {"--schema", "install", "--worker", ""},
 		{"--schema", "install", "--worker", "--json"}, {"--schema", "install", "--worker", "bad\x00role"},
 		{"--schema", "install", "--worker", "a", "--worker", "b"}, {"--schema", "status", "--worker", "a"},
+		{"--schema", "catch-up", "--force"}, {"--schema", "catch-up", "V2"},
+		{"--schema", "catch-up", "--worker", "worker"}, {"--schema", "catch-up", "--dry-run"},
 	} {
 		var out, diagnostics bytes.Buffer
 		if handled, code := RunSchemaCommand(args, &out, &diagnostics); !handled || code != 2 || out.Len() != 0 || diagnostics.Len() == 0 {
@@ -46,6 +48,10 @@ func TestSchemaCommandRejectsBadArgumentsBeforeConnection(t *testing.T) {
 	command, handled, err = pgParseSchemaCommand([]string{"--schema", "install", "--worker", "worker ' 雪", "--json", "--database", "A.Main"})
 	if err != nil || !handled || command.verb != "install" || command.worker != "worker ' 雪" || !command.json || command.database != "A.Main" {
 		t.Fatalf("installer arguments changed the role identity: %+v %v", command, err)
+	}
+	command, handled, err = pgParseSchemaCommand([]string{"--schema", "catch-up", "--json", "--database", "A.Main"})
+	if err != nil || !handled || command.verb != "catch-up" || !command.json || command.database != "A.Main" || command.force || command.targetVersion != 0 {
+		t.Fatalf("catch-up must select the real compiled target without force: %+v %v", command, err)
 	}
 }
 

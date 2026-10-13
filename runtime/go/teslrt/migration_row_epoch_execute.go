@@ -81,9 +81,14 @@ func pgExecuteRowEpoch(parent context.Context, conn *pgx.Conn, b *pgRowBaseline,
 	ctx, cancel := context.WithTimeout(parent, pgLeaseTimeout())
 	defer cancel()
 	result = pgRowEpochPreview{Version: 1, Kind: "schema-epoch-preview", Database: b.history.Database, ThroughVersion: through, Forced: force, DryRun: dryRun, RecentInstances: []PgMigrationInstanceStatus{}}
-	if through != b.history.CurrentVersion || b.target == nil || b.target.version != through || !pgRowEpochPreserving(b.target) {
+	if b.target == nil || b.target.version != through || !pgRowEpochPreserving(b.target) {
 		return result, fmt.Errorf("close epoch requires the current compiled additive version")
 	}
+	window, err := pgRowExecutionWindow(b, through)
+	if err != nil {
+		return result, err
+	}
+	b = window
 	plans := map[int]*pgRowPhysicalPlan{}
 	for version := 1; version <= through; version++ {
 		plan, err := pgCompiledRowPhysicalPlan(b.database, version)
@@ -157,6 +162,9 @@ func pgExecuteRowEpoch(parent context.Context, conn *pgx.Conn, b *pgRowBaseline,
 				}
 				if state.DatabaseUUID != initial.DatabaseUUID || state.FenceNamespace != initial.FenceNamespace || state.MinVersion != initial.MinVersion {
 					return fmt.Errorf("close epoch admission changed before publication")
+				}
+				if len(result.RecentInstances) > 0 && !force {
+					return fmt.Errorf("close epoch has recent retiring instances; stop them and wait or use --force")
 				}
 				raw, err := pgRowBaselineHex(document)
 				if err != nil {

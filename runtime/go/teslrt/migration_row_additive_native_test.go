@@ -312,6 +312,35 @@ func TestPgRowAdditiveCatchupBootstrapFromLatest(t *testing.T) {
 	}
 }
 
+func TestPgRowAdditiveCatchupClosesHistoricalEpoch(t *testing.T) {
+	for _, fresh := range []bool{false, true} {
+		t.Run(fmt.Sprintf("fresh=%t", fresh), func(t *testing.T) {
+			root := os.Getenv("TESL_ROW_ADDITIVE_PROGRAMS")
+			if root == "" {
+				t.Skip("compiler-generated additive programs required")
+			}
+			var f *pgControlTestFixture
+			if fresh {
+				f, _ = pgNewWorkerTest(t)
+				f.namespace = "notes"
+				if out, err := pgRowAdditiveCommand(f, root, "v3", "--schema", "install", "--worker", f.roles.Worker, "--request", f.roles.Request, "--json").CombinedOutput(); err != nil {
+					t.Fatalf("install latest retained origin: %v %s", err, out)
+				}
+			} else {
+				root, f = pgRowAdditiveInstalled(t)
+			}
+			if out, err := pgRowAdditiveCommand(f, root, "v3", "--schema", "catch-up", "--json").CombinedOutput(); err != nil {
+				t.Fatalf("historical epoch catch-up: %v %s", err, out)
+			}
+			var current, minimum, floor, epochs int
+			var forced bool
+			if err := f.worker.QueryRow(f.ctx, `select current,min_version,compat_floor,(select count(*) from notes.tesl_row_epochs),(select forced from notes.tesl_row_epochs where through_version=2) from notes.tesl_schema_state`).Scan(&current, &minimum, &floor, &epochs, &forced); err != nil || current != 3 || minimum != 2 || floor != 2 || epochs != 1 || forced {
+				t.Fatal("historical epoch lost exact unforced retirement", current, minimum, floor, epochs, forced, err)
+			}
+		})
+	}
+}
+
 func TestPgRowAdditiveCatchupRefusesDifferentRetainedSource(t *testing.T) {
 	root, f := pgRowAdditiveInstalled(t)
 	pgRowAdditiveWorker(t, f, root, "fork-v2")()

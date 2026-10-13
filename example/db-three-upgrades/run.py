@@ -120,7 +120,7 @@ def eventually(check, *, timeout=30):
     raise RuntimeError(f"condition did not become true; last result: {last!r}")
 
 
-def exercise(output, env):
+def exercise(output, env, catchup_from=None):
     for tool in ("initdb", "pg_ctl", "psql"):
         if not shutil.which(tool):
             raise RuntimeError(f"{tool} is required; run inside nix develop")
@@ -193,6 +193,53 @@ def exercise(output, env):
         old, old_port = serve(1)
         assert request(old_port, "POST", "/seed") == "created"
         assert note(old_port)["metadata"] == {"oldText": "kept"}
+        if catchup_from is not None:
+            # Reach a real previously deployed version, then use only the newest
+            # release for all missing conversion/Contract steps.
+            for version in range(2, catchup_from + 1):
+                stop(worker)
+                worker, _ = serve(version, True)
+                stop(old)
+                schema(version, "demo_worker", "contract", f"V{version}")
+                old, old_port = serve(version)
+            before = sql("select row_to_json(s) from notes.tesl_schema_state s")
+            if catchup_from < 3:
+                refused = subprocess.run([str(output / "v4/app"), "--schema", "catch-up", "--json"],
+                                         env=app_env("demo_worker"), text=True, capture_output=True, timeout=60)
+                assert refused.returncode != 0 and "stop those" in refused.stderr, refused
+                assert sql("select row_to_json(s) from notes.tesl_schema_state s") == before
+            if catchup_from == 1:
+                assert request(old_port, "PUT", "/block") == "blocked"
+            stop(old)
+            stop(worker)
+            # Exercise the real recent-instance guard; never edit heartbeat rows.
+            time.sleep(31)
+            if catchup_from == 1:
+                rejected = subprocess.run([str(output / "v4/app"), "--schema", "catch-up", "--json"],
+                                          env=app_env("demo_worker"), text=True, capture_output=True, timeout=90)
+                assert rejected.returncode != 0, rejected
+                assert "reject" in rejected.stderr.lower() or "quarantin" in rejected.stderr.lower(), rejected
+                assert sql("select min_version from notes.tesl_schema_state") == "1"
+                old, old_port = serve(1)
+                assert request(old_port, "PUT", "/repair") == "repaired"
+                stop(old)
+                time.sleep(31)
+            caught_up = json.loads(schema(4, "demo_worker", "catch-up"))
+            assert caught_up["kind"] == "schema-caught-up", caught_up
+            assert caught_up["currentVersion"] == caught_up["binaryVersion"] == 4, caught_up
+            assert caught_up["minVersion"] == 3, caught_up
+            old, old_port = serve(4)
+            row = note(old_port)
+            expected_text = "repaired" if catchup_from == 1 else "kept"
+            assert row["owner"] == "original-owner", row
+            assert row["metadata"]["body"] == expected_text, row
+            assert row["metadata"]["revision"] == 3, row
+            assert "memo" not in row, row
+            receipts = sql("select json_agg(v order by version,step) from notes.tesl_schema_versions v")
+            assert json.loads(schema(4, "demo_worker", "catch-up")) == caught_up
+            assert sql("select json_agg(v order by version,step) from notes.tesl_schema_versions v") == receipts
+            print(f"PASS: latest V4 catches up from V{catchup_from}; retained data, guarded retirement and exact replay", flush=True)
+            return
         for version in (2, 3, 4):
             title_change = version == 4
             prefix = "/title-" if title_change else "/"
@@ -287,6 +334,7 @@ def main():
     parser.add_argument("--output", type=Path, required=True, help="new output directory for source releases, binaries and logs")
     parser.add_argument("--build-only", action="store_true")
     parser.add_argument("--run-built", action="store_true", help="run existing releases in --output without rebuilding")
+    parser.add_argument("--catch-up-only", action="store_true", help="run latest-binary V1/V2/V3 catch-up witnesses only")
     parser.add_argument("--compiler", type=Path, default=Path(os.getenv("TESL_COMPILER", REPO / "compiler/_build/default/bin/main.exe")))
     args = parser.parse_args()
     output = args.output.absolute()
@@ -302,7 +350,10 @@ def main():
         output.mkdir(parents=True)
         build_versions(output, args.compiler.absolute(), env)
     if not args.build_only:
-        exercise(output, env)
+        if not args.catch_up_only:
+            exercise(output, env)
+        for version in (1, 2, 3):
+            exercise(output, env, catchup_from=version)
 
 
 if __name__ == "__main__":

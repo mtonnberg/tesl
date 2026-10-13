@@ -49,11 +49,16 @@ V1 → V2: Retype/WriteBack + Rename; rejection, repair, overlap and Contract pa
 V2 → V3: Retype/WriteBack + Legacy removal; rejection, repair, overlap and Contract passed
 V3 → V4: proof Revalidate; rejection, repair, overlap and Contract passed
 PASS: ordinary V1 → V2 → V3 → V4 mixed non-additive rollout on one PostgreSQL database
+PASS: latest V4 catches up from V1; retained data, guarded retirement and exact replay
+PASS: latest V4 catches up from V2; retained data, guarded retirement and exact replay
+PASS: latest V4 catches up from V3; retained data, guarded retirement and exact replay
 ```
 
 Go, PostgreSQL, Python 3 and the built compiler are required; `nix develop` provides
 the toolchain. To build without a database run, pass `--build-only`. To repeat the
 database run using existing binaries, pass `--run-built` with the same output.
+Add `--catch-up-only` to run just the latest-binary catch-up scenarios. These wait
+for the real 30-second heartbeat expiry after stopping retiring processes.
 
 ## What it verifies
 
@@ -80,6 +85,11 @@ database run using existing binaries, pass `--run-built` with the same output.
     The metadata value and its physical column remain unchanged.
 11. Replays each Contract and restarts its Worker. The final database retains all
     three rows, three distinct upgrade receipts, and admission floors at V4.
+12. On separate retained V1/V2/V3 databases, runs only V4's `--schema catch-up` for
+    the missing steps. It refuses recent retiring instances, resumes after a
+    rejected V1 row is repaired, preserves metadata/ownership, and reuses exact
+    receipts on replay. Intermediate Contracts complete automatically; the final
+    V4 window remains open with minimum admitted version V3.
 
 The HTTP handlers in [app.tesl](app.tesl) are shared across the releases. Schema
 constructors and codecs own their representation. Repairs here are ordinary
@@ -114,6 +124,17 @@ Set `DEMO_HOST`, `DEMO_PORT`, `DEMO_DB`, `DEMO_USER`, `DEMO_OWNER`, `DEMO_WORKER
 `DEMO_REQUEST`, `DEMO_DDL` and `DEMO_HTTP_PORT`. `DEMO_DDL` must use the short-lived
 installer for installation and the Worker login for worker/Contract commands.
 Drain predecessor request processes before each Contract.
+
+For row catch-up after installation, stop incompatible old application/worker
+processes, wait for their last heartbeat to expire, and use Worker credentials:
+
+```sh
+OUTPUT/v4/app --schema catch-up --json
+OUTPUT/v4/app --schema worker --json
+```
+
+The first command completes required intermediate Contracts and exits. The second
+runs the latest Worker's ongoing services. V4's own Contract remains explicit.
 
 The complete example is included in `scripts/run-migration-tests.sh`. For the
 separate initial public queue conversion/repair/retirement rollout, see

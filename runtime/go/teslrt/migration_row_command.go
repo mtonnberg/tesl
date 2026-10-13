@@ -41,10 +41,10 @@ func pgRunRowSchemaCommand(serviceContext context.Context, command pgSchemaComma
 			roles.Worker = command.worker
 		}
 	}
-	if (command.verb == "worker" || command.verb == "contract" || command.verb == "close-epoch") && roles.Request == "" {
+	if (command.verb == "worker" || command.verb == "catch-up" || command.verb == "contract" || command.verb == "close-epoch") && roles.Request == "" {
 		return fmt.Errorf("schema worker requires Worker migration topology")
 	}
-	if command.verb == "install" || command.verb == "worker" || command.verb == "contract" || command.verb == "close-epoch" {
+	if command.verb == "install" || command.verb == "worker" || command.verb == "catch-up" || command.verb == "contract" || command.verb == "close-epoch" {
 		config, err = pgMigrationDDLConfig(database.Config)
 		if err != nil {
 			return err
@@ -52,6 +52,9 @@ func pgRunRowSchemaCommand(serviceContext context.Context, command pgSchemaComma
 	}
 	ctx, cancel := context.WithTimeout(serviceContext, pgLeaseTimeout())
 	defer cancel()
+	if command.verb == "catch-up" {
+		config.RuntimeParams["application_name"] = "tesl-exec:" + UUIDv7()
+	}
 	conn, err := pgx.ConnectConfig(ctx, config)
 	if err != nil {
 		return fmt.Errorf("%v", pgFailure("cannot connect row schema command", err))
@@ -62,6 +65,24 @@ func pgRunRowSchemaCommand(serviceContext context.Context, command pgSchemaComma
 		resultErr = errors.Join(resultErr, conn.Close(cleanup))
 	}()
 	switch command.verb {
+	case "catch-up":
+		cancel()
+		state, err := pgExecuteRowCatchup(serviceContext, conn, config, b, roles)
+		if err != nil {
+			return err
+		}
+		if command.json {
+			return json.NewEncoder(out).Encode(struct {
+				Version        int    `json:"version"`
+				Kind           string `json:"kind"`
+				Database       string `json:"database"`
+				BinaryVersion  int    `json:"binaryVersion"`
+				CurrentVersion int    `json:"currentVersion"`
+				MinVersion     int    `json:"minVersion"`
+			}{1, "schema-caught-up", b.history.Database, b.history.CurrentVersion, state.Current, state.MinVersion})
+		}
+		_, err = fmt.Fprintf(out, "%s: schema caught up to V%d; minimum V%d.\n", b.history.Database, state.Current, state.MinVersion)
+		return err
 	case "install":
 		if b.target != nil && len(b.target.queueConversions) > 0 {
 			if err := pgControlTransaction(ctx, conn, false, func(tx pgx.Tx) error {
