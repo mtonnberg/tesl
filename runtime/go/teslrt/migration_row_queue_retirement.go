@@ -125,7 +125,9 @@ begin
 end`}, {"tesl_row_queue_restamps_valid", "", "boolean", "stable", `
 begin
  return not exists(select 1 from ` + ns + `tesl_row_queue_restamps a
-  where not exists(select 1 from ` + ns + `tesl_row_queue_retirements r where r.version=a.to_version and r.retirement_hash=a.retirement_hash)
+   where (not exists(select 1 from ` + ns + `tesl_row_queue_retirements r where r.version=a.to_version and r.retirement_hash=a.retirement_hash)
+    and not exists(select 1 from ` + ns + `tesl_schema_versions r join ` + ns + `tesl_row_contracts c on c.version=r.version
+     where r.version=a.to_version and r.step='retired' and r.artefact_hash=a.retirement_hash))
    or not exists(select 1 from ` + ns + `tesl_queue_payloads old join ` + ns + `tesl_queue_payloads target
     on target.version=a.to_version and target.queue=old.queue and target.job_type=old.job_type and target.contract=old.contract and target.contract_hash=old.contract_hash
     where old.version=a.from_version and old.queue=a.queue and old.job_type=a.job_type and old.contract_hash=a.contract_hash));

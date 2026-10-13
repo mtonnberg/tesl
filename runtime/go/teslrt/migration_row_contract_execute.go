@@ -323,6 +323,9 @@ func pgExecuteRowContractOn(ctx context.Context, conn *pgx.Conn, settings *pgx.C
 							}
 						}
 						_, err := tx.Exec(ctx, "select "+ns+"tesl_retire_row_window($1,$2,$3,$4,$5,$6)", version, c.hash, pgRowRetirementHash(c), entities, generations, b.history.SourceCompilerABI)
+						if err == nil {
+							migrationBoundary("row-contract-after-retirement-statement")
+						}
 						return err
 					})
 				})

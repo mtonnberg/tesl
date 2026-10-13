@@ -19,7 +19,7 @@ func pgStageRowQueueTarget(ctx context.Context, conn *pgx.Conn, namespace string
 	if err != nil {
 		return err
 	}
-	if plan.namespace != namespace || plan.version < 2 || len(plan.queueConversions) == 0 || len(plan.windows) != 0 || len(plan.retirements) != 0 || plan.requiresContractVersion != 0 {
+	if plan.namespace != namespace || plan.version < 2 || len(plan.queueConversions) == 0 || len(plan.windows) != 0 || len(plan.retirements) != 0 {
 		return fmt.Errorf("queue target staging requires an exact adjacent queue-only physical descriptor")
 	}
 	tx, err := conn.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
@@ -63,7 +63,18 @@ func pgStageRowQueueTarget(ctx context.Context, conn *pgx.Conn, namespace string
 	if err := tx.QueryRow(ctx, "select p.contract,p.contract_hash,p.stored_value_compatibility,r.family from "+ns+"tesl_row_physical p cross join "+ns+"tesl_row_versions r where p.version=$1 and r.version=1", current).Scan(&priorDoc, &priorHash, &compatibility, &family); err != nil {
 		return err
 	}
-	prior, err := pgParseRowPhysicalPlan(hex.EncodeToString(priorDoc), priorHash)
+	var prior *pgRowPhysicalPlan
+	if plan.requiresContractVersion != 0 {
+		if plan.requiresContractVersion != current {
+			return fmt.Errorf("queue target requires its exact adjacent row Contract")
+		}
+		if err := tx.QueryRow(ctx, "select c.settled,c.settled_hash from "+ns+"tesl_row_contracts c join "+ns+"tesl_schema_versions v on v.version=c.version and v.step='contracted' and v.artefact_hash=c.contract_hash where c.version=$1", current).Scan(&priorDoc, &priorHash); err != nil {
+			return fmt.Errorf("queue target requires completed row Contract V%d: %w", current, err)
+		}
+		prior, err = pgParseRowSettledPlan(hex.EncodeToString(priorDoc), priorHash)
+	} else {
+		prior, err = pgParseRowPhysicalPlan(hex.EncodeToString(priorDoc), priorHash)
+	}
 	if err != nil {
 		return err
 	}

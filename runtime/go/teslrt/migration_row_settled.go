@@ -23,7 +23,9 @@ func pgRowSettledMode(ctx context.Context, tx pgx.Tx, database *Database, window
 	if err := tx.QueryRow(ctx, "select "+pgx.Identifier{window.namespace, "tesl_admit"}.Sanitize()+"($1)", window.version).Scan(&floor); err != nil {
 		return false, &pgMigrationAdmissionError{cause: err}
 	}
-	if pgRowEpochPreserving(window) || floor < window.version {
+	// A queue-only Contract changes payload admission, not the row SQL shape.
+	// Its bound physical plan already contains any settled row predecessor.
+	if pgRowEpochPreserving(window) || len(window.queueConversions) > 0 || floor < window.version {
 		return false, nil
 	}
 	settled, err := pgCompiledRowSettledPlan(database, window.version)

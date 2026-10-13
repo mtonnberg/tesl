@@ -28,14 +28,15 @@ preservation and explicit loss policies, `QueueRepair` now supports
 reason for audited discard. Both complete real deployment/retirement witnesses.
 The separate recovery-keyword proposal is superseded, not a release blocker.
 
-**Local validation is complete. The clarified release still requires automatic
-deployment, catch-up and an executable ordered row/queue migration path.**
+**Baseline local validation is complete. The clarified release requires automatic
+deployment, catch-up and an executable ordered row/queue migration path; current
+implementation progress is recorded below.**
 
 **Subsequent release clarification:** automatic production migration and catch-up
 from any earlier supported schema version are required. Two ordered row/queue
-migrations are acceptable with a constructive diagnostic, but the current
-retained-history refusal still needs implementation work to make that sequence
-possible. CI preview is sufficient; editor apply and other operator conveniences
+migrations are acceptable with a constructive diagnostic. At that clarification,
+the retained-history refusal still blocked this sequence; subsequent increments
+below implement it. CI preview is sufficient; editor apply and other operator conveniences
 are not merge blockers. Thus green local CI establishes the implemented scope,
 not completion of the clarified release. The [delivery requirements](dev-docs/migration-delivery-status.md#clarified-release-requirements-maintainer-2026-10-12)
 record the updated acceptance criteria.
@@ -43,9 +44,11 @@ record the updated acceptance criteria.
 **Implementation continuation after `b5cddb9`:** additive catch-up now executes
 missing checked row revisions using the latest Worker, with restart, concurrency,
 source/ABI refusal and index-readiness witnesses. Compatible row/queue compiler
-upgrades still pass. Transforming/queue catch-up and automatic finality remain
-required work. See the delivery status for the targeted evidence; the earlier full
-CI pass is not claimed for this continuation.
+upgrades still pass. Subsequent increments add row-transforming and queue catch-up,
+then the tested ordered row-first / payload-second path with atomic job restamping
+and intermediate finality. Automatic production deployment wiring remains open.
+See the delivery status for current targeted evidence; the earlier full CI pass
+is not claimed for these continuations.
 
 The system now demonstrates genuine repeated deployments, exact immutable history,
 typed conversion and repair, separate operating roles, overlap, retirement and

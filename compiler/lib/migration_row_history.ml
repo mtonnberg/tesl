@@ -77,8 +77,12 @@ let check_internal ~queue_expansion ~schemas ~edges = protect (fun () ->
     | _ -> reject ~code:"MIG001" loc "incomplete row generation history" in
   adjacent 2 schemas edges;
    if queue_expansion then begin
-      if edges=[] || List.exists(fun edge -> D.queue_transforms edge=[] || S.entries(D.coverage edge)<>[])edges then
-        reject ~code:"MIG028" loc "queue physical planning requires consecutive queue-only edges with unchanged entities";
+      List.iter (fun edge ->
+        if D.queue_transforms edge<>[] && S.entries(D.coverage edge)<>[] then
+          reject ~code:"MIG028" loc (Printf.sprintf
+            "V%d changes row entities (%s) and queue payloads (%s) together. Split these into ordered revisions: first the row change with its reviewed Contract, then the queue-payload change with unchanged entities. Run `tesl migrate generate app.tesl --manifest-json` for each revision and generate the row Contract with `tesl migrate contract --version %d app.tesl --manifest-json`. Deploy the latest binary: `app --schema install --worker ROLE --request ROLE` as Installer, then `app --schema catch-up` as Worker; intermediate application images are not required."
+            (D.version edge) (String.concat ", " (List.map fst (S.entries(D.coverage edge))))
+            (String.concat ", " (List.map (fun conversion -> let queue,job=Migration_queue_transform.queue_job conversion in queue ^ "." ^ job) (D.queue_transforms edge))) (D.version edge))) edges;
      let membership inventory=I.queue_contracts inventory |> List.map(fun q ->
        Migration_queue.wire_identity inventory q.I.queue_name,
        List.map(fun p->Migration_queue.wire_identity inventory p.I.payload_name)q.payloads |> List.sort compare) |> List.sort compare in

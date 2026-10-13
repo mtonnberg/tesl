@@ -43,11 +43,13 @@ deletion.
 2. **Migration surface (later):** `jobs:`, `Migrate`, `Rename`, `IgnoreOld`, fixtures,
     the transforming retirement pass that re-encodes payloads.
 
-Current implementation (2026-10-11): fresh format-5 Worker histories support
+Current implementation (2026-10-13): fresh format-5 Worker histories support
 unchanged-payload restamping and consecutive checked `jobs:` transformations,
-business repair, execution-failure recovery and explicit audited discard. They
-retain queue membership and unchanged stored entities. General mixed row/queue
-evolution, membership rename/removal and the schema-level `IgnoreOld` constructor
+business repair, execution-failure recovery and explicit audited discard. Latest-
+binary catch-up also supports ordered row-first / payload-second revisions with
+unchanged queue membership. Each row edge preserves payload contracts; each queue
+edge preserves settled entities. Simultaneous row/payload changes, membership
+rename/removal and the schema-level `IgnoreOld` constructor
 remain open. See [delivery status](../../dev-docs/migration-delivery-status.md),
 [lesson 95](../../example/learn/lesson95-retiring-unchanged-queue-payloads.md) and
 [lesson 96](../../example/learn/lesson96-typed-queue-conversion.md).
@@ -58,8 +60,10 @@ remain open. See [delivery status](../../dev-docs/migration-delivery-status.md),
 are acceptable when row and queue-payload changes cannot share an edge. The
 compiler must explain which changes conflict, how to split/order them and what to
 run next. The sequence must be supported by deployment/catch-up, including retained
-jobs; merely splitting files cannot work around the current retained-row-history
-refusal. Simultaneous unrestricted row/queue transformation is not required for
+jobs. The row-first / payload-second sequence now has a latest-binary PostgreSQL
+witness in `scripts/test-ordered-row-queue.py`; row retirement atomically restamps
+unchanged jobs, and the queue edge requires its settled row Contract. Simultaneous
+unrestricted row/queue transformation is not required for
 this release. See the [release requirements](../../dev-docs/migration-delivery-status.md#clarified-release-requirements-maintainer-2026-10-12).
 
 - Job record types are declared in a schema-kind module (the schema module itself, or

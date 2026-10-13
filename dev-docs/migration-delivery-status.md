@@ -4,7 +4,8 @@
 
 Assessment baseline: `84ef00d`. Requirements were committed in `b5cddb9`;
 additive catch-up was committed in `137ddd1`, row-transforming catch-up in
-`4f6e86e`. Queue catch-up and its targeted verification are recorded below.
+`4f6e86e`, and queue catch-up in `085bf00`. Ordered row/queue composition and its
+targeted verification are recorded below.
 
 ## Delivery contract
 
@@ -13,8 +14,8 @@ with checked row transformations and restricted Worker-topology queue histories.
 **Baseline `84ef00d` passed local authoritative acceptance: 24/24 phases, no skips,
 exit 0.** The catch-up continuations have the targeted evidence below; a fresh full
 gate has not yet been run for these runtime changes. The maintainer's clarified
-release requirements below still require deployment automation, catch-up and
-ordered row/queue composition before release acceptance. Hosted supported-major
+release requirements below still require deployment automation and a fresh full
+acceptance run. Hosted supported-major
 checks also remain open. This document does not waive the
 [normative roadmap's requirements](../roadmap/next/database-migrations.md#target-mechanisms-after-phase-4-authoritative-summary).
 
@@ -29,8 +30,8 @@ this delivery contract. Other missing roadmap requirements remain open work.
 |---|---|
 | CI preview | Required workflow, already available through compiler-owned non-mutating `tesl migrate generate app.tesl --manifest-json`. Editor preview is sufficient; applying edits inside the editor is not a merge blocker. |
 | Automatic production migration | Required. Deploying checked migration history must drive the necessary installation/staging, expansion, backfill/conversion and reviewed retirement steps without manual per-version schema commands. The newest artifact now stages retained queue edges as Installer and executes row/queue catch-up as Worker. Wiring those separately authorized operations into automatic production deployment remains required work. |
-| Catch-up from any earlier supported schema version | Required. A deployment targeting Vn must advance a valid database at Vk through every missing checked step without intermediate application deployments. Additive, row-transforming and supported queue-only payload gaps now execute with the latest artifact. Ordered row/queue transformation histories remain open. |
-| Ordered row/queue changes | Two ordered migrations are acceptable. Simultaneous non-additive row and queue-payload changes in one edge are not required. The ordered sequence must actually work, with a friendly diagnostic explaining conflicting changes, the required split/order and the next commands. Today the retained-history guard still refuses transforming row history in a queue-bearing database, even across separate releases; supporting that sequence remains required work. |
+| Catch-up from any earlier supported schema version | Required. A deployment targeting Vn must advance a valid database at Vk through every missing checked step without intermediate application deployments. Additive, row-transforming, queue-only and the tested ordered row-first / queue-second history now execute with the latest artifact. |
+| Ordered row/queue changes | Two ordered migrations are acceptable. The row-first / queue-payload-second sequence is now implemented and tested with retained jobs, repair and restart. `MIG028` names the conflicting entities/payloads and prescribes the tested split/order and commands. Simultaneous row and payload changes remain refused and are not required for this release. |
 | Other operator/editor conveniences | Dedicated offline application, pruning, rebase/repair scaffolding, grant/deployment-recipe generation, extra quarantine/pause tooling and editor apply are not merge blockers for this release. Named automatic Contract modes are an implementation choice; executing necessary reviewed Contracts automatically is part of the deployment/catch-up requirement. |
 
 **What catch-up must prove.** Keep the exact recorded history and run missing
@@ -196,9 +197,55 @@ Evidence under `.tesl-stuff/`:
 - `queue-catchup-final-analysis.log`: final runtime/migrationtest race tests
   (34.350s / 11.569s), vet, staticcheck, golangci-lint, gosec and Nilaway pass.
 
-This continuation does not implement ordered non-additive row/queue composition
-or automatic production deployment wiring. A fresh full authoritative CI run is
-still outstanding.
+Ordered composition was still missing from the queue-only increment; the
+continuation below supplies that path. Automatic production deployment wiring
+and a fresh full authoritative CI run remain outstanding.
+
+## Ordered row/queue continuation
+
+The compiler now accepts retained row transformations alongside queues when each
+row-transforming edge preserves exact queue membership and payload contracts.
+Payload-changing edges still require unchanged entities. A queue edge immediately
+after a row transform carries an explicit checked row-Contract prerequisite in
+the retained physical descriptor; Installer staging and Worker activation bind
+the settled predecessor, while the queue inventory retains its actual original
+expansion hash. Neither source identity nor database version is fabricated.
+
+Row Contract retirement now verifies unchanged payload contracts, fences old
+writers, checks live claims/quarantine/conversion attempts, and atomically
+restamps retained jobs with the row retirement receipt and admission floor.
+The audit records original payload hashes and claim sequences. An expired old
+claim is released; a surviving current-version claim retains its identity.
+Queue-only retirement does not select a nonexistent row-cleanup Contract for
+ordinary entity reads. Additive epoch closure after completed row/queue edges
+uses their exact retirement receipts and compares only the admitted payload tail.
+
+`scripts/test-ordered-row-queue.py` is a new phase in the shared migration gate.
+It builds public V1–V4 artifacts from guarded compiler previews and exercises:
+
+- V1 → row Retype/WriteBack V2 → queue payload V3 with only the latest binary.
+- Catch-up from already settled V2; an additive V4 tail and epoch closure.
+- Rejected row repair without advancing queue stamps or the admission floor.
+- Live old queue claims, late V1 row inserts and queue enqueue during overlap.
+- Process death after expansion, before the retirement transaction commits, and
+  after it commits; exact receipt replay and retained values survive.
+- Altered restamp audit refusal and actual latest typed row reads/queue handling.
+- A combined-change preview reporting `MIG028`, both conflicting names, the
+  required split/order and actionable source/deployment commands.
+
+Targeted evidence under `.tesl-stuff/`: `ordered-overlap-final.log` passes the
+ordered scenarios and diagnostic; `ordered-regressions.log` passes the full
+Retype/WriteBack suite (272.955s) and additive suite (202.215s);
+`ordered-queue-table-index.log` passes 58 queue source cases (346.811s), table Drop
+(61.807s) and index/cancellation (71.691s). `ordered-compiler-compat.log` passes the
+actual row and queue A/B/C compiler witnesses (697.379s).
+`ordered-analysis-final.log` passes runtime/migrationtest race tests
+(34.769s / 11.623s), vet, staticcheck, golangci-lint, gosec and Nilaway.
+
+This remains the original-V1 owned protocol: changed protected definitions do not
+adopt older development catalogs. Queue membership removal/rename, queue-bearing
+table Drop and simultaneous row/payload transformations remain outside this
+supported sequence. These targeted results are not a fresh full CI pass.
 
 ## Implemented behavior and its evidence
 
@@ -225,9 +272,9 @@ samples are not a production SLA or evidence for the separate p99 admission gate
 
 | Requirement | Current boundary |
 |---|---|
-| Ordered row/queue applications | Non-additive row transformations alongside versioned queues refuse, including retained history from separate releases. The required first delivery may use two ordered migrations with actionable diagnostics; unrestricted simultaneous changes are not required. Queue membership removal/rename and general `IgnoreOld` remain unsupported. |
+| Broader composition | The tested ordered row-first / payload-second sequence is implemented. Simultaneous row/payload changes and queue-bearing table Drop remain refused. Queue membership removal/rename and general `IgnoreOld` remain unsupported. |
 | Other durable facilities | Worker migration topology refuses durable caches, email outboxes and SSE facilities; Embedded topology refuses versioned queues. |
-| Operator workflow | Public application verbs are `status`, `install`, `worker`, `catch-up`, `contract`, `close-epoch`. Row and queue-only catch-up are implemented; automatic deployment completion and ordered row/queue composition remain release blockers. Other operator conveniences above remain roadmap work without blocking this release. `close-epoch --dry-run` is not the general data dry-run. |
+| Operator workflow | Public application verbs are `status`, `install`, `worker`, `catch-up`, `contract`, `close-epoch`. Row, queue and ordered row/queue catch-up are implemented; automatic production deployment wiring remains a release blocker. Other operator conveniences above remain roadmap work without blocking this release. `close-epoch --dry-run` is not the general data dry-run. |
 | Source/editor workflow | Native CLI has generation, plan, Contract and source-write recovery; non-mutating previews can run in CI. Editor apply and rebase/prune/repair scaffolding remain follow-up work, not merge blockers. |
 | Staged uniqueness | The specified staging/promotion declaration and per-key promotion guard remain outstanding. Ordinary index execution does not establish that workflow. |
 | Release-scale acceptance | Dedicated pinned read/write p99 measurements and the prescribed large-table/rolling-write workloads remain unfulfilled. The 1,000-extra-row experiment is not the 10M/100M-row gate. |
@@ -377,7 +424,7 @@ check, never the complete gate.
    refusal/unchanged-state assertions when optimizing.
 4. Preserve the passing authoritative gate and obtain hosted supported-major CI
    results. A failed prefix or isolated retry cannot replace a complete invocation.
-5. Complete the clarified release requirements: automatic deployment, arbitrary
-   version-gap catch-up and the supported ordered row/queue path with constructive
-   diagnostics. Keep the other operator/editor items as nonblocking follow-up;
+5. Wire the separately authorized Installer and Worker steps into automatic
+   production deployment, then run complete acceptance including the new catch-up
+   and ordered row/queue witnesses. Keep other operator/editor items as nonblocking follow-up;
    completing this release still does not close every original roadmap item.

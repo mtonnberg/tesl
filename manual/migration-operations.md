@@ -91,8 +91,31 @@ staged or executable repair authority. Include every needed historical
 Request processes wait for verified readiness. Installation/staging, explicit
 Contract commands remain available, alongside the row catch-up coordinator. The
 runtime does not yet wire the separate Installer and Worker operations into one
-automatic production deployment. Ordered row transformations in queue-bearing
-histories remain unsupported.
+automatic production deployment.
+
+### Ordered row and queue changes
+
+Use separate revisions when changing both stored rows and queue payloads:
+
+1. Author the row change while keeping queue membership and payload contracts
+   unchanged. Generate and review that revision's row Contract.
+2. Freeze it and author the queue-payload change, keeping the settled entities
+   unchanged. Preserve any required `Same` declarations for retained nominal types.
+3. Build the latest artifact with both revisions and the row Contract. Run its
+   `--schema install` as Installer, then `--schema catch-up` as Worker. No
+   intermediate application image is required.
+
+Row retirement preserves unchanged job bytes and records their version restamp
+in the same transaction as the row finality and admission floor. Live old claims
+block that transaction. Rejection or interruption cannot publish a partial
+restamp/retirement. The following queue edge binds the exact completed row
+Contract's settled layout before converting jobs.
+
+`MIG028` names conflicting row entities and queue payloads when they share an
+edge, and gives the split/order and next commands. The executable
+[ordered row/queue witness](../scripts/test-ordered-row-queue.py) covers Retype /
+WriteBack followed by a payload change, old-writer overlap, repair, active claims,
+crash recovery, audit corruption refusal and a subsequent additive epoch.
 
 Contract is the retirement/finalization step: establish final data and queue
 state, fence out retiring versions, then perform the reviewed cleanup. Automatic
@@ -213,9 +236,11 @@ proof; the budget is not hard intrinsic preemption or a memory sandbox.
 
 ## Current scope
 
-Row and queue examples each demonstrate repeated non-additive upgrades. Queue
-histories retain membership and unchanged stored entities; unrestricted mixed
-row/queue evolution, old-catalog adoption, and the general `IgnoreOld` schema-change
+Row and queue examples demonstrate repeated non-additive upgrades, including
+ordered row-first / queue-payload-second changes. A row-transforming edge retains
+identical queue contracts; a payload-changing edge retains settled entities.
+Simultaneous row/payload changes, queue-bearing table Drop, old-catalog adoption,
+and the general `IgnoreOld` schema-change
 constructor remain outside the supported surface. Explicit discard revisions can
 remove malformed old jobs; they do not reconstruct a typed value. Consult the current language spec
 and executable examples rather than contributor milestone history when choosing
@@ -223,7 +248,7 @@ an operation.
 
 Changing a queue job's record is different from changing an entity table. A checked
 `jobs:` migration can change an `InvoiceJob` payload while stored entities remain
-unchanged. Changing an `Order` entity in a queue-bearing database is the current
-composition restriction. It applies to retained history too: two separate
-releases do not yet bypass it. The required release workflow will support that
-ordered split and explain it in diagnostics; it is not an available workaround today.
+unchanged. To change both an `Order` entity and `InvoiceJob`, use the ordered
+workflow above: first the row revision and its Contract, then the payload revision.
+Both can be deployed together in the latest binary; the runtime executes their
+checked steps in order.

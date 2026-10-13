@@ -88,6 +88,7 @@ func pgParseRowPhysicalShape(contract, hash string, settled bool) (*pgRowPhysica
 		valid = valid || (n.list(9) && (n.children[0].isAtom("tesl-retained-physical-version-v3") || n.children[0].isAtom("tesl-retained-physical-version-v4")))
 		valid = valid || (n.list(10) && n.children[0].isAtom("tesl-retained-physical-version-v5"))
 		valid = valid || (n.list(9) && n.children[0].isAtom("tesl-retained-physical-version-v6"))
+		valid = valid || (n.list(10) && n.children[0].isAtom("tesl-retained-physical-version-v7"))
 		if !valid {
 			return nil, fmt.Errorf("invalid retained physical document")
 		}
@@ -124,10 +125,15 @@ func pgParseRowPhysicalShape(contract, hash string, settled bool) (*pgRowPhysica
 		r.fail("invalid physical owner")
 	}
 	retirementFormat := n.children[0].isAtom("tesl-retained-physical-version-v5")
-	queueFormat := n.children[0].isAtom("tesl-retained-physical-version-v6")
+	queueContractFormat := n.children[0].isAtom("tesl-retained-physical-version-v7")
+	queueFormat := queueContractFormat || n.children[0].isAtom("tesl-retained-physical-version-v6")
 	if queueFormat {
 		seen := map[string]bool{}
-		for _, entry := range sequence(n.children[8]) {
+		queueIndex := 8
+		if queueContractFormat {
+			queueIndex = 9
+		}
+		for _, entry := range sequence(n.children[queueIndex]) {
 			if !entry.list(5) {
 				r.fail("invalid physical queue conversion")
 				continue
@@ -150,7 +156,7 @@ func pgParseRowPhysicalShape(contract, hash string, settled bool) (*pgRowPhysica
 		}
 	}
 	legacyFormat := n.children[0].isAtom("tesl-retained-physical-version-v4")
-	requiresContract := n.children[0].isAtom("tesl-retained-physical-version-v3")
+	requiresContract := queueContractFormat || n.children[0].isAtom("tesl-retained-physical-version-v3")
 	prerequisite := pgRowCanonical{}
 	if requiresContract {
 		prerequisite = n.children[8]

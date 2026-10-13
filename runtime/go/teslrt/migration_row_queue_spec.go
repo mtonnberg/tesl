@@ -41,7 +41,7 @@ begin
  end loop;
  if (width=8 and fields[1] not in ('tesl-retained-physical-version-v1','tesl-retained-physical-version-v2')) or
      (width=9 and fields[1] not in ('tesl-retained-physical-version-v3','tesl-retained-physical-version-v4','tesl-retained-physical-version-v6')) or
-    (width=10 and fields[1]<>'tesl-retained-physical-version-v5') or
+     (width=10 and fields[1] not in ('tesl-retained-physical-version-v5','tesl-retained-physical-version-v7')) or
     fields[2]!~'^(Schema\.[A-Z][A-Za-z0-9_]*|[A-Z][A-Za-z0-9_]*Schema)$' or
     pg_catalog.octet_length(fields[3])<1 or pg_catalog.octet_length(fields[3])>63 or
     fields[4]!~'^[1-9][0-9]{0,9}$' or fields[5]!~'^[0-9a-f]{64}$' or fields[6]!~'^[0-9a-f]{64}$' then raise exception 'tesl: invalid physical source header fields'; end if;
@@ -194,7 +194,7 @@ func pgRowQueueVerificationSQL(namespace, version string) string {
  and b.facility_count=original.facility_count and original.facility_count=original.queue_count
  and original.queue_count=(select count(*) from ` + ns + `tesl_queue_contracts where version=1)) then
  raise exception 'tesl: incomplete original row queue baseline'; end if;
- if not exists(select 1 from ` + ns + `tesl_queue_baseline b join ` + ns + `tesl_queue_versions s on s.version=1 and s.inventory_hash=b.inventory_hash
+ if not exists(select 1 from ` + ns + `tesl_queue_baseline b join ` + ns + `tesl_queue_versions baseline_source on baseline_source.version=1 and baseline_source.inventory_hash=b.inventory_hash
  where b.id=1 and b.initial_version=1 and b.inventory_authority='complete' and b.established_by='fresh-install') then
  raise exception 'tesl: queue installation baseline is unknown or incomplete'; end if;
  for n in 1..` + version + ` loop
@@ -228,11 +228,11 @@ func pgRowQueueVerificationSQL(namespace, version string) string {
     raise exception 'tesl: row queue physical source differs'; end if;
    expected_expansion:=physical.contract_hash; expected_artifact:=physical.contract_hash; expected_abi:=physical.compiler_abi;
   end if;
-  if binding.expansion_hash<>expected_expansion or not exists(select 1 from ` + ns + `tesl_schema_expansions e
-   join ` + ns + `tesl_schema_versions s on s.version=e.version and s.step='expanded'
+   if binding.expansion_hash<>expected_expansion or not exists(select 1 from ` + ns + `tesl_schema_expansions e
+    join ` + ns + `tesl_schema_versions expansion_receipt on expansion_receipt.version=e.version and expansion_receipt.step='expanded'
    where e.version=n and e.snapshot_hash=expected_expansion and e.artefact_hash=expected_artifact
     and e.source_abi=expected_abi and e.stored_value_compatibility=compatibility
-    and s.snapshot_hash=e.snapshot_hash and s.artefact_hash=e.artefact_hash and s.source_abi=e.source_abi and s.stored_value_compatibility=e.stored_value_compatibility) then
+     and expansion_receipt.snapshot_hash=e.snapshot_hash and expansion_receipt.artefact_hash=e.artefact_hash and expansion_receipt.source_abi=e.source_abi and expansion_receipt.stored_value_compatibility=e.stored_value_compatibility) then
    raise exception 'tesl: row queue has no exact completed expansion receipt'; end if;
  end loop;
  `

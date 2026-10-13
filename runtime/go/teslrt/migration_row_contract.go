@@ -343,8 +343,8 @@ func pgCompiledRowSettledPlan(database *Database, version int) (*pgRowPhysicalPl
 			return physical.versions[version-1], nil
 		}
 		current := physical.versions[version-1]
-		if pgRowEpochPreserving(current) {
-			// An additive tail is already a complete physical projection. Earlier
+		if pgRowEpochPreserving(current) || len(current.queueConversions) > 0 {
+			// An additive or queue-only tail has a complete row projection. Earlier
 			// transformations still need their exact registered Contracts; durable
 			// completion is independently required by expansion/admission checks.
 			for _, plan := range physical.versions[:version] {

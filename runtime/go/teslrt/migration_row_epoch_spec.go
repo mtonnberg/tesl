@@ -19,11 +19,14 @@ begin
  exists(select 1 from pg_catalog.generate_series(1,through_version) physical_version(value) where not exists(
  select 1 from ` + ns + `tesl_row_physical p join ` + ns + `tesl_schema_versions receipt on receipt.version=p.version and receipt.step='expanded'
  where p.version=physical_version.value and p.contract_hash=physical_hashes[physical_version.value]
- and (p.epoch_preserving or (p.version<=old_min and exists(
+ and (p.epoch_preserving or (p.version<=old_min and (exists(
   select 1 from ` + ns + `tesl_row_contracts c join ` + ns + `tesl_schema_versions done
    on done.version=c.version and done.step='contracted' and done.artefact_hash=c.contract_hash
   where c.version=p.version and c.window_hash=p.contract_hash
-   and (select count(*) from ` + ns + `tesl_row_contract_objects o where o.version=c.version)=c.operation_count))))) or
+    and (select count(*) from ` + ns + `tesl_row_contract_objects o where o.version=c.version)=c.operation_count)
+   or exists(select 1 from ` + ns + `tesl_row_queue_retirements q join ` + ns + `tesl_schema_versions done
+    on done.version=q.version and done.step='contracted' and done.artefact_hash=q.retirement_hash and done.source_abi=q.compiler_abi
+    where q.version=p.version)))))) or
  exists(select 1 from ` + ns + `tesl_row_processing where version>old_min) or
  exists(select 1 from ` + ns + `tesl_row_contracts where version>old_min) or
  exists(select 1 from ` + ns + `tesl_schema_backfill_shards where version>old_min or state<>'final') then
@@ -54,12 +57,27 @@ end`}}
 // rejection or process death rolls back the complete operation. Retiring
 // executions are already fenced; surviving claims keep their attempt identity.
 func pgRowQueueEpochRestampSQL(namespace string) string {
+	return pgRowQueueRestampSQL(namespace, "")
+}
+
+func pgRowQueueUnchangedGuardSQL(namespace, version string) string {
+	ns := quoteIdentifier(namespace) + "."
+	return `if exists(select 1 from ` + ns + `tesl_queue_contracts) and
+ (not ` + ns + `tesl_queue_inventory_preserves(` + ns + `tesl_queue_inventory_json(` + version + `-1),` + ns + `tesl_queue_inventory_json(` + version + `)) or
+  not ` + ns + `tesl_queue_inventory_preserves(` + ns + `tesl_queue_inventory_json(` + version + `),` + ns + `tesl_queue_inventory_json(` + version + `-1))) then
+ raise exception 'tesl: row Contract requires identical queue membership and payload contracts; split row and queue changes into ordered revisions'; end if;`
+}
+
+// The caller owns the retiring writer fences and publishes its exact retirement
+// receipt in this transaction. The optional audit binds adjacent row restamps to
+// that receipt; additive epochs retain their existing complete-prefix document.
+func pgRowQueueRestampSQL(namespace, audit string) string {
 	ns := quoteIdentifier(namespace) + "."
 	return pgRowQueueVerificationSQL(namespace, "through_version") + `
  if exists(select 1 from ` + ns + `tesl_row_versions r where r.version<=through_version and
    r.queue_count<>(select count(*) from ` + ns + `tesl_queue_contracts q where q.version=r.version)) then
    raise exception 'tesl: queue epoch inventory differs from row source'; end if;
- if exists(select 1 from ` + ns + `tesl_queue_payloads p where p.version<through_version and not exists(
+ if exists(select 1 from ` + ns + `tesl_queue_payloads p where p.version>=old_min and p.version<through_version and not exists(
    select 1 from ` + ns + `tesl_queue_payloads target where target.version=through_version and
    target.queue=p.queue and target.job_type=p.job_type and target.contract=p.contract and target.contract_hash=p.contract_hash)) then
    raise exception 'tesl: queue epoch requires identical retained payload contracts'; end if;
@@ -67,7 +85,9 @@ func pgRowQueueEpochRestampSQL(namespace string) string {
  -- job is accounted for. The caller's operation deadline bounds lock waits.
  perform j.id from ` + ns + `tesl_jobs j where j.schema_version<through_version order by j.seq for update;
  if exists(select 1 from ` + ns + `tesl_jobs j where j.schema_version<old_min) then
-   raise exception 'tesl: queue job is already below the admission floor'; end if;
+    raise exception 'tesl: queue job is already below the admission floor'; end if;
+ if exists(select 1 from ` + ns + `tesl_row_queue_conversion_attempts a join ` + ns + `tesl_row_queue_conversion_staging conversion_source on conversion_source.source_digest=a.source_digest where conversion_source.from_version<through_version) then
+    raise exception 'tesl: queue conversion attempts must finish before unchanged-payload retirement'; end if;
  if exists(select 1 from ` + ns + `tesl_jobs j where j.schema_version<through_version and j.status='quarantined') then
    raise exception 'tesl: quarantined queue payload requires typed repair before retirement'; end if;
  if exists(select 1 from ` + ns + `tesl_jobs j where j.schema_version<through_version and j.status in ('processing','dead_processing') and
@@ -76,6 +96,7 @@ func pgRowQueueEpochRestampSQL(namespace string) string {
  if exists(select 1 from ` + ns + `tesl_jobs j where j.schema_version<through_version and j.status in ('processing','dead_processing') and
    j.claimed_by_version<through_version and j.lease_until>pg_catalog.clock_timestamp()) then
    raise exception 'tesl: retiring queue attempts are still leased; stop old workers and retry after their leases expire'; end if;
+ ` + audit + `
  update ` + ns + `tesl_jobs j set schema_version=through_version,
    status=case when j.status='processing' and j.claimed_by_version<through_version then 'pending'
                when j.status='dead_processing' and j.claimed_by_version<through_version then 'dead' else j.status end,

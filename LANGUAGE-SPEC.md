@@ -1155,13 +1155,14 @@ prevents audited job-ID reuse, and grants no bypass of Contract's finality check
 
 `QueueRepair` is contextual
 source syntax, not a runtime value or permission to mutate quarantined jobs.
-Ordinary Go application builds now support consecutive queue-only edges
-with unchanged stored entities and exact retained queue/job membership. The
+Ordinary Go application builds support queue-payload edges with unchanged settled
+entities and exact retained queue/job membership, including an edge after a
+separately authored row transformation and its reviewed Contract. The
 application emits compiler-bound byte adapters and a checked physical transition
 in the queue companion. The initial upgrade requires an expanded V1 predecessor;
 each subsequent upgrade requires its exact fully retired adjacent predecessor.
 the normal Worker command publishes the checked target and runs bounded conversion
-turns. A rejected payload remains quarantined at its original version. Mixed
+turns. A rejected payload remains quarantined at its original version. Simultaneous
 entity/queue changes and queue/job additions or removals on
 this narrowing edge remain refused with MIG028. Additive physical planning does
 not infer conversion authority from a later installation origin. Explicitly
@@ -1174,6 +1175,16 @@ claims and attempts are gone and no retiring instance has reported in the preced
 30 seconds. It drains both source-writer and compatibility domains and atomically
 records finality and both admission floors. Installed repair and retirement replay
 is checked; a new repair cannot be appended after retirement.
+
+For ordered row-first / payload-second revisions, the row edge must preserve
+queue membership and payload contracts. Row retirement restamps unchanged jobs
+atomically with its checked retirement receipt and admission floor, preserving
+payload bytes and refusing live old claims. The following queue edge records the
+exact required row Contract and settled layout. The latest binary can stage all
+retained edges with `--schema install` under Installer credentials and execute
+them with `--schema catch-up` under Worker credentials; intermediate application
+deployments are not required. `MIG028` names simultaneous conflicting edits and
+provides the split/order and commands. Queue-bearing table Drop remains unsupported.
 
 **Internal sparse migration coverage.** Before checking a row function or deriving a
 single adapter, the coverage pass checks the record's coverage against both complete

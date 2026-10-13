@@ -11,20 +11,18 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// Transforming queue payload retirement has a separate protocol. Even an empty job table
-// cannot establish safety: old writers and leased attempts can still publish
-// work, and dead payloads retain their source identity. Refuse by inventory.
-// Purely additive epoch closure uses its own atomic, exact-contract restamping
-// path; this guard still protects row Contracts and compatibility switches.
+// Row retirement may restamp only unchanged queue contracts. The actual job
+// restamp, claim checks and retirement receipt share one fenced SQL transaction.
 func pgCheckRowQueueRetirement(ctx context.Context, query interface {
 	QueryRow(context.Context, string, ...any) pgx.Row
 }, namespace string) error {
-	var queued bool
-	if err := query.QueryRow(ctx, "select exists(select 1 from "+quoteIdentifier(namespace)+".tesl_queue_contracts)").Scan(&queued); err != nil {
+	ns := quoteIdentifier(namespace) + "."
+	var unchanged bool
+	if err := query.QueryRow(ctx, "select not exists(select 1 from "+ns+"tesl_queue_contracts) or (current>=2 and "+ns+"tesl_queue_inventory_preserves("+ns+"tesl_queue_inventory_json(current-1),"+ns+"tesl_queue_inventory_json(current)) and "+ns+"tesl_queue_inventory_preserves("+ns+"tesl_queue_inventory_json(current),"+ns+"tesl_queue_inventory_json(current-1))) from "+ns+"tesl_schema_state where id=1").Scan(&unchanged); err != nil {
 		return err
 	}
-	if queued {
-		return fmt.Errorf("queue-bearing history retirement is not supported")
+	if !unchanged {
+		return fmt.Errorf("row Contract requires identical queue membership and payload contracts; split row and queue changes into ordered revisions")
 	}
 	return nil
 }
@@ -67,11 +65,11 @@ func pgReadRowEpochRetirements(ctx context.Context, tx pgx.Tx, b *pgRowBaseline,
 	if err := tx.QueryRow(ctx, "select database_uuid::text,fence_ns from "+ns+"tesl_schema_meta where id=1").Scan(&state.DatabaseUUID, &state.FenceNamespace); err != nil {
 		return nil, err
 	}
-	// Gaps between additive epochs are permitted only for exact completed row
-	// Contracts. The enclosing history verifier independently checks their full
+	// Gaps between additive epochs require exact completed row or queue
+	// retirements. The enclosing history verifier independently checks their full
 	// source, object prefix, settled catalog and lifecycle provenance.
 	closed := map[int]bool{}
-	contractRows, err := tx.Query(ctx, "select c.version,c.window_hash from "+ns+"tesl_row_contracts c join "+ns+"tesl_schema_versions v on v.version=c.version and v.step='contracted' and v.artefact_hash=c.contract_hash")
+	contractRows, err := tx.Query(ctx, "select c.version,c.window_hash from "+ns+"tesl_row_contracts c join "+ns+"tesl_schema_versions v on v.version=c.version and v.step='contracted' and v.artefact_hash=c.contract_hash union all select q.version,p.contract_hash from "+ns+"tesl_row_queue_retirements q join "+ns+"tesl_row_physical p on p.version=q.version join "+ns+"tesl_schema_versions v on v.version=q.version and v.step='contracted' and v.artefact_hash=q.retirement_hash and v.source_abi=q.compiler_abi")
 	if err != nil {
 		return nil, err
 	}

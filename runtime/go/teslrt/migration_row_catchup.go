@@ -61,11 +61,11 @@ func pgStageRetainedQueueBatch(ctx context.Context, conn *pgx.Conn, b *pgRowBase
 		return err
 	}
 	plan := window.target
-	previous, err := pgCompiledRowPhysicalPlan(b.database, plan.version-1)
+	previous, err := pgCompiledRowPredecessorPlan(b.database, plan.version)
 	if err != nil {
 		return err
 	}
-	if len(plan.queueConversions) == 0 || len(plan.windows) != 0 || len(plan.retirements) != 0 || plan.requiresContractVersion != 0 || !reflect.DeepEqual(previous.entities, plan.entities) {
+	if len(plan.queueConversions) == 0 || len(plan.windows) != 0 || len(plan.retirements) != 0 || !reflect.DeepEqual(previous.entities, plan.entities) {
 		return fmt.Errorf("retained queue staging requires unchanged entity storage")
 	}
 	tx, err := conn.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
@@ -98,18 +98,30 @@ func pgStageRetainedQueueBatch(ctx context.Context, conn *pgx.Conn, b *pgRowBase
 		return fmt.Errorf("retained queue staging admission changed; retry installation")
 	}
 	priorHash := previous.hash
-	expansion := priorHash
+	physical, err := pgCompiledRowPhysicalPlan(b.database, previous.version)
+	if err != nil {
+		return err
+	}
+	expansion := physical.hash
 	if previous.version == 1 {
 		expansion = b.catalogHash
 	}
 	if previous.version <= max(1, current) {
 		// A completed predecessor may have been produced by a compatible older
 		// compiler. Bind its actual immutable descriptor, never rewrite its ABI.
-		if err := tx.QueryRow(ctx, "select contract_hash from "+ns+"tesl_row_physical where version=$1", previous.version).Scan(&priorHash); err != nil {
+		var installed string
+		if err := tx.QueryRow(ctx, "select contract_hash from "+ns+"tesl_row_physical where version=$1", previous.version).Scan(&installed); err != nil {
 			return err
 		}
 		if previous.version > 1 {
-			expansion = priorHash
+			expansion = installed
+		}
+		if plan.requiresContractVersion == 0 {
+			priorHash = installed
+		} else if pgRowHasStep(state, previous.version, "contracted") {
+			if err := tx.QueryRow(ctx, "select settled_hash from "+ns+"tesl_row_contracts where version=$1", previous.version).Scan(&priorHash); err != nil {
+				return err
+			}
 		}
 	}
 	for _, digest := range digests {

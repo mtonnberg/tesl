@@ -16787,7 +16787,7 @@ let project_entity_bindings (modules : module_form list) =
     | _ -> ()) m.decls) modules;
   if !errors = [] then Ok !bindings else Error (List.rev !errors)
 
-let compile_project ?(mode=Release) ?(row_storage=false) ?(row_physical=false) ?(row_catalog_only=false) ?row_source ?fixture_graph ?(migration_fixtures=[]) ?(queue_conversions=[]) ?(migration_families=[]) ?(migration_queues=[]) ?(queue_codec_records=[]) ~(entry : module_form) (modules : module_form list) =
+let compile_project ?(mode=Release) ?(row_storage=false) ?(row_physical=false) ?row_source ?fixture_graph ?(migration_fixtures=[]) ?(queue_conversions=[]) ?(migration_families=[]) ?(migration_queues=[]) ?(queue_codec_records=[]) ~(entry : module_form) (modules : module_form list) =
 let queue_conversion_artifacts graph exports conversions =
  let module Q=Migration_queue_transform in
  let loc=Location.dummy_loc entry.source_file in
@@ -16998,11 +16998,6 @@ let compiled_row_artifacts ~entry ~modules:_ ~exports source =
   match Migration_retained_storage_json.to_json ~quote:Migration_row_companion.quote source with
   | Ok json -> Some json
   | Error errors -> unsupported loc "%s" (String.concat "\n" (List.map (fun (e:Migration_sparse.error) -> e.message) errors)) in
- List.iter (fun (database:P.database) ->
-  if not row_catalog_only && List.exists (fun (version:P.queue_version) -> version.contracts<>[]) database.queue_versions then
-   match List.assoc_opt database.identity (P.row_histories source) with
-   | Some history when RH.bindings history=[] -> ()
-   | _ -> unsupported loc "queue-bearing row history currently requires additive entity migrations; queue retirement is not implemented") (P.databases p);
  let bridges=ref [] and owners=ref [] in
  let callbacks=List.filter_map (fun (database:P.database) ->
   let module_name,name=split database.identity in

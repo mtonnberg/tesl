@@ -2714,7 +2714,7 @@ let compile_queue_conversion_artifacts checked =
   | Error errors -> GoFailure(Migration_declaration.diagnostics_of_errors errors)
 
 (** Checked source/typed-registration artifact seam.  The public compiler uses
-    the same path automatically for versioned entity-only PostgreSQL histories;
+    the same path automatically for versioned PostgreSQL row/queue histories;
     the
     catalog-only mode remains reserved for compiler/runtime integration tests. *)
 let compile_row_captured_artifacts ~catalog_only ?(mode=Emit_go.Release) ?(storage=false) ?(physical=false) filename source =
@@ -2732,7 +2732,7 @@ let compile_row_captured_artifacts ~catalog_only ?(mode=Emit_go.Release) ?(stora
     let modules=Go_graph_lowering.modules lowering and entry=Go_graph_lowering.entry lowering in
     let p=Migration_program.source_program history in
     let migration_families=List.map (fun (d:Migration_program.database) -> d.identity,d.family) (Migration_program.databases p) in
-    match Emit_go.compile_project ~mode ~row_catalog_only:catalog_only ~row_physical:physical ~row_storage:(storage || physical) ~row_source:history ~migration_families
+    match Emit_go.compile_project ~mode ~row_physical:physical ~row_storage:(storage || physical) ~row_source:history ~migration_families
       ~migration_queues:(Migration_program.queue_bindings p)
       ~queue_codec_records:(Migration_program.queue_codec_records p) ~entry modules with
     | Ok artifacts -> GoSuccess (if catalog_only then List.filter (fun (artifact:Emit_go.artifact) -> not (String.starts_with ~prefix:"cmd/" artifact.path)) artifacts else artifacts)
@@ -2743,8 +2743,8 @@ let compile_row_source_artifacts ?mode ?storage ?physical filename source =
  compile_row_captured_artifacts ~catalog_only:false ?mode ?storage ?physical filename source
 
 (* Internal installer/catalog tests only. It shares the exact capture/checking
-   path and emits no command entry point. Ordinary row App emission retains its
-   queue capability refusal. No CLI flag selects this route. *)
+   path and emits no command entry point. Ordinary App emission supports ordered
+   row/queue edges with their checked retirement. No CLI flag selects this route. *)
 let compile_row_catalog_artifacts filename source =
  compile_row_captured_artifacts ~catalog_only:true ~storage:true ~physical:true filename source
 

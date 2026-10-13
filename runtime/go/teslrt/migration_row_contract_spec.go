@@ -6,7 +6,7 @@ func pgRowContractFunctions(namespace string) []pgMigrationControlFunction {
 		{"tesl_register_row_contract", "v integer, prior text, doc bytea, digest text, window_hash text, settled_doc bytea, settled_digest text, ops integer, preparations integer, abi text", "void", "volatile", `
 declare r ` + ns + `tesl_row_contracts%rowtype; s ` + ns + `tesl_schema_state%rowtype; previous text;
 begin
- if exists(select 1 from ` + ns + `tesl_queue_contracts) then raise exception 'tesl: queue-bearing history retirement is not supported'; end if;
+ ` + pgRowQueueUnchangedGuardSQL(namespace, "v") + `
  if v is null or v<2 or doc is null or digest is null or digest !~ '^[0-9a-f]{64}$' or
  pg_catalog.encode(pg_catalog.sha256(doc),'hex') is distinct from digest or settled_doc is null or
  settled_digest is null or settled_digest !~ '^[0-9a-f]{64}$' or pg_catalog.encode(pg_catalog.sha256(settled_doc),'hex') is distinct from settled_digest or
@@ -14,7 +14,7 @@ begin
  raise exception 'tesl: invalid checked Contract intent'; end if;
  select * into s from ` + ns + `tesl_schema_state where id=1 for update;
  -- Recheck after the state lock serializes concurrent queue registration.
- if exists(select 1 from ` + ns + `tesl_queue_contracts) then raise exception 'tesl: queue-bearing history retirement is not supported'; end if;
+ ` + pgRowQueueUnchangedGuardSQL(namespace, "v") + `
  if not found or s.current<v or s.min_version>v then raise exception 'tesl: Contract target is not admitted'; end if;
  if not exists(select 1 from ` + ns + `tesl_row_physical p where p.version=v and p.contract_hash=window_hash) then
  raise exception 'tesl: Contract window differs from installed manifest'; end if;
@@ -28,12 +28,13 @@ begin
  r.operation_count is distinct from ops or r.preparation_count is distinct from preparations then raise exception 'tesl: immutable Contract intent differs'; end if;
 end`},
 		{"tesl_retire_row_window", "v integer, digest text, retirement text, entities text[], generations smallint[], executor_abi text", "void", "volatile", `
-declare s ` + ns + `tesl_schema_state%rowtype; c ` + ns + `tesl_row_contracts%rowtype; compatibility text; fence integer; old integer; i integer; table_retirement boolean;
+declare s ` + ns + `tesl_schema_state%rowtype; c ` + ns + `tesl_row_contracts%rowtype; fence integer; old integer; i integer; table_retirement boolean;
+ old_min integer; through_version integer; ` + pgRowQueueVerificationDeclarations(namespace) + `
 begin
- if exists(select 1 from ` + ns + `tesl_queue_contracts) then raise exception 'tesl: queue-bearing history retirement is not supported'; end if;
+ ` + pgRowQueueUnchangedGuardSQL(namespace, "v") + `
  select * into s from ` + ns + `tesl_schema_state where id=1 for update;
  -- Recheck after the state lock serializes concurrent queue registration.
- if exists(select 1 from ` + ns + `tesl_queue_contracts) then raise exception 'tesl: queue-bearing history retirement is not supported'; end if;
+ ` + pgRowQueueUnchangedGuardSQL(namespace, "v") + `
  select * into c from ` + ns + `tesl_row_contracts where version=v;
  if not found or c.contract_hash is distinct from digest or retirement is null or retirement !~ '^[0-9a-f]{64}$' or
  executor_abi is null or executor_abi !~ '^tesl-source-abi-v1:[0-9a-f]{64}$' or
@@ -43,8 +44,8 @@ begin
   (select contract from ` + ns + `tesl_row_physical where version=v),c.settled,
   (select coalesce((select previous.settled from ` + ns + `tesl_row_contracts previous
    where previous.version=v-1 and exists(select 1 from ` + ns + `tesl_schema_versions receipt
-    where receipt.version=previous.version and receipt.step='contracted' and receipt.artefact_hash=previous.contract_hash)),physical.contract)
-   from ` + ns + `tesl_row_physical physical where physical.version=v-1),v);
+     where receipt.version=previous.version and receipt.step='contracted' and receipt.artefact_hash=previous.contract_hash)),prior_physical.contract)
+    from ` + ns + `tesl_row_physical prior_physical where prior_physical.version=v-1),v);
  if pg_catalog.cardinality(entities)=0 then
   if table_retirement is distinct from true or c.operation_count<>1 or c.preparation_count<>0 then raise exception 'tesl: empty final inventory requires exact pure table Contract'; end if;
  elsif table_retirement then raise exception 'tesl: table Contract cannot fabricate row finality'; end if;
@@ -59,6 +60,14 @@ begin
  and classid=fence::oid and objid=old::oid and objsubid=2 and mode='ExclusiveLock') then
  raise exception 'tesl: retirement lacks exclusive retiring writer fence'; end if;
  end loop;
+ old_min:=s.min_version; through_version:=v;
+ ` + pgRowQueueRestampSQL(namespace, `
+ insert into `+ns+`tesl_row_queue_restamps(job_id,from_version,to_version,queue,job_type,contract_hash,payload_hash,retirement_hash,claim_seq)
+ select j.id,j.schema_version,v,j.queue,j.job_type,p.contract_hash,
+  pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(j.payload::text,'UTF8')),'hex'),retirement,j.claim_seq
+ from `+ns+`tesl_jobs j join `+ns+`tesl_queue_payloads p on p.version=j.schema_version and p.queue=j.queue and p.job_type=j.job_type
+ where j.schema_version<v;
+ `) + `
  for i in 1..pg_catalog.cardinality(entities) loop
  if entities[i] is null or generations[i] is null or generations[i]<2 or
  not exists(select 1 from ` + ns + `tesl_row_finality where entity=entities[i] and generation=generations[i]-1) or
@@ -76,10 +85,10 @@ end`},
 		{"tesl_begin_row_contract", "v integer, digest text", "void", "volatile", `
 declare s ` + ns + `tesl_schema_state%rowtype; c ` + ns + `tesl_row_contracts%rowtype; fence integer; compatibility text;
 begin
- if exists(select 1 from ` + ns + `tesl_queue_contracts) then raise exception 'tesl: queue-bearing history retirement is not supported'; end if;
+ ` + pgRowQueueUnchangedGuardSQL(namespace, "v") + `
  select * into s from ` + ns + `tesl_schema_state where id=1 for update;
  -- Recheck after the state lock serializes concurrent queue registration.
- if exists(select 1 from ` + ns + `tesl_queue_contracts) then raise exception 'tesl: queue-bearing history retirement is not supported'; end if;
+ ` + pgRowQueueUnchangedGuardSQL(namespace, "v") + `
  select * into c from ` + ns + `tesl_row_contracts where version=v;
  if not found or c.contract_hash is distinct from digest or s.min_version<v or
  not exists(select 1 from ` + ns + `tesl_schema_versions where version=v and step='retired') then
