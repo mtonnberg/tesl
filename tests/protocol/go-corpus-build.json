@@ -1,15 +1,16 @@
 {
   "version": 1,
   "scope": ["example/**/*.tesl", "tests/**/*.tesl", "templates/**/*.tesl"],
-  "expected_count": 268,
+  "expected_count": 272,
   "expected_by_root": {
-    "example": 187,
+    "example": 191,
     "tests": 79,
     "templates": 2
   },
   "assembled_examples": {
     "example/db-three-upgrades": 8,
-    "example/queue-three-upgrades": 5
+    "example/queue-three-upgrades": 5,
+    "example/kubernetes-rolling": 4
   },
   "owner": "Go compiler and generated-module build gate",
   "evidence": "scripts/run-go-corpus-build.sh",

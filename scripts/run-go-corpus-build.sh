@@ -42,7 +42,7 @@ done
 # These tracked files are release-recipe inputs, not independent compilation
 # units: transition bodies acquire canonical paths and frozen predecessors only
 # through the guarded generator. Count all inputs, then build every release below.
-assembled=(example/db-three-upgrades example/queue-three-upgrades)
+assembled=(example/db-three-upgrades example/queue-three-upgrades example/kubernetes-rolling)
 for project in "${assembled[@]}"; do
   actual=0
   for source in "${sources[@]}"; do [[ $source == "$project/"* ]] && actual=$((actual + 1)); done
@@ -72,7 +72,7 @@ for source in "${sources[@]}"; do
   if [[ $mode == --run-examples && $source != example/* ]]; then continue; fi
   selected_count=$((selected_count + 1))
   case "$source" in
-    example/db-three-upgrades/*|example/queue-three-upgrades/*) ;;
+    example/db-three-upgrades/*|example/queue-three-upgrades/*|example/kubernetes-rolling/*) ;;
     *) standalone+=("$source") ;;
   esac
 done
@@ -102,7 +102,12 @@ printf '%s\0' "${outputs[@]}" | xargs -0 -n1 -P "$jobs" bash -c '
 ' "$mode"
 
 for project in "${assembled[@]}"; do
-  python3 "$repo_root/$project/run.py" --build-only --output "$output_root/${project##*/}"
+  case "$project" in
+    example/kubernetes-rolling)
+      python3 "$repo_root/$project/build.py" --compiler "$compiler" --output "$output_root/${project##*/}"
+      ;;
+    *) python3 "$repo_root/$project/run.py" --build-only --output "$output_root/${project##*/}" ;;
+  esac
 done
 
 printf 'Go corpus OK (%s tracked sources checked; %s standalone modules and %s assembled release histories build with their tests; jobs=%s)\n' \

@@ -127,6 +127,19 @@ or retry. This is a drained rollout; it consumes all supported intermediate
 revisions from the latest image. See [migration operations](migration-operations.md)
 for source previews, repair policies and exact role requirements.
 
+## Local Kubernetes rolling example
+
+For an actual local Helm/OpenTofu rollout with old/new pod overlap, run the
+[kind rolling-migration example](../example/kubernetes-rolling/README.md). It uses
+separate ordered releases: Installer staging and a ready schema worker first,
+application rolling update second, then a retirement Job. The Request pods start
+normally; schema Jobs/workers use the schema flags.
+
+The example continuously checks database-backed HTTP reads/writes and queue
+submission, records Ready-pod overlap, and verifies retained rows and final job
+results. This demonstrates observed availability for compatible adjacent changes.
+The Compose recipe above instead uses a drained rollout.
+
 ## Generate OpenAPI for security scanning
 
 Before deploying to staging, generate a checked specification for the server being deployed:

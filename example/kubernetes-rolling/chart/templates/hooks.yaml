@@ -1,0 +1,53 @@
+{{- if or (eq .Values.mode "migrator") (eq .Values.mode "app") }}
+{{- $install := eq .Values.mode "migrator" }}
+{{- $hook := ternary "pre-install,pre-upgrade" "post-install,post-upgrade" $install }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ .Release.Name }}-schema-hook
+  annotations:
+    helm.sh/hook: {{ $hook | quote }}
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+type: Opaque
+stringData:
+  {{- include "demo.env" (dict "root" . "role" (ternary "installer" "worker" $install)) | nindent 2 }}
+  {{- if not $install }}
+  TESL_SCHEMA_INSTALLER_DSN: {{ printf "postgres://postgres:%s@%s:5432/%s?sslmode=disable" (.Values.database.installerPassword | urlquery) .Values.database.host .Values.database.name | quote }}
+  {{- end }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Release.Name }}-schema-hook
+  annotations:
+    helm.sh/hook: {{ $hook | quote }}
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 540
+  template:
+    spec:
+      automountServiceAccountToken: false
+      restartPolicy: Never
+      containers:
+        - name: schema
+          image: {{ .Values.image | quote }}
+          imagePullPolicy: IfNotPresent
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+          command: [/app]
+          {{- if $install }}
+          args: [--schema, install, --worker, demo_worker, --request, demo_request, --json]
+          {{- else }}
+          args: [--schema, deploy, --json]
+          {{- end }}
+          envFrom:
+            - secretRef:
+                name: {{ .Release.Name }}-schema-hook
+{{- end }}

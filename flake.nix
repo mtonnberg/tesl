@@ -258,6 +258,11 @@
         # ── Dev shell ─────────────────────────────────────────────────────────
         # `nix develop` gives the same workflow as the legacy `nix-shell`,
         # while the shellHook retains compiler auto-build logic.
+        devShells.kubernetes = pkgs.mkShell {
+          inputsFrom = [ self.devShells.${system}.default ];
+          packages = with pkgs; [ kind kubectl kubernetes-helm opentofu docker-client ];
+        };
+
         devShells.default = pkgs.mkShell {
           packages = with pkgs; [
             tesl-cli-dev
