@@ -18,7 +18,7 @@ func pgCheckRowQueueRetirement(ctx context.Context, query interface {
 }, namespace string) error {
 	ns := quoteIdentifier(namespace) + "."
 	var unchanged bool
-	if err := query.QueryRow(ctx, "select not exists(select 1 from "+ns+"tesl_queue_contracts) or (current>=2 and "+ns+"tesl_queue_inventory_preserves("+ns+"tesl_queue_inventory_json(current-1),"+ns+"tesl_queue_inventory_json(current)) and "+ns+"tesl_queue_inventory_preserves("+ns+"tesl_queue_inventory_json(current),"+ns+"tesl_queue_inventory_json(current-1))) from "+ns+"tesl_schema_state where id=1").Scan(&unchanged); err != nil {
+	if err := query.QueryRow(ctx, "select case when not exists(select 1 from "+ns+"tesl_queue_contracts) then true when current<2 then false else "+ns+"tesl_queue_inventory_preserves("+ns+"tesl_queue_inventory_json(current-1),"+ns+"tesl_queue_inventory_json(current)) and "+ns+"tesl_queue_inventory_preserves("+ns+"tesl_queue_inventory_json(current),"+ns+"tesl_queue_inventory_json(current-1)) end from "+ns+"tesl_schema_state where id=1").Scan(&unchanged); err != nil {
 		return err
 	}
 	if !unchanged {

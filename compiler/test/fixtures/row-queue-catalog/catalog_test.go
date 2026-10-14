@@ -363,12 +363,17 @@ func rowQueueRetirementRefuses(t *testing.T, ctx context.Context, observer, work
 		"select todo.tesl_begin_row_contract(null,null)",
 		"select todo.tesl_register_row_contract(null,null,null,null,null,null,null,null,null,null)",
 	} {
-		if _, err := worker.Exec(ctx, sql); err == nil || !strings.Contains(err.Error(), "queue-bearing history retirement is not supported") {
+		if _, err := worker.Exec(ctx, sql); err == nil || !strings.Contains(err.Error(), "invalid queue-bearing row Contract target") {
 			t.Fatalf("V%d queue retirement guard: %v", version, err)
 		}
 	}
-	if err := teslrt.TeslTestRowQueueRetirementGuard(ctx, worker); err == nil || !strings.Contains(err.Error(), "queue-bearing history retirement is not supported") {
-		t.Fatalf("Go queue retirement guard: %v", err)
+	err := teslrt.TeslTestRowQueueRetirementGuard(ctx, worker)
+	if version == 1 {
+		if err == nil || !strings.Contains(err.Error(), "row Contract requires identical queue membership and payload contracts") {
+			t.Fatalf("V1 has no adjacent row retirement target: %v", err)
+		}
+	} else if err != nil {
+		t.Fatalf("unchanged queue contracts must permit checked row retirement: %v", err)
 	}
 	if version == 2 {
 		for _, force := range []bool{false, true} {

@@ -62,10 +62,12 @@ func pgRowQueueEpochRestampSQL(namespace string) string {
 
 func pgRowQueueUnchangedGuardSQL(namespace, version string) string {
 	ns := quoteIdentifier(namespace) + "."
-	return `if exists(select 1 from ` + ns + `tesl_queue_contracts) and
- (not ` + ns + `tesl_queue_inventory_preserves(` + ns + `tesl_queue_inventory_json(` + version + `-1),` + ns + `tesl_queue_inventory_json(` + version + `)) or
+	return `if exists(select 1 from ` + ns + `tesl_queue_contracts) then
+ if ` + version + ` is null or ` + version + `<2 or ` + version + `>2147483646 then raise exception 'tesl: invalid queue-bearing row Contract target'; end if;
+ if (not ` + ns + `tesl_queue_inventory_preserves(` + ns + `tesl_queue_inventory_json(` + version + `-1),` + ns + `tesl_queue_inventory_json(` + version + `)) or
   not ` + ns + `tesl_queue_inventory_preserves(` + ns + `tesl_queue_inventory_json(` + version + `),` + ns + `tesl_queue_inventory_json(` + version + `-1))) then
- raise exception 'tesl: row Contract requires identical queue membership and payload contracts; split row and queue changes into ordered revisions'; end if;`
+ raise exception 'tesl: row Contract requires identical queue membership and payload contracts; split row and queue changes into ordered revisions'; end if;
+ end if;`
 }
 
 // The caller owns the retiring writer fences and publishes its exact retirement
