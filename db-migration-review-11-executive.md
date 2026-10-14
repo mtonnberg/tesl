@@ -48,8 +48,9 @@ upgrades still pass. Subsequent increments add row-transforming and queue catch-
 then the tested ordered row-first / payload-second path with atomic job restamping
 and intermediate finality. `--schema deploy` and a gated Compose rollout now wire
 the separate Installer and Worker phases into production deployment.
-See the delivery status for current targeted evidence; the earlier full CI pass
-is not claimed for these continuations.
+The complete local gate now passes at `1ddc8a6`: 24/24 phases, no skips, exit 0,
+including all 49 migration phases in the same run. See the delivery status for
+the evidence and remaining hosted-matrix/performance requirements.
 
 The system now demonstrates genuine repeated deployments, exact immutable history,
 typed conversion and repair, separate operating roles, overlap, retirement and

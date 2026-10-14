@@ -2,7 +2,8 @@
 
 > Audience: contributors reviewing the migration PR and its release evidence.
 
-Assessment baseline: `84ef00d`. Requirements were committed in `b5cddb9`;
+Current full-gate baseline: `1ddc8a6` (2026-10-14). Earlier baseline: `84ef00d`.
+Requirements were committed in `b5cddb9`;
 additive catch-up was committed in `137ddd1`, row-transforming catch-up in
 `4f6e86e`, queue catch-up in `085bf00`, and ordered composition in `99b869f`.
 Automatic deployment wiring and its targeted verification are recorded below.
@@ -11,12 +12,11 @@ Automatic deployment wiring and its targeted verification are recorded below.
 
 The implemented surface supports **original-V1, fresh-install PostgreSQL histories**
 with checked row transformations and restricted Worker-topology queue histories.
-**Baseline `84ef00d` passed local authoritative acceptance: 24/24 phases, no skips,
-exit 0.** The catch-up continuations have the targeted evidence below; a fresh full
-gate has not yet been run for these runtime changes. The maintainer's clarified
-release requirements below now have implementation witnesses, including a finite
-deployment job and gated rollout. A fresh full acceptance run and hosted supported-major
-checks also remain open. This document does not waive the
+**Baseline `1ddc8a6` passed the complete local authoritative gate: 24/24 phases,
+no skips, exit 0, including all 49 migration phases in that same invocation.**
+This covers additive, transforming, queue and ordered catch-up, the finite
+deployment job, and gated rollout wiring. Hosted supported-major results and
+the separate pinned performance requirements remain open. This document does not waive the
 [normative roadmap's requirements](../roadmap/next/database-migrations.md#target-mechanisms-after-phase-4-authoritative-summary).
 
 The maintainer explicitly accepted fresh-catalog-first development. Missing or
@@ -29,7 +29,7 @@ this delivery contract. Other missing roadmap requirements remain open work.
 | Requirement | Release decision and present state |
 |---|---|
 | CI preview | Required workflow, already available through compiler-owned non-mutating `tesl migrate generate app.tesl --manifest-json`. Editor preview is sufficient; applying edits inside the editor is not a merge blocker. |
-| Automatic production migration | Required. `app --schema deploy` now installs/stages as Installer, closes that connection, catches up as Worker and completes reviewed target finality. A Compose rollout stops old services and gates new service startup on the finite job's successful exit. No manual per-version commands or intermediate images are needed. Full acceptance remains to be rerun. |
+| Automatic production migration | Required and included in the passing local full gate. `app --schema deploy` installs/stages as Installer, closes that connection, catches up as Worker and completes reviewed target finality. A Compose rollout stops old services and gates new service startup on the finite job's successful exit. No manual per-version commands or intermediate images are needed. |
 | Catch-up from any earlier supported schema version | Required. A deployment targeting Vn must advance a valid database at Vk through every missing checked step without intermediate application deployments. Additive, row-transforming, queue-only and the tested ordered row-first / queue-second history now execute with the latest artifact. |
 | Ordered row/queue changes | Two ordered migrations are acceptable. The row-first / queue-payload-second sequence is now implemented and tested with retained jobs, repair and restart. `MIG028` names the conflicting entities/payloads and prescribes the tested split/order and commands. Simultaneous row and payload changes remain refused and are not required for this release. |
 | Other operator/editor conveniences | Dedicated offline application, pruning, rebase/repair scaffolding, grant/deployment-recipe generation, extra quarantine/pause tooling and editor apply are not merge blockers for this release. Named automatic Contract modes are an implementation choice; executing necessary reviewed Contracts automatically is part of the deployment/catch-up requirement. |
@@ -198,8 +198,8 @@ Evidence under `.tesl-stuff/`:
   (34.350s / 11.569s), vet, staticcheck, golangci-lint, gosec and Nilaway pass.
 
 Ordered composition was still missing from the queue-only increment; the
-continuations below supply that path and production deployment wiring. A fresh
-full authoritative CI run remains outstanding.
+continuations below supply that path and production deployment wiring. Their
+complete local acceptance is recorded below.
 
 ## Ordered row/queue continuation
 
@@ -286,7 +286,8 @@ Evidence under `.tesl-stuff/`:
   vet, staticcheck, golangci-lint, gosec and Nilaway pass. The parser now makes its
   empty-argument guard explicit for the ordinary-startup credential-inertness test.
 
-These are targeted results. A new complete authoritative CI run is still required.
+These targeted results are now supplemented by the complete authoritative run
+recorded in the acceptance section below.
 
 ## Implemented behavior and its evidence
 
@@ -315,7 +316,7 @@ samples are not a production SLA or evidence for the separate p99 admission gate
 |---|---|
 | Broader composition | The tested ordered row-first / payload-second sequence is implemented. Simultaneous row/payload changes and queue-bearing table Drop remain refused. Queue membership removal/rename and general `IgnoreOld` remain unsupported. |
 | Other durable facilities | Worker migration topology refuses durable caches, email outboxes and SSE facilities; Embedded topology refuses versioned queues. |
-| Operator workflow | Public application verbs are `status`, `install`, `deploy`, `worker`, `catch-up`, `contract`, `close-epoch`. Automatic deployment and ordered catch-up have implementation witnesses; full acceptance remains pending. Other operator conveniences above remain roadmap work without blocking this release. `close-epoch --dry-run` is not the general data dry-run. |
+| Operator workflow | Public application verbs are `status`, `install`, `deploy`, `worker`, `catch-up`, `contract`, `close-epoch`. Automatic deployment and ordered catch-up pass the full local gate. Other operator conveniences above remain roadmap work without blocking this release. `close-epoch --dry-run` is not the general data dry-run. |
 | Source/editor workflow | Native CLI has generation, plan, Contract and source-write recovery; non-mutating previews can run in CI. Editor apply and rebase/prune/repair scaffolding remain follow-up work, not merge blockers. |
 | Staged uniqueness | The specified staging/promotion declaration and per-key promotion guard remain outstanding. Ordinary index execution does not establish that workflow. |
 | Release-scale acceptance | Dedicated pinned read/write p99 measurements and the prescribed large-table/rolling-write workloads remain unfulfilled. The 1,000-extra-row experiment is not the 10M/100M-row gate. |
@@ -329,8 +330,38 @@ active-edge compiler substitution remains refused.
 
 ## Acceptance evidence
 
-The full-gate rows below describe baseline `84ef00d`; the additive continuation
-above has separate targeted evidence and must not inherit that earlier full pass.
+### Complete deployment/catch-up gate (`1ddc8a6`)
+
+One uninterrupted `./ci.sh` invocation completed in **15,716s (4h 21m 56s)**:
+**24/24 phases OK, no skips, `READINESS_CI_EXIT_CODE=0`**. The working tree was
+clean at completion. Evidence: `.tesl-stuff/deploy-ci-release.log` and
+`.tesl-stuff/deploy-ci-release-migrations/phases.tsv`.
+
+| Gate | Result from this invocation |
+|---|---|
+| Compiler and agent surface | Full Dune/OCaml suite passed (2,350s); protocol contracts, diagnostics/tooling, embedded-source checks and snapshots passed. |
+| Complete migration runner | **49/49 phases passed**: kernel 1,669s; ordered row/queue and deployment scenarios 464s; deployment wiring 1s; review 05 361s; review 11 592s; V1–V20 2,625s. |
+| Adversarial and retained-data evidence | 127 review-05 and 117 review-11 cases; 58 compiler queue-source cases; V1–V20/95 PostgreSQL API cases; fresh/adjacent/gap deployments, finality, repair, drain, interruption and typed Request handling. |
+| Runtime and analysis | Normal/race tests, fuzz targets, vet, staticcheck, golangci-lint, gosec, govulncheck and Nilaway all passed. |
+| Distribution and integration | Recursive corpus, CLI smoke/portability, clean installation, browser parity, OpenAPI DAST and SSO browser E2E all passed. |
+
+The earlier attempts remain failures, not acceptance evidence. They found stale
+assertions for newly supported row/queue emission, unchanged-payload retirement,
+and future staging, plus brittle embedded-document checks. The corrected tests
+retain refusal/unchanged-state assertions for malformed targets, premature
+publication, admission and retirement. Queue-bearing row Contract guards now
+reject invalid targets explicitly, and the V1 inventory query uses a guarded
+`CASE` instead of evaluating an absent predecessor. Fixes are committed in
+`2e1ab64`, `4881f71` and `1ddc8a6`.
+
+Only this evidence document and related status wording are updated after the
+passing run; build/documentation integrity checks are rerun for those updates.
+Hosted PostgreSQL-major matrix results and pinned release-scale performance
+evidence remain separate requirements.
+
+### Earlier readiness baseline (`84ef00d`)
+
+The following rows and readiness-fix history describe the earlier baseline.
 
 | Gate | Recorded state |
 |---|---|
@@ -465,7 +496,6 @@ check, never the complete gate.
    refusal/unchanged-state assertions when optimizing.
 4. Preserve the passing authoritative gate and obtain hosted supported-major CI
    results. A failed prefix or isolated retry cannot replace a complete invocation.
-5. Run complete acceptance for the automatic deployment operation and rollout,
-   including all new catch-up and ordered row/queue witnesses. Keep other
-   operator/editor items as nonblocking follow-up;
+5. Preserve the deployment, catch-up and ordered row/queue witnesses as the release
+   regression contract. Keep other operator/editor items as nonblocking follow-up;
    completing this release still does not close every original roadmap item.
