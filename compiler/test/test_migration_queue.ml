@@ -234,8 +234,8 @@ let public_queue_row_boundary () = with_project (fun root write ->
 entity Note table "notes" primaryKey id { id: String, title: String }
 |} in
   let file=write "schema/todo/v-current.tesl" schema in accepts file schema;
-  let program=app |> replace "[Database, Memory]" "[Database, Postgres, PostgresConfig, TcpConnection]"
-    |> replace "backend: Memory" "backend: Postgres (PostgresConfig { namespace: \"todo\", dbName: \"unused\", user: \"unused\", password: \"\", connection: TcpConnection { host: \"127.0.0.1\", port: 5432 } })" in
+  let program=app |> replace "[Database, Memory]" "[Database, Postgres, PostgresConfig, TcpConnection, MigrationConfig, Worker]"
+    |> replace "backend: Memory" "backend: Postgres (PostgresConfig { namespace: \"todo\", dbName: \"unused\", user: \"unused\", password: \"\", connection: TcpConnection { host: \"127.0.0.1\", port: 5432 }, migrations: MigrationConfig { topology: Worker, controlOwner: \"owner\", workerRole: \"worker\", requestRole: \"request\", ddlConnection: \"\" } })" in
   let entry=write "todo-app.tesl" program in accepts entry program;
   (match Compile.compile_go_file entry with
    | Compile.GoFailure ds -> fail(describes ds)
@@ -254,10 +254,11 @@ entity Note table "notes" primaryKey id { id: String, title: String }
     |> replace "entities: {}" "entities: { Note: Derived [Rename title headline] }" in
   ignore(write "migrations/todo/v2.tesl" body); accepts edge body;
   match Compile.compile_go_file entry with
-  | Compile.GoSuccess _ -> fail "queue-bearing transformation emitted before queue retirement exists"
-  | Compile.GoFailure ds -> check bool (describes ds) true
-      (List.exists(fun(d:Compile.diagnostic)->d.code="V001" && Compile.string_contains d.message
-        "queue-bearing row history currently requires additive entity migrations")ds))
+  | Compile.GoFailure ds -> fail(describes ds)
+  | Compile.GoSuccess artifacts ->
+      List.iter (fun name -> check bool ("ordered row/queue source retains " ^ name) true
+        (List.exists(fun(a:Emit_go.artifact)->Filename.basename a.path=name)artifacts))
+        ["retained-physical-history.json"; "queue-history.json"])
 let frontend_edges () =
   List.iter (fun after -> pair source after (fun root write before after previous ->
     let path,edge=write_edge root write before after previous in
@@ -475,7 +476,7 @@ func TestOriginalRowQueueCatalog(t *testing.T) {
   end)
 
 let () = run "Queue schema prerequisite" ["contracts",[
-  test_case "public mixed queue app and transforming boundary" `Quick public_queue_row_boundary;
+  test_case "public row transformations with unchanged queues" `Quick public_queue_row_boundary;
   test_case "original installer-only row queue artifacts" `Quick native_row_catalog_artifacts;
   test_case "complete source projection and runtime refusal" `Quick native_source_projection;
   test_case "pure contextual parser" `Quick parser;
