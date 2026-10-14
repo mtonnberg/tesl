@@ -8,6 +8,7 @@ case. The privileged observer injects faults; the operation under test still run
 under its documented application role. Logs and a JSON inventory are retained.
 """
 import argparse
+import ast
 import hashlib
 import json
 import os
@@ -505,10 +506,14 @@ class DatabaseReview(unittest.TestCase):
         self.assertRefused(LAB.schema(self.db, "v3", "contract", "V3"))
         self.assertEqual(self.state(), before)
 
-    def test_42_new_edge_cannot_stage_before_retirement(self):
+    def test_42_future_staging_cannot_publish_before_retirement(self):
         before = self.state()
-        self.assertRefused(LAB.install(self.db, "v3"))
-        self.assertEqual(LAB.sql(self.db, "select count(*) from mail.tesl_row_queue_conversion_staging where to_version=3"), "0")
+        require(LAB.install(self.db, "v3"))
+        self.assertEqual(LAB.sql(self.db, "select count(*) from mail.tesl_row_queue_conversion_staging where to_version=3"), "1")
+        self.assertRefused(LAB.schema(self.db, "v3", "worker"))
+        self.assertRefused(LAB.schema(self.db, "v3", "contract", "V3"))
+        self.assertRefused(LAB.sql(self.db, "select mail.tesl_queue_admit(3,'Jobs')", "review_request", ok=False))
+        self.assertEqual(LAB.sql(self.db, "select count(*) from mail.tesl_schema_versions where version=3"), "0")
         self.assertEqual(self.state(), before)
 
     def test_43_delayed_job_converts_without_running_handler(self):
@@ -882,7 +887,9 @@ class EmbeddedDocsReview(unittest.TestCase):
         self.assertIn("delayed unchanged job", self.document("lesson96-typed-queue-conversion"))
 
     def test_100_linked_queue_example_is_embedded(self):
-        self.assertIn("seven standalone binaries", self.document("example/queue-three-upgrades/README"))
+        text = self.document("example/queue-three-upgrades/README")
+        self.assertIn("standalone binaries", text)
+        self.assertIn("--schema catch-up", text)
 
     def test_101_linked_row_example_is_embedded(self):
         text = self.document("example/db-three-upgrades/README")
@@ -890,7 +897,9 @@ class EmbeddedDocsReview(unittest.TestCase):
         self.assertIn("Legacy", text)
 
     def test_102_queue_runner_source_is_embedded(self):
-        self.assertIn("def exercise(output, env):", self.document("example/queue-three-upgrades/run.py"))
+        source = ast.parse(self.document("example/queue-three-upgrades/run.py"))
+        exercise = next(node for node in source.body if isinstance(node, ast.FunctionDef) and node.name == "exercise")
+        self.assertEqual([arg.arg for arg in exercise.args.args[:2]], ["output", "env"])
 
     def test_103_proof_revalidation_source_is_embedded(self):
         self.assertIn("Revalidate title", self.document("example/db-three-upgrades/transitions/v4.tesl"))
