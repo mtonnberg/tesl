@@ -29,6 +29,9 @@ func pgRunRowSchemaCommand(serviceContext context.Context, command pgSchemaComma
 	if err != nil {
 		return err
 	}
+	if command.verb == "deploy" {
+		return pgRunRowDeployment(serviceContext, command, out, b, roles)
+	}
 	if command.verb == "install" {
 		if roles.Request != "" {
 			if command.worker != roles.Worker || command.request != roles.Request {
@@ -89,7 +92,7 @@ func pgRunRowSchemaCommand(serviceContext context.Context, command pgSchemaComma
 			return err
 		}
 		cancel()
-		if err := pgStageRowQueueHistory(serviceContext, conn, b, roles); err != nil {
+		if err := pgStageRowQueueHistory(serviceContext, conn, b, roles, &state); err != nil {
 			return err
 		}
 		return pgWriteSchemaInstallation(out, command.json, b.history, state, roles)

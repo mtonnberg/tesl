@@ -4,8 +4,8 @@
 
 Assessment baseline: `84ef00d`. Requirements were committed in `b5cddb9`;
 additive catch-up was committed in `137ddd1`, row-transforming catch-up in
-`4f6e86e`, and queue catch-up in `085bf00`. Ordered row/queue composition and its
-targeted verification are recorded below.
+`4f6e86e`, queue catch-up in `085bf00`, and ordered composition in `99b869f`.
+Automatic deployment wiring and its targeted verification are recorded below.
 
 ## Delivery contract
 
@@ -14,8 +14,8 @@ with checked row transformations and restricted Worker-topology queue histories.
 **Baseline `84ef00d` passed local authoritative acceptance: 24/24 phases, no skips,
 exit 0.** The catch-up continuations have the targeted evidence below; a fresh full
 gate has not yet been run for these runtime changes. The maintainer's clarified
-release requirements below still require deployment automation and a fresh full
-acceptance run. Hosted supported-major
+release requirements below now have implementation witnesses, including a finite
+deployment job and gated rollout. A fresh full acceptance run and hosted supported-major
 checks also remain open. This document does not waive the
 [normative roadmap's requirements](../roadmap/next/database-migrations.md#target-mechanisms-after-phase-4-authoritative-summary).
 
@@ -29,7 +29,7 @@ this delivery contract. Other missing roadmap requirements remain open work.
 | Requirement | Release decision and present state |
 |---|---|
 | CI preview | Required workflow, already available through compiler-owned non-mutating `tesl migrate generate app.tesl --manifest-json`. Editor preview is sufficient; applying edits inside the editor is not a merge blocker. |
-| Automatic production migration | Required. Deploying checked migration history must drive the necessary installation/staging, expansion, backfill/conversion and reviewed retirement steps without manual per-version schema commands. The newest artifact now stages retained queue edges as Installer and executes row/queue catch-up as Worker. Wiring those separately authorized operations into automatic production deployment remains required work. |
+| Automatic production migration | Required. `app --schema deploy` now installs/stages as Installer, closes that connection, catches up as Worker and completes reviewed target finality. A Compose rollout stops old services and gates new service startup on the finite job's successful exit. No manual per-version commands or intermediate images are needed. Full acceptance remains to be rerun. |
 | Catch-up from any earlier supported schema version | Required. A deployment targeting Vn must advance a valid database at Vk through every missing checked step without intermediate application deployments. Additive, row-transforming, queue-only and the tested ordered row-first / queue-second history now execute with the latest artifact. |
 | Ordered row/queue changes | Two ordered migrations are acceptable. The row-first / queue-payload-second sequence is now implemented and tested with retained jobs, repair and restart. `MIG028` names the conflicting entities/payloads and prescribes the tested split/order and commands. Simultaneous row and payload changes remain refused and are not required for this release. |
 | Other operator/editor conveniences | Dedicated offline application, pruning, rebase/repair scaffolding, grant/deployment-recipe generation, extra quarantine/pause tooling and editor apply are not merge blockers for this release. Named automatic Contract modes are an implementation choice; executing necessary reviewed Contracts automatically is part of the deployment/catch-up requirement. |
@@ -119,8 +119,8 @@ The final version is expanded and index-ready; its own Contract is not required
 to report `schema-caught-up`. Installation remains an Installer command, and the
 latest ordinary Worker owns ongoing backfill. Queue-conversion gaps were still
 refused by this row-only increment; the continuation below supplies that path.
-Ordered row/queue composition and complete production deployment wiring remain
-release work.
+Ordered composition and production deployment wiring were still outstanding at
+that increment; their continuations are recorded below.
 
 Verified evidence (logs under `.tesl-stuff/`):
 
@@ -198,8 +198,8 @@ Evidence under `.tesl-stuff/`:
   (34.350s / 11.569s), vet, staticcheck, golangci-lint, gosec and Nilaway pass.
 
 Ordered composition was still missing from the queue-only increment; the
-continuation below supplies that path. Automatic production deployment wiring
-and a fresh full authoritative CI run remain outstanding.
+continuations below supply that path and production deployment wiring. A fresh
+full authoritative CI run remains outstanding.
 
 ## Ordered row/queue continuation
 
@@ -247,6 +247,47 @@ adopt older development catalogs. Queue membership removal/rename, queue-bearing
 table Drop and simultaneous row/payload transformations remain outside this
 supported sequence. These targeted results are not a fresh full CI pass.
 
+## Automatic deployment continuation
+
+`app --schema deploy [--database Module.Database] [--json]` is a finite,
+Worker-topology deployment operation. It takes a separate Installer connection
+from `TESL_SCHEMA_INSTALLER_DSN` and the configured Worker `ddlConnection`.
+Before installation, the Worker verifies a live Installer backend tag/PID in its
+own database; equal database names alone do not establish identity. Existing
+role-isolation checks remain mandatory. The Installer closes after installation
+and bounded staging, before any data conversion executes. Worker execution pins
+the installed UUID, fence, format and origin across phase boundaries.
+
+The job executes retained catch-up and the reviewed final row Contract for a
+transforming target. Missing final Contract source refuses before database
+mutation. Queue targets likewise complete retirement. Known recent-instance and
+live-claim blockers wait within `TESL_SCHEMA_DEPLOY_TIMEOUT_SECONDS` (default 600);
+data rejection, invalid payloads, execution failures and source/catalog problems
+fail the job. Cancellation and timeout cannot produce `schema-deployed` success.
+Ordinary application startup remains inert with respect to the Installer variable.
+
+`templates/docker/compose.worker.yml.example` scopes credentials separately for
+the migration job, schema Worker and Request service. `deploy-worker.sh` validates
+configuration, pulls the immutable image, stops old services, runs the job, and
+starts the new services only after a successful exit. The same image executes all
+retained versions. The shared migration gate includes real Compose configuration
+validation and executable rollout exit-status tests; this phase requires the
+Docker Compose client, not a running Docker daemon.
+
+Evidence under `.tesl-stuff/`:
+
+- `deploy-verified.log`: public compiled fresh/adjacent/gap deployment, final row
+  cleanup, rejection/repair, claim/heartbeat waiting, deadline refusal, separate
+  database refusal, missing Contract refusal, Installer closure and restart pass;
+  real Compose configuration and rollout failure gating pass.
+- `deploy-complete-scenarios.log`: all ordered catch-up regressions plus deployment
+  scenarios pass, including queue-Contract waiting for a V2 claim.
+- `deploy-analysis-final.log`: runtime/migrationtest race tests (34.623s / 11.583s),
+  vet, staticcheck, golangci-lint, gosec and Nilaway pass. The parser now makes its
+  empty-argument guard explicit for the ordinary-startup credential-inertness test.
+
+These are targeted results. A new complete authoritative CI run is still required.
+
 ## Implemented behavior and its evidence
 
 | Area | Delivered surface | Main evidence / review entry point |
@@ -274,7 +315,7 @@ samples are not a production SLA or evidence for the separate p99 admission gate
 |---|---|
 | Broader composition | The tested ordered row-first / payload-second sequence is implemented. Simultaneous row/payload changes and queue-bearing table Drop remain refused. Queue membership removal/rename and general `IgnoreOld` remain unsupported. |
 | Other durable facilities | Worker migration topology refuses durable caches, email outboxes and SSE facilities; Embedded topology refuses versioned queues. |
-| Operator workflow | Public application verbs are `status`, `install`, `worker`, `catch-up`, `contract`, `close-epoch`. Row, queue and ordered row/queue catch-up are implemented; automatic production deployment wiring remains a release blocker. Other operator conveniences above remain roadmap work without blocking this release. `close-epoch --dry-run` is not the general data dry-run. |
+| Operator workflow | Public application verbs are `status`, `install`, `deploy`, `worker`, `catch-up`, `contract`, `close-epoch`. Automatic deployment and ordered catch-up have implementation witnesses; full acceptance remains pending. Other operator conveniences above remain roadmap work without blocking this release. `close-epoch --dry-run` is not the general data dry-run. |
 | Source/editor workflow | Native CLI has generation, plan, Contract and source-write recovery; non-mutating previews can run in CI. Editor apply and rebase/prune/repair scaffolding remain follow-up work, not merge blockers. |
 | Staged uniqueness | The specified staging/promotion declaration and per-key promotion guard remain outstanding. Ordinary index execution does not establish that workflow. |
 | Release-scale acceptance | Dedicated pinned read/write p99 measurements and the prescribed large-table/rolling-write workloads remain unfulfilled. The 1,000-extra-row experiment is not the 10M/100M-row gate. |
@@ -424,7 +465,7 @@ check, never the complete gate.
    refusal/unchanged-state assertions when optimizing.
 4. Preserve the passing authoritative gate and obtain hosted supported-major CI
    results. A failed prefix or isolated retry cannot replace a complete invocation.
-5. Wire the separately authorized Installer and Worker steps into automatic
-   production deployment, then run complete acceptance including the new catch-up
-   and ordered row/queue witnesses. Keep other operator/editor items as nonblocking follow-up;
+5. Run complete acceptance for the automatic deployment operation and rollout,
+   including all new catch-up and ordered row/queue witnesses. Keep other
+   operator/editor items as nonblocking follow-up;
    completing this release still does not close every original roadmap item.

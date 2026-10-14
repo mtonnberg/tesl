@@ -10,6 +10,7 @@ safe to publish new data and retire old users.
 |---|---|---|
 | `tesl migrate generate`, `tesl migrate contract`, `agent-context`, source tests | Compiler/tooling | Prepare and check source; do not modify the application database |
 | `app --schema install --worker ROLE --request ROLE` | Short-lived installer | Register the exact compiled baseline or queue/repair staging |
+| `app --schema deploy --json` | Separate Installer, then Worker connections | Install, stage, catch up and complete reviewed target finality in one finite deployment job |
 | `app --schema worker` | Configured Worker | Publish checked expansion and perform conversion/backfill |
 | Ordinary HTTP/queue application | Configured Request | Serve admitted requests and process compatible jobs |
 | `app --schema status --json` | Configured read-capable application principal | Observe installed progress without mutation |
@@ -22,6 +23,43 @@ Original V1 installation is required for the current fresh-install-first protoco
 missing old catalog objects cause refusal, not automatic adoption.
 
 ## The deployment sequence
+
+### Automatic production deployment
+
+For versioned Worker-topology applications, run the latest binary as a deployment
+job before starting the new application services:
+
+```sh
+app --schema deploy --json
+```
+
+Configure `MigrationConfig.ddlConnection` with Worker credentials and supply
+`TESL_SCHEMA_INSTALLER_DSN` only to the deployment job. The command verifies that
+both dedicated sessions reach the same database, installs/stages with the
+Installer, closes that connection, then executes with the Worker. The installed
+database UUID, fence and origin remain pinned across phases. Roles come from the
+compiled configuration; the operation takes no role override or force flag.
+
+Use a deployment-scoped administrative Installer identity and the configured
+non-administrative Worker login. Existing role-isolation checks apply throughout:
+a non-administrative login retaining control-owner membership blocks Worker
+execution. Provision these roles outside the application.
+
+For a transforming target, include its reviewed final row Contract as well as
+the intermediate Contracts. Deployment completes final backfill and cleanup
+before reporting `schema-deployed`; a missing final Contract is rejected before
+database mutation. Queue targets also finish their retirement. Compatible
+additive targets retain the admission window they need.
+
+The job waits for recent retiring instances and live claims, up to
+`TESL_SCHEMA_DEPLOY_TIMEOUT_SECONDS` (default 600; range 1–86400). The deployment
+controller must stop retiring services. Data rejection, missing repair code,
+catalog drift and source/ABI mismatches fail the job. Retry resumes immutable
+receipts; failure never starts the new Request process.
+
+The [Compose rollout](deploy.md#automatic-migration-job-worker-topology) supplies
+the stop → deployment job → start wiring with separate credential files. It uses
+one latest image for every retained migration step.
 
 ### Preview in CI
 
@@ -44,8 +82,8 @@ install its genuine retained V1 baseline and use the same path on a new database
 
 Each step retains its exact source identity, normal fences and durable receipts;
 restart resumes incomplete work. Required indexes still gate readiness, and old
-compatible applications remain admitted. For gaps containing row transformations,
-run the newest binary's finite deployment command with Worker credentials:
+compatible applications remain admitted. For explicit Worker-only catch-up across
+gaps containing row transformations, use:
 
 ```sh
 app --schema catch-up --json
@@ -90,8 +128,8 @@ staged or executable repair authority. Include every needed historical
 
 Request processes wait for verified readiness. Installation/staging, explicit
 Contract commands remain available, alongside the row catch-up coordinator. The
-runtime does not yet wire the separate Installer and Worker operations into one
-automatic production deployment.
+`deploy` command above wires installation/staging and Worker execution into one
+finite production operation.
 
 ### Ordered row and queue changes
 

@@ -121,6 +121,13 @@ migration = Migration {
     command(["go", "test", "-race", "./..."], cwd=release / "go", env=env, timeout=180)
     command(["go", "build", "-race", "-o", release / "app", "./cmd/app"], cwd=release / "go", env=env)
     print("Built additive V4 after ordered row/queue history", flush=True)
+    missing = output / "no-contract"
+    shutil.copytree(output / "v2/source", missing / "source")
+    (missing / "source/migrations/mail/v2-contract.tesl").unlink()
+    for path in sorted((missing / "source").rglob("*.tesl")):
+        assert json.loads(command([compiler, "agent-context", path], env=env))["ok"]
+    command([compiler, "--backend", "go", missing / "source/app.tesl", "--out", missing / "go"], env=env)
+    command(["go", "build", "-race", "-o", missing / "app", "./cmd/app"], cwd=missing / "go", env=env)
 
 def check_combined(output, compiler, env):
     bad = Path(tempfile.mkdtemp(prefix="combined-", dir=output))
@@ -140,8 +147,8 @@ fn oldNote() -> Schema.Mail.V2.Note = Schema.Mail.V2.Note { id: "fixture", metad
     print("PASS: combined row/queue change reports the tested split/order and deployment commands", flush=True)
 
 
-def exercise(output, env, rejection=False, claim=False, crash=None, from_v2=False, epoch_tail=False):
-    target = 4 if epoch_tail else 3
+def exercise(output, env, rejection=False, claim=False, crash=None, from_v2=False, epoch_tail=False, deployment=False, fresh=False, terminal_row=False, heartbeat=False):
+    target = 2 if terminal_row else (4 if epoch_tail else 3)
     cluster = Path(tempfile.mkdtemp(prefix="ordered-", dir="/tmp"))
     data = cluster / "data"
     processes = []
@@ -155,8 +162,12 @@ def exercise(output, env, rejection=False, claim=False, crash=None, from_v2=Fals
                     DEMO_OWNER="owner", DEMO_WORKER="worker", DEMO_REQUEST="request", DEMO_HTTP_PORT=str(port),
                     DEMO_DDL=f"host={cluster} port=5432 dbname=ordered user={login}")
 
-    def schema(version, login, *args, refuse=False):
-        result = subprocess.run([str(output / f"v{version}/app"), "--schema", *args, "--json"], env=app_env(login), capture_output=True, text=True, timeout=90)
+    def schema(version, login, *args, refuse=False, timeout_seconds=75):
+        settings = app_env(login)
+        if args[0] == "deploy":
+            settings["TESL_SCHEMA_INSTALLER_DSN"] = app_env("installer")["DEMO_DDL"]
+            settings["TESL_SCHEMA_DEPLOY_TIMEOUT_SECONDS"] = str(timeout_seconds)
+        result = subprocess.run([str(output / f"v{version}/app"), "--schema", *args, "--json"], env=settings, capture_output=True, text=True, timeout=90)
         if (result.returncode == 0) == refuse:
             raise RuntimeError(f"V{version} {args}: {result.stdout}\n{result.stderr}")
         return result.stdout + result.stderr
@@ -166,7 +177,10 @@ def exercise(output, env, rejection=False, claim=False, crash=None, from_v2=Fals
             path = cluster / "boundary.sock"
             listener.bind(str(path)); listener.listen(16); listener.settimeout(1)
             log = open(output / f"crash-{boundary}.log", "w+")
-            process = subprocess.Popen([str(output / "v3/app-test"), "--schema", "catch-up", "--json"], env=dict(app_env("worker"), TESL_MIGRATION_TEST_SOCKET=str(path)), stdout=log, stderr=log)
+            settings = dict(app_env("worker"), TESL_MIGRATION_TEST_SOCKET=str(path))
+            if deployment:
+                settings["TESL_SCHEMA_INSTALLER_DSN"] = app_env("installer")["DEMO_DDL"]
+            process = subprocess.Popen([str(output / "v3/app-test"), "--schema", "deploy" if deployment else "catch-up", "--json"], env=settings, stdout=log, stderr=log)
             processes.append((process, log))
             deadline = time.monotonic() + 60
             while time.monotonic() < deadline:
@@ -182,6 +196,8 @@ def exercise(output, env, rejection=False, claim=False, crash=None, from_v2=Fals
                     with connection.makefile("rb") as stream:
                         event = json.loads(stream.readline())
                     if event["name"] == boundary:
+                        if boundary == "schema-deploy-after-installer-close":
+                            assert sql("select count(*) from pg_stat_activity where datname=current_database() and usename='installer' and application_name like 'tesl-exec:%'") == "0"
                         process.kill(); process.wait(timeout=5)
                         return
                     connection.sendall(b"continue\n")
@@ -195,6 +211,27 @@ def exercise(output, env, rejection=False, claim=False, crash=None, from_v2=Fals
         sql('grant create on database ordered to owner')
         base["PGDATABASE"] = "ordered"
         sql('grant create on schema public to owner')
+        if deployment:
+            settings = dict(app_env("worker"), TESL_SCHEMA_INSTALLER_DSN=app_env("installer")["DEMO_DDL"])
+            missing = subprocess.run([str(output / "no-contract/app"), "--schema", "deploy", "--json"], env=settings, capture_output=True, text=True, timeout=30)
+            assert missing.returncode != 0 and "reviewed final row Contract" in missing.stderr, missing
+            assert sql("select to_regnamespace('mail') is null") == "t"
+            # A differently routed Installer must be refused before either
+            # database receives application metadata.
+            sql("create database other")
+            wrong = dict(app_env("worker"), TESL_SCHEMA_INSTALLER_DSN=f"host={cluster} port=5432 dbname=other user=installer")
+            result = subprocess.run([str(output / f"v{target}/app"), "--schema", "deploy", "--json"], env=wrong, capture_output=True, text=True, timeout=30)
+            assert result.returncode != 0 and "same PostgreSQL database" in result.stderr, result
+            assert sql("select to_regnamespace('mail') is null") == "t"
+            other = dict(base, PGDATABASE="other")
+            assert command(["psql", "-X", "-Atc", "select to_regnamespace('mail') is null"], env=other).strip() == "t"
+        if fresh:
+            result = json.loads(schema(target, "worker", "deploy"))
+            assert result["kind"] == "schema-deployed" and result["currentVersion"] == target, result
+            assert sql("select initial_version from mail.tesl_schema_meta") == "1"
+            assert json.loads(schema(target, "worker", "deploy")) == result
+            print(f"PASS: fresh automatic deployment to V{target} and immutable replay", flush=True)
+            return
         schema(1, "installer", "install", "--worker", "worker", "--request", "request")
         schema(1, "worker", "catch-up")
         text = "blocked" if rejection else "kept"
@@ -204,7 +241,8 @@ def exercise(output, env, rejection=False, claim=False, crash=None, from_v2=Fals
         if from_v2:
             schema(2, "worker", "catch-up")
             schema(2, "worker", "contract", "V2")
-        schema(target, "installer", "install", "--worker", "worker", "--request", "request")
+        if not deployment:
+            schema(target, "installer", "install", "--worker", "worker", "--request", "request")
         assert sql("select current from mail.tesl_schema_state") == ("2" if from_v2 else "1")
         if crash is not None:
             interrupt_at(crash)
@@ -217,37 +255,47 @@ def exercise(output, env, rejection=False, claim=False, crash=None, from_v2=Fals
                 sql('''insert into mail.notes(id,metadata) values ('late','{"oldText":"late-row"}')''', "request")
                 sql('''select mail.tesl_queue_enqueue(1,'Jobs','Delivery','late-job','{"oldText":"late-job"}')''', "request")
         if claim:
-            assert sql("select job_id from mail.tesl_queue_claim(1,'Jobs','pending','old-claimant',15000)", "request") == "retained"
-            refused = schema(3, "worker", "catch-up", refuse=True)
-            assert "leased" in refused, refused
-            assert sql("select min_version from mail.tesl_schema_state") == "1"
+            claim_version = 2 if from_v2 else 1
+            assert sql(f"select job_id from mail.tesl_queue_claim({claim_version},'Jobs','pending','old-claimant',15000)", "request") == "retained"
+            if not deployment:
+                refused = schema(3, "worker", "catch-up", refuse=True)
+                assert "leased" in refused, refused
+                assert sql("select min_version from mail.tesl_schema_state") == "1"
+                assert sql("select schema_version from mail.tesl_jobs where id='retained'") == "1"
+                assert sql("select count(*) from mail.tesl_row_queue_restamps") == "0"
+                time.sleep(16)
+        if heartbeat:
+            sql("set application_name='tesl-app:deploy-old'; select mail.tesl_heartbeat(1,1,1)", "request")
+            refused = schema(target, "worker", "deploy", refuse=True, timeout_seconds=2)
+            assert "deadline" in refused, refused
+            assert sql("select current from mail.tesl_schema_state") == "1"
             assert sql("select schema_version from mail.tesl_jobs where id='retained'") == "1"
-            assert sql("select count(*) from mail.tesl_row_queue_restamps") == "0"
-            time.sleep(16)
         if rejection:
-            refused = schema(3, "worker", "catch-up", refuse=True)
+            refused = schema(target, "worker", "deploy" if deployment else "catch-up", refuse=True)
             assert "reject" in refused.lower(), refused
             assert sql("select min_version from mail.tesl_schema_state") == "1"
             assert sql("select schema_version from mail.tesl_jobs where id='retained'") == "1"
             sql('''update mail.notes set metadata='{"oldText":"kept"}' where id='one' ''', "request")
-        result = json.loads(schema(target, "worker", "catch-up"))
-        assert result["currentVersion"] == target and result["minVersion"] == 3, result
+        mode = "deploy" if deployment else "catch-up"
+        result = json.loads(schema(target, "worker", mode))
+        assert result["kind"] == ("schema-deployed" if deployment else "schema-caught-up"), result
+        assert result["currentVersion"] == target and result["minVersion"] == (2 if terminal_row else 3), result
         if epoch_tail:
             schema(4, "worker", "close-epoch", "--through", "V4")
             assert sql("select min_version from mail.tesl_schema_state") == "4"
         assert json.loads(sql("select metadata__v2 from mail.notes where id='one'")) == {"newText": "kept", "detail": "migrated"}
-        assert json.loads(sql("select payload from mail.tesl_jobs where id='retained'")) == {"message": "job-kept"}
+        assert json.loads(sql("select payload from mail.tesl_jobs where id='retained'")) == {"oldText" if terminal_row else "message": "job-kept"}
         if crash == "row-catchup-after-step":
             assert json.loads(sql("select metadata__v2 from mail.notes where id='late'")) == {"newText": "late-row", "detail": "migrated"}
             assert json.loads(sql("select payload from mail.tesl_jobs where id='late-job'")) == {"message": "late-job"}
         assert sql("select database_uuid::text from mail.tesl_schema_meta") == identity
         assert sql("select count(*) from mail.tesl_row_queue_restamps where job_id='retained' and from_version=1 and to_version=2") == "1"
         receipts = sql("select json_agg(v order by version,step) from mail.tesl_schema_versions v")
-        schema(target, "worker", "catch-up")
+        schema(target, "worker", mode)
         assert sql("select json_agg(v order by version,step) from mail.tesl_schema_versions v") == receipts
         audit = sql("select retirement_hash from mail.tesl_row_queue_restamps where job_id='retained' and from_version=1")
         sql("update mail.tesl_row_queue_restamps set retirement_hash=repeat('0',64) where job_id='retained' and from_version=1")
-        refused = schema(target, "worker", "catch-up", refuse=True)
+        refused = schema(target, "worker", mode, refuse=True)
         assert "restamp audit" in refused, refused
         sql(f"update mail.tesl_row_queue_restamps set retirement_hash='{audit}' where job_id='retained' and from_version=1")
         number = COMMON["port"]()
@@ -258,7 +306,7 @@ def exercise(output, env, rejection=False, claim=False, crash=None, from_v2=Fals
         rows = COMMON["request"](number, "GET", "/notes")
         assert next(row for row in rows if row["id"] == "one")["metadata"] == {"newText": "kept", "detail": "migrated"}, rows
         eventually(lambda: sql("select count(*) from mail.tesl_jobs") == "0")
-        print(f"PASS: ordered row/queue latest-binary catch-up; rejection={rejection}, claim={claim}, crash={crash}, fromV2={from_v2}, epochTail={epoch_tail}; audited restamp, retained row/job and typed handler", flush=True)
+        print(f"PASS: ordered row/queue latest-binary {mode}; rejection={rejection}, claim={claim}, heartbeat={heartbeat}, crash={crash}, fromV2={from_v2}, epochTail={epoch_tail}; audited restamp, retained row/job and typed handler", flush=True)
     finally:
         for process, log in processes:
             if process.poll() is None:
@@ -278,6 +326,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--run-built", action="store_true")
+    parser.add_argument("--deploy-only", action="store_true")
     parser.add_argument("--compiler", type=Path, default=ROOT / "compiler/_build/default/bin/main.exe")
     args = parser.parse_args()
     output = args.output.absolute()
@@ -286,13 +335,21 @@ def main():
         output.mkdir(parents=True)
         build(output, args.compiler.absolute(), env)
     check_combined(output, args.compiler.absolute(), env)
-    exercise(output, env)
-    exercise(output, env, rejection=True)
-    exercise(output, env, claim=True)
-    exercise(output, env, from_v2=True)
-    exercise(output, env, epoch_tail=True)
-    for boundary in ("row-catchup-after-step", "row-contract-after-retirement-statement", "row-contract-after-retirement"):
-        exercise(output, env, crash=boundary)
+    if not args.deploy_only:
+        exercise(output, env)
+        exercise(output, env, rejection=True)
+        exercise(output, env, claim=True)
+        exercise(output, env, from_v2=True)
+        exercise(output, env, epoch_tail=True)
+        for boundary in ("row-catchup-after-step", "row-contract-after-retirement-statement", "row-contract-after-retirement"):
+            exercise(output, env, crash=boundary)
+    exercise(output, env, deployment=True, fresh=True)
+    exercise(output, env, deployment=True, terminal_row=True, rejection=True)
+    exercise(output, env, deployment=True, claim=True)
+    exercise(output, env, deployment=True, heartbeat=True)
+    exercise(output, env, deployment=True, from_v2=True)
+    exercise(output, env, deployment=True, from_v2=True, claim=True)
+    exercise(output, env, deployment=True, crash="schema-deploy-after-installer-close")
 
 
 if __name__ == "__main__":

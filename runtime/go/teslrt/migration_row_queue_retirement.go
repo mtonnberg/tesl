@@ -319,7 +319,7 @@ func pgExecuteRowQueueContractOn(ctx context.Context, conn *pgx.Conn, b *pgRowBa
 			return err
 		}
 		if recent {
-			return fmt.Errorf("queue Contract has recent retiring instances; stop them and wait 30 seconds")
+			return &pgMigrationDrainError{"queue Contract has recent retiring instances; stop them and wait 30 seconds"}
 		}
 		return nil
 	}
@@ -328,7 +328,7 @@ func pgExecuteRowQueueContractOn(ctx context.Context, conn *pgx.Conn, b *pgRowBa
 		return result, err
 	}
 	if !done {
-		return result, fmt.Errorf("queue Contract is blocked by old payloads, claims or conversion attempts; complete the checked repairs first")
+		return result, &pgQueueContractBlockedError{}
 	}
 	err = pgControlTransaction(ctx, conn, false, func(tx pgx.Tx) error {
 		var err error

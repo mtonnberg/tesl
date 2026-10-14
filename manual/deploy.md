@@ -68,8 +68,9 @@ The app is configured entirely through environment variables — set them with
 | `PORT` | port the HTTP server binds (default from `tesl.toml [env]`) |
 | `TESL_POSTGRES_HOST` / `_PORT` / `_DATABASE` / `_USER` / `_PASSWORD` | external PostgreSQL connection |
 
-The Tesl runtime **creates its own tables on first boot** (`ensure-database-ready!`),
-so there is no separate migration step for the system tables.
+Unversioned databases use their ordinary startup initialization. Versioned
+Worker-topology histories use the deployment job below to install and execute
+their checked migration history.
 
 ```bash
 # container image against your own PostgreSQL:
@@ -87,6 +88,45 @@ Container Registry lives at
 [`templates/docker/github-deploy.yml.example`](../templates/docker/github-deploy.yml.example).
 Copy it to your project's `.github/workflows/deploy.yml` and set `APP_NAME`.
 
+## Automatic migration job (Worker topology)
+
+Use the same immutable release image for a finite migration job, the schema Worker,
+and the Request application. Copy
+[`compose.worker.yml.example`](../templates/docker/compose.worker.yml.example)
+and [`deploy-worker.sh`](../templates/docker/deploy-worker.sh) to the deployment
+host. Create the three environment files using the names your application reads:
+
+| File | Connection configuration |
+|---|---|
+| `.env.deploy` | Worker `ddlConnection`, plus `TESL_SCHEMA_INSTALLER_DSN` for the deployment-scoped administrative Installer |
+| `.env.worker` | Worker credentials and the compiled migration role names |
+| `.env.request` | Request credentials and ordinary application settings |
+
+All connections target the same PostgreSQL database. Provision the distinct
+control-owner, Worker and Request roles beforehand. Installer credentials belong
+only to the finite deployment job. The images use the normal compiled application
+entry point, so schema command arguments reach the same checked binary.
+
+Run this from the deployment controller after publishing the release image:
+
+```sh
+export TESL_IMAGE=ghcr.io/your-org/your-app:RELEASE_COMMIT
+sh deploy-worker.sh compose.worker.yml
+```
+
+The script validates configuration and pulls the image, stops the old application
+and schema Worker, then runs `app --schema deploy --json`. That command installs
+and stages as Installer, closes its Installer connection, and executes retained
+history and reviewed finality as Worker. It waits for real heartbeat/claim expiry
+within `TESL_SCHEMA_DEPLOY_TIMEOUT_SECONDS` (600 seconds by default). Include the
+reviewed final Contract when the target transforms rows.
+
+Only a successful migration-job exit starts the new Worker and Request services.
+A failed job leaves the new services stopped and provides the blocker for repair
+or retry. This is a drained rollout; it consumes all supported intermediate
+revisions from the latest image. See [migration operations](migration-operations.md)
+for source previews, repair policies and exact role requirements.
+
 ## Generate OpenAPI for security scanning
 
 Before deploying to staging, generate a checked specification for the server being deployed:
@@ -101,16 +141,15 @@ routes, typed captures, request/response schemas, cookie authentication, and pro
 It is a file-based input; the application does not need to expose a public documentation route.
 See [OpenAPI and DAST](openapi-dast.md) for the CI workflow and credential-safety guidance.
 
-## How it works (and what is intentionally not here)
+## How it works
 
 - `tesl build --container` compiles a Linux Go binary, stages a runtime-only
   container context, instantiates a template in [`templates/docker/`](../templates/docker/),
   and runs `docker build`.
-- The deployment story is deliberately **just an image** — the app serves HTTP
-  the same way it does locally. Health-check endpoints, graceful-shutdown
-  signalling, a reproducible Nix `dockerTools` image, multi-arch builds, and
-  PaaS-specific adapters are **not** part of this; add them per platform if you
-  need them.
+- The image serves the same application as local execution. The Worker-topology
+  Compose recipe adds a gated migration job, and the direct executable entry point
+  receives normal container stop signals. Configure application health checks and
+  platform-specific publishing in your deployment controller.
 
 ### Building on Apple Silicon / arm64
 

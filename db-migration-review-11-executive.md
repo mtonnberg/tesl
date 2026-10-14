@@ -46,7 +46,8 @@ missing checked row revisions using the latest Worker, with restart, concurrency
 source/ABI refusal and index-readiness witnesses. Compatible row/queue compiler
 upgrades still pass. Subsequent increments add row-transforming and queue catch-up,
 then the tested ordered row-first / payload-second path with atomic job restamping
-and intermediate finality. Automatic production deployment wiring remains open.
+and intermediate finality. `--schema deploy` and a gated Compose rollout now wire
+the separate Installer and Worker phases into production deployment.
 See the delivery status for current targeted evidence; the earlier full CI pass
 is not claimed for these continuations.
 

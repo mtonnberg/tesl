@@ -25,6 +25,9 @@ type pgSchemaCommand struct {
 
 func pgParseSchemaCommand(args []string) (pgSchemaCommand, bool, error) {
 	var command pgSchemaCommand
+	if len(args) == 0 {
+		return command, false, nil
+	}
 	position := -1
 	for i, arg := range args {
 		if arg == "--schema" || strings.HasPrefix(arg, "--schema=") {
@@ -35,8 +38,8 @@ func pgParseSchemaCommand(args []string) (pgSchemaCommand, bool, error) {
 	if position < 0 {
 		return command, false, nil
 	}
-	if position != 0 || args[0] != "--schema" || len(args) < 2 || (args[1] != "status" && args[1] != "install" && args[1] != "worker" && args[1] != "catch-up" && args[1] != "contract" && args[1] != "close-epoch") {
-		return command, true, fmt.Errorf("usage: app --schema status [--database Module.Database] [--json]\n       app --schema install --worker ROLE [--request ROLE] [--database Module.Database] [--json]\n       app --schema worker [--database Module.Database] [--json]\n       app --schema catch-up [--database Module.Database] [--json]\n       app --schema contract Vn [--database Module.Database] [--json]\n       app --schema close-epoch --through Vn [--dry-run] [--force] [--database Module.Database] [--json]")
+	if position != 0 || args[0] != "--schema" || len(args) < 2 || (args[1] != "status" && args[1] != "install" && args[1] != "deploy" && args[1] != "worker" && args[1] != "catch-up" && args[1] != "contract" && args[1] != "close-epoch") {
+		return command, true, fmt.Errorf("usage: app --schema status [--database Module.Database] [--json]\n       app --schema install --worker ROLE [--request ROLE] [--database Module.Database] [--json]\n       app --schema deploy [--database Module.Database] [--json]\n       app --schema worker [--database Module.Database] [--json]\n       app --schema catch-up [--database Module.Database] [--json]\n       app --schema contract Vn [--database Module.Database] [--json]\n       app --schema close-epoch --through Vn [--dry-run] [--force] [--database Module.Database] [--json]")
 	}
 	command.verb = args[1]
 	start := 2
@@ -143,7 +146,7 @@ func pgSelectSchemaDatabase(selector string) (*Database, PgCompiledMigrationHist
 
 func pgRunSchemaCommand(command pgSchemaCommand, out io.Writer) (resultErr error) {
 	ctx := context.Background()
-	if command.verb == "install" || command.verb == "worker" || command.verb == "catch-up" || command.verb == "contract" || command.verb == "close-epoch" {
+	if command.verb == "install" || command.verb == "deploy" || command.verb == "worker" || command.verb == "catch-up" || command.verb == "contract" || command.verb == "close-epoch" {
 		var stop context.CancelFunc
 		ctx, stop = signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 		defer stop()
@@ -159,7 +162,7 @@ func pgRunSchemaCommandContext(serviceContext context.Context, command pgSchemaC
 	if database.Config.Schema != history.Namespace {
 		return fmt.Errorf("migration namespace disagrees with connection")
 	}
-	if command.verb == "install" || command.verb == "worker" || command.verb == "catch-up" || command.verb == "contract" || command.verb == "close-epoch" {
+	if command.verb == "install" || command.verb == "deploy" || command.verb == "worker" || command.verb == "catch-up" || command.verb == "contract" || command.verb == "close-epoch" {
 		if err := pgVerifyMigrationFacilities(database); err != nil {
 			return err
 		}
@@ -167,7 +170,7 @@ func pgRunSchemaCommandContext(serviceContext context.Context, command pgSchemaC
 	if pgHasRowCompanion(database) {
 		return pgRunRowSchemaCommand(serviceContext, command, out, database)
 	}
-	if command.verb == "catch-up" || command.verb == "contract" || command.verb == "close-epoch" {
+	if command.verb == "deploy" || command.verb == "catch-up" || command.verb == "contract" || command.verb == "close-epoch" {
 		return fmt.Errorf("schema %s requires exact compiled row history", command.verb)
 	}
 	if _, err := history.ExpansionPlan(1); err != nil {

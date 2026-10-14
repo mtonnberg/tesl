@@ -1186,6 +1186,16 @@ them with `--schema catch-up` under Worker credentials; intermediate application
 deployments are not required. `MIG028` names simultaneous conflicting edits and
 provides the split/order and commands. Queue-bearing table Drop remains unsupported.
 
+`app --schema deploy` combines installation/staging and Worker execution in a finite
+deployment job with separate credentials. The Installer connection is supplied by
+`TESL_SCHEMA_INSTALLER_DSN`; `ddlConnection` supplies the exact Worker login. Both
+must reach the same database, and execution remains pinned to its installed UUID,
+fence and origin. A transforming target requires its reviewed final row Contract;
+deployment completes that Contract before success. Known drain blockers wait
+within `TESL_SCHEMA_DEPLOY_TIMEOUT_SECONDS` (default 600); data/source failures
+abort. Request startup does not activate deployment merely because the Installer
+environment variable is present.
+
 **Internal sparse migration coverage.** Before checking a row function or deriving a
 single adapter, the coverage pass checks the record's coverage against both complete
 inventories. Entity identity is the owning module path relative to the schema

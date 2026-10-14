@@ -151,7 +151,7 @@ func pgExecuteRowEpoch(parent context.Context, conn *pgx.Conn, b *pgRowBaseline,
 		return result, nil
 	}
 	if len(result.RecentInstances) > 0 && !force {
-		return result, fmt.Errorf("close epoch has recent retiring instances; stop them and wait or use --force")
+		return result, &pgMigrationDrainError{"close epoch has recent retiring instances; stop them and wait or use --force"}
 	}
 	err = pgMigrationSessionLock(ctx, conn, initial.FenceNamespace, 2147483647, true, func() error {
 		return pgRowEpochDrain(ctx, conn, initial.FenceNamespace, initial.MinVersion, through, func() error {
@@ -164,7 +164,7 @@ func pgExecuteRowEpoch(parent context.Context, conn *pgx.Conn, b *pgRowBaseline,
 					return fmt.Errorf("close epoch admission changed before publication")
 				}
 				if len(result.RecentInstances) > 0 && !force {
-					return fmt.Errorf("close epoch has recent retiring instances; stop them and wait or use --force")
+					return &pgMigrationDrainError{"close epoch has recent retiring instances; stop them and wait or use --force"}
 				}
 				raw, err := pgRowBaselineHex(document)
 				if err != nil {

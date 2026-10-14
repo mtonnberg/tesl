@@ -12,7 +12,7 @@ import (
 // Installer-only proposals can cover future retained edges. Their hashes name
 // the exact predecessor they require, but do not install that predecessor or
 // admit any version. Existing protected activation rechecks the installed chain.
-func pgStageRowQueueHistory(ctx context.Context, conn *pgx.Conn, b *pgRowBaseline, roles PgMigrationControlRoles) error {
+func pgStageRowQueueHistory(ctx context.Context, conn *pgx.Conn, b *pgRowBaseline, roles PgMigrationControlRoles, expected *PgMigrationControlState) error {
 	type edge struct {
 		window  *pgRowBaseline
 		digests []string
@@ -36,7 +36,7 @@ func pgStageRowQueueHistory(ctx context.Context, conn *pgx.Conn, b *pgRowBaselin
 		for start := 0; start < len(edge.digests); start += pgRowQueueStagingBatchLimit {
 			end := min(start+pgRowQueueStagingBatchLimit, len(edge.digests))
 			batch, stop := context.WithTimeout(ctx, pgLeaseTimeout())
-			err := pgStageRetainedQueueBatch(batch, conn, edge.window, roles, edge.digests[start:end], end == len(edge.digests))
+			err := pgStageRetainedQueueBatch(batch, conn, edge.window, roles, edge.digests[start:end], end == len(edge.digests), expected)
 			stop()
 			if err != nil {
 				return fmt.Errorf("queue staging V%d: %w", edge.window.target.version, err)
@@ -47,7 +47,7 @@ func pgStageRowQueueHistory(ctx context.Context, conn *pgx.Conn, b *pgRowBaselin
 	return nil
 }
 
-func pgStageRetainedQueueBatch(ctx context.Context, conn *pgx.Conn, b *pgRowBaseline, roles PgMigrationControlRoles, digests []string, complete bool) error {
+func pgStageRetainedQueueBatch(ctx context.Context, conn *pgx.Conn, b *pgRowBaseline, roles PgMigrationControlRoles, digests []string, complete bool, expected *PgMigrationControlState) error {
 	if len(digests) == 0 || len(digests) > pgRowQueueStagingBatchLimit || b == nil || b.target == nil {
 		return fmt.Errorf("retained queue staging requires a bounded compiler-owned edge")
 	}
@@ -82,6 +82,9 @@ func pgStageRetainedQueueBatch(ctx context.Context, conn *pgx.Conn, b *pgRowBase
 	ready := true
 	state, _, err := pgReadRowBaselineState(ctx, tx, observer, roles, false, &ready)
 	if err != nil {
+		return err
+	}
+	if err := pgCheckDeploymentIdentity(state, expected); err != nil {
 		return err
 	}
 	// Completed earlier edges are immutable observation. A latest repair cannot
@@ -189,6 +192,10 @@ func pgStageRetainedQueueBatch(ctx context.Context, conn *pgx.Conn, b *pgRowBase
 // worker/Contract commands. It lends one boot-locked session to each step; no
 // intermediate application registration or request identity is manufactured.
 func pgExecuteRowCatchup(ctx context.Context, conn *pgx.Conn, config *pgx.ConnConfig, b *pgRowBaseline, roles PgMigrationControlRoles) (result PgMigrationControlState, resultErr error) {
+	return pgExecuteRowCatchupFor(ctx, conn, config, b, roles, nil)
+}
+
+func pgExecuteRowCatchupFor(ctx context.Context, conn *pgx.Conn, config *pgx.ConnConfig, b *pgRowBaseline, roles PgMigrationControlRoles, expected *PgMigrationControlState) (result PgMigrationControlState, resultErr error) {
 	if b == nil || b.target == nil || b.target.version != b.history.CurrentVersion {
 		return result, fmt.Errorf("schema catch-up requires the complete current compiled row history")
 	}
@@ -216,6 +223,9 @@ func pgExecuteRowCatchup(ctx context.Context, conn *pgx.Conn, config *pgx.ConnCo
 			}
 			ready := true
 			state, _, err = pgReadRowBaselineState(query, tx, b, roles, true, &ready)
+			if err == nil {
+				err = pgCheckDeploymentIdentity(state, expected)
+			}
 			return err
 		})
 		return state, err
@@ -425,7 +435,7 @@ func pgRowCatchupRequiresDrained(ctx context.Context, conn *pgx.Conn, namespace 
 		return err
 	}
 	if recent {
-		return fmt.Errorf("schema catch-up must retire V%d through V%d; stop those application/worker instances, wait 30 seconds after their last heartbeat, then rerun --schema catch-up", from, through-1)
+		return &pgMigrationDrainError{fmt.Sprintf("schema catch-up must retire V%d through V%d; stop those application/worker instances, wait 30 seconds after their last heartbeat, then rerun --schema catch-up", from, through-1)}
 	}
 	return nil
 }

@@ -112,6 +112,7 @@ if (( $# == 0 )); then
   run_phase row-releases 3600 python3 "$repo_root/example/db-three-upgrades/run.py" --output "$migration_tmp/review05-releases/row"
   run_phase queue-releases 3600 python3 "$repo_root/example/queue-three-upgrades/run.py" --output "$migration_tmp/review05-releases/queue"
   run_phase ordered-row-queue 1800 python3 "$repo_root/scripts/test-ordered-row-queue.py" --output "$migration_tmp/ordered-row-queue"
+  run_phase deployment-wiring 120 python3 "$repo_root/scripts/test-worker-deploy.py"
   run_phase review05 3600 python3 "$repo_root/scripts/test-db-migration-review-05.py" --artifacts "$migration_tmp/review05-releases" --output "$migration_tmp/review05-results"
   run_phase review11 3600 python3 "$repo_root/scripts/test-db-migration-review-11.py" --artifacts "$migration_tmp/review05-releases" --output "$migration_tmp/review11-results"
   run_phase twenty-releases 3600 python3 "$repo_root/example/db-twenty-releases/run.py" --output "$migration_tmp/twenty-releases"
