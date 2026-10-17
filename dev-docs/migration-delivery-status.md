@@ -291,6 +291,31 @@ recorded in the acceptance section below.
 
 ## Implemented behavior and its evidence
 
+### Combined installation and rolling Worker startup
+
+`app --schema worker --install` accepts the existing two connection inputs:
+`TESL_SCHEMA_INSTALLER_DSN` and the configured Worker `ddlConnection`. It checks
+both connections reach the same database, installs/stages with the Installer,
+closes that connection, and passes only the Worker connection/configuration and
+verified database identity into the long-running Worker. The consumed Installer
+variable is removed from the current Go environment; this is not secure erasure
+of startup credentials or a separate-process security boundary.
+
+The current schema window stays open for rolling application overlap. The
+Kubernetes example uses this command instead of a pre-upgrade Installer Job;
+its post-upgrade cleanup Job remains. `AGENTS.md` now uses this discussion as an
+example of concrete language about tables, permissions, commands and processes.
+
+Targeted verification: `.tesl-stuff/worker-install-native.log` verifies separate
+connections, closed Installer sessions before Worker readiness, restricted
+Worker table privileges, restart and unchanged deployment behavior.
+`worker-install-analysis.log` passes runtime/migrationtest race tests, vet,
+staticcheck, lint, gosec and Nilaway. The actual kind/Helm/OpenTofu run in
+`worker-install-kube.log` records 731 successful samples, zero failed samples,
+at least two Ready application pods, both version overlaps, 81 queue conversions
+and 121 correct job results. These new changes have targeted evidence; the full
+gate baseline recorded above predates this combined-command increment.
+
 | Area | Delivered surface | Main evidence / review entry point |
 |---|---|---|
 | Source history | Guarded generation/refresh, frozen nominal schemas/codecs, verified `Same`, typed row/queue functions and fixtures, source-bound Contract previews | [Implementation ledger](migrations-implementation.md), compiler migration suites |

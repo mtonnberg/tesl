@@ -48,11 +48,11 @@ func pgDeploymentTimeout() (time.Duration, error) {
 
 func pgDeploymentConnections(config PostgresConfig, roles PgMigrationControlRoles) (*pgx.ConnConfig, *pgx.ConnConfig, error) {
 	if roles.Request == "" {
-		return nil, nil, fmt.Errorf("schema deploy requires Worker migration topology")
+		return nil, nil, fmt.Errorf("combined schema setup requires Worker migration topology")
 	}
 	dsn := os.Getenv("TESL_SCHEMA_INSTALLER_DSN")
 	if dsn == "" {
-		return nil, nil, fmt.Errorf("schema deploy requires TESL_SCHEMA_INSTALLER_DSN for its separate Installer connection")
+		return nil, nil, fmt.Errorf("combined schema setup requires TESL_SCHEMA_INSTALLER_DSN for its separate Installer connection")
 	}
 	installer, err := pgx.ParseConfig(dsn)
 	if err != nil {
@@ -63,42 +63,43 @@ func pgDeploymentConnections(config PostgresConfig, roles PgMigrationControlRole
 		return nil, nil, err
 	}
 	if worker.User != roles.Worker || installer.User == roles.Worker || installer.User == roles.Request {
-		return nil, nil, fmt.Errorf("schema deploy requires the configured Worker login in ddlConnection and a distinct Installer login in TESL_SCHEMA_INSTALLER_DSN")
+		return nil, nil, fmt.Errorf("combined schema setup requires the configured Worker login in ddlConnection and a distinct Installer login in TESL_SCHEMA_INSTALLER_DSN")
 	}
 	installer.RuntimeParams["application_name"] = "tesl-exec:" + UUIDv7()
 	worker.RuntimeParams["application_name"] = "tesl-exec:" + UUIDv7()
 	return installer, worker, nil
 }
 
-func pgRunRowDeployment(parent context.Context, command pgSchemaCommand, out io.Writer, b *pgRowBaseline, roles PgMigrationControlRoles) (resultErr error) {
-	budget, err := pgDeploymentTimeout()
-	if err != nil {
-		return err
-	}
+type pgPreparedRowWorker struct {
+	connection *pgx.Conn
+	config     *pgx.ConnConfig
+	installed  PgMigrationControlState
+}
+
+func pgCloseSchemaConnection(conn *pgx.Conn) error {
+	cleanup, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return conn.Close(cleanup)
+}
+
+// Installer state is confined to this startup frame. Only the independently
+// authenticated Worker connection/configuration and installed identity escape.
+func pgPrepareRowWorker(ctx context.Context, b *pgRowBaseline, roles PgMigrationControlRoles) (prepared *pgPreparedRowWorker, resultErr error) {
 	installerConfig, workerConfig, err := pgDeploymentConnections(b.database.Config, roles)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	terminalContract := b.target != nil && (len(b.target.windows) > 0 || len(b.target.retirements) > 0)
-	if terminalContract {
-		if _, err := pgRowContractFor(b.database, b.history.CurrentVersion); err != nil {
-			return fmt.Errorf("schema deploy requires a reviewed final row Contract; generate it with tesl migrate contract --version %d app.tesl --manifest-json and rebuild: %w", b.history.CurrentVersion, err)
-		}
-	}
-	ctx, cancel := context.WithTimeout(parent, budget)
-	defer cancel()
 	startup, stop := context.WithTimeout(ctx, pgLeaseTimeout())
 	defer stop()
 	worker, err := pgx.ConnectConfig(startup, workerConfig)
 	if err != nil {
-		return fmt.Errorf("schema deploy cannot connect its Worker; check ddlConnection and credentials")
+		return nil, fmt.Errorf("schema setup cannot connect its Worker; check ddlConnection and credentials")
 	}
-	closeConnection := func(conn *pgx.Conn) error {
-		cleanup, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		return conn.Close(cleanup)
-	}
-	defer func() { resultErr = errors.Join(resultErr, closeConnection(worker)) }()
+	defer func() {
+		if resultErr != nil {
+			resultErr = errors.Join(resultErr, pgCloseSchemaConnection(worker))
+		}
+	}()
 	// Check Worker isolation before the Installer can mutate anything. The
 	// existing role policy still refuses leaked non-administrative Owner grants.
 	if err := pgControlTransaction(startup, worker, false, func(tx pgx.Tx) error {
@@ -110,43 +111,70 @@ func pgRunRowDeployment(parent context.Context, command pgSchemaCommand, out io.
 			return err
 		}
 		if !exact {
-			return fmt.Errorf("schema deploy requires exact Worker session identity")
+			return fmt.Errorf("schema setup requires exact Worker session identity")
 		}
 		return nil
 	}); err != nil {
-		return err
+		return nil, err
 	}
 	installer, err := pgx.ConnectConfig(startup, installerConfig)
 	if err != nil {
-		return fmt.Errorf("schema deploy cannot connect its Installer; check TESL_SCHEMA_INSTALLER_DSN and credentials")
+		return nil, fmt.Errorf("schema setup cannot connect its Installer; check TESL_SCHEMA_INSTALLER_DSN and credentials")
 	}
-	defer func() { resultErr = errors.Join(resultErr, closeConnection(installer)) }()
+	defer func() { resultErr = errors.Join(resultErr, pgCloseSchemaConnection(installer)) }()
 	// The live backend tag/PID must be visible in the Worker's own database.
 	// This permits different connection endpoints without mistaking equal
 	// database names on different clusters for the same installation.
 	var installerPID int
 	if err := installer.QueryRow(startup, "select pg_catalog.pg_backend_pid()").Scan(&installerPID); err != nil {
-		return err
+		return nil, err
 	}
 	var sameDatabase bool
 	if err := worker.QueryRow(startup, `select exists(select 1 from pg_catalog.pg_stat_activity
  where pid=$1 and application_name=$2 and datname=pg_catalog.current_database())`, installerPID, installerConfig.RuntimeParams["application_name"]).Scan(&sameDatabase); err != nil {
-		return err
+		return nil, err
 	}
 	if !sameDatabase {
-		return fmt.Errorf("schema deploy Installer and Worker must use dedicated sessions to the same PostgreSQL database")
+		return nil, fmt.Errorf("schema setup Installer and Worker must use dedicated sessions to the same PostgreSQL database")
 	}
 	installed, err := InstallPgCompiledRowBaseline(startup, installer, b.database, roles)
 	if err != nil {
-		return fmt.Errorf("schema deploy installation: %w", err)
+		return nil, fmt.Errorf("schema setup installation: %w", err)
 	}
 	stop()
 	if err := pgStageRowQueueHistory(ctx, installer, b, roles, &installed); err != nil {
-		return fmt.Errorf("schema deploy staging: %w", err)
+		return nil, fmt.Errorf("schema setup staging: %w", err)
 	}
-	if err := closeConnection(installer); err != nil {
+	if err := pgCloseSchemaConnection(installer); err != nil {
+		return nil, err
+	}
+	// Avoid accidental reuse and inheritance by child processes. This is not
+	// secure erasure of the original environment or a process-isolation boundary.
+	if err := os.Unsetenv("TESL_SCHEMA_INSTALLER_DSN"); err != nil {
+		return nil, fmt.Errorf("cannot remove the consumed Installer connection from the process environment")
+	}
+	return &pgPreparedRowWorker{worker, workerConfig, installed}, nil
+}
+
+func pgRunRowDeployment(parent context.Context, command pgSchemaCommand, out io.Writer, b *pgRowBaseline, roles PgMigrationControlRoles) (resultErr error) {
+	budget, err := pgDeploymentTimeout()
+	if err != nil {
 		return err
 	}
+	terminalContract := b.target != nil && (len(b.target.windows) > 0 || len(b.target.retirements) > 0)
+	if terminalContract {
+		if _, err := pgRowContractFor(b.database, b.history.CurrentVersion); err != nil {
+			return fmt.Errorf("schema deploy requires a reviewed final row Contract; generate it with tesl migrate contract --version %d app.tesl --manifest-json and rebuild: %w", b.history.CurrentVersion, err)
+		}
+	}
+	ctx, cancel := context.WithTimeout(parent, budget)
+	defer cancel()
+	prepared, err := pgPrepareRowWorker(ctx, b, roles)
+	if err != nil {
+		return err
+	}
+	worker, workerConfig, installed := prepared.connection, prepared.config, prepared.installed
+	defer func() { resultErr = errors.Join(resultErr, pgCloseSchemaConnection(worker)) }()
 	migrationBoundary("schema-deploy-after-installer-close")
 	var state PgMigrationControlState
 	for {
@@ -181,7 +209,7 @@ func pgRunRowDeployment(parent context.Context, command pgSchemaCommand, out io.
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := closeConnection(worker); err != nil {
+	if err := pgCloseSchemaConnection(worker); err != nil {
 		return err
 	}
 	if command.json {

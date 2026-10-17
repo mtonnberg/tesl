@@ -1196,6 +1196,14 @@ within `TESL_SCHEMA_DEPLOY_TIMEOUT_SECONDS` (default 600); data/source failures
 abort. Request startup does not activate deployment merely because the Installer
 environment variable is present.
 
+`app --schema worker --install` uses those same two connection inputs to perform
+installation/staging before starting the ordinary long-running schema Worker.
+The Installer connection closes before expansion/backfill/conversion begins, and
+its DSN is removed from the current Go environment. The Worker uses its own login;
+the current compatibility window remains open for rolling application overlap.
+This combines commands, not database permissions, and does not guarantee secure
+erasure of startup credentials from the process or its container configuration.
+
 **Internal sparse migration coverage.** Before checking a row function or deriving a
 single adapter, the coverage pass checks the record's coverage against both complete
 inventories. Entity identity is the owning module path relative to the schema

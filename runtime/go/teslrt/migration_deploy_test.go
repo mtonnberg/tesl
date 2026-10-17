@@ -44,6 +44,25 @@ func TestSchemaDeploymentArgumentsAndCredentials(t *testing.T) {
 	}
 }
 
+func TestSchemaWorkerInstallIsExplicit(t *testing.T) {
+	command, handled, err := pgParseSchemaCommand([]string{"--schema", "worker", "--install", "--json", "--database", "App.Main"})
+	if err != nil || !handled || !command.install || command.verb != "worker" || !command.json || command.database != "App.Main" {
+		t.Fatal("combined worker did not retain explicit installation intent", command, handled, err)
+	}
+	for _, args := range [][]string{
+		{"--schema", "worker", "--install", "--install"},
+		{"--schema", "deploy", "--install"},
+		{"--schema", "install", "--install"},
+		{"--schema", "status", "--install"},
+		{"--schema", "worker", "--install", "--worker", "other"},
+		{"--schema", "worker", "--install", "--force"},
+	} {
+		if _, handled, err := pgParseSchemaCommand(args); !handled || err == nil {
+			t.Fatal("invalid combined-worker command accepted", args)
+		}
+	}
+}
+
 func TestSchemaDeploymentPinsInstallationAcrossPhases(t *testing.T) {
 	expected := PgMigrationControlState{DatabaseUUID: "installation", FenceNamespace: 7, FenceDomain: "tesl-1", Format: 5, InitialVersion: 1, Current: 1}
 	advanced := expected

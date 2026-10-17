@@ -69,8 +69,8 @@ The app is configured entirely through environment variables — set them with
 | `TESL_POSTGRES_HOST` / `_PORT` / `_DATABASE` / `_USER` / `_PASSWORD` | external PostgreSQL connection |
 
 Unversioned databases use their ordinary startup initialization. Versioned
-Worker-topology histories use the deployment job below to install and execute
-their checked migration history.
+Worker-topology histories use the finite deployment job or the rolling Worker
+startup below to install and execute their checked migration history.
 
 ```bash
 # container image against your own PostgreSQL:
@@ -103,9 +103,10 @@ host. Create the three environment files using the names your application reads:
 | `.env.request` | Request credentials and ordinary application settings |
 
 All connections target the same PostgreSQL database. Provision the distinct
-control-owner, Worker and Request roles beforehand. Installer credentials belong
-only to the finite deployment job. The images use the normal compiled application
-entry point, so schema command arguments reach the same checked binary.
+control-owner, Worker and Request roles beforehand. In this Compose recipe,
+Installer credentials belong only to the finite deployment job. The images use
+the normal compiled application entry point, so schema command arguments reach
+the same checked binary.
 
 Run this from the deployment controller after publishing the release image:
 
@@ -117,8 +118,9 @@ sh deploy-worker.sh compose.worker.yml
 The script validates configuration and pulls the image, stops the old application
 and schema Worker, then runs `app --schema deploy --json`. That command installs
 and stages as Installer, closes its Installer connection, and executes retained
-history and reviewed finality as Worker. It waits for real heartbeat/claim expiry
-within `TESL_SCHEMA_DEPLOY_TIMEOUT_SECONDS` (600 seconds by default). Include the
+history and the reviewed target Contract as Worker. It waits for real
+heartbeat/claim expiry within `TESL_SCHEMA_DEPLOY_TIMEOUT_SECONDS` (600 seconds
+by default). Include the
 reviewed final Contract when the target transforms rows.
 
 Only a successful migration-job exit starts the new Worker and Request services.
@@ -129,16 +131,48 @@ for source previews, repair policies and exact role requirements.
 
 ## Local Kubernetes rolling example
 
+For a rolling deployment, start the schema Worker with installation included:
+
+```sh
+app --schema worker --install [--json] [--database App.Main]
+```
+
+Supply two independent connection inputs: `TESL_SCHEMA_INSTALLER_DSN` for the
+Installer and `MigrationConfig.ddlConnection` for the Worker login. The command
+creates Tesl's bookkeeping tables/functions and stages checked migrations with
+the Installer, verifies that both connections reach the same database, closes
+the Installer connection and unsets `TESL_SCHEMA_INSTALLER_DSN` from the current
+Go environment. The Worker keeps the installed database UUID, fence and origin
+pinned, then performs ordinary adjacent/additive expansion, row backfill and
+queue conversion. It reports `schema-worker-ready` and preserves old-version
+overlap; it does not finish the current Contract or serve HTTP.
+
+`TESL_SCHEMA_DEPLOY_TIMEOUT_SECONDS` bounds installation/setup, not the ongoing
+Worker lifetime, which ends on signal or cancellation. Plain `--schema worker`
+is unchanged and ignores the Installer environment variable without `--install`.
+After old application pods drain, run the finite `--schema deploy` Job to catch
+up and complete the reviewed target Contract.
+
+Closing the Installer connection, dropping its configuration and unsetting the
+variable is not a security isolation boundary within the same process. It does
+not guarantee erasure of original environment bytes or process memory, remove
+the Kubernetes Secret, or prevent a compromised host or operator from retrieving
+startup credentials.
+
 For an actual local Helm/OpenTofu rollout with old/new pod overlap, run the
 [kind rolling-migration example](../example/kubernetes-rolling/README.md). It uses
-separate ordered releases: Installer staging and a ready schema worker first,
-application rolling update second, then a retirement Job. The Request pods start
-normally; schema Jobs/workers use the schema flags.
+separate ordered releases: database first, then the migrator's `/worker.sh`
+running `--schema worker --install`, then the application rolling update and a
+post-install/post-upgrade retirement Job running `--schema deploy`. There is no
+pre-install Installer Job. The migrator runtime Secret supplies both Worker DDL
+credentials and the Installer DSN; the app Request Secret contains no privileged
+credentials. Request pods start normally; schema Jobs/workers use the schema flags.
 
 The example continuously checks database-backed HTTP reads/writes and queue
 submission, records Ready-pod overlap, and verifies retained rows and final job
-results. This demonstrates observed availability for compatible adjacent changes.
-The Compose recipe above instead uses a drained rollout.
+results. The README's recorded availability measurements refer to the previous
+separate install/worker commands; verification of the combined startup remains
+pending. The Compose recipe above instead uses a drained rollout.
 
 ## Generate OpenAPI for security scanning
 

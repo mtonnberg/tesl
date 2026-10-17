@@ -32,6 +32,9 @@ func pgRunRowSchemaCommand(serviceContext context.Context, command pgSchemaComma
 	if command.verb == "deploy" {
 		return pgRunRowDeployment(serviceContext, command, out, b, roles)
 	}
+	if command.verb == "worker" && command.install {
+		return pgRunInstallingRowWorker(serviceContext, command, out, b, roles)
+	}
 	if command.verb == "install" {
 		if roles.Request != "" {
 			if command.worker != roles.Worker || command.request != roles.Request {
@@ -67,6 +70,44 @@ func pgRunRowSchemaCommand(serviceContext context.Context, command pgSchemaComma
 		defer cancel()
 		resultErr = errors.Join(resultErr, conn.Close(cleanup))
 	}()
+	cancel()
+	return pgRunRowSchemaCommandOn(serviceContext, command, out, b, roles, config, conn, nil)
+}
+
+func pgRunInstallingRowWorker(serviceContext context.Context, command pgSchemaCommand, out io.Writer, b *pgRowBaseline, roles PgMigrationControlRoles) (resultErr error) {
+	budget, err := pgDeploymentTimeout()
+	if err != nil {
+		return err
+	}
+	setup, stop := context.WithTimeout(serviceContext, budget)
+	prepared, err := pgPrepareRowWorker(setup, b, roles)
+	stop()
+	if err != nil {
+		return err
+	}
+	defer func() { resultErr = errors.Join(resultErr, pgCloseSchemaConnection(prepared.connection)) }()
+	migrationBoundary("schema-worker-after-installer-close")
+	return pgRunRowSchemaCommandOn(serviceContext, command, out, b, roles, prepared.config, prepared.connection, &prepared.installed)
+}
+
+// Both ordinary and install-then-worker startup enter the same execution path.
+// The combined mode additionally pins the installation verified by its Installer.
+func pgRunRowSchemaCommandOn(serviceContext context.Context, command pgSchemaCommand, out io.Writer, b *pgRowBaseline, roles PgMigrationControlRoles, config *pgx.ConnConfig, conn *pgx.Conn, expected *PgMigrationControlState) error {
+	ctx, cancel := context.WithTimeout(serviceContext, pgLeaseTimeout())
+	defer cancel()
+	var err error
+	if expected != nil {
+		if err := pgControlTransaction(ctx, conn, false, func(tx pgx.Tx) error {
+			ready := true
+			state, _, err := pgReadRowBaselineState(ctx, tx, b, roles, true, &ready)
+			if err != nil {
+				return err
+			}
+			return pgCheckDeploymentIdentity(state, expected)
+		}); err != nil {
+			return err
+		}
+	}
 	switch command.verb {
 	case "catch-up":
 		cancel()
@@ -87,7 +128,7 @@ func pgRunRowSchemaCommand(serviceContext context.Context, command pgSchemaComma
 		_, err = fmt.Fprintf(out, "%s: schema caught up to V%d; minimum V%d.\n", b.history.Database, state.Current, state.MinVersion)
 		return err
 	case "install":
-		state, err := InstallPgCompiledRowBaseline(ctx, conn, database, roles)
+		state, err := InstallPgCompiledRowBaseline(ctx, conn, b.database, roles)
 		if err != nil {
 			return err
 		}
@@ -115,12 +156,26 @@ func pgRunRowSchemaCommand(serviceContext context.Context, command pgSchemaComma
 				}
 				var err error
 				state, _, err = pgReadRowBaselineState(ctx, tx, b, roles, true)
+				if err == nil {
+					err = pgCheckDeploymentIdentity(state, expected)
+				}
 				return err
 			}); err != nil {
 				return err
 			}
 			if state.Current != b.target.version {
 				if err := pgPublishRowQueueTarget(ctx, conn, b.history.Namespace, roles, b.queues[b.target.version-1].version, b.target.contract, b.target.hash); err != nil {
+					return err
+				}
+			}
+			if expected != nil {
+				if err := pgControlTransaction(ctx, conn, false, func(tx pgx.Tx) error {
+					state, _, err := pgReadRowBaselineState(ctx, tx, b, roles, true)
+					if err != nil {
+						return err
+					}
+					return pgCheckDeploymentIdentity(state, expected)
+				}); err != nil {
 					return err
 				}
 			}
@@ -153,6 +208,9 @@ func pgRunRowSchemaCommand(serviceContext context.Context, command pgSchemaComma
 		cancel()
 		state, err := pgExecuteRowBaseline(serviceContext, conn, b, roles)
 		if err != nil {
+			return err
+		}
+		if err := pgCheckDeploymentIdentity(state, expected); err != nil {
 			return err
 		}
 		return pgRunRowIndexServices(serviceContext, conn, config, b, roles, state, func(state PgMigrationControlState) error {

@@ -10,7 +10,8 @@ safe to publish new data and retire old users.
 |---|---|---|
 | `tesl migrate generate`, `tesl migrate contract`, `agent-context`, source tests | Compiler/tooling | Prepare and check source; do not modify the application database |
 | `app --schema install --worker ROLE --request ROLE` | Short-lived installer | Register the exact compiled baseline or queue/repair staging |
-| `app --schema deploy --json` | Separate Installer, then Worker connections | Install, stage, catch up and complete reviewed target finality in one finite deployment job |
+| `app --schema deploy --json` | Separate Installer, then Worker connections | Install, stage, catch up and complete the reviewed target Contract in one finite deployment job |
+| `app --schema worker --install` | Separate Installer, then Worker connections | Install/stage, then run expansion and backfill/queue conversion while preserving old-version overlap |
 | `app --schema worker` | Configured Worker | Publish checked expansion and perform conversion/backfill |
 | Ordinary HTTP/queue application | Configured Request | Serve admitted requests and process compatible jobs |
 | `app --schema status --json` | Configured read-capable application principal | Observe installed progress without mutation |
@@ -60,6 +61,54 @@ receipts; failure never starts the new Request process.
 The [Compose rollout](deploy.md#automatic-migration-job-worker-topology) supplies
 the stop → deployment job → start wiring with separate credential files. It uses
 one latest image for every retained migration step.
+
+### Install and start a long-running Worker for a rolling deployment
+
+```sh
+app --schema worker --install [--json] [--database App.Main]
+```
+
+This command uses two independently configured inputs:
+
+| Input | Login and work |
+|---|---|
+| `TESL_SCHEMA_INSTALLER_DSN` | Installer: create Tesl's bookkeeping tables and PostgreSQL functions, and stage checked migrations |
+| `MigrationConfig.ddlConnection` | Worker: expand application tables and convert stored rows or queued jobs |
+
+The shared `pgPrepareRowWorker` helper installs/stages with the Installer,
+verifies that the Worker connection reaches the same database, closes the
+Installer connection and unsets `TESL_SCHEMA_INSTALLER_DSN` from the current Go
+environment. It returns only the Worker connection/configuration and the pinned
+installed database UUID, fence and origin. The same role checks described above
+apply; two logins do not require separate commands or containers.
+
+Installation/setup is bounded by `TESL_SCHEMA_DEPLOY_TIMEOUT_SECONDS` (default
+600; range 1–86400). The ongoing Worker instead runs until a signal or cancellation
+stops it. It performs the ordinary Worker's supported adjacent/additive expansion,
+row backfill and queue conversion, reports `schema-worker-ready`, and preserves
+old-version overlap. It does not finish the current target's Contract and does
+not serve HTTP. Existing `--schema worker` behavior is unchanged: without explicit
+`--install`, it ignores the Installer environment variable.
+
+Closing a connection, dropping Installer configuration and unsetting an
+environment variable do not make this process a security isolation boundary.
+These actions do not guarantee erasure of original environment bytes or process
+memory, delete a Kubernetes Secret, or prevent a compromised host or operator
+from retrieving startup credentials. PostgreSQL still checks the Worker login's
+permissions on its connection.
+
+For the [Kubernetes rolling example](../example/kubernetes-rolling/README.md),
+the order is database → migrator Worker ready → application rolling update →
+retirement Job. `/worker.sh` runs `--schema worker --install`; there is no separate
+pre-install Job. The migrator runtime Secret contains Worker DDL credentials and
+the Installer DSN, while the app Request Secret contains no privileged credentials.
+The remaining app post-install/post-upgrade hook runs finite `--schema deploy`:
+it catches up and completes the reviewed target Contract after old applications
+and their claims drain. Running that retirement command before rolling old pods
+can wait for pods that the deployment controller has not yet replaced.
+
+The example's recorded measurements cover the previous separate install/worker
+commands; verification evidence for the combined startup is still pending.
 
 ### Preview in CI
 

@@ -161,7 +161,7 @@ from demo.tesl_schema_state s;
             values = {"kubeconfig_path": str(kubeconfig), "namespace": namespace, "app_image": image,
                       "revision": version, "schema_version": version, "host_port": args.port}
             (output / "infra/demo.auto.tfvars.json").write_text(json.dumps(values, indent=2) + "\n")
-            print(f"Applying V{version}: Installer -> ready schema worker -> rolling app -> retirement", flush=True)
+            print(f"Applying V{version}: worker --install -> ready -> rolling app -> retirement", flush=True)
             run(["tofu", f"-chdir={output / 'infra'}", "apply", "-input=false", "-auto-approve"], env=env, timeout=1200, log=output / f"apply-v{version}.log")
             assert request(url, "/health")["release"] == version
             inspect(version)

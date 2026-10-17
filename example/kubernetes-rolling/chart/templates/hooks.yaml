@@ -1,6 +1,5 @@
-{{- if or (eq .Values.mode "migrator") (eq .Values.mode "app") }}
-{{- $install := eq .Values.mode "migrator" }}
-{{- $hook := ternary "pre-install,pre-upgrade" "post-install,post-upgrade" $install }}
+{{- if eq .Values.mode "app" }}
+{{- $hook := "post-install,post-upgrade" }}
 apiVersion: v1
 kind: Secret
 metadata:
@@ -11,10 +10,8 @@ metadata:
     helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
 type: Opaque
 stringData:
-  {{- include "demo.env" (dict "root" . "role" (ternary "installer" "worker" $install)) | nindent 2 }}
-  {{- if not $install }}
+  {{- include "demo.env" (dict "root" . "role" "worker") | nindent 2 }}
   TESL_SCHEMA_INSTALLER_DSN: {{ printf "postgres://postgres:%s@%s:5432/%s?sslmode=disable" (.Values.database.installerPassword | urlquery) .Values.database.host .Values.database.name | quote }}
-  {{- end }}
 ---
 apiVersion: batch/v1
 kind: Job
@@ -42,11 +39,7 @@ spec:
             limits:
               memory: 512Mi
           command: [/app]
-          {{- if $install }}
-          args: [--schema, install, --worker, demo_worker, --request, demo_request, --json]
-          {{- else }}
           args: [--schema, deploy, --json]
-          {{- end }}
           envFrom:
             - secretRef:
                 name: {{ .Release.Name }}-schema-hook

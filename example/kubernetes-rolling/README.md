@@ -63,33 +63,50 @@ Instead, OpenTofu orders three releases from the same small chart:
 ```text
 database
    ↓
-migrator: pre-hook install/stage → Recreate schema-worker → worker-ready
+migrator: Recreate worker --install → schema-worker-ready
    ↓
 app: RollingUpdate (0 unavailable, 1 surge) → post-hook deploy/retire
 ```
 
-1. **Installer Job:** `--schema install` stages the new checked history. It uses
-   the Installer credential and grants no premature version admission.
-2. **Schema worker:** `--schema worker` expands the adjacent revision and keeps
-   backfill/conversion running. `/worker.sh` marks it Ready only after the actual
-   `schema-worker-ready` event. The old schema executor is replaced, while old
-   application pods continue serving.
-3. **Application rollout:** ordinary `/app`, with Request credentials. Readiness
+1. **Schema worker:** `/worker.sh` runs `app --schema worker --install --json`.
+   It checks that `TESL_SCHEMA_INSTALLER_DSN` and the independently configured
+   Worker `MigrationConfig.ddlConnection` reach the same database. The Installer
+   then creates Tesl's bookkeeping tables/functions and stages checked migrations.
+   Its connection closes and its DSN is removed from the current Go environment.
+   The long-running Worker then expands the adjacent revision and keeps row
+   backfill/queue conversion running without completing the current Contract.
+   `/worker.sh` marks it Ready only after `schema-worker-ready`. The old schema
+   worker is replaced while old application pods continue serving. There is no
+   pre-install Installer Job.
+2. **Application rollout:** ordinary `/app`, with Request credentials. Readiness
    performs a database query. Two replicas, `maxUnavailable: 0`, `maxSurge: 1`, a
    brief preStop drain and termination grace preserve overlap.
-4. **Retirement Job:** the Helm post-install/post-upgrade hook runs `--schema deploy`
+3. **Retirement Job:** the Helm post-install/post-upgrade hook runs `--schema deploy`
    with separate Installer and Worker connections. It waits for old-instance
    heartbeats/claims to drain and then completes the reviewed Contract. OpenTofu
    waits for that hook before moving to the next release.
 
-Request pods receive only Request credentials. Hook credentials are separate.
+Worker installation/setup is bounded by `TESL_SCHEMA_DEPLOY_TIMEOUT_SECONDS`;
+after setup, the Worker runs until a signal or cancellation stops it. Plain
+`--schema worker` retains its existing behavior and ignores the Installer
+environment variable unless `--install` is explicit.
+
+The migrator runtime Secret contains both the Worker DDL credentials and the
+Installer DSN. The app Request Secret contains no privileged credentials.
+`chart/templates/hooks.yaml` contains only the app post-install/post-upgrade
+deployment Job and its Secret. Two database logins do not require two startup
+commands or pods.
+Database work after setup uses only the Worker login. The pod still receives the
+Installer secret at startup: closing its connection and clearing the Go environment
+do not guarantee erasure of original process memory or delete the Kubernetes Secret.
+
 The public passwords in `chart/values.yaml` are local-demo values. PostgreSQL uses
 `emptyDir`: deleting/replacing its pod loses the demo database. This example
 shows application rolling availability, not database HA or production provisioning.
 The one-second queue visibility timeout is also a demo setting; real handlers
 need a lease budget appropriate to their execution and renewal latency.
 
-## What the checks prove
+## What the checks measure
 
 - `/health` performs an admitted database read and reports the release.
 - The probe continuously reads, inserts unique notes and submits unique jobs;
@@ -105,8 +122,9 @@ need a lease budget appropriate to their execution and renewal latency.
   not required for every job.
 - All accepted note values and job results are checked after the rollout.
 
-This is **observed zero downtime for these compatible adjacent changes**, over
-the sampled window. Arbitrary rejected conversions, incompatible version gaps,
+The combined command recorded **observed zero downtime for these compatible
+adjacent changes**, over the sampled window. Arbitrary rejected conversions,
+incompatible version gaps,
 infrastructure failures or overload do not acquire a zero-downtime guarantee from
 `maxUnavailable: 0`. Contract is a retirement boundary: avoid automatically rolling
 back to an image whose version has already been retired. Helm `atomic` rollback
@@ -126,9 +144,9 @@ snapshots and `result.json`. The default output is under ignored `.tesl-stuff`.
 Keep custom output directories untracked too: they contain kubeconfig credentials
 and OpenTofu state.
 
-Verified local run: **763 samples, zero failures** (533 health reads, 115 note
-writes, 115 job submissions), minimum **2 Ready pods**, both version overlaps,
-**83 retained-job conversions**, and **123 correct final job receipts**. Health
-p95 was 32.4 ms and maximum 403.1 ms. Evidence for that run is
-`.tesl-stuff/kubernetes-rolling-verified-source/`; measurements are local observations, not
-a production SLA. Its cluster was cleaned up.
+Combined-command local run (`--schema worker --install`): **731 samples, zero
+failures** (505 health reads, 113 note writes, 113 job submissions), minimum
+**2 Ready pods**, both version overlaps, **81 retained-job conversions**, and
+**121 correct final job receipts**. Health p95 was 53.3 ms and maximum 673.5 ms.
+Evidence is under `.tesl-stuff/worker-install-kube/`; these are local observations,
+not a production SLA. The cluster was cleaned up.

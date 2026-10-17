@@ -20,7 +20,7 @@ trap cleanup EXIT
     done < "$state.pipe"
 ) &
 reader=$!
-/app --schema worker --json > "$state.pipe" &
+/app --schema worker --install --json > "$state.pipe" &
 child=$!
 printf '%s\n' "$child" > "$state.pid"
 terminate() {

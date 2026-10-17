@@ -25,4 +25,7 @@ TESL_QUEUE_VISIBILITY_TIMEOUT_MS: {{ .root.Values.queueVisibilityTimeoutMs | quo
 {{- $password = .root.Values.database.installerPassword -}}
 {{- end }}
 DEMO_DDL: {{ printf "postgres://%s:%s@%s:5432/%s?sslmode=disable" $user ($password | urlquery) .root.Values.database.host .root.Values.database.name | quote }}
+{{- if eq .root.Values.mode "migrator" }}
+TESL_SCHEMA_INSTALLER_DSN: {{ printf "postgres://postgres:%s@%s:5432/%s?sslmode=disable" (.root.Values.database.installerPassword | urlquery) .root.Values.database.host .root.Values.database.name | quote }}
+{{- end }}
 {{- end -}}

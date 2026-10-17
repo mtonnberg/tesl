@@ -20,6 +20,7 @@ type pgSchemaCommand struct {
 	verb, database, worker, request string
 	json                            bool
 	dryRun, force                   bool
+	install                         bool
 	targetVersion                   int
 }
 
@@ -39,7 +40,7 @@ func pgParseSchemaCommand(args []string) (pgSchemaCommand, bool, error) {
 		return command, false, nil
 	}
 	if position != 0 || args[0] != "--schema" || len(args) < 2 || (args[1] != "status" && args[1] != "install" && args[1] != "deploy" && args[1] != "worker" && args[1] != "catch-up" && args[1] != "contract" && args[1] != "close-epoch") {
-		return command, true, fmt.Errorf("usage: app --schema status [--database Module.Database] [--json]\n       app --schema install --worker ROLE [--request ROLE] [--database Module.Database] [--json]\n       app --schema deploy [--database Module.Database] [--json]\n       app --schema worker [--database Module.Database] [--json]\n       app --schema catch-up [--database Module.Database] [--json]\n       app --schema contract Vn [--database Module.Database] [--json]\n       app --schema close-epoch --through Vn [--dry-run] [--force] [--database Module.Database] [--json]")
+		return command, true, fmt.Errorf("usage: app --schema status [--database Module.Database] [--json]\n       app --schema install --worker ROLE [--request ROLE] [--database Module.Database] [--json]\n       app --schema deploy [--database Module.Database] [--json]\n       app --schema worker [--install] [--database Module.Database] [--json]\n       app --schema catch-up [--database Module.Database] [--json]\n       app --schema contract Vn [--database Module.Database] [--json]\n       app --schema close-epoch --through Vn [--dry-run] [--force] [--database Module.Database] [--json]")
 	}
 	command.verb = args[1]
 	start := 2
@@ -56,6 +57,11 @@ func pgParseSchemaCommand(args []string) (pgSchemaCommand, bool, error) {
 	}
 	for i := start; i < len(args); i++ {
 		switch args[i] {
+		case "--install":
+			if command.verb != "worker" || command.install {
+				return command, true, fmt.Errorf("--install is only valid once for schema worker")
+			}
+			command.install = true
 		case "--through":
 			if command.verb != "close-epoch" || command.targetVersion != 0 || i+1 == len(args) {
 				return command, true, fmt.Errorf("close-epoch requires one --through V2 or later")
@@ -169,6 +175,9 @@ func pgRunSchemaCommandContext(serviceContext context.Context, command pgSchemaC
 	}
 	if pgHasRowCompanion(database) {
 		return pgRunRowSchemaCommand(serviceContext, command, out, database)
+	}
+	if command.install {
+		return fmt.Errorf("schema worker --install requires exact compiled row history")
 	}
 	if command.verb == "deploy" || command.verb == "catch-up" || command.verb == "contract" || command.verb == "close-epoch" {
 		return fmt.Errorf("schema %s requires exact compiled row history", command.verb)

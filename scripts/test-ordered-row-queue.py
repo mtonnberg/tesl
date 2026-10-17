@@ -147,7 +147,7 @@ fn oldNote() -> Schema.Mail.V2.Note = Schema.Mail.V2.Note { id: "fixture", metad
     print("PASS: combined row/queue change reports the tested split/order and deployment commands", flush=True)
 
 
-def exercise(output, env, rejection=False, claim=False, crash=None, from_v2=False, epoch_tail=False, deployment=False, fresh=False, terminal_row=False, heartbeat=False):
+def exercise(output, env, rejection=False, claim=False, crash=None, from_v2=False, epoch_tail=False, deployment=False, fresh=False, terminal_row=False, heartbeat=False, combined_worker=False):
     target = 2 if terminal_row else (4 if epoch_tail else 3)
     cluster = Path(tempfile.mkdtemp(prefix="ordered-", dir="/tmp"))
     data = cluster / "data"
@@ -172,15 +172,36 @@ def exercise(output, env, rejection=False, claim=False, crash=None, from_v2=Fals
             raise RuntimeError(f"V{version} {args}: {result.stdout}\n{result.stderr}")
         return result.stdout + result.stderr
 
+    def installing_worker(version):
+        log = open(output / f"installing-worker-v{version}.log", "w+")
+        settings = dict(app_env("worker"), TESL_SCHEMA_INSTALLER_DSN=app_env("installer")["DEMO_DDL"])
+        process = subprocess.Popen([str(output / f"v{version}/app"), "--schema", "worker", "--install", "--json"], env=settings, stdout=log, stderr=log)
+        processes.append((process, log))
+        def ready():
+            log.flush(); log.seek(0)
+            text = log.read()
+            if process.poll() is not None:
+                raise RuntimeError(f"combined worker exited: {text}")
+            return '"kind":"schema-worker-ready"' in text
+        eventually(ready)
+        assert sql("select count(*) from pg_stat_activity where datname=current_database() and usename='installer' and application_name like 'tesl-exec:%'") == "0"
+        assert sql("select has_table_privilege('worker','mail.tesl_schema_state','UPDATE')") == "f"
+        return process
+
+    def stop_worker(process):
+        process.terminate()
+        assert process.wait(timeout=10) == 0
+
     def interrupt_at(boundary):
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
             path = cluster / "boundary.sock"
             listener.bind(str(path)); listener.listen(16); listener.settimeout(1)
             log = open(output / f"crash-{boundary}.log", "w+")
             settings = dict(app_env("worker"), TESL_MIGRATION_TEST_SOCKET=str(path))
-            if deployment:
+            if deployment or combined_worker:
                 settings["TESL_SCHEMA_INSTALLER_DSN"] = app_env("installer")["DEMO_DDL"]
-            process = subprocess.Popen([str(output / "v3/app-test"), "--schema", "deploy" if deployment else "catch-up", "--json"], env=settings, stdout=log, stderr=log)
+            arguments = ["worker", "--install"] if combined_worker else ["deploy" if deployment else "catch-up"]
+            process = subprocess.Popen([str(output / "v3/app-test"), "--schema", *arguments, "--json"], env=settings, stdout=log, stderr=log)
             processes.append((process, log))
             deadline = time.monotonic() + 60
             while time.monotonic() < deadline:
@@ -196,7 +217,7 @@ def exercise(output, env, rejection=False, claim=False, crash=None, from_v2=Fals
                     with connection.makefile("rb") as stream:
                         event = json.loads(stream.readline())
                     if event["name"] == boundary:
-                        if boundary == "schema-deploy-after-installer-close":
+                        if boundary in ("schema-deploy-after-installer-close", "schema-worker-after-installer-close"):
                             assert sql("select count(*) from pg_stat_activity where datname=current_database() and usename='installer' and application_name like 'tesl-exec:%'") == "0"
                         process.kill(); process.wait(timeout=5)
                         return
@@ -232,8 +253,11 @@ def exercise(output, env, rejection=False, claim=False, crash=None, from_v2=Fals
             assert json.loads(schema(target, "worker", "deploy")) == result
             print(f"PASS: fresh automatic deployment to V{target} and immutable replay", flush=True)
             return
-        schema(1, "installer", "install", "--worker", "worker", "--request", "request")
-        schema(1, "worker", "catch-up")
+        if combined_worker:
+            stop_worker(installing_worker(1))
+        else:
+            schema(1, "installer", "install", "--worker", "worker", "--request", "request")
+            schema(1, "worker", "catch-up")
         text = "blocked" if rejection else "kept"
         sql(f'''insert into mail.notes(id,metadata) values ('one','{{"oldText":"{text}"}}')''', "request")
         sql('''select mail.tesl_queue_enqueue(1,'Jobs','Delivery','retained','{"oldText":"job-kept"}')''', "request")
@@ -241,10 +265,23 @@ def exercise(output, env, rejection=False, claim=False, crash=None, from_v2=Fals
         if from_v2:
             schema(2, "worker", "catch-up")
             schema(2, "worker", "contract", "V2")
-        if not deployment:
+        if combined_worker:
+            worker = installing_worker(2)
+            assert sql("select current::text||','||min_version::text from mail.tesl_schema_state") == "2,1"
+            sql("select mail.tesl_queue_admit(1,'Jobs')", "request")
+            stop_worker(worker)
+            schema(2, "worker", "contract", "V2")
+            if crash:
+                interrupt_at(crash)
+                assert sql("select current from mail.tesl_schema_state") == "2"
+            worker = installing_worker(3)
+            assert sql("select current::text||','||min_version::text from mail.tesl_schema_state") == "3,2"
+            eventually(lambda: sql("select schema_version from mail.tesl_jobs where id='retained'") == "3")
+            stop_worker(worker)
+        elif not deployment:
             schema(target, "installer", "install", "--worker", "worker", "--request", "request")
-        assert sql("select current from mail.tesl_schema_state") == ("2" if from_v2 else "1")
-        if crash is not None:
+        assert sql("select current from mail.tesl_schema_state") == ("3" if combined_worker else "2" if from_v2 else "1")
+        if crash is not None and not combined_worker:
             interrupt_at(crash)
             committed = crash == "row-contract-after-retirement"
             assert sql("select schema_version from mail.tesl_jobs where id='retained'") == ("2" if committed else "1")
@@ -306,7 +343,7 @@ def exercise(output, env, rejection=False, claim=False, crash=None, from_v2=Fals
         rows = COMMON["request"](number, "GET", "/notes")
         assert next(row for row in rows if row["id"] == "one")["metadata"] == {"newText": "kept", "detail": "migrated"}, rows
         eventually(lambda: sql("select count(*) from mail.tesl_jobs") == "0")
-        print(f"PASS: ordered row/queue latest-binary {mode}; rejection={rejection}, claim={claim}, heartbeat={heartbeat}, crash={crash}, fromV2={from_v2}, epochTail={epoch_tail}; audited restamp, retained row/job and typed handler", flush=True)
+        print(f"PASS: ordered row/queue latest-binary {mode}; rejection={rejection}, claim={claim}, heartbeat={heartbeat}, crash={crash}, fromV2={from_v2}, epochTail={epoch_tail}, combinedWorker={combined_worker}; audited restamp, retained row/job and typed handler", flush=True)
     finally:
         for process, log in processes:
             if process.poll() is None:
@@ -350,6 +387,7 @@ def main():
     exercise(output, env, deployment=True, from_v2=True)
     exercise(output, env, deployment=True, from_v2=True, claim=True)
     exercise(output, env, deployment=True, crash="schema-deploy-after-installer-close")
+    exercise(output, env, combined_worker=True, crash="schema-worker-after-installer-close")
 
 
 if __name__ == "__main__":
