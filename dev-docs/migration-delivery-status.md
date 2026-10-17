@@ -2,11 +2,48 @@
 
 > Audience: contributors reviewing the migration PR and its release evidence.
 
-Current full-gate baseline: `1ddc8a6` (2026-10-14). Earlier baseline: `84ef00d`.
+Last passing full-gate baseline: `1ddc8a6` (2026-10-14). Earlier baseline: `84ef00d`.
 Requirements were committed in `b5cddb9`;
 additive catch-up was committed in `137ddd1`, row-transforming catch-up in
 `4f6e86e`, queue catch-up in `085bf00`, and ordered composition in `99b869f`.
 Automatic deployment wiring and its targeted verification are recorded below.
+
+## Latest PR scope and verification (2026-10-18)
+
+These maintainer decisions supersede narrower scope statements in the historical
+sections below:
+
+- Required: three-release staged uniqueness with a preparatory nonunique index,
+  indexed per-key promotion guards and reviewed promotion; fenced empty-queue
+  removal; safe unrelated-table Drop beside unchanged queues; Worker-topology
+  cache, email and SSE support; and complete scoped requirement/code/test links.
+- Required performance gate: measured base-versus-candidate latency regression,
+  with noise calibration. Absolute 1% read / 5% write p99 overhead acceptance is
+  not the chosen merge criterion; report absolute overhead separately.
+- The 10M/100M data sweep is deferred until after merge. The reservation-table
+  uniqueness subsystem is also deferred; it is distinct from required staged
+  promotion. Queue identity rename and simultaneous row/payload transformations
+  remain unsupported; the ordered row-first/payload-second route is accepted.
+
+The latest complete CI invocation on `9852f26` **failed**, with 23/24 phases
+passing in 6,536 seconds. Its migration kernel reached the final Worker lesson
+after 1,792 seconds, then hit the 1,800-second package timeout eight seconds into
+that test. The focused Worker-lesson retry passed in 45.81 seconds. The shared
+package budget is now 2,400 seconds; individual scenario deadlines are unchanged.
+This correction still needs a complete rerun. The remaining migration-runner
+phases were not reached after the kernel failure, so this is not a migration-gate
+pass. Evidence: `.tesl-stuff/pr-scope-baseline-ci.log` and
+`.tesl-stuff/pr-scope-worker-recheck.log`.
+
+Commit `61c0732` connects the three durable facilities through a single Installer
+transaction and exact catalog/privilege checks. Its 16 new PostgreSQL tests passed
+with the race detector (80.573 seconds); existing facility/cache/outbox/pubsub
+regressions passed (8.957 seconds). Compiler build, targeted emission tests,
+emitted PostgreSQL runtime compilation, `go vet`, and documentation integrity
+also passed. See [combined facility verification](../runtime/go/teslrt/MIGRATION_FACILITIES.md).
+These results do not establish a full CI pass or interoperability with archived
+pre-extension binaries. Staged uniqueness, queue removal, safe Drop, latency
+calibration and full traceability still have pending work in isolated drafts.
 
 ## Delivery contract
 

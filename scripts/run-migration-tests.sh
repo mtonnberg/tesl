@@ -75,8 +75,12 @@ runtime_test() {
 run_phase compiler-build 1800 dune build --root "$repo_root/compiler" -j "${TESL_CI_JOBS:-2}"
 # This package builds and runs both the archived rolling releases and the full
 # V1–V13 transforming application. Keep individual scenario deadlines intact,
-# but allow their sequential sum to finish after repairing earlier short exits.
-run_phase kernel 1860 go -C "$repo_root/runtime/go" test -race -count=1 -timeout=1800s -v ./internal/migrationtest "$@"
+# but allow their sequential sum to finish. The 9852f26 baseline spent 1792s
+# before its final Worker lesson (which has its own eight-minute deadline), so
+# a 30-minute package alarm could kill a healthy scenario seconds after it began.
+# Keep every scenario deadline; give the package aggregate 40 minutes plus the
+# existing 60-second outer allowance for compilation/startup.
+run_phase kernel 2460 go -C "$repo_root/runtime/go" test -race -count=1 -timeout=2400s -v ./internal/migrationtest "$@"
 if (( $# == 0 )); then
   # Production control/executor APIs and their crash tests use the same
   # isolated cluster and supported-major matrix as the independent harness.
