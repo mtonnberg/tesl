@@ -276,11 +276,25 @@ func pgControlFunctionCatalog(ctx context.Context, tx pgx.Tx, namespace string, 
 		!reflect.DeepEqual(actual.Configuration, []string{`search_path=""`}) {
 		return fmt.Errorf("protected migration function %s.%s differs from its definition, owner or execution grants", namespace, fn.name)
 	}
+	if roles.Request != "" && reflect.DeepEqual(pgControlFunctionRoles(roles, fn), []string{roles.Request}) {
+		// Request-only facility functions must also be unavailable through
+		// inherited role membership, not merely absent from Worker's direct ACL.
+		var workerCanExecute bool
+		target := pgx.Identifier{namespace, fn.name}.Sanitize() + "(" + pgControlArgumentTypes(fn) + ")"
+		if err := tx.QueryRow(ctx, "select pg_catalog.has_function_privilege($1,$2,'EXECUTE')", roles.Worker, target).Scan(&workerCanExecute); err != nil {
+			return err
+		}
+		if workerCanExecute {
+			return fmt.Errorf("Worker can execute Request-only facility function %s", fn.name)
+		}
+	}
 	return nil
 }
 
 func pgControlFunctionRoles(roles PgMigrationControlRoles, fn pgMigrationControlFunction) []string {
 	switch fn.name {
+	case "tesl_email_enqueue", "tesl_email_claim", "tesl_email_outcome", "tesl_email_messages", "tesl_email_prune", "tesl_sse_publish", "tesl_sse_prune":
+		return []string{roles.Request}
 	case "tesl_queue_inventory_checked", "tesl_queue_inventory_digest", "tesl_row_admit_version":
 		// Internal composition helpers: only the owner-definer wrappers may
 		// consume these intermediate values. Never application-supplied authority.

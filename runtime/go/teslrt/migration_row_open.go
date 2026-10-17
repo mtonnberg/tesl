@@ -37,7 +37,10 @@ func pgWaitForRowBaseline(ctx context.Context, conn *pgx.Conn, b *pgRowBaseline,
 			}
 			var err error
 			state, _, err = pgReadRowBaselineState(ctx, tx, b, roles, false, &indexReady)
-			return err
+			if err != nil {
+				return err
+			}
+			return pgRequireRowFacilitiesOn(ctx, tx, b.database, b.history.Namespace, roles)
 		})
 		if err != nil {
 			return PgMigrationControlState{}, err
@@ -95,6 +98,28 @@ func openRowPostgres(database *Database) (*PostgresDB, func()) {
 		release, err = initialization.db.embedded.acquire()
 		if err != nil {
 			panic(pgFailure("database: Embedded row migration service refused", err))
+		}
+	}
+	if roles.Request != "" {
+		// Any required-extension failure releases a lifetime acquired above.
+		defer func() {
+			if failure := recover(); failure != nil {
+				if release != nil {
+					release()
+				}
+				panic(failure)
+			}
+		}()
+		if pgHasArtifactCaches(database) {
+			pgCheckArtifactCacheConnection(initialization.db)
+		}
+		if pgHasEmail(database) {
+			pgRequireEmail(initialization.db)
+		}
+		if pgHasBroadcast(database) {
+			if err := pgRequireBroadcast(initialization.db); err != nil {
+				panic(pgFailure("database: SSE storage refused", err))
+			}
 		}
 	}
 	return initialization.db, release
@@ -166,7 +191,7 @@ func initializeRowPostgres(key string, initialization *postgresInitialization, p
 	}
 	db = &PostgresDB{schema: b.history.Namespace, migration: &pgMigrationAdmission{version: b.history.CurrentVersion, fenceNamespace: state.FenceNamespace, databaseUUID: state.DatabaseUUID, worker: principal, roles: roles, controlFormat: pgRowControlFormat, rowBaseline: b}}
 	db.migration.rowObservation = &pgRowObservationCache{owner: db.migration}
-	if len(b.queues[len(b.queues)-1].version.Contracts) > 0 {
+	if len(b.queues[len(b.queues)-1].version.Contracts) > 0 || pgHasBroadcast(b.database) {
 		if roles.Request == "" {
 			panic(pgMigrationQueueStorageError(b.database.Name))
 		}

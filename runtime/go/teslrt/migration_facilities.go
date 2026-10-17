@@ -1,10 +1,13 @@
 package teslrt
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strings"
 	"sync"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // Registration transactions never hold a database lock while taking a queue
@@ -79,8 +82,8 @@ func pgRegisterMigrationQueue(database *Database, queue *Queue) {
 }
 
 // This is a local capability restriction, not a persisted footprint or proof
-// that old binaries cannot use durable facilities. Only checked Worker row queues
-// have a protected runtime; other facilities retain their capability refusal.
+// that old binaries cannot use durable facilities. Worker row queues, artifact
+// caches, email and SSE have checked storage; other facilities remain refused.
 // Closing registration and inspecting declarations share one lock: a constructor
 // racing with preflight either makes preflight refuse or itself refuses before
 // creating a backend. Neither side can introduce a facility after validation.
@@ -128,7 +131,7 @@ func pgCheckMigrationFacilities(database *Database) (bool, error) {
 		return true, nil
 	}
 	for _, facility := range facilities {
-		if facility.kind != "queue" {
+		if !pgSupportedRowFacility(facility.kind) {
 			return false, pgMigrationFacilitiesError(database.Name, facilities)
 		}
 	}
@@ -160,6 +163,97 @@ func pgCheckMigrationFacilities(database *Database) (bool, error) {
 		return false, err
 	}
 	return true, nil
+}
+
+func pgSupportedRowFacility(kind string) bool {
+	return kind == "queue" || kind == "artifact cache" || kind == "email outbox" || kind == "SSE channel"
+}
+
+// This list describes installed extensions, independently of the current App's
+// declarations. Both closed catalog inventories must retain the same names.
+func pgRowFacilityCatalog(ctx context.Context, tx pgx.Tx, namespace string, roles PgMigrationControlRoles) ([]string, []pgMigrationControlFunction, error) {
+	var names []string
+	var functions []pgMigrationControlFunction
+	if present, err := pgVerifyArtifactCache(ctx, tx, namespace, roles, false); err != nil {
+		return nil, nil, err
+	} else if present {
+		names = append(names, pgArtifactCacheTable)
+	}
+	if present, err := pgVerifyEmail(ctx, tx, namespace, roles, false); err != nil {
+		return nil, nil, err
+	} else if present {
+		names = append(names, pgEmailState, pgEmailTable)
+		functions = append(functions, pgEmailFunctions(namespace)...)
+	}
+	if present, err := pgVerifyBroadcast(ctx, tx, namespace, roles, false); err != nil {
+		return nil, nil, err
+	} else if present {
+		names = append(names, pgBroadcastTable, pgBroadcastClock)
+		functions = append(functions, pgBroadcastFunctions(namespace)...)
+	}
+	return names, functions, nil
+}
+
+func pgFacilityFunctionCount(ctx context.Context, tx pgx.Tx, namespace, prefix string, expected int) error {
+	var count int
+	if err := tx.QueryRow(ctx, `select count(*) from pg_catalog.pg_proc p join pg_catalog.pg_namespace n on n.oid=p.pronamespace where n.nspname=$1 and left(p.proname,length($2))=$2`, namespace, prefix).Scan(&count); err != nil {
+		return err
+	}
+	if count != expected {
+		return fmt.Errorf("unexpected protected routines for %s", prefix)
+	}
+	return nil
+}
+
+// Every requested extension is installed before the caller commits. Restore the
+// transaction's entry role even when a helper temporarily becomes Owner.
+func pgInstallRowFacilities(ctx context.Context, tx pgx.Tx, namespace string, roles PgMigrationControlRoles, cache, email, broadcast bool) error {
+	var role string
+	if err := tx.QueryRow(ctx, "select current_user").Scan(&role); err != nil {
+		return err
+	}
+	for _, extension := range []struct {
+		requested bool
+		install   func(context.Context, pgx.Tx, string, PgMigrationControlRoles) error
+	}{
+		{cache, pgInstallArtifactCache},
+		{email, pgInstallEmail},
+		{broadcast, pgInstallBroadcast},
+	} {
+		if extension.requested {
+			if err := extension.install(ctx, tx, namespace, roles); err != nil {
+				return err // caller rolls back, including SET LOCAL
+			}
+			if _, err := tx.Exec(ctx, "set local role "+quoteIdentifier(role)); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// Required declarations are checked on the Request readiness snapshot, before
+// publishing a pool. Catalog inspection alone permits absent optional storage.
+func pgRequireRowFacilitiesOn(ctx context.Context, tx pgx.Tx, database *Database, namespace string, roles PgMigrationControlRoles) error {
+	if pgHasArtifactCaches(database) {
+		if _, err := pgVerifyArtifactCache(ctx, tx, namespace, roles, true); err != nil {
+			return err
+		}
+	}
+	if pgHasEmail(database) {
+		if _, err := pgVerifyEmail(ctx, tx, namespace, roles, true); err != nil {
+			return err
+		}
+	}
+	if pgHasBroadcast(database) {
+		if _, err := pgVerifyBroadcast(ctx, tx, namespace, roles, true); err != nil {
+			return err
+		}
+		if _, err := pgReadBroadcastClock(ctx, tx, &PostgresDB{schema: namespace}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // PreflightApplicationDatabases validates only the compiler's explicit active

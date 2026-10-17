@@ -14,6 +14,12 @@
  (mode promote)
  (deps
   ../../../../runtime/go/teslrt/migration_budget.go
+   ../../../../runtime/go/teslrt/migration_cache.go
+   ../../../../runtime/go/teslrt/migration_cache_runtime.go
+   ../../../../runtime/go/teslrt/migration_email.go
+   ../../../../runtime/go/teslrt/migration_email_spec.go
+   ../../../../runtime/go/teslrt/migration_pubsub.go
+   ../../../../runtime/go/teslrt/migration_pubsub_runtime.go
    ../../../../runtime/go/teslrt/migration_row_catchup.go
    ../../../../runtime/go/teslrt/migration_deploy.go
    ../../../../runtime/go/teslrt/migration_queue_conversion_postgres.go

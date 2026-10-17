@@ -10,6 +10,24 @@ type artifact = {
   contents : string;
 }
 
+(* Cache compatibility hashes the complete emitted closure, including codecs
+   and runtime. Normalize our digest so project emission can reseal modules. *)
+let seal_cache_artifacts artifacts =
+  let prefix = "const teslCacheArtifactIdentity = " in
+  let rewrite identity (artifact : artifact) =
+    if not (Filename.check_suffix artifact.path ".go") then artifact else
+    { artifact with contents = String.split_on_char '\n' artifact.contents
+        |> List.map (fun line -> if String.starts_with ~prefix line then
+             prefix ^ "\"" ^ identity ^ "\"" else line)
+        |> String.concat "\n" } in
+  let normalized = List.map (rewrite "") artifacts in
+  let document = normalized |> List.sort (fun a b -> String.compare a.path b.path)
+    |> List.map (fun a -> Migration_canonical.seq
+         [Migration_canonical.bytes a.path; Migration_canonical.bytes a.contents]) in
+  let identity = Migration_hash.digest (Migration_canonical.encode
+    (Migration_canonical.seq (Migration_canonical.bytes "tesl-cache-artifact-v1" :: document))) in
+  List.map (rewrite identity) normalized
+
 type emit_error = {
   loc : Location.loc;
   message : string;
@@ -10477,6 +10495,13 @@ let runtime_file_gates : (string * string list) list = [
   "timezone", [ "timezone.go"; "timetrunc.go" ];
 ]
 
+let runtime_file_gates = List.map (fun (name, files) ->
+  name, if name = "postgres" then files @ [
+    "migration_cache.go"; "migration_cache_runtime.go";
+    "migration_email.go"; "migration_email_spec.go";
+    "migration_pubsub.go"; "migration_pubsub_runtime.go"] else files)
+  runtime_file_gates
+
 let runtime_gate_files name =
   match List.assoc_opt name runtime_file_gates with Some files -> files | None -> []
 
@@ -10980,6 +11005,7 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
   (* The store for a `cache` declaration.  `defaultTtl:` is baked in for the reason
      `maxAttempts` is: the expiry rule belongs to the declaration, not to any call site, and a
      `Cache.set` with no TTL of its own is exactly the one that asks for it. *)
+  let cache_identity_emitted = ref false in
   Hashtbl.to_seq_values types.caches
   |> List.of_seq
   |> List.sort (fun left right -> String.compare left.ca_tesl_name right.ca_tesl_name)
@@ -11735,6 +11761,10 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
     | None -> ()
     | Some db ->
       let encoder, decoder = durable_codec info.ca_loc info.ca_tesl_name info.ca_value in
+      if not !cache_identity_emitted then begin
+        Buffer.add_string body "\nconst teslCacheArtifactIdentity = \"\"\n";
+        cache_identity_emitted := true
+      end;
       (* The codecs are wrapped in named functions: a derived decoder is a function literal
          indented for a function body, and gofmt would re-indent it inside a package-level
          call. *)
@@ -11742,10 +11772,10 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
       Buffer.add_char body '\n';
       Buffer.add_string body (line_directive info.ca_loc);
       Printf.bprintf body
-        "func teslCacheEncode%s(teslValue %s) any {\n\treturn %s(teslValue)\n}\n\nfunc teslCacheDecode%s(teslRaw any) (%s, error) {\n\treturn %s(teslRaw)\n}\n\nvar %s = teslrt.NewCacheOn[%s](%s, %s, %d, teslCacheEncode%s, teslCacheDecode%s)\n"
+        "func teslCacheEncode%s(teslValue %s) any {\n\treturn %s(teslValue)\n}\n\nfunc teslCacheDecode%s(teslRaw any) (%s, error) {\n\treturn %s(teslRaw)\n}\n\nvar %s = teslrt.NewCacheOnArtifact[%s](%s, %s, %d, teslCacheEncode%s, teslCacheDecode%s, teslCacheArtifactIdentity)\n"
         suffix (go_type info.ca_value) encoder suffix (go_type info.ca_value) decoder
         info.ca_go_var (go_type info.ca_value) (qualified db.db_owner db.db_go_var)
-        (go_quote info.ca_tesl_name) info.ca_default_ttl suffix suffix;
+        (go_quote (info.ca_owner ^ "." ^ info.ca_tesl_name)) info.ca_default_ttl suffix suffix;
       if debug then
         Printf.bprintf body "var _ = teslrt.RegisterDebugCache(%s, %s)\n"
           info.ca_go_var (go_quote info.ca_tesl_name));
@@ -16732,7 +16762,7 @@ let compile_module_internal ?(migration_metered=false) ?emission_graph ?(nominal
           Embedded_go_runtime.files
       end
     in
-    Ok (artifacts, { ex_module = m.module_name; ex_package = package;
+    Ok (seal_cache_artifacts artifacts, { ex_module = m.module_name; ex_package = package;
                      ex_types = types; ex_signatures = signatures; ex_codecs = codecs; ex_taken=Hashtbl.copy taken; ex_row_storage=List.map fst row_storage_adapters; ex_nominal_reverses=List.map (fun (binding,_,_) -> binding) nominal_reverse_adapters; ex_nominal_mappings=List.map (fun (binding,_,_) -> binding) nominal_mapping_adapters })
   with Unsupported error -> Error [error])
 
@@ -17455,6 +17485,7 @@ let compiled_row_artifacts ~entry ~modules:_ ~exports source =
          if checksums = "" || List.exists (fun (a : artifact) -> a.path = "go.sum") rebuilt
          then rebuilt
          else rebuilt @ [{ path = "go.sum"; contents = checksums }] in
+       let rebuilt = seal_cache_artifacts rebuilt in
        (match row_source with
         | None -> Ok rebuilt
         | Some source -> match Migration_program.verify_source_history source modules with

@@ -230,6 +230,11 @@ func pgVerifyRowCatalogSet(ctx context.Context, tx pgx.Tx, b *pgRowBaseline, rol
 		return err
 	}
 	names := []string{"tesl_jobs_seq_seq"}
+	extensions, _, err := pgRowFacilityCatalog(ctx, tx, b.history.Namespace, roles)
+	if err != nil {
+		return err
+	}
+	names = append(names, extensions...)
 	for _, spec := range pgQueueCandidateTables(b.history.Namespace) {
 		names = append(names, spec.name)
 	}

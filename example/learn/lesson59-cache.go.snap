@@ -121,6 +121,8 @@ func invalidateUserSessions(userId string) struct{} {
 	return teslrt.CacheInvalidatePrefix(SessionCacheStore, ("session:" + userId))
 }
 
+const teslCacheArtifactIdentity = "fd709f73217ed8dda75343c8337448adcb637c8e73b10c1c1186c6cae3de370e"
+
 //line lesson59-cache.tesl:86
 func teslCacheEncodeCounterCache(teslValue teslrt.Int) any {
 	return teslEncode1(teslValue)
@@ -130,7 +132,7 @@ func teslCacheDecodeCounterCache(teslRaw any) (teslrt.Int, error) {
 	return teslrt.DecodeIntValue(teslRaw)
 }
 
-var CounterCacheStore = teslrt.NewCacheOn[teslrt.Int](MainDBDatabase, "CounterCache", 60, teslCacheEncodeCounterCache, teslCacheDecodeCounterCache)
+var CounterCacheStore = teslrt.NewCacheOnArtifact[teslrt.Int](MainDBDatabase, "teslmodlesson59cache.CounterCache", 60, teslCacheEncodeCounterCache, teslCacheDecodeCounterCache, teslCacheArtifactIdentity)
 
 //line lesson59-cache.tesl:93
 func teslCacheEncodeSessionCache(teslValue string) any {
@@ -141,7 +143,7 @@ func teslCacheDecodeSessionCache(teslRaw any) (string, error) {
 	return teslrt.DecodeStringValue(teslRaw)
 }
 
-var SessionCacheStore = teslrt.NewCacheOn[string](MainDBDatabase, "SessionCache", 0, teslCacheEncodeSessionCache, teslCacheDecodeSessionCache)
+var SessionCacheStore = teslrt.NewCacheOnArtifact[string](MainDBDatabase, "teslmodlesson59cache.SessionCache", 0, teslCacheEncodeSessionCache, teslCacheDecodeSessionCache, teslCacheArtifactIdentity)
 
 //line lesson59-cache.tesl:79
 func teslCacheEncodeUserProfileCache(teslValue string) any {
@@ -152,7 +154,7 @@ func teslCacheDecodeUserProfileCache(teslRaw any) (string, error) {
 	return teslrt.DecodeStringValue(teslRaw)
 }
 
-var UserProfileCacheStore = teslrt.NewCacheOn[string](MainDBDatabase, "UserProfileCache", 3600, teslCacheEncodeUserProfileCache, teslCacheDecodeUserProfileCache)
+var UserProfileCacheStore = teslrt.NewCacheOnArtifact[string](MainDBDatabase, "teslmodlesson59cache.UserProfileCache", 3600, teslCacheEncodeUserProfileCache, teslCacheDecodeUserProfileCache, teslCacheArtifactIdentity)
 
 func teslEncode1(teslValue teslrt.Int) any {
 	return teslValue

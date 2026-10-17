@@ -263,6 +263,11 @@ func pgRowControlCatalog(ctx context.Context, tx pgx.Tx, namespace string, roles
 		return err
 	}
 	names := []string{"tesl_jobs_seq_seq"}
+	extensions, _, err := pgRowFacilityCatalog(ctx, tx, namespace, roles)
+	if err != nil {
+		return err
+	}
+	names = append(names, extensions...)
 	for _, spec := range pgQueueCandidateTables(namespace) {
 		names = append(names, spec.name)
 	}
@@ -273,7 +278,7 @@ func pgRowControlCatalog(ctx context.Context, tx pgx.Tx, namespace string, roles
 		names = append(names, spec.name)
 	}
 	var extra bool
-	if err := tx.QueryRow(ctx, `select exists(select 1 from pg_catalog.pg_class c join pg_catalog.pg_namespace n on n.oid=c.relnamespace join pg_catalog.pg_roles r on r.oid=c.relowner where n.nspname=$1 and c.relkind not in ('i','I') and ((r.rolname=$2 and not(c.relname=any($3::text[]))) or ((left(c.relname,12)='tesl_schema_' or left(c.relname,9)='tesl_row_' or left(c.relname,11)='tesl_queue_' or c.relname='tesl_jobs') and not(c.relname=any($3::text[])))))`, namespace, roles.Owner, names).Scan(&extra); err != nil {
+	if err := tx.QueryRow(ctx, `select exists(select 1 from pg_catalog.pg_class c join pg_catalog.pg_namespace n on n.oid=c.relnamespace join pg_catalog.pg_roles r on r.oid=c.relowner where n.nspname=$1 and c.relkind not in ('i','I') and ((r.rolname=$2 and not(c.relname=any($3::text[]))) or ((left(c.relname,12)='tesl_schema_' or left(c.relname,9)='tesl_row_' or left(c.relname,11)='tesl_queue_' or left(c.relname,11)='tesl_cache_' or left(c.relname,11)='tesl_email_' or left(c.relname,9)='tesl_sse_' or c.relname='tesl_jobs') and not(c.relname=any($3::text[])))))`, namespace, roles.Owner, names).Scan(&extra); err != nil {
 		return err
 	}
 	if extra {

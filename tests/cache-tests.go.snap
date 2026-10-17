@@ -141,6 +141,8 @@ func getMultiple(k1 string, k2 string) []teslrt.Maybe[string] {
 	return []teslrt.Maybe[string]{teslrt.CacheGet(StringCacheStore, k1), teslrt.CacheGet(StringCacheStore, k2)}
 }
 
+const teslCacheArtifactIdentity = "64aed359e6b2cff3ff206177abb7565fb0aeefacddd4033cf4e73a2f8f664bb2"
+
 //line cache-tests.tesl:38
 func teslCacheEncodeIntCache(teslValue teslrt.Int) any {
 	return teslEncode1(teslValue)
@@ -150,7 +152,7 @@ func teslCacheDecodeIntCache(teslRaw any) (teslrt.Int, error) {
 	return teslrt.DecodeIntValue(teslRaw)
 }
 
-var IntCacheStore = teslrt.NewCacheOn[teslrt.Int](TestDBDatabase, "IntCache", 60, teslCacheEncodeIntCache, teslCacheDecodeIntCache)
+var IntCacheStore = teslrt.NewCacheOnArtifact[teslrt.Int](TestDBDatabase, "teslmodcachetests.IntCache", 60, teslCacheEncodeIntCache, teslCacheDecodeIntCache, teslCacheArtifactIdentity)
 
 //line cache-tests.tesl:44
 func teslCacheEncodeNoTtlCache(teslValue string) any {
@@ -161,7 +163,7 @@ func teslCacheDecodeNoTtlCache(teslRaw any) (string, error) {
 	return teslrt.DecodeStringValue(teslRaw)
 }
 
-var NoTtlCacheStore = teslrt.NewCacheOn[string](TestDBDatabase, "NoTtlCache", 0, teslCacheEncodeNoTtlCache, teslCacheDecodeNoTtlCache)
+var NoTtlCacheStore = teslrt.NewCacheOnArtifact[string](TestDBDatabase, "teslmodcachetests.NoTtlCache", 0, teslCacheEncodeNoTtlCache, teslCacheDecodeNoTtlCache, teslCacheArtifactIdentity)
 
 //line cache-tests.tesl:32
 func teslCacheEncodeStringCache(teslValue string) any {
@@ -172,7 +174,7 @@ func teslCacheDecodeStringCache(teslRaw any) (string, error) {
 	return teslrt.DecodeStringValue(teslRaw)
 }
 
-var StringCacheStore = teslrt.NewCacheOn[string](TestDBDatabase, "StringCache", 3600, teslCacheEncodeStringCache, teslCacheDecodeStringCache)
+var StringCacheStore = teslrt.NewCacheOnArtifact[string](TestDBDatabase, "teslmodcachetests.StringCache", 3600, teslCacheEncodeStringCache, teslCacheDecodeStringCache, teslCacheArtifactIdentity)
 
 func teslEncode1(teslValue teslrt.Int) any {
 	return teslValue

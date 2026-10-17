@@ -151,6 +151,18 @@ func pgInstallMigrationControlPrepared(ctx context.Context, conn *pgx.Conn, name
 	if !pgMigrationIdentifier(namespace) || strings.HasPrefix(namespace, "pg_") || initialVersion < 1 || initialVersion > 2147483646 {
 		return state, fmt.Errorf("invalid migration namespace or installation version")
 	}
+	installCache, installEmail, installBroadcast := false, false, false
+	if row, ok := candidate.(*pgRowBaselinePreparation); ok && roles.Request != "" {
+		installCache = pgHasArtifactCaches(row.baseline.database)
+		installEmail = pgHasEmail(row.baseline.database)
+		installBroadcast = pgHasBroadcast(row.baseline.database)
+	}
+	installFacilities := func(tx pgx.Tx) error {
+		if state.Format != pgRowControlFormat {
+			return nil
+		}
+		return pgInstallRowFacilities(ctx, tx, namespace, roles, installCache, installEmail, installBroadcast)
+	}
 	err := pgControlTransaction(ctx, conn, true, func(tx pgx.Tx) error {
 		if err := pgControlRoles(ctx, tx, roles, true); err != nil {
 			return err
@@ -176,7 +188,24 @@ func pgInstallMigrationControlPrepared(ctx context.Context, conn *pgx.Conn, name
 				if err == nil && verify != nil {
 					err = verify(tx, state)
 				}
-				return err // Inspection rolls back its temporary comparison objects.
+				if err != nil {
+					return err
+				}
+				if state.Format == pgRowControlFormat && (installCache || installEmail || installBroadcast) {
+					if err := installFacilities(tx); err != nil {
+						return err
+					}
+					// Recheck the combined exact inventory before one atomic commit.
+					if _, err := candidate.inspect(ctx, tx, namespace, roles); err != nil {
+						return err
+					}
+					migrationBoundary("control-before-commit")
+					if err := tx.Commit(ctx); err != nil {
+						return err
+					}
+					migrationBoundary("control-after-commit")
+				}
+				return nil
 			}
 			var occupied bool
 			if err := tx.QueryRow(ctx, `select exists(select 1 from pg_catalog.pg_class c join pg_catalog.pg_namespace n on n.oid=c.relnamespace where n.nspname=$1)
@@ -272,6 +301,14 @@ func pgInstallMigrationControlPrepared(ctx context.Context, conn *pgx.Conn, name
 				return err
 			}
 			if err := candidate.verify(ctx, tx, state); err != nil {
+				return err
+			}
+		}
+		if err := installFacilities(tx); err != nil {
+			return err
+		}
+		if state.Format == pgRowControlFormat {
+			if _, err := candidate.inspect(ctx, tx, namespace, roles); err != nil {
 				return err
 			}
 		}
@@ -396,6 +433,11 @@ func pgInspectControlProtocolMode(ctx context.Context, tx pgx.Tx, namespace stri
 	}
 	if rowBaseline && format == pgRowControlFormat {
 		functions = pgRowControlFunctions(namespace)
+		_, extensionFunctions, err := pgRowFacilityCatalog(ctx, tx, namespace, roles)
+		if err != nil {
+			return state, err
+		}
+		functions = append(functions, extensionFunctions...)
 	}
 	for _, fn := range functions {
 		if err := pgControlFunctionCatalog(ctx, tx, namespace, roles, fn); err != nil {

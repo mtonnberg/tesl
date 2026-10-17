@@ -48,13 +48,24 @@ func pgCompiledRowBaseline(database *Database) (*pgRowBaseline, error) {
 	database.mutex.RLock()
 	config := database.Config
 	sealed := database.applicationPreflightClosed
-	nonQueueFacilities := false
+	unsupportedFacilities, workerFacilities := false, false
 	for facility := range database.migrationFacilities {
-		if facility.kind != "queue" {
-			nonQueueFacilities = true
+		if !pgSupportedRowFacility(facility.kind) {
+			unsupportedFacilities = true
+		} else if facility.kind != "queue" {
+			workerFacilities = true
 		}
 	}
 	database.mutex.RUnlock()
+	if workerFacilities {
+		roles, err := pgMigrationRoles(config, config.User)
+		if err != nil {
+			return nil, err
+		}
+		if roles.Request == "" {
+			return nil, fmt.Errorf("row-baseline cache, email and SSE require Worker migration topology")
+		}
+	}
 	if len(compiled.inventory.Retirements) > 0 {
 		roles, err := pgMigrationRoles(config, config.User)
 		if err != nil {
@@ -64,7 +75,7 @@ func pgCompiledRowBaseline(database *Database) (*pgRowBaseline, error) {
 			return nil, fmt.Errorf("table Drop requires Worker migration topology")
 		}
 	}
-	if !sealed || nonQueueFacilities {
+	if !sealed || unsupportedFacilities {
 		return nil, fmt.Errorf("row baseline requires sealed complete App queue inventory and no unsupported facilities")
 	}
 	physical := compiledRowPhysicalHistories[compiled]

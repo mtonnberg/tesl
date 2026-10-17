@@ -8502,6 +8502,39 @@ let test_cache_with_go () =
      the literal-prefix rule, and the reset. *)
   gate_emitted "tesl-go-cache" emitted
 
+let test_cache_artifact_identity () =
+  let replace before after = Str.global_replace (Str.regexp_string before) after in
+  let source = cache_source
+    |> replace "Database, Memory" "Database, Postgres, PostgresConfig, TcpConnection"
+    |> replace "backend: Memory" {|backend: Postgres (PostgresConfig {
+      dbName: "cache" user: "cache" password: "cache"
+      connection: TcpConnection { host: "localhost" port: 5432 }
+    })|} in
+  let emit source = emit_ok "<cache-artifact>" source in
+  let identity artifacts =
+    let code = artifact "internal/teslmodgocache/module.go" artifacts in
+    check bool "compiled cache constructor carries artifact identity" true
+      (contains code "teslrt.NewCacheOnArtifact[string]");
+    let prefix = "const teslCacheArtifactIdentity = \"" in
+    let line = String.split_on_char '\n' code |> List.find (String.starts_with ~prefix) in
+    String.sub line (String.length prefix) 64 in
+  let first = emit source in
+  check string "identical artifacts keep their cache namespace" (identity first) (identity (emit source));
+  check bool "code changes cannot reuse an unproven codec identity" true
+    (identity first <> identity (emit (replace "Nothing -> 0 - 1" "Nothing -> 0 - 2" source)));
+  check bool "protected cache verifier ships in actual emitted runtime" true
+    (contains (artifact "internal/teslrt/migration_cache.go" first) "func pgVerifyArtifactCache");
+  check bool "typed cache runtime ships in actual emitted runtime" true
+    (contains (artifact "internal/teslrt/migration_cache_runtime.go" first) "func NewCacheOnArtifact");
+  List.iter (fun file -> check bool ("combined facility runtime: " ^ file) true
+    (String.length (artifact ("internal/teslrt/" ^ file) first) > 0))
+    ["migration_email.go"; "migration_email_spec.go"; "migration_pubsub.go"; "migration_pubsub_runtime.go"];
+  (* Compile the actual PostgreSQL artifact dependency closure. Database behavior
+     is exercised by the private-cluster runtime suites; this check catches an
+     omitted runtime file even when the in-repository Go package compiles. *)
+  gate_emitted "tesl-go-cache-artifact"
+    (List.filter (fun (a : Emit_go.artifact) -> not (Filename.check_suffix a.path "_test.go")) first)
+
 let money_source = {|module GoMoney exposing [invoiceTotal, discounted, converted, hourlyFee, pace]
 
 import Tesl.Prelude exposing [Bool(..), Int, String, Unit]
@@ -12934,6 +12967,7 @@ let emission_tests =
       test_case "polymorphic equality travels as a dictionary" `Slow test_poly_equality_with_go;
       test_case "a wide ADT is emitted boxed" `Slow test_wide_adt_is_boxed;
       test_case "Tesl.Cache" `Slow test_cache_with_go;
+      test_case "durable cache artifact identity" `Quick test_cache_artifact_identity;
       test_case "Tesl.Money and Tesl.Units" `Slow test_money_with_go;
       test_case "property tests" `Slow test_property_with_go;
       test_case "SSE channels, publish and subscribe" `Slow test_sse_with_go;

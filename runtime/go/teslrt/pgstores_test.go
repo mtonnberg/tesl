@@ -924,7 +924,7 @@ func TestDurableCacheIsSharedAndLiteral(t *testing.T) {
 }
 
 // A cache of a non-string type goes through its codec both ways, and an entry the codec no
-// longer reads is a miss that is removed.
+// longer reads is a miss. A decoder never deletes a potentially replaced key.
 func TestDurableCacheUsesTheValueCodec(t *testing.T) {
 	database := storeDatabase(t, "Codec")
 	name := uniqueName("intcache")
@@ -949,7 +949,8 @@ func TestDurableCacheUsesTheValueCodec(t *testing.T) {
 		}
 		counted := PgCount(db, "select count(*) from "+db.QualifiedTable(cacheTable)+" where cache_name = $1",
 			[]any{name})
-		expectInt(t, "rows after the undecodable read", counted, 0)
+		expectInt(t, "failed decoding does not delete a key", counted, 1)
+		CacheReset(cache)
 	})
 }
 

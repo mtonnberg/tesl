@@ -88,6 +88,10 @@ if (( $# == 0 )); then
   runtime_test row-baseline 300 '^(TestPgRowBaseline|TestPgRowIndex|TestPgRowEpoch|TestRowBaseline|TestRowPhysical|TestPgRowForwardInvalidation)'
   # Preserve the former matrix-only suites in the shared gate as well.
   runtime_test queue-runtime 300 '^(TestQueue|TestDurableQueue|TestAppPreflight|TestDeadJob|TestDurableDeadJob|TestWorkerLifetime)'
+  runtime_test cache-runtime 180 '^(TestArtifactCache|TestDurableCache)'
+  runtime_test email-runtime 300 '^Test(PgEmail|Email|DurableEmail|SendEmail|DeliverEmail|DeliverPending|PruneSentEmail|StartEmailWorker|Outbox|ResetOutbox|HeaderFieldSafe|SmtpTimeout|TrappingDelivery)'
+  runtime_test sse-broadcast 180 '^TestWorkerBroadcast'
+  runtime_test combined-facilities 180 '^TestWorkerCombinedFacilities'
   runtime_test row-generation 300 '^(TestPgMigration(TriggerCatalog|RowGeneration)|TestMigrationRowGeneration)'
   compiler_test test_migration_queue
   compiler_test test_migration_queue_transform

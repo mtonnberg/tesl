@@ -238,7 +238,7 @@ func (runtime *pgPubsub) publish(channel, key string, encoded string) {
 	ctx, cancel := context.WithTimeout(context.Background(), pgLeaseTimeout())
 	defer cancel()
 	if transaction := currentTransactionFor(connection); transaction != nil {
-		if err := pgAdmitMigrationTransaction(ctx, transaction, connection, true); err != nil {
+		if err := pgAdmitBroadcastTransaction(ctx, transaction, connection); err != nil {
 			panic(pgFailure("publish", err))
 		}
 		if _, err := writePubsub(ctx, transaction, connection, channel, key, encoded); err != nil {
@@ -259,7 +259,7 @@ func (runtime *pgPubsub) publish(channel, key string, encoded string) {
 				_ = transaction.Rollback(context.Background())
 			}
 		}()
-		if err := pgAdmitMigrationTransaction(ctx, transaction, connection, true); err != nil {
+		if err := pgAdmitBroadcastTransaction(ctx, transaction, connection); err != nil {
 			panic(pgFailure("publish", err))
 		}
 		if _, err := writePubsub(ctx, transaction, connection, channel, key, encoded); err != nil {
@@ -275,6 +275,9 @@ func (runtime *pgPubsub) publish(channel, key string, encoded string) {
 
 func writePubsub(ctx context.Context, executor pgExecutor, connection *PostgresDB,
 	channel, key, encoded string) (int64, error) {
+	if pgBroadcastConnection(connection) {
+		return pgWriteBroadcast(ctx, executor, connection, channel, key, encoded)
+	}
 	if err := pgVerifyMigrationFacilityConnection(connection, "SSE outbox"); err != nil {
 		return 0, err
 	}
@@ -305,8 +308,10 @@ func (runtime *pgPubsub) prepare(connection *PostgresDB) error {
 }
 
 func (runtime *pgPubsub) prepareOn(connection *PostgresDB, executor pgExecutor) error {
-	if err := pgVerifyMigrationFacilityConnection(connection, "SSE outbox"); err != nil {
-		return err
+	if !pgBroadcastConnection(connection) {
+		if err := pgVerifyMigrationFacilityConnection(connection, "SSE outbox"); err != nil {
+			return err
+		}
 	}
 	runtime.mutex.Lock()
 	defer runtime.mutex.Unlock()
@@ -317,6 +322,9 @@ func (runtime *pgPubsub) prepareOn(connection *PostgresDB, executor pgExecutor) 
 	defer cancel()
 	cursor, err := pgMigrationStatementOn(ctx, connection, executor, false, func(executor pgExecutor) (int64, error) {
 		var cursor int64
+		if pgBroadcastConnection(connection) {
+			return pgReadBroadcastClock(ctx, executor, connection)
+		}
 		err := executor.QueryRow(ctx, `select coalesce(max("dispatch_seq"), 0) from `+connection.QualifiedTable(pubsubOutboxTable)).Scan(&cursor)
 		return cursor, err
 	})
@@ -663,8 +671,8 @@ func pgVerifyQueueCandidateConnection(ctx context.Context, tx pgx.Tx, db *Postgr
 	return pgAdmitMigrationTransaction(ctx, tx, db, false)
 }
 
-// listenQueue never enters the SSE outbox preparation, sweep or prune paths.
-// PostgreSQL notifications are commit-ordered doorbells, not stored payloads.
+// listenQueue handles protected queue doorbells and the optional format5 SSE
+// broadcast extension, never legacy SSE DDL. Notifications are not payloads.
 // A dedicated connection is rechecked against the complete protected catalog on
 // every reconnect; no connection ever passes the ordinary format-3 guard as 4.
 func (runtime *pgPubsub) listenQueue(db *PostgresDB) (bool, error) {
@@ -701,11 +709,34 @@ func (runtime *pgPubsub) listenQueue(db *PostgresDB) (bool, error) {
 	if err := pgVerifyQueueCandidateConnection(connectCtx, tx, db, db.queueRuntime); err != nil {
 		return false, err
 	}
+	broadcast := pgHasBroadcast(runtime.database)
+	if broadcast {
+		if !pgBroadcastConnection(db) {
+			return false, fmt.Errorf("SSE listener requires format5 Worker topology")
+		}
+		if _, err := pgVerifyBroadcast(connectCtx, tx, db.schema, db.migration.roles, true); err != nil {
+			return false, err
+		}
+		if _, err := pgReadBroadcastClock(connectCtx, tx, db); err != nil {
+			return false, err
+		}
+	}
 	if err := tx.Commit(connectCtx); err != nil {
 		return false, err
 	}
 	if _, err := conn.Exec(connectCtx, "listen "+quoteIdentifier(queueNotifyChannel)); err != nil {
 		return false, err
+	}
+	if broadcast {
+		if err := runtime.prepareOn(db, conn); err != nil {
+			return false, err
+		}
+		if _, err := conn.Exec(connectCtx, "listen "+quoteIdentifier(pubsubNotifyChannel)); err != nil {
+			return false, err
+		}
+		if err := runtime.drainBroadcast(conn, db); err != nil {
+			return true, err
+		}
 	}
 	if runtime.database.bound() != db {
 		return false, fmt.Errorf("queue listener: database binding ended during connection")
@@ -714,6 +745,8 @@ func (runtime *pgPubsub) listenQueue(db *PostgresDB) (bool, error) {
 	runtime.listener = conn
 	runtime.mutex.Unlock()
 	runtime.wakeAllQueueAliases()
+	nextSweep := time.Now().Add(pubsubSweepInterval)
+	nextPrune := time.Now().Add(pubsubPruneInterval)
 	for {
 		if runtime.database.bound() != db {
 			return true, nil
@@ -723,6 +756,18 @@ func (runtime *pgPubsub) listenQueue(db *PostgresDB) (bool, error) {
 		cancelWait()
 		if runtime.database.bound() != db {
 			return true, nil
+		}
+		if broadcast && (time.Now().After(nextSweep) || err == nil && notification != nil && notification.Channel == pubsubNotifyChannel) {
+			if err := runtime.drainBroadcast(conn, db); err != nil {
+				return true, err
+			}
+			nextSweep = time.Now().Add(pubsubSweepInterval)
+		}
+		if broadcast && time.Now().After(nextPrune) {
+			if err := runtime.pruneBroadcast(conn, db); err != nil {
+				return true, err
+			}
+			nextPrune = time.Now().Add(pubsubPruneInterval)
 		}
 		if err == nil {
 			if notification != nil && notification.Channel == queueNotifyChannel {

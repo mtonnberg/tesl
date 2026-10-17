@@ -784,6 +784,10 @@ func NewOutboxOn(database *Database, settings SmtpSettings) *Outbox {
 
 func (backend *pgOutboxBackend) table() (*PostgresDB, string) {
 	db := backend.connection()
+	if db.migration != nil && db.migration.roles.Request != "" {
+		pgRequireEmail(db)
+		return db, db.QualifiedTable(pgEmailTable)
+	}
 	ensureTable(db, outboxTable, outboxTableDDL)
 	return db, db.QualifiedTable(outboxTable)
 }
@@ -834,6 +838,10 @@ func emailStatusOf(text string) EmailStatus {
 
 func (backend *pgOutboxBackend) send(message EmailMessage) {
 	db, table := backend.table()
+	if db.migration != nil && db.migration.roles.Request != "" {
+		PgExec(db, "select "+db.QualifiedTable("tesl_email_enqueue")+"($1,$2,$3,$4,$5,$6)", []any{db.migration.version, message.To, message.Subject, bodyKind(message.Body), message.Body.Text, message.Body.HTML})
+		return
+	}
 	PgExec(db, "insert into "+table+" (recipient, subject, body_kind, body_text, body_html, "+
 		"status, attempts, next_attempt_at) values ($1, $2, $3, $4, $5, 'pending', 0, now())",
 		[]any{message.To, message.Subject, bodyKind(message.Body), message.Body.Text, message.Body.HTML})
@@ -899,6 +907,9 @@ func scanOutboxRow(row pgx.CollectableRow) (EmailMessage, error) {
 // `skip locked` covers the instant between two claims running at once.
 func (backend *pgOutboxBackend) claimDue(limit int) []EmailMessage {
 	db, table := backend.table()
+	if db.migration != nil && db.migration.roles.Request != "" {
+		return PgWriteQuery(db, "select * from "+db.QualifiedTable("tesl_email_claim")+"($1,$2)", []any{db.migration.version, int32(min(max(limit, 1), 1<<30))}, scanOutboxRow) // #nosec G115 -- clamped
+	}
 	claimToken := UUIDv7()
 	return PgWriteQuery(db, "update "+table+" set locked_at = now(), claim_token = $3 where id in ("+
 		"select id from "+table+" where status = 'pending' and next_attempt_at <= now() "+
@@ -914,6 +925,10 @@ func (backend *pgOutboxBackend) recordOutcome(message EmailMessage, err error) b
 		panic("email: outbox row id out of range")
 	}
 	id := int64(message.id) // #nosec G115 -- range checked above
+	if db.migration != nil && db.migration.roles.Request != "" {
+		results := PgWriteQuery(db, "select "+db.QualifiedTable("tesl_email_outcome")+"($1,$2,$3,$4)", []any{db.migration.version, id, message.claimToken, err == nil}, func(row pgx.CollectableRow) (bool, error) { var ok bool; e := row.Scan(&ok); return ok, e })
+		return len(results) == 1 && results[0]
+	}
 	// Zero rows in any branch means the lease was replaced; the stale SMTP result is discarded.
 	if err == nil {
 		return PgExec(db, "update "+table+" set status = 'sent', sent_at = now(), locked_at = null, "+
@@ -935,16 +950,26 @@ func (backend *pgOutboxBackend) recordOutcome(message EmailMessage, err error) b
 
 func (backend *pgOutboxBackend) messages() []EmailMessage {
 	db, table := backend.table()
+	if db.migration != nil && db.migration.roles.Request != "" {
+		return PgWriteQuery(db, "select * from "+db.QualifiedTable("tesl_email_messages")+"($1)", []any{db.migration.version}, scanOutboxRow)
+	}
 	return PgQuery(db, "select "+outboxColumns+" from "+table+" order by id", nil, scanOutboxRow)
 }
 
 func (backend *pgOutboxBackend) reset() {
 	db, table := backend.table()
+	if db.migration != nil && db.migration.roles.Request != "" {
+		panic("email: reset is unavailable for protected durable messages")
+	}
 	PgExec(db, "delete from "+table, nil)
 }
 
 func (backend *pgOutboxBackend) prune(keep time.Duration) {
 	db, table := backend.table()
+	if db.migration != nil && db.migration.roles.Request != "" {
+		PgExec(db, "select "+db.QualifiedTable("tesl_email_prune")+"($1,$2)", []any{db.migration.version, keep.Milliseconds()})
+		return
+	}
 	PgExec(db, "delete from "+table+" where status = 'sent' and sent_at < now() - ($1::bigint * interval '1 millisecond')",
 		[]any{keep.Milliseconds()})
 }
@@ -954,8 +979,8 @@ func (backend *pgOutboxBackend) prune(keep time.Duration) {
 // tesl_cache is UNLOGGED — no WAL, so a write costs what a cache write should, at the price
 // that a crash empties it, which for a cache is the right trade. One table per database,
 // with every `cache` declaration on it told apart by `cache_name`. The value is JSONB through
-// the declaration's codec; an entry that no longer decodes (the type changed under it) is a
-// miss and is removed, as Racket's was.
+// the declaration's codec; a failed decode is a miss and never deletes a concurrent
+// replacement of the same key.
 
 const cacheTable = "tesl_cache"
 
@@ -978,13 +1003,14 @@ const cacheSweepInterval = time.Minute
 type pgCacheBackend struct {
 	pgStore
 	name      string
+	codec     string // compiler artifact identity; immutable after construction
 	encode    func(any) any
 	decode    func(any) (any, error)
 	lastSweep atomic.Int64 // unix nanoseconds
 }
 
-// NewCacheOn is `cache C = Cache { database: D … }` for a Postgres-backed D: the in-memory
-// cache plus the durable backend. `encode` and `decode` are the value type's JSON codec.
+// NewCacheOn is the legacy durable constructor without a compiler codec identity.
+// Worker topology refuses it; emitted declarations use NewCacheOnArtifact.
 func NewCacheOn[V any](database *Database, name string, defaultTTLSeconds int64,
 	encode func(V) any, decode func(any) (V, error)) *Cache[V] {
 	pgRegisterMigrationFacility(database, "cache", name)
@@ -1003,6 +1029,9 @@ func (backend *pgCacheBackend) table() (*PostgresDB, string) {
 }
 
 func (backend *pgCacheBackend) get(key string) (any, bool) {
+	if backend.artifactConnection() != nil {
+		return backend.artifactGet(key)
+	}
 	db, table := backend.table()
 	rows := PgQuery(db, "select value::text from "+table+" where cache_name = $1 and key = $2 "+
 		"and (expires_at is null or expires_at > now())", []any{backend.name, key}, scanText)
@@ -1017,16 +1046,17 @@ func (backend *pgCacheBackend) get(key string) (any, bool) {
 			return value, true
 		}
 	}
-	// An entry this build cannot read is removed so the next read does not pay for it
-	// again, and reported, since a cache that silently misses on every read of a key looks
-	// like one that was never written.
-	fmt.Fprintf(os.Stderr, "tesl: cache %s: stored value for a key cannot be decoded and was removed: %v\n",
+	// A failed decoder must never delete a concurrent replacement of this key.
+	fmt.Fprintf(os.Stderr, "tesl: cache %s: stored value for a key cannot be decoded: %v\n",
 		backend.name, err)
-	PgExec(db, "delete from "+table+" where cache_name = $1 and key = $2", []any{backend.name, key})
 	return nil, false
 }
 
 func (backend *pgCacheBackend) set(key string, value any, ttlSeconds int64) {
+	if backend.artifactConnection() != nil {
+		backend.artifactSet(key, value, ttlSeconds)
+		return
+	}
 	db, table := backend.table()
 	backend.sweepExpired(db, table)
 	PgExec(db, "insert into "+table+" (cache_name, key, value, expires_at) values ($1, $2, $3::jsonb, "+
@@ -1049,6 +1079,10 @@ func (backend *pgCacheBackend) sweepExpired(db *PostgresDB, table string) {
 }
 
 func (backend *pgCacheBackend) del(key string) {
+	if backend.artifactConnection() != nil {
+		backend.artifactDelete(" and key=$2", key)
+		return
+	}
 	db, table := backend.table()
 	PgExec(db, "delete from "+table+" where cache_name = $1 and key = $2", []any{backend.name, key})
 }
@@ -1057,12 +1091,20 @@ func (backend *pgCacheBackend) del(key string) {
 // length($2)) = $2` has no pattern semantics, where `key like $2 || '%'` would read a `%` or
 // `_` in the prefix as a wildcard and wipe far more than it names.
 func (backend *pgCacheBackend) invalidatePrefix(prefix string) {
+	if backend.artifactConnection() != nil {
+		backend.artifactDelete(" and left(key,length($2))=$2", prefix)
+		return
+	}
 	db, table := backend.table()
 	PgExec(db, "delete from "+table+" where cache_name = $1 and left(key, length($2)) = $2",
 		[]any{backend.name, prefix})
 }
 
 func (backend *pgCacheBackend) reset() {
+	if backend.artifactConnection() != nil {
+		backend.artifactDelete("")
+		return
+	}
 	db, table := backend.table()
 	PgExec(db, "delete from "+table+" where cache_name = $1", []any{backend.name})
 }
