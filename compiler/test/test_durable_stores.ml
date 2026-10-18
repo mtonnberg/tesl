@@ -1,8 +1,7 @@
-(** Durable stores (2026-09-02): a `queue`, `email`, `cache` or `sseChannel` declared on a
-    Postgres-backed database is emitted through the `…On` constructors that bind it to that
-    database (rows in `tesl_jobs` / `tesl_email_outbox` / `tesl_cache` / `tesl_pubsub_outbox`,
-    shared by every instance), and every job type a durable queue carries gets a registered
-    JSON codec. On a Memory-backed database the in-process constructors are kept. *)
+(** Postgres-backed declarations bind their stores to the declared database.
+    Cache bindings also carry a module-qualified name and compiler artifact
+    identity; every durable queue job type gets a registered JSON codec.
+    On a Memory-backed database the in-process constructors are kept. *)
 
 open Alcotest
 
@@ -122,7 +121,7 @@ let test_postgres_backed_declarations_are_durable () =
     if not (contains needle out) then failf "expected %s in the emitted module:\n%s" needle out)
     [ "teslrt.NewQueueOn(DbDatabase, \"ReportQueue\", 3, \"exponential\", 2)";
       "teslrt.RegisterJobCodec(ReportQueueQueue, \"ReportJob\"";
-      "teslrt.NewCacheOn[Tick](DbDatabase, \"TickCache\", 60, teslCacheEncodeTickCache, teslCacheDecodeTickCache)";
+       "teslrt.NewCacheOnArtifact[Tick](DbDatabase, \"teslmoddurable.TickCache\", 60, teslCacheEncodeTickCache, teslCacheDecodeTickCache, teslCacheArtifactIdentity)";
       "teslrt.NewOutboxOn(DbDatabase, teslrt.SmtpSettings{";
       "teslrt.NewSseChannelOn(DbDatabase, \"Ticks\")" ];
   List.iter (fun needle ->

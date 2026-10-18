@@ -193,7 +193,7 @@ begin
  return result;
 end`},
 		{"tesl_register_stage_preparation",
-		"stage text, doc bytea, snapshot text, v integer, job text, physical text, tbl text, idx text", "void", "volatile", `
+			"stage text, doc bytea, snapshot text, v integer, job text, physical text, tbl text, idx text", "void", "volatile", `
 declare p ` + ns + `tesl_row_physical%rowtype; recorded ` + ns + `tesl_schema_stages%rowtype;
  linked ` + ns + `tesl_schema_index%rowtype; envelope bytea[]; body bytea[]; stages bytea[]; descriptor_fields bytea[];
 begin

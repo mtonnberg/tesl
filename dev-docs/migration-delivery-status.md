@@ -16,6 +16,15 @@ Automatic deployment wiring and its targeted verification are recorded below.
 
 ## Latest PR scope and verification (2026-10-18)
 
+The full-gate attempt on `943a73d` stopped at phase 4 in 3,093 seconds: the first
+three phases passed, Dune failed, and phases 5–24 were not reached. The failures
+were an obsolete cache-constructor emission assertion and one Go indentation
+error in the embedded stage runtime. Both are corrected. The two durable-store
+emission cases and all five affected PostgreSQL emission cases passed in a
+targeted private-cluster rerun. Evidence: `.tesl-stuff/pr-increment-ci.log` and
+`.tesl-stuff/pr-increment-ci-fix-tests.log`. This targeted rerun is not a full-gate
+pass; a complete rerun remains required.
+
 These maintainer decisions supersede narrower scope statements in the historical
 sections below:
 
