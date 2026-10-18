@@ -2,6 +2,12 @@
 
 > Audience: contributors reviewing the migration PR and its release evidence.
 
+The [scoped traceability register](migration-pr-scope.md) links the 18 agreed PR
+clauses to live production declarations, named witnesses and execution routes.
+Full staged uniqueness and empty-queue removal remain required and pending.
+Static consistency is not executed acceptance: a successful complete CI run is
+still required. Historical-roadmap reconciliation is reported separately.
+
 Last passing full-gate baseline: `1ddc8a6` (2026-10-14). Earlier baseline: `84ef00d`.
 Requirements were committed in `b5cddb9`;
 additive catch-up was committed in `137ddd1`, row-transforming catch-up in

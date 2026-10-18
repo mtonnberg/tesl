@@ -5,6 +5,8 @@
 # PostgreSQL tools on PATH. Arguments select focused kernel tests only.
 set -euo pipefail
 repo_root="$(CDPATH='' cd -- "$(dirname "$0")/.." && pwd)"
+python3 "$repo_root/scripts/check-migration-pr.py"
+python3 -m unittest discover -s "$repo_root/scripts" -p 'test_migration_pr.py'
 required_tools=(initdb pg_ctl go python3 dune timeout tee git tar psql)
 if [[ ${TESL_MIGRATION_TEST_POOLERS:-0} == 1 ]]; then required_tools+=(pgbouncer); fi
 if [[ ${TESL_MIGRATION_TEST_CLUSTER_CRASH:-0} == 1 ]]; then required_tools+=(pg_basebackup); fi

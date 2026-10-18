@@ -12,6 +12,16 @@ permissions:
   contents: read
 
 jobs:
+  pr-traceability:
+    name: PR requirement register consistency (not release readiness)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate scoped requirements and negative regressions
+        run: |
+          python3 scripts/check-migration-pr.py
+          python3 -m unittest discover -s scripts -p 'test_migration_pr.py'
   model:
     name: Admission and queue model checks
     runs-on: ubuntu-latest
