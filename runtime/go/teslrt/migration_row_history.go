@@ -378,14 +378,27 @@ func pgReadRowBase(history PgCompiledMigrationHistory) ([]PgRowSourceInventory, 
 			})
 		}
 		if len(d.Retirements) > 0 {
+			var previousQueues map[string]pgRowCanonical
 			for _, version := range d.Versions {
 				schema := pgRowDocument(r, version.SchemaContract, version.SchemaSnapshotHash, "snapshot")
 				_, definitions := pgRowClosure(r, schema, history.SourceCompilerABI, history.StoredValueCompatibility)
-				for _, definition := range definitions {
+				queues := map[string]pgRowCanonical{}
+				for key, definition := range definitions {
 					if !definition.atom && len(definition.children) > 0 && definition.children[0].isAtom("queue-schema") {
-						r.fail("table retirement cannot coexist with a historical queue schema")
+						queues[key] = definition
 					}
 				}
+				if previousQueues != nil {
+					if len(previousQueues) != len(queues) {
+						r.fail("table retirement requires unchanged historical queue membership")
+					}
+					for key, old := range previousQueues {
+						if fresh, ok := queues[key]; !ok || !pgRowCanonicalEqual(old, fresh) {
+							r.fail("table retirement requires unchanged historical queue membership")
+						}
+					}
+				}
+				previousQueues = queues
 			}
 		}
 		lifetime := map[string]bool{}

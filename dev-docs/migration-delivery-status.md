@@ -42,8 +42,20 @@ regressions passed (8.957 seconds). Compiler build, targeted emission tests,
 emitted PostgreSQL runtime compilation, `go vet`, and documentation integrity
 also passed. See [combined facility verification](../runtime/go/teslrt/MIGRATION_FACILITIES.md).
 These results do not establish a full CI pass or interoperability with archived
-pre-extension binaries. Staged uniqueness, queue removal, safe Drop, latency
-calibration and full traceability still have pending work in isolated drafts.
+pre-extension binaries.
+
+Safe unrelated-table Drop now permits unchanged queues, comparing full historical
+membership and payload/proof/codec contracts. Current application imports cannot
+retain access to dropped entities through historical schemas or transitive helpers.
+After integration with the durable facilities, the compiler planning suite passed
+16 tests and the PostgreSQL application suite passed in 111 seconds. These scenarios
+cover old-claim refusal, surviving claims, restamped retained jobs, delayed-job
+consumption and source-contract tampering. The embedded-runtime seam passed six
+tests; generated snapshots were refreshed. Logs:
+`/tmp/opencode/safe-drop-integrated-{compiler,postgres,embedded}.log`.
+
+Staged uniqueness, queue removal, latency calibration and full traceability still
+have pending work in isolated drafts. A final full gate remains required.
 
 ## Delivery contract
 

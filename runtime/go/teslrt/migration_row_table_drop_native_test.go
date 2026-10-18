@@ -4,6 +4,7 @@ package teslrt
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"strings"
 	"testing"
@@ -59,11 +60,38 @@ func TestPgRowTableDropActualApp(t *testing.T) {
 			run(installed, "install")
 			run(installed, "worker")
 			var v1 string
+			var retiringToken, survivingToken, jobsBefore string
+			var retiringSeq, survivingSeq int64
+			queueSnapshot := func() string {
+				t.Helper()
+				var value string
+				if err := f.installer.QueryRow(ctx, `select coalesce(jsonb_agg(to_jsonb(j)-'schema_version' order by id),'[]'::jsonb)::text from notes.tesl_jobs j`).Scan(&value); err != nil {
+					t.Fatal(err)
+				}
+				return value
+			}
 			if scenario != "fresh-v2" {
+				run("v2", "worker")
+				// Use the compiled queue's protected enqueue/claim API, before
+				// starting consumers. Both attempts own genuine V1 payloads.
+				for _, id := range []string{"retiring", "surviving", "delayed"} {
+					if _, err := request.Exec(ctx, `select notes.tesl_queue_enqueue(1,'Notifications','Notify',$1,jsonb_build_object('text',$1::text))`, id); err != nil {
+						t.Fatal(err)
+					}
+				}
+				var claimed string
+				if err := request.QueryRow(ctx, `select job_id,token,attempt_seq from notes.tesl_queue_claim(1,'Notifications','pending','old-handler',300000)`).Scan(&claimed, &retiringToken, &retiringSeq); err != nil || claimed != "retiring" {
+					t.Fatal("wrong retiring claim", claimed, err)
+				}
+				if err := request.QueryRow(ctx, `select job_id,token,attempt_seq from notes.tesl_queue_claim(2,'Notifications','pending','current-handler',300000)`).Scan(&claimed, &survivingToken, &survivingSeq); err != nil || claimed != "surviving" {
+					t.Fatal("wrong surviving claim", claimed, err)
+				}
+				if _, err := f.installer.Exec(ctx, `update notes.tesl_jobs set next_attempt_at=clock_timestamp()+interval '1 day' where id='delayed'`); err != nil {
+					t.Fatal(err)
+				}
 				v1 = pgStartRowAccessApp(t, f, root, "v1")
 				call(v1, "POST", "/archive", 200)
 				call(v1, "POST", "/one", 200)
-				run("v2", "worker")
 			}
 			v2 := pgStartRowAccessApp(t, f, root, "v2")
 			if scenario == "fresh-v2" {
@@ -81,8 +109,8 @@ func TestPgRowTableDropActualApp(t *testing.T) {
 			if scenario == "overlap" {
 				before := snapshot()
 				output := string(pgForwardNativeRun(t, f, root, "v2", "embedded", false))
-				if !strings.Contains(output, "table Drop requires Worker migration topology") {
-					t.Fatal("Embedded Drop did not reach exact scope guard", output)
+				if !strings.Contains(output, "Embedded migration topology does not yet support versioned queues") {
+					t.Fatal("queue-bearing Embedded Drop did not reach exact topology guard", output)
 				}
 				if after := snapshot(); after != before {
 					t.Fatalf("Embedded refusal mutated durable lifecycle: before %s after %s", before, after)
@@ -132,6 +160,42 @@ func TestPgRowTableDropActualApp(t *testing.T) {
 				call(v1, "PUT", "/archive", 200)
 				call(v2, "GET", "/all", 200)
 			}
+			if v1 != "" {
+				before, jobs := snapshot(), queueSnapshot()
+				output := string(pgForwardNativeRun(t, f, root, "v2", "contract", false))
+				if !strings.Contains(output, "retiring queue attempts are still leased") {
+					t.Fatal("live old queue claim did not block Drop", output)
+				}
+				if after, afterJobs := snapshot(), queueSnapshot(); after != before || afterJobs != jobs {
+					// The first Contract call registers its reviewed intent before
+					// attempting execution. Only that registration may persist.
+					var oldState, newState map[string]json.RawMessage
+					if err := json.Unmarshal([]byte(before), &oldState); err != nil {
+						t.Fatal(err)
+					}
+					if err := json.Unmarshal([]byte(after), &newState); err != nil {
+						t.Fatal(err)
+					}
+					if string(oldState["contracts"]) != "null" || string(newState["contracts"]) == "null" || afterJobs != jobs {
+						t.Fatal("old-claim refusal changed jobs or failed to register reviewed intent")
+					}
+					for key, value := range oldState {
+						if key != "contracts" && string(value) != string(newState[key]) {
+							t.Fatalf("old-claim refusal changed %s", key)
+						}
+					}
+				}
+				before = snapshot()
+				output = string(pgForwardNativeRun(t, f, root, "v2", "contract", false))
+				if !strings.Contains(output, "retiring queue attempts are still leased") || snapshot() != before || queueSnapshot() != jobs {
+					t.Fatal("registered Contract retry changed lifecycle or jobs", output)
+				}
+				var completed bool
+				if err := request.QueryRow(ctx, `select notes.tesl_queue_complete(1,'Notifications','retiring',$1,$2)`, retiringToken, retiringSeq).Scan(&completed); err != nil || !completed {
+					t.Fatal("old handler could not finish before Drop", completed, err)
+				}
+				jobsBefore = queueSnapshot()
+			}
 			if scenario == "dependency" {
 				// An external view must never be destroyed as a side effect of table Drop.
 				if _, err := f.installer.Exec(ctx, "create view public.drop_archive_dependency as select * from notes.archive"); err != nil {
@@ -155,6 +219,9 @@ func TestPgRowTableDropActualApp(t *testing.T) {
 				output := string(pgForwardNativeRun(t, f, root, "v2", "contract", false))
 				if after := snapshot(); before != after {
 					t.Fatalf("dependency refusal mutated floor, intent or receipts:\nbefore %s\nafter %s", before, after)
+				}
+				if queueSnapshot() != jobsBefore {
+					t.Fatal("dependency refusal changed queued jobs")
 				}
 				if !strings.Contains(output, "depend") {
 					t.Fatal("Contract failed for unrelated reason", output)
@@ -256,6 +323,19 @@ func TestPgRowTableDropActualApp(t *testing.T) {
 				t.Fatal("Contract failed exact table/index removal", present, index, err)
 			}
 			noRowWork()
+			if v1 != "" {
+				if after := queueSnapshot(); after != jobsBefore {
+					t.Fatal("Drop restamp changed payloads, scheduling or surviving claim", jobsBefore, after)
+				}
+				var count int
+				if err := f.installer.QueryRow(ctx, `select count(*) from notes.tesl_jobs where schema_version=2`).Scan(&count); err != nil || count != 2 {
+					t.Fatal("Drop did not restamp every retained job", count, err)
+				}
+				var completed bool
+				if err := request.QueryRow(ctx, `select notes.tesl_queue_complete(2,'Notifications','surviving',$1,$2)`, survivingToken, survivingSeq).Scan(&completed); err != nil || !completed {
+					t.Fatal("surviving handler lost its claim across Drop", completed, err)
+				}
+			}
 			call(v2, "PUT", "/touch", 200)
 			call(v2, "GET", "/all", 200)
 			if v1 != "" {
@@ -305,6 +385,27 @@ func TestPgRowTableDropActualApp(t *testing.T) {
 					t.Fatal("successor failed to advance or resurrected retired table", version, present, err)
 				}
 				noRowWork()
+			}
+			if v1 != "" {
+				// The ordinary compiled current queue handler decodes the
+				// restamped payload and queries Note after Archive is gone.
+				if _, err := f.installer.Exec(ctx, `update notes.tesl_jobs set next_attempt_at=clock_timestamp() where id='delayed'`); err != nil {
+					t.Fatal(err)
+				}
+				deadline := time.Now().Add(12 * time.Second)
+				for {
+					var remaining int
+					if err := f.installer.QueryRow(ctx, `select count(*) from notes.tesl_jobs where id='delayed'`).Scan(&remaining); err != nil {
+						t.Fatal(err)
+					}
+					if remaining == 0 {
+						break
+					}
+					if time.Now().After(deadline) {
+						t.Fatal("current compiled queue handler could not consume restamped job after Drop")
+					}
+					time.Sleep(25 * time.Millisecond)
+				}
 			}
 		})
 	}

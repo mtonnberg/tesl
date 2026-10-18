@@ -5,6 +5,7 @@ module D = Migration_declaration
 module S = Migration_sparse
 module I = Migration_inventory
 module C = Migration_canonical
+exception Rejected of S.error list
 let get = function Ok x -> x | Error es -> fail (String.concat "\n" (List.map (fun (e:S.error)->e.message) es))
 let rec mkdir p = if not(Sys.file_exists p) then (mkdir(Filename.dirname p);Unix.mkdir p 0o700)
 let write p s = mkdir(Filename.dirname p);Out_channel.with_open_bin p (fun o->output_string o s)
@@ -22,7 +23,8 @@ let fixture bodies entries run =
  let abi=match Migration_abi.current() with Ok x->Migration_abi.id x|Error e->fail e.message in
  let inventories=List.map(fun file->match I.load ~compiler_abi:abi ~root_file:file with Ok x->x|Error e->fail e.message) schemas in
  let seals=List.map(fun inventory->match Migration_seal.create ~project_root:root inventory with Ok x->x|Error e->fail e.message) inventories in
- let edges=List.mapi(fun index entry ->
+  let result = try
+  let edges=List.mapi(fun index entry ->
   let version=index+2 in let file=Filename.concat root (Printf.sprintf "migrations/drop/v%d.tesl" version) in
   let previous=name (version-1) count and current=name version count in
   let header=get(Migration_header.create ~previous:(List.nth seals index) ~current:(List.nth seals(index+1))) in
@@ -38,8 +40,10 @@ migration = Migration { from: %s, to: %s, same: [], fixtures: [], entities: { %s
     get(Migration_closure.attach ~file ~source closure) else source in
   write file source;
   let ast=match Parser.parse_module file source with Ok x->x|Err e->fail e.msg in
-  match get(D.check ~compiler_abi:abi ~source ast) with Some x->x|None->fail "no migration") entries in
- run (H.check ~schemas:inventories ~edges))
+   match D.check ~compiler_abi:abi ~source ast with
+   | Ok (Some x)->x | Ok None->fail "no migration" | Error errors->raise (Rejected errors)) entries in
+  H.check ~schemas:inventories ~edges with Rejected errors -> Error errors in
+  run result)
 let note="entity Note table \"notes\" primaryKey id { id: String, title: String }\n"
 let archive="entity Archive table \"archive\" primaryKey id { id: String, title: String }\n"
 let indexed="entity Archive table \"archive\" primaryKey id { id: String, title: String\n index [title] as \"archive_title\" }\n"
@@ -47,7 +51,20 @@ let revision p n=List.find(fun(v:R.version)->v.version=n)(R.versions p)
 let refuses message bodies edges ()=fixture bodies edges(function
  | Ok _->fail("accepted: "^message)
  | Error es->check bool (String.concat "\n" (List.map(fun(e:S.error)->e.message)es)) true
-  (List.exists(fun(e:S.error)->e.code="MIG016" && Compile.string_contains e.message message)es))
+   (List.exists(fun(e:S.error)->e.code="MIG016" && Compile.string_contains e.message message)es))
+let queue_refuses before after () = fixture [note^archive^before;note^after] ["Archive: Drop"] (function
+ | Ok _ -> fail "accepted changed queue contract alongside Drop"
+ | Error errors -> check bool "queue-specific refusal" true
+   (List.exists (fun (e:S.error) -> Compile.string_contains e.message "queue") errors))
+let proof_queue blocked = Printf.sprintf {|fact Valid (text: String)
+establish validate(text: String) -> Maybe (value: String ::: Valid value) =
+ if text != %S then
+  Something (text ::: Valid text)
+ else
+  Nothing
+record Payload { text: String ::: Valid text }
+queueSchema Jobs { jobs: [Payload] }
+|} blocked
 let retained ()=fixture [note^indexed;note;note] ["Archive: Drop";""] (fun result->
  let history=get result in let p=get(R.plan history) in
  let before=revision p 1 and window=revision p 2 and next=revision p 3 in
@@ -75,7 +92,17 @@ let ()=run "Table Drop planning" ["boundaries",[
  test_case "changed survivor refused" `Quick (refuses "unchanged surviving" [note^archive;"entity Note table \"notes\" primaryKey id { id: String, title: String, extra: Maybe String }"] ["Archive: Drop, Note: Additive []"]);
  test_case "transformed survivor refused" `Quick (refuses "unchanged surviving" [note^archive;"entity Note table \"notes\" primaryKey id { id: String, renamed: String }"] ["Archive: Drop, Note: Derived [Rename title renamed]"]);
  test_case "multiple Drops refused" `Quick (refuses "exactly one" [note^archive^"entity Extra table \"extra\" primaryKey id { id: String }";note] ["Archive: Drop, Extra: Drop"]);
- test_case "queue history refused" `Quick (let q="record Payload { text: String }\nqueueSchema Jobs { jobs: [Payload] }\n" in refuses "queue-bearing" [note^archive^q;note^q] ["Archive: Drop"]);
+ test_case "unchanged queue survives unrelated Drop" `Quick (fun () ->
+  let q="record Payload { text: String }\nqueueSchema Jobs { jobs: [Payload] }\n" in
+  fixture [note^archive^q;note^q] ["Archive: Drop"] (fun result ->
+   let history=get result in
+   check int "historical descriptors retained" 2 (List.length (H.versions history));
+   check int "one retirement" 1 (List.length (H.retirements history))));
+ test_case "queue addition alongside Drop refused" `Quick (let q="record Payload { text: String }\nqueueSchema Jobs { jobs: [Payload] }\n" in refuses "unchanged historical queue" [note^archive;note^q] ["Archive: Drop"]);
+ test_case "earlier queue membership change remains unsupported" `Quick (let q="record Payload { text: String }\nqueueSchema Jobs { jobs: [Payload] }\n" in refuses "unchanged historical queue" [note^archive;note^archive^q;note^q] ["";"Archive: Drop"]);
+ test_case "queue removal alongside Drop refused" `Quick (queue_refuses "record Payload { text: String }\nqueueSchema Jobs { jobs: [Payload] }\n" "");
+ test_case "payload shape change alongside Drop refused" `Quick (queue_refuses "record Payload { text: String }\nqueueSchema Jobs { jobs: [Payload] }\n" "record Payload { text: Int }\nqueueSchema Jobs { jobs: [Payload] }\n");
+ test_case "payload proof dependency change alongside Drop refused" `Quick (queue_refuses (proof_queue "") (proof_queue "blocked"));
  test_case "previously transformed table refused" `Quick (refuses "previously transformed" [note^archive;note^"entity Archive table \"archive\" primaryKey id { id: String, renamed: String }";note] ["Archive: Derived [Rename title renamed]";"Archive: Drop"]);
  test_case "protected concurrent index lifecycle refused" `Quick (refuses "concurrent index" [note^archive;note^indexed;note] ["Archive: Additive []";"Archive: Drop"]);
  test_case "entity identity cannot restart" `Quick (refuses "restart a retained" [note^archive;note;note^archive] ["Archive: Drop";"Archive: New"]);

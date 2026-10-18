@@ -168,6 +168,7 @@ type pgQueueSourceDatabase struct {
 	database, family, namespace string
 	current                     int
 	versions                    []pgQueueSourceSnapshot
+	tableRetirement             bool
 }
 type pgQueueSourceSnapshot struct {
 	storage, schema string
@@ -191,7 +192,7 @@ func pgQueueSourceProjection(history PgCompiledMigrationHistory) ([]pgQueueSourc
 		}
 		result := make([]pgQueueSourceDatabase, 0, len(inventories))
 		for _, inventory := range inventories {
-			d := pgQueueSourceDatabase{database: inventory.Database, family: inventory.Family, namespace: inventory.Namespace, current: inventory.CurrentVersion}
+			d := pgQueueSourceDatabase{database: inventory.Database, family: inventory.Family, namespace: inventory.Namespace, current: inventory.CurrentVersion, tableRetirement: len(inventory.Retirements) != 0}
 			for _, version := range inventory.Versions {
 				schema := pgRowDocument(r, version.SchemaContract, version.SchemaSnapshotHash, "snapshot")
 				_, definitions := pgRowClosure(r, schema, history.SourceCompilerABI, history.StoredValueCompatibility)
@@ -378,6 +379,11 @@ func pgReadQueueHistory(history PgCompiledMigrationHistory, payload string, init
 			r.fail("queue companion must describe every source version including empty inventories")
 		}
 		for i, v := range versions {
+			if owner.tableRetirement && i > 0 && !slices.EqualFunc(versions[0].Contracts, v.Contracts, func(a, b PgQueueSourceContract) bool {
+				return a.Queue == b.Queue && slices.Equal(a.Payloads, b.Payloads)
+			}) {
+				r.fail("table retirement requires unchanged historical queue payload/proof/codec contracts")
+			}
 			if v.Version != i+1 {
 				r.fail("queue inventory versions must be consecutive")
 			}

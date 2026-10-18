@@ -5,9 +5,15 @@ let replace a b s =
  Str.global_replace (Str.regexp_string a) b s
 let repository () = Option.get (Sys.getenv_opt "TESL_REPO_ROOT")
 let fixture name = Source_input.read (Filename.concat (repository ()) ("example/learn/db-revalidation/" ^ name))
-let fresh = fixture "schema/notes/v1.tesl" |> replace "Schema.Notes.V1" "Schema.Notes.VCurrent"
+let fresh = (fixture "schema/notes/v1.tesl" |> replace "Schema.Notes.V1" "Schema.Notes.VCurrent"
+ |> replace "import Tesl.Prelude exposing [String]" "import Tesl.Prelude exposing [String]\nimport Tesl.Json exposing [stringCodec]"
+ |> replace "exposing [Note, tryTitle]" "exposing [Note, tryTitle, Notify, Notifications]") ^
+ {|record Notify { text: String }
+codec Notify { toJson { text -> "text" with_codec stringCodec } fromJson [ { text <- "text" with_codec stringCodec } ] }
+queueSchema Notifications { jobs: [Notify] }
+|}
 let old = (fresh |> replace "Schema.Notes.VCurrent" "Schema.Notes.V1"
- |> replace "exposing [Note, tryTitle]" "exposing [Note, tryTitle, Archive]") ^
+ |> replace "exposing [Note, tryTitle, Notify, Notifications]" "exposing [Note, tryTitle, Notify, Notifications, Archive]") ^
  {|entity Archive table "archive" primaryKey id { id: String, body: String
  index [body] as "archive_body" }
 |}
@@ -19,11 +25,21 @@ migration = Migration { from: Schema.Notes.V1, to: Schema.Notes.VCurrent,
  same: [], fixtures: [], entities: { Archive: Drop } }
 |}
 let app version =
- let source=fixture "app.tesl"
+  let source=fixture "app.tesl"
+   |> replace "import Tesl.App exposing [App]" "import Tesl.App exposing [App]\nimport Tesl.Queue exposing [Queue, FromQueue, queueRead, QueueRetryStrategy, Fixed]"
+   |> replace "exposing [Note, tryTitle]" "exposing [Note, tryTitle, Notify]"
+   |> replace "api NotesApi {" {|queue Tasks requires [queueRead, dbRead Note] = Queue { database: Main, schema: Schema.Notes.VCurrent.Notifications,
+ jobs: [Job Schema.Notes.VCurrent.Notify handle Nothing], retry: QueueRetryStrategy { maxAttempts: 2, backoff: Fixed, initialDelay: 60 } }
+worker handle(job: Schema.Notes.VCurrent.Notify ::: FromQueue (Id == jobId) job) requires [queueRead, dbRead Note] =
+ let _ = select note from Note order note.id asc
+ job
+api NotesApi {|}
+   |> replace "App { database: Main," "App { database: Main, queues: [Tasks],"
+   |> replace "[dbRead Note, dbWrite Note, envRead]" "[queueRead, dbRead Note, dbWrite Note, envRead]"
   |> replace "PostgresConfig, TcpConnection]" "PostgresConfig, TcpConnection, MigrationConfig, MigrationTopology(..)]"
   |> replace "PostgresConfig { namespace:" "PostgresConfig { migrations: MigrationConfig { topology: Worker, controlOwner: \"owner\", requestRole: \"request\", workerRole: \"worker\", ddlConnection: \"\" }, namespace:" in
  if version<>"v1" then source else source
- |> replace "exposing [Note, tryTitle]" "exposing [Note, tryTitle, Archive]"
+  |> replace "exposing [Note, tryTitle, Notify]" "exposing [Note, tryTitle, Notify, Archive]"
  |> replace "  get \"/all\" -> List Note" "  get \"/all\" -> List Note\n  get \"/archive\" -> List Archive\n  post \"/archive\" -> String\n  put \"/archive\" -> String"
  |> replace "server NotesServer for NotesApi { health, all, one, invalid, repair, touch }" {|handler get archive() -> List Archive requires [dbRead Archive] =
  select row from Archive order row.id asc
@@ -37,7 +53,7 @@ handler put editArchive() -> String requires [dbWrite Archive] =
    set row.body = "edited"
  "edited"
 server NotesServer for NotesApi { health, all, archive, addArchive, editArchive, one, invalid, repair, touch }|}
- |> replace "[dbRead Note, dbWrite Note, envRead]" "[dbRead Note, dbWrite Note, dbRead Archive, dbWrite Archive, envRead]"
+  |> replace "[queueRead, dbRead Note, dbWrite Note, envRead]" "[queueRead, dbRead Note, dbWrite Note, dbRead Archive, dbWrite Archive, envRead]"
 let rec mkdir p = if not (Sys.file_exists p) then (mkdir (Filename.dirname p); Unix.mkdir p 0o700)
 let write p s = mkdir (Filename.dirname p); Out_channel.with_open_bin p (fun out -> output_string out s)
 let rec remove p = if (Unix.lstat p).Unix.st_kind=Unix.S_DIR then
@@ -73,14 +89,14 @@ let export destination =
   command out (Filename.concat out "build.log") "timeout 120s go build -p 1 -race -tags tesl_migration_test -o app ./cmd/access-test" in
  build "v1";
  ignore(save "schema/notes/v1.tesl" old);ignore(save "schema/notes/v-current.tesl" fresh);
- let path=save "migrations/notes/v2.tesl" migration in
+ let path=Filename.concat root "migrations/notes/v2.tesl" in
  let abi=Result.get_ok(Migration_abi.current()) in
  let load file=match Migration_inventory.load_with_compatibility
   ~stored_value_compatibility:(Some(Migration_abi.stored_value_compatibility abi)) ~compiler_abi:(Migration_abi.id abi) ~root_file:file with
   | Ok x->x | Error e->fail e.message in
  let seal file=match Migration_seal.create ~project_root:root (load file) with Ok x->x|Error e->fail e.message in
  let header=get(Migration_header.create ~previous:(seal(Filename.concat root "schema/notes/v1.tesl")) ~current:(seal current)) in
- write path (Migration_header.encode header ^ migration);
+ ignore(save "migrations/notes/v2.tesl" (Migration_header.encode header ^ migration));
  let source=Source_input.read path in
  let ast=match Parser.parse_module path source with Ok x->x|Err e->fail e.msg in
  let declaration=Option.get(get(Migration_declaration.check ~compiler_abi:(Migration_abi.id abi) ~source ast)) in
@@ -88,7 +104,31 @@ let export destination =
  let history=get(Migration_row_history.check ~schemas:[before;after] ~edges:[declaration]) in
  let plan=get(Migration_retained_storage.plan history) in
  ignore(save "migrations/notes/v2-contract.tesl" (get(Migration_contract.source ~plan ~version:2)));
- build "v2";
+  build "v2";
+  let unsafe = app "v1" |> replace
+   "import Schema.Notes.VCurrent exposing [Note, tryTitle, Notify, Archive]"
+   "import Schema.Notes.VCurrent exposing [Note, tryTitle, Notify]\nimport Schema.Notes.V1 exposing [Archive]" in
+   let refuses_historical code message source =
+   (match Compile.compile_go_source (Filename.concat root "app.tesl") source with
+   | Compile.GoFailure diagnostics ->
+     if not (List.exists (fun (d:Compile.diagnostic) -> d.code=code && Compile.string_contains d.message message) diagnostics) then
+      fail (Compile.diagnostics_to_json diagnostics)
+    | Compile.GoSuccess _ -> fail "current handler retained access to dropped Archive through a historical import") in
+   refuses_historical "MIG015" "cannot import frozen historical schema" unsafe;
+   write (Filename.concat root "archive-access.tesl") {|module ArchiveAccess exposing [archiveRows]
+import Schema.Notes.V1 exposing [Archive]
+import Tesl.Prelude exposing [List]
+import Tesl.DB exposing [dbRead]
+fn archiveRows() -> List Archive requires [dbRead Archive] = select row from Archive order row.id asc
+|};
+   refuses_historical "MIG015" "cannot import frozen historical schema" (app "v2" |> replace "module App exposing []"
+    "module App exposing []\nimport ArchiveAccess exposing [archiveRows]");
+   write (Filename.concat root "migrations/notes/archive-access.tesl") {|module Schema.Notes.Migrate.ArchiveAccess exposing [archiveIdentity]
+import Schema.Notes.V1 exposing [Archive]
+fn archiveIdentity(value: Archive) -> Archive = value
+|};
+   refuses_historical "MIG016" "historical schema imports" (app "v2" |> replace "module App exposing []"
+    "module App exposing []\nimport Schema.Notes.Migrate.ArchiveAccess exposing [archiveIdentity]");
  (* Freeze through the public generator so the successor replays the same sealed
     V2 Drop and reviewed Contract, rather than a hand-assembled history. *)
  let next=match Migration_generate.start_with_compatibility
@@ -106,7 +146,7 @@ let native () =
  let out=Filename.temp_dir "tesl-table-drop-app-" "" in
  Fun.protect ~finally:(fun()->remove out) (fun()->export out;
   command (Filename.concat(repository())"runtime/go") (Filename.concat out "postgres.log")
-   (Printf.sprintf "TESL_ROW_TABLE_DROP_PROGRAMS=%s timeout 240s go test -p 1 -race -tags tesl_migration_test -timeout 210s ./teslrt -run '^TestPgRowTableDropActualApp$' -count=1 -v" (Filename.quote out)))
+    (Printf.sprintf "TESL_ROW_TABLE_DROP_PROGRAMS=%s timeout 240s go test -p 1 -race -tags tesl_migration_test -timeout 210s ./teslrt -run '^TestPgRowTableDrop(ActualApp|CompiledQueueSource)$' -count=1 -v" (Filename.quote out)))
 let () = match Sys.getenv_opt "TESL_TABLE_DROP_EXPORT" with
  | Some destination -> export destination
  | None -> run "whole table retirement application" ["postgres",[

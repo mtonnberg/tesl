@@ -180,6 +180,18 @@ let capture_history ~source_only ~entry ~source f = protect entry.source_file (f
     let inventories = List.map (fun (s:H.schema) -> s.inventory) schemas in
     if source_only || H.contracts h<>[] then begin
       let rows=checked((if List.exists(fun edge->D.queue_transforms edge<>[])edges then RH.check_queue_expansion else RH.check) ~schemas:inventories ~edges) in
+      if RH.retirements rows<>[] then
+       List.iter (fun (m:module_form) ->
+         (* [modules] is the application's explicit transitive import graph;
+            implicit retained sources are captured separately below. A helper
+            reachable from the application must not gain historical access just
+            because a frozen schema also captured it. *)
+         List.iter (fun (imp:import_decl) ->
+          match Validation_common.schema_module_parts imp.module_name with
+          | Some (owner,revision,_) when owner=family && revision<>"VCurrent" ->
+            reject ~code:"MIG016" (Location.dummy_loc m.source_file)
+             "table Drop requires current application handlers to use VCurrent; historical schema imports are retained only for migration code"
+          | _ -> ()) m.imports) modules;
      if source_only then row_histories := (identity,rows) :: !row_histories;
      if H.contracts h<>[] then begin
       let plan=checked(Migration_retained_storage.plan rows) in

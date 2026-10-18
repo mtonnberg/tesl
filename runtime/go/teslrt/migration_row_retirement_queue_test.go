@@ -38,8 +38,8 @@ func TestRowRetirementSourceV5EmptyQueueRouting(t *testing.T) {
 			t.Fatal("manufactured queue contract")
 		}
 	}
-	// The compiler forbids this combination. A coherently rehashed source must
-	// still be refused by runtime before an empty companion can conceal the queue.
+	// Coherently rehashed unchanged queue metadata may pass row validation, but
+	// an empty companion must still never conceal its source queue inventory.
 	db := rowTestDB(source)
 	for _, raw := range db["versions"].([]any) {
 		version := raw.(map[string]any)
@@ -66,11 +66,30 @@ func TestRowRetirementSourceV5EmptyQueueRouting(t *testing.T) {
 	retirement["fromSchemaSnapshot"] = versions[0].(map[string]any)["schemaSnapshotHash"]
 	retirement["toSchemaSnapshot"] = versions[1].(map[string]any)["schemaSnapshotHash"]
 	h.HistoryJSON = rowTestJSON(t, source)
-	if _, err := pgReadRowBase(h); err == nil || !strings.Contains(err.Error(), "historical queue schema") {
-		t.Fatal("forged queue-bearing Drop source admitted", err)
+	if _, err := pgReadRowBase(h); err != nil {
+		t.Fatal("unchanged queue membership refused by row source", err)
 	}
 	companion = rowRetirementEmptyQueueCompanion(t, h, source)
-	if _, err := pgReadQueueHistory(h, rowTestJSON(t, companion), 1); err == nil || !strings.Contains(err.Error(), "historical queue schema") {
+	if _, err := pgReadQueueHistory(h, rowTestJSON(t, companion), 1); err == nil || !strings.Contains(err.Error(), "queue inventory omits or adds") {
 		t.Fatal("empty queue companion concealed queued Drop", err)
+	}
+	// Remove the target queue and coherently rehash schema, storage and the
+	// retirement endpoints. Hash validity must not authorize membership removal.
+	version := versions[1].(map[string]any)
+	reader := &pgMigrationWireReader{}
+	schema := pgRowDocument(reader, version["schemaContract"].(string), version["schemaSnapshotHash"].(string), "snapshot")
+	ref := pgRowTypeReference(h.Family, "Notifications")
+	ref.children[1] = pgRowAtom("value")
+	closure := &schema.children[2]
+	closure.children[1].children = slices.DeleteFunc(closure.children[1].children, func(n pgRowCanonical) bool { return pgRowCanonicalEqual(n, ref) })
+	closure.children[2].children = slices.DeleteFunc(closure.children[2].children, func(n pgRowCanonical) bool { return pgRowCanonicalEqual(n.children[0], ref) })
+	version["schemaContract"], version["schemaSnapshotHash"] = rowTestDoc("snapshot", schema)
+	storage := pgRowDocument(reader, version["storageContract"].(string), version["storageSnapshotHash"].(string), "migration")
+	storage.children[1] = schema
+	version["storageContract"], version["storageSnapshotHash"] = rowTestDoc("migration", storage)
+	retirement["toSchemaSnapshot"] = version["schemaSnapshotHash"]
+	h.HistoryJSON = rowTestJSON(t, source)
+	if _, err := pgReadRowBase(h); err == nil || !strings.Contains(err.Error(), "unchanged historical queue membership") {
+		t.Fatal("coherently rehashed queue removal admitted", err)
 	}
 }

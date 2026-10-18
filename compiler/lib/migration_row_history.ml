@@ -119,8 +119,14 @@ let check_internal ~queue_expansion ~schemas ~edges = protect (fun () ->
       if List.length removed<>1 || List.exists (fun (_,kind) -> kind<>S.Drop) (S.entries (D.coverage edge)) then
         reject loc "table Drop requires exactly one removed entity and unchanged surviving entities";
       if I.stored_entities schema=[] then reject loc "table Drop cannot remove the last entity";
-      if List.exists (fun schema -> I.queue_contracts schema<>[]) schemas then
-        reject loc "queue-bearing history does not support table Drop";
+      (* Compare full payload closures, not just job names or SQL carriers. Keep
+         every historical descriptor: Contract restamps these unchanged jobs. *)
+      let queues inventory = I.queue_contracts inventory |> List.map (fun q ->
+        relative inventory q.I.queue_name,
+        List.map (fun p -> relative inventory p.I.payload_name,p.payload_contract)
+          q.payloads |> List.sort compare) |> List.sort compare in
+      if List.exists (fun inventory -> queues inventory<>queues first) schemas then
+        reject loc "table Drop requires unchanged historical queue membership and full payload/proof/codec contracts";
       List.iter (fun (entity:I.stored_entity) ->
         let identity=relative (!previous).schema entity.entity_name in
         let old=List.find (fun (e:entity) -> e.identity=identity) (!previous).entities in
