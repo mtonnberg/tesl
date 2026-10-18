@@ -163,6 +163,13 @@ let resolve_binding ?(modules = []) (m : module_form) (d : database_form) =
          visit m.source_file root;
          let members = List.sort (fun (left, _) (right, _) -> String.compare left right) !members in
          errors := List.rev_append (check_member_storage members) !errors;
+         (match List.assoc_opt "backend" fields with
+          | Some backend when fst (Migration_form.application backend) = "Postgres" ->
+            List.iter (fun (_, (entity:entity_form)) ->
+              List.iter (fun (index:entity_index) -> if index.ix_staging then
+                errors := make_error ~code:"MIG030" index.ix_loc
+                  "PostgreSQL staging unique index requires protected stage control and reviewed promotion/cancellation support; execution is not implemented" :: !errors) entity.indexes) members
+          | _ -> ());
          if !errors <> [] then Error (List.rev !errors)
          else Ok (Some { database = d; schema_root = root; migration_prefix = expected_migrations; members })
      | _ -> error "`Database.schema` must name an imported `Schema.Family.VCurrent` root (or legacy `FamilySchema.VCurrent`), not a frozen version or child module")

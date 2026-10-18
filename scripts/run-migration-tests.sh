@@ -103,6 +103,7 @@ if (( $# == 0 )); then
   # Exact source/target codecs, separate predecessor/successor executables,
   # proof obligations and the isolated candidate all remain mandatory.
   for suite in \
+    test_staged_indexes \
     test_migration_queue_application test_queue_candidate_app \
     test_migration_fixtures test_migration_row_companion test_migration_contract \
     test_migration_row_storage test_migration_retype test_migration_row_forward \

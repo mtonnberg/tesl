@@ -270,6 +270,18 @@ let registry : entry list = [
        The diagnostic identifies the first differing dependency.";
     manual = Some "best-practices#database-access" };
 
+  { code = "MIG030"; category = Migration;
+    title = "staged uniqueness obligation is unsupported or inconsistent";
+    explanation =
+      "A staging unique index is a nonunique preparatory index, not a uniqueness \
+       promise. Its single key must use supported builtin equality and storage. \
+       Pending stage identity includes the complete typed field dependency closure. \
+       Carry it unchanged, or explicitly cancel or promote it in reviewed source. \
+       Key mutation requires prior cancellation. PostgreSQL stage execution, \
+       protected cancellation and reviewed PromoteStage are not implemented; \
+       source declarations do not authorize these operations.";
+    manual = Some "best-practices#database-access" };
+
   { code = "MIG031"; category = Migration;
     title = "migration update cost is proportional to matched rows";
     explanation =

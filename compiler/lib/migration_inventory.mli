@@ -73,6 +73,21 @@ val same_compiler_abi : same -> string
 val same_candidates : before:t -> after:t -> (same list, Migration_ir.error) result
 
 val snapshot : t -> Migration_canonical.node
+type staged_index = {
+  stage_id : string;
+  stage_entity : string;
+  stage_field : string;
+  stage_loc : Location.loc;
+  stage_contract : Migration_canonical.node;
+}
+type stage_transition = Stage of staged_index | Carry of staged_index
+  | Cancel of staged_index | Promote of staged_index
+val staged_indexes : t -> staged_index list
+(** Source intent only; Promote is NOT execution or uniqueness authority. Key
+    mutation/removal requires cancellation in a preceding revision. *)
+val stage_transitions : before:t -> after:t ->
+  (stage_transition list, Migration_ir.error) result
+val check_stage_history : ?max_versions:int -> t list -> (unit, Migration_ir.error) result
 val closure : t -> (Migration_ir.namespace * string) list ->
   (Migration_canonical.node, Migration_ir.error) result
 

@@ -16,6 +16,12 @@
  (libraries tesl_compiler_lib alcotest unix str))
 
 (test
+ (name test_staged_indexes)
+ (modules test_staged_indexes)
+ (deps ../bin/main.exe fixtures/stage-memory.tesl)
+ (libraries tesl_compiler_lib alcotest unix str))
+
+(test
  (name test_migration_ir)
  (modules test_migration_ir)
  (deps (universe) fixtures/migration-ir-vectors.txt)

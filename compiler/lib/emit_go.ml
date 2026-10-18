@@ -14061,6 +14061,9 @@ let compile_module_internal ?(migration_metered=false) ?emission_graph ?(nominal
       let managing = match managing, project_binding with
         | None, Some database when database.db_backend = "postgres" -> Some database
         | other, _ -> other in
+      if managing <> None then List.iter (fun (index:entity_index) ->
+        if index.ix_staging then unsupported index.ix_loc
+          "MIG030: PostgreSQL staged uniqueness requires protected stage control, reviewed promotion authority and writer fencing; execution is not implemented") e.indexes;
       (* Named by SOME database, whatever its backend: that is what decides whether a test
          block starts from an empty table (see `ent_in_database`). *)
       let declared = Hashtbl.fold (fun _ (database : database_info) found ->

@@ -147,6 +147,113 @@ let snapshot inventory =
   | Ok body -> with_abi inventory body
   | Error _ -> assert false (* load checks this exact closure before publishing t *)
 
+type staged_index = {
+  stage_id : string;
+  stage_entity : string;
+  stage_field : string;
+  stage_loc : Location.loc;
+  stage_contract : Migration_canonical.node;
+}
+type stage_transition = Stage of staged_index | Carry of staged_index
+  | Cancel of staged_index | Promote of staged_index
+
+let index_entries inventory entity = match entity_indexes inventory ~entity with
+  | Some (Migration_canonical.Seq entries) -> entries | _ -> []
+
+let stage_key inventory entity field =
+  let open Migration_canonical in
+  let owner = List.find (fun entry -> entry.stored_entity.entity_name=entity) inventory.entities in
+  let stored = List.find (fun entry -> entry.field.entity=entity && entry.field.name=field) inventory.fields in
+  (* The field contract includes ALL reached type/proof/helper definitions, not
+     just a surface type name. Index names and revision numbers are not stage
+     identity; physical storage and equality semantics are. *)
+  let contract = Seq [Bytes "staged-unique-key-v1";Bytes owner.entity_identity;
+    Bytes owner.stored_entity.table_name;Bytes field;stored.field.contract;
+    Bytes "default-btree";Bytes "nulls-distinct";Bytes "immediate"] in
+  {stage_id=digest Snapshot contract;stage_entity=entity;stage_field=field;
+   stage_loc=stored.field.loc;stage_contract=contract}
+
+let staged_indexes inventory =
+  List.concat_map (fun entity -> index_entries inventory entity.entity_name |> List.filter_map (function
+    | Migration_canonical.Seq [Bytes "staging-unique-index-v1";Seq [Bytes field];_;Bytes "default-btree";Bytes "nulls-distinct";Bytes "immediate"] ->
+      Some (stage_key inventory entity.entity_name field)
+    | _ -> None)) (stored_entities inventory)
+  |> List.sort (fun a b -> String.compare a.stage_id b.stage_id)
+
+let validate_stage_domains inventory =
+  let open Migration_canonical in
+  let primitive = function
+    | Seq [Bytes "named";Seq [Bytes "reference";Bytes "type";Seq [Bytes "primitive";Bytes name]]] -> Some name
+    | _ -> None in
+  List.iter (fun stage ->
+    let shape = List.find (fun s -> s.stored_field.entity=stage.stage_entity && s.stored_field.name=stage.stage_field) (field_shapes inventory) in
+    let key = match shape.type_identity with
+      | Seq [Bytes "apply";head;inner] when primitive head=Some "Tesl.Maybe.Maybe" -> inner
+      | key -> key in
+    let storage = Option.map String.lowercase_ascii shape.db_type in
+    match primitive key,storage with
+    | Some "Tesl.Prelude.Bool",(None | Some ("bool" | "boolean")) -> ()
+    | Some "Tesl.Int32.Int32",Some ("int" | "integer" | "int4" | "bigint" | "int8") -> ()
+    | Some "Tesl.Prelude.String",_ -> reject stage.stage_loc
+      "MIG030: staged String requires catalog-bound C/POSIX collation; explicit collation storage is not implemented"
+    | _ -> reject stage.stage_loc
+      "MIG030: staged key requires supported builtin equality and an exact physical carrier; currently Bool and Int32 with integer/bigint storage are supported (numeric Int, nominal wrappers, UUID/bytes mappings and custom storage are not implemented)") (staged_indexes inventory)
+
+let stage_transitions ~before ~after =
+  try
+    (match compatible_inventories ~before ~after with
+     | Ok () -> () | Error message -> reject (Location.dummy_loc "<stages>") message);
+    let old = staged_indexes before and fresh = staged_indexes after in
+    let relative inventory name =
+      let prefix = root_module inventory ^ "." in
+      String.sub name (String.length prefix) (String.length name-String.length prefix) in
+    let transitions = List.map (fun stage ->
+      match List.find_opt (fun next -> next.stage_contract=stage.stage_contract) fresh with
+      | Some next -> Carry next
+      | None ->
+        let entity = root_module after ^ "." ^ relative before stage.stage_entity in
+        (match List.find_opt (fun e -> e.entity_name=entity) (stored_entities after) with
+         | None -> reject stage.stage_loc "MIG030: cancel a pending stage in an earlier revision before dropping or renaming its entity"
+         | Some _ -> ());
+        (match List.find_opt (fun f -> f.entity=entity && f.name=stage.stage_field) (stored_fields after) with
+         | None -> reject stage.stage_loc "MIG030: cancel a pending stage before dropping or renaming its key"
+         | Some _ -> ());
+        let candidate = stage_key after entity stage.stage_field in
+        if candidate.stage_contract<>stage.stage_contract then reject stage.stage_loc
+          "MIG030: staged key type, dependencies, storage or equality changed; cancel the old stage in an earlier revision";
+        if List.exists (fun next -> next.stage_entity=entity &&
+          not (List.exists (fun prior -> prior.stage_contract=next.stage_contract) old)) fresh then reject stage.stage_loc
+          "MIG030: changing staged columns requires a separate cancellation revision";
+        let unique = List.exists (function
+          | Migration_canonical.Seq [Bytes "index";Seq [Bytes "bool";Bytes "true"];Seq [Bytes field];_] -> field=stage.stage_field
+          | _ -> false) (index_entries after entity) in
+        if unique then Promote stage else Cancel stage) old in
+    Ok (transitions @ List.filter_map (fun stage ->
+      if List.exists (fun previous -> previous.stage_contract=stage.stage_contract) old then None else Some (Stage stage)) fresh)
+  with Invalid error -> Error error
+
+let check_stage_history ?(max_versions=3) inventories =
+  try
+    if max_versions<1 then reject (Location.dummy_loc "<stages>") "MIG030: stage maximum age must be positive";
+    let ages = Hashtbl.create 8 in
+    let rec visit previous = function
+      | [] -> ()
+      | inventory::rest ->
+        Option.iter (fun before -> match stage_transitions ~before ~after:inventory with
+          | Ok _ -> () | Error error -> raise (Invalid error)) previous;
+        let current = staged_indexes inventory in
+        let expired = Hashtbl.fold (fun id _ acc ->
+          if List.exists (fun s -> s.stage_id=id) current then acc else id::acc) ages [] in
+        List.iter (Hashtbl.remove ages) expired;
+        List.iter (fun stage ->
+          let age=1 + Option.value (Hashtbl.find_opt ages stage.stage_id) ~default:0 in
+          if age>max_versions then reject stage.stage_loc
+            "MIG030: outstanding stage exceeds maximum carried versions; promote or cancel it through a reviewed schema change";
+          Hashtbl.replace ages stage.stage_id age) current;
+        visit (Some inventory) rest in
+    visit None inventories; Ok ()
+  with Invalid error -> Error error
+
 type queue_payload = { payload_name : string; payload_contract : Migration_canonical.node; payload_loc : Location.loc }
 type queue_contract = { queue_name : string; queue_loc : Location.loc; payloads : queue_payload list }
 let queue_payload_codec_records inventory payload =
@@ -428,6 +535,7 @@ let load_with_compatibility ~stored_value_compatibility ~compiler_abi ~root_file
           primary_key=form.primary_key; entity_contract}}) members
       |> List.sort (fun a b -> String.compare a.entity_identity b.entity_identity) in
     let inventory = { inventory with fields; entities } in
+    validate_stage_domains inventory;
     let assigned = Hashtbl.create 8 in
     List.iter (fun queue -> List.iter (fun payload ->
       match Hashtbl.find_opt assigned payload.payload_name with

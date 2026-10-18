@@ -68,6 +68,14 @@ let requirements ~before ~after ~(identities : identity list) ~loc =
   | Error error -> Error [{code="MIG020";loc;message=error.message;related=[]}]
   | Ok _ ->
     let errors = ref [] in
+    (match stage_transitions ~before ~after with
+     | Error error -> errors := [{code="MIG030";loc=error.loc;message=error.message;related=[]}]
+     | Ok transitions -> List.iter (function
+       | Promote stage -> errors := {code="MIG030";loc=stage.stage_loc;related=[];
+           message="staged promotion requires reviewed PromoteStage authority, protected stage control and predecessor writer fencing; promotion is not implemented"} :: !errors
+       | Cancel stage -> errors := {code="MIG030";loc=stage.stage_loc;related=[];
+           message="CANCEL STAGED UNIQUE is a decision-class schema change; protected stage cancellation is not implemented"} :: !errors
+       | Stage _ | Carry _ -> ()) transitions);
     let report code loc message related = errors := {code;loc;message;related} :: !errors in
     let seen_old = Hashtbl.create 16 and seen_new = Hashtbl.create 16 in
     let verified = List.filter_map (fun (claim : identity) ->

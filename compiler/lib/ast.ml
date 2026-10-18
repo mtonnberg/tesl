@@ -389,6 +389,8 @@ type record_form = {
     already lives.  [ix_name] is the explicit `as` override; when [None] the
     runtime derives the name from the table and column names. *)
 type entity_index = {
+  (** Preparatory obligation only. A staged index MUST have ix_unique=false. *)
+  ix_staging : bool;
   ix_unique : bool;
   ix_fields : string list;
   ix_name   : string option;

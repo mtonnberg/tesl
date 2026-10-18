@@ -103,11 +103,18 @@ let table inventory entity =
  let field_name field = match List.find_opt (fun c -> c.field.name=field) columns with
   | Some c -> c.name | None -> reject entity.entity_loc "index references an unknown storage field" in
  let indexes = match I.entity_indexes inventory ~entity:entity.entity_name with
-  | Some (Seq entries) -> List.map (function
+  | Some (Seq entries) -> List.map (fun entry ->
+     let staging = match entry with Seq (Bytes "staging-unique-index-v1"::_) -> true | _ -> false in
+     let entry = match entry with
+      | Seq [Bytes "staging-unique-index-v1";fields;explicit;Bytes "default-btree";Bytes "nulls-distinct";Bytes "immediate"] ->
+        Seq [Bytes "index";bool false;fields;explicit]
+      | entry -> entry in
+     match entry with
     | Seq [Bytes "index";Seq [Bytes "bool";Bytes unique];Seq fields;explicit] ->
       let fields = List.map (function Bytes name -> field_name name | _ -> assert false) fields in
       let ix_name = match explicit with
-       | Seq [Bytes "none"] -> derived_index entity.entity_loc (name ^ "_" ^ String.concat "_" fields ^ "_idx")
+       | Seq [Bytes "none"] -> derived_index entity.entity_loc
+           (name ^ "_" ^ String.concat "_" fields ^ (if staging then "_stage_idx" else "_idx"))
        | Seq [Bytes "some";Bytes text] -> identifier entity.entity_loc text
        | _ -> assert false in
       {name=ix_name;columns=fields;unique=unique="true"}

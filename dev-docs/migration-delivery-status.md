@@ -64,8 +64,50 @@ scope were corrected without widening thresholds. See
 [latency policy and evidence](../scripts/MIGRATION-LATENCY.md). This establishes
 neither absolute migration overhead nor hosted-runner reliability.
 
-Staged uniqueness, queue removal and full traceability still have pending work
-in isolated drafts. A final full gate remains required.
+Staged-uniqueness **compiler groundwork** is now integrated on top of `923f51f`.
+This is not production staged uniqueness: PostgreSQL binding/emission, additive
+expansion and row execution still refuse stage-bearing plans with `MIG030`.
+Reviewed promotion and protected cancellation also remain refused. No stage
+control tables, writer guards or promotion/recovery executor have been enabled.
+The unconnected Go guard experiment remains in the isolated draft, not in root
+production sources or emitted artifacts.
+
+The source surface parses/formats `staging unique index [field]` without granting
+uniqueness, `onConflict` eligibility or Memory enforcement. Canonical stage identity
+includes the complete typed field/storage/proof dependency closure, while excluding
+revision and physical index names. Storage descriptions are NONUNIQUE; source
+history distinguishes introduction/carry/cancel/promotion and rejects unsupported
+key mutations. The current admitted subset is Bool and Int32 with integer/bigint
+storage, optionally nullable. String C/POSIX collation and UUID/bytes mappings
+remain unsupported. Source carry-age checking defaults to three revisions;
+protected state and runtime configuration remain future work.
+
+`test_staged_indexes` is mandatory both through Dune and the full migration runner.
+It includes real Go execution of `compiler/test/fixtures/stage-memory.tesl`, testing
+duplicate inserts, duplicate-producing updates and multiple NULL keys, as well as
+the compiler/history/refusal cases. Integrated-root verification passed: staged
+indexes 9 cases (including the three real Memory tests), database indexes/onConflict
+30, index lint 29, source inventory 14, storage 11, compiler ABI 21, safe-Drop
+planning 16 and embedded-runtime seam 6. Compiler/selected test builds passed.
+Logs: `/tmp/opencode/uniqueness-integrated/`. Embedded documentation and source-ABI
+Go snapshots were regenerated from root; embedded runtime inputs are unchanged.
+No guard helper was integrated, so no new guard PostgreSQL suite is claimed here.
+These targeted results do not replace a final full CI gate. Queue removal, full
+traceability and the complete three-release uniqueness protocol remain open.
+
+**Next slice: sealed V8 preparation end to end.** Add the exact stage descriptor
+to retained source/physical plans and their runtime decoder; install and observe
+protected `tesl_schema_stages` pending rows with source ABI, plan identity and
+preparatory index linkage. Use the existing nonunique concurrent-index job/lease
+executor to build that exact preparatory index, including interrupted-build
+recovery and catch-up. Extend exact catalog/function/owner/ACL checks alongside
+the integrated durable facilities, preserving safe Drop. Lift executable-plan
+refusal only for verified Stage/Carry operations in this slice; promotion and
+cancellation stay refused. Acceptance requires compiled predecessor/staging
+applications sharing one private database: duplicate writes still succeed,
+nonunique index validity and pending stage identity survive restart, and tampered
+source/catalog/ABI plus attempted promotion refuse. This slice introduces no V9
+guard or unique index and must not claim enforcement or V10 readiness.
 
 ## Delivery contract
 

@@ -3396,10 +3396,12 @@ let at_entity_index s =
   match peek s, peek2 s with
   | IDENT "index", LBRACKET -> true
   | IDENT "unique", IDENT "index" -> true
+  | IDENT "staging", IDENT "unique" -> true
   | _ -> false
 
 let parse_entity_index s =
   let loc0 = current_loc s in
+  let ix_staging = (match peek s with IDENT "staging" -> advance s; true | _ -> false) in
   let ix_unique = (match peek s with IDENT "unique" -> advance s; true | _ -> false) in
   let* _ = (match peek s with
             | IDENT "index" -> advance s; return ()
@@ -3414,7 +3416,7 @@ let parse_entity_index s =
       return (Some n)
     | _ -> return None
   in
-  return { ix_unique; ix_fields; ix_name; ix_loc = span loc0 (current_loc s) }
+  return { ix_staging; ix_unique = ix_unique && not ix_staging; ix_fields; ix_name; ix_loc = span loc0 (current_loc s) }
 
 (** Parse a brace-delimited field block.  [allow_indexes] enables the entity-only
     `index [...]` entries; a record body leaves it off so an index entry there

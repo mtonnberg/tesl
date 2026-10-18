@@ -610,12 +610,12 @@ let record_json ~(codec_names : string list) (record : record_form) =
    NAME is deliberately absent: it is computed by the runtime, which owns column
    naming, so only an explicit `as` name is known here. *)
 let entity_index_json (index : entity_index) =
-  json_object [
+  json_object ([
     json_field "fields" (json_array (List.map json_string index.ix_fields));
     json_field "unique" (json_bool index.ix_unique);
     json_field "name"
       (match index.ix_name with Some n -> json_string n | None -> json_null);
-  ]
+  ] @ if index.ix_staging then [json_field "staging" (json_bool true)] else [])
 
 let entity_json (entity : entity_form) =
   json_object [

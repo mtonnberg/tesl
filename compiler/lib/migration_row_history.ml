@@ -76,6 +76,11 @@ let check_internal ~queue_expansion ~schemas ~edges = protect (fun () ->
       adjacent (expected+1) rest later
     | _ -> reject ~code:"MIG001" loc "incomplete row generation history" in
   adjacent 2 schemas edges;
+   (match I.check_stage_history schemas with
+    | Ok () -> () | Error error -> reject ~code:"MIG030" error.loc error.message);
+   List.iter (fun schema -> List.iter (fun (stage:I.staged_index) ->
+     reject ~code:"MIG030" stage.stage_loc
+       "staged uniqueness source is preparatory only; row execution requires protected stage control and reviewed promotion/cancellation support, which are not implemented") (I.staged_indexes schema)) schemas;
    if queue_expansion then begin
       List.iter (fun edge ->
         if D.queue_transforms edge<>[] && S.entries(D.coverage edge)<>[] then

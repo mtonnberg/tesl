@@ -284,7 +284,11 @@ let lower_declaration ~scopes ~(resolve : resolver) ~typed_nodes ~module_name de
         tag "record-declaration" [identity; Seq fs; option (invariant env) r.invariant]
       | DEntity e ->
         let identity = own Type e.name in let _, fs = fields ~stored:true [] e.fields in
-        let indexes = List.map (fun (i : entity_index) -> tag "index" [bool i.ix_unique; Seq (List.map bytes i.ix_fields); option bytes i.ix_name]) e.indexes in
+        let indexes = List.map (fun (i : entity_index) ->
+          if i.ix_staging then tag "staging-unique-index-v1"
+            [Seq (List.map bytes i.ix_fields); option bytes i.ix_name;
+             Bytes "default-btree"; Bytes "nulls-distinct"; Bytes "immediate"]
+          else tag "index" [bool i.ix_unique; Seq (List.map bytes i.ix_fields); option bytes i.ix_name]) e.indexes in
         tag "entity" [identity; Bytes e.table; Bytes e.primary_key; Seq fs; Seq indexes]
       | DFact f -> let identity = own Predicate f.name in let _, bs = bindings [] f.params in tag "fact" [identity; Seq bs]
       | DCodec c ->

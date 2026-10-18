@@ -13,6 +13,11 @@ let () =
     failwith "duplicate compiler ABI input names";
   if not (List.mem_assoc "checker.ml" inputs && List.mem_assoc "emit_go.ml" inputs && List.mem_assoc "lexer.ml" inputs) then
     failwith "incomplete compiler ABI source dependencies";
+  List.iter (fun name -> if not (List.mem_assoc name inputs) then
+    failwith ("incomplete staged-index ABI dependency: " ^ name))
+    ["ast.ml";"parser.ml";"validation_structural.ml";"migration_ir.ml";
+     "migration_inventory.ml";"migration_inventory.mli";"migration_storage.ml";
+     "migration_sparse.ml";"migration_row_history.ml";"migration_expansion.ml";"migration_schema.ml"];
   print_endline "(** Generated from Dune build dependencies; no source checkout is required at runtime. *)";
   Printf.printf "let ocaml_version = %S\n" Sys.ocaml_version;
   print_endline "let compiler_sources = [";

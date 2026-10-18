@@ -825,7 +825,7 @@ let is_valid_index_name (n : string) : bool =
 
 let index_label (ix : entity_index) =
   Printf.sprintf "%sindex [%s]"
-    (if ix.ix_unique then "unique " else "")
+    (if ix.ix_staging then "staging unique " else if ix.ix_unique then "unique " else "")
     (String.concat ", " ix.ix_fields)
 
 (** Per-entity index validation.  Every rule here is cheap and structural, so
@@ -836,6 +836,25 @@ let check_entity_indexes (e : entity_form) : validation_error list =
   let field_names = List.map (fun (f : field_def) -> f.name) e.fields in
   List.iter (fun (ix : entity_index) ->
       let label = index_label ix in
+      if ix.ix_staging then begin
+        let stage_error message = errs := make_error ~code:"MIG030" ix.ix_loc message :: !errs in
+        if ix.ix_unique || List.length ix.ix_fields <> 1 then
+          stage_error "staging unique index requires exactly one preparatory NONUNIQUE key (NULLS DISTINCT, immediate default btree equality)";
+        List.iter (fun name -> match List.find_opt (fun (f:field_def) -> f.name=name) e.fields with
+          | None -> ()
+          | Some f ->
+            let key = match f.type_expr with
+              | TApp {head=TName {name=("Maybe" | "Tesl.Maybe.Maybe");_};arg;_} -> arg
+              | key -> key in
+            let head = match key with TName {name;_} -> Some name | _ -> None in
+            (match head,Option.map String.lowercase_ascii f.db_type with
+             | Some ("Bool" | "Tesl.Prelude.Bool"),(None | Some ("bool" | "boolean")) -> ()
+             | Some ("Int32" | "Tesl.Int32.Int32"),Some ("int" | "integer" | "int4" | "bigint" | "int8") -> ()
+             | Some ("String" | "Tesl.Prelude.String"),_ -> stage_error "staged String requires catalog-bound C/POSIX collation; explicit collation storage is not implemented"
+             | _ -> stage_error "staged uniqueness requires an exact builtin equality/storage mapping; currently Bool and Int32 @db(integer/bigint) are supported; numeric Int, float, custom types and UUID/bytes storage mappings are unsupported")) ix.ix_fields;
+        if List.exists (fun (other:entity_index) -> other != ix && other.ix_fields=ix.ix_fields) e.indexes then
+          stage_error "a pending stage cannot coexist with another index declaration on the same key"
+      end;
       if ix.ix_fields = [] then
         add ix.ix_loc
           "name at least one field, e.g. `index [createdAt]`"

@@ -85,6 +85,11 @@ let project_catalog steps =
 (* The entire retained source chain is visited, including versions that no longer
    declare an entity. Physical objects are never freed by a logical Drop. *)
 let derive ~initial_version baseline edges =
+  let inventories = baseline :: List.concat_map (fun edge ->
+    let before,after=S.inventories (D.coverage edge) in [before;after]) edges in
+  List.iter (fun inventory -> List.iter (fun (stage:I.staged_index) ->
+    reject ~code:"MIG030" stage.stage_loc
+      "staging unique index is a preparatory obligation; protected stage execution is not implemented") (I.staged_indexes inventory)) inventories;
  let tables = Hashtbl.create 16 and relations = Hashtbl.create 32 in
  let reserve loc name =
    if Hashtbl.mem relations name then reject loc ("retained PostgreSQL relation name cannot be reused: " ^ name);
