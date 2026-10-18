@@ -152,4 +152,28 @@ let describe inventory =
     else Seq [Bytes "postgres-storage-v2";I.snapshot inventory;Seq (List.map storage tables);Seq stages] in
   let digest = Migration_canonical.digest Migration node in
   Ok {inventory;tables;digest;node}
- with Invalid error -> Error [error]
+  with Invalid error -> Error [error]
+
+let promotions ~before ~after =
+ let transitions = match I.stage_transitions ~before:before.inventory ~after:after.inventory with
+  | Ok xs -> xs | Error e -> invalid_arg e.message in
+ let previous = match stage_nodes before with Seq xs -> xs | _ -> assert false in
+ List.filter_map (function I.Promote stage ->
+  let prep = List.find (function Seq (_::Bytes id::_) -> id=stage.I.stage_id | _ -> false) previous in
+  let table,column,prep_name = match prep with
+   | Seq [_;_;_;_;_;Bytes t;Bytes c;_;_;Bytes i] -> t,c,i | _ -> assert false in
+  let target=List.find (fun (t:table) -> t.name=table) after.tables |> fun t ->
+   List.find (fun (i:index) -> i.unique && i.columns=[column]) t.indexes in
+  if target.name=prep_name then invalid_arg "promotion requires a distinct target unique index name; retain the preparatory index";
+  Some (prep,target)
+ | _ -> None) transitions
+
+let cancellations ~before ~after =
+ let transitions=match I.stage_transitions ~before:before.inventory ~after:after.inventory with Ok xs->xs|Error e->invalid_arg e.message in
+ let previous=match stage_nodes before with Seq xs->xs|_->assert false in
+ List.filter_map(function I.Cancel stage ->
+  let prep=List.find(function Seq(_::Bytes id::_)->id=stage.I.stage_id|_->false)previous in
+  let table,column=match prep with Seq[_;_;_;_;_;Bytes t;Bytes c;_;_;_]->t,c|_->assert false in
+  if List.exists(fun(t:table)->t.name=table && List.exists(fun(i:index)->List.mem column i.columns)t.indexes)after.tables then
+   invalid_arg "cancellation requires deleting the staged declaration without a replacement index on its key";
+  Some prep | _ -> None)transitions

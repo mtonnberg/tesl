@@ -254,6 +254,15 @@ func pgExecuteRowCatchupFor(ctx context.Context, conn *pgx.Conn, config *pgx.Con
 		for version := max(2, state.Current); version <= b.history.CurrentVersion; version++ {
 			window := windows[version]
 			plan := window.target
+			if len(plan.stageCancellations) > 0 {
+				retireThrough = max(retireThrough, version)
+			}
+			if len(plan.stageGuards) > 0 && version < b.history.CurrentVersion {
+				if _, err := pgRowContractFor(b.database, version); err != nil {
+					return err
+				}
+				retireThrough = max(retireThrough, version)
+			}
 			previous, err := pgCompiledRowPredecessorPlan(b.database, version)
 			if err != nil {
 				return err
@@ -300,6 +309,12 @@ func pgExecuteRowCatchupFor(ctx context.Context, conn *pgx.Conn, config *pgx.Con
 		}
 		for state.Current <= b.history.CurrentVersion {
 			window := windows[state.Current]
+			if len(window.target.stageCancellations) > 0 {
+				state, err = pgExecuteStageCancellations(ctx, conn, window, roles, true)
+				if err != nil {
+					return err
+				}
+			}
 			queueEdge := pgRowQueueEdge(window.target)
 			if !queueEdge || state.MinVersion < state.Current {
 				if err := pgCompleteCatchupIndexes(ctx, config, window, roles, state); err != nil {
@@ -329,7 +344,7 @@ func pgExecuteRowCatchupFor(ctx context.Context, conn *pgx.Conn, config *pgx.Con
 				result = state
 				return nil
 			}
-			if !pgRowEpochPreserving(window.target) && !queueEdge {
+			if (!pgRowEpochPreserving(window.target) || len(window.target.stageGuards) > 0) && !queueEdge {
 				state, err = pgExecuteRowContractOn(ctx, conn, config, window, roles, state.Current, true)
 				if err != nil {
 					return fmt.Errorf("schema catch-up Contract V%d: %w", window.target.version, err)
@@ -350,7 +365,7 @@ func pgExecuteRowCatchupFor(ctx context.Context, conn *pgx.Conn, config *pgx.Con
 					state, err = observe()
 				}
 			} else {
-				state, err = pgExecuteRowForward(step, conn, next, roles)
+				state, err = pgExecuteRowForward(step, conn, next, roles, true)
 			}
 			stop()
 			if err != nil {

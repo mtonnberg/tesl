@@ -1,8 +1,8 @@
 package teslrt
 
-// Stage protocol v1 is preparation only. It does not expose uniqueness or any
-// transition to promoting/enforced/cancelled. A pending record is immutable and
-// belongs to the exact nonunique index job which created it.
+// Preparation records remain pending and immutable, including during a guarded
+// declaration window. Guard activation is recorded separately; neither record
+// claims enforced uniqueness or authorizes a UNIQUE index build.
 import (
 	"context"
 	"crypto/sha256"
@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"slices"
 	"strconv"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -101,6 +102,24 @@ func pgVerifyStagePhysical(plan *pgRowPhysicalPlan) error {
 }
 
 func pgVerifyStageLineage(previous, plan *pgRowPhysicalPlan) error {
+	for _, s := range plan.stageCancellations {
+		if previous == nil || !slices.Contains(previous.stages, s) || !slices.Contains(plan.stages, s) || slices.ContainsFunc(previous.stageGuards, func(g pgStageGuard) bool { return g.preparation == s }) || slices.ContainsFunc(previous.stageReliance, func(g pgStageGuard) bool { return g.preparation == s }) {
+			return fmt.Errorf("cancellation requires an exact pending, unguarded predecessor")
+		}
+	}
+	if previous != nil && len(previous.stageGuards) != 0 && (plan.stageRelianceVersion != previous.version || !slices.Equal(plan.stageReliance, previous.stageGuards)) {
+		return fmt.Errorf("guarded promotion successor requires its exact enforced-stage prerequisite")
+	}
+	for _, guard := range plan.stageGuards {
+		if previous == nil || !slices.Contains(previous.stages, guard.preparation) || !slices.Contains(plan.stages, guard.preparation) {
+			return fmt.Errorf("guarded promotion lacks its exact pending predecessor")
+		}
+		for _, entity := range plan.entities {
+			if slices.ContainsFunc(entity.indexes, func(i PgMigrationCatalogIndex) bool { return i.Name == guard.target }) {
+				return fmt.Errorf("guarded promotion must not create or require its unique target")
+			}
+		}
+	}
 	if len(plan.stages) > 0 && (plan.version < 2 || !pgRowEpochPreserving(plan) || plan.requiresContractVersion > 0) {
 		return fmt.Errorf("stage preparation requires an additive existing-table revision after original V1")
 	}
@@ -108,11 +127,14 @@ func pgVerifyStageLineage(previous, plan *pgRowPhysicalPlan) error {
 		return nil
 	}
 	for _, old := range previous.stages {
-		if !slices.Contains(plan.stages, old) {
-			return fmt.Errorf("pending stage cannot disappear or change; promotion/cancellation are unsupported")
+		if !slices.Contains(plan.stages, old) && !slices.Contains(previous.stageCancellations, old) {
+			return fmt.Errorf("pending preparation cannot disappear or change; guarded windows retain it")
 		}
 	}
 	for _, stage := range plan.stages {
+		if slices.ContainsFunc(plan.stageReliance, func(g pgStageGuard) bool { return g.preparation == stage }) {
+			continue
+		}
 		if slices.Contains(previous.stages, stage) {
 			continue
 		}
@@ -129,7 +151,7 @@ func pgVerifyStageLineage(previous, plan *pgRowPhysicalPlan) error {
 // catalog is rejected by exact catalog observation; it is never silently adopted.
 func pgStageControlTables() []pgMigrationControlTable {
 	return []pgMigrationControlTable{
-		{"tesl_schema_stage_protocol", `id smallint primary key check(id=1), format integer not null check(format=1)`},
+		{"tesl_schema_stage_protocol", `id smallint primary key check(id=1), format integer not null check(format=2)`},
 		{"tesl_schema_stages", `
  stage_id text primary key,
  descriptor bytea not null,
@@ -141,7 +163,7 @@ func pgStageControlTables() []pgMigrationControlTable {
  table_name text not null,
  index_name text not null unique,
  job_id text not null unique,
- state text not null check(state='pending'),
+ state text not null check(state in ('pending','promoting','blocked_duplicates','enforced','cancelled')),
  check(pg_catalog.encode(pg_catalog.sha256(descriptor),'hex')=descriptor_hash)`},
 	}
 }
@@ -203,7 +225,7 @@ declare p ` + ns + `tesl_row_physical%rowtype; recorded ` + ns + `tesl_schema_st
 begin
  if stage is null or stage !~ '^[0-9a-f]{64}$' or doc is null or snapshot is null or snapshot !~ '^[0-9a-f]{64}$' or
  v is null or v<2 or job is null or physical is null or tbl is null or idx is null or
- not exists(select 1 from ` + ns + `tesl_schema_stage_protocol where id=1 and format=1) or
+  not exists(select 1 from ` + ns + `tesl_schema_stage_protocol where id=1 and format=2) or
  not exists(select 1 from ` + ns + `tesl_schema_meta where id=1 and format_version=5 and initial_version=1) then
  raise exception 'tesl: invalid stage preparation identity'; end if;
  select * into p from ` + ns + `tesl_row_physical where version=v and contract_hash=physical and epoch_preserving for share;
@@ -280,7 +302,7 @@ func pgVerifyStageRecords(ctx context.Context, tx pgx.Tx, b *pgRowBaseline, forw
 	if err := tx.QueryRow(ctx, "select format from "+pgx.Identifier{b.history.Namespace, "tesl_schema_stage_protocol"}.Sanitize()+" where id=1").Scan(&format); err != nil {
 		return err
 	}
-	if format != 1 {
+	if format != 2 {
 		return fmt.Errorf("unsupported stage control extension")
 	}
 	type expectation struct {
@@ -312,6 +334,21 @@ func pgVerifyStageRecords(ctx context.Context, tx pgx.Tx, b *pgRowBaseline, forw
 			}
 		}
 	}
+	authorities, err := pgStageIndexAuthorities(ctx, tx, b.history.Namespace)
+	if err != nil {
+		return err
+	}
+	states := map[string]string{}
+	for _, a := range authorities {
+		states[a.guard.preparation.id] = a.state
+	}
+	cancellations, err := pgStageCancellationAuthorities(ctx, tx, b.history.Namespace)
+	if err != nil {
+		return err
+	}
+	for _, c := range cancellations {
+		states[c.stage.id] = "cancelled"
+	}
 	rows, err := tx.Query(ctx, "select stage_id,descriptor,descriptor_hash,introduced_version,physical_hash,source_abi,source_snapshot,table_name,index_name,job_id,state from "+pgx.Identifier{b.history.Namespace, "tesl_schema_stages"}.Sanitize())
 	if err != nil {
 		return err
@@ -325,7 +362,11 @@ func pgVerifyStageRecords(ctx context.Context, tx pgx.Tx, b *pgRowBaseline, forw
 			return err
 		}
 		want, ok := expected[id]
-		if !ok || string(descriptor) != want.stage.descriptor || digest != fmt.Sprintf("%x", sha256.Sum256(descriptor)) || version != want.version || physical != want.physical || abi != want.abi || snapshot != want.snapshot || table != want.stage.table || index != want.stage.index || job != want.job || state != "pending" {
+		wantState := states[id]
+		if wantState == "" {
+			wantState = "pending"
+		}
+		if !ok || string(descriptor) != want.stage.descriptor || digest != fmt.Sprintf("%x", sha256.Sum256(descriptor)) || version != want.version || physical != want.physical || abi != want.abi || snapshot != want.snapshot || table != want.stage.table || index != want.stage.index || job != want.job || state != wantState {
 			return fmt.Errorf("protected stage differs from complete immutable source/index intent")
 		}
 		delete(expected, id)
@@ -335,6 +376,9 @@ func pgVerifyStageRecords(ctx context.Context, tx pgx.Tx, b *pgRowBaseline, forw
 	}
 	if len(expected) != 0 {
 		return fmt.Errorf("registered stage index lacks its protected pending record")
+	}
+	if _, err := tx.Exec(ctx, "select "+pgx.Identifier{b.history.Namespace, "tesl_stage_guards_ready"}.Sanitize()+"(current) from "+pgx.Identifier{b.history.Namespace, "tesl_schema_state"}.Sanitize()+" where id=1"); err != nil {
+		return err
 	}
 	return nil
 }
@@ -346,6 +390,25 @@ func pgStageSourceMatches(plan *pgRowPhysicalPlan, storage pgRowCanonical) error
 	if err != nil {
 		return err
 	}
+	for _, guard := range plan.stageGuards {
+		if err := pgCheckGuardSource(plan, storage, guard); err != nil {
+			return err
+		}
+		stages = append(stages, guard.preparation)
+	}
+	for _, guard := range plan.stageReliance {
+		if err := pgCheckGuardSource(plan, storage, guard); err != nil {
+			return err
+		}
+		stages = append(stages, guard.preparation)
+	}
+	for _, s := range plan.stageCancellations {
+		if err := pgCheckGuardSource(plan, storage, pgStageGuard{preparation: s}); err != nil {
+			return err
+		}
+		stages = append(stages, s)
+	}
+	slices.SortFunc(stages, func(a, b pgStagePreparation) int { return strings.Compare(a.id, b.id) })
 	if !slices.Equal(stages, plan.stages) {
 		return fmt.Errorf("stage physical inventory differs from complete compiled source")
 	}

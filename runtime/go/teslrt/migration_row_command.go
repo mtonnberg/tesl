@@ -333,6 +333,15 @@ func pgRowSchemaStatus(ctx context.Context, conn *pgx.Conn, b *pgRowBaseline, ro
 		if err := tx.QueryRow(ctx, "select "+quoteIdentifier(b.history.Namespace)+".tesl_row_queue_status()").Scan(&status.Queues); err != nil {
 			return err
 		}
+		ns := quoteIdentifier(b.history.Namespace) + "."
+		if err := tx.QueryRow(ctx, `select coalesce(jsonb_agg(jsonb_build_object('stageId',s.stage_id,'table',s.table_name,'preparation',s.index_name,
+ 'introducedVersion',s.introduced_version,'state',s.state,'promotionVersion',p.version,'contractHash',p.contract_hash,
+ 'targetIndex',j.index_name,'enforcedIndexOid',p.enforced_index_oid,'error',j.error,
+ 'cancellationVersion',c.version,'cancellationCompilerAbi',c.compiler_abi) order by s.stage_id),'[]'::jsonb)
+ from `+ns+`tesl_schema_stages s left join `+ns+`tesl_schema_stage_promotions p on p.stage_id=s.stage_id
+ left join `+ns+`tesl_schema_index j on j.id=p.job_id left join `+ns+`tesl_schema_stage_cancellations c on c.stage_id=s.stage_id`).Scan(&status.Stages); err != nil {
+			return err
+		}
 		instances, err := tx.Query(ctx, "select instance,version,protocol_level,last_seen,compat_floor_seen from "+quoteIdentifier(b.history.Namespace)+".tesl_schema_instances where last_seen>pg_catalog.clock_timestamp()-interval '30 seconds' order by version,instance limit 100")
 		if err != nil {
 			return err
@@ -360,7 +369,7 @@ func pgRowSchemaStatus(ctx context.Context, conn *pgx.Conn, b *pgRowBaseline, ro
 		for _, job := range jobs {
 			status.Indexes = append(status.Indexes, PgMigrationIndexStatus{ID: job.ID, Name: job.Index.Name,
 				Table: job.Table, Version: job.Version, State: job.State, SourceCompilerABI: job.SourceABI,
-				Attempts: job.Attempts, Holder: job.Holder, Token: job.Token, ExpiresAt: job.ExpiresAt, Error: job.Error})
+				Attempts: job.Attempts, Holder: job.Holder, Token: job.Token, ExpiresAt: job.ExpiresAt, Error: job.Error, TerminalVersion: job.TerminalVersion})
 		}
 		for version := 1; version <= b.history.CurrentVersion; version++ {
 			intent := intents[version]

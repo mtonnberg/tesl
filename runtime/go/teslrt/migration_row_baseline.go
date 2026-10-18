@@ -204,6 +204,17 @@ func (p *pgRowBaselinePreparation) inspect(ctx context.Context, tx pgx.Tx, names
 	return pgInspectRowControl(ctx, tx, namespace, roles)
 }
 func (p *pgRowBaselinePreparation) verify(ctx context.Context, tx pgx.Tx, state PgMigrationControlState) error {
+	for version := 2; version <= p.baseline.history.CurrentVersion; version++ {
+		plan, err := pgCompiledRowPhysicalPlan(p.baseline.database, version)
+		if err != nil {
+			return err
+		}
+		if len(plan.stageCancellations) > 0 {
+			ready := true
+			_, _, err := pgReadRowBaselineState(ctx, tx, p.baseline, p.roles, false, &ready)
+			return err
+		}
+	}
 	_, _, err := pgReadRowBaselineState(ctx, tx, p.baseline, p.roles, false)
 	return err
 }
@@ -273,6 +284,22 @@ func pgExecuteRowBaseline(ctx context.Context, conn *pgx.Conn, b *pgRowBaseline,
 	stopOrigin()
 	if err != nil {
 		return state, err
+	}
+	for version := 2; version <= min(state.Current, b.history.CurrentVersion); version++ {
+		plan, err := pgCompiledRowPhysicalPlan(b.database, version)
+		if err != nil {
+			return state, err
+		}
+		if len(plan.stageCancellations) > 0 {
+			window, err := pgRowExecutionWindow(b, version)
+			if err != nil {
+				return state, err
+			}
+			state, err = pgExecuteStageCancellations(ctx, conn, window, roles, false)
+			if err != nil {
+				return state, err
+			}
+		}
 	}
 	if b.target != nil && b.target.version > 1 {
 		steps, err := pgRowCatchupSteps(b, state.Current)

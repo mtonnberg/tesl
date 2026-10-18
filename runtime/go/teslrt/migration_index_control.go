@@ -17,6 +17,9 @@ type pgMigrationIndexJob struct {
 	// Derived only after complete row source/job/stage verification, never read
 	// from a supplied job or database row. TEXT preparation accepts btree limits.
 	verifiedTextPreparation          bool
+	stagePromotion                   bool
+	stageCancellationVersion         int
+	stageCancellationPlanned         int
 	Version, Ordinal                 int
 	ID, ObjectHash, SourceABI, Table string
 	Index                            PgMigrationCatalogIndex
@@ -106,6 +109,14 @@ func pgReadMigrationIndexJobs(ctx context.Context, tx pgx.Tx, namespace string, 
 // the complete lease table: format3 permits only index leases, row5 also has
 // independently verified row-shard leases.
 func pgReadMigrationIndexJobRows(ctx context.Context, tx pgx.Tx, namespace string, intents map[int]*pgExpansionIntent) ([]pgMigrationIndexJob, error) {
+	stageAuthorities, err := pgStageIndexAuthorities(ctx, tx, namespace)
+	if err != nil {
+		return nil, err
+	}
+	cancellations, err := pgStageCancellationAuthorities(ctx, tx, namespace)
+	if err != nil {
+		return nil, err
+	}
 	ns := quoteIdentifier(namespace) + "."
 	rows, err := tx.Query(ctx, `select j.version,j.ordinal,j.id,j.table_name,j.index_name,j.key_columns,j.is_unique,
  j.state,j.terminal_version,j.attempts,j.error,l.name,coalesce(l.holder,''),l.token,l.expires_at,
@@ -128,8 +139,12 @@ func pgReadMigrationIndexJobRows(ctx context.Context, tx pgx.Tx, namespace strin
 			return nil, err
 		}
 		intent := intents[job.Version]
-		if intent == nil || job.Ordinal < 0 || job.Ordinal >= len(intent.Objects) ||
-			job.ID != pgMigrationObjectHash(intent.ArtifactHash, job.Ordinal) || intent.Objects[job.Ordinal] != job.ID ||
+		authority, stageJob := stageAuthorities[job.ID]
+		provenance := intent != nil && job.Ordinal >= 0 && job.Ordinal < len(intent.Objects) && job.ID == pgMigrationObjectHash(intent.ArtifactHash, job.Ordinal) && intent.Objects[job.Ordinal] == job.ID
+		if stageJob {
+			provenance = job.Version == authority.version && job.Ordinal == authority.ordinal && job.Index.Unique && job.Table == authority.guard.preparation.table && job.Index.Name == authority.guard.target && len(job.Index.Columns) == 1 && job.Index.Columns[0] == authority.guard.preparation.column
+		}
+		if !provenance ||
 			!pgMigrationIdentifier(job.Table) || !pgMigrationIdentifier(job.Index.Name) ||
 			len(job.Index.Columns) == 0 || len(job.Index.Columns) > 32 || job.Attempts < 0 ||
 			dimensions == nil || *dimensions != 1 || lower == nil || *lower != 1 || upper == nil || *upper != len(job.Index.Columns) ||
@@ -160,7 +175,20 @@ func pgReadMigrationIndexJobRows(ctx context.Context, tx pgx.Tx, namespace strin
 		if detail != nil {
 			job.Error = *detail
 		}
-		job.ObjectHash, job.SourceABI, job.Token = job.ID, intent.SourceABI, *token
+		job.ObjectHash, job.Token = job.ID, *token
+		if cancelled, ok := cancellations[job.ID]; ok {
+			if job.State != "terminal" || job.TerminalVersion == nil || *job.TerminalVersion != cancelled.version || job.Table != cancelled.stage.table || job.Index.Name != cancelled.stage.index || job.Index.Unique {
+				return nil, fmt.Errorf("cancelled preparation job terminal state differs")
+			}
+			job.stageCancellationVersion = cancelled.version
+		}
+		if stageJob {
+			job.SourceABI = authority.abi
+			job.stagePromotion = true
+			job.verifiedTextPreparation = authority.guard.preparation.scalar == "text"
+		} else {
+			job.SourceABI = intent.SourceABI
+		}
 		jobs = append(jobs, job)
 	}
 	if err := rows.Err(); err != nil {

@@ -292,10 +292,15 @@ func pgControlFunctionCatalog(ctx context.Context, tx pgx.Tx, namespace string, 
 }
 
 func pgControlFunctionRoles(roles PgMigrationControlRoles, fn pgMigrationControlFunction) []string {
+	if strings.HasPrefix(fn.name, "tesl_guard_") {
+		return []string{roles.Owner}
+	}
 	switch fn.name {
+	case "tesl_stage_atom", "tesl_stage_guard_spec", "tesl_stage_guard_body", "tesl_activate_stage_guards", "tesl_stage_list", "tesl_stage_reliance_ready", "tesl_stage_settled", "tesl_stage_cancellations_ready":
+		return []string{roles.Owner}
 	case "tesl_email_enqueue", "tesl_email_claim", "tesl_email_outcome", "tesl_email_messages", "tesl_email_prune", "tesl_sse_publish", "tesl_sse_prune":
 		return []string{roles.Request}
-	case "tesl_queue_inventory_checked", "tesl_queue_inventory_digest", "tesl_row_admit_version", "tesl_stage_canonical_children", "tesl_row_queue_removal_inventory":
+	case "tesl_queue_inventory_checked", "tesl_queue_inventory_digest", "tesl_row_admit_version", "tesl_stage_canonical_children", "tesl_row_queue_removal_inventory", "tesl_writer_version":
 		// Internal composition helpers: only the owner-definer wrappers may
 		// consume these intermediate values. Never application-supplied authority.
 		return []string{roles.Owner}
@@ -303,9 +308,11 @@ func pgControlFunctionRoles(roles PgMigrationControlRoles, fn pgMigrationControl
 	principals := []string{roles.Worker}
 	requestCallable := false
 	switch fn.name {
+	case "tesl_stage_guard_catalog", "tesl_stage_guards_ready":
+		requestCallable = true
 	case "tesl_row_queue_removal_source_valid":
 		requestCallable = true
-	case "tesl_admit", "tesl_heartbeat", "tesl_row_processing", "tesl_row_check_abi", "tesl_row_queue_transition_valid", "tesl_row_queue_final", "tesl_row_queue_restamps_valid", "tesl_row_queue_status", "tesl_queue_admit", "tesl_queue_enqueue",
+	case "tesl_admit", "tesl_admit_writer", "tesl_heartbeat", "tesl_row_processing", "tesl_row_check_abi", "tesl_row_queue_transition_valid", "tesl_row_queue_final", "tesl_row_queue_restamps_valid", "tesl_row_queue_status", "tesl_queue_admit", "tesl_queue_enqueue",
 		"tesl_queue_claim", "tesl_queue_complete", "tesl_queue_renew", "tesl_queue_fail",
 		"tesl_queue_quarantine", "tesl_queue_count", "tesl_queue_dead_jobs", "tesl_queue_requeue":
 		requestCallable = true

@@ -22,12 +22,12 @@ class Traceability(unittest.TestCase):
     def validate(self):
         return pr.validate(pr.ROOT, self.spec)
 
-    def test_consistent_but_not_release_ready(self):
+    def test_scoped_ready_is_not_execution_or_full_ci(self):
         report = self.validate()
         self.assertTrue(report["consistency"])
-        self.assertFalse(report["release_ready"])
+        self.assertTrue(report["release_ready"])
         self.assertGreater(report["unmapped_blocks"], 0)
-        self.assertIn("PR-UNIQUE", report["required_pending"])
+        self.assertEqual(report["required_pending"], [])
         self.assertNotIn("PR-SCALE", report["required_pending"])
         self.assertTrue(report["full_ci_required"])
         self.assertFalse(report["execution_verified"])
@@ -36,19 +36,20 @@ class Traceability(unittest.TestCase):
         command = [sys.executable, str(pr.ROOT / "scripts/check-migration-pr.py"), "--json"]
         # The draft's historical override must not affect integrated live checks.
         env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1", TESL_PR_REFERENCE_REF="nonexistent-historical-ref")
-        for flags, status in (([], 0), (["--release-ready"], 1), (["--roadmap-reconciled"], 1)):
+        for flags, status in (([], 0), (["--release-ready"], 0), (["--roadmap-reconciled"], 1)):
             with self.subTest(flags=flags):
                 result = subprocess.run(command + flags, capture_output=True, text=True, env=env, timeout=10)
                 self.assertEqual(result.returncode, status, result.stderr)
                 report = json.loads(result.stdout)
                 self.assertTrue(report["consistency"])
-                self.assertFalse(report["release_ready"])
+                self.assertTrue(report["release_ready"])
                 self.assertEqual(report["reference_source"], "live-checkout")
-                self.assertEqual(report["required_pending"], ["PR-UNIQUE"])
+                self.assertEqual(report["required_pending"], [])
                 self.assertFalse(report["execution_verified"])
                 self.assertEqual(report["unmapped_blocks"], sum(b["classification"] == "unmapped" for b in report["source_inventory"]))
 
     def test_pending_blocks_scoped_readiness_independently_of_roadmap(self):
+        self.spec["requirements"]["PR-UNIQUE"]["status"] = "pending"
         with patch.object(pr, "blocks", return_value=[]):
             self.spec["source_mappings"] = []
             self.assertFalse(self.validate()["release_ready"])
@@ -165,10 +166,138 @@ class Traceability(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "runner reference/selection"):
                 self.validate()
 
-    def test_missing_pending_feature_cannot_be_green(self):
-        self.spec["requirements"]["PR-UNIQUE"]["status"] = "evidenced"
-        with self.assertRaisesRegex(ValueError, "pending acceptance"):
+    def test_unique_groundwork_status_flip_is_not_evidence(self):
+        req = self.spec["requirements"]["PR-UNIQUE"]
+        req["status"] = "evidenced"
+        req["implementation"] = ["compiler/lib/migration_inventory.ml#stage_transitions"]
+        req["witnesses"] = [{"ref": "compiler/test/test_staged_indexes.ml#parse_format", "route": "compiler"}]
+        with self.assertRaisesRegex(ValueError, "staged uniqueness evidence requires.*implementations"):
             self.validate()
+
+    def test_unique_every_implementation_link_is_required(self):
+        original = copy.deepcopy(self.spec)
+        for ref in pr.UNIQUE_IMPLEMENTATION:
+            with self.subTest(ref=ref):
+                self.spec = copy.deepcopy(original)
+                self.spec["requirements"]["PR-UNIQUE"]["implementation"].remove(ref)
+                with self.assertRaisesRegex(ValueError, "staged uniqueness evidence requires.*implementations"):
+                    self.validate()
+
+    def test_unique_every_protocol_witness_is_required(self):
+        original = copy.deepcopy(self.spec)
+        for ref, route in pr.UNIQUE_WITNESSES:
+            with self.subTest(ref=ref):
+                self.spec = copy.deepcopy(original)
+                req = self.spec["requirements"]["PR-UNIQUE"]
+                req["witnesses"] = [w for w in req["witnesses"] if (w["ref"], w["route"]) != (ref, route)]
+                with self.assertRaisesRegex(ValueError, "staged uniqueness evidence requires.*witnesses"):
+                    self.validate()
+
+    def test_unique_metadata_fixture_cannot_replace_runtime_witness(self):
+        req = self.spec["requirements"]["PR-UNIQUE"]
+        req["witnesses"] = [w for w in req["witnesses"] if not w["route"].startswith("compiler-native:")]
+        req["witnesses"].append({"ref": "runtime/go/teslrt/migration_stage_text_test.go#TestStageTextDefaultResolution", "route": "runtime:stage-text-equality"})
+        with self.assertRaisesRegex(ValueError, "staged uniqueness evidence requires.*witnesses"):
+            self.validate()
+
+    def test_unique_native_tests_cannot_use_fixtureless_runtime_route(self):
+        req = self.spec["requirements"]["PR-UNIQUE"]
+        witness = next(w for w in req["witnesses"] if "TestPgStagePreparationTextCatalogResolution" in w["ref"])
+        witness["route"] = "runtime:stage-text-equality"
+        with self.assertRaisesRegex(ValueError, "runner reference/selection"):
+            self.validate()
+
+    def test_unique_execution_edges_cannot_disappear(self):
+        original = pr.read
+        for path, calls in pr.UNIQUE_CONNECTIONS.items():
+            for call in calls:
+                with self.subTest(path=path, call=call):
+                    self.assertIn(call, original(pr.ROOT, path))
+                    def changed(root, name):
+                        text = original(root, name)
+                        return text.replace(call, "disconnected_link") if name == path else text
+                    with patch.object(pr, "read", side_effect=changed):
+                        with self.assertRaisesRegex(ValueError, "staged uniqueness execution/mutation route"):
+                            self.validate()
+
+    def test_unique_handoff_cannot_precede_retirement(self):
+        original = pr.read
+        path = "runtime/go/teslrt/migration_stage_execute.go"
+        def changed(root, name):
+            text = original(root, name)
+            if name == path:
+                text = text.replace("pgExecuteRowEpoch(ctx, conn", "REORDER_MARKER")
+                text = text.replace("tesl_stage_handoff($1,$2)", "pgExecuteRowEpoch(ctx, conn")
+                text = text.replace("REORDER_MARKER", "tesl_stage_handoff($1,$2)")
+            return text
+        with patch.object(pr, "read", side_effect=changed):
+            with self.assertRaisesRegex(ValueError, "retire writers before"):
+                self.validate()
+
+    def test_unique_protected_mutation_catalog_is_required(self):
+        original = pr.read
+        for filename, function in (
+            ("migration_stage_lifecycle_spec.go", "tesl_stage_handoff"),
+            ("migration_stage_lifecycle_spec.go", "tesl_finish_stage_enforcement"),
+            ("migration_stage_cancel.go", "tesl_finish_stage_cancellation"),
+            ("migration_stage_guard_catalog.go", "tesl_activate_stage_guards"),
+        ):
+            with self.subTest(function=function):
+                path = "runtime/go/teslrt/" + filename
+                def changed(root, name):
+                    text = original(root, name)
+                    return text.replace('{"' + function + '",', '{"removed_mutation",') if name == path else text
+                with patch.object(pr, "read", side_effect=changed):
+                    with self.assertRaisesRegex(ValueError, "protected catalog entry"):
+                        self.validate()
+
+    def test_unique_real_fixture_build_run_and_cases_are_required(self):
+        original = pr.read
+        for old in (
+            "Compile.compile_go_file", "export ~stages ~guards ~cancelled output;",
+            "go build -race -tags", "go test -p 2 -race -tags", "-run %s",
+            '(compilation ~stages:true ~guards:true)', '(compilation ~stages:true ~cancelled:true)',
+            'build "v4"', 'fail "guarded V3 exposed onConflict"',
+            '"^TestPgStageCancel"', '"TESL_STAGE_GUARD_PROGRAMS"',
+        ):
+            with self.subTest(old=old):
+                self.assertIn(old, original(pr.ROOT, pr.UNIQUE_HARNESS))
+                def changed(root, name):
+                    text = original(root, name)
+                    return text.replace(old, "disconnected_fixture") if name == pr.UNIQUE_HARNESS else text
+                with patch.object(pr, "read", side_effect=changed):
+                    with self.assertRaisesRegex(ValueError, "staged uniqueness (harness|native fixture)"):
+                        self.validate()
+
+    def test_unique_all_named_native_declarations_are_required(self):
+        original = pr.read
+        for filename, names in pr.UNIQUE_NATIVE_TESTS.items():
+            for test in names:
+                with self.subTest(test=test):
+                    path = "runtime/go/teslrt/" + filename
+                    def changed(root, name):
+                        text = original(root, name)
+                        return text.replace("func " + test + "(", "func removedWitness(") if name == path else text
+                    with patch.object(pr, "read", side_effect=changed):
+                        with self.assertRaisesRegex(ValueError, "missing Go declaration"):
+                            self.validate()
+
+    def test_unique_runner_cannot_skip_native_cases_or_change_matrix(self):
+        original = pr.read
+        for path, old, message in (
+            (pr.RUNNER, "TESL_STAGE_CANCELLATION_EXPORT", "clear export-only modes"),
+            (pr.RUNNER, "export TESL_MIGRATION_TEST_REQUIRE_POSTGRES=1", "require PostgreSQL"),
+            (pr.RUNNER, "test_migration_row_tables test_migration_row_indexes test_migration_additive_tail", "runner reference/selection"),
+            (pr.WORKFLOW, "postgresql_$POSTGRES_MAJOR^out", "matching-major PostgreSQL matrix"),
+        ):
+            with self.subTest(old=old):
+                self.assertIn(old, original(pr.ROOT, path))
+                def changed(root, name):
+                    text = original(root, name)
+                    return text.replace(old, "disconnected_route") if name == path else text
+                with patch.object(pr, "read", side_effect=changed):
+                    with self.assertRaisesRegex(ValueError, message):
+                        self.validate()
 
     def test_empty_queue_cannot_borrow_unrelated_evidence(self):
         self.spec["requirements"]["PR-EMPTY-QUEUE"] = copy.deepcopy(self.spec["requirements"]["PR-DROP"])
@@ -293,7 +422,7 @@ class Traceability(unittest.TestCase):
         clause = next(b for b in report["source_inventory"] if b["text"] == "New normative obligation.")
         self.assertEqual(clause["classification"], "unmapped")
         self.assertFalse(report["roadmap_reconciled"])
-        self.assertEqual(report["required_pending"], ["PR-UNIQUE"])
+        self.assertEqual(report["required_pending"], [])
 
     def test_blocks_do_not_omit_nonblank_source_lines(self):
         inventory = pr.blocks(pr.ROOT)

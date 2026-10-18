@@ -438,6 +438,11 @@ func pgInspectControlProtocolMode(ctx context.Context, tx pgx.Tx, namespace stri
 			return state, err
 		}
 		functions = append(functions, extensionFunctions...)
+		guardFunctions, err := pgStageGuardCatalogSpecs(ctx, tx, namespace)
+		if err != nil {
+			return state, err
+		}
+		functions = append(functions, guardFunctions...)
 	}
 	for _, fn := range functions {
 		if err := pgControlFunctionCatalog(ctx, tx, namespace, roles, fn); err != nil {

@@ -78,7 +78,7 @@ func pgRowControlTables() []pgMigrationControlTable {
  primary key(version,entity),unique(version,table_name),unique(version,ordinal),
  check(pg_catalog.encode(pg_catalog.sha256(type_contract),'hex')=type_contract_hash),
  check(pg_catalog.encode(pg_catalog.sha256(physical_storage),'hex')=physical_storage_hash)`},
-	}, append(append(append(pgRowForwardTables(), pgRowLifecycleTables()...), pgRowQueueWorkTables()...), pgRowQueueRetirementTables()...)...), append(pgStageControlTables(), pgRowQueueRemovalTables()...)...)
+	}, append(append(append(pgRowForwardTables(), pgRowLifecycleTables()...), pgRowQueueWorkTables()...), pgRowQueueRetirementTables()...)...), append(append(append(append(append(pgStageControlTables(), pgRowQueueRemovalTables()...), pgWriterContextTables()...), pgStageGuardTables()...), pgStageLifecycleTables()...), pgStageCancellationTables()...)...)
 }
 
 // Format5 binds each version to its original baseline and checked expansion
@@ -116,6 +116,14 @@ func pgRowControlFunctions(namespace string) []pgMigrationControlFunction {
  raise exception 'tesl: object does not match exact row baseline'; end if;
 `
 		case "tesl_record_expanded":
+			guard += " perform " + ns + "tesl_stage_cancellations_ready(v-1);\n"
+			guard += ` if exists(select 1 from ` + ns + `tesl_row_physical p where p.version=v
+ and (` + ns + `tesl_row_physical_source_header(p.contract)->>'format')='tesl-retained-physical-version-v10')
+ and not exists(select 1 from ` + ns + `tesl_schema_stage_guards where version=v) then
+ perform ` + ns + `tesl_activate_stage_guards(v);
+ end if;
+ perform ` + ns + `tesl_stage_guards_ready(v);
+`
 			guard += ` if exists(select 1 from ` + ns + `tesl_row_queue_removal_staging where version=v)
  and (not ` + ns + `tesl_row_queue_removal_source_valid(v) or not exists(select 1 from ` + ns + `tesl_row_queue_retirements removal_receipt
   join ` + ns + `tesl_row_queue_removal_staging removal_decision on removal_decision.version=removal_receipt.version and removal_decision.retirement=removal_receipt.retirement and removal_decision.retirement_hash=removal_receipt.retirement_hash
@@ -157,6 +165,7 @@ end`
 		}
 		functions[i].body = strings.Replace(body, "\nbegin\n", "\nbegin\n"+guard, 1)
 		if fn.name == "tesl_admit" {
+			functions[i].body = strings.Replace(functions[i].body, " return s.compat_floor;", " perform "+ns+"tesl_stage_guards_ready(v);\n return s.compat_floor;", 1)
 			versionOnly := functions[i]
 			versionOnly.name = "tesl_row_admit_version"
 			// Queue admission validates every complete inventory itself immediately
@@ -166,12 +175,41 @@ end`
 		}
 	}
 	functions = append(functions, internal...)
+	functions = append(functions, pgWriterContextFunctions(namespace)...)
 	functions = append(functions, pgStageControlFunctions(namespace)...)
+	functions = append(functions, pgStageGuardFunctions(namespace)...)
+	functions = append(functions, pgStageGuardCatalogFunctions(namespace)...)
+	functions = append(functions, pgStageLifecycleFunctions(namespace)...)
+	functions = append(functions, pgStageCancellationFunctions(namespace)...)
 	functions = append(functions, pgQueueRegistrationFunctions(namespace)...)
 	functions = append(functions, pgRowQueueOperationFunctions(namespace)...)
 	functions = append(functions, pgRowQueueFunctions(namespace)...)
 	functions = append(functions, pgRowQueueConversionFunctions(namespace)...)
 	functions = append(functions, pgRowQueueRetirementFunctions(namespace)...)
 	functions = append(functions, pgRowQueueRemovalFunctions(namespace)...)
-	return append(append(append(append(functions, pgRowForwardFunctions(namespace)...), pgRowBackfillFunctions(namespace)...), pgRowContractFunctions(namespace)...), append(pgRowEpochFunctions(namespace), pgRowIndexFunctions(namespace)...)...)
+	functions = append(append(append(append(functions, pgRowForwardFunctions(namespace)...), pgRowBackfillFunctions(namespace)...), pgRowContractFunctions(namespace)...), append(pgRowEpochFunctions(namespace), pgRowIndexFunctions(namespace)...)...)
+	for i, fn := range functions {
+		guard := ""
+		if fn.name == "tesl_record_index_state" {
+			functions[i].body = strings.Replace(fn.body, "\n return true;", `
+  update `+ns+`tesl_schema_stage_promotions set state=case when new_state='failed' and pg_catalog.left(detail,6)='23505:' then 'blocked_duplicates' else 'promoting' end where job_id=j and state<>'enforced';
+  update `+ns+`tesl_schema_stages s set state=p.state from `+ns+`tesl_schema_stage_promotions p where p.job_id=j and p.stage_id=s.stage_id;
+  return true;`, 1)
+		}
+		switch fn.name {
+		case "tesl_register_index":
+			guard = ` if exists(select 1 from ` + ns + `tesl_schema_stage_guards where spec->>'table'=tbl)
+ and not exists(select 1 from ` + ns + `tesl_schema_index where id=j) then
+ raise exception 'tesl: guarded table cannot register another index path'; end if;
+`
+		case "tesl_register_row_physical":
+			guard = " perform " + ns + "tesl_stage_cancellations_ready(v-1);\n if exists(select 1 from " + ns + "tesl_schema_stage_guards where version<v) or (" + ns + "tesl_row_physical_source_header(doc)->>'format')='tesl-retained-physical-version-v11' then perform " + ns + "tesl_stage_reliance_ready(doc); end if;\n"
+		case "tesl_register_row_contract", "tesl_retire_row_window", "tesl_begin_row_contract", "tesl_record_row_contract_object", "tesl_finish_row_contract":
+			guard = " if exists(select 1 from " + ns + "tesl_schema_stage_guards) then raise exception 'tesl: guarded unique Contract is not implemented'; end if;\n"
+		}
+		if guard != "" {
+			functions[i].body = strings.Replace(fn.body, "\nbegin\n", "\nbegin\n"+guard, 1)
+		}
+	}
+	return functions
 }

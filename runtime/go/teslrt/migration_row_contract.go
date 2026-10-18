@@ -101,13 +101,16 @@ func pgParseTableContract(result *pgRowContract, n pgRowCanonical) (*pgRowContra
 func pgParseRowContract(encoded, hash string, window, settled *pgRowPhysicalPlan) (*pgRowContract, error) {
 	r := &pgMigrationWireReader{}
 	n := pgRowDocument(r, encoded, hash, "contract")
-	if r.err != nil || !n.list(10) || (!n.children[0].isAtom("tesl-row-contract-v1") && !n.children[0].isAtom("tesl-table-contract-v1")) || window == nil || settled == nil || window.settled || !settled.settled || window.version != settled.version || window.version < 2 {
+	if r.err != nil || !n.list(10) || (!n.children[0].isAtom("tesl-row-contract-v1") && !n.children[0].isAtom("tesl-table-contract-v1") && !n.children[0].isAtom("tesl-stage-contract-v1")) || window == nil || settled == nil || window.settled || !settled.settled || window.version != settled.version || window.version < 2 {
 		return nil, fmt.Errorf("invalid checked row Contract document")
 	}
 	if !n.children[1].isAtom(window.family) || !n.children[2].isAtom(window.namespace) || !n.children[3].isAtom(strconv.Itoa(window.version)) || !n.children[4].isAtom(window.schemaSnapshotHash) || !n.children[6].isAtom(window.hash) || !n.children[7].isAtom(settled.hash) || n.children[8].atom || n.children[9].atom {
 		return nil, fmt.Errorf("row Contract owner, source or physical identity differs")
 	}
 	result := &pgRowContract{window: window, settled: settled, contract: encoded, hash: hash, finalGenerations: map[string]int{}}
+	if n.children[0].isAtom("tesl-stage-contract-v1") {
+		return pgParseStageContract(result, n)
+	}
 	if n.children[0].isAtom("tesl-table-contract-v1") {
 		return pgParseTableContract(result, n)
 	}
@@ -369,6 +372,17 @@ func pgCompiledRowSettledPlan(database *Database, version int) (*pgRowPhysicalPl
 func pgCompiledRowPredecessorPlan(database *Database, version int) (*pgRowPhysicalPlan, error) {
 	if version < 2 {
 		return nil, fmt.Errorf("missing physical predecessor version")
+	}
+	previous, err := pgCompiledRowPhysicalPlan(database, version-1)
+	if err != nil {
+		return nil, err
+	}
+	if len(previous.stageGuards) > 0 {
+		c, err := pgRowContractFor(database, version-1)
+		if err != nil {
+			return nil, fmt.Errorf("stage reliance requires reviewed PromoteStage Contract: %w", err)
+		}
+		return c.settled, nil
 	}
 	return pgCompiledRowSettledPlan(database, version-1)
 }

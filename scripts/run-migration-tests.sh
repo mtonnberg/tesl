@@ -69,6 +69,9 @@ run_phase() {
 compiler_test() {
   # Local investigation may narrow the native fixture; the mandatory gate may not.
   if [[ "$1" == test_migration_queue_removal ]]; then unset TESL_QUEUE_REMOVAL_TEST_FILTER; fi
+  if [[ "$1" == test_migration_row_indexes ]]; then
+    unset TESL_ROW_INDEX_EXPORT TESL_STAGE_PREPARATION_EXPORT TESL_STAGE_GUARD_EXPORT TESL_STAGE_CANCELLATION_EXPORT
+  fi
   run_phase "$1" 1800 dune exec --root "$repo_root/compiler" --no-build "./test/$1.exe"
 }
 runtime_test() {
@@ -95,6 +98,7 @@ if (( $# == 0 )); then
   # Pin the limits of an earlier EXPLAIN and scan switches alone; these witnesses
   # do not claim that managed, restricted SQL-only probe paths are impossible.
   runtime_test stage-probe-plan-boundary 120 '^TestPgStageProbePlan'
+  runtime_test writer-transaction-identity 120 '^TestPgWriterContext'
   runtime_test stage-text-equality 120 '^(TestStageText|TestPgStagePreparationText(Catalog|Database))'
   # Permanent generation baseline: marker/catalog/role guards and real backend deaths.
   runtime_test row-baseline 300 '^(TestPgRowBaseline|TestPgRowIndex|TestPgRowEpoch|TestRowBaseline|TestRowPhysical|TestPgRowForwardInvalidation)'
@@ -109,8 +113,9 @@ if (( $# == 0 )); then
   compiler_test test_migration_queue_transform
   run_phase queue-pipeline 120 go -C "$repo_root/runtime/go" test -race -count=1 -timeout=60s ./teslrt -run '^TestQueueConversionPipeline'
   # test_migration_row_indexes also builds predecessor/staging/carry executables
-  # and runs the mandatory Stage preparation PostgreSQL/race suite, including
-  # interrupted index work, catch-up, immutable records and tamper refusal.
+  # and guarded V3/reviewed Contract/V4 reliance/cancellation executables. Its
+  # mandatory PG/race suites cover real build waits, source authority, repair,
+  # lease takeover, crash prefixes, deployment, cancellation and successor use.
   # Exact source/target codecs, separate predecessor/successor executables,
   # proof obligations and the isolated candidate all remain mandatory.
   for suite in \

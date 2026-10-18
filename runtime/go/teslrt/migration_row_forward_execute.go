@@ -7,7 +7,7 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-func pgExecuteRowForward(ctx context.Context, conn *pgx.Conn, b *pgRowBaseline, roles PgMigrationControlRoles) (PgMigrationControlState, error) {
+func pgExecuteRowForward(ctx context.Context, conn *pgx.Conn, b *pgRowBaseline, roles PgMigrationControlRoles, requireDrained ...bool) (PgMigrationControlState, error) {
 	if b != nil && b.target != nil && b.target.queueRemoval != nil {
 		return pgExecuteRowQueueRemoval(ctx, conn, b, roles, nil)
 	}
@@ -198,6 +198,13 @@ func pgExecuteRowForward(ctx context.Context, conn *pgx.Conn, b *pgRowBaseline, 
 					return fmt.Errorf("row publication admission changed while draining")
 				}
 				migrationBoundary("row-forward-before-publication")
+				if len(plan.stageGuards) != 0 {
+					for _, g := range plan.stageGuards {
+						if _, err := tx.Exec(ctx, "grant select,trigger on "+pgx.Identifier{b.history.Namespace, g.preparation.table}.Sanitize()+" to "+quoteIdentifier(roles.Owner)); err != nil {
+							return err
+						}
+					}
+				}
 				if _, err := tx.Exec(ctx, "select "+ns+"tesl_record_expanded($1)", plan.version); err != nil {
 					return err
 				}
@@ -226,6 +233,9 @@ func pgExecuteRowForward(ctx context.Context, conn *pgx.Conn, b *pgRowBaseline, 
 	})
 	if err != nil {
 		return PgMigrationControlState{}, err
+	}
+	if len(plan.stageCancellations) > 0 {
+		return pgExecuteStageCancellations(ctx, conn, b, roles, len(requireDrained) > 0 && requireDrained[0])
 	}
 	return result, nil
 }

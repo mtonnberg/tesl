@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/jackc/pgx/v5"
+	"slices"
 	"strings"
 	"time"
 )
@@ -47,6 +48,9 @@ func pgRowIndexSnapshot(ctx context.Context, conn *pgx.Conn, source pgIndexWorke
 		snapshot.jobs, err = pgReadRowIndexJobs(ctx, tx, source.row, forward, intents, true)
 		return err
 	})
+	if err == nil && slices.ContainsFunc(snapshot.jobs, func(j pgMigrationIndexJob) bool { return j.stagePromotion && j.State == "valid" }) {
+		err = pgFinishStageEnforcement(ctx, conn, source.row, roles)
+	}
 	return snapshot, err
 }
 
@@ -98,6 +102,14 @@ func pgRowIndexFunctions(namespace string) []pgMigrationControlFunction {
  where p.version=v and p.contract_hash=physical_hash and p.epoch_preserving and x.artefact_hash=p.contract_hash and x.source_abi=p.compiler_abi and x.operation_count=p.operation_count and n>=0 and n<p.operation_count) then
  raise exception 'tesl: row index differs from exact additive physical intent'; end if;
 `
+		}
+		if fn.name == "tesl_claim_index" || fn.name == "tesl_lock_expired_index_holder" {
+			fn.body = strings.Replace(fn.body, " select source_abi into creator from "+ns+"tesl_schema_expansions where version=job.version;", ` if job.is_unique then
+ select c.compiler_abi into creator from `+ns+`tesl_schema_stage_promotions p join `+ns+`tesl_schema_stage_contracts c on c.version=p.version and c.contract_hash=p.contract_hash
+ where p.job_id=job.id and p.version=job.version and p.ordinal=job.ordinal;
+ else
+ select source_abi into creator from `+ns+`tesl_schema_expansions where version=job.version;
+ end if;`, 1)
 		}
 		functions[i].body = strings.Replace(fn.body, "\nbegin\n", "\nbegin\n"+guard, 1)
 	}

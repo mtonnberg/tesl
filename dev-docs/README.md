@@ -172,6 +172,9 @@ that checks manual coherence without building the compiler.
 | [Migration implementation](migrations-implementation.md) | Delivery gates, implemented prerequisites, regression evidence and remaining migration work |
 | [Migration delivery status](migration-delivery-status.md) | Current PR scope, roadmap gaps, shared CI execution and acceptance evidence |
 | [Staged TEXT preparation](stage-text-preparation.md) | Builtin String equality, database-default C/POSIX checks, btree size bounds and preparation-only evidence |
+| [Guarded promotion windows](stage-guard-window.md) | Source-bound V3 activation, actual-value guards, indexed probe profile, lifecycle bounds and PostgreSQL evidence |
+| [Staged uniqueness lifecycle](stage-lifecycle.md) | Reviewed PromoteStage Contract, fenced UNIQUE builds, repair/recovery, V4 reliance and pending-stage cancellation |
+| [Staged uniqueness major verification](stage-major-verification.md) | Measured PostgreSQL 14/17/18 compiled/race subsets, pinned tools and bounded technical acceptance |
 | [Migration PR scope](migration-pr-scope.md) | The 18 agreed clauses, static-link checks, pending acceptance and separate roadmap reconciliation |
 | [Migration PR register](migration-pr-register.json) | Machine-checked dispositions, production declarations, named witnesses and mandatory or accepted local routes |
 | [Queue admission performance](queue-admission-performance.md) | Profile-driven optimizations, publication authority and bounded 257-type measurements |

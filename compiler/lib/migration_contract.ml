@@ -8,6 +8,7 @@ module I = Migration_inventory
 
 type selector = Table of string | Column of string * string | Storage of string * string
  | Index of string * string | Trigger of string | Not_null of string * string
+ | Promote_stage of string * string
 
 type operation = { selector:selector option; node:C.node }
 type description = { family:string; version:int; window:R.version; settled:R.version;
@@ -35,8 +36,7 @@ let find_version plan version =
  match List.find_opt (fun (v:R.version) -> v.version=version) (R.versions plan) with
  | Some v -> v
  | None -> reject (Location.dummy_loc "<contract>") "contract target is outside its checked history"
-let describe ?(namespace="") plan version =
- ignore (checked (H.revalidate (R.history plan)));
+let describe_row ?(namespace="") plan version =
  let window=find_version plan version in
  if window.windows=[] && window.retirements=[] then reject (Location.dummy_loc "<contract>")
   "this version has no transforming window; an empty additive contract is unnecessary";
@@ -99,7 +99,21 @@ let describe ?(namespace="") plan version =
     source selector grants an independent nullability relaxation. *)
  let operations=List.concat_map fst per_entity @ List.concat_map snd per_entity in
  let final_generations=List.map (fun (w:R.window) -> w.after.source.identity,w.after.source.generation) window.windows |> List.sort compare in
- {family;version;window;settled;snapshot;behavior;final_generations;operations}
+  {family;version;window;settled;snapshot;behavior;final_generations;operations}
+let describe ?(namespace="") plan version =
+ ignore (checked(H.revalidate(R.history plan)));
+ let window=find_version plan version in
+ if window.promotions=[] then describe_row ~namespace plan version else
+ let settled=checked(R.settled_version plan ~version) in
+ let family=family_of(R.history plan) in
+ let schema=List.find(fun(v:H.version)->v.version=version)(H.versions(R.history plan)) in
+ let snapshot=C.digest C.Snapshot(I.snapshot schema.schema) in
+ let operations=List.map(fun(prep,target)->match prep with
+  | C.Seq [_;_;_;C.Bytes entity;C.Bytes field;_;_;_;_;_] ->
+    {selector=Some(Promote_stage(entity,field));node=seq[atom "promote-stage";atom entity;seq[atom "staged-unique-guard-v1";prep;K.index target]]}
+  | _ -> assert false) window.promotions in
+ let behavior=C.digest C.Contract(seq[atom "tesl-stage-promotion-v1";seq(List.map(fun o->o.node)operations)]) in
+ {family;version;window;settled;snapshot;behavior;final_generations=[];operations}
 let quote_source text =
  let out=Buffer.create(String.length text+2) in
  Buffer.add_char out '"';
@@ -122,14 +136,16 @@ let selector_source = function
  | Index(e,f) -> "Index " ^ e ^ " " ^ name_source f
  | Trigger e -> "Trigger " ^ e
  | Not_null(e,f) -> "NotNull " ^ e ^ " " ^ name_source f
+ | Promote_stage(e,f) -> "PromoteStage " ^ e ^ " [" ^ name_source f ^ "]"
 let source ~plan ~version = protect (fun () ->
  let d=describe plan version in
  let selected=List.filter_map (fun o -> o.selector) d.operations in
- let drops=List.filter (function Not_null _ -> false | _ -> true) selected in
- let tighten=List.filter (function Not_null _ -> true | _ -> false) selected in
+  let drops=List.filter (function Not_null _ | Promote_stage _ -> false | _ -> true) selected in
+  let tighten=List.filter (function Not_null _ -> true | _ -> false) selected in
+  let promote=List.filter (function Promote_stage _ -> true | _ -> false) selected in
  let render xs="[" ^ String.concat ", " (List.map selector_source xs) ^ "]" in
  Printf.sprintf {|module %s.Migrate.V%dContract exposing [contract]
-import Tesl.Migration exposing [Contract, Drop(..), Tighten(..)]
+import Tesl.Migration exposing [Contract, Drop(..), Tighten(..), Promote(..)]
 import %s.Migrate.V%d
 
 # Reviewed source authority only; execute explicitly after the rolling update.
@@ -138,9 +154,9 @@ contract = Contract {
   of: %s.Migrate.V%d
   drops: %s
   tighten: %s
-  promote: []
+  promote: %s
 }
-|} d.family version d.family version d.family version (render drops) (render tighten))
+|} d.family version d.family version d.family version (render drops) (render tighten) (render promote))
 let bare = function EVar {name;_} | EConstructor {name;args=[];_} -> name
  | e -> reject (at e) "contract objects require literal entity/field identifiers"
 let fields = function ERecord {fields;type_hint=None;_} -> fields
@@ -155,7 +171,8 @@ let selector e = match Migration_form.application e with
  | "Index",[entity;name] -> Index(bare entity,object_name name)
  | "Trigger",[entity] -> Trigger(bare entity)
  | "NotNull",[entity;field] -> Not_null(bare entity,object_name field)
- | _ -> reject (at e) "expected Table, Column, Storage, Index, Trigger or NotNull with exact literal operands"
+ | "PromoteStage",[entity;EList{elems=[field];_}] -> Promote_stage(bare entity,object_name field)
+ | _ -> reject (at e) "expected Table, Column, Storage, Index, Trigger, NotNull or PromoteStage Entity [field] with exact literal operands"
 let root m = match Validation_common.schema_module_parts m.module_name with
  | Some(family,"Migrate",[name]) when Filename.check_suffix name "Contract" ->
    let revision=String.sub name 0 (String.length name-8) in
@@ -198,15 +215,14 @@ let check ~plan ~namespace ~file ~source = protect (fun () ->
  if not (List.exists (fun (i:import_decl) -> i.module_name=expected) m.imports) then reject decl.loc "import the exact migration named by Contract.of";
  List.iter (fun (i:import_decl) -> if i.module_name<>"Tesl.Migration" && i.module_name<>expected then
    reject i.loc "contract modules import only Tesl.Migration and their exact migration root") m.imports;
- if elements (List.assoc "promote" record)<>[] then reject (at (List.assoc "promote" record)) "contract index promotion requires its checked promotion protocol";
- let read name expected_tighten=elements (List.assoc name record) |> List.map (fun e ->
-  let value=selector e in
-  let is_tighten=match value with Not_null _ -> true | _ -> false in
-  if is_tighten<>expected_tighten then reject (at e) "contract operation is in the wrong object list";
+  let read name=elements (List.assoc name record) |> List.map (fun e ->
+   let value=selector e in
+   let expected=match value with Not_null _ -> "tighten" | Promote_stage _ -> "promote" | _ -> "drops" in
+   if name<>expected then reject (at e) "contract operation is in the wrong object list";
   let ctor=fst (Migration_form.application e) in
   if not (Migration_form.imported_name m ctor) then reject (at e) ("import contract constructor " ^ ctor);
   value) in
- let selected=read "drops" false @ read "tighten" true in
+  let selected=read "drops" @ read "tighten" @ read "promote" in
  if List.sort_uniq compare selected<>List.sort compare selected then reject decl.loc "duplicate contract object authority";
  let expected=List.filter_map (fun o -> o.selector) d.operations |> List.sort compare in
  if List.sort compare selected<>expected then reject decl.loc
@@ -215,7 +231,7 @@ let check ~plan ~namespace ~file ~source = protect (fun () ->
  let d={d with operations=staged_nullability ~family ~namespace ~version ~window_hash d.operations} in
  let settled_encoded,settled_hash=H.contract C.Migration (K.settled_node ~family ~namespace plan d.settled) in
  let table_retirement=d.window.retirements<>[] in
- let canonical=seq [atom (if table_retirement then "tesl-table-contract-v1" else "tesl-row-contract-v1");atom family;atom namespace;integer version;
+  let canonical=seq [atom (if d.window.promotions<>[] then "tesl-stage-contract-v1" else if table_retirement then "tesl-table-contract-v1" else "tesl-row-contract-v1");atom family;atom namespace;integer version;
   atom d.snapshot;atom d.behavior;atom window_hash;atom settled_hash;
   seq(List.map (fun (e,g) -> seq[atom e;integer g]) d.final_generations);
   seq(List.map (fun o -> o.node) d.operations)] in

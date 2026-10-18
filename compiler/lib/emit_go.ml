@@ -10499,6 +10499,15 @@ let runtime_file_gates = List.map (fun (name, files) ->
   name, if name = "postgres" then files @ [
     "migration_stage_preparation.go";
     "migration_stage_text.go";
+    "migration_writer_context.go";
+    "migration_stage_guard.go";
+    "migration_stage_guard_sql.go";
+    "migration_stage_guard_catalog.go";
+    "migration_stage_contract.go";
+    "migration_stage_lifecycle_spec.go";
+    "migration_stage_index_authority.go";
+    "migration_stage_execute.go";
+    "migration_stage_cancel.go";
     "migration_cache.go"; "migration_cache_runtime.go";
     "migration_email.go"; "migration_email_spec.go";
     "migration_pubsub.go"; "migration_pubsub_runtime.go"] else files)

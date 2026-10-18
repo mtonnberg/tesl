@@ -56,6 +56,104 @@ EMPTY_QUEUE_NATIVE_TESTS = {
     ),
 }
 
+# Bounded staged uniqueness requires the whole connected lifecycle. Declaration
+# syntax, an identity helper, or metadata-only tests cannot stand in for it.
+UNIQUE_HARNESS = "compiler/test/test_migration_row_indexes.ml"
+UNIQUE_IMPLEMENTATION = {
+    "compiler/lib/migration_inventory.ml#stage_transitions",
+    "compiler/lib/migration_inventory.ml#validate_stage_domains",
+    "compiler/lib/migration_contract.ml#check",
+    "compiler/lib/migration_program.ml#capture_history",
+    "compiler/lib/migration_retained_storage_canonical.ml#version_node",
+    "runtime/go/teslrt/migration_admission.go#pgAdmitMigrationTransaction",
+    "runtime/go/teslrt/migration_writer_context.go#pgWriterContextFunctions",
+    "runtime/go/teslrt/migration_stage_preparation.go#pgRegisterStagePreparation",
+    "runtime/go/teslrt/migration_stage_guard_sql.go#pgStageGuardFunctions",
+    "runtime/go/teslrt/migration_stage_guard_catalog.go#pgStageGuardCatalogFunctions",
+    "runtime/go/teslrt/migration_stage_lifecycle_spec.go#pgStageLifecycleFunctions",
+    "runtime/go/teslrt/migration_stage_index_authority.go#pgStageIndexAuthorities",
+    "runtime/go/teslrt/migration_stage_execute.go#pgExecuteStageContract",
+    "runtime/go/teslrt/migration_stage_execute.go#pgFinishStageEnforcement",
+    "runtime/go/teslrt/migration_stage_cancel.go#pgStageCancellationFunctions",
+    "runtime/go/teslrt/migration_stage_cancel.go#pgExecuteStageCancellations",
+    "runtime/go/teslrt/migration_index_worker.go#pgRunIndexWorkerSource",
+}
+UNIQUE_NATIVE_TESTS = {
+    "migration_stage_guard_native_test.go": ("TestPgStageGuardCompiledWindow", "TestPgStageGuardActivationBoundary"),
+    "migration_stage_authority_native_test.go": ("TestPgStageGuardReviewedAuthorityBoundary",),
+    "migration_stage_build_native_test.go": ("TestPgStageGuardWritesDuringUniqueBuild",),
+    "migration_stage_lifecycle_native_test.go": ("TestPgStageGuardPromotionLifecycle",),
+    "migration_stage_recovery_native_test.go": (
+        "TestPgStageGuardContractCrashRecovery", "TestPgStageGuardFourReleaseCatchup", "TestPgStageGuardFourReleaseDeploy"),
+    "migration_stage_cancellation_native_test.go": (
+        "TestPgStageCancelFailedPreparationAndSuccessor", "TestPgStageCancelPublicationRecovery", "TestPgStageCancelFourReleaseCatchup"),
+    "migration_stage_preparation_native_test.go": (
+        "TestPgStagePreparationPredecessorCarryRestart", "TestPgStagePreparationInterruptedIndexBuild",
+        "TestPgStagePreparationTextCatalogResolution", "TestPgStagePreparationTextDatabaseLocales"),
+    "migration_stage_registration_boundary_test.go": ("TestPgStagePreparationWorkerRegistrationBoundary",),
+}
+UNIQUE_WITNESSES = {
+    (UNIQUE_HARNESS + "#compilation", "compiler"),
+    ("compiler/test/test_staged_indexes.ml#negative_domains", "compiler"),
+    ("compiler/test/test_staged_indexes.ml#text_domains", "compiler"),
+    ("compiler/test/test_staged_indexes.ml#no_conflict_promise", "compiler"),
+    ("compiler/test/test_staged_indexes.ml#dependencies", "compiler"),
+    ("compiler/test/test_staged_indexes.ml#memory_runtime", "compiler"),
+    ("runtime/go/teslrt/migration_writer_context_test.go#TestPgWriterContextTransactionIdentity", "runtime:writer-transaction-identity"),
+    ("runtime/go/teslrt/migration_stage_probe_plan_test.go#TestPgStageProbePlanAnalyzeCanReplaceForcedGenericPlan", "runtime:stage-probe-plan-boundary"),
+    ("runtime/go/teslrt/migration_stage_probe_plan_test.go#TestPgStageProbePlanDisabledSeqScanStillFallsBackAfterInvalidation", "runtime:stage-probe-plan-boundary"),
+} | {(f"runtime/go/teslrt/{path}#{name}", "compiler-native:test_migration_row_indexes")
+     for path, names in UNIQUE_NATIVE_TESTS.items() for name in names}
+UNIQUE_CONNECTIONS = {
+    "runtime/go/teslrt/migration_admission.go": ('admit = "tesl_admit_writer"',),
+    "runtime/go/teslrt/migration_row_control_spec.go": (
+        "pgWriterContextFunctions(namespace)", "pgStageGuardFunctions(namespace)",
+        "pgStageGuardCatalogFunctions(namespace)", "pgStageLifecycleFunctions(namespace)",
+        "pgStageCancellationFunctions(namespace)", "tesl_activate_stage_guards(v)",
+        "tesl_stage_reliance_ready(doc)", "tesl_stage_cancellations_ready(v-1)"),
+    "runtime/go/teslrt/migration_row_contract_execute.go": ("return pgExecuteStageContract(",),
+    "runtime/go/teslrt/migration_row_forward_execute.go": ("return pgExecuteStageCancellations(",),
+    "runtime/go/teslrt/migration_row_catchup.go": ("pgExecuteStageCancellations(", "len(window.target.stageGuards) > 0"),
+    "runtime/go/teslrt/migration_row_index_worker.go": ("pgFinishStageEnforcement(", "tesl_schema_stage_contracts c"),
+    "runtime/go/teslrt/migration_stage_execute.go": (
+        "tesl_register_stage_contract($1,$2,$3,$4,$5,$6)", "pgExecuteRowEpoch(ctx, conn",
+        "tesl_stage_handoff($1,$2)", "pgRunIndexWorkerSource(ctx, ddl",
+        "tesl_prepare_stage_enforcement($1)", '"drop trigger "', "tesl_finish_stage_enforcement($1)"),
+    "runtime/go/teslrt/migration_stage_cancel.go": (
+        "pgExecuteRowEpoch(", "pgIndexJobLockMode(", "pgIndexObserve(",
+        '"drop index if exists "', '"tesl_finish_stage_cancellation"'),
+    "runtime/go/teslrt/migration_stage_guard_sql.go": (
+        "tesl_writer_version()", "pg_catalog.pg_advisory_xact_lock(", "force_custom_plan", "IS DISTINCT FROM"),
+    "runtime/go/teslrt/migration_stage_lifecycle_spec.go": (
+        "settled_doc<>", "tesl_stage_settled(v)", "i.indisvalid and i.indisready and i.indislive",
+        "not i.indcheckxmin", "receipt<=0", "enforced_index_oid=target"),
+}
+
+
+def unique_native_harness(root):
+    text = read(root, UNIQUE_HARNESS)
+    required = (
+        "Compile.compile_go_file", "Migration_header.create", "Migration_closure.capture",
+        "export ~stages ~guards ~cancelled output;", "go build -race -tags tesl_migration_test -o app",
+        "go test -p 2 -race -tags tesl_migration_test", "-run %s", "Sys.command command",
+        '(compilation ~stages:false)', '(compilation ~stages:true)',
+        '(compilation ~stages:true ~guards:true)', '(compilation ~stages:true ~cancelled:true)',
+        'build "v1"', 'build "v2"', 'build "v3"', 'build "v3-contract"', 'build "v4"',
+        'fail "guarded V3 exposed onConflict"', 'fail "unguarded V4 reliance compiled"',
+        'fail "guarded/enforced obligation vanished by source omission"',
+    )
+    if not all(part in text for part in required):
+        raise ValueError("staged uniqueness harness must compile and execute all real race-enabled releases and source refusals")
+    selectors = {
+        "^TestPgRowIndex": "TESL_ROW_INDEX_PROGRAMS",
+        "^TestPgStagePreparation": "TESL_STAGE_PREPARATION_PROGRAMS",
+        "^TestPgStageGuard": "TESL_STAGE_GUARD_PROGRAMS",
+        "^TestPgStageCancel": "TESL_STAGE_CANCELLATION_PROGRAMS",
+    }
+    if not all(f'"{pattern}"' in text and f'"{env}"' in text for pattern, env in selectors.items()):
+        raise ValueError("staged uniqueness native fixture selector/environment is disconnected")
+    return selectors
+
 
 def unique_object(pairs):
     result = {}
@@ -115,17 +213,23 @@ def runner_route(root, witness):
     elif route.startswith("compiler-native:"):
         suite = route.split(":", 1)[1]
         harness = f"compiler/test/{suite}.ml"
-        runner_route(root, {"ref": harness + "#native", "route": "compiler"})
-        text = read(root, harness)
-        command = re.search(r"TESL_ROW_TABLE_DROP_PROGRAMS=%s [^\n]+go test [^\n]+ -run '([^']+)'", text)
-        valid = (path.startswith("runtime/go/teslrt/") and command
-                 and re.search(command[1], name) and "fun()->export out;" in text)
+        if harness == UNIQUE_HARNESS:
+            runner_route(root, {"ref": harness + "#compilation", "route": "compiler"})
+            selectors = unique_native_harness(root)
+            valid = path.startswith("runtime/go/teslrt/") and any(re.search(pattern, name) for pattern in selectors)
+        else:
+            runner_route(root, {"ref": harness + "#native", "route": "compiler"})
+            text = read(root, harness)
+            command = re.search(r"TESL_ROW_TABLE_DROP_PROGRAMS=%s [^\n]+go test [^\n]+ -run '([^']+)'", text)
+            valid = (path.startswith("runtime/go/teslrt/") and command
+                     and re.search(command[1], name) and "fun()->export out;" in text)
     elif route == "control" or route.startswith("runtime:"):
         phase = "control" if route == "control" else route.split(":", 1)[1]
         match = re.search(r"^  runtime_test " + re.escape(phase) + r" \d+ '([^']+)'$", runner, re.M)
         valid = path.startswith("runtime/go/teslrt/") and match and re.search(match[1], name)
         valid = valid and '-tags=tesl_migration_test ./teslrt -run "$pattern"' in runner
-        if "TESL_ROW_TABLE_DROP_PROGRAMS" in read(root, path):
+        if ("TESL_ROW_TABLE_DROP_PROGRAMS" in read(root, path)
+                or path.startswith("runtime/go/teslrt/") and Path(path).name in UNIQUE_NATIVE_TESTS):
             valid = False  # Native fixtures are supplied by the compiler harness.
     elif route == "compiler":
         suite = Path(path).stem
@@ -209,6 +313,46 @@ def empty_queue_protocol(root, req):
         raise ValueError("empty queue mandatory runner must clear the investigative native filter")
 
 
+def unique_protocol(root, req):
+    """Concrete bounded lifecycle links; execution is established by real runs."""
+    if not UNIQUE_IMPLEMENTATION <= set(req["implementation"]):
+        raise ValueError("staged uniqueness evidence requires source, context, guard, Contract, index, cancellation and reliance implementations")
+    witnesses = {(w["ref"], w["route"]) for w in req["witnesses"]}
+    if not UNIQUE_WITNESSES <= witnesses:
+        raise ValueError("staged uniqueness evidence requires compiler, identity, probe and compiled lifecycle witnesses")
+    unique_native_harness(root)
+    for path, calls in UNIQUE_CONNECTIONS.items():
+        if not all(call in read(root, path) for call in calls):
+            raise ValueError("staged uniqueness execution/mutation route is disconnected: " + path)
+    executor = read(root, "runtime/go/teslrt/migration_stage_execute.go")
+    ordered = ("tesl_register_stage_contract($1", "pgExecuteRowEpoch(ctx, conn",
+               "tesl_stage_handoff($1", "pgRunIndexWorkerSource(ctx, ddl")
+    positions = [executor.index(call) for call in ordered]
+    if positions != sorted(positions):
+        raise ValueError("staged uniqueness must retire writers before handing off and executing target jobs")
+    catalogs = {
+        "migration_writer_context.go": ("tesl_admit_writer", "tesl_writer_version"),
+        "migration_stage_guard_sql.go": ("tesl_stage_guard_spec", "tesl_stage_guard_body"),
+        "migration_stage_guard_catalog.go": ("tesl_stage_guard_catalog", "tesl_activate_stage_guards", "tesl_stage_guards_ready"),
+        "migration_stage_lifecycle_spec.go": ("tesl_register_stage_contract", "tesl_stage_handoff", "tesl_stage_target_oid",
+            "tesl_prepare_stage_enforcement", "tesl_finish_stage_enforcement", "tesl_stage_reliance_ready", "tesl_stage_settled"),
+        "migration_stage_cancel.go": ("tesl_stage_cancellations_ready", "tesl_finish_stage_cancellation"),
+    }
+    for filename, functions in catalogs.items():
+        text = read(root, "runtime/go/teslrt/" + filename)
+        for name in functions:
+            if not re.search(r'\{"' + re.escape(name) + r'",\s*"[^"]*",\s*"[^"]+",\s*"(?:stable|volatile|immutable)"', text):
+                raise ValueError("staged uniqueness protected catalog entry is missing: " + name)
+    runner = read(root, RUNNER)
+    if ('export TESL_MIGRATION_TEST_REQUIRE_POSTGRES=1' not in runner or
+            not re.search(r'if \[\[ "\$1" == test_migration_row_indexes \]\]; then\s*'
+                          r'unset TESL_ROW_INDEX_EXPORT TESL_STAGE_PREPARATION_EXPORT TESL_STAGE_GUARD_EXPORT TESL_STAGE_CANCELLATION_EXPORT\s*fi', runner)):
+        raise ValueError("staged uniqueness mandatory runner must require PostgreSQL and clear export-only modes")
+    workflow = read(root, WORKFLOW)
+    if not all(part in workflow for part in ("'[14,18]'", "TESL_MIGRATION_TEST_POSTGRES_MAJOR", "postgresql_$POSTGRES_MAJOR^out", ".nodes.nixpkgs.locked.rev")):
+        raise ValueError("staged uniqueness requires the pinned matching-major PostgreSQL matrix")
+
+
 def validate(root, spec):
     if set(spec) != {"version", "requirements", "source_mappings"} or spec["version"] != 1:
         raise ValueError("unsupported register schema")
@@ -239,7 +383,7 @@ def validate(root, spec):
         if req["status"] == "evidenced" and (not req["implementation"] or not mandatory or not (all(mandatory) or accepted_local)):
             raise ValueError(f"evidenced requirement lacks implementation/test/mandatory runner: {key}")
         if key == "PR-UNIQUE" and req["status"] == "evidenced":
-            raise ValueError(f"pending acceptance requires reviewed protocol witnesses, not groundwork: {key}")
+            unique_protocol(root, req)
         if key == "PR-EMPTY-QUEUE" and req["status"] == "evidenced":
             empty_queue_protocol(root, req)
         if req["disposition"] == "required" and req["status"] != "evidenced":

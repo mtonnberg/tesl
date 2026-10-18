@@ -41,6 +41,59 @@ func pgExpectedRowControl(e *pgCatalogExpectations, owner, name string) (*pgCata
 	digest := func(value, hash string) { check("(encode(sha256("+value+"), 'hex'::text) = "+hash+")", value, hash) }
 	bounded := func(n string) { check("(("+n+" >= 1) AND ("+n+" <= 2147483646))", n) }
 	switch name {
+	case "tesl_schema_stage_cancellations":
+		col("stage_id", "text")
+		col("version", "int4")
+		col("descriptor", "bytea")
+		col("physical_hash", "text")
+		col("job_id", "text")
+		col("compiler_abi", "text")
+		con("p", "", "stage_id")
+		con("u", "", "job_id")
+		check("(version >= 3)", "version")
+	case "tesl_schema_stage_contracts":
+		col("version", "int4")
+		col("contract", "bytea")
+		col("contract_hash", "text")
+		col("window_hash", "text")
+		col("settled", "bytea")
+		col("settled_hash", "text")
+		col("compiler_abi", "text")
+		con("p", "", "version")
+		con("u", "", "contract_hash")
+		check("(version >= 3)", "version")
+		digest("contract", "contract_hash")
+		digest("settled", "settled_hash")
+	case "tesl_schema_stage_promotions":
+		col("stage_id", "text")
+		col("version", "int4")
+		col("ordinal", "int4")
+		col("job_id", "text")
+		col("contract_hash", "text")
+		col("state", "text")
+		columns = append(columns, pgControlExpectedColumn{name: "enforced_index_oid", typeName: "int8"})
+		con("p", "", "stage_id")
+		con("u", "", "job_id")
+		con("u", "", "version", "ordinal")
+		check("(state = ANY (ARRAY['promoting'::text, 'blocked_duplicates'::text, 'enforced'::text]))", "state")
+		check("((state = 'enforced'::text) = (enforced_index_oid IS NOT NULL))", "state", "enforced_index_oid")
+		check("(enforced_index_oid > 0)", "enforced_index_oid")
+	case "tesl_schema_stage_guards":
+		col("stage_id", "text")
+		col("version", "int4")
+		col("descriptor", "bytea")
+		col("physical_hash", "text")
+		col("spec", "jsonb")
+		con("p", "", "stage_id")
+		check("(version >= 3)", "version")
+	case "tesl_writer_context":
+		col("backend_pid", "int4")
+		col("transaction_id", "xid8")
+		col("database_uuid", "uuid")
+		col("version", "int4")
+		con("p", "", "backend_pid")
+		check("(backend_pid > 0)", "backend_pid")
+		bounded("version")
 	case "tesl_row_queue_removal_staging":
 		col("version", "int4")
 		col("queue", "text")
@@ -56,7 +109,11 @@ func pgExpectedRowControl(e *pgCatalogExpectations, owner, name string) (*pgCata
 		col("format", "int4")
 		con("p", "", "id")
 		check("(id = 1)", "id")
-		check("(format = 1)", "format")
+		if name == "tesl_schema_stage_protocol" {
+			check("(format = 2)", "format")
+		} else {
+			check("(format = 1)", "format")
+		}
 	case "tesl_schema_stages":
 		col("stage_id", "text")
 		col("descriptor", "bytea")
@@ -69,7 +126,7 @@ func pgExpectedRowControl(e *pgCatalogExpectations, owner, name string) (*pgCata
 		con("u", "", "index_name")
 		con("u", "", "job_id")
 		check("(introduced_version >= 2)", "introduced_version")
-		check("(state = 'pending'::text)", "state")
+		check("(state = ANY (ARRAY['pending'::text, 'promoting'::text, 'blocked_duplicates'::text, 'enforced'::text, 'cancelled'::text]))", "state")
 		digest("descriptor", "descriptor_hash")
 	case "tesl_row_queue_discards":
 		col("job_id", "text")

@@ -40,6 +40,16 @@ func pgRowForwardOperations(previous, plan *pgRowPhysicalPlan) ([]pgRowForwardOp
 	if previous == nil || plan == nil || plan.version != previous.version+1 {
 		return nil, fmt.Errorf("row execution requires an adjacent checked physical revision")
 	}
+	if len(previous.stageGuards) > 0 && plan.stageRelianceVersion == previous.version {
+		if !slices.Equal(previous.stageGuards, plan.stageReliance) {
+			return nil, fmt.Errorf("stage reliance source differs")
+		}
+		var err error
+		previous, err = pgStageSettledShape(previous)
+		if err != nil {
+			return nil, err
+		}
+	}
 	if err := pgValidateRowPhysicalLineage(previous, plan); err != nil {
 		return nil, err
 	}
@@ -157,6 +167,13 @@ func pgReadRowForwardManifest(ctx context.Context, tx pgx.Tx, b *pgRowBaseline) 
 			}
 		} else {
 			predecessor := previous
+			if previous != nil && len(previous.stageGuards) > 0 && plan.stageRelianceVersion == previous.version {
+				var err error
+				predecessor, err = pgStageSettledShape(previous)
+				if err != nil {
+					return nil, err
+				}
+			}
 			if plan.requiresContractVersion > 0 {
 				// This first repeated-transform path requires a completely contracted
 				// immediate predecessor. Additive-tail composition remains an explicit

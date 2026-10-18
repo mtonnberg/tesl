@@ -83,7 +83,11 @@ let check_internal ~queue_expansion ~schemas ~edges = protect (fun () ->
      "stage preparation on original V1 is not implemented; introduce the preparatory index on an existing table in a later additive revision") (I.staged_indexes first);
    let rec stage_pairs = function
     | before::(after::_ as rest) ->
-      let old_storage=checked(P.describe before) and fresh_storage=checked(P.describe after) in
+       let old_storage=checked(P.describe before) and fresh_storage=checked(P.describe after) in
+       let promoted=try P.promotions ~before:old_storage ~after:fresh_storage with
+        Invalid_argument message -> reject ~code:"MIG030" loc message in
+       ignore promoted;
+       (try ignore(P.cancellations ~before:old_storage ~after:fresh_storage) with Invalid_argument message -> reject ~code:"MIG030" loc message);
       let descriptors storage=match P.stage_nodes storage with C.Seq nodes -> nodes | _ -> assert false in
       List.iter (fun node -> match node with
        | C.Seq [_;C.Bytes id;_;_;_;C.Bytes table;C.Bytes column;_;_;C.Bytes index] ->

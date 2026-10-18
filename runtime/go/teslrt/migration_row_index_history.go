@@ -3,6 +3,7 @@ package teslrt
 import (
 	"context"
 	"fmt"
+	"slices"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -50,18 +51,28 @@ func pgVerifyRowIndexJobs(forward *pgRowForwardManifest, intents map[int]*pgExpa
 		if err := pgIndexJobCatalogShape(job); err != nil {
 			return err
 		}
+		if job.stagePromotion {
+			if names[job.Index.Name] || job.State == "terminal" || !job.Index.Unique {
+				return fmt.Errorf("invalid stage target job inventory")
+			}
+			if executorVersion >= job.Version && job.State != "valid" && job.SourceABI != compilerABI {
+				return fmt.Errorf("unfinished stage index compiler ABI differs")
+			}
+			names[job.Index.Name] = true
+			continue
+		}
 		want, exists := inventory[job.ID]
 		if !exists || job.ObjectHash != job.ID || job.Version != want.version || job.Ordinal != want.ordinal || job.SourceABI != want.abi ||
 			want.index == nil || job.Table != want.index.table || job.Index.Name != want.index.index.Name || !pgPhysicalIndexEqual(job.Index, want.index.index) || names[job.Index.Name] {
 			return fmt.Errorf("row index job differs from its exact committed source operation")
 		}
-		if job.State == "terminal" {
+		if job.State == "terminal" && job.stageCancellationVersion == 0 {
 			return fmt.Errorf("row index removal requires its checked Contract lifecycle")
 		}
-		if job.Index.Unique {
+		if job.Index.Unique && !job.stagePromotion {
 			return fmt.Errorf("unique row index enforcement is not admitted")
 		}
-		if executorVersion >= job.Version && job.State != "valid" && job.SourceABI != compilerABI {
+		if executorVersion >= job.Version && job.State != "valid" && job.State != "terminal" && job.stageCancellationPlanned == 0 && job.SourceABI != compilerABI {
 			return fmt.Errorf("unfinished row index compiler ABI differs at V%d", job.Version)
 		}
 		names[job.Index.Name] = true
@@ -81,6 +92,22 @@ func pgReadRowIndexJobs(ctx context.Context, tx pgx.Tx, b *pgRowBaseline, forwar
 	version := 0
 	if executor {
 		version = b.history.CurrentVersion
+	}
+	if b.target != nil && b.target.compiled != nil {
+		for v := 2; v <= b.history.CurrentVersion; v++ {
+			plan, err := pgCompiledRowPhysicalPlan(b.database, v)
+			if err != nil {
+				return nil, err
+			}
+			for _, cancel := range plan.stageCancellations {
+				for i := range jobs {
+					j := &jobs[i]
+					if j.Version < v && !j.Index.Unique && j.Table == cancel.table && j.Index.Name == cancel.index && slices.Equal(j.Index.Columns, []string{cancel.column}) {
+						j.stageCancellationPlanned = v
+					}
+				}
+			}
+		}
 	}
 	if err := pgVerifyRowIndexJobs(forward, intents, jobs, version, b.history.SourceCompilerABI); err != nil {
 		return nil, err
@@ -120,14 +147,36 @@ func pgPrepareRowIndexCatalog(metadata *pgCatalogExpectations, actual, expected 
 	latest := local.version
 	for _, job := range jobs {
 		latest = max(latest, job.Version)
-		if job.Index.Unique {
+		if job.Index.Unique && !job.stagePromotion {
 			return nil, nil, false, fmt.Errorf("unique row index enforcement is not admitted")
 		}
-		if job.Table == actual.Name && job.Version > local.version && !job.verifiedTextPreparation && !pgFutureIndexSafeForWrites(actual, own, job.Index) {
+		if job.Table == actual.Name && job.Version > local.version && !job.stagePromotion && !job.verifiedTextPreparation && !pgFutureIndexSafeForWrites(actual, own, job.Index) {
 			return nil, nil, false, fmt.Errorf("future row index changes this binary's admitted writes")
+		}
+	}
+	copyExpected := *expected
+	copyExpected.Indexes = slices.Clone(expected.Indexes)
+	for _, job := range jobs {
+		if job.stagePromotion && job.Table == actual.Name && !slices.ContainsFunc(copyExpected.Indexes, func(i pgCatalogIndex) bool { return i.Name == job.Index.Name }) {
+			index, err := metadata.index(job.Index.Name, actual, job.Index.Columns, false, true, false)
+			if err != nil {
+				return nil, nil, false, err
+			}
+			copyExpected.Indexes = append(copyExpected.Indexes, index)
 		}
 	}
 	// Future index safety was checked against own above. For finite shape and
 	// state, every verified job is declared in the reconstructed full prefix.
-	return pgPrepareIndexJobCatalogForAdmission(metadata, actual, expected, jobs, latest, local.version, report)
+	live, want, ready, err := pgPrepareIndexJobCatalogForAdmission(metadata, actual, &copyExpected, jobs, latest, local.version, report)
+	if err != nil {
+		return nil, nil, false, err
+	}
+	for _, s := range local.stageCancellations {
+		if s.table == actual.Name && !slices.ContainsFunc(jobs, func(j pgMigrationIndexJob) bool {
+			return j.Table == s.table && j.Index.Name == s.index && j.State == "terminal" && j.stageCancellationVersion == local.version
+		}) {
+			ready = false
+		}
+	}
+	return live, want, ready, nil
 }

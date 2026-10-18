@@ -136,10 +136,10 @@ let inventory_history () = project (fun write ->
   (match get (I.stage_transitions ~before ~after:plain) with [I.Cancel _] -> () | _ -> fail "not cancellation");
   let promoted=load write "V9" (source "V9" "unique index [active]") in
   (match get (I.stage_transitions ~before ~after:promoted) with [I.Promote _] -> () | _ -> fail "not promotion");
-  List.iter (fun after -> match S.requirements ~before ~after ~identities:[] ~loc:old.stage_loc with
-    | Ok _ -> fail "unimplemented transition admitted"
-    | Error es -> check bool "explicit unsupported transition" true
-        (List.exists (fun (e:S.error) -> e.code="MIG030" && contains e.message "not implemented") es)) [plain;promoted];
+   (match S.requirements ~before ~after:plain ~identities:[] ~loc:old.stage_loc with
+    | Ok _ -> () | Error _ -> fail "cancellation source intent refused");
+   (match S.requirements ~before ~after:promoted ~identities:[] ~loc:old.stage_loc with
+    | Ok _ -> () | Error _ -> fail "guarded promotion source intent refused");
   let changed=load write "V9" (source "V9" "staging unique index [other]") in
   expect_ir_error "changing staged columns" (I.stage_transitions ~before ~after:changed);
   let removed=load write "V9" (source "V9" "" |> replace "active: Bool\n" "") in

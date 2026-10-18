@@ -2,8 +2,10 @@
 
 `staging unique index [field]` accepts the exact builtin `String` or `Maybe String`
 on an existing TEXT column, with no storage annotation or `@db(text)`. It creates
-a **nonunique** btree index and an immutable pending stage. Promotion, cancellation,
-unique conflict arbiters and Memory uniqueness enforcement remain refused.
+a **nonunique** btree index and an immutable preparation identity. This declaration
+itself supplies no uniqueness or Memory enforcement. Later guarded promotion,
+reviewed Contract, reliance and cancellation use the separate
+[staged lifecycle](stage-lifecycle.md).
 
 ## Equality and storage contract
 

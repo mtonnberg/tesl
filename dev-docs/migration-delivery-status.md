@@ -4,7 +4,8 @@
 
 The [scoped traceability register](migration-pr-scope.md) links the 18 agreed PR
 clauses to live production declarations, named witnesses and execution routes.
-Full staged uniqueness remains required and pending. Bounded empty-queue removal
+Staged uniqueness has bounded technical evidence on PostgreSQL 14/17/18 and is
+scoped `evidenced`; the complete CI gate remains required. Bounded empty-queue removal
 is integrated and technically accepted with merged execution evidence below.
 Static consistency is not executed acceptance: a successful complete CI run is
 still required. Historical-roadmap reconciliation is reported separately.
@@ -82,10 +83,51 @@ neither absolute migration overhead nor hosted-runner reliability.
 
 On top of compiler groundwork `4f03e6f`, **bounded V8 Stage/Carry preparation is
 connected to the real original-V1 PostgreSQL execution path**. It builds NONUNIQUE
-indexes and records immutable pending obligations. It does not implement the full
-three-release uniqueness protocol: no V9 writer guard, unique-index promotion or
-V10 reliance is enabled. Reviewed promotion and cancellation remain refused;
-deleting the source declaration cannot silently cancel an installed obligation.
+indexes and records immutable preparation identities. The connected lifecycle now
+covers V1 ordinary → V2 staging → V3 guarded declaration and reviewed PromoteStage
+Contract → V4 enforced reliance. Pending-stage source deletion drives a checked
+cancellation receipt and fenced index retirement; it cannot cancel an active or
+enforced guard. Targeted PostgreSQL results are not a full release-acceptance claim.
+
+See [guarded promotion windows](stage-guard-window.md) for the source, activation,
+probe-profile and lifecycle bounds and the compiled PostgreSQL witnesses.
+See [Contract, enforcement and cancellation](stage-lifecycle.md) for the durable
+handoff, distinct Contract-job provenance, repair/retry, crash recovery and V4 gates.
+
+The writer-admission foundation now records the backend PID, full PostgreSQL
+transaction ID (`xid8`), database UUID and admitted release in the owner-controlled
+`tesl_writer_context` table. Format5 application writes call `tesl_admit_writer`.
+It acquires the transaction writer fence, then checks admission with a fresh
+READ COMMITTED snapshot. Repeated admission may keep the same identity; it cannot
+change the release within the transaction. The owner-only reader checks the
+transaction, database UUID, held fence and current admission again. Session
+settings and `_tesl_v` are not inputs to this identity.
+
+This authenticates **admission, not executable identity**. Compiled callers supply
+their compiler-owned release. A caller claiming an older, still-admitted release
+has that release's permissions, including duplicate-producing writes during the
+staging overlap. Once retirement commits behind the exclusive writer fence, that
+release cannot obtain an admitted writer context. Shared Request credentials do
+not identify which executable is running.
+
+Records are replaced per backend; their presence alone grants nothing. Transaction
+and savepoint rollback undo record changes alongside transaction locks. The full
+transaction ID prevents a committed record from authorizing the next request on a
+pooled connection. This adds one protected-row replacement for a backend's first
+write admission in each transaction; nested admission only reads the existing row.
+The table contains no staged key values or uniqueness reservations.
+
+`TestPgWriterContextTransactionIdentity` passed with the race detector on the
+private PostgreSQL 17 cluster, including fence-wait retirement, repeated/nested
+admission, savepoint rollback, connection reuse after commit/rollback, forged
+settings, rejected record mutation and unsupported isolation levels. The existing
+compiled Stage/Carry PostgreSQL/race suite also passed. The migration runner has
+a required `writer-transaction-identity` phase. These tests establish the admission
+component only. Separate compiled lifecycle tests exercise Contract, concurrent
+builds, recovery, V4 reliance and cancellation. The later
+[major verification](stage-major-verification.md) passed the same selected suites
+on PostgreSQL 14.23, 17.10 and 18.4 with no skipped Go tests. No full-gate pass is
+claimed.
 
 The supported slice is an additive history, introducing a new preparatory index
 on an existing table/key after V1, then carrying its exact descriptor forward.
@@ -107,8 +149,9 @@ reachability, including private check/establish producers and codec reverse edge
 Ordinary stage-free source/physical encodings retain their existing formats.
 
 **Catalog compatibility is explicit.** Every fresh original-V1 installation built
-by this toolchain installs the required `tesl_schema_stage_protocol` format-1 row
-and `tesl_schema_stages` table alongside row format5, even before a stage is
+by this toolchain installs the required `tesl_schema_stage_protocol` format-2 row
+and complete stage/guard/Contract/promotion/cancellation tables alongside row
+format5, even before a stage is
 declared. This lets predecessor and staging binaries built by this toolchain
 coexist. Tables, constraints, function bodies, owners and ACLs are checked exactly.
 Pre-extension development catalogs missing that extension are refused, not adopted
@@ -146,17 +189,15 @@ checks run in the mandatory native preparation suite; evidence for this boundary
 review is in `/tmp/opencode/stage-boundary/`.
 
 Mandatory routes: `test_staged_indexes` includes actual Go Memory execution;
-`test_migration_row_indexes` now also compiles predecessor/staging/carry programs
-and executes the PostgreSQL/race stage-preparation suite. The full migration runner
-already invokes both executables without selecting out either native scenario.
-The preparation implementation is embedded only for PostgreSQL artifacts; the
-isolated experimental V9 guard is still not integrated.
+`test_migration_row_indexes` compiles predecessor/staging/carry and guarded-window
+programs and executes preparation, guarded-window, enforcement and cancellation
+PostgreSQL/race suites. The full migration runner invokes all native scenarios.
+Stage runtime files are embedded only
+for PostgreSQL artifacts.
 
-**Guarded promotion plan requirements (b266388 continuation).** Promotion
-and cancellation remain refused; no V3 promotion-window writer or V4 reliance
-path has been enabled. The current SQL/pgx surface does not yet bind a validated
-probe plan to the executor that will read the rows. The new mandatory
-`stage-probe-plan-boundary` phase records two PostgreSQL counterexamples:
+**Earlier guarded-probe research (b266388 continuation).** Before the connected
+window, promotion was refused. The mandatory `stage-probe-plan-boundary` phase
+retains two PostgreSQL counterexamples to an earlier-EXPLAIN-as-authority design:
 
 - A prepared probe starts with an Index Only Scan under `force_generic_plan`.
   Another backend analyzes already-committed data. After a new relation lock
@@ -186,22 +227,25 @@ legitimately choose it instead of the preparatory index.
 
 The follow-up also found that extreme session or tablespace cost settings can
 defeat scan switches, and a non-leading covering index can yield an unbounded
-index walk. The implementation candidate therefore needs a scoped cost profile,
-checks on effective tablespace costs and every eligible index path, and lifecycle
-rules that retain the valid preparatory index while guarded writers are admitted.
-It must establish a safe plan family, not assume an earlier EXPLAIN pins a later
-execution. These are requirements for the proposed guard, not implemented claims.
+index walk. The connected guard now scopes the actual probe's zero-cost/custom
+profile, checks effective tablespace costs and the restricted eligible index
+family, and refuses managed lifecycle changes that could remove preparation.
+It does not assume an earlier EXPLAIN pins a later execution. Only exact reviewed
+UNIQUE target jobs are additionally admitted, including known in-progress/invalid
+states while the valid preparation remains available.
 Evidence: `/tmp/opencode/managed-probe-review.md` and
 `/tmp/opencode/managed-probe-results.BiPpOGFz/`. Only PostgreSQL 17.10 was executed
-in these experiments; supported-major validation remains required. Promotion is
-still refused pending the connected writer, Contract and recovery implementation.
+in these experiments; supported-major validation remains required. The connected
+lifecycle now implements reviewed Contract, build/recovery and enforced V4 reliance.
 
 Targeted evidence is in `/tmp/opencode/stage-preparation/`: the native stage
 scenarios verify duplicate writes, valid NONUNIQUE indexes, predecessor read/write
 compatibility, immutable carry/restart/reinstall, finite catch-up, interrupted-build
 lease recovery, and rejection of validly framed descriptor drift, source/ABI drift,
 catalog/ACL drift, missing extension and attempted unreviewed Contract. Compiler
-checks also reject promotion and source deletion after generating fresh seals.
+checks reject reuse of the preparatory name as a unique target and source deletion
+after generating fresh seals; the separate guarded-window fixture accepts distinct
+target names and rejects premature reliance.
 Staged compiler/Memory (9), inventory (14), storage (11), safe-Drop planning (16),
 embedded seam (6), the original index application scenario, and 20 top-level
 baseline/facility/dependency runtime tests passed; the latter ran with `-race` and
@@ -210,13 +254,15 @@ capitalized facility-error message was lowercased without changing its ACL check
 These are targeted results, not a
 full CI or latency-gate pass.
 
-**Remaining V9/V10 work:** indexed per-key guards on every relevant write path,
-reviewed `PromoteStage`, predecessor writer fencing before concurrent UNIQUE build,
-protected cancellation, duplicate reporting/repair/retry and promotion recovery,
-and V10 readiness tied to durable enforcement plus a valid/ready/live unique index.
-The pending-only stage-control extension must be evolved explicitly for those
-transitions. Full-roadmap traceability reconciliation also remains open; the
-bounded empty-queue removal increment is documented separately below.
+**Connected lifecycle verification:** indexed per-key guards, reviewed
+`PromoteStage`, predecessor writer fencing before concurrent UNIQUE build,
+pending-stage cancellation, duplicate reporting/repair/retry, recovery and enforced
+reliance now have actual compiled PostgreSQL/race evidence on 14.23, 17.10 and 18.4.
+The measured subsets, toolchain and logs are recorded in
+[major verification](stage-major-verification.md). The static checker now requires
+the concrete connected implementation and runtime-fixture links; helper-only
+evidence cannot make `PR-UNIQUE` green. Full CI and full-roadmap reconciliation
+remain open, and the bounded domain/history restrictions remain explicit.
 
 ## Bounded empty-queue removal integration (2026-10-18)
 
@@ -263,8 +309,8 @@ documented bounded support: `PR-EMPTY-QUEUE` is evidenced, with no additional
 human approval flag. The static validator requires concrete source, staging,
 execution and protected-mutation links plus registered source and both compiled
 native witnesses; a status flip backed by the old emptiness helper cannot pass.
-`PR-UNIQUE` remains pending because Stage/Carry does not provide the full three-release
-uniqueness protocol. No full CI pass or universal history support is claimed.
+The later staged lifecycle and major verification now supply bounded `PR-UNIQUE`
+technical evidence too. No full CI pass or universal history support is claimed.
 
 ## Delivery contract
 

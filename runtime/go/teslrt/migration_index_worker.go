@@ -327,6 +327,8 @@ func pgIndexWorkerRound(ctx context.Context, ddl, coordinator *pgx.Conn, tag str
 	defer poll.Stop()
 	defer renew.Stop()
 	var active *pgMigrationIndexJob
+	initialAttempts := map[string]int64{}
+	firstSnapshot := true
 	var finished chan error
 	var stopJob context.CancelFunc
 	defer func() {
@@ -356,6 +358,19 @@ func pgIndexWorkerRound(ctx context.Context, ddl, coordinator *pgx.Conn, tag str
 		if err != nil {
 			return err
 		}
+		if firstSnapshot {
+			for _, job := range snapshot.jobs {
+				initialAttempts[job.ID] = job.Attempts
+			}
+			firstSnapshot = false
+		}
+		if history.untilValid && active == nil {
+			for _, job := range snapshot.jobs {
+				if job.stagePromotion && job.State == "failed" && job.Attempts > initialAttempts[job.ID] && strings.HasPrefix(job.Error, "23505:") {
+					return pgIndexRefuse("blocked_duplicates: %s", job.Error)
+				}
+			}
+		}
 		// A finite deployment executor holds the same real per-job fences but
 		// is not an application instance of the historical version it executes.
 		if !history.untilValid {
@@ -364,7 +379,9 @@ func pgIndexWorkerRound(ctx context.Context, ddl, coordinator *pgx.Conn, tag str
 				return err
 			}
 		}
-		if history.untilValid && active == nil && !slices.ContainsFunc(snapshot.jobs, func(job pgMigrationIndexJob) bool { return job.State != "valid" }) {
+		if history.untilValid && active == nil && !slices.ContainsFunc(snapshot.jobs, func(job pgMigrationIndexJob) bool {
+			return job.State != "valid" && job.State != "terminal" && job.stageCancellationPlanned <= history.executionVersion()
+		}) {
 			return errPgIndexComplete
 		}
 		if snapshot.ready && !*announced {
@@ -396,7 +413,10 @@ func pgIndexWorkerRound(ctx context.Context, ddl, coordinator *pgx.Conn, tag str
 			return nil
 		}
 		for _, job := range snapshot.jobs {
-			if job.Version > history.executionVersion() || job.State == "valid" {
+			if history.untilValid && job.stageCancellationPlanned > history.executionVersion() {
+				continue
+			}
+			if job.Version > history.executionVersion() || job.State == "valid" || job.State == "terminal" {
 				continue
 			}
 			if job.Holder != "" && job.Holder != tag && job.ExpiresAt != nil {
@@ -577,10 +597,18 @@ func pgMigrationDDLJobKey(uuid, id string) int64 {
 }
 
 func pgIndexJobLock(ctx context.Context, conn *pgx.Conn, key int64, run func() error) (resultErr error) {
+	return pgIndexJobLockMode(ctx, conn, key, false, run)
+}
+
+func pgIndexJobLockMode(ctx context.Context, conn *pgx.Conn, key int64, exclusive bool, run func() error) (resultErr error) {
 	if conn == nil || conn.IsClosed() || conn.PgConn().TxStatus() != 'I' {
 		return pgIndexRefuse("concurrent index DDL requires an idle session-fenced connection")
 	}
-	if _, err := conn.Exec(ctx, "select pg_catalog.pg_advisory_lock_shared($1::bigint)", key); err != nil {
+	suffix := "_shared"
+	if exclusive {
+		suffix = ""
+	}
+	if _, err := conn.Exec(ctx, "select pg_catalog.pg_advisory_lock"+suffix+"($1::bigint)", key); err != nil {
 		// Acquisition can succeed before the client learns that it was cancelled.
 		_ = conn.PgConn().Conn().Close()
 		return err
@@ -589,7 +617,7 @@ func pgIndexJobLock(ctx context.Context, conn *pgx.Conn, key int64, run func() e
 		cleanup, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		var unlocked bool
-		err := conn.QueryRow(cleanup, "select pg_catalog.pg_advisory_unlock_shared($1::bigint)", key).Scan(&unlocked)
+		err := conn.QueryRow(cleanup, "select pg_catalog.pg_advisory_unlock"+suffix+"($1::bigint)", key).Scan(&unlocked)
 		if err != nil || !unlocked {
 			if err == nil {
 				err = errPgIndexLeaseLost

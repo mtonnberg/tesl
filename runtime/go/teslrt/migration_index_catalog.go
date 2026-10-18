@@ -41,7 +41,14 @@ func pgPrepareIndexJobCatalogForAdmission(metadata *pgCatalogExpectations, actua
 		// Contract requires its own floor/terminal-version protocol. A terminal
 		// row is never permission to ignore an index in this additive bridge.
 		if job.State == "terminal" {
-			return nil, nil, false, fmt.Errorf("terminal index job requires the contract executor")
+			if job.stageCancellationVersion == 0 || job.TerminalVersion == nil || job.stageCancellationVersion != *job.TerminalVersion {
+				return nil, nil, false, fmt.Errorf("terminal index job requires the contract executor")
+			}
+			if slices.ContainsFunc(live.Indexes, func(i pgCatalogIndex) bool { return i.Name == job.Index.Name }) {
+				return nil, nil, false, fmt.Errorf("cancelled preparation index is still present")
+			}
+			want.Indexes = slices.DeleteFunc(want.Indexes, func(i pgCatalogIndex) bool { return i.Name == job.Index.Name })
+			continue
 		}
 		declared := slices.IndexFunc(want.Indexes, func(i pgCatalogIndex) bool { return i.Name == job.Index.Name })
 		shape, err := metadata.index(job.Index.Name, actual, job.Index.Columns, false, job.Index.Unique, false)
@@ -76,7 +83,7 @@ func pgPrepareIndexJobCatalogForAdmission(metadata *pgCatalogExpectations, actua
 			}
 			live.Indexes = slices.Delete(live.Indexes, position, position+1)
 		}
-		if pgIndexRequiresValidForWrites(actual, job.Index) && job.Version <= admissionVersion && (!valid || job.State != "valid") {
+		if pgIndexRequiresValidForWrites(actual, job.Index) && job.Version <= admissionVersion && !(job.stagePromotion && job.Version == admissionVersion) && (!valid || job.State != "valid") {
 			ready = false
 		}
 	}

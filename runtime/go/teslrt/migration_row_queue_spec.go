@@ -41,7 +41,7 @@ begin
  end loop;
  if (width=8 and fields[1] not in ('tesl-retained-physical-version-v1','tesl-retained-physical-version-v2')) or
      (width=9 and fields[1] not in ('tesl-retained-physical-version-v3','tesl-retained-physical-version-v4','tesl-retained-physical-version-v6','tesl-retained-physical-version-v8','tesl-retained-physical-version-v9')) or
-     (width=10 and fields[1] not in ('tesl-retained-physical-version-v5','tesl-retained-physical-version-v7')) or
+     (width=10 and fields[1] not in ('tesl-retained-physical-version-v5','tesl-retained-physical-version-v7','tesl-retained-physical-version-v10','tesl-retained-physical-version-v11','tesl-retained-physical-version-v12')) or
     fields[2]!~'^(Schema\.[A-Z][A-Za-z0-9_]*|[A-Z][A-Za-z0-9_]*Schema)$' or
     pg_catalog.octet_length(fields[3])<1 or pg_catalog.octet_length(fields[3])>63 or
     fields[4]!~'^[1-9][0-9]{0,9}$' or fields[5]!~'^[0-9a-f]{64}$' or fields[6]!~'^[0-9a-f]{64}$' then raise exception 'tesl: invalid physical source header fields'; end if;

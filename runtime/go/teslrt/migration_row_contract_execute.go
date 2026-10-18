@@ -232,6 +232,9 @@ func pgExecuteRowContractOn(ctx context.Context, conn *pgx.Conn, settings *pgx.C
 	if current != roles.Worker || session != roles.Worker {
 		return result, fmt.Errorf("row Contract requires exact Worker login")
 	}
+	if len(c.window.stageGuards) > 0 {
+		return pgExecuteStageContract(ctx, conn, settings, b, roles, c, requireDrained)
+	}
 	state, err := pgRowContractState(ctx, conn, b, roles, c)
 	if err != nil {
 		return result, err

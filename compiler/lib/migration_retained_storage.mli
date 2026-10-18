@@ -46,6 +46,9 @@ type version = {
      requires the exact checked contract receipt for this earlier transformation.
      An intervening additive revision does not invent another contract. *)
  requires_contract_version : int option;
+ promotions : (Migration_canonical.node * Migration_storage.index) list;
+ reliance : (int * (Migration_canonical.node * Migration_storage.index) list) option;
+ cancellations : Migration_canonical.node list;
 }
 type t
 val plan : Migration_row_history.t -> (t, Migration_sparse.error list) result

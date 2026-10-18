@@ -108,8 +108,19 @@ func pgExecuteRowEpoch(parent context.Context, conn *pgx.Conn, b *pgRowBaseline,
 		return result, fmt.Errorf("close epoch requires exact Worker login")
 	}
 	ns := quoteIdentifier(b.history.Namespace) + "."
+	readState := func(tx pgx.Tx) (PgMigrationControlState, error) {
+		ready := true
+		var result PgMigrationControlState
+		var err error
+		if len(b.target.stageCancellations) > 0 {
+			result, _, err = pgReadRowBaselineState(ctx, tx, b, roles, false, &ready)
+		} else {
+			result, _, err = pgReadRowBaselineState(ctx, tx, b, roles, false)
+		}
+		return result, err
+	}
 	observe := func(tx pgx.Tx) (PgMigrationControlState, error) {
-		state, _, err := pgReadRowBaselineState(ctx, tx, b, roles, false)
+		state, err := readState(tx)
 		if err != nil {
 			return state, err
 		}
@@ -179,7 +190,7 @@ func pgExecuteRowEpoch(parent context.Context, conn *pgx.Conn, b *pgRowBaseline,
 					return err
 				}
 				migrationBoundary("row-epoch-after-publication")
-				final, _, err := pgReadRowBaselineState(ctx, tx, b, roles, false)
+				final, err := readState(tx)
 				if err != nil {
 					return err
 				}

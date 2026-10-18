@@ -103,10 +103,16 @@ turn the report green.
 | Drop `ec07129` | `PR-DROP`: compiler PostgreSQL suite invokes two native application/source witnesses with generated fixtures | Recorded 16 planning cases, PostgreSQL suite and six embedded seam tests. Standalone `row-retirement` selection would skip these fixtures |
 | Latency `923f51f` | `PR-LATENCY`: comparator entrypoint and threshold/calibration tests; `latency-regression` and `latency-statistics` | Recorded standalone calibrated comparison pass; no absolute overhead or hosted reliability claim |
 | Preparation `ce73748`, following groundwork `4f03e6f` | `PR-UNIQUE`: stage history, protected registration/observation; `test_staged_indexes` and `test_migration_row_indexes` compiler-loop routes | Connected bounded Stage/Carry builds NONUNIQUE indexes and retains pending records. Targeted native preparation and Memory results are not V9 guards, promotion or V10 reliance |
+| Connected staged lifecycle and major verification | `PR-UNIQUE`: source/context/guard/protected Contract/index/recovery/cancellation/reliance links and real compiled fixture routes are required | Selected suites passed with race instrumentation on PostgreSQL 14.23, 17.10 and 18.4, with no skipped Go tests; full CI and universal histories are not claimed |
 | Bounded empty-queue removal | `PR-EMPTY-QUEUE`: explicit source decision, Installer staging, fenced execution and protected SQL mutation; registered source and both native cases in `test_migration_queue_removal` | Merged source checks and real V1/V2 and V1→additive V2→RemoveEmpty V3→additive V4 PostgreSQL/race fixtures passed. One removal edge, additive prefixes/suffixes; not universal history support or full CI |
 
-Required production work still pending: **PR-UNIQUE**. Stage/Carry preparation is
-not the full unique-writer guard/promotion/recovery protocol. Bounded empty-queue
+**PR-UNIQUE is now scoped evidenced** after the
+[major verification](stage-major-verification.md) of the connected lifecycle on
+PostgreSQL 14/17/18. The unconditional pending switch was replaced by concrete
+required implementation and runtime-fixture links, with negative tests rejecting
+helper-only evidence, missing paths, wrong handoff order and skipped native routes.
+Scoped static readiness passes; `execution_verified` remains false and complete
+CI is still required. Bounded empty-queue
 removal is technically accepted and evidenced by its actual implementation and
 executed native fixtures; no separate human approval flag is required. Its validator
 checks require source/staging/execution/protected-mutation links, the real compiled

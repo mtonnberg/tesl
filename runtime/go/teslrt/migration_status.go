@@ -36,6 +36,7 @@ type PgMigrationStatus struct {
 	Instances                []PgMigrationInstanceStatus  `json:"instances"`
 	Indexes                  []PgMigrationIndexStatus     `json:"indexes"`
 	Queues                   json.RawMessage              `json:"queues,omitempty"`
+	Stages                   json.RawMessage              `json:"stages,omitempty"`
 }
 
 type PgMigrationIndexStatus struct {
@@ -50,6 +51,7 @@ type PgMigrationIndexStatus struct {
 	Token             int64      `json:"token"`
 	ExpiresAt         *time.Time `json:"expiresAt,omitempty"`
 	Error             string     `json:"error,omitempty"`
+	TerminalVersion   *int       `json:"terminalVersion,omitempty"`
 }
 
 type PgMigrationExpansionStatus struct {

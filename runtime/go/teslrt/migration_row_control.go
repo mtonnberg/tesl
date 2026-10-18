@@ -47,7 +47,7 @@ func (p *pgRowBaselinePreparation) prepareFresh(ctx context.Context, tx pgx.Tx, 
 	if _, err := tx.Exec(ctx, "create index tesl_row_queue_conversion_latest on "+ns+"tesl_row_queue_conversion_receipts(job_id,attempt_seq)"); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(ctx, "insert into "+ns+"tesl_schema_stage_protocol values(1,1)"); err != nil {
+	if _, err := tx.Exec(ctx, "insert into "+ns+"tesl_schema_stage_protocol values(1,2)"); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(ctx, "insert into "+ns+"tesl_schema_queue_removal_protocol values(1,1)"); err != nil {
@@ -268,6 +268,9 @@ func pgVerifyRowCatalogSet(ctx context.Context, tx pgx.Tx, b *pgRowBaseline, rol
 			return err
 		}
 		if actual != nil {
+			if err := pgVerifyStageGuardTriggers(ctx, tx, b.history.Namespace, roles, actual); err != nil {
+				return err
+			}
 			if err := pgVerifyRowNotNullProofs(ctx, tx, b.history.Namespace, actual, checks[entity.Name]); err != nil {
 				return err
 			}

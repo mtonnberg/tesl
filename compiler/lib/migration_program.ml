@@ -177,7 +177,35 @@ let capture_history ~source_only ~entry ~source f = protect entry.source_file (f
      edge) sources in
     inventories := (identity,(H.current h).inventory) :: !inventories;
     let queue_versions=queue_versions schemas edges in
-    let inventories = List.map (fun (s:H.schema) -> s.inventory) schemas in
+     let inventories = List.map (fun (s:H.schema) -> s.inventory) schemas in
+     (match List.rev inventories with
+      | after::before::_ ->
+       let promoted=match Migration_inventory.stage_transitions ~before ~after with
+        | Ok xs -> List.filter_map(function Migration_inventory.Promote s -> Some s | _ -> None) xs
+        | Error _ -> [] in
+       if promoted<>[] then List.iter (fun (m:module_form) ->
+        List.iter(fun (imp:import_decl) -> match Validation_common.schema_module_parts imp.module_name with
+         | Some(owner,revision,_) when owner=family && revision<>"VCurrent" ->
+          reject ~code:"MIG030" imp.loc "guarded promotion applications must use VCurrent; historical schemas are retained only for migration code"
+         | _ -> ()) m.imports;
+        let check loc entity conflict =
+         let resolved=Migration_queue.visible_reference modules m (function DEntity e -> Some e.name | _ -> None) entity in
+         if List.exists (fun (s:Migration_inventory.staged_index) ->
+          let current=Str.global_replace (Str.regexp_string (Migration_inventory.root_module before))
+           (Migration_inventory.root_module after) s.stage_entity in
+          conflict=[s.stage_field] && (resolved=Some current || entity=current)) promoted then
+           reject ~code:"MIG030" loc "guarded promotion exposes no onConflict/reliance before a later enforced release" in
+        let inspect e=Ast_visitor.iter (fun node -> match node with
+         | ESqlQuery {query=QueryUpsert q;loc} -> check loc q.entity q.conflict
+         | _ -> match Validation_common.collect_call_head_and_args [] node with
+          | head,entity::_record::EVar{name="onConflict";_}::EList{elems;loc}::EVar{name="doUpdate";_}::EList _::[]
+           when Validation_common.function_name_of_expr head=Some "upsert" ->
+            let name=match entity with EVar{name;_}|EConstructor{name;_}->name|_->"" in
+            check loc name (List.filter_map(function EVar{name;_}->Some name|EField{field;_}->Some field|_->None) elems)
+          | _ -> ()) e in
+        List.iter(function DFunc f -> inspect f.body | DConst c -> inspect c.value
+         | DTest t -> List.iter inspect (List.concat_map Ast.test_stmt_exprs t.stmts) | _ -> ()) m.decls) modules
+      | _ -> ());
     if source_only || H.contracts h<>[] then begin
       let rows=checked((if List.exists D.queue_transition edges then RH.check_queue_expansion else RH.check) ~schemas:inventories ~edges) in
       if RH.retirements rows<>[] then
@@ -197,8 +225,12 @@ let capture_history ~source_only ~entry ~source f = protect entry.source_file (f
       let plan=checked(Migration_retained_storage.plan rows) in
       let checked_contracts=List.map(fun (s:H.migration_source) ->
        checked(Migration_contract.check ~plan ~namespace ~file:s.path ~source:s.contents)) (H.contracts h) in
-      contracts := (identity,checked_contracts) :: !contracts
+       contracts := (identity,checked_contracts) :: !contracts
      end
+     ;let plan=checked(Migration_retained_storage.plan rows) in
+     List.iter(fun(v:Migration_retained_storage.version)->match v.reliance with
+      | None->()|Some(prior,_)->if not(List.exists(fun c->Migration_contract.version c=prior)(Option.value(List.assoc_opt identity !contracts)~default:[])) then
+       reject ~code:"MIG030" loc "unique reliance requires the exact reviewed prior PromoteStage Contract source") (Migration_retained_storage.versions plan)
     end;
     let first = E.generate ~initial_version:1 ~schemas:inventories ~edges in
     if not source_only then ignore (checked first);

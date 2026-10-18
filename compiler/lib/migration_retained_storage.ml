@@ -16,7 +16,10 @@ type entity = {source:RH.entity;columns:column list;projection:field list;
 type window = {binding:RH.binding;before:entity;after:entity;
                requires_final_generation:int;invalidation_columns:column list;
                rename_dual_writes:(string * column) list}
-type version = {version:int;entities:entity list;windows:window list;retirements:entity list;requires_contract_version:int option}
+type version = {version:int;entities:entity list;windows:window list;retirements:entity list;requires_contract_version:int option;
+ promotions:(Migration_canonical.node * S.index) list;
+ reliance:(int * (Migration_canonical.node * S.index) list) option;
+ cancellations:Migration_canonical.node list}
 type t = {history:RH.t;versions:version list}
 type projection = {entity:entity;fields:field list}
 let history t = t.history
@@ -52,7 +55,8 @@ let plan history = protect (fun () ->
  let reserve location name =
   if Hashtbl.mem relations name then reject location ("retained PostgreSQL relation name cannot be reused: " ^ name);
   Hashtbl.add relations name () in
- let add_indexes source retained =
+  let promotion_targets=ref [] in
+  let add_indexes source retained =
   List.fold_left (fun all (index:S.index) ->
    if index.columns=[] || List.length index.columns>32 then
     reject source.RH.table.entity.entity_loc "retained B-tree index requires 1 to 32 columns";
@@ -60,7 +64,7 @@ let plan history = protect (fun () ->
    | Some old when old=index -> all
    | Some _ -> reject source.table.entity.entity_loc ("retained index definition cannot be replaced: " ^ index.name)
    | None -> reserve source.table.entity.entity_loc index.name;index::all)
-   retained source.table.indexes |> order_indexes in
+    retained (List.filter (fun (i:S.index) -> not (List.mem i !promotion_targets)) source.table.indexes) |> order_indexes in
  let born version source =
   let table=source.RH.table in
   reserve table.entity.entity_loc table.name;
@@ -71,9 +75,26 @@ let plan history = protect (fun () ->
     {logical;physical=shape logical version logical.nullable E.Null}) table.columns in
   {source;projection;columns=order_columns (List.map (fun (f:field) -> f.physical) projection);
    indexes=add_indexes source [];marker_default_generation=1;rename_dual_writes=[];reverse_writes=[]} in
- let prior=ref [] in
+  let prior=ref [] in
+  let previous_promotions=ref [] and reliance=ref None in
  let pending_contract=ref None and prior_retirements=ref [] in
- let planned=List.map (fun (revision:RH.version) ->
+  let planned=List.map (fun (revision:RH.version) ->
+   let promotions=match List.find_opt (fun (v:RH.version) -> v.version=revision.version-1) (RH.versions history) with
+    | None -> [] | Some previous -> S.promotions ~before:previous.storage ~after:revision.storage in
+   let cancellations=match List.find_opt(fun(v:RH.version)->v.version=revision.version-1)(RH.versions history) with
+    | None->[]|Some previous->S.cancellations ~before:previous.storage ~after:revision.storage in
+   if promotions<>[] && cancellations<>[] then reject loc "simultaneous promotion and cancellation require separate staged revisions";
+   if !previous_promotions<>[] then begin
+    reliance:=Some(revision.version-1,!previous_promotions);
+    prior:=List.map(fun(e:entity)->{e with indexes=order_indexes(List.sort_uniq compare(e.indexes @ e.source.table.indexes))})!prior
+   end;
+   if !reliance<>None && (promotions<>[] || cancellations<>[]) then reject loc "MIG030: combining another staged decision with an enforced reliance history is unsupported";
+   Option.iter(fun(_,guards)->List.iter(fun(prep,target)->
+    let table=match prep with Migration_canonical.Seq[_;_;_;_;_;Bytes table;_;_;_;_]->table|_->assert false in
+    if not(List.exists(fun(e:RH.entity)->e.table.name=table && List.mem target e.table.indexes)revision.entities) then
+     reject loc "staged reliance must retain its exact unique key and target; guarded/enforced cancellation is unsupported")guards)!reliance;
+   previous_promotions:=promotions;
+   promotion_targets:=List.map snd promotions;
   let transforming=List.exists (fun b -> RH.migration_version b=revision.version) (RH.bindings history) in
   let requires_contract_version= !pending_contract in
   pending_contract:=None;
@@ -172,7 +193,7 @@ let plan history = protect (fun () ->
   let entities=List.sort (fun a b -> compare a.source.identity b.source.identity) (entities @ retirements) in
   prior:=entities;prior_retirements:=List.map (fun e -> e.source.identity) retirements;
   if transforming || retirements<>[] then pending_contract:=Some revision.version;
-  {version=revision.version;entities;windows=List.rev !windows;retirements;requires_contract_version}) (RH.versions history) in
+   {version=revision.version;entities;windows=List.rev !windows;retirements;requires_contract_version;promotions;reliance= !reliance;cancellations}) (RH.versions history) in
  {history;versions=planned})
 
 let project t ~version ~entity ~logical_fields = protect (fun () ->
@@ -189,6 +210,8 @@ let project t ~version ~entity ~logical_fields = protect (fun () ->
 let settled_version t ~version = protect (fun () ->
  let retained=match List.find_opt (fun v -> v.version=version) t.versions with
   | Some v -> v | None -> reject loc "settled projection names a revision outside its retained history" in
- let entities=List.filter (fun e -> not (List.exists (fun retired ->
+  let entities=List.filter (fun e -> not (List.exists (fun retired ->
   retired.source.identity=e.source.identity) retained.retirements)) retained.entities |> List.map settle_entity in
- {version;entities;windows=[];retirements=[];requires_contract_version=None})
+  let entities=if retained.promotions=[] then entities else List.map(fun(e:entity)->
+   {e with indexes=order_indexes(List.sort_uniq compare(e.indexes @ (List.find(fun old->old.source.identity=e.source.identity)retained.entities).indexes))})entities in
+  {version;entities;windows=[];retirements=[];requires_contract_version=None;promotions=[];reliance=None;cancellations=[]})

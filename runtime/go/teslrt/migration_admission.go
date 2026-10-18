@@ -45,7 +45,11 @@ func pgAdmitMigrationTransaction(ctx context.Context, tx pgx.Tx, db *PostgresDB,
 		migrationBoundary("writer-fence")
 	}
 	var floor int
-	if err := tx.QueryRow(ctx, "select "+pgx.Identifier{db.schema, "tesl_admit"}.Sanitize()+"($1::integer)", protocol.version).Scan(&floor); err != nil {
+	admit := "tesl_admit"
+	if write && protocol.controlFormat == pgRowControlFormat {
+		admit = "tesl_admit_writer"
+	}
+	if err := tx.QueryRow(ctx, "select "+pgx.Identifier{db.schema, admit}.Sanitize()+"($1::integer)", protocol.version).Scan(&floor); err != nil {
 		return &pgMigrationAdmissionError{cause: err}
 	}
 	return nil

@@ -59,6 +59,10 @@ type pgRowPhysicalPlan struct {
 	queueConversions                        []pgRowPhysicalQueueConversion
 	queueRemoval                            *pgRowPhysicalQueueRemoval
 	stages                                  []pgStagePreparation
+	stageGuards                             []pgStageGuard
+	stageRelianceVersion                    int
+	stageReliance                           []pgStageGuard
+	stageCancellations                      []pgStagePreparation
 	contract, hash                          string
 }
 type pgCompiledRowPhysicalHistory struct {
@@ -93,6 +97,8 @@ func pgParseRowPhysicalShape(contract, hash string, settled bool) (*pgRowPhysica
 		valid = valid || (n.list(10) && n.children[0].isAtom("tesl-retained-physical-version-v7"))
 		valid = valid || (n.list(9) && n.children[0].isAtom("tesl-retained-physical-version-v8"))
 		valid = valid || (n.list(9) && n.children[0].isAtom("tesl-retained-physical-version-v9"))
+		valid = valid || (n.list(10) && n.children[0].isAtom("tesl-retained-physical-version-v10"))
+		valid = valid || (n.list(10) && (n.children[0].isAtom("tesl-retained-physical-version-v11") || n.children[0].isAtom("tesl-retained-physical-version-v12")))
 		if !valid {
 			return nil, fmt.Errorf("invalid retained physical document")
 		}
@@ -132,11 +138,37 @@ func pgParseRowPhysicalShape(contract, hash string, settled bool) (*pgRowPhysica
 			return nil, fmt.Errorf("invalid adjacent queue-only removal: %v", err)
 		}
 	}
-	if n.children[0].isAtom("tesl-retained-physical-version-v8") {
+	if n.children[0].isAtom("tesl-retained-physical-version-v8") || n.children[0].isAtom("tesl-retained-physical-version-v10") || n.children[0].isAtom("tesl-retained-physical-version-v11") || n.children[0].isAtom("tesl-retained-physical-version-v12") {
 		var err error
 		plan.stages, err = pgParseStagePreparations(n.children[8])
 		if err != nil || len(plan.stages) == 0 {
 			return nil, fmt.Errorf("invalid stage-bearing physical plan: %v", err)
+		}
+	}
+	if n.children[0].isAtom("tesl-retained-physical-version-v10") {
+		var err error
+		plan.stageGuards, err = pgParseStageGuards(n.children[9])
+		if err != nil || len(plan.stageGuards) == 0 || !n.children[7].list(0) {
+			return nil, fmt.Errorf("invalid guarded promotion plan: %v", err)
+		}
+	}
+	if n.children[0].isAtom("tesl-retained-physical-version-v11") {
+		reliance := n.children[9]
+		if !reliance.list(3) || !reliance.children[0].isAtom("staged-unique-reliance-v1") {
+			return nil, fmt.Errorf("invalid stage reliance")
+		}
+		plan.stageRelianceVersion = number(reliance.children[1], 2147483646)
+		var err error
+		plan.stageReliance, err = pgParseStageGuards(reliance.children[2])
+		if err != nil || len(plan.stageReliance) == 0 || plan.stageRelianceVersion >= plan.version || !n.children[7].list(0) {
+			return nil, fmt.Errorf("invalid enforced-stage prerequisite: %v", err)
+		}
+	}
+	if n.children[0].isAtom("tesl-retained-physical-version-v12") {
+		var err error
+		plan.stageCancellations, err = pgParseStagePreparations(n.children[9])
+		if err != nil || len(plan.stageCancellations) == 0 || !n.children[7].list(0) {
+			return nil, fmt.Errorf("invalid stage cancellation: %v", err)
 		}
 	}
 	if !pgMigrationIdentifier(plan.namespace) || !pgMigrationFamily(plan.family) || !pgMigrationDigest(plan.schemaSnapshotHash) || !pgMigrationDigest(plan.storageSnapshotHash) {
@@ -698,6 +730,16 @@ func pgBindRowPhysicalPlan(compiled *pgCompiledRowHistory, previous, plan *pgRow
 			return err
 		}
 	}
+	if previous != nil && len(previous.stageGuards) > 0 && plan.stageRelianceVersion == previous.version {
+		if !slices.Equal(previous.stageGuards, plan.stageReliance) {
+			return fmt.Errorf("stage reliance differs from exact promotion predecessor")
+		}
+		var err error
+		previous, err = pgStageSettledShape(previous)
+		if err != nil {
+			return err
+		}
+	}
 	if err := pgValidateRowPhysicalLineage(previous, plan); err != nil {
 		return err
 	}
@@ -765,6 +807,11 @@ func pgBindRowPhysicalPlan(compiled *pgCompiledRowHistory, previous, plan *pgRow
 						return fmt.Errorf("invalid bound source index column")
 					}
 					index.Columns = append(index.Columns, column.value)
+				}
+				if slices.ContainsFunc(plan.stageGuards, func(g pgStageGuard) bool {
+					return g.preparation.table == entity.Table && index.Name == g.target && index.Unique && slices.Equal(index.Columns, []string{g.preparation.column})
+				}) {
+					continue // A declaration is a guarded window, not a physical UNIQUE job.
 				}
 				if old, ok := expectedIndexes[index.Name]; ok && !pgPhysicalIndexEqual(old, index) {
 					return fmt.Errorf("source changed retained index identity")
@@ -1049,6 +1096,17 @@ func pgBindRowSettledPlan(compiled *pgCompiledRowHistory, window, settled *pgRow
 		settled.schemaSnapshotHash != window.schemaSnapshotHash || settled.storageSnapshotHash != window.storageSnapshotHash ||
 		len(settled.entities)+len(window.retirements) != len(window.entities) || len(settled.windows) != 0 || len(settled.retirements) != 0 || settled.version < 1 || settled.version > len(compiled.inventory.Versions) {
 		return fmt.Errorf("settled physical description has no exact compiled window")
+	}
+	if len(window.stageGuards) > 0 {
+		want, err := pgStageSettledShape(window)
+		if err != nil {
+			return err
+		}
+		if want.hash != settled.hash || want.contract != settled.contract {
+			return fmt.Errorf("stage Contract settled storage differs")
+		}
+		settled.stages = slices.Clone(window.stages)
+		return nil
 	}
 	source := compiled.inventory.Versions[settled.version-1]
 	if len(settled.entities) != len(source.Entities) {
