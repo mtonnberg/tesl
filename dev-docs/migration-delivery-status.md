@@ -4,7 +4,8 @@
 
 The [scoped traceability register](migration-pr-scope.md) links the 18 agreed PR
 clauses to live production declarations, named witnesses and execution routes.
-Full staged uniqueness and empty-queue removal remain required and pending.
+Full staged uniqueness remains required and pending. Bounded empty-queue removal
+is integrated and technically accepted with merged execution evidence below.
 Static consistency is not executed acceptance: a successful complete CI run is
 still required. Historical-roadmap reconciliation is reported separately.
 
@@ -167,7 +168,56 @@ reviewed `PromoteStage`, predecessor writer fencing before concurrent UNIQUE bui
 protected cancellation, duplicate reporting/repair/retry and promotion recovery,
 and V10 readiness tied to durable enforcement plus a valid/ready/live unique index.
 The pending-only stage-control extension must be evolved explicitly for those
-transitions. Queue removal and full traceability also remain open.
+transitions. Full-roadmap traceability reconciliation also remains open; the
+bounded empty-queue removal increment is documented separately below.
+
+## Bounded empty-queue removal integration (2026-10-18)
+
+The reviewed `RemoveEmpty` source decision is integrated with compiler history,
+physical format v9, Installer staging, Worker/Contract/deploy/catch-up execution,
+protected SQL mutation and immutable receipt verification. See
+[empty queue removal](../manual/queue-removal.md) for the exact source surface and
+protocol. This supports one whole-queue removal edge in an additive history,
+including additive prefixes and later additive successors. It does not enable
+row-transforming or queue-converting prefixes/suffixes, staged-index histories,
+Drop/reset composition, mixed removal edges, rename/move, partial job removal,
+multiple removals or retired-identity reuse.
+
+The receipt binds the real database UUID/fence, selected removal version,
+predecessor/target physical hashes, closed endpoint inventories, complete earlier
+physical/source-inventory prefix and actual compiler ABI. Every admitted older
+writer and representation fence is required before checking retained jobs.
+Pending, delayed, dead, quarantined, claimed and expired-claimed removed jobs
+block publication. Surviving jobs retain payloads and scheduling; their audit
+records retain actual old versions. Receipt, membership, restamps and floors
+publish atomically. Later replay does not lower newer floors or rewrite newer
+claims. An original-V1 protocol marker is required; older development catalogs
+are refused rather than adopted.
+
+`compiler/test/test_migration_queue_removal.ml#reviewed_source_scope`, `#native`
+and `#native_chain` are real registered source/native witnesses selected by the
+mandatory compiler loop. They compile V1/V2 and V1→additive V2→RemoveEmpty V3→
+additive V4 applications, remove the source projects, and run PostgreSQL/race
+scenarios for nonempty refusal, both fence domains, producer/claim races,
+survivors, source/version/ABI tampering, crashes, later replay and deployment.
+The isolated fixtures and relevant Contract/queue/history/Stage/facility/Drop
+regressions passed. On merged root, four source checks and both real compiled
+PostgreSQL/race fixture suites passed in **465.176 seconds**, including the
+original-marker refusal, all nonempty categories, independently missing writer
+and representation fences, old-producer post-wait rejection, missing claim
+authority, unchanged survivors and V4 claim/floor-preserving replay. The dependency
+shell was pinned to root `66c22b2`; generated runtime/docs and ABI snapshots are
+regenerated normally rather than copied from the isolated worktree. Evidence:
+`/tmp/opencode/queue-removal-merged-verification/merged-removal.log` and its
+`fixtures/adjacent/postgres.log` and `fixtures/chain/postgres.log`.
+
+This code/test review and merged execution establish technical acceptance for the
+documented bounded support: `PR-EMPTY-QUEUE` is evidenced, with no additional
+human approval flag. The static validator requires concrete source, staging,
+execution and protected-mutation links plus registered source and both compiled
+native witnesses; a status flip backed by the old emptiness helper cannot pass.
+`PR-UNIQUE` remains pending because Stage/Carry does not provide the full three-release
+uniqueness protocol. No full CI pass or universal history support is claimed.
 
 ## Delivery contract
 

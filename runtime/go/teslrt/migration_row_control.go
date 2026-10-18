@@ -50,6 +50,9 @@ func (p *pgRowBaselinePreparation) prepareFresh(ctx context.Context, tx pgx.Tx, 
 	if _, err := tx.Exec(ctx, "insert into "+ns+"tesl_schema_stage_protocol values(1,1)"); err != nil {
 		return err
 	}
+	if _, err := tx.Exec(ctx, "insert into "+ns+"tesl_schema_queue_removal_protocol values(1,1)"); err != nil {
+		return err
+	}
 	if _, err := tx.Exec(ctx, "create index tesl_row_queue_conversion_fair on "+ns+"tesl_row_queue_conversion_receipts(source_digest,attempt_seq)"); err != nil {
 		return err
 	}
@@ -128,6 +131,13 @@ func pgVerifyRowBaseline(ctx context.Context, tx pgx.Tx, b *pgRowBaseline, state
 		return fmt.Errorf("row baseline installation identity differs")
 	}
 	ns := quoteIdentifier(b.history.Namespace) + "."
+	var removalProtocol bool
+	if err := tx.QueryRow(ctx, "select exists(select 1 from "+ns+"tesl_schema_queue_removal_protocol where id=1 and format=1)").Scan(&removalProtocol); err != nil {
+		return err
+	}
+	if !removalProtocol {
+		return fmt.Errorf("missing original-V1 queue removal protocol marker; automatic adoption is not supported")
+	}
 	if err := pgVerifyRowQueueBaseline(ctx, tx, b, state); err != nil {
 		return err
 	}

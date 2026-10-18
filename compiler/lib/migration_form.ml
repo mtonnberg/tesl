@@ -2,7 +2,7 @@
     arguments are checked by Migration_declaration against checked inventories. *)
 open Ast
 
-let type_names = ["Migration"; "Entity"; "Rule"; "Same"; "Contract"; "Drop"; "Tighten"; "QueueRepair"]
+let type_names = ["Migration"; "Entity"; "Rule"; "Same"; "Contract"; "Drop"; "Tighten"; "QueueRepair"; "RemoveEmpty"]
 let constructor_groups = ["Entity", ["Additive"; "Derived"; "Migrate"; "New"; "Drop"];
                           "Rule", ["Default"; "Rename"; "Retype"; "Revalidate"; "WriteBack"; "Legacy"; "LegacyWith"]; "Same", ["Same"];
                           "Drop", ["Table"; "Column"; "Storage"; "Index"; "Trigger"]; "Tighten", ["NotNull"]]

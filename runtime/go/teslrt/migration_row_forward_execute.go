@@ -8,6 +8,9 @@ import (
 )
 
 func pgExecuteRowForward(ctx context.Context, conn *pgx.Conn, b *pgRowBaseline, roles PgMigrationControlRoles) (PgMigrationControlState, error) {
+	if b != nil && b.target != nil && b.target.queueRemoval != nil {
+		return pgExecuteRowQueueRemoval(ctx, conn, b, roles, nil)
+	}
 	var initial, result PgMigrationControlState
 	if b.target == nil || b.target.compiled == nil || b.physical == nil {
 		return result, fmt.Errorf("row expansion requires exact compiler-linked physical history")

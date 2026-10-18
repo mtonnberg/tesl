@@ -41,7 +41,17 @@ func pgExpectedRowControl(e *pgCatalogExpectations, owner, name string) (*pgCata
 	digest := func(value, hash string) { check("(encode(sha256("+value+"), 'hex'::text) = "+hash+")", value, hash) }
 	bounded := func(n string) { check("(("+n+" >= 1) AND ("+n+" <= 2147483646))", n) }
 	switch name {
-	case "tesl_schema_stage_protocol":
+	case "tesl_row_queue_removal_staging":
+		col("version", "int4")
+		col("queue", "text")
+		col("source", "jsonb")
+		col("retirement", "bytea")
+		col("retirement_hash", "text")
+		con("p", "", "version")
+		check("((version >= 2) AND (version <= 2147483646))", "version")
+		hash("retirement_hash")
+		digest("retirement", "retirement_hash")
+	case "tesl_schema_stage_protocol", "tesl_schema_queue_removal_protocol":
 		col("id", "int2")
 		col("format", "int4")
 		con("p", "", "id")
@@ -80,7 +90,7 @@ func pgExpectedRowControl(e *pgCatalogExpectations, owner, name string) (*pgCata
 		check("(attempt_seq > 0)", "attempt_seq")
 		hash("payload_hash")
 		check("(code = ANY (ARRAY['execution-budget'::text, 'execution-trap'::text, 'invalid-result'::text]))", "code")
-	case "tesl_row_queue_restamps":
+	case "tesl_row_queue_restamps", "tesl_row_queue_removal_restamps":
 		col("job_id", "text")
 		col("from_version", "int4")
 		col("to_version", "int4")
@@ -92,7 +102,11 @@ func pgExpectedRowControl(e *pgCatalogExpectations, owner, name string) (*pgCata
 		col("claim_seq", "int8")
 		con("p", "", "job_id", "from_version")
 		check("(from_version >= 1)", "from_version")
-		check("((to_version = (from_version + 1)) AND (to_version <= 2147483646))", "to_version", "from_version")
+		if name == "tesl_row_queue_removal_restamps" {
+			check("((to_version > from_version) AND (to_version <= 2147483646))", "to_version", "from_version")
+		} else {
+			check("((to_version = (from_version + 1)) AND (to_version <= 2147483646))", "to_version", "from_version")
+		}
 		hash("contract_hash")
 		hash("payload_hash")
 		hash("retirement_hash")

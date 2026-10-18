@@ -8,14 +8,16 @@ module A = Migration_additive
 module R = Migration_transform_rules
 module T = Migration_transform
 
-type t = { coverage : S.t; additive : A.t; transforms : T.t option; queue_transforms : Migration_queue_transform.t list; version : int; source_seals : Migration_header.checked option }
+type t = { coverage : S.t; additive : A.t; transforms : T.t option; queue_transforms : Migration_queue_transform.t list; queue_removal : string option; version : int; source_seals : Migration_header.checked option }
 type prepared = { pcoverage : S.t; padditive : A.t; ptransforms : T.prepared option;
    pversion : int; pseals : Migration_header.checked option; pgraph : T.captured;
-   pqueue_transforms : Migration_queue_transform.t list; pproject_root : string }
+   pqueue_transforms : Migration_queue_transform.t list; pqueue_removal : string option; pproject_root : string }
 let coverage t = t.coverage
 let additive t = t.additive
 let transforms t = t.transforms
 let queue_transforms t = t.queue_transforms
+let queue_removal t = t.queue_removal
+let queue_transition t = t.queue_transforms<>[] || t.queue_removal<>None
 let version t = t.version
 let source_seals t = t.source_seals
 exception Invalid of S.error list
@@ -170,11 +172,29 @@ let prepare_queue_decisions ~project_root ~before ~after ~previous_file ~current
   | None ->
     let errors=Migration_queue.changes ~before ~after in
     if errors<>[] then raise(Invalid errors);
-    [],fixtures
+    [],None,fixtures
   | Some expression ->
     let holes=entry_holes expression in
     if holes<>[] then raise(Invalid holes);
-    let entries=record "MIG028" expression in
+     let entries=record "MIG028" expression in
+     if List.exists(fun(_,value)->fst(application value)="RemoveEmpty")entries then begin
+       let name,value=match entries with [entry]->entry | _ ->
+         reject "MIG028" (at expression) "RemoveEmpty requires exactly one whole-queue decision and no payload conversions" in
+       if application value<>("RemoveEmpty",[]) || version<2 || fixtures<>[] then
+         reject "MIG028" (at value) "RemoveEmpty requires an adjacent V(n-1) -> Vn edge, no arguments and no conversion fixtures";
+       let matches=I.queue_contracts before |> List.filter(fun q ->
+         let identity=Migration_queue.wire_identity before q.I.queue_name in
+         List.mem name [identity;q.queue_name]) in
+       let queue=match matches with [q]->q | _ -> reject "MIG028" (at value) "RemoveEmpty must name one exact previous queueSchema identity" in
+       let identity=Migration_queue.wire_identity before queue.I.queue_name in
+       let inventory i=I.queue_contracts i |> List.map(fun q ->
+         Migration_queue.wire_identity i q.I.queue_name,
+         List.map(fun p->Migration_queue.wire_identity i p.I.payload_name,p.payload_contract)q.payloads |> List.sort compare) |> List.sort compare in
+       let old=inventory before and fresh=inventory after in
+       if List.mem_assoc identity fresh || List.remove_assoc identity old<>fresh then
+         reject "MIG028" (at value) "RemoveEmpty requires the entire named queue absent and all surviving queue membership, payload/proof/codec contracts unchanged; rename, move and partial removal are unsupported";
+       [],Some identity,fixtures
+     end else begin
     let payloads inventory = I.queue_contracts inventory |> List.concat_map(fun q ->
       List.map(fun p -> Migration_queue.wire_identity inventory p.I.payload_name,
         (Migration_queue.wire_identity inventory q.I.queue_name,p))q.payloads) in
@@ -254,7 +274,8 @@ let prepare_queue_decisions ~project_root ~before ~after ~previous_file ~current
     let decisions=List.map(fun(identity,_,_,_)->Hashtbl.find checked_requests identity)requests in
     let remaining=List.combine fixtures fixture_bindings |> List.filter_map(fun(expr,(binding:T.function_binding))->
       if Hashtbl.mem used binding.identity then None else Some expr) in
-    decisions,remaining
+    decisions,None,remaining
+    end
 
 let prepare ?stored_value_compatibility ~compiler_abi ~source (m : module_form) =
   try
@@ -311,12 +332,14 @@ let prepare ?stored_value_compatibility ~compiler_abi ~source (m : module_form) 
       (* The supplied root may be an unsaved buffer. Adjacent metadata readers
          must see that same source view, not a pinned-only view that disappears
          when an integrity guard checks the caller's source preconditions. *)
-      let queue_transforms,fixtures=Source_input.with_overlays ~project_root:view_root [Source_input.canonical_path m.source_file,source] (fun () ->
+      let queue_transforms,queue_removal,fixtures=Source_input.with_overlays ~project_root:view_root [Source_input.canonical_path m.source_file,source] (fun () ->
         prepare_queue_decisions ~project_root ~before ~after
           ~previous_file:previous.root_file ~current_file:current.root_file ~version:target
           ~graph:source_graph ~root:m ~fixtures (List.assoc_opt "jobs" fields)) in
       let identities = identities before after (list "MIG024" same) in
       let definitions = record "MIG002" entities in
+      if queue_removal<>None && definitions<>[] then reject "MIG028" declaration.loc
+        "RemoveEmpty requires unchanged row entities and no entity migration decisions";
       let rules = ref [] in
       let transform_rules = ref [] and functions = ref [] in
       let entries = List.map (fun (entity,expression) ->
@@ -368,7 +391,7 @@ let prepare ?stored_value_compatibility ~compiler_abi ~source (m : module_form) 
       Option.iter (fun header -> ignore (checked (Migration_header.verify_unchanged header))) source_seals;
       Option.iter (fun located -> ignore (checked (Migration_closure.verify ~project_root
         ~root_file:(Validation_common.canonical_import_path m.source_file) ~source located))) closure;
-      Ok (Some {pcoverage=coverage;padditive=additive;ptransforms=transforms;pversion=target;pseals=source_seals;pgraph=source_graph;pqueue_transforms=queue_transforms;pproject_root=project_root})))
+      Ok (Some {pcoverage=coverage;padditive=additive;ptransforms=transforms;pversion=target;pseals=source_seals;pgraph=source_graph;pqueue_transforms=queue_transforms;pqueue_removal=queue_removal;pproject_root=project_root})))
   with Invalid errors -> Error errors
 
 let rec with_queue_conversions conversions run = match conversions with
@@ -394,7 +417,7 @@ let check_prepared prepared =
     | None -> Ok None
     | Some transforms -> Result.map Option.some (T.check_prepared transforms) in
   Result.map (fun transforms -> {coverage=prepared.pcoverage;additive=prepared.padditive;
-    transforms;queue_transforms=prepared.pqueue_transforms;version=prepared.pversion;source_seals=prepared.pseals}) transforms))
+    transforms;queue_transforms=prepared.pqueue_transforms;queue_removal=prepared.pqueue_removal;version=prepared.pversion;source_seals=prepared.pseals}) transforms))
 let with_prepared_list prepared run =
   let rec guards = function
     | [] -> T.with_prepared_list (List.filter_map (fun p -> p.ptransforms) prepared) run

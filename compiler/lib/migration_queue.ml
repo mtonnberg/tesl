@@ -16,7 +16,7 @@ let changes ~before ~after =
   List.concat_map (fun q ->
     let name = relative before q.I.queue_name in
     match List.assoc_opt name current with
-    | None -> [error q.queue_loc ("queueSchema `" ^ name ^ "` was removed or renamed; queue payload migrations are not implemented")]
+    | None -> [error q.queue_loc ("queueSchema `" ^ name ^ "` was removed or renamed; whole-queue removal requires a reviewed jobs: { " ^ name ^ ": RemoveEmpty } decision on an adjacent edge in an additive-only history. Source deletion does not authorize removal; queue identity rename is unsupported")]
     | Some target ->
       let payloads = List.map (fun p -> relative after p.I.payload_name,p) target.payloads in
       List.filter_map (fun payload ->

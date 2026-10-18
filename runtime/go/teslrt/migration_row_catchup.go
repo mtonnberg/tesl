@@ -23,6 +23,12 @@ func pgStageRowQueueHistory(ctx context.Context, conn *pgx.Conn, b *pgRowBaselin
 		if err != nil {
 			return err
 		}
+		if window.target.queueRemoval != nil {
+			if err := pgStageRowQueueRemoval(ctx, conn, window, roles, expected); err != nil {
+				return err
+			}
+			continue
+		}
 		if len(window.target.queueConversions) == 0 {
 			continue
 		}
@@ -262,11 +268,11 @@ func pgExecuteRowCatchupFor(ctx context.Context, conn *pgx.Conn, config *pgx.Con
 			}
 			if !pgRowEpochPreserving(plan) {
 				retireThrough = max(retireThrough, version-1)
-				if len(plan.queueConversions) > 0 {
+				if pgRowQueueEdge(plan) {
 					retireThrough = max(retireThrough, version)
 				}
 				if version < b.history.CurrentVersion {
-					if len(plan.queueConversions) == 0 {
+					if !pgRowQueueEdge(plan) {
 						if _, err := pgRowContractFor(b.database, version); err != nil {
 							return fmt.Errorf("schema catch-up requires reviewed Contract V%d: %w", version, err)
 						}
@@ -274,7 +280,7 @@ func pgExecuteRowCatchupFor(ctx context.Context, conn *pgx.Conn, config *pgx.Con
 					retireThrough = max(retireThrough, version)
 				}
 			}
-			if len(plan.queueConversions) > 0 && (version > state.Current || state.MinVersion < version) {
+			if pgRowQueueEdge(plan) && (version > state.Current || state.MinVersion < version) {
 				if err := pgCheckQueueCatchupStaging(ctx, conn, window, state); err != nil {
 					return err
 				}
@@ -294,7 +300,7 @@ func pgExecuteRowCatchupFor(ctx context.Context, conn *pgx.Conn, config *pgx.Con
 		}
 		for state.Current <= b.history.CurrentVersion {
 			window := windows[state.Current]
-			queueEdge := len(window.target.queueConversions) > 0
+			queueEdge := pgRowQueueEdge(window.target)
 			if !queueEdge || state.MinVersion < state.Current {
 				if err := pgCompleteCatchupIndexes(ctx, config, window, roles, state); err != nil {
 					return err
@@ -306,6 +312,9 @@ func pgExecuteRowCatchupFor(ctx context.Context, conn *pgx.Conn, config *pgx.Con
 			}
 			if queueEdge {
 				if state.MinVersion < state.Current {
+					if window.target.queueRemoval != nil {
+						return fmt.Errorf("RemoveEmpty V%d lacks its atomic retirement receipt", state.Current)
+					}
 					if err := pgCatchupQueueConversion(ctx, conn, window, roles); err != nil {
 						return err
 					}
@@ -327,13 +336,15 @@ func pgExecuteRowCatchupFor(ctx context.Context, conn *pgx.Conn, config *pgx.Con
 				}
 			}
 			next := windows[state.Current+1]
-			if !pgRowEpochPreserving(next.target) && state.MinVersion < state.Current {
+			if !pgRowEpochPreserving(next.target) && next.target.queueRemoval == nil && state.MinVersion < state.Current {
 				if _, err := pgExecuteRowEpoch(ctx, conn, window, roles, state.Current, false, false); err != nil {
 					return err
 				}
 			}
 			step, stop := context.WithTimeout(ctx, pgLeaseTimeout())
-			if len(next.target.queueConversions) > 0 {
+			if next.target.queueRemoval != nil {
+				state, err = pgExecuteRowQueueRemoval(step, conn, next, roles, expected)
+			} else if len(next.target.queueConversions) > 0 {
 				err = pgPublishRowQueueTarget(step, conn, b.history.Namespace, roles, b.queues[next.target.version-1].version, next.target.contract, next.target.hash)
 				if err == nil {
 					state, err = observe()

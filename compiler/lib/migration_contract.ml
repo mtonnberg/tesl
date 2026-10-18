@@ -265,7 +265,7 @@ let check_module ~compiler_abi ~source (m:module_form) = protect(fun () ->
   let edges=Migration_history_sources.completed_migrations h @ Option.to_list(Migration_history_sources.current_migration h) |> List.map(fun(s:Migration_history_sources.migration_source)->
    let ast=match Parser.parse_module s.path s.contents with Ok m -> m | Err e -> reject e.loc e.msg in
    match checked(Migration_declaration.check ~compiler_abi ~source:s.contents ast) with Some d -> d | None -> reject (Location.dummy_loc s.path) "contract requires its checked migration declaration") in
-   let check_history=if List.exists (fun edge -> Migration_declaration.queue_transforms edge<>[]) edges then H.check_queue_expansion else H.check in
+   let check_history=if List.exists Migration_declaration.queue_transition edges then H.check_queue_expansion else H.check in
    let history=checked(check_history ~schemas ~edges) in
   let plan=checked(R.plan history) in
   Some(checked(check ~plan ~namespace:"contract_validation" ~file ~source))))

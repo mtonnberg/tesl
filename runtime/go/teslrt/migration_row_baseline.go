@@ -95,6 +95,12 @@ func pgCompiledRowBaseline(database *Database) (*pgRowBaseline, error) {
 	if physical != nil {
 		result.physical = physical.versions[0]
 		result.target = physical.versions[history.CurrentVersion-1]
+		if slices.ContainsFunc(physical.versions, func(plan *pgRowPhysicalPlan) bool { return plan.queueRemoval != nil }) {
+			roles, err := pgMigrationRoles(config, config.User)
+			if err != nil || roles.Request == "" {
+				return nil, fmt.Errorf("RemoveEmpty requires Worker migration topology: %v", err)
+			}
+		}
 		if history.CurrentVersion > 1 {
 			previous := physical.versions[history.CurrentVersion-2]
 			if result.target.requiresContractVersion > 0 {
@@ -310,7 +316,7 @@ func pgRowCatchupSteps(b *pgRowBaseline, current int) ([]*pgRowBaseline, error) 
 		if err != nil {
 			return nil, err
 		}
-		if current < b.history.CurrentVersion-1 && !pgRowEpochPreserving(plan) {
+		if current < b.history.CurrentVersion-1 && !pgRowEpochPreserving(plan) && plan.queueRemoval == nil {
 			return nil, fmt.Errorf("worker catch-up from V%d to V%d reaches non-additive V%d; run app --schema catch-up with Worker credentials to execute retained conversions and reviewed intermediate Contracts before starting this worker", current, b.history.CurrentVersion, version)
 		}
 		step := *verified

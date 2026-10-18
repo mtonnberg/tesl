@@ -716,6 +716,12 @@
  (libraries tesl_compiler_lib alcotest unix str))
 
 (test
+ (name test_migration_queue_removal)
+ (modules test_migration_queue_removal)
+ (deps (source_tree fixtures/queue-removal))
+ (libraries tesl_compiler_lib alcotest unix str))
+
+(test
  (name test_migration_proof_retype_postgres)
  (modules test_migration_proof_retype_postgres)
  (libraries tesl_compiler_lib alcotest unix str))

@@ -212,7 +212,7 @@ let generate ~initial_version ~schemas ~edges =
      Inspect EVERY retained edge before selecting a fresh installation origin:
      choosing a later origin must not silently skip an unsupported transform. *)
    List.iter (fun (edge : D.t) ->
-     if D.queue_transforms edge<>[] then reject ~code:"MIG028" loc
+     if D.queue_transition edge then reject ~code:"MIG028" loc
        "checked queue conversions cannot be treated as additive physical history";
      List.iter (fun (entity,kind) -> match kind with
       | S.Transform | S.Reset -> reject

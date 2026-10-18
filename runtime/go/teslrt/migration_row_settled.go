@@ -25,7 +25,7 @@ func pgRowSettledMode(ctx context.Context, tx pgx.Tx, database *Database, window
 	}
 	// A queue-only Contract changes payload admission, not the row SQL shape.
 	// Its bound physical plan already contains any settled row predecessor.
-	if pgRowEpochPreserving(window) || len(window.queueConversions) > 0 || floor < window.version {
+	if pgRowEpochPreserving(window) || pgRowQueueEdge(window) || floor < window.version {
 		return false, nil
 	}
 	settled, err := pgCompiledRowSettledPlan(database, window.version)

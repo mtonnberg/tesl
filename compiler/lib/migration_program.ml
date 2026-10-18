@@ -179,7 +179,7 @@ let capture_history ~source_only ~entry ~source f = protect entry.source_file (f
     let queue_versions=queue_versions schemas edges in
     let inventories = List.map (fun (s:H.schema) -> s.inventory) schemas in
     if source_only || H.contracts h<>[] then begin
-      let rows=checked((if List.exists(fun edge->D.queue_transforms edge<>[])edges then RH.check_queue_expansion else RH.check) ~schemas:inventories ~edges) in
+      let rows=checked((if List.exists D.queue_transition edges then RH.check_queue_expansion else RH.check) ~schemas:inventories ~edges) in
       if RH.retirements rows<>[] then
        List.iter (fun (m:module_form) ->
          (* [modules] is the application's explicit transitive import graph;
@@ -265,7 +265,7 @@ let queues_to_json ~quote t =
  let contract q=Printf.sprintf {|{"queue":%s,"payloads":%s}|} (quote q.queue) (array payload q.payloads) in
  let version v=Printf.sprintf {|{"version":%d,"storageSnapshotHash":%s,"schemaSnapshotHash":%s,"checkedInventory":"complete","sourceSealInventory":%s,"contracts":%s}|}
   v.version (quote v.storage_snapshot_hash) (quote v.schema_snapshot_hash) (quote v.source_seal_inventory) (array contract v.contracts) in
-  let has_transitions=List.exists(fun(_,rows)->List.exists(fun edge->D.queue_transforms edge<>[])(RH.declarations rows))t.row_histories in
+  let has_transitions=List.exists(fun(_,rows)->List.exists D.queue_transition (RH.declarations rows))t.row_histories in
   let database d=
   let origin o=Printf.sprintf {|{"initialVersion":%d,"versions":%s}|} o.initial_version
    (array string_of_int (List.init (d.current_version-o.initial_version+1) (fun i -> o.initial_version+i))) in
@@ -273,7 +273,7 @@ let queues_to_json ~quote t =
     let nodes=match List.assoc_opt d.identity t.row_histories with
      | None -> []
      | Some rows -> let plan=checked(Migration_retained_storage.plan rows) in
-       Migration_retained_storage.versions plan |> List.filter(fun v->List.exists(fun edge->D.version edge=v.Migration_retained_storage.version && D.queue_transforms edge<>[])(RH.declarations rows))
+       Migration_retained_storage.versions plan |> List.filter(fun v->List.exists(fun edge->D.version edge=v.Migration_retained_storage.version && D.queue_transition edge)(RH.declarations rows))
        |> List.map(fun v->let doc,hash=RH.contract Migration_canonical.Migration (Migration_retained_storage_canonical.version_node ~family:d.family ~namespace:d.namespace plan v) in
          Printf.sprintf {|{"contract":%s,"hash":%s}|}(quote doc)(quote hash)) in
     ",\"transitions\":[" ^ String.concat "," nodes ^ "]" in

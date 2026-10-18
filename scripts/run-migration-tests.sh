@@ -67,6 +67,8 @@ run_phase() {
   return "$result"
 }
 compiler_test() {
+  # Local investigation may narrow the native fixture; the mandatory gate may not.
+  if [[ "$1" == test_migration_queue_removal ]]; then unset TESL_QUEUE_REMOVAL_TEST_FILTER; fi
   run_phase "$1" 1800 dune exec --root "$repo_root/compiler" --no-build "./test/$1.exe"
 }
 runtime_test() {
@@ -109,7 +111,7 @@ if (( $# == 0 )); then
   # proof obligations and the isolated candidate all remain mandatory.
   for suite in \
     test_staged_indexes \
-    test_migration_queue_application test_queue_candidate_app \
+    test_migration_queue_application test_migration_queue_removal test_queue_candidate_app \
     test_migration_fixtures test_migration_row_companion test_migration_contract \
     test_migration_row_storage test_migration_retype test_migration_row_forward \
     test_migration_row_access test_migration_delete test_migration_row_additive \

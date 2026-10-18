@@ -27,6 +27,11 @@ func pgRowQueueSources(history PgCompiledMigrationHistory) ([]pgRowQueueSource, 
 	if inventory.Database != history.Database || inventory.Family != history.Family || inventory.Namespace != history.Namespace || inventory.InitialVersion != 1 || inventory.CurrentVersion != history.CurrentVersion || len(inventory.Versions) != history.CurrentVersion {
 		return nil, fmt.Errorf("row queue inventory owner or complete version range differs")
 	}
+	if physical := compiledRowPhysicalHistories[compiledRowHistories[history.Family]]; physical != nil {
+		if err := pgCheckQueueRemovalHistory(physical.versions, inventory.Versions); err != nil {
+			return nil, err
+		}
+	}
 	result := make([]pgRowQueueSource, 0, len(inventory.Versions))
 	for i, version := range inventory.Versions {
 		if version.Version != i+1 {
@@ -48,6 +53,9 @@ func pgRowQueueSources(history PgCompiledMigrationHistory) ([]pgRowQueueSource, 
 }
 
 func pgQueuePhysicalTransitionMatches(before, after PgQueueSourceVersion, plan *pgRowPhysicalPlan) bool {
+	if plan != nil && plan.queueRemoval != nil {
+		return pgQueueRemovalMatches(before, after, plan)
+	}
 	if plan == nil || before.Version < 1 || after.Version != before.Version+1 || plan.version != after.Version || len(plan.windows) != 0 || len(plan.queueConversions) == 0 || plan.schemaSnapshotHash != after.SchemaSnapshotHash || plan.storageSnapshotHash != after.StorageSnapshotHash {
 		return false
 	}

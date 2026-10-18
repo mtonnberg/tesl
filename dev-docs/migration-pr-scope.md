@@ -103,10 +103,14 @@ turn the report green.
 | Drop `ec07129` | `PR-DROP`: compiler PostgreSQL suite invokes two native application/source witnesses with generated fixtures | Recorded 16 planning cases, PostgreSQL suite and six embedded seam tests. Standalone `row-retirement` selection would skip these fixtures |
 | Latency `923f51f` | `PR-LATENCY`: comparator entrypoint and threshold/calibration tests; `latency-regression` and `latency-statistics` | Recorded standalone calibrated comparison pass; no absolute overhead or hosted reliability claim |
 | Preparation `ce73748`, following groundwork `4f03e6f` | `PR-UNIQUE`: stage history, protected registration/observation; `test_staged_indexes` and `test_migration_row_indexes` compiler-loop routes | Connected bounded Stage/Carry builds NONUNIQUE indexes and retains pending records. Targeted native preparation and Memory results are not V9 guards, promotion or V10 reliance |
+| Bounded empty-queue removal | `PR-EMPTY-QUEUE`: explicit source decision, Installer staging, fenced execution and protected SQL mutation; registered source and both native cases in `test_migration_queue_removal` | Merged source checks and real V1/V2 and V1→additive V2→RemoveEmpty V3→additive V4 PostgreSQL/race fixtures passed. One removal edge, additive prefixes/suffixes; not universal history support or full CI |
 
-Required acceptance still pending: **PR-UNIQUE and PR-EMPTY-QUEUE**. The explicit
-pending-acceptance guard must be reviewed with real protocol witnesses before either
-status can change to `evidenced`; borrowing another feature's links or changing a
-status string cannot establish completion. The latest complete CI invocation
-recorded in delivery status failed; targeted preparation/facility/Drop/latency passes
-do not supersede that result.
+Required production work still pending: **PR-UNIQUE**. Stage/Carry preparation is
+not the full unique-writer guard/promotion/recovery protocol. Bounded empty-queue
+removal is technically accepted and evidenced by its actual implementation and
+executed native fixtures; no separate human approval flag is required. Its validator
+checks require source/staging/execution/protected-mutation links, the real compiled
+fixture harness and mandatory native selection. Borrowing another feature's tests,
+substituting an isolated emptiness helper or flipping a status string cannot pass.
+The latest complete CI invocation recorded in delivery status failed; these targeted
+results do not supersede that result or establish full-roadmap reconciliation.

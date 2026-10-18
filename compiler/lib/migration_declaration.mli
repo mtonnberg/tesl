@@ -13,6 +13,8 @@ val coverage : t -> Migration_sparse.t
 val additive : t -> Migration_additive.t
 val transforms : t -> Migration_transform.t option
 val queue_transforms : t -> Migration_queue_transform.t list
+val queue_removal : t -> string option
+val queue_transition : t -> bool
 val version : t -> int
 val source_seals : t -> Migration_header.checked option
 val diagnostics : string -> Ast.module_form -> Frontend_check.diagnostic list

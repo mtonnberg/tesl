@@ -423,6 +423,9 @@ func pgReadQueueHistory(history PgCompiledMigrationHistory, payload string, init
 			for queue, jobs := range previous {
 				next, exists := currentContracts[queue]
 				if !exists {
+					if transition := transitions[version.Version]; transition != nil && transition.queueRemoval != nil && transition.queueRemoval.queue == queue {
+						continue
+					}
 					r.fail("queue contract was removed across source versions")
 				}
 				for job, payload := range jobs {

@@ -26,6 +26,36 @@ REVIEWED.update(SCALE="deferred-postmerge", RESERVATIONS="deferred-postmerge",
                 CONVENIENCES="nonblocker")
 REVIEWED = {"PR-" + key: value for key, value in REVIEWED.items()}
 
+# These are concrete execution/mutation links, not a blanket acceptance switch.
+# A standalone emptiness helper or borrowed source-only tests cannot supply them.
+EMPTY_QUEUE_IMPLEMENTATION = {
+    "compiler/lib/migration_declaration.ml#prepare_queue_decisions",
+    "compiler/lib/migration_row_history.ml#check_internal",
+    "runtime/go/teslrt/migration_row_queue_removal_execute.go#pgStageRowQueueRemoval",
+    "runtime/go/teslrt/migration_row_queue_removal_execute.go#pgExecuteRowQueueRemoval",
+    "runtime/go/teslrt/migration_row_queue_removal_spec.go#pgRowQueueRemovalFunctions",
+}
+EMPTY_QUEUE_HARNESS = "compiler/test/test_migration_queue_removal.ml"
+EMPTY_QUEUE_WITNESSES = {EMPTY_QUEUE_HARNESS + "#" + name
+                         for name in ("reviewed_source_scope", "native", "native_chain")}
+EMPTY_QUEUE_NATIVE_TESTS = {
+    "application_test.go": (
+        "TestQueueRemovalNonempty", "TestQueueRemovalSurvivorsAndReplay",
+        "TestQueueRemovalInFlightTransactions", "TestQueueRemovalPostWaitAdmission",
+        "TestQueueRemovalCrashReplay", "TestQueueRemovalForgedStagingAndACL",
+        "TestQueueRemovalFreshLatestDeployment", "TestQueueRemovalActiveAttemptRefuses",
+        "TestQueueRemovalWorkerAutomation",
+        "TestQueueRemovalMissingClaimAuthorityCannotManufactureEmptiness",
+        "TestQueueRemovalRequiresOriginalProtocolMarker",
+    ),
+    "chain_test.go": (
+        "TestQueueRemovalChainBlockedResumeAndHistoricalCatchup",
+        "TestQueueRemovalChainAlreadyRemovedPrefix", "TestQueueRemovalChainFreshLatest",
+        "TestQueueRemovalChainProtectedBindingAndAllFences",
+        "TestQueueRemovalChainWitnessesPresent", "TestQueueRemovalChainOlderProducerAndClaimRace",
+    ),
+}
+
 
 def unique_object(pairs):
     result = {}
@@ -130,6 +160,55 @@ def blocks(root):
     return result
 
 
+def empty_queue_protocol(root, req):
+    """Bounded live-link checks; runtime assertions still require real execution."""
+    if not EMPTY_QUEUE_IMPLEMENTATION <= set(req["implementation"]):
+        raise ValueError("empty queue evidence requires source, staging, execution and protected mutation implementations")
+    linked = {w["ref"] for w in req["witnesses"] if w["route"] == "compiler"}
+    if not EMPTY_QUEUE_WITNESSES <= linked:
+        raise ValueError("empty queue evidence requires registered source and both compiled native witnesses")
+    executor = read(root, "runtime/go/teslrt/migration_row_queue_removal_execute.go")
+    catalog = read(root, "runtime/go/teslrt/migration_row_queue_removal_spec.go")
+    if "pgRowEpochDrain(" not in executor or "tesl_remove_empty_queue($1,$2,$3,$4,$5)" not in executor:
+        raise ValueError("empty queue execution must invoke the fenced protected mutation")
+    if not re.search(r'\{"tesl_remove_empty_queue",\s*"[^"]+",\s*"boolean",\s*"volatile"', catalog):
+        raise ValueError("empty queue protected mutation catalog entry is missing")
+    connections = {
+        "runtime/go/teslrt/migration_row_control_spec.go": ("functions = append(functions, pgRowQueueRemovalFunctions(namespace)...)",),
+        "runtime/go/teslrt/migration_row_catchup.go": (
+            "pgStageRowQueueRemoval(ctx, conn, window, roles, expected)",
+            "pgExecuteRowQueueRemoval(step, conn, next, roles, expected)",
+        ),
+        "runtime/go/teslrt/migration_row_command.go": ("pgExecuteRowQueueRemoval(ctx, conn, selected, roles, expected)",),
+    }
+    for path, calls in connections.items():
+        if not all(call in read(root, path) for call in calls):
+            raise ValueError("empty queue public execution/mutation route is disconnected: " + path)
+    harness = read(root, EMPTY_QUEUE_HARNESS)
+    patterns = (
+        r"^let native \(\) = compiled_history false$",
+        r"^let native_chain \(\) = compiled_history true$",
+        r"Compile\.compile_go_source\b",
+        r"go build -race -tags tesl_migration_test -o app",
+        r"go test -race -tags tesl_migration_test -c -o application\.test",
+        r"remove root;",
+        r'"\^TestQueueRemovalChain" else "\^TestQueueRemoval"',
+        r"-test\.run %s",
+        r"Sys\.command\(command",
+    )
+    if not all(re.search(pattern, harness, re.M) for pattern in patterns):
+        raise ValueError("empty queue native harness must compile and execute real race-enabled fixtures")
+    for filename, tests in EMPTY_QUEUE_NATIVE_TESTS.items():
+        path = "compiler/test/fixtures/queue-removal/" + filename
+        if path not in harness:
+            raise ValueError("empty queue native fixture is not supplied by the compiler harness: " + path)
+        for name in tests:
+            declaration(root, path + "#" + name, witness=True)
+    runner = read(root, RUNNER)
+    if not re.search(r'if \[\[ "\$1" == test_migration_queue_removal \]\]; then unset TESL_QUEUE_REMOVAL_TEST_FILTER; fi', runner):
+        raise ValueError("empty queue mandatory runner must clear the investigative native filter")
+
+
 def validate(root, spec):
     if set(spec) != {"version", "requirements", "source_mappings"} or spec["version"] != 1:
         raise ValueError("unsupported register schema")
@@ -159,8 +238,10 @@ def validate(root, spec):
             raise ValueError("accepted local evidence record missing")
         if req["status"] == "evidenced" and (not req["implementation"] or not mandatory or not (all(mandatory) or accepted_local)):
             raise ValueError(f"evidenced requirement lacks implementation/test/mandatory runner: {key}")
-        if key in {"PR-UNIQUE", "PR-EMPTY-QUEUE"} and req["status"] == "evidenced":
+        if key == "PR-UNIQUE" and req["status"] == "evidenced":
             raise ValueError(f"pending acceptance requires reviewed protocol witnesses, not groundwork: {key}")
+        if key == "PR-EMPTY-QUEUE" and req["status"] == "evidenced":
+            empty_queue_protocol(root, req)
         if req["disposition"] == "required" and req["status"] != "evidenced":
             pending.append(key)
     inventory = blocks(root)

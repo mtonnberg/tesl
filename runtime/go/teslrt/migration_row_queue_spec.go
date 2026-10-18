@@ -40,13 +40,13 @@ begin
   pos:=pos+count_bytes;
  end loop;
  if (width=8 and fields[1] not in ('tesl-retained-physical-version-v1','tesl-retained-physical-version-v2')) or
-     (width=9 and fields[1] not in ('tesl-retained-physical-version-v3','tesl-retained-physical-version-v4','tesl-retained-physical-version-v6','tesl-retained-physical-version-v8')) or
+     (width=9 and fields[1] not in ('tesl-retained-physical-version-v3','tesl-retained-physical-version-v4','tesl-retained-physical-version-v6','tesl-retained-physical-version-v8','tesl-retained-physical-version-v9')) or
      (width=10 and fields[1] not in ('tesl-retained-physical-version-v5','tesl-retained-physical-version-v7')) or
     fields[2]!~'^(Schema\.[A-Z][A-Za-z0-9_]*|[A-Z][A-Za-z0-9_]*Schema)$' or
     pg_catalog.octet_length(fields[3])<1 or pg_catalog.octet_length(fields[3])>63 or
     fields[4]!~'^[1-9][0-9]{0,9}$' or fields[5]!~'^[0-9a-f]{64}$' or fields[6]!~'^[0-9a-f]{64}$' then raise exception 'tesl: invalid physical source header fields'; end if;
  if fields[4]::bigint>2147483646 or pos>=size or pg_catalog.get_byte(doc,pos)<>108 then raise exception 'tesl: invalid physical source version or entity framing'; end if;
- return pg_catalog.jsonb_build_object('family',fields[2],'namespace',fields[3],'version',fields[4],'schema',fields[5],'storage',fields[6]);
+ return pg_catalog.jsonb_build_object('format',fields[1],'family',fields[2],'namespace',fields[3],'version',fields[4],'schema',fields[5],'storage',fields[6]);
 end`},
 		{"tesl_register_row_queue_source", "family text, v integer, storage_snapshot text, schema_snapshot text, creator_abi text, compatibility text, source_seal text, inventory_hash text, contracts jsonb, binding bytea, binding_hash text, expansion_hash text", "void", "volatile", `
 declare s ` + ns + `tesl_schema_state%rowtype; old ` + ns + `tesl_queue_versions%rowtype;
@@ -67,7 +67,16 @@ begin
  select * into physical from ` + ns + `tesl_row_physical where version=v;
  if not found or expansion_hash is null or physical.contract_hash<>expansion_hash or physical.stored_value_compatibility<>compatibility then raise exception 'tesl: row queue inventory lacks exact physical expansion binding'; end if;
  source_header:=` + ns + `tesl_row_physical_source_header(physical.contract);
- if source_header->>'family'<>family or source_header->>'namespace'<>pg_catalog.convert_from(pg_catalog.decode('` + hex.EncodeToString([]byte(namespace)) + `','hex'),'UTF8') or source_header->>'version'<>v::text or source_header->>'schema'<>schema_snapshot or source_header->>'storage'<>storage_snapshot then raise exception 'tesl: row queue source hashes differ from the stored physical header'; end if;
+  if source_header->>'family'<>family or source_header->>'namespace'<>pg_catalog.convert_from(pg_catalog.decode('` + hex.EncodeToString([]byte(namespace)) + `','hex'),'UTF8') or source_header->>'version'<>v::text or source_header->>'schema'<>schema_snapshot or source_header->>'storage'<>storage_snapshot then raise exception 'tesl: row queue source hashes differ from the stored physical header'; end if;
+ if source_header->>'format'='tesl-retained-physical-version-v9' then
+  if not ` + ns + `tesl_row_queue_removal_source_valid(v) or not exists(
+   select 1 from ` + ns + `tesl_row_queue_removal_staging d
+   join ` + ns + `tesl_row_queue_target_staging t on t.version=d.version and t.contract=physical.contract and t.contract_hash=physical.contract_hash
+   join ` + ns + `tesl_row_queue_retirements receipt on receipt.version=d.version and receipt.retirement=d.retirement and receipt.retirement_hash=d.retirement_hash
+   where d.version=v and d.source->'new'=contracts and d.source->>'newHash'=inventory_hash
+    and t.compiler_abi=creator_abi and t.stored_value_compatibility=compatibility) then
+   raise exception 'tesl: removal source registration requires exact staged source and atomic receipt'; end if;
+ end if;
  select * into old from ` + ns + `tesl_queue_versions where version=v;
  if found then
   if old.inventory_hash<>inventory_hash or old.storage_snapshot_hash<>storage_snapshot or old.schema_snapshot_hash<>schema_snapshot or old.stored_value_compatibility<>compatibility or ` + ns + `tesl_queue_inventory_json(v)<>contracts
@@ -91,6 +100,24 @@ begin
 end`},
 		{"tesl_row_queue_transition_valid", "old_contracts jsonb, new_contracts jsonb, v integer", "boolean", "stable", `
 begin
+ if exists(select 1 from ` + ns + `tesl_row_queue_removal_staging where version<v) then
+  if not ` + ns + `tesl_queue_inventory_preserves(old_contracts,new_contracts) then return false; end if;
+  if exists(select 1 from ` + ns + `tesl_row_queue_removal_staging d
+   cross join lateral pg_catalog.jsonb_array_elements(new_contracts) q
+   where d.version<v and (q->>'queue'=d.queue or exists(
+    select 1 from pg_catalog.jsonb_array_elements(d.source->'old') old_queue
+    cross join lateral pg_catalog.jsonb_array_elements(old_queue->'payloads') old_job
+    cross join lateral pg_catalog.jsonb_array_elements(q->'payloads') new_job
+    where old_queue->>'queue'=d.queue and old_job->>'job'=new_job->>'job'))) then return false; end if;
+ end if;
+ if exists(select 1 from ` + ns + `tesl_row_queue_removal_staging where version=v) then
+  return ` + ns + `tesl_row_queue_removal_source_valid(v) and exists(select 1 from ` + ns + `tesl_row_queue_removal_staging d
+   join ` + ns + `tesl_row_queue_target_staging t on t.version=d.version
+   join ` + ns + `tesl_row_physical p on p.version=t.version and p.contract=t.contract and p.contract_hash=t.contract_hash
+    and p.predecessor_hash=t.predecessor_hash and p.compiler_abi=t.compiler_abi and p.stored_value_compatibility=t.stored_value_compatibility and not p.epoch_preserving and p.operation_count=0
+   join ` + ns + `tesl_row_queue_retirements r on r.version=d.version and r.retirement=d.retirement and r.retirement_hash=d.retirement_hash
+   where d.version=v and d.source->'old'=old_contracts and d.source->'new'=new_contracts);
+ end if;
  if not exists(select 1 from ` + ns + `tesl_row_queue_target_staging where version=v)
   and ` + ns + `tesl_queue_inventory_preserves(old_contracts,new_contracts) then return true; end if;
   if v is null or v<2 or v>2147483646 then return false; end if;
@@ -142,6 +169,7 @@ func pgRowQueueOperationFunctions(namespace string) []pgMigrationControlFunction
 			functions[i].body = strings.Replace(functions[i].body, " delete from "+ns+"tesl_jobs j", " delete from "+ns+"tesl_row_queue_conversion_attempts a where a.job_id=tesl_queue_complete.job_id;\n delete from "+ns+"tesl_jobs j", 1)
 		}
 		if functions[i].name == "tesl_queue_enqueue" {
+			functions[i].body = strings.Replace(functions[i].body, " insert into "+ns+"tesl_jobs", " if exists(select 1 from "+ns+"tesl_row_queue_removal_restamps r where r.job_id=tesl_queue_enqueue.job_id) then raise exception 'tesl: audited job identity cannot be reused'; end if;\n insert into "+ns+"tesl_jobs", 1)
 			functions[i].body = strings.Replace(functions[i].body, " insert into "+ns+"tesl_jobs", " if exists(select 1 from "+ns+"tesl_row_queue_discards d where d.job_id=tesl_queue_enqueue.job_id) then raise exception 'tesl: discarded job identity cannot be reused'; end if;\n insert into "+ns+"tesl_jobs", 1)
 			functions[i].body = strings.Replace(functions[i].body, " insert into "+ns+"tesl_jobs", " if exists(select 1 from "+ns+"tesl_row_queue_conversion_receipts r where r.job_id=tesl_queue_enqueue.job_id) or exists(select 1 from "+ns+"tesl_row_queue_conversion_failures r where r.job_id=tesl_queue_enqueue.job_id) or exists(select 1 from "+ns+"tesl_row_queue_restamps r where r.job_id=tesl_queue_enqueue.job_id) then raise exception 'tesl: audited job identity cannot be reused'; end if;\n insert into "+ns+"tesl_jobs", 1)
 		}

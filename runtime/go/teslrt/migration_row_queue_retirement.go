@@ -130,6 +130,13 @@ begin
      where r.version=a.to_version and r.step='retired' and r.artefact_hash=a.retirement_hash))
    or not exists(select 1 from ` + ns + `tesl_queue_payloads old join ` + ns + `tesl_queue_payloads target
     on target.version=a.to_version and target.queue=old.queue and target.job_type=old.job_type and target.contract=old.contract and target.contract_hash=old.contract_hash
+     where old.version=a.from_version and old.queue=a.queue and old.job_type=a.job_type and old.contract_hash=a.contract_hash))
+  and not exists(select 1 from ` + ns + `tesl_row_queue_removal_restamps a
+   where not exists(select 1 from ` + ns + `tesl_row_queue_removal_staging d
+    join ` + ns + `tesl_row_queue_retirements r on r.version=d.version and r.retirement=d.retirement and r.retirement_hash=d.retirement_hash
+    where r.version=a.to_version and r.retirement_hash=a.retirement_hash and d.queue<>a.queue)
+   or not exists(select 1 from ` + ns + `tesl_queue_payloads old join ` + ns + `tesl_queue_payloads target
+    on target.version=a.to_version and target.queue=old.queue and target.job_type=old.job_type and target.contract=old.contract and target.contract_hash=old.contract_hash
     where old.version=a.from_version and old.queue=a.queue and old.job_type=a.job_type and old.contract_hash=a.contract_hash));
 end`}, {"tesl_row_queue_status", "", "jsonb", "stable", `
 declare s ` + ns + `tesl_schema_state%rowtype; jobs jsonb; total_types bigint;
@@ -152,7 +159,7 @@ begin
   and not ` + activeFailure + `;
  select count(*) into attempt_count from ` + ns + `tesl_row_queue_conversion_attempts;
  select count(*) into recent_count from ` + ns + `tesl_schema_instances where version>=s.min_version and version<s.current and last_seen>pg_catalog.clock_timestamp()-interval '30 seconds';
- select count(*) into restamp_count from ` + ns + `tesl_row_queue_restamps;
+ select (select count(*) from ` + ns + `tesl_row_queue_restamps)+(select count(*) from ` + ns + `tesl_row_queue_removal_restamps) into restamp_count;
  select count(*) into discarded_count from ` + ns + `tesl_row_queue_discards;
  select coalesce(pg_catalog.jsonb_agg(x.item),'[]'::jsonb) into discard_plans from (
   select pg_catalog.jsonb_build_object('queue',c.queue,'jobType',c.job_type,'fromVersion',c.from_version,'toVersion',c.to_version,
@@ -202,6 +209,18 @@ func pgRowQueueRetirementDocument(ctx context.Context, tx pgx.Tx, namespace stri
 	plan, err := pgParseRowPhysicalPlan(hex.EncodeToString(raw), physical)
 	if err != nil {
 		return result, err
+	}
+	if plan.queueRemoval != nil {
+		var valid bool
+		var receipt []byte
+		if err := tx.QueryRow(ctx, "select "+ns+"tesl_row_queue_removal_source_valid($1),d.retirement,d.retirement_hash from "+ns+"tesl_row_queue_removal_staging d join "+ns+"tesl_row_queue_target_staging t on t.version=d.version where d.version=$1 and t.database_uuid::text=$2 and t.fence_ns=$3 and t.contract_hash=$4 and t.contract=$5 and t.compiler_abi=$6", version, state.DatabaseUUID, state.FenceNamespace, physical, raw, result.abi).Scan(&valid, &receipt, &result.hash); err != nil {
+			return result, err
+		}
+		if !valid {
+			return result, fmt.Errorf("queue removal receipt lost its exact staged source binding")
+		}
+		result.document = hex.EncodeToString(receipt)
+		return result, nil
 	}
 	if plan.namespace != namespace || plan.family != family || len(plan.queueConversions) == 0 || len(plan.windows) != 0 || pgRowEpochPreserving(plan) {
 		return result, fmt.Errorf("queue retirement requires its exact queue-only target")

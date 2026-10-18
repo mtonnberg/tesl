@@ -57,6 +57,7 @@ type pgRowPhysicalPlan struct {
 	windows                                 []pgRowPhysicalWindow
 	retirements                             []pgRowPhysicalRetirement
 	queueConversions                        []pgRowPhysicalQueueConversion
+	queueRemoval                            *pgRowPhysicalQueueRemoval
 	stages                                  []pgStagePreparation
 	contract, hash                          string
 }
@@ -91,6 +92,7 @@ func pgParseRowPhysicalShape(contract, hash string, settled bool) (*pgRowPhysica
 		valid = valid || (n.list(9) && n.children[0].isAtom("tesl-retained-physical-version-v6"))
 		valid = valid || (n.list(10) && n.children[0].isAtom("tesl-retained-physical-version-v7"))
 		valid = valid || (n.list(9) && n.children[0].isAtom("tesl-retained-physical-version-v8"))
+		valid = valid || (n.list(9) && n.children[0].isAtom("tesl-retained-physical-version-v9"))
 		if !valid {
 			return nil, fmt.Errorf("invalid retained physical document")
 		}
@@ -123,6 +125,13 @@ func pgParseRowPhysicalShape(contract, hash string, settled bool) (*pgRowPhysica
 		return n.children
 	}
 	plan := &pgRowPhysicalPlan{settled: settled, family: atom(n.children[1]), namespace: atom(n.children[2]), version: number(n.children[3], 2147483646), schemaSnapshotHash: atom(n.children[4]), storageSnapshotHash: atom(n.children[5]), contract: contract, hash: hash}
+	if n.children[0].isAtom("tesl-retained-physical-version-v9") {
+		var err error
+		plan.queueRemoval, err = pgParseQueueRemoval(n.children[8])
+		if err != nil || plan.version < 2 || !n.children[7].list(0) {
+			return nil, fmt.Errorf("invalid adjacent queue-only removal: %v", err)
+		}
+	}
 	if n.children[0].isAtom("tesl-retained-physical-version-v8") {
 		var err error
 		plan.stages, err = pgParseStagePreparations(n.children[8])
@@ -492,6 +501,19 @@ func pgValidateRowPhysicalLineage(previous, plan *pgRowPhysicalPlan) error {
 				return fmt.Errorf("table retirement changed retained physical entity")
 			}
 		}
+	}
+	if plan.queueRemoval != nil {
+		if previous == nil || previous.version+1 != plan.version || !pgRowEpochPreserving(previous) || len(previous.stages) != 0 || plan.queueRemoval.fromSchema != previous.schemaSnapshotHash || plan.queueRemoval.fromStorage != previous.storageSnapshotHash || len(plan.entities) != len(previous.entities) {
+			return fmt.Errorf("queue removal requires its exact additive adjacent predecessor")
+		}
+		for i := range plan.entities {
+			if !pgPhysicalEntityEqual(&plan.entities[i], previous.entity(plan.entities[i].identity)) {
+				return fmt.Errorf("queue removal changed surviving row storage")
+			}
+		}
+	}
+	if previous != nil && previous.queueRemoval != nil && (!pgRowEpochPreserving(plan) || len(plan.stages) != 0) {
+		return fmt.Errorf("RemoveEmpty currently requires an ordinary additive successor")
 	}
 	for _, entity := range plan.entities {
 		var old *pgRowPhysicalEntity

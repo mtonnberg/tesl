@@ -78,7 +78,7 @@ func pgRowControlTables() []pgMigrationControlTable {
  primary key(version,entity),unique(version,table_name),unique(version,ordinal),
  check(pg_catalog.encode(pg_catalog.sha256(type_contract),'hex')=type_contract_hash),
  check(pg_catalog.encode(pg_catalog.sha256(physical_storage),'hex')=physical_storage_hash)`},
-	}, append(append(append(pgRowForwardTables(), pgRowLifecycleTables()...), pgRowQueueWorkTables()...), pgRowQueueRetirementTables()...)...), pgStageControlTables()...)
+	}, append(append(append(pgRowForwardTables(), pgRowLifecycleTables()...), pgRowQueueWorkTables()...), pgRowQueueRetirementTables()...)...), append(pgStageControlTables(), pgRowQueueRemovalTables()...)...)
 }
 
 // Format5 binds each version to its original baseline and checked expansion
@@ -90,6 +90,8 @@ func pgRowControlFunctions(namespace string) []pgMigrationControlFunction {
 	for i, fn := range functions {
 		guard := ` if v is null or v<1 or v>2147483646 or not exists(select 1 from ` + ns + `tesl_schema_meta where id=1 and format_version=5 and initial_version=1) then
  raise exception 'tesl: unsupported bounded format5 row version'; end if;
+ if not exists(select 1 from ` + ns + `tesl_schema_queue_removal_protocol where id=1 and format=1) then
+ raise exception 'tesl: missing original-V1 queue removal protocol marker'; end if;
  if v>1 and not exists(select 1 from ` + ns + `tesl_row_physical where version=v) then
  raise exception 'tesl: row V2 has no protected physical manifest'; end if;
  if not exists(select 1 from ` + ns + `tesl_row_baseline b join ` + ns + `tesl_row_versions baseline_version on baseline_version.version=b.initial_version and baseline_version.inventory_hash=b.inventory_hash
@@ -114,7 +116,11 @@ func pgRowControlFunctions(namespace string) []pgMigrationControlFunction {
  raise exception 'tesl: object does not match exact row baseline'; end if;
 `
 		case "tesl_record_expanded":
-			guard += ` if v>1 and exists (
+			guard += ` if exists(select 1 from ` + ns + `tesl_row_queue_removal_staging where version=v)
+ and (not ` + ns + `tesl_row_queue_removal_source_valid(v) or not exists(select 1 from ` + ns + `tesl_row_queue_retirements removal_receipt
+  join ` + ns + `tesl_row_queue_removal_staging removal_decision on removal_decision.version=removal_receipt.version and removal_decision.retirement=removal_receipt.retirement and removal_decision.retirement_hash=removal_receipt.retirement_hash
+  where removal_receipt.version=v)) then raise exception 'tesl: removal cannot publish outside its atomic retirement'; end if;
+ if v>1 and exists (
  select 1 from ` + ns + `tesl_schema_state publication_state
  cross join ` + ns + `tesl_schema_meta publication_meta
  cross join lateral pg_catalog.generate_series(publication_state.min_version,publication_state.current) publication_version(value)
@@ -166,5 +172,6 @@ end`
 	functions = append(functions, pgRowQueueFunctions(namespace)...)
 	functions = append(functions, pgRowQueueConversionFunctions(namespace)...)
 	functions = append(functions, pgRowQueueRetirementFunctions(namespace)...)
+	functions = append(functions, pgRowQueueRemovalFunctions(namespace)...)
 	return append(append(append(append(functions, pgRowForwardFunctions(namespace)...), pgRowBackfillFunctions(namespace)...), pgRowContractFunctions(namespace)...), append(pgRowEpochFunctions(namespace), pgRowIndexFunctions(namespace)...)...)
 }

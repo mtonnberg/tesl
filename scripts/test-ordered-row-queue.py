@@ -149,8 +149,14 @@ fn oldNote() -> Schema.Mail.V2.Note = Schema.Mail.V2.Note { id: "fixture", metad
 
 def exercise(output, env, rejection=False, claim=False, crash=None, from_v2=False, epoch_tail=False, deployment=False, fresh=False, terminal_row=False, heartbeat=False, combined_worker=False):
     target = 2 if terminal_row else (4 if epoch_tail else 3)
-    cluster = Path(tempfile.mkdtemp(prefix="ordered-", dir="/tmp"))
-    data = cluster / "data"
+    cluster = Path(tempfile.mkdtemp(prefix="ordered-", dir=env.get(
+        "TESL_MIGRATION_TEST_SOCKET_ROOT", env.get("TESL_MIGRATION_TEST_SOCKET_TMPDIR", "/tmp"))))
+    storage = Path(tempfile.mkdtemp(prefix="ordered-data-", dir=env.get(
+        "TESL_MIGRATION_TEST_DATA_TMPDIR", env.get("TMPDIR", "/tmp"))))
+    data = storage / "data"
+    scenario = (f"v{target}-deploy{int(deployment)}-fresh{int(fresh)}-reject{int(rejection)}"
+                f"-claim{int(claim)}-heartbeat{int(heartbeat)}-fromv2{int(from_v2)}"
+                f"-tail{int(epoch_tail)}-worker{int(combined_worker)}-{crash or 'no-crash'}")
     processes = []
     base = dict(env, PGHOST=str(cluster), PGPORT="5432", PGUSER="installer", PGDATABASE="postgres")
 
@@ -355,8 +361,9 @@ def exercise(output, env, rejection=False, claim=False, crash=None, from_v2=Fals
             log.close()
         subprocess.run(["pg_ctl", "-D", str(data), "-m", "immediate", "-w", "stop"], capture_output=True)
         if (cluster / "postgres.log").exists():
-            shutil.copyfile(cluster / "postgres.log", output / f"postgres-{rejection}.log")
+            shutil.copyfile(cluster / "postgres.log", output / f"postgres-{scenario}.log")
         shutil.rmtree(cluster)
+        shutil.rmtree(storage)
 
 
 def main():

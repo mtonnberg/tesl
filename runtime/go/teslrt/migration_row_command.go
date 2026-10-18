@@ -243,7 +243,16 @@ func pgRunRowSchemaCommandOn(serviceContext context.Context, command pgSchemaCom
 		return err
 	case "contract":
 		var state PgMigrationControlState
-		if b.target != nil && len(b.target.queueConversions) > 0 {
+		selected := b
+		if command.targetVersion >= 2 && command.targetVersion <= b.history.CurrentVersion {
+			selected, err = pgRowExecutionWindow(b, command.targetVersion)
+			if err != nil {
+				return err
+			}
+		}
+		if selected.target != nil && selected.target.queueRemoval != nil {
+			state, err = pgExecuteRowQueueRemoval(ctx, conn, selected, roles, expected)
+		} else if b.target != nil && len(b.target.queueConversions) > 0 {
 			state, err = pgExecuteRowQueueContract(ctx, conn, b, roles, command.targetVersion)
 		} else {
 			cancel()

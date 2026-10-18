@@ -33,7 +33,7 @@ type pgRowForwardManifest struct {
 }
 
 func pgRowEpochPreserving(plan *pgRowPhysicalPlan) bool {
-	return plan != nil && len(plan.windows) == 0 && len(plan.retirements) == 0 && len(plan.queueConversions) == 0
+	return plan != nil && len(plan.windows) == 0 && len(plan.retirements) == 0 && !pgRowQueueEdge(plan)
 }
 
 func pgRowForwardOperations(previous, plan *pgRowPhysicalPlan) ([]pgRowForwardOperation, error) {
@@ -139,7 +139,7 @@ func pgReadRowForwardManifest(ctx context.Context, tx pgx.Tx, b *pgRowBaseline) 
 		// entire known additive prefix before using it for catch-up. Historical
 		// queue transitions carry creator-linked callback identities instead;
 		// their existing source/retirement observers verify those identities.
-		if version > 1 && version <= b.history.CurrentVersion && pgRowEpochPreserving(plan) {
+		if version > 1 && version <= b.history.CurrentVersion && (pgRowEpochPreserving(plan) || plan.queueRemoval != nil) {
 			local, err := pgCompiledRowPhysicalPlan(b.database, version)
 			if err != nil {
 				return nil, err
@@ -255,7 +255,7 @@ func pgReadRowForwardManifest(ctx context.Context, tx pgx.Tx, b *pgRowBaseline) 
 	}
 	for target, retirement := range queueRetirements {
 		manifest := manifests[target]
-		if manifest == nil || len(manifest.plan.queueConversions) == 0 {
+		if manifest == nil || !pgRowQueueEdge(manifest.plan) {
 			return nil, fmt.Errorf("queue retirement references an absent queue transition")
 		}
 		manifest.queueRetirement = retirement
@@ -383,7 +383,7 @@ func pgVerifyRowExpansionHistory(state PgMigrationControlState, b *pgRowBaseline
 			}
 		} else if m.epoch != nil {
 			return fmt.Errorf("transforming revision cannot be an additive epoch slot")
-		} else if len(m.plan.queueConversions) > 0 {
+		} else if pgRowQueueEdge(m.plan) {
 			if c != nil || m.processingABI != "" {
 				return fmt.Errorf("queue-only retirement cannot carry row work or a destructive Contract")
 			}

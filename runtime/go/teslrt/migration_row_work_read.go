@@ -57,7 +57,7 @@ func pgVerifyRowWorkState(ctx context.Context, tx pgx.Tx, b *pgRowBaseline, stat
 				// receipt adds no entity generation or backfill obligation.
 				continue
 			}
-			if len(m.plan.windows) == 0 && len(m.plan.queueConversions) > 0 && m.queueRetirement != nil && row.ArtifactHash == m.queueRetirement.hash && row.SourceABI == m.queueRetirement.abi {
+			if len(m.plan.windows) == 0 && pgRowQueueEdge(m.plan) && m.queueRetirement != nil && row.ArtifactHash == m.queueRetirement.hash && row.SourceABI == m.queueRetirement.abi {
 				// Queue-only finality proves durable job retirement; unchanged
 				// entities retain their existing generation-one finality.
 				continue

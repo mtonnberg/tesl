@@ -82,6 +82,19 @@ func pgReadRowEpochRetirements(ctx context.Context, tx pgx.Tx, b *pgRowBaseline,
 		}
 		if plan := plans[version]; plan != nil && !pgRowEpochPreserving(plan) && plan.hash == hash {
 			closed[version] = true
+			if plan.queueRemoval != nil {
+				// This receipt closes the admitted additive prefix atomically;
+				// it does not fabricate per-version epoch receipts or creator ABIs.
+				// The complete removal/source receipt is verified by the enclosing
+				// manifest reader before any observation can authorize execution.
+				for older := 2; older < version; older++ {
+					if !pgRowEpochPreserving(plans[older]) {
+						contractRows.Close()
+						return nil, fmt.Errorf("RemoveEmpty receipt crossed a non-additive prefix")
+					}
+					closed[older] = true
+				}
+			}
 		}
 	}
 	if err := contractRows.Err(); err != nil {

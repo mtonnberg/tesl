@@ -108,10 +108,35 @@ let check_internal ~queue_expansion ~schemas ~edges = protect (fun () ->
      let membership inventory=I.queue_contracts inventory |> List.map(fun q ->
        Migration_queue.wire_identity inventory q.I.queue_name,
        List.map(fun p->Migration_queue.wire_identity inventory p.I.payload_name)q.payloads |> List.sort compare) |> List.sort compare in
-      if List.exists(fun schema->membership(List.hd schemas)<>membership schema)schemas then
+      let removals=List.filter(fun edge->D.queue_removal edge<>None)edges in
+      if List.length removals>1 then reject ~code:"MIG028" loc
+        "RemoveEmpty currently permits one removal edge per history";
+      if removals<>[] then begin
+        let contracts inventory=I.queue_contracts inventory |> List.map(fun q ->
+          Migration_queue.wire_identity inventory q.I.queue_name,
+          List.map(fun p->Migration_queue.wire_identity inventory p.I.payload_name,p.payload_contract)q.payloads) in
+        let removal=List.hd removals in
+        let removed=Option.get(D.queue_removal removal) in
+        let removed_before,_=S.inventories(D.coverage removal) in
+        let removed_jobs=List.map fst(List.assoc removed(contracts removed_before)) in
+        let preserves old fresh=List.for_all(fun(queue,payloads)->match List.assoc_opt queue fresh with
+          | None->false | Some next->List.for_all(fun(job,contract)->List.assoc_opt job next=Some contract)payloads)old in
+        List.iter(fun edge ->
+          if D.queue_transforms edge<>[] || List.exists(fun(_,kind)->kind<>S.Additive && kind<>S.New)(S.entries(D.coverage edge)) then
+            reject ~code:"MIG028" loc (Printf.sprintf
+              "RemoveEmpty requires an additive-only prefix and suffix; V%d contains a row transformation, Drop/reset or queue conversion. Retirement of those histories is not implemented for RemoveEmpty" (D.version edge));
+          let before,after=S.inventories(D.coverage edge) in
+          if D.queue_removal edge=None && not(preserves (contracts before)(contracts after)) then
+            reject ~code:"MIG028" loc (Printf.sprintf
+              "RemoveEmpty requires additive queue membership and unchanged existing payload/proof/codec contracts outside its removal edge; V%d changes them" (D.version edge));
+          if D.version edge>D.version removal && List.exists(fun(queue,payloads)->queue=removed ||
+            List.exists(fun(job,_)->List.mem job removed_jobs)payloads)(contracts after) then
+            reject ~code:"MIG028" loc (Printf.sprintf "RemoveEmpty cannot reintroduce removed queue or job identities in later V%d" (D.version edge))) edges
+      end;
+      if not(List.exists(fun edge->D.queue_removal edge<>None)edges) && List.exists(fun schema->membership(List.hd schemas)<>membership schema)schemas then
         reject ~code:"MIG028" loc "queue conversion rollout retains exact queue/job membership; additions or removals require a separate supported edge"
    end;
-   if not queue_expansion && List.exists(fun edge -> D.queue_transforms edge<>[])edges then
+   if not queue_expansion && List.exists D.queue_transition edges then
     reject ~code:"MIG028" loc "checked queue conversions require protected transformation and repair execution before physical planning";
   let generations=Hashtbl.create 16 and relation_owners=Hashtbl.create 16 in
   let describe version schema =
@@ -210,8 +235,8 @@ let check_internal ~queue_expansion ~schemas ~edges = protect (fun () ->
     versions:=next::!versions;previous:=next) (List.tl schemas) edges;
   let result={retirements=List.rev !retirements;versions=List.rev !versions;bindings=List.sort (fun (a:binding) (b:binding) -> compare (a.version,a.current.identity) (b.version,b.current.identity)) !bindings;links=List.rev !links;edges} in
    if has_stages &&
-      (result.retirements<>[] || result.bindings<>[] || List.exists(fun edge->D.queue_transforms edge<>[])edges) then
-     reject ~code:"MIG030" loc "stage preparation currently requires an additive history; combining stages with transformations, queue conversion or Drop is not implemented";
+      (result.retirements<>[] || result.bindings<>[] || List.exists D.queue_transition edges) then
+     reject ~code:"MIG030" loc "stage preparation currently requires an additive history; combining stages with transformations, queue conversion, RemoveEmpty or Drop is not implemented";
    ignore (checked (revalidate result));result)
 
 let check = check_internal ~queue_expansion:false

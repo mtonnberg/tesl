@@ -44,7 +44,7 @@ class Traceability(unittest.TestCase):
                 self.assertTrue(report["consistency"])
                 self.assertFalse(report["release_ready"])
                 self.assertEqual(report["reference_source"], "live-checkout")
-                self.assertEqual(report["required_pending"], ["PR-UNIQUE", "PR-EMPTY-QUEUE"])
+                self.assertEqual(report["required_pending"], ["PR-UNIQUE"])
                 self.assertFalse(report["execution_verified"])
                 self.assertEqual(report["unmapped_blocks"], sum(b["classification"] == "unmapped" for b in report["source_inventory"]))
 
@@ -53,7 +53,7 @@ class Traceability(unittest.TestCase):
             self.spec["source_mappings"] = []
             self.assertFalse(self.validate()["release_ready"])
         report = self.validate()
-        self.assertEqual(set(report["required_pending"]), {"PR-UNIQUE", "PR-EMPTY-QUEUE"})
+        self.assertEqual(set(report["required_pending"]), {"PR-UNIQUE"})
         self.assertFalse(report["release_ready"])
         self.assertFalse(report["roadmap_reconciled"])
 
@@ -172,8 +172,102 @@ class Traceability(unittest.TestCase):
 
     def test_empty_queue_cannot_borrow_unrelated_evidence(self):
         self.spec["requirements"]["PR-EMPTY-QUEUE"] = copy.deepcopy(self.spec["requirements"]["PR-DROP"])
-        with self.assertRaisesRegex(ValueError, "pending acceptance"):
+        with self.assertRaisesRegex(ValueError, "empty queue evidence requires"):
             self.validate()
+
+    def test_empty_queue_real_source_and_native_routes_are_evidenced(self):
+        report = self.validate()
+        self.assertEqual(report["requirements"]["PR-EMPTY-QUEUE"]["status"], "evidenced")
+        self.assertNotIn("PR-EMPTY-QUEUE", report["required_pending"])
+
+    def test_empty_queue_old_helper_status_flip_is_not_evidence(self):
+        req = self.spec["requirements"]["PR-EMPTY-QUEUE"]
+        req["status"] = "evidenced"
+        req["implementation"] = ["runtime/go/teslrt/migration_row_epoch.go#pgCheckRowQueueRetirement"]
+        req["witnesses"] = [{"ref": "compiler/test/test_migration_queue.ml#bindings", "route": "compiler"}]
+        with self.assertRaisesRegex(ValueError, "empty queue evidence requires.*execution"):
+            self.validate()
+
+    def test_empty_queue_every_execution_link_is_required(self):
+        original = copy.deepcopy(self.spec)
+        for ref in pr.EMPTY_QUEUE_IMPLEMENTATION:
+            with self.subTest(ref=ref):
+                self.spec = copy.deepcopy(original)
+                self.spec["requirements"]["PR-EMPTY-QUEUE"]["implementation"].remove(ref)
+                with self.assertRaisesRegex(ValueError, "empty queue evidence requires"):
+                    self.validate()
+
+    def test_empty_queue_isolated_emptiness_helper_cannot_be_promoted(self):
+        req = self.spec["requirements"]["PR-EMPTY-QUEUE"]
+        req["status"] = "evidenced"
+        path = "runtime/go/teslrt/migration_queue_removal.go"
+        req["implementation"] = [path + "#pgCheckQueueRemovalJobsEmpty"]
+        req["witnesses"] = [{"ref": "compiler/test/test_migration_queue.ml#incompatible", "route": "compiler"}]
+        original_read = pr.read
+        def old_helper(root, name):
+            if name == path:
+                return "package teslrt\nfunc pgCheckQueueRemovalJobsEmpty() error { return nil }\n"
+            return original_read(root, name)
+        with patch.object(pr, "read", side_effect=old_helper):
+            with self.assertRaisesRegex(ValueError, "empty queue evidence requires.*execution"):
+                self.validate()
+
+    def test_empty_queue_source_only_cannot_replace_native_witnesses(self):
+        original = copy.deepcopy(self.spec)
+        for ref in pr.EMPTY_QUEUE_WITNESSES:
+            with self.subTest(ref=ref):
+                self.spec = copy.deepcopy(original)
+                req = self.spec["requirements"]["PR-EMPTY-QUEUE"]
+                req["witnesses"] = [w for w in req["witnesses"] if w["ref"] != ref]
+                with self.assertRaisesRegex(ValueError, "empty queue evidence requires.*witnesses"):
+                    self.validate()
+
+    def test_empty_queue_mutation_and_native_invocation_cannot_disappear(self):
+        original_read = pr.read
+        cases = (
+            ("runtime/go/teslrt/migration_row_queue_removal_execute.go", "pgRowEpochDrain(", "observeOnly(", "fenced protected mutation"),
+            ("runtime/go/teslrt/migration_row_queue_removal_execute.go", "tesl_remove_empty_queue(", "observe_empty_queue(", "fenced protected mutation"),
+            ("runtime/go/teslrt/migration_row_queue_removal_spec.go", '{"tesl_remove_empty_queue",', '{"observe_empty_queue",', "mutation catalog entry"),
+            ("runtime/go/teslrt/migration_row_control_spec.go", "pgRowQueueRemovalFunctions(namespace)", "pgObservationFunctions(namespace)", "route is disconnected"),
+            ("runtime/go/teslrt/migration_row_catchup.go", "pgStageRowQueueRemoval(", "pgObserveQueueRemoval(", "route is disconnected"),
+            ("runtime/go/teslrt/migration_row_catchup.go", "pgExecuteRowQueueRemoval(", "pgObserveQueueRemoval(", "route is disconnected"),
+            ("runtime/go/teslrt/migration_row_command.go", "pgExecuteRowQueueRemoval(", "pgObserveQueueRemoval(", "route is disconnected"),
+            (pr.EMPTY_QUEUE_HARNESS, "Compile.compile_go_source", "fake_snapshot", "compile and execute"),
+            (pr.EMPTY_QUEUE_HARNESS, "go build -race", "go build", "compile and execute"),
+            (pr.EMPTY_QUEUE_HARNESS, "go test -race", "go test", "compile and execute"),
+            (pr.EMPTY_QUEUE_HARNESS, "-test.run %s", "-test.list %s", "compile and execute"),
+            (pr.EMPTY_QUEUE_HARNESS, "compiled_history true", "compiled_history false", "compile and execute"),
+            (pr.EMPTY_QUEUE_HARNESS, "fixtures/queue-removal/chain_test.go", "fixtures/queue-removal/unrelated_test.go", "native fixture is not supplied"),
+            (pr.RUNNER, "unset TESL_QUEUE_REMOVAL_TEST_FILTER", ":", "clear the investigative native filter"),
+        )
+        for path, old, new, message in cases:
+            with self.subTest(path=path, old=old):
+                self.assertIn(old, original_read(pr.ROOT, path))
+                def changed(root, name):
+                    text = original_read(root, name)
+                    return text.replace(old, new) if name == path else text
+                with patch.object(pr, "read", side_effect=changed):
+                    with self.assertRaisesRegex(ValueError, message):
+                        self.validate()
+
+    def test_empty_queue_missing_native_assertion_declaration_refuses(self):
+        original_read = pr.read
+        path = "compiler/test/fixtures/queue-removal/chain_test.go"
+        def changed(root, name):
+            text = original_read(root, name)
+            return text.replace("func TestQueueRemovalChainProtectedBindingAndAllFences(", "func removedFenceWitness(") if name == path else text
+        with patch.object(pr, "read", side_effect=changed):
+            with self.assertRaisesRegex(ValueError, "missing Go declaration"):
+                self.validate()
+
+    def test_empty_queue_removed_mandatory_route_refuses(self):
+        original_read = pr.read
+        def changed(root, path):
+            text = original_read(root, path)
+            return text.replace("test_migration_queue_application test_migration_queue_removal test_queue_candidate_app", "test_migration_queue_application test_queue_candidate_app") if path == pr.RUNNER else text
+        with patch.object(pr, "read", side_effect=changed):
+            with self.assertRaisesRegex(ValueError, "runner reference/selection"):
+                self.validate()
 
     def test_source_mapping_must_be_exact_and_resolve_requirement(self):
         original = copy.deepcopy(self.spec)
@@ -199,7 +293,7 @@ class Traceability(unittest.TestCase):
         clause = next(b for b in report["source_inventory"] if b["text"] == "New normative obligation.")
         self.assertEqual(clause["classification"], "unmapped")
         self.assertFalse(report["roadmap_reconciled"])
-        self.assertEqual(report["required_pending"], ["PR-UNIQUE", "PR-EMPTY-QUEUE"])
+        self.assertEqual(report["required_pending"], ["PR-UNIQUE"])
 
     def test_blocks_do_not_omit_nonblank_source_lines(self):
         inventory = pr.blocks(pr.ROOT)

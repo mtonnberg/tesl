@@ -141,7 +141,7 @@ func getMultiple(k1 string, k2 string) []teslrt.Maybe[string] {
 	return []teslrt.Maybe[string]{teslrt.CacheGet(StringCacheStore, k1), teslrt.CacheGet(StringCacheStore, k2)}
 }
 
-const teslCacheArtifactIdentity = "dd7a8e1b821c364fcf3e54c33b9d9c6ec1e8d5f5540d9fedf26a90cc056fc4aa"
+const teslCacheArtifactIdentity = "bd9a555f8afb1b5037a2013ce3c482fa3bf3304fad09ad62dab196916a914d43"
 
 //line cache-tests.tesl:38
 func teslCacheEncodeIntCache(teslValue teslrt.Int) any {

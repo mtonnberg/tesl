@@ -167,6 +167,7 @@ If you are writing tooling that deep-links into the manual, read that page first
 - **[Preparing migration cleanup](migration-contracts.md)** — reviewed Contract source and the order for preparing a rollout
 - **[Operating checked migrations](migration-operations.md)** — roles, deployment order, status, retirement and supported scope
 - **[Queue remediation](queue-remediation.md)** — typed execution-failure recovery and explicit audited discard
+- **[Empty queue removal](queue-removal.md)** — reviewed whole-queue removal, producer fencing, retained history and additive catch-up
 - **[Worker-topology SSE](worker-sse.md)** — Installer-owned broadcast storage, ordering and listener recovery
 - **[Worker-topology durable facilities](../runtime/go/teslrt/MIGRATION_FACILITIES.md)** — cache, email and SSE installation and permissions
 - **[Deploying a Tesl web API](deploy.md)** — `tesl build`, the Docker image, and database flavours

@@ -40,8 +40,18 @@ begin
  creator is null or creator !~ '^tesl-source-abi-v1:[0-9a-f]{64}$' or compatibility is null or
  compatibility !~ '^tesl-stored-value-v1:[0-9a-f]{64}$' or ops is null or ops<0 or preserving is null then
  raise exception 'tesl: invalid bounded row manifest'; end if;
- if not exists(select 1 from ` + ns + `tesl_schema_meta where id=1 and format_version=5 and initial_version=1) then
- raise exception 'tesl: row manifest requires format5 fresh origin'; end if;
+  if not exists(select 1 from ` + ns + `tesl_schema_meta where id=1 and format_version=5 and initial_version=1) then
+  raise exception 'tesl: row manifest requires format5 fresh origin'; end if;
+ if (` + ns + `tesl_row_physical_source_header(doc))->>'format'='tesl-retained-physical-version-v9' then
+  if ` + ns + `tesl_row_queue_removal_source_valid(v) is distinct from true or not exists(select 1 from ` + ns + `tesl_row_queue_target_staging t
+   join ` + ns + `tesl_row_queue_removal_staging d on d.version=t.version
+   join ` + ns + `tesl_row_queue_retirements receipt on receipt.version=d.version and receipt.retirement=d.retirement and receipt.retirement_hash=d.retirement_hash and receipt.compiler_abi=t.compiler_abi
+   where t.version=v and t.predecessor_hash=prior and t.contract=doc and t.contract_hash=digest and t.compiler_abi=creator and t.stored_value_compatibility=compatibility)
+   or ops<>0 or preserving then raise exception 'tesl: removal manifest requires exact staged source'; end if;
+ end if;
+ if exists(select 1 from ` + ns + `tesl_row_queue_removal_staging where version<v)
+  and (not preserving or (` + ns + `tesl_row_physical_source_header(doc))->>'format'<>'tesl-retained-physical-version-v1') then
+  raise exception 'tesl: RemoveEmpty suffix requires ordinary additive physical history'; end if;
  select * into s from ` + ns + `tesl_schema_state where id=1 for update;
  if not found or s.current not in (v-1,v) or s.min_version>v-1 or s.compat_floor>v-1 then
  raise exception 'tesl: row manifest predecessor is not final baseline'; end if;
@@ -50,7 +60,7 @@ begin
   not ((p.epoch_preserving and p.contract_hash=prior and exists(select 1 from ` + ns + `tesl_schema_versions where version=v-1 and step='expanded')) or exists(select 1 from ` + ns + `tesl_row_contracts c join ` + ns + `tesl_schema_versions prior_version on prior_version.version=c.version and prior_version.step='contracted' and prior_version.artefact_hash=c.contract_hash where c.version=v-1 and c.settled_hash=prior)
    or (p.contract_hash=prior and s.min_version=v-1 and s.compat_floor=v-1 and exists(select 1 from ` + ns + `tesl_row_queue_retirements c join ` + ns + `tesl_schema_versions prior_version on prior_version.version=c.version and prior_version.step='contracted' and prior_version.artefact_hash=c.retirement_hash and prior_version.source_abi=c.compiler_abi where c.version=v-1))) then
  raise exception 'tesl: row manifest predecessor identity differs'; end if;
- if not preserving and s.min_version<v-1 then raise exception 'tesl: close additive epoch first: app --schema close-epoch --through V%',v-1; end if;
+ if not preserving and s.min_version<v-1 and (` + ns + `tesl_row_physical_source_header(doc))->>'format'<>'tesl-retained-physical-version-v9' then raise exception 'tesl: close additive epoch first: app --schema close-epoch --through V%',v-1; end if;
  if s.current=v and not exists(select 1 from ` + ns + `tesl_row_physical where version=v) then
  raise exception 'tesl: cannot append manifest to published history'; end if;
  insert into ` + ns + `tesl_row_physical values(v,prior,doc,digest,creator,compatibility,ops,preserving) on conflict(version) do nothing;

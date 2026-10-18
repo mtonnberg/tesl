@@ -523,6 +523,9 @@ func pgVerifyRowQueueTransition(ctx context.Context, tx pgx.Tx, namespace string
 	if plan.version != after.Version || pgRowEpochPreserving(plan) || plan.schemaSnapshotHash != after.SchemaSnapshotHash || plan.storageSnapshotHash != after.StorageSnapshotHash {
 		return fmt.Errorf("staged queue target differs from its registered inventory")
 	}
+	if plan.queueRemoval != nil && !pgQueueRemovalMatches(before, after, plan) {
+		return fmt.Errorf("registered queue removal differs from its closed source inventories")
+	}
 	for _, c := range plan.queueConversions {
 		payload := func(v PgQueueSourceVersion, expected string) bool {
 			for _, q := range v.Contracts {

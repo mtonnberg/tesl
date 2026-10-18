@@ -32,17 +32,25 @@ let version_node ~family ~namespace plan (version:R.version) =
   let retirement=version.retirements<>[] in
   let queue_conversions=H.declarations history |> List.filter(fun d->Migration_declaration.version d=version.version)
     |> List.concat_map Migration_declaration.queue_transforms in
-  let queue=queue_conversions<>[] in
+   let queue=queue_conversions<>[] in
+   let removal=H.declarations history |> List.find_map(fun d ->
+     if Migration_declaration.version d=version.version then Migration_declaration.queue_removal d else None) in
+   let inventory inventory = Migration_inventory.queue_contracts inventory |> List.map(fun q ->
+     list [atom(Migration_queue.wire_identity inventory q.Migration_inventory.queue_name);
+       list(List.map(fun p -> list [atom(Migration_queue.wire_identity inventory p.Migration_inventory.payload_name);
+         atom(fst(H.contract C.Contract (list [atom "queue-payload-v1";p.payload_contract])))])q.payloads)]) |> list in
   let stages=S.stage_nodes (schema version.version).storage in
   let staged=stages<>list [] in
  let reverse=retirement || version.requires_contract_version<>None || List.exists (fun (e:R.entity) -> e.reverse_writes<>[]) version.entities in
  let legacy=List.exists (fun (e:R.entity) -> List.exists (fun (w:R.reverse_write) -> w.current=None) e.reverse_writes) version.entities in
- if staged && (version.version<2 || queue || reverse || version.windows<>[]) then
+  if staged && (version.version<2 || queue || removal<>None || reverse || version.windows<>[]) then
   invalid_arg "staged physical protocol cannot omit non-additive authority or stage original V1";
-    list ([atom (if staged then "tesl-retained-physical-version-v8" else if queue && version.requires_contract_version<>None then "tesl-retained-physical-version-v7" else if queue then "tesl-retained-physical-version-v6" else if retirement then "tesl-retained-physical-version-v5" else if legacy then "tesl-retained-physical-version-v4" else if version.requires_contract_version<>None then "tesl-retained-physical-version-v3" else if reverse then "tesl-retained-physical-version-v2" else "tesl-retained-physical-version-v1");atom family;atom namespace;int version.version;
+     list ([atom (if removal<>None then "tesl-retained-physical-version-v9" else if staged then "tesl-retained-physical-version-v8" else if queue && version.requires_contract_version<>None then "tesl-retained-physical-version-v7" else if queue then "tesl-retained-physical-version-v6" else if retirement then "tesl-retained-physical-version-v5" else if legacy then "tesl-retained-physical-version-v4" else if version.requires_contract_version<>None then "tesl-retained-physical-version-v3" else if reverse then "tesl-retained-physical-version-v2" else "tesl-retained-physical-version-v1");atom family;atom namespace;int version.version;
  atom (hash version.version);atom (S.digest (schema version.version).storage);
  list (List.map (entity ~reverse) version.entities);list (List.map window version.windows)] @
-   (if staged then [stages] else if queue then (Option.fold ~none:[] ~some:(fun v -> [int v]) version.requires_contract_version) @ [list(List.map(fun conversion ->
+   (if removal<>None then [list [atom "remove-empty-v1";atom(Option.get removal);atom(hash (version.version-1));
+      atom(S.digest (schema (version.version-1)).storage);inventory (schema (version.version-1)).schema;inventory (schema version.version).schema]]
+    else if staged then [stages] else if queue then (Option.fold ~none:[] ~some:(fun v -> [int v]) version.requires_contract_version) @ [list(List.map(fun conversion ->
      let queue,job=Migration_queue_transform.queue_job conversion in
      let payloads=match Migration_queue_transform.semantic conversion with
        | C.Seq parts -> List.nth parts 7,List.nth parts 8
