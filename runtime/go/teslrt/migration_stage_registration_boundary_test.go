@@ -25,7 +25,7 @@ func TestPgStagePreparationWorkerRegistrationBoundary(t *testing.T) {
 	f.ctx = ctx
 	pgStageInstall(t, f, root, "v2")
 	stop := pgRowAdditiveWorker(t, f, root, "v2")
-	pgAwaitStageIndexes(t, f, 2)
+	pgAwaitStageIndexes(t, f, 4)
 	stop()
 	original := pgStageSnapshot(t, f)
 	type registration struct {
@@ -51,7 +51,7 @@ func TestPgStagePreparationWorkerRegistrationBoundary(t *testing.T) {
 		t.Fatal(err)
 	}
 	rows.Close()
-	if len(seeds) != 2 {
+	if len(seeds) != 4 {
 		t.Fatal("fixture requires two different legitimate stage/index bindings", len(seeds))
 	}
 	call := func(seed registration) error {

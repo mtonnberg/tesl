@@ -9,10 +9,13 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 func pgStagePrograms(t *testing.T) string {
 	t.Helper()
+	t.Setenv("TESL_SCHEMA_POLL_S", "1")
 	root := os.Getenv("TESL_STAGE_PREPARATION_PROGRAMS")
 	if root == "" {
 		t.Skip("compiler-generated predecessor/staging programs required")
@@ -38,7 +41,7 @@ func pgAwaitStageIndexes(t *testing.T, f *pgControlTestFixture, count int) {
 		if err := f.worker.QueryRow(ctx, `select (select count(*) from notes.tesl_schema_stages where state='pending'),(select count(*) from notes.tesl_schema_index where state='valid')`).Scan(&pending, &valid); err != nil {
 			t.Fatal(err)
 		}
-		if pending == 2 && valid == count {
+		if pending == 4 && valid == count {
 			return
 		}
 		select {
@@ -62,12 +65,15 @@ func TestPgStagePreparationPredecessorCarryRestart(t *testing.T) {
 	root := pgStagePrograms(t)
 	f, _ := pgNewWorkerTest(t)
 	f.namespace = "notes"
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	t.Cleanup(cancel)
+	f.ctx = ctx
 	pgStageInstall(t, f, root, "v1")
 	pgRowAdditiveWorker(t, f, root, "v1")()
 	old := pgRowAdditiveApp(t, f, root, "v1")
 	pgCallRowAccessApp(t, f.ctx, old, "POST", "/one", 200)
 	stop := pgRowAdditiveWorker(t, f, root, "v2")
-	pgAwaitStageIndexes(t, f, 2)
+	pgAwaitStageIndexes(t, f, 4)
 	frozen := pgStageSnapshot(t, f)
 	fresh := pgRowAdditiveApp(t, f, root, "v2")
 	pgCallRowAccessApp(t, f.ctx, fresh, "POST", "/two", 200)
@@ -77,6 +83,14 @@ func TestPgStagePreparationPredecessorCarryRestart(t *testing.T) {
 	if err := f.worker.QueryRow(f.ctx, `select count(*) from notes.notes where active`).Scan(&duplicates); err != nil || duplicates != 2 {
 		t.Fatal("old writer must be allowed to create duplicates", duplicates, err)
 	}
+	pgCallRowAccessApp(t, f.ctx, old, "POST", "/text", 200)
+	var textCount, optionalCount, nullCount int
+	if err := f.worker.QueryRow(f.ctx, `select count(distinct title),count(distinct optional_text),count(*) filter (where optional_text is null) from notes.notes`).Scan(&textCount, &optionalCount, &nullCount); err != nil || textCount != 8 || optionalCount != 6 || nullCount != 2 {
+		t.Fatal("TEXT representations or multiple NULLs lost", textCount, optionalCount, nullCount, err)
+	}
+	if _, err := f.worker.Exec(f.ctx, `update notes.notes set title='duplicate',optional_text='duplicate' where id in ('one','two')`); err != nil {
+		t.Fatal("preparation must allow duplicate TEXT writes", err)
+	}
 	if _, err := f.worker.Exec(f.ctx, `update notes.notes set amount=7`); err != nil {
 		t.Fatal(err)
 	}
@@ -85,11 +99,11 @@ func TestPgStagePreparationPredecessorCarryRestart(t *testing.T) {
 	}
 	stop()
 	stop = pgRowAdditiveWorker(t, f, root, "v3")
-	pgAwaitStageIndexes(t, f, 3)
+	pgAwaitStageIndexes(t, f, 5)
 	stop()
 	pgStageInstall(t, f, root, "v3")
 	stop = pgRowAdditiveWorker(t, f, root, "v3")
-	pgAwaitStageIndexes(t, f, 3)
+	pgAwaitStageIndexes(t, f, 5)
 	stop()
 	if got := pgStageSnapshot(t, f); got != frozen {
 		t.Fatal("restart/carry/reinstall rewrote introduction identity", got, frozen)
@@ -109,7 +123,7 @@ func TestPgStagePreparationCatchupAndTamper(t *testing.T) {
 	if out, err := pgRowAdditiveCommand(f, root, "v3", "--schema", "catch-up", "--json").CombinedOutput(); err != nil {
 		t.Fatalf("finite stage catch-up: %v %s", err, out)
 	}
-	pgAwaitStageIndexes(t, f, 3)
+	pgAwaitStageIndexes(t, f, 5)
 	var current, minimum int
 	if err := f.worker.QueryRow(f.ctx, `select current,min_version from notes.tesl_schema_state`).Scan(&current, &minimum); err != nil || current != 3 || minimum != 1 {
 		t.Fatal("catchup invented admission identity", current, minimum, err)
@@ -196,11 +210,116 @@ func TestPgStagePreparationCatchupAndTamper(t *testing.T) {
 	}
 	pgStageInstall(t, f, root, "v3")
 	before := pgStageSnapshot(t, f)
+	for _, drift := range []string{
+		`drop index notes.title_lookup; create index title_lookup on notes.notes(title collate "C")`,
+		`drop index notes.title_lookup; alter table notes.notes alter column title type text collate "C"; create index title_lookup on notes.notes(title)`,
+	} {
+		if _, err := f.installer.Exec(f.ctx, drift); err != nil {
+			t.Fatal(err)
+		}
+		refuse(t)
+		if _, err := f.installer.Exec(f.ctx, `drop index notes.title_lookup; alter table notes.notes alter column title type text collate "default"; create index title_lookup on notes.notes(title)`); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if out, err := pgRowAdditiveCommand(f, root, "v3", "--schema", "contract", "V2", "--json").CombinedOutput(); err == nil {
 		t.Fatalf("unreviewed stage promotion accepted: %s", out)
 	}
 	if pgStageSnapshot(t, f) != before {
 		t.Fatal("refused promotion mutated pending stages")
+	}
+}
+
+// Transaction-local catalog fixtures exercise the actual SQL resolver, including
+// database-default OID 100 with non-C settings. They do not install host locales.
+func TestPgStagePreparationTextCatalogResolution(t *testing.T) {
+	f := pgNewControlTest(t)
+	for _, change := range []string{
+		"",
+		`update pg_catalog.pg_database set datcollate='en_US.UTF-8' where datname=current_database()`,
+		`update pg_catalog.pg_database set datctype='C.UTF-8' where datname=current_database()`,
+		`update pg_catalog.pg_collation set collisdeterministic=false where oid=100`,
+		`update pg_catalog.pg_collation set collname='spoof_default' where oid=100`,
+	} {
+		tx, err := f.installer.Begin(f.ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if change != "" {
+			if _, err := tx.Exec(f.ctx, change); err != nil {
+				_ = tx.Rollback(f.ctx)
+				t.Fatal(err)
+			}
+		}
+		err = pgVerifyStageTextDefault(f.ctx, tx, []pgStagePreparation{{scalar: "text"}})
+		_ = tx.Rollback(f.ctx)
+		if (err == nil) != (change == "") {
+			t.Fatalf("catalog %q: %v", change, err)
+		}
+	}
+}
+
+func TestPgStagePreparationTextDatabaseLocales(t *testing.T) {
+	f := pgNewControlTest(t)
+	for _, locale := range []string{"C", "POSIX", "C.UTF-8", "en_US.UTF-8"} {
+		name := "stage_locale_" + strings.ReplaceAll(UUIDv7(), "-", "")
+		_, err := f.installer.Exec(f.ctx, "create database "+quoteIdentifier(name)+" template template0 lc_collate '"+locale+"' lc_ctype '"+locale+"'")
+		if err != nil {
+			if locale == "C" || locale == "POSIX" {
+				t.Fatal(err)
+			}
+			t.Logf("locale %s unavailable: %v; non-C/provider refusal remains mandatory in catalog fixtures", locale, err)
+			continue
+		}
+		config := f.installer.Config().Copy()
+		config.Database = name
+		conn, err := pgx.ConnectConfig(f.ctx, config)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tx, err := conn.Begin(f.ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = pgVerifyStageTextDefault(f.ctx, tx, []pgStagePreparation{{scalar: "text"}})
+		_ = tx.Rollback(f.ctx)
+		_ = conn.Close(f.ctx)
+		if _, dropErr := f.installer.Exec(f.ctx, "drop database "+quoteIdentifier(name)); dropErr != nil {
+			t.Fatal(dropErr)
+		}
+		if (err == nil) != (locale == "C" || locale == "POSIX") {
+			t.Fatal(locale, err)
+		}
+		t.Logf("database locale %s: accepted=%v", locale, err == nil)
+	}
+}
+
+func TestPgStagePreparationTextOversizedBuild(t *testing.T) {
+	root := pgStagePrograms(t)
+	f, _ := pgNewWorkerTest(t)
+	f.namespace = "notes"
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	f.ctx = ctx
+	pgStageInstall(t, f, root, "v1")
+	pgRowAdditiveWorker(t, f, root, "v1")()
+	if _, err := f.worker.Exec(ctx, `insert into notes.notes(id,title,active,amount,optional_text) select 'large',string_agg(md5(n::text),''),false,null,null from generate_series(1,400) n`); err != nil {
+		t.Fatal(err)
+	}
+	output, stop := pgRowAdditiveProcess(t, pgRowAdditiveCommand(f, root, "v2", "--schema", "worker", "--json"))
+	defer stop()
+	for {
+		var failed bool
+		if err := f.worker.QueryRow(ctx, `select exists(select 1 from notes.tesl_schema_index where index_name='title_lookup' and state='failed' and error like '%index row%')`).Scan(&failed); err != nil {
+			t.Fatal(err, output.String())
+		}
+		if failed {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if strings.Contains(output.String(), `"kind":"schema-worker-ready"`) {
+		t.Fatal("oversized index published readiness")
 	}
 }
 
@@ -257,7 +376,7 @@ func TestPgStagePreparationInterruptedIndexBuild(t *testing.T) {
 	}
 	pauses[0].resume()
 	stop := pgRowAdditiveWorker(t, f, root, "v2")
-	pgAwaitStageIndexes(t, f, 2)
+	pgAwaitStageIndexes(t, f, 4)
 	stop()
 	if pgStageSnapshot(t, f) != frozen {
 		t.Fatal("index recovery rewrote source-bound stage identity")

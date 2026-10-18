@@ -164,12 +164,16 @@ let stage_key inventory entity field =
   let open Migration_canonical in
   let owner = List.find (fun entry -> entry.stored_entity.entity_name=entity) inventory.entities in
   let stored = List.find (fun entry -> entry.field.entity=entity && entry.field.name=field) inventory.fields in
+  let shape = List.find (fun s -> s.stored_field.entity=entity && s.stored_field.name=field) (field_shapes inventory) in
+  let string_type = Seq [Bytes "named";Seq [Bytes "reference";Bytes "type";Seq [Bytes "primitive";Bytes "Tesl.Prelude.String"]]] in
+  let text = shape.type_identity=string_type || shape.type_identity=
+    Seq [Bytes "apply";Seq [Bytes "named";Seq [Bytes "reference";Bytes "type";Seq [Bytes "primitive";Bytes "Tesl.Maybe.Maybe"]]];string_type] in
   (* The field contract includes ALL reached type/proof/helper definitions, not
      just a surface type name. Index names and revision numbers are not stage
      identity; physical storage and equality semantics are. *)
   let contract = Seq [Bytes "staged-unique-key-v1";Bytes owner.entity_identity;
     Bytes owner.stored_entity.table_name;Bytes field;stored.field.contract;
-    Bytes "default-btree";Bytes "nulls-distinct";Bytes "immediate"] in
+    Bytes (if text then "default-text-btree-libc-c-posix-v1" else "default-btree");Bytes "nulls-distinct";Bytes "immediate"] in
   {stage_id=digest Snapshot contract;stage_entity=entity;stage_field=field;
    stage_loc=stored.field.loc;stage_contract=contract}
 
@@ -194,10 +198,9 @@ let validate_stage_domains inventory =
     match primitive key,storage with
     | Some "Tesl.Prelude.Bool",(None | Some ("bool" | "boolean")) -> ()
     | Some "Tesl.Int32.Int32",Some ("int" | "integer" | "int4" | "bigint" | "int8") -> ()
-    | Some "Tesl.Prelude.String",_ -> reject stage.stage_loc
-      "MIG030: staged String requires catalog-bound C/POSIX collation; explicit collation storage is not implemented"
+    | Some "Tesl.Prelude.String",(None | Some "text") -> ()
     | _ -> reject stage.stage_loc
-      "MIG030: staged key requires supported builtin equality and an exact physical carrier; currently Bool and Int32 with integer/bigint storage are supported (numeric Int, nominal wrappers, UUID/bytes mappings and custom storage are not implemented)") (staged_indexes inventory)
+      "MIG030: staged key requires supported builtin equality and an exact physical carrier; supported: Bool, Int32 with integer/bigint storage, String with TEXT and verified libc C/POSIX database default (numeric Int, nominal wrappers, UUID/bytes mappings and custom storage are not implemented)") (staged_indexes inventory)
 
 let stage_transitions ~before ~after =
   try

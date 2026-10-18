@@ -52,7 +52,8 @@ api NotesApi {
  get "/health" -> String
  get "/all" -> List Note
  post "/one" -> String
- post "/two" -> String
+  post "/two" -> String
+  post "/text" -> String
  put "/edit" -> String
 }
 handler get health() -> String = "ready"
@@ -69,7 +70,11 @@ handler put edit() -> String requires [dbWrite Note] =
  update note in Note
   set note.active = True
  "edited"
-server NotesServer for NotesApi { health, all, addOne, addTwo, edit }
+handler post addText() -> String requires [dbWrite Note] =
+  let rows = [makeNote "", makeNote "A", makeNote "a", makeNote "a ", makeNote "é", makeNote "é"]
+  let _ = insertMany rows in Note
+  "created"
+server NotesServer for NotesApi { health, all, addOne, addTwo, addText, edit }
 main() -> App requires [dbRead Note, dbWrite Note, envRead] =
  App { database: Main, api: NotesServer, port: envInt "ROW_PORT" 8093 }
 |}
@@ -105,10 +110,12 @@ let export ?(stages=false) output =
  let schema version =
   let text=schema version in
   if not stages then text else
-  text |> replace "import Tesl.Maybe exposing" "import Tesl.Int32 exposing [Int32]\nimport Tesl.Maybe exposing"
-   |> replace "active: Bool" "active: Bool, amount: Maybe Int32 @db(integer)"
-   |> replace "active: False" "active: False, amount: Nothing"
-   |> replace "index [active] as \"active_lookup\"" "staging unique index [active] as \"active_lookup\"\n staging unique index [amount] as \"amount_lookup\"" in
+   text |> replace "import Tesl.Maybe exposing" "import Tesl.Int32 exposing [Int32]\nimport Tesl.Maybe exposing"
+    |> replace "title: \"hello\"" "title: id"
+    |> replace "active: Bool" "active: Bool, amount: Maybe Int32 @db(integer), optionalText: Maybe String @db(text)"
+    |> replace "fn makeNote" "fn optionalValue(id: String) -> Maybe String =\n if id == \"one\" || id == \"two\" then\n  Nothing\n else\n  Something id\nfn makeNote"
+    |> replace "active: False" "active: False, amount: Nothing, optionalText: optionalValue id"
+    |> replace "index [active] as \"active_lookup\"" "staging unique index [active] as \"active_lookup\"\n staging unique index [amount] as \"amount_lookup\"\n staging unique index [title] as \"title_lookup\"\n staging unique index [optionalText] as \"optional_text_lookup\"" in
  let root=Filename.temp_dir "tesl-row-index-source-" "" in
  Fun.protect ~finally:(fun () -> remove root) (fun () ->
  let file p=Filename.concat root p in

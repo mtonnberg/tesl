@@ -45,15 +45,19 @@ func pgParseStagePreparations(n pgRowCanonical) ([]pgStagePreparation, error) {
 			table: c[5].value, column: c[6].value, scalar: c[7].value, nullable: pgRowBool(c[8], true),
 			index: c[9].value, descriptor: pgRowEncode(entry)}
 		semantic := c[2]
+		equality := "default-btree"
+		if stage.scalar == "text" {
+			equality = "default-text-btree-libc-c-posix-v1"
+		}
 		if !semantic.list(8) || !semantic.children[0].isAtom("staged-unique-key-v1") ||
 			!semantic.children[1].atom || !semantic.children[2].isAtom(stage.table) || !semantic.children[3].isAtom(stage.field) ||
-			!semantic.children[5].isAtom("default-btree") || !semantic.children[6].isAtom("nulls-distinct") || !semantic.children[7].isAtom("immediate") {
+			!semantic.children[5].isAtom(equality) || !semantic.children[6].isAtom("nulls-distinct") || !semantic.children[7].isAtom("immediate") {
 			return nil, fmt.Errorf("stage equality or semantic identity differs")
 		}
 		document := pgRowList(pgRowAtom("tesl-migration-canonical"), pgRowAtom("1"), pgRowAtom("snapshot"), semantic)
 		if stage.id <= last || !pgMigrationDigest(stage.id) || fmt.Sprintf("%x", sha256.Sum256([]byte(pgRowEncode(document)))) != stage.id ||
 			!pgQueueIdentity(stage.entity) || !pgRowName(stage.field) || !pgMigrationIdentifier(stage.table) || !pgMigrationIdentifier(stage.column) ||
-			!pgMigrationIdentifier(stage.index) || indexes[stage.index] || !slices.Contains([]string{"bool", "int4", "int8"}, stage.scalar) ||
+			!pgMigrationIdentifier(stage.index) || indexes[stage.index] || !slices.Contains([]string{"bool", "int4", "int8", "text"}, stage.scalar) ||
 			(!pgRowBool(c[8], true) && !pgRowBool(c[8], false)) {
 			return nil, fmt.Errorf("invalid stage identity, physical domain or canonical order")
 		}
@@ -252,6 +256,9 @@ end`}}
 }
 
 func pgRegisterStagePreparation(ctx context.Context, tx pgx.Tx, b *pgRowBaseline, index pgRowConcurrentIndex, ordinal int) error {
+	if err := pgVerifyStageTextDefault(ctx, tx, b.target.stages); err != nil {
+		return err
+	}
 	for _, stage := range b.target.stages {
 		if stage.index != index.index.Name {
 			continue
@@ -264,6 +271,11 @@ func pgRegisterStagePreparation(ctx context.Context, tx pgx.Tx, b *pgRowBaseline
 }
 
 func pgVerifyStageRecords(ctx context.Context, tx pgx.Tx, b *pgRowBaseline, forward *pgRowForwardManifest, jobs []pgMigrationIndexJob) error {
+	if b.target != nil {
+		if err := pgVerifyStageTextDefault(ctx, tx, b.target.stages); err != nil {
+			return err
+		}
+	}
 	var format int
 	if err := tx.QueryRow(ctx, "select format from "+pgx.Identifier{b.history.Namespace, "tesl_schema_stage_protocol"}.Sanitize()+" where id=1").Scan(&format); err != nil {
 		return err
@@ -278,6 +290,9 @@ func pgVerifyStageRecords(ctx context.Context, tx pgx.Tx, b *pgRowBaseline, forw
 	}
 	expected := map[string]expectation{}
 	for manifest := forward; manifest != nil; manifest = manifest.previous {
+		if err := pgVerifyStageTextDefault(ctx, tx, manifest.plan.stages); err != nil {
+			return err
+		}
 		for ordinal, operation := range manifest.operations {
 			if operation.index == nil {
 				continue
@@ -387,6 +402,10 @@ func pgCheckStageSource(r *pgMigrationWireReader, schema, storage pgRowCanonical
 			return
 		}
 		fieldContract := stored.children[2].children[1]
+		if stage.scalar == "text" && (!fieldContract.list(5) || !pgStageBuiltinText(fieldContract.children[2], stage.nullable)) {
+			r.fail("stage TEXT requires exact builtin String or Maybe String source identity")
+			return
+		}
 		var normalize func(pgRowCanonical) pgRowCanonical
 		normalize = func(node pgRowCanonical) pgRowCanonical {
 			if node.list(2) && node.children[0].isAtom("local") {

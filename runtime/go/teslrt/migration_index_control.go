@@ -14,6 +14,9 @@ import (
 // predicate, INCLUDE columns or constraint ownership. Catalog readers establish
 // that finite shape independently; a job state alone never proves readiness.
 type pgMigrationIndexJob struct {
+	// Derived only after complete row source/job/stage verification, never read
+	// from a supplied job or database row. TEXT preparation accepts btree limits.
+	verifiedTextPreparation          bool
 	Version, Ordinal                 int
 	ID, ObjectHash, SourceABI, Table string
 	Index                            PgMigrationCatalogIndex

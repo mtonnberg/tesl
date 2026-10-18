@@ -88,6 +88,15 @@ func pgReadRowIndexJobs(ctx context.Context, tx pgx.Tx, b *pgRowBaseline, forwar
 	if err := pgVerifyStageRecords(ctx, tx, b, forward, jobs); err != nil {
 		return nil, err
 	}
+	for i := range jobs {
+		for manifest := forward; manifest != nil; manifest = manifest.previous {
+			for _, stage := range manifest.plan.stages {
+				if stage.scalar == "text" && stage.table == jobs[i].Table && stage.index == jobs[i].Index.Name {
+					jobs[i].verifiedTextPreparation = true
+				}
+			}
+		}
+	}
 	// pgVerifyRowWorkState accounts for every index lease plus every strictly
 	// verified row shard. Neither prefix is an exemption for orphan lease rows.
 	return jobs, nil
@@ -114,7 +123,7 @@ func pgPrepareRowIndexCatalog(metadata *pgCatalogExpectations, actual, expected 
 		if job.Index.Unique {
 			return nil, nil, false, fmt.Errorf("unique row index enforcement is not admitted")
 		}
-		if job.Table == actual.Name && job.Version > local.version && !pgFutureIndexSafeForWrites(actual, own, job.Index) {
+		if job.Table == actual.Name && job.Version > local.version && !job.verifiedTextPreparation && !pgFutureIndexSafeForWrites(actual, own, job.Index) {
 			return nil, nil, false, fmt.Errorf("future row index changes this binary's admitted writes")
 		}
 	}

@@ -68,7 +68,10 @@ func pgDeriveRowConcurrentIndexes(previous, plan *pgRowPhysicalPlan) ([]pgRowCon
 					allNewNull = false
 				}
 			}
-			if !bounded && !allNewNull {
+			textPreparation := slices.ContainsFunc(plan.stages, func(s pgStagePreparation) bool {
+				return s.scalar == "text" && s.entity == entity.identity && s.table == entity.table && s.index == index.Name && slices.Equal(index.Columns, []string{s.column})
+			})
+			if !bounded && !allNewNull && !textPreparation {
 				return nil, fmt.Errorf("concurrent row index can reject writes from an admitted schema")
 			}
 			index.Columns = slices.Clone(index.Columns)

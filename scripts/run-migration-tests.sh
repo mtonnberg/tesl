@@ -92,6 +92,10 @@ if (( $# == 0 )); then
   # Long-running index work and its application lifetime have independent
   # mandatory budgets; neither gate may skip unavailable PostgreSQL.
   runtime_test indexes 300 '^(TestPgMigration(Index|FutureIndex|Embedded)|TestServe(Shutdown|ListenFailure))'
+  # Pin the limits of an earlier EXPLAIN and scan switches alone; these witnesses
+  # do not claim that managed, restricted SQL-only probe paths are impossible.
+  runtime_test stage-probe-plan-boundary 120 '^TestPgStageProbePlan'
+  runtime_test stage-text-equality 120 '^(TestStageText|TestPgStagePreparationText(Catalog|Database))'
   # Permanent generation baseline: marker/catalog/role guards and real backend deaths.
   runtime_test row-baseline 300 '^(TestPgRowBaseline|TestPgRowIndex|TestPgRowEpoch|TestRowBaseline|TestRowPhysical|TestPgRowForwardInvalidation)'
   # Preserve the former matrix-only suites in the shared gate as well.

@@ -66,7 +66,7 @@ let negative_domains () =
     ["Bool","staging unique index [active, other]";
      "Bool","staging unique index [active]\n unique index [active]";
      "Int","staging unique index [active]";
-     "String","staging unique index [active]";
+      "String @db(varchar)","staging unique index [active]";
      "Int32","staging unique index [active]";
      "Maybe (Maybe Bool)","staging unique index [active]";
      "Bool @db(text)","staging unique index [active]"]
@@ -79,6 +79,21 @@ let diagnostic_authority () =
     check bool "stage decisions require review" true action.needs_confirmation;
     check string "decision class" "decision" (Diagnostic_metadata.class_name action.class_)
   | None -> fail "stage obligation lost its decision classification"
+
+let text_domains () = project (fun write ->
+  List.iter (fun key ->
+    let text=source "V2" "staging unique index [active]" |> replace "active: Bool" ("active: " ^ key) in
+    check int "typed diagnostics" 0 (List.length (errors text));
+    let inventory=load write "V2" text in
+    let stage=only (I.staged_indexes inventory) in
+    check bool "text equality is explicit in canonical identity" true
+      (contains (Migration_canonical.encode stage.stage_contract) "default-text-btree-libc-c-posix-v1"))
+    ["String";"String @db(text)";"Maybe String";"Maybe String @db(text)"];
+  let shadow=source "V2" "staging unique index [active]" |> replace "[String, Int, Bool(..)]" "[Int, Bool(..)]"
+    |> replace "entity User" "type String = Int\nentity User" |> replace "active: Bool" "active: String @db(text)" in
+  check bool "typed compiler refuses nominal String shadow" true (errors shadow <> []);
+  expect_ir_error "builtin" (I.load ~compiler_abi:"stage-test-abi"
+    ~root_file:(write "schema/stages/v2.tesl" shadow)))
 
 let no_conflict_promise () =
   let text=source "VCurrent" "staging unique index [active]" |> replace "Schema.Stages.VCurrent" "StageConflict" in
@@ -153,6 +168,12 @@ establish approve(b: Bool) -> Maybe (value: Bool ::: Approved value) =
   let after=load write "V9" (text |> replace ".V8" ".V9" |> replace "= True" "= False") in
   check bool "private proof helper participates in stage identity" true
     ((only (I.staged_indexes before)).stage_id<>(only (I.staged_indexes after)).stage_id);
+  expect_ir_error "dependencies" (I.stage_transitions ~before ~after);
+  let text=text |> replace "Bool" "String" |> replace "String(..)" "Bool(..)" |> replace "= True" "= \"yes\"" in
+  let before=load write "V8" text in
+  let after=load write "V9" (text |> replace ".V8" ".V9" |> replace "= \"yes\"" "= \"YES\"") in
+  check bool "String private proof helper participates in stage identity" true
+    ((only (I.staged_indexes before)).stage_id<>(only (I.staged_indexes after)).stage_id);
   expect_ir_error "dependencies" (I.stage_transitions ~before ~after))
 
 let execution_refusals () = project (fun write ->
@@ -204,6 +225,7 @@ let memory_runtime () =
 let () = run "staged indexes" ["source",[
   test_case "parse and format" `Quick parse_format;
   test_case "restricted domains" `Quick negative_domains;
+  test_case "text equality domains" `Quick text_domains;
   test_case "decision authority" `Quick diagnostic_authority;
   test_case "no conflict promise" `Quick no_conflict_promise;
   test_case "inventory and source history" `Quick inventory_history;

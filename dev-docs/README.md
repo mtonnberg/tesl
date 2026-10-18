@@ -171,6 +171,7 @@ that checks manual coherence without building the compiler.
 | `11-frontend-ir.md` | Generator-facing frontend IR stage and `emit_ir` architecture |
 | [Migration implementation](migrations-implementation.md) | Delivery gates, implemented prerequisites, regression evidence and remaining migration work |
 | [Migration delivery status](migration-delivery-status.md) | Current PR scope, roadmap gaps, shared CI execution and acceptance evidence |
+| [Staged TEXT preparation](stage-text-preparation.md) | Builtin String equality, database-default C/POSIX checks, btree size bounds and preparation-only evidence |
 | [Migration PR scope](migration-pr-scope.md) | The 18 agreed clauses, static-link checks, pending acceptance and separate roadmap reconciliation |
 | [Migration PR register](migration-pr-register.json) | Machine-checked dispositions, production declarations, named witnesses and mandatory or accepted local routes |
 | [Queue admission performance](queue-admission-performance.md) | Profile-driven optimizations, publication authority and bounded 257-type measurements |

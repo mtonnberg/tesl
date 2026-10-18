@@ -74,11 +74,11 @@ let check_module_unscoped (m : module_form) : validation_error list =
      the migration module. Each imported schema still passes its own structural
      checks through the dependency traversal. *)
   @ (TDatabase @: (if Migration_schema.migration_family m.module_name <> None
-      then check_entity_structure decls
+      then check_entity_structure ~staged_scope:m.source_file ~type_decls:decls_with_imported_types decls
       else
         (* Lookup metadata contains both qualified and exposed names. Physical
            indexes belong to the declaration once, not once per lookup alias. *)
-        check_entity_structure
+        check_entity_structure ~staged_scope:m.source_file ~type_decls:decls_with_imported_types
           (decls @ load_imported_type_decls ~include_exposed_aliases:false m)))
   (* Given the imported-type harvest, not [decls]: an upsert on an entity
      declared in ANOTHER module must be checked against THAT entity's unique

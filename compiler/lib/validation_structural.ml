@@ -830,7 +830,7 @@ let index_label (ix : entity_index) =
 
 (** Per-entity index validation.  Every rule here is cheap and structural, so
     `--check` gets it for free. *)
-let check_entity_indexes (e : entity_form) : validation_error list =
+let check_entity_indexes ?(owned_type_names=[]) (e : entity_form) : validation_error list =
   let errs = ref [] in
   let add loc hint msg = errs := make_error loc ~hint msg :: !errs in
   let field_names = List.map (fun (f : field_def) -> f.name) e.fields in
@@ -843,6 +843,12 @@ let check_entity_indexes (e : entity_form) : validation_error list =
         List.iter (fun name -> match List.find_opt (fun (f:field_def) -> f.name=name) e.fields with
           | None -> ()
           | Some f ->
+            let rec owned = function
+              | TName {name;_} -> List.mem name owned_type_names
+              | TApp {head;arg;_} -> owned head || owned arg
+              | _ -> false in
+            if owned f.type_expr then stage_error
+              "staged uniqueness requires exact builtin type identity; owned nominal wrappers are not implemented";
             let key = match f.type_expr with
               | TApp {head=TName {name=("Maybe" | "Tesl.Maybe.Maybe");_};arg;_} -> arg
               | key -> key in
@@ -850,8 +856,8 @@ let check_entity_indexes (e : entity_form) : validation_error list =
             (match head,Option.map String.lowercase_ascii f.db_type with
              | Some ("Bool" | "Tesl.Prelude.Bool"),(None | Some ("bool" | "boolean")) -> ()
              | Some ("Int32" | "Tesl.Int32.Int32"),Some ("int" | "integer" | "int4" | "bigint" | "int8") -> ()
-             | Some ("String" | "Tesl.Prelude.String"),_ -> stage_error "staged String requires catalog-bound C/POSIX collation; explicit collation storage is not implemented"
-             | _ -> stage_error "staged uniqueness requires an exact builtin equality/storage mapping; currently Bool and Int32 @db(integer/bigint) are supported; numeric Int, float, custom types and UUID/bytes storage mappings are unsupported")) ix.ix_fields;
+             | Some ("String" | "Tesl.Prelude.String"),(None | Some "text") -> ()
+             | _ -> stage_error "staged uniqueness requires an exact builtin equality/storage mapping: Bool, Int32 @db(integer/bigint), or String with TEXT and verified libc C/POSIX database default; numeric Int, float, custom types and UUID/bytes storage mappings are unsupported")) ix.ix_fields;
         if List.exists (fun (other:entity_index) -> other != ix && other.ix_fields=ix.ix_fields) e.indexes then
           stage_error "a pending stage cannot coexist with another index declaration on the same key"
       end;
@@ -1030,11 +1036,14 @@ let check_upsert_conflict_target ?facts ?(extra_funcs=[]) (decls : top_decl list
       | _ -> ()) decls;
     List.rev !errors
 
-let check_entity_structure ?facts ?(extra_funcs=[]) (decls : top_decl list) : validation_error list =
+let check_entity_structure ?facts ?(extra_funcs=[]) ?staged_scope ?(type_decls=[]) (decls : top_decl list) : validation_error list =
   (* Validation-consolidation Phase 1: iterate the entity forms precomputed once
      in [module_facts] (source-order preserved) instead of re-filtering [decls].
      Byte-identical because the dropped [_ -> []] arm produced nothing. *)
   let entities = (facts_or_compute ?facts ~extra_funcs decls).mf_entities in
+  let owned_type_names = List.filter_map (function
+    | DType (TypeAdt {name;_}) | DType (TypeNewtype {name;_}) -> Some name
+    | DRecord r -> Some r.name | DEntity e -> Some e.name | _ -> None) (decls @ type_decls) in
   List.concat_map (fun (e : entity_form) ->
       let errs = ref [] in
       let add hint msg = errs := make_error e.loc ~hint msg :: !errs in
@@ -1064,7 +1073,11 @@ let check_entity_structure ?facts ?(extra_funcs=[]) (decls : top_decl list) : va
           (Printf.sprintf
             "entity `%s` declares `%s` as its primary key but has no field named `%s`"
             e.name e.primary_key e.primary_key);
-      List.rev !errs @ check_entity_indexes e
+      (* Imported entities are checked in their declaring module by dependency
+         traversal; a local shadow must not reinterpret their builtin fields. *)
+      let owned_type_names = match staged_scope with
+        | Some file when e.loc.file <> file -> [] | _ -> owned_type_names in
+      List.rev !errs @ check_entity_indexes ~owned_type_names e
   ) entities
   @ check_index_name_collisions entities
 

@@ -90,9 +90,12 @@ deleting the source declaration cannot silently cancel an installed obligation.
 The supported slice is an additive history, introducing a new preparatory index
 on an existing table/key after V1, then carrying its exact descriptor forward.
 Bool and Int32 with integer/bigint storage, optionally nullable, are supported.
+Builtin String and Maybe String on existing TEXT storage are also supported when
+the database default is verified as deterministic libc C/POSIX. See
+[the exact text preparation bounds](stage-text-preparation.md).
 Stage-on-birth/V1, reuse of an existing index name, changing a carried preparatory
-descriptor, histories containing row transformations/queue conversion/Drop, String
-C/POSIX collation and UUID/bytes mappings remain explicitly unsupported. Existing
+descriptor, histories containing row transformations/queue conversion/Drop,
+explicit column collations and UUID/bytes mappings remain explicitly unsupported. Existing
 stage-free facilities and safe Drop retain their previous checks and behavior.
 Source carry-age checking still defaults to three revisions; runtime configuration
 of that limit is not implemented.
@@ -148,6 +151,50 @@ and executes the PostgreSQL/race stage-preparation suite. The full migration run
 already invokes both executables without selecting out either native scenario.
 The preparation implementation is embedded only for PostgreSQL artifacts; the
 isolated experimental V9 guard is still not integrated.
+
+**Guarded promotion plan requirements (b266388 continuation).** Promotion
+and cancellation remain refused; no V3 promotion-window writer or V4 reliance
+path has been enabled. The current SQL/pgx surface does not yet bind a validated
+probe plan to the executor that will read the rows. The new mandatory
+`stage-probe-plan-boundary` phase records two PostgreSQL counterexamples:
+
+- A prepared probe starts with an Index Only Scan under `force_generic_plan`.
+  Another backend analyzes already-committed data. After a new relation lock
+  accepts the invalidation messages, the same prepared probe, connection and
+  READ COMMITTED transaction execute a Seq Scan filtering all 50,000 live rows.
+  No application key write happens while the test's advisory key lock is held.
+- Even with `enable_seqscan=off`, a concurrent index drop can invalidate the
+  checked index. After the same explicit invalidation-acceptance boundary, the
+  actual prepared execution scans all 50,000 rows. This second case is deliberate
+  catalog drift, not an authorized stage-cancellation operation.
+
+The intervening relation lock is explicit in both tests; these are counterexamples
+to treating an earlier EXPLAIN or forced generic-plan choice as an execution
+capability, not a claim that every immediately adjacent EXPLAIN/EXECUTE pair
+replans. The first attempt without that invalidation boundary retained the cached
+index plan and is recorded as a failed witness. The successful witnesses and their
+actual EXPLAIN ANALYZE output are in `/tmp/opencode/stage-promotion-proof/`.
+These tests deliberately read through the unsafe plans but perform no guarded DML.
+
+These witnesses do not show that a PostgreSQL extension is necessary. The first
+allows sequential scans; the second deliberately drops the index outside the
+managed stage lifecycle. Follow-up experiments executed 85 actual plans on
+PostgreSQL 17.10. With controlled custom planning and scan settings, probes stayed
+indexed across ANALYZE, VACUUM ANALYZE, concurrent UNIQUE construction, and cleanup
+of a separate failed UNIQUE target. After the target became valid, PostgreSQL could
+legitimately choose it instead of the preparatory index.
+
+The follow-up also found that extreme session or tablespace cost settings can
+defeat scan switches, and a non-leading covering index can yield an unbounded
+index walk. The implementation candidate therefore needs a scoped cost profile,
+checks on effective tablespace costs and every eligible index path, and lifecycle
+rules that retain the valid preparatory index while guarded writers are admitted.
+It must establish a safe plan family, not assume an earlier EXPLAIN pins a later
+execution. These are requirements for the proposed guard, not implemented claims.
+Evidence: `/tmp/opencode/managed-probe-review.md` and
+`/tmp/opencode/managed-probe-results.BiPpOGFz/`. Only PostgreSQL 17.10 was executed
+in these experiments; supported-major validation remains required. Promotion is
+still refused pending the connected writer, Contract and recovery implementation.
 
 Targeted evidence is in `/tmp/opencode/stage-preparation/`: the native stage
 scenarios verify duplicate writes, valid NONUNIQUE indexes, predecessor read/write
