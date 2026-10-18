@@ -5,7 +5,7 @@
 # PostgreSQL tools on PATH. Arguments select focused kernel tests only.
 set -euo pipefail
 repo_root="$(CDPATH='' cd -- "$(dirname "$0")/.." && pwd)"
-required_tools=(initdb pg_ctl go python3 dune timeout tee)
+required_tools=(initdb pg_ctl go python3 dune timeout tee git tar psql)
 if [[ ${TESL_MIGRATION_TEST_POOLERS:-0} == 1 ]]; then required_tools+=(pgbouncer); fi
 if [[ ${TESL_MIGRATION_TEST_CLUSTER_CRASH:-0} == 1 ]]; then required_tools+=(pg_basebackup); fi
 for tool in "${required_tools[@]}"; do
@@ -124,4 +124,10 @@ if (( $# == 0 )); then
   run_phase review05 3600 python3 "$repo_root/scripts/test-db-migration-review-05.py" --artifacts "$migration_tmp/review05-releases" --output "$migration_tmp/review05-results"
   run_phase review11 3600 python3 "$repo_root/scripts/test-db-migration-review-11.py" --artifacts "$migration_tmp/review05-releases" --output "$migration_tmp/review11-results"
   run_phase twenty-releases 3600 python3 "$repo_root/example/db-twenty-releases/run.py" --output "$migration_tmp/twenty-releases"
+  # Mandatory full-gate comparison; sequential so other phases do not distort
+  # latency. Missing pinned history, noisy calibration or errors fail the gate.
+  run_phase latency-statistics 120 python3 "$repo_root/scripts/test-migration-latency.py"
+  run_phase latency-regression 3600 python3 "$repo_root/scripts/compare-migration-latency.py" \
+    --baseline-ref "${TESL_MIGRATION_LATENCY_BASELINE:-9852f263b0ce52f78045c3edb266625aa4460674}" \
+    --output "$evidence/latency-regression"
 fi

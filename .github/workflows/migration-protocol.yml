@@ -40,6 +40,9 @@ jobs:
         postgres: ${{ fromJSON(github.event_name == 'schedule' && '[14,15,16,17,18]' || '[14,18]') }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The latency gate independently builds its pinned baseline commit.
+          fetch-depth: 0
       - uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25
         with:
           extra-conf: |

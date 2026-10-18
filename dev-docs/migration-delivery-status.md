@@ -47,15 +47,25 @@ pre-extension binaries.
 Safe unrelated-table Drop now permits unchanged queues, comparing full historical
 membership and payload/proof/codec contracts. Current application imports cannot
 retain access to dropped entities through historical schemas or transitive helpers.
-After integration with the durable facilities, the compiler planning suite passed
-16 tests and the PostgreSQL application suite passed in 111 seconds. These scenarios
+After integration with the durable facilities, all 16 compiler planning cases passed
+and the PostgreSQL application suite passed in 111 seconds. These scenarios
 cover old-claim refusal, surviving claims, restamped retained jobs, delayed-job
 consumption and source-contract tampering. The embedded-runtime seam passed six
 tests; generated snapshots were refreshed. Logs:
 `/tmp/opencode/safe-drop-integrated-{compiler,postgres,embedded}.log`.
 
-Staged uniqueness, queue removal, latency calibration and full traceability still
-have pending work in isolated drafts. A final full gate remains required.
+The full migration runner now includes a pinned baseline/candidate latency gate.
+Its standalone run at `.tesl-stuff/latency-cli-only-20261018` passed A/A noise
+calibration, all correctness checks and all four p50/p95 comparisons. Baseline
+read/write p50 was 0.936/1.656ms; candidate was 0.925/1.636ms. The comparator
+rejected a deliberate +3ms change to recorded candidate samples. Two earlier
+calibration failures are retained and documented; sample size and compiler-build
+scope were corrected without widening thresholds. See
+[latency policy and evidence](../scripts/MIGRATION-LATENCY.md). This establishes
+neither absolute migration overhead nor hosted-runner reliability.
+
+Staged uniqueness, queue removal and full traceability still have pending work
+in isolated drafts. A final full gate remains required.
 
 ## Delivery contract
 
