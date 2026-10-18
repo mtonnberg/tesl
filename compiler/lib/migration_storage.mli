@@ -29,3 +29,4 @@ val digest : t -> string
 
 (** Exact canonical payload used by digest; no alternate storage identity. *)
 val node : t -> Migration_canonical.node
+val stage_nodes : t -> Migration_canonical.node

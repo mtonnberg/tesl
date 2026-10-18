@@ -111,6 +111,11 @@ let inventory_history () = project (fun write ->
   let index=only (only (Migration_storage.tables storage)).indexes in
   check bool "preparatory physical index is NONUNIQUE" false index.unique;
   check string "explicit name" "prep_a" index.name;
+  (match Migration_storage.stage_nodes storage with
+   | Migration_canonical.Seq [Migration_canonical.Seq [_;Bytes id;semantic;_;_;_;_;_;_;_]] ->
+     check string "sealed descriptor carries semantic id" old.stage_id id;
+     check bool "sealed descriptor carries full typed dependency contract" true (semantic=old.stage_contract)
+   | _ -> fail "missing complete source storage stage descriptor");
   let plain=load write "V9" (source "V9" "index [active] as \"prep_a\"") in
   check bool "stage canonical identity differs from plain index" true (I.snapshot before<>I.snapshot plain);
   (match get (I.stage_transitions ~before ~after:plain) with [I.Cancel _] -> () | _ -> fail "not cancellation");

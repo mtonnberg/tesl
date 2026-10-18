@@ -78,9 +78,26 @@ let check_internal ~queue_expansion ~schemas ~edges = protect (fun () ->
   adjacent 2 schemas edges;
    (match I.check_stage_history schemas with
     | Ok () -> () | Error error -> reject ~code:"MIG030" error.loc error.message);
-   List.iter (fun schema -> List.iter (fun (stage:I.staged_index) ->
-     reject ~code:"MIG030" stage.stage_loc
-       "staged uniqueness source is preparatory only; row execution requires protected stage control and reviewed promotion/cancellation support, which are not implemented") (I.staged_indexes schema)) schemas;
+   let has_stages=List.exists(fun schema->I.staged_indexes schema<>[]) schemas in
+   List.iter (fun (stage:I.staged_index) -> reject ~code:"MIG030" stage.stage_loc
+     "stage preparation on original V1 is not implemented; introduce the preparatory index on an existing table in a later additive revision") (I.staged_indexes first);
+   let rec stage_pairs = function
+    | before::(after::_ as rest) ->
+      let old_storage=checked(P.describe before) and fresh_storage=checked(P.describe after) in
+      let descriptors storage=match P.stage_nodes storage with C.Seq nodes -> nodes | _ -> assert false in
+      List.iter (fun node -> match node with
+       | C.Seq [_;C.Bytes id;_;_;_;C.Bytes table;C.Bytes column;_;_;C.Bytes index] ->
+         (match List.find_opt (function C.Seq (_::C.Bytes old::_) -> old=id | _ -> false) (descriptors old_storage) with
+          | Some old when old=node -> ()
+          | Some _ -> reject ~code:"MIG030" loc "carried stage must preserve its exact preparatory physical descriptor"
+          | None -> match List.find_opt (fun (t:P.table) -> t.name=table) (P.tables old_storage) with
+            | Some old when List.exists (fun (c:P.column) -> c.name=column) old.columns &&
+                not(List.exists (fun (i:P.index) -> i.name=index) old.indexes) -> ()
+            | _ -> reject ~code:"MIG030" loc "stage preparation requires a new nonunique index on an existing table/key")
+       | _ -> assert false) (descriptors fresh_storage);
+      stage_pairs rest
+    | _ -> () in
+   if has_stages then stage_pairs schemas;
    if queue_expansion then begin
       List.iter (fun edge ->
         if D.queue_transforms edge<>[] && S.entries(D.coverage edge)<>[] then
@@ -192,6 +209,9 @@ let check_internal ~queue_expansion ~schemas ~edges = protect (fun () ->
         bindings:={version=next.version;previous=old;current=fresh;link;row}::!bindings) rows) checked_link;
     versions:=next::!versions;previous:=next) (List.tl schemas) edges;
   let result={retirements=List.rev !retirements;versions=List.rev !versions;bindings=List.sort (fun (a:binding) (b:binding) -> compare (a.version,a.current.identity) (b.version,b.current.identity)) !bindings;links=List.rev !links;edges} in
+   if has_stages &&
+      (result.retirements<>[] || result.bindings<>[] || List.exists(fun edge->D.queue_transforms edge<>[])edges) then
+     reject ~code:"MIG030" loc "stage preparation currently requires an additive history; combining stages with transformations, queue conversion or Drop is not implemented";
    ignore (checked (revalidate result));result)
 
 let check = check_internal ~queue_expansion:false

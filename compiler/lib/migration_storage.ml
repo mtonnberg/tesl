@@ -14,6 +14,9 @@ let inventory t = t.inventory
 let tables t = t.tables
 let digest t = t.digest
 let node t = t.node
+let stage_nodes t = match t.node with
+ | Seq [Bytes "postgres-storage-v2";_;_;stages] -> stages
+ | _ -> Seq []
 exception Invalid of S.error
 let reject loc message = raise (Invalid {S.code="MIG016";loc;message;related=[]})
 let identifier loc name =
@@ -136,7 +139,17 @@ let describe inventory =
   let scalar (c : column) = Seq [Bytes c.name;Bytes (scalar_name c.scalar);bool c.nullable;bool c.primary_key] in
   let index (i : index) = Seq [Bytes i.name;Seq (List.map bytes i.columns);bool i.unique] in
   let storage t = Seq [Bytes t.name;Seq (List.map scalar t.columns);Seq (List.map index t.indexes)] in
-  let node = Seq [Bytes "postgres-storage-v1";I.snapshot inventory;Seq (List.map storage tables)] in
+   let stages=I.staged_indexes inventory |> List.map (fun stage ->
+    let table=List.find (fun t -> t.entity.entity_name=stage.I.stage_entity) tables in
+    let column=List.find (fun (c:column) -> c.field.name=stage.stage_field) table.columns in
+    let index=List.find (fun (i:index) -> not i.unique && i.columns=[column.name]) table.indexes in
+    let prefix=I.root_module inventory ^ "." in
+    let entity=String.sub stage.stage_entity (String.length prefix) (String.length stage.stage_entity-String.length prefix) in
+    Seq [Bytes "staged-unique-preparation-v1";Bytes stage.stage_id;stage.stage_contract;
+      Bytes entity;Bytes stage.stage_field;Bytes table.name;Bytes column.name;
+      Bytes (scalar_name column.scalar);bool column.nullable;Bytes index.name]) in
+   let node = if stages=[] then Seq [Bytes "postgres-storage-v1";I.snapshot inventory;Seq (List.map storage tables)]
+    else Seq [Bytes "postgres-storage-v2";I.snapshot inventory;Seq (List.map storage tables);Seq stages] in
   let digest = Migration_canonical.digest Migration node in
   Ok {inventory;tables;digest;node}
  with Invalid error -> Error [error]

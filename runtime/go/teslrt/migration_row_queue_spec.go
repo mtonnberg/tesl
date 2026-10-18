@@ -40,7 +40,7 @@ begin
   pos:=pos+count_bytes;
  end loop;
  if (width=8 and fields[1] not in ('tesl-retained-physical-version-v1','tesl-retained-physical-version-v2')) or
-     (width=9 and fields[1] not in ('tesl-retained-physical-version-v3','tesl-retained-physical-version-v4','tesl-retained-physical-version-v6')) or
+     (width=9 and fields[1] not in ('tesl-retained-physical-version-v3','tesl-retained-physical-version-v4','tesl-retained-physical-version-v6','tesl-retained-physical-version-v8')) or
      (width=10 and fields[1] not in ('tesl-retained-physical-version-v5','tesl-retained-physical-version-v7')) or
     fields[2]!~'^(Schema\.[A-Z][A-Za-z0-9_]*|[A-Z][A-Za-z0-9_]*Schema)$' or
     pg_catalog.octet_length(fields[3])<1 or pg_catalog.octet_length(fields[3])>63 or

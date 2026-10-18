@@ -13,6 +13,7 @@
  (target embedded_go_runtime.ml)
  (mode promote)
  (deps
+   ../../../../runtime/go/teslrt/migration_stage_preparation.go
   ../../../../runtime/go/teslrt/migration_budget.go
    ../../../../runtime/go/teslrt/migration_cache.go
    ../../../../runtime/go/teslrt/migration_cache_runtime.go

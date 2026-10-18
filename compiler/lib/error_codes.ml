@@ -277,9 +277,10 @@ let registry : entry list = [
        promise. Its single key must use supported builtin equality and storage. \
        Pending stage identity includes the complete typed field dependency closure. \
        Carry it unchanged, or explicitly cancel or promote it in reviewed source. \
-       Key mutation requires prior cancellation. PostgreSQL stage execution, \
-       protected cancellation and reviewed PromoteStage are not implemented; \
-       source declarations do not authorize these operations.";
+       Key mutation requires prior cancellation. Preparation is supported only \
+       through sealed additive original-V1 row histories, with a new nonunique \
+       index on an existing table/key. Protected cancellation and reviewed \
+       PromoteStage are not implemented; preparation grants no uniqueness.";
     manual = Some "best-practices#database-access" };
 
   { code = "MIG031"; category = Migration;

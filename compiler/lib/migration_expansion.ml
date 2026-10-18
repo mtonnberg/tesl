@@ -89,7 +89,7 @@ let derive ~initial_version baseline edges =
     let before,after=S.inventories (D.coverage edge) in [before;after]) edges in
   List.iter (fun inventory -> List.iter (fun (stage:I.staged_index) ->
     reject ~code:"MIG030" stage.stage_loc
-      "staging unique index is a preparatory obligation; protected stage execution is not implemented") (I.staged_indexes inventory)) inventories;
+      "staged preparation requires the sealed original-V1 row protocol; legacy expansion-plan stage execution is not implemented") (I.staged_indexes inventory)) inventories;
  let tables = Hashtbl.create 16 and relations = Hashtbl.create 32 in
  let reserve loc name =
    if Hashtbl.mem relations name then reject loc ("retained PostgreSQL relation name cannot be reused: " ^ name);

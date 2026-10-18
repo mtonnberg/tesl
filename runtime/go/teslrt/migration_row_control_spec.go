@@ -3,7 +3,7 @@ package teslrt
 import "strings"
 
 func pgRowControlTables() []pgMigrationControlTable {
-	return append([]pgMigrationControlTable{
+	return append(append([]pgMigrationControlTable{
 		{"tesl_row_baseline", `
  id smallint primary key check(id=1),
  initial_version integer not null check(initial_version=1),
@@ -78,7 +78,7 @@ func pgRowControlTables() []pgMigrationControlTable {
  primary key(version,entity),unique(version,table_name),unique(version,ordinal),
  check(pg_catalog.encode(pg_catalog.sha256(type_contract),'hex')=type_contract_hash),
  check(pg_catalog.encode(pg_catalog.sha256(physical_storage),'hex')=physical_storage_hash)`},
-	}, append(append(append(pgRowForwardTables(), pgRowLifecycleTables()...), pgRowQueueWorkTables()...), pgRowQueueRetirementTables()...)...)
+	}, append(append(append(pgRowForwardTables(), pgRowLifecycleTables()...), pgRowQueueWorkTables()...), pgRowQueueRetirementTables()...)...), pgStageControlTables()...)
 }
 
 // Format5 binds each version to its original baseline and checked expansion
@@ -160,6 +160,7 @@ end`
 		}
 	}
 	functions = append(functions, internal...)
+	functions = append(functions, pgStageControlFunctions(namespace)...)
 	functions = append(functions, pgQueueRegistrationFunctions(namespace)...)
 	functions = append(functions, pgRowQueueOperationFunctions(namespace)...)
 	functions = append(functions, pgRowQueueFunctions(namespace)...)

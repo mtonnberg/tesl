@@ -64,50 +64,95 @@ scope were corrected without widening thresholds. See
 [latency policy and evidence](../scripts/MIGRATION-LATENCY.md). This establishes
 neither absolute migration overhead nor hosted-runner reliability.
 
-Staged-uniqueness **compiler groundwork** is now integrated on top of `923f51f`.
-This is not production staged uniqueness: PostgreSQL binding/emission, additive
-expansion and row execution still refuse stage-bearing plans with `MIG030`.
-Reviewed promotion and protected cancellation also remain refused. No stage
-control tables, writer guards or promotion/recovery executor have been enabled.
-The unconnected Go guard experiment remains in the isolated draft, not in root
-production sources or emitted artifacts.
+On top of compiler groundwork `4f03e6f`, **bounded V8 Stage/Carry preparation is
+connected to the real original-V1 PostgreSQL execution path**. It builds NONUNIQUE
+indexes and records immutable pending obligations. It does not implement the full
+three-release uniqueness protocol: no V9 writer guard, unique-index promotion or
+V10 reliance is enabled. Reviewed promotion and cancellation remain refused;
+deleting the source declaration cannot silently cancel an installed obligation.
 
-The source surface parses/formats `staging unique index [field]` without granting
-uniqueness, `onConflict` eligibility or Memory enforcement. Canonical stage identity
-includes the complete typed field/storage/proof dependency closure, while excluding
-revision and physical index names. Storage descriptions are NONUNIQUE; source
-history distinguishes introduction/carry/cancel/promotion and rejects unsupported
-key mutations. The current admitted subset is Bool and Int32 with integer/bigint
-storage, optionally nullable. String C/POSIX collation and UUID/bytes mappings
-remain unsupported. Source carry-age checking defaults to three revisions;
-protected state and runtime configuration remain future work.
+The supported slice is an additive history, introducing a new preparatory index
+on an existing table/key after V1, then carrying its exact descriptor forward.
+Bool and Int32 with integer/bigint storage, optionally nullable, are supported.
+Stage-on-birth/V1, reuse of an existing index name, changing a carried preparatory
+descriptor, histories containing row transformations/queue conversion/Drop, String
+C/POSIX collation and UUID/bytes mappings remain explicitly unsupported. Existing
+stage-free facilities and safe Drop retain their previous checks and behavior.
+Source carry-age checking still defaults to three revisions; runtime configuration
+of that limit is not implemented.
 
-`test_staged_indexes` is mandatory both through Dune and the full migration runner.
-It includes real Go execution of `compiler/test/fixtures/stage-memory.tesl`, testing
-duplicate inserts, duplicate-producing updates and multiple NULL keys, as well as
-the compiler/history/refusal cases. Integrated-root verification passed: staged
-indexes 9 cases (including the three real Memory tests), database indexes/onConflict
-30, index lint 29, source inventory 14, storage 11, compiler ABI 21, safe-Drop
-planning 16 and embedded-runtime seam 6. Compiler/selected test builds passed.
-Logs: `/tmp/opencode/uniqueness-integrated/`. Embedded documentation and source-ABI
-Go snapshots were regenerated from root; embedded runtime inputs are unchanged.
-No guard helper was integrated, so no new guard PostgreSQL suite is claimed here.
-These targeted results do not replace a final full CI gate. Queue removal, full
-traceability and the complete three-release uniqueness protocol remain open.
+`postgres-storage-v2` and `tesl-retained-physical-version-v8` carry the complete
+typed semantic descriptor and stage ID, not only an index name or digest. The
+runtime compares source and physical descriptors and reconstructs field dependency
+reachability, including private check/establish producers and codec reverse edges.
+Ordinary stage-free source/physical encodings retain their existing formats.
 
-**Next slice: sealed V8 preparation end to end.** Add the exact stage descriptor
-to retained source/physical plans and their runtime decoder; install and observe
-protected `tesl_schema_stages` pending rows with source ABI, plan identity and
-preparatory index linkage. Use the existing nonunique concurrent-index job/lease
-executor to build that exact preparatory index, including interrupted-build
-recovery and catch-up. Extend exact catalog/function/owner/ACL checks alongside
-the integrated durable facilities, preserving safe Drop. Lift executable-plan
-refusal only for verified Stage/Carry operations in this slice; promotion and
-cancellation stay refused. Acceptance requires compiled predecessor/staging
-applications sharing one private database: duplicate writes still succeed,
-nonunique index validity and pending stage identity survive restart, and tampered
-source/catalog/ABI plus attempted promotion refuse. This slice introduces no V9
-guard or unique index and must not claim enforcement or V10 readiness.
+**Catalog compatibility is explicit.** Every fresh original-V1 installation built
+by this toolchain installs the required `tesl_schema_stage_protocol` format-1 row
+and `tesl_schema_stages` table alongside row format5, even before a stage is
+declared. This lets predecessor and staging binaries built by this toolchain
+coexist. Tables, constraints, function bodies, owners and ACLs are checked exactly.
+Pre-extension development catalogs missing that extension are refused, not adopted
+or upgraded implicitly. Compatibility with archived pre-extension binaries is not
+claimed.
+
+Stage registration shares the nonunique index job/receipt transaction. Each
+pending row retains the full descriptor, its checksum, introduction version,
+physical-plan hash, actual creator ABI, source snapshot, table/index and job ID.
+Observation derives that complete expected tuple from protected physical manifests
+and committed jobs; carry/restart/reinstall do not rewrite it to the latest version
+or ABI. Existing concurrent-index jobs and lease tokens own building/recovery.
+The stage stays `pending` even after its linked index job becomes `valid`: neither
+state grants uniqueness, `onConflict` eligibility or Memory enforcement.
+
+The registration SQL itself now authorizes the descriptor before inserting it:
+an owner-only bounded canonical parser extracts the actual migration document,
+its v8 physical body and that body's ninth-child stage inventory. Only an exact
+immediate child of that inventory is eligible. The full descriptor bytes and its
+ID/table/index/key column are bound to the protected plan and nonunique job;
+the job receipt, object hash, expansion hash and creator ABI must also agree.
+Physical/job rows are held with share locks through registration. Atom contents,
+nested lists and other physical fields cannot supply descriptor authority.
+Parsing is bounded to 64 MiB, 1,000,000 nodes and 512 edges of nesting, with exact
+framing and no trailing bytes. The independent Go source/physical/record checks
+remain in place; later observation is not the mutation-boundary authorization.
+
+Worker-direct regression calls start with an empty stage table so uniqueness or
+replay constraints cannot mask authorization failures. Fake IDs, mutated and
+coherently rehashed descriptors, cross-stage/index/job bindings, and wrong job
+columns fail without inserting a row. Synthetic protected plans with coherent
+hash/job linkage exercise embedded-atom, nested-list and wrong-position attacks.
+Legitimate registration and exact replay reconstruct the original records. These
+checks run in the mandatory native preparation suite; evidence for this boundary
+review is in `/tmp/opencode/stage-boundary/`.
+
+Mandatory routes: `test_staged_indexes` includes actual Go Memory execution;
+`test_migration_row_indexes` now also compiles predecessor/staging/carry programs
+and executes the PostgreSQL/race stage-preparation suite. The full migration runner
+already invokes both executables without selecting out either native scenario.
+The preparation implementation is embedded only for PostgreSQL artifacts; the
+isolated experimental V9 guard is still not integrated.
+
+Targeted evidence is in `/tmp/opencode/stage-preparation/`: the native stage
+scenarios verify duplicate writes, valid NONUNIQUE indexes, predecessor read/write
+compatibility, immutable carry/restart/reinstall, finite catch-up, interrupted-build
+lease recovery, and rejection of validly framed descriptor drift, source/ABI drift,
+catalog/ACL drift, missing extension and attempted unreviewed Contract. Compiler
+checks also reject promotion and source deletion after generating fresh seals.
+Staged compiler/Memory (9), inventory (14), storage (11), safe-Drop planning (16),
+embedded seam (6), the original index application scenario, and 20 top-level
+baseline/facility/dependency runtime tests passed; the latter ran with `-race` and
+required private PostgreSQL. `go vet` and `staticcheck` passed (an existing
+capitalized facility-error message was lowercased without changing its ACL check).
+These are targeted results, not a
+full CI or latency-gate pass.
+
+**Remaining V9/V10 work:** indexed per-key guards on every relevant write path,
+reviewed `PromoteStage`, predecessor writer fencing before concurrent UNIQUE build,
+protected cancellation, duplicate reporting/repair/retry and promotion recovery,
+and V10 readiness tied to durable enforcement plus a valid/ready/live unique index.
+The pending-only stage-control extension must be evolved explicitly for those
+transitions. Queue removal and full traceability also remain open.
 
 ## Delivery contract
 

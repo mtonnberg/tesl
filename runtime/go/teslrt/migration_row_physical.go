@@ -57,6 +57,7 @@ type pgRowPhysicalPlan struct {
 	windows                                 []pgRowPhysicalWindow
 	retirements                             []pgRowPhysicalRetirement
 	queueConversions                        []pgRowPhysicalQueueConversion
+	stages                                  []pgStagePreparation
 	contract, hash                          string
 }
 type pgCompiledRowPhysicalHistory struct {
@@ -89,6 +90,7 @@ func pgParseRowPhysicalShape(contract, hash string, settled bool) (*pgRowPhysica
 		valid = valid || (n.list(10) && n.children[0].isAtom("tesl-retained-physical-version-v5"))
 		valid = valid || (n.list(9) && n.children[0].isAtom("tesl-retained-physical-version-v6"))
 		valid = valid || (n.list(10) && n.children[0].isAtom("tesl-retained-physical-version-v7"))
+		valid = valid || (n.list(9) && n.children[0].isAtom("tesl-retained-physical-version-v8"))
 		if !valid {
 			return nil, fmt.Errorf("invalid retained physical document")
 		}
@@ -121,6 +123,13 @@ func pgParseRowPhysicalShape(contract, hash string, settled bool) (*pgRowPhysica
 		return n.children
 	}
 	plan := &pgRowPhysicalPlan{settled: settled, family: atom(n.children[1]), namespace: atom(n.children[2]), version: number(n.children[3], 2147483646), schemaSnapshotHash: atom(n.children[4]), storageSnapshotHash: atom(n.children[5]), contract: contract, hash: hash}
+	if n.children[0].isAtom("tesl-retained-physical-version-v8") {
+		var err error
+		plan.stages, err = pgParseStagePreparations(n.children[8])
+		if err != nil || len(plan.stages) == 0 {
+			return nil, fmt.Errorf("invalid stage-bearing physical plan: %v", err)
+		}
+	}
 	if !pgMigrationIdentifier(plan.namespace) || !pgMigrationFamily(plan.family) || !pgMigrationDigest(plan.schemaSnapshotHash) || !pgMigrationDigest(plan.storageSnapshotHash) {
 		r.fail("invalid physical owner")
 	}
@@ -451,6 +460,12 @@ func pgValidateRowPhysicalLineage(previous, plan *pgRowPhysicalPlan) error {
 	if plan == nil || plan.settled {
 		return fmt.Errorf("retained lineage requires a window physical plan")
 	}
+	if err := pgVerifyStagePhysical(plan); err != nil {
+		return err
+	}
+	if err := pgVerifyStageLineage(previous, plan); err != nil {
+		return err
+	}
 	if plan.requiresContractVersion > 0 && (previous == nil || !previous.settled) {
 		return fmt.Errorf("physical expansion requires settled predecessor from exact contract")
 	}
@@ -684,8 +699,11 @@ func pgBindRowPhysicalPlan(compiled *pgCompiledRowHistory, previous, plan *pgRow
 	}
 	reader := &pgMigrationWireReader{}
 	sourceStorage := pgRowDocument(reader, source.StorageContract, source.StorageSnapshotHash, "migration")
-	if reader.err != nil || !sourceStorage.list(3) || sourceStorage.children[2].atom {
+	if reader.err != nil || !pgStageStorageShape(sourceStorage) || sourceStorage.children[2].atom {
 		return fmt.Errorf("missing exact physical source storage")
+	}
+	if err := pgStageSourceMatches(plan, sourceStorage); err != nil {
+		return err
 	}
 	for _, entity := range source.Entities {
 		retained := plan.entity(entity.Entity)

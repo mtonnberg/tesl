@@ -85,6 +85,9 @@ func pgReadRowIndexJobs(ctx context.Context, tx pgx.Tx, b *pgRowBaseline, forwar
 	if err := pgVerifyRowIndexJobs(forward, intents, jobs, version, b.history.SourceCompilerABI); err != nil {
 		return nil, err
 	}
+	if err := pgVerifyStageRecords(ctx, tx, b, forward, jobs); err != nil {
+		return nil, err
+	}
 	// pgVerifyRowWorkState accounts for every index lease plus every strictly
 	// verified row shard. Neither prefix is an exemption for orphan lease rows.
 	return jobs, nil

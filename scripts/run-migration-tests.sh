@@ -100,6 +100,9 @@ if (( $# == 0 )); then
   compiler_test test_migration_queue
   compiler_test test_migration_queue_transform
   run_phase queue-pipeline 120 go -C "$repo_root/runtime/go" test -race -count=1 -timeout=60s ./teslrt -run '^TestQueueConversionPipeline'
+  # test_migration_row_indexes also builds predecessor/staging/carry executables
+  # and runs the mandatory Stage preparation PostgreSQL/race suite, including
+  # interrupted index work, catch-up, immutable records and tamper refusal.
   # Exact source/target codecs, separate predecessor/successor executables,
   # proof obligations and the isolated candidate all remain mandatory.
   for suite in \

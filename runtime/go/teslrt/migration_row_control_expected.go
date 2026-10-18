@@ -41,6 +41,26 @@ func pgExpectedRowControl(e *pgCatalogExpectations, owner, name string) (*pgCata
 	digest := func(value, hash string) { check("(encode(sha256("+value+"), 'hex'::text) = "+hash+")", value, hash) }
 	bounded := func(n string) { check("(("+n+" >= 1) AND ("+n+" <= 2147483646))", n) }
 	switch name {
+	case "tesl_schema_stage_protocol":
+		col("id", "int2")
+		col("format", "int4")
+		con("p", "", "id")
+		check("(id = 1)", "id")
+		check("(format = 1)", "format")
+	case "tesl_schema_stages":
+		col("stage_id", "text")
+		col("descriptor", "bytea")
+		col("descriptor_hash", "text")
+		col("introduced_version", "int4")
+		for _, name := range []string{"physical_hash", "source_abi", "source_snapshot", "table_name", "index_name", "job_id", "state"} {
+			col(name, "text")
+		}
+		con("p", "", "stage_id")
+		con("u", "", "index_name")
+		con("u", "", "job_id")
+		check("(introduced_version >= 2)", "introduced_version")
+		check("(state = 'pending'::text)", "state")
+		digest("descriptor", "descriptor_hash")
 	case "tesl_row_queue_discards":
 		col("job_id", "text")
 		col("source_digest", "text")

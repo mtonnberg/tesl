@@ -242,7 +242,7 @@ func pgRowBool(node pgRowCanonical, value bool) bool {
 // Compare the declared per-schema column inventory with its exact canonical
 // storage description. This neither observes nor predicts a retained catalog.
 func pgRowCheckStorage(r *pgMigrationWireReader, schema, storage pgRowCanonical, entities []PgRowSourceEntity) {
-	if !storage.list(3) || !storage.children[0].isAtom("postgres-storage-v1") || !pgRowCanonicalEqual(schema, storage.children[1]) || storage.children[2].atom {
+	if !pgStageStorageShape(storage) || !pgRowCanonicalEqual(schema, storage.children[1]) || storage.children[2].atom {
 		r.fail("row storage document does not embed its exact schema snapshot")
 		return
 	}
@@ -355,6 +355,7 @@ func pgReadRowBase(history PgCompiledMigrationHistory) ([]PgRowSourceInventory, 
 			}
 			pgRowCheckStorage(r, schema, storage, version.Entities)
 			pgRowCheckTypeInventory(r, schema, d.Family, history.SourceCompilerABI, history.StoredValueCompatibility, version.Entities)
+			pgCheckStageSource(r, schema, storage, d.Family, history.SourceCompilerABI, history.StoredValueCompatibility)
 			return version
 		})
 		if len(d.Versions) != d.CurrentVersion {

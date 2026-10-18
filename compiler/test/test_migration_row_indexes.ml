@@ -101,7 +101,14 @@ let edge root path previous current source historical =
   get (Migration_closure.attach ~file:path ~source closure)
  else source in
  write path source; accepts path
-let export output =
+let export ?(stages=false) output =
+ let schema version =
+  let text=schema version in
+  if not stages then text else
+  text |> replace "import Tesl.Maybe exposing" "import Tesl.Int32 exposing [Int32]\nimport Tesl.Maybe exposing"
+   |> replace "active: Bool" "active: Bool, amount: Maybe Int32 @db(integer)"
+   |> replace "active: False" "active: False, amount: Nothing"
+   |> replace "index [active] as \"active_lookup\"" "staging unique index [active] as \"active_lookup\"\n staging unique index [amount] as \"amount_lookup\"" in
  let root=Filename.temp_dir "tesl-row-index-source-" "" in
  Fun.protect ~finally:(fun () -> remove root) (fun () ->
  let file p=Filename.concat root p in
@@ -113,14 +120,14 @@ let export output =
    | Compile.GoSuccess a -> a | Compile.GoFailure ds -> fail (describe ds) in
   let destination=Filename.concat output version in
   List.iter (fun (a:Emit_go.artifact) -> if not (Filename.check_suffix a.path ".json") then write (Filename.concat destination a.path) a.contents) artifacts;
-  if version="v2" then (
+   if version="v2" && not stages then (
    let repo=Sys.getenv "TESL_REPO_ROOT" in
    List.iter (fun (source,target) -> write (Filename.concat destination target) (Source_input.read (Filename.concat repo ("compiler/test/fixtures/row-index/"^source))))
     ["bridge.go","internal/teslrt/index_probe_testbuild.go";"probe.go","cmd/index-probe/main.go"]);
   check bool "ordinary main emitted" true (Sys.file_exists (Filename.concat destination "cmd/app/main.go"));
   let command=Printf.sprintf "cd %s && timeout 120s go build -race -tags tesl_migration_test -o app ./cmd/app >build.log 2>&1" (Filename.quote destination) in
   if Sys.command command<>0 then fail (Source_input.read (Filename.concat destination "build.log"));
-  if version="v2" then (
+   if version="v2" && not stages then (
    let command=Printf.sprintf "cd %s && timeout 120s go build -race -tags tesl_migration_test -o index-probe ./cmd/index-probe >probe-build.log 2>&1" (Filename.quote destination) in
    if Sys.command command<>0 then fail (Source_input.read (Filename.concat destination "probe-build.log"))) in
  write current (schema 1); build "v1";
@@ -134,17 +141,33 @@ let export output =
  edge root (file "migrations/notes/v2.tesl") v1 v2 (additive 2 "Schema.Notes.V2") true;
  write current (schema 3);
  edge root (file "migrations/notes/v3.tesl") v2 current (additive 3 "Schema.Notes.VCurrent") false;
- build "v3")
-let compilation () =
+  build "v3";
+  if stages then List.iter (fun (decision,edit) ->
+    write current (edit (schema 3));
+    let header=get (Migration_header.create ~previous:(seal root v2) ~current:(seal root current)) in
+    write (file "migrations/notes/v3.tesl")
+      (Migration_header.encode header ^ additive 3 "Schema.Notes.VCurrent");
+    match Compile.compile_go_file (file "app.tesl") with
+    | Compile.GoSuccess _ -> fail ("unreviewed stage " ^ decision ^ " compiled")
+    | Compile.GoFailure ds -> check bool (decision ^ " requires its protected protocol: " ^ describe ds) true
+        (List.exists (fun (d:Compile.diagnostic) -> d.code="MIG030") ds))
+    ["promotion",replace "staging unique index [active]" "unique index [active]";
+     "cancellation",replace "staging unique index [active] as \"active_lookup\"" ""])
+let compilation ?(stages=false) () =
  let output=Filename.temp_dir "tesl-row-index-programs-" "" in
  Fun.protect ~finally:(fun () -> remove output) (fun () ->
-  export output;
+   export ~stages output;
   let repo=Unix.realpath (Sys.getenv "TESL_REPO_ROOT") in
   let log=Filename.concat output "postgres.log" in
-  let command=Printf.sprintf "cd %s && TESL_ROW_INDEX_PROGRAMS=%s timeout 150s go test -p 1 -race -tags tesl_migration_test -timeout 120s ./teslrt -run '^TestPgRowIndex' -count=1 -v > %s 2>&1"
-   (Filename.quote (Filename.concat repo "runtime/go")) (Filename.quote output) (Filename.quote log) in
+   let budget=if stages then 150 else 120 in
+   let command=Printf.sprintf "cd %s && %s=%s timeout %ds go test -p 2 -race -tags tesl_migration_test -timeout %ds ./teslrt -run %s -count=1 -v > %s 2>&1"
+    (Filename.quote (Filename.concat repo "runtime/go"))
+    (if stages then "TESL_STAGE_PREPARATION_PROGRAMS" else "TESL_ROW_INDEX_PROGRAMS")
+    (Filename.quote output) (budget+30) budget (Filename.quote (if stages then "^TestPgStagePreparation" else "^TestPgRowIndex")) (Filename.quote log) in
   if Sys.command command<>0 then fail (Source_input.read log))
-let () = match Sys.getenv_opt "TESL_ROW_INDEX_EXPORT" with
- | Some output -> export output
- | None -> run "format5 concurrent indexes" ["native application",[
-   test_case "original index workers, readiness and atomic registration" `Quick compilation]]
+let () = match Sys.getenv_opt "TESL_STAGE_PREPARATION_EXPORT",Sys.getenv_opt "TESL_ROW_INDEX_EXPORT" with
+  | Some output,_ -> export ~stages:true output
+  | _,Some output -> export output
+  | None,None -> run "format5 concurrent indexes" ["native application",[
+    test_case "original index workers, readiness and atomic registration" `Quick (compilation ~stages:false);
+    test_case "sealed stage preparation and carry" `Quick (compilation ~stages:true)]]

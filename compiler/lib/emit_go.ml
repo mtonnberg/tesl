@@ -10497,6 +10497,7 @@ let runtime_file_gates : (string * string list) list = [
 
 let runtime_file_gates = List.map (fun (name, files) ->
   name, if name = "postgres" then files @ [
+    "migration_stage_preparation.go";
     "migration_cache.go"; "migration_cache_runtime.go";
     "migration_email.go"; "migration_email_spec.go";
     "migration_pubsub.go"; "migration_pubsub_runtime.go"] else files)
@@ -13316,7 +13317,7 @@ let register_imported_module ~loc ~exposed ?(protected_names=[]) types signature
     ignore (found_type, found_value, loc))
     exposed
 
-let compile_module_internal ?(migration_metered=false) ?emission_graph ?(nominal_mappings=[]) ?(nominal_reverses=[]) ?(nominal_transports=[]) ?(row_access_entities=[]) ?(row_storage_entities=[]) ?(mode=Release) ?(dependencies=[]) ?(entity_bindings=[]) ?(migration_families=[]) ?(migration_queues=[]) ?(queue_codec_records=[]) ?project_path (m : module_form) =
+let compile_module_internal ?(stage_preparation=false) ?(migration_metered=false) ?emission_graph ?(nominal_mappings=[]) ?(nominal_reverses=[]) ?(nominal_transports=[]) ?(row_access_entities=[]) ?(row_storage_entities=[]) ?(mode=Release) ?(dependencies=[]) ?(entity_bindings=[]) ?(migration_families=[]) ?(migration_queues=[]) ?(queue_codec_records=[]) ?project_path (m : module_form) =
   let previous_transports = !current_nominal_transports and previous_graph= !current_emission_graph in
   let previous_meter = !current_migration_metering and previous_owned = !current_migration_owned_module in
   Fun.protect ~finally:(fun () -> current_migration_metering:=previous_meter;current_migration_owned_module:=previous_owned;current_nominal_transports := previous_transports;current_emission_graph:=previous_graph) (fun () ->
@@ -14062,7 +14063,7 @@ let compile_module_internal ?(migration_metered=false) ?emission_graph ?(nominal
         | None, Some database when database.db_backend = "postgres" -> Some database
         | other, _ -> other in
       if managing <> None then List.iter (fun (index:entity_index) ->
-        if index.ix_staging then unsupported index.ix_loc
+        if index.ix_staging && not stage_preparation then unsupported index.ix_loc
           "MIG030: PostgreSQL staged uniqueness requires protected stage control, reviewed promotion authority and writer fencing; execution is not implemented") e.indexes;
       (* Named by SOME database, whatever its backend: that is what decides whether a test
          block starts from an empty table (see `ent_in_database`). *)
@@ -17430,7 +17431,7 @@ let compiled_row_artifacts ~entry ~modules:_ ~exports source =
         Ok (List.rev acc @ fixtures @ conversions @ Option.fold ~none:[] ~some:(compiled_row_artifacts ~entry ~modules ~exports) row_source)
         with Unsupported error -> Error [error])
       | (m : module_form) :: rest ->
-         (match compile_module_internal ~migration_metered:(Option.is_some row_source || queue_conversions<>[] || fixture_checks<>[]) ?emission_graph ~nominal_mappings:(List.filter (fun mapping ->
+         (match compile_module_internal ~stage_preparation:(row_physical && Option.is_some row_source) ~migration_metered:(Option.is_some row_source || queue_conversions<>[] || fixture_checks<>[]) ?emission_graph ~nominal_mappings:(List.filter (fun mapping ->
           emitted_owner emission_graph (Migration_transform.nominal_mapping_owner mapping) = m.module_name) nominal_mappings) ~nominal_reverses:(List.filter (fun transport ->
           emitted_owner emission_graph (Migration_proof_context.nominal_module transport) = m.module_name) nominal_reverses) ~nominal_transports:(List.filter (fun transport ->
           emitted_owner emission_graph (Migration_proof_context.nominal_module transport) = m.module_name) nominal_transports)

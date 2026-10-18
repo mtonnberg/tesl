@@ -285,7 +285,7 @@ func pgControlFunctionCatalog(ctx context.Context, tx pgx.Tx, namespace string, 
 			return err
 		}
 		if workerCanExecute {
-			return fmt.Errorf("Worker can execute Request-only facility function %s", fn.name)
+			return fmt.Errorf("worker role can execute Request-only facility function %s", fn.name)
 		}
 	}
 	return nil
@@ -295,7 +295,7 @@ func pgControlFunctionRoles(roles PgMigrationControlRoles, fn pgMigrationControl
 	switch fn.name {
 	case "tesl_email_enqueue", "tesl_email_claim", "tesl_email_outcome", "tesl_email_messages", "tesl_email_prune", "tesl_sse_publish", "tesl_sse_prune":
 		return []string{roles.Request}
-	case "tesl_queue_inventory_checked", "tesl_queue_inventory_digest", "tesl_row_admit_version":
+	case "tesl_queue_inventory_checked", "tesl_queue_inventory_digest", "tesl_row_admit_version", "tesl_stage_canonical_children":
 		// Internal composition helpers: only the owner-definer wrappers may
 		// consume these intermediate values. Never application-supplied authority.
 		return []string{roles.Owner}

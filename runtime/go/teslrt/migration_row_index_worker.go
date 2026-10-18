@@ -76,6 +76,9 @@ func pgRegisterRowIndex(ctx context.Context, tx pgx.Tx, b *pgRowBaseline, roles 
 	if err != nil {
 		return err
 	}
+	if err := pgRegisterStagePreparation(ctx, tx, b, index, ordinal); err != nil {
+		return err
+	}
 	migrationBoundary("row-index-after-register")
 	_, _, err = pgReadRowIndexExecutionState(ctx, tx, b, roles)
 	return err

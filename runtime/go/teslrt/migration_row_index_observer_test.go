@@ -21,7 +21,6 @@ func TestPgRowIndexProtectedJobObserver(t *testing.T) {
 	f.call(t, "drop table notes_app.notes; create table notes_app.notes(id bigint primary key,key text not null)")
 	manifest, _, _ := rowIndexManifest(t)
 	manifest.plan.hash, manifest.creatorABI = strings.Repeat("b", 64), pgTestSourceABI
-	baseline := &pgRowBaseline{history: PgCompiledMigrationHistory{Namespace: f.namespace, CurrentVersion: 1, SourceCompilerABI: pgTestSourceABI}}
 	contract := false
 	read := func(catalog bool) error {
 		return pgControlSnapshotMode(f.ctx, f.worker, pgx.ReadOnly, func(tx pgx.Tx) error {
@@ -29,8 +28,14 @@ func TestPgRowIndexProtectedJobObserver(t *testing.T) {
 			if err != nil {
 				return err
 			}
-			jobs, err := pgReadRowIndexJobs(f.ctx, tx, baseline, manifest, intents, false)
+			// This fixture deliberately installs format3, not the row5 + stage1
+			// catalog. Exercise the shared job proof directly; the production row
+			// reader additionally requires the exact stage-control extension.
+			jobs, err := pgReadMigrationIndexJobRows(f.ctx, tx, f.namespace, intents)
 			if err != nil {
+				return err
+			}
+			if err := pgVerifyRowIndexJobs(manifest, intents, jobs, 0, pgTestSourceABI); err != nil {
 				return err
 			}
 			if len(jobs) != 1 || jobs[0].ID != id {
