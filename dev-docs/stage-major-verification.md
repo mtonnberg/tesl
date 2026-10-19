@@ -1,5 +1,7 @@
 # Staged uniqueness: PostgreSQL major verification
 
+> Audience: contributors verifying staged-uniqueness behavior across supported PostgreSQL majors.
+
 The connected, bounded staging/guard/Contract/recovery/cancellation/reliance
 implementation was exercised on PostgreSQL **14.23, 17.10 and 18.4** using fresh
 private clusters and the same actual compiled race-enabled fixtures. This is

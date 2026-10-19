@@ -18,6 +18,26 @@ Automatic deployment wiring and its targeted verification are recorded below.
 
 ## Full-gate follow-up (2026-10-19)
 
+The complete attempt on `cce3708` finished in 4,167 seconds with 21/24 phases
+passing. Dune passed. The remaining failures were a stale runtime assertion that
+still refused supported protected SSE preparation, missing Audience banners on
+five developer pages, and the browser checker exceeding its existing 2 MB ceiling.
+The runtime assertion now distinguishes protected broadcast preparation from
+legacy DDL and retains the legacy-refusal checks; the focused race check passed.
+The Audience banners are present and manual coherence passed.
+
+The browser checker now uses js_of_ocaml's ES6 output, consistent with the
+workbench's existing ES2022 target. With the same minifier, its raw size decreased
+from 2,021,173 to 1,920,150 bytes, and gzip from 612,285 to 605,946 bytes. The ceiling
+was not raised. The standard checker/search parity gate passed; before/after full
+JSON results were identical for all 86 lesson inputs. Existing local-import limits
+of the single-buffer browser remain unchanged. Evidence for the failed full run:
+`.tesl-stuff/pr-final-retry-ci.log`; the rebuilt parity distribution is at
+`/tmp/opencode/playground-phase23`.
+
+The Go phase stopped at its unit suite, before the shared migration runner. These
+targeted fixes therefore still require a complete successful CI invocation.
+
 The attempt on `a53d4ab` stopped at phase 4 after 3,075 seconds. Four migration-plan
 cases exposed diagnostic-order changes caused by applying the new reliance check
 to histories without stages. The check is now limited to stage-bearing histories;

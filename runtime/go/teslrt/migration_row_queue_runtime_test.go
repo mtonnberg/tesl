@@ -28,7 +28,13 @@ func TestRowQueueRuntimeDoesNotAuthorizeLegacyFacilities(t *testing.T) {
 		}
 	}
 	runtime := &pgPubsub{ready: true}
-	pgRequireFacilityRefusal(t, runtime.prepareOn(connection, nil), "SSE")
+	// Protected broadcast preparation is supported and can reuse its ready cursor;
+	// it must not fall back to the legacy outbox's creation/normalization paths.
+	if err := runtime.prepareOn(connection, nil); err != nil {
+		t.Fatal("ready protected broadcast was refused", err)
+	}
 	pgRequireFacilityRefusal(t, createPubsubOutbox(context.Background(), connection), "SSE")
 	pgRequireFacilityRefusal(t, normalizeLegacyPubsubRows(connection), "SSE")
+	connection.queueRuntime = nil
+	pgRequireFacilityRefusal(t, runtime.prepareOn(connection, nil), "SSE")
 }

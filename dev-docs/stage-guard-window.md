@@ -1,5 +1,7 @@
 # Guarded staged-uniqueness window
 
+> Audience: compiler and runtime contributors reviewing guarded writes during staged promotion.
+
 The connected window is **V1 ordinary → V2 staging → V3 declares unique with a
 write guard**. V3 can start and repair data without a UNIQUE index. It cannot use
 `onConflict` on a promoted key. The connected

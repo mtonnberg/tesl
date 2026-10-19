@@ -1,5 +1,7 @@
 # Migration PR requirement register: agreed scope
 
+> Audience: contributors reviewing migration requirements and their acceptance evidence.
+
 This is an explicit PR contract, not a claim to have implemented all three original
 roadmaps. Each `PR-*` clause below has exactly one entry in the
 [requirement register](migration-pr-register.json). The roadmap reconciliation

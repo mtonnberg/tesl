@@ -1,5 +1,7 @@
 # Staged uniqueness: Contract, enforcement and cancellation
 
+> Audience: contributors reviewing staged-uniqueness deployment, recovery and cancellation.
+
 The connected PostgreSQL lifecycle is V1 ordinary storage, V2 nonunique
 preparation, V3 guarded declaration and reviewed promotion, then V4 reliance.
 It supports the existing Bool, int4/int8 and C/POSIX TEXT key domain, including

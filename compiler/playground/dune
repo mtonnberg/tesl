@@ -21,7 +21,9 @@
  (js_of_ocaml
   ; The browser uses the mounted virtual filesystem. Compact calls plus the
   ; pinned final minifier preserve the existing 2 MB shipped-bundle ceiling.
-  (flags (:standard --target-env browser --opt 3 --no-inline))
+  ; Emit ES6 directly (including arrow functions): the workbench already targets
+  ; ES2022. Terser cannot infer all of these safe rewrites from ES5 output.
+  (flags (:standard --target-env browser --opt 3 --no-inline --enable es6))
   (javascript_files vfs_realpath.js))
  ; ── Why this stanza is gated on the RELEASE profile ──────────────────────────
  ; An empty `(alias (name default))` override does NOT work, and that was the
