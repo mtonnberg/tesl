@@ -27,6 +27,9 @@ func pgParseStageGuards(n pgRowCanonical) ([]pgStageGuard, error) {
 		if err != nil {
 			return nil, err
 		}
+		if stages == nil || len(stages) != 1 {
+			return nil, fmt.Errorf("guard requires exactly one preparation descriptor")
+		}
 		s := stages[0]
 		target := entry.children[2]
 		if s.id <= last || !target.list(3) || !target.children[0].atom || !pgMigrationIdentifier(target.children[0].value) ||

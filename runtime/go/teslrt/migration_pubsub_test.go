@@ -122,7 +122,7 @@ func TestWorkerBroadcastConcurrentCommitAndRollback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer other.Close(context.Background())
+	defer func() { _ = other.Close(context.Background()) }()
 	connection := &PostgresDB{schema: f.namespace, migration: &pgMigrationAdmission{version: 1}}
 	for _, rollback := range []bool{false, true} {
 		tx, err := request.Begin(f.ctx)
@@ -137,7 +137,7 @@ func TestWorkerBroadcastConcurrentCommitAndRollback(t *testing.T) {
 		go func() {
 			second, err := other.Begin(f.ctx)
 			if err == nil {
-				defer second.Rollback(context.Background())
+				defer func() { _ = second.Rollback(context.Background()) }()
 				_, err = pgWriteBroadcast(f.ctx, second, connection, "Updates", "key", `"second"`)
 				if err == nil {
 					err = second.Commit(f.ctx)

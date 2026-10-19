@@ -14,6 +14,9 @@ func pgEmailFixture(t *testing.T) (*pgControlTestFixture, *pgx.Conn, *Database, 
 	f, request := pgNewWorkerTest(t)
 	var outbox *Outbox
 	db := pgRowBaselineFixtureConfigured(t, f, nil, func(db *Database) { outbox = NewOutboxOn(db, SmtpSettings{}) })
+	if outbox == nil {
+		t.Fatal("fixture did not register its email outbox")
+	}
 	if _, err := InstallPgCompiledRowBaseline(f.ctx, f.installer, db, f.roles); err != nil {
 		t.Fatal(err)
 	}

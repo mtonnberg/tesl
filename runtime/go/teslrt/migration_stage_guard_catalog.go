@@ -200,6 +200,10 @@ func pgVerifyStageGuardTriggers(ctx context.Context, tx pgx.Tx, namespace string
 			rows.Close()
 			return err
 		}
+		if gs == nil || len(gs) != 1 {
+			rows.Close()
+			return fmt.Errorf("guard record requires exactly one descriptor")
+		}
 		e.g = gs[0]
 		if e.id != e.g.preparation.id {
 			rows.Close()
@@ -214,6 +218,9 @@ func pgVerifyStageGuardTriggers(ctx context.Context, tx pgx.Tx, namespace string
 	}
 	for _, e := range expectedGuards {
 		fn := pgStageGuardFunction(namespace, e.version, e.g, e.pk, e.pkt)
+		if actual.TriggerDefinitions == nil {
+			return fmt.Errorf("missing protected stage guard trigger")
+		}
 		i := slices.IndexFunc(actual.TriggerDefinitions, func(t pgCatalogTrigger) bool { return t.Name == fn.name })
 		if i < 0 {
 			return fmt.Errorf("missing protected stage guard trigger")

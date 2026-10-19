@@ -111,7 +111,7 @@ func TestPgStageProbePlanAnalyzeCanReplaceForcedGenericPlan(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer other.Close(context.Background())
+	defer func() { _ = other.Close(context.Background()) }()
 	// A second backend can analyze while the guard's key and ACCESS SHARE locks
 	// remain held. This is ordinary maintenance, not an application key write.
 	if _, err := other.Exec(f.ctx, `analyze notes_app.stage_probe_data`); err != nil {

@@ -83,7 +83,7 @@ func pgPrepareIndexJobCatalogForAdmission(metadata *pgCatalogExpectations, actua
 			}
 			live.Indexes = slices.Delete(live.Indexes, position, position+1)
 		}
-		if pgIndexRequiresValidForWrites(actual, job.Index) && job.Version <= admissionVersion && !(job.stagePromotion && job.Version == admissionVersion) && (!valid || job.State != "valid") {
+		if pgIndexRequiresValidForWrites(actual, job.Index) && job.Version <= admissionVersion && (!job.stagePromotion || job.Version != admissionVersion) && (!valid || job.State != "valid") {
 			ready = false
 		}
 	}

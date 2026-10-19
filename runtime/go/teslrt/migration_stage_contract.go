@@ -16,11 +16,15 @@ func pgStageSettledShape(window *pgRowPhysicalPlan) (*pgRowPhysicalPlan, error) 
 	if r.err != nil || !n.list(10) || !n.children[0].isAtom("tesl-retained-physical-version-v10") {
 		return nil, fmt.Errorf("stage settled shape requires guarded window")
 	}
-	body := slices.Clone(n.children[:8])
+	body := make([]pgRowCanonical, 8)
+	copy(body, n.children[:8])
 	body[0] = pgRowAtom("tesl-settled-physical-version-v1")
 	entities := slices.Clone(body[6].children)
 	for i, e := range entities {
 		children := slices.Clone(e.children)
+		if children == nil || len(children) != 9 {
+			return nil, fmt.Errorf("stage settled shape requires complete entity descriptors")
+		}
 		indexes := slices.Clone(children[7].children)
 		for _, g := range window.stageGuards {
 			if g.preparation.entity == e.children[0].value {

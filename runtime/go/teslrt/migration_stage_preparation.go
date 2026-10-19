@@ -498,8 +498,9 @@ func pgCheckStageSource(r *pgMigrationWireReader, schema, storage pgRowCanonical
 			r.fail("stage typed field differs from sealed schema")
 			return
 		}
-		if !(stored.children[0].isAtom("stored-value-semantics") && stored.children[1].isAtom(compatibility)) &&
-			!(stored.children[0].isAtom("compiler-semantics") && stored.children[1].isAtom(abi)) {
+		compatibleStoredValue := stored.children[0].isAtom("stored-value-semantics") && stored.children[1].isAtom(compatibility)
+		sameCompiler := stored.children[0].isAtom("compiler-semantics") && stored.children[1].isAtom(abi)
+		if !compatibleStoredValue && !sameCompiler {
 			r.fail("stage field semantics identity differs")
 			return
 		}
