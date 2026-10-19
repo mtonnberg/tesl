@@ -227,10 +227,14 @@ let capture_history ~source_only ~entry ~source f = protect entry.source_file (f
        checked(Migration_contract.check ~plan ~namespace ~file:s.path ~source:s.contents)) (H.contracts h) in
        contracts := (identity,checked_contracts) :: !contracts
      end
-     ;let plan=checked(Migration_retained_storage.plan rows) in
-     List.iter(fun(v:Migration_retained_storage.version)->match v.reliance with
-      | None->()|Some(prior,_)->if not(List.exists(fun c->Migration_contract.version c=prior)(Option.value(List.assoc_opt identity !contracts)~default:[])) then
-       reject ~code:"MIG030" loc "unique reliance requires the exact reviewed prior PromoteStage Contract source") (Migration_retained_storage.versions plan)
+     ;if List.exists (fun inventory -> Migration_inventory.staged_indexes inventory<>[]) inventories then begin
+      (* Only staged histories can introduce enforced reliance. Ordinary histories
+         retain their public physical emitter's validation and diagnostic path. *)
+      let plan=checked(Migration_retained_storage.plan rows) in
+      List.iter(fun(v:Migration_retained_storage.version)->match v.reliance with
+       | None->()|Some(prior,_)->if not(List.exists(fun c->Migration_contract.version c=prior)(Option.value(List.assoc_opt identity !contracts)~default:[])) then
+        reject ~code:"MIG030" loc "unique reliance requires the exact reviewed prior PromoteStage Contract source") (Migration_retained_storage.versions plan)
+     end
     end;
     let first = E.generate ~initial_version:1 ~schemas:inventories ~edges in
     if not source_only then ignore (checked first);

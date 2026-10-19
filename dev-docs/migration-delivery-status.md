@@ -16,6 +16,22 @@ additive catch-up was committed in `137ddd1`, row-transforming catch-up in
 `4f6e86e`, queue catch-up in `085bf00`, and ordered composition in `99b869f`.
 Automatic deployment wiring and its targeted verification are recorded below.
 
+## Full-gate follow-up (2026-10-19)
+
+The attempt on `a53d4ab` stopped at phase 4 after 3,075 seconds. Four migration-plan
+cases exposed diagnostic-order changes caused by applying the new reliance check
+to histories without stages. The check is now limited to stage-bearing histories;
+the original public emitter still validates ordinary histories. Three additional
+failures exposed missing Promote/PromoteStage documentation and an outdated
+source-only-name inventory. The catalog entries and inventory are corrected,
+without adding ordinary runtime value signatures or relaxing expression checks.
+
+The root recheck passed all 40 selected cases across migration-plan diagnostics,
+staged indexes/Memory execution, config-only positions, standard-library docs and
+signature coverage. Logs: `.tesl-stuff/pr-final-ci.log` and
+`.tesl-stuff/pr-final-root-fix-tests.log`. Phases 5–24 were not reached in that CI
+attempt. A complete rerun remains required.
+
 ## Latest PR scope and verification (2026-10-18)
 
 The full-gate attempt on `943a73d` stopped at phase 4 in 3,093 seconds: the first

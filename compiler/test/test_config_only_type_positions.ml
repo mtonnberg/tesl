@@ -340,7 +340,9 @@ let pre_refactor_literal =
     "SsoProvider"; "Github"; "Google" ]
   @ ["Migration"; "Entity"; "Rule"; "Same"; "Additive"; "Derived"; "Migrate"; "New"; "Drop"; "Default"; "Rename"]
   @ ["Column"; "Contract"; "Index"; "Legacy"; "LegacyWith"; "NotNull"; "QueueRepair";
-     "Retype"; "Revalidate"; "Storage"; "Table"; "Tighten"; "Trigger"; "WriteBack"]
+      "Retype"; "Revalidate"; "Storage"; "Table"; "Tighten"; "Trigger"; "WriteBack"]
+  (* Reviewed source-only queue-removal and staged-promotion decisions. *)
+  @ ["RemoveEmpty"; "Promote"; "PromoteStage"]
   @ Tz_zones.ctor_names
   @ Currencies.ctor_names
   @ List.map fst Units_catalog.aliases

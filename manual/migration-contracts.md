@@ -144,3 +144,25 @@ supported states, atomic retry behavior and current limits.
 This runtime path requires a matching fresh format-5 catalog. Adoption of
 existing control-format3 deployments is separate work; the command cannot
 upgrade or recreate such a database.
+
+## Promoting staged uniqueness
+
+Staged uniqueness uses three releases. The staging release declares a nonunique
+preparation index, for example `staging unique index [email] as "email_preparation"`.
+The next release declares `unique index [email] as "email_unique"`; its writes use
+per-key guards, but it cannot use `onConflict` on that key yet.
+
+Generate and review that release's Contract. Its `promote` list names the exact
+stage, for example `promote: [PromoteStage User [email]]`, imported through
+`Promote(..)` from `Tesl.Migration`. The Contract retires older unguarded writers
+before registering and concurrently building the UNIQUE target. Existing duplicates
+block the build without being discarded; repair them through the guarded release
+and retry. Only a later release may rely on the valid target and recorded enforcement.
+
+Supported keys are single-column Bool, Int32 with integer/bigint storage, and
+String on TEXT with a verified libc C/POSIX database default, optionally nullable.
+NULLs remain distinct. Custom equality, composite staged keys and unsupported
+native storage mappings are refused. Removing a pending staging declaration requests
+reviewed cancellation, preserving rows; it does not cancel an active promotion by
+omitting its selector. See [the staged lifecycle](../dev-docs/stage-lifecycle.md)
+for recovery, cancellation and the supported history bounds.
