@@ -39,6 +39,12 @@ def build(output, compiler, env, through, resume=False, from_built=None):
     checked_sources = {str(p.relative_to(source)): hashlib.sha256(p.read_bytes()).hexdigest() for p in source.rglob("*.tesl")} if done else {}
     for version in range(done+1, through+1):
         started = time.monotonic()
+        command_seconds = {}
+        def timed(name, args, **kwargs):
+            began = time.monotonic()
+            result = command(args, **kwargs)
+            command_seconds[name] = time.monotonic() - began
+            return result
         if from_built:
             archived = from_built / f"v{version}"
             manifest = json.loads((archived / "build.json").read_text())
@@ -72,7 +78,7 @@ def build(output, compiler, env, through, resume=False, from_built=None):
             release.rename(output / f"incomplete-v{version}-{time.time_ns()}")
         release.mkdir()
         shutil.copytree(source, release / "source")
-        command([compiler, "--backend", "go", entry, "--out", release / "go"], env=env, timeout=300)
+        timed("emit", [compiler, "--backend", "go", entry, "--out", release / "go"], env=env, timeout=300)
         shutil.copyfile(HERE / "postgres_api_test.go", release / "go/internal/teslmodapp/postgres_api_test.go")
         test_file = release / "go/internal/teslmodapp/module_test.go"
         tests_source = test_file.read_text()
@@ -81,11 +87,14 @@ def build(output, compiler, env, through, resume=False, from_built=None):
         test_file.write_text(tests_source.replace("testExitCode := teslM.Run()", "testExitCode := runBoundAPITests(teslM)", 1))
         # Pure converter fixtures run before deployment. API tests run later,
         # bound to the real retained PostgreSQL state at this version.
-        tests = command(["go", "test", "-race", "-p", "1", "./..."], cwd=release / "go", env=dict(env, TESL_TEST_KIND="test"), timeout=300)
+        # Consistent path trimming lets identical runtime packages reuse Go's
+        # compilation cache across release directories. Never cache test results.
+        tests = timed("fixtures", ["go", "test", "-race", "-trimpath", "-count=1", "-p", "1", "./..."], cwd=release / "go", env=dict(env, TESL_TEST_KIND="test"), timeout=300)
         (release / "fixtures.log").write_text(tests)
-        command(["go", "build", "-race", "-o", release / "app", "./cmd/app"], cwd=release / "go", env=env, timeout=180)
-        command(["go", "test", "-race", "-c", "-o", release / "api.test", "./internal/teslmodapp"], cwd=release / "go", env=env, timeout=180)
+        timed("app", ["go", "build", "-race", "-trimpath", "-o", release / "app", "./cmd/app"], cwd=release / "go", env=env, timeout=180)
+        timed("api", ["go", "test", "-race", "-trimpath", "-c", "-o", release / "api.test", "./internal/teslmodapp"], cwd=release / "go", env=env, timeout=180)
         record = {"version": version, "change": RELEASES[version], "seconds": time.monotonic()-started,
+                  "commandSeconds": command_seconds,
                   "compilerSha256": hashlib.sha256(compiler.read_bytes()).hexdigest(),
                   "binarySha256": hashlib.sha256((release / "app").read_bytes()).hexdigest(),
                   "apiTestSha256": hashlib.sha256((release / "api.test").read_bytes()).hexdigest(),

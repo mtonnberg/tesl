@@ -657,6 +657,15 @@ if [ "$go_gate_fail" -eq 0 ]; then
           printf "unformatted Go files:\n%s\n" "$_unformatted" >&2
           exit 1
       fi
+      # Static gates run first: the same checks remain mandatory, but a lint or
+      # analysis failure must not wait behind hours of native migration scenarios.
+      go vet ./... &&
+      CGO_ENABLED=0 go build ./... &&
+      staticcheck ./... &&
+      golangci-lint run ./... &&
+      gosec -quiet ./... &&
+      govulncheck ./... &&
+      GOMEMLIMIT=3GiB nilaway ./... &&
       # The runtime package now includes the full native protocol inventory.
       # Its sequential sum can exceed Go's implicit ten-minute package timeout;
       # individual fixture/operation deadlines still bound each scenario.
@@ -678,14 +687,7 @@ if [ "$go_gate_fail" -eq 0 ]; then
       bash "$SCRIPT_DIR/scripts/go-fuzz-target.sh" ./internal/tooling FuzzRichDiagnosticEnvelope &&
       bash "$SCRIPT_DIR/scripts/go-fuzz-target.sh" ./internal/lsp FuzzFixAllSourceBoundaries &&
       bash "$SCRIPT_DIR/scripts/go-fuzz-target.sh" ./internal/lsp FuzzClientResponseEnvelopes &&
-      bash "$SCRIPT_DIR/scripts/go-fuzz-target.sh" ./internal/sourceedit FuzzSourceManifestDecode &&
-      go vet ./... &&
-      CGO_ENABLED=0 go build ./... &&
-      staticcheck ./... &&
-      golangci-lint run ./... &&
-      gosec -quiet ./... &&
-      govulncheck ./... &&
-      GOMEMLIMIT=3GiB nilaway ./...
+      bash "$SCRIPT_DIR/scripts/go-fuzz-target.sh" ./internal/sourceedit FuzzSourceManifestDecode
     ) || go_gate_fail=1
 fi
 if [ "$go_gate_fail" -eq 0 ] && [ -f "$SCRIPT_DIR/tests/go-cli-smoke.sh" ]; then

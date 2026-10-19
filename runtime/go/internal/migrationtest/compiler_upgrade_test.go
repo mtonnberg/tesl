@@ -18,7 +18,7 @@ import (
 // bytes in the emitted program are patched, and the working checkout is never
 // edited. B differs only in query implementation source; C changes the declared
 // stored-value semantics. Both still run the full checker and normal emitter.
-func buildMigrationCompilerVariants(t *testing.T, ctx context.Context, root string) (string, string, string) {
+func buildUncachedMigrationCompilerVariants(t *testing.T, ctx context.Context, root string) (string, string, string) {
 	t.Helper()
 	clone := t.TempDir()
 	for _, directory := range []string{"compiler/lib", "compiler/bin", "compiler/gen", "runtime/go/teslrt"} {
@@ -121,6 +121,7 @@ func buildMigrationCompilerVariants(t *testing.T, ctx context.Context, root stri
 	}
 	build := func(name string) string {
 		t.Helper()
+		started := time.Now()
 		command := exec.CommandContext(ctx, "dune", "build", "bin/main.exe", "-j", "2")
 		command.Dir = filepath.Join(clone, "compiler")
 		if out, err := command.CombinedOutput(); err != nil {
@@ -130,12 +131,14 @@ func buildMigrationCompilerVariants(t *testing.T, ctx context.Context, root stri
 		if err != nil {
 			t.Fatal(err)
 		}
-		binary := filepath.Join(t.TempDir(), "compiler-"+name)
+		binary := filepath.Join(migrationCompilers.directory, "compiler-"+name)
 		if err := os.WriteFile(binary, contents, 0700); err != nil {
 			t.Fatal(err)
 		}
+		t.Logf("compiler variant=%s build_time=%s binary_sha256=%s", name, time.Since(started), compilerDigest(contents))
 		return binary
 	}
+	validateCompilerClone(t, clone)
 	baseline := build("a")
 	edit("compiler_query.ml", "", "\n(* Compiler-upgrade regression: query-only build change. *)\n")
 	compatible := build("b")

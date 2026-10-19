@@ -121,7 +121,7 @@ func readProtocolSource(files map[string]string) (protocolSource, error) {
 		if strings.HasSuffix(name, "_test.go") {
 			for _, decl := range file.Decls {
 				fn, ok := decl.(*ast.FuncDecl)
-				if !ok || fn.Recv != nil || !isGoTestName(fn.Name.Name) {
+				if !ok || fn.Recv != nil || !isGoTestName(fn.Name.Name) || isTestingMain(file, fn) {
 					continue
 				}
 				test := protocolTest{Name: fn.Name.Name, File: name, Line: positions.Position(fn.Pos()).Line}
@@ -444,5 +444,21 @@ func Testhelper() {}`,
 	}
 	if err := rejectDuplicateJSONKeys([]byte(`{"first":{"name":"one"},"second":{"name":"two"},"rows":[1,true,null]}`)); err != nil {
 		t.Fatalf("independent JSON object scopes were merged: %v", err)
+	}
+	for _, parameter := range []string{"M", "T"} {
+		candidate := make(map[string]string, len(files)+1)
+		maps.Copy(candidate, files)
+		candidate["bootstrap_test.go"] = "package example\nimport tt \"testing\"\nfunc TestMain(m *tt." + parameter + ") {}"
+		parsed, err := readProtocolSource(candidate)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = protocolCoverage(spec, parsed)
+		if parameter == "M" && (err != nil || len(parsed.Tests) != 1) {
+			t.Fatalf("bootstrap counted as test: %+v %v", parsed.Tests, err)
+		}
+		if parameter == "T" && (err == nil || len(parsed.Tests) != 2) {
+			t.Fatal("genuine TestMain(*testing.T) escaped coverage requirements")
+		}
 	}
 }

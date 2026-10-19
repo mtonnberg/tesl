@@ -18,6 +18,17 @@ Automatic deployment wiring and its targeted verification are recorded below.
 
 ## Full-gate follow-up (2026-10-19)
 
+The `cc80282` attempt finished in 14,078 seconds with 23/24 phases passing.
+All 60 shared migration-runner phases passed, including latency comparison.
+Phase 5 then failed on six lint findings. Cleanup return values are now explicitly
+handled and boolean expressions clarified without disabling lint rules. Running
+the previously unreached NilAway gate exposed five further local nil/shape
+findings; explicit descriptor/fixture checks now satisfy it. Lint and NilAway
+pass. Static gates now precede expensive scenarios, with the same checks retained.
+Measured fixture-reuse changes and their limits are documented in
+[migration CI timing](migration-ci-performance.md); no full-run speedup is claimed
+from the targeted timings. A complete successful invocation is still required.
+
 The complete attempt on `cce3708` finished in 4,167 seconds with 21/24 phases
 passing. Dune passed. The remaining failures were a stale runtime assertion that
 still refused supported protected SSE preparation, missing Audience banners on
