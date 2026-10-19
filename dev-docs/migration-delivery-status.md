@@ -18,6 +18,17 @@ Automatic deployment wiring and its targeted verification are recorded below.
 
 ## Full-gate follow-up (2026-10-19)
 
+The latest compiled Kubernetes rolling example passed on `70e37b9`:
+722 successful samples (zero HTTP failures), with at least two Ready application pods in every
+snapshot and both V1/V2 and V2/V3 overlaps observed. It verified 81 conversion
+receipts and 118 exact deliveries (110 submitted jobs plus eight seeds), retained
+note values, and final current/minimum/compatibility floors all equal to V3.
+Every release used `worker --install` and completed post-deployment retirement.
+Health p95 was 38.9ms and maximum 519.8ms in the sampled window. Evidence:
+`.tesl-stuff/rolling-final-20261019-183052/`, including `audit-summary.json` and
+full binary hashes. The owned cluster and processes were removed. The host's
+user-raised inotify limit remains 256; this run did not change it.
+
 The `cc80282` attempt finished in 14,078 seconds with 23/24 phases passing.
 All 60 shared migration-runner phases passed, including latency comparison.
 Phase 5 then failed on six lint findings. Cleanup return values are now explicitly

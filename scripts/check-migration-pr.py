@@ -376,9 +376,9 @@ def validate(root, spec):
         mandatory = [runner_route(root, w) for w in req["witnesses"]]
         accepted_local = key == "PR-K8S" and req["witnesses"] == [{
             "ref": "example/kubernetes-rolling/run.py#main", "route": "manual",
-            "evidence": ".tesl-stuff/worker-install-kube.log",
+            "evidence": ".tesl-stuff/rolling-final-20261019-183052/audit-summary.json",
             "acceptance": "maintainer-accepted-local"}]
-        if accepted_local and "731 successful samples" not in read(root, "dev-docs/migration-delivery-status.md"):
+        if accepted_local and "722 successful samples" not in read(root, "dev-docs/migration-delivery-status.md"):
             raise ValueError("accepted local evidence record missing")
         if req["status"] == "evidenced" and (not req["implementation"] or not mandatory or not (all(mandatory) or accepted_local)):
             raise ValueError(f"evidenced requirement lacks implementation/test/mandatory runner: {key}")
