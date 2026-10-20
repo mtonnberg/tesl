@@ -240,28 +240,54 @@ func pgDeploymentCanWait(ctx context.Context, conn *pgx.Conn, namespace string, 
 	if !errors.As(err, &blocked) {
 		return false, nil
 	}
+	migrationBoundary("schema-deploy-before-queue-status")
 	query, stop := context.WithTimeout(ctx, pgLeaseTimeout())
 	defer stop()
 	var raw []byte
 	if err := conn.QueryRow(query, "select "+pgx.Identifier{namespace, "tesl_row_queue_status"}.Sanitize()+"()").Scan(&raw); err != nil {
 		return false, err
 	}
-	var status struct {
-		Blockers []struct {
-			Code string `json:"code"`
-		} `json:"blockers"`
+	return pgQueueStatusCanWait(raw)
+}
+
+// This is only consulted after a typed queue Contract refusal. The status is a
+// later snapshot: a claim can expire (leaving convertible old payloads), or a
+// peer can finish the work (leaving no blockers), before this lookup. Retrying
+// re-enters checked catch-up and Contract; it does not bypass either operation.
+func pgQueueStatusCanWait(raw []byte) (bool, error) {
+	if err := pgMigrationCheckJSON(string(raw)); err != nil {
+		return false, fmt.Errorf("invalid queue status: %w", err)
 	}
+	var status map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &status); err != nil {
 		return false, err
 	}
-	wait := false
-	for _, blocker := range status.Blockers {
-		switch blocker.Code {
-		case "QUEUE_MIGRATION_REJECTED", "QUEUE_PAYLOAD_INVALID", "QUEUE_MIGRATION_EXECUTION_FAILED":
+	var blockers []map[string]json.RawMessage
+	if err := json.Unmarshal(status["blockers"], &blockers); err != nil {
+		return false, err
+	}
+	if blockers == nil {
+		return false, errors.New("queue status requires an explicit blockers array")
+	}
+	for _, blocker := range blockers {
+		var code string
+		var count int64
+		if err := json.Unmarshal(blocker["code"], &code); err != nil {
+			return false, err
+		}
+		if err := json.Unmarshal(blocker["count"], &count); err != nil {
+			return false, err
+		}
+		if code == "" || count <= 0 {
+			return false, errors.New("queue status contains a malformed blocker")
+		}
+		switch code {
+		case "QUEUE_RETIRING_CLAIMS", "QUEUE_CONVERSION_ATTEMPTS", "RECENT_RETIRING_INSTANCES", "QUEUE_OLD_PAYLOADS":
+			// All blockers must be known and progress-capable. Terminal or new
+			// codes must not be hidden by a transient blocker in either order.
+		default:
 			return false, nil
-		case "QUEUE_RETIRING_CLAIMS", "QUEUE_CONVERSION_ATTEMPTS", "RECENT_RETIRING_INSTANCES":
-			wait = true
 		}
 	}
-	return wait, nil
+	return true, nil
 }

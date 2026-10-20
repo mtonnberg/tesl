@@ -147,7 +147,7 @@ fn oldNote() -> Schema.Mail.V2.Note = Schema.Mail.V2.Note { id: "fixture", metad
     print("PASS: combined row/queue change reports the tested split/order and deployment commands", flush=True)
 
 
-def exercise(output, env, rejection=False, claim=False, crash=None, from_v2=False, epoch_tail=False, deployment=False, fresh=False, terminal_row=False, heartbeat=False, combined_worker=False):
+def exercise(output, env, rejection=False, claim=False, crash=None, from_v2=False, epoch_tail=False, deployment=False, fresh=False, terminal_row=False, heartbeat=False, combined_worker=False, claim_status_race=False):
     target = 2 if terminal_row else (4 if epoch_tail else 3)
     cluster = Path(tempfile.mkdtemp(prefix="ordered-", dir=env.get(
         "TESL_MIGRATION_TEST_SOCKET_ROOT", env.get("TESL_MIGRATION_TEST_SOCKET_TMPDIR", "/tmp"))))
@@ -156,7 +156,7 @@ def exercise(output, env, rejection=False, claim=False, crash=None, from_v2=Fals
     data = storage / "data"
     scenario = (f"v{target}-deploy{int(deployment)}-fresh{int(fresh)}-reject{int(rejection)}"
                 f"-claim{int(claim)}-heartbeat{int(heartbeat)}-fromv2{int(from_v2)}"
-                f"-tail{int(epoch_tail)}-worker{int(combined_worker)}-{crash or 'no-crash'}")
+                f"-tail{int(epoch_tail)}-worker{int(combined_worker)}-statusrace{int(claim_status_race)}-{crash or 'no-crash'}")
     processes = []
     base = dict(env, PGHOST=str(cluster), PGPORT="5432", PGUSER="installer", PGDATABASE="postgres")
 
@@ -168,12 +168,58 @@ def exercise(output, env, rejection=False, claim=False, crash=None, from_v2=Fals
                     DEMO_OWNER="owner", DEMO_WORKER="worker", DEMO_REQUEST="request", DEMO_HTTP_PORT=str(port),
                     DEMO_DDL=f"host={cluster} port=5432 dbname=ordered user={login}")
 
+    status_race_done = False
+
+    def deploy_across_claim_expiry(settings):
+        nonlocal status_race_done
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
+            path = cluster / "status-boundary.sock"
+            listener.bind(str(path)); listener.listen(16); listener.settimeout(0.1)
+            log = open(output / "claim-status-deploy.log", "w+")
+            process = subprocess.Popen(
+                [str(output / "v3/app-test"), "--schema", "deploy", "--json"],
+                env=dict(settings, TESL_MIGRATION_TEST_SOCKET=str(path)), stdout=log, stderr=log)
+            processes.append((process, log))
+            deadline = time.monotonic() + 90
+            while process.poll() is None:
+                if time.monotonic() >= deadline:
+                    raise RuntimeError("controlled claim/status deployment timed out")
+                try:
+                    connection, _ = listener.accept()
+                except TimeoutError:
+                    continue
+                with connection:
+                    connection.settimeout(5)
+                    with connection.makefile("rb") as stream:
+                        event = json.loads(stream.readline())
+                    if event["name"] == "schema-deploy-before-queue-status" and not status_race_done:
+                        before = json.loads(sql("select mail.tesl_row_queue_status()", "worker"))
+                        assert [b["code"] for b in before["blockers"]] == ["QUEUE_RETIRING_CLAIMS"], before
+                        # The Installer moves only the lease clock at this test boundary.
+                        # Production catch-up, conversion, fences and receipts remain intact.
+                        expired = sql("with expired as (update mail.tesl_jobs set lease_until=clock_timestamp()-interval '1 second' where id='retained' returning id) select id from expired")
+                        assert expired == "retained", expired
+                        after = json.loads(sql("select mail.tesl_row_queue_status()", "worker"))
+                        assert [b["code"] for b in after["blockers"]] == ["QUEUE_OLD_PAYLOADS"], after
+                        assert before["oldPayloads"] == after["oldPayloads"] == 1
+                        assert before["liveRetiringClaims"] == 1 and after["liveRetiringClaims"] == 0
+                        (output / "claim-status-transition.json").write_text(json.dumps({"before": before, "after": after}, indent=2))
+                        status_race_done = True
+                    connection.sendall(b"continue\n")
+            log.flush(); log.seek(0)
+            result = subprocess.CompletedProcess(process.args, process.returncode, log.read(), "")
+            assert status_race_done, result
+            return result
+
     def schema(version, login, *args, refuse=False, timeout_seconds=75):
         settings = app_env(login)
         if args[0] == "deploy":
             settings["TESL_SCHEMA_INSTALLER_DSN"] = app_env("installer")["DEMO_DDL"]
             settings["TESL_SCHEMA_DEPLOY_TIMEOUT_SECONDS"] = str(timeout_seconds)
-        result = subprocess.run([str(output / f"v{version}/app"), "--schema", *args, "--json"], env=settings, capture_output=True, text=True, timeout=90)
+        if claim_status_race and not status_race_done and args[0] == "deploy" and not refuse:
+            result = deploy_across_claim_expiry(settings)
+        else:
+            result = subprocess.run([str(output / f"v{version}/app"), "--schema", *args, "--json"], env=settings, capture_output=True, text=True, timeout=90)
         if (result.returncode == 0) == refuse:
             raise RuntimeError(f"V{version} {args}: {result.stdout}\n{result.stderr}")
         return result.stdout + result.stderr
@@ -349,7 +395,7 @@ def exercise(output, env, rejection=False, claim=False, crash=None, from_v2=Fals
         rows = COMMON["request"](number, "GET", "/notes")
         assert next(row for row in rows if row["id"] == "one")["metadata"] == {"newText": "kept", "detail": "migrated"}, rows
         eventually(lambda: sql("select count(*) from mail.tesl_jobs") == "0")
-        print(f"PASS: ordered row/queue latest-binary {mode}; rejection={rejection}, claim={claim}, heartbeat={heartbeat}, crash={crash}, fromV2={from_v2}, epochTail={epoch_tail}, combinedWorker={combined_worker}; audited restamp, retained row/job and typed handler", flush=True)
+        print(f"PASS: ordered row/queue latest-binary {mode}; rejection={rejection}, claim={claim}, heartbeat={heartbeat}, crash={crash}, fromV2={from_v2}, epochTail={epoch_tail}, combinedWorker={combined_worker}, claimStatusRace={claim_status_race}; audited restamp, retained row/job and typed handler", flush=True)
     finally:
         for process, log in processes:
             if process.poll() is None:
@@ -395,6 +441,7 @@ def main():
     exercise(output, env, deployment=True, from_v2=True, claim=True)
     exercise(output, env, deployment=True, crash="schema-deploy-after-installer-close")
     exercise(output, env, combined_worker=True, crash="schema-worker-after-installer-close")
+    exercise(output, env, deployment=True, from_v2=True, claim=True, claim_status_race=True)
 
 
 if __name__ == "__main__":

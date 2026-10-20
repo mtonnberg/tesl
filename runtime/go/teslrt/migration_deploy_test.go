@@ -2,8 +2,13 @@ package teslrt
 
 import (
 	"bytes"
+	"context"
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 func TestSchemaDeploymentArgumentsAndCredentials(t *testing.T) {
@@ -41,6 +46,58 @@ func TestSchemaDeploymentArgumentsAndCredentials(t *testing.T) {
 	installer, worker, err := pgDeploymentConnections(config, roles)
 	if err != nil || installer.User != "installer" || worker.User != "worker" || installer.RuntimeParams["application_name"] == worker.RuntimeParams["application_name"] {
 		t.Fatal("deployment connections do not retain separate identities", err)
+	}
+}
+
+func TestSchemaDeploymentQueueStatusRetryClassification(t *testing.T) {
+	transient := []string{"QUEUE_RETIRING_CLAIMS", "QUEUE_CONVERSION_ATTEMPTS", "RECENT_RETIRING_INSTANCES", "QUEUE_OLD_PAYLOADS"}
+	terminal := []string{"QUEUE_MIGRATION_REJECTED", "QUEUE_PAYLOAD_INVALID", "QUEUE_MIGRATION_EXECUTION_FAILED", "SOURCE_DRIFT", "CATALOG_DRIFT", "UNKNOWN"}
+	blocker := func(code string) string { return fmt.Sprintf(`{"code":%q,"count":1}`, code) }
+	check := func(raw string, want bool) {
+		t.Helper()
+		got, err := pgQueueStatusCanWait([]byte(raw))
+		if got != want || (want && err != nil) {
+			t.Fatalf("status %s: wait=%v error=%v; want wait=%v", raw, got, err, want)
+		}
+	}
+	t.Run("resolved", func(t *testing.T) { check(`{"blockers":[]}`, true) })
+	for _, code := range transient {
+		t.Run(code, func(t *testing.T) {
+			check(`{"blockers":[`+blocker(code)+`]}`, true)
+			for _, stop := range terminal {
+				check(`{"blockers":[`+blocker(code)+`,`+blocker(stop)+`]}`, false)
+				check(`{"blockers":[`+blocker(stop)+`,`+blocker(code)+`]}`, false)
+			}
+		})
+	}
+	for _, raw := range []string{
+		``, `null`, `{}`, `[]`, `{"blockers":null}`, `{"blockers":{}}`, `{"blockers":"[]"}`,
+		`{"blockers":[null]}`, `{"blockers":[{}]}`, `{"blockers":[{"code":1,"count":1}]}`,
+		`{"blockers":[{"code":"QUEUE_OLD_PAYLOADS"}]}`,
+		`{"blockers":[{"code":"QUEUE_OLD_PAYLOADS","count":0}]}`,
+		`{"blockers":[{"code":"QUEUE_OLD_PAYLOADS","count":-1}]}`,
+		`{"blockers":[{"code":"QUEUE_OLD_PAYLOADS","count":1.5}]}`,
+		`{"blockers":[{"code":"QUEUE_OLD_PAYLOADS","count":"1"}]}`,
+		`{"blockers":[{"Code":"QUEUE_OLD_PAYLOADS","count":1}]}`,
+		`{"blockers":[{"code":"UNKNOWN","code":"QUEUE_OLD_PAYLOADS","count":1}]}`,
+		`{"blockers":[{"code":"UNKNOWN","count":1}],"blockers":[]}`,
+	} {
+		t.Run("malformed/"+raw, func(t *testing.T) { check(raw, false) })
+	}
+}
+
+func TestSchemaDeploymentUnclassifiedFailuresAreTerminal(t *testing.T) {
+	// A nil connection proves these failures do not even consult queue status.
+	for _, err := range []error{
+		errors.New("converter failed"), errors.New("source changed"), errors.New("catalog changed"),
+		errors.New("queue Contract is blocked"),
+		&pgconn.PgError{Code: "P0001", Message: "checked conversion failed"},
+		&pgconn.PgError{Code: "40001", Message: "serialization failure"},
+	} {
+		wait, inspectErr := pgDeploymentCanWait(context.Background(), nil, "unused", err)
+		if wait || inspectErr != nil {
+			t.Fatal("unclassified failure was retried", err, wait, inspectErr)
+		}
 	}
 }
 

@@ -36,6 +36,24 @@ also passed all 62 cases. Normal generators refreshed the ABI-bearing snapshots.
 These are integrated targeted results. The successful full run below predates
 this merge; a new authoritative run on the merged commit is required.
 
+The first integrated attempt on `c41d12b` finished in 13,644 seconds with 23/24
+phases passing. The ordered deployment from V2 with an old claim exposed a race:
+after Contract refused the live claim, it could expire before the status lookup,
+leaving `QUEUE_OLD_PAYLOADS`. Deployment incorrectly treated that progress-capable
+snapshot as terminal. Retry classification now accepts known transient blockers,
+convertible old payloads and an explicitly empty blocker inventory; terminal,
+unknown and malformed states still refuse. Retrying runs the normal checked
+catch-up/Contract path and preserves its fences and receipts.
+
+All 16 original ordered scenarios, one new deterministic claim/status-transition
+scenario and the combined-change diagnostic passed on fresh merged artifacts.
+Targeted PostgreSQL/race, fixture, vet and lint checks also passed. Evidence:
+`.tesl-stuff/pr-main-merge-ci.log`,
+`.tesl-stuff/main-merge-claim-fix-repro.log`, and
+`.tesl-stuff/main-merge-claim-fix-ordered-final.log`. The failed full run stopped
+the migration runner after 53 successful subphases and the ordered failure; its
+six later subphases did not run. A complete integrated rerun remains required.
+
 ## Passing full-gate result before main integration
 
 Commit `df0479bcf3c8c32d86b6f1f311310c34905dd9ff` passed all 24 authoritative CI
