@@ -4,19 +4,41 @@
 
 The [scoped traceability register](migration-pr-scope.md) links the 18 agreed PR
 clauses to live production declarations, named witnesses and execution routes.
-Staged uniqueness has bounded technical evidence on PostgreSQL 14/17/18 and is
-scoped `evidenced`; the complete CI gate remains required. Bounded empty-queue removal
-is integrated and technically accepted with merged execution evidence below.
-Static consistency is not executed acceptance: a successful complete CI run is
-still required. Historical-roadmap reconciliation is reported separately.
+Staged uniqueness has bounded technical evidence on PostgreSQL 14/17/18. Bounded
+empty-queue removal is integrated with merged execution evidence below. The complete
+local CI gate passed on `df0479b`; static consistency alone is not that execution
+evidence. Historical-roadmap reconciliation is reported separately.
 
-Last passing full-gate baseline: `1ddc8a6` (2026-10-14). Earlier baseline: `84ef00d`.
+Last passing full-gate baseline: `df0479b`. Earlier passing baselines: `1ddc8a6`
+(2026-10-14) and `84ef00d`.
 Requirements were committed in `b5cddb9`;
 additive catch-up was committed in `137ddd1`, row-transforming catch-up in
 `4f6e86e`, queue catch-up in `085bf00`, and ordered composition in `99b869f`.
 Automatic deployment wiring and its targeted verification are recorded below.
 
-## Full-gate follow-up (2026-10-19)
+## Passing full-gate result
+
+Commit `df0479bcf3c8c32d86b6f1f311310c34905dd9ff` passed all 24 authoritative CI
+phases, with no phase skips and exit code 0, in 16,380 seconds (4h 33m).
+The same invocation passed all 60 shared migration-runner phases, including the
+latency regression gate. Evidence:
+
+- `.tesl-stuff/pr-speed-ci-retry.log`
+- `.tesl-stuff/pr-speed-migrations/phases.tsv`
+- `.tesl-stuff/pr-speed-migrations/latency-regression/result.json`
+
+Phase 5 took 12,885 seconds (3h 34m 45s). This result establishes a passing gate,
+not a reduction in overall wall time. Static-first ordering improves failure
+feedback, and fixture reuse removes measured duplicate build work; passing-run
+cost remains substantial. The latency comparison passed its unchanged policy:
+baseline/candidate read p50 was 0.733/0.917ms and write p50 was 1.250/1.419ms.
+This is a regression comparison, not an absolute-overhead proof.
+
+The supported carrier/history restrictions and explicit deferrals in the scoped
+register remain in effect. This local pass does not claim hosted matrix execution
+or complete implementation of every historical-roadmap paragraph.
+
+## Rolling deployment evidence (2026-10-19)
 
 The latest compiled Kubernetes rolling example passed on `70e37b9`:
 722 successful samples (zero HTTP failures), with at least two Ready application pods in every
@@ -28,6 +50,8 @@ Health p95 was 38.9ms and maximum 519.8ms in the sampled window. Evidence:
 `.tesl-stuff/rolling-final-20261019-183052/`, including `audit-summary.json` and
 full binary hashes. The owned cluster and processes were removed. The host's
 user-raised inotify limit remains 256; this run did not change it.
+
+## Earlier full-gate attempts and fixes
 
 The `cc80282` attempt finished in 14,078 seconds with 23/24 phases passing.
 All 60 shared migration-runner phases passed, including latency comparison.

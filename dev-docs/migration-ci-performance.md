@@ -74,6 +74,11 @@ Evidence: `/tmp/opencode/ci-speed-compiler-scenarios-final.log` and
 
 ## What remains expensive
 
+The subsequent full run on `df0479b` passed all 24 CI phases and all 60 migration
+phases. Total time was 16,380s; phase 5 took 12,885s. Thus the completed run does
+not demonstrate an overall wall-time reduction. Its evidence is retained in
+`.tesl-stuff/pr-speed-ci-retry.log` and `.tesl-stuff/pr-speed-migrations/`.
+
 The full passing gate still needs the distinct release histories, source checking,
 emission, database transitions, race checks and adversarial scenarios. The changes
 above do not justify claiming a large reduction in that passing wall time.
