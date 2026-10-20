@@ -16,7 +16,27 @@ additive catch-up was committed in `137ddd1`, row-transforming catch-up in
 `4f6e86e`, queue catch-up in `085bf00`, and ordered composition in `99b869f`.
 Automatic deployment wiring and its targeted verification are recorded below.
 
-## Passing full-gate result
+## Main integration awaiting full CI
+
+Current `main` at `3e89b637980a814435ee385a3cbc6840a543a9f7` is integrated with
+the migration branch. The emitter resolution retains nominal codec ownership and
+generic/recursive ADT handling while incorporating main's plain-record payload
+support and rejection of unvalidated proof-bearing ADT payloads.
+
+Targeted checks passed: the complete emission suite (161 cases), validation (100),
+JSONB columns (19), and codec/source/migration regressions. A separate private
+PostgreSQL 17.10 run executed persisted record/ADT restart, storage adapters,
+nominal derived migrations and queue conversion/repair with race instrumentation.
+Its 34 recorded Go invocations had zero failures; the only skip was a process-child
+helper whose parent separately requires that child's actual PASS and committed
+database results. Evidence is in `.tesl-stuff/main-merge-private-pg/` and
+`/tmp/opencode/main-merge/`. The native checksum/distribution/catalog Python suites
+also passed all 62 cases. Normal generators refreshed the ABI-bearing snapshots.
+
+These are integrated targeted results. The successful full run below predates
+this merge; a new authoritative run on the merged commit is required.
+
+## Passing full-gate result before main integration
 
 Commit `df0479bcf3c8c32d86b6f1f311310c34905dd9ff` passed all 24 authoritative CI
 phases, with no phase skips and exit code 0, in 16,380 seconds (4h 33m).

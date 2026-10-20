@@ -314,7 +314,7 @@ def main():
         archive = args.archive_dir / plan["payloads"][args.target]["archiveName"]
         digest = pack(plan, args.target, args.output, archive)
         checksum = archive.with_name(archive.name + ".sha256")
-        with checksum.open("x", encoding="utf-8") as stream:
+        with checksum.open("x", encoding="utf-8", newline="\n") as stream:
             stream.write(f"{digest}  {archive.name}\n")
     except (ValueError, OSError) as error:
         raise SystemExit(f"native payload failed: {error}") from error

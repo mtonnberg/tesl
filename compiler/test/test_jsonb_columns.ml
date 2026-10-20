@@ -24,7 +24,13 @@ let with_project f =
     ignore (write "tesl.toml" "");
     f root write)
 
-let compile file = match Compile.compile_go_file file with
+let compile file =
+  let compiler = Filename.concat (Filename.dirname Sys.executable_name) "../bin/main.exe" in
+  let log = file ^ ".context.json" in
+  let status = Sys.command (Printf.sprintf "%s agent-context %s > %s"
+    (Filename.quote compiler) (Filename.quote file) (Filename.quote log)) in
+  if status <> 0 then fail (In_channel.with_open_text log In_channel.input_all);
+  match Compile.compile_go_file file with
   | Compile.GoSuccess artifacts -> artifacts
   | Compile.GoFailure diagnostics -> fail (Compile.diagnostics_to_json diagnostics)
 
@@ -190,7 +196,8 @@ codec Details {
   toJson { text -> "%s" with_codec stringCodec }
   fromJson [ { text <- "%s" with_codec stringCodec } ]
 }
-entity %s table "%s" primaryKey id { id: String, details: Details }
+type Event = Changed details: Details
+entity %s table "%s" primaryKey id { id: String, details: Details, event: Event }
 |} name entity key key entity (String.lowercase_ascii entity))))
     ["Alpha", "a", "First"; "Beta", "b", "Second"];
   if transitive then begin
@@ -206,7 +213,8 @@ codec Details {
     ignore (write "alpha.tesl" {|module Alpha exposing [First]
 import Tesl.Prelude exposing [String]
 import Inner exposing [Details]
-entity First table "first" primaryKey id { id: String, details: Details }
+type Event = Changed details: Details
+entity First table "first" primaryKey id { id: String, details: Details, event: Event }
 |})
   end;
   let entry = write "columns.tesl" ("module Columns exposing [first, second]\n" ^ imports ^ {|
@@ -225,10 +233,17 @@ import (
 )
 |} ^ scanner_row ^ {|
 func TestPrivateSameNamedCodecs(t *testing.T) {
-  first, err := teslScanFirst(rawRow{[]any{"a", []byte(`{"a":"alpha"}`)}})
+  firstEvent := []byte(`{"tag":"Changed","fields":{"details":{"a":"alpha"}}}`)
+  secondEvent := []byte(`{"tag":"Changed","fields":{"details":{"b":"beta"}}}`)
+  first, err := teslScanFirst(rawRow{[]any{"a", []byte(`{"a":"alpha"}`), firstEvent}})
   if err != nil || first.Details.Text != "alpha" { t.Fatalf("%+v %v", first, err) }
-  second, err := teslScanSecond(rawRow{[]any{"b", []byte(`{"b":"beta"}`)}})
+  second, err := teslScanSecond(rawRow{[]any{"b", []byte(`{"b":"beta"}`), secondEvent}})
   if err != nil || second.Details.Text != "beta" { t.Fatalf("%+v %v", second, err) }
+  if first.Event.ChangedDetails.Text != "alpha" || second.Event.ChangedDetails.Text != "beta" {
+    t.Fatal("ADT payload used a same-named record's codec")
+  }
+  mustPanic(t, func() { _, _ = teslScanFirst(rawRow{[]any{"a", []byte(`{"a":"alpha"}`), secondEvent}}) })
+  mustPanic(t, func() { _, _ = teslScanSecond(rawRow{[]any{"b", []byte(`{"b":"beta"}`), firstEvent}}) })
   mustPanic(t, func() { _, _ = teslScanFirst(rawRow{[]any{"a", []byte(`{"b":"wrong"}`)}}) })
   mustPanic(t, func() { _, _ = teslScanSecond(rawRow{[]any{"b", []byte(`{"a":"wrong"}`)}}) })
 }
@@ -243,6 +258,7 @@ let forbidden_directions () = with_project (fun _root write ->
       database "Stored" ^
       (if queried then "fn read() -> Maybe Stored requires [dbRead Stored] = selectOne s from Stored\n" else "")) in
     match Compile.compile_go_file file with
+    | Compile.GoSuccess _ when field_type = "Event" && codec = "" -> ()
     | Compile.GoSuccess _ -> fail "storage admitted a record with no bidirectional codec"
     | Compile.GoFailure diagnostics -> check bool "actionable storage refusal" true
         (List.exists (fun (d : Compile.diagnostic) -> contains d.message "stored record") diagnostics))
@@ -250,6 +266,69 @@ let forbidden_directions () = with_project (fun _root write ->
      "codec Details { toJson_forbidden, fromJson [ { text <- \"text\" with_codec stringCodec } ] }";
      "codec Details { toJson { text -> \"text\" with_codec stringCodec }, fromJson_forbidden }"]) [true; false])
     ["Details"; "Maybe Details"; "Event"])
+
+let plain_record_payloads () = with_project (fun root write ->
+  let file = write "columns.tesl" ("module Columns exposing [read]\n" ^ imports ^ {|
+record Inner { text: String }
+record Outer { inner: Inner }
+type Envelope a = Wrapped value: a
+type Tree = Leaf value: Outer | Branch left: Tree right: Tree
+entity Stored table "stored" primaryKey id {
+  id: String, generic: Envelope Outer, recursive: Tree
+}
+|} ^ database "Stored" ^ {|
+fn read() -> Maybe Stored requires [dbRead Stored] = selectOne s from Stored
+|}) in
+  execute root write (compile file) ["internal/teslmodcolumns/plain_record_test.go", {|
+package teslmodcolumns
+import (
+  "reflect"
+  "testing"
+  "github.com/jackc/pgx/v5/pgconn"
+)
+|} ^ scanner_row ^ {|
+func TestPlainRecordPayloads(t *testing.T) {
+  generic := []byte(`{"tag":"Wrapped","fields":{"value":{"inner":{"text":"generic"}}}}`)
+  tree := []byte(`{"tag":"Branch","fields":{"left":{"tag":"Leaf","fields":{"value":{"inner":{"text":"left"}}}},"right":{"tag":"Leaf","fields":{"value":{"inner":{"text":"right"}}}}}}`)
+  row, err := teslScanStored(rawRow{[]any{"one", generic, tree}})
+  if err != nil || row.Generic.WrappedValue.Inner.Text != "generic" {
+    t.Fatalf("generic record payload: %+v %v", row, err)
+  }
+  for _, bad := range []string{
+    `{"tag":"Wrapped","fields":{"value":{"inner":{"text":3}}}}`,
+    `{"tag":"Wrapped","fields":{"value":{"inner":{}}}}`,
+    `{"tag":"Wrapped","fields":{"value":{"inner":{"text":"x","extra":1}}}}`,
+  } {
+    mustPanic(t, func() { _, _ = teslScanStored(rawRow{[]any{"one", []byte(bad), tree}}) })
+  }
+}
+|}])
+
+let proof_record_payloads () = with_project (fun root write ->
+  List.iter (fun payload -> List.iter (fun queried ->
+    let file = write "columns.tesl"
+      ((if queried then "module Columns exposing [read]\n" else "module Columns exposing []\n") ^ imports ^ {|
+fact Positive (n: Int)
+record Proven { count: Int ::: Positive count }
+record Nested { proven: Proven }
+type Envelope a = Wrapped value: a
+type Tree = Leaf value: Nested | Branch left: Tree right: Tree
+|} ^ "type Event = Changed value: " ^ payload ^ "\n" ^
+      "entity Stored table \"stored\" primaryKey id { id: String, event: Event }\n" ^
+      database "Stored" ^
+      (if queried then "fn read() -> Maybe Stored requires [dbRead Stored] = selectOne s from Stored\n" else "")) in
+    let compiler = Filename.concat (Filename.dirname Sys.executable_name) "../bin/main.exe" in
+    let log = Filename.concat root "context.json" in
+    ignore (Sys.command (Printf.sprintf "%s agent-context %s > %s"
+      (Filename.quote compiler) (Filename.quote file) (Filename.quote log)));
+    let context = In_channel.with_open_text log In_channel.input_all in
+    check bool "agent context returned diagnostics" true (contains context "diagnostics");
+    match Compile.compile_go_file file with
+    | Compile.GoSuccess _ -> fail "structural payload minted an unvalidated record proof"
+    | Compile.GoFailure diagnostics ->
+      check bool "proof record requires its checked codec" true
+        (List.exists (fun (d : Compile.diagnostic) -> contains d.message "stored record `Proven`") diagnostics))
+    [true; false]) ["Proven"; "Nested"; "Maybe Nested"; "Envelope Nested"; "Envelope (Envelope Nested)"; "Tree"])
 
 let forbidden_adt_directions () = with_project (fun _root write ->
   List.iter (fun field_type -> List.iter (fun queried -> List.iter (fun direction ->
@@ -572,6 +651,8 @@ let () = run "jsonb columns" ["storage boundary", [
   test_case "transitive private records keep their owning codecs" `Slow (private_nominal_codecs true);
   test_case "missing or forbidden codec directions are refused" `Quick forbidden_directions;
   test_case "stored ADTs respect explicit forbidden codec directions" `Quick forbidden_adt_directions;
+  test_case "nested generic and recursive payloads cannot mint record proofs" `Quick proof_record_payloads;
+  test_case "plain nested records decode in generic and recursive payloads" `Slow plain_record_payloads;
   test_case "same-named ADT columns retain their own payload types" `Slow (fun () -> same_named_adts false);
   test_case "same-named imported boxed ADTs retain their payload owners" `Slow (fun () -> same_named_adts true);
   test_case "generic ADT columns retain each instantiation" `Slow (fun () -> generic_adts false false);

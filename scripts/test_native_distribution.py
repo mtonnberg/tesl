@@ -14,6 +14,7 @@ import zipfile
 from unittest.mock import patch
 
 import native_distribution as distribution
+from test_native_payload import windows_checksum_newlines
 
 
 SHA = "1" * 40
@@ -317,8 +318,11 @@ assert json.loads(result)['root'] == chr(229), ascii(result)
 
     def test_windows_uses_verified_build_tools_native_executables_and_zip(self):
         value, calls = self.pipeline(target="windows-amd64")
-        result = distribution.build(value, self.root, "windows-amd64", self.root / "modules", self.output,
-                                    cygwin_bash=self.root / "cygwin/bin/bash.exe")
+        with windows_checksum_newlines():
+            result = distribution.build(value, self.root, "windows-amd64", self.root / "modules", self.output,
+                                        cygwin_bash=self.root / "cygwin/bin/bash.exe")
+        self.assertEqual((self.output / (result["archive"] + ".sha256")).read_bytes(),
+                         f"{result['sha256']}  {result['archive']}\n".encode("ascii"))
         self.assertEqual(result["signed_distribution"], "unsigned-by-policy")
         self.assertEqual(result["setup"]["authenticode"], "unsigned")
         self.assertEqual(result["installed_workflow"], "passed")
@@ -363,7 +367,7 @@ assert json.loads(result)['root'] == chr(229), ascii(result)
             return json.dumps({"state": {"active_version": ""}, "installed": []})
 
         with patch.object(distribution, "audit_windows_binary", return_value=({"imports": ["kernel32.dll"]}, [])), \
-                patch.object(distribution, "run", side_effect=run):
+                patch.object(distribution, "run", side_effect=run), windows_checksum_newlines():
             result = distribution.windows_setup(value, frontends, archive, digest, artifacts, work,
                                                 {"TESL_COMPILER": "unrelated", "tesl_toolchain_root": "unrelated",
                                                  "SYSTEMROOT": str(system_root), "PATH": "developer tools"})
@@ -371,7 +375,8 @@ assert json.loads(result)['root'] == chr(229), ascii(result)
         self.assertEqual(result["authenticode"], "unsigned")
         self.assertEqual(result["install_launch_uninstall"], "passed")
         self.assertEqual(result["sha256"], distribution.native_payload.file_hash(artifacts / result["archive"]))
-        self.assertTrue((artifacts / (result["archive"] + ".sha256")).is_file())
+        self.assertEqual((artifacts / (result["archive"] + ".sha256")).read_bytes(),
+                         f"{result['sha256']}  {result['archive']}\n".encode("ascii"))
 
 
 if __name__ == "__main__":

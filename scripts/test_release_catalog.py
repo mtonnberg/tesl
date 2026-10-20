@@ -91,7 +91,7 @@ class ReleaseCatalogTests(unittest.TestCase):
     def asset(self, path, content):
         path.write_bytes(content)
         digest = hashlib.sha256(content).hexdigest()
-        path.with_name(path.name + ".sha256").write_text(f"{digest}  {path.name}\n")
+        path.with_name(path.name + ".sha256").write_text(f"{digest}  {path.name}\n", encoding="ascii", newline="\n")
         return digest
 
     def write_json(self, path, value):

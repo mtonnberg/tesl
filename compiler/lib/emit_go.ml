@@ -2648,11 +2648,18 @@ let entity_columns (info : entity_info) =
   List.map (fun (field, ty) ->
     (* An explicit SQL type must not bypass a stored type's codec contract, even if this
        build never queries the entity. Follow wrappers and ADT payloads as well. *)
-    let rec validate_codec visited = function
-      | TRecord record -> ignore (record_column_codec info.ent_loc record)
-      | TNewtype wrapped -> validate_codec visited wrapped.base
-      | TList inner | TSet inner -> validate_codec visited inner
-      | TDict (key, value) -> validate_codec visited key; validate_codec visited value
+    let rec validate_codec ~payload visited = function
+      | TRecord record ->
+        if not payload || record.rec_proof_fields
+           || nominal_codec record.rec_owner record.rec_tesl_name <> None then
+          ignore (record_column_codec info.ent_loc record);
+        let key = record.rec_owner, record.rec_tesl_name in
+        if not (List.mem key visited) then
+          List.iter (fun (_, field) -> validate_codec ~payload:true (key :: visited) field)
+            record.rec_fields
+      | TNewtype wrapped -> validate_codec ~payload visited wrapped.base
+      | TList inner | TSet inner -> validate_codec ~payload visited inner
+      | TDict (key, value) -> validate_codec ~payload visited key; validate_codec ~payload visited value
       | TAdt (adt, args) ->
         (match nominal_codec adt.adt_owner adt.adt_tesl_name with
          | Some codec when codec.to_json = ToJsonForbidden
@@ -2664,15 +2671,16 @@ let entity_columns (info : entity_info) =
         (* Visit concrete arguments even when the declaration was already seen:
            Envelope (Envelope State) must reach State's codec. Keeping the body
            guard nominal also bounds non-regular recursive declarations. *)
-        List.iter (validate_codec visited) args;
+        let payload = payload || adt.adt_tesl_name <> "Maybe" in
+        List.iter (validate_codec ~payload visited) args;
         let key = adt.adt_owner, adt.adt_tesl_name in
         if not (List.mem key visited) then
           List.iter (fun variant ->
-            List.iter (fun (_, field) -> validate_codec (key :: visited) field)
+            List.iter (fun (_, field) -> validate_codec ~payload (key :: visited) field)
               (variant_field_types adt args variant)) adt.adt_variants
       | _ -> ()
     in
-    validate_codec [] ty;
+    validate_codec ~payload:false [] ty;
     let sql_type = match List.assoc_opt field info.ent_db_types with
       | Some declared -> String.uppercase_ascii declared
       | None ->
@@ -8662,9 +8670,31 @@ and sql_adt_field_decoder loc ty raw =
     Printf.sprintf "%s{Value: %s}" (qualified newtype.owner newtype.go_name)
       (sql_adt_field_decoder loc newtype.base raw)
   | TRecord info ->
-    ignore (record_column_codec loc info);
-    Printf.sprintf "teslrt.MustDecodeColumnJSON(teslrt.MustEncodeJSON(%s), %s)" raw
-      (qualified info.rec_owner (codec_decode_name info.rec_tesl_name))
+    let body =
+      match nominal_codec info.rec_owner info.rec_tesl_name with
+      | Some _ ->
+        ignore (record_column_codec loc info);
+        (* Match the encoder's use of the record's own codec, including renamed
+           keys and validation. A stored decode failure is corruption, not a 400. *)
+        Printf.sprintf
+          "\tteslDecoded := %s(teslRaw)\n\tif !teslDecoded.OK() {\n\t\tpanic(\"database: \" + teslDecoded.Message())\n\t}\n\tteslValue, _ := teslDecoded.Value()\n\treturn teslValue\n"
+          (qualified info.rec_owner (codec_decode_name info.rec_tesl_name))
+      | None ->
+        if info.rec_proof_fields then
+          ignore (record_column_codec loc info);
+        let fields = List.map (fun (field, field_ty) ->
+          Printf.sprintf "%s: %s" (record_field_go_name field)
+            (sql_adt_field_decoder loc field_ty
+               (Printf.sprintf "teslFields[%s]" (go_quote field)))) info.rec_fields in
+        Printf.sprintf
+          "\tteslFields, teslErr := teslrt.DecodeObjectShape(teslRaw, %s, []string{%s})\n\tif teslErr != nil {\n\t\tpanic(\"database: \" + teslErr.Error())\n\t}\n\treturn %s{%s}\n"
+          (go_quote info.rec_tesl_name)
+          (String.concat ", " (List.map (fun (field, _) -> go_quote field) info.rec_fields))
+          (go_type ty) (String.concat ", " fields)
+    in
+    let decoder = remember_helper_stmts ~prefix:"teslColumnRecord"
+      ~signature:(Printf.sprintf "(teslRaw any) %s" (go_type ty)) ~body in
+    Printf.sprintf "%s(%s)" decoder raw
   | TAdt (nested, args) when nested.adt_tesl_name <> "Maybe" ->
     (* A nested ADT decodes through its OWN column decoder, so one rule covers any depth. *)
     Printf.sprintf "%s(teslrt.MustEncodeJSON(%s))" (sql_adt_column_decoder loc nested args) raw
@@ -8675,7 +8705,7 @@ and sql_adt_field_decoder loc ty raw =
          raw (go_type inner) (sql_adt_field_decoder loc inner "teslInner")
      | None -> unsupported loc
        "Go backend: an ADT column's constructor field of type `%s` has no column decoder — a \
-        stored variant may carry scalars, newtypes over them, records with codecs, nested ADTs and `Maybe`s of \
+         stored variant may carry scalars, newtypes over them, records, nested ADTs and `Maybe`s of \
         those" (go_type ty))
 
 and sql_adt_column_decoder loc (info : adt_info) args =
@@ -10924,9 +10954,11 @@ let rec json_value_decoder ~package ~loc ~what ty =
       "func(teslRaw any) (%s, error) {\n\t\tteslNested := %s(teslRaw)\n\t\tif !teslNested.OK() {\n\t\t\treturn %s{}, errors.New(teslNested.Message())\n\t\t}\n\t\tteslValue, _ := teslNested.Value()\n\t\treturn teslValue, nil\n\t}"
       (go_type ty) (qualified nested.rec_owner (codec_decode_name nested.rec_tesl_name)) (go_type ty)
   | TAdt (nested, _) when nominal_codec nested.adt_owner nested.adt_tesl_name <> None ->
-    Printf.sprintf
-      "func(teslRaw any) (%s, error) {\n\t\tteslNested := %s(teslRaw)\n\t\tif !teslNested.OK() {\n\t\t\treturn %s{}, errors.New(teslNested.Message())\n\t\t}\n\t\tteslValue, _ := teslNested.Value()\n\t\treturn teslValue, nil\n\t}"
-      (go_type ty) (qualified nested.adt_owner (codec_decode_name nested.adt_tesl_name)) (go_type ty)
+    remember_helper_stmts ~prefix:"teslDecode"
+      ~signature:(Printf.sprintf "(teslRaw any) (%s, error)" (go_type ty))
+      ~body:(Printf.sprintf
+        "\tteslNested := %s(teslRaw)\n\tif !teslNested.OK() {\n\t\treturn %s{}, errors.New(teslNested.Message())\n\t}\n\tteslValue, _ := teslNested.Value()\n\treturn teslValue, nil\n"
+        (qualified nested.adt_owner (codec_decode_name nested.adt_tesl_name)) (go_type ty))
   | _ -> unsupported loc
     "Go backend cannot decode `%s` from JSON; give the type a `codec`" what
 
@@ -11474,7 +11506,8 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
             let assignments = List.mapi (fun index (field, field_ty) ->
               let suffix = string_of_int index in
               let decoder = json_value_decoder ~package ~loc:codec.loc
-                ~what:(type_name ^ "." ^ variant.var_ctor ^ "." ^ field) field_ty in
+                ~what:(type_name ^ "." ^ variant.var_ctor ^ "." ^ field) field_ty
+                |> String.split_on_char '\n' |> String.concat "\n\t" in
               Printf.bprintf body
                 "\t\tteslRaw%s, teslFieldErr%s := teslrt.JSONFieldValue(teslFields, %s)\n\t\tif teslFieldErr%s != nil {\n\t\t\treturn teslrt.RejectShape[%s](teslFieldErr%s.Error())\n\t\t}\n\t\tteslValue%s, teslDecodeErr%s := %s(teslRaw%s)\n\t\tif teslDecodeErr%s != nil {\n\t\t\treturn teslrt.RejectShape[%s](teslDecodeErr%s.Error())\n\t\t}\n"
                 suffix suffix (go_quote field) suffix (go_type go_ty) suffix
@@ -11717,6 +11750,15 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
       end
     | _ -> ()
   in
+  (* An adtJson decoder also references derived decoders for record payloads,
+     even when no HTTP endpoint takes those records directly. *)
+  List.iter (fun (codec : codec_form) ->
+    match codec.from_json, Hashtbl.find_opt types.adts codec.type_name with
+    | FromJsonAdt, Some info ->
+      List.iter (fun variant ->
+        List.iter (fun (_, ty) -> derive_decoder codec.loc ty) variant.var_fields)
+        info.adt_variants
+    | _ -> ()) codecs;
   List.iter (fun (api : api_form) ->
     List.iter (fun (endpoint : api_endpoint) ->
       match endpoint.kind with

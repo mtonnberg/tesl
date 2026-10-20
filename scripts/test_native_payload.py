@@ -5,6 +5,7 @@ import copy
 import json
 import os
 from pathlib import Path
+import sys
 import tarfile
 import unittest
 from unittest.mock import patch
@@ -13,6 +14,20 @@ import zipfile
 import module_proxy
 import native_payload as payload
 from test_module_proxy import fixture as module_fixture
+
+
+@contextmanager
+def windows_checksum_newlines():
+    """Exercise Windows text translation on any host, without normalizing reads."""
+    original = Path.open
+
+    def open_file(path, mode="r", buffering=-1, encoding=None, errors=None, newline=None):
+        if path.suffix == ".sha256" and "b" not in mode and any(flag in mode for flag in "wax"):
+            newline = "\r\n" if newline is None else newline
+        return original(path, mode, buffering, encoding, errors, newline)
+
+    with patch.object(Path, "open", open_file):
+        yield
 
 
 @contextmanager
@@ -71,6 +86,27 @@ def assemble(arguments):
 
 
 class NativePayloadTest(unittest.TestCase):
+    def test_cli_checksum_uses_canonical_bytes_with_windows_text_defaults(self):
+        with fixture("windows-amd64") as args:
+            plan, root, target = args[:3]
+            plan_path = root / "plan.json"
+            plan_path.write_text(json.dumps(plan))
+            options = {name: root for name in ("compiler", "frontends", "go-root", "postgres",
+                                              "module-bundle", "ocaml-license", "output", "archive-dir")}
+            options.update(plan=plan_path, target=target)
+            argv = ["native_payload.py", *[part for name, value in options.items() for part in ("--" + name, str(value))]]
+
+            def pack(plan, target, output, archive):
+                archive.write_bytes(b"candidate archive")
+                return payload.file_hash(archive)
+
+            with patch.object(sys, "argv", argv), patch.object(payload, "assemble"), \
+                    patch.object(payload, "pack", side_effect=pack), windows_checksum_newlines():
+                payload.main()
+            archive = root / plan["payloads"][target]["archiveName"]
+            self.assertEqual(archive.with_name(archive.name + ".sha256").read_bytes(),
+                             f"{payload.file_hash(archive)}  {archive.name}\n".encode("ascii"))
+
     def test_macos_signing_precedes_inventory_and_archive_checksums(self):
         with fixture("darwin-arm64") as args:
             def sign(root, audit, policy):
