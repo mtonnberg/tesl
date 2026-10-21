@@ -6,19 +6,33 @@ The [scoped traceability register](migration-pr-scope.md) links the 18 agreed PR
 clauses to live production declarations, named witnesses and execution routes.
 Staged uniqueness has bounded technical evidence on PostgreSQL 14/17/18. Bounded
 empty-queue removal is integrated with merged execution evidence below. The complete
-local CI gate passed on `df0479b`; static consistency alone is not that execution
+local CI gate passed on the main-integrated `60b0b3a`; static consistency alone is not that execution
 evidence. Historical-roadmap reconciliation is reported separately.
 
-Last passing full-gate baseline: `df0479b`. Earlier passing baselines: `1ddc8a6`
+Last passing full-gate baseline: `60b0b3a`. Earlier passing baselines: `df0479b`, `1ddc8a6`
 (2026-10-14) and `84ef00d`.
 Requirements were committed in `b5cddb9`;
 additive catch-up was committed in `137ddd1`, row-transforming catch-up in
 `4f6e86e`, queue catch-up in `085bf00`, and ordered composition in `99b869f`.
 Automatic deployment wiring and its targeted verification are recorded below.
 
-## Main integration awaiting full CI
+## Verified main integration
 
-Current `main` at `3e89b637980a814435ee385a3cbc6840a543a9f7` is integrated with
+The integrated implementation at `60b0b3a6f24d4c85196966e7824f64d53db08b3d`
+passed all 24 authoritative CI phases and all 60 migration-runner subphases,
+with no phase skips and exit code 0. Total elapsed time was 18,303 seconds
+(5h 5m 3s); phase 5 took 14,125 seconds. The ordered row/queue deployment,
+both adversarial review phases, twenty-release verification and latency gate
+all passed in that same invocation. Evidence:
+
+- `.tesl-stuff/pr-main-merge-retry-ci.log`
+- `.tesl-stuff/pr-main-merge-retry-migrations/phases.tsv`
+
+This is the passing result for the merged code and the claim-expiry fix below.
+The working tree was clean at completion. It does not establish a CI speedup or
+hosted PR-check result. No branch push was performed as part of this verification.
+
+`main` at `3e89b637980a814435ee385a3cbc6840a543a9f7` is integrated with
 the migration branch. The emitter resolution retains nominal codec ownership and
 generic/recursive ADT handling while incorporating main's plain-record payload
 support and rejection of unvalidated proof-bearing ADT payloads.
@@ -33,8 +47,7 @@ database results. Evidence is in `.tesl-stuff/main-merge-private-pg/` and
 `/tmp/opencode/main-merge/`. The native checksum/distribution/catalog Python suites
 also passed all 62 cases. Normal generators refreshed the ABI-bearing snapshots.
 
-These are integrated targeted results. The successful full run below predates
-this merge; a new authoritative run on the merged commit is required.
+These targeted results preceded the successful integrated full run above.
 
 The first integrated attempt on `c41d12b` finished in 13,644 seconds with 23/24
 phases passing. The ordered deployment from V2 with an old claim exposed a race:
@@ -52,7 +65,8 @@ Targeted PostgreSQL/race, fixture, vet and lint checks also passed. Evidence:
 `.tesl-stuff/main-merge-claim-fix-repro.log`, and
 `.tesl-stuff/main-merge-claim-fix-ordered-final.log`. The failed full run stopped
 the migration runner after 53 successful subphases and the ordered failure; its
-six later subphases did not run. A complete integrated rerun remains required.
+six later subphases did not run. The passing integrated rerun above supersedes
+that failed attempt.
 
 ## Passing full-gate result before main integration
 

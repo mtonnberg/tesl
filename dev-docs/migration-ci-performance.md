@@ -79,6 +79,12 @@ phases. Total time was 16,380s; phase 5 took 12,885s. Thus the completed run doe
 not demonstrate an overall wall-time reduction. Its evidence is retained in
 `.tesl-stuff/pr-speed-ci-retry.log` and `.tesl-stuff/pr-speed-migrations/`.
 
+After integrating main and fixing a claim-expiry retry race, `60b0b3a` also passed
+all 24 CI phases and 60 migration phases. It took 18,303s overall and 14,125s in
+phase 5. Evidence: `.tesl-stuff/pr-main-merge-retry-ci.log` and
+`.tesl-stuff/pr-main-merge-retry-migrations/`. This later run likewise provides
+verification evidence, not an overall performance improvement.
+
 The full passing gate still needs the distinct release histories, source checking,
 emission, database transitions, race checks and adversarial scenarios. The changes
 above do not justify claiming a large reduction in that passing wall time.
