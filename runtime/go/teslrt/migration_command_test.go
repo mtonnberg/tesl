@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -361,11 +362,18 @@ func TestPgMigrationStatusHumanOutputReportsInstallationAndEscapesInstances(t *t
 		t.Fatalf("missing incomplete-installation explanation: %s", text)
 	}
 	f.expand(t, 1)
-	f.call(t, "select pg_catalog.set_config('application_name',$1,false)", "tesl-app:\n\x1b[2J")
+	f.call(t, "select pg_catalog.set_config('application_name',$1,false)", "tesl-app:\"\\\n\x1b[2J")
+	// PostgreSQL 14 replaces control characters in application_name with '?'.
+	// Check the retained identity, including quotes/backslashes that still need
+	// escaping on every supported version, rather than assuming the input survived.
+	var instance string
+	if err := f.worker.QueryRow(f.ctx, "select current_setting('application_name')").Scan(&instance); err != nil {
+		t.Fatal(err)
+	}
 	f.call(t, "select notes_app.tesl_heartbeat(1,1,1)")
 	text := report()
 	if !strings.Contains(text, "Database V1; oldest admitted V1") || !strings.Contains(text, "last heartbeat") ||
-		strings.Contains(text, "\x1b") || !strings.Contains(text, "\\x1b") {
+		strings.Contains(text, "\x1b") || !strings.Contains(text, strconv.Quote(instance)+": V1; last heartbeat ") {
 		t.Fatalf("status lost or failed to escape instance information: %q", text)
 	}
 }

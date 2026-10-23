@@ -25,7 +25,9 @@ let emitted path = match Compile.compile_go_file path with
 let contents name artifacts = (List.find (fun (a:Emit_go.artifact) -> a.path = name) artifacts).contents
 
 let paths () =
-  List.iter (fun (name,path) -> check (option string) name (Some path) (V.schema_module_relative_path name)) [
+  List.iter (fun (name,path) ->
+    let path = String.concat Filename.dir_sep (String.split_on_char '/' path) in
+    check (option string) name (Some path) (V.schema_module_relative_path name)) [
     "Schema.Todo.VCurrent", "schema/todo/v-current.tesl";
     "Schema.Todo.VCurrent.Todos", "schema/todo/v-current/todos.tesl";
     "Schema.Todo.V12.Todos", "schema/todo/v12/todos.tesl";

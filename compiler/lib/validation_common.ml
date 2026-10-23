@@ -1104,7 +1104,7 @@ let schema_module_relative_path module_name =
     let name = module_name_to_kebab name in
     let dirs = if revision = "Migrate" then ["migrations"; name]
       else ["schema"; name; module_name_to_kebab revision] in
-    Some (String.concat "/" (dirs @ List.map module_name_to_kebab rest) ^ ".tesl")
+    Some (String.concat Filename.dir_sep (dirs @ List.map module_name_to_kebab rest) ^ ".tesl")
 
 let resolve_local_import_path_with ~exists ~realpath source_file module_name =
   let dir = Filename.dirname source_file in

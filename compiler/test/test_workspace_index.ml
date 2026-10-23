@@ -265,7 +265,7 @@ let migration_source_ownership () =
     let file = Filename.concat root "schema/notes/lib.tesl" in
     let index = build file in complete index;
     let target = selected index file 2 3 in
-    check bool "ordinary declaration remains mutable" false (source_read_only index file);
+    check bool "ordinary declaration remains mutable" false (source_read_only index (canonical file));
     expect_refused index target "twice");
   with_project ["schema/notes/v-current.tesl", Str.global_replace (Str.regexp_string "V2") "VCurrent" schema] (fun root ->
     let file = Filename.concat root "schema/notes/v-current.tesl" in

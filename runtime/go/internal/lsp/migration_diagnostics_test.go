@@ -107,7 +107,10 @@ func TestFrozenSourceDiagnosticsThroughRealCompilerAndRetainedLSP(t *testing.T) 
 		t.Skip("requires TESL_REPO_ROOT and built compiler")
 	}
 	compiler := filepath.Join(repo, "compiler/_build/default/bin/main.exe")
-	project := t.TempDir()
+	project, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	write := func(path, source string) {

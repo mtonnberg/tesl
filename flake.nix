@@ -12,13 +12,13 @@
         toolchainInputs = import ./nix/toolchain-inputs.nix;
         # Go is PINNED to a patch release nixpkgs has not packaged yet.
         #
-        # `govulncheck` is a mandatory gate (ci.sh phase 2a). The previous 1.26.6
-        # pin is affected by standard-library advisories including GO-2026-6617
-        # (HTTP/2 HPACK encoder race), fixed in 1.26.9. toolchain-inputs.nix pins
+        # `govulncheck` is a mandatory gate. The previous 1.26.9 pin is affected
+        # by GO-2026-6809 (compromised intermediate certificates in crypto/x509),
+        # fixed in 1.26.10. toolchain-inputs.nix pins
         # that patch and the source checksum published by https://go.dev/dl/?mode=json.
         # The overlay updates Go without moving the other locked compiler/CI tools.
         #
-        # Remove this the moment nixpkgs carries go1.26.9 or newer — `nix flake update
+        # Remove this the moment nixpkgs carries go1.26.10 or newer — `nix flake update
         # nixpkgs` then gives the same result with no local patch to maintain.
         goOverlay = import ./nix/go-overlay.nix;
         pkgs = import nixpkgs { inherit system; overlays = [ goOverlay ]; };

@@ -141,8 +141,18 @@ func TestClientRejectsOutputBomb(t *testing.T) {
 	}
 }
 
+func formatTestHelper() {
+	if os.Getenv("TESL_LOGICAL_PATH") != "" || len(os.Args) != 3 || os.Args[1] != "--format-json" {
+		os.Exit(3)
+	}
+	source, err := os.ReadFile(os.Args[2])
+	if err != nil || string(source) != "unsaved source" {
+		os.Exit(4)
+	}
+	_, _ = os.Stdout.WriteString(`{"version":1,"formatted":"formatted","readOnly":false,"reason":null}`)
+}
+
 func TestClientFormatsBoundedShadowSourceWithoutWritingWorkspace(t *testing.T) {
-	directory := t.TempDir()
 	project := t.TempDir()
 	file := filepath.Join(project, "demo.tesl")
 	if err := os.WriteFile(filepath.Join(project, "tesl.toml"), nil, 0600); err != nil {
@@ -151,16 +161,7 @@ func TestClientFormatsBoundedShadowSourceWithoutWritingWorkspace(t *testing.T) {
 	if err := os.WriteFile(file, []byte("disk source"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	script := directory + "/compiler-helper.sh"
-	if err := os.WriteFile(script, []byte(`#!/bin/sh
-test -z "$TESL_LOGICAL_PATH" || exit 3
-test "$1" = --format-json || exit 4
-test "$(cat "$2")" = 'unsaved source' || exit 5
-printf '{"version":1,"formatted":"formatted","readOnly":false,"reason":null}'
-`), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	client := Client{Executable: script}
+	client := Client{Executable: testExecutable(t), Environment: withEnvironment(os.Environ(), "TESL_FORMAT_TEST_HELPER", "1")}
 	formatted, result, err := client.FormatSource(context.Background(), file, "unsaved source")
 	if err != nil {
 		t.Fatal(err)

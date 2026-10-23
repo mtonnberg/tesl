@@ -26,6 +26,7 @@ let with_project f =
 
 let layout () =
   let check_path name expected =
+    let expected = Option.map (fun path -> String.concat Filename.dir_sep (String.split_on_char '/' path)) expected in
     check (option string) name expected (Validation_common.schema_module_relative_path name)
   in
   List.iter (fun (name, path) -> check_path name (Some path)) [

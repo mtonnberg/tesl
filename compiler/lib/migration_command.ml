@@ -42,7 +42,9 @@ let path spelling =
      | _ -> ()
      | exception Unix.Unix_error (Unix.ENOENT,_,_) -> ());
     result in
-  walk absolute
+   (* After rejecting symlinks, resolve native aliases such as Windows 8.3
+      directory names so selection and history checks share one spelling. *)
+   Source_input.canonical_path (walk absolute)
 type options = {entry:string;database:string option;new_revision:bool;root:string option;plan:bool;initial_version:int;contract_version:int option;
                 overlays:(string * int * string) list}
 let parse args =
