@@ -1,0 +1,33 @@
+module Schema.Notes.Migrate.V4 exposing [migration, fixture]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.Prelude exposing [Bool(..)]
+import Tesl.Migration exposing [Migration, Entity(..), Rule(..), Same(..), Migrated(..)]
+import Schema.Notes.V3
+import Schema.Notes.VCurrent
+
+migration = Migration {
+  from: Schema.Notes.V3
+  to: Schema.Notes.VCurrent
+  same: [Same Schema.Notes.V3.Metadata Schema.Notes.VCurrent.Metadata]
+  entities: { Note: Migrate convert [Revalidate title Schema.Notes.VCurrent.tryTitle] }
+  fixtures: [fixture]
+}
+fn convert(old: Schema.Notes.V3.Note) -> Migrated Schema.Notes.VCurrent.Note =
+  case Schema.Notes.VCurrent.tryTitle old.title of
+    Nothing -> Reject "blocked V3 title"
+    Something title -> Row (Schema.Notes.VCurrent.Note {
+      id: old.id
+      owner: old.owner
+      metadata: old.metadata
+      title: title
+    })
+fn fixture() -> Maybe Schema.Notes.V3.Note = Schema.Notes.V3.makeNote "fixture" "kept"
+
+test "title policy rejects a formerly valid value" {
+  case Schema.Notes.V3.makeNote "invalid" "blocked" of
+    Nothing -> expect False
+    Something old ->
+      case convert old of
+        Row current -> expect False
+        Reject reason -> expect reason == "blocked V3 title"
+}

@@ -71,6 +71,8 @@ var FakeDbDatabase = teslrt.NewDatabase(
 	[]teslrt.PostgresTable{},
 )
 
+var _ = teslrt.RegisterDatabaseIdentity("teslmodlesson28deadletterqueue.FakeDb", FakeDbDatabase)
+
 //line lesson28-dead-letter-queue.tesl:103
 func notifWorker(job SendNotif) SendNotif {
 //line lesson28-dead-letter-queue.tesl:105

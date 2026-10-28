@@ -8,13 +8,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
+	"math"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"tesl.dev/runtime/go/internal/protocol"
 	"tesl.dev/runtime/go/internal/tooling"
@@ -37,11 +38,16 @@ type overlayCompiler interface {
 	QuerySourcesJSON(context.Context, string, string, []tooling.SourceOverlay, ...string) ([]byte, tooling.Result, error)
 }
 
+type overlayFormatter interface {
+	FormatSources(context.Context, string, []tooling.SourceOverlay) ([]byte, tooling.Result, error)
+}
+
 type document struct {
 	URI     string
 	Path    string
 	Version int
 	Text    string
+	openID  uint64
 }
 
 type Server struct {
@@ -52,7 +58,17 @@ type Server struct {
 	nextTokenID             uint64
 	fileChangeVersion       uint64
 	shutdown                bool
+	documentChanges         bool
+	migrationPreview        *migrationPreviewState
+	migrationApply          *migrationApplyState
+	migrationResult         *migrationApplicationResult
+	migrationApplySupported bool
+	migrationBatchEdits     bool
 	requests                *requestStream
+	clientRequests          map[string]clientRequest
+	nextClientRequestID     uint64
+	nextDocumentID          uint64
+	clientClosed            bool
 	diagnosticMu            sync.Mutex
 	diagnosticRuns          map[string]diagnosticRun
 	diagnosticWG            sync.WaitGroup
@@ -75,6 +91,7 @@ func NewServer(compiler Compiler) *Server {
 		compiler: compiler, documents: make(map[string]document), semanticTokens: make(map[string]semanticTokenState),
 		diagnosticRuns: make(map[string]diagnosticRun), diagnosticSets: make(map[string]map[string][]map[string]any),
 		diagnosticLocks: make(map[string]*sync.Mutex),
+		clientRequests:  make(map[string]clientRequest),
 	}
 }
 
@@ -117,6 +134,7 @@ func (server *Server) diagnosticLock(uri string) *sync.Mutex {
 // the LSP protocol: exit before shutdown is a failure.
 func (server *Server) Run(ctx context.Context, input io.Reader, output io.Writer) int {
 	ctx, cancel := context.WithCancel(ctx)
+	defer server.closeClientRequests()
 	defer func() {
 		cancel()
 		server.waitDiagnostics()
@@ -133,14 +151,30 @@ func (server *Server) Run(ctx context.Context, input io.Reader, output io.Writer
 			return 1
 		}
 		var item incomingRequest
+		timer := server.clientRequestTimer()
+		var timeout <-chan time.Time
+		if timer != nil {
+			timeout = timer.C
+		}
 		select {
+		case now := <-timeout:
+			if err := server.expireClientRequests(now); err != nil {
+				return 1
+			}
+			continue
 		case <-server.requests.ctx.Done():
+			if timer != nil {
+				timer.Stop()
+			}
 			if err := server.requests.failed(); err != nil {
 				_ = server.writeError(writer, nil, invalidRequest, err.Error())
 				return 1
 			}
 			return 0
 		case next, ok := <-server.requests.messages:
+			if timer != nil {
+				timer.Stop()
+			}
 			if !ok {
 				if err := server.requests.failed(); err != nil {
 					_ = server.writeError(writer, nil, invalidRequest, err.Error())
@@ -153,6 +187,14 @@ func (server *Server) Run(ctx context.Context, input io.Reader, output io.Writer
 		if item.err != nil {
 			server.requests.finish(item)
 			if writeErr := server.writeError(writer, nil, item.code, item.err.Error()); writeErr != nil || item.terminal {
+				return 1
+			}
+			continue
+		}
+		if item.response != nil {
+			err := server.finishClientRequest(*item.response)
+			server.requests.finish(item)
+			if err != nil {
 				return 1
 			}
 			continue
@@ -195,28 +237,17 @@ func (server *Server) Run(ctx context.Context, input io.Reader, output io.Writer
 func (server *Server) handle(ctx context.Context, request protocol.Request, writer *protocol.Writer) (int, error) {
 	switch request.Method {
 	case "initialize":
-		var params struct {
-			Capabilities struct {
-				Workspace struct {
-					WorkspaceEdit struct {
-						DocumentChanges bool   `json:"documentChanges"`
-						FailureHandling string `json:"failureHandling"`
-					} `json:"workspaceEdit"`
-				} `json:"workspace"`
-			} `json:"capabilities"`
-		}
-		if err := json.Unmarshal(request.Params, &params); err != nil {
+		if _, err := decodeInitializeParams(request.Params); err != nil {
 			return -1, &requestError{code: invalidRequest, message: "invalid initialize params"}
 		}
-		edit := params.Capabilities.Workspace.WorkspaceEdit
-		server.workspaceEditsSupported = edit.DocumentChanges && (edit.FailureHandling == "transactional" || edit.FailureHandling == "textOnlyTransactional")
-		result := initializeResult()
-		if !server.workspaceEditsSupported {
-			result["capabilities"].(map[string]any)["renameProvider"] = false
-		}
-		return -1, server.writeResult(writer, request.ID, result)
+		return -1, server.writeResult(writer, request.ID, server.initializeCapabilities(request.Params))
 	case "initialized":
 		return -1, nil
+	case "workspace/executeCommand":
+		if len(request.ID) == 0 {
+			return -1, nil
+		}
+		return -1, server.writeMigrationCommand(ctx, request.ID, request.Params, writer)
 	case "shutdown":
 		server.waitDiagnostics()
 		server.shutdown = true
@@ -288,7 +319,7 @@ func (server *Server) handle(ctx context.Context, request protocol.Request, writ
 		if len(request.ID) == 0 {
 			return -1, nil
 		}
-		return -1, server.writeCodeActions(request.ID, request.Params, writer)
+		return -1, server.writeCodeActionsContext(ctx, request.ID, request.Params, writer)
 	case "textDocument/documentLink":
 		if len(request.ID) == 0 {
 			return -1, nil
@@ -483,6 +514,7 @@ type codeActionParams struct {
 	} `json:"textDocument"`
 	Context struct {
 		Diagnostics []codeActionDiagnostic `json:"diagnostics"`
+		Only        []string               `json:"only"`
 	} `json:"context"`
 }
 
@@ -490,7 +522,11 @@ type codeActionDiagnostic struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
 	Data    struct {
-		Fix json.RawMessage `json:"fix"`
+		Fix               json.RawMessage `json:"fix"`
+		ActionClass       string          `json:"actionClass"`
+		NeedsConfirmation bool            `json:"needsConfirmation"`
+		FixAllEligible    bool            `json:"fixAllEligible"`
+		Command           json.RawMessage `json:"command"`
 	} `json:"data"`
 }
 
@@ -516,8 +552,12 @@ func (server *Server) didOpen(ctx context.Context, raw json.RawMessage, writer *
 	if err != nil {
 		return err
 	}
+	if server.nextDocumentID == math.MaxUint64 {
+		return errors.New("document lifetime limit exceeded")
+	}
+	server.nextDocumentID++
 	server.documents[params.TextDocument.URI] = document{
-		URI: params.TextDocument.URI, Path: path, Version: params.TextDocument.Version, Text: params.TextDocument.Text,
+		URI: params.TextDocument.URI, Path: path, Version: params.TextDocument.Version, Text: params.TextDocument.Text, openID: server.nextDocumentID,
 	}
 	if err := server.publishDiagnostics(ctx, server.documents[params.TextDocument.URI], writer); err != nil {
 		return err
@@ -979,6 +1019,10 @@ type fixPayload struct {
 }
 
 func (server *Server) writeCodeActions(id json.RawMessage, raw json.RawMessage, writer *protocol.Writer) error {
+	return server.writeCodeActionsContext(context.Background(), id, raw, writer)
+}
+
+func (server *Server) writeCodeActionsContext(ctx context.Context, id json.RawMessage, raw json.RawMessage, writer *protocol.Writer) error {
 	var params codeActionParams
 	if err := json.Unmarshal(raw, &params); err != nil || params.TextDocument.URI == "" {
 		return server.writeResult(writer, id, []map[string]any{})
@@ -987,8 +1031,19 @@ func (server *Server) writeCodeActions(id json.RawMessage, raw json.RawMessage, 
 	if !found {
 		return server.writeResult(writer, id, []map[string]any{})
 	}
+	// Source actions are requested explicitly. Recompute diagnostics over the
+	// current buffers; context.diagnostics can be stale or supplied by a client.
+	if codeActionKindRequested(params.Context.Only, "source.fixAll.tesl") {
+		return server.writeFixAll(ctx, id, doc, writer)
+	}
+	if len(params.Context.Only) > 0 && !codeActionKindRequested(params.Context.Only, "quickfix") {
+		return server.writeResult(writer, id, []map[string]any{})
+	}
 	actions := make([]map[string]any, 0)
 	for _, diagnostic := range params.Context.Diagnostics {
+		if diagnostic.Data.NeedsConfirmation || diagnostic.Data.ActionClass == "decision" {
+			continue
+		}
 		if len(diagnostic.Data.Fix) == 0 || string(diagnostic.Data.Fix) == "null" {
 			continue
 		}
@@ -1228,7 +1283,13 @@ func (server *Server) writeFormatting(ctx context.Context, id json.RawMessage, r
 	if !found || server.compiler == nil {
 		return server.writeResult(writer, id, []map[string]any{})
 	}
-	formatted, _, err := server.compiler.FormatSource(ctx, doc.Path, doc.Text)
+	var formatted []byte
+	var err error
+	if formatter, ok := server.compiler.(overlayFormatter); ok {
+		formatted, _, err = formatter.FormatSources(ctx, doc.Path, server.sourceOverlays())
+	} else {
+		formatted, _, err = server.compiler.FormatSource(ctx, doc.Path, doc.Text)
+	}
 	if err != nil || string(formatted) == doc.Text {
 		return server.writeResult(writer, id, []map[string]any{})
 	}
@@ -1785,14 +1846,20 @@ type compilerResponse struct {
 }
 
 type compilerDiagnostic struct {
-	File     string          `json:"file"`
-	Start    sourcePosition  `json:"start"`
-	End      sourcePosition  `json:"end"`
-	Severity string          `json:"severity"`
-	Code     string          `json:"code"`
-	Message  string          `json:"message"`
-	Fix      json.RawMessage `json:"fix"`
-	Source   string          `json:"source"`
+	File               string                      `json:"file"`
+	Start              sourcePosition              `json:"start"`
+	End                sourcePosition              `json:"end"`
+	Severity           string                      `json:"severity"`
+	Code               string                      `json:"code"`
+	Message            string                      `json:"message"`
+	Fix                json.RawMessage             `json:"fix"`
+	Source             string                      `json:"source"`
+	RelatedInformation []compilerRelatedDiagnostic `json:"relatedInformation"`
+	ActionClass        *string                     `json:"actionClass"`
+	NeedsConfirmation  bool                        `json:"needsConfirmation"`
+	FixAllEligible     bool                        `json:"fixAllEligible"`
+	Command            json.RawMessage             `json:"command"`
+	CodeDescription    map[string]string           `json:"codeDescription"`
 }
 
 type sourcePosition struct {
@@ -1816,11 +1883,15 @@ func (server *Server) diagnosticsForDocumentWithOverlays(ctx context.Context, do
 	if server.compiler == nil {
 		return nil, errors.New("compiler client is not configured")
 	}
-	payload, _, err := server.querySourceJSON(ctx, "--check-json", doc, overlays)
+	flag := "--check-json"
+	if rich, ok := server.compiler.(interface{ DiagnosticQueryVersion() int }); ok && rich.DiagnosticQueryVersion() == 2 {
+		flag = "--check-json-v2"
+	}
+	payload, _, err := server.querySourceJSON(ctx, flag, doc, overlays)
 	if err != nil {
 		return nil, err
 	}
-	if err := tooling.ValidateCompilerJSON("--check-json", payload); err != nil {
+	if err := tooling.ValidateCompilerJSON(flag, payload); err != nil {
 		return nil, err
 	}
 	var response compilerResponse
@@ -1829,44 +1900,41 @@ func (server *Server) diagnosticsForDocumentWithOverlays(ctx context.Context, do
 	}
 	groups := map[string][]map[string]any{doc.URI: {}}
 	for _, diagnostic := range response.Diagnostics {
-		uri := doc.URI
-		source := doc.Text
-		if !samePath(diagnostic.File, doc.Path) {
-			uri = protocol.PathToURI(diagnostic.File)
-			var found bool
-			for _, overlay := range overlays {
-				if samePath(diagnostic.File, overlay.Path) {
-					source = overlay.Source
-					found = true
-					break
-				}
-			}
-			if !found {
-				contents, readErr := os.ReadFile(diagnostic.File) // #nosec G304 -- compiler returned a local source path.
-				if readErr != nil {
-					return nil, fmt.Errorf("read diagnostic source %s: %w", diagnostic.File, readErr)
-				}
-				source = string(contents)
-			}
-		}
-		index := protocol.NewLineIndex(source)
-		start, startErr := index.PositionFromLineColumn(diagnostic.Start.Line, diagnostic.Start.Col)
-		end, endErr := index.PositionFromLineColumn(diagnostic.End.Line, diagnostic.End.Col)
-		if startErr != nil || endErr != nil {
-			return nil, errors.New("compiler diagnostic range is outside document")
+		uri, span, err := diagnosticLocation(doc, overlays, diagnostic.File, diagnostic.Start, diagnostic.End)
+		if err != nil {
+			return nil, err
 		}
 		entry := map[string]any{
-			"range": map[string]protocol.Position{
-				"start": start,
-				"end":   end,
-			},
+			"range":    span,
 			"severity": lspSeverity(diagnostic.Severity),
 			"code":     diagnostic.Code,
 			"message":  diagnostic.Message,
 			"source":   diagnostic.Source,
 		}
+		data := map[string]any{}
 		if len(diagnostic.Fix) > 0 && string(diagnostic.Fix) != "null" {
-			entry["data"] = map[string]json.RawMessage{"fix": diagnostic.Fix}
+			data["fix"] = diagnostic.Fix
+		}
+		if response.Version == 2 {
+			data["actionClass"] = diagnostic.ActionClass
+			data["needsConfirmation"] = diagnostic.NeedsConfirmation
+			data["fixAllEligible"] = diagnostic.FixAllEligible
+			data["command"] = diagnostic.Command
+			if diagnostic.CodeDescription != nil {
+				entry["codeDescription"] = diagnostic.CodeDescription
+			}
+			related := make([]map[string]any, 0, len(diagnostic.RelatedInformation))
+			for _, information := range diagnostic.RelatedInformation {
+				uri, span, err := diagnosticLocation(doc, overlays, information.File, information.Start, information.End)
+				if err != nil {
+					return nil, err
+				}
+				related = append(related, map[string]any{"location": map[string]any{"uri": uri, "range": span}, "message": information.Message})
+			}
+			entry["relatedInformation"] = related
+		}
+		if len(data) != 0 {
+			entry["data"] = data
 		}
 		groups[uri] = append(groups[uri], entry)
 	}

@@ -213,9 +213,9 @@ let load_imported_cap_map (m : module_form) : (string * string list) list =
       if is_tesl_module imp.module_name then []
       else
         let path = resolve_local_import_path m.source_file imp.module_name in
-        if not (Sys.file_exists path) then []
+        if not (Source_input.exists path) then []
         else
-          let source = In_channel.with_open_text path In_channel.input_all in
+          let source = Source_input.read_text path in
           match Parser.parse_module path source with
           | Err _ -> []
           | Ok imported ->
@@ -473,7 +473,7 @@ let string_of_func_kind = function
   | DeadWorkerKind -> "deadworker"
   | MainKind -> "main"
 
-let validate_no_ok_in_fn ~(funcs : func_decl list) (body : expr) (kind : func_kind) (fd_loc : loc)
+let validate_no_ok_in_fn ?(allow_establish_attachment=false) ~(funcs : func_decl list) (body : expr) (kind : func_kind) (fd_loc : loc)
     : proof_error list =
   let clean_fact_fns =
     List.filter_map (fun (f : func_decl) ->
@@ -494,6 +494,7 @@ let validate_no_ok_in_fn ~(funcs : func_decl list) (body : expr) (kind : func_ki
     in
     let rec walk (e : Ast.expr) =
       match e with
+      | EOk {value; keyword=false; _} when allow_establish_attachment -> walk value
       | EOk { loc; _ } ->
         [{ loc; message = "establish functions must return proof constructors directly (e.g. `ValidPort port`), not use 'ok' syntax" }]
       | EFail { loc; _ } ->
@@ -678,7 +679,7 @@ let build_forall_binding_env (all_funcs : func_decl list) (fd : func_decl) : (st
 (** Validate a check/auth function's `ok x ::: P x` body against declared return spec.
     Also validates fn functions with binding return type.
     [all_funcs] is used to look up check function proofs for ForAll binding tracking. *)
-let validate_check_return (all_funcs : func_decl list) (fd : func_decl) : proof_error list =
+let validate_check_return ~decls (all_funcs : func_decl list) (fd : func_decl) : proof_error list =
   match fd.kind with
   | CheckKind | AuthKind ->
     let errors = ref [] in
@@ -687,6 +688,27 @@ let validate_check_return (all_funcs : func_decl list) (fd : func_decl) : proof_
     let binding_env = build_forall_binding_env all_funcs fd in
     (* Walk body looking for EOk expressions *)
     let proof_var_env : (string * proof_expr) list ref = ref [] in
+    let current_subjects = ref [] in
+    let witness_names = ref [] in
+    Ast_visitor.iter (function
+      | ELetProof {proof_name; _} -> witness_names := proof_name :: !witness_names
+      | _ -> ()) fd.body;
+    let extra_funcs = Validation_common.build_func_info (List.map (fun f -> DFunc f) all_funcs) in
+    let contexts = Proof_discharge.function_return_contexts ~decls ~extra_funcs fd in
+    let canonical_subject name =
+      let rec follow seen name =
+        if List.mem name seen then name else
+        match List.assoc_opt name !current_subjects with
+        | Some next when next <> name -> follow (name :: seen) next
+        | _ -> name in
+      follow [] name in
+    let scoped_equal ?returned actual expected =
+      let mapping = List.map (fun (name, _) -> name, canonical_subject name) !current_subjects in
+      let mapping = match returned with
+        | None -> mapping
+        | Some (binding, value) -> (binding, canonical_subject value) :: mapping in
+      mint_proof_equal (Validation_common.subst_proof mapping actual)
+        (Validation_common.subst_proof mapping expected) in
     let rec expand_proof_vars (proof : proof_expr) : proof_expr =
       match proof with
       | PredApp { pred; args = []; loc = _ } when
@@ -711,6 +733,18 @@ let validate_check_return (all_funcs : func_decl list) (fd : func_decl) : proof_
     let rec validate_ok_expr (e : Ast.expr) =
       match e with
       | EOk { value; proof; loc; _ } ->
+        (* Resolve witnesses from this exact returning leaf, never from a global
+           name inventory or a previous branch's syntactic check call. *)
+        (match List.find_opt (fun (_, _, _, leaf) -> leaf == e) contexts with
+         | Some (_, subjects, proofs, _) ->
+           current_subjects := subjects;
+           proof_var_env := List.filter_map (fun name ->
+             match List.assoc_opt name proofs with
+             | None -> None
+             | Some facts -> Option.map (fun proof -> name, proof)
+               (Validation_common.combine_proof_list loc (List.map Proof_kernel.fact_of facts)))
+             (List.sort_uniq String.compare !witness_names)
+         | None -> current_subjects := []; proof_var_env := []);
         (* Check for dotted paths in proof subjects *)
         errors := check_proof_no_dotted_path proof loc @ !errors;
         (match fd.return_spec with
@@ -730,7 +764,7 @@ let validate_check_return (all_funcs : func_decl list) (fd : func_decl) : proof_
               in
               let ok_name = value_name_of_expr value in
               (match ok_name with
-               | Some n when n <> b.name ->
+               | Some n when n <> b.name && canonical_subject n <> canonical_subject b.name ->
                  errors := { loc; message = Printf.sprintf
                    "ok expression returns `%s` but the declared return binding name is `%s`; \
 either use `let %s = ... in ok %s ::: ...` to bind the result to `%s`, \
@@ -751,7 +785,7 @@ in a constructor: `ok BindingName ::: ...` or `ok (Ctor arg) ::: Proof bindingNa
                    | Some n when n <> b.name -> subst_in_proof n b.name expanded
                    | _ -> expanded
                  in
-                 if not (mint_proof_equal normalized expected) then
+                 if not (scoped_equal ?returned:(Option.map (fun name -> b.name, name) ok_name) normalized expected) then
                    errors := { loc; message = Printf.sprintf
                      "ok proof does not match declared return spec: got `%s`, expected `%s`"
                      (pp_proof normalized) (pp_proof expected) } :: !errors)
@@ -782,7 +816,7 @@ use the named constructor instead: `ok %s { ... } ::: ...`" b.name } :: !errors
                    | Some n when n <> b.name -> subst_in_proof n b.name expanded
                    | _ -> expanded
                  in
-                 if not (mint_proof_equal normalized expected) then
+                 if not (scoped_equal ?returned:(Option.map (fun name -> b.name, name) ok_name) normalized expected) then
                    errors := { loc; message = Printf.sprintf
                      "ok proof does not match declared return spec: got `%s`, expected `%s`"
                      (pp_proof normalized) (pp_proof expected) } :: !errors)
@@ -896,7 +930,7 @@ use the named constructor instead: `ok %s { ... } ::: ...`" b.name } :: !errors
                  did not even reach normalize_conj, so `A && B` vs `B && A`
                  spuriously mismatched.  Now the same structural relation as the
                  RetAttached arms. *)
-              if not (mint_proof_equal normalized expected) then
+              if not (scoped_equal ?returned:(Option.map (fun name -> b.name, name) ok_name) normalized expected) then
                 errors := { loc; message = Printf.sprintf
                   "ok proof does not match declared Maybe return spec: got `%s`, expected `%s`"
                   (pp_proof normalized) (pp_proof expected) } :: !errors)
@@ -912,41 +946,7 @@ use the named constructor instead: `ok %s { ... } ::: ...`" b.name } :: !errors
       | ECase { arms; _ } ->
         List.iter (fun (a : Ast.case_arm) -> validate_ok_expr a.body) arms
       | ELet { body; _ } -> validate_ok_expr body
-      | ELetProof { value_name; proof_name; value; body; _ } ->
-        (* Track the proof carried by the proof variable. *)
-        (let check_proof_opt =
-          let rec find_check_fn = function
-            | EApp { fn = EVar { name = "check"; _ }; arg; _ } -> Some arg
-            | EApp { fn; _ } -> find_check_fn fn
-            | _ -> None
-          in
-          match find_check_fn value with
-          | Some check_fn_expr ->
-            let fn_name, check_args = match flatten_app_pf [] check_fn_expr with
-              | EVar { name; _ }, args -> name, args
-              | _ -> "", []
-            in
-            (match List.find_opt (fun (fd2 : func_decl) -> fd2.name = fn_name) all_funcs with
-             | Some { return_spec = RetAttached { binding = { proof_ann = Some p; name = binder; _ }; _ }; _ }
-             | Some { return_spec = RetMaybeAttached { binding = { proof_ann = Some p; name = binder; _ }; _ }; _ } ->
-               let actual_arg = match check_args with
-                 | [EVar { name; _ }] -> name
-                 | _ -> binder
-               in
-               let rec subst_proof (pe : proof_expr) : proof_expr = match pe with
-                 | PredApp { pred; args; loc } ->
-                   PredApp { pred; args = List.map (fun a -> if a = binder || a = actual_arg then value_name else a) args; loc }
-                 | PredAnd { left; right; loc } ->
-                   PredAnd { left = subst_proof left; right = subst_proof right; loc }
-               in
-               Some (subst_proof p)
-             | _ -> None)
-          | None -> None
-        in
-        (match check_proof_opt with
-         | Some p -> proof_var_env := (proof_name, p) :: !proof_var_env
-         | None -> ()));
-        validate_ok_expr body
+      | ELetProof { body; _ } -> validate_ok_expr body
       (* Effect-wrapper blocks are TAIL positions: `transaction { ok .. }` /
          `with database { ok .. }` / `with capabilities { ok .. }` evaluate to
          their body, so the `ok` return proof lives inside them and MUST be
@@ -973,8 +973,11 @@ use the named constructor instead: `ok %s { ... } ::: ...`" b.name } :: !errors
   | FnKind ->
     (* For fn functions with RetAttached, the body must return the binding name *)
     (match fd.return_spec with
-     | RetAttached { binding = b; _ } ->
+     | RetAttached { binding = b; _ }
+       when not (List.exists (fun (parameter : binding) -> parameter.name = b.name) fd.params) ->
        let errors = ref [] in
+       (* Input-named return bindings are checked on every returning leaf by
+          Proof_discharge; preserve the fresh local-result spelling check here. *)
        (* Find the tail expression and check it returns the binding name *)
        let rec get_tail = function
          | ELet { body; _ } | ELetProof { body; _ } -> get_tail body
@@ -1219,7 +1222,7 @@ let check_capabilities ?(extra_caps = []) (decls : top_decl list) : proof_error 
        Enumerated (no wildcard) so `@8` forces a decision here the day a new
        or existing kind gains a capability requirement.  DCapability / DCache /
        DEmail capability DEFINITIONS are folded into [build_cap_map] above. *)
-    | DType _ | DRecord _ | DEntity _ | DFact _ | DCodec _ | DDatabase _
+    | DQueueSchema _ | DType _ | DRecord _ | DEntity _ | DFact _ | DCodec _ | DDatabase _
     | DConst _ | DChannel _ | DWorkers _ | DCache _ | DEmail _ | DCapture _
     | DApi _ | DServer _ -> ()
   ) decls;
@@ -1255,6 +1258,7 @@ let stdlib_predicates : string list =
 
 (** Collect predicate names produced by check/auth/establish functions in imported modules. *)
 let load_imported_predicates (m : module_form) : string list =
+  let ambiguous = Validation_common.ambiguous_predicate_names m in
   let is_tesl_module name =
     String.length name >= 5 && String.sub name 0 5 = "Tesl."
   in
@@ -1262,9 +1266,9 @@ let load_imported_predicates (m : module_form) : string list =
     if is_tesl_module imp.module_name then []
     else
       let path = resolve_local_import_path m.source_file imp.module_name in
-      if not (Sys.file_exists path) then []
+      if not (Source_input.exists path) then []
       else
-        let source = In_channel.with_open_text path In_channel.input_all in
+        let source = Source_input.read_text path in
         match Parser.parse_module path source with
         | Err _ -> []
         | Ok imported ->
@@ -1272,15 +1276,14 @@ let load_imported_predicates (m : module_form) : string list =
             | ImportAll -> None
             | ImportExposing names -> Some names
           in
-          List.filter_map (function
-            | DFact ff ->
+          Validation_common.provided_predicate_owners imported
+          |> List.concat_map (fun (name, _) ->
               let include_it = match requested with
-                | Some names -> List.mem ff.name names
-                | None -> true
-              in
-              if include_it then Some ff.name else None
-            | _ -> None
-          ) imported.decls
+                | Some names -> List.mem name names | None -> true in
+              let exported = List.exists (function
+                | ExportName n | ExportAdt n -> n = name) imported.exports in
+              (if include_it && not (List.mem name ambiguous) then [name] else [])
+              @ (if exported then [imp.module_name ^ "." ^ name] else []))
   ) m.imports
 
 let collect_import_parse_errors (m : module_form) : proof_error list =
@@ -1291,9 +1294,9 @@ let collect_import_parse_errors (m : module_form) : proof_error list =
     if is_tesl_module imp.module_name then None
     else
       let path = resolve_local_import_path m.source_file imp.module_name in
-      if not (Sys.file_exists path) then None
+      if not (Source_input.exists path) then None
       else
-        let source = In_channel.with_open_text path In_channel.input_all in
+        let source = Source_input.read_text path in
         match Parser.parse_module path source with
         | Ok _ -> None
         | Err e -> Some { loc = e.loc;
@@ -1486,7 +1489,7 @@ before this function, or import it from the module that declares it"
        - Expression-level proofs inside test bodies are validated by the
          expression passes, not this declaration walk.
        - The rest carry no proof annotation at all. *)
-    | DType _ | DFact _ | DCodec _ | DDatabase _ | DCapability _ | DConst _
+    | DQueueSchema _ | DType _ | DFact _ | DCodec _ | DDatabase _ | DCapability _ | DConst _
     | DQueue _ | DChannel _ | DWorkers _ | DCache _ | DAgent _ | DEmail _
     | DCapture _ | DApi _ | DServer _ | DTest _ | DApiTest _ | DLoadTest _ -> ()
   ) m.decls;
@@ -1494,7 +1497,7 @@ before this function, or import it from the module that declares it"
 
 (* ── Module-level proof checking ─────────────────────────────────────────── *)
 
-let check_module (m : module_form) : proof_error list =
+let check_module_unscoped (m : module_form) : proof_error list =
   let errors = ref [] in
   (* Collect all top-level func_decls for cross-function proof lookup *)
   let all_funcs : func_decl list = List.filter_map (function DFunc fd -> Some fd | _ -> None) m.decls in
@@ -1640,10 +1643,12 @@ name the proof-carrying value (a different parameter or local), not the Fact par
       ) fd.params;
 
       (* 2. Check ok ::: only in check/auth/establish *)
-      errors := validate_no_ok_in_fn ~funcs:all_funcs fd.body fd.kind fd.loc @ !errors;
+      errors := validate_no_ok_in_fn
+        ~allow_establish_attachment:(optional_attached_proof_return fd.return_spec)
+        ~funcs:all_funcs fd.body fd.kind fd.loc @ !errors;
 
       (* 3. Validate check/auth return proofs *)
-      errors := validate_check_return all_funcs fd @ !errors;
+      errors := validate_check_return ~decls:m.decls all_funcs fd @ !errors;
 
       (* 4. Validate establish return type: must be Fact (...) or Maybe (Fact (...)) *)
       if fd.kind = EstablishKind then begin
@@ -1691,6 +1696,7 @@ name the proof-carrying value (a different parameter or local), not the Fact par
           | None -> None
         in
         let valid_establish_return = match fd.return_spec with
+          | RetMaybeAttached _ when optional_attached_proof_return fd.return_spec -> true
           | RetPlain { ty = TApp { head = TName { name = "Fact"; _ }; _ }; _ } -> true
           | RetPlain { ty = TApp {
               head = TApp { head = TName { name = "Maybe"; _ };
@@ -1703,7 +1709,7 @@ name the proof-carrying value (a different parameter or local), not the Fact par
         in
         if not valid_establish_return then
           errors := { loc = fd.loc;
-            message = "establish functions must return 'Fact (Pred args)' or 'Maybe (Fact (Pred args))'" }
+            message = "establish functions must return 'Fact (Pred args)', 'Maybe (Fact (Pred args))', or 'Maybe (value: T ::: Pred value)'" }
             :: !errors
         else begin
           (* Verify that every fact constructor used in the body matches the declared
@@ -2509,3 +2515,6 @@ supplies the wrong arguments (%s); the body must return the declared fact about 
   ) m.decls;
 
   List.rev !errors
+
+let check_module m =
+  Validation_common.with_predicate_scope m (fun () -> check_module_unscoped m)

@@ -113,6 +113,8 @@ var UserDatabaseDatabase = teslrt.NewDatabase(
 	},
 )
 
+var _ = teslrt.RegisterDatabaseIdentity("teslmoduserserviceapi.UserDatabase", UserDatabaseDatabase)
+
 //line user-service-api.tesl:183
 func checkEmail(s string) teslrt.Check[string] {
 //line user-service-api.tesl:184
@@ -701,6 +703,8 @@ func DecodeUserJSON(teslJSON any) teslrt.Check[User] {
 	return teslrt.Accept(User{Id: teslFieldId, Username: teslFieldUsername, EmailAddress: teslFieldEmailAddress, PasswordHash: teslFieldPasswordHash, Bio: teslFieldBio, AvatarUrl: teslFieldAvatarUrl, CreatedAt: teslFieldCreatedAt})
 }
 
+const teslCacheArtifactIdentity = "ae3eb8c8d7f5305c956fd9148b6402ff3014f0ecb45e966274e4921d2ecafcf0"
+
 //line user-service-api.tesl:151
 func teslCacheEncodeUserProfileCache(teslValue User) any {
 	return teslEncode4(teslValue)
@@ -717,7 +721,7 @@ func teslCacheDecodeUserProfileCache(teslRaw any) (User, error) {
 	}(teslRaw)
 }
 
-var UserProfileCacheStore = teslrt.NewCacheOn[User](UserDatabaseDatabase, "UserProfileCache", 3600, teslCacheEncodeUserProfileCache, teslCacheDecodeUserProfileCache)
+var UserProfileCacheStore = teslrt.NewCacheOnArtifact[User](UserDatabaseDatabase, "teslmoduserserviceapi.UserProfileCache", 3600, teslCacheEncodeUserProfileCache, teslCacheDecodeUserProfileCache, teslCacheArtifactIdentity)
 
 var UserServer = teslrt.Server{
 	Routes: []teslrt.Route{

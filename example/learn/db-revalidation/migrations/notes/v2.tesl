@@ -1,0 +1,40 @@
+# tesl:migration-history:v1
+# tesl:migration-from
+# tesl:snapshot-seal:v3 Schema.Notes.V1 7465736c2d736f757263652d6162692d76313a31353432363038396137333433353938336134633131383330303164303232623439356163373331666661336331373338373762333366316361653034353864 tesl-stored-value-v1:9b265343069c361d3879d623b69de5081f934ec0f2f8826dc0efeda951384a30 6f8d6825e1a1671eeb7dfe1bc61d156b105285c4fa3846ca9b3d55d20b073132 queue-inventory-v1
+# tesl:snapshot-source Schema.Notes.V1 8e1108fd572e0c76bdc92be9f0630e0a547e506b70cbd8009b59c1d203eca741
+# tesl:snapshot-end
+# tesl:migration-to
+# tesl:snapshot-seal:v3 Schema.Notes.VCurrent 7465736c2d736f757263652d6162692d76313a31353432363038396137333433353938336134633131383330303164303232623439356163373331666661336331373338373762333366316361653034353864 tesl-stored-value-v1:9b265343069c361d3879d623b69de5081f934ec0f2f8826dc0efeda951384a30 a9029a83ba71e6ae1377c72f84f5175e806040576a02c3c9a8f5cb8947197ad3 queue-inventory-v1
+# tesl:snapshot-source Schema.Notes.VCurrent d99dd749923eabc18ed5c3eae8a88f33ae6ff684b9b5617b9a8d3ae544b54bc5
+# tesl:snapshot-end
+# tesl:migration-history:end
+module Schema.Notes.Migrate.V2 exposing [migration, oldNote]
+import Tesl.Prelude exposing [Bool(..)]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.Migration exposing [Migration, Entity(..), Rule(..), Migrated(..)]
+import Schema.Notes.V1
+import Schema.Notes.VCurrent
+migration = Migration {
+  from: Schema.Notes.V1
+  to: Schema.Notes.VCurrent
+  same: []
+  fixtures: [oldNote]
+  entities: { Note: Migrate convert [Revalidate title Schema.Notes.VCurrent.tryTitle] }
+}
+fn convert(old: Schema.Notes.V1.Note) -> Migrated Schema.Notes.VCurrent.Note =
+  case Schema.Notes.VCurrent.tryTitle old.title of
+    Nothing -> Reject "empty title"
+    Something title -> Row (Schema.Notes.VCurrent.Note { id: old.id, title: title, memo: old.memo })
+fn oldNote() -> Schema.Notes.V1.Note = Schema.Notes.V1.Note { id: "fixture", title: "valid", memo: "base" }
+test "revalidation preserves Unicode exactly" {
+  let old = Schema.Notes.V1.Note { id: "unicode", title: "å🙂", memo: "retained" }
+  case convert old of
+    Row row -> expect row.title == "å🙂"
+    Reject reason -> expect False
+}
+test "revalidation rejects an empty retained title" {
+  let old = Schema.Notes.V1.Note { id: "invalid", title: "", memo: "retained" }
+  case convert old of
+    Row row -> expect False
+    Reject reason -> expect reason == "empty title"
+}

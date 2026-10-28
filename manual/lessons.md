@@ -13,7 +13,7 @@ Go snapshot and test blocks in the gate. Read one with:
 tesl help manual <lesson-name>      # e.g. tesl help manual lesson05-intro-to-proofs
 ```
 
-There are **83** lessons. That number is generated; it cannot drift.
+There are **86** lessons. That number is generated; it cannot drift.
 
 ## In a hurry? Start with these
 
@@ -106,6 +106,9 @@ exactly what you are missing.
 | 220 | [`lesson21-sql-reference`](../example/learn/lesson21-sql-reference.tesl) | The whole SQL surface in one file: select, insert, update, delete, ordering, aggregates and upsert | [`lesson18-database-sql-and-proofs`](../example/learn/lesson18-database-sql-and-proofs.tesl) — Declare a table with entity and query it in typed SQL whose results carry a proof that they came from the database |
 | 670 | [`lesson67-newtype-columns`](../example/learn/lesson67-newtype-columns.tesl) | Use a newtype as an entity column, so the wrong String is a compile error at every SQL site | [`lesson04-newtypes`](../example/learn/lesson04-newtypes.tesl) — Give a String or Int its own nominal type, so a UserId can never be passed where a ProjectId is expected<br>[`lesson18-database-sql-and-proofs`](../example/learn/lesson18-database-sql-and-proofs.tesl) — Declare a table with entity and query it in typed SQL whose results carry a proof that they came from the database |
 | 680 | [`lesson48-sql-inner-join`](../example/learn/lesson48-sql-inner-join.tesl) | Query two entities together on a foreign key with innerJoin | [`lesson21-sql-reference`](../example/learn/lesson21-sql-reference.tesl) — The whole SQL surface in one file: select, insert, update, delete, ordering, aggregates and upsert |
+| 840 | [`lesson82-database-migrations`](../example/learn/lesson82-database-migrations.tesl) | Run a notes API whose handlers and connection stay outside its versioned schema | [`lesson18-database-sql-and-proofs`](../example/learn/lesson18-database-sql-and-proofs.tesl) — Declare a table with entity and query it in typed SQL whose results carry a proof that they came from the database<br>[`lesson05-intro-to-proofs`](../example/learn/lesson05-intro-to-proofs.tesl) — A check function stamps a value as validated, and the stamp travels with it through the type system<br>[`lesson32-api-tests`](../example/learn/lesson32-api-tests.tesl) — Test a whole HTTP endpoint from Tesl: seeded state, request bodies and JSON response assertions |
+| 850 | [`lesson83-additive-migrations`](../example/learn/lesson83-additive-migrations.tesl) | Add a nullable column while the complete notes API keeps serving the same contract | [`lesson82-database-migrations`](../example/learn/lesson82-database-migrations.tesl) — Run a notes API whose handlers and connection stay outside its versioned schema |
+| 860 | [`lesson84-worker-migrations`](../example/learn/lesson84-worker-migrations.tesl) | Keep serving the same notes API while a separate schema worker owns migration DDL | [`lesson83-additive-migrations`](../example/learn/lesson83-additive-migrations.tesl) — Add a nullable column while the complete notes API keeps serving the same contract |
 
 ### Async — queues, workers, streaming
 
@@ -172,6 +175,20 @@ A few lessons have a longer prose companion alongside the code:
 - [`lesson23-queues-and-workers.md`](../example/learn/lesson23-queues-and-workers.md) — Lesson 23: Queues and Workers
 - [`lesson24-pubsub-sse.md`](../example/learn/lesson24-pubsub-sse.md) — Lesson 24: Pub/Sub Channels and SSE Endpoints
 - [`lesson72-units.md`](../example/learn/lesson72-units.md) — Lesson 72: Units — Compile-Time Dimensions, Runtime Floats
+- [`lesson83-additive-migrations.md`](../example/learn/lesson83-additive-migrations.md) — Updating the compiler while the notes app keeps serving
+- [`lesson84-worker-migrations.md`](../example/learn/lesson84-worker-migrations.md) — Adding an index while the application keeps serving
+- [`lesson85-derived-backfill.md`](../example/learn/lesson85-derived-backfill.md) — Lesson 85 — Backfill a derived field from retained rows
+- [`lesson86-removing-fields.md`](../example/learn/lesson86-removing-fields.md) — Lesson 86 — Remove a field without breaking old writers
+- [`lesson87-jsonb-record-migration.md`](../example/learn/lesson87-jsonb-record-migration.md) — Lesson 87 — Migrate a record stored as JSONB
+- [`lesson88-jsonb-adt-retype.md`](../example/learn/lesson88-jsonb-adt-retype.md) — Lesson 88 — Retype JSONB from a record to an ADT
+- [`lesson89-proof-revalidation.md`](../example/learn/lesson89-proof-revalidation.md) — Lesson 89 — Add a proof to existing data
+- [`lesson90-changing-field-proofs.md`](../example/learn/lesson90-changing-field-proofs.md) — Lesson 90 — Change an existing field proof
+- [`lesson91-removing-a-table.md`](../example/learn/lesson91-removing-a-table.md) — Lesson 91 — Remove a table while old apps still run
+- [`lesson92-repeated-retypes.md`](../example/learn/lesson92-repeated-retypes.md) — Lesson 92 — Change the same stored field again
+- [`lesson93-testing-breaking-migrations.md`](../example/learn/lesson93-testing-breaking-migrations.md) — Lesson 93 — Test breaking database changes across a rolling deployment
+- [`lesson94-same-column-proof-strengthening.md`](../example/learn/lesson94-same-column-proof-strengthening.md) — Lesson 94 — Strengthen a proof without replacing its column
+- [`lesson95-retiring-unchanged-queue-payloads.md`](../example/learn/lesson95-retiring-unchanged-queue-payloads.md) — Lesson 95 — Retire old producers without stranding queued work
+- [`lesson96-typed-queue-conversion.md`](../example/learn/lesson96-typed-queue-conversion.md) — Lesson 96 — Convert, repair and retire queued payloads
 
 ---
 

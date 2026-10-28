@@ -119,7 +119,7 @@ import Tesl.Prelude exposing [String]
 import Tesl.Database exposing [Database, Memory]
 import Tesl.App exposing [App]
 
-record Doc {
+entity Doc table "docs" primaryKey id {
   id: String
 }
 
@@ -177,7 +177,7 @@ import Tesl.DB exposing [dbRead]
 import Tesl.Database exposing [Database, Memory]
 import Tesl.App exposing [App]
 
-record Doc {
+entity Doc table "docs" primaryKey id {
   id: String
 }
 
@@ -279,7 +279,7 @@ import Tesl.App exposing [App]
 
 capability audit implies dbWrite Doc
 
-record Doc {
+entity Doc table "docs" primaryKey id {
   id: String
 }
 
@@ -328,7 +328,7 @@ import Tesl.DB exposing [dbWrite]
 import Tesl.Database exposing [Database, Memory]
 import Tesl.App exposing [App]
 
-record Doc {
+entity Doc table "docs" primaryKey id {
   id: String
 }
 
@@ -375,7 +375,7 @@ import Tesl.DB exposing [dbWrite]
 import Tesl.Database exposing [Database, Memory]
 import Tesl.App exposing [App]
 
-record Doc {
+entity Doc table "docs" primaryKey id {
   id: String
 }
 
@@ -422,7 +422,7 @@ import Tesl.Queue exposing [pubsub]
 import Tesl.Database exposing [Database, Memory]
 import Tesl.App exposing [App]
 
-record Doc {
+entity Doc table "docs" primaryKey id {
   id: String
 }
 
@@ -468,7 +468,7 @@ import Tesl.DB exposing [dbWrite]
 import Tesl.Database exposing [Database, Memory]
 import Tesl.App exposing [App]
 
-record Doc {
+entity Doc table "docs" primaryKey id {
   id: String
 }
 
@@ -512,7 +512,7 @@ let test_imported_handler_rejected () =
 import Tesl.Prelude exposing [String]
 import Tesl.DB exposing [dbWrite]
 
-record Doc {
+entity Doc table "docs" primaryKey id {
   id: String
 }
 
@@ -529,7 +529,7 @@ import Tesl.Database exposing [Database, Memory]
 import Tesl.App exposing [App]
 import Sec005Lib exposing [libMutate]
 
-record Doc {
+entity Doc table "docs" primaryKey id {
   id: String
 }
 
@@ -565,7 +565,7 @@ import Tesl.Telemetry exposing [telemetry]
 import Tesl.Database exposing [Database, Memory]
 import Tesl.App exposing [App]
 
-record Doc {
+entity Doc table "docs" primaryKey id {
   id: String
 }
 
@@ -640,7 +640,7 @@ import Tesl.Prelude exposing [String]
 import Tesl.DB exposing [dbWrite]
 import Tesl.Database exposing [Database, Memory]
 
-record Doc {
+entity Doc table "docs" primaryKey id {
   id: String
 }
 
@@ -674,7 +674,7 @@ import Tesl.Prelude exposing [String]
 import Tesl.DB exposing [dbWrite]
 import Tesl.Database exposing [Database, Memory]
 
-record Doc {
+entity Doc table "docs" primaryKey id {
   id: String
 }
 

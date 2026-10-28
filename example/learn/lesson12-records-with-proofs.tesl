@@ -247,6 +247,12 @@ codec OrderLine {
 fn makeOrderLine(price: Int ::: IsPositive price, quantity: Int ::: IsPositive quantity, recordProof: Fact (PriceExceedsQuantity price quantity)) -> OrderLine =
   OrderLine { price: price, quantity: quantity } ::: recordProof
 
+# Return just the cross-field witness, independently of field-level proofs.
+fn orderLineProof(price: Int, quantity: Int) -> Fact (PriceExceedsQuantity price quantity) =
+  let checked = check checkPriceExceedsQuantity price quantity
+  let witness = detachFact checked
+  witness
+
 fn shouldWork_ConfusingForTheCallerButNorRealError(price: Int ::: IsPositive price, quantity: Int ::: IsPositive quantity, recordProof: Fact (PriceExceedsQuantity price quantity)) -> OrderLine =
   let p = check checkPositiveInt 10
   let q = check checkPositiveInt 3
@@ -268,7 +274,7 @@ test "valid OrderLine" {
   let rawQ = 3
   let q = check checkPositiveInt rawQ
   let pq = check checkPriceExceedsQuantity p q # cross-field proof: price > quantity
-  let order = makeOrderLine p q (detachFact pq) # total: detachFact extracts Fact P
+  let order = makeOrderLine p q (orderLineProof p q) # total constructor; checks happen before the call
   let orderAlt = OrderLine { price: p, quantity: q } ::: (detachFact pq) # direct construction
   expect order.price == 10
   expect order.quantity == 3

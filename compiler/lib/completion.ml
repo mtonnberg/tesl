@@ -288,9 +288,9 @@ let local_functions context m =
    declarations. Only resolvable sibling modules are offered with automatic
    edits. Discovery is bounded independently of parser recovery. *)
 let project_types source context m safe_imports =
-  if not (Sys.file_exists m.source_file) then [] else
+  if not (Source_input.exists m.source_file) then [] else
   let directory = Filename.dirname m.source_file in
-  let files = try Sys.readdir directory |> Array.to_list |> List.sort compare
+  let files = try Source_input.readdir directory |> Array.to_list |> List.sort compare
     with Sys_error _ -> [] in
   let remaining = ref 200 and bytes = ref (8 * 1024 * 1024) in
   List.concat_map (fun file ->
@@ -302,7 +302,7 @@ let project_types source context m safe_imports =
       if stat.Unix.st_kind <> Unix.S_REG || stat.st_size > 1024 * 1024
          || stat.st_size > !bytes then [] else
       (decr remaining; bytes := !bytes - stat.st_size;
-      let input = In_channel.with_open_bin path In_channel.input_all in
+      let input = Source_input.read path in
       match Parser.parse_module path input with
       | Err _ -> []
       | Ok imported ->

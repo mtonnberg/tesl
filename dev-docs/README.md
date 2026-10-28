@@ -169,10 +169,39 @@ that checks manual coherence without building the compiler.
 | `09-adding-tests.md` | Test patterns, infrastructure, regression test conventions |
 | `10-common-patterns.md` | Gotchas, quick reference table, diagnostic commands |
 | `11-frontend-ir.md` | Generator-facing frontend IR stage and `emit_ir` architecture |
+| [Migration implementation](migrations-implementation.md) | Delivery gates, implemented prerequisites, regression evidence and remaining migration work |
+| [Migration delivery status](migration-delivery-status.md) | Current PR scope, roadmap gaps, shared CI execution and acceptance evidence |
+| [Migration CI timing](migration-ci-performance.md) | Measured bottlenecks, fail-fast static checks and verified fixture reuse |
+| [Staged TEXT preparation](stage-text-preparation.md) | Builtin String equality, database-default C/POSIX checks, btree size bounds and preparation-only evidence |
+| [Guarded promotion windows](stage-guard-window.md) | Source-bound V3 activation, actual-value guards, indexed probe profile, lifecycle bounds and PostgreSQL evidence |
+| [Staged uniqueness lifecycle](stage-lifecycle.md) | Reviewed PromoteStage Contract, fenced UNIQUE builds, repair/recovery, V4 reliance and pending-stage cancellation |
+| [Staged uniqueness major verification](stage-major-verification.md) | Measured PostgreSQL 14/17/18 compiled/race subsets, pinned tools and bounded technical acceptance |
+| [Migration PR scope](migration-pr-scope.md) | The 18 agreed clauses, static-link checks, pending acceptance and separate roadmap reconciliation |
+| [Migration PR register](migration-pr-register.json) | Machine-checked dispositions, production declarations, named witnesses and mandatory or accepted local routes |
+| [Queue admission performance](queue-admission-performance.md) | Profile-driven optimizations, publication authority and bounded 257-type measurements |
+| [Checked Contract source](migration-contract-source.md) | Exact cleanup selectors, preparatory operations, source guards and runtime authority boundaries |
+| [Migration source writes](migration-source-writes.md) | Guarded native generation, compiler manifest consumption, concurrent saves and crash recovery |
+| [Migration planning](migration-planning.md) | Checked PostgreSQL source plans, retained storage, index compatibility and execution boundaries |
+| [Migration execution](migration-execution.md) | Protected installation, additive execution, regression evidence and pending startup/admission integration |
+| [Migration row results](migration-result-type.md) | Typed `Row`/`Reject` results and proof identity prerequisites |
+| [Transforming declarations](migration-transform-declaration.md) | Checked row functions, field mappings, fixtures and execution boundaries |
+| [Row generation prototype](migration-row-generations-candidate.md) | Test-only invalidation triggers and production integration requirements |
+| [Frozen queue schemas](queue-schema-prerequisite.md) | Complete source inventories, stable queue identities and immutable history |
+| [Compiled queue history](queue-history-projection.md) | Linked queue contracts and application registration checks |
+| [Combined row and queue catalog](row-queue-catalog.md) | Complete source inventories, atomic registration and unpublished format-5 catalog boundaries |
+| [Row concurrent index worker](row-index-worker.md) | Checked additive index registration, worker lifecycle and old/current writer readiness |
+| [Queue control candidate](queue-control-format4-candidate.md) | Unpublished protected storage, catalog checks and registration protocol |
+| [Protected queue operations](queue-operations-candidate.md) | Unpublished fenced claims, renewal, completion and retry operations |
+| [Dead-letter metadata](dead-letter-metadata.md) | Opaque job diagnostics and operator-facing metadata |
 | `12-your-first-compiler-change.md` | **Start here if you are new.** One real diagnostic improvement (`W020`), end to end: the edit, the tests it breaks, the byte-exact diff, the regression test, the finished change |
 | `zero-cost-proofs-contract.md` | Proof erasure as the only mode — the as-built compile-time proof/declared-context contract |
 | `deploy.md` | *(moved → [`manual/deploy.md`](../manual/deploy.md))* Deploying a Tesl web API — `tesl build`, the generated Docker image, database flavours. This file is now a redirect stub. |
 | `tesl-manifest.md` | *(moved → [`manual/tesl-manifest.md`](../manual/tesl-manifest.md))* `tesl.toml` project manifest schema read by `tesl build` / `tesl db`. This file is now a redirect stub. |
+
+Migration contributors should also read the
+[protocol harness](../runtime/go/internal/migrationtest/README.md),
+[finite model assumptions](models/README.md), and
+[generated kernel coverage map](migration-protocol-coverage.json).
 
 Every guide here is also in the binary, with no checkout:
 `tesl help manual dev` opens this index and `tesl help manual dev-docs/<file>` opens one guide —
@@ -216,3 +245,4 @@ Where to start, by task:
 | `nix/tesl-cli-body.sh` | The installed `tesl` CLI wrapper (verb dispatch); the flake builds `tesl` from it |
 | `scripts/run-go-test-manifest.sh` | Authoritative Go execution of every tracked `tests/*.tesl` source |
 | `runtime/go/teslrt/*_test.go` | Go runtime and integration coverage |
+- [Row adoption design](row-adoption-design.md)

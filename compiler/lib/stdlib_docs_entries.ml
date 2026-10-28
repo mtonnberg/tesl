@@ -993,6 +993,10 @@ let database : entry list = [
   e "PostgresConnection" ~m:"Tesl.Database"
     ~kind:(KType "type PostgresConnection = TcpConnection { host, port } | SocketConnection { path }")
     ~doc:"The `connection:` field of a PostgresConfig — TCP or Unix socket.";
+  e "MigrationTopology" ~m:"Tesl.Database"
+    ~kind:(KType "type MigrationTopology = Worker | Embedded")
+    ~doc:"The optional `MigrationConfig.topology` inside `PostgresConfig.migrations` for a versioned schema. Worker separates request processes from `app --schema worker`; Embedded runs migration execution in the application process. Without an explicit value, TESL_DEPLOYED selects Worker and local execution selects Embedded. Connection settings and role names belong to application configuration."
+    ~aliases:[ "Worker"; "Embedded" ];
 ]
 
 (* ── Tesl.HttpClient ───────────────────────────────────────────────────────── *)
@@ -1085,7 +1089,31 @@ let agent : entry list = [
 (* ── Tesl.Queue (infrastructure helpers; queue caps + config are generated) ── *)
 
 let queue : entry list = [
-  f "requeue" [ "job" ] ~m:"Tesl.Queue" ~doc:"Re-enqueues a dead-letter job for another attempt; True when requeued.";
+  e "DeadJob" ~m:"Tesl.Queue" ~kind:(KType "type DeadJob # opaque metadata")
+    ~doc:"A dead-letter entry's metadata. No constructor, record fields or decoded payload are exposed.";
+  e "DeadJobReason" ~m:"Tesl.Queue"
+    ~kind:(KType "type DeadJobReason = AttemptsExhausted | PayloadInvalid | MigrationRejected | LegacyUnresolved")
+    ~doc:"Why a job cannot currently run. Only AttemptsExhausted is eligible for ordinary requeue.";
+  v "AttemptsExhausted" ~m:"Tesl.Queue" ~doc:"The job exhausted its ordinary retry policy.";
+  v "PayloadInvalid" ~m:"Tesl.Queue" ~doc:"The recorded source payload failed its source decoder.";
+  v "MigrationRejected" ~m:"Tesl.Queue" ~doc:"A checked payload migration rejected this job.";
+  v "LegacyUnresolved" ~m:"Tesl.Queue" ~doc:"Legacy quarantine has no trustworthy recorded source version or precise failure reason.";
+  f "DeadJob.id" ["job"] ~m:"Tesl.Queue" ~doc:"The stable job identifier; does not decode its payload.";
+  f "DeadJob.reason" ["job"] ~m:"Tesl.Queue" ~doc:"The typed dead-letter reason. Match all four cases.";
+  f "DeadJob.sourceVersion" ["job"] ~m:"Tesl.Queue" ~doc:"The recorded source schema version, when known. Nothing for Memory and unversioned PostgreSQL jobs.";
+  f "DeadJob.attempts" ["job"] ~m:"Tesl.Queue" ~doc:"The recorded number of processing attempts.";
+  f "DeadJob.typeName" ["job"] ~m:"Tesl.Queue" ~doc:"The stored job type identity, when available. Nothing for Memory jobs; never inferred from the current payload.";
+  e "FromQueue" ~m:"Tesl.Queue" ~kind:(KFact "FromQueue queue job")
+    ~doc:"Provenance attached to a job supplied to its queue worker.";
+  e "FromDeadQueue" ~m:"Tesl.Queue" ~kind:(KFact "FromDeadQueue queue job")
+    ~doc:"Provenance attached to a decodable job supplied to its dead-letter worker.";
+  e "Job" ~m:"Tesl.Queue"
+    ~kind:(KSyntax "Job <JobRecord> <workerFn> (Something <deadWorker> | Nothing)")
+    ~doc:"Associates a payload record with its workers inside Queue.jobs. This contextual declaration is not an ordinary value or data type.";
+  e "QueueRetryBackoff" ~m:"Tesl.Queue" ~kind:(KType "type QueueRetryBackoff = Fixed | Exponential | Linear")
+    ~aliases:["Fixed"; "Exponential"; "Linear"]
+    ~doc:"The literal backoff mode inside QueueRetryStrategy. Import QueueRetryBackoff(..) to name all three modes; they are configuration constructors, not ordinary runtime values.";
+  f "requeue" [ "job" ] ~m:"Tesl.Queue" ~doc:"Re-enqueues an AttemptsExhausted entry for another attempt; False for quarantines, claimed or absent jobs.";
   f "deadJobs" [ "queue" ] ~m:"Tesl.Queue" ~doc:"The queue's dead-letter entries.";
 ]
 
@@ -1151,9 +1179,46 @@ let sso : entry list = [
     ~doc:"Builds the RP-initiated logout URL (OIDC RP-Initiated Logout 1.0) that ends the IdP's own browser session, not just the app's. Re-discovers the connection's `end_session_endpoint` on every call, so a rotated endpoint is always honored; requires `httpClient` since discovery is a live fetch. Raises if the provider does not advertise `end_session_endpoint` (plain OAuth2 providers such as GitHub/Discord never do). A `handler` typically returns this String and the frontend navigates to it after clearing its own session cookie.";
 ]
 
+let migration : entry list = [
+  e "Migrated" ~m:"Tesl.Migration"
+    ~kind:(KType "type Migrated a = Row a | Reject String")
+    ~doc:"The ordinary result of a pure row function: a fully typed new value or a rejection reason. It can be returned, stored in local data, and exhaustively matched. This result type alone does not enable transforming database migrations.";
+  f "Row" ["value"] ~m:"Tesl.Migration"
+    ~doc:"Wraps a new value without changing its type or granting any proofs.";
+  f "Reject" ["reason"] ~m:"Tesl.Migration"
+    ~doc:"Rejects a row with a String reason; no new row is available in this branch.";
+  e "Migration" ~m:"Tesl.Migration"
+    ~kind:(KType "Migration { from: schemaRef, to: schemaRef, same: List Same, entities: { EntityName: Entity }, fixtures: List oldRowFunction }")
+    ~doc:"A contextual declaration in Schema.Family.Migrate.V<n> (legacy FamilySchema.Migrate.V<n> is also supported). References and entity keys are compiler-checked against adjacent schema revisions. It is not a runtime type or value. Additive entries have logical adapters; Migrate and Derived entries have checked source mappings. Entity-only PostgreSQL histories link their checked physical plans and row executors into the generated application; queue inventories remain on the separate queue migration path.";
+  e "Entity" ~m:"Tesl.Migration" ~aliases:["Additive";"Derived";"Migrate";"New";"Drop"]
+    ~kind:(KType "Entity = Additive (List Rule) | Derived (List Rule) | Migrate rowFunction (List Rule) | New | Drop   # contextual")
+    ~doc:"One entry per changed entity. Additive derives a row adapter; Derived derives an identity rename; Migrate checks an exact From.E -> Migrated To.E pure function and requires parameterless previous-row fixtures, returning From.E or Maybe From.E. The ordinary test command runs each fixture; Nothing fails its named smoke test. Row and Reject are both permitted smoke outcomes, so ordinary tests should assert business expectations. New and Drop name an added or removed table. An absent entity must be compiler-verified unchanged. These markers cannot be used as runtime values.";
+  e "RemoveEmpty" ~m:"Tesl.Migration"
+    ~kind:(KType "RemoveEmpty   # contextual whole-queue decision in Migration.jobs")
+    ~doc:"Explicitly review removal of one entire previous queueSchema: jobs: { Notifications: RemoveEmpty }. An adjacent V(n-1) -> Vn edge may follow and precede ordinary additive row changes. One removal edge per history; other queue/proof/codec changes, row transformations, Drop and stages remain refused. The removal edge requires unchanged entities and full surviving queue contracts, sealed endpoints and removal of the current application binding. Installer staging grants no admission. Worker fences every admitted older producer, refuses all retained removed-queue jobs, preserves unchanged survivors and atomically records removal and floors. Later replay preserves newer versions, claims and creator ABIs. See manual/queue-removal.md.";
+  e "QueueRepair" ~m:"Tesl.Migration"
+    ~kind:(KType "QueueRepair { predecessor: declarationRef, job: String, revision: Int, on: String, migrate: oldPayloadFunction, fixtures: List oldPayloadFixture }   # or on: unconverted with discard: reason instead of migrate/fixtures; contextual")
+    ~doc:"A separate immutable remediation declaration under the schema family's Migrate namespace. Names an exported, directly imported predecessor and exact job identity. With on omitted or rejected, fixtures reproduce business rejection. With on: execution-failed, fixtures reproduce that operational outcome before a corrected typed callback. With on: unconverted, discard: reason explicitly authorizes all remaining old-version jobs of that type; migrate/fixtures must be absent and discard is terminal. Source/target contracts stay exact. Installer staging, protected attempt ownership, audits and Contract finality independently govern durable execution. See manual/queue-remediation.md.";
+  e "Rule" ~m:"Tesl.Migration" ~aliases:["Default";"Rename";"Retype";"Revalidate";"WriteBack";"Legacy";"LegacyWith"]
+    ~kind:(KType "Rule = Default field literal | Rename previous current | Retype field | Revalidate field callback | WriteBack previous current callback | Legacy field literal | LegacyWith field callback   # contextual")
+    ~doc:"Default supplies the exact primitive literal for a new, non-optional, proof-free field. Rename preserves the exact previous value under a new field name. Retype selects a new storage generation for a changed field; Revalidate checks a new proof on the unchanged input. WriteBack names an exact typed inverse from the current field to its previous representation. Legacy and LegacyWith supply removed old fields during overlap using a literal or a checked current-row callback. These rules are checked against the complete migration mapping and do not themselves authorize storage changes.";
+  e "Contract" ~m:"Tesl.Migration" ~aliases:["Table";"Column";"Storage";"Index";"Trigger"]
+    ~kind:(KType "Contract { of: migrationRef, drops: List Drop, tighten: List Tighten, promote: List Promote }   # contextual")
+    ~doc:"A reviewed contract declaration naming the exact checked physical difference after a migration window. Drop selectors are Table entity, Column entity field, Storage entity physicalNameString, Index entity name and Trigger entity. PromoteStage names an exact pending staged key and its declared unique target. Contract modules import only Tesl.Migration and their exact migration root. Extra, missing or duplicate objects are refused; execution additionally requires runtime retirement/finality checks. Promotion excludes older unguarded writers before building the UNIQUE target and records enforcement only after the target is valid.";
+  e "Promote" ~m:"Tesl.Migration" ~aliases:["PromoteStage"]
+    ~kind:(KType "Promote = PromoteStage entity [field]   # contextual Contract selector")
+    ~doc:"Used only in Contract.promote, for example promote: [PromoteStage User [email]]. The compiler resolves the exact semantic stage and unique target from sealed history; this selector is not an ordinary runtime type or value. The guarded declaration release cannot rely on uniqueness through onConflict. The Contract retires older writers, builds the target concurrently, and preserves data when duplicates block the build. A later release may rely on the exact valid target and durable enforcement receipt. See dev-docs/stage-lifecycle.md for supported carriers, recovery and cancellation.";
+  e "Tighten" ~m:"Tesl.Migration" ~aliases:["NotNull"]
+    ~kind:(KType "Tighten = NotNull entity field   # contextual")
+    ~doc:"Names a checked NOT NULL tightening in a Contract's tighten list. It must match the migration's exact entity and physical field transition; the runtime establishes the required staged validation before finalizing nullability.";
+  e "Same" ~m:"Tesl.Migration"
+    ~kind:(KType "Same From.Declaration To.Declaration   # contextual")
+    ~doc:"The compiler verifies semantic equality for every eligible type, fact and codec with the named spelling. A record and its same-named codec are both checked. This claim cannot assert equality or cast persisted proofs.";
+]
+
 let entries : entry list =
   ambient @ prelude @ email @ maybe_result @ time @ civil_time
   @ int32 @ db @ either @ string_ @ regex @ url @ net @ list_ @ list_prim @ int_ @ float_
   @ dict @ set_ @ tuple @ money @ random_uuid_id_env @ json_codecs
   @ api_test @ jwt @ crypto @ cache @ database @ http @ http_client @ agent @ queue
-   @ telemetry @ sso
+   @ telemetry @ sso @ migration

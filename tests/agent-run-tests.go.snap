@@ -105,6 +105,8 @@ var RunDatabaseDatabase = teslrt.NewDatabase(
 	},
 )
 
+var _ = teslrt.RegisterDatabaseIdentity("teslmodagentruntests.RunDatabase", RunDatabaseDatabase)
+
 //line agent-run-tests.tesl:137
 func validateEcho(argsJson string) EchoArgs {
 //line agent-run-tests.tesl:138
@@ -293,15 +295,9 @@ func teslEncode1(teslValue string) any {
 }
 
 func teslEncode2(teslValue RunEvent) any {
-	return func() any {
-		switch teslValue.Tag {
-		case RunEventStep:
-			return map[string]any{"tag": "Step", "fields": map[string]any{
-				"content": teslEncode1(teslValue.StepContent),
-			}}
-		}
-		panic("unreachable: checker guarantees case exhaustiveness")
-	}()
+	return map[string]any{"tag": "Step", "fields": map[string]any{
+		"content": teslEncode1(teslValue.StepContent),
+	}}
 }
 
 func teslEncode3(teslValue RunLog) any {

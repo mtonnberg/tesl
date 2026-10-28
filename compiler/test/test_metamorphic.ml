@@ -133,6 +133,26 @@ let corpus_files () : string list =
 
 let read_file f = try In_channel.with_open_text f In_channel.input_all with _ -> ""
 
+(* A sealed migration root is intentionally sensitive to source edits: its
+   frozen closure hash is part of the migration ABI, so even a semantics-
+   preserving AST rewrite must be rejected until the migration is regenerated
+   and resealed.  That is the opposite of the ordinary checker invariant this
+   suite probes.  Keep sealed migration files in their dedicated migration
+   tests, while applying metamorphic rewrites to regular Tesl modules. *)
+let is_sealed_migration_source src =
+  String.contains src '#' &&
+  (try
+     let markers = ["tesl:frozen-migration:"; "tesl:migration-history:"] in
+     List.exists (fun marker ->
+       let len = String.length marker in
+       let rec search index =
+         if index + len > String.length src then false
+         else if String.sub src index len = marker then true
+         else search (index + 1)
+       in
+       search 0) markers
+   with _ -> false)
+
 (* ── Rejected fixtures (for the inverse metamorphic direction) ────────────────
    Programs the checker MUST reject; each has >= 2 functions and a body statement,
    so both transforms have a site.  A preserving rewrite must keep them rejected. *)
@@ -217,6 +237,7 @@ let () =
       | None -> None
       | Some m ->
         let src = read_file file in
+        if is_sealed_migration_source src then None else
         let n = rel file in
         Some (n,
           test_case "fuzz: checker total (no crash)" `Quick (fuzz_program n src m)

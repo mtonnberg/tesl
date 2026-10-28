@@ -1,7 +1,17 @@
 (executable
  (name gen_docs)
+ (modules gen_docs)
  (libraries unix))
 
 (executable
  (name gen_go_runtime)
+ (modules gen_go_runtime)
  (libraries unix))
+
+; Use the compiler's own SHA-256 implementation without linking the compiler
+; library (which depends on the generated build snapshot).
+(copy_files ../lib/migration_hash.ml)
+
+(executable
+ (name gen_migration_abi)
+ (modules gen_migration_abi migration_hash))

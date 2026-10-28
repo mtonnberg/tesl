@@ -1,0 +1,80 @@
+# tesl:frozen-migration:v1 Schema.Todo.Migrate.V12
+# tesl:frozen-source Schema.Todo.Migrate.V12 b5117630c155412d2079eca2ce9b757027fe1b331b62e5629bcd8841358497f4
+# tesl:frozen-source Schema.Todo.Migrate.V12Contract 4083426b559b001634092ff16e9ed0b176fbf05831593314c74495c2ed0a5620
+# tesl:frozen-migration:end
+# tesl:migration-history:v1
+# tesl:migration-from
+# tesl:snapshot-seal:v3 Schema.Todo.V11 7465736c2d736f757263652d6162692d76313a63613638306234663266366333346163626435653832366332306161623732616365353837646139313536636163336531626134356265363462386234306163 tesl-stored-value-v1:9b265343069c361d3879d623b69de5081f934ec0f2f8826dc0efeda951384a30 6e7d18d0db25395f645316a1d43eeeee424e86ed69769bc02118b40246865a38 queue-inventory-v1
+# tesl:snapshot-source Schema.Todo.V11 09fbdee66f92cf38241422499e9ab634d215ef0b036d65e582247b41ed0b8954
+# tesl:snapshot-end
+# tesl:migration-to
+# tesl:snapshot-seal:v3 Schema.Todo.V12 7465736c2d736f757263652d6162692d76313a63613638306234663266366333346163626435653832366332306161623732616365353837646139313536636163336531626134356265363462386234306163 tesl-stored-value-v1:9b265343069c361d3879d623b69de5081f934ec0f2f8826dc0efeda951384a30 b03f4888f4480cf1d5fb38435c7a4ac1ef081a8dc56a58a3962777411156c6fe queue-inventory-v1
+# tesl:snapshot-source Schema.Todo.V12 3bd6964422001da07833aad145bdc39480edb28848302422a7f88914232597ce
+# tesl:snapshot-end
+# tesl:migration-history:end
+module Schema.Todo.Migrate.V12 exposing [migration]
+import Tesl.Migration exposing [Migration, Entity(..), Rule(..), Same(..), Migrated(..)]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.Prelude exposing [Bool(..)]
+import Schema.Todo.V11
+import Schema.Todo.V12
+
+migration = Migration {
+  from: Schema.Todo.V11
+  to: Schema.Todo.V12
+  same: [Same Schema.Todo.V11.ValidTitle Schema.Todo.V12.ValidTitle]
+  fixtures: [previousTodo]
+  entities: { Todo: Migrate addPriorityInfo [] }
+}
+
+# Store a real record payload derived from the retained row, with provenance.
+fn addPriorityInfo(old: Schema.Todo.V11.Todo) -> Migrated Schema.Todo.V12.Todo =
+  Row (Schema.Todo.V12.Todo {
+    id: old.id
+    title: old.title
+    completed: old.completed
+    details: old.details
+    dueAt: old.dueAt
+    projectId: old.projectId
+    priorityWeight: old.priorityWeight
+    priorityInfo: Schema.Todo.V12.PriorityInfo { weight: old.priorityWeight, origin: "migrated-v11" }
+    reminderAt: old.reminderAt
+  })
+
+fn previousTodo() -> Maybe Schema.Todo.V11.Todo =
+  case Schema.Todo.V11.tryTitle "Populate stored metadata" of
+    Nothing -> Nothing
+    Something title -> Something (Schema.Todo.V11.Todo {
+      id: "record-priority"
+      title: title
+      completed: False
+      details: Nothing
+      dueAt: Nothing
+      projectId: Nothing
+      priorityWeight: 4
+      reminderAt: Nothing
+    })
+
+test "existing weight becomes a nonempty record with provenance" {
+  case previousTodo() of
+    Nothing -> expect False
+    Something old ->
+      case addPriorityInfo old of
+        Reject reason -> expect False
+        Row current ->
+          expect current.priorityInfo.weight == 4
+          expect current.priorityInfo.origin == "migrated-v11"
+          expect current.priorityWeight == old.priorityWeight
+          expect current.title == old.title
+          expect current.id == old.id
+}
+
+test "unchanged app constructor creates a nonempty record" {
+  case Schema.Todo.V12.tryTitle "New weighted work" of
+    Nothing -> expect False
+    Something title ->
+      let current = Schema.Todo.V12.newTodo "new-record" title
+      expect current.priorityInfo.weight == 1
+      expect current.priorityInfo.origin == "created"
+      expect current.priorityWeight == 1
+}

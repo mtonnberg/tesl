@@ -1,0 +1,88 @@
+name: Migration protocol matrix
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '23 2 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  pr-traceability:
+    name: PR requirement register consistency (not release readiness)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate scoped requirements and negative regressions
+        run: |
+          python3 scripts/check-migration-pr.py
+          python3 -m unittest discover -s scripts -p 'test_migration_pr.py'
+  model:
+    name: Admission and queue model checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25
+        with:
+          extra-conf: |
+            experimental-features = nix-command flakes
+      - name: Check finite models and required counterexamples
+        run: nix develop --command bash scripts/check-migration-models.sh
+  protocol:
+    name: PostgreSQL ${{ matrix.postgres }} protocol and race tests
+    runs-on: ubuntu-latest
+    # Full shared gate: compiler/PostgreSQL suites, adversarial reviews and V1–V20.
+    # Individual scenario deadlines stay in the runner; this bounds their sum.
+    timeout-minutes: 240
+    env:
+      TESL_CI_JOBS: '2'
+      GOMAXPROCS: '2'
+      GOFLAGS: '-p=2'
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres: ${{ fromJSON(github.event_name == 'schedule' && '[14,15,16,17,18]' || '[14,18]') }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The latency gate independently builds its pinned baseline commit.
+          fetch-depth: 0
+      - uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25
+        with:
+          extra-conf: |
+            experimental-features = nix-command flakes
+      - name: Execute the complete migration gate on matching-major private clusters
+        env:
+          TESL_MIGRATION_TEST_OUTPUT: ${{ runner.temp }}/migration-evidence
+          TESL_MIGRATION_TEST_POOLERS: '1'
+          TESL_MIGRATION_TEST_CLUSTER_CRASH: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && '1' || '0' }}
+          TESL_MIGRATION_TEST_TRACE_SCALE: ${{ github.event_name == 'schedule' && '8' || '1' }}
+          POSTGRES_MAJOR: ${{ matrix.postgres }}
+          TESL_MIGRATION_TEST_POSTGRES_MAJOR: ${{ matrix.postgres }}
+          TESL_MIGRATION_TEST_REQUIRE_POSTGRES: '1'
+        run: |
+          nixpkgs_rev="$(jq -r '.nodes.nixpkgs.locked.rev' flake.lock)"
+          cluster_toolchain="$(nix build --no-link --print-out-paths "github:NixOS/nixpkgs/$nixpkgs_rev#postgresql_$POSTGRES_MAJOR^out")"
+          test -x "$cluster_toolchain/bin/pg_ctl"
+          export TESL_MIGRATION_CLUSTER_BIN="$cluster_toolchain/bin"
+          # Variables in the quoted script expand inside the Nix shell.
+          # shellcheck disable=SC2016
+          nix develop --command bash -c '
+            set -euo pipefail
+            export PATH="$TESL_MIGRATION_CLUSTER_BIN:$PATH"
+            export TESL_REPO_ROOT="$PWD"
+            bash scripts/run-migration-tests.sh
+          '
+      - name: Retain phase results and failure diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: migration-pg${{ matrix.postgres }}-${{ github.sha }}
+          path: ${{ runner.temp }}/migration-evidence
+          if-no-files-found: warn

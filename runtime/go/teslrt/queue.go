@@ -70,6 +70,19 @@ type queueBackend interface {
 	reset()
 }
 
+// A durable claim needs renewal while its handler runs. Memory claims remain
+// owned until the handler returns and have no wall-clock lease to maintain.
+type queueLeaseBackend interface {
+	keepClaim(id, claimToken string) func()
+}
+
+func (queue *Queue) keepClaim(id, token string) func() {
+	if backend, ok := queue.durable().(queueLeaseBackend); ok {
+		return backend.keepClaim(id, token)
+	}
+	return func() {}
+}
+
 // durable answers the backend this call runs against, or nil for the in-memory path.
 func (queue *Queue) durable() queueBackend {
 	if backend := queue.backend; backend != nil && backend.active() {
@@ -252,14 +265,68 @@ func (queue *Queue) dequeue(status string) (string, any, int, string, bool) {
 	return job.id, job.payload, job.attempts, "", true
 }
 
-// DeadJob is one entry in a queue's dead letter. It is OPAQUE to Tesl — `deadJobs` is typed
-// `List DeadJob` and the type has no accessors — so it carries the job's identity for the
-// runtime's use and nothing a program can read: what a test does with the list is count it.
+// DeadJobReason is metadata, never a decoded job payload. Its four constructors
+// are a real Tesl ADT so consumers must handle quarantines explicitly.
+type DeadJobReason struct{ Tag DeadJobReasonTag }
+type DeadJobReasonTag int
+
+const (
+	// An empty Go metadata value cannot accidentally become a retryable job.
+	DeadJobReasonLegacyUnresolved DeadJobReasonTag = iota
+	DeadJobReasonAttemptsExhausted
+	DeadJobReasonPayloadInvalid
+	DeadJobReasonMigrationRejected
+)
+
+// DeadJob is an opaque metadata snapshot. Tesl can inspect these fields only
+// through typed accessors; no undecoded payload is held here or cast to a job.
 type DeadJob struct {
-	ID string
+	ID            string
+	reason        DeadJobReason
+	sourceVersion Maybe[Int]
+	typeName      Maybe[string]
+	attempts      Int
 	// The queue the job came out of. `requeue job` names no queue — the value carries it, as
 	// Racket's dead-job carries its queue-spec — so this is what makes that call resolvable.
 	queue *Queue
+}
+
+func DeadJobID(job DeadJob) string                { return job.ID }
+func DeadJobReasonOf(job DeadJob) DeadJobReason   { return job.reason }
+func DeadJobSourceVersion(job DeadJob) Maybe[Int] { return job.sourceVersion }
+func DeadJobTypeName(job DeadJob) Maybe[string]   { return job.typeName }
+func DeadJobAttempts(job DeadJob) Int             { return job.attempts }
+
+// Converts only the metadata row. A reason unknown to this runtime is an error,
+// never a new meaning of AttemptsExhausted. Neither this parser nor the DTO
+// establishes a source version for unversioned/Memory jobs or enables dispatch.
+func deadJobFromMetadata(queue *Queue, id string, typeName *string, sourceVersion *int32, attempts int, reason string) (DeadJob, error) {
+	job := DeadJob{ID: id, queue: queue, attempts: FromInt64(int64(attempts))}
+	if id == "" || attempts < 0 {
+		return DeadJob{}, fmt.Errorf("dead letter: invalid job metadata")
+	}
+	if typeName != nil {
+		job.typeName = Something(*typeName)
+	}
+	if sourceVersion != nil {
+		if *sourceVersion < 1 || *sourceVersion > 2147483646 {
+			return DeadJob{}, fmt.Errorf("dead letter: invalid source version")
+		}
+		job.sourceVersion = Something(FromInt64(int64(*sourceVersion)))
+	}
+	switch reason {
+	case "attempts-exhausted":
+		job.reason.Tag = DeadJobReasonAttemptsExhausted
+	case "payload-invalid":
+		job.reason.Tag = DeadJobReasonPayloadInvalid
+	case "migration-rejected":
+		job.reason.Tag = DeadJobReasonMigrationRejected
+	case "legacy-unresolved":
+		job.reason.Tag = DeadJobReasonLegacyUnresolved
+	default:
+		return DeadJob{}, fmt.Errorf("dead letter: unknown reason")
+	}
+	return job, nil
 }
 
 // DeadJobs is the dead letter's contents, oldest first. The order is by enqueue sequence
@@ -271,19 +338,24 @@ func DeadJobs(queue *Queue) []DeadJob {
 	queue.mutex.Lock()
 	defer queue.mutex.Unlock()
 	type entry struct {
-		id  string
-		seq int64
+		id       string
+		seq      int64
+		attempts int
 	}
 	found := make([]entry, 0, len(queue.jobs))
 	for id, job := range queue.jobs {
 		if job.status == jobDead {
-			found = append(found, entry{id: id, seq: job.seq})
+			found = append(found, entry{id: id, seq: job.seq, attempts: job.attempts})
 		}
 	}
 	sort.Slice(found, func(left, right int) bool { return found[left].seq < found[right].seq })
 	dead := make([]DeadJob, 0, len(found))
 	for _, each := range found {
-		dead = append(dead, DeadJob{ID: each.id, queue: queue})
+		job, err := deadJobFromMetadata(queue, each.id, nil, nil, each.attempts, "attempts-exhausted")
+		if err != nil {
+			panic(err)
+		}
+		dead = append(dead, job)
 	}
 	return dead
 }
@@ -325,8 +397,13 @@ func ProcessNextJob(queue *Queue, handler func(any) JobOutcome) JobOutcome {
 	if !found {
 		return JobOutcome{}
 	}
+	stopRenewal := queue.keepClaim(id, claimToken)
+	defer stopRenewal()
 	started := time.Now()
 	outcome := runJob(handler, payload)
+	// Renewal covers the final store mutation too: borrowing a connection or
+	// waiting for its statement can outlive the handler's remaining lease. The
+	// deferred stop joins renewal after completion/retry, including store panics.
 	Histogram("tesl.queue.job.duration", time.Since(started).Seconds(),
 		[]Tuple2[string, string]{{Tuple2First: "tesl.queue", Tuple2Second: queue.name}})
 	if outcome.OK {
@@ -351,7 +428,12 @@ func ProcessNextDeadJob(queue *Queue, handler func(any) JobOutcome) JobOutcome {
 	if !found {
 		return JobOutcome{}
 	}
+	stopRenewal := queue.keepClaim(id, claimToken)
+	defer stopRenewal()
 	outcome := runJob(handler, payload)
+	// Renewal covers the final store mutation too: borrowing a connection or
+	// waiting for its statement can outlive the handler's remaining lease. The
+	// deferred stop joins renewal after completion/retry, including store panics.
 	if !queue.complete(id, claimToken) {
 		panic("queue " + queue.name + ": dead-letter completion lost ownership of job " + id)
 	}
@@ -492,7 +574,7 @@ func EnqueueJob(queue *Queue, payload any) struct{} {
 // while the dead-letter worker's completion then deleted whichever copy was left. So an
 // in-flight job answers `False` too: from the dead letter's point of view it has left.
 func Requeue(job DeadJob) bool {
-	if job.queue == nil {
+	if job.queue == nil || job.reason.Tag != DeadJobReasonAttemptsExhausted {
 		return false
 	}
 	if backend := job.queue.durable(); backend != nil {

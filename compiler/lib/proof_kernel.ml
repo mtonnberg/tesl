@@ -53,3 +53,11 @@ type evidence_origin =
 let elaborated (_origin : evidence_origin) (p : proof_expr) : proven_fact = p
 
 let fact_of (pf : proven_fact) : proof_expr = pf
+
+(* Predicate identity alone changes; every argument and conjunction stays exact. *)
+let migration_same_predicate ~previous ~current (pf : proven_fact) : proven_fact =
+  let rec rewrite = function
+    | PredApp p when p.pred = previous -> PredApp {p with pred=current}
+    | PredApp _ as p -> p
+    | PredAnd p -> PredAnd {p with left=rewrite p.left;right=rewrite p.right}
+  in rewrite pf

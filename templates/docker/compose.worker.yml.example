@@ -1,0 +1,28 @@
+# Copy alongside deploy-worker.sh. The three env files contain the environment
+# names consumed by your compiled application; keep credentials scoped per role.
+# Use a new immutable image tag/digest for each deployment.
+services:
+  schema-deploy:
+    image: ${TESL_IMAGE:?Set TESL_IMAGE to the release image}
+    command: ["--schema", "deploy", "--json"]
+    env_file: [.env.deploy]
+    restart: "no"
+
+  schema-worker:
+    image: ${TESL_IMAGE:?Set TESL_IMAGE to the release image}
+    command: ["--schema", "worker", "--json"]
+    env_file: [.env.worker]
+    depends_on:
+      schema-deploy:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  app:
+    image: ${TESL_IMAGE:?Set TESL_IMAGE to the release image}
+    env_file: [.env.request]
+    depends_on:
+      schema-deploy:
+        condition: service_completed_successfully
+    ports:
+      - "${TESL_HTTP_PORT:-8086}:${TESL_CONTAINER_PORT:-8086}"
+    restart: unless-stopped

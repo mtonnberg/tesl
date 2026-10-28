@@ -1,0 +1,27 @@
+module Schema.Notes.Migrate.V2 exposing [migration, fixture]
+import Tesl.Migration exposing [Migration, Entity(..), Rule(..), Migrated(..)]
+import Tesl.Maybe exposing [Maybe(..)]
+import Schema.Notes.V1
+import Schema.Notes.VCurrent
+
+migration = Migration {
+from: Schema.Notes.V1
+to: Schema.Notes.VCurrent
+same: []
+entities: { Note: Migrate convert [Rename author owner, Retype metadata, WriteBack metadata metadata backward] }
+fixtures: [fixture]
+}
+fn convert(old: Schema.Notes.V1.Note) -> Migrated Schema.Notes.VCurrent.Note =
+if old.metadata.text == "blocked" then
+  Reject "blocked V1 metadata"
+else
+  Row (Schema.Notes.VCurrent.Note {
+   id: old.id
+   owner: old.author
+   memo: old.memo
+   title: old.title
+  metadata: Schema.Notes.VCurrent.Metadata { text: old.metadata.text, detail: "migrated-v2" }
+  })
+fn backward(row: Schema.Notes.VCurrent.Note) -> Schema.Notes.V1.Metadata =
+Schema.Notes.V1.Metadata { text: row.metadata.text }
+fn fixture() -> Maybe Schema.Notes.V1.Note = Schema.Notes.V1.makeNote "fixture" "kept"

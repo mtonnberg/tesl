@@ -109,6 +109,8 @@ let render_capability name =
    trailing comment. *)
 let vkind_label : Validation_structural.vkind -> string * string option = function
   | VStr -> "String", None
+  | VSchemaRef -> "ModuleRef (VCurrent) | String", Some "String is the legacy SQL schema name"
+  | VMigrationRef -> "ModuleRef (Migrate prefix)", None
   | VInt -> "Int", None
   | VPort -> "Int", Some "port, 1..65535"
   | VMountPath -> "String", Some "leading `/`, no trailing `/`, e.g. \"/api\""
@@ -116,6 +118,7 @@ let vkind_label : Validation_structural.vkind -> string * string option = functi
   | VSub sub -> Printf.sprintf "%s { ... }" sub, None
   | VConn -> "TcpConnection { host, port } | SocketConnection { path }", None
   | VBackend -> "Postgres (PostgresConfig { ... }) | Memory", None
+  | VMigrationTopology -> "Worker | Embedded", Some "versioned schema only; deployment default"
   | VBackoff -> "Exponential | Fixed", None
   | VDatabaseRef -> "<declared database name>", None
   | VEntityList -> "[<declared entities>]", None
@@ -194,7 +197,7 @@ let capability_entries : entry list =
 
 let config_entries : entry list =
   let m_of = function
-    | "Database" | "PostgresConfig" | "TcpConnection" | "SocketConnection" -> "Tesl.Database"
+    | "Database" | "PostgresConfig" | "MigrationConfig" | "TcpConnection" | "SocketConnection" -> "Tesl.Database"
     | "Queue" | "QueueRetryStrategy" -> "Tesl.Queue"
     | "Email" | "SmtpConfig" -> "Tesl.Email"
     | "SseChannel" -> "Tesl.SSE"
@@ -205,6 +208,7 @@ let config_entries : entry list =
   let doc_of = function
     | "Database" -> "Declares a database: `database Name = Database { ... }`."
     | "PostgresConfig" -> "PostgreSQL backend configuration (inside `backend: Postgres (...)`)."
+    | "MigrationConfig" -> "Migration execution and role settings inside `PostgresConfig.migrations`. All fields are optional; omission retains their deployment defaults. The schema history reference remains `Database.migrations`."
     | "TcpConnection" -> "TCP connection details for a Postgres backend."
     | "SocketConnection" -> "Unix-socket connection details for a Postgres backend."
     | "Queue" -> "Declares a job queue: `queue Name requires [...] = Queue { ... }`."
@@ -217,7 +221,7 @@ let config_entries : entry list =
     | name -> Printf.sprintf "Config block %s." name
   in
   List.map (fun name -> e name ~m:(m_of name) ~kind:KConfig ~doc:(doc_of name))
-    [ "Database"; "PostgresConfig"; "TcpConnection"; "SocketConnection";
+    [ "Database"; "PostgresConfig"; "MigrationConfig"; "TcpConnection"; "SocketConnection";
       "Queue"; "QueueRetryStrategy"; "Email"; "SmtpConfig"; "SseChannel";
       "Cache"; "App" ]
 

@@ -123,6 +123,51 @@ let test_capability_algebra () =
   check bool "scoped builtin is not a row variable" true
     (Ast.is_concrete_builtin_capability "dbRead Note")
 
+let repository_sources root =
+  let cmd = Printf.sprintf "git -C %s ls-files -z --cached --others --exclude-standard -- '*.tesl'" (Filename.quote root) in
+  let ic = Unix.open_process_in cmd in
+  let listed = In_channel.input_all ic in
+  (match Unix.close_process_in ic with
+   | Unix.WEXITED 0 -> ()
+   | _ -> fail "git ls-files failed while checking bare DB capabilities");
+  String.split_on_char '\000' listed
+  |> List.filter (fun relative -> relative <> "")
+  |> List.sort_uniq String.compare
+  |> List.filter (fun relative ->
+      (* Inspect the working tree: a pending deletion is no longer source, and
+         a new unstaged lesson must already meet the repository's capability bar.
+         Other filesystem failures remain errors rather than hiding a source. *)
+      try ignore (Unix.lstat (Filename.concat root relative)); true
+      with Unix.Unix_error (Unix.ENOENT, _, _) -> false)
+
+let test_repository_sources_follow_working_tree () =
+  let root = Filename.temp_dir "tesl-capability-inventory-" "" in
+  let rec remove path =
+    if (Unix.lstat path).Unix.st_kind = Unix.S_DIR then begin
+      Array.iter (fun name -> remove (Filename.concat path name)) (Sys.readdir path);
+      Unix.rmdir path
+    end else Sys.remove path in
+  Fun.protect ~finally:(fun () -> remove root) (fun () ->
+    let git args =
+      let ic = Unix.open_process_args_in "git" (Array.of_list ("git" :: "-C" :: root :: args)) in
+      let output = In_channel.input_all ic in
+      match Unix.close_process_in ic with
+      | Unix.WEXITED 0 -> () | _ -> fail output in
+    let write name source = Out_channel.with_open_text (Filename.concat root name)
+      (fun out -> output_string out source) in
+    git ["init"; "--quiet"];
+    write "removed.tesl" "module Removed exposing []\n";
+    write "retained.tesl" "module Retained exposing []\n";
+    git ["add"; "--"; "removed.tesl"; "retained.tesl"];
+    Sys.remove (Filename.concat root "removed.tesl");
+    write ".gitignore" "ignored/\nretained.tesl\n";
+    Unix.mkdir (Filename.concat root "ignored") 0o700;
+    write "ignored/generated.tesl" "module Generated exposing []\n";
+    let names = ["new lesson.tesl"; "line\nbreak.tesl"] in
+    List.iter (fun name -> write name "module Lesson exposing []\n") names;
+    check (list string) "new files are checked, deleted/ignored sources are absent"
+      (List.sort String.compare ("retained.tesl" :: names)) (repository_sources root))
+
 let test_repository_has_no_bare_db_grants () =
   let root = Compile.default_root_path () in
   let failures = ref [] in
@@ -149,19 +194,13 @@ let test_repository_has_no_bare_db_grants () =
     in
     search 0
   in
-  let cmd = Printf.sprintf "git -C %s ls-files '*.tesl'" (Filename.quote root) in
-  let ic = Unix.open_process_in cmd in
-  let tracked = In_channel.input_lines ic in
-  (match Unix.close_process_in ic with
-   | Unix.WEXITED 0 -> ()
-   | _ -> fail "git ls-files failed while checking bare DB capabilities");
   List.iter (fun relative ->
     let path = Filename.concat root relative in
     In_channel.with_open_text path (fun source ->
       In_channel.input_lines source |> List.iter (fun line ->
         check_token path line "dbRead";
         check_token path line "dbWrite"))
-  ) tracked;
+  ) (repository_sources root);
   match List.rev !failures with
   | [] -> ()
   | xs -> fail ("bare DB capability in repository .tesl source:\n" ^ String.concat "\n" xs)
@@ -182,5 +221,5 @@ let () =
       test_case "job type is not queue scope" `Quick test_enqueue_rejects_job_type_scope;
     ];
     "algebra", [test_case "coverage matrix" `Quick test_capability_algebra];
-    "repository", [test_case "no bare DB grants" `Quick test_repository_has_no_bare_db_grants];
+    "repository", [test_case "working-tree source inventory" `Quick test_repository_sources_follow_working_tree; test_case "no bare DB grants" `Quick test_repository_has_no_bare_db_grants];
   ]

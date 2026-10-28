@@ -1,0 +1,9 @@
+module Schema.Mail.VCurrent exposing [Delivery, Jobs]
+import Tesl.Prelude exposing [String]
+import Tesl.Json exposing [stringCodec]
+record Delivery { text: String }
+codec Delivery {
+  toJson { text -> "oldText" with_codec stringCodec }
+  fromJson [ { text <- "oldText" with_codec stringCodec } ]
+}
+queueSchema Jobs { jobs: [Delivery] }

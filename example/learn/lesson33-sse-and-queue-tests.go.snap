@@ -95,6 +95,8 @@ var Lesson33DatabaseDatabase = teslrt.NewDatabase(
 	[]teslrt.PostgresTable{},
 )
 
+var _ = teslrt.RegisterDatabaseIdentity("teslmodlesson33sseandqueuetests.Lesson33Database", Lesson33DatabaseDatabase)
+
 //line lesson33-sse-and-queue-tests.tesl:84
 func parseUserId(id string) string {
 //line lesson33-sse-and-queue-tests.tesl:85
@@ -238,15 +240,9 @@ func teslEncode1(teslValue string) any {
 }
 
 func teslEncode2(teslValue NoticeEvent) any {
-	return func() any {
-		switch teslValue.Tag {
-		case NoticeEventNoticeSent:
-			return map[string]any{"tag": "NoticeSent", "fields": map[string]any{
-				"message": teslEncode1(teslValue.NoticeSentMessage),
-			}}
-		}
-		panic("unreachable: checker guarantees case exhaustiveness")
-	}()
+	return map[string]any{"tag": "NoticeSent", "fields": map[string]any{
+		"message": teslEncode1(teslValue.NoticeSentMessage),
+	}}
 }
 
 func teslEncode3(teslValue NotifyJob) any {

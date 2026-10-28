@@ -801,7 +801,7 @@ let module_diagnostics (m : module_form) : (Location.loc * string * string) list
       | DLoadTest test ->
         List.iter visit_expr test.seed_stmts;
         List.iter visit_test_stmt test.request_stmts
-      | DType _ | DRecord _ | DEntity _ | DFact _ | DCodec _ | DDatabase _
+      | DQueueSchema _ | DType _ | DRecord _ | DEntity _ | DFact _ | DCodec _ | DDatabase _
       | DCapability _ | DQueue _ | DChannel _ | DWorkers _ | DCache _ | DAgent _
       | DEmail _ | DCapture _ | DApi _ | DServer _ ->
         ())

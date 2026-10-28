@@ -1,0 +1,6 @@
+[project]
+name = "kubernetes-rolling"
+entrypoint = "app.tesl"
+
+[deploy]
+target = "local"

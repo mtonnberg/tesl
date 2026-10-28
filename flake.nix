@@ -12,19 +12,13 @@
         toolchainInputs = import ./nix/toolchain-inputs.nix;
         # Go is PINNED to a patch release nixpkgs has not packaged yet.
         #
-        # `govulncheck` is a mandatory gate (ci.sh phase 2a), and go1.26.4 — what
-        # nixpkgs-unstable carried — is subject to three advisories that are all in the
-        # standard library and therefore unavoidable from Tesl's side: GO-2026-6218
-        # (quadratic `net/url.resolvePath`), GO-2026-6090 (`crypto/tls`) and GO-2026-6089
-        # (`net/http`).  All three are fixed in go1.26.6.
+        # `govulncheck` is a mandatory gate. The previous 1.26.9 pin is affected
+        # by GO-2026-6809 (compromised intermediate certificates in crypto/x509),
+        # fixed in 1.26.10. toolchain-inputs.nix pins
+        # that patch and the source checksum published by https://go.dev/dl/?mode=json.
+        # The overlay updates Go without moving the other locked compiler/CI tools.
         #
-        # Bumping the whole channel does NOT deliver it: nixpkgs-unstable was at go1.26.5 when
-        # this was written, which still trips all three, while moving staticcheck,
-        # golangci-lint and every other pinned tool underneath the gates for no gain.  So the
-        # OVERLAY pins exactly the one thing the gate is about and leaves the rest of the
-        # channel where it is.
-        #
-        # Remove this the moment nixpkgs carries go1.26.6 or newer — `nix flake update
+        # Remove this the moment nixpkgs carries go1.26.10 or newer — `nix flake update
         # nixpkgs` then gives the same result with no local patch to maintain.
         goOverlay = import ./nix/go-overlay.nix;
         pkgs = import nixpkgs { inherit system; overlays = [ goOverlay ]; };
@@ -174,7 +168,9 @@
         # Previous CLI retained as the black-box parity reference.
         cliBody = builtins.readFile ./nix/tesl-cli-body.sh;
 
-        tesl-go-cli = pkgs.writeShellScriptBin "tesl" (goRuntimePreamble + cliBody);
+        tesl-go-cli = pkgs.writeShellScriptBin "tesl" (goRuntimePreamble + ''
+          export TESL_NATIVE_CLI="${tesl-go-tools}/bin/tesl"
+        '' + cliBody);
 
         # Nix and native distributions share the Go command implementation.
         # The shell here only supplies the immutable Nix component paths.
@@ -262,6 +258,11 @@
         # ── Dev shell ─────────────────────────────────────────────────────────
         # `nix develop` gives the same workflow as the legacy `nix-shell`,
         # while the shellHook retains compiler auto-build logic.
+        devShells.kubernetes = pkgs.mkShell {
+          inputsFrom = [ self.devShells.${system}.default ];
+          packages = with pkgs; [ kind kubectl kubernetes-helm opentofu docker-client ];
+        };
+
         devShells.default = pkgs.mkShell {
           packages = with pkgs; [
             tesl-cli-dev
@@ -270,6 +271,8 @@
             jq
             nodejs
             postgresql
+            pgbouncer
+            tlaplus
             go
             staticcheck
             gosec

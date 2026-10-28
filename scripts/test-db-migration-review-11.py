@@ -1,0 +1,956 @@
+#!/usr/bin/env python3
+"""Review 11: boundary attacks on real compiler releases and private PostgreSQL.
+
+Run in nix develop. --build builds the ordinary row/queue V1–V4 releases.
+Every database test clones an idle template. Only fault injection uses the
+installer; tested commands use their documented role. JSON records include
+failures, skips, source revision and binary hashes, including lazily built inputs.
+"""
+import argparse
+import hashlib
+import importlib.util
+import json
+from pathlib import Path
+import shutil
+import tempfile
+import time
+import unittest
+
+ROOT = Path(__file__).resolve().parents[1]
+spec = importlib.util.spec_from_file_location("review05", ROOT / "scripts/test-db-migration-review-05.py")
+old = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(old)
+LAB = CONFIG = None
+require, literal = old.require, old.literal
+
+
+class DatabaseCase(unittest.TestCase):
+    template = "review_v2"
+    family = "queue"
+
+    def setUp(self):
+        self.db = LAB.clone(self.template)
+        self.addCleanup(lambda: LAB.sql("postgres", f"drop database {self.db} with (force)"))
+
+    def snapshot(self):
+        tables = ["tesl_schema_state", "tesl_schema_versions", "tesl_row_queue_conversion_staging",
+                  "tesl_row_queue_target_staging", "tesl_row_queue_conversion_receipts",
+                  "tesl_row_queue_conversion_attempts", "tesl_row_queue_conversion_failures",
+                  "tesl_row_queue_discards",
+                  "tesl_row_queue_retirements", "tesl_row_queue_restamps", "tesl_jobs"]
+        return {table: LAB.sql(self.db, f"select coalesce(jsonb_agg(to_jsonb(t) order by to_jsonb(t)::text),'[]') from mail.{table} t") for table in tables}
+
+    def refused(self, result):
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertNotIn("panic:", result.stderr)
+        self.assertTrue(result.stderr.strip(), "refusal needs a diagnostic")
+
+    def enqueue(self, version=1, identity="old", payload=None):
+        if payload is None:
+            payload = {"oldText": "retained"} if version == 1 else {"message": "retained", "priority": 7}
+        LAB.sql(self.db, f"select mail.tesl_queue_enqueue({version},'Jobs','Delivery',{literal(identity)},{literal(json.dumps(payload))}::jsonb)", "review_request")
+
+    def claim(self, version=1):
+        return json.loads(LAB.sql(self.db, f"select row_to_json(c) from mail.tesl_queue_claim({version},'Jobs','pending','review11',60000) c", "review_request"))
+
+    def convert(self):
+        process, log = LAB.start(self.db, "v2")
+        try:
+            LAB.wait(lambda: LAB.sql(self.db, "select count(*) from mail.tesl_row_queue_conversion_receipts") == "1", process)
+        finally:
+            LAB.stop(process, log)
+
+
+class CatalogReview(DatabaseCase):
+    pass
+
+
+CATALOG = [
+    ("selector_volatile", "alter function mail.tesl_row_queue_dispatch_sources() volatile"),
+    ("selector_invoker", "alter function mail.tesl_row_queue_dispatch_sources() security invoker"),
+    ("selector_search_path", "alter function mail.tesl_row_queue_dispatch_sources() set search_path=public"),
+    ("selector_leakproof", "alter function mail.tesl_row_queue_dispatch_sources() leakproof"),
+    ("selector_public_execute", "grant execute on function mail.tesl_row_queue_dispatch_sources() to public"),
+    ("selector_extra_overload", "create function mail.tesl_row_queue_dispatch_sources(integer) returns text language sql as 'select ''forged'''; alter function mail.tesl_row_queue_dispatch_sources(integer) owner to review_owner"),
+    ("fairness_index_reversed_keys", "drop index mail.tesl_row_queue_conversion_fair; create index tesl_row_queue_conversion_fair on mail.tesl_row_queue_conversion_receipts(attempt_seq,source_digest)"),
+    ("fairness_index_partial", "drop index mail.tesl_row_queue_conversion_fair; create index tesl_row_queue_conversion_fair on mail.tesl_row_queue_conversion_receipts(source_digest,attempt_seq) where kind='converted'"),
+    ("fairness_index_wrong_order", "drop index mail.tesl_row_queue_conversion_fair; create index tesl_row_queue_conversion_fair on mail.tesl_row_queue_conversion_receipts(source_digest,attempt_seq desc)"),
+    ("status_invoker", "alter function mail.tesl_row_queue_status() security invoker"),
+    ("status_grant_option", "grant execute on function mail.tesl_row_queue_status() to review_request with grant option"),
+    ("staging_extra_trigger", "create function mail.review11_trigger() returns trigger language plpgsql as 'begin return new; end'; create trigger review11_attack before insert on mail.tesl_row_queue_conversion_staging for each row execute function mail.review11_trigger()"),
+    ("attempts_rls", "alter table mail.tesl_row_queue_conversion_attempts enable row level security"),
+    ("receipts_request_column_grant", "grant select(original) on mail.tesl_row_queue_conversion_receipts to review_request"),
+    ("staging_worker_update_grant", "grant update on mail.tesl_row_queue_conversion_staging to review_worker"),
+    ("target_owner_changed", "alter table mail.tesl_row_queue_target_staging owner to review_installer"),
+]
+
+
+def catalog_case(sql):
+    def test(self):
+        LAB.sql(self.db, sql)
+        before = self.snapshot()
+        self.refused(LAB.schema(self.db, "v2", "status", role="review_request"))
+        self.assertEqual(self.snapshot(), before)
+    return test
+
+
+for number, (name, sql) in enumerate(CATALOG, 1):
+    setattr(CatalogReview, f"test_{number:03}_{name}", catalog_case(sql))
+
+
+class RoleReview(DatabaseCase):
+    def test_115_application_roles_cannot_call_partial_admission_helper(self):
+        before = self.snapshot()
+        for role in ("review_request", "review_worker"):
+            self.refused(LAB.sql(self.db, "select mail.tesl_row_admit_version(2)", role, ok=False))
+            self.refused(LAB.sql(self.db, "select * from mail.tesl_queue_inventory_checked(2)", role, ok=False))
+        self.assertEqual(self.snapshot(), before)
+
+
+DENIED = [
+    ("request_selector", "review_request", "select * from mail.tesl_row_queue_dispatch_sources()"),
+    ("request_receipt_bytes", "review_request", "select original from mail.tesl_row_queue_conversion_receipts"),
+    ("worker_receipt_bytes", "review_worker", "select original from mail.tesl_row_queue_conversion_receipts"),
+    ("request_attempt_bytes", "review_request", "select original from mail.tesl_row_queue_conversion_attempts"),
+    ("worker_attempt_bytes", "review_worker", "select original from mail.tesl_row_queue_conversion_attempts"),
+    ("request_restamp_audit", "review_request", "select * from mail.tesl_row_queue_restamps"),
+    ("worker_restamp_delete", "review_worker", "delete from mail.tesl_row_queue_restamps"),
+    ("request_staging_delete", "review_request", "delete from mail.tesl_row_queue_conversion_staging"),
+    ("worker_target_delete", "review_worker", "delete from mail.tesl_row_queue_target_staging"),
+    ("request_owner_role", "review_request", "set role review_owner"),
+    ("worker_owner_role", "review_worker", "set role review_owner"),
+    ("request_worker_role", "review_request", "set role review_worker"),
+]
+
+
+def denied_case(role, sql):
+    def test(self):
+        before = self.snapshot()
+        self.refused(LAB.sql(self.db, sql, role, ok=False))
+        self.assertEqual(self.snapshot(), before)
+    return test
+
+
+for number, (name, role, sql) in enumerate(DENIED, 17):
+    setattr(RoleReview, f"test_{number:03}_{name}", denied_case(role, sql))
+
+
+class StagingReview(DatabaseCase):
+    template = "review11_staged"
+    family = "fair-many-33"
+
+    @classmethod
+    def setUpClass(cls):
+        family = CONFIG.artifacts / cls.family
+        stamp = family / "compiler.sha256"
+        digest = hashlib.sha256(CONFIG.compiler.read_bytes()).hexdigest()
+        if not stamp.exists() or stamp.read_text().strip() != digest:
+            LAB.build_fairness_payloads(cls.family, 32)
+        LAB.sql("postgres", f"create database {cls.template}")
+        LAB.sql("postgres", f"grant create on database {cls.template} to review_owner")
+        LAB.sql(cls.template, "grant create on schema public to review_owner")
+        require(LAB.install(cls.template, "v1", cls.family))
+        LAB.stop(*LAB.start(cls.template, "v1", cls.family))
+        require(LAB.install(cls.template, "v2", cls.family))
+
+    def install(self, role="review_installer"):
+        return LAB.schema(self.db, "v2", "install", "--worker", "review_worker", "--request", "review_request", family=self.family, role=role)
+
+    def test_029_second_batch_failure_retains_only_first_committed_group(self):
+        LAB.sql(self.db, "delete from mail.tesl_row_queue_target_staging; delete from mail.tesl_row_queue_conversion_staging where job_type<>'Other031'; update mail.tesl_row_queue_conversion_staging set fence_ns=fence_ns+1")
+        self.refused(self.install())
+        self.assertEqual(LAB.sql(self.db, "select count(*) from mail.tesl_row_queue_conversion_staging where fence_ns=(select fence_ns from mail.tesl_schema_meta)"), "32")
+        self.assertEqual(LAB.sql(self.db, "select count(*) from mail.tesl_row_queue_target_staging"), "0")
+        self.assertEqual(LAB.sql(self.db, "select current||','||min_version||','||compat_floor from mail.tesl_schema_state"), "1,1,1")
+        # Fault repair by observer restores exact original fence; installer resumes.
+        LAB.sql(self.db, "update mail.tesl_row_queue_conversion_staging set fence_ns=(select fence_ns from mail.tesl_schema_meta) where job_type='Other031'")
+        require(self.install())
+        before = self.snapshot()
+        require(self.install())
+        self.assertEqual(self.snapshot(), before)
+
+    def test_030_worker_cannot_install_staging_batch(self):
+        before = self.snapshot()
+        self.refused(self.install("review_worker"))
+        self.assertEqual(self.snapshot(), before)
+
+    def test_031_request_cannot_install_staging_batch(self):
+        before = self.snapshot()
+        self.refused(self.install("review_request"))
+        self.assertEqual(self.snapshot(), before)
+
+    def test_112_shared_open_checks_late_source_before_earlier_job_mutation(self):
+        LAB.sql(self.db, "select mail.tesl_queue_enqueue(1,'Jobs','Delivery','head','{\"oldText\":\"kept\"}')", "review_request")
+        LAB.sql(self.db, "update mail.tesl_row_queue_conversion_staging set policy='rejected' where job_type='Other000'")
+        before = LAB.sql(self.db, "select row_to_json(j)::text from mail.tesl_jobs j")
+        result = LAB.schema(self.db, "v2", "worker", family=self.family)
+        self.refused(result)
+        self.assertEqual(LAB.sql(self.db, "select row_to_json(j)::text from mail.tesl_jobs j"), before)
+        self.assertEqual(LAB.sql(self.db, "select count(*) from mail.tesl_row_queue_conversion_receipts"), "0")
+
+
+def staging_case(field, value):
+    def test(self):
+        LAB.sql(self.db, "delete from mail.tesl_row_queue_target_staging; delete from mail.tesl_row_queue_conversion_staging where job_type='Delivery'")
+        LAB.sql(self.db, f"update mail.tesl_row_queue_conversion_staging set {field}={value} where job_type='Other000'")
+        before = self.snapshot()
+        self.refused(self.install())
+        self.assertEqual(self.snapshot(), before)
+    return test
+
+
+for number, (field, value) in enumerate([
+    ("database_uuid", "gen_random_uuid()"),
+    ("inventory_hash", "repeat('a',64)"),
+    ("expansion_hash", "repeat('b',64)"),
+    ("old_contract", "old_contract||'x'::bytea"),
+    ("new_contract", "new_contract||'x'::bytea"),
+], 32):
+    setattr(StagingReview, f"test_{number:03}_late_member_{field}_mismatch_is_atomic", staging_case(field, value))
+
+
+class LifecycleReview(DatabaseCase):
+    def test_037_enqueue_rollback_leaves_no_job_or_receipt(self):
+        before = self.snapshot()
+        LAB.sql(self.db, "begin; select mail.tesl_queue_enqueue(1,'Jobs','Delivery','rolled','{\"oldText\":\"rolled\"}'); rollback", "review_request")
+        self.assertEqual(self.snapshot(), before)
+
+    def test_038_claim_rollback_restores_attempt_ownership(self):
+        self.enqueue()
+        before = self.snapshot()
+        LAB.sql(self.db, "begin; select * from mail.tesl_queue_claim(1,'Jobs','pending','rolled',60000); rollback", "review_request")
+        self.assertEqual(self.snapshot(), before)
+
+    def test_039_complete_rollback_preserves_live_claim(self):
+        self.enqueue()
+        claim = self.claim()
+        before = self.snapshot()
+        LAB.sql(self.db, f"begin; select mail.tesl_queue_complete(1,'Jobs','old',{literal(claim['token'])},{claim['attempt_seq']}); rollback", "review_request")
+        self.assertEqual(self.snapshot(), before)
+
+    def test_040_requeue_cannot_reinterpret_changed_old_contract(self):
+        self.enqueue()
+        LAB.sql(self.db, "update mail.tesl_jobs set status='dead',dead_reason='attempts-exhausted',attempts=7")
+        before = self.snapshot()
+        self.assertEqual(LAB.sql(self.db, "select mail.tesl_queue_requeue(2,'Jobs','old')", "review_request"), "f")
+        self.assertEqual(self.snapshot(), before)
+
+    def test_041_current_claim_cannot_consume_incompatible_old_payload(self):
+        self.enqueue()
+        before = self.snapshot()
+        self.assertEqual(LAB.sql(self.db, "select count(*) from mail.tesl_queue_claim(2,'Jobs','pending','new',60000)", "review_request"), "0")
+        self.assertEqual(self.snapshot(), before)
+
+    def test_042_old_claim_cannot_consume_future_payload(self):
+        self.enqueue(2, "new")
+        before = self.snapshot()
+        self.assertEqual(LAB.sql(self.db, "select count(*) from mail.tesl_queue_claim(1,'Jobs','pending','old',60000)", "review_request"), "0")
+        self.assertEqual(self.snapshot(), before)
+
+    def test_043_receipt_survives_real_completion_and_replay(self):
+        self.enqueue()
+        self.convert()
+        receipt = LAB.sql(self.db, "select row_to_json(r)::text from mail.tesl_row_queue_conversion_receipts r")
+        claim = self.claim(2)
+        self.assertEqual(LAB.sql(self.db, f"select mail.tesl_queue_complete(2,'Jobs','old',{literal(claim['token'])},{claim['attempt_seq']})", "review_request"), "t")
+        require(LAB.install(self.db, "v2"))
+        self.assertEqual(LAB.sql(self.db, "select row_to_json(r)::text from mail.tesl_row_queue_conversion_receipts r"), receipt)
+        self.assertEqual(LAB.sql(self.db, "select count(*) from mail.tesl_jobs"), "0")
+
+    def quarantine_current(self):
+        self.enqueue(2, "invalid-current", {"message": 42, "priority": 7})
+        claim = self.claim(2)
+        self.assertEqual(LAB.sql(self.db, f"select mail.tesl_queue_quarantine(2,'Jobs','invalid-current',{literal(claim['token'])},{claim['attempt_seq']})", "review_request"), "t")
+
+    def test_044_current_invalid_job_cannot_hide_old_backlog_status(self):
+        self.quarantine_current()
+        self.enqueue()
+        before = self.snapshot()
+        summary = json.loads(require(LAB.schema(self.db, "v2", "status", role="review_request")))["queues"]
+        self.assertEqual(summary["oldPayloads"], 1)
+        self.assertEqual(summary["invalid"], 1, "current operational quarantine must remain visible")
+        blockers = {item["code"]: item["count"] for item in summary["blockers"]}
+        self.assertEqual(blockers.get("QUEUE_OLD_PAYLOADS"), 1, summary)
+        self.assertEqual(self.snapshot(), before)
+
+    def test_045_current_invalid_status_agrees_with_retirement(self):
+        self.quarantine_current()
+        summary = json.loads(require(LAB.schema(self.db, "v2", "status", role="review_request")))["queues"]
+        self.assertEqual(summary["invalid"], 1)
+        require(LAB.schema(self.db, "v2", "contract", "V2"))
+        self.assertFalse(any(b["code"] == "QUEUE_PAYLOAD_INVALID" for b in summary["blockers"]), summary)
+
+    def test_046_snapshot_enqueue_refuses_without_mutation(self):
+        before = self.snapshot()
+        self.refused(LAB.sql(self.db, "begin isolation level repeatable read; select mail.tesl_queue_enqueue(1,'Jobs','Delivery','wrong-isolation','{}'); commit", "review_request", ok=False))
+        self.assertEqual(self.snapshot(), before)
+
+    def test_047_serializable_claim_refuses_without_mutation(self):
+        self.enqueue()
+        before = self.snapshot()
+        self.refused(LAB.sql(self.db, "begin isolation level serializable; select * from mail.tesl_queue_claim(1,'Jobs','pending','wrong-isolation',60000); commit", "review_request", ok=False))
+        self.assertEqual(self.snapshot(), before)
+
+    def test_048_statement_cancelled_enqueue_is_atomic(self):
+        before = self.snapshot()
+        # Cancellation after the protected insert, inside the same transaction.
+        self.refused(LAB.sql(self.db, "begin; set local statement_timeout='50ms'; select mail.tesl_queue_enqueue(1,'Jobs','Delivery','cancelled','{}'); select pg_sleep(1); commit", "review_request", ok=False))
+        self.assertEqual(self.snapshot(), before)
+
+
+class SourceReview(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="source-", dir=CONFIG.output)
+        self.addCleanup(self.temp.cleanup)
+        self.source = Path(self.temp.name) / "source"
+        shutil.copytree(CONFIG.artifacts / "queue/v2/source", self.source)
+
+    def check_mutation(self, file, before, after):
+        path = self.source / file
+        text = path.read_text()
+        self.assertIn(before, text)
+        path.write_text(text.replace(before, after, 1))
+        context = json.loads(old.run([CONFIG.compiler, "agent-context", self.source / "app.tesl"], env=LAB.env).stdout)
+        self.assertFalse(context["ok"], context)
+        self.assertTrue(context["diagnostics"], context)
+        self.assertFalse(any(d["code"] == "E000" for d in context["diagnostics"]), context)
+
+
+SOURCE_ATTACKS = [
+    ("fixture_callback_swap", "migrations/mail/v2.tesl", "fixtures: [Schema.Mail.Migrate.Convert2.oldJob]", "fixtures: [Schema.Mail.Migrate.Convert2.convert]"),
+    ("fixture_duplicate", "migrations/mail/v2.tesl", "fixtures: [Schema.Mail.Migrate.Convert2.oldJob]", "fixtures: [Schema.Mail.Migrate.Convert2.oldJob, Schema.Mail.Migrate.Convert2.oldJob]"),
+    ("fixture_current_nominal", "migrations/mail/convert2.tesl", 'fn oldJob() -> Schema.Mail.V1.Delivery = Schema.Mail.V1.Delivery { text: "kept" }', 'fn oldJob() -> Schema.Mail.VCurrent.Delivery = Schema.Mail.VCurrent.Delivery { body: "kept", priority: 7 }'),
+    ("fixture_parameter", "migrations/mail/convert2.tesl", "fn oldJob()", "fn oldJob(ignored: String)"),
+    ("fixture_private", "migrations/mail/convert2.tesl", "convert, repair, oldJob, rejectedJob", "convert, repair, rejectedJob"),
+    ("callback_private", "migrations/mail/convert2.tesl", "convert, repair, oldJob, rejectedJob", "repair, oldJob, rejectedJob"),
+    ("callback_extra_parameter", "migrations/mail/convert2.tesl", "fn convert(old: Schema.Mail.V1.Delivery)", "fn convert(old: Schema.Mail.V1.Delivery, extra: Int)"),
+    ("unreachable_helper_illtyped", "migrations/mail/convert2.tesl", 'import Tesl.Prelude exposing [String, Int, Bool(..)]', 'import Tesl.Prelude exposing [String, Int, Bool(..)]\nfn unreachable() -> Int = "wrong"'),
+    ("fixture_frozen_codec_substitution", "schema/mail/v1.tesl", '"oldText"', '"oldTextRenamed"'),
+    ("historical_record_extra_field", "schema/mail/v1.tesl", "text: String", "text: String, extra: String"),
+    ("missing_job_decision", "migrations/mail/v2.tesl", "jobs: { Delivery: Migrate Schema.Mail.Migrate.Convert2.convert }", "jobs: {}"),
+    ("current_missing_decoder", "schema/mail/v-current.tesl", 'fromJson [ { body <- "message" with_codec stringCodec, priority <- "priority" with_codec intCodec } ]', "fromJson forbidden"),
+]
+
+
+def source_case(file, before, after):
+    return lambda self: self.check_mutation(file, before, after)
+
+
+for number, (name, file, before, after) in enumerate(SOURCE_ATTACKS, 49):
+    setattr(SourceReview, f"test_{number:03}_{name}", source_case(file, before, after))
+
+
+class RowSourceReview(unittest.TestCase):
+    check_mutation = SourceReview.check_mutation
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="row-source-", dir=CONFIG.output)
+        self.addCleanup(self.temp.cleanup)
+        self.source = Path(self.temp.name) / "source"
+        version = getattr(getattr(self, self._testMethodName), "version")
+        shutil.copytree(CONFIG.artifacts / "row" / f"v{version}" / "source", self.source)
+
+
+def row_positive(version):
+    def test(self):
+        result = old.run([CONFIG.compiler, "agent-context", self.source / "app.tesl"], env=LAB.env)
+        context = json.loads(result.stdout)
+        self.assertTrue(context["ok"], context)
+        self.assertEqual(result.returncode, 0)
+    test.version = version
+    return test
+
+
+for number, version in enumerate((2, 3, 4), 61):
+    setattr(RowSourceReview, f"test_{number:03}_row_v{version}_positive_control", row_positive(version))
+
+
+ROW_ATTACKS = [
+    (2, "missing_writeback", "migrations/notes/v2.tesl", ", WriteBack metadata metadata backward", ""),
+    (2, "changed_primary_key", "migrations/notes/v2.tesl", "id: old.id", 'id: "replacement"'),
+    (2, "rename_wrong_destination", "migrations/notes/v2.tesl", "Rename author owner", "Rename author title"),
+    (3, "missing_legacy_value", "migrations/notes/v3.tesl", 'Legacy memo "legacy-default", ', ""),
+    (3, "wrong_reverse_field_type", "migrations/notes/v3.tesl", "text: row.metadata.body", "text: row.metadata.revision"),
+    (4, "missing_nominal_same", "migrations/notes/v4.tesl", "same: [Same Schema.Notes.V3.Metadata Schema.Notes.VCurrent.Metadata]", "same: []"),
+    (4, "revalidate_substitutes_value", "migrations/notes/v4.tesl", "tryTitle old.title", 'tryTitle "replacement"'),
+    (4, "raw_unproven_title", "migrations/notes/v4.tesl", "title: title", "title: old.title"),
+    (4, "missing_result_field", "migrations/notes/v4.tesl", "metadata: old.metadata", ""),
+    (4, "contract_wrong_predecessor", "migrations/notes/v4-contract.tesl", "of: Schema.Notes.Migrate.V4", "of: Schema.Notes.Migrate.V3"),
+]
+for number, (version, name, file, before, after) in enumerate(ROW_ATTACKS, 64):
+    case = source_case(file, before, after)
+    case.version = version
+    setattr(RowSourceReview, f"test_{number:03}_row_{name}", case)
+
+
+class ExecutionReview(DatabaseCase):
+    template = "review11_poison_v1"
+    family = "fair-poison"
+
+    @classmethod
+    def setUpClass(cls):
+        family = CONFIG.artifacts / cls.family
+        stamp = family / "compiler.sha256"
+        digest = hashlib.sha256(CONFIG.compiler.read_bytes()).hexdigest()
+        if not stamp.exists() or stamp.read_text().strip() != digest:
+            LAB.build_fairness_payloads(cls.family)
+        source = sorted(family.glob("source-*"), key=lambda path: path.stat().st_mtime_ns)[-1]
+        target = Path(tempfile.mkdtemp(prefix="poison-", dir=family))
+        shutil.copytree(source, target / "source")
+        helper = target / "source/migrations/mail/convert2.tesl"
+        text = helper.read_text()
+        expression = "Row (Schema.Mail.VCurrent.Delivery { body: old.text, priority: 7 })"
+        if expression not in text:
+            raise AssertionError("poison fixture lost its positive converter")
+        helper.write_text(text.replace(expression, 'if old.text == "poison" then\n      convert old\n    else\n      ' + expression, 1))
+        require(old.run([CONFIG.compiler, "agent-context", helper], env=LAB.env))
+        require(old.run([CONFIG.compiler, "--backend", "go", target / "source/app.tesl", "--out", target / "go"], env=LAB.env))
+        require(old.run(["go", "test", "-race", "-p", "1", "./..."], cwd=target / "go", env=LAB.env, timeout=180))
+        require(old.run(["go", "build", "-race", "-o", target / "app", "./cmd/app"], cwd=target / "go", env=LAB.env))
+        cls.release = target.name
+        LAB.sql("postgres", f"create database {cls.template}")
+        LAB.sql("postgres", f"grant create on database {cls.template} to review_owner")
+        LAB.sql(cls.template, "grant create on schema public to review_owner")
+        require(LAB.install(cls.template, "v1", cls.family))
+        LAB.stop(*LAB.start(cls.template, "v1", cls.family))
+
+    def run_poison(self, dead=False, concurrent=False):
+        self.enqueue(payload={"oldText": "poison"})
+        if dead:
+            LAB.sql(self.db, "update mail.tesl_jobs set status='dead',dead_reason='attempts-exhausted',attempts=7,next_attempt_at='2099-01-01' where id='old'")
+        self.enqueue(identity="same-type-healthy")
+        LAB.sql(self.db, "select mail.tesl_queue_enqueue(1,'Jobs','Other','healthy','{\"oldText\":\"healthy\"}')", "review_request")
+        require(LAB.install(self.db, self.release, self.family))
+        workers = []
+        try:
+            for _ in range(2 if concurrent else 1):
+                workers.append(LAB.start(self.db, self.release, self.family))
+            process, _ = workers[0]
+            LAB.wait(lambda: LAB.sql(self.db, "select (select count(*) from mail.tesl_row_queue_conversion_failures)=1 and (select count(*) from mail.tesl_row_queue_conversion_receipts)=2") == "t", process)
+        finally:
+            for process, log in workers:
+                LAB.stop(process, log)
+
+    def test_074_poisoned_job_is_durable_while_healthy_peers_progress(self):
+        self.run_poison()
+        self.assertEqual(LAB.sql(self.db, "select schema_version||','||status||','||(payload='{\"oldText\":\"poison\"}'::jsonb)::text from mail.tesl_jobs where id='old'"), "1,pending,true")
+        self.assertEqual(LAB.sql(self.db, "select count(*) from mail.tesl_jobs where schema_version=2"), "2")
+        self.assertEqual(LAB.sql(self.db, "select code from mail.tesl_row_queue_conversion_failures"), "execution-budget")
+        self.assertEqual(LAB.sql(self.db, "select count(*) from mail.tesl_row_queue_conversion_attempts"), "0")
+        before = self.snapshot()
+        process, log = LAB.start(self.db, self.release, self.family)
+        try:
+            time.sleep(.7)
+            self.assertIsNone(process.poll(), Path(log.name).read_text())
+        finally:
+            LAB.stop(process, log)
+        self.assertEqual(self.snapshot(), before)
+        LAB.sql(self.db, self.failure_sql(replay=True), "review_worker")
+        self.assertEqual(self.snapshot(), before)
+        status = json.loads(require(LAB.schema(self.db, self.release, "status", family=self.family, role="review_request")))["queues"]
+        self.assertEqual(status["executionFailed"], 1)
+        self.assertEqual({item["code"] for item in status["blockers"]}, {"QUEUE_MIGRATION_EXECUTION_FAILED"})
+        self.assertNotIn("poison", json.dumps(status))
+        self.refused(LAB.schema(self.db, self.release, "contract", "V2", family=self.family))
+
+    def test_075_predecessor_processing_resolves_failure_without_erasing_audit(self):
+        self.run_poison()
+        audit = LAB.sql(self.db, "select row_to_json(f)::text from mail.tesl_row_queue_conversion_failures f")
+        claim = self.claim(1)
+        self.assertEqual(claim["job_id"], "old")
+        self.assertEqual(LAB.sql(self.db, f"select mail.tesl_queue_complete(1,'Jobs','old',{literal(claim['token'])},{claim['attempt_seq']})", "review_request"), "t")
+        require(LAB.schema(self.db, self.release, "contract", "V2", family=self.family))
+        require(LAB.schema(self.db, self.release, "contract", "V2", family=self.family))
+        self.assertEqual(LAB.sql(self.db, "select row_to_json(f)::text from mail.tesl_row_queue_conversion_failures f"), audit)
+        status = json.loads(require(LAB.schema(self.db, self.release, "status", family=self.family, role="review_request")))["queues"]
+        self.assertEqual(status["executionFailed"], 0)
+        self.refused(LAB.sql(self.db, "select mail.tesl_queue_enqueue(2,'Jobs','Delivery','old','{\"message\":\"reused\",\"priority\":7}')", "review_request", ok=False))
+
+    def test_076_failure_audit_is_private_and_cannot_be_deleted_by_worker(self):
+        self.run_poison()
+        before = self.snapshot()
+        for role in ("review_worker", "review_request"):
+            self.refused(LAB.sql(self.db, "select * from mail.tesl_row_queue_conversion_failures", role, ok=False))
+            self.refused(LAB.sql(self.db, "delete from mail.tesl_row_queue_conversion_failures", role, ok=False))
+        self.assertEqual(self.snapshot(), before)
+
+    def failure_sql(self, change="", commit=False, replay=False):
+        # Observer constructs the exact public binding; mutation itself uses Worker.
+        binding = LAB.sql(self.db, "select jsonb_build_object('document',encode(c.source_document,'hex'),'parent',nullif(c.parent_digest,''),'revision',c.revision,'family',r.family,'queue',c.queue,'job',c.job_type,'from',c.from_version,'to',c.to_version,'root',c.source_digest,'policy',c.policy,'discardReason',c.discard_reason,'old',encode(c.old_contract,'hex'),'new',encode(c.new_contract,'hex')) from mail.tesl_row_queue_conversion_staging c cross join mail.tesl_row_versions r where c.job_type='Delivery' and r.version=1")
+        uuid, digest = json.loads(LAB.sql(self.db, "select json_build_array(m.database_uuid::text,c.source_digest) from mail.tesl_schema_meta m cross join mail.tesl_row_queue_conversion_staging c where c.job_type='Delivery'"))
+        if replay:
+            return f"""begin; do $block$ declare a record; begin
+select * into a from mail.tesl_row_queue_conversion_begin({literal(uuid)}::uuid,{literal(digest)},'old',{literal(binding)}::jsonb);
+if a.outcome is distinct from 'execution-failed' or a.transaction_id is distinct from '' then raise exception 'failure replay acquired a new attempt'; end if;
+end $block$; commit;"""
+        return f"""begin;
+do $block$ declare a record; accepted boolean; b jsonb:={literal(binding)}::jsonb; ident uuid:={literal(uuid)}::uuid; d text:={literal(digest)}; begin
+ select * into a from mail.tesl_row_queue_conversion_begin(ident,d,'probe',b);
+ {change}
+ accepted:=mail.tesl_row_queue_conversion_fail(ident,d,'probe',a.attempt_seq,a.transaction_id,a.original,'execution-trap',b);
+ if accepted is distinct from {'true' if not change else 'false'} then raise exception 'wrong failure publication result'; end if;
+end $block$; {'commit' if commit else 'rollback'};"""
+
+    def prepare_probe(self):
+        self.run_poison()
+        self.enqueue(identity="probe")
+
+    def root_binding(self):
+        binding = LAB.sql(self.db, "select jsonb_build_object('document',encode(c.source_document,'hex'),'parent',nullif(c.parent_digest,''),'revision',c.revision,'family',r.family,'queue',c.queue,'job',c.job_type,'from',c.from_version,'to',c.to_version,'root',c.source_digest,'policy',c.policy,'discardReason',c.discard_reason,'old',encode(c.old_contract,'hex'),'new',encode(c.new_contract,'hex')) from mail.tesl_row_queue_conversion_staging c cross join mail.tesl_row_versions r where c.job_type='Delivery' and c.revision=0 and r.version=1")
+        uuid, digest = json.loads(LAB.sql(self.db, "select json_build_array(m.database_uuid::text,c.source_digest) from mail.tesl_schema_meta m cross join mail.tesl_row_queue_conversion_staging c where c.job_type='Delivery' and c.revision=0"))
+        return literal(uuid), literal(digest), literal(binding)
+
+    def test_113_publication_requires_current_transaction_attempt(self):
+        self.prepare_probe()
+        uuid, digest, binding = self.root_binding()
+        before = self.snapshot()
+        args = f"{uuid}::uuid,{digest},'probe',1,pg_current_xact_id()::text,'{{\"oldText\": \"retained\"}}'"
+        for call in (
+            f"mail.tesl_row_queue_conversion_finish({args},'converted','{{\"message\":\"retained\",\"priority\":7}}'::jsonb,'',{binding}::jsonb)",
+            f"mail.tesl_row_queue_conversion_fail({args},'execution-trap',{binding}::jsonb)",
+            f"mail.tesl_row_queue_conversion_discard({args},{binding}::jsonb)",
+        ):
+            self.assertEqual(LAB.sql(self.db, "select " + call, "review_worker"), "f")
+        self.assertEqual(self.snapshot(), before)
+
+    def test_114_selection_is_not_permission_to_skip_fresh_admission(self):
+        self.prepare_probe()
+        uuid, digest, binding = self.root_binding()
+        self.assertEqual(LAB.sql(self.db, f"select count(*) from mail.tesl_row_queue_conversion_next({uuid}::uuid,{digest},{binding}::jsonb,0)", "review_worker"), "1")
+        LAB.sql(self.db, "update mail.tesl_queue_versions set inventory_hash=repeat('a',64) where version=1")
+        before = self.snapshot()
+        self.refused(LAB.sql(self.db, f"select * from mail.tesl_row_queue_conversion_begin({uuid}::uuid,{digest},'probe',{binding}::jsonb)", "review_worker", ok=False))
+        self.assertEqual(self.snapshot(), before)
+
+    def test_116_committed_attempt_cannot_authorize_a_later_transaction(self):
+        self.prepare_probe()
+        uuid, digest, binding = self.root_binding()
+        attempt = json.loads(LAB.sql(self.db, f"select row_to_json(a) from mail.tesl_row_queue_conversion_begin({uuid}::uuid,{digest},'probe',{binding}::jsonb) a", "review_worker"))
+        before = self.snapshot()
+        for xid in (literal(attempt["transaction_id"]), "pg_current_xact_id()::text"):
+            result = LAB.sql(self.db, f"select mail.tesl_row_queue_conversion_finish({uuid}::uuid,{digest},'probe',{attempt['attempt_seq']},{xid},{literal(attempt['original'])},'converted','{{\"message\":\"retained\",\"priority\":7}}'::jsonb,'',{binding}::jsonb)", "review_worker")
+            self.assertEqual(result, "f")
+        self.assertEqual(self.snapshot(), before)
+
+    def test_117_rolled_back_attempt_cannot_authorize_same_transaction(self):
+        self.prepare_probe()
+        uuid, digest, binding = self.root_binding()
+        before = self.snapshot()
+        result = LAB.sql(self.db, f"""begin; savepoint before_attempt;
+select * from mail.tesl_row_queue_conversion_begin({uuid}::uuid,{digest},'probe',{binding}::jsonb);
+rollback to savepoint before_attempt;
+select mail.tesl_row_queue_conversion_finish({uuid}::uuid,{digest},'probe',1,pg_current_xact_id()::text,'{{"oldText": "retained"}}','converted','{{"message":"retained","priority":7}}'::jsonb,'',{binding}::jsonb);
+rollback;""", "review_worker")
+        self.assertIn("f", result.splitlines())
+        self.assertEqual(self.snapshot(), before)
+
+    def test_077_failure_publication_rolls_back_with_transaction(self):
+        self.prepare_probe()
+        before = self.snapshot()
+        LAB.sql(self.db, self.failure_sql(), "review_worker")
+        self.assertEqual(self.snapshot(), before)
+
+    def test_078_failure_publication_refuses_stale_attempt(self):
+        self.prepare_probe()
+        before = self.snapshot()
+        LAB.sql(self.db, self.failure_sql("a.attempt_seq:=a.attempt_seq+1;"), "review_worker")
+        self.assertEqual(self.snapshot(), before)
+
+    def test_079_failure_publication_refuses_foreign_transaction(self):
+        self.prepare_probe()
+        before = self.snapshot()
+        LAB.sql(self.db, self.failure_sql("a.transaction_id:='0';"), "review_worker")
+        self.assertEqual(self.snapshot(), before)
+
+    def test_080_failure_publication_refuses_changed_original(self):
+        self.prepare_probe()
+        before = self.snapshot()
+        LAB.sql(self.db, self.failure_sql("a.original:=a.original||' ';"), "review_worker")
+        self.assertEqual(self.snapshot(), before)
+
+    def test_081_failure_publication_refuses_substituted_binding(self):
+        self.prepare_probe()
+        before = self.snapshot()
+        LAB.sql(self.db, self.failure_sql("b:=jsonb_set(b,'{document}','\"00\"');"), "review_worker")
+        self.assertEqual(self.snapshot(), before)
+
+    def test_082_failure_publication_requires_worker_execute_privilege(self):
+        self.prepare_probe()
+        before = self.snapshot()
+        self.refused(LAB.sql(self.db, self.failure_sql(), "review_request", ok=False))
+        self.assertEqual(self.snapshot(), before)
+
+    def test_083_failure_audit_grant_drift_refuses_public_status(self):
+        self.run_poison()
+        LAB.sql(self.db, "grant select on mail.tesl_row_queue_conversion_failures to review_request")
+        before = self.snapshot()
+        self.refused(LAB.schema(self.db, self.release, "status", family=self.family, role="review_request"))
+        self.assertEqual(self.snapshot(), before)
+
+    def test_084_missing_failure_audit_refuses_public_status(self):
+        self.run_poison()
+        before = LAB.sql(self.db, "select row_to_json(s)::text from mail.tesl_schema_state s")
+        LAB.sql(self.db, "drop table mail.tesl_row_queue_conversion_failures")
+        self.refused(LAB.schema(self.db, self.release, "status", family=self.family, role="review_request"))
+        self.assertEqual(LAB.sql(self.db, "select row_to_json(s)::text from mail.tesl_schema_state s"), before)
+
+    def test_085_failed_dead_job_keeps_schedule_attempts_and_disposition(self):
+        self.run_poison(dead=True)
+        self.assertEqual(LAB.sql(self.db, "select schema_version||','||status||','||attempts||','||dead_reason||','||(next_attempt_at='2099-01-01'::timestamptz)::text from mail.tesl_jobs where id='old'"), "1,dead,7,attempts-exhausted,true")
+
+    def test_086_concurrent_workers_do_not_duplicate_failure_evidence(self):
+        self.run_poison(concurrent=True)
+        self.assertEqual(LAB.sql(self.db, "select claim_seq from mail.tesl_jobs where id='old'"), "1")
+        self.assertEqual(LAB.sql(self.db, "select count(*) from mail.tesl_row_queue_conversion_failures"), "1")
+
+    def test_087_same_bytes_on_another_job_need_independent_failure_evidence(self):
+        self.run_poison()
+        self.enqueue(identity="second-poison", payload={"oldText": "poison"})
+        process, log = LAB.start(self.db, self.release, self.family)
+        try:
+            LAB.wait(lambda: LAB.sql(self.db, "select count(*) from mail.tesl_row_queue_conversion_failures") == "2", process)
+        finally:
+            LAB.stop(process, log)
+        self.assertEqual(LAB.sql(self.db, "select count(distinct job_id) from mail.tesl_row_queue_conversion_failures"), "2")
+        self.assertEqual(LAB.sql(self.db, "select count(*) from mail.tesl_jobs where schema_version=1"), "2")
+
+
+class RemediationReview(ExecutionReview):
+    template = "review11_remediation_v1"
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.remedies = {}
+        for kind in ("recover", "discard"):
+            target = Path(tempfile.mkdtemp(prefix=kind+"-", dir=CONFIG.artifacts / cls.family))
+            shutil.copytree(CONFIG.artifacts / cls.family / cls.release / "source", target / "source")
+            module = "Schema.Mail.Migrate.Remediation"
+            text = f'''module {module} exposing [repair]
+import Tesl.Prelude exposing [String, Int]
+import Tesl.Migration exposing [QueueRepair, Migrated(..)]
+import Schema.Mail.Migrate.V2
+import Schema.Mail.V1
+import Schema.Mail.VCurrent
+'''
+            if kind == "recover":
+                text += '''repair = QueueRepair {
+ predecessor: Schema.Mail.Migrate.V2.migration
+ job: "Delivery"
+ revision: 1
+ on: "execution-failed"
+ migrate: recover
+ fixtures: [poisonFixture]
+}
+fn recover(old: Schema.Mail.V1.Delivery) -> Migrated Schema.Mail.VCurrent.Delivery =
+ Row (Schema.Mail.VCurrent.Delivery { body: old.text, priority: 17 })
+fn poisonFixture() -> Schema.Mail.V1.Delivery = Schema.Mail.V1.Delivery { text: "poison" }
+'''
+            else:
+                text += '''repair = QueueRepair {
+ predecessor: Schema.Mail.Migrate.V2.migration
+ job: "Delivery"
+ revision: 1
+ on: "unconverted"
+ discard: "Obsolete notifications from the retired release"
+}
+'''
+            file = target / "source/migrations/mail/remediation.tesl"
+            file.write_text(text)
+            entry = target / "source/app.tesl"
+            entry.write_text(entry.read_text().replace("module App exposing []", "module App exposing []\nimport " + module))
+            require(old.run([CONFIG.compiler, "agent-context", entry], env=LAB.env))
+            require(old.run([CONFIG.compiler, "--backend", "go", entry, "--out", target / "go"], env=LAB.env))
+            require(old.run(["go", "test", "-race", "-p", "1", "./..."], cwd=target / "go", env=LAB.env, timeout=180))
+            require(old.run(["go", "build", "-race", "-o", target / "app", "./cmd/app"], cwd=target / "go", env=LAB.env))
+            cls.remedies[kind] = target.name
+        # A recovery may make a genuine business rejection. Keep that distinct
+        # from its predecessor's execution failure and exercise a later repair.
+        for kind in ("recover-reject", "repair-after-recovery"):
+            parent = cls.remedies["recover"] if kind == "recover-reject" else cls.remedies["recover-reject"]
+            target = Path(tempfile.mkdtemp(prefix=kind+"-", dir=CONFIG.artifacts / cls.family))
+            shutil.copytree(CONFIG.artifacts / cls.family / parent / "source", target / "source")
+            entry = target / "source/app.tesl"
+            if kind == "recover-reject":
+                file = target / "source/migrations/mail/remediation.tesl"
+                file.write_text(file.read_text().replace("Row (Schema.Mail.VCurrent.Delivery { body: old.text, priority: 17 })", 'Reject "requires review"'))
+            else:
+                file = target / "source/migrations/mail/finish.tesl"
+                file.write_text('''module Schema.Mail.Migrate.Finish exposing [repair]
+import Tesl.Prelude exposing [String, Int]
+import Tesl.Migration exposing [QueueRepair, Migrated(..)]
+import Schema.Mail.Migrate.Remediation
+import Schema.Mail.V1
+import Schema.Mail.VCurrent
+repair = QueueRepair {
+ predecessor: Schema.Mail.Migrate.Remediation.repair
+ job: "Delivery"
+ revision: 2
+ migrate: finish
+ fixtures: [poisonFixture]
+}
+fn finish(old: Schema.Mail.V1.Delivery) -> Migrated Schema.Mail.VCurrent.Delivery =
+ Row (Schema.Mail.VCurrent.Delivery { body: old.text, priority: 29 })
+fn poisonFixture() -> Schema.Mail.V1.Delivery = Schema.Mail.V1.Delivery { text: "poison" }
+''')
+                entry.write_text(entry.read_text().replace("module App exposing []", "module App exposing []\nimport Schema.Mail.Migrate.Finish"))
+            require(old.run([CONFIG.compiler, "agent-context", entry], env=LAB.env))
+            require(old.run([CONFIG.compiler, "--backend", "go", entry, "--out", target / "go"], env=LAB.env))
+            require(old.run(["go", "test", "-race", "-p", "1", "./..."], cwd=target / "go", env=LAB.env, timeout=180))
+            require(old.run(["go", "build", "-race", "-o", target / "app", "./cmd/app"], cwd=target / "go", env=LAB.env))
+            cls.remedies[kind] = target.name
+
+    def run_remedy(self, kind, predicate):
+        release = self.remedies[kind]
+        require(LAB.install(self.db, release, self.family))
+        process, log = LAB.start(self.db, release, self.family)
+        try:
+            LAB.wait(predicate, process)
+        finally:
+            LAB.stop(process, log)
+
+    def test_097_remediation_corrected_converter_preserves_original_failure_and_retires(self):
+        self.run_poison()
+        failure = LAB.sql(self.db, "select row_to_json(f)::text from mail.tesl_row_queue_conversion_failures f")
+        self.run_remedy("recover", lambda: LAB.sql(self.db, "select schema_version=2 from mail.tesl_jobs where id='old'") == "t")
+        self.assertEqual(json.loads(LAB.sql(self.db, "select payload from mail.tesl_jobs where id='old'")), {"message": "poison", "priority": 17})
+        self.assertEqual(LAB.sql(self.db, "select row_to_json(f)::text from mail.tesl_row_queue_conversion_failures f"), failure)
+        require(LAB.schema(self.db, self.remedies["recover"], "contract", "V2", family=self.family))
+        require(LAB.install(self.db, self.remedies["recover"], self.family))
+        before = self.snapshot()
+        require(LAB.schema(self.db, self.remedies["recover"], "contract", "V2", family=self.family))
+        self.assertEqual(self.snapshot(), before)
+
+    def test_098_remediation_discard_handles_malformed_and_failed_old_jobs_only(self):
+        self.run_poison()
+        self.enqueue(identity="invalid", payload={"oldText": 42})
+        self.enqueue(identity="late-valid")
+        failure = LAB.sql(self.db, "select row_to_json(f)::text from mail.tesl_row_queue_conversion_failures f")
+        require(LAB.install(self.db, self.remedies["discard"], self.family))
+        status = json.loads(require(LAB.schema(self.db, self.remedies["discard"], "status", family=self.family, role="review_request")))["queues"]
+        self.assertEqual(status["discardPlans"][0]["pendingJobs"], 3)
+        self.run_remedy("discard", lambda: LAB.sql(self.db, "select count(*) from mail.tesl_row_queue_discards") == "3")
+        self.assertEqual(LAB.sql(self.db, "select count(*) from mail.tesl_jobs where schema_version=2"), "2")
+        self.assertEqual(LAB.sql(self.db, "select count(*) from mail.tesl_jobs where schema_version=1"), "0")
+        self.assertEqual(LAB.sql(self.db, "select row_to_json(f)::text from mail.tesl_row_queue_conversion_failures f"), failure)
+        require(LAB.schema(self.db, self.remedies["discard"], "contract", "V2", family=self.family))
+        before = self.snapshot()
+        require(LAB.install(self.db, self.remedies["discard"], self.family))
+        require(LAB.schema(self.db, self.remedies["discard"], "contract", "V2", family=self.family))
+        self.assertEqual(self.snapshot(), before)
+        self.refused(LAB.sql(self.db, "select mail.tesl_queue_enqueue(2,'Jobs','Delivery','invalid','{}')", "review_request", ok=False))
+
+    def test_099_remediation_discard_waits_for_live_claim_then_resumes_after_expiry(self):
+        self.run_poison()
+        claim = self.claim(1)
+        self.assertEqual(claim["job_id"], "old")
+        require(LAB.install(self.db, self.remedies["discard"], self.family))
+        before = LAB.sql(self.db, "select row_to_json(j)::text from mail.tesl_jobs j where id='old'")
+        process, log = LAB.start(self.db, self.remedies["discard"], self.family)
+        try:
+            time.sleep(.7)
+            self.assertIsNone(process.poll(), Path(log.name).read_text())
+            self.assertEqual(LAB.sql(self.db, "select count(*) from mail.tesl_row_queue_discards"), "0")
+            self.assertEqual(LAB.sql(self.db, "select row_to_json(j)::text from mail.tesl_jobs j where id='old'"), before)
+            self.refused(LAB.schema(self.db, self.remedies["discard"], "contract", "V2", family=self.family))
+            LAB.sql(self.db, "update mail.tesl_jobs set lease_until=clock_timestamp()-interval '1 second' where id='old'")
+            LAB.wait(lambda: LAB.sql(self.db, "select count(*) from mail.tesl_row_queue_discards") == "1", process)
+        finally:
+            LAB.stop(process, log)
+        require(LAB.schema(self.db, self.remedies["discard"], "contract", "V2", family=self.family))
+
+    def test_100_remediation_recovery_requires_original_failure_not_business_rejection(self):
+        self.run_poison()
+        self.enqueue(identity="rejected", payload={"oldText": ""})
+        self.run_remedy("recover", lambda: LAB.sql(self.db, "select count(*) from mail.tesl_row_queue_conversion_receipts where job_id in ('old','rejected')") == "2")
+        self.assertEqual(LAB.sql(self.db, "select schema_version||','||dead_reason from mail.tesl_jobs where id='rejected'"), "1,migration-rejected")
+        self.assertEqual(LAB.sql(self.db, "select count(*) from mail.tesl_row_queue_conversion_receipts where job_id='rejected'"), "1")
+        self.refused(LAB.schema(self.db, self.remedies["recover"], "contract", "V2", family=self.family))
+
+    def discard_sql(self, commit=False, mutate="", expected=True):
+        binding = LAB.sql(self.db, "select jsonb_build_object('document',encode(c.source_document,'hex'),'parent',nullif(c.parent_digest,''),'revision',c.revision,'family',r.family,'queue',c.queue,'job',c.job_type,'from',c.from_version,'to',c.to_version,'root',(select source_digest from mail.tesl_row_queue_conversion_staging where revision=0 and job_type=c.job_type),'policy',c.policy,'discardReason',c.discard_reason,'old',encode(c.old_contract,'hex'),'new',encode(c.new_contract,'hex')) from mail.tesl_row_queue_conversion_staging c cross join mail.tesl_row_versions r where c.policy='unconverted' and r.version=1")
+        uuid, digest = json.loads(LAB.sql(self.db, "select json_build_array(m.database_uuid::text,c.source_digest) from mail.tesl_schema_meta m cross join mail.tesl_row_queue_conversion_staging c where c.policy='unconverted'"))
+        return f"""begin; do $block$ declare a record; accepted boolean; b jsonb:={literal(binding)}::jsonb; ident uuid:={literal(uuid)}::uuid; d text:={literal(digest)}; begin
+ select * into a from mail.tesl_row_queue_conversion_begin(ident,d,'old',b);
+ {mutate}
+ accepted:=mail.tesl_row_queue_conversion_discard(ident,d,'old',a.attempt_seq,a.transaction_id,a.original,b);
+ if accepted is distinct from {'true' if expected else 'false'} then raise exception 'wrong discard publication result'; end if;
+ end $block$; {'commit' if commit else 'rollback'};"""
+
+    def prepare_discard(self):
+        self.run_poison()
+        require(LAB.install(self.db, self.remedies["discard"], self.family))
+
+    def test_101_remediation_discard_rollback_preserves_job_and_audits(self):
+        self.prepare_discard()
+        before = self.snapshot()
+        LAB.sql(self.db, self.discard_sql(), "review_worker")
+        self.assertEqual(self.snapshot(), before)
+
+    def test_102_remediation_discard_refuses_stale_attempt(self):
+        self.prepare_discard()
+        before = self.snapshot()
+        LAB.sql(self.db, self.discard_sql(mutate="a.attempt_seq:=a.attempt_seq+1;", expected=False), "review_worker")
+        self.assertEqual(self.snapshot(), before)
+
+    def test_103_remediation_discard_refuses_changed_original(self):
+        self.prepare_discard()
+        before = self.snapshot()
+        LAB.sql(self.db, self.discard_sql(mutate="a.original:=a.original||' ';", expected=False), "review_worker")
+        self.assertEqual(self.snapshot(), before)
+
+    def test_104_remediation_discard_refuses_request_role(self):
+        self.prepare_discard()
+        before = self.snapshot()
+        self.refused(LAB.sql(self.db, self.discard_sql(commit=True), "review_request", ok=False))
+        self.assertEqual(self.snapshot(), before)
+
+    def test_105_remediation_policy_tamper_refuses_worker_before_deletion(self):
+        self.prepare_discard()
+        LAB.sql(self.db, "update mail.tesl_row_queue_conversion_staging set discard_reason='substituted' where policy='unconverted'")
+        before = self.snapshot()
+        self.refused(LAB.schema(self.db, self.remedies["discard"], "worker", family=self.family))
+        self.assertEqual(self.snapshot(), before)
+
+    def test_106_remediation_invalid_policy_declarations_refuse(self):
+        for before, after in [('on: "unconverted"', 'on: "anything"'), ('revision: 1', 'revision: 3'),
+                              ('discard: "Obsolete notifications from the retired release"', 'discard: ""'),
+                              ('on: "unconverted"', 'on: "execution-failed"')]:
+            with self.subTest(after=after):
+                target = Path(tempfile.mkdtemp(prefix="invalid-remediation-", dir=CONFIG.output))
+                shutil.copytree(CONFIG.artifacts / self.family / self.remedies["discard"] / "source", target / "source")
+                file = target / "source/migrations/mail/remediation.tesl"
+                file.write_text(file.read_text().replace(before, after, 1))
+                result = old.run([CONFIG.compiler, "agent-context", target / "source/app.tesl"], env=LAB.env)
+                context = json.loads(result.stdout)
+                self.assertFalse(context["ok"], context)
+                self.assertTrue(any(d["code"].startswith("MIG") for d in context["diagnostics"]), context)
+
+    def test_107_remediation_recovery_fixture_must_reproduce_execution_failure(self):
+        target = Path(tempfile.mkdtemp(prefix="wrong-witness-", dir=CONFIG.output))
+        shutil.copytree(CONFIG.artifacts / self.family / self.remedies["recover"] / "source", target / "source")
+        file = target / "source/migrations/mail/remediation.tesl"
+        file.write_text(file.read_text().replace('text: "poison"', 'text: "healthy"'))
+        require(old.run([CONFIG.compiler, "agent-context", target / "source/app.tesl"], env=LAB.env))
+        require(old.run([CONFIG.compiler, "--backend", "go", target / "source/app.tesl", "--out", target / "go"], env=LAB.env))
+        result = old.run(["go", "test", "-race", "-p", "1", "./internal/teslqueueconversions"], cwd=target / "go", env=LAB.env, timeout=180)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("execution-failed outcome", result.stdout+result.stderr)
+
+    def test_108_remediation_competing_discard_cannot_replace_installed_recovery(self):
+        self.run_poison()
+        require(LAB.install(self.db, self.remedies["recover"], self.family))
+        before = self.snapshot()
+        self.refused(LAB.install(self.db, self.remedies["discard"], self.family))
+        self.assertEqual(self.snapshot(), before)
+
+    def test_109_remediation_discard_cannot_revive_after_retirement(self):
+        self.run_poison()
+        self.run_remedy("recover", lambda: LAB.sql(self.db, "select schema_version=2 from mail.tesl_jobs where id='old'") == "t")
+        require(LAB.schema(self.db, self.remedies["recover"], "contract", "V2", family=self.family))
+        before = self.snapshot()
+        self.refused(LAB.install(self.db, self.remedies["discard"], self.family))
+        self.assertEqual(self.snapshot(), before)
+
+    def test_110_remediation_audits_are_private_to_both_long_lived_roles(self):
+        self.prepare_discard()
+        self.run_remedy("discard", lambda: LAB.sql(self.db, "select count(*) from mail.tesl_row_queue_discards") == "1")
+        before = self.snapshot()
+        for role in ("review_request", "review_worker"):
+            self.refused(LAB.sql(self.db, "select * from mail.tesl_row_queue_discards", role, ok=False))
+            self.refused(LAB.sql(self.db, "delete from mail.tesl_row_queue_discards", role, ok=False))
+        self.assertEqual(self.snapshot(), before)
+
+    def test_111_remediation_business_repair_consumes_recovery_rejection(self):
+        self.run_poison()
+        self.run_remedy("recover-reject", lambda: LAB.sql(self.db, "select count(*) from mail.tesl_row_queue_conversion_receipts where job_id='old' and kind='migration-rejected'") == "1")
+        rejection = LAB.sql(self.db, "select row_to_json(r)::text from mail.tesl_row_queue_conversion_receipts r where job_id='old'")
+        self.refused(LAB.schema(self.db, self.remedies["recover-reject"], "contract", "V2", family=self.family))
+        self.run_remedy("repair-after-recovery", lambda: LAB.sql(self.db, "select schema_version=2 from mail.tesl_jobs where id='old'") == "t")
+        self.assertEqual(json.loads(LAB.sql(self.db, "select payload from mail.tesl_jobs where id='old'")), {"message": "poison", "priority": 29})
+        self.assertEqual(LAB.sql(self.db, "select row_to_json(r)::text from mail.tesl_row_queue_conversion_receipts r where job_id='old' and kind='migration-rejected'"), rejection)
+        self.assertEqual(LAB.sql(self.db, "select count(*) from mail.tesl_row_queue_conversion_failures"), "1")
+        require(LAB.schema(self.db, self.remedies["repair-after-recovery"], "contract", "V2", family=self.family))
+
+
+class TransitionReview(DatabaseCase):
+    def inventories(self):
+        return [json.loads(LAB.sql(self.db, f"select mail.tesl_queue_inventory_json({version})")) for version in (1, 2)]
+
+    def valid(self, before, after):
+        return LAB.sql(self.db, f"select mail.tesl_row_queue_transition_valid({literal(json.dumps(before))}::jsonb,{literal(json.dumps(after))}::jsonb,2)", "review_request") == "t"
+
+    def test_096_exact_transition_stays_valid_and_read_only(self):
+        before, after = self.inventories()
+        state = self.snapshot()
+        self.assertTrue(self.valid(before, after))
+        self.assertEqual(self.snapshot(), state)
+
+
+def transition_case(mutation):
+    def test(self):
+        before, after = self.inventories()
+        mutation(self, before, after)
+        state = self.snapshot()
+        self.assertFalse(self.valid(before, after))
+        self.assertEqual(self.snapshot(), state)
+    return test
+
+
+for number, (name, mutation) in enumerate([
+    ("missing_old_member", lambda self, before, after: before[0]["payloads"].clear()),
+    ("missing_target_member", lambda self, before, after: after[0]["payloads"].clear()),
+    ("target_job_substituted", lambda self, before, after: after[0]["payloads"][0].update(job="Other")),
+    ("target_queue_substituted", lambda self, before, after: after[0].update(queue="OtherQueue")),
+    ("source_contract_substituted", lambda self, before, after: before[0]["payloads"][0].update(contract="00")),
+    ("unchanged_cannot_consume_staged_converter", lambda self, before, after: after[0].update(payloads=before[0]["payloads"])),
+    ("foreign_staging_identity", lambda self, before, after: LAB.sql(self.db, "update mail.tesl_row_queue_conversion_staging set database_uuid=gen_random_uuid()")),
+    ("staged_source_inventory_substituted", lambda self, before, after: LAB.sql(self.db, "update mail.tesl_row_queue_conversion_staging set inventory_hash=repeat('a',64)")),
+], 88):
+    setattr(TransitionReview, f"test_{number:03}_transition_{name}", transition_case(mutation))
+
+
+def main():
+    global CONFIG, LAB
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--artifacts", type=Path, required=True)
+    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--compiler", type=Path, default=ROOT / "compiler/_build/default/bin/main.exe")
+    parser.add_argument("--build", action="store_true")
+    parser.add_argument("--match", default="")
+    CONFIG = parser.parse_args()
+    CONFIG.artifacts, CONFIG.output = CONFIG.artifacts.resolve(), CONFIG.output.resolve()
+    CONFIG.output.mkdir(parents=True, exist_ok=True)
+    old.CONFIG = CONFIG
+    LAB = old.Lab()
+    old.LAB = LAB
+    try:
+        if CONFIG.build:
+            for family, example in (("queue", "queue-three-upgrades"), ("row", "db-three-upgrades")):
+                require(old.run(["python3", ROOT / "example" / example / "run.py", "--compiler", CONFIG.compiler, "--output", CONFIG.artifacts / family, "--build-only"], timeout=1200))
+        LAB.prepare()
+        suite = unittest.TestSuite()
+        names = []
+        for cls in (CatalogReview, RoleReview, StagingReview, LifecycleReview, SourceReview, RowSourceReview, ExecutionReview, TransitionReview, RemediationReview):
+            for name in unittest.defaultTestLoader.getTestCaseNames(cls):
+                if cls is RemediationReview and name not in cls.__dict__:
+                    continue
+                if CONFIG.match in name:
+                    suite.addTest(cls(name))
+                    names.append(cls.__name__ + "." + name)
+        if not names:
+            parser.error("--match selected no cases")
+        (CONFIG.output / "inventory.json").write_text(json.dumps(names, indent=2)+"\n")
+        result = unittest.TextTestRunner(verbosity=2).run(suite)
+        provenance = {"git": require(old.run(["git", "rev-parse", "HEAD"], cwd=ROOT)),
+                      "compilerSha256": hashlib.sha256(CONFIG.compiler.read_bytes()).hexdigest(),
+                      "binaries": {str(p.relative_to(CONFIG.artifacts)): hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(CONFIG.artifacts.glob("*/*/app"))}}
+        (CONFIG.output / "provenance.json").write_text(json.dumps(provenance, indent=2)+"\n")
+        (CONFIG.output / "result.json").write_text(json.dumps({"run": result.testsRun, "failures": [t.id() for t, _ in result.failures], "errors": [t.id() for t, _ in result.errors], "skipped": result.skipped, "expectedFailures": [t.id() for t, _ in result.expectedFailures]}, indent=2)+"\n")
+        raise SystemExit(0 if result.wasSuccessful() else 1)
+    finally:
+        LAB.close()
+
+
+if __name__ == "__main__":
+    main()

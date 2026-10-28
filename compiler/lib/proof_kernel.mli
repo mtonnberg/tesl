@@ -103,3 +103,7 @@ val elaborated : evidence_origin -> proof_expr -> proven_fact
     intentionally no inverse — you cannot turn a [proof_expr] back into a
     [proven_fact] except through the admission rules above. *)
 val fact_of : proven_fact -> proof_expr
+
+(** Contextual Same rule. The caller must hold exact checked migration-site
+    authority. This derives from existing evidence, preserving all subjects. *)
+val migration_same_predicate : previous:string -> current:string -> proven_fact -> proven_fact

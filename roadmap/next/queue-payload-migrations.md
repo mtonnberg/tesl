@@ -41,9 +41,30 @@ deletion.
    change to an existing job type. Cross-version claiming may not ship before this —
    without a frozen history the compiler has no authoritative previous shape.
 2. **Migration surface (later):** `jobs:`, `Migrate`, `Rename`, `IgnoreOld`, fixtures,
-   the transforming retirement pass that re-encodes payloads.
+    the transforming retirement pass that re-encodes payloads.
+
+Current implementation (2026-10-13): fresh format-5 Worker histories support
+unchanged-payload restamping and consecutive checked `jobs:` transformations,
+business repair, execution-failure recovery and explicit audited discard. Latest-
+binary catch-up also supports ordered row-first / payload-second revisions with
+unchanged queue membership. Each row edge preserves payload contracts; each queue
+edge preserves settled entities. Simultaneous row/payload changes, membership
+rename/removal and the schema-level `IgnoreOld` constructor
+remain open. See [delivery status](../../dev-docs/migration-delivery-status.md),
+[lesson 95](../../example/learn/lesson95-retiring-unchanged-queue-payloads.md) and
+[lesson 96](../../example/learn/lesson96-typed-queue-conversion.md).
 
 ## Design sketch (to be specified)
+
+**Release sequencing decision (maintainer, 2026-10-12):** two ordered migrations
+are acceptable when row and queue-payload changes cannot share an edge. The
+compiler must explain which changes conflict, how to split/order them and what to
+run next. The sequence must be supported by deployment/catch-up, including retained
+jobs. The row-first / payload-second sequence now has a latest-binary PostgreSQL
+witness in `scripts/test-ordered-row-queue.py`; row retirement atomically restamps
+unchanged jobs, and the queue edge requires its settled row Contract. Simultaneous
+unrestricted row/queue transformation is not required for
+this release. See the [release requirements](../../dev-docs/migration-delivery-status.md#clarified-release-requirements-maintainer-2026-10-12).
 
 - Job record types are declared in a schema-kind module (the schema module itself, or
   a `jobs module` revision), so they are frozen, hashed and diffed like entities and
@@ -104,5 +125,27 @@ deletion.
 
 ## Open
 
-- Whether job types live in the schema module or their own module kind.
+### Recovery decision (maintainer direction, 2026-09-26)
+
+Rejected transformations retain their original payload and source version in
+quarantine and block retirement. Recovery uses a **typed repair migration**:
+an additional checked repair revision retries conversion of that historical
+payload into the target schema. It must not edit the already-deployed migration
+or relabel the quarantined payload as a current value. Dropping those jobs
+requires a separate explicit `IgnoreOld` migration decision, with the normal
+count and audit record; an operator discard command is not part of this choice.
+
+These bindings and typed business repairs now execute through the public Worker
+path. The subsequent maintainer decision to support both preservation and explicit
+loss is implemented through `QueueRepair`: `on: "execution-failed"` consumes exact
+source-bound execution-failure evidence; `on: "unconverted"` with a reason discards
+the named edge's remaining original jobs with immutable audit, including malformed
+bytes. Active claims and retirement obligations remain enforced. See
+[queue remediation](../../manual/queue-remediation.md) for the checked fixture and
+policy rules. This supersedes the earlier requirement to use `IgnoreOld` for that
+recovery decision; general schema membership changes still need their own surface.
+
+- The prerequisite implementation already places job records in the ordinary
+  versioned schema closure and lists them in `queueSchema`; no new module kind
+  is needed for this implementation.
 - Elaboration rules for `jobs:` in LANGUAGE-SPEC alongside `Migration`.

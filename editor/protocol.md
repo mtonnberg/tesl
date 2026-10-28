@@ -6,7 +6,7 @@ This document defines the protocol boundary between the Tesl compiler and editor
 
 Today that primarily means:
 
-- `tesl --check-json` from `compiler/bin/main.ml`
+- `tesl --check-json-v2` (and the preserved `--check-json` endpoint) from `compiler/bin/main.ml`
 - the Go Tesl LSP in `runtime/go/cmd/tesl-lsp`
 
 Future compiler implementations must match this contract before editor cutover.
@@ -15,13 +15,18 @@ Future compiler implementations must match this contract before editor cutover.
 
 Every compiler response used by editor tooling must include a top-level `version` integer.
 
-Current version:
+The original diagnostic endpoint and other query endpoints retain version 1:
 
 ```json
 { "version": 1, "diagnostics": [] }
 ```
 
 A consumer that receives an unknown version must treat that as a protocol mismatch, not as a silently accepted payload.
+`--check-json-v2` explicitly selects diagnostic protocol 2. The current Go compiler
+client and LSP use it; a custom older compiler must be updated to serve that
+endpoint. An invalid rich response never silently falls back to version 1. The
+retained-session envelope stays at version 1; its nested diagnostic result is
+version 2, and whole-snapshot invalidation covers implicit migration history.
 
 ## Diagnostic response shape
 
@@ -35,6 +40,95 @@ The `check`/`--check-json` path returns a top-level object:
 ```
 
 `diagnostics` must be an array of objects.
+
+## Diagnostic protocol 2
+
+`--check-json-v2` checks the same source, with the same diagnostic codes and exit
+status, but returns `{"version":2,"diagnostics":[...]}`. Every diagnostic retains
+the base fields below and adds:
+
+- `relatedInformation`: an array of `{file, start, end, message}` locations.
+- `actionClass`: `"mechanical"`, `"suggested"`, `"decision"`, or `null`.
+- `needsConfirmation`: a boolean; decisions require confirmation.
+- `fixAllEligible`: a separate boolean. A mechanical multi-file command is never
+  eligible. Currently only verified import corrections of at most eight short
+  ranges can opt in; other fixes retain explicit quick-fix presentation.
+- `command`: `null` or `{title, command, arguments}`. The bounded supported shape
+  is `tesl.generateMigration` with one `{entryFile, database?}` selection object;
+  `entryFile` is an absolute canonical Tesl path. Current producers leave this
+  null until the guarded multi-file editor command is available.
+- `codeDescription`: `null` or `{href}`, an absolute HTTPS manual link.
+
+The compiler owns the action classification. The editor never derives safety from
+message text or a diagnostic-code list. Ambiguous MIG002/MIG020/MIG026 errors
+default to decisions until a producer establishes a unique mechanical repair.
+The rich transport rejects duplicate object keys (including escaped equivalents
+and ASCII/Unicode case-fold collisions), invalid UTF-8, inconsistent action flags, unsupported command shapes
+and JSON nested beyond 64 levels. Documentation links must use HTTPS.
+The rich primary message excludes the textual related-location suffix retained
+by the legacy diagnostic endpoint.
+
+The LSP publishes imported-file diagnostics by URI and converts every related
+span from byte columns to UTF-16 using that file's open buffer, or its saved
+bytes. A missing file can be linked at its zero origin; other absent or invalid
+ranges refuse rather than guessing. Source snapshot paths are remapped in related
+locations and command selections. Code descriptions and action metadata survive
+publication. Decisions and confirmation-requiring actions are never exposed as
+ordinary source quick fixes. The generation/decision workflow remains separate
+editor work.
+
+Clients declaring `workspace.workspaceEdit.documentChanges` receive
+`source.fixAll.tesl`. An explicit request for that kind or its `source.fixAll`/
+`source` parents rechecks all current editor buffers; client-supplied diagnostic
+fixes are not authority. Only producer-marked mechanical, fix-all-eligible source
+edits without confirmation or commands participate. The initial provider accepts
+explicit replacement ranges, including atomic compound fixes. It validates byte
+boundaries before converting to UTF-16, removes duplicates and no-op edits, and
+refuses conflicting batches. A malformed compound member discards the whole
+compound fix. The result is one `TextDocumentEdit` pinned to the checked document
+version, and never includes imported-file edits. Requests are cancellable and
+late results are discarded. Without versioned edit support, no fix-all is offered.
+
+## Migration source preview commands
+
+When the compiler supports guarded migration previews, the LSP advertises two
+`workspace/executeCommand` commands. Both are read-only; source application and
+the Change Schema UI remain under development.
+
+- `tesl.generateMigration` takes one argument object with absolute `entryFile`
+  and `projectRoot` paths, optional `database`, and optional `newRevision` boolean.
+  The server supplies all open Tesl buffers within that project, including their
+  exact versions. The compiler chooses and validates the migration history.
+- `tesl.migrationPreviewFile` takes one argument object with `previewId` and an
+  exact `path` from the preview's file list. It returns retained preimage/proposal
+  bytes; it never substitutes current disk contents.
+
+Successful generation returns version 1, kind `migration-editor-preview`,
+`ok: true`, `previewId`, selected `database`/`entryFile`, `operation`, `compilable`,
+`files` and `diagnostics`. File entries contain `path`, `creates` and nullable
+`documentVersion`. Diagnostics retain the compiler's application diagnostic
+envelope and logical paths, including future files. A valid proposal with migration
+holes has `ok: true` and `compilable: false`. Compiler refusal returns `ok: false`
+and its structured `errors`, including database candidates when ambiguous.
+
+File retrieval returns version 1, kind `migration-editor-file`, `path`, `before`
+and `after` strings. `creates` in the summary distinguishes a new file from an
+existing empty file. Only the latest preview handle remains valid; starting a new
+generation expires the previous handle even if the new generation fails or is
+cancelled. Unknown handles and paths return invalid-parameters errors. Responses
+are limited to 4 MiB of encoded JSON. Large file content is refused without a
+partial response. Clients must request a new preview after any source changes
+before a future application operation; viewing a retained diff establishes no
+authority to overwrite current contents.
+
+The session transport supports bounded server-to-client requests for the upcoming
+apply workflow. Replies enter the same ordered, bounded queue as document
+notifications, and their continuations run on the document event loop. Request
+identities are separate in each direction; duplicate and expired replies cannot
+complete another request. Each request has a deadline and is released on session
+exit. A timeout or disconnect means the request outcome is unknown, not that the
+client left its buffers untouched. Migration source application must reconcile
+that outcome through its guarded inverse and journal before reporting restoration.
 
 ## Definition response shape
 
@@ -317,10 +411,27 @@ All `loc` objects use the shape `{ "file", "start_line", "start_col", "end_line"
 with **0-based** line/column coordinates (matching LSP positions). The process exits non-zero and
 emits no JSON on a parse error; consumers must treat that as "no snapshot available".
 
+## Formatting response shape
+
+`--format-json <file>` returns `version: 1`, `formatted` (the complete source),
+`readOnly` (boolean) and `reason` (null for mutable source, a nonempty string for
+read-only source). Frozen snapshots and completed migration namespaces preserve
+the input bytes exactly. Canonical ownership paths and the existing frozen-source
+metadata protocol determine protection, including private helper modules.
+
+The editor supplies every open document in its bounded source snapshot. An unsaved
+frozen sibling snapshot or completed migration root therefore protects helper
+buffers. Formatting currently bypasses retained-query caching because ownership
+can depend on siblings outside the import graph. CLI `--fmt` uses the same guard
+and refuses a proposed frozen rewrite with MIG013. `--fmt-check` exempts frozen
+bytes from style changes; source-integrity diagnostics remain independent.
+
 ## LSP methods backed by the above flags
 
 The Go LSP advertises and implements these read-only methods.
-They consume the shared compiler query contracts below. Source queries use retained sessions by default; formatting still uses an isolated `--fmt` call.
+They consume the shared compiler query contracts below. Source queries use retained
+sessions by default; formatting uses a complete bounded shadow project containing
+all open buffers, including sibling snapshots and migration roots.
 
 - `textDocument/documentSymbol` — flat `SymbolInformation[]` built from `--semantic-json`
   (functions/checks/handlers/workers → Function, records → Struct + Field children, ADTs → Enum +
@@ -330,9 +441,9 @@ They consume the shared compiler query contracts below. Source queries use retai
   never widened to a whole declaration body or to end-of-line, which previously over-painted the
   minimap. Legend: tokenTypes `["function","type","enum","enumMember","property","variable"]`,
   tokenModifiers `["declaration"]`.
-- `textDocument/formatting` — runs `--fmt` on a temp copy of the (possibly unsaved) buffer and
-  returns a single full-document `TextEdit`. Returns `[]` when the buffer is already canonical or
-  when `--fmt` fails (e.g. parse error), never a partial edit.
+- `textDocument/formatting` — queries `--format-json` and returns a single
+  full-document `TextEdit`. Returns `[]` for unchanged or frozen source, and on
+  query failure. It never writes workspace files or saves another buffer.
 - `textDocument/inlayHint` — inferred `let` types from `--local-bindings-json`. A hint `: T` is
   emitted after the binding name only for `let <name> = …` forms WITHOUT an explicit annotation;
   parameters and already-annotated lets are skipped. Parameter-name hints are not derivable from the

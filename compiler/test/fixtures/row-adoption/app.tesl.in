@@ -1,0 +1,60 @@
+module App exposing []
+import Tesl.Prelude exposing [String, List]
+import Tesl.App exposing [App]
+import Tesl.Env exposing [envInt, envRead]
+import Tesl.DB exposing [dbRead, dbWrite]
+import Tesl.Database exposing [Database, Postgres, PostgresConfig, MigrationConfig, MigrationTopology(..), TcpConnection]
+import Schema.Notes.VCurrent exposing [Note, makeNote]
+database Main = Database {
+ schema: Schema.Notes.VCurrent
+ migrations: Schema.Notes.Migrate
+ backend: Postgres (PostgresConfig {
+  namespace: "notes"
+  migrations: MigrationConfig {
+   topology: Worker
+   controlOwner: env "ROW_CONTROL_OWNER"
+   requestRole: env "ROW_REQUEST_ROLE"
+   workerRole: env "ROW_WORKER_ROLE"
+   ddlConnection: env "ROW_DDL_CONNECTION"
+  }
+  dbName: env "ROW_DB_NAME"
+  user: env "ROW_DB_USER"
+  password: env "ROW_DB_PASSWORD"
+  connection: TcpConnection { host: env "ROW_DB_HOST", port: envInt "ROW_DB_PORT" 5432 }
+ })
+}
+api NotesApi {
+ get "/health" -> String
+ get "/all" -> List Note
+ post "/one" -> String
+ post "/two" -> String
+ post "/three" -> String
+ put "/all" -> String
+ put "/one" -> String
+}
+handler get health() -> String = "ready"
+handler get all() -> List Note requires [dbRead Note] = select note from Note order note.id asc
+handler post addOne() -> String requires [dbWrite Note] =
+ let rows = [makeNote "one"]
+ let _ = insertMany rows in Note
+ "created"
+handler post addTwo() -> String requires [dbWrite Note] =
+ let rows = [makeNote "two"]
+ let _ = insertMany rows in Note
+ "created"
+handler post addThree() -> String requires [dbWrite Note] =
+ let rows = [makeNote "three"]
+ let _ = insertMany rows in Note
+ "created"
+handler put editAll() -> String requires [dbWrite Note] =
+ update note in Note
+  set note.memo = "all-edited"
+ "edited"
+handler put editOne() -> String requires [dbWrite Note] =
+ update note in Note
+  where note.id == "one"
+  set note.memo = "edited"
+ "edited"
+server NotesServer for NotesApi { health, all, addOne, addTwo, addThree, editAll, editOne }
+main() -> App requires [dbRead Note, dbWrite Note, envRead] =
+ App { database: Main, api: NotesServer, port: envInt "ROW_PORT" 8093 }

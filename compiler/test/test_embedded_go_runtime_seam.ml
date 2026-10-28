@@ -17,7 +17,9 @@
 
     - every embedded file is byte-identical to `runtime/go/teslrt/<name>` on disk;
     - every non-test `.go` file under `runtime/go/teslrt` is embedded (a file the generator's
-      list forgot would otherwise be a runtime the source tree has and users do not). *)
+      list forgot would otherwise be a runtime the source tree has and users do not);
+    - every embedded file is an explicit rule dependency, so changing only that file
+      invalidates the snapshot without waiting for an unrelated generator change. *)
 
 let ( // ) = Filename.concat
 
@@ -82,6 +84,67 @@ let test_embedded_list_has_no_test_files () =
     failf "test files must not be embedded into user modules: %s"
       (String.concat ", " (List.map fst tests))
 
+(* Read only explicit dependency atoms: a path in a comment or generator action
+   cannot make Dune observe changes to that input. This small lexer also permits
+   quoted atoms and nested dependency forms without treating their punctuation as
+   part of a filename. *)
+type dune_token = Open | Close | Atom of string
+
+let dependency_atoms source =
+  let length = String.length source in
+  let separator = function ' ' | '\t' | '\r' | '\n' | '(' | ')' | ';' | '"' -> true | _ -> false in
+  let rec tokens i acc =
+    if i = length then List.rev acc else match source.[i] with
+    | ' ' | '\t' | '\r' | '\n' -> tokens (i + 1) acc
+    | ';' ->
+      let next = match String.index_from_opt source i '\n' with Some n -> n | None -> length in
+      tokens next acc
+    | '(' -> tokens (i + 1) (Open :: acc)
+    | ')' -> tokens (i + 1) (Close :: acc)
+    | '"' ->
+      let value = Buffer.create 32 in
+      let rec quoted j =
+        if j = length then failf "unterminated quoted Dune dependency atom"
+        else match source.[j] with
+        | '"' -> tokens (j + 1) (Atom (Buffer.contents value) :: acc)
+        | '\\' when j + 1 < length -> Buffer.add_char value source.[j + 1]; quoted (j + 2)
+        | c -> Buffer.add_char value c; quoted (j + 1) in
+      quoted (i + 1)
+    | _ ->
+      let j = ref (i + 1) in
+      while !j < length && not (separator source.[!j]) do incr j done;
+      tokens !j (Atom (String.sub source i (!j - i)) :: acc) in
+  let rec collect stack acc = function
+    | [] -> if stack = [] then List.rev acc else failf "unclosed Dune dependency form"
+    | Open :: Atom "deps" :: rest -> collect (true :: stack) acc rest
+    | Open :: rest -> collect (false :: stack) acc rest
+    | Close :: rest ->
+      (match stack with _ :: parent -> collect parent acc rest | [] -> failf "unmatched Dune closing parenthesis")
+    | Atom atom :: rest -> collect stack (if List.mem true stack then atom :: acc else acc) rest in
+  collect [] [] (tokens 0 [])
+
+let missing_runtime_dependencies names source =
+  let declared = dependency_atoms source in
+  (* Dune source paths use '/', including when this test runs on Windows. *)
+  List.filter (fun name -> not (List.mem ("../../../../runtime/go/teslrt/" ^ name) declared)) names
+
+let test_every_embedded_file_is_rule_dependency () =
+  let rule = repo_root () // "compiler" // "lib" // "go_runtime" // "embedded" // "dune" in
+  let missing = missing_runtime_dependencies (List.map fst Embedded_go_runtime.files) (read_file rule) in
+  if missing <> [] then
+    failf "embedded runtime files missing explicit Dune rule dependencies (edits would not regenerate the snapshot): %s"
+      (String.concat ", " missing)
+
+let test_dependency_check_ignores_non_dependencies () =
+  let source = {|
+; (deps ../../../../runtime/go/teslrt/missing.go)
+(rule
+ (deps "../../../../runtime/go/teslrt/present.go")
+ (action (cat ../../../../runtime/go/teslrt/missing.go)))
+|} in
+  Alcotest.(check (list string)) "comments and action inputs do not repair an omitted dependency"
+    ["missing.go"] (missing_runtime_dependencies ["present.go"; "missing.go"] source)
+
 let test_generator_emits_binary_snapshot () =
   let executable = Unix.realpath Sys.executable_name in
   let generator = Filename.dirname executable // ".." // "gen" // "gen_go_runtime.exe" in
@@ -107,6 +170,10 @@ let () =
           test_every_runtime_file_is_embedded;
         Alcotest.test_case "no test file is embedded" `Quick
           test_embedded_list_has_no_test_files;
+        Alcotest.test_case "every embedded input invalidates the snapshot" `Quick
+          test_every_embedded_file_is_rule_dependency;
+        Alcotest.test_case "comments and actions cannot impersonate dependencies" `Quick
+          test_dependency_check_ignores_non_dependencies;
         Alcotest.test_case "generator output is byte-stable on native hosts" `Quick
           test_generator_emits_binary_snapshot;
       ]);

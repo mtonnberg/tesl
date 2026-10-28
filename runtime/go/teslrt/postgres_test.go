@@ -195,8 +195,17 @@ func TestPgBigintRefusesWhatDoesNotFit(t *testing.T) {
 // ── Against a live cluster ────────────────────────────────────────────────────
 //
 // Same environment the Racket Postgres tests read (tests/private/postgres-test-support.rkt), so
-// one cluster started by ci.sh serves both backends. Absent, these skip: a developer without a
-// server still gets the half above.
+// one cluster started by ci.sh serves both backends. A developer without a server still gets
+// the half above. Mandatory migration gates set TESL_MIGRATION_TEST_REQUIRE_POSTGRES=1 so a
+// missing or unavailable cluster fails the gate instead of silently skipping it.
+
+func postgresTestUnavailable(t *testing.T, format string, args ...any) {
+	t.Helper()
+	if os.Getenv("TESL_MIGRATION_TEST_REQUIRE_POSTGRES") == "1" {
+		t.Fatalf("required PostgreSQL unavailable: "+format, args...)
+	}
+	t.Skipf(format, args...)
+}
 
 func liveCluster(t *testing.T) PostgresConfig {
 	t.Helper()
@@ -204,11 +213,11 @@ func liveCluster(t *testing.T) PostgresConfig {
 	port := os.Getenv("TESL_TEST_POSTGRES_SHARED_PORT")
 	user := os.Getenv("TESL_TEST_POSTGRES_SHARED_USER")
 	if host == "" || port == "" || user == "" {
-		t.Skip("no shared PostgreSQL cluster configured (TESL_TEST_POSTGRES_SHARED_*)")
+		postgresTestUnavailable(t, "no shared PostgreSQL cluster configured (TESL_TEST_POSTGRES_SHARED_*)")
 	}
 	parsed, err := strconv.Atoi(port)
-	if err != nil {
-		t.Skipf("TESL_TEST_POSTGRES_SHARED_PORT is not a port: %v", err)
+	if err != nil || parsed < 1 || parsed > 65535 {
+		postgresTestUnavailable(t, "TESL_TEST_POSTGRES_SHARED_PORT must be a port from 1 to 65535, got %q", port)
 	}
 	database := os.Getenv("TESL_TEST_POSTGRES_SHARED_ADMIN_DATABASE")
 	if database == "" {
@@ -222,15 +231,23 @@ func liveCluster(t *testing.T) PostgresConfig {
 
 // waitForCluster bounds the wait for a cluster that is still starting: ci.sh boots one in the
 // background and reaches the Go gates before it is accepting connections, so a test that
-// connected immediately would fail on TIMING rather than on behaviour. A cluster that never
-// answers is a skip, not a failure — the same reading as one that was never configured, and
-// ci.sh reports a cluster that failed to start on its own.
+// connected immediately would fail on TIMING rather than on behaviour. Required gates fail
+// if the cluster never answers; optional local tests skip.
 func waitForCluster(t *testing.T, config PostgresConfig) {
 	t.Helper()
-	deadline := time.Now().Add(20 * time.Second)
+	waitForClusterWithin(t, config, 20*time.Second)
+}
+
+func waitForClusterWithin(t *testing.T, config PostgresConfig, budget time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(budget)
 	var lastErr error
 	for time.Now().Before(deadline) {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		attemptDeadline := time.Now().Add(2 * time.Second)
+		if deadline.Before(attemptDeadline) {
+			attemptDeadline = deadline
+		}
+		ctx, cancel := context.WithDeadline(context.Background(), attemptDeadline)
 		connection, err := pgx.Connect(ctx, postgresDSN(config))
 		if err == nil {
 			lastErr = connection.Ping(ctx)
@@ -243,9 +260,11 @@ func waitForCluster(t *testing.T, config PostgresConfig) {
 			lastErr = err
 			cancel()
 		}
-		time.Sleep(500 * time.Millisecond)
+		if remaining := time.Until(deadline); remaining > 0 {
+			time.Sleep(min(500*time.Millisecond, remaining))
+		}
 	}
-	t.Skipf("PostgreSQL at %s:%d is not accepting connections: %v", config.Host, config.Port,
+	postgresTestUnavailable(t, "PostgreSQL at %s:%d is not accepting connections: %v", config.Host, config.Port,
 		lastErr)
 }
 

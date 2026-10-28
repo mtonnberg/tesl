@@ -33,16 +33,23 @@ jobs:
   gate:
     name: Authoritative gate (./ci.sh)
     runs-on: ubuntu-latest
-    # ci.sh caps its own sub-phases; give the whole gate ample headroom.
-    timeout-minutes: 60
+    # Includes the full migration gate plus compiler, corpus and integration gates.
+    # Tests retain operation/progress assertions; phase timings are retained below.
+    timeout-minutes: 360
     env:
       # GitHub Actions already sets CI=true; ci.sh reads CI to pick a temp
       # PostgreSQL data root (TESL_TEST_USE_TEMP_PG). Set it explicitly so the
       # behaviour is not dependent on the runner's implicit defaults.
       CI: "true"
+      TESL_CI_JOBS: '2'
+      GOMAXPROCS: '2'
+      GOFLAGS: '-p=2'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # The latency gate independently builds its pinned baseline commit.
+          fetch-depth: 0
 
       - name: Install Nix (flakes enabled)
         uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
@@ -57,7 +64,11 @@ jobs:
       # runs `dune build` + `dune test` as its first two phases, so we invoke it
       # directly — its non-zero exit fails the job (no `|| true`).
       - name: Run the authoritative gate
+        env:
+          TESL_MIGRATION_TEST_OUTPUT: ${{ runner.temp }}/migration-evidence
         run: |
+          # Variables in the quoted script expand inside the Nix shell.
+          # shellcheck disable=SC2016
           nix develop --command bash -lc '
             set -euo pipefail
             export TESL_REPO_ROOT="$PWD"
@@ -67,7 +78,7 @@ jobs:
             # hijacks ci.sh into "reuse external cluster" mode. Unset them so
             # ci.sh manages its own robust temp cluster (its documented design).
             unset TESL_POSTGRES_HOST TESL_POSTGRES_PORT TESL_POSTGRES_USER TESL_POSTGRES_PASSWORD
-            ./ci.sh
+            ./ci.sh 2>&1 | tee "$RUNNER_TEMP/authoritative-ci.log"
           '
 
       - name: Export verified content from the checked revision
@@ -79,3 +90,13 @@ jobs:
           name: tesl-content-${{ github.sha }}
           path: ${{ runner.temp }}/tesl-content.json
           if-no-files-found: error
+
+      - name: Retain CI and migration failure diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: authoritative-migrations-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/authoritative-ci.log
+            ${{ runner.temp }}/migration-evidence
+          if-no-files-found: warn

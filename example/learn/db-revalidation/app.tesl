@@ -1,0 +1,54 @@
+module App exposing []
+import Tesl.Prelude exposing [String, List]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.App exposing [App]
+import Tesl.Env exposing [envInt, envRead]
+import Tesl.DB exposing [dbRead, dbWrite]
+import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
+import Schema.Notes.VCurrent exposing [Note, tryTitle]
+database Main = Database {
+  schema: Schema.Notes.VCurrent
+  migrations: Schema.Notes.Migrate
+  backend: Postgres (PostgresConfig { namespace: "notes", dbName: "unused", user: "unused", password: "unused", connection: TcpConnection { host: "127.0.0.1", port: 5432 } })
+}
+api NotesApi {
+  get "/health" -> String
+  get "/all" -> List Note
+  post "/one" -> String
+  put "/invalid" -> String
+  put "/repair" -> String
+  put "/touch" -> String
+}
+handler get health() -> String = "ready"
+handler get all() -> List Note requires [dbRead Note] = select note from Note order note.title asc
+handler post one() -> String requires [dbWrite Note] =
+  case tryTitle "valid" of
+    Nothing -> "refused"
+    Something title ->
+      let rows = [Note { id: "one", title: title, memo: "base" }]
+      let _ = insertMany rows in Note
+      "created"
+handler put invalid() -> String requires [dbWrite Note] =
+  case tryTitle "" of
+    Nothing -> "refused"
+    Something title ->
+      update note in Note
+        where note.id == "one"
+        set note.title = title
+      "invalidated"
+handler put repair() -> String requires [dbWrite Note] =
+  case tryTitle "repaired" of
+    Nothing -> "refused"
+    Something title ->
+      update note in Note
+        where note.id == "one"
+        set note.title = title
+      "repaired"
+handler put touch() -> String requires [dbWrite Note] =
+  update note in Note
+    where note.id == "one"
+    set note.memo = "touched"
+  "touched"
+server NotesServer for NotesApi { health, all, one, invalid, repair, touch }
+main() -> App requires [dbRead Note, dbWrite Note, envRead] =
+  App { database: Main, api: NotesServer, port: envInt "ROW_PORT" 8093 }

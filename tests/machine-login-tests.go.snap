@@ -972,14 +972,14 @@ func TestTesl1(teslT *testing.T) {
 //line machine-login-tests.tesl:629
 					teslT.Fatal("Tesl expectation failed")
 				}
-//line machine-login-tests.tesl:633
-				teslExpectFailure(teslT, func() {
-					_ = installationForVerifiedTag("install-a", "00000000000000000000000000000000000000000000000000000000000000ff")
-				})
 			default:
 				panic("unreachable: checker guarantees case exhaustiveness")
 			}
 		}
+//line machine-login-tests.tesl:633
+		teslExpectFailure(teslT, func() {
+			_ = installationForVerifiedTag("install-a", "00000000000000000000000000000000000000000000000000000000000000ff")
+		})
 	}
 }
 

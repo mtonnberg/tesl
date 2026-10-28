@@ -1,0 +1,113 @@
+module App exposing []
+import Tesl.Prelude exposing [String, List]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.Env exposing [env, envInt, envRead]
+import Tesl.DB exposing [dbRead, dbWrite]
+import Tesl.Database exposing [
+  Database,
+  Postgres,
+  PostgresConfig,
+  TcpConnection,
+  MigrationConfig,
+  Worker,
+]
+import Tesl.App exposing [App]
+import Schema.Notes.VCurrent exposing [Note, makeNote, makeMetadata, tryTitle]
+
+database Main = Database {
+schema: Schema.Notes.VCurrent
+migrations: Schema.Notes.Migrate
+backend: Postgres (PostgresConfig {
+  namespace: "notes"
+  dbName: env "DEMO_DB"
+  user: env "DEMO_USER"
+  password: ""
+  connection: TcpConnection { host: env "DEMO_HOST", port: envInt "DEMO_PORT" 5432 }
+  migrations: MigrationConfig {
+  topology: Worker
+  controlOwner: env "DEMO_OWNER"
+  requestRole: env "DEMO_REQUEST"
+  workerRole: env "DEMO_WORKER"
+  ddlConnection: env "DEMO_DDL"
+  }
+})
+}
+
+api NotesApi {
+get "/health" -> String
+get "/notes" -> List Note
+post "/seed" -> String
+post "/late" -> String
+post "/current" -> String
+put "/edit" -> String
+put "/block" -> String
+put "/repair" -> String
+put "/title-block" -> String
+put "/title-repair" -> String
+put "/title-edit" -> String
+}
+handler get health() -> String = "ready"
+handler get notes() -> List Note requires [dbRead Note] = select note from Note order note.id asc
+handler post seedNote() -> String requires [dbWrite Note] =
+  case makeNote "one" "kept" of
+    Nothing -> "invalid"
+    Something note ->
+      let rows = [note]
+      let _ = insertMany rows in Note
+      "created"
+handler post lateNote() -> String requires [dbWrite Note] =
+  case makeNote "late" "late" of
+    Nothing -> "invalid"
+    Something note ->
+      let rows = [note]
+      let _ = insertMany rows in Note
+      "created"
+handler post currentNote() -> String requires [dbWrite Note] =
+  case makeNote "current" "current" of
+    Nothing -> "invalid"
+    Something note ->
+      let rows = [note]
+      let _ = insertMany rows in Note
+      "created"
+handler put edit() -> String requires [dbWrite Note] =
+  update note in Note
+    where note.id == "one"
+    set note.metadata = makeMetadata "edited"
+  "edited"
+handler put block() -> String requires [dbWrite Note] =
+  update note in Note
+    where note.id == "one"
+    set note.metadata = makeMetadata "blocked"
+  "blocked"
+handler put repair() -> String requires [dbWrite Note] =
+  update note in Note
+    where note.id == "one"
+    set note.metadata = makeMetadata "repaired"
+  "repaired"
+handler put titleBlock() -> String requires [dbWrite Note] =
+  case tryTitle "blocked" of
+    Nothing -> "invalid"
+    Something title ->
+      update note in Note
+        where note.id == "one"
+        set note.title = title
+      "blocked"
+handler put titleRepair() -> String requires [dbWrite Note] =
+  case tryTitle "repaired" of
+    Nothing -> "invalid"
+    Something title ->
+      update note in Note
+        where note.id == "one"
+        set note.title = title
+      "repaired"
+handler put titleEdit() -> String requires [dbWrite Note] =
+  case tryTitle "edited" of
+    Nothing -> "invalid"
+    Something title ->
+      update note in Note
+        where note.id == "one"
+        set note.title = title
+      "edited"
+server NotesServer for NotesApi { health, notes, seedNote, lateNote, currentNote, edit, block, repair, titleBlock, titleRepair, titleEdit }
+main() -> App requires [dbRead Note, dbWrite Note, envRead] =
+App { database: Main, api: NotesServer, port: envInt "DEMO_HTTP_PORT" 8097 }

@@ -1,0 +1,11 @@
+module NotesSchema.VCurrent exposing [Note]
+
+import Tesl.Prelude exposing [String, Int]
+import Tesl.Maybe exposing [Maybe]
+
+entity Note table "notes" primaryKey id {
+  id: String
+  title: String
+  label: Maybe String
+  score: Maybe Int
+}

@@ -585,6 +585,45 @@ test "greet" {
     | _ -> Alcotest.fail "expected DTest"
   )
 
+let test_test_case_arm_boundaries () =
+  List.iter (fun body ->
+    let src = "module Foo exposing []\ntest \"conversion\" {\n  case value of\n" ^ body ^
+      "    Reject reason -> expect reason == \"rejected\"\n  expect True\n}\n" in
+    assert_ok src (fun m -> match first_decl m with
+      | DTest {stmts=[TsCase {arms=[first;second];_};TsExpect _];_} ->
+        Alcotest.(check int) "both success assertions stay in first arm" 2 (List.length first.ts_body);
+        Alcotest.(check int) "rejection assertion stays in second arm" 1 (List.length second.ts_body);
+        List.iter (function TsExpect _ -> () | _ -> Alcotest.fail "pattern consumed as a test expression") first.ts_body
+      | _ -> Alcotest.fail "case swallowed another arm or following assertion"))
+    ["    Row row ->\n      expect row.id == \"one\"\n      expect row.text == \"kept\"\n";
+     "    Row row ->\n      expect row.id == \"one\"\n\n      # retain all assertions\n      expect row.text == \"kept\"\n";
+     "    Row row -> {\n      expect row.id == \"one\"\n      expect row.text == \"kept\"\n    }\n"]
+
+let test_test_nested_case_arm_boundaries () =
+  let src = {|module Foo exposing []
+test "nested conversion" {
+  case value of
+    Row row ->
+      case row.optional of
+        Something text ->
+          expect text == "kept"
+          expect True
+        Nothing -> expect False
+      expect row.id == "one"
+    Reject reason -> expect reason == "rejected"
+  expect True
+}
+|} in
+  assert_ok src (fun m -> match first_decl m with
+    | DTest {stmts=[TsCase {arms=[first;second];_};TsExpect _];_} ->
+      Alcotest.(check int) "outer reject retained" 1 (List.length second.ts_body);
+      (match first.ts_body with
+       | [TsCase {arms=[present;absent];_};TsExpect _] ->
+         Alcotest.(check int) "nested present assertions" 2 (List.length present.ts_body);
+         Alcotest.(check int) "nested absent assertion" 1 (List.length absent.ts_body)
+       | _ -> Alcotest.fail "nested case swallowed its sibling or trailing assertion")
+    | _ -> Alcotest.fail "outer case boundaries changed")
+
 let test_test_with_let () =
   let src = {|module Foo exposing []
 test "proofs" {
@@ -1082,6 +1121,8 @@ let () =
     ];
     "tests", [
       Alcotest.test_case "test block" `Quick test_test_block;
+      Alcotest.test_case "test case multiline arm boundaries" `Quick test_test_case_arm_boundaries;
+      Alcotest.test_case "test case nested arm boundaries" `Quick test_test_nested_case_arm_boundaries;
       Alcotest.test_case "test with let" `Quick test_test_with_let;
       Alcotest.test_case "test with typed let" `Quick test_test_with_typed_let;
       Alcotest.test_case "expectFail" `Quick test_test_expect_fail;
