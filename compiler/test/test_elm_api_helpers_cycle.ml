@@ -323,7 +323,7 @@ type A = (List B)
 type B = A
 
 fn accepts(value: A) -> Bool =
-  true
+  True
 
 fact Accepted (value: A)
 
@@ -412,7 +412,7 @@ let cyclic_newtype_base_fails_closed () =
   assert_not_contains ~label:"cyclic newtypes must not import ApiHelpers" out
     "import ApiHelpers";
   assert_contains ~label:"cyclic newtypes use predicate injection" out
-    "accept : (A -> Bool) -> A -> Maybe (Proven A Accepted)"
+    "accepted : (A -> Bool) -> A -> Maybe (Proven A Accepted)"
 
 (* The guard has to be able to FAIL, or it pins nothing. *)
 let guard_rejects_a_module_local_helper_signature () =
