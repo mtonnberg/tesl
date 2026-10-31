@@ -101,6 +101,8 @@ let rec map_sql_clause f = function
   | SqlIsNotNull _ as clause -> clause
   | SqlIn { field; values } -> SqlIn { field; values = List.map f values }
   | SqlNotIn { field; values } -> SqlNotIn { field; values = List.map f values }
+  | SqlInList { field; values } -> SqlInList { field; values = f values }
+  | SqlNotInList { field; values } -> SqlNotInList { field; values = f values }
   | SqlLike { field; pattern } -> SqlLike { field; pattern = f pattern }
   | SqlILike { field; pattern } -> SqlILike { field; pattern = f pattern }
 
@@ -128,6 +130,7 @@ let rec fold_sql_clause f acc = function
   | SqlOr clauses -> List.fold_left (fold_sql_clause f) acc clauses
   | SqlIsNull _ | SqlIsNotNull _ -> acc
   | SqlIn { values; _ } | SqlNotIn { values; _ } -> List.fold_left f acc values
+  | SqlInList { values; _ } | SqlNotInList { values; _ } -> f acc values
   | SqlLike { pattern; _ } | SqlILike { pattern; _ } -> f acc pattern
 
 let fold_sql_group_key f acc = function

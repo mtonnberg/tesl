@@ -2633,6 +2633,10 @@ let rec infer_expr ctx (e : expr) : ty =
          List.iter (fun value ->
            let value_ty = infer_expr ctx value in
            unify_at ctx (expr_loc value) value_ty field_ty) values
+       | SqlInList { field; values } | SqlNotInList { field; values } ->
+         let field_ty = field_type entity field in
+         let values_ty = infer_expr ctx values in
+         unify_at ctx (expr_loc values) values_ty (t_list field_ty)
        | SqlIsNull { field } | SqlIsNotNull { field } ->
          let field_ty = field_type entity field in
          (match apply !(ctx.subst) field_ty with

@@ -134,61 +134,6 @@ let check_sql_patterns_recognised ?facts ?(extra_funcs=[]) (decls : top_decl lis
     | _ -> ()) decls;
   List.rev !errors
 
-(* `inList` / `notInList` take a LIST LITERAL.  Until 2026-09-02 a non-literal operand —
-   a parameter, a `let`, a call — parsed as an EMPTY member list, and both renderers turned an
-   empty list into a constant predicate: `where false` for `inList`, `where true` for
-   `notInList`.  So `select t from T where notInList t.ownerId blocked` compiled cleanly and
-   returned EVERY row, the blocked ones included, on the Memory store and on Postgres alike —
-   an access-control filter silently inverted, with no test able to see it because the two
-   backends agreed.  `Sql_query` now fails closed on that shape; this rule is what names the
-   operand for the author instead of letting the query fall out of the recognised shapes. *)
-let check_sql_list_membership_operands (decls : top_decl list) : validation_error list =
-  let errors = ref [] in
-  let refuse op list_expr =
-    errors := make_error (Checker.expr_loc list_expr)
-      ~hint:(Printf.sprintf
-               "write the members as a list literal, e.g. `where %s p.field [\"a\", \"b\"]`; a \
-                list held in a variable is not supported inside a query yet (it would have \
-                compiled to a constant `where %s` and returned %s row)"
-               op
-               (if op = "inList" then "false" else "true")
-               (if op = "inList" then "no" else "every"))
-      (Printf.sprintf
-         "`%s` needs a list literal as its member list; this operand is a `%s`, which the \
-          query cannot bind"
-         op
-         (match list_expr with
-          | EVar _ -> "variable"
-          | EApp _ -> "call"
-          | EField _ -> "field read"
-          | _ -> "computed expression"))
-      :: !errors
-  in
-  (* A query is one flat application chain (`select p from T where notInList p.f xs` is
-     `select` applied to seven arguments), or several (one per clause line), so the operator
-     is found by scanning each chain's argument SEQUENCE rather than by matching a head. *)
-  let rec scan = function
-    | EVar { name = ("inList" | "notInList") as op; _ } :: _field :: list_expr :: rest ->
-      (match list_expr with
-       | EList _ -> ()
-       | _ -> refuse op list_expr);
-      scan rest
-    | _ :: rest -> scan rest
-    | [] -> ()
-  in
-  let rec walk (e : expr) =
-    (match e with
-     | EApp _ ->
-       let head, args = Sql_query.flatten_app_expr [] e in
-       scan (head :: args)
-     | _ -> ());
-    Ast_visitor.iter_children walk e
-  in
-  List.iter (function
-    | DFunc (fd : func_decl) -> walk fd.body
-    | _ -> ()) decls;
-  List.rev !errors
-
 let check_sql_where_clauses
     ?facts
     ?(extra_funcs : (string * func_info) list = [])
@@ -390,7 +335,7 @@ let check_sql_where_clauses
                     arg = EField { obj = EVar { name = binder; loc }; field; loc };
                     loc })
         | SqlOr clauses -> List.iter (check_clause binder_env binder) clauses
-        | SqlIn _ | SqlNotIn _ | SqlLike _ | SqlILike _ -> ()
+        | SqlIn _ | SqlNotIn _ | SqlInList _ | SqlNotInList _ | SqlLike _ | SqlILike _ -> ()
       in
       (match query with
        | QuerySelect (seed, dynamic) ->

@@ -1,10 +1,8 @@
 module SqlListMembershipTests exposing []
 
-# `inList` / `notInList` take a LIST LITERAL.  A non-literal operand used to compile to a
-# constant predicate (`where false` / `where true`) on both backends — an exclusion filter
-# over a runtime list returned every row it was meant to exclude, silently.  The compiler now
-# refuses that shape (see compiler/test/test_sql_list_membership.ml); this file pins that the
-# literal form still means what it says (language review 2026-09-02, H1).
+# Literal membership regression coverage (language review 2026-09-02, H1).
+# Runtime list operands are covered by compiler/test/test_sql_list_membership.ml (#114).
+# Neither form may silently lose its operand and become a constant predicate.
 
 import Tesl.Prelude exposing [Bool(..), Int, String, List]
 import Tesl.DB exposing [dbRead, dbWrite]

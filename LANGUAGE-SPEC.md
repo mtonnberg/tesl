@@ -2836,8 +2836,8 @@ The current `.tesl` frontend includes a small SQL-like sublanguage:
 <select-clause> ::= "where" <sql-predicate>
                   | "where" "isNull"    <field-ref>
                   | "where" "isNotNull" <field-ref>
-                  | "where" "inList"    <field-ref> "[" <expr>* "]"
-                  | "where" "notInList" <field-ref> "[" <expr>* "]"
+                  | "where" "inList"    <field-ref> <list-expr>
+                  | "where" "notInList" <field-ref> <list-expr>
                   | "where" "like"      <field-ref> <string-expr>
                   | "where" "ilike"     <field-ref> <string-expr>
                   | "order"   <field-ref> ( "asc" | "desc" )
@@ -2878,6 +2878,15 @@ checker, capability validator, index linter, and Go backend read the same `sql_q
 do not independently reinterpret the application tree. A malformed SQL-shaped expression is left
 unrecognized and receives the normal fail-closed structural diagnostic rather than being emitted as
 an ordinary function call.
+
+**`inList` / `notInList` — list membership.** The member operand may be a list literal
+or any expression of type `List T`, where `T` is the column's exact type (including
+newtypes and `Maybe`). For example, `where inList rs.runId runIds` batches rows for a
+runtime-sized list of IDs; group a call as `where inList rs.runId (getIds ())`.
+An empty list matches no rows with `inList` and all rows with `notInList`.
+Membership uses value equality, so `Nothing` matches a nullable column's NULL.
+Runtime lists bind as a single PostgreSQL array parameter; list contents are never
+interpolated into SQL text.
 
 **`innerJoin` — inner join by FK.** Returns only rows from the main entity for which a matching row exists in the joined entity. The two field refs after `on` are the main entity's FK field and the join entity's matching field (no `==` operator — `==` sits above function application in Tesl's grammar). A query requires `dbRead` for every entity it touches: the examples below require both `dbRead User` and `dbRead Profile`, and multiple joins add one requirement per joined entity.
 

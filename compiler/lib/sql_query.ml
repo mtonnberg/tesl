@@ -24,6 +24,8 @@ type sql_clause = Ast.sql_clause =
   | SqlIsNotNull of { field : string }
   | SqlIn of { field : string; values : expr list }
   | SqlNotIn of { field : string; values : expr list }
+  | SqlInList of { field : string; values : expr }
+  | SqlNotInList of { field : string; values : expr }
   | SqlLike of { field : string; pattern : expr }
   | SqlILike of { field : string; pattern : expr }
 type sql_join = Ast.sql_join = {
@@ -127,23 +129,25 @@ let rec parse_select_tail binder where_field order limit offset group_by static_
        parse_select_tail binder where_field order limit offset group_by
          (static_clauses @ [SqlIsNotNull { field }]) joins rest
      | None -> None)
-  (* `inList` / `notInList` take a LIST LITERAL.  A non-literal operand used to be read as
-     an EMPTY member list, which both renderers turned into a constant predicate — `where
-     false` for `inList`, `where true` for `notInList` — so an exclusion filter over a
-     runtime list returned every row it was meant to exclude, silently, on both backends.
-     The shape now fails to parse (fail closed); `check_sql_list_membership_operands`
-     names the operand with a diagnostic before this is reached. *)
+  (* Preserve literal expansion, and carry runtime lists as expressions all the way to
+     the checker and backend rather than interpreting an unknown shape as empty. *)
   | EVar { name = "where"; _ } :: EVar { name = "inList"; _ } :: field_expr :: list_expr :: rest ->
     (match field_name_for_binder binder field_expr, list_expr with
      | Some field, EList { elems; _ } ->
        parse_select_tail binder where_field order limit offset group_by
          (static_clauses @ [SqlIn { field; values = elems }]) joins rest
+     | Some field, values ->
+       parse_select_tail binder where_field order limit offset group_by
+         (static_clauses @ [SqlInList { field; values }]) joins rest
      | _ -> None)
   | EVar { name = "where"; _ } :: EVar { name = "notInList"; _ } :: field_expr :: list_expr :: rest ->
     (match field_name_for_binder binder field_expr, list_expr with
      | Some field, EList { elems; _ } ->
        parse_select_tail binder where_field order limit offset group_by
          (static_clauses @ [SqlNotIn { field; values = elems }]) joins rest
+     | Some field, values ->
+       parse_select_tail binder where_field order limit offset group_by
+         (static_clauses @ [SqlNotInList { field; values }]) joins rest
      | _ -> None)
   | EVar { name = "where"; _ } :: EVar { name = "like"; _ } :: field_expr :: pattern_expr :: rest ->
     (match field_name_for_binder binder field_expr with
@@ -406,14 +410,15 @@ let rec collect_sql_clauses binder base_field_of_expr expr =
           (match base_field_of_expr field_expr with
            | Some field -> Some [SqlIsNotNull { field }]
            | None -> None))
-     (* Literal list only — see `parse_select_tail` for why a non-literal fails closed. *)
      | EVar { name = "inList"; _ }, [field_expr; list_expr] ->
        (match field_name_for_binder binder field_expr, list_expr with
         | Some field, EList { elems; _ } -> Some [SqlIn { field; values = elems }]
+        | Some field, values -> Some [SqlInList { field; values }]
         | _ -> None)
      | EVar { name = "notInList"; _ }, [field_expr; list_expr] ->
        (match field_name_for_binder binder field_expr, list_expr with
         | Some field, EList { elems; _ } -> Some [SqlNotIn { field; values = elems }]
+        | Some field, values -> Some [SqlNotInList { field; values }]
         | _ -> None)
      | EVar { name = "like"; _ }, [field_expr; pattern_expr] ->
        (match field_name_for_binder binder field_expr with

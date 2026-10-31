@@ -14,37 +14,37 @@ package teslmodsqllistmembershiptests
 
 import "tesl.generated/teslmodsqllistmembershiptests/internal/teslrt"
 
-//line sql-list-membership-tests.tesl:14
+//line sql-list-membership-tests.tesl:12
 type Post struct {
 	Id     string
 	Author string
 }
 
-//line sql-list-membership-tests.tesl:14
+//line sql-list-membership-tests.tesl:12
 var PostTable = teslrt.NewTable[Post]()
 
-//line sql-list-membership-tests.tesl:27
+//line sql-list-membership-tests.tesl:25
 func visiblePosts() teslrt.Int {
 	{
-//line sql-list-membership-tests.tesl:28
+//line sql-list-membership-tests.tesl:26
 		rows := teslrt.TableSelect(PostTable, func(p Post) bool {
 			return ((p.Author != "mallory") && (p.Author != "trudy"))
 		})
 		_ = rows
-//line sql-list-membership-tests.tesl:30
+//line sql-list-membership-tests.tesl:28
 		return teslrt.ListLength(rows)
 	}
 }
 
-//line sql-list-membership-tests.tesl:32
+//line sql-list-membership-tests.tesl:30
 func staffPosts() teslrt.Int {
 	{
-//line sql-list-membership-tests.tesl:33
+//line sql-list-membership-tests.tesl:31
 		rows := teslrt.TableSelect(PostTable, func(p Post) bool {
 			return ((p.Author == "alice") || (p.Author == "bob"))
 		})
 		_ = rows
-//line sql-list-membership-tests.tesl:35
+//line sql-list-membership-tests.tesl:33
 		return teslrt.ListLength(rows)
 	}
 }
@@ -79,18 +79,18 @@ func TestTesl0(teslT *testing.T) {
 		}
 	}()
 	{
-//line sql-list-membership-tests.tesl:38
+//line sql-list-membership-tests.tesl:36
 		_ = teslrt.TableInsert(PostTable, "Post", Post{Id: "1", Author: "alice"}, func(teslRow, teslNew Post) bool { return (teslRow.Id == teslNew.Id) })
 		{
-//line sql-list-membership-tests.tesl:39
+//line sql-list-membership-tests.tesl:37
 			_ = teslrt.TableInsert(PostTable, "Post", Post{Id: "2", Author: "mallory"}, func(teslRow, teslNew Post) bool { return (teslRow.Id == teslNew.Id) })
 			{
-//line sql-list-membership-tests.tesl:40
+//line sql-list-membership-tests.tesl:38
 				_ = teslrt.TableInsert(PostTable, "Post", Post{Id: "3", Author: "trudy"}, func(teslRow, teslNew Post) bool { return (teslRow.Id == teslNew.Id) })
 				teslLeft1 := visiblePosts()
-//line sql-list-membership-tests.tesl:41
+//line sql-list-membership-tests.tesl:39
 				if !teslrt.Equal(teslLeft1, teslrt.FromInt64(1)) {
-//line sql-list-membership-tests.tesl:41
+//line sql-list-membership-tests.tesl:39
 					teslT.Fatal("Tesl expectation failed")
 				}
 			}
@@ -112,18 +112,18 @@ func TestTesl1(teslT *testing.T) {
 		}
 	}()
 	{
-//line sql-list-membership-tests.tesl:45
+//line sql-list-membership-tests.tesl:43
 		_ = teslrt.TableInsert(PostTable, "Post", Post{Id: "1", Author: "alice"}, func(teslRow, teslNew Post) bool { return (teslRow.Id == teslNew.Id) })
 		{
-//line sql-list-membership-tests.tesl:46
+//line sql-list-membership-tests.tesl:44
 			_ = teslrt.TableInsert(PostTable, "Post", Post{Id: "2", Author: "mallory"}, func(teslRow, teslNew Post) bool { return (teslRow.Id == teslNew.Id) })
 			{
-//line sql-list-membership-tests.tesl:47
+//line sql-list-membership-tests.tesl:45
 				_ = teslrt.TableInsert(PostTable, "Post", Post{Id: "3", Author: "bob"}, func(teslRow, teslNew Post) bool { return (teslRow.Id == teslNew.Id) })
 				teslLeft2 := staffPosts()
-//line sql-list-membership-tests.tesl:48
+//line sql-list-membership-tests.tesl:46
 				if !teslrt.Equal(teslLeft2, teslrt.FromInt64(2)) {
-//line sql-list-membership-tests.tesl:48
+//line sql-list-membership-tests.tesl:46
 					teslT.Fatal("Tesl expectation failed")
 				}
 			}

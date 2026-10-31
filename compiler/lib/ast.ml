@@ -187,6 +187,8 @@ and sql_clause =
   | SqlIsNotNull of { field : string }
   | SqlIn of { field : string; values : expr list }
   | SqlNotIn of { field : string; values : expr list }
+  | SqlInList of { field : string; values : expr }
+  | SqlNotInList of { field : string; values : expr }
   | SqlLike of { field : string; pattern : expr }
   | SqlILike of { field : string; pattern : expr }
 

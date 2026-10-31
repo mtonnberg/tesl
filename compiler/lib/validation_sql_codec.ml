@@ -218,6 +218,9 @@ let rec validate_field_accesses
       | SqlIn { field; values } | SqlNotIn { field; values } ->
         field_error entity field
         @ List.concat_map (validate_field_accesses query_env funcs fields_by_type ctors) values
+      | SqlInList { field; values } | SqlNotInList { field; values } ->
+        field_error entity field
+        @ validate_field_accesses query_env funcs fields_by_type ctors values
       | SqlLike { field; pattern } | SqlILike { field; pattern } ->
         field_error entity field
         @ validate_field_accesses query_env funcs fields_by_type ctors pattern
