@@ -620,7 +620,7 @@ import Tesl.Prelude exposing [Int]
 fact Ordered (low: Int) (high: Int)
 record Range { low: Int, high: Int } ::: Ordered low high
 type Payload = Put value: Range
-entity Row table "rows" primary key id { id: Int, payload: Payload }
+entity Row table "rows" primaryKey id { id: Int, payload: Payload }
 |} "generically decodes record 'Range'"
 
 (* ── 4. Call-site proof satisfaction ────────────────────────────────────── *)
