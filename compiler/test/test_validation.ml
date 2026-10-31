@@ -623,6 +623,14 @@ type Payload = Put value: Range
 entity Row table "rows" primaryKey id { id: Int, payload: Payload }
 |} "generically decodes record 'Range'"
 
+let test_adt_codec_proof_payload_rejected () =
+  assert_validation_error {|module Forge exposing []
+import Tesl.Prelude exposing [String]
+fact IsAdmin (user: String)
+type Command = Delete user: String ::: IsAdmin user
+codec Command { adtJson }
+|} "adtJson cannot decode proof-annotated payload fields"
+
 (* ── 4. Call-site proof satisfaction ────────────────────────────────────── *)
 
 let test_call_with_checked_arg_ok () =
@@ -1768,6 +1776,8 @@ let () =
       Alcotest.test_case "conjunctive via chain ok" `Quick test_codec_conjunctive_proof_via_chain_ok;
       Alcotest.test_case "adtJson rejects nested unvalidated proof record" `Quick test_adt_json_rejects_nested_unvalidated_proof_record;
       Alcotest.test_case "persisted ADT rejects nested unvalidated invariant record" `Quick test_persisted_adt_rejects_nested_unvalidated_invariant_record;
+
+      Alcotest.test_case "adtJson proof payload rejected" `Quick test_adt_codec_proof_payload_rejected;
     ];
     "call-site-proofs", [
       Alcotest.test_case "checked arg ok" `Quick test_call_with_checked_arg_ok;
