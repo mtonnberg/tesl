@@ -39,7 +39,9 @@ jobs:
     runs-on: ubuntu-latest
     # Full shared gate: compiler/PostgreSQL suites, adversarial reviews and V1–V20.
     # Individual scenario deadlines stay in the runner; this bounds their sum.
-    timeout-minutes: 240
+    # The complete gate has taken over four hours on supported-major runners,
+    # including all twenty releases and the independent latency comparison.
+    timeout-minutes: 360
     env:
       TESL_CI_JOBS: '2'
       GOMAXPROCS: '2'

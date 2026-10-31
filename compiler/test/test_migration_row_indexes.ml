@@ -230,7 +230,10 @@ let compilation ?(stages=false) ?(guards=false) ?(cancelled=false) () =
     export ~stages ~guards ~cancelled output;
   let repo=Unix.realpath (Sys.getenv "TESL_REPO_ROOT") in
   let log=Filename.concat output "postgres.log" in
-    let budget=if guards then 600 else if cancelled then 300 else if stages then 150 else 120 in
+    (* The guarded suite includes every crash prefix and four-release catch-up
+       and deployment. CI spent 583s before starting the last scenario, whose
+       own 150s deadline must remain available within this aggregate budget. *)
+    let budget=if guards then 900 else if cancelled then 300 else if stages then 150 else 120 in
    let command=Printf.sprintf "cd %s && %s=%s timeout %ds go test -p 2 -race -tags tesl_migration_test -timeout %ds ./teslrt -run %s -count=1 -v > %s 2>&1"
     (Filename.quote (Filename.concat repo "runtime/go"))
      (if guards then "TESL_STAGE_GUARD_PROGRAMS" else if cancelled then "TESL_STAGE_CANCELLATION_PROGRAMS" else if stages then "TESL_STAGE_PREPARATION_PROGRAMS" else "TESL_ROW_INDEX_PROGRAMS")

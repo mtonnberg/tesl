@@ -50,7 +50,11 @@ class Lab:
         self.count = 0
 
     def sql(self, db, query, role="review_installer", ok=True):
-        result = run(["psql", "-X", "-v", "ON_ERROR_STOP=1", "-Atc", query],
+        queries = query if isinstance(query, list) else [query]
+        arguments = ["psql", "-X", "-v", "ON_ERROR_STOP=1", "-At"]
+        for statement in queries:
+            arguments.extend(["-c", statement])
+        result = run(arguments,
                      env=dict(self.env, PGHOST=str(self.cluster), PGPORT="5432", PGDATABASE=db, PGUSER=role))
         return require(result) if ok else result
 
@@ -464,7 +468,17 @@ class KnownGaps(unittest.TestCase):
             return f"s{len(raw)}:".encode() + raw
         uuid, fence, family, physical, inventory, abi = header
         raw = frame(["tesl-migration-canonical", "1", "migration", ["tesl-row-queue-retirement-v1", uuid, fence, family, "mail", "1", "2", physical, inventory, sources, abi]])
-        query = f"begin; select pg_advisory_xact_lock({fence},1); select pg_advisory_xact_lock(-{fence},1); select mail.tesl_retire_row_queue({literal(uuid)},{fence},decode('{raw.hex()}','hex'),'{hashlib.sha256(raw).hexdigest()}',{literal(abi)}); select mail.tesl_row_queue_final(2); rollback;"
+        # PostgreSQL 14's psql exposes only the last result of a multi-statement
+        # -c command. Separate commands keep one connection/transaction while
+        # preserving the finality witness before ROLLBACK on every major.
+        query = [
+            "begin",
+            f"select pg_advisory_xact_lock({fence},1)",
+            f"select pg_advisory_xact_lock(-{fence},1)",
+            f"select mail.tesl_retire_row_queue({literal(uuid)},{fence},decode('{raw.hex()}','hex'),'{hashlib.sha256(raw).hexdigest()}',{literal(abi)})",
+            "select mail.tesl_row_queue_final(2)",
+            "rollback",
+        ]
         output = LAB.sql(self.db, query, "review_worker")
         self.assertIn("t", output.splitlines())
         self.assertEqual(LAB.sql(self.db, "select schema_version from mail.tesl_jobs"), "1")
