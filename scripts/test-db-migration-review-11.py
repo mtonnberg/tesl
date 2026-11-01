@@ -536,11 +536,16 @@ end $block$; {'commit' if commit else 'rollback'};"""
         self.prepare_probe()
         uuid, digest, binding = self.root_binding()
         before = self.snapshot()
-        result = LAB.sql(self.db, f"""begin; savepoint before_attempt;
-select * from mail.tesl_row_queue_conversion_begin({uuid}::uuid,{digest},'probe',{binding}::jsonb);
-rollback to savepoint before_attempt;
-select mail.tesl_row_queue_conversion_finish({uuid}::uuid,{digest},'probe',1,pg_current_xact_id()::text,'{{"oldText": "retained"}}','converted','{{"message":"retained","priority":7}}'::jsonb,'',{binding}::jsonb);
-rollback;""", "review_worker")
+        # Keep the rejected publication result visible with PostgreSQL 14's
+        # psql, which exposes only the last result of each -c command.
+        result = LAB.sql(self.db, [
+            "begin",
+            "savepoint before_attempt",
+            f"select * from mail.tesl_row_queue_conversion_begin({uuid}::uuid,{digest},'probe',{binding}::jsonb)",
+            "rollback to savepoint before_attempt",
+            f"select mail.tesl_row_queue_conversion_finish({uuid}::uuid,{digest},'probe',1,pg_current_xact_id()::text,'{{\"oldText\": \"retained\"}}','converted','{{\"message\":\"retained\",\"priority\":7}}'::jsonb,'',{binding}::jsonb)",
+            "rollback",
+        ], "review_worker")
         self.assertIn("f", result.splitlines())
         self.assertEqual(self.snapshot(), before)
 

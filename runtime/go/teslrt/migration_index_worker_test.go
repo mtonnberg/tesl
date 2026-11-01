@@ -435,7 +435,9 @@ func TestPgMigrationIndexWorkerExpiresAndRemovesEveryStuckHolderBackend(t *testi
 		t.Fatal(err)
 	}
 	var token int64
-	if err := oldControl.QueryRow(f.ctx, "select notes_app.tesl_claim_index($1,2,$2,200)", job.ID, pgTestSourceABI).Scan(&token); err != nil || token < 1 {
+	// Keep setup inside the lease even when CI pauses between SQL commands.
+	// The observer expires this exact claim after the DDL is visibly blocked.
+	if err := oldControl.QueryRow(f.ctx, "select notes_app.tesl_claim_index($1,2,$2,30000)", job.ID, pgTestSourceABI).Scan(&token); err != nil || token < 1 {
 		t.Fatalf("old claim: %d %v", token, err)
 	}
 	if err := pgIndexRecord(f.ctx, oldControl, f.namespace, pgMigrationIndexJob{ID: job.ID, Token: token}, "building", nil); err != nil {
@@ -467,6 +469,12 @@ func TestPgMigrationIndexWorkerExpiresAndRemovesEveryStuckHolderBackend(t *testi
 	pid, tag := pgIndexTestWaitingBuild(t, f, watch)
 	if pid != oldPID || tag != oldTag {
 		t.Fatalf("unexpected old builder: %d %s", pid, tag)
+	}
+	expired, err := f.installer.Exec(f.ctx, `update notes_app.tesl_schema_leases
+ set expires_at=clock_timestamp()-interval '1 second'
+ where name='index:active__v2' and holder=$1 and token=$2`, oldTag, token)
+	if err != nil || expired.RowsAffected() != 1 {
+		t.Fatalf("expire the observed old claim: rows=%d err=%v", expired.RowsAffected(), err)
 	}
 	pgIndexTestAwait(t, f, watch, "old holder expired on the PostgreSQL clock", func() bool {
 		var expired bool
