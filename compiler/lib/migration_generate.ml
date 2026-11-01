@@ -6,8 +6,10 @@ module M = Migration_manifest
 module E = Migration_sparse
 type error = { path : string; message : string }
 type preview = { family : string; frozen_version : int; current_version : int; manifest : M.t }
+type decision_option = { id:string; label:string; template:string; help:string; needs_custom_code:bool }
+type decision = { id:string; entity:string; file:string; line:int; col:int; reason:string; options:decision_option list }
 type refresh_preview = { family : string; current_version : int; manifest : M.t;
-                         diagnostics : Compile.diagnostic list }
+                         diagnostics : Compile.diagnostic list; decisions:decision list }
 exception Invalid of error list
 let reject path message = raise (Invalid [{path;message}])
 let sparse = function Ok x -> x | Error errors -> raise (Invalid (List.map (fun (e : E.error) -> {path=e.loc.file;message=e.code ^ ": " ^ e.message}) errors))
@@ -259,11 +261,7 @@ let decision_body before after identity (errors : E.error list) =
     "; old row fields: " ^ String.concat ", " fields ^
     String.concat "" (List.map (fun guidance -> "; " ^ guidance) (existing_proof_guidance before after identity)) in
   "todo " ^ Compile.json_encode_string reason
-let inferred_entry requirements before after loc identity entity =
-  match entity with
-  | E.Added _ -> "New"
-  | E.Removed _ -> "Drop"
-  | E.Paired _ ->
+let additive_coverage requirements loc identity =
     (* Select one additive candidate while satisfying only the other entries'
        coverage. Transform here is a local classification probe, never a checked
        row function or execution permission. *)
@@ -272,7 +270,13 @@ let inferred_entry requirements before after loc identity entity =
       let kind = if name = identity then E.Additive else match entity with
         | E.Added _ -> E.New | E.Removed _ -> E.Drop | E.Paired _ -> E.Transform in
       Some {E.entity=name;kind;loc}) in
-    let checked = match E.check_requirements requirements ~entries ~loc with
+    E.check_requirements requirements ~entries ~loc
+let inferred_entry requirements before after loc identity entity =
+  match entity with
+  | E.Added _ -> "New"
+  | E.Removed _ -> "Drop"
+  | E.Paired _ ->
+    let checked = match additive_coverage requirements loc identity with
       | Error errors -> Error errors
       | Ok coverage -> Result.map (fun _ -> ()) (Migration_additive.check coverage ~defaults:[]) in
     (match checked with Ok () -> "Additive []" | Error errors -> decision_body before after identity errors)
@@ -314,6 +318,60 @@ let refresh_entities file source before after =
       Some {Merge.id="entity:" ^ key;key=Some key;
         body=inferred_entry requirements before after syntax.declaration.loc identity entity}) in
     (source_result file (Merge.reconcile view ~collection:syntax.entities ~previous ~current ~existing ~desired)).source
+
+(* Advisory source templates come from the same checked inventories and additive
+   classifier as generation. Probe literals establish only that the exact shape
+   permits defaults; they are never emitted as a guessed data policy. Neither a
+   template nor this metadata is an executable plan or source-write authority. *)
+let decision_guidance file source before after =
+  let view,declaration = syntax file source in
+  let requirements = match D.identity_claims ~before ~after declaration with
+    | Error _ -> None
+    | Ok identities -> (match E.requirements ~before ~after ~identities ~loc:declaration.declaration.loc with
+      | Error _ -> None | Ok value -> Some value) in
+  match requirements with None -> [] | Some requirements ->
+  let old_shapes = I.field_shapes before and new_shapes = I.field_shapes after in
+  let additive_option identity (previous:I.stored_entity) (current:I.stored_entity) loc =
+    let old = List.filter (fun s -> s.I.stored_field.entity=previous.entity_name) old_shapes in
+    let fresh = List.filter (fun s -> s.I.stored_field.entity=current.entity_name) new_shapes in
+    let needed = List.filter (fun s ->
+      not (List.exists (fun old -> old.I.stored_field.name=s.I.stored_field.name) old) &&
+      not (Migration_additive.nullable s && s.proof_identity=None)) fresh in
+    let primitive shape =
+      if shape.I.proof_identity<>None then None else
+      List.find_opt (fun (name,_,_) -> shape.type_identity=Migration_additive.primitive name)
+        ["Tesl.Prelude.Int","Int",Migration_additive.Integer "0";
+         "Tesl.Float.Float","Float",Migration_additive.Floating 0.;
+         "Tesl.Prelude.Bool","Bool",Migration_additive.Boolean false;
+         "Tesl.Prelude.String","String",Migration_additive.Text ""] in
+    let choices = List.filter_map (fun shape -> Option.map (fun (_,name,value) ->
+      shape.I.stored_field.name,name,value) (primitive shape)) needed in
+    if needed=[] || List.length choices<>List.length needed then [] else
+    let defaults = List.map (fun (field,_,value) -> {Migration_additive.entity=identity;field;value;loc}) choices in
+    match additive_coverage requirements loc identity with
+    | Error _ -> []
+    | Ok coverage -> match Migration_additive.check coverage ~defaults with
+      | Error _ -> []
+      | Ok _ ->
+        let rules = List.map (fun (field,ty,_) -> "Default " ^ field ^ " (todo " ^
+          Compile.json_encode_string ("Choose a literal of type " ^ ty ^ " for " ^ identity ^ "." ^ field) ^ ")") choices in
+        [{id="additive-default";label="Supply literal defaults for the new required fields";
+          template="Additive [" ^ String.concat ", " rules ^ "]";
+          help="The compiler checked that literal defaults can cover this additive shape. Replace every todo with a literal of the named primitive type. Choose values for existing rows deliberately; no default value has been guessed. Refresh and compile the complete application before reviewing the physical plan. Index and deployment readiness remain separate checks.";
+          needs_custom_code=true}] in
+  Syntax.members view declaration.entities |> source_result file |> List.filter_map (fun (key,expression) ->
+    match key,expression with
+    | Some key,Ast.EApp {fn=Ast.EVar {name="todo";_};arg=Ast.ELit {lit=Ast.LString reason;_};loc} ->
+      let matches = E.requirement_entities requirements |> List.filter (fun (identity,entity) ->
+        let owned = match entity with E.Added e | E.Removed e -> [e.I.entity_name]
+          | E.Paired pair -> [pair.previous.I.entity_name;pair.current.I.entity_name] in
+        List.mem key (identity :: List.hd (List.rev (String.split_on_char '.' identity)) :: owned)) in
+      (match matches with
+       | [identity,entity] ->
+         let options = match entity with E.Paired pair -> additive_option identity pair.previous pair.current loc | _ -> [] in
+         Some {id="entity:" ^ identity;entity=identity;file;line=loc.start.line;col=loc.start.col;reason;options}
+       | _ -> None)
+    | _ -> None)
 
 (* Explicit Retype rules select fields; generation owns their physical name.
    This only proposes edits. The entire resulting migration is checked after
@@ -393,13 +451,14 @@ let refresh_with_compatibility ~stored_value_compatibility ~compiler_abi ~projec
     let checked_previous = seal (S.verify_sources ~project_root:root previous_seal) in
     ignore (seal (S.verify_semantics ?stored_value_compatibility ~compiler_abi checked_previous));
     let column_writes=retype_columns previous current migration in
-    let source=overlay root column_writes (fun () ->
+    let source,decisions=overlay root column_writes (fun () ->
       let target_inventory=inventory (I.load_with_compatibility ~stored_value_compatibility ~compiler_abi ~root_file:current.root_file) in
       let target_seal = seal (S.create ~project_root:root target_inventory) in
       let header = sparse (Header.create ~previous:previous_seal ~current:target_seal) in
       let source = refresh_same migration.path migration.contents previous.inventory target_inventory in
       let source = refresh_entities migration.path source previous.inventory target_inventory in
-      sparse (Header.replace ~file:migration.path ~source header)) in
+      let source=sparse (Header.replace ~file:migration.path ~source header) in
+      source,decision_guidance migration.path source previous.inventory target_inventory) in
     (* A completed edge's target is also the current edge's predecessor. The
        public source checker therefore sees both seals. Check completed bodies
        against the proposed refreshed header, after their own frozen seals have
@@ -417,7 +476,7 @@ let refresh_with_compatibility ~stored_value_compatibility ~compiler_abi ~projec
     history (H.verify_unchanged h);
     manifest (M.verify_source source_manifest ~documents);
     manifest (M.verify_disk source_manifest);
-    Ok {family;current_version=version;manifest=source_manifest;diagnostics}
+    Ok {family;current_version=version;manifest=source_manifest;diagnostics;decisions}
   with
   | Invalid errors -> Error errors
   | Sys_error message | Failure message | Invalid_argument message -> Error [{path=root;message}]

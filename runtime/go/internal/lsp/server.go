@@ -1904,9 +1904,18 @@ func (server *Server) diagnosticsForDocumentWithOverlays(ctx context.Context, do
 		if err != nil {
 			return nil, err
 		}
+		severity := lspSeverity(diagnostic.Severity)
+		// Editing the current target is an expected draft state. Keep the
+		// compiler's build refusal, but distinguish this exact producer-owned
+		// byte mismatch from missing/layout failures and frozen-source tampering.
+		if diagnostic.Code == "MIG001" && strings.HasPrefix(diagnostic.Message,
+			"current schema source changed since migration generation (expected while preparing an undeployed migration); refresh this revision before building or running.") &&
+			strings.Contains(diagnostic.Message, "\nsnapshot source differs from its recorded bytes:") {
+			severity = 3
+		}
 		entry := map[string]any{
 			"range":    span,
-			"severity": lspSeverity(diagnostic.Severity),
+			"severity": severity,
 			"code":     diagnostic.Code,
 			"message":  diagnostic.Message,
 			"source":   diagnostic.Source,

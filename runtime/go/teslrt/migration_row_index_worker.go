@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"github.com/jackc/pgx/v5"
 	"slices"
-	"strings"
 	"time"
 )
 
@@ -104,14 +103,14 @@ func pgRowIndexFunctions(namespace string) []pgMigrationControlFunction {
 `
 		}
 		if fn.name == "tesl_claim_index" || fn.name == "tesl_lock_expired_index_holder" {
-			fn.body = strings.Replace(fn.body, " select source_abi into creator from "+ns+"tesl_schema_expansions where version=job.version;", ` if job.is_unique then
+			fn.body = pgRewriteMigrationSQL(fn.body, namespace, " select source_abi into creator from "+ns+"tesl_schema_expansions where version=job.version;", ` if job.is_unique then
  select c.compiler_abi into creator from `+ns+`tesl_schema_stage_promotions p join `+ns+`tesl_schema_stage_contracts c on c.version=p.version and c.contract_hash=p.contract_hash
  where p.job_id=job.id and p.version=job.version and p.ordinal=job.ordinal;
  else
  select source_abi into creator from `+ns+`tesl_schema_expansions where version=job.version;
  end if;`, 1)
 		}
-		functions[i].body = strings.Replace(fn.body, "\nbegin\n", "\nbegin\n"+guard, 1)
+		functions[i].body = pgRewriteMigrationSQL(fn.body, namespace, "\nbegin\n", "\nbegin\n"+guard, 1)
 	}
 	return functions
 }

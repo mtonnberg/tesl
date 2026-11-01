@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"tesl.dev/runtime/go/internal/migrationguide"
 	"tesl.dev/runtime/go/internal/sourceedit"
 )
 
@@ -106,6 +107,7 @@ type migrationWizardReport struct {
 	Diagnostics struct{ Diagnostics []migrationWizardDiagnostic }
 	Errors      []migrationWizardDiagnostic
 	Error       string
+	Decisions   []migrationguide.Decision
 	Manifest    struct {
 		Imports []struct{ Module, SourceResolved string }
 		Edits   []struct{ Path string }
@@ -181,7 +183,7 @@ func (app *App) migrationWizardPrompt(ctx context.Context, prompt string) (bool,
 		if err := ctx.Err(); err != nil {
 			return false, err
 		}
-		if _, err := fmt.Fprint(app.Stdout, prompt+" [Enter/q]: "); err != nil {
+		if _, err := fmt.Fprint(app.Stdout, prompt+" [Enter/?/q]: "); err != nil {
 			return false, err
 		}
 		line, err := migrationReadLine(ctx, app.Stdin)
@@ -194,8 +196,145 @@ func (app *App) migrationWizardPrompt(ctx context.Context, prompt string) (bool,
 		case "q", "Q":
 			_, err := fmt.Fprintln(app.Stdout, "Stopped. Prepared files remain saved; use --resume to continue this undeployed revision.")
 			return false, err
+		case "?":
+			if err := app.migrationWizardHelp(migrationguide.ForDiagnostic("", "")); err != nil {
+				return false, err
+			}
 		default:
 			if _, err := fmt.Fprintln(app.Stdout, "Press Enter after saving, or q to stop."); err != nil {
+				return false, err
+			}
+		}
+	}
+}
+
+func (app *App) migrationWizardHelp(guide migrationguide.Guide) error {
+	for _, option := range guide.Options {
+		if _, err := fmt.Fprintf(app.Stdout, "\n%s\n  %s\n", option.Title, option.When); err != nil {
+			return err
+		}
+		if option.Example != "" {
+			if _, err := fmt.Fprintln(app.Stdout, "  Source template (replace custom-code holes, then recheck):"); err != nil {
+				return err
+			}
+			for _, line := range strings.Split(option.Example, "\n") {
+				if _, err := fmt.Fprintln(app.Stdout, "    "+line); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	for _, help := range guide.Help {
+		if _, err := fmt.Fprintln(app.Stdout, "  "+help); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func migrationWizardGuide(report migrationWizardReport, diagnostic migrationWizardDiagnostic) (migrationguide.Guide, bool) {
+	line, col := diagnostic.Start.Line, diagnostic.Start.Col
+	if diagnostic.Line != 0 || diagnostic.Col != 0 {
+		line, col = diagnostic.Line, diagnostic.Col
+	}
+	for _, decision := range report.Decisions {
+		if diagnostic.Code == "MIG003" && decision.File == diagnostic.File && decision.Line == line && decision.Col == col {
+			return migrationguide.ForDecision(decision), len(decision.Options) > 0
+		}
+	}
+	return migrationguide.ForDiagnostic(diagnostic.Code, diagnostic.Message), false
+}
+
+func migrationWizardShortMessage(message string) string {
+	first, _, multiline := strings.Cut(message, "\n")
+	runes := []rune(first)
+	if len(runes) > 160 || multiline {
+		if len(runes) > 157 {
+			runes = runes[:157]
+		}
+		return string(runes) + "..."
+	}
+	return first
+}
+
+// Review one compiler diagnostic at a time. Browsing or expanding help cannot
+// approve a decision: Enter always regenerates and checks the entire revision.
+func (app *App) migrationWizardReview(ctx context.Context, report migrationWizardReport, prompt string) (bool, error) {
+	diagnostics := report.Diagnostics.Diagnostics
+	if len(diagnostics) == 0 {
+		return app.migrationWizardPrompt(ctx, prompt)
+	}
+	if _, err := fmt.Fprintf(app.Stdout, "\nMigration review: %d item(s). Enter rechecks saved changes; n browses; a number shows an option template; ? expands help.\n", len(diagnostics)); err != nil {
+		return false, err
+	}
+	index := 0
+	for {
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
+		diagnostic := diagnostics[index]
+		guide, compilerChoices := migrationWizardGuide(report, diagnostic)
+		if _, err := fmt.Fprintf(app.Stdout, "\nItem %d/%d: %s\n%s\n", index+1, len(diagnostics), guide.Title, guide.Summary); err != nil {
+			return false, err
+		}
+		compact := diagnostic
+		compact.Message = migrationWizardShortMessage(diagnostic.Message)
+		if err := app.migrationWizardDiagnostics([]migrationWizardDiagnostic{compact}); err != nil {
+			return false, err
+		}
+		if len(guide.Options) > 0 {
+			heading := "Routes to review (the compiler must check your completed source):"
+			if compilerChoices {
+				heading = "Compiler-proposed templates (custom code still required):"
+			}
+			if _, err := fmt.Fprintln(app.Stdout, heading); err != nil {
+				return false, err
+			}
+			for i, option := range guide.Options {
+				if _, err := fmt.Fprintf(app.Stdout, "  %d. %s\n", i+1, option.Title); err != nil {
+					return false, err
+				}
+			}
+		}
+		if _, err := fmt.Fprint(app.Stdout, prompt+" [Enter/n/option/?/q]: "); err != nil {
+			return false, err
+		}
+		line, err := migrationReadLine(ctx, app.Stdin)
+		if err != nil {
+			return false, fmt.Errorf("guided migration stopped; prepared files remain saved (continue with --resume): %w", err)
+		}
+		switch strings.TrimSpace(line) {
+		case "":
+			return true, nil
+		case "n", "N":
+			index = (index + 1) % len(diagnostics)
+		case "?":
+			if _, err := fmt.Fprintln(app.Stdout, "Full compiler diagnostic:"); err != nil {
+				return false, err
+			}
+			if err := app.migrationWizardDiagnostics([]migrationWizardDiagnostic{diagnostic}); err != nil {
+				return false, err
+			}
+			if err := app.migrationWizardHelp(guide); err != nil {
+				return false, err
+			}
+		case "q", "Q":
+			_, err := fmt.Fprintln(app.Stdout, "Stopped. Prepared files remain saved; use --resume to continue this undeployed revision.")
+			return false, err
+		default:
+			choice, err := strconv.Atoi(strings.TrimSpace(line))
+			if err == nil && choice >= 1 && choice <= len(guide.Options) {
+				if _, err := fmt.Fprintln(app.Stdout, "Template selected for review. Copy it into the current migration, fill custom-code holes, save, then press Enter to recheck."); err != nil {
+					return false, err
+				}
+				selected := guide
+				selected.Options = guide.Options[choice-1 : choice]
+				if err := app.migrationWizardHelp(selected); err != nil {
+					return false, err
+				}
+				continue
+			}
+			if _, err := fmt.Fprintln(app.Stdout, "Save and press Enter to recheck, n for the next item, an option number for its template, ? for help, or q to stop. Options are templates; choosing their meaning still requires source edits."); err != nil {
 				return false, err
 			}
 		}
@@ -262,6 +401,9 @@ func (app *App) migrationWizard(ctx context.Context, args []string) error {
 	if _, err := fmt.Fprintf(app.Stdout, "Prepared %s revision V%d.\n", report.Selection.Database, report.Selection.RevisionAfter); err != nil {
 		return err
 	}
+	if _, err := fmt.Fprintln(app.Stdout, "Workflow: 1. Edit current schema → 2. Review migration decisions → 3. Check the application and plan → 4. Test, build and deploy the worker.\nGeneration fills checked mechanical structure; custom values, conversions and proof changes remain your decisions. Press ? at a prompt for help."); err != nil {
+		return err
+	}
 	for _, edit := range report.Manifest.Edits {
 		if _, err := fmt.Fprintf(app.Stdout, "  %s\n", strconv.Quote(edit.Path)); err != nil {
 			return err
@@ -275,15 +417,12 @@ func (app *App) migrationWizard(ctx context.Context, args []string) error {
 			return err
 		}
 	}
-	if err := app.migrationWizardDiagnostics(report.Diagnostics.Diagnostics); err != nil {
-		return err
-	}
 	prompt := "Edit the current schema files above and save your changes"
 	if options.resume && !report.Compilable {
 		prompt = "Resolve the diagnostics in your schema or current migration, then save"
 	}
 	for {
-		proceed, err := app.migrationWizardPrompt(ctx, prompt)
+		proceed, err := app.migrationWizardReview(ctx, report, prompt)
 		if err != nil || !proceed {
 			return err
 		}
@@ -296,12 +435,12 @@ func (app *App) migrationWizard(ctx context.Context, args []string) error {
 			}
 			return err
 		}
-		if err := app.migrationWizardDiagnostics(report.Diagnostics.Diagnostics); err != nil {
-			return err
-		}
 		if !report.Compilable {
 			prompt = "Fill the migration decisions and resolve the diagnostics above, then save"
 			continue
+		}
+		if err := app.migrationWizardDiagnostics(report.Diagnostics.Diagnostics); err != nil {
+			return err
 		}
 		// Check the actual saved application after publication, including edits
 		// a user may have made since the compiler prepared the guarded manifest.

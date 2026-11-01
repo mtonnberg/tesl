@@ -90,8 +90,11 @@ The initial supported operation is deliberately narrow:
 - Remove one ordinary entity and leave all surviving entities unchanged.
 - Keep at least one entity; dropping the last entity is refused.
 - Do not combine Drop with another removal, addition or transformation.
-- Queue-bearing histories are refused. The removed entity cannot have prior
-  transformations; this restriction does not apply to unchanged surviving entities.
+- Queues may remain when their membership and complete payload contracts stay
+  unchanged and the dropped table has no retained queue dependency. Actual
+  dependencies and simultaneous payload changes are refused. The removed entity
+  cannot have prior transformations; this restriction does not apply to unchanged
+  surviving entities.
 - A dropped table may have its ordinary initial indexes. A history that added
   concurrent-index jobs to that table needs a separate index retirement lifecycle
   and is refused here.

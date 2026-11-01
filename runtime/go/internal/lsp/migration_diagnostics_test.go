@@ -336,4 +336,117 @@ func TestFrozenSourceDiagnosticsThroughRealCompilerAndRetainedLSP(t *testing.T) 
 			t.Fatal("editor preview froze the previous migration on disk")
 		}
 	})
+	t.Run("current draft info and compiler-owned decision templates", func(t *testing.T) {
+		current := filepath.Join(project, "schema/notes/v-current.tesl")
+		before, err := os.ReadFile(current)
+		if err != nil {
+			t.Fatal(err)
+		}
+		changed := strings.Replace(string(before), "{ id: String }", "{ id: String, title: String }", 1)
+		if changed == string(before) {
+			t.Fatal("fixture schema did not change")
+		}
+		currentDoc := document{URI: protocol.PathToURI(current), Path: current, Version: 31, Text: changed}
+		server.documents[currentDoc.URI] = currentDoc
+		defer delete(server.documents, currentDoc.URI)
+		groups, err := server.diagnosticsForDocument(ctx, currentDoc)
+		if err != nil {
+			t.Fatal(err)
+		}
+		foundInfo := false
+		for _, diagnostics := range groups {
+			for _, diagnostic := range diagnostics {
+				if diagnostic["code"] == "MIG001" {
+					foundInfo = true
+					if diagnostic["severity"] != 3 {
+						t.Fatalf("draft not informative: %+v", diagnostic)
+					}
+				}
+			}
+		}
+		if !foundInfo {
+			t.Fatal("expected real current-target hash diagnostic")
+		}
+		checked, _, err := client.QuerySourcesJSON(ctx, "--agent-context-json", entry, server.sourceOverlays())
+		var contextResult struct{ OK bool }
+		if err != nil || json.Unmarshal(checked, &contextResult) != nil || contextResult.OK {
+			t.Fatalf("stale draft became compilable: %s %v", checked, err)
+		}
+		raw := migrationEditorCommand(t, server, "tesl.generateMigration", map[string]any{"entryFile": entry, "projectRoot": project}, 0)
+		var result struct {
+			Compilable bool
+			Decisions  []struct {
+				ID      string
+				Options []struct {
+					ID, Template    string
+					NeedsCustomCode bool
+				}
+			}
+			Guidance []struct {
+				DecisionID string
+				Guide      struct {
+					Options []struct {
+						ID                 string
+						RequiresCustomCode bool
+					}
+				}
+			}
+		}
+		if err := json.Unmarshal(raw, &result); err != nil {
+			t.Fatal(err)
+		}
+		if result.Compilable || len(result.Decisions) != 1 || len(result.Decisions[0].Options) != 1 {
+			t.Fatalf("real decision metadata: %s", raw)
+		}
+		option := result.Decisions[0].Options[0]
+		if option.ID != "additive-default" || !option.NeedsCustomCode || !strings.Contains(option.Template, "Default title (todo") {
+			t.Fatalf("lost typed custom-code template: %s", raw)
+		}
+		foundGuide := false
+		for _, item := range result.Guidance {
+			if item.DecisionID == result.Decisions[0].ID {
+				foundGuide = len(item.Guide.Options) == 1 && item.Guide.Options[0].ID == option.ID && item.Guide.Options[0].RequiresCustomCode
+			}
+		}
+		if !foundGuide {
+			t.Fatalf("compiler option did not reach editor guide: %s", raw)
+		}
+		if after, err := os.ReadFile(current); err != nil || !bytes.Equal(before, after) {
+			t.Fatal("preview saved unsaved schema")
+		}
+	})
+
+}
+
+func TestCurrentDraftHashMismatchIsInformationalOnlyInEditor(t *testing.T) {
+	prefix := "current schema source changed since migration generation (expected while preparing an undeployed migration); refresh this revision before building or running. If this revision has been deployed, restore the deployed source and start the next forward revision. The compiler cannot determine deployment state"
+	for _, item := range []struct {
+		name, code, message string
+		severity            int
+	}{
+		{"current edited bytes", "MIG001", prefix + "\nsnapshot source differs from its recorded bytes: v-current.tesl", 3},
+		{"frozen edited bytes", "MIG013", prefix + "\nsnapshot source differs from its recorded bytes: v1.tesl", 1},
+		{"missing current", "MIG001", "schema changed since this migration was generated; missing source", 1},
+		{"invalid current layout", "MIG001", "schema changed since this migration was generated; symlink source", 1},
+		{"unrecognized message", "MIG001", "snapshot source differs from its recorded bytes: v-current.tesl", 1},
+	} {
+		t.Run(item.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "v-current.tesl")
+			payload, err := json.Marshal(map[string]any{"version": 1, "diagnostics": []any{map[string]any{
+				"file": path, "code": item.code, "source": "migration", "message": item.message,
+				"severity": "error", "fix": nil, "start": map[string]int{"line": 0, "col": 0}, "end": map[string]int{"line": 0, "col": 0}}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			server := NewServer(&fakeCompiler{payload: payload})
+			doc := document{URI: protocol.PathToURI(path), Path: path, Text: "x"}
+			groups, err := server.diagnosticsForDocument(context.Background(), doc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(groups[doc.URI]) != 1 || groups[doc.URI][0]["severity"] != item.severity {
+				t.Fatalf("editor diagnostic: %+v", groups)
+			}
+		})
+	}
 }

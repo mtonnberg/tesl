@@ -256,9 +256,29 @@ func pgRowObserveGeneration(ctx context.Context, tx pgx.Tx, db *PostgresDB, wind
 	if cache == nil || cache.owner != protocol {
 		return nil, fmt.Errorf("row observation cache belongs to another admission")
 	}
-	for !cache.mu.TryLock() {
-		if err := pgIndexWait(ctx, 5*time.Millisecond); err != nil {
-			return nil, err
+	// A contended observation refresh cannot delay a transaction which has no
+	// future generation to observe. Keep both admission and revision reads live
+	// in this transaction; only that negative result may bypass the cache lock.
+	if !cache.mu.TryLock() {
+		if tx != nil && window != nil && active != nil {
+			if err := pgAdmitMigrationTransaction(ctx, tx, db, false); err != nil {
+				return nil, err
+			}
+			key, err := pgRowObservedRevisionAt(ctx, tx, window.namespace, active.hash)
+			if err != nil {
+				return nil, err
+			}
+			if key.databaseUUID != protocol.databaseUUID {
+				return nil, fmt.Errorf("row observation database identity changed")
+			}
+			if key.current <= window.version {
+				return nil, nil
+			}
+		}
+		for !cache.mu.TryLock() {
+			if err := pgIndexWait(ctx, 5*time.Millisecond); err != nil {
+				return nil, err
+			}
 		}
 	}
 	defer cache.mu.Unlock()

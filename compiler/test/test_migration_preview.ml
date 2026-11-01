@@ -70,6 +70,15 @@ let holes () = with_project (fun root path ->
   let errors = List.filter (fun (d : Compile.diagnostic) -> d.severity="error") (P.diagnostics p) in
   check (list string) "implicit history hole reaches application diagnostics once" ["MIG003"] (List.map (fun (d : Compile.diagnostic) -> d.code) errors);
   check bool "preview marks incomplete application in JSON" true (Compile.string_contains (P.to_json p) "\"compilable\":false");
+  let json = Yojson.Basic.from_string (P.to_json p) in
+  let open Yojson.Basic.Util in
+  let decisions = json |> member "decisions" |> to_list in
+  check int "preview exposes the compiler-owned entity decision" 1 (List.length decisions);
+  let option = List.hd decisions |> member "options" |> to_list |> List.hd in
+  check string "exact checked option reaches clients" "additive-default" (option |> member "id" |> to_string);
+  check bool "copyable template preserves custom-code hole" true
+    (Compile.string_contains (option |> member "template" |> to_string) "Default title (todo");
+  check bool "decision is not an automatic value choice" true (option |> member "needsCustomCode" |> to_bool);
   materialize p;
   ignore (refuse (preview ~new_revision:true root)))
 let application_errors () = with_project (fun root path ->

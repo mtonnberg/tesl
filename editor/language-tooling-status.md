@@ -15,6 +15,7 @@ The executable fixtures are in `server_test.go`, `completion_test.go`,
 | Highlights/linked editing | `--occurrences-json` | Same-file occurrences |
 | Prepare rename/rename | `--workspace-references-json`, `--workspace-rename-json` | Rechecked staged project, binding/capture/type/proof checks and whole-input preconditions; requires an initially valid project and a client supporting transactional versioned edits |
 | Completion/resolve | `--completions-json`, `--doc-json` | Stdlib discovery, sibling exported types, auto-imports, receiver fields, partial parsing, revision checks |
+| Migration authoring | Guarded preview, compiler decisions and shared advisory guide | Migration CodeLens, overview/individual help, contextual fields/constructors, explicit template holes and retained read-only diffs; editor apply remains disabled |
 | Signature help | `--signature-help-json` | Callee parameters and active argument |
 | Code actions | Diagnostic fixes and producer action metadata | Decisions/confirmation requests are excluded from ordinary quick fixes; `source.fixAll.tesl` rechecks buffers and returns a versioned single-document edit; guarded migration previews and per-file diffs are read-only; multi-file application remains pending |
 | Selection ranges | `--selection-range-json` | Nested source ranges |

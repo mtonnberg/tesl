@@ -12,6 +12,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"tesl.dev/runtime/go/internal/migrationguide"
 	"tesl.dev/runtime/go/internal/protocol"
 	"tesl.dev/runtime/go/internal/sourceedit"
 	"tesl.dev/runtime/go/internal/tooling"
@@ -110,14 +111,41 @@ func (server *Server) writeMigrationPreview(ctx context.Context, id json.RawMess
 	// Source diagnostics are about the proposed files. Keep their original
 	// logical paths, including files that have not been created on disk.
 	var envelope struct {
-		Diagnostics json.RawMessage `json:"diagnostics"`
+		Diagnostics json.RawMessage           `json:"diagnostics"`
+		Decisions   []migrationguide.Decision `json:"decisions"`
 	}
 	if err := json.Unmarshal(preview.JSON(), &envelope); err != nil {
 		return err
 	}
+	var diagnostics struct {
+		Diagnostics []compilerDiagnostic `json:"diagnostics"`
+	}
+	if err := json.Unmarshal(envelope.Diagnostics, &diagnostics); err != nil {
+		return err
+	}
+	guidance := make([]map[string]any, 0, len(diagnostics.Diagnostics))
+	for index, diagnostic := range diagnostics.Diagnostics {
+		guide := migrationguide.ForDiagnostic(diagnostic.Code, diagnostic.Message)
+		if !strings.HasPrefix(diagnostic.Code, "MIG") {
+			guide = migrationguide.Guide{Title: "Resolve this compiler diagnostic",
+				Summary: "Follow the compiler message and source location, then recheck the complete application.",
+				Options: []migrationguide.Option{}, Help: []string{"A migration preview preserves unrelated type, proof and lint diagnostics; it does not suppress application errors."}}
+		}
+		item := map[string]any{"diagnosticIndex": index}
+		for _, decision := range envelope.Decisions {
+			if diagnostic.Code == "MIG003" && diagnostic.File == decision.File &&
+				diagnostic.Start.Line == decision.Line && diagnostic.Start.Col == decision.Col {
+				guide = migrationguide.ForDecision(decision)
+				item["decisionId"] = decision.ID
+				break
+			}
+		}
+		item["guide"] = guide
+		guidance = append(guidance, item)
+	}
 	response := map[string]any{"version": 1, "kind": "migration-editor-preview", "ok": true, "previewId": handle,
 		"database": preview.Database(), "entryFile": preview.EntryFile(), "operation": preview.Operation(), "compilable": preview.Compilable(),
-		"files": preview.Manifest().FileEdits(), "diagnostics": envelope.Diagnostics}
+		"files": preview.Manifest().FileEdits(), "diagnostics": envelope.Diagnostics, "guidance": guidance, "decisions": envelope.Decisions}
 	encoded, err := json.Marshal(response)
 	if err != nil {
 		return err

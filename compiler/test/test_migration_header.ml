@@ -91,6 +91,40 @@ let private_edits () =
     ["V1","schema/notes/v1/notes.tesl","MIG013";
      "VCurrent","schema/notes/v-current/notes.tesl","MIG001"]
 
+let draft_byte_guidance () = with_project (fun root path file source ->
+  let snapshot = checked root file source in
+  let expected code draft = match H.verify_unchanged snapshot with
+    | Ok () -> fail "changed recorded source accepted"
+    | Error errors ->
+      let error = match List.find_opt (fun (e : Migration_sparse.error) -> e.code=code) errors with
+        | Some error -> error | None -> fail (show errors) in
+      check bool "only a current byte mismatch gets draft guidance" draft
+        (Compile.string_contains error.message "expected while preparing an undeployed migration");
+      if draft then begin
+        check bool "draft guidance retains deployment caution" true
+          (Compile.string_contains error.message "If this revision has been deployed, restore the deployed source");
+        check bool "draft guidance retains executable precondition" true
+          (Compile.string_contains error.message "before building or running")
+      end in
+  let current = path "schema/notes/v-current/notes.tesl" in
+  let saved = read current in
+  write current (saved ^ "# draft byte edit\n");
+  expected "MIG001" true;
+  (match Compile.compile_go_source file source with
+   | Compile.GoFailure diagnostics ->
+      check bool "stale draft is still a compiler error" true
+        (List.exists (fun (d : Compile.diagnostic) -> d.code="MIG001" && d.severity="error") diagnostics)
+   | Compile.GoSuccess _ -> fail "informational guidance allowed stale migration execution");
+  Sys.remove current;
+  expected "MIG001" false;
+  Unix.mkdir current 0o700;
+  expected "MIG001" false;
+  Unix.rmdir current;
+  write current saved;
+  let frozen = path "schema/notes/v1/notes.tesl" in
+  write frozen (read frozen ^ "# frozen byte edit\n");
+  expected "MIG013" false)
+
 let malformed_frozen () = with_project (fun _ path file source ->
   write (path "schema/notes/v1/notes.tesl") "module Broken exposing [";
   ignore (refuses "MIG013" file source))
@@ -304,7 +338,8 @@ let application_private_import () = with_app (fun root path file source ->
 
 let () = run "Migration history headers" ["source diagnostics", List.map (fun (name,f) -> test_case name `Quick f)
   ["complete checked header",complete_header; "unsealed source remains explicit",absent_header;
-   "current versus frozen private edits",private_edits; "malformed frozen source",malformed_frozen;
+   "current versus frozen private edits",private_edits; "current draft guidance keeps executable and frozen guards",draft_byte_guidance;
+   "malformed frozen source",malformed_frozen;
    "unsaved refreshed header wins",unsaved_header; "malformed and duplicate metadata",malformed_metadata;
    "header and declaration edges agree",wrong_edge; "source preservation and formatting",preserve_source;
    "transitively imported history diagnostics",dependency_check; "missing source classification",missing_sources;

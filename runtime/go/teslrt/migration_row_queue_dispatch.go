@@ -104,24 +104,24 @@ func pgRowQueueConversionFunctions(namespace string) []pgMigrationControlFunctio
 			// and target fences plus the state-row share lock until transaction end.
 			// Reacquire/check those live domains here, but do not reconstruct the
 			// complete immutable inventory a second/third time for the same job.
-			operationGuard = strings.Replace(operationGuard,
+			operationGuard = pgRewriteMigrationSQL(operationGuard, namespace,
 				" perform "+ns+"tesl_queue_admit(s.to_version,s.queue);",
 				" perform pg_catalog.pg_advisory_xact_lock_shared(s.fence,s.to_version);", 1)
 		}
-		fn.body = strings.Replace(fn.body, originalGuard, operationGuard, 1)
-		fn.body = strings.ReplaceAll(fn.body, "s "+ns+"tesl_queue_conversion_scope%rowtype", "s record")
-		fn.body = strings.ReplaceAll(fn.body, "source "+ns+"tesl_queue_conversion_sources%rowtype", "source record")
-		fn.body = strings.ReplaceAll(fn.body, "from "+ns+"tesl_queue_conversion_sources c", "from "+sources+" c")
-		fn.body = strings.ReplaceAll(fn.body, "tesl_queue_conversion_receipts", "tesl_row_queue_conversion_receipts")
-		fn.body = strings.ReplaceAll(fn.body, "tesl_queue_conversion_attempts", "tesl_row_queue_conversion_attempts")
-		fn.body = strings.ReplaceAll(fn.body, fn.name, "tesl_row_queue_conversion_"+strings.TrimPrefix(fn.name, "tesl_queue_conversion_"))
+		fn.body = pgRewriteMigrationSQL(fn.body, namespace, originalGuard, operationGuard, 1)
+		fn.body = pgRewriteMigrationSQL(fn.body, namespace, "s "+ns+"tesl_queue_conversion_scope%rowtype", "s record", -1)
+		fn.body = pgRewriteMigrationSQL(fn.body, namespace, "source "+ns+"tesl_queue_conversion_sources%rowtype", "source record", -1)
+		fn.body = pgRewriteMigrationSQL(fn.body, namespace, "from "+ns+"tesl_queue_conversion_sources c", "from "+sources+" c", -1)
+		fn.body = pgRewriteMigrationSQL(fn.body, namespace, "tesl_queue_conversion_receipts", "tesl_row_queue_conversion_receipts", -1)
+		fn.body = pgRewriteMigrationSQL(fn.body, namespace, "tesl_queue_conversion_attempts", "tesl_row_queue_conversion_attempts", -1)
+		fn.body = pgRewriteMigrationSQL(fn.body, namespace, fn.name, "tesl_row_queue_conversion_"+strings.TrimPrefix(fn.name, "tesl_queue_conversion_"), -1)
 		fn.name = "tesl_row_queue_conversion_" + strings.TrimPrefix(fn.name, "tesl_queue_conversion_")
 		if fn.name == "tesl_row_queue_conversion_next" || fn.name == "tesl_row_queue_conversion_begin" {
 			bindingEnd := "raise exception 'tesl: installed queue conversion binding differs'; end if;"
 			if !strings.Contains(fn.body, bindingEnd) {
 				panic("missing queue binding guard")
 			}
-			fn.body = strings.Replace(fn.body, bindingEnd, bindingEnd+`
+			fn.body = pgRewriteMigrationSQL(fn.body, namespace, bindingEnd, bindingEnd+`
  if not `+exactBinding+` then raise exception 'tesl: remediation source policy differs'; end if;
  if `+superseded+` then return; end if;`, 1)
 		}
@@ -129,7 +129,7 @@ func pgRowQueueConversionFunctions(namespace string) []pgMigrationControlFunctio
 			// Finish also gets a compiler binding; the isolated protocol keeps
 			// its existing signature. Both routes fence the same exact attempt.
 			fn.arguments += ", binding jsonb"
-			prefix, _, found := strings.Cut(fn.body, " if kind is null")
+			prefix, _, found := pgCutMigrationSQL(fn.body, namespace, " if kind is null")
 			if !found {
 				panic("application queue failure lost its exact finish guard")
 			}
@@ -152,39 +152,39 @@ end`})
  delete from ` + ns + `tesl_jobs q where q.id=j.id;
  return true;
 end`})
-			fn.body = strings.Replace(fn.body, " if kind is null", " if not "+exactBinding+" or binding->>'policy'='unconverted' then return false; end if;\n if kind is null", 1)
+			fn.body = pgRewriteMigrationSQL(fn.body, namespace, " if kind is null", " if not "+exactBinding+" or binding->>'policy'='unconverted' then return false; end if;\n if kind is null", 1)
 		}
 		if fn.name == "tesl_row_queue_conversion_next" {
 			anchor := " and ((source.revision=0"
 			if !strings.Contains(fn.body, anchor) {
 				panic("application queue failure lost its selection guard")
 			}
-			fn.body = strings.Replace(fn.body, anchor, ` and not exists(select 1 from `+ns+`tesl_row_queue_conversion_failures failure
+			fn.body = pgRewriteMigrationSQL(fn.body, namespace, anchor, ` and not exists(select 1 from `+ns+`tesl_row_queue_conversion_failures failure
   where failure.job_id=j.id and failure.source_digest=digest and failure.attempt_seq<=j.claim_seq
    and failure.payload_hash=pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(j.payload::text,'UTF8')),'hex'))
 `+anchor, 1)
-			fn.body = strings.Replace(fn.body, " and ((source.revision=0", " and (source.policy<>'execution-failed' or "+failureEligible+")\n and (((source.revision=0 or source.policy in ('execution-failed','unconverted'))", 1)
-			fn.body = strings.Replace(fn.body, "j.status in ('pending','dead')", "(j.status in ('pending','dead') or (source.policy in ('execution-failed','unconverted') and j.status='quarantined'))", 1)
-			fn.body = strings.Replace(fn.body, "source.revision>0 and j.status", "source.policy='rejected' and source.revision>0 and j.status", 1)
+			fn.body = pgRewriteMigrationSQL(fn.body, namespace, " and ((source.revision=0", " and (source.policy<>'execution-failed' or "+failureEligible+")\n and (((source.revision=0 or source.policy in ('execution-failed','unconverted'))", 1)
+			fn.body = pgRewriteMigrationSQL(fn.body, namespace, "j.status in ('pending','dead')", "(j.status in ('pending','dead') or (source.policy in ('execution-failed','unconverted') and j.status='quarantined'))", 1)
+			fn.body = pgRewriteMigrationSQL(fn.body, namespace, "source.revision>0 and j.status", "source.policy='rejected' and source.revision>0 and j.status", 1)
 		}
 		if fn.name == "tesl_row_queue_conversion_begin" {
 			anchor := " if source.revision=0 then"
 			if !strings.Contains(fn.body, anchor) {
 				panic("application queue failure lost its begin guard")
 			}
-			fn.body = strings.Replace(fn.body, anchor, ` if exists(select 1 from `+ns+`tesl_row_queue_conversion_failures failure
+			fn.body = pgRewriteMigrationSQL(fn.body, namespace, anchor, ` if exists(select 1 from `+ns+`tesl_row_queue_conversion_failures failure
   where failure.job_id=j.id and failure.source_digest=digest and failure.attempt_seq<=j.claim_seq
    and failure.payload_hash=pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(j.payload::text,'UTF8')),'hex')) then
   return query select j.payload::text,''::text,j.claim_seq,''::text,'execution-failed'::text; return;
  end if;
 `+anchor, 1)
-			fn.body = strings.Replace(fn.body, " if not has_job then return; end if;", ` if not has_job then
+			fn.body = pgRewriteMigrationSQL(fn.body, namespace, " if not has_job then return; end if;", ` if not has_job then
  if exists(select 1 from `+ns+`tesl_row_queue_discards d where d.job_id=tesl_row_queue_conversion_begin.job_id and d.source_digest=digest) then
   return query select ''::text,''::text,0::bigint,''::text,'discarded'::text; end if;
  return; end if;`, 1)
-			fn.body = strings.Replace(fn.body, anchor, " if source.policy='execution-failed' and not "+failureEligible+" then raise exception 'tesl: recovery requires exact latest execution failure'; end if;\n if source.revision=0 or source.policy in ('execution-failed','unconverted') then", 1)
-			fn.body = strings.Replace(fn.body, "if j.status not in ('pending','dead')", "if j.status not in ('pending','dead') and not(source.policy in ('execution-failed','unconverted') and j.status='quarantined')", 1)
-			fn.body = strings.Replace(fn.body, "resume:=j.status;", "resume:=case when j.status='quarantined' then coalesce((select r.resume_status from "+ns+"tesl_row_queue_conversion_receipts r where r.job_id=j.id order by r.attempt_seq desc limit 1),'dead') else j.status end;", 1)
+			fn.body = pgRewriteMigrationSQL(fn.body, namespace, anchor, " if source.policy='execution-failed' and not "+failureEligible+" then raise exception 'tesl: recovery requires exact latest execution failure'; end if;\n if source.revision=0 or source.policy in ('execution-failed','unconverted') then", 1)
+			fn.body = pgRewriteMigrationSQL(fn.body, namespace, "if j.status not in ('pending','dead')", "if j.status not in ('pending','dead') and not(source.policy in ('execution-failed','unconverted') and j.status='quarantined')", 1)
+			fn.body = pgRewriteMigrationSQL(fn.body, namespace, "resume:=j.status;", "resume:=case when j.status='quarantined' then coalesce((select r.resume_status from "+ns+"tesl_row_queue_conversion_receipts r where r.job_id=j.id order by r.attempt_seq desc limit 1),'dead') else j.status end;", 1)
 		}
 		result = append(result, fn)
 	}

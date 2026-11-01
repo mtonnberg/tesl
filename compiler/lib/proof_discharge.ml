@@ -677,7 +677,10 @@ let check_fn_return_proof_annotations
        | RetMaybeAttached { binding = b; loc = ret_loc; _ }
          when fd.kind = EstablishKind && optional_attached_proof_return fd.return_spec ->
          let required = Option.get b.proof_ann in
-         let check_leaf (_te, subjects, proofs, leaf) =
+         let check_leaf (types, subjects, proofs, leaf) =
+           (* A returned field belongs to the receiver's type at this exact
+              branch, including let aliases and case payload bindings. *)
+           with_field_type_context fields_by_type ctors types (fun () ->
            let head, args = collect_call_head_and_args [] leaf in
            let payload = match head, args with
              | EConstructor {name="Nothing"; args=[]; _}, [] -> None
@@ -698,7 +701,7 @@ let check_fn_return_proof_annotations
                errors := make_error ret_loc
                  ~hint:"attach the declared proof to the returned value with ::: inside establish, preserve existing evidence, or return Nothing"
                  (Printf.sprintf "establish `%s` returns a success value without the declared proof `%s` on that value"
-                   fd.name (pp_proof wanted)) :: !errors in
+                   fd.name (pp_proof wanted)) :: !errors) in
          List.iter check_leaf (return_leaves
            (List.map (fun (p : binding) -> p.name, p.type_expr) fd.params)
            (build_initial_subject_env fd.params) (build_initial_proof_env fd.params) fd.body)

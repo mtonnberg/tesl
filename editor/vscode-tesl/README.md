@@ -51,6 +51,65 @@ For diagnostics, set the `TESL_DAP_LOG` environment variable to a file path
 
 ---
 
+## Migration authoring
+
+Use **Tesl: Migration Guide** from the Command Palette for an overview and
+step-by-step proof, row, queue and rollout guidance. Expand each option or
+**More help** for its conditions and limitations. The guide distinguishes adding
+a first proof with `Revalidate` from changing an existing historical proof, which
+requires a supported explicit conversion rather than `Same`.
+
+**Tesl: Preview Migration Decisions** uses the matching language server and
+compiler to inspect the application and all open project buffers. When invoked
+from a schema or migration file, choose the application entry file; multiple
+reachable databases get an explicit picker. The preview shows:
+
+- An overview of proposed files and every compiler diagnostic.
+- One review item at a time, with **Previous**/**Next**, source locations and
+  expandable help.
+- Compiler-proposed templates where a supported route was checked. Explicit
+  `todo` holes remain for your values or custom code; copying a template never
+  applies it or establishes that the completed migration is safe.
+- Read-only before/after diffs of the exact retained proposal. Refresh after
+  editing; stale handles cannot fetch replacement disk contents.
+
+A **Migration guide** / **Preview migration decisions** CodeLens appears above
+`migration = Migration { ... }` and `VCurrent` module headers. Enable the editor's
+`editor.codeLens` setting if lenses are hidden. Contextual completion offers
+migration fields and constructors with help; use `Ctrl+Space` to request it.
+
+An exact current-target byte/hash mismatch is shown as information while preparing
+a draft, with refresh and deployed-history guidance. The compiler still refuses
+to build/run stale history. Missing sources, invalid layouts and frozen-source
+hash errors remain errors. The editor cannot determine deployment state.
+
+The editor preview does not apply multi-file changes. Complete source preparation
+with `tesl migrate app.tesl`, then recheck, test and inspect the generated plan.
+Editor application remains disabled until its buffer-snapshot and recovery guards
+are complete; migration decisions are never ordinary automatic quick fixes.
+
+These features require the updated extension **and matching Tesl toolchain**.
+A checkout does not update an installed extension. Build a VSIX with
+`npm ci && npm run package` in this directory, install it using
+`codium --install-extension vscode-tesl-0.7.14.vsix` (or **Extensions: Install from
+VSIX...**), then reload the window. Toolchain development settings follow below.
+
+When using this PR from a checkout, rebuild the compiler, CLI and LSP from that
+same checkout. After `cd compiler && dune build`, build the Go components from the
+repository root (inside the repository development environment):
+
+```sh
+(cd runtime/go && go build -o ../../.tesl-stuff/tesl ./cmd/tesl)
+(cd runtime/go && go build -o ../../.tesl-stuff/tesl-lsp ./cmd/tesl-lsp)
+```
+
+Set `tesl.compilerBinary` to the rebuilt compiler and `tesl.lspBinary` to the rebuilt
+LSP in User Settings, then reload the window. Use the rebuilt CLI for
+`tesl migrate`; an older globally installed CLI/LSP does not gain these features
+from rebuilding only the compiler or reinstalling only the VSIX.
+
+---
+
 ## Requirements
 
 The extension needs the Tesl language server (`tesl-lsp`) to provide diagnostics and editor intelligence.

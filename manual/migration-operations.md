@@ -4,6 +4,9 @@ Tesl migrations are a deployment lifecycle, not just DDL. Source checking establ
 the allowed transition; installed history and runtime fences establish when it is
 safe to publish new data and retire old users.
 
+For the authoring loop, proof-change decisions, draft diagnostics and a rolling
+compatibility overview, start with the [migration guide](migration-guide.md).
+
 ## Which connection runs which command?
 
 | Operation | Principal | Purpose |
@@ -107,8 +110,11 @@ it catches up and completes the reviewed target Contract after old applications
 and their claims drain. Running that retirement command before rolling old pods
 can wait for pods that the deployment controller has not yet replaced.
 
-The example's recorded measurements cover the previous separate install/worker
-commands; verification evidence for the combined startup is still pending.
+The combined startup has a recorded local Kubernetes run: 731 successful samples,
+no failed samples, both application-version overlaps and 121 correct final job
+receipts. See the [example's evidence and limits](../example/kubernetes-rolling/README.md#files-and-evidence).
+This verifies those compatible adjacent changes in the sampled local workload;
+it is not a production availability guarantee for arbitrary migrations.
 
 ### Preview in CI
 
@@ -208,8 +214,11 @@ Contract is the retirement/finalization step: establish final data and queue
 state, fence out retiring versions, then perform the reviewed cleanup. Automatic
 Contract execution means scheduling that same checked operation when safe.
 It does not by itself provide installation, conversion or multi-version catch-up.
-Those complete automatic deployment/catch-up paths are required release work;
-see [delivery requirements](../dev-docs/migration-delivery-status.md#clarified-release-requirements-maintainer-2026-10-12).
+The finite `deploy` command connects installation, conversion and checked
+retirement; `catch-up` executes the supported retained history with Worker
+credentials. For a rolling adjacent upgrade, preserve the open window with
+`worker --install` before replacing application pods, then retire after the old
+pods drain. See the [deployment sequence](#the-deployment-sequence).
 
 ### Current explicit-command sequence
 
@@ -326,9 +335,16 @@ proof; the budget is not hard intrinsic preemption or a memory sandbox.
 Row and queue examples demonstrate repeated non-additive upgrades, including
 ordered row-first / queue-payload-second changes. A row-transforming edge retains
 identical queue contracts; a payload-changing edge retains settled entities.
-Simultaneous row/payload changes, queue-bearing table Drop, old-catalog adoption,
-and the general `IgnoreOld` schema-change
-constructor remain outside the supported surface. Explicit discard revisions can
+Simultaneous row/payload changes, queue identity rename, old-catalog adoption,
+and the general `IgnoreOld` schema-change constructor remain outside the supported
+surface. Dropping an unrelated table beside unchanged queues is supported within
+the checked Drop restrictions; it does not permit dropping a table required by
+retained queue contracts. One reviewed whole-queue `RemoveEmpty` edge is also
+supported in an otherwise additive history, with unchanged surviving queue
+contracts and no retained jobs in the removed queue. Partial job removal, mixed
+removal/conversion edges and multiple removal edges remain refused. See
+[table cleanup](migration-contracts.md) and [empty queue removal](queue-removal.md)
+for the exact bounds. Explicit discard revisions can
 remove malformed old jobs; they do not reconstruct a typed value. Consult the current language spec
 and executable examples rather than contributor milestone history when choosing
 an operation.

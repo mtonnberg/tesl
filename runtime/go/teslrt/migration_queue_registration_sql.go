@@ -26,7 +26,7 @@ func pgQueueCandidateControlFunctions(namespace string) []pgMigrationControlFunc
 			if !strings.Contains(functions[i].body, "begin\n") {
 				panic("candidate expanded function has no closed body boundary")
 			}
-			functions[i].body = strings.Replace(functions[i].body, "begin\n", guard, 1)
+			functions[i].body = pgRewriteMigrationSQL(functions[i].body, namespace, "begin\n", guard, 1)
 		}
 	}
 	functions = append(functions, pgQueueRegistrationFunctions(namespace)...)

@@ -91,3 +91,33 @@ func TestContractSourcePreviewUsesExistingGuards(t *testing.T) {
 		t.Fatal("contract bypassed exact envelope")
 	}
 }
+
+func TestSourcePreviewAdvisoryDecisionsKeepAuthoritySeparate(t *testing.T) {
+	base := previewVector(t)
+	old, err := DecodePreview(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decision := `[{"id":"entity:Note","entity":"Note","file":"migration.tesl","line":20,"col":4,"reason":"choose a value","options":[{"id":"additive-default","label":"Choose defaults","template":"Additive [Default title (todo \"Choose a String literal\")]","help":"Replace the typed hole and recheck","needsCustomCode":true}]}]`
+	with := func(value string) []byte {
+		return append(append(bytes.Clone(base[:len(base)-1]), []byte(`,"decisions":`+value)...), '}')
+	}
+	p, err := DecodePreview(with(decision))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Manifest().Digest() != old.Manifest().Digest() || p.Compilable() != old.Compilable() {
+		t.Fatal("advisory options changed source authority or compiler judgment")
+	}
+	for _, invalid := range []string{
+		`null`, `{}`, `[{}]`, strings.Replace(decision, `"line":20`, `"line":-1`, 1),
+		strings.Replace(decision, `"options":[`, `"options":null,"unknown":[`, 1),
+		strings.Replace(decision, `"needsCustomCode":true`, `"needsCustomCode":null`, 1),
+		strings.Replace(decision, `"entity":"Note"`, `"entity":null`, 1),
+		strings.Replace(decision, `"line":20`, `"line":"20"`, 1),
+	} {
+		if _, err := DecodePreview(with(invalid)); err == nil {
+			t.Fatalf("invalid advisory metadata accepted: %s", invalid)
+		}
+	}
+}

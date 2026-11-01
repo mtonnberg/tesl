@@ -155,6 +155,7 @@ function makeVscode(files, debugCalls, taskCalls, workspacePath = repoRoot, opti
         inspect: (key) => ({ globalValue: options.configuration?.[key], workspaceValue: options.workspaceConfiguration?.[key] }),
       }),
       getWorkspaceFolder: () => workspaceFolder,
+      registerTextDocumentContentProvider: () => new Disposable(),
       findFiles: async () => files,
       createFileSystemWatcher: () => ({
         onDidCreate: () => new Disposable(),
@@ -935,7 +936,8 @@ function testManifestRequiresTrustForExecution() {
     restrictedConfigurations: ["tesl.lspBinary", "tesl.dapBinary", "tesl.toolchainRoot"],
   });
   assert.ok(
-    manifest.contributes.commands.every((command) => command.enablement === "isWorkspaceTrusted")
+    manifest.contributes.commands.filter((command) => command.command !== "tesl.migrationGuide")
+      .every((command) => command.enablement === "isWorkspaceTrusted")
   );
   for (const items of Object.values(manifest.contributes.menus)) {
     assert.ok(items.every((item) => item.when.includes("isWorkspaceTrusted")));

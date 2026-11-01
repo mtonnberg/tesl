@@ -4,7 +4,7 @@ module M = Migration_manifest
 type operation = Start | Refresh | Contract
 type error = {loc:Location.loc;message:string;candidates:T.candidate list}
 type t = {operation:operation;selection:T.selection;revision_after:int;abi:A.t;
-          manifest:M.t;diagnostics:Compile.diagnostic list}
+          manifest:M.t;diagnostics:Compile.diagnostic list;decisions:Migration_generate.decision list}
 let operation p = p.operation
 let selection p = p.selection
 let revision_after p = p.revision_after
@@ -34,15 +34,15 @@ let generate ~project_root ~entry_file ~database ~new_revision ~documents = prot
       ~stored_value_compatibility:(Some (A.stored_value_compatibility context))
       ~compiler_abi:(A.id context) ~project_root ~entry_file ~database ~documents) in
     let selected = T.selection target_ in
-    let operation,revision_after,manifest =
+    let operation,revision_after,manifest,decisions =
       if new_revision || selected.current_version=1 then
-        let p = target (T.start target_ ~documents) in Start,p.current_version,p.manifest
+        let p = target (T.start target_ ~documents) in Start,p.current_version,p.manifest,[]
       else
-        let p = target (T.refresh target_ ~documents) in Refresh,p.current_version,p.manifest in
+        let p = target (T.refresh target_ ~documents) in Refresh,p.current_version,p.manifest,p.decisions in
     let diagnostics = Source_input.with_overlays
       ~project_root:(Option.value (Source_input.project_root ()) ~default:project_root)
       (M.overlays manifest) (fun () -> Compile.check_source entry_file (Source_input.read entry_file)) in
-    {operation;selection=selected;revision_after;abi=context;manifest;diagnostics})) in
+    {operation;selection=selected;revision_after;abi=context;manifest;diagnostics;decisions})) in
   (match verify preview ~documents with Ok () -> () | Error errors -> raise (Invalid errors));
   preview)
 let generate_contract ~project_root ~entry_file ~database ~version ~documents = protect entry_file (fun () ->
@@ -72,17 +72,25 @@ let generate_contract ~project_root ~entry_file ~database ~version ~documents = 
   let manifest=source_guard(M.combine (T.source_guard target_) edits ~documents) in
   let diagnostics=Source_input.with_overlays ~project_root:(Option.value(Source_input.project_root())~default:project_root)
    (M.overlays manifest) (fun () -> Compile.check_source entry_file (Source_input.read entry_file)) in
-  {operation=Contract;selection;revision_after=selection.current_version;abi=context;manifest;diagnostics})) in
+  {operation=Contract;selection;revision_after=selection.current_version;abi=context;manifest;diagnostics;decisions=[]})) in
  (match verify result ~documents with Ok () -> () | Error errors -> raise(Invalid errors));result)
 let quote = Compile.json_encode_string
 let option_int = function None -> "null" | Some n -> string_of_int n
 let to_json p =
   let s = p.selection in
-  Printf.sprintf {|{"version":1,"kind":"migration-source-preview","ok":true,"operation":%s,"compilerAbi":%s,"compilable":%b,"selection":{"entryFile":%s,"databaseFile":%s,"database":%s,"family":%s,"schemaRoot":%s,"previousVersion":%s,"revisionBefore":%d,"revisionAfter":%d},"diagnostics":%s,"manifest":%s}|}
+  let option (o:Migration_generate.decision_option) = Printf.sprintf
+    {|{"id":%s,"label":%s,"template":%s,"help":%s,"needsCustomCode":%b}|}
+    (quote o.id) (quote o.label) (quote o.template) (quote o.help) o.needs_custom_code in
+  let decision (d:Migration_generate.decision) = Printf.sprintf
+    {|{"id":%s,"entity":%s,"file":%s,"line":%d,"col":%d,"reason":%s,"options":[%s]}|}
+    (quote d.id) (quote d.entity) (quote d.file) d.line d.col (quote d.reason)
+    (String.concat "," (List.map option d.options)) in
+  Printf.sprintf {|{"version":1,"kind":"migration-source-preview","ok":true,"operation":%s,"compilerAbi":%s,"compilable":%b,"selection":{"entryFile":%s,"databaseFile":%s,"database":%s,"family":%s,"schemaRoot":%s,"previousVersion":%s,"revisionBefore":%d,"revisionAfter":%d},"diagnostics":%s,"decisions":[%s],"manifest":%s}|}
     (quote (match p.operation with Start -> "start" | Refresh -> "refresh" | Contract -> "contract"))
     (quote (compiler_abi p)) (compilable p) (quote s.entry_file) (quote s.database_file)
     (quote s.database_name) (quote s.family) (quote s.schema_root) (option_int s.previous_version)
-    s.current_version p.revision_after (Compile.diagnostics_to_json p.diagnostics) (M.to_json p.manifest)
+    s.current_version p.revision_after (Compile.diagnostics_to_json p.diagnostics)
+    (String.concat "," (List.map decision p.decisions)) (M.to_json p.manifest)
 let errors_to_json errors =
   let candidate (c : T.candidate) = Printf.sprintf {|{"database":%s,"file":%s}|} (quote c.database_name) (quote c.database_file) in
   let error (e : error) = Printf.sprintf {|{"file":%s,"line":%d,"col":%d,"message":%s,"candidates":[%s]}|}

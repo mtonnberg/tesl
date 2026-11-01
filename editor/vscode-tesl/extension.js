@@ -6,6 +6,7 @@ const { spawnSync, spawn } = require("child_process");
 const vscode = require("vscode");
 const { parseTeslTestOutput } = require("./test-output-parser");
 const { findOnPath, findInstallation } = require("./toolchain");
+const { registerMigrationAuthoring } = require("./migration-authoring");
 
 let client;
 let managedSelection;
@@ -476,6 +477,9 @@ function activate(context) {
   context.subscriptions.push(
     vscode.languages.registerCodeLensProvider({ language: "tesl" }, lensProvider)
   );
+
+  registerMigrationAuthoring(vscode, context, { getClient: () => client, requireTrustedWorkspace });
+
 
   // "Run test" — run a single named test via the `tesl` CLI wrapper.
   //

@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -259,4 +260,59 @@ func TestMigrationEditorCancellationDiscardsLatePreviewAndOldHandle(t *testing.T
 	connection.send(t, "3", "workspace/executeCommand", map[string]any{"command": "tesl.migrationPreviewFile", "arguments": []any{
 		map[string]string{"previewId": original.PreviewID, "path": created}}})
 	connection.response(t, "3", -32602)
+}
+
+func TestMigrationEditorForwardsCompilerDecisionsAndAllDiagnosticGuidance(t *testing.T) {
+	for _, hasOption := range []bool{false, true} {
+		t.Run(fmt.Sprintf("option=%v", hasOption), func(t *testing.T) {
+			server, doc, _, compiler := migrationEditorFixture(t)
+			var envelope map[string]any
+			if err := json.Unmarshal(compiler.preview.JSON(), &envelope); err != nil {
+				t.Fatal(err)
+			}
+			options := []any{}
+			if hasOption {
+				options = append(options, map[string]any{"id": "additive-default", "label": "Supply a literal", "template": "Additive [Default count (todo \"Choose Int\")]", "help": "Compiler checked structural route", "needsCustomCode": true})
+			}
+			envelope["decisions"] = []any{map[string]any{"id": "entity:Todo", "entity": "Todo", "file": doc.Path, "line": 0, "col": 0, "reason": "choose a value", "options": options}}
+			envelope["diagnostics"] = map[string]any{"version": 1, "diagnostics": []any{
+				map[string]any{"file": doc.Path, "start": map[string]int{"line": 0, "col": 0}, "code": "MIG003", "severity": "error", "message": "choose a value"},
+				map[string]any{"code": "MIG013", "severity": "error", "message": "frozen source changed"},
+				map[string]any{"code": "T001", "severity": "error", "message": "expected Int, got String"},
+			}}
+			raw, err := json.Marshal(envelope)
+			if err != nil {
+				t.Fatal(err)
+			}
+			compiler.preview, err = sourceedit.DecodePreview(raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			raw = migrationEditorCommand(t, server, "tesl.generateMigration", map[string]any{"entryFile": doc.Path, "projectRoot": filepath.Dir(doc.Path)}, 0)
+			var result struct {
+				Decisions []json.RawMessage
+				Guidance  []struct {
+					DiagnosticIndex int
+					DecisionID      string
+					Guide           struct {
+						Title   string
+						Options []json.RawMessage
+					}
+				}
+			}
+			if err := json.Unmarshal(raw, &result); err != nil {
+				t.Fatal(err)
+			}
+			if len(result.Decisions) != 1 || len(result.Guidance) != 3 || result.Guidance[0].DecisionID != "entity:Todo" || result.Guidance[1].Guide.Title != "Restore the recorded history" || result.Guidance[2].Guide.Title != "Resolve this compiler diagnostic" {
+				t.Fatalf("lost compiler decisions/diagnostics: %s", raw)
+			}
+			wantOptions := 0
+			if hasOption {
+				wantOptions = 1
+			}
+			if len(result.Guidance[0].Guide.Options) != wantOptions {
+				t.Fatalf("invented alternatives: %s", raw)
+			}
+		})
+	}
 }

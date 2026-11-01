@@ -89,6 +89,17 @@ let optional () = with_project (fun root path ->
 let holes_and_manual_default () = with_project (fun root path ->
   change path (replace "title: String }" "title: String, count: Int }" child);
   let p = get (refresh root) in assert_codes ["MIG003"] p;
+  check int "one compiler-owned decision" 1 (List.length p.decisions);
+  let decision = List.hd p.decisions in
+  check string "decision identifies owned entity" "Notes.Note" decision.entity;
+  check string "decision points at proposed migration" (migration path) decision.file;
+  check int "one checked additive option" 1 (List.length decision.options);
+  let option = List.hd decision.options in
+  check string "option uses checked additive classification" "additive-default" option.id;
+  check bool "default value remains explicit" true option.needs_custom_code;
+  check bool "typed template contains a blocking custom hole" true
+    (contains option.template "Default count (todo \"Choose a literal of type Int");
+  check bool "no probe constant becomes a data policy" false (contains option.template "Default count 0");
   let source = preview_source path p in
   check bool "decision names new field" true (contains source "count");
   check bool "decision lists old row inputs" true (contains source "old row fields: id, title");
@@ -101,8 +112,26 @@ let holes_and_manual_default () = with_project (fun root path ->
   let source = set_entry (migration path) source "Notes.Note" "Additive [Default count 0]" in
   edit path "migrations/notes/v2.tesl" source; accepts (migration path) source;
   let p = get (refresh root) in assert_codes [] p;
+  check int "resolved handwritten rule has no decision" 0 (List.length p.decisions);
   check string "handwritten default remains exact" source (preview_source path p);
   check int "handwritten default is not regenerated" 0 (List.length (M.edits p.manifest)))
+let multiple_default_template () = with_project (fun root path ->
+  change path (replace "title: String }" "title: String, count: Int, label: String, archived: Maybe String }" child);
+  let p = get (refresh root) in assert_codes ["MIG003"] p;
+  let decision = List.hd p.decisions in
+  let option = List.hd decision.options in
+  check bool "every new required field is represented" true
+    (contains option.template "Default count" && contains option.template "Default label");
+  check bool "optional field needs no invented default" false (contains option.template "Default archived");
+  materialize p.manifest;
+  let completed = option.template
+    |> replace "(todo \"Choose a literal of type Int for Notes.Note.count\")" "7"
+    |> replace "(todo \"Choose a literal of type String for Notes.Note.label\")" "\"reviewed\"" in
+  let source = set_entry (migration path) (read (migration path)) "Notes.Note" completed in
+  edit path "migrations/notes/v2.tesl" source;
+  accepts (migration path) source;
+  let final = get (refresh root) in assert_codes [] final;
+  check int "author-completed template has no unresolved decisions" 0 (List.length final.decisions))
 let new_drop () = with_project (fun root path ->
   change path (replace "entity Note table \"notes\"" "entity Tag table \"tags\"" child |> replace "exposing [Note]" "exposing [Tag]");
   let p = get (refresh root) in assert_codes [] p;
@@ -143,6 +172,8 @@ let codec_change () = with_project ~source:payload (fun root path ->
   change path (replace "-> \"text\"" "-> \"body\"" payload);
   let p = get (refresh root) in assert_codes ["MIG003"] p;
   check int "codec change invalidates whole generated claim" 0 (same_count (migration path) (preview_source path p));
+  check int "codec change never offers a literal-default shortcut" 0
+    (List.length (List.hd p.decisions).options);
   check bool "affected stored occurrence needs a decision" true (contains (preview_source path p) "payload"))
 let omitted_same () = with_project ~source:payload (fun root path ->
   edit path "migrations/notes/v2.tesl" (same_omitted (migration path) (read (migration path)));
@@ -247,6 +278,8 @@ entity Note table "notes" primaryKey id { id: String, amount: Int ::: Positive a
     change path (replace "n > 0" "n > 10" source);
     let p = get (refresh root) in assert_codes ["MIG003"] p;
     let output = preview_source path p in
+    check int "changed historical proof never offers a default shortcut" 0
+      (List.length (List.hd p.decisions).options);
     check int "stale fact identity is removed" 0 (same_count (migration path) output);
     check bool "proof decision identifies fact" true (contains output "Positive");
     check bool "proof decision identifies stored occurrence" true (contains output "amount");
@@ -345,6 +378,7 @@ let later_revision () = with_project (fun root path ->
 let () = run "Migration refresh previews" ["checked source merge",List.map (fun (name,f) -> test_case name `Quick f)
   ["unchanged preview is deterministic and empty",noop;"optional private field preserves app and helpers",optional;
    "missing value blocks compilation and manual default survives",holes_and_manual_default;
+   "typed template covers all required fields and excludes optional ones",multiple_default_template;
    "new and removed entities",new_drop;"reverting schema removes generated entry",reverted;
    "obsolete handwritten entry remains diagnosed",obsolete_user;"changed same-named codec invalidates claim",codec_change;
    "deliberate Same omission requests revalidation",omitted_same;"stale user Same cannot inform adapters",stale_user_same;

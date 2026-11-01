@@ -144,15 +144,15 @@ func pgRowControlFunctions(namespace string) []pgMigrationControlFunction {
 		}
 		body := fn.body
 		if fn.name == "tesl_heartbeat" {
-			body = strings.Replace(body, " admitted_floor :=", ` if v is null or v<1 or v>2147483646 then raise exception 'tesl: invalid row heartbeat version'; end if;
+			body = pgRewriteMigrationSQL(body, namespace, " admitted_floor :=", ` if v is null or v<1 or v>2147483646 then raise exception 'tesl: invalid row heartbeat version'; end if;
  perform pg_catalog.pg_advisory_xact_lock_shared(-fence_ns,v) from `+ns+`tesl_schema_meta where id=1;
  admitted_floor :=`, 1)
 		}
 		if fn.name == "tesl_begin_expansion" {
-			body = strings.Replace(body, "ep is distinct from true", "(v=1 and ep is distinct from true)", 1)
+			body = pgRewriteMigrationSQL(body, namespace, "ep is distinct from true", "(v=1 and ep is distinct from true)", 1)
 		}
 		if fn.name == "tesl_record_expanded" {
-			body = strings.Replace(body, "1,'tesl-1',true,pg_catalog.current_setting", "1,'tesl-1',r.epoch_preserving,pg_catalog.current_setting", 1)
+			body = pgRewriteMigrationSQL(body, namespace, "1,'tesl-1',true,pg_catalog.current_setting", "1,'tesl-1',r.epoch_preserving,pg_catalog.current_setting", 1)
 		}
 		if fn.name == "tesl_record_expanded" {
 			body = strings.TrimSuffix(body, "\nend") + `
@@ -163,14 +163,14 @@ func pgRowControlFunctions(namespace string) []pgMigrationControlFunction {
  end if;
 end`
 		}
-		functions[i].body = strings.Replace(body, "\nbegin\n", "\nbegin\n"+guard, 1)
+		functions[i].body = pgRewriteMigrationSQL(body, namespace, "\nbegin\n", "\nbegin\n"+guard, 1)
 		if fn.name == "tesl_admit" {
-			functions[i].body = strings.Replace(functions[i].body, " return s.compat_floor;", " perform "+ns+"tesl_stage_guards_ready(v);\n return s.compat_floor;", 1)
+			functions[i].body = pgRewriteMigrationSQL(functions[i].body, namespace, " return s.compat_floor;", " perform "+ns+"tesl_stage_guards_ready(v);\n return s.compat_floor;", 1)
 			versionOnly := functions[i]
 			versionOnly.name = "tesl_row_admit_version"
 			// Queue admission validates every complete inventory itself immediately
 			// afterward. Retain all other live version/baseline admission checks.
-			versionOnly.body = strings.Replace(versionOnly.body, " perform "+ns+"tesl_queue_inventory_json(v);", "", 1)
+			versionOnly.body = pgRewriteMigrationSQL(versionOnly.body, namespace, " perform "+ns+"tesl_queue_inventory_json(v);", "", 1)
 			internal = append(internal, versionOnly)
 		}
 	}
@@ -191,7 +191,7 @@ end`
 	for i, fn := range functions {
 		guard := ""
 		if fn.name == "tesl_record_index_state" {
-			functions[i].body = strings.Replace(fn.body, "\n return true;", `
+			functions[i].body = pgRewriteMigrationSQL(fn.body, namespace, "\n return true;", `
   update `+ns+`tesl_schema_stage_promotions set state=case when new_state='failed' and pg_catalog.left(detail,6)='23505:' then 'blocked_duplicates' else 'promoting' end where job_id=j and state<>'enforced';
   update `+ns+`tesl_schema_stages s set state=p.state from `+ns+`tesl_schema_stage_promotions p where p.job_id=j and p.stage_id=s.stage_id;
   return true;`, 1)
@@ -208,7 +208,7 @@ end`
 			guard = " if exists(select 1 from " + ns + "tesl_schema_stage_guards) then raise exception 'tesl: guarded unique Contract is not implemented'; end if;\n"
 		}
 		if guard != "" {
-			functions[i].body = strings.Replace(fn.body, "\nbegin\n", "\nbegin\n"+guard, 1)
+			functions[i].body = pgRewriteMigrationSQL(fn.body, namespace, "\nbegin\n", "\nbegin\n"+guard, 1)
 		}
 	}
 	return functions

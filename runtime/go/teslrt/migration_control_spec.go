@@ -1,9 +1,50 @@
 package teslrt
 
+import "strings"
+
 // The initial production format supports additive expansion only. These closed
 // definitions serve both installation and same-server catalog comparison; they
 // are never assembled from a source program's SQL or a database's stored text.
 const pgMigrationControlFormat = 3
+
+// pgRewriteMigrationSQL treats a quoted namespace as data while rewriting a
+// trusted SQL template. The old/new fragments may themselves include that
+// complete namespace prefix, so protect all three inputs before substitution.
+// A NUL cannot occur in a valid PostgreSQL identifier or SQL body; rejecting it
+// also keeps the internal one-byte token distinct from every nonempty fragment.
+func pgRewriteMigrationSQL(body, namespace, old, replacement string, count int) string {
+	if old == "" {
+		panic("migration SQL rewrite requires a nonempty fragment")
+	}
+	for _, input := range []string{namespace, body, old, replacement} {
+		if strings.IndexByte(input, 0) >= 0 {
+			panic("migration SQL rewrite does not accept NUL")
+		}
+	}
+	prefix := quoteIdentifier(namespace) + "."
+	const token = "\x00"
+	protect := func(input string) string { return strings.ReplaceAll(input, prefix, token) }
+	rewritten := strings.Replace(protect(body), protect(old), protect(replacement), count)
+	return strings.ReplaceAll(rewritten, token, prefix)
+}
+
+// pgCutMigrationSQL locates an SQL fragment outside quoted namespace data.
+// Like rewriting, splitting must protect both the body and the sought fragment.
+func pgCutMigrationSQL(body, namespace, separator string) (string, string, bool) {
+	if separator == "" {
+		panic("migration SQL cut requires a nonempty fragment")
+	}
+	for _, input := range []string{namespace, body, separator} {
+		if strings.IndexByte(input, 0) >= 0 {
+			panic("migration SQL cut does not accept NUL")
+		}
+	}
+	prefix := quoteIdentifier(namespace) + "."
+	const token = "\x00"
+	protect := func(input string) string { return strings.ReplaceAll(input, prefix, token) }
+	before, after, found := strings.Cut(protect(body), protect(separator))
+	return strings.ReplaceAll(before, token, prefix), strings.ReplaceAll(after, token, prefix), found
+}
 
 type pgMigrationControlTable struct{ name, columns string }
 

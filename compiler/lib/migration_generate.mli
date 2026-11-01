@@ -26,11 +26,17 @@ val start_with_compatibility : stored_value_compatibility:string option ->
   compiler_abi:string -> project_root:string -> family:string -> version:int ->
   documents:Migration_manifest.document list -> (preview,error list) result
 
+type decision_option = { id:string; label:string; template:string; help:string; needs_custom_code:bool }
+type decision = { id:string; entity:string; file:string; line:int; col:int; reason:string; options:decision_option list }
+(** Advisory templates only, never source-write or execution authority. Literal
+    default options require a successful checked additive classification; values
+    remain explicit author decisions. Positions refer to the proposed source. *)
 type refresh_preview = {
   family : string;
   current_version : int;
   manifest : Migration_manifest.t;
   diagnostics : Compile.diagnostic list;
+  decisions : decision list;
 }
 (** Refresh a selected, already sealed current migration after undeployed schema
     edits. Frozen schema seals are verified before replacing the current target seal.

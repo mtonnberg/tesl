@@ -105,7 +105,22 @@ the Change Schema UI remain under development.
 
 Successful generation returns version 1, kind `migration-editor-preview`,
 `ok: true`, `previewId`, selected `database`/`entryFile`, `operation`, `compilable`,
-`files` and `diagnostics`. File entries contain `path`, `creates` and nullable
+`files` and `diagnostics`. Optional `decisions` and `guidance` provide authoring
+help without granting edit authority:
+
+- `decisions` retains the compiler array of `{id, entity, file, line, col,
+  reason, options}`. Options have `{id, label, template, help, needsCustomCode}`.
+  Coordinates are zero-based compiler UTF-8 byte positions. Templates retain
+  explicit custom-code/value holes. An empty option array is meaningful: the
+  consumer must not invent a checked source template for that decision.
+- `guidance` contains `{diagnosticIndex, guide, decisionId?}` for each diagnostic
+  in `diagnostics.diagnostics`. `guide` has `{title, summary, options, help}`;
+  options have `{id, title, when, example?, requiresCustomCode}`. Exact compiler
+  decision locations take precedence over advisory diagnostic help. Otherwise
+  the guide explains alternatives without claiming a supported edit. All compiler
+  diagnostics remain visible, including non-migration errors.
+
+File entries contain `path`, `creates` and nullable
 `documentVersion`. Diagnostics retain the compiler's application diagnostic
 envelope and logical paths, including future files. A valid proposal with migration
 holes has `ok: true` and `compilable: false`. Compiler refusal returns `ok: false`
@@ -120,6 +135,18 @@ are limited to 4 MiB of encoded JSON. Large file content is refused without a
 partial response. Clients must request a new preview after any source changes
 before a future application operation; viewing a retained diff establishes no
 authority to overwrite current contents.
+
+The VS Code/VSCodium extension exposes these read-only operations through a
+migration CodeLens, **Migration Guide**, and **Preview Migration Decisions**.
+It shows an overview, individual decision help and retained diffs. Copying a
+compiler template only writes the clipboard; it does not call `tesl.applyMigration`.
+
+For presentation only, the exact producer-owned current-source byte mismatch
+(`MIG001`, expected-undeployed-draft message and recorded-bytes mismatch reason)
+is informational in the editor. Compiler/build diagnostics remain errors. Other
+`MIG001` causes, including missing sources and invalid layout, and all frozen
+integrity (`MIG013`) errors keep error severity. Message changes fail closed to
+normal error presentation. This does not infer deployment state.
 
 The session transport supports bounded server-to-client requests for the upcoming
 apply workflow. Replies enter the same ordered, bounded queue as document

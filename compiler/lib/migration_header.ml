@@ -100,9 +100,11 @@ let verify_unchanged checked = protect (fun () ->
         | S.Changed_source | S.Missing_source | S.Invalid_layout -> true
         | S.Invalid_record | S.Invalid_schema | S.Abi_mismatch | S.Semantic_mismatch -> false in
       let code = if current && changed_input then "MIG001" else "MIG013" in
-      let instruction = if code = "MIG001" then
-        "schema changed since this migration was generated; refresh this revision if it is undeployed, or start the next revision from the deployed source"
-        else "recorded frozen schema source or history metadata changed; restore the recorded source and make a forward revision" in
+      let instruction = match code,error.S.kind with
+        | "MIG001",S.Changed_source ->
+          "current schema source changed since migration generation (expected while preparing an undeployed migration); refresh this revision before building or running. If this revision has been deployed, restore the deployed source and start the next forward revision. The compiler cannot determine deployment state"
+        | "MIG001",_ -> "schema changed since this migration was generated; refresh this revision if it is undeployed, or start the next revision from the deployed source"
+        | _,_ -> "recorded frozen schema source or history metadata changed; restore the recorded source and make a forward revision" in
       reject ~code ~related:[error.loc, role ^ " schema source"] checked.located.loc
         (instruction ^ "\n" ^ error.message))
     ["previous",checked.located.header.previous;"target",checked.located.header.current])

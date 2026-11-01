@@ -1,9 +1,6 @@
 package teslrt
 
-import (
-	"encoding/hex"
-	"strings"
-)
+import "encoding/hex"
 
 func pgRowQueueFunctions(namespace string) []pgMigrationControlFunction {
 	ns := quoteIdentifier(namespace) + "."
@@ -166,12 +163,12 @@ func pgRowQueueOperationFunctions(namespace string) []pgMigrationControlFunction
 	ns := quoteIdentifier(namespace) + "."
 	for i := range functions {
 		if functions[i].name == "tesl_queue_complete" {
-			functions[i].body = strings.Replace(functions[i].body, " delete from "+ns+"tesl_jobs j", " delete from "+ns+"tesl_row_queue_conversion_attempts a where a.job_id=tesl_queue_complete.job_id;\n delete from "+ns+"tesl_jobs j", 1)
+			functions[i].body = pgRewriteMigrationSQL(functions[i].body, namespace, " delete from "+ns+"tesl_jobs j", " delete from "+ns+"tesl_row_queue_conversion_attempts a where a.job_id=tesl_queue_complete.job_id;\n delete from "+ns+"tesl_jobs j", 1)
 		}
 		if functions[i].name == "tesl_queue_enqueue" {
-			functions[i].body = strings.Replace(functions[i].body, " insert into "+ns+"tesl_jobs", " if exists(select 1 from "+ns+"tesl_row_queue_removal_restamps r where r.job_id=tesl_queue_enqueue.job_id) then raise exception 'tesl: audited job identity cannot be reused'; end if;\n insert into "+ns+"tesl_jobs", 1)
-			functions[i].body = strings.Replace(functions[i].body, " insert into "+ns+"tesl_jobs", " if exists(select 1 from "+ns+"tesl_row_queue_discards d where d.job_id=tesl_queue_enqueue.job_id) then raise exception 'tesl: discarded job identity cannot be reused'; end if;\n insert into "+ns+"tesl_jobs", 1)
-			functions[i].body = strings.Replace(functions[i].body, " insert into "+ns+"tesl_jobs", " if exists(select 1 from "+ns+"tesl_row_queue_conversion_receipts r where r.job_id=tesl_queue_enqueue.job_id) or exists(select 1 from "+ns+"tesl_row_queue_conversion_failures r where r.job_id=tesl_queue_enqueue.job_id) or exists(select 1 from "+ns+"tesl_row_queue_restamps r where r.job_id=tesl_queue_enqueue.job_id) then raise exception 'tesl: audited job identity cannot be reused'; end if;\n insert into "+ns+"tesl_jobs", 1)
+			functions[i].body = pgRewriteMigrationSQL(functions[i].body, namespace, " insert into "+ns+"tesl_jobs", " if exists(select 1 from "+ns+"tesl_row_queue_removal_restamps r where r.job_id=tesl_queue_enqueue.job_id) then raise exception 'tesl: audited job identity cannot be reused'; end if;\n insert into "+ns+"tesl_jobs", 1)
+			functions[i].body = pgRewriteMigrationSQL(functions[i].body, namespace, " insert into "+ns+"tesl_jobs", " if exists(select 1 from "+ns+"tesl_row_queue_discards d where d.job_id=tesl_queue_enqueue.job_id) then raise exception 'tesl: discarded job identity cannot be reused'; end if;\n insert into "+ns+"tesl_jobs", 1)
+			functions[i].body = pgRewriteMigrationSQL(functions[i].body, namespace, " insert into "+ns+"tesl_jobs", " if exists(select 1 from "+ns+"tesl_row_queue_conversion_receipts r where r.job_id=tesl_queue_enqueue.job_id) or exists(select 1 from "+ns+"tesl_row_queue_conversion_failures r where r.job_id=tesl_queue_enqueue.job_id) or exists(select 1 from "+ns+"tesl_row_queue_restamps r where r.job_id=tesl_queue_enqueue.job_id) then raise exception 'tesl: audited job identity cannot be reused'; end if;\n insert into "+ns+"tesl_jobs", 1)
 		}
 		if functions[i].name != "tesl_queue_admit" {
 			continue

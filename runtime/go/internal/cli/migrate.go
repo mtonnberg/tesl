@@ -28,6 +28,9 @@ The guided flow requires an interactive terminal; use explicit commands in CI.
 generate refreshes migration sources and reports the result as JSON.
 --manifest-json previews the edits without writing files.
 The report separates source generation from compilation: decision holes need filling.
+The guide reviews one item at a time: Enter rechecks, n browses, ? expands help.
+An option number shows its source template for you to copy, complete and save.
+Compiler-proposed templates leave custom-code holes; options are never auto-approved.
 recover-source restores an interrupted source write, or finishes committed cleanup.
 plan reports PostgreSQL expansion and retained storage across checked source history.
 --initial-version selects the first installed revision (default 1), not the current floor.

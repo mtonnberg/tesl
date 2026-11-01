@@ -316,6 +316,44 @@ let native () =
     if status <> 0 then fail contents;
     check bool "actual native test executed" true (Compile.string_contains contents "--- PASS:"))
 
+let optional_establish_field_contexts () =
+  accepts (prelude ^ {|
+establish throughBranch(note: Note, flag: Bool) -> Maybe (title: String ::: NonEmpty title) =
+  if flag then
+    let local = note
+    Something local.title
+  else
+    Something note.title
+establish throughCase(note: Maybe Note) -> Maybe (title: String ::: NonEmpty title) =
+  case note of
+    Nothing -> Nothing
+    Something local -> Something local.title
+|});
+  let unproven = prelude ^ {|
+record RawNote { title: String }
+establish throughUnproven(raw: RawNote, flag: Bool) -> Maybe (title: String ::: NonEmpty title) =
+  if flag then
+    let local = raw
+    Something local.title
+  else
+    Nothing
+|} in
+  check bool "an equally named unproven field supplies no evidence" true
+    (List.exists (fun (d : Compile.diagnostic) -> d.code="V001" &&
+      Compile.string_contains d.message "without the declared proof") (errors unproven));
+  let shadowed = prelude ^ {|
+record RawNote { title: String }
+establish shadowed(note: Note, raw: RawNote, flag: Bool) -> Maybe (title: String ::: NonEmpty title) =
+  if flag then
+    let note = raw
+    Something note.title
+  else
+    Something note.title
+|} in
+  check bool "a proven outer receiver cannot lend its name to an unproven inner receiver" true
+    (List.exists (fun (d : Compile.diagnostic) -> d.code="V001" &&
+      Compile.string_contains d.message "shadows existing name") (errors shadowed))
+
 let () = run "attached input subject identity" ["return", [
   test_case "ordinary same-input alias" `Quick (positive {|
 fn aliased(value: String ::: NonEmpty value) -> value: String ::: NonEmpty value =
@@ -344,5 +382,6 @@ fn aliased(value: String ::: NonEmpty value) -> value: String ::: NonEmpty value
   test_case "branch-valued case cannot alias another subject" `Quick (bound_control_wrong "case");
   test_case "joined lets preserve forgetFact proof removal" `Quick bound_control_strip;
   test_case "branch-local spelling is not an outer subject" `Quick branch_local_subject;
+  test_case "optional establish uses each branch's exact field receiver type" `Quick optional_establish_field_contexts;
   test_case "fresh transformed result compiles and runs" `Quick native;
 ]]

@@ -2,7 +2,7 @@
   "name": "vscode-tesl",
   "displayName": "Tesl Language",
   "description": "Syntax highlighting, live diagnostics, go-to-definition, hover types, and completions for the Tesl (.tesl) language",
-  "version": "0.7.13",
+  "version": "0.7.14",
   "publisher": "Tesl",
   "namespace": "Tesl",
   "//extensionKind": "Run only on the workspace (remote/WSL) side. Without this, in a Remote-WSL session VSCode can run the extension on BOTH the local UI host and the remote workspace, starting two language-server clients that each publish diagnostics \u2014 so every error/warning appears twice.",
@@ -290,6 +290,17 @@
         "title": "Run Function with Input...",
         "category": "Tesl",
         "enablement": "isWorkspaceTrusted"
+      },
+      {
+        "command": "tesl.migrationGuide",
+        "title": "Migration Guide",
+        "category": "Tesl"
+      },
+      {
+        "command": "tesl.previewMigration",
+        "title": "Preview Migration Decisions",
+        "category": "Tesl",
+        "enablement": "isWorkspaceTrusted"
       }
     ],
     "menus": {
@@ -313,6 +324,11 @@
           "command": "tesl.runFunctionWithInput",
           "when": "resourceExtname == .tesl && isWorkspaceTrusted",
           "group": "tesl@4"
+        },
+        {
+          "command": "tesl.previewMigration",
+          "when": "resourceExtname == .tesl && isWorkspaceTrusted",
+          "group": "tesl@5"
         }
       ],
       "explorer/context": [
@@ -335,7 +351,7 @@
     }
   },
   "scripts": {
-    "test": "node --test test-output-parser.test.js toolchain.test.js extension.test.js grammar.test.js",
+    "test": "node --test test-output-parser.test.js toolchain.test.js extension.test.js grammar.test.js migration-authoring.test.js",
     "bundle": "esbuild extension.js --bundle --platform=node --format=cjs --target=node16 --minify --external:vscode --outfile=dist/extension.js",
     "package": "npm run bundle && npx @vscode/vsce package",
     "publish:vsce": "npx @vscode/vsce publish",

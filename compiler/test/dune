@@ -477,7 +477,7 @@
 (test
  (name test_migration_preview)
  (modules test_migration_preview)
- (libraries tesl_compiler_lib alcotest str unix))
+ (libraries tesl_compiler_lib alcotest str unix yojson))
 
 (test
  (name test_migration_command)

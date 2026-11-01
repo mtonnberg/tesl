@@ -284,6 +284,54 @@ func TestMigrationWizardNativeLoopsThroughSyntaxAndDecisionDiagnostics(t *testin
 	migrationCheck(t, app, "app.tesl", true)
 }
 
+func TestMigrationWizardNativeReviewsCompilerTemplateBeforeAuthoredDefault(t *testing.T) {
+	app := realMigrationApp(t)
+	writeProjectFile(t, app.Directory, "app.tesl", migrationPostgresApp)
+	decisionFile := filepath.Join(app.Directory, "migrations/notes/v2.tesl")
+	input := &migrationScriptedInput{steps: []func() string{
+		func() string {
+			writeProjectFile(t, app.Directory, "schema/notes/v-current.tesl", strings.Replace(migrationSchema, "id: String }", "id: String, title: String }", 1))
+			return "\n"
+		},
+		func() string {
+			if !strings.Contains(app.Stdout.(*bytes.Buffer).String(), "Compiler-proposed templates") {
+				t.Fatal("the real compiler's decision metadata did not reach the guide")
+			}
+			return "1\n"
+		},
+		func() string {
+			output := app.Stdout.(*bytes.Buffer).String()
+			if !strings.Contains(output, "Template selected for review") || !strings.Contains(output, "Default title (todo") {
+				t.Fatal("the selected compiler template was not shown")
+			}
+			source, err := os.ReadFile(decisionFile)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if bytes.Contains(source, []byte("Default title")) {
+				t.Fatal("reviewing a template changed source before the author supplied the value")
+			}
+			hole := regexp.MustCompile(`todo "(?:\\.|[^"\\])*"`)
+			if len(hole.FindAll(source, -1)) != 1 {
+				t.Fatalf("expected one unresolved decision: %s", source)
+			}
+			changed := hole.ReplaceAll(source, []byte(`Additive [Default title "untitled"]`))
+			if err := os.WriteFile(decisionFile, changed, 0600); err != nil {
+				t.Fatal(err)
+			}
+			return "\n"
+		},
+	}}
+	app.Stdin = input
+	if err := app.Run(context.Background(), []string{"migrate", "app.tesl"}); err != nil {
+		t.Fatalf("template review: %v\n%s\n%s", err, app.Stdout, app.Stderr)
+	}
+	if len(input.steps) != 0 {
+		t.Fatal("guide did not reach the authored decision and checked plan")
+	}
+	migrationCheck(t, app, "app.tesl", true)
+}
+
 func TestMigrationWizardNativeQuitEOFAndResumeDoNotAdvanceAgain(t *testing.T) {
 	for _, answer := range []string{"q\n", ""} {
 		t.Run("answer="+answer, func(t *testing.T) {

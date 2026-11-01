@@ -164,6 +164,7 @@ If you are writing tooling that deep-links into the manual, read that page first
 - **[Language Specification](../LANGUAGE-SPEC.md)** — complete grammar and semantics
 - **[Stable Anchor Scheme](anchors.md)** — anchor IDs for deep-linking
 - **[FAQ](FAQ.md)** — troubleshooting and common questions
+- **[Migration authoring and rolling guide](migration-guide.md)** — stepwise decisions, changed proofs, draft hashes and compatible rollout routes
 - **[Preparing migration cleanup](migration-contracts.md)** — reviewed Contract source and the order for preparing a rollout
 - **[Operating checked migrations](migration-operations.md)** — roles, deployment order, status, retirement and supported scope
 - **[Queue remediation](queue-remediation.md)** — typed execution-failure recovery and explicit audited discard

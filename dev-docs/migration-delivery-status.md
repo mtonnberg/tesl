@@ -777,11 +777,11 @@ samples are not a production SLA or evidence for the separate p99 admission gate
 
 | Requirement | Current boundary |
 |---|---|
-| Broader composition | The tested ordered row-first / payload-second sequence is implemented. Simultaneous row/payload changes and queue-bearing table Drop remain refused. Queue membership removal/rename and general `IgnoreOld` remain unsupported. |
-| Other durable facilities | Worker migration topology refuses durable caches, email outboxes and SSE facilities; Embedded topology refuses versioned queues. |
+| Broader composition | The tested ordered row-first / payload-second sequence is implemented. Simultaneous row/payload changes remain refused. Drop of an unrelated table beside exact unchanged queue contracts and bounded empty-queue removal are supported; actual dependencies, arbitrary membership removal/rename and general `IgnoreOld` remain unsupported. |
+| Other durable facilities | Worker migration topology supports the registered cache, email and SSE facility paths with separate privilege checks; Embedded topology still refuses versioned queues. |
 | Operator workflow | Public application verbs are `status`, `install`, `deploy`, `worker`, `catch-up`, `contract`, `close-epoch`. Automatic deployment and ordered catch-up pass the full local gate. Other operator conveniences above remain roadmap work without blocking this release. `close-epoch --dry-run` is not the general data dry-run. |
 | Source/editor workflow | Native CLI has generation, plan, Contract and source-write recovery; non-mutating previews can run in CI. Editor apply and rebase/prune/repair scaffolding remain follow-up work, not merge blockers. |
-| Staged uniqueness | The specified staging/promotion declaration and per-key promotion guard remain outstanding. Ordinary index execution does not establish that workflow. |
+| Staged uniqueness | The connected staged declaration, per-key guard, promotion and recovery lifecycle have bounded compiler/runtime evidence on PostgreSQL 14/17/18. The separate reservation-table subsystem remains deferred; ordinary index execution alone does not establish staged uniqueness. |
 | Release-scale acceptance | Dedicated pinned read/write p99 measurements and the prescribed large-table/rolling-write workloads remain unfulfilled. The 1,000-extra-row experiment is not the 10M/100M-row gate. |
 | Complete traceability | The current checked inventory explicitly lists uncovered normative scopes. Finite model checks and a green partial coverage map do not complete whole-feature correspondence. |
 

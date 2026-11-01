@@ -30,7 +30,20 @@ func DecodePreview(data []byte) (*Preview, error) {
 	if err := strictJSON(data); err != nil {
 		return nil, err
 	}
-	fields, err := object(data, "version", "kind", "ok", "operation", "compilerAbi", "compilable", "selection", "diagnostics", "manifest")
+	keys := []string{"version", "kind", "ok", "operation", "compilerAbi", "compilable", "selection", "diagnostics", "manifest"}
+	var envelope map[string]json.RawMessage
+	if err := json.Unmarshal(data, &envelope); err != nil {
+		return nil, err
+	}
+	// Older compilers have no advisory decisions. A new compiler may add this
+	// exact field; it never changes manifest validation or compilability.
+	if decisions, present := envelope["decisions"]; present {
+		keys = append(keys, "decisions")
+		if err := validatePreviewDecisions(decisions); err != nil {
+			return nil, err
+		}
+	}
+	fields, err := object(data, keys...)
 	if err != nil {
 		return nil, err
 	}
@@ -93,4 +106,40 @@ func DecodePreview(data []byte) (*Preview, error) {
 	}
 	return &Preview{manifest: m, compilable: compilable, compilerABI: header.CompilerABI, canonical: bytes.Clone(data),
 		entryFile: header.Selection.EntryFile, database: header.Selection.Database, operation: header.Operation}, nil
+}
+
+func validatePreviewDecisions(raw json.RawMessage) error {
+	if err := arrayObjects(raw, "id", "entity", "file", "line", "col", "reason", "options"); err != nil {
+		return fmt.Errorf("invalid compiler decisions: %w", err)
+	}
+	var decisions []struct {
+		ID, Entity, File, Reason *string
+		Line, Col                *int
+		Options                  json.RawMessage
+	}
+	if err := json.Unmarshal(raw, &decisions); err != nil {
+		return err
+	}
+	for _, d := range decisions {
+		if d.ID == nil || *d.ID == "" || d.Entity == nil || *d.Entity == "" || d.File == nil || *d.File == "" ||
+			d.Reason == nil || d.Line == nil || *d.Line < 0 || d.Col == nil || *d.Col < 0 {
+			return fmt.Errorf("invalid compiler decision location or identity")
+		}
+		if err := arrayObjects(d.Options, "id", "label", "template", "help", "needsCustomCode"); err != nil {
+			return fmt.Errorf("invalid compiler decision options: %w", err)
+		}
+		var options []struct {
+			ID, Label, Template, Help *string
+			NeedsCustomCode           *bool
+		}
+		if err := json.Unmarshal(d.Options, &options); err != nil {
+			return err
+		}
+		for _, o := range options {
+			if o.ID == nil || *o.ID == "" || o.Label == nil || o.Template == nil || o.Help == nil || o.NeedsCustomCode == nil {
+				return fmt.Errorf("invalid compiler decision option")
+			}
+		}
+	}
+	return nil
 }

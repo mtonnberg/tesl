@@ -179,10 +179,14 @@ let registry : entry list = [
     title = "current schema changed since migration generation";
     explanation =
       "The migration header records the complete target schema source closure. \
-       VCurrent or one of its private dependencies has changed. Refresh the \
-       revision if it has not been deployed, or start the next forward revision \
-       from the deployed source. The compiler cannot determine deployment state.";
-    manual = Some "best-practices#database-access" };
+       VCurrent or one of its private dependencies has changed. A byte mismatch \
+       is expected while editing an undeployed migration, but builds remain \
+       blocked until its checked preview is refreshed. Refresh the revision if \
+       it has not been deployed, or restore the deployed source and start the \
+       next forward revision. The compiler cannot determine deployment state. \
+       Missing files or invalid paths still require correction; do not dismiss \
+       frozen-source or history-metadata changes as draft edits.";
+    manual = Some "migration-guide#current-schema-edits-and-recorded-hashes" };
 
   { code = "MIG002"; category = Migration;
     title = "migration entity coverage is inconsistent";
@@ -267,8 +271,15 @@ let registry : entry list = [
        equal complete semantic closures. It cannot assert equality between \
        changed helpers, checks or codecs, name another revision, or pair a \
        function or constructor alias. Each declaration may occur only once. \
-       The diagnostic identifies the first differing dependency.";
-    manual = Some "best-practices#database-access" };
+       The diagnostic identifies the first differing dependency. Keeping Int or \
+       String as the physical type does not preserve a changed proof's meaning. \
+       Refresh generated claims and review the stored-value decision. Revalidate \
+       can add a first proof or an extra field-local conjunction while preserving \
+       every historical proof through verified Same evidence; it cannot replace \
+       changed historical evidence. That change needs an explicitly checked \
+       conversion, such as Retype with a WriteBack reverse function proving the \
+       exact historical contract for supported rolling overlap.";
+    manual = Some "migration-guide#same-proofs-and-changed-meaning" };
 
   { code = "MIG030"; category = Migration;
     title = "staged uniqueness obligation is unsupported or inconsistent";

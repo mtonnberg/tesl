@@ -398,7 +398,9 @@ let verify_same ~(before : t) ~(after : t) ~previous ~current =
           | Some old, None -> old.qualified_name ^ " (removed from closure)"
           | None, Some fresh -> fresh.qualified_name ^ " (added to closure)"
           | None, None -> assert false in
-        refuse Different_closure ("Same semantic closures differ first at " ^ changed) difference
+        refuse Different_closure ("Same semantic closures differ first at " ^ changed ^
+          ". An unchanged physical type does not preserve changed proof or codec meaning. " ^
+          "Remove this invalid Same claim and review the field's checked revalidation or conversion choices") difference
 
 let same_candidates ~(before : t) ~(after : t) =
   match compatible_inventories ~before ~after with

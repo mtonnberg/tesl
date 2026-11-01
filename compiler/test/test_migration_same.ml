@@ -111,6 +111,10 @@ let changed_private_helper () = with_project (fun root write ->
   let after = change write path (replace "threshold() -> Int = 0" "threshold() -> Int = 1" shared) in
   let e = rejected Different_closure (verify before after Predicate "Positive") in
   expect_difference (Some "NotesSchema.V1.Shared.threshold") (Some "NotesSchema.VCurrent.Shared.threshold") e;
+  check bool "proof helper drift explains physical-type trap" true
+    (Compile.string_contains e.message "An unchanged physical type does not preserve changed proof or codec meaning");
+  check bool "proof helper drift requests a checked decision" true
+    (Compile.string_contains e.message "Remove this invalid Same claim");
   check (option string) "old related location belongs to the frozen dependency"
     (Some (Filename.concat root "schema/notes/v1/shared.tesl"))
     (Option.map (fun d -> d.source_loc.file) e.difference.previous);

@@ -10,6 +10,7 @@ test/**
 tests/**
 extension.js
 test-output-parser.js
+migration-authoring.js
 node_modules/**
 package-lock.json
 
