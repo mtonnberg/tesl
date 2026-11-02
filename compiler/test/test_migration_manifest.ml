@@ -296,6 +296,81 @@ let compilation_bytes () = with_project (fun root path ->
   check bool "source capture respects the original unsaved view" true
    (List.mem (app,source) (get (M.source_files manifest)));
   refuse (fun () -> M.verify_disk manifest)))
+let batch_identity () = with_project (fun root path ->
+  let files = List.init 12 (fun i -> path (Printf.sprintf "helper%d.tesl" i)) in
+  List.iter (fun file -> write file "module Helper exposing []\n") files;
+  let parts = List.map (fun file -> proposal ~reads:[file] root []) files in
+  let repeated = List.fold_left (fun all next -> get (M.combine all next ~documents:[]))
+      (List.hd parts) (List.tl parts) in
+  let batch = get (M.combine_many (parts @ List.rev parts) ~documents:[]) in
+  check string "batch retains byte-identical guards" (M.to_json repeated) (M.to_json batch);
+  check string "batch retains byte-identical digest" (M.digest repeated) (M.digest batch);
+  unchanged batch)
+
+let batch_early_stale () = with_project (fun root path ->
+  let early = path "early.tesl" and late = path "late.tesl" in
+  write early "early bytes"; write late "late bytes";
+  let a = proposal ~reads:[early] root [] in
+  write early "other bytes";
+  let b = proposal ~reads:[late] root [] in
+  refuse (fun () -> M.combine_many [a;b;b] ~documents:[]);
+  let recaptured = proposal ~reads:[early] root [] in
+  refuse (fun () -> M.combine_many [a;b;recaptured] ~documents:[]);
+  Source_input.with_overlays ~project_root:root [early,"early bytes"] (fun () ->
+    let b = proposal ~reads:[late] root [] in
+    refuse (fun () -> M.combine_many [a;b;b] ~documents:[])))
+
+let batch_late_conflicts () = with_project (fun root path ->
+  let file = path "schema/notes/v-current.tesl" in
+  let a = proposal root [file,"first"] and b = proposal root [] in
+  let c = proposal root [file,"second"] in
+  refuse (fun () -> M.combine_many [a;b;c] ~documents:[]);
+  let old = [{M.path=file;version=1}] and fresh = [{M.path=file;version=2}] in
+  let a = proposal ~documents:old root [] and b = proposal ~documents:fresh root [] in
+  refuse (fun () -> M.combine_many [a;a;b] ~documents:old);
+  refuse (fun () -> M.combine_many [] ~documents:[]))
+
+let batch_alias () = with_project (fun root path ->
+  let early = path "early.tesl" and target = path "target.tesl" in
+  write early "same bytes"; write target "same bytes";
+  let a = proposal ~reads:[early] root [] and b = proposal ~reads:[target] root [] in
+  Sys.remove early; Unix.symlink target early;
+  refuse (fun () -> M.combine_many [a;b;b] ~documents:[]))
+
+let captured_graph () = with_project (fun root path ->
+  let leaves = List.init 16 (fun i -> Printf.sprintf "Leaf%d" i) in
+  List.iter (fun name -> write (path (String.lowercase_ascii name ^ ".tesl"))
+    ("module " ^ name ^ " exposing []\n")) leaves;
+  let source = "module App exposing []\n" ^ String.concat ""
+    (List.map (fun name -> "import " ^ name ^ "\n") leaves) in
+  let app = path "app.tesl" in write app source;
+  let capture () = match Migration_source_integrity.capture ~project_root:root ~inputs:[app,source] with
+    | Ok token -> token | Error _ -> fail "valid graph refused" in
+  let token = capture () in
+  (match Migration_source_integrity.with_captured token (fun () -> Source_input.read app) with
+   | Ok actual -> check string "captured graph is readable" source actual
+   | Error _ -> fail "unchanged graph refused");
+  let leaf = path "leaf0.tesl" in
+  write leaf "module Leaf0 exposing []\n# edited\n";
+  (match Migration_source_integrity.revalidate token with Error (_::_) -> () | _ -> fail "early helper edit accepted");
+  let token = capture () in
+  write (path "leaf17.tesl") "module Leaf17 exposing []\n";
+  (match Migration_source_integrity.revalidate token with Error (_::_) -> () | _ -> fail "new directory member accepted"))
+
+let incremental_identity () = with_project (fun root path ->
+  let files = List.init 24 (fun i -> path (Printf.sprintf "part%d.tesl" i)) in
+  List.iter (fun file -> write file "captured bytes") files;
+  let parts = List.map (fun file -> proposal ~reads:[file] root []) files in
+  let accumulator = List.fold_left (fun accumulator part -> get (M.add_to_combine accumulator part))
+    (get (M.start_combine (List.hd parts) ~documents:[])) (List.tl parts) in
+  let combined = get (M.finish_combine accumulator) in
+  check string "incremental union has exact batch identity"
+    (M.to_json (get (M.combine_many parts ~documents:[]))) (M.to_json combined);
+  write (List.hd files) "changed earliest input";
+  refuse (fun () -> M.finish_combine accumulator);
+  let fresh = proposal ~reads:[List.hd files] root [] in
+  refuse (fun () -> M.add_to_combine accumulator fresh))
+
 let () = run "Migration source manifests" ["guarded proposals", List.map (fun (name,f) -> test_case name `Quick f)
   ["preview never writes sources or directories",no_writes;
    "arbitrary source bytes survive JSON transport",byte_edits;"no-op writes retain guards",noops;
@@ -315,4 +390,10 @@ let () = run "Migration source manifests" ["guarded proposals", List.map (fun (n
    "composition retains document-version guards",combine_versions;
    "composition keeps disk and unsaved source distinct",combine_disk_buffer;
    "composition retains discovery and import resolution",combine_discovery;
-   "compilation captures exact original source bytes",compilation_bytes]]
+   "compilation captures exact original source bytes",compilation_bytes;
+   "batch composition preserves complete manifest identity",batch_identity;
+   "batch refuses early stale and recaptured source",batch_early_stale;
+   "batch refuses late edit and document conflicts",batch_late_conflicts;
+   "batch refuses a replaced path alias",batch_alias;
+   "batched graph capture guards helpers and membership",captured_graph;
+   "incremental composition preserves original observations",incremental_identity]]

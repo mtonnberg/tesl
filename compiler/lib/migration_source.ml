@@ -3,6 +3,19 @@
     indentation stay byte-identical. This module does not hash semantic IR or
     write files; its caller builds and verifies the complete edit manifest. *)
 
+(* Adapt newly generated fragments only; never normalize existing source bytes.
+   A mixed-ending input remains mixed and must be refused by an editor publisher
+   that cannot represent its exact bytes. *)
+let source_fragment ~source fragment =
+  let crlf=ref false and lf=ref false in
+  String.iteri(fun i c->if c='\n' then
+    if i>0 && source.[i-1]='\r' then crlf:=true else lf:=true)source;
+  if !crlf && not !lf then
+    String.split_on_char '\n' fragment |> List.map(fun line->
+      if String.ends_with ~suffix:"\r" line then String.sub line 0(String.length line-1)else line)
+      |> String.concat "\r\n"
+  else fragment
+
 let valid_revision name =
   name = "VCurrent" ||
   (String.length name > 1 && name.[0] = 'V' && name.[1] <> '0' &&

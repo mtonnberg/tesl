@@ -28,6 +28,7 @@ type migrationPreviewState struct {
 	id        string
 	preview   *sourceedit.Preview
 	documents map[string]document
+	selection tooling.MigrationSelection
 }
 
 func (server *Server) writeMigrationCommand(ctx context.Context, id json.RawMessage, raw json.RawMessage, writer *protocol.Writer) error {
@@ -68,15 +69,19 @@ func (server *Server) writeMigrationPreview(ctx context.Context, id json.RawMess
 		return server.writeError(writer, id, -32602, "compiler does not support guarded migration previews")
 	}
 	var params struct {
-		EntryFile   string `json:"entryFile"`
-		ProjectRoot string `json:"projectRoot"`
-		Database    string `json:"database"`
-		NewRevision bool   `json:"newRevision"`
+		EntryFile           string `json:"entryFile"`
+		ProjectRoot         string `json:"projectRoot"`
+		Database            string `json:"database"`
+		NewRevision         bool   `json:"newRevision"`
+		DecisionID          string `json:"decisionId"`
+		OptionID            string `json:"optionId"`
+		ExpectedInputDigest string `json:"expectedInputDigest"`
 	}
 	if err := json.Unmarshal(raw, &params); err != nil || params.EntryFile == "" || params.ProjectRoot == "" {
 		return server.writeError(writer, id, -32602, "migration preview requires entryFile and projectRoot")
 	}
 	selection := tooling.MigrationSelection{EntryFile: params.EntryFile, ProjectRoot: params.ProjectRoot, Database: params.Database, NewRevision: params.NewRevision}
+	selection.DecisionID, selection.OptionID, selection.ExpectedInputDigest = params.DecisionID, params.OptionID, params.ExpectedInputDigest
 	documents, snapshots, err := server.migrationDocuments(selection.ProjectRoot)
 	if err != nil {
 		return server.writeError(writer, id, -32602, err.Error())
@@ -133,7 +138,7 @@ func (server *Server) writeMigrationPreview(ctx context.Context, id json.RawMess
 		}
 		item := map[string]any{"diagnosticIndex": index}
 		for _, decision := range envelope.Decisions {
-			if diagnostic.Code == "MIG003" && diagnostic.File == decision.File &&
+			if diagnostic.File == decision.File &&
 				diagnostic.Start.Line == decision.Line && diagnostic.Start.Col == decision.Col {
 				guide = migrationguide.ForDecision(decision)
 				item["decisionId"] = decision.ID
@@ -144,7 +149,8 @@ func (server *Server) writeMigrationPreview(ctx context.Context, id json.RawMess
 		guidance = append(guidance, item)
 	}
 	response := map[string]any{"version": 1, "kind": "migration-editor-preview", "ok": true, "previewId": handle,
-		"database": preview.Database(), "entryFile": preview.EntryFile(), "operation": preview.Operation(), "compilable": preview.Compilable(),
+		"inputDigest": preview.InputDigest(),
+		"database":    preview.Database(), "entryFile": preview.EntryFile(), "operation": preview.Operation(), "compilable": preview.Compilable(),
 		"files": preview.Manifest().FileEdits(), "diagnostics": envelope.Diagnostics, "guidance": guidance, "decisions": envelope.Decisions}
 	encoded, err := json.Marshal(response)
 	if err != nil {
@@ -153,7 +159,7 @@ func (server *Server) writeMigrationPreview(ctx context.Context, id json.RawMess
 	if len(encoded) > protocol.DefaultMaxMessageBytes/2 {
 		return fmt.Errorf("migration preview summary exceeds the editor message limit")
 	}
-	server.migrationPreview = &migrationPreviewState{id: handle, preview: preview, documents: snapshots}
+	server.migrationPreview = &migrationPreviewState{id: handle, preview: preview, documents: snapshots, selection: selection}
 	if err := server.writeResult(writer, id, json.RawMessage(encoded)); err != nil {
 		server.migrationPreview = nil
 		return err

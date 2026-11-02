@@ -16,11 +16,14 @@ let protect f = try Ok(f()) with
 let revalidate t = protect(fun()->Source_input.without_pinned_files(fun()->
  ignore(guard(M.verify_source t.guard ~documents:[]));ignore(guard(M.verify_disk t.guard))))
 let capture ~project_root ~inputs = protect(fun()->
- let manifest=ref(guard(M.create ~project_root ~reads:[] ~directories:[] ~imports:[] ~documents:[] ~writes:[])) in
+ let accumulator=ref(guard(M.start_combine (guard(M.create ~project_root ~reads:[] ~directories:[] ~imports:[] ~documents:[] ~writes:[])) ~documents:[])) in
  let seen=ref Paths.empty and directories=ref Paths.empty and files=Hashtbl.create 32 in
  let extend ~reads ~dirs ~imports =
   let next=guard(M.create ~project_root ~reads ~directories:dirs ~imports ~documents:[] ~writes:[]) in
-  manifest:=guard(M.combine !manifest next ~documents:[]);
+  (* Keep each original observation. Rechecking the growing union here makes
+     graph discovery quadratic; the final union checks every captured source,
+     disk, directory and import guard before publishing the token. *)
+  accumulator:=guard(M.add_to_combine !accumulator next);
   guard(M.source_files next) in
  let module_path root name = match Validation_common.schema_module_relative_path name with
   | Some path -> Filename.concat root path
@@ -69,7 +72,8 @@ let capture ~project_root ~inputs = protect(fun()->
   end in
  List.iter(fun(path,bytes)->visit path;
    if Hashtbl.find_opt files path<>Some bytes then reject path "source changed before integrity discovery")inputs;
- let token={guard= !manifest;files=Hashtbl.to_seq files |> List.of_seq |> List.sort compare} in
+ let manifest=guard(M.finish_combine !accumulator) in
+ let token={guard=manifest;files=Hashtbl.to_seq files |> List.of_seq |> List.sort compare} in
  (match revalidate token with Ok()->()|Error errors->raise(Invalid errors));token)
 let with_captured t f = protect(fun()->
  (match revalidate t with Ok()->()|Error errors->raise(Invalid errors));

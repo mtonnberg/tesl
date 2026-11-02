@@ -99,19 +99,27 @@ type migrationWizardDiagnostic struct {
 }
 
 type migrationWizardReport struct {
-	Version     int
-	Kind        string
-	OK          bool
-	Compilable  bool
-	Selection   migrationWizardSelection
-	Diagnostics struct{ Diagnostics []migrationWizardDiagnostic }
-	Errors      []migrationWizardDiagnostic
-	Error       string
-	Decisions   []migrationguide.Decision
-	Manifest    struct {
+	Version           int
+	Kind              string
+	OK                bool
+	Compilable        bool
+	Selection         migrationWizardSelection
+	Diagnostics       struct{ Diagnostics []migrationWizardDiagnostic }
+	Errors            []migrationWizardDiagnostic
+	Error             string
+	Decisions         []migrationguide.Decision
+	SourceTransaction struct {
+		Outcome          string
+		RecoveryRequired bool
+	}
+	Manifest struct {
 		Imports []struct{ Module, SourceResolved string }
 		Edits   []struct{ Path string }
 	}
+	// Retained only for a fresh read-only preview of the current saved files.
+	// A report returned after publication cannot authorize another source edit.
+	preview *sourceedit.Preview
+	options migrationWizardOptions
 }
 
 type migrationWizardDiagnosticError struct{ cause error }
@@ -163,6 +171,114 @@ func (app *App) migrationWizardGenerate(ctx context.Context, options migrationWi
 		return report, fmt.Errorf("compiler did not return a successful supported migration source application")
 	}
 	return report, nil
+}
+
+func (app *App) migrationWizardPreview(ctx context.Context, options migrationWizardOptions) (report migrationWizardReport, err error) {
+	var output compilerOutput
+	child := *app
+	child.Stdout = &output
+	child.Stdin = strings.NewReader("")
+	args := append([]string{"migrate", "generate", "--manifest-json"}, options.generateArgs(false)[2:]...)
+	if err := child.compiler(ctx, args...); err != nil {
+		if decodeErr := json.Unmarshal(output.Bytes(), &report); decodeErr == nil {
+			if displayErr := app.migrationWizardDiagnostics(report.Errors); displayErr != nil {
+				return report, displayErr
+			}
+		}
+		return report, err
+	}
+	preview, err := sourceedit.DecodePreview(output.Bytes())
+	if err != nil {
+		return report, fmt.Errorf("invalid guided migration preview: %w", err)
+	}
+	if err := json.Unmarshal(preview.JSON(), &report); err != nil {
+		return report, err
+	}
+	if err := migrationWizardSameSelection(options.selection, report.Selection, preview.Operation()); err != nil {
+		return report, err
+	}
+	report.preview, report.options = preview, options
+	return report, nil
+}
+
+func migrationWizardSameSelection(expected, actual migrationWizardSelection, operation string) error {
+	if operation != "refresh" || actual.EntryFile != expected.EntryFile || actual.Database != expected.Database ||
+		actual.Family != expected.Family || actual.SchemaRoot != expected.SchemaRoot ||
+		actual.RevisionBefore != expected.RevisionAfter || actual.RevisionAfter != expected.RevisionAfter {
+		return fmt.Errorf("guided migration selection changed while you were editing; no further source edits were applied")
+	}
+	return nil
+}
+
+func migrationWizardDecision(report migrationWizardReport, diagnostic migrationWizardDiagnostic) *migrationguide.Decision {
+	line, col := diagnostic.Start.Line, diagnostic.Start.Col
+	if diagnostic.Line != 0 || diagnostic.Col != 0 {
+		line, col = diagnostic.Line, diagnostic.Col
+	}
+	for i := range report.Decisions {
+		decision := &report.Decisions[i]
+		if diagnostic.Code == "MIG003" && decision.File == diagnostic.File && decision.Line == line && decision.Col == col {
+			return decision
+		}
+	}
+	return nil
+}
+
+func (app *App) migrationWizardApplyChoice(ctx context.Context, report migrationWizardReport, decision *migrationguide.Decision, choice int) error {
+	if report.preview == nil || report.preview.InputDigest() == "" || decision == nil || choice < 0 || choice >= len(decision.Options) {
+		return fmt.Errorf("this choice requires a fresh guarded preview from a matching compiler; stop and resume after updating the toolchain")
+	}
+	option := decision.Options[choice]
+	args := append([]string{"migrate", "generate", "--decision", decision.ID, "--option", option.ID,
+		"--expected-input-digest", report.preview.InputDigest()}, report.options.generateArgs(false)[2:]...)
+	child := *app
+	var output compilerOutput
+	child.Stdout = &output
+	child.Stdin = strings.NewReader("")
+	publicationRequested := false
+	err := child.migrationGenerate(ctx, args, func(proposed *sourceedit.Preview) error {
+		var selected migrationWizardReport
+		if err := json.Unmarshal(proposed.JSON(), &selected); err != nil {
+			return err
+		}
+		if err := migrationWizardSameSelection(report.options.selection, selected.Selection, proposed.Operation()); err != nil {
+			return err
+		}
+		if proposed.CompilerABI() != report.preview.CompilerABI() {
+			return fmt.Errorf("compiler changed after this choice was reviewed; request a fresh migration preview")
+		}
+		if _, err := fmt.Fprintf(app.Stdout, "Applying %s to saved source:\n", option.Label); err != nil {
+			return err
+		}
+		for _, edit := range proposed.Manifest().FileEdits() {
+			if _, err := fmt.Fprintf(app.Stdout, "  %s\n", strconv.Quote(edit.Path)); err != nil {
+				return err
+			}
+		}
+		publicationRequested = true
+		return nil
+	})
+	var applied migrationWizardReport
+	decodeErr := json.Unmarshal(output.Bytes(), &applied)
+	if decodeErr == nil && len(applied.Errors) > 0 {
+		if displayErr := app.migrationWizardDiagnostics(applied.Errors); displayErr != nil {
+			return displayErr
+		}
+	}
+	if err != nil {
+		if applied.SourceTransaction.RecoveryRequired {
+			return fmt.Errorf("selected migration source operation requires recovery (outcome %q); inspect .tesl-source-edit and use migrate recover-source after its owner exits: %w", applied.SourceTransaction.Outcome, err)
+		}
+		if publicationRequested && decodeErr != nil {
+			return fmt.Errorf("could not confirm the selected migration source operation; inspect saved source and recovery state before resuming: %w", err)
+		}
+		return fmt.Errorf("selected migration scaffold was not applied; resume to review the current saved files: %w", err)
+	}
+	if decodeErr != nil || applied.Kind != "migration-source-application" || !applied.OK {
+		return fmt.Errorf("compiler did not return a successful scaffold application")
+	}
+	_, err = fmt.Fprintln(app.Stdout, "Applied the selected scaffold. Checking the saved application now; any remaining custom-code holes must be completed before it can build. Existing handwritten code remains subject to the compiler's preservation checks.")
+	return err
 }
 
 func (app *App) migrationWizardDiagnostics(diagnostics []migrationWizardDiagnostic) error {
@@ -233,14 +349,8 @@ func (app *App) migrationWizardHelp(guide migrationguide.Guide) error {
 }
 
 func migrationWizardGuide(report migrationWizardReport, diagnostic migrationWizardDiagnostic) (migrationguide.Guide, bool) {
-	line, col := diagnostic.Start.Line, diagnostic.Start.Col
-	if diagnostic.Line != 0 || diagnostic.Col != 0 {
-		line, col = diagnostic.Line, diagnostic.Col
-	}
-	for _, decision := range report.Decisions {
-		if diagnostic.Code == "MIG003" && decision.File == diagnostic.File && decision.Line == line && decision.Col == col {
-			return migrationguide.ForDecision(decision), len(decision.Options) > 0
-		}
+	if decision := migrationWizardDecision(report, diagnostic); decision != nil {
+		return migrationguide.ForDecision(*decision), len(decision.Options) > 0
 	}
 	return migrationguide.ForDiagnostic(diagnostic.Code, diagnostic.Message), false
 }
@@ -257,14 +367,21 @@ func migrationWizardShortMessage(message string) string {
 	return first
 }
 
-// Review one compiler diagnostic at a time. Browsing or expanding help cannot
-// approve a decision: Enter always regenerates and checks the entire revision.
+// Browsing/help are read-only. A numbered compiler choice explicitly applies a
+// guarded scaffold, while Enter regenerates and checks saved author edits.
 func (app *App) migrationWizardReview(ctx context.Context, report migrationWizardReport, prompt string) (bool, error) {
 	diagnostics := report.Diagnostics.Diagnostics
 	if len(diagnostics) == 0 {
 		return app.migrationWizardPrompt(ctx, prompt)
 	}
-	if _, err := fmt.Fprintf(app.Stdout, "\nMigration review: %d item(s). Enter rechecks saved changes; n browses; a number shows an option template; ? expands help.\n", len(diagnostics)); err != nil {
+	actions := "Enter rechecks saved changes; n browses; ? expands help."
+	for _, diagnostic := range diagnostics {
+		if decision := migrationWizardDecision(report, diagnostic); decision != nil && len(decision.Options) > 0 {
+			actions += " A number applies a compiler-proposed scaffold. Save editor buffers first: choices update saved files."
+			break
+		}
+	}
+	if _, err := fmt.Fprintf(app.Stdout, "\nMigration review: %d item(s). %s\n", len(diagnostics), actions); err != nil {
 		return false, err
 	}
 	index := 0
@@ -285,18 +402,26 @@ func (app *App) migrationWizardReview(ctx context.Context, report migrationWizar
 		if len(guide.Options) > 0 {
 			heading := "Routes to review (the compiler must check your completed source):"
 			if compilerChoices {
-				heading = "Compiler-proposed templates (custom code still required):"
+				heading = "Compiler-proposed scaffolds (select a number to update source):"
 			}
 			if _, err := fmt.Fprintln(app.Stdout, heading); err != nil {
 				return false, err
 			}
 			for i, option := range guide.Options {
-				if _, err := fmt.Fprintf(app.Stdout, "  %d. %s\n", i+1, option.Title); err != nil {
+				label := "  - " + option.Title
+				if compilerChoices {
+					label = fmt.Sprintf("  %d. %s", i+1, option.Title)
+				}
+				if _, err := fmt.Fprintln(app.Stdout, label); err != nil {
 					return false, err
 				}
 			}
 		}
-		if _, err := fmt.Fprint(app.Stdout, prompt+" [Enter/n/option/?/q]: "); err != nil {
+		keys := " [Enter/n/?/q]: "
+		if compilerChoices {
+			keys = " [Enter/n/option/?/q]: "
+		}
+		if _, err := fmt.Fprint(app.Stdout, prompt+keys); err != nil {
 			return false, err
 		}
 		line, err := migrationReadLine(ctx, app.Stdin)
@@ -323,18 +448,13 @@ func (app *App) migrationWizardReview(ctx context.Context, report migrationWizar
 			return false, err
 		default:
 			choice, err := strconv.Atoi(strings.TrimSpace(line))
-			if err == nil && choice >= 1 && choice <= len(guide.Options) {
-				if _, err := fmt.Fprintln(app.Stdout, "Template selected for review. Copy it into the current migration, fill custom-code holes, save, then press Enter to recheck."); err != nil {
+			if err == nil && compilerChoices && choice >= 1 && choice <= len(guide.Options) {
+				if err := app.migrationWizardApplyChoice(ctx, report, migrationWizardDecision(report, diagnostic), choice-1); err != nil {
 					return false, err
 				}
-				selected := guide
-				selected.Options = guide.Options[choice-1 : choice]
-				if err := app.migrationWizardHelp(selected); err != nil {
-					return false, err
-				}
-				continue
+				return true, nil
 			}
-			if _, err := fmt.Fprintln(app.Stdout, "Save and press Enter to recheck, n for the next item, an option number for its template, ? for help, or q to stop. Options are templates; choosing their meaning still requires source edits."); err != nil {
+			if _, err := fmt.Fprintln(app.Stdout, "Save and press Enter to recheck, n for the next item, a compiler option number to apply its scaffold, ? for help, or q to stop. Guidance without a compiler-proposed option cannot update source."); err != nil {
 				return false, err
 			}
 		}
@@ -422,6 +542,14 @@ func (app *App) migrationWizard(ctx context.Context, args []string) error {
 		prompt = "Resolve the diagnostics in your schema or current migration, then save"
 	}
 	for {
+		if !report.Compilable && len(report.Decisions) > 0 && report.preview == nil {
+			// Publication invalidates its own preconditions. Choices must be bound
+			// to a new read-only preview over the saved files now on disk.
+			report, err = app.migrationWizardPreview(ctx, options)
+			if err != nil {
+				return err
+			}
+		}
 		proceed, err := app.migrationWizardReview(ctx, report, prompt)
 		if err != nil || !proceed {
 			return err

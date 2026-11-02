@@ -35,6 +35,10 @@ val capture : before:Migration_inventory.t -> after:Migration_inventory.t -> sou
 val with_captured : captured -> (unit -> 'a) -> ('a,Migration_sparse.error list) result
 val captured_source_texts : captured -> (Ast.module_form * string) list
 
+(** Read-only reference resolution shared by advisory scaffolding classifiers.
+    A resolved name grants no checking, proof transport or execution authority. *)
+val resolver : Ast.module_form list -> Ast.module_form -> Migration_ir.resolver
+
 (** Resolve direct source-owned function references and check their reachable
     purity. This alone grants neither frontend checking nor execution authority. *)
 val bind_pure_functions : Ast.module_form list -> Ast.module_form -> Ast.expr list ->

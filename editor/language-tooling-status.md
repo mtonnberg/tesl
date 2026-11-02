@@ -15,9 +15,9 @@ The executable fixtures are in `server_test.go`, `completion_test.go`,
 | Highlights/linked editing | `--occurrences-json` | Same-file occurrences |
 | Prepare rename/rename | `--workspace-references-json`, `--workspace-rename-json` | Rechecked staged project, binding/capture/type/proof checks and whole-input preconditions; requires an initially valid project and a client supporting transactional versioned edits |
 | Completion/resolve | `--completions-json`, `--doc-json` | Stdlib discovery, sibling exported types, auto-imports, receiver fields, partial parsing, revision checks |
-| Migration authoring | Guarded preview, compiler decisions and shared advisory guide | Migration CodeLens, overview/individual help, contextual fields/constructors, explicit template holes and retained read-only diffs; editor apply remains disabled |
+| Migration authoring | Guarded preview, compiler decisions and shared advisory guide | Migration CodeLens, overview/individual help, contextual fields/constructors, explicit template holes, retained read-only diffs and guarded real file/buffer application; custom snapshot barrier required |
 | Signature help | `--signature-help-json` | Callee parameters and active argument |
-| Code actions | Diagnostic fixes and producer action metadata | Decisions/confirmation requests are excluded from ordinary quick fixes; `source.fixAll.tesl` rechecks buffers and returns a versioned single-document edit; guarded migration previews and per-file diffs are read-only; multi-file application remains pending |
+| Code actions | Diagnostic fixes and producer action metadata | Decisions/confirmation requests are excluded from ordinary quick fixes; `source.fixAll.tesl` rechecks buffers and returns a versioned single-document edit; migration choices regenerate compiler-owned guarded proposals and apply real files/buffers through a negotiated snapshot barrier; ordinary quick fixes never select migration policy |
 | Selection ranges | `--selection-range-json` | Nested source ranges |
 | Inlay hints | `--local-bindings-json` | Inferred binding types; no general expected-type/proof hint engine |
 | Document symbols and semantic tokens | `--semantic-json` | Document snapshot; full/range/delta token transport does not imply a workspace index |

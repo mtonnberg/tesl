@@ -241,3 +241,51 @@ changes. This request-path optimization makes no CI wall-time claim.
    artifacts; keep every assertion, supported-major witness and race test. Run
    latency comparisons on a separate quiet job so sharding does not invalidate
    their measurements. Measure the whole passing run before claiming a speedup.
+
+## Follow-up: source discovery
+
+Profiling found repeated verification of every earlier guard while discovering
+each helper. Incremental accumulation now preserves and deduplicates the original
+file, directory, import and edit observations; conflicts refuse and the complete
+source/disk union is verified before a capture is published. Existing final
+revalidation and alias checks remain. The first batched-list prototype retained
+duplicate directory data; independent review caught that memory regression and
+the final opaque accumulator removes it.
+
+Five paired native runs on the shared cloud host measured the complete discovery,
+capture, final guard verification and `with_captured` verification phase:
+
+| Helpers | Original median | Final median | Speedup |
+|---|---:|---:|---:|
+| 8 | 5.244 ms | 2.089 ms | 2.51 times |
+| 32 | 38.115 ms | 7.531 ms | 5.06 times |
+| 64 | 139.355 ms | 17.322 ms | 8.04 times |
+| 128 | 515.219 ms | 46.430 ms | 11.10 times |
+
+Median process peak RSS was 12,672 KiB for both original and final versions;
+the superseded collected-list prototype used 14,088 KiB. These are component
+measurements, not editor p99, total build time or production request acceptance.
+The final guard suite passed, including stale early inputs, conflicting
+late observations, changed disk under buffers, symlinks and graph membership.
+[Raw paired measurements](migration-source-discovery-measurements.json) include
+binary hashes and memory observations. The reproducible fixture is
+`compiler/bench/migration_source_discovery.ml`; run
+`dune exec bench/migration_source_discovery.exe` from `compiler/`.
+Compare the same fixture against the recorded base revision in a separate
+untracked archive, preserving guards and alternating variants.
+
+## Follow-up: real rollout evidence
+
+The [rollout report](migration-rollout-performance.md) records the full-data
+10,000-row baseline, original p99 budgets, sampled lock spans, Worker restart,
+rejection/repair and final Contract. Correctness passed; the original latency
+budgets failed on this shared host. Larger bounded cases and resource refusals
+must remain distinct from completed correctness or release acceptance.
+
+The Worker optimization reuses a successful processing latch only within its exact
+fenced repeatable-read batch admission. Every retry constructs a fresh token;
+Request checks and SQL function definitions remain unchanged. A real same-process
+40001 regression verifies rollback of converted rows, latch and progress, followed
+by a new durable receipt while retaining an old writer's accepted edit. This and
+the missed-CAS regression passed on PostgreSQL without skips. Measure whole
+workloads before attributing a throughput factor to this optimization.

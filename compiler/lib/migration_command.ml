@@ -4,6 +4,7 @@ module M = Migration_manifest
 type response = { stdout : string; stderr : string; exit_code : int }
 let usage = {|Usage: tesl migrate generate <entry.tesl> --manifest-json [--database D] [--new-revision]
        [--project-root DIR] [--overlay FILE VERSION CONTENTS_FILE ...]
+       [--decision ID --option ID --expected-input-digest HASH]
        tesl migrate contract <entry.tesl> --version N --manifest-json [--database D]
        tesl migrate plan <entry.tesl> [--database D] [--initial-version N] [--project-root DIR]
 
@@ -46,10 +47,11 @@ let path spelling =
       directory names so selection and history checks share one spelling. *)
    Source_input.canonical_path (walk absolute)
 type options = {entry:string;database:string option;new_revision:bool;root:string option;plan:bool;initial_version:int;contract_version:int option;
-                overlays:(string * int * string) list}
+                overlays:(string * int * string) list;choice:(string * string * string) option}
 let parse args =
   let entry = ref None and database = ref None and root = ref None and initial_version = ref None in
   let new_revision = ref false and json = ref false and overlays = ref [] and contract_version = ref None in
+  let decision=ref None and option_=ref None and expected_digest=ref None in
   let set flag cell value =
     if !cell<>None then reject "" ("duplicate " ^ flag);
     if value="" || String.starts_with ~prefix:"--" value then reject "" (flag ^ " requires a value");
@@ -63,6 +65,9 @@ let parse args =
     | "--project-root" :: value :: rest -> set "--project-root" root value; loop rest
     | "--initial-version" :: value :: rest -> set "--initial-version" initial_version value; loop rest
     | "--version" :: value :: rest -> set "--version" contract_version value; loop rest
+    | "--decision" :: value :: rest -> set "--decision" decision value;loop rest
+    | "--option" :: value :: rest -> set "--option" option_ value;loop rest
+    | "--expected-input-digest" :: value :: rest -> set "--expected-input-digest" expected_digest value;loop rest
     | "--overlay" :: file :: version :: contents :: rest ->
       let version = match Int64.of_string_opt version with
         | Some n when n >= -2147483648L && n <= 2147483647L -> Int64.to_int n
@@ -77,6 +82,14 @@ let parse args =
    | "contract" :: rest -> loop rest; false
    | _ -> reject "" "expected migration verb generate, contract or plan" in
   let contract=match args with "contract"::_ -> true | _ -> false in
+  let choice=match !decision,!option_,!expected_digest with
+    | None,None,None->None
+    | Some decision,Some option_,Some digest->
+      if plan || contract || !new_revision then reject "" "migration choices apply only to generate of the current revision";
+      if String.length digest<>64 || not(String.for_all(function '0'..'9'|'a'..'f'->true|_->false)digest)then
+        reject "" "--expected-input-digest must be the 64-character lowercase digest from the reviewed preview";
+      Some(decision,option_,digest)
+    | _->reject "" "--decision, --option and --expected-input-digest are required together" in
   if contract && !new_revision then reject "" "contract does not start a new revision";
   if contract && !contract_version=None then reject "" "contract requires --version N";
   if not contract && !contract_version<>None then reject "" "--version applies only to contract";
@@ -93,7 +106,7 @@ let parse args =
   if not plan && not !json then reject "" "this compiler endpoint returns previews; use the native tesl CLI for source writes, or --manifest-json for a non-mutating preview";
   if !overlays<>[] && !root=None then reject "" "editor overlays require an explicit --project-root";
   let entry = match !entry with Some file -> file | None -> reject "" "an explicit application entry file is required" in
-  {entry;database = !database;new_revision = !new_revision;root = !root;plan;initial_version;contract_version;overlays=List.rev !overlays}
+  {entry;database = !database;new_revision = !new_revision;root = !root;plan;initial_version;contract_version;overlays=List.rev !overlays;choice}
 let generate opts =
   let root = Option.map path opts.root in
   let overlays = List.map (fun (file,version,contents) ->
@@ -117,7 +130,10 @@ let generate opts =
        | Error errors -> raise (Plan_invalid errors)
      else match opts.contract_version with
      | Some version -> P.to_json(preview(P.generate_contract ~project_root ~entry_file ~database:opts.database ~version ~documents))
-     | None -> P.to_json (preview (P.generate ~project_root ~entry_file ~database:opts.database ~new_revision:opts.new_revision ~documents)) in
+     | None -> P.to_json (preview (match opts.choice with
+       | None->P.generate ~project_root ~entry_file ~database:opts.database ~new_revision:opts.new_revision ~documents
+       | Some(decision,option_,expected_input_digest)->P.generate_choice ~project_root ~entry_file ~database:opts.database
+          ~documents ~decision ~option_ ~expected_input_digest)) in
     {stdout=stdout ^ "\n";stderr="";exit_code=0} in
   match root with
   | Some root -> Source_input.with_overlays ~project_root:root

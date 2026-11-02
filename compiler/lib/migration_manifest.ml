@@ -122,29 +122,74 @@ let create ~project_root:root ~reads ~directories ~imports ~documents ~writes = 
 (** Combine independently computed operations without taking a new snapshot of
     their inputs. Re-capturing after target selection could bless changed source
     while retaining the old selection. Conflicting preconditions must refuse. *)
-let combine left right ~documents = protect (fun () ->
-  if left.root <> right.root then reject right.root "cannot combine manifests from different projects";
-  let documents = normalized_documents left.root documents in
-  if left.documents <> right.documents || documents <> left.documents then
-    reject left.root "open document set or version changed between previews";
-  let union label key path xs ys =
-    let all = List.sort (fun a b -> compare (key a) (key b)) (xs @ ys) in
-    let rec merge = function
-      | a :: b :: rest when key a = key b ->
-        if a <> b then reject (path a) ("conflicting " ^ label ^ " between previews");
-        merge (a :: rest)
-      | a :: rest -> a :: merge rest
-      | [] -> [] in
-    merge all in
-  let files = union "source precondition" (fun g -> g.file) (fun g -> g.file) left.files right.files in
-  let directories = union "directory precondition" (fun g -> g.directory) (fun g -> g.directory) left.directories right.directories in
-  let imports = union "import precondition" (fun g -> g.source,g.name) (fun g -> g.source) left.imports right.imports in
-  let edits = union "source edit" (fun (e : edit) -> e.path) (fun e -> e.path) left.edits right.edits in
-  let combined = {root=left.root;documents;files;directories;imports;edits} in
-  let overlay_root = Option.value (Source_input.project_root ()) ~default:left.root in
+module Import_paths = Map.Make(struct type t = string * string let compare = compare end)
+type accumulator = {
+  combine_root : string;
+  combine_documents : document list;
+  combine_files : file_guard Paths.t;
+  combine_directories : directory_guard Paths.t;
+  combine_imports : import_guard Import_paths.t;
+  combine_edits : edit Paths.t;
+}
+
+(* Deduplicate original observations as they arrive, including repeated directory
+   listings. No input is recaptured or replaced by a later observation. *)
+let merge_observations accumulator (manifest : t) =
+  if manifest.root <> accumulator.combine_root then
+    reject manifest.root "cannot combine manifests from different projects";
+  if manifest.documents <> accumulator.combine_documents then
+    reject manifest.root "open document set or version changed between previews";
+  let add_paths label key location observations entries =
+    List.fold_left (fun entries observation ->
+      Paths.update (key observation) (function
+        | None -> Some observation
+        | Some previous when previous = observation -> Some previous
+        | Some _ -> reject (location observation) ("conflicting " ^ label ^ " between previews")) entries
+    ) entries observations in
+  let combine_files = add_paths "source precondition" (fun g -> g.file) (fun g -> g.file)
+      manifest.files accumulator.combine_files in
+  let combine_directories = add_paths "directory precondition" (fun g -> g.directory) (fun g -> g.directory)
+      manifest.directories accumulator.combine_directories in
+  let combine_imports = List.fold_left (fun entries guard ->
+    Import_paths.update (guard.source,guard.name) (function
+      | None -> Some guard
+      | Some previous when previous = guard -> Some previous
+      | Some _ -> reject guard.source "conflicting import precondition between previews") entries
+    ) accumulator.combine_imports manifest.imports in
+  let combine_edits = add_paths "source edit" (fun (e : edit) -> e.path) (fun e -> e.path)
+      manifest.edits accumulator.combine_edits in
+  {accumulator with combine_files;combine_directories;combine_imports;combine_edits}
+
+let initial_observations (first : t) ~documents =
+  let documents = normalized_documents first.root documents in
+  merge_observations {
+    combine_root=first.root;combine_documents=documents;
+    combine_files=Paths.empty;combine_directories=Paths.empty;
+    combine_imports=Import_paths.empty;combine_edits=Paths.empty
+  } first
+
+let verify_observations accumulator =
+  let combined = {
+    root=accumulator.combine_root;documents=accumulator.combine_documents;
+    files=List.map snd (Paths.bindings accumulator.combine_files);
+    directories=List.map snd (Paths.bindings accumulator.combine_directories);
+    imports=List.map snd (Import_paths.bindings accumulator.combine_imports);
+    edits=List.map snd (Paths.bindings accumulator.combine_edits)
+  } in
+  let overlay_root = Option.value (Source_input.project_root ()) ~default:combined.root in
   Source_input.with_overlays ~project_root:overlay_root (overlays combined) (fun () -> ());
   verify_files combined false; verify_files combined true;
-  combined)
+  combined
+
+let start_combine first ~documents = protect (fun () -> initial_observations first ~documents)
+let add_to_combine accumulator manifest = protect (fun () -> merge_observations accumulator manifest)
+let finish_combine accumulator = protect (fun () -> verify_observations accumulator)
+let combine_many manifests ~documents = protect (fun () ->
+  match manifests with
+  | [] -> reject "" "cannot combine an empty manifest list"
+  | first :: rest -> verify_observations
+    (List.fold_left merge_observations (initial_observations first ~documents) rest))
+let combine left right ~documents = combine_many [left;right] ~documents
 
 (* Kept independent of Compile so compiler-owned generators can use manifests
    without introducing a compilation pipeline dependency cycle. *)

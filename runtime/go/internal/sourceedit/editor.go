@@ -206,17 +206,28 @@ func (editor *EditorTransaction) Publish(ctx context.Context) (Report, error) {
 	return editor.Report(), err
 }
 
-// BeginClientEdits MUST succeed before any workspace/applyEdit request is sent.
+// BeginClientEdits MUST succeed before any editor edit request is sent.
 // Once this marker is durable, automatic disk-only recovery refuses to infer the
 // state of editor buffers. Even a request with no reply might have applied edits.
 func (editor *EditorTransaction) BeginClientEdits(ctx context.Context) (Report, error) {
+	return editor.beginClient(ctx, false)
+}
+
+// BeginClientObservation retains the same durable editor-pending marker while a
+// closed-only publication awaits its final editor snapshot. A newly opened
+// published file must not be removed by disk-only recovery after a lost reply.
+func (editor *EditorTransaction) BeginClientObservation(ctx context.Context) (Report, error) {
+	return editor.beginClient(ctx, true)
+}
+
+func (editor *EditorTransaction) beginClient(ctx context.Context, observation bool) (Report, error) {
 	if err := editor.requirePhase("prepared"); err != nil {
 		return editor.Report(), err
 	}
 	if !editor.published {
 		return editor.Report(), fmt.Errorf("closed source publication is incomplete")
 	}
-	if len(editor.tx.files) == len(editor.tx.manifest.wire.Edits) {
+	if !observation && len(editor.tx.files) == len(editor.tx.manifest.wire.Edits) {
 		return editor.Report(), fmt.Errorf("no buffer edits are needed; commit without a client request")
 	}
 	err := editor.step(ctx)("before-client")
@@ -268,6 +279,10 @@ func (editor *EditorTransaction) Abort(ctx context.Context) (Report, error) {
 	if err := editor.requirePhase("prepared"); err != nil {
 		return editor.Report(), err
 	}
+	if err := editor.tx.manifest.verifySavedEditorInputs(editor.tx.tree); err != nil {
+		editor.tx.report.RecoveryRequired = true
+		return editor.Report(), err
+	}
 	return editor.finish(editor.tx.rollback(editor.step(ctx)))
 }
 
@@ -281,18 +296,25 @@ func (editor *EditorTransaction) Restore(ctx context.Context, documents []Editor
 	// An editor may have saved an applied buffer before acknowledging it. Its
 	// saved imports can now depend on our published closed files, even after a
 	// buffer-only inverse. Do not delete those dependencies or claim restoration.
-	versions := editor.tx.manifest.DocumentVersions()
-	for _, input := range editor.tx.manifest.wire.Inputs {
+	if err := editor.tx.manifest.verifySavedEditorInputs(editor.tx.tree); err != nil {
+		editor.tx.report.RecoveryRequired = true
+		return editor.Report(), err
+	}
+	return editor.finish(editor.tx.rollback(editor.step(ctx)))
+}
+
+func (m *Manifest) verifySavedEditorInputs(tree *tree) error {
+	versions := m.DocumentVersions()
+	for _, input := range m.wire.Inputs {
 		if _, open := versions[input.Path]; !open {
 			continue
 		}
-		actual, err := editor.tx.tree.fileHash(input.Path)
+		actual, err := tree.fileHash(input.Path)
 		if err != nil || !same(actual, input.DiskHash) {
-			editor.tx.report.RecoveryRequired = true
-			return editor.Report(), errors.Join(fmt.Errorf("saved editor input changed; retain generated dependencies for recovery: %s", input.Path), err)
+			return errors.Join(fmt.Errorf("saved editor input changed; retain generated dependencies for recovery: %s", input.Path), err)
 		}
 	}
-	return editor.finish(editor.tx.rollback(editor.step(ctx)))
+	return nil
 }
 
 func (editor *EditorTransaction) finish(err error) (Report, error) {

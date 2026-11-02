@@ -259,6 +259,8 @@ func (server *Server) handle(ctx context.Context, request protocol.Request, writ
 		return 1, nil
 	case "textDocument/didOpen":
 		return -1, server.didOpen(ctx, request.Params, writer)
+	case "tesl/migrationSnapshotFence":
+		return -1, server.migrationSnapshotFence(request.Params)
 	case "textDocument/didChange":
 		return -1, server.didChange(ctx, request.Params, writer)
 	case "textDocument/didSave":
@@ -2059,6 +2061,11 @@ func (server *Server) publishDiagnosticGroups(entryURI string, groups map[string
 }
 
 func (server *Server) publish(uri string, diagnostics []map[string]any, writer *protocol.Writer) error {
+	// Clearing the final diagnostic owner produces a nil aggregate. LSP requires
+	// an array here; null makes real language clients fail before clearing it.
+	if diagnostics == nil {
+		diagnostics = []map[string]any{}
+	}
 	params := map[string]any{"uri": uri, "diagnostics": diagnostics}
 	encoded, err := json.Marshal(params)
 	if err != nil {

@@ -150,6 +150,13 @@ func recoverWithCheckpoint(ctx context.Context, root string, checkpoint func(str
 	if j.Phase == "editor-pending" {
 		return report, fmt.Errorf("editor source request outcome is unknown; reconcile editor buffers before recovery")
 	}
+	// A save may precede the first editor request, or even its durable pending
+	// marker. Preserve generated dependencies if those saved imports changed.
+	if j.Version == 2 && j.Phase == "prepared" {
+		if err := m.verifySavedEditorInputs(tree); err != nil {
+			return report, err
+		}
+	}
 	if err := tx.rollback(step); err != nil {
 		tx.report.RecoveryRequired = true
 		return tx.report, err

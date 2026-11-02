@@ -40,6 +40,8 @@ The `check`/`--check-json` path returns a top-level object:
 ```
 
 `diagnostics` must be an array of objects.
+LSP `textDocument/publishDiagnostics` also always carries an array; clearing the
+last diagnostic publishes `[]`, never `null`.
 
 ## Diagnostic protocol 2
 
@@ -91,21 +93,25 @@ late results are discarded. Without versioned edit support, no fix-all is offere
 
 ## Migration source preview commands
 
-When the compiler supports guarded migration previews, the LSP advertises two
-`workspace/executeCommand` commands. Both are read-only; source application and
-the Change Schema UI remain under development.
+When the compiler supports guarded migration previews, the LSP advertises source
+preview commands. Application is advertised only to a client that negotiates the
+checked migration snapshot-barrier capability described below.
 
 - `tesl.generateMigration` takes one argument object with absolute `entryFile`
   and `projectRoot` paths, optional `database`, and optional `newRevision` boolean.
-  The server supplies all open Tesl buffers within that project, including their
-  exact versions. The compiler chooses and validates the migration history.
+  It optionally takes `decisionId`, `optionId`, and `expectedInputDigest` together
+  to regenerate one retained compiler choice. The server forwards only those
+  identifiers, the digest and exact open document versions to the compiler; a
+  client-provided source template is never trusted. The server supplies all open
+  Tesl buffers within that project. The compiler validates history and binds the
+  proposal to the whole source/disk/directory/import/compiler-ABI snapshot.
 - `tesl.migrationPreviewFile` takes one argument object with `previewId` and an
   exact `path` from the preview's file list. It returns retained preimage/proposal
   bytes; it never substitutes current disk contents.
 
 Successful generation returns version 1, kind `migration-editor-preview`,
 `ok: true`, `previewId`, selected `database`/`entryFile`, `operation`, `compilable`,
-`files` and `diagnostics`. Optional `decisions` and `guidance` provide authoring
+`files`, `diagnostics` and `inputDigest`. Optional `decisions` and `guidance` provide authoring
 help without granting edit authority:
 
 - `decisions` retains the compiler array of `{id, entity, file, line, col,
@@ -136,10 +142,15 @@ partial response. Clients must request a new preview after any source changes
 before a future application operation; viewing a retained diff establishes no
 authority to overwrite current contents.
 
-The VS Code/VSCodium extension exposes these read-only operations through a
-migration CodeLens, **Migration Guide**, and **Preview Migration Decisions**.
-It shows an overview, individual decision help and retained diffs. Copying a
-compiler template only writes the clipboard; it does not call `tesl.applyMigration`.
+The extension exposes previews through migration CodeLens, **Migration Guide**,
+and **Preview Migration Decisions**. Diffs remain read-only. Choosing an applicable
+compiler option updates actual source through `tesl.applyMigration`; custom-code
+holes are opened and the application is rechecked. The product extension commands
+`tesl.applyMigrationChoice({previewId, decisionId, optionId})` and
+`tesl.applyMigrationSource({previewId})` use the latest retained view and the same
+implementation as the webview buttons. `tesl.previewMigration` returns a
+serializable `migration-editor-view` descriptor with that handle and compiler
+choices for developer/AI clients. No command accepts arbitrary source edits.
 
 For presentation only, the exact producer-owned current-source byte mismatch
 (`MIG001`, expected-undeployed-draft message and recorded-bytes mismatch reason)
@@ -148,14 +159,80 @@ is informational in the editor. Compiler/build diagnostics remain errors. Other
 integrity (`MIG013`) errors keep error severity. Message changes fail closed to
 normal error presentation. This does not infer deployment state.
 
-The session transport supports bounded server-to-client requests for the upcoming
-apply workflow. Replies enter the same ordered, bounded queue as document
-notifications, and their continuations run on the document event loop. Request
-identities are separate in each direction; duplicate and expired replies cannot
-complete another request. Each request has a deadline and is released on session
-exit. A timeout or disconnect means the request outcome is unknown, not that the
-client left its buffers untouched. Migration source application must reconcile
-that outcome through its guarded inverse and journal before reporting restoration.
+### Checked migration source application
+
+The client must advertise
+`capabilities.experimental.teslMigrationApply = {version: 1, snapshotBarrier: 1}`.
+It must also support `workspace.applyEdit` and versioned `documentChanges`.
+Standard `workspace/applyEdit` support alone does not satisfy this contract.
+`tesl.applyMigration` takes `{previewId}` and returns a
+`migration-editor-application` result with `ok`, `active`, `compilable`,
+`sourceTransaction`, `buffersWritten`, `buffersRestored`, and optional `error`.
+`tesl.migrationApplicationStatus({previewId})` retrieves the active or last retained
+outcome in the same server session if the original request was cancelled or its
+reply was lost. Handles and outcomes do not survive a server restart.
+
+The server recompiles the retained selection and exact overlay snapshot before
+publication, rechecking compiler ABI, complete family/revision selection,
+compilability and immutable proposal identity. A changed or unavailable compiler
+refuses before any journal or source write. The server then verifies the initial
+editor snapshot, prepares a durable journal, publishes closed files and records
+`editor-pending` before requesting buffer edits. A proposal with only closed-file
+edits also records that marker while awaiting its final editor snapshot. Open
+buffers use these bounded custom client requests:
+
+- `tesl/migrationSnapshot`: `{version: 1, previewId, projectRoot, phase}`, where
+  phase is `before`, `afterApply`, or `afterRestore`. The reply is
+  `{version: 1, previewId, eventSeq, documents: [{uri, version, source, openId}]}`.
+  It contains the complete open project `.tesl` document set, not just edited targets.
+  `openId` identifies a real TextDocument lifetime, so close/reopen with an equal
+  URI/version/source cannot masquerade as the old buffer.
+- Before each snapshot reply the client drains document synchronization, sends
+  `tesl/migrationSnapshotFence({version: 1, previewId, eventSeq})`, and retries if
+  an open/change/close event happened while awaiting the drain. The final complete
+  capture and return happen synchronously. The server processes the fence and
+  reply on its ordered dispatcher and requires an exact sequence match plus the
+  corresponding observed sources, versions, document set and lifetimes. `eventSeq`
+  is a nonnegative JavaScript safe integer that advances when document events
+  change the snapshot. A snapshot containing text that was never observed through
+  the preceding document notifications is refused.
+- `tesl/migrationApplyEdit`: `{version: 1, previewId, label, documents: [{uri,
+  version, source, openId, newText, range}]}`. The client checks all preimages,
+  opens each specific editor, rechecks its document lifetime/source/version and
+  invokes `TextEditor.edit` with the editor's version guard. Replies use standard
+  `{applied, failureReason?, failedChange?}` fields. A partial/negative reply still
+  requires an explicit post-edit snapshot before any inverse or disk restoration.
+  `range` is the complete preimage range in LSP UTF-16 coordinates. Requests and
+  snapshot responses are preflighted against the 4 MiB encoded JSON limit.
+
+Pure LF/CRLF proposals retain exact line endings through the editor's explicit EOL
+operation. Mixed-EOL proposals are refused before buffer edits rather than silently
+changing frozen hash bytes. Open dirty buffers are not saved behind the user's
+back. A changed user buffer or lifetime prevents an inverse overwrite and leaves
+journaled recovery state when safe automatic restoration cannot be established.
+
+Transport responses and notifications enter the same bounded ordered queue.
+Timeout, disconnect, malformed snapshots or unknown outcomes preserve recovery
+state; they are never interpreted as proof that editor changes did not happen.
+Only a verified final snapshot and committed source transaction mean success.
+
+The source transaction uses Linux atomic file exchange and retains the original
+manifest, including every open-buffer and disk guard. Source application refuses
+on platforms without that operation; read-only previews remain available. Open
+buffer paths are never written by the filesystem transaction. Generated closed
+files may be visible while an application is pending, so their presence alone
+does not establish completion. An inverse edits only an unchanged expected
+postimage in the same editor lifetime and waits for its own verified snapshot.
+
+When `sourceTransaction.recoveryRequired` is true, preserve the editor buffers,
+saved source and `.tesl-source-edit` directory together. Disk-only recovery refuses
+an `editor-pending` journal. It also refuses a prepared editor journal if an
+originally open input was saved with different bytes: those saved imports may
+depend on generated files even before the first editor edit request. A normal
+abort follows the same rule. Automatic reconciliation after a restart is not
+implemented; inspect both source and buffers before deciding how to recover.
+Starting another apply or deleting the journal is not a substitute for that
+reconciliation.
 
 ## Definition response shape
 

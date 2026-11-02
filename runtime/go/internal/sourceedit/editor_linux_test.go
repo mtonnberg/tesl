@@ -123,6 +123,47 @@ func TestEditorRestorationRetainsDependenciesAfterBufferAutoSave(t *testing.T) {
 	}
 }
 
+func TestEditorAbortAndPreparedRecoveryRetainDependenciesAfterEarlyBufferSave(t *testing.T) {
+	m, documents := editorTransactionFixture(t)
+	editor, _, err := m.PrepareEditor(context.Background(), documents)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = editor.Close() })
+	if _, err := editor.Publish(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	// Save while publication is complete but before any client request marker.
+	// Even this saved source may now import the newly published dependencies.
+	saved := editorAppliedDocuments(t, m, documents)
+	changed := false
+	for i, doc := range saved {
+		if doc.Source != documents[i].Source {
+			if err := os.WriteFile(doc.Path, []byte(doc.Source), 0600); err != nil {
+				t.Fatal(err)
+			}
+			changed = true
+			break
+		}
+	}
+	if !changed {
+		t.Fatal("fixture has no buffer edit to save")
+	}
+	if report, err := editor.BeginClientEdits(context.Background()); err == nil || report.Outcome != "prepared" {
+		t.Fatal("early save unexpectedly passed client preparation")
+	}
+	before := sourceSnapshot(t, m.ProjectRoot())
+	if report, err := editor.Abort(context.Background()); err == nil || !report.RecoveryRequired || !strings.Contains(err.Error(), "saved editor input changed") || !reflect.DeepEqual(before, sourceSnapshot(t, m.ProjectRoot())) {
+		t.Fatal("early-save abort removed generated dependencies")
+	}
+	if err := editor.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if report, err := Recover(context.Background(), m.ProjectRoot()); err == nil || !report.RecoveryRequired || !strings.Contains(err.Error(), "saved editor input changed") || !reflect.DeepEqual(before, sourceSnapshot(t, m.ProjectRoot())) {
+		t.Fatal("prepared disk-only recovery removed early-saved source dependencies")
+	}
+}
+
 func runEditorSourceChild(t *testing.T, m *Manifest, documents []EditorDocument, operation, stop string) {
 	t.Helper()
 	private := t.TempDir()
@@ -432,6 +473,46 @@ func TestEditorSourceTransactionWithOnlyClosedEdits(t *testing.T) {
 	}
 	assertProposed(t, m)
 	assertChecks(t, root)
+}
+
+func TestEditorClosedPublicationWaitsForClientObservation(t *testing.T) {
+	for _, complete := range []bool{false, true} {
+		t.Run(strconv.FormatBool(complete), func(t *testing.T) {
+			root, _ := transactionFixture(t, false)
+			entry := filepath.Join(root, "app.tesl")
+			source, err := os.ReadFile(entry)
+			if err != nil {
+				t.Fatal(err)
+			}
+			documents := []EditorDocument{{Path: entry, Version: 9, Source: string(source)}}
+			m := editorCompilerPreview(t, root, documents, false).Manifest()
+			editor, _, err := m.PrepareEditor(context.Background(), documents)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = editor.Close() })
+			if _, err := editor.Publish(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := editor.BeginClientObservation(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if complete {
+				if report, err := editor.Commit(context.Background(), documents); err != nil || report.Outcome != "committed" || report.RecoveryRequired {
+					t.Fatalf("observed closed publication: %+v %v", report, err)
+				}
+				assertProposed(t, m)
+			} else {
+				if err := editor.Close(); err != nil {
+					t.Fatal(err)
+				}
+				before := sourceSnapshot(t, root)
+				if report, err := Recover(context.Background(), root); err == nil || !report.RecoveryRequired || !reflect.DeepEqual(before, sourceSnapshot(t, root)) {
+					t.Fatal("lost final client observation allowed disk-only recovery to remove possibly opened files")
+				}
+			}
+		})
+	}
 }
 
 func TestEditorSourceTransactionRejectsStalePreparationAndCancelsPublication(t *testing.T) {

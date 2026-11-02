@@ -84,10 +84,12 @@ let read ~file source = protect (fun () ->
     ignore (validate loc header);
     Some {header;loc;start_offset=first.offset;end_offset=last.stop})
 
-let replace ~file ~source header = match read ~file source with
+let replace ~file ~source header =
+  let encoded=Migration_source.source_fragment ~source (encode header)in
+  match read ~file source with
   | Error _ as error -> error
-  | Ok None -> Ok (encode header ^ source)
-  | Ok (Some previous) -> Ok (String.sub source 0 previous.start_offset ^ encode header ^
+  | Ok None -> Ok (encoded ^ source)
+  | Ok (Some previous) -> Ok (String.sub source 0 previous.start_offset ^ encoded ^
       String.sub source previous.end_offset (String.length source - previous.end_offset))
 
 let verify_unchanged checked = protect (fun () ->

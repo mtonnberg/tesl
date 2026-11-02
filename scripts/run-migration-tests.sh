@@ -141,6 +141,11 @@ if (( $# == 0 )); then
   run_phase review05 3600 python3 "$repo_root/scripts/test-db-migration-review-05.py" --artifacts "$migration_tmp/review05-releases" --output "$migration_tmp/review05-results"
   run_phase review11 3600 python3 "$repo_root/scripts/test-db-migration-review-11.py" --artifacts "$migration_tmp/review05-releases" --output "$migration_tmp/review11-results"
   run_phase twenty-releases 3600 python3 "$repo_root/example/db-twenty-releases/run.py" --output "$migration_tmp/twenty-releases"
+  # Real rolling correctness owns a private cluster and stops before latency.
+  run_phase rolling-workload-smoke 1800 python3 "$repo_root/scripts/measure-migration-rollout.py" \
+    --correctness-smoke --source-root "$repo_root" \
+    --compiler "$repo_root/compiler/_build/default/bin/main.exe" \
+    --artifacts "$migration_tmp/rolling-workload-programs" --output "$evidence/rolling-workload-smoke"
   # Mandatory full-gate comparison; sequential so other phases do not distort
   # latency. Missing pinned history, noisy calibration or errors fail the gate.
   run_phase latency-statistics 120 python3 "$repo_root/scripts/test-migration-latency.py"

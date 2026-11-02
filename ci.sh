@@ -79,6 +79,64 @@ cd "$SCRIPT_DIR"
 export TESL_REPO_ROOT="$SCRIPT_DIR"
 COMPILER_DIR="$SCRIPT_DIR/compiler"
 
+# The default remains the complete, serial local gate. Hosted runners partition
+# only the declared phase union; their receipts are joined by the required gate.
+CI_SHARD=full
+CI_EVIDENCE_DIR=""
+CI_EXPECTED_REVISION="${GITHUB_SHA:-}"
+CI_LIST_PHASES=0
+while (( $# > 0 )); do
+    case "$1" in
+        --shard|--evidence-dir|--expected-revision)
+            if (( $# < 2 )); then printf 'missing value for %s\n' "$1" >&2; exit 2; fi
+            case "$1" in
+                --shard) CI_SHARD="$2" ;;
+                --evidence-dir) CI_EVIDENCE_DIR="$2" ;;
+                --expected-revision) CI_EXPECTED_REVISION="$2" ;;
+            esac
+            shift 2 ;;
+        --list-phases) CI_LIST_PHASES=1; shift ;;
+        *) printf 'unknown CI argument: %s\n' "$1" >&2; exit 2 ;;
+    esac
+done
+case "$CI_SHARD" in
+    full|compiler-integration|go-runtime|migration) ;;
+    *) printf 'unknown CI shard: %s\n' "$CI_SHARD" >&2; exit 2 ;;
+esac
+CI_SHARD_ARGUMENTS=()
+if [ "$CI_SHARD" != full ]; then CI_SHARD_ARGUMENTS=(--shard "$CI_SHARD"); fi
+CI_PHASE_PLAN="$(python3 "$SCRIPT_DIR/scripts/ci-shards.py" list "${CI_SHARD_ARGUMENTS[@]}")" || exit 1
+if [ "$CI_LIST_PHASES" -eq 1 ]; then printf '%s\n' "$CI_PHASE_PLAN"; exit 0; fi
+mapfile -t CI_PLANNED_PHASES <<<"$CI_PHASE_PLAN"
+declare -A CI_SELECTED_PHASES=() CI_SEEN_PHASES=()
+for ci_phase_name in "${CI_PLANNED_PHASES[@]}"; do CI_SELECTED_PHASES["$ci_phase_name"]=1; done
+ci_phase_selected() { [[ -n "${CI_SELECTED_PHASES[$1]+selected}" ]]; }
+ci_complete_phase_coverage() {
+    local i
+    if (( ${#PHASE_NAMES[@]} != ${#CI_PLANNED_PHASES[@]} )); then
+        printf 'CI completed phase count differs from the declared plan\n' >&2
+        return 1
+    fi
+    for i in "${!CI_PLANNED_PHASES[@]}"; do
+        if [[ "${PHASE_NAMES[$i]}" != "${CI_PLANNED_PHASES[$i]}" ]]; then
+            printf 'CI completed phase sequence differs at position %s\n' "$i" >&2
+            return 1
+        fi
+    done
+}
+if [ "$CI_SHARD" != full ]; then
+    if [ -z "$CI_EXPECTED_REVISION" ]; then CI_EXPECTED_REVISION="$(git rev-parse HEAD)" || exit 1; fi
+    if [ -z "$CI_EVIDENCE_DIR" ]; then CI_EVIDENCE_DIR="$(mktemp -d)/evidence"; fi
+    python3 "$SCRIPT_DIR/scripts/ci-shards.py" start --shard "$CI_SHARD" \
+        --expected-revision "$CI_EXPECTED_REVISION" --output "$CI_EVIDENCE_DIR" || exit 1
+    printf 'CI shard: %s; evidence: %s\n' "$CI_SHARD" "$CI_EVIDENCE_DIR"
+    # Every shard owns its test cluster. Never borrow application credentials or
+    # the dev shell's convenience database for a hosted shard.
+    unset TESL_POSTGRES_HOST TESL_POSTGRES_PORT TESL_POSTGRES_USER TESL_POSTGRES_PASSWORD
+    unset TESL_TEST_POSTGRES_SHARED_HOST TESL_TEST_POSTGRES_SHARED_PORT TESL_TEST_POSTGRES_SHARED_USER TESL_TEST_POSTGRES_SHARED_ADMIN_DATABASE
+    export TESL_TEST_USE_TEMP_PG=1
+fi
+
 # ── CI hermetic-store guard ──────────────────────────────────────────────────
 # Under `nix develop`, the flake source is realised into the READ-ONLY Nix
 # store, so the dev shell's shellHook can neither build the OCaml compiler in
@@ -119,7 +177,7 @@ phase_started_at=$SECONDS
 
 # ── Phase registry / progress bar ────────────────────────────────────────────
 # We know the phase count up front so each phase can print "[N/T] <name>".
-TOTAL_PHASES=24
+TOTAL_PHASES="${#CI_PLANNED_PHASES[@]}"
 PHASE_NUM=0
 # Parallel arrays: name / status (OK|FAIL|SKIP) / elapsed seconds.
 PHASE_NAMES=()
@@ -129,6 +187,11 @@ GATE_FAILURES=0
 
 # phase_begin <name> — bump the counter, remember the name, print the start line.
 phase_begin() {
+    if ! ci_phase_selected "$1" || [[ -n "${CI_SEEN_PHASES[$1]+seen}" ]]; then
+        printf 'unknown, unowned, or duplicate CI phase: %s\n' "$1" >&2
+        exit 1
+    fi
+    CI_SEEN_PHASES["$1"]=1
     PHASE_NUM=$((PHASE_NUM + 1))
     phase_started_at=$SECONDS
     CURRENT_PHASE_NAME="$1"
@@ -151,6 +214,9 @@ phase_end() {
     esac
     printf "  %s[%d/%d] %s … %s (%ss)%s\n" \
         "$colour" "$PHASE_NUM" "$TOTAL_PHASES" "$CURRENT_PHASE_NAME" "$mark" "$elapsed" "$C_RESET"
+    if [ "$CI_SHARD" != full ]; then
+        printf '%s\t%s\t%s\n' "$CURRENT_PHASE_NAME" "$status" "$elapsed" >>"$CI_EVIDENCE_DIR/phases.tsv"
+    fi
 }
 
 is_truthy() {
@@ -204,6 +270,17 @@ print_summary_and_exit() {
     printf "────────────────────────────────────────────\n"
     printf "  total %ss\n" "$total_elapsed"
     local total_failures=$((GATE_FAILURES + skipped_required))
+    if ! ci_complete_phase_coverage; then total_failures=$((total_failures + 1)); fi
+    if [ "$CI_SHARD" != full ]; then
+        local migration_arguments=()
+        if [ "$CI_SHARD" == migration ]; then
+            migration_arguments=(--migration-phases "${TESL_MIGRATION_TEST_OUTPUT:-$CI_EVIDENCE_DIR/migration}/phases.tsv")
+        fi
+        if ! python3 "$SCRIPT_DIR/scripts/ci-shards.py" record --shard "$CI_SHARD" \
+            --expected-revision "$CI_EXPECTED_REVISION" --output "$CI_EVIDENCE_DIR" "${migration_arguments[@]}"; then
+            total_failures=$((total_failures + 1))
+        fi
+    fi
     if [ "$total_failures" -eq 0 ]; then
         printf "  %s✓  All good — every phase passed (or was legitimately skipped).%s\n" "$C_GREEN" "$C_RESET"
         printf "%s════════════════════════════════════════════%s\n" "$C_BOLD" "$C_RESET"
@@ -505,13 +582,46 @@ ALL_FILES=( "${LEARN_FILES[@]}" "${EXAMPLE_FILES[@]}" "${TEST_FILES[@]}" "${TEMP
 
 # Kick off the shared PostgreSQL warm-up immediately so the cluster is ready by
 # the time the Tesl-test / aggregate phases need it (async — overlaps the build).
-start_shared_postgres_async
+if [ "$CI_SHARD" != migration ]; then start_shared_postgres_async; fi
+# The complete migration runner builds its own compiler first. The Go-only part
+# needs a local compiler for its CLI/LSP/source-edit native integration tests, but
+# does not run the OCaml suite a second time.
+if [ "$CI_SHARD" == go-runtime ]; then
+    if ! (cd "$COMPILER_DIR" && dune build -j "$TESL_CI_JOBS" bin/main.exe) || ! git diff --quiet HEAD --; then
+        GATE_FAILURES=$((GATE_FAILURES + 1))
+        print_summary_and_exit
+    fi
+    if ! wait_for_shared_postgres; then
+        GATE_FAILURES=$((GATE_FAILURES + 1))
+        print_summary_and_exit
+    fi
+fi
+ci_migration_part() {
+    if [ "$CI_SHARD" == full ] || [ "$CI_SHARD" == migration ]; then
+        if [ "$CI_SHARD" == migration ]; then
+            export TESL_MIGRATION_TEST_OUTPUT="${TESL_MIGRATION_TEST_OUTPUT:-$CI_EVIDENCE_DIR/migration}"
+        else
+            export TESL_MIGRATION_TEST_OUTPUT="${TESL_MIGRATION_TEST_OUTPUT:-$(mktemp -d "${TMPDIR:-/tmp}/tesl-migration-evidence.XXXXXXXX")}"
+        fi
+        if bash "$SCRIPT_DIR/scripts/run-migration-tests.sh" && \
+           python3 "$SCRIPT_DIR/scripts/ci-shards.py" check-migration --evidence "$TESL_MIGRATION_TEST_OUTPUT/phases.tsv"; then
+            printf 'migration\tOK\n' >>"$CI_GO_PARTS_FILE"
+        else
+            return 1
+        fi
+    fi
+}
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  Migration gate — contracts and traceability
 # ══════════════════════════════════════════════════════════════════════════════
+if ci_phase_selected "Protocol contracts"; then
 phase_begin "Protocol contracts"
 migration_contract_fail=0
+if ! python3 "$SCRIPT_DIR/scripts/ci-shards.py" inventory || \
+   ! python3 -m unittest discover -s "$SCRIPT_DIR/scripts" -p 'test_ci_shards.py'; then
+    migration_contract_fail=1
+fi
     if ! "$SCRIPT_DIR/tests/protocol/check-contracts.sh"; then
     migration_contract_fail=1
 fi
@@ -521,6 +631,9 @@ if [ "$migration_contract_fail" -gt 0 ]; then
     print_summary_and_exit
 fi
 
+
+fi
+if ci_phase_selected "Migration admission models"; then
 phase_begin "Migration admission models"
 if bash "$SCRIPT_DIR/scripts/check-migration-models.sh"; then
     phase_end OK
@@ -532,6 +645,9 @@ fi
 # ══════════════════════════════════════════════════════════════════════════════
 #  Phase 1 — Build (dune)
 # ══════════════════════════════════════════════════════════════════════════════
+
+fi
+if ci_phase_selected "Build (dune build)"; then
 phase_begin "Build (dune build)"
 if [ -z "${IN_NIX_SHELL:-}" ] && [ -z "${OCAMLPATH:-}" ] && [ -d "$HOME/.nix-profile/lib/ocaml/5.4.1/site-lib" ]; then
     export OCAMLPATH="$HOME/.nix-profile/lib/ocaml/5.4.1/site-lib"
@@ -589,12 +705,20 @@ _is_waived() {
     return 1
 }
 
+
+fi
+if ci_phase_selected "Dune test (OCaml alcotest suite)"; then
 phase_begin "Dune test (OCaml alcotest suite)"
 dune_test_fail=0
 if ! command -v dune >/dev/null 2>&1; then
     printf "  %s⚠%s  dune not found — skipping dune test\n" "$C_YELLOW" "$C_RESET"
     phase_end SKIP
 else
+    # Catch broken diagnostic help links before starting long native fixtures.
+    if ! (cd "$COMPILER_DIR" && dune exec --no-build ./test/test_error_codes.exe); then
+        phase_end FAIL
+        print_summary_and_exit
+    fi
     # The old -j1 workaround covered test_httpclient_integration, which no longer
     # exists. Dune sandboxes independent test executables, so use the shared
     # bounded worker count. Unset compiler overrides so dune uses its own
@@ -641,8 +765,16 @@ fi
 # ══════════════════════════════════════════════════════════════════════════════
 #  Phase 2a — Go runtime and emitted-code gates
 # ══════════════════════════════════════════════════════════════════════════════
+
+fi
+if ci_phase_selected "Go runtime + emitted-code gates"; then
 phase_begin "Go runtime + emitted-code gates"
 go_gate_fail=0
+if [ "$CI_SHARD" == full ]; then CI_GO_PARTS_FILE="$(mktemp)"; else CI_GO_PARTS_FILE="$CI_EVIDENCE_DIR/go-parts.tsv"; fi
+printf 'part\tstatus\n' >"$CI_GO_PARTS_FILE"
+if [ "$CI_SHARD" == migration ]; then
+    ci_migration_part || go_gate_fail=1
+else
 for tool in go gofmt staticcheck gosec govulncheck golangci-lint nilaway; do
     if ! command -v "$tool" >/dev/null 2>&1; then
         printf "  %s✗%s  required Go gate tool not found: %s\n" "$C_RED" "$C_RESET" "$tool"
@@ -671,7 +803,7 @@ if [ "$go_gate_fail" -eq 0 ]; then
       # individual fixture/operation deadlines still bound each scenario.
       go test -count=1 -timeout=1800s ./... &&
       go test -race -count=1 -timeout=1800s ./... &&
-      bash "$SCRIPT_DIR/scripts/run-migration-tests.sh" &&
+      ci_migration_part &&
       # Fuzz targets go through scripts/go-fuzz-target.sh: it retries ONLY the Go fuzz
       # engine's own -fuzztime deadline race ("context deadline exceeded", no crasher
       # written); a real finding still fails on the first run.  TESL_GO_FUZZTIME sets
@@ -695,11 +827,20 @@ if [ "$go_gate_fail" -eq 0 ] && [ -f "$SCRIPT_DIR/tests/go-cli-smoke.sh" ]; then
     _go_cli_rc=$?
     [ "$_go_cli_rc" -eq 0 ] || [ "$_go_cli_rc" -eq 77 ] || go_gate_fail=1
 fi
+if [ "$go_gate_fail" -eq 0 ]; then printf 'go-runtime\tOK\n' >>"$CI_GO_PARTS_FILE"; fi
+fi # go-runtime/default part
+if ! python3 "$SCRIPT_DIR/scripts/ci-shards.py" check-parts --shard "$CI_SHARD" --evidence "$CI_GO_PARTS_FILE"; then
+    go_gate_fail=1
+fi
+if [ "$CI_SHARD" == full ]; then rm -f "$CI_GO_PARTS_FILE"; fi
 if [ "$go_gate_fail" -eq 0 ]; then phase_end OK; else phase_end FAIL; fi
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  Lesson catalog
 # ══════════════════════════════════════════════════════════════════════════════
+
+fi
+if ci_phase_selected "Lesson catalog (gen-lesson-index --check)"; then
 phase_begin "Lesson catalog (gen-lesson-index --check)"
 # The lesson corpus was indexed by hand in three places that all disagreed, and
 # every count had drifted (73 / 70+ / 50+ against a real 77), while 37 lesson
@@ -734,6 +875,9 @@ fi
 # snapshot, the Build phase just promoted a different version and the tracked
 # file is now dirty.  Fail so a stale embedded copy (out-of-date `tesl help`)
 # cannot ship.  Depends on the Build phase having run `dune build` first.
+
+fi
+if ci_phase_selected "Embedded sync (embedded_docs.ml + embedded_go_runtime.ml up to date)"; then
 phase_begin "Embedded sync (embedded_docs.ml + embedded_go_runtime.ml up to date)"
 if ! command -v git >/dev/null 2>&1 || ! git -C "$SCRIPT_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     printf "  %s⚠%s  git unavailable / not a work tree — skipping\n" "$C_YELLOW" "$C_RESET"
@@ -765,6 +909,9 @@ fi
 # skipped by forgetting.  Placed right after the build because the section-map and
 # diagnostic-deep-link halves invoke `tesl help manual`; without main.exe those two
 # halves self-skip and the script exits 77.
+
+fi
+if ci_phase_selected "Verified content (proof failure, repair, executed tests)"; then
 phase_begin "Verified content (proof failure, repair, executed tests)"
 if ! command -v python3 >/dev/null 2>&1; then
     printf '  python3 is required for content verification\n'
@@ -776,6 +923,9 @@ else
     phase_end FAIL
 fi
 
+
+fi
+if ci_phase_selected "Doc integrity (links, anchors, section map, orphans)"; then
 phase_begin "Doc integrity (links, anchors, section map, orphans)"
 _docint_main_exe="$COMPILER_DIR/_build/default/bin/main.exe"
 _docint_rc=0
@@ -801,6 +951,9 @@ fi
 # It has its OWN dune-project (str + unix only, no compiler library), so
 # the root `dune build` / `dune test` never reaches it — it was orphaned from the
 # gate entirely until this phase.  A missing dune SKIPs; a real failure FAILs.
+
+fi
+if ci_phase_selected "Manual coherence suite (manual/tests)"; then
 phase_begin "Manual coherence suite (manual/tests)"
 if ! command -v dune >/dev/null 2>&1; then
     printf "  %s⚠%s  dune not found — skipping the manual coherence suite\n" "$C_YELLOW" "$C_RESET"
@@ -829,6 +982,9 @@ fi
 # ══════════════════════════════════════════════════════════════════════════════
 # All files are independent — fan out with a bounded parallel pool, then print
 # captured per-file results in input order under their section headers.
+
+fi
+if ci_phase_selected "Format (tesl fmt, in place)"; then
 phase_begin "Format (tesl fmt, in place)"
 if ! command -v tesl >/dev/null 2>&1; then
     printf "  %s⚠%s  tesl not on PATH — skipping format\n" "$C_YELLOW" "$C_RESET"
@@ -858,6 +1014,9 @@ fi
 # ══════════════════════════════════════════════════════════════════════════════
 # `tesl validate` = check + lint + fmt-check per file; this is the strict superset
 # of the old bare "compile-all" per-file loop, so it subsumes it (deduped).
+
+fi
+if ci_phase_selected "Validate (compile + lint + format-check)"; then
 phase_begin "Validate (compile + lint + format-check)"
 if ! command -v tesl >/dev/null 2>&1; then
     printf "  %s⚠%s  tesl not on PATH — skipping validate\n" "$C_YELLOW" "$C_RESET"
@@ -896,6 +1055,9 @@ fi
 # The Go emitter bakes only the BASENAME into its `//line` directives, so a snapshot
 # does not depend on where
 # the repository sits.
+
+fi
+if ci_phase_selected "Exact-match .go.snap snapshots"; then
 phase_begin "Exact-match .go.snap snapshots"
 _main_exe="$COMPILER_DIR/_build/default/bin/main.exe"
 if [ ! -x "$_main_exe" ]; then
@@ -973,6 +1135,9 @@ fi
 # tests need it, so they run HERE, after the warm-up has been joined.  They skip
 # themselves when no cluster is configured, which is what a machine without
 # initdb/pg_ctl gets.
+
+fi
+if ci_phase_selected "Go runtime PostgreSQL backend (live cluster)"; then
 phase_begin "Go runtime PostgreSQL backend (live cluster)"
 if ! command -v go >/dev/null 2>&1; then
     printf "  %s⚠%s  go not on PATH — skipping\n" "$C_YELLOW" "$C_RESET"
@@ -993,6 +1158,9 @@ else
     fi
 fi
 
+
+fi
+if ci_phase_selected "Recursive Go corpus compile/build"; then
 phase_begin "Recursive Go corpus compile/build"
 tesl_files_fail=0
 if ! command -v go >/dev/null 2>&1; then
@@ -1009,6 +1177,9 @@ fi
 # ══════════════════════════════════════════════════════════════════════════════
 #  Phase 8 — Go mutation testing
 # ══════════════════════════════════════════════════════════════════════════════
+
+fi
+if ci_phase_selected "Mutation testing (Go backend)"; then
 phase_begin "Mutation testing (Go backend)"
 mutation_fail=0
 if [ -x "$_main_exe" ]; then
@@ -1059,6 +1230,9 @@ fi
 # into the emitted modules, and proves three live chains — an emitted handler
 # dialing a real upstream over TCP, the compiled binary serving its own route,
 # and generated email delivered through a real SMTP conversation.
+
+fi
+if ci_phase_selected "Integration tests (httpclient + email)"; then
 phase_begin "Integration tests (httpclient + email)"
 if ! command -v go >/dev/null 2>&1; then
     printf "  %s⚠%s  go not on PATH — skipping integration tests\n" "$C_YELLOW" "$C_RESET"
@@ -1085,6 +1259,9 @@ fi
 # found"). This phase builds the default flake profile and both CLI implementations and drives
 # `init`/`emit`/`build --no-docker` through it under a scrubbed environment
 # (env -i), exactly what a fresh `nix profile install` user gets.
+
+fi
+if ci_phase_selected "Clean install (Nix default and CLI parity references)"; then
 phase_begin "Clean install (Nix default and CLI parity references)"
 if ! command -v nix >/dev/null 2>&1; then
     printf "  %s⚠%s  nix not found — skipping clean-install gate\n" "$C_YELLOW" "$C_RESET"
@@ -1117,6 +1294,9 @@ fi
 # a tree MIRRORING the sources — never next to the .tesl files — and deleting
 # .tesl-stuff/ then rerunning must always work.
 # Drives the real CLI body script end-to-end from a clean temp project.
+
+fi
+if ci_phase_selected "tesl CLI smoke (multi-module test + .tesl-stuff/build layout)"; then
 phase_begin "tesl CLI smoke (multi-module test + .tesl-stuff/build layout)"
 if ! command -v go >/dev/null 2>&1; then
     printf "  %s⚠%s  go not found — skipping CLI smoke\n" "$C_YELLOW" "$C_RESET"
@@ -1232,6 +1412,9 @@ fi
 # STATIC scan of nix/tesl-cli-body.sh for GNU-only constructs plus a DYNAMIC
 # re-run of the verbs with BSD-only mktemp/stat/readlink/sed/xargs shimmed onto
 # PATH — both run on this Linux CI, so a macOS-only regression fails here.
+
+fi
+if ci_phase_selected "CLI portability (shell/native) + manifest-driven verbs"; then
 phase_begin "CLI portability (shell/native) + manifest-driven verbs"
 _portability_rc=0
 TESL_REPO_ROOT="$SCRIPT_DIR" TESL_OCAML_COMPILER="$_main_exe" \
@@ -1263,6 +1446,9 @@ fi
 # `tesl check` and `tesl test` do not execute `main`; this smoke starts the
 # emitted Go server and probes its health route, covering queue-worker startup,
 # dead-letter-worker startup, worker count, and HTTP serving in one process.
+
+fi
+if ci_phase_selected "Boot smoke (Go App activation via tesl run)"; then
 phase_begin "Boot smoke (Go App activation via tesl run)"
 boot_smoke_src="$SCRIPT_DIR/scripts/boot-smoke/app.tesl"
 if ! command -v go >/dev/null 2>&1; then
@@ -1328,6 +1514,9 @@ fi
 # selected server's spec excludes its sibling server, exercises both sides of
 # the auth boundary, and imports that spec into ZAP. The app and report are
 # disposable; `tesl dast` itself never starts the target.
+
+fi
+if ci_phase_selected "OpenAPI DAST smoke (server scope + auth boundary)"; then
 phase_begin "OpenAPI DAST smoke (server scope + auth boundary)"
 _dast_smoke_rc=0
 _dast_smoke_zap="${TESL_ZAP:-$(command -v zap 2>/dev/null || true)}"
@@ -1356,6 +1545,9 @@ fi
 # how the linter was once found to be contributing nothing in the browser.  So
 # this phase asserts PARITY over the first 30 lessons, not that it compiles.
 # All the logic lives in the script; this stays thin.
+
+fi
+if ci_phase_selected "Playground parity (browser teslCheck ≡ --check-json)"; then
 phase_begin "Playground parity (browser teslCheck ≡ --check-json)"
 if [ ! -f "$SCRIPT_DIR/scripts/playground-parity.sh" ]; then
     printf "  %s⚠%s  scripts/playground-parity.sh not found — skipping\n" "$C_YELLOW" "$C_RESET"
@@ -1384,6 +1576,9 @@ fi
 # what catches the "never executed end-to-end" class of bug. Needs `nix` (it
 # realizes dex + playwright + the browser bundle); skipped explicitly with
 # `SSO_E2E_SKIP`. Timeout-bounded.
+
+fi
+if ci_phase_selected "SSO browser e2e (dex + Playwright, headless)"; then
 phase_begin "SSO browser e2e (dex + Playwright, headless)"
 if is_truthy "${SSO_E2E_SKIP:-0}"; then
     printf "  %s⚠%s  SSO_E2E_SKIP set — skipping\n" "$C_YELLOW" "$C_RESET"
@@ -1410,4 +1605,6 @@ fi
 # ══════════════════════════════════════════════════════════════════════════════
 #  Final collated summary + overall verdict
 # ══════════════════════════════════════════════════════════════════════════════
+fi
+
 print_summary_and_exit

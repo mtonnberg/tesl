@@ -5,12 +5,14 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -284,7 +286,7 @@ func TestMigrationWizardNativeLoopsThroughSyntaxAndDecisionDiagnostics(t *testin
 	migrationCheck(t, app, "app.tesl", true)
 }
 
-func TestMigrationWizardNativeReviewsCompilerTemplateBeforeAuthoredDefault(t *testing.T) {
+func TestMigrationWizardNativeAppliesCompilerScaffoldBeforeAuthoredDefault(t *testing.T) {
 	app := realMigrationApp(t)
 	writeProjectFile(t, app.Directory, "app.tesl", migrationPostgresApp)
 	decisionFile := filepath.Join(app.Directory, "migrations/notes/v2.tesl")
@@ -294,28 +296,28 @@ func TestMigrationWizardNativeReviewsCompilerTemplateBeforeAuthoredDefault(t *te
 			return "\n"
 		},
 		func() string {
-			if !strings.Contains(app.Stdout.(*bytes.Buffer).String(), "Compiler-proposed templates") {
+			if !strings.Contains(app.Stdout.(*bytes.Buffer).String(), "Compiler-proposed scaffolds") {
 				t.Fatal("the real compiler's decision metadata did not reach the guide")
 			}
 			return "1\n"
 		},
 		func() string {
 			output := app.Stdout.(*bytes.Buffer).String()
-			if !strings.Contains(output, "Template selected for review") || !strings.Contains(output, "Default title (todo") {
-				t.Fatal("the selected compiler template was not shown")
+			if !strings.Contains(output, "Applied the selected scaffold") {
+				t.Fatal("the selected compiler scaffold was not applied")
 			}
 			source, err := os.ReadFile(decisionFile)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if bytes.Contains(source, []byte("Default title")) {
-				t.Fatal("reviewing a template changed source before the author supplied the value")
+			if !bytes.Contains(source, []byte("Default title (todo")) {
+				t.Fatal("the explicit choice did not update the actual migration source")
 			}
 			hole := regexp.MustCompile(`todo "(?:\\.|[^"\\])*"`)
 			if len(hole.FindAll(source, -1)) != 1 {
 				t.Fatalf("expected one unresolved decision: %s", source)
 			}
-			changed := hole.ReplaceAll(source, []byte(`Additive [Default title "untitled"]`))
+			changed := hole.ReplaceAll(source, []byte(`"untitled"`))
 			if err := os.WriteFile(decisionFile, changed, 0600); err != nil {
 				t.Fatal(err)
 			}
@@ -330,6 +332,110 @@ func TestMigrationWizardNativeReviewsCompilerTemplateBeforeAuthoredDefault(t *te
 		t.Fatal("guide did not reach the authored decision and checked plan")
 	}
 	migrationCheck(t, app, "app.tesl", true)
+}
+
+func TestMigrationWizardNativeChoiceRefusesSavedInputChangedAfterReview(t *testing.T) {
+	app := realMigrationApp(t)
+	writeProjectFile(t, app.Directory, "app.tesl", migrationPostgresApp)
+	var expected map[string]string
+	app.Stdin = &migrationScriptedInput{steps: []func() string{
+		func() string {
+			writeProjectFile(t, app.Directory, "schema/notes/v-current.tesl", strings.Replace(migrationSchema, "id: String }", "id: String, title: String }", 1))
+			return "\n"
+		},
+		func() string {
+			if !strings.Contains(app.Stdout.(*bytes.Buffer).String(), "Compiler-proposed scaffolds") {
+				t.Fatal("choice was not displayed before the concurrent save")
+			}
+			writeProjectFile(t, app.Directory, "app.tesl", migrationPostgresApp+"\n# saved after the choice was reviewed\n")
+			expected = migrationTree(t, app.Directory)
+			return "1\n"
+		},
+	}}
+	err := app.Run(context.Background(), []string{"migrate", "app.tesl"})
+	if err == nil || !strings.Contains(err.Error(), "scaffold was not applied") {
+		t.Fatalf("stale choice was accepted: %v\n%s", err, app.Stdout)
+	}
+	if !reflect.DeepEqual(expected, migrationTree(t, app.Directory)) {
+		t.Fatal("stale choice changed or overwrote saved source")
+	}
+}
+
+func TestMigrationWizardNativeChoiceRefusesChangedCompilerABIBeforePublication(t *testing.T) {
+	app := realMigrationApp(t)
+	writeProjectFile(t, app.Directory, "app.tesl", migrationPostgresApp)
+	real := app.Execute
+	var expected map[string]string
+	app.Stdin = &migrationScriptedInput{steps: []func() string{
+		func() string {
+			writeProjectFile(t, app.Directory, "schema/notes/v-current.tesl", strings.Replace(migrationSchema, "id: String }", "id: String, title: String }", 1))
+			return "\n"
+		},
+		func() string {
+			expected = migrationTree(t, app.Directory)
+			app.Execute = func(ctx context.Context, inv Invocation) error {
+				if !slices.Contains(inv.Args, "--decision") {
+					return real(ctx, inv)
+				}
+				var output bytes.Buffer
+				captured := inv
+				captured.Stdout = &output
+				if err := real(ctx, captured); err != nil {
+					return err
+				}
+				var result map[string]any
+				if err := json.Unmarshal(output.Bytes(), &result); err != nil {
+					return err
+				}
+				result["compilerAbi"] = "tesl-source-abi-v1:" + strings.Repeat("a", 64)
+				return json.NewEncoder(inv.Stdout).Encode(result)
+			}
+			return "1\n"
+		},
+	}}
+	err := app.Run(context.Background(), []string{"migrate", "app.tesl"})
+	if err == nil || !strings.Contains(err.Error(), "compiler changed") {
+		t.Fatalf("changed ABI authorized scaffold publication: %v\n%s", err, app.Stdout)
+	}
+	if !reflect.DeepEqual(expected, migrationTree(t, app.Directory)) {
+		t.Fatal("changed-ABI scaffold was published")
+	}
+}
+
+func TestMigrationWizardNativeChoicePreservesRecoveryRequiredState(t *testing.T) {
+	app := realMigrationApp(t)
+	writeProjectFile(t, app.Directory, "app.tesl", migrationPostgresApp)
+	real := app.Execute
+	var expected map[string]string
+	app.Stdin = &migrationScriptedInput{steps: []func() string{
+		func() string {
+			writeProjectFile(t, app.Directory, "schema/notes/v-current.tesl", strings.Replace(migrationSchema, "id: String }", "id: String, title: String }", 1))
+			return "\n"
+		},
+		func() string {
+			app.Execute = func(ctx context.Context, inv Invocation) error {
+				if err := real(ctx, inv); err != nil {
+					return err
+				}
+				if slices.Contains(inv.Args, "--decision") {
+					if err := os.Mkdir(filepath.Join(app.Directory, ".tesl-source-edit"), 0700); err != nil {
+						return err
+					}
+					writeProjectFile(t, app.Directory, ".tesl-source-edit/foreign-state", "preserve this transaction state\n")
+					expected = migrationTree(t, app.Directory)
+				}
+				return nil
+			}
+			return "1\n"
+		},
+	}}
+	err := app.Run(context.Background(), []string{"migrate", "app.tesl"})
+	if err == nil || !strings.Contains(err.Error(), "requires recovery") {
+		t.Fatalf("recovery-required state was hidden: %v\n%s", err, app.Stdout)
+	}
+	if !reflect.DeepEqual(expected, migrationTree(t, app.Directory)) {
+		t.Fatal("choice removed foreign recovery state or modified source")
+	}
 }
 
 func TestMigrationWizardNativeQuitEOFAndResumeDoNotAdvanceAgain(t *testing.T) {

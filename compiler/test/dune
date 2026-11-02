@@ -750,3 +750,8 @@
  (name test_migration_table_drop_postgres)
  (modules test_migration_table_drop_postgres)
  (libraries tesl_compiler_lib alcotest unix str))
+
+(test
+ (name test_migration_choice)
+ (modules test_migration_choice)
+ (libraries tesl_compiler_lib alcotest str unix yojson))

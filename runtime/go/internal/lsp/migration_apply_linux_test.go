@@ -8,8 +8,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -79,7 +81,53 @@ func startMigrationApplication(t *testing.T, ctx context.Context, server *Server
 	if err := server.writeMigrationApply(ctx, json.RawMessage(`44`), raw, protocol.NewWriter(output)); err != nil {
 		t.Fatal(err)
 	}
+	answerMigrationSnapshot(t, server, output)
 	return id
+}
+
+func answerMigrationSnapshot(t *testing.T, server *Server, output *bytes.Buffer) {
+	t.Helper()
+	if output.Len() == 0 {
+		return
+	}
+	peek, err := protocol.NewReader(bytes.NewReader(output.Bytes())).Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := protocol.DecodeRequest(peek)
+	if err != nil || request.Method != "tesl/migrationSnapshot" {
+		return
+	}
+	if _, err := protocol.NewReader(output).Read(); err != nil {
+		t.Fatal(err)
+	}
+	var params struct {
+		PreviewID   string `json:"previewId"`
+		ProjectRoot string `json:"projectRoot"`
+	}
+	if err := json.Unmarshal(request.Params, &params); err != nil {
+		t.Fatal(err)
+	}
+	_, docs, err := server.migrationDocuments(params.ProjectRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries := []any{}
+	for _, doc := range docs {
+		entries = append(entries, map[string]any{"uri": doc.URI, "version": doc.Version, "source": doc.Text, "openId": strconv.FormatUint(doc.openID, 10)})
+	}
+	sequence := uint64(1)
+	if op := server.migrationApply; op != nil {
+		sequence = op.eventSeq + 1
+	}
+	result, _ := json.Marshal(map[string]any{"version": 1, "previewId": params.PreviewID, "eventSeq": sequence, "documents": entries})
+	fence, _ := json.Marshal(map[string]any{"version": 1, "previewId": params.PreviewID, "eventSeq": sequence})
+	if err := server.migrationSnapshotFence(fence); err != nil {
+		t.Fatal(err)
+	}
+	if err := server.finishClientRequest(protocol.Response{ID: request.ID, Result: result}); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func nextMigrationClientEdit(t *testing.T, output *bytes.Buffer) (protocol.Request, []*migrationTextDocumentEdit) {
@@ -89,18 +137,25 @@ func nextMigrationClientEdit(t *testing.T, output *bytes.Buffer) (protocol.Reque
 		t.Fatal(err)
 	}
 	request, err := protocol.DecodeRequest(raw)
-	if err != nil || request.Method != "workspace/applyEdit" {
+	if err != nil || request.Method != "tesl/migrationApplyEdit" {
 		t.Fatalf("expected client edit: %s %v", raw, err)
 	}
 	var params struct {
-		Edit struct {
-			DocumentChanges []*migrationTextDocumentEdit `json:"documentChanges"`
-		} `json:"edit"`
+		Documents []struct {
+			URI                     string `json:"uri"`
+			Version                 int    `json:"version"`
+			Source, OpenID, NewText string
+			Range                   protocol.Range `json:"range"`
+		} `json:"documents"`
 	}
-	if err := json.Unmarshal(request.Params, &params); err != nil || len(params.Edit.DocumentChanges) == 0 {
+	if err := json.Unmarshal(request.Params, &params); err != nil || len(params.Documents) == 0 {
 		t.Fatalf("empty edit: %s %v", raw, err)
 	}
-	return request, params.Edit.DocumentChanges
+	edits := make([]*migrationTextDocumentEdit, 0, len(params.Documents))
+	for _, doc := range params.Documents {
+		edits = append(edits, migrationVersionedEdit(document{URI: doc.URI, Version: doc.Version}, doc.Range, doc.NewText))
+	}
+	return request, edits
 }
 
 func observeMigrationEdits(t *testing.T, server *Server, edits []*migrationTextDocumentEdit) {
@@ -116,11 +171,12 @@ func observeMigrationEdits(t *testing.T, server *Server, edits []*migrationTextD
 	}
 }
 
-func acknowledgeMigration(t *testing.T, server *Server, request protocol.Request, result string) {
+func acknowledgeMigration(t *testing.T, server *Server, output *bytes.Buffer, request protocol.Request, result string) {
 	t.Helper()
 	if err := server.finishClientRequest(protocol.Response{ID: request.ID, Result: json.RawMessage(result)}); err != nil {
 		t.Fatal(err)
 	}
+	answerMigrationSnapshot(t, server, output)
 }
 
 func assertMigrationOutcome(t *testing.T, server *Server, output *bytes.Buffer, outcome string, recovery bool) {
@@ -159,7 +215,7 @@ func TestMigrationApplicationCommitsOnlyObservedBuffers(t *testing.T) {
 				t.Fatal("negotiated batching was ignored")
 			}
 			observeMigrationEdits(t, server, edits)
-			acknowledgeMigration(t, server, request, `{"applied":true}`)
+			acknowledgeMigration(t, server, output, request, `{"applied":true}`)
 			requests++
 		}
 		assertMigrationOutcome(t, server, output, "committed", false)
@@ -199,10 +255,10 @@ func TestMigrationApplicationRestoresPartialEditsAndCancellation(t *testing.T) {
 				changed.Version++
 				server.documents[uri] = changed
 			}
-			acknowledgeMigration(t, server, request, `{"applied":true}`)
+			acknowledgeMigration(t, server, output, request, `{"applied":true}`)
 			inverse, changes := nextMigrationClientEdit(t, output)
 			observeMigrationEdits(t, server, changes)
-			acknowledgeMigration(t, server, inverse, `{"applied":true}`)
+			acknowledgeMigration(t, server, output, inverse, `{"applied":true}`)
 			assertMigrationOutcome(t, server, output, "restored", false)
 			if server.documents[doc.URI].Text != doc.Text {
 				t.Fatal("inverse did not restore original buffer")
@@ -221,7 +277,7 @@ func TestMigrationApplicationRestoresPartialEditsAndCancellation(t *testing.T) {
 }
 
 func TestMigrationApplicationUnknownRepliesAndUserChangesRetainRecovery(t *testing.T) {
-	for _, scenario := range []string{"timeout", "missing update", "invalid reply", "negative before update", "user text", "reopened", "closed target opened", "inverse missing update", "inverse refused"} {
+	for _, scenario := range []string{"timeout", "missing update", "invalid reply", "missing snapshot", "user text", "reopened", "closed target opened", "inverse missing update", "inverse refused"} {
 		t.Run(scenario, func(t *testing.T) {
 			server, output, doc, created := migrationApplicationFixture(t, true)
 			startMigrationApplication(t, context.Background(), server, output)
@@ -232,12 +288,20 @@ func TestMigrationApplicationUnknownRepliesAndUserChangesRetainRecovery(t *testi
 					t.Fatal(err)
 				}
 			case "missing update":
-				acknowledgeMigration(t, server, request, `{"applied":true}`)
+				acknowledgeMigration(t, server, output, request, `{"applied":true}`)
 			case "invalid reply":
-				acknowledgeMigration(t, server, request, `{"applied":true,"applied":false}`)
-			case "negative before update":
-				acknowledgeMigration(t, server, request, `{"applied":false}`)
+				acknowledgeMigration(t, server, output, request, `{"applied":true,"applied":false}`)
+			case "missing snapshot":
+				if err := server.finishClientRequest(protocol.Response{ID: request.ID, Result: json.RawMessage(`{"applied":false}`)}); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := protocol.NewReader(output).Read(); err != nil {
+					t.Fatal(err)
+				}
 				observeMigrationEdits(t, server, edits[:1])
+				if err := server.expireClientRequests(time.Now().Add(time.Minute)); err != nil {
+					t.Fatal(err)
+				}
 			default:
 				observeMigrationEdits(t, server, edits[:1])
 				after := server.documents[doc.URI]
@@ -260,15 +324,15 @@ func TestMigrationApplicationUnknownRepliesAndUserChangesRetainRecovery(t *testi
 					dependency.Text = "changed dependency"
 					dependency.Version++
 					server.documents[uri] = dependency
-					acknowledgeMigration(t, server, request, `{"applied":true}`)
+					acknowledgeMigration(t, server, output, request, `{"applied":true}`)
 					inverse, _ := nextMigrationClientEdit(t, output)
 					if scenario == "inverse refused" {
-						acknowledgeMigration(t, server, inverse, `{"applied":false}`)
+						acknowledgeMigration(t, server, output, inverse, `{"applied":false}`)
 					} else {
-						acknowledgeMigration(t, server, inverse, `{"applied":true}`)
+						acknowledgeMigration(t, server, output, inverse, `{"applied":true}`)
 					}
 				} else {
-					acknowledgeMigration(t, server, request, `{"applied":false}`)
+					acknowledgeMigration(t, server, output, request, `{"applied":false}`)
 				}
 			}
 			assertMigrationOutcome(t, server, output, "editor-pending", true)
@@ -281,7 +345,7 @@ func TestMigrationApplicationUnknownRepliesAndUserChangesRetainRecovery(t *testi
 			if scenario == "user text" && server.documents[doc.URI].Text != "user work after application" {
 				t.Fatal("user text was overwritten")
 			}
-			acknowledgeMigration(t, server, request, `{"applied":true}`)
+			acknowledgeMigration(t, server, output, request, `{"applied":true}`)
 			if output.Len() != 0 {
 				t.Fatal("late reply produced another outcome")
 			}
@@ -325,5 +389,61 @@ func TestMigrationApplicationRemainsUnavailableWithoutSnapshotBarrier(t *testing
 		if _, err := os.Stat(filepath.Join(filepath.Dir(created), ".tesl-source-edit")); !os.IsNotExist(err) {
 			t.Fatal("disabled application created a journal")
 		}
+	}
+}
+
+func TestMigrationApplicationRevalidatesCompilerAndReviewedManifestBeforePublication(t *testing.T) {
+	for _, change := range []string{"ABI", "manifest", "selection", "family", "revision", "judgment", "compiler failure"} {
+		t.Run(change, func(t *testing.T) {
+			server, output, doc, created := migrationApplicationFixture(t, true)
+			compiler := server.compiler.(*migrationPreviewCompiler)
+			if change == "compiler failure" {
+				compiler.failure = errors.New("current compiler unavailable")
+			} else {
+				var envelope map[string]any
+				if err := json.Unmarshal(compiler.preview.JSON(), &envelope); err != nil {
+					t.Fatal(err)
+				}
+				switch change {
+				case "ABI":
+					envelope["compilerAbi"] = "tesl-source-abi-v1:" + strings.Repeat("b", 64)
+				case "manifest":
+					envelope["manifest"].(map[string]any)["edits"].([]any)[0].(map[string]any)["afterHex"] = hex.EncodeToString([]byte("different compiler proposal"))
+				case "selection":
+					envelope["selection"].(map[string]any)["database"] = "Other.Main"
+				case "family":
+					envelope["selection"].(map[string]any)["family"] = "OtherSchema"
+				case "revision":
+					envelope["selection"].(map[string]any)["revisionAfter"] = 3
+				case "judgment":
+					envelope["compilable"] = true
+					envelope["diagnostics"] = map[string]any{"version": 1, "diagnostics": []any{}}
+				}
+				raw, _ := json.Marshal(envelope)
+				var err error
+				compiler.preview, err = sourceedit.DecodePreview(raw)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			startMigrationApplication(t, context.Background(), server, output)
+			raw, err := protocol.NewReader(output).Read()
+			if err != nil {
+				t.Fatal(err)
+			}
+			response, err := protocol.DecodeResponse(raw)
+			if err != nil || response.Error == nil || response.Error.Code != -32801 || server.migrationApply != nil || server.migrationPreview != nil {
+				t.Fatalf("unverified current compiler was accepted: %s %v", raw, err)
+			}
+			if _, err := os.Stat(created); !os.IsNotExist(err) {
+				t.Fatal("compiler revalidation refusal published source")
+			}
+			if _, err := os.Stat(filepath.Join(filepath.Dir(doc.Path), ".tesl-source-edit")); !os.IsNotExist(err) {
+				t.Fatal("compiler revalidation refusal created a transaction")
+			}
+			if server.documents[doc.URI] != doc {
+				t.Fatal("compiler revalidation refusal changed buffer bytes")
+			}
+		})
 	}
 }

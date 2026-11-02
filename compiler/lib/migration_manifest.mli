@@ -34,6 +34,18 @@ val source_files : t -> ((string * string) list,error list) result
     The combined proposed paths and current preconditions are checked; this does
     not apply edits, sequence dependent previews or re-capture changed inputs. *)
 val combine : t -> t -> documents:document list -> (t,error list) result
+(** The same checked union over a nonempty list. Verify the complete original
+    preconditions once after merging; no intermediate snapshot is recaptured.
+    This avoids repeatedly verifying an ever-growing discovery prefix. *)
+val combine_many : t list -> documents:document list -> (t,error list) result
+(** Incremental union of original guard observations. Adding a captured manifest
+    deduplicates observations and refuses conflicts without recapturing inputs.
+    The accumulator is not a manifest; finish verifies all current source, disk,
+    import and directory preconditions before publishing the union. *)
+type accumulator
+val start_combine : t -> documents:document list -> (accumulator,error list) result
+val add_to_combine : accumulator -> t -> (accumulator,error list) result
+val finish_combine : accumulator -> (t,error list) result
 (** Stable version-1 JSON with separate source/disk hashes, hashed directory
     membership, exact replacement bytes (lowercase hex) and editor versions.
     Paths are UTF-8. Source bytes need not be. It grants no execution authority.

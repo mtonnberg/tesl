@@ -17,6 +17,7 @@ import (
 const migrationUsage = `Usage: tesl migrate <entry.tesl> [--database D] [--resume]
        tesl migrate generate <entry.tesl> [--database D] [--new-revision]
        tesl migrate generate <entry.tesl> --manifest-json [--database D] [--new-revision]
+       tesl migrate generate <entry.tesl> --decision ID --option ID --expected-input-digest HASH
        tesl migrate recover-source --project-root DIR
        tesl migrate contract <entry.tesl> --version N [--database D] [--manifest-json]
        tesl migrate plan <entry.tesl> [--database D] [--initial-version N]
@@ -29,8 +30,9 @@ generate refreshes migration sources and reports the result as JSON.
 --manifest-json previews the edits without writing files.
 The report separates source generation from compilation: decision holes need filling.
 The guide reviews one item at a time: Enter rechecks, n browses, ? expands help.
-An option number shows its source template for you to copy, complete and save.
-Compiler-proposed templates leave custom-code holes; options are never auto-approved.
+An option number applies its compiler-proposed scaffold to saved source files.
+Save editor buffers before choosing, then fill the custom-code holes and recheck.
+Explicit generation choices use the inputDigest from the preview you reviewed.
 recover-source restores an interrupted source write, or finishes committed cleanup.
 plan reports PostgreSQL expansion and retained storage across checked source history.
 --initial-version selects the first installed revision (default 1), not the current floor.

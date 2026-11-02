@@ -1,0 +1,454 @@
+{
+  "valid": true,
+  "baseRef": "ae7bb3efe98c85a4d3a916ceca0e45796bfc0ef3",
+  "scope": "native source-integrity discovery/capture, final original guard verification and with_captured verification; no query caching, guard removal or p99/whole-build claim; paired observations on shared cloud host",
+  "variants": {
+    "base": "original repeatedly verified growing union",
+    "batch": "initial collected-list implementation, superseded due quadratic retained directory data",
+    "incremental": "final deduplicating original-observation accumulator"
+  },
+  "binaries": {
+    "base": "8ffe143d4d8da167201861d8560bbb0bcc856a631d4a9abffa205b58d1ead234",
+    "batch": "8a9806d9a26a1a5b96e9cc7f32f1ff50e65a3153fa6cbd39ce0d8c7c2c3c61e8",
+    "incremental": "4b834032a4cd0d526848e99d7637ae0461b59007cce707234c5a6b1dda6b2089"
+  },
+  "observations": [
+    {
+      "pair": 0,
+      "variant": "base",
+      "helpers": 8,
+      "ms": 7.147074
+    },
+    {
+      "pair": 0,
+      "variant": "base",
+      "helpers": 32,
+      "ms": 44.01803
+    },
+    {
+      "pair": 0,
+      "variant": "base",
+      "helpers": 64,
+      "ms": 142.846107
+    },
+    {
+      "pair": 0,
+      "variant": "base",
+      "helpers": 128,
+      "ms": 536.945105
+    },
+    {
+      "pair": 0,
+      "variant": "batch",
+      "helpers": 8,
+      "ms": 2.351999
+    },
+    {
+      "pair": 0,
+      "variant": "batch",
+      "helpers": 32,
+      "ms": 9.331942
+    },
+    {
+      "pair": 0,
+      "variant": "batch",
+      "helpers": 64,
+      "ms": 20.115137
+    },
+    {
+      "pair": 0,
+      "variant": "batch",
+      "helpers": 128,
+      "ms": 54.205894
+    },
+    {
+      "pair": 0,
+      "variant": "incremental",
+      "helpers": 8,
+      "ms": 2.047062
+    },
+    {
+      "pair": 0,
+      "variant": "incremental",
+      "helpers": 32,
+      "ms": 7.311821
+    },
+    {
+      "pair": 0,
+      "variant": "incremental",
+      "helpers": 64,
+      "ms": 17.953873
+    },
+    {
+      "pair": 0,
+      "variant": "incremental",
+      "helpers": 128,
+      "ms": 42.825937
+    },
+    {
+      "pair": 1,
+      "variant": "batch",
+      "helpers": 8,
+      "ms": 2.003193
+    },
+    {
+      "pair": 1,
+      "variant": "batch",
+      "helpers": 32,
+      "ms": 7.812023
+    },
+    {
+      "pair": 1,
+      "variant": "batch",
+      "helpers": 64,
+      "ms": 16.218901
+    },
+    {
+      "pair": 1,
+      "variant": "batch",
+      "helpers": 128,
+      "ms": 50.23098
+    },
+    {
+      "pair": 1,
+      "variant": "incremental",
+      "helpers": 8,
+      "ms": 2.895832
+    },
+    {
+      "pair": 1,
+      "variant": "incremental",
+      "helpers": 32,
+      "ms": 9.77397
+    },
+    {
+      "pair": 1,
+      "variant": "incremental",
+      "helpers": 64,
+      "ms": 17.322063
+    },
+    {
+      "pair": 1,
+      "variant": "incremental",
+      "helpers": 128,
+      "ms": 48.834085
+    },
+    {
+      "pair": 1,
+      "variant": "base",
+      "helpers": 8,
+      "ms": 4.796028
+    },
+    {
+      "pair": 1,
+      "variant": "base",
+      "helpers": 32,
+      "ms": 33.966064
+    },
+    {
+      "pair": 1,
+      "variant": "base",
+      "helpers": 64,
+      "ms": 126.893044
+    },
+    {
+      "pair": 1,
+      "variant": "base",
+      "helpers": 128,
+      "ms": 484.241009
+    },
+    {
+      "pair": 2,
+      "variant": "incremental",
+      "helpers": 8,
+      "ms": 1.954079
+    },
+    {
+      "pair": 2,
+      "variant": "incremental",
+      "helpers": 32,
+      "ms": 7.313013
+    },
+    {
+      "pair": 2,
+      "variant": "incremental",
+      "helpers": 64,
+      "ms": 15.015841
+    },
+    {
+      "pair": 2,
+      "variant": "incremental",
+      "helpers": 128,
+      "ms": 46.430111
+    },
+    {
+      "pair": 2,
+      "variant": "base",
+      "helpers": 8,
+      "ms": 5.799055
+    },
+    {
+      "pair": 2,
+      "variant": "base",
+      "helpers": 32,
+      "ms": 38.115025
+    },
+    {
+      "pair": 2,
+      "variant": "base",
+      "helpers": 64,
+      "ms": 145.305872
+    },
+    {
+      "pair": 2,
+      "variant": "base",
+      "helpers": 128,
+      "ms": 516.072035
+    },
+    {
+      "pair": 2,
+      "variant": "batch",
+      "helpers": 8,
+      "ms": 2.019882
+    },
+    {
+      "pair": 2,
+      "variant": "batch",
+      "helpers": 32,
+      "ms": 7.130861
+    },
+    {
+      "pair": 2,
+      "variant": "batch",
+      "helpers": 64,
+      "ms": 15.656948
+    },
+    {
+      "pair": 2,
+      "variant": "batch",
+      "helpers": 128,
+      "ms": 44.211149
+    },
+    {
+      "pair": 3,
+      "variant": "base",
+      "helpers": 8,
+      "ms": 4.778147
+    },
+    {
+      "pair": 3,
+      "variant": "base",
+      "helpers": 32,
+      "ms": 37.696123
+    },
+    {
+      "pair": 3,
+      "variant": "base",
+      "helpers": 64,
+      "ms": 139.354944
+    },
+    {
+      "pair": 3,
+      "variant": "base",
+      "helpers": 128,
+      "ms": 505.698919
+    },
+    {
+      "pair": 3,
+      "variant": "batch",
+      "helpers": 8,
+      "ms": 2.007961
+    },
+    {
+      "pair": 3,
+      "variant": "batch",
+      "helpers": 32,
+      "ms": 7.745028
+    },
+    {
+      "pair": 3,
+      "variant": "batch",
+      "helpers": 64,
+      "ms": 17.922878
+    },
+    {
+      "pair": 3,
+      "variant": "batch",
+      "helpers": 128,
+      "ms": 49.710989
+    },
+    {
+      "pair": 3,
+      "variant": "incremental",
+      "helpers": 8,
+      "ms": 2.089024
+    },
+    {
+      "pair": 3,
+      "variant": "incremental",
+      "helpers": 32,
+      "ms": 8.743048
+    },
+    {
+      "pair": 3,
+      "variant": "incremental",
+      "helpers": 64,
+      "ms": 15.662909
+    },
+    {
+      "pair": 3,
+      "variant": "incremental",
+      "helpers": 128,
+      "ms": 42.538881
+    },
+    {
+      "pair": 4,
+      "variant": "batch",
+      "helpers": 8,
+      "ms": 2.06399
+    },
+    {
+      "pair": 4,
+      "variant": "batch",
+      "helpers": 32,
+      "ms": 7.580042
+    },
+    {
+      "pair": 4,
+      "variant": "batch",
+      "helpers": 64,
+      "ms": 18.256187
+    },
+    {
+      "pair": 4,
+      "variant": "batch",
+      "helpers": 128,
+      "ms": 49.046993
+    },
+    {
+      "pair": 4,
+      "variant": "incremental",
+      "helpers": 8,
+      "ms": 2.137184
+    },
+    {
+      "pair": 4,
+      "variant": "incremental",
+      "helpers": 32,
+      "ms": 7.530928
+    },
+    {
+      "pair": 4,
+      "variant": "incremental",
+      "helpers": 64,
+      "ms": 17.328978
+    },
+    {
+      "pair": 4,
+      "variant": "incremental",
+      "helpers": 128,
+      "ms": 49.530983
+    },
+    {
+      "pair": 4,
+      "variant": "base",
+      "helpers": 8,
+      "ms": 5.244017
+    },
+    {
+      "pair": 4,
+      "variant": "base",
+      "helpers": 32,
+      "ms": 39.062977
+    },
+    {
+      "pair": 4,
+      "variant": "base",
+      "helpers": 64,
+      "ms": 138.321877
+    },
+    {
+      "pair": 4,
+      "variant": "base",
+      "helpers": 128,
+      "ms": 515.218973
+    }
+  ],
+  "memory": [
+    {
+      "pair": 0,
+      "variant": "base",
+      "peakRssKiB": 12672
+    },
+    {
+      "pair": 0,
+      "variant": "batch",
+      "peakRssKiB": 14076
+    },
+    {
+      "pair": 0,
+      "variant": "incremental",
+      "peakRssKiB": 12672
+    },
+    {
+      "pair": 1,
+      "variant": "batch",
+      "peakRssKiB": 14088
+    },
+    {
+      "pair": 1,
+      "variant": "incremental",
+      "peakRssKiB": 12672
+    },
+    {
+      "pair": 1,
+      "variant": "base",
+      "peakRssKiB": 12672
+    },
+    {
+      "pair": 2,
+      "variant": "incremental",
+      "peakRssKiB": 12672
+    },
+    {
+      "pair": 2,
+      "variant": "base",
+      "peakRssKiB": 12672
+    },
+    {
+      "pair": 2,
+      "variant": "batch",
+      "peakRssKiB": 14152
+    },
+    {
+      "pair": 3,
+      "variant": "base",
+      "peakRssKiB": 12672
+    },
+    {
+      "pair": 3,
+      "variant": "batch",
+      "peakRssKiB": 14088
+    },
+    {
+      "pair": 3,
+      "variant": "incremental",
+      "peakRssKiB": 12672
+    },
+    {
+      "pair": 4,
+      "variant": "batch",
+      "peakRssKiB": 14084
+    },
+    {
+      "pair": 4,
+      "variant": "incremental",
+      "peakRssKiB": 12672
+    },
+    {
+      "pair": 4,
+      "variant": "base",
+      "peakRssKiB": 12672
+    }
+  ]
+}

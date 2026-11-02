@@ -7,6 +7,7 @@ const vscode = require("vscode");
 const { parseTeslTestOutput } = require("./test-output-parser");
 const { findOnPath, findInstallation } = require("./toolchain");
 const { registerMigrationAuthoring } = require("./migration-authoring");
+const { createMigrationClient } = require("./migration-client");
 
 let client;
 let managedSelection;
@@ -320,7 +321,9 @@ function activate(context) {
       };
     }
 
+    const migrationClient = createMigrationClient(vscode, context);
     const clientOptions = {
+      middleware: migrationClient.middleware,
       documentSelector: [{ scheme: "file", language: "tesl" }],
       synchronize: {
         fileEvents: vscode.workspace.createFileSystemWatcher("**/*.tesl"),
@@ -330,6 +333,7 @@ function activate(context) {
     };
 
     client = new LanguageClient("tesl-lsp", "Tesl Language Server", serverOptions, clientOptions);
+    migrationClient.attach(client);
     client.start().catch((err) => {
       outputChannel.appendLine(`[tesl-lsp] failed to start: ${err}`);
       vscode.window.showErrorMessage(`Tesl LSP failed to start: ${err}`);

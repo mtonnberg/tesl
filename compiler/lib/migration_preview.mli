@@ -9,6 +9,7 @@ val operation : t -> operation
 val selection : t -> Migration_target.selection
 val revision_after : t -> int
 val compiler_abi : t -> string
+val input_digest : t -> string
 val manifest : t -> Migration_manifest.t
 val diagnostics : t -> Compile.diagnostic list
 val compilable : t -> bool
@@ -16,6 +17,9 @@ val compilable : t -> bool
 val verify : t -> documents:Migration_manifest.document list -> (unit,error list) result
 val to_json : t -> string
 val errors_to_json : error list -> string
+val generate_choice : project_root:string -> entry_file:string -> database:string option ->
+  documents:Migration_manifest.document list -> decision:string -> option_:string ->
+  expected_input_digest:string -> (t,error list) result
 
 (** Create one source Contract without overwriting existing authority. The complete
     proposed app is checked and the existing guarded writer applies this preview. *)

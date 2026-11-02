@@ -77,7 +77,7 @@ func ForDiagnostic(code, message string) Guide {
 		Options: []Option{},
 		Help: []string{
 			"Generation fills compiler-proven New, Drop and proof-free Additive entries. It preserves handwritten decisions and leaves todo where your intent or custom code is required.",
-			"Examples are source templates, not applied edits or evidence that a transition is supported. Keep placeholders unresolved until you have supplied the intended behavior and the compiler accepts it.",
+			"Examples alone do not change source or prove that a transition is supported. Selecting a compiler-proposed option applies its guarded scaffold; custom-code holes remain blocking until you supply the intended behavior and recheck.",
 			"This command prepares source only. Test conversion and mixed old/new writers, review the plan, then build and deploy the migration worker before routing new requests. Contract retires old versions before removing retained storage.",
 		},
 	}
@@ -105,7 +105,11 @@ func ForDiagnostic(code, message string) Guide {
 	case "MIG003":
 		guide.Title = "Choose how to populate existing rows"
 		guide.Summary = "A generated todo marks an unresolved decision; generation does not fabricate a value or a proof."
-		if strings.Contains(message, "stored proof contract changed") {
+		if strings.Contains(message, "Choose a literal of type ") {
+			guide.Title = "Complete the selected literal default"
+			guide.Summary = "The scaffold is written. Replace this todo with a literal of the compiler's named type, then save and recheck."
+			guide.Help = append(guide.Help, "This is the custom value for the default route you already selected. Keep its generated Default rule and replace only the value hole. Choose the value for existing rows deliberately; Same or Revalidate cannot supply that missing value.")
+		} else if strings.Contains(message, "stored proof contract changed") {
 			guide.Title = "Migrate a changed historical proof"
 			guide.Summary = "Changing an existing proof requires preserving an old-valid representation while old versions may write."
 			guide.Options = []Option{{ID: "retype-proof", Title: "Retype with a checked reverse function", When: "Use Migrate with Retype and WriteBack; the reverse function must return the exact historical type and proof.", Example: "Migrate convert [Retype field, WriteBack field field reverseFn]", RequiresCustomCode: true}}

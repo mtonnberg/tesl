@@ -158,6 +158,15 @@ func TestMigrationEditorRefusalInvalidatesPriorPreview(t *testing.T) {
 	}
 }
 
+func TestMigrationEditorForwardsDecisionAndReviewedDigest(t *testing.T) {
+	server, doc, _, compiler := migrationEditorFixture(t)
+	selection := map[string]any{"entryFile": doc.Path, "projectRoot": filepath.Dir(doc.Path), "database": "App.Main", "decisionId": "NotesSchema.Note", "optionId": "additive-default", "expectedInputDigest": strings.Repeat("a", 64), "template": "untrusted arbitrary source is never forwarded"}
+	migrationEditorCommand(t, server, "tesl.generateMigration", selection, 0)
+	if compiler.selection.DecisionID != "NotesSchema.Note" || compiler.selection.OptionID != "additive-default" || compiler.selection.ExpectedInputDigest != strings.Repeat("a", 64) || len(compiler.documents) != 1 || compiler.documents[0].Source != doc.Text {
+		t.Fatalf("choice bypassed compiler input guards: %+v", compiler.selection)
+	}
+}
+
 func TestMigrationEditorMalformedGenerationExpiresPreview(t *testing.T) {
 	server, doc, _, compiler := migrationEditorFixture(t)
 	migrationEditorCommand(t, server, "tesl.generateMigration", map[string]string{"entryFile": doc.Path, "projectRoot": filepath.Dir(doc.Path)}, 0)

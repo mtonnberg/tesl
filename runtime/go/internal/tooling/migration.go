@@ -15,8 +15,9 @@ import (
 )
 
 type MigrationSelection struct {
-	EntryFile, ProjectRoot, Database string
-	NewRevision                      bool
+	EntryFile, ProjectRoot, Database          string
+	NewRevision                               bool
+	DecisionID, OptionID, ExpectedInputDigest string
 }
 
 type MigrationDocument struct {
@@ -45,6 +46,13 @@ func (client Client) QueryMigrationPreview(ctx context.Context, selection Migrat
 	if len(selection.Database) > DefaultMaxOverlayPathBytes || !utf8.ValidString(selection.Database) || strings.ContainsRune(selection.Database, 0) {
 		return nil, result, fmt.Errorf("invalid migration database selection")
 	}
+	if selection.DecisionID != "" || selection.OptionID != "" || selection.ExpectedInputDigest != "" {
+		if selection.DecisionID == "" || selection.OptionID == "" || len(selection.DecisionID) > 256 || len(selection.OptionID) > 256 ||
+			!utf8.ValidString(selection.DecisionID) || !utf8.ValidString(selection.OptionID) || strings.ContainsRune(selection.DecisionID, 0) || strings.ContainsRune(selection.OptionID, 0) ||
+			len(selection.ExpectedInputDigest) != 64 || strings.Trim(selection.ExpectedInputDigest, "0123456789abcdef") != "" {
+			return nil, result, fmt.Errorf("migration decision requires bounded identifiers and its reviewed input digest")
+		}
+	}
 	if len(documents) > DefaultMaxOverlayDocuments {
 		return nil, result, fmt.Errorf("migration preview exceeds the open-document limit")
 	}
@@ -72,6 +80,9 @@ func (client Client) QueryMigrationPreview(ctx context.Context, selection Migrat
 	}
 	if selection.NewRevision {
 		args = append(args, "--new-revision")
+	}
+	if selection.DecisionID != "" {
+		args = append(args, "--decision", selection.DecisionID, "--option", selection.OptionID, "--expected-input-digest", selection.ExpectedInputDigest)
 	}
 	if len(documents) != 0 {
 		temporary, err := os.MkdirTemp("", "tesl-migration-overlays-*")

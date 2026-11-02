@@ -43,7 +43,7 @@ func TestCompilerDecisionOptionsReplaceTextHeuristics(t *testing.T) {
 
 func TestUnrecognizedDiagnosticDoesNotInventAnEdit(t *testing.T) {
 	guide := ForDiagnostic("MIG999", "unknown future diagnostic")
-	if len(guide.Options) != 0 || !strings.Contains(strings.Join(guide.Help, "\n"), "not applied edits") {
+	if len(guide.Options) != 0 || !strings.Contains(strings.Join(guide.Help, "\n"), "Examples alone do not change source") {
 		t.Fatalf("unknown diagnostic received a speculative edit: %+v", guide)
 	}
 }
@@ -52,5 +52,12 @@ func TestCompilerRefusalToProposeOptionsDoesNotFallBackToGuesses(t *testing.T) {
 	guide := ForDecision(Decision{Entity: "Note", Reason: "Note.title: no additive value source", Options: []DecisionOption{}})
 	if len(guide.Options) != 0 || !strings.Contains(guide.Summary, "has not proposed a source template") {
 		t.Fatalf("explicit compiler option boundary lost: %+v", guide)
+	}
+}
+
+func TestSelectedDefaultHoleDoesNotAskForAnotherMigrationDecision(t *testing.T) {
+	guide := ForDiagnostic("MIG003", "unresolved migration decision: Choose a literal of type String for Note.title")
+	if len(guide.Options) != 0 || !strings.Contains(guide.Summary, "scaffold is written") {
+		t.Fatalf("selected literal hole was turned back into a migration-route choice: %+v", guide)
 	}
 }

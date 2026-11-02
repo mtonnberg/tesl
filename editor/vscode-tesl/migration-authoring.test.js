@@ -4,7 +4,7 @@ const assert = require("node:assert/strict");
 const path = require("node:path");
 const os = require("node:os");
 const fs = require("node:fs");
-const { registerMigrationAuthoring, migrationLensLocations, previewItems, renderGuide, inside } = require("./migration-authoring");
+const { registerMigrationAuthoring, migrationLensLocations, previewItems, renderGuide, inside, codeHoleOffset } = require("./migration-authoring");
 
 function fixture(trusted = true) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "tesl-migration-editor-"));
@@ -73,7 +73,7 @@ test("compiler decision guidance is authoritative and not duplicated", () => {
   assert.deepEqual(items[0].options, []);
 });
 
-test("read-only preview provides overview, individual help, template copy and retained diff", async () => {
+test("old-server preview preserves overview, individual help and retained read-only diffs", async () => {
   const f = fixture();
   try {
     await f.commands.get("tesl.previewMigration")(f.uri(f.entryFile));
@@ -86,8 +86,8 @@ test("read-only preview provides overview, individual help, template copy and re
     assert.ok(panel.webview.html.includes("&lt;script&gt;bad()&lt;/script&gt;"));
     assert.ok(!panel.webview.html.includes("<script>bad()</script>"));
     assert.ok(panel.webview.html.includes("More help"));
-    await panel.message({ action: "copy", optionIndex: 0 });
-    assert.deepEqual(f.copies, ['Additive [Default count (todo "Choose Int")]']);
+    assert.ok(!panel.webview.html.includes("Copy example/template"));
+    assert.deepEqual(f.copies, []);
     await panel.message({ action: "source" });
     assert.equal(f.opened[0][1].selection.start.character, 3); // UTF-8 bytes -> UTF-16
     await panel.message({ action: "diff", index: 0 });
@@ -176,4 +176,70 @@ test("entry selection can browse beyond the bounded discovery list", async () =>
     assert.equal(f.requests.length, 1);
     assert.ok(f.errors.some((message) => message.includes("inside an open workspace folder")));
   } finally { f.cleanup(); }
+});
+
+
+test("using a compiler option updates the real source then opens custom code and rechecks", async () => {
+  const f = fixture();
+  try {
+    f.client.initializeResult = { capabilities: { executeCommandProvider: { commands: ["tesl.applyMigration"] } } };
+    f.preview.inputDigest = "a".repeat(64);
+    f.preview.guidance[0].decisionId = "entity:Todo";
+    f.preview.guidance[0].guide.options[0].id = "additive-default";
+    const selected = { ...f.preview, previewId: "selected", inputDigest: "b".repeat(64) };
+    const after = 'module App exposing []\nvalue = todo "Write your converter"\n';
+    const fresh = { ...selected, previewId: "rechecked", files: [], guidance: [] };
+    let applied = false;
+    f.vscode.workspace.openTextDocument = async (uri) => {
+      const text = fs.readFileSync(uri.fsPath, "utf8");
+      return { uri, lineCount: text.split("\n").length, getText: () => text, lineAt: (line) => ({text:text.split("\n")[line]}), positionAt: (offset) => { const lines=text.slice(0,offset).split("\n");return {line:lines.length-1,character:lines.at(-1).length}; } };
+    };
+    f.client.sendRequest = async (method, params) => {
+      f.requests.push({method,params});
+      if (params.command === "tesl.generateMigration") {
+        if (params.arguments[0].decisionId) return selected;
+        return applied ? fresh : f.preview;
+      }
+      if (params.command === "tesl.applyMigration") {
+        assert.deepEqual(params.arguments, [{previewId:"selected"}]);
+        fs.writeFileSync(f.entryFile, after); applied=true;
+        return {ok:true,active:false,sourceTransaction:{outcome:"committed",recoveryRequired:false}};
+      }
+      throw new Error("unexpected command");
+    };
+    await f.commands.get("tesl.previewMigration")(f.uri(f.entryFile));
+    await f.panels[0].message({action:"next"});
+    assert.ok(f.panels[0].webview.html.includes("Use this option and update source"));
+    await f.panels[0].message({action:"choose",optionIndex:0});
+    assert.equal(fs.readFileSync(f.entryFile,"utf8"),after);
+    assert.deepEqual(f.requests[1].params.arguments[0], {entryFile:f.entryFile,projectRoot:f.root,decisionId:"entity:Todo",optionId:"additive-default",expectedInputDigest:"a".repeat(64)});
+    assert.ok(!JSON.stringify(f.requests[1]).includes("template"));
+    assert.equal(f.opened[0][1].selection.start.line,1);
+    assert.equal(f.opened[0][1].selection.end.character-f.opened[0][1].selection.start.character,4);
+    assert.equal(f.requests.at(-1).params.command,"tesl.generateMigration");
+    assert.equal(f.panels[0].disposed,true);
+    assert.equal(f.copies.length,0);
+  } finally { f.cleanup(); }
+});
+
+test("stale compiler choice and recovery-required outcomes never trigger automatic retry", async () => {
+ const f=fixture();
+ try {
+  f.client.initializeResult={capabilities:{executeCommandProvider:{commands:["tesl.applyMigration"]}}};
+  f.preview.inputDigest="a".repeat(64);f.preview.guidance[0].decisionId="entity:Todo";f.preview.guidance[0].guide.options[0].id="additive-default";
+  let applies=0;
+  f.client.sendRequest=async(method,params)=>{f.requests.push({method,params});if(params.command==="tesl.generateMigration"&&params.arguments[0].decisionId)throw new Error("source digest changed");if(params.command==="tesl.generateMigration")return f.preview;if(params.command==="tesl.applyMigration"){applies++;return{ok:false,sourceTransaction:{outcome:"editor-pending",recoveryRequired:true},error:"concurrent user edit preserved"};}};
+  await f.commands.get("tesl.previewMigration")(f.uri(f.entryFile));await f.panels[0].message({action:"next"});await f.panels[0].message({action:"choose",optionIndex:0});
+  assert.equal(applies,0);assert.ok(f.errors.some(message=>message.includes("source digest changed")));assert.equal(fs.readFileSync(f.entryFile,"utf8"),"module App exposing []\n");
+  await f.commands.get("tesl.previewMigration")(f.uri(f.entryFile));const panel=f.panels.at(-1);await panel.message({action:"apply"});
+  assert.equal(applies,1);assert.ok(panel.webview.html.includes("Recovery is required"));assert.ok(panel.webview.html.includes("concurrent user edit preserved"));
+  await panel.message({action:"apply"});assert.equal(applies,1);
+ }finally{f.cleanup();}
+});
+
+
+test("custom-code selection ignores todo text in comments and strings", () => {
+ const source='note = "todo" # todo in comment\n# another todo\nfn convert = todo "Write converter"\n';
+ assert.equal(codeHoleOffset(source),source.indexOf('todo "Write'));
+ assert.equal(codeHoleOffset('note = "todo" # todo\n'),-1);
 });

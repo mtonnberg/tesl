@@ -9,6 +9,15 @@ let operation p = p.operation
 let selection p = p.selection
 let revision_after p = p.revision_after
 let compiler_abi p = A.id p.abi
+let operation_name = function Start->"start" | Refresh->"refresh" | Contract->"contract"
+let input_digest p =
+  let s=p.selection in
+  Migration_hash.digest(Migration_canonical.encode(Migration_canonical.Seq(
+    List.map(fun x->Migration_canonical.Bytes x)
+      ["tesl-migration-choice-input-v1";compiler_abi p;M.digest p.manifest;operation_name p.operation;
+       s.entry_file;s.database_file;s.database_name;s.family;s.schema_root;
+       Option.fold ~none:"none" ~some:string_of_int s.previous_version;
+       string_of_int s.current_version;string_of_int p.revision_after])))
 let manifest p = p.manifest
 let diagnostics p = p.diagnostics
 let compilable p = not (List.exists (fun (d : Compile.diagnostic) -> d.severity="error") p.diagnostics)
@@ -45,6 +54,31 @@ let generate ~project_root ~entry_file ~database ~new_revision ~documents = prot
     {operation;selection=selected;revision_after;abi=context;manifest;diagnostics;decisions})) in
   (match verify preview ~documents with Ok () -> () | Error errors -> raise (Invalid errors));
   preview)
+let generate_choice ~project_root ~entry_file ~database ~documents ~decision ~option_ ~expected_input_digest =
+ protect entry_file(fun()->
+  let reviewed=match generate ~project_root ~entry_file ~database ~new_revision:false ~documents with
+    | Ok p->p | Error errors->raise(Invalid errors)in
+  if reviewed.operation<>Refresh then raise(Invalid[{loc=Location.dummy_loc entry_file;
+    message="a migration choice requires an existing current revision; prepare it and obtain a fresh preview";candidates=[]}]);
+  if input_digest reviewed<>expected_input_digest then raise(Invalid[{loc=Location.dummy_loc entry_file;
+    message="the reviewed migration preview is stale; source, documents, discovery or compiler inputs changed; obtain a fresh preview";candidates=[]}]);
+  (match verify reviewed ~documents with Ok()->()|Error errors->raise(Invalid errors));
+  let chosen=abi(A.with_snapshot reviewed.abi(fun()->
+    let selected=target(T.resolve_with_compatibility
+      ~stored_value_compatibility:(Some(A.stored_value_compatibility reviewed.abi))
+      ~compiler_abi:(compiler_abi reviewed) ~project_root ~entry_file ~database ~documents)in
+    let selection=T.selection selected in
+    if selection<>reviewed.selection then raise(Invalid[{loc=Location.dummy_loc entry_file;
+      message="migration selection changed since review; obtain a fresh preview";candidates=[]}]);
+    let choice={Migration_generate.decision_id=decision;option_id=option_}in
+    let p=target(T.refresh_choice selected ~choice ~documents)in
+    let diagnostics=Source_input.with_overlays
+      ~project_root:(Option.value(Source_input.project_root())~default:project_root)
+      (M.overlays p.manifest)(fun()->Compile.check_source entry_file(Source_input.read entry_file))in
+    {operation=Refresh;selection;revision_after=p.current_version;abi=reviewed.abi;
+      manifest=p.manifest;diagnostics;decisions=p.decisions}))in
+  (match verify reviewed ~documents with Ok()->()|Error errors->raise(Invalid errors));
+  (match verify chosen ~documents with Ok()->()|Error errors->raise(Invalid errors));chosen)
 let generate_contract ~project_root ~entry_file ~database ~version ~documents = protect entry_file (fun () ->
  let context=abi(A.current()) in
  let checked = function Ok value -> value | Error errors ->
@@ -85,9 +119,9 @@ let to_json p =
     {|{"id":%s,"entity":%s,"file":%s,"line":%d,"col":%d,"reason":%s,"options":[%s]}|}
     (quote d.id) (quote d.entity) (quote d.file) d.line d.col (quote d.reason)
     (String.concat "," (List.map option d.options)) in
-  Printf.sprintf {|{"version":1,"kind":"migration-source-preview","ok":true,"operation":%s,"compilerAbi":%s,"compilable":%b,"selection":{"entryFile":%s,"databaseFile":%s,"database":%s,"family":%s,"schemaRoot":%s,"previousVersion":%s,"revisionBefore":%d,"revisionAfter":%d},"diagnostics":%s,"decisions":[%s],"manifest":%s}|}
+  Printf.sprintf {|{"version":1,"kind":"migration-source-preview","ok":true,"operation":%s,"compilerAbi":%s,"inputDigest":%s,"compilable":%b,"selection":{"entryFile":%s,"databaseFile":%s,"database":%s,"family":%s,"schemaRoot":%s,"previousVersion":%s,"revisionBefore":%d,"revisionAfter":%d},"diagnostics":%s,"decisions":[%s],"manifest":%s}|}
     (quote (match p.operation with Start -> "start" | Refresh -> "refresh" | Contract -> "contract"))
-    (quote (compiler_abi p)) (compilable p) (quote s.entry_file) (quote s.database_file)
+    (quote (compiler_abi p)) (quote(input_digest p)) (compilable p) (quote s.entry_file) (quote s.database_file)
     (quote s.database_name) (quote s.family) (quote s.schema_root) (option_int s.previous_version)
     s.current_version p.revision_after (Compile.diagnostics_to_json p.diagnostics)
     (String.concat "," (List.map decision p.decisions)) (M.to_json p.manifest)

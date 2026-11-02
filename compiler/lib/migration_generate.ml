@@ -8,6 +8,7 @@ type error = { path : string; message : string }
 type preview = { family : string; frozen_version : int; current_version : int; manifest : M.t }
 type decision_option = { id:string; label:string; template:string; help:string; needs_custom_code:bool }
 type decision = { id:string; entity:string; file:string; line:int; col:int; reason:string; options:decision_option list }
+type choice = {decision_id:string;option_id:string}
 type refresh_preview = { family : string; current_version : int; manifest : M.t;
                          diagnostics : Compile.diagnostic list; decisions:decision list }
 exception Invalid of error list
@@ -368,7 +369,12 @@ let decision_guidance file source before after =
         List.mem key (identity :: List.hd (List.rev (String.split_on_char '.' identity)) :: owned)) in
       (match matches with
        | [identity,entity] ->
-         let options = match entity with E.Paired pair -> additive_option identity pair.previous pair.current loc | _ -> [] in
+         let options = match entity with E.Paired pair ->
+           additive_option identity pair.previous pair.current loc @
+           List.map(fun (p:Migration_scaffold.t)->{id=p.id;label=p.label;template=p.template;help=p.help;needs_custom_code=true})
+            (Migration_scaffold.options ~file ~source ~before ~after ~requirements ~identity
+              ~previous:pair.previous ~current:pair.current ~missing:pair.missing_identities ~loc)
+           | _ -> [] in
          Some {id="entity:" ^ identity;entity=identity;file;line=loc.start.line;col=loc.start.col;reason;options}
        | _ -> None)
     | _ -> None)
@@ -421,7 +427,82 @@ let retype_columns previous current migration =
        | Some _ -> None)) e.fields | _ -> []) owner.decls in
   if edits=[] then None else Some (file,source_result file (Syntax.replace view edits)))
 
-let refresh_with_compatibility ~stored_value_compatibility ~compiler_abi ~project_root:root ~family ~version ~documents =
+let choose_entry file source before after choice =
+  let decisions=decision_guidance file source before after in
+  let decision=match List.find_opt(fun (d:decision)->d.id=choice.decision_id)decisions with
+    | Some d->d | None->reject file "the reviewed migration decision is unavailable; obtain a fresh preview" in
+  let option_=match List.find_opt(fun (o:decision_option)->o.id=choice.option_id)decision.options with
+    | Some o->o | None->reject file "the reviewed migration option is unavailable; obtain a fresh preview" in
+  let view,declaration=syntax file source in
+  let candidates=Syntax.members view declaration.entities |> source_result file |> List.filter_map(fun(_,expression)->
+    let loc=Checker.expr_loc expression in
+    if loc.start.line=decision.line && loc.start.col=decision.col then Some expression else None) in
+  let expression=match candidates with [e]->e | _->reject file "migration decision no longer has one exact source member" in
+  let requirements=match D.identity_claims ~before ~after declaration with
+    | Ok identities->(match E.requirements ~before ~after ~identities ~loc:declaration.declaration.loc with
+       | Ok r->r|Error _->reject file "migration identity requirements changed since review")
+    | Error _->reject file "migration identity requirements changed since review"in
+  let scaffold=if choice.option_id="additive-default"then None else
+    E.requirement_entities requirements |> List.find_map(fun(identity,entity)->
+      if identity<>decision.entity then None else match entity with
+      | E.Paired pair->Migration_scaffold.options ~file ~source ~before ~after ~requirements ~identity
+         ~previous:pair.previous ~current:pair.current ~missing:pair.missing_identities ~loc:(Checker.expr_loc expression)
+         |> List.find_opt(fun(p:Migration_scaffold.t)->p.id=choice.option_id)
+      | _->None)in
+  if choice.option_id<>"additive-default" && scaffold=None then reject file "selected source scaffold is no longer available";
+  let replacement=Option.fold ~none:option_.template ~some:(fun(p:Migration_scaffold.t)->p.replacement)scaffold in
+  (* Replacing the expression leaves its prior generator fingerprint intact.
+     The explicit choice is therefore user-owned on subsequent refreshes. *)
+  let chosen=source_result file(Syntax.replace view [source_result file(Syntax.range view expression),
+    Migration_source.source_fragment ~source replacement])in
+  match scaffold with None->chosen | Some plan->
+    let view,declaration=syntax file chosen in
+    let point,addition=match List.assoc_opt "fixtures" declaration.fields with
+     | Some(Ast.EList{elems;_}as fixtures)->
+       let range=source_result file(Syntax.collection_range view fixtures)in
+       range.start_byte+1,plan.fixture ^ (if elems=[] then "" else ", ")
+     | Some _->reject file "fixture scaffolding requires an existing literal fixtures list"
+     | None->
+       (match Migration_form.application declaration.declaration.value with
+        | "Migration",[record]->
+          let range=source_result file(Syntax.collection_range view record)in
+          range.start_byte+1,"fixtures: [" ^ plan.fixture ^ "], "
+        | _->reject file "migration declaration changed before fixture insertion")in
+    let chosen=source_result file(Syntax.replace view [({Syntax.start_byte=point;end_byte=point},addition)])in
+    let view,_=syntax file chosen in
+    let form=Syntax.module_ view in
+    let available=ref form.imports in
+    let exposed home name=
+      if String.ends_with ~suffix:"(..)" name then
+        let base=String.sub name 0 (String.length name-4)in
+        match List.find_opt(fun(m,t,_)->m=home && t=base)Type_system.stdlib_import_ctor_groups with
+        | Some(_,_,ctors)->base::ctors | None->[name;base]
+      else [name]in
+    let imports=List.filter_map(fun text->
+      let imported=match Parser.parse_module file("module " ^ form.module_name ^ " exposing []\n" ^ text ^ "\n")with
+       | Ok m->List.hd m.imports|Err _->reject file "compiler scaffold import is malformed"in
+      match imported.names with
+      | Ast.ImportAll->
+        if List.exists(fun(i:Ast.import_decl)->i.module_name=imported.module_name && i.names=Ast.ImportAll)!available
+        then None else(available:=imported::!available;Some text)
+      | Ast.ImportExposing needed->
+        let actual=List.concat_map(fun(i:Ast.import_decl)->if i.module_name<>imported.module_name then []else
+          match i.names with Ast.ImportAll->[]|Ast.ImportExposing names->List.concat_map(exposed i.module_name)names)!available in
+        let missing=List.concat_map(exposed imported.module_name)needed |> List.filter(fun n->not(List.mem n actual)) |> List.sort_uniq compare in
+        if missing=[]then None else begin
+          available:={imported with names=Ast.ImportExposing missing}::!available;
+          Some("import " ^ imported.module_name ^ " exposing [" ^ String.concat ", " missing ^ "]")
+        end)plan.imports in
+    let first=match form.decls with d::_->(Ast.top_decl_loc d).start.line|[]->reject file "migration declaration disappeared"in
+    let lines=String.split_on_char '\n' chosen in
+    let rec line_offset n=function _ when n=0->0|line::rest->String.length line+1+line_offset(n-1)rest|[]->reject file "scaffold import point is outside source"in
+    let point=line_offset first lines in
+    let chosen=if imports=[]then chosen else source_result file(Syntax.replace view
+      [({Syntax.start_byte=point;end_byte=point},Migration_source.source_fragment ~source:chosen(String.concat "\n" imports ^ "\n\n"))])in
+    let complete=chosen ^ Migration_source.source_fragment ~source:chosen("\n" ^ plan.helpers)in
+    ignore(source_result file(Syntax.read ~file ~source:complete));complete
+
+let refresh_internal ~choice ~stored_value_compatibility ~compiler_abi ~project_root:root ~family ~version ~documents =
   try
     let h = history (H.discover_with_compatibility ~stored_value_compatibility ~compiler_abi ~project_root:root ~family) in
     let current = H.current h in
@@ -450,8 +531,8 @@ let refresh_with_compatibility ~stored_value_compatibility ~compiler_abi ~projec
     let previous_seal,_ = Header.recorded_seals header in
     let checked_previous = seal (S.verify_sources ~project_root:root previous_seal) in
     ignore (seal (S.verify_semantics ?stored_value_compatibility ~compiler_abi checked_previous));
-    let column_writes=retype_columns previous current migration in
-    let source,decisions=overlay root column_writes (fun () ->
+    let initial_column_writes=retype_columns previous current migration in
+    let refreshed column_writes (migration:H.migration_source) = overlay root column_writes (fun () ->
       let target_inventory=inventory (I.load_with_compatibility ~stored_value_compatibility ~compiler_abi ~root_file:current.root_file) in
       let target_seal = seal (S.create ~project_root:root target_inventory) in
       let header = sparse (Header.create ~previous:previous_seal ~current:target_seal) in
@@ -459,6 +540,16 @@ let refresh_with_compatibility ~stored_value_compatibility ~compiler_abi ~projec
       let source = refresh_entities migration.path source previous.inventory target_inventory in
       let source=sparse (Header.replace ~file:migration.path ~source header) in
       source,decision_guidance migration.path source previous.inventory target_inventory) in
+    let initial_source,initial_decisions=refreshed initial_column_writes migration in
+    let column_writes,source,decisions=match choice with
+      | None->initial_column_writes,initial_source,initial_decisions
+      | Some choice->
+        let chosen=overlay root initial_column_writes(fun()->
+          let after=inventory(I.load_with_compatibility ~stored_value_compatibility ~compiler_abi ~root_file:current.root_file)in
+          choose_entry migration.path initial_source previous.inventory after choice)in
+        let chosen_migration={migration with H.contents=chosen}in
+        let columns=retype_columns previous current chosen_migration in
+        let source,decisions=refreshed columns chosen_migration in columns,source,decisions in
     (* A completed edge's target is also the current edge's predecessor. The
        public source checker therefore sees both seals. Check completed bodies
        against the proposed refreshed header, after their own frozen seals have
@@ -482,4 +573,6 @@ let refresh_with_compatibility ~stored_value_compatibility ~compiler_abi ~projec
   | Sys_error message | Failure message | Invalid_argument message -> Error [{path=root;message}]
   | Unix.Unix_error (error,operation,path) -> Error [{path;message=operation ^ ": " ^ Unix.error_message error}]
 
+let refresh_with_compatibility = refresh_internal ~choice:None
+let refresh_choice_with_compatibility ~choice = refresh_internal ~choice:(Some choice)
 let refresh = refresh_with_compatibility ~stored_value_compatibility:None

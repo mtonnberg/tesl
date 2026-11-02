@@ -18,16 +18,17 @@ import (
 // path. A parsed durable manifest never creates one, and it cannot outlive the
 // admitted callback or be reused on another database/connection.
 type pgRowTransactionAdmission struct {
-	tx                 pgx.Tx
-	database           *Database
-	protocol           *pgMigrationAdmission
-	plan               *pgRowPhysicalPlan
-	window             *pgRowPhysicalPlan
-	entity             *pgRowPhysicalEntity
-	write              bool
-	active             atomic.Bool
-	backfill           *pgRowLeaseAdmission
-	currentGenerations map[int]bool
+	tx                        pgx.Tx
+	database                  *Database
+	protocol                  *pgMigrationAdmission
+	plan                      *pgRowPhysicalPlan
+	window                    *pgRowPhysicalPlan
+	entity                    *pgRowPhysicalEntity
+	write                     bool
+	active                    atomic.Bool
+	backfill                  *pgRowLeaseAdmission
+	backfillProcessingLatched bool
+	currentGenerations        map[int]bool
 }
 
 func pgWithRowTransaction[T any](ctx context.Context, database *Database, plan *pgRowPhysicalPlan, entity *pgRowPhysicalEntity, write bool, run func(*pgRowTransactionAdmission) (T, error)) (value T, err error) {
@@ -181,7 +182,17 @@ func (a *pgRowTransactionAdmission) latchProcessing(ctx context.Context) error {
 	if window.window(a.entity.identity) == nil {
 		return nil
 	}
+	// The runtime-owned Worker batch holds one repeatable-read transaction and
+	// its lease, ABI and compatibility fences throughout its fixed CAS loop.
+	// Rollback discards both its processing receipt and this admission token.
+	// Request callbacks retain their ordinary checks.
+	if a.backfill != nil && a.backfillProcessingLatched {
+		return nil
+	}
 	_, err := a.tx.Exec(ctx, "select "+pgx.Identifier{a.plan.namespace, "tesl_row_processing"}.Sanitize()+"($1,$2,$3)", window.version, window.compiled.history.SourceCompilerABI, window.hash)
+	if err == nil && a.backfill != nil {
+		a.backfillProcessingLatched = true
+	}
 	return err
 }
 

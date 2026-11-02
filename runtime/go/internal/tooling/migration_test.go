@@ -180,6 +180,41 @@ func TestMigrationPreviewRefusesChangedCompilerBindings(t *testing.T) {
 	}
 }
 
+func TestMigrationPreviewForwardsOnlyGuardedDecisionIdentifiers(t *testing.T) {
+	selection, documents, response := migrationPreviewVector(t)
+	selection.DecisionID, selection.OptionID, selection.ExpectedInputDigest = "NotesSchema.Note", "additive-default", strings.Repeat("a", 64)
+	client, auditFile := migrationPreviewClient(t, response, "ok")
+	if _, _, err := client.QueryMigrationPreview(context.Background(), selection, documents); err != nil {
+		t.Fatal(err)
+	}
+	audit := migrationPreviewReadAudit(t, auditFile)
+	if !reflect.DeepEqual(audit.Args[9:15], []string{"--decision", selection.DecisionID, "--option", selection.OptionID, "--expected-input-digest", selection.ExpectedInputDigest}) {
+		t.Fatalf("decision guard changed in transport: %+v", audit.Args)
+	}
+	for _, change := range []string{"missing decision", "missing option", "missing digest", "uppercase digest", "bad digest", "invalid identifier"} {
+		t.Run(change, func(t *testing.T) {
+			invalid := selection
+			switch change {
+			case "missing decision":
+				invalid.DecisionID = ""
+			case "missing option":
+				invalid.OptionID = ""
+			case "missing digest":
+				invalid.ExpectedInputDigest = ""
+			case "uppercase digest":
+				invalid.ExpectedInputDigest = strings.Repeat("A", 64)
+			case "bad digest":
+				invalid.ExpectedInputDigest = strings.Repeat("g", 64)
+			case "invalid identifier":
+				invalid.OptionID = "bad\x00option"
+			}
+			if preview, _, err := (Client{}).QueryMigrationPreview(context.Background(), invalid, documents); err == nil || preview != nil || strings.Contains(err.Error(), "executable") {
+				t.Fatalf("invalid decision reached compiler: %v", err)
+			}
+		})
+	}
+}
+
 func TestMigrationPreviewCancellationRemovesPrivateFiles(t *testing.T) {
 	selection, documents, response := migrationPreviewVector(t)
 	client, auditFile := migrationPreviewClient(t, response, "hang")

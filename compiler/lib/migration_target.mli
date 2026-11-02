@@ -44,3 +44,5 @@ val start : t -> documents:Migration_manifest.document list ->
   (Migration_generate.preview,error list) result
 val refresh : t -> documents:Migration_manifest.document list ->
   (Migration_generate.refresh_preview,error list) result
+val refresh_choice : t -> choice:Migration_generate.choice -> documents:Migration_manifest.document list ->
+  (Migration_generate.refresh_preview,error list) result

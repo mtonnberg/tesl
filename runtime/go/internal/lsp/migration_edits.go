@@ -12,7 +12,7 @@ import (
 
 // Planning is read-only. The original manifest remains the sole filesystem
 // authority; no document/version guards are removed to make it a saved-file
-// manifest. The later coordinator must hold its journal while applying buffers.
+// manifest. The coordinator holds its journal while applying buffers.
 type migrationEditPlan struct {
 	manifest *sourceedit.Manifest
 	open     []migrationBufferEdit

@@ -1011,6 +1011,9 @@ func TestDependencyDiagnosticPublicationAggregatesEntryOwnership(t *testing.T) {
 		if params.URI != dependencyURI {
 			t.Fatalf("publication URI = %q", params.URI)
 		}
+		if params.Diagnostics == nil {
+			t.Fatalf("cleared dependency diagnostics must be an empty JSON array: %s", message)
+		}
 		counts = append(counts, len(params.Diagnostics))
 	}
 	if got, want := fmt.Sprint(counts), "[1 1 1 0]"; got != want {

@@ -14,6 +14,7 @@ type Preview struct {
 	manifest                       *Manifest
 	compilable                     bool
 	compilerABI                    string
+	inputDigest                    string
 	canonical                      []byte
 	entryFile, database, operation string
 }
@@ -21,6 +22,10 @@ type Preview struct {
 func (p *Preview) Manifest() *Manifest { return p.manifest }
 func (p *Preview) Compilable() bool    { return p.compilable }
 func (p *Preview) CompilerABI() string { return p.compilerABI }
+
+// InputDigest pins a reviewed compiler proposal for a subsequent choice. It is
+// not a substitute for validating and applying the returned guarded manifest.
+func (p *Preview) InputDigest() string { return p.inputDigest }
 func (p *Preview) JSON() []byte        { return bytes.Clone(p.canonical) }
 func (p *Preview) EntryFile() string   { return p.entryFile }
 func (p *Preview) Database() string    { return p.database }
@@ -41,6 +46,13 @@ func DecodePreview(data []byte) (*Preview, error) {
 		keys = append(keys, "decisions")
 		if err := validatePreviewDecisions(decisions); err != nil {
 			return nil, err
+		}
+	}
+	var inputDigest string
+	if raw, present := envelope["inputDigest"]; present {
+		keys = append(keys, "inputDigest")
+		if json.Unmarshal(raw, &inputDigest) != nil || len(inputDigest) != 64 || !validHex(inputDigest) {
+			return nil, fmt.Errorf("invalid compiler proposal input digest")
 		}
 	}
 	fields, err := object(data, keys...)
@@ -104,7 +116,7 @@ func DecodePreview(data []byte) (*Preview, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Preview{manifest: m, compilable: compilable, compilerABI: header.CompilerABI, canonical: bytes.Clone(data),
+	return &Preview{manifest: m, compilable: compilable, compilerABI: header.CompilerABI, inputDigest: inputDigest, canonical: bytes.Clone(data),
 		entryFile: header.Selection.EntryFile, database: header.Selection.Database, operation: header.Operation}, nil
 }
 

@@ -121,7 +121,7 @@ let attach ~file ~source seal = protect file (fun () ->
   let body = without ~file source in
   if List.assoc_opt seal.root seal.sources <> Some (Hash.digest body) then
     reject file "migration root changed after its closure was captured";
-  encode seal ^ body)
+  Migration_source.source_fragment ~source:body (encode seal) ^ body)
 let verify ~project_root ~root_file ~source located = protect root_file (fun () ->
   (* Compare raw bytes before parsing helpers. Even an edit that no longer parses
      is an integrity failure, not permission to replace a completed source. *)

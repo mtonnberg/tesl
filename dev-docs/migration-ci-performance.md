@@ -92,3 +92,15 @@ Larger improvements need separately verified work—for example, independent CI
 shards with isolated PostgreSQL clusters, or compiler profiling that removes
 repeated analysis without bypassing source-integrity checks. Latency comparisons
 must continue to run without competing test workloads.
+
+## Isolated authoritative shards
+
+The hosted gate partitions its existing checks across three runners. The default `./ci.sh` remains the complete serial local gate. `compiler-integration` owns the 23 parent phases outside the Go gate, including the full Dune suite. `go-runtime` owns the Go gate's static/build/unit/race/fuzz/CLI checks and bootstraps only the compiler executable. `migration` owns the complete shared migration runner, now 61 mandatory phases with private PostgreSQL.
+
+The added rolling-workload smoke builds ordinary old/new programs and checks concurrent requests, backfill restart, rejection/repair, managed-index work and Contract. Its processes stop before the existing isolated latency comparison. The smoke establishes correctness on that runner, not production p99 or large-table acceptance. The supported PostgreSQL-major workflow retains the complete shared runner.
+
+Each shard records the exact commit, tree, clean tracked source and phase inventory, with hashes of its evidence. The required job retains the name `Authoritative gate (./ci.sh)`, runs after every upstream outcome and accepts only the exact successful union: all 24 parent phases, both Go parts and all 61 migration phases. Missing, duplicated, reordered, skipped or failed work refuses. The serial gate also verifies its exact completed phase sequence. The final job preserves the existing verified-content export.
+
+Use `./ci.sh --list-phases` or `./ci.sh --shard migration --list-phases` to inspect the plan. Explicit shard execution requires clean committed source and emits a source-bound receipt; one shard alone is not a green gate. Fresh complete workflow wall times, including startup and final export, are required before assigning any speedup factor. No assertion, timing budget or supported-major check was removed.
+
+The failed predecessor run spent 4,155 seconds in Dune before reporting an early diagnostic-anchor registry failure. The Dune phase now runs that existing small registry check first, while retaining the full suite, so broken help links fail promptly.

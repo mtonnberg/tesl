@@ -246,3 +246,7 @@ Where to start, by task:
 | `scripts/run-go-test-manifest.sh` | Authoritative Go execution of every tracked `tests/*.tesl` source |
 | `runtime/go/teslrt/*_test.go` | Go runtime and integration coverage |
 - [Row adoption design](row-adoption-design.md)
+
+- [Migration review](pr-102-major-review.md)
+- [Migration performance](migration-performance-review.md)
+- [Rollout performance](migration-rollout-performance.md)

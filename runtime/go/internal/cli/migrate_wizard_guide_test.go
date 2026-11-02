@@ -32,13 +32,22 @@ func TestMigrationWizardReviewBrowsesAndExpandsWithoutApplyingChoices(t *testing
 		t.Fatalf("browse/help executed or approved a choice: %v %v %+v", proceed, err, *calls)
 	}
 	output := app.Stdout.(*bytes.Buffer).String()
-	for _, required := range []string{"Item 1/2", "Item 2/2", "Compiler-proposed templates", "Use a literal String default", `Additive [Default title (todo "Choose a String literal")]`, "Same requires an equal complete semantic closure", "does not replace changed historical evidence", "Template selected for review", "--resume"} {
+	for _, required := range []string{"Item 1/2", "Item 2/2", "Compiler-proposed scaffolds", "Use a literal String default", `Additive [Default title (todo "Choose a String literal")]`, "Same requires an equal complete semantic closure", "does not replace changed historical evidence", "Guidance without a compiler-proposed option cannot update source", "--resume"} {
 		if !strings.Contains(output, required) {
 			t.Errorf("missing %q in:\n%s", required, output)
 		}
 	}
 	if strings.Contains(output, "Compute the value from each old row") {
 		t.Fatal("consumer-derived choice replaced the compiler's explicit option list")
+	}
+}
+
+func TestMigrationWizardReviewCannotApplyChoiceWithoutRetainedPreview(t *testing.T) {
+	app, calls := fakeApp(t)
+	app.Stdin = strings.NewReader("1\n")
+	proceed, err := app.migrationWizardReview(context.Background(), migrationGuideReport(t), "Choose")
+	if proceed || err == nil || !strings.Contains(err.Error(), "fresh guarded preview") || len(*calls) != 0 {
+		t.Fatalf("unbound metadata authorized an edit: %v %v %+v", proceed, err, *calls)
 	}
 }
 

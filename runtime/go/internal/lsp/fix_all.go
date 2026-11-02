@@ -14,6 +14,12 @@ import (
 
 type initializeParams struct {
 	Capabilities struct {
+		Experimental struct {
+			MigrationApply struct {
+				Version         int `json:"version"`
+				SnapshotBarrier int `json:"snapshotBarrier"`
+			} `json:"teslMigrationApply"`
+		} `json:"experimental"`
 		Workspace struct {
 			ApplyEdit     bool `json:"applyEdit"`
 			WorkspaceEdit struct {
@@ -36,10 +42,10 @@ func (server *Server) initializeCapabilities(raw json.RawMessage) map[string]any
 	edit := params.Capabilities.Workspace.WorkspaceEdit
 	server.documentChanges = err == nil && edit.DocumentChanges
 	server.workspaceEditsSupported = server.documentChanges && (edit.FailureHandling == "transactional" || edit.FailureHandling == "textOnlyTransactional")
-	// Standard applyEdit capabilities do not establish that all document updates
-	// precede an acknowledgement. Keep the internal coordinator unavailable until
-	// a checked editor snapshot barrier and real-wire recovery tests establish it.
-	server.migrationApplySupported = false
+	// Only the matching extension implements guarded preimages, document lifetime
+	// checks and a notification fence. Standard applyEdit alone is insufficient.
+	checked := params.Capabilities.Experimental.MigrationApply
+	server.migrationApplySupported = err == nil && checked.Version == 1 && checked.SnapshotBarrier == 1 && params.Capabilities.Workspace.ApplyEdit && server.documentChanges
 	server.migrationBatchEdits = edit.FailureHandling == "transactional" || edit.FailureHandling == "textOnlyTransactional" || edit.FailureHandling == "undo"
 	result := initializeResult()
 	if !server.workspaceEditsSupported {

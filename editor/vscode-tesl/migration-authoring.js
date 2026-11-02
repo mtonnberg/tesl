@@ -48,24 +48,24 @@ function previewItems(preview) {
   const guidance = new Map((preview.guidance || []).map((item) => [item.diagnosticIndex, item.guide]));
   const matched = new Set((preview.guidance || []).map((item) => item.decisionId).filter(Boolean));
   const items = diagnostics.map((diagnostic, index) => ({
-    ...guidance.get(index), title: `${diagnostic.code || "Diagnostic"}: ${guidance.get(index)?.title || diagnostic.severity || "review"}`,
+    ...guidance.get(index), decisionId: (preview.guidance || []).find((item) => item.diagnosticIndex === index)?.decisionId, title: `${diagnostic.code || "Diagnostic"}: ${guidance.get(index)?.title || diagnostic.severity || "review"}`,
     summary: `${diagnostic.message}${guidance.get(index)?.summary ? `\n\n${guidance.get(index).summary}` : ""}`, file: diagnostic.file, line: diagnostic.start?.line, col: diagnostic.start?.col,
   }));
   for (const decision of preview.decisions || []) { if (matched.has(decision.id)) continue; items.push({
-    title: `Template: ${decision.entity || decision.id}`, summary: decision.reason,
+    title: `Choose: ${decision.entity || decision.id}`, decisionId: decision.id, summary: decision.reason,
     file: decision.file, line: decision.line, col: decision.col,
-    options: (decision.options || []).map((option) => ({ title: option.label, when: option.help, example: option.template })),
-    help: ["This compiler-proposed template retains explicit holes for your values or custom code. Copy and adapt it, then run the compiler again. No source changes occur in this preview."],
+    options: (decision.options || []).map((option) => ({ id: option.id, title: option.label, when: option.help, example: option.template })),
+    help: ["This compiler-proposed template retains explicit holes for your values or custom code. Choose an option to update the real migration source through a guarded transaction. Complete its explicit custom-code holes, then recheck."],
   }); }
   return items;
 }
 
-function renderGuide(items, index, nonce, heading, overview) {
+function renderGuide(items, index, nonce, heading, overview, controls = {}) {
   const item = items[index];
   const button = (action, label, extra = "") => `<button data-action="${action}" ${extra}>${escape(label)}</button>`;
   const details = (item?.help || []).map((text) => `<p>${escape(text)}</p>`).join("");
-  const options = (item?.options || []).map((option, optionIndex) => `<details><summary>${escape(option.title)}</summary><p>${escape(option.when)}</p>${option.example ? `<pre>${escape(option.example)}</pre>${button("copy", "Copy example/template", `data-option="${optionIndex}"`)}` : ""}</details>`).join("");
-  return `<!DOCTYPE html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';"><style>body{font-family:var(--vscode-font-family);line-height:1.5;padding:20px;max-width:950px}button{margin:5px;padding:6px;color:var(--vscode-button-foreground);background:var(--vscode-button-background);border:0}pre{white-space:pre-wrap}details{margin:12px 0;padding:8px;border:1px solid var(--vscode-panel-border)}summary{cursor:pointer}p{white-space:pre-wrap}</style></head><body><h1>${escape(heading)}</h1><p>${escape(overview)}</p><p>This guide is read-only. Review choices, edit source, then request a fresh preview. Editor application remains unavailable until its buffer-snapshot safeguards are complete.</p>${button("refresh", "Refresh preview")}${button("overview", "Overview")}<hr>${index < 0 ? `<h2>Overview</h2><ol>${items.map((entry, number) => `<li>${button("select", entry.title, `data-index="${number}"`)}</li>`).join("")}</ol>` : `<h2>${index + 1} / ${items.length}: ${escape(item.title)}</h2><p>${escape(item.summary)}</p>${options}${details ? `<details><summary>More help</summary>${details}</details>` : ""}${item.file ? button("source", "Open source location") : ""}${button("previous", "Previous")}${button("next", "Next")}`}<h2>Proposed files</h2><div id="files"></div><script nonce="${nonce}">const vscode=acquireVsCodeApi();document.addEventListener('click',event=>{const button=event.target.closest('button');if(button)vscode.postMessage({action:button.dataset.action,index:button.dataset.index===undefined?undefined:Number(button.dataset.index),optionIndex:button.dataset.option===undefined?undefined:Number(button.dataset.option)});});</script></body></html>`;
+  const options = (item?.options || []).map((option, optionIndex) => `<details><summary>${escape(option.title)}</summary><p>${escape(option.when)}</p>${option.example ? `<pre>${escape(option.example)}</pre>` : ""}${controls.canChoose && item.decisionId && option.id ? button("choose", "Use this option and update source", `data-option="${optionIndex}"`) : ""}</details>`).join("");
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';"><style>body{font-family:var(--vscode-font-family);line-height:1.5;padding:20px;max-width:950px}button{margin:5px;padding:6px;color:var(--vscode-button-foreground);background:var(--vscode-button-background);border:0}pre{white-space:pre-wrap}details{margin:12px 0;padding:8px;border:1px solid var(--vscode-panel-border)}summary{cursor:pointer}p{white-space:pre-wrap}</style></head><body><h1>${escape(heading)}</h1><p>${escape(overview)}</p><p>Review the proposed files and choose the intended behavior. Applying updates real files and open buffers through checked source and document guards; custom-code holes remain explicit.</p>${controls.status ? `<p role="status">${escape(controls.status)}</p>` : ""}${controls.canApply ? button("apply", "Update proposed source files") : ""}${controls.canStatus ? button("status", "Check application outcome") : ""}${button("refresh", "Refresh preview")}${button("overview", "Overview")}<hr>${index < 0 ? `<h2>Overview</h2><ol>${items.map((entry, number) => `<li>${button("select", entry.title, `data-index="${number}"`)}</li>`).join("")}</ol>` : `<h2>${index + 1} / ${items.length}: ${escape(item.title)}</h2><p>${escape(item.summary)}</p>${options}${details ? `<details><summary>More help</summary>${details}</details>` : ""}${item.file ? button("source", controls.canApply && controls.pendingPaths?.includes(item.file) ? "Update source and edit this decision" : "Open source location") : ""}${button("previous", "Previous")}${button("next", "Next")}`}<h2>Proposed files</h2><div id="files"></div><script nonce="${nonce}">const vscode=acquireVsCodeApi();document.addEventListener('click',event=>{const button=event.target.closest('button');if(button)vscode.postMessage({action:button.dataset.action,index:button.dataset.index===undefined?undefined:Number(button.dataset.index),optionIndex:button.dataset.option===undefined?undefined:Number(button.dataset.option)});});</script></body></html>`;
 }
 
 function inside(root, file) {
@@ -74,13 +74,28 @@ function inside(root, file) {
   return relative === "" || relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
 }
 
+function codeHoleOffset(source) {
+  let state = "code";
+  for (let i = 0; i < source.length; i++) {
+    const char = source[i];
+    if (state === "comment") { if (char === "\n") state = "code"; continue; }
+    if (state === "escape") { state = "string"; continue; }
+    if (state === "string") { if (char === "\\") state = "escape"; else if (char === '"') state = "code"; continue; }
+    if (char === "#") { state = "comment"; continue; }
+    if (char === '"') { state = "string"; continue; }
+    if (source.startsWith("todo", i) && !/[A-Za-z0-9_]/.test(source[i - 1] || "") && !/[A-Za-z0-9_]/.test(source[i + 4] || "")) return i;
+  }
+  return -1;
+}
+
 function registerMigrationAuthoring(vscode, context, { getClient, requireTrustedWorkspace }) {
   const virtualDocuments = new Map();
+  const views = new Map();
   context.subscriptions.push(vscode.workspace.registerTextDocumentContentProvider("tesl-migration-preview", {
     provideTextDocumentContent: (uri) => virtualDocuments.get(uri.toString()) || "Preview expired; request a new migration preview.",
   }));
 
-  async function requestPreview(uri, selectedDatabase) {
+  async function requestPreview(uri, selectedDatabase, viewOptions = {}) {
     if (!requireTrustedWorkspace()) return;
     const languageClient = getClient();
     if (!languageClient) { vscode.window.showWarningMessage("Tesl: a matching language server is required for migration preview."); return; }
@@ -97,7 +112,8 @@ function registerMigrationAuthoring(vscode, context, { getClient, requireTrusted
     let projectRoot = path.dirname(entry.fsPath);
     while (projectRoot !== workspaceRoot && inside(workspaceRoot, projectRoot) && !fs.existsSync(path.join(projectRoot, "tesl.toml"))) projectRoot = path.dirname(projectRoot);
     if (!inside(workspaceRoot, projectRoot)) projectRoot = workspaceRoot;
-    const preview = await languageClient.sendRequest("workspace/executeCommand", { command: "tesl.generateMigration", arguments: [{ entryFile: entry.fsPath, projectRoot, ...(selectedDatabase ? { database: selectedDatabase } : {}) }] });
+    const selection = { entryFile: entry.fsPath, projectRoot, ...(selectedDatabase ? { database: selectedDatabase } : {}) };
+    let preview = await languageClient.sendRequest("workspace/executeCommand", { command: "tesl.generateMigration", arguments: [selection] });
     if (!preview?.ok) {
       const candidates = new Map((preview?.errors || []).flatMap((error) => error.candidates || []).filter((candidate) => typeof candidate.database === "string").map((candidate) => [candidate.database, candidate]));
       if (!selectedDatabase && candidates.size > 1) {
@@ -107,35 +123,108 @@ function registerMigrationAuthoring(vscode, context, { getClient, requireTrusted
       }
       throw new Error(`Migration preview refused: ${(preview?.errors || []).map((error) => error.message || "Unknown compiler refusal").join("\n") || "Unsupported language server response"}`);
     }
-    const items = previewItems(preview);
-    const panel = vscode.window.createWebviewPanel("teslMigrationGuide", "Tesl Migration Preview", vscode.ViewColumn.Beside, { enableScripts: true, retainContextWhenHidden: false });
-    let index = -1;
+    let items = previewItems(preview);
+    const panel = vscode.window.createWebviewPanel("teslMigrationGuide", "Tesl Migration Decisions", { viewColumn: vscode.ViewColumn.Beside, preserveFocus: !!viewOptions.preserveFocus }, { enableScripts: true, retainContextWhenHidden: false });
+    let index = -1, busy = false, consumed = false, status = "", operationPreviewId, panelDisposed = false;
+    const viewId = preview.previewId;
+    panel.onDidDispose?.(() => { panelDisposed = true; views.delete(viewId); }, undefined, context.subscriptions);
+    const supportsApply = languageClient.initializeResult?.capabilities?.executeCommandProvider?.commands?.includes("tesl.applyMigration") === true;
     const nonce = randomBytes(16).toString("hex");
     virtualDocuments.clear();
     const refresh = () => {
-      panel.webview.html = renderGuide(items, index, nonce, "Migration preview", `${preview.database}: ${preview.operation}; ${preview.files.length} proposed files; ${items.length} review items. ${preview.compilable ? "Proposal compiles." : "Proposal still has decisions or errors to resolve."}`)
+      if (panelDisposed) return;
+      panel.webview.html = renderGuide(items, index, nonce, "Migration preview", `${preview.database}: ${preview.operation}; ${preview.files.length} proposed files; ${items.length} review items. ${preview.compilable ? "Proposal compiles." : "Proposal still has decisions or errors to resolve."}`, {
+        canApply: supportsApply && !busy && !consumed && preview.files.length > 0,
+        canChoose: supportsApply && !busy && !consumed && typeof preview.inputDigest === "string",
+        canStatus: !!operationPreviewId, pendingPaths: preview.files.map((file) => file.path),
+        status: status || (supportsApply ? "Choices update source; they never invent business values or execute database migrations." : "This language server cannot apply guarded editor changes. Install the matching updated CLI/compiler/LSP and reload."),
+      })
         .replace('<div id="files"></div>', `<div id="files">${preview.files.map((file, number) => `<button data-action="diff" data-index="${number}">${escape(path.relative(projectRoot, file.path))}${file.creates ? " (new)" : ""}</button>`).join("")}</div>`);
+    };
+    const openLocation = async (item) => {
+      if (!item || !inside(projectRoot, item.file)) return;
+      const document = await vscode.workspace.openTextDocument(vscode.Uri.file(item.file));
+      const line = Math.min(Math.max(0, Number.isInteger(item.line) ? item.line : 0), Math.max(0, document.lineCount - 1));
+      const sourceLine = line < document.lineCount ? document.lineAt(line).text : "";
+      const col = Buffer.from(sourceLine).subarray(0, Math.max(0, Number.isInteger(item.col) ? item.col : 0)).toString("utf8").length;
+      await vscode.window.showTextDocument(document, { selection: new vscode.Range(line, col, line, col), preview: false });
+    };
+    const openCustomCode = async (proposal, preferred) => {
+      const candidates = [...new Set([preferred?.file, ...(proposal.decisions || []).map((item) => item.file), ...(proposal.diagnostics?.diagnostics || []).map((item) => item.file), ...proposal.files.map((file) => file.path)])].filter((file) => inside(projectRoot, file));
+      for (const file of candidates) {
+        try {
+          const document = await vscode.workspace.openTextDocument(vscode.Uri.file(file));
+          const offset = codeHoleOffset(document.getText());
+          if (offset < 0) continue;
+          const position = document.positionAt(offset);
+          await vscode.window.showTextDocument(document, { selection: new vscode.Range(position.line, position.character, position.line, position.character + 4), preview: false });
+          return;
+        } catch (_) { /* Leave source errors visible in the fresh compiler preview. */ }
+      }
+      if (preferred) await openLocation(preferred);
+    };
+    const showOutcome = (result) => {
+      const transaction = result?.sourceTransaction;
+      status = `Source outcome: ${transaction?.outcome || "unknown"}. ${result?.error || ""}${transaction?.recoveryRequired ? " Recovery is required; preserve your buffers and the .tesl-source-edit journal before any further changes." : ""}`;
+      refresh();
+    };
+    const applyProposal = async (choice, preferred) => {
+      if (!views.has(viewId) || busy || consumed || !supportsApply) throw new Error("Request a fresh preview with the matching language server before applying source.");
+      busy = true; status = "Checking source and editor inputs…"; refresh();
+      try {
+        if (choice) {
+          if (typeof preview.inputDigest !== "string" || !choice.decisionId || !choice.optionId) throw new Error("This option is advisory; the compiler has not supplied a checked choice.");
+          // Pass only compiler identifiers and its full input digest. Never send
+          // a copied/client-edited template as source authority.
+          consumed = true;
+          const selected = await languageClient.sendRequest("workspace/executeCommand", { command: "tesl.generateMigration", arguments: [{ ...selection, decisionId: choice.decisionId, optionId: choice.optionId, expectedInputDigest: preview.inputDigest }] });
+          if (!selected?.ok) throw new Error((selected?.errors || []).map((item) => item.message).join("\n") || "Compiler refused the selected source choice.");
+          preview = selected; items = previewItems(preview); index = -1;
+        }
+        consumed = true; operationPreviewId = preview.previewId;
+        let result;
+        try {
+          result = await languageClient.sendRequest("workspace/executeCommand", { command: "tesl.applyMigration", arguments: [{ previewId: operationPreviewId }] });
+        } catch (error) {
+          // A lost acknowledgement does not mean files or buffers were unchanged.
+          try { result = await languageClient.sendRequest("workspace/executeCommand", { command: "tesl.migrationApplicationStatus", arguments: [{ previewId: operationPreviewId }] }); }
+          catch (_) { status = `Application outcome is unknown: ${error.message}. Preserve buffers and .tesl-source-edit recovery state; do not repeat the apply blindly.`; refresh(); return; }
+        }
+        showOutcome(result);
+        if (result?.ok !== true || result?.active || result?.sourceTransaction?.outcome !== "committed" || result?.sourceTransaction?.recoveryRequired) return { result };
+        status = "Source files and buffers updated. Opening custom-code holes and rechecking the application…"; refresh();
+        try {
+          await openCustomCode(preview, preferred);
+          const next = await requestPreview(entry, selectedDatabase, { preserveFocus: true });
+          if (next) { panelDisposed = true; views.delete(viewId); panel.dispose(); }
+          return { result, nextView: next };
+        } catch (error) { status = `Source was committed; follow-up check failed: ${error.message}`; refresh(); }
+      } catch (error) { status = `No committed source update was confirmed: ${error.message}`; throw error; }
+      finally { busy = false; refresh(); }
     };
     panel.webview.onDidReceiveMessage(async (message) => {
       try {
-        if (!requireTrustedWorkspace()) return;
-        if (message.action === "refresh") { await requestPreview(entry, selectedDatabase); panel.dispose(); return; }
+        if (!requireTrustedWorkspace() || !message || typeof message.action !== "string") return;
+        if (busy && message.action !== "status") return;
+        if (message.action === "refresh") { await requestPreview(entry, selectedDatabase); panelDisposed = true; panel.dispose(); return; }
         if (message.action === "overview") index = -1;
         if (message.action === "select" && Number.isInteger(message.index) && message.index >= 0 && message.index < items.length) index = message.index;
         if (message.action === "next") index = Math.min(items.length - 1, index + 1);
         if (message.action === "previous") index = Math.max(-1, index - 1);
         const item = items[index];
-        if (message.action === "source" && item && inside(projectRoot, item.file)) {
-          const line = Math.max(0, Number.isInteger(item.line) ? item.line : 0);
-          const document = await vscode.workspace.openTextDocument(vscode.Uri.file(item.file));
-          const sourceLine = line < document.lineCount ? document.lineAt(line).text : "";
-          const byteCol = Math.max(0, Number.isInteger(item.col) ? item.col : 0);
-          const col = Buffer.from(sourceLine).subarray(0, byteCol).toString("utf8").length;
-          await vscode.window.showTextDocument(document, { selection: new vscode.Range(line, col, line, col), preview: true });
+        if (message.action === "apply") { await vscode.commands.executeCommand("tesl.applyMigrationSource", { previewId: viewId }); return; }
+        if (message.action === "choose" && item && Number.isInteger(message.optionIndex)) {
+          const option = item.options?.[message.optionIndex];
+          if (!item.decisionId || !option?.id) throw new Error("The compiler has not supplied a checked option here.");
+          await vscode.commands.executeCommand("tesl.applyMigrationChoice", { previewId: viewId, decisionId: item.decisionId, optionId: option.id }); return;
         }
-        if (message.action === "copy" && item && Number.isInteger(message.optionIndex)) {
-          const example = item.options?.[message.optionIndex]?.example;
-          if (typeof example === "string") await vscode.env.clipboard.writeText(example);
+        if (message.action === "status" && operationPreviewId) {
+          const result = await languageClient.sendRequest("workspace/executeCommand", { command: "tesl.migrationApplicationStatus", arguments: [{ previewId: operationPreviewId }] });
+          showOutcome(result); return;
+        }
+        if (message.action === "source" && item && inside(projectRoot, item.file)) {
+          if (!consumed && supportsApply && preview.files.some((file) => file.path === item.file)) { await applyProposal(undefined, item); return; }
+          await openLocation(item);
         }
         if (message.action === "diff" && Number.isInteger(message.index)) {
           const file = preview.files[message.index];
@@ -150,9 +239,32 @@ function registerMigrationAuthoring(vscode, context, { getClient, requireTrusted
         refresh();
       } catch (error) { vscode.window.showErrorMessage(`Tesl migration: ${error.message}`); }
     }, undefined, context.subscriptions);
+    views.clear();
+    const view = {
+      apply: () => applyProposal(),
+      choose: (decisionId, optionId) => {
+        const item = items.find((candidate) => candidate.decisionId === decisionId && candidate.options?.some((option) => option.id === optionId));
+        if (!item) throw new Error("That compiler choice is not present in the retained migration view.");
+        return applyProposal({ decisionId, optionId }, item);
+      },
+    };
+    views.set(viewId, view);
     refresh();
-    return panel;
+    return { version: 1, kind: "migration-editor-view", previewId: viewId, inputDigest: preview.inputDigest,
+      database: preview.database, compilable: preview.compilable, decisions: preview.decisions || [],
+      files: preview.files, diagnostics: preview.diagnostics };
   }
+
+  const retainedView = (params) => {
+    if (!requireTrustedWorkspace()) throw new Error("Trust this workspace before applying migration source.");
+    if (!params || typeof params.previewId !== "string" || !views.has(params.previewId)) throw new Error("Migration view expired; request a fresh preview.");
+    return views.get(params.previewId);
+  };
+  context.subscriptions.push(vscode.commands.registerCommand("tesl.applyMigrationSource", async (params) => retainedView(params).apply()));
+  context.subscriptions.push(vscode.commands.registerCommand("tesl.applyMigrationChoice", async (params) => {
+    if (typeof params?.decisionId !== "string" || typeof params?.optionId !== "string") throw new Error("Select an explicit compiler decision and option.");
+    return retainedView(params).choose(params.decisionId, params.optionId);
+  }));
 
   context.subscriptions.push(vscode.commands.registerCommand("tesl.previewMigration", async (uri) => {
     try { return await requestPreview(uri); } catch (error) { vscode.window.showErrorMessage(`Tesl migration: ${error.message}`); }
@@ -183,4 +295,4 @@ function registerMigrationAuthoring(vscode, context, { getClient, requireTrusted
   }));
 }
 
-module.exports = { registerMigrationAuthoring, migrationLensLocations, previewItems, renderGuide, inside };
+module.exports = { registerMigrationAuthoring, migrationLensLocations, previewItems, renderGuide, inside, codeHoleOffset };

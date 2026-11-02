@@ -163,6 +163,7 @@ function makeVscode(files, debugCalls, taskCalls, workspacePath = repoRoot, opti
         onDidDelete: () => new Disposable(),
       }),
       onDidOpenTextDocument: () => new Disposable(),
+      onDidCloseTextDocument: () => new Disposable(),
       onDidChangeTextDocument: () => new Disposable(),
     },
     languages: {
@@ -242,6 +243,8 @@ function loadExtension(vscode, languageClients, moduleOverrides = {}) {
           constructor(id, name, serverOptions, clientOptions) {
             languageClients.push({ id, name, serverOptions, clientOptions });
           }
+          registerFeature() {}
+          onRequest() { return new Disposable(); }
           start() { return Promise.resolve(); }
           stop() { return Promise.resolve(); }
         },

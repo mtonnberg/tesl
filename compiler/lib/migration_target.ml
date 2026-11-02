@@ -19,3 +19,10 @@ let refresh t ~documents =
     ~family:(selection t).family ~version:(selection t).current_version ~documents)) (fun preview ->
    Result.map (fun source_manifest -> {preview with G.manifest=source_manifest})
     (manifest (M.combine (source_guard t) preview.manifest ~documents))))
+let refresh_choice t ~choice ~documents =
+ Result.bind (verify t ~documents) (fun () ->
+  Result.bind (generated (G.refresh_choice_with_compatibility ~choice ~stored_value_compatibility:(stored_value_compatibility t)
+    ~compiler_abi:(compiler_abi t) ~project_root:(project_root t)
+    ~family:(selection t).family ~version:(selection t).current_version ~documents)) (fun preview ->
+   Result.map (fun source_manifest -> {preview with G.manifest=source_manifest})
+    (manifest (M.combine (source_guard t) preview.manifest ~documents))))

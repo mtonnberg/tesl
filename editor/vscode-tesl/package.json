@@ -2,7 +2,7 @@
   "name": "vscode-tesl",
   "displayName": "Tesl Language",
   "description": "Syntax highlighting, live diagnostics, go-to-definition, hover types, and completions for the Tesl (.tesl) language",
-  "version": "0.7.14",
+  "version": "0.7.15",
   "publisher": "Tesl",
   "namespace": "Tesl",
   "//extensionKind": "Run only on the workspace (remote/WSL) side. Without this, in a Remote-WSL session VSCode can run the extension on BOTH the local UI host and the remote workspace, starting two language-server clients that each publish diagnostics \u2014 so every error/warning appears twice.",
@@ -301,6 +301,18 @@
         "title": "Preview Migration Decisions",
         "category": "Tesl",
         "enablement": "isWorkspaceTrusted"
+      },
+      {
+        "command": "tesl.applyMigrationSource",
+        "title": "Apply Reviewed Migration Source",
+        "category": "Tesl",
+        "enablement": "isWorkspaceTrusted"
+      },
+      {
+        "command": "tesl.applyMigrationChoice",
+        "title": "Apply Reviewed Migration Choice",
+        "category": "Tesl",
+        "enablement": "isWorkspaceTrusted"
       }
     ],
     "menus": {
@@ -347,15 +359,26 @@
           "when": "resourceExtname == .tesl && isWorkspaceTrusted",
           "group": "tesl@3"
         }
+      ],
+      "commandPalette": [
+        {
+          "command": "tesl.applyMigrationSource",
+          "when": "false && isWorkspaceTrusted"
+        },
+        {
+          "command": "tesl.applyMigrationChoice",
+          "when": "false && isWorkspaceTrusted"
+        }
       ]
     }
   },
   "scripts": {
-    "test": "node --test test-output-parser.test.js toolchain.test.js extension.test.js grammar.test.js migration-authoring.test.js",
+    "test": "node --test test-output-parser.test.js toolchain.test.js extension.test.js grammar.test.js migration-authoring.test.js migration-client.test.js",
     "bundle": "esbuild extension.js --bundle --platform=node --format=cjs --target=node16 --minify --external:vscode --outfile=dist/extension.js",
     "package": "npm run bundle && npx @vscode/vsce package",
     "publish:vsce": "npx @vscode/vsce publish",
-    "publish:ovsx": "npx ovsx publish"
+    "publish:ovsx": "npx ovsx publish",
+    "test:host": "node host-test/run.cjs"
   },
   "devDependencies": {
     "@types/vscode": "^1.80.0",

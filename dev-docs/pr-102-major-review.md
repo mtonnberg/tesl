@@ -42,8 +42,8 @@ import mode after `migration =`, returning `Tesl.*` modules where migration fiel
 were expected. A green native portability workflow did not exercise this journey.
 
 This pass adds migration commands and CodeLens, contextual completion/help, and a
-read-only overview with individual decisions, expandable explanations, compiler
-templates and source diffs. A matching extension and language server must be
+review overview with individual decisions, expandable explanations, compiler
+choices and source diffs. A matching extension and language server must be
 installed; an already installed older VSIX does not update from repository edits.
 
 ### P2: the CLI exposed diagnostics instead of a decision workflow
@@ -53,17 +53,34 @@ all diagnostics. A new required `String` field produced a long MIG003 `todo`
 reason, but no concise presentation of the available value-source decision.
 
 The CLI and LSP now share guidance. The wizard shows an overview and individual
-review items, with numbered templates, expanded help, navigation and rechecking.
+review items, with numbered compiler choices, expanded help, navigation and rechecking.
 The compiler preview carries structured `decisions` metadata. Literal-default
 templates are offered only when the actual additive classifier accepts the
 checked inventory shape with correctly typed probe literals. Probe values never
 become business defaults; displayed templates retain explicit custom-code holes.
 
-Templates remain proposals. Selecting or copying one does not apply a source edit,
-authorize database work or prove the completed migration. General conversion
-function scaffolding and safe multi-buffer editor application remain unfinished.
-The editor's existing apply coordinator stays disabled because standard LSP
-apply acknowledgements do not establish the required snapshot barrier.
+The follow-up applies compiler-proposed choices to actual saved CLI files or editor
+buffers. The compiler binds each choice to its complete input digest; source,
+disk, selection and compiler ABI are rechecked before deriving guarded edits.
+Existing handwritten imports and code remain intact, including equivalent explicit
+constructor exposures. The CLI rechecks saved files; editor buffers remain dirty
+until saved.
+
+The editor uses an explicit snapshot/fence protocol and exact document text,
+version, set and open/close lifetimes before publication and after edits or
+restoration. An apply acknowledgement alone never commits a transaction.
+Unknown, partial or concurrent outcomes retain recovery state whenever safe
+restoration cannot be established. Automatic editor reconciliation after server
+restart remains unavailable.
+
+Scaffolding is bounded: checked primitive literal defaults; supported single-field
+primitive revalidation using an exported target establish function; and primitive
+field conversions with unchanged names, key, table and indexes. Row copies,
+forward/reverse signatures, imports and historical fixture structure are written.
+Business values, conversion/rejection policies and fixture values remain explicit
+holes. Cross-field proofs, hidden owners, nonprimitive conversions, renames,
+removals and key/index changes do not receive these automatic scaffolds.
+Choosing a scaffold does not execute database work or prove the completed source.
 
 ### P2: expected draft hash drift appeared as an unexplained error
 
@@ -212,9 +229,9 @@ memory sandbox. Closing the Installer connection and unsetting its DSN do not
 erase credentials or isolate a compromised process. Request deployments must
 receive only their own credentials.
 
-Fresh review verification includes real PostgreSQL 18.4 race tests for catalog
+Fresh review verification includes race coverage against PostgreSQL 18.4 for catalog
 ACLs/drift, inherited privileges, old/new writers, heartbeat shutdown and deployment
-identity (13 root tests, no skips), plus nine queue/facility root tests covering
+identity (root tests, no skips), plus queue/facility root tests covering
 protected registration, exact repair inputs, email tokens, cache permissions and
 SSE admission/function tampering (also no skips). Seven source-bound queue
 publication attacks additionally passed on PostgreSQL 18.4, covering rollback,
@@ -228,8 +245,9 @@ The optional-establish fix passed 229 focused proof/configuration tests, includi
 native identity and revalidation execution. Final authoring validation also passed
 the complete CLI, LSP, shared-guide and guarded-source-edit packages, extension
 tests, manual coherence, the 44 register negative tests, and changed-package Go
-vet/lint checks. A graphical VSCodium session was not available; editor behavior
-was exercised through command/provider/webview tests and real compiler/LSP calls.
+vet/lint checks. The initial pass used command/provider/webview tests and real compiler/LSP calls.
+The follow-up also passed a real VSCodium host journey, including CodeLens,
+completion, actual dirty-buffer application, stale-choice refusal and saved results.
 
 Coverage is deliberately bounded: the initial runtime review read 21 production
 files, followed by queue publication/repair/discard and cache/email/SSE permission
@@ -244,16 +262,45 @@ finite models and mutation counterexamples do not establish all feature composit
 
 ## Remaining work after this pass
 
-1. Complete safe compiler-backed scaffolding for broader conversion decisions and
-   the editor snapshot/application protocol. Current templates are read-only and
-   intentionally partial. Saved-source publication/guided authoring remains Linux
-   only; portable manifest preview is not portable mutation.
-2. Establish realistic active-rollout p99, throughput and lock-duration acceptance;
-   execute the deferred large-table workload before making scale claims.
-3. Reduce CI wall time with measured, correctness-preserving isolation/sharding.
+The user selected items 1–3 for the follow-up:
+
+1. Bounded compiler scaffolding and actual CLI/editor source application are now
+   implemented through guarded transactions. Saved-source publication remains Linux
+   only; portable previews do not imply portable mutation.
+2. The new workload measures real old/new HTTP reads and writes during backfill,
+   restart, managed-index work, rejection/repair and Contract. The 10,000-row baseline
+   passed correctness but failed the original p99 overhead budgets on this shared
+   host. This is not production-scale acceptance. See the
+   [rollout measurements](migration-rollout-performance.md).
+3. Hosted CI now separates compiler/integration, Go runtime and migration work onto
+   private runners, with a source-bound aggregation gate that requires the complete
+   phase union. The exact reported MIG001/MIG024 anchor-registry failure is fixed,
+   and that check now runs before the long Dune suite. Fresh CI on the final pushed
+   revision must pass; measure its complete wall time before assigning a speedup.
+   See the [CI timing report](migration-ci-performance.md).
 4. Reconcile the original requirements and conduct remaining security/composition
    review before claiming whole-roadmap completion.
 
 These limitations should stay visible alongside the implemented capability. The
 right target is a predictable checked migration workflow whose supported paths,
 required decisions and refusals are easy to see in both CLI and editor.
+
+## Follow-up validation scope
+
+Ten native compiler cases cover all supported choice routes, completing holes into
+valid applications, changed historical proofs, stale or invented choices, document
+versions, unsupported shapes, CRLF and existing constructor imports. Thirty-three
+manifest tests cover exact source/disk/import/directory guards and stale/conflicting
+observations. Full CLI, source-edit, LSP, tooling and guide tests passed, including
+scoped race tests. Actual PostgreSQL tests passed for same-process rollback/retry
+and old-writer CAS conflicts, without skips. The initial real VSCodium journey
+passed, including its expanded CodeLens/completion and unhandled-error checks.
+The complete extension suite passed without skips, and extension 0.7.15 was packaged.
+Fresh exact-head CI remains the final verification.
+
+Source-integrity discovery now deduplicates original guard observations while
+collecting them and verifies the complete union once. Independent review checked
+freshness, aliases, conflicts and memory behavior. Five paired native measurements
+at 128 helpers improved this phase from 515.2 to 46.4 ms (11.1 times), with the same
+12,672 KiB median process peak RSS. This is not an 11-times whole-build claim.
+See the [performance report](migration-performance-review.md).

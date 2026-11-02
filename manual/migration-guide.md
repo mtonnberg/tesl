@@ -11,8 +11,10 @@ application binary with separate Installer, Worker and Request database roles.
    `tesl migrate app.tesl --resume` to continue an existing undeployed revision.
 2. Save the current schema changes. Refresh produces the compiler's proposed
    migration, preserving user-owned conversion code. Read the overview and work
-   through the remaining decisions. In the guide, `?` expands help, `n` advances
-   to another decision, and Enter refreshes and rechecks saved changes.
+   through the remaining decisions. Enter a displayed compiler option number to
+   write its scaffold directly into the migration files. `?` expands help, `n`
+   advances, and Enter refreshes and rechecks saved changes. Save editor buffers
+   before using the CLI: its choices update saved files.
 3. Fill the typed holes with the business decisions the compiler cannot infer.
    A rename can copy the exact old field; a new default needs a value you choose;
    a changed representation needs a converter; a changed proof may also need a
@@ -41,6 +43,40 @@ tesl migrate plan app.tesl
 requires an interactive terminal and its supported filesystem protections;
 portable previews do not imply portable source application. Keep every frozen
 schema, migration, codec and reviewed Contract that the retained history needs.
+
+## Apply choices in VSCodium
+
+Install extension 0.7.15 or later with a matching compiler and language server,
+then reload the editor. Run **Tesl: Preview Migration Decisions** from the Command
+Palette or migration CodeLens. When starting from a schema or migration file,
+choose the application entry file. Review the overview and expand each decision's
+help. **Use this option and update source** writes the compiler scaffold into the
+actual files or open buffers, selects a remaining custom-code hole and rechecks.
+**Update proposed source files** applies the ordinary generated proposal. The diff
+view is for review; there is no manual copy/paste step. See the
+[extension setup](../editor/vscode-tesl/README.md) if CodeLens or completion is missing.
+
+Dirty buffers stay unsaved until you save them. A stale preview or changed buffer
+refuses instead of overwriting your edit: request a fresh preview. The editor
+checks exact text, versions and open/close lifetimes before and after application.
+If an outcome is unknown or requires recovery, preserve buffers and the
+`.tesl-source-edit` journal, and use **Check application outcome**. Follow its
+guidance before starting another operation. Automatic reconciliation after a
+server restart is not implemented; an editor-pending journal deliberately refuses
+disk-only recovery. Saved-source publication requires Linux filesystem protections.
+
+The compiler scaffolds classifier-approved primitive literal defaults, supported
+single primitive-field revalidation using an existing exported establish function,
+and bounded primitive conversions with unchanged field names, primary key, table
+and indexes. It fills row copies, forward/reverse signatures, imports and historical
+fixture structure. Business values, conversion/rejection policies and fixture
+values remain explicit `todo` holes. Cross-field proofs, hidden owners,
+nonprimitive conversions, key/index changes, renames and removals are outside these
+automatic scaffolds. Guidance without a compiler-proposed choice cannot write source.
+
+A scaffold with holes cannot build or deploy. Complete the code, inspect its
+diagnostics and test historical values before reviewing the deployment plan.
+Selecting an option prepares source and never executes database work.
 
 ## Same proofs and changed meaning
 

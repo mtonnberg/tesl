@@ -121,3 +121,30 @@ func TestSourcePreviewAdvisoryDecisionsKeepAuthoritySeparate(t *testing.T) {
 		}
 	}
 }
+
+func TestSourcePreviewInputDigestPinsChoiceWithoutGrantingWrites(t *testing.T) {
+	base := previewVector(t)
+	before, err := DecodePreview(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before.InputDigest() != "" {
+		t.Fatal("legacy proposal invented a choice precondition")
+	}
+	with := func(value string) []byte {
+		return append(append(bytes.Clone(base[:len(base)-1]), []byte(`,"inputDigest":`+value)...), '}')
+	}
+	digest := strings.Repeat("a", 64)
+	p, err := DecodePreview(with(`"` + digest + `"`))
+	if err != nil || p.InputDigest() != digest {
+		t.Fatalf("lost compiler choice precondition: %v", err)
+	}
+	if p.Manifest().Digest() != before.Manifest().Digest() || p.Compilable() != before.Compilable() {
+		t.Fatal("choice precondition changed source authority or compiler judgment")
+	}
+	for _, invalid := range []string{`null`, `42`, `true`, `""`, `"abc"`, `"` + strings.Repeat("A", 64) + `"`, `"` + strings.Repeat("g", 64) + `"`} {
+		if _, err := DecodePreview(with(invalid)); err == nil {
+			t.Fatalf("accepted invalid choice digest %s", invalid)
+		}
+	}
+}
