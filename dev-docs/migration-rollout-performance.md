@@ -37,5 +37,40 @@ must not be used as continuous-lock evidence.
 This host used PostgreSQL 17 with shared cloud CPUs. It did not supply pinned
 PostgreSQL 16 hardware, replica/pooler variants, controlled 1 ms network latency,
 ten-table histories or a cold operating-system cache. Release acceptance remains
-incomplete. Candidate comparisons and larger bounded cases must report actual
-results and resource/timeout limits separately.
+incomplete. The following candidate results retain those limitations.
+
+## Candidate comparison and bounded scale
+
+A fresh sequential pair used the same application, schema, conversion and index
+source with 10,000 rows, 2/8 clients, and the baseline plus the transaction-local
+backfill processing latch. Migration headers have the required compiler ABI seal
+updates; every other source byte matched. Both runs passed full-row checks,
+Worker restart, rejection/repair, Contract and post-Contract restart. This is one
+shared-host pair, not a confidence interval or an acceptance result.
+
+| Observation | Baseline | Candidate |
+|---|---:|---:|
+| Backfill including startup/restart | 80.808 s | 58.165 s |
+| Sampled steady backfill | 134.87 rows/s | 185.70 rows/s |
+| Contract | 62.315 s | 94.716 s |
+| V2 overlap read p99 | 44.603 ms | 41.875 ms |
+| V2 overlap write p99 | 56.022 ms | 53.267 ms |
+
+Backfill was 1.39 times faster in this pair. Contract was slower; the measurements
+do not establish an overall rollout speedup. All four original read/write p99
+budget comparisons still failed. The compiler's separate source-discovery phase
+improvement must not be described as a database or whole-build speedup.
+
+The 100,000-row and 1,000,000-row candidate cases each exhausted the explicit
+180-second backfill observation budget. Neither completed migration validation.
+The 10M/100M cases were refused before seeding because the conservative disk
+estimate plus the reserved 2 GiB exceeded available space. These outcomes are
+limits, not passing scale evidence. An extended 100,000-row run was interrupted
+to isolate investigation of a CI queue-test failure; it is not completion evidence.
+
+[The compact measurement evidence](migration-rollout-candidate-measurements.json)
+records executable/compiler hashes, exact source differences, both control and
+migration quantiles, unchanged budget verdicts, raw-result hashes and scale
+refusals. Complete raw observations remain in the review workspace's
+`rollout/restarted-baseline-10k`, `rollout/candidate-10k` and `rollout/candidate-scale`
+artifacts.

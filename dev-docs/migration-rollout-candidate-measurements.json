@@ -1,0 +1,531 @@
+{
+  "version": 1,
+  "baselineCommit": "ae7bb3efe98c85a4d3a916ceca0e45796bfc0ef3",
+  "candidateChange": "transaction-local backfill processing latch, with compiler-generated ABI seal updates",
+  "sourceComparison": [
+    {
+      "program": "v2",
+      "file": "migrations/notes/v2.tesl",
+      "difference": "only compiler ABI fields in from/to seal headers",
+      "normalizedSourceSha256": "dfc6b61f3ddbfc192b4efcd060356fed4ec49a0f5c2dfd399a807539915db951"
+    },
+    {
+      "program": "index2",
+      "file": "migrations/lookup/v2.tesl",
+      "difference": "only compiler ABI fields in from/to seal headers",
+      "normalizedSourceSha256": "3f0e9e59238617c0d836b5cc566cd78c8f77e7ea10106b8c9545809cde1fc3d9"
+    }
+  ],
+  "baselineRuntimeSha256": "e92587eb8f0404b4b4bcc1f05ae2879a338baf09e04ca7966a7fcbfeb2233695",
+  "candidateRuntimeSha256": "765b3b626563dd508e018dba364871b2473d49e57b0f137716157c5a0402527e",
+  "hostLimits": "shared cloud Linux amd64, PostgreSQL 17.11, loopback TCP, one sequential pair; not pinned reference acceptance",
+  "releaseAcceptance": "incomplete",
+  "variants": {
+    "baseline": {
+      "rawResultSha256": "24168fcc34f2f45f1b072ad769e1b17b2f1d5495606766ad8ae889dbe4269134",
+      "compilerSha256": "66226c3fa383aa831901e84e68a113adc410ebce1bb50cefd115aea31cc0d069",
+      "programs": {
+        "v1": {
+          "sha256": "6130c2e91da4733d4cc1a52d0e8a557895fe47e1bfcafdcfad6daaa7206cf7d2",
+          "sourceSha256": {
+            "app.tesl": "afcb8b458b9e6d3d652d62af390c068874df368532963086e334115c5da00284",
+            "schema/notes/v-current.tesl": "1624b8eea428c77c61c31189342a59e62e354e9612e00c26e09d839530696153",
+            "tesl.toml": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        },
+        "plain1": {
+          "sha256": "7df904cc5a8677a11e8df853225060a4306ff31a267ae021ea32b8d37ef1e414",
+          "sourceSha256": {
+            "app.tesl": "4132f3b68a5c143ad924f78e2acec7ea7f0eec219b83d23ebacc557e73f87aa3",
+            "model.tesl": "b7f031022a5ec56655aaeadaf081770ca848ee72f2e049552b42644aa2a9bdac",
+            "tesl.toml": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        },
+        "v2": {
+          "sha256": "2ca2c6cc0b99217322c73cbdd5d8181697817bfb7ed94fbc61e65df8714fa877",
+          "sourceSha256": {
+            "app.tesl": "afcb8b458b9e6d3d652d62af390c068874df368532963086e334115c5da00284",
+            "migrations/notes/v2-contract.tesl": "9c94090e606aae5f1dd9b296a46aa8948c83cc13da80b412dd0830768d53e71b",
+            "migrations/notes/v2.tesl": "6377ba25be982c95914ae9081514054dda4ed40ad91ece334e7d05c174d21b93",
+            "schema/notes/v-current.tesl": "7f3be5e7bfa3a5d072d90093cedd64d6f82574cf2486acc355d0948c023f5fd7",
+            "schema/notes/v1.tesl": "686d922a610b9ef440b9ae959477a83590e9cb53406c14f846c51623313b4a69",
+            "tesl.toml": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        },
+        "plain2": {
+          "sha256": "b696fe1af7e63627c059a85981ae16b50a67f5889f3fca27fcc8689d888f56ae",
+          "sourceSha256": {
+            "app.tesl": "4132f3b68a5c143ad924f78e2acec7ea7f0eec219b83d23ebacc557e73f87aa3",
+            "model.tesl": "718bd1bf679d0c2354e214bf0251980364c1fa88a1552e4e9c2414613290bee9",
+            "tesl.toml": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        },
+        "index1": {
+          "sha256": "519578cfcd416450fb2889573d7ffe4fbcbcb4cf97d49e82e14c2494ad65940d",
+          "sourceSha256": {
+            "app.tesl": "1c32409244939545df238b6321ab6f8e18fbcb72e961d477ebf168f0d96e34bb",
+            "schema/lookup/v-current.tesl": "7874e8a9a4c46bd748cf3f3c892c674484aa5c8f8129d98b8377cdd3096ddc24",
+            "tesl.toml": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        },
+        "index2": {
+          "sha256": "9a5afebe8d178682725e1167ff8ba1980961c99142727c7c5495e7a197898399",
+          "sourceSha256": {
+            "app.tesl": "1c32409244939545df238b6321ab6f8e18fbcb72e961d477ebf168f0d96e34bb",
+            "migrations/lookup/v2.tesl": "093e157f41069f9c0b972d1921cb2ae76a1103ceb25f9416b4c42a9e2c7e5ba4",
+            "schema/lookup/v-current.tesl": "168bddfa1447387106cce34fd77a1b5349f64aa6dd4a07826440ae813af6ebc9",
+            "schema/lookup/v1.tesl": "3cc126d4df162fb6e0c8c737637026f48f1d65201364b01767b6f3d4000c82c5",
+            "tesl.toml": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        }
+      },
+      "rows": 10000,
+      "batchSize": 1000,
+      "backfillSeconds": 80.80835068300075,
+      "steadyBackfill": {
+        "status": "observed",
+        "rows": 9000,
+        "seconds": 66.72879791259766,
+        "rowsPerSecond": 134.87430137417326,
+        "interpretation": "committed progress after startup/restart; sampled endpoints, not completed migration throughput"
+      },
+      "contractSeconds": 62.315267869998934,
+      "summaries": {
+        "control-v2-c2": {
+          "read": {
+            "samples": 4913,
+            "errors": 0,
+            "p50Ns": 650562,
+            "p95Ns": 1457694,
+            "p99Ns": 2046259
+          },
+          "write": {
+            "samples": 4913,
+            "errors": 0,
+            "p50Ns": 1133982,
+            "p95Ns": 2201664,
+            "p99Ns": 3007259
+          }
+        },
+        "control-v1-c2": {
+          "read": {
+            "samples": 4942,
+            "errors": 0,
+            "p50Ns": 651644,
+            "p95Ns": 1379172,
+            "p99Ns": 2009293
+          },
+          "write": {
+            "samples": 4942,
+            "errors": 0,
+            "p50Ns": 1122234,
+            "p95Ns": 2179940,
+            "p99Ns": 2945697
+          }
+        },
+        "control-v2-c8": {
+          "read": {
+            "samples": 5671,
+            "errors": 0,
+            "p50Ns": 2491707,
+            "p95Ns": 7347881,
+            "p99Ns": 11250599
+          },
+          "write": {
+            "samples": 5668,
+            "errors": 0,
+            "p50Ns": 3096945,
+            "p95Ns": 8128596,
+            "p99Ns": 11424086
+          }
+        },
+        "control-v1-c8": {
+          "read": {
+            "samples": 5780,
+            "errors": 0,
+            "p50Ns": 2437960,
+            "p95Ns": 7279509,
+            "p99Ns": 10566160
+          },
+          "write": {
+            "samples": 5774,
+            "errors": 0,
+            "p50Ns": 3055251,
+            "p95Ns": 8288702,
+            "p99Ns": 11540370
+          }
+        },
+        "steady-v1": {
+          "read": {
+            "samples": 4872,
+            "errors": 0,
+            "p50Ns": 3287122,
+            "p95Ns": 5516577,
+            "p99Ns": 6886456
+          },
+          "write": {
+            "samples": 4865,
+            "errors": 0,
+            "p50Ns": 3492001,
+            "p95Ns": 5895389,
+            "p99Ns": 7545029
+          }
+        },
+        "overlap-v2": {
+          "read": {
+            "samples": 11462,
+            "errors": 0,
+            "p50Ns": 18195987,
+            "p95Ns": 37241173,
+            "p99Ns": 44602647
+          },
+          "write": {
+            "samples": 11461,
+            "errors": 0,
+            "p50Ns": 26460636,
+            "p95Ns": 47438303,
+            "p99Ns": 56022195
+          }
+        },
+        "overlap-v1": {
+          "read": {
+            "samples": 42053,
+            "errors": 0,
+            "p50Ns": 6444429,
+            "p95Ns": 20417487,
+            "p99Ns": 27432956
+          },
+          "write": {
+            "samples": 42048,
+            "errors": 0,
+            "p50Ns": 7048941,
+            "p95Ns": 21465009,
+            "p99Ns": 28094584
+          }
+        },
+        "contract-v2": {
+          "read": {
+            "samples": 26129,
+            "errors": 0,
+            "p50Ns": 7683360,
+            "p95Ns": 14007078,
+            "p99Ns": 20491586
+          },
+          "write": {
+            "samples": 26125,
+            "errors": 0,
+            "p50Ns": 10571197,
+            "p95Ns": 18631949,
+            "p99Ns": 26124452
+          }
+        }
+      },
+      "observedBudgets": {
+        "v1": {
+          "read": {
+            "budgetRatio": 0.01,
+            "p99AdditionalRatio": 1.5963032927761835,
+            "observedPassed": false,
+            "verdict": "observed-fail"
+          },
+          "write": {
+            "budgetRatio": 0.05,
+            "p99AdditionalRatio": 1.4344612867698348,
+            "observedPassed": false,
+            "verdict": "observed-fail"
+          }
+        },
+        "v2": {
+          "read": {
+            "budgetRatio": 0.01,
+            "p99AdditionalRatio": 2.964468647402685,
+            "observedPassed": false,
+            "verdict": "observed-fail"
+          },
+          "write": {
+            "budgetRatio": 0.05,
+            "p99AdditionalRatio": 3.90386670758606,
+            "observedPassed": false,
+            "verdict": "observed-fail"
+          }
+        }
+      },
+      "workerRestartedDuringBackfill": true,
+      "allRowValuesVerified": true
+    },
+    "candidate": {
+      "rawResultSha256": "b67dda96a803610c307e788bba2c770a75f6b3f14d814612fb70cf5b16f129dc",
+      "compilerSha256": "4d2d85282b29464b158a895d85f18e4c0d3ad8320af00379fc71190e4b351161",
+      "programs": {
+        "v1": {
+          "sha256": "a2e6c7379cb353027793dfd74ae4dd6ca992bbbb93363960a2389af920caec1b",
+          "sourceSha256": {
+            "app.tesl": "afcb8b458b9e6d3d652d62af390c068874df368532963086e334115c5da00284",
+            "schema/notes/v-current.tesl": "1624b8eea428c77c61c31189342a59e62e354e9612e00c26e09d839530696153",
+            "tesl.toml": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        },
+        "plain1": {
+          "sha256": "f5c606853acf40c7cbe7371a39e3c5d8db99ceb829aa77aa9360470738462012",
+          "sourceSha256": {
+            "app.tesl": "4132f3b68a5c143ad924f78e2acec7ea7f0eec219b83d23ebacc557e73f87aa3",
+            "model.tesl": "b7f031022a5ec56655aaeadaf081770ca848ee72f2e049552b42644aa2a9bdac",
+            "tesl.toml": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        },
+        "v2": {
+          "sha256": "8d40c0a1583d55a816266d4cf0010924c32ba0fff7d77bb88cf314f352fbb0fb",
+          "sourceSha256": {
+            "app.tesl": "afcb8b458b9e6d3d652d62af390c068874df368532963086e334115c5da00284",
+            "migrations/notes/v2-contract.tesl": "9c94090e606aae5f1dd9b296a46aa8948c83cc13da80b412dd0830768d53e71b",
+            "migrations/notes/v2.tesl": "b5416def7c33b27958ad71c305ab0629af1013adc2f75711dd97c805c55ab60a",
+            "schema/notes/v-current.tesl": "7f3be5e7bfa3a5d072d90093cedd64d6f82574cf2486acc355d0948c023f5fd7",
+            "schema/notes/v1.tesl": "686d922a610b9ef440b9ae959477a83590e9cb53406c14f846c51623313b4a69",
+            "tesl.toml": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        },
+        "plain2": {
+          "sha256": "ee8a2bb256d9c88450fecf54bbff84074f668c350501a7ba7b3b92993a126d11",
+          "sourceSha256": {
+            "app.tesl": "4132f3b68a5c143ad924f78e2acec7ea7f0eec219b83d23ebacc557e73f87aa3",
+            "model.tesl": "718bd1bf679d0c2354e214bf0251980364c1fa88a1552e4e9c2414613290bee9",
+            "tesl.toml": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        },
+        "index1": {
+          "sha256": "1a7f66760ef4e3fbadde1ca13bfc842f0c4ee6a04bcc3d7f701999d1a7e38ce4",
+          "sourceSha256": {
+            "app.tesl": "1c32409244939545df238b6321ab6f8e18fbcb72e961d477ebf168f0d96e34bb",
+            "schema/lookup/v-current.tesl": "7874e8a9a4c46bd748cf3f3c892c674484aa5c8f8129d98b8377cdd3096ddc24",
+            "tesl.toml": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        },
+        "index2": {
+          "sha256": "6ab90e150201f482dbda8f1c06bb354f9c3ec5394472bf8b1f2d287643c661e9",
+          "sourceSha256": {
+            "app.tesl": "1c32409244939545df238b6321ab6f8e18fbcb72e961d477ebf168f0d96e34bb",
+            "migrations/lookup/v2.tesl": "e7d3c1a0f18945b49b16cee1e78661531014ab7b2ed51b28e76482c7d6fa37e4",
+            "schema/lookup/v-current.tesl": "168bddfa1447387106cce34fd77a1b5349f64aa6dd4a07826440ae813af6ebc9",
+            "schema/lookup/v1.tesl": "3cc126d4df162fb6e0c8c737637026f48f1d65201364b01767b6f3d4000c82c5",
+            "tesl.toml": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        }
+      },
+      "rows": 10000,
+      "batchSize": 1000,
+      "backfillSeconds": 58.16480732400669,
+      "steadyBackfill": {
+        "status": "observed",
+        "rows": 9000,
+        "seconds": 48.46541094779968,
+        "rowsPerSecond": 185.6994467599495,
+        "interpretation": "committed progress after startup/restart; sampled endpoints, not completed migration throughput"
+      },
+      "contractSeconds": 94.71566679599346,
+      "summaries": {
+        "control-v2-c2": {
+          "read": {
+            "samples": 5184,
+            "errors": 0,
+            "p50Ns": 607678,
+            "p95Ns": 1334295,
+            "p99Ns": 1944417
+          },
+          "write": {
+            "samples": 5184,
+            "errors": 0,
+            "p50Ns": 1077648,
+            "p95Ns": 2132046,
+            "p99Ns": 2923636
+          }
+        },
+        "control-v1-c2": {
+          "read": {
+            "samples": 5192,
+            "errors": 0,
+            "p50Ns": 599887,
+            "p95Ns": 1397551,
+            "p99Ns": 1939941
+          },
+          "write": {
+            "samples": 5191,
+            "errors": 0,
+            "p50Ns": 1069035,
+            "p95Ns": 2144018,
+            "p99Ns": 2863216
+          }
+        },
+        "control-v2-c8": {
+          "read": {
+            "samples": 5897,
+            "errors": 0,
+            "p50Ns": 2419485,
+            "p95Ns": 7224696,
+            "p99Ns": 10513973
+          },
+          "write": {
+            "samples": 5895,
+            "errors": 0,
+            "p50Ns": 3042704,
+            "p95Ns": 7756173,
+            "p99Ns": 11176066
+          }
+        },
+        "control-v1-c8": {
+          "read": {
+            "samples": 6062,
+            "errors": 0,
+            "p50Ns": 2440066,
+            "p95Ns": 7111035,
+            "p99Ns": 10148394
+          },
+          "write": {
+            "samples": 6059,
+            "errors": 0,
+            "p50Ns": 2976767,
+            "p95Ns": 7650529,
+            "p99Ns": 10562496
+          }
+        },
+        "steady-v1": {
+          "read": {
+            "samples": 5225,
+            "errors": 0,
+            "p50Ns": 3115103,
+            "p95Ns": 5266470,
+            "p99Ns": 6632422
+          },
+          "write": {
+            "samples": 5221,
+            "errors": 0,
+            "p50Ns": 3239421,
+            "p95Ns": 5470228,
+            "p99Ns": 6935580
+          }
+        },
+        "overlap-v2": {
+          "read": {
+            "samples": 8886,
+            "errors": 0,
+            "p50Ns": 17483318,
+            "p95Ns": 35079667,
+            "p99Ns": 41874854
+          },
+          "write": {
+            "samples": 8884,
+            "errors": 0,
+            "p50Ns": 24851559,
+            "p95Ns": 44966726,
+            "p99Ns": 53267443
+          }
+        },
+        "overlap-v1": {
+          "read": {
+            "samples": 32439,
+            "errors": 0,
+            "p50Ns": 6219058,
+            "p95Ns": 19409911,
+            "p99Ns": 25915312
+          },
+          "write": {
+            "samples": 32435,
+            "errors": 0,
+            "p50Ns": 6686994,
+            "p95Ns": 20443459,
+            "p99Ns": 26854772
+          }
+        },
+        "contract-v2": {
+          "read": {
+            "samples": 41887,
+            "errors": 0,
+            "p50Ns": 7281172,
+            "p95Ns": 12816197,
+            "p99Ns": 17581732
+          },
+          "write": {
+            "samples": 41882,
+            "errors": 0,
+            "p50Ns": 10066477,
+            "p95Ns": 17228351,
+            "p99Ns": 22319821
+          }
+        }
+      },
+      "observedBudgets": {
+        "v1": {
+          "read": {
+            "budgetRatio": 0.01,
+            "p99AdditionalRatio": 1.553636762624707,
+            "observedPassed": false,
+            "verdict": "observed-fail"
+          },
+          "write": {
+            "budgetRatio": 0.05,
+            "p99AdditionalRatio": 1.5424645841286,
+            "observedPassed": false,
+            "verdict": "observed-fail"
+          }
+        },
+        "v2": {
+          "read": {
+            "budgetRatio": 0.01,
+            "p99AdditionalRatio": 2.9827811998375875,
+            "observedPassed": false,
+            "verdict": "observed-fail"
+          },
+          "write": {
+            "budgetRatio": 0.05,
+            "p99AdditionalRatio": 3.7662069103743665,
+            "observedPassed": false,
+            "verdict": "observed-fail"
+          }
+        }
+      },
+      "workerRestartedDuringBackfill": true,
+      "allRowValuesVerified": true
+    }
+  },
+  "boundedScale": {
+    "rawResultSha256": "2be1b5c269f57f7f568010e44c28e8f8871e219c64f3626952c0a8d341008d4b",
+    "rolloutBudgetSeconds": 180,
+    "cases": [
+      {
+        "rows": 100000,
+        "status": "observation-budget-exhausted",
+        "error": "rollout observation budget expired before backfill completed"
+      },
+      {
+        "rows": 1000000,
+        "status": "observation-budget-exhausted",
+        "error": "rollout observation budget expired before backfill completed"
+      },
+      {
+        "rows": 10000000,
+        "status": "resource-refused",
+        "estimate": {
+          "rows": 10000000,
+          "bytesPerRow": 256,
+          "multiplier": 8,
+          "estimatedPeakBytes": 20480000000,
+          "freeBytes": 21606379520,
+          "reservedBytes": 2147483648,
+          "allowed": false
+        }
+      },
+      {
+        "rows": 100000000,
+        "status": "resource-refused",
+        "estimate": {
+          "rows": 100000000,
+          "bytesPerRow": 256,
+          "multiplier": 8,
+          "estimatedPeakBytes": 204800000000,
+          "freeBytes": 21606379520,
+          "reservedBytes": 2147483648,
+          "allowed": false
+        }
+      }
+    ]
+  }
+}
