@@ -316,7 +316,13 @@ func (f *QueueConversionDBFixture) StartPublicSuccessorWorker(t *testing.T, repa
 		t.Fatal(err)
 	}
 	stop := func() { _ = process.Process.Kill(); _ = process.Wait(); _ = log.Close() }
-	t.Cleanup(stop)
+	t.Cleanup(func() {
+		stop()
+		if t.Failed() {
+			output, _ := os.ReadFile(log.Name())
+			t.Logf("public successor worker output: %s", output)
+		}
+	})
 	deadline := time.Now().Add(30 * time.Second)
 	for {
 		output, err := os.ReadFile(log.Name())

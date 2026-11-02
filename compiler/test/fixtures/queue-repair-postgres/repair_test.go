@@ -1382,15 +1382,27 @@ func TestPostgresPublicQueueWorkerConvertsRetainedPayload(t *testing.T) {
 	stopRepair := f.StartPublicSuccessorWorker(t, true)
 	deadline = time.Now().Add(15 * time.Second)
 	for {
+		// The real Request process also runs queue handlers. It may consume the
+		// repaired job before this query, so assert its durable exact conversion
+		// and completed delivery rather than racing its transient pending state.
 		var repaired int
-		if err := f.Installer.QueryRow(f.Context, "select count(*) from mail.tesl_jobs where id='public-rejected' and schema_version=2 and payload->>'message'='repaired' and status='pending'").Scan(&repaired); err != nil {
+		if err := f.Installer.QueryRow(f.Context, `select count(*) from mail.tesl_row_queue_conversion_receipts r
+ where r.job_id='public-rejected' and r.source_digest=$1 and r.kind='converted'
+ and r.original::jsonb='{"oldText":""}'::jsonb
+ and r.payload='{"message":"repaired","priority":9}'::jsonb
+ and r.resume_status='pending'
+ and not exists(select 1 from mail.tesl_jobs j where j.id=r.job_id)`, finalRepairDigest).Scan(&repaired); err != nil {
 			t.Fatal(err)
 		}
 		if repaired == 1 {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatal("public repaired deployment did not convert original quarantined payload")
+			var state string
+			if err := f.Installer.QueryRow(f.Context, "select json_build_object('job',(select row_to_json(j) from mail.tesl_jobs j where id='public-rejected'),'receipts',(select json_agg(row_to_json(r)) from mail.tesl_row_queue_conversion_receipts r where job_id='public-rejected'))::text").Scan(&state); err != nil {
+				t.Fatal(err)
+			}
+			t.Fatalf("public repaired deployment did not preserve its exact conversion receipt and complete delivery: %s", state)
 		}
 		time.Sleep(25 * time.Millisecond)
 	}
