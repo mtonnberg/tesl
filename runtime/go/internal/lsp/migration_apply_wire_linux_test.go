@@ -248,7 +248,7 @@ func TestMigrationApplicationCheckedBarriersThroughJSONRPC(t *testing.T) {
 			}
 			if scenario == "partial refusal" || strings.HasPrefix(scenario, "inverse ") {
 				inverse := client.next()
-				restored := []document{}
+				var restored []document
 				ack := json.RawMessage(`{"applied":true}`)
 				if scenario == "inverse user edit" {
 					changed := client.docs[doc.URI]

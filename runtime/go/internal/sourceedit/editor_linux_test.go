@@ -126,7 +126,7 @@ func TestEditorRestorationRetainsDependenciesAfterBufferAutoSave(t *testing.T) {
 func TestEditorAbortAndPreparedRecoveryRetainDependenciesAfterEarlyBufferSave(t *testing.T) {
 	m, documents := editorTransactionFixture(t)
 	editor, _, err := m.PrepareEditor(context.Background(), documents)
-	if err != nil {
+	if err != nil || editor == nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = editor.Close() })
@@ -487,7 +487,7 @@ func TestEditorClosedPublicationWaitsForClientObservation(t *testing.T) {
 			documents := []EditorDocument{{Path: entry, Version: 9, Source: string(source)}}
 			m := editorCompilerPreview(t, root, documents, false).Manifest()
 			editor, _, err := m.PrepareEditor(context.Background(), documents)
-			if err != nil {
+			if err != nil || editor == nil {
 				t.Fatal(err)
 			}
 			t.Cleanup(func() { _ = editor.Close() })
