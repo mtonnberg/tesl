@@ -7,6 +7,7 @@ set -euo pipefail
 repo_root="$(CDPATH='' cd -- "$(dirname "$0")/.." && pwd)"
 python3 "$repo_root/scripts/check-migration-pr.py"
 python3 -m unittest discover -s "$repo_root/scripts" -p 'test_migration_pr.py'
+python3 -m unittest discover -s "$repo_root/scripts" -p 'test_migration_go_cache.py'
 required_tools=(initdb pg_ctl go python3 dune timeout tee git tar psql)
 if [[ ${TESL_MIGRATION_TEST_POOLERS:-0} == 1 ]]; then required_tools+=(pgbouncer); fi
 if [[ ${TESL_MIGRATION_TEST_CLUSTER_CRASH:-0} == 1 ]]; then required_tools+=(pg_basebackup); fi
@@ -63,6 +64,11 @@ run_phase() {
   shift 2
   printf '\nMigration phase: %s (outer limit %ss)\n' "$name" "$budget"
   timeout --kill-after=30s "${budget}s" "$@" 2>&1 | tee "$evidence/$name.log" || result=$?
+  # This phase and its Go children have exited. Keep the warmed dependency
+  # artifacts, but do not accumulate every generated application's packages.
+  if (( result == 0 )); then
+    python3 "$repo_root/scripts/migration-go-cache.py" prune "$GOCACHE" | tee -a "$evidence/go-cache.log" || result=$?
+  fi
   printf '%s\t%s\t%s\n' "$name" "$((SECONDS - started))" "$result" >>"$evidence/phases.tsv"
   return "$result"
 }
@@ -79,6 +85,19 @@ runtime_test() {
   run_phase "$name" "$((budget + 60))" go -C "$repo_root/runtime/go" test \
     -race -count=1 "-timeout=${budget}s" -tags=tesl_migration_test ./teslrt -run "$pattern"
 }
+# Own this cache rather than filling or pruning the caller's shared GOCACHE.
+# Generated modules have distinct source paths and package contents; Go's normal
+# multi-day cache retention otherwise accumulates gigabytes across these phases.
+export GOCACHE="$migration_tmp/go-build-cache"
+mkdir -p "$GOCACHE"
+# Warm ordinary and race-instrumented standard-library/third-party dependencies
+# once. This only prepares artifacts; all actual test phases still run below.
+for instrumentation in normal race; do
+  warm_flags=()
+  if [[ "$instrumentation" == race ]]; then warm_flags=(-race); fi
+  timeout --kill-after=30s 1800 go -C "$repo_root/runtime/go" list -test -export -deps -tags=tesl_migration_test "${warm_flags[@]}" ./teslrt >"$evidence/go-cache-warm-$instrumentation.log"
+done
+python3 "$repo_root/scripts/migration-go-cache.py" seed "$GOCACHE" | tee "$evidence/go-cache.log"
 run_phase compiler-build 1800 dune build --root "$repo_root/compiler" -j "${TESL_CI_JOBS:-2}"
 # This package builds and runs both the archived rolling releases and the full
 # V1–V13 transforming application. Keep individual scenario deadlines intact,

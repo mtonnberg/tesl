@@ -97,7 +97,13 @@ reproducible seed in its subtest name and prints the failing operation prefix.
 CI sets `TESL_MIGRATION_TEST_POSTGRES_MAJOR` and checks the connected server's
 actual major before creating fixtures, including the separately owned clusters.
 Run the full compiler suite and this harness sequentially on machines with
-limited disk bandwidth or cache space.
+limited disk bandwidth or cache space. The runner owns a fresh Go build cache,
+warms ordinary and race-instrumented runtime/test dependencies once, and removes
+additional generated-module cache entries after each successful phase. It never
+prunes the caller's cache or removes files while a phase is running. Retained
+`go-cache.log` measurements show the warmed size, reclaimed bytes and free disk
+space. Individual phases still need enough space for their own builds; this
+prevents accumulation across the full gate, rather than imposing a live size cap.
 
 ## What the independent comparisons establish
 
