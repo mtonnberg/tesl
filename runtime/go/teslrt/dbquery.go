@@ -207,7 +207,7 @@ func DbUpdateReturnOne[Row any](database *Database, table *Table[Row], match fun
 // trap — the same message the Memory table raises.
 func pgUpdateReturnOne[Row any](db *PostgresDB, plan PgPlan,
 	scan func(pgx.CollectableRow) (Row, error)) []Row {
-	updated := PgQueryPlan(db, plan, scan)
+	updated := PgWriteQueryPlan(db, plan, scan)
 	if len(updated) == 0 && plan.Probe != "" {
 		matched, exact := PgCount(db, plan.Probe, plan.probeArguments()).Int64()
 		if exact && matched > 1 {

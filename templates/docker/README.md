@@ -34,6 +34,20 @@ Both template names use an external PostgreSQL service through the standard
 not packaged in the image; `Dockerfile.all-in-one.tmpl` is retained as a legacy
 name. Use `tesl db` or a separate PostgreSQL container.
 
+For checked Worker-topology histories, `compose.worker.yml.example` and
+`deploy-worker.sh` provide a drained rollout using the same latest image:
+
+```sh
+TESL_IMAGE=myorg/my-app:RELEASE_COMMIT sh deploy-worker.sh compose.worker.yml
+```
+
+Copy the Compose example to `compose.worker.yml` and provide `.env.deploy`,
+`.env.worker` and `.env.request`. The deployment job gets Worker configuration and
+`TESL_SCHEMA_INSTALLER_DSN`; each long-running service gets only its own credential
+scope. `--schema deploy` finishes installation, staging, catch-up and reviewed
+target finality. Its successful exit gates service startup. See
+[the deployment guide](../../manual/deploy.md#automatic-migration-job-worker-topology).
+
 ## Build
 
 ```sh

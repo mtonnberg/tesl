@@ -311,6 +311,37 @@ let t_project_type_ambiguity_and_exports () =
       Alcotest.(check (list string)) "explicit choices without private/unresolvable modules"
         ["Left"; "Right"] (List.map (fun item -> Option.get item.ci_module) items))
 
+let migration_prefix = header ^ "import Tesl.Migration exposing [Migration, Entity(..), Rule(..), Same(..)]\nimport Schema.Notes.V1\nimport Schema.Notes.VCurrent\n"
+
+let t_migration_fields () =
+  let input = migration_prefix ^ "migration = Migration {\n  sam<cursor>\n}\n" in
+  let item = find "same" input in
+  let source, _, _ = marked input in
+  check_contains "same: " (apply source item);
+  check_contains "changed proof predicates" (Option.get item.ci_documentation);
+  absent "Tesl.Migration" input
+
+let t_migration_proof_help () =
+  let input = migration_prefix ^ "migration = Migration {\n  same: [Sa<cursor>]\n}\n" in
+  let item = find "Same" input in
+  check_contains "Equal names or storage types are insufficient" (Option.get item.ci_documentation);
+  let source, _, _ = marked input in
+  check_contains "same: [Same]" (apply source item);
+  absent "Tesl.String" input
+
+let t_migration_rules () =
+  let input = migration_prefix ^ "migration = Migration {\n  entities: { Todo: Derived [Rev<cursor>] }\n}\n" in
+  let item = find "Revalidate" input in
+  check_contains "Old values can reject" (Option.get item.ci_documentation);
+  Alcotest.(check bool) "no guessed import" true (item.ci_import_fix = None)
+
+let t_migration_context_ends () =
+  let input = migration_prefix ^ "migration = Migration { same: [], entities: {} }\nfn helper() -> Int = String.le<cursor>\n" in
+  ignore (find "String.length" input);
+  absent "Revalidate" input;
+  absent "Same" (migration_prefix ^ "# migration = Migration { same: [Sa<cursor>]\n");
+  absent "Same" (migration_prefix ^ "fn text() -> String = \"migration = Migration { same: [Sa<cursor>]\"\n")
+
 let () = Alcotest.run "Completion" ["discovery", List.map (fun (name, test) ->
   Alcotest.test_case name `Quick test) [
   "module names", t_modules; "exposing list", t_import_export;
@@ -337,4 +368,7 @@ let () = Alcotest.run "Completion" ["discovery", List.map (fun (name, test) ->
   "project type auto-import checks", t_project_type_auto_import;
   "project type wins over stdlib", t_imported_project_type_wins;
   "ambiguous project types retain module choices", t_project_type_ambiguity_and_exports;
+  "migration fields after imports", t_migration_fields;
+  "migration proof guidance", t_migration_proof_help; "migration rules", t_migration_rules;
+  "migration context ends", t_migration_context_ends;
   "agent JSON metadata", t_json_metadata]]

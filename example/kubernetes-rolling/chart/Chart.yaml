@@ -1,0 +1,5 @@
+apiVersion: v2
+name: rolling-demo
+description: Local disposable Tesl rolling-migration demonstration
+type: application
+version: 0.1.0

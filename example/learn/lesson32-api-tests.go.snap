@@ -68,6 +68,8 @@ var Lesson32DatabaseDatabase = teslrt.NewDatabase(
 	},
 )
 
+var _ = teslrt.RegisterDatabaseIdentity("teslmodlesson32apitests.Lesson32Database", Lesson32DatabaseDatabase)
+
 //line lesson32-api-tests.tesl:59
 func echo(req EchoRequest) EchoRequest {
 //line lesson32-api-tests.tesl:60

@@ -149,11 +149,12 @@ let rec content_title (fix : t) : string =
     intent-bearing title.  Kept as data so test/test_fix_titles.ml can assert it
     stays complete as new fixes are added. *)
 let titled_codes = [ "W010"; "W011"; "W050"; "T001"; "E000"; "E002";
-                     "VBOOL001"; "VBOOL002" ]
+                     "VBOOL001"; "VBOOL002"; "MIG015" ]
 
 (** The user-facing code-action title for [fix], reported under [code]. *)
 let title ~(code : string) (fix : t) : string =
   match code, fix with
+  | "MIG015", _ -> "Use VCurrent for this schema import and its qualified references"
   (* ── Linter formatting fixes: the code IS the intent. ── *)
   | "W010", _ -> "Remove trailing whitespace"
   | "W011", _ -> "Re-indent to a multiple of 2 spaces"

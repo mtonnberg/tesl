@@ -61,9 +61,10 @@ let assert_clean ~ctx src =
 (* ── The reject matrix ────────────────────────────────────────────────────── *)
 
 let import_for = function
-  | "Database" | "Postgres" | "Memory" ->
+  | "Database" | "Postgres" | "Memory" | "MigrationConfig" | "MigrationTopology" | "Worker" | "Embedded" ->
     "import Tesl.Database exposing [Database, DatabaseBackend, Postgres, \
-     Memory, PostgresConfig, PostgresConnection, TcpConnection, SocketConnection]"
+     Memory, PostgresConfig, MigrationConfig, PostgresConnection, TcpConnection, SocketConnection, \
+     MigrationTopology, Worker, Embedded]"
   | "Queue" | "Job" ->
     "import Tesl.Queue exposing [Queue, QueueRetryStrategy, Exponential, \
      Fixed, Linear, Job]"
@@ -77,10 +78,13 @@ let import_for = function
 
 (* The category-specific message fragment each rejected name must produce. *)
 let expected_fragment = function
-  | "Database" | "Queue" | "Job" | "App" | "SmtpConfig" | "SseChannel" ->
+  | "Database" | "MigrationConfig" | "Queue" | "Job" | "App" | "SmtpConfig" | "SseChannel" ->
     "is a config-only stdlib name"
   | "Postgres" | "Memory" ->
     "is a config-block constructor (of `DatabaseBackend`)"
+  | "Worker" | "Embedded" ->
+    "is a config-block constructor (of `MigrationTopology`)"
+  | "MigrationTopology" -> "is a config-block type consumed at compile time"
   | "Utc" | "EuropeStockholm" ->
     "is a `TimeZone` constructor, not a type"
   | "Usd" ->
@@ -106,8 +110,8 @@ let positions name = [
 ]
 
 let reject_names =
-  [ "Database"; "Postgres"; "Memory"; "Queue"; "Job"; "App"; "SmtpConfig";
-    "SseChannel"; "Utc"; "EuropeStockholm"; "Usd" ]
+  [ "Database"; "MigrationConfig"; "Postgres"; "Memory"; "Queue"; "Job"; "App"; "SmtpConfig";
+    "SseChannel"; "Utc"; "EuropeStockholm"; "Usd"; "MigrationTopology"; "Worker"; "Embedded" ]
 
 let test_reject_matrix () =
   List.iter (fun name ->
@@ -314,10 +318,13 @@ module SS = Set.Make (String)
 (* The exact literal that lived in the retired emit_racket.ml before the refactor to
    {!Stdlib_config_names} (2026-07-09).  test_stdlib_runtime_binding.ml keys
    the runtime provide-existence seam off this set, so the refactored value
-   must stay set-identical. *)
+   must stay set-identical after the explicitly reviewed migration additions
+   below. New runtime-bearing constructors must not be suppressed accidentally. *)
 let pre_refactor_literal =
-  [ "Database"; "DatabaseBackend"; "Postgres"; "Memory"; "PostgresConfig";
+  [ "Database"; "DatabaseBackend"; "Postgres"; "Memory"; "PostgresConfig"; "MigrationConfig";
     "PostgresConnection"; "TcpConnection"; "SocketConnection";
+    (* Versioned migration topology is likewise consumed as declaration configuration. *)
+    "MigrationTopology"; "Worker"; "Embedded";
     "Queue"; "QueueRetryStrategy"; "QueueRetryConfig"; "QueueRetryBackoff";
     "Exponential"; "Fixed"; "Linear";
     "Email"; "SmtpConfig"; "SseChannel"; "App"; "Job"; "Cache";
@@ -331,6 +338,11 @@ let pre_refactor_literal =
     "SsoConnection"; "SsoSubjectKey"; "SsoIdentity";
     (* Phase 4: the SsoProvider type + its inline-lowered value constructors. *)
     "SsoProvider"; "Github"; "Google" ]
+  @ ["Migration"; "Entity"; "Rule"; "Same"; "Additive"; "Derived"; "Migrate"; "New"; "Drop"; "Default"; "Rename"]
+  @ ["Column"; "Contract"; "Index"; "Legacy"; "LegacyWith"; "NotNull"; "QueueRepair";
+      "Retype"; "Revalidate"; "Storage"; "Table"; "Tighten"; "Trigger"; "WriteBack"]
+  (* Reviewed source-only queue-removal and staged-promotion decisions. *)
+  @ ["RemoveEmpty"; "Promote"; "PromoteStage"]
   @ Tz_zones.ctor_names
   @ Currencies.ctor_names
   @ List.map fst Units_catalog.aliases

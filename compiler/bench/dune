@@ -1,0 +1,4 @@
+(executable
+ (name migration_source_discovery)
+ (modules migration_source_discovery)
+ (libraries tesl_compiler_lib unix))

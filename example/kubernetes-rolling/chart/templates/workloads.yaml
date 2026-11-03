@@ -1,0 +1,88 @@
+{{- if or (eq .Values.mode "migrator") (eq .Values.mode "app") }}
+{{- $worker := eq .Values.mode "migrator" }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ .Release.Name }}-runtime
+type: Opaque
+stringData:
+  {{- include "demo.env" (dict "root" . "role" (ternary "worker" "request" $worker)) | nindent 2 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}
+spec:
+  replicas: {{ ternary 1 2 $worker }}
+  minReadySeconds: 2
+  progressDeadlineSeconds: 540
+  strategy:
+    {{- if $worker }}
+    type: Recreate
+    {{- else }}
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+    {{- end }}
+  selector:
+    matchLabels:
+      app: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app: {{ .Release.Name }}
+      annotations:
+        demo.tesl/revision: {{ .Values.revision | quote }}
+        demo.tesl/schema-version: {{ .Values.schemaVersion | quote }}
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 40
+      containers:
+        - name: {{ .Values.mode }}
+          image: {{ .Values.image | quote }}
+          imagePullPolicy: IfNotPresent
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+          command: [{{ ternary "/worker.sh" "/app" $worker | quote }}]
+          envFrom:
+            - secretRef:
+                name: {{ .Release.Name }}-runtime
+          {{- if $worker }}
+          readinessProbe:
+            exec:
+              command: [/worker.sh, --ready]
+            periodSeconds: 2
+          {{- else }}
+          ports:
+            - containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            periodSeconds: 2
+          lifecycle:
+            preStop:
+              exec:
+                command: [sh, -c, sleep 5]
+          {{- end }}
+{{- if not $worker }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}
+spec:
+  type: NodePort
+  selector:
+    app: {{ .Release.Name }}
+  ports:
+    - port: 8080
+      targetPort: 8080
+      nodePort: {{ .Values.nodePort }}
+{{- end }}
+{{- end }}

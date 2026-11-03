@@ -59,6 +59,10 @@ let lowered_forms : string list = [
      than a KConfig/KType row: the name is a BLOCK head the desugarer rewrites,
      not a value you can pass. *)
   "cache"; "Email.send"; "startEmailWorker"; "humanActions"; "serverTools";
+  (* Queue.jobs is checked contextually: the first argument is a record TYPE,
+     followed by regular/dead worker bindings. Job cannot inhabit a value scheme
+     or escape its declaration; test_import_gated_ctors pins that boundary. *)
+  "Job";
   (* Tesl.Json codecs are lowered INLINE (emit_requires skips the module
      wholesale — see test_stdlib_runtime_binding.ml's inline_modules). *)
   "stringCodec"; "intCodec"; "int32Codec"; "boolCodec"; "floatCodec";

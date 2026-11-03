@@ -54,6 +54,8 @@ var AppDBDatabase = teslrt.NewDatabase(
 	[]teslrt.PostgresTable{},
 )
 
+var _ = teslrt.RegisterDatabaseIdentity("teslmodlesson60email.AppDB", AppDBDatabase)
+
 //line lesson60-email.tesl:104
 func SendWelcomeEmail(recipientAddr string, firstName string) struct{} {
 //line lesson60-email.tesl:106

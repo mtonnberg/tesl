@@ -1,0 +1,5 @@
+module Schema.Notes.V1 exposing [Note, tryTitle]
+import Tesl.Prelude exposing [String]
+import Tesl.Maybe exposing [Maybe(..)]
+fn tryTitle(value: String) -> Maybe String = Something value
+entity Note table "notes" primaryKey id { id: String, title: String, memo: String }

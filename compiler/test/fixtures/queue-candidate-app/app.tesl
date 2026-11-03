@@ -1,0 +1,58 @@
+module App exposing [NotifyRequest, AuditRequest, notify, audit, handleNotify, handleAudit, deadAudit]
+import Tesl.Prelude exposing [String]
+import Tesl.Database exposing [Database, Postgres, PostgresConfig, MigrationConfig, TcpConnection, Worker]
+import Tesl.DB exposing [dbWrite]
+import Tesl.App exposing [App]
+import Tesl.Queue exposing [Queue, Job, QueueRetryStrategy, Fixed, FromQueue, FromDeadQueue, queueRead, queueWrite]
+import Tesl.Maybe exposing [Maybe(..)]
+import Schema.Tasks.VCurrent exposing [Receipt, Notify, Audit]
+import Schema.Tasks.VCurrent.Detail
+
+database Store = Database {
+  schema: Schema.Tasks.VCurrent
+  migrations: Schema.Tasks.Migrate
+  backend: Postgres (PostgresConfig { dbName: "provided-by-test-bridge", user: "provided-by-test-bridge", password: "", namespace: "queued_app", migrations: MigrationConfig { topology: Worker },
+    connection: TcpConnection { host: "127.0.0.1", port: 1 } })
+}
+record NotifyRequest { id: String, message: String }
+record AuditRequest { id: String, message: String }
+handler post notify(body: NotifyRequest) -> String requires [queueWrite] =
+  transaction {
+    let checked = check Schema.Tasks.VCurrent.Detail.nonEmpty body.message
+    enqueue Notify { id: body.id, detail: Schema.Tasks.VCurrent.Detail.Content { text: checked } }
+    if body.id == "rollback-enqueue" then
+      fail 409 "cancelled after enqueue"
+    else
+      "queued notify"
+  }
+handler post audit(body: AuditRequest) -> String requires [queueWrite] =
+  enqueue Audit { id: body.id, message: body.message }
+  "queued audit"
+worker handleNotify(job: Notify ::: FromQueue (Id == jobId) job)
+  requires [queueRead, dbWrite Receipt] =
+  let _ = insert Receipt { id: job.id, label: job.detail.text }
+  job
+worker handleAudit(job: Audit ::: FromQueue (Id == jobId) job)
+  requires [queueRead, dbWrite Receipt] =
+  if job.message == "fail" then
+    fail 503 "retry this audit"
+  else
+    let _ = insert Receipt { id: job.id, label: job.message }
+    job
+deadWorker deadAudit(job: Audit ::: FromDeadQueue (Id == jobId) job)
+  requires [queueRead, dbWrite Receipt] =
+  let _ = insert Receipt { id: "dead-" ++ job.id, label: job.message }
+  job
+queue Tasks requires [queueRead, dbWrite Receipt] = Queue {
+  database: Store
+  schema: Schema.Tasks.VCurrent.Notifications
+  jobs: [Job Notify handleNotify Nothing, Job Audit handleAudit (Something deadAudit)]
+  retry: QueueRetryStrategy { maxAttempts: 2, backoff: Fixed, initialDelay: 0 }
+}
+api Routes {
+  post "/notify" body body: NotifyRequest -> String
+  post "/audit" body body: AuditRequest -> String
+}
+server Web for Routes { notify, audit }
+main() -> App requires [queueRead, queueWrite, dbWrite Receipt] =
+  App { database: Store, queues: [Tasks], api: Web }

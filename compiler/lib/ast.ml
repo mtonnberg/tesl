@@ -58,6 +58,7 @@ type field_def = {
   type_expr : type_expr;
   proof_ann : proof_expr option;
   db_type   : string option;   (** @db(type) override *)
+  db_column : string option;   (** Compiler-owned @column("field__vN") storage identity. *)
   loc       : loc;
 }
 
@@ -83,6 +84,14 @@ type return_spec =
                          (** -> Dict K V ::: ForAllKeys Proof *)
   | RetExists     of { binding : binding; body : return_spec; loc : loc }
                      (** -> exists name: T => Body *)
+
+(** The value-carrying optional establish form. Other wrappers and unannotated
+    Maybe values do not introduce evidence through this boundary. *)
+let optional_attached_proof_return = function
+  | RetMaybeAttached {outer_ty=None; binding={proof_ann=Some _; _}; _} -> true
+  | RetMaybeAttached _ | RetPlain _ | RetAttached _ | RetNamedPack _ | RetForAll _
+  | RetMaybeForAll _ | RetSetForAll _ | RetMaybeSetForAll _ | RetForAllDictValues _
+  | RetForAllDictKeys _ | RetExists _ -> false
 
 (* ─── Expressions ────────────────────────────────────────────────────────── *)
 
@@ -380,6 +389,8 @@ type record_form = {
     already lives.  [ix_name] is the explicit `as` override; when [None] the
     runtime derives the name from the table and column names. *)
 type entity_index = {
+  (** Preparatory obligation only. A staged index MUST have ix_unique=false. *)
+  ix_staging : bool;
   ix_unique : bool;
   ix_fields : string list;
   ix_name   : string option;
@@ -466,6 +477,12 @@ type database_form = {
 }
 
 (* ─── Queue / sseChannel / workers ─────────────────────────────────────────── *)
+
+type queue_schema_form = {
+  name : string;
+  jobs : (string * loc) list;
+  loc : loc;
+}
 
 type queue_form = {
   name             : string;
@@ -862,6 +879,7 @@ type top_decl =
   | DDatabase   of database_form
   | DCapability of capability_form
   | DConst      of const_form
+  | DQueueSchema of queue_schema_form
   | DQueue      of queue_form
   | DChannel    of channel_form
   | DWorkers    of workers_form
@@ -888,6 +906,7 @@ let top_decl_loc (decl : top_decl) : loc =
   | DDatabase d -> d.loc
   | DCapability c -> c.loc
   | DConst c -> c.loc
+  | DQueueSchema q -> q.loc
   | DQueue q -> q.loc
   | DChannel c -> c.loc
   | DWorkers w -> w.loc

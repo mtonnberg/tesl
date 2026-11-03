@@ -1,0 +1,16 @@
+mode: database
+image: tesl-rolling:v1
+revision: 1
+schemaVersion: 1
+database:
+  host: rolling-database
+  name: rolling_demo
+  image: postgres:17-alpine
+  # Public LOCAL DEMO credentials, deliberately not production secrets.
+  installerPassword: demo_postgres
+  workerPassword: demo_worker
+  requestPassword: demo_request
+# Roles are fixed: postgres (admin Installer), demo_owner (NOLOGIN),
+# demo_worker and demo_request (isolated LOGIN, no memberships).
+nodePort: 30080
+queueVisibilityTimeoutMs: 1000

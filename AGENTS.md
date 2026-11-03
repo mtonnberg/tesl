@@ -224,4 +224,33 @@ Tesl has a very powerful proof system, make sure to leverage that when coding. T
 
 ## Communication style
 
-Be very crisp, concise and precise but helpful and constructive. Avoid fluff and go directly to the point. Use BLUF where appropiate (Bottom Line Up Front). If a user do not seem to understand, be a bit more verbose and use tables to clearly make different options clear and understandable.
+Be concise, precise, helpful and constructive. Start with the direct answer, then
+explain what actually happens. Do not turn a simple mechanism into an abstract
+architectural explanation.
+
+- Name the concrete things being changed: tables, columns, rows, PostgreSQL
+  functions, connections, processes, pods and commands.
+- Explain technical terms before relying on them. Phrases such as "protected
+  control objects", "authority", "finality" and "orchestration" are not substitutes
+  for describing the operation and its permissions.
+- Separate requirements from implementation choices. Two database roles do not
+  necessarily require two commands or two containers. Say which part is required
+  and which part could be simplified.
+- Distinguish a compiled binary from a running process, an HTTP server from a
+  background worker, and a one-off job from a long-running service.
+- State security and verification claims narrowly. Closing a privileged connection
+  is different from removing access to its credentials; a passing test is different
+  from a general proof. Explain the actual guarantee without overstating it.
+- If the user is confused, use a concrete example or a small table. Do not repeat
+  the same abstract explanation at greater length or add a long apology.
+
+Example from the migration-command discussion:
+
+Avoid: "The Installer establishes protected control authority; the Worker executes
+authorized transitions and establishes finality."
+
+Prefer: "The Installer creates Tesl's bookkeeping tables and functions and records
+which migrations may run. The Worker adds or changes your application columns and
+converts stored rows or queued jobs. They use different database credentials, but
+one command can run them in sequence. The Installer connection closes before the
+long-running Worker starts. That Worker does not serve HTTP."

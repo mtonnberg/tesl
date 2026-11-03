@@ -1,0 +1,28 @@
+# tesl:frozen-migration:v1 Schema.Todo.Migrate.V2
+# tesl:frozen-source Schema.Todo.Migrate.V2 b2653405185256b0291addfa89e9e1b5a82cb3bb6338b45b8ba7567317d1bf46
+# tesl:frozen-migration:end
+# tesl:migration-history:v1
+# tesl:migration-from
+# tesl:snapshot-seal:v3 Schema.Todo.V1 7465736c2d736f757263652d6162692d76313a62666432396139346336616134346330643336393161373433373738373562373234393132323537323730663064613232646437643866373363636566663066 tesl-stored-value-v1:9b265343069c361d3879d623b69de5081f934ec0f2f8826dc0efeda951384a30 348f5213bab2981f19eb77bf6d799e0b00bc4135a0cc5f661fd1f23ecc9671ea queue-inventory-v1
+# tesl:snapshot-source Schema.Todo.V1 33c8c1cdae268b2c6fa7f1c940920aadf478e9d38b9042786707f069ffcea07b
+# tesl:snapshot-end
+# tesl:migration-to
+# tesl:snapshot-seal:v3 Schema.Todo.V2 7465736c2d736f757263652d6162692d76313a62666432396139346336616134346330643336393161373433373738373562373234393132323537323730663064613232646437643866373363636566663066 tesl-stored-value-v1:9b265343069c361d3879d623b69de5081f934ec0f2f8826dc0efeda951384a30 616eb0c96d8d39a585a205ecf05d6c9f31be0b0e357d6adfd630bf2d3ff27593 queue-inventory-v1
+# tesl:snapshot-source Schema.Todo.V2 3af614e435cbd6bcae30e9a1c2c5ad10843fa9355a66b94e804b5a439b1e34cb
+# tesl:snapshot-end
+# tesl:migration-history:end
+module Schema.Todo.Migrate.V2 exposing [migration]
+import Tesl.Migration exposing [Migration, Entity(..), Rule(..), Same(..)]
+import Schema.Todo.V1
+import Schema.Todo.V2
+
+migration = Migration {
+  from: Schema.Todo.V1
+  to: Schema.Todo.V2
+  same: [
+    Same Schema.Todo.V1.ValidTitle Schema.Todo.V2.ValidTitle # @tesl-gen same:ValidTitle 84f60cf0a2ca6ec87f9ffa0e47962271a15570bc1403397caa6d13e709efc1c8
+  ]
+  entities: {
+    "Todo": Additive [], # @tesl-gen entity:Todo 3b63e7cd694eb5b717b01e7b7851f03ae0f4ac22292411c77effcf71db067501
+  }
+}

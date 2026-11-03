@@ -1,0 +1,425 @@
+package teslrt
+
+import (
+	"context"
+	"fmt"
+	"sort"
+	"strings"
+	"sync"
+
+	"github.com/jackc/pgx/v5"
+)
+
+// Registration transactions never hold a database lock while taking a queue
+// codec lock: QueueSourceCodecs acquires these in the opposite order. All local
+// registration writers join this lock; validation can inspect their immutable
+// snapshots, then publish every closure only after the whole batch succeeds.
+var pgMigrationRegistrations sync.Mutex
+var pgMigrationClosedFamilies = map[string]bool{} // guarded by the registration transaction
+
+type pgMigrationFacility struct{ kind, name string }
+
+func pgMigrationQueueStorageError(database string) error {
+	return fmt.Errorf("database %q: Embedded migration topology does not yet support versioned queues; protected storage and version-aware dispatch are not implemented", database)
+}
+
+func pgMigrationFacilitiesError(database string, facilities []pgMigrationFacility) error {
+	labels := make([]string, 0, len(facilities))
+	for _, facility := range facilities {
+		label := facility.kind
+		if facility.name != "" {
+			label += " " + fmt.Sprintf("%q", facility.name)
+		}
+		labels = append(labels, label)
+	}
+	sort.Strings(labels)
+	return fmt.Errorf("database %q: Worker migration topology does not yet support durable %s; protected runtime storage is not implemented",
+		database, strings.Join(labels, ", "))
+}
+
+// Register declarations independently of history-link order. Construction remains
+// usable by ordinary in-memory tests and schema status. Worker capability
+// refusal and App registration closure both happen before connection startup.
+func pgRegisterMigrationFacility(database *Database, kind, name string) {
+	if database == nil {
+		return
+	}
+	pgMigrationRegistrations.Lock()
+	defer pgMigrationRegistrations.Unlock()
+	facility := pgMigrationFacility{kind, name}
+	database.mutex.Lock()
+	defer database.mutex.Unlock()
+	if database.applicationPreflightClosed {
+		panic(fmt.Errorf("database %q: application startup declarations are closed", database.Name))
+	}
+	if database.migrationFacilitiesClosed {
+		panic(pgMigrationFacilitiesError(database.Name, []pgMigrationFacility{facility}))
+	}
+	if database.migrationFacilities == nil {
+		database.migrationFacilities = make(map[pgMigrationFacility]struct{})
+	}
+	database.migrationFacilities[facility] = struct{}{}
+}
+
+// Retain every actual queue, including duplicate names or queues whose codec
+// registration has not completed. A name-only facility set cannot prove that
+// every backend was checked and sealed. This runs before listener registration.
+func pgRegisterMigrationQueue(database *Database, queue *Queue) {
+	if database == nil {
+		return
+	}
+	pgMigrationRegistrations.Lock()
+	defer pgMigrationRegistrations.Unlock()
+	database.mutex.Lock()
+	defer database.mutex.Unlock()
+	if database.applicationPreflightClosed || database.migrationFacilitiesClosed {
+		panic(fmt.Errorf("database %q: application startup declarations are closed", database.Name))
+	}
+	if database.migrationQueues == nil {
+		database.migrationQueues = map[*Queue]struct{}{}
+	}
+	database.migrationQueues[queue] = struct{}{}
+}
+
+// This is a local capability restriction, not a persisted footprint or proof
+// that old binaries cannot use durable facilities. Worker row queues, artifact
+// caches, email and SSE have checked storage; other facilities remain refused.
+// Closing registration and inspecting declarations share one lock: a constructor
+// racing with preflight either makes preflight refuse or itself refuses before
+// creating a backend. Neither side can introduce a facility after validation.
+func pgVerifyMigrationFacilities(database *Database) error {
+	pgMigrationRegistrations.Lock()
+	defer pgMigrationRegistrations.Unlock()
+	closeRegistration, err := pgCheckMigrationFacilities(database)
+	if err == nil && closeRegistration {
+		database.mutex.Lock()
+		database.migrationFacilitiesClosed = true
+		database.mutex.Unlock()
+	}
+	return err
+}
+
+// Called inside the registration transaction. This phase never mutates state.
+func pgCheckMigrationFacilities(database *Database) (bool, error) {
+	if database == nil {
+		return false, nil
+	}
+	database.mutex.RLock()
+	history := database.migrationHistory
+	config := database.Config
+	facilities := make([]pgMigrationFacility, 0, len(database.migrationFacilities))
+	for facility := range database.migrationFacilities {
+		facilities = append(facilities, facility)
+	}
+	database.mutex.RUnlock()
+	if history == nil {
+		return false, nil
+	}
+	roles, err := pgMigrationRoles(config, config.User)
+	if err != nil {
+		return false, fmt.Errorf("database %q: %w", database.Name, err)
+	}
+	if roles.Request == "" {
+		for _, facility := range facilities {
+			if facility.kind == "queue" {
+				return false, pgMigrationQueueStorageError(database.Name)
+			}
+		}
+		return false, nil
+	}
+	if len(facilities) == 0 {
+		return true, nil
+	}
+	for _, facility := range facilities {
+		if !pgSupportedRowFacility(facility.kind) {
+			return false, pgMigrationFacilitiesError(database.Name, facilities)
+		}
+	}
+	// The caller already owns pgMigrationRegistrations. Never reenter the public
+	// row lookup here, and do not hold database.mutex while checking codec owners.
+	compiled := compiledRowHistories[history.Family]
+	if compiled == nil {
+		return false, pgMigrationFacilitiesError(database.Name, facilities)
+	}
+	if err := pgCheckRowOwner(database, compiled); err != nil {
+		return false, err
+	}
+	physical := compiledRowPhysicalHistories[compiled]
+	if history.CurrentVersion > 1 && physical == nil {
+		return false, fmt.Errorf("versioned queues require complete retained physical history")
+	}
+	if physical != nil {
+		queues, err := pgRowQueueSources(*history)
+		if err != nil {
+			return false, err
+		}
+		for _, plan := range physical.versions {
+			if len(plan.windows) > 0 && (len(plan.queueConversions) > 0 || plan.version < 2 || plan.version > len(queues) || !pgQueueInventoryPreserves(queues[plan.version-2].version, queues[plan.version-1].version) || !pgQueueInventoryPreserves(queues[plan.version-1].version, queues[plan.version-2].version)) {
+				return false, fmt.Errorf("schema V%d changes row data and queue payloads or membership together; split the row change with its reviewed Contract from the queue-payload change, then run the latest binary's --schema install as Installer and --schema catch-up as Worker", plan.version)
+			}
+		}
+	}
+	if _, err := pgCheckApplicationQueueCodecs(database, *history); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func pgSupportedRowFacility(kind string) bool {
+	return kind == "queue" || kind == "artifact cache" || kind == "email outbox" || kind == "SSE channel"
+}
+
+// This list describes installed extensions, independently of the current App's
+// declarations. Both closed catalog inventories must retain the same names.
+func pgRowFacilityCatalog(ctx context.Context, tx pgx.Tx, namespace string, roles PgMigrationControlRoles) ([]string, []pgMigrationControlFunction, error) {
+	var names []string
+	var functions []pgMigrationControlFunction
+	if present, err := pgVerifyArtifactCache(ctx, tx, namespace, roles, false); err != nil {
+		return nil, nil, err
+	} else if present {
+		names = append(names, pgArtifactCacheTable)
+	}
+	if present, err := pgVerifyEmail(ctx, tx, namespace, roles, false); err != nil {
+		return nil, nil, err
+	} else if present {
+		names = append(names, pgEmailState, pgEmailTable)
+		functions = append(functions, pgEmailFunctions(namespace)...)
+	}
+	if present, err := pgVerifyBroadcast(ctx, tx, namespace, roles, false); err != nil {
+		return nil, nil, err
+	} else if present {
+		names = append(names, pgBroadcastTable, pgBroadcastClock)
+		functions = append(functions, pgBroadcastFunctions(namespace)...)
+	}
+	return names, functions, nil
+}
+
+func pgFacilityFunctionCount(ctx context.Context, tx pgx.Tx, namespace, prefix string, expected int) error {
+	var count int
+	if err := tx.QueryRow(ctx, `select count(*) from pg_catalog.pg_proc p join pg_catalog.pg_namespace n on n.oid=p.pronamespace where n.nspname=$1 and left(p.proname,length($2))=$2`, namespace, prefix).Scan(&count); err != nil {
+		return err
+	}
+	if count != expected {
+		return fmt.Errorf("unexpected protected routines for %s", prefix)
+	}
+	return nil
+}
+
+// Every requested extension is installed before the caller commits. Restore the
+// transaction's entry role even when a helper temporarily becomes Owner.
+func pgInstallRowFacilities(ctx context.Context, tx pgx.Tx, namespace string, roles PgMigrationControlRoles, cache, email, broadcast bool) error {
+	var role string
+	if err := tx.QueryRow(ctx, "select current_user").Scan(&role); err != nil {
+		return err
+	}
+	for _, extension := range []struct {
+		requested bool
+		install   func(context.Context, pgx.Tx, string, PgMigrationControlRoles) error
+	}{
+		{cache, pgInstallArtifactCache},
+		{email, pgInstallEmail},
+		{broadcast, pgInstallBroadcast},
+	} {
+		if extension.requested {
+			if err := extension.install(ctx, tx, namespace, roles); err != nil {
+				return err // caller rolls back, including SET LOCAL
+			}
+			if _, err := tx.Exec(ctx, "set local role "+quoteIdentifier(role)); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// Required declarations are checked on the Request readiness snapshot, before
+// publishing a pool. Catalog inspection alone permits absent optional storage.
+func pgRequireRowFacilitiesOn(ctx context.Context, tx pgx.Tx, database *Database, namespace string, roles PgMigrationControlRoles) error {
+	if pgHasArtifactCaches(database) {
+		if _, err := pgVerifyArtifactCache(ctx, tx, namespace, roles, true); err != nil {
+			return err
+		}
+	}
+	if pgHasEmail(database) {
+		if _, err := pgVerifyEmail(ctx, tx, namespace, roles, true); err != nil {
+			return err
+		}
+	}
+	if pgHasBroadcast(database) {
+		if _, err := pgVerifyBroadcast(ctx, tx, namespace, roles, true); err != nil {
+			return err
+		}
+		if _, err := pgReadBroadcastClock(ctx, tx, &PostgresDB{schema: namespace}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// PreflightApplicationDatabases validates only the compiler's explicit active
+// App targets, before Main enters any database scope or executes user startup
+// code. This is local capability/codec validation, never persisted queue
+// authority or permission to create protected storage. App currently names one
+// database; accepting a batch here gives atomic validation without expanding
+// that language surface. Legacy databases keep their existing lifecycle.
+func PreflightApplicationDatabases(databases ...*Database) error {
+	pgMigrationRegistrations.Lock()
+	defer pgMigrationRegistrations.Unlock()
+	pending, err := pgPrepareApplicationDatabases(databases)
+	if err != nil {
+		return err
+	}
+	for _, database := range pending.databases {
+		if _, err := pgCheckMigrationFacilities(database); err != nil {
+			return err
+		}
+	}
+	pending.closeRegistrations()
+	return nil
+}
+
+// Pure local preparation and registration closure are distinct from production
+// capability admission. Both run inside pgMigrationRegistrations. A complete
+// codec projection cannot make legacy queue storage safe for a versioned DB.
+type pgApplicationPreflight struct {
+	databases   []*Database
+	codecs      []*pgQueueBackend
+	rows        []*pgRowRegistration
+	currentRows []*pgRowCurrentRegistration
+}
+
+func pgPrepareApplicationDatabases(databases []*Database) (pgApplicationPreflight, error) {
+	var pending pgApplicationPreflight
+	seen := map[*Database]bool{}
+	for _, database := range databases {
+		if database == nil {
+			return pgApplicationPreflight{}, fmt.Errorf("application startup: missing database")
+		}
+		if seen[database] {
+			continue
+		}
+		seen[database] = true
+		history, versioned := database.CompiledMigrationHistory()
+		if !versioned {
+			continue
+		}
+		if _, err := pgMigrationRoles(database.Config, database.Config.User); err != nil {
+			return pgApplicationPreflight{}, fmt.Errorf("database %q: %w", database.Name, err)
+		}
+		if database.Config.Schema != history.Namespace {
+			return pgApplicationPreflight{}, fmt.Errorf("database %q: compiled migration namespace disagrees with its connection", database.Name)
+		}
+		checked, err := pgCheckApplicationQueueCodecs(database, history)
+		if err != nil {
+			return pgApplicationPreflight{}, fmt.Errorf("database %q: %w", database.Name, err)
+		}
+		rows, err := pgCheckApplicationRowTransforms(database, history)
+		if err != nil {
+			return pgApplicationPreflight{}, fmt.Errorf("database %q: %w", database.Name, err)
+		}
+		currentRows, err := pgCheckApplicationCurrentRows(database, history)
+		if err != nil {
+			return pgApplicationPreflight{}, fmt.Errorf("database %q: %w", database.Name, err)
+		}
+		pending.currentRows = append(pending.currentRows, currentRows...)
+		pending.rows = append(pending.rows, rows...)
+		pending.databases = append(pending.databases, database)
+		pending.codecs = append(pending.codecs, checked...)
+	}
+	return pending, nil
+}
+
+func (pending pgApplicationPreflight) closeRegistrations() {
+	// Every writer is excluded until all closures have been published. No failed
+	// target can leave an earlier database or codec registry partially sealed.
+	for _, row := range pending.currentRows {
+		row.sealed = true
+	}
+	for _, row := range pending.rows {
+		row.sealed = true
+	}
+	for _, backend := range pending.codecs {
+		backend.codecsMutex.Lock()
+		backend.queueCodecsClosed = true
+		backend.codecsMutex.Unlock()
+	}
+	for _, database := range pending.databases {
+		database.mutex.Lock()
+		database.applicationPreflightClosed = true
+		pgMigrationClosedFamilies[database.migrationHistory.Family] = true
+		database.migrationFacilitiesClosed = true
+		database.mutex.Unlock()
+	}
+}
+
+// All registration writers are excluded. Snapshot the owners before reading
+// codecs, and never retain either the owners or database lock across that read.
+func pgCheckApplicationQueueCodecs(database *Database, history PgCompiledMigrationHistory) ([]*pgQueueBackend, error) {
+	database.mutex.RLock()
+	queueNames := map[string]bool{}
+	for facility := range database.migrationFacilities {
+		if facility.kind == "queue" {
+			queueNames[facility.name] = true
+		}
+	}
+	queues := map[*Queue]bool{}
+	for queue := range database.migrationQueues {
+		queues[queue] = true
+	}
+	database.mutex.RUnlock()
+	queueSchemaOwners.Lock()
+	owners := map[string]*Queue{}
+	for identity, queue := range queueSchemaOwners.queues[database] {
+		owners[identity] = queue
+	}
+	queueSchemaOwners.Unlock()
+	compiledQueueHistories.RLock()
+	_, companion := compiledQueueHistories.families[history.Family]
+	compiledQueueHistories.RUnlock()
+	if !companion && len(queueNames) == 0 && len(owners) == 0 && len(queues) == 0 {
+		// Older entity-only binaries have no queue companion. Absence never
+		// permits a queued database or claims a persisted empty baseline.
+		return nil, nil
+	}
+	inventory, err := history.QueueSourceInventory(history.CurrentVersion)
+	if err != nil {
+		return nil, err
+	}
+	if len(inventory.Versions) != 1 {
+		return nil, fmt.Errorf("current queue inventory must contain exactly one version")
+	}
+	contracts := inventory.Versions[0].Contracts
+	if len(owners) != len(contracts) || len(queueNames) != len(contracts) || len(queues) != len(contracts) {
+		return nil, fmt.Errorf("queue schema application bindings are missing or incomplete")
+	}
+	var result []*pgQueueBackend
+	for _, contract := range contracts {
+		queue := owners[contract.Queue]
+		if queue == nil || !queueNames[queue.name] || !queues[queue] {
+			return nil, fmt.Errorf("queue schema application binding is missing")
+		}
+		if _, err := QueueSourceCodecs(queue); err != nil {
+			return nil, err
+		}
+		backend, ok := queue.backend.(*pgQueueBackend)
+		if !ok || backend.database != database {
+			return nil, fmt.Errorf("queue schema application binding belongs to another database")
+		}
+		result = append(result, backend)
+	}
+	return result, nil
+}
+
+// The opened connection retains its actual topology. Check that immutable
+// binding at lazy-storage entry points as well, before touching a pool or
+// trusting an already-completed bootstrap flag. A later environment change or
+// manually constructed backend must not turn Worker requests into DDL writers.
+func pgVerifyMigrationFacilityConnection(connection *PostgresDB, facility string) error {
+	if connection != nil && connection.migration != nil && facility == jobsTable && connection.migration.roles.Request == "" {
+		return pgMigrationQueueStorageError(connection.schema)
+	}
+	if connection != nil && connection.migration != nil && connection.migration.roles.Request != "" {
+		return pgMigrationFacilitiesError(connection.schema, []pgMigrationFacility{{kind: facility}})
+	}
+	return nil
+}

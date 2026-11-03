@@ -1,0 +1,8 @@
+module NotesSchema.VCurrent exposing [Note]
+
+import Tesl.Prelude exposing [String]
+
+entity Note table "notes" primaryKey id {
+  id: String
+  title: String
+}

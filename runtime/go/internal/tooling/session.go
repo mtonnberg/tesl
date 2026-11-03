@@ -68,7 +68,10 @@ func (sessions *WorkspaceSessions) reset() {
 }
 
 func sessionFlag(flag string) bool {
-	return flag != "--doc-json" && (knownCompilerJSONFlag(flag) || flag == "--config-context-json")
+	// Frozen ownership can depend on a sibling snapshot which is not an import.
+	// Use a complete bounded source snapshot for formatting until retained-query
+	// invalidation explicitly covers that namespace lifecycle dependency.
+	return flag != "--doc-json" && flag != "--format-json" && (knownCompilerJSONFlag(flag) || flag == "--config-context-json")
 }
 
 func (sessions *WorkspaceSessions) query(ctx context.Context, client Client, flag, path string, overlays []SourceOverlay, position []string) ([]byte, Result, error) {

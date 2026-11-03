@@ -1,0 +1,213 @@
+{
+  "version": 1,
+  "phases": [
+    {
+      "name": "Protocol contracts",
+      "owners": [
+        "compiler-integration"
+      ]
+    },
+    {
+      "name": "Migration admission models",
+      "owners": [
+        "compiler-integration"
+      ]
+    },
+    {
+      "name": "Build (dune build)",
+      "owners": [
+        "compiler-integration"
+      ]
+    },
+    {
+      "name": "Dune test (OCaml alcotest suite)",
+      "owners": [
+        "compiler-integration"
+      ]
+    },
+    {
+      "name": "Go runtime + emitted-code gates",
+      "owners": [
+        "go-runtime",
+        "migration"
+      ]
+    },
+    {
+      "name": "Lesson catalog (gen-lesson-index --check)",
+      "owners": [
+        "compiler-integration"
+      ]
+    },
+    {
+      "name": "Embedded sync (embedded_docs.ml + embedded_go_runtime.ml up to date)",
+      "owners": [
+        "compiler-integration"
+      ]
+    },
+    {
+      "name": "Verified content (proof failure, repair, executed tests)",
+      "owners": [
+        "compiler-integration"
+      ]
+    },
+    {
+      "name": "Doc integrity (links, anchors, section map, orphans)",
+      "owners": [
+        "compiler-integration"
+      ]
+    },
+    {
+      "name": "Manual coherence suite (manual/tests)",
+      "owners": [
+        "compiler-integration"
+      ]
+    },
+    {
+      "name": "Format (tesl fmt, in place)",
+      "owners": [
+        "compiler-integration"
+      ]
+    },
+    {
+      "name": "Validate (compile + lint + format-check)",
+      "owners": [
+        "compiler-integration"
+      ]
+    },
+    {
+      "name": "Exact-match .go.snap snapshots",
+      "owners": [
+        "compiler-integration"
+      ]
+    },
+    {
+      "name": "Go runtime PostgreSQL backend (live cluster)",
+      "owners": [
+        "compiler-integration"
+      ]
+    },
+    {
+      "name": "Recursive Go corpus compile/build",
+      "owners": [
+        "compiler-integration"
+      ]
+    },
+    {
+      "name": "Mutation testing (Go backend)",
+      "owners": [
+        "compiler-integration"
+      ]
+    },
+    {
+      "name": "Integration tests (httpclient + email)",
+      "owners": [
+        "compiler-integration"
+      ]
+    },
+    {
+      "name": "Clean install (Nix default and CLI parity references)",
+      "owners": [
+        "compiler-integration"
+      ]
+    },
+    {
+      "name": "tesl CLI smoke (multi-module test + .tesl-stuff/build layout)",
+      "owners": [
+        "compiler-integration"
+      ]
+    },
+    {
+      "name": "CLI portability (shell/native) + manifest-driven verbs",
+      "owners": [
+        "compiler-integration"
+      ]
+    },
+    {
+      "name": "Boot smoke (Go App activation via tesl run)",
+      "owners": [
+        "compiler-integration"
+      ]
+    },
+    {
+      "name": "OpenAPI DAST smoke (server scope + auth boundary)",
+      "owners": [
+        "compiler-integration"
+      ]
+    },
+    {
+      "name": "Playground parity (browser teslCheck \u2261 --check-json)",
+      "owners": [
+        "compiler-integration"
+      ]
+    },
+    {
+      "name": "SSO browser e2e (dex + Playwright, headless)",
+      "owners": [
+        "compiler-integration"
+      ]
+    }
+  ],
+  "migration_phases": [
+    "compiler-build",
+    "kernel",
+    "control",
+    "indexes",
+    "stage-probe-plan-boundary",
+    "writer-transaction-identity",
+    "stage-text-equality",
+    "row-baseline",
+    "queue-runtime",
+    "cache-runtime",
+    "email-runtime",
+    "sse-broadcast",
+    "combined-facilities",
+    "row-generation",
+    "test_migration_queue",
+    "test_migration_queue_transform",
+    "queue-pipeline",
+    "test_staged_indexes",
+    "test_migration_queue_application",
+    "test_migration_queue_removal",
+    "test_queue_candidate_app",
+    "test_migration_fixtures",
+    "test_migration_row_companion",
+    "test_migration_contract",
+    "test_migration_row_storage",
+    "test_migration_retype",
+    "test_migration_row_forward",
+    "test_migration_row_access",
+    "test_migration_delete",
+    "test_migration_row_additive",
+    "test_migration_row_tables",
+    "test_migration_row_indexes",
+    "test_migration_additive_tail",
+    "test_migration_row_derived",
+    "test_migration_nominal_derived",
+    "test_migration_nominal_optional",
+    "test_migration_row_scc",
+    "test_migration_row_civil",
+    "test_migration_nominal_pk",
+    "test_migration_nominal_copy",
+    "test_migration_row_contract_abi",
+    "test_migration_row_retype_physical",
+    "test_migration_revalidate",
+    "test_migration_revalidate_postgres",
+    "test_migration_reverse_proof",
+    "test_migration_proof_retype_postgres",
+    "test_migration_proof_removal_postgres",
+    "test_proof_return_field_scope",
+    "test_migration_table_drop",
+    "test_migration_table_drop_postgres",
+    "row-retirement",
+    "row-releases",
+    "queue-releases",
+    "ordered-row-queue",
+    "deployment-wiring",
+    "review05",
+    "review11",
+    "twenty-releases",
+    "rolling-workload-smoke",
+    "latency-statistics",
+    "latency-regression"
+  ]
+}

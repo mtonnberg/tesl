@@ -1,0 +1,39 @@
+module Schema.Todo.V5 exposing [Todo, ValidTitle, tryTitle, newTodo, Project, newProject]
+
+import Tesl.Prelude exposing [Bool(..), String]
+import Tesl.String exposing [String.length, String.trim]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.Time exposing [PosixMillis]
+
+fact ValidTitle (title: String)
+
+# The proof and its pure establishment belong to the versioned schema.
+establish tryTitle(raw: String) -> Maybe (title: String ::: ValidTitle title) =
+  let title = String.trim raw
+  if String.length title > 0 && String.length title <= 120 then
+    Something (title ::: ValidTitle title)
+  else
+    Nothing
+
+entity Todo table "todos" primaryKey id {
+  id: String
+  title: String ::: ValidTitle title
+  completed: Bool
+  details: Maybe String
+  dueAt: Maybe PosixMillis
+  projectId: Maybe String
+}
+
+# Storage-only additions change this constructor, leaving request handlers alone.
+fn newTodo(id: String, title: String ::: ValidTitle title) -> Todo =
+  Todo { id: id, title: title, completed: False, details: Nothing, dueAt: Nothing, projectId: Nothing }
+
+entity Project table "projects" primaryKey id {
+  id: String
+  name: String
+  archived: Bool
+  index [archived]
+}
+
+fn newProject(id: String, name: String) -> Project =
+  Project { id: id, name: name, archived: False }

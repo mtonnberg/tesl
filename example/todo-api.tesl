@@ -14,7 +14,7 @@ import Tesl.Env exposing [env, envInt, envRead, requireSecret]
 import Tesl.JWT exposing [jwt, JWT.verify]
 import Tesl.String exposing [String.length, String.startsWith, String.contains]
 import Tesl.Int exposing [Int.parse]
-import Tesl.List exposing [List.isEmpty, List.filterCheck]
+import Tesl.List exposing [List.isEmpty, List.filterCheck, List.allCheck]
 import Tesl.DB exposing [dbRead, dbWrite]
 import Tesl.Telemetry exposing [telemetry, initTelemetry]
 import Tesl.Id exposing [generatePrefixedId]
@@ -200,13 +200,17 @@ fn seedExampleData() -> Int
   else
     0
 
-  # post "/list-test"
-  #   auth requestUser: User::: Authenticated requestUser via cookieAuth
-  #   body newTodos: List String
-handler post listTest(requestUser: User ::: Authenticated requestUser, newTodos: List String ::: ForAll TodoId newTodos)
+# The JSON body is a raw list. Validate every element before calling code that
+# requires ForAll; a request annotation cannot establish evidence from JSON.
+fn acceptTodoIds(todoIds: List String ::: ForAll TodoId todoIds) -> String =
+  "hej"
+
+handler post listTest(requestUser: User ::: Authenticated requestUser, newTodos: List String)
   -> String
   requires [todoDbRead, todoDbWrite, time, random] =
-  "hej"
+  case List.allCheck isTodoId newTodos of
+    Nothing -> fail 400 "Malformed todo id"
+    Something checkedTodos -> acceptTodoIds checkedTodos
 
 handler post createTodo(requestUser: User ::: Authenticated requestUser, newTodo: NewTodo)
   -> exists todoId: String =>
@@ -266,7 +270,7 @@ handler put completeTodo(requestUser: User ::: Authenticated requestUser, todoId
 api TodoApi {
   post "/list-test"
     auth requestUser: User ::: Authenticated requestUser via cookieAuth
-    body newTodos: List String ::: ForAll TodoId newTodos
+    body newTodos: List String
     -> String
   post "/todos"
     auth requestUser: User ::: Authenticated requestUser via cookieAuth

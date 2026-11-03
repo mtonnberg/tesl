@@ -279,7 +279,7 @@ let indexed_leading_columns (e : entity_form) : string list =
 
 let index_label (ix : entity_index) =
   Printf.sprintf "%sindex [%s]"
-    (if ix.ix_unique then "unique " else "")
+    (if ix.ix_staging then "staging unique " else if ix.ix_unique then "unique " else "")
     (String.concat ", " ix.ix_fields)
 
 (* ── The passes ───────────────────────────────────────────────────────────── *)

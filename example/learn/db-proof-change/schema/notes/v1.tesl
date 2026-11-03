@@ -1,0 +1,10 @@
+module Schema.Notes.V1 exposing [Note, tryTitle, NonEmpty]
+import Tesl.Prelude exposing [String, Bool(..)]
+import Tesl.Maybe exposing [Maybe(..)]
+fact NonEmpty (value: String)
+establish tryTitle(value: String) -> Maybe (v: String ::: NonEmpty v) =
+if value != "" then
+  Something (value ::: NonEmpty value)
+else
+  Nothing
+entity Note table "notes" primaryKey id { id: String, title: String ::: NonEmpty title, memo: String }

@@ -1,0 +1,32 @@
+module App exposing []
+import Tesl.Prelude exposing [String]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.Env exposing [env, envInt, envRead]
+import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection, MigrationConfig, Worker]
+import Tesl.Queue exposing [Queue, FromQueue, queueRead]
+import Tesl.App exposing [App]
+import Schema.Mail.VCurrent exposing [Delivery]
+
+database Main = Database {
+  schema: Schema.Mail.VCurrent
+  migrations: Schema.Mail.Migrate
+  backend: Postgres (PostgresConfig {
+    namespace: "mail"
+    dbName: env "DEMO_DB"
+    user: env "DEMO_USER"
+    password: ""
+    connection: TcpConnection { host: env "DEMO_HOST", port: envInt "DEMO_PORT" 5432 }
+    migrations: MigrationConfig { topology: Worker, controlOwner: env "DEMO_OWNER", requestRole: env "DEMO_REQUEST", workerRole: env "DEMO_WORKER", ddlConnection: env "DEMO_DDL" }
+  })
+}
+queue Tasks requires [queueRead] = Queue {
+  database: Main
+  schema: Schema.Mail.VCurrent.Jobs
+  jobs: [Job Schema.Mail.VCurrent.Delivery handle Nothing]
+}
+worker handle(job: Delivery ::: FromQueue (Id == jobId) job) = job
+handler get health() -> String = "ready"
+api Api { get "/health" -> String }
+server Web for Api { health }
+main() -> App requires [queueRead, envRead] =
+  App { database: Main, queues: [Tasks], api: Web, port: envInt "DEMO_HTTP_PORT" 8097 }

@@ -1,0 +1,6 @@
+module StorageSchema.VCurrent.Text exposing [Int32(..)]
+
+import Tesl.Prelude exposing [String]
+
+# A user-owned type can have this spelling without acquiring integer storage.
+type Int32 = String

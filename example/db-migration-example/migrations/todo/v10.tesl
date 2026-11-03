@@ -1,0 +1,72 @@
+# tesl:frozen-migration:v1 Schema.Todo.Migrate.V10
+# tesl:frozen-source Schema.Todo.Migrate.V10 8e9c394792cf5eec2e2ecff851ea1c767760188c307d9f099a5b0bb4fde1ae0c
+# tesl:frozen-source Schema.Todo.Migrate.V10Contract 07158b8d9ff53b36fd093975601bd33eae0cec2f9c1b54aed43fa32cc3351bac
+# tesl:frozen-migration:end
+# tesl:migration-history:v1
+# tesl:migration-from
+# tesl:snapshot-seal:v3 Schema.Todo.V9 7465736c2d736f757263652d6162692d76313a39316565626633343164346263353034393236386132613665346137623734323930383263643337613834333139366461326362643939386436303765626364 tesl-stored-value-v1:9b265343069c361d3879d623b69de5081f934ec0f2f8826dc0efeda951384a30 5f1741aef83d6f5a3f6b637aa2d760e3e3982caf9ab610a107990f3a6dce1a48 queue-inventory-v1
+# tesl:snapshot-source Schema.Todo.V9 b1994a0443b24bd88f51f890846a39728b742df67dcc60e0ece10b3b76ef5a72
+# tesl:snapshot-end
+# tesl:migration-to
+# tesl:snapshot-seal:v3 Schema.Todo.V10 7465736c2d736f757263652d6162692d76313a63613638306234663266366333346163626435653832366332306161623732616365353837646139313536636163336531626134356265363462386234306163 tesl-stored-value-v1:9b265343069c361d3879d623b69de5081f934ec0f2f8826dc0efeda951384a30 e18c9de8c082d5a0e83e52b2eb967dea8cdd3edbc2b01e57d5265e6391bc7b27 queue-inventory-v1
+# tesl:snapshot-source Schema.Todo.V10 9ae3a3a85641ed7a1c61278b6bbad6c17ed4d4aa6d70915cd5ec97fb2614bf60
+# tesl:snapshot-end
+# tesl:migration-history:end
+module Schema.Todo.Migrate.V10 exposing [migration]
+import Tesl.Migration exposing [Migration, Entity(..), Rule(..), Same(..), Migrated(..)]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.Prelude exposing [Bool(..)]
+import Schema.Todo.V9
+import Schema.Todo.V10
+
+migration = Migration {
+  from: Schema.Todo.V9
+  to: Schema.Todo.V10
+  same: [Same Schema.Todo.V9.ValidTitle Schema.Todo.V10.ValidTitle]
+  fixtures: [previousTodo]
+  entities: { Todo: Migrate migrateTodo [] }
+}
+
+# This storage value depends on the retained row, not a constant SQL default.
+# Public request handlers never edit priority, so their API stays unchanged.
+fn migrateTodo(old: Schema.Todo.V9.Todo) -> Migrated Schema.Todo.V10.Todo =
+  Row (Schema.Todo.V10.Todo {
+    id: old.id
+    title: old.title
+    completed: old.completed
+    details: old.details
+    dueAt: old.dueAt
+    projectId: old.projectId
+    priority: old.priority
+    priorityWeight: old.priority + 1
+    reminderAt: old.reminderAt
+  })
+
+# Use the real frozen schema's proof-producing constructor. No fact is asserted
+# in the migration. A failed fixture establishment must not become a stored row.
+fn previousTodo() -> Maybe Schema.Todo.V9.Todo =
+  case Schema.Todo.V9.tryTitle "Keep a proven title" of
+    Nothing -> Nothing
+    Something title -> Something (Schema.Todo.V9.Todo {
+      id: "weighted"
+      title: title
+      completed: False
+      details: Nothing
+      dueAt: Nothing
+      projectId: Nothing
+      priority: 4
+      reminderAt: Nothing
+    })
+
+test "retained priority determines weight without losing the title proof" {
+  case previousTodo() of
+    Nothing -> expect False
+    Something old ->
+      case migrateTodo old of
+        Reject reason -> expect False
+        Row current ->
+          expect current.priorityWeight == 5
+          expect current.priority == 4
+          expect current.title == old.title
+          expect current.id == old.id
+}

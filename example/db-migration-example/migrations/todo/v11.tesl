@@ -1,0 +1,75 @@
+# tesl:frozen-migration:v1 Schema.Todo.Migrate.V11
+# tesl:frozen-source Schema.Todo.Migrate.V11 b7052002d811ce1f52ad5300c9e111a1a1e8474ce74e2ea08aa6dc4d05fcd2b0
+# tesl:frozen-source Schema.Todo.Migrate.V11Contract 11541e65f2de62eee6f422656752e7abfdd796d8eb063dada57c7ff4b034d3f1
+# tesl:frozen-migration:end
+# tesl:migration-history:v1
+# tesl:migration-from
+# tesl:snapshot-seal:v3 Schema.Todo.V10 7465736c2d736f757263652d6162692d76313a63613638306234663266366333346163626435653832366332306161623732616365353837646139313536636163336531626134356265363462386234306163 tesl-stored-value-v1:9b265343069c361d3879d623b69de5081f934ec0f2f8826dc0efeda951384a30 e18c9de8c082d5a0e83e52b2eb967dea8cdd3edbc2b01e57d5265e6391bc7b27 queue-inventory-v1
+# tesl:snapshot-source Schema.Todo.V10 9ae3a3a85641ed7a1c61278b6bbad6c17ed4d4aa6d70915cd5ec97fb2614bf60
+# tesl:snapshot-end
+# tesl:migration-to
+# tesl:snapshot-seal:v3 Schema.Todo.V11 7465736c2d736f757263652d6162692d76313a63613638306234663266366333346163626435653832366332306161623732616365353837646139313536636163336531626134356265363462386234306163 tesl-stored-value-v1:9b265343069c361d3879d623b69de5081f934ec0f2f8826dc0efeda951384a30 6e7d18d0db25395f645316a1d43eeeee424e86ed69769bc02118b40246865a38 queue-inventory-v1
+# tesl:snapshot-source Schema.Todo.V11 09fbdee66f92cf38241422499e9ab634d215ef0b036d65e582247b41ed0b8954
+# tesl:snapshot-end
+# tesl:migration-history:end
+module Schema.Todo.Migrate.V11 exposing [migration]
+import Tesl.Migration exposing [Migration, Entity(..), Rule(..), Same(..), Migrated(..)]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.Prelude exposing [Bool(..), Int]
+import Schema.Todo.V10
+import Schema.Todo.V11
+
+migration = Migration {
+  from: Schema.Todo.V10
+  to: Schema.Todo.V11
+  same: [Same Schema.Todo.V10.ValidTitle Schema.Todo.V11.ValidTitle]
+  fixtures: [previousTodo]
+  entities: { Todo: Migrate retirePriority [LegacyWith priority previousPriority] }
+}
+
+# Retain the weight introduced by V10; priority is no longer a current field.
+fn retirePriority(old: Schema.Todo.V10.Todo) -> Migrated Schema.Todo.V11.Todo =
+  Row (Schema.Todo.V11.Todo {
+    id: old.id
+    title: old.title
+    completed: old.completed
+    details: old.details
+    dueAt: old.dueAt
+    projectId: old.projectId
+    priorityWeight: old.priorityWeight
+    reminderAt: old.reminderAt
+  })
+
+# While V10 still serves, its old physical column must receive the compatible
+# value. This rule is removed only by the checked Contract after retirement.
+fn previousPriority(current: Schema.Todo.V11.Todo) -> Int =
+  current.priorityWeight - 1
+
+fn previousTodo() -> Maybe Schema.Todo.V10.Todo =
+  case Schema.Todo.V10.tryTitle "Keep weighted work" of
+    Nothing -> Nothing
+    Something title -> Something (Schema.Todo.V10.Todo {
+      id: "retire-priority"
+      title: title
+      completed: False
+      details: Nothing
+      dueAt: Nothing
+      projectId: Nothing
+      priority: 3
+      priorityWeight: 4
+      reminderAt: Nothing
+    })
+
+test "retiring priority preserves weight and reconstructs the old value" {
+  case previousTodo() of
+    Nothing -> expect False
+    Something old ->
+      case retirePriority old of
+        Reject reason -> expect False
+        Row current ->
+          expect current.priorityWeight == 4
+          expect previousPriority current == 3
+          expect previousPriority current == old.priority
+          expect current.title == old.title
+          expect current.id == old.id
+}

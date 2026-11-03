@@ -306,15 +306,27 @@ test "ok" {
    Fix 3: Proof checker — negative cases (must NOT compile)
    ═══════════════════════════════════════════════════════════════════════════ *)
 
-(* R48_P01: check ok returns wrong name — must be rejected *)
-let test_r48_p01_check_ok_wrong_binding () =
-  should_fail_src "ok expression returns" {|module Test exposing []
+(* R48_P01: a verified alias preserves the subject; a different input does not. *)
+let test_r48_p01_check_ok_alias () =
+  should_pass_src {|module Test exposing []
 import Tesl.Prelude exposing [Int]
 fact Valid (n: Int)
 check checkValid(n: Int) -> n: Int ::: Valid n =
   if n > 0 then
     let result = n
     ok result ::: Valid n
+  else
+    fail 400 "no"
+|}
+
+let test_r48_p01_check_ok_wrong_subject () =
+  should_fail_src "does not preserve that input's subject identity" {|module Test exposing []
+import Tesl.Prelude exposing [Int]
+fact Valid (n: Int)
+check checkValid(n: Int, other: Int) -> n: Int ::: Valid n =
+  if other > 0 then
+    let result = other
+    ok result ::: Valid result
   else
     fail 400 "no"
 |}
@@ -553,7 +565,8 @@ let () =
       test_case "R48_T12: lowercase false in api-test let rejected" `Quick test_r48_t12_lowercase_false_in_api_test_let;
     ];
     "proof-checker-negative", [
-      test_case "R48_P01: check ok returns wrong binding name" `Quick test_r48_p01_check_ok_wrong_binding;
+      test_case "R48_P01: check ok preserves a verified alias" `Quick test_r48_p01_check_ok_alias;
+      test_case "R48_P01: check ok refuses another input" `Quick test_r48_p01_check_ok_wrong_subject;
       test_case "R48_P02: check proof mismatch" `Quick test_r48_p02_check_proof_mismatch;
       test_case "R48_P03: auth proof wrong predicate" `Quick test_r48_p03_auth_proof_wrong_predicate;
       test_case "R48_P04: auth conjunction wrong left half" `Quick test_r48_p04_auth_conj_wrong_left;

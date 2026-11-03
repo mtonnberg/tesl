@@ -73,6 +73,8 @@ var TimedDatabaseDatabase = teslrt.NewDatabase(
 	},
 )
 
+var _ = teslrt.RegisterDatabaseIdentity("teslmodlesson26timeandposix.TimedDatabase", TimedDatabaseDatabase)
+
 //line lesson26-time-and-posix.tesl:140
 func cookieAuth(request teslrt.HttpRequest) teslrt.Check[string] {
 //line lesson26-time-and-posix.tesl:142

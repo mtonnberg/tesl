@@ -5,7 +5,9 @@
 # APP_NAME to your project's [project].name from tesl.toml. The runner needs
 # Docker (ubuntu-latest has it) and Nix (installed below).
 #
-# See dev-docs/deploy.md for the full deployment guide.
+# On the deployment host, use compose.worker.yml.example and deploy-worker.sh
+# for the stop -> checked migration job -> start lifecycle, with TESL_IMAGE set
+# to the immutable release tag below. See manual/deploy.md for credential scopes.
 
 name: deploy
 
@@ -37,7 +39,7 @@ jobs:
 
       - name: Build the image
         # --app-only → production image that connects to your own database via env.
-        # Use --with-postgres for a self-contained all-in-one image instead.
+        # PostgreSQL remains external for both legacy image-flavour flags.
         run: tesl build --app-only --tag "$APP_NAME:ci"
 
       - name: Log in to GHCR

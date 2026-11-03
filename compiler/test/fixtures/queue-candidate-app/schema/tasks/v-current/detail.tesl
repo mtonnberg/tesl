@@ -1,0 +1,14 @@
+module Schema.Tasks.VCurrent.Detail exposing [Content, NonEmpty, nonEmpty]
+import Tesl.Prelude exposing [String]
+import Tesl.Json exposing [stringCodec]
+fact NonEmpty (value: String)
+check nonEmpty(value: String) -> value: String ::: NonEmpty value =
+  if value != "" then
+    ok value ::: NonEmpty value
+  else
+    fail 400 "empty queued content"
+record Content { text: String ::: NonEmpty text }
+codec Content {
+  toJson { text -> "text" with_codec stringCodec }
+  fromJson [ { text <- "text" with_codec stringCodec via nonEmpty } ]
+}

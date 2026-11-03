@@ -1,20 +1,6 @@
-# Tesl Continuous Integration
-#
-# This workflow runs the EXACT SAME authoritative gate a human runs locally:
-#
-#     nix develop        # dune + Go + postgresql + ocaml + mailhog + python3
-#     ./ci.sh            # the single combined super-set gate (see its header)
-#
-# ./ci.sh is the single source of truth for "green" (see its header comment). It
-# is the union of the two historical QA scripts (compile-examples.sh and
-# compiler/ci.sh, now thin shims that exec it): dune build + dune test (ID-keyed
-# waivers) + embedded-doc sync + format + validate sweep + exact-match Go
-# snapshots + Go corpus/runtime checks + Tesl tests + mutation + integration.
-# It starts its OWN project-local PostgreSQL cluster
-# (initdb/pg_ctl on a temp data dir under CI), so NO external database service
-# is needed here. The gate is exit-code driven: a non-zero exit fails the job.
-# We deliberately do NOT swallow the exit code with `|| true`.
-
+# The same complete ci.sh gate runs locally in serial and on three isolated
+# hosted runners. The required gate accepts only the complete, successful union
+# for the checked revision; no shard alone means the repository is green.
 name: CI
 
 on:
@@ -23,26 +9,31 @@ on:
   pull_request:
   workflow_dispatch:
 
-# Preserve each pushed main revision for its eventual immutable release gate.
-# Superseded pull-request runs still cancel normally.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
-  gate:
-    name: Authoritative gate (./ci.sh)
+  shards:
+    name: CI (${{ matrix.shard }})
     runs-on: ubuntu-latest
-    # ci.sh caps its own sub-phases; give the whole gate ample headroom.
-    timeout-minutes: 60
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [compiler-integration, go-runtime, migration]
     env:
-      # GitHub Actions already sets CI=true; ci.sh reads CI to pick a temp
-      # PostgreSQL data root (TESL_TEST_USE_TEMP_PG). Set it explicitly so the
-      # behaviour is not dependent on the runner's implicit defaults.
-      CI: "true"
+      CI: 'true'
+      TESL_CI_JOBS: '2'
+      GOMAXPROCS: '2'
+      GOFLAGS: '-p=2'
+      CI_SHARD: ${{ matrix.shard }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # The migration latency comparison builds its pinned historical base.
+          fetch-depth: 0
 
       - name: Install Nix (flakes enabled)
         uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
@@ -50,26 +41,73 @@ jobs:
           extra-conf: |
             experimental-features = nix-command flakes
 
-      # One dev shell, one script: this mirrors the local workflow exactly.
-      # `nix develop --command bash` runs inside the flake devShell (go,
-      # dune, initdb/pg_ctl, etc. all on PATH). ci.sh detects the direct
-      # gopath and manages its own PostgreSQL cluster. ci.sh already
-      # runs `dune build` + `dune test` as its first two phases, so we invoke it
-      # directly — its non-zero exit fails the job (no `|| true`).
-      - name: Run the authoritative gate
+      - name: Run the declared gate shard
+        env:
+          TESL_MIGRATION_TEST_OUTPUT: ${{ runner.temp }}/migration-evidence
         run: |
+          # Each shard gets a private cluster. Migration latency runs sequentially
+          # in its own runner, after its correctness workloads have stopped.
           nix develop --command bash -lc '
             set -euo pipefail
             export TESL_REPO_ROOT="$PWD"
-            # The flake devShell shellHook starts a convenience PostgreSQL on
-            # :55432 with PGDATA inside the read-only Nix store (fragile — it
-            # dies mid-run) and exports TESL_POSTGRES_{HOST,PORT,USER}, which
-            # hijacks ci.sh into "reuse external cluster" mode. Unset them so
-            # ci.sh manages its own robust temp cluster (its documented design).
             unset TESL_POSTGRES_HOST TESL_POSTGRES_PORT TESL_POSTGRES_USER TESL_POSTGRES_PASSWORD
-            ./ci.sh
+            unset TESL_TEST_POSTGRES_SHARED_HOST TESL_TEST_POSTGRES_SHARED_PORT TESL_TEST_POSTGRES_SHARED_USER TESL_TEST_POSTGRES_SHARED_ADMIN_DATABASE
+            ./ci.sh --shard "$CI_SHARD" --expected-revision "$GITHUB_SHA" \
+              --evidence-dir "$RUNNER_TEMP/ci-evidence" 2>&1 | tee "$RUNNER_TEMP/ci-shard.log"
           '
 
+      - name: Retain source-bound shard receipts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-shard-${{ matrix.shard }}-${{ github.sha }}
+          path: ${{ runner.temp }}/ci-evidence
+          if-no-files-found: error
+
+      - name: Retain phase logs and migration diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-diagnostics-${{ matrix.shard }}-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/ci-shard.log
+            ${{ runner.temp }}/migration-evidence
+          if-no-files-found: warn
+
+  gate:
+    name: Authoritative gate (./ci.sh)
+    if: always()
+    needs: [shards]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout the same revision
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Read this run's shard receipts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: ci-shard-*-${{ github.sha }}
+          path: ${{ runner.temp }}/ci-evidence
+
+      - name: Verify the complete authoritative phase union
+        env:
+          CI_UPSTREAM_RESULT: ${{ needs.shards.result }}
+        run: |
+          python3 scripts/ci-shards.py verify --expected-revision "$GITHUB_SHA" \
+            --evidence "$RUNNER_TEMP/ci-evidence" --upstream-result "$CI_UPSTREAM_RESULT" \
+            --output "$RUNNER_TEMP/ci-verified.json"
+
+      - name: Install Nix for verified content export
+        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
+        with:
+          extra-conf: |
+            experimental-features = nix-command flakes
+
+      # Preserve the original export's executed proof/repair/example checks.
+      # It rebuilds only the compiler binary, not the full OCaml test suite.
       - name: Export verified content from the checked revision
         run: nix develop --command python3 scripts/content.py export --out "${{ runner.temp }}/tesl-content.json"
 
@@ -78,4 +116,11 @@ jobs:
         with:
           name: tesl-content-${{ github.sha }}
           path: ${{ runner.temp }}/tesl-content.json
+          if-no-files-found: error
+
+      - name: Retain the verified phase-union receipt
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-verified-${{ github.sha }}
+          path: ${{ runner.temp }}/ci-verified.json
           if-no-files-found: error

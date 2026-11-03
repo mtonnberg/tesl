@@ -77,6 +77,8 @@ var NoteDatabaseDatabase = teslrt.NewDatabase(
 	},
 )
 
+var _ = teslrt.RegisterDatabaseIdentity("teslmodlesson29foralllistproofs.NoteDatabase", NoteDatabaseDatabase)
+
 //line lesson29-forall-list-proofs.tesl:145
 func checkTitle(s string) teslrt.Check[string] {
 //line lesson29-forall-list-proofs.tesl:146

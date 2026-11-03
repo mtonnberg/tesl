@@ -73,6 +73,7 @@ let section_file = function
   | "best-practices"  -> Some "best-practices.md"
   | "faq"             -> Some "FAQ.md"
   | "anchors"         -> Some "anchors.md"
+  | "migration-guide" -> Some "migration-guide.md"
   (* language-spec lives at repo root, not manual/; dev lives in dev-docs/.
      We do not slug-check those here (no in-manual file), matching the manual
      test's policy. *)

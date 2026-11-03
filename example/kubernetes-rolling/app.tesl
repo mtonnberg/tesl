@@ -1,0 +1,105 @@
+module App exposing []
+import Tesl.Prelude exposing [String, Int, Bool(..), List]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.List exposing [List.length]
+import Tesl.Env exposing [env, envInt, envRead]
+import Tesl.DB exposing [dbRead, dbWrite]
+import Tesl.Database exposing [
+  Database,
+  Postgres,
+  PostgresConfig,
+  TcpConnection,
+  MigrationConfig,
+  Worker,
+]
+import Tesl.Queue exposing [Queue, FromQueue, queueRead, queueWrite]
+import Tesl.App exposing [App]
+import Schema.Demo.VCurrent exposing [
+  Note,
+  Receipt,
+  Gate,
+  Delivery,
+  makeNote,
+  deliveryText,
+]
+
+database Main = Database {
+  schema: Schema.Demo.VCurrent
+  migrations: Schema.Demo.Migrate
+  backend: Postgres (PostgresConfig {
+    namespace: "demo"
+    dbName: env "DEMO_DB"
+    user: env "DEMO_USER"
+    password: env "DEMO_PASSWORD"
+    connection: TcpConnection { host: env "DEMO_HOST", port: envInt "DEMO_PORT" 5432 }
+    migrations: MigrationConfig { topology: Worker, controlOwner: env "DEMO_OWNER", requestRole: env "DEMO_REQUEST", workerRole: env "DEMO_WORKER", ddlConnection: env "DEMO_DDL" }
+  })
+}
+
+# Keep a few jobs pending until /deliver opens the business gate. No private
+# queue table edits are needed to demonstrate retained payload conversion.
+fact Enabled (value: Int)
+check requireEnabled(value: Int) -> value: Int ::: Enabled value =
+  if value > 0 then
+    ok value ::: Enabled value
+  else
+    fail 503 "delivery gate is closed; retry later"
+
+queue Tasks requires [queueRead, dbRead Gate, dbRead Receipt, dbWrite Receipt] = Queue {
+  database: Main
+  schema: Schema.Demo.VCurrent.Jobs
+  jobs: [Job Schema.Demo.VCurrent.Delivery deliver Nothing]
+  retry: QueueRetryStrategy { maxAttempts: 1000, backoff: Fixed, initialDelay: 1 }
+  numberOfWorkers: 1
+}
+
+fn receiptFor(job: Delivery, enabled: Int ::: Enabled enabled) -> Receipt =
+  Receipt { id: job.id, text: deliveryText job }
+
+worker deliver(job: Delivery ::: FromQueue (Id == jobId) job)
+  requires [dbRead Gate, dbRead Receipt, dbWrite Receipt] =
+  let gates = selectCount gate from Gate
+  let enabled = check requireEnabled gates
+  let receipt = receiptFor job enabled
+  let existing = selectOne row from Receipt where row.id == job.id
+  case existing of
+    Something row -> job
+    Nothing ->
+      let rows = [receipt]
+      let _ = insertMany rows in Receipt
+      job
+
+record Health { release: Int, notes: Int }
+handler get health() -> Health requires [dbRead Note, envRead] =
+  let rows = select note from Note
+  let count = List.length rows
+  Health { release: envInt "DEMO_REVISION" 1, notes: count }
+handler get notes() -> List Note requires [dbRead Note] = select note from Note order note.id asc
+handler get receipts() -> List Receipt requires [dbRead Receipt] = select receipt from Receipt order receipt.id asc
+handler post addNote(id: String) -> String requires [dbWrite Note] =
+  let rows = [makeNote id]
+  let _ = insertMany rows in Note
+  "created"
+handler post submit(id: String) -> Bool requires [queueWrite] =
+  enqueue Delivery { id: id, text: id }
+  True
+handler post enable() -> String requires [dbRead Gate, dbWrite Gate] =
+  let existing = selectOne gate from Gate where gate.id == "enabled"
+  case existing of
+    Something gate -> "enabled"
+    Nothing ->
+      let rows = [Gate { id: "enabled" }]
+      let _ = insertMany rows in Gate
+      "enabled"
+
+api Api {
+  get "/health" -> Health
+  get "/notes" -> List Note
+  get "/receipts" -> List Receipt
+  post "/notes/:id" capture id: String using stringCodec -> String
+  post "/jobs/:id" capture id: String using stringCodec -> Bool
+  post "/deliver" -> String
+}
+server Web for Api { health, notes, receipts, addNote, submit, enable }
+main() -> App requires [envRead, queueRead, queueWrite, dbRead Note, dbWrite Note, dbRead Gate, dbWrite Gate, dbRead Receipt, dbWrite Receipt] =
+  App { database: Main, queues: [Tasks], api: Web, port: envInt "DEMO_HTTP_PORT" 8080 }

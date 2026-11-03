@@ -1,0 +1,426 @@
+package teslrt
+
+import (
+	"context"
+	"fmt"
+	"reflect"
+	"slices"
+	"strings"
+
+	"github.com/jackc/pgx/v5"
+)
+
+// Independent read-only catalog expectations; Request needs no TEMP privilege.
+func pgExpectedRowControl(e *pgCatalogExpectations, owner, name string) (*pgCatalogTable, error) {
+	if name == "tesl_row_queue_conversion_receipts" || name == "tesl_row_queue_conversion_attempts" {
+		table, err := pgExpectedQueueConversionTable(e, owner, strings.Replace(name, "tesl_row_queue_", "tesl_queue_", 1))
+		if err != nil {
+			return nil, err
+		}
+		table.Name = name
+		table.Constraints = slices.DeleteFunc(table.Constraints, func(c pgCatalogConstraint) bool { return c.Kind == "f" })
+		if name == "tesl_row_queue_conversion_receipts" {
+			index, err := e.index("tesl_row_queue_conversion_fair", table, []string{"source_digest", "attempt_seq"}, false, false, false)
+			if err != nil {
+				return nil, err
+			}
+			table.Indexes = append(table.Indexes, index)
+		}
+		return table, nil
+	}
+	columns := []pgControlExpectedColumn{}
+	constraints := []pgControlExpectedConstraint{}
+	col := func(n, typ string) {
+		columns = append(columns, pgControlExpectedColumn{name: n, typeName: typ, required: true})
+	}
+	con := func(kind, expression string, keys ...string) {
+		constraints = append(constraints, pgControlExpectedConstraint{kind: kind, expression: expression, keys: keys})
+	}
+	check := func(expression string, keys ...string) { con("c", expression, keys...) }
+	hash := func(n string) { check("("+n+" ~ '^[0-9a-f]{64}$'::text)", n) }
+	digest := func(value, hash string) { check("(encode(sha256("+value+"), 'hex'::text) = "+hash+")", value, hash) }
+	bounded := func(n string) { check("(("+n+" >= 1) AND ("+n+" <= 2147483646))", n) }
+	switch name {
+	case "tesl_schema_stage_cancellations":
+		col("stage_id", "text")
+		col("version", "int4")
+		col("descriptor", "bytea")
+		col("physical_hash", "text")
+		col("job_id", "text")
+		col("compiler_abi", "text")
+		con("p", "", "stage_id")
+		con("u", "", "job_id")
+		check("(version >= 3)", "version")
+	case "tesl_schema_stage_contracts":
+		col("version", "int4")
+		col("contract", "bytea")
+		col("contract_hash", "text")
+		col("window_hash", "text")
+		col("settled", "bytea")
+		col("settled_hash", "text")
+		col("compiler_abi", "text")
+		con("p", "", "version")
+		con("u", "", "contract_hash")
+		check("(version >= 3)", "version")
+		digest("contract", "contract_hash")
+		digest("settled", "settled_hash")
+	case "tesl_schema_stage_promotions":
+		col("stage_id", "text")
+		col("version", "int4")
+		col("ordinal", "int4")
+		col("job_id", "text")
+		col("contract_hash", "text")
+		col("state", "text")
+		columns = append(columns, pgControlExpectedColumn{name: "enforced_index_oid", typeName: "int8"})
+		con("p", "", "stage_id")
+		con("u", "", "job_id")
+		con("u", "", "version", "ordinal")
+		check("(state = ANY (ARRAY['promoting'::text, 'blocked_duplicates'::text, 'enforced'::text]))", "state")
+		check("((state = 'enforced'::text) = (enforced_index_oid IS NOT NULL))", "state", "enforced_index_oid")
+		check("(enforced_index_oid > 0)", "enforced_index_oid")
+	case "tesl_schema_stage_guards":
+		col("stage_id", "text")
+		col("version", "int4")
+		col("descriptor", "bytea")
+		col("physical_hash", "text")
+		col("spec", "jsonb")
+		con("p", "", "stage_id")
+		check("(version >= 3)", "version")
+	case "tesl_writer_context":
+		col("backend_pid", "int4")
+		col("transaction_id", "xid8")
+		col("database_uuid", "uuid")
+		col("version", "int4")
+		con("p", "", "backend_pid")
+		check("(backend_pid > 0)", "backend_pid")
+		bounded("version")
+	case "tesl_row_queue_removal_staging":
+		col("version", "int4")
+		col("queue", "text")
+		col("source", "jsonb")
+		col("retirement", "bytea")
+		col("retirement_hash", "text")
+		con("p", "", "version")
+		check("((version >= 2) AND (version <= 2147483646))", "version")
+		hash("retirement_hash")
+		digest("retirement", "retirement_hash")
+	case "tesl_schema_stage_protocol", "tesl_schema_queue_removal_protocol":
+		col("id", "int2")
+		col("format", "int4")
+		con("p", "", "id")
+		check("(id = 1)", "id")
+		if name == "tesl_schema_stage_protocol" {
+			check("(format = 2)", "format")
+		} else {
+			check("(format = 1)", "format")
+		}
+	case "tesl_schema_stages":
+		col("stage_id", "text")
+		col("descriptor", "bytea")
+		col("descriptor_hash", "text")
+		col("introduced_version", "int4")
+		for _, name := range []string{"physical_hash", "source_abi", "source_snapshot", "table_name", "index_name", "job_id", "state"} {
+			col(name, "text")
+		}
+		con("p", "", "stage_id")
+		con("u", "", "index_name")
+		con("u", "", "job_id")
+		check("(introduced_version >= 2)", "introduced_version")
+		check("(state = ANY (ARRAY['pending'::text, 'promoting'::text, 'blocked_duplicates'::text, 'enforced'::text, 'cancelled'::text]))", "state")
+		digest("descriptor", "descriptor_hash")
+	case "tesl_row_queue_discards":
+		col("job_id", "text")
+		col("source_digest", "text")
+		col("attempt_seq", "int8")
+		col("payload_hash", "text")
+		col("reason", "text")
+		con("p", "", "job_id", "source_digest")
+		check("(attempt_seq > 0)", "attempt_seq")
+		hash("payload_hash")
+	case "tesl_row_queue_conversion_failures":
+		col("job_id", "text")
+		col("source_digest", "text")
+		col("attempt_seq", "int8")
+		col("payload_hash", "text")
+		col("code", "text")
+		con("p", "", "job_id", "source_digest", "attempt_seq")
+		check("(attempt_seq > 0)", "attempt_seq")
+		hash("payload_hash")
+		check("(code = ANY (ARRAY['execution-budget'::text, 'execution-trap'::text, 'invalid-result'::text]))", "code")
+	case "tesl_row_queue_restamps", "tesl_row_queue_removal_restamps":
+		col("job_id", "text")
+		col("from_version", "int4")
+		col("to_version", "int4")
+		col("queue", "text")
+		col("job_type", "text")
+		col("contract_hash", "text")
+		col("payload_hash", "text")
+		col("retirement_hash", "text")
+		col("claim_seq", "int8")
+		con("p", "", "job_id", "from_version")
+		check("(from_version >= 1)", "from_version")
+		if name == "tesl_row_queue_removal_restamps" {
+			check("((to_version > from_version) AND (to_version <= 2147483646))", "to_version", "from_version")
+		} else {
+			check("((to_version = (from_version + 1)) AND (to_version <= 2147483646))", "to_version", "from_version")
+		}
+		hash("contract_hash")
+		hash("payload_hash")
+		hash("retirement_hash")
+		check("(claim_seq >= 0)", "claim_seq")
+	case "tesl_row_queue_retirements":
+		col("version", "int4")
+		col("retirement", "bytea")
+		col("retirement_hash", "text")
+		col("compiler_abi", "text")
+		con("p", "", "version")
+		check("((version >= 2) AND (version <= 2147483646))", "version")
+		hash("retirement_hash")
+		check("(compiler_abi ~ '^tesl-source-abi-v1:[0-9a-f]{64}$'::text)", "compiler_abi")
+		digest("retirement", "retirement_hash")
+	case "tesl_row_queue_target_staging":
+		col("version", "int4")
+		col("database_uuid", "uuid")
+		col("fence_ns", "int4")
+		col("predecessor_hash", "text")
+		col("contract", "bytea")
+		col("contract_hash", "text")
+		col("compiler_abi", "text")
+		col("stored_value_compatibility", "text")
+		con("p", "", "version")
+		check("((version >= 2) AND (version <= 2147483646))", "version")
+		bounded("fence_ns")
+		hash("predecessor_hash")
+		digest("contract", "contract_hash")
+		check("(compiler_abi ~ '^tesl-source-abi-v1:[0-9a-f]{64}$'::text)", "compiler_abi")
+		check("(stored_value_compatibility ~ '^tesl-stored-value-v1:[0-9a-f]{64}$'::text)", "stored_value_compatibility")
+	case "tesl_row_queue_conversion_staging":
+		col("database_uuid", "uuid")
+		for _, n := range []string{"fence_ns", "from_version", "to_version"} {
+			col(n, "int4")
+		}
+		col("queue", "text")
+		col("job_type", "text")
+		col("revision", "int4")
+		col("source_digest", "text")
+		col("source_document", "bytea")
+		col("parent_digest", "text")
+		col("inventory_hash", "text")
+		col("expansion_hash", "text")
+		col("old_contract", "bytea")
+		col("new_contract", "bytea")
+		col("policy", "text")
+		col("discard_reason", "text")
+		check("(policy = ANY (ARRAY['convert'::text, 'rejected'::text, 'execution-failed'::text, 'unconverted'::text]))", "policy")
+		con("p", "", "from_version", "queue", "job_type", "revision")
+		con("u", "", "source_digest")
+		bounded("fence_ns")
+		bounded("from_version")
+		check("((to_version = (from_version + 1)) AND (to_version <= 2147483646))", "to_version", "from_version")
+		check("((revision >= 0) AND (revision <= 128))", "revision")
+		digest("source_document", "source_digest")
+		check("(((revision = 0) AND (parent_digest = ''::text)) OR ((revision > 0) AND (parent_digest ~ '^[0-9a-f]{64}$'::text)))", "revision", "parent_digest")
+		hash("inventory_hash")
+		hash("expansion_hash")
+	case "tesl_row_baseline":
+		col("id", "int2")
+		col("initial_version", "int4")
+		col("established_by", "text")
+		col("inventory_authority", "text")
+		col("inventory", "bytea")
+		col("inventory_hash", "text")
+		col("queue_authority", "text")
+		col("queue_count", "int4")
+		col("facility_authority", "text")
+		col("facility_count", "int4")
+		con("p", "", "id")
+		check("(id = 1)", "id")
+		check("(initial_version = 1)", "initial_version")
+		check("(established_by = 'fresh-install'::text)", "established_by")
+		check("(inventory_authority = 'complete'::text)", "inventory_authority")
+		hash("inventory_hash")
+		check("(queue_authority = 'complete'::text)", "queue_authority")
+		check("(queue_count >= 0)", "queue_count")
+		check("(facility_authority = 'complete'::text)", "facility_authority")
+		check("(facility_count >= 0)", "facility_count")
+		digest("inventory", "inventory_hash")
+	case "tesl_row_versions":
+		col("version", "int4")
+		col("family", "text")
+		col("schema_snapshot", "bytea")
+		col("schema_snapshot_hash", "text")
+		col("storage_snapshot", "bytea")
+		col("storage_snapshot_hash", "text")
+		col("inventory_hash", "text")
+		col("catalog_hash", "text")
+		col("entity_count", "int4")
+		col("queue_count", "int4")
+		col("facility_count", "int4")
+		col("compiler_abi", "text")
+		col("stored_value_compatibility", "text")
+		con("p", "", "version")
+		bounded("version")
+		for _, n := range []string{"schema_snapshot_hash", "storage_snapshot_hash", "inventory_hash", "catalog_hash"} {
+			hash(n)
+		}
+		check("(entity_count >= 0)", "entity_count")
+		check("(queue_count >= 0)", "queue_count")
+		check("(facility_count >= 0)", "facility_count")
+		check("(compiler_abi ~ '^tesl-source-abi-v1:[0-9a-f]{64}$'::text)", "compiler_abi")
+		check("(stored_value_compatibility ~ '^tesl-stored-value-v1:[0-9a-f]{64}$'::text)", "stored_value_compatibility")
+		digest("schema_snapshot", "schema_snapshot_hash")
+		digest("storage_snapshot", "storage_snapshot_hash")
+	case "tesl_row_physical":
+		col("version", "int4")
+		col("predecessor_hash", "text")
+		col("contract", "bytea")
+		col("contract_hash", "text")
+		col("compiler_abi", "text")
+		col("stored_value_compatibility", "text")
+		col("operation_count", "int4")
+		col("epoch_preserving", "bool")
+		con("p", "", "version")
+		check("((version >= 1) AND (version <= 2147483646))", "version")
+		hash("contract_hash")
+		check("(compiler_abi ~ '^tesl-source-abi-v1:[0-9a-f]{64}$'::text)", "compiler_abi")
+		check("(stored_value_compatibility ~ '^tesl-stored-value-v1:[0-9a-f]{64}$'::text)", "stored_value_compatibility")
+		check("(operation_count >= 0)", "operation_count")
+		check("(((version = 1) AND (predecessor_hash = ''::text) AND (operation_count = 0)) OR ((version > 1) AND (predecessor_hash ~ '^[0-9a-f]{64}$'::text) AND (operation_count >= 0)))", "version", "predecessor_hash", "operation_count")
+		digest("contract", "contract_hash")
+	case "tesl_row_epochs":
+		col("through_version", "int4")
+		col("old_min", "int4")
+		col("retirement", "bytea")
+		col("retirement_hash", "text")
+		col("compiler_abi", "text")
+		col("forced", "bool")
+		con("p", "", "through_version")
+		check("((through_version >= 2) AND (through_version <= 2147483646))", "through_version")
+		check("((old_min >= 1) AND (old_min < through_version))", "old_min", "through_version")
+		hash("retirement_hash")
+		check("(compiler_abi ~ '^tesl-source-abi-v1:[0-9a-f]{64}$'::text)", "compiler_abi")
+		digest("retirement", "retirement_hash")
+	case "tesl_row_processing":
+		col("version", "int4")
+		col("compiler_abi", "text")
+		con("p", "", "version")
+		check("((version >= 2) AND (version <= 2147483646))", "version")
+		check("(compiler_abi ~ '^tesl-source-abi-v1:[0-9a-f]{64}$'::text)", "compiler_abi")
+	case "tesl_row_queue_sources":
+		col("version", "int4")
+		col("source_binding", "bytea")
+		col("source_binding_hash", "text")
+		col("inventory_hash", "text")
+		col("expansion_hash", "text")
+		con("p", "", "version")
+		bounded("version")
+		hash("source_binding_hash")
+		hash("inventory_hash")
+		hash("expansion_hash")
+		digest("source_binding", "source_binding_hash")
+	case "tesl_row_entities":
+		col("version", "int4")
+		col("entity", "text")
+		col("table_name", "text")
+		col("generation", "int2")
+		col("insert_generation", "int2")
+		col("type_contract", "bytea")
+		col("type_contract_hash", "text")
+		col("physical_storage", "bytea")
+		col("physical_storage_hash", "text")
+		col("ordinal", "int4")
+		col("operation_hash", "text")
+		con("p", "", "version", "entity")
+		con("u", "", "version", "table_name")
+		con("u", "", "version", "ordinal")
+		bounded("version")
+		check("((generation >= 1) AND (generation <= 32767))", "generation")
+		check("((insert_generation >= 1) AND (insert_generation <= generation))", "insert_generation", "generation")
+		hash("type_contract_hash")
+		hash("physical_storage_hash")
+		check("(ordinal >= 0)", "ordinal")
+		hash("operation_hash")
+		digest("type_contract", "type_contract_hash")
+		digest("physical_storage", "physical_storage_hash")
+	default:
+		return pgExpectedRowLifecycleControl(e, owner, name)
+	}
+	return pgBuildExpectedControlTable(e, owner, name, columns, constraints)
+}
+
+func pgRowControlCatalog(ctx context.Context, tx pgx.Tx, namespace string, roles PgMigrationControlRoles) error {
+	metadata, err := pgReadCatalogExpectations(ctx, tx)
+	if err != nil {
+		return err
+	}
+	names := []string{"tesl_jobs_seq_seq"}
+	extensions, _, err := pgRowFacilityCatalog(ctx, tx, namespace, roles)
+	if err != nil {
+		return err
+	}
+	names = append(names, extensions...)
+	for _, spec := range pgQueueCandidateTables(namespace) {
+		names = append(names, spec.name)
+	}
+	for _, spec := range pgMigrationControlTables {
+		names = append(names, spec.name)
+	}
+	for _, spec := range pgRowControlTables() {
+		names = append(names, spec.name)
+	}
+	var extra bool
+	if err := tx.QueryRow(ctx, `select exists(select 1 from pg_catalog.pg_class c join pg_catalog.pg_namespace n on n.oid=c.relnamespace join pg_catalog.pg_roles r on r.oid=c.relowner where n.nspname=$1 and c.relkind not in ('i','I') and ((r.rolname=$2 and not(c.relname=any($3::text[]))) or ((left(c.relname,12)='tesl_schema_' or left(c.relname,9)='tesl_row_' or left(c.relname,11)='tesl_queue_' or left(c.relname,11)='tesl_cache_' or left(c.relname,11)='tesl_email_' or left(c.relname,9)='tesl_sse_' or c.relname='tesl_jobs') and not(c.relname=any($3::text[])))))`, namespace, roles.Owner, names).Scan(&extra); err != nil {
+		return err
+	}
+	if extra {
+		return fmt.Errorf("unrecorded protected relation in row format 5")
+	}
+	if err := pgVerifyQueueCandidateTables(ctx, tx, namespace, roles, metadata); err != nil {
+		return err
+	}
+	for _, spec := range pgRowControlTables() {
+		expected, err := pgExpectedRowControl(metadata, roles.Owner, spec.name)
+		if err != nil {
+			return err
+		}
+		actual, err := pgReadMigrationTable(ctx, tx, namespace, spec.name)
+		if err != nil {
+			return err
+		}
+		if actual == nil || !reflect.DeepEqual(pgCanonicalMigrationTable(actual), pgCanonicalMigrationTable(expected)) {
+			return fmt.Errorf("protected row table %s differs from format 5", spec.name)
+		}
+		principals := []string{roles.Worker}
+		if roles.Request != "" {
+			principals = append(principals, roles.Request)
+		}
+		if pgRowQueueWorkTable(spec.name) {
+			if spec.name == "tesl_row_queue_conversion_attempts" {
+				var namedKey bool
+				if err := tx.QueryRow(ctx, `select exists(select 1 from pg_catalog.pg_constraint k join pg_catalog.pg_class c on c.oid=k.conrelid join pg_catalog.pg_namespace n on n.oid=c.relnamespace where n.nspname=$1 and c.relname=$2 and k.conname='tesl_row_queue_conversion_attempts_pkey' and k.contype='p')`, namespace, spec.name).Scan(&namedKey); err != nil {
+					return err
+				}
+				if !namedKey {
+					return fmt.Errorf("application queue attempt key was renamed")
+				}
+			}
+			if err := pgQueueTableACL(ctx, tx, namespace, spec.name, []string{}); err != nil {
+				return err
+			}
+		} else {
+			for _, principal := range principals {
+				if err := pgControlTableACL(ctx, tx, namespace, spec.name, principal); err != nil {
+					return err
+				}
+			}
+		}
+		seqs, err := pgReadControlSequences(ctx, tx, namespace, spec.name, roles.Worker)
+		if err != nil {
+			return err
+		}
+		if len(seqs) != 0 {
+			return fmt.Errorf("unexpected row control sequence")
+		}
+	}
+	return nil
+}

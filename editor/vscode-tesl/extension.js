@@ -6,6 +6,8 @@ const { spawnSync, spawn } = require("child_process");
 const vscode = require("vscode");
 const { parseTeslTestOutput } = require("./test-output-parser");
 const { findOnPath, findInstallation } = require("./toolchain");
+const { registerMigrationAuthoring } = require("./migration-authoring");
+const { createMigrationClient } = require("./migration-client");
 
 let client;
 let managedSelection;
@@ -319,7 +321,9 @@ function activate(context) {
       };
     }
 
+    const migrationClient = createMigrationClient(vscode, context);
     const clientOptions = {
+      middleware: migrationClient.middleware,
       documentSelector: [{ scheme: "file", language: "tesl" }],
       synchronize: {
         fileEvents: vscode.workspace.createFileSystemWatcher("**/*.tesl"),
@@ -329,6 +333,7 @@ function activate(context) {
     };
 
     client = new LanguageClient("tesl-lsp", "Tesl Language Server", serverOptions, clientOptions);
+    migrationClient.attach(client);
     client.start().catch((err) => {
       outputChannel.appendLine(`[tesl-lsp] failed to start: ${err}`);
       vscode.window.showErrorMessage(`Tesl LSP failed to start: ${err}`);
@@ -476,6 +481,9 @@ function activate(context) {
   context.subscriptions.push(
     vscode.languages.registerCodeLensProvider({ language: "tesl" }, lensProvider)
   );
+
+  registerMigrationAuthoring(vscode, context, { getClient: () => client, requireTrustedWorkspace });
+
 
   // "Run test" — run a single named test via the `tesl` CLI wrapper.
   //

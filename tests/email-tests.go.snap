@@ -72,6 +72,8 @@ var TestDBDatabase = teslrt.NewDatabase(
 	[]teslrt.PostgresTable{},
 )
 
+var _ = teslrt.RegisterDatabaseIdentity("teslmodemailtests.TestDB", TestDBDatabase)
+
 //line email-tests.tesl:66
 func sendWelcome(addr string) struct{} {
 //line email-tests.tesl:67

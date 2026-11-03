@@ -1,0 +1,27 @@
+module Schema.Demo.VCurrent exposing [
+  Note,
+  Receipt,
+  Gate,
+  Delivery,
+  Jobs,
+  makeNote,
+  makeDelivery,
+  deliveryText,
+]
+import Tesl.Prelude exposing [String]
+import Tesl.Json exposing [stringCodec]
+
+entity Note table "notes" primaryKey id { id: String, headline: String }
+entity Receipt table "receipts" primaryKey id { id: String, text: String }
+entity Gate table "delivery_gate" primaryKey id { id: String }
+
+record Delivery { id: String, text: String }
+codec Delivery {
+  toJson { id -> "id" with_codec stringCodec, text -> "oldText" with_codec stringCodec }
+  fromJson [ { id <- "id" with_codec stringCodec, text <- "oldText" with_codec stringCodec } ]
+}
+queueSchema Jobs { jobs: [Delivery] }
+
+fn makeNote(id: String) -> Note = Note { id: id, headline: id }
+fn makeDelivery(id: String) -> Delivery = Delivery { id: id, text: id }
+fn deliveryText(job: Delivery) -> String = job.text

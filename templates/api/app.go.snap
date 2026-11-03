@@ -114,6 +114,8 @@ var AppDatabaseDatabase = teslrt.NewDatabase(
 	},
 )
 
+var _ = teslrt.RegisterDatabaseIdentity("teslmodapp.AppDatabase", AppDatabaseDatabase)
+
 //line app.tesl:77
 var DefaultPort = teslrt.FromInt64(8086)
 

@@ -380,7 +380,7 @@ func CheckedDecoder[T any](decode func(any) Check[T]) func(any) (T, error) {
 // the same line the tag switch takes for a tag it has no constructor for. A request body is
 // the opposite case and goes through the `Decode*` functions above, which answer an error.
 
-// ParseColumnJSON parses the text of a jsonb column that holds an ADT.
+// ParseColumnJSON parses the text of a jsonb column that holds a record or ADT.
 //
 // It accepts BOTH shapes a Tesl backend writes there. This backend writes a JSON object.
 // `dsl/sql.rkt` binds the serialised value as a STRING parameter, so a row written by the
@@ -402,6 +402,21 @@ func ParseColumnJSON(data []byte) (any, error) {
 		return parsed, nil
 	}
 	return ParseJSON([]byte(text))
+}
+
+// MustDecodeColumnJSON applies the record's checked codec at the storage boundary.
+// A failed decode is an incompatible or corrupt row, never a zero-valued record.
+func MustDecodeColumnJSON[T any](data []byte, decode func(any) Check[T]) T {
+	raw, err := ParseColumnJSON(data)
+	if err != nil {
+		panic("database: a record column holds invalid JSON: " + err.Error())
+	}
+	checked := decode(raw)
+	if !checked.OK() {
+		panic("database: a record column failed its codec: " + checked.Message())
+	}
+	value, _ := checked.Value()
+	return value
 }
 
 // MustJSONFields is the `fields` object of a stored variant.

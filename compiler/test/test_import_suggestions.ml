@@ -18,16 +18,20 @@ let write_file path content =
   output_string oc content;
   close_out oc
 
-let fresh_dir =
-  let counter = ref 0 in
-  fun () ->
-    incr counter;
-    let dir =
-      Filename.concat (Filename.get_temp_dir_name ())
-        (Printf.sprintf "tesl_import_sug_%d_%d" (Unix.getpid ()) !counter)
-    in
-    Unix.mkdir dir 0o755;
-    dir
+let rec remove_tree path =
+  match Unix.lstat path with
+  | { Unix.st_kind = Unix.S_DIR; _ } ->
+    Array.iter (fun name -> remove_tree (Filename.concat path name)) (Sys.readdir path);
+    Unix.rmdir path
+  | _ -> Sys.remove path
+  | exception Unix.Unix_error (Unix.ENOENT, _, _) -> ()
+
+let fresh_dir () =
+  let dir = Filename.temp_file "tesl_import_sug_" ".dir" in
+  Sys.remove dir;
+  Unix.mkdir dir 0o700;
+  at_exit (fun () -> remove_tree dir);
+  dir
 
 (* Check a source that lives at a real path (so the folder scan can run). *)
 let check_at path source =
@@ -271,6 +275,32 @@ let test_local_scan_excludes_external_files () =
   Alcotest.(check (list string)) "only ordinary local files are indexed" [local]
     (Import_suggest.tesl_files_under dir ~self:"")
 
+(* The bounded, non-symlink scan must retain migration preview overlays,
+   including source files and directories that have not been written yet. *)
+let test_local_scan_overlay_preserves_security_boundary () =
+  let dir = Unix.realpath (fresh_dir ()) in
+  let outside = fresh_dir () in
+  let external_path = Filename.concat outside "external.tesl" in
+  write_file external_path "module External exposing []\n";
+  Unix.symlink external_path (Filename.concat dir "external.tesl");
+  Unix.symlink outside (Filename.concat dir "external");
+  let future = Filename.concat dir "future.tesl" in
+  let nested = Filename.concat dir "future/deep.tesl" in
+  let main = Filename.concat dir "main.tesl" in
+  Source_input.with_overlays ~project_root:dir [
+    future, "module Future exposing [futureFn]\nimport Tesl.Prelude exposing [Int]\nfn futureFn(n: Int) -> Int = n\n";
+    nested, "module Deep exposing []\n";
+  ] (fun () ->
+    Alcotest.(check (list string)) "only checked overlay files enter the scan"
+      [future; nested] (Import_suggest.tesl_files_under dir ~self:main);
+    let diags = check_at main
+      "module Main exposing []\nimport Tesl.Prelude exposing [Int]\nfn use() -> Int = futureFn 1\n" in
+    let d = find_diag ~code:"T001" ~msg_sub:"futureFn" diags in
+    check_insert_line ~line:2 ~text:"import Future exposing [futureFn]" d);
+  Alcotest.(check bool) "preview did not create its source" false (Sys.file_exists future);
+  Alcotest.(check bool) "preview did not create its directory" false
+    (Sys.file_exists (Filename.dirname nested))
+
 (* ── #34: bare top-level constants across the module boundary ────────────── *)
 
 (* A literal-valued exported constant now binds in the importing module — with
@@ -463,6 +493,31 @@ let test_type_position_excludes_config_only_names () =
       "ordinary type-position suggestion must still name its module: %s"
       d2.message
 
+let test_broken_sibling_cannot_replace_diagnostics () =
+  let dir = fresh_dir () in
+  let main = Filename.concat dir "main.tesl" in
+  let broken = Filename.concat dir "broken.tesl" in
+  let good = Filename.concat dir "good.tesl" in
+  Fun.protect ~finally:(fun () ->
+    List.iter (fun path -> if Sys.file_exists path then Sys.remove path) [main; broken; good];
+    Unix.rmdir dir) (fun () ->
+    write_file good "module Good exposing [wanted]\nimport Tesl.Prelude exposing [Int]\nfn wanted(n: Int) -> Int = n\n";
+    List.iter (fun invalid ->
+      write_file broken ("module Broken exposing [wanted]\n" ^ invalid);
+      let diags = check_at main
+        "module Main exposing []\nimport Tesl.Prelude exposing [Int]\nfn use() -> Int = wanted 1\n" in
+      let d = find_diag ~code:"T001" ~msg_sub:"wanted" diags in
+      check_insert_line ~line:2 ~text:"import Good exposing [wanted]" d;
+      Alcotest.(check bool) "an unimported broken sibling is not this module's syntax error"
+        false (List.exists (fun (d : Compile.diagnostic) -> d.code = "E000") diags);
+      let unknown = check_at main
+        "module Main exposing []\nimport Tesl.Prelude exposing [Int]\nfn bad(x: Tuple4 Int Int Int Int) -> Int = 1\n" in
+      ignore (find_diag ~code:"T001" ~msg_sub:"Tuple4" unknown);
+      Alcotest.(check bool) "checking the broken source itself still reports its error" true
+        (List.exists (fun (d : Compile.diagnostic) -> d.severity = "error") (Compile.check_file broken))
+    ) ["\000\n"; "fn bad() -> String = \"unterminated\n";
+       "fn bad() -> Int = $\n"; "fn bad(\n"])
+
 (* ── Runner ──────────────────────────────────────────────────────────────── *)
 
 let () =
@@ -490,10 +545,14 @@ let () =
         test_local_subdir_hint_no_fix;
       Alcotest.test_case "no candidate → plain error" `Quick
         test_unknown_name_without_candidate_is_plain;
+      Alcotest.test_case "broken siblings preserve errors and valid suggestions" `Quick
+        test_broken_sibling_cannot_replace_diagnostics;
       Alcotest.test_case "external file and directory links are ignored" `Quick
         test_local_scan_excludes_external_files;
       Alcotest.test_case "directory symlink cycles are ignored" `Quick
         test_local_scan_ignores_directory_symlink_cycles;
+      Alcotest.test_case "preview overlays retain the scan security boundary" `Quick
+        test_local_scan_overlay_preserves_security_boundary;
     ];
     "const-exports", [
       Alcotest.test_case "literal const binds across modules (#34)" `Quick

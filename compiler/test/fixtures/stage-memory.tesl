@@ -1,0 +1,39 @@
+module StageMemory exposing []
+
+import Tesl.Prelude exposing [String, Bool(..)]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.List exposing [List.length]
+import Tesl.DB exposing [dbRead, dbWrite]
+import Tesl.Database exposing [Database, Memory]
+
+entity Staged table "staged" primaryKey id {
+  id: String
+  flag: Maybe Bool
+  staging unique index [flag]
+}
+
+database Main = Database { entities: [Staged], backend: Memory }
+
+test "staging permits duplicate non-null inserts" requires [dbRead Staged, dbWrite Staged] {
+  insert Staged { id: "one", flag: Something True }
+  insert Staged { id: "two", flag: Something True }
+  let rows = select row from Staged
+  expect List.length rows == 2
+}
+
+test "staging permits updates that create duplicates" requires [dbRead Staged, dbWrite Staged] {
+  insert Staged { id: "one", flag: Something True }
+  insert Staged { id: "two", flag: Something False }
+  update row in Staged
+    where row.id == "two"
+    set row.flag = Something True
+  let rows = select row from Staged where row.flag == Something True
+  expect List.length rows == 2
+}
+
+test "staging permits multiple NULL keys" requires [dbRead Staged, dbWrite Staged] {
+  insert Staged { id: "one", flag: Nothing }
+  insert Staged { id: "two", flag: Nothing }
+  let rows = select row from Staged
+  expect List.length rows == 2
+}

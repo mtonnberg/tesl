@@ -755,20 +755,26 @@ let format_source (src : string) : string =
   let formatted = normalize_indentation formatted in
   String.concat "\n" formatted ^ "\n"
 
-let format_file (filename : string) : (unit, string) result =
+let format_file ?logical_path (filename : string) : (unit, string) result =
   try
     let src = In_channel.with_open_text filename In_channel.input_all in
     let formatted = format_source src in
-    if src <> formatted then
-      Out_channel.with_open_text filename (fun oc ->
-        Out_channel.output_string oc formatted);
-    Ok ()
+    let path = Option.value logical_path ~default:filename in
+    if src = formatted then Ok () else
+    match Migration_format_guard.reason ~file:path ~source:src with
+    | Some reason -> Error ("MIG013: " ^ reason)
+    | None ->
+      Out_channel.with_open_text filename (fun oc -> Out_channel.output_string oc formatted);
+      Ok ()
   with Sys_error msg -> Error msg
 
 (** Return [Ok true] if already formatted, [Ok false] if not, [Error msg] on IO error. *)
-let format_check (filename : string) : (bool, string) result =
+let format_check ?logical_path (filename : string) : (bool, string) result =
   try
     let src = In_channel.with_open_text filename In_channel.input_all in
     let formatted = format_source src in
-    Ok (src = formatted)
+    (* Frozen bytes are exempt from formatter style drift. A check must not
+       prescribe an edit which the formatter itself correctly refuses. *)
+    Ok (src = formatted || Migration_format_guard.reason
+      ~file:(Option.value logical_path ~default:filename) ~source:src <> None)
   with Sys_error msg -> Error msg

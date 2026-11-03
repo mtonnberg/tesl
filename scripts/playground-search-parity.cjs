@@ -49,5 +49,5 @@ const report = { version: 1, catalog_id: catalog.catalog_id, entries: catalog.en
   environment: { node: process.version, platform: process.platform, arch: process.arch },
   checker_bytes: fs.statSync(path.join(dist, "tesl_playground.js")).size,
   search_bytes: fs.statSync(path.join(dist, "tesl_search.js")).size };
-assert.ok(report.checker_bytes < 2000000, "checker bundle ceiling");
+assert.ok(report.checker_bytes < 2000000, `checker bundle ceiling: ${report.checker_bytes} bytes must be below 2000000`);
 console.log(JSON.stringify(report, null, 2));

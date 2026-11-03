@@ -1,0 +1,96 @@
+module App exposing []
+import Tesl.Prelude exposing [String, List]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.App exposing [App]
+import Tesl.Env exposing [env, envInt, envRead]
+import Tesl.DB exposing [dbRead, dbWrite]
+import Tesl.Database exposing [
+  Database,
+  Postgres,
+  PostgresConfig,
+  TcpConnection,
+  MigrationConfig,
+  Worker,
+]
+import Schema.Notes.VCurrent exposing [Note, tryTitle]
+database Main = Database {
+  schema: Schema.Notes.VCurrent
+  migrations: Schema.Notes.Migrate
+  backend: Postgres (PostgresConfig {
+    namespace: "notes"
+    dbName: env "NOTES_DB_NAME"
+    user: env "NOTES_DB_USER"
+    password: env "NOTES_DB_PASSWORD"
+    connection: TcpConnection { host: env "NOTES_DB_HOST", port: envInt "NOTES_DB_PORT" 5432 }
+    migrations: MigrationConfig {
+      topology: Worker
+      controlOwner: env "NOTES_CONTROL_OWNER"
+      requestRole: env "NOTES_REQUEST_ROLE"
+      workerRole: env "NOTES_WORKER_ROLE"
+      ddlConnection: env "NOTES_DDL_CONNECTION"
+    }
+  })
+}
+api NotesApi {
+  get "/health" -> String
+  get "/all" -> List Note
+  post "/one" -> String
+  post "/two" -> String
+  put "/touch-all" -> String
+  put "/empty" -> String
+  put "/invalid" -> String
+  put "/repair" -> String
+  put "/touch" -> String
+}
+handler get health() -> String = "ready"
+handler get all() -> List Note requires [dbRead Note] = select note from Note order note.id asc
+handler post one() -> String requires [dbWrite Note] =
+  case tryTitle "valid" of
+    Nothing -> "refused"
+    Something title ->
+      let rows = [Note { id: "one", title: title, memo: "base" }]
+      let _ = insertMany rows in Note
+      "created"
+handler put invalid() -> String requires [dbWrite Note] =
+  case tryTitle "blocked" of
+    Nothing -> "refused"
+    Something title ->
+      update note in Note
+        where note.id == "one"
+        set note.title = title
+      "invalidated"
+handler put repair() -> String requires [dbWrite Note] =
+  case tryTitle "repaired" of
+    Nothing -> "refused"
+    Something title ->
+      update note in Note
+        where note.id == "one"
+        set note.title = title
+      "repaired"
+handler put touch() -> String requires [dbWrite Note] =
+  update note in Note
+    where note.id == "one"
+    set note.memo = "touched"
+  "touched"
+handler post two() -> String requires [dbWrite Note] =
+  case tryTitle "valid" of
+    Nothing -> "refused"
+    Something title ->
+      let rows = [Note { id: "a-valid", title: title, memo: "base" }]
+      let _ = insertMany rows in Note
+      "created"
+handler put empty() -> String requires [dbWrite Note] =
+  case tryTitle "" of
+    Nothing -> "refused"
+    Something title ->
+      update note in Note
+        where note.id == "one"
+        set note.title = title
+      "emptied"
+handler put touchAll() -> String requires [dbWrite Note] =
+  update note in Note
+    set note.memo = "bulk"
+  "touched"
+server NotesServer for NotesApi { health, all, one, two, touchAll, empty, invalid, repair, touch }
+main() -> App requires [dbRead Note, dbWrite Note, envRead] =
+  App { database: Main, api: NotesServer, port: envInt "ROW_PORT" 8093 }

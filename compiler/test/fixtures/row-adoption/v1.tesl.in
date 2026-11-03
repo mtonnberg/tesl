@@ -1,0 +1,5 @@
+module Schema.Notes.VCurrent exposing [Note, makeNote]
+import Tesl.Prelude exposing [String]
+entity Note table "notes" primaryKey id { id: String, author: String, title: String, memo: String
+ unique index [title] as "notes_title_unique" }
+fn makeNote(id: String) -> Note = Note { id: id, author: "writer", title: id, memo: "base" }

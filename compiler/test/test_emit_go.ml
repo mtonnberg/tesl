@@ -863,7 +863,7 @@ let command_available command =
    missing linter has to be a failure rather than a silent pass. *)
 let required_go_gates = [
   "staticcheck", "staticcheck ./...";
-  "golangci-lint", "golangci-lint run ./...";
+  "golangci-lint", "golangci-lint run --allow-serial-runners ./...";
   "gosec", "gosec -quiet ./...";
   "govulncheck", "govulncheck ./...";
   "nilaway", "nilaway ./...";
@@ -4178,7 +4178,7 @@ func TestRecordColumnDecode(t *testing.T) {
 	}
 	for _, tc := range cases {
 		for _, stored := range []string{tc.wire, strconv.Quote(tc.wire)} {
-			got := teslColumnState([]byte(stored))
+			got := teslrt.MustDecodeColumnJSON([]byte(stored), DecodeStateJSON)
 			if !got.TeslEqual(tc.want) {
 				t.Fatalf("column decode: got %#v, want %#v", got, tc.want)
 			}
@@ -4217,7 +4217,7 @@ func TestMalformedRecordColumn(t *testing.T) {
 					t.Fatal("malformed stored record did not panic")
 				}
 			}()
-			_ = teslColumnState([]byte(wire))
+			_ = teslrt.MustDecodeColumnJSON([]byte(wire), DecodeStateJSON)
 		})
 	}
 }
@@ -8858,6 +8858,39 @@ let test_cache_with_go () =
      the literal-prefix rule, and the reset. *)
   gate_emitted "tesl-go-cache" emitted
 
+let test_cache_artifact_identity () =
+  let replace before after = Str.global_replace (Str.regexp_string before) after in
+  let source = cache_source
+    |> replace "Database, Memory" "Database, Postgres, PostgresConfig, TcpConnection"
+    |> replace "backend: Memory" {|backend: Postgres (PostgresConfig {
+      dbName: "cache" user: "cache" password: "cache"
+      connection: TcpConnection { host: "localhost" port: 5432 }
+    })|} in
+  let emit source = emit_ok "<cache-artifact>" source in
+  let identity artifacts =
+    let code = artifact "internal/teslmodgocache/module.go" artifacts in
+    check bool "compiled cache constructor carries artifact identity" true
+      (contains code "teslrt.NewCacheOnArtifact[string]");
+    let prefix = "const teslCacheArtifactIdentity = \"" in
+    let line = String.split_on_char '\n' code |> List.find (String.starts_with ~prefix) in
+    String.sub line (String.length prefix) 64 in
+  let first = emit source in
+  check string "identical artifacts keep their cache namespace" (identity first) (identity (emit source));
+  check bool "code changes cannot reuse an unproven codec identity" true
+    (identity first <> identity (emit (replace "Nothing -> 0 - 1" "Nothing -> 0 - 2" source)));
+  check bool "protected cache verifier ships in actual emitted runtime" true
+    (contains (artifact "internal/teslrt/migration_cache.go" first) "func pgVerifyArtifactCache");
+  check bool "typed cache runtime ships in actual emitted runtime" true
+    (contains (artifact "internal/teslrt/migration_cache_runtime.go" first) "func NewCacheOnArtifact");
+  List.iter (fun file -> check bool ("combined facility runtime: " ^ file) true
+    (String.length (artifact ("internal/teslrt/" ^ file) first) > 0))
+    ["migration_email.go"; "migration_email_spec.go"; "migration_pubsub.go"; "migration_pubsub_runtime.go"];
+  (* Compile the actual PostgreSQL artifact dependency closure. Database behavior
+     is exercised by the private-cluster runtime suites; this check catches an
+     omitted runtime file even when the in-repository Go package compiles. *)
+  gate_emitted "tesl-go-cache-artifact"
+    (List.filter (fun (a : Emit_go.artifact) -> not (Filename.check_suffix a.path "_test.go")) first)
+
 let money_source = {|module GoMoney exposing [invoiceTotal, discounted, converted, hourlyFee, pace]
 
 import Tesl.Prelude exposing [Bool(..), Int, String, Unit]
@@ -11199,6 +11232,77 @@ let test_boundary_with_go () =
       ())
   end
 
+(* The real example accepts a raw JSON list and obtains ForAll by executing
+   List.allCheck. Test the emitted handler itself, not a copied implementation or
+   a source-string assertion; the direct principal below makes no auth claim. *)
+let test_todo_example_body_validation_with_go () =
+  let input = Filename.concat (Compile.default_root_path ()) "example/todo-api.tesl" in
+  let source = In_channel.with_open_bin input In_channel.input_all in
+  let emitted = emit_ok input source in
+  let regression = {Emit_go.path="internal/teslmodtodoapi/todo_body_validation_test.go";
+    contents={|package teslmodtodoapi
+
+import (
+	"testing"
+
+	"tesl.generated/teslmodtodoapi/internal/teslrt"
+)
+
+// This calls the actual emitted handler to test batch validation. The direct
+// principal is test-only: authentication and HTTP decoding are separate gates.
+func invokeTodoIDBatchForTest(values []string) (result string, rejection *teslrt.RequestRejection) {
+	defer func() {
+		if raised := recover(); raised != nil {
+			failure, ok := raised.(teslrt.RequestRejection)
+			if !ok {
+				panic(raised)
+			}
+			rejection = &failure
+		}
+	}()
+	result = listTest(User{}, values)
+	return result, nil
+}
+
+func TestTodoExampleValidatesEverySubmittedID(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		values []string
+	}{
+		{name: "nil list"},
+		{name: "empty list", values: []string{}},
+		{name: "valid ID", values: []string{"todo-a"}},
+		{name: "valid batch", values: []string{"todo-a", "todo-1", "todo-last"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			result, rejection := invokeTodoIDBatchForTest(test.values)
+			if rejection != nil || result != "hej" {
+				t.Fatalf("valid batch = %q, %v; want hej without rejection", result, rejection)
+			}
+		})
+	}
+	for _, test := range []struct {
+		name   string
+		values []string
+	}{
+		{name: "wrong prefix", values: []string{"other-a"}},
+		{name: "prefix only", values: []string{"todo-"}},
+		{name: "empty ID", values: []string{""}},
+		{name: "invalid first", values: []string{"other-a", "todo-a", "todo-last"}},
+		{name: "invalid middle", values: []string{"todo-a", "other-a", "todo-last"}},
+		{name: "invalid last", values: []string{"todo-a", "todo-1", "other-a"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			result, rejection := invokeTodoIDBatchForTest(test.values)
+			if rejection == nil || rejection.Status != 400 || rejection.Message != "Malformed todo id" || result != "" {
+				t.Fatalf("malformed batch = %q, %v; want RequestRejection 400", result, rejection)
+			}
+		})
+	}
+}
+|}} in
+  gate_emitted "tesl-go-todo-body-validation" (emitted @ [regression])
+
 (* ── Proof shapes at the edges of erasure ────────────────────────────────────
    A proof ANNOTATION on a constructor field is a type-level contract with no runtime
    structure, like every other: what it buys is that a `Node` cannot be BUILT without a
@@ -13219,6 +13323,7 @@ let emission_tests =
       test_case "polymorphic equality travels as a dictionary" `Slow test_poly_equality_with_go;
       test_case "a wide ADT is emitted boxed" `Slow test_wide_adt_is_boxed;
       test_case "Tesl.Cache" `Slow test_cache_with_go;
+      test_case "durable cache artifact identity" `Quick test_cache_artifact_identity;
       test_case "Tesl.Money and Tesl.Units" `Slow test_money_with_go;
       test_case "property tests" `Slow test_property_with_go;
       test_case "SSE channels, publish and subscribe" `Slow test_sse_with_go;
@@ -13280,6 +13385,8 @@ let emission_tests =
         test_proof_erasure_limits_fail_closed;
       test_case "the request boundary: captures, list bodies, chained checks" `Slow
         test_boundary_with_go;
+      test_case "the real todo handler validates every submitted ID" `Slow
+        test_todo_example_body_validation_with_go;
       test_case "a newtype over a newtype, and unobservable containers" `Slow
         test_ordered_newtype_with_go;
       test_case "empty containers, and what a seed block describes" `Slow
@@ -13332,4 +13439,7 @@ let () =
       Printf.sprintf "emit_go-shard-%02d" shard_index,
       Printf.sprintf "emission-shard-%02d" shard_index
   in
-  run suite_name [group_name, selected]
+  (* Alcotest updates one shared `latest` symlink per log directory. Concurrent
+     shards otherwise race in that update and can abort before running a test. *)
+  let log_dir = Filename.concat "_build/_tests/emit-go-shards" suite_name in
+  run ~log_dir suite_name [group_name, selected]

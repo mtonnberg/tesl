@@ -92,7 +92,12 @@ type mode = Modules | Exports of string | Types | Values
 let mode context =
   let ts = tokens context.before in
   let recent = List.fold_left (fun acc token ->
-    if declaration_token token || token = Token.IMPORT then [token]
+    (* Contextual migration values are IDENT declarations, not reserved lexer
+       keywords. Their '=' must end the preceding import completion context. *)
+    if token = Token.EQ && (match acc with
+      | Token.IDENT ("migration" | "contract" | "repair") :: _ -> true
+      | _ -> false) then [Token.EQ]
+    else if declaration_token token || token = Token.IMPORT then [token]
     else token :: acc) [] ts |> List.rev in
   match recent with
   | Token.IMPORT :: rest ->
@@ -230,7 +235,75 @@ let matches prefix label =
   starts (lower prefix) (lower label) ||
   (not (String.contains prefix '.') && starts (lower prefix) (lower (tail label)))
 
+(* Contextual migration constructors are erased before runtime checking, so
+   they intentionally do not belong to the ordinary stdlib value environment. *)
+let migration_context context =
+  let rec constructor name = function
+    | Token.UIDENT part :: rest -> constructor (name ^ part) rest
+    | Token.DOT :: rest -> constructor (name ^ ".") rest
+    | Token.LBRACE :: rest when tail name = "Migration" -> Some rest
+    | _ -> None in
+  let rec seek = function
+    | Token.IDENT "migration" :: Token.EQ :: rest ->
+      (match constructor "" rest with
+       | Some rest -> inside 1 0 None rest
+       | None when rest = [] -> Some (0, 0, None)
+       | None -> seek rest)
+    | _ :: rest -> seek rest | [] -> None
+  and inside braces brackets field = function
+    | [] -> Some (braces, brackets, field)
+    | Token.RBRACE :: rest when braces = 1 -> seek rest
+    | Token.LBRACE :: rest -> inside (braces + 1) brackets field rest
+    | Token.RBRACE :: rest -> inside (braces - 1) brackets field rest
+    | Token.LBRACKET :: rest -> inside braces (brackets + 1) field rest
+    | Token.RBRACKET :: rest -> inside braces (max 0 (brackets - 1)) field rest
+    | Token.IDENT name :: Token.COLON :: rest when braces = 1 && brackets = 0 ->
+      inside braces brackets (Some name) rest
+    | _ :: rest -> inside braces brackets field rest in
+  seek (tokens context.before)
+
+let migration_items context =
+  let item label replacement detail documentation =
+    make ~kind:"constructor" ~edit:(edit context replacement) ~documentation label detail in
+  let field label documentation =
+    make ~kind:"field" ~edit:(edit context (label ^ ": ")) ~documentation label
+      ("Migration field " ^ label) in
+  match migration_context context with
+  | None -> []
+  | Some (0, _, _) -> [item "Migration" "Migration" "Migration declaration"
+      "Start a migration with from, to, same, and entities fields. Use tesl migrate for a checked proposal; review each decision before applying it."]
+  | Some (1, 0, _) when not (String.contains context.line_text ':') ->
+    List.map (fun (name, doc) -> field name doc) [
+      "from", "Previous frozen schema root. Import it directly; never edit a deployed snapshot.";
+      "to", "Current target schema root. Refresh the draft after editing VCurrent.";
+      "same", "Explicit cross-version identities. Same is valid only for unchanged complete contracts; changed proof predicates require revalidation, not an automatic Same.";
+      "entities", "One decision per changed entity: Additive, Derived, Migrate, New, or Drop. The compiler checks supported combinations.";
+      "fixtures", "Representative old values for pure converters. The compiler checks exact old types and converter results.";
+      "jobs", "Explicit retained-payload decisions. Row and payload changes may require separate ordered releases."]
+  | Some (_, _, Some "same") -> [item "Same" "Same" "Same Old.Declaration New.Declaration"
+      "Assert complete semantic identity, including proof/check/establish dependencies and codecs. Equal names or storage types are insufficient. If historical proof meaning changed, omit Same and use a checked explicit migration; Retype and WriteBack may be required."]
+  | Some (_, _, Some "entities") -> List.map (fun (name, detail, doc) -> item name name detail doc) [
+      "Additive", "Additive [rules]", "Keep all existing field contracts unchanged; provide values for new fields. A missing proof identity forbids this option.";
+      "Derived", "Derived [rules]", "Derive a field-by-field adapter. Revalidate can add a supported proof while preserving all old proofs; changing historical proof meaning requires a different checked route. Use fixtures to exercise old values.";
+      "Migrate", "Migrate helperFunction", "Call a pure old-row to Migrated new-row converter. Write and test the application-specific conversion; the compiler checks its exact type.";
+      "New", "New", "Create a genuinely new entity. This does not preserve a renamed entity's identity.";
+      "Drop", "Drop", "Retire a removed entity only through the checked migration and Contract lifecycle; this is a destructive decision.";
+      "Default", "Default field literal", "Supply a supported literal for a newly added primitive field. Existing or proof-bearing fields need another checked rule.";
+      "Revalidate", "Revalidate field helperFunction", "Add a first field-local proof, or a conjunction preserving every old proof through verified Same. Return the original primitive value; do not normalize it or replace historical proof meaning. Old values can reject; add representative fixtures.";
+      "Retype", "Retype field", "Convert the representation and prove the new field contract. Review old-writer compatibility and the generated physical plan.";
+      "Rename", "Rename oldField newField", "Explicitly map a renamed field. This alone does not prove proof identity or authorize a table/queue identity rename.";
+      "WriteBack", "WriteBack oldField newField helperFunction", "Provide a checked reverse conversion for supported rolling overlap. It does not establish general rollback after Contract.";
+      "Legacy", "Legacy field literal", "Retain a historical field for old readers/writers until the checked retirement point.";
+      "LegacyWith", "LegacyWith field helperFunction", "Supply an explicit historical projection during supported overlap. Review and test the conversion."]
+  | Some (_, _, Some "jobs") -> [item "Migrate" "Migrate" "Migrate helperFunction"
+      "Convert an exact retained job payload with a pure Old.Payload -> Migrated New.Payload helper and representative fixtures.";
+      item "RemoveEmpty" "RemoveEmpty" "RemoveEmpty"
+      "Remove an unchanged empty queue through durable admission and catalog checks. Pending jobs or dependency changes must refuse."]
+  | Some _ -> []
+
 let library_items source context m safe_imports =
+  let special = migration_items context in
+  if special <> [] then special else
   let mode = mode context in
   match mode with
   | Modules ->
@@ -288,9 +361,9 @@ let local_functions context m =
    declarations. Only resolvable sibling modules are offered with automatic
    edits. Discovery is bounded independently of parser recovery. *)
 let project_types source context m safe_imports =
-  if not (Sys.file_exists m.source_file) then [] else
+  if not (Source_input.exists m.source_file) then [] else
   let directory = Filename.dirname m.source_file in
-  let files = try Sys.readdir directory |> Array.to_list |> List.sort compare
+  let files = try Source_input.readdir directory |> Array.to_list |> List.sort compare
     with Sys_error _ -> [] in
   let remaining = ref 200 and bytes = ref (8 * 1024 * 1024) in
   List.concat_map (fun file ->
@@ -302,7 +375,7 @@ let project_types source context m safe_imports =
       if stat.Unix.st_kind <> Unix.S_REG || stat.st_size > 1024 * 1024
          || stat.st_size > !bytes then [] else
       (decr remaining; bytes := !bytes - stat.st_size;
-      let input = In_channel.with_open_bin path In_channel.input_all in
+      let input = Source_input.read path in
       match Parser.parse_module path input with
       | Err _ -> []
       | Ok imported ->

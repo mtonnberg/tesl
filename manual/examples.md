@@ -120,6 +120,17 @@ parameters.
 | [`lesson75-regex-validation.tesl`](../example/learn/lesson75-regex-validation.tesl) | `Tesl.Regex` inside `check` functions that mint `ValidEmail` / `ValidSlug`: why the pattern must be a string literal (VREGEX002), the compile-time rejection of catastrophic backtracking (VREGEX003) and of capture groups that may not participate (VREGEX004, which is what makes `Regex.captures : … -> Maybe (List String)` honest), plus `find` / `findAll` / `replace` / `split` |
 | [`lesson77-traces.tesl`](../example/learn/lesson77-traces.tesl) | The OTel Traces signal: inbound `traceparent` correlation and outbound propagation with nothing to write, `traces True` + `traceRatio` for the per-request span tree that answers the N+1 question, the built-in span catalog (request / SQL / pool wait / outbound HTTP / queue job / LLM call / agent tool / cache), parent-respecting head sampling, and why there is no user-facing `span` statement |
 
+### Database migrations
+
+| Lesson | Focus |
+| --- | --- |
+| [Remove fields](../example/learn/lesson86-removing-fields.md) | Retained old representations, rolling writes and Contract cleanup |
+| [Change JSONB representation](../example/learn/lesson88-jsonb-adt-retype.md) | Record-to-ADT conversion with explicit reverse writes |
+| [Add a field proof](../example/learn/lesson89-proof-revalidation.md) | Validate existing data while keeping the same column |
+| [Change a field proof](../example/learn/lesson90-changing-field-proofs.md) | Preserve old and new proof requirements during deployment |
+| [Remove a table](../example/learn/lesson91-removing-a-table.md) | Retain old-app access until reviewed Contract deletes the table |
+| [Full PostgreSQL todo app](../example/db-migration-example/README.md) | Application history, worker migrations and rolling deployment |
+
 ### Testing
 | File | Description |
 |------|-------------|

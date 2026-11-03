@@ -1,0 +1,84 @@
+{{- if eq .Values.mode "database" }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ .Release.Name }}-postgres
+type: Opaque
+stringData:
+  POSTGRES_PASSWORD: {{ .Values.database.installerPassword | quote }}
+  POSTGRES_DB: {{ .Values.database.name | quote }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ .Release.Name }}-init
+type: Opaque
+stringData:
+  init.sql: |
+    CREATE ROLE demo_owner NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION;
+    CREATE ROLE demo_worker LOGIN PASSWORD '{{ .Values.database.workerPassword | replace "'" "''" }}' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION;
+    CREATE ROLE demo_request LOGIN PASSWORD '{{ .Values.database.requestPassword | replace "'" "''" }}' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION;
+    REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+    GRANT USAGE, CREATE ON SCHEMA public TO demo_owner;
+    GRANT USAGE ON SCHEMA public TO demo_worker, demo_request;
+    GRANT CREATE ON DATABASE {{ .Values.database.name | quote }} TO demo_owner;
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.database.host }}
+spec:
+  selector:
+    app: {{ .Release.Name }}
+  ports:
+    - port: 5432
+      targetPort: 5432
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app: {{ .Release.Name }}
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: postgres
+          image: {{ .Values.database.image | quote }}
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+          envFrom:
+            - secretRef:
+                name: {{ .Release.Name }}-postgres
+          ports:
+            - containerPort: 5432
+          readinessProbe:
+            exec:
+              command: [sh, -ec, 'PGPASSWORD="$POSTGRES_PASSWORD" psql -h 127.0.0.1 -U postgres -d "$POSTGRES_DB" -c "SELECT 1" >/dev/null']
+            periodSeconds: 2
+            timeoutSeconds: 5
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+            - name: init
+              mountPath: /docker-entrypoint-initdb.d
+      volumes:
+        - name: data
+          emptyDir: {}
+        - name: init
+          secret:
+            secretName: {{ .Release.Name }}-init
+{{- end }}

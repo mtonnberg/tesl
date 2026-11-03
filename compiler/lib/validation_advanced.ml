@@ -1184,41 +1184,9 @@ let check_record_field_proof_construction
         List.iter (walk_expr type_env subject_env proof_env) args
       | ELet { name; value; body; _ } ->
         walk_expr type_env subject_env proof_env value;
-        let subject_env' = match subject_of_expr subject_env value with
-          | Some s -> (name, s) :: subject_env
-          | None ->
-            (* For direct check-fn calls (RetAttached), propagate the subject of the
-               return-bound argument to the let-binder, mirroring check_expr_call_proofs. *)
-            (match value with
-             | EApp _ ->
-               let (head0, args0) = collect_call_head_and_args [] value in
-               let (head, args) = normalize_explicit_check_call head0 args0 in
-               (match function_name_of_expr head with
-                | Some fn_name ->
-                  (match List.assoc_opt fn_name funcs with
-                   | Some info when (match info.fi_return with RetAttached _ -> true | _ -> false) ->
-                     let binding_arg = match info.fi_return with
-                       | RetAttached { binding = b; _ } ->
-                         let rec find_idx i = function
-                           | [] -> None
-                           | (p : binding) :: _ when p.name = b.name ->
-                             if i < List.length args then Some (List.nth args i) else None
-                           | _ :: rest -> find_idx (i+1) rest
-                         in
-                         (match find_idx 0 info.fi_params with
-                          | Some a -> Some a
-                          | None -> List.nth_opt args 0)
-                       | _ -> List.nth_opt args 0
-                     in
-                     (match binding_arg with
-                      | Some arg ->
-                        (match subject_of_expr subject_env arg with
-                         | Some s -> (name, s) :: subject_env
-                         | None -> subject_env)
-                      | None -> subject_env)
-                   | _ -> subject_env)
-                | None -> subject_env)
-             | _ -> subject_env)
+        let subject_env' = match attached_subject_of_expr funcs subject_env value with
+          | Some subject -> (name, subject) :: subject_env
+          | None -> subject_env
         in
         let new_proofs = proofs_of_expr name funcs subject_env' proof_env value in
         let proof_env' = if new_proofs = [] then proof_env
@@ -1230,41 +1198,9 @@ let check_record_field_proof_construction
         walk_expr type_env' subject_env' proof_env' body
       | ELetProof { value_name; proof_name; value; body; _ } ->
         walk_expr type_env subject_env proof_env value;
-        let subject_env' = match subject_of_expr subject_env value with
-          | Some s -> (value_name, s) :: subject_env
-          | None ->
-            (* For check-fn calls (RetAttached), propagate the subject of the
-               return-bound argument — same logic as the ELet handler. *)
-            (match value with
-             | EApp _ ->
-               let (head0, args0) = collect_call_head_and_args [] value in
-               let (_head, args) = normalize_explicit_check_call head0 args0 in
-               (match function_name_of_expr _head with
-                | Some fn_name ->
-                  (match List.assoc_opt fn_name funcs with
-                   | Some info when (match info.fi_return with RetAttached _ -> true | _ -> false) ->
-                     let binding_arg = match info.fi_return with
-                       | RetAttached { binding = b; _ } ->
-                         let rec find_idx i = function
-                           | [] -> None
-                           | (p : binding) :: _ when p.name = b.name ->
-                             if i < List.length args then Some (List.nth args i) else None
-                           | _ :: rest -> find_idx (i+1) rest
-                         in
-                         (match find_idx 0 info.fi_params with
-                          | Some arg -> Some arg
-                          | None -> (match args with x :: _ -> Some x | [] -> None))
-                       | _ -> (match args with x :: _ -> Some x | [] -> None)
-                     in
-                     (match binding_arg with
-                      | Some arg ->
-                        (match subject_of_expr subject_env arg with
-                         | Some s -> (value_name, s) :: subject_env
-                         | None -> subject_env)
-                      | None -> subject_env)
-                   | _ -> subject_env)
-                | None -> subject_env)
-             | _ -> subject_env)
+        let subject_env' = match attached_subject_of_expr funcs subject_env value with
+          | Some subject -> (value_name, subject) :: subject_env
+          | None -> subject_env
         in
         (* Propagate proofs: proof_name gets the detached proofs from the value.
            Mirror the logic in check_expr_call_proofs's ELetProof handler. *)
@@ -1288,21 +1224,10 @@ let check_record_field_proof_construction
         walk_expr type_env subject_env proof_env else_
       | ECase { scrut; arms; _ } ->
         walk_expr type_env subject_env proof_env scrut;
-        (* R51_P03 — propagate case-arm binder proofs.
-           For `case scrut of Something p -> body`, the `p` binder carries
-           the proofs extracted from the scrut's Maybe (Fact P) shape.  We
-           mirror the logic in `check_expr_call_proofs`'s ECase handler so
-           the record-field-proof pass can resolve `value ::: p` in the
-           arm body, making `Holder { v: x ::: p }` accept the same proof
-           evidence that the direct call form already does. *)
-        let scrut_proofs = proofs_of_expr "_" funcs subject_env proof_env scrut in
         List.iter (fun (arm : case_arm) ->
-          let proof_env' = match arm.pattern with
-            | PCon { fields = [(_, PVar x)]; _ } when scrut_proofs <> [] ->
-              (x, scrut_proofs) :: proof_env
-            | _ -> proof_env
-          in
-          walk_expr type_env subject_env proof_env' arm.body
+          let proof_env', subject_env' = case_payload_proof_environments
+            funcs subject_env proof_env scrut arm.pattern in
+          walk_expr type_env subject_env' proof_env' arm.body
         ) arms
       | EOk { value; _ } -> walk_expr type_env subject_env proof_env value
       | ELambda { params; body; _ } ->
@@ -1347,8 +1272,51 @@ let check_record_field_proof_construction
          walk_expr type_env subject_env proof_env subject;
          walk_expr type_env subject_env proof_env body
        | EStartEmailWorker _ -> ()
-       | ESqlQuery { query; _ } ->
-         Ast_visitor.fold_sql_query
+       | ESqlQuery { query; loc } ->
+         (* SQL writes construct persisted entity fields too. Merely walking
+            their value expressions loses the destination's proof obligation. *)
+         let destination = match query with
+           | QueryInsert insert -> Some (insert.entity, insert.fields)
+           | QueryUpsert upsert -> Some (upsert.entity, upsert.fields)
+           | QueryUpdate update -> Some (update.entity, update.updates)
+           | QuerySelect _ | QueryDelete _ | QueryInsertMany _ -> None in
+         Option.iter (fun (entity, fields) ->
+           let annotated = Option.value ~default:[] (List.assoc_opt entity rec_bindings) in
+           let definitions = List.find_map (function
+             | DEntity d when d.name=entity -> Some d.fields
+             | _ -> None) decls |> Option.value ~default:[] in
+           let updated = match query with
+             | QueryUpdate update -> List.map fst update.updates
+             | QueryUpsert upsert -> upsert.do_update
+             | _ -> [] in
+           let rec subjects = function
+             | PredApp p -> p.args
+             | PredAnd p -> subjects p.left @ subjects p.right in
+           List.iter (fun (b:binding) ->
+             if not (List.mem b.name updated) &&
+                Option.fold ~none:false ~some:(fun proof ->
+                  List.exists (fun subject -> List.mem subject updated) (subjects proof)) b.proof_ann then
+               errors := make_error loc
+                 (Printf.sprintf "SQL write changes a subject of `%s.%s`'s proof without re-establishing that field; update all dependent proof fields together" entity b.name) :: !errors;
+             if List.mem b.name updated then
+               Option.iter (fun proof -> List.iter (fun subject ->
+                 if List.exists (fun (f:field_def) -> f.name=subject) definitions &&
+                    not (List.mem subject updated) &&
+                    not (match query with QueryUpsert upsert -> List.mem subject upsert.conflict | _ -> false) then
+                   errors := make_error loc
+                     (Printf.sprintf "SQL write cannot assume stored sibling `%s.%s` equals the proof subject; assign dependent fields together" entity subject) :: !errors
+               ) (subjects proof)) b.proof_ann
+           ) annotated;
+           (* Include plain supplied fields in the substitution map: evidence
+              about a sibling must bind to that sibling's actual assigned value. *)
+           let bindings = List.filter_map (fun (f:field_def) ->
+             if not (List.mem_assoc f.name fields) then None else
+             Some (Option.value ~default:{name=f.name;type_expr=f.type_expr;proof_ann=None;loc=f.loc}
+               (List.find_opt (fun (b:binding) -> b.name=f.name) annotated))) definitions in
+           let args = List.map (fun (b:binding) -> List.assoc b.name fields) bindings in
+           errors := check_call_proofs ~funcs loc entity bindings args subject_env proof_env @ !errors
+         ) destination;
+          Ast_visitor.fold_sql_query
            (fun () child -> walk_expr type_env subject_env proof_env child)
            () query
      in
@@ -1644,39 +1612,9 @@ let check_ghost_witness_predicates
          | _ -> walk_expr type_env subject_env proof_env value)
       | ELet { name; value; body; _ } ->
         walk_expr type_env subject_env proof_env value;
-        let subject_env' = match subject_of_expr subject_env value with
-          | Some s -> (name, s) :: subject_env
-          | None ->
-            (match value with
-             | EApp _ ->
-               let (head0, args0) = collect_call_head_and_args [] value in
-               let (head, args) = normalize_explicit_check_call head0 args0 in
-               (match function_name_of_expr head with
-                | Some fn_name ->
-                  (match List.assoc_opt fn_name funcs with
-                   | Some info when (match info.fi_return with RetAttached _ -> true | _ -> false) ->
-                     let binding_arg = match info.fi_return with
-                       | RetAttached { binding = b; _ } ->
-                         let rec find_idx i = function
-                           | [] -> None
-                           | (p : binding) :: _ when p.name = b.name ->
-                             if i < List.length args then Some (List.nth args i) else None
-                           | _ :: rest -> find_idx (i+1) rest
-                         in
-                         (match find_idx 0 info.fi_params with
-                          | Some a -> Some a
-                          | None -> List.nth_opt args 0)
-                       | _ -> List.nth_opt args 0
-                     in
-                     (match binding_arg with
-                      | Some arg ->
-                        (match subject_of_expr subject_env arg with
-                         | Some s -> (name, s) :: subject_env
-                         | None -> subject_env)
-                      | None -> subject_env)
-                   | _ -> subject_env)
-                | None -> subject_env)
-             | _ -> subject_env)
+        let subject_env' = match attached_subject_of_expr funcs subject_env value with
+          | Some subject -> (name, subject) :: subject_env
+          | None -> subject_env
         in
         let new_proofs = proofs_of_expr name funcs subject_env' proof_env value in
         let proof_env' = if new_proofs = [] then proof_env
@@ -1688,7 +1626,7 @@ let check_ghost_witness_predicates
         walk_expr type_env' subject_env' proof_env' body
       | ELetProof { value_name; proof_name; value; body; _ } ->
         walk_expr type_env subject_env proof_env value;
-        let subject_env' = match subject_of_expr subject_env value with
+        let subject_env' = match attached_subject_of_expr funcs subject_env value with
           | Some s -> (value_name, s) :: subject_env
           | None -> subject_env
         in
@@ -1720,11 +1658,8 @@ let check_ghost_witness_predicates
               let se = match subject_of_expr subject_env scrut with
                 | Some s when s <> x -> (x, s) :: subject_env | _ -> subject_env in
               (pe, se)
-            | PCon { fields = [(_, PVar x)]; _ } ->
-              let pe = if scrut_proofs <> [] then (x, scrut_proofs) :: proof_env else proof_env in
-              let se = match subject_of_expr subject_env scrut with
-                | Some s when s <> x -> (x, s) :: subject_env | _ -> subject_env in
-              (pe, se)
+            | PCon { fields = [(_, PVar _)]; _ } ->
+              case_payload_proof_environments funcs subject_env proof_env scrut arm.pattern
             | _ -> (proof_env, subject_env)
           in
           walk_expr type_env subject_env' proof_env' arm.body

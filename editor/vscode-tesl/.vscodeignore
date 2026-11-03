@@ -10,6 +10,8 @@ test/**
 tests/**
 extension.js
 test-output-parser.js
+migration-authoring.js
+migration-client.js
 node_modules/**
 package-lock.json
 
@@ -26,3 +28,5 @@ package-lock.json
 
 # Racket bytecode that may have been compiled locally
 **/compiled/**
+
+host-test/**

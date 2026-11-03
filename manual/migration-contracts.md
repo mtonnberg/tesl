@@ -1,0 +1,168 @@
+# Preparing storage cleanup after a migration
+
+For credentials, deployment order, public blocker codes and recovery actions, see
+[operating a checked migration](migration-operations.md).
+
+A transforming migration temporarily keeps the storage needed by the old app.
+A **Contract** describes the cleanup after all required row work has finished and
+old writers have been retired. Prepare it with the migration, before building the rollout:
+
+```sh
+tesl migrate contract app.tesl --version 2
+tesl check app.tesl
+```
+
+This creates `migrations/<family>/v2-contract.tesl`. Review the generated file;
+your handlers, database connection, and current entity definitions stay where they
+are. For example, a rename can leave an old column and its index to remove:
+
+```tesl
+module Schema.Work.Migrate.V2Contract exposing [contract]
+import Tesl.Migration exposing [Contract, Drop(..), Tighten(..)]
+import Schema.Work.Migrate.V2
+
+contract = Contract {
+  of: Schema.Work.Migrate.V2
+  drops: [Index Note old_author, Trigger Note, Column Note author]
+  tighten: [NotNull Note owner, NotNull Note count]
+  promote: []
+}
+```
+
+The compiler checks the exact cleanup against the migration. An omitted or extra
+operation is an error. `Trigger Note` removes Tesl's temporary old-write
+invalidation machinery. Required changes to the internal generation default are
+included automatically. Before switching new writes to the cleaned-up layout,
+Tesl also relaxes obsolete required columns so inserts can continue while those
+columns are being removed. This preparation follows from the reviewed drop;
+you do not add another source operation.
+
+`NotNull` also includes the internal steps needed to keep writes running during
+validation. Tesl prepares and validates a temporary check, uses that check when
+making the column required, then removes it. Your Contract still contains just
+the one `NotNull` entry for the field.
+
+When a record or ADT changes its JSONB representation, its logical field may keep
+the same name while the migration uses a new physical column. Cleanup then names
+old storage explicitly, for example `Storage Note "metadata"`. The compiler
+generates that distinction for you.
+
+For another Retype of the same field in a later revision, keep its inherited
+`@column` annotation while writing the new rules. Refresh advances that name to
+the new introducing version when it matches the exact previous field; it also
+handles an explicit Rename followed by Retype. Complete the previous Contract
+before deploying the next transforming version. See
+[lesson 92](../example/learn/lesson92-repeated-retypes.md) for the source workflow
+and [lesson 93](../example/learn/lesson93-testing-breaking-migrations.md) for the
+non-additive test matrix.
+
+Generating a Contract only writes a checked source proposal. It does not run DDL,
+finish backfill, retire a process, or prove that cleanup is safe now. The compiled
+worker must establish any required row generations and the retirement floor before
+executing the checked cleanup. Keep the Contract in the versioned source history;
+starting the next revision freezes it with the completed migration.
+
+Removing an entire entity uses `drops: [Table Archive]`. This bounded Worker-only
+operation retains the old table until Contract retires its users, then deletes
+the table and its data. It needs no conversion callbacks, backfill or final row
+generations. See [lesson 91](../example/learn/lesson91-removing-a-table.md) for the
+supported scope, dependency handling and restart behavior.
+
+For scripts, add `--manifest-json` to preview the same guarded source edit. The
+command refuses to overwrite an existing Contract. After undeployed schema or
+migration edits, `tesl check` reports any stale selectors and the exact
+selection it expects; review those changes before rebuilding. A purely additive
+migration does not need an empty Contract.
+
+A `Derived` migration can retain unchanged record and ADT fields, including
+optional records, when the generated `Same` declarations verify their stored
+representation. The compiler generates their copies and any reverse copies
+needed by `Legacy` or `LegacyWith`; keep the `Same` declarations for nested types
+and codecs too. `Nothing` continues to mean SQL NULL.
+
+For an unchanged record or ADT field, copy its original projection, such as
+`id: old.id` or `metadata: old.metadata`, and retain the generated `Same` entries
+for the type and its dependencies. A rename uses the same rule, for example
+`details: old.metadata`. Tesl preserves the value across the frozen schema types,
+including fields omitted by a lossy JSONB codec. A primary key must always keep
+its original identity; reconstructing a new key is rejected.
+
+When another field uses `Legacy` or `WriteBack`, Tesl also preserves these copied
+values while constructing the old row for compatible writes. This needs no
+extra conversion function. Ordinary functions still distinguish the two schema
+types, and your handlers continue to use the current schema as before.
+
+
+When removing a logical field, the old app still needs a value for it during the
+rollout. Use `Legacy author "former"` for a fixed value, or
+`LegacyWith metadata legacyMetadata` for a function that constructs the old field
+from the new row. The function returns the old schema's field type, so a removed
+JSONB record still uses its original codec. The migration supplies these values
+for converted rows and new writes; choose values the old app can safely read.
+
+Your current entity and handlers no longer use the removed field. The generated
+Contract names it as `Column Note author` (and removes any obsolete index).
+After cleanup, new inserts stop supplying the legacy value and the old column is
+removed. Removing a field and changing a field's type therefore use the same
+migration and cleanup workflow.
+
+
+An unchanged optional record or ADT field can also be copied in an explicit
+`Migrate` function: use the original row projection, such as
+`metadata: old.metadata`, and supply `Same` for its stored type and dependencies.
+This also works with `Rename`. `Nothing` stays SQL NULL, and `Something` keeps its
+original codec input. If the record, ADT or codec changes, use the explicit
+`Retype` migration described above. Application handlers keep using the current
+entity as usual.
+
+## Closing an additive epoch
+
+In the format5 runtime candidate, a purely additive migration needs no empty
+Contract. Older applications remain admitted until you explicitly close the
+additive epoch. Use the surviving version's compiled binary to preview and retire
+versions below it:
+
+```sh
+app --schema close-epoch --through V4 --dry-run --json
+app --schema close-epoch --through V4 --json
+```
+
+The preview lists recently registered older processes. Stop them and allow the
+thirty-second heartbeat window to expire before closing. `--force` records an
+explicit choice to retire processes that are still live or uncertain, but still
+waits for their active transactions; a timeout leaves admission unchanged. The
+surviving version continues serving, and retired versions receive HTTP 503.
+Closing the additive epoch is required before beginning its first transforming
+migration.
+
+For unchanged queue payload contracts, closure also restamps retained jobs before
+the floor advances. Live old claim leases and quarantined payloads block it even
+with `--force`; surviving claimants retain their attempt identity. See
+[lesson 95](../example/learn/lesson95-retiring-unchanged-queue-payloads.md) for the
+supported states, atomic retry behavior and current limits.
+
+This runtime path requires a matching fresh format-5 catalog. Adoption of
+existing control-format3 deployments is separate work; the command cannot
+upgrade or recreate such a database.
+
+## Promoting staged uniqueness
+
+Staged uniqueness uses three releases. The staging release declares a nonunique
+preparation index, for example `staging unique index [email] as "email_preparation"`.
+The next release declares `unique index [email] as "email_unique"`; its writes use
+per-key guards, but it cannot use `onConflict` on that key yet.
+
+Generate and review that release's Contract. Its `promote` list names the exact
+stage, for example `promote: [PromoteStage User [email]]`, imported through
+`Promote(..)` from `Tesl.Migration`. The Contract retires older unguarded writers
+before registering and concurrently building the UNIQUE target. Existing duplicates
+block the build without being discarded; repair them through the guarded release
+and retry. Only a later release may rely on the valid target and recorded enforcement.
+
+Supported keys are single-column Bool, Int32 with integer/bigint storage, and
+String on TEXT with a verified libc C/POSIX database default, optionally nullable.
+NULLs remain distinct. Custom equality, composite staged keys and unsupported
+native storage mappings are refused. Removing a pending staging declaration requests
+reviewed cancellation, preserving rows; it does not cancel an active promotion by
+omitting its selector. See [the staged lifecycle](../dev-docs/stage-lifecycle.md)
+for recovery, cancellation and the supported history bounds.

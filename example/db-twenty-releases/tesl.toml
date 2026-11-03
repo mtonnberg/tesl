@@ -1,0 +1,2 @@
+# The runner creates one ordinary project, then freezes twenty releases through
+# compiler-owned previews. Connection roles are configured outside schema history.

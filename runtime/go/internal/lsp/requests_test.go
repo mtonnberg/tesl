@@ -165,12 +165,17 @@ func (connection *requestConnection) response(t *testing.T, id string, code int)
 }
 
 func TestServerCancelsActiveRequestsAndDiscardsLateResults(t *testing.T) {
-	for _, method := range []string{"textDocument/hover", "textDocument/completion", "textDocument/formatting", "completionItem/resolve"} {
+	for _, method := range []string{"textDocument/hover", "textDocument/completion", "textDocument/formatting", "completionItem/resolve", "textDocument/codeAction"} {
 		for _, late := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/late=%v", method, late), func(t *testing.T) {
 				compiler := &requestCompiler{started: make(chan struct{}), canceled: make(chan struct{}), lateSuccess: late}
 				connection := newRequestConnection(t, compiler)
 				params := connection.position()
+				if method == "textDocument/codeAction" {
+					connection.send(t, "0", "initialize", map[string]any{"capabilities": map[string]any{"workspace": map[string]any{"workspaceEdit": map[string]bool{"documentChanges": true}}}})
+					connection.response(t, "0", 0)
+					params["context"] = map[string]any{"only": []string{"source.fixAll.tesl"}, "diagnostics": []any{}}
+				}
 				if method == "completionItem/resolve" {
 					params = map[string]any{"label": "List.length"}
 				}
@@ -274,6 +279,48 @@ func TestRequestCancellationIdentityAndLateNotifications(t *testing.T) {
 		t.Fatal("late cancel/old cleanup affected reused id")
 	}
 	stream.finish(second)
+}
+
+func TestDeferredRequestsRetainCancellationAndReleaseOnReply(t *testing.T) {
+	for _, canceled := range []bool{false, true} {
+		stream := dormantStream(t)
+		item := pendingItem(stream, `1`)
+		if !stream.enqueue(item) {
+			t.Fatal("enqueue")
+		}
+		<-stream.messages
+		stream.deferResponse(json.RawMessage(`1`))
+		stream.finish(item)
+		if stream.bytes != 0 || item.pending.ctx.Err() != nil || len(stream.pending) != 1 {
+			t.Fatal("dispatch completion released the deferred request")
+		}
+		if canceled {
+			stream.cancelRequest(json.RawMessage(`{"id":1}`))
+			if item.pending.ctx.Err() == nil {
+				t.Fatal("deferred request cannot be cancelled")
+			}
+		}
+		if stream.complete(json.RawMessage(`1`)) != canceled || item.pending.ctx.Err() == nil || len(stream.pending) != 0 {
+			t.Fatal("response did not release deferred identity and context")
+		}
+	}
+}
+
+func TestDeferredRequestsCannotBypassOutstandingBound(t *testing.T) {
+	stream := dormantStream(t)
+	for i := 0; i < maxPendingMessages; i++ {
+		id := fmt.Sprint(i)
+		item := pendingItem(stream, id)
+		if !stream.enqueue(item) {
+			t.Fatal("premature refusal")
+		}
+		<-stream.messages
+		stream.deferResponse(json.RawMessage(id))
+		stream.finish(item)
+	}
+	if stream.enqueue(pendingItem(stream, fmt.Sprint(maxPendingMessages))) || stream.failed() == nil || stream.ctx.Err() == nil {
+		t.Fatal("deferred requests bypassed outstanding identity bound")
+	}
 }
 
 func TestRequestKeysRejectInvalidIDsAndDistinguishStrings(t *testing.T) {

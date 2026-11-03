@@ -1,0 +1,5 @@
+[project]
+name = "public-row"
+entrypoint = "app.tesl"
+[deploy]
+target = "local"

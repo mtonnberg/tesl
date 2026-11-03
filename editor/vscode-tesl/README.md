@@ -51,6 +51,80 @@ For diagnostics, set the `TESL_DAP_LOG` environment variable to a file path
 
 ---
 
+## Migration authoring
+
+Use **Tesl: Migration Guide** from the Command Palette for an overview and
+step-by-step proof, row, queue and rollout guidance. Expand each option or
+**More help** for its conditions and limitations. The guide distinguishes adding
+a first proof with `Revalidate` from changing an existing historical proof, which
+requires a supported explicit conversion rather than `Same`.
+
+**Tesl: Preview Migration Decisions** uses the matching language server and
+compiler to inspect the application and all open project buffers. When invoked
+from a schema or migration file, choose the application entry file; multiple
+reachable databases get an explicit picker. The preview shows:
+
+- An overview of proposed files and every compiler diagnostic.
+- One review item at a time, with **Previous**/**Next**, source locations and
+  expandable help.
+- Compiler-proposed templates where a supported route was checked. Explicit
+  `todo` holes remain for your values or custom code. **Use this option and update
+  source** regenerates the compiler-checked proposal and updates the real files
+  and open buffers; it then selects the custom-code hole and rechecks the app.
+- Read-only before/after diffs of the exact retained proposal. Refresh after
+  editing; stale handles cannot fetch replacement disk contents.
+
+A **Migration guide** / **Preview migration decisions** CodeLens appears above
+`migration = Migration { ... }` and `VCurrent` module headers. Enable the editor's
+`editor.codeLens` setting if lenses are hidden. Contextual completion offers
+migration fields and constructors with help; use `Ctrl+Space` to request it.
+
+An exact current-target byte/hash mismatch is shown as information while preparing
+a draft, with refresh and deployed-history guidance. The compiler still refuses
+to build/run stale history. Missing sources, invalid layouts and frozen-source
+hash errors remain errors. The editor cannot determine deployment state.
+
+**Update proposed source files** writes the reviewed proposal, including new files.
+Open dirty buffers receive version-guarded editor edits and stay unsaved; their
+original disk bytes and handwritten changes are preserved. Closed files use a
+durable source journal. The client and server check complete buffer snapshots,
+versions and document lifetimes before publication and after edits or restoration.
+A normal edit acknowledgement alone never authorizes commit or rollback.
+
+Finish custom code in the selected `todo` hole. The refreshed preview reports
+remaining decisions and ordinary compiler errors. These actions prepare source;
+they do not execute database migrations. Test and inspect the resulting plan
+before deployment. Compiler choices are explicit user decisions and remain
+excluded from ordinary automatic quick fixes.
+
+If inputs changed after preview, refresh before choosing again. If an operation
+reports an unknown outcome or recovery required, preserve your buffers and the
+`.tesl-source-edit` journal. Use **Check application outcome** rather than blindly
+repeating the apply. A concurrent edit is preserved, even when that requires
+retaining recovery state instead of claiming automatic restoration.
+
+These features require the updated extension **and matching Tesl toolchain**.
+A checkout does not update an installed extension. Build a VSIX with
+`npm ci && npm run package` in this directory, install it using
+`codium --install-extension vscode-tesl-0.7.15.vsix` (or **Extensions: Install from
+VSIX...**), then reload the window. Toolchain development settings follow below.
+
+When using this PR from a checkout, rebuild the compiler, CLI and LSP from that
+same checkout. After `cd compiler && dune build`, build the Go components from the
+repository root (inside the repository development environment):
+
+```sh
+(cd runtime/go && go build -o ../../.tesl-stuff/tesl ./cmd/tesl)
+(cd runtime/go && go build -o ../../.tesl-stuff/tesl-lsp ./cmd/tesl-lsp)
+```
+
+Set `tesl.compilerBinary` to the rebuilt compiler and `tesl.lspBinary` to the rebuilt
+LSP in User Settings, then reload the window. Use the rebuilt CLI for
+`tesl migrate`; an older globally installed CLI/LSP does not gain these features
+from rebuilding only the compiler or reinstalling only the VSIX.
+
+---
+
 ## Requirements
 
 The extension needs the Tesl language server (`tesl-lsp`) to provide diagnostics and editor intelligence.
@@ -104,3 +178,23 @@ remains supported. Clear the setting to return to the installed compiler.
 ## Feedback and issues
 
 [github.com/mtonnberg/tesl/issues](https://github.com/mtonnberg/tesl/issues)
+
+## Real extension-host migration test
+
+`npm test` runs headless unit/protocol fixtures. To run the complete source-choice
+journey inside a real VS Code/VSCodium host, first bundle the extension and build
+a matching compiler and LSP, then provide these paths:
+
+```sh
+TESL_CODIUM_BINARY=/absolute/path/to/codium \
+TESL_LSP_HOST_BINARY=/absolute/path/to/tesl-lsp \
+DISPLAY=:99 npm run test:host
+```
+
+The display can be supplied by Xvfb. The launcher isolates user settings,
+extensions and XDG directories, preserves the inherited network/TLS settings, and
+retains the actual project, logs and evidence. `TESL_MIGRATION_HOST_ARTIFACTS`
+selects that output directory. It tests real source-file creation, dirty-buffer
+updates, stale-choice refusal, preserved handwritten edits, custom-code selection,
+compiler rechecking and explicit saves; it does not substitute a command-name
+assertion for editor application.

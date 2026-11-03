@@ -50,6 +50,11 @@ make it a subsystem rather than a convenience:
 - Equality is PostgreSQL's: the reservation table has one column per key column with
   the same types and collations and a **real unique index**; the compiler never hashes
   or re-implements collation equality.
+- The preparatory index and reservation key must also satisfy the old-key domain
+  rule in `database-migrations.md` §7. Nonuniqueness does not remove B-tree key-size
+  limits: a guard or preparatory index over an unbounded old-written key can reject
+  previously valid writes. Without a proof of safe old-key operations and width,
+  the plan is window-narrowing and carries the corresponding rolling-window risk.
 - Deadlocks between multi-row statements remain possible and are handled by the
   runtime's whole-transaction retry (LANGUAGE-SPEC).
 - Cleanup order after promotion: confirm the exact expected index is `VALID`; record

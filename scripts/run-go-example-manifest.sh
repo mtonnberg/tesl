@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-repo_root=${TESL_REPO_ROOT:-$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)}
+repo_root=${TESL_REPO_ROOT:-$(CDPATH='' cd -- "$(dirname "$0")/.." && pwd)}
 compiler=${TESL_OCAML_COMPILER:-$repo_root/compiler/_build/default/bin/main.exe}
 manifest="$repo_root/tests/protocol/go-example-migration.json"
 mode=${1:---list}
@@ -36,20 +36,9 @@ case "$mode" in
     printf '%s\n' "${examples[@]}"
     ;;
   --run-all)
-    root_output=$(mktemp -d "${TMPDIR:-/tmp}/tesl-go-examples.XXXXXXXX")
-    trap 'rm -rf "$root_output"' EXIT
-    failures=0
-    index=0
-    for source in "${examples[@]}"; do
-      index=$((index + 1))
-      output="$root_output/$index"
-      if ! (cd "$repo_root" && "$compiler" --backend go "$source" --out "$output" >/dev/null &&
-        (cd "$output" && LESSON80_SESSION_KEY="${LESSON80_SESSION_KEY:-anything}" go test ./... >/dev/null)); then
-        printf 'Go example manifest: run failed: %s\n' "$source" >&2
-        failures=$((failures + 1))
-      fi
-    done
-    (( failures == 0 )) || exit 1
+    # Share the guarded release-recipe and rejected-starter/repair handling
+    # with the build gate, but execute the generated example tests as well.
+    bash "$repo_root/scripts/run-go-corpus-build.sh" --run-examples
     ;;
   *)
     printf 'usage: run-go-example-manifest.sh [--list|--run-all]\n' >&2
