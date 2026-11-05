@@ -36,6 +36,51 @@ def fixture():
 
 
 class NativeSDKTest(unittest.TestCase):
+    def test_publish_retries_windows_access_denied_and_keeps_sdk_bytes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source, output = Path(temporary) / "built", Path(temporary) / "published"
+            source.mkdir()
+            (source / "go.exe").write_bytes(b"verified SDK")
+            rename = Path.rename
+            calls = []
+            def transient(path, destination):
+                calls.append(path)
+                if len(calls) <= 2:
+                    error = PermissionError("scanner has an open handle")
+                    error.winerror = 5 if len(calls) == 1 else 32
+                    raise error
+                return rename(path, destination)
+            with patch.object(Path, "rename", autospec=True, side_effect=transient), \
+                 patch.object(sdk.time, "sleep") as sleep:
+                sdk.publish_sdk(source, output, windows=True)
+            self.assertEqual(len(calls), 3)
+            self.assertEqual(sleep.call_count, 2)
+            self.assertFalse(source.exists())
+            self.assertEqual((output / "go.exe").read_bytes(), b"verified SDK")
+
+    def test_publish_refuses_existing_output_and_bounds_retries(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source, output = Path(temporary) / "built", Path(temporary) / "published"
+            source.mkdir()
+            (source / "keep").write_text("source")
+            for windows, code, attempts in ((True, 5, 10), (True, 32, 10), (True, 2, 1), (False, 5, 1)):
+                error = PermissionError("permanent failure")
+                error.winerror = code
+                with self.subTest(windows=windows, code=code), \
+                     patch.object(Path, "rename", side_effect=error) as rename, \
+                     patch.object(sdk.time, "sleep") as sleep:
+                    with self.assertRaises(PermissionError):
+                        sdk.publish_sdk(source, output, windows=windows)
+                    self.assertEqual(rename.call_count, attempts)
+                    self.assertEqual(sleep.call_count, attempts - 1)
+                self.assertFalse(output.exists())
+                self.assertEqual((source / "keep").read_text(), "source")
+            output.mkdir()
+            (output / "keep").write_text("existing")
+            with self.assertRaisesRegex(ValueError, "already exists"):
+                sdk.publish_sdk(source, output, windows=True)
+            self.assertEqual((output / "keep").read_text(), "existing")
+
     def test_environment_clears_host_and_user_go_configuration(self):
         original = {"GOROOT": "/nix/store/wrong", "GOFLAGS": "-race", "GO_LDSO": "/bad/loader",
                     "CGO_ENABLED": "1", "CC": "missing", "GOTOOLCHAIN": "auto", "GOENV": "/user/env", "PATH": "/tools"}

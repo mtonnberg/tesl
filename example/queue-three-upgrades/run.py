@@ -40,10 +40,10 @@ def build(output, compiler, env, upgrade_compiler=None, incompatible_compiler=No
                 raise RuntimeError(json.dumps(context))
         shutil.copytree(selected_source, target / "source")
         command([selected_compiler, "--backend", "go", selected_entry, "--out", target / "go"], env=env)
-        command(["go", "test", "-race", "-p", "1", "./..."], cwd=target / "go", env=env, timeout=180)
-        command(["go", "build", "-race", "-o", target / "app", "./cmd/app"], cwd=target / "go", env=env)
+        command(["go", "test", "-race", "-trimpath", "-count=1", "-p", "1", "./..."], cwd=target / "go", env=env, timeout=180)
+        command(["go", "build", "-race", "-trimpath", "-o", target / "app", "./cmd/app"], cwd=target / "go", env=env)
         if name == "v4":
-            command(["go", "build", "-race", "-tags", "tesl_migration_test", "-o", target / "app-test", "./cmd/app"], cwd=target / "go", env=env)
+            command(["go", "build", "-race", "-trimpath", "-tags", "tesl_migration_test", "-o", target / "app-test", "./cmd/app"], cwd=target / "go", env=env)
         print(f"Built {name}", flush=True)
 
     release("v1")

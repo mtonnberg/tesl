@@ -7,11 +7,58 @@ on:
   schedule:
     - cron: '23 2 * * *'
   workflow_dispatch:
+    inputs:
+      reuse_fixtures:
+        description: Share verified fixture builds (disable for same-revision CI comparison)
+        type: boolean
+        default: true
 
 permissions:
   contents: read
 
 jobs:
+  fixtures:
+    name: Build shared migration fixtures
+    if: github.event_name != 'workflow_dispatch' || inputs.reuse_fixtures
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      TESL_CI_JOBS: '2'
+      GOMAXPROCS: '2'
+      GOFLAGS: '-p=2'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25
+        with:
+          extra-conf: |
+            experimental-features = nix-command flakes
+      - name: Build checked fixture sources and race executables once
+        run: |
+          nix develop --command python3 scripts/migration-ci-artifacts.py build \
+            --expected-revision "$GITHUB_SHA" --bundle "$RUNNER_TEMP/migration-fixtures"
+          tar -czf "$RUNNER_TEMP/migration-fixtures.tar.gz" -C "$RUNNER_TEMP/migration-fixtures" .
+      - name: Measure immutable specification construction on the hosted runner
+        run: |
+          set -euo pipefail
+          nix develop --command go -C runtime/go test ./teslrt -run '^$' \
+            -bench '^BenchmarkRowControlSpecifications$' -benchmem -count=3 \
+            | tee "$RUNNER_TEMP/migration-fixtures/metadata-bench.log"
+      - name: Upload same-revision fixture bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: migration-fixtures-${{ github.sha }}
+          path: ${{ runner.temp }}/migration-fixtures.tar.gz
+          compression-level: 0
+          if-no-files-found: error
+      - name: Retain build timings and diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: migration-fixture-build-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/migration-fixtures/manifest.json
+            ${{ runner.temp }}/migration-fixtures/*.log
+          if-no-files-found: warn
   pr-traceability:
     name: PR requirement register consistency (not release readiness)
     runs-on: ubuntu-latest
@@ -36,6 +83,8 @@ jobs:
         run: nix develop --command bash scripts/check-migration-models.sh
   protocol:
     name: PostgreSQL ${{ matrix.postgres }} protocol and race tests
+    needs: [fixtures]
+    if: always() && !cancelled()
     runs-on: ubuntu-latest
     # Full shared gate: compiler/PostgreSQL suites, adversarial reviews and V1–V20.
     # Individual scenario deadlines stay in the runner; this bounds their sum.
@@ -51,12 +100,28 @@ jobs:
       matrix:
         postgres: ${{ fromJSON(github.event_name == 'schedule' && '[14,15,16,17,18]' || '[14,18]') }}
     steps:
+      - name: Require the selected fixture producer outcome
+        if: needs.fixtures.result != 'success' && !(github.event_name == 'workflow_dispatch' && !inputs.reuse_fixtures && needs.fixtures.result == 'skipped')
+        run: |
+          echo "::error::Shared fixture build failed; database verification cannot be skipped or replaced."
+          exit 1
       - uses: actions/checkout@v4
         with:
           # The latency gate independently builds its pinned baseline commit.
           fetch-depth: 0
       - name: Fetch the exact migration latency baseline
         run: python3 scripts/compare-migration-latency.py --prepare-baseline --fetch-baseline
+      - uses: actions/download-artifact@v4
+        if: needs.fixtures.result == 'success'
+        with:
+          name: migration-fixtures-${{ github.sha }}
+          path: ${{ runner.temp }}/migration-fixture-download
+      - name: Unpack shared fixtures
+        if: needs.fixtures.result == 'success'
+        run: |
+          mkdir "$RUNNER_TEMP/migration-fixtures"
+          tar -xzf "$RUNNER_TEMP/migration-fixture-download/migration-fixtures.tar.gz" -C "$RUNNER_TEMP/migration-fixtures"
+          echo "TESL_MIGRATION_PREBUILT=$RUNNER_TEMP/migration-fixtures" >> "$GITHUB_ENV"
       - uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25
         with:
           extra-conf: |
@@ -83,6 +148,9 @@ jobs:
             export TESL_REPO_ROOT="$PWD"
             bash scripts/run-migration-tests.sh
           '
+      - name: Summarize measured phase and fixture times
+        if: always()
+        run: python3 scripts/migration-ci-artifacts.py summary --evidence "$RUNNER_TEMP/migration-evidence"
       - name: Retain phase results and failure diagnostics
         if: always()
         uses: actions/upload-artifact@v4

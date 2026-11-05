@@ -64,11 +64,10 @@ func pgWithRowTransaction[T any](ctx context.Context, database *Database, plan *
 		if !ok {
 			return value, fmt.Errorf("row transaction requires an admitted SQL transaction")
 		}
-		if !write {
-			if err := pgAdmitMigrationTransaction(ctx, tx, db, false); err != nil {
-				return value, err
-			}
-		}
+		// The format-5 pgMigrationStatement wrapper just admitted this read
+		// after acquiring its compatibility fence. No SQL or application callback
+		// intervened. Its final live read admission still gates result publication;
+		// repeating the same initial query here adds no ordering guarantee.
 		if err := pgRowTransactionABI(ctx, tx, plan); err != nil {
 			return value, err
 		}

@@ -94,6 +94,43 @@ class RegressionPolicy(unittest.TestCase):
             result = bench['calibrated']([(samples(a), samples(b))] * 6)['read']['p50']
             self.assertGreater(result['noise_ns'], result['budget_ns'])
 
+    def test_larger_fixed_calibration_still_rejects_noisy_write_tails(self):
+        slow = samples(1_000_000)
+        slow['write'][-bench['SAMPLES'] // 10:] = [3_000_000] * (bench['SAMPLES'] // 10)
+        pairs = [(samples(1_000_000), slow)] * bench['CALIBRATION_PAIRS']
+        result = bench['calibrated'](pairs)
+        self.assertLessEqual(result['read']['p95']['noise_ns'], result['read']['p95']['budget_ns'])
+        self.assertGreater(result['write']['p95']['noise_ns'], result['write']['p95']['budget_ns'])
+
+    def test_host_qualification_retains_failed_trials_without_candidate_samples(self):
+        evidence, calls = {}, []
+        def sample(label, phase, pair, position):
+            calls.append((label, phase, pair, position))
+            return samples(4_000_000 if pair < bench['CALIBRATION_PAIRS'] and position == 1 else 1_000_000)
+        pause = mock.Mock()
+        bench['qualify_host'](sample, evidence, pause)
+        self.assertEqual(evidence['calibration_selected_attempt'], 1)
+        self.assertEqual([a['qualified'] for a in evidence['calibration_attempts']], [False, True])
+        self.assertEqual(len(calls), 4 * bench['CALIBRATION_PAIRS'])
+        self.assertEqual(len(set(calls)), len(calls))
+        self.assertTrue(all(label == 'baseline' and phase == 'calibration' for label, phase, _, _ in calls))
+        pause.assert_called_once_with(bench['CALIBRATION_PAUSE_SECONDS'])
+
+    def test_host_qualification_is_bounded_and_does_not_retry_correctness_errors(self):
+        evidence = {}
+        sample = mock.Mock(side_effect=lambda label, phase, pair, position: samples(1_000_000 if position == 0 else 4_000_000))
+        pause = mock.Mock()
+        with self.assertRaisesRegex(RuntimeError, 'no regression verdict'):
+            bench['qualify_host'](sample, evidence, pause)
+        self.assertEqual(sample.call_count, 2 * bench['CALIBRATION_PAIRS'] * bench['CALIBRATION_ATTEMPTS'])
+        self.assertEqual(len(evidence['calibration_attempts']), bench['CALIBRATION_ATTEMPTS'])
+        self.assertNotIn('calibration_selected_attempt', evidence)
+        self.assertEqual(evidence['failure_kind'], 'calibration-noise')
+        broken = mock.Mock(side_effect=RuntimeError('incorrect stored value'))
+        with self.assertRaisesRegex(RuntimeError, 'incorrect stored value'):
+            bench['qualify_host'](broken, {}, mock.Mock())
+        broken.assert_called_once()
+
     def test_missing_pairs_fail(self):
         with self.assertRaises(ValueError):
             bench['compare']([])
@@ -121,7 +158,8 @@ class RegressionPolicy(unittest.TestCase):
 
 def audit_evidence(directory):
     """Replay real observations and test deliberately slowed copies, never a live injection."""
-    policy = json.loads((directory / 'result.json').read_text())['policy']
+    evidence = json.loads((directory / 'result.json').read_text())
+    policy = evidence['policy']
     groups = {}
     for line in (directory / 'raw.jsonl').read_text().splitlines():
         row = json.loads(line)
@@ -131,15 +169,25 @@ def audit_evidence(directory):
         side = groups.setdefault(key, {'read': [], 'write': []})
         for op in side:
             side[op].append(row[op + '_ns'])
-    calibration = [(groups['calibration', i, 0, 'baseline'], groups['calibration', i, 1, 'baseline'])
-                   for i in range(policy['calibration_pairs'])]
+    attempts = evidence.get('calibration_attempts', [{'first_pair': 0}])
+    calibrations = []
+    for attempt in attempts:
+        first = attempt['first_pair']
+        calibration = [(groups['calibration', i, 0, 'baseline'], groups['calibration', i, 1, 'baseline'])
+                       for i in range(first, first + policy['calibration_pairs'])]
+        calibrations.append(bench['calibrated'](calibration, policy['samples']))
+    if not any(key[0] == 'comparison' for key in groups):
+        print(json.dumps({'calibration_attempts': calibrations, 'comparison': None,
+                          'regression_verdict': 'not available'}, indent=2))
+        return
+    selected = evidence.get('calibration_selected_attempt', 0)
     pairs = [(groups['comparison', i, i % 2, 'baseline'], groups['comparison', i, 1 - i % 2, 'candidate'])
              for i in range(policy['pairs'])]
     # Add 3ms to every measured candidate request. Preserve actual pair noise.
     slow = [(a, {op: [ns + 3_000_000 for ns in values] for op, values in b.items()}) for a, b in pairs]
     rejected = bench['compare'](slow, policy['samples'])
     assert all(not metric['passed'] for op in rejected.values() for metric in op.values()), rejected
-    print(json.dumps({'calibration': bench['calibrated'](calibration, policy['samples']),
+    print(json.dumps({'calibration': calibrations[selected], 'calibration_attempts': calibrations,
                       'comparison': bench['compare'](pairs, policy['samples']), 'deliberate_3ms_slowdown': rejected,
                       'run_quantiles_ns': {str(key): {op: {q: bench['percentile'](values, p)
                           for q, p in (('p50', .5), ('p95', .95))} for op, values in side.items()}

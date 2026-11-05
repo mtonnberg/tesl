@@ -8,6 +8,7 @@ repo_root="$(CDPATH='' cd -- "$(dirname "$0")/.." && pwd)"
 python3 "$repo_root/scripts/check-migration-pr.py"
 python3 -m unittest discover -s "$repo_root/scripts" -p 'test_migration_pr.py'
 python3 -m unittest discover -s "$repo_root/scripts" -p 'test_migration_go_cache.py'
+python3 -m unittest discover -s "$repo_root/scripts" -p 'test_migration_ci_artifacts.py'
 required_tools=(initdb pg_ctl go python3 dune timeout tee git tar psql)
 if [[ ${TESL_MIGRATION_TEST_POOLERS:-0} == 1 ]]; then required_tools+=(pgbouncer); fi
 if [[ ${TESL_MIGRATION_TEST_CLUSTER_CRASH:-0} == 1 ]]; then required_tools+=(pg_basebackup); fi
@@ -104,6 +105,13 @@ for instrumentation in normal race; do
 done
 python3 "$repo_root/scripts/migration-go-cache.py" seed "$GOCACHE" | tee "$evidence/go-cache.log"
 run_phase compiler-build 1800 dune build --root "$repo_root/compiler" -j "${TESL_CI_JOBS:-2}"
+release_args=()
+if [[ -n ${TESL_MIGRATION_PREBUILT:-} ]]; then
+  python3 "$repo_root/scripts/migration-ci-artifacts.py" restore \
+    --bundle "$TESL_MIGRATION_PREBUILT" --output "$migration_tmp" \
+    --evidence "$evidence/prebuilt-fixtures.json"
+  release_args=(--run-built)
+fi
 # This package builds and runs both the archived rolling releases and the full
 # V1–V13 transforming application. Keep individual scenario deadlines intact,
 # but allow their sequential sum to finish. The 9852f26 baseline spent 1792s
@@ -158,13 +166,13 @@ if (( $# == 0 )); then
     compiler_test "$suite"
   done
   runtime_test row-retirement 120 '^(TestRowRetirement|TestRowTableContract|TestPgRowTableContract|TestPgRowTableDrop)'
-  run_phase row-releases 3600 python3 "$repo_root/example/db-three-upgrades/run.py" --output "$migration_tmp/review05-releases/row"
-  run_phase queue-releases 3600 python3 "$repo_root/example/queue-three-upgrades/run.py" --output "$migration_tmp/review05-releases/queue"
+  run_phase row-releases 3600 python3 "$repo_root/example/db-three-upgrades/run.py" --output "$migration_tmp/review05-releases/row" "${release_args[@]}"
+  run_phase queue-releases 3600 python3 "$repo_root/example/queue-three-upgrades/run.py" --output "$migration_tmp/review05-releases/queue" "${release_args[@]}"
   run_phase ordered-row-queue 1800 python3 "$repo_root/scripts/test-ordered-row-queue.py" --output "$migration_tmp/ordered-row-queue"
   run_phase deployment-wiring 120 python3 "$repo_root/scripts/test-worker-deploy.py"
   run_phase review05 3600 python3 "$repo_root/scripts/test-db-migration-review-05.py" --artifacts "$migration_tmp/review05-releases" --output "$migration_tmp/review05-results"
   run_phase review11 3600 python3 "$repo_root/scripts/test-db-migration-review-11.py" --artifacts "$migration_tmp/review05-releases" --output "$migration_tmp/review11-results"
-  run_phase twenty-releases 3600 python3 "$repo_root/example/db-twenty-releases/run.py" --output "$migration_tmp/twenty-releases"
+  run_phase twenty-releases 3600 python3 "$repo_root/example/db-twenty-releases/run.py" --output "$migration_tmp/twenty-releases" "${release_args[@]}"
   # Real rolling correctness owns a private cluster and stops before latency.
   run_phase rolling-workload-smoke 1800 python3 "$repo_root/scripts/measure-migration-rollout.py" \
     --correctness-smoke --source-root "$repo_root" \

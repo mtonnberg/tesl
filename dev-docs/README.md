@@ -250,3 +250,5 @@ Where to start, by task:
 - [Migration review](pr-102-major-review.md)
 - [Migration performance](migration-performance-review.md)
 - [Rollout performance](migration-rollout-performance.md)
+- [Post-merge migration review](migration-post-merge-review.md)
+- [Migration CI build reuse and catalog inspection](migration-ci-reuse.md)

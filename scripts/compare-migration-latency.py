@@ -20,7 +20,10 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 # Deliberately pinned: changing this is a reviewed comparison-policy change.
 BASELINE = '9852f263b0ce52f78045c3edb266625aa4460674'
-PAIRS, CALIBRATION_PAIRS, SAMPLES, WARMUP = 8, 6, 1000, 200
+# Fixed before sampling: more independent A/A pairs improve the estimate of
+# hosted-runner variability. Host qualification precedes any candidate samples.
+PAIRS, CALIBRATION_PAIRS, SAMPLES, WARMUP = 8, 12, 1000, 200
+CALIBRATION_ATTEMPTS, CALIBRATION_PAUSE_SECONDS = 3, 10
 RELATIVE = .50
 FLOOR_NS = {'p50': 500_000, 'p95': 2_000_000}
 
@@ -122,6 +125,30 @@ def calibrated(pairs, samples=SAMPLES):
                  for q in ('p50', 'p95')} for op in ('read', 'write')}
 
 
+def qualify_host(sample, evidence, pause=time.sleep):
+    """Retry only baseline noise, before observing candidate results; retain all trials."""
+    attempts = evidence.setdefault('calibration_attempts', [])
+    for attempt in range(CALIBRATION_ATTEMPTS):
+        first = attempt * CALIBRATION_PAIRS
+        pairs = [(sample('baseline', 'calibration', first + i, 0),
+                  sample('baseline', 'calibration', first + i, 1))
+                 for i in range(CALIBRATION_PAIRS)]
+        metrics = calibrated(pairs)
+        noisy = [f"{operation} {quantile}: {value['noise_ns'] / 1e6:.3f} ms noise > {value['budget_ns'] / 1e6:.3f} ms budget"
+                 for operation, quantiles in metrics.items()
+                 for quantile, value in quantiles.items() if value['noise_ns'] > value['budget_ns']]
+        attempts.append({'first_pair': first, 'metrics': metrics, 'qualified': not noisy})
+        evidence['calibration'] = metrics
+        if not noisy:
+            evidence['calibration_selected_attempt'] = attempt
+            return
+        print(f"Baseline host qualification {attempt + 1}/{CALIBRATION_ATTEMPTS}: " + '; '.join(noisy), flush=True)
+        if attempt + 1 < CALIBRATION_ATTEMPTS:
+            pause(CALIBRATION_PAUSE_SECONDS)
+    evidence['failure_kind'] = 'calibration-noise'
+    raise RuntimeError('A/A calibration too noisy; no regression verdict: ' + '; '.join(noisy))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--baseline-ref', default=os.environ.get('TESL_MIGRATION_LATENCY_BASELINE', BASELINE))
@@ -148,6 +175,8 @@ def main():
     evidence = {'status': 'incomplete', 'baseline_ref': args.baseline_ref,
                 'policy': {'relative': RELATIVE, 'floor_ns': FLOOR_NS, 'pairs': PAIRS,
                            'calibration_pairs': CALIBRATION_PAIRS, 'samples': SAMPLES,
+                           'calibration_attempts': CALIBRATION_ATTEMPTS,
+                           'calibration_pause_seconds': CALIBRATION_PAUSE_SECONDS,
                            'warmup': WARMUP, 'rows': 3, 'concurrency': 1},
                 'scope': 'steady-state format5 V1 HTTP read/update regression, not absolute overhead'}
     cluster = None
@@ -301,12 +330,7 @@ def main():
                     processes.remove((proc, log))
                 sql('postgres', f'drop database {db}')
 
-        calibration = []
-        for i in range(CALIBRATION_PAIRS):
-            calibration.append((sample('baseline', 'calibration', i, 0), sample('baseline', 'calibration', i, 1)))
-        evidence['calibration'] = calibrated(calibration)
-        if any(v['noise_ns'] > v['budget_ns'] for op in evidence['calibration'].values() for v in op.values()):
-            raise RuntimeError('A/A calibration too noisy; no regression verdict')
+        qualify_host(sample, evidence)
         pairs = []
         for i in range(PAIRS):
             order = ('baseline', 'candidate') if i % 2 == 0 else ('candidate', 'baseline')
