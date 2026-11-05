@@ -1,14 +1,28 @@
 """Source, executable and release-completeness guards for cross-major reuse."""
 import importlib.util
+import hashlib
 import json
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest import mock
 
 SPEC = importlib.util.spec_from_file_location('artifacts', Path(__file__).with_name('migration-ci-artifacts.py'))
 artifacts = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(artifacts)
+
+
+class HashCompatibility(unittest.TestCase):
+    def test_hashing_without_file_digest_handles_empty_and_multichunk_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            file = Path(directory) / 'input'
+            for data in (b'', bytes(range(256)) * 8192 + b'last partial chunk'):
+                with self.subTest(size=len(data)):
+                    file.write_bytes(data)
+                    expected = hashlib.sha256(data).hexdigest()
+                    with mock.patch.object(artifacts, 'hashlib', SimpleNamespace(sha256=hashlib.sha256)):
+                        self.assertEqual(artifacts.digest(file), expected)
 
 
 class FixtureArtifacts(unittest.TestCase):

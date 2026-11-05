@@ -28,8 +28,13 @@ def run(args, **kwargs):
 
 
 def digest(path):
+    # Native planning runs on Ubuntu 22.04's Python 3.10, before Nix. Keep
+    # hashing streaming without depending on Python 3.11's file_digest API.
+    checksum = hashlib.sha256()
     with path.open('rb') as stream:
-        return hashlib.file_digest(stream, 'sha256').hexdigest()
+        for chunk in iter(lambda: stream.read(1024 * 1024), b''):
+            checksum.update(chunk)
+    return checksum.hexdigest()
 
 
 def source_identity(root, expected=None):
