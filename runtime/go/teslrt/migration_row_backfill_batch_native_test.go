@@ -95,3 +95,72 @@ func TestPgRowBackfillBatchLatchRollback(t *testing.T) {
 	stop()
 	t.Log("same Worker process rolled back its first successful latch and both-row attempt, then re-latched a fresh transaction while preserving the old writer's edit")
 }
+
+// A later pipeline group can fail after earlier groups have succeeded. Every
+// group, the first-write ABI latch and the cursor still share one transaction.
+func TestPgRowBackfillPipelineRollback(t *testing.T) {
+	root := os.Getenv("TESL_ROW_SETTLED_PROGRAMS")
+	if root == "" {
+		t.Skip("actual compiler-generated V1/V2 applications required")
+	}
+	f, request := pgNewWorkerTest(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	t.Cleanup(cancel)
+	f.ctx = ctx
+	f.namespace = "notes"
+	pgForwardNativeRun(t, f, root, "v1", "install", true)
+	pgForwardNativeRun(t, f, root, "v1", "worker", true)
+	pgForwardNativeRun(t, f, root, "v2", "worker", true)
+	if _, err := request.Exec(ctx, `begin; select notes.tesl_admit_writer(1);
+insert into notes.notes(id,author,title,memo)
+select 'r'||lpad(i::text,4,'0'),'writer','r'||lpad(i::text,4,'0'),'base' from generate_series(0,259) i;
+commit`); err != nil {
+		t.Fatal(err)
+	}
+	pauses := pgPauseConcurrentRowBoundaries(t, []pgExpansionBoundary{
+		{name: "row-backfill-after-dml", hit: 2},
+		{name: "row-backfill-after-read", hit: 2},
+	})
+	socket := "TESL_MIGRATION_TEST_SOCKET=" + os.Getenv("TESL_MIGRATION_TEST_SOCKET")
+	stop, done := pgStartSettledWorker(t, f, root, "v2", socket, "TESL_BACKFILL_BATCH=260")
+	t.Cleanup(func() {
+		for _, pause := range pauses {
+			pause.resume()
+		}
+	})
+	pgAwaitRowSnapshotBoundary(t, pauses[0], done)
+	if _, err := request.Exec(ctx, `begin; select notes.tesl_admit_writer(1);
+update notes.notes set memo='accepted-old-edit' where id='r0259'; commit`); err != nil {
+		t.Fatal(err)
+	}
+	pauses[0].resume()
+	pgAwaitRowSnapshotBoundary(t, pauses[1], done)
+	var oldRows, pins, progress, edits int
+	if err := request.QueryRow(ctx, `select
+(select count(*) from notes.notes where _tesl_v=1 and count is null),
+(select count(*) from notes.tesl_row_processing),
+(select rows_done from notes.tesl_schema_backfill_shards where lease_name='row:Note:2:0'),
+(select count(*) from notes.notes where id='r0259' and memo='accepted-old-edit')`).Scan(&oldRows, &pins, &progress, &edits); err != nil || oldRows != 260 || pins != 0 || progress != 0 || edits != 1 {
+		t.Fatal("pipeline failure published a prefix or lost the accepted edit", oldRows, pins, progress, edits, err)
+	}
+	pauses[1].resume()
+	for {
+		var converted int
+		if err := request.QueryRow(ctx, `select count(*) from notes.notes where _tesl_v=2 and count=7 and owner='writer'
+and memo=case when id='r0259' then 'accepted-old-edit' else 'base' end`).Scan(&converted); err != nil {
+			t.Fatal(err)
+		}
+		if converted == 260 {
+			break
+		}
+		select {
+		case err := <-done:
+			t.Fatalf("Worker did not retry the rolled-back pipeline: %v", err)
+		default:
+		}
+		if err := pgIndexWait(ctx, 10*time.Millisecond); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stop()
+}

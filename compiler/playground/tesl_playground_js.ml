@@ -120,7 +120,7 @@ let emitted vfile source =
       | Compile.GoSuccess artifacts -> Some (Compile.artifacts_text artifacts), artifacts
       | Compile.GoFailure _ -> None, []
     in
-    let m' = try Compile.merge_imported_client_decls m with _ -> m in
+    let m' = Compile.merge_imported_client_decls m in
     let ts = try Some (Emit_ts.emit_ts m') with _ -> None in
     let elm = try Some (Emit_elm.emit_elm m') with _ -> None in
     (racket, ts, elm, files)
@@ -149,7 +149,9 @@ let check (src : Js.js_string Js.t) : Js.js_string Js.t =
         {|{"version":1,"backend":"go","diagnostics":[{"file":%s,"start":{"line":0,"col":0},"end":{"line":0,"col":0},"severity":"error","code":"E000","message":%s,"fix":null,"source":"playground"}],"go":null,"racket":null,"ts":null,"elm":null,"go_files":[]}|}
         (Compile.json_encode_string vfile)
         (Compile.json_encode_string
-           ("internal compiler error: " ^ Printexc.to_string e))
+           (match e with
+            | Compile.Client_generation_error message -> message
+            | _ -> "internal compiler error: " ^ Printexc.to_string e))
   in
   Js.string json
 

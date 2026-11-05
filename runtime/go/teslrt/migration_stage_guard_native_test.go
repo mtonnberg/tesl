@@ -14,6 +14,29 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
+func TestPgStageGuardPendingIndexesDoNotWaitForPoll(t *testing.T) {
+	t.Setenv("TESL_SCHEMA_POLL_S", "600")
+	root := os.Getenv("TESL_STAGE_GUARD_PROGRAMS")
+	if root == "" {
+		t.Skip("compiled guarded programs required")
+	}
+	f, _ := pgNewWorkerTest(t)
+	f.namespace = "notes"
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	t.Cleanup(cancel)
+	f.ctx = ctx
+	pgStageInstall(t, f, root, "v1")
+	pgRowAdditiveWorker(t, f, root, "v1")()
+	started := time.Now()
+	stop := pgRowAdditiveWorker(t, f, root, "v2")
+	defer stop()
+	var valid int
+	if err := f.worker.QueryRow(ctx, "select count(*) from notes.tesl_schema_index where state='valid'").Scan(&valid); err != nil || valid != 5 {
+		t.Fatalf("readiness before all five pending indexes completed: %d %v", valid, err)
+	}
+	t.Logf("five staged indexes ready in %s without a poll tick", time.Since(started))
+}
+
 func TestPgStageGuardCompiledWindow(t *testing.T) {
 	t.Setenv("TESL_SCHEMA_POLL_S", "1")
 	root := os.Getenv("TESL_STAGE_GUARD_PROGRAMS")
@@ -292,6 +315,9 @@ func TestPgStageGuardActivationBoundary(t *testing.T) {
 	}
 	t.Setenv("TESL_SCHEMA_POLL_S", "1")
 	f, request := pgNewWorkerTest(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	t.Cleanup(cancel)
+	f.ctx = ctx
 	f.namespace = "notes"
 	pgStageInstall(t, f, root, "v3")
 	if out, err := pgRowAdditiveCommand(f, root, "v3", "--schema", "catch-up", "--json").CombinedOutput(); err != nil {

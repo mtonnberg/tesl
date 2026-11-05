@@ -377,7 +377,9 @@ let native_settled ?test ()=
     consumed its budget; every Go test retains its own operation deadlines. *)
  let tests=match test with Some test->[test] | None->[
   "TestPgRow(SettledActualApp|FinalityRenewsOutsideBatchesAndWaitsForOwnCAS|HealthyWorkerClaimSkipsActiveCAS|ContractPrepareHasOperationDeadline)";
-  "TestPgRow(BackfillBackendKillPreservesAtomicProgress|BackfillBatchLatchRollback|StagedNullabilityAllowsWritesAndPublishesExactProof|StagedNullabilityCrashReceiptAtomicity)";
+  "TestPgRow(BackfillBackendKillPreservesAtomicProgress|BackfillBatchLatchRollback|StagedNullabilityAllowsWritesAndPublishesExactProof)";
+  "TestPgRowStagedNullabilityCrashReceiptAtomicity";
+  "TestPgRowBackfillPipelineRollback";
   "TestPgRow(PrepareRetriesCommittedProgressSnapshot|ClaimRetriesCommittedRenewalSnapshot|BackfillRetriesWriteAfterCASSnapshot|WorkerDrainsInFlightRenewalAfterBatchCommit|RetirementRequiresEntireFinalShardInventory)"
  ] in
  let output=Filename.temp_dir "tesl-row-settled-" "" in

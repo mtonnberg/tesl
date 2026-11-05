@@ -428,7 +428,7 @@ let r40_18_ts_generator_preserves_get_response_type () =
     let code, out = run_compiler ["--generate-ts"; path] in
     check int "exit code" 0 code;
     assert_contains ~label:"getTodos return type" out "export async function getTodos(): Promise<Array<Todo>>";
-    assert_contains ~label:"getTodos parser" out "return z.array(TodoSchema).parse(await res.json()) as Array<Todo>;" )
+    assert_contains ~label:"getTodos parser" out "return z.array(z.lazy(() => TodoSchema)).parse(await res.json()) as Array<Todo>;" )
 
 let r40_19_ts_generator_types_post_body_as_newtodo () =
   with_temp_file "tesl-r40-ts-" ".tesl" api_src (fun path ->
@@ -442,7 +442,7 @@ let r40_20_ts_generator_types_post_response_as_todo () =
     let code, out = run_compiler ["--generate-ts"; path] in
     check int "exit code" 0 code;
     assert_contains ~label:"postTodos Todo response" out "Promise<Todo>";
-    assert_contains ~label:"postTodos Todo parser" out "return TodoSchema.parse(await res.json()) as Todo;";
+    assert_contains ~label:"postTodos Todo parser" out "return z.lazy(() => TodoSchema).parse(await res.json()) as Todo;";
     assert_not_contains ~label:"postTodos should not parse Unit" out "return UnitSchema.parse(await res.json()) as Unit;" )
 
 let r40_21_elm_generator_preserves_get_response_type () =

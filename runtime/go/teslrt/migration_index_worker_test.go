@@ -341,6 +341,35 @@ func TestPgMigrationIndexWorkerReconnectClassification(t *testing.T) {
 	}
 }
 
+func TestPgMigrationIndexWorkerFailedAttemptWaitsForPoll(t *testing.T) {
+	f, _ := pgNewWorkerTest(t)
+	f.install(t, 1)
+	pgExpandIndexTest(t, f, 1, true)
+	f.call(t, "insert into notes_app.notes(id,active) values('a',true),('b',true)")
+	state := pgExpandIndexTest(t, f, 2, true)
+	f.call(t, "update notes_app.notes set token='duplicate'")
+	settings := pgIndexTestSettings()
+	settings.poll = time.Hour
+	service := pgStartIndexTestService(t, f, 2, true, state, settings)
+	pgIndexTestAwait(t, f, service, "failed attempt released", func() bool {
+		job := pgFirstIndexControlTestJob(t, f)
+		return job.State == "failed" && job.Holder == ""
+	})
+	// Several immediate refreshes could fit here, but no poll can occur. The
+	// failed UNIQUE build must not spin or announce write readiness.
+	time.Sleep(250 * time.Millisecond)
+	job := pgFirstIndexControlTestJob(t, f)
+	if job.Attempts != 1 || job.State != "failed" || job.Holder != "" {
+		t.Fatalf("completion retried failed work before a poll: %+v", job)
+	}
+	select {
+	case <-service.ready:
+		t.Fatal("failed unique index announced readiness")
+	default:
+	}
+	pgIndexTestStop(t, service)
+}
+
 func TestPgMigrationIndexWorkerTimingConfiguration(t *testing.T) {
 	t.Setenv("TESL_LEASE_TTL_S", "")
 	t.Setenv("TESL_SCHEMA_POLL_S", "")

@@ -1312,7 +1312,7 @@ let () =
          Printf.eprintf "%s:%d:%d: error: %s\n"
            e.loc.file (e.loc.start.line + 1) (e.loc.start.col + 1) e.msg;
          exit 1
-     with Sys_error msg ->
+     with Sys_error msg | Compile.Client_generation_error msg ->
        Printf.eprintf "error: %s\n" msg; exit 1)
 
   | ("--generate-elm" :: filename :: rest) ->
@@ -1360,7 +1360,7 @@ let () =
          Printf.eprintf "%s:%d:%d: error: %s\n"
            e.loc.file (e.loc.start.line + 1) (e.loc.start.col + 1) e.msg;
          exit 1
-     with Sys_error msg ->
+     with Sys_error msg | Compile.Client_generation_error msg ->
        Printf.eprintf "error: %s\n" msg; exit 1)
 
    | ["--debug"; filename] ->

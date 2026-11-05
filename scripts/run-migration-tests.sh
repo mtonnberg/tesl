@@ -14,6 +14,11 @@ if [[ ${TESL_MIGRATION_TEST_CLUSTER_CRASH:-0} == 1 ]]; then required_tools+=(pg_
 for tool in "${required_tools[@]}"; do
   command -v "$tool" >/dev/null || { echo "migration tests require $tool (nix develop)" >&2; exit 1; }
 done
+# Fail before hours of database/build work when a squash merge or shallow clone
+# omitted the independent comparison input. Focused kernel runs do not need it.
+if (( $# == 0 )); then
+  python3 "$repo_root/scripts/compare-migration-latency.py" --prepare-baseline
+fi
 migration_tmp="$(mktemp -d "${TESL_MIGRATION_TEST_DATA_TMPDIR:-${TMPDIR:-/tmp}}/tesl-migration.XXXXXXXX")"
 evidence="${TESL_MIGRATION_TEST_OUTPUT:-$(mktemp -d "${TMPDIR:-/tmp}/tesl-migration-evidence.XXXXXXXX")}"
 mkdir -p "$evidence"

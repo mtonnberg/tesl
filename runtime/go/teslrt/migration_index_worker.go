@@ -342,7 +342,7 @@ func pgIndexWorkerRound(ctx context.Context, ddl, coordinator *pgx.Conn, tag str
 			<-finished
 		}
 	}()
-	refresh := func(dispatch bool) error {
+	refresh := func(retryFailed bool) error {
 		query, cancel := context.WithTimeout(ctx, settings.query)
 		defer cancel()
 		var ddlAlive bool
@@ -409,14 +409,17 @@ func pgIndexWorkerRound(ctx context.Context, ddl, coordinator *pgx.Conn, tag str
 			}
 			return pgIndexPublishProgress(query, coordinator, history, *active, ddl.PgConn().PID(), tag)
 		}
-		if !dispatch {
-			return nil
-		}
 		for _, job := range snapshot.jobs {
 			if history.untilValid && job.stageCancellationPlanned > history.executionVersion() {
 				continue
 			}
 			if job.Version > history.executionVersion() || job.State == "valid" || job.State == "terminal" {
+				continue
+			}
+			// Completion should immediately dispatch other pending work. A server
+			// failure is also a completed attempt, so only a poll may retry failed
+			// jobs; otherwise duplicate keys would create a tight retry loop.
+			if job.State == "failed" && !retryFailed {
 				continue
 			}
 			if job.Holder != "" && job.Holder != tag && job.ExpiresAt != nil {

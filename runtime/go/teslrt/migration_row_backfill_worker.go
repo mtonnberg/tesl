@@ -113,16 +113,10 @@ func pgRowBackfillBatchAttempt(ctx context.Context, conn *pgx.Conn, b *pgRowBase
 	}
 	migrationBoundary("row-backfill-after-conversion")
 	changed, err := pgWithRowWorkerTransaction(query, conn, b, plan, entity, roles, lease, func(a *pgRowTransactionAdmission) (int, error) {
-		changed := 0
 		migrationBoundary("row-backfill-before-cas")
-		for _, commit := range commits {
-			ok, err := commit(query, a)
-			if err != nil {
-				return 0, err
-			}
-			if ok {
-				changed++
-			}
+		changed, err := pgPublishRowBackfills(query, a, commits)
+		if err != nil {
+			return 0, err
 		}
 		var cursor any
 		if len(items) > 0 {
@@ -136,4 +130,61 @@ func pgRowBackfillBatchAttempt(ctx context.Context, conn *pgx.Conn, b *pgRowBase
 		return changed, nil
 	})
 	return changed, err
+}
+
+// The setting belongs to this fixed entity and fenced Worker transaction, not
+// an application callback. Pipeline small groups after the first successful CAS
+// has latched the ABI. SQL still checks each tuple's exact source and age; neither
+// sending a statement nor advancing the provisional read cursor proves a write.
+func pgPublishRowBackfills(ctx context.Context, a *pgRowTransactionAdmission, commits []pgRowBackfillCommit) (int, error) {
+	if len(commits) == 0 {
+		return 0, nil
+	}
+	changed := 0
+	err := a.withWriter(ctx, func(tx pgx.Tx) error {
+		for start := 0; start < len(commits); {
+			limit := min(start+128, len(commits))
+			// Preserve first-write/latch ordering, including the crash boundary
+			// before any later CAS can run. Retries receive a fresh admission.
+			if !a.backfillProcessingLatched {
+				limit = start + 1
+			}
+			batch := &pgx.Batch{}
+			for _, prepare := range commits[start:limit] {
+				statement, err := prepare(a)
+				if err != nil {
+					return err
+				}
+				batch.Queue(statement.sql, statement.args...)
+			}
+			results := tx.SendBatch(ctx, batch)
+			written := 0
+			for range batch.Len() {
+				tag, err := results.Exec()
+				if err != nil {
+					return errors.Join(err, results.Close())
+				}
+				if tag.RowsAffected() > 1 {
+					return errors.Join(fmt.Errorf("backfill primary key matched multiple rows"), results.Close())
+				}
+				written += int(tag.RowsAffected())
+			}
+			if err := results.Close(); err != nil {
+				return err
+			}
+			if written > 0 {
+				migrationBoundary("row-backfill-after-dml")
+				if err := a.latchProcessing(ctx); err != nil {
+					return err
+				}
+			}
+			changed += written
+			start = limit
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	return changed, nil
 }

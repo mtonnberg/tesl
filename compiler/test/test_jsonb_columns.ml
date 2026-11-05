@@ -327,7 +327,8 @@ type Tree = Leaf value: Nested | Branch left: Tree right: Tree
     | Compile.GoSuccess _ -> fail "structural payload minted an unvalidated record proof"
     | Compile.GoFailure diagnostics ->
       check bool "proof record requires its checked codec" true
-        (List.exists (fun (d : Compile.diagnostic) -> contains d.message "stored record `Proven`") diagnostics))
+        (List.exists (fun (d : Compile.diagnostic) ->
+          d.code = "V001" && contains d.message "generically decodes record 'Proven'") diagnostics))
     [true; false]) ["Proven"; "Nested"; "Maybe Nested"; "Envelope Nested"; "Envelope (Envelope Nested)"; "Tree"])
 
 let forbidden_adt_directions () = with_project (fun _root write ->

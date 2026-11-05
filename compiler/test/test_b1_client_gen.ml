@@ -275,8 +275,21 @@ let elm_posix_field_tolerant_decoder () =
    in endpoint signatures without ever DEFINING them (uncompilable client). *)
 let issue36_lib = {|module Lib exposing [NameSafe, isName, NewThing]
 import Tesl.Prelude exposing [String]
-import Tesl.String exposing [String.length]
+import Tesl.String exposing [String.length, String.startsWith]
 import Tesl.Json exposing [stringCodec]
+
+fact InternalPrefix (value: String)
+
+check internalPrefix(value: String) -> value: String ::: InternalPrefix value =
+  if String.startsWith value "sk_live_PRIVATE" then
+    ok value ::: InternalPrefix value
+  else
+    fail 400 "wrong prefix"
+
+record InternalDatabaseShape {
+  credentialHash: String,
+  internalTenantId: String
+}
 
 fact NameSafe (name: String)
 
@@ -337,7 +350,13 @@ let elm_imported_types_emitted () =
     if not (contains "type alias NewThing" out) then
       failf "imported record NewThing referenced but not defined (#36):\n%s" out;
     if not (contains "type NameSafe" out) then
-      failf "imported fact NameSafe referenced but not defined (#36):\n%s" out)
+      failf "imported fact NameSafe referenced but not defined (#36):\n%s" out;
+    List.iter (fun private_marker ->
+      if contains private_marker out then
+        failf "private imported declaration leaked into Elm client (%s):\n%s"
+          private_marker out
+    ) ["InternalPrefix"; "sk_live_PRIVATE"; "InternalDatabaseShape";
+       "credentialHash"; "internalTenantId"])
 
 let ts_imported_types_emitted () =
   with_issue36_project (fun main ->
@@ -346,7 +365,95 @@ let ts_imported_types_emitted () =
     if not (contains "NewThingSchema" out) then
       failf "imported record NewThing schema missing from TS client (#36):\n%s" out;
     if not (contains "NameSafeSchema" out) then
-      failf "imported fact NameSafe schema missing from TS client (#36):\n%s" out)
+      failf "imported fact NameSafe schema missing from TS client (#36):\n%s" out;
+    List.iter (fun private_marker ->
+      if contains private_marker out then
+        failf "private imported declaration leaked into TS client (%s):\n%s"
+          private_marker out
+    ) ["InternalPrefix"; "sk_live_PRIVATE"; "InternalDatabaseShape";
+       "credentialHash"; "internalTenantId"])
+
+let client_private_type_dependencies () =
+  let dir = Filename.temp_dir "tesl-client-closure-" "" in
+  let files = [
+    "lib.tesl", {|module Lib exposing [Public, Other]
+import Tesl.Prelude exposing [String]
+import Internal exposing [InternalOnly]
+import Detail exposing [Detail]
+record Nested { value: String }
+type Wrapped = Nested
+record Public { nested: Wrapped }
+record Other { title: String, detail: Detail }
+record Unrelated { credentialHash: String }
+|};
+    "internal.tesl", {|module Internal exposing [InternalOnly]
+import Tesl.Prelude exposing [String]
+record InternalOnly { privateKey: String }
+|};
+    "detail.tesl", {|module Detail exposing [Detail]
+import Tesl.Prelude exposing [String]
+record Detail { label: String }
+|};
+    "left.tesl", {|module Left exposing [LeftView]
+import Lib exposing [Public]
+record LeftView { value: Public }
+|};
+    "right.tesl", {|module Right exposing [RightView]
+import Lib exposing [Other]
+record RightView { value: Other }
+|};
+    "main.tesl", {|module Main exposing []
+import Left exposing [LeftView]
+import Right exposing [RightView]
+api Api {
+ get "/left" -> LeftView
+ get "/right" -> RightView
+}
+handler get left() -> LeftView = fail 404 "missing"
+handler get right() -> RightView = fail 404 "missing"
+server Server for Api { left, right }
+|}] in
+  List.iter (fun (name, src) ->
+    Out_channel.with_open_bin (Filename.concat dir name) (fun out -> output_string out src)) files;
+  Fun.protect ~finally:(fun () ->
+    List.iter (fun (name, _) -> Sys.remove (Filename.concat dir name)) files;
+    Unix.rmdir dir) (fun () ->
+    List.iter (fun (flag, definition) ->
+      let code, out = run_cc [flag; Filename.concat dir "main.tesl"] in
+      if code <> 0 then failf "%s failed: %s" flag out;
+      if flag = "--generate-ts" && not (contains "z.lazy(() => NestedSchema).brand<\"Wrapped\">()" out) then
+        failf "nested newtype lost its wire representation: %s" out;
+      List.iter (fun name ->
+        if not (contains (definition name) out) then
+          failf "%s omitted required definition %s: %s" flag name out)
+        ["Nested"; "Wrapped"; "Public"; "Other"; "LeftView"; "RightView"; "Detail"];
+      if List.exists (fun name -> contains name out)
+          ["Unrelated"; "credentialHash"; "InternalOnly"; "privateKey"] then
+        failf "%s leaked an unrelated private declaration: %s" flag out)
+      ["--generate-ts", (fun name -> "export const " ^ name ^ "Schema");
+       "--generate-elm", (fun name -> "type alias " ^ name)])
+
+let client_private_type_collision_refuses () =
+  with_issue36_project (fun main ->
+    Out_channel.with_open_bin (Filename.concat (Filename.dirname main) "lib.tesl") (fun out ->
+      output_string out {|module Lib exposing [Public]
+import Tesl.Prelude exposing [String]
+record Nested { value: String }
+record Public { nested: Nested }
+|});
+    Out_channel.with_open_bin main (fun out -> output_string out {|module Main exposing []
+import Tesl.Prelude exposing [Int]
+import Lib exposing [Public]
+record Nested { number: Int }
+api Api { get "/value" -> Public }
+handler get value() -> Public = fail 404 "missing"
+server Server for Api { value }
+|});
+    List.iter (fun flag ->
+      let code, out = run_cc [flag; main] in
+      if code <> 1 || not (contains "client generation cannot flatten distinct declarations named type:Nested" out) then
+        failf "ambiguous private wire name was not refused by %s: %s" flag out)
+      ["--generate-ts"; "--generate-elm"])
 
 (* ── mountPath reaches the request URL but never the generated names (#75) ──
    `mountPath` is a deployment concern.  The generators derive function and type
@@ -457,6 +564,10 @@ let () =
         elm_imported_types_emitted;
       test_case "ts client defines imported record + fact" `Quick
         ts_imported_types_emitted;
+      test_case "private wire dependencies and both diamond imports are defined" `Quick
+        client_private_type_dependencies;
+      test_case "distinct owners of one private wire name refuse" `Quick
+        client_private_type_collision_refuses;
     ];
     "mountPath: URL base, not generated names (GitHub #75)", [
       test_case "ts: _teslBase seeded, name stays getWidgets" `Quick

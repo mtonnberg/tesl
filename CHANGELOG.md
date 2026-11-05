@@ -12,9 +12,10 @@ has a regression test.
   `dbWrite Order` covers `dbRead Order`, never another entity. SQL joins require read access to
   every touched entity, and every scoped DB capability granted by `main` must name an entity in
   the database selected by `App.database`; violations are compile errors.
-- **`inList` / `notInList` require a list literal.** A variable, `let` or call as the member
-  list is now a compile error (V001, operand named). It used to compile to a constant
-  `where false` / `where true` — an exclusion filter returned every row.
+- **`inList` / `notInList` support runtime lists (#114).** Variables, computed lists and
+  list literals must have the column's exact element type. Runtime lists bind as one
+  PostgreSQL array parameter, preserving empty-list and nullable-value membership semantics.
+  They no longer need to be rejected to prevent the historical constant-predicate bug.
 - **`updateAndReturnOne` refuses an ambiguous predicate.** When the `where` clause matches
   more than one row, both backends now trap before changing anything ("the predicate matched
   more than one row"). Memory used to update the first match; Postgres updated all of them.

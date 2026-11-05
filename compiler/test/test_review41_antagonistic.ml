@@ -209,7 +209,7 @@ let r41_02_ts_get_result_erased_to_unknown () =
     assert_contains ~label:"result response" out
       "export async function getResult(): Promise<{ tag: \"Ok\"; value: Todo } | { tag: \"Err\"; error: string }>";
     assert_contains ~label:"result parse" out
-      "z.discriminatedUnion(\"tag\", [z.object({ tag: z.literal(\"Ok\"), value: TodoSchema }), z.object({ tag: z.literal(\"Err\"), error: z.string() })]).parse(await res.json())")
+      "z.discriminatedUnion(\"tag\", [z.object({ tag: z.literal(\"Ok\"), value: z.lazy(() => TodoSchema) }), z.object({ tag: z.literal(\"Err\"), error: z.string() })]).parse(await res.json())")
 
 let r41_03_ts_get_dict_erased_to_unknown () =
   with_get_api (fun path ->
@@ -233,7 +233,7 @@ let r41_05_ts_get_maybe_lacks_zod_parse () =
     assert_contains ~label:"maybe signature" out
       "export async function getMaybe(): Promise<Todo | null>";
     assert_contains ~label:"maybe parse" out
-      "TodoSchema.nullable().parse(await res.json())")
+      "z.lazy(() => TodoSchema).nullable().parse(await res.json())")
 
 let r41_06_ts_post_tuple_body_erased_to_unknown () =
   with_post_api (fun path ->
@@ -249,7 +249,7 @@ let r41_07_ts_post_result_body_erased_to_unknown () =
     assert_contains ~label:"result body" out
       "export async function postResult(result: { tag: \"Ok\"; value: Todo } | { tag: \"Err\"; error: string }): Promise<{ tag: \"Ok\"; value: Todo } | { tag: \"Err\"; error: string }>";
     assert_contains ~label:"result return parse" out
-      "z.discriminatedUnion(\"tag\", [z.object({ tag: z.literal(\"Ok\"), value: TodoSchema }), z.object({ tag: z.literal(\"Err\"), error: z.string() })]).parse(await res.json())")
+      "z.discriminatedUnion(\"tag\", [z.object({ tag: z.literal(\"Ok\"), value: z.lazy(() => TodoSchema) }), z.object({ tag: z.literal(\"Err\"), error: z.string() })]).parse(await res.json())")
 
 let r41_08_ts_post_dict_body_erased_to_unknown () =
   with_post_api (fun path ->
@@ -275,7 +275,7 @@ let r41_10_ts_post_maybe_is_the_only_preserved_complex_shape () =
     assert_contains ~label:"maybe stringified" out
       "body: JSON.stringify(todo)";
     assert_contains ~label:"maybe return parse" out
-      "TodoSchema.nullable().parse(await res.json())")
+      "z.lazy(() => TodoSchema).nullable().parse(await res.json())")
 
 let r41_11_elm_get_tuple_erased_to_value () =
   with_get_api (fun path ->

@@ -35,6 +35,10 @@ jobs:
           # The migration latency comparison builds its pinned historical base.
           fetch-depth: 0
 
+      - name: Fetch the exact migration latency baseline
+        if: matrix.shard == 'migration'
+        run: python3 scripts/compare-migration-latency.py --prepare-baseline --fetch-baseline
+
       - name: Install Nix (flakes enabled)
         uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
         with:

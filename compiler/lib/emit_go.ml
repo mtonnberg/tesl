@@ -8471,6 +8471,13 @@ and emit_sql_predicate ?(joins=[]) ~indent signatures env loc (info : entity_inf
        `Maybe`)" binder field field;
     column_ref field
   in
+  let member field values negate =
+    let ty = entity_column loc info field in
+    let list = emit_expr ~expected:(TList ty) ~indent signatures row_env values in
+    let equal = element_equal_func ty in
+    Printf.sprintf "%steslrt.ListMemberBy(%s, %s, %s)"
+      (if negate then "!" else "") (column_ref field) list equal
+  in
   let rec clause (c : Sql_query.sql_clause) =
     match c with
     | SqlPred { field; op; value } -> compare_op field op value
@@ -8489,6 +8496,8 @@ and emit_sql_predicate ?(joins=[]) ~indent signatures env loc (info : entity_inf
       (match List.map (fun value -> compare_op field BNeq value) values with
        | [] -> "true"
        | rendered -> "(" ^ String.concat " && " rendered ^ ")")
+    | SqlInList { field; values } -> member field values false
+    | SqlNotInList { field; values } -> member field values true
     (* The memory counterpart of `IS NULL`: a nullable column is a `Maybe`, and `Nothing` IS
        the null.  TRUE or FALSE, never UNKNOWN — the one place NULL-ness is decidable — which
        is why it is its own clause rather than a comparison against a null. *)
@@ -8524,7 +8533,8 @@ and sql_check_where_field loc where_field clauses =
     match c with
     | SqlPred { field = other; _ } | SqlIsNull { field = other }
     | SqlIsNotNull { field = other } | SqlIn { field = other; _ }
-    | SqlNotIn { field = other; _ } | SqlLike { field = other; _ }
+    | SqlNotIn { field = other; _ } | SqlInList { field = other; _ }
+    | SqlNotInList { field = other; _ } | SqlLike { field = other; _ }
     | SqlILike { field = other; _ } -> other = field
     | SqlOr parts -> List.exists (mentions field) parts
   in
@@ -8901,6 +8911,28 @@ and sql_where_text ?column_renderer ?(joins=[]) ~indent signatures env loc (info
     | BNeq, true -> Printf.sprintf "%s is distinct from %s" (column field) (bind field expr)
     | _ -> Printf.sprintf "%s %s %s" (column field) symbol (bind field expr)
   in
+  let member field values negate =
+    let ty = entity_column loc info field in
+    let list = emit_expr ~expected:(TList ty) ~indent signatures env values in
+    (* One array parameter keeps statement text and placeholder numbering independent
+       of list length. Convert each element through the scalar column binder so Int,
+       newtype, secret, JSONB and nullable values retain their existing wire format.
+       make produces an empty, non-NULL array even for a nil source slice. *)
+    let bind_list = remember_helper_stmts ~prefix:"teslSqlList"
+      ~signature:(Printf.sprintf "(teslMembers []%s) []any" (go_type ty))
+      ~body:(Printf.sprintf
+        "\tteslArgs := make([]any, len(teslMembers))\n\tfor teslIndex, teslMember := range teslMembers {\n\t\tteslArgs[teslIndex] = %s\n\t}\n\treturn teslArgs\n"
+        (sql_bound_value loc ty "teslMember")) in
+    let parameter = sql_placeholder builder (Printf.sprintf "%s(%s)" bind_list list) in
+    let array = parameter ^ "::" ^ (sql_column_of loc info field).col_sql_type ^ "[]" in
+    if maybe_element ty <> None then
+      (* array_position uses IS NOT DISTINCT FROM, including NULL membership. *)
+      Printf.sprintf "array_position(%s, %s) is %snull" array (column field)
+        (if negate then "" else "not ")
+    else
+      Printf.sprintf "%s %s (%s)" (column field)
+        (if negate then "<> all" else "= any") array
+  in
   let rec clause (c : Sql_query.sql_clause) =
     match c with
     | SqlPred { field; op; value } -> compare_op field op value
@@ -8916,6 +8948,8 @@ and sql_where_text ?column_renderer ?(joins=[]) ~indent signatures env loc (info
       (match List.map (fun value -> compare_op field BNeq value) values with
        | [] -> "true"
        | rendered -> "(" ^ String.concat " and " rendered ^ ")")
+    | SqlInList { field; values } -> member field values false
+    | SqlNotInList { field; values } -> member field values true
     | SqlIsNull { field } -> Printf.sprintf "%s is null" (nullable_column field)
     | SqlIsNotNull { field } -> Printf.sprintf "%s is not null" (nullable_column field)
     (* `like`/`ilike` are the SQL operators themselves; the memory store matches the same

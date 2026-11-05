@@ -16,6 +16,41 @@ def samples(ns):
 
 
 class RegressionPolicy(unittest.TestCase):
+    def test_available_baseline_needs_no_network(self):
+        run = mock.Mock(return_value=bench['BASELINE'])
+        with mock.patch.dict(bench['prepare_baseline'].__globals__, {'run': run}):
+            self.assertEqual(bench['prepare_baseline'](bench['BASELINE'], fetch=True), bench['BASELINE'])
+        self.assertEqual(run.call_count, 1)
+
+    def test_squashed_baseline_fetches_exact_commit(self):
+        ref = bench['BASELINE']
+        root = Path('/checkout')
+        run = mock.Mock(side_effect=[RuntimeError('missing'), '', ref])
+        with mock.patch.dict(bench['prepare_baseline'].__globals__, {'run': run}):
+            self.assertEqual(bench['prepare_baseline'](ref, fetch=True, root=root), ref)
+        self.assertEqual(run.call_args_list[1], mock.call(
+            ['git', 'fetch', '--no-tags', '--no-write-fetch-head', 'origin', ref], cwd=root, timeout=120))
+        self.assertEqual(run.call_args_list[0], run.call_args_list[2])
+
+    def test_preflight_missing_baseline_fails_without_fetching(self):
+        run = mock.Mock(side_effect=RuntimeError('missing'))
+        with mock.patch.dict(bench['prepare_baseline'].__globals__, {'run': run}):
+            with self.assertRaisesRegex(RuntimeError, 'Full main history does not include squashed'):
+                bench['prepare_baseline'](bench['BASELINE'])
+        self.assertEqual(run.call_count, 1)
+
+    def test_fetch_refuses_moving_names_and_wrong_objects(self):
+        for ref in ('main', '9852f26', '--upload-pack=other'):
+            run = mock.Mock(side_effect=RuntimeError('missing'))
+            with mock.patch.dict(bench['prepare_baseline'].__globals__, {'run': run}):
+                with self.assertRaisesRegex(RuntimeError, 'full commit SHA'):
+                    bench['prepare_baseline'](ref, fetch=True)
+            self.assertEqual(run.call_count, 1)
+        run = mock.Mock(side_effect=[RuntimeError('missing'), '', '0' * 40])
+        with mock.patch.dict(bench['prepare_baseline'].__globals__, {'run': run}):
+            with self.assertRaisesRegex(RuntimeError, 'differs'):
+                bench['prepare_baseline'](bench['BASELINE'], fetch=True)
+
     def test_in_checkout_evidence_is_excluded_from_snapshot(self):
         root = Path('/checkout')
         output = root / 'evidence'

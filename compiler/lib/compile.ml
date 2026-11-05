@@ -2948,16 +2948,23 @@ let check_files (filenames : string list) : diagnostic list =
 
 (* ── Client-generation module merge (#36) ────────────────────────────────── *)
 
+exception Client_generation_error of string
+
 (* The Elm/TS client generators receive one [module_form], but the entrypoint's
    endpoint signatures reference imported-module types by bare name (a request-
    body record, a fact used as a `Proven` phantom).  Emitting only the
    entrypoint's decls therefore produced clients that reference types they
    never define.  Merge every transitively imported local module's CLIENT-
-   RELEVANT decls into the entrypoint before emitting: type definitions plus
+   RELEVANT, explicitly imported decls into the entrypoint before emitting:
+   type definitions plus
    the check/auth/establish functions the emitters consult to classify facts
    (client-side validator vs server-only).  Runtime/API surface decls (api,
    server, database, queue, …) are NOT merged — only the entrypoint defines
-   the client's endpoints.  Names already defined by the entrypoint win. *)
+   the client's endpoints. Start with exported declarations visible through each
+   import, then include their wire-type dependencies. Private types used by a
+   public payload need definitions; unrelated private functions and literals do
+   not belong in a generated client. Distinct owners of the same flattened name
+   must refuse rather than silently decoding one owner's payload as the other. *)
 let merge_imported_client_decls (entry : Ast.module_form) : Ast.module_form =
   let is_client_decl = function
     | Ast.DFact _ | Ast.DType _ | Ast.DRecord _ | Ast.DEntity _
@@ -2974,42 +2981,134 @@ let merge_imported_client_decls (entry : Ast.module_form) : Ast.module_form =
     | Ast.DFunc (f : Ast.func_decl) -> Some ("fn:" ^ f.name)
     | _ -> None
   in
-  let seen_files = Hashtbl.create 8 in
-  Hashtbl.replace seen_files entry.Ast.source_file ();
+  let seen_selections = Hashtbl.create 8 in
+  let entry_path = canonical_import_path entry.Ast.source_file in
   let seen_names = Hashtbl.create 32 in
   List.iter (fun d ->
     match decl_key d with
-    | Some k -> Hashtbl.replace seen_names k ()
+    | Some k -> Hashtbl.replace seen_names k entry_path
     | None -> ()
   ) entry.Ast.decls;
-  let rec walk (m : Ast.module_form) : Ast.top_decl list =
+  let exported_names (m : Ast.module_form) =
+    List.map (function
+      | Ast.ExportName name | Ast.ExportAdt name -> name
+    ) m.Ast.exports
+  in
+  let visible_through (imp : Ast.import_decl) (m : Ast.module_form) name =
+    List.mem name (exported_names m)
+    && match imp.Ast.names with
+       | Ast.ImportAll -> true
+       | Ast.ImportExposing names -> List.mem name names
+  in
+  let client_closure requested (imp : Ast.import_decl) (m : Ast.module_form) =
+    let needed = Hashtbl.create 16 in
+    let add key = Hashtbl.replace needed key () in
+    let rec ty = function
+      | Ast.TName {name; _} -> add ("type:" ^ name)
+      | Ast.TApp {head; arg; _} -> ty head; ty arg
+      | Ast.TFun {dom; cod; _} -> ty dom; ty cod
+      | Ast.TTuple {elems; _} -> List.iter ty elems
+      | Ast.TVar _ -> () in
+    let rec proof = function
+      | Ast.PredApp {pred; _} -> add ("fact:" ^ pred)
+      | Ast.PredAnd {left; right; _} -> proof left; proof right in
+    let field (f : Ast.field_def) = ty f.type_expr; Option.iter proof f.proof_ann in
+    let binding (b : Ast.binding) = ty b.type_expr; Option.iter proof b.proof_ann in
+    let rec result = function
+      | Ast.RetPlain {ty=t; _} -> ty t
+      | Ast.RetAttached {binding=b; _} -> binding b
+      | Ast.RetNamedPack {ty=t; entity_proof; other_proof; _} ->
+        ty t; Option.iter proof entity_proof; Option.iter proof other_proof
+      | Ast.RetForAll {elem_ty; proof=p; _}
+      | Ast.RetMaybeForAll {elem_ty; proof=p; _}
+      | Ast.RetSetForAll {elem_ty; proof=p; _}
+      | Ast.RetMaybeSetForAll {elem_ty; proof=p; _} -> ty elem_ty; proof p
+      | Ast.RetMaybeAttached {outer_ty; binding=b; _} -> Option.iter ty outer_ty; binding b
+      | Ast.RetForAllDictValues {key_ty; val_ty; proof=p; _}
+      | Ast.RetForAllDictKeys {key_ty; val_ty; proof=p; _} -> ty key_ty; ty val_ty; proof p
+      | Ast.RetExists {binding=b; body; _} -> binding b; result body in
+    List.iter (fun d -> match decl_key d with
+      | Some key ->
+        let name = String.sub key (String.index key ':' + 1)
+          (String.length key - String.index key ':' - 1) in
+        let requested = match requested with
+          | None -> true
+          | Some wanted ->
+            let prefix = String.sub key 0 (String.index key ':' + 1) in
+            Hashtbl.mem wanted key || Hashtbl.mem wanted (prefix ^ imp.module_name ^ "." ^ name) in
+        if requested && visible_through imp m name then add key
+      | None -> ()) m.decls;
+    let expanded = Hashtbl.create 16 in
+    let rec expand () =
+      let changed = ref false in
+      List.iter (fun d -> match decl_key d with
+        | Some key when not (Hashtbl.mem expanded key) &&
+            (Hashtbl.mem needed key || match d with
+             | Ast.DCodec c -> Hashtbl.mem needed ("type:" ^ c.type_name)
+             | _ -> false) ->
+          add key; Hashtbl.add expanded key (); changed := true;
+          (match d with
+           | Ast.DRecord r -> List.iter field r.fields;
+             Option.iter (fun (i : Ast.record_invariant) -> proof i.proof_text) r.invariant
+           | Ast.DEntity e -> List.iter field e.fields
+           | Ast.DType (Ast.TypeNewtype {base_type; _}) -> ty base_type
+           | Ast.DType (Ast.TypeAdt {variants; _}) ->
+             List.iter (fun (v : Ast.adt_variant) -> List.iter field v.fields) variants
+           | Ast.DFact f -> List.iter binding f.params
+           | Ast.DFunc f -> List.iter binding f.params; result f.return_spec
+           | _ -> ())
+        | _ -> ()) m.decls;
+      if !changed then expand () in
+    expand ();
+    let selected = List.filter (fun d -> match decl_key d with
+      | Some key -> Hashtbl.mem needed key
+      | None -> false) m.decls in
+    (* Only references not defined here can require an imported dependency.
+       An internal import which no selected wire type uses must stay private. *)
+    List.iter (fun d -> Option.iter (Hashtbl.remove needed) (decl_key d)) m.decls;
+    selected, needed
+  in
+  let rec walk requested (m : Ast.module_form) : Ast.top_decl list =
     List.concat_map (fun (imp : Ast.import_decl) ->
       let path =
-        Checker.resolve_local_import_path m.Ast.source_file imp.Ast.module_name
+        canonical_import_path (Checker.resolve_local_import_path m.Ast.source_file imp.Ast.module_name)
       in
-      if Hashtbl.mem seen_files path || not (Source_input.exists path) then []
+      if path = entry_path || not (Source_input.exists path) then []
       else begin
-        Hashtbl.replace seen_files path ();
         try
           let source = Source_input.read_text path in
           match Parser.parse_module path source with
-          | Err _ -> []   (* the full-checker gate already reported it *)
-          | Ok im ->
+           | Err _ -> []   (* the full-checker gate already reported it *)
+           | Ok im ->
+             let selected, needed = client_closure requested imp im in
+             let seen = match Hashtbl.find_opt seen_selections path with
+               | Some seen -> seen
+               | None -> let seen = Hashtbl.create 16 in
+                 Hashtbl.add seen_selections path seen; seen in
+             let changed = ref false in
+             List.iter (fun d -> match decl_key d with
+               | Some key when not (Hashtbl.mem seen key) ->
+                 Hashtbl.add seen key (); changed := true
+               | _ -> ()) selected;
             let own =
               List.filter (fun d ->
                 is_client_decl d
                 && (match decl_key d with
-                    | Some k when Hashtbl.mem seen_names k -> false
-                    | Some k -> Hashtbl.replace seen_names k (); true
+                    | Some k ->
+                      (match Hashtbl.find_opt seen_names k with
+                       | Some owner when owner = path -> false
+                       | Some _ -> raise (Client_generation_error (Printf.sprintf
+                           "client generation cannot flatten distinct declarations named %s; give the public wire types distinct names" k))
+                       | None -> Hashtbl.add seen_names k path; true)
                     | None -> false)
-              ) im.Ast.decls
+              ) selected
             in
-            own @ walk im
+            own @ (if !changed then walk (Some needed) im else [])
         with Sys_error _ -> []
       end
     ) m.Ast.imports
   in
-  { entry with Ast.decls = entry.Ast.decls @ walk entry }
+  { entry with Ast.decls = entry.Ast.decls @ walk None entry }
 
 (* ── WS4: whole-project / batch checking ─────────────────────────────────────
    A normal `tesl --check f1 f2 ...` already checks N files in one OS process,

@@ -70,14 +70,14 @@ func pgRowAdditiveProcess(t *testing.T, cmd *exec.Cmd) (*pgRowAppOutput, func())
 func pgRowAdditiveWorker(t *testing.T, f *pgControlTestFixture, root, version string) func() {
 	t.Helper()
 	output, stop := pgRowAdditiveProcess(t, pgRowAdditiveCommand(f, root, version, "--schema", "worker", "--json"))
-	deadline := time.Now().Add(15 * time.Second)
-	for time.Now().Before(deadline) {
-		if strings.Contains(output.String(), `"kind":"schema-worker-ready"`) {
-			return stop
-		}
-		time.Sleep(20 * time.Millisecond)
+	// These are lifecycle/correctness witnesses, not a 15-second startup SLA.
+	// Keep startup bounded by both its own budget and the enclosing scenario.
+	ready, cancel := context.WithTimeout(f.ctx, 60*time.Second)
+	defer cancel()
+	if output.WaitContains(ready, `"kind":"schema-worker-ready"`) {
+		return stop
 	}
-	t.Fatalf("ordinary schema worker did not become ready: %s", output.String())
+	t.Fatalf("ordinary schema worker %s did not become ready: %v; output: %s", version, ready.Err(), output.String())
 	return stop
 }
 func pgRowAdditiveApp(t *testing.T, f *pgControlTestFixture, root, version string) string {

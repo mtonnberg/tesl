@@ -8,6 +8,7 @@ import math
 import os
 from pathlib import Path
 import random
+import re
 import runpy
 import shutil
 import signal
@@ -34,6 +35,29 @@ def run(args, *, cwd=None, env=None, timeout=1800):
 
 def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def prepare_baseline(ref, *, fetch=False, root=ROOT):
+    """Resolve the reviewed baseline even when its PR was squash-merged."""
+    command = ['git', 'rev-parse', '--verify', '--end-of-options', ref + '^{commit}']
+    try:
+        return run(command, cwd=root)
+    except RuntimeError as error:
+        if not fetch:
+            raise RuntimeError(
+                f'Missing migration latency baseline {ref}. Full main history does not '
+                'include squashed PR commits. Run scripts/compare-migration-latency.py '
+                '--prepare-baseline --fetch-baseline before the gate.\n' + str(error)) from error
+        # Remote branch names may move. Network preparation accepts only an exact
+        # reviewed object ID; local callers may still use an existing local ref.
+        if not re.fullmatch(r'[0-9a-f]{40}', ref):
+            raise RuntimeError('Fetching a migration baseline requires a full commit SHA') from error
+    run(['git', 'fetch', '--no-tags', '--no-write-fetch-head', 'origin', ref],
+        cwd=root, timeout=120)
+    resolved = run(command, cwd=root)
+    if resolved != ref:
+        raise RuntimeError('Fetched migration baseline differs from the requested commit')
+    return resolved
 
 
 def inventory(root):
@@ -101,8 +125,19 @@ def calibrated(pairs, samples=SAMPLES):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--baseline-ref', default=os.environ.get('TESL_MIGRATION_LATENCY_BASELINE', BASELINE))
-    parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--output', type=Path)
+    parser.add_argument('--prepare-baseline', action='store_true',
+                        help='resolve the pinned comparison input without building or benchmarking')
+    parser.add_argument('--fetch-baseline', action='store_true',
+                        help='allow preparation to fetch a missing full commit SHA from origin')
     args = parser.parse_args()
+    if args.fetch_baseline and not args.prepare_baseline:
+        parser.error('--fetch-baseline requires --prepare-baseline')
+    if args.prepare_baseline:
+        print(prepare_baseline(args.baseline_ref, fetch=args.fetch_baseline))
+        return
+    if args.output is None:
+        parser.error('--output is required when benchmarking')
     output = args.output.resolve()
     if output == ROOT or output in ROOT.parents:
         parser.error('--output must not contain the source checkout')
@@ -122,7 +157,7 @@ def main():
         for tool in ('git', 'tar', 'dune', 'go', 'initdb', 'pg_ctl', 'psql'):
             if not shutil.which(tool):
                 raise RuntimeError(f'required tool missing: {tool}')
-        baseline = run(['git', 'rev-parse', '--verify', args.baseline_ref + '^{commit}'], cwd=ROOT)
+        baseline = prepare_baseline(args.baseline_ref)
         evidence['baseline_commit'] = baseline
         evidence['candidate_commit'] = run(['git', 'rev-parse', 'HEAD'], cwd=ROOT)
         evidence['candidate_status'] = run(['git', 'status', '--porcelain'], cwd=ROOT)

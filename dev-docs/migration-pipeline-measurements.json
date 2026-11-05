@@ -1,0 +1,72 @@
+{
+  "version": 1,
+  "date": "2026-11-05",
+  "scope": "two alternating 10k-row local rollout pairs; not release acceptance",
+  "postgres": "17.10",
+  "rows": 10000,
+  "clients": [2],
+  "batch": 2000,
+  "fixedPhaseSeconds": 1,
+  "runtimeSha256": {
+    "migration_row_backfill.go": "7338bed25387d71f02cb457e6fa96231f3ac7b32faf11357423d66c33b2be773",
+    "migration_row_backfill_worker.go": "0bdbaa52fa4f43580a5e104d55079ad96ebb45c7a652d4caea63719e91c065c5"
+  },
+  "variants": {
+    "before": {
+      "compilerSha256": "35e55493de4089c49c8351742f68eb8ac8093b4dad5e411894204f9964e3d968",
+      "v2BinarySha256": "aa2f5818a933ca345a616fb743253f038b89d384ee11c0c7c42305a55594934a"
+    },
+    "after": {
+      "compilerSha256": "84592845e739d6de5e181e715f8b5ab2a03e16aa57799cbd04f894badbcaea88",
+      "v2BinarySha256": "41fedd645c6f7cc297389ef5bde075dbbf0f7f9e52b434c809ba8a019d7dbe2e"
+    }
+  },
+  "runs": [
+    {
+      "variant": "before",
+      "artifact": "rollout-before-results/10000/result.json",
+      "rawSha256": "2a2d3007cfde0f6b5dec6ad9fbb4cf3f2afe1ec2ab76bfcc9f1d2eb803399787",
+      "rowsPerSecond": 385.9326863828472,
+      "backfillSeconds": 28.837547032999282,
+      "contractSeconds": 17.49102269600553,
+      "correctnessPassed": true,
+      "allRowValuesVerified": true
+    },
+    {
+      "variant": "after",
+      "artifact": "rollout-after-results/10000/result.json",
+      "rawSha256": "bb3c4c91b17dd7b75b37b4949129b557e57363f539f0f54e155e2f28b5fa96b4",
+      "rowsPerSecond": 465.56782485361225,
+      "backfillSeconds": 25.948466597001243,
+      "contractSeconds": 15.900350427000376,
+      "correctnessPassed": true,
+      "allRowValuesVerified": true
+    },
+    {
+      "variant": "after",
+      "artifact": "rollout-after-repeat/10000/result.json",
+      "rawSha256": "e9d2c3128da36e61d93d41760fcc54bea894fec6937d5048f885aeb6cc1959f0",
+      "rowsPerSecond": 547.178355328852,
+      "backfillSeconds": 22.55009536199941,
+      "contractSeconds": 19.07701143000304,
+      "correctnessPassed": true,
+      "allRowValuesVerified": true
+    },
+    {
+      "variant": "before",
+      "artifact": "rollout-before-repeat/10000/result.json",
+      "rawSha256": "24155dd18ff8b0168b2a73bd73c260b83bd8153234ff4badff2c90db79732e5b",
+      "rowsPerSecond": 431.6548016320826,
+      "backfillSeconds": 28.000371636997443,
+      "contractSeconds": 18.00924046900036,
+      "correctnessPassed": true,
+      "allRowValuesVerified": true
+    }
+  ],
+  "limitations": [
+    "Two pairs only, unpinned local host, Unix-socket database transport",
+    "One-second fixed control phases do not satisfy p99 sample requirements",
+    "No 10x or 100x whole-workload speedup demonstrated",
+    "Final compiler includes later client-emitter changes; measured runtime pipeline bytes are unchanged"
+  ]
+}

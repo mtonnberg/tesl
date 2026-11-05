@@ -336,6 +336,27 @@ api TagApi {
 }
 |}
 
+(* A cycle in transparent aliases is invalid as an Elm helper signature, but
+   must not make client generation recurse forever while deciding that.  The
+   List edge also ensures the recursion is non-tail-recursive. *)
+let cyclic_newtype_base_src = {|module CycleNewtypes exposing []
+import Tesl.Prelude exposing [Bool(..), List]
+
+type A = (List B)
+type B = A
+
+fn accepts(value: A) -> Bool =
+  True
+
+fact Accepted (value: A)
+
+check accept(value: A) -> value: A ::: Accepted value =
+  if accepts value then
+    ok value ::: Accepted value
+  else
+    fail 400 "rejected"
+|}
+
 (* ── Tests ────────────────────────────────────────────────────────────────── *)
 
 let adt_base_injects_the_predicate_instead_of_importing () =
@@ -409,6 +430,13 @@ let compound_core_base_keeps_the_helper () =
   assert_contains ~label:"compound signature printed" out "mayRead : List String -> Bool";
   assert_helper_signatures_are_core ~label:"compound core base" out
 
+let cyclic_newtype_base_fails_closed () =
+  let out = generate_elm ~module_name:"CycleNewtypes" cyclic_newtype_base_src in
+  assert_not_contains ~label:"cyclic newtypes must not import ApiHelpers" out
+    "import ApiHelpers";
+  assert_contains ~label:"cyclic newtypes use predicate injection" out
+    "accepted : (A -> Bool) -> A -> Maybe (Proven A Accepted)"
+
 (* The guard has to be able to FAIL, or it pins nothing. *)
 let guard_rejects_a_module_local_helper_signature () =
   let broken =
@@ -431,6 +459,8 @@ let () =
         newtype_base_prints_the_underlying_type;
       test_case "List String base keeps the delegation" `Quick
         compound_core_base_keeps_the_helper;
+      test_case "cyclic newtype bases fail closed without recursing forever" `Quick
+        cyclic_newtype_base_fails_closed;
       test_case "guard rejects a module-local ApiHelpers signature" `Quick
         guard_rejects_a_module_local_helper_signature;
     ];

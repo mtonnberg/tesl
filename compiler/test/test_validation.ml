@@ -613,6 +613,69 @@ type Command = Delete user: String ::: IsAdmin user
 codec Command { adtJson }
 |} "adtJson cannot decode proof-annotated payload fields"
 
+let test_adt_json_rejects_nested_unvalidated_proof_record () =
+  assert_validation_error {|module Foo exposing []
+import Tesl.Prelude exposing [String]
+fact Admin (role: String)
+record Claim { role: String ::: Admin role }
+type Command = Run claim: Claim
+codec Command { adtJson }
+|} "generically decodes record 'Claim'"
+
+let test_persisted_adt_rejects_nested_unvalidated_invariant_record () =
+  assert_validation_error {|module Foo exposing []
+import Tesl.Prelude exposing [Int]
+fact Ordered (low: Int) (high: Int)
+record Range { low: Int, high: Int } ::: Ordered low high
+type Payload = Put value: Range
+entity Row table "rows" primaryKey id { id: Int, payload: Payload }
+|} "generically decodes record 'Range'"
+
+let test_generic_decode_follows_newtypes () =
+  List.iter (fun boundary ->
+    assert_validation_error ({|module AliasProof exposing []
+import Tesl.Prelude exposing [String, List]
+fact Admin (role: String)
+record Claim { role: String ::: Admin role }
+type Wrapped = Claim
+type Batch = (List Wrapped)
+type Command = Run claims: Batch
+|} ^ boundary) "generically decodes record 'Claim'")
+    ["codec Command { adtJson }";
+     "entity Row table \"rows\" primaryKey id { id: String, payload: Command }"];
+  assert_no_errors {|module AliasPlain exposing []
+import Tesl.Prelude exposing [String, List]
+record Claim { role: String }
+type Wrapped = Claim
+type Command = Run claims: (List Wrapped)
+codec Command { adtJson }
+|};
+  assert_no_errors {|module AliasCycle exposing []
+import Tesl.Prelude exposing [List]
+type A = (List B)
+type B = A
+type Command = Run value: A
+codec Command { adtJson }
+|}
+
+let test_generic_decode_imported_newtype () =
+  let dir = Filename.temp_dir "tesl-proof-alias-" "" in
+  Fun.protect ~finally:(fun () -> Unix.rmdir dir) (fun () ->
+    assert_compile_diagnostic_from_entry
+      ~entry_path:(Filename.concat dir "main.tesl")
+      ~entry_src:{|module Main exposing []
+import Lib exposing [Wrapped]
+type Command = Run claim: Wrapped
+codec Command { adtJson }
+|}
+      ~extra_files:[Filename.concat dir "lib.tesl", {|module Lib exposing [Wrapped]
+import Tesl.Prelude exposing [String]
+fact Admin (role: String)
+record Claim { role: String ::: Admin role }
+type Wrapped = Claim
+|}]
+      ~substr:"generically decodes record")
+
 (* ── 4. Call-site proof satisfaction ────────────────────────────────────── *)
 
 let test_call_with_checked_arg_ok () =
@@ -1757,6 +1820,10 @@ let () =
       Alcotest.test_case "conjunctive proof coverage" `Quick test_codec_conjunctive_proof_requires_full_coverage;
       Alcotest.test_case "conjunctive via chain ok" `Quick test_codec_conjunctive_proof_via_chain_ok;
       Alcotest.test_case "adtJson proof payload rejected" `Quick test_adt_codec_proof_payload_rejected;
+      Alcotest.test_case "adtJson rejects nested unvalidated proof record" `Quick test_adt_json_rejects_nested_unvalidated_proof_record;
+      Alcotest.test_case "persisted ADT rejects nested unvalidated invariant record" `Quick test_persisted_adt_rejects_nested_unvalidated_invariant_record;
+      Alcotest.test_case "generic decoding follows newtypes and terminates cycles" `Quick test_generic_decode_follows_newtypes;
+      Alcotest.test_case "generic decoding follows imported newtype" `Quick test_generic_decode_imported_newtype;
     ];
     "call-site-proofs", [
       Alcotest.test_case "checked arg ok" `Quick test_call_with_checked_arg_ok;

@@ -233,9 +233,9 @@ let shape_cases = [
     body_name = "result";
     ir_type = "Result Todo String";
     ts_get_sig = {|export async function getResult(): Promise<{ tag: "Ok"; value: Todo } | { tag: "Err"; error: string }>|};
-    ts_get_parse = {|z.discriminatedUnion("tag", [z.object({ tag: z.literal("Ok"), value: TodoSchema }), z.object({ tag: z.literal("Err"), error: z.string() })]).parse(await res.json()) as { tag: "Ok"; value: Todo } | { tag: "Err"; error: string }|};
+    ts_get_parse = {|z.discriminatedUnion("tag", [z.object({ tag: z.literal("Ok"), value: z.lazy(() => TodoSchema) }), z.object({ tag: z.literal("Err"), error: z.string() })]).parse(await res.json()) as { tag: "Ok"; value: Todo } | { tag: "Err"; error: string }|};
     ts_post_sig = {|export async function postResult(result: { tag: "Ok"; value: Todo } | { tag: "Err"; error: string }): Promise<{ tag: "Ok"; value: Todo } | { tag: "Err"; error: string }>|};
-    ts_post_parse = {|z.discriminatedUnion("tag", [z.object({ tag: z.literal("Ok"), value: TodoSchema }), z.object({ tag: z.literal("Err"), error: z.string() })]).parse(await res.json()) as { tag: "Ok"; value: Todo } | { tag: "Err"; error: string }|};
+    ts_post_parse = {|z.discriminatedUnion("tag", [z.object({ tag: z.literal("Ok"), value: z.lazy(() => TodoSchema) }), z.object({ tag: z.literal("Err"), error: z.string() })]).parse(await res.json()) as { tag: "Ok"; value: Todo } | { tag: "Err"; error: string }|};
     elm_get_sig = {|getResult : (Result Http.Error (Result String Todo) -> msg) -> Cmd msg|};
     elm_get_decoder = {|Http.expectJson toMsg (D.field "tag" D.string |> D.andThen (\tag -> case tag of "Ok" -> D.map Ok (D.field "value" todoDecoder) ; "Err" -> D.map Err (D.field "error" D.string) ; _ -> D.fail ("Unexpected Result tag: " ++ tag)))|};
     elm_post_sig = {|postResult : Result String Todo -> (Result Http.Error (Result String Todo) -> msg) -> Cmd msg|};

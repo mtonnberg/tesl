@@ -311,9 +311,7 @@
  (deps ../gen/gen_go_runtime.exe ../lib/go_runtime/embedded/dune)
  (libraries tesl_compiler_lib alcotest unix))
 
-; `inList`/`notInList` need a list literal (review 2026-09-02, H1): a non-literal member list
-; used to compile to a CONSTANT predicate. Pins the checker rule and the
-; fail-closed Sql_query parser.
+; Runtime and literal membership: typing, query recovery, Memory and PostgreSQL.
 ;   dune exec test/test_sql_list_membership.exe
 (tests
  (names test_sql_list_membership)

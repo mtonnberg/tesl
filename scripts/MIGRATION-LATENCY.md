@@ -3,10 +3,22 @@
 `run-migration-tests.sh` runs `latency-statistics`, then `latency-regression`
 sequentially in its full (no focused-test arguments) gate. Missing tools/history,
 build failures, request errors, incorrect writes, non-format5 databases, failed
-calibration and regressions are failures, never skips. CI fetches full history.
+calibration and regressions are failures, never skips. CI explicitly fetches the
+exact baseline commit: full main history alone does not retain squashed PR history.
 
 The pinned baseline is **9852f263b0ce52f78045c3edb266625aa4460674**.
 Override with `TESL_MIGRATION_LATENCY_BASELINE` or standalone `--baseline-ref`.
+Before a full local gate, prepare that input if it is missing:
+
+```sh
+python3 scripts/compare-migration-latency.py --prepare-baseline --fetch-baseline
+```
+
+Preparation fetches only a missing full commit SHA from `origin`, verifies its
+identity, and leaves the checkout and baseline policy unchanged. The full gate
+checks availability before starting PostgreSQL or expensive builds; benchmarking
+itself never fetches. A locally available override can still be a named ref.
+
 Evidence includes the supplied and resolved baseline, candidate HEAD and dirty
 status, every copied source's SHA-256, aggregate source identities, shared fixture
 hashes, generated-source and binary hashes, tools, host, policy and raw timings.

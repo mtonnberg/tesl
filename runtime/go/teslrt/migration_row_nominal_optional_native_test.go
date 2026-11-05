@@ -3,6 +3,7 @@
 package teslrt
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,6 +20,11 @@ func TestPgRowNominalOptionalLifecycle(t *testing.T) {
 		t.Run(kind, func(t *testing.T) {
 			root := filepath.Join(programs, kind)
 			f, request := pgNewWorkerTest(t)
+			// Installation, overlap, late writes, finality and restart share this
+			// scenario. The fixture's 30-second single-operation budget is too short.
+			ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+			t.Cleanup(cancel)
+			f.ctx = ctx
 			f.namespace = "notes"
 			run := func(version, mode string) { pgForwardNativeRun(t, f, root, version, mode, true) }
 			run("v1", "install")

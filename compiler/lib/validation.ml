@@ -107,7 +107,7 @@ let check_module_unscoped (m : module_form) : validation_error list =
   @ (TStructural @: check_server_completeness ~extra_funcs:imported_funcs decls)
   @ (TDatabase @: check_sql_field_names ~facts decls)
   @ (TCodec @: check_codec_target_types ~facts decls_with_imported_types)
-  @ (TCodec @: check_codec_proof_coverage ~facts decls)
+   @ (TCodec @: check_codec_proof_coverage ~facts ~owner:m decls)
   @ (TCodec @: check_codec_alt_completeness ~facts decls)
   @ (TCodec @: check_codec_field_types ~facts decls)
   @ (TProof @: check_call_site_proofs ~facts decls)
@@ -165,10 +165,6 @@ let check_module_unscoped (m : module_form) : validation_error list =
      `tesl --check` and to the editor, and a guard the Go backend would have had to
      reimplement.  Checked here so both backends inherit it. *)
   @ (TDatabase @: check_sql_patterns_recognised decls)
-  (* `inList`/`notInList` with a non-literal member list used to compile to a CONSTANT
-     predicate (`where true` / `where false`) on both backends — a silently inverted filter.
-     Refused here, with the operand named, before the query parser fails closed on it. *)
-  @ (TDatabase @: check_sql_list_membership_operands decls)
   (* A `:param` route declared before a literal route at the same position makes the literal
      one unreachable (first match wins), silently — and with the earlier endpoint's auth. *)
   @ (TStructural @: check_route_shadowing decls)

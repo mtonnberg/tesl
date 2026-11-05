@@ -17,7 +17,11 @@ type pgRowBackfillItem struct {
 	cursor  json.RawMessage
 	convert func() (pgRowBackfillCommit, error)
 }
-type pgRowBackfillCommit func(context.Context, *pgRowTransactionAdmission) (bool, error)
+type pgRowBackfillCommit func(*pgRowTransactionAdmission) (pgRowBackfillStatement, error)
+type pgRowBackfillStatement struct {
+	sql  string
+	args []any
+}
 type pgRowBackfillBinding struct {
 	registration *pgRowRegistration
 	read         func(context.Context, pgx.Tx, *pgRowPhysicalPlan, *pgRowPhysicalEntity, json.RawMessage, int) ([]pgRowBackfillItem, error)
@@ -145,15 +149,15 @@ func pgAttachRowBackfill[From, To any](storage *PgRowStorage[From, To]) error {
 					return nil, fmt.Errorf("stored row rejected by checked backfill migration")
 				}
 				// The typed result is captured here after the read transaction has ended.
-				return func(ctx context.Context, a *pgRowTransactionAdmission) (bool, error) {
+				return func(a *pgRowTransactionAdmission) (pgRowBackfillStatement, error) {
 					if a == nil || a.plan != plan || a.entity != entity {
-						return false, fmt.Errorf("backfill commit belongs to another admitted window")
+						return pgRowBackfillStatement{}, fmt.Errorf("backfill commit belongs to another admitted window")
 					}
 					write, err := pgMaterializePhysicalWrite(a, storage, migrated.RowValue)
 					if err != nil {
-						return false, err
+						return pgRowBackfillStatement{}, err
 					}
-					return pgCommitBackfillRow(ctx, a, write, originalKey, xmin, xid8, readAt, readStarted, d.PreviousGeneration)
+					return pgPrepareBackfillRow(a, write, originalKey, xmin, xid8, readAt, readStarted, d.PreviousGeneration)
 				}, nil
 			}
 			return item, nil
@@ -168,15 +172,15 @@ func pgLiteralString(value string) string { return "'" + strings.ReplaceAll(valu
 // The worker holds its current lease row through this entire transaction. The
 // tuple guard and full transaction-id bound exclude both old-writer races and
 // xmin reuse after wraparound. A skipped CAS is not a materializing write.
-func pgCommitBackfillRow(ctx context.Context, a *pgRowTransactionAdmission, row pgPhysicalWrite, originalKey any, xmin, xid8 string, readAt, readStarted time.Time, previous int) (changed bool, err error) {
-	if err = a.check(true); err != nil {
-		return false, err
+func pgPrepareBackfillRow(a *pgRowTransactionAdmission, row pgPhysicalWrite, originalKey any, xmin, xid8 string, readAt, readStarted time.Time, previous int) (pgRowBackfillStatement, error) {
+	if err := a.check(true); err != nil {
+		return pgRowBackfillStatement{}, err
 	}
 	if a.backfill == nil || a.backfill.leaseToken <= 0 {
-		return false, fmt.Errorf("backfill write requires a live fenced worker lease")
+		return pgRowBackfillStatement{}, fmt.Errorf("backfill write requires a live fenced worker lease")
 	}
 	if time.Since(readStarted) > 30*time.Second {
-		return false, fmt.Errorf("backfill source snapshot exceeded bounded age")
+		return pgRowBackfillStatement{}, fmt.Errorf("backfill source snapshot exceeded bounded age")
 	}
 	assignments := make([]string, len(row.columns))
 	args := append([]any(nil), row.values...)
@@ -188,20 +192,5 @@ func pgCommitBackfillRow(ctx context.Context, a *pgRowTransactionAdmission, row 
 	p := func(offset int) string { return "$" + strconv.Itoa(base+offset) }
 	key := quoteIdentifier(pgPhysicalPrimary(a.entity))
 	sql := "update " + pgx.Identifier{a.plan.namespace, a.entity.table}.Sanitize() + " set " + strings.Join(assignments, ",") + " where " + key + "=" + p(1) + " and " + key + " is not distinct from " + p(2) + " and xmin=" + p(3) + "::xid and \"_tesl_v\"=" + p(6) + " and pg_catalog.pg_current_xact_id()::text::numeric-" + p(4) + "::numeric between 0 and 2147483647 and pg_catalog.clock_timestamp() between " + p(5) + "::timestamptz and " + p(5) + "::timestamptz+interval '30 seconds'"
-	err = a.withWriter(ctx, func(tx pgx.Tx) error {
-		tag, err := tx.Exec(ctx, sql, args...)
-		if err != nil {
-			return err
-		}
-		if tag.RowsAffected() > 1 {
-			return fmt.Errorf("backfill primary key matched multiple rows")
-		}
-		changed = tag.RowsAffected() == 1
-		if !changed {
-			return nil
-		}
-		migrationBoundary("row-backfill-after-dml")
-		return a.latchProcessing(ctx)
-	})
-	return changed, err
+	return pgRowBackfillStatement{sql: sql, args: args}, nil
 }

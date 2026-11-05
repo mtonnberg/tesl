@@ -150,8 +150,9 @@ let rec zod_of_ir_type (fact_schemas : (string, unit) Hashtbl.t) (ty : Ir.ir_typ
      accessor; they erase to a bare string, same as their wire representation. *)
   | Ir.IRNamed ("PasswordHash" | "Secret" | "Signature" | "JwtToken") -> "z.string()"
   | Ir.IRNamed name ->
-    if Hashtbl.mem fact_schemas name then name ^ "Schema"
-    else name ^ "Schema"
+    (* Imported wire dependencies may be declared after their users, including
+       across the separate newtype/record sections. Resolve at decode time. *)
+    "z.lazy(() => " ^ name ^ "Schema)"
   | Ir.IRList arg ->
     "z.array(" ^ zod_of_ir_type fact_schemas arg ^ ")"
   | Ir.IRMaybe arg ->
@@ -539,7 +540,7 @@ let emit_ts (m : module_form) : string =
         | TName { name = "Money"; _ } -> money_zod_schema
         | TName { name; _ } when Ir.is_money_rate_type_name name -> money_rate_zod_schema
         | TName { name; _ } when Ir.is_quantity_type_name name -> "z.number()"
-        | _ -> "z.string()"
+        | _ -> zod_of_type_expr all_schema_set base_type
       in
       addf "export const %sSchema = %s.brand<%S>();\n" name base_schema name;
       addf "export type %s = z.infer<typeof %sSchema>;\n\n" name name

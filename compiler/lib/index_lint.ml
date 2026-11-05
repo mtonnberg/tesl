@@ -98,6 +98,7 @@ let rec clause_fields (c : Sql_query.sql_clause) : string list =
   | Sql_query.SqlIsNotNull { field } -> [ field ]
   | Sql_query.SqlIn { field; _ } -> [ field ]
   | Sql_query.SqlNotIn { field; _ } -> [ field ]
+  | Sql_query.SqlInList { field; _ } | Sql_query.SqlNotInList { field; _ } -> [ field ]
   | Sql_query.SqlLike _ -> []
   | Sql_query.SqlILike _ -> []
 
