@@ -20,7 +20,10 @@ FAMILIES = {
     'row': ('example/db-three-upgrades/run.py', 'review05-releases/row'),
     'queue': ('example/queue-three-upgrades/run.py', 'review05-releases/queue'),
     'twenty': ('example/db-twenty-releases/run.py', 'twenty-releases'),
+    'indexes': (None, 'native-index-fixtures'),
 }
+INDEX_GROUPS = {'ordinary': 'TESL_ROW_INDEX_EXPORT', 'stage': 'TESL_STAGE_PREPARATION_EXPORT',
+                'guard': 'TESL_STAGE_GUARD_EXPORT', 'cancel': 'TESL_STAGE_CANCELLATION_EXPORT'}
 
 
 def run(args, **kwargs):
@@ -94,6 +97,11 @@ def required_files():
                 required.extend([f'{family}/{version}/api.test', f'{family}/{version}/build.json',
                                  f'{family}/{version}/fixtures.log'])
     required.append('queue/v4/app-test')
+    for group in INDEX_GROUPS:
+        versions = ['v1', 'v2', 'v3'] + (['v3-contract', 'v4'] if group == 'guard' else ['v4'] if group == 'cancel' else [])
+        for version in versions:
+            required.extend([f'indexes/{group}/{version}/app', f'indexes/{group}/{version}/go.mod'])
+    required.append('indexes/ordinary/v2/index-probe')
     return required
 
 
@@ -116,7 +124,7 @@ def verify(bundle, source, toolchain):
     if not set(required_files()) <= files.keys():
         raise ValueError('fixture bundle omits required releases or test executables')
     for name in required_files():
-        if name.endswith(('/app', '/api.test', '/app-test')) and not files[name]['executable']:
+        if name.endswith(('/app', '/api.test', '/app-test', '/index-probe')) and not files[name]['executable']:
             raise ValueError(f'fixture executable lost its executable mode: {name}')
     if set(manifest.get('build_seconds', {})) != {'compiler', 'cache-warm', *FAMILIES}:
         raise ValueError('fixture build timing inventory is incomplete')
@@ -124,6 +132,15 @@ def verify(bundle, source, toolchain):
            for value in manifest['build_seconds'].values()):
         raise ValueError('fixture build timings must be finite nonnegative seconds')
     return manifest
+
+
+def build_index_fixtures(output, env, log):
+    env = {key: value for key, value in env.items() if key not in INDEX_GROUPS.values()
+           and key != 'TESL_PREBUILT_ROW_INDEX_PROGRAMS'}
+    for group, variable in INDEX_GROUPS.items():
+        subprocess.run([str(ROOT / 'compiler/_build/default/test/test_migration_row_indexes.exe')],
+                       cwd=ROOT, env=dict(env, **{variable: str(output / group)}),
+                       stdout=log, stderr=subprocess.STDOUT, check=True, timeout=1800)
 
 
 def build(bundle, expected=None):
@@ -136,14 +153,15 @@ def build(bundle, expected=None):
     # These fixtures run pure conversion checks here. Each consumer executes its
     # own PostgreSQL lifecycle and API assertions on its selected server major.
     for key in list(env):
-        if key.startswith(('TESL_TEST_POSTGRES_SHARED_', 'TESL_MIGRATION_TEST_')):
+        if key.startswith(('TESL_TEST_POSTGRES_SHARED_', 'TESL_MIGRATION_TEST_')) or key in INDEX_GROUPS.values() or key == 'TESL_PREBUILT_ROW_INDEX_PROGRAMS':
             env.pop(key)
     timings = {}
     commands = [('compiler', ['dune', 'build', '--root', ROOT / 'compiler', '-j',
-                              os.environ.get('TESL_CI_JOBS', '2'), 'bin/main.exe'])]
+                              os.environ.get('TESL_CI_JOBS', '2'), 'bin/main.exe', 'test/test_migration_row_indexes.exe'])]
     commands += [(name, ['python3', ROOT / recipe, '--compiler', compiler,
                         '--build-only', '--output', payload / name])
-                 for name, (recipe, _) in FAMILIES.items()]
+                 for name, (recipe, _) in FAMILIES.items() if recipe is not None]
+    commands.append(('indexes', None))
     with tempfile.TemporaryDirectory(prefix='fixture-go-cache-', dir=bundle.parent) as cache:
         env['GOCACHE'] = cache
         started = time.monotonic()
@@ -158,8 +176,11 @@ def build(bundle, expected=None):
         for name, command in commands:
             started = time.monotonic()
             with (bundle / f'{name}.log').open('w') as log:
-                subprocess.run(list(map(str, command)), cwd=ROOT, env=env, stdout=log,
-                               stderr=subprocess.STDOUT, check=True, timeout=3600)
+                if command is None:
+                    build_index_fixtures(payload / 'indexes', env, log)
+                else:
+                    subprocess.run(list(map(str, command)), cwd=ROOT, env=env, stdout=log,
+                                   stderr=subprocess.STDOUT, check=True, timeout=3600)
                 subprocess.run(['python3', str(ROOT / 'scripts/migration-go-cache.py'), 'prune', cache],
                                env=env, stdout=log, stderr=subprocess.STDOUT, check=True)
             timings[name] = time.monotonic() - started

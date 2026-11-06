@@ -148,6 +148,45 @@ func pgReadMigrationTableForRoles(ctx context.Context, tx pgx.Tx, namespace, nam
 	if len(raw) > 64<<20 {
 		return nil, fmt.Errorf("migration catalog observation exceeds 64 MiB")
 	}
+	return pgDecodeMigrationTable(raw)
+}
+
+// One live snapshot, bounded total data, and no evaluation of stored expressions.
+// Missing tables remain absent from the map so callers retain their exact checks.
+func pgReadMigrationTables(ctx context.Context, tx pgx.Tx, namespace string, names []string) (map[string]*pgCatalogTable, error) {
+	result := make(map[string]*pgCatalogTable, len(names))
+	if len(names) == 0 {
+		return result, nil
+	}
+	query := strings.Replace(pgMigrationCatalogSQL, "c.relname=$2", "c.relname=any($2::text[])", 1)
+	rows, err := tx.Query(ctx, query, namespace, names, []string(nil))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	size := 0
+	for rows.Next() {
+		var raw string
+		if err := rows.Scan(&raw); err != nil {
+			return nil, err
+		}
+		size += len(raw)
+		if size > 64<<20 {
+			return nil, fmt.Errorf("migration catalog observation exceeds 64 MiB")
+		}
+		table, err := pgDecodeMigrationTable(raw)
+		if err != nil {
+			return nil, err
+		}
+		if _, duplicate := result[table.Name]; duplicate {
+			return nil, fmt.Errorf("duplicate migration catalog table %q", table.Name)
+		}
+		result[table.Name] = table
+	}
+	return result, rows.Err()
+}
+
+func pgDecodeMigrationTable(raw string) (*pgCatalogTable, error) {
 	var table pgCatalogTable
 	if err := json.Unmarshal([]byte(raw), &table); err != nil {
 		return nil, fmt.Errorf("decode migration catalog: %w", err)

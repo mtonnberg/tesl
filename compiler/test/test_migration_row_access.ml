@@ -246,7 +246,10 @@ let repeated_driver driver = driver
  |> replace "if os.Args[1] == \"effects\""
   "if os.Args[1] == \"locked-observe\" {rt.TestRepeatedLockedRead(app.MainDatabase,app.TestRepeatedRead);fmt.Println(\"locked-observe-complete\");return}\n if os.Args[1] == \"effects\""
 
-let export ?(contracts=false) ?(repeated=false) destination=project (fun root save path ->
+let export ?(contracts=false) ?(repeated=false) ?(bulk=false) destination=
+ let no_unique s=replace " unique index [title] as \"notes_title_unique\"" "" s in
+ let old,fresh=if bulk then no_unique old,no_unique fresh else old,fresh in
+ project ~before:old ~after:fresh (fun root save path ->
  seal_edge root path;let edge=Source_input.read path in
  let app=if not contracts then app else app
   |> replace "[String, List]" "[String, List, Bool(..)]"
@@ -379,7 +382,7 @@ let native_settled ?test ()=
   "TestPgRow(SettledActualApp|FinalityRenewsOutsideBatchesAndWaitsForOwnCAS|HealthyWorkerClaimSkipsActiveCAS|ContractPrepareHasOperationDeadline)";
   "TestPgRow(BackfillBackendKillPreservesAtomicProgress|BackfillBatchLatchRollback|StagedNullabilityAllowsWritesAndPublishesExactProof)";
   "TestPgRowStagedNullabilityCrashReceiptAtomicity";
-  "TestPgRowBackfillPipelineRollback";
+  "TestPgRow(BackfillPipelineRollback|ParallelShardRequiresProtocolUpgrade)";
   "TestPgRow(PrepareRetriesCommittedProgressSnapshot|ClaimRetriesCommittedRenewalSnapshot|BackfillRetriesWriteAfterCASSnapshot|WorkerDrainsInFlightRenewalAfterBatchCommit|RetirementRequiresEntireFinalShardInventory)"
  ] in
  let output=Filename.temp_dir "tesl-row-settled-" "" in
@@ -387,7 +390,14 @@ let native_settled ?test ()=
   export ~contracts:true output;
   List.iteri(fun index test ->
    command (Filename.concat (repository ()) "runtime/go") (Filename.concat output (Printf.sprintf "postgres-%d.log" index))
-    (Printf.sprintf "TESL_ROW_SETTLED_PROGRAMS=%s timeout 210s go test -p 1 -race -tags tesl_migration_test -timeout 180s ./teslrt -run %s -count=1 -v" (Filename.quote output) (Filename.quote ("^" ^ test ^ "$")))) tests)
+     (Printf.sprintf "TESL_ROW_SETTLED_PROGRAMS=%s timeout 210s go test -p 1 -race -tags tesl_migration_test -timeout 180s ./teslrt -run %s -count=1 -v" (Filename.quote output) (Filename.quote ("^" ^ test ^ "$")))) tests)
+
+let native_bulk () =
+ let output=Filename.temp_dir "tesl-row-bulk-" "" in
+ Fun.protect ~finally:(fun () -> remove output) (fun () ->
+  export ~contracts:true ~bulk:true output;
+  command (Filename.concat (repository ()) "runtime/go") (Filename.concat output "bulk.log")
+   (Printf.sprintf "TESL_REQUIRE_BULK=1 TESL_ROW_SETTLED_PROGRAMS=%s timeout 150s go test -p 1 -race -tags tesl_migration_test -timeout 120s ./teslrt -run '^TestPgRowBackfillPipelineRollback$' -count=1 -v" (Filename.quote output)))
 
 let key_type = {|module Types.Key exposing [Key, makeKey]
 import Tesl.Prelude exposing [String]
@@ -648,4 +658,5 @@ let ()=match Sys.getenv_opt "TESL_ROW_REPEATED_EXPORT" with
  test_case "generated V1 JSONB key codec and raw carrier boundary" `Quick native_keys;
  test_case "builtin List key has no checked migration carrier" `Quick list_key_boundary;
  test_case "repeated exact current binding requires predecessor Contract" `Quick repeated_binding_guards;
- test_case "actual unchanged App across two windows" `Quick native_repeated]]
+ test_case "actual unchanged App across two windows" `Quick native_repeated;
+ test_case "bulk publication rolls back all earlier groups" `Quick native_bulk]]

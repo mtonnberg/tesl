@@ -4,6 +4,9 @@
 
 Branch baseline: `424d6af` (including the embedded-documentation CI repair).
 
+This records the first reuse increment. [Wave two](migration-wave2.md) extends it
+with overlapping core/lifecycle lanes and shared native index fixtures.
+
 ## Hosted experiment
 
 The migration protocol workflow builds these fixtures once per revision:

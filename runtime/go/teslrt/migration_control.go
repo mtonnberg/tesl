@@ -377,9 +377,15 @@ func pgInspectControlProtocolMode(ctx context.Context, tx pgx.Tx, namespace stri
 	var state PgMigrationControlState
 	inspectTable, principal := pgControlTableCatalog, roles.Worker
 	if readOnly {
-		inspectTable = pgControlTableCatalogReadOnly
 		if roles.Request != "" {
 			principal = roles.Request
+		}
+		metadata, err := pgReadCatalogExpectations(ctx, tx)
+		if err != nil {
+			return state, err
+		}
+		inspectTable = func(ctx context.Context, tx pgx.Tx, namespace, owner, principal string, spec pgMigrationControlTable) error {
+			return pgControlTableCatalogWithMetadata(ctx, tx, namespace, owner, principal, spec, metadata)
 		}
 	}
 	if exists, err := pgControlNamespace(ctx, tx, namespace, roles.Owner, roles.Worker); err != nil || !exists {

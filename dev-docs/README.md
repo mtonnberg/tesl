@@ -252,3 +252,4 @@ Where to start, by task:
 - [Rollout performance](migration-rollout-performance.md)
 - [Post-merge migration review](migration-post-merge-review.md)
 - [Migration CI build reuse and catalog inspection](migration-ci-reuse.md)
+- [Second migration performance sweep](migration-wave2.md)
