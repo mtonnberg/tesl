@@ -39,7 +39,7 @@ all reads check IDs, metadata and unchanged fields. Timings include HTTP and
 database admission/transactions, not just admission overhead. Startup, installation,
 seeding and readback are excluded. Warmup observations remain in `raw.jsonl`.
 
-Six baseline/baseline pairs calibrate noise first. Eight baseline/candidate pairs
+Twelve baseline/baseline pairs calibrate noise first. Eight baseline/candidate pairs
 alternate AB/BA order. Metrics are within-run p50/p95 for reads/writes. Comparison
 uses median paired differences and a deterministic 4,000-resample, one-sided 99%
 percentile-bootstrap upper bound, resampling whole pairs, not correlated requests.
@@ -47,6 +47,22 @@ All four upper bounds must fit `max(50% of baseline metric, floor)`, where the
 floor is **0.5 ms for p50 and 2 ms for p95**. Two-sided A/A
 noise must fit half that allowance; noisy hosts fail rather than widening limits.
 These small-sample bootstrap estimates are not a distribution-free guarantee.
+
+The A/A sample count increased from six to twelve after hosted PostgreSQL 18
+run `42040296693` passed all correctness phases but failed calibration: write-p95
+noise was 1.303 ms against a 1.000 ms budget. The fixed larger sample collects
+more independent pairs. Before any candidate observations, host qualification may
+run at most three such trials, with ten seconds between noisy trials. Every trial
+and every raw observation is retained with distinct pair indices. No pair is
+discarded from a trial. Source/build/request/correctness errors fail immediately;
+only baseline-versus-itself noise qualifies for another trial. The A/B comparison
+runs once and a failed regression never retries. The evidence audit replays all
+calibration trials, including failures.
+
+Thresholds, raw request sample counts and the A/B policy are unchanged. Persistent
+noise still fails, with `failure_kind: "calibration-noise"` and the specific
+metric/budget in the error. Candidate optimizations cannot fix this baseline-
+versus-itself failure, and a green run is not guaranteed on noisy hosts.
 
 Absolute 1%/5% overhead is not a merge criterion. Large datasets, active migrations,
 queues, concurrency and large-data sweeps are deferred.

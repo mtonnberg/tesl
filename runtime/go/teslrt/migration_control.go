@@ -444,10 +444,8 @@ func pgInspectControlProtocolMode(ctx context.Context, tx pgx.Tx, namespace stri
 		}
 		functions = append(functions, guardFunctions...)
 	}
-	for _, fn := range functions {
-		if err := pgControlFunctionCatalog(ctx, tx, namespace, roles, fn); err != nil {
-			return state, err
-		}
+	if err := pgControlFunctionCatalogs(ctx, tx, namespace, roles, functions); err != nil {
+		return state, err
 	}
 	var functionCount int
 	if err := tx.QueryRow(ctx, `select pg_catalog.count(*) from pg_catalog.pg_proc p

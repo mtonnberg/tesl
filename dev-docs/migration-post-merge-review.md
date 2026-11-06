@@ -1,5 +1,7 @@
 # Post-merge migration review — 2026-11-05
 
+> Audience: contributors investigating migration CI failures, integration and performance.
+
 Baseline: main `1fc72cbfa50f579e577adfc67b5d8aa31bfce1dc`.
 PR #102 head: `d0caabc0735cb3c212ba0d386450a3f726cf06f0`.
 Their source trees are identical (`git diff --exit-code` passes).
@@ -191,10 +193,10 @@ made. Tests below used the integrated compiler explicitly; inherited
 
 | PR | Mechanical integration | Targeted result | Recommendation |
 |---|---|---|---|
-| [#111](https://github.com/mtonnberg/tesl/pull/111), `9f3257d` | `flake.nix` conflict; shared Go-overlay change with #113 | 102 validation tests pass; new alias counterexample accepted | Fix recursive type closure before treating the decoding boundary as covered. |
-| [#112](https://github.com/mtonnberg/tesl/pull/112), `e956239` | Clean textual merge | 17 existing tests pass; new valid nested-type example emits an undefined schema | Fix public wire-type dependencies and add generated-client compilation coverage. |
+| [#111](https://github.com/mtonnberg/tesl/pull/111), `9f3257d` | `flake.nix` conflict; shared Go-overlay change with #113 | Validation suite passes; new alias counterexample accepted | Fix recursive type closure before treating the decoding boundary as covered. |
+| [#112](https://github.com/mtonnberg/tesl/pull/112), `e956239` | Clean textual merge | Existing client tests pass; new valid nested-type example emits an undefined schema | Fix public wire-type dependencies and add generated-client compilation coverage. |
 | [#113](https://github.com/mtonnberg/tesl/pull/113), `70bf171` | `flake.nix` conflict; duplicate Go-overlay change | All 7 Elm helper-cycle tests pass | Good candidate after resolving Nix integration. |
-| [#115](https://github.com/mtonnberg/tesl/pull/115), `f8836c8` | Conflict in generated `embedded_docs.ml` | Regenerated docs; compiler builds; all 7 membership tests pass, including real private PostgreSQL 17 | Resolve historical red CI and run complete integrated checks. |
+| [#115](https://github.com/mtonnberg/tesl/pull/115), `f8836c8` | Conflict in generated `embedded_docs.ml` | Regenerated docs; compiler builds; membership suite passes, including real private PostgreSQL 17 | Resolve historical red CI and run complete integrated checks. |
 
 ### #111: newtype wrapper escapes the new check
 

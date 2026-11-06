@@ -12,6 +12,7 @@ import tempfile
 import unittest
 import zipfile
 from unittest.mock import patch
+from urllib.error import HTTPError
 
 import native_distribution as distribution
 from test_native_payload import windows_checksum_newlines
@@ -117,12 +118,50 @@ assert json.loads(result)['root'] == chr(229), ascii(result)
 
     def test_download_byte_and_time_bounds_remove_partial_archive(self):
         for limit, ticks in ((2, [0, 0]), (1024, [0, 301])):
+            clock = lambda: ticks.pop(0) if len(ticks) > 1 else ticks[0]
             with self.subTest(limit=limit), patch.object(distribution, "MAX_SOURCE_BYTES", limit), \
-                    patch.object(distribution.time, "monotonic", side_effect=ticks), \
+                    patch.object(distribution.time, "monotonic", side_effect=clock), \
                     patch.object(distribution, "urlopen", return_value=Response(b"archive")):
                 with self.assertRaisesRegex(ValueError, "bound"):
                     distribution.download({"urls": ["https://example.test/source"]}, self.root / "archive")
             self.assertFalse((self.root / "archive").exists())
+
+    def test_download_read_timeout_restarts_without_partial_prefix(self):
+        class Interrupted(Response):
+            def read(self, size):
+                if self.tell():
+                    raise TimeoutError("read operation timed out")
+                return super().read(size)
+        output = self.root / "archive"
+        with patch.object(distribution, "urlopen", side_effect=[Interrupted(b"partial"), Response(b"complete")]) as opened, \
+             patch.object(distribution.time, "sleep") as sleep:
+            result = distribution.download({"urls": ["https://example.test/source"]}, output)
+        self.assertEqual(output.read_bytes(), b"complete")
+        self.assertEqual(result["archive_sha256"], distribution.native_payload.file_hash(output))
+        self.assertEqual(opened.call_count, 2)
+        self.assertEqual(opened.call_args_list[0], opened.call_args_list[1])
+        sleep.assert_called_once_with(1)
+
+    def test_download_retries_are_bounded_and_http_refusals_are_not_retried(self):
+        for error, attempts in ((TimeoutError("read timed out"), 3),
+                                (HTTPError("https://example.test", 503, "unavailable", {}, None), 3),
+                                (HTTPError("https://example.test", 404, "missing", {}, None), 1)):
+            with self.subTest(error=error), patch.object(distribution, "urlopen", side_effect=error) as opened, \
+                 patch.object(distribution.time, "sleep") as sleep:
+                with self.assertRaisesRegex(ValueError, "source download failed for archive"):
+                    distribution.download({"urls": ["https://example.test/source"]}, self.root / "archive")
+                self.assertEqual(opened.call_count, attempts)
+                self.assertEqual(sleep.call_count, attempts - 1)
+                self.assertFalse((self.root / "archive").exists())
+
+    def test_capture_failure_reports_child_output_and_still_fails(self):
+        error = subprocess.CalledProcessError(3, ["tool"], output="child stdout\n", stderr="child error\n")
+        with patch.object(distribution.subprocess, "run", side_effect=error), \
+             patch.object(distribution.sys, "stderr", new_callable=io.StringIO) as captured:
+            with self.assertRaises(subprocess.CalledProcessError):
+                distribution.run(["tool"], self.root, {}, capture=True)
+        self.assertIn("child stdout", captured.getvalue())
+        self.assertIn("child error", captured.getvalue())
 
     def test_download_preserves_existing_output(self):
         archive = self.root / "existing"

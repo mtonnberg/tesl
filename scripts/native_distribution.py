@@ -2,17 +2,20 @@
 """Build an audited native archive and test its extracted installation, without publishing."""
 
 import argparse
+import errno
 import json
 import os
 from pathlib import Path
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 import zipfile
 from urllib.parse import urlparse
 from urllib.request import urlopen
+from urllib.error import HTTPError, URLError
 
 import native_payload
 import native_compiler_tools
@@ -29,8 +32,14 @@ from native_source import MAX_SOURCE_BYTES, extract_verified
 
 def run(arguments, root, environment, capture=False, timeout=1800):
     print("Native distribution: " + " ".join(map(str, arguments)), flush=True)
-    result = subprocess.run(list(map(str, arguments)), cwd=root, env=environment,
-                            check=True, text=True, encoding="utf-8", capture_output=capture, timeout=timeout)
+    try:
+        result = subprocess.run(list(map(str, arguments)), cwd=root, env=environment,
+                                check=True, text=True, encoding="utf-8", capture_output=capture, timeout=timeout)
+    except subprocess.CalledProcessError as error:
+        if capture:
+            print(error.stdout or "", file=sys.stderr, end="")
+            print(error.stderr or "", file=sys.stderr, end="")
+        raise
     return result.stdout.strip() if capture else None
 
 
@@ -47,6 +56,15 @@ def verify_checkout(plan, root, environment):
                          f"planned={plan['sourceRevision']}, actual={revision}, tracked changes={dirty!r}")
     return {"head": revision, "tracked_changes": bool(dirty),
             "worktree_preview": plan["sourceRevision"] == "worktree"}
+
+
+def transient_download_error(error):
+    if isinstance(error, HTTPError):
+        return error.code in (408, 429, 500, 502, 503, 504)
+    if isinstance(error, URLError):
+        return transient_download_error(error.reason)
+    return isinstance(error, TimeoutError) or (isinstance(error, OSError) and error.errno in
+        (errno.ETIMEDOUT, errno.ECONNRESET, errno.ECONNABORTED, errno.EPIPE))
 
 
 def download(source, output):
@@ -70,23 +88,41 @@ def download(source, output):
         if url.startswith("http://"):
             attempts.append("https://" + url[7:])
         attempts.append(url)
+    started = time.monotonic()
     for url in dict.fromkeys(attempts):
-        try:
-            started, size = time.monotonic(), 0
-            with urlopen(url, timeout=30) as response, output.open("xb") as stream:
-                if urlparse(response.geturl()).scheme not in {"http", "https"}:
-                    raise ValueError("source redirect uses an unsupported protocol")
-                while data := response.read(1024 * 1024):
-                    size += len(data)
-                    if size > MAX_SOURCE_BYTES or time.monotonic() - started > 300:
-                        raise ValueError("source download exceeds its size or time bound")
-                    stream.write(data)
-            return {"requested_url": url, "final_url": response.geturl(),
-                    "archive_sha256": native_payload.file_hash(output)}
-        except (OSError, ValueError) as error:
-            output.unlink(missing_ok=True)
-            errors.append(str(error))
-    raise ValueError("source download failed: " + "; ".join(errors))
+        for attempt in range(3):
+            remaining = 300 - (time.monotonic() - started)
+            if remaining <= 0:
+                raise ValueError("source download exceeded its overall time bound: " + "; ".join(errors))
+            owned = False
+            try:
+                size = 0
+                with urlopen(url, timeout=min(30, remaining)) as response, output.open("xb") as stream:
+                    owned = True
+                    if urlparse(response.geturl()).scheme not in {"http", "https"}:
+                        raise ValueError("source redirect uses an unsupported protocol")
+                    while True:
+                        data = response.read(1024 * 1024)
+                        size += len(data)
+                        if size > MAX_SOURCE_BYTES or time.monotonic() - started > 300:
+                            raise ValueError("source download exceeds its size or time bound")
+                        if not data:
+                            break
+                        stream.write(data)
+                return {"requested_url": url, "final_url": response.geturl(),
+                        "archive_sha256": native_payload.file_hash(output)}
+            except (OSError, ValueError) as error:
+                if owned:
+                    output.unlink(missing_ok=True)
+                errors.append(f"{url} (attempt {attempt + 1}/3): {error}")
+                if output.exists() or output.is_symlink():
+                    raise ValueError("source download output already exists") from error
+                if not transient_download_error(error) or attempt == 2:
+                    break
+                print(f"Retrying source download {output.name}: {errors[-1]}", flush=True)
+                delay = min(2 ** attempt, max(0, 300 - (time.monotonic() - started)))
+                time.sleep(delay)
+    raise ValueError(f"source download failed for {output.name}: " + "; ".join(errors))
 
 
 def build_environment(environment, target, sdk, work, module_bundle):

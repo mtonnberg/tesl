@@ -1,6 +1,10 @@
 package teslrt
 
-import "strings"
+import (
+	"slices"
+	"strings"
+	"sync"
+)
 
 func pgRowControlTables() []pgMigrationControlTable {
 	return append(append([]pgMigrationControlTable{
@@ -84,6 +88,41 @@ func pgRowControlTables() []pgMigrationControlTable {
 // Format5 binds each version to its original baseline and checked expansion
 // manifest. Queue SQL admission is separate from ordinary App activation.
 func pgRowControlFunctions(namespace string) []pgMigrationControlFunction {
+	return pgRowFunctionSpecifications.get(namespace)
+}
+
+type pgRowFunctionSpecCache struct {
+	sync.Mutex
+	next    int
+	entries [16]struct {
+		namespace string
+		functions []pgMigrationControlFunction
+	}
+}
+
+var pgRowFunctionSpecifications pgRowFunctionSpecCache
+
+// Only deterministic SQL specifications are retained. No database observations,
+// roles, leases or permission decisions enter this bounded cache. Each caller
+// owns its slice, so catalog probes and tests cannot mutate another caller's spec.
+func (c *pgRowFunctionSpecCache) get(namespace string) []pgMigrationControlFunction {
+	if namespace == "" || len(namespace) > 63 {
+		return pgBuildRowControlFunctions(namespace)
+	}
+	c.Lock()
+	defer c.Unlock()
+	for _, entry := range c.entries {
+		if entry.namespace == namespace {
+			return slices.Clone(entry.functions)
+		}
+	}
+	functions := pgBuildRowControlFunctions(namespace)
+	c.entries[c.next].namespace, c.entries[c.next].functions = namespace, functions
+	c.next = (c.next + 1) % len(c.entries)
+	return slices.Clone(functions)
+}
+
+func pgBuildRowControlFunctions(namespace string) []pgMigrationControlFunction {
 	ns := quoteIdentifier(namespace) + "."
 	functions := pgMigrationControlFunctionsV2(namespace)
 	var internal []pgMigrationControlFunction

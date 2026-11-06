@@ -243,50 +243,105 @@ func pgControlArgumentTypes(fn pgMigrationControlFunction) string {
 }
 
 func pgControlFunctionCatalog(ctx context.Context, tx pgx.Tx, namespace string, roles PgMigrationControlRoles, fn pgMigrationControlFunction) error {
-	var actual struct {
-		Owner, Language, Kind, Arguments, Result, Volatility, Parallel, Body string
-		SecurityDefiner, Strict, Leakproof, SetReturning, Unsafe             bool
-		Configuration                                                        []string
-		Support                                                              uint32
+	return pgControlFunctionCatalogs(ctx, tx, namespace, roles, []pgMigrationControlFunction{fn})
+}
+
+type pgControlFunctionObservation struct {
+	Owner, Language, Kind, Arguments, Result, Volatility, Parallel, Body string
+	SecurityDefiner, Strict, Leakproof, SetReturning, Unsafe             bool
+	Configuration                                                        []string
+	Support                                                              uint32
+	WorkerCanExecute                                                     bool
+}
+
+// Read the closed function inventory in one query in the caller's snapshot.
+// Expected SQL is immutable compiler data; actual bodies, ACLs and inherited
+// execution privileges are always fetched live, never reused across transactions.
+func pgControlFunctionCatalogs(ctx context.Context, tx pgx.Tx, namespace string, roles PgMigrationControlRoles, functions []pgMigrationControlFunction) error {
+	if len(functions) == 0 {
+		return nil
 	}
-	var encoded []byte
-	err := tx.QueryRow(ctx, `select pg_catalog.jsonb_build_object(
+	type requested struct {
+		Ordinal     int      `json:"ordinal"`
+		Name        string   `json:"name"`
+		Arguments   string   `json:"arguments"`
+		Grantees    []string `json:"grantees"`
+		RequestOnly bool     `json:"request_only"`
+	}
+	expected := make([]requested, len(functions))
+	for i, fn := range functions {
+		grantees := pgControlFunctionRoles(roles, fn)
+		expected[i] = requested{i, fn.name, strings.ReplaceAll(pgControlArgumentTypes(fn), ",", ", "), grantees,
+			roles.Request != "" && reflect.DeepEqual(grantees, []string{roles.Request})}
+	}
+	input, err := json.Marshal(expected)
+	if err != nil {
+		return err
+	}
+	rows, err := tx.Query(ctx, `with expected as (
+ select * from pg_catalog.jsonb_to_recordset($2::jsonb)
+ as e(ordinal integer,name text,arguments text,grantees text[],request_only boolean))
+ select e.ordinal,p.oid is not null,pg_catalog.jsonb_build_object(
  'Owner',r.rolname,'Language',l.lanname,'Kind',p.prokind,'Arguments',pg_catalog.pg_get_function_arguments(p.oid),
  'Result',pg_catalog.pg_get_function_result(p.oid),'Volatility',p.provolatile,'Parallel',p.proparallel,'Support',p.prosupport::bigint,'Body',p.prosrc,
  'SecurityDefiner',p.prosecdef,'Strict',p.proisstrict,'Leakproof',p.proleakproof,'SetReturning',p.proretset,
  'Configuration',p.proconfig,'Unsafe',exists (
    select 1 from pg_catalog.aclexplode(coalesce(p.proacl,pg_catalog.acldefault('f',p.proowner))) a
-   where a.grantee<>p.proowner and (a.grantee not in (select oid from pg_catalog.pg_roles where rolname=any($4::text[])) or a.is_grantable))
-   or exists (select 1 from unnest($4::text[]) expected(role) where not exists (
+    where a.grantee<>p.proowner and (a.grantee not in (select oid from pg_catalog.pg_roles where rolname=any(e.grantees)) or a.is_grantable))
+    or exists (select 1 from pg_catalog.unnest(e.grantees) expected(role) where not exists (
      select 1 from pg_catalog.aclexplode(coalesce(p.proacl,pg_catalog.acldefault('f',p.proowner))) a
-     join pg_catalog.pg_roles grantee on grantee.oid=a.grantee where grantee.rolname=expected.role and a.privilege_type='EXECUTE' and not a.is_grantable)))
- from pg_catalog.pg_proc p join pg_catalog.pg_namespace n on n.oid=p.pronamespace
- join pg_catalog.pg_roles r on r.oid=p.proowner join pg_catalog.pg_language l on l.oid=p.prolang
- where n.nspname=$1 and p.proname=$2 and pg_catalog.oidvectortypes(p.proargtypes)=$3`,
-		namespace, fn.name, strings.ReplaceAll(pgControlArgumentTypes(fn), ",", ", "), pgControlFunctionRoles(roles, fn)).Scan(&encoded)
+	  join pg_catalog.pg_roles grantee on grantee.oid=a.grantee where grantee.rolname=expected.role and a.privilege_type='EXECUTE' and not a.is_grantable)),
+ 'WorkerCanExecute',case when e.request_only and p.oid is not null then pg_catalog.has_function_privilege($3,p.oid,'EXECUTE') else false end)
+ from expected e left join pg_catalog.pg_namespace n on n.nspname=$1
+ left join pg_catalog.pg_proc p on p.pronamespace=n.oid and p.proname=e.name and pg_catalog.oidvectortypes(p.proargtypes)=e.arguments
+ left join pg_catalog.pg_roles r on r.oid=p.proowner left join pg_catalog.pg_language l on l.oid=p.prolang
+ order by e.ordinal`, namespace, input, roles.Worker)
 	if err != nil {
-		return fmt.Errorf("protected migration function %s.%s is missing or unreadable: %w", namespace, fn.name, err)
+		return fmt.Errorf("protected migration function inventory %s is unreadable: %w", namespace, err)
 	}
-	if err := json.Unmarshal(encoded, &actual); err != nil {
+	defer rows.Close()
+	index := 0
+	for rows.Next() {
+		var ordinal int
+		var present bool
+		var encoded []byte
+		if err := rows.Scan(&ordinal, &present, &encoded); err != nil {
+			return err
+		}
+		if index >= len(functions) || ordinal != index {
+			return fmt.Errorf("protected migration function inventory is ambiguous")
+		}
+		fn := functions[index]
+		if !present {
+			return fmt.Errorf("protected migration function %s.%s is missing or unreadable", namespace, fn.name)
+		}
+		var actual pgControlFunctionObservation
+		if err := json.Unmarshal(encoded, &actual); err != nil {
+			return err
+		}
+		if err := pgVerifyControlFunction(namespace, roles, fn, actual); err != nil {
+			return err
+		}
+		index++
+	}
+	if err := rows.Err(); err != nil {
 		return err
 	}
+	if index != len(functions) {
+		return fmt.Errorf("protected migration function inventory is incomplete")
+	}
+	return nil
+}
+
+func pgVerifyControlFunction(namespace string, roles PgMigrationControlRoles, fn pgMigrationControlFunction, actual pgControlFunctionObservation) error {
 	if actual.Owner != roles.Owner || actual.Language != "plpgsql" || actual.Kind != "f" || actual.Arguments != fn.arguments ||
 		actual.Result != fn.result || actual.Volatility != fn.volatility[:1] || actual.Parallel != "u" || actual.Support != 0 || actual.Body != fn.body ||
 		!actual.SecurityDefiner || actual.Strict || actual.Leakproof || (actual.SetReturning != strings.HasPrefix(fn.result, "TABLE(")) || actual.Unsafe ||
 		!reflect.DeepEqual(actual.Configuration, []string{`search_path=""`}) {
 		return fmt.Errorf("protected migration function %s.%s differs from its definition, owner or execution grants", namespace, fn.name)
 	}
-	if roles.Request != "" && reflect.DeepEqual(pgControlFunctionRoles(roles, fn), []string{roles.Request}) {
-		// Request-only facility functions must also be unavailable through
-		// inherited role membership, not merely absent from Worker's direct ACL.
-		var workerCanExecute bool
-		target := pgx.Identifier{namespace, fn.name}.Sanitize() + "(" + pgControlArgumentTypes(fn) + ")"
-		if err := tx.QueryRow(ctx, "select pg_catalog.has_function_privilege($1,$2,'EXECUTE')", roles.Worker, target).Scan(&workerCanExecute); err != nil {
-			return err
-		}
-		if workerCanExecute {
-			return fmt.Errorf("worker role can execute Request-only facility function %s", fn.name)
-		}
+	if actual.WorkerCanExecute {
+		return fmt.Errorf("worker role can execute Request-only facility function %s", fn.name)
 	}
 	return nil
 }

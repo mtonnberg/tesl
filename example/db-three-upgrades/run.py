@@ -84,8 +84,8 @@ def build_versions(output, compiler, env):
         release.mkdir()
         shutil.copytree(source, release / "source")
         command([compiler, "--backend", "go", entry, "--out", release / "go"], env=env)
-        command(["go", "test", "-race", "-p", "1", "./..."], cwd=release / "go", env=env, timeout=180)
-        command(["go", "build", "-race", "-o", release / "app", "./cmd/app"], cwd=release / "go", env=env)
+        command(["go", "test", "-race", "-trimpath", "-count=1", "-p", "1", "./..."], cwd=release / "go", env=env, timeout=180)
+        command(["go", "build", "-race", "-trimpath", "-o", release / "app", "./cmd/app"], cwd=release / "go", env=env)
         if version in (2, 3):
             expected = f'metadata__v{version}'
             if expected not in current.read_text():

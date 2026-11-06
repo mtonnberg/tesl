@@ -13,6 +13,7 @@ import platform
 import shutil
 import subprocess
 import tempfile
+import time
 
 from native_source import extract_verified
 
@@ -35,6 +36,21 @@ def build_environment(environment, target, bootstrap, work):
                   GOCACHE=str(work / "cache"), GOMODCACHE=str(work / "modules"),
                   GOMAXPROCS=str(min(os.cpu_count() or 1, 4)))
     return result
+
+
+def publish_sdk(source, output, *, windows):
+    """Wait for transient Windows executable/scanner handles, never overwrite."""
+    for attempt in range(10):
+        if output.exists() or output.is_symlink():
+            raise ValueError("SDK output already exists")
+        try:
+            source.rename(output)
+            return
+        except OSError as error:
+            if not windows or getattr(error, "winerror", None) not in (5, 32) or attempt == 9:
+                raise
+            print(f"SDK publication waiting for Windows file handles (attempt {attempt + 1}/10): {error}", flush=True)
+            time.sleep(min(.25 * 2 ** attempt, 2))
 
 
 def build(plan, target, archive, bootstrap, output):
@@ -76,7 +92,7 @@ def build(plan, target, archive, bootstrap, output):
             "source": plan["sources"]["go"], "bootstrap_version": reported.split()[2],
             "cgo_enabled": False,
         }, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-        sdk.rename(output)
+        publish_sdk(sdk, output, windows=bool(suffix))
     return output
 
 
