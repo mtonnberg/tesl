@@ -15,6 +15,9 @@ func TestRowControlSpecCacheIsolationAndEviction(t *testing.T) {
 	var cache pgRowFunctionSpecCache
 	want := pgBuildRowControlFunctions("notes")
 	first := cache.get("notes")
+	if len(first) == 0 {
+		t.Fatal("cached specifications are empty")
+	}
 	if !reflect.DeepEqual(first, want) {
 		t.Fatal("cached specifications differ from independently built SQL")
 	}
@@ -36,6 +39,10 @@ func TestRowControlSpecCacheIsolationAndEviction(t *testing.T) {
 		workers.Go(func() {
 			for range 8 {
 				got := cache.get("notes")
+				if len(got) == 0 {
+					t.Error("concurrent lookup returned empty specifications")
+					return
+				}
 				if !reflect.DeepEqual(got, want) {
 					t.Error("concurrent lookup changed SQL")
 				}
@@ -69,6 +76,9 @@ func TestPgMigrationControlBatchedFunctions(t *testing.T) {
 	f, _ := pgNewWorkerTest(t)
 	f.install(t, 1)
 	functions := pgMigrationControlFunctions(f.namespace)
+	if len(functions) == 0 {
+		t.Fatal("control function inventory is empty")
+	}
 	check := func(tx pgx.Tx) error { return pgControlFunctionCatalogs(f.ctx, tx, f.namespace, f.roles, functions) }
 	if err := pgControlTransaction(f.ctx, f.worker, false, check); err != nil {
 		t.Fatal(err)
@@ -79,7 +89,7 @@ func TestPgMigrationControlBatchedFunctions(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer tx.Rollback(context.Background())
+			defer func() { _ = tx.Rollback(context.Background()) }()
 			if err := pgControlSession(f.ctx, tx); err != nil {
 				t.Fatal(err)
 			}
@@ -96,7 +106,7 @@ func TestPgMigrationControlBatchedFunctions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer tx.Rollback(context.Background())
+	defer func() { _ = tx.Rollback(context.Background()) }()
 	if err := pgControlSession(f.ctx, tx); err != nil {
 		t.Fatal(err)
 	}

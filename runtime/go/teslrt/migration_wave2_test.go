@@ -37,7 +37,7 @@ func TestPgRowHeaderOptimizationNeedsCatalogUpgrade(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer tx.Rollback(context.Background())
+	defer func() { _ = tx.Rollback(context.Background()) }()
 	if err := pgControlSession(f.ctx, tx); err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +76,7 @@ insert into notes_app.bulk_rows values('a','old',1),('b','old',1)`)
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer tx.Rollback(context.Background())
+			defer func() { _ = tx.Rollback(context.Background()) }()
 			entity := &pgRowPhysicalEntity{table: "bulk_rows", generation: 2, columns: []pgRowPhysicalColumn{
 				{catalog: PgMigrationCatalogColumn{Name: "id", Type: "text", PrimaryKey: true}},
 				{catalog: PgMigrationCatalogColumn{Name: "title", Type: "text"}},
@@ -167,7 +167,7 @@ func TestPgRowCatalogBatchMatchesSingleReadsAndSeesDrift(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer tx.Rollback(context.Background())
+	defer func() { _ = tx.Rollback(context.Background()) }()
 	if err := pgControlSession(f.ctx, tx); err != nil {
 		t.Fatal(err)
 	}
