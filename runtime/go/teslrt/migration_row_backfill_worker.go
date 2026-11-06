@@ -271,8 +271,8 @@ func pgPublishBackfillBulk(ctx context.Context, a *pgRowTransactionAdmission, st
 		" compatible as (select count(*)=count(distinct old_key) as ok from input)," +
 		" changed as (update " + pgx.Identifier{a.plan.namespace, a.entity.table}.Sanitize() + " t set " + strings.Join(assignments, ",") +
 		" from input i where (select ok from compatible) and " + pgBackfillPredicate("t.", key, func(offset int) string {
-			return "i." + aliases[len(columns)+offset-1]
-		}) + " returning 1)" +
+		return "i." + aliases[len(columns)+offset-1]
+	}) + " returning 1)" +
 		" select (select ok from compatible),count(*) from changed"
 	var compatible bool
 	var written int
