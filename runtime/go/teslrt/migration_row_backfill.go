@@ -19,8 +19,9 @@ type pgRowBackfillItem struct {
 }
 type pgRowBackfillCommit func(*pgRowTransactionAdmission) (pgRowBackfillStatement, error)
 type pgRowBackfillStatement struct {
-	sql  string
-	args []any
+	sql     string
+	args    []any
+	columns []string
 }
 type pgRowBackfillBinding struct {
 	registration *pgRowRegistration
@@ -190,7 +191,16 @@ func pgPrepareBackfillRow(a *pgRowTransactionAdmission, row pgPhysicalWrite, ori
 	base := len(args)
 	args = append(args, originalKey, row.primary, xmin, xid8, readAt, previous)
 	p := func(offset int) string { return "$" + strconv.Itoa(base+offset) }
-	key := quoteIdentifier(pgPhysicalPrimary(a.entity))
-	sql := "update " + pgx.Identifier{a.plan.namespace, a.entity.table}.Sanitize() + " set " + strings.Join(assignments, ",") + " where " + key + "=" + p(1) + " and " + key + " is not distinct from " + p(2) + " and xmin=" + p(3) + "::xid and \"_tesl_v\"=" + p(6) + " and pg_catalog.pg_current_xact_id()::text::numeric-" + p(4) + "::numeric between 0 and 2147483647 and pg_catalog.clock_timestamp() between " + p(5) + "::timestamptz and " + p(5) + "::timestamptz+interval '30 seconds'"
-	return pgRowBackfillStatement{sql: sql, args: args}, nil
+	sql := "update " + pgx.Identifier{a.plan.namespace, a.entity.table}.Sanitize() + " set " + strings.Join(assignments, ",") + " where " + pgBackfillPredicate("", pgPhysicalPrimary(a.entity), p)
+	return pgRowBackfillStatement{sql: sql, args: args, columns: row.columns}, nil
+}
+
+// Shared by individual and bulk publication: neither path may weaken a tuple,
+// generation, full transaction-ID or age precondition independently.
+func pgBackfillPredicate(prefix, primary string, argument func(int) string) string {
+	key := prefix + quoteIdentifier(primary)
+	return key + "=" + argument(1) + " and " + key + " is not distinct from " + argument(2) +
+		" and " + prefix + "xmin=" + argument(3) + "::xid and " + prefix + "\"_tesl_v\"=" + argument(6) +
+		" and pg_catalog.pg_current_xact_id()::text::numeric-" + argument(4) + "::numeric between 0 and 2147483647" +
+		" and pg_catalog.clock_timestamp() between " + argument(5) + "::timestamptz and " + argument(5) + "::timestamptz+interval '30 seconds'"
 }

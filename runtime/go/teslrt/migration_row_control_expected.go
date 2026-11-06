@@ -378,21 +378,32 @@ func pgRowControlCatalog(ctx context.Context, tx pgx.Tx, namespace string, roles
 	if err := pgVerifyQueueCandidateTables(ctx, tx, namespace, roles, metadata); err != nil {
 		return err
 	}
+	var tableNames, ordinaryNames []string
+	for _, spec := range pgRowControlTables() {
+		tableNames = append(tableNames, spec.name)
+		if !pgRowQueueWorkTable(spec.name) {
+			ordinaryNames = append(ordinaryNames, spec.name)
+		}
+	}
+	tables, err := pgReadMigrationTables(ctx, tx, namespace, tableNames)
+	if err != nil {
+		return err
+	}
+	principals := []string{roles.Worker}
+	if roles.Request != "" {
+		principals = append(principals, roles.Request)
+	}
+	if err := pgControlTableACLs(ctx, tx, namespace, ordinaryNames, principals); err != nil {
+		return err
+	}
 	for _, spec := range pgRowControlTables() {
 		expected, err := pgExpectedRowControl(metadata, roles.Owner, spec.name)
 		if err != nil {
 			return err
 		}
-		actual, err := pgReadMigrationTable(ctx, tx, namespace, spec.name)
-		if err != nil {
-			return err
-		}
+		actual := tables[spec.name]
 		if actual == nil || !reflect.DeepEqual(pgCanonicalMigrationTable(actual), pgCanonicalMigrationTable(expected)) {
 			return fmt.Errorf("protected row table %s differs from format 5", spec.name)
-		}
-		principals := []string{roles.Worker}
-		if roles.Request != "" {
-			principals = append(principals, roles.Request)
 		}
 		if pgRowQueueWorkTable(spec.name) {
 			if spec.name == "tesl_row_queue_conversion_attempts" {
@@ -407,20 +418,21 @@ func pgRowControlCatalog(ctx context.Context, tx pgx.Tx, namespace string, roles
 			if err := pgQueueTableACL(ctx, tx, namespace, spec.name, []string{}); err != nil {
 				return err
 			}
-		} else {
-			for _, principal := range principals {
-				if err := pgControlTableACL(ctx, tx, namespace, spec.name, principal); err != nil {
-					return err
-				}
-			}
 		}
-		seqs, err := pgReadControlSequences(ctx, tx, namespace, spec.name, roles.Worker)
-		if err != nil {
-			return err
-		}
-		if len(seqs) != 0 {
-			return fmt.Errorf("unexpected row control sequence")
-		}
+	}
+	var sequences bool
+	if err := tx.QueryRow(ctx, `select exists(select 1 from pg_catalog.pg_class t
+ join pg_catalog.pg_namespace n on n.oid=t.relnamespace
+ join pg_catalog.pg_depend d on d.refclassid='pg_catalog.pg_class'::regclass and d.refobjid=t.oid
+  and d.classid='pg_catalog.pg_class'::regclass and d.deptype in ('a','i')
+ join pg_catalog.pg_sequence s on s.seqrelid=d.objid
+ join pg_catalog.pg_class q on q.oid=s.seqrelid join pg_catalog.pg_roles r on r.oid=q.relowner
+ join pg_catalog.pg_attribute a on a.attrelid=t.oid and a.attnum=d.refobjsubid
+ where n.nspname=$1 and t.relname=any($2::text[]))`, namespace, tableNames).Scan(&sequences); err != nil {
+		return err
+	}
+	if sequences {
+		return fmt.Errorf("unexpected row control sequence")
 	}
 	return nil
 }

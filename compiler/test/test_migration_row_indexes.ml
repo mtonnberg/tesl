@@ -143,10 +143,10 @@ let export ?(stages=false) ?(guards=false) ?(cancelled=false) output =
    List.iter (fun (source,target) -> write (Filename.concat destination target) (Source_input.read (Filename.concat repo ("compiler/test/fixtures/row-index/"^source))))
     ["bridge.go","internal/teslrt/index_probe_testbuild.go";"probe.go","cmd/index-probe/main.go"]);
   check bool "ordinary main emitted" true (Sys.file_exists (Filename.concat destination "cmd/app/main.go"));
-  let command=Printf.sprintf "cd %s && timeout 120s go build -race -tags tesl_migration_test -o app ./cmd/app >build.log 2>&1" (Filename.quote destination) in
+   let command=Printf.sprintf "cd %s && timeout 120s go build -race -tags tesl_migration_test -o app -trimpath ./cmd/app >build.log 2>&1" (Filename.quote destination) in
   if Sys.command command<>0 then fail (Source_input.read (Filename.concat destination "build.log"));
    if version="v2" && not stages then (
-   let command=Printf.sprintf "cd %s && timeout 120s go build -race -tags tesl_migration_test -o index-probe ./cmd/index-probe >probe-build.log 2>&1" (Filename.quote destination) in
+    let command=Printf.sprintf "cd %s && timeout 120s go build -race -tags tesl_migration_test -o index-probe -trimpath ./cmd/index-probe >probe-build.log 2>&1" (Filename.quote destination) in
    if Sys.command command<>0 then fail (Source_input.read (Filename.concat destination "probe-build.log"))) in
  write current (schema 1); build "v1";
  let v1=file "schema/notes/v1.tesl" in
@@ -225,9 +225,11 @@ contract = Contract {
         (List.exists (fun (d:Compile.diagnostic) -> d.code="MIG030") ds))
      ["promotion",replace "staging unique index [active]" "unique index [active]"])
 let compilation ?(stages=false) ?(guards=false) ?(cancelled=false) () =
- let output=Filename.temp_dir "tesl-row-index-programs-" "" in
- Fun.protect ~finally:(fun () -> remove output) (fun () ->
-    export ~stages ~guards ~cancelled output;
+  let output,owned=match Sys.getenv_opt "TESL_PREBUILT_ROW_INDEX_PROGRAMS" with
+   | None -> Filename.temp_dir "tesl-row-index-programs-" "",true
+   | Some root -> Filename.concat root (if guards then "guard" else if cancelled then "cancel" else if stages then "stage" else "ordinary"),false in
+  Fun.protect ~finally:(fun () -> if owned then remove output) (fun () ->
+    if owned then export ~stages ~guards ~cancelled output;
   let repo=Unix.realpath (Sys.getenv "TESL_REPO_ROOT") in
   let log=Filename.concat output "postgres.log" in
     (* The guarded suite includes every crash prefix and four-release catch-up

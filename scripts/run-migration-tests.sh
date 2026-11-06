@@ -5,10 +5,18 @@
 # PostgreSQL tools on PATH. Arguments select focused kernel tests only.
 set -euo pipefail
 repo_root="$(CDPATH='' cd -- "$(dirname "$0")/.." && pwd)"
+lane="${TESL_MIGRATION_TEST_LANE:-full}"
+if [[ "$lane" != full && $# != 0 ]]; then
+  echo 'partitioned migration lanes cannot narrow the test selection' >&2
+  exit 1
+fi
+selected_phases="$(python3 "$repo_root/scripts/migration-lanes.py" phases --lane "$lane")"
+unset TESL_PREBUILT_ROW_INDEX_PROGRAMS
 python3 "$repo_root/scripts/check-migration-pr.py"
 python3 -m unittest discover -s "$repo_root/scripts" -p 'test_migration_pr.py'
 python3 -m unittest discover -s "$repo_root/scripts" -p 'test_migration_go_cache.py'
 python3 -m unittest discover -s "$repo_root/scripts" -p 'test_migration_ci_artifacts.py'
+python3 -m unittest discover -s "$repo_root/scripts" -p 'test_migration_lanes.py'
 required_tools=(initdb pg_ctl go python3 dune timeout tee git tar psql)
 if [[ ${TESL_MIGRATION_TEST_POOLERS:-0} == 1 ]]; then required_tools+=(pgbouncer); fi
 if [[ ${TESL_MIGRATION_TEST_CLUSTER_CRASH:-0} == 1 ]]; then required_tools+=(pg_basebackup); fi
@@ -17,7 +25,7 @@ for tool in "${required_tools[@]}"; do
 done
 # Fail before hours of database/build work when a squash merge or shallow clone
 # omitted the independent comparison input. Focused kernel runs do not need it.
-if (( $# == 0 )); then
+if (( $# == 0 )) && [[ "$lane" != core ]]; then
   python3 "$repo_root/scripts/compare-migration-latency.py" --prepare-baseline
 fi
 migration_tmp="$(mktemp -d "${TESL_MIGRATION_TEST_DATA_TMPDIR:-${TMPDIR:-/tmp}}/tesl-migration.XXXXXXXX")"
@@ -25,6 +33,10 @@ evidence="${TESL_MIGRATION_TEST_OUTPUT:-$(mktemp -d "${TMPDIR:-/tmp}/tesl-migrat
 mkdir -p "$evidence"
 printf 'Migration gate evidence: %s\n' "$evidence"
 printf 'phase\tseconds\texit_code\n' >"$evidence/phases.tsv"
+if [[ "$lane" != full ]]; then
+  python3 "$repo_root/scripts/migration-lanes.py" begin --lane "$lane" \
+    --postgres "${TESL_MIGRATION_TEST_POSTGRES_MAJOR:?}" --directory "$evidence"
+fi
 # PostgreSQL's Unix socket filename is limited to 107 bytes on Linux. Keep the
 # data/build files on TMPDIR, while allowing a short socket-only directory.
 migration_socket=""
@@ -45,7 +57,12 @@ cleanup() {
   fi
   if [[ -n "$migration_socket" ]]; then rmdir -- "$migration_socket" 2>/dev/null || true; fi
   rm -rf -- "$migration_tmp"
-  return "$status"
+  if [[ "$lane" != full ]]; then
+    python3 "$repo_root/scripts/migration-lanes.py" finish --lane "$lane" \
+      --postgres "$TESL_MIGRATION_TEST_POSTGRES_MAJOR" --directory "$evidence" --status "$status" || status=1
+  fi
+  trap - EXIT
+  exit "$status"
 }
 trap cleanup EXIT
 trap 'exit 130' INT
@@ -68,6 +85,7 @@ export TESL_REPO_ROOT="$repo_root"
 run_phase() {
   local name="$1" budget="$2" started=$SECONDS result=0
   shift 2
+  if [[ $'\n'"$selected_phases"$'\n' != *$'\n'"$name"$'\n'* ]]; then return 0; fi
   printf '\nMigration phase: %s (outer limit %ss)\n' "$name" "$budget"
   timeout --kill-after=30s "${budget}s" "$@" 2>&1 | tee "$evidence/$name.log" || result=$?
   # This phase and its Go children have exited. Keep the warmed dependency
@@ -104,13 +122,22 @@ for instrumentation in normal race; do
   timeout --kill-after=30s 1800 go -C "$repo_root/runtime/go" list -test -export -deps -tags=tesl_migration_test "${warm_flags[@]}" ./teslrt >"$evidence/go-cache-warm-$instrumentation.log"
 done
 python3 "$repo_root/scripts/migration-go-cache.py" seed "$GOCACHE" | tee "$evidence/go-cache.log"
+if [[ "$lane" == lifecycle ]]; then
+  # This runner needs compiler executables, but compiler-build belongs to core
+  # in the complete phase union. Bootstrap is measured separately, not credited
+  # as a duplicate successful phase.
+  started=$SECONDS
+  timeout --kill-after=30s 1800 dune build --root "$repo_root/compiler" -j "${TESL_CI_JOBS:-2}" >"$evidence/compiler-bootstrap.log" 2>&1
+  printf '%s\n' "$((SECONDS - started))" >"$evidence/compiler-bootstrap-seconds.txt"
+fi
 run_phase compiler-build 1800 dune build --root "$repo_root/compiler" -j "${TESL_CI_JOBS:-2}"
 release_args=()
-if [[ -n ${TESL_MIGRATION_PREBUILT:-} ]]; then
+if [[ -n ${TESL_MIGRATION_PREBUILT:-} && "$lane" != core ]]; then
   python3 "$repo_root/scripts/migration-ci-artifacts.py" restore \
     --bundle "$TESL_MIGRATION_PREBUILT" --output "$migration_tmp" \
     --evidence "$evidence/prebuilt-fixtures.json"
   release_args=(--run-built)
+  export TESL_PREBUILT_ROW_INDEX_PROGRAMS="$migration_tmp/native-index-fixtures"
 fi
 # This package builds and runs both the archived rolling releases and the full
 # V1–V13 transforming application. Keep individual scenario deadlines intact,
@@ -140,7 +167,7 @@ if (( $# == 0 )); then
   runtime_test email-runtime 300 '^Test(PgEmail|Email|DurableEmail|SendEmail|DeliverEmail|DeliverPending|PruneSentEmail|StartEmailWorker|Outbox|ResetOutbox|HeaderFieldSafe|SmtpTimeout|TrappingDelivery)'
   runtime_test sse-broadcast 180 '^TestWorkerBroadcast'
   runtime_test combined-facilities 180 '^TestWorkerCombinedFacilities'
-  runtime_test row-generation 300 '^(TestPgMigration(TriggerCatalog|RowGeneration)|TestMigrationRowGeneration)'
+  runtime_test row-generation 300 '^(TestPgMigration(TriggerCatalog|RowGeneration)|TestMigrationRowGeneration|TestPgRowBackfillBulk|TestPgRowHeaderOptimization|TestPgRowCatalogBatch)'
   compiler_test test_migration_queue
   compiler_test test_migration_queue_transform
   run_phase queue-pipeline 120 go -C "$repo_root/runtime/go" test -race -count=1 -timeout=60s ./teslrt -run '^TestQueueConversionPipeline'

@@ -243,14 +243,21 @@ func pgRunRowWorker(service context.Context, config *pgx.ConnConfig, b *pgRowBas
 				_ = batch.Close(cleanup)
 				_ = coordinator.Close(cleanup)
 			}()
+			prepared := false
 			for service.Err() == nil {
-				query, stop := context.WithTimeout(service, 10*time.Second)
-				err := pgPrepareRowWork(query, coordinator, b, roles, b.target)
-				stop()
-				if err != nil {
-					return err
+				if !prepared {
+					query, stop := context.WithTimeout(service, 10*time.Second)
+					err := pgPrepareRowWork(query, coordinator, b, roles, b.target)
+					stop()
+					if err != nil {
+						return err
+					}
+					// Shard registration is immutable and committed. This is not
+					// admission reuse: claim and publication still inspect live
+					// state for every batch, and each batch releases its lease.
+					prepared = true
+					migrationBoundary("row-worker-after-prepare")
 				}
-				migrationBoundary("row-worker-after-prepare")
 				for _, window := range b.target.windows {
 					entity := b.target.entity(window.entity)
 					name := pgRowLeaseName(window.entity, window.targetGeneration, 0)

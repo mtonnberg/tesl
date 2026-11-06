@@ -15,10 +15,20 @@ func pgVerifyRowWorkState(ctx context.Context, tx pgx.Tx, b *pgRowBaseline, stat
 	}
 	expected := map[string]final{}
 	manifests := map[int]*pgRowForwardManifest{}
+	// Preserve every receipt and its order: an index must not hide conflicting
+	// duplicates. All indexed rows still come from this inspection's snapshot.
+	versions := make(map[int][]PgMigrationControlVersion)
+	retired := make(map[int]bool)
+	for _, row := range state.Versions {
+		versions[row.Version] = append(versions[row.Version], row)
+		if row.Step == "retired" {
+			retired[row.Version] = true
+		}
+	}
 	key := func(entity string, generation int) string { return fmt.Sprintf("%s\x00%d", entity, generation) }
 	if state.Current >= 1 {
 		abi := ""
-		for _, row := range state.Versions {
+		for _, row := range versions[1] {
 			if row.Version == 1 && row.Step == "expanded" {
 				abi = row.SourceABI
 			}
@@ -36,7 +46,7 @@ func pgVerifyRowWorkState(ctx context.Context, tx pgx.Tx, b *pgRowBaseline, stat
 		// A newly created table has generation-one finality from its exact
 		// expansion publication. Seed the complete inventory even when every
 		// persisted birth record is absent.
-		for _, row := range state.Versions {
+		for _, row := range versions[m.plan.version] {
 			if row.Version != m.plan.version || row.Step != "expanded" {
 				continue
 			}
@@ -48,7 +58,7 @@ func pgVerifyRowWorkState(ctx context.Context, tx pgx.Tx, b *pgRowBaseline, stat
 				expected[key(entity, 1)] = final{m.plan.version, 1, entity, m.plan.hash, pgMigrationObjectHash(m.plan.hash, ordinal), row.SourceABI}
 			}
 		}
-		for _, row := range state.Versions {
+		for _, row := range versions[m.plan.version] {
 			if row.Version != m.plan.version || row.Step != "retired" {
 				continue
 			}
@@ -133,12 +143,7 @@ func pgVerifyRowWorkState(ctx context.Context, tx pgx.Tx, b *pgRowBaseline, stat
 		if !found || shard != 0 || !lo || !hi || lease != pgRowLeaseName(entity, generation, shard) || stored == nil || *stored != lease || token == nil || *token < 0 || holder != nil && !strings.HasPrefix(*holder, "tesl-exec:") {
 			return fmt.Errorf("row shard/lease differs from exact current work inventory")
 		}
-		final := false
-		for _, row := range state.Versions {
-			if row.Version == version && row.Step == "retired" {
-				final = true
-			}
-		}
+		final := retired[version]
 		if (status == "final") != final {
 			return fmt.Errorf("row shard finality differs from retirement receipt")
 		}

@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -150,12 +152,25 @@ func pgPublishRowBackfills(ctx context.Context, a *pgRowTransactionAdmission, co
 				limit = start + 1
 			}
 			batch := &pgx.Batch{}
+			statements := make([]pgRowBackfillStatement, 0, limit-start)
 			for _, prepare := range commits[start:limit] {
 				statement, err := prepare(a)
 				if err != nil {
 					return err
 				}
 				batch.Queue(statement.sql, statement.args...)
+				statements = append(statements, statement)
+			}
+			if written, used, err := pgPublishBackfillBulk(ctx, a, statements); err != nil {
+				return err
+			} else if used {
+				if written > 0 {
+					migrationBoundary("row-backfill-after-bulk")
+					migrationBoundary("row-backfill-after-dml")
+				}
+				changed += written
+				start = limit
+				continue
 			}
 			results := tx.SendBatch(ctx, batch)
 			written := 0
@@ -187,4 +202,85 @@ func pgPublishRowBackfills(ctx context.Context, a *pgRowTransactionAdmission, co
 		return 0, err
 	}
 	return changed, nil
+}
+
+// A conservative fast path after the first successful, ABI-latched write.
+// Secondary uniqueness and staged guards can make statement grouping observable;
+// nominal/JSONB keys also retain the existing path. All other cases fall back to
+// the same per-row guarded pipeline, without changing conversion or progress.
+func pgPublishBackfillBulk(ctx context.Context, a *pgRowTransactionAdmission, statements []pgRowBackfillStatement) (int, bool, error) {
+	if err := a.check(true); err != nil {
+		return 0, false, err
+	}
+	if a.backfill == nil || !a.backfillProcessingLatched || len(statements) < 2 || len(statements) > 128 ||
+		len(a.plan.stageGuards) != 0 || slices.ContainsFunc(a.entity.indexes, func(i PgMigrationCatalogIndex) bool { return i.Unique }) {
+		return 0, false, nil
+	}
+	key := pgPhysicalPrimary(a.entity)
+	primary := a.entity.column(key)
+	if primary == nil {
+		return 0, false, nil
+	}
+	switch primary.catalog.Type {
+	case "text", "int4", "int8", "numeric", "bool":
+	default:
+		return 0, false, nil
+	}
+	columns := statements[0].columns
+	if len(columns) == 0 || (len(columns)+6)*len(statements) > 65535 {
+		return 0, false, nil
+	}
+	var types, aliases, assignments []string
+	for i, name := range columns {
+		typ := "pg_catalog.int2"
+		if name != "_tesl_v" {
+			column := a.entity.column(name)
+			if column == nil {
+				return 0, false, nil
+			}
+			typ = pgMigrationTypeSQL(column.catalog.Type)
+			if typ == "" {
+				return 0, false, nil
+			}
+		}
+		alias := "c" + strconv.Itoa(i)
+		types = append(types, typ)
+		aliases = append(aliases, alias)
+		assignments = append(assignments, quoteIdentifier(name)+"=i."+alias)
+	}
+	keyType := pgMigrationTypeSQL(primary.catalog.Type)
+	types = append(types, keyType, keyType, "pg_catalog.xid", "pg_catalog.numeric", "pg_catalog.timestamptz", "pg_catalog.int2")
+	aliases = append(aliases, "old_key", "new_key", "source_xmin", "source_xid", "read_at", "old_generation")
+	var values []string
+	var args []any
+	for _, statement := range statements {
+		if !slices.Equal(statement.columns, columns) || len(statement.args) != len(types) {
+			return 0, false, nil
+		}
+		parameters := make([]string, len(types))
+		for i, typ := range types {
+			parameters[i] = "$" + strconv.Itoa(len(args)+i+1) + "::" + typ
+		}
+		args = append(args, statement.args...)
+		values = append(values, "("+strings.Join(parameters, ",")+")")
+	}
+	// Duplicate encoded keys must not let UPDATE FROM pick an arbitrary source.
+	// PostgreSQL's own equality decides eligibility; no DML occurs when false,
+	// and the caller falls back to the ordered per-row pipeline.
+	query := "with input(" + strings.Join(aliases, ",") + ") as materialized (values " + strings.Join(values, ",") + ")," +
+		" compatible as (select count(*)=count(distinct old_key) as ok from input)," +
+		" changed as (update " + pgx.Identifier{a.plan.namespace, a.entity.table}.Sanitize() + " t set " + strings.Join(assignments, ",") +
+		" from input i where (select ok from compatible) and " + pgBackfillPredicate("t.", key, func(offset int) string {
+			return "i." + aliases[len(columns)+offset-1]
+		}) + " returning 1)" +
+		" select (select ok from compatible),count(*) from changed"
+	var compatible bool
+	var written int
+	if err := a.tx.QueryRow(ctx, query, args...).Scan(&compatible, &written); err != nil {
+		return 0, false, err
+	}
+	if written < 0 || written > len(statements) || (!compatible && written != 0) {
+		return 0, false, fmt.Errorf("bulk backfill changed an invalid row count")
+	}
+	return written, compatible, nil
 }

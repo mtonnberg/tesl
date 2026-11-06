@@ -5,9 +5,34 @@ package teslrt
 import (
 	"context"
 	"os"
+	"strings"
 	"testing"
 	"time"
 )
+
+func TestPgRowParallelShardRequiresProtocolUpgrade(t *testing.T) {
+	root := os.Getenv("TESL_ROW_SETTLED_PROGRAMS")
+	if root == "" {
+		t.Skip("actual compiler-generated applications required")
+	}
+	f, _ := pgNewWorkerTest(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	t.Cleanup(cancel)
+	f.ctx = ctx
+	f.namespace = "notes"
+	pgForwardNativeRun(t, f, root, "v1", "install", true)
+	pgForwardNativeRun(t, f, root, "v1", "worker", true)
+	pgForwardNativeRun(t, f, root, "v2", "worker", true)
+	pgForwardNativeRun(t, f, root, "v2", "status", true)
+	if _, err := f.installer.Exec(ctx, `insert into notes.tesl_schema_backfill_shards(version,entity,target_generation,shard,lo_pk,hi_pk,lease_name)
+values(2,'Note',2,1,null,null,'row:Note:2:1'); insert into notes.tesl_schema_leases(name) values('row:Note:2:1')`); err != nil {
+		t.Fatal(err)
+	}
+	out := pgForwardNativeRun(t, f, root, "v2", "status", false)
+	if !strings.Contains(string(out), "row shard/lease differs") {
+		t.Fatal("unexpected parallel shard refusal", string(out))
+	}
+}
 
 // Processing success belongs to one SQL transaction. A 40001 retry in the same
 // process must not reuse a latch which the preceding batch rolled back.
@@ -117,8 +142,12 @@ select 'r'||lpad(i::text,4,'0'),'writer','r'||lpad(i::text,4,'0'),'base' from ge
 commit`); err != nil {
 		t.Fatal(err)
 	}
+	publication := pgExpansionBoundary{name: "row-backfill-after-dml", hit: 2}
+	if os.Getenv("TESL_REQUIRE_BULK") == "1" {
+		publication = pgExpansionBoundary{name: "row-backfill-after-bulk", hit: 1}
+	}
 	pauses := pgPauseConcurrentRowBoundaries(t, []pgExpansionBoundary{
-		{name: "row-backfill-after-dml", hit: 2},
+		publication,
 		{name: "row-backfill-after-read", hit: 2},
 	})
 	socket := "TESL_MIGRATION_TEST_SOCKET=" + os.Getenv("TESL_MIGRATION_TEST_SOCKET")

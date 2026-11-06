@@ -36,7 +36,7 @@ class FixtureArtifacts(unittest.TestCase):
             file = self.payload / name
             file.parent.mkdir(parents=True, exist_ok=True)
             file.write_text(name)
-            if name.endswith(('/app', '/api.test', '/app-test')):
+            if name.endswith(('/app', '/api.test', '/app-test', '/index-probe')):
                 file.chmod(0o755)
         self.source = {'revision': 'a' * 40, 'tree': 'b' * 40, 'inputs_sha256': 'c' * 64, 'tracked_clean': True}
         self.tools = {'go': 'test compiler'}

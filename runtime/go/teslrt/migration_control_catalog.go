@@ -139,6 +139,45 @@ func pgControlTableACL(ctx context.Context, tx pgx.Tx, namespace, name, worker s
 	return nil
 }
 
+func pgControlTableACLs(ctx context.Context, tx pgx.Tx, namespace string, names, principals []string) error {
+	if len(names) == 0 {
+		return nil
+	}
+	rows, err := tx.Query(ctx, `select c.relname, exists (
+ select 1 from pg_catalog.aclexplode(coalesce(c.relacl,pg_catalog.acldefault('r',c.relowner))) a
+ where a.privilege_type<>'SELECT' and a.grantee<>c.relowner) or exists (
+ select 1 from pg_catalog.pg_attribute col cross join lateral pg_catalog.aclexplode(col.attacl) a
+ where col.attrelid=c.oid and a.privilege_type<>'SELECT' and a.grantee<>c.relowner)
+ or exists(select 1 from pg_catalog.unnest($3::text[]) principal(name)
+ where pg_catalog.has_table_privilege(principal.name,c.oid,'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
+ or pg_catalog.has_any_column_privilege(principal.name,c.oid,'INSERT,UPDATE,REFERENCES'))
+ from pg_catalog.pg_class c join pg_catalog.pg_namespace n on n.oid=c.relnamespace
+ where n.nspname=$1 and c.relname=any($2::text[])`, namespace, names, principals)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	count := 0
+	for rows.Next() {
+		var name string
+		var unsafe bool
+		if err := rows.Scan(&name, &unsafe); err != nil {
+			return err
+		}
+		if unsafe {
+			return fmt.Errorf("protected migration table %s.%s grants write authority outside its control owner", namespace, name)
+		}
+		count++
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if count != len(names) {
+		return fmt.Errorf("protected migration table ACL inventory is incomplete")
+	}
+	return nil
+}
+
 // Compare actual and temporary expected tables under the same server and session
 // settings. Control objects have no benign-extra-column exception: every column,
 // constraint and index belongs to the versioned format. Live defaults are never

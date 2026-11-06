@@ -224,12 +224,19 @@ func pgBuildExpectedControlTable(expected *pgCatalogExpectations, owner, name st
 // and formatting settings as installation. This verifier performs catalog reads
 // only and works in a READ ONLY transaction without TEMP or schema CREATE grants.
 func pgControlTableCatalogReadOnly(ctx context.Context, tx pgx.Tx, namespace, owner, principal string, spec pgMigrationControlTable) error {
+	return pgControlTableCatalogWithMetadata(ctx, tx, namespace, owner, principal, spec, nil)
+}
+
+func pgControlTableCatalogWithMetadata(ctx context.Context, tx pgx.Tx, namespace, owner, principal string, spec pgMigrationControlTable, metadata *pgCatalogExpectations) error {
 	if !pgKnownControlTable(spec) {
 		return fmt.Errorf("unsupported migration control table specification %q", spec.name)
 	}
-	metadata, err := pgReadCatalogExpectations(ctx, tx)
-	if err != nil {
-		return err
+	if metadata == nil {
+		var err error
+		metadata, err = pgReadCatalogExpectations(ctx, tx)
+		if err != nil {
+			return err
+		}
 	}
 	expected, err := pgExpectedControlTable(metadata, owner, spec)
 	if err != nil {
