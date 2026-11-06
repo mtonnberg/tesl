@@ -32,6 +32,11 @@
  (modules test_migration_inventory)
  (libraries tesl_compiler_lib alcotest unix str))
 
+(executable
+ (name bench_migration_inventory)
+ (modules bench_migration_inventory)
+ (libraries tesl_compiler_lib unix))
+
 (test
  (name test_migration_same)
  (modules test_migration_same)
