@@ -80,7 +80,7 @@ jobs:
           extra-conf: |
             experimental-features = nix-command flakes
       - name: Check finite models and required counterexamples
-        run: nix develop --command bash scripts/check-migration-models.sh
+        run: nix develop .#migration-models --command bash scripts/check-migration-models.sh
   core:
     name: PostgreSQL ${{ matrix.postgres }} core protocol
     runs-on: ubuntu-latest

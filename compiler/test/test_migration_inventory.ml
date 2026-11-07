@@ -150,6 +150,7 @@ let execution_abi () = with_project (fun _root write ->
 
 let no_invalid_inventory () = with_project (fun _root write ->
   let path = fixture write in
+  ignore (load ~abi:"A" path);
   let refused label source =
     ignore (write "schema/notes/v-current/notes.tesl" source);
     match Migration_inventory.load ~compiler_abi:"A" ~root_file:path with
@@ -172,7 +173,7 @@ let changed_import_interface () = with_project (fun _root write ->
   ignore (write "schema/notes/v-current/child.tesl" (child "Int" "42"));
   let path = write "schema/notes/v-current.tesl" (prefix "NotesSchema.VCurrent" ^ imports ^
     "import NotesSchema.VCurrent.Child exposing [answer]\nfn value() -> Int = answer()\n") in
-  ignore (load path);
+  ignore (load ~abi:"A" path);
   ignore (write "schema/notes/v-current/child.tesl" (child "String" "\"changed\""));
   match Migration_inventory.load ~compiler_abi:"A" ~root_file:path with
   | Error _ -> ()
@@ -241,6 +242,51 @@ let retained_query_inventory () =
     changed_import_interface ();
     nested_jsonb_dependencies ())
 
+let compilation_cache () = with_project (fun root write ->
+  let path = fixture write in
+  let uncached = load path in
+  let cached = Migration_inventory.with_cache (fun () ->
+    let first = load path in
+    check bool "identical captured inputs reuse immutable result" true (first == load path);
+    Migration_inventory.with_cache (fun () ->
+      check bool "nested compilation shares exact-input result" true (first == load path));
+    check string "cached result preserves complete inventory" (hash uncached) (hash first);
+    check bool "ABI is part of cache key" false (first == load ~abi:"another-compiler" path);
+    let member = Filename.concat root "schema/notes/v-current/notes.tesl" in
+    Source_input.with_overlays ~project_root:root [member,replace "= 0" "= 1" notes] (fun () ->
+      check bool "editor bytes invalidate cached inventory" true (hash first <> hash (load path)));
+    check bool "returning from overlay restores exact source-key hit" true (first == load path);
+    ignore (write "schema/notes/v-current/notes.tesl" "not a module");
+    (match Migration_inventory.load ~compiler_abi:"test-compiler-1" ~root_file:path with
+     | Error _ -> () | Ok _ -> fail "cached result hid malformed source");
+    ignore (write "schema/notes/v-current/notes.tesl" notes);
+    for i = 1 to 129 do ignore (load ~abi:(Printf.sprintf "eviction-%d" i) path) done;
+    check bool "bounded cache eviction recomputes identical inputs" false (first == load path);
+    check string "eviction preserves inventory" (hash first) (hash (load path));
+    first) in
+  Migration_inventory.with_cache (fun () ->
+    check bool "new compilation cannot reuse previous cache" false (cached == load path));
+  let escaped = ref None in
+  (try Migration_inventory.with_cache (fun () -> escaped := Some (load path); raise Exit) with Exit -> ());
+  Migration_inventory.with_cache (fun () ->
+    check bool "exception releases compilation cache" false (Option.get !escaped == load path));
+  let resources = List.map (fun (name,basename) ->
+    let source = Source_input.read (Option.get (Validation_common.lifted_stdlib_source_path name)) in
+    basename,write ("stdlib/" ^ basename) source) Validation_common.lifted_stdlib_sources in
+  Migration_inventory.with_cache (fun () ->
+    let original = load path in
+    Validation_common.with_fixed_stdlib_sources resources (fun () ->
+    let first = load path in
+    check bool "stdlib resolution paths participate in cache key" false (original == first);
+    let basename,file = List.hd resources in
+    let source = Source_input.read file in
+    ignore (write ("stdlib/" ^ basename) (source ^ "\n# changed compiler resource\n"));
+    check bool "actual stdlib bytes invalidate even unchanged ABI label" false (first == load path))))
+
+let cached_mutations () = Migration_inventory.with_cache (fun () ->
+  complete_private_inventory (); changed_import_interface (); nested_jsonb_dependencies ();
+  import_graph (); ordinary_compiler_gates (); no_invalid_inventory ())
+
 let () = run "migration-inventory" ["checked inventory", [
   test_case "complete private dependency inventory" `Quick complete_private_inventory;
   test_case "source and frozen-copy invariance" `Quick frozen_and_source_invariance;
@@ -256,4 +302,6 @@ let () = run "migration-inventory" ["checked inventory", [
   test_case "unchanged JSONB column follows nested types and codecs" `Quick nested_jsonb_dependencies;
   test_case "all ordinary compiler gates precede hashing" `Quick ordinary_compiler_gates;
   test_case "saved inventories remain fresh with retained query caches" `Quick retained_query_inventory;
+  test_case "compilation cache keys exact inputs and releases scope" `Quick compilation_cache;
+  test_case "cached inventories retain mutation and refusal checks" `Quick cached_mutations;
 ]]

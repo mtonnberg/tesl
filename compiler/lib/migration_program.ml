@@ -127,7 +127,7 @@ let verify_bindings expected modules = protect "<migration build>" (fun () ->
   "database history bindings changed during compilation; rebuild from one source snapshot";
  Option.iter (fun t -> if capture_queue_bindings modules t.databases t.inventories <> t.queue_bindings then
   reject ~code:"MIG013" (Location.dummy_loc "<migration build>") "queue history bindings changed during compilation") expected)
-let capture_history ~source_only ~entry ~source f = protect entry.source_file (fun () ->
+let capture_history ~source_only ~entry ~source f = Migration_inventory.with_cache (fun () -> protect entry.source_file (fun () ->
  let entry_file = Source_input.canonical_path entry.source_file in
  let graph = Frontend_check.build_local_import_graph ~entry entry_file in
  let modules = Hashtbl.to_seq_keys graph |> List.of_seq |> List.sort String.compare |> List.filter_map (fun file ->
@@ -278,7 +278,7 @@ let capture_history ~source_only ~entry ~source f = protect entry.source_file (f
    List.iter (fun (_,rows) -> ignore (checked (RH.revalidate rows))) row_histories;
    result)) in
    List.iter (fun source_guard -> guard (M.verify_source source_guard ~documents:[]);guard (M.verify_disk source_guard)) guards;
-   result))))
+   result)))))
 
 let to_json ~quote t =
  let array f xs = "[" ^ String.concat "," (List.map f xs) ^ "]" in

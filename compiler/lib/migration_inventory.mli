@@ -167,3 +167,6 @@ val queue_contracts : t -> queue_contract list
 (** Owned records reachable through the payload value type graph. Proof/helper
     closure remains in payload_contract but does not require unrelated codecs. *)
 val queue_payload_codec_records : t -> queue_payload -> declaration list
+val with_cache : (unit -> 'a) -> 'a
+(** Bound successful immutable inventory reuse to one compilation; nested scopes
+    share the cache. Exact schema/stdlib bytes and paths remain lookup inputs. *)

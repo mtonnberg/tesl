@@ -258,6 +258,12 @@
         # ── Dev shell ─────────────────────────────────────────────────────────
         # `nix develop` gives the same workflow as the legacy `nix-shell`,
         # while the shellHook retains compiler auto-build logic.
+        # Finite-model CI needs TLC, not the compiler, database, or Go/DAST tools.
+        # tlaplus supplies its Java runtime through the executable wrapper.
+        devShells.migration-models = pkgs.mkShellNoCC {
+          packages = with pkgs; [ tlaplus bash coreutils gnugrep gnused ];
+        };
+
         devShells.kubernetes = pkgs.mkShell {
           inputsFrom = [ self.devShells.${system}.default ];
           packages = with pkgs; [ kind kubectl kubernetes-helm opentofu docker-client ];
