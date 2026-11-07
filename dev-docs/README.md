@@ -254,3 +254,4 @@ Where to start, by task:
 - [Migration CI build reuse and catalog inspection](migration-ci-reuse.md)
 - [Second migration performance sweep](migration-wave2.md)
 - [Migration compilation and model CI performance](migration-wave3.md)
+- [Fourth migration performance sweep](migration-wave4.md)

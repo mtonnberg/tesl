@@ -127,7 +127,10 @@ let verify_bindings expected modules = protect "<migration build>" (fun () ->
   "database history bindings changed during compilation; rebuild from one source snapshot";
  Option.iter (fun t -> if capture_queue_bindings modules t.databases t.inventories <> t.queue_bindings then
   reject ~code:"MIG013" (Location.dummy_loc "<migration build>") "queue history bindings changed during compilation") expected)
-let capture_history ~source_only ~entry ~source f = Migration_inventory.with_cache (fun () -> protect entry.source_file (fun () ->
+let with_compilation_cache f = Parser.with_module_cache (fun () ->
+ Migration_history_sources.with_cache (fun () -> Migration_inventory.with_cache f))
+
+let capture_history ~source_only ~entry ~source f = with_compilation_cache (fun () -> protect entry.source_file (fun () ->
  let entry_file = Source_input.canonical_path entry.source_file in
  let graph = Frontend_check.build_local_import_graph ~entry entry_file in
  let modules = Hashtbl.to_seq_keys graph |> List.of_seq |> List.sort String.compare |> List.filter_map (fun file ->

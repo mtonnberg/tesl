@@ -65,3 +65,6 @@ val adjacent_pair : compiler_abi:string -> project_root:string -> family:string 
 val adjacent_pair_with_compatibility : stored_value_compatibility:string option ->
   compiler_abi:string -> project_root:string -> family:string ->
   previous:string -> current:string -> (schema * schema,error) result
+val with_cache : (unit -> 'a) -> 'a
+(** Compilation-scoped reuse; every hit rechecks source, directory and import
+    guards. Changed inputs are rediscovered through the ordinary checker. *)

@@ -34,13 +34,13 @@ jobs:
             experimental-features = nix-command flakes
       - name: Build checked fixture sources and race executables once
         run: |
-          nix develop --command python3 scripts/migration-ci-artifacts.py build \
+          nix develop .#migration-fixtures --command python3 scripts/migration-ci-artifacts.py build \
             --expected-revision "$GITHUB_SHA" --bundle "$RUNNER_TEMP/migration-fixtures"
           tar -czf "$RUNNER_TEMP/migration-fixtures.tar.gz" -C "$RUNNER_TEMP/migration-fixtures" .
       - name: Measure immutable specification construction on the hosted runner
         run: |
           set -euo pipefail
-          nix develop --command go -C runtime/go test ./teslrt -run '^$' \
+          nix develop .#migration-fixtures --command go -C runtime/go test ./teslrt -run '^$' \
             -bench '^BenchmarkRowControlSpecifications$' -benchmem -count=3 \
             | tee "$RUNNER_TEMP/migration-fixtures/metadata-bench.log"
       - name: Upload same-revision fixture bundle

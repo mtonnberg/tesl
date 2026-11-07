@@ -275,6 +275,72 @@ let stale_inputs () =
     ignore (write "README.md" "unrelated source does not stale a preview");
     ignore (get (verify_unchanged history)))
 
+let cached_discovery () = with_project (fun root write ->
+ chain write;
+ let first = with_cache (fun () ->
+  let first = get (discover root) in
+  check bool "unchanged guarded history reused" true (first == get (discover root));
+  with_cache (fun () -> check bool "nested cache" true (first == get (discover root)));
+  let member = "schema/notes/v-current/notes.tesl" in
+  ignore (write member (child "NotesSchema.VCurrent.Notes" ^ "fn invalid() -> Int = \"bad\"\n"));
+  (match discover root with Error _ -> () | Ok _ -> fail "cache hid an ill-typed private helper");
+  ignore (write member (child "NotesSchema.VCurrent.Notes"));
+  ignore (get (discover root));
+  let contract = write "migrations/notes/v3-contract.tesl" (header "NotesSchema.Migrate.V3Contract") in
+  check int "new Contract captured" 1 (List.length (contracts (get (discover root))));
+  Sys.remove contract;
+  check int "removed Contract rediscovered" 0 (List.length (contracts (get (discover root))));
+  let malformed = write "schema/notes/v01.tesl" "" in
+  expect_error Invalid_layout "versions must" (discover root);
+  Sys.remove malformed;
+  ignore (get (discover root));
+  let shadow = write "schema/notes/NotesSchema.VCurrent.Notes.tesl" (child "NotesSchema.VCurrent.Notes") in
+  expect_error Invalid_layout "canonical module path" (discover root);
+  Sys.remove shadow;
+  first) in
+ with_cache (fun () -> check bool "scope releases history" false (first == get (discover root)));
+ let escaped = ref None in
+ (try with_cache (fun () -> escaped := Some (get (discover root)); raise Exit) with Exit -> ());
+ with_cache (fun () -> check bool "exception releases history" false (Option.get !escaped == get (discover root)));
+ with_cache (fun () ->
+  let initial = get (discover root) in
+  for index = 1 to 17 do
+   ignore (get (Migration_history_sources.discover ~compiler_abi:(string_of_int index) ~project_root:root ~family:"NotesSchema"))
+  done;
+  check bool "bounded eviction" false (initial == get (discover root))))
+
+let cached_existing_guards () = Migration_program.with_compilation_cache (fun () ->
+ consecutive_history (); schema_errors (); import_shadowing (); canonical_files ();
+ canonical_directories (); byte_guards (); discovery_scope (); stale_inputs ())
+
+let cached_resolution_inputs () = with_project (fun root write ->
+ initial write;
+ with_cache (fun () ->
+  let first = get (discover root) in
+  let resources = List.map (fun (name,basename) ->
+    let contents = Source_input.read (Option.get (Validation_common.lifted_stdlib_source_path name)) in
+    basename,write ("stdlib/" ^ basename) contents) Validation_common.lifted_stdlib_sources in
+  Validation_common.with_fixed_stdlib_sources resources (fun () ->
+    let relocated = get (discover root) in
+    check bool "stdlib paths invalidate" false (first == relocated);
+    let basename,path = List.hd resources in
+    ignore (write ("stdlib/" ^ basename) (Source_input.read path ^ "\n# new bytes\n"));
+    check bool "stdlib bytes invalidate unchanged ABI label" false (relocated == get (discover root)));
+  let alias = Filename.concat root "alias" in
+  let restored = get (discover root) in
+  Unix.symlink root alias;
+  check bool "canonical project aliases agree" true (restored == get (discover alias));
+  with_project (fun other save ->
+    chain save;
+    Sys.remove alias; Unix.symlink other alias;
+    check int "changed project alias resolves new history" 3 (current (get (discover alias))).version);
+  Sys.remove alias;
+  let member = Filename.concat root "schema/notes/v-current/notes.tesl" in
+  let contents = Source_input.read member in
+  let replacement = write "replacement.tesl" contents in
+  Sys.remove member; Unix.symlink replacement member;
+  expect_error Invalid_layout "canonical regular" (discover root)))
+
 let () = run "migration history source discovery" ["history", List.map (fun (name, test) ->
   test_case name `Quick test) [
     "first revision", first_revision;
@@ -292,4 +358,7 @@ let () = run "migration history source discovery" ["history", List.map (fun (nam
     "raw bytes versus meaning", byte_guards;
     "discovery boundary", discovery_scope;
     "stale source and directory guards", stale_inputs;
+    "cached discovery rechecks edits directories and imports", cached_discovery;
+    "existing guards under compilation caches", cached_existing_guards;
+    "cache observes stdlib and project resolution", cached_resolution_inputs;
   ]]
