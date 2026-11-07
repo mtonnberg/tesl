@@ -37,6 +37,11 @@
  (modules bench_migration_inventory)
  (libraries tesl_compiler_lib unix))
 
+(executable
+ (name bench_migration_compilation_cache)
+ (modules bench_migration_compilation_cache)
+ (libraries tesl_compiler_lib unix))
+
 (test
  (name test_migration_same)
  (modules test_migration_same)
@@ -56,6 +61,11 @@
  (name test_migration_history_sources)
  (modules test_migration_history_sources)
  (libraries tesl_compiler_lib alcotest unix str))
+
+(test
+ (name test_parser_compilation_cache)
+ (modules test_parser_compilation_cache)
+ (libraries tesl_compiler_lib alcotest))
 
 (test
  (name test_migration_field_impact)

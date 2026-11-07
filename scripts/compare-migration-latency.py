@@ -125,6 +125,18 @@ def calibrated(pairs, samples=SAMPLES):
                  for q in ('p50', 'p95')} for op in ('read', 'write')}
 
 
+def report_comparison(metrics):
+    """Expose the existing verdict and bounds in CI logs, not only artifacts."""
+    for operation, quantiles in metrics.items():
+        for quantile, value in quantiles.items():
+            print(f"Latency {operation} {quantile}: {'PASS' if value['passed'] else 'FAIL'}; "
+                  f"baseline={value['baseline_ns'] / 1e6:.6f} ms; "
+                  f"candidate={value['candidate_ns'] / 1e6:.6f} ms; "
+                  f"paired delta={value['paired_delta_ns'] / 1e6:.6f} ms; "
+                  f"99% upper delta={value['upper99_delta_ns'] / 1e6:.6f} ms; "
+                  f"limit={value['limit_ns'] / 1e6:.6f} ms", flush=True)
+
+
 def qualify_host(sample, evidence, pause=time.sleep):
     """Retry only baseline noise, before observing candidate results; retain all trials."""
     attempts = evidence.setdefault('calibration_attempts', [])
@@ -337,6 +349,7 @@ def main():
             values = {label: sample(label, 'comparison', i, position) for position, label in enumerate(order)}
             pairs.append((values['baseline'], values['candidate']))
         evidence['comparison'] = compare(pairs)
+        report_comparison(evidence['comparison'])
         if not all(v['passed'] for op in evidence['comparison'].values() for v in op.values()):
             raise RuntimeError('latency regression or insufficient evidence below regression limit')
         evidence['status'] = 'passed'

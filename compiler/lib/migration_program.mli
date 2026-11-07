@@ -61,3 +61,6 @@ val verify_source_history : source_history -> Ast.module_form list ->
 (** Deterministic emission graph derived only from this active source capture.
     Retains exact original ownership and expression correspondence across SCCs. *)
 val source_lowering : source_history -> (Go_graph_lowering.t,Migration_sparse.error list) result
+val with_compilation_cache : (unit -> 'a) -> 'a
+(** Scope pure parsing and guarded history/inventory reuse across frontend
+    validation and emission. This grants no source-history authority. *)

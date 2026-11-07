@@ -247,6 +247,58 @@ let inspect ~stored_value_compatibility ~include_migrations ~compiler_abi ~proje
     history)
 
 
+type history_cache_key = string option * bool * string * string * string * (string * string) list
+type history_cache = { entries : (history_cache_key, t) Hashtbl.t; mutable weight : int }
+let active_cache : history_cache option ref = ref None
+let with_cache f = match !active_cache with
+ | Some _ -> f ()
+ | None ->
+   active_cache := Some {entries=Hashtbl.create 8;weight=0};
+   Fun.protect ~finally:(fun () -> active_cache := None) f
+let stdlib_inputs () =
+ try Some (List.map (fun (name,_) ->
+   match Validation_common.lifted_stdlib_source_path name with
+   | None -> raise Not_found
+   | Some path -> path,Source_input.read path) Validation_common.lifted_stdlib_sources)
+ with Not_found | Sys_error _ | Unix.Unix_error _ -> None
+let inspect_uncached = inspect
+let inspect ~stored_value_compatibility ~include_migrations ~compiler_abi ~project_root ~family =
+ let compute () = inspect_uncached ~stored_value_compatibility ~include_migrations ~compiler_abi ~project_root ~family in
+ let key = match !active_cache with
+  | None -> None
+  | Some _ ->
+    (try Option.map (fun stdlib -> stored_value_compatibility,include_migrations,compiler_abi,
+       Source_input.realpath project_root,family,stdlib) (stdlib_inputs ())
+     with Sys_error _ | Unix.Unix_error _ | Invalid_argument _ -> None) in
+ match !active_cache,key with
+ | Some cache,Some ((_,_,_,_,_,stdlib) as key) ->
+   (* A hit still scans revision/Contract directories, rechecks canonical regular
+      files and exact source digests, and resolves every captured import. Changed
+      inputs trigger fresh discovery, not a stale result or cached diagnostic. *)
+   let cached = Option.bind (Hashtbl.find_opt cache.entries key) (fun history ->
+     match verify_unchanged history with
+     | Ok () when stdlib_inputs () = Some stdlib -> Some history
+     | _ -> None) in
+   (match cached with
+    | Some history -> Ok history
+    | None ->
+      if Hashtbl.mem cache.entries key then begin
+        Hashtbl.clear cache.entries; cache.weight <- 0
+      end;
+      let result = compute () in
+      (match result with
+       | Ok history when stdlib_inputs () = Some stdlib ->
+         let size = String.length (Marshal.to_string (key,history) []) in
+         if size <= 32 * 1024 * 1024 then begin
+           if Hashtbl.length cache.entries >= 16 || cache.weight + size > 32 * 1024 * 1024 then begin
+             Hashtbl.clear cache.entries; cache.weight <- 0
+           end;
+           Hashtbl.replace cache.entries key history; cache.weight <- cache.weight + size
+         end
+       | _ -> ());
+      result)
+ | _ -> compute ()
+
 let discover_with_compatibility = inspect ~include_migrations:true
 let discover = discover_with_compatibility ~stored_value_compatibility:None
 

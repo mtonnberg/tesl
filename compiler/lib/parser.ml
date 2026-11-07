@@ -5951,6 +5951,37 @@ and parse_module_header_body s =
   skip_layout s;
   return (name, items)
 
+(* Parsing depends only on filename and exact bytes. ASTs are immutable; unlike
+   source resolution or checking, this cache needs no filesystem observations. *)
+let parse_module_uncached = parse_module
+type module_cache = { entries : ((string * string), module_form) Hashtbl.t; mutable weight : int }
+let active_module_cache : module_cache option ref = ref None
+let with_module_cache f = match !active_module_cache with
+ | Some _ -> f ()
+ | None ->
+   active_module_cache := Some {entries=Hashtbl.create 128;weight=0};
+   Fun.protect ~finally:(fun () -> active_module_cache := None) f
+let parse_module filename source =
+ match !active_module_cache with
+ | None -> parse_module_uncached filename source
+ | Some cache ->
+   let key = filename,source in
+   match Hashtbl.find_opt cache.entries key with
+   | Some m -> Ok m
+   | None ->
+     let result = parse_module_uncached filename source in
+     (match result with
+      | Err _ -> ()
+      | Ok m ->
+        let size = String.length (Marshal.to_string (key,m) []) in
+        if size <= 32 * 1024 * 1024 then begin
+          if Hashtbl.length cache.entries >= 256 || cache.weight + size > 32 * 1024 * 1024 then begin
+            Hashtbl.clear cache.entries; cache.weight <- 0
+          end;
+          Hashtbl.replace cache.entries key m; cache.weight <- cache.weight + size
+        end);
+     result
+
 (* ── Resilient (recovering) module parse ──────────────────────────────────── *)
 
 (** True for tokens that begin a top-level declaration (the same set used by

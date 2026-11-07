@@ -2631,6 +2631,7 @@ let checked_migration_artifacts sources =
  collect [] [] sources
 
 let compile_go_source_internal ?(debug=false) ?(path="") ~queue_conversions filename source =
+ Migration_program.with_compilation_cache (fun () ->
   let path = if path = "" then filename else path in
   match parse_module filename source with
   | Err error -> GoFailure (source_parse_diagnostics filename source error)
@@ -2696,7 +2697,7 @@ let compile_go_source_internal ?(debug=false) ?(path="") ~queue_conversions file
                   "\n\nfunc init() {\n" ^ String.concat "" registrations ^ "\tregisterCompiledQueueHistory(teslGeneratedQueueHistoryJSON)\n}\n"}] in
              GoSuccess (artifacts @ metadata)
            | Error errors -> GoFailure (List.map diag_of_go_emit_error errors))))) in
-    match result with Ok result -> result | Error es -> GoFailure (Migration_declaration.diagnostics_of_errors es)
+    match result with Ok result -> result | Error es -> GoFailure (Migration_declaration.diagnostics_of_errors es))
 
 let compile_go_source ?debug ?path filename source =
   compile_go_source_internal ?debug ?path ~queue_conversions:[] filename source

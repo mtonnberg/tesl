@@ -264,6 +264,17 @@
           packages = with pkgs; [ tlaplus bash coreutils gnugrep gnused ];
         };
 
+        # The fixture producer compiles and runs converter tests, but does not
+        # run databases, editor tools, static analysis, browsers, or DAST scans.
+        # Keep the same Go overlay and C toolchain as consumers for race builds.
+        devShells.migration-fixtures = pkgs.mkShell {
+          packages = with pkgs; [
+            go python3 git curl cacert
+            ocamlPackages.ocaml ocamlPackages.dune_3
+            ocamlPackages.findlib ocamlPackages.alcotest
+          ];
+        };
+
         devShells.kubernetes = pkgs.mkShell {
           inputsFrom = [ self.devShells.${system}.default ];
           packages = with pkgs; [ kind kubectl kubernetes-helm opentofu docker-client ];
