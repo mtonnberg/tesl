@@ -18,12 +18,20 @@ class NativeSetupRetry(unittest.TestCase):
         inputs = []
         for index, step in enumerate(self.setup, 1):
             self.assertIn(f'id: ocaml-setup-{index}\n', step)
-            self.assertIn('uses: ocaml/setup-ocaml@v3\n', step)
+            self.assertIn('uses: ocaml/setup-ocaml@ff66428f72b64472e749b22e0ad4dded4b2ddca6 # v3.9.1\n', step)
             inputs.append(step.split('        with:\n', 1)[1])
         self.assertEqual(inputs, [inputs[0]] * 3)
         self.assertIn('needs.plan.outputs.windows-ocaml', inputs[0])
         self.assertIn('needs.plan.outputs.ocaml', inputs[0])
         self.assertIn('windows-compiler: mingw', inputs[0])
+
+    def test_verified_bootstrap_runs_before_setup_with_step_scoped_token(self):
+        bootstrap = [step for step in self.steps if 'run: python scripts/bootstrap_opam.py' in step]
+        self.assertEqual(len(bootstrap), 1)
+        self.assertLess(self.steps.index(bootstrap[0]), self.steps.index(self.setup[0]))
+        self.assertIn('GH_TOKEN: ${{ github.token }}', bootstrap[0])
+        self.assertNotIn('continue-on-error:', bootstrap[0])
+        self.assertNotIn('        if:', bootstrap[0])
 
     def test_retries_use_actual_failure_not_masked_conclusion(self):
         self.assertNotIn('        if:', self.setup[0])
