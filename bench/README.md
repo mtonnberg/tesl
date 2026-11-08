@@ -11,6 +11,7 @@ Tesl programs compiled to Go, driven by the generated load-test harness or a rea
 | `BenchCeiling.tesl` | 20,000 rps for 5 s, used to probe the runtime ceiling |
 | `BoundedMemory.tesl` | ordered first-page, pagination, selectOne and unordered range queries over a populated Memory table |
 | `InsertManyMemory.tesl` | real HTTP batch insertion with primary/composite unique constraints, inside/outside transactions |
+| `NullablePostgres.tesl` | real PostgreSQL HTTP equality and list lookups on nullable indexed columns |
 
 The three load-test programs exercise two request paths, both free of sleeps and outbound calls, so the measurement is the
 runtime's own cost:
@@ -49,6 +50,15 @@ Run the insertion benchmark, including row construction inside each request:
 It validates all rows plus duplicate-prefix and rollback behavior. Use the same
 `--repo-root` baseline option and alternating run order. See
 [wave-seven evidence](../dev-docs/runtime-wave7.md).
+
+Run indexed nullable lookups through HTTP against a private PostgreSQL cluster:
+
+    python3 scripts/measure-nullable-postgres.py --output /tmp/nullable-after
+
+Both versions receive the same existing index outside timing. The runner checks
+complete results, captures emitted SQL and EXPLAIN plans, and supports baseline
+`--repo-root` plus separate `--plan-modes auto force_generic_plan` controls. See
+[wave-eight evidence and scope](../dev-docs/postgres-ci-wave8.md).
 
 For process-level CPU/RSS measurements, build once and time the generated load test directly:
 

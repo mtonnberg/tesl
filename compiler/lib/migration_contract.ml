@@ -264,7 +264,18 @@ let rec absolute_source_path file =
  let parent=absolute_source_path parent in
  match Filename.basename file with "." -> parent | name -> Filename.concat parent name
 
-let check_module ~compiler_abi ~source (m:module_form) = protect(fun () ->
+let checked_plan ~compiler_abi ~project_root ~family =
+ let h=match Migration_history_sources.discover ~compiler_abi ~project_root ~family with
+  | Ok h -> h | Error e -> reject e.loc e.message in
+ let schemas=Migration_history_sources.frozen h @ [Migration_history_sources.current h] |> List.map(fun(s:Migration_history_sources.schema)->s.inventory) in
+ let edges=Migration_history_sources.completed_migrations h @ Option.to_list(Migration_history_sources.current_migration h) |> List.map(fun(s:Migration_history_sources.migration_source)->
+  let ast=match Parser.parse_module s.path s.contents with Ok m -> m | Err e -> reject e.loc e.msg in
+  match checked(Migration_declaration.check ~compiler_abi ~source:s.contents ast) with Some d -> d | None -> reject (Location.dummy_loc s.path) "contract requires its checked migration declaration") in
+ let check_history=if List.exists Migration_declaration.queue_transition edges then H.check_queue_expansion else H.check in
+ let history=checked(check_history ~schemas ~edges) in
+ h,checked(R.plan history)
+
+let check_module_with_plan load_plan ~compiler_abi ~source (m:module_form) = protect(fun () ->
  let present=List.exists(function DConst c -> Migration_form.is_contract m c | _ -> false) m.decls in
  let contract_root=match Validation_common.schema_module_parts m.module_name with
   | Some(_,"Migrate",[name]) -> Filename.check_suffix name "Contract" | _ -> false in
@@ -275,21 +286,44 @@ let check_module ~compiler_abi ~source (m:module_form) = protect(fun () ->
  let relative=Option.get(Validation_common.schema_module_relative_path m.module_name) in
  if Filename.concat project_root relative<>file then reject (Location.dummy_loc m.source_file) "contract source must use its canonical schema-family path";
  Source_input.with_overlays ~project_root:(Option.value(Source_input.project_root()) ~default:project_root) [file,source] (fun () ->
-  let h=match Migration_history_sources.discover ~compiler_abi ~project_root ~family with
-   | Ok h -> h | Error e -> reject e.loc e.message in
-  let schemas=Migration_history_sources.frozen h @ [Migration_history_sources.current h] |> List.map(fun(s:Migration_history_sources.schema)->s.inventory) in
-  let edges=Migration_history_sources.completed_migrations h @ Option.to_list(Migration_history_sources.current_migration h) |> List.map(fun(s:Migration_history_sources.migration_source)->
-   let ast=match Parser.parse_module s.path s.contents with Ok m -> m | Err e -> reject e.loc e.msg in
-   match checked(Migration_declaration.check ~compiler_abi ~source:s.contents ast) with Some d -> d | None -> reject (Location.dummy_loc s.path) "contract requires its checked migration declaration") in
-   let check_history=if List.exists Migration_declaration.queue_transition edges then H.check_queue_expansion else H.check in
-   let history=checked(check_history ~schemas ~edges) in
-  let plan=checked(R.plan history) in
+  let plan=load_plan ~compiler_abi ~project_root ~family in
   Some(checked(check ~plan ~namespace:"contract_validation" ~file ~source))))
-let diagnostics source m =
+let check_module ~compiler_abi ~source m =
+ check_module_with_plan (fun ~compiler_abi ~project_root ~family ->
+  snd(checked_plan ~compiler_abi ~project_root ~family)) ~compiler_abi ~source m
+
+let diagnostics_with check_module source m =
  let relevant=List.exists(function DConst c -> Migration_form.is_contract m c | _ -> false) m.decls ||
    (match Validation_common.schema_module_parts m.module_name with Some(_,"Migrate",[name]) -> Filename.check_suffix name "Contract" | _ -> false) in
  if not relevant then [] else
  match Migration_abi.current () with
  | Error error -> Migration_declaration.diagnostics_of_errors [{S.code="MIG013";loc=Location.dummy_loc error.path;message=error.message;related=[]}]
- | Ok abi -> match check_module ~compiler_abi:(Migration_abi.id abi) ~source m with
+ | Ok abi -> match check_module abi ~source m with
    | Ok _ -> [] | Error errors -> Migration_declaration.diagnostics_of_errors errors
+let diagnostics = diagnostics_with (fun abi -> check_module ~compiler_abi:(Migration_abi.id abi))
+
+let diagnostics_batch sources =
+ (* Only this explicit batch owns the shared successful plan. In particular, do
+    not borrow the application's comparison-ABI history or turn this into an
+    ambient compilation cache. Single-module and artifact checks stay independent.
+    One slot bounds retention and also isolates interleaved projects/families. *)
+ let previous=ref None in
+ let check_module abi ~source m =
+  let load_plan ~compiler_abi ~project_root ~family =
+   let key=compiler_abi,Migration_abi.source_inputs abi,project_root,family,Source_input.project_root() in
+   let unchanged h plan =
+    (* Under this Contract's overlay, check directory membership, exact inputs,
+       import resolution and captured transforms (including unpinned ABI/source
+       guards). A miss must run the original checker, not report a cache error. *)
+    try Migration_history_sources.verify_unchanged h=Ok () && H.revalidate(R.history plan)=Ok ()
+    with Sys_error _ | Invalid_argument _ | Unix.Unix_error _ -> false in
+   match !previous with
+   | Some (old,h,plan) when old=key && unchanged h plan -> plan
+   | _ ->
+     previous:=None;
+     let h,plan=checked_plan ~compiler_abi ~project_root ~family in
+     previous:=Some(key,h,plan);plan in
+  check_module_with_plan load_plan ~compiler_abi:(Migration_abi.id abi) ~source m in
+ List.concat_map (fun (file,source) -> match Parser.parse_module file source with
+  | Err e -> [Frontend_check.diag_of_parse_error e]
+  | Ok m -> diagnostics_with check_module source m) sources

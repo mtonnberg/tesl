@@ -1,6 +1,6 @@
 (** Two SQL-parity rules from the whitebox campaign (2026-09-02).
 
-    1. `==`/`!=` on a `Maybe` column renders as `is [not] distinct from`: the Memory store
+    1. `==`/`!=` on a `Maybe` column must retain NULL-safe WHERE semantics: the Memory store
        compares a Maybe as a value (`Nothing == Nothing`), SQL's `=` against NULL is never
        true, and a session-revocation filter written `where s.revokedAt == none` therefore
        matched everything in tests and nothing in production.
@@ -97,8 +97,8 @@ fn revokedSessions(none: Maybe String) -> List Session requires [dbRead Session]
 
 let test_maybe_equality_is_null_safe () =
   let out = emitted_module "Sessions" sessions in
-  if not (contains {|\"revoked_at\" is not distinct from $|} out) then
-    failf "Maybe equality must render as `is not distinct from`:\n%s" out;
+  if not (contains {|(\"revoked_at\" = $2 or (\"revoked_at\" is null and $2 is null))|} out) then
+    failf "Maybe equality must expose equality/NULL branches sharing one parameter:\n%s" out;
   if not (contains {|\"revoked_at\" is distinct from $|} out) then
     failf "Maybe inequality must render as `is distinct from`:\n%s" out;
   (* The non-Maybe column keeps the plain operator. *)

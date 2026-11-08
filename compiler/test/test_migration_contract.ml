@@ -567,7 +567,122 @@ migration = Migration { from: Schema.Work.V1, to: Schema.Work.VCurrent,
   List.iter(fun replacement->refuse plan file (replace source "Table Task" replacement))
     ["";"Table Note";"Table Task, Table Task";"Trigger Task";"Column Task title"];
   refuse plan file (replace source "tighten: []" "tighten: [Table Task]"))
-let ()=run "Checked source contracts" ["contract",[
+let single_diagnostics sources = List.concat_map(fun(file,source) ->
+ match Parser.parse_module file source with
+ | Err e -> [Frontend_check.diag_of_parse_error e]
+ | Ok m -> Contract.diagnostics source m) sources
+let compare_batch ?(code=None) sources =
+ let single=Migration_program.with_compilation_cache(fun()->single_diagnostics sources) in
+ let batch=Migration_program.with_compilation_cache(fun()->Contract.diagnostics_batch sources) in
+ check bool "complete ordered diagnostics equal (including spans, related locations and fixes)" true (single=batch);
+ (match code with
+ | None -> check int "valid history has no diagnostics" 0 (List.length batch)
+ | Some code -> check bool ("real refusal: " ^ code ^ "; got " ^
+   String.concat "; " (List.map(fun(d:Frontend_check.diagnostic)->d.code ^ ": " ^ d.message)batch)) true
+   (List.exists(fun(d:Frontend_check.diagnostic)->d.code=code)batch));
+ batch
+let with_two_contracts run = with_plan(fun root _ first _ ->
+ let abi=match Migration_abi.current() with Ok a->Migration_abi.id a | Error e->fail e.message in
+ let generated=match Migration_generate.start ~compiler_abi:abi ~project_root:root ~family:"Schema.Work" ~version:2 ~documents:[] with
+  | Ok p->p | Error errors->fail(String.concat "\n"(List.map(fun(e:Migration_generate.error)->e.message)errors)) in
+ List.iter(fun(e:Migration_manifest.edit)->write e.path e.after)(Migration_manifest.edits generated.manifest);
+ let before=Filename.concat root "schema/work/v2.tesl" in
+ let after=Filename.concat root "schema/work/v-current.tesl" in
+ write after (schema "Schema.Work.VCurrent" ", count: Int, nextCount: Int");
+ let seal path =
+  let inventory=match Migration_inventory.load ~compiler_abi:abi ~root_file:path with Ok x->x | Error e->fail e.message in
+  match Migration_seal.create ~project_root:root inventory with Ok x->x | Error e->fail e.message in
+ let edge=Filename.concat root "migrations/work/v3.tesl" in
+ let body=migration 11 |> fun s->replace s "Migrate.V2" "Migrate.V3"
+  |> fun s->replace s "Work.V1" "Work.V2"
+  |> fun s->replace s "count: 7" "count: old.count, nextCount: 7"
+  |> fun s->replace s "count: 11" "count: old.count, nextCount: 11"
+  |> fun s->replace s "title: \"note\" }" "title: \"note\", count: 7 }"
+  |> fun s->replace s "title: \"task\" }" "title: \"task\", count: 11 }" in
+ write edge (Migration_header.encode(get(Migration_header.create ~previous:(seal before) ~current:(seal after))) ^ body);
+ let second=Filename.concat root "migrations/work/v3-contract.tesl" in
+ let source=Source_input.read first |> fun s->replace s "Migrate.V2" "Migrate.V3"
+  |> fun s->replace s "Note count" "Note nextCount" |> fun s->replace s "Task count" "Task nextCount" in
+ write second source;
+ run root first second)
+let batch_authority ()=with_two_contracts(fun _ first second ->
+ let old=Source_input.read first and source=Source_input.read second in
+ ignore(compare_batch [first,old;second,source]);
+ List.iter(fun replacement ->
+  let broken=replace source "Trigger Note, Trigger Task" replacement in
+  write second broken;
+  let ds=compare_batch ~code:(Some "MIG022") [first,old;second,broken;second,broken] in
+  check int "each invalid Contract retains its own error" 2 (List.length ds);
+  check bool "both errors belong to current Contract" true
+   (List.for_all(fun(d:Frontend_check.diagnostic)->d.file=second)ds))
+  ["Trigger Note";"Trigger Note, Trigger Note";"Trigger Unknown, Trigger Task"];
+ write second source;
+ let broken=replace source "NotNull Note nextCount" "NotNull Note missing" in
+ (* Different buffers of the same Contract force source-guard misses inside one
+    batch. Restoring a buffer must restore the original success, not a cached error. *)
+ ignore(compare_batch ~code:(Some "MIG022") [first,old;second,source;second,broken;second,source]);
+ let frozen_edit=old ^ "\n# unsaved frozen companion edit\n" in
+ ignore(compare_batch ~code:(Some "MIG013") [second,source;first,frozen_edit;first,old;second,source]);
+ let malformed=source ^ "\nfn broken(\n" in
+ let ds=compare_batch ~code:(Some "MIG022") [second,broken;second,malformed;second,broken] in
+ check int "parse errors preserve their position between Contract errors" 3 (List.length ds);
+ ignore(compare_batch [first,old;second,source]))
+let batch_history_mutations ()=with_two_contracts(fun root first second ->
+ let inputs ()=[first,Source_input.read first;second,Source_input.read second] in
+ ignore(compare_batch(inputs()));
+ let mutate file altered code =
+  let original=Source_input.read file in
+  Fun.protect ~finally:(fun()->write file original) (fun()->
+   write file (altered original);
+   ignore(compare_batch ~code:(Some code) (inputs())));
+  ignore(compare_batch(inputs())) in
+ mutate (Filename.concat root "migrations/work/v3.tesl")
+  (fun s->replace s "nextCount: 7" "nextCount: \"wrong\"") "T001";
+ mutate (Filename.concat root "migrations/work/v2.tesl") (fun s->s ^ "\n# frozen edit\n") "MIG013";
+ mutate (Filename.concat root "schema/work/v1.tesl") (fun s->s ^ "\n# schema edit\n") "MIG013";
+ let extra=Filename.concat root "migrations/work/v4-contract.tesl" in
+ Fun.protect ~finally:(fun()->Sys.remove extra) (fun()->
+  write extra(replace(Source_input.read second) "Migrate.V3" "Migrate.V4");
+  ignore(compare_batch ~code:(Some "MIG022") (inputs())));
+ let edge=Filename.concat root "migrations/work/v2.tesl" in
+ let bytes=Source_input.read edge in
+ Fun.protect ~finally:(fun()->write edge bytes) (fun()->Sys.remove edge;
+  ignore(compare_batch ~code:(Some "MIG022") (inputs())));
+ ignore(compare_batch(inputs()));
+ let broken=replace(Source_input.read second) "Trigger Note, Trigger Task" "Trigger Note" in
+ Source_input.with_overlays ~project_root:root [second,broken] (fun()->
+  ignore(compare_batch ~code:(Some "MIG022") (inputs())));
+ ignore(compare_batch(inputs())))
+let batch_isolation ()=with_two_contracts(fun root first second ->
+ let sources=[first,Source_input.read first;second,Source_input.read second] in
+ with_plan(fun _ _ other text ->
+  ignore(compare_batch(sources @ [other,text] @ sources)));
+ let text=Source_input.read second in
+ let wrong=Filename.concat root "wrong-contract.tesl" in
+ ignore(compare_batch ~code:(Some "MIG022") (sources @ [wrong,text] @ sources));
+ let alias=Filename.concat root "migrations/work/alias-contract.tesl" in
+ Unix.symlink second alias;
+ Fun.protect ~finally:(fun()->Sys.remove alias) (fun()->
+  ignore(compare_batch ~code:(Some "MIG022") (sources @ [alias,text] @ sources)));
+ Source_input.with_pinned_files [second,text] (fun()->
+  let broken=replace text "Trigger Note, Trigger Task" "Trigger Note" in
+  ignore(compare_batch ~code:(Some "MIG013") (sources @ [second,broken] @ sources))))
+let batch_application ()=with_two_contracts(fun root first second ->
+ let entry_file=Filename.concat root "app.tesl" in write entry_file app;
+ let entry=match Parser.parse_module entry_file app with Ok m->m | Err e->fail e.msg in
+ let original=Source_input.read second in
+ List.iter(fun source ->
+  write second source;
+  let expected=single_diagnostics [first,Source_input.read first;second,source] in
+  let actual=Migration_program.with_compilation_cache(fun()->
+   Migration_application.make ~skip_dep_body:(fun _->true) entry app entry) in
+  check bool "implicit family diagnostics equal standalone judgments exactly" true (expected=actual))
+  [original;replace original "Trigger Note, Trigger Task" "Trigger Note";original])
+let ()=run "Checked source contracts" ["batch",[
+ test_case "valid histories and real invalid Contract authority match single diagnostics" `Quick batch_authority;
+ test_case "history and directory mutations restore without stale diagnostics" `Quick batch_history_mutations;
+ test_case "project ownership, paths, pins and exceptions remain isolated" `Quick batch_isolation;
+ test_case "implicit application family preserves complete Contract diagnostics" `Quick batch_application];"contract",[
  test_case "pure table retirement exact authority and no fabricated row finality" `Quick table_retirement;
  test_case "complete checked artifact and settled descriptions" `Quick positive;
  test_case "omitted duplicate foreign and unsupported authority" `Quick omissions;

@@ -92,10 +92,8 @@ let make ?(skip_dep_body=fun _ -> false) (entry : module_form) =
             | Ok migration -> (match D.check ~compiler_abi:comparison_abi ~source:edge.contents migration with
               | Ok (Some declaration) -> Option.fold ~none:[] ~some:(query_costs modules) (D.transforms declaration)
               | _ -> [])) in
-        let contract_diags=List.concat_map(fun (contract:H.migration_source) ->
-          match Parser.parse_module contract.path contract.contents with
-          | Err e -> [F.diag_of_parse_error e]
-          | Ok m -> Migration_contract.diagnostics contract.contents m) (H.contracts history) in
+        let contract_diags=Migration_contract.diagnostics_batch
+          (List.map(fun (contract:H.migration_source) -> contract.path,contract.contents) (H.contracts history)) in
         costs @ queue_diags @ queue_history_diags @ contract_diags @ missing @ List.concat_map (fun (edge : H.migration_source) ->
           let seals = match Header.read ~file:edge.path edge.contents with
             | Error errors -> D.diagnostics_of_errors errors

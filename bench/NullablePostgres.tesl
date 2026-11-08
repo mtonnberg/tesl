@@ -1,0 +1,98 @@
+module NullablePostgres exposing []
+
+# Synthetic PostgreSQL HTTP workload, without authentication. Scenario names are
+# request captures; nullable operands are generated on the server, not decoded
+# from an uploaded list. The runner installs the same pre-existing owner index
+# for both compilers. This legacy declaration does not create that index.
+import Tesl.Prelude exposing [Bool, Int, String, List]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
+import Tesl.DB exposing [dbRead]
+import Tesl.App exposing [App]
+import Tesl.Env exposing [env, envInt, envRead]
+import Tesl.Json exposing [stringCodec]
+
+entity Item table "items" primaryKey id {
+  id: Int
+  owner: Maybe String
+  score: Int
+  label: String
+  payload: String
+  active: Bool
+}
+
+database Main = Database {
+  schema: "nullable_bench"
+  entities: [Item]
+  backend: Postgres (PostgresConfig {
+    dbName: env "BENCH_DATABASE"
+    user: env "BENCH_USER"
+    password: env "BENCH_PASSWORD"
+    connection: TcpConnection {
+      host: env "BENCH_HOST"
+      port: envInt "BENCH_PG_PORT" 5432
+    }
+    poolSize: 1
+  })
+}
+
+fn equalityOperand(scenario: String) -> Maybe String =
+  if scenario == "null" then
+    Nothing
+  else if scenario == "miss" then
+    Something "absent-owner"
+  else if scenario == "special" then
+    Something "owner'雪;--"
+  else
+    Something "owner-7"
+
+fn membershipOperand(scenario: String) -> List (Maybe String) =
+  if scenario == "empty" then
+    []
+  else if scenario == "null" then
+    [Nothing]
+  else if scenario == "miss" then
+    [Something "absent-owner"]
+  else if scenario == "mixed" then
+    [Nothing, Something "owner-7", Something "owner-19"]
+  else if scenario == "duplicates" then
+    [Something "owner-7", Nothing, Something "owner-7", Nothing]
+  else if scenario == "special" then
+    [Something "owner'雪;--", Something "absent-owner"]
+  else
+    [Something "owner-7", Something "owner-19"]
+
+handler get health() -> String = "ready"
+handler get equalityCount(scenario: String) -> Int requires [dbRead Item] =
+  let owner = equalityOperand scenario
+  selectCount item from Item where item.owner == owner
+handler get equalityRows(scenario: String) -> List Item requires [dbRead Item] =
+  let owner = equalityOperand scenario
+  select item from Item where item.owner == owner order item.id asc
+handler get membershipCount(scenario: String) -> Int requires [dbRead Item] =
+  let owners = membershipOperand scenario
+  selectCount item from Item where inList item.owner owners
+handler get membershipRows(scenario: String) -> List Item requires [dbRead Item] =
+  let owners = membershipOperand scenario
+  select item from Item where inList item.owner owners order item.id asc
+
+api NullableApi {
+  get "/health" -> String
+  get "/eq/count/:scenario"
+    capture scenario: String using stringCodec
+    -> Int
+  get "/eq/rows/:scenario"
+    capture scenario: String using stringCodec
+    -> List Item
+  get "/in/count/:scenario"
+    capture scenario: String using stringCodec
+    -> Int
+  get "/in/rows/:scenario"
+    capture scenario: String using stringCodec
+    -> List Item
+}
+server NullableServer for NullableApi {
+  health, equalityCount, equalityRows, membershipCount, membershipRows
+}
+main() -> App requires [dbRead Item, envRead] =
+  App { database: Main, api: NullableServer, port: envInt "BENCH_HTTP_PORT" 8099 }
