@@ -190,6 +190,20 @@ func DbInsertMany[Row any](database *Database, table *Table[Row], entity string,
 	return TableInsertMany(table, entity, rows, conflicts, unique...)
 }
 
+// DbInsertManyKeyed changes only the unbound Memory path. PostgreSQL still binds
+// and executes each row in order, with the same partial-failure semantics.
+func DbInsertManyKeyed[Row any](database *Database, table *Table[Row], entity string, rows []Row,
+	conflicts func(Row, Row) bool, primary InsertKey[Row], statement string, bind func(Row) []any,
+	unique ...InsertIndex[Row]) struct{} {
+	if connection := database.bound(); connection != nil {
+		for _, row := range rows {
+			PgExec(connection, statement, bind(row))
+		}
+		return struct{}{}
+	}
+	return TableInsertManyKeyed(table, entity, rows, conflicts, primary, unique...)
+}
+
 // DbUpdate is `update … set …`. Nothing is reported back: a plain update is a statement.
 func DbUpdate[Row any](database *Database, table *Table[Row], match func(Row) bool,
 	apply func(Row) Row, plan PgPlan, unique ...UniqueIndex[Row]) struct{} {

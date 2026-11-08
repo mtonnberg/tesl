@@ -187,6 +187,119 @@ func TableInsertMany[Row any](table *Table[Row], entity string, rows []Row,
 	return struct{}{}
 }
 
+// InsertKey is an opaque, comparable representation of a compiler-proven pure,
+// total field projection. Equality of keys MUST be exactly the emitted equality
+// of the field, including nominal wrappers and arbitrary-precision integers.
+// Secret fields must never use this path: their equality is constant-time.
+type InsertKey[Row any] struct {
+	value func(Row) any
+}
+
+func InsertKeyOf[Row any, Key comparable](project func(Row) Key) InsertKey[Row] {
+	return InsertKey[Row]{value: func(row Row) any { return project(row) }}
+}
+
+// InsertIndex retains the original constraint's NULL exemption and diagnostic.
+// Constructors only package projections; they do not evaluate row expressions.
+type InsertIndex[Row any] struct {
+	index UniqueIndex[Row]
+	key   InsertKey[Row]
+}
+
+func InsertIndexOf[Row any](index UniqueIndex[Row], key InsertKey[Row]) InsertIndex[Row] {
+	return InsertIndex[Row]{index: index, key: key}
+}
+
+// TableInsertManyKeyed is emitted only when EVERY key and constraint is a pure,
+// total compiler-generated projection. Arbitrary callbacks use TableInsertMany.
+// Maps are local to this call, so updates, rollback and truncation need no cache
+// invalidation. Rows still publish individually, including before a later trap.
+// BenchmarkMemoryInsertManySmall measures the scan/hash crossover with empty and
+// populated tables. Keep batches through 32 on the allocation-free scan path;
+// the next measured size (64) benefits from hashing in both cases.
+const tableInsertManyScanLimit = 32
+
+func TableInsertManyKeyed[Row any](table *Table[Row], entity string, rows []Row,
+	conflicts func(Row, Row) bool, primary InsertKey[Row], unique ...InsertIndex[Row]) struct{} {
+	defer releaseMemoryWrite(acquireMemoryWrite())
+	table.mutex.Lock()
+	defer table.mutex.Unlock()
+	// Keep small batches' original comparisons and publication without allocating
+	// keys, particularly canonical Int strings for a singleton on a large table.
+	if len(rows) <= tableInsertManyScanLimit {
+		for _, row := range rows {
+			for _, constraint := range unique {
+				checkUniqueIn(table.rows, entity, row, []UniqueIndex[Row]{constraint.index}, -1)
+			}
+			table.publishLocked(insertInto(table.rows, entity, row, conflicts))
+		}
+		return struct{}{}
+	}
+	// Reject a conflicting first row before allocating or projecting the existing
+	// table. This first publication also records the transaction's rollback target;
+	// the gate and pure projections keep that ownership fixed for the entire batch.
+	for _, constraint := range unique {
+		checkUniqueIn(table.rows, entity, rows[0], []UniqueIndex[Row]{constraint.index}, -1)
+	}
+	table.publishLocked(insertInto(table.rows, entity, rows[0], conflicts))
+	// Reserve only for published rows, never for an unvalidated batch suffix.
+	// Nullable indexes grow lazily: an all-NULL column needs no map storage.
+	ids := make(map[any]struct{}, len(table.rows))
+	indexes := make([]map[any]struct{}, len(unique))
+	for i, constraint := range unique {
+		if constraint.index.Constrained == nil {
+			indexes[i] = make(map[any]struct{}, len(table.rows))
+		}
+	}
+	for _, row := range table.rows {
+		ids[primary.value(row)] = struct{}{}
+		for i, constraint := range unique {
+			if constraint.index.Constrained == nil || constraint.index.Constrained(row) {
+				if indexes[i] == nil {
+					indexes[i] = make(map[any]struct{})
+				}
+				indexes[i][constraint.key.value(row)] = struct{}{}
+			}
+		}
+	}
+	keys := make([]any, len(unique))
+	constrained := make([]bool, len(unique))
+	for _, row := range rows[1:] {
+		for i, constraint := range unique {
+			index := constraint.index
+			constrained[i] = index.Constrained == nil || index.Constrained(row)
+			if !constrained[i] {
+				continue
+			}
+			keys[i] = constraint.key.value(row)
+			if _, exists := indexes[i][keys[i]]; exists {
+				panic("entity " + entity + " already contains a row with (" +
+					strings.Join(index.Columns, " ") + ") = " + index.Describe(row) +
+					"; the declared unique index on (" + strings.Join(index.Columns, ", ") +
+					") forbids duplicates")
+			}
+		}
+		id := primary.value(row)
+		if _, exists := ids[id]; exists {
+			panic(fmt.Sprintf("insert: entity %s already contains a row with that primary key", entity))
+		}
+		// Rollback was recorded by the first publication. As in publishLocked,
+		// append writes only beyond published snapshot lengths.
+		table.rows = append(table.rows, row)
+		table.version++
+		ids[id] = struct{}{}
+		for i := range unique {
+			if constrained[i] {
+				if indexes[i] == nil {
+					indexes[i] = make(map[any]struct{})
+				}
+				indexes[i][keys[i]] = struct{}{}
+			}
+		}
+	}
+	return struct{}{}
+}
+
 // insertInto is `rows` with `row` appended, once no existing row shares its primary key. The
 // caller holds the write lock. Appending is safe under the immutable-when-published rule
 // because it writes only PAST every length a reader may hold.

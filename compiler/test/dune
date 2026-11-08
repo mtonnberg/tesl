@@ -320,6 +320,12 @@
  (deps fixtures/bounded-memory.tesl)
  (libraries tesl_compiler_lib alcotest unix str))
 
+(test
+ (name test_memory_insert_many)
+ (modules test_memory_insert_many)
+ (deps fixtures/keyed-insert-many.tesl)
+ (libraries tesl_compiler_lib alcotest unix str))
+
 ; Embedded Go runtime seam test (review 2026-09-02, H8): the runtime the compiler bakes into
 ; every emitted module (compiler/lib/go_runtime/embedded/embedded_go_runtime.ml) must be byte-identical to
 ; runtime/go/teslrt, and every non-test runtime file must be embedded.  CI phase 2a tests the

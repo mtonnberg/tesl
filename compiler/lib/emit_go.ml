@@ -9110,6 +9110,48 @@ and sql_unique_arguments ~indent loc (info : entity_info) =
   | [] -> ""
   | values -> ", " ^ String.concat ", " values
 
+(* Only compiler-owned scalar projections enter the keyed batch path. A secret's
+   constant-time comparison cannot become a hash lookup. Nullable unique columns
+   are unwrapped only after the original Constrained check. Composite keys are
+   structured tuples, never ambiguous diagnostic strings. *)
+and sql_insert_key ~indent ~nullable loc info fields =
+  let rec supported = function
+    | TString | TBool | TInt -> true
+    | TNewtype { secret = false; base; _ } -> supported base
+    | _ -> false in
+  let parts = List.map (fun field ->
+    let ty = entity_column loc info field in
+    let operand = "teslRow." ^ record_field_go_name field in
+    let ty,operand = match nullable, maybe_element ty with
+      | true, Some inner -> inner, operand ^ ".SomethingValue"
+      | _ -> ty,operand in
+    if not (supported ty) then None else
+    Option.map (fun (key_type,derive) -> key_type,derive operand) (comparable_key ty)) fields in
+  if List.exists Option.is_none parts || parts=[] then None else
+  let rec tuple = function
+    | [part] -> part
+    | (ty,value)::rest ->
+      let rest_ty,rest_value = tuple rest in
+      let key_type = Printf.sprintf "teslrt.Tuple2[%s, %s]" ty rest_ty in
+      key_type, Printf.sprintf "%s{Tuple2First: %s, Tuple2Second: %s}" key_type value rest_value
+    | [] -> assert false in
+  let key_type,value = tuple (List.map Option.get parts) in
+  Some (Printf.sprintf "teslrt.InsertKeyOf(func(teslRow %s) %s {\n%s\treturn %s\n%s})"
+    (sql_row_type info) key_type indent value indent)
+
+and sql_insert_many_keys ~indent loc info =
+  let primary = sql_insert_key ~indent ~nullable:false loc info [info.ent_primary_key] in
+  let indexes = List.filter (fun (index:entity_index) -> index.ix_unique) info.ent_indexes in
+  let keys = List.map (fun (index:entity_index) ->
+    sql_insert_key ~indent ~nullable:true loc info index.ix_fields) indexes in
+  match primary with
+  | Some primary when List.for_all Option.is_some keys ->
+    let constraints = sql_unique_indexes ~indent loc info in
+    let values = List.map2 (fun index key ->
+      "teslrt.InsertIndexOf(" ^ index ^ ", " ^ Option.get key ^ ")") constraints keys in
+    Some (primary, match values with [] -> "" | _ -> ", " ^ String.concat ", " values)
+  | _ -> None
+
 (* The emitted `teslrt.PgSql(…)`: one statement and a THUNK for the arguments its placeholders
    stand for.  A thunk because both forms of the query sit at this one call site but only one of
    them runs: an eager slice would evaluate a `where` operand that reads the clock, draws a
@@ -9674,13 +9716,18 @@ and emit_sql_form ?(indent="") signatures env loc form =
     in
     (match info.ent_database with
      | None ->
-       Printf.sprintf "teslrt.TableInsertMany(%s, %s, %s, %s%s)"
-         (sql_table_ref info) (go_quote info.ent_tesl_name) rows (sql_key_conflict loc info)
-         (sql_unique_arguments ~indent loc info)
+       let name,primary,unique = match sql_insert_many_keys ~indent loc info with
+         | Some (primary,unique) -> "TableInsertManyKeyed",sql_key_conflict loc info ^ ", " ^ primary,unique
+         | None -> "TableInsertMany",sql_key_conflict loc info,sql_unique_arguments ~indent loc info in
+       Printf.sprintf "teslrt.%s(%s, %s, %s, %s%s)"
+         name (sql_table_ref info) (go_quote info.ent_tesl_name) rows primary unique
      | Some database when Option.is_some info.ent_row_access ->
-       Printf.sprintf "teslrt.DbRowInsertMany(%s, %s, %s, %s, %s, %s%s)"
-         (sql_access_ref info) (qualified database.db_owner database.db_go_var) (sql_table_ref info)
-         (go_quote info.ent_tesl_name) rows (sql_key_conflict loc info) (sql_unique_arguments ~indent loc info)
+       let name,primary,unique = match sql_insert_many_keys ~indent loc info with
+         | Some (primary,unique) -> "DbRowInsertManyKeyed",sql_key_conflict loc info ^ ", " ^ primary,unique
+         | None -> "DbRowInsertMany",sql_key_conflict loc info,sql_unique_arguments ~indent loc info in
+       Printf.sprintf "teslrt.%s(%s, %s, %s, %s, %s, %s%s)"
+         name (sql_access_ref info) (qualified database.db_owner database.db_go_var) (sql_table_ref info)
+         (go_quote info.ent_tesl_name) rows primary unique
      | Some database ->
        (* The rows are only known at run time, so the statement is fixed and its ARGUMENTS are
           read off each row — the one query whose plan cannot be a value.  One statement per
@@ -9694,10 +9741,13 @@ and emit_sql_form ?(indent="") signatures env loc form =
            (String.concat ", "
               (List.mapi (fun index _ -> Printf.sprintf "$%d" (index + 1)) columns)) in
        let bind = sql_row_binder loc indent info columns in
-       Printf.sprintf "teslrt.DbInsertMany(%s, %s, %s, %s, %s, %s, %s%s)"
-         (qualified database.db_owner database.db_go_var) (sql_table_ref info)
-         (go_quote info.ent_tesl_name) rows (sql_key_conflict loc info)
-         (go_quote statement) bind (sql_unique_arguments ~indent loc info))
+       let name,primary,unique = match sql_insert_many_keys ~indent loc info with
+         | Some (primary,unique) -> "DbInsertManyKeyed",sql_key_conflict loc info ^ ", " ^ primary,unique
+         | None -> "DbInsertMany",sql_key_conflict loc info,sql_unique_arguments ~indent loc info in
+       Printf.sprintf "teslrt.%s(%s, %s, %s, %s, %s, %s, %s%s)"
+         name (qualified database.db_owner database.db_go_var) (sql_table_ref info)
+         (go_quote info.ent_tesl_name) rows primary
+         (go_quote statement) bind unique)
   | SqlUpdate update ->
     let info = entity_of_query loc update.entity in
     sql_check_where_field loc None update.clauses;

@@ -1,0 +1,58 @@
+module InsertManyMemory exposing []
+import Tesl.Prelude exposing [Int, String, List]
+import Tesl.List exposing [List.range, List.map, List.append]
+import Tesl.Database exposing [Database, Memory]
+import Tesl.DB exposing [dbRead, dbWrite]
+import Tesl.App exposing [App]
+import Tesl.Env exposing [envInt, envRead]
+
+type ItemId = Int
+entity Item table "insert_items" primaryKey id {
+  id: ItemId
+  code: Int
+  category: String
+  label: String
+  unique index [category, code]
+}
+database Main = Database { schema: "insert_memory", entities: [Item], backend: Memory }
+
+fn makeItem(id: Int) -> Item = Item { id: ItemId id, code: id, category: "group", label: "retained" }
+fn rows() -> List Item requires [envRead] =
+  let count = envInt "BENCH_ROWS" 1000
+  if count < 1 || count > 10000 then
+    []
+  else
+    List.map makeItem (List.range 0 count)
+fn countItems() -> Int requires [dbRead Item] = selectCount item from Item
+fn store(values: List Item) -> Int requires [dbWrite Item, dbRead Item] =
+  let _ = insertMany values in Item
+  countItems()
+handler get health() -> String = "ready"
+handler post clearItems() -> Int requires [dbWrite Item, dbRead Item] =
+  delete item from Item
+  countItems()
+handler post populate() -> Int requires [envRead, dbWrite Item, dbRead Item] = store (rows())
+handler post populateAtomic() -> Int requires [envRead, dbWrite Item, dbRead Item] =
+  transaction {
+    store (rows())
+  }
+handler post duplicateBatch() -> Int requires [envRead, dbWrite Item, dbRead Item] =
+  store (List.append (rows()) [makeItem 0])
+handler post duplicateAtomic() -> Int requires [envRead, dbWrite Item, dbRead Item] =
+  transaction {
+    store (List.append (rows()) [makeItem 0])
+  }
+handler get allItems() -> List Item requires [dbRead Item] = select item from Item
+
+api InsertApi {
+  get "/health" -> String
+  post "/reset" -> Int
+  post "/bulk" -> Int
+  post "/transaction" -> Int
+  post "/duplicate" -> Int
+  post "/transaction-duplicate" -> Int
+  get "/items" -> List Item
+}
+server InsertServer for InsertApi { health, clearItems, populate, populateAtomic, duplicateBatch, duplicateAtomic, allItems }
+main() -> App requires [envRead, dbRead Item, dbWrite Item] =
+  App { database: Main, api: InsertServer, port: envInt "PORT" 8100 }

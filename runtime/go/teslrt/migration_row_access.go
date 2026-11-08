@@ -542,6 +542,21 @@ func DbRowInsertMany[Row any](slot *PgRowAccessSlot[Row], database *Database, ta
 	return struct{}{}
 }
 
+// DbRowInsertManyKeyed retains the checked row-access slot on PostgreSQL; only
+// its unbound Memory implementation uses the compiler's comparable keys.
+func DbRowInsertManyKeyed[Row any](slot *PgRowAccessSlot[Row], database *Database, table *Table[Row], entity string, rows []Row, conflicts func(Row, Row) bool, primary InsertKey[Row], unique ...InsertIndex[Row]) struct{} {
+	if database.bound() == nil {
+		return TableInsertManyKeyed(table, entity, rows, conflicts, primary, unique...)
+	}
+	access := slot.access(database)
+	for _, row := range rows {
+		if err := access.insert(row); err != nil {
+			panic(pgFailure("database", err))
+		}
+	}
+	return struct{}{}
+}
+
 // DbRowDelete and DbRowDeleteCount share one server statement. Its command tag
 // supplies the count; there is no read/convert/delete race and no row ABI latch.
 func DbRowDelete[Row any](slot *PgRowAccessSlot[Row], database *Database, table *Table[Row], match func(Row) bool, query PgRowQuery) struct{} {

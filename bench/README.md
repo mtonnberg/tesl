@@ -10,6 +10,7 @@ Tesl programs compiled to Go, driven by the generated load-test harness or a rea
 | `BenchLoad.tesl` | 2,000 rps for 5 s |
 | `BenchCeiling.tesl` | 20,000 rps for 5 s, used to probe the runtime ceiling |
 | `BoundedMemory.tesl` | ordered first-page, pagination, selectOne and unordered range queries over a populated Memory table |
+| `InsertManyMemory.tesl` | real HTTP batch insertion with primary/composite unique constraints, inside/outside transactions |
 
 The three load-test programs exercise two request paths, both free of sleeps and outbound calls, so the measurement is the
 runtime's own cost:
@@ -40,6 +41,14 @@ Use `--repo-root /path/to/baseline-checkout` to run the same fixture with anothe
 built compiler/runtime. Alternate before/after order. Every response is checked
 against independently computed rows and ordering; raw timings and source/binary
 hashes remain in the output directory. See [wave-six evidence](../dev-docs/runtime-wave6.md).
+
+Run the insertion benchmark, including row construction inside each request:
+
+    python3 scripts/measure-memory-insert.py --output /tmp/insert-after
+
+It validates all rows plus duplicate-prefix and rollback behavior. Use the same
+`--repo-root` baseline option and alternating run order. See
+[wave-seven evidence](../dev-docs/runtime-wave7.md).
 
 For process-level CPU/RSS measurements, build once and time the generated load test directly:
 
