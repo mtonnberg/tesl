@@ -83,6 +83,12 @@ the benefit. In particular, a generic plan can visit NULL index entries even whe
 the operand excludes NULL. Local measurements do not establish production p99
 or a PostgreSQL 14 performance result.
 
+A separate million-row, approximately 90%-NULL SQL spot check forced generic
+planning: both versions scanned the table. A non-NULL membership hit took
+97 ms before and 110 ms after; mixed-NULL membership took 268/264 ms. These single
+SQL samples are not HTTP measurements, but show why the selective indexed
+workload's speedup must not be generalized to dense-NULL generic plans.
+
 ## Compiler result: one checked history per Contract batch
 
 Application diagnostics used to discover, check and plan the entire family
@@ -141,6 +147,12 @@ Additional live driver tests cover nullable NUMERIC, secrets and JSONB, includin
 JSON null versus SQL NULL and once-only argument evaluation. A sealed transforming
 history test checks renamed/copied nullable fields, repeated logical field holes
 and exact parameter alignment in emitted versioned queries.
+
+Final verification also passed all 28 Contract cases (including four actual
+native PostgreSQL cases), all 13 ordinary typed migration-query cases, and the
+new driver-carrier test under Go's race detector. An isolated committed checkout
+rebuilt with no generated differences, regenerated all 199 snapshots unchanged,
+passed documentation integrity, and passed CI suite/shard inventory checks.
 
 Other candidates found during this sweep:
 
