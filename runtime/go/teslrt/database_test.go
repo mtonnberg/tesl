@@ -78,6 +78,40 @@ func TestUnboundDatabaseReadsTheMemoryTable(t *testing.T) {
 	}
 }
 
+// Bounded Memory selection must leave the server plan and operand timing intact.
+func TestBoundDatabaseTopDispatchUsesSQL(t *testing.T) {
+	database := liveDatabase(t)
+	table := NewTable[dbBook]()
+	WithDatabase(database, func() {
+		DbTruncate(database, table, "books")
+		for index := 0; index < 40; index++ {
+			book := dbBook{ID: fmt.Sprint(index), Title: "retained", Pages: FromInt64(int64(40 - index))}
+			DbInsert(database, table, "Book", book, bookConflicts,
+				`insert into "teslgotest"."books" (id,title,pages) values ($1,$2,$3)`,
+				func(book dbBook) []any { return []any{book.ID, book.Title, PgInt(book.Pages)} })
+		}
+		operands := 0
+		args := func() []any { operands++; return []any{PgInt(FromInt64(5))} }
+		match := func(dbBook) bool { t.Fatal("PostgreSQL evaluated Memory predicate"); return false }
+		less := func(dbBook, dbBook) bool { t.Fatal("PostgreSQL evaluated Memory comparator"); return false }
+		rows := DbSelectTop(database, table, match, less, 2, 3,
+			PgSql(`select id,title,pages from "teslgotest"."books" where pages >= $1 order by pages asc limit 3 offset 2`, args), scanDbBook)
+		if len(rows) != 3 || operands != 1 {
+			t.Fatal("bounded SQL query changed result count or operand evaluation", len(rows), operands)
+		}
+		for index, row := range rows {
+			if !Equal(row.Pages, FromInt64(int64(7+index))) || row.Title != "retained" {
+				t.Fatal("wrong SQL result", row)
+			}
+		}
+		one := DbSelectOneTop(database, table, match, less,
+			PgSql(`select id,title,pages from "teslgotest"."books" where pages >= $1 order by pages asc limit 1`, args), scanDbBook)
+		if !one.IsSomething() || !Equal(one.SomethingValue.Pages, FromInt64(5)) || operands != 2 {
+			t.Fatal("ordered SQL selectOne changed", one, operands)
+		}
+	})
+}
+
 // The same four shapes, bound. Each is asserted against the memory answer for the same rows, so
 // a divergence shows up as a disagreement rather than as a Go-only expectation.
 func TestBoundDatabaseAgreesWithTheMemoryTable(t *testing.T) {

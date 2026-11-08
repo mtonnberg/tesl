@@ -462,6 +462,23 @@ func DbRowSelectOne[Row any](slot *PgRowAccessSlot[Row], database *Database, tab
 	}
 	return Something(rows[0])
 }
+
+// These dispatchers change only Memory selection. PostgreSQL retains its exact
+// typed query and admission path; the emitter supplies a pure total comparator.
+func DbRowSelectTop[Row any](slot *PgRowAccessSlot[Row], database *Database, table *Table[Row], match func(Row) bool, less func(Row, Row) bool, offset, limit int, query PgRowQuery) []Row {
+	if database.bound() == nil {
+		return TableSelectTop(table, match, less, offset, limit)
+	}
+	return DbRowSelect(slot, database, table, match, less, offset, limit, query)
+}
+
+func DbRowSelectOneTop[Row any](slot *PgRowAccessSlot[Row], database *Database, table *Table[Row], match func(Row) bool, less func(Row, Row) bool, query PgRowQuery) Maybe[Row] {
+	if database.bound() == nil {
+		return TableSelectOneTop(table, match, less)
+	}
+	return DbRowSelectOne(slot, database, table, match, less, query)
+}
+
 func DbRowInsert[Row any](slot *PgRowAccessSlot[Row], database *Database, table *Table[Row], entity string, row Row, conflicts func(Row, Row) bool, unique ...UniqueIndex[Row]) Row {
 	if database.bound() == nil {
 		return TableInsert(table, entity, row, conflicts, unique...)

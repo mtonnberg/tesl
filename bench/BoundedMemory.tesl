@@ -1,0 +1,64 @@
+module BoundedMemory exposing []
+
+import Tesl.Prelude exposing [Int, String, List]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.Int exposing [Int.nonZero, Int.modulo]
+import Tesl.List exposing [List.range, List.map]
+import Tesl.Database exposing [Database, Memory]
+import Tesl.DB exposing [dbRead, dbWrite]
+import Tesl.App exposing [App]
+import Tesl.Env exposing [envInt, envRead]
+
+entity Item table "bounded_items" primaryKey id {
+  id: Int
+  score: Int
+  label: String
+  groupName: String
+  note: String
+  owner: String
+  metadata: String
+}
+
+database Main = Database {
+  schema: "bounded_memory"
+  entities: [Item]
+  backend: Memory
+}
+
+fn makeItem(id: Int) -> Item =
+  let divisor = check Int.nonZero 100003
+  let score = Int.modulo (id * 48271 + 17) divisor
+  Item { id: id, score: score, label: "item", groupName: "group", note: "retained", owner: "owner", metadata: "metadata" }
+
+handler post populate() -> Int requires [dbRead Item, dbWrite Item, envRead] =
+  let count = envInt "BENCH_ROWS" 10000
+  if count < 1 || count > 30000 then
+    0
+  else
+    let rows = List.map makeItem (List.range 0 count)
+    let _ = insertMany rows in Item
+    selectCount item from Item
+
+handler get health() -> String = "ready"
+handler get top() -> List Item requires [dbRead Item] =
+  select item from Item order item.score asc limit 10
+handler get page() -> List Item requires [dbRead Item] =
+  select item from Item order item.score desc limit 10 offset 20
+handler get first() -> Int requires [dbRead Item] =
+  case selectOne item from Item order item.score asc of
+    Nothing -> -1
+    Something item -> item.id
+handler get plain() -> List Item requires [dbRead Item] =
+  select item from Item limit 10 offset 20
+
+api BoundedApi {
+  get "/health" -> String
+  post "/seed" -> Int
+  get "/top" -> List Item
+  get "/page" -> List Item
+  get "/first" -> Int
+  get "/plain" -> List Item
+}
+server BoundedServer for BoundedApi { health, populate, top, page, first, plain }
+main() -> App requires [dbRead Item, dbWrite Item, envRead] =
+  App { database: Main, api: BoundedServer, port: envInt "PORT" 8099 }

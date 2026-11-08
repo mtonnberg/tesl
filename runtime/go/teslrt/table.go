@@ -242,7 +242,32 @@ func TableCount[Row any](table *Table[Row], match func(Row) bool) Int {
 // insertion order, which is the order the un-ordered Racket path yields as well. A
 // negative `limit` means "no limit".
 func TableSelectRange[Row any](table *Table[Row], match func(Row) bool, offset, limit int) []Row {
-	return sliceRange(TableSelect(table, match), offset, limit)
+	if offset < 0 {
+		// Preserve the legacy panic, including predicate evaluation before it.
+		return sliceRange(TableSelect(table, match), offset, limit)
+	}
+	rows, _ := table.snapshot()
+	capacity := max(0, len(rows)-offset)
+	if limit >= 0 {
+		capacity = min(capacity, limit)
+	}
+	out := make([]Row, 0, capacity)
+	skipped := 0
+	for _, row := range rows {
+		// Do not stop at LIMIT: predicates may query tables, have effects or
+		// fail, and historically run once for every row in this snapshot.
+		if !match(row) {
+			continue
+		}
+		if skipped < offset {
+			skipped++
+			continue
+		}
+		if limit < 0 || len(out) < limit {
+			out = append(out, row)
+		}
+	}
+	return out
 }
 
 // TableSelectSorted is `order by`, plus any `limit`/`offset` applied after the sort.

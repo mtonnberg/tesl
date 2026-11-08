@@ -811,6 +811,7 @@ if [ "$go_gate_fail" -eq 0 ]; then
       bash "$SCRIPT_DIR/scripts/go-fuzz-target.sh" ./teslrt FuzzIntDecimalAndJSONRoundTrip &&
       bash "$SCRIPT_DIR/scripts/go-fuzz-target.sh" ./teslrt FuzzIntArithmeticAgainstBig &&
       bash "$SCRIPT_DIR/scripts/go-fuzz-target.sh" ./teslrt FuzzIntJSONInput &&
+      bash "$SCRIPT_DIR/scripts/go-fuzz-target.sh" ./teslrt FuzzTableBoundedSelection &&
       bash "$SCRIPT_DIR/scripts/go-fuzz-target.sh" ./teslrt FuzzMigrationCatalogLiteral &&
       bash "$SCRIPT_DIR/scripts/go-fuzz-target.sh" ./teslrt FuzzCompiledMigrationHistory &&
       bash "$SCRIPT_DIR/scripts/go-fuzz-target.sh" ./teslrt FuzzRowCanonicalFraming &&

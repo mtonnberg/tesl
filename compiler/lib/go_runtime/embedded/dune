@@ -13,6 +13,7 @@
  (target embedded_go_runtime.ml)
  (mode promote)
  (deps
+   ../../../../runtime/go/teslrt/table_selection.go
    ../../../../runtime/go/teslrt/migration_row_update_bulk.go
    ../../../../runtime/go/teslrt/migration_stage_cancel.go
    ../../../../runtime/go/teslrt/migration_stage_contract.go

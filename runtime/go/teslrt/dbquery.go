@@ -89,6 +89,26 @@ func DbSelectOne[Row any](database *Database, table *Table[Row], match func(Row)
 	return TableSelectOneSorted(table, match, less)
 }
 
+// DbSelectTop has the same PostgreSQL plan as DbSelect. Its Memory comparator
+// satisfies TableSelectTop's pure, total ordering contract, selected by the emitter.
+func DbSelectTop[Row any](database *Database, table *Table[Row], match func(Row) bool,
+	less func(Row, Row) bool, offset, limit int, plan PgPlan,
+	scan func(pgx.CollectableRow) (Row, error)) []Row {
+	if connection := database.bound(); connection != nil {
+		return PgQueryPlan(connection, plan, scan)
+	}
+	return TableSelectTop(table, match, less, offset, limit)
+}
+
+func DbSelectOneTop[Row any](database *Database, table *Table[Row], match func(Row) bool,
+	less func(Row, Row) bool, plan PgPlan,
+	scan func(pgx.CollectableRow) (Row, error)) Maybe[Row] {
+	if connection := database.bound(); connection != nil {
+		return PgQueryOnePlan(connection, plan, scan)
+	}
+	return TableSelectOneTop(table, match, less)
+}
+
 // DbCount is `selectCount`. The server counts in the database rather than shipping rows to be
 // counted here, which is the whole reason an aggregate is a separate query shape.
 func DbCount[Row any](database *Database, table *Table[Row], match func(Row) bool,

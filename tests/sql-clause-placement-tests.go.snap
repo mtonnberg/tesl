@@ -51,7 +51,7 @@ func oneWhereOrder(org string) []Thing {
 //line sql-clause-placement-tests.tesl:59
 func oneWhereOrderLimit(org string) []Thing {
 //line sql-clause-placement-tests.tesl:60
-	return teslrt.TableSelectSorted(ThingTable, func(t Thing) bool {
+	return teslrt.TableSelectTop(ThingTable, func(t Thing) bool {
 		return (t.OrgId == org)
 	}, func(teslLeft, teslRight Thing) bool {
 		return (teslLeft.Name < teslRight.Name)
@@ -71,7 +71,7 @@ func andWhereOrder(org string) []Thing {
 //line sql-clause-placement-tests.tesl:64
 func andWhereLimitOffset(org string) []Thing {
 //line sql-clause-placement-tests.tesl:65
-	return teslrt.TableSelectSorted(ThingTable, func(t Thing) bool {
+	return teslrt.TableSelectTop(ThingTable, func(t Thing) bool {
 		return (t.OrgId == org) && !t.Archived
 	}, func(teslLeft, teslRight Thing) bool {
 		return (teslLeft.Name < teslRight.Name)
@@ -81,7 +81,7 @@ func andWhereLimitOffset(org string) []Thing {
 //line sql-clause-placement-tests.tesl:69
 func andIlikeOrderLimit(org string, pat string) []Thing {
 //line sql-clause-placement-tests.tesl:70
-	return teslrt.TableSelectSorted(ThingTable, func(t Thing) bool {
+	return teslrt.TableSelectTop(ThingTable, func(t Thing) bool {
 		return (t.OrgId == org) && !t.Archived && teslrt.SqlLike(t.Name, pat, true)
 	}, func(teslLeft, teslRight Thing) bool {
 		return (teslLeft.Name < teslRight.Name)
@@ -121,7 +121,7 @@ func andWhereOrderMulti(org string) []Thing {
 //line sql-clause-placement-tests.tesl:87
 func andWhereLimitOffsetMulti(org string) []Thing {
 //line generated.tesl:1
-	return teslrt.TableSelectSorted(ThingTable, func(t Thing) bool {
+	return teslrt.TableSelectTop(ThingTable, func(t Thing) bool {
 		return (t.OrgId == org) && !t.Archived
 	}, func(teslLeft, teslRight Thing) bool {
 		return (teslLeft.Name < teslRight.Name)
@@ -141,7 +141,7 @@ func orWhereOrderMulti(org string) []Thing {
 //line sql-clause-placement-tests.tesl:102
 func andIlikeOrderLimitMulti(org string, pat string) []Thing {
 //line generated.tesl:1
-	return teslrt.TableSelectSorted(ThingTable, func(t Thing) bool {
+	return teslrt.TableSelectTop(ThingTable, func(t Thing) bool {
 		return (t.OrgId == org) && !t.Archived && teslrt.SqlLike(t.Name, pat, true)
 	}, func(teslLeft, teslRight Thing) bool {
 		return (teslLeft.Name < teslRight.Name)
@@ -151,7 +151,7 @@ func andIlikeOrderLimitMulti(org string, pat string) []Thing {
 //line sql-clause-placement-tests.tesl:113
 func countInline(org string) teslrt.Int {
 //line sql-clause-placement-tests.tesl:114
-	return teslrt.ListLength(teslrt.TableSelectSorted(ThingTable, func(t Thing) bool {
+	return teslrt.ListLength(teslrt.TableSelectTop(ThingTable, func(t Thing) bool {
 		return (t.OrgId == org) && !t.Archived
 	}, func(teslLeft, teslRight Thing) bool {
 		return (teslLeft.Name < teslRight.Name)
@@ -161,7 +161,7 @@ func countInline(org string) teslrt.Int {
 //line sql-clause-placement-tests.tesl:116
 func countInlineMultiLine(org string) teslrt.Int {
 //line sql-clause-placement-tests.tesl:117
-	return teslrt.ListLength(teslrt.TableSelectSorted(ThingTable, func(t Thing) bool {
+	return teslrt.ListLength(teslrt.TableSelectTop(ThingTable, func(t Thing) bool {
 		return (t.OrgId == org) && !t.Archived
 	}, func(teslLeft, teslRight Thing) bool {
 		return (teslLeft.Name < teslRight.Name)
@@ -171,7 +171,7 @@ func countInlineMultiLine(org string) teslrt.Int {
 //line sql-clause-placement-tests.tesl:124
 func oneRow(org string) teslrt.Maybe[Thing] {
 //line sql-clause-placement-tests.tesl:125
-	return teslrt.TableSelectOneSorted(ThingTable, func(t Thing) bool {
+	return teslrt.TableSelectOneTop(ThingTable, func(t Thing) bool {
 		return (t.OrgId == org) && !t.Archived
 	}, func(teslLeft, teslRight Thing) bool {
 		return (teslLeft.Name < teslRight.Name)

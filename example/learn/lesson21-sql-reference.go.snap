@@ -101,7 +101,7 @@ func FindFeatured(cat1 string, cat2 string) []Product {
 //line lesson21-sql-reference.tesl:242
 func CheapestProducts(n teslrt.Int) []Product {
 //line lesson21-sql-reference.tesl:243
-	return teslrt.TableSelectSorted(ProductTable, func(_ Product) bool {
+	return teslrt.TableSelectTop(ProductTable, func(_ Product) bool {
 		return true
 	}, func(teslLeft, teslRight Product) bool {
 		return (teslrt.Compare(teslLeft.Price, teslRight.Price) < 0)

@@ -69,7 +69,7 @@ func FindOrdersByCustomerCountry(country string) []Order {
 //line lesson48-sql-inner-join.tesl:131
 func CheapOrdersByCountry(n teslrt.Int) []Order {
 //line generated.tesl:1
-	return teslrt.TableSelectSorted(OrderTable, func(o Order) bool {
+	return teslrt.TableSelectTop(OrderTable, func(o Order) bool {
 		return teslrt.TableAny(CustomerTable, func(teslJoined Customer) bool {
 			return (teslJoined.Id == o.CustomerId)
 		})
