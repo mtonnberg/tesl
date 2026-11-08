@@ -10561,6 +10561,7 @@ let runtime_file_gates : (string * string list) list = [
 
 let runtime_file_gates = List.map (fun (name, files) ->
   name, if name = "postgres" then files @ [
+    "migration_row_update_bulk.go";
     "migration_stage_preparation.go";
     "migration_stage_text.go";
     "migration_writer_context.go";
