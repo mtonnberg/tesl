@@ -26,7 +26,7 @@ out="${1:-$here/dist}"
 mkdir -p "$out"
 out="$(cd "$out" && pwd)"
 
-for required in python3 node npm elm; do
+for required in python3 curl node npm elm; do
   command -v "$required" >/dev/null 2>&1 || { echo "error: $required is required for verified playground assets" >&2; exit 1; }
 done
 
@@ -78,6 +78,8 @@ install -m 644 "$builddir/default/playground/tesl_search_js.bc.js" "$out/tesl_se
 for asset in playground.css editor.js bridge.js fix.js learning.js start.html why.html agents.md; do
   install -m 644 "$here/$asset" "$out/$asset"
 done
+# Avoid GitHub's flaky zipball redirect, while checking the registry archive hash.
+python3 "$here/prefetch-elm.py" "$here/elm/elm.json"
 ( cd "$here/elm" && elm make src/Main.elm --optimize --output="$out/playground-elm.js" )
 install -m 644 "$here/search.css" "$out/search.css"
 install -m 644 "$here/share.js" "$out/share.js"

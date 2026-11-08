@@ -34,7 +34,7 @@ KNOWN_DIFF="lesson07-consumer.tesl"
 #   scripts/playground-parity.sh --limit N       # compare the first N lessons
 #   scripts/playground-parity.sh --verbose       # print every file, not just diffs
 #
-# Exit: 0 = parity holds, 1 = divergence, 77 = nothing to do (no node, no
+# Exit: 0 = parity holds, 1 = build/test failure or divergence, 77 = nothing to do (no node, no
 # js_of_ocaml, no corpus, no compiler) — a missing optional tool is a SKIP, never
 # a gate failure.
 #
@@ -64,9 +64,10 @@ skip() { say "$*  — nothing to do"; exit 77; }
 [ -d "$LEARN_DIR" ] || skip "no example/learn"
 command -v node >/dev/null 2>&1 || skip "node is not on PATH"
 
-# This needs only the static page and Node, so run it before optional compiler /
-# js_of_ocaml checks can skip the broader parity suite.
+# These need only Python and Node (no network), so run them before optional
+# compiler / js_of_ocaml checks can skip the broader parity suite.
 python3 "$REPO_ROOT/tests/playground-dom-xss.py" || exit 1
+python3 "$REPO_ROOT/tests/test_playground_elm_prefetch.py" || exit 1
 
 # ── The CLI side ─────────────────────────────────────────────────────────────
 MAIN_EXE="${TESL_OCAML_COMPILER:-$REPO_ROOT/compiler/_build/default/bin/main.exe}"
