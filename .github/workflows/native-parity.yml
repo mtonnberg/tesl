@@ -82,11 +82,43 @@ jobs:
         with:
           go-version: ${{ needs.plan.outputs.go }}
           cache-dependency-path: runtime/go/go.sum
-      - uses: ocaml/setup-ocaml@v3
+      # setup-ocaml downloads opam and its signature/key before installing it.
+      # Transient upstream 5xx responses must not require rerunning the entire
+      # parity matrix. Retry setup only; all native checks below still run once.
+      - name: Set up OCaml (attempt 1/3)
+        id: ocaml-setup-1
+        continue-on-error: true
+        uses: ocaml/setup-ocaml@v3
         with:
           ocaml-compiler: ${{ startsWith(matrix.target, 'windows-') && needs.plan.outputs.windows-ocaml || needs.plan.outputs.ocaml }}
           windows-compiler: mingw
           cache-prefix: native-payload-no-compression-v2
+      - name: Back off before OCaml setup retry
+        if: ${{ !cancelled() && steps.ocaml-setup-1.outcome == 'failure' }}
+        run: python -c "import time; time.sleep(15)"
+      - name: Set up OCaml (attempt 2/3)
+        id: ocaml-setup-2
+        if: ${{ !cancelled() && steps.ocaml-setup-1.outcome == 'failure' }}
+        continue-on-error: true
+        uses: ocaml/setup-ocaml@v3
+        with:
+          ocaml-compiler: ${{ startsWith(matrix.target, 'windows-') && needs.plan.outputs.windows-ocaml || needs.plan.outputs.ocaml }}
+          windows-compiler: mingw
+          cache-prefix: native-payload-no-compression-v2
+      - name: Back off before final OCaml setup attempt
+        if: ${{ !cancelled() && steps.ocaml-setup-2.outcome == 'failure' }}
+        run: python -c "import time; time.sleep(30)"
+      - name: Set up OCaml (attempt 3/3)
+        id: ocaml-setup-3
+        if: ${{ !cancelled() && steps.ocaml-setup-2.outcome == 'failure' }}
+        uses: ocaml/setup-ocaml@v3
+        with:
+          ocaml-compiler: ${{ startsWith(matrix.target, 'windows-') && needs.plan.outputs.windows-ocaml || needs.plan.outputs.ocaml }}
+          windows-compiler: mingw
+          cache-prefix: native-payload-no-compression-v2
+      - name: Require successful OCaml setup
+        if: ${{ !cancelled() && steps.ocaml-setup-1.outcome != 'success' && steps.ocaml-setup-2.outcome != 'success' && steps.ocaml-setup-3.outcome != 'success' }}
+        run: python -c "raise SystemExit('OCaml setup did not succeed; native verification cannot proceed')"
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
