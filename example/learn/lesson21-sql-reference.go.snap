@@ -101,7 +101,7 @@ func FindFeatured(cat1 string, cat2 string) []Product {
 //line lesson21-sql-reference.tesl:242
 func CheapestProducts(n teslrt.Int) []Product {
 //line lesson21-sql-reference.tesl:243
-	return teslrt.TableSelectSorted(ProductTable, func(_ Product) bool {
+	return teslrt.TableSelectTop(ProductTable, func(_ Product) bool {
 		return true
 	}, func(teslLeft, teslRight Product) bool {
 		return (teslrt.Compare(teslLeft.Price, teslRight.Price) < 0)
@@ -233,7 +233,9 @@ func CreateWithWitness(name string, price teslrt.Int) Product {
 //line lesson21-sql-reference.tesl:317
 func BatchCreate(products []Product) struct{} {
 //line lesson21-sql-reference.tesl:318
-	return teslrt.TableInsertMany(ProductTable, "Product", products, func(teslRow, teslNew Product) bool { return (teslRow.Id == teslNew.Id) }, teslrt.UniqueIndexOf(
+	return teslrt.TableInsertManyKeyed(ProductTable, "Product", products, func(teslRow, teslNew Product) bool { return (teslRow.Id == teslNew.Id) }, teslrt.InsertKeyOf(func(teslRow Product) string {
+		return teslRow.Id
+	}), teslrt.InsertIndexOf(teslrt.UniqueIndexOf(
 		"Product",
 		[]string{"name"},
 		nil,
@@ -243,7 +245,9 @@ func BatchCreate(products []Product) struct{} {
 		func(teslRow Product) string {
 			return "(" + teslRow.Name + ")"
 		},
-	))
+	), teslrt.InsertKeyOf(func(teslRow Product) string {
+		return teslRow.Name
+	})))
 }
 
 //line lesson21-sql-reference.tesl:325

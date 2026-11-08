@@ -811,6 +811,7 @@ if [ "$go_gate_fail" -eq 0 ]; then
       bash "$SCRIPT_DIR/scripts/go-fuzz-target.sh" ./teslrt FuzzIntDecimalAndJSONRoundTrip &&
       bash "$SCRIPT_DIR/scripts/go-fuzz-target.sh" ./teslrt FuzzIntArithmeticAgainstBig &&
       bash "$SCRIPT_DIR/scripts/go-fuzz-target.sh" ./teslrt FuzzIntJSONInput &&
+      bash "$SCRIPT_DIR/scripts/go-fuzz-target.sh" ./teslrt FuzzTableBoundedSelection &&
       bash "$SCRIPT_DIR/scripts/go-fuzz-target.sh" ./teslrt FuzzMigrationCatalogLiteral &&
       bash "$SCRIPT_DIR/scripts/go-fuzz-target.sh" ./teslrt FuzzCompiledMigrationHistory &&
       bash "$SCRIPT_DIR/scripts/go-fuzz-target.sh" ./teslrt FuzzRowCanonicalFraming &&
@@ -1562,7 +1563,7 @@ else
         # tool that is missing is never a gate failure.
         phase_end SKIP
     else
-        printf "  %s✗%s  the browser checker diverged from the CLI (see above)\n" "$C_RED" "$C_RESET"
+        printf "  %s✗%s  playground build or parity check failed (see above)\n" "$C_RED" "$C_RESET"
         phase_end FAIL
     fi
 fi

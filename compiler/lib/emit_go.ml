@@ -2300,6 +2300,14 @@ let rec supports_column_ordering = function
   | TNewtype info -> (not info.secret) && supports_column_ordering info.base
   | other -> supports_ordering other
 
+(* Bounded Memory selection changes comparison order. Only these emitted field
+   comparisons are pure, non-throwing strict weak orders. IEEE Float/Quantity
+   comparisons (also inside nominal wrappers) keep the legacy NaN behavior. *)
+let rec supports_top_selection = function
+  | TInt | TString | TBool -> true
+  | TNewtype info -> not info.secret && supports_top_selection info.base
+  | _ -> false
+
 (* A generic ADT has no comparable Go form: `TeslEqual` would have to dispatch
    `teslrt.Equal` for whatever the type parameter was instantiated with, which Go
    generics cannot express without an interface the thin-runtime invariant forbids.
@@ -9102,6 +9110,48 @@ and sql_unique_arguments ~indent loc (info : entity_info) =
   | [] -> ""
   | values -> ", " ^ String.concat ", " values
 
+(* Only compiler-owned scalar projections enter the keyed batch path. A secret's
+   constant-time comparison cannot become a hash lookup. Nullable unique columns
+   are unwrapped only after the original Constrained check. Composite keys are
+   structured tuples, never ambiguous diagnostic strings. *)
+and sql_insert_key ~indent ~nullable loc info fields =
+  let rec supported = function
+    | TString | TBool | TInt -> true
+    | TNewtype { secret = false; base; _ } -> supported base
+    | _ -> false in
+  let parts = List.map (fun field ->
+    let ty = entity_column loc info field in
+    let operand = "teslRow." ^ record_field_go_name field in
+    let ty,operand = match nullable, maybe_element ty with
+      | true, Some inner -> inner, operand ^ ".SomethingValue"
+      | _ -> ty,operand in
+    if not (supported ty) then None else
+    Option.map (fun (key_type,derive) -> key_type,derive operand) (comparable_key ty)) fields in
+  if List.exists Option.is_none parts || parts=[] then None else
+  let rec tuple = function
+    | [part] -> part
+    | (ty,value)::rest ->
+      let rest_ty,rest_value = tuple rest in
+      let key_type = Printf.sprintf "teslrt.Tuple2[%s, %s]" ty rest_ty in
+      key_type, Printf.sprintf "%s{Tuple2First: %s, Tuple2Second: %s}" key_type value rest_value
+    | [] -> assert false in
+  let key_type,value = tuple (List.map Option.get parts) in
+  Some (Printf.sprintf "teslrt.InsertKeyOf(func(teslRow %s) %s {\n%s\treturn %s\n%s})"
+    (sql_row_type info) key_type indent value indent)
+
+and sql_insert_many_keys ~indent loc info =
+  let primary = sql_insert_key ~indent ~nullable:false loc info [info.ent_primary_key] in
+  let indexes = List.filter (fun (index:entity_index) -> index.ix_unique) info.ent_indexes in
+  let keys = List.map (fun (index:entity_index) ->
+    sql_insert_key ~indent ~nullable:true loc info index.ix_fields) indexes in
+  match primary with
+  | Some primary when List.for_all Option.is_some keys ->
+    let constraints = sql_unique_indexes ~indent loc info in
+    let values = List.map2 (fun index key ->
+      "teslrt.InsertIndexOf(" ^ index ^ ", " ^ Option.get key ^ ")") constraints keys in
+    Some (primary, match values with [] -> "" | _ -> ", " ^ String.concat ", " values)
+  | _ -> None
+
 (* The emitted `teslrt.PgSql(…)`: one statement and a THUNK for the arguments its placeholders
    stand for.  A thunk because both forms of the query sit at this one call site but only one of
    them runs: an eager slice would evaluate a `where` operand that reads the clock, draws a
@@ -9223,11 +9273,16 @@ and emit_sql_form ?(indent="") signatures env loc form =
       sql_where_text ~joins:exists ~indent signatures env loc info seed.binder all_clauses
         builder in
     let db_ref (database : database_info) = qualified database.db_owner database.db_go_var in
+    let top_order = match seed.order with
+      | Some (field, _) -> supports_top_selection (entity_column loc info field)
+      | None -> false in
+    let top_range = top_order && Option.is_some seed.limit in
     (match seed.kind with
      | SelectMany ->
        (match pg with
         | Some database when Option.is_some info.ent_row_access ->
-          Printf.sprintf "teslrt.DbRowSelect(%s, %s, %s, %s, %s, %s, %s)"
+           Printf.sprintf "teslrt.%s(%s, %s, %s, %s, %s, %s, %s)"
+             (if top_range then "DbRowSelectTop" else "DbRowSelect")
             (sql_access_ref info) (db_ref database) table predicate
             (match ordering () with None -> "nil" | Some less -> less) (range ())
             (sql_row_query ~indent signatures env loc info seed.binder all_clauses seed.order seed.limit seed.offset)
@@ -9237,7 +9292,8 @@ and emit_sql_form ?(indent="") signatures env loc form =
             Printf.sprintf "select %s from %s%s%s%s" (sql_column_list info)
               (sql_qualified_table database info) (where builder)
               (sql_order_text loc info seed.order) (sql_range_text seed.limit seed.offset) in
-          Printf.sprintf "teslrt.DbSelect(%s, %s, %s, %s, %s, %s, %s)"
+           Printf.sprintf "teslrt.%s(%s, %s, %s, %s, %s, %s, %s)"
+             (if top_range then "DbSelectTop" else "DbSelect")
             (db_ref database) table predicate
             (match ordering () with None -> "nil" | Some less -> less)
             (range ()) (sql_plan ~indent statement builder) (sql_scanner loc info)
@@ -9247,7 +9303,8 @@ and emit_sql_form ?(indent="") signatures env loc form =
            | None, _, _ ->
              Printf.sprintf "teslrt.TableSelectRange(%s, %s, %s)" table predicate (range ())
            | Some less, _, _ ->
-             Printf.sprintf "teslrt.TableSelectSorted(%s, %s, %s, %s)"
+              Printf.sprintf "teslrt.%s(%s, %s, %s, %s)"
+                (if top_range then "TableSelectTop" else "TableSelectSorted")
                table predicate less (range ())))
      | SelectOne ->
        (* `limit`/`offset` on a `selectOne` decide nothing — `order` is what decides which
@@ -9258,7 +9315,8 @@ and emit_sql_form ?(indent="") signatures env loc form =
           this; reaching here means that rule was bypassed)";
        (match pg with
         | Some database when Option.is_some info.ent_row_access ->
-          Printf.sprintf "teslrt.DbRowSelectOne(%s, %s, %s, %s, %s, %s)"
+           Printf.sprintf "teslrt.%s(%s, %s, %s, %s, %s, %s)"
+             (if top_order then "DbRowSelectOneTop" else "DbRowSelectOne")
             (sql_access_ref info) (db_ref database) table predicate
             (match ordering () with None -> "nil" | Some less -> less)
             (sql_row_query ~indent signatures env loc info seed.binder all_clauses seed.order (Some 1) None)
@@ -9268,7 +9326,8 @@ and emit_sql_form ?(indent="") signatures env loc form =
             Printf.sprintf "select %s from %s%s%s limit 1" (sql_column_list info)
               (sql_qualified_table database info) (where builder)
               (sql_order_text loc info seed.order) in
-          Printf.sprintf "teslrt.DbSelectOne(%s, %s, %s, %s, %s, %s)"
+           Printf.sprintf "teslrt.%s(%s, %s, %s, %s, %s, %s)"
+             (if top_order then "DbSelectOneTop" else "DbSelectOne")
             (db_ref database) table predicate
             (match ordering () with None -> "nil" | Some less -> less)
             (sql_plan ~indent statement builder) (sql_scanner loc info)
@@ -9276,7 +9335,8 @@ and emit_sql_form ?(indent="") signatures env loc form =
           (match ordering () with
            | None -> Printf.sprintf "teslrt.TableSelectOne(%s, %s)" table predicate
            | Some less ->
-             Printf.sprintf "teslrt.TableSelectOneSorted(%s, %s, %s)" table predicate less))
+              Printf.sprintf "teslrt.%s(%s, %s, %s)"
+                (if top_order then "TableSelectOneTop" else "TableSelectOneSorted") table predicate less))
      | SelectCount ->
        (* An aggregate answers ONE value over the whole matching set, so none of these
           decides anything; `check_meaningless_limit_offset` refuses them for both backends,
@@ -9656,13 +9716,18 @@ and emit_sql_form ?(indent="") signatures env loc form =
     in
     (match info.ent_database with
      | None ->
-       Printf.sprintf "teslrt.TableInsertMany(%s, %s, %s, %s%s)"
-         (sql_table_ref info) (go_quote info.ent_tesl_name) rows (sql_key_conflict loc info)
-         (sql_unique_arguments ~indent loc info)
+       let name,primary,unique = match sql_insert_many_keys ~indent loc info with
+         | Some (primary,unique) -> "TableInsertManyKeyed",sql_key_conflict loc info ^ ", " ^ primary,unique
+         | None -> "TableInsertMany",sql_key_conflict loc info,sql_unique_arguments ~indent loc info in
+       Printf.sprintf "teslrt.%s(%s, %s, %s, %s%s)"
+         name (sql_table_ref info) (go_quote info.ent_tesl_name) rows primary unique
      | Some database when Option.is_some info.ent_row_access ->
-       Printf.sprintf "teslrt.DbRowInsertMany(%s, %s, %s, %s, %s, %s%s)"
-         (sql_access_ref info) (qualified database.db_owner database.db_go_var) (sql_table_ref info)
-         (go_quote info.ent_tesl_name) rows (sql_key_conflict loc info) (sql_unique_arguments ~indent loc info)
+       let name,primary,unique = match sql_insert_many_keys ~indent loc info with
+         | Some (primary,unique) -> "DbRowInsertManyKeyed",sql_key_conflict loc info ^ ", " ^ primary,unique
+         | None -> "DbRowInsertMany",sql_key_conflict loc info,sql_unique_arguments ~indent loc info in
+       Printf.sprintf "teslrt.%s(%s, %s, %s, %s, %s, %s%s)"
+         name (sql_access_ref info) (qualified database.db_owner database.db_go_var) (sql_table_ref info)
+         (go_quote info.ent_tesl_name) rows primary unique
      | Some database ->
        (* The rows are only known at run time, so the statement is fixed and its ARGUMENTS are
           read off each row — the one query whose plan cannot be a value.  One statement per
@@ -9676,10 +9741,13 @@ and emit_sql_form ?(indent="") signatures env loc form =
            (String.concat ", "
               (List.mapi (fun index _ -> Printf.sprintf "$%d" (index + 1)) columns)) in
        let bind = sql_row_binder loc indent info columns in
-       Printf.sprintf "teslrt.DbInsertMany(%s, %s, %s, %s, %s, %s, %s%s)"
-         (qualified database.db_owner database.db_go_var) (sql_table_ref info)
-         (go_quote info.ent_tesl_name) rows (sql_key_conflict loc info)
-         (go_quote statement) bind (sql_unique_arguments ~indent loc info))
+       let name,primary,unique = match sql_insert_many_keys ~indent loc info with
+         | Some (primary,unique) -> "DbInsertManyKeyed",sql_key_conflict loc info ^ ", " ^ primary,unique
+         | None -> "DbInsertMany",sql_key_conflict loc info,sql_unique_arguments ~indent loc info in
+       Printf.sprintf "teslrt.%s(%s, %s, %s, %s, %s, %s, %s%s)"
+         name (qualified database.db_owner database.db_go_var) (sql_table_ref info)
+         (go_quote info.ent_tesl_name) rows primary
+         (go_quote statement) bind unique)
   | SqlUpdate update ->
     let info = entity_of_query loc update.entity in
     sql_check_where_field loc None update.clauses;
@@ -10561,6 +10629,7 @@ let runtime_file_gates : (string * string list) list = [
 
 let runtime_file_gates = List.map (fun (name, files) ->
   name, if name = "postgres" then files @ [
+    "migration_row_update_bulk.go";
     "migration_stage_preparation.go";
     "migration_stage_text.go";
     "migration_writer_context.go";

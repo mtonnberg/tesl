@@ -194,7 +194,9 @@ func insertTranscript(conversationId string, json string) struct{} {
 		rows := []ConversationRecord{ConversationRecord{Id: conversationId, Transcript: json}}
 		_ = rows
 //line lesson70-agent-async-work.tesl:214
-		return teslrt.DbInsertMany(ReportDbDatabase, ConversationRecordTable, "ConversationRecord", rows, func(teslRow, teslNew ConversationRecord) bool { return (teslRow.Id == teslNew.Id) }, "insert into \"lesson70\".\"report_conversations\" (\"id\", \"transcript\") values ($1, $2)", func(teslRow ConversationRecord) []any {
+		return teslrt.DbInsertManyKeyed(ReportDbDatabase, ConversationRecordTable, "ConversationRecord", rows, func(teslRow, teslNew ConversationRecord) bool { return (teslRow.Id == teslNew.Id) }, teslrt.InsertKeyOf(func(teslRow ConversationRecord) string {
+			return teslRow.Id
+		}), "insert into \"lesson70\".\"report_conversations\" (\"id\", \"transcript\") values ($1, $2)", func(teslRow ConversationRecord) []any {
 			return []any{teslRow.Id, teslRow.Transcript}
 		})
 	}

@@ -244,7 +244,7 @@ fn q(org: String, pat: String) -> Int requires [dbRead Thing] =
 |} in
   (* Before the fix this emitted `(ilike … pat order … asc limit 5)` — the clause
      keywords as ordinary identifiers, and `t` as a free variable. *)
-  if not (contains out "teslrt.TableSelectSorted(") then
+  if not (contains out "teslrt.TableSelectTop(") then
     failf "the order clause did not reach the query:\n%s" out;
   if not (contains out ", 0, 5)") then
     failf "the limit clause did not reach the query:\n%s" out

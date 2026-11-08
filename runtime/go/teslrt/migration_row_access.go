@@ -353,18 +353,60 @@ func pgRowCursorUpdateUsing[Row any](ctx context.Context, a *pgRowTransactionAdm
 		if len(next) != len(values) {
 			return nil, fmt.Errorf("typed update changed row count")
 		}
-		for i, value := range values {
-			before, writeErr := data.materialize(a, value)
+		bulk := !one && pgCanBulkRowUpdate(a, capture)
+		for start := 0; start < len(values); {
+			if !bulk || start == 0 || len(values)-start == 1 {
+				before, writeErr := data.materialize(a, values[start])
+				if writeErr != nil {
+					return nil, writeErr
+				}
+				after, writeErr := data.materialize(a, next[start])
+				if writeErr != nil {
+					return nil, writeErr
+				}
+				if _, writeErr := pgUpdateMaterializedPhysicalRow(ctx, a, before, after, capture...); writeErr != nil {
+					return nil, writeErr
+				}
+				start++
+				continue
+			}
+			limit := min(start+128, len(values))
+			before, after := make([]pgPhysicalWrite, 0, limit-start), make([]pgPhysicalWrite, 0, limit-start)
+			bytes := 0
+			for index := start; index < limit; index++ {
+				original, writeErr := data.materialize(a, values[index])
+				if writeErr != nil {
+					return nil, writeErr
+				}
+				updated, writeErr := data.materialize(a, next[index])
+				if writeErr != nil {
+					return nil, writeErr
+				}
+				// The UPDATE predicate uses only the original primary key. Do not
+				// retain the otherwise unused original encoded payload for a group.
+				before, after = append(before, pgPhysicalWrite{primary: original.primary}), append(after, updated)
+				size, supported := pgRowBulkUpdateBytes(original.primary, updated)
+				if !supported || size > pgRowBulkUpdateMaxBytes-bytes {
+					// Bound preparation to the budget plus at most this one row.
+					// Reuse prepared values on fallback; never re-run a codec.
+					bulk = false
+					limit = index + 1
+					break
+				}
+				bytes += size
+			}
+			used, writeErr := pgUpdateMaterializedPhysicalRows(ctx, a, before, after)
 			if writeErr != nil {
 				return nil, writeErr
 			}
-			after, writeErr := data.materialize(a, next[i])
-			if writeErr != nil {
-				return nil, writeErr
+			if !used {
+				for index := range after {
+					if _, writeErr := pgUpdateMaterializedPhysicalRow(ctx, a, before[index], after[index], capture...); writeErr != nil {
+						return nil, writeErr
+					}
+				}
 			}
-			if _, writeErr := pgUpdateMaterializedPhysicalRow(ctx, a, before, after, capture...); writeErr != nil {
-				return nil, writeErr
-			}
+			start = limit
 		}
 		if one {
 			return next, nil
@@ -420,6 +462,23 @@ func DbRowSelectOne[Row any](slot *PgRowAccessSlot[Row], database *Database, tab
 	}
 	return Something(rows[0])
 }
+
+// These dispatchers change only Memory selection. PostgreSQL retains its exact
+// typed query and admission path; the emitter supplies a pure total comparator.
+func DbRowSelectTop[Row any](slot *PgRowAccessSlot[Row], database *Database, table *Table[Row], match func(Row) bool, less func(Row, Row) bool, offset, limit int, query PgRowQuery) []Row {
+	if database.bound() == nil {
+		return TableSelectTop(table, match, less, offset, limit)
+	}
+	return DbRowSelect(slot, database, table, match, less, offset, limit, query)
+}
+
+func DbRowSelectOneTop[Row any](slot *PgRowAccessSlot[Row], database *Database, table *Table[Row], match func(Row) bool, less func(Row, Row) bool, query PgRowQuery) Maybe[Row] {
+	if database.bound() == nil {
+		return TableSelectOneTop(table, match, less)
+	}
+	return DbRowSelectOne(slot, database, table, match, less, query)
+}
+
 func DbRowInsert[Row any](slot *PgRowAccessSlot[Row], database *Database, table *Table[Row], entity string, row Row, conflicts func(Row, Row) bool, unique ...UniqueIndex[Row]) Row {
 	if database.bound() == nil {
 		return TableInsert(table, entity, row, conflicts, unique...)
@@ -473,6 +532,21 @@ func DbRowUpdateReturnOne[Row any](slot *PgRowAccessSlot[Row], database *Databas
 func DbRowInsertMany[Row any](slot *PgRowAccessSlot[Row], database *Database, table *Table[Row], entity string, rows []Row, conflicts func(Row, Row) bool, unique ...UniqueIndex[Row]) struct{} {
 	if database.bound() == nil {
 		return TableInsertMany(table, entity, rows, conflicts, unique...)
+	}
+	access := slot.access(database)
+	for _, row := range rows {
+		if err := access.insert(row); err != nil {
+			panic(pgFailure("database", err))
+		}
+	}
+	return struct{}{}
+}
+
+// DbRowInsertManyKeyed retains the checked row-access slot on PostgreSQL; only
+// its unbound Memory implementation uses the compiler's comparable keys.
+func DbRowInsertManyKeyed[Row any](slot *PgRowAccessSlot[Row], database *Database, table *Table[Row], entity string, rows []Row, conflicts func(Row, Row) bool, primary InsertKey[Row], unique ...InsertIndex[Row]) struct{} {
+	if database.bound() == nil {
+		return TableInsertManyKeyed(table, entity, rows, conflicts, primary, unique...)
 	}
 	access := slot.access(database)
 	for _, row := range rows {

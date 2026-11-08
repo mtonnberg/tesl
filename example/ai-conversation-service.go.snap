@@ -321,7 +321,9 @@ func insertTranscript(requestUser Consumer, conversationId string, json string) 
 		rows := []ConversationRecord{ConversationRecord{Id: conversationId, OwnerId: requestUser.Id, Transcript: json}}
 		_ = rows
 //line ai-conversation-service.tesl:227
-		return teslrt.DbInsertMany(ConversationDbDatabase, ConversationRecordTable, "ConversationRecord", rows, func(teslRow, teslNew ConversationRecord) bool { return (teslRow.Id == teslNew.Id) }, "insert into \"ai_conversations\".\"ai_conversations\" (\"id\", \"owner_id\", \"transcript\") values ($1, $2, $3)", func(teslRow ConversationRecord) []any {
+		return teslrt.DbInsertManyKeyed(ConversationDbDatabase, ConversationRecordTable, "ConversationRecord", rows, func(teslRow, teslNew ConversationRecord) bool { return (teslRow.Id == teslNew.Id) }, teslrt.InsertKeyOf(func(teslRow ConversationRecord) string {
+			return teslRow.Id
+		}), "insert into \"ai_conversations\".\"ai_conversations\" (\"id\", \"owner_id\", \"transcript\") values ($1, $2, $3)", func(teslRow ConversationRecord) []any {
 			return []any{teslRow.Id, teslRow.OwnerId, teslRow.Transcript}
 		})
 	}
@@ -602,7 +604,9 @@ func TestTesl0(teslT *testing.T) {
 		seed := []Order{Order{Id: "ord-1", Status: "shipped"}}
 		_ = seed
 //line ai-conversation-service.tesl:325
-		_ = teslrt.DbInsertMany(ConversationDbDatabase, OrderTable, "Order", seed, func(teslRow, teslNew Order) bool { return (teslRow.Id == teslNew.Id) }, "insert into \"ai_conversations\".\"orders\" (\"id\", \"status\") values ($1, $2)", func(teslRow Order) []any {
+		_ = teslrt.DbInsertManyKeyed(ConversationDbDatabase, OrderTable, "Order", seed, func(teslRow, teslNew Order) bool { return (teslRow.Id == teslNew.Id) }, teslrt.InsertKeyOf(func(teslRow Order) string {
+			return teslRow.Id
+		}), "insert into \"ai_conversations\".\"orders\" (\"id\", \"status\") values ($1, $2)", func(teslRow Order) []any {
 			return []any{teslRow.Id, teslRow.Status}
 		})
 		teslLeft1 := LookupOrderStatus("ord-1")
@@ -638,7 +642,9 @@ func TestTesl1(teslT *testing.T) {
 		seed := []Order{Order{Id: "ord-2", Status: "delivered"}}
 		_ = seed
 //line ai-conversation-service.tesl:334
-		_ = teslrt.DbInsertMany(ConversationDbDatabase, OrderTable, "Order", seed, func(teslRow, teslNew Order) bool { return (teslRow.Id == teslNew.Id) }, "insert into \"ai_conversations\".\"orders\" (\"id\", \"status\") values ($1, $2)", func(teslRow Order) []any {
+		_ = teslrt.DbInsertManyKeyed(ConversationDbDatabase, OrderTable, "Order", seed, func(teslRow, teslNew Order) bool { return (teslRow.Id == teslNew.Id) }, teslrt.InsertKeyOf(func(teslRow Order) string {
+			return teslRow.Id
+		}), "insert into \"ai_conversations\".\"orders\" (\"id\", \"status\") values ($1, $2)", func(teslRow Order) []any {
 			return []any{teslRow.Id, teslRow.Status}
 		})
 		{

@@ -79,7 +79,9 @@ func TestTesl0(teslT *testing.T) {
 		seed := []Order{Order{Id: "o1", Status: "new"}}
 		_ = seed
 //line db-write-test-body-tests.tesl:39
-		_ = teslrt.TableInsertMany(OrderTable, "Order", seed, func(teslRow, teslNew Order) bool { return (teslRow.Id == teslNew.Id) })
+		_ = teslrt.TableInsertManyKeyed(OrderTable, "Order", seed, func(teslRow, teslNew Order) bool { return (teslRow.Id == teslNew.Id) }, teslrt.InsertKeyOf(func(teslRow Order) string {
+			return teslRow.Id
+		}))
 		teslLeft1 := statusOf("o1")
 //line db-write-test-body-tests.tesl:40
 		if teslLeft1 != "new" {
@@ -107,7 +109,9 @@ func TestTesl1(teslT *testing.T) {
 		rows := []Order{Order{Id: "o3", Status: "new"}}
 		_ = rows
 //line db-write-test-body-tests.tesl:45
-		_ = teslrt.TableInsertMany(OrderTable, "Order", rows, func(teslRow, teslNew Order) bool { return (teslRow.Id == teslNew.Id) })
+		_ = teslrt.TableInsertManyKeyed(OrderTable, "Order", rows, func(teslRow, teslNew Order) bool { return (teslRow.Id == teslNew.Id) }, teslrt.InsertKeyOf(func(teslRow Order) string {
+			return teslRow.Id
+		}))
 		teslLeft2 := statusOf("o3")
 //line db-write-test-body-tests.tesl:46
 		if teslLeft2 != "new" {
@@ -149,7 +153,9 @@ func TestTesl2(teslT *testing.T) {
 		rows := []Order{Order{Id: "o4", Status: "new"}}
 		_ = rows
 //line db-write-test-body-tests.tesl:55
-		_ = teslrt.TableInsertMany(OrderTable, "Order", rows, func(teslRow, teslNew Order) bool { return (teslRow.Id == teslNew.Id) })
+		_ = teslrt.TableInsertManyKeyed(OrderTable, "Order", rows, func(teslRow, teslNew Order) bool { return (teslRow.Id == teslNew.Id) }, teslrt.InsertKeyOf(func(teslRow Order) string {
+			return teslRow.Id
+		}))
 		teslLeft4 := statusOf("o4")
 //line db-write-test-body-tests.tesl:56
 		if teslLeft4 != "new" {
@@ -187,7 +193,9 @@ func TestTesl3(teslT *testing.T) {
 		rows := []Order{Order{Id: "o5", Status: "new"}}
 		_ = rows
 //line db-write-test-body-tests.tesl:67
-		_ = teslrt.TableInsertMany(OrderTable, "Order", rows, func(teslRow, teslNew Order) bool { return (teslRow.Id == teslNew.Id) })
+		_ = teslrt.TableInsertManyKeyed(OrderTable, "Order", rows, func(teslRow, teslNew Order) bool { return (teslRow.Id == teslNew.Id) }, teslrt.InsertKeyOf(func(teslRow Order) string {
+			return teslRow.Id
+		}))
 		teslLeft6 := statusOf("o5")
 //line db-write-test-body-tests.tesl:68
 		if teslLeft6 != "new" {
@@ -225,7 +233,9 @@ func TestTesl4(teslT *testing.T) {
 		rows := []Order{Order{Id: "keep", Status: "us"}, Order{Id: "drop", Status: "eu"}}
 		_ = rows
 //line db-write-test-body-tests.tesl:76
-		_ = teslrt.TableInsertMany(OrderTable, "Order", rows, func(teslRow, teslNew Order) bool { return (teslRow.Id == teslNew.Id) })
+		_ = teslrt.TableInsertManyKeyed(OrderTable, "Order", rows, func(teslRow, teslNew Order) bool { return (teslRow.Id == teslNew.Id) }, teslrt.InsertKeyOf(func(teslRow Order) string {
+			return teslRow.Id
+		}))
 //line db-write-test-body-tests.tesl:77
 		_ = teslrt.TableDelete(OrderTable, func(o Order) bool {
 			return (o.Id == "drop") && (o.Status == "eu")

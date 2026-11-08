@@ -192,10 +192,14 @@ func seedFixtures() bool {
 			_ = widgets
 			{
 //line machine-login-tests.tesl:245
-				_ = teslrt.TableInsertMany(InstallationTable, "Installation", installs, func(teslRow, teslNew Installation) bool { return (teslRow.Id == teslNew.Id) })
+				_ = teslrt.TableInsertManyKeyed(InstallationTable, "Installation", installs, func(teslRow, teslNew Installation) bool { return (teslRow.Id == teslNew.Id) }, teslrt.InsertKeyOf(func(teslRow Installation) string {
+					return teslRow.Id
+				}))
 				{
 //line machine-login-tests.tesl:246
-					_ = teslrt.TableInsertMany(WidgetTable, "Widget", widgets, func(teslRow, teslNew Widget) bool { return (teslRow.Id == teslNew.Id) })
+					_ = teslrt.TableInsertManyKeyed(WidgetTable, "Widget", widgets, func(teslRow, teslNew Widget) bool { return (teslRow.Id == teslNew.Id) }, teslrt.InsertKeyOf(func(teslRow Widget) string {
+						return teslRow.Id
+					}))
 //line machine-login-tests.tesl:247
 					return true
 				}

@@ -89,6 +89,26 @@ func DbSelectOne[Row any](database *Database, table *Table[Row], match func(Row)
 	return TableSelectOneSorted(table, match, less)
 }
 
+// DbSelectTop has the same PostgreSQL plan as DbSelect. Its Memory comparator
+// satisfies TableSelectTop's pure, total ordering contract, selected by the emitter.
+func DbSelectTop[Row any](database *Database, table *Table[Row], match func(Row) bool,
+	less func(Row, Row) bool, offset, limit int, plan PgPlan,
+	scan func(pgx.CollectableRow) (Row, error)) []Row {
+	if connection := database.bound(); connection != nil {
+		return PgQueryPlan(connection, plan, scan)
+	}
+	return TableSelectTop(table, match, less, offset, limit)
+}
+
+func DbSelectOneTop[Row any](database *Database, table *Table[Row], match func(Row) bool,
+	less func(Row, Row) bool, plan PgPlan,
+	scan func(pgx.CollectableRow) (Row, error)) Maybe[Row] {
+	if connection := database.bound(); connection != nil {
+		return PgQueryOnePlan(connection, plan, scan)
+	}
+	return TableSelectOneTop(table, match, less)
+}
+
 // DbCount is `selectCount`. The server counts in the database rather than shipping rows to be
 // counted here, which is the whole reason an aggregate is a separate query shape.
 func DbCount[Row any](database *Database, table *Table[Row], match func(Row) bool,
@@ -168,6 +188,20 @@ func DbInsertMany[Row any](database *Database, table *Table[Row], entity string,
 		return struct{}{}
 	}
 	return TableInsertMany(table, entity, rows, conflicts, unique...)
+}
+
+// DbInsertManyKeyed changes only the unbound Memory path. PostgreSQL still binds
+// and executes each row in order, with the same partial-failure semantics.
+func DbInsertManyKeyed[Row any](database *Database, table *Table[Row], entity string, rows []Row,
+	conflicts func(Row, Row) bool, primary InsertKey[Row], statement string, bind func(Row) []any,
+	unique ...InsertIndex[Row]) struct{} {
+	if connection := database.bound(); connection != nil {
+		for _, row := range rows {
+			PgExec(connection, statement, bind(row))
+		}
+		return struct{}{}
+	}
+	return TableInsertManyKeyed(table, entity, rows, conflicts, primary, unique...)
 }
 
 // DbUpdate is `update … set …`. Nothing is reported back: a plain update is a statement.

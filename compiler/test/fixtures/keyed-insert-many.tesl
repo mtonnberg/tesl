@@ -1,0 +1,80 @@
+module KeyedInsertMany exposing []
+import Tesl.Prelude exposing [Int, String, Bool(..), List]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.Float exposing [Float]
+import Tesl.Database exposing [Database, Memory]
+import Tesl.DB exposing [dbRead, dbWrite]
+import Tesl.List exposing [List.append, List.map, List.range]
+
+type RowId = Int
+type Label = String
+entity Item table "items" primaryKey id {
+  id: RowId
+  label: Maybe Label
+  suffix: String
+  enabled: Bool
+  unique index [label, suffix, enabled]
+}
+entity FloatItem table "float_items" primaryKey id {
+  id: Int
+  value: Float
+  unique index [value]
+}
+secret Token = String
+entity SecretItem table "secret_items" primaryKey id { id: Token }
+database Main = Database { schema: "keyed_insert", entities: [Item, FloatItem, SecretItem], backend: Memory }
+
+fn batch(rows: List Item) -> Int requires [dbWrite Item] =
+  let _ = insertMany rows in Item
+  1
+fn atomicBatch(rows: List Item) -> Int requires [dbWrite Item] =
+  transaction {
+    batch rows
+  }
+fn countItems() -> Int requires [dbRead Item] = selectCount row from Item
+fn secretBatch(rows: List SecretItem) -> Int requires [dbWrite SecretItem] =
+  let _ = insertMany rows in SecretItem
+  1
+fn item(id: Int, label: Maybe Label, suffix: String, enabled: Bool) -> Item =
+  Item { id: RowId id, label: label, suffix: suffix, enabled: enabled }
+fn filler(id: Int) -> Item = item (100 + id) Nothing "filler" True
+# Exceed the small-batch scan cutoff so these tests exercise real map setup.
+fn large(rows: List Item) -> List Item = List.append rows (List.map filler (List.range 0 32))
+
+test "big nominal primary and nullable structured unique keys" requires [dbWrite Item, dbRead Item] {
+  let rows = large [item 18446744073709551616 Nothing "x" False,
+    item 36893488147419103232 Nothing "x" False,
+    item 3 (Something (Label "a b")) "c" False,
+    item 4 (Something (Label "a")) "b c" False,
+    item 5 (Something (Label "a")) "b c" True]
+  expect batch rows == 1
+  expect countItems() == 37
+  let duplicate = large [item 6 (Something (Label "a")) "b c" False]
+  expectFail batch duplicate
+  expect countItems() == 37
+}
+
+test "duplicate publishes prefix outside transaction" requires [dbWrite Item, dbRead Item] {
+  let rows = large [item 1 Nothing "x" False, item 2 Nothing "x" False, item 1 Nothing "y" True]
+  expectFail batch rows
+  expect countItems() == 2
+}
+
+test "rollback permits reinsertion" requires [dbWrite Item, dbRead Item] {
+  let rows = large [item 1 Nothing "x" False, item 2 Nothing "x" False, item 1 Nothing "y" True]
+  expectFail atomicBatch rows
+  expect countItems() == 0
+  let retry = large [item 1 Nothing "x" False, item 2 Nothing "x" False]
+  expect atomicBatch retry == 1
+  expect countItems() == 34
+}
+
+test "unsupported Float unique and secret primary retain equality" requires [dbWrite FloatItem, dbRead FloatItem, dbWrite SecretItem, dbRead SecretItem] {
+  let floats = [FloatItem { id: 1, value: 0.0 }, FloatItem { id: 2, value: -0.0 }]
+  let _ = insertMany floats in FloatItem
+  expect (selectCount row from FloatItem) == 2
+  let secrets = [SecretItem { id: Token "a" }, SecretItem { id: Token "b" }]
+  expect secretBatch secrets == 1
+  expect (selectCount row from SecretItem) == 2
+  expectFail secretBatch secrets
+}

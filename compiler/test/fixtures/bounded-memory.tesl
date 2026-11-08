@@ -1,0 +1,65 @@
+module BoundedMemory exposing []
+import Tesl.Prelude exposing [Int, String, Bool(..), List]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.Float exposing [Float, Float.nan]
+import Tesl.List exposing [List.range, List.map]
+import Tesl.Database exposing [Database, Memory]
+import Tesl.DB exposing [dbRead, dbWrite]
+
+type Rank = Int
+type FloatingRank = Float
+entity Item table "items" primaryKey id { id: Int, score: Int, name: String, enabled: Bool, rank: Rank }
+entity FloatItem table "float_items" primaryKey id { id: Int, value: Float, wrapped: FloatingRank }
+database Main = Database { schema: "selection", entities: [Item, FloatItem], backend: Memory }
+
+fn makeItem(id: Int) -> Item =
+  let score = if id < 10 then
+    999999999999999999999999999999
+  else
+    -999999999999999999999999999999
+  let name = if id < 10 then
+    "z"
+  else
+    "a"
+  Item { id: id, score: score, name: name, enabled: id < 10, rank: Rank score }
+fn makeFloatItem(id: Int) -> FloatItem =
+  let value = if id == 0 then
+    1.0
+  else if id == 1 then
+    Float.nan
+  else if id == 2 then
+    0.0
+  else
+    2.0
+  FloatItem { id: id, value: value, wrapped: FloatingRank value }
+fn itemId(row: Item) -> Int = row.id
+fn ids(rows: List Item) -> List Int = List.map itemId rows
+fn topNumbers() -> List Item requires [dbRead Item] = select item from Item order item.score asc limit 3
+fn topNames() -> List Item requires [dbRead Item] = select item from Item order item.name asc limit 3
+fn topFlags() -> List Item requires [dbRead Item] = select item from Item order item.enabled asc limit 3
+fn topRanks() -> List Item requires [dbRead Item] = select item from Item order item.rank asc limit 3
+fn page() -> List Item requires [dbRead Item] = select item from Item order item.score desc limit 2 offset 1
+fn first() -> Maybe Item requires [dbRead Item] = selectOne item from Item order item.score asc
+fn firstFloat() -> Maybe FloatItem requires [dbRead FloatItem] = selectOne item from FloatItem order item.value asc
+fn firstWrappedFloat() -> Maybe FloatItem requires [dbRead FloatItem] = selectOne item from FloatItem order item.wrapped asc
+
+test "bounded selection keeps ties, offsets, nominal keys and legacy NaN ordering" requires [dbRead Item, dbRead FloatItem, dbWrite Item, dbWrite FloatItem] {
+  let items = List.map makeItem (List.range 0 20)
+  let floats = List.map makeFloatItem (List.range 0 20)
+  let _ = insertMany items in Item
+  let _ = insertMany floats in FloatItem
+  expect ids (topNumbers()) == [10, 11, 12]
+  expect ids (topNames()) == [10, 11, 12]
+  expect ids (topFlags()) == [10, 11, 12]
+  expect ids (topRanks()) == [10, 11, 12]
+  expect ids (page()) == [1, 2]
+  case first() of
+    Nothing -> expect False
+    Something row -> expect row.id == 10
+  case firstFloat() of
+    Nothing -> expect False
+    Something row -> expect row.id == 0
+  case firstWrappedFloat() of
+    Nothing -> expect False
+    Something row -> expect row.id == 0
+}

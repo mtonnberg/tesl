@@ -255,3 +255,6 @@ Where to start, by task:
 - [Second migration performance sweep](migration-wave2.md)
 - [Migration compilation and model CI performance](migration-wave3.md)
 - [Fourth migration performance sweep](migration-wave4.md)
+- [Migration and HTTP performance: fifth sweep](migration-wave5.md)
+- [Runtime performance: bounded Memory selection](runtime-wave6.md)
+- [Cumulative runtime performance: PostgreSQL first](runtime-wave7.md)

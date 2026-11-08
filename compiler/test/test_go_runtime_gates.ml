@@ -150,11 +150,23 @@ let test_no_file_is_in_two_gates () =
       | None -> Hashtbl.replace seen name gate) names)
     Emit_go.runtime_file_gates
 
+(* Fail before invoking Go or downloading modules when a newly embedded file
+   imports pgx but was omitted from feature classification. The builds above
+   remain the authoritative dependency-closure checks for every file set. *)
+let test_pgx_imports_require_postgres () =
+  let postgres = Emit_go.runtime_gate_files "postgres" in
+  List.iter (fun (name, contents) ->
+    let uses_pgx = Compile.string_contains contents "\"github.com/jackc/pgx/v5" in
+    if uses_pgx && not (List.mem name postgres) then
+      failf "%s imports pgx but is not gated on PostgreSQL" name)
+    Embedded_go_runtime.files
+
 let () =
   Alcotest.run "Go runtime gates" [
     "file-sets", [
       Alcotest.test_case "the always-shipped set builds alone" `Slow test_ungated_set_builds;
       Alcotest.test_case "each gate builds on top of it" `Slow test_each_gate_builds;
       Alcotest.test_case "no file is in two gates" `Quick test_no_file_is_in_two_gates;
+      Alcotest.test_case "pgx imports require PostgreSQL" `Quick test_pgx_imports_require_postgres;
     ];
   ]
