@@ -167,7 +167,7 @@ if (( $# == 0 )); then
   runtime_test email-runtime 300 '^Test(PgEmail|Email|DurableEmail|SendEmail|DeliverEmail|DeliverPending|PruneSentEmail|StartEmailWorker|Outbox|ResetOutbox|HeaderFieldSafe|SmtpTimeout|TrappingDelivery)'
   runtime_test sse-broadcast 180 '^TestWorkerBroadcast'
   runtime_test combined-facilities 180 '^TestWorkerCombinedFacilities'
-  runtime_test row-generation 300 '^(TestPgMigration(TriggerCatalog|RowGeneration)|TestMigrationRowGeneration|TestPgRowBackfillBulk|TestPgRowHeaderOptimization|TestPgRowCatalogBatch)'
+  runtime_test row-generation 300 '^(TestPgMigration(TriggerCatalog|RowGeneration)|TestMigrationRowGeneration|TestPgRowBackfillBulk|TestPgRowBulkUpdate|TestPgRowHeaderOptimization|TestPgRowCatalogBatch)'
   compiler_test test_migration_queue
   compiler_test test_migration_queue_transform
   run_phase queue-pipeline 120 go -C "$repo_root/runtime/go" test -race -count=1 -timeout=60s ./teslrt -run '^TestQueueConversionPipeline'

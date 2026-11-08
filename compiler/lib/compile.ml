@@ -8,6 +8,7 @@ open Ast
 include Frontend_check
 
 let check_module ?skip_dep_body source m =
+  Migration_program.with_compilation_cache (fun () ->
   match Migration_application.with_contexts ~source m (fun () ->
   let additional = Migration_application.make ?skip_dep_body m in
   let diagnostics = Frontend_check.check_module ~additional
@@ -16,7 +17,7 @@ let check_module ?skip_dep_body source m =
     (Migration_source_diagnostics.check_module_source source m) @ diagnostics) with
   | Ok diagnostics -> diagnostics
   | Error errors -> Migration_declaration.diagnostics_of_errors errors @
-      Migration_proof_context.without_context (fun () -> Frontend_check.check_module ?skip_dep_body source m)
+      Migration_proof_context.without_context (fun () -> Frontend_check.check_module ?skip_dep_body source m))
 
 
 let source_parse_diagnostics filename source error =

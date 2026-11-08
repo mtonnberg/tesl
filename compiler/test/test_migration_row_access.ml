@@ -255,6 +255,15 @@ let export ?(contracts=false) ?(repeated=false) ?(bulk=false) destination=
   |> replace "[String, List]" "[String, List, Bool(..)]"
   |> replace "[telemetry]" "[telemetry, TelemetryConfig]"
   |> replace "App { database: Main" "App { telemetry: TelemetryConfig { service: \"row-access\", endpoint: \"in-memory\", console: True }, database: Main" in
+  let app=if not bulk then app else app
+   |> replace "api NotesApi {" "api NotesApi {\n put \"/bulk-transaction\" -> String"
+   |> replace "server NotesServer for NotesApi {" {|handler put bulkTransaction() -> String requires [dbWrite Note] =
+ transaction {
+  update note in Note
+   set note.memo = "bulk-transaction"
+  "edited"
+ }
+server NotesServer for NotesApi { bulkTransaction,|} in
  let file=save "app.tesl" app in
  let build version=
   accepts file (Source_input.read file);
@@ -397,7 +406,7 @@ let native_bulk () =
  Fun.protect ~finally:(fun () -> remove output) (fun () ->
   export ~contracts:true ~bulk:true output;
   command (Filename.concat (repository ()) "runtime/go") (Filename.concat output "bulk.log")
-   (Printf.sprintf "TESL_REQUIRE_BULK=1 TESL_ROW_SETTLED_PROGRAMS=%s timeout 150s go test -p 1 -race -tags tesl_migration_test -timeout 120s ./teslrt -run '^TestPgRowBackfillPipelineRollback$' -count=1 -v" (Filename.quote output)))
+   (Printf.sprintf "TESL_REQUIRE_BULK=1 TESL_ROW_SETTLED_PROGRAMS=%s timeout 150s go test -p 1 -race -tags tesl_migration_test -timeout 120s ./teslrt -run '^TestPgRow(BackfillPipelineRollback|SettledBulkUpdateRollback)$' -count=1 -v" (Filename.quote output)))
 
 let key_type = {|module Types.Key exposing [Key, makeKey]
 import Tesl.Prelude exposing [String]

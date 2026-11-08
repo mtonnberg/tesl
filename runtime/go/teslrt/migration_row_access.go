@@ -353,18 +353,60 @@ func pgRowCursorUpdateUsing[Row any](ctx context.Context, a *pgRowTransactionAdm
 		if len(next) != len(values) {
 			return nil, fmt.Errorf("typed update changed row count")
 		}
-		for i, value := range values {
-			before, writeErr := data.materialize(a, value)
+		bulk := !one && pgCanBulkRowUpdate(a, capture)
+		for start := 0; start < len(values); {
+			if !bulk || start == 0 || len(values)-start == 1 {
+				before, writeErr := data.materialize(a, values[start])
+				if writeErr != nil {
+					return nil, writeErr
+				}
+				after, writeErr := data.materialize(a, next[start])
+				if writeErr != nil {
+					return nil, writeErr
+				}
+				if _, writeErr := pgUpdateMaterializedPhysicalRow(ctx, a, before, after, capture...); writeErr != nil {
+					return nil, writeErr
+				}
+				start++
+				continue
+			}
+			limit := min(start+128, len(values))
+			before, after := make([]pgPhysicalWrite, 0, limit-start), make([]pgPhysicalWrite, 0, limit-start)
+			bytes := 0
+			for index := start; index < limit; index++ {
+				original, writeErr := data.materialize(a, values[index])
+				if writeErr != nil {
+					return nil, writeErr
+				}
+				updated, writeErr := data.materialize(a, next[index])
+				if writeErr != nil {
+					return nil, writeErr
+				}
+				// The UPDATE predicate uses only the original primary key. Do not
+				// retain the otherwise unused original encoded payload for a group.
+				before, after = append(before, pgPhysicalWrite{primary: original.primary}), append(after, updated)
+				size, supported := pgRowBulkUpdateBytes(original.primary, updated)
+				if !supported || size > pgRowBulkUpdateMaxBytes-bytes {
+					// Bound preparation to the budget plus at most this one row.
+					// Reuse prepared values on fallback; never re-run a codec.
+					bulk = false
+					limit = index + 1
+					break
+				}
+				bytes += size
+			}
+			used, writeErr := pgUpdateMaterializedPhysicalRows(ctx, a, before, after)
 			if writeErr != nil {
 				return nil, writeErr
 			}
-			after, writeErr := data.materialize(a, next[i])
-			if writeErr != nil {
-				return nil, writeErr
+			if !used {
+				for index := range after {
+					if _, writeErr := pgUpdateMaterializedPhysicalRow(ctx, a, before[index], after[index], capture...); writeErr != nil {
+						return nil, writeErr
+					}
+				}
 			}
-			if _, writeErr := pgUpdateMaterializedPhysicalRow(ctx, a, before, after, capture...); writeErr != nil {
-				return nil, writeErr
-			}
+			start = limit
 		}
 		if one {
 			return next, nil
