@@ -1563,7 +1563,7 @@ else
         # tool that is missing is never a gate failure.
         phase_end SKIP
     else
-        printf "  %s✗%s  the browser checker diverged from the CLI (see above)\n" "$C_RED" "$C_RESET"
+        printf "  %s✗%s  playground build or parity check failed (see above)\n" "$C_RED" "$C_RESET"
         phase_end FAIL
     fi
 fi
