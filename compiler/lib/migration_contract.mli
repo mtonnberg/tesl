@@ -29,3 +29,10 @@ val revalidate : t -> (unit,Migration_sparse.error list) result
 val check_module : compiler_abi:string -> source:string -> Ast.module_form ->
   (t option,Migration_sparse.error list) result
 val diagnostics : string -> Ast.module_form -> Frontend_check.diagnostic list
+(** Ordered diagnostics for [(file, source)] inputs, including parse errors.
+    Consecutive Contracts of one family share a checked plan only within this
+    call. Every Contract retains its own source overlay, current ABI judgment,
+    and captured-history guards. Changed inputs rebuild; failures are not cached.
+    This checks current source, not persisted-value compatibility or execution
+    authority, just like [diagnostics]. *)
+val diagnostics_batch : (string * string) list -> Frontend_check.diagnostic list

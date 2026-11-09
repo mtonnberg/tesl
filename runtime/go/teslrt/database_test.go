@@ -1330,3 +1330,83 @@ func TestBoundSecretParamStoresPlaintextAndRendersRedacted(t *testing.T) {
 		t.Fatalf("a SecretParam rendered its plaintext: %s", rendered)
 	}
 }
+
+// Exercise the driver's nullable scalar/array carriers, including SQL NULL versus
+// JSON null. Expected row IDs come from membership of integer labels, not SQL.
+// Compiler tests separately check that these predicates and binders are emitted.
+func TestBoundNullablePredicateCarriers(t *testing.T) {
+	database := &Database{Name: "NullableCarriers", Config: liveCluster(t)}
+	carriers := []struct {
+		name, sqlType string
+		values        []any // NULL, hit, other, miss (the last is never stored)
+	}{
+		{"numeric", "numeric", []any{nil, PgInt(MustParseDecimal("9223372036854775808")), PgInt(FromInt64(2)), PgInt(FromInt64(3))}},
+		{"secret", "text", []any{nil, PgSecret(MakeSecret("key'雪;--")), PgSecret(MakeSecret("other")), PgSecret(MakeSecret("missing"))}},
+		{"jsonb", "jsonb", []any{nil, EncodeJSONValue(nil), EncodeJSONValue(map[string]any{"storedKey": "value"}), EncodeJSONValue(map[string]any{"storedKey": "missing"})}},
+	}
+	WithDatabase(database, func() {
+		for _, carrier := range carriers {
+			t.Run(carrier.name, func(t *testing.T) {
+				// Same PgNull conversion used by Maybe Int, Maybe Secret and Maybe
+				// nominal JSONB columns; Something(JSON null) must stay non-NULL.
+				bind := func(label int) any {
+					value := Nothing[any]()
+					if label != 0 {
+						value = Something(carrier.values[label])
+					}
+					return PgNull(value, func(value any) any { return value })
+				}
+				from := fmt.Sprintf(" from (values (0,$1::%s),(1,$2::%s),(2,$3::%s)) as rows(id,col) where ", carrier.sqlType, carrier.sqlType, carrier.sqlType)
+				run := func(predicate string, operand any, wanted []int) {
+					t.Helper()
+					calls := 0
+					plan := PgSql("select id"+from+predicate+" order by id", func() []any {
+						calls++
+						return []any{bind(0), bind(1), bind(2), operand}
+					})
+					got := DbSelect(database, NewTable[int](), func(int) bool {
+						t.Fatal("bound query evaluated Memory predicate")
+						return false
+					}, nil, 0, -1, plan, func(row pgx.CollectableRow) (int, error) {
+						var id int
+						err := row.Scan(&id)
+						return id, err
+					})
+					if fmt.Sprint(got) != fmt.Sprint(wanted) || calls != 1 {
+						t.Fatalf("%s: rows %v, want %v; operand evaluations %d", predicate, got, wanted, calls)
+					}
+				}
+				for label := range carrier.values {
+					var equal, unequal []int
+					for row := 0; row < 3; row++ {
+						if row == label {
+							equal = append(equal, row)
+						} else {
+							unequal = append(unequal, row)
+						}
+					}
+					run("(col = $4 or (col is null and $4 is null))", bind(label), equal)
+					run("col is distinct from $4", bind(label), unequal)
+				}
+				for _, labels := range [][]int{nil, {}, {0}, {1}, {3}, {0, 1}, {0, 3}, {0, 0, 1, 1}, {1, 2}} {
+					array := make([]any, len(labels)) // nil source list still binds an empty SQL array
+					members := map[int]bool{}
+					for i, label := range labels {
+						array[i], members[label] = bind(label), true
+					}
+					var included, excluded []int
+					for row := 0; row < 3; row++ {
+						if members[row] {
+							included = append(included, row)
+						} else {
+							excluded = append(excluded, row)
+						}
+					}
+					parameter := "$4::" + carrier.sqlType + "[]"
+					run("(col = any ("+parameter+") or (col is null and array_position("+parameter+", null) is not null))", array, included)
+					run("array_position("+parameter+", col) is null", array, excluded)
+				}
+			})
+		}
+	})
+}

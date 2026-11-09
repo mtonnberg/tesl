@@ -8911,11 +8911,16 @@ and sql_where_text ?column_renderer ?(joins=[]) ~indent signatures env loc (info
        true, `Nothing == Something x` is false — and `=`/`<>` against a NULL parameter is
        never true in SQL, so `where s.revokedAt == notRevoked` matched every unrevoked
        session in the test store and none in production (whitebox campaign, 2026-09-02).
-       `IS [NOT] DISTINCT FROM` is SQL's value equality with NULL as a value, which is the
-       Memory semantics exactly. Non-Maybe columns keep the plain operators. *)
+       Positive equality exposes indexable equality/NULL branches. WHERE retains
+       exactly the same rows as IS NOT DISTINCT FROM, including under AND/OR;
+       bind once even though the parameter occurs twice. Negative equality keeps
+       IS DISTINCT FROM so SQL UNKNOWN cannot invert the NULL behavior. *)
     let nullable = maybe_element (entity_column loc info field) <> None in
     match op, nullable with
-    | BEq, true -> Printf.sprintf "%s is not distinct from %s" (column field) (bind field expr)
+    | BEq, true ->
+      let parameter = bind field expr in
+      Printf.sprintf "(%s = %s or (%s is null and %s is null))"
+        (column field) parameter (column field) parameter
     | BNeq, true -> Printf.sprintf "%s is distinct from %s" (column field) (bind field expr)
     | _ -> Printf.sprintf "%s %s %s" (column field) symbol (bind field expr)
   in
@@ -8934,9 +8939,16 @@ and sql_where_text ?column_renderer ?(joins=[]) ~indent signatures env loc (info
     let parameter = sql_placeholder builder (Printf.sprintf "%s(%s)" bind_list list) in
     let array = parameter ^ "::" ^ (sql_column_of loc info field).col_sql_type ^ "[]" in
     if maybe_element ty <> None then
-      (* array_position uses IS NOT DISTINCT FROM, including NULL membership. *)
-      Printf.sprintf "array_position(%s, %s) is %snull" array (column field)
-        (if negate then "" else "not ")
+      if negate then
+        (* Keep NULL-safe negation; NOT over a nullable ANY expression would
+           incorrectly discard nonmembers when the array contains NULL. *)
+        Printf.sprintf "array_position(%s, %s) is null" array (column field)
+      else
+        (* Both branches expose index conditions. array_position now searches
+           for NULL in the bound operand, not for every stored row's value.
+           Reuse one parameter, preserving once-only operand evaluation. *)
+        Printf.sprintf "(%s = any (%s) or (%s is null and array_position(%s, null) is not null))"
+          (column field) array (column field) array
     else
       Printf.sprintf "%s %s (%s)" (column field)
         (if negate then "<> all" else "= any") array

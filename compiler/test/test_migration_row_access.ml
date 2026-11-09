@@ -376,6 +376,54 @@ fn bad() -> Int = "not an integer"
  check bool "mixed check retains warning" true (Compile.string_contains output "warning[MIG031]");
  check bool "mixed check reports type error" true (Compile.string_contains output "error[T001]"))
 
+let nullable_query_fragments () =
+ let nullable s = s
+  |> replace "import Tesl.Prelude" "import Tesl.Maybe exposing [Maybe(..)]\nimport Tesl.Prelude"
+  |> replace "[String]" "[String, Int]"
+  |> replace "author: String" "author: Maybe String"
+  |> replace "owner: String" "owner: Maybe String"
+  |> replace "memo: String" "memo: Maybe Int"
+  |> replace "author: \"writer\"" "author: Something \"writer\""
+  |> replace "owner: \"writer\"" "owner: Something \"writer\""
+  |> replace "row.owner == \"writer\"" "row.owner == Something \"writer\""
+  |> replace "memo: \"base\"" "memo: Something 9223372036854775808"
+  |> replace "memo: \"fixture\"" "memo: Nothing" in
+ project ~before:(nullable old) ~after:(nullable fresh) (fun root save path ->
+  let before=seal root (Filename.concat root "schema/notes/v1.tesl") in
+  let after=seal root (Filename.concat root "schema/notes/v-current.tesl") in
+  let header=match Migration_header.create ~previous:before ~current:after with
+   | Ok h -> h | Error es -> fail (String.concat "\n" (List.map (fun(e:S.error)->e.message) es)) in
+  let edge=Migration_header.encode header ^ nullable source in
+  write path edge; accepts path edge;
+  (* Keep only the database declaration from the App fixture. The query combines
+     a renamed nullable field, a copied nullable numeric field and scalar operands
+     on both sides, so duplicate field holes cannot shift parameter numbering. *)
+  let prefix=String.sub app 0 (Str.search_forward (Str.regexp_string "api NotesApi {") app 0) in
+  let bytes=(replace "[String, List]" "[String, List, Int]" prefix) ^ {|
+fn markedOwner() -> Maybe String =
+ telemetry "nullable-query" { phase = "owner" }
+ Nothing
+fn markedMemos() -> List (Maybe Int) =
+ telemetry "nullable-query" { phase = "memos" }
+ [Nothing, Something 9223372036854775808]
+fn nullableRows() -> List Note requires [dbRead Note] =
+ select note from Note
+  where note.id == "one" && note.owner == (markedOwner ()) && inList note.memo (markedMemos ()) && note.title != "hidden"
+  order note.id asc
+|} in
+  let file=save "app.tesl" bytes in accepts file bytes;
+  let output=emit ~physical:true file |> List.map(fun(a:Emit_go.artifact)->a.contents) |> String.concat "\n" in
+  let query=String.split_on_char '\n' output |> List.find(fun line ->
+   Compile.string_contains line "teslrt.PgRowSQL(" && Compile.string_contains line "markedOwner()") in
+  check bool "logical holes stay in textual order, including both repeated nullable columns" true
+   (Compile.string_contains query {|[]string{"id", "owner", "owner", "memo", "memo", "title", "id"}|});
+  List.iter(fun fragment -> check bool ("retained query fragment: " ^ fragment) true (Compile.string_contains query fragment))
+   [{| = $1 and (|}; {| = $2 or (|}; {| is null and $2 is null))|};
+    {| = any ($3::NUMERIC[])|}; {|array_position($3::NUMERIC[], null)|}; {| <> $4 order by |}];
+  List.iter(fun call -> check int ("one argument evaluation for " ^ call) 1
+   (let rec count at n=try let pos=Str.search_forward (Str.regexp_string call) query at in count (pos+String.length call) (n+1) with Not_found->n in count 0 0))
+   ["markedOwner()"; "markedMemos()"])
+
 let native ()=
  let output=Filename.temp_dir "tesl-row-access-" "" in
  Fun.protect ~finally:(fun () -> if Sys.getenv_opt "TESL_KEEP_ROW_ACCESS_TEST"=None then remove output) (fun () ->
@@ -668,4 +716,5 @@ let ()=match Sys.getenv_opt "TESL_ROW_REPEATED_EXPORT" with
  test_case "builtin List key has no checked migration carrier" `Quick list_key_boundary;
  test_case "repeated exact current binding requires predecessor Contract" `Quick repeated_binding_guards;
  test_case "actual unchanged App across two windows" `Quick native_repeated;
- test_case "bulk publication rolls back all earlier groups" `Quick native_bulk]]
+ test_case "bulk publication rolls back all earlier groups" `Quick native_bulk;
+ test_case "nullable retained query holes and operands stay aligned" `Quick nullable_query_fragments]]

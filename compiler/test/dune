@@ -42,6 +42,11 @@
  (modules bench_migration_compilation_cache)
  (libraries tesl_compiler_lib unix))
 
+(executable
+ (name bench_migration_contract)
+ (modules bench_migration_contract)
+ (libraries tesl_compiler_lib unix))
+
 (test
  (name test_migration_same)
  (modules test_migration_same)

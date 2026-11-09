@@ -152,6 +152,21 @@ fn owners(names: List (Maybe String)) -> Int requires [dbRead Item] =
   selectCount i from Item where inList i.owner names
 fn otherOwners(names: List (Maybe String)) -> Int requires [dbRead Item] =
   selectCount i from Item where notInList i.owner names
+fn equalOwners(name: Maybe String) -> Int requires [dbRead Item] =
+  selectCount i from Item where i.owner == name
+fn unequalOwners(name: Maybe String) -> Int requires [dbRead Item] =
+  selectCount i from Item where i.owner != name
+fn combined(left: Maybe String, right: Maybe String, floor: Int) -> Int requires [dbRead Item] =
+  selectCount i from Item
+    where i.score > floor && (i.owner == left || i.owner == right)
+fn ownersAbove(names: List (Maybe String), floor: Int) -> Int requires [dbRead Item] =
+  selectCount i from Item where i.score > floor && inList i.owner names
+fn rewriteOwners(name: Maybe String, replacement: Maybe String) -> Unit requires [dbWrite Item] =
+  update i in Item
+    where i.owner == name
+    set i.owner = replacement
+fn removeOwners(name: Maybe String) -> Unit requires [dbWrite Item] =
+  delete i from Item where i.owner == name
 fn scores(values: List Int) -> Int requires [dbRead Item] =
   selectSum i.score from Item where inList i.score values
 fn ownerIds(ids: List OwnerId) -> Int requires [dbRead Item] =
@@ -185,12 +200,37 @@ fn makeIds() -> List String = ["a", "b"]
   expect otherOwners [Nothing, Something "bob"] == 1
   expect owners [] == 0
   expect otherOwners [] == 3
+  expect owners [Something "bob"] == 1
+  expect otherOwners [Something "bob"] == 2
+  expect owners [Nothing, Nothing, Something "bob", Something "bob"] == 2
+  expect owners [Something "missing"] == 0
+  expect otherOwners [Something "missing"] == 3
+  expect otherOwners [Nothing] == 2
+  expect owners [Nothing, Something "missing"] == 1
+  expect otherOwners [Nothing, Something "missing"] == 2
+  expect equalOwners Nothing == 1
+  expect equalOwners (Something "bob") == 1
+  expect equalOwners (Something "missing") == 0
+  expect unequalOwners Nothing == 2
+  expect unequalOwners (Something "bob") == 2
+  expect unequalOwners (Something "missing") == 3
+  expect combined Nothing (Something "bob") 0 == 2
+  expect combined Nothing (Something "bob") 1 == 1
+  expect combined (Something "missing") (Something "missing") 0 == 0
+  expect ownersAbove [Nothing, Something "bob"] 1 == 1
+  expect ownersAbove [] 0 == 0
   expect scores [9223372036854775808] == 9223372036854775808
   expect ownerIds [OwnerId "x"] == 2
   expect List.length (mixed ids 0) == 1
   expect single [] == Nothing
   expect single ["a"] != Nothing
-
+  rewriteOwners Nothing (Something "changed")
+  rewriteOwners (Something "bob") (Something "changed")
+  expect equalOwners (Something "changed") == 2
+  expect equalOwners Nothing == 0
+  removeOwners (Something "changed")
+  expect List.length (excluded []) == 1
+  expect equalOwners (Something "cara") == 1
 }
 |} header
 
