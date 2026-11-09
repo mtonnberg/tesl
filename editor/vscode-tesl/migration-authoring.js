@@ -9,7 +9,7 @@ const escape = (value) => String(value ?? "").replace(/[&<>"']/g, (char) =>
 
 // Mask comments and literals before finding declaration lenses; examples and
 // commented-out migrations must not acquire actions that look executable.
-function migrationLensLocations(source) {
+function migrationLensLocations(source, file = "") {
   let state = "code";
   const masked = [...source].map((char) => {
     if (char === "\n") { if (state === "comment") state = "code"; return char; }
@@ -26,18 +26,22 @@ function migrationLensLocations(source) {
   }).join("");
   const result = [];
   masked.split(/\r?\n/).forEach((line, index) => {
-    if (/^\s*migration\s*=\s*(?:[A-Z]\w*\.)*Migration\b/.test(line) ||
+    if (/^\s*(migration|contract|repair)\s*=\s*(?:[A-Z]\w*\.)*(Migration|Contract|Repair)\b/.test(line) ||
+        /^\s*database\s+[A-Z]\w*\s*=/.test(line) ||
         /^\s*module\s+[A-Z][\w.]*\.VCurrent\b/.test(line)) result.push(index);
   });
+  // Frozen snapshots, private schema helpers and incomplete migration files
+  // also need a way back to their application's checked authoring workflow.
+  if (result.length === 0 && /[\\/](schema|migrations)[\\/]/.test(file)) result.push(0);
   return result;
 }
 
 const generalHelp = [
-  { title: "1. Edit the current schema", summary: "Edit VCurrent, then refresh the undeployed migration with tesl migrate app.tesl. Keep deployed snapshots unchanged.", help: ["A current-target hash mismatch is expected while editing a draft. The compiler still blocks building/running that stale migration until refresh. If a revision has already been deployed, restore it and create the next forward revision; the editor cannot infer deployment state."] },
+  { title: "1. Start or continue a revision", summary: "Run Tesl: Migrate database. Before changing a deployed schema, choose Start next revision and apply it to freeze the current version. For an initial migration or an undeployed draft, choose Continue current draft.", help: ["Edit VCurrent, then continue the draft and choose a compiler-generated scaffold. Or apply Update generated source, place the cursor on a generated todo decision and press Ctrl+Space to choose a complete plan. You do not need to write its migration rules, imports or helper signatures. The editor fills boilerplate and selects the whole remaining domain placeholder: type your value or code over it. Use Fill remaining domain logic to return to the next placeholder.", "A current-target hash mismatch is shown as a warning while editing; the compiler still blocks building/running that stale migration until refresh. If a revision has already been deployed, restore it and create the next forward revision; the editor cannot infer deployment state."] },
   { title: "2. Review proof identity", summary: "Same means the complete old and new contracts have the same meaning, not merely the same name or stored type.", options: [
     { title: "Same", when: "The complete proof/type/codec dependencies are unchanged and the compiler verifies identity." },
     { title: "Revalidate", when: "A new proof is added to a previously plain field and the compiler accepts revalidation on retained storage. Return the original primitive value without normalization and test rejected old values. An added conjunction must preserve every old proof through Same. Changed historical proof meaning requires a different route." },
-    { title: "Derived or Migrate", when: "The representation or an existing historical proof changed. Supply the checked conversion and the required old-writer projection; add old-value fixtures. The compiler decides which retained-storage paths are supported." },
+    { title: "Derived or Migrate", when: "The representation or an existing historical proof changed. Reuse existing validators fills forward and historical validation calls when exact exported pure establish functions are unambiguous. Fill rejection policy, historical fallback and fixture values. Otherwise choose the generic converter scaffold. The compiler decides which retained-storage paths are supported." },
   ], help: ["For example, changing an allowed title length from 120 to 80 changes validity even though the field is still String. Do not declare Same for that changed historical meaning. The supported field-local conversion uses Migrate with Retype and WriteBack, whose reverse function returns the exact old field type and proof; cross-field reverse proofs are unsupported.", "Read every identity pair and affected stored occurrence. A successful build checks the implemented source rules; it does not decide your business policy."] },
   { title: "3. Review entity and queue decisions", summary: "Choose from the compiler's supported plans, fill explicit custom-code/value holes, and recheck. A recommendation is not permission to discard data.", help: ["Additive keeps existing contracts unchanged and supplies supported defaults for new fields. Derived builds a checked field adapter. Migrate requires a pure converter with the exact old/new types. New and Drop are explicit identity/lifecycle decisions.", "Row and payload changes can require separate ordered releases. Queue identity renames and some simultaneous changes are intentionally refused. Read the generated plan and the compiler's diagnostic rather than bypassing it."] },
   { title: "4. Check overlap and Contract", summary: "Test old/new processes together, catch-up and restart, then retire old writers before Contract.", help: ["Expand and conversion support the implemented compatible overlap. A destructive Contract closes that overlap; general rollback after Contract is not promised. Reverse conversions and legacy projections require explicit supported rules.", "Use representative fixtures, rejection cases, application tests and the PostgreSQL migration suites. Passing a finite scenario does not prove arbitrary histories or production-scale latency."] },
@@ -88,9 +92,24 @@ function codeHoleOffset(source) {
   return -1;
 }
 
+function codeHoleRange(source) {
+  const start = codeHoleOffset(source);
+  if (start < 0) return undefined;
+  let end = start + 4, cursor = end;
+  while (/\s/.test(source[cursor] || "") && cursor < source.length) cursor++;
+  if (source[cursor] === '"') {
+    for (let i = cursor + 1; i < source.length; i++) {
+      if (source[i] === "\\") { i++; continue; }
+      if (source[i] === '"') { end = i + 1; break; }
+    }
+  }
+  return { start, end };
+}
+
 function registerMigrationAuthoring(vscode, context, { getClient, requireTrustedWorkspace }) {
   const virtualDocuments = new Map();
   const views = new Map();
+  const selections = new Map();
   context.subscriptions.push(vscode.workspace.registerTextDocumentContentProvider("tesl-migration-preview", {
     provideTextDocumentContent: (uri) => virtualDocuments.get(uri.toString()) || "Preview expired; request a new migration preview.",
   }));
@@ -112,30 +131,31 @@ function registerMigrationAuthoring(vscode, context, { getClient, requireTrusted
     let projectRoot = path.dirname(entry.fsPath);
     while (projectRoot !== workspaceRoot && inside(workspaceRoot, projectRoot) && !fs.existsSync(path.join(projectRoot, "tesl.toml"))) projectRoot = path.dirname(projectRoot);
     if (!inside(workspaceRoot, projectRoot)) projectRoot = workspaceRoot;
-    const selection = { entryFile: entry.fsPath, projectRoot, ...(selectedDatabase ? { database: selectedDatabase } : {}) };
+    const selection = { entryFile: entry.fsPath, projectRoot, ...(selectedDatabase ? { database: selectedDatabase } : {}), ...(viewOptions.newRevision ? { newRevision: true } : {}) };
     let preview = await languageClient.sendRequest("workspace/executeCommand", { command: "tesl.generateMigration", arguments: [selection] });
     if (!preview?.ok) {
       const candidates = new Map((preview?.errors || []).flatMap((error) => error.candidates || []).filter((candidate) => typeof candidate.database === "string").map((candidate) => [candidate.database, candidate]));
       if (!selectedDatabase && candidates.size > 1) {
         const selected = await vscode.window.showQuickPick([...candidates.values()].map((candidate) => ({ label: candidate.database, description: candidate.file, database: candidate.database })), { placeHolder: "Choose the database to migrate" });
-        if (selected) return requestPreview(entry, selected.database);
+        if (selected) return requestPreview(entry, selected.database, viewOptions);
         return;
       }
       throw new Error(`Migration preview refused: ${(preview?.errors || []).map((error) => error.message || "Unknown compiler refusal").join("\n") || "Unsupported language server response"}`);
     }
     let items = previewItems(preview);
-    const panel = vscode.window.createWebviewPanel("teslMigrationGuide", "Tesl Migration Decisions", { viewColumn: vscode.ViewColumn.Beside, preserveFocus: !!viewOptions.preserveFocus }, { enableScripts: true, retainContextWhenHidden: false });
+    selections.set(`${entry.fsPath}:${preview.database}`, { entry, projectRoot, database: preview.database });
+    const panel = viewOptions.silent ? undefined : vscode.window.createWebviewPanel("teslMigrationGuide", "Tesl Migration Decisions", { viewColumn: vscode.ViewColumn.Beside, preserveFocus: !!viewOptions.preserveFocus }, { enableScripts: true, retainContextWhenHidden: false });
     let index = -1, busy = false, consumed = false, status = "", operationPreviewId, panelDisposed = false;
     const viewId = preview.previewId;
-    panel.onDidDispose?.(() => { panelDisposed = true; views.delete(viewId); }, undefined, context.subscriptions);
+    panel?.onDidDispose?.(() => { panelDisposed = true; views.delete(viewId); }, undefined, context.subscriptions);
     const supportsApply = languageClient.initializeResult?.capabilities?.executeCommandProvider?.commands?.includes("tesl.applyMigration") === true;
     const nonce = randomBytes(16).toString("hex");
     virtualDocuments.clear();
     const refresh = () => {
-      if (panelDisposed) return;
+      if (panelDisposed || !panel) return;
       panel.webview.html = renderGuide(items, index, nonce, "Migration preview", `${preview.database}: ${preview.operation}; ${preview.files.length} proposed files; ${items.length} review items. ${preview.compilable ? "Proposal compiles." : "Proposal still has decisions or errors to resolve."}`, {
         canApply: supportsApply && !busy && !consumed && preview.files.length > 0,
-        canChoose: supportsApply && !busy && !consumed && typeof preview.inputDigest === "string",
+        canChoose: supportsApply && !busy && !consumed && !selection.newRevision && typeof preview.inputDigest === "string",
         canStatus: !!operationPreviewId, pendingPaths: preview.files.map((file) => file.path),
         status: status || (supportsApply ? "Choices update source; they never invent business values or execute database migrations." : "This language server cannot apply guarded editor changes. Install the matching updated CLI/compiler/LSP and reload."),
       })
@@ -154,14 +174,21 @@ function registerMigrationAuthoring(vscode, context, { getClient, requireTrusted
       for (const file of candidates) {
         try {
           const document = await vscode.workspace.openTextDocument(vscode.Uri.file(file));
-          const offset = codeHoleOffset(document.getText());
-          if (offset < 0) continue;
-          const position = document.positionAt(offset);
-          await vscode.window.showTextDocument(document, { selection: new vscode.Range(position.line, position.character, position.line, position.character + 4), preview: false });
+          const hole = codeHoleRange(document.getText());
+          if (!hole) continue;
+          const start = document.positionAt(hole.start), end = document.positionAt(hole.end);
+          await vscode.window.showTextDocument(document, { selection: new vscode.Range(start.line, start.character, end.line, end.character), preview: false });
           return;
         } catch (_) { /* Leave source errors visible in the fresh compiler preview. */ }
       }
       if (preferred) await openLocation(preferred);
+      else {
+        const frozen = proposal.files.find((file) => /[\\/]schema[\\/][^\\/]+[\\/]v\d+\.tesl$/.test(file.path));
+        if (frozen) {
+          const current = path.join(path.dirname(frozen.path), "v-current.tesl");
+          if (inside(projectRoot, current)) await openLocation({ file: current });
+        }
+      }
     };
     const showOutcome = (result) => {
       const transaction = result?.sourceTransaction;
@@ -173,6 +200,7 @@ function registerMigrationAuthoring(vscode, context, { getClient, requireTrusted
       busy = true; status = "Checking source and editor inputs…"; refresh();
       try {
         if (choice) {
+          if (selection.newRevision) throw new Error("Apply the new revision before choosing its field conversions.");
           if (typeof preview.inputDigest !== "string" || !choice.decisionId || !choice.optionId) throw new Error("This option is advisory; the compiler has not supplied a checked choice.");
           // Pass only compiler identifiers and its full input digest. Never send
           // a copied/client-edited template as source authority.
@@ -196,17 +224,17 @@ function registerMigrationAuthoring(vscode, context, { getClient, requireTrusted
         try {
           await openCustomCode(preview, preferred);
           const next = await requestPreview(entry, selectedDatabase, { preserveFocus: true });
-          if (next) { panelDisposed = true; views.delete(viewId); panel.dispose(); }
+          if (next) { panelDisposed = true; views.delete(viewId); panel?.dispose(); }
           return { result, nextView: next };
         } catch (error) { status = `Source was committed; follow-up check failed: ${error.message}`; refresh(); }
       } catch (error) { status = `No committed source update was confirmed: ${error.message}`; throw error; }
       finally { busy = false; refresh(); }
     };
-    panel.webview.onDidReceiveMessage(async (message) => {
+    panel?.webview.onDidReceiveMessage(async (message) => {
       try {
         if (!requireTrustedWorkspace() || !message || typeof message.action !== "string") return;
         if (busy && message.action !== "status") return;
-        if (message.action === "refresh") { await requestPreview(entry, selectedDatabase); panelDisposed = true; panel.dispose(); return; }
+        if (message.action === "refresh") { await requestPreview(entry, selectedDatabase, viewOptions); panelDisposed = true; panel.dispose(); return; }
         if (message.action === "overview") index = -1;
         if (message.action === "select" && Number.isInteger(message.index) && message.index >= 0 && message.index < items.length) index = message.index;
         if (message.action === "next") index = Math.min(items.length - 1, index + 1);
@@ -241,6 +269,9 @@ function registerMigrationAuthoring(vscode, context, { getClient, requireTrusted
     }, undefined, context.subscriptions);
     views.clear();
     const view = {
+      preview,
+      supportsApply,
+      editLogic: () => openCustomCode(preview),
       apply: () => applyProposal(),
       choose: (decisionId, optionId) => {
         const item = items.find((candidate) => candidate.decisionId === decisionId && candidate.options?.some((option) => option.id === optionId));
@@ -269,6 +300,73 @@ function registerMigrationAuthoring(vscode, context, { getClient, requireTrusted
   context.subscriptions.push(vscode.commands.registerCommand("tesl.previewMigration", async (uri) => {
     try { return await requestPreview(uri); } catch (error) { vscode.window.showErrorMessage(`Tesl migration: ${error.message}`); }
   }));
+  context.subscriptions.push(vscode.commands.registerCommand("tesl.migrateDatabase", async (uri) => {
+    if (!requireTrustedWorkspace()) return;
+    try {
+      const mode = await vscode.window.showQuickPick([
+        { label: "Continue current draft", description: "Refresh schema changes and fill migration boilerplate", newRevision: false },
+        { label: "Start next revision", description: "Freeze the current schema BEFORE editing its next version", newRevision: true },
+      ], { title: "Tesl: Migrate database", placeHolder: "Continue an undeployed draft, or start a new revision before changing a deployed schema" });
+      if (!mode) return;
+      const result = await requestPreview(uri, undefined, { newRevision: mode.newRevision });
+      if (!result) return;
+      const view = views.get(result.previewId);
+      if (!view?.supportsApply) return result;
+      const choices = mode.newRevision ? [] : (view.preview.decisions || []).flatMap((decision) =>
+        (decision.options || []).map((option) => ({ label: `${decision.entity}: ${option.label}`, description: "Generate scaffold and open domain logic", detail: option.help, decisionId: decision.id, optionId: option.id })));
+      const actions = [
+        { label: "Review proposed files and decisions", description: "Use the migration panel and file diffs", review: true },
+        ...(view.preview.files.length ? [{ label: mode.newRevision ? "Create next revision" : "Update generated source", description: "Apply compiler proposal and open remaining domain logic", apply: true }] : []),
+        ...choices,
+        ...(!mode.newRevision && !view.preview.compilable ? [{ label: "Fill remaining domain logic", description: "Jump to the next value, rejection policy or fixture placeholder", editLogic: true }] : []),
+      ];
+      const action = await vscode.window.showQuickPick(actions, { title: "Tesl: Migrate database", placeHolder: "Choose a compiler-generated scaffold, or review the proposal first", matchOnDescription: true, matchOnDetail: true });
+      if (!action || action.review) return result;
+      const retained = retainedView(result);
+      if (action.editLogic) return await retained.editLogic();
+      return await (action.apply ? retained.apply() : retained.choose(action.decisionId, action.optionId));
+    } catch (error) { vscode.window.showErrorMessage(`Tesl migration: ${error.message}`); }
+  }));
+  context.subscriptions.push(vscode.languages.registerCompletionItemProvider({ scheme: "file", language: "tesl" }, {
+    async provideCompletionItems(document, position, token) {
+      if (token.isCancellationRequested || !vscode.workspace.isTrusted || !/[\\/]migrations[\\/]/.test(document.uri.fsPath)) return [];
+      const line = document.lineAt(position.line).text;
+      // Whole migration choices belong at compiler-generated decision holes,
+      // not inside comments, strings or handwritten conversion bodies.
+      if (codeHoleOffset(line) < 0 || position.character > codeHoleOffset(line) + 4) return [];
+      const candidates = [...selections.values()].filter((selection) => inside(selection.projectRoot, document.uri.fsPath));
+      const itemFor = (label, detail, command) => {
+        const item = new vscode.CompletionItem(label, vscode.CompletionItemKind.Snippet);
+        item.detail = detail;
+        item.documentation = detail;
+        // Acceptance performs no textual replacement. Its command applies the
+        // complete compiler-owned, version-guarded multi-file transaction.
+        item.insertText = "";
+        item.range = new vscode.Range(position.line, position.character, position.line, position.character);
+        item.filterText = `todo ${label}`;
+        item.sortText = `000:${label}`;
+        item.command = command;
+        return item;
+      };
+      if (candidates.length !== 1) return [itemFor("Set up migration choices…", "Select your application and database once; Tesl then offers complete migration scaffolds here.", { title: "Migrate database", command: "tesl.migrateDatabase", arguments: [document.uri] })];
+      const version = document.version;
+      const { entry, database } = candidates[0];
+      try {
+        const result = await requestPreview(entry, database, { silent: true });
+        if (!result || token.isCancellationRequested || document.version !== version || document.isClosed) return [];
+        const view = views.get(result.previewId);
+        if (!view?.supportsApply || !result.inputDigest) return [];
+        return result.decisions.filter((decision) => decision.file === document.uri.fsPath && decision.line === position.line)
+          .flatMap((decision) => decision.options.map((option) => itemFor(
+            `${decision.entity}: ${option.label}`, option.help,
+            { title: "Fill migration boilerplate", command: "tesl.completeMigrationDecision", arguments: [{ previewId: result.previewId, decisionId: decision.id, optionId: option.id }] })));
+      } catch (_) { return []; } // Keep compiler diagnostics visible; completion never opens an error popup.
+    },
+  }));
+  context.subscriptions.push(vscode.commands.registerCommand("tesl.completeMigrationDecision", async (params) => {
+    try { return await retainedView(params).choose(params.decisionId, params.optionId); }
+    catch (error) { vscode.window.showErrorMessage(`Tesl migration: ${error.message}`); }
+  }));
   context.subscriptions.push(vscode.commands.registerCommand("tesl.migrationGuide", () => {
     const panel = vscode.window.createWebviewPanel("teslMigrationHelp", "Tesl Migration Guide", vscode.ViewColumn.Beside, { enableScripts: true });
     let index = -1;
@@ -287,12 +385,30 @@ function registerMigrationAuthoring(vscode, context, { getClient, requireTrusted
   context.subscriptions.push(vscode.languages.registerCodeLensProvider({ scheme: "file", language: "tesl" }, {
     provideCodeLenses(document) {
       if (!vscode.workspace.isTrusted) return [];
-      return migrationLensLocations(document.getText()).flatMap((line) => [
+      return migrationLensLocations(document.getText(), document.uri?.fsPath).flatMap((line) => [
+        new vscode.CodeLens(new vscode.Range(line, 0, line, 0), { title: "Migrate database…", command: "tesl.migrateDatabase", arguments: [document.uri] }),
         new vscode.CodeLens(new vscode.Range(line, 0, line, 0), { title: "Migration guide", command: "tesl.migrationGuide" }),
         new vscode.CodeLens(new vscode.Range(line, 0, line, 0), { title: "Preview migration decisions", command: "tesl.previewMigration", arguments: [document.uri] }),
       ]);
     },
   }));
+  context.subscriptions.push(vscode.languages.registerCodeActionsProvider({ scheme: "file", language: "tesl" }, {
+    provideCodeActions(document, _range, actionContext) {
+      if (!vscode.workspace.isTrusted) return [];
+      const diagnostics = actionContext.diagnostics.filter((diagnostic) => /^MIG\d+$/.test(String(diagnostic.code?.value ?? diagnostic.code)));
+      if (!diagnostics.length) return [];
+      const guide = new vscode.CodeAction("Tesl: Explain migration requirements", vscode.CodeActionKind.QuickFix);
+      guide.command = { title: guide.title, command: "tesl.migrationGuide" };
+      guide.diagnostics = diagnostics;
+      // Frozen-history mismatches need restoration, not regeneration.
+      const actionable = diagnostics.filter((diagnostic) => String(diagnostic.code?.value ?? diagnostic.code) !== "MIG013");
+      if (!actionable.length) return [guide];
+      const migrate = new vscode.CodeAction("Tesl: Migrate database…", vscode.CodeActionKind.QuickFix);
+      migrate.command = { title: migrate.title, command: "tesl.migrateDatabase", arguments: [document.uri] };
+      migrate.diagnostics = actionable;
+      return [migrate, guide];
+    },
+  }, { providedCodeActionKinds: [vscode.CodeActionKind.QuickFix] }));
 }
 
-module.exports = { registerMigrationAuthoring, migrationLensLocations, previewItems, renderGuide, inside, codeHoleOffset };
+module.exports = { registerMigrationAuthoring, migrationLensLocations, previewItems, renderGuide, inside, codeHoleOffset, codeHoleRange };

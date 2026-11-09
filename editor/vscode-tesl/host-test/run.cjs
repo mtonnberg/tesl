@@ -24,7 +24,7 @@ async function main() {
   for (const [name, subdir] of Object.entries({ XDG_STATE_HOME: "state", XDG_CONFIG_HOME: "config", XDG_DATA_HOME: "data", XDG_CACHE_HOME: "cache", XDG_RUNTIME_DIR: "runtime" })) {
     env[name] = path.join(run, subdir); fs.mkdirSync(env[name], { mode: 0o700 });
   }
-  const args = ["--no-sandbox", "--disable-gpu", "--disable-workspace-trust", "--skip-welcome", "--skip-release-notes", "--user-data-dir", userData, "--extensions-dir", extensions, "--extensionDevelopmentPath", extension, "--extensionTestsPath", path.join(__dirname, "index.cjs"), project];
+  const args = ["--wait", "--no-sandbox", "--disable-gpu", "--disable-workspace-trust", "--skip-welcome", "--skip-release-notes", "--user-data-dir", userData, "--extensions-dir", extensions, "--extensionDevelopmentPath", extension, "--extensionTestsPath", path.join(__dirname, "index.cjs"), project];
   const log = fs.createWriteStream(path.join(run, "editor.log"));
   const child = spawn(binary, args, { env, stdio: ["ignore", "pipe", "pipe"], detached: process.platform !== "win32" });
   child.stdout.pipe(log); child.stderr.pipe(log);

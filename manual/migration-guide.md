@@ -46,11 +46,40 @@ schema, migration, codec and reviewed Contract that the retained history needs.
 
 ## Apply choices in VSCodium
 
-Install extension 0.7.15 or later with a matching compiler and language server,
-then reload the editor. Run **Tesl: Preview Migration Decisions** from the Command
-Palette or migration CodeLens. When starting from a schema or migration file,
-choose the application entry file. Review the overview and expand each decision's
-help. **Use this option and update source** writes the compiler scaffold into the
+You do not need to write a migration declaration, choose internal storage column
+names, or wire forward/reverse helpers yourself for the supported scaffolds below.
+Describe the change in your current schema; Tesl proposes the migration structure.
+Your inputs are domain values and policies, such as what an existing row should
+receive for a new field or what to do with a value rejected by a stricter rule.
+
+Install extension 0.7.16 or later with a matching compiler and language server,
+then reload the editor. Run **Tesl: Migrate database** from the Command Palette,
+editor/explorer context menu, migration lightbulb or CodeLens:
+
+1. Choose **Start next revision** before changing a deployed schema. Review and
+   apply **Create next revision** to freeze its current version first. For an
+   initial migration or an existing undeployed revision, choose **Continue current
+   draft** instead.
+2. When starting from a schema or migration file, select the application entry
+   file. If the compiler finds multiple databases, select the intended database.
+3. Choose a compiler-generated scaffold from the searchable options list, or
+   **Review proposed files and decisions** to inspect diffs and detailed help.
+   **Update generated source** refreshes the ordinary proposal without selecting
+   a conversion policy. The compiler reads unsaved project buffers too.
+4. Fill the selected domain-logic hole, then continue the draft to recheck it.
+
+Prefer completion? Apply **Update generated source** first, put the cursor on an
+unresolved `todo` decision, and press **Ctrl+Space**. The completion list offers
+the compiler's complete plans with explanations, not just individual migration
+keywords. Accepting one fills its multi-file boilerplate and selects the whole
+remaining placeholder expression. Type your domain value or code over that
+selection. If the editor has not selected an application yet, **Set up migration
+choices…** starts the guided flow. No copying from a preview or manual import
+editing is needed. A stale choice asks for a fresh preview instead of overwriting
+newer edits.
+
+**Tesl: Preview Migration Decisions** still opens the review panel directly.
+In that panel, **Use this option and update source** writes the compiler scaffold into the
 actual files or open buffers, selects a remaining custom-code hole and rechecks.
 **Update proposed source files** applies the ordinary generated proposal. The diff
 view is for review; there is no manual copy/paste step. See the
@@ -69,7 +98,12 @@ The compiler scaffolds classifier-approved primitive literal defaults, supported
 single primitive-field revalidation using an existing exported establish function,
 and bounded primitive conversions with unchanged field names, primary key, table
 and indexes. It fills row copies, forward/reverse signatures, imports and historical
-fixture structure. Business values, conversion/rejection policies and fixture
+fixture structure. **Reuse existing validators for changed field proofs** also
+fills the forward validation call and historical validation/result handling when
+each proof has exactly one matching exported pure `establish` in its schema module
+and the primitive type is unchanged. A plain historical field needs no reverse
+validation. Ambiguous or unavailable validators leave the generic converter option
+available instead. Business values, conversion/rejection policies and fixture
 values remain explicit `todo` holes. Cross-field proofs, hidden owners,
 nonprimitive conversions, key/index changes, renames and removals are outside these
 automatic scaffolds. Guidance without a compiler-proposed choice cannot write source.
@@ -77,6 +111,47 @@ automatic scaffolds. Guidance without a compiler-proposed choice cannot write so
 A scaffold with holes cannot build or deploy. Complete the code, inspect its
 diagnostics and test historical values before reviewing the deployment plan.
 Selecting an option prepares source and never executes database work.
+
+### Example: changing a stored title's validation
+
+Suppose the exported `accept` establish function now rejects `"blocked"`, while
+the frozen version only rejected empty titles. After refreshing the draft, choose
+**Reuse existing validators for changed field proofs**. Tesl generates:
+
+- The call to the current schema's `accept`, plus `Nothing`/`Something` handling.
+- The new row, copying unchanged fields and inserting the validated title.
+- `Retype title`, its compiler-owned storage column, and `WriteBack` with the exact
+  historical proof type.
+- A call to the frozen schema's `accept` for historical writes, returning its
+  validated value on success.
+- Required imports and the historical fixture structure.
+
+You supply the rejected-row policy, a historical fallback if the old validator
+rejects a new value, and representative fixture values. A fallback is a business
+decision; it is not necessarily a lossless reverse conversion. Review validators
+that normalize values and test both directions. If only a `check` function is
+available, the generic typed converter scaffold remains available; this shortcut
+requires a pure `establish` returning the exact `Maybe` proof type.
+
+### Squiggles, completion and lightbulbs
+
+Schema and migration files use the same live compiler diagnostics as application
+files, including unsaved changes. Draft hash mismatches show a warning squiggle;
+frozen-history mismatches remain errors. File-level migration diagnostics underline
+an available character instead of using an invisible zero-width marker.
+
+Migration lightbulbs open **Migrate database** for compiler-backed choices or
+**Explain migration requirements** for guidance. Ordinary compiler-provided
+mechanical fixes remain available through the LSP. Semantic decisions require
+choosing an option; Fix All cannot invent a rejection or data-loss policy.
+`MIG013` offers guidance rather than regeneration of frozen history.
+
+CodeLens appears on application `database` declarations, current schemas and
+migration/Contract declarations, with a file-level entry in other `schema/` and
+`migrations/` files, including incomplete drafts. Enable `editor.codeLens` if
+hidden. Use **Ctrl+Space** at a generated migration decision for complete
+multi-file scaffolds. Elsewhere inside a migration declaration, completion offers
+contextual fields and constructors with their requirements for manual authoring.
 
 ## Same proofs and changed meaning
 

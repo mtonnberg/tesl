@@ -4,19 +4,23 @@ const assert = require("node:assert/strict");
 const path = require("node:path");
 const os = require("node:os");
 const fs = require("node:fs");
-const { registerMigrationAuthoring, migrationLensLocations, previewItems, renderGuide, inside, codeHoleOffset } = require("./migration-authoring");
+const { registerMigrationAuthoring, migrationLensLocations, previewItems, renderGuide, inside, codeHoleOffset, codeHoleRange } = require("./migration-authoring");
 
 function fixture(trusted = true) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "tesl-migration-editor-"));
   const entryFile = path.join(root, "app.tesl");
   fs.writeFileSync(entryFile, "module App exposing []\n");
   fs.writeFileSync(path.join(root, "tesl.toml"), "");
-  const commands = new Map(), panels = [], providers = [], requests = [], warnings = [], errors = [], copies = [], opened = [], diffs = [];
+  const commands = new Map(), panels = [], providers = [], completionProviders = [], requests = [], warnings = [], errors = [], copies = [], opened = [], diffs = [];
   const uri = (file) => ({ fsPath: file, toString: () => file });
   const vscode = {
     Uri: { file: uri, parse: uri }, ViewColumn: { Beside: 2 },
     Range: class { constructor(a, b, c, d) { this.start = { line: a, character: b }; this.end = { line: c, character: d }; } },
     CodeLens: class { constructor(range, command) { this.range = range; this.command = command; } },
+    CodeAction: class { constructor(title, kind) { this.title = title; this.kind = kind; } },
+    CodeActionKind: { QuickFix: "quickfix" },
+    CompletionItem: class { constructor(label, kind) { this.label = label; this.kind = kind; } },
+    CompletionItemKind: { Snippet: 15 },
     env: { clipboard: { writeText: async (text) => copies.push(text) } },
     workspace: {
       isTrusted: trusted, getWorkspaceFolder: () => ({ uri: uri(root) }), asRelativePath: (file) => path.relative(root, file.fsPath),
@@ -32,7 +36,11 @@ function fixture(trusted = true) {
         panels.push(panel); return panel;
       },
     },
-    languages: { registerCodeLensProvider: (_selector, provider) => { providers.push(provider); return { dispose() {} }; } },
+    languages: {
+      registerCompletionItemProvider: (_selector, provider) => { completionProviders.push(provider); return { dispose() {} }; },
+      registerCodeLensProvider: (_selector, provider) => { providers.push(provider); return { dispose() {} }; },
+      registerCodeActionsProvider: (_selector, provider) => { providers.push(provider); return { dispose() {} }; },
+    },
     commands: {
       registerCommand: (name, handler) => { commands.set(name, handler); return { dispose() {} }; },
       executeCommand: async (name, ...args) => {
@@ -48,7 +56,7 @@ function fixture(trusted = true) {
   };
   const client = { sendRequest: async (method, params) => { requests.push({ method, params }); if (params.command === "tesl.generateMigration") return preview; return { before: "before", after: "after" }; } };
   registerMigrationAuthoring(vscode, { subscriptions: [] }, { getClient: () => client, requireTrustedWorkspace: () => trusted });
-  return { root, entryFile, uri, vscode, client, commands, panels, providers, requests, warnings, errors, copies, opened, diffs, preview,
+  return { root, entryFile, uri, vscode, client, commands, panels, providers, completionProviders, requests, warnings, errors, copies, opened, diffs, preview,
     cleanup: () => fs.rmSync(root, { recursive: true, force: true }) };
 }
 
@@ -131,7 +139,7 @@ test("migration lenses expose discoverable guidance and preview commands", () =>
   const f = fixture();
   try {
     const lenses = f.providers[1].provideCodeLenses({ uri: f.uri(f.entryFile), getText: () => "migration = Migration {" });
-    assert.deepEqual(lenses.map((lens) => lens.command.command), ["tesl.migrationGuide", "tesl.previewMigration"]);
+    assert.deepEqual(lenses.map((lens) => lens.command.command), ["tesl.migrateDatabase", "tesl.migrationGuide", "tesl.previewMigration"]);
   } finally { f.cleanup(); }
 });
 
@@ -215,7 +223,7 @@ test("using a compiler option updates the real source then opens custom code and
     assert.deepEqual(f.requests[1].params.arguments[0], {entryFile:f.entryFile,projectRoot:f.root,decisionId:"entity:Todo",optionId:"additive-default",expectedInputDigest:"a".repeat(64)});
     assert.ok(!JSON.stringify(f.requests[1]).includes("template"));
     assert.equal(f.opened[0][1].selection.start.line,1);
-    assert.equal(f.opened[0][1].selection.end.character-f.opened[0][1].selection.start.character,4);
+    assert.equal(f.opened[0][1].selection.end.character-f.opened[0][1].selection.start.character,'todo "Write your converter"'.length);
     assert.equal(f.requests.at(-1).params.command,"tesl.generateMigration");
     assert.equal(f.panels[0].disposed,true);
     assert.equal(f.copies.length,0);
@@ -242,4 +250,88 @@ test("custom-code selection ignores todo text in comments and strings", () => {
  const source='note = "todo" # todo in comment\n# another todo\nfn convert = todo "Write converter"\n';
  assert.equal(codeHoleOffset(source),source.indexOf('todo "Write'));
  assert.equal(codeHoleOffset('note = "todo" # todo\n'),-1);
+ const quoted = 'value = (todo "Choose \\"a value\\" here") # keep comment';
+ const span = codeHoleRange(quoted);
+ assert.equal(quoted.slice(span.start, span.end), 'todo "Choose \\"a value\\" here"');
+ assert.equal(quoted.slice(0, span.start) + '"Imported"' + quoted.slice(span.end), 'value = ("Imported") # keep comment');
+});
+
+test("schema helpers, frozen snapshots, malformed migrations and application databases expose lenses", () => {
+  for (const file of ["/project/schema/notes/v1.tesl", "/project/schema/notes/v-current/checks.tesl", "/project/migrations/notes/v2.tesl"]) {
+    assert.deepEqual(migrationLensLocations("# incomplete source\n", file), [0]);
+  }
+  assert.deepEqual(migrationLensLocations('module App exposing []\ndatabase Main = Database {\n'), [1]);
+  assert.deepEqual(migrationLensLocations('# database Main = Database {\n'), []);
+});
+
+test("migration lightbulbs lead to checked choices; frozen history only offers guidance", () => {
+  const f = fixture();
+  try {
+    const provider = f.providers[2], doc = { uri: f.uri(f.entryFile) };
+    const diagnostic = { code: { value: "MIG003" } };
+    const actions = provider.provideCodeActions(doc, null, { diagnostics: [diagnostic] });
+    assert.deepEqual(actions.map((action) => action.command.command), ["tesl.migrateDatabase", "tesl.migrationGuide"]);
+    assert.deepEqual(actions[0].diagnostics, [diagnostic]);
+    assert.ok(actions.every((action) => !action.edit));
+    assert.deepEqual(provider.provideCodeActions(doc, null, { diagnostics: [{ code: "MIG013" }] }).map((action) => action.command.command), ["tesl.migrationGuide"]);
+    f.vscode.workspace.isTrusted = false;
+    assert.deepEqual(provider.provideCodeActions(doc, null, { diagnostics: [diagnostic] }), []);
+  } finally { f.cleanup(); }
+});
+
+test("Migrate database exposes compiler options and preserves new-revision intent", async () => {
+  const f = fixture();
+  try {
+    f.client.initializeResult = { capabilities: { executeCommandProvider: { commands: ["tesl.applyMigration"] } } };
+    f.preview.decisions = [{ id: "entity:Note", entity: "Note", options: [{ id: "migrate-validators", label: "Reuse validators", help: "Choose fallback policy" }] }];
+    const menus = [];
+    f.vscode.window.showQuickPick = async (items, options) => { menus.push({ items, options }); return items[0]; };
+    await f.commands.get("tesl.migrateDatabase")(f.uri(f.entryFile));
+    assert.ok(menus[1].items.some((item) => item.optionId === "migrate-validators" && item.detail === "Choose fallback policy"));
+    assert.equal(f.requests.length, 1);
+    assert.equal(f.requests[0].params.arguments[0].newRevision, undefined);
+    f.vscode.window.showQuickPick = async (items) => items.find((item) => item.newRevision) || items[0];
+    await f.commands.get("tesl.migrateDatabase")(f.uri(f.entryFile));
+    assert.equal(f.requests.at(-1).params.arguments[0].newRevision, true);
+    await f.panels.at(-1).message({ action: "refresh" });
+    assert.equal(f.requests.at(-1).params.arguments[0].newRevision, true);
+  } finally { f.cleanup(); }
+});
+
+test("cancelling Migrate database does not request or apply a proposal", async () => {
+  const f = fixture();
+  try {
+    f.vscode.window.showQuickPick = async () => undefined;
+    await f.commands.get("tesl.migrateDatabase")();
+    assert.equal(f.requests.length, 0);
+  } finally { f.cleanup(); }
+});
+
+test("first-use completion explains setup; known projects offer whole compiler scaffolds without editing text", async () => {
+  const f = fixture();
+  try {
+    const document = { uri: f.uri(path.join(f.root, "migrations/notes/v2.tesl")), version: 4, lineAt: () => ({ text: '  Note: todo "Choose migration"' }) };
+    const position = { line: 10, character: 9 }, token = { isCancellationRequested: false };
+    const provider = f.completionProviders[0];
+    let items = await provider.provideCompletionItems(document, position, token);
+    assert.equal(items[0].command.command, "tesl.migrateDatabase");
+    assert.equal(f.requests.length, 0);
+    f.client.initializeResult = { capabilities: { executeCommandProvider: { commands: ["tesl.applyMigration"] } } };
+    f.preview.inputDigest = "a".repeat(64);
+    f.preview.decisions = [{ id: "entity:Note", entity: "Note", file: document.uri.fsPath, line: 10, options: [{ id: "migrate-validators", label: "Reuse validators", help: "Fill rejection and fallback policy" }] }];
+    await f.commands.get("tesl.previewMigration")(f.uri(f.entryFile));
+    items = await provider.provideCompletionItems(document, position, token);
+    assert.equal(items.length, 1);
+    assert.equal(items[0].label, "Note: Reuse validators");
+    assert.equal(items[0].insertText, "");
+    assert.deepEqual(items[0].range.start, items[0].range.end);
+    assert.equal(items[0].command.command, "tesl.completeMigrationDecision");
+    assert.deepEqual(items[0].command.arguments, [{ previewId: "retained", decisionId: "entity:Note", optionId: "migrate-validators" }]);
+    assert.equal(f.panels.length, 1, "completion does not create a webview");
+    assert.equal(f.requests.at(-1).params.arguments[0].database, "App.Main");
+    token.isCancellationRequested = true;
+    assert.deepEqual(await provider.provideCompletionItems(document, position, token), []);
+    document.lineAt = () => ({ text: '# Note: todo "Comment"' });
+    assert.deepEqual(await provider.provideCompletionItems(document, position, token), []);
+  } finally { f.cleanup(); }
 });

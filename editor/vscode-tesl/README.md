@@ -53,6 +53,21 @@ For diagnostics, set the `TESL_DAP_LOG` environment variable to a file path
 
 ## Migration authoring
 
+Run **Tesl: Migrate database** from the Command Palette or editor/explorer context
+menu. Choose **Continue current draft** to refresh an undeployed revision, or
+**Start next revision** to freeze the current schema before editing its next
+version. The searchable picker offers compiler-generated scaffolds, applying the
+ordinary proposal, or reviewing files and decisions in the panel.
+
+For completion-driven authoring, apply **Update generated source**, place the
+cursor on a generated `todo` migration decision, and press **Ctrl+Space**. Choose
+a complete compiler plan; accepting it fills the multi-file scaffold and selects
+the whole remaining domain placeholder for replacement. If this editor session
+has not selected an application, **Set up migration choices…** opens the guided
+flow first. You need only supply domain values and policies for supported plans;
+imports, signatures, row mappings and migration rules are generated. Completion
+uses the same stale-source and document guards as panel choices.
+
 Use **Tesl: Migration Guide** from the Command Palette for an overview and
 step-by-step proof, row, queue and rollout guidance. Expand each option or
 **More help** for its conditions and limitations. The guide distinguishes adding
@@ -74,15 +89,28 @@ reachable databases get an explicit picker. The preview shows:
 - Read-only before/after diffs of the exact retained proposal. Refresh after
   editing; stale handles cannot fetch replacement disk contents.
 
-A **Migration guide** / **Preview migration decisions** CodeLens appears above
-`migration = Migration { ... }` and `VCurrent` module headers. Enable the editor's
+A **Migrate database…** / **Migration guide** / **Preview migration decisions**
+CodeLens appears on application database declarations, migrations, Contracts and
+`VCurrent` headers. Other schema/migration files, including frozen snapshots,
+private helpers and incomplete drafts, get a file-level entry. Enable the editor's
 `editor.codeLens` setting if lenses are hidden. Contextual completion offers
 migration fields and constructors with help; use `Ctrl+Space` to request it.
 
-An exact current-target byte/hash mismatch is shown as information while preparing
+An exact current-target byte/hash mismatch is shown as a warning squiggle while preparing
 a draft, with refresh and deployed-history guidance. The compiler still refuses
 to build/run stale history. Missing sources, invalid layouts and frozen-source
 hash errors remain errors. The editor cannot determine deployment state.
+File-level migration diagnostics underline an available character. Migration
+lightbulbs offer **Migrate database…** and **Explain migration requirements**;
+frozen-history `MIG013` only offers guidance. Compiler-provided mechanical fixes
+remain available; migration policy choices are not applied by Fix All.
+
+For changed primitive field proofs, **Reuse existing validators for changed field
+proofs** fills calls to uniquely matching exported pure `establish` functions,
+result handling, row copies, exact reverse signatures, imports and Retype/WriteBack
+rules. Fill rejection policy, historical fallback and fixture values. Ambiguous
+validators require the generic converter scaffold. See the
+[migration guide](../../manual/migration-guide.md) for a worked workflow and limits.
 
 **Update proposed source files** writes the reviewed proposal, including new files.
 Open dirty buffers receive version-guarded editor edits and stay unsaved; their
@@ -106,7 +134,7 @@ retaining recovery state instead of claiming automatic restoration.
 These features require the updated extension **and matching Tesl toolchain**.
 A checkout does not update an installed extension. Build a VSIX with
 `npm ci && npm run package` in this directory, install it using
-`codium --install-extension vscode-tesl-0.7.15.vsix` (or **Extensions: Install from
+`codium --install-extension vscode-tesl-0.7.16.vsix` (or **Extensions: Install from
 VSIX...**), then reload the window. Toolchain development settings follow below.
 
 When using this PR from a checkout, rebuild the compiler, CLI and LSP from that
