@@ -126,7 +126,41 @@ let changed_proof_choice () = with_project ~old:(replace "PROOF" " ::: Good titl
     else if String.starts_with ~prefix:"Convert " reason then "NotesSchema.VCurrent.accept value"
     else if String.starts_with ~prefix:"Return " reason then
       "case NotesSchema.V1.accept current.title of\n    Nothing ->\n      let previous = fixtureNote()\n      previous.title\n    Something previousValue -> previousValue"
-    else fail ("unexpected custom hole: " ^ reason)) ())
+     else fail ("unexpected custom hole: " ^ reason)) ())
+let validator_choice () = with_project ~old:(replace "PROOF" " ::: Good title" proof_source) (fun root path ->
+  write (path "schema/notes/v-current.tesl") (proof_source |> replace "PROOF" " ::: Good title" |> replace "value != \"\"" "value != \"blocked\"");
+  let p=get(preview root)in
+  let chosen=get(choose root p "migrate-validators")in
+  let actual=source chosen(path "migrations/notes/v2.tesl")in
+  List.iter(fun expected->check bool ("generated " ^ expected) true (Compile.string_contains actual expected))
+    ["NotesSchema.VCurrent.accept value";"case NotesSchema.V1.accept current.title of";"Something previousValue -> previousValue";"Retype title";"WriteBack title title"];
+  let fixture_body={|case NotesSchema.V1.accept "valid" of
+    Nothing -> fixtureNote()
+    Something title -> NotesSchema.V1.Note { id: "fixture", title: title }|}in
+  finish root path chosen ~fixture_body (fun reason->
+    if String.starts_with ~prefix:"Choose an explicit Reject" reason then "Reject \"invalid historical title\""
+    else if String.starts_with ~prefix:"Choose a historical fallback" reason then
+      "\n      let previous = fixtureNote()\n      previous.title"
+    else fail("unexpected domain hole: " ^ reason)) ())
+let ambiguous_validator () = with_project ~old:(replace "PROOF" " ::: Good title" proof_source) (fun root path ->
+  let fresh=proof_source |> replace "PROOF" " ::: Good title" |> replace "value != \"\"" "value != \"blocked\"" in
+  write(path "schema/notes/v-current.tesl") (fresh |> replace "Good, accept]" "Good, accept, other]" |>
+    fun source->source ^ "\nestablish other(value: String) -> Maybe (accepted: String ::: Good accepted) =\n  accept value\n");
+  let p=get(preview root)in
+  check bool "ambiguous validators require a manual choice" false(List.mem "migrate-validators"(options p));
+  check bool "generic conversion remains available" true(List.mem "migrate-retype"(options p)))
+let multiple_validator_fields () =
+  let old=proof_source |> replace "PROOF" "" |> replace "title: String }" "title: String, memo: String }"in
+  with_project ~old(fun root path->
+    write(path "schema/notes/v-current.tesl") (old |> replace "title: String, memo: String"
+      "title: String ::: Good title, memo: String ::: Good memo");
+    let chosen=get(choose root (get(preview root)) "migrate-validators")in
+    let actual=source chosen(path "migrations/notes/v2.tesl")in
+    check bool "both fields receive storage rules" true
+      (Compile.string_contains actual "Retype title" && Compile.string_contains actual "Retype memo");
+    finish root path chosen (fun reason->if String.starts_with ~prefix:"Choose an explicit Reject" reason then
+      "Reject \"invalid historical value\"" else if String.starts_with ~prefix:"Supply reviewed historical fixture" reason then
+      "\"fixture\"" else fail("unnecessary domain hole: " ^ reason)) ())
 let stale_choice () = with_project (fun root path ->
   write (path "schema/notes/v-current.tesl") (replace "amount: Int" "amount: Int, title: String" simple);
   let p=get (preview root) in
@@ -185,4 +219,7 @@ let () = run "Compiler-owned migration choices" ["complete source workflows",Lis
    "stale or invented choices never apply",stale_choice;"document set and versions bind the choice",stale_documents;
    "unsupported shapes never guess converters",unsupported_shapes;"consistent CRLF survives a selected scaffold",crlf_choice;
    "choice flags are strict and grouped",strict_command_flags;
-   "existing constructor imports remain valid",constructor_imports]]
+    "existing constructor imports remain valid",constructor_imports;
+    "changed proofs reuse exact validators",validator_choice;
+    "multiple fields reuse validators with plain historical write-back",multiple_validator_fields;
+    "ambiguous validators are not guessed",ambiguous_validator]]

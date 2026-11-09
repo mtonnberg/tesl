@@ -2,7 +2,7 @@
   "name": "vscode-tesl",
   "displayName": "Tesl Language",
   "description": "Syntax highlighting, live diagnostics, go-to-definition, hover types, and completions for the Tesl (.tesl) language",
-  "version": "0.7.15",
+  "version": "0.7.16",
   "publisher": "Tesl",
   "namespace": "Tesl",
   "//extensionKind": "Run only on the workspace (remote/WSL) side. Without this, in a Remote-WSL session VSCode can run the extension on BOTH the local UI host and the remote workspace, starting two language-server clients that each publish diagnostics \u2014 so every error/warning appears twice.",
@@ -292,6 +292,12 @@
         "enablement": "isWorkspaceTrusted"
       },
       {
+        "command": "tesl.migrateDatabase",
+        "title": "Migrate database",
+        "category": "Tesl",
+        "enablement": "isWorkspaceTrusted"
+      },
+      {
         "command": "tesl.migrationGuide",
         "title": "Migration Guide",
         "category": "Tesl"
@@ -338,12 +344,17 @@
           "group": "tesl@4"
         },
         {
-          "command": "tesl.previewMigration",
+          "command": "tesl.migrateDatabase",
           "when": "resourceExtname == .tesl && isWorkspaceTrusted",
           "group": "tesl@5"
         }
       ],
       "explorer/context": [
+        {
+          "command": "tesl.migrateDatabase",
+          "when": "resourceExtname == .tesl && isWorkspaceTrusted",
+          "group": "tesl@5"
+        },
         {
           "command": "tesl.debugTests",
           "when": "resourceExtname == .tesl && isWorkspaceTrusted",

@@ -122,6 +122,7 @@ function makeVscode(files, debugCalls, taskCalls, workspacePath = repoRoot, opti
     Uri,
     Range,
     CodeLens,
+    CodeActionKind: { QuickFix: "quickfix" },
     ProcessExecution,
     Task,
     TaskScope: { Workspace: 1 },
@@ -167,6 +168,8 @@ function makeVscode(files, debugCalls, taskCalls, workspacePath = repoRoot, opti
       onDidChangeTextDocument: () => new Disposable(),
     },
     languages: {
+      registerCompletionItemProvider: () => new Disposable(),
+      registerCodeActionsProvider: () => new Disposable(),
       registerCodeLensProvider: (_selector, provider) => {
         codeLensProviders.push(provider);
         return new Disposable();

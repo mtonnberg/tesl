@@ -50,6 +50,31 @@ let allocate taken base =
 let key identity=String.split_on_char '.' identity |> List.map String.capitalize_ascii |> String.concat ""
 let todo reason="todo " ^ Compile.json_encode_string reason
 let row constructor fields="Row (" ^ constructor ^ " { " ^ String.concat ", " fields ^ " })"
+(* Reuse only one unambiguous, exported, pure validator of the exact field
+   contract. Choosing this scaffold explicitly chooses its validation behavior;
+   the completed migration still passes the normal type/proof checks. *)
+let validator forms (home:module_form) (field:field_def) =
+ let resolve=T.resolver forms in
+ let same_type a b=match a,b with
+  | TName a,TName b->(match resolve home Migration_ir.Type a.name,resolve home Migration_ir.Type b.name with
+    | Some(Migration_ir.Primitive a),Some(Migration_ir.Primitive b)->a=b|_->false)
+  | _->false in
+ let rec same_proof binder actual expected=match actual,expected with
+  | PredApp a,PredApp b->a.args=[binder] && b.args=[field.name] &&
+    Option.is_some(resolve home Migration_ir.Predicate b.pred) &&
+    resolve home Migration_ir.Predicate a.pred=resolve home Migration_ir.Predicate b.pred
+  | PredAnd a,PredAnd b->same_proof binder a.left b.left && same_proof binder a.right b.right
+  | _->false in
+ let candidates=List.filter_map(function
+  | DFunc f when f.kind=EstablishKind && exported home f.name && f.capabilities=[] && f.http_methods=[]->
+    (match f.params,f.return_spec,field.proof_ann with
+     | [p],RetMaybeAttached{outer_ty=None;binding=r;_},Some proof when p.proof_ann=None &&
+       same_type p.type_expr field.type_expr && same_type r.type_expr field.type_expr &&
+       Option.fold ~none:false ~some:(fun actual->same_proof r.name actual proof)r.proof_ann->
+       Some(home.module_name ^ "." ^ f.name)
+     | _->None)
+  | _->None)home.decls in
+ match candidates with [one]->Some one|_->None
 let coverage requirements identity loc =
  let entries=E.requirement_entities requirements |> List.filter_map(fun(name,e)->match e with
   | E.Added _->Some{E.entity=name;kind=E.New;loc}
@@ -96,7 +121,8 @@ let options ~file ~source ~before ~after ~requirements ~identity ~(previous:I.st
   {id;label;replacement;imports=List.sort_uniq compare(common_imports @ imports);
    helpers=forward ^ "\n" ^ helpers ^ "\n" ^ fixture_body;fixture;
    template=replacement ^ "\n\n" ^ forward ^ "\n" ^ helpers ^ "\n" ^ fixture_body;help}in
- let retype=try
+ let retype automatic=try
+  let taken=ref !taken in
   let imports=ref [] and helpers=ref [] and rules=ref [] in
   let conversions=List.map(fun shape->
    let field=shape.I.stored_field.name and old_shape=by_name shape in
@@ -106,14 +132,26 @@ let options ~file ~source ~before ~after ~requirements ~identity ~(previous:I.st
    let target_ann,target_import,target_proofs=annotation forms new_home new_field shape "convertedValue"in
    let reverse_ann,_,_=annotation forms old_home old_field old_shape "previousValue"in
    imports:=old_import::target_import::List.map(fun name->"import " ^ name)(old_proofs @ target_proofs) @ !imports;
-   let function_=allocate taken("convert" ^ suffix ^ String.capitalize_ascii field)
-   and reverse=allocate taken("writeBack" ^ suffix ^ String.capitalize_ascii field)in
-   helpers:= !helpers @ ["fn " ^ function_ ^ "(value: " ^ old_ann ^ ") -> Maybe (" ^
-    (if shape.proof_identity=None then snd(require(primitive shape)) else "convertedValue: " ^ target_ann) ^ ") =\n  " ^
-    todo("Convert the exact historical value; return Something with the target type/proof, or Nothing") ^ "\n";
+    let function_=allocate taken("convert" ^ suffix ^ String.capitalize_ascii field)
+    and reverse=allocate taken("writeBack" ^ suffix ^ String.capitalize_ascii field)in
+    let forward_body,reverse_body=if automatic then begin
+      if primitive shape<>primitive old_shape then raise Unsupported;
+      let target=require(validator forms new_home new_field)in
+      let backward=if old_field.proof_ann=None then "current." ^ field else
+        let historical=require(validator forms old_home old_field)in
+        "case " ^ historical ^ " current." ^ field ^ " of\n    Nothing -> " ^
+        todo("Choose a historical fallback carrying the exact old proof for " ^ previous.entity_name ^ "." ^ field) ^
+        "\n    Something previousValue -> previousValue" in
+      target ^ " value",backward
+    end else
+      todo("Convert the exact historical value; return Something with the target type/proof, or Nothing"),
+      todo("Return the exact historical type and proof for " ^ previous.entity_name ^ "." ^ field ^ "; choose a reviewed compatibility policy") in
+    helpers:= !helpers @ ["fn " ^ function_ ^ "(value: " ^ old_ann ^ ") -> Maybe (" ^
+     (if shape.proof_identity=None then snd(require(primitive shape)) else "convertedValue: " ^ target_ann) ^ ") =\n  " ^
+     forward_body ^ "\n";
     "fn " ^ reverse ^ "(current: " ^ current.entity_name ^ ") -> " ^
     (if old_shape.proof_identity=None then reverse_ann else "previousValue: " ^ reverse_ann) ^ " =\n  " ^
-    todo("Return the exact historical type and proof for " ^ previous.entity_name ^ "." ^ field ^ "; choose a reviewed compatibility policy") ^ "\n"];
+     reverse_body ^ "\n"];
    rules:= !rules @ ["Retype " ^ field;"WriteBack " ^ field ^ " " ^ field ^ " " ^ reverse];
    field,function_)changed in
   let rec body indent=function
@@ -122,9 +160,11 @@ let options ~file ~source ~before ~after ~requirements ~identity ~(previous:I.st
      pad ^ "case " ^ function_ ^ " old." ^ field ^ " of\n" ^
      pad ^ "  Nothing -> " ^ todo("Choose an explicit Reject reason or other reviewed conversion policy for " ^ identity ^ "." ^ field) ^ "\n" ^
      pad ^ "  Something converted" ^ String.capitalize_ascii field ^ " ->\n" ^ body(indent+4)rest in
-  [make "migrate-retype" "Convert changed primitive fields with an explicit historical write-back" !rules (body 2 conversions)
-    (String.concat "\n" !helpers) !imports
-    "The compiler filled the row mapping, changed-field rules, exact forward/reverse signatures, historical fixture and required imports. Implement each conversion, rejected-row policy, historical write-back policy and fixture value. No values, rejection/discard policy, Same proof or inverse behavior has been guessed. Cross-field proofs, hidden owners, key changes, renamed/removed fields and index changes are deliberately not scaffolded. The complete source remains blocked until every custom hole is implemented and all compiler checks pass."]
+   [make (if automatic then "migrate-validators" else "migrate-retype")
+     (if automatic then "Reuse existing validators for changed field proofs" else "Convert changed primitive fields with an explicit historical write-back") !rules (body 2 conversions)
+     (String.concat "\n" !helpers) !imports
+     (if automatic then "Reuse the uniquely matching exported establish functions for the new and historical field proofs. The compiler fills validator calls, Maybe handling, row copies, Retype/WriteBack rules, imports and fixture structure. Choose rejection reasons, historical fallback values when old validation fails, and representative fixture values. Validators may normalize values: review their behavior and test both directions. This is Retype, not Same or same-column Revalidate."
+      else "The compiler filled the row mapping, changed-field rules, exact forward/reverse signatures, historical fixture and required imports. Implement each conversion, rejected-row policy, historical write-back policy and fixture value. No values, rejection/discard policy, Same proof or inverse behavior has been guessed. Cross-field proofs, hidden owners, key changes, renamed/removed fields and index changes are deliberately not scaffolded. The complete source remains blocked until every custom hole is implemented and all compiler checks pass.")]
   with Unsupported->[]in
  let revalidate=try match changed with
   | [shape]->
@@ -156,5 +196,5 @@ let options ~file ~source ~before ~after ~requirements ~identity ~(previous:I.st
        "This existing target-owned establish was checked for the exact primitive field proof and original-value preservation, including all historical Same evidence. The scaffold fills the call, result handling, copied fields, rule and historical fixture. Choose the rejected-row policy and fixture values; these holes remain compile-blocking. Revalidate does not replace changed historical proof meaning.")
     with Unsupported->None)
   | _->[] with Unsupported->[]in
- revalidate @ retype
+ revalidate @ retype true @ retype false
  with Unsupported->[]
