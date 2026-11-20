@@ -258,8 +258,11 @@ let display_ty_of_binding ty = function
   | FactProofBinding proof ->
     Printf.sprintf "Fact (%s)" (pp_proof_expr proof)
 
-let record_local_binding ?hover_note ctx name loc ty meta =
+let record_local_binding ?hover_note ?declared_proof ctx name loc ty meta =
   let ty = apply !(ctx.subst) ty in
+  (* Report an explicit refinement as part of the declared type. This is display
+     metadata only; proof validation independently discharges the annotation. *)
+  let meta=match declared_proof with Some proof->AttachedProofBinding proof|None->meta in
   let display_ty = display_ty_of_binding ty meta in
   ctx.local_bindings := { name; loc; ty; display_ty; hover_note } :: !(ctx.local_bindings)
 
@@ -4856,7 +4859,7 @@ let rec infer_stmt ctx (e : expr) : ty * ctx =
        — without a binding there is no subject to attach the proof to, and the \
        validation result is silently discarded";
     infer_stmt ctx body
-  | ELet { name; declared_type; value; body; loc; declared_proof = _ } ->
+  | ELet { name; declared_type; value; body; loc; declared_proof } ->
     reject_unchecked_check_binding ctx name value;
     let value_ty =
       match declared_type with
@@ -4872,7 +4875,7 @@ let rec infer_stmt ctx (e : expr) : ty * ctx =
     let meta = binding_meta_for_binding ctx name value in
     let subject_chain = binding_subject_chain ctx name value in
     let hover_note = hover_note_for_meta ((name, subject_chain) :: ctx.subject_chain_env) name meta in
-    record_local_binding ?hover_note ctx name loc value_ty meta;
+    record_local_binding ?hover_note ?declared_proof ctx name loc value_ty meta;
     let env_fv = free_vars_env ctx.env in
     let sch = generalize env_fv !(ctx.subst) value_ty in
     let ctx' = {
@@ -4984,7 +4987,7 @@ let rec check_stmt ctx (e : expr) (expected : expectation) : unit =
        — without a binding there is no subject to attach the proof to, and the \
        validation result is silently discarded";
     check_stmt ctx body expected
-  | ELet { name; declared_type; value; body; loc; declared_proof = _ } ->
+  | ELet { name; declared_type; value; body; loc; declared_proof } ->
     reject_unchecked_check_binding ctx name value;
     let value_ty =
       match declared_type with
@@ -5000,7 +5003,7 @@ let rec check_stmt ctx (e : expr) (expected : expectation) : unit =
     let meta = binding_meta_for_binding ctx name value in
     let subject_chain = binding_subject_chain ctx name value in
     let hover_note = hover_note_for_meta ((name, subject_chain) :: ctx.subject_chain_env) name meta in
-    record_local_binding ?hover_note ctx name loc value_ty meta;
+    record_local_binding ?hover_note ?declared_proof ctx name loc value_ty meta;
     let env_fv = free_vars_env ctx.env in
     let sch = generalize env_fv !(ctx.subst) value_ty in
     let ctx' = {
@@ -8073,7 +8076,7 @@ let check_module_with_metadata_uncached ?typed_nodes ?(source_lines = [||]) (m :
                 binding_meta_env = (pn, proof_meta) :: ctx.binding_meta_env;
               }
             ) test_ctx proof_names
-          | TsLet { name; declared_type; value; loc; _ } ->
+          | TsLet { name; declared_type; declared_proof; value; loc; _ } ->
             let ty =
               match declared_type with
               | Some declared_type ->
@@ -8087,7 +8090,7 @@ let check_module_with_metadata_uncached ?typed_nodes ?(source_lines = [||]) (m :
             let meta = binding_meta_for_binding test_ctx name value in
             let subject_chain = binding_subject_chain test_ctx name value in
             let hover_note = hover_note_for_meta ((name, subject_chain) :: test_ctx.subject_chain_env) name meta in
-            record_local_binding ?hover_note test_ctx name loc ty meta;
+            record_local_binding ?hover_note ?declared_proof test_ctx name loc ty meta;
             let sch = generalize (free_vars_env test_ctx.env) !(test_ctx.subst) ty in
             {
               test_ctx with

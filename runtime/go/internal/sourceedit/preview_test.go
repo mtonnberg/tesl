@@ -148,3 +148,35 @@ func TestSourcePreviewInputDigestPinsChoiceWithoutGrantingWrites(t *testing.T) {
 		}
 	}
 }
+
+func TestSourcePreviewCleanupMetadata(t *testing.T) {
+	base := previewVector(t)
+	before, err := DecodePreview(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	with := func(fields string) []byte {
+		return append(append(bytes.Clone(base[:len(base)-1]), []byte(","+fields)...), '}')
+	}
+	for _, fields := range []string{
+		`"contractVersion":null,"cleanup":[]`,
+		`"contractVersion":2,"cleanup":[{"version":2,"file":"migrations/notes/v2-contract.tesl","present":false}]`,
+	} {
+		p, err := DecodePreview(with(fields))
+		if err != nil || p.Manifest().Digest() != before.Manifest().Digest() || p.Compilable() != before.Compilable() {
+			t.Fatalf("cleanup metadata changed the guarded proposal: %v", err)
+		}
+	}
+	for _, fields := range []string{
+		`"contractVersion":1`, `"contractVersion":-2`, `"contractVersion":2147483647`, `"contractVersion":"2"`,
+		`"cleanup":null`, `"cleanup":{}`, `"cleanup":[{}]`,
+		`"cleanup":[{"version":1,"file":"x","present":false}]`,
+		`"cleanup":[{"version":2,"file":"","present":false}]`,
+		`"cleanup":[{"version":2,"file":"x","present":null}]`,
+		`"cleanup":[{"version":2,"file":"x","present":false,"unexpected":true}]`,
+	} {
+		if _, err := DecodePreview(with(fields)); err == nil {
+			t.Fatalf("invalid cleanup metadata accepted: %s", fields)
+		}
+	}
+}

@@ -147,7 +147,7 @@ let with_field_type_context fields_by_type ctors type_env f =
     field_proof_type_ctx := Some (type_env, fields_by_type, ctors);
     f ())
 
-let return_context_operations ~funcs ~fields_by_type ~ctors =
+let return_context_operations ~funcs ~fields_by_type ~ctors ~ctor_fields =
   let extend_let_envs type_env subject_env proof_env name value =
     with_field_type_context fields_by_type ctors type_env (fun () ->
     (* Special case: forgetFact strips all proofs — do not propagate subject chain,
@@ -265,7 +265,8 @@ let return_context_operations ~funcs ~fields_by_type ~ctors =
           | _ -> "_" in
         let scrut_proofs = proofs_of_expr result_name funcs subject_env proof_env scrut in
         let te = pattern_bindings scrut_ty ctors arm.pattern @ type_env in
-        let pe, se = extend_case_envs subject_env proof_env scrut scrut_proofs arm.pattern in
+         let pe, se = extend_case_envs subject_env proof_env scrut scrut_proofs arm.pattern in
+         let pe, se = pattern_field_proof_environments ~ctor_fields (pe, se) arm.pattern in
         return_leaves te se pe arm.body
       ) arms
     | EWithDatabase { body; _ } | EWithCapabilities { body; _ } | EWithTransaction { body; _ } ->
@@ -316,8 +317,8 @@ let function_return_contexts ~decls ~extra_funcs (fd : func_decl) =
     field_proof_registry := mf.mf_field_proof_map;
     field_proof_type_ctx := Some (fn_type_env mf.mf_funcs mf.mf_fields_map mf.mf_ctors fd,
                                  mf.mf_fields_map, mf.mf_ctors);
-    let _, _, leaves = return_context_operations ~funcs:mf.mf_funcs
-      ~fields_by_type:mf.mf_fields_map ~ctors:mf.mf_ctors in
+     let _, _, leaves = return_context_operations ~funcs:mf.mf_funcs
+       ~fields_by_type:mf.mf_fields_map ~ctors:mf.mf_ctors ~ctor_fields:mf.mf_ctor_field_proof_map in
     leaves (List.map (fun (p : binding) -> p.name, p.type_expr) fd.params)
       (build_initial_subject_env fd.params) (build_initial_proof_env fd.params) fd.body)
 
@@ -345,7 +346,7 @@ let check_fn_return_proof_annotations
     | None -> "no proofs"
   in
   let extend_let_envs, extend_case_envs, return_leaves =
-    return_context_operations ~funcs ~fields_by_type ~ctors in
+    return_context_operations ~funcs ~fields_by_type ~ctors ~ctor_fields:mf.mf_ctor_field_proof_map in
   (* Predicates that come from infrastructure (SQL, queue) and cannot be
      validated by tracing the function body — exclude them from proof-body
      checking so fn functions can correctly propagate these proofs.
@@ -675,7 +676,7 @@ let check_fn_return_proof_annotations
           `findMin`'s `Node Leaf cur _ -> Right cur` is accepted (cur carries the
           field proof) while `Something (0 - 999)` is rejected. *)
        | RetMaybeAttached { binding = b; loc = ret_loc; _ }
-         when fd.kind = EstablishKind && optional_attached_proof_return fd.return_spec ->
+          when (fd.kind = EstablishKind || is_forgery_restricted_kind fd.kind) && optional_attached_proof_return fd.return_spec ->
          let required = Option.get b.proof_ann in
          let check_leaf (types, subjects, proofs, leaf) =
            (* A returned field belongs to the receiver's type at this exact
@@ -700,8 +701,8 @@ let check_fn_return_proof_annotations
              if not (framework_ok && proof_matches wanted carried) then
                errors := make_error ret_loc
                  ~hint:"attach the declared proof to the returned value with ::: inside establish, preserve existing evidence, or return Nothing"
-                 (Printf.sprintf "establish `%s` returns a success value without the declared proof `%s` on that value"
-                   fd.name (pp_proof wanted)) :: !errors) in
+                  (Printf.sprintf "%s `%s` returns a success value without the declared proof `%s` on that value"
+                    (if fd.kind=EstablishKind then "establish" else "function") fd.name (pp_proof wanted)) :: !errors) in
          List.iter check_leaf (return_leaves
            (List.map (fun (p : binding) -> p.name, p.type_expr) fd.params)
            (build_initial_subject_env fd.params) (build_initial_proof_env fd.params) fd.body)

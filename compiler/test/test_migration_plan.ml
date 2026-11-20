@@ -130,7 +130,10 @@ let retained_drop () = with_project ~initial:(schema ^ "\nentity Survivor table 
  let born = get (plan ~initial_version:2 root) in
   check bool "later installation never creates already dropped storage" true
    (List.for_all (fun (table:P.catalog_table) -> table.name<>"notes") (last born).catalog);
- generate ~next:true root;
+  let cleanup=match G.generate_contract ~project_root:root ~entry_file:(path "app.tesl") ~database:None ~version:2 ~documents:[] with
+    | Ok p->p | Error es->fail(String.concat "\n"(List.map(fun(e:G.error)->e.message)es))in
+  List.iter(fun(e:M.edit)->save e.path e.after)(M.edits(G.manifest cleanup));
+  generate ~next:true root;
  edit_schema path (fun s -> s ^ "entity Replacement table \"notes\" primaryKey id { id: String }\n");generate root;
  List.iter (fun initial_version -> refused "MIG016" (plan ~initial_version root)) [1;2;3])
 let index_case initial change risk = with_project ~initial (fun root path ->

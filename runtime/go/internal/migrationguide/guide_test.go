@@ -19,6 +19,22 @@ func TestChangedProofGuideNeverOffersRevalidateAsReplacement(t *testing.T) {
 	}
 }
 
+func TestWeakerProofGuidanceExplainsBothDirectionsBeforeDetails(t *testing.T) {
+	for _, guide := range []Guide{
+		ForDiagnostic("MIG024", "Same differs at a check"),
+		ForDecision(Decision{Entity: "Note", Reason: "stored proof contract changed", Options: []DecisionOption{{ID: "migrate-validators", Label: "Reuse validators"}}}),
+	} {
+		for _, required := range []string{"more permissive", "old-valid", "old check"} {
+			if !strings.Contains(guide.Summary, required) {
+				t.Fatalf("missing visible weakening guidance %q: %+v", required, guide)
+			}
+		}
+		if !strings.Contains(strings.Join(guide.Help, "\n"), "150-character") {
+			t.Fatal("missing concrete forward/reverse example")
+		}
+	}
+}
+
 func TestCurrentAndFrozenHashHelpHaveDifferentRecovery(t *testing.T) {
 	draft := ForDiagnostic("MIG001", "changed current hash")
 	frozen := ForDiagnostic("MIG013", "changed source")
@@ -59,5 +75,16 @@ func TestSelectedDefaultHoleDoesNotAskForAnotherMigrationDecision(t *testing.T) 
 	guide := ForDiagnostic("MIG003", "unresolved migration decision: Choose a literal of type String for Note.title")
 	if len(guide.Options) != 0 || !strings.Contains(guide.Summary, "scaffold is written") {
 		t.Fatalf("selected literal hole was turned back into a migration-route choice: %+v", guide)
+	}
+}
+
+func TestRequiredValueChoicesAndHelperHolesStayFocused(t *testing.T) {
+	guide := ForDecision(Decision{Entity: "Todo", Reason: "Todo.details is now required.", Options: []DecisionOption{{ID: "require-value", Label: "Fill missing values"}}})
+	if len(guide.Options) != 1 || guide.Options[0].ID != "require-value" || guide.Summary != "Todo.details is now required." || strings.Contains(strings.Join(guide.Help, "\n"), "Same") {
+		t.Fatalf("required value received unrelated proof decisions: %+v", guide)
+	}
+	hole := ForDiagnostic("MIG003", "Migration needs a value: Value to use when Todo.details is missing (String)")
+	if len(hole.Options) != 0 || hole.Summary != "Value to use when Todo.details is missing (String)" {
+		t.Fatalf("domain hole was turned back into a migration choice: %+v", hole)
 	}
 }

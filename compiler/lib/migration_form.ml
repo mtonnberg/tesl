@@ -12,7 +12,7 @@ let names = List.sort_uniq String.compare
 (** Unlike the declaration vocabulary above, Migrated is an ordinary runtime
     ADT. Never add these names to [names]: contextual erasure and config-only
     type checks consume that list. *)
-let runtime_constructor_groups = ["Migrated", ["Row"; "Reject"]]
+let runtime_constructor_groups = ["Migrated", ["Row"; "Reject"]; "RowChange", ["KeepRow"; "DeleteRow"; "RejectRow"]]
 let runtime_names = List.concat_map (fun (name, constructors) -> name :: constructors)
   runtime_constructor_groups
 

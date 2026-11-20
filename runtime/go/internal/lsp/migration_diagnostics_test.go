@@ -413,7 +413,7 @@ func TestFrozenSourceDiagnosticsThroughRealCompilerAndRetainedLSP(t *testing.T) 
 		if err := json.Unmarshal(raw, &result); err != nil {
 			t.Fatal(err)
 		}
-		if result.Compilable || len(result.Decisions) != 1 || len(result.Decisions[0].Options) != 1 {
+		if result.Compilable || len(result.Decisions) != 1 || len(result.Decisions[0].Options) != 3 {
 			t.Fatalf("real decision metadata: %s", raw)
 		}
 		option := result.Decisions[0].Options[0]
@@ -423,7 +423,7 @@ func TestFrozenSourceDiagnosticsThroughRealCompilerAndRetainedLSP(t *testing.T) 
 		foundGuide := false
 		for _, item := range result.Guidance {
 			if item.DecisionID == result.Decisions[0].ID {
-				foundGuide = len(item.Guide.Options) == 1 && item.Guide.Options[0].ID == option.ID && item.Guide.Options[0].RequiresCustomCode
+				foundGuide = len(item.Guide.Options) == 3 && item.Guide.Options[0].ID == option.ID && item.Guide.Options[0].RequiresCustomCode
 			}
 		}
 		if !foundGuide {

@@ -213,55 +213,27 @@ let refresh_same file source before after =
   (source_result file (Merge.reconcile view ~collection:syntax.same ~previous ~current
     ~existing ~desired:(List.filter_map Fun.id desired))).source
 let required = function E.Paired {contract_changed=false;missing_identities=[];_} -> false | _ -> true
-(* Guidance only: these candidates never replace the unresolved decision or
-   authorize an adapter. Compare complete contracts so changes to a fact's
-   establish/helper closure are visible even when field syntax is unchanged. *)
-let existing_proof_guidance before after identity =
-  let open Migration_canonical in
-  let shapes inventory = I.field_shapes inventory |> List.filter (fun shape ->
-    relative (I.root_module inventory) shape.I.stored_field.entity = identity) in
-  let old = shapes before and fresh = shapes after in
-  let rec local_proof field = function
-    | Seq [Bytes "predicate"; _; Seq args] -> List.for_all (function
-      | Seq [Bytes "subject"; Seq [Bytes "field-subject"; Bytes name]; Seq []] -> name=field
-      | _ -> false) args
-    | Seq [Bytes "and"; left; right] -> local_proof field left && local_proof field right
-    | _ -> false in
-  let local_fields fields = List.for_all (fun shape ->
-    Option.fold ~none:true ~some:(local_proof shape.I.stored_field.name) shape.proof_identity) fields in
-  let no_codec inventory shape =
-    match I.stored_dependencies inventory ~entity:shape.I.stored_field.entity ~field:shape.stored_field.name with
-    | Some dependencies -> not (List.exists (fun d -> d.I.declaration_kind=I.Codec_declaration) dependencies)
-    | None -> false in
-  let non_key inventory shape = List.exists (fun entity ->
-    entity.I.entity_name=shape.I.stored_field.entity && entity.primary_key<>shape.stored_field.name)
-    (I.stored_entities inventory) in
-  if not (local_fields old && local_fields fresh) then [] else
-  fresh |> List.filter_map (fun current ->
-    match List.find_opt (fun previous -> previous.I.stored_field.name=current.I.stored_field.name) old with
-    | Some previous when previous.proof_identity<>None &&
-        previous.stored_field.contract<>current.stored_field.contract &&
-        previous.type_identity=current.type_identity && previous.db_type=current.db_type &&
-        previous.db_column=current.db_column && non_key before previous && non_key after current &&
-        no_codec before previous && no_codec after current &&
-        List.exists (fun name -> current.type_identity=Migration_additive.primitive name)
-          ["Tesl.Prelude.Int"; "Tesl.Float.Float"; "Tesl.Prelude.Bool"; "Tesl.Prelude.String"] ->
-      let field=current.stored_field.name in
-      Some ("stored proof contract changed for " ^ identity ^ "." ^ field ^
-        ": use Migrate with Retype " ^ field ^ " and WriteBack " ^ field ^ " " ^ field ^
-        " <reverseFn>; the reverse function must return the exact historical field type and proof from " ^
-        previous.stored_field.entity ^ "." ^ field ^
-        ". Refresh generates the new storage column after these explicit rules are supplied. " ^
-        "This route supports field-local proofs only; whole-entity cross-field reverse proofs are unsupported. " ^
-         "Revalidate supports adding a first proof, or a field-local conjunction preserving every historical proof through exact Same evidence; it cannot replace changed historical evidence")
-    | _ -> None)
 let decision_body before after identity (errors : E.error list) =
-  let fields = I.stored_fields before |> List.filter (fun (f : I.stored_field) -> relative (I.root_module before) f.entity = identity)
-    |> List.map (fun (f : I.stored_field) -> f.name) |> List.sort String.compare in
-  let reason = identity ^ ": " ^ String.concat "; " (List.map (fun (e : E.error) -> e.message) errors) ^
-    "; old row fields: " ^ String.concat ", " fields ^
-    String.concat "" (List.map (fun guidance -> "; " ^ guidance) (existing_proof_guidance before after identity)) in
-  "todo " ^ Compile.json_encode_string reason
+  let shapes inv=I.field_shapes inv |> List.filter(fun s->relative(I.root_module inv)s.I.stored_field.entity=identity)in
+  let old=shapes before and fresh=shapes after in
+  let changed=List.filter_map(fun s->Option.bind(List.find_opt(fun p->p.I.stored_field.name=s.I.stored_field.name)old)
+    (fun p->if p.stored_field.contract=s.stored_field.contract then None else Some(p,s)))fresh in
+  let optional_message=if changed<>[] && List.length old=List.length fresh &&
+    List.for_all(fun(p,s)->Migration_scaffold.required_value p s)changed &&
+    List.for_all(fun(e:E.error)->Compile.string_contains e.message "Additive requires the existing field")errors then
+    Some(String.concat " "(List.map(fun(_,s)->identity ^ "." ^ s.I.stored_field.name ^
+      " is now required. Choose a value for rows where it is missing; existing values can be kept.")changed))else None in
+  let names fields=String.concat ", "(List.map(fun s->identity ^ "." ^ s.I.stored_field.name)fields)in
+  let added=List.filter(fun s->not(List.exists(fun p->p.I.stored_field.name=s.I.stored_field.name)old))fresh
+  and removed=List.filter(fun p->not(List.exists(fun s->p.I.stored_field.name=s.I.stored_field.name)fresh))old in
+  let descriptions=(if added=[]then[]else["Choose values for new fields " ^ names added]) @
+    (if removed=[]then[]else["Choose an explicit rename or old-writer values for removed fields " ^ names removed]) @
+    List.map(fun(p,s)->
+      if p.I.proof_identity<>None || s.I.proof_identity<>None then "stored proof contract changed for " ^ identity ^ "." ^ s.stored_field.name
+      else "Map the changed type or codec of " ^ identity ^ "." ^ s.stored_field.name)changed in
+  let reason=if descriptions=[]then String.concat "; "(List.map(fun(e:E.error)->e.message)errors)
+    else String.concat ". " descriptions ^ "."in
+  "todo " ^ Compile.json_encode_string(Option.value optional_message ~default:reason)
 let additive_coverage requirements loc identity =
     (* Select one additive candidate while satisfying only the other entries'
        coverage. Transform here is a local classification probe, never a checked
@@ -324,7 +296,7 @@ let refresh_entities file source before after =
    classifier as generation. Probe literals establish only that the exact shape
    permits defaults; they are never emitted as a guessed data policy. Neither a
    template nor this metadata is an executable plan or source-write authority. *)
-let decision_guidance file source before after =
+let entity_decision_guidance file source before after =
   let view,declaration = syntax file source in
   let requirements = match D.identity_claims ~before ~after declaration with
     | Error _ -> None
@@ -371,13 +343,55 @@ let decision_guidance file source before after =
        | [identity,entity] ->
          let options = match entity with E.Paired pair ->
            additive_option identity pair.previous pair.current loc @
-           List.map(fun (p:Migration_scaffold.t)->{id=p.id;label=p.label;template=p.template;help=p.help;needs_custom_code=true})
+            List.map(fun (p:Migration_scaffold.t)->{id=p.id;label=p.label;template=p.template;help=p.help;needs_custom_code=Compile.string_contains p.template "todo \""})
             (Migration_scaffold.options ~file ~source ~before ~after ~requirements ~identity
               ~previous:pair.previous ~current:pair.current ~missing:pair.missing_identities ~loc)
            | _ -> [] in
-         Some {id="entity:" ^ identity;entity=identity;file;line=loc.start.line;col=loc.start.col;reason;options}
+          let reason=if options<>[]then reason else match entity with
+           | E.Paired pair->let explanations=ref []in
+             ignore(Migration_scaffold_general.options ~on_unsupported:(fun text->explanations:=text::!explanations)
+               ~file ~source ~before ~after ~identity ~previous:pair.previous ~current:pair.current ~missing:pair.missing_identities
+               ~validator:Migration_scaffold.validator ~constructor:Migration_scaffold.constructor_fixture ());
+             (match List.sort_uniq compare !explanations with []->reason|messages->String.concat " " messages)
+           | _->reason in
+          Some {id="entity:" ^ identity;entity=identity;file;line=loc.start.line;col=loc.start.col;reason;options}
        | _ -> None)
     | _ -> None)
+
+let refresh_jobs file source before after =
+ let changes=Migration_scaffold_general.queue_changes before after in
+ let view,declaration=syntax file source in
+ let source=if changes=[] || List.mem_assoc "jobs" declaration.fields then source else
+   match Migration_form.application declaration.declaration.value with
+   | "Migration",[record]->let range=source_result file(Syntax.collection_range view record)in
+     source_result file(Syntax.replace view [({Syntax.start_byte=range.start_byte+1;end_byte=range.start_byte+1},"jobs: {}, ")])
+   | _->reject file "migration declaration changed before queue scaffolding"in
+ let view,declaration=syntax file source in
+ match List.assoc_opt "jobs" declaration.fields with None->source|Some jobs->
+ let members=source_result file(Syntax.members view jobs)in
+ let existing=List.map(fun(key,expr)->"job:" ^ Option.get key,expr)members in
+ let desired=List.map(fun(change:Migration_scaffold_general.queue_change)->
+   {Merge.id="job:" ^ change.key;key=Some change.key;body="todo " ^ Compile.json_encode_string change.reason})changes in
+ (source_result file(Merge.reconcile view ~collection:jobs ~previous:(I.root_module before) ~current:(I.root_module after) ~existing ~desired)).source
+
+let queue_decision_guidance file source before after =
+ let view,declaration=syntax file source in
+ match List.assoc_opt "jobs" declaration.fields with None->[]|Some jobs->
+ source_result file(Syntax.members view jobs)|>List.filter_map(function
+ | Some key,Ast.EApp{fn=Ast.EVar{name="todo";_};arg=Ast.ELit{lit=Ast.LString reason;_};loc}->
+   (match List.find_opt(fun(c:Migration_scaffold_general.queue_change)->c.key=key)(Migration_scaffold_general.queue_changes before after)with
+    | None->None|Some change->
+      let explanations=ref []in
+      let plans=Migration_scaffold_general.queue_options ~on_unsupported:(fun reason->explanations:=reason::!explanations) ~file ~source ~before ~after ~change
+        ~validator:Migration_scaffold.validator ~constructor:Migration_scaffold.constructor_fixture ()in
+      let reason=if plans=[] && !explanations<>[]then String.concat " "(List.sort_uniq compare !explanations)else reason in
+      Some{id="job:" ^ key;entity="Queued " ^ key;file;line=loc.start.line;col=loc.start.col;reason;
+        options=List.map(fun(p:Migration_scaffold_general.queue_plan)->let o=p.option in
+          {id=o.id;label=o.label;template=o.template;help=o.help;needs_custom_code=Compile.string_contains o.template "todo \""})plans})
+ | _->None)
+
+let decision_guidance file source before after =
+  entity_decision_guidance file source before after @ queue_decision_guidance file source before after
 
 (* Explicit Retype rules select fields; generation owns their physical name.
    This only proposes edits. The entire resulting migration is checked after
@@ -427,7 +441,7 @@ let retype_columns previous current migration =
        | Some _ -> None)) e.fields | _ -> []) owner.decls in
   if edits=[] then None else Some (file,source_result file (Syntax.replace view edits)))
 
-let choose_entry file source before after choice =
+let rec choose_entity_entry file source before after choice =
   let decisions=decision_guidance file source before after in
   let decision=match List.find_opt(fun (d:decision)->d.id=choice.decision_id)decisions with
     | Some d->d | None->reject file "the reviewed migration decision is unavailable; obtain a fresh preview" in
@@ -456,6 +470,10 @@ let choose_entry file source before after choice =
   let chosen=source_result file(Syntax.replace view [source_result file(Syntax.range view expression),
     Migration_source.source_fragment ~source replacement])in
   match scaffold with None->chosen | Some plan->
+    append_plan file chosen plan
+
+and append_plan file chosen (plan:Migration_scaffold.t) =
+    let chosen=if plan.fixture="" then chosen else begin
     let view,declaration=syntax file chosen in
     let point,addition=match List.assoc_opt "fixtures" declaration.fields with
      | Some(Ast.EList{elems;_}as fixtures)->
@@ -468,14 +486,15 @@ let choose_entry file source before after choice =
           let range=source_result file(Syntax.collection_range view record)in
           range.start_byte+1,"fixtures: [" ^ plan.fixture ^ "], "
         | _->reject file "migration declaration changed before fixture insertion")in
-    let chosen=source_result file(Syntax.replace view [({Syntax.start_byte=point;end_byte=point},addition)])in
+    source_result file(Syntax.replace view [({Syntax.start_byte=point;end_byte=point},addition)])end in
     let view,_=syntax file chosen in
     let form=Syntax.module_ view in
     let available=ref form.imports in
     let exposed home name=
-      if String.ends_with ~suffix:"(..)" name then
-        let base=String.sub name 0 (String.length name-4)in
-        match List.find_opt(fun(m,t,_)->m=home && t=base)Type_system.stdlib_import_ctor_groups with
+       if String.ends_with ~suffix:"(..)" name then
+         let base=String.sub name 0 (String.length name-4)in
+         if home="Tesl.Prelude" && base="Bool" then ["Bool";"True";"False"] else
+         match List.find_opt(fun(m,t,_)->m=home && t=base)Type_system.stdlib_import_ctor_groups with
         | Some(_,_,ctors)->base::ctors | None->[name;base]
       else [name]in
     let imports=List.filter_map(fun text->
@@ -501,6 +520,26 @@ let choose_entry file source before after choice =
       [({Syntax.start_byte=point;end_byte=point},Migration_source.source_fragment ~source:chosen(String.concat "\n" imports ^ "\n\n"))])in
     let complete=chosen ^ Migration_source.source_fragment ~source:chosen("\n" ^ plan.helpers)in
     ignore(source_result file(Syntax.read ~file ~source:complete));complete
+
+let choose_entry file source before after choice =
+ if not(String.starts_with ~prefix:"job:" choice.decision_id)then choose_entity_entry file source before after choice,[] else
+ let key=String.sub choice.decision_id 4 (String.length choice.decision_id-4)in
+ let change=match List.find_opt(fun(c:Migration_scaffold_general.queue_change)->c.key=key)(Migration_scaffold_general.queue_changes before after)with
+  | Some c->c|None->reject file "queue decision changed; request a fresh preview"in
+ let plan=match List.find_opt(fun(p:Migration_scaffold_general.queue_plan)->p.option.id=choice.option_id)
+   (Migration_scaffold_general.queue_options ~file ~source ~before ~after ~change ~validator:Migration_scaffold.validator ~constructor:Migration_scaffold.constructor_fixture ())with
+  | Some p->p|None->reject file "queue option is unavailable; request a fresh preview"in
+ let p=plan.option in
+ let source=append_plan file source {Migration_scaffold.id=p.id;label=p.label;template=p.template;help=p.help;
+   replacement=p.replacement;imports=p.imports;helpers=p.helpers;fixture=p.fixture}in
+ let view,declaration=syntax file source in
+ let expression=match List.assoc_opt "jobs" declaration.fields with
+  | None->reject file "queue decision no longer exists"
+  | Some jobs->(match source_result file(Syntax.members view jobs)|>List.find_opt(fun(k,_)->k=Some key)with
+    | Some(_, (Ast.EApp{fn=Ast.EVar{name="todo";_};arg=Ast.ELit{lit=Ast.LString _;_};_} as expression))->expression
+    | _->reject file "queue decision is no longer an unresolved placeholder")in
+ let chosen=source_result file(Syntax.replace view [source_result file(Syntax.range view expression),plan.option.replacement])in
+ chosen,plan.writes
 
 let refresh_internal ~choice ~stored_value_compatibility ~compiler_abi ~project_root:root ~family ~version ~documents =
   try
@@ -537,32 +576,36 @@ let refresh_internal ~choice ~stored_value_compatibility ~compiler_abi ~project_
       let target_seal = seal (S.create ~project_root:root target_inventory) in
       let header = sparse (Header.create ~previous:previous_seal ~current:target_seal) in
       let source = refresh_same migration.path migration.contents previous.inventory target_inventory in
-      let source = refresh_entities migration.path source previous.inventory target_inventory in
+       let source = refresh_entities migration.path source previous.inventory target_inventory in
+       let source = refresh_jobs migration.path source previous.inventory target_inventory in
       let source=sparse (Header.replace ~file:migration.path ~source header) in
       source,decision_guidance migration.path source previous.inventory target_inventory) in
     let initial_source,initial_decisions=refreshed initial_column_writes migration in
-    let column_writes,source,decisions=match choice with
-      | None->initial_column_writes,initial_source,initial_decisions
+    let column_writes,extra_writes,source,decisions=match choice with
+      | None->initial_column_writes,[],initial_source,initial_decisions
       | Some choice->
-        let chosen=overlay root initial_column_writes(fun()->
+        let chosen,extra=overlay root initial_column_writes(fun()->
           let after=inventory(I.load_with_compatibility ~stored_value_compatibility ~compiler_abi ~root_file:current.root_file)in
           choose_entry migration.path initial_source previous.inventory after choice)in
         let chosen_migration={migration with H.contents=chosen}in
         let columns=retype_columns previous current chosen_migration in
-        let source,decisions=refreshed columns chosen_migration in columns,source,decisions in
+        let source,decisions=overlay root extra(fun()->refreshed columns chosen_migration)in columns,extra,source,decisions in
     (* A completed edge's target is also the current edge's predecessor. The
        public source checker therefore sees both seals. Check completed bodies
        against the proposed refreshed header, after their own frozen seals have
        passed above; otherwise a legitimate VCurrent edit prevents V3+ refresh. *)
-    overlay root (column_writes @ [migration.path,source]) (fun () ->
+    overlay root (extra_writes @ column_writes @ [migration.path,source]) (fun () ->
       List.iter (fun (edge : H.migration_source) -> check edge.path edge.contents) (H.completed_migrations h));
     let reads = List.map fst (H.source_inputs h) in
     let imports = List.concat_map (fun file ->
       let m = parse file (Source_input.read file) in
       List.filter_map (fun (i : Ast.import_decl) ->
         if String.starts_with ~prefix:"Tesl." i.module_name then None else Some (file,i.module_name)) m.imports) reads in
-    let source_manifest = manifest (M.create ~project_root:root ~reads ~imports ~documents
-      ~directories:[Filename.dirname current.root_file;Filename.dirname migration.path] ~writes:(column_writes @ [migration.path,source])) in
+    let generated_imports=List.concat_map(fun(file,source)->let m=parse file source in
+      List.filter_map(fun(i:Ast.import_decl)->if String.starts_with ~prefix:"Tesl." i.module_name then None else Some(file,i.module_name))m.imports)
+      ((migration.path,source)::extra_writes)in
+    let source_manifest = manifest (M.create ~project_root:root ~reads ~imports:(imports @ generated_imports) ~documents
+      ~directories:[Filename.dirname current.root_file;Filename.dirname migration.path;Filename.chop_suffix migration.path ".tesl"] ~writes:(extra_writes @ column_writes @ [migration.path,source])) in
     let diagnostics = overlay root (M.overlays source_manifest) (fun () -> Compile.check_source migration.path source) in
     history (H.verify_unchanged h);
     manifest (M.verify_source source_manifest ~documents);

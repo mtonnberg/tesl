@@ -146,7 +146,7 @@ func pgAttachRowBackfill[From, To any](storage *PgRowStorage[From, To]) error {
 				if err != nil {
 					return nil, err
 				}
-				if migrated.Tag != MigratedRow {
+				if migrated.Tag != RowChangeKeep && migrated.Tag != RowChangeDelete {
 					return nil, fmt.Errorf("stored row rejected by checked backfill migration")
 				}
 				// The typed result is captured here after the read transaction has ended.
@@ -154,7 +154,10 @@ func pgAttachRowBackfill[From, To any](storage *PgRowStorage[From, To]) error {
 					if a == nil || a.plan != plan || a.entity != entity {
 						return pgRowBackfillStatement{}, fmt.Errorf("backfill commit belongs to another admitted window")
 					}
-					write, err := pgMaterializePhysicalWrite(a, storage, migrated.RowValue)
+					if migrated.Tag == RowChangeDelete {
+						return pgPrepareBackfillDelete(a, originalKey, xmin, xid8, readAt, readStarted, d.PreviousGeneration)
+					}
+					write, err := pgMaterializePhysicalWrite(a, storage, migrated.KeepValue, encoded)
 					if err != nil {
 						return pgRowBackfillStatement{}, err
 					}
@@ -169,6 +172,23 @@ func pgAttachRowBackfill[From, To any](storage *PgRowStorage[From, To]) error {
 }
 
 func pgLiteralString(value string) string { return "'" + strings.ReplaceAll(value, "'", "''") + "'" }
+
+// Delete only the exact tuple that was decoded. A concurrent old-writer update
+// causes a skipped CAS and a later rescan, just like conversion. SQL constraints,
+// the Worker lease, ABI latch, and progress update share the same transaction.
+func pgPrepareBackfillDelete(a *pgRowTransactionAdmission, key any, xmin, xid8 string, readAt, readStarted time.Time, previous int) (pgRowBackfillStatement, error) {
+	if err := a.check(true); err != nil {
+		return pgRowBackfillStatement{}, err
+	}
+	if a.backfill == nil || a.backfill.leaseToken <= 0 {
+		return pgRowBackfillStatement{}, fmt.Errorf("backfill deletion requires a live fenced worker lease")
+	}
+	if time.Since(readStarted) > 30*time.Second {
+		return pgRowBackfillStatement{}, fmt.Errorf("backfill source snapshot exceeded bounded age")
+	}
+	sql := "delete from " + pgx.Identifier{a.plan.namespace, a.entity.table}.Sanitize() + " where " + pgBackfillPredicate("", pgPhysicalPrimary(a.entity), func(i int) string { return "$" + strconv.Itoa(i) })
+	return pgRowBackfillStatement{sql: sql, args: []any{key, key, xmin, xid8, readAt, previous}}, nil
+}
 
 // The worker holds its current lease row through this entire transaction. The
 // tuple guard and full transaction-id bound exclude both old-writer races and

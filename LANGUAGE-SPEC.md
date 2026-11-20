@@ -2112,6 +2112,7 @@ Note: the current `.tesl` surface uses lowercase `exists ... => ...`. The elabor
 
 ```text
 <fact-decl> ::= "fact" <UpperIdentifier> { "(" <binding-list> ")" }
+                [ "literal" "via" <identifier> ]
 
 <binding-list> ::= <binding> { "," <binding> }
 <binding>      ::= <identifier> ":" <type-expr>
@@ -2162,6 +2163,84 @@ fn validate(lo: Int, hi: Int, raw: Int) -> String =
 ```
 
 Passing `raw` (without the proof) directly to `processInRange` is a compile-time error.
+
+#### Explicit literal proof rules
+
+A fact's declaring module may opt into compile-time validation of annotated
+literal bindings by naming one of its own validators:
+
+```tesl
+fact IsPositive(n: Int) literal via tryPositive
+
+establish tryPositive(n: Int) -> Maybe (value: Int ::: IsPositive value) =
+  if n > 0 then
+    Something (n ::: IsPositive n)
+  else
+    Nothing
+
+fn example() -> Int ? IsPositive =
+  let x: Int ::: IsPositive x = 3
+  x
+```
+
+The compiler checks the validator and its referenced function/constant closure
+without literal-proof inference, then evaluates it on this literal. Success must
+return **the unchanged input value** carrying the declared fact. `Nothing`,
+`fail`, a changed value, unsupported evaluation, or an exceeded evaluation limit
+rejects the binding. The emitted binding contains the literal; it does not call
+the validator at runtime. Validators remain ordinary callable Tesl functions.
+
+This uses the existing trust boundary: the compiler checks that the chosen
+validator accepts the literal, not that the validator implements the intended
+mathematical meaning of its fact. Its `check`/`establish` proof-producing body
+still needs the same review as any other validator.
+
+Current supported rules:
+
+- One plain parameter of primitive type `Int`, `String`, or `Bool`, matching the
+  fact's single parameter and returned value type.
+- A local pure `check` returning `value: T ::: P value`, or a local pure `fn` or
+  `establish` returning `Maybe (value: T ::: P value)`. A plain `fn` must forward
+  independently established evidence; it cannot mint the fact itself.
+- No required capabilities, HTTP operations, or runtime effects in the referenced
+  validator closure. Imported pure helpers and constants can be evaluated; the
+  rule itself must be declared alongside the fact. Importers cannot add a rule
+  to someone else's fact, and the selected validator need not be exported.
+- Annotated `let` bindings, including test-block bindings, whose initializer is
+  an `Int`, `String`, or `Bool` literal (including negative integers). Each fact
+  in a conjunction must have its own applicable rule.
+- Bounded evaluation of direct calls, constants, `let`, `if`, supported `case`
+  patterns, scalar comparisons, Boolean operators, integer arithmetic, string
+  concatenation, `String.trim`, and `String.length`. String operations use Unicode
+  code points/whitespace as at runtime; integer division truncates toward zero.
+  Dynamic calls and other unsupported operations are refused when evaluated.
+
+Evaluation is limited to 100,000 work units, call depth 128, expression depth
+512, integers of at most 4,096 decimal digits, and strings of at most 65,536
+UTF-8 bytes. Exceeding a limit produces a diagnostic rather than evidence.
+
+If the selected validator or one of its helpers requires a capability, the
+literal rule is rejected for both `check` and `establish`. The diagnostic names
+the function and its required capabilities and points at the rule. Remove
+`literal via`, call the validator at runtime in a context declaring those
+capabilities, and use its returned proof-carrying value. The compiler does not
+silently turn an annotated literal into an effectful runtime call.
+
+Facts without `literal via` remain opaque. The compiler neither searches for a
+matching validator nor infers literal evidence at arbitrary call sites:
+`consume 3` still needs evidence; bind the annotated literal first. Nonliteral
+initializers must already carry the requested proof. A rule that trims strings
+cannot justify `" x "` if it returns `"x"`; use a normalized literal or validate
+at runtime and consume the returned value.
+
+Ordinary `case` exhaustiveness is unchanged: matching `tryPositive 3` still
+requires both `Something` and `Nothing` branches. Literal evidence belongs to the
+checked binding, not every equal literal elsewhere in the program.
+
+The rule and its validator dependencies participate in migration fact identity.
+Adding or changing a rule therefore requires a new schema revision; it does not
+authorize editing a frozen historical schema. Checked source bytes and import
+resolution are guarded through native compilation, including row applications.
 
 ### 11.5 Function-like declarations
 **Accepted design, Implemented with some current syntax limits.**

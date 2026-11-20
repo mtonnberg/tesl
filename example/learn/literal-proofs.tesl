@@ -1,0 +1,26 @@
+module LiteralProofs exposing [IsPositive, tryPositive, doublePositive, example]
+
+import Tesl.Prelude exposing [Int, Bool(..)]
+import Tesl.Maybe exposing [Maybe(..)]
+
+fact IsPositive(n: Int) literal via tryPositive
+
+establish tryPositive(n: Int) -> Maybe (positive: Int ::: IsPositive positive) =
+  if n > 0 then
+    Something (n ::: IsPositive n)
+  else
+    Nothing
+
+fn doublePositive(n: Int ::: IsPositive n) -> Int = n + n
+
+fn positiveLiteral() -> Int ? IsPositive =
+  let x: Int ::: IsPositive x = 3
+  x
+
+fn example() -> Int =
+  let x = positiveLiteral()
+  doublePositive x
+
+test "a literal obtains the explicitly declared proof" {
+  expect example() == 6
+}

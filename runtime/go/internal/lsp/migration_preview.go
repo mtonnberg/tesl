@@ -73,6 +73,7 @@ func (server *Server) writeMigrationPreview(ctx context.Context, id json.RawMess
 		ProjectRoot         string `json:"projectRoot"`
 		Database            string `json:"database"`
 		NewRevision         bool   `json:"newRevision"`
+		ContractVersion     int    `json:"contractVersion"`
 		DecisionID          string `json:"decisionId"`
 		OptionID            string `json:"optionId"`
 		ExpectedInputDigest string `json:"expectedInputDigest"`
@@ -81,6 +82,7 @@ func (server *Server) writeMigrationPreview(ctx context.Context, id json.RawMess
 		return server.writeError(writer, id, -32602, "migration preview requires entryFile and projectRoot")
 	}
 	selection := tooling.MigrationSelection{EntryFile: params.EntryFile, ProjectRoot: params.ProjectRoot, Database: params.Database, NewRevision: params.NewRevision}
+	selection.ContractVersion = params.ContractVersion
 	selection.DecisionID, selection.OptionID, selection.ExpectedInputDigest = params.DecisionID, params.OptionID, params.ExpectedInputDigest
 	documents, snapshots, err := server.migrationDocuments(selection.ProjectRoot)
 	if err != nil {
@@ -116,8 +118,18 @@ func (server *Server) writeMigrationPreview(ctx context.Context, id json.RawMess
 	// Source diagnostics are about the proposed files. Keep their original
 	// logical paths, including files that have not been created on disk.
 	var envelope struct {
-		Diagnostics json.RawMessage           `json:"diagnostics"`
-		Decisions   []migrationguide.Decision `json:"decisions"`
+		Diagnostics     json.RawMessage           `json:"diagnostics"`
+		Decisions       []migrationguide.Decision `json:"decisions"`
+		Cleanup         json.RawMessage           `json:"cleanup"`
+		ContractVersion *int                      `json:"contractVersion"`
+		Selection       struct {
+			SchemaRoot     string `json:"schemaRoot"`
+			RevisionBefore int    `json:"revisionBefore"`
+			RevisionAfter  int    `json:"revisionAfter"`
+		} `json:"selection"`
+		Manifest struct {
+			Imports []struct{ Module, SourceResolved string } `json:"imports"`
+		} `json:"manifest"`
 	}
 	if err := json.Unmarshal(preview.JSON(), &envelope); err != nil {
 		return err
@@ -148,10 +160,36 @@ func (server *Server) writeMigrationPreview(ctx context.Context, id json.RawMess
 		item["guide"] = guide
 		guidance = append(guidance, item)
 	}
+	// Use compiler-owned selection/import paths, not filename guesses in clients.
+	// These are the editable current schema closure (including queue payloads).
+	schemaFiles := []string{}
+	for _, imported := range envelope.Manifest.Imports {
+		if imported.SourceResolved != "" && envelope.Selection.SchemaRoot != "" &&
+			(imported.Module == envelope.Selection.SchemaRoot || strings.HasPrefix(imported.Module, envelope.Selection.SchemaRoot+".")) {
+			if relative, err := filepath.Rel(selection.ProjectRoot, imported.SourceResolved); err == nil && filepath.IsLocal(relative) {
+				schemaFiles = append(schemaFiles, imported.SourceResolved)
+			}
+		}
+	}
+	sort.Strings(schemaFiles)
+	unique := schemaFiles[:0]
+	for _, file := range schemaFiles {
+		if len(unique) == 0 || unique[len(unique)-1] != file {
+			unique = append(unique, file)
+		}
+	}
 	response := map[string]any{"version": 1, "kind": "migration-editor-preview", "ok": true, "previewId": handle,
-		"inputDigest": preview.InputDigest(),
+		"inputDigest":    preview.InputDigest(),
+		"revisionBefore": envelope.Selection.RevisionBefore, "revisionAfter": envelope.Selection.RevisionAfter,
+		"schemaFiles": unique,
 		"database":    preview.Database(), "entryFile": preview.EntryFile(), "operation": preview.Operation(), "compilable": preview.Compilable(),
 		"files": preview.Manifest().FileEdits(), "diagnostics": envelope.Diagnostics, "guidance": guidance, "decisions": envelope.Decisions}
+	if len(envelope.Cleanup) != 0 {
+		response["cleanup"] = envelope.Cleanup
+	}
+	if envelope.ContractVersion != nil {
+		response["contractVersion"] = *envelope.ContractVersion
+	}
 	encoded, err := json.Marshal(response)
 	if err != nil {
 		return err

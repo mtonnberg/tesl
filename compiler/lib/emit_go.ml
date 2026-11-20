@@ -7541,6 +7541,7 @@ and emit_adt_case_statements ?(indent="") ?(terminating=true) signatures env buf
       body_indent
   in
   if single then begin
+    Printf.bprintf buffer "%s_ = %s\n" inner scrut_name;
     match plans with
     | (arm, (_, whole, bindings, _)) :: _ ->
       let arm_env = bind_arm inner (whole, bindings) in
@@ -15307,7 +15308,7 @@ let compile_module_internal ?(stage_preparation=false) ?(migration_metered=false
       match import.names with
       | ImportAll -> true
       | ImportExposing names -> List.exists (fun name ->
-          List.mem name ("Migrated(..)" :: Migration_form.runtime_names)) names) m.imports then begin
+          List.mem name ("RowChange(..)" :: "Migrated(..)" :: Migration_form.runtime_names)) names) m.imports then begin
       let loc = Location.dummy_loc m.source_file in
       Hashtbl.replace types.adts "Migrated" {
         adt_tesl_name = "Migrated"; adt_owner = "";
@@ -15322,6 +15323,15 @@ let compile_module_internal ?(stage_preparation=false) ?(migration_metered=false
             var_go_fields = ["reason", "RejectReason"]; var_loc = loc };
         ];
         adt_loc = loc; adt_builtin = true;
+      };
+      Hashtbl.replace types.adts "RowChange" {
+        adt_tesl_name="RowChange";adt_owner="";adt_go_name="teslrt.RowChange";adt_tag_type="teslrt.RowChangeTag";
+        adt_params=["a","A"];
+        adt_variants=[
+          {var_ctor="KeepRow";var_tag="teslrt.RowChangeKeep";var_fields=["value",TParam "A"];var_go_fields=["value","KeepValue"];var_loc=loc};
+          {var_ctor="DeleteRow";var_tag="teslrt.RowChangeDelete";var_fields=["reason",TString];var_go_fields=["reason","Reason"];var_loc=loc};
+          {var_ctor="RejectRow";var_tag="teslrt.RowChangeReject";var_fields=["reason",TString];var_go_fields=["reason","Reason"];var_loc=loc}];
+        adt_loc=loc;adt_builtin=true;
       }
     end;
     if !either_imported then begin
@@ -16988,6 +16998,11 @@ let project_entity_bindings (modules : module_form list) =
     | _ -> ()) m.decls) modules;
   if !errors = [] then Ok !bindings else Error (List.rev !errors)
 
+let optional_writeback_preparation ~variable ~callback ~previous_type =
+  Printf.sprintf
+    "%s := %s\nswitch %s.Tag {\ncase teslrt.MaybeNothing:\nreturn teslrt.Nothing[%s]()\ncase teslrt.MaybeSomething:\ndefault:\npanic(\"historical write-back returned an invalid Maybe tag\")\n}\n"
+    variable callback variable previous_type
+
 let compile_project ?(mode=Release) ?(row_storage=false) ?(row_physical=false) ?row_source ?fixture_graph ?(migration_fixtures=[]) ?(queue_conversions=[]) ?(migration_families=[]) ?(migration_queues=[]) ?(queue_codec_records=[]) ~(entry : module_form) (modules : module_form list) =
 let queue_conversion_artifacts graph exports conversions =
  let module Q=Migration_queue_transform in
@@ -17134,7 +17149,9 @@ let fixture_artifacts graph exports checked =
     Printf.sprintf "\tfixture := %s()\n\tif fixture.Tag != teslrt.MaybeSomething { t.Fatalf(\"%%s: fixture returned Nothing or an invalid Maybe tag\", %s) }\n\trow := fixture.SomethingValue\n" fixture_ref (go_quote description)
     else "\trow := " ^ fixture_ref ^ "()\n" in
    let invoke=match callback with None->"\t_ = row\n" | Some callback->
-    "\tresult := " ^ callback ^ "(row)\n\tswitch result.Tag {\n\tcase teslrt.MigratedRow, teslrt.MigratedReject:\n\tdefault: t.Fatal(\"migration fixture returned an invalid Migrated tag\")\n\t}\n" in
+     "\tresult := " ^ callback ^ "(row)\n\tswitch result.Tag {\n\tcase " ^
+     (if row.row_change then "teslrt.RowChangeKeep, teslrt.RowChangeReject, teslrt.RowChangeDelete" else "teslrt.MigratedRow, teslrt.MigratedReject") ^
+     ":\n\tdefault: t.Fatal(\"migration fixture returned an invalid result tag\")\n\t}\n" in
    bodies:=(Printf.sprintf "func %s(t *testing.T) {\n\tif wanted := os.Getenv(\"TESL_TEST_NAME\"); wanted != \"\" && wanted != %s && wanted != %s { t.Skip(\"named test filter\") }\n\tif kind := os.Getenv(\"TESL_TEST_KIND\"); kind != \"\" && kind != \"test\" { t.Skip(\"test kind filter\") }\n\tdefer func() { if trapped := recover(); trapped != nil { t.Fatalf(\"%%s trapped: %%v\", %s, trapped) } }()\n%s%s}\n"
     name (go_quote description) (go_quote name) (go_quote description) unwrap invoke)::!bodies
   )row.fixtures)(T.rows transform)) checked;
@@ -17277,8 +17294,8 @@ let compiled_row_artifacts ~entry ~modules:_ ~exports source =
        from target target target (String.concat ", " fields)
    | _ -> unsupported loc "row callback mode lost its exact checked source binding" in
    let handle=unique_ident exported.ex_taken (db.db_go_var ^ "CompiledRowTransform" ^ string_of_int index) in
-   let declaration=Printf.sprintf "var %s = teslrt.RegisterCompiledRowTransform[%s, %s](\n\tteslrt.LookupCompiledRowTransform(teslrt.RegisterDatabaseMigrationHistory(teslrt.RegisterDatabaseIdentity(%s, %s), %s), %s, %d, %s), %s)\n"
-    handle from target (go_quote database.identity) db.db_go_var (go_quote database.family)
+   let declaration=Printf.sprintf "var %s = teslrt.%s[%s, %s](\n\tteslrt.LookupCompiledRowTransform(teslrt.RegisterDatabaseMigrationHistory(teslrt.RegisterDatabaseIdentity(%s, %s), %s), %s, %d, %s), %s)\n"
+    handle (if (RH.row binding).row_change then "RegisterCompiledRowChange"else "RegisterCompiledRowTransform") from target (go_quote database.identity) db.db_go_var (go_quote database.family)
     (go_quote database.family) (RH.migration_version binding) (go_quote current.identity) fn in
    if not row_storage then declaration else
    let decoder_owner,decoder=adapter previous and encoder_owner,encoder=adapter current in
@@ -17299,8 +17316,8 @@ let compiled_row_artifacts ~entry ~modules:_ ~exports source =
      bridges:={path="internal/" ^ own.ex_package ^ "/migration_row_" ^ bridge ^ "_generated.go";
       contents="package " ^ own.ex_package ^ "\n\nvar " ^ bridge ^ " = " ^ signature.go_name ^ "\n"}::!bridges;
      refname own.ex_package bridge ^ "(row)" in
-    let callbacks=List.map (fun (w:Migration_transform.writeback_binding) ->
-      w.mapping.previous.name,reverse_callback w.function_binding) row.writebacks @
+     let callbacks=List.map (fun (w:Migration_transform.writeback_binding) ->
+       w.mapping.previous.name,(reverse_callback w.function_binding,w.optional)) row.writebacks @
       List.map (fun (w:Migration_transform.legacy_binding) ->
        let value=match w.mapping.value,w.function_binding with
         | Migration_transform_rules.Function _,Some binding -> reverse_callback binding
@@ -17310,10 +17327,16 @@ let compiled_row_artifacts ~entry ~modules:_ ~exports source =
           | Migration_additive.Text text -> go_quote text
           | Migration_additive.Boolean value -> if value then "true" else "false")
         | _ -> unsupported loc "Legacy lost its exact checked value binding" in
-       w.mapping.previous.name,value) row.legacies in
-    let values=List.map (fun (field,ty) ->
-     let value=match List.assoc_opt field callbacks with
-      | Some callback -> callback
+        w.mapping.previous.name,(value,w.optional)) row.legacies in
+     let optional=List.exists(fun(_,(_,optional))->optional)callbacks in
+     let preparations=ref [] in
+     let values=List.mapi (fun index (field,ty) ->
+      let value=match List.assoc_opt field callbacks with
+       | Some (callback,false) -> callback
+       | Some (callback,true) ->
+         let value="previousValue" ^ string_of_int index in
+         preparations:= !preparations @ [optional_writeback_preparation ~variable:value ~callback ~previous_type:from];
+         value ^ ".SomethingValue"
       | None ->
        let current=List.find_map (function
         | Migration_transform_rules.Copy p when p.previous.name=field -> Some p.current.name
@@ -17351,8 +17374,11 @@ let compiled_row_artifacts ~entry ~modules:_ ~exports source =
         | None -> unsupported loc "WriteBack reverse identity requires the exact checked nominal Copy/Rename site") in
      record_field_go_name field ^ ": " ^ value) from_info.ent_row.rec_fields in
     let reverse=unique_ident exported.ex_taken (db.db_go_var ^ "CompiledRowWriteBack" ^ string_of_int index) in
-    storage ^ Printf.sprintf "\nvar %s = teslrt.RegisterCompiledRowWriteBack[%s, %s](%s, func(row %s) %s { return %s{%s} })\n"
-      reverse from target name target from from (String.concat ", " values)
+     storage ^ (if optional then
+       Printf.sprintf "\nvar %s = teslrt.RegisterCompiledRowTryWriteBack[%s, %s](%s, func(row %s) teslrt.Maybe[%s] {\n%sreturn teslrt.Something(%s{%s})\n})\n"
+         reverse from target name target from (String.concat "" !preparations) from (String.concat ", " values)
+       else Printf.sprintf "\nvar %s = teslrt.RegisterCompiledRowWriteBack[%s, %s](%s, func(row %s) %s { return %s{%s} })\n"
+         reverse from target name target from from (String.concat ", " values))
    end) (RH.bindings rows) in
   let declarations=declarations @ if not row_storage then [] else
    List.mapi (fun index ((version:RH.version),(current:RH.entity))->
