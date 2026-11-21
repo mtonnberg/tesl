@@ -21,7 +21,7 @@ func TestParentDeathHelper(t *testing.T) {
 	leaf := exec.Command(testExecutable(t), "-test.run=TestProcessHelper")
 	leaf.Env = append(os.Environ(), "TESL_PROCESS_HELPER=leaf")
 	child, err := Start(leaf)
-	if err != nil {
+	if err != nil || child.Command.Process == nil {
 		os.Exit(2)
 	}
 	pid := strconv.Itoa(child.Command.Process.Pid)
