@@ -89,6 +89,9 @@ let native ?source_root ?(extra_tests=[]) ?(test="") artifacts =
   List.iter (fun (a:Emit_go.artifact) -> if not (Filename.check_suffix a.path ".json") then
    write (Filename.concat root a.path) a.contents) artifacts;
   List.iter (fun (path,source) -> write (Filename.concat root path) source) extra_tests;
+  if List.exists (fun (path,_) -> String.starts_with ~prefix:"internal/teslrt/" path) extra_tests then
+    Option.iter (fun (a:Emit_go.artifact) -> write (Filename.concat root a.path) a.contents)
+      (Emit_go.runtime_history_test_companion artifacts);
   let rec source_files path=if (Unix.lstat path).Unix.st_kind=Unix.S_DIR then
    Array.to_list (Sys.readdir path) |> List.concat_map (fun name -> source_files (Filename.concat path name))
    else if Filename.check_suffix path ".tesl" then [path,In_channel.with_open_bin path In_channel.input_all] else [] in

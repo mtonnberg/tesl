@@ -17818,6 +17818,21 @@ let relocate_migration_history ~project_path (artifacts : artifact list) =
                      ^ go_quote (project_path ^ "/internal/teslhistory") ^ "\n" }) packages in
     List.filter (fun (a : artifact) -> a.path <> migration_history_runtime_path) artifacts @ relocated :: imports
 
+(* A test placed inside the runtime package cannot import teslhistory (that
+   package imports the runtime), so it would see no compiled history. Test
+   harnesses that inject such tests add this companion: the same registration
+   as a _test.go file of the runtime package, compiled only into that
+   package's own test binary. *)
+let runtime_history_test_companion (artifacts : artifact list) =
+  List.find_opt (fun (a : artifact) -> a.path = "internal/teslhistory/migration_history_generated.go") artifacts
+  |> Option.map (fun (history : artifact) ->
+    let lines = String.split_on_char '\n' history.contents in
+    let body = List.filter (fun line -> not (String.starts_with ~prefix:"import teslrt " line)) lines
+      |> List.map (fun line -> if line = "package teslhistory" then "package teslrt" else line)
+      |> String.concat "\n" in
+    { path = "internal/teslrt/migration_history_generated_test.go";
+      contents = Str.global_replace (Str.regexp_string "\tteslrt.RegisterCompiled") "\tregisterCompiled" body })
+
 let relocate_migration_history_by_go_mod artifacts =
   match List.find_opt (fun (a : artifact) -> a.path = "go.mod") artifacts with
   | None -> artifacts
