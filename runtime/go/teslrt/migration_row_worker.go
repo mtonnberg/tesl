@@ -196,13 +196,36 @@ func pgWithRowLeaseRenewal(service context.Context, coordinator *pgx.Conn, plan 
 	return run(ctx)
 }
 
-// Ordinary workers release after one bounded batch; finality keeps the same
-// renewal scope across the complete rescan, including fast consecutive batches.
-func pgRunRowBackfillLease(service context.Context, coordinator, batch *pgx.Conn, b *pgRowBaseline, roles PgMigrationControlRoles, plan *pgRowPhysicalPlan, entity *pgRowPhysicalEntity, lease pgRowLeaseAdmission) (outcome pgRowBatchOutcome, err error) {
+// pgRowLeaseSlice bounds how long an ordinary Worker keeps a claimed lease
+// running consecutive batches before releasing it to other Workers and
+// entities. Claiming re-verifies the control catalog, so one claim per batch
+// made that verification and the inter-claim pause a fixed cost of every
+// batch. Each batch still runs its own fenced, verified CAS transaction.
+const pgRowLeaseSlice = 2 * time.Second
+
+// Ordinary workers release after a bounded slice of batches, or when a batch
+// completes the pass; finality keeps the same renewal scope across the
+// complete rescan, including fast consecutive batches.
+func pgRunRowBackfillLease(service context.Context, coordinator, batch *pgx.Conn, b *pgRowBaseline, roles PgMigrationControlRoles, plan *pgRowPhysicalPlan, entity *pgRowPhysicalEntity, lease pgRowLeaseAdmission, pace *pgRowIdlePasses) (outcome pgRowBatchOutcome, err error) {
+	started := time.Now()
 	err = pgWithRowLeaseRenewal(service, coordinator, plan, lease, func(ctx context.Context) error {
-		var batchErr error
-		outcome, batchErr = pgRowBackfillBatch(ctx, batch, b, plan, entity, roles, lease, true)
-		return batchErr
+		for {
+			if pace.batch == 0 {
+				pace.batch = pgRowBackfillBatchDefault
+			}
+			batchStarted := time.Now()
+			next, batchErr := pgRowBackfillBatch(ctx, batch, b, plan, entity, roles, lease, true, pace.batch)
+			if batchErr != nil {
+				return batchErr
+			}
+			pace.batch = pgRowNextBatchSize(pace.batch, time.Since(batchStarted))
+			outcome.changed += next.changed
+			outcome.rejected = append(outcome.rejected, next.rejected...)
+			outcome.exhausted = next.exhausted
+			if next.exhausted || time.Since(started) >= pgRowLeaseSlice || ctx.Err() != nil {
+				return nil
+			}
+		}
 	})
 	return outcome, err
 }
@@ -217,6 +240,7 @@ type pgRowIdlePasses struct {
 	changed   int
 	idle      int
 	notBefore time.Time
+	batch     int // adaptive batch size; see pgRowNextBatchSize
 }
 
 const pgRowIdlePassMaxWait = 30 * time.Second
@@ -322,7 +346,7 @@ func pgRunRowWorker(service context.Context, config *pgx.ConnConfig, b *pgRowBas
 						continue
 					}
 					lease := pgRowLeaseAdmission{leaseName: name, leaseToken: token, holder: tag}
-					outcome, err := pgRunRowBackfillLease(service, coordinator, batch, b, roles, b.target, entity, lease)
+					outcome, err := pgRunRowBackfillLease(service, coordinator, batch, b, roles, b.target, entity, lease, pace)
 					if err == nil {
 						pace.record(outcome.changed, outcome.exhausted, time.Now())
 						pgReportRowRejections(os.Stderr, outcome.rejected)

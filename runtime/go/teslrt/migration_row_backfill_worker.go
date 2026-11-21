@@ -15,10 +15,33 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
+// Without TESL_BACKFILL_BATCH the ordinary Worker adapts its batch size
+// between these bounds, aiming for about pgRowBackfillBatchTarget per batch:
+// cheap conversions amortize each batch's fixed verification and lease work
+// over more rows, while expensive ones stay well inside the 30s batch budget.
+const (
+	pgRowBackfillBatchDefault = 2000
+	pgRowBackfillBatchMin     = 500
+	pgRowBackfillBatchMax     = 10000
+	pgRowBackfillBatchTarget  = time.Second
+)
+
+// pgRowNextBatchSize scales the batch toward the target duration, at most
+// doubling or halving per step, within the adaptive bounds.
+func pgRowNextBatchSize(current int, took time.Duration) int {
+	took = max(took, time.Millisecond)
+	next := int(float64(current) * float64(pgRowBackfillBatchTarget) / float64(took))
+	next = min(max(next, current/2), current*2)
+	return min(max(next, pgRowBackfillBatchMin), pgRowBackfillBatchMax)
+}
+
+// pgRowBackfillBatchFixed reports an explicitly configured batch size.
+func pgRowBackfillBatchFixed() bool { return os.Getenv("TESL_BACKFILL_BATCH") != "" }
+
 func pgRowBackfillBatchSize() (int, error) {
 	value := os.Getenv("TESL_BACKFILL_BATCH")
 	if value == "" {
-		return 2000, nil
+		return pgRowBackfillBatchDefault, nil
 	}
 	n, err := strconv.Atoi(value)
 	if err != nil || n < 1 || n > 10000 {
@@ -66,11 +89,12 @@ type pgRowBatchOutcome struct {
 // the rest of the batch proceeds, so one bad row neither stops conversion of
 // the others nor stalls the cursor. Retirement still refuses while it remains:
 // Contract's final pass runs without skipRejected and fails on that row.
-func pgRowBackfillBatch(ctx context.Context, conn *pgx.Conn, b *pgRowBaseline, plan *pgRowPhysicalPlan, entity *pgRowPhysicalEntity, roles PgMigrationControlRoles, lease pgRowLeaseAdmission, skipRejected bool) (outcome pgRowBatchOutcome, err error) {
+// limit 0 uses the configured (or default) batch size.
+func pgRowBackfillBatch(ctx context.Context, conn *pgx.Conn, b *pgRowBaseline, plan *pgRowPhysicalPlan, entity *pgRowPhysicalEntity, roles PgMigrationControlRoles, lease pgRowLeaseAdmission, skipRejected bool, limit int) (outcome pgRowBatchOutcome, err error) {
 	query, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	for {
-		outcome, err = pgRowBackfillBatchAttempt(query, conn, b, plan, entity, roles, lease, skipRejected)
+		outcome, err = pgRowBackfillBatchAttempt(query, conn, b, plan, entity, roles, lease, skipRejected, limit)
 		var server *pgconn.PgError
 		if !errors.As(err, &server) || server.Code != "40001" || query.Err() != nil || conn.IsClosed() {
 			return outcome, err
@@ -83,7 +107,7 @@ func pgRowBackfillBatch(ctx context.Context, conn *pgx.Conn, b *pgRowBaseline, p
 	}
 }
 
-func pgRowBackfillBatchAttempt(ctx context.Context, conn *pgx.Conn, b *pgRowBaseline, plan *pgRowPhysicalPlan, entity *pgRowPhysicalEntity, roles PgMigrationControlRoles, lease pgRowLeaseAdmission, skipRejected bool) (pgRowBatchOutcome, error) {
+func pgRowBackfillBatchAttempt(ctx context.Context, conn *pgx.Conn, b *pgRowBaseline, plan *pgRowPhysicalPlan, entity *pgRowPhysicalEntity, roles PgMigrationControlRoles, lease pgRowLeaseAdmission, skipRejected bool, size int) (pgRowBatchOutcome, error) {
 	binding, err := pgRowBackfillBindingFor(b.database, plan, entity)
 	if err != nil {
 		return pgRowBatchOutcome{}, err
@@ -91,6 +115,9 @@ func pgRowBackfillBatchAttempt(ctx context.Context, conn *pgx.Conn, b *pgRowBase
 	limit, err := pgRowBackfillBatchSize()
 	if err != nil {
 		return pgRowBatchOutcome{}, err
+	}
+	if size > 0 && !pgRowBackfillBatchFixed() {
+		limit = size
 	}
 	query, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()

@@ -32,3 +32,24 @@ func TestRowIdlePassesBackOffOnlyAfterSettledPasses(t *testing.T) {
 		t.Fatalf("a pass that converted a demoted row kept backing off: %+v", pace)
 	}
 }
+
+// The adaptive batch moves toward about one second per batch, at most doubling
+// or halving per step, and never leaves its bounds.
+func TestRowNextBatchSizeAdapts(t *testing.T) {
+	for _, step := range []struct {
+		current int
+		took    time.Duration
+		want    int
+	}{
+		{2000, 100 * time.Millisecond, 4000},
+		{8000, 200 * time.Millisecond, 10000},
+		{2000, time.Second, 2000},
+		{2000, 10 * time.Second, 1000},
+		{600, 30 * time.Second, 500},
+		{2000, 0, 4000},
+	} {
+		if got := pgRowNextBatchSize(step.current, step.took); got != step.want {
+			t.Errorf("next(%d, %s) = %d, want %d", step.current, step.took, got, step.want)
+		}
+	}
+}

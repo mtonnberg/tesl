@@ -3,6 +3,7 @@ package teslrt
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -15,6 +16,10 @@ type pgRowLeaseAdmission struct {
 // The only worker constructor uses an actual Worker connection and the exact
 // locally registered plan. The protected lease lock lasts through DML, ABI
 // publication and cursor progress; a successor cannot claim between them.
+// pgRowWorkerFences caches, per database, the fence namespace a Worker
+// transaction last verified. See pgWithRowWorkerTransaction.
+var pgRowWorkerFences sync.Map
+
 func pgWithRowWorkerTransaction[T any](ctx context.Context, conn *pgx.Conn, b *pgRowBaseline, plan *pgRowPhysicalPlan, entity *pgRowPhysicalEntity, roles PgMigrationControlRoles, lease pgRowLeaseAdmission, run func(*pgRowTransactionAdmission) (T, error)) (value T, err error) {
 	if conn == nil || b == nil || b.database == nil || plan == nil || entity == nil || run == nil || lease.leaseName == "" || lease.holder == "" || lease.leaseToken <= 0 {
 		return value, fmt.Errorf("missing exact worker transaction binding")
@@ -29,14 +34,22 @@ func pgWithRowWorkerTransaction[T any](ctx context.Context, conn *pgx.Conn, b *p
 	// Acquire ABI coordination before the repeatable-read snapshot and before
 	// lease/shard locks. Retirement takes the same order, and waiting cannot
 	// leave this transaction observing pre-latch or pre-retirement metadata.
+	// The fence namespace is fixed for an installation, and the transaction
+	// below verifies the complete control catalog and refuses a different
+	// fence. Only the first transaction needs a separate verified read to
+	// learn it; later ones reuse the value that check last confirmed.
 	var observed PgMigrationControlState
-	err = pgControlTransaction(ctx, conn, false, func(tx pgx.Tx) error {
-		var readErr error
-		observed, _, readErr = pgReadRowBaselineState(ctx, tx, b, roles, false)
-		return readErr
-	})
-	if err != nil {
-		return value, err
+	if fence, cached := pgRowWorkerFences.Load(b.database); cached {
+		observed.FenceNamespace = fence.(int)
+	} else {
+		err = pgControlTransaction(ctx, conn, false, func(tx pgx.Tx) error {
+			var readErr error
+			observed, _, readErr = pgReadRowBaselineState(ctx, tx, b, roles, false)
+			return readErr
+		})
+		if err != nil {
+			return value, err
+		}
 	}
 	err = pgMigrationSessionLock(ctx, conn, observed.FenceNamespace, -plan.version, true, func() error {
 		return pgRowControlWrite(ctx, conn, func(tx pgx.Tx) error {
@@ -55,8 +68,10 @@ func pgWithRowWorkerTransaction[T any](ctx context.Context, conn *pgx.Conn, b *p
 				return err
 			}
 			if state.FenceNamespace != observed.FenceNamespace {
+				pgRowWorkerFences.Delete(b.database)
 				return fmt.Errorf("worker ABI fence changed before transaction")
 			}
+			pgRowWorkerFences.Store(b.database, state.FenceNamespace)
 			if err := pgRowTransactionABI(ctx, tx, plan); err != nil {
 				return err
 			}
