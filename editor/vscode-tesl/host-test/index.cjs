@@ -233,6 +233,15 @@ exports.run = async () => {
     assert.equal(queueApplied.result.sourceTransaction.outcome, "committed");
     const queueHelper = vscode.window.activeTextEditor.document.uri.fsPath;
     assert.ok(queueHelper.includes("/v2/author-notify.tesl"), queueHelper);
+    const queueInputs = [...new Map(queueApplied.nextView.diagnostics.diagnostics
+      .filter((item) => item.message.startsWith("Migration needs a value: "))
+      .map((item) => [JSON.stringify([item.file, item.start, item.message]), item])).values()];
+    assert.ok(queueInputs.length > 1, `queue conversion has several explicit domain inputs: ${JSON.stringify(queueApplied.nextView.diagnostics)}`);
+    await vscode.commands.executeCommand("tesl.editMigrationHole", { previewId: queueApplied.nextView.previewId, itemIndex: 1 });
+    const selectedInput = vscode.window.activeTextEditor;
+    assert.equal(selectedInput.document.uri.fsPath, queueInputs[1].file);
+    assert.equal(selectedInput.document.getText(selectedInput.selection), `todo ${JSON.stringify(queueInputs[1].message.slice("Migration needs a value: ".length))}`);
+    evidence.checks.push("selecting a later migration input focuses that exact placeholder instead of returning to the first todo");
     for (let count = 0; count < 5; count++) {
       const editor = vscode.window.activeTextEditor;
       const hole = editor.document.getText(editor.selection);

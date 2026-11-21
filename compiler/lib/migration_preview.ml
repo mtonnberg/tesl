@@ -34,6 +34,23 @@ let protect file f = try Ok (f ()) with
   | Invalid errors -> Error errors
   | Sys_error message | Invalid_argument message | Failure message -> Error [{loc=Location.dummy_loc file;message;candidates=[]}]
    | Unix.Unix_error (error,operation,path) -> Error [{loc=Location.dummy_loc path;message=operation ^ ": " ^ Unix.error_message error;candidates=[]}]
+(* A checked queue conversion can stop at its first helper error. For authoring,
+   expose all normally checked input holes in that reported file, so the editor
+   can navigate them without guessing from source text. This runs inside the
+   same proposed-source overlay and manifest guards as the entry check. *)
+let authoring_diagnostics entry_file =
+ let diagnostics = Compile.check_source entry_file (Source_input.read entry_file) in
+ let is_input (d:Compile.diagnostic) = d.code="MIG003" &&
+   String.starts_with ~prefix:"Migration needs a value: " d.message in
+ let files = diagnostics |> List.filter is_input |> List.map(fun(d:Compile.diagnostic)->d.file)
+   |> List.filter((<>)entry_file) |> List.sort_uniq String.compare in
+ let inputs = List.concat_map(fun file ->
+   Compile.check_source file (Source_input.read file) |> List.filter is_input) files in
+ let seen = Hashtbl.create 16 in
+ List.filter(fun(d:Compile.diagnostic)->
+   let key=d.file,d.start_line,d.start_col,d.end_line,d.end_col,d.code,d.severity,d.message in
+   if Hashtbl.mem seen key then false else (Hashtbl.add seen key ();true)) (diagnostics @ inputs)
+
 let cleanup_for (selection:T.selection) diagnostics =
  if List.exists(fun(d:Compile.diagnostic)->d.severity="error")diagnostics then [],diagnostics else
  let source=Source_input.read selection.entry_file in
@@ -79,7 +96,7 @@ let generate ~project_root ~entry_file ~database ~new_revision ~documents = prot
         let p = target (T.refresh target_ ~documents) in Refresh,p.current_version,p.manifest,p.decisions in
     let cleanup,diagnostics = Source_input.with_overlays
       ~project_root:(Option.value (Source_input.project_root ()) ~default:project_root)
-      (M.overlays manifest) (fun () -> cleanup_for selected (Compile.check_source entry_file (Source_input.read entry_file))) in
+      (M.overlays manifest) (fun () -> cleanup_for selected (authoring_diagnostics entry_file)) in
     {operation;selection=selected;revision_after;abi=context;manifest;diagnostics;decisions;cleanup;contract_version=None})) in
   (match verify preview ~documents with Ok () -> () | Error errors -> raise (Invalid errors));
   preview)
@@ -103,7 +120,7 @@ let generate_choice ~project_root ~entry_file ~database ~documents ~decision ~op
     let p=target(T.refresh_choice selected ~choice ~documents)in
     let cleanup,diagnostics=Source_input.with_overlays
       ~project_root:(Option.value(Source_input.project_root())~default:project_root)
-      (M.overlays p.manifest)(fun()->cleanup_for selection (Compile.check_source entry_file(Source_input.read entry_file)))in
+      (M.overlays p.manifest)(fun()->cleanup_for selection (authoring_diagnostics entry_file))in
     {operation=Refresh;selection;revision_after=p.current_version;abi=reviewed.abi;
       manifest=p.manifest;diagnostics;decisions=p.decisions;cleanup;contract_version=None}))in
   (match verify reviewed ~documents with Ok()->()|Error errors->raise(Invalid errors));
@@ -134,7 +151,7 @@ let generate_contract ~project_root ~entry_file ~database ~version ~documents = 
     ~imports:[] ~documents ~writes:[file,contents]) in
   let manifest=source_guard(M.combine (T.source_guard target_) edits ~documents) in
    let cleanup,diagnostics=Source_input.with_overlays ~project_root:(Option.value(Source_input.project_root())~default:project_root)
-    (M.overlays manifest) (fun () -> cleanup_for selection (Compile.check_source entry_file (Source_input.read entry_file))) in
+    (M.overlays manifest) (fun () -> cleanup_for selection (authoring_diagnostics entry_file)) in
    (match List.find_opt(fun(d:Compile.diagnostic)->d.severity="error")diagnostics with
     | Some d->raise(Invalid[{loc=Location.make_loc d.file d.start_line d.start_col d.end_line d.end_col;message=d.message;candidates=[]}])
     | None->());

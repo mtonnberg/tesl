@@ -128,7 +128,7 @@ pre{white-space:pre-wrap;overflow-wrap:anywhere}details{margin:12px 0}summary{cu
 <h1>${escape(heading)}</h1><p class="context">${escape(controls.context || "")}</p><p>${escape(overview)}</p>
 ${controls.status ? `<p role="status">${escape(controls.status)}</p>` : ""}
 ${body}<section class="next-step"><h3>Next step</h3><p>${escape(instruction)}</p>${primary}</section>
-<nav aria-label="Guide navigation">${index > 0 ? button("previous", "Previous item") : ""}${index >= 0 && index < items.length - 1 ? button("next", "Next item") : ""}${index >= 0 ? button("overview", "All items") : ""}${!controls.reference ? button("refresh", "Recheck application") : ""}</nav>
+<nav aria-label="Guide navigation">${index > 0 ? button("previous", "Previous item") : ""}${index >= 0 && index < items.length - 1 ? button("next", "Next item") : ""}${index >= 0 ? button("overview", "All items") : ""}${!controls.reference && items.length > 1 && !controls.busy && !controls.consumed ? button("pickItem", `Remaining items… (${items.length})`) : ""}${!controls.reference ? button("refresh", "Recheck application") : ""}</nav>
 ${!controls.reference ? `<details><summary>Proposed source files (${controls.fileCount || 0})</summary><p>These actions prepare source; they do not run database migrations.</p><div id="files"></div>${controls.canApply && (item || items.length) ? button("apply", "Update generated source only") : ""}</details>` : ""}
 <script nonce="${nonce}">
 const vscode=acquireVsCodeApi();
@@ -269,7 +269,10 @@ function registerMigrationAuthoring(vscode, context, { getClient, requireTrusted
     const openCustomCode = async (proposal, preferred) => {
       // Select actual value holes before unrelated, still-unselected migration
       // decisions. This also finds holes in generated queue helper modules.
-      for (const diagnostic of proposal.diagnostics?.diagnostics || []) {
+      // An explicitly selected input must not fall back to another input.
+      const selectedHole = preferred?.customHole;
+      const diagnostics = selectedHole ? [{ file: preferred.file, start: { line: preferred.line, col: preferred.col }, message: preferred.diagnostic }] : proposal.diagnostics?.diagnostics || [];
+      for (const diagnostic of diagnostics) {
         if (!inside(projectRoot, diagnostic.file) || !(diagnostic.message?.startsWith("Migration needs a value: ") || diagnostic.message?.includes("Choose a literal of type "))) continue;
         try {
           const document = await vscode.workspace.openTextDocument(vscode.Uri.file(diagnostic.file));
@@ -279,10 +282,18 @@ function registerMigrationAuthoring(vscode, context, { getClient, requireTrusted
           const offset = lines.slice(0, line).reduce((count, text) => count + text.length + 1, 0) + col;
           const hole = codeHoleRange(source, offset);
           if (!hole || hole.start !== offset) continue;
+          if (selectedHole && diagnostic.message.startsWith("Migration needs a value: ")) {
+            const reason = JSON.parse(source.slice(hole.start + 4, hole.end).trim());
+            if (reason !== diagnostic.message.slice("Migration needs a value: ".length)) continue;
+          }
           const start = document.positionAt(hole.start), end = document.positionAt(hole.end);
           await vscode.window.showTextDocument(document, { selection: new vscode.Range(start.line, start.character, end.line, end.character), preview: false });
           return;
-        } catch (_) { /* Fall back to the source inventory when a location moved. */ }
+        } catch (_) { /* Report a stale selected input; automatic discovery may try other files. */ }
+      }
+      if (selectedHole) {
+        await vscode.window.showWarningMessage("This migration input moved or was filled. Recheck the migration to navigate the current inputs.");
+        return;
       }
       const candidates = [...new Set([preferred?.file, ...(proposal.decisions || []).map((item) => item.file), ...(proposal.diagnostics?.diagnostics || []).map((item) => item.file), ...proposal.files.map((file) => file.path)])].filter((file) => inside(projectRoot, file));
       for (const file of candidates) {
@@ -364,7 +375,7 @@ function registerMigrationAuthoring(vscode, context, { getClient, requireTrusted
     if (panel && viewOptions.flow) viewOptions.flow.previewListener?.dispose();
     const previewListener = panel?.webview.onDidReceiveMessage(async (message) => {
       try {
-        if (!["refresh", "overview", "select", "next", "previous", "apply", "choose", "status", "edit", "source", "diff"].includes(message?.action)) return;
+        if (!["refresh", "overview", "select", "pickItem", "next", "previous", "apply", "choose", "status", "edit", "source", "diff"].includes(message?.action)) return;
         if (!requireTrustedWorkspace() || !message || typeof message.action !== "string") return;
         if (busy && message.action !== "status") return;
         if (message.action === "refresh") { await requestPreview(entry, selectedDatabase, viewOptions); panelDisposed = true; if (!viewOptions.flow) panel.dispose(); return; }
@@ -372,6 +383,25 @@ function registerMigrationAuthoring(vscode, context, { getClient, requireTrusted
         if (message.action === "select" && Number.isInteger(message.index) && message.index >= 0 && message.index < items.length) index = message.index;
         if (message.action === "next") index = viewOptions.flow && index >= items.length - 1 ? 0 : Math.min(items.length - 1, index + 1);
         if (message.action === "previous") index = Math.max(-1, index - 1);
+        if (message.action === "pickItem") {
+          if (consumed || viewOptions.flow?.changedAfterCheck) return;
+          const selected = await vscode.window.showQuickPick(items.map((item, itemIndex) => ({
+            label: `${itemIndex + 1}. ${item.customHole ? (item.diagnostic || item.summary).replace(/^Migration needs a value: /, "") : item.title}`,
+            description: inside(projectRoot, item.file) ? `${path.relative(projectRoot, item.file)}${Number.isInteger(item.line) ? `:${item.line + 1}` : ""}` : "",
+            detail: item.summary, itemIndex,
+          })), { placeHolder: "Find a remaining migration input, decision, or diagnostic", matchOnDescription: true, matchOnDetail: true });
+          if (!selected || !requireTrustedWorkspace() || panelDisposed || !views.has(viewId) || viewOptions.flow?.changedAfterCheck) return;
+          index = selected.itemIndex;
+          refresh();
+          const selectedItem = items[index];
+          // Navigation is read-only. A pending proposal must be applied through
+          // its existing explicit action before its new inputs exist on disk.
+          if (!preview.files.some((file) => file.path === selectedItem.file)) {
+            if (selectedItem.customHole) await openCustomCode(preview, selectedItem);
+            else await openLocation(selectedItem);
+          }
+          return;
+        }
         const item = items[index];
         if (message.action === "apply") { await vscode.commands.executeCommand("tesl.applyMigrationSource", { previewId: viewId }); return; }
         if (message.action === "choose" && item && Number.isInteger(message.optionIndex)) {
@@ -407,7 +437,10 @@ function registerMigrationAuthoring(vscode, context, { getClient, requireTrusted
       preview,
       supportsApply,
       apply: () => applyProposal(),
-      edit: () => openCustomCode(preview),
+      edit: (itemIndex) => {
+        if (itemIndex !== undefined && (!Number.isInteger(itemIndex) || itemIndex < 0 || itemIndex >= items.length)) throw new Error("Select an input from the current migration review.");
+        return openCustomCode(preview, itemIndex === undefined ? undefined : items[itemIndex]);
+      },
       status: async () => {
         if (!operationPreviewId) throw new Error("No source transaction was started.");
         return languageClient.sendRequest("workspace/executeCommand", { command: "tesl.migrationApplicationStatus", arguments: [{ previewId: operationPreviewId }] });
@@ -437,7 +470,7 @@ function registerMigrationAuthoring(vscode, context, { getClient, requireTrusted
   };
   const workflow = registerMigrationFlow(vscode, context, { requestPreview, getView: retainedView, requireTrustedWorkspace, isApplying: () => applyingSource });
   context.subscriptions.push(vscode.commands.registerCommand("tesl.applyMigrationSource", async (params) => retainedView(params).apply()));
-  context.subscriptions.push(vscode.commands.registerCommand("tesl.editMigrationHole", async (params) => retainedView(params).edit()));
+  context.subscriptions.push(vscode.commands.registerCommand("tesl.editMigrationHole", async (params) => retainedView(params).edit(params.itemIndex)));
   context.subscriptions.push(vscode.commands.registerCommand("tesl.applyMigrationChoice", async (params) => {
     if (typeof params?.decisionId !== "string" || typeof params?.optionId !== "string") throw new Error("Select an explicit compiler decision and option.");
     return retainedView(params).choose(params.decisionId, params.optionId);

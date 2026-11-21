@@ -549,6 +549,146 @@ test("source edits replace stale hole navigation with a primary recheck action",
   } finally { f.cleanup(); }
 });
 
+function inputNavigation(f, secondFile = f.entryFile) {
+  const first = 'fn first() -> String = todo "First value"';
+  const second = 'fn second() -> String = if "🌱" == "" then todo "Second value" else ""';
+  const sources = new Map([[f.entryFile, first + "\n"]]);
+  sources.set(secondFile, (sources.get(secondFile) || "") + second + "\n");
+  const diagnostic = (file, line, text, reason) => ({ code: "MIG003", severity: "error", file,
+    start: { line, col: Buffer.byteLength(text.slice(0, text.indexOf("todo"))) }, message: `Migration needs a value: ${reason}` });
+  f.preview.files = []; f.preview.guidance = [];
+  f.preview.diagnostics.diagnostics = [diagnostic(f.entryFile, 0, first, "First value"), diagnostic(secondFile, secondFile === f.entryFile ? 1 : 0, second, "Second value")];
+  f.vscode.workspace.openTextDocument = async (uri) => {
+    const text = sources.get(uri.fsPath);
+    return { uri, lineCount: text.split("\n").length, getText: () => text, lineAt: (line) => ({ text: text.split("\n")[line] }),
+      positionAt: (offset) => { const lines = text.slice(0, offset).split("\n"); return { line: lines.length - 1, character: lines.at(-1).length }; } };
+  };
+  return { sources, second };
+}
+
+test("Next and Previous open the selected input, including another file and Unicode columns", async () => {
+  for (const crossFile of [false, true]) {
+    const f = fixture();
+    try {
+      const secondFile = crossFile ? path.join(f.root, "migrations/notes/helper.tesl") : f.entryFile;
+      const { second } = inputNavigation(f, secondFile);
+      const flow = await f.commands.get("tesl.migrateDatabase")(f.uri(f.entryFile));
+      await f.commands.get("tesl.migrationFlowAction")({ flowId: flow.flowId, action: "resume" });
+      const panel = f.panels[0];
+      await panel.message({ action: "next" });
+      assert.ok(panel.webview.html.includes("Review item 2 of 2"));
+      assert.ok(panel.webview.html.includes('data-action="previous"'));
+      await panel.message({ action: "edit" });
+      assert.equal(f.opened.at(-1)[0].uri.fsPath, secondFile);
+      const selection = f.opened.at(-1)[1].selection;
+      assert.equal(selection.start.line, crossFile ? 0 : 1);
+      assert.equal(selection.start.character, second.indexOf("todo"));
+      assert.equal(selection.end.character - selection.start.character, 'todo "Second value"'.length);
+      await panel.message({ action: "previous" });
+      await panel.message({ action: "edit" });
+      assert.equal(f.opened.at(-1)[0].uri.fsPath, f.entryFile);
+      assert.equal(f.opened.at(-1)[1].selection.start.line, 0);
+      assert.equal(f.requests.length, 1, "input navigation never applies source or reruns the compiler");
+    } finally { f.cleanup(); }
+  }
+});
+
+test("Remaining items picker searches paths and opens the chosen input without edits", async () => {
+  const f = fixture();
+  try {
+    const secondFile = path.join(f.root, "migrations/notes/helper.tesl");
+    inputNavigation(f, secondFile);
+    await f.commands.get("tesl.previewMigration")(f.uri(f.entryFile));
+    const panel = f.panels[0];
+    f.vscode.window.showQuickPick = async (items, options) => {
+      assert.equal(options.matchOnDescription, true);
+      assert.equal(options.matchOnDetail, true);
+      assert.equal(items[1].label, "2. Second value");
+      assert.equal(items[1].description, `migrations${path.sep}notes${path.sep}helper.tesl:1`);
+      return items[1];
+    };
+    await panel.message({ action: "pickItem" });
+    assert.equal(f.opened.at(-1)[0].uri.fsPath, secondFile);
+    assert.ok(panel.webview.html.includes("2 / 2"));
+    f.vscode.window.showQuickPick = async () => undefined;
+    await panel.message({ action: "pickItem" });
+    assert.equal(f.opened.length, 1, "dismissing the picker does nothing");
+    assert.equal(f.requests.length, 1);
+    assert.equal(fs.readFileSync(f.entryFile, "utf8"), "module App exposing []\n");
+  } finally { f.cleanup(); }
+});
+
+test("a filled or replaced selected input never redirects to another todo", async () => {
+  for (const replacement of ['"filled"', 'todo "Different value"']) {
+    const f = fixture();
+    try {
+      const { sources } = inputNavigation(f);
+      await f.commands.get("tesl.previewMigration")(f.uri(f.entryFile));
+      await f.panels[0].message({ action: "select", index: 1 });
+      sources.set(f.entryFile, sources.get(f.entryFile).replace('todo "Second value"', replacement));
+      await f.panels[0].message({ action: "edit" });
+      assert.equal(f.opened.length, 0);
+      assert.ok(f.warnings.some((message) => /moved or was filled.*Recheck/.test(message)));
+      assert.equal(f.requests.length, 1);
+    } finally { f.cleanup(); }
+  }
+});
+
+test("a picker from a closed preview cannot reopen its source", async () => {
+  const f = fixture();
+  try {
+    inputNavigation(f);
+    await f.commands.get("tesl.previewMigration")(f.uri(f.entryFile));
+    const panel = f.panels[0];
+    f.vscode.window.showQuickPick = async (items) => { panel.dispose(); return items[1]; };
+    await panel.message({ action: "pickItem" });
+    assert.equal(f.opened.length, 0);
+  } finally { f.cleanup(); }
+});
+
+test("Remaining items navigation never applies a pending source proposal", async () => {
+  const f = fixture();
+  try {
+    inputNavigation(f);
+    f.preview.files = [{ path: f.entryFile, creates: false }];
+    f.client.initializeResult = { capabilities: { executeCommandProvider: { commands: ["tesl.applyMigration"] } } };
+    const view = await f.commands.get("tesl.previewMigration")(f.uri(f.entryFile));
+    f.vscode.window.showQuickPick = async (items) => items[1];
+    await f.panels[0].message({ action: "pickItem" });
+    assert.ok(f.panels[0].webview.html.includes("Second value"));
+    assert.equal(f.requests.length, 1);
+    assert.equal(f.opened.length, 0, "proposed inputs are not yet present in the editor");
+    await assert.rejects(f.commands.get("tesl.editMigrationHole")({ previewId: view.previewId, itemIndex: 99 }), /current migration review/);
+    assert.equal(f.opened.length, 0);
+  } finally { f.cleanup(); }
+});
+
+test("schema picker uses the compiler's current closure, excludes outside paths, and cancels cleanly", async () => {
+  const f = fixture();
+  try {
+    const helper = path.join(f.root, "schema/notes/v-current/payload.tesl"), current = f.preview.schemaFiles[0];
+    f.preview.schemaFiles = [helper, current, path.join(path.dirname(f.root), "outside.tesl")];
+    f.vscode.workspace.openTextDocument = async (uri) => ({ uri });
+    const flow = await f.commands.get("tesl.migrateDatabase")(f.uri(f.entryFile));
+    const action = (action) => f.commands.get("tesl.migrationFlowAction")({ flowId: flow.flowId, action });
+    await action("resume");
+    await action("back");
+    assert.ok(f.panels[0].webview.html.includes("Choose schema file…"));
+    f.opened.length = 0;
+    f.vscode.window.showQuickPick = async (items) => {
+      assert.deepEqual(items.map((item) => item.file), [current, helper]);
+      return items[1];
+    };
+    await action("openSchema");
+    assert.equal(f.opened.at(-1)[0].uri.fsPath, helper);
+    assert.ok(f.panels[0].webview.html.includes(path.relative(f.root, helper)), "edit page names the helper actually opened");
+    f.vscode.window.showQuickPick = async () => undefined;
+    await action("openSchema");
+    assert.equal(f.opened.length, 1);
+    assert.equal(f.requests.length, 1);
+  } finally { f.cleanup(); }
+});
+
 test("guide resolves the nearest configured application from a schema in a repository workspace", async () => {
   const f = fixture();
   try {

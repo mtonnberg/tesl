@@ -58,6 +58,7 @@ button:focus-visible,input:focus-visible,summary:focus-visible{outline:2px solid
 
 function renderFlow(flow) {
   const { nonce, stage, revision, draft, error } = flow;
+  const schemaFile = flow.schemaFiles?.includes(flow.schemaFile) ? flow.schemaFile : flow.schemaFiles?.find((file) => /v-current\.tesl$/.test(file)) || flow.schemaFiles?.[0];
   const navigation = `${button("back", "Back")}${button("cancel", "Cancel migration")}`;
   if (stage === "welcome") {
     const resume = draft && draft.status !== "complete" && !flow.forceNew;
@@ -86,9 +87,9 @@ function renderFlow(flow) {
   if (stage === "preparing") return page(nonce, "Step 1 of 4 · preparing source", "Preparing your migration…",
     "<p>Checking the current revision before creating the next one. Wait to edit the schema until preparation finishes.</p>", button("start", "Preparing…", true, "disabled"));
   if (stage === "edit") return page(nonce, `Step 2 of 4 · draft V${revision} prepared`, "Now edit your schema",
-    `<p>${flow.changedAfterCheck ? "Source changed since the last check. " : ""}Edit the current schema opened beside this page. Change fields, validation or queue payloads, then review your changes.</p><p><code>${escape(flow.schemaFiles?.[0] ? path.relative(flow.projectRoot, flow.schemaFiles[0]) : "v-current.tesl")}</code></p>`,
+    `<p>${flow.changedAfterCheck ? "Source changed since the last check. " : ""}Edit the current schema opened beside this page. Change fields, validation or queue payloads, then review your changes.</p><p><code>${escape(schemaFile ? path.relative(flow.projectRoot, schemaFile) : "v-current.tesl")}</code></p>`,
     button("review", "Review my changes", true),
-    `${navigation}${button("openSchema", "Open schema")}<p class="muted">Changes belong to V${revision}. Editing this draft changes source files, not deployed data.</p>${more("About schema warnings", "<p>A temporary stale-schema warning means the migration needs to catch up with your edits. Review my changes updates it.</p>")}`);
+    `${navigation}${button("openSchema", flow.schemaFiles?.length > 1 ? "Choose schema file…" : "Open schema")}<p class="muted">Changes belong to V${revision}. Editing this draft changes source files, not deployed data.</p>${more("About schema warnings", "<p>A temporary stale-schema warning means the migration needs to catch up with your edits. Review my changes updates it.</p>")}`);
   if (stage === "testing") return page(nonce, `Step 4 of 4 · V${revision}`, "Running application tests…",
     "<p>Wait for the test result. You can follow progress in Test Results.</p>", button("tests", "Tests running…", true, "disabled"));
   if (stage === "ready") {
@@ -149,8 +150,11 @@ function renderFlowReview(flow, preview, items, index, controls) {
     primary = button("review", "Recheck and continue", true);
     body += button(item?.code === "MIG003" ? "edit" : "source", item?.code === "MIG003" ? "Open remaining value or policy" : "Open source issue");
   }
+  if (item && items.length > 1 && !controls.busy && !controls.consumed && !flow.changedAfterCheck) {
+    body = `<p class="muted">Review item ${Math.max(0, index) + 1} of ${items.length}${item.file ? ` · ${escape(path.relative(flow.projectRoot, item.file))}${Number.isInteger(item.line) ? `:${item.line + 1}` : ""}` : ""}</p>` + body;
+  }
   return page(flow.nonce, state, title, body, primary,
-    `${controls.canLeave ?? (!controls.busy && !controls.consumed) ? button("back", "Back") + button("cancel", "Cancel migration") : ""}${button("refresh", "Recheck my changes")}${items.length > 1 ? button("next", `Next item (${Math.max(0, index) + 1}/${items.length})`) : ""}
+    `${controls.canLeave ?? (!controls.busy && !controls.consumed) ? button("back", "Back") + button("cancel", "Cancel migration") : ""}${button("refresh", "Recheck my changes")}${items.length > 1 && !controls.busy && !controls.consumed && !flow.changedAfterCheck ? `${index > 0 ? button("previous", "Previous item") : ""}${button("next", "Next item")}${button("pickItem", `Remaining items… (${items.length})`)}` : ""}
 ${more("Details and source changes", `<p>${escape(item?.summary || "")}</p>${(item?.help || []).map((text) => `<p>${escape(text)}</p>`).join("")}<pre>${escape(item?.diagnostic || "")}</pre><div id="files"></div>${controls.canApply && !preview.compilable ? button("apply", "Write proposal without choosing a plan") : ""}`)}`);
 }
 
@@ -161,11 +165,22 @@ function registerMigrationFlow(vscode, context, { requestPreview, getView, requi
     entryFile: flow.entryFile, projectRoot: flow.projectRoot, previewId: flow.previewId, view: flow.view, testStatus: flow.testStatus, ...(flow.error ? { error: flow.error } : {}) });
   const render = (flow) => { if (!flow.disposed && !["review", "cleanup"].includes(flow.stage)) flow.panel.webview.html = renderFlow(flow); };
   const persistBackup = async (flow, backup) => { await context.workspaceState?.update(`${flow.key}:backup`, backup); flow.backup = backup; };
-  async function openSchema(flow) {
-    const file = flow.schemaFiles?.find((file) => /v-current\.tesl$/.test(file)) || flow.schemaFiles?.[0] || flow.sourceUri?.fsPath;
+  async function openSchema(flow, choose = false) {
+    const files = [...new Set(flow.schemaFiles || [])].filter((file) => typeof file === "string" && flow.projectRoot && within(flow.projectRoot, file));
+    const root = files.find((file) => /v-current\.tesl$/.test(file));
+    let file = root || files[0] || flow.sourceUri?.fsPath;
+    if (choose && files.length > 1) {
+      const selected = await vscode.window.showQuickPick([...(root ? [root] : []), ...files.filter((file) => file !== root)].map((file) => ({
+        label: path.relative(flow.projectRoot, file), description: file === root ? "Current schema" : "Current schema helper or queue payload", file,
+      })), { placeHolder: "Choose a current-schema file to edit", matchOnDescription: true });
+      if (!selected || flow.disposed) return;
+      file = selected.file;
+    }
     if (!file || !flow.projectRoot || !within(flow.projectRoot, file)) return;
     const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(file));
     await vscode.window.showTextDocument(doc, { preview: false, preserveFocus: false });
+    flow.schemaFile = file;
+    return true;
   }
   async function remember(flow, view) {
     flow.entryFile = view.entryFile; flow.projectRoot = view.projectRoot; flow.database = view.database;
@@ -250,7 +265,7 @@ function registerMigrationFlow(vscode, context, { requestPreview, getView, requi
         const required = flow.view?.cleanup?.find((item) => !item.present);
         if (!required) return snapshot(flow);
         await requestPreview(vscode.Uri.file(flow.entryFile), flow.database, { flow, guided: true, expectedRevision: flow.revision, contractVersion: required.version });
-      } else if (name === "openSchema") { if (flow.stage === "ready") flow.stage = "edit"; await openSchema(flow); }
+      } else if (name === "openSchema") { if (await openSchema(flow, true) && flow.stage === "ready") flow.stage = "edit"; }
       else if (name === "tests" && flow.stage === "ready") {
         flow.testStatus = undefined;
         await saveProject(flow);

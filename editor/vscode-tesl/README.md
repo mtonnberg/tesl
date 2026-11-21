@@ -63,6 +63,18 @@ Now edit your schema** should you edit the opened `v-current.tesl`. Then press
 **Review my changes**, choose a plan, and **Generate this plan**. Fill the selected
 domain placeholders, then press the primary **Recheck and continue** button.
 Editing source replaces stale hole-navigation instructions with this recheck action.
+For several inputs, **Remaining items…** opens a searchable list with each input's
+file and line; filter by its explanation or path and jump directly to it.
+**Previous item** and **Next item** review inputs in order. Opening an input selects
+that exact `todo "…"` expression, including in generated queue helpers. If it has
+moved or been filled since review, recheck first rather than jumping to a different
+placeholder. Selecting an item in the picker never applies a pending proposal.
+
+For schemas spread across modules, **Choose schema file…** lists the compiler's
+current-schema files and queue payload helpers. Start still opens `v-current.tesl`
+directly; the picker is available when you want another file. The edit page shows
+the selected file's path.
+
 If cleanup is required, **Review cleanup** previews
 `vN-contract.tesl`, then **Add reviewed cleanup source** writes and checks it.
 The last step offers **Save and run application tests** after source checks pass.

@@ -334,7 +334,10 @@ let queue_choice () = with_project ~old:queue_schema ~program:queue_program(fun 
   check bool "queue helper holes request domain values rather than unknown identifiers" true
     (List.exists(fun(d:Compile.diagnostic)->d.code="MIG003" && Compile.string_contains d.message "Migration needs a value:")(P.diagnostics chosen) &&
      not(List.exists(fun(d:Compile.diagnostic)->Compile.string_contains d.message "unknown name: todo")(P.diagnostics chosen)));
- materialize chosen;
+  let inputs p = P.diagnostics p |> List.filter(fun(d:Compile.diagnostic)->d.code="MIG003" && String.starts_with ~prefix:"Migration needs a value: " d.message) in
+  check int "all queue helper inputs appear once in the proposed preview" 3 (List.length(inputs chosen));
+  materialize chosen;
+  check int "all queue helper inputs remain navigable after application" 3 (List.length(inputs(get(preview root))));
  List.iter(fun(e:M.edit)->if Compile.string_contains e.path "/v2/author-notify.tesl"then
    write e.path(complete e.path(read e.path)(fun reason->
      if Compile.string_contains reason ".body"then "value.text"
