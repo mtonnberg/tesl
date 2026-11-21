@@ -14,7 +14,11 @@ let compiler =
     let dir = Filename.dirname Sys.argv.(0) in
     let c1 = Filename.concat (Filename.dirname dir) "bin/main.exe" in
     let c2 = Filename.concat dir "../bin/main.exe" in
-    if Sys.file_exists c1 then c1 else if Sys.file_exists c2 then c2 else "tesl"
+    let found = if Sys.file_exists c1 then c1 else if Sys.file_exists c2 then c2 else "tesl" in
+    (* Absolute: the tests run the compiler from inside temporary project directories, and a
+       path relative to the test's own directory stops resolving after that `cd`. *)
+    if found <> "tesl" && Filename.is_relative found
+    then Filename.concat (Sys.getcwd ()) found else found
 
 let failf fmt = Printf.ksprintf failwith fmt
 

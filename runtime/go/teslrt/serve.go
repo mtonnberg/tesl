@@ -805,7 +805,7 @@ func RunHealthcheckCommand(args []string, stderr io.Writer, host string, port in
 	target := "http://" + net.JoinHostPort(host, strconv.Itoa(port)) + probePath
 	client := &http.Client{Timeout: 5 * time.Second}
 	response, err := client.Get(target)
-	if err != nil {
+	if err != nil || response == nil {
 		_, _ = fmt.Fprintf(stderr, "healthcheck: %s: %v\n", target, err)
 		return true, 1
 	}
