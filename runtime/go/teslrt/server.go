@@ -123,7 +123,7 @@ func (server Server) ServeHTTP(writer http.ResponseWriter, request *http.Request
 	// The MOST SPECIFIC route for the method answers, not the first declared one: a literal
 	// segment beats a `:capture` in the same position. Otherwise `get "/runs/:runId"` answered
 	// `GET /runs/stream` by capturing "stream" — even with `sse "/runs/stream"` declared
-	// first — and the stream was unreachable (FRICTION §32). Equally specific routes keep
+	// first — and the stream was unreachable. Equally specific routes keep
 	// declaration order.
 	var chosen *Route
 	for index := range server.Routes {

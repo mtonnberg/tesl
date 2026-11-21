@@ -13,8 +13,12 @@ let lowercase_first s =
   if String.length s = 0 then s
   else String.make 1 (Char.lowercase_ascii s.[0]) ^ String.sub s 1 (String.length s - 1)
 
+(* A path segment may hold any URL character (`documents.csv`, `api-v2`, `a~b`); only letters
+   and digits survive into a generated function name, each run capitalised, so the name is a
+   legal identifier (`getDocuments.csv` was emitted verbatim and broke the client). *)
 let capitalize_segment s =
-  let parts = String.split_on_char '-' s in
+  let parts = String.split_on_char '\x00' (String.map (fun c ->
+    match c with 'a'..'z' | 'A'..'Z' | '0'..'9' -> c | _ -> '\x00') s) in
   String.concat "" (List.map (fun p ->
     if String.length p = 0 then ""
     else String.make 1 (Char.uppercase_ascii p.[0]) ^ String.sub p 1 (String.length p - 1)
@@ -87,6 +91,22 @@ let elm_paren_if_applied text =
 
 let elm_type_application head arg = head ^ " " ^ elm_paren_if_applied arg
 
+(* `F a b` for a user generic type `F` (the builtins have their own arms). *)
+let user_type_application te =
+  let rec collect head args = match head with
+    | TApp { head; arg; _ } -> collect head (arg :: args)
+    | other -> (other, args) in
+  match collect te [] with
+  | TName { name; _ }, (_ :: _ as args)
+    when not (List.mem name ["List"; "Maybe"; "Set"; "Dict"; "Result"; "Either"; "Tuple2"; "Tuple3"]) ->
+    Some (name, args)
+  | _ -> None
+
+(* A generic ADT's decoder/encoder takes one decoder/encoder per type parameter; inside its
+   body a payload of parameter type `a` is read with the parameter's own. *)
+let param_decoder_name name = "decoder_" ^ name
+let param_encoder_name name = "encoder_" ^ name
+
 let rec elm_type_of_type_expr te =
   match te with
   | TName { name = "String"; _ } -> "String"
@@ -118,6 +138,11 @@ let rec elm_type_of_type_expr te =
   | TApp { head = TName { name = "Set"; _ }; arg; _ } ->
     "List " ^ elm_type_arg arg
   | TVar { name; _ } -> name
+  (* A user GENERIC type applied to arguments: `CustomEither String Int`. *)
+  | TApp _ when user_type_application te <> None ->
+    (match user_type_application te with
+     | Some (head, args) -> String.concat " " (head :: List.map elm_type_arg args)
+     | None -> assert false)
   | _ -> "value"
 
 and elm_type_arg te = elm_paren_if_applied (elm_type_of_type_expr te)
@@ -368,9 +393,15 @@ let rec decode_expr_of_type te =
   | TApp { head = TName { name = "List"; _ }; arg; _ } ->
     "(D.list " ^ decode_expr_arg arg ^ ")"
   | TApp { head = TName { name = "Maybe"; _ }; arg; _ } ->
-    "(D.maybe " ^ decode_expr_arg arg ^ ")"
+    "(D.nullable " ^ decode_expr_arg arg ^ ")"
   | TApp { head = TName { name = "Set"; _ }; arg; _ } ->
     "(D.list " ^ decode_expr_arg arg ^ ")"
+  | TVar { name; _ } -> param_decoder_name name
+  | TApp _ when user_type_application te <> None ->
+    (match user_type_application te with
+     | Some (head, args) ->
+       "(" ^ String.concat " " (decoder_fn_name head :: List.map decode_expr_arg args) ^ ")"
+     | None -> assert false)
   | _ -> "D.value"
 
 and decode_expr_arg te =
@@ -398,10 +429,12 @@ let rec encode_expr_of_type te value_expr =
     "(E.list " ^ encode_fn_of_type arg ^ ") " ^ value_expr
   (* `Maybe.map f` must be APPLIED to the value before `withDefault` sees it; the old
      `(Maybe.withDefault E.null (Maybe.map f)) v` handed withDefault a function and did not
-     compile (FRICTION.md item 21.5). *)
+     compile. *)
   | TApp { head = TName { name = "Maybe"; _ }; arg; _ } ->
     Printf.sprintf "(Maybe.withDefault E.null (Maybe.map %s %s))"
       (encode_fn_of_type arg) value_expr
+  | TVar _ | TApp _ when (match te with TVar _ -> true | _ -> user_type_application te <> None) ->
+    encode_fn_of_type te ^ " " ^ value_expr
   | _ -> "E.null"
 
 and encode_fn_of_type te =
@@ -422,6 +455,12 @@ and encode_fn_of_type te =
   | TApp { head = TName { name = "List"; _ }; arg; _ }
   | TApp { head = TName { name = "Set"; _ }; arg; _ } ->
     "(E.list " ^ encode_fn_of_type arg ^ ")"
+  | TVar { name; _ } -> param_encoder_name name
+  | TApp _ when user_type_application te <> None ->
+    (match user_type_application te with
+     | Some (head, args) ->
+       "(" ^ String.concat " " (encoder_fn_name head :: List.map encode_fn_of_type args) ^ ")"
+     | None -> assert false)
   | _ -> "(\\_ -> E.null)"
 
 let encode_expr_of_annotated_type te proof_ann value_expr =
@@ -477,26 +516,35 @@ let elm_type_with_proof_ir ty proof_ann =
 let wrap_decoder_arg dec =
   if String.contains dec ' ' then "(" ^ dec ^ ")" else dec
 
+(* A JSON ARRAY pair — the shape a Dict with non-String keys would take. *)
 let tuple2_decoder a b =
   Printf.sprintf "(D.map2 (\\x y -> ( x, y )) (D.index 0 %s) (D.index 1 %s))"
     (wrap_decoder_arg a)
     (wrap_decoder_arg b)
 
-let tuple3_decoder a b c =
-  Printf.sprintf "(D.map3 (\\x y z -> ( x, y, z )) (D.index 0 %s) (D.index 1 %s) (D.index 2 %s))"
+(* A TUPLE VALUE crosses the wire as the runtime encodes every ADT,
+   `{"tag":"Tuple2","fields":{"first":…,"second":…}}` — the generated client used to expect a
+   JSON array the server never sends. *)
+let tuple2_value_decoder a b =
+  Printf.sprintf "(D.map2 (\\x y -> ( x, y )) (D.at [ \"fields\", \"first\" ] %s) (D.at [ \"fields\", \"second\" ] %s))"
+    (wrap_decoder_arg a)
+    (wrap_decoder_arg b)
+
+let tuple3_value_decoder a b c =
+  Printf.sprintf "(D.map3 (\\x y z -> ( x, y, z )) (D.at [ \"fields\", \"first\" ] %s) (D.at [ \"fields\", \"second\" ] %s) (D.at [ \"fields\", \"third\" ] %s))"
     (wrap_decoder_arg a)
     (wrap_decoder_arg b)
     (wrap_decoder_arg c)
 
 let result_decoder ok_decoder err_decoder =
   Printf.sprintf
-    "(D.field \"tag\" D.string |> D.andThen (\\tag -> case tag of \"Ok\" -> D.map Ok (D.field \"value\" %s) ; \"Err\" -> D.map Err (D.field \"error\" %s) ; _ -> D.fail (\"Unexpected Result tag: \" ++ tag)))"
+    "(D.field \"tag\" D.string |> D.andThen (\\tag -> case tag of \"Ok\" -> D.map Ok (D.at [ \"fields\", \"value\" ] %s) ; \"Err\" -> D.map Err (D.at [ \"fields\", \"error\" ] %s) ; _ -> D.fail (\"Unexpected Result tag: \" ++ tag)))"
     (wrap_decoder_arg ok_decoder)
     (wrap_decoder_arg err_decoder)
 
 let either_decoder left_decoder right_decoder =
   Printf.sprintf
-    "(D.field \"tag\" D.string |> D.andThen (\\tag -> case tag of \"Left\" -> D.map Left (D.field \"value\" %s) ; \"Right\" -> D.map Right (D.field \"value\" %s) ; _ -> D.fail (\"Unexpected Either tag: \" ++ tag)))"
+    "(D.field \"tag\" D.string |> D.andThen (\\tag -> case tag of \"Left\" -> D.map Left (D.at [ \"fields\", \"value\" ] %s) ; \"Right\" -> D.map Right (D.at [ \"fields\", \"value\" ] %s) ; _ -> D.fail (\"Unexpected Either tag: \" ++ tag)))"
     (wrap_decoder_arg left_decoder)
     (wrap_decoder_arg right_decoder)
 
@@ -521,15 +569,17 @@ let rec decode_expr_of_ir_type (ty : Ir.ir_type) =
   | Ir.IRNamed name -> decoder_fn_name name
   | Ir.IRVar _ -> "D.value"
   | Ir.IRList arg -> "(D.list " ^ wrap_decoder_arg (decode_expr_of_ir_type arg) ^ ")"
-  | Ir.IRMaybe arg -> "(D.maybe " ^ wrap_decoder_arg (decode_expr_of_ir_type arg) ^ ")"
+  (* `D.nullable`, not `D.maybe`: Nothing is `null` on the wire, and `D.maybe` would also turn a
+     payload that FAILS to decode into Nothing, silently dropping a populated value. *)
+  | Ir.IRMaybe arg -> "(D.nullable " ^ wrap_decoder_arg (decode_expr_of_ir_type arg) ^ ")"
   | Ir.IRSet arg -> "(D.list " ^ wrap_decoder_arg (decode_expr_of_ir_type arg) ^ ")"
   | Ir.IRDict (Ir.IRString, value) -> "(D.dict " ^ wrap_decoder_arg (decode_expr_of_ir_type value) ^ ")"
   | Ir.IRDict (key, value) ->
     "(D.list " ^ tuple2_decoder (decode_expr_of_ir_type key) (decode_expr_of_ir_type value) ^ ")"
   | Ir.IRResult (ok, err) -> result_decoder (decode_expr_of_ir_type ok) (decode_expr_of_ir_type err)
   | Ir.IREither (left, right) -> either_decoder (decode_expr_of_ir_type left) (decode_expr_of_ir_type right)
-  | Ir.IRTuple [a; b] -> tuple2_decoder (decode_expr_of_ir_type a) (decode_expr_of_ir_type b)
-  | Ir.IRTuple [a; b; c] -> tuple3_decoder (decode_expr_of_ir_type a) (decode_expr_of_ir_type b) (decode_expr_of_ir_type c)
+  | Ir.IRTuple [a; b] -> tuple2_value_decoder (decode_expr_of_ir_type a) (decode_expr_of_ir_type b)
+  | Ir.IRTuple [a; b; c] -> tuple3_value_decoder (decode_expr_of_ir_type a) (decode_expr_of_ir_type b) (decode_expr_of_ir_type c)
   | Ir.IRTuple _
   | Ir.IRFun _
   | Ir.IROpaque _ -> "D.value"
@@ -564,23 +614,23 @@ let rec encode_expr_of_ir_type ty value_expr =
       value_expr
   | Ir.IRResult (ok, err) ->
     Printf.sprintf
-      "((\\result_ -> case result_ of Ok ok_ -> E.object [ (\"tag\", E.string \"Ok\"), (\"value\", %s ok_) ] ; Err err_ -> E.object [ (\"tag\", E.string \"Err\"), (\"error\", %s err_) ]) %s)"
+      "((\\result_ -> case result_ of Ok ok_ -> E.object [ (\"tag\", E.string \"Ok\"), (\"fields\", E.object [ (\"value\", %s ok_) ]) ] ; Err err_ -> E.object [ (\"tag\", E.string \"Err\"), (\"fields\", E.object [ (\"error\", %s err_) ]) ]) %s)"
       (encode_fn_of_ir_type ok)
       (encode_fn_of_ir_type err)
       value_expr
   | Ir.IREither (left, right) ->
     Printf.sprintf
-      "((\\either_ -> case either_ of Left left_ -> E.object [ (\"tag\", E.string \"Left\"), (\"value\", %s left_) ] ; Right right_ -> E.object [ (\"tag\", E.string \"Right\"), (\"value\", %s right_) ]) %s)"
+      "((\\either_ -> case either_ of Left left_ -> E.object [ (\"tag\", E.string \"Left\"), (\"fields\", E.object [ (\"value\", %s left_) ]) ] ; Right right_ -> E.object [ (\"tag\", E.string \"Right\"), (\"fields\", E.object [ (\"value\", %s right_) ]) ]) %s)"
       (encode_fn_of_ir_type left)
       (encode_fn_of_ir_type right)
       value_expr
   | Ir.IRTuple [a; b] ->
-    Printf.sprintf "((\\( first, second ) -> E.list identity [ %s first, %s second ]) %s)"
+    Printf.sprintf "((\\( first, second ) -> E.object [ (\"tag\", E.string \"Tuple2\"), (\"fields\", E.object [ (\"first\", %s first), (\"second\", %s second) ]) ]) %s)"
       (encode_fn_of_ir_type a)
       (encode_fn_of_ir_type b)
       value_expr
   | Ir.IRTuple [a; b; c] ->
-    Printf.sprintf "((\\( first, second, third ) -> E.list identity [ %s first, %s second, %s third ]) %s)"
+    Printf.sprintf "((\\( first, second, third ) -> E.object [ (\"tag\", E.string \"Tuple3\"), (\"fields\", E.object [ (\"first\", %s first), (\"second\", %s second), (\"third\", %s third) ]) ]) %s)"
       (encode_fn_of_ir_type a)
       (encode_fn_of_ir_type b)
       (encode_fn_of_ir_type c)
@@ -816,7 +866,31 @@ let classify_fact fact_name
              | p :: _ -> p.name
              | [] -> "value"
            in
-           (match Ir.extract_simple_constraints base_name func.body with
+           (* A predicate factored into a one-parameter helper `fn` is read THROUGH the
+              helper when its body is translatable: naming the predicate must not change
+              what the client gets — `fn isShort(s) = String.length s
+              < 9` called from the check yields the same smart constructor as writing the
+              comparison inline.  Only a helper whose body is NOT translatable still
+              delegates to ApiHelpers below. *)
+           let inlined_body =
+             let helpers = List.filter_map (function
+               | DFunc f when f.kind = FnKind ->
+                 (match f.params with [p] -> Some (f.name, (p.name, f.body)) | _ -> None)
+               | _ -> None) decls in
+             Ast_visitor.map (fun e -> match e with
+               | EApp { fn = EVar { name; _ }; arg = EVar { name = arg_name; loc }; _ }
+                 when arg_name = base_name && List.mem_assoc name helpers ->
+                 let param, body = List.assoc name helpers in
+                 Ast_visitor.map (fun inner -> match inner with
+                   | EVar { name = n; _ } when n = param -> EVar { name = base_name; loc }
+                   | other -> other) body
+               | other -> other) func.body in
+           let constraints_of body = match Ir.extract_simple_constraints base_name body with
+             | Some cs when all_elm_conditions "input" cs <> None -> Some cs
+             | _ -> None in
+           (match (match Ir.extract_simple_constraints base_name func.body with
+                   | Some cs -> Some cs
+                   | None -> constraints_of inlined_body) with
             | Some constraints ->
               (match all_elm_conditions "input" constraints with
                | Some _ -> FkElmSmart { checker = func.name; base_type; constraints }
@@ -897,10 +971,18 @@ let rec validation_chain ~fact_kind_of proof_ctor facts indent =
       ^ indent ^ "        D.fail " ^ Printf.sprintf "%S" ("Failed proof: " ^ fact_name)
     | _ -> validation_chain ~fact_kind_of proof_ctor rest indent
 
+(* The decoder a fact's `<fact>FieldDecoder` reads its value with (its first parameter's
+   type), set per module.  A value proven by a fact may have ANOTHER type — a `Session`
+   carrying `IsCreatedSession (Id == sessionId) user`, whose first parameter is a String — and
+   then reusing the field decoder decodes the wrong type (the client did not compile). *)
+let current_fact_base_decoder : (string -> string option) ref = ref (fun _ -> None)
+
 let decode_expr_of_proof_wrapped ~fact_kind_of ~has_fact_decoder base_decoder proof_ann =
   match strip_hidden_client_proofs_opt proof_ann with
   | None -> base_decoder
-  | Some (PredApp { pred; _ }) when has_fact_decoder pred -> fact_decoder_name pred
+  | Some (PredApp { pred; _ }) when has_fact_decoder pred
+                                   && !current_fact_base_decoder pred = Some base_decoder ->
+    fact_decoder_name pred
   | Some proof ->
     let facts = Ir.dedupe_preserving_order (Ir.proof_names proof) in
     let simple_facts = List.filter (fun fact_name ->
@@ -1102,14 +1184,24 @@ let rec return_info_ir ~fact_kind_of ~has_fact_decoder (rs : Ir.ir_return) : elm
       decoder_text = "(D.list " ^ tuple2_decoder key_decoder value_decoder ^ ")" }
   | Ir.IRRetExists { body; _ } -> return_info_ir ~fact_kind_of ~has_fact_decoder body
 
+(* A path segment is TEXT: a capture of any other base type is rendered to it, or the
+   generated `"/" ++ … ++ n` does not compile for an `Int` capture.
+   [base_of] resolves a newtype (an Elm type alias) to the type it wraps. *)
+let url_segment_text ~base_of ty expr =
+  match base_of ty with
+  | Ir.IRInt | Ir.IRInt32 | Ir.IRPosixMillis -> "String.fromInt (" ^ expr ^ ")"
+  | Ir.IRFloat -> "String.fromFloat (" ^ expr ^ ")"
+  | _ -> expr
+
 let elm_url_expr_ir ?(rename_param = fun name -> name) ?(mount_path = None)
-    (ep : Ir.ir_endpoint) : string =
+    ?(base_of = fun ty -> ty) (ep : Ir.ir_endpoint) : string =
   let capture_exprs = List.map (fun (c : Ir.ir_capture) ->
     let local_name = rename_param c.irc_binding.irb_name in
     let expr = match c.irc_binding.irb_proof with
       | None -> local_name
       | Some _ -> "exorcise " ^ local_name
     in
+    let expr = url_segment_text ~base_of c.irc_binding.irb_type expr in
     (c.irc_binding.irb_name, expr)
   ) ep.ire_captures in
   let lookup_capture param =
@@ -1361,6 +1453,10 @@ let emit_elm ?module_name_override (m : module_form) : string =
   let establish_fns = collect_establish_fns m.decls in
   let fact_kind_tbl : (string, elm_fact_kind) Hashtbl.t = Hashtbl.create 8 in
   let has_fact_decoder fact_name = Hashtbl.mem fact_decls fact_name in
+  current_fact_base_decoder := (fun fact_name ->
+    if Hashtbl.mem fact_decls fact_name then
+      Some (decode_expr_of_type (find_fact_base_type fact_name ~fact_decls ~decls:m.decls))
+    else None);
   let fact_kind_of fact_name =
     match Hashtbl.find_opt fact_kind_tbl fact_name with
     | Some kind -> kind
@@ -1371,6 +1467,7 @@ let emit_elm ?module_name_override (m : module_form) : string =
   in
   let uses_refinement_proofs = List.exists decl_uses_proofs m.decls in
   let ir_module = Ir.module_to_ir m in
+  let ir_module = { ir_module with Ir.irm_endpoints = Ir.client_endpoints ir_module } in
   let endpoints_use_elm_dict = List.exists ir_endpoint_uses_elm_dict ir_module.Ir.irm_endpoints in
   (* Emit the Money alias + codec helpers exactly once, and only when needed. *)
   let emit_money_helpers =
@@ -1706,7 +1803,7 @@ let emit_elm ?module_name_override (m : module_form) : string =
 
   (* ── ADTs ── *)
   let adts = List.filter_map (function
-    | DType (TypeAdt { name; variants; _ }) -> Some (name, variants)
+    | DType (TypeAdt { name; variants; params; _ }) -> Some (name, params, variants)
     | _ -> None
   ) m.decls in
 
@@ -1714,8 +1811,12 @@ let emit_elm ?module_name_override (m : module_form) : string =
     add "-- ---------------------------------------------------------------------------\n";
     add "-- ADTs\n";
     add "-- ---------------------------------------------------------------------------\n\n";
-    List.iter (fun (name, variants) ->
-      addf "type %s\n" name;
+    List.iter (fun (name, params, variants) ->
+      (* A generic ADT declares its parameters: `type CustomEither l r`, and its codecs take
+         one decoder/encoder per parameter. *)
+      let applied = String.concat " " (name :: params) in
+      let applied_arg = if params = [] then name else "(" ^ applied ^ ")" in
+      addf "type %s\n" applied;
       List.iteri (fun i (v : adt_variant) ->
         let prefix = if i = 0 then "    = " else "    | " in
         if v.fields = [] then
@@ -1732,8 +1833,9 @@ let emit_elm ?module_name_override (m : module_form) : string =
       add "\n";
 
       let dec_name = decoder_fn_name name in
-      addf "%s : D.Decoder %s\n" dec_name name;
-      addf "%s =\n" dec_name;
+      addf "%s : %sD.Decoder %s\n" dec_name
+        (String.concat "" (List.map (fun p -> Printf.sprintf "D.Decoder %s -> " p) params)) applied_arg;
+      addf "%s =\n" (String.concat " " (dec_name :: List.map param_decoder_name params));
       add "    D.field \"tag\" D.string\n";
       add "        |> D.andThen\n";
       add "            (\\tag ->\n";
@@ -1747,8 +1849,9 @@ let emit_elm ?module_name_override (m : module_form) : string =
       add "            )\n\n";
 
       let enc_name = encoder_fn_name name in
-      addf "%s : %s -> E.Value\n" enc_name name;
-      addf "%s value =\n" enc_name;
+      addf "%s : %s%s -> E.Value\n" enc_name
+        (String.concat "" (List.map (fun p -> Printf.sprintf "(%s -> E.Value) -> " p) params)) applied_arg;
+      addf "%s value =\n" (String.concat " " (enc_name :: List.map param_encoder_name params));
       add "    case value of\n";
       List.iter (fun (v : adt_variant) ->
         if v.fields = [] then begin
@@ -1919,7 +2022,16 @@ let emit_elm ?module_name_override (m : module_form) : string =
            | Some (original, local_name, _, _) when original = name -> local_name
            | _ -> name)
       in
-      let url_expr = elm_url_expr_ir ~rename_param ~mount_path ep in
+      let rec base_of (ty : Ir.ir_type) = match ty with
+        | Ir.IRNamed name ->
+          (match List.find_map (function
+             | DType (TypeNewtype { name = n; base_type; secret = false; _ }) when n = name ->
+               Some base_type
+             | _ -> None) m.decls with
+           | Some base -> base_of (Ir.ir_type_of_type_expr base)
+           | None -> ty)
+        | _ -> ty in
+      let url_expr = elm_url_expr_ir ~rename_param ~mount_path ~base_of ep in
 
       let param_types = List.map (fun (_, _, ty) -> ty) capture_params
         @ (match body_param with Some (_, _, ty, proof_ann) -> [elm_type_of_ir_binding_surface ty proof_ann] | None -> [])

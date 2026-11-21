@@ -703,7 +703,7 @@ func DecodeUserJSON(teslJSON any) teslrt.Check[User] {
 	return teslrt.Accept(User{Id: teslFieldId, Username: teslFieldUsername, EmailAddress: teslFieldEmailAddress, PasswordHash: teslFieldPasswordHash, Bio: teslFieldBio, AvatarUrl: teslFieldAvatarUrl, CreatedAt: teslFieldCreatedAt})
 }
 
-const teslCacheArtifactIdentity = "ddc7c9c79841be05ce77629fa9b0d2ac6b5a594fd0a9b0af906990c4a179d10c"
+const teslCacheArtifactIdentity = "7437b31bf2db03a2c3e51def69d8cbdeb7123e6650ab27c07e441c391d57ca18"
 
 //line user-service-api.tesl:151
 func teslCacheEncodeUserProfileCache(teslValue User) any {

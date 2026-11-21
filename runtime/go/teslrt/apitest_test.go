@@ -22,7 +22,7 @@ func TestApiRequestNamesAMalformedPath(t *testing.T) {
 	}
 }
 
-// FRICTION §43: a `publicOrigin` server refuses a Host naming another origin, and the harness
+// a `publicOrigin` server refuses a Host naming another origin, and the harness
 // sent none — so every api-test against such a server failed with 421 until each request
 // carried a hand-written Host. A request with no Host now goes to the app's own origin; a
 // test that writes its own Host keeps it, which is how the refusal itself is tested.

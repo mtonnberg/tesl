@@ -1,7 +1,7 @@
-module FrictionCrossModuleApp exposing [Note, NotesDb, NotesServer]
+module CrossModuleApiTestApp exposing [Note, NotesDb, NotesServer]
 
-# The server half of the FRICTION §37 regression: an `api-test … for NotesServer`
-# in ANOTHER module (friction-cross-module-tests.tesl) used to emit Go that named
+# The server half of a cross-module api-test regression: an `api-test … for NotesServer`
+# in ANOTHER module (cross-module-api-test-tests.tesl) used to emit Go that named
 # `NotesServer` without its package, so `go test` failed with
 # `undefined: NotesServer` while `tesl check` was clean.
 
@@ -17,7 +17,7 @@ entity Note table "notes" primaryKey id {
 }
 
 database NotesDb = Database {
-  schema: "friction_cross_module"
+  schema: "cross_module_api_test"
   entities: [Note]
   backend: Memory
 }

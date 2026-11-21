@@ -7,6 +7,7 @@ import (
 	"hash/fnv"
 	"math"
 	"math/big"
+	"strings"
 )
 
 var (
@@ -495,3 +496,47 @@ func MustPow(base, exponent Int) Int {
 	}
 	return result
 }
+
+// SqlBound converts a `limit`/`offset` written as an expression into
+// the count a store takes. A negative bound reads nothing rather than failing the statement
+// (PostgreSQL rejects `LIMIT -1`), and a bound beyond the platform's int saturates. It lives
+// here, ungated, because the memory store and the PostgreSQL statement both use it.
+func SqlBound(value Int) int {
+	count, fits := value.Int64()
+	switch {
+	case !fits && value.Sign() > 0:
+		return int(^uint(0) >> 1)
+	case !fits || count < 0:
+		return 0
+	case count > int64(int(^uint(0)>>1)):
+		return int(^uint(0) >> 1)
+	default:
+		return int(count)
+	}
+}
+
+// IntToFloat is `Int.toFloat`: the nearest float64 (exact up to 2^53).
+func IntToFloat(value Int) float64 { return value.Float64() }
+
+// IntFromFloat is `Int.fromFloat`: truncation toward zero. Its Tesl type promises an Int, so a
+// NaN or an infinity — which has no integer — traps with the reason rather than inventing one.
+func IntFromFloat(value float64) Int {
+	truncated, ok := FloatToInt(value).Value()
+	if !ok {
+		panic("Int.fromFloat: " + FormatFloat(value) + " has no integer value")
+	}
+	return truncated
+}
+
+// IntDigits is `Int.digits`: the number of decimal digits in abs(n); zero has one.
+func IntDigits(value Int) Int {
+	text := value.String()
+	if strings.HasPrefix(text, "-") {
+		text = text[1:]
+	}
+	return FromInt64(int64(len(text)))
+}
+
+func IntIsZero(value Int) bool     { return value.Sign() == 0 }
+func IntIsPositive(value Int) bool { return value.Sign() > 0 }
+func IntIsNegative(value Int) bool { return value.Sign() < 0 }

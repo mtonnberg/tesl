@@ -1,4 +1,4 @@
-module FrictionEmitterGapsTests exposing [
+module GoEmitterGapTests exposing [
   Status(..),
   Point,
   keep,
@@ -14,14 +14,31 @@ module FrictionEmitterGapsTests exposing [
 # ─────────────────────────────────────────────────────────────────────────────
 # Programs the checker has always accepted and the Go emitter used to refuse.
 #
-# `tesl check` now runs the emitter for a program entry (FRICTION.md: a program
-# that checked clean must not first fail at `tesl test`/`run`/`build`).  Running
+# `tesl check` now runs the emitter for a program entry: a program that checked
+# clean must not first fail at `tesl test`/`run`/`build`.  Running
 # it over the compiler's own test corpus surfaced these refusals; each is now
 # lowered, and each test below runs the emitted Go and asserts the answer.
 # ─────────────────────────────────────────────────────────────────────────────
 
 import Tesl.Prelude exposing [Bool(..), Int, String, List, Unit]
 import Tesl.List
+import Tesl.Float exposing [Float]
+import Tesl.Int exposing [
+  Int.toFloat,
+  Int.fromFloat,
+  Int.digits,
+  Int.isZero,
+  Int.isPositive,
+  Int.isNegative,
+]
+import Tesl.String exposing [
+  String.words,
+  String.lines,
+  String.trimLeft,
+  String.trimRight,
+  String.toFloat,
+  String.fromFloat,
+]
 import Tesl.Maybe exposing [Maybe(..)]
 import Tesl.Result exposing [Result]
 import Tesl.Time exposing [nowMillis, diffMs, time]
@@ -131,7 +148,7 @@ entity Order table "orders" primaryKey id {
 }
 
 database OrdersDb = Database {
-  schema: "friction_emitter_gaps"
+  schema: "go_emitter_gaps"
   entities: [Order]
   backend: Memory
 }
@@ -173,4 +190,26 @@ test "update returning one discards its row in a Unit fn" requires [dbRead Order
   insert Order { id: "d", status: "live" }
   touch "d"
   expect (selectOne o from Order where o.id == "d") == Something (Order { id: "d", status: "touched" })
+}
+
+# ── Documented Tesl.Int / Tesl.String functions the Go backend lacked ─────────
+
+test "Int.toFloat, Int.fromFloat, Int.digits and the sign predicates" {
+  expect Int.toFloat 3 == 3.0
+  expect Int.fromFloat (0.0 - 2.9) == 0 - 2
+  expect Int.digits (0 - 1234) == 4
+  expect Int.digits 0 == 1
+  expect Int.isZero 0
+  expect Int.isPositive 5
+  expect Int.isNegative (0 - 5)
+}
+
+test "String.words, lines, trimLeft, trimRight, toFloat and fromFloat" {
+  expect String.words "  a \t b " == ["a", "b"]
+  expect String.lines "a\nb\n" == ["a", "b"]
+  expect String.trimLeft "  x  " == "x  "
+  expect String.trimRight "  x  " == "  x"
+  expect String.toFloat "2.5" == Something 2.5
+  expect String.toFloat "x" == Nothing
+  expect String.fromFloat 2.5 == "2.5"
 }

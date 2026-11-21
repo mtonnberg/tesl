@@ -159,7 +159,7 @@ func TestServer405CarriesAllow(t *testing.T) {
 	}
 }
 
-// FRICTION §32: `get "/runs/:runId"` answered `GET /runs/stream` by capturing "stream", even
+// `get "/runs/:runId"` answered `GET /runs/stream` by capturing "stream", even
 // with `sse "/runs/stream"` declared first. The literal route is the more specific one and now
 // answers, in either declaration order; the capture still answers everything else.
 func TestLiteralSegmentBeatsCaptureInEitherOrder(t *testing.T) {

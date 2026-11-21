@@ -1,9 +1,9 @@
-(** Regression suite for the FRICTION.md pass (see friction-fixes.md at the repo root).
-
-    A downstream user kept a log of every place Tesl got in their way while they mapped an
-    existing schema and built a small API.  Each test here names the section it pins
-    (`item NN`).  The tests drive the real compiler binary on inline programs, so they exercise
-    the same path a user's `tesl check` does. *)
+(** Regressions where `tesl check` disagreed with what the backend and the generated clients
+    actually do: programs that checked clean and then failed to emit or build, repeated
+    endpoint clauses that silently replaced each other, seed inserts whose field types went
+    unchecked, lint false positives, SQL bounds, and the `Maybe` wire shape.  The tests drive
+    the real compiler binary on inline programs, so they exercise the same path a user's
+    `tesl check` does. *)
 
 open Alcotest
 
@@ -47,7 +47,7 @@ let rec remove_tree path =
 (** [with_project files k] writes [(module_name, source)] files into a fresh directory and
     calls [k dir]. *)
 let with_project files k =
-  let dir = Filename.temp_dir "tesl-friction" "" in
+  let dir = Filename.temp_dir "tesl-check-backend" "" in
   List.iter (fun (m, src) ->
     let path = Filename.concat dir (kebab_of_module m ^ ".tesl") in
     Out_channel.with_open_text path (fun oc -> Out_channel.output_string oc src)) files;
@@ -70,7 +70,7 @@ let expect_clean ~label (code, out) =
   if code <> 0 then failf "%s: expected a clean check, got exit %d:\n%s" label code out
 
 (* ── The check/emit gap (class) ──────────────────────────────────────────────
-   item 56/item 36/item 60/item 33/item 37: `tesl check` was clean, then the Go emitter refused the program (or
+   `tesl check` was clean, then the Go emitter refused the program (or
    emitted Go that did not build) the first time `tesl test`/`run`/`build` ran.  `check`
    now runs the emitter, so an emitter refusal is a check error. *)
 
@@ -105,7 +105,7 @@ api-test "start" for S {
 
 let test_emitter_refusal_is_a_check_error () =
   (* The program is only refused by the emitter; before this pass `--check` exited 0. *)
-  expect_error ~label:"item 56 via --check" (check_module "MaybeBody" maybe_body_without_codec)
+  expect_error ~label:"via --check" (check_module "MaybeBody" maybe_body_without_codec)
     "error[V001]"
 
 (* A library is emitted as part of the entries that import it, never alone: a module
@@ -151,7 +151,7 @@ let test_agent_context_reports_emitter_refusal () =
     if not (contains out "\"ok\":false") then failf "agent-context must report ok:false:\n%s" out)
 
 
-(* ── item 22.1: a repeated endpoint clause used to replace the first silently ─────── *)
+(* ── a repeated endpoint clause used to replace the first silently ─────── *)
 
 let two_auth_lines = {|module TwoAuth exposing [S]
 
@@ -216,7 +216,7 @@ server S for Api {
 }
 |}) "duplicate `body` clause"
 
-(* ── item 36: seed inserts are type-checked like any insert ─────────────────────── *)
+(* ── seed inserts are type-checked like any insert ─────────────────────── *)
 
 let seed_program field_value = Printf.sprintf {|module SeedTypes exposing [S]
 
@@ -269,7 +269,7 @@ let test_seed_constructed_posix_is_clean () =
   expect_clean ~label:"seed built PosixMillis"
     (check_module "SeedTypes" (seed_program "addMs (Time.secondsToPosix 0) 1700000000300"))
 
-(* ── item 20: W050 must credit what an api-test and an inline capture reference ──── *)
+(* ── W050 must credit what an api-test and an inline capture reference ──── *)
 
 let test_lint_credits_api_test_server_and_inline_codec () =
   let app = {|module LintApp exposing [Srv]
@@ -306,8 +306,81 @@ api-test "r" for Srv {
     let _, out_tests = run_cc ~cwd:dir ["--lint"; file_of "LintAppTests"] in
     if contains out_tests "W050" then failf "api-test server flagged unused:\n%s" out_tests)
 
+(* ── a limit/offset expression is a statement PARAMETER, never spliced ─── *)
+
+let emitted_module_text m src =
+  with_project [(m, src)] (fun dir ->
+    let out = Filename.concat dir "go-out" in
+    let code, log = run_cc ~cwd:dir [file_of m; "--out"; out] in
+    if code <> 0 then failf "emission failed:\n%s" log;
+    let ic = Unix.open_process_in (Printf.sprintf "cat %s/internal/*/module.go" (Filename.quote out)) in
+    let text = In_channel.input_all ic in
+    ignore (Unix.close_process_in ic); text)
+
+let test_limit_expression_is_a_parameter () =
+  let text = emitted_module_text "PgLimit" {|module PgLimit exposing [page]
+
+import Tesl.Prelude exposing [String, Int, List]
+import Tesl.DB exposing [dbRead]
+import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
+
+entity Thing table "things" primaryKey id {
+  id: String
+  n: Int
+}
+
+database Db = Database {
+  schema: "public"
+  entities: [Thing]
+  backend: Postgres (PostgresConfig {
+    dbName: "app"
+    user: "tesl"
+    password: ""
+    connection: TcpConnection {
+      host: "127.0.0.1"
+      port: 5432
+    }
+  })
+}
+
+fn page(size: Int, skip: Int) -> List Thing
+  requires [dbRead Thing] =
+  select t from Thing order t.n asc limit size offset skip
+|} in
+  if not (contains text "limit $1 offset $2") then
+    failf "the bounds must be $n parameters in the statement:\n%s" text;
+  if not (contains text "teslrt.SqlBound(") then
+    failf "the bounds must go through teslrt.SqlBound:\n%s" text
+
+(* ── Maybe is null/value on the wire, the envelope in storage ──────────── *)
+
+let test_maybe_wire_and_storage_encoders_differ () =
+  let text = emitted_module_text "WireMaybe" {|module WireMaybe exposing [S]
+
+import Tesl.Prelude exposing [String]
+import Tesl.Maybe exposing [Maybe(..)]
+
+record View {
+  note: Maybe String
+}
+
+handler get view() -> View =
+  View { note: Nothing }
+
+api A {
+  get "/v"
+    -> View
+}
+
+server S for A {
+  view
+}
+|} in
+  if not (contains text "teslrt.EncodeMaybeWire(") then
+    failf "a response's Maybe field must encode through the wire rule:\n%s" text
+
 let () =
-  run "friction-fixes" [
+  run "check-backend-regressions" [
     "check-emit-gap", [
       test_case "emitter refusal fails --check" `Quick test_emitter_refusal_is_a_check_error;
       test_case "emittable program stays clean" `Quick test_emittable_program_stays_clean;
@@ -316,14 +389,20 @@ let () =
       test_case "emitter refusal in agent-context" `Quick test_agent_context_reports_emitter_refusal;
     ];
     "endpoint-clauses", [
-      test_case "item 22.1 second auth line refused" `Quick test_second_auth_line_is_refused;
-      test_case "item 22.1 second body clause refused" `Quick test_second_body_clause_is_refused;
+      test_case "second auth line refused" `Quick test_second_auth_line_is_refused;
+      test_case "second body clause refused" `Quick test_second_body_clause_is_refused;
     ];
     "seed-types", [
-      test_case "item 36 Int literal for PosixMillis in seed" `Quick test_seed_int_literal_for_posix_is_a_type_error;
-      test_case "item 36 constructed PosixMillis in seed" `Quick test_seed_constructed_posix_is_clean;
+      test_case "Int literal for PosixMillis in seed" `Quick test_seed_int_literal_for_posix_is_a_type_error;
+      test_case "constructed PosixMillis in seed" `Quick test_seed_constructed_posix_is_clean;
+    ];
+    "sql-bounds", [
+      test_case "limit/offset expression is a parameter" `Quick test_limit_expression_is_a_parameter;
+    ];
+    "wire", [
+      test_case "Maybe wire encoder" `Quick test_maybe_wire_and_storage_encoders_differ;
     ];
     "lint", [
-      test_case "item 20 W050 credits api-test server + inline codec" `Quick test_lint_credits_api_test_server_and_inline_codec;
+      test_case "W050 credits api-test server + inline codec" `Quick test_lint_credits_api_test_server_and_inline_codec;
     ];
   ]

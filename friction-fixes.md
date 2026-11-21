@@ -151,9 +151,9 @@ Status legend: ✅ fixed · 🟰 already fixed / not reproducible at HEAD ·
 | 11 | 🟰 | yes — absolute path works; missing parent is a clear error | — | — | — |
 | 24 | 🟰 | yes — `Secret` `==` is constant-time (`requireSecret` + `Secret header`); `Tesl.Proxy.verifyBinding` too | docs only | — | — |
 | 18, 4 (varchar) | 🟰 | upstream already | — | — | — |
-| class: check/emit gap | ✅ | yes — `tesl check` was clean on programs the Go emitter then refused | Two gates: frontend judged, emitter refused later. Go is the sole backend, so an emitter refusal is a property of the program | `check`, `--check-json`, `--check-batch`, `agent-context` now run the emitter for a program ENTRY (a module declaring `main() -> App` or any test block). Libraries are judged through their entries; migration/schema modules are skipped. Running this over the compiler's own tests surfaced ~20 emitter gaps, fixed below. OCaml: `test_friction_fixes` (check-emit-gap) | batch 1 |
-| 33 | ✅ | yes — `Maybe[struct{}]` Go build error | Branch type merge took the first arm's (anonymous) reading; `let x: T =` annotation ignored | case/if merge anonymous type args across arms (`merge_anon`); `let` annotations lower to the binding type. `tests/friction-fixes-tests.tesl` (break-it verified on baseline) | batch 1 |
-| 37 | ✅ | yes — `undefined: RunsServer` | api-test server name emitted unqualified | modules export their servers (`ex_servers`); api-test/load-test qualify by owner package. `tests/friction-cross-module-{app,tests}.tesl` | batch 1 |
+| class: check/emit gap | ✅ | yes — `tesl check` was clean on programs the Go emitter then refused | Two gates: frontend judged, emitter refused later. Go is the sole backend, so an emitter refusal is a property of the program | `check`, `--check-json`, `--check-batch`, `agent-context` now run the emitter for a program ENTRY (a module declaring `main() -> App` or any test block). Libraries are judged through their entries; migration/schema modules are skipped. Running this over the compiler's own tests surfaced ~20 emitter gaps, fixed below. OCaml: `test_check_backend_regressions` (check-emit-gap) | batch 1 |
+| 33 | ✅ | yes — `Maybe[struct{}]` Go build error | Branch type merge took the first arm's (anonymous) reading; `let x: T =` annotation ignored | case/if merge anonymous type args across arms (`merge_anon`); `let` annotations lower to the binding type. `tests/api-boundary-regression-tests.tesl` (break-it verified on baseline) | batch 1 |
+| 37 | ✅ | yes — `undefined: RunsServer` | api-test server name emitted unqualified | modules export their servers (`ex_servers`); api-test/load-test qualify by owner package. `tests/cross-module-api-test-{app,tests}.tesl` | batch 1 |
 | 32 | ✅ | yes — also in the harness; `subscribe` silently "succeeded" on the JSON route | Router took first declared match | Most-specific route wins (literal segment beats `:capture`, any order); `subscribe` now refuses a non-`text/event-stream` answer. Go unit tests + Tesl test | batch 1 |
 | 34 | ✅ | yes — headers parsed then dropped | emitter scanned only `cookie` for subscribe | `subscribe … headers {}` sends headers (shared renderer with request verbs). Go unit test + Tesl test | batch 1 |
 | 43 | ✅ | yes | harness sent no Host | api-test request/subscribe with no Host is addressed to `publicOrigin`; explicit Host kept (421 still testable). lesson80 updated (no `onHost()` boilerplate, new 421 test) | batch 1 |
@@ -162,4 +162,54 @@ Status legend: ✅ fixed · 🟰 already fixed / not reproducible at HEAD ·
 | 47 | ✅ | yes | multi-line `upsert` never merged; same family: multi-line `delete … \n where` orphaned its `where` (head line was already a complete delete-ALL query) | `Sql_query` joins multi-line upsert; delete head read back out of its node. Tesl test asserts rows | batch 1 |
 | 20 | ✅ | partly live — server-only import, and `capture … using codec` | linter missed both references | W050 credits `api-test … for S` and inline capture codec/check | batch 1 |
 | 21.5 | ✅ | yes | `(Maybe.withDefault E.null (Maybe.map f)) v` | `Maybe.withDefault E.null (Maybe.map f v)` | batch 1 |
-| emitter gaps (from class fix) | ✅ | — | bare nullary fn/stdlib value (`pi`, `nowMillis`); zero-arg lambda `f()`; type var named like a param; irrefutable case over record/list; `import Tesl.X` (no list) qualified calls; local ctor shadowing unexposed builtin/imported ctor; `Something True` patterns; newtype path captures; tail `update … returning one` in Unit fn | `tests/friction-emitter-gaps-tests.tesl` runs each | batch 1 |
+| emitter gaps (from class fix) | ✅ | — | bare nullary fn/stdlib value (`pi`, `nowMillis`); zero-arg lambda `f()`; type var named like a param; irrefutable case over record/list; `import Tesl.X` (no list) qualified calls; local ctor shadowing unexposed builtin/imported ctor; `Something True` patterns; newtype path captures; tail `update … returning one` in Unit fn | `tests/go-emitter-gap-tests.tesl` runs each | batch 1 |
+| 13 | ✅ | yes — runtime sent `{"tag":…}` for `Maybe` while OpenAPI/TS/Elm all declared `null`/value | Runtime vs every client artifact disagreed on one type's wire shape | DECISION: on the HTTP wire (bodies, SSE payloads, tool results, api-test templates) `Maybe T` is `null` or the bare value; stored JSON (JSONB, queue, cache) keeps the envelope; decoders accept both. `Maybe (Maybe T)` keeps the envelope at its outer level. Spec documents it. Go unit tests + Tesl probes | batch 2 |
+| 56 | ✅ | yes — check now refused it (batch 1), runtime had no decoder | Derived decoder lacked `Maybe`; `with_codec Maybe` called an undefined `DecodeMaybeJSON` | Derived records decode `Maybe` (absent/null/value/envelope; absent keys allowed); `with_codec Maybe` reads/writes the wire shape | batch 2 |
+| 39 / 21.8 | ✅ | yes | see 13; also `D.maybe` swallowed decode failures | runtime now sends `null`; Elm uses strict `D.nullable` | batch 2 |
+| class: client/runtime wire drift | ✅ | Result/Either/Tuple: runtime `{"tag","fields":{…}}`, clients/OpenAPI flat `{"tag","value"}` and JSON arrays | three generators drifted from the runtime's documented ADT rule | Elm/TS/OpenAPI describe the runtime envelope (TS keeps tuple TYPES and transforms in zod; Elm decodes into native tuples/Result). Runtime unchanged (no storage impact) | batch 2 |
+| class: Elm clients don't compile | ✅ | 71/76 corpus clients failed `elm make` (mostly gate setup; 6 real bugs) | nothing compiled generated Elm | new `tests/elm-client-compile.sh` + ci.sh phase 4a2; fixed: Int/newtype path segments (62), `.csv`-style route names (Elm+TS), duplicate functions across two `api`s, generic ADT params, fact field decoder reused at the wrong base type. All 76 compile | batch 2 |
+| 62 | ✅ | yes | URL builder appended non-String captures | segments rendered via `String.fromInt`/`fromFloat` through newtype aliases | batch 2 |
+| 59 | ✅ (partly by design) | yes | helper-calling checks always delegated to ApiHelpers | a helper whose body is translatable is read through (same smart constructor as inline). Non-translatable helpers still delegate — documented ApiHelpers design (#13) | batch 2 |
+| 21.1 | 🟰 | module name is the Tesl module name, or inferred from `--out …/src/…` | user's module was literally `App` | — | — |
+| 21.2 | ✅ | yes | — | `--out` creates its parent directory (elm/ts/ir) | batch 2 |
+| api-test JSON vs Maybe/record | ✅ | `expect r.body.x == Nothing` refused; two copies of the comparison rule | — | one shared `api_json_comparand`; any wire-encodable value compares; `!=` too | batch 2 |
+
+## Investigation: LEFT JOIN / LATERAL / `->>` (§2, §3, §53) — not built
+
+What exists today: `innerJoin E on a.f E.g` lowers to an `EXISTS (select 1 from E where …)`
+semi-join (`emit_go.ml` `sql_join_exists`). It filters the main entity's rows; it returns no
+columns of the joined entity. A `select` always yields rows of ONE entity.
+
+- **LEFT JOIN** as a filter is meaningless (it keeps every row). Its value is the joined
+  columns, which needs a projection result type — e.g. `select (r, s) from Run leftJoin State
+  on …` yielding `List (Tuple2 Run (Maybe State))`. That is new surface across the parser,
+  checker (row typing, nullability of the joined side, FromDb provenance for TWO subjects), the
+  memory store (a real join) and the SQL emitter, plus index lint and migrations' row-access
+  rules. Large, and it touches the proof story (which facts does the joined row carry?).
+- **LATERAL** ("the earliest `started` event per run") additionally needs ordering + limit
+  inside a correlated subquery; strictly larger than LEFT JOIN.
+- **`->>`** reads into a JSONB value the type system treats as an opaque string; typed access
+  would need a JSON path type and a decision about which JSON shapes are trusted. Today a JSONB
+  column holding a Tesl ADT is already typed — `->>` is only needed for foreign JSON.
+
+Recommendation: keep these out for now. The two shapes the user actually needed are covered:
+1. **Batching (no N+1):** `inList` with a runtime list now works (verified at HEAD), so a page
+   is 1 query + 1 per related entity (`select s from State where inList s.runId runIds`) joined
+   in memory with `Dict` — constant query count per page, no new surface.
+2. **Database views** mapped by an entity remain the right tool when SQL already expresses the
+   projection (only possible where the schema is managed outside Tesl; Tesl's own migrations
+   do not create views).
+If LEFT JOIN is wanted later, the minimal sound design is the tuple-projection select above,
+with the joined side always `Maybe` and FromDb provenance attached only to the main entity.
+| 15 | ✅ | yes | `limit`/`offset` only parsed integer literals | `sql_bound = BoundLiteral \| BoundExpr`; expression bound is a `$n` parameter via `teslrt.SqlBound` (negative → nothing, saturating); checker types it Int. Verified on real PostgreSQL (`limit $1 offset $2`) and memory store | batch 2 |
+| 16 (OR of AND) | ✅ | yes | `SqlOr` held only atoms | new `SqlAnd` group under `SqlOr` handled at every clause site (checker, validation, capabilities provenance all-or-nothing, index lint, codec validation, Go predicate, SQL text); nested `\|\|` flattens. Verified on PostgreSQL | batch 2 |
+| 16 (tuple sortBy) | ✅ | yes — Go refused at emit (no longer silent on Go) | sort key had to be a scalar | Tuple2/Tuple3 keys of ordered components sort lexicographically (keys computed once per comparison); `<` on tuples still refused | batch 2 |
+| 61 | ✅ (scalar part) | yes | `go_backend_unavailable_exports` listed documented functions Go never implemented | implemented `Int.toFloat/fromFloat/digits/isZero/isPositive/isNegative`, `String.trimLeft/trimRight/words/lines/toFloat/fromFloat`. Still unavailable: Dict/Set/List higher-order helpers (`Dict.map`, `List.findIndex`, …), `int32Codec`, `uuidV4/V7Codec`, legacy `Email.send` | batch 2 |
+| 22.2 | ✅ | yes | `tesl test`/`run` read `.env` (written once by `tesl init`) but not `tesl.toml [env]` | manifest [env] is the lowest-precedence source (process env > .env > [env]); `TESL_NO_DOTENV=1` disables both. Go CLI test | batch 2 |
+| 58 | ✅ (hint, no new surface) | yes | — | `isNothing`/`isSomething`/`isJust`/`isNone`/`isSome` → targeted hint (`m == Nothing`) | batch 2 |
+| 38 | ✅ | yes (path-length class) | sockets under `t.TempDir()` exceed sockaddr_un in nix sandbox | `shortSocketDir` test helper (prefers `/tmp`) in teslrt + tesl-debug-attach debug tests | batch 2 |
+| 40 / 50 | ✅ | yes — darwin default failed to evaluate at baseline | CLI wrappers wrote `${pkgs.zap}`/`${pkgs.nuclei}` into their script, making DAST tools CLI runtime deps | removed from CLI preamble; scanners found next to the CLI in the profile bin (tesl-full ships them where available) or PATH; `TESL_ZAP/NUCLEI` still override. `nix eval .#packages.aarch64-darwin.{default,tesl-native-cli}` now evaluates | batch 2 |
+| 44 | 🚫 by design | — | resolved-address SSRF containment with one dev escape and a ratchet against new ones (ensure_sso_works.md risks 5/30/47) | no private-range knob; supported topology is loopback + TLS | — |
+| 2 / 3 / 53 | 🔍 | see investigation section | — | not built; batching via runtime `inList` covers the N+1 case | — |
+
+Environment notes (not caused by this branch): `test_emit_go` "fresh module passes Go gates" now fails locally because the nix `govulncheck` sees Go 1.26.4 stdlib and the vulnerability DB published new advisories; `test_migration_row_{forward,contract_abi}` trip on a stray local `example/result` nix symlink. CI "Native portability" failed on a DNS error downloading the Go source tarball (needs a rerun by someone with admin rights).

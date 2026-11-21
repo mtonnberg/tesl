@@ -1090,6 +1090,15 @@ let check_pk_match (decls : top_decl list) : validation_error list =
                 Some (EBinop { op;
                   left = EField { obj = EVar { name = binder; loc }; field; loc };
                   right = value; loc; op_loc = loc })
+              (* All-or-nothing: a conjunction whose part has no canonical form has none. *)
+              | SqlAnd clauses ->
+                let exprs = List.map (canonical_clause_expr binder) clauses in
+                if List.mem None exprs then None
+                else (match List.filter_map Fun.id exprs with
+                  | [] -> None
+                  | first :: rest ->
+                    Some (List.fold_left (fun left right ->
+                      EBinop { op = BAnd; left; right; loc; op_loc = loc }) first rest))
               | SqlOr clauses ->
                 let exprs = List.filter_map (canonical_clause_expr binder) clauses in
                 (match exprs with

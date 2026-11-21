@@ -97,6 +97,7 @@ let fold_interp_segment (f : 'a -> expr -> 'a) (acc : 'a) (seg : interp_segment)
 let rec map_sql_clause f = function
   | SqlPred { field; op; value } -> SqlPred { field; op; value = f value }
   | SqlOr clauses -> SqlOr (List.map (map_sql_clause f) clauses)
+  | SqlAnd clauses -> SqlAnd (List.map (map_sql_clause f) clauses)
   | SqlIsNull _ as clause -> clause
   | SqlIsNotNull _ as clause -> clause
   | SqlIn { field; values } -> SqlIn { field; values = List.map f values }
@@ -112,7 +113,9 @@ let map_sql_group_key f = function
 
 let map_sql_query f = function
   | QuerySelect (seed, dynamic) ->
+    let map_bound = Option.map (function BoundExpr e -> BoundExpr (f e) | b -> b) in
     QuerySelect ({ seed with
+      limit = map_bound seed.limit; offset = map_bound seed.offset;
       static_clauses = List.map (map_sql_clause f) seed.static_clauses;
       group_by = List.map (map_sql_group_key f) seed.group_by },
       List.map (map_sql_clause f) dynamic)
@@ -127,7 +130,7 @@ let map_sql_query f = function
 
 let rec fold_sql_clause f acc = function
   | SqlPred { value; _ } -> f acc value
-  | SqlOr clauses -> List.fold_left (fold_sql_clause f) acc clauses
+  | SqlOr clauses | SqlAnd clauses -> List.fold_left (fold_sql_clause f) acc clauses
   | SqlIsNull _ | SqlIsNotNull _ -> acc
   | SqlIn { values; _ } | SqlNotIn { values; _ } -> List.fold_left f acc values
   | SqlInList { values; _ } | SqlNotInList { values; _ } -> f acc values
@@ -139,6 +142,8 @@ let fold_sql_group_key f acc = function
 
 let fold_sql_query f acc = function
   | QuerySelect (seed, dynamic) ->
+    let fold_bound acc = function Some (BoundExpr e) -> f acc e | _ -> acc in
+    let acc = fold_bound (fold_bound acc seed.limit) seed.offset in
     let acc = List.fold_left (fold_sql_clause f) acc seed.static_clauses in
     let acc = List.fold_left (fold_sql_group_key f) acc seed.group_by in
     List.fold_left (fold_sql_clause f) acc dynamic

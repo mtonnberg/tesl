@@ -1418,20 +1418,21 @@ let test_string_stdlib_with_go () =
       ())
 
 let test_unsupported_string_exports_fail_closed () =
-  (* `String.split` is supported now that lists are, so the boundary this pins moved:
-     `trimLeft`/`trimRight` are still unimplemented leaves of a supported module. *)
-  let unsupported = {|module StringTrimLeft exposing [tidy]
-import Tesl.Prelude exposing [String]
-import Tesl.String exposing [String.trimLeft]
-fn tidy(s: String) -> String = String.trimLeft s
+  (* The boundary this pins keeps moving as leaves land: `String.trimLeft`/`trimRight` are
+     implemented now.  `List.findIndex` is still an unimplemented leaf of a supported module,
+     and the refusal must come from the frontend, before emission. *)
+  let unsupported = {|module ListFindIndex exposing [where_]
+import Tesl.Prelude exposing [Bool, Int, List]
+import Tesl.List exposing [List.findIndex]
+fn where_(xs: List Int) -> Int = 0
 |} in
-  match Compile.compile_go_source "<go-string-trimleft>" unsupported with
-  | Compile.GoSuccess _ -> fail "an unsupported Tesl.String export emitted Go artifacts"
+  match Compile.compile_go_source "<go-list-findindex>" unsupported with
+  | Compile.GoSuccess _ -> fail "an unsupported Tesl.List export emitted Go artifacts"
   | Compile.GoFailure diagnostics ->
     check bool "an unimplemented leaf is rejected before emission" true
       (List.exists (fun (d : Compile.diagnostic) ->
          d.source <> "go-emitter"
-         && contains d.message "the Go backend does not implement `String.trimLeft` from `Tesl.String`")
+         && contains d.message "the Go backend does not implement `List.findIndex` from `Tesl.List`")
         diagnostics)
 
 let list_source = {|module GoLists exposing [size, empty, firstOr, rest, joined, parts, top, dedup, ordered, hasTwo, both, prefix]
@@ -13406,7 +13407,7 @@ let emission_tests =
       test_case "Float keys in Dict and Set" `Slow test_float_keys_with_go;
       test_case "unordered dict keys fail closed" `Quick test_unordered_dict_keys_fail_closed;
       test_case "unsupported Tesl.List exports fail closed" `Quick test_unsupported_list_exports_fail_closed;
-      test_case "unsupported Tesl.String exports fail closed" `Quick test_unsupported_string_exports_fail_closed;
+      test_case "unsupported stdlib exports fail closed" `Quick test_unsupported_string_exports_fail_closed;
       test_case "other stdlib ADTs fail closed" `Quick test_other_stdlib_adts_fail_closed;
       test_case "generic limits fail closed" `Quick test_generic_limits_fail_closed;
       test_case "unsupported ADTs fail closed" `Quick test_unsupported_adts_fail_closed;

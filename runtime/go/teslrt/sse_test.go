@@ -363,7 +363,7 @@ func TestSseChannelIsSafeUnderConcurrentUse(t *testing.T) {
 	}
 }
 
-// FRICTION §34: `subscribe "/p" headers { … }` parsed and type-checked, and the headers never
+// `subscribe "/p" headers { … }` parsed and type-checked, and the headers never
 // reached the endpoint — a stream behind header auth could not be subscribed from a test.
 func TestSubscribeSendsItsHeaders(t *testing.T) {
 	seen := make(chan string, 1)
@@ -394,7 +394,7 @@ func TestSubscribeSendsItsHeaders(t *testing.T) {
 	}
 }
 
-// FRICTION §32: a JSON route answering a `subscribe` used to pass as a subscription, and the
+// a JSON route answering a `subscribe` used to pass as a subscription, and the
 // test then timed out waiting for events on a body that could never carry one.
 func TestSubscribeRefusesANonStreamResponse(t *testing.T) {
 	server := Server{

@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -219,6 +220,25 @@ func (app *App) projectEnvironment(ctx context.Context, root string, autostart b
 	}
 	if err != nil {
 		return nil, err
+	}
+	// `tesl.toml`'s [env] table declares the variables the app reads, with their defaults.
+	// `.env` is generated from it once, by `tesl init`, so a key added to the manifest later
+	// never reached `tesl test` or `tesl run` and the program read it as unset. The manifest is
+	// therefore the lowest-precedence source: process environment, then `.env`, then [env].
+	// TESL_NO_DOTENV=1 turns off both project-supplied sources.
+	envNames := make([]string, 0, len(manifest["env"]))
+	for key := range manifest["env"] {
+		envNames = append(envNames, key)
+	}
+	sort.Strings(envNames)
+	for _, key := range envNames {
+		if noDotenv == "1" || !manifestName.MatchString(key) {
+			continue
+		}
+		if _, exists := environmentValue(env, key); exists {
+			continue
+		}
+		env = toolchain.Setenv(env, key, manifest["env"][key])
 	}
 	if manifest.value("database", "mode", "none") != "managed" {
 		return env, nil

@@ -409,7 +409,7 @@ func TestDebugControlUnixBoundsAuthenticatedClients(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Unix control endpoint")
 	}
-	path := filepath.Join(t.TempDir(), "debug.sock")
+	path := filepath.Join(shortSocketDir(t), "debug.sock")
 	server, err := NewDebugger().StartDebugControl(path)
 	if err != nil {
 		t.Fatal(err)
@@ -535,7 +535,7 @@ func TestDebugControlUnixSessionSurvivesClientChurn(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Unix control endpoint")
 	}
-	path := filepath.Join(t.TempDir(), "debug.sock")
+	path := filepath.Join(shortSocketDir(t), "debug.sock")
 	debugger := NewDebugger()
 	server, err := debugger.StartDebugControl(path)
 	if err != nil {

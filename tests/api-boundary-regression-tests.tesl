@@ -1,23 +1,26 @@
-module FrictionFixesTests exposing [
+module ApiBoundaryRegressionTests exposing [
   RunsServer,
   OriginServer,
   CaptureServer,
   RunView,
   Evaluation,
   pickView,
+  page,
+  keysetAfter,
+  Item,
 ]
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Regressions from FRICTION.md — a downstream user's log of every place Tesl got
-# in their way while building a small read API over an existing schema.  Each
-# block names the section it pins (§NN); friction-fixes.md at the repo root has
-# the analysis.
+# Regressions at the API boundary: Maybe values from branching code, route
+# precedence between a literal and a capture, headers on a `subscribe`, the
+# Host an api-test sends to a `publicOrigin` server, newtype path captures and
+# request-chosen `limit`/`offset` bounds.
 #
 # Every test asserts an OBSERVABLE answer (a status, a body, a delivered event),
 # so a regression fails here rather than passing vacuously.
 # ─────────────────────────────────────────────────────────────────────────────
 
-import Tesl.Prelude exposing [Bool(..), Int, String]
+import Tesl.Prelude exposing [Bool(..), Int, String, List]
 import Tesl.Int exposing [Int.toString]
 import Tesl.Http exposing [HttpRequest]
 import Tesl.Dict exposing [Dict.lookup]
@@ -27,8 +30,11 @@ import Tesl.Queue exposing [pubsub]
 import Tesl.Database exposing [Database, Memory]
 import Tesl.SSE exposing [SseChannel]
 import Tesl.ApiTest exposing [statusOk, subscribe, collect, isNotEmpty]
+import Tesl.List exposing [List.map, List.sortBy]
+import Tesl.Tuple exposing [Tuple2(..)]
+import Tesl.DB exposing [dbRead, dbWrite]
 
-# ── §33: a `Maybe` bound from a case/if whose FIRST branch is a bare `Nothing` ──
+# ── a `Maybe` bound from a case/if whose FIRST branch is a bare `Nothing` ──
 # The Go emitter took the Maybe's type argument from the first branch and emitted
 # `Maybe[struct{}]`, which Go refused.  The branch order here is deliberately the
 # conventional one the user had to avoid.
@@ -56,7 +62,7 @@ fn pickView(score: Maybe Int, last: Bool) -> RunView =
     Something n -> Something (n + 1)
   RunView { evaluation: evaluation, cursor: cursor, annotated: annotated }
 
-test "§33 a Nothing-first case or if still settles the Maybe's type" {
+test "a Nothing-first case or if still settles the Maybe's type" {
   let some = pickView (Something 7) False
   expect some.evaluation == Something (Evaluation { score: 7 })
   expect some.cursor == Something "next"
@@ -67,7 +73,7 @@ test "§33 a Nothing-first case or if still settles the Maybe's type" {
   expect none.annotated == Nothing
 }
 
-# ── §32 + §34: a literal `sse` route next to a `:capture` route, header auth ──
+# ── a literal `sse` route next to a `:capture` route, header auth ──
 
 fact HasKey(who: String)
 
@@ -81,7 +87,7 @@ record RunEvent {
 }
 
 database RunsDb = Database {
-  schema: "friction_fixes"
+  schema: "api_boundary_regressions"
   entities: []
   backend: Memory
 }
@@ -120,18 +126,18 @@ server RunsServer for RunsApi {
   publishRun
 }
 
-api-test "§32 header auth still guards the capture route" for RunsServer {
+api-test "header auth still guards the capture route" for RunsServer {
   let resp = get "/runs/abc"
   expect resp.status == 401
 }
 
-api-test "§32 the capture route still answers every other id" for RunsServer {
+api-test "the capture route still answers every other id" for RunsServer {
   let resp = get "/runs/abc" headers { "x-api-key": "good-key" }
   expect statusOk resp.status
   expect resp.body == "run:abc"
 }
 
-api-test "§32+§34 the literal sse route wins and subscribe carries its headers" for RunsServer requires [pubsub] {
+api-test "the literal sse route wins and subscribe carries its headers" for RunsServer requires [pubsub] {
   let stream = subscribe "/runs/stream" headers { "x-api-key": "good-key" }
   let resp = post "/runs/r-1/publish" headers { "x-api-key": "good-key" }
   expect statusOk resp.status
@@ -139,7 +145,7 @@ api-test "§32+§34 the literal sse route wins and subscribe carries its headers
   expect isNotEmpty events
 }
 
-# ── §43: a `publicOrigin` server's api-tests need no hand-written Host ────────
+# ── a `publicOrigin` server's api-tests need no hand-written Host ────────
 
 handler get ping() -> String =
   "pong"
@@ -154,13 +160,13 @@ server OriginServer for OriginApi {
   publicOrigin "https://runs.example.com"
 }
 
-api-test "§43 a request with no Host is addressed to the app's own origin" for OriginServer {
+api-test "a request with no Host is addressed to the app's own origin" for OriginServer {
   let resp = get "/ping"
   expect statusOk resp.status
   expect resp.body == "pong"
 }
 
-api-test "§43 an explicit foreign Host is still refused" for OriginServer {
+api-test "an explicit foreign Host is still refused" for OriginServer {
   let resp = get "/ping" headers { "Host": "attacker.example.net" }
   expect resp.status == 421
 }
@@ -193,4 +199,57 @@ api-test "a newtype capture is parsed at its base type and wrapped" for CaptureS
   expect resp.body == "ada#3"
   let bad = get "/users/ada/iterations/three"
   expect bad.status == 400
+}
+
+# ── a `limit`/`offset` the request chooses ──────────────────────────────
+# Only an integer LITERAL lowered; a page size from a query parameter had to be
+# fetched as a fixed window and sliced in Tesl.  Now it is bound as a statement
+# parameter (PostgreSQL) and a count (memory store); a negative bound reads
+# nothing.
+
+entity Item table "api_boundary_items" primaryKey id {
+  id: String
+  rank: Int
+}
+
+database ItemsDb = Database {
+  schema: "api_boundary_items"
+  entities: [Item]
+  backend: Memory
+}
+
+fn page(size: Int, skip: Int) -> List String
+  requires [dbRead Item] =
+  List.map (fn (i: Item) -> i.id) (select i from Item order i.rank asc limit size offset skip)
+
+test "limit and offset may be Int expressions" requires [dbRead Item, dbWrite Item] {
+  insert Item { id: "a", rank: 1 }
+  insert Item { id: "b", rank: 2 }
+  insert Item { id: "c", rank: 3 }
+  insert Item { id: "d", rank: 4 }
+  expect page 2 0 == ["a", "b"]
+  expect page 2 1 == ["b", "c"]
+  expect page 10 3 == ["d"]
+  expect page 0 0 == []
+  expect page (0 - 5) 0 == []
+}
+
+# ── Keyset paging: `a < x || (a == x && b < y)` and a tuple sort key ──────────
+# The OR of an AND did not lower, and `List.sortBy` with a Tuple2 key was refused
+# by the backend; together they are how a cursor-paged list orders rows by one
+# column with a tie-break on another.
+
+fn keysetAfter(rank: Int, id: String) -> List String
+  requires [dbRead Item] =
+  let rows = select i from Item where i.rank < rank || (i.rank == rank && i.id < id)
+  List.map (fn (i: Item) -> i.id) (List.sortBy (fn (i: Item) -> Tuple2 i.rank i.id) rows)
+
+test "an OR of an AND filters, and a tuple key sorts lexicographically" requires [dbRead Item, dbWrite Item] {
+  insert Item { id: "c", rank: 2 }
+  insert Item { id: "a", rank: 1 }
+  insert Item { id: "b", rank: 2 }
+  insert Item { id: "z", rank: 0 }
+  insert Item { id: "d", rank: 3 }
+  expect keysetAfter 2 "c" == ["z", "a", "b"]
+  expect keysetAfter 9 "a" == ["z", "a", "b", "c", "d"]
 }

@@ -1739,31 +1739,11 @@ func teslEncode13(teslValue []teslmodkanelmodels.Project) any {
 }
 
 func teslEncode14(teslValue teslrt.Maybe[string]) any {
-	return func() any {
-		switch teslValue.Tag {
-		case teslrt.MaybeNothing:
-			return map[string]any{"tag": "Nothing"}
-		case teslrt.MaybeSomething:
-			return map[string]any{"tag": "Something", "fields": map[string]any{
-				"value": teslEncode1(teslValue.SomethingValue),
-			}}
-		}
-		panic("unreachable: checker guarantees case exhaustiveness")
-	}()
+	return teslrt.EncodeMaybeWire(teslValue, teslEncode1)
 }
 
 func teslEncode15(teslValue teslrt.Maybe[teslrt.PosixMillis]) any {
-	return func() any {
-		switch teslValue.Tag {
-		case teslrt.MaybeNothing:
-			return map[string]any{"tag": "Nothing"}
-		case teslrt.MaybeSomething:
-			return map[string]any{"tag": "Something", "fields": map[string]any{
-				"value": teslEncode5(teslValue.SomethingValue),
-			}}
-		}
-		panic("unreachable: checker guarantees case exhaustiveness")
-	}()
+	return teslrt.EncodeMaybeWire(teslValue, teslEncode5)
 }
 
 func teslEncode16(teslValue teslmodkanelmodels.Issue) any {

@@ -187,7 +187,7 @@ const sseTestBufferLimit = 256
 // api-test cookie headers, so a stream behind `auth … via cookieAuth` can be subscribed the
 // way the endpoint expects; `headers` are the `headers { … }` modifier, sent as written, the
 // same as on a request verb — a stream behind header auth (`x-api-key`) is subscribed with
-// it. The headers used to be parsed and then dropped (FRICTION §34).
+// it. The headers used to be parsed and then dropped.
 func SubscribeStream(server Server, path string, cookies []string, headers []Tuple2[string, string]) *SseTestStream {
 	testServer := httptest.NewServer(server)
 	request, err := http.NewRequest(http.MethodGet, testServer.URL+path, nil) //nolint:noctx // torn down by UnsubscribeStream
@@ -228,7 +228,7 @@ func SubscribeStream(server Server, path string, cookies []string, headers []Tup
 	// A 200 that is not an event stream means the path reached an ordinary handler — a
 	// `get "/runs/:id"` route capturing "stream" used to answer `subscribe "/runs/stream"`
 	// this way, and the test then waited out its timeout on a JSON body that would never
-	// carry an event (FRICTION §32). Name the route mismatch where it happens instead.
+	// carry an event. Name the route mismatch where it happens instead.
 	if contentType := response.Header.Get("Content-Type"); !strings.HasPrefix(contentType, "text/event-stream") {
 		body, _ := io.ReadAll(io.LimitReader(response.Body, 4096))
 		_ = response.Body.Close()

@@ -142,7 +142,7 @@ let routes ()=project(fun _ _ _ file->
  accepts file renamed;ignore(artifacts file renamed))
 let refused field file text=
  (* `check` runs the emitter too, so the refusal is reported there as well as at emission —
-    a program that cannot be emitted no longer checks clean (FRICTION check/emit gap). *)
+    a program that cannot be emitted no longer checks clean. *)
  let message="migration query on `Note." ^ field ^ "` needs a value-preserving Copy, Rename or Revalidate field; querying a computed or retyped field during this window is not supported yet" in
  check bool "check reports the emission refusal" true
    (List.exists(fun(d:Compile.diagnostic)->d.code = "V001" && d.message = message)

@@ -3,6 +3,7 @@ package teslrt
 import (
 	"fmt"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -205,4 +206,25 @@ func StringRequireNonEmpty(s string) Check[string] {
 		return Reject[string](400, "expected a non-empty string")
 	}
 	return Accept(s)
+}
+
+// StringTrimLeft / StringTrimRight remove leading / trailing whitespace — the same whitespace
+// `String.trim` removes from both ends.
+func StringTrimLeft(s string) string  { return strings.TrimLeftFunc(s, unicode.IsSpace) }
+func StringTrimRight(s string) string { return strings.TrimRightFunc(s, unicode.IsSpace) }
+
+// StringWords splits on runs of whitespace and drops empty pieces.
+func StringWords(s string) []string { return strings.Fields(s) }
+
+// StringLines splits on newlines; a `\r\n` line ending counts as one newline, and a trailing
+// newline does not produce an empty last line.
+func StringLines(s string) []string {
+	if s == "" {
+		return []string{}
+	}
+	lines := strings.Split(strings.ReplaceAll(s, "\r\n", "\n"), "\n")
+	if lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	return lines
 }

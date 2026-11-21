@@ -93,7 +93,7 @@ type finding = {
 let rec clause_fields (c : Sql_query.sql_clause) : string list =
   match c with
   | Sql_query.SqlPred { field; _ } -> [ field ]
-  | Sql_query.SqlOr cs -> List.concat_map clause_fields cs
+  | Sql_query.SqlOr cs | Sql_query.SqlAnd cs -> List.concat_map clause_fields cs
   | Sql_query.SqlIsNull { field } -> [ field ]
   | Sql_query.SqlIsNotNull { field } -> [ field ]
   | Sql_query.SqlIn { field; _ } -> [ field ]

@@ -160,10 +160,14 @@
           export TESL_GO="${pkgs.go}/bin/go"
           export TESL_STDLIB_DIR="${tesl-compiler}/share/tesl/stdlib"
           export TESL_POSTGRES_BIN="${pkgs.postgresql}/bin"
-          export TESL_ZAP="${pkgs.zap}/bin/zap"
-          export TESL_NUCLEI="${pkgs.nuclei}/bin/nuclei"
           export PATH="${gnuUserland}:$PATH"
         '';
+        # The DAST scanners are NOT referenced from the CLI wrapper.  A store path written
+        # here becomes a runtime dependency of the CLI itself: every install pulled ~950 MiB
+        # of JDK, ZAP and Nuclei into its closure, and ZAP (Linux-only in nixpkgs) made the
+        # CLI uninstallable on macOS.  `tesl dast` finds the scanners beside the CLI in the
+        # same profile `bin` (tesl-full ships them, on platforms that have them) or on PATH,
+        # and TESL_ZAP / TESL_NUCLEI still override.
 
         # Previous CLI retained as the black-box parity reference.
         cliBody = builtins.readFile ./nix/tesl-cli-body.sh;
@@ -189,8 +193,6 @@
            export TESL_DEBUG_ATTACH_BIN="''${TESL_DEBUG_ATTACH_BIN:-${tesl-go-tools}/bin/tesl-debug-attach}"
            export TESL_DEBUG_INSPECT_BIN="''${TESL_DEBUG_INSPECT_BIN:-${tesl-go-tools}/bin/tesl-debug-inspect}"
            export TESL_GO="''${TESL_GO:-${pkgs.go}/bin/go}"
-           export TESL_ZAP="''${TESL_ZAP:-${pkgs.zap}/bin/zap}"
-           export TESL_NUCLEI="''${TESL_NUCLEI:-${pkgs.nuclei}/bin/nuclei}"
            export PATH="${gnuUserland}:$PATH"
         '' + ''
           exec ${tesl-go-tools}/bin/tesl "$@"

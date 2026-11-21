@@ -1421,10 +1421,6 @@ let go_backend_unavailable_exports : (string * string list) list = [
                 "List.findIndex"; "List.dedupe"; "List.intersperse"; "List.intercalate";
                 "List.nth"];
   "Tesl.ListPrim", ["ListPrim.head"; "ListPrim.tail"; "ListPrim.append"];
-  "Tesl.Int", ["Int.toFloat"; "Int.fromFloat"; "Int.digits"; "Int.isZero";
-               "Int.isPositive"; "Int.isNegative"];
-  "Tesl.String", ["String.toFloat"; "String.fromFloat"; "String.words"; "String.lines";
-                  "String.trimLeft"; "String.trimRight"];
   "Tesl.Json", ["int32Codec"];
   "Tesl.UUID", ["uuidV4Codec"; "uuidV7Codec"];
   "Tesl.Email", ["Email.send"; "startEmailWorker"];

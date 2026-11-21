@@ -168,17 +168,7 @@ var TaskServer = teslrt.Server{
 }
 
 func teslEncode1(teslValue teslrt.Maybe[Task]) any {
-	return func() any {
-		switch teslValue.Tag {
-		case teslrt.MaybeNothing:
-			return map[string]any{"tag": "Nothing"}
-		case teslrt.MaybeSomething:
-			return map[string]any{"tag": "Something", "fields": map[string]any{
-				"value": EncodeTaskJSON(teslValue.SomethingValue),
-			}}
-		}
-		panic("unreachable: checker guarantees case exhaustiveness")
-	}()
+	return teslrt.EncodeMaybeWire(teslValue, EncodeTaskJSON)
 }
 
 func teslKeyLessString(teslX, teslY string) bool {

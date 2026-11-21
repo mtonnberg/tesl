@@ -1024,7 +1024,7 @@ let stdlib_nullary_value name (signature : signature) =
 
 (* Which package owns each server an api-test in the module being compiled may name: the
    module's own servers, then its dependencies'.  A cross-module `api-test … for S` used to
-   emit a bare `S`, which Go rejected as undefined (FRICTION.md item 37). *)
+   emit a bare `S`, which Go rejected as undefined. *)
 let current_server_owners : (string, string) Hashtbl.t = Hashtbl.create 4
 
 let api_test_server_ref name =
@@ -1164,6 +1164,20 @@ let api_response_key = "HttpResponse (api-test)"
    because the encoder machinery is defined with the codecs, far below the expression emitter —
    and one expression needs it: `publish`, whose payload crosses the wire as JSON exactly as a
    response body does.  Assigned once, where `value_encoder` is defined. *)
+(* WIRE vs STORED JSON.  On the wire — an HTTP body, an SSE payload, a tool result, an
+   api-test template — `Maybe a` is `null` or the bare value: the shape the OpenAPI document
+   and the TypeScript/Elm clients have always declared (the runtime sent
+   the generic `{"tag":…}` envelope, and a client decoding by the published contract read
+   every populated value as Nothing).  Stored JSON — a JSONB column, a queue or cache row —
+   keeps the envelope, so nothing already persisted changes meaning.  The flag is set by the
+   wire sites around their encoder request; everything else is storage. *)
+let wire_json = ref false
+
+let with_wire_json f =
+  let previous = !wire_json in
+  wire_json := true;
+  Fun.protect ~finally:(fun () -> wire_json := previous) f
+
 let value_encoder_hook : (go_type -> string) ref =
   ref (fun _ -> invalid_arg "value encoder used before the codec layer was ready")
 
@@ -1299,7 +1313,7 @@ type module_exports = {
   ex_nominal_reverses : (Migration_proof_context.nominal * string) list;
   ex_nominal_mappings : (Migration_transform.nominal_mapping * string * string) list;
   (* The `server` declarations this module owns.  An `api-test … for S` in ANOTHER module
-     drives this module's server, and must name it through this package (FRICTION.md item 37). *)
+     drives this module's server, and must name it through this package. *)
   ex_servers : string list;
 }
 
@@ -1620,7 +1634,7 @@ let rec merge_anon left right =
 (* A `let x: T = …` binds at T.  The checker has already verified the value against the
    annotation, so it is the more precise of the two readings whenever it lowers; the value's
    own inference is the fallback, and is what an unannotated `let` uses.  Ignoring the
-   annotation left a user no way to settle an under-determined binding (FRICTION.md item 33). *)
+   annotation left a user no way to settle an under-determined binding. *)
 let annotated_let_type declared infer =
   let lowered te = match !current_types with
     | Some types -> (try Some (type_of_type_expr types te) with _ -> None)
@@ -2328,6 +2342,16 @@ and ordered_expr ty op left right =
   | TFunc _ | TJson | TStream | TCheck _ | TFailure | TAnon ->
     invalid_arg "Go ordering requires an ordered scalar type"
 
+(* A `List.sortBy` key may be a TUPLE of ordered components, compared lexicographically:
+   `List.sortBy (fn (r) -> Tuple2 r.queuedAt r.id)` is how a list is ordered by one field with
+   a tie-break on another.  Tuples are not ordered values in general (`<` refuses them); only
+   the sort key admits them. *)
+let tuple_key_components = function
+  | TAdt (info, args) when (info.adt_tesl_name = "Tuple2" && List.length args = 2)
+                         || (info.adt_tesl_name = "Tuple3" && List.length args = 3) ->
+    Some (info.adt_tesl_name, args)
+  | _ -> None
+
 let rec supports_ordering = function
   | TInt | TFloat | TQuantity | TString -> true
   (* A secret must not be ORDERED: sorting or comparing them leaks their relative values,
@@ -2335,6 +2359,12 @@ let rec supports_ordering = function
   | TNewtype info -> (not info.secret) && supports_ordering info.base
   | TBool | TUnit | TRecord _ | TAdt _ | TList _ | TDict _ | TSet _ | TParam _
   | TFunc _ | TJson | TStream | TCheck _ | TFailure | TAnon -> false
+
+let supports_sort_key ty =
+  supports_ordering ty
+  || (match tuple_key_components ty with
+      | Some (_, components) -> List.for_all supports_ordering components
+      | None -> false)
 
 (* Ordering INSIDE A QUERY admits one type the value language does not: a Bool.  PostgreSQL
    orders boolean columns (false before true) and `dsl/sql.tesl` reproduces that in its own
@@ -4080,9 +4110,13 @@ let rec type_of_expr signatures env expr =
       (* One side settled a type but left an ADT argument ANONYMOUS — a bare `Nothing` says
          it is a Maybe and nothing about what of — so the OTHER side settles it.  Both sides
          are then the same Go type, which is what the comparison is emitted at. *)
-      | Some left_ty, Some right_ty when has_anon left_ty && not (has_anon right_ty) ->
+      (* …unless the other side is an UNTYPED api-test value: then the comparison is
+         structural, and the anonymous side stays what it is (`== Nothing` is `null`). *)
+      | Some left_ty, Some right_ty when has_anon left_ty && not (has_anon right_ty)
+                                         && right_ty <> TJson ->
         right_ty, right_ty
-      | Some left_ty, Some right_ty when has_anon right_ty && not (has_anon left_ty) ->
+      | Some left_ty, Some right_ty when has_anon right_ty && not (has_anon left_ty)
+                                         && left_ty <> TJson ->
         left_ty, left_ty
       | Some left_ty, Some right_ty -> left_ty, right_ty
       (* One side carries no type of its OWN — a nullary constructor whose ADT this module
@@ -4159,7 +4193,10 @@ let rec type_of_expr signatures env expr =
        (* Equality fails closed here rather than in the emitter, so the refusal can name the
           leaf that blocks it: a generic ADT is fine (the instantiation is known at the
           comparison site), a bare type parameter is not. *)
-       if not (supports_equality left_ty) then
+       (* One untyped api-test side compares structurally (`teslrt.JsonEqual`), as the
+          comment above says — `expect r.body.agent != Nothing` included. *)
+       if not (supports_equality left_ty)
+          && not ((left_ty = TJson) <> (right_ty = TJson)) then
          unsupported loc "%s" (equality_refusal "compare" left_ty);
        TBool
       | BLt | BLe | BGt | BGe ->
@@ -4196,7 +4233,7 @@ let rec type_of_expr signatures env expr =
      (* A DEFAULTED branch yields to a real type: `if c then [] else ["a"]`. *)
      | Some _, Some ty when then_defaulted && not else_defaulted -> ty
      | Some ty, Some _ when else_defaulted && not then_defaulted -> ty
-     (* Same as `case` arms: keep what either branch settles (FRICTION.md item 33). *)
+     (* Same as `case` arms: keep what either branch settles. *)
      | Some left, Some right when type_equal left right -> merge_anon left right
      | Some _, Some _ -> unsupported loc "Go backend if branches have different types"
      | Some ty, None | None, Some ty ->
@@ -4301,7 +4338,7 @@ let rec type_of_expr signatures env expr =
             `Nothing -> Nothing` arm types as a `Maybe` of nothing in particular — so the
             case's type keeps what EITHER arm settles.  Taking the first arm's reading
             emitted `Maybe[struct{}]` for `case m of Nothing -> Nothing | Something x ->
-            Something (R { … })`, which Go then refused (FRICTION.md item 33). *)
+            Something (R { … })`, which Go then refused. *)
          | left, right when type_equal left right -> merge_anon left right
          | _ -> unsupported loc "Go backend `case` arms have different types")
          TFailure types)
@@ -4716,8 +4753,9 @@ and type_of_hof signatures env loc what hof args =
   | HofSortBy ->
     let element = list_of 1 in
     let key = type_of_callable signatures env loc what (List.nth args 0) [element] in
-    if not (supports_ordering key) then unsupported loc
-      "Go backend `%s` needs a key function returning an ordered type" what;
+    if not (supports_sort_key key) then unsupported loc
+      "Go backend `%s` needs a key function returning an ordered type (Int, Float, String, \
+       a newtype over one, or a Tuple2/Tuple3 of those)" what;
     TList element
   | HofZip ->
     let left = list_of 0 and right = list_of 1 in
@@ -6326,7 +6364,7 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
                (* A type with no wire shape (a check, a stream, a function) has nothing to
                   inspect, so it is refused by name rather than crashing the emitter. *)
                let encoder =
-                 try !value_encoder_hook ty with Invalid_argument _ ->
+                 try with_wire_json (fun () -> !value_encoder_hook ty) with Invalid_argument _ ->
                    unsupported loc
                      "Go backend `%s` cannot inspect a `%s` as JSON" verb (go_type ty)
                in
@@ -6661,25 +6699,7 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
     let json_side, typed_side =
       if type_of_expr signatures env left = TJson then left, right else right, left in
     let typed_ty = type_of_expr signatures env typed_side in
-    (* The typed side is handed over in the shape the runtime compares against: a scalar as
-       itself, a newtype unwrapped, a list lifted.  Anything richer (a record, a dict) fails
-       closed rather than being compared as something it is not — an api-test compares FIELDS,
-       and that is the shape the corpus uses. *)
-    let rec comparand ty emitted = match ty with
-      | TInt | TString | TBool | TFloat -> emitted
-      | TNewtype info when not info.secret ->
-        comparand info.base (Printf.sprintf "%s.Value" (selector_operand emitted))
-      | TList (TInt | TString | TBool | TFloat) ->
-        Printf.sprintf "teslrt.JsonListOf(%s)" emitted
-      | _ -> unsupported loc
-        "Go backend compares an api-test JSON value against a scalar, a newtype over one, or \
-         a list of those"
-    in
-    let encoded =
-      if typed_ty = TJson then emit_expr ~indent signatures env typed_side
-      else comparand typed_ty
-        (emit_expr ~expected:typed_ty ~indent signatures env typed_side)
-    in
+    let encoded = api_json_comparand ~indent signatures env loc typed_side typed_ty in
     Printf.sprintf "%steslrt.JsonEqual(%s, %s)"
       (if op = BNeq then "!" else "")
       (emit_expr ~indent signatures env json_side) encoded
@@ -7135,7 +7155,7 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
        encoder a response body goes through, so a subscriber and a caller read the same shape. *)
     Printf.sprintf "teslrt.Publish(%s, %s, %s(%s))"
       (qualified info.ch_owner info.ch_go_var) key
-      (!value_encoder_hook info.ch_payload) payload
+      (with_wire_json (fun () -> !value_encoder_hook info.ch_payload)) payload
   (* A LAMBDA is a Go function literal.  The body goes through the ordinary TAIL emitter, so
      a `let` chain or an `if` inside it keeps statement form instead of nesting closures. *)
   | ELambda { params; body; loc } ->
@@ -7325,7 +7345,7 @@ and emit_endpoint_tool signatures loc name description schema (endpoint : api_en
   let encoder = match signature.result with
     | TDict _ | TSet _ | TParam _ | TCheck _ | TFailure ->
       unsupported loc "Go backend cannot encode endpoint `%s`\'s response as a tool result" name
-    | result -> !value_encoder_hook result
+    | result -> with_wire_json (fun () -> !value_encoder_hook result)
   in
   (* A tool_result is TEXT, and the endpoint's response is JSON — the same bytes an HTTP
      caller would receive, through the same encoder. *)
@@ -7736,6 +7756,16 @@ and emit_negated ?(indent="") signatures env expr =
     Printf.sprintf "(%s || %s)" (group (neg left)) (group (neg right))
   | EBinop { op = BOr; left; right; _ } ->
     Printf.sprintf "(%s && %s)" (group (neg left)) (group (neg right))
+  (* A comparison with an UNTYPED api-test value: the positive form is the runtime call, and
+     its negation flips which of the two calls is emitted. *)
+  | EBinop { op = (BEq | BNeq); left; right; _ }
+    when (let json side = match typed_with_default (type_of_expr signatures env) side with
+            | Some TJson, _ -> true | _ -> false in
+          json left <> json right) ->
+    let positive = emit expr in
+    if String.length positive > 0 && positive.[0] = '!' then
+      String.sub positive 1 (String.length positive - 1)
+    else "!" ^ positive
   | EBinop { op = (BEq | BNeq) as op; left; right; _ } ->
     (* The operand type comes from whichever side HAS one: a defaulted empty list yields to
        the other, exactly as it does in the positive emission.  Both sides are then emitted
@@ -8166,9 +8196,28 @@ and emit_hof ?(indent="") signatures env _loc _what hof args result =
     (* The comparator is hoisted for the same reason a nested element comparator is: a
        one-line func literal survives only while go/printer judges it small enough, and
        this one is not. *)
+    let less_body = match tuple_key_components key_ty with
+      | None -> ordered_expr key_ty "<" (key_call left) (key_call right)
+      | Some (tuple, components) ->
+        (* Lexicographic: the first component that differs decides.  Each key is computed
+           once per comparison. *)
+        let fields = ["First"; "Second"; "Third"] in
+        let rec lex = function
+          | [] -> "false"
+          | (index, component) :: rest ->
+            let field side = Printf.sprintf "%s.%s%s" side tuple (List.nth fields index) in
+            let lt = ordered_expr component "<" (field "teslL") (field "teslR") in
+            (* Not less and at most: equal, so the next component decides. *)
+            let le = ordered_expr component "<=" (field "teslL") (field "teslR") in
+            if rest = [] then lt
+            else Printf.sprintf "(%s || (%s && %s))" lt le (lex rest) in
+        Printf.sprintf "func() bool {\n\t\tteslL, teslR := %s, %s\n\t\treturn %s\n\t}()"
+          (key_call left) (key_call right)
+          (lex (List.mapi (fun index component -> (index, component)) components))
+    in
     let less = remember_helper ~prefix:"teslSortLess"
       ~signature:(Printf.sprintf "(%s, %s %s) bool" left right (go_type element))
-      ~body:(ordered_expr key_ty "<" (key_call left) (key_call right))
+      ~body:less_body
     in
     Printf.sprintf "teslrt.ListSortBy(%s, %s)" (emit_list 1) less
   | HofFoldl ->
@@ -8575,6 +8624,10 @@ and emit_sql_predicate ?(joins=[]) ~indent signatures env loc (info : entity_inf
       (match List.map clause parts with
        | [] -> "false"
        | rendered -> "(" ^ String.concat " || " rendered ^ ")")
+    | SqlAnd parts ->
+      (match List.map clause parts with
+       | [] -> "true"
+       | rendered -> "(" ^ String.concat " && " rendered ^ ")")
     | SqlIn { field; values } ->
       (match List.map (fun value -> compare_op field BEq value) values with
        | [] -> "false"
@@ -8623,7 +8676,7 @@ and sql_check_where_field loc where_field clauses =
     | SqlNotIn { field = other; _ } | SqlInList { field = other; _ }
     | SqlNotInList { field = other; _ } | SqlLike { field = other; _ }
     | SqlILike { field = other; _ } -> other = field
-    | SqlOr parts -> List.exists (mentions field) parts
+    | SqlOr parts | SqlAnd parts -> List.exists (mentions field) parts
   in
   match where_field with
   | Some field when not (List.exists (mentions field) clauses) ->
@@ -8657,6 +8710,13 @@ and sql_key_conflict loc (info : entity_info) =
    The statement's TEXT is built here, at compile time, and never carries a value: every operand
    becomes a `$n` placeholder with its Go expression in the argument list.  So nothing a request
    sends can change what a statement SAYS. *)
+(* A bound EXPRESSION as the Go `int` the stores take: an Int, never negative. *)
+and sql_bound_go ~indent signatures env expression =
+  Printf.sprintf "teslrt.SqlBound(%s)" (emit_expr ~expected:TInt ~indent signatures env expression)
+
+and sql_bound_arg ~indent signatures env builder expression =
+  sql_placeholder builder (sql_bound_go ~indent signatures env expression)
+
 and sql_placeholder (builder : sql_arguments) argument =
   builder.sql_args <- builder.sql_args @ [argument];
   Printf.sprintf "$%d" (List.length builder.sql_args)
@@ -9039,6 +9099,10 @@ and sql_where_text ?column_renderer ?(joins=[]) ~indent signatures env loc (info
       (match List.map clause parts with
        | [] -> "false"
        | rendered -> "(" ^ String.concat " or " rendered ^ ")")
+    | SqlAnd parts ->
+      (match List.map clause parts with
+       | [] -> "true"
+       | rendered -> "(" ^ String.concat " and " rendered ^ ")")
     | SqlIn { field; values } ->
       (match List.map (fun value -> compare_op field BEq value) values with
        | [] -> "false"
@@ -9073,9 +9137,19 @@ and sql_order_text loc (info : entity_info) order =
     Printf.sprintf " order by %s %s" (sql_ident (sql_column_of loc info field).col_name)
       (if direction = "desc" then "DESC" else "ASC")
 
-and sql_range_text limit offset =
-  (match limit with Some count -> Printf.sprintf " limit %d" count | None -> "")
-  ^ (match offset with Some count -> Printf.sprintf " offset %d" count | None -> "")
+(* A literal bound is written into the statement; an EXPRESSION bound is a `$n` parameter
+   like every other operand, clamped at zero so a negative page size reads nothing instead of
+   failing the statement — the same answer `teslrt.SqlBound` gives the memory store. *)
+and sql_range_text ?(bound_arg = fun _ -> invalid_arg "sql bound expression without a builder")
+    limit offset =
+  let bound keyword = function
+    | Some (BoundLiteral count) -> Printf.sprintf " %s %d" keyword count
+    | Some (BoundExpr expression) -> Printf.sprintf " %s %s" keyword (bound_arg expression)
+    | None -> "" in
+  (* Bound in reading order: `^` evaluates its right operand first. *)
+  let limit_text = bound "limit" limit in
+  let offset_text = bound "offset" offset in
+  limit_text ^ offset_text
 
 (* The column list a select asks for: the entity's own fields in declaration order, which is
    the order the scanner reads them in. *)
@@ -9288,7 +9362,7 @@ and sql_row_query ~indent signatures env loc info binder clauses order limit off
  let builder={sql_args=[]} in
  let where=sql_where_text ~column_renderer:column ~indent signatures env loc info binder clauses builder in
  let order=match order with None -> "" | Some (field,direction) -> " order by " ^ column field ^ " " ^ direction in
- let text=where ^ order ^ sql_range_text limit offset in
+ let text=where ^ order ^ sql_range_text ~bound_arg:(sql_bound_arg ~indent signatures env builder) limit offset in
  let marker=Str.regexp "\000[0-9]+\000" in
  let rec pieces at parts names =
   match (try Some (Str.search_forward marker text at) with Not_found -> None) with
@@ -9350,8 +9424,11 @@ and emit_sql_form ?(indent="") signatures env loc form =
     in
     let range () =
       (* A missing `limit` is "every row", spelled as a negative count. *)
-      Printf.sprintf "%d, %d" (Option.value seed.offset ~default:0)
-        (Option.value seed.limit ~default:(-1))
+      let bound default = function
+        | Some (BoundLiteral count) -> string_of_int count
+        | Some (BoundExpr expression) -> sql_bound_go ~indent signatures env expression
+        | None -> string_of_int default in
+      Printf.sprintf "%s, %s" (bound 0 seed.offset) (bound (-1) seed.limit)
     in
     let table = sql_table_ref info in
     (* The database this entity belongs to, when it is a Postgres-backed one: the query is then
@@ -9382,7 +9459,9 @@ and emit_sql_form ?(indent="") signatures env loc form =
           let statement =
             Printf.sprintf "select %s from %s%s%s%s" (sql_column_list info)
               (sql_qualified_table database info) (where builder)
-              (sql_order_text loc info seed.order) (sql_range_text seed.limit seed.offset) in
+              (sql_order_text loc info seed.order)
+              (sql_range_text ~bound_arg:(sql_bound_arg ~indent signatures env builder)
+                 seed.limit seed.offset) in
            Printf.sprintf "teslrt.%s(%s, %s, %s, %s, %s, %s, %s)"
              (if top_range then "DbSelectTop" else "DbSelect")
             (db_ref database) table predicate
@@ -9410,7 +9489,7 @@ and emit_sql_form ?(indent="") signatures env loc form =
              (if top_order then "DbRowSelectOneTop" else "DbRowSelectOne")
             (sql_access_ref info) (db_ref database) table predicate
             (match ordering () with None -> "nil" | Some less -> less)
-            (sql_row_query ~indent signatures env loc info seed.binder all_clauses seed.order (Some 1) None)
+            (sql_row_query ~indent signatures env loc info seed.binder all_clauses seed.order (Some (BoundLiteral 1)) None)
         | Some database ->
           let builder = { sql_args = [] } in
           let statement =
@@ -10015,9 +10094,39 @@ and api_test_interpolates value =
 
    Outside an api-test block a string literal is itself; nothing here is reached from ordinary
    code. *)
+(* The typed side of an api-test comparison against an UNTYPED JSON value, in the shape the
+   runtime compares (`teslrt.JsonEqual`): a scalar as itself, a newtype unwrapped, a scalar
+   list lifted, and anything else through its WIRE encoding — the shape the response body
+   carries — so `expect resp.body.agent == Nothing` and `== Something (Eval { score: 3 })`
+   say what they mean.  One rule for the `==` expression and the `expect` statement; the two
+   used to be separate copies, and both refused every Maybe and record. *)
+and api_json_comparand ~indent signatures env loc typed_side typed_ty =
+  let rec comparand ty emitted = match ty with
+    | TJson -> emitted
+    | TInt | TString | TBool | TFloat -> emitted
+    | TNewtype info when not info.secret ->
+      comparand info.base (Printf.sprintf "%s.Value" (selector_operand emitted))
+    | TList (TInt | TString | TBool | TFloat) ->
+      Printf.sprintf "teslrt.JsonListOf(%s)" emitted
+    | ty when not (has_anon ty) ->
+      (match (try Some (with_wire_json (fun () -> !value_encoder_hook ty))
+              with Invalid_argument _ -> None) with
+       | Some encoder -> Printf.sprintf "%s(%s)" encoder emitted
+       | None -> unsupported loc
+         "Go backend cannot compare an api-test JSON value against a `%s`" (go_type ty))
+    | _ -> unsupported loc
+      "Go backend compares an api-test JSON value against a value whose type it cannot settle"
+  in
+  match typed_side with
+  (* A bare `Nothing` settles no type argument, and on the wire it is `null` whatever the
+     argument would have been. *)
+  | EConstructor { name = "Nothing"; args = []; _ } -> "nil"
+  | _ when typed_ty = TJson -> emit_expr ~indent signatures env typed_side
+  | _ -> comparand typed_ty (emit_expr ~expected:typed_ty ~indent signatures env typed_side)
+
 (* The `headers { … }` modifier of an api-test request or `subscribe`: a literal template, or
    a `Dict String String` a shared helper built.  One rendering for both, so a stream is
-   subscribed with exactly the headers a request would carry (FRICTION.md item 34). *)
+   subscribed with exactly the headers a request would carry. *)
 and emit_api_test_headers ~indent signatures env request_headers =
   match request_headers with
     | None -> "nil"
@@ -10060,7 +10169,7 @@ and emit_api_test_string ?(indent="") signatures env value =
                through its own encoder, which is the shape the Legacy walk produces. *)
             | TJson -> Printf.sprintf "%s.JsonRaw()"
                          (selector_operand (emit_expr ~indent signatures env slot))
-            | _ -> Printf.sprintf "%s(%s)" (!value_encoder_hook ty)
+            | _ -> Printf.sprintf "%s(%s)" (with_wire_json (fun () -> !value_encoder_hook ty))
                      (emit_expr ~expected:ty ~indent signatures env slot)
           in
           Printf.sprintf "teslrt.ApiTestFragment(%s)" encoded) parts in
@@ -10102,7 +10211,7 @@ and json_template_value ?(indent="") signatures env value =
          (List.map (json_template_value ~indent signatures env) elems))
   | _ ->
     let ty = type_of_expr signatures env value in
-    Printf.sprintf "%s(%s)" (!value_encoder_hook ty)
+    Printf.sprintf "%s(%s)" (with_wire_json (fun () -> !value_encoder_hook ty))
       (emit_expr ~expected:ty ~indent signatures env value)
 
 and json_template_object ?(indent="") signatures env value =
@@ -10969,12 +11078,11 @@ let field_codec_kind name =
   | Some kind -> Some kind
   | None -> newtype_base_codec name
 
-(* The wire shape of a response value, mirroring `runtime-value->jsexpr` in dsl/types.tesl:
-   a type with its own codec encodes through it; a record without one becomes an object of
-   its fields; an ADT without one becomes a TAGGED object — `{"tag":"Nothing"}`, or
-   `{"tag":"Something","fields":{…}}` when the variant carries payload.  That is why a
-   handler returning `Maybe Task` works without a codec for `Maybe`: the tagged shape is
-   the fallback, not an error.  A newtype unwraps, matching Legacy.
+(* The JSON shape of a value: a type with its own codec encodes through it; a record without
+   one becomes an object of its fields; an ADT without one becomes a TAGGED object —
+   `{"tag":"Ctor"}`, or `{"tag":"Ctor","fields":{…}}` when the variant carries payload.  A
+   newtype unwraps.  `Maybe` is the one difference between the two modes (see `wire_json`):
+   on the wire it is `null` or the bare value, in storage it keeps the tagged shape.
 
    Each encoder is hoisted into a named function, so the call site stays a plain call and
    the same type is encoded one way everywhere. *)
@@ -11003,7 +11111,7 @@ let rec json_dict_key_encoder ty operand =
 let active_value_encoders : (string, string * bool ref) Hashtbl.t = Hashtbl.create 8
 
 let rec value_encoder ty =
-  let key = go_type ty in
+  let key = (if !wire_json then "wire:" else "") ^ go_type ty in
   match Hashtbl.find_opt active_value_encoders key with
   | Some (name, used) -> used := true; name
   | None ->
@@ -11014,7 +11122,7 @@ let rec value_encoder ty =
       let encoder = value_encoder_body ty in
       if !used then Hashtbl.replace pending_helpers name
         (Printf.sprintf "\nfunc %s(teslValue %s) any {\n\treturn %s(teslValue)\n}\n"
-           name key encoder);
+           name (go_type ty) encoder);
       encoder)
 
 and adt_json_payload info args variant ~indent =
@@ -11058,6 +11166,15 @@ and value_encoder_body ty =
     qualified info.rec_owner (codec_encode_name info.rec_tesl_name)
   | TAdt (info, _) when nominal_codec info.adt_owner info.adt_tesl_name <> None ->
     qualified info.adt_owner (codec_encode_name info.adt_tesl_name)
+  (* A directly nested `Maybe (Maybe a)` keeps the envelope at its outer level: `null` cannot
+     say which of the two Nothings it means. *)
+  | TAdt (info, [inner]) when !wire_json && info.adt_tesl_name = "Maybe"
+                              && (match inner with
+                                  | TAdt (inner_info, _) -> inner_info.adt_tesl_name <> "Maybe"
+                                  | _ -> true) ->
+    remember_helper ~prefix:"teslEncode"
+      ~signature:(Printf.sprintf "(teslValue %s) any" (go_type ty))
+      ~body:(Printf.sprintf "teslrt.EncodeMaybeWire(teslValue, %s)" (value_encoder inner))
   | TRecord info ->
     let fields = aligned_map_entries "\t\t" (List.map (fun (name, field_ty) ->
       (name, encoded_field ("teslValue." ^ record_field_go_name name) field_ty))
@@ -11179,6 +11296,13 @@ let rec json_value_decoder ~package ~loc ~what ty =
     Printf.sprintf
       "func(teslRaw any) (%s, error) {\n\t\tteslNested := %s(teslRaw)\n\t\tif !teslNested.OK() {\n\t\t\treturn %s{}, errors.New(teslNested.Message())\n\t\t}\n\t\tteslValue, _ := teslNested.Value()\n\t\treturn teslValue, nil\n\t}"
       (go_type ty) (qualified nested.rec_owner (codec_decode_name nested.rec_tesl_name)) (go_type ty)
+  (* `Maybe a` reads the wire shape (null, an absent key, or the bare value) and the stored
+     envelope alike — see `teslrt.DecodeMaybeValue`.  A request body with an optional field
+     used to have no decoder at all. *)
+  | TAdt (info, [inner]) when info.adt_tesl_name = "Maybe" ->
+    Printf.sprintf
+      "func(teslRaw any) (%s, error) {\n\t\treturn teslrt.DecodeMaybeValue(teslRaw, %s)\n\t}"
+      (go_type ty) (json_value_decoder ~package ~loc ~what inner)
   | TAdt (nested, _) when nominal_codec nested.adt_owner nested.adt_tesl_name <> None ->
     remember_helper_stmts ~prefix:"teslDecode"
       ~signature:(Printf.sprintf "(teslRaw any) (%s, error)" (go_type ty))
@@ -11721,6 +11845,12 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
               | Some _ -> unwrapped (field_type entry.field_name) value
               | None when List.mem entry.codec ["listCodec"; "setCodec"; "dictCodec"] ->
                 Printf.sprintf "%s(%s)" (value_encoder (field_type entry.field_name)) value
+              (* `with_codec Maybe` — the spelling the checker's own hint names for a `Maybe`
+                 field — is the wire shape: null or the bare value (it
+                 emitted a call to a `EncodeMaybeJSON` nothing defined). *)
+              | None when entry.codec = "Maybe" ->
+                Printf.sprintf "%s(%s)"
+                  (with_wire_json (fun () -> value_encoder (field_type entry.field_name))) value
               | None -> Printf.sprintf "%s(%s)" (codec_encode_ref entry.codec) value))
             entries));
        Buffer.add_string body "\n\t}\n}\n");
@@ -11820,6 +11950,14 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
               | None when List.mem field_codec ["listCodec"; "setCodec"; "dictCodec"] ->
                 Printf.bprintf body
                   "\tteslRaw%s, teslErr%s := teslrt.JSONFieldValue(teslJSON, %s)\n\tif teslErr%s != nil {\n\t\treturn teslrt.RejectShape[%s](teslErr%s.Error())\n\t}\n\t%s, teslDecodeErr%s := %s(teslRaw%s)\n\tif teslDecodeErr%s != nil {\n\t\treturn teslrt.RejectShape[%s](teslDecodeErr%s.Error())\n\t}\n"
+                  suffix suffix (go_quote json_key) suffix go_type_name suffix
+                  binder suffix
+                  (json_value_decoder ~package ~loc:codec.loc
+                     ~what:(Printf.sprintf "%s.%s" type_name field_name) (field_type field_name))
+                  suffix suffix go_type_name suffix
+              | None when field_codec = "Maybe" ->
+                Printf.bprintf body
+                  "\tteslRaw%s, teslErr%s := teslrt.JSONFieldValueOptional(teslJSON, %s)\n\tif teslErr%s != nil {\n\t\treturn teslrt.RejectShape[%s](teslErr%s.Error())\n\t}\n\t%s, teslDecodeErr%s := %s(teslRaw%s)\n\tif teslDecodeErr%s != nil {\n\t\treturn teslrt.RejectShape[%s](teslDecodeErr%s.Error())\n\t}\n"
                   suffix suffix (go_quote json_key) suffix go_type_name suffix
                   binder suffix
                   (json_value_decoder ~package ~loc:codec.loc
@@ -11967,10 +12105,21 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
            // whole contract, exactly as it is on the Legacy runtime's generic decode.\n\
            func %s(teslJSON any) teslrt.Check[%s] {\n"
           (codec_decode_name info.rec_tesl_name) (codec_decode_name info.rec_tesl_name) go_ty;
-        Printf.bprintf body "\tteslFields, teslShapeErr := teslrt.DecodeObjectShape(teslJSON, %s, []string{%s})\n\tif teslShapeErr != nil {\n\t\treturn teslrt.RejectShape[%s](teslShapeErr.Error())\n\t}\n"
-          (go_quote info.rec_tesl_name)
-          (String.concat ", " (List.map (fun (name, _) -> go_quote name) info.rec_fields))
-          go_ty;
+        (* A `Maybe` field may be absent: that is how a client says "no value". *)
+        let optional = List.filter_map (fun (name, field_ty) -> match field_ty with
+          | TAdt (field_info, [_]) when field_info.adt_tesl_name = "Maybe" -> Some (go_quote name)
+          | _ -> None) info.rec_fields in
+        if optional = [] then
+          Printf.bprintf body "\tteslFields, teslShapeErr := teslrt.DecodeObjectShape(teslJSON, %s, []string{%s})\n\tif teslShapeErr != nil {\n\t\treturn teslrt.RejectShape[%s](teslShapeErr.Error())\n\t}\n"
+            (go_quote info.rec_tesl_name)
+            (String.concat ", " (List.map (fun (name, _) -> go_quote name) info.rec_fields))
+            go_ty
+        else
+          Printf.bprintf body "\tteslFields, teslShapeErr := teslrt.DecodeObjectShapeOptional(teslJSON, %s, []string{%s}, []string{%s})\n\tif teslShapeErr != nil {\n\t\treturn teslrt.RejectShape[%s](teslShapeErr.Error())\n\t}\n"
+            (go_quote info.rec_tesl_name)
+            (String.concat ", " (List.map (fun (name, _) -> go_quote name) info.rec_fields))
+            (String.concat ", " optional)
+            go_ty;
         List.iter (fun (name, field_ty) ->
           let suffix = go_ident ~exported:true name in
           (* Every field decoder is a `func(any) (T, error)`, so a list composes over the
@@ -12122,7 +12271,7 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
         | TDict _ | TSet _ | TParam _ | TCheck _ | TFailure ->
           unsupported server.loc
             "Go backend cannot encode handler `%s`'s response type" handler
-        | result -> value_encoder result
+        | result -> with_wire_json (fun () -> value_encoder result)
       in
       current_scope_in_hand := true;
       Printf.bprintf body
@@ -12891,20 +13040,7 @@ let test_source ?(debug=false) ?(imported_packages=[]) ?(api_tests=[]) ?(load_te
           if left_ty = TJson || right_ty = TJson then begin
             let json_side, typed_side, typed_ty =
               if left_ty = TJson then left, right, right_ty else right, left, left_ty in
-            let rec comparand ty emitted = match ty with
-              | TJson -> emitted
-              | TInt | TString | TBool | TFloat -> emitted
-              | TNewtype info when not info.secret ->
-                comparand info.base (Printf.sprintf "%s.Value" (selector_operand emitted))
-              | TList (TInt | TString | TBool | TFloat) ->
-                Printf.sprintf "teslrt.JsonListOf(%s)" emitted
-              | _ -> unsupported loc
-                "Go backend compares an api-test JSON value against a scalar, a newtype over \
-                 one, or a list of those"
-            in
-            let encoded = comparand typed_ty
-              (if typed_ty = TJson then emit_expr ~indent signatures env typed_side
-               else emit_expr ~expected:typed_ty ~indent signatures env typed_side) in
+            let encoded = api_json_comparand ~indent signatures env loc typed_side typed_ty in
             Printf.sprintf "!teslrt.JsonEqual(%s, %s)"
               (emit_expr ~indent signatures env json_side) encoded
           end else begin
@@ -14566,11 +14702,23 @@ let compile_module_internal ?(stage_preparation=false) ?(migration_metered=false
       "String.requireNonEmpty", [`Str], `CheckStr, "teslrt.StringRequireNonEmpty";
       "String.split",     [`Str; `Str], `StrList, "teslrt.StringSplit";
       "String.join",      [`StrList; `Str], `Str, "teslrt.StringJoin";
+      "String.trimLeft",  [`Str], `Str,     "teslrt.StringTrimLeft";
+      "String.trimRight", [`Str], `Str,     "teslrt.StringTrimRight";
+      "String.words",     [`Str], `StrList, "teslrt.StringWords";
+      "String.lines",     [`Str], `StrList, "teslrt.StringLines";
+      "String.toFloat",   [`Str], `MaybeFloat, "teslrt.ParseFloat";
+      "String.fromFloat", [`Float], `Str,   "teslrt.FormatFloat";
       (* `Tesl.Int` checks: `List.take`/`List.drop` are proof-total, so a caller
          needs `check Int.nonNegative n` before it can pass a count at all. *)
       "Int.nonZero",      [`Int], `CheckInt, "teslrt.IntNonZero";
       "Int.nonNegative",  [`Int], `CheckInt, "teslrt.IntNonNegative";
       "Int.abs",          [`Int], `Int,      "teslrt.Abs";
+      "Int.toFloat",      [`Int], `Float,    "teslrt.IntToFloat";
+      "Int.fromFloat",    [`Float], `Int,    "teslrt.IntFromFloat";
+      "Int.digits",       [`Int], `Int,      "teslrt.IntDigits";
+      "Int.isZero",       [`Int], `Bool,     "teslrt.IntIsZero";
+      "Int.isPositive",   [`Int], `Bool,     "teslrt.IntIsPositive";
+      "Int.isNegative",   [`Int], `Bool,     "teslrt.IntIsNegative";
       "Int.min",          [`Int; `Int], `Int, "teslrt.Min";
       (* Both are Legacy's, so both are NON-NEGATIVE whatever the operands' signs are, and
          `lcm` with a zero operand is zero rather than a division by the gcd of two zeros. *)

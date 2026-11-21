@@ -2496,6 +2496,8 @@ This design is theoretically sound because:
 
 **Separate HTTP wire adapters are not implemented by the Go backend.** The forms `body req: Domain from Wire via decodeWire` and `response Wire via encodeWire` do not describe an executed request/response conversion. Do not use them to establish a boundary guarantee. Declare the actual decoded request and encoded response types, supply their codecs where required, and perform domain conversions through ordinary checked function calls in the handler.
 
+**Wire shape of a value without a codec.** A record is a JSON object of its fields. An ADT is `{"tag": "Ctor"}`, or `{"tag": "Ctor", "fields": {…}}` when the constructor carries payload; `Result`, `Either`, `Tuple2` and `Tuple3` follow the same rule (`{"tag": "Ok", "fields": {"value": v}}`, `{"tag": "Err", "fields": {"error": e}}`, `{"tag": "Tuple2", "fields": {"first": a, "second": b}}`). `Maybe T` is the exception on the HTTP wire — a request or response body, an SSE payload, a tool result: `Nothing` is JSON `null` and `Something v` is `v` itself, and a request body may omit a `Maybe` field entirely (absent reads as `Nothing`). A directly nested `Maybe (Maybe T)` keeps the tagged shape at its outer level, since `null` cannot say which `Nothing` it means. Stored JSON — a `JSONB` column, a queue job, a cache value — keeps the tagged `Maybe` shape, and decoding accepts either form. A `codec` field reads and writes this wire shape with `with_codec Maybe`. The OpenAPI document and the generated TypeScript and Elm clients describe exactly these shapes.
+
 **`adtJson` shorthand for ADT types.** When a codec is needed solely to declare the standard `{"tag": "ConstructorName"}` JSON encoding for an ADT, use the `adtJson` shorthand:
 
 ```tesl
@@ -3620,8 +3622,8 @@ The current `.tesl` frontend includes a small SQL-like sublanguage:
                   | "where" "like"      <field-ref> <string-expr>
                   | "where" "ilike"     <field-ref> <string-expr>
                   | "order"   <field-ref> ( "asc" | "desc" )
-                  | "limit"   <int>
-                  | "offset"  <int>
+                  | "limit"   <int-expr>
+                  | "offset"  <int-expr>
                   | "innerJoin" <entity> "on" <binder-field-ref> <entity-field-ref>
 
 <group-by-clause> ::= "groupBy" <field-ref>
@@ -3649,6 +3651,11 @@ The current `.tesl` frontend includes a small SQL-like sublanguage:
 <sql-predicate> ::= <identifier> "." <identifier> <comparison-op> <expr>
 <comparison-op> ::= "==" | "!=" | "<=" | ">=" | "<" | ">"
 ```
+
+A `limit`/`offset` bound is an integer literal or any `Int` expression (a page size the request
+chose). An expression bound is a statement parameter, never spliced into the SQL text, and a
+negative bound selects nothing. Every clause may sit on its own indented line, including the
+`onConflict`/`doUpdate` clauses of an `upsert` and the `where` clauses of a `delete`.
 
 The parser produces a dedicated `ESqlQuery` AST node for each recognized select, insert, upsert,
 update, delete, or `deleteAndReturnResult` expression. SQL clause keywords and their source spans

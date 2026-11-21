@@ -8,6 +8,10 @@
 
 open Ast
 
+(* The runtime's field names for a tuple's components. *)
+let tuple_field_name index =
+  match index with 0 -> "first" | 1 -> "second" | 2 -> "third" | n -> Printf.sprintf "item%d" n
+
 (* ── String helpers ──────────────────────────────────────────────────────── *)
 
 let lowercase_first s =
@@ -29,8 +33,12 @@ let snake_case s =
 let fact_unique_field name = "__tesl_" ^ snake_case name
 
 (** Capitalise a path segment, handling kebab-case: "list-test" → "ListTest" *)
+(* A path segment may hold any URL character (`documents.csv`, `api-v2`, `a~b`); only letters
+   and digits survive into a generated function name, each run capitalised, so the name is a
+   legal identifier (`getDocuments.csv` was emitted verbatim and broke the client). *)
 let capitalize_segment s =
-  let parts = String.split_on_char '-' s in
+  let parts = String.split_on_char '\x00' (String.map (fun c ->
+    match c with 'a'..'z' | 'A'..'Z' | '0'..'9' -> c | _ -> '\x00') s) in
   String.concat "" (List.map (fun p ->
     if String.length p = 0 then ""
     else String.make 1 (Char.uppercase_ascii p.[0]) ^ String.sub p 1 (String.length p - 1)
@@ -167,16 +175,24 @@ let rec zod_of_ir_type (fact_schemas : (string, unit) Hashtbl.t) (ty : Ir.ir_typ
       (zod_of_ir_type fact_schemas value)
   | Ir.IRResult (ok, err) ->
     Printf.sprintf
-      "z.discriminatedUnion(\"tag\", [z.object({ tag: z.literal(\"Ok\"), value: %s }), z.object({ tag: z.literal(\"Err\"), error: %s })])"
+      "z.discriminatedUnion(\"tag\", [z.object({ tag: z.literal(\"Ok\"), fields: z.object({ value: %s }) }), z.object({ tag: z.literal(\"Err\"), fields: z.object({ error: %s }) })])"
       (zod_of_ir_type fact_schemas ok)
       (zod_of_ir_type fact_schemas err)
   | Ir.IREither (left, right) ->
     Printf.sprintf
-      "z.discriminatedUnion(\"tag\", [z.object({ tag: z.literal(\"Left\"), value: %s }), z.object({ tag: z.literal(\"Right\"), value: %s })])"
+      "z.discriminatedUnion(\"tag\", [z.object({ tag: z.literal(\"Left\"), fields: z.object({ value: %s }) }), z.object({ tag: z.literal(\"Right\"), fields: z.object({ value: %s }) })])"
       (zod_of_ir_type fact_schemas left)
       (zod_of_ir_type fact_schemas right)
+  (* A tuple crosses the wire as the runtime encodes every ADT:
+     `{"tag":"Tuple2","fields":{"first":…,"second":…}}`. *)
   | Ir.IRTuple elems ->
-    "z.tuple([" ^ String.concat ", " (List.map (zod_of_ir_type fact_schemas) elems) ^ "])"
+    let names = List.mapi (fun index _ -> tuple_field_name index) elems in
+    Printf.sprintf "z.object({ tag: z.literal(\"Tuple%d\"), fields: z.object({ %s }) }).transform((v) => [%s] as [%s])"
+      (List.length elems)
+      (String.concat ", " (List.map2 (fun name elem ->
+         Printf.sprintf "%s: %s" name (zod_of_ir_type fact_schemas elem)) names elems))
+      (String.concat ", " (List.map (fun name -> "v.fields." ^ name) names))
+      (String.concat ", " (List.map (fun name -> "typeof v.fields." ^ name) names))
   | Ir.IRVar _
   | Ir.IRFun _
   | Ir.IROpaque _ -> "z.unknown()"
@@ -211,13 +227,15 @@ let rec ts_type_of_ir_type (ty : Ir.ir_type) =
   | Ir.IRDict (key, value) ->
     "Array<[" ^ ts_type_of_ir_type key ^ ", " ^ ts_type_of_ir_type value ^ "]>"
   | Ir.IRResult (ok, err) ->
-    Printf.sprintf "{ tag: \"Ok\"; value: %s } | { tag: \"Err\"; error: %s }"
+    Printf.sprintf "{ tag: \"Ok\"; fields: { value: %s } } | { tag: \"Err\"; fields: { error: %s } }"
       (ts_type_of_ir_type ok)
       (ts_type_of_ir_type err)
   | Ir.IREither (left, right) ->
-    Printf.sprintf "{ tag: \"Left\"; value: %s } | { tag: \"Right\"; value: %s }"
+    Printf.sprintf "{ tag: \"Left\"; fields: { value: %s } } | { tag: \"Right\"; fields: { value: %s } }"
       (ts_type_of_ir_type left)
       (ts_type_of_ir_type right)
+  (* The client's tuple TYPE stays a TS tuple; the zod schema reads the wire envelope and
+     transforms it, as the Elm decoder does. *)
   | Ir.IRTuple elems ->
     "[" ^ String.concat ", " (List.map ts_type_of_ir_type elems) ^ "]"
   | Ir.IRFun _
@@ -685,6 +703,7 @@ let emit_ts (m : module_form) : string =
 
   (* ── API client ── *)
   let ir_module = Ir.module_to_ir m in
+  let ir_module = { ir_module with Ir.irm_endpoints = Ir.client_endpoints ir_module } in
   let endpoints = ir_module.Ir.irm_endpoints in
 
   if endpoints <> [] then begin

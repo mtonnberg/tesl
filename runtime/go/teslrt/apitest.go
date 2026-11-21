@@ -110,7 +110,7 @@ func ApiRequest(server Server, method, path, body string, cookies []string,
 // A `publicOrigin` server refuses a request whose Host names another origin (421). A real
 // client of the deployed app always addresses it by that origin, so a request a test writes
 // without a Host means "a request to this app" — and before this every api-test against such a
-// server failed with 421 until each request carried a hand-written Host header (FRICTION §43).
+// server failed with 421 until each request carried a hand-written Host header.
 // A test that sends its own Host keeps it: that is how the 421 refusal itself is tested.
 func addressToPublicOrigin(request *http.Request, headers []Tuple2[string, string]) {
 	for _, header := range headers {

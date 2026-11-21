@@ -4497,7 +4497,7 @@ let parse_api_form s =
             (* An endpoint takes ONE `auth`, `body` and `response` clause: each is a single
                slot, and a repeated clause used to overwrite the first SILENTLY.  Two `auth`
                lines therefore dropped the first auth function — an `x-api-key` check written
-               above a second `auth` line simply stopped running (FRICTION.md item 22.1). *)
+               above a second `auth` line simply stopped running. *)
             let refuse_repeat clause already =
               if already && !ep_parse_err = None then
                 ep_parse_err := Some {

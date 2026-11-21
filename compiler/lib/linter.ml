@@ -665,7 +665,7 @@ let collect_decl_names acc (d : Ast.top_decl) =
     List.fold_left collect_test_stmt_names acc tf.stmts
   | DApiTest atf ->
     (* `api-test "…" for S` references S: an import used only there is not unused, and
-       removing it fails the module with "references unknown server" (FRICTION.md item 20). *)
+       removing it fails the module with "references unknown server". *)
     let acc = atf.server_name :: acc in
     let acc = List.fold_left collect_capability_name acc atf.capabilities in
     let acc = List.fold_left (fun a e -> collect_expr_names a e) acc atf.seed_stmts in
