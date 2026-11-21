@@ -1105,6 +1105,11 @@ let server_clause_dispositions (server : server_form) : unit =
    that something later consults — it is an argument to the one `ListenAndServe`. *)
 let server_listen_addresses : (string, string) Hashtbl.t = Hashtbl.create 4
 
+(* The server `main` serves, its port when that port is a literal, and its mount path — what
+   the binary's `healthcheck` command probes by default.  Set while the `serve` tail is
+   emitted. *)
+let served_server : (string * int option * string option) option ref = ref None
+
 (* Where the api-test response record lives in the record table.  It shares the Tesl name
    `HttpResponse` with `Tesl.HttpClient`'s outbound response — the checker has one opaque
    type for both, since field access on either is untyped — but the two have different
@@ -7118,6 +7123,8 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
      reaches `ServeOptions`.  The same seam the `server` clauses have, for the same reason. *)
   | EServe { server_name; port; static_dir; mount_path; capabilities; loc } ->
     serve_field_dispositions ~server_name ~port ~static_dir ~mount_path ~capabilities ~loc;
+    served_server := Some (server_name,
+      (match port with ELit { lit = LInt n; _ } -> Some n | _ -> None), mount_path);
     let options =
       String.concat ", "
         ([ Printf.sprintf "Port: teslrt.PortOf(%s)"
@@ -11514,8 +11521,39 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
   |> List.iter (fun info ->
     Buffer.add_char body '\n';
     Buffer.add_string body (line_directive info.ent_loc);
-    Printf.bprintf body "var %s = teslrt.NewTable[%s]()\n"
-      info.ent_table_var info.ent_row.rec_go_name);
+    (* A String column stored as `jsonb` comes back from PostgreSQL re-rendered — keys
+       reordered, whitespace replaced — so the memory table stores the same rendering, or a
+       test comparing the text would pass here and fail against the real database. *)
+    let jsonb_text_fields = List.filter_map (fun (field, ty) ->
+      let jsonb = match List.assoc_opt field info.ent_db_types with
+        | Some declared -> String.uppercase_ascii declared = "JSONB"
+        | None -> false
+      in
+      let go_field = "teslRow." ^ go_ident ~exported:true field in
+      let rec text_of path = function
+        | TString -> Some path
+        | TNewtype { secret = false; base; _ } -> text_of (path ^ ".Value") base
+        | _ -> None
+      in
+      if not jsonb then None
+      else match maybe_element ty with
+        | Some inner ->
+          Option.map (fun text ->
+            Printf.sprintf "\tif %s.Tag == teslrt.MaybeSomething {\n\t\t%s = teslrt.JsonbText(%s)\n\t}\n"
+              go_field text text)
+            (text_of (go_field ^ ".SomethingValue") inner)
+        | None ->
+          Option.map (fun text -> Printf.sprintf "\t%s = teslrt.JsonbText(%s)\n" text text)
+            (text_of go_field ty))
+      info.ent_row.rec_fields
+    in
+    if jsonb_text_fields = [] then
+      Printf.bprintf body "var %s = teslrt.NewTable[%s]()\n"
+        info.ent_table_var info.ent_row.rec_go_name
+    else
+      Printf.bprintf body "var %s = teslrt.NewTableNormalized(func(teslRow %s) %s {\n%s\treturn teslRow\n})\n"
+        info.ent_table_var info.ent_row.rec_go_name info.ent_row.rec_go_name
+        (String.concat "" jsonb_text_fields));
   (* A Postgres-backed `database` declaration becomes one value holding what a connection
      needs: the DSN parts, the schema, and the tables the bootstrap creates if they are absent.
      A Memory-backed declaration emits nothing at all — the store it names IS the entity's
@@ -14201,6 +14239,7 @@ let compile_module_internal ?(stage_preparation=false) ?(migration_metered=false
     let apis = List.filter_map (function DApi a -> Some a | _ -> None) m.decls in
     let servers = List.filter_map (function DServer s -> Some s | _ -> None) m.decls in
     Hashtbl.reset server_listen_addresses;
+    served_server := None;
     List.iter (fun (server : server_form) ->
       match server.listen_address with
       (* `Loopback` binds 127.0.0.1 only — the server sits behind a reverse proxy, and binding
@@ -17215,6 +17254,39 @@ let compile_module_internal ?(stage_preparation=false) ?(migration_metered=false
     let main_startup = if mode = Debug then
        "\tteslDebug, teslDebugErr := teslrt.StartDebugControlFromEnvironment()\n\tif teslDebugErr != nil {\n\t\tpanic(teslDebugErr)\n\t}\n\tif teslDebug != nil && os.Getenv(\"TESL_DEBUG_WAIT\") != \"\" {\n\t\tteslDebug.WaitForConfiguration()\n\t}\n\tif teslDebug != nil {\n\t\tdefer func() { _ = teslDebug.Close() }()\n\t}\n"
     else "" in
+    (* `healthcheck` answers whether the server is up WITHOUT starting one: a distroless image
+       has no shell or HTTP client, so the binary probes its own `healthProbePath`.  It is
+       dispatched before `Main()`, so a probe never connects to a database or runs a
+       migration. *)
+    let healthcheck = match !served_server with
+      | Some (served, literal_port, mount) when List.exists (fun (fd : func_decl) -> fd.kind = MainKind) funcs ->
+        List.find_map (fun (server : server_form) ->
+          if server.name <> served then None
+          else Option.map (fun path ->
+            let host = match Hashtbl.find_opt server_listen_addresses served with
+              | Some ("" | "0.0.0.0" | "::") | None -> "127.0.0.1"
+              | Some address -> address
+            in
+            Printf.sprintf
+              "\tif handled, code := teslrt.RunHealthcheckCommand(os.Args[1:], os.Stderr, %s, %d, %s); handled {\n\t\tos.Exit(code)\n\t}\n"
+              (go_quote host) (Option.value literal_port ~default:8080)
+              (go_quote (match mount with
+                 (* `healthProbePath` is api-relative: under a mount it moves with the api. *)
+                 | Some mount when mount <> "" && mount <> "/" ->
+                   (if String.ends_with ~suffix:"/" mount
+                    then String.sub mount 0 (String.length mount - 1) else mount) ^ path
+                 | _ -> path)))
+            server.health_probe_path) servers
+      | _ -> None
+    in
+    let main_imports = match healthcheck with
+      | Some _ when not (mode = Debug || schema_commands) ->
+        Printf.sprintf "%s\n\t%s\n\t%s" (go_quote "os")
+          (go_quote (module_path ^ "/internal/" ^ package))
+          (go_quote (module_path ^ "/internal/teslrt"))
+      | _ -> main_imports
+    in
+    let main_startup = Option.value healthcheck ~default:"" ^ main_startup in
     let main_startup = (if schema_commands then
       "\tif handled, code := teslrt.RunSchemaCommand(os.Args[1:], os.Stdout, os.Stderr); handled {\n\t\tos.Exit(code)\n\t}\n"
       else "") ^ main_startup in

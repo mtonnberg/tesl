@@ -121,7 +121,7 @@ func invalidateUserSessions(userId string) struct{} {
 	return teslrt.CacheInvalidatePrefix(SessionCacheStore, ("session:" + userId))
 }
 
-const teslCacheArtifactIdentity = "94d15dd716317a7c8bfb900651b15a2349290781c844287478fd100ff4050cd2"
+const teslCacheArtifactIdentity = "3d78ee19c2fa5e5e985fd7f39b6aecb0ab42bcb32b7ecf48f6cc6d185c57e615"
 
 //line lesson59-cache.tesl:86
 func teslCacheEncodeCounterCache(teslValue teslrt.Int) any {

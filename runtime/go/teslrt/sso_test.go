@@ -501,8 +501,10 @@ func TestSsoCallbackOpensAnInFlightCookieSealedUnderThePreviousKey(t *testing.T)
 // A missing sso variable is a startup error naming it, not a first-login failure.
 func TestPreflightSsoConfigurationNamesTheMissingVariable(t *testing.T) {
 	routes := []SsoRoute{{
-		Segment:    "idp",
-		Connection: func() SsoConnection { panic("requireEnv: environment variable TESL_OIDC_ISSUER is not set (or is empty)") },
+		Segment: "idp",
+		Connection: func() SsoConnection {
+			panic("requireEnv: environment variable TESL_OIDC_ISSUER is not set (or is empty)")
+		},
 		SessionKey: func() Secret { return Secret{Value: MakeSecret("k")} },
 	}}
 	err := preflightSsoConfiguration(routes)

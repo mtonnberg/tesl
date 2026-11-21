@@ -4196,6 +4196,66 @@ let test_failed_expectation_names_values () =
   Alcotest.(check int) "the secret-holding expectation names nothing" 1
     (count "teslT.Fatal(\"Tesl expectation failed\")")
 
+(* A distroless image has no shell or HTTP client, so the compiled binary answers its own
+   `healthcheck`: it probes `healthProbePath` (under the mount) on the literal port, and it is
+   dispatched before `Main()` so a probe never opens a database or runs a migration.  A server
+   with no probe path gets no subcommand. *)
+let health_probe_source = {|module HealthApp exposing [HealthServer, main]
+
+import Tesl.Prelude exposing [String]
+import Tesl.App exposing [App]
+import Tesl.Database exposing [Database, Memory]
+
+record HealthView { status: String }
+
+entity Note table "notes" primaryKey id {
+  id: String
+}
+
+database HealthDb = Database {
+  schema: "health"
+  entities: [Note]
+  backend: Memory
+}
+
+handler get healthz() -> HealthView =
+  HealthView { status: "ok" }
+
+api HealthApi {
+  get "/healthz"
+    -> HealthView
+}
+
+server HealthServer for HealthApi {
+  healthz
+  healthProbePath "/healthz"
+}
+
+main() -> App =
+  App {
+    database: HealthDb
+    api: HealthServer
+    port: 18777
+    mountPath: "/api"
+  }
+|}
+
+let test_healthcheck_subcommand () =
+  let main_go source =
+    artifact "cmd/app/main.go" (emit_ok "<go-healthcheck>" source) in
+  let with_probe = main_go health_probe_source in
+  Alcotest.(check bool) "probes the mounted path on the literal port" true
+    (contains with_probe
+       "teslrt.RunHealthcheckCommand(os.Args[1:], os.Stderr, \"127.0.0.1\", 18777, \"/api/healthz\")");
+  let dispatch = Str.search_forward (Str.regexp_string "RunHealthcheckCommand") with_probe 0 in
+  let startup = Str.search_forward (Str.regexp_string ".Main()") with_probe 0 in
+  Alcotest.(check bool) "dispatched before the startup chain" true (dispatch < startup);
+  let without_probe =
+    main_go (Str.global_replace (Str.regexp_string "  healthProbePath \"/healthz\"\n") ""
+               health_probe_source) in
+  Alcotest.(check bool) "no probe path, no subcommand" false
+    (contains without_probe "RunHealthcheckCommand")
+
 let test_record_columns_with_go () =
   let emitted = emit_ok "<record-column>" record_column_source in
   let regressions : Emit_go.artifact = {
@@ -13469,6 +13529,7 @@ let emission_tests =
       test_case "payload ADT JSON codecs" `Slow test_payload_adt_codecs_with_go;
       test_case "record payload ADT columns" `Slow test_record_columns_with_go;
       test_case "failed expectation names both values" `Quick test_failed_expectation_names_values;
+      test_case "binary healthcheck subcommand" `Quick test_healthcheck_subcommand;
     ]
 
 let () =

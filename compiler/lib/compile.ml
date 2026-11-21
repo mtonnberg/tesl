@@ -3794,12 +3794,23 @@ let mutate_go_file ?(extra_test_files=[]) filename : mutate_result =
                else { module_ with decls = module_.decls @ extra_test_decls }
              in
             let has_tests = List.exists (function DTest _ -> true | _ -> false) baseline.decls in
+            (* The baseline and every mutant are emitted the way `tesl test` emits the file:
+               with the local modules it imports, so a module whose tests run under
+               `tesl test` can be mutation-tested too.  The graph is resolved per module,
+               since the mutated module is the entry the lowering starts from. *)
+            let emit_module (module_ : Ast.module_form) =
+                match local_dependency_modules filename module_ with
+                | GoDepsError message ->
+                  Error [{ Emit_go.loc = Location.dummy_loc filename; message }]
+                | GoDeps { emit; entry_emit; _ } ->
+                  Emit_go.compile_project ~mode:Emit_go.Release ~entry:entry_emit emit
+            in
             if not has_tests then MutateErr "Go mutation baseline has NO TESTS (no runnable tests)"
             else
-              (match Emit_go.compile_module ~mode:Emit_go.Release baseline with
+              (match emit_module baseline with
                | Error (error :: _) -> MutateErr ("Go mutation baseline emit failed: " ^ error.message)
                | Error [] -> MutateErr "Go mutation baseline emit failed"
-               | Ok (artifacts, _exports) ->
+               | Ok artifacts ->
                  (match run_go_test_artifacts artifacts with
                   | GoBuildFailed output -> MutateErr ("Go mutation baseline did not compile:\n" ^ output)
                   | GoTestsFailed output -> MutateErr ("Go mutation baseline tests fail:\n" ^ output)
@@ -3810,10 +3821,10 @@ let mutate_go_file ?(extra_test_files=[]) filename : mutate_result =
                     let results = List.map (fun (mutant : Mutate.mutant) ->
                       let module_ = with_tests mutant.module_ in
                       let result =
-                        match Emit_go.compile_module ~mode:Emit_go.Release module_ with
+                        match emit_module module_ with
                         | Error (error :: _) -> Mutate.Error ("Go emit failed: " ^ error.message)
                         | Error [] -> Mutate.Error "Go emit failed"
-                        | Ok (artifacts, _exports) ->
+                        | Ok artifacts ->
                           (match run_go_test_artifacts artifacts with
                            | GoTestsPassed -> Mutate.Survived
                            | GoTestsFailed _ -> Mutate.Killed

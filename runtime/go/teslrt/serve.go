@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -11,6 +12,7 @@ import (
 	"os/signal"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -777,4 +779,40 @@ func PortOf(value Int) int {
 		panic("serve: port " + value.String() + " is not a valid TCP port (1-65535)")
 	}
 	return int(port)
+}
+
+// RunHealthcheckCommand is the compiled binary's `healthcheck` subcommand: `app healthcheck
+// [PORT]` asks the running server's `healthProbePath` whether it is up and exits 0 for a 2xx
+// answer, 1 otherwise. It exists for images with no shell or HTTP client (distroless), where
+// a container HEALTHCHECK can only run the binary itself. It never starts a server, opens a
+// database or runs a migration: it is dispatched before the program's startup chain.
+func RunHealthcheckCommand(args []string, stderr io.Writer, host string, port int, probePath string) (handled bool, exitCode int) {
+	if len(args) == 0 || args[0] != "healthcheck" {
+		return false, 0
+	}
+	if len(args) > 2 {
+		_, _ = fmt.Fprintln(stderr, "usage: healthcheck [PORT]")
+		return true, 2
+	}
+	if len(args) == 2 {
+		parsed, err := strconv.Atoi(args[1])
+		if err != nil || parsed < 1 || parsed > 65535 {
+			_, _ = fmt.Fprintf(stderr, "healthcheck: %q is not a port\n", args[1])
+			return true, 2
+		}
+		port = parsed
+	}
+	target := "http://" + net.JoinHostPort(host, strconv.Itoa(port)) + probePath
+	client := &http.Client{Timeout: 5 * time.Second}
+	response, err := client.Get(target)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "healthcheck: %s: %v\n", target, err)
+		return true, 1
+	}
+	_ = response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode > 299 {
+		_, _ = fmt.Fprintf(stderr, "healthcheck: %s answered %d\n", target, response.StatusCode)
+		return true, 1
+	}
+	return true, 0
 }

@@ -1,0 +1,78 @@
+module MemoryStoreParityTests exposing [Event, DocumentText, record_]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# `tesl test` runs against the in-memory store; production runs against PostgreSQL.
+# A program that passes its tests must behave the same on both.
+#
+# A `String` column declared `@db(jsonb)` does not round-trip byte for byte on
+# PostgreSQL: the server parses the text and gives back its own rendering — object keys
+# ordered by length then bytes, a repeated key keeping its last value, `": "` and `", "`
+# as separators, numbers folded to NUMERIC form.  The memory store stores that same
+# rendering, so a test comparing the text sees what production would serve.
+# ─────────────────────────────────────────────────────────────────────────────
+
+import Tesl.Prelude exposing [String]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.DB exposing [dbRead, dbWrite]
+import Tesl.Database exposing [Database, Memory]
+
+type DocumentText = String
+
+entity Event table "events" primaryKey id {
+  id: String
+  payload: String @db(jsonb)
+  note: Maybe String @db(jsonb)
+  document: DocumentText @db(jsonb)
+  label: String
+}
+
+database EventsDb = Database {
+  schema: "memory_store_parity"
+  entities: [Event]
+  backend: Memory
+}
+
+fn record_(id: String, payload: String) -> Event
+  requires [dbWrite Event] =
+  insert Event { id: id, payload: payload, note: Something "[1,2]", document: DocumentText "{\"b\":1,\"a\":2}", label: payload }
+
+fn payloadOf(id: String) -> Maybe String
+  requires [dbRead Event] =
+  let found = selectOne e from Event where e.id == id
+  case found of
+    Something event -> Something event.payload
+    Nothing -> Nothing
+
+test "a jsonb String column reads back in PostgreSQL's rendering" requires [dbRead Event, dbWrite Event] {
+  record_ "a" "{\"kind\":\"started\",\"worktreePath\":\"/w\",\"agent\":\"claude\"}"
+  expect payloadOf "a" == Something "{\"kind\": \"started\", \"agent\": \"claude\", \"worktreePath\": \"/w\"}"
+}
+
+test "a repeated key keeps its last value and numbers take NUMERIC form" requires [dbRead Event, dbWrite Event] {
+  record_ "b" "{\"n\":1.50e1,\"n\":2e1,\"z\":-0.0}"
+  expect payloadOf "b" == Something "{\"n\": 20, \"z\": 0.0}"
+}
+
+test "optional and newtype jsonb columns are rendered too; a text column is not" requires [dbRead Event, dbWrite Event] {
+  record_ "c" "{\"k\" : true}"
+  let found = selectOne e from Event where e.id == "c"
+  expect found == Something (Event {
+    id: "c",
+    payload: "{\"k\": true}",
+    note: Something "[1, 2]",
+    document: DocumentText "{\"a\": 2, \"b\": 1}",
+    label: "{\"k\" : true}",
+  })
+}
+
+test "an update stores the rendering as well" requires [dbRead Event, dbWrite Event] {
+  record_ "d" "{}"
+  update e in Event
+    where e.id == "d"
+    set e.payload = "{\"y\":[ ]}"
+  expect payloadOf "d" == Something "{\"y\": []}"
+}
+
+test "text PostgreSQL refuses as jsonb is refused here too" requires [dbWrite Event] {
+  expectFail record_ "e" "{not json"
+}
