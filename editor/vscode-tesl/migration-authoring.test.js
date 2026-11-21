@@ -7,7 +7,7 @@ const fs = require("node:fs");
 const { registerMigrationAuthoring, migrationLensLocations, previewItems, renderGuide, inside, codeHoleOffset, codeHoleRange } = require("./migration-authoring");
 
 function fixture(trusted = true) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "tesl-migration-editor-"));
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "tesl-migration-editor-")));
   const entryFile = path.join(root, "app.tesl");
   fs.writeFileSync(entryFile, "module App exposing []\n");
   fs.writeFileSync(path.join(root, "tesl.toml"), "");
@@ -333,7 +333,7 @@ test("welcome does nothing; Start creates the next revision before inviting sche
     assert.ok(f.panels[0].webview.html.includes("Start migration"));
     assert.ok(!f.panels[0].webview.html.includes("MIG003"));
     const prepared = await f.commands.get("tesl.migrationFlowAction")({ flowId: welcome.flowId, action: "start" });
-    assert.equal(prepared.stage, "edit");
+    assert.equal(prepared.stage, "edit", JSON.stringify(prepared));
     assert.equal(prepared.revision, 14);
     assert.equal([...f.state.values()][0].revision, 14, "remember only the committed draft");
     assert.equal(f.requests[0].params.arguments[0].newRevision, true);
@@ -361,6 +361,31 @@ test("editing before Start blocks preparation without silently refreshing the ol
     assert.ok(f.panels[0].webview.html.includes("Schema already edited?"));
     assert.equal(f.state.size, 0);
   } finally { f.cleanup(); }
+});
+
+test("Start works when the OS temporary directory has a symlinked ancestor", async () => {
+  const parent = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "tesl-mac-temp-")));
+  const target = path.join(parent, "real"), alias = path.join(parent, "alias");
+  fs.mkdirSync(target);
+  fs.symlinkSync(target, alias, "junction");
+  const tmpdir = os.tmpdir;
+  let f;
+  try {
+    os.tmpdir = () => alias;
+    f = fixture();
+    os.tmpdir = tmpdir;
+    f.client.initializeResult = { capabilities: { executeCommandProvider: { commands: ["tesl.applyMigration"] } } };
+    f.client.sendRequest = async (_method, params) => params.command === "tesl.generateMigration" ?
+      { ...f.preview, files: [{ path: path.join(f.root, "migrations/notes/v14.tesl"), creates: true }], operation: "start", revisionAfter: 14, compilable: true } :
+      { ok: true, sourceTransaction: { outcome: "committed" } };
+    const welcome = await f.commands.get("tesl.migrateDatabase")(f.uri(f.entryFile));
+    const result = await f.commands.get("tesl.migrationFlowAction")({ flowId: welcome.flowId, action: "start" });
+    assert.equal(result.stage, "edit", JSON.stringify(result));
+  } finally {
+    os.tmpdir = tmpdir;
+    f?.cleanup();
+    fs.rmSync(parent, { recursive: true, force: true });
+  }
 });
 
 test("unconfirmed Start outcome cannot create another revision; status can confirm preparation", async () => {

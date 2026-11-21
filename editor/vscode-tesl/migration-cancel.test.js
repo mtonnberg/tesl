@@ -7,7 +7,7 @@ const path = require("node:path");
 const { captureDraft, reviewCancellation, restoreDraft, restoreDiscardedDocuments } = require("./migration-cancel");
 
 function fixture({ cacheDeleted = false } = {}) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "tesl-cancel-"));
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "tesl-cancel-")));
   const schema = path.join(root, "schema/todo/v-current.tesl"), old = path.join(root, "migrations/todo/v13.tesl");
   const created = path.join(root, "migrations/todo/v14.tesl"), frozen = path.join(root, "schema/todo/v13.tesl");
   fs.mkdirSync(path.dirname(schema), { recursive: true }); fs.mkdirSync(path.dirname(old), { recursive: true });

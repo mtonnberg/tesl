@@ -235,7 +235,9 @@ func TestPgRowOptionalReverseBackfillActualApp(t *testing.T) {
 		t.Skip("compiler-generated optional reverse application required")
 	}
 	f, request := pgNewWorkerTest(t)
-	f.namespace = "notes"
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	t.Cleanup(cancel)
+	f.ctx, f.namespace = ctx, "notes"
 	run := func(version, mode string) { pgForwardNativeRun(t, f, root, version, mode, true) }
 	call := func(base, method, path string, status int) string {
 		return pgCallRowAccessApp(t, f.ctx, base, method, path, status)
@@ -244,7 +246,13 @@ func TestPgRowOptionalReverseBackfillActualApp(t *testing.T) {
 	run("v1", "worker")
 	v1 := pgStartRowAccessApp(t, f, root, "v1")
 	call(v1, "POST", "/one", 200)
-	run("v2", "worker")
+	pgRunRowWorkerUntil(t, f, root, "v2", 30*time.Second, func() bool {
+		var materialized bool
+		if err := request.QueryRow(f.ctx, "select exists(select 1 from notes.notes where id='one' and _tesl_v=2)").Scan(&materialized); err != nil {
+			t.Fatal(err)
+		}
+		return materialized
+	})
 	v2 := pgStartRowAccessApp(t, f, root, "v2")
 	var old, current string
 	var generation int

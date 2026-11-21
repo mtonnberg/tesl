@@ -218,6 +218,29 @@ func TestPgRowSettledActualApp(t *testing.T) {
 	t.Log("same V2 applications served across actual finality/contract, kept unrelated requests live while barrier busy, and used settled read/write projections after exact drops")
 }
 
+// Wait for a committed database observation, not merely Worker readiness. The
+// worker remains alive while it catches up and releases its lease on shutdown.
+func pgRunRowWorkerUntil(t *testing.T, f *pgControlTestFixture, root, version string, wait time.Duration, committed func() bool) {
+	t.Helper()
+	stop, done := pgStartSettledWorker(t, f, root, version)
+	defer stop()
+	deadline := time.NewTimer(wait)
+	defer deadline.Stop()
+	poll := time.NewTicker(20 * time.Millisecond)
+	defer poll.Stop()
+	for !committed() {
+		select {
+		case err := <-done:
+			t.Fatalf("worker exited before committing backfill: %v", err)
+		case <-deadline.C:
+			var progress string
+			err := f.worker.QueryRow(f.ctx, "select coalesce(jsonb_agg(to_jsonb(s))::text,'[]') from notes.tesl_schema_backfill_shards s").Scan(&progress)
+			t.Fatalf("worker did not commit the expected backfill within %s; progress=%s inspection=%v", wait, progress, err)
+		case <-poll.C:
+		}
+	}
+}
+
 // Keep the actual worker process alive past readiness; readiness itself only
 // promises admission/expansion, not completion of provisional backfill.
 func pgStartSettledWorker(t *testing.T, f *pgControlTestFixture, root, version string, extra ...string) (func(), <-chan error) {

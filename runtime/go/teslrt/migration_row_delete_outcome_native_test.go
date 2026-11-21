@@ -3,6 +3,7 @@
 package teslrt
 
 import (
+	"context"
 	"os"
 	"strings"
 	"testing"
@@ -21,7 +22,9 @@ func TestPgRowDeleteOutcomeActualApp(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			f, request := pgNewWorkerTest(t)
-			f.namespace = "notes"
+			ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+			t.Cleanup(cancel)
+			f.ctx, f.namespace = ctx, "notes"
 			run := func(version, mode string) { pgForwardNativeRun(t, f, root, version, mode, true) }
 			call := func(base, method, path string, status int) string {
 				return pgCallRowAccessApp(t, f.ctx, base, method, path, status)
@@ -92,13 +95,15 @@ func TestPgRowDeleteOutcomeActualApp(t *testing.T) {
 				if count() != 1 {
 					t.Fatal("crashed deletion did not roll back")
 				}
-				run("v2", "worker")
+				// Row leases last 60 seconds, independently of the index-worker
+				// lease setting. Wait for real fenced takeover after the crash.
+				pgRunRowWorkerUntil(t, f, root, "v2", 90*time.Second, func() bool { return count() == 0 })
 				if count() != 0 {
 					t.Fatal("worker did not publish explicit deletion")
 				}
 				call(v1, "POST", "/one", 200)
 				call(v1, "PUT", "/obsolete", 200)
-				run("v2", "worker")
+				pgRunRowWorkerUntil(t, f, root, "v2", 30*time.Second, func() bool { return count() == 0 })
 				if count() != 0 {
 					t.Fatal("worker did not rescan an old-writer recreation")
 				}

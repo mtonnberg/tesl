@@ -27,7 +27,7 @@ let command directory log text =
  if Sys.command (Printf.sprintf "cd %s && %s > %s 2>&1" (Filename.quote directory) text (Filename.quote log))<>0 then
   fail (text ^ "\n" ^ Source_input.read log)
 let export ?(delete_rows=false) ?(no_reverse=false) ~weaken ~remove_proof destination =
- let app=app |> replace "  put \"/touch-all\" -> String" "  put \"/touch-all\" -> String\n  put \"/mixed\" -> String\n  put \"/obsolete\" -> String" |>
+ let app=app |> replace "  put \"/touch\" -> String" "  put \"/touch\" -> String\n  put \"/mixed\" -> String\n  put \"/obsolete\" -> String" |>
    replace "touchAll, empty, invalid, repair, touch }" "touchAll, empty, invalid, repair, touch, mixed, obsolete }" in
  let app=app ^ {|
 handler put mixed() -> String requires [dbWrite Note] =

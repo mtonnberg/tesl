@@ -100,7 +100,7 @@ func TestNominalKeyPreservesCodecInput(t *testing.T) {
  for _, value := range []string{"", "null", "\"quote\"", "å/日本語"} {
   before := old.MakeNote(value)
   result := convert(before)
-  after := result.RowValue
+  after := result.KeepValue
   oldColumns, oldErr := old.TeslEncodeRowNote(before)
   newColumns, newErr := fresh.TeslEncodeRowNote(after)
   if oldErr != nil || newErr != nil || !reflect.DeepEqual(oldColumns[0], newColumns[0]) {
