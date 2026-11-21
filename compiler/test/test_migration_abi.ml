@@ -190,6 +190,23 @@ let nested_abi_refuses () = with_program (fun root _ _ _ changed _ ->
       let called = ref false in
       ignore (refuse (A.with_snapshot different (fun () -> called:=true)));
       check bool "nested generation cannot mix another ABI" false !called))))
+(* A history sealed under one stdlib must not look fine to ordinary checking
+   (agent-context, the editor) when the production build would refuse it. *)
+let check_reports_foreign_seal () = with_sources (fun root sources ->
+  let app = Filename.concat (Option.get (Sys.getenv_opt "TESL_REPO_ROOT")) "example/learn/db-proof-change/app.tesl" in
+  let foreign (d : Compile.diagnostic) = d.severity = "error" && d.code = "MIG013" in
+  let ds = Compile.check_source app (read app) in
+  check bool "the sealing stdlib checks clean" false (List.exists foreign ds);
+  let either = Filename.concat root "either.tesl" in
+  write either (List.assoc "either.tesl" sources ^ "\n# a comment-only stdlib edit\n");
+  let ds = Compile.check_source app (read app) in
+  let mismatches = List.filter foreign ds in
+  check bool "a diagnostic names the foreign seal" true (mismatches <> []);
+  let message = (List.hd mismatches).message in
+  check bool "repeats are the same diagnostic" true
+    (List.for_all (fun (d : Compile.diagnostic) -> d.message = message) mismatches);
+  check bool "it explains the stored-value contract" true
+    (Str.string_match (Str.regexp ".*different stored-value compatibility") message 0))
 let () = run "Compiler migration ABI" ["build and active sources",List.map (fun (name,f) -> test_case name `Quick f)
   ["stable actual identity",stable;"relocated stdlib resources",relocated;"each lifted source changes ABI",changed_source;
    "guarded input hashes",guarded_hashes;"additional source participates",extra_source;"missing required sources refuse",missing_sources;
@@ -199,4 +216,5 @@ let () = run "Compiler migration ABI" ["build and active sources",List.map (fun 
    "generation pins sources and refuses changed resources",snapshot_rejects_change;"ABA changes cannot mix checking inputs",snapshot_aba;
    "stale snapshot never starts",snapshot_stale;"callback exception restores resources",snapshot_exception;
    "resource snapshot preserves application view",project_view;"nested resource edits refuse",nested_edit_refuses;
-   "resource resolution remains fixed",snapshot_resolution;"nested different ABI refuses",nested_abi_refuses]]
+   "resource resolution remains fixed",snapshot_resolution;"nested different ABI refuses",nested_abi_refuses;
+   "ordinary checking reports a seal from another stdlib",check_reports_foreign_seal]]

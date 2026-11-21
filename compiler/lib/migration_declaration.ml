@@ -305,6 +305,22 @@ let prepare ?stored_value_compatibility ~compiler_abi ~source (m : module_form) 
             (Migration_seal.verify_semantics ~stored_value_compatibility:contract ~compiler_abi) in
           match result with Ok _ -> () | Error error ->
             reject "MIG013" error.loc error.message) [before;after]) source_seals) stored_value_compatibility;
+      (* Ordinary diagnostics do not re-derive the recorded semantics, but they
+         must not report a history as fine that the production build refuses
+         outright: a seal recorded under a different stored-value compatibility
+         contract (another compiler or stdlib) fails that build. *)
+      if stored_value_compatibility = None then
+        Option.iter (fun header -> match Migration_abi.current () with
+          | Error _ -> ()
+          | Ok abi ->
+            let current = Migration_abi.stored_value_compatibility abi in
+            let before,after = Migration_header.seals header in
+            if List.exists (fun seal -> match Migration_seal.stored_value_compatibility seal with
+                | Some recorded -> recorded <> current | None -> false) [before;after] then
+                reject "MIG013" declaration.loc
+                  "this migration history was sealed under a different stored-value compatibility \
+                   contract (another compiler or stdlib version); the production build refuses \
+                   it. Build with the compiler and stdlib that sealed it") source_seals;
       let closure = checked (Migration_closure.read ~file:m.source_file source) in
       Option.iter (fun located -> ignore (checked (Migration_closure.verify ~project_root
         ~root_file:(Validation_common.canonical_import_path m.source_file) ~source located))) closure;
