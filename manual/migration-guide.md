@@ -321,6 +321,14 @@ conversions retain their `Row`/`Reject` result unchanged.
 - `DeleteRow reason` explicitly selects the entire source row for deletion.
 - `RejectRow reason` retains unresolved data and prevents successful completion.
 
+A rejected stored row stays in its old representation. The ongoing Worker leaves
+it unconverted, keeps converting the other rows, and reports the entity and
+primary key on its standard error after each pass; the reason text is not
+repeated there. Contract refuses to retire the old version while the row remains
+and names the same key. Repair the row through the admitted old version, or
+change the migration's policy in a new undeployed revision, then let the Worker
+pass again.
+
 The Worker physically deletes only the exact source tuple it decoded, using the
 same generation, xmin, transaction-age and lease checks as backfill updates.
 Deletion, processing-ABI latching and progress commit together; crashes roll back
@@ -358,9 +366,10 @@ contextual fields and constructors with their requirements for manual authoring.
 
 `Same Old.Valid New.Valid` means the compiler verified the complete reached
 semantic closure, including the relevant checks, proof-producing functions,
-helpers and codecs. A matching name or carrier type is insufficient. Renaming a
-fact is not permission to change its meaning, and manually adding `Same` cannot
-bypass the closure check.
+helpers and codecs. A matching name or carrier type is insufficient, and manually
+adding `Same` cannot bypass the closure check. The closure includes the fact's
+name, so `Same` cannot express renaming a fact either: a renamed fact goes through
+the same `Retype` conversion as a changed one.
 
 | Your change | Supported decision |
 |---|---|
@@ -387,6 +396,24 @@ prove unchanged meaning or a lossless reverse conversion.
 Worked examples: [adding a proof](../example/learn/lesson89-proof-revalidation.md),
 [changing an existing proof](../example/learn/lesson90-changing-field-proofs.md),
 and [retaining old proofs while strengthening a field](../example/learn/lesson94-same-column-proof-strengthening.md).
+
+### What is checked at runtime, and what is trusted
+
+Proofs are checked where values are produced. A migration re-establishes them
+when it converts a row: every old-generation row a request or the Worker reads
+goes through the checked converter, including rows written by old application
+versions or by plain SQL that changed a column the old version can see. Rows
+already in the current representation are decoded without re-running checks on
+primitive proof fields. A field carried over with `Same` keeps its stored value,
+so data that never satisfied the old check is not re-validated by `Same` either.
+Proof-bearing record fields are different: their codec's `via` checks run on
+every decode.
+
+The database is therefore part of the trusted boundary. Writes made outside
+Tesl to current-representation columns, at any time, and to any column after
+Contract has dropped the old-write trigger, are served as already proven. Use
+`Revalidate` or a converter that calls the validator when existing data must
+be checked, and keep other writers away from Tesl-owned tables.
 
 ## Current schema edits and recorded hashes
 

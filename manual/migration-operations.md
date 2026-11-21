@@ -86,7 +86,9 @@ installed database UUID, fence and origin. The same role checks described above
 apply; two logins do not require separate commands or containers.
 
 Installation/setup is bounded by `TESL_SCHEMA_DEPLOY_TIMEOUT_SECONDS` (default
-600; range 1–86400). The ongoing Worker instead runs until a signal or cancellation
+600; range 1–86400). Connecting and the session identity checks use the shorter
+connection timeout `TESL_PG_POOL_LEASE_TIMEOUT_MS` (default 10 seconds); verifying
+and staging the retained history uses the deployment budget. The ongoing Worker instead runs until a signal or cancellation
 stops it. It performs the ordinary Worker's supported adjacent/additive expansion,
 row backfill and queue conversion, reports `schema-worker-ready`, and preserves
 old-version overlap. It does not finish the current target's Contract and does
@@ -329,6 +331,44 @@ an explicit `on: "unconverted"` discard decision. See [queue remediation](queue-
 for fixture, inspection, claim and audit obligations. Do not edit installed history
 or delete the audit to manufacture a retry. Purity/type checking is not a static termination
 proof; the budget is not hard intrinsic preemption or a memory sandbox.
+
+## How the Worker paces row conversion
+
+Each Worker batch covers the next `TESL_BACKFILL_BATCH` primary keys of a table
+(default 2000), whether or not those rows still need conversion. No single
+statement scans the whole table, so a very large table cannot exceed the batch
+budget just because most of its rows are already converted.
+
+Old writers can demote converted rows during overlap, so the Worker keeps
+passing over each table until Contract. A pass that converted nothing means the
+table was settled: the next pass waits one second, doubling up to 30 seconds,
+and any pass that converts a row resets the wait. Requests convert demoted rows
+themselves when they read them, and Contract makes its own final pass, so the
+wait delays neither correctness nor retirement.
+
+Publishing an expansion and retiring a version both need a moment when no
+request of the affected version is mid-transaction. The Worker first only tries
+for that moment. Under steady load it then waits in PostgreSQL's lock queue for
+at most 150 ms per attempt: new requests of that version wait behind it for at
+most that long while the in-flight ones finish. A transaction that stays open
+longer (an idle-in-transaction session, a long report) keeps the Worker waiting
+until it ends or the operation's deadline expires.
+
+## Backups and restores
+
+Back up and restore the whole database, not a single schema. Tesl's bookkeeping
+lives in the application's schema plus the shared `public.tesl_fence_namespaces`
+registry; a `pg_dump -n <schema>` omits that registry, and the restored schema
+then cannot be inspected or reinstalled.
+
+The installed database identity is ordinary data, so a restored backup, a
+point-in-time recovery, a promoted replica or a copy counts as the same
+installation at the version it held when copied. A binary whose expansion that
+database has not reached refuses to serve it, as for any other database behind
+its schema. Contract and additive-epoch closure are not reversible: a backup
+taken before them still admits the old version, while the live database no
+longer does. Decide which application image to run against a restored database
+from that database's `--schema status`, not from the image that last served it.
 
 ## Current scope
 

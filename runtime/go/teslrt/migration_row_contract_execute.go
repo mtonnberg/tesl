@@ -454,7 +454,7 @@ func pgRowFinalPass(ctx context.Context, coordinator *pgx.Conn, settings *pgx.Co
 				return err
 			}
 			for {
-				if _, err := pgRowBackfillBatch(ctx, batch, b, c.window, c.window.entity(window.entity), roles, lease); err != nil {
+				if _, err := pgRowBackfillBatch(ctx, batch, b, c.window, c.window.entity(window.entity), roles, lease, false); err != nil {
 					return err
 				}
 				migrationBoundary("row-finality-after-batch")

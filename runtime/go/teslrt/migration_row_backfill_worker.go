@@ -53,35 +53,48 @@ func pgRowBackfillBindingFor(database *Database, plan *pgRowPhysicalPlan, entity
 // One provisional batch has three distinct phases. No row lock, lease lock or
 // SQL transaction survives across execution of the arbitrary checked row
 // function. Only a fresh fenced CAS transaction can publish converted results.
-func pgRowBackfillBatch(ctx context.Context, conn *pgx.Conn, b *pgRowBaseline, plan *pgRowPhysicalPlan, entity *pgRowPhysicalEntity, roles PgMigrationControlRoles, lease pgRowLeaseAdmission) (int, error) {
+// pgRowBatchOutcome reports one batch: rows published, whether it completed a
+// pass over the whole table, and rows left unconverted because their checked
+// migration rejected them.
+type pgRowBatchOutcome struct {
+	changed   int
+	exhausted bool
+	rejected  []*pgRowRejectedError
+}
+
+// With skipRejected (the ordinary Worker) a rejected row stays unconverted and
+// the rest of the batch proceeds, so one bad row neither stops conversion of
+// the others nor stalls the cursor. Retirement still refuses while it remains:
+// Contract's final pass runs without skipRejected and fails on that row.
+func pgRowBackfillBatch(ctx context.Context, conn *pgx.Conn, b *pgRowBaseline, plan *pgRowPhysicalPlan, entity *pgRowPhysicalEntity, roles PgMigrationControlRoles, lease pgRowLeaseAdmission, skipRejected bool) (outcome pgRowBatchOutcome, err error) {
 	query, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	for {
-		changed, err := pgRowBackfillBatchAttempt(query, conn, b, plan, entity, roles, lease)
+		outcome, err = pgRowBackfillBatchAttempt(query, conn, b, plan, entity, roles, lease, skipRejected)
 		var server *pgconn.PgError
 		if !errors.As(err, &server) || server.Code != "40001" || query.Err() != nil || conn.IsClosed() {
-			return changed, err
+			return outcome, err
 		}
 		// Only a fully rolled-back internal batch is retried. Read current source
 		// again and rerun its checked pure conversion; no App callback is replayed.
 		if err := pgIndexWait(query, 10*time.Millisecond); err != nil {
-			return 0, err
+			return pgRowBatchOutcome{}, err
 		}
 	}
 }
 
-func pgRowBackfillBatchAttempt(ctx context.Context, conn *pgx.Conn, b *pgRowBaseline, plan *pgRowPhysicalPlan, entity *pgRowPhysicalEntity, roles PgMigrationControlRoles, lease pgRowLeaseAdmission) (int, error) {
+func pgRowBackfillBatchAttempt(ctx context.Context, conn *pgx.Conn, b *pgRowBaseline, plan *pgRowPhysicalPlan, entity *pgRowPhysicalEntity, roles PgMigrationControlRoles, lease pgRowLeaseAdmission, skipRejected bool) (pgRowBatchOutcome, error) {
 	binding, err := pgRowBackfillBindingFor(b.database, plan, entity)
 	if err != nil {
-		return 0, err
+		return pgRowBatchOutcome{}, err
 	}
 	limit, err := pgRowBackfillBatchSize()
 	if err != nil {
-		return 0, err
+		return pgRowBatchOutcome{}, err
 	}
 	query, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	var items []pgRowBackfillItem
+	var chunk pgRowBackfillChunk
 	err = pgControlTransaction(query, conn, false, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(query, "select "+pgx.Identifier{plan.namespace, "tesl_lock_row_lease"}.Sanitize()+"($1,$2,$3)", lease.leaseName, lease.leaseToken, lease.holder); err != nil {
 			return err
@@ -96,22 +109,29 @@ func pgRowBackfillBatchAttempt(ctx context.Context, conn *pgx.Conn, b *pgRowBase
 			return fmt.Errorf("backfill read lease belongs to another entity generation")
 		}
 		var err error
-		items, err = binding.read(query, tx, plan, entity, cursor, limit)
+		chunk, err = binding.read(query, tx, plan, entity, cursor, limit)
 		return err
 	})
 	if err != nil {
-		return 0, err
+		return pgRowBatchOutcome{}, err
 	}
 	migrationBoundary("row-backfill-after-read")
-	commits := make([]pgRowBackfillCommit, len(items))
-	for i, item := range items {
+	commits := make([]pgRowBackfillCommit, 0, len(chunk.items))
+	var rejected []*pgRowRejectedError
+	for _, item := range chunk.items {
 		if err := ctx.Err(); err != nil {
-			return 0, err
+			return pgRowBatchOutcome{}, err
 		}
-		commits[i], err = item.convert()
+		commit, err := item.convert()
+		var rejection *pgRowRejectedError
+		if skipRejected && errors.As(err, &rejection) {
+			rejected = append(rejected, rejection)
+			continue
+		}
 		if err != nil {
-			return 0, err
+			return pgRowBatchOutcome{}, err
 		}
+		commits = append(commits, commit)
 	}
 	migrationBoundary("row-backfill-after-conversion")
 	changed, err := pgWithRowWorkerTransaction(query, conn, b, plan, entity, roles, lease, func(a *pgRowTransactionAdmission) (int, error) {
@@ -120,18 +140,20 @@ func pgRowBackfillBatchAttempt(ctx context.Context, conn *pgx.Conn, b *pgRowBase
 		if err != nil {
 			return 0, err
 		}
+		// The cursor moves past the whole key range, including rows that were
+		// already converted; the range that reached the end completes the pass.
 		var cursor any
-		if len(items) > 0 {
-			cursor = []byte(items[len(items)-1].cursor)
+		if !chunk.exhausted {
+			cursor = []byte(chunk.next)
 		}
 		migrationBoundary("row-backfill-before-progress")
-		if _, err := a.tx.Exec(query, "select "+pgx.Identifier{plan.namespace, "tesl_record_row_progress"}.Sanitize()+"($1,$2,$3,$4,$5,$6)", lease.leaseName, lease.leaseToken, lease.holder, cursor, changed, len(items) == 0); err != nil {
+		if _, err := a.tx.Exec(query, "select "+pgx.Identifier{plan.namespace, "tesl_record_row_progress"}.Sanitize()+"($1,$2,$3,$4,$5,$6)", lease.leaseName, lease.leaseToken, lease.holder, cursor, changed, chunk.exhausted); err != nil {
 			return 0, err
 		}
 		migrationBoundary("row-backfill-after-progress")
 		return changed, nil
 	})
-	return changed, err
+	return pgRowBatchOutcome{changed: changed, exhausted: err == nil && chunk.exhausted, rejected: rejected}, err
 }
 
 // The setting belongs to this fixed entity and fenced Worker transaction, not

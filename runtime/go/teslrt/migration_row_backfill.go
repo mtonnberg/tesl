@@ -3,6 +3,7 @@ package teslrt
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -25,10 +26,33 @@ type pgRowBackfillStatement struct {
 }
 type pgRowBackfillBinding struct {
 	registration *pgRowRegistration
-	read         func(context.Context, pgx.Tx, *pgRowPhysicalPlan, *pgRowPhysicalEntity, json.RawMessage, int) ([]pgRowBackfillItem, error)
+	read         func(context.Context, pgx.Tx, *pgRowPhysicalPlan, *pgRowPhysicalEntity, json.RawMessage, int) (pgRowBackfillChunk, error)
+}
+
+// One batch covers a bounded primary-key range: the next `limit` keys after the
+// cursor, whether or not their rows still need conversion. A pass over a table
+// whose rows are already converted therefore never runs one unbounded scan.
+// next is the last key the range covered; exhausted means the range reached
+// the end of the table, which completes the pass.
+type pgRowBackfillChunk struct {
+	items     []pgRowBackfillItem
+	next      json.RawMessage
+	exhausted bool
 }
 
 var compiledRowBackfills = map[*pgRowRegistration]*pgRowBackfillBinding{}
+
+// pgRowRejectedError is a stored row its checked migration rejected. It names
+// the entity and primary key so an operator can find and repair the row; the
+// callback's reason text is not repeated, as for rejected queue payloads.
+type pgRowRejectedError struct {
+	entity string
+	key    json.RawMessage
+}
+
+func (e *pgRowRejectedError) Error() string {
+	return fmt.Sprintf("stored %s row with primary key %s was rejected by its checked migration", e.entity, e.key)
+}
 
 // Called by the compiler's typed access attachment with the registration mutex
 // held. This captures code and exact storage metadata; it performs no SQL and
@@ -43,21 +67,21 @@ func pgAttachRowBackfill[From, To any](storage *PgRowStorage[From, To]) error {
 	}
 	d := r.compiled.inventory.Transforms[r.index]
 	binding := &pgRowBackfillBinding{registration: r}
-	binding.read = func(ctx context.Context, tx pgx.Tx, plan *pgRowPhysicalPlan, entity *pgRowPhysicalEntity, cursor json.RawMessage, limit int) ([]pgRowBackfillItem, error) {
+	binding.read = func(ctx context.Context, tx pgx.Tx, plan *pgRowPhysicalPlan, entity *pgRowPhysicalEntity, cursor json.RawMessage, limit int) (chunk pgRowBackfillChunk, err error) {
 		if plan == nil || entity == nil || plan.compiled != r.compiled || plan.version != d.MigrationVersion || entity.identity != d.Entity || entity.generation != d.TargetGeneration || limit < 1 || limit > 10000 {
-			return nil, fmt.Errorf("backfill read differs from typed window")
+			return chunk, fmt.Errorf("backfill read differs from typed window")
 		}
 		previous, err := pgCompiledRowPredecessorPlan(r.database, plan.version)
 		if err != nil {
-			return nil, err
+			return chunk, err
 		}
 		old := previous.entity(entity.identity)
 		if old == nil {
-			return nil, fmt.Errorf("backfill lacks exact previous projection")
+			return chunk, fmt.Errorf("backfill lacks exact previous projection")
 		}
 		key := pgPhysicalPrimary(entity)
 		if key == "" || pgPhysicalPrimary(old) != key {
-			return nil, fmt.Errorf("backfill primary key differs")
+			return chunk, fmt.Errorf("backfill primary key differs")
 		}
 		columns := []string{quoteIdentifier("_tesl_v")}
 		for _, c := range entity.columns {
@@ -71,17 +95,37 @@ func pgAttachRowBackfill[From, To any](storage *PgRowStorage[From, To]) error {
 			// would collapse it to SQL NULL and lose the remainder of a pass.
 			cursorKey = "$1::jsonb"
 		}
-		sql := "select " + strings.Join(columns, ",") + ",xmin::text as tesl_xmin,pg_catalog.pg_current_xact_id()::text as tesl_xid8,pg_catalog.to_jsonb(" + quoteIdentifier(key) + ") as tesl_cursor,pg_catalog.clock_timestamp() as tesl_read_at from " + pgx.Identifier{plan.namespace, entity.table}.Sanitize() + " where \"_tesl_v\"=$2 and ($1::jsonb is null or " + quoteIdentifier(key) + ">" + cursorKey + ") order by " + quoteIdentifier(key) + " limit $3"
+		boundKey := strings.Replace(cursorKey, "$1::jsonb", "$4::jsonb", 1)
+		table := pgx.Identifier{plan.namespace, entity.table}.Sanitize()
 		var cursorArg any
 		if len(cursor) > 0 {
 			cursorArg = []byte(cursor)
 		}
-		readStarted := time.Now()
-		rows, err := tx.Query(ctx, sql, cursorArg, d.PreviousGeneration, limit)
-		if err != nil {
-			return nil, err
+		// The range's last key, found by walking at most `limit` primary-key
+		// entries. No row means fewer than `limit` keys remain: this range
+		// reaches the end of the table.
+		var bound []byte
+		if err := tx.QueryRow(ctx, "select pg_catalog.to_jsonb("+quoteIdentifier(key)+") from "+table+" where ($1::jsonb is null or "+quoteIdentifier(key)+">"+cursorKey+") order by "+quoteIdentifier(key)+" offset $2 limit 1", cursorArg, limit-1).Scan(&bound); err != nil {
+			if !errors.Is(err, pgx.ErrNoRows) {
+				return chunk, err
+			}
+			bound = nil
 		}
-		return pgx.CollectRows(rows, func(row pgx.CollectableRow) (pgRowBackfillItem, error) {
+		var boundArg any
+		if bound != nil {
+			boundArg = bound
+		}
+		sql := "select " + strings.Join(columns, ",") + ",xmin::text as tesl_xmin,pg_catalog.pg_current_xact_id()::text as tesl_xid8,pg_catalog.to_jsonb(" + quoteIdentifier(key) + ") as tesl_cursor,pg_catalog.clock_timestamp() as tesl_read_at from " + table + " where \"_tesl_v\"=$2 and ($1::jsonb is null or " + quoteIdentifier(key) + ">" + cursorKey + ") and ($4::jsonb is null or " + quoteIdentifier(key) + "<=" + boundKey + ") order by " + quoteIdentifier(key) + " limit $3"
+		readStarted := time.Now()
+		rows, err := tx.Query(ctx, sql, cursorArg, d.PreviousGeneration, limit, boundArg)
+		if err != nil {
+			return chunk, err
+		}
+		chunk.exhausted = bound == nil
+		if bound != nil {
+			chunk.next = json.RawMessage(bound)
+		}
+		chunk.items, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (pgRowBackfillItem, error) {
 			fields := row.FieldDescriptions()
 			count := len(columns)
 			if len(fields) != count+4 || fields[count].Name != "tesl_xmin" || fields[count+1].Name != "tesl_xid8" || fields[count+2].Name != "tesl_cursor" || fields[count+3].Name != "tesl_read_at" {
@@ -147,7 +191,7 @@ func pgAttachRowBackfill[From, To any](storage *PgRowStorage[From, To]) error {
 					return nil, err
 				}
 				if migrated.Tag != RowChangeKeep && migrated.Tag != RowChangeDelete {
-					return nil, fmt.Errorf("stored row rejected by checked backfill migration")
+					return nil, &pgRowRejectedError{entity: entity.identity, key: append(json.RawMessage(nil), keyJSON...)}
 				}
 				// The typed result is captured here after the read transaction has ended.
 				return func(a *pgRowTransactionAdmission) (pgRowBackfillStatement, error) {
@@ -166,6 +210,7 @@ func pgAttachRowBackfill[From, To any](storage *PgRowStorage[From, To]) error {
 			}
 			return item, nil
 		})
+		return chunk, err
 	}
 	compiledRowBackfills[r] = binding
 	return nil

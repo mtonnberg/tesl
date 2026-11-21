@@ -42,10 +42,9 @@ func TestPgRowRevalidateActualApp(t *testing.T) {
 	call(v1, "POST", "/one", 200)
 	call(v1, "PUT", "/invalid", 200)
 	marker(1, "")
-	// Expansion succeeds, but proof rejection must abort durable materialization.
-	if output := run("v2", "worker", false); !strings.Contains(string(output), "reject") {
-		t.Fatalf("worker failed for a reason other than checked rejection: %s", output)
-	}
+	// Expansion succeeds; the Worker leaves the rejected row unconverted,
+	// reports it and keeps running instead of exiting.
+	pgForwardNativeWorkerReportsRejection(t, f, root, "v2")
 	marker(1, "")
 	v2 := pgStartRowAccessApp(t, f, root, "v2")
 	call(v2, "GET", "/all", 500)
