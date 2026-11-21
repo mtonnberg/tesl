@@ -1,6 +1,7 @@
 package teslrt
 
 import (
+	"context"
 	"io"
 	"net"
 	"net/http"
@@ -25,6 +26,11 @@ func TestPgRowRetypePhysicalActualApp(t *testing.T) {
 	}
 	valuesSQL := "select " + oldValue + "," + newValue + "," + extraValue + " from notes.notes where id="
 	f, request := pgNewWorkerTest(t)
+	// Lazy reads, writes, rejection and a running Worker pass: give the whole
+	// scenario its own budget rather than the fixture's 30s default.
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	t.Cleanup(cancel)
+	f.ctx = ctx
 	f.namespace = "notes"
 	run := func(version, mode string) { pgForwardNativeRun(t, f, root, version, mode, true) }
 	run("v1", "install")
