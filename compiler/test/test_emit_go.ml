@@ -1418,21 +1418,21 @@ let test_string_stdlib_with_go () =
       ())
 
 let test_unsupported_string_exports_fail_closed () =
-  (* The boundary this pins keeps moving as leaves land: `String.trimLeft`/`trimRight` are
-     implemented now.  `List.findIndex` is still an unimplemented leaf of a supported module,
-     and the refusal must come from the frontend, before emission. *)
-  let unsupported = {|module ListFindIndex exposing [where_]
-import Tesl.Prelude exposing [Bool, Int, List]
-import Tesl.List exposing [List.findIndex]
-fn where_(xs: List Int) -> Int = 0
+  (* The boundary this pins keeps moving as leaves land: the List/Dict/Set callback
+     functions are implemented now.  `uuidV4Codec` is still an unimplemented export of a
+     supported module, and the refusal must come from the frontend, before emission. *)
+  let unsupported = {|module UuidCodecProbe exposing [name_]
+import Tesl.Prelude exposing [String]
+import Tesl.UUID exposing [uuidV4Codec]
+fn name_() -> String = "x"
 |} in
-  match Compile.compile_go_source "<go-list-findindex>" unsupported with
-  | Compile.GoSuccess _ -> fail "an unsupported Tesl.List export emitted Go artifacts"
+  match Compile.compile_go_source "<go-uuid-codec>" unsupported with
+  | Compile.GoSuccess _ -> fail "an unsupported Tesl.UUID export emitted Go artifacts"
   | Compile.GoFailure diagnostics ->
-    check bool "an unimplemented leaf is rejected before emission" true
+    check bool "an unimplemented export is rejected before emission" true
       (List.exists (fun (d : Compile.diagnostic) ->
          d.source <> "go-emitter"
-         && contains d.message "the Go backend does not implement `List.findIndex` from `Tesl.List`")
+         && contains d.message "the Go backend does not implement `uuidV4Codec` from `Tesl.UUID`")
         diagnostics)
 
 let list_source = {|module GoLists exposing [size, empty, firstOr, rest, joined, parts, top, dedup, ordered, hasTwo, both, prefix]
@@ -1548,15 +1548,10 @@ let test_unsupported_list_exports_fail_closed () =
         (List.exists (fun (d : Compile.diagnostic) ->
            contains d.message needle) diagnostics)
   in
-  (* `map`/`filter`/`foldl`/`foldr`/`any`/`all` are loops now, so this moved to the next
-     unimplemented higher-order leaf: an unimplemented leaf of a SUPPORTED module must
-     still fail closed rather than emit something plausible. *)
-  expect_go_error "unimplemented higher-order leaf"
-    "the Go backend does not implement `List.partition` from `Tesl.List`" {|module ListPartition exposing [split]
-import Tesl.Prelude exposing [Int, List]
-import Tesl.List exposing [List.partition]
-fn split(xs: List Int) -> List (List Int) = List.partition (fn(x: Int) -> x > 10) xs
-|};
+  (* Every documented higher-order `Tesl.List` function lowers now; the fail-closed rule
+     for an unimplemented export of a supported module is pinned with `uuidV4Codec` in
+     test_unsupported_string_exports_fail_closed. *)
+  ignore expect_go_error;
   (* `List.sum` on a non-Int list never reaches the emitter — the frontend's own
      signature rejects it — so the emitter's guard is containment, and what this pins
      is that the program is refused SOMEWHERE rather than emitted. *)

@@ -318,13 +318,14 @@ let test_h13_list_filter_named_fn () =
   should_pass src
 
 (* ── H14: `Dict.filter` is unavailable on the sole backend ────────────────── *)
-let test_h14_dict_filter_rejected_before_emission () =
+let test_h14_dict_filter_compiles () =
   let src = prelude ^
     "import Tesl.Dict exposing [Dict(..), Dict.filter, Dict.empty]\n" ^
     "fn test(d: Dict String Int) -> Dict String Int =\n" ^
     "  Dict.filter (fn(v: Int) -> v > 0) d\n"
   in
-  should_fail "Go backend does not implement.*Dict.filter" src
+  (* Implemented on the Go backend now: a value predicate over a Dict compiles. *)
+  should_pass src
 
 let test_h14b_dict_filter_two_param_predicate_rejected () =
   let src = prelude ^
@@ -601,8 +602,8 @@ let () =
                `Quick test_h12_lambda_with_proof_param_threads_proof ];
     "H13", [ test_case "List.filter with named Bool-returning fn compiles"
                `Quick test_h13_list_filter_named_fn ];
-    "H14", [ test_case "Dict.filter is rejected before backend emission"
-               `Quick test_h14_dict_filter_rejected_before_emission ];
+    "H14", [ test_case "Dict.filter with a value predicate compiles"
+               `Quick test_h14_dict_filter_compiles ];
     "H14b", [ test_case "Dict.filter with two-param predicate is a type error"
                 `Quick test_h14b_dict_filter_two_param_predicate_rejected ];
     "H15", [ test_case "mutual recursion across two fn declarations compiles"

@@ -147,7 +147,7 @@ let t_ctor_wildcard () =
   let item = find "Something" (header ^ "import Tesl.Maybe exposing [Maybe(..)]\nfn f() -> Int = Some<cursor>\n") in
   Alcotest.(check bool) "wildcard brings ctor in scope" false item.ci_requires_import
 
-let t_unavailable () = absent "List.findIndex" (expression "List.<cursor>")
+let t_unavailable () = absent "Email.send" (expression "Email.<cursor>")
 let t_opaque () = absent "MkCivilDate" (expression "<cursor>")
 
 let record_source tail = header ^ "record User {\n  name: String\n  age: Int\n}\nfn f(u: User) -> String = " ^ tail ^ "\n"

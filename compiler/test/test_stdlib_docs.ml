@@ -166,7 +166,8 @@ let t_search_type_boundaries () =
   Alcotest.(check int) "earlier nominal never relaxed" 0 (Builtin_search.search "F -> Float").total;
   Alcotest.(check int) "no invented types" 0 (Builtin_search.search "UnknownNominal -> Int").total;
   Alcotest.(check int) "combined name and type" 1 (Builtin_search.search "String.length :: String -> Int").total;
-  Alcotest.(check int) "unquantified scheme variables cannot become query generics" 0
+  (* `Dict.map` quantifies its key and value variables, so a generic query finds it. *)
+  Alcotest.(check int) "a quantified Dict scheme matches a generic query" 1
     (Builtin_search.search "Dict.map :: (a -> b) -> Dict k a -> Dict k b").total;
   Alcotest.(check int) "text-only syntax excluded" 0 (Builtin_search.search "List.map :: (a -> b) -> List a -> List b").total
 
@@ -182,8 +183,9 @@ let t_search_metadata () =
   let map = Builtin_search.entry_json (entry "List.map") in
   List.iter (fun needle -> if not (contains map needle) then Alcotest.failf "lost unknown: %s" needle)
     [ {|"type":null|}; {|"structural_status":"text-only"|}; {|"capabilities_status":"unavailable"|}; "requires c" ];
-  if not (contains (Builtin_search.entry_json (entry "Dict.map")) {|"structural_status":"incomplete-scheme"|}) then
-    Alcotest.fail "the current Dict.map scheme omits its key variable from quantification; expose that limitation";
+  (* Every type variable of `Dict.map`'s scheme is quantified, so its structure is complete. *)
+  if contains (Builtin_search.entry_json (entry "Dict.map")) {|"structural_status":"incomplete-scheme"|} then
+    Alcotest.fail "Dict.map's scheme is reported incomplete although every variable is quantified";
   let ids = List.map Builtin_search.id Builtin_search.entries in
   Alcotest.(check int) "unique stable IDs" (List.length ids) (List.length (List.sort_uniq compare ids));
   let e = entry "String.length" in
