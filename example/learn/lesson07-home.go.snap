@@ -93,7 +93,7 @@ func TestTesl0(teslT *testing.T) {
 //line lesson07-home.tesl:92
 							if !teslrt.Equal(teslrt.FromInt64(1), teslrt.FromInt64(1)) {
 //line lesson07-home.tesl:92
-								teslT.Fatal("Tesl expectation failed")
+								teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslrt.FromInt64(1)), teslrt.DescribeValue(teslrt.FromInt64(1)))
 							}
 						}
 					}
@@ -156,7 +156,7 @@ func TestTesl2(teslT *testing.T) {
 //line lesson07-home.tesl:105
 					if !teslrt.Equal(teslrt.FromInt64(1), teslrt.FromInt64(1)) {
 //line lesson07-home.tesl:105
-						teslT.Fatal("Tesl expectation failed")
+						teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslrt.FromInt64(1)), teslrt.DescribeValue(teslrt.FromInt64(1)))
 					}
 				}
 			}

@@ -118,7 +118,7 @@ func TestTesl0(teslT *testing.T) {
 //line lesson09-proof-composition.tesl:124
 							if !teslrt.Equal(teslrt.FromInt64(1), teslrt.FromInt64(1)) {
 //line lesson09-proof-composition.tesl:124
-								teslT.Fatal("Tesl expectation failed")
+								teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslrt.FromInt64(1)), teslrt.DescribeValue(teslrt.FromInt64(1)))
 							}
 						}
 					}
@@ -191,7 +191,7 @@ func TestTesl2(teslT *testing.T) {
 //line lesson09-proof-composition.tesl:139
 					if !teslrt.Equal(teslrt.FromInt64(1), teslrt.FromInt64(1)) {
 //line lesson09-proof-composition.tesl:139
-						teslT.Fatal("Tesl expectation failed")
+						teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslrt.FromInt64(1)), teslrt.DescribeValue(teslrt.FromInt64(1)))
 					}
 				}
 			}
@@ -257,7 +257,7 @@ func TestTesl4(teslT *testing.T) {
 //line lesson09-proof-composition.tesl:153
 						if r1 != "5: item" {
 //line lesson09-proof-composition.tesl:153
-							teslT.Fatal("Tesl expectation failed")
+							teslT.Fatalf("Tesl expectation failed: %q != %q", r1, "5: item")
 						}
 					}
 				}

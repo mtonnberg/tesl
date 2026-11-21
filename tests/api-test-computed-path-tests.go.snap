@@ -613,7 +613,7 @@ func TestTeslApi10(teslT *testing.T) {
 //line api-test-computed-path-tests.tesl:203
 			if !teslrt.Equal(teslLeft1, teslrt.FromInt64(404)) {
 //line api-test-computed-path-tests.tesl:203
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft1), teslrt.DescribeValue(teslrt.FromInt64(404)))
 			}
 		}
 	}

@@ -131,25 +131,25 @@ func TestTesl0(teslT *testing.T) {
 //line lesson58-httpclient.tesl:200
 	if teslLeft1 != "success" {
 //line lesson58-httpclient.tesl:200
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft1, "success")
 	}
 	teslLeft2 := ClassifyStatusCode(teslrt.FromInt64(201))
 //line lesson58-httpclient.tesl:201
 	if teslLeft2 != "success" {
 //line lesson58-httpclient.tesl:201
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft2, "success")
 	}
 	teslLeft3 := ClassifyStatusCode(teslrt.FromInt64(204))
 //line lesson58-httpclient.tesl:202
 	if teslLeft3 != "success" {
 //line lesson58-httpclient.tesl:202
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft3, "success")
 	}
 	teslLeft4 := ClassifyStatusCode(teslrt.FromInt64(299))
 //line lesson58-httpclient.tesl:203
 	if teslLeft4 != "success" {
 //line lesson58-httpclient.tesl:203
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft4, "success")
 	}
 }
 
@@ -170,25 +170,25 @@ func TestTesl1(teslT *testing.T) {
 //line lesson58-httpclient.tesl:207
 	if teslLeft5 != "client-error" {
 //line lesson58-httpclient.tesl:207
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft5, "client-error")
 	}
 	teslLeft6 := ClassifyStatusCode(teslrt.FromInt64(404))
 //line lesson58-httpclient.tesl:208
 	if teslLeft6 != "client-error" {
 //line lesson58-httpclient.tesl:208
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft6, "client-error")
 	}
 	teslLeft7 := ClassifyStatusCode(teslrt.FromInt64(422))
 //line lesson58-httpclient.tesl:209
 	if teslLeft7 != "client-error" {
 //line lesson58-httpclient.tesl:209
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft7, "client-error")
 	}
 	teslLeft8 := ClassifyStatusCode(teslrt.FromInt64(429))
 //line lesson58-httpclient.tesl:210
 	if teslLeft8 != "client-error" {
 //line lesson58-httpclient.tesl:210
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft8, "client-error")
 	}
 }
 
@@ -209,19 +209,19 @@ func TestTesl2(teslT *testing.T) {
 //line lesson58-httpclient.tesl:214
 	if teslLeft9 != "server-error" {
 //line lesson58-httpclient.tesl:214
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft9, "server-error")
 	}
 	teslLeft10 := ClassifyStatusCode(teslrt.FromInt64(502))
 //line lesson58-httpclient.tesl:215
 	if teslLeft10 != "server-error" {
 //line lesson58-httpclient.tesl:215
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft10, "server-error")
 	}
 	teslLeft11 := ClassifyStatusCode(teslrt.FromInt64(503))
 //line lesson58-httpclient.tesl:216
 	if teslLeft11 != "server-error" {
 //line lesson58-httpclient.tesl:216
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft11, "server-error")
 	}
 }
 
@@ -242,19 +242,19 @@ func TestTesl3(teslT *testing.T) {
 //line lesson58-httpclient.tesl:220
 	if teslLeft12 != "redirect-or-info" {
 //line lesson58-httpclient.tesl:220
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft12, "redirect-or-info")
 	}
 	teslLeft13 := ClassifyStatusCode(teslrt.FromInt64(302))
 //line lesson58-httpclient.tesl:221
 	if teslLeft13 != "redirect-or-info" {
 //line lesson58-httpclient.tesl:221
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft13, "redirect-or-info")
 	}
 	teslLeft14 := ClassifyStatusCode(teslrt.FromInt64(100))
 //line lesson58-httpclient.tesl:222
 	if teslLeft14 != "redirect-or-info" {
 //line lesson58-httpclient.tesl:222
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft14, "redirect-or-info")
 	}
 }
 
@@ -324,13 +324,13 @@ func TestTesl5(teslT *testing.T) {
 //line lesson58-httpclient.tesl:236
 		if teslLeft15 != "Authorization" {
 //line lesson58-httpclient.tesl:236
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft15, "Authorization")
 		}
 		teslLeft16 := h.Tuple2Second
 //line lesson58-httpclient.tesl:237
 		if teslLeft16 != "Bearer mytoken123" {
 //line lesson58-httpclient.tesl:237
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft16, "Bearer mytoken123")
 		}
 	}
 }
@@ -356,7 +356,7 @@ func TestTesl6(teslT *testing.T) {
 //line lesson58-httpclient.tesl:242
 		if teslLeft17 != "Bearer sk-abc123xyz" {
 //line lesson58-httpclient.tesl:242
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft17, "Bearer sk-abc123xyz")
 		}
 	}
 }
@@ -384,13 +384,13 @@ func TestTesl7(teslT *testing.T) {
 //line lesson58-httpclient.tesl:254
 		if !teslrt.Equal(teslLeft18, teslrt.FromInt64(200)) {
 //line lesson58-httpclient.tesl:254
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft18), teslrt.DescribeValue(teslrt.FromInt64(200)))
 		}
 		teslLeft19 := resp.Body
 //line lesson58-httpclient.tesl:255
 		if teslLeft19 != "{\"usd\": 110}" {
 //line lesson58-httpclient.tesl:255
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft19, "{\"usd\": 110}")
 		}
 //line lesson58-httpclient.tesl:256
 		if !(IsSuccessCode(resp.Status)) {
@@ -428,19 +428,19 @@ func TestTesl8(teslT *testing.T) {
 //line lesson58-httpclient.tesl:263
 		if !teslrt.Equal(teslLeft20, teslrt.FromInt64(202)) {
 //line lesson58-httpclient.tesl:263
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft20), teslrt.DescribeValue(teslrt.FromInt64(202)))
 		}
 		teslLeft21 := teslrt.HttpLastBody("POST", "https://api.example.com/events")
 //line lesson58-httpclient.tesl:264
 		if teslLeft21 != "{\"kind\": \"signup\"}" {
 //line lesson58-httpclient.tesl:264
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft21, "{\"kind\": \"signup\"}")
 		}
 		teslLeft22 := teslrt.HttpCallCount("POST", "https://api.example.com/events")
 //line lesson58-httpclient.tesl:265
 		if !teslrt.Equal(teslLeft22, teslrt.FromInt64(1)) {
 //line lesson58-httpclient.tesl:265
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft22), teslrt.DescribeValue(teslrt.FromInt64(1)))
 		}
 	}
 }
@@ -468,7 +468,7 @@ func TestTesl9(teslT *testing.T) {
 //line lesson58-httpclient.tesl:271
 		if teslLeft23 != "server-error" {
 //line lesson58-httpclient.tesl:271
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft23, "server-error")
 		}
 //line lesson58-httpclient.tesl:272
 		if IsSuccessCode(resp.Status) {
@@ -501,7 +501,7 @@ func TestTesl10(teslT *testing.T) {
 //line lesson58-httpclient.tesl:278
 		if !teslrt.Equal(teslLeft24, teslrt.FromInt64(200)) {
 //line lesson58-httpclient.tesl:278
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft24), teslrt.DescribeValue(teslrt.FromInt64(200)))
 		}
 //line lesson58-httpclient.tesl:279
 		if !(teslrt.StringContains(resp.Body, "not json")) {
@@ -576,13 +576,13 @@ func TestTesl13(teslT *testing.T) {
 //line lesson58-httpclient.tesl:295
 		if !teslrt.Equal(teslLeft25, teslrt.FromInt64(200)) {
 //line lesson58-httpclient.tesl:295
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft25), teslrt.DescribeValue(teslrt.FromInt64(200)))
 		}
 		teslLeft26 := teslrt.HttpCallCount("GET", "https://api.example.com/me")
 //line lesson58-httpclient.tesl:296
 		if !teslrt.Equal(teslLeft26, teslrt.FromInt64(1)) {
 //line lesson58-httpclient.tesl:296
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft26), teslrt.DescribeValue(teslrt.FromInt64(1)))
 		}
 	}
 }

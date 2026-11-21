@@ -4145,6 +4145,57 @@ fn remove(id: String) -> Unit requires [dbWrite Work] =
   delete w from Work where w.id == id
 |}
 
+(* A failed `expect a == b` names both values, so the test output says what differed.  A
+   constructor value prints as its JSON, which names the constructor; a value that can hold a
+   `secret` prints nothing, since a test log is still a log. *)
+let failed_expectation_source = {|module GoExpectMessage exposing [Shape(..), Token, twice]
+
+import Tesl.Prelude exposing [Int, String]
+
+type Shape
+  = Circle radius: Int
+  | Square side: Int
+
+secret Token = String
+
+record Holder { token: Token }
+
+fn twice(n: Int) -> Int =
+  n * 2
+
+test "ints" {
+  expect twice 2 == 4
+}
+
+test "constructors" {
+  expect Circle { radius: 1 } == Circle { radius: 1 }
+}
+
+test "secrets" {
+  expect Holder { token: Token "a" } == Holder { token: Token "a" }
+}
+|}
+
+let test_failed_expectation_names_values () =
+  let emitted = emit_ok "<go-expect-message>" failed_expectation_source in
+  let test_go = artifact "internal/teslmodgoexpectmessage/module_test.go" emitted in
+  let count needle =
+    let rec go from acc =
+      match Str.search_forward (Str.regexp_string needle) test_go from with
+      | index -> go (index + 1) (acc + 1)
+      | exception Not_found -> acc
+    in
+    go 0 0
+  in
+  Alcotest.(check bool) "an Int expectation prints both values" true
+    (contains test_go "teslrt.DescribeValue(");
+  Alcotest.(check bool) "a constructor expectation prints its JSON" true
+    (contains test_go "teslrt.EncodeJSONValue(");
+  Alcotest.(check int) "two expectations name values" 2
+    (count "Tesl expectation failed: %s != %s\"");
+  Alcotest.(check int) "the secret-holding expectation names nothing" 1
+    (count "teslT.Fatal(\"Tesl expectation failed\")")
+
 let test_record_columns_with_go () =
   let emitted = emit_ok "<record-column>" record_column_source in
   let regressions : Emit_go.artifact = {
@@ -4388,7 +4439,7 @@ let test_server_clauses_with_go () =
     [ "publicOrigin", "teslrt.SetPublicOriginValue(\"https://app.example.test\")";
       "sessionPolicy", "teslrt.SetSessionPolicy(teslrt.SessionPolicyTTL(\"ShortSession\"))";
       "sessionPreviousKey",
-        "teslrt.SetPreviousSessionKey(teslrt.SecretPointer(teslrt.RequireSecret(\"GOCLAUSES_PREVIOUS_KEY\")))";
+        "teslrt.SetPreviousSessionKeyEnv(\"GOCLAUSES_PREVIOUS_KEY\")";
       "sessionRevoked", "teslrt.SetSessionRevokedHook(func(teslSubject string, teslIssuedAt int64) bool {";
       "healthProbePath", "teslrt.SetHealthProbePath(\"/healthz\")";
        "contentSecurityPolicy", "teslrt.SetContentSecurityPolicy(\"default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self'\")";
@@ -13417,6 +13468,7 @@ let emission_tests =
       test_case "fresh module passes Go gates" `Slow test_generated_module_with_go;
       test_case "payload ADT JSON codecs" `Slow test_payload_adt_codecs_with_go;
       test_case "record payload ADT columns" `Slow test_record_columns_with_go;
+      test_case "failed expectation names both values" `Quick test_failed_expectation_names_values;
     ]
 
 let () =

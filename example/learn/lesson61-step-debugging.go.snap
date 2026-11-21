@@ -116,7 +116,7 @@ func TestTesl0(teslT *testing.T) {
 //line lesson61-step-debugging.tesl:175
 			if !teslrt.Equal(result, teslrt.FromInt64(0)) {
 //line lesson61-step-debugging.tesl:175
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(result), teslrt.DescribeValue(teslrt.FromInt64(0)))
 			}
 		}
 	}
@@ -145,7 +145,7 @@ func TestTesl1(teslT *testing.T) {
 //line lesson61-step-debugging.tesl:181
 			if !teslrt.Equal(result, teslrt.FromInt64(100)) {
 //line lesson61-step-debugging.tesl:181
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(result), teslrt.DescribeValue(teslrt.FromInt64(100)))
 			}
 		}
 	}
@@ -174,7 +174,7 @@ func TestTesl2(teslT *testing.T) {
 //line lesson61-step-debugging.tesl:187
 			if !teslrt.Equal(result, teslrt.FromInt64(75)) {
 //line lesson61-step-debugging.tesl:187
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(result), teslrt.DescribeValue(teslrt.FromInt64(75)))
 			}
 		}
 	}
@@ -252,7 +252,7 @@ func TestTesl5(teslT *testing.T) {
 //line lesson61-step-debugging.tesl:203
 	if teslLeft4 != "A" {
 //line lesson61-step-debugging.tesl:203
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft4, "A")
 	}
 }
 
@@ -272,7 +272,7 @@ func TestTesl6(teslT *testing.T) {
 //line lesson61-step-debugging.tesl:207
 	if teslLeft5 != "B" {
 //line lesson61-step-debugging.tesl:207
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft5, "B")
 	}
 }
 
@@ -292,7 +292,7 @@ func TestTesl7(teslT *testing.T) {
 //line lesson61-step-debugging.tesl:211
 	if teslLeft6 != "C" {
 //line lesson61-step-debugging.tesl:211
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft6, "C")
 	}
 }
 
@@ -312,6 +312,6 @@ func TestTesl8(teslT *testing.T) {
 //line lesson61-step-debugging.tesl:215
 	if teslLeft7 != "F" {
 //line lesson61-step-debugging.tesl:215
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft7, "F")
 	}
 }

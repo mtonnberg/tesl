@@ -181,9 +181,10 @@ let t_both_clauses_coexist () =
   (try ignore (Str.search_forward (Str.regexp "SetPublicOriginValue") out 0)
    with Not_found -> failf "expected SetPublicOriginValue in:\n%s" out)
 
-(* OQ11: `publicOrigin fromEnv "VAR"` reads the origin from the env var at boot. *)
+(* `publicOrigin fromEnv "VAR"` names the variable at boot; it is read when the origin is
+   needed, and `Serve` refuses to start when it is unset. *)
 let t_public_origin_from_env_is_set () =
-  should_emit "SetPublicOriginValue.*RequireEnv.*PUBLIC_ORIGIN"
+  should_emit "SetPublicOriginEnv(\"[A-Z_]*PUBLIC_ORIGIN\")"
     (server_prog "publicOrigin fromEnv \"PUBLIC_ORIGIN\"")
 
 (* OQ11: a loopback http origin is accepted (dev). *)
@@ -319,9 +320,9 @@ let t_session_revoked_unknown_fn () =
 (* ── The `sessionPreviousKey` server clause (Phase 3): key rotation ───────────── *)
 
 let t_previous_key_sets_the_param () =
-  (* Sets current-previous-session-key at boot, wrapped in the bootstrap-trust
-     marker (a load-time provider read).  Requires a current key too. *)
-  should_emit "SetPreviousSessionKey.*RequireSecret.*PREV"
+  (* Names the variable at boot; it is read when a token is verified, and `Serve` refuses
+     to start when it is unset.  Requires a current key too. *)
+  should_emit "SetPreviousSessionKeyEnv.*PREV"
     (server_prog "sessionKey \"CUR\"\n  sessionPreviousKey \"PREV\"")
 
 let t_no_previous_key_sets_none () =

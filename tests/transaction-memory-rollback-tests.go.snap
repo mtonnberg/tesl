@@ -116,13 +116,13 @@ func TestTesl0(teslT *testing.T) {
 //line transaction-memory-rollback-tests.tesl:42
 	if !teslrt.Equal(teslLeft1, teslrt.FromInt64(2)) {
 //line transaction-memory-rollback-tests.tesl:42
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft1), teslrt.DescribeValue(teslrt.FromInt64(2)))
 	}
 	teslLeft2 := countEntries()
 //line transaction-memory-rollback-tests.tesl:43
 	if !teslrt.Equal(teslLeft2, teslrt.FromInt64(2)) {
 //line transaction-memory-rollback-tests.tesl:43
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft2), teslrt.DescribeValue(teslrt.FromInt64(2)))
 	}
 }
 
@@ -147,7 +147,7 @@ func TestTesl1(teslT *testing.T) {
 //line transaction-memory-rollback-tests.tesl:48
 	if !teslrt.Equal(teslLeft3, teslrt.FromInt64(0)) {
 //line transaction-memory-rollback-tests.tesl:48
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft3), teslrt.DescribeValue(teslrt.FromInt64(0)))
 	}
 }
 

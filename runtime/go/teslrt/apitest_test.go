@@ -50,3 +50,15 @@ func TestApiRequestAddressesThePublicOrigin(t *testing.T) {
 		t.Fatalf("an explicit foreign Host must still be refused, got %s", foreign.Status.String())
 	}
 }
+
+func TestDescribeValueRendersJsonAndScalars(t *testing.T) {
+	if got := DescribeValue(JsonParseBody(`{"a":1}`)); got != `{"a":1}` {
+		t.Errorf("json = %s", got)
+	}
+	if got := DescribeValue(FromInt64(421)); got != "421" {
+		t.Errorf("int = %s", got)
+	}
+	if got := DescribeValue("x"); got != `"x"` {
+		t.Errorf("string = %s", got)
+	}
+}

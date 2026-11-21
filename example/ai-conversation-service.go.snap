@@ -613,13 +613,13 @@ func TestTesl0(teslT *testing.T) {
 //line ai-conversation-service.tesl:326
 		if teslLeft1 != "shipped" {
 //line ai-conversation-service.tesl:326
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft1, "shipped")
 		}
 		teslLeft2 := LookupOrderStatus("ord-unknown")
 //line ai-conversation-service.tesl:327
 		if teslLeft2 != "no such order" {
 //line ai-conversation-service.tesl:327
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft2, "no such order")
 		}
 	}
 }
@@ -666,7 +666,7 @@ func TestTesl1(teslT *testing.T) {
 //line ai-conversation-service.tesl:339
 						if reply != "Order ord-2 has been delivered." {
 //line ai-conversation-service.tesl:339
-							teslT.Fatal("Tesl expectation failed")
+							teslT.Fatalf("Tesl expectation failed: %q != %q", reply, "Order ord-2 has been delivered.")
 						}
 					}
 				}
@@ -703,7 +703,7 @@ func TestTesl2(teslT *testing.T) {
 //line ai-conversation-service.tesl:348
 				if r1 != "Hi Alice." {
 //line ai-conversation-service.tesl:348
-					teslT.Fatal("Tesl expectation failed")
+					teslT.Fatalf("Tesl expectation failed: %q != %q", r1, "Hi Alice.")
 				}
 				{
 //line ai-conversation-service.tesl:349
@@ -712,7 +712,7 @@ func TestTesl2(teslT *testing.T) {
 //line ai-conversation-service.tesl:350
 					if r2 != "Sure \xe2\x80\x94 more." {
 //line ai-conversation-service.tesl:350
-						teslT.Fatal("Tesl expectation failed")
+						teslT.Fatalf("Tesl expectation failed: %q != %q", r2, "Sure \xe2\x80\x94 more.")
 					}
 				}
 			}
@@ -756,7 +756,7 @@ func TestTesl3(teslT *testing.T) {
 //line ai-conversation-service.tesl:361
 						if !teslrt.Equal(teslLeft6, teslrt.FromInt64(0)) {
 //line ai-conversation-service.tesl:361
-							teslT.Fatal("Tesl expectation failed")
+							teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft6), teslrt.DescribeValue(teslrt.FromInt64(0)))
 						}
 					}
 				}

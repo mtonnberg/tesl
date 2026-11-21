@@ -190,7 +190,7 @@ func TestTesl0(teslT *testing.T) {
 //line lesson51-proof-combining.tesl:184
 	if teslLeft1 != "Alice / Alice" {
 //line lesson51-proof-combining.tesl:184
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft1, "Alice / Alice")
 	}
 }
 
@@ -210,6 +210,6 @@ func TestTesl1(teslT *testing.T) {
 //line lesson51-proof-combining.tesl:188
 	if teslLeft2 != "alice@example.com / alice@example.com" {
 //line lesson51-proof-combining.tesl:188
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft2, "alice@example.com / alice@example.com")
 	}
 }

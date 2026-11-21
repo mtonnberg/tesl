@@ -623,13 +623,13 @@ func TestTesl3(teslT *testing.T) {
 //line sql-maybe-in-tuple-tests.tesl:196
 		if teslLeft1 != "secret" {
 //line sql-maybe-in-tuple-tests.tesl:196
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft1, "secret")
 		}
 		teslLeft2 := secondSlotSurvives(tuple2NestedMaybe("missing"))
 //line sql-maybe-in-tuple-tests.tesl:197
 		if teslLeft2 != "secret" {
 //line sql-maybe-in-tuple-tests.tesl:197
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft2, "secret")
 		}
 	}
 }
@@ -793,13 +793,13 @@ func TestTesl9(teslT *testing.T) {
 //line sql-maybe-in-tuple-tests.tesl:232
 		if !teslrt.Equal(teslLeft3, teslrt.FromInt64(1)) {
 //line sql-maybe-in-tuple-tests.tesl:232
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft3), teslrt.DescribeValue(teslrt.FromInt64(1)))
 		}
 		teslLeft4 := listNestedCount(listNested("missing"))
 //line sql-maybe-in-tuple-tests.tesl:233
 		if !teslrt.Equal(teslLeft4, teslrt.FromInt64(1)) {
 //line sql-maybe-in-tuple-tests.tesl:233
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft4), teslrt.DescribeValue(teslrt.FromInt64(1)))
 		}
 	}
 }

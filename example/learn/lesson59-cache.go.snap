@@ -121,7 +121,7 @@ func invalidateUserSessions(userId string) struct{} {
 	return teslrt.CacheInvalidatePrefix(SessionCacheStore, ("session:" + userId))
 }
 
-const teslCacheArtifactIdentity = "7925c09f2aca0f1688ce50c656137deff3a91845ab7a7e15171ffe757c756102"
+const teslCacheArtifactIdentity = "94d15dd716317a7c8bfb900651b15a2349290781c844287478fd100ff4050cd2"
 
 //line lesson59-cache.tesl:86
 func teslCacheEncodeCounterCache(teslValue teslrt.Int) any {
@@ -184,6 +184,34 @@ func TestMain(teslM *testing.M) {
 	os.Exit(testExitCode)
 }
 
+func teslEncode3(teslValue teslrt.Maybe[string]) any {
+	return func() any {
+		switch teslValue.Tag {
+		case teslrt.MaybeNothing:
+			return map[string]any{"tag": "Nothing"}
+		case teslrt.MaybeSomething:
+			return map[string]any{"tag": "Something", "fields": map[string]any{
+				"value": teslEncode2(teslValue.SomethingValue),
+			}}
+		}
+		panic("unreachable: checker guarantees case exhaustiveness")
+	}()
+}
+
+func teslEncode4(teslValue teslrt.Maybe[teslrt.Int]) any {
+	return func() any {
+		switch teslValue.Tag {
+		case teslrt.MaybeNothing:
+			return map[string]any{"tag": "Nothing"}
+		case teslrt.MaybeSomething:
+			return map[string]any{"tag": "Something", "fields": map[string]any{
+				"value": teslEncode1(teslValue.SomethingValue),
+			}}
+		}
+		panic("unreachable: checker guarantees case exhaustiveness")
+	}()
+}
+
 func TestTesl0(teslT *testing.T) {
 	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "cache miss returns Nothing" && teslWanted != "TestTesl0" {
 		teslT.Skip("named test filter")
@@ -205,7 +233,7 @@ func TestTesl0(teslT *testing.T) {
 //line lesson59-cache.tesl:216
 		if result.Tag != teslRight1.Tag || (result.Tag == teslrt.MaybeSomething && (result.SomethingValue != teslRight1.SomethingValue)) {
 //line lesson59-cache.tesl:216
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.EncodeJSONValue(teslEncode3(result)), teslrt.EncodeJSONValue(teslEncode3(teslRight1)))
 		}
 	}
 }
@@ -234,7 +262,7 @@ func TestTesl1(teslT *testing.T) {
 //line lesson59-cache.tesl:222
 			if result.Tag != teslRight2.Tag || (result.Tag == teslrt.MaybeSomething && (result.SomethingValue != teslRight2.SomethingValue)) {
 //line lesson59-cache.tesl:222
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.EncodeJSONValue(teslEncode3(result)), teslrt.EncodeJSONValue(teslEncode3(teslRight2)))
 			}
 		}
 	}
@@ -267,7 +295,7 @@ func TestTesl2(teslT *testing.T) {
 //line lesson59-cache.tesl:229
 				if result.Tag != teslRight3.Tag || (result.Tag == teslrt.MaybeSomething && (result.SomethingValue != teslRight3.SomethingValue)) {
 //line lesson59-cache.tesl:229
-					teslT.Fatal("Tesl expectation failed")
+					teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.EncodeJSONValue(teslEncode3(result)), teslrt.EncodeJSONValue(teslEncode3(teslRight3)))
 				}
 			}
 		}
@@ -294,7 +322,7 @@ func TestTesl3(teslT *testing.T) {
 //line lesson59-cache.tesl:234
 		if result != "default-profile" {
 //line lesson59-cache.tesl:234
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %q != %q", result, "default-profile")
 		}
 	}
 }
@@ -322,7 +350,7 @@ func TestTesl4(teslT *testing.T) {
 //line lesson59-cache.tesl:240
 			if result != "profile-data" {
 //line lesson59-cache.tesl:240
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %q != %q", result, "profile-data")
 			}
 		}
 	}
@@ -352,7 +380,7 @@ func TestTesl5(teslT *testing.T) {
 //line lesson59-cache.tesl:246
 			if result.Tag != teslRight6.Tag || (result.Tag == teslrt.MaybeSomething && !teslrt.Equal(result.SomethingValue, teslRight6.SomethingValue)) {
 //line lesson59-cache.tesl:246
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.EncodeJSONValue(teslEncode4(result)), teslrt.EncodeJSONValue(teslEncode4(teslRight6)))
 			}
 		}
 	}
@@ -385,7 +413,7 @@ func TestTesl6(teslT *testing.T) {
 //line lesson59-cache.tesl:253
 				if result.Tag != teslRight7.Tag || (result.Tag == teslrt.MaybeSomething && (result.SomethingValue != teslRight7.SomethingValue)) {
 //line lesson59-cache.tesl:253
-					teslT.Fatal("Tesl expectation failed")
+					teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.EncodeJSONValue(teslEncode3(result)), teslrt.EncodeJSONValue(teslEncode3(teslRight7)))
 				}
 			}
 		}
@@ -416,7 +444,7 @@ func TestTesl7(teslT *testing.T) {
 //line lesson59-cache.tesl:259
 			if result.Tag != teslRight8.Tag || (result.Tag == teslrt.MaybeSomething && (result.SomethingValue != teslRight8.SomethingValue)) {
 //line lesson59-cache.tesl:259
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.EncodeJSONValue(teslEncode3(result)), teslrt.EncodeJSONValue(teslEncode3(teslRight8)))
 			}
 		}
 	}
@@ -453,13 +481,13 @@ func TestTesl8(teslT *testing.T) {
 //line lesson59-cache.tesl:267
 					if r1.Tag != teslRight9.Tag || (r1.Tag == teslrt.MaybeSomething && (r1.SomethingValue != teslRight9.SomethingValue)) {
 //line lesson59-cache.tesl:267
-						teslT.Fatal("Tesl expectation failed")
+						teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.EncodeJSONValue(teslEncode3(r1)), teslrt.EncodeJSONValue(teslEncode3(teslRight9)))
 					}
 					teslRight10 := teslrt.Maybe[teslrt.Int]{Tag: teslrt.MaybeSomething, SomethingValue: teslrt.FromInt64(100)}
 //line lesson59-cache.tesl:268
 					if r2.Tag != teslRight10.Tag || (r2.Tag == teslrt.MaybeSomething && !teslrt.Equal(r2.SomethingValue, teslRight10.SomethingValue)) {
 //line lesson59-cache.tesl:268
-						teslT.Fatal("Tesl expectation failed")
+						teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.EncodeJSONValue(teslEncode4(r2)), teslrt.EncodeJSONValue(teslEncode4(teslRight10)))
 					}
 				}
 			}
@@ -501,13 +529,13 @@ func TestTesl9(teslT *testing.T) {
 //line lesson59-cache.tesl:277
 						if r1.Tag != teslRight11.Tag || (r1.Tag == teslrt.MaybeSomething && (r1.SomethingValue != teslRight11.SomethingValue)) {
 //line lesson59-cache.tesl:277
-							teslT.Fatal("Tesl expectation failed")
+							teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.EncodeJSONValue(teslEncode3(r1)), teslrt.EncodeJSONValue(teslEncode3(teslRight11)))
 						}
 						teslRight12 := teslrt.Maybe[string]{Tag: teslrt.MaybeNothing}
 //line lesson59-cache.tesl:278
 						if r2.Tag != teslRight12.Tag || (r2.Tag == teslrt.MaybeSomething && (r2.SomethingValue != teslRight12.SomethingValue)) {
 //line lesson59-cache.tesl:278
-							teslT.Fatal("Tesl expectation failed")
+							teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.EncodeJSONValue(teslEncode3(r2)), teslrt.EncodeJSONValue(teslEncode3(teslRight12)))
 						}
 					}
 				}

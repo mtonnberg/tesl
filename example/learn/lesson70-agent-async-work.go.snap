@@ -572,7 +572,7 @@ func TestTeslApi0(teslT *testing.T) {
 //line lesson70-agent-async-work.tesl:341
 		if !teslrt.Equal(teslLeft1, teslrt.FromInt64(1)) {
 //line lesson70-agent-async-work.tesl:341
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft1), teslrt.DescribeValue(teslrt.FromInt64(1)))
 		}
 	}
 }
@@ -611,7 +611,7 @@ func TestTeslApi1(teslT *testing.T) {
 //line lesson70-agent-async-work.tesl:352
 			if !teslrt.Equal(teslLeft2, teslrt.FromInt64(1)) {
 //line lesson70-agent-async-work.tesl:352
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft2), teslrt.DescribeValue(teslrt.FromInt64(1)))
 			}
 			{
 //line lesson70-agent-async-work.tesl:355
@@ -644,13 +644,13 @@ func TestTeslApi1(teslT *testing.T) {
 //line lesson70-agent-async-work.tesl:357
 					if teslLeft3 != "conv-1" {
 //line lesson70-agent-async-work.tesl:357
-						teslT.Fatal("Tesl expectation failed")
+						teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft3, "conv-1")
 					}
 					teslLeft4 := teslrt.PendingJobCount(ReportQueueQueue)
 //line lesson70-agent-async-work.tesl:358
 					if !teslrt.Equal(teslLeft4, teslrt.FromInt64(0)) {
 //line lesson70-agent-async-work.tesl:358
-						teslT.Fatal("Tesl expectation failed")
+						teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft4), teslrt.DescribeValue(teslrt.FromInt64(0)))
 					}
 					{
 //line lesson70-agent-async-work.tesl:362

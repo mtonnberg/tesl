@@ -366,7 +366,7 @@ func TestTeslApi0(teslT *testing.T) {
 //line agent-run-tests.tesl:194
 			if !teslrt.Equal(teslLeft1, teslrt.FromInt64(1)) {
 //line agent-run-tests.tesl:194
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft1), teslrt.DescribeValue(teslrt.FromInt64(1)))
 			}
 			{
 //line agent-run-tests.tesl:197
@@ -399,13 +399,13 @@ func TestTeslApi0(teslT *testing.T) {
 //line agent-run-tests.tesl:199
 					if teslLeft2 != "please echo" {
 //line agent-run-tests.tesl:199
-						teslT.Fatal("Tesl expectation failed")
+						teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft2, "please echo")
 					}
 					teslLeft3 := teslrt.PendingJobCount(RunQueueQueue)
 //line agent-run-tests.tesl:200
 					if !teslrt.Equal(teslLeft3, teslrt.FromInt64(0)) {
 //line agent-run-tests.tesl:200
-						teslT.Fatal("Tesl expectation failed")
+						teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft3), teslrt.DescribeValue(teslrt.FromInt64(0)))
 					}
 					{
 //line agent-run-tests.tesl:203

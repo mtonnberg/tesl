@@ -325,7 +325,7 @@ func TestTeslApi0(teslT *testing.T) {
 //line lesson80-testing-sso.tesl:210
 		if !teslrt.Equal(teslLeft1, teslrt.FromInt64(421)) {
 //line lesson80-testing-sso.tesl:210
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft1), teslrt.DescribeValue(teslrt.FromInt64(421)))
 		}
 	}
 }
@@ -354,7 +354,7 @@ func TestTeslApi1(teslT *testing.T) {
 //line lesson80-testing-sso.tesl:215
 		if !teslrt.Equal(teslLeft2, teslrt.FromInt64(401)) {
 //line lesson80-testing-sso.tesl:215
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft2), teslrt.DescribeValue(teslrt.FromInt64(401)))
 		}
 	}
 }
@@ -416,7 +416,7 @@ func TestTeslApi3(teslT *testing.T) {
 //line lesson80-testing-sso.tesl:228
 		if !teslrt.Equal(teslLeft3, teslrt.FromInt64(303)) {
 //line lesson80-testing-sso.tesl:228
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft3), teslrt.DescribeValue(teslrt.FromInt64(303)))
 		}
 //line lesson80-testing-sso.tesl:229
 		{
@@ -474,7 +474,7 @@ func TestTeslApi4(teslT *testing.T) {
 //line lesson80-testing-sso.tesl:241
 		if !teslrt.Equal(teslLeft4, teslrt.FromInt64(303)) {
 //line lesson80-testing-sso.tesl:241
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft4), teslrt.DescribeValue(teslrt.FromInt64(303)))
 		}
 //line lesson80-testing-sso.tesl:242
 		if !(teslrt.HttpCalled("GET", "https://idp.example.test/.well-known/openid-configuration")) {
@@ -594,7 +594,7 @@ func TestTeslApi5(teslT *testing.T) {
 //line lesson80-testing-sso.tesl:273
 							if !teslrt.Equal(teslLeft5, teslrt.FromInt64(303)) {
 //line lesson80-testing-sso.tesl:273
-								teslT.Fatal("Tesl expectation failed")
+								teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft5), teslrt.DescribeValue(teslrt.FromInt64(303)))
 							}
 //line lesson80-testing-sso.tesl:275
 							{

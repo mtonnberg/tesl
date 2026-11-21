@@ -530,10 +530,7 @@ func IntFromFloat(value float64) Int {
 
 // IntDigits is `Int.digits`: the number of decimal digits in abs(n); zero has one.
 func IntDigits(value Int) Int {
-	text := value.String()
-	if strings.HasPrefix(text, "-") {
-		text = text[1:]
-	}
+	text := strings.TrimPrefix(value.String(), "-")
 	return FromInt64(int64(len(text)))
 }
 

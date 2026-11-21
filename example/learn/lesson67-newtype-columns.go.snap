@@ -80,6 +80,36 @@ func TestMain(teslM *testing.M) {
 	os.Exit(testExitCode)
 }
 
+func teslEncode1(teslValue string) any {
+	return teslValue
+}
+
+func teslEncode2(teslValue Sku) any {
+	return teslEncode1(teslValue.Value)
+}
+
+func teslEncode3(teslValue teslrt.Int) any {
+	return teslValue
+}
+
+func teslEncode4(teslValue Product) any {
+	return map[string]any{
+		"id":       teslEncode1(teslValue.Id),
+		"sku":      teslEncode2(teslValue.Sku),
+		"quantity": teslEncode3(teslValue.Quantity),
+	}
+}
+
+func teslEncode5(teslValue []Product) any {
+	return func() any {
+		teslOut := make([]any, len(teslValue))
+		for teslAt, teslItem := range teslValue {
+			teslOut[teslAt] = teslEncode4(teslItem)
+		}
+		return teslOut
+	}()
+}
+
 func teslEqualProduct(teslX, teslY Product) bool {
 	return ((teslX.Id == teslY.Id) && (teslX.Sku.Value == teslY.Sku.Value) && teslrt.Equal(teslX.Quantity, teslY.Quantity))
 }
@@ -104,7 +134,7 @@ func TestTesl0(teslT *testing.T) {
 //line lesson67-newtype-columns.tesl:65
 		if !teslrt.Equal(teslLeft1, teslrt.FromInt64(10)) {
 //line lesson67-newtype-columns.tesl:65
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft1), teslrt.DescribeValue(teslrt.FromInt64(10)))
 		}
 	}
 }
@@ -130,7 +160,7 @@ func TestTesl1(teslT *testing.T) {
 //line lesson67-newtype-columns.tesl:70
 		if !teslrt.ListEqualBy(teslLeft2, teslRight2, teslEqualProduct) {
 //line lesson67-newtype-columns.tesl:70
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.EncodeJSONValue(teslEncode5(teslLeft2)), teslrt.EncodeJSONValue(teslEncode5(teslRight2)))
 		}
 	}
 }
@@ -164,14 +194,14 @@ func TestTesl2(teslT *testing.T) {
 //line lesson67-newtype-columns.tesl:79
 		if !teslrt.Equal(teslLeft3, teslrt.FromInt64(99)) {
 //line lesson67-newtype-columns.tesl:79
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft3), teslrt.DescribeValue(teslrt.FromInt64(99)))
 		}
 		teslLeft4 := FindBySku("OLD-SKU")
 		teslRight4 := []Product{}
 //line lesson67-newtype-columns.tesl:80
 		if !teslrt.ListEqualBy(teslLeft4, teslRight4, teslEqualProduct) {
 //line lesson67-newtype-columns.tesl:80
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.EncodeJSONValue(teslEncode5(teslLeft4)), teslrt.EncodeJSONValue(teslEncode5(teslRight4)))
 		}
 	}
 }

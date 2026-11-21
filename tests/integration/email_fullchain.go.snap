@@ -102,7 +102,7 @@ func TestTesl0(teslT *testing.T) {
 //line email_fullchain.tesl:63
 	if teslLeft1 != teslRight1 {
 //line email_fullchain.tesl:63
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %t != %t", teslLeft1, teslRight1)
 	}
 }
 
@@ -124,7 +124,7 @@ func TestTesl1(teslT *testing.T) {
 //line email_fullchain.tesl:67
 	if teslLeft2 != teslRight2 {
 //line email_fullchain.tesl:67
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %t != %t", teslLeft2, teslRight2)
 	}
 }
 

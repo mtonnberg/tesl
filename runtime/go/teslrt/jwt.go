@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -105,7 +106,23 @@ func SessionPolicyTTL(name string) int {
 var (
 	previousSessionKeyMutex sync.RWMutex
 	previousSessionKey      *Secret
+	// previousSessionKeyEnv is `sessionPreviousKey "VAR"`, read when a token is verified rather
+	// than at package load (where a missing variable panicked before `main` and in tests).
+	previousSessionKeyEnv string
 )
+
+// SetPreviousSessionKeyEnv installs the rotation overlap from an environment variable.
+func SetPreviousSessionKeyEnv(name string) {
+	previousSessionKeyMutex.Lock()
+	defer previousSessionKeyMutex.Unlock()
+	previousSessionKeyEnv = name
+}
+
+func previousSessionKeyEnvName() string {
+	previousSessionKeyMutex.RLock()
+	defer previousSessionKeyMutex.RUnlock()
+	return previousSessionKeyEnv
+}
 
 // SecretPointer is the one-line adapter the emitter needs: `SetPreviousSessionKey` takes a
 // pointer so that "no previous key" is a distinct state from "the empty secret", and an emitted
@@ -163,6 +180,10 @@ func sessionKeys(current Secret) []string {
 	keys := []string{current.Value.Reveal()}
 	if previousSessionKey != nil {
 		keys = append(keys, previousSessionKey.Value.Reveal())
+	} else if previousSessionKeyEnv != "" {
+		if previous := os.Getenv(previousSessionKeyEnv); previous != "" {
+			keys = append(keys, previous)
+		}
 	}
 	return keys
 }

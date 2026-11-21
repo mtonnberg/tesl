@@ -84,7 +84,7 @@ func TestTesl0(teslT *testing.T) {
 //line lesson07-consumer.tesl:81
 		if r1 != "processing 5: hello" {
 //line lesson07-consumer.tesl:81
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %q != %q", r1, "processing 5: hello")
 		}
 		{
 //line lesson07-consumer.tesl:82
@@ -93,7 +93,7 @@ func TestTesl0(teslT *testing.T) {
 //line lesson07-consumer.tesl:83
 			if r2 != "processing 0: " {
 //line lesson07-consumer.tesl:83
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %q != %q", r2, "processing 0: ")
 			}
 			{
 //line lesson07-consumer.tesl:84
@@ -102,7 +102,7 @@ func TestTesl0(teslT *testing.T) {
 //line lesson07-consumer.tesl:85
 				if r3 != "processing 1000: max" {
 //line lesson07-consumer.tesl:85
-					teslT.Fatal("Tesl expectation failed")
+					teslT.Fatalf("Tesl expectation failed: %q != %q", r3, "processing 1000: max")
 				}
 			}
 		}
@@ -215,7 +215,7 @@ func TestTesl0(teslT *testing.T) {
 //line lesson07-home.tesl:92
 							if !teslrt.Equal(teslrt.FromInt64(1), teslrt.FromInt64(1)) {
 //line lesson07-home.tesl:92
-								teslT.Fatal("Tesl expectation failed")
+								teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslrt.FromInt64(1)), teslrt.DescribeValue(teslrt.FromInt64(1)))
 							}
 						}
 					}
@@ -278,7 +278,7 @@ func TestTesl2(teslT *testing.T) {
 //line lesson07-home.tesl:105
 					if !teslrt.Equal(teslrt.FromInt64(1), teslrt.FromInt64(1)) {
 //line lesson07-home.tesl:105
-						teslT.Fatal("Tesl expectation failed")
+						teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslrt.FromInt64(1)), teslrt.DescribeValue(teslrt.FromInt64(1)))
 					}
 				}
 			}

@@ -105,13 +105,13 @@ func TestTesl0(teslT *testing.T) {
 //line lesson62-ai-agents.tesl:109
 					if teslLeft1 != "It is sunny in Paris right now." {
 //line lesson62-ai-agents.tesl:109
-						teslT.Fatal("Tesl expectation failed")
+						teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft1, "It is sunny in Paris right now.")
 					}
 					teslLeft2 := teslrt.ReplyToolCalls(reply)
 //line lesson62-ai-agents.tesl:110
 					if !teslrt.Equal(teslLeft2, teslrt.FromInt64(1)) {
 //line lesson62-ai-agents.tesl:110
-						teslT.Fatal("Tesl expectation failed")
+						teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft2), teslrt.DescribeValue(teslrt.FromInt64(1)))
 					}
 				}
 			}
@@ -151,13 +151,13 @@ func TestTesl1(teslT *testing.T) {
 //line lesson62-ai-agents.tesl:120
 					if teslLeft3 != "All set!" {
 //line lesson62-ai-agents.tesl:120
-						teslT.Fatal("Tesl expectation failed")
+						teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft3, "All set!")
 					}
 					teslLeft4 := teslrt.ReplyToolCalls(reply)
 //line lesson62-ai-agents.tesl:121
 					if !teslrt.Equal(teslLeft4, teslrt.FromInt64(1)) {
 //line lesson62-ai-agents.tesl:121
-						teslT.Fatal("Tesl expectation failed")
+						teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft4), teslrt.DescribeValue(teslrt.FromInt64(1)))
 					}
 				}
 			}
@@ -197,13 +197,13 @@ func TestTesl2(teslT *testing.T) {
 //line lesson62-ai-agents.tesl:131
 					if teslLeft5 != "I could not look that up." {
 //line lesson62-ai-agents.tesl:131
-						teslT.Fatal("Tesl expectation failed")
+						teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft5, "I could not look that up.")
 					}
 					teslLeft6 := teslrt.ReplyToolCalls(reply)
 //line lesson62-ai-agents.tesl:132
 					if !teslrt.Equal(teslLeft6, teslrt.FromInt64(1)) {
 //line lesson62-ai-agents.tesl:132
-						teslT.Fatal("Tesl expectation failed")
+						teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft6), teslrt.DescribeValue(teslrt.FromInt64(1)))
 					}
 				}
 			}

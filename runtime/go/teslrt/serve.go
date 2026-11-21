@@ -57,6 +57,10 @@ func Serve(server Server, options ServeOptions) struct{} {
 	if port == 0 {
 		port = 8080
 	}
+	if err := preflightBootConfiguration(server); err != nil {
+		fmt.Fprintf(os.Stderr, "tesl: cannot start: %v\n", err)
+		os.Exit(1)
+	}
 	handler := server.handlerWith(options)
 	httpServer := newHTTPServer(handler, bindAddress(options), serveWriteTimeout)
 	// Graceful: an interrupt stops accepting and lets in-flight requests finish, so a deploy does
@@ -82,6 +86,50 @@ func Serve(server Server, options ServeOptions) struct{} {
 		panic("serve: " + err.Error())
 	}
 	return struct{}{}
+}
+
+// preflightSsoConfiguration reads every `sso` clause's connection and session key once, at
+// boot. They stay thunks — a test sets the environment per case, and provider discovery is
+// still deferred to the first login — but a missing `TESL_OIDC_*` or session-key variable is
+// now a startup error naming the variable, instead of a server that boots and then answers
+// the first sign-in with a generic failure page.
+// preflightBootConfiguration is every boot-time configuration read a server needs, checked
+// before it listens so a missing variable is one line naming it.
+func preflightBootConfiguration(server Server) error {
+	publicOriginMutex.RLock()
+	fromEnv := publicOriginEnv
+	publicOriginMutex.RUnlock()
+	if fromEnv != "" && strings.TrimSpace(os.Getenv(fromEnv)) == "" {
+		return fmt.Errorf("publicOrigin: environment variable %s is not set (or is empty)", fromEnv)
+	}
+	if name := previousSessionKeyEnvName(); name != "" && os.Getenv(name) == "" {
+		return fmt.Errorf("sessionPreviousKey: environment variable %s is not set (or is empty)", name)
+	}
+	return preflightSsoConfiguration(server.SsoRoutes)
+}
+
+func preflightSsoConfiguration(routes []SsoRoute) (failure error) {
+	for _, route := range routes {
+		segment := route.Segment
+		read := func(what string, thunk func()) {
+			defer func() {
+				if recovered := recover(); recovered != nil && failure == nil {
+					failure = fmt.Errorf("sso %q %s: %v", segment, what, recovered)
+				}
+			}()
+			thunk()
+		}
+		if route.Connection != nil {
+			read("connection", func() { _ = route.Connection() })
+		}
+		if route.SessionKey != nil {
+			read("session key", func() { _ = route.SessionKey() })
+		}
+		if failure != nil {
+			return failure
+		}
+	}
+	return nil
 }
 
 // Shutdown closes the listener before it has drained active requests. Join that
@@ -379,16 +427,31 @@ var publicOrigin string
 var (
 	publicOriginMutex    sync.RWMutex
 	publicOriginOverride string
+	// publicOriginEnv is `publicOrigin fromEnv "VAR"`: the variable is read when the origin is
+	// needed, not at package load. A load-time read panicked in `init` — before `main`, with a
+	// stack trace — and in every test binary that merely imported the module.
+	publicOriginEnv string
 )
+
+// SetPublicOriginEnv installs the `publicOrigin fromEnv "VAR"` clause. `Serve` refuses to
+// start when the variable is unset; a test that never sets it runs without the Host check.
+func SetPublicOriginEnv(name string) {
+	publicOriginMutex.Lock()
+	defer publicOriginMutex.Unlock()
+	publicOriginEnv = name
+}
 
 // PublicOrigin is the declared origin, else `TESL_PUBLIC_ORIGIN`: the origin this deployment
 // answers as. Never derived from a request — a Host header is exactly what it guards.
 func PublicOrigin() string {
 	publicOriginMutex.RLock()
-	declared := publicOriginOverride
+	declared, fromEnv := publicOriginOverride, publicOriginEnv
 	publicOriginMutex.RUnlock()
 	if declared != "" {
 		return declared
+	}
+	if fromEnv != "" {
+		return strings.TrimSpace(os.Getenv(fromEnv))
 	}
 	publicOriginOnce.Do(func() {
 		publicOrigin = strings.TrimSpace(os.Getenv("TESL_PUBLIC_ORIGIN"))

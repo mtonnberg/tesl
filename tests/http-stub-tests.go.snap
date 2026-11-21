@@ -183,13 +183,13 @@ func TestTesl0(teslT *testing.T) {
 //line http-stub-tests.tesl:76
 		if !teslrt.Equal(teslLeft1, teslrt.FromInt64(200)) {
 //line http-stub-tests.tesl:76
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft1), teslrt.DescribeValue(teslrt.FromInt64(200)))
 		}
 		teslLeft2 := r.Body
 //line http-stub-tests.tesl:77
 		if teslLeft2 != "{\"usd\": 110}" {
 //line http-stub-tests.tesl:77
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft2, "{\"usd\": 110}")
 		}
 	}
 }
@@ -223,19 +223,19 @@ func TestTesl1(teslT *testing.T) {
 //line http-stub-tests.tesl:85
 			if teslLeft3 != "get-answer" {
 //line http-stub-tests.tesl:85
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft3, "get-answer")
 			}
 			teslLeft4 := p.Body
 //line http-stub-tests.tesl:86
 			if teslLeft4 != "post-answer" {
 //line http-stub-tests.tesl:86
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft4, "post-answer")
 			}
 			teslLeft5 := p.Status
 //line http-stub-tests.tesl:87
 			if !teslrt.Equal(teslLeft5, teslrt.FromInt64(201)) {
 //line http-stub-tests.tesl:87
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft5), teslrt.DescribeValue(teslrt.FromInt64(201)))
 			}
 		}
 	}
@@ -268,13 +268,13 @@ func TestTesl2(teslT *testing.T) {
 //line http-stub-tests.tesl:94
 			if teslLeft6 != "wildcard" {
 //line http-stub-tests.tesl:94
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft6, "wildcard")
 			}
 			teslLeft7 := b.Body
 //line http-stub-tests.tesl:95
 			if teslLeft7 != "wildcard" {
 //line http-stub-tests.tesl:95
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft7, "wildcard")
 			}
 		}
 	}
@@ -309,13 +309,13 @@ func TestTesl3(teslT *testing.T) {
 //line http-stub-tests.tesl:103
 			if teslLeft8 != "specific" {
 //line http-stub-tests.tesl:103
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft8, "specific")
 			}
 			teslLeft9 := b.Status
 //line http-stub-tests.tesl:104
 			if !teslrt.Equal(teslLeft9, teslrt.FromInt64(500)) {
 //line http-stub-tests.tesl:104
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft9), teslrt.DescribeValue(teslrt.FromInt64(500)))
 			}
 		}
 	}
@@ -346,7 +346,7 @@ func TestTesl4(teslT *testing.T) {
 //line http-stub-tests.tesl:111
 		if teslLeft10 != "second" {
 //line http-stub-tests.tesl:111
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft10, "second")
 		}
 	}
 }
@@ -374,7 +374,7 @@ func TestTesl5(teslT *testing.T) {
 //line http-stub-tests.tesl:119
 		if !teslrt.Equal(teslLeft11, teslrt.FromInt64(500)) {
 //line http-stub-tests.tesl:119
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft11), teslrt.DescribeValue(teslrt.FromInt64(500)))
 		}
 	}
 }
@@ -402,7 +402,7 @@ func TestTesl6(teslT *testing.T) {
 //line http-stub-tests.tesl:125
 		if !teslrt.Equal(teslLeft12, teslrt.FromInt64(200)) {
 //line http-stub-tests.tesl:125
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft12), teslrt.DescribeValue(teslrt.FromInt64(200)))
 		}
 //line http-stub-tests.tesl:126
 		if !(teslrt.StringContains(r.Body, "not json")) {
@@ -506,19 +506,19 @@ func TestTesl10(teslT *testing.T) {
 //line http-stub-tests.tesl:151
 				if !teslrt.Equal(teslLeft13, teslrt.FromInt64(200)) {
 //line http-stub-tests.tesl:151
-					teslT.Fatal("Tesl expectation failed")
+					teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft13), teslrt.DescribeValue(teslrt.FromInt64(200)))
 				}
 				teslLeft14 := b.Status
 //line http-stub-tests.tesl:152
 				if !teslrt.Equal(teslLeft14, teslrt.FromInt64(200)) {
 //line http-stub-tests.tesl:152
-					teslT.Fatal("Tesl expectation failed")
+					teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft14), teslrt.DescribeValue(teslrt.FromInt64(200)))
 				}
 				teslLeft15 := c.Status
 //line http-stub-tests.tesl:153
 				if !teslrt.Equal(teslLeft15, teslrt.FromInt64(200)) {
 //line http-stub-tests.tesl:153
-					teslT.Fatal("Tesl expectation failed")
+					teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft15), teslrt.DescribeValue(teslrt.FromInt64(200)))
 				}
 //line http-stub-tests.tesl:154
 				if !(teslrt.HttpCalled("GET", "https://rates.test/v1")) {
@@ -529,25 +529,25 @@ func TestTesl10(teslT *testing.T) {
 //line http-stub-tests.tesl:155
 				if !teslrt.Equal(teslLeft16, teslrt.FromInt64(2)) {
 //line http-stub-tests.tesl:155
-					teslT.Fatal("Tesl expectation failed")
+					teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft16), teslrt.DescribeValue(teslrt.FromInt64(2)))
 				}
 				teslLeft17 := teslrt.HttpCallCount("POST", "https://rates.test/log")
 //line http-stub-tests.tesl:156
 				if !teslrt.Equal(teslLeft17, teslrt.FromInt64(1)) {
 //line http-stub-tests.tesl:156
-					teslT.Fatal("Tesl expectation failed")
+					teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft17), teslrt.DescribeValue(teslrt.FromInt64(1)))
 				}
 				teslLeft18 := teslrt.HttpCallCount("GET", "https://rates.test/log")
 //line http-stub-tests.tesl:157
 				if !teslrt.Equal(teslLeft18, teslrt.FromInt64(0)) {
 //line http-stub-tests.tesl:157
-					teslT.Fatal("Tesl expectation failed")
+					teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft18), teslrt.DescribeValue(teslrt.FromInt64(0)))
 				}
 				teslLeft19 := teslrt.HttpCallCount("*", "*")
 //line http-stub-tests.tesl:158
 				if !teslrt.Equal(teslLeft19, teslrt.FromInt64(3)) {
 //line http-stub-tests.tesl:158
-					teslT.Fatal("Tesl expectation failed")
+					teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft19), teslrt.DescribeValue(teslrt.FromInt64(3)))
 				}
 			}
 		}
@@ -577,13 +577,13 @@ func TestTesl11(teslT *testing.T) {
 //line http-stub-tests.tesl:164
 		if !teslrt.Equal(teslLeft20, teslrt.FromInt64(202)) {
 //line http-stub-tests.tesl:164
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft20), teslrt.DescribeValue(teslrt.FromInt64(202)))
 		}
 		teslLeft21 := teslrt.HttpLastBody("POST", "https://rates.test/log")
 //line http-stub-tests.tesl:165
 		if teslLeft21 != "{\"event\": \"sync\"}" {
 //line http-stub-tests.tesl:165
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft21, "{\"event\": \"sync\"}")
 		}
 	}
 }
@@ -615,13 +615,13 @@ func TestTesl12(teslT *testing.T) {
 //line http-stub-tests.tesl:172
 			if teslLeft22 != "computed" {
 //line http-stub-tests.tesl:172
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft22, "computed")
 			}
 			teslLeft23 := teslrt.HttpCallCount("GET", target)
 //line http-stub-tests.tesl:173
 			if !teslrt.Equal(teslLeft23, teslrt.FromInt64(1)) {
 //line http-stub-tests.tesl:173
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft23), teslrt.DescribeValue(teslrt.FromInt64(1)))
 			}
 		}
 	}
@@ -676,13 +676,13 @@ func TestTesl14(teslT *testing.T) {
 //line http-stub-tests.tesl:187
 		if teslLeft24 != "from 14a" {
 //line http-stub-tests.tesl:187
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft24, "from 14a")
 		}
 		teslLeft25 := teslrt.HttpCallCount("*", "*")
 //line http-stub-tests.tesl:188
 		if !teslrt.Equal(teslLeft25, teslrt.FromInt64(1)) {
 //line http-stub-tests.tesl:188
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft25), teslrt.DescribeValue(teslrt.FromInt64(1)))
 		}
 	}
 }
@@ -704,7 +704,7 @@ func TestTesl15(teslT *testing.T) {
 //line http-stub-tests.tesl:192
 	if !teslrt.Equal(teslLeft26, teslrt.FromInt64(0)) {
 //line http-stub-tests.tesl:192
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft26), teslrt.DescribeValue(teslrt.FromInt64(0)))
 	}
 //line http-stub-tests.tesl:193
 	if teslrt.HttpCalled("GET", "https://leak.test/v1") {
@@ -750,7 +750,7 @@ func TestTeslApi0(teslT *testing.T) {
 //line http-stub-tests.tesl:270
 		if !teslrt.Equal(teslLeft27, teslrt.FromInt64(1)) {
 //line http-stub-tests.tesl:270
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft27), teslrt.DescribeValue(teslrt.FromInt64(1)))
 		}
 		{
 //line http-stub-tests.tesl:274
@@ -783,7 +783,7 @@ func TestTeslApi0(teslT *testing.T) {
 //line http-stub-tests.tesl:276
 				if !teslrt.Equal(teslLeft28, teslrt.FromInt64(1)) {
 //line http-stub-tests.tesl:276
-					teslT.Fatal("Tesl expectation failed")
+					teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft28), teslrt.DescribeValue(teslrt.FromInt64(1)))
 				}
 				{
 //line http-stub-tests.tesl:279
@@ -816,19 +816,19 @@ func TestTeslApi0(teslT *testing.T) {
 //line http-stub-tests.tesl:281
 						if !teslrt.Equal(teslLeft29, teslrt.FromInt64(0)) {
 //line http-stub-tests.tesl:281
-							teslT.Fatal("Tesl expectation failed")
+							teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft29), teslrt.DescribeValue(teslrt.FromInt64(0)))
 						}
 						teslLeft30 := teslrt.ListLength(teslrt.DeadJobs(SyncQueueQueue))
 //line http-stub-tests.tesl:282
 						if !teslrt.Equal(teslLeft30, teslrt.FromInt64(1)) {
 //line http-stub-tests.tesl:282
-							teslT.Fatal("Tesl expectation failed")
+							teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft30), teslrt.DescribeValue(teslrt.FromInt64(1)))
 						}
 						teslLeft31 := teslrt.HttpCallCount("GET", "https://upstream.test/sync")
 //line http-stub-tests.tesl:285
 						if !teslrt.Equal(teslLeft31, teslrt.FromInt64(2)) {
 //line http-stub-tests.tesl:285
-							teslT.Fatal("Tesl expectation failed")
+							teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft31), teslrt.DescribeValue(teslrt.FromInt64(2)))
 						}
 					}
 				}
@@ -891,19 +891,19 @@ func TestTeslApi1(teslT *testing.T) {
 //line http-stub-tests.tesl:295
 			if !teslrt.Equal(teslLeft32, teslrt.FromInt64(0)) {
 //line http-stub-tests.tesl:295
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft32), teslrt.DescribeValue(teslrt.FromInt64(0)))
 			}
 			teslLeft33 := teslrt.ListLength(teslrt.DeadJobs(SyncQueueQueue))
 //line http-stub-tests.tesl:296
 			if !teslrt.Equal(teslLeft33, teslrt.FromInt64(0)) {
 //line http-stub-tests.tesl:296
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft33), teslrt.DescribeValue(teslrt.FromInt64(0)))
 			}
 			teslLeft34 := teslrt.HttpCallCount("GET", "https://upstream.test/sync")
 //line http-stub-tests.tesl:297
 			if !teslrt.Equal(teslLeft34, teslrt.FromInt64(1)) {
 //line http-stub-tests.tesl:297
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft34), teslrt.DescribeValue(teslrt.FromInt64(1)))
 			}
 		}
 	}

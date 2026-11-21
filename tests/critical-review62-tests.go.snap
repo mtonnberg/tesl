@@ -878,7 +878,7 @@ func TestTesl0(teslT *testing.T) {
 //line critical-review62-tests.tesl:168
 		if !teslrt.Equal(r, teslrt.FromInt64(5)) {
 //line critical-review62-tests.tesl:168
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(r), teslrt.DescribeValue(teslrt.FromInt64(5)))
 		}
 	}
 }
@@ -902,7 +902,7 @@ func TestTesl1(teslT *testing.T) {
 //line critical-review62-tests.tesl:173
 		if !teslrt.Equal(r, teslrt.FromInt64(0)) {
 //line critical-review62-tests.tesl:173
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(r), teslrt.DescribeValue(teslrt.FromInt64(0)))
 		}
 	}
 }
@@ -926,7 +926,7 @@ func TestTesl2(teslT *testing.T) {
 //line critical-review62-tests.tesl:185
 		if !teslrt.Equal(r, teslrt.FromInt64(10)) {
 //line critical-review62-tests.tesl:185
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(r), teslrt.DescribeValue(teslrt.FromInt64(10)))
 		}
 	}
 }
@@ -1009,7 +1009,7 @@ func TestTesl6(teslT *testing.T) {
 //line critical-review62-tests.tesl:213
 			if !teslrt.Equal(teslLeft4, teslrt.FromInt64(5)) {
 //line critical-review62-tests.tesl:213
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft4), teslrt.DescribeValue(teslrt.FromInt64(5)))
 			}
 		}
 	}
@@ -1038,7 +1038,7 @@ func TestTesl7(teslT *testing.T) {
 //line critical-review62-tests.tesl:229
 			if !teslrt.Equal(r, teslrt.FromInt64(10)) {
 //line critical-review62-tests.tesl:229
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(r), teslrt.DescribeValue(teslrt.FromInt64(10)))
 			}
 		}
 	}
@@ -1084,7 +1084,7 @@ func TestTesl8(teslT *testing.T) {
 //line critical-review62-tests.tesl:239
 							if !teslrt.Equal(teslLeft6, teslrt.FromInt64(3)) {
 //line critical-review62-tests.tesl:239
-								teslT.Fatal("Tesl expectation failed")
+								teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft6), teslrt.DescribeValue(teslrt.FromInt64(3)))
 							}
 						}
 					}
@@ -1118,7 +1118,7 @@ func TestTesl9(teslT *testing.T) {
 //line critical-review62-tests.tesl:245
 			if !teslrt.Equal(teslLeft7, teslrt.FromInt64(5)) {
 //line critical-review62-tests.tesl:245
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft7), teslrt.DescribeValue(teslrt.FromInt64(5)))
 			}
 		}
 	}
@@ -1147,7 +1147,7 @@ func TestTesl10(teslT *testing.T) {
 //line critical-review62-tests.tesl:268
 			if !teslrt.Equal(r, teslrt.FromInt64(5)) {
 //line critical-review62-tests.tesl:268
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(r), teslrt.DescribeValue(teslrt.FromInt64(5)))
 			}
 		}
 	}
@@ -1181,7 +1181,7 @@ func TestTesl11(teslT *testing.T) {
 //line critical-review62-tests.tesl:275
 				if !teslrt.Equal(teslLeft9, teslrt.FromInt64(5)) {
 //line critical-review62-tests.tesl:275
-					teslT.Fatal("Tesl expectation failed")
+					teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft9), teslrt.DescribeValue(teslrt.FromInt64(5)))
 				}
 			}
 		}
@@ -1208,7 +1208,7 @@ func TestTesl12(teslT *testing.T) {
 //line critical-review62-tests.tesl:290
 		if !teslrt.Equal(teslLeft10, teslrt.FromInt64(3)) {
 //line critical-review62-tests.tesl:290
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft10), teslrt.DescribeValue(teslrt.FromInt64(3)))
 		}
 	}
 }
@@ -1233,7 +1233,7 @@ func TestTesl13(teslT *testing.T) {
 //line critical-review62-tests.tesl:295
 		if !teslrt.Equal(teslLeft11, teslrt.FromInt64(3)) {
 //line critical-review62-tests.tesl:295
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft11), teslrt.DescribeValue(teslrt.FromInt64(3)))
 		}
 	}
 }
@@ -1277,7 +1277,7 @@ func TestTesl14(teslT *testing.T) {
 //line critical-review62-tests.tesl:301
 				if !teslrt.Equal(teslrt.FromInt64(1), teslrt.FromInt64(1)) {
 //line critical-review62-tests.tesl:301
-					teslT.Fatal("Tesl expectation failed")
+					teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslrt.FromInt64(1)), teslrt.DescribeValue(teslrt.FromInt64(1)))
 				}
 			case teslrt.MaybeSomething:
 //line critical-review62-tests.tesl:302
@@ -1338,7 +1338,7 @@ func TestTesl15(teslT *testing.T) {
 //line critical-review62-tests.tesl:309
 				if !teslrt.Equal(teslLeft13, teslrt.FromInt64(3)) {
 //line critical-review62-tests.tesl:309
-					teslT.Fatal("Tesl expectation failed")
+					teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft13), teslrt.DescribeValue(teslrt.FromInt64(3)))
 				}
 			default:
 				panic("unreachable: checker guarantees case exhaustiveness")
@@ -1375,7 +1375,7 @@ func TestTesl16(teslT *testing.T) {
 //line critical-review62-tests.tesl:317
 		if !teslrt.Equal(teslLeft14, teslrt.FromInt64(3)) {
 //line critical-review62-tests.tesl:317
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft14), teslrt.DescribeValue(teslrt.FromInt64(3)))
 		}
 	}
 }
@@ -1400,7 +1400,7 @@ func TestTesl17(teslT *testing.T) {
 //line critical-review62-tests.tesl:353
 		if !teslrt.Equal(teslLeft15, teslrt.FromInt64(10)) {
 //line critical-review62-tests.tesl:353
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft15), teslrt.DescribeValue(teslrt.FromInt64(10)))
 		}
 	}
 }
@@ -1425,7 +1425,7 @@ func TestTesl18(teslT *testing.T) {
 //line critical-review62-tests.tesl:358
 		if !teslrt.Equal(teslLeft16, teslrt.FromInt64(3)) {
 //line critical-review62-tests.tesl:358
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft16), teslrt.DescribeValue(teslrt.FromInt64(3)))
 		}
 	}
 }
@@ -1446,7 +1446,7 @@ func TestTesl19(teslT *testing.T) {
 //line critical-review62-tests.tesl:373
 	if teslLeft17 != "active" {
 //line critical-review62-tests.tesl:373
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft17, "active")
 	}
 }
 
@@ -1466,7 +1466,7 @@ func TestTesl20(teslT *testing.T) {
 //line critical-review62-tests.tesl:377
 	if teslLeft18 != "suspended" {
 //line critical-review62-tests.tesl:377
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft18, "suspended")
 	}
 }
 
@@ -1486,7 +1486,7 @@ func TestTesl21(teslT *testing.T) {
 //line critical-review62-tests.tesl:392
 	if !teslrt.Equal(teslLeft19, teslrt.FromInt64(12)) {
 //line critical-review62-tests.tesl:392
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft19), teslrt.DescribeValue(teslrt.FromInt64(12)))
 	}
 }
 
@@ -1509,7 +1509,7 @@ func TestTesl22(teslT *testing.T) {
 //line critical-review62-tests.tesl:403
 		if r != "hello" {
 //line critical-review62-tests.tesl:403
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %q != %q", r, "hello")
 		}
 	}
 }
@@ -1534,7 +1534,7 @@ func TestTesl23(teslT *testing.T) {
 //line critical-review62-tests.tesl:414
 		if !teslrt.Equal(teslLeft21, teslrt.FromInt64(3)) {
 //line critical-review62-tests.tesl:414
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft21), teslrt.DescribeValue(teslrt.FromInt64(3)))
 		}
 	}
 }
@@ -1558,7 +1558,7 @@ func TestTesl24(teslT *testing.T) {
 //line critical-review62-tests.tesl:425
 		if r != "HELLO" {
 //line critical-review62-tests.tesl:425
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %q != %q", r, "HELLO")
 		}
 	}
 }
@@ -1582,7 +1582,7 @@ func TestTesl25(teslT *testing.T) {
 //line critical-review62-tests.tesl:463
 		if r != "user-123" {
 //line critical-review62-tests.tesl:463
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %q != %q", r, "user-123")
 		}
 	}
 }
@@ -1624,7 +1624,7 @@ func TestTesl27(teslT *testing.T) {
 //line critical-review62-tests.tesl:484
 		if !teslrt.Equal(r, teslrt.FromInt64(7)) {
 //line critical-review62-tests.tesl:484
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(r), teslrt.DescribeValue(teslrt.FromInt64(7)))
 		}
 	}
 }
@@ -1648,7 +1648,7 @@ func TestTesl28(teslT *testing.T) {
 //line critical-review62-tests.tesl:489
 		if !teslrt.Equal(r, teslrt.FromInt64(1)) {
 //line critical-review62-tests.tesl:489
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(r), teslrt.DescribeValue(teslrt.FromInt64(1)))
 		}
 	}
 }
@@ -1690,7 +1690,7 @@ func TestTesl30(teslT *testing.T) {
 //line critical-review62-tests.tesl:506
 		if !teslrt.Equal(r, teslrt.FromInt64(5)) {
 //line critical-review62-tests.tesl:506
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(r), teslrt.DescribeValue(teslrt.FromInt64(5)))
 		}
 	}
 }
@@ -1732,7 +1732,7 @@ func TestTesl32(teslT *testing.T) {
 //line critical-review62-tests.tesl:525
 		if !teslrt.Equal(r, teslrt.FromInt64(5)) {
 //line critical-review62-tests.tesl:525
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(r), teslrt.DescribeValue(teslrt.FromInt64(5)))
 		}
 	}
 }
@@ -1803,7 +1803,7 @@ func TestTesl35(teslT *testing.T) {
 //line critical-review62-tests.tesl:560
 			if teslLeft28 != "Hello" {
 //line critical-review62-tests.tesl:560
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft28, "Hello")
 			}
 		}
 	}
@@ -1829,7 +1829,7 @@ func TestTesl36(teslT *testing.T) {
 //line critical-review62-tests.tesl:565
 		if !teslrt.Equal(teslLeft29, teslrt.FromInt64(0)) {
 //line critical-review62-tests.tesl:565
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft29), teslrt.DescribeValue(teslrt.FromInt64(0)))
 		}
 	}
 }

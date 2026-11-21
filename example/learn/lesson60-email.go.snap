@@ -127,7 +127,7 @@ func TestTesl0(teslT *testing.T) {
 //line lesson60-email.tesl:217
 		if teslLeft1 != teslRight1 {
 //line lesson60-email.tesl:217
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %t != %t", teslLeft1, teslRight1)
 		}
 	}
 }
@@ -153,7 +153,7 @@ func TestTesl1(teslT *testing.T) {
 //line lesson60-email.tesl:222
 		if teslLeft2 != teslRight2 {
 //line lesson60-email.tesl:222
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %t != %t", teslLeft2, teslRight2)
 		}
 	}
 }
@@ -179,7 +179,7 @@ func TestTesl2(teslT *testing.T) {
 //line lesson60-email.tesl:227
 		if teslLeft3 != teslRight3 {
 //line lesson60-email.tesl:227
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %t != %t", teslLeft3, teslRight3)
 		}
 	}
 }
@@ -205,7 +205,7 @@ func TestTesl3(teslT *testing.T) {
 //line lesson60-email.tesl:232
 		if teslLeft4 != teslRight4 {
 //line lesson60-email.tesl:232
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %t != %t", teslLeft4, teslRight4)
 		}
 	}
 }
@@ -237,7 +237,7 @@ func TestTesl4(teslT *testing.T) {
 //line lesson60-email.tesl:239
 				if teslLeft5 != teslRight5 {
 //line lesson60-email.tesl:239
-					teslT.Fatal("Tesl expectation failed")
+					teslT.Fatalf("Tesl expectation failed: %t != %t", teslLeft5, teslRight5)
 				}
 			}
 		}
@@ -265,7 +265,7 @@ func TestTesl5(teslT *testing.T) {
 //line lesson60-email.tesl:244
 		if teslLeft6 != teslRight6 {
 //line lesson60-email.tesl:244
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %t != %t", teslLeft6, teslRight6)
 		}
 	}
 }
@@ -288,7 +288,7 @@ func TestTesl6(teslT *testing.T) {
 //line lesson60-email.tesl:262
 	if teslLeft7 != teslRight7 {
 //line lesson60-email.tesl:262
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %t != %t", teslLeft7, teslRight7)
 	}
 }
 

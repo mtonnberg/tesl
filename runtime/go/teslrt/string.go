@@ -219,12 +219,12 @@ func StringWords(s string) []string { return strings.Fields(s) }
 // StringLines splits on newlines; a `\r\n` line ending counts as one newline, and a trailing
 // newline does not produce an empty last line.
 func StringLines(s string) []string {
+	lines := []string{}
 	if s == "" {
-		return []string{}
+		return lines
 	}
-	lines := strings.Split(strings.ReplaceAll(s, "\r\n", "\n"), "\n")
-	if lines[len(lines)-1] == "" {
-		lines = lines[:len(lines)-1]
+	for line := range strings.SplitSeq(strings.TrimSuffix(strings.ReplaceAll(s, "\r\n", "\n"), "\n"), "\n") {
+		lines = append(lines, line)
 	}
 	return lines
 }

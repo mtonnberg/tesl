@@ -2092,6 +2092,50 @@ let comparator kind ty body =
        one in a map key would hand the timing back;
      * ADTs, records and containers, which have no single scalar to key on.  They keep the closure
        path, which is what they had before. *)
+(* Whether a value of this type can hold a `secret` anywhere inside it.  Such a value is
+   never printed: a test log is a log, and the storage encoder writes a secret's plaintext.
+   Recursive types are walked once per declaration. *)
+let mentions_secret ty =
+  let seen = Hashtbl.create 8 in
+  let rec walk ty = match ty with
+    | TNewtype info -> info.secret || walk info.base
+    | TRecord info ->
+      if Hashtbl.mem seen ("r:" ^ info.rec_owner ^ "." ^ info.rec_go_name) then false
+      else begin
+        Hashtbl.add seen ("r:" ^ info.rec_owner ^ "." ^ info.rec_go_name) ();
+        List.exists (fun (_, field) -> walk field) info.rec_fields
+      end
+    | TAdt (info, args) ->
+      List.exists walk args
+      || (if Hashtbl.mem seen ("a:" ^ info.adt_owner ^ "." ^ info.adt_go_name) then false
+          else begin
+            Hashtbl.add seen ("a:" ^ info.adt_owner ^ "." ^ info.adt_go_name) ();
+            List.exists (fun variant ->
+              List.exists (fun (_, field) -> walk field) variant.var_fields)
+              info.adt_variants
+          end)
+    | TList inner | TSet inner | TCheck inner -> walk inner
+    | TDict (key, value) -> walk key || walk value
+    | TFunc (params, result) -> List.exists walk params || walk result
+    | _ -> false
+  in
+  walk ty
+
+(* Whether a failed `expect` prints this type as its JSON.  Only types the program declares
+   (and `Maybe` or containers of them) have a JSON shape worth reading; a runtime-provided
+   value such as a `TimeZone` is opaque to the encoder and prints through `fmt` instead. *)
+let rec renders_as_json ty =
+  match ty with
+  | TInt | TFloat | TString | TBool -> true
+  | TNewtype info -> renders_as_json info.base
+  | TRecord info ->
+    info.rec_owner <> "" && not (String.starts_with ~prefix:"teslrt." info.rec_go_name)
+  | TAdt (info, args) ->
+    (info.adt_tesl_name = "Maybe" || not info.adt_builtin) && List.for_all renders_as_json args
+  | TList inner | TSet inner -> renders_as_json inner
+  | TDict (key, value) -> renders_as_json key && renders_as_json value
+  | _ -> false
+
 let rec comparable_key ty =
   match ty with
   | TString -> Some ("string", fun operand -> operand)
@@ -12625,10 +12669,12 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
       (match server.public_origin with
        | Some (POLiteral origin) ->
          [Printf.sprintf "\tteslrt.SetPublicOriginValue(%s)" (go_quote origin)]
-       (* The env form is read ONCE, here, and never per request: a public origin derived
-          from a request is the thing it exists to guard against. *)
+       (* The env form names the variable here and reads it when the origin is needed —
+          never from a request, which is what it guards against.  Reading it at package load
+          panicked before `main` (and in every test binary importing the module); `Serve`
+          now refuses to start, naming the variable, when it is unset. *)
        | Some (POEnv name) ->
-         [Printf.sprintf "\tteslrt.SetPublicOriginValue(teslrt.RequireEnv(%s))" (go_quote name)]
+         [Printf.sprintf "\tteslrt.SetPublicOriginEnv(%s)" (go_quote name)]
        | None -> [])
       @ (match server.session_policy with
          | Some policy ->
@@ -12642,9 +12688,7 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
          opportunity to leak it. *)
       @ (match server.sso_previous_key_env with
          | Some name ->
-           [Printf.sprintf
-              "\tteslrt.SetPreviousSessionKey(teslrt.SecretPointer(teslrt.RequireSecret(%s)))"
-              (go_quote name)]
+           [Printf.sprintf "\tteslrt.SetPreviousSessionKeyEnv(%s)" (go_quote name)]
          | None -> [])
       (* `sessionRevoked <fn>` installs the renewal-time revocation check.  The clause's fn
          takes `(String, PosixMillis)`; the runtime hook is handed `iat` in SECONDS, so the
@@ -13011,6 +13055,11 @@ let test_source ?(debug=false) ?(imported_packages=[]) ?(api_tests=[]) ?(load_te
       in
       (* The emitted guard is the NEGATION of the expectation, built structurally so
          no `!(a && b)` / `!(a == b)` shape reaches the lint gate. *)
+      (* A failed equality names both values, so the test output says what differed
+         instead of only that something did.  Only the plain-equality form records them:
+         its operands are already names (bound below), so describing them re-evaluates
+         nothing. *)
+      let described = ref None in
       let failure_condition = match right with
         | None ->
           if left_ty <> TBool then unsupported loc "Go backend bare expect requires Bool";
@@ -13079,6 +13128,25 @@ let test_source ?(debug=false) ?(imported_packages=[]) ?(api_tests=[]) ?(load_te
              incr expect_operand;
              let emitted_left = bind "Left" left in
              let emitted_right = bind "Right" right in
+             (* A scalar prints as itself; a record or constructor value prints as its
+                JSON (`{"tag":"Circle",…}`), which names the constructor — the Go struct
+                behind it would show only an internal tag number. *)
+             (* Each side is a (verb, argument) pair for `Fatalf`.  A String or Bool needs no
+                runtime to print, so a module that uses no runtime still pulls none in. *)
+             let describe emitted = match left_ty with
+               | TString -> "%q", emitted
+               | TBool -> "%t", emitted
+               | TInt | TFloat ->
+                 "%s", Printf.sprintf "teslrt.DescribeValue(%s)" emitted
+               | ty when not (has_anon ty) && renders_as_json ty ->
+                 (match (try Some (!value_encoder_hook ty) with Invalid_argument _ -> None) with
+                  | Some encoder ->
+                    "%s", Printf.sprintf "teslrt.EncodeJSONValue(%s(%s))" encoder emitted
+                  | None -> "%s", Printf.sprintf "teslrt.DescribeValue(%s)" emitted)
+               | _ -> "%s", Printf.sprintf "teslrt.DescribeValue(%s)" emitted
+             in
+             if not (mentions_secret left_ty) then
+               described := Some (describe emitted_left, describe emitted_right);
              strip_outer_parens (unequal_expr left_ty emitted_left emitted_right))
           end
       in
@@ -13086,8 +13154,14 @@ let test_source ?(debug=false) ?(imported_packages=[]) ?(api_tests=[]) ?(load_te
       (* The directive is repeated before the `Fatal` line: a `//line` maps the NEXT line
          only, and `go test` reports the position of the `Fatal`, which sits one line below
          the `if` — so without this a failing `expect` on line N was reported at N+1. *)
-      Printf.bprintf body "%sif %s {\n%s%s\tteslT.Fatal(\"Tesl expectation failed\")\n%s}\n"
-        indent failure_condition (line_directive loc) indent indent;
+      let fatal = match !described with
+        | Some ((left_verb, l), (right_verb, r)) ->
+          Printf.sprintf "teslT.Fatalf(\"Tesl expectation failed: %s != %s\", %s, %s)"
+            left_verb right_verb l r
+        | None -> "teslT.Fatal(\"Tesl expectation failed\")"
+      in
+      Printf.bprintf body "%sif %s {\n%s%s\t%s\n%s}\n"
+        indent failure_condition (line_directive loc) indent fatal indent;
       emit_stmts env indent rest
     | TsExpr { e; loc } :: rest ->
       ignore (type_of_expr signatures env e);

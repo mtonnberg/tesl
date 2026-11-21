@@ -216,25 +216,25 @@ func TestTesl0(teslT *testing.T) {
 //line sql-group-by-tests.tesl:108
 		if !teslrt.Equal(teslLeft1, teslrt.FromInt64(1699999200)) {
 //line sql-group-by-tests.tesl:108
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft1), teslrt.DescribeValue(teslrt.FromInt64(1699999200)))
 		}
 		teslLeft2 := teslrt.PosixToSeconds(teslrt.TimeTruncDay(teslrt.UtcZone(), t))
 //line sql-group-by-tests.tesl:109
 		if !teslrt.Equal(teslLeft2, teslrt.FromInt64(1699920000)) {
 //line sql-group-by-tests.tesl:109
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft2), teslrt.DescribeValue(teslrt.FromInt64(1699920000)))
 		}
 		teslLeft3 := teslrt.PosixToSeconds(teslrt.TimeTruncMonth(teslrt.UtcZone(), t))
 //line sql-group-by-tests.tesl:110
 		if !teslrt.Equal(teslLeft3, teslrt.FromInt64(1698796800)) {
 //line sql-group-by-tests.tesl:110
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft3), teslrt.DescribeValue(teslrt.FromInt64(1698796800)))
 		}
 		teslLeft4 := teslrt.PosixToSeconds(teslrt.TimeTruncYear(teslrt.UtcZone(), t))
 //line sql-group-by-tests.tesl:111
 		if !teslrt.Equal(teslLeft4, teslrt.FromInt64(1672531200)) {
 //line sql-group-by-tests.tesl:111
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft4), teslrt.DescribeValue(teslrt.FromInt64(1672531200)))
 		}
 	}
 }
@@ -260,7 +260,7 @@ func TestTesl1(teslT *testing.T) {
 //line sql-group-by-tests.tesl:117
 		if !teslrt.Equal(teslLeft5, teslrt.FromInt64(1699833600)) {
 //line sql-group-by-tests.tesl:117
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft5), teslrt.DescribeValue(teslrt.FromInt64(1699833600)))
 		}
 		{
 //line sql-group-by-tests.tesl:119
@@ -271,7 +271,7 @@ func TestTesl1(teslT *testing.T) {
 //line sql-group-by-tests.tesl:120
 			if !teslrt.Equal(teslLeft6, teslRight6) {
 //line sql-group-by-tests.tesl:120
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft6), teslrt.DescribeValue(teslRight6))
 			}
 		}
 	}
@@ -298,13 +298,13 @@ func TestTesl2(teslT *testing.T) {
 //line sql-group-by-tests.tesl:127
 		if !teslrt.Equal(teslLeft7, teslrt.FromInt64(1699999200)) {
 //line sql-group-by-tests.tesl:127
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft7), teslrt.DescribeValue(teslrt.FromInt64(1699999200)))
 		}
 		teslLeft8 := teslrt.PosixToSeconds(teslrt.TimeTruncDay(teslrt.UtcZone(), lateEvening))
 //line sql-group-by-tests.tesl:129
 		if !teslrt.Equal(teslLeft8, teslrt.FromInt64(1699920000)) {
 //line sql-group-by-tests.tesl:129
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft8), teslrt.DescribeValue(teslrt.FromInt64(1699920000)))
 		}
 	}
 }
@@ -334,13 +334,13 @@ func TestTesl3(teslT *testing.T) {
 //line sql-group-by-tests.tesl:137
 			if !teslrt.Equal(teslLeft9, teslrt.FromInt64(60)) {
 //line sql-group-by-tests.tesl:137
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft9), teslrt.DescribeValue(teslrt.FromInt64(60)))
 			}
 			teslLeft10 := teslrt.TimeOffsetAt(teslrt.NamedZone("Europe/Stockholm"), summer)
 //line sql-group-by-tests.tesl:138
 			if !teslrt.Equal(teslLeft10, teslrt.FromInt64(120)) {
 //line sql-group-by-tests.tesl:138
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft10), teslrt.DescribeValue(teslrt.FromInt64(120)))
 			}
 			{
 //line sql-group-by-tests.tesl:141
@@ -354,13 +354,13 @@ func TestTesl3(teslT *testing.T) {
 //line sql-group-by-tests.tesl:143
 					if !teslrt.Equal(teslLeft11, teslrt.FromInt64(1774738800)) {
 //line sql-group-by-tests.tesl:143
-						teslT.Fatal("Tesl expectation failed")
+						teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft11), teslrt.DescribeValue(teslrt.FromInt64(1774738800)))
 					}
 					teslLeft12 := teslrt.PosixToSeconds(teslrt.TimeTruncDay(teslrt.NamedZone("Europe/Stockholm"), later))
 //line sql-group-by-tests.tesl:144
 					if !teslrt.Equal(teslLeft12, teslrt.FromInt64(1774738800)) {
 //line sql-group-by-tests.tesl:144
-						teslT.Fatal("Tesl expectation failed")
+						teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft12), teslrt.DescribeValue(teslrt.FromInt64(1774738800)))
 					}
 				}
 			}
@@ -389,19 +389,19 @@ func TestTesl4(teslT *testing.T) {
 //line sql-group-by-tests.tesl:149
 		if !teslrt.Equal(teslLeft13, teslrt.FromInt64(1582934400)) {
 //line sql-group-by-tests.tesl:149
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft13), teslrt.DescribeValue(teslrt.FromInt64(1582934400)))
 		}
 		teslLeft14 := teslrt.PosixToSeconds(teslrt.TimeTruncMonth(teslrt.UtcZone(), leap))
 //line sql-group-by-tests.tesl:150
 		if !teslrt.Equal(teslLeft14, teslrt.FromInt64(1580515200)) {
 //line sql-group-by-tests.tesl:150
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft14), teslrt.DescribeValue(teslrt.FromInt64(1580515200)))
 		}
 		teslLeft15 := teslrt.PosixToSeconds(teslrt.TimeTruncYear(teslrt.UtcZone(), leap))
 //line sql-group-by-tests.tesl:151
 		if !teslrt.Equal(teslLeft15, teslrt.FromInt64(1577836800)) {
 //line sql-group-by-tests.tesl:151
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft15), teslrt.DescribeValue(teslrt.FromInt64(1577836800)))
 		}
 	}
 }
@@ -430,19 +430,19 @@ func TestTesl5(teslT *testing.T) {
 //line sql-group-by-tests.tesl:159
 			if !teslrt.Equal(teslLeft16, teslrt.FromInt64(3)) {
 //line sql-group-by-tests.tesl:159
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft16), teslrt.DescribeValue(teslrt.FromInt64(3)))
 			}
 			teslLeft17 := firstKeySeconds(days)
 //line sql-group-by-tests.tesl:161
 			if !teslrt.Equal(teslLeft17, teslrt.FromInt64(1772323200)) {
 //line sql-group-by-tests.tesl:161
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft17), teslrt.DescribeValue(teslrt.FromInt64(1772323200)))
 			}
 			teslLeft18 := firstValue(days)
 //line sql-group-by-tests.tesl:162
 			if !teslrt.Equal(teslLeft18, teslrt.FromInt64(90)) {
 //line sql-group-by-tests.tesl:162
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft18), teslrt.DescribeValue(teslrt.FromInt64(90)))
 			}
 		}
 	}
@@ -472,19 +472,19 @@ func TestTesl6(teslT *testing.T) {
 //line sql-group-by-tests.tesl:168
 			if !teslrt.Equal(teslLeft19, teslrt.FromInt64(2)) {
 //line sql-group-by-tests.tesl:168
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft19), teslrt.DescribeValue(teslrt.FromInt64(2)))
 			}
 			teslLeft20 := firstKeySeconds(months)
 //line sql-group-by-tests.tesl:169
 			if !teslrt.Equal(teslLeft20, teslrt.FromInt64(1772323200)) {
 //line sql-group-by-tests.tesl:169
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft20), teslrt.DescribeValue(teslrt.FromInt64(1772323200)))
 			}
 			teslLeft21 := firstValue(months)
 //line sql-group-by-tests.tesl:170
 			if !teslrt.Equal(teslLeft21, teslrt.FromInt64(3)) {
 //line sql-group-by-tests.tesl:170
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft21), teslrt.DescribeValue(teslrt.FromInt64(3)))
 			}
 		}
 	}
@@ -514,13 +514,13 @@ func TestTesl7(teslT *testing.T) {
 //line sql-group-by-tests.tesl:178
 			if !teslrt.Equal(teslLeft22, teslrt.FromInt64(3)) {
 //line sql-group-by-tests.tesl:178
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft22), teslrt.DescribeValue(teslrt.FromInt64(3)))
 			}
 			teslLeft23 := firstValue(days)
 //line sql-group-by-tests.tesl:179
 			if !teslrt.Equal(teslLeft23, teslrt.FromInt64(60)) {
 //line sql-group-by-tests.tesl:179
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft23), teslrt.DescribeValue(teslrt.FromInt64(60)))
 			}
 		}
 	}
@@ -550,19 +550,19 @@ func TestTesl8(teslT *testing.T) {
 //line sql-group-by-tests.tesl:185
 			if !teslrt.Equal(teslLeft24, teslrt.FromInt64(2)) {
 //line sql-group-by-tests.tesl:185
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft24), teslrt.DescribeValue(teslrt.FromInt64(2)))
 			}
 			teslLeft25 := firstOrgKey(orgs)
 //line sql-group-by-tests.tesl:187
 			if teslLeft25 != "acme" {
 //line sql-group-by-tests.tesl:187
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft25, "acme")
 			}
 			teslLeft26 := firstOrgValue(orgs)
 //line sql-group-by-tests.tesl:188
 			if !teslrt.Equal(teslLeft26, teslrt.FromInt64(4)) {
 //line sql-group-by-tests.tesl:188
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft26), teslrt.DescribeValue(teslrt.FromInt64(4)))
 			}
 		}
 	}
@@ -592,13 +592,13 @@ func TestTesl9(teslT *testing.T) {
 //line sql-group-by-tests.tesl:196
 			if !teslrt.Equal(teslLeft27, teslrt.FromInt64(3)) {
 //line sql-group-by-tests.tesl:196
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft27), teslrt.DescribeValue(teslrt.FromInt64(3)))
 			}
 			teslLeft28 := firstValue(days)
 //line sql-group-by-tests.tesl:197
 			if !teslrt.Equal(teslLeft28, teslrt.FromInt64(60)) {
 //line sql-group-by-tests.tesl:197
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft28), teslrt.DescribeValue(teslrt.FromInt64(60)))
 			}
 		}
 	}

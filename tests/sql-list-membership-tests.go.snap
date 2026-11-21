@@ -91,7 +91,7 @@ func TestTesl0(teslT *testing.T) {
 //line sql-list-membership-tests.tesl:39
 				if !teslrt.Equal(teslLeft1, teslrt.FromInt64(1)) {
 //line sql-list-membership-tests.tesl:39
-					teslT.Fatal("Tesl expectation failed")
+					teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft1), teslrt.DescribeValue(teslrt.FromInt64(1)))
 				}
 			}
 		}
@@ -124,7 +124,7 @@ func TestTesl1(teslT *testing.T) {
 //line sql-list-membership-tests.tesl:46
 				if !teslrt.Equal(teslLeft2, teslrt.FromInt64(2)) {
 //line sql-list-membership-tests.tesl:46
-					teslT.Fatal("Tesl expectation failed")
+					teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft2), teslrt.DescribeValue(teslrt.FromInt64(2)))
 				}
 			}
 		}

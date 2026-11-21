@@ -165,6 +165,24 @@ func TestMain(teslM *testing.M) {
 	os.Exit(testExitCode)
 }
 
+func teslEncode1(teslValue teslrt.Int) any {
+	return teslValue
+}
+
+func teslEncode2(teslValue teslrt.Maybe[teslrt.Int]) any {
+	return func() any {
+		switch teslValue.Tag {
+		case teslrt.MaybeNothing:
+			return map[string]any{"tag": "Nothing"}
+		case teslrt.MaybeSomething:
+			return map[string]any{"tag": "Something", "fields": map[string]any{
+				"value": teslEncode1(teslValue.SomethingValue),
+			}}
+		}
+		panic("unreachable: checker guarantees case exhaustiveness")
+	}()
+}
+
 func TestTesl0(teslT *testing.T) {
 	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "safeHead returns Nothing for empty list" && teslWanted != "TestTesl0" {
 		teslT.Skip("named test filter")
@@ -186,7 +204,7 @@ func TestTesl0(teslT *testing.T) {
 //line lesson23-maybe-and-optional-values.tesl:110
 		if teslLeft1.Tag != teslRight1.Tag || (teslLeft1.Tag == teslrt.MaybeSomething && !teslrt.Equal(teslLeft1.SomethingValue, teslRight1.SomethingValue)) {
 //line lesson23-maybe-and-optional-values.tesl:110
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.EncodeJSONValue(teslEncode2(teslLeft1)), teslrt.EncodeJSONValue(teslEncode2(teslRight1)))
 		}
 	}
 }
@@ -208,7 +226,7 @@ func TestTesl1(teslT *testing.T) {
 //line lesson23-maybe-and-optional-values.tesl:114
 	if teslLeft2.Tag != teslRight2.Tag || (teslLeft2.Tag == teslrt.MaybeSomething && !teslrt.Equal(teslLeft2.SomethingValue, teslRight2.SomethingValue)) {
 //line lesson23-maybe-and-optional-values.tesl:114
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.EncodeJSONValue(teslEncode2(teslLeft2)), teslrt.EncodeJSONValue(teslEncode2(teslRight2)))
 	}
 }
 
@@ -232,7 +250,7 @@ func TestTesl2(teslT *testing.T) {
 //line lesson23-maybe-and-optional-values.tesl:119
 		if result.Tag != teslRight3.Tag || (result.Tag == teslrt.MaybeSomething && !teslrt.Equal(result.SomethingValue, teslRight3.SomethingValue)) {
 //line lesson23-maybe-and-optional-values.tesl:119
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.EncodeJSONValue(teslEncode2(result)), teslrt.EncodeJSONValue(teslEncode2(teslRight3)))
 		}
 	}
 }
@@ -254,7 +272,7 @@ func TestTesl3(teslT *testing.T) {
 //line lesson23-maybe-and-optional-values.tesl:123
 	if teslLeft4.Tag != teslRight4.Tag || (teslLeft4.Tag == teslrt.MaybeSomething && !teslrt.Equal(teslLeft4.SomethingValue, teslRight4.SomethingValue)) {
 //line lesson23-maybe-and-optional-values.tesl:123
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.EncodeJSONValue(teslEncode2(teslLeft4)), teslrt.EncodeJSONValue(teslEncode2(teslRight4)))
 	}
 }
 
@@ -275,7 +293,7 @@ func TestTesl4(teslT *testing.T) {
 //line lesson23-maybe-and-optional-values.tesl:127
 	if teslLeft5.Tag != teslRight5.Tag || (teslLeft5.Tag == teslrt.MaybeSomething && !teslrt.Equal(teslLeft5.SomethingValue, teslRight5.SomethingValue)) {
 //line lesson23-maybe-and-optional-values.tesl:127
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.EncodeJSONValue(teslEncode2(teslLeft5)), teslrt.EncodeJSONValue(teslEncode2(teslRight5)))
 	}
 }
 
@@ -296,7 +314,7 @@ func TestTesl5(teslT *testing.T) {
 //line lesson23-maybe-and-optional-values.tesl:131
 	if teslLeft6.Tag != teslRight6.Tag || (teslLeft6.Tag == teslrt.MaybeSomething && !teslrt.Equal(teslLeft6.SomethingValue, teslRight6.SomethingValue)) {
 //line lesson23-maybe-and-optional-values.tesl:131
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.EncodeJSONValue(teslEncode2(teslLeft6)), teslrt.EncodeJSONValue(teslEncode2(teslRight6)))
 	}
 }
 
@@ -316,6 +334,6 @@ func TestTesl6(teslT *testing.T) {
 //line lesson23-maybe-and-optional-values.tesl:135
 	if teslLeft7 != "unknown" {
 //line lesson23-maybe-and-optional-values.tesl:135
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft7, "unknown")
 	}
 }
