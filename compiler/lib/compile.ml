@@ -2712,7 +2712,7 @@ let compile_go_source_internal ?(debug=false) ?(path="") ~queue_conversions file
                 contents="package teslrt\n\nconst teslGeneratedMigrationHistoryJSON = " ^ Emit_go.go_quote json ^
                   "\nconst teslGeneratedQueueHistoryJSON = " ^ Emit_go.go_quote queue_json ^
                   "\n\nfunc init() {\n" ^ String.concat "" registrations ^ "\tregisterCompiledQueueHistory(teslGeneratedQueueHistoryJSON)\n}\n"}] in
-             GoSuccess (artifacts @ metadata)
+             GoSuccess (Emit_go.relocate_migration_history_by_go_mod (artifacts @ metadata))
            | Error errors -> GoFailure (List.map diag_of_go_emit_error errors)in
           with_literal_source_graph filename captured_sources emit_captured)))) in
     match result with Ok result -> result | Error es -> GoFailure (Migration_declaration.diagnostics_of_errors es))

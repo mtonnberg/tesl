@@ -17003,6 +17003,52 @@ let optional_writeback_preparation ~variable ~callback ~previous_type =
     "%s := %s\nswitch %s.Tag {\ncase teslrt.MaybeNothing:\nreturn teslrt.Nothing[%s]()\ncase teslrt.MaybeSomething:\ndefault:\npanic(\"historical write-back returned an invalid Maybe tag\")\n}\n"
     variable callback variable previous_type
 
+(* The compiled migration history differs for every revision of an
+   application. Emitted inside the runtime package it changed that package's
+   bytes, so Go recompiled the complete runtime for every revision (and every
+   test variant). Relocate it into its own generated package, which imports
+   the runtime and registers the history from its init. Every other generated
+   package imports it, so registration still precedes their package-level
+   database registrations. The runtime package itself stays byte-identical. *)
+let migration_history_runtime_path = "internal/teslrt/migration_history_generated.go"
+let relocate_migration_history ~project_path (artifacts : artifact list) =
+  match List.find_opt (fun (a : artifact) -> a.path = migration_history_runtime_path) artifacts with
+  | None -> artifacts
+  | Some history ->
+    let prefix = "package teslrt\n" in
+    if not (String.starts_with ~prefix history.contents) then
+      invalid_arg "migration history artifact lacks its runtime package clause";
+    let body = String.sub history.contents (String.length prefix) (String.length history.contents - String.length prefix) in
+    let body = List.fold_left (fun body name ->
+        Str.global_replace (Str.regexp_string ("\t" ^ name ^ "(")) ("\tteslrt." ^ String.capitalize_ascii name ^ "(") body)
+      body ["registerCompiledMigrationHistory"; "registerCompiledQueueHistory"; "registerCompiledRowHistory";
+            "registerCompiledRowPhysicalHistory"; "registerCompiledRowContractHistory"] in
+    let relocated = { path = "internal/teslhistory/migration_history_generated.go";
+      contents = "package teslhistory\n\nimport teslrt " ^ go_quote (project_path ^ "/internal/teslrt") ^ "\n" ^ body } in
+    let package_clause contents =
+      let first = List.find_opt (fun line -> String.starts_with ~prefix:"package " line) (String.split_on_char '\n' contents) in
+      Option.map (fun line -> String.trim (String.sub line 8 (String.length line - 8))) first in
+    let packages = List.filter_map (fun (a : artifact) ->
+        match String.split_on_char '/' a.path with
+        | ["internal"; dir; file] when dir <> "teslrt" && dir <> "teslhistory"
+                                       && Filename.check_suffix file ".go" && not (Filename.check_suffix file "_test.go") ->
+          Option.map (fun name -> dir, name) (package_clause a.contents)
+        | _ -> None) artifacts |> List.sort_uniq compare in
+    let imports = List.map (fun (dir, name) ->
+        { path = "internal/" ^ dir ^ "/migration_history_import_generated.go";
+          contents = "package " ^ name ^ "\n\n// The compiled migration history registers before this package's database registrations.\nimport _ "
+                     ^ go_quote (project_path ^ "/internal/teslhistory") ^ "\n" }) packages in
+    List.filter (fun (a : artifact) -> a.path <> migration_history_runtime_path) artifacts @ relocated :: imports
+
+let relocate_migration_history_by_go_mod artifacts =
+  match List.find_opt (fun (a : artifact) -> a.path = "go.mod") artifacts with
+  | None -> artifacts
+  | Some go_mod ->
+    let first = List.hd (String.split_on_char '\n' go_mod.contents) in
+    if String.starts_with ~prefix:"module " first
+    then relocate_migration_history ~project_path:(String.trim (String.sub first 7 (String.length first - 7))) artifacts
+    else artifacts
+
 let compile_project ?(mode=Release) ?(row_storage=false) ?(row_physical=false) ?row_source ?fixture_graph ?(migration_fixtures=[]) ?(queue_conversions=[]) ?(migration_families=[]) ?(migration_queues=[]) ?(queue_codec_records=[]) ~(entry : module_form) (modules : module_form list) =
 let queue_conversion_artifacts graph exports conversions =
  let module Q=Migration_queue_transform in
@@ -17682,7 +17728,7 @@ let compiled_row_artifacts ~entry ~modules:_ ~exports source =
          if checksums = "" || List.exists (fun (a : artifact) -> a.path = "go.sum") rebuilt
          then rebuilt
          else rebuilt @ [{ path = "go.sum"; contents = checksums }] in
-       let rebuilt = seal_cache_artifacts rebuilt in
+       let rebuilt = relocate_migration_history ~project_path (seal_cache_artifacts rebuilt) in
        (match row_source with
         | None -> Ok rebuilt
         | Some source -> match Migration_program.verify_source_history source modules with

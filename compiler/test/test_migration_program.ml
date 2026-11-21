@@ -62,9 +62,14 @@ let baseline () = with_project (fun _ path ->
  check bool "lowered connection retains its checked family binding" true
   (List.exists (fun (a:Emit_go.artifact) -> a.path="internal/teslmodapp/module.go" &&
     Compile.string_contains a.contents "teslrt.RegisterDatabaseMigrationHistory(MainDatabase, \"NotesSchema\")") artifacts);
- check bool "standalone runtime carries its history" true
-  (List.exists (fun (a:Emit_go.artifact) -> a.path="internal/teslrt/migration_history_generated.go" &&
-    Compile.string_contains a.contents "registerCompiledMigrationHistory(\"App.Main\", \"NotesSchema\"") artifacts);
+ check bool "standalone binary carries its history" true
+  (List.exists (fun (a:Emit_go.artifact) -> a.path="internal/teslhistory/migration_history_generated.go" &&
+    Compile.string_contains a.contents "teslrt.RegisterCompiledMigrationHistory(\"App.Main\", \"NotesSchema\"") artifacts);
+ check bool "the runtime package carries no revision-specific file" false
+  (List.exists (fun (a:Emit_go.artifact) -> a.path="internal/teslrt/migration_history_generated.go") artifacts);
+ check bool "packages that register databases import the history first" true
+  (List.exists (fun (a:Emit_go.artifact) -> a.path="internal/teslmodapp/migration_history_import_generated.go" &&
+    Compile.string_contains a.contents "import _ \"tesl.generated/teslmodapp/internal/teslhistory\"") artifacts);
  let output = match artifact artifacts with Some a -> a.contents | None -> fail "build omitted history artifact" in
  check string "actual build uses guarded history" (json p ^ "\n") output;
  check bool "compact history uses its own versioned envelope" true
@@ -324,8 +329,8 @@ let queue_projection ()=queue_fixture (fun root path ->
  let source=(List.find (fun (a:Emit_go.artifact) -> a.path="internal/teslmodapp/module.go") artifacts).contents in
  check bool "real queue and codec bind checked IDs" true (Compile.string_contains source "RegisterQueueSchemaJobCodec(TasksQueue, \"NotesSchema\", \"Notifications\", \"Notify\", 1");
  check bool "legacy queue name unchanged" true (Compile.string_contains source "NewQueueOn(MainDatabase, \"Tasks\"");
- let generated=(List.find (fun (a:Emit_go.artifact) -> a.path="internal/teslrt/migration_history_generated.go") artifacts).contents in
- check bool "binary links companion without disk reads" true (Compile.string_contains generated "registerCompiledQueueHistory(teslGeneratedQueueHistoryJSON)");
+ let generated=(List.find (fun (a:Emit_go.artifact) -> a.path="internal/teslhistory/migration_history_generated.go") artifacts).contents in
+ check bool "binary links companion without disk reads" true (Compile.string_contains generated "teslrt.RegisterCompiledQueueHistory(teslGeneratedQueueHistoryJSON)");
  let owner=(List.find (fun (a:Emit_go.artifact) -> a.path="internal/teslmodnotesschemavcurrent/module.go") artifacts).contents in
  check bool "schema owner emits derived payload decoder" true (Compile.string_contains owner "func DecodeNotify");
  generate root 1;
