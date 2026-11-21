@@ -105,6 +105,7 @@ func innerIsSomething(pair teslrt.Tuple2[teslrt.Maybe[Inst], string]) bool {
 //line sql-maybe-in-tuple-tests.tesl:54
 	{
 		teslScrut1 := pair
+		_ = teslScrut1
 		maybeInstVal := teslScrut1.Tuple2First
 		_ = maybeInstVal
 		secretPart := teslScrut1.Tuple2Second
@@ -163,6 +164,7 @@ func secondSlotSurvives(m teslrt.Maybe[teslrt.Tuple2[teslrt.Maybe[Inst], string]
 //line sql-maybe-in-tuple-tests.tesl:69
 			{
 				teslScrut3 := pair
+				_ = teslScrut3
 				maybeInstVal := teslScrut3.Tuple2First
 				_ = maybeInstVal
 				secretPart := teslScrut3.Tuple2Second
@@ -217,6 +219,7 @@ func secondSlotIsSomething(m teslrt.Maybe[teslrt.Tuple2[string, teslrt.Maybe[Ins
 //line sql-maybe-in-tuple-tests.tesl:88
 			{
 				teslScrut3 := pair
+				_ = teslScrut3
 				secretPart := teslScrut3.Tuple2First
 				_ = secretPart
 				maybeInstVal := teslScrut3.Tuple2Second
@@ -272,6 +275,7 @@ func tuple3InnerIsSomething(m teslrt.Maybe[teslrt.Tuple3[teslrt.Maybe[Inst], str
 //line sql-maybe-in-tuple-tests.tesl:104
 			{
 				teslScrut3 := triple
+				_ = teslScrut3
 				maybeInstVal := teslScrut3.Tuple3First
 				_ = maybeInstVal
 				secretPart := teslScrut3.Tuple3Second
@@ -381,6 +385,7 @@ func handBuiltInnerIsSomething(m teslrt.Maybe[teslrt.Tuple2[teslrt.Maybe[string]
 //line sql-maybe-in-tuple-tests.tesl:138
 			{
 				teslScrut3 := pair
+				_ = teslScrut3
 				inner := teslScrut3.Tuple2First
 				_ = inner
 				secretPart := teslScrut3.Tuple2Second

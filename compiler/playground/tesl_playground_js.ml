@@ -83,16 +83,17 @@ let vfs_dir = "/tesl/"
 
 let sources : (string, string) Hashtbl.t = Hashtbl.create 8
 
-let () =
-  try Sys_js.mount ~path:vfs_dir (fun ~prefix:_ ~path -> Hashtbl.find_opt sources path)
-  with _ ->
-    (* Fail soft: without the pseudo-directory the linter contributes nothing
-       (Linter.lint_file swallows Sys_error and returns []), but the parser,
-       type checker, proof checker and validation passes all work off the
-       in-memory string and are unaffected. *)
-    ()
+external install_vfs_metadata : unit -> unit = "tesl_playground_vfs_metadata"
 
-let register_source basename content = Hashtbl.replace sources basename content
+let register_source basename content =
+  (* The device caches loaded files. A fresh mount both reflects edits to the
+     current buffer and prevents previous snippets from becoming local imports. *)
+  Query_cache.clear ();
+  Hashtbl.clear sources;
+  Hashtbl.replace sources basename content;
+  Sys_js.unmount ~path:vfs_dir;
+  Sys_js.mount ~path:vfs_dir (fun ~prefix:_ ~path -> Hashtbl.find_opt sources path);
+  install_vfs_metadata ()
 
 (* Mirrors [check_json_diags] in compiler/bin/main.ml: do not lint a buffer the
    parser or lexer rejected — the linter's re-parse would be meaningless. *)
@@ -128,10 +129,10 @@ let emitted vfile source =
 let check (src : Js.js_string Js.t) : Js.js_string Js.t =
   let source = Js.to_string src in
   let basename = vfile_of_source source in
-  register_source basename source;
   let vfile = vfs_dir ^ basename in
   let json =
     try
+      register_source basename source;
       let diags = check_diags vfile source in
       let has_error =
         List.exists (fun (d : Compile.diagnostic) -> d.severity = "error") diags

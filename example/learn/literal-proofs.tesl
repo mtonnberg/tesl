@@ -1,5 +1,8 @@
 module LiteralProofs exposing [IsPositive, tryPositive, doublePositive, example]
 
+# lesson: track=proofs order=605 needs=lesson06-proof-check-proof-auth,lesson52-maybe-proof
+# summary: Validate proof-annotated literals at compile time with an explicit, pure validator
+
 import Tesl.Prelude exposing [Int, Bool(..)]
 import Tesl.Maybe exposing [Maybe(..)]
 

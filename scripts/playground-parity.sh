@@ -29,7 +29,7 @@ KNOWN_DIFF="lesson07-consumer.tesl"
 # rendered on lessons.html).
 #
 # Usage:
-#   scripts/playground-parity.sh                 # build if needed, compare 30 files
+#   scripts/playground-parity.sh                 # compare 30 lessons + literal rules
 #   scripts/playground-parity.sh --dist DIR      # reuse an already-built dist
 #   scripts/playground-parity.sh --limit N       # compare the first N lessons
 #   scripts/playground-parity.sh --verbose       # print every file, not just diffs
@@ -101,6 +101,12 @@ node "$REPO_ROOT/scripts/playground-search-parity.cjs" "$(dirname "$ART")" || ex
 # ── The fixture set: the first N lessons in directory order ──────────────────
 FILES="$(ls "$LEARN_DIR"/*.tesl 2>/dev/null | head -n "$LIMIT")"
 [ -n "$FILES" ] || skip "no lessons under $LEARN_DIR"
+# Literal rules exercise source pinning in the browser's virtual filesystem.
+# Keep this regression in the default gate even though its filename sorts last.
+if ! printf '%s\n' "$FILES" | grep -Fxq "$LEARN_DIR/literal-proofs.tesl"; then
+  FILES="$FILES
+$LEARN_DIR/literal-proofs.tesl"
+fi
 
 n=0
 for f in $FILES; do
@@ -122,9 +128,10 @@ say "comparing $n lesson(s) — CLI \`--check-json\` vs the browser's teslCheck"
 # One process, not one per file: evaluating the 1.1 MB artifact costs ~70 ms and
 # there is no reason to pay it 30 times.  `globalThis.window = globalThis` is
 # what the browser driver's export expects (it sets window.teslCheck).
-NODE_TMP="$TMP" NODE_ART="$ART" NODE_VERBOSE="$VERBOSE" NODE_KNOWN="$KNOWN_DIFF" \
+NODE_TMP="$TMP" NODE_ART="$ART" NODE_VERBOSE="$VERBOSE" NODE_KNOWN="$KNOWN_DIFF" NODE_COMPILER="$MAIN_EXE" NODE_REPO="$REPO_ROOT" \
 node - <<'NODE'
 const fs = require("fs"), path = require("path");
+const { spawnSync } = require("child_process");
 globalThis.window = globalThis;
 require(path.resolve(process.env.NODE_ART));
 if (typeof teslCheck !== "function") {
@@ -194,6 +201,45 @@ for (const f of files) {
 console.log(`playground-parity: ${same}/${files.length} byte-identical, ` +
             `${exempt} known exception(s), ${bad} divergence(s); ` +
             `${diagCount} CLI diagnostics compared`);
+
+const literal = fs.readFileSync(path.join(process.env.NODE_REPO, "example/learn/literal-proofs.tesl"), "utf8");
+const checkLiteral = literal
+  .replace("establish tryPositive(n: Int) -> Maybe (positive: Int ::: IsPositive positive)", "check tryPositive(n: Int) -> n: Int ::: IsPositive n")
+  .replace("Something (n ::: IsPositive n)", "ok n ::: IsPositive n")
+  .replace("    Nothing", '    fail 400 "positive required"');
+const requiresCapability = source => source
+  .replace("fact IsPositive", "capability external\nfact IsPositive")
+  .replace(/(^(?:establish|check) tryPositive.*) =$/m, "$1 requires [external] =");
+for (const [label, source, accepted] of [
+  ["accepted literal", literal, true],
+  ["rejected literal", literal.replace("= 3", "= 0"), false],
+  ["changed validator", literal.replace("n > 0", "n > 10"), false],
+  ["check validator", checkLiteral, true],
+  ["capability-dependent establish", requiresCapability(literal), false],
+  ["capability-dependent check", requiresCapability(checkLiteral), false],
+  ["opaque fact", literal.replace(" literal via tryPositive", ""), false],
+  ["restored buffer", literal, true],
+]) {
+  const file = path.join(tmp, "LiteralProofs.tesl");
+  fs.writeFileSync(file, source);
+  const result = spawnSync(process.env.NODE_COMPILER, ["--check-json", file], {
+    encoding: "utf8", env: { ...process.env, TESL_REPO_ROOT: process.env.NODE_REPO }, timeout: 30000,
+  });
+  if (result.error || ![0, 1].includes(result.status)) throw result.error || new Error(result.stderr);
+  const cli = JSON.parse(result.stdout), web = JSON.parse(teslCheck(source));
+  if (key(cli.diagnostics) !== key(web.diagnostics) ||
+      web.diagnostics.some(d => d.severity === "error") === accepted ||
+      accepted && !web.go_files?.length) {
+    console.error(`  ✗ ${label}: literal-rule parity failed\n    cli: ${key(cli.diagnostics)}\n    web: ${key(web.diagnostics)}`);
+    bad++;
+  } else console.log(`  ✓ ${label}: native/browser agreement`);
+}
+teslCheck("module Earlier exposing [value]\nimport Tesl.Prelude exposing [Int]\nfn value() -> Int = 1\n");
+const later = JSON.parse(teslCheck("module Later exposing []\nimport Tesl.Prelude exposing [Int]\nimport Earlier exposing [value]\nfn result() -> Int = value()\n"));
+if (!later.diagnostics.some(d => /module `Earlier` not found/.test(d.message)) || later.go_files?.length) {
+  console.error("  ✗ previous snippets must not become local imports");
+  bad++;
+} else console.log("  ✓ previous snippets remain outside the current buffer");
 process.exit(bad === 0 ? 0 : 1);
 NODE
 rc=$?
