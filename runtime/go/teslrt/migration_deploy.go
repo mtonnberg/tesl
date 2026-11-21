@@ -137,7 +137,11 @@ func pgPrepareRowWorker(ctx context.Context, b *pgRowBaseline, roles PgMigration
 	if !sameDatabase {
 		return nil, fmt.Errorf("schema setup Installer and Worker must use dedicated sessions to the same PostgreSQL database")
 	}
-	installed, err := InstallPgCompiledRowBaseline(startup, installer, b.database, roles)
+	// Installation verifies and stages the complete retained history, which
+	// grows with the application. It runs under the caller's deployment budget
+	// (TESL_SCHEMA_DEPLOY_TIMEOUT_SECONDS), not the short connection-lease
+	// timeout that bounds connecting and the identity checks above.
+	installed, err := InstallPgCompiledRowBaseline(ctx, installer, b.database, roles)
 	if err != nil {
 		return nil, fmt.Errorf("schema setup installation: %w", err)
 	}
