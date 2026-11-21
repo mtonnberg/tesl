@@ -3939,8 +3939,16 @@ let parse_fact_form s =
      | Ok group -> all_params := !all_params @ group
      | Err _    -> ())
   done;
+  let* literal_via = match peek s with
+    | IDENT "literal" ->
+      advance s;
+      let* _ = expect s VIA in
+      let loc = current_loc s in
+      let* name = expect_ident s in
+      return(Some ({Ast.name;loc}:Ast.ident))
+    | _ -> return None in
   let loc = span loc0 (current_loc s) in
-  return Ast.{ name; params = !all_params; loc }
+  return Ast.{ name; params = !all_params; literal_via; loc }
 
 
 let parse_codec_form s name type_name =

@@ -20,16 +20,12 @@ fn convert(old: Schema.Notes.V1.Note) -> Migrated Schema.Notes.VCurrent.Note =
 case Schema.Notes.VCurrent.tryTitle old.title of
   Nothing -> Reject "title rejected by changed proof"
   Something title -> Row (Schema.Notes.VCurrent.Note { id: old.id, title: title, memo: old.memo })
-fn backward(row: Schema.Notes.VCurrent.Note) -> value: String ::: Schema.Notes.V1.NonEmpty value =
-case Schema.Notes.V1.tryTitle row.title of
-  Nothing ->
-    let previous = oldNote()
-    previous.title
-  Something title -> title
-fn oldNote() -> Schema.Notes.V1.Note =
-case Schema.Notes.V1.tryTitle "valid" of
-  Nothing -> oldNote()
-  Something title -> Schema.Notes.V1.Note { id: "fixture", title: title, memo: "base" }
+fn backward(row: Schema.Notes.VCurrent.Note) -> Maybe (value: String ::: Schema.Notes.V1.NonEmpty value) =
+  Schema.Notes.V1.tryTitle row.title
+fn oldNote() -> Maybe Schema.Notes.V1.Note =
+  case Schema.Notes.V1.tryTitle "valid" of
+    Nothing -> Nothing
+    Something title -> Something (Schema.Notes.V1.Note { id: "fixture", title: title, memo: "base" })
 
 fn noteWithTitle(value: String) -> Maybe Schema.Notes.V1.Note =
   case Schema.Notes.V1.tryTitle value of
@@ -44,7 +40,7 @@ test "stronger proof preserves a valid Unicode title" {
         Reject reason -> expect False
         Row current ->
           expect current.title == "Äng 雪"
-          expect backward current == "Äng 雪"
+          expect backward current == Something "Äng 雪"
 }
 
 test "a formerly valid title can fail the stronger proof" {

@@ -2,6 +2,7 @@ package tooling
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -17,6 +18,7 @@ import (
 type MigrationSelection struct {
 	EntryFile, ProjectRoot, Database          string
 	NewRevision                               bool
+	ContractVersion                           int
 	DecisionID, OptionID, ExpectedInputDigest string
 }
 
@@ -45,6 +47,10 @@ func (client Client) QueryMigrationPreview(ctx context.Context, selection Migrat
 	}
 	if len(selection.Database) > DefaultMaxOverlayPathBytes || !utf8.ValidString(selection.Database) || strings.ContainsRune(selection.Database, 0) {
 		return nil, result, fmt.Errorf("invalid migration database selection")
+	}
+	if selection.ContractVersion < 0 || selection.ContractVersion == 1 || selection.ContractVersion > 2147483646 ||
+		selection.ContractVersion > 0 && (selection.NewRevision || selection.DecisionID != "" || selection.OptionID != "" || selection.ExpectedInputDigest != "") {
+		return nil, result, fmt.Errorf("cleanup requires a version >= 2 and cannot be combined with a new revision or source choice")
 	}
 	if selection.DecisionID != "" || selection.OptionID != "" || selection.ExpectedInputDigest != "" {
 		if selection.DecisionID == "" || selection.OptionID == "" || len(selection.DecisionID) > 256 || len(selection.OptionID) > 256 ||
@@ -75,6 +81,10 @@ func (client Client) QueryMigrationPreview(ctx context.Context, selection Migrat
 	documents = append([]MigrationDocument(nil), documents...)
 	sort.Slice(documents, func(i, j int) bool { return documents[i].Path < documents[j].Path })
 	args := []string{"migrate", "generate", selection.EntryFile, "--manifest-json", "--project-root", selection.ProjectRoot}
+	if selection.ContractVersion > 0 {
+		args[1] = "contract"
+		args = append(args, "--version", strconv.Itoa(selection.ContractVersion))
+	}
 	if selection.Database != "" {
 		args = append(args, "--database", selection.Database)
 	}
@@ -131,6 +141,22 @@ func (client Client) QueryMigrationPreview(ctx context.Context, selection Migrat
 	}
 	if preview.EntryFile() != selection.EntryFile || (selection.NewRevision && preview.Operation() != "start") {
 		return nil, result, fmt.Errorf("migration preview changed the selected entry or operation")
+	}
+	if selection.ContractVersion > 0 && preview.Operation() != "contract" {
+		return nil, result, fmt.Errorf("compiler changed the cleanup operation")
+	}
+	if selection.ContractVersion == 0 && preview.Operation() == "contract" {
+		return nil, result, fmt.Errorf("compiler returned cleanup source without a cleanup request")
+	}
+	if selection.ContractVersion > 0 {
+		var metadata struct {
+			ContractVersion int `json:"contractVersion"`
+		}
+		files := preview.Manifest().FileEdits()
+		if !preview.Compilable() || json.Unmarshal(preview.JSON(), &metadata) != nil || metadata.ContractVersion != selection.ContractVersion ||
+			len(files) != 1 || !files[0].Creates || filepath.Base(files[0].Path) != fmt.Sprintf("v%d-contract.tesl", selection.ContractVersion) {
+			return nil, result, fmt.Errorf("compiler changed the reviewed cleanup version or output")
+		}
 	}
 	if selection.Database != "" && preview.Database() != selection.Database &&
 		(strings.Contains(selection.Database, ".") || !strings.HasSuffix(preview.Database(), "."+selection.Database)) {

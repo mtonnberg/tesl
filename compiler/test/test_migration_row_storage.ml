@@ -224,8 +224,8 @@ func TestActualPostgresStorageAdapters(t *testing.T) {
  if _,err,scanned:=decode(sourcePlan,wrongType);err==nil||scanned {t.Fatal("wrong SQL carrier reached scanner",err)}
  value,err,scanned:=decode(sourcePlan,expressions);if err!=nil||!scanned {t.Fatal("generated source decoder",err)}
  if value.Title!="title-distinct"||value.Author!="author-distinct"||value.Huge.String()!="123456789012345678901234567890"||!value.Active||value.Score!=2.75||value.Optional.Tag!=rt.MaybeNothing {t.Fatal("decoded primitive/NULL/JSONB values shifted")}
- result,err:=MainDatabaseCompiledRowTransform0.Run(value);if err!=nil||result.Tag!=rt.MigratedRow {t.Fatal("actual Tesl callback",err)}
- encoded,err:=adapter.Encode(result.RowValue);if err!=nil {t.Fatal(err)}
+ result,err:=MainDatabaseCompiledRowTransform0.Run(value);if err!=nil||result.Tag!=rt.RowChangeKeep {t.Fatal("actual Tesl callback",err)}
+ encoded,err:=adapter.Encode(result.KeepValue);if err!=nil {t.Fatal(err)}
  if _,err:=encoded.Parameters(sourcePlan);err==nil {t.Fatal("encoded target accepted source plan")}
  if _,err:=encoded.Parameters(foreignTarget);err==nil {t.Fatal("encoded target accepted foreign database target plan")}
  params,err:=encoded.Parameters(targetPlan);if err!=nil {t.Fatal(err)}
@@ -234,7 +234,7 @@ func TestActualPostgresStorageAdapters(t *testing.T) {
  var title,owner,huge,json string;var count int;var nullText,nullJSON bool
  err=conn.QueryRow(ctx,`SELECT "count"::int,"title","owner","huge"::text,"metadata"->>'storedText',"optional" IS NULL,"optionalJson" IS NULL FROM "odd""target"`).Scan(&count,&title,&owner,&huge,&json,&nullText,&nullJSON)
  if err!=nil||count!=7||title!="title-distinct"||owner!="author-distinct"||huge!="123456789012345678901234567890"||json!="title-distinct"||!nullText||!nullJSON {t.Fatal("encoded SQL projection/codec/null mismatch",err)}
- value.Id="reject";rejected,err:=MainDatabaseCompiledRowTransform0.Run(value);if err!=nil||rejected.Tag!=rt.MigratedReject {t.Fatal("actual Tesl Reject lost")}
+ value.Id="reject";rejected,err:=MainDatabaseCompiledRowTransform0.Run(value);if err!=nil||rejected.Tag!=rt.RowChangeReject {t.Fatal("actual Tesl Reject lost")}
  for _,expression:=range []string{`NULL::numeric AS "huge"`,`1.25::numeric AS "huge"`} {
   parts:=append([]string(nil),expressions...);parts[3]=expression
   if _,err,scanned:=decode(sourcePlan,parts);err==nil||!scanned {t.Fatal("numeric null/fractional value accepted",err)}
@@ -291,8 +291,8 @@ func TestCompiledStorageCompletenessAtomicRetry(t *testing.T) {
  rt.RegisterCompiledRowStorage(second,tasksOld.TeslDecodeRowNote,tasksFresh.TeslEncodeRowNote,tasksFresh.TeslDecodeRowNote,tasksOld.TeslEncodeRowNote)
  if err:=rt.PreflightApplicationDatabases(db,other);err!=nil {t.Fatal("complete retry failed",err)}
  value:=old.Note{Id:"kept",Title:"safe",Huge:rt.FromInt64(42)}
- result,err:=first.Run(value);if err!=nil||result.Tag!=rt.MigratedRow||result.RowValue.Metadata.Text!="safe" {t.Fatal("retry did not seal actual callback",err)}
- if _,err:=adapter.Encode(result.RowValue);err!=nil {t.Fatal("retry did not seal codec",err)}
+ result,err:=first.Run(value);if err!=nil||result.Tag!=rt.RowChangeKeep||result.KeepValue.Metadata.Text!="safe" {t.Fatal("retry did not seal actual callback",err)}
+ if _,err:=adapter.Encode(result.KeepValue);err!=nil {t.Fatal("retry did not seal codec",err)}
 }
 |}
 let shared_fixture ()=project ~before:stored_old ~after:stored_new (fun root save path ->

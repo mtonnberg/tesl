@@ -261,6 +261,9 @@ let proofs_of_expr
     : Proof_kernel.proven_fact list =
   let direct =
     match expr with
+    | ELit _ | EUnop _ | EConstructor {name=("True"|"False");args=[];_} ->
+      let subject=Option.value(subject_of_expr subject_env expr)~default:result_name in
+      (match Literal_proof_context.proofs subject expr with []->None|proofs->Some proofs)
     | EVar _ | EField _ -> carried_proofs_of_expr ~funcs subject_env proof_env expr
     | EOk _ ->
       (* Handled after proofs_of_call_head is defined below, so we can merge

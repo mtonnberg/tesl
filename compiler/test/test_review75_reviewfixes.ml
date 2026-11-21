@@ -381,7 +381,7 @@ fn getVal(t: PositiveTree) -> Int =
 
 (* (b): a plain fn cannot mint the proof through a Maybe container. *)
 let test_R75_PFC2_maybe_forgery_rejected () =
-  should_fail "does not carry" ({|
+  should_fail "returns a success value without the declared proof" ({|
 module Pfc2M exposing [IsPositive, PositiveTree, checkPos, needPos, launder]
 import Tesl.Prelude exposing [Bool(..), Int]
 import Tesl.Maybe exposing [Maybe(..)]

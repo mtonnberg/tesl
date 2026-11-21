@@ -932,6 +932,9 @@ let builtin_ctor_info : ctor_info = [
   ("Right", ([mk_var_type "b"], mk_app_type (mk_app_type (mk_name_type "Either") (mk_var_type "a")) (mk_var_type "b")));
   ("Row", ([mk_var_type "a"], mk_app_type (mk_name_type "Migrated") (mk_var_type "a")));
   ("Reject", ([mk_name_type "String"], mk_app_type (mk_name_type "Migrated") (mk_var_type "a")));
+  ("KeepRow", ([mk_var_type "a"], mk_app_type (mk_name_type "RowChange") (mk_var_type "a")));
+  ("DeleteRow", ([mk_name_type "String"], mk_app_type (mk_name_type "RowChange") (mk_var_type "a")));
+  ("RejectRow", ([mk_name_type "String"], mk_app_type (mk_name_type "RowChange") (mk_var_type "a")));
   ("Tuple2", ([mk_var_type "a"; mk_var_type "b"], mk_app_type (mk_app_type (mk_name_type "Tuple2") (mk_var_type "a")) (mk_var_type "b")));
   ("Tuple3", ([mk_var_type "a"; mk_var_type "b"; mk_var_type "c"], mk_app_type (mk_app_type (mk_app_type (mk_name_type "Tuple3") (mk_var_type "a")) (mk_var_type "b")) (mk_var_type "c")));
   (* EmailBody (Tesl.Email) is a REAL stdlib ADT — TextBody String | HtmlBody

@@ -100,7 +100,7 @@ func TestNominalKeyPreservesCodecInput(t *testing.T) {
  for _, value := range []string{"", "null", "\"quote\"", "å/日本語"} {
   before := old.MakeNote(value)
   result := convert(before)
-  after := result.RowValue
+  after := result.KeepValue
   oldColumns, oldErr := old.TeslEncodeRowNote(before)
   newColumns, newErr := fresh.TeslEncodeRowNote(after)
   if oldErr != nil || newErr != nil || !reflect.DeepEqual(oldColumns[0], newColumns[0]) {
@@ -162,7 +162,7 @@ func TestBothNominalDirectionsPreserveInput(t *testing.T) {
   before:=old.MakeNote(value)
   forward,err:=MainDatabaseCompiledRowTransform0.Run(before)
   if err!=nil{t.Fatal(err)}
-  converted:=forward.RowValue
+  converted:=forward.KeepValue
   current:=fresh.MakeNote(value)
   if !reflect.DeepEqual(converted.Id,current.Id)||!reflect.DeepEqual(converted.Alias,current.Alias){t.Fatal("forward exact projections changed",converted,current)}
   previous,err:=MainDatabaseCompiledRowWriteBack0.Reverse(current)
@@ -222,8 +222,8 @@ let optional_native () =
    |>replace "if _,err:=MainDatabaseCompiledRowWriteBack0.Encode(current);err!=nil{t.Fatal(\"original storage codec rejected reverse\",err)}" {|if _,err:=MainDatabaseCompiledRowWriteBack0.Encode(current);err!=nil{t.Fatal("original storage codec rejected reverse",err)}
   before.Spare=rt.Maybe[old.Key]{Tag:rt.MaybeNothing}
   absent,err:=MainDatabaseCompiledRowTransform0.Run(before)
-  if err!=nil||absent.RowValue.Alias.Tag!=rt.MaybeNothing{t.Fatal("Derived changed SQL NULL",absent,err)}
-  back,err:=MainDatabaseCompiledRowWriteBack0.Reverse(absent.RowValue)
+  if err!=nil||absent.KeepValue.Alias.Tag!=rt.MaybeNothing{t.Fatal("Derived changed SQL NULL",absent,err)}
+  back,err:=MainDatabaseCompiledRowWriteBack0.Reverse(absent.KeepValue)
   if err!=nil||back.Spare.Tag!=rt.MaybeNothing{t.Fatal("inverse changed SQL NULL",back,err)}
   columns,err:=old.TeslEncodeRowNote(back)
   if err!=nil||columns[1]!=nil{t.Fatal("Nothing became JSON null",columns,err)}|} in

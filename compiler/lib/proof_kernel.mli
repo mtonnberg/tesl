@@ -91,7 +91,8 @@ type evidence_origin =
                             which §7.12 ([is_forgery_restricted_kind]) has verified is a
                             pass-through of an input proof or a framework provenance *)
   | FrameworkCollection (** a framework collection operation's synthesized proof
-                            (List/Set filterCheck/allCheck ⇒ ForAll) *)
+                             (List/Set filterCheck/allCheck ⇒ ForAll) *)
+  | LiteralRule         (** an explicit literal rule's checked, value-preserving validation *)
 
 (** Admit a fact the untrusted carried-proof elaborator read off explicit program
     structure, tagged with its {!evidence_origin}.  This is the residual raw admission

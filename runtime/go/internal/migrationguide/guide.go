@@ -50,10 +50,34 @@ func ForDecision(decision Decision) Guide {
 	guide := ForDiagnostic("MIG003", decision.Reason)
 	if len(decision.Options) == 0 {
 		guide.Options = []Option{}
-		guide.Summary += " The compiler has not proposed a source template for this case."
+		guide.Title = "Adjust this schema change"
+		guide.Summary = decision.Reason + " The compiler has not proposed a source template for this case."
+		guide.Help = []string{"Return to the schema step and address the stated constraint. An unsupported transition cannot be made safe by filling the placeholder with arbitrary migration rules. Keep frozen history unchanged."}
 		return guide
 	}
 	guide.Title = "Choose how to migrate " + decision.Entity
+	if strings.Contains(decision.Reason, "stored proof contract changed") {
+		guide.Summary = decision.Reason + "\n\n" + guide.Summary
+	} else {
+		guide.Summary = decision.Reason
+	}
+	for _, option := range decision.Options {
+		if option.ID == "map-fields" || strings.HasPrefix(option.ID, "rename:") || option.ID == "rename-all" {
+			guide.Help = []string{"Choose explicit field identity mappings; matching types alone do not prove a rename. New fields and old-version writes for removed fields require your values or expressions.", "Record and ADT adapters rebuild exact target types through their constructors and codecs. Removed/new variants need a domain mapping; failed forward conversions reject the row. Review historical compatibility values and test both directions before retiring old writers."}
+		}
+		if option.ID == "map-queued-payload" || option.ID == "remove-empty-queue" {
+			guide.Title = "Review " + decision.Entity
+			guide.Help = []string{"Queued payload conversions use a generated pure helper module and historical fixtures. They use exact old/new payload types and codecs; rejected jobs are retained rather than discarded.", "Keep row changes and queue payload changes in separate revisions. Empty-queue retirement is a runtime-checked operation, not permission to discard queued data."}
+		}
+		if option.ID == "require-value" {
+			guide.Title = "Choose a value for missing data"
+			guide.Summary = decision.Reason
+			guide.Help = []string{
+				"Existing Something values are kept. Replace the missing-value placeholder with a value or an expression using the old row.",
+				"The reverse function writes Something for new-version values so the old application can still read them. Fill valid historical example inputs for the generated fixture and recheck.",
+			}
+		}
+	}
 	guide.Options = make([]Option, 0, len(decision.Options))
 	for _, option := range decision.Options {
 		guide.Options = append(guide.Options, Option{
@@ -81,6 +105,9 @@ func ForDiagnostic(code, message string) Guide {
 			"This command prepares source only. Test conversion and mixed old/new writers, review the plan, then build and deploy the migration worker before routing new requests. Contract retires old versions before removing retained storage.",
 		},
 	}
+	if message != "" {
+		guide.Summary = message
+	}
 	switch code {
 	case "MIG001":
 		guide.Title = "Refresh an undeployed current revision"
@@ -96,7 +123,7 @@ func ForDiagnostic(code, message string) Guide {
 		guide.Help = append(guide.Help, "Do not dismiss this as a normal draft edit or replace recorded hashes manually. Restore frozen schemas, private helpers and completed migrations from the deployed source.")
 	case "MIG024":
 		guide.Title = "Same no longer proves identity"
-		guide.Summary = "Same requires an equal complete semantic closure, including facts, checks, establish functions, helpers and codecs."
+		guide.Summary = "Same requires unchanged meaning, including the reached checks, establish functions, helpers and codecs. Old values passing a new check is not enough.\n\nIf your new check is more permissive, use a changed-proof conversion, not Same or same-column Revalidate. Old values may all pass forwards, but newly allowed values can fail the old check. While old versions can still write, the reverse conversion must supply an old-valid value."
 		guide.Options = []Option{
 			{ID: "restore-identity", Title: "Keep the old behavior", When: "The dependency change was unintended; restore it, then let the compiler verify Same again."},
 			{ID: "explicit-transition", Title: "Write an explicit checked transition", When: "The stored meaning intentionally changed; remove the invalid Same and choose the appropriate migration rules.", RequiresCustomCode: true},
@@ -105,13 +132,17 @@ func ForDiagnostic(code, message string) Guide {
 	case "MIG003":
 		guide.Title = "Choose how to populate existing rows"
 		guide.Summary = "A generated todo marks an unresolved decision; generation does not fabricate a value or a proof."
-		if strings.Contains(message, "Choose a literal of type ") {
+		if strings.HasPrefix(message, "Migration needs a value: ") {
+			guide.Title = "Fill this migration value"
+			guide.Summary = strings.TrimPrefix(message, "Migration needs a value: ")
+			guide.Help = []string{"Replace the selected placeholder with a value or expression of the requested type, then recheck. Historical examples exercise the migration using the previous schema's constructor and validation."}
+		} else if strings.Contains(message, "Choose a literal of type ") {
 			guide.Title = "Complete the selected literal default"
 			guide.Summary = "The scaffold is written. Replace this todo with a literal of the compiler's named type, then save and recheck."
 			guide.Help = append(guide.Help, "This is the custom value for the default route you already selected. Keep its generated Default rule and replace only the value hole. Choose the value for existing rows deliberately; Same or Revalidate cannot supply that missing value.")
 		} else if strings.Contains(message, "stored proof contract changed") {
 			guide.Title = "Migrate a changed historical proof"
-			guide.Summary = "Changing an existing proof requires preserving an old-valid representation while old versions may write."
+			guide.Summary = "Changing an existing proof requires preserving an old-valid representation while old versions may write. This also applies when the new check is more permissive and every old value passes: newly allowed values may fail the old check in the reverse direction.\n\nChoose the validator-reuse plan if offered, or the custom conversion plan. Supply an old-valid fallback policy, or keep new writes within the old rule until old writers are retired. Neither Same nor same-column Revalidate replaces this changed proof."
 			guide.Options = []Option{{ID: "retype-proof", Title: "Retype with a checked reverse function", When: "Use Migrate with Retype and WriteBack; the reverse function must return the exact historical type and proof.", Example: "Migrate convert [Retype field, WriteBack field field reverseFn]", RequiresCustomCode: true}}
 			guide.Help = append(guide.Help, proofHelp()...)
 		} else if match := additiveField.FindStringSubmatch(message); len(match) == 2 {
@@ -156,7 +187,8 @@ func proofHelp() []string {
 	return []string{
 		"A changed check, establish function, private helper or codec can change stored meaning without changing a field's visible type. Same must not conceal that change; use the compiler's differing-dependency diagnostic.",
 		"Revalidate supports a first proof or a supported field-local conjunction that preserves every historical proof through exact Same. It does not replace changed historical evidence. Removing a valid Same intentionally requests revalidation; refresh does not put it back.",
-		"For a changed existing primitive field proof, use Migrate with Retype and WriteBack. The reverse callback returns the exact historical field type and proof. Cross-field entity predicates are unsupported for these scalar reverse callbacks.",
+		"For a changed existing field proof, use Migrate with Retype and WriteBack. The reverse callback returns the exact historical field type and proof, or Maybe of that type. Something supplies the old representation; Nothing refuses the entire application write while old columns remain. During backfill, the exact original old projection can be retained instead. Cross-field entity predicates are unsupported for these field reverse callbacks.",
 		"Stronger proofs may reject old rows; repair them before Contract. Weaker proofs may permit values old writers cannot represent. An old-valid reverse value is not necessarily lossless: an unrelated old update can invalidate the new row representation. Retire old writers before permitting such values when exact retention is required.",
+		"Example: increasing a title limit from 120 to 200 accepts every previously valid title. A new 150-character title still fails the old 120-character check. Choose a reviewed old-valid representation for that reverse write, or wait until old writers are retired before accepting titles longer than 120. The compiler does not treat one-way acceptance as Same, and does not guess a truncation or fallback value.",
 	}
 }

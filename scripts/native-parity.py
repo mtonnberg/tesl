@@ -111,7 +111,8 @@ def main():
         checks.append(("Windows debug token", ["go", "test", "./teslrt", "-run",
                        "TestWindowsDebugToken"], root / "runtime/go"))
     checks.append(("Editor", ["node", "--test", "toolchain.test.js", "test-output-parser.test.js",
-                              "migration-authoring.test.js", "migration-client.test.js"],
+                              "migration-authoring.test.js", "migration-client.test.js",
+                              "migration-cancel.test.js", "migration-flow.test.js", "migration-project.test.js"],
                    root / "editor/vscode-tesl"))
     run_checks(checks, environment)
     # `dune exec` can promote the generators again while running the suites.

@@ -121,10 +121,10 @@ func TestCompiledRow(t *testing.T) {
  if err := teslrt.PreflightApplicationDatabases(MainDatabase); err != nil { t.Fatal(err) }
  input.Id="reject"
  rejected, rejectErr := MainDatabaseCompiledRowTransform0.Run(input)
- if rejectErr != nil || rejected.Tag != teslrt.MigratedReject || rejected.RejectReason != "source rejected" { t.Fatal("Tesl Reject branch lost", rejected, rejectErr) }
+ if rejectErr != nil || rejected.Tag != teslrt.RowChangeReject || rejected.Reason != "source rejected" { t.Fatal("Tesl Reject branch lost", rejected, rejectErr) }
  input.Id="kept"
  result, err := MainDatabaseCompiledRowTransform0.Run(input)
- if err != nil || result.Tag != teslrt.MigratedRow || result.RowValue.Id != "kept" || result.RowValue.Owner != "writer" || result.RowValue.Title != "hello" || result.RowValue.Count.String() != "7" {
+ if err != nil || result.Tag != teslrt.RowChangeKeep || result.KeepValue.Id != "kept" || result.KeepValue.Owner != "writer" || result.KeepValue.Title != "hello" || result.KeepValue.Count.String() != "7" {
   t.Fatalf("wrong row: %#v %v", result, err)
  }
 }
@@ -238,7 +238,7 @@ func TestCompiledRowScenario(t *testing.T) {
 	}
 	result, err := handle.Run(original)
 	if scenario == "invalid-result" {
-		if err == nil || !strings.Contains(err.Error(), "invalid Migrated tag") {
+		if err == nil || !strings.Contains(err.Error(), "invalid result tag") {
 			t.Fatal("unknown result tag accepted", err)
 		}
 		return
@@ -247,12 +247,12 @@ func TestCompiledRowScenario(t *testing.T) {
 		t.Fatal(err)
 	}
 	if scenario == "reject" {
-		if result.Tag != runtime.MigratedReject || result.RejectReason != "test-reject" {
+		if result.Tag != runtime.RowChangeReject || result.Reason != "test-reject" {
 			t.Fatal("rejection did not survive typed handle")
 		}
 		return
 	}
-	if result.Tag != runtime.MigratedRow || result.RowValue.Owner != "writer" || result.RowValue.Title != "keep" {
+	if result.Tag != runtime.RowChangeKeep || result.KeepValue.Owner != "writer" || result.KeepValue.Title != "keep" {
 		t.Fatal("actual compiled callback returned wrong row", result)
 	}
 	if scenario == "concurrent" {
@@ -261,7 +261,7 @@ func TestCompiledRowScenario(t *testing.T) {
 			wg.Go(func() {
 				for range 20 {
 					row, err := handle.Run(original)
-					if err != nil || row.Tag != runtime.MigratedRow || row.RowValue.Owner != "writer" {
+					if err != nil || row.Tag != runtime.RowChangeKeep || row.KeepValue.Owner != "writer" {
 						t.Error("concurrent typed callback failed", err)
 					}
 				}
@@ -507,7 +507,7 @@ func TestTwoActualDatabaseBindings(t *testing.T) {
  if err:=teslrt.PreflightApplicationDatabases(MainDatabase,second.MainDatabase); err!=nil {t.Fatal(err)}
  a,e:=MainDatabaseCompiledRowTransform0.Run(old.Note{Id:"one",Author:"notes",Title:"a"})
  b,f:=second.MainDatabaseCompiledRowTransform0.Run(tasks.Note{Id:"two",Author:"tasks",Title:"b"})
- if e!=nil || f!=nil || a.RowValue.Owner!="notes" || b.RowValue.Owner!="tasks" { t.Fatal(a,b,e,f) }
+ if e!=nil || f!=nil || a.KeepValue.Owner!="notes" || b.KeepValue.Owner!="tasks" { t.Fatal(a,b,e,f) }
 }
 |} (emit app))
 let multi_entity_generations ()=project
@@ -576,7 +576,7 @@ entity Note|}
    let column=List.find (fun (c:Migration_storage.column) -> c.name="metadata") (List.hd v.entities).table.columns in
    check bool "computed record stored as JSONB" true (column.scalar=Migration_storage.Jsonb)));
   native ~source_root:root ~test:(native_test
-   |> replace "result.RowValue.Count.String() != \"7\"" "result.RowValue.Count.String() != \"7\" || result.RowValue.Metadata.Title != \"hello\"") (emit app))
+   |> replace "result.KeepValue.Count.String() != \"7\"" "result.KeepValue.Count.String() != \"7\" || result.KeepValue.Metadata.Title != \"hello\"") (emit app))
 let overlay_source_guard ()=baseline_project (fun root _ _ ->
  get (capture root (fun source ->
   let file=Filename.concat root "schema/notes/v-current.tesl" in

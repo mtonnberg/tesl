@@ -61,43 +61,79 @@ let checker_crashed src (m : module_form) : exn option =
 
 (* ── Semantics-preserving transforms (each sound by construction) ────────────*)
 
-let synth_loc = Location.dummy_loc "tesl-metamorphic"
+(* Source-backed counterparts for judgments that require exact parsed inputs.
+   The ordinary AST oracle is retained, including for frozen schema modules:
+   changing their source bytes would intentionally invalidate their seals. *)
+let source_offset src (position : Location.pos) =
+  let rec line_start line offset =
+    if line = position.line then offset + position.col
+    else match String.index_from_opt src offset '\n' with
+      | Some newline -> line_start (line + 1) (newline + 1)
+      | None -> fail "metamorphic transform has an invalid source location" in
+  line_start 0 0
+
+let declaration_end src (m : module_form) start =
+  m.decls |> List.map(fun decl -> source_offset src {(Ast.top_decl_loc decl).start with col=0})
+  |> List.filter(fun offset -> offset > start) |> List.fold_left min (String.length src)
+
+let slice src start stop = String.sub src start (stop - start)
 
 (* (i) Prepend an inert `let _ = 0` to the FIRST function's body.  A discard bound
    to a constant references nothing and changes no meaning. *)
-let insert_noop_module (m : module_form) : (module_form * string) option =
-  let noop body =
-    ELet { name = "_"; declared_type = None; declared_proof = None;
-           value = ELit { lit = LInt 0; loc = synth_loc };
-           body; loc = synth_loc }
-  in
-  let rec go acc = function
-    | [] -> None
-    | DFunc fd :: rest ->
-      Some ({ m with decls = List.rev_append acc (DFunc { fd with body = noop fd.body } :: rest) },
-            fd.name)
-    | d :: rest -> go (d :: acc) rest
-  in
-  go [] m.decls
+let insert_noop_source src (m : module_form) : string option =
+  match List.find_map(function DFunc fd -> Some fd | _ -> None)m.decls with
+  | None -> None
+  | Some fd ->
+    let position = (Checker.expr_loc fd.body).start in
+    let start = source_offset src position in
+    let prefix = slice src 0 start in
+    if position.line > fd.loc.start.line then
+      Some(prefix ^ "let _ = 0\n" ^ String.make position.col ' ' ^ slice src start (String.length src))
+    else
+      (* An inline body becomes a block. Shift its continuation lines together,
+         preserving nested case/if indentation relative to the function. *)
+      let stop = declaration_end src m start in
+      let body = slice src start stop in
+      let indented = String.split_on_char '\n' body |> List.map(fun line -> "  " ^ line) |> String.concat "\n" in
+      Some(prefix ^ "\n  let _ = 0\n" ^ indented ^ "\n" ^ slice src stop (String.length src))
 
 (* (ii) Swap the first two top-level function declarations, leaving every other
    declaration in place.  Declaration order among functions must not affect the
    verdict (signatures are collected before bodies are checked). *)
-let reorder_funcs_module (m : module_form) : (module_form * string) option =
-  let func_idxs =
-    List.mapi (fun i d -> (i, d)) m.decls
-    |> List.filter_map (function (i, DFunc _) -> Some i | _ -> None)
-  in
-  match func_idxs with
-  | i :: j :: _ ->
-    let arr = Array.of_list m.decls in
-    let tmp = arr.(i) in arr.(i) <- arr.(j); arr.(j) <- tmp;
-    Some ({ m with decls = Array.to_list arr }, "reorder-funcs")
+let reorder_funcs_source src (m : module_form) : string option =
+  match List.filter_map(function DFunc fd -> Some fd | _ -> None)m.decls with
+  | first :: second :: _ ->
+    let a = source_offset src {first.loc.start with col=0} and b = source_offset src {second.loc.start with col=0} in
+    let a_end = declaration_end src m a and b_end = declaration_end src m b in
+    let chunk start stop = let text = slice src start stop in
+      if String.ends_with ~suffix:"\n" text then text else text ^ "\n" in
+    Some(slice src 0 a ^ chunk b b_end ^ slice src a_end b ^ chunk a a_end ^ slice src b_end (String.length src))
   | _ -> None
 
-let transforms : (string * (module_form -> (module_form * string) option)) list =
-  [ ("insert-unused-let", insert_noop_module);
-    ("reorder-functions", reorder_funcs_module) ]
+let synth_loc = Location.dummy_loc "tesl-metamorphic"
+
+let insert_noop_module (m : module_form) : module_form option =
+  let noop body = ELet { name="_"; declared_type=None; declared_proof=None;
+    value=ELit{lit=LInt 0;loc=synth_loc};body;loc=synth_loc } in
+  let rec go acc = function
+    | [] -> None
+    | DFunc fd :: rest -> Some {m with decls=List.rev_append acc (DFunc{fd with body=noop fd.body}::rest)}
+    | d :: rest -> go (d::acc) rest in
+  go [] m.decls
+
+let reorder_funcs_module (m : module_form) : module_form option =
+  let indices = List.mapi(fun i d -> i,d)m.decls |>
+    List.filter_map(function i,DFunc _ -> Some i | _ -> None) in
+  match indices with
+  | i :: j :: _ ->
+    let arr=Array.of_list m.decls in
+    let tmp=arr.(i) in arr.(i)<-arr.(j);arr.(j)<-tmp;
+    Some {m with decls=Array.to_list arr}
+  | _ -> None
+
+let transforms =
+  [ ("insert-unused-let", insert_noop_module, insert_noop_source);
+    ("reorder-functions", reorder_funcs_module, reorder_funcs_source) ]
 
 (* ── Corpus discovery (mirrors test_s7_generative) ───────────────────────────*)
 
@@ -207,12 +243,22 @@ let fuzz_program name src (m : module_form) () =
   ) (Mutate.generate_mutants m)
 
 (* Metamorphic invariance for one (program, transform): verdict must not change. *)
-let invariance name (transform_name, transform) src (m : module_form) () =
+let invariance name (transform_name, transform, source_transform) src (m : module_form) () =
   match transform m with
   | None -> ()  (* transform has no site in this program *)
-  | Some (m', _) ->
+  | Some m' ->
     let before = is_rejected src m in
-    let after = is_rejected src m' in
+    let after_diags = error_diags (Compile.check_module src m') in
+    let source_bound = List.exists(fun(d:Compile.diagnostic)->d.source="literal-proof" &&
+      d.message="literal proof checking requires the exact parsed source module")after_diags in
+    let after = if not source_bound then after_diags <> [] else
+      (* Do not waive the literal example or disable its source guard. Exercise
+         the same rewrite using coherent source/AST, as a real editor would. *)
+      let rewritten = match source_transform src m with Some text -> text | None -> fail "missing source transform" in
+      let parsed = match Parser.parse_module m.source_file rewritten with
+        | Ok parsed -> parsed
+        | Err e -> failf "%s made %s unparsable: %s" transform_name name e.msg in
+      is_rejected rewritten parsed in
     incr invariance_counter;
     if before <> after then
       failf "%s FLIPPED the verdict for %s: before=%s after=%s \
@@ -241,7 +287,7 @@ let () =
         let n = rel file in
         Some (n,
           test_case "fuzz: checker total (no crash)" `Quick (fuzz_program n src m)
-          :: List.map (fun (tn, _ as t) ->
+          :: List.map (fun (tn, _, _ as t) ->
                test_case (Printf.sprintf "metamorphic: %s verdict-invariant" tn) `Quick
                  (invariance n t src m))
              transforms)
@@ -258,7 +304,7 @@ let () =
         test_case "fixture is rejected (baseline)" `Quick
           (fun () -> check bool "rejected" true (is_rejected src m))
         :: test_case "fuzz: checker total (no crash)" `Quick (fuzz_program name src m)
-        :: List.map (fun (tn, _ as t) ->
+        :: List.map (fun (tn, _, _ as t) ->
              test_case (Printf.sprintf "metamorphic: %s keeps it rejected" tn) `Quick
                (invariance name t src m))
            transforms)

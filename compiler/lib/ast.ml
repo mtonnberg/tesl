@@ -420,6 +420,7 @@ type capability_form = {
 type fact_form = {
   name   : string;
   params : binding list;
+  literal_via : ident option; (** Explicit pure validator for annotated literals. *)
   loc    : loc;
 }
 

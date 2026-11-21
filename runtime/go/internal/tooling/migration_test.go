@@ -215,6 +215,61 @@ func TestMigrationPreviewForwardsOnlyGuardedDecisionIdentifiers(t *testing.T) {
 	}
 }
 
+func TestMigrationCleanupSelectionAndResponseMustAgree(t *testing.T) {
+	for _, scenario := range []string{"valid", "wrong operation", "wrong revision", "missing output", "wrong filename", "unrequested cleanup"} {
+		t.Run(scenario, func(t *testing.T) {
+			selection, documents, response := migrationPreviewVector(t)
+			selection.NewRevision, selection.ContractVersion = false, 2
+			response["operation"], response["contractVersion"] = "contract", 2
+			manifest := response["manifest"].(map[string]any)
+			file := filepath.Join(selection.ProjectRoot, "migrations/notes/v2-contract.tesl")
+			if scenario == "wrong filename" {
+				file = filepath.Join(selection.ProjectRoot, "migrations/notes/v3-contract.tesl")
+			}
+			manifest["inputs"] = append(manifest["inputs"].([]any), map[string]any{"path": file, "sourceHash": nil, "diskHash": nil})
+			for _, dir := range []string{filepath.Dir(filepath.Dir(file)), filepath.Dir(file)} {
+				manifest["directories"] = append(manifest["directories"].([]any), map[string]any{"path": dir, "sourceHash": nil, "diskHash": nil})
+			}
+			manifest["edits"] = []any{map[string]any{"path": file, "beforeHex": nil, "afterHex": "61", "documentVersion": nil}}
+			switch scenario {
+			case "wrong operation":
+				response["operation"] = "refresh"
+			case "wrong revision":
+				response["contractVersion"] = 3
+			case "missing output":
+				manifest["edits"] = []any{}
+			case "unrequested cleanup":
+				selection.ContractVersion = 0
+			}
+			client, auditFile := migrationPreviewClient(t, response, "ok")
+			preview, _, err := client.QueryMigrationPreview(context.Background(), selection, documents)
+			if scenario != "valid" {
+				if err == nil || preview != nil {
+					t.Fatalf("mismatched cleanup accepted: %v", err)
+				}
+				return
+			}
+			if err != nil || preview == nil {
+				t.Fatalf("cleanup preview: %v", err)
+			}
+			audit := migrationPreviewReadAudit(t, auditFile)
+			if !reflect.DeepEqual(audit.Args[:10], []string{"migrate", "contract", selection.EntryFile, "--manifest-json", "--project-root", selection.ProjectRoot, "--version", "2", "--database", "App.Main"}) {
+				t.Fatalf("cleanup request lost exact revision or read-only mode: %v", audit.Args)
+			}
+		})
+	}
+	for _, selection := range []MigrationSelection{
+		{ContractVersion: -1}, {ContractVersion: 1}, {ContractVersion: 2147483647},
+		{ContractVersion: 2, NewRevision: true}, {ContractVersion: 2, OptionID: "map-fields"},
+	} {
+		base, documents, _ := migrationPreviewVector(t)
+		selection.EntryFile, selection.ProjectRoot = base.EntryFile, base.ProjectRoot
+		if preview, _, err := (Client{}).QueryMigrationPreview(context.Background(), selection, documents); err == nil || preview != nil || strings.Contains(err.Error(), "executable") {
+			t.Fatalf("invalid cleanup request reached compiler: %v", err)
+		}
+	}
+}
+
 func TestMigrationPreviewCancellationRemovesPrivateFiles(t *testing.T) {
 	selection, documents, response := migrationPreviewVector(t)
 	client, auditFile := migrationPreviewClient(t, response, "hang")

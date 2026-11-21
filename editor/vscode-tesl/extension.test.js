@@ -122,6 +122,7 @@ function makeVscode(files, debugCalls, taskCalls, workspacePath = repoRoot, opti
     Uri,
     Range,
     CodeLens,
+    CodeActionKind: { QuickFix: "quickfix" },
     ProcessExecution,
     Task,
     TaskScope: { Workspace: 1 },
@@ -167,6 +168,8 @@ function makeVscode(files, debugCalls, taskCalls, workspacePath = repoRoot, opti
       onDidChangeTextDocument: () => new Disposable(),
     },
     languages: {
+      registerCompletionItemProvider: () => new Disposable(),
+      registerCodeActionsProvider: () => new Disposable(),
       registerCodeLensProvider: (_selector, provider) => {
         codeLensProviders.push(provider);
         return new Disposable();
@@ -333,6 +336,8 @@ test "add" {
     assert.strictEqual(failure.message.location.uri.fsPath, fixture.file);
     assert.match(run.output, /fixture\.tesl :: add/);
     assert.strictEqual(run.ended, true);
+    const fileResult = await fixture.commands.get("tesl.runTests")(fixture.uri);
+    assert.deepEqual(fileResult, { kind: "tesl-test-result", status: "failed", count: 1 });
   } finally {
     fixture.cleanup();
   }
@@ -350,7 +355,8 @@ test "two" {
 }
 `);
   try {
-    await fixture.commands.get("tesl.runTests")(fixture.uri);
+    const result = await fixture.commands.get("tesl.runTests")(fixture.uri);
+    assert.deepEqual(result, { kind: "tesl-test-result", status: "passed", count: 2 });
     assert.ok(fixture.controllers[0].runs[0].events.some((event) => event.kind === "passed"));
 
     await fixture.commands.get("tesl.debugTests")(fixture.uri);
@@ -365,6 +371,10 @@ test "two" {
       isCancellationRequested: false,
     });
     assert.strictEqual(fixture.debugCalls.length, 2);
+    const runProfile = fixture.controllers[0].profiles.find((profile) => profile.name === "Run");
+    const cancelled = await runProfile.handler(new fixture.vscode.TestRunRequest([fileItem]), { isCancellationRequested: true });
+    assert.equal(cancelled.status, "cancelled");
+    assert.equal(cancelled.count, 0);
   } finally {
     fixture.cleanup();
   }
@@ -939,7 +949,7 @@ function testManifestRequiresTrustForExecution() {
     restrictedConfigurations: ["tesl.lspBinary", "tesl.dapBinary", "tesl.toolchainRoot"],
   });
   assert.ok(
-    manifest.contributes.commands.filter((command) => command.command !== "tesl.migrationGuide")
+    manifest.contributes.commands.filter((command) => command.command !== "tesl.migrationReference")
       .every((command) => command.enablement === "isWorkspaceTrusted")
   );
   for (const items of Object.values(manifest.contributes.menus)) {

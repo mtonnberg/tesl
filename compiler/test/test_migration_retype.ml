@@ -143,8 +143,8 @@ func TestRetypeRecordPostgres(t *testing.T) {
  _,err=conn.Exec(ctx,`INSERT INTO "retype""notes" VALUES ('one','{"oldText":"distinct"}',NULL)`);if err!=nil{t.Fatal(err)}
  rows,err:=conn.Query(ctx,`SELECT id AS id,metadata AS metadata FROM "retype""notes"`);if err!=nil{t.Fatal(err)}
  if !rows.Next(){t.Fatal(rows.Err())};old,err:=storage.Decode(source,rows);rows.Close();if err!=nil{t.Fatal(err)}
- migrated,err:=MainDatabaseCompiledRowTransform0.Run(old);if err!=nil||migrated.Tag!=rt.MigratedRow{t.Fatal("actual Tesl transform",err)}
- value:=migrated.RowValue
+ migrated,err:=MainDatabaseCompiledRowTransform0.Run(old);if err!=nil||migrated.Tag!=rt.RowChangeKeep{t.Fatal("actual Tesl transform",err)}
+ value:=migrated.KeepValue
  if value.Metadata.Text!="distinct"||value.Metadata.Extra!="new"{t.Fatal("new nominal constructor lost fields")}
  encoded,err:=storage.Encode(value);if err!=nil{t.Fatal(err)}
  params,err:=encoded.Parameters(target);if err!=nil{t.Fatal(err)}
@@ -426,7 +426,7 @@ fn backOptional(row: Schema.Notes.VCurrent.Note) -> Maybe Schema.Notes.V1.Metada
   |> replace {|SELECT id AS id,metadata AS metadata FROM|} {|SELECT id AS id,metadata AS metadata,optional_metadata AS "optionalMetadata" FROM|}
   |> replace {|SET metadata__v2=$1 WHERE id=$2|} {|SET metadata__v2=$1,optional_metadata__v2=$2 WHERE id=$3|}
   |> replace {|SET metadata=$2 WHERE id=$1|} {|SET metadata=$2,optional_metadata=$3 WHERE id=$1|}
-  |> replace {|migrated,err:=MainDatabaseCompiledRowTransform0.Run(old)|} {|old.Id="reject";rejected,err:=MainDatabaseCompiledRowTransform0.Run(old);if err!=nil||rejected.Tag!=rt.MigratedReject{t.Fatal("actual Tesl Reject branch",err)};old.Id="one"
+  |> replace {|migrated,err:=MainDatabaseCompiledRowTransform0.Run(old)|} {|old.Id="reject";rejected,err:=MainDatabaseCompiledRowTransform0.Run(old);if err!=nil||rejected.Tag!=rt.RowChangeReject{t.Fatal("actual Tesl Reject branch",err)};old.Id="one"
  migrated,err:=MainDatabaseCompiledRowTransform0.Run(old)|}
   |> replace {|if value.Metadata.Text!="distinct"|} {|if value.OptionalMetadata.Tag!=rt.MaybeNothing{t.Fatal("SQL NULL optional JSONB changed")}
  if value.Metadata.Text!="distinct"|}

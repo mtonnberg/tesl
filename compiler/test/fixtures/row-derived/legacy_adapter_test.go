@@ -13,14 +13,14 @@ func TestDerivedLegacyOldCodec(t *testing.T) {
 	}
 	input := old.Note{Id: "identity", Author: "before", Title: "distinct-title", Memo: "retained-memo", Metadata: old.Metadata{Text: "old"}}
 	result, err := MainDatabaseCompiledRowTransform0.Run(input)
-	if err != nil || result.Tag != rt.MigratedRow || result.RowValue.Owner != "new-owner" {
+	if err != nil || result.Tag != rt.RowChangeKeep || result.KeepValue.Owner != "new-owner" {
 		t.Fatal("Derived legacy forward", result, err)
 	}
-	reverse, err := MainDatabaseCompiledRowWriteBack0.Reverse(result.RowValue)
+	reverse, err := MainDatabaseCompiledRowWriteBack0.Reverse(result.KeepValue)
 	if err != nil || reverse.Author != "former" || reverse.Metadata.Text != "retained-memo" || reverse.Id != input.Id || reverse.Title != input.Title {
 		t.Fatal("checked legacy reverse", reverse, err)
 	}
-	encoded, err := MainDatabaseCompiledRowWriteBack0.Encode(result.RowValue)
+	encoded, err := MainDatabaseCompiledRowWriteBack0.Encode(result.KeepValue)
 	if err != nil {
 		t.Fatal(err)
 	}

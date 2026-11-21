@@ -2,6 +2,7 @@ package teslrt
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strconv"
@@ -187,10 +188,13 @@ func pgDecodePhysicalRow[From, To any](a *pgRowTransactionAdmission, storage *Pg
 		if err != nil {
 			return value, err
 		}
-		if migrated.Tag != MigratedRow {
+		if migrated.Tag == RowChangeDelete {
+			return value, fmt.Errorf("stored row is pending explicit deletion by the migration Worker")
+		}
+		if migrated.Tag != RowChangeKeep {
 			return value, fmt.Errorf("stored row rejected by its checked migration")
 		}
-		value = migrated.RowValue
+		value = migrated.KeepValue
 	} else {
 		return value, fmt.Errorf("stored row has an unsupported generation")
 	}
@@ -203,7 +207,7 @@ type pgPhysicalWrite struct {
 	primary any
 }
 
-func pgMaterializePhysicalWrite[From, To any](a *pgRowTransactionAdmission, storage *PgRowStorage[From, To], value To) (pgPhysicalWrite, error) {
+func pgMaterializePhysicalWrite[From, To any](a *pgRowTransactionAdmission, storage *PgRowStorage[From, To], value To, original ...PgEncodedRow) (pgPhysicalWrite, error) {
 	if err := pgCheckRowData(a, storage, true); err != nil {
 		return pgPhysicalWrite{}, err
 	}
@@ -243,7 +247,15 @@ func pgMaterializePhysicalWrite[From, To any](a *pgRowTransactionAdmission, stor
 		}
 		encoded, err := storage.writeBack.Encode(value)
 		if err != nil {
-			return pgPhysicalWrite{}, err
+			// Only a Worker backfill has the exact original old row, protected by
+			// its tuple CAS. Preserve that proven representation on an explicit
+			// Nothing. New application writes have no such fallback; traps and
+			// codec failures are never treated as compatibility decisions.
+			if len(original) == 1 && errors.Is(err, errHistoricalWriteBackRejected) {
+				encoded = original[0]
+			} else {
+				return pgPhysicalWrite{}, err
+			}
 		}
 		values, err := encoded.Parameters(PgRowProjectionPlan{storage.source})
 		if err != nil {

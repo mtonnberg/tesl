@@ -17,7 +17,8 @@ let check_module ?skip_dep_body source m =
     (Migration_source_diagnostics.check_module_source source m) @ diagnostics) with
   | Ok diagnostics -> diagnostics
   | Error errors -> Migration_declaration.diagnostics_of_errors errors @
-      Migration_proof_context.without_context (fun () -> Frontend_check.check_module ?skip_dep_body source m))
+       Migration_proof_context.without_context (fun () -> Frontend_check.check_module ?skip_dep_body source m))
+  |> Migration_source_diagnostics.explain_holes ~source m
 
 
 let source_parse_diagnostics filename source error =
@@ -925,8 +926,10 @@ let definition_in_top_decl env line col (decl : Ast.top_decl) =
          match type_definition_at_precise_loc env.type_defs line col c.loc c.type_name with
          | Some _ as result -> result
          | None -> None)
+  | Ast.DFact f -> Option.bind f.literal_via(fun(v:Ast.ident)->
+      term_definition_at_precise_loc env.term_defs line col v.loc v.name)
   | Ast.DQueueSchema _ | Ast.DDatabase _ | Ast.DCapability _ | Ast.DQueue _
-  | Ast.DWorkers _ | Ast.DServer _ | Ast.DFact _ | Ast.DCache _ | Ast.DEmail _
+  | Ast.DWorkers _ | Ast.DServer _ | Ast.DCache _ | Ast.DEmail _
   | Ast.DAgent _ -> None
 
 let collect_definition_env (m : Ast.module_form) =
@@ -1467,7 +1470,9 @@ let resolve_symbol_in_top_decl env line col (decl : Ast.top_decl) =
   | Ast.DQueueSchema q -> let name_loc = precise_name_loc q.loc q.name in if loc_contains_position name_loc line col then Some (term_symbol q.name name_loc) else None
   | Ast.DWorkers w -> let name_loc = precise_name_loc w.loc w.name in if loc_contains_position name_loc line col then Some (term_symbol w.name name_loc) else None
   | Ast.DServer s -> let name_loc = precise_name_loc s.loc s.name in if loc_contains_position name_loc line col then Some (term_symbol s.name name_loc) else None
-  | Ast.DFact f -> let name_loc = precise_name_loc f.loc f.name in if loc_contains_position name_loc line col then Some (type_symbol f.name name_loc) else None
+  | Ast.DFact f -> let name_loc = precise_name_loc f.loc f.name in
+    if loc_contains_position name_loc line col then Some (type_symbol f.name name_loc)
+    else Option.bind f.literal_via(fun(v:Ast.ident)->resolve_term_symbol_at_precise_loc [] env line col v.loc v.name)
   | Ast.DCache c -> let name_loc = precise_name_loc c.loc c.name in if loc_contains_position name_loc line col then Some (term_symbol c.name name_loc) else None
   | Ast.DEmail e -> let name_loc = precise_name_loc e.loc e.name in if loc_contains_position name_loc line col then Some (term_symbol e.name name_loc) else None
   | Ast.DAgent a -> let name_loc = precise_name_loc a.loc a.name in if loc_contains_position name_loc line col then Some (term_symbol a.name name_loc) else None
@@ -1825,7 +1830,9 @@ let rec collect_occurrences_in_top_decl env target (decl : Ast.top_decl) =
   | Ast.DQueueSchema q -> let name_loc = precise_name_loc q.loc q.name in if symbol_equal (term_symbol q.name name_loc) target then [name_loc] else []
   | Ast.DWorkers w -> let name_loc = precise_name_loc w.loc w.name in if symbol_equal (term_symbol w.name name_loc) target then [name_loc] else []
   | Ast.DServer s -> let name_loc = precise_name_loc s.loc s.name in if symbol_equal (term_symbol s.name name_loc) target then [name_loc] else []
-  | Ast.DFact f -> let name_loc = precise_name_loc f.loc f.name in if symbol_equal (type_symbol f.name name_loc) target then [name_loc] else []
+  | Ast.DFact f -> let name_loc = precise_name_loc f.loc f.name in
+    (if symbol_equal (type_symbol f.name name_loc) target then [name_loc] else []) @
+    Option.fold ~none:[] ~some:(fun(v:Ast.ident)->term_occurrence_at_precise_loc [] env target v.loc v.name)f.literal_via
   | Ast.DCache c -> let name_loc = precise_name_loc c.loc c.name in if symbol_equal (term_symbol c.name name_loc) target then [name_loc] else []
   | Ast.DEmail e -> let name_loc = precise_name_loc e.loc e.name in if symbol_equal (term_symbol e.name name_loc) target then [name_loc] else []
   | Ast.DAgent a -> let name_loc = precise_name_loc a.loc a.name in if symbol_equal (term_symbol a.name name_loc) target then [name_loc] else []
@@ -2534,6 +2541,11 @@ let go_import_boundary_diags (filename : string) (m : Ast.module_form) =
 
 (* Validate the captured bytes and every dependency before either public or
    internal row emission. Import signatures alone do not validate hidden bodies. *)
+let with_literal_source_graph filename sources run =
+  match Literal_proof.with_graph ~entry:filename sources run with
+  | Ok result -> result
+  | Error errors -> GoFailure (Frontend_check.literal_diags errors)
+
 let checked_row_source_diagnostics filename entry history =
     let captured=Migration_program.source_modules history in
     let originals=List.map fst captured in
@@ -2560,7 +2572,7 @@ let compile_public_row_source ?(debug=false) filename source entry =
   let mode = if debug then Emit_go.Debug else Emit_go.Release in
   let result = Migration_program.with_source_history ~entry ~source (function
     | None -> GoFailure [go_project_diag filename "row migration emission requires a versioned PostgreSQL database"]
-    | Some captured ->
+     | Some captured -> with_literal_source_graph filename (Migration_program.source_modules captured) (fun () ->
       let diagnostics = checked_row_source_diagnostics filename entry captured in
       if List.exists (fun (d:diagnostic) -> d.severity="error") diagnostics then
         GoFailure diagnostics
@@ -2600,7 +2612,7 @@ let compile_public_row_source ?(debug=false) filename source entry =
            GoSuccess (artifacts @
              [{Emit_go.path="migration-history.json";contents=json ^ "\n"};
               {Emit_go.path="queue-history.json";contents=queue_json ^ "\n"}])
-         | Error errors -> GoFailure (List.map diag_of_go_emit_error errors))) in
+          | Error errors -> GoFailure (List.map diag_of_go_emit_error errors)))) in
   match result with
   | Ok output -> output
   | Error errors -> GoFailure (Migration_declaration.diagnostics_of_errors errors)
@@ -2652,10 +2664,14 @@ let compile_go_source_internal ?(debug=false) ?(path="") ~queue_conversions file
       (match local_dependency_modules ~entry_source:source path m with
        | GoDepsError message -> GoFailure [go_project_diag filename message]
        | GoDeps { emit = modules; originals; entry_emit; lowering; sources=captured_sources } ->
+         let emit_captured () =
+         let literal_diags = if List.exists(fun((m:Ast.module_form),_)->List.exists(function Ast.DFact f->f.literal_via<>None|_->false)m.decls)captured_sources then
+           List.concat_map(fun((m:Ast.module_form),bytes)->Frontend_check.module_local_diags
+             ~additional:(Migration_application.make m) bytes m)captured_sources else []in
          (* Each dependency is checked in its own right: an importer only sees names its
             dependency exports, so a dependency that does not compile must not be
             emitted as if it did. *)
-         let dependency_diags = List.concat_map (fun (dependency : Ast.module_form) ->
+         let dependency_diags = literal_diags @ List.concat_map (fun (dependency : Ast.module_form) ->
            if dependency.source_file = m.source_file then []
            else
              match Source_input.read_text dependency.source_file with
@@ -2697,7 +2713,8 @@ let compile_go_source_internal ?(debug=false) ?(path="") ~queue_conversions file
                   "\nconst teslGeneratedQueueHistoryJSON = " ^ Emit_go.go_quote queue_json ^
                   "\n\nfunc init() {\n" ^ String.concat "" registrations ^ "\tregisterCompiledQueueHistory(teslGeneratedQueueHistoryJSON)\n}\n"}] in
              GoSuccess (artifacts @ metadata)
-           | Error errors -> GoFailure (List.map diag_of_go_emit_error errors))))) in
+           | Error errors -> GoFailure (List.map diag_of_go_emit_error errors)in
+          with_literal_source_graph filename captured_sources emit_captured)))) in
     match result with Ok result -> result | Error es -> GoFailure (Migration_declaration.diagnostics_of_errors es))
 
 let compile_go_source ?debug ?path filename source =
@@ -2725,7 +2742,7 @@ let compile_row_captured_artifacts ~catalog_only ?(mode=Emit_go.Release) ?(stora
  | Ok entry ->
   let result=Migration_program.with_source_history ~entry ~source (function
    | None -> GoFailure [go_project_diag filename "row source artifacts require a versioned PostgreSQL database"]
-   | Some history ->
+    | Some history -> with_literal_source_graph filename (Migration_program.source_modules history) (fun () ->
     let diagnostics=checked_row_source_diagnostics filename entry history in
     if List.exists (fun (d:diagnostic) -> d.severity="error") diagnostics then GoFailure diagnostics else
     match Migration_program.source_lowering history with
@@ -2738,7 +2755,7 @@ let compile_row_captured_artifacts ~catalog_only ?(mode=Emit_go.Release) ?(stora
       ~migration_queues:(Migration_program.queue_bindings p)
       ~queue_codec_records:(Migration_program.queue_codec_records p) ~entry modules with
     | Ok artifacts -> GoSuccess (if catalog_only then List.filter (fun (artifact:Emit_go.artifact) -> not (String.starts_with ~prefix:"cmd/" artifact.path)) artifacts else artifacts)
-    | Error errors -> GoFailure (List.map diag_of_go_emit_error errors)) in
+     | Error errors -> GoFailure (List.map diag_of_go_emit_error errors))) in
   match result with Ok output -> output | Error errors -> GoFailure (Migration_declaration.diagnostics_of_errors errors)
 
 let compile_row_source_artifacts ?mode ?storage ?physical filename source =

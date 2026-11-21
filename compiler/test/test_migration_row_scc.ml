@@ -114,10 +114,10 @@ func TestCompiledRow(t *testing.T) {
  if err := teslrt.PreflightApplicationDatabases(MainDatabase); err != nil { t.Fatal(err) }
  input.Id="reject"
  rejected, rejectErr := MainDatabaseCompiledRowTransform0.Run(input)
- if rejectErr != nil || rejected.Tag != teslrt.MigratedReject || rejected.RejectReason != "source rejected" { t.Fatal("Tesl Reject branch lost", rejected, rejectErr) }
+ if rejectErr != nil || rejected.Tag != teslrt.RowChangeReject || rejected.Reason != "source rejected" { t.Fatal("Tesl Reject branch lost", rejected, rejectErr) }
  input.Id="kept"
  result, err := MainDatabaseCompiledRowTransform0.Run(input)
- if err != nil || result.Tag != teslrt.MigratedRow || result.RowValue.Id != "kept" || result.RowValue.Owner != "writer" || result.RowValue.Title != "hello" || result.RowValue.Count.String() != "7" {
+ if err != nil || result.Tag != teslrt.RowChangeKeep || result.KeepValue.Id != "kept" || result.KeepValue.Owner != "writer" || result.KeepValue.Title != "hello" || result.KeepValue.Count.String() != "7" {
   t.Fatalf("wrong row: %#v %v", result, err)
  }
 }
@@ -218,12 +218,12 @@ func TestNominalHelperCycleForwardAndInverse(t *testing.T) {
  if err := teslrt.PreflightApplicationDatabases(MainDatabase); err != nil { t.Fatal(err) }
  before := old.Note{Id:"kept",Author:"writer",Title:"hello",Metadata:old.Metadata{Text:"nested",Hidden:"original"},Retired:"stored"}
  result, err := MainDatabaseCompiledRowTransform0.Run(before)
- if err != nil || result.Tag != teslrt.MigratedRow || result.RowValue.Count.String() != "7" || result.RowValue.Metadata.Hidden != "original" { t.Fatal("source-site transport lost",result,err) }
- previous, err := MainDatabaseCompiledRowWriteBack0.Reverse(result.RowValue)
+ if err != nil || result.Tag != teslrt.RowChangeKeep || result.KeepValue.Count.String() != "7" || result.KeepValue.Metadata.Hidden != "original" { t.Fatal("source-site transport lost",result,err) }
+ previous, err := MainDatabaseCompiledRowWriteBack0.Reverse(result.KeepValue)
  if err != nil || previous.Metadata != before.Metadata || previous.Retired != "fallback" { t.Fatal("inverse owner/certificate lost",previous,err) }
- if !reflect.DeepEqual(old.EncodeMetadataJSON(before.Metadata),fresh.EncodeMetadataJSON(result.RowValue.Metadata)) { t.Fatal("original codec owner changed") }
+ if !reflect.DeepEqual(old.EncodeMetadataJSON(before.Metadata),fresh.EncodeMetadataJSON(result.KeepValue.Metadata)) { t.Fatal("original codec owner changed") }
  if _,err := old.TeslEncodeRowNote(previous); err != nil { t.Fatal(err) }
- if _,err := fresh.TeslEncodeRowNote(result.RowValue); err != nil { t.Fatal(err) }
+ if _,err := fresh.TeslEncodeRowNote(result.KeepValue); err != nil { t.Fatal(err) }
 }
 |} in native ~source_root:root ~test artifacts)
 

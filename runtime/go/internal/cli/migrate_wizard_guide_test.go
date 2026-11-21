@@ -32,7 +32,7 @@ func TestMigrationWizardReviewBrowsesAndExpandsWithoutApplyingChoices(t *testing
 		t.Fatalf("browse/help executed or approved a choice: %v %v %+v", proceed, err, *calls)
 	}
 	output := app.Stdout.(*bytes.Buffer).String()
-	for _, required := range []string{"Item 1/2", "Item 2/2", "Compiler-proposed scaffolds", "Use a literal String default", `Additive [Default title (todo "Choose a String literal")]`, "Same requires an equal complete semantic closure", "does not replace changed historical evidence", "Guidance without a compiler-proposed option cannot update source", "--resume"} {
+	for _, required := range []string{"Item 1/2", "Item 2/2", "Compiler-proposed scaffolds", "Use a literal String default", `Additive [Default title (todo "Choose a String literal")]`, "Same requires unchanged meaning", "more permissive", "does not replace changed historical evidence", "Guidance without a compiler-proposed option cannot update source", "--resume"} {
 		if !strings.Contains(output, required) {
 			t.Errorf("missing %q in:\n%s", required, output)
 		}

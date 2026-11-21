@@ -89,7 +89,8 @@ let check ~resolve ~modules ~root ~owner ~(declaration:func_decl) ~mapping =
    let shadow names loc=if List.mem old names || List.exists (fun name ->
      List.exists (fun (_,_,identity)->resolve owner I.Value name=Some(I.Global identity)) rules ||
      List.exists (fun ctor->primitive owner ctor name)
-       ["Tesl.Maybe.Something";"Tesl.Maybe.Nothing";"Tesl.Migration.Row";"Tesl.Migration.Reject"]) names then
+       ["Tesl.Maybe.Something";"Tesl.Maybe.Nothing";"Tesl.Migration.Row";"Tesl.Migration.Reject";
+        "Tesl.Migration.KeepRow";"Tesl.Migration.DeleteRow";"Tesl.Migration.RejectRow"]) names then
      reject "MIG018" loc "Revalidate cannot shadow the original row, establish or result constructors" in
    let check_fields env fields loc = List.iter(fun(target,_,identity)->
     match List.assoc_opt target fields with
@@ -119,7 +120,9 @@ let check ~resolve ~modules ~root ~owner ~(declaration:func_decl) ~mapping =
        returns env arm.body) e.arms
     | value -> (match application value with
       | Some ctor,[value] when primitive owner "Tesl.Migration.Row" ctor -> row env value
-      | Some ctor,[_] when primitive owner "Tesl.Migration.Reject" ctor -> ()
+       | Some ctor,[_] when primitive owner "Tesl.Migration.Reject" ctor -> ()
+       | Some ctor,[value] when primitive owner "Tesl.Migration.KeepRow" ctor -> row env value
+       | Some ctor,[_] when primitive owner "Tesl.Migration.DeleteRow" ctor || primitive owner "Tesl.Migration.RejectRow" ctor -> ()
       | _ -> reject "MIG018" (at value) "Revalidate requires explicit Row or Reject results") in
    returns [] declaration.body
   end;
