@@ -731,6 +731,11 @@
  (libraries tesl_compiler_lib alcotest str unix))
 
 (test
+ (name test_literal_proof)
+ (modules test_literal_proof)
+ (libraries tesl_compiler_lib alcotest str unix))
+
+(test
  (name test_migration_revalidate_postgres)
  (modules test_migration_revalidate_postgres)
  (libraries tesl_compiler_lib alcotest str unix))

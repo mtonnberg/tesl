@@ -16,10 +16,10 @@ func TestDerivedActualTypedCallback(t *testing.T) {
 		t.Fatal(err)
 	}
 	result, err := MainDatabaseCompiledRowTransform0.Run(input)
-	if err != nil || result.Tag != rt.MigratedRow {
+	if err != nil || result.Tag != rt.RowChangeKeep {
 		t.Fatal("generated Derived did not return Row", result, err)
 	}
-	row := result.RowValue
+	row := result.KeepValue
 	if row.Id != input.Id || row.Owner != input.Author || row.Title != input.Title || row.Memo != input.Memo || row.Count.String() != "123456789012345678901234567890" || row.Label != "derived" || !row.Enabled || math.Float64bits(row.Ratio) != 1<<63 || row.Extra.Tag != rt.MaybeNothing {
 		t.Fatal("generated Derived changed mapped values", row)
 	}

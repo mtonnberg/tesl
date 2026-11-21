@@ -106,7 +106,7 @@ for project in "${assembled[@]}"; do
     example/kubernetes-rolling)
       python3 "$repo_root/$project/build.py" --compiler "$compiler" --output "$output_root/${project##*/}"
       ;;
-    *) python3 "$repo_root/$project/run.py" --build-only --output "$output_root/${project##*/}" ;;
+    *) python3 "$repo_root/$project/run.py" --compiler "$compiler" --build-only --output "$output_root/${project##*/}" ;;
   esac
 done
 

@@ -93,7 +93,8 @@ let holes_and_manual_default () = with_project (fun root path ->
   let decision = List.hd p.decisions in
   check string "decision identifies owned entity" "Notes.Note" decision.entity;
   check string "decision points at proposed migration" (migration path) decision.file;
-  check int "one checked additive option" 1 (List.length decision.options);
+  check (list string) "literal defaults, row mapping and explicit deletion" ["additive-default";"map-fields";"delete-rows"]
+    (List.map (fun (o:G.decision_option)->o.id) decision.options);
   let option = List.hd decision.options in
   check string "option uses checked additive classification" "additive-default" option.id;
   check bool "default value remains explicit" true option.needs_custom_code;
@@ -102,7 +103,7 @@ let holes_and_manual_default () = with_project (fun root path ->
   check bool "no probe constant becomes a data policy" false (contains option.template "Default count 0");
   let source = preview_source path p in
   check bool "decision names new field" true (contains source "count");
-  check bool "decision lists old row inputs" true (contains source "old row fields: id, title");
+  check bool "decision asks for a domain value" true (contains source "Choose values for new fields Notes.Note.count");
   materialize p.manifest;
   check bool "agent-context refuses generated hole" false (Compile.agent_context_result_source (migration path) source).ok;
   (match Compile.compile_go_source (migration path) source with
@@ -172,8 +173,8 @@ let codec_change () = with_project ~source:payload (fun root path ->
   change path (replace "-> \"text\"" "-> \"body\"" payload);
   let p = get (refresh root) in assert_codes ["MIG003"] p;
   check int "codec change invalidates whole generated claim" 0 (same_count (migration path) (preview_source path p));
-  check int "codec change never offers a literal-default shortcut" 0
-    (List.length (List.hd p.decisions).options);
+  check (list string) "codec change offers exact value mapping and explicit row deletion" ["map-fields";"delete-rows"]
+    (List.map (fun (o:G.decision_option)->o.id) (List.hd p.decisions).options);
   check bool "affected stored occurrence needs a decision" true (contains (preview_source path p) "payload"))
 let omitted_same () = with_project ~source:payload (fun root path ->
   edit path "migrations/notes/v2.tesl" (same_omitted (migration path) (read (migration path)));
@@ -281,19 +282,12 @@ entity Note table "notes" primaryKey id { id: String, amount: Int ::: Positive a
     check int "changed historical proof never offers a default shortcut" 0
       (List.length (List.hd p.decisions).options);
     check int "stale fact identity is removed" 0 (same_count (migration path) output);
-    check bool "proof decision identifies fact" true (contains output "Positive");
+    let reason=(List.hd p.decisions).reason in
+    check bool "proof guidance identifies inaccessible historical fact" true (contains reason "Positive" && contains reason "historical declaration");
     check bool "proof decision identifies stored occurrence" true (contains output "amount");
     check bool "decision remains unresolved" true (contains output "todo ");
-    check bool "changed establish body suggests supported isolated storage" true
-      (contains output "Retype amount and WriteBack amount amount <reverseFn>");
-    check bool "reverse evidence names exact historical field" true
-      (contains output "NotesSchema.V1.Notes.Note.amount");
-    check bool "storage is generated after explicit rules" true
-      (contains output "Refresh generates the new storage column after these explicit rules are supplied");
-     check bool "Revalidate guidance requires exact retained historical evidence" true
-       (contains output "field-local conjunction preserving every historical proof through exact Same evidence; it cannot replace changed historical evidence");
-    check bool "does not promise cross-field support" true
-      (contains output "whole-entity cross-field reverse proofs are unsupported"));
+    check bool "private historical API requires a compatible preparatory revision" true
+      (contains reason "compatible revision" && contains reason "do not edit frozen history"));
   with_project ~source (fun root path ->
     change path (replace "amount: Int ::: Positive amount }"
       "amount: Int ::: Positive amount, required: Int }" source);
@@ -311,7 +305,7 @@ fact Positive (n: Int)
 fact Stronger (n: Int)
 entity Note table "notes" primaryKey id { id: String, amount: Int ::: Positive amount }
 |} in
-  let check_guidance label expected before after =
+  let check_guidance label before after =
     with_project ~source:before (fun root path ->
       accepts (path "schema/notes/v-current/notes.tesl") before;
       change path after;
@@ -326,22 +320,24 @@ entity Note table "notes" primaryKey id { id: String, amount: Int ::: Positive a
       assert_codes ["MIG003"] p;
       let output = preview_source path p in
       check bool (label ^ ": decision remains unresolved") true (contains output "todo ");
-      check bool (label ^ ": proof-specific guidance") expected
-        (contains output "stored proof contract changed");
-      check bool (label ^ ": reverse-function recommendation") expected
-        (contains output "<reverseFn>")) in
+      let decision=List.hd p.decisions in
+      check int (label ^ ": no unusable scaffold") 0 (List.length decision.options);
+      check bool (label ^ ": specific unsupported boundary") true
+        (contains decision.reason "Primary key contracts" || contains decision.reason "historical declaration" ||
+         contains decision.reason "Export " || contains decision.reason "Cross-field proof");
+      check bool (label ^ ": no manual boilerplate in placeholder") false (contains output "<reverseFn>")) in
   let strengthen = replace "Positive amount" "Stronger amount" in
   let keyed = replace "primaryKey id" "primaryKey amount" primitive in
-  check_guidance "proven primary key" false keyed (strengthen keyed);
+  check_guidance "proven primary key" keyed (strengthen keyed);
   let cross = primitive
     |> replace "fact Positive" "fact Related (a: Int, b: Int)\nfact Positive"
     |> replace "amount: Int ::: Positive amount }"
       "amount: Int ::: Positive amount, other: Int ::: Related other amount }" in
-  check_guidance "cross-field sibling proof" false cross (strengthen cross);
+  check_guidance "cross-field sibling proof" cross (strengthen cross);
   let column = strengthen primitive
     |> replace "amount: Int ::: Stronger amount" "amount: Int ::: Stronger amount @column(\"amount_elsewhere\")" in
-  check_guidance "changed physical column" false primitive column;
-  check_guidance "removed proof" true primitive
+  check_guidance "changed physical column" primitive column;
+  check_guidance "removed proof" primitive
     (replace "amount: Int ::: Positive amount" "amount: Int" primitive);
   let nominal = {|module NotesSchema.VCurrent.Notes exposing [Note]
 import Tesl.Prelude exposing [String]
@@ -355,7 +351,7 @@ fact Trusted (value: Payload)
 fact Stronger (value: Payload)
 entity Note table "notes" primaryKey id { id: String, payload: Payload ::: Trusted payload }
 |} in
-  check_guidance "nominal JSONB codec carrier" false nominal
+  check_guidance "nominal JSONB codec carrier" nominal
     (replace "Trusted payload" "Stronger payload" nominal)
 
 let later_revision () = with_project (fun root path ->

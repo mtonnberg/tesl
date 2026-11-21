@@ -497,6 +497,7 @@ func BoxMap33[A any, B any](f func(A) B, box Box33[A]) Box33[B] {
 //line critical-review-33-tests.tesl:385
 	{
 		teslScrut1 := box
+		_ = teslScrut1
 		value := teslScrut1.MkBox33Value
 		_ = value
 //line critical-review-33-tests.tesl:386
@@ -509,6 +510,7 @@ func BoxFlatMap33[A any, B any](f func(A) Box33[B], box Box33[A]) Box33[B] {
 //line critical-review-33-tests.tesl:389
 	{
 		teslScrut1 := box
+		_ = teslScrut1
 		value := teslScrut1.MkBox33Value
 		_ = value
 //line critical-review-33-tests.tesl:390

@@ -55,6 +55,30 @@ func DecodePreview(data []byte) (*Preview, error) {
 			return nil, fmt.Errorf("invalid compiler proposal input digest")
 		}
 	}
+	if raw, present := envelope["contractVersion"]; present {
+		keys = append(keys, "contractVersion")
+		var version *int
+		if json.Unmarshal(raw, &version) != nil || version != nil && (*version < 2 || *version > 2147483646) {
+			return nil, fmt.Errorf("invalid cleanup version")
+		}
+	}
+	if raw, present := envelope["cleanup"]; present {
+		keys = append(keys, "cleanup")
+		var items []json.RawMessage
+		if json.Unmarshal(raw, &items) != nil || items == nil || len(items) > 8192 {
+			return nil, fmt.Errorf("invalid cleanup inventory")
+		}
+		for _, raw := range items {
+			fields, err := object(raw, "version", "file", "present")
+			var version int
+			var file string
+			var present *bool
+			if err != nil || json.Unmarshal(fields["version"], &version) != nil || version < 2 || version > 2147483646 ||
+				json.Unmarshal(fields["file"], &file) != nil || file == "" || json.Unmarshal(fields["present"], &present) != nil || present == nil {
+				return nil, fmt.Errorf("invalid cleanup item")
+			}
+		}
+	}
 	fields, err := object(data, keys...)
 	if err != nil {
 		return nil, err

@@ -159,10 +159,8 @@ func TestPgRowProofRetypeActualApp(t *testing.T) {
 	run("v2", "contract", true)
 }
 
-// Weakening expands the new writer's accepted domain. WriteBack must construct
-// an actually valid old representation when that value is not expressible under
-// the predecessor proof. The new column retains the exact value until an old
-// write invalidates the row and causes replay from that old representation.
+// A weaker current proof does not invent an old value. Optional write-back
+// refuses incompatible writes atomically until Contract removes old columns.
 func TestPgRowProofWeakenActualApp(t *testing.T) {
 	root := os.Getenv("TESL_ROW_PROOF_RETYPE_PROGRAMS")
 	if root == "" {
@@ -180,73 +178,93 @@ func TestPgRowProofWeakenActualApp(t *testing.T) {
 	run("v1", "worker")
 	v1 := pgStartRowAccessApp(t, f, root, "v1")
 	call(v1, "POST", "/one", 200)
+	call(v1, "POST", "/two", 200)
 	if body := call(v1, "PUT", "/invalid", 200); !strings.Contains(body, "refused") {
 		t.Fatal("strong old proof unexpectedly accepted blocked value", body)
 	}
 	run("v2", "worker")
 	v2 := pgStartRowAccessApp(t, f, root, "v2")
-	if body := call(v2, "PUT", "/invalid", 200); !strings.Contains(body, "invalidated") {
-		t.Fatal("weakened proof did not admit newly valid value", body)
-	}
-	var prior, current string
-	var generation int
-	if err := request.QueryRow(ctx, "select title,title__v2,_tesl_v from notes.notes where id='one'").Scan(&prior, &current, &generation); err != nil || prior != "valid" || current != "blocked" || generation != 2 {
-		t.Fatal("reverse establish did not preserve two proof domains", prior, current, generation, err)
-	}
-	if body := call(v1, "GET", "/all", 200); !strings.Contains(body, `"title":"valid"`) {
-		t.Fatal("old reader did not receive valid fallback", body)
-	}
-	if body := call(v2, "GET", "/all", 200); !strings.Contains(body, `"title":"blocked"`) {
-		t.Fatal("new reader lost accepted value", body)
-	}
-	// An unrelated old-writer change invalidates the whole predecessor row.
-	// The explicit fallback is valid, but is not a lossless round trip.
-	assertFallbackReplay := func(storedCurrent string) {
-		t.Helper()
-		call(v1, "PUT", "/touch", 200)
-		var memo string
-		if err := request.QueryRow(ctx, "select title,title__v2,_tesl_v,memo from notes.notes where id='one'").Scan(&prior, &current, &generation, &memo); err != nil || prior != "valid" || current != storedCurrent || generation != 1 || memo != "touched" {
-			t.Fatal("unrelated old write did not invalidate retained representations", prior, current, generation, memo, err)
+	snapshot := func() string {
+		var state string
+		if err := request.QueryRow(ctx, "select jsonb_agg(to_jsonb(n) order by id)::text from notes.notes n").Scan(&state); err != nil {
+			t.Fatal(err)
 		}
-		if body := call(v2, "GET", "/all", 200); !strings.Contains(body, `"title":"valid"`) || !strings.Contains(body, `"memo":"touched"`) {
-			t.Fatal("new reader did not replay the explicit old fallback", body)
-		}
-		if err := request.QueryRow(ctx, "select title__v2,_tesl_v from notes.notes where id='one'").Scan(&current, &generation); err != nil || current != storedCurrent || generation != 1 {
-			t.Fatal("lazy replay unexpectedly materialized the fallback", current, generation, err)
-		}
+		return state
 	}
-	assertFallbackReplay("blocked")
-	call(v2, "PUT", "/invalid", 200)
+	before := snapshot()
+	call(v2, "PUT", "/invalid", 500)
+	if snapshot() != before {
+		t.Fatal("rejected write-back changed a stored row")
+	}
+	call(v2, "PUT", "/mixed", 500)
+	if snapshot() != before {
+		t.Fatal("rejected write-back did not roll back the earlier write in its transaction")
+	}
 	if os.Getenv("TESL_ROW_PROOF_REMOVED") == "1" {
-		if body := call(v2, "PUT", "/empty", 200); !strings.Contains(body, "emptied") {
-			t.Fatal("removed proof still refused empty scalar", body)
+		call(v2, "PUT", "/empty", 500)
+		if snapshot() != before {
+			t.Fatal("proof removal fabricated a historical value")
 		}
-		if err := request.QueryRow(ctx, "select title,title__v2 from notes.notes where id='one'").Scan(&prior, &current); err != nil || prior != "valid" || current != "" {
-			t.Fatal("proof removal lost raw value or valid predecessor", prior, current, err)
-		}
-		// Change memo first so the following V1 /touch is an actual update,
-		// not a no-op with the already stored "touched" value.
-		call(v2, "PUT", "/touch-all", 200)
-		assertFallbackReplay("")
 	}
 	call(v1, "PUT", "/repair", 200)
 	if body := call(v2, "GET", "/all", 200); !strings.Contains(body, `"title":"repaired"`) {
 		t.Fatal("old writer did not invalidate and retransform", body)
 	}
 	wantTitle := `"title":"blocked"`
+	call(v2, "PUT", "/touch-all", 200)
+	run("v2", "contract")
+	call(v1, "PUT", "/repair", 503)
 	if os.Getenv("TESL_ROW_PROOF_REMOVED") == "1" {
 		call(v2, "PUT", "/empty", 200)
 		wantTitle = `"title":""`
 	} else {
 		call(v2, "PUT", "/invalid", 200)
 	}
-	run("v2", "contract")
-	call(v1, "PUT", "/repair", 503)
 	if body := call(v2, "GET", "/all", 200); !strings.Contains(body, wantTitle) {
 		t.Fatal("Contract lost newly valid data", body)
 	}
 	var count int
 	if err := request.QueryRow(ctx, "select count(*) from information_schema.columns where table_schema='notes' and table_name='notes' and column_name='title'").Scan(&count); err != nil || count != 0 {
 		t.Fatal("old proof column survived Contract", count, err)
+	}
+}
+
+func TestPgRowOptionalReverseBackfillActualApp(t *testing.T) {
+	root := os.Getenv("TESL_ROW_PROOF_RETYPE_PROGRAMS")
+	if root == "" {
+		t.Skip("compiler-generated optional reverse application required")
+	}
+	f, request := pgNewWorkerTest(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	t.Cleanup(cancel)
+	f.ctx, f.namespace = ctx, "notes"
+	run := func(version, mode string) { pgForwardNativeRun(t, f, root, version, mode, true) }
+	call := func(base, method, path string, status int) string {
+		return pgCallRowAccessApp(t, f.ctx, base, method, path, status)
+	}
+	run("v1", "install")
+	run("v1", "worker")
+	v1 := pgStartRowAccessApp(t, f, root, "v1")
+	call(v1, "POST", "/one", 200)
+	pgRunRowWorkerUntil(t, f, root, "v2", 30*time.Second, func() bool {
+		var materialized bool
+		if err := request.QueryRow(f.ctx, "select exists(select 1 from notes.notes where id='one' and _tesl_v=2)").Scan(&materialized); err != nil {
+			t.Fatal(err)
+		}
+		return materialized
+	})
+	v2 := pgStartRowAccessApp(t, f, root, "v2")
+	var old, current string
+	var generation int
+	if err := request.QueryRow(f.ctx, "select title,title__v2,_tesl_v from notes.notes where id='one'").Scan(&old, &current, &generation); err != nil || old != "valid" || current != "valid" || generation != 2 {
+		t.Fatal("backfill must keep the actual historical value when no inverse is provided", old, current, generation, err)
+	}
+	call(v2, "PUT", "/repair", 500)
+	call(v1, "PUT", "/repair", 200)
+	run("v2", "contract")
+	call(v1, "PUT", "/repair", 503)
+	call(v2, "PUT", "/repair", 200)
+	if body := call(v2, "GET", "/all", 200); !strings.Contains(body, `"title":"repaired"`) {
+		t.Fatal("retirement failed to remove the historical write-back requirement", body)
 	}
 }

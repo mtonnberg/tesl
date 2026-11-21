@@ -2,9 +2,9 @@
     authority or semantic callback hash is produced by this initial judgment. *)
 type requested = { entity : string; function_ref : Ast.expr; loc : Location.loc }
 type function_binding = { identity : string; owner : Ast.module_form; declaration : Ast.func_decl }
-type writeback_binding = { mapping : Migration_transform_rules.writeback; function_binding : function_binding }
-type legacy_binding = { mapping : Migration_transform_rules.legacy; function_binding : function_binding option }
-type row = { mapping : Migration_transform_rules.entity; function_binding : function_binding option; fixtures : function_binding list; writebacks : writeback_binding list; legacies : legacy_binding list }
+type writeback_binding = { mapping : Migration_transform_rules.writeback; function_binding : function_binding; optional:bool }
+type legacy_binding = { mapping : Migration_transform_rules.legacy; function_binding : function_binding option; optional:bool }
+type row = { mapping : Migration_transform_rules.entity; function_binding : function_binding option; fixtures : function_binding list; writebacks : writeback_binding list; legacies : legacy_binding list; row_change:bool }
 type t
 val check : project_root:string -> source:string -> Ast.module_form -> Migration_transform_rules.t ->
   functions:requested list -> fixtures:Ast.expr list -> (t,Migration_sparse.error list) result

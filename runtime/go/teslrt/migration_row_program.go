@@ -162,7 +162,7 @@ func LookupCompiledRowTransform(database *Database, family string, migrationVers
 // local callback binding; Run does not migrate persisted rows or authorize DDL.
 type PgRowTransform[From, To any] struct {
 	registration *pgRowRegistration
-	callback     func(From) Migrated[To]
+	callback     func(From) RowChange[To]
 }
 
 // RegisterCompiledRowTransform is emitted with explicit exact source and target
@@ -170,6 +170,23 @@ type PgRowTransform[From, To any] struct {
 // contracts, so a same-shaped function from another generated version cannot be
 // attached to this descriptor. No structural or JSON conversion is performed.
 func RegisterCompiledRowTransform[From, To any](ref PgRowTransformSourceRef, fn func(From) Migrated[To]) *PgRowTransform[From, To] {
+	if fn == nil {
+		panic("database: invalid compiled row callback")
+	}
+	return RegisterCompiledRowChange(ref, func(value From) RowChange[To] {
+		result := fn(value)
+		switch result.Tag {
+		case MigratedRow:
+			return RowChange[To]{Tag: RowChangeKeep, KeepValue: result.RowValue}
+		case MigratedReject:
+			return RowChange[To]{Tag: RowChangeReject, Reason: result.RejectReason}
+		default:
+			return RowChange[To]{Tag: -1}
+		}
+	})
+}
+
+func RegisterCompiledRowChange[From, To any](ref PgRowTransformSourceRef, fn func(From) RowChange[To]) *PgRowTransform[From, To] {
 	pgMigrationRegistrations.Lock()
 	defer pgMigrationRegistrations.Unlock()
 	if err := pgCheckRowOwner(ref.database, ref.compiled); err != nil {
@@ -206,16 +223,16 @@ func RegisterCompiledRowTransform[From, To any](ref PgRowTransformSourceRef, fn 
 // Run is available only after atomic application preflight has verified and
 // sealed every required binding. A callback rejection is an ordinary result;
 // unknown result tags are errors and can never be treated as accepted rows.
-func (transform *PgRowTransform[From, To]) Run(from From, contexts ...context.Context) (result Migrated[To], err error) {
+func (transform *PgRowTransform[From, To]) Run(from From, contexts ...context.Context) (result RowChange[To], err error) {
 	pgMigrationRegistrations.Lock()
 	ready := transform != nil && transform.registration != nil && transform.registration.sealed && transform.callback != nil
 	pgMigrationRegistrations.Unlock()
 	if !ready {
-		return Migrated[To]{}, fmt.Errorf("row callback is not sealed by application preflight")
+		return RowChange[To]{}, fmt.Errorf("row callback is not sealed by application preflight")
 	}
 	defer func() {
 		if trapped := recover(); trapped != nil {
-			result = Migrated[To]{}
+			result = RowChange[To]{}
 			err = fmt.Errorf("row conversion trapped")
 			if failure, bounded := trapped.(migrationExecutionFailure); bounded {
 				err = failure
@@ -225,8 +242,8 @@ func (transform *PgRowTransform[From, To]) Run(from From, contexts ...context.Co
 	defer BeginMigrationExecution(contexts...)()
 	result = transform.callback(from)
 	MigrationStep()
-	if result.Tag != MigratedRow && result.Tag != MigratedReject {
-		return Migrated[To]{}, fmt.Errorf("row callback returned an invalid Migrated tag")
+	if result.Tag != RowChangeKeep && result.Tag != RowChangeReject && result.Tag != RowChangeDelete {
+		return RowChange[To]{}, fmt.Errorf("row callback returned an invalid result tag")
 	}
 	return result, nil
 }

@@ -726,6 +726,7 @@ func DayNumber(d CivilDate) teslrt.Int {
 //line civil-time.tesl:470
 	{
 		teslScrut1 := d
+		_ = teslScrut1
 		n := teslScrut1.CivilValue
 		_ = n
 //line civil-time.tesl:471
@@ -738,6 +739,7 @@ func Zone(d CivilDate) teslrt.TimeZone {
 //line civil-time.tesl:474
 	{
 		teslScrut1 := d
+		_ = teslScrut1
 		z := teslScrut1.CivilValue2
 		_ = z
 //line civil-time.tesl:475
@@ -862,6 +864,7 @@ func WeekYear(w IsoWeek) teslrt.Int {
 //line civil-time.tesl:541
 	{
 		teslScrut1 := w
+		_ = teslScrut1
 		y := teslScrut1.WeekValue
 		_ = y
 //line civil-time.tesl:542
@@ -880,6 +883,7 @@ func rawWeekNumberOf(w IsoWeek) teslrt.Int {
 //line civil-time.tesl:548
 	{
 		teslScrut1 := w
+		_ = teslScrut1
 		n := teslScrut1.WeekValue2
 		_ = n
 //line civil-time.tesl:549

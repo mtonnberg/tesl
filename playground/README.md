@@ -207,9 +207,10 @@ proof-error example. Type-as-you-go checking is comfortably interactive.
 
 ## Verified parity with the CLI
 
-The first 30 files of `example/learn/` were checked through `tesl --check-json`
-and through `teslCheck`, comparing `(code, severity, source, line, col, message,
-fix)` for every diagnostic: **29 of 30 byte-identical** (50 diagnostics), zero
+The first 30 files of `example/learn/`, plus `literal-proofs.tesl`, were checked
+through `tesl --check-json` and through `teslCheck`, comparing
+`(code, severity, source, line, col, message,
+fix)` for every diagnostic: **30 of 31 byte-identical** (51 diagnostics), zero
 crashes.
 
 The one difference is the documented single-module limit:
@@ -300,10 +301,12 @@ and source links for both people and visiting agents.
   (`roadmap/discarded/online_editor_to_drive_adoption.md`, D7).
 - **Multi-module programs.** There is one buffer, so `import` of another *local*
   module cannot resolve. Stdlib imports (`Tesl.*`) work — those are compiled in.
-- **Read or write files.** `Unix.realpath` is the one primitive `js_of_ocaml`
-  cannot provide; every call site in the compiler is already inside
-  `try … with _ -> p`, so the dummy implementation is caught and the path is used
-  unchanged. Nothing else in `compiler/lib/` needs `unix` at check time.
+- **Read or write host files.** The checker uses only the current buffer mounted
+  under `/tesl/`. Its virtual device supplies canonical paths and regular-file
+  metadata for literal-rule source pinning; it contains no symlinks. Every check
+  replaces that mount and clears query caches, so edits replace the previous
+  bytes and old snippets cannot become imported modules. Native filesystem
+  checks are not relaxed.
 
 ## Wired into CI: the parity assertion
 
@@ -319,7 +322,7 @@ is exactly how the linter was found to be contributing nothing before
 have missed entirely.
 
 ```sh
-scripts/playground-parity.sh                    # build if needed, compare 30 lessons
+scripts/playground-parity.sh                    # compare 30 lessons + literal rules
 scripts/playground-parity.sh --dist DIR         # reuse an existing dist
 scripts/playground-parity.sh --limit N --verbose
 ```
@@ -330,8 +333,12 @@ or `node` missing, no corpus, no built compiler. The CI phase maps `77` to
 excluded from the comparison because the CLI reports a real path and the driver
 reports the virtual `/tesl/<Module>.tesl` it derives from the module header.
 
-Measured, over the first 30 files of `example/learn/` (50 CLI diagnostics):
-**29/30 byte-identical, 1 known exception, 0 divergences.**
+Measured, over the first 30 files of `example/learn/` plus the literal-proof
+lesson (51 CLI diagnostics): **30/31 byte-identical, 1 known exception,
+0 divergences.** Eight additional literal-rule cases check accepted/rejected
+constants, changed validators, both capability-dependent validator kinds,
+opaque facts, and restored buffers in the same browser process. Successful
+cases must also emit Go files.
 
 The exception is **named, not tolerated**: `lesson07-consumer.tesl` imports the
 local module `Lesson07Home`, which cannot exist in a one-buffer playground. The

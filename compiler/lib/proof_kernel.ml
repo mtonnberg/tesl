@@ -49,6 +49,7 @@ type evidence_origin =
   | AttachedEvidence
   | RestrictedReturn
   | FrameworkCollection
+  | LiteralRule
 
 let elaborated (_origin : evidence_origin) (p : proof_expr) : proven_fact = p
 

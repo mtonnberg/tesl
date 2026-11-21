@@ -326,7 +326,10 @@ let contextual_holes () = with_project ~fresh:(schema "  rank: Int\n") (fun _ wr
   let file = write "migrations/notes/caller.tesl" importer in
   ignore (refuses "MIG003" file importer))
 let holes_do_not_escape () = with_project (fun _ write path ->
-  ignore (refuses "T001" path (declaration "Note: Additive []" ^ "fn value() -> Int = todo \"missing\"\n"));
+  ignore (refuses "MIG003" path (declaration "Note: Additive []" ^ "fn value() -> Int = todo \"missing\"\n"));
+  let missing = "module Ordinary exposing [value]\nimport Tesl.Prelude exposing [Int]\nfn value() -> Int = todo \"missing\"\n" in
+  let missing_file = write "ordinary.tesl" missing in
+  ignore (refuses "T001" missing_file missing);
   let ordinary = "module Ordinary exposing [value]\nimport Tesl.Prelude exposing [Int, String]\nfn todo(reason: String) -> Int = 7\nfn value() -> Int = todo \"ordinary function\"\n" in
   let file = write "ordinary.tesl" ordinary in accepts file ordinary)
 

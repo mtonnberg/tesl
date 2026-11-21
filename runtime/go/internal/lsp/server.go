@@ -1902,7 +1902,7 @@ func (server *Server) diagnosticsForDocumentWithOverlays(ctx context.Context, do
 	}
 	groups := map[string][]map[string]any{doc.URI: {}}
 	for _, diagnostic := range response.Diagnostics {
-		uri, span, err := diagnosticLocation(doc, overlays, diagnostic.File, diagnostic.Start, diagnostic.End)
+		uri, span, err := locateDiagnostic(doc, overlays, diagnostic.File, diagnostic.Start, diagnostic.End, strings.HasPrefix(diagnostic.Code, "MIG"))
 		if err != nil {
 			return nil, err
 		}
@@ -1913,7 +1913,7 @@ func (server *Server) diagnosticsForDocumentWithOverlays(ctx context.Context, do
 		if diagnostic.Code == "MIG001" && strings.HasPrefix(diagnostic.Message,
 			"current schema source changed since migration generation (expected while preparing an undeployed migration); refresh this revision before building or running.") &&
 			strings.Contains(diagnostic.Message, "\nsnapshot source differs from its recorded bytes:") {
-			severity = 3
+			severity = 2 // Visible warning squiggle; the compiler still refuses a build.
 		}
 		entry := map[string]any{
 			"range":    span,

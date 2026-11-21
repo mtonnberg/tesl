@@ -26,7 +26,40 @@ let accepts path source =
 let command directory log text =
  if Sys.command (Printf.sprintf "cd %s && %s > %s 2>&1" (Filename.quote directory) text (Filename.quote log))<>0 then
   fail (text ^ "\n" ^ Source_input.read log)
-let export ~weaken ~remove_proof destination =
+let export ?(delete_rows=false) ?(no_reverse=false) ~weaken ~remove_proof destination =
+ let app=app |> replace "  put \"/touch\" -> String" "  put \"/touch\" -> String\n  put \"/mixed\" -> String\n  put \"/obsolete\" -> String" |>
+   replace "touchAll, empty, invalid, repair, touch }" "touchAll, empty, invalid, repair, touch, mixed, obsolete }" in
+ let app=app ^ {|
+handler put mixed() -> String requires [dbWrite Note] =
+  case tryTitle "blocked" of
+    Nothing -> "refused"
+    Something title ->
+      transaction {
+        update note in Note
+          where note.id == "a-valid"
+          set note.memo = "must roll back"
+        update note in Note
+          where note.id == "one"
+          set note.title = title
+        "updated"
+      }
+handler put obsolete() -> String requires [dbWrite Note] =
+  case tryTitle "obsolete" of
+    Nothing -> "refused"
+    Something title ->
+      update note in Note
+        where note.id == "one"
+        set note.title = title
+      "obsolete"
+|}in
+ let migration=if no_reverse then replace "Schema.Notes.V1.tryTitle row.title" "Nothing" migration else migration in
+ let migration=if not delete_rows then migration else migration
+   |> replace "Migrated" "RowChange" |> replace "Row " "KeepRow " |> replace "Reject " "RejectRow "
+   |> replace "        RejectRow reason ->" "        DeleteRow reason -> expect False\n        RejectRow reason ->"
+   |> replace "case Schema.Notes.VCurrent.tryTitle old.title of"
+      "  if old.title == \"obsolete\" then\n    DeleteRow \"obsolete title\"\n  else\n    case Schema.Notes.VCurrent.tryTitle old.title of"
+   |> replace "  Nothing -> RejectRow" "      Nothing -> RejectRow"
+   |> replace "  Something title -> KeepRow" "      Something title -> KeepRow"in
  let old = if weaken then old |> replace "  Something (value ::: NonEmpty value)" "  if value == \"blocked\" then\n    Nothing\n  else\n    Something (value ::: NonEmpty value)" else old in
  let fresh = if weaken then fresh |> replace "  if value == \"blocked\" then\n    Nothing\n  else\n    Something (value ::: Allowed value)" "  Something (value ::: Allowed value)" else fresh in
  let fresh = if remove_proof then {|module Schema.Notes.VCurrent exposing [Note, tryTitle]
@@ -70,12 +103,14 @@ entity Note table "notes" primaryKey id { id: String, title: String @column("tit
  let plan=get(Migration_retained_storage.plan history) in
  ignore(save "migrations/notes/v2-contract.tesl" (get(Migration_contract.source ~plan ~version:2)));
  build "v2")
-let native weaken remove_proof () =
+let native ?(delete_rows=false) ?(no_reverse=false) weaken remove_proof () =
  let out=Filename.temp_dir "tesl-proof-retype-app-" "" in
- Fun.protect ~finally:(fun()->remove out) (fun()->export ~weaken ~remove_proof out;
+ Fun.protect ~finally:(fun()->remove out) (fun()->export ~delete_rows ~no_reverse ~weaken ~remove_proof out;
   command (Filename.concat(repository())"runtime/go") (Filename.concat out "postgres.log")
-   (Printf.sprintf "TESL_ROW_PROOF_REMOVED=%s TESL_ROW_PROOF_RETYPE_PROGRAMS=%s timeout 180s go test -p 1 -race -tags tesl_migration_test -timeout 150s ./teslrt -run '^%s$' -count=1 -v" (if remove_proof then "1" else "0") (Filename.quote out) (if weaken then "TestPgRowProofWeakenActualApp" else "TestPgRowProofRetypeActualApp")))
+    (Printf.sprintf "TESL_ROW_PROOF_REMOVED=%s TESL_ROW_PROOF_RETYPE_PROGRAMS=%s timeout 180s go test -p 1 -race -tags tesl_migration_test -timeout 150s ./teslrt -run '^%s$' -count=1 -v" (if remove_proof then "1" else "0") (Filename.quote out) (if no_reverse then "TestPgRowOptionalReverseBackfillActualApp" else if delete_rows then "TestPgRowDeleteOutcomeActualApp" else if weaken then "TestPgRowProofWeakenActualApp" else "TestPgRowProofRetypeActualApp")))
 let () = run "changed proven primitive Retype application" ["postgres",[
  test_case "old proof to stronger proof with reverse establish" `Quick (native false false);
- test_case "weaker proof writes exact valid fallback for old readers" `Quick (native true false);
- test_case "removing proof keeps explicit valid old representation" `Quick (native true true)]]
+ test_case "weaker proof refuses incompatible writes until retirement" `Quick (native true false);
+ test_case "removing proof retains atomic optional write-back" `Quick (native true true);
+ test_case "explicit deletion and old-writer races use checked Worker CAS" `Quick (native ~delete_rows:true false false);
+ test_case "backfill preserves existing old values when write-back refuses" `Quick (native ~no_reverse:true false false)]]

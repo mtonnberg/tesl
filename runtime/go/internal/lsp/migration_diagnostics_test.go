@@ -71,6 +71,24 @@ func TestMissingDiagnosticOriginsRemainLinkable(t *testing.T) {
 	}
 }
 
+func TestMigrationPointDiagnosticsHaveVisibleUTF16Ranges(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "schema", "notes", "v-current.tesl")
+	doc := document{URI: protocol.PathToURI(file), Path: file, Text: "🌱 title\r\n"}
+	for _, item := range []struct {
+		col, first, last int
+	}{{0, 0, 2}, {4, 2, 3}, {10, 7, 8}, {100, 7, 8}} {
+		point := sourcePosition{Col: item.col}
+		_, span, err := locateDiagnostic(doc, nil, file, point, point, true)
+		if err != nil || span["start"].Character != item.first || span["end"].Character != item.last {
+			t.Fatalf("column %d: %+v %v", item.col, span, err)
+		}
+	}
+	_, related, err := diagnosticLocation(doc, nil, file, sourcePosition{}, sourcePosition{})
+	if err != nil || related["start"] != related["end"] {
+		t.Fatalf("related compiler origin was changed: %+v %v", related, err)
+	}
+}
+
 func TestDecisionDiagnosticsNeverBecomeOrdinaryQuickFixes(t *testing.T) {
 	uri := testFileURI("decision.tesl")
 	server := NewServer(&fakeCompiler{})
@@ -336,7 +354,7 @@ func TestFrozenSourceDiagnosticsThroughRealCompilerAndRetainedLSP(t *testing.T) 
 			t.Fatal("editor preview froze the previous migration on disk")
 		}
 	})
-	t.Run("current draft info and compiler-owned decision templates", func(t *testing.T) {
+	t.Run("current draft warning and compiler-owned decision templates", func(t *testing.T) {
 		current := filepath.Join(project, "schema/notes/v-current.tesl")
 		before, err := os.ReadFile(current)
 		if err != nil {
@@ -358,8 +376,8 @@ func TestFrozenSourceDiagnosticsThroughRealCompilerAndRetainedLSP(t *testing.T) 
 			for _, diagnostic := range diagnostics {
 				if diagnostic["code"] == "MIG001" {
 					foundInfo = true
-					if diagnostic["severity"] != 3 {
-						t.Fatalf("draft not informative: %+v", diagnostic)
+					if diagnostic["severity"] != 2 {
+						t.Fatalf("draft not visibly warned: %+v", diagnostic)
 					}
 				}
 			}
@@ -395,7 +413,7 @@ func TestFrozenSourceDiagnosticsThroughRealCompilerAndRetainedLSP(t *testing.T) 
 		if err := json.Unmarshal(raw, &result); err != nil {
 			t.Fatal(err)
 		}
-		if result.Compilable || len(result.Decisions) != 1 || len(result.Decisions[0].Options) != 1 {
+		if result.Compilable || len(result.Decisions) != 1 || len(result.Decisions[0].Options) != 3 {
 			t.Fatalf("real decision metadata: %s", raw)
 		}
 		option := result.Decisions[0].Options[0]
@@ -405,7 +423,7 @@ func TestFrozenSourceDiagnosticsThroughRealCompilerAndRetainedLSP(t *testing.T) 
 		foundGuide := false
 		for _, item := range result.Guidance {
 			if item.DecisionID == result.Decisions[0].ID {
-				foundGuide = len(item.Guide.Options) == 1 && item.Guide.Options[0].ID == option.ID && item.Guide.Options[0].RequiresCustomCode
+				foundGuide = len(item.Guide.Options) == 3 && item.Guide.Options[0].ID == option.ID && item.Guide.Options[0].RequiresCustomCode
 			}
 		}
 		if !foundGuide {
@@ -418,13 +436,13 @@ func TestFrozenSourceDiagnosticsThroughRealCompilerAndRetainedLSP(t *testing.T) 
 
 }
 
-func TestCurrentDraftHashMismatchIsInformationalOnlyInEditor(t *testing.T) {
+func TestCurrentDraftHashMismatchIsWarningOnlyInEditor(t *testing.T) {
 	prefix := "current schema source changed since migration generation (expected while preparing an undeployed migration); refresh this revision before building or running. If this revision has been deployed, restore the deployed source and start the next forward revision. The compiler cannot determine deployment state"
 	for _, item := range []struct {
 		name, code, message string
 		severity            int
 	}{
-		{"current edited bytes", "MIG001", prefix + "\nsnapshot source differs from its recorded bytes: v-current.tesl", 3},
+		{"current edited bytes", "MIG001", prefix + "\nsnapshot source differs from its recorded bytes: v-current.tesl", 2},
 		{"frozen edited bytes", "MIG013", prefix + "\nsnapshot source differs from its recorded bytes: v1.tesl", 1},
 		{"missing current", "MIG001", "schema changed since this migration was generated; missing source", 1},
 		{"invalid current layout", "MIG001", "schema changed since this migration was generated; symlink source", 1},

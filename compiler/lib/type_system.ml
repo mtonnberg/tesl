@@ -117,6 +117,7 @@ let t_conversation_turn = TCon "ConversationTurn"
 let t_list a        = TApp (TCon "List", a)
 let t_maybe a       = TApp (TCon "Maybe", a)
 let t_migrated a    = TApp (TCon "Migrated", a)
+let t_row_change a  = TApp (TCon "RowChange", a)
 let t_set a         = TApp (TCon "Set", a)
 let t_dict k v      = TApp (TApp (TCon "Dict", k), v)
 let t_either a b    = TApp (TApp (TCon "Either", a), b)
@@ -759,6 +760,9 @@ let stdlib_env : (string * scheme) list = [
      Reject is polymorphic only in the absent row; its reason is always String. *)
   "Row",              { vars = _r1_a; mono = t_fun [_a] (t_migrated _a) };
   "Reject",           { vars = _r1_a; mono = t_fun [t_string] (t_migrated _a) };
+  "KeepRow",          { vars = _r1_a; mono = t_fun [_a] (t_row_change _a) };
+  "DeleteRow",        { vars = _r1_a; mono = t_fun [t_string] (t_row_change _a) };
+  "RejectRow",        { vars = _r1_a; mono = t_fun [t_string] (t_row_change _a) };
 
 
   (* ── Float arithmetic functions ─────────────────────────────────────── *)

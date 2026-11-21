@@ -476,6 +476,7 @@ func MyIntVal(a MyInt) teslrt.Int {
 //line critical-review-26-tests.tesl:324
 	{
 		teslScrut1 := a
+		_ = teslScrut1
 		inner := teslScrut1.MkMyIntInner
 		_ = inner
 //line critical-review-26-tests.tesl:325

@@ -99,6 +99,10 @@ checked migration snapshot-barrier capability described below.
 
 - `tesl.generateMigration` takes one argument object with absolute `entryFile`
   and `projectRoot` paths, optional `database`, and optional `newRevision` boolean.
+  Optional `contractVersion` (integer 2–2147483646) requests a read-only cleanup
+  proposal through `migrate contract --manifest-json --version N`. It cannot be
+  combined with `newRevision` or a decision choice. The response must be a compilable
+  `contract` proposal for that exact version, creating only `vN-contract.tesl`.
   It optionally takes `decisionId`, `optionId`, and `expectedInputDigest` together
   to regenerate one retained compiler choice. The server forwards only those
   identifiers, the digest and exact open document versions to the compiler; a
@@ -114,11 +118,24 @@ Successful generation returns version 1, kind `migration-editor-preview`,
 `files`, `diagnostics` and `inputDigest`. Optional `decisions` and `guidance` provide authoring
 help without granting edit authority:
 
+- `revisionBefore` and `revisionAfter` retain the compiler's selected revision
+  numbers. `schemaFiles` lists the selected current schema closure's absolute
+  source paths (including queue payload modules), derived from the compiler's
+  guarded imports. Clients must not infer these from migration filenames. The
+  start-first editor workflow requires this metadata before applying a proposal.
 - `decisions` retains the compiler array of `{id, entity, file, line, col,
   reason, options}`. Options have `{id, label, template, help, needsCustomCode}`.
   Coordinates are zero-based compiler UTF-8 byte positions. Templates retain
   explicit custom-code/value holes. An empty option array is meaningful: the
   consumer must not invent a checked source template for that decision.
+  Entity decisions use `entity:<identity>`; queued-payload and queue-retirement
+  decisions use `job:<identity>`. Their manifests may include pure helper modules.
+  Treat option IDs as opaque compiler-owned identifiers, including rename candidates.
+- `cleanup`, when supplied, is an array of `{version, file, present}` for required
+  cleanup source in the selected checked row history. It reports source presence,
+  not runtime completion. `contractVersion` identifies a cleanup proposal (null
+  or absent otherwise). New-revision refusal may include error
+  `action: "review-cleanup"` when the current revision needs cleanup source first.
 - `guidance` contains `{diagnosticIndex, guide, decisionId?}` for each diagnostic
   in `diagnostics.diagnostics`. `guide` has `{title, summary, options, help}`;
   options have `{id, title, when, example?, requiresCustomCode}`. Exact compiler
@@ -142,8 +159,45 @@ partial response. Clients must request a new preview after any source changes
 before a future application operation; viewing a retained diff establishes no
 authority to overwrite current contents.
 
-The extension exposes previews through migration CodeLens, **Migration Guide**,
-and **Preview Migration Decisions**. Diffs remain read-only. Choosing an applicable
+The extension's **Migrate database/queues** command and CodeLens open an inert
+welcome page. Its **Start migration** button requests `newRevision: true` and
+applies the guarded proposal before inviting schema edits. Subsequent reviews
+refresh that exact revision; persisted draft markers are UI hints, checked
+against the compiler's revision on resume. Preparation and review write source
+only. The test action runs the application's configured tests; deployment is separate.
+The internal `tesl.migrationFlowAction({flowId, action})` command invokes the same
+start/resume/review/test actions as its buttons and returns the current phase.
+Its snapshot includes `testStatus` when available: `passed`, `failed`, `cancelled`,
+`empty`, `unknown` or `stale`. The `tests` action waits in phase `testing` for
+`tesl.runTests`, which returns `{kind: "tesl-test-result", status, count}` from
+the Test Explorer run. Terminal fallback has no reported outcome. The flow
+rechecks afterward and compares project source bytes and editor changes; generated
+test/cache files do not invalidate the run merely by changing manifest directory
+guards. A confirmed pass marks the persisted draft as authoring-complete so
+closing/reopening offers Start, without claiming deployment.
+`finish` saves and rechecks a ready draft, clears its marker and cancellation
+backup, and closes the panel with phase `finished`. It keeps source files.
+`new` from the ready page performs the same finish checks before showing Start.
+Older draft markers retain an explicit visible new-migration option. Source edits
+invalidate the displayed result and make rechecking the primary review action.
+The `cleanup` action selects the first missing required cleanup file from the
+retained compiler response. `cleanup-needed` and `cleanup` phases precede `ready`;
+the latter exposes the reviewed source-apply action, then rechecks the draft.
+`back` navigates without undoing edits. `cancel` captures a review of the draft's
+current files; `confirmCancel` restores the private pre-Start backup after
+checking saved contents and open document lifetimes/versions. The backup covers
+the selected family's schema/migration Tesl files and is retained until restore
+verification succeeds. These actions do not accept caller-supplied file paths or
+replacement contents and never roll back database work. Incomplete restoration
+returns `cancelFailed` with an error and retains its backup. `keepEditing` dismisses
+the discard confirmation without restoring files.
+Deleted draft documents cached by VS Code leave Tesl language synchronization;
+they cannot remain compiler overlays after Cancel. If a later draft recreates
+those paths, the client restores the new saved source and Tesl language support,
+preserving any new dirty user text.
+The old `tesl.migrationGuide` ID is a hidden alias for this workflow.
+Low-level previews remain available through `tesl.previewMigration` and diagnostic
+actions. Diffs remain read-only. Choosing an applicable
 compiler option updates actual source through `tesl.applyMigration`; custom-code
 holes are opened and the application is rechecked. The product extension commands
 `tesl.applyMigrationChoice({previewId, decisionId, optionId})` and
@@ -151,10 +205,12 @@ holes are opened and the application is rechecked. The product extension command
 implementation as the webview buttons. `tesl.previewMigration` returns a
 serializable `migration-editor-view` descriptor with that handle and compiler
 choices for developer/AI clients. No command accepts arbitrary source edits.
+`tesl.editMigrationHole({previewId})` opens the next domain placeholder in that
+retained proposal; it does not apply proposed file changes.
 
 For presentation only, the exact producer-owned current-source byte mismatch
 (`MIG001`, expected-undeployed-draft message and recorded-bytes mismatch reason)
-is informational in the editor. Compiler/build diagnostics remain errors. Other
+is a visible warning in the editor. Compiler/build diagnostics remain errors. Other
 `MIG001` causes, including missing sources and invalid layout, and all frozen
 integrity (`MIG013`) errors keep error severity. Message changes fail closed to
 normal error presentation. This does not infer deployment state.

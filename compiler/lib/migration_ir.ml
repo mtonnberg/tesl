@@ -290,7 +290,9 @@ let lower_declaration ~scopes ~(resolve : resolver) ~typed_nodes ~module_name de
              Bytes "default-btree"; Bytes "nulls-distinct"; Bytes "immediate"]
           else tag "index" [bool i.ix_unique; Seq (List.map bytes i.ix_fields); option bytes i.ix_name]) e.indexes in
         tag "entity" [identity; Bytes e.table; Bytes e.primary_key; Seq fs; Seq indexes]
-      | DFact f -> let identity = own Predicate f.name in let _, bs = bindings [] f.params in tag "fact" [identity; Seq bs]
+      | DFact f -> let identity = own Predicate f.name in let _, bs = bindings [] f.params in
+        tag "fact" ([identity; Seq bs] @ Option.fold ~none:[]
+          ~some:(fun (validator:ident)->[tag "literal-rule" [lookup Value validator.name]]) f.literal_via)
       | DCodec c ->
         let identity = own Codec c.name in let target = lookup Type c.type_name in
         let to_json = match c.to_json with

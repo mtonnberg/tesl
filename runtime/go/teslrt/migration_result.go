@@ -17,3 +17,18 @@ const (
 	MigratedReject MigratedTag = iota
 	MigratedRow
 )
+
+// RowChange is a separate, ordinary ADT. Queue conversions keep their existing
+// Migrated result and cannot acquire a deletion outcome accidentally.
+type RowChange[A any] struct {
+	Tag       RowChangeTag
+	KeepValue A
+	Reason    string
+}
+type RowChangeTag int
+
+const (
+	RowChangeReject RowChangeTag = iota
+	RowChangeKeep
+	RowChangeDelete
+)

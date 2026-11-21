@@ -98,11 +98,13 @@ func TestMigrationEditorPreviewRetainsExactSourcesAndExpiresHandles(t *testing.T
 	selection := map[string]any{"entryFile": doc.Path, "projectRoot": filepath.Dir(doc.Path), "database": "App.Main", "newRevision": false}
 	raw := migrationEditorCommand(t, server, "tesl.generateMigration", selection, 0)
 	var preview struct {
-		OK          bool
-		PreviewID   string `json:"previewId"`
-		Compilable  bool
-		Files       []sourceedit.FileEdit
-		Diagnostics json.RawMessage
+		OK             bool
+		PreviewID      string `json:"previewId"`
+		Compilable     bool
+		Files          []sourceedit.FileEdit
+		Diagnostics    json.RawMessage
+		RevisionBefore int
+		RevisionAfter  int
 	}
 	if err := json.Unmarshal(raw, &preview); err != nil || !preview.OK || len(preview.PreviewID) != 32 || preview.Compilable || len(preview.Files) != 2 || !bytes.Contains(preview.Diagnostics, []byte("MIG003")) {
 		t.Fatalf("preview summary: %s %v", raw, err)
@@ -110,6 +112,9 @@ func TestMigrationEditorPreviewRetainsExactSourcesAndExpiresHandles(t *testing.T
 	if compiler.calls != 1 || compiler.selection.EntryFile != doc.Path || compiler.selection.Database != "App.Main" ||
 		!reflect.DeepEqual(compiler.documents, []tooling.MigrationDocument{{Path: doc.Path, Version: 19, Source: "old"}}) {
 		t.Fatalf("wrong compiler selection/overlays: %+v %+v", compiler.selection, compiler.documents)
+	}
+	if preview.RevisionBefore != 2 || preview.RevisionAfter != 2 {
+		t.Fatalf("missing compiler revision identity: %s", raw)
 	}
 	contents := migrationEditorCommand(t, server, "tesl.migrationPreviewFile", map[string]string{"previewId": preview.PreviewID, "path": created}, 0)
 	var file struct{ Before, After string }

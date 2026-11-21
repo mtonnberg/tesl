@@ -12,6 +12,9 @@ extension.js
 test-output-parser.js
 migration-authoring.js
 migration-client.js
+migration-cancel.js
+migration-flow.js
+migration-project.js
 node_modules/**
 package-lock.json
 

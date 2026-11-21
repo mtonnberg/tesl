@@ -73,7 +73,7 @@ let wrong_owner ()=check (Some "MIG021") (replace return_type "value: String :::
 let missing ()=check (Some "MIG021") (replace return_type "String" migration)
 let wrong_subject ()=check (Some "MIG021") (replace return_type "value: String ::: Schema.Notes.V1.NonEmpty row" migration)
 let wrong_type ()=check (Some "MIG021") (replace "[String]" "[String, Int]" migration |> replace return_type "value: Int ::: Schema.Notes.V1.NonEmpty value")
-let optional ()=check (Some "MIG021") (replace return_type ("Maybe ("^return_type^")") migration)
+let optional ()=check (Some "T001") (replace return_type ("Maybe ("^return_type^")") migration)
 let backwards_body={|case Schema.Notes.V1.tryTitle row.title of
   Nothing ->
    case Schema.Notes.V1.tryTitle "valid" of

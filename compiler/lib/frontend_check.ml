@@ -591,17 +591,25 @@ let validation_diags_of source (m : Ast.module_form) =
 
 (** The full per-module check pipeline, reused by the cross-module graph walk
     so dependency diagnostics and fixes stay anchored at their own source. *)
+let literal_diags errors = List.map(fun(e:Literal_proof.error)->{
+  file=e.loc.file;start_line=e.loc.start.line;start_col=e.loc.start.col;
+  end_line=e.loc.stop.line;end_col=e.loc.stop.col;severity="error";code="P001";
+  message=e.message;fix=None;source="literal-proof";metadata=None;
+  manual=Error_codes.manual_for ~code:"P001" ~message:e.message ()})errors
+
 let module_local_diags ?(additional = fun _ _ -> []) source (m : Ast.module_form) : diagnostic list =
   match module_complexity_diagnostics m with
   | _ :: _ as diagnostics -> diagnostics
   | [] ->
+    let diagnostics,literal_errors=Literal_proof.with_module ~source m (fun ()->
     Migration_proof_context.with_module m (fun () ->
     legacy_bool_diagnostics m.source_file source m
     @ regex_literal_diagnostics m
     @ type_diags_of source m
     @ List.map diag_of_proof_error (Proof_checker.check_module m)
     @ validation_diags_of source m
-    @ additional source m)
+    @ additional source m)) in
+    literal_diags literal_errors @ diagnostics
 
 (* ── Cross-module structural validation (2026-07-08 multi-module audit) ─────
    `--check <entrypoint>` historically validated the entrypoint plus module

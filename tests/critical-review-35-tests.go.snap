@@ -553,6 +553,7 @@ func SwapPair35(p Pair35[teslrt.Int, string]) Pair35[string, teslrt.Int] {
 //line critical-review-35-tests.tesl:750
 	{
 		teslScrut1 := p
+		_ = teslScrut1
 		fst := teslScrut1.MkPair35Fst
 		_ = fst
 		snd := teslScrut1.MkPair35Snd
@@ -567,6 +568,7 @@ func MapPair35(f func(teslrt.Int) teslrt.Int, g func(string) string, p Pair35[te
 //line critical-review-35-tests.tesl:754
 	{
 		teslScrut1 := p
+		_ = teslScrut1
 		fst := teslScrut1.MkPair35Fst
 		_ = fst
 		snd := teslScrut1.MkPair35Snd

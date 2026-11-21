@@ -13,7 +13,7 @@ Go snapshot and test blocks in the gate. Read one with:
 tesl help manual <lesson-name>      # e.g. tesl help manual lesson05-intro-to-proofs
 ```
 
-There are **86** lessons. That number is generated; it cannot drift.
+There are **87** lessons. That number is generated; it cannot drift.
 
 ## In a hurry? Start with these
 
@@ -82,6 +82,7 @@ exactly what you are missing.
 | 580 | [`lesson29-forall-list-proofs`](../example/learn/lesson29-forall-list-proofs.tesl) | Prove a property of every element of a returned list with ForAll | [`lesson20-named-db-results`](../example/learn/lesson20-named-db-results.tesl) — Tie a fetched entity to the variable the caller binds it to, with the ? named-pack operator and FromDb |
 | 590 | [`lesson30-forall-set-proofs`](../example/learn/lesson30-forall-set-proofs.tesl) | The same ForAll guarantee for sets, and the two ways to produce one | [`lesson29-forall-list-proofs`](../example/learn/lesson29-forall-list-proofs.tesl) — Prove a property of every element of a returned list with ForAll |
 | 600 | [`lesson52-maybe-proof`](../example/learn/lesson52-maybe-proof.tesl) | Return either nothing or a proof-carrying value, and keep the proof through the case | [`lesson23-maybe-and-optional-values`](../example/learn/lesson23-maybe-and-optional-values.tesl) — Represent absence with Maybe and handle both cases without a null<br>[`lesson09-proof-composition`](../example/learn/lesson09-proof-composition.tesl) — Require and decompose several facts about the same value with && |
+| 605 | [`literal-proofs`](../example/learn/literal-proofs.tesl) | Validate proof-annotated literals at compile time with an explicit, pure validator | [`lesson06-proof-check-proof-auth`](../example/learn/lesson06-proof-check-proof-auth.tesl) — The three proof-producing function kinds: check validates at runtime, establish asserts a trust boundary, auth proves identity<br>[`lesson52-maybe-proof`](../example/learn/lesson52-maybe-proof.tesl) — Return either nothing or a proof-carrying value, and keep the proof through the case |
 | 610 | [`lesson19-existential-witnesses`](../example/learn/lesson19-existential-witnesses.tesl) | Return a proof about a value the caller never gets to name, using exists | [`lesson05-intro-to-proofs`](../example/learn/lesson05-intro-to-proofs.tesl) — A check function stamps a value as validated, and the stamp travels with it through the type system |
 | 620 | [`lesson22-compound-named-pack`](../example/learn/lesson22-compound-named-pack.tesl) | Split a return annotation into entity proofs and independent proof cargo | [`lesson20-named-db-results`](../example/learn/lesson20-named-db-results.tesl) — Tie a fetched entity to the variable the caller binds it to, with the ? named-pack operator and FromDb |
 | 630 | [`lesson53-literal-parametrized-predicates`](../example/learn/lesson53-literal-parametrized-predicates.tesl) | Give a predicate literal parameters, so HasMin 10 is a different fact from HasMin 5 | [`lesson06-proof-check-proof-auth`](../example/learn/lesson06-proof-check-proof-auth.tesl) — The three proof-producing function kinds: check validates at runtime, establish asserts a trust boundary, auth proves identity |

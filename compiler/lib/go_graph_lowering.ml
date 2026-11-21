@@ -203,7 +203,8 @@ let alpha_rename_cycle_members origins ~(targets : Ast.module_form list)
         | _ -> rename m name in
       Ast.DDatabase { d with entities = List.map entity d.entities;
         config_expr = Option.map (expr m) d.config_expr }
-    | Ast.DFact f -> Ast.DFact { f with name = rename m f.name; params = List.map (binding m) f.params }
+    | Ast.DFact f -> Ast.DFact { f with name = rename m f.name; params = List.map (binding m) f.params;
+        literal_via=Option.map(fun (v:Ast.ident)->{v with name=rename m v.name})f.literal_via }
     | Ast.DCapture c -> Ast.DCapture { c with name = rename m c.name;
       binding = binding m c.binding; parser = rename m c.parser;
       checker = Option.map (rename m) c.checker }

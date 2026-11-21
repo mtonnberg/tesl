@@ -670,8 +670,7 @@ function activate(context) {
       const file = teslFileFrom(uri);
       if (!file) { vscode.window.showErrorMessage("No Tesl file selected."); return; }
       if (runFileInExplorer) {
-        await runFileInExplorer(file);
-        return;
+        return runFileInExplorer(file);
       }
       await runTeslInTerminal(file, "Tesl Tests", ["test", file]);
     })
@@ -958,6 +957,7 @@ function activate(context) {
     // only failures; passes are inferred from "discovered ∧ not failed ∧ compiled").
     const runHandler = async (request, token) => {
       const run = ctrl.createTestRun(request);
+      let executed = 0, allPassed = true;
       try {
         if (!requireTrustedWorkspace()) return;
         const byFile = new Map(); // file -> [{ item, tgt }]
@@ -988,6 +988,8 @@ function activate(context) {
               run.appendOutput(`\r\n=== ${path.basename(file)} :: ${tgt.testName} (exit ${res.code}) ===\r\n`);
               if (res.output) run.appendOutput(res.output.replace(/\r?\n/g, "\r\n"));
               const { failures, compileError, reportedFailureCount } = parseTeslTestOutput(res.output, res.code);
+              executed++;
+              allPassed = allPassed && res.code === 0 && !compileError && failures.size === 0;
               const confident = res.code === 0 ||
                 (reportedFailureCount !== null && failures.size >= reportedFailureCount);
               if (compileError) {
@@ -1018,6 +1020,8 @@ function activate(context) {
           run.appendOutput(`\r\n=== ${path.basename(file)} (exit ${res.code}) ===\r\n`);
           if (res.output) run.appendOutput(res.output.replace(/\r?\n/g, "\r\n"));
           const { failures, compileError, reportedFailureCount } = parseTeslTestOutput(res.output, res.code);
+          executed += entries.length;
+          allPassed = allPassed && res.code === 0 && !compileError && failures.size === 0;
           // Only report a PASS when confident every failure was attributed: the run
           // exited 0, OR the parsed failure count matches the run summary. Otherwise a
           // failure the parser could not attribute would masquerade as a pass — so the
@@ -1051,6 +1055,7 @@ function activate(context) {
       } finally {
         run.end();
       }
+      return { kind: "tesl-test-result", status: token.isCancellationRequested ? "cancelled" : executed === 0 ? "empty" : allPassed ? "passed" : "failed", count: executed };
     };
 
     runSingleTestInExplorer = async (file, testName, kind) => {
@@ -1083,7 +1088,7 @@ function activate(context) {
       }
       const cancellation = new vscode.CancellationTokenSource();
       try {
-        await runHandler(new vscode.TestRunRequest([fileItem]), cancellation.token);
+        return await runHandler(new vscode.TestRunRequest([fileItem]), cancellation.token);
       } finally {
         cancellation.dispose();
       }

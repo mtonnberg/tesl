@@ -226,6 +226,44 @@ handler post createTodo(req: NewTodo ::: ValidNewTodo) -> Todo ? FromDb (Id == t
   insert Todo req
 ```
 
+### Validated Literals
+
+For a fact you own, name an explicit literal validator:
+
+```tesl
+fact IsPositive(n: Int) literal via tryPositive
+
+establish tryPositive(n: Int) -> Maybe (value: Int ::: IsPositive value) =
+  if n > 0 then
+    Something (n ::: IsPositive n)
+  else
+    Nothing
+
+fn example() -> Int ? IsPositive =
+  let x: Int ::: IsPositive x = 3
+  x
+```
+
+The compiler runs bounded, pure validation of `3` and requires the validator to
+return that same value. The binding needs no runtime validation call. `0` fails
+at compile time. Facts without a rule still require ordinary carried evidence;
+the compiler does not guess which validator to call.
+
+Keep validators small and review their conditions: this proves acceptance by
+your selected validator, not that its implementation expresses your intent.
+Current rules support unary `Int`, `String`, and `Bool` facts. If a validator
+normalizes a value, use an already-normalized literal or validate at runtime and
+consume the returned value. A direct `case` on a validator call still needs all
+branches. Frozen schemas cannot acquire new rules retroactively.
+
+Capability-dependent `check` and `establish` validators cannot serve as literal
+rules. The compiler names the required capabilities and explains how to move
+validation to runtime: remove `literal via`, call the validator from a context
+with the required capabilities, and consume its returned proven value.
+
+See [the executable example](../example/learn/literal-proofs.tesl) and
+[the supported evaluator and limits](../LANGUAGE-SPEC.md#explicit-literal-proof-rules).
+
 ### Detaching and Reattaching Proofs
 
 When you need to pass proofs explicitly:

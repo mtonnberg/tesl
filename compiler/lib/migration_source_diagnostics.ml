@@ -196,3 +196,33 @@ let check_module_source source (m : Ast.module_form) =
   let closures = List.concat_map (fun file -> check_closure_source ~skip_roots:skip_headers
     ~overlay:false ~query_file:m.source_file ~file "") migration_imports in
   List.sort_uniq compare (direct @ imported @ closures)
+
+(* Scaffold placeholders in ordinary helper bodies are not runtime names. Keep
+   them blocking, but report the requested domain input rather than "unknown
+   name: todo". Match the AST and the original diagnostic position exactly. *)
+let explain_holes ~source (root:Ast.module_form) diagnostics =
+ let cache=Hashtbl.create 4 in
+ let holes file = match Hashtbl.find_opt cache file with Some value->value|None->
+   let value=try
+     let bytes=if file=root.source_file then source else Source_input.read file in
+     match Parser.parse_module file bytes with
+     | Err _->[]
+     | Ok m->let found=ref []in
+       List.iter(Ast_visitor.iter(function
+        | Ast.EApp{fn=Ast.EVar{name="todo";loc=name_loc};arg=Ast.ELit{lit=Ast.LString reason;_};loc}->
+          found:=(name_loc,loc,reason)::!found
+        | _->()))(Frontend_check.module_expression_roots m);!found
+     with Sys_error _ | Unix.Unix_error _ -> []in
+   Hashtbl.add cache file value;value in
+ let seen=Hashtbl.create 8 in
+ List.filter_map(fun(d:Frontend_check.diagnostic)->
+   let d=if List.mem d.code ["T001";"MIG028"] && d.message="unknown name: todo" && owned_scopes "migrations" d.file<>[] then
+     match List.find_opt(fun(name,_,_)->name.Location.start.line=d.start_line && name.start.col=d.start_col)(holes d.file)with
+     | Some(_,loc,reason)->let message="Migration needs a value: " ^ reason in
+       {d with start_line=loc.start.line;start_col=loc.start.col;end_line=loc.stop.line;end_col=loc.stop.col;
+         code="MIG003";message;source="migration";fix=None;
+         metadata=Some(Diagnostic_metadata.migration ~code:"MIG003" ~message ~related:[]);
+         manual=Error_codes.manual_for ~code:"MIG003" ~message ()}
+     | None->d else d in
+   if d.code="MIG003" && String.starts_with ~prefix:"Migration needs a value: " d.message then
+     (if Hashtbl.mem seen d then None else(Hashtbl.add seen d ();Some d)) else Some d)diagnostics

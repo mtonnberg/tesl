@@ -483,6 +483,85 @@ let check_callback_arguments subject_env funcs head args =
     [make_error loc ~hint:"pass a named function, a tracked partial application, or an explicit lambda whose Fact subjects match the receiving callback annotation" message]
   ) (List.mapi (fun i arg -> i, arg) args)
 
+(* Shared by call-site and return-side checking. Constructor field proofs keep
+   their subjects when patterns rename fields; a discarded required field must
+   not resolve to an unrelated outer binding with the same spelling. *)
+let pattern_field_proof_environments ~ctor_fields env pattern =
+  let is_ident_char = function
+    | 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' | '_' -> true
+    | _ -> false in
+  let proof_mentions_field field proof =
+    let arg_mentions arg =
+      let length = String.length arg in
+      let rec loop index token_start =
+        if index = length then
+          match token_start with
+          | Some start -> String.sub arg start (index - start) = field
+          | None -> false
+        else if is_ident_char arg.[index] then
+          loop (index + 1) (match token_start with Some _ -> token_start | None -> Some index)
+        else
+          let matched = match token_start with
+            | Some start -> String.sub arg start (index - start) = field
+            | None -> false in
+          matched || loop (index + 1) None in
+      loop 0 None in
+    let rec mentions = function
+      | PredApp { args; _ } -> List.exists arg_mentions args
+      | PredAnd { left; right; _ } -> mentions left || mentions right in
+    mentions proof in
+  let subst_pattern_proof mapping proof =
+    let subst_arg arg =
+      match List.assoc_opt arg mapping with
+      | Some replacement -> replacement
+      | None ->
+        let buffer = Buffer.create (String.length arg) in
+        let length = String.length arg in
+        let rec loop index =
+          if index = length then Buffer.contents buffer
+          else if is_ident_char arg.[index] then begin
+            let finish = ref index in
+            while !finish < length && is_ident_char arg.[!finish] do incr finish done;
+            let token = String.sub arg index (!finish - index) in
+            let is_member = index > 0 && arg.[index - 1] = '.' in
+            Buffer.add_string buffer
+              (if is_member then token
+               else Option.value (List.assoc_opt token mapping) ~default:token);
+            loop !finish
+          end else begin
+            Buffer.add_char buffer arg.[index];
+            loop (index + 1)
+          end in
+        loop 0 in
+    let rec subst = function
+      | PredApp ({ args; _ } as app) -> PredApp { app with args = List.map subst_arg args }
+      | PredAnd ({ left; right; _ } as conjunction) ->
+        PredAnd { conjunction with left = subst left; right = subst right } in
+    subst proof in
+  let rec add (penv, senv) = function
+    | PCon { ctor; fields; _ } ->
+      let field_proofs = match List.assoc_opt ctor ctor_fields with
+        | Some fps when List.length fps = List.length fields -> fps
+        | _ -> List.map (fun _ -> ("", None)) fields in
+      let field_names = List.map fst field_proofs in
+      let field_mapping = List.fold_left2 (fun mapping (fname, _) (_label, pat) ->
+        match pat with
+        | PVar var when fname <> "" -> (fname, var) :: mapping
+        | _ -> mapping) [] field_proofs fields in
+      List.fold_left2 (fun env (_fname, proof_opt) (_label, pat) ->
+        let env = match proof_opt, pat with
+          | Some proof, PVar var ->
+            let unresolved_field = List.exists (fun field ->
+              not (List.mem_assoc field field_mapping) && proof_mentions_field field proof) field_names in
+            if unresolved_field then env
+            else ((var, [Proof_kernel.elaborated Proof_kernel.FieldProof
+                           (subst_pattern_proof field_mapping proof)]) :: fst env,
+                  (var, var) :: snd env)
+          | _ -> env in
+        add env pat) (penv, senv) field_proofs fields
+    | PVar _ | PWild | PNullary _ | PLit _ -> (penv, senv) in
+  add env pattern
+
 let rec check_expr_call_proofs
     (subject_env : subject_env)
     (proof_env : proof_env)
@@ -1111,104 +1190,9 @@ let rec check_expr_call_proofs
          positionally.  `case t of Node l cur r -> …` gives `cur` the `value`
           field's `::: P` proof (subject renamed field_name -> binder).  Sound
           because field proofs are now enforced at construction (PFC-2b / a0). *)
-      let proof_mentions_field field proof =
-        let arg_mentions arg =
-          let is_ident_char = function
-            | 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' | '_' -> true
-            | _ -> false
-          in
-          let length = String.length arg in
-          let rec loop index token_start =
-            if index = length then
-              match token_start with
-              | Some start -> String.sub arg start (index - start) = field
-              | None -> false
-            else if is_ident_char arg.[index] then
-              loop (index + 1) (match token_start with Some _ -> token_start | None -> Some index)
-            else
-              let matched = match token_start with
-                | Some start -> String.sub arg start (index - start) = field
-                | None -> false
-              in
-              matched || loop (index + 1) None
-          in
-          loop 0 None
-        in
-        let rec mentions = function
-          | PredApp { args; _ } -> List.exists arg_mentions args
-          | PredAnd { left; right; _ } -> mentions left || mentions right
-        in
-        mentions proof
-      in
-      let subst_pattern_proof mapping proof =
-        let subst_arg arg =
-          match List.assoc_opt arg mapping with
-          | Some replacement -> replacement
-          | None ->
-            let is_ident_char = function
-              | 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' | '_' -> true
-              | _ -> false
-            in
-            let buffer = Buffer.create (String.length arg) in
-            let length = String.length arg in
-            let rec loop index =
-              if index = length then Buffer.contents buffer
-              else if is_ident_char arg.[index] then begin
-                let finish = ref index in
-                while !finish < length && is_ident_char arg.[!finish] do incr finish done;
-                let token = String.sub arg index (!finish - index) in
-                let is_member = index > 0 && arg.[index - 1] = '.' in
-                Buffer.add_string buffer
-                  (if is_member then token
-                   else Option.value (List.assoc_opt token mapping) ~default:token);
-                loop !finish
-              end else begin
-                Buffer.add_char buffer arg.[index];
-                loop (index + 1)
-              end
-            in
-            loop 0
-        in
-        let rec subst = function
-          | PredApp ({ args; _ } as app) ->
-            PredApp { app with args = List.map subst_arg args }
-          | PredAnd ({ left; right; _ } as conjunction) ->
-            PredAnd { conjunction with left = subst left; right = subst right }
-        in
-        subst proof
-      in
-      let rec add_pattern_field_proofs (penv, senv) = function
-        | PCon { ctor; fields; _ } ->
-          let field_proofs = match List.assoc_opt ctor !ctor_field_proof_registry with
-            | Some fps when List.length fps = List.length fields -> fps
-            | _ -> List.map (fun _ -> ("", None)) fields
-          in
-          let field_names = List.map fst field_proofs in
-          let field_mapping = List.fold_left2 (fun mapping (fname, _) (_label, pat) ->
-            match pat with
-            | PVar var when fname <> "" -> (fname, var) :: mapping
-            | _ -> mapping) [] field_proofs fields in
-          List.fold_left2 (fun env (_fname, proof_opt) (_label, pat) ->
-            let env = match proof_opt, pat with
-              | Some proof, PVar var ->
-                let unresolved_field =
-                  List.exists (fun field ->
-                    not (List.mem_assoc field field_mapping) && proof_mentions_field field proof)
-                    field_names
-                in
-                if unresolved_field then env
-                else
-                  ((var, [Proof_kernel.elaborated Proof_kernel.FieldProof
-                            (subst_pattern_proof field_mapping proof)]) :: fst env,
-                   (var, var) :: snd env)
-              | _ -> env
-            in
-            add_pattern_field_proofs env pat
-          ) (penv, senv) field_proofs fields
-        | PVar _ | PWild | PNullary _ | PLit _ -> (penv, senv)
-      in
       let proof_env', subject_env' =
-        add_pattern_field_proofs (proof_env', subject_env') arm.pattern
+        pattern_field_proof_environments ~ctor_fields:!ctor_field_proof_registry
+          (proof_env', subject_env') arm.pattern
       in
       let guard_errors = match arm.guard with
         | Some guard -> check_expr_call_proofs subject_env' proof_env' funcs guard

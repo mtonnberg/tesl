@@ -11,9 +11,9 @@ module C = Migration_canonical
 
 type requested = { entity : string; function_ref : expr; loc : Location.loc }
 type function_binding = { identity : string; owner : module_form; declaration : func_decl }
-type writeback_binding = { mapping : Migration_transform_rules.writeback; function_binding : function_binding }
-type legacy_binding = { mapping : Migration_transform_rules.legacy; function_binding : function_binding option }
-type row = { mapping : R.entity; function_binding : function_binding option; fixtures : function_binding list; writebacks : writeback_binding list; legacies : legacy_binding list }
+type writeback_binding = { mapping : Migration_transform_rules.writeback; function_binding : function_binding; optional:bool }
+type legacy_binding = { mapping : Migration_transform_rules.legacy; function_binding : function_binding option; optional:bool }
+type row = { mapping : R.entity; function_binding : function_binding option; fixtures : function_binding list; writebacks : writeback_binding list; legacies : legacy_binding list; row_change:bool }
 type nominal_mapping_spec = { previous_entity : Migration_proof_context.nominal_type;
   current_entity : Migration_proof_context.nominal_type;
   types : (Migration_proof_context.nominal_type * Migration_proof_context.nominal_type) list }
@@ -227,7 +227,7 @@ let with_fixture_sources checked run =
 
 let result_type modules owner expected = function
   | RetPlain {ty=TApp {head=TName {name;_};arg;_};_} ->
-    resolver modules owner IR.Type name=Some (IR.Primitive "Tesl.Migration.Migrated") && entity_type modules owner expected arg
+    List.mem (resolver modules owner IR.Type name) [Some (IR.Primitive "Tesl.Migration.Migrated");Some (IR.Primitive "Tesl.Migration.RowChange")] && entity_type modules owner expected arg
   | _ -> false
 
 (* Signature equality is nominal in each original owner, never a comparison of
@@ -275,31 +275,36 @@ let bind_reverse_function ~rule modules root entity previous loc expression =
      same_proof subject actual.left expected.left && same_proof subject actual.right expected.right
    | _ -> false in
   let result_matches = function
-   | RetPlain result when field.proof_ann=None ->
-     same_type modules binding.owner old_owner result.ty field.type_expr
+   | RetPlain result when field.proof_ann=None && same_type modules binding.owner old_owner result.ty field.type_expr -> Some false
+   | RetPlain {ty=TApp {head=TName head;arg;_};_} when field.proof_ann=None &&
+       resolver modules binding.owner IR.Type head.name=Some(IR.Primitive "Tesl.Maybe.Maybe") ->
+      if same_type modules binding.owner old_owner arg field.type_expr then Some true else None
+   | RetMaybeAttached {outer_ty=None;binding=result;_} ->
+      if same_type modules binding.owner old_owner result.type_expr field.type_expr &&
+      (match result.proof_ann,field.proof_ann with
+       | Some actual,Some expected->same_proof result.name actual expected
+       | _->false) then Some true else None
    | RetAttached result ->
-     same_type modules binding.owner old_owner result.binding.type_expr field.type_expr &&
-     (match result.binding.proof_ann,field.proof_ann with
-      | Some actual,Some expected -> same_proof result.binding.name actual expected
-      | _ -> false)
-   | _ -> false in
-  (match binding.declaration.params,binding.declaration.return_spec with
-   | [parameter],result when parameter.proof_ann=None &&
-       entity_type modules binding.owner entity parameter.type_expr &&
-       result_matches result -> ()
-   | _ -> reject "MIG021" loc (rule ^ " requires exactly To.Entity -> previous field type, with the exact previous field proof when present"));
-  binding
+      if same_type modules binding.owner old_owner result.binding.type_expr field.type_expr &&
+      (match result.binding.proof_ann,field.proof_ann with
+       | Some actual,Some expected -> same_proof result.binding.name actual expected
+       | _ -> false) then Some false else None
+   | _ -> None in
+  match binding.declaration.params,result_matches binding.declaration.return_spec with
+   | [parameter],Some optional when parameter.proof_ann=None && entity_type modules binding.owner entity parameter.type_expr -> binding,optional
+   | _ -> reject "MIG021" loc (rule ^ " requires To.Entity -> previous field type or Maybe of that type, with the exact previous field proof when present")
 
 let bind_writeback modules root entity (mapping:R.writeback) : writeback_binding =
-  {mapping;function_binding=bind_reverse_function ~rule:"WriteBack" modules root entity mapping.previous mapping.loc mapping.function_ref}
+  let function_binding,optional=bind_reverse_function ~rule:"WriteBack" modules root entity mapping.previous mapping.loc mapping.function_ref in
+  {mapping;function_binding;optional}
 let bind_legacy modules root entity (mapping:R.legacy) : legacy_binding =
-  let function_binding=match mapping.value with
+  let function_binding,optional=match mapping.value with
     | R.Literal _ ->
       let _,field=reverse_field ~rule:"Legacy" modules mapping.previous mapping.loc in
       if field.proof_ann<>None then reject "MIG021" mapping.loc "Legacy cannot fabricate a previous field proof";
-      None
-    | R.Function expression -> Some (bind_reverse_function ~rule:"LegacyWith" modules root entity mapping.previous mapping.loc expression) in
-  {mapping;function_binding}
+      None,false
+   | R.Function expression -> let binding,optional=bind_reverse_function ~rule:"LegacyWith" modules root entity mapping.previous mapping.loc expression in Some binding,optional in
+  {mapping;function_binding;optional}
 
 let check_returns modules root binding mapping =
   let accepted=ref [] in
@@ -350,8 +355,10 @@ let check_returns modules root binding mapping =
     | ECase e -> List.iter (fun (arm:case_arm) -> pattern arm.loc arm.pattern; returns arm.body) e.arms
     | value -> (match Migration_form.application value with
       | "Row",[value] when resolver modules binding.owner IR.Value "Row"=Some (IR.Primitive "Tesl.Migration.Row") -> row value
-      | "Reject",[_] when resolver modules binding.owner IR.Value "Reject"=Some (IR.Primitive "Tesl.Migration.Reject") -> ()
-      | _ -> reject "MIG018" (at value) "every row-function result must be an explicit Row target literal or Reject reason") in
+       | "Reject",[_] when resolver modules binding.owner IR.Value "Reject"=Some (IR.Primitive "Tesl.Migration.Reject") -> ()
+       | "KeepRow",[value] when resolver modules binding.owner IR.Value "KeepRow"=Some (IR.Primitive "Tesl.Migration.KeepRow") -> row value
+       | ("DeleteRow"|"RejectRow") as name,[_] when resolver modules binding.owner IR.Value name=Some (IR.Primitive ("Tesl.Migration." ^ name)) -> ()
+       | _ -> reject "MIG018" (at value) "every row-function result must be an explicit Row/KeepRow target literal, Reject/RejectRow reason, or DeleteRow reason") in
   returns binding.declaration.body;
   (match Migration_revalidate.check ~resolve:(resolver modules) ~modules ~root
       ~owner:binding.owner ~declaration:binding.declaration ~mapping with
@@ -446,7 +453,10 @@ let prepare ~project_root:_ ~source root rules ~functions ~fixtures =
         (Printf.sprintf "%s requires a representative fixture `fn old%s() -> %s`; add it to fixtures" mapping.identity mapping.identity mapping.previous.entity_name);
       let writebacks=List.map (bind_writeback modules root mapping.current.entity_name) mapping.writebacks in
       let legacies=List.map (bind_legacy modules root mapping.current.entity_name) mapping.legacies in
-      {mapping;function_binding;fixtures;writebacks;legacies}) in
+      let row_change=Option.fold ~none:false ~some:(fun binding->match binding.declaration.return_spec with
+        | RetPlain{ty=TApp{head=TName n;_};_}->resolver modules binding.owner IR.Type n.name=Some(IR.Primitive "Tesl.Migration.RowChange")
+        | _->false)function_binding in
+      {mapping;function_binding;fixtures;writebacks;legacies;row_change}) in
     List.iter (fun fixture -> if not (Hashtbl.mem used fixture.identity) then reject "MIG021" fixture.declaration.loc
       "fixtures must be parameterless functions returning an exact previous entity or Maybe of that entity in this transformation") fixture_functions;
     let seen = Hashtbl.create 8 in

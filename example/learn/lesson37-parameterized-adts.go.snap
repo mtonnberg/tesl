@@ -107,6 +107,7 @@ func Unwrap(b Box[teslrt.Int]) teslrt.Int {
 //line lesson37-parameterized-adts.tesl:60
 	{
 		teslScrut1 := b
+		_ = teslScrut1
 		value := teslScrut1.MkBoxValue
 		_ = value
 //line lesson37-parameterized-adts.tesl:61
@@ -119,6 +120,7 @@ func MapBox(b Box[teslrt.Int], f func(teslrt.Int) teslrt.Int) Box[teslrt.Int] {
 //line lesson37-parameterized-adts.tesl:64
 	{
 		teslScrut1 := b
+		_ = teslScrut1
 		value := teslScrut1.MkBoxValue
 		_ = value
 //line lesson37-parameterized-adts.tesl:65
