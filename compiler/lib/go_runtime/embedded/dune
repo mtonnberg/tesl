@@ -14,6 +14,12 @@
  (mode promote)
  (deps
    ../../../../runtime/go/teslrt/table_selection.go
+   ../../../../runtime/go/teslrt/migration_history_registration.go
+   ../../../../runtime/go/teslrt/goroutine_id.go
+   ../../../../runtime/go/teslrt/goroutine_id_fast.go
+   ../../../../runtime/go/teslrt/goroutine_id_other.go
+   ../../../../runtime/go/teslrt/goroutine_id_amd64.s
+   ../../../../runtime/go/teslrt/goroutine_id_arm64.s
    ../../../../runtime/go/teslrt/migration_row_update_bulk.go
    ../../../../runtime/go/teslrt/migration_stage_cancel.go
    ../../../../runtime/go/teslrt/migration_stage_contract.go
