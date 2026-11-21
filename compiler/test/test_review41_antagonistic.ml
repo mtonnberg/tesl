@@ -347,7 +347,7 @@ let r41_19_elm_post_maybe_preserves_simple_record_shape () =
     assert_contains ~label:"maybe post signature" out
       "postMaybe : Maybe Todo -> (Result Http.Error (Maybe Todo) -> msg) -> Cmd msg";
     assert_contains ~label:"maybe post body" out
-      ", body = Http.jsonBody ((Maybe.withDefault E.null (Maybe.map todoEncoder)) todo)")
+      ", body = Http.jsonBody ((Maybe.withDefault E.null (Maybe.map todoEncoder todo)))")
 
 let r41_20_semantic_json_omits_api_declarations () =
   with_semantic_api (fun path ->

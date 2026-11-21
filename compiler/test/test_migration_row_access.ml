@@ -53,6 +53,10 @@ let project ?(before=old) ?(after=fresh) f =
 let describe ds = String.concat "\n" (List.map (fun (d:Compile.diagnostic) -> d.code ^ ": " ^ d.message) ds)
 let errors path s = (Compile.agent_context_result_source path s).diagnostics |> List.filter (fun (d:Compile.diagnostic) -> d.severity="error")
 let accepts path s = match errors path s with [] -> () | ds -> fail (describe ds)
+(* A program entry's `check` runs the emitter, so an emission refusal is a check error
+   too; these cases assert both gates report it. *)
+let reports_v001 path s = check bool "check reports an emission refusal" true
+  (List.exists (fun (d:Compile.diagnostic) -> d.code = "V001") (errors path s))
 
 module RH=Migration_row_history
 module P=Migration_program
@@ -305,7 +309,10 @@ let refused_queries () =
    |> replace "handler get all() -> List Note requires [dbRead Note] = select note from Note order note.id asc"
      ("handler get all() -> " ^ result ^ " requires [dbRead Note, dbRead Member] =\n " ^ query)
    |> replace "main() -> App requires [dbRead Note," "main() -> App requires [dbRead Member, dbRead Note," in
-  let file=save "app.tesl" bytes in accepts file bytes;
+  let file=save "app.tesl" bytes in
+  (* `check` runs the emitter for a program entry, so the refusal is a check error too. *)
+  check bool (label ^ ": check reports the refusal") true
+    (List.exists (fun (d:Compile.diagnostic) -> Compile.string_contains d.message reason) (errors file bytes));
   match Compile.compile_row_source_artifacts ~storage:true ~physical:true file bytes with
    | Compile.GoSuccess _ -> fail ("unsafe legacy query accepted: " ^ label)
    | Compile.GoFailure ds -> check bool (label ^ "\n" ^ describe ds) true (List.exists (fun (d:Compile.diagnostic) -> Compile.string_contains d.message reason) ds))) cases
@@ -330,7 +337,7 @@ migration = Migration {
  entities: {}
 }
 |}));
- let file=save "app.tesl" app in accepts file app;
+ let file=save "app.tesl" app in reports_v001 file app;
  match Compile.compile_row_source_artifacts ~storage:true ~physical:true file app with
  | Compile.GoSuccess _ -> fail "additive successor accepted without its checked Contract V2 source"
  | Compile.GoFailure ds -> check bool (describe ds) true
@@ -627,7 +634,8 @@ let with_repeated_project ?(contract=true) f = project(fun root save path ->
  let previous=seal root (Filename.concat root "schema/notes/v2.tesl") and current=seal root current_file in
  let header=match Migration_header.create ~previous ~current with Ok h->h|Error errors->fail(String.concat "\n" (List.map(fun(e:S.error)->e.message)errors)) in
  let edge=Migration_header.encode header ^ repeated_migration in
- let third=save "migrations/notes/v3.tesl" edge in accepts third edge;accepts app_file app;
+ let third=save "migrations/notes/v3.tesl" edge in accepts third edge;
+ (if contract then accepts app_file app else reports_v001 app_file app);
  f root save app_file)
 let prepare_repeated destination = with_repeated_project(fun root _ app_file ->
  let rec copy relative =
@@ -658,7 +666,7 @@ let repeated_binding_guards () =
   (Compile.string_contains rows "teslmodschemanotesmigratev3.TeslCompiledRowCallback");
  let unsafe=app |> replace "select note from Note order note.id asc"
    "select note from Note where note.priority == 8 order note.id asc" in
- ignore(save "app.tesl" unsafe);accepts app_file unsafe;
+ ignore(save "app.tesl" unsafe);reports_v001 app_file unsafe;
  match Compile.compile_row_source_artifacts ~storage:true ~physical:true app_file unsafe with
  | Compile.GoSuccess _->fail "V3 computed predicate silently gained legacy SQL"
  | Compile.GoFailure ds->check bool (describe ds) true

@@ -53,7 +53,7 @@ func channelListenerCount(channel *SseChannel, key string) int {
 
 func TestSubscribeReceivesAPublishedEvent(t *testing.T) {
 	channel := NewSseChannel("RunEvents")
-	stream := SubscribeStream(streamServer(channel), "/stream", nil)
+	stream := SubscribeStream(streamServer(channel), "/stream", nil, nil)
 	defer UnsubscribeStream(stream)
 	waitForListeners(t, channel, "all", 1)
 
@@ -74,9 +74,9 @@ func TestSubscribeReceivesAPublishedEvent(t *testing.T) {
 func TestPublishReachesOnlyItsOwnKey(t *testing.T) {
 	channel := NewSseChannel("Notices")
 	server := streamServer(channel)
-	watching := SubscribeStream(server, "/events/ada", nil)
+	watching := SubscribeStream(server, "/events/ada", nil, nil)
 	defer UnsubscribeStream(watching)
-	elsewhere := SubscribeStream(server, "/events/grace", nil)
+	elsewhere := SubscribeStream(server, "/events/grace", nil, nil)
 	defer UnsubscribeStream(elsewhere)
 	waitForListeners(t, channel, "ada", 1)
 	waitForListeners(t, channel, "grace", 1)
@@ -94,9 +94,9 @@ func TestPublishReachesOnlyItsOwnKey(t *testing.T) {
 func TestPublishReachesEverySubscriberOnTheKey(t *testing.T) {
 	channel := NewSseChannel("Broadcast")
 	server := streamServer(channel)
-	first := SubscribeStream(server, "/stream", nil)
+	first := SubscribeStream(server, "/stream", nil, nil)
 	defer UnsubscribeStream(first)
-	second := SubscribeStream(server, "/stream", nil)
+	second := SubscribeStream(server, "/stream", nil, nil)
 	defer UnsubscribeStream(second)
 	waitForListeners(t, channel, "all", 2)
 
@@ -113,7 +113,7 @@ func TestPublishReachesEverySubscriberOnTheKey(t *testing.T) {
 func TestPublishWithNoSubscribersIsDropped(t *testing.T) {
 	channel := NewSseChannel("Quiet")
 	Publish(channel, "all", eventPayload("id", "e1"))
-	stream := SubscribeStream(streamServer(channel), "/stream", nil)
+	stream := SubscribeStream(streamServer(channel), "/stream", nil, nil)
 	defer UnsubscribeStream(stream)
 	waitForListeners(t, channel, "all", 1)
 	if events := CollectWithin(stream, FromInt64(200)); JsonIsNotEmpty(events) {
@@ -137,7 +137,7 @@ func TestSubscribeToAnUnknownRouteFails(t *testing.T) {
 			t.Fatalf("the failure reads %q", message)
 		}
 	}()
-	SubscribeStream(streamServer(channel), "/nowhere", nil)
+	SubscribeStream(streamServer(channel), "/nowhere", nil, nil)
 }
 
 // A connection that goes away takes its listener with it: a listener that outlives its
@@ -145,7 +145,7 @@ func TestSubscribeToAnUnknownRouteFails(t *testing.T) {
 // development left 109 stale listeners on one key).
 func TestUnsubscribeRemovesTheListener(t *testing.T) {
 	channel := NewSseChannel("Runs")
-	stream := SubscribeStream(streamServer(channel), "/stream", nil)
+	stream := SubscribeStream(streamServer(channel), "/stream", nil, nil)
 	waitForListeners(t, channel, "all", 1)
 	UnsubscribeStream(stream)
 
@@ -170,7 +170,7 @@ func TestUnsubscribeRemovesTheListener(t *testing.T) {
 
 func TestCollectCountAnswersEverythingDrained(t *testing.T) {
 	channel := NewSseChannel("Runs")
-	stream := SubscribeStream(streamServer(channel), "/stream", nil)
+	stream := SubscribeStream(streamServer(channel), "/stream", nil, nil)
 	defer UnsubscribeStream(stream)
 	waitForListeners(t, channel, "all", 1)
 	for index := range 3 {
@@ -193,7 +193,7 @@ func TestCollectCountAnswersEverythingDrained(t *testing.T) {
 // nothing".
 func TestCollectCountTimesOutLoudly(t *testing.T) {
 	channel := NewSseChannel("Runs")
-	stream := SubscribeStream(streamServer(channel), "/stream", nil)
+	stream := SubscribeStream(streamServer(channel), "/stream", nil, nil)
 	defer UnsubscribeStream(stream)
 	defer func() {
 		recovered := recover()
@@ -213,7 +213,7 @@ func TestCollectCountTimesOutLoudly(t *testing.T) {
 
 func TestCollectCountRejectsANonPositiveCount(t *testing.T) {
 	channel := NewSseChannel("Runs")
-	stream := SubscribeStream(streamServer(channel), "/stream", nil)
+	stream := SubscribeStream(streamServer(channel), "/stream", nil, nil)
 	defer UnsubscribeStream(stream)
 	defer func() {
 		if recover() == nil {
@@ -227,7 +227,7 @@ func TestCollectCountRejectsANonPositiveCount(t *testing.T) {
 // collect on the same stream continues where this one stopped.
 func TestCollectUntilKeepsTheRest(t *testing.T) {
 	channel := NewSseChannel("Runs")
-	stream := SubscribeStream(streamServer(channel), "/stream", nil)
+	stream := SubscribeStream(streamServer(channel), "/stream", nil, nil)
 	defer UnsubscribeStream(stream)
 	waitForListeners(t, channel, "all", 1)
 	for _, id := range []string{"a", "b", "c"} {
@@ -361,4 +361,59 @@ func TestSseChannelIsSafeUnderConcurrentUse(t *testing.T) {
 	if channel.active != 0 {
 		t.Fatalf("the active count settled at %d", channel.active)
 	}
+}
+
+// FRICTION §34: `subscribe "/p" headers { … }` parsed and type-checked, and the headers never
+// reached the endpoint — a stream behind header auth could not be subscribed from a test.
+func TestSubscribeSendsItsHeaders(t *testing.T) {
+	seen := make(chan string, 1)
+	server := Server{
+		Routes:   []Route{{Method: "GET", Path: "/stream", Endpoint: "sse:/stream"}},
+		Handlers: map[string]HandlerFunc{},
+		Streams: map[string]StreamFunc{
+			"sse:/stream": func(writer http.ResponseWriter, request *http.Request) {
+				seen <- request.Header.Get("X-Api-Key")
+				writer.Header().Set("Content-Type", "text/event-stream")
+				writer.WriteHeader(http.StatusOK)
+				_, _ = writer.Write([]byte(": ok\n\n"))
+				writer.(http.Flusher).Flush()
+				<-request.Context().Done()
+			},
+		},
+	}
+	stream := SubscribeStream(server, "/stream", nil,
+		[]Tuple2[string, string]{{Tuple2First: "x-api-key", Tuple2Second: "good"}})
+	defer UnsubscribeStream(stream)
+	select {
+	case got := <-seen:
+		if got != "good" {
+			t.Fatalf("the stream saw x-api-key %q, want %q", got, "good")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the stream handler never ran")
+	}
+}
+
+// FRICTION §32: a JSON route answering a `subscribe` used to pass as a subscription, and the
+// test then timed out waiting for events on a body that could never carry one.
+func TestSubscribeRefusesANonStreamResponse(t *testing.T) {
+	server := Server{
+		Routes: []Route{{Method: "GET", Path: "/runs/:id", Endpoint: "GET /runs/:id"}},
+		Handlers: map[string]HandlerFunc{
+			"GET /runs/:id": func(scope *RequestScope, request *http.Request) Response {
+				return Response{Status: 200, Body: "id"}
+			},
+		},
+		Streams: map[string]StreamFunc{},
+	}
+	defer func() {
+		recovered := recover()
+		if recovered == nil {
+			t.Fatal("subscribing to a JSON route succeeded")
+		}
+		if message := fmt.Sprint(recovered); !strings.Contains(message, "not an event stream") {
+			t.Fatalf("the failure reads %q", message)
+		}
+	}()
+	SubscribeStream(server, "/runs/stream", nil, nil)
 }

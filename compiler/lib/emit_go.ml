@@ -884,15 +884,19 @@ let rec return_spec_type_exprs = function
   | RetExists { body; _ } -> return_spec_type_exprs body
 
 let type_variables_of ?(subjects=[]) type_exprs =
+  ignore subjects;
   let seen = ref [] in
   let rec walk ty =
     match ty with
     (* A lowercase name inside a PROOF is a value — `Fact (AlwaysValid33 n)` names the
        parameter `n`, not a type — and a proof erases here, so nothing under it is a type at
-       all.  `subjects` catches the same thing from the other side: a name that is one of the
-       function's own parameters is a value wherever it appears. *)
+       all.  Everywhere else a lowercase name in a TYPE is a type variable, even one spelled
+       like a parameter: `fn same(a: a, b: a) -> Bool` is generic in `a`, and the checker
+       accepts it.  (`subjects` used to drop such a name, so the emitter then refused the
+       type variable it had just discarded.)  Proof subjects only ever appear under `Fact`,
+       which the arm below skips, so `subjects` has nothing left to exclude. *)
     | TVar { name; _ } ->
-      if not (List.mem name !seen || List.mem name subjects) then seen := !seen @ [name]
+      if not (List.mem name !seen) then seen := !seen @ [name]
     | TApp { head = TName { name = "Fact"; _ }; _ } -> ()
     | TApp { head; arg; _ } -> walk head; walk arg
     | TFun { dom; cod; _ } -> walk dom; walk cod
@@ -1004,6 +1008,30 @@ let module_has_postgres_database () =
    request verb (`get "/path"`) only means something inside such a block, and this is what
    tells the emitter which server it addresses. *)
 let current_api_server : string option ref = ref None
+
+(* A NULLARY function referred to bare is its RESULT: the checker types `pi` (for
+   `fn pi() -> Int = 3`) and the stdlib's `nowMillis` as values, so `pi == pi` and
+   `let t = nowMillis` check clean.  The emitter reads the bare name as the zero-argument
+   call it means rather than refusing it as a "function value".  A fact's zero-size entry
+   (`struct{}{}`) and a check (whose `Check` result is not a value) are not functions here. *)
+let stdlib_nullary_value name (signature : signature) =
+  signature.params = []
+  && signature.go_name <> "struct{}{}"
+  && (match signature.result with TCheck _ -> false | _ -> true)
+  && (match List.assoc_opt name Type_system.stdlib_env with
+      | Some scheme -> (match scheme.mono with Type_system.TFun _ -> false | _ -> true)
+      | None -> true)
+
+(* Which package owns each server an api-test in the module being compiled may name: the
+   module's own servers, then its dependencies'.  A cross-module `api-test … for S` used to
+   emit a bare `S`, which Go rejected as undefined (FRICTION.md item 37). *)
+let current_server_owners : (string, string) Hashtbl.t = Hashtbl.create 4
+
+let api_test_server_ref name =
+  let go_name = go_ident ~exported:true name in
+  match Hashtbl.find_opt current_server_owners name with
+  | Some owner -> qualified owner go_name
+  | None -> go_name
 
 (* The `serve` node's fields, and what each one does here.  Rebuilding the record is what makes
    this exhaustive: an `App { … }` field that `Desugar.lower_main_app` starts carrying has to be
@@ -1270,6 +1298,9 @@ type module_exports = {
   ex_row_storage : row_storage_export list;
   ex_nominal_reverses : (Migration_proof_context.nominal * string) list;
   ex_nominal_mappings : (Migration_transform.nominal_mapping * string * string) list;
+  (* The `server` declarations this module owns.  An `api-test … for S` in ANOTHER module
+     drives this module's server, and must name it through this package (FRICTION.md item 37). *)
+  ex_servers : string list;
 }
 
 (* Whether a compiled dependency is the module an import names.
@@ -1585,6 +1616,21 @@ let rec merge_anon left right =
   | TDict (left_key, left_value), TDict (right_key, right_value) ->
     TDict (merge_anon left_key right_key, merge_anon left_value right_value)
   | settled, _ -> settled
+
+(* A `let x: T = …` binds at T.  The checker has already verified the value against the
+   annotation, so it is the more precise of the two readings whenever it lowers; the value's
+   own inference is the fallback, and is what an unannotated `let` uses.  Ignoring the
+   annotation left a user no way to settle an under-determined binding (FRICTION.md item 33). *)
+let annotated_let_type declared infer =
+  let lowered te = match !current_types with
+    | Some types -> (try Some (type_of_type_expr types te) with _ -> None)
+    | None -> None in
+  match declared with
+  | Some te ->
+    (match lowered te with
+     | Some ty when not (has_anon ty) && (match ty with TParam _ -> false | _ -> true) -> ty
+     | _ -> infer ())
+  | None -> infer ()
 
 let record_field_go_name name = go_ident ~exported:true name
 
@@ -3180,6 +3226,33 @@ let scalar_case_type = function
   | TNewtype info -> (match info.base with TInt | TString | TBool -> true | _ -> false)
   | _ -> false
 
+(* A `case` whose FIRST arm is irrefutable — `_` or a bare variable, no guard — picks that arm
+   for every value, so it IS a `let`: `case [Nothing] of _ -> True`.  The checker accepts it
+   over any scrutinee; the Go backend lowers `case` only over an ADT or a scalar, so over any
+   other type (a List, a record) it is rewritten to the `let` it means instead of refused. *)
+let irrefutable_case_let type_of expr =
+  match expr with
+  | ECase { scrut; arms = ({ pattern = (PWild | PVar _) as pattern; guard = None; body; _ } :: _); loc } ->
+    (match (try Some (type_of scrut) with Unsupported _ -> None) with
+     | Some (TAdt _) | None -> None
+     | Some ty when scalar_case_type ty -> None
+     | Some _ ->
+       let name = match pattern with PVar name -> name | _ -> "_" in
+       Some (ELet { name; declared_type = None; declared_proof = None; value = scrut; body; loc }))
+  | _ -> None
+
+
+(* `True`/`False` parse as nullary constructors.  As a sub-pattern over a Bool FIELD —
+   `Something True` for a `Maybe Bool` — they are the two literals, exactly as at the top of
+   a `case` over a Bool; the checker reads them that way, so the emitter does too. *)
+let bool_ctor_as_literal field_ty pattern =
+  match field_ty, pattern with
+  | TBool, PNullary { ctor = ("True" | "False") as ctor; loc } ->
+    PLit { value = LBool (ctor = "True"); loc }
+  | TBool, PCon { ctor = ("True" | "False") as ctor; fields = []; loc } ->
+    PLit { value = LBool (ctor = "True"); loc }
+  | _ -> pattern
+
 (* Bindings a scalar arm introduces.  A literal binds nothing, a variable binds the scrutinee,
    and a constructor pattern is refused — there is no ADT here to name a constructor of. *)
 let scalar_pattern_bindings _loc scrut_ty pattern =
@@ -3355,6 +3428,7 @@ let rec type_of_expr signatures env expr =
        ignore params; ignore result;
        unsupported loc "Go backend does not support a `check` as a function value"
      | None, Some { params = (_ :: _ as params); result; _ } -> TFunc (params, result)
+     | None, Some ({ result; _ } as signature) when stdlib_nullary_value name signature -> result
      | None, Some _ -> unsupported loc "Go backend does not support function `%s` as a value" name
      | None, None -> lookup_env loc name env)
   | EConstructor { name = "True" | "False"; args = []; _ } -> TBool
@@ -3926,6 +4000,7 @@ let rec type_of_expr signatures env expr =
           | Some (TFunc (params, result)) -> params, result
           | _ -> assert false
         in
+        let args = normalize_call_args params args in
         if List.length args <> List.length params then
           unsupported loc
             "Go backend requires the function value `%s` applied to %d argument(s)"
@@ -4121,7 +4196,8 @@ let rec type_of_expr signatures env expr =
      (* A DEFAULTED branch yields to a real type: `if c then [] else ["a"]`. *)
      | Some _, Some ty when then_defaulted && not else_defaulted -> ty
      | Some ty, Some _ when else_defaulted && not then_defaulted -> ty
-     | Some left, Some right when type_equal left right -> left
+     (* Same as `case` arms: keep what either branch settles (FRICTION.md item 33). *)
+     | Some left, Some right when type_equal left right -> merge_anon left right
      | Some _, Some _ -> unsupported loc "Go backend if branches have different types"
      | Some ty, None | None, Some ty ->
        let other = if then_result = None then then_ else else_ in
@@ -4129,8 +4205,8 @@ let rec type_of_expr signatures env expr =
          unsupported loc "Go backend if branches have different types";
        ty
      | None, None -> type_of_expr signatures env then_)
-  | ELet { name; value; body; _ } ->
-    let value_ty = type_of_expr signatures env value in
+  | ELet { name; value; body; declared_type; _ } ->
+    let value_ty = annotated_let_type declared_type (fun () -> type_of_expr signatures env value) in
     type_of_expr signatures ((name, value_ty) :: env) body
   (* `Set.empty` takes no arguments, so it parses as a bare field access over the module
      name rather than a call.  Normalising it here lets the leaf tables resolve it. *)
@@ -4172,6 +4248,10 @@ let rec type_of_expr signatures env expr =
         take on its way through. *)
      | other, _ -> unsupported loc
        "Go backend: `.%s` reads a field of a `%s`, which has no fields" field (go_type other))
+  | ECase _ when irrefutable_case_let (type_of_expr signatures env) expr <> None ->
+    (match irrefutable_case_let (type_of_expr signatures env) expr with
+     | Some lowered -> type_of_expr signatures env lowered
+     | None -> assert false)
   | ECase { scrut; arms; loc } ->
     let scrut_ty = type_of_expr signatures env scrut in
     let info, type_args = match scrut_ty with
@@ -4217,7 +4297,12 @@ let rec type_of_expr signatures env expr =
        List.fold_left (fun acc ty ->
          match acc, ty with
          | TFailure, ty | ty, TFailure -> ty
-         | left, right when type_equal left right -> left
+         (* Arms that agree may each leave a different argument anonymous — a leading
+            `Nothing -> Nothing` arm types as a `Maybe` of nothing in particular — so the
+            case's type keeps what EITHER arm settles.  Taking the first arm's reading
+            emitted `Maybe[struct{}]` for `case m of Nothing -> Nothing | Something x ->
+            Something (R { … })`, which Go then refused (FRICTION.md item 33). *)
+         | left, right when type_equal left right -> merge_anon left right
          | _ -> unsupported loc "Go backend `case` arms have different types")
          TFailure types)
   (* `let (v ::: pf) = y` DECOMPOSES a proof-carrying value: `v` is the value and `pf` the
@@ -5216,7 +5301,7 @@ and type_of_arg signatures env want arg =
       unsupported loc "Go backend if condition must be Bool";
     (match type_of_arg signatures env want then_, type_of_arg signatures env want else_ with
      | TFailure, ty | ty, TFailure -> ty
-     | left, right when type_equal left right -> left
+     | left, right when type_equal left right -> merge_anon left right
      | _ -> unsupported loc "Go backend if branches have different types")
   (* The money-rate algebra, where the EXPECTATION is what settles it: `money / quantity` has
      no denominator without the declared rate type, and `rate * float` is a rescale when a rate
@@ -5246,12 +5331,17 @@ and type_of_arg signatures env want arg =
      emitter does.  Without this, one `let` before an `if` was enough to lose it, and an
      under-constrained tail (`[]`, `Nothing`, `Set.empty`) failed for no reason the author
      could see — the very shape a list-building function has. *)
-  | ELet { name; value; body; _ } ->
-    let inferred = type_of_expr signatures env value in
-    let ty = if inferred = TFailure then want else inferred in
+  | ELet { name; value; body; declared_type; _ } ->
+    let ty = annotated_let_type declared_type (fun () ->
+      let inferred = type_of_expr signatures env value in
+      if inferred = TFailure then want else inferred) in
     type_of_arg signatures ((name, ty) :: env) want body
   (* The expectation belongs to each ARM for the same reason it belongs to each `if`
      branch. *)
+  | ECase _ when irrefutable_case_let (type_of_expr signatures env) arg <> None ->
+    (match irrefutable_case_let (type_of_expr signatures env) arg with
+     | Some lowered -> type_of_arg signatures env want lowered
+     | None -> assert false)
   | ECase { scrut; arms; loc } ->
     let scrut_ty = type_of_expr signatures env scrut in
     let info, type_args = match scrut_ty with
@@ -5272,7 +5362,7 @@ and type_of_arg signatures env want arg =
            unsupported (Checker.expr_loc guard) "Go backend `case` guard must be Bool");
       match acc, type_of_arg signatures arm_env want arm.body with
       | TFailure, ty | ty, TFailure -> ty
-      | left, right when type_equal left right -> left
+      | left, right when type_equal left right -> merge_anon left right
       | _ -> unsupported loc "Go backend `case` arms have different types") TFailure arms
   | _ ->
     (* A constructor cannot always infer its ADT's type arguments from its own
@@ -5397,7 +5487,7 @@ and pattern_bindings _loc info type_args pattern =
           binders; the shapes it cannot type — a constructor pattern over something that is
           not an ADT, a literal over a type with no literal form — fail closed here. *)
        let rec sub_bindings field_ty sub =
-         match sub with
+         match bool_ctor_as_literal field_ty sub with
          | PWild -> []
          | PVar name -> [name, field_ty]
          | PNullary { ctor; loc } ->
@@ -5539,6 +5629,8 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
      | None, Some signature when (match type_of_expr signatures env expr with
                                   | TFunc _ -> true | _ -> false) ->
        qualified signature.sig_owner signature.go_name
+     | None, Some signature when stdlib_nullary_value name signature ->
+       Printf.sprintf "%s()" (qualified signature.sig_owner signature.go_name)
      | None, Some _ -> unsupported loc "Go backend does not support function `%s` as a value" name
      | None, None -> local_ident name)
   | EConstructor { name = "True"; args = []; _ } -> "true"
@@ -5846,29 +5938,7 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
             Printf.sprintf "[]string{%s}"
               (emit_api_test_string ~indent signatures env value)
         in
-        let headers = match request_headers with
-          | None -> "nil"
-          | Some (ERecord { fields; _ }) ->
-            Printf.sprintf "[]teslrt.Tuple2[string, string]{%s}"
-              (String.concat ", " (List.map (fun (name, value) ->
-                 let emitted =
-                   if type_of_expr signatures env value = TString then
-                     emit_api_test_string ~indent signatures env value
-                   else unsupported (Checker.expr_loc value)
-                     "Go backend api-test header `%s` must be a String" name
-                 in
-                 Printf.sprintf "{Tuple2First: %s, Tuple2Second: %s}" (go_quote name) emitted)
-                 fields))
-          (* A DICT of headers: `headers (onHost())`.  The surface takes either a literal
-             template or a `Dict String String`, and a shared helper — the one every test in
-             a `publicOrigin` server needs for its Host header — answers the second. *)
-          | Some other when type_of_expr signatures env other = TDict (TString, TString) ->
-            Printf.sprintf "teslrt.DictToList(%s)"
-              (emit_expr ~expected:(TDict (TString, TString)) ~indent signatures env other)
-          | Some other -> unsupported (Checker.expr_loc other)
-            "Go backend api-test `headers` must be a `{ \"name\": value }` template or a \
-             `Dict String String`"
-        in
+        let headers = emit_api_test_headers ~indent signatures env request_headers in
         Printf.sprintf "teslrt.ApiRequest(%s, %S, %s, %s, %s, %s)" server
           (String.uppercase_ascii verb)
           (emit_api_test_string ~indent signatures env path)
@@ -5881,14 +5951,16 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
          is what makes a refused subscription fail the test where it is written. *)
       | EVar { name = "subscribe"; _ } when !current_api_server <> None ->
         let server = match !current_api_server with Some s -> s | None -> assert false in
-        let path, cookie = match args with
+        let path, cookie, request_headers = match args with
           | path :: rest ->
-            let rec scan cookie = function
-              | EVar { name = "cookie"; _ } :: value :: more -> scan (Some value) more
-              | _ :: more -> scan cookie more
-              | [] -> cookie
+            let rec scan cookie headers = function
+              | EVar { name = "cookie"; _ } :: value :: more -> scan (Some value) headers more
+              | EVar { name = "headers"; _ } :: value :: more -> scan cookie (Some value) more
+              | _ :: more -> scan cookie headers more
+              | [] -> cookie, headers
             in
-            path, scan None rest
+            let cookie, headers = scan None None rest in
+            path, cookie, headers
           | [] -> unsupported loc "Go backend api-test `subscribe` needs a path"
         in
         let cookies = match cookie with
@@ -5897,8 +5969,9 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
             Printf.sprintf "[]string{%s}"
               (emit_api_test_string ~indent signatures env value)
         in
-        Printf.sprintf "teslrt.SubscribeStream(%s, %s, %s)" server
+        Printf.sprintf "teslrt.SubscribeStream(%s, %s, %s, %s)" server
           (emit_api_test_string ~indent signatures env path) cookies
+          (emit_api_test_headers ~indent signatures env request_headers)
       (* `collect stream …` — the three shapes Legacy's `api-test-collect` implements: wait for
          a COUNT, wait UNTIL a matching event, or take whatever arrives within the timeout. The
          first two treat a timeout as a test failure; the third does not, since "nothing was
@@ -6492,6 +6565,8 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
           | Some (TFunc (params, _)) -> params
           | _ -> assert false
         in
+        (* `f()` on a zero-parameter lambda: the `()` is the empty argument list. *)
+        let args = normalize_call_args params args in
         ignore (type_of_expr signatures env app);
         Printf.sprintf "%s(%s)" (local_ident name)
           (String.concat ", " (List.map2 (fun arg want ->
@@ -6792,6 +6867,10 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
        ignore (type_of_expr signatures env expr);
        emit_record_literal ~indent signatures env info fields
      | None -> unsupported loc "Go backend cannot emit record type `%s`" name)
+  | ECase _ when irrefutable_case_let (type_of_expr signatures env) expr <> None ->
+    (match irrefutable_case_let (type_of_expr signatures env) expr with
+     | Some lowered -> emit_expr ?expected ~indent signatures env lowered
+     | None -> assert false)
   | ECase { scrut; arms; _ } ->
     let inferred = type_of_expr signatures env expr in
     let result = match inferred, expected with
@@ -7284,7 +7363,7 @@ and pattern_plan ~scrut info type_args pattern =
     else read
   in
   let rec sub_plan access field_ty sub =
-    match sub with
+    match bool_ctor_as_literal field_ty sub with
     | PWild -> [], []
     | PVar name -> [name, access, field_ty], []
     | PNullary { ctor; _ } ->
@@ -9936,6 +10015,33 @@ and api_test_interpolates value =
 
    Outside an api-test block a string literal is itself; nothing here is reached from ordinary
    code. *)
+(* The `headers { … }` modifier of an api-test request or `subscribe`: a literal template, or
+   a `Dict String String` a shared helper built.  One rendering for both, so a stream is
+   subscribed with exactly the headers a request would carry (FRICTION.md item 34). *)
+and emit_api_test_headers ~indent signatures env request_headers =
+  match request_headers with
+    | None -> "nil"
+    | Some (ERecord { fields; _ }) ->
+      Printf.sprintf "[]teslrt.Tuple2[string, string]{%s}"
+        (String.concat ", " (List.map (fun (name, value) ->
+           let emitted =
+             if type_of_expr signatures env value = TString then
+               emit_api_test_string ~indent signatures env value
+             else unsupported (Checker.expr_loc value)
+               "Go backend api-test header `%s` must be a String" name
+           in
+           Printf.sprintf "{Tuple2First: %s, Tuple2Second: %s}" (go_quote name) emitted)
+           fields))
+    (* A DICT of headers: `headers (onHost())`.  The surface takes either a literal
+       template or a `Dict String String`, and a shared helper — the one every test in
+       a `publicOrigin` server needs for its Host header — answers the second. *)
+    | Some other when type_of_expr signatures env other = TDict (TString, TString) ->
+      Printf.sprintf "teslrt.DictToList(%s)"
+        (emit_expr ~expected:(TDict (TString, TString)) ~indent signatures env other)
+    | Some other -> unsupported (Checker.expr_loc other)
+      "Go backend api-test `headers` must be a `{ \"name\": value }` template or a \
+       `Dict String String`"
+
 and emit_api_test_string ?(indent="") signatures env value =
   match value with
   | ELit { lit = LString text; _ } when !current_api_server <> None ->
@@ -10467,9 +10573,10 @@ let emit_tail ?self ?(debug=false) ?(debug_package="") ?(debug_function="")
       end;
       go (if name = "_" then env else (name, inner) :: env) (indent ^ "\t") body;
       Printf.bprintf buffer "%s}\n" indent
-    | ELet { name; value; body; loc; _ } ->
-      let inferred = type_of_expr signatures env value in
-      let ty = if inferred = TFailure then expected else inferred in
+    | ELet { name; value; body; loc; declared_type; _ } ->
+      let ty = annotated_let_type declared_type (fun () ->
+        let inferred = type_of_expr signatures env value in
+        if inferred = TFailure then expected else inferred) in
       Printf.bprintf buffer "%s{\n" indent;
       Buffer.add_string buffer (line_directive loc);
       let emitted_value =
@@ -10500,6 +10607,10 @@ let emit_tail ?self ?(debug=false) ?(debug_package="") ?(debug_function="")
       Printf.bprintf buffer "%s} else {\n" indent;
       go env (indent ^ "\t") else_;
       Printf.bprintf buffer "%s}\n" indent
+    | ECase _ as case_expr when irrefutable_case_let (type_of_expr signatures env) case_expr <> None ->
+      (match irrefutable_case_let (type_of_expr signatures env) case_expr with
+       | Some lowered -> go env indent lowered
+       | None -> assert false)
     | ECase { scrut; arms; loc } ->
       (* Checked against the EXPECTED type, arm by arm, for the same reason the plain
          tail below is: an arm is exactly where an under-constrained constructor sits.
@@ -11416,6 +11527,20 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
       fd.params signature.params in
     let result = signature.result in
     let env = params in
+    (* `update … returning one` as the LAST statement of a Unit function: the checker lets
+       the returned row be discarded there (it is "commonly used as a statement"), so the
+       emitter discards it too instead of refusing a result-type mismatch. *)
+    let fd =
+      if result <> TUnit then fd
+      else
+        let rec discard = function
+          | ELet ({ body; _ } as l) -> ELet { l with body = discard body }
+          | ELetProof ({ body; _ } as l) -> ELetProof { l with body = discard body }
+          | ESqlQuery { query = QueryUpdate { returning_one = true; returns_row = false; _ }; loc } as tail ->
+            ELet { name = "_"; declared_type = None; declared_proof = None; value = tail;
+                   body = EConstructor { name = "Unit"; args = []; loc }; loc }
+          | other -> other in
+        { fd with body = discard fd.body } in
     (* An `establish` body is a proof TERM, not a value expression — it is never typed or
        emitted, so it is not checked against the result type either.  When the result is a
        CONTAINER of proofs (`Maybe (Fact P)`) the body IS emitted, and then it is checked
@@ -12060,7 +12185,18 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
         (* The declared type and the codec have to agree: the segment arrives as text and
            the parser is what turns it into the capture's type. *)
         let captured_type = type_of_type_expr types capture.binding.type_expr in
-        (match parser, captured_type with
+        (* A capture may be typed as a NEWTYPE over the codec's type — `capture uid: UserId
+           using stringCodec` with `type UserId = String`, local or imported.  The segment is
+           parsed at the base type and wrapped; the checker accepted this all along, and the
+           emitter refused it, so the program checked clean and then could not be built. *)
+        let rec capture_base = function
+          | TNewtype { secret = false; base; _ } -> capture_base base
+          | ty -> ty in
+        let rec wrap_capture ty expr = match ty with
+          | TNewtype ({ secret = false; base; _ }) ->
+            Printf.sprintf "%s{Value: %s}" (go_type ty) (wrap_capture base expr)
+          | _ -> expr in
+        (match parser, capture_base captured_type with
          | "stringCodec", TString -> ()
          | "intCodec", TInt -> ()
          | "stringCodec", _ | "intCodec", _ -> unsupported endpoint_loc
@@ -12068,20 +12204,25 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
          | _ -> unsupported endpoint_loc
            "Go backend supports `stringCodec` and `intCodec` path captures only for now \
             (`%s`)" parser);
+        let wrapped = (match captured_type with TNewtype _ -> true | _ -> false) in
         (* A String capture IS the segment, so it binds the name directly.  An `intCodec` one
            has to be parsed first, and the raw text gets its own binder so the capture's name
-           still holds the capture's declared type. *)
+           still holds the capture's declared type; a newtype one is wrapped last. *)
         let raw_binder =
-          if parser = "intCodec" then "teslRaw" ^ suffix else local_ident name in
+          if parser = "intCodec" || wrapped then "teslRaw" ^ suffix else local_ident name in
         Printf.bprintf body
           "\t\t\t%s, teslFound%s := teslrt.PathParam(%s, teslRequest.URL.Path, %s)\n\t\t\tif !teslFound%s {\n\t\t\t\treturn teslrt.Fail(404, \"not found\")\n\t\t\t}\n"
           raw_binder suffix (go_quote endpoint_path) (go_quote name) suffix;
         (* A segment that is not an integer is the CLIENT's error, not a missing route: the
            path shape matched and the value in it did not. *)
+        let base_binder = if wrapped then "teslBase" ^ suffix else local_ident name in
         if parser = "intCodec" then
           Printf.bprintf body
             "\t\t\tteslSegment%s := teslrt.IntegerSegment(%s)\n\t\t\tif !teslSegment%s.OK() {\n\t\t\t\treturn teslrt.Fail(teslSegment%s.Status(), teslSegment%s.Message())\n\t\t\t}\n\t\t\t%s, _ := teslSegment%s.Value()\n"
-            suffix raw_binder suffix suffix suffix (local_ident name) suffix;
+            suffix raw_binder suffix suffix suffix base_binder suffix;
+        if wrapped then
+          Printf.bprintf body "\t\t\t%s := %s\n" (local_ident name)
+            (wrap_capture captured_type (if parser = "intCodec" then base_binder else raw_binder));
         (match checker with
          | None -> ()
          | Some check_fn ->
@@ -13190,7 +13331,7 @@ let test_source ?(debug=false) ?(imported_packages=[]) ?(api_tests=[]) ?(load_te
          (go_quote api_test.loc.file)
          (api_test.loc.start.line + 1) (api_test.loc.start.col + 1);
      emit_seed api_test.loc api_test.seed_stmts;
-     current_api_server := Some (go_ident ~exported:true api_test.server_name);
+     current_api_server := Some (api_test_server_ref api_test.server_name);
      active_debug_test := Some (Printf.sprintf "TestTeslApi%d" index, api_test.description);
      emit_stmts [] "\t" api_test.stmts;
      active_debug_test := None;
@@ -13232,7 +13373,7 @@ let test_source ?(debug=false) ?(imported_packages=[]) ?(api_tests=[]) ?(load_te
     Printf.bprintf body
       "\tteslResult := teslrt.RunLoadTest(%d, %d, func() int {\n" load_test.rate
       load_test.duration;
-    current_api_server := Some (go_ident ~exported:true load_test.server_name);
+    current_api_server := Some (api_test_server_ref load_test.server_name);
     (* The last request statement's status is what the harness counts, so the thunk answers it. *)
     let statuses = ref [] in
     List.iteri (fun statement_index (statement : test_stmt) ->
@@ -13484,6 +13625,48 @@ let register_imported_module ~loc ~exposed ?(protected_names=[]) types signature
     ignore (found_type, found_value, loc))
     exposed
 
+(* `import Tesl.List` with no exposing list grants every export QUALIFIED (`List.length`) — the
+   checker resolves it that way.  Every stdlib family below reads the exposing list to decide
+   what to register, and each read `ImportAll` as "nothing", so a program the checker accepted
+   failed here with "cannot resolve function `List.length`".  The import is normalised once, at
+   module entry, to the exports the module actually names: the families keep a single shape to
+   read, and nothing unused is registered. *)
+let normalize_stdlib_import_all (m : module_form) : module_form =
+  if not (List.exists (fun (import : import_decl) ->
+            import.names = ImportAll && String.starts_with ~prefix:"Tesl." import.module_name)
+            m.imports) then m
+  else begin
+    let used = Hashtbl.create 64 in
+    let note (e : expr) = match e with
+      | EVar { name; _ } -> Hashtbl.replace used name ()
+      | EField { obj = (EVar { name = owner; _ } | EConstructor { name = owner; args = []; _ }); field; _ } ->
+        Hashtbl.replace used (owner ^ "." ^ field) ()
+      | EConstructor { name; _ } -> Hashtbl.replace used name ()
+      | _ -> () in
+    let walk e = Ast_visitor.iter note e in
+    List.iter (function
+      | DFunc fd -> walk fd.body
+      | DConst c -> walk c.value
+      | DTest t -> List.iter walk (List.concat_map Ast.test_stmt_exprs t.stmts)
+      | DApiTest t ->
+        List.iter walk t.seed_stmts; List.iter walk (List.concat_map Ast.test_stmt_exprs t.stmts)
+      | DLoadTest t ->
+        List.iter walk t.seed_stmts; List.iter walk (List.concat_map Ast.test_stmt_exprs t.request_stmts)
+      | _ -> ()) m.decls;
+    let imports = List.map (fun (import : import_decl) ->
+      match import.names with
+      | ImportAll when String.starts_with ~prefix:"Tesl." import.module_name ->
+        (match List.assoc_opt import.module_name Type_system.tesl_module_exports with
+         | Some exports ->
+           let named = List.filter (fun name ->
+             Hashtbl.mem used name
+             && Type_system.go_backend_export_available import.module_name name) exports in
+           { import with names = ImportExposing named }
+         | None -> import)
+      | _ -> import) m.imports in
+    { m with imports }
+  end
+
 let compile_module_internal ?(stage_preparation=false) ?(migration_metered=false) ?emission_graph ?(nominal_mappings=[]) ?(nominal_reverses=[]) ?(nominal_transports=[]) ?(row_access_entities=[]) ?(row_storage_entities=[]) ?(mode=Release) ?(dependencies=[]) ?(entity_bindings=[]) ?(migration_families=[]) ?(migration_queues=[]) ?(queue_codec_records=[]) ?project_path (m : module_form) =
   let previous_transports = !current_nominal_transports and previous_graph= !current_emission_graph in
   let previous_meter = !current_migration_metering and previous_owned = !current_migration_owned_module in
@@ -13491,6 +13674,7 @@ let compile_module_internal ?(stage_preparation=false) ?(migration_metered=false
   current_migration_metering := migration_metered;
   current_migration_owned_module := Option.is_some (Migration_schema.migration_family m.module_name);
   current_nominal_transports := nominal_transports;current_emission_graph:=emission_graph;
+  let m = normalize_stdlib_import_all m in
   try
     List.iter (function
       | DDatabase { config_expr = Some config; loc; _ } ->
@@ -13818,6 +14002,14 @@ let compile_module_internal ?(stage_preparation=false) ?(migration_metered=false
         "Go backend does not know the `listenAddress` value `%s`: it is `Loopback` or \
          `AllInterfaces`" other) servers;
     let capturers = List.filter_map (function DCapture c -> Some c | _ -> None) m.decls in
+    Hashtbl.reset current_server_owners;
+    List.iter (fun dependency ->
+      List.iter (fun name ->
+        if not (Hashtbl.mem current_server_owners name) then
+          Hashtbl.replace current_server_owners name dependency.ex_package)
+        dependency.ex_servers) dependencies;
+    List.iter (fun (server : server_form) ->
+      Hashtbl.replace current_server_owners server.name (package_name m.module_name)) servers;
     let api_tests = List.filter_map (function DApiTest t -> Some t | _ -> None) m.decls in
     let load_tests = List.filter_map (function DLoadTest t -> Some t | _ -> None) m.decls in
     let tests = List.filter_map (function DTest test -> Some test | _ -> None) m.decls in
@@ -15720,11 +15912,26 @@ let compile_module_internal ?(stage_preparation=false) ?(migration_metered=false
       }) types.records;
     (* Each constructor is its own signature entry: the surface syntax names the
        constructor, and the variant it belongs to is recovered from the result type. *)
-    Hashtbl.iter (fun name info ->
+    (* A runtime-provided ADT (`Result`, `Maybe`, …) — or an imported module's ADT — is in the
+       table whenever its module is
+       imported, constructors exposed or not.  A module that does NOT expose them may declare a
+       constructor of the same name (`type Status = Ok | Pending` beside
+       `import Tesl.Result exposing [Result]`) — the checker accepts that, so the local
+       constructor is the one the name means, and the builtin's yields.  Builtins are
+       registered last so the order of the table cannot decide it. *)
+    let rank (info : adt_info) =
+      if info.adt_owner = package && not info.adt_builtin then 0 else if info.adt_builtin then 2 else 1 in
+    let adt_entries = Hashtbl.fold (fun name info acc -> (name, info) :: acc) types.adts []
+      |> List.stable_sort (fun (_, a) (_, b) -> compare (rank a) (rank b)) in
+    List.iter (fun (name, info) ->
       (* Qualified table entries alias the same ADT metadata. Their constructors
          are registered from the owning module below, not emitted a second time. *)
       if not (String.contains name '.') then
       List.iter (fun variant ->
+        (* The same rule for an imported module's constructors under `import A` with no
+           `(..)`: the local declaration is what the bare name means. *)
+        if Hashtbl.mem signatures variant.var_ctor && rank info > 0 then ()
+        else begin
         if Hashtbl.mem signatures variant.var_ctor then unsupported variant.var_loc
           "Go backend generated name collision for constructor `%s`" variant.var_ctor;
         (* The result carries no type arguments: it exists so a constructor
@@ -15733,7 +15940,7 @@ let compile_module_internal ?(stage_preparation=false) ?(migration_metered=false
           params = List.map snd variant.var_fields;
           result = TAdt (info, []);
           go_name = variant.var_tag; sig_owner = info.adt_owner; sig_needs_scope = false;
-        }) info.adt_variants) types.adts;
+        } end) info.adt_variants) adt_entries;
     (* Imported stdlib leaves are ordinary signatures whose Go name is a runtime
        function, so the existing call machinery emits them with no special case. *)
     (* A list leaf is registered only so the call arms can tell an imported name from
@@ -16934,7 +17141,8 @@ let compile_module_internal ?(stage_preparation=false) ?(migration_metered=false
       end
     in
     Ok (seal_cache_artifacts artifacts, { ex_module = m.module_name; ex_package = package;
-                     ex_types = types; ex_signatures = signatures; ex_codecs = codecs; ex_taken=Hashtbl.copy taken; ex_row_storage=List.map fst row_storage_adapters; ex_nominal_reverses=List.map (fun (binding,_,_) -> binding) nominal_reverse_adapters; ex_nominal_mappings=List.map (fun (binding,_,_) -> binding) nominal_mapping_adapters })
+                     ex_types = types; ex_signatures = signatures; ex_codecs = codecs; ex_taken=Hashtbl.copy taken; ex_row_storage=List.map fst row_storage_adapters; ex_nominal_reverses=List.map (fun (binding,_,_) -> binding) nominal_reverse_adapters; ex_nominal_mappings=List.map (fun (binding,_,_) -> binding) nominal_mapping_adapters;
+                     ex_servers=List.map (fun (server : server_form) -> server.name) servers })
   with Unsupported error -> Error [error])
 
 let compile_module ?row_access_entities ?row_storage_entities ?mode ?dependencies ?entity_bindings ?migration_families ?migration_queues ?queue_codec_records ?project_path m =

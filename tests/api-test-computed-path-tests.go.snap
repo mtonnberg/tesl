@@ -675,7 +675,7 @@ func TestTeslApi12(teslT *testing.T) {
 	}()
 	{
 //line api-test-computed-path-tests.tesl:218
-		stream := teslrt.SubscribeStream(PathServer, "/events/topic-1", nil)
+		stream := teslrt.SubscribeStream(PathServer, "/events/topic-1", nil, nil)
 		_ = stream
 		defer teslrt.UnsubscribeStream(stream)
 		{
@@ -728,7 +728,7 @@ func TestTeslApi13(teslT *testing.T) {
 		_ = topic
 		{
 //line api-test-computed-path-tests.tesl:228
-			stream := teslrt.SubscribeStream(PathServer, ("/events/" + topic), nil)
+			stream := teslrt.SubscribeStream(PathServer, ("/events/" + topic), nil, nil)
 			_ = stream
 			defer teslrt.UnsubscribeStream(stream)
 			{

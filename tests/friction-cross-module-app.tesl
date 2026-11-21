@@ -1,0 +1,39 @@
+module FrictionCrossModuleApp exposing [Note, NotesDb, NotesServer]
+
+# The server half of the FRICTION §37 regression: an `api-test … for NotesServer`
+# in ANOTHER module (friction-cross-module-tests.tesl) used to emit Go that named
+# `NotesServer` without its package, so `go test` failed with
+# `undefined: NotesServer` while `tesl check` was clean.
+
+import Tesl.Prelude exposing [String]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.Json exposing [stringCodec]
+import Tesl.DB exposing [dbRead]
+import Tesl.Database exposing [Database, Memory]
+
+entity Note table "notes" primaryKey id {
+  id: String
+  title: String
+}
+
+database NotesDb = Database {
+  schema: "friction_cross_module"
+  entities: [Note]
+  backend: Memory
+}
+
+handler get readNote(noteId: String) -> String
+  requires [dbRead Note] =
+  case selectOne n from Note where n.id == noteId of
+    Nothing -> fail 404 "no such note"
+    Something n -> n.title
+
+api NotesApi {
+  get "/notes/:noteId"
+    capture noteId: String using stringCodec
+    -> String
+}
+
+server NotesServer for NotesApi {
+  readNote
+}

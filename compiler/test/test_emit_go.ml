@@ -8284,17 +8284,19 @@ fn depth(c: Chain) -> Int = 0
      instantiation gets, and Go accepts the declaration — the instantiation cycle it rejects
      is the one whose type ARGUMENT grows. See "a recursive generic at another
      instantiation". *)
-  (* A `case` over Int, String or Bool IS supported now; anything with no equality this backend
-     emits — a record here, and a Float, which cannot even be written as a pattern — still fails
-     closed rather than being guessed at. *)
-  expect_go_error "case over a record" "case` over a module ADT or a scalar"
-    {|module CaseOverRecord exposing [classify]
+  (* A `case` over Int, String or Bool IS supported now.  Over a type with no equality this
+     backend emits — a record, a list — the only patterns the checker admits are irrefutable
+     (`_`, a variable), and such a case picks its first arm for every value: it is lowered as
+     the `let` it means rather than refused (refusing it made `tesl check` report a program
+     the checker had accepted). *)
+  let lowered = emit_ok "case over a record" {|module CaseOverRecord exposing [classify]
 import Tesl.Prelude exposing [Int, String]
 record Point { x: Int }
 fn classify(p: Point) -> String =
   case p of
     _ -> "other"
-|}
+|} in
+  gate_emitted "tesl-case-over-record" lowered
   (* A proof-carrying CONSTRUCTOR field is supported now: the annotation is a type-level
      contract with no runtime structure, so the field is its own type and the proof erases —
      the same rule a record field follows. See "proof shapes at the edges of erasure". *)
@@ -9205,7 +9207,7 @@ let test_sse_with_go () =
     (contains module_go "teslrt.SseStreamParam(UserNoticesChannel, \"/events/:userId\", \"userId\")");
   let tests_go = artifact "internal/teslmodgosse/module_test.go" emitted in
   check bool "subscribe opens a stream against the server under test" true
-    (contains tests_go "teslrt.SubscribeStream(MainServer, \"/runs/stream\", nil)");
+    (contains tests_go "teslrt.SubscribeStream(MainServer, \"/runs/stream\", nil, nil)");
   check bool "collect waits for the count it was given" true
     (contains tests_go "teslrt.CollectCount(");
   (* A SUBSCRIPTION is per-block state, preserving the retired Racket api-test cleanup

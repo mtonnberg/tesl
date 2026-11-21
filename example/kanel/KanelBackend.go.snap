@@ -2479,7 +2479,7 @@ func TestTeslApi4(teslT *testing.T) {
 					_ = issueId
 					{
 //line KanelBackend.tesl:633
-						stream := teslrt.SubscribeStream(KanelServer, ("/events/users/" + teslrt.ApiTestFragment(teslEncode1(reporterId))), []string{("kanel_user_id=" + teslrt.ApiTestFragment(teslEncode1(reporterId)))})
+						stream := teslrt.SubscribeStream(KanelServer, ("/events/users/" + teslrt.ApiTestFragment(teslEncode1(reporterId))), []string{("kanel_user_id=" + teslrt.ApiTestFragment(teslEncode1(reporterId)))}, nil)
 						_ = stream
 						defer teslrt.UnsubscribeStream(stream)
 						{
@@ -2635,7 +2635,7 @@ func TestTeslApi5(teslT *testing.T) {
 					_ = issueId
 					{
 //line KanelBackend.tesl:717
-						stream := teslrt.SubscribeStream(KanelServer, ("/events/users/" + teslrt.ApiTestFragment(teslEncode1(reporterId))), []string{("kanel_user_id=" + teslrt.ApiTestFragment(teslEncode1(reporterId)))})
+						stream := teslrt.SubscribeStream(KanelServer, ("/events/users/" + teslrt.ApiTestFragment(teslEncode1(reporterId))), []string{("kanel_user_id=" + teslrt.ApiTestFragment(teslEncode1(reporterId)))}, nil)
 						_ = stream
 						defer teslrt.UnsubscribeStream(stream)
 						{

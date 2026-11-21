@@ -1,0 +1,196 @@
+module FrictionFixesTests exposing [
+  RunsServer,
+  OriginServer,
+  CaptureServer,
+  RunView,
+  Evaluation,
+  pickView,
+]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Regressions from FRICTION.md — a downstream user's log of every place Tesl got
+# in their way while building a small read API over an existing schema.  Each
+# block names the section it pins (§NN); friction-fixes.md at the repo root has
+# the analysis.
+#
+# Every test asserts an OBSERVABLE answer (a status, a body, a delivered event),
+# so a regression fails here rather than passing vacuously.
+# ─────────────────────────────────────────────────────────────────────────────
+
+import Tesl.Prelude exposing [Bool(..), Int, String]
+import Tesl.Int exposing [Int.toString]
+import Tesl.Http exposing [HttpRequest]
+import Tesl.Dict exposing [Dict.lookup]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.Json exposing [stringCodec, intCodec]
+import Tesl.Queue exposing [pubsub]
+import Tesl.Database exposing [Database, Memory]
+import Tesl.SSE exposing [SseChannel]
+import Tesl.ApiTest exposing [statusOk, subscribe, collect, isNotEmpty]
+
+# ── §33: a `Maybe` bound from a case/if whose FIRST branch is a bare `Nothing` ──
+# The Go emitter took the Maybe's type argument from the first branch and emitted
+# `Maybe[struct{}]`, which Go refused.  The branch order here is deliberately the
+# conventional one the user had to avoid.
+
+record Evaluation {
+  score: Int
+}
+
+record RunView {
+  evaluation: Maybe Evaluation
+  cursor: Maybe String
+  annotated: Maybe Int
+}
+
+fn pickView(score: Maybe Int, last: Bool) -> RunView =
+  let evaluation = case score of
+    Nothing -> Nothing
+    Something n -> Something (Evaluation { score: n })
+  let cursor = if last then
+    Nothing
+  else
+    Something "next"
+  let annotated: Maybe Int = case score of
+    Nothing -> Nothing
+    Something n -> Something (n + 1)
+  RunView { evaluation: evaluation, cursor: cursor, annotated: annotated }
+
+test "§33 a Nothing-first case or if still settles the Maybe's type" {
+  let some = pickView (Something 7) False
+  expect some.evaluation == Something (Evaluation { score: 7 })
+  expect some.cursor == Something "next"
+  expect some.annotated == Something 8
+  let none = pickView Nothing True
+  expect none.evaluation == Nothing
+  expect none.cursor == Nothing
+  expect none.annotated == Nothing
+}
+
+# ── §32 + §34: a literal `sse` route next to a `:capture` route, header auth ──
+
+fact HasKey(who: String)
+
+auth apiKeyAuth(req: HttpRequest) -> who: String ::: HasKey who =
+  case Dict.lookup "x-api-key" req.headers of
+    Nothing -> fail 401 "missing api key"
+    Something key -> ok key ::: HasKey who
+
+record RunEvent {
+  runId: String
+}
+
+database RunsDb = Database {
+  schema: "friction_fixes"
+  entities: []
+  backend: Memory
+}
+
+sseChannel RunEvents(scope: String) = SseChannel {
+  database: RunsDb
+  payload: RunEvent
+}
+
+handler get getRun(identity: String ::: HasKey identity, runId: String) -> String =
+  "run:" ++ runId
+
+handler post publishRun(identity: String ::: HasKey identity, runId: String) -> String
+  requires [pubsub] =
+  publish RunEvents("all") RunEvent { runId: runId }
+  "published"
+
+api RunsApi {
+  get "/runs/:runId"
+    auth identity: String ::: HasKey identity via apiKeyAuth
+    capture runId: String using stringCodec
+    -> String
+
+  sse "/runs/stream"
+    auth identity: String ::: HasKey identity via apiKeyAuth
+    subscribe RunEvents("all")
+
+  post "/runs/:runId/publish"
+    auth identity: String ::: HasKey identity via apiKeyAuth
+    capture runId: String using stringCodec
+    -> String
+}
+
+server RunsServer for RunsApi {
+  getRun
+  publishRun
+}
+
+api-test "§32 header auth still guards the capture route" for RunsServer {
+  let resp = get "/runs/abc"
+  expect resp.status == 401
+}
+
+api-test "§32 the capture route still answers every other id" for RunsServer {
+  let resp = get "/runs/abc" headers { "x-api-key": "good-key" }
+  expect statusOk resp.status
+  expect resp.body == "run:abc"
+}
+
+api-test "§32+§34 the literal sse route wins and subscribe carries its headers" for RunsServer requires [pubsub] {
+  let stream = subscribe "/runs/stream" headers { "x-api-key": "good-key" }
+  let resp = post "/runs/r-1/publish" headers { "x-api-key": "good-key" }
+  expect statusOk resp.status
+  let events = collect stream count 1 timeout 1500ms
+  expect isNotEmpty events
+}
+
+# ── §43: a `publicOrigin` server's api-tests need no hand-written Host ────────
+
+handler get ping() -> String =
+  "pong"
+
+api OriginApi {
+  get "/ping"
+    -> String
+}
+
+server OriginServer for OriginApi {
+  ping
+  publicOrigin "https://runs.example.com"
+}
+
+api-test "§43 a request with no Host is addressed to the app's own origin" for OriginServer {
+  let resp = get "/ping"
+  expect statusOk resp.status
+  expect resp.body == "pong"
+}
+
+api-test "§43 an explicit foreign Host is still refused" for OriginServer {
+  let resp = get "/ping" headers { "Host": "attacker.example.net" }
+  expect resp.status == 421
+}
+
+# ── A capture typed as a newtype over the codec's type ───────────────────────
+# `check` accepted `capture uid: UserId using stringCodec` (and its Int twin);
+# the emitter refused it, which `check` now reports — so the emitter supports it.
+
+type UserId = String
+
+type Iteration = Int
+
+handler get userIteration(uid: UserId, n: Iteration) -> String =
+  uid.value ++ "#" ++ Int.toString n.value
+
+api CaptureApi {
+  get "/users/:uid/iterations/:n"
+    capture uid: UserId using stringCodec
+    capture n: Iteration using intCodec
+    -> String
+}
+
+server CaptureServer for CaptureApi {
+  userIteration
+}
+
+api-test "a newtype capture is parsed at its base type and wrapped" for CaptureServer {
+  let resp = get "/users/ada/iterations/3"
+  expect statusOk resp.status
+  expect resp.body == "ada#3"
+  let bad = get "/users/ada/iterations/three"
+  expect bad.status == 400
+}

@@ -350,7 +350,7 @@ func TestTeslApi0(teslT *testing.T) {
 	}()
 	{
 //line agent-run-tests.tesl:190
-		stream := teslrt.SubscribeStream(AgentRunServer, "/events/runs/run-1", nil)
+		stream := teslrt.SubscribeStream(AgentRunServer, "/events/runs/run-1", nil, nil)
 		_ = stream
 		defer teslrt.UnsubscribeStream(stream)
 		{

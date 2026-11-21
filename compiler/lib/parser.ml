@@ -4494,8 +4494,24 @@ let parse_api_form s =
               | RBRACE | EOF -> continue_ := false
               | _ -> advance s
             end else
+            (* An endpoint takes ONE `auth`, `body` and `response` clause: each is a single
+               slot, and a repeated clause used to overwrite the first SILENTLY.  Two `auth`
+               lines therefore dropped the first auth function — an `x-api-key` check written
+               above a second `auth` line simply stopped running (FRICTION.md item 22.1). *)
+            let refuse_repeat clause already =
+              if already && !ep_parse_err = None then
+                ep_parse_err := Some {
+                  msg = Printf.sprintf
+                    "duplicate `%s` clause: an endpoint takes exactly one \
+                     (a repeated one would silently replace the first)%s" clause
+                    (if clause = "auth" then
+                       " — combine both checks in one auth function, which may call the \
+                        other's helpers, so one `auth … via` proves both"
+                     else "");
+                  loc = current_loc s; fix = None } in
             (match peek s with
              | AUTH ->
+               refuse_repeat "auth" (!auth <> None);
                advance s;
                (match parse_binding s with
                 | Ok b ->
@@ -4514,6 +4530,7 @@ let parse_api_form s =
                 | Err e ->
                   if !ep_parse_err = None then ep_parse_err := Some e)
              | IDENT "body" ->
+               refuse_repeat "body" (!body <> None);
                advance s;
                (match parse_api_body_binding s with
                 | Ok b ->
@@ -4526,6 +4543,7 @@ let parse_api_form s =
                   end
                 | Err _ -> ())
              | IDENT "response" ->
+               refuse_repeat "response" (!resp_wire <> None);
                advance s;
                (* response WireResponseType via encoderFn *)
                (match peek s with

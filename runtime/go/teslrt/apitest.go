@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 )
 
@@ -60,6 +61,7 @@ func ApiRequest(server Server, method, path, body string, cookies []string,
 	if body != "" && request.Header.Get("Content-Type") == "" {
 		request.Header.Set("Content-Type", "application/json")
 	}
+	addressToPublicOrigin(request, headers)
 	recorder := httptest.NewRecorder()
 	server.ServeHTTP(recorder, request)
 	result := recorder.Result()
@@ -100,6 +102,28 @@ func ApiRequest(server Server, method, path, body string, cookies []string,
 		Status:  FromInt64(int64(result.StatusCode)),
 		Body:    JsonParseBody(string(raw)),
 		Headers: responseHeaders,
+	}
+}
+
+// addressToPublicOrigin sends a request to the app's own origin unless the test chose a Host.
+//
+// A `publicOrigin` server refuses a request whose Host names another origin (421). A real
+// client of the deployed app always addresses it by that origin, so a request a test writes
+// without a Host means "a request to this app" — and before this every api-test against such a
+// server failed with 421 until each request carried a hand-written Host header (FRICTION §43).
+// A test that sends its own Host keeps it: that is how the 421 refusal itself is tested.
+func addressToPublicOrigin(request *http.Request, headers []Tuple2[string, string]) {
+	for _, header := range headers {
+		if strings.EqualFold(header.Tuple2First, "Host") {
+			return
+		}
+	}
+	origin := strings.TrimSpace(PublicOrigin())
+	if origin == "" {
+		return
+	}
+	if parsed, err := url.Parse(origin); err == nil && parsed.Host != "" {
+		request.Host = parsed.Host
 	}
 }
 

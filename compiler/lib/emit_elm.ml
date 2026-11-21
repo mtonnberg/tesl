@@ -396,8 +396,11 @@ let rec encode_expr_of_type te value_expr =
   | TApp { head = TName { name = "List"; _ }; arg; _ }
   | TApp { head = TName { name = "Set"; _ }; arg; _ } ->
     "(E.list " ^ encode_fn_of_type arg ^ ") " ^ value_expr
+  (* `Maybe.map f` must be APPLIED to the value before `withDefault` sees it; the old
+     `(Maybe.withDefault E.null (Maybe.map f)) v` handed withDefault a function and did not
+     compile (FRICTION.md item 21.5). *)
   | TApp { head = TName { name = "Maybe"; _ }; arg; _ } ->
-    Printf.sprintf "(Maybe.withDefault E.null (Maybe.map %s)) %s"
+    Printf.sprintf "(Maybe.withDefault E.null (Maybe.map %s %s))"
       (encode_fn_of_type arg) value_expr
   | _ -> "E.null"
 
@@ -547,7 +550,7 @@ let rec encode_expr_of_ir_type ty value_expr =
   | Ir.IRList arg
   | Ir.IRSet arg -> "(E.list " ^ encode_fn_of_ir_type arg ^ ") " ^ value_expr
   | Ir.IRMaybe arg ->
-    Printf.sprintf "(Maybe.withDefault E.null (Maybe.map %s)) %s"
+    Printf.sprintf "(Maybe.withDefault E.null (Maybe.map %s %s))"
       (encode_fn_of_ir_type arg)
       value_expr
   | Ir.IRDict (Ir.IRString, value) ->

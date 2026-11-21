@@ -225,7 +225,7 @@ let shape_cases = [
     elm_get_sig = {|getMaybePair : (Result Http.Error (Maybe (((Int, String)))) -> msg) -> Cmd msg|};
     elm_get_decoder = {|Http.expectJson toMsg (D.maybe ((D.map2 (\x y -> ( x, y )) (D.index 0 D.int) (D.index 1 D.string))))|};
     elm_post_sig = {|postMaybePair : Maybe (((Int, String))) -> (Result Http.Error (Maybe (((Int, String)))) -> msg) -> Cmd msg|};
-    elm_post_body = {|Http.jsonBody ((Maybe.withDefault E.null (Maybe.map (\value -> ((\( first, second ) -> E.list identity [ E.int first, E.string second ]) value)))) pair)|};
+    elm_post_body = {|Http.jsonBody ((Maybe.withDefault E.null (Maybe.map (\value -> ((\( first, second ) -> E.list identity [ E.int first, E.string second ]) value)) pair)))|};
     elm_post_decoder = {|Http.expectJson toMsg (D.maybe ((D.map2 (\x y -> ( x, y )) (D.index 0 D.int) (D.index 1 D.string))))|};
   };
   {

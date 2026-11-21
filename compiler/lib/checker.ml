@@ -345,7 +345,12 @@ let type_mismatch_message actual expected note expectation =
     else ""
   in
   let posix_hint =
-    if is_posix_ty actual || is_posix_ty expected
+    (* An Int where a PosixMillis is expected is almost always an epoch-milliseconds
+       literal or column value, not arithmetic — say how to BUILD one (FRICTION.md item 36). *)
+    if is_posix_ty expected && actual = TCon "Int"
+    then " (hint: a plain Int is not a timestamp; build one from epoch milliseconds with \
+`addMs (Time.secondsToPosix 0) ms`, or from seconds with `Time.secondsToPosix s`)"
+    else if is_posix_ty actual || is_posix_ty expected
     then " (hint: PosixMillis values cannot be used in arithmetic; \
 use `diffMs t1 t2` to get a duration in ms, `addMs t offset` to advance a timestamp, \
 or `subtractMs t offset` to go back in time)"
@@ -7101,6 +7106,15 @@ let pattern_bound_names_helper pat = pattern_var_names pat
     explicitly imported from a Tesl stdlib module.
     This catches "unbound identifier" errors at compile time rather than
     letting them surface as Racket runtime errors. *)
+(* A `seed { insert E { … } }` is "the ordinary `insert` syntax, so entity field names and
+   types are still compile-time checked" (LANGUAGE-SPEC §11.14) — but only the names were:
+   `insert Run { queuedAt: 1700000000300 }` on a `PosixMillis` field passed `tesl check` and was
+   refused only when the Go emitter met it (FRICTION.md item 36).  Each seed statement is inferred the
+   way the same `insert` in a function body is. *)
+let check_seed_types ctx seed_stmts =
+  let seed_ctx = { ctx with env = make_stdlib_env () @ ctx.env; subst = ref empty_subst } in
+  List.iter (fun stmt -> ignore (infer_expr seed_ctx stmt)) seed_stmts
+
 let check_api_test_scope ctx (m : module_form) seed_stmts stmts =
   let is_tesl_module name =
     String.length name >= 5 && String.sub name 0 5 = "Tesl."
@@ -8161,9 +8175,11 @@ let check_module_with_metadata_uncached ?typed_nodes ?(source_lines = [||]) (m :
       in
       ignore (check_test_stmts test_ctx0 t.stmts)
     | DApiTest t ->
-      check_api_test_scope ctx m t.seed_stmts t.stmts
+      check_api_test_scope ctx m t.seed_stmts t.stmts;
+      check_seed_types ctx t.seed_stmts
     | DLoadTest lt ->
-      check_api_test_scope ctx m lt.seed_stmts lt.request_stmts
+      check_api_test_scope ctx m lt.seed_stmts lt.request_stmts;
+      check_seed_types ctx lt.seed_stmts
     | _ -> ()  (* codecs, databases, etc. — skip for Phase 2 *)
   ) m.decls;
   check_api_decl_types ctx m;

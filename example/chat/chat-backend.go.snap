@@ -1349,7 +1349,7 @@ func TestTeslApi3(teslT *testing.T) {
 				_ = bobId
 				{
 //line chat-backend.tesl:484
-					stream := teslrt.SubscribeStream(ChatServer, ("/events/rooms/" + teslrt.ApiTestFragment(teslEncode1(roomId))), []string{("chatUserId=" + teslrt.ApiTestFragment(teslEncode1(aliceId)))})
+					stream := teslrt.SubscribeStream(ChatServer, ("/events/rooms/" + teslrt.ApiTestFragment(teslEncode1(roomId))), []string{("chatUserId=" + teslrt.ApiTestFragment(teslEncode1(aliceId)))}, nil)
 					_ = stream
 					defer teslrt.UnsubscribeStream(stream)
 					{
@@ -1477,7 +1477,7 @@ func TestTeslApi4(teslT *testing.T) {
 			_ = annaId
 			{
 //line chat-backend.tesl:512
-				stream := teslrt.SubscribeStream(ChatServer, ("/events/rooms/" + teslrt.ApiTestFragment(teslEncode1(roomId))), []string{("chatUserId=" + teslrt.ApiTestFragment(teslEncode1(annaId)))})
+				stream := teslrt.SubscribeStream(ChatServer, ("/events/rooms/" + teslrt.ApiTestFragment(teslEncode1(roomId))), []string{("chatUserId=" + teslrt.ApiTestFragment(teslEncode1(annaId)))}, nil)
 				_ = stream
 				defer teslrt.UnsubscribeStream(stream)
 				{

@@ -294,7 +294,7 @@ func TestTeslApi0(teslT *testing.T) {
 	}()
 	{
 //line lesson33-sse-and-queue-tests.tesl:129
-		stream := teslrt.SubscribeStream(Lesson33Server, "/events/user-1", nil)
+		stream := teslrt.SubscribeStream(Lesson33Server, "/events/user-1", nil, nil)
 		_ = stream
 		defer teslrt.UnsubscribeStream(stream)
 		{

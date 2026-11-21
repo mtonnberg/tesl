@@ -1,0 +1,176 @@
+module FrictionEmitterGapsTests exposing [
+  Status(..),
+  Point,
+  keep,
+  Order,
+  pi,
+  same,
+  classify,
+  firstOr,
+  describe,
+  sweep,
+]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Programs the checker has always accepted and the Go emitter used to refuse.
+#
+# `tesl check` now runs the emitter for a program entry (FRICTION.md: a program
+# that checked clean must not first fail at `tesl test`/`run`/`build`).  Running
+# it over the compiler's own test corpus surfaced these refusals; each is now
+# lowered, and each test below runs the emitted Go and asserts the answer.
+# ─────────────────────────────────────────────────────────────────────────────
+
+import Tesl.Prelude exposing [Bool(..), Int, String, List, Unit]
+import Tesl.List
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.Result exposing [Result]
+import Tesl.Time exposing [nowMillis, diffMs, time]
+import Tesl.DB exposing [dbRead, dbWrite]
+import Tesl.Database exposing [Database, Memory]
+
+# ── A bare nullary fn is its RESULT (the checker types it as a value) ────────
+
+fn pi() -> Int =
+  3
+
+test "a bare nullary fn reference is the call it means" {
+  expect pi == 3
+  expect pi + pi == 6
+}
+
+test "a bare stdlib value name is the call it means" requires [time] {
+  let started = nowMillis
+  expect diffMs started nowMillis >= 0
+}
+
+# ── A zero-parameter lambda called with () ───────────────────────────────────
+
+fn thunked() -> Int =
+  let f = fn() -> 42
+  f()
+
+test "a zero-argument lambda is called with ()" {
+  expect thunked() == 42
+}
+
+# ── A type variable spelled like a parameter ─────────────────────────────────
+
+fn same(a: a, b: a) -> Bool =
+  a == b
+
+test "a generic fn whose parameter shares its type variable's name" {
+  expect same 1 1
+  expect same "x" "y" == False
+}
+
+# ── A case whose first arm is irrefutable, over a type with no patterns ───────
+
+record Point {
+  x: Int
+}
+
+fn classify(p: Point) -> String =
+  case p of
+    _ -> "point"
+
+fn firstOr(xs: List Int) -> Int =
+  case xs of
+    whole -> List.length whole
+
+test "an irrefutable case over a record or a list is the let it means" {
+  expect classify (Point { x: 1 }) == "point"
+  expect firstOr [4, 5, 6] == 3
+}
+
+# ── `import Tesl.List` with no exposing list grants qualified names ──────────
+
+test "a qualified stdlib call under a bare module import" {
+  expect List.length [1, 2, 3] == 3
+  expect List.head [9] == Something 9
+}
+
+# ── A local constructor shadows an unexposed builtin one ─────────────────────
+
+type Status
+  = Ok
+  | Pending
+
+# The builtin type stays usable by name; only its constructors are not in scope.
+fn keep(r: Result Int String) -> Result Int String =
+  r
+
+fn describe(s: Status) -> String =
+  case s of
+    Ok -> "ok"
+    Pending -> "pending"
+
+test "a local `Ok` beside `import Tesl.Result exposing [Result]`" {
+  expect describe Ok == "ok"
+  expect describe Pending == "pending"
+}
+
+# ── True/False as sub-patterns over a Bool field ──────────────────────────────
+
+fn flag(m: Maybe Bool) -> Int =
+  case m of
+    Nothing -> 0
+    Something True -> 1
+    Something False -> 2
+
+test "True and False match a Bool payload" {
+  expect flag Nothing == 0
+  expect flag (Something True) == 1
+  expect flag (Something False) == 2
+}
+
+# ── Multi-line delete/upsert, and `update … returning one` as a Unit statement ─
+
+entity Order table "orders" primaryKey id {
+  id: String
+  status: String
+}
+
+database OrdersDb = Database {
+  schema: "friction_emitter_gaps"
+  entities: [Order]
+  backend: Memory
+}
+
+fn sweep() -> Int
+  requires [dbRead Order, dbWrite Order] =
+  delete o from Order
+    where o.status == "expired"
+  selectCount o from Order
+
+fn mark(id: String, status: String) -> String
+  requires [dbRead Order, dbWrite Order] =
+  upsert Order { id: id, status: status }
+    onConflict [id]
+    doUpdate [status]
+  status
+
+fn touch(id: String) -> Unit
+  requires [dbWrite Order] =
+  update o in Order
+    where o.id == id
+    set o.status = "touched"
+    returning one
+
+test "a where clause on its own line belongs to its delete" requires [dbRead Order, dbWrite Order] {
+  insert Order { id: "a", status: "expired" }
+  insert Order { id: "b", status: "live" }
+  expect sweep() == 1
+}
+
+test "a multi-line upsert inserts, then updates on conflict" requires [dbRead Order, dbWrite Order] {
+  expect mark "c" "new" == "new"
+  expect mark "c" "again" == "again"
+  expect selectCount o from Order == 1
+  expect (selectOne o from Order where o.id == "c") == Something (Order { id: "c", status: "again" })
+}
+
+test "update returning one discards its row in a Unit fn" requires [dbRead Order, dbWrite Order] {
+  insert Order { id: "d", status: "live" }
+  touch "d"
+  expect (selectOne o from Order where o.id == "d") == Something (Order { id: "d", status: "touched" })
+}

@@ -595,7 +595,7 @@ func TestTeslApi1(teslT *testing.T) {
 	}()
 	{
 //line lesson70-agent-async-work.tesl:349
-		stream := teslrt.SubscribeStream(ReportServer, "/chat/conv-1/events", nil)
+		stream := teslrt.SubscribeStream(ReportServer, "/chat/conv-1/events", nil, nil)
 		_ = stream
 		defer teslrt.UnsubscribeStream(stream)
 		{
