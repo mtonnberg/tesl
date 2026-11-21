@@ -2865,6 +2865,8 @@ evts.onmessage = (e) => {
 // Reconnects automatically — no manual reconnect code needed
 ```
 
+**Authenticating a browser stream.** `EventSource` cannot set request headers — its only option is `withCredentials` — so an `sse` route whose `auth` reads a header (`x-api-key`, `Authorization`) always refuses a browser. Use an auth that reads a **cookie** for routes a browser subscribes to: a same-origin session cookie (the `sso` session, or any cookie-reading `auth`) is sent with the request, and `{ withCredentials: true }` sends it cross-origin. Alternatively an edge proxy can inject the header. Avoid moving an API key into the query string: it lands in access logs, browser history and `Referer` headers. A header-only route still serves non-browser clients (`curl -N -H …`) and `api-test`'s `subscribe … headers { … }`.
+
 ### 11.12 Servers
 **Accepted design, Implemented.**
 

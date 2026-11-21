@@ -145,6 +145,20 @@ api-test "the literal sse route wins and subscribe carries its headers" for Runs
   expect isNotEmpty events
 }
 
+# A plain request to an `sse` route answers whether the subscription would be accepted:
+# a refused one is an ordinary 401 a test can assert (`subscribe` itself traps on refusal),
+# and an accepted one returns its status and headers instead of waiting on the open stream.
+api-test "a refused subscription is an ordinary 401 to a plain get" for RunsServer {
+  let resp = get "/runs/stream"
+  expect resp.status == 401
+}
+
+api-test "an accepted subscription answers a plain get without waiting on the stream" for RunsServer {
+  let resp = get "/runs/stream" headers { "x-api-key": "good-key" }
+  expect resp.status == 200
+  expect Dict.lookup "content-type" resp.headers == Something "text/event-stream"
+}
+
 # ── a `publicOrigin` server's api-tests need no hand-written Host ────────
 
 handler get ping() -> String =
