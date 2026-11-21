@@ -409,6 +409,7 @@ let native_contract_fixture ?old_source ?new_source ?migration_source ?(expected
  let out=Filename.temp_dir "tesl-contract-native-" "" in
  Fun.protect ~finally:(fun () -> remove out) (fun () ->
   List.iter(fun(a:Emit_go.artifact)->write(Filename.concat out a.path)a.contents)artifacts;
+  Option.iter(fun(a:Emit_go.artifact)->write(Filename.concat out a.path)a.contents)(Emit_go.runtime_history_test_companion artifacts);
   write(Filename.concat out "internal/teslrt/contract_generated_test.go") (replace (replace {|package teslrt
 import("testing";"strings";"encoding/hex";"fmt";"crypto/sha256")
 func TestActualCompiledContract(t *testing.T){

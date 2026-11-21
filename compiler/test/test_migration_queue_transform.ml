@@ -514,6 +514,7 @@ let native ?(after=fresh) ?(body=helper) ?(extra_tests=[]) ?(pure_tests=true) ?(
  ignore(save "out/internal/teslmodschemamailmigratehelpers/queue_codec_test.go" wire_tests);
  ignore(save "out/internal/teslqueueconversions/conversions_test.go" (adapter_tests(Q.digest checked)));
  ignore(save "out/internal/teslrt/queue_conversion_metadata_test.go" metadata_tests);
+ Option.iter(fun(a:Emit_go.artifact)->ignore(save ("out/" ^ a.path) a.contents))(Emit_go.runtime_history_test_companion artifacts);
  List.iter(fun name->remove(Filename.concat root name))["schema";"migrations";"tesl.toml"];
  let command=Printf.sprintf "cd %s && go test -race -p 1 -count=1 -timeout=60s -v ./... 2>&1" (Filename.quote(Filename.concat root "out")) in
  let channel=Unix.open_process_in command in
@@ -549,6 +550,7 @@ let public_job_tests () = with_job_declaration(fun root save file _ ->
  let project_path=replace "tesl.generated/teslmodschemamailmigratehelpers/" "tesl.generated/teslmodschemamailmigratev2/" in
  ignore(save "out/internal/teslqueueconversions/conversions_test.go" (project_path(adapter_tests(Q.digest conversion))));
  ignore(save "out/internal/teslrt/queue_conversion_metadata_test.go" metadata_tests);
+ Option.iter(fun(a:Emit_go.artifact)->ignore(save ("out/" ^ a.path) a.contents))(Emit_go.runtime_history_test_companion artifacts);
  List.iter(fun name->remove(Filename.concat root name))["schema";"migrations";"tesl.toml"];
  let command=Printf.sprintf "cd %s && go test -race -p 1 -count=1 -timeout=60s -v ./... 2>&1" (Filename.quote(Filename.concat root "out")) in
  let channel=Unix.open_process_in command in let output=In_channel.input_all channel in
@@ -632,6 +634,7 @@ func TestTypedRepairLineage(t *testing.T) {
  if _,err:=Conversion2.Convert(1,[]byte(original));err==nil {t.Fatal("later repair bypassed predecessor")}
 }
 |});
+ Option.iter(fun(a:Emit_go.artifact)->ignore(save ("out/" ^ a.path) a.contents))(Emit_go.runtime_history_test_companion artifacts);
  ignore(save "out/internal/teslrt/repair_metadata_test.go" {|package teslrt
 import (
  "encoding/hex"
