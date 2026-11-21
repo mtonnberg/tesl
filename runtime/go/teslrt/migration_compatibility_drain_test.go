@@ -40,7 +40,7 @@ func TestPgMigrationCompatibilityDrainProgressesUnderSteadyLoad(t *testing.T) {
 				group.Add(1)
 				go func(seed int64) {
 					defer group.Done()
-					defer conn.Close(context.Background())
+					defer func() { _ = conn.Close(context.Background()) }()
 					random := rand.New(rand.NewSource(seed))
 					for ctx.Err() == nil {
 						started := time.Now()
@@ -69,7 +69,7 @@ func TestPgMigrationCompatibilityDrainProgressesUnderSteadyLoad(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer drain.Close(context.Background())
+			defer func() { _ = drain.Close(context.Background()) }()
 			budget, cancel := context.WithTimeout(f.ctx, 15*time.Second)
 			defer cancel()
 			ran := false
@@ -107,7 +107,7 @@ func TestPgMigrationCompatibilityDrainWaitsForLongTransaction(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer holder.Close(context.Background())
+	defer func() { _ = holder.Close(context.Background()) }()
 	tx, err := holder.Begin(f.ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -119,7 +119,7 @@ func TestPgMigrationCompatibilityDrainWaitsForLongTransaction(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer drain.Close(context.Background())
+	defer func() { _ = drain.Close(context.Background()) }()
 	done := make(chan error, 1)
 	ran := atomic.Bool{}
 	go func() {
