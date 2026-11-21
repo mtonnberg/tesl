@@ -973,12 +973,13 @@ func WithMemoryTransaction(body func()) {
 	committed = true
 }
 
-// goroutineID reads the id out of the goroutine's own stack header, which is the only place
-// the runtime exposes it. The header's shape ("goroutine 17 [running]:") is fixed by
+// goroutineIDFromStack reads the id out of the goroutine's own stack header, which is the only
+// place the runtime exposes it. The header's shape ("goroutine 17 [running]:") is fixed by
 // `runtime.Stack` itself; an unreadable one answers 0, which is a key like any other — every
 // goroutine that fails to parse would share one transaction, and none can, because the parse
-// cannot fail for a header this function is looking at.
-func goroutineID() uint64 {
+// cannot fail for a header this function is looking at. It is the reference for the fast path
+// in goroutine_id.go, and the answer wherever that path is unavailable.
+func goroutineIDFromStack() uint64 {
 	var header [64]byte
 	written := runtime.Stack(header[:], false)
 	fields := bytes.Fields(header[:written])
