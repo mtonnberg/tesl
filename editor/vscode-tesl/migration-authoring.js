@@ -434,6 +434,7 @@ function registerMigrationAuthoring(vscode, context, { getClient, requireTrusted
     if (panel && viewOptions.flow) viewOptions.flow.previewListener = previewListener;
     views.clear();
     const view = {
+      projectRoot,
       preview,
       supportsApply,
       apply: () => applyProposal(),
@@ -468,7 +469,9 @@ function registerMigrationAuthoring(vscode, context, { getClient, requireTrusted
     if (!params || typeof params.previewId !== "string" || !views.has(params.previewId)) throw new Error("Migration view expired; request a fresh preview.");
     return views.get(params.previewId);
   };
-  const workflow = registerMigrationFlow(vscode, context, { requestPreview, getView: retainedView, requireTrustedWorkspace, isApplying: () => applyingSource });
+  const workflow = registerMigrationFlow(vscode, context, { requestPreview, getView: retainedView,
+    discardViews: (root) => { for (const [id, view] of views) if (view.projectRoot === root) views.delete(id); },
+    requireTrustedWorkspace, isApplying: () => applyingSource });
   context.subscriptions.push(vscode.commands.registerCommand("tesl.applyMigrationSource", async (params) => retainedView(params).apply()));
   context.subscriptions.push(vscode.commands.registerCommand("tesl.editMigrationHole", async (params) => retainedView(params).edit(params.itemIndex)));
   context.subscriptions.push(vscode.commands.registerCommand("tesl.applyMigrationChoice", async (params) => {

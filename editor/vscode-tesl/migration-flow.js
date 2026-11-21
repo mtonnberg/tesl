@@ -60,13 +60,14 @@ function renderFlow(flow) {
   const { nonce, stage, revision, draft, error } = flow;
   const schemaFile = flow.schemaFiles?.includes(flow.schemaFile) ? flow.schemaFile : flow.schemaFiles?.find((file) => /v-current\.tesl$/.test(file)) || flow.schemaFiles?.[0];
   const navigation = `${button("back", "Back")}${button("cancel", "Cancel migration")}`;
+  const reset = flow.backup || draft ? button("reset", "Keep current files and reset guide…") : "";
   if (stage === "welcome") {
     const resume = draft && draft.status !== "complete" && !flow.forceNew;
     return page(nonce, resume ? `Draft V${draft.revision}` : "Ready to start",
       "Migrate database/queues",
       `<p>${resume ? `V${draft.revision} is still marked as an open draft. Continue to finish it, or start a new revision below.` : draft?.status === "complete" ? `V${draft.revision} authoring is complete. Start prepares the next revision; your existing migration files are kept.` : "Change your schema with help from the compiler. Tesl writes the migration code; you choose what happens to existing data."}</p>`,
       button(resume ? "resume" : "start", resume ? `Continue migration V${draft.revision}` : "Start migration", true),
-      `<ol><li>Prepare migration files ${more("About this step", "<p>Start saves a versioned copy of your current schema and prepares the next migration. Wait for the next page before making schema changes.</p>")}</li><li>Edit your schema</li><li>Choose values for existing data</li><li>Check, test and finish</li></ol><p class="muted">Start and review change source files only. Deployment is a separate step.</p>${resume ? button("new", "Start a new migration instead") : ""}${button("cancel", resume ? "Cancel migration" : "Close")}${more("Continue work already started", `<p>Use this for an existing, undeployed draft.</p>${button("resume", "Continue an existing draft")}`)}`);
+      `<ol><li>Prepare migration files ${more("About this step", "<p>Start saves a versioned copy of your current schema and prepares the next migration. Wait for the next page before making schema changes.</p>")}</li><li>Edit your schema</li><li>Choose values for existing data</li><li>Check, test and finish</li></ol><p class="muted">Start and review change source files only. Deployment is a separate step.</p>${resume ? button("new", "Start a new migration instead") : ""}${button("cancel", resume ? "Cancel migration" : "Close")}${reset}${more("Continue work already started", `<p>Use this for an existing, undeployed draft.</p>${button("resume", "Continue an existing draft")}`)}`);
   }
   if (stage === "prepared") return page(nonce, `Step 1 of 4 · V${revision}`, "Your working copy is ready",
     "<p>The previous schema has been saved. Continue to edit the current schema, or cancel to restore the files from before you started.</p>",
@@ -78,12 +79,15 @@ function renderFlow(flow) {
     flow.backup ? `<p>Restore this schema and migration family to its state before Start. This discards your draft edits and removes files created during the draft.</p><p>Other application files are not changed. Only cancel a draft that has not been deployed.</p>` :
       "<p>This draft has no Start backup. You can close the workflow, but its existing files will be kept.</p>",
     button(flow.backup ? "confirmCancel" : "close", flow.backup ? "Discard draft and restore files" : "Close and keep files", true),
-    `${button("keepEditing", "Keep editing")}${flow.backup ? more("Files to restore or remove", `<p>${escape(flow.backup.scopes.join("\n"))}</p><ul>${(flow.cancelPlan?.changedPaths || []).map((file) => `<li>${escape(file)}</li>`).join("")}</ul>`) : ""}`);
+    `${button("keepEditing", "Keep editing")}${reset}${flow.backup ? more("Files to restore or remove", `<p>${escape(flow.backup.scopes.join("\n"))}</p><ul>${(flow.cancelPlan?.changedPaths || []).map((file) => `<li>${escape(file)}</li>`).join("")}</ul>`) : ""}`);
   if (stage === "cancelled") return page(nonce, "Cancelled", "Draft changes discarded",
     "<p>The schema and migration files have been restored to their pre-Start state.</p>", button("close", "Close", true));
   if (stage === "cancelFailed") return page(nonce, "Cancellation incomplete", "Finish restoring the draft",
-    `<p>${escape(firstSentence(error || "A previous cancellation did not finish."))}</p><p>Your original files are still backed up. Review the remaining changes and retry.</p>`,
-    button("cancel", "Review cancellation again", true), more("Details", `<pre>${escape(error)}</pre>`) + button("close", "Close and keep backup"));
+    `<p>${escape(firstSentence(error || "A previous cancellation did not finish."))}</p><p>The editor still has a cancellation backup. Review it to retry restoration. If you already restored or replaced the files yourself, keep your current files and reset the guide instead.</p>`,
+    button("cancel", "Review cancellation again", true), reset + more("Details", `<pre>${escape(error)}</pre>`) + button("close", "Close and keep backup"));
+  if (stage === "reset") return page(nonce, "Reset editor state only", "Keep current files and reset the guide?",
+    "<p>This forgets the saved draft record and deletes this guide's cancellation backup. Files on disk and unsaved editor buffers stay exactly as they are.</p><p>Use this after restoring files with Git or deciding to keep your current source. Start will check that source before preparing another migration.</p>",
+    button("confirmReset", "Keep files and forget old draft", true), button("abortReset", "Back"));
   if (stage === "preparing") return page(nonce, "Step 1 of 4 · preparing source", "Preparing your migration…",
     "<p>Checking the current revision before creating the next one. Wait to edit the schema until preparation finishes.</p>", button("start", "Preparing…", true, "disabled"));
   if (stage === "edit") return page(nonce, `Step 2 of 4 · draft V${revision} prepared`, "Now edit your schema",
@@ -106,7 +110,7 @@ function renderFlow(flow) {
   return page(nonce, flow.revision ? `Draft V${revision} · action blocked` : "Not started · preparation blocked", flow.revision ? "Resolve this before continuing" : "The new revision could not be prepared",
     `<p>${escape(firstSentence(error || "Preparation could not complete."))}</p><p>${flow.revision ? "Your draft is still here. Resolve this issue, then recheck." : flow.restored ? "No new revision was created. The source update was refused or restored, and your edits were preserved." : "No new revision has been confirmed. Resolve the reported issue, then try Start again."}</p>`,
     button(flow.reviewCleanup ? "resume" : flow.revision ? "review" : "start", flow.reviewCleanup ? "Review the existing revision's cleanup" : flow.revision ? "Recheck my draft" : "Try Start again", true),
-    `${navigation}${more("Compiler details", `<pre>${escape(error)}</pre>`)}${button("openSchema", "Open current schema")}${!flow.revision ? more("Schema already edited?", "<p>Keep those edits separately, restore the previous source, then Start and reapply the edits. Or continue the existing revision if it is still an undeployed draft.</p>") + button("resume", "Continue existing draft") : ""}`);
+    `${navigation}${reset}${more("Compiler details", `<pre>${escape(error)}</pre>`)}${button("openSchema", "Open current schema")}${!flow.revision ? more("Schema already edited?", "<p>Keep those edits separately, restore the previous source, then Start and reapply the edits. Or continue the existing revision if it is still an undeployed draft.</p>") + button("resume", "Continue existing draft") : ""}`);
 }
 
 function renderFlowReview(flow, preview, items, index, controls) {
@@ -158,7 +162,7 @@ function renderFlowReview(flow, preview, items, index, controls) {
 ${more("Details and source changes", `<p>${escape(item?.summary || "")}</p>${(item?.help || []).map((text) => `<p>${escape(text)}</p>`).join("")}<pre>${escape(item?.diagnostic || "")}</pre><div id="files"></div>${controls.canApply && !preview.compilable ? button("apply", "Write proposal without choosing a plan") : ""}`)}`);
 }
 
-function registerMigrationFlow(vscode, context, { requestPreview, getView, requireTrustedWorkspace, isApplying = () => false }) {
+function registerMigrationFlow(vscode, context, { requestPreview, getView, discardViews = () => {}, requireTrustedWorkspace, isApplying = () => false }) {
   const flows = new Map();
   const within = (root, file) => { const relative = path.relative(root, file); return relative === "" || relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative); };
   const snapshot = (flow) => ({ kind: "migration-authoring-flow", flowId: flow.id, stage: flow.stage, revision: flow.revision,
@@ -233,6 +237,23 @@ function registerMigrationFlow(vscode, context, { requestPreview, getView, requi
     flow.draft = undefined;
     return true;
   }
+  function requireNoSourceTransaction(flow) {
+    if (isApplying() || !flow.projectRoot || fs.existsSync(path.join(flow.projectRoot, ".tesl-source-edit"))) {
+      throw new Error("A source update is active or needs recovery. Finish that update before resetting the guide; its journal and backup are retained.");
+    }
+  }
+  async function resetGuide(flow) {
+    requireNoSourceTransaction(flow);
+    flow.previewListener?.dispose(); flow.previewListener = undefined;
+    discardViews(flow.projectRoot);
+    // Clear the hint first and the backup last. Failed persistence retains the
+    // recovery backup; no file restoration, saving, or compiler apply is run.
+    await context.workspaceState.update(flow.key, undefined);
+    requireNoSourceTransaction(flow);
+    await persistBackup(flow, undefined);
+    for (const key of ["draft", "revision", "view", "previewId", "startView", "startHandle", "entryFile", "database", "schemaFiles", "schemaFile", "cancelPlan", "cancelReturn", "resetReturn", "refreshPreview", "testStatus", "error", "reviewCleanup", "reviewOnly", "changedAfterCheck", "restored", "forceNew"]) delete flow[key];
+    flow.stage = "welcome";
+  }
   async function action(flow, name) {
     if (!requireTrustedWorkspace() || flow.disposed || flow.busy || isApplying()) return snapshot(flow);
     flow.busy = true;
@@ -253,6 +274,14 @@ function registerMigrationFlow(vscode, context, { requestPreview, getView, requi
           unsuccessful(flow, applied?.result);
           if (flow.restored) await persistBackup(flow, undefined);
         }
+      } else if (name === "reset" && ["welcome", "cancel", "cancelFailed", "blocked"].includes(flow.stage) && (flow.backup || flow.draft)) {
+        requireNoSourceTransaction(flow);
+        flow.resetReturn = flow.stage;
+        flow.stage = "reset";
+      } else if (name === "abortReset" && flow.stage === "reset") {
+        flow.stage = flow.resetReturn || "welcome";
+      } else if (name === "confirmReset" && flow.stage === "reset") {
+        await resetGuide(flow);
       } else if (name === "resume") {
         if (!["welcome", "blocked"].includes(flow.stage)) return snapshot(flow);
         await reviewed(flow, true);
@@ -347,7 +376,7 @@ function registerMigrationFlow(vscode, context, { requestPreview, getView, requi
     flow.renderReview = (preview, items, index, controls) => renderFlowReview(flow, preview, items, index, controls);
     flow.panel.onDidDispose?.(() => { flow.disposed = true; flow.previewListener?.dispose(); flows.delete(flow.id); }, undefined, context.subscriptions);
     flow.panel.webview.onDidReceiveMessage(async (message) => {
-      if (["start", "resume", "review", "cleanup", "openSchema", "tests", "finish", "reference", "new", "back", "editStep", "finishReview", "cancel", "confirmCancel", "keepEditing", "close"].includes(message?.action) || message?.action === "status" && flow.stage === "recovery") await action(flow, message.action);
+      if (["start", "resume", "review", "cleanup", "openSchema", "tests", "finish", "reference", "new", "back", "editStep", "finishReview", "cancel", "confirmCancel", "keepEditing", "reset", "abortReset", "confirmReset", "close"].includes(message?.action) || message?.action === "status" && flow.stage === "recovery") await action(flow, message.action);
     }, undefined, context.subscriptions);
     flows.set(flow.id, flow); render(flow); return snapshot(flow);
   }

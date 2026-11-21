@@ -63,3 +63,16 @@ test("source readiness requires reviewed cleanup and exposes one explicit source
   renderFlowReview(flow, { ...preview, cleanup: [{ version: 14, present: true }] }, [], 0, {});
   assert.equal(flow.stage, "ready");
 });
+
+test("failed cancellation distinguishes restoring files from resetting saved editor state", () => {
+  const flow = { nonce: "abc", stage: "cancelFailed", backup: { restoring: true } };
+  const failed = renderFlow(flow);
+  assert.ok(failed.includes("already restored or replaced the files yourself"));
+  assert.ok(failed.includes('data-action="reset"'));
+  const reset = renderFlow({ ...flow, stage: "reset" });
+  assert.ok(reset.includes("deletes this guide's cancellation backup"));
+  assert.ok(reset.includes("unsaved editor buffers stay exactly as they are"));
+  assert.ok(reset.includes('data-action="confirmReset"'));
+  assert.ok(reset.includes('data-action="abortReset"'));
+  assert.equal((reset.match(/class="primary"/g) || []).length, 1);
+});

@@ -94,6 +94,15 @@ Continue once and use **Finish and close**, or choose the now-visible **Start a 
 migration instead**. Starting still compiler-checks the existing revision before
 freezing it. Closing an unfinished workflow continues to preserve its draft.
 
+If you restore or discard the draft yourself with Git, the editor may still show
+**Cancellation incomplete** because its private recovery backup is separate from
+your source files. Choose **Keep current files and reset guide…**, then **Keep
+files and forget old draft**. This deletes only the guide's saved draft record and
+cancellation backup; it does not save, restore, or delete source files or change
+unsaved buffers. You can then use **Start migration**, which checks the current
+source normally. **Review cancellation again** instead proposes restoring the old
+backup. Reset is unavailable while a `.tesl-source-edit` transaction needs recovery.
+
 Each page shows the draft number and phase with one highlighted next action.
 Background and compiler details are collapsed. A remembered draft offers
 **Continue migration V14** on reopening; a draft prepared elsewhere can be resumed

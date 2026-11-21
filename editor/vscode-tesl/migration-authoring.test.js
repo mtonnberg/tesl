@@ -437,6 +437,141 @@ test("a removed legacy draft does not trap the welcome page on a stale revision"
   } finally { f.cleanup(); }
 });
 
+function failedCancellation(f) {
+  const schema = f.preview.schemaFiles[0], key = `tesl.migrationDraft:${f.root}`;
+  fs.mkdirSync(path.dirname(schema), { recursive: true });
+  fs.writeFileSync(schema, "source restored with Git\n");
+  const draft = { entryFile: f.entryFile, projectRoot: f.root, database: "App.Main", revision: 14, schemaFiles: [schema] };
+  const backup = { version: 1, root: f.root, revision: 14, scopes: ["schema/notes", "migrations/notes"], restoring: true,
+    files: [{ path: path.relative(f.root, schema), disk: Buffer.from("old saved source\n").toString("base64"), source: "old unsaved source\n", dirty: true }] };
+  f.state.set(key, draft); f.state.set(`${key}:backup`, backup);
+  return { schema, key, backup };
+}
+
+test("reset after Git restoration forgets failed cancellation without touching files or dirty buffers", async () => {
+  const f = fixture();
+  try {
+    const { schema, key } = failedCancellation(f);
+    const document = { uri: { ...f.uri(schema), scheme: "file" }, languageId: "tesl", version: 7, isDirty: true,
+      getText: () => "current unsaved work\n", save: async () => assert.fail("reset must not save") };
+    f.vscode.workspace.textDocuments = [document];
+    f.state.set("unrelated", "keep me");
+    const opened = await f.commands.get("tesl.migrateDatabase")(f.uri(f.entryFile));
+    const call = (action) => f.commands.get("tesl.migrationFlowAction")({ flowId: opened.flowId, action });
+    assert.equal(opened.stage, "cancelFailed");
+    assert.ok(f.panels[0].webview.html.includes("Keep current files and reset guide…"));
+    assert.equal((await call("reset")).stage, "reset");
+    assert.ok(f.state.has(`${key}:backup`), "review does not discard recovery data");
+    const reset = await call("confirmReset");
+    assert.equal(reset.stage, "welcome");
+    assert.equal(reset.revision, undefined);
+    assert.equal(f.requests.length, 0, "reset never requests a compiler apply or preview");
+    assert.equal(f.state.has(key), false);
+    assert.equal(f.state.has(`${key}:backup`), false);
+    assert.equal(f.state.get("unrelated"), "keep me");
+    assert.equal(fs.readFileSync(schema, "utf8"), "source restored with Git\n");
+    assert.equal(document.getText(), "current unsaved work\n");
+    assert.equal(document.isDirty, true);
+    assert.equal(document.version, 7);
+    assert.equal(fs.existsSync(path.join(f.root, "migrations/notes/v14.tesl")), false);
+    f.panels[0].dispose();
+    const fresh = await f.commands.get("tesl.migrateDatabase")(f.uri(f.entryFile));
+    assert.equal(fresh.stage, "welcome", "reload does not resurrect the recovery marker");
+    f.client.initializeResult = { capabilities: { executeCommandProvider: { commands: ["tesl.applyMigration"] } } };
+    f.client.sendRequest = async (method, params) => {
+      f.requests.push({ method, params });
+      if (params.command === "tesl.generateMigration") return { ...f.preview, operation: "start", compilable: true, revisionAfter: 14,
+        files: [{ path: path.join(f.root, "migrations/notes/v14.tesl"), creates: true }] };
+      return { ok: true, sourceTransaction: { outcome: "committed" } };
+    };
+    const started = await f.commands.get("tesl.migrationFlowAction")({ flowId: fresh.flowId, action: "start" });
+    assert.equal(started.stage, "edit", JSON.stringify(started));
+    assert.equal(f.requests[0].params.arguments[0].newRevision, true);
+    assert.equal(f.state.get(`${key}:backup`).restoring, undefined);
+    assert.equal(f.state.get(`${key}:backup`).files[0].source, "current unsaved work\n");
+  } finally { f.cleanup(); }
+});
+
+test("backing out of guide reset preserves the failed cancellation backup", async () => {
+  const f = fixture();
+  try {
+    const { key, backup } = failedCancellation(f);
+    const flow = await f.commands.get("tesl.migrateDatabase")(f.uri(f.entryFile));
+    const call = (action) => f.commands.get("tesl.migrationFlowAction")({ flowId: flow.flowId, action });
+    await call("confirmReset");
+    assert.equal(f.state.get(`${key}:backup`), backup, "confirmation requires the reset review screen");
+    await call("reset");
+    assert.equal((await call("abortReset")).stage, "cancelFailed");
+    assert.equal(f.state.get(`${key}:backup`), backup);
+    assert.equal(f.requests.length, 0);
+  } finally { f.cleanup(); }
+});
+
+test("guide reset cannot discard recovery data while a source transaction exists", async () => {
+  for (const when of ["before-review", "before-confirm", "during-persistence"]) {
+    const f = fixture();
+    try {
+      const { key, backup } = failedCancellation(f);
+      const journal = path.join(f.root, ".tesl-source-edit");
+      const flow = await f.commands.get("tesl.migrateDatabase")(f.uri(f.entryFile));
+      const call = (action) => f.commands.get("tesl.migrationFlowAction")({ flowId: flow.flowId, action });
+      if (when === "before-review") fs.mkdirSync(journal);
+      await call("reset");
+      if (when === "before-confirm") fs.mkdirSync(journal);
+      if (when === "during-persistence") {
+        const remove = f.state.delete.bind(f.state);
+        f.state.delete = (name) => { if (name === key) fs.mkdirSync(journal); return remove(name); };
+      }
+      const result = when === "before-review" ? await call("reset") : await call("confirmReset");
+      assert.equal(result.stage, "cancelFailed");
+      assert.match(result.error, /source update is active or needs recovery/);
+      assert.equal(f.state.get(`${key}:backup`), backup);
+      assert.equal(fs.existsSync(journal), true);
+      assert.equal(f.requests.length, 0);
+    } finally { f.cleanup(); }
+  }
+});
+
+test("failed reset persistence retains the backup and can be retried", async () => {
+  const f = fixture();
+  try {
+    const { key, backup, schema } = failedCancellation(f);
+    const flow = await f.commands.get("tesl.migrateDatabase")(f.uri(f.entryFile));
+    const call = (action) => f.commands.get("tesl.migrationFlowAction")({ flowId: flow.flowId, action });
+    const remove = f.state.delete.bind(f.state);
+    f.state.delete = (name) => { if (name === `${key}:backup`) throw new Error("storage unavailable"); return remove(name); };
+    await call("reset");
+    assert.equal((await call("confirmReset")).stage, "cancelFailed");
+    assert.equal(f.state.get(`${key}:backup`), backup);
+    assert.equal(fs.readFileSync(schema, "utf8"), "source restored with Git\n");
+    f.state.delete = remove;
+    await call("reset");
+    assert.equal((await call("confirmReset")).stage, "welcome");
+    assert.equal(f.state.has(`${key}:backup`), false);
+  } finally { f.cleanup(); }
+});
+
+test("reset expires the retained source proposal even after the guide reopens", async () => {
+  for (const reopen of [false, true]) {
+    const f = fixture();
+    try {
+      let flow = await f.commands.get("tesl.migrateDatabase")(f.uri(f.entryFile));
+      const call = (action) => f.commands.get("tesl.migrationFlowAction")({ flowId: flow.flowId, action });
+      const reviewed = await call("resume");
+      await call("cancel");
+      assert.ok(f.panels[0].webview.html.includes("Keep current files and reset guide…"));
+      if (reopen) {
+        await call("close");
+        failedCancellation(f);
+        flow = await f.commands.get("tesl.migrateDatabase")(f.uri(f.entryFile));
+      }
+      await call("reset"); await call("confirmReset");
+      await assert.rejects(f.commands.get("tesl.applyMigrationSource")({ previewId: reviewed.previewId }), /expired/);
+      assert.equal(f.requests.length, 1);
+    } finally { f.cleanup(); }
+  }
+});
+
 test("failed status checks retain recovery state; confirmed restoration permits an explicit retry", async () => {
   const f = fixture();
   try {

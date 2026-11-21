@@ -312,6 +312,46 @@ exports.run = async () => {
     assert.equal(proofReview.stage, "ready", JSON.stringify(proofReview));
     assert.equal(fs.readFileSync(frozenPath, "utf8"), frozenBytes);
     evidence.checks.push("removed ADT variants offer explicit row deletion, changed proofs use ordinary fallible write-back, completed source checks pass, and frozen source stays byte-identical");
+    // Interrupt cancellation after its backup is marked restoring. Then emulate
+    // the user's Git restore/clean and reset only the persisted editor state.
+    const proofMigration = path.join(proofRoot, "migrations/notes/v2.tesl");
+    const proofDraft = await vscode.workspace.openTextDocument(vscode.Uri.file(proofMigration));
+    await replaceDocument(proofDraft, proofDraft.getText() + "\n# cancellation recovery regression\n");
+    await proofAction("cancel");
+    const journal = path.join(proofRoot, ".tesl-source-edit");
+    const interrupt = vscode.workspace.onDidChangeTextDocument(({ document }) => {
+      if (document.uri.fsPath === proofMigration && !fs.existsSync(journal)) fs.mkdirSync(journal);
+    });
+    let interrupted;
+    try { interrupted = await proofAction("confirmCancel"); }
+    finally { interrupt.dispose(); }
+    assert.equal(interrupted.stage, "cancelFailed", JSON.stringify(interrupted));
+    fs.rmdirSync(journal); // This test created the empty marker, not a source transaction.
+    assert.equal(fs.existsSync(proofMigration), false, "failure occurs after deleting the draft migration");
+    await replaceDocument(proofSchema, proofBefore);
+    if (proofSchema.isDirty) assert.equal(await proofSchema.save(), true);
+    assert.equal(fs.readFileSync(proofSchema.uri.fsPath, "utf8"), proofBefore);
+    await vscode.workspace.fs.delete(vscode.Uri.file(frozenPath), { useTrash: false });
+    await replaceDocument(proofSchema, proofBefore + "\n# current unsaved work after manual restore\n");
+    const keptText = proofSchema.getText(), keptDisk = fs.readFileSync(proofSchema.uri.fsPath, "utf8");
+    await proofAction("close");
+    const recoveryWelcome = await vscode.commands.executeCommand("tesl.migrateDatabase", proofSchema.uri);
+    assert.equal(recoveryWelcome.stage, "cancelFailed", "failed cancellation survives reopening until explicitly reset");
+    const staleAction = (action) => vscode.commands.executeCommand("tesl.migrationFlowAction", { flowId: recoveryWelcome.flowId, action });
+    assert.equal((await staleAction("reset")).stage, "reset");
+    assert.equal((await staleAction("confirmReset")).stage, "welcome");
+    assert.equal(proofSchema.getText(), keptText);
+    assert.equal(proofSchema.isDirty, true);
+    assert.equal(fs.readFileSync(proofSchema.uri.fsPath, "utf8"), keptDisk);
+    assert.equal(fs.existsSync(proofMigration), false);
+    assert.equal(fs.existsSync(frozenPath), false);
+    await staleAction("cancel"); // Close the now-empty welcome page.
+    const freshWelcome = await vscode.commands.executeCommand("tesl.migrateDatabase", proofSchema.uri);
+    assert.equal(freshWelcome.stage, "welcome");
+    const freshStart = await vscode.commands.executeCommand("tesl.migrationFlowAction", { flowId: freshWelcome.flowId, action: "start" });
+    assert.equal(freshStart.stage, "edit", JSON.stringify(freshStart));
+    assert.equal(freshStart.revision, 2);
+    evidence.checks.push("failed cancellation can be reset after manual source restoration without changing disk or unsaved text, and a fresh migration starts normally");
     evidence.ok = true;
   } catch (error) { evidence.ok = false; evidence.error = error.stack; throw error; }
   finally {
