@@ -4,6 +4,54 @@
 application database or convert stored data. Deployment runs the resulting
 application binary with separate Installer, Worker and Request database roles.
 
+## Quickstart: a first migration
+
+If you have written migrations in Rails, Django, Prisma or Flyway, the loop is
+familiar: change the model, generate the migration, fill in what the tool cannot
+guess, deploy. Tesl differs in three ways: the generator is a checked wizard, every
+deploy keeps old and new application versions working side by side, and dropped
+columns and tables are cleaned up by a separate, later step (the Contract).
+
+**Project layout** (see `example/db-migration-example`):
+
+| Path | What it is | Who edits it |
+|---|---|---|
+| `schema/<family>/v-current.tesl` | The current schema, module `Schema.<Family>.VCurrent` | You |
+| `schema/<family>/vN.tesl` | Frozen copy of the schema at revision N | Generated, never edited |
+| `migrations/<family>/vN.tesl` | How rows move from revision N-1 to N | Generated, you fill the `todo` holes |
+| `migrations/<family>/vN-contract.tesl` | Cleanup of retired columns/tables after N | Generated, you review it |
+
+The application imports entities from `Schema.<Family>.VCurrent`; its `database`
+declaration names `schema: Schema.<Family>.VCurrent` and
+`migrations: Schema.<Family>.Migrate`.
+
+**The loop:** edit `v-current.tesl`, save, run `tesl migrate app.tesl` (the
+installed `tesl` command; the compiler binary only offers JSON previews), answer
+the wizard, fill each `todo "..."`, run `tesl agent-context app.tesl` until clean,
+then follow the "Next steps" the wizard prints.
+
+| You want to | Edit `v-current.tesl` | Wizard choice / what you fill in |
+|---|---|---|
+| Add an optional column | Add `field: Maybe T` | Nothing to fill; existing rows get `Nothing` |
+| Add a required column | Add `field: T` | Pick the default option and give the value (or a row expression) |
+| Rename a column | Rename the field | Pick "Rename old to new"; a Contract follows |
+| Change a column's type | Change the type | A converter, a write-back for old writers and a reject policy |
+| Add validation (a proof) | Add `::: Fact field` | Pick "Revalidate using tryX"; choose what happens to failing rows |
+| Remove a column | Delete the field | A value old writers store while they still run (`Something Nothing` for a `Maybe` field); a Contract follows |
+| Add an index | Add `index [col]` to the entity | Nothing; the index builds concurrently while the app runs |
+| Add a unique index | Add `unique index [col]` | Older versions must be retired first (`close-epoch`); duplicates block the build. For zero refusals use staged uniqueness ([contracts guide](migration-contracts.md#promoting-staged-uniqueness)) |
+| Add a table | Add an `entity` | Nothing; the wizard records it as `New` |
+| Remove a table | Delete the `entity` | Only change in its revision; a Contract follows. Tables that were transformed or gained an index later cannot be dropped yet (MIG032) |
+| Split or compute a column | Change fields | One row mapping computed from the old row |
+
+To deploy, run the new binary once as a job before starting the new
+application services: `app --schema deploy --json` installs, converts and
+finishes in one go. For a rolling update with old and new versions serving
+together, start `app --schema worker --install` first, roll the application, and
+run `app --schema contract Vn` once the old version has stopped. The wizard's
+"Next steps" names the commands your revision needs. See
+[operations](migration-operations.md) for the database roles.
+
 ## Work through one revision
 
 1. Edit `schema/<family>/v-current.tesl` (add, rename or change fields) and save,
