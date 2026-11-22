@@ -183,5 +183,9 @@ test outcome:
   compilation rules, keyed by the digest of all their inputs; user rules, which
   include generators and any rule that runs a program, always execute.
 
+The verified-content export now runs in its own job beside the shards. The
+required gate still verifies the complete receipt union first, refuses unless the
+export job succeeded, and only then publishes `tesl-content-SHA`.
+
 The supported-major workflow cancels a superseded run of the same branch or pull
 request. Runs on `main` and scheduled runs are never cancelled.

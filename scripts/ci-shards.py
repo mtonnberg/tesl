@@ -152,10 +152,13 @@ def inventory(root):
     require(gate is not None, 'required authoritative aggregation job is missing')
     gate = gate.group(1)
     require(re.search(r'^    if: always\(\)\s*$', gate, re.M), 'authoritative aggregation must always run')
-    require(re.search(r'^    needs: \[shards\]\s*$', gate, re.M), 'authoritative aggregation must depend on every shard')
+    require(re.search(r'^    needs: \[shards, content\]\s*$', gate, re.M), 'authoritative aggregation must depend on every shard')
     require('python3 scripts/ci-shards.py verify --expected-revision "$GITHUB_SHA"' in gate and
             'CI_UPSTREAM_RESULT: ${{ needs.shards.result }}' in gate,
             'authoritative aggregation must verify source-bound receipts and upstream outcome')
+    require('CI_CONTENT_RESULT: ${{ needs.content.result }}' in gate and
+            'if [ "$CI_CONTENT_RESULT" != success ]; then' in gate,
+            'authoritative aggregation must require the verified content export')
     matrix_workflow(root)
     migration = migration_declarations((root / 'scripts/run-migration-tests.sh').read_text())
     require(len(set(migration)) == len(migration), 'duplicate declared migration phase')

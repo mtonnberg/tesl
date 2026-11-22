@@ -397,8 +397,16 @@ class ShardEvidence(unittest.TestCase):
 
     def test_gate_without_all_upstream_shards_refuses(self):
         path = self.root / '.github/workflows/ci.yml'
-        path.write_text(path.read_text().replace('    needs: [shards]', '    needs: []'))
-        with self.assertRaisesRegex(ci.EvidenceError, 'every shard'):
+        for needs in ('    needs: []', '    needs: [shards]', '    needs: [content]'):
+            with self.subTest(needs=needs):
+                path.write_text((ROOT / '.github/workflows/ci.yml').read_text().replace('    needs: [shards, content]', needs))
+                with self.assertRaisesRegex(ci.EvidenceError, 'every shard'):
+                    ci.inventory(self.root)
+
+    def test_gate_without_the_content_export_outcome_refuses(self):
+        path = self.root / '.github/workflows/ci.yml'
+        path.write_text(path.read_text().replace('if [ "$CI_CONTENT_RESULT" != success ]; then', 'if false; then'))
+        with self.assertRaisesRegex(ci.EvidenceError, 'content export'):
             ci.inventory(self.root)
 
     def test_supported_major_matrix_must_run_exactly_the_declared_lanes(self):

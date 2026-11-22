@@ -185,10 +185,75 @@ jobs:
             ${{ runner.temp }}/migration-evidence
           if-no-files-found: warn
 
+  # The verified-content export runs beside the shards. The gate publishes it
+  # only after the complete phase union has verified.
+  content:
+    name: Verified content export
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout the same revision
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Nix for verified content export
+        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
+        with:
+          extra-conf: |
+            experimental-features = nix-command flakes
+
+      - name: Restore the Nix store
+        uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7.0.2
+        with:
+          primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.nix', 'flake.lock', 'nix/**') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-
+          save: false
+
+      - name: Restore Go modules
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ~/go/pkg/mod
+          key: gomod-${{ runner.os }}-${{ hashFiles('runtime/go/go.sum') }}
+          restore-keys: gomod-${{ runner.os }}-
+
+      - name: Restore the Go build cache
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ~/.cache/go-build
+          key: gobuild-${{ runner.os }}-${{ hashFiles('flake.lock', 'nix/**', 'runtime/go/go.sum') }}
+          restore-keys: gobuild-${{ runner.os }}-
+
+      - name: Restore the Dune compilation cache
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ~/.cache/dune
+          key: dune-${{ runner.os }}-${{ hashFiles('flake.lock', 'nix/**') }}-${{ hashFiles('compiler/**/*.ml', 'compiler/**/*.mli', 'compiler/**/dune', 'compiler/dune-project') }}
+          restore-keys: dune-${{ runner.os }}-${{ hashFiles('flake.lock', 'nix/**') }}-
+
+      # Preserve the original export's executed proof/repair/example checks.
+      # It rebuilds only the compiler binary, not the full OCaml test suite.
+      - name: Export verified content from the checked revision
+        run: |
+          # Variables expand inside the Nix shell.
+          # shellcheck disable=SC2016
+          nix develop --command bash -c '
+            set -euo pipefail
+            go clean -testcache
+            python3 scripts/content.py export --out "$RUNNER_TEMP/tesl-content.json"
+          '
+
+      - name: Retain the unpublished content export
+        uses: actions/upload-artifact@v4
+        with:
+          name: tesl-content-candidate-${{ github.sha }}
+          path: ${{ runner.temp }}/tesl-content.json
+          if-no-files-found: error
+
   gate:
     name: Authoritative gate (./ci.sh)
     if: always()
-    needs: [shards]
+    needs: [shards, content]
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -211,22 +276,26 @@ jobs:
             --evidence "$RUNNER_TEMP/ci-evidence" --upstream-result "$CI_UPSTREAM_RESULT" \
             --output "$RUNNER_TEMP/ci-verified.json"
 
-      - name: Install Nix for verified content export
-        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
-        with:
-          extra-conf: |
-            experimental-features = nix-command flakes
+      - name: Require the verified content export
+        env:
+          CI_CONTENT_RESULT: ${{ needs.content.result }}
+        run: |
+          if [ "$CI_CONTENT_RESULT" != success ]; then
+            echo "::error::Verified content export did not succeed ($CI_CONTENT_RESULT)."
+            exit 1
+          fi
 
-      # Preserve the original export's executed proof/repair/example checks.
-      # It rebuilds only the compiler binary, not the full OCaml test suite.
-      - name: Export verified content from the checked revision
-        run: nix develop --command python3 scripts/content.py export --out "${{ runner.temp }}/tesl-content.json"
+      - name: Read the content export of the checked revision
+        uses: actions/download-artifact@v4
+        with:
+          name: tesl-content-candidate-${{ github.sha }}
+          path: ${{ runner.temp }}/content
 
       - name: Upload official content evidence
         uses: actions/upload-artifact@v4
         with:
           name: tesl-content-${{ github.sha }}
-          path: ${{ runner.temp }}/tesl-content.json
+          path: ${{ runner.temp }}/content/tesl-content.json
           if-no-files-found: error
 
       - name: Retain the verified phase-union receipt
