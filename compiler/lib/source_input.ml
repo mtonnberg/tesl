@@ -62,8 +62,9 @@ let with_overlays ~project_root inputs f =
   let seen = ref Names.empty in
   let files = List.fold_left (fun files (path, contents) ->
     if Filename.is_relative path || not (within root path) ||
-       not (Filename.check_suffix path ".tesl") || String.contains path '\000' then
-      invalid path "expected an absolute .tesl path inside the project";
+       not (Filename.check_suffix path ".tesl" || Filename.check_suffix path ".checkpoint") ||
+       String.contains path '\000' then
+      invalid path "expected an absolute .tesl or .checkpoint path inside the project";
     validate_file path;
     if proposed_path path <> path then invalid path "path must use its canonical spelling";
     (match Paths.find_opt path !pinned_files with

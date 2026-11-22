@@ -4,6 +4,7 @@ let to_json source =
  let quote=Migration_row_companion.quote in
  let array f xs="[" ^ String.concat "," (List.map f xs) ^ "]" in
  let program=P.source_program source in
+ P.unresumed program;
  let database (d:P.database) =
   let contracts=Option.value(List.assoc_opt d.identity (P.contracts program)) ~default:[] in
   let contract c =

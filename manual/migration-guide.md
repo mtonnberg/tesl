@@ -20,6 +20,7 @@ columns and tables are cleaned up by a separate, later step (the Contract).
 | `schema/<family>/vN.tesl` | Frozen copy of the schema at revision N | Generated, never edited |
 | `migrations/<family>/vN.tesl` | How rows move from revision N-1 to N | Generated, you fill the `todo` holes |
 | `migrations/<family>/vN-contract.tesl` | Cleanup of retired columns/tables after N | Generated, you review it |
+| `migrations/<family>/vN.checkpoint` | History state carried after revision N, so later builds need not re-derive V1..N; its hash is recorded in `vN.tesl` | Generated when N is frozen, never edited; commit it |
 
 The application imports entities from `Schema.<Family>.VCurrent`; its `database`
 declaration names `schema: Schema.<Family>.VCurrent` and
@@ -527,10 +528,32 @@ re-hash those files instead of re-checking the revision. A frozen revision is
 | both seals name the running stored-value contract | `MIG013`, as before: build with the compiler that sealed it |
 
 The current revision (the migration to `VCurrent`) is always checked completely,
-and so is any file you query directly. The history-wide checks (row generations,
-retained storage, Contracts, the expansion plan) and the older schema inventories
-the current revision needs are recomputed from the hash-verified files in every
-command. Trust removes only the repeated per-revision type and proof checks.
+and so is any file you query directly. Trust removes the repeated per-revision
+type and proof checks.
+
+**Checkpoints.** When `tesl migrate` freezes revision N it also writes
+`migrations/<family>/vN.checkpoint`. It holds what the history-wide checks carry
+from revision N to the next one: each entity's row generation, the retained
+PostgreSQL columns and indexes with their pending Contract, and the
+installation-origin refusal, plus the compiler ABI, the stored-value contract and
+the recorded root hash of every completed migration V2..N. Its SHA-256 is
+recorded in `vN.tesl` (`# tesl:frozen-checkpoint`), so an edited checkpoint
+byte fails with `MIG013` like any other frozen byte.
+
+`tesl migrate` previews and Contract checks continue from the newest checkpoint
+instead of re-deriving every revision, when:
+
+| Condition | If it fails |
+|---|---|
+| every completed revision is trusted (table above) | history is folded from V1, as before |
+| the checkpoint names the running compiler ABI and stored-value contract | it is ignored and history is folded from V1 |
+| its recorded migration hashes equal the files' recorded hashes | `MIG013`: restore the checkpoint written with this revision |
+
+Independently of checkpoints, a frozen schema snapshot covered by a trusted
+later revision is loaded only when a check needs it. Go emission still folds the complete history from V1 (the emitted program contains
+every revision). Histories that use table Drop, staged unique indexes, queue
+payload conversions or write-backs get no checkpoints and are always folded from
+V1; so are histories frozen before checkpoints existed.
 
 Upgrading the compiler changes its ABI. Revisions frozen by the older compiler are
 then checked completely by every build, as they were before seals were trusted;
@@ -542,7 +565,9 @@ is not caught by a normal build. To check every revision completely, set
 `TESL_FULL_HISTORY=1` or pass `--full-history` (for example
 `tesl --full-history --backend go app.tesl --out build`). Run that in CI on a
 schedule or before a release; when the history is intact its output is
-byte-for-byte the same as a normal build.
+byte-for-byte the same as a normal build. Full-history mode also recomputes every
+checkpoint written by the running compiler and refuses one that differs
+(`MIG013`), which catches a checkpoint edited together with its recorded hash.
 
 ## Choose the deployment route
 

@@ -89,7 +89,9 @@ let create ~project_root:root ~reads ~directories ~imports ~documents ~writes = 
     {source;name;source_path=resolve ~disk:false source name;disk_path=resolve ~disk:true source name}) in
   let writes = List.fold_left (fun map (path,source) ->
     canonical root path;
-    if not (Filename.check_suffix path ".tesl") then reject path "migration source edits must target .tesl files";
+    (* Generated revision checkpoints are written beside their migration root. *)
+    if not (Filename.check_suffix path ".tesl" || Filename.check_suffix path ".checkpoint") then
+      reject path "migration source edits must target .tesl files or generated .checkpoint files";
     if Paths.mem path map then reject path "duplicate output path";
     Paths.add path source map) Paths.empty writes in
   let overlay_root = Option.value (Source_input.project_root ()) ~default:root in

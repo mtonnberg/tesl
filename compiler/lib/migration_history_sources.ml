@@ -1,8 +1,13 @@
+(* [loaded] is forced at discovery unless the schema is covered by a trusted
+   seal of a later completed migration (Migration_trust): then the same compiler
+   already checked exactly these bytes, and only callers that need the
+   inventory pay for loading it. *)
 type schema = {
   version : int;
   root_file : string;
-  inventory : Migration_inventory.t;
+  loaded : Migration_inventory.t Lazy.t;
 }
+let inventory schema = Lazy.force schema.loaded
 
 type migration_source = {
   version : int;
@@ -181,9 +186,10 @@ let inspect ~stored_value_compatibility ~include_migrations ~compiler_abi ~proje
           end else reject ~kind:Invalid_source m.source_file
             ("schema import escapes its revision: " ^ imp.module_name)) m.imports
       end in
-    let load_schema version revision path =
+    let load_schema ?(defer=false) version revision path =
       let expected = family ^ "." ^ revision in
       visit_schema expected expected;
+      let load () =
       match Migration_inventory.load_with_compatibility ~stored_value_compatibility ~compiler_abi ~root_file:path with
       | Error error -> raise (Invalid {kind=Invalid_source; loc=error.loc; message=error.message})
       | Ok inventory ->
@@ -197,8 +203,18 @@ let inspect ~stored_value_compatibility ~include_migrations ~compiler_abi ~proje
         List.iter (fun (source, digest) ->
           if Hashtbl.find_opt sources source <> Some digest then
             reject ~kind:Changed_source source "schema source changed during history discovery") inputs;
-        {version; root_file=path; inventory} in
-    let frozen = List.map (fun (version, path) -> load_schema version ("V" ^ string_of_int version) path) snapshots in
+        inventory in
+      let loaded = if defer then lazy (try load () with Invalid error -> failwith error.message)
+        else Lazy.from_val (load ()) in
+      {version; root_file=path; loaded} in
+    let compiler = lazy (Migration_trust.current_compiler ()) in
+    let covered version =
+      (* V<n> is covered by the previous-schema seal of completed V<n+1>. *)
+      not (Migration_trust.full_history ()) && version+1 < current_version &&
+      let file = module_path (Printf.sprintf "%s.Migrate.V%d" family (version+1)) in
+      (try Migration_trust.edge ~project_root:root ~compiler:(Lazy.force compiler) ~file ~source:(Source_input.read file) <> None
+       with Sys_error _ | Unix.Unix_error _ -> false) in
+    let frozen = List.map (fun (version, path) -> load_schema ~defer:(covered version) version ("V" ^ string_of_int version) path) snapshots in
     let current = load_schema current_version "VCurrent" current_path in
     let migration_modules = Hashtbl.create 16 in
     let rec visit_migration name =
@@ -300,7 +316,7 @@ let inspect ~stored_value_compatibility ~include_migrations ~compiler_abi ~proje
       let result = compute () in
       (match result with
        | Ok history when stdlib_inputs () = Some stdlib ->
-         let size = String.length (Marshal.to_string (key,history) []) in
+         let size = String.length (Marshal.to_string (key,history) [Marshal.Closures]) in
          if size <= 256 * 1024 * 1024 then begin
            if Hashtbl.length cache.entries >= 16 || cache.weight + size > 256 * 1024 * 1024 then begin
              Hashtbl.clear cache.entries; Hashtbl.clear cache.verified; cache.weight <- 0
@@ -323,7 +339,7 @@ let adjacent_pair_with_compatibility ~stored_value_compatibility ~compiler_abi ~
   match inspect ~stored_value_compatibility ~include_migrations:false ~compiler_abi ~project_root ~family with
   | Error error -> Error error
   | Ok history ->
-    let root schema = Migration_inventory.root_module schema.inventory in
+    let root schema = Migration_inventory.root_module (inventory schema) in
     let find name = List.find_opt (fun schema -> root schema = name)
       (history.frozen @ [history.current]) in
     match find previous, find current with

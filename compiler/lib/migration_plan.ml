@@ -85,7 +85,7 @@ let generate ~project_root ~entry_file ~database ~initial_version ~documents = p
   let transforming=List.exists (fun edge -> Option.is_some (D.transforms edge)) edges in
   let steps,row_steps = if not transforming then
     checked (Migration_expansion.generate ~initial_version
-     ~schemas:(List.map (fun (s : H.schema) -> s.inventory) schemas) ~edges),None
+     ~schemas:(List.map H.inventory schemas) ~edges),None
    else begin
     if initial_version<>1 then reject connection.loc
       "retained-row previews require the complete V1 baseline; later installation/adoption is not authorized by a source preview";

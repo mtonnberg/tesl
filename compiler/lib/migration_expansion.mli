@@ -31,3 +31,14 @@ val step_to_json : ?include_catalog:bool -> quote:(string -> string) -> step -> 
 (** Validate a checked primitive default against its PostgreSQL carrier. *)
 val validate_assignment : Migration_storage.column -> Migration_canonical.node ->
   (unit, Migration_sparse.error list) result
+
+(** The refusal every origin receives when [edges] contain a queue conversion,
+    transform or reset (the earliest such edge decides it), or [None]. *)
+val refusal : edges:Migration_declaration.t list -> Migration_sparse.error list option
+(** Origins of a history whose checkpointed prefix through [through] already has
+    [refusal]: the continuation [schemas] = [V<through>; ...] and its [edges]
+    are checked for exact adjacency and every origin gets the same refusal.
+    [None] when the continuation is not an exact chain. *)
+val resumed_origins : refusal:Migration_sparse.error list -> through:int ->
+  schemas:Migration_inventory.t list -> edges:Migration_declaration.t list ->
+  (step list,Migration_sparse.error list) result list option

@@ -52,7 +52,7 @@ let apply_fixture (preview : G.preview) =
   (* Test materialization only; the production apply protocol remains separate. *)
   (match M.verify_disk preview.manifest with Ok () -> () | Error _ -> fail "stale test proposal");
   List.iter (fun (e : M.edit) -> write e.path e.after) (M.edits preview.manifest);
-  List.iter (fun (e : M.edit) -> checked e.path e.after) (M.edits preview.manifest)
+  List.iter (fun (e : M.edit) -> if Filename.check_suffix e.path ".tesl" then checked e.path e.after) (M.edits preview.manifest)
 let first () = with_project (fun root path ->
   let original = files root in
   let preview = get (start root 1) in
@@ -72,7 +72,7 @@ let next_revision () = with_project (fun root path ->
   apply_fixture (get (start root 1));
   let old = read (path "migrations/notes/v2.tesl") in
   let preview = get (start root 2) in
-  check int "next freeze includes previous migration edit" 4 (List.length (M.edits preview.manifest));
+  check int "next freeze includes previous migration edit and its checkpoint" 5 (List.length (M.edits preview.manifest));
   check string "previous migration unchanged until apply" old (read (path "migrations/notes/v2.tesl"));
   apply_fixture preview;
   let finalized = read (path "migrations/notes/v2.tesl") in
@@ -232,7 +232,7 @@ let compatible_upgrade () = with_project (fun root path ->
     let h = match Migration_history_sources.discover_with_compatibility
       ~stored_value_compatibility:(Some contract) ~compiler_abi:abi ~project_root:root ~family:"NotesSchema" with
       | Ok h -> h | Error e -> fail e.message in
-    let schemas = List.map (fun (s:Migration_history_sources.schema) -> s.inventory)
+    let schemas = List.map Migration_history_sources.inventory
       (Migration_history_sources.frozen h @ [Migration_history_sources.current h]) in
     let sources = Migration_history_sources.completed_migrations h @ Option.to_list (Migration_history_sources.current_migration h) in
     let edges = List.map (fun (s:Migration_history_sources.migration_source) ->

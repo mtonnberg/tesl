@@ -91,7 +91,7 @@ let current_compiler () =
 (* Self-contained decision for a saved completed migration file reached only as
    history (not the module being queried). Any failure means "not trusted"; the
    caller then runs the full check, which reports the precise diagnostic. *)
-let edge ~project_root ~compiler ~file ~source =
+let edge_uncached ~project_root ~compiler ~file ~source =
   if full_history () then None
   else match compiler with
   | None -> None
@@ -112,6 +112,23 @@ let edge ~project_root ~compiler ~file ~source =
          | _ -> None)
       | _ -> None
     with Sys_error _ | Unix.Unix_error _ | Invalid_argument _ | Failure _ | Not_found -> None
+
+(* One command asks about the same completed edge from discovery, the
+   checkpoint, the application check and the capture. A decision is reused only
+   under the identical source view (same overlays and pinned resources) in
+   which it re-hashed every recorded input; any other view decides again. *)
+let edge_memo : (string * string * string * (string * string) option,
+  Source_input.view_token * evidence option) Migration_analysis_cache.t =
+  Migration_analysis_cache.create ~limit:4096
+let edge ~project_root ~compiler ~file ~source =
+  if full_history () then None else
+  let key = project_root,file,Migration_hash.digest source,compiler in
+  let decide () = Source_input.view_token (),edge_uncached ~project_root ~compiler ~file ~source in
+  (* Trust re-hashes recorded bytes only; no proof scope shapes it. *)
+  let _,evidence = Migration_analysis_cache.find ~any_scope:true edge_memo ~key
+    ~guard:(fun (token,_) -> Source_input.same_view token) decide in
+  Option.iter (fun e -> trusted_log := e.root :: !trusted_log) evidence;
+  evidence
 
 (* [edge] for a parsed captured module, deriving the project root from its
    canonical versioned path. A completed migration root, or the Contract

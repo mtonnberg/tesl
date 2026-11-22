@@ -6,6 +6,7 @@ let version_node = Migration_retained_storage_canonical.version_node
 let to_json ~quote source =
  let array f xs = "[" ^ String.concat "," (List.map f xs) ^ "]" in
  let program=P.source_program source in
+ P.unresumed program;
  let database (database:P.database) =
   let history=List.assoc database.identity (P.row_histories source) in
   match R.plan history with
