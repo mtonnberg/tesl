@@ -2,7 +2,8 @@ module Paths = Map.Make (String)
 module Names = Set.Make (String)
 
 type view = { root : string; files : string Paths.t; directories : Names.t;
-              basenames : Names.t (* final components of every file and directory entry *) }
+              basenames : Names.t (* final components of every file and directory entry *);
+              children : Names.t Paths.t (* each directory's file and directory entries, by name *) }
 let active : view option ref = ref None
 let pinned_files : string Paths.t ref = ref Paths.empty
 let project_root () = Option.map (fun view -> view.root) !active
@@ -78,7 +79,13 @@ let with_overlays ~project_root inputs f =
   let basenames = Names.union
     (Paths.fold (fun path _ names -> Names.add (Filename.basename path) names) files Names.empty)
     (Names.map Filename.basename directories) in
-  let view = {root; files; directories; basenames} in
+  let children =
+    let add path children =
+      let parent = Filename.dirname path in
+      Paths.update parent (fun names ->
+        Some (Names.add (Filename.basename path) (Option.value ~default:Names.empty names))) children in
+    Names.fold add directories (Paths.fold (fun path _ children -> add path children) files Paths.empty) in
+  let view = {root; files; directories; basenames; children} in
   Query_cache.clear ();
   active := Some view;
   Fun.protect ~finally:(fun () -> active := previous; Query_cache.clear ()) f
@@ -150,10 +157,8 @@ let readdir path = match !active, find path with
       | _ -> Sys.readdir path
       | exception Unix.Unix_error (Unix.ENOENT, _, _) when Names.mem canonical view.directories -> [||] in
     let names = Array.fold_left (fun set name -> Names.add name set) Names.empty disk in
-    let add_child child names =
-      if Filename.dirname child = canonical then Names.add (Filename.basename child) names else names in
-    let names = Paths.fold (fun child _ names -> add_child child names) view.files names in
-    Names.fold add_child view.directories names |> Names.elements |> Array.of_list
+    Names.union names (Option.value ~default:Names.empty (Paths.find_opt canonical view.children))
+    |> Names.elements |> Array.of_list
 
 let with_pinned_files inputs f =
   let previous = !pinned_files and seen = ref Names.empty in
