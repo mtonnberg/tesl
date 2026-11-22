@@ -118,7 +118,7 @@ func TestMigrationWizardAdditivePlanUnchanged(t *testing.T) {
 		map[string]any{"kind": "add-column", "table": "notes", "column": map[string]any{"name": "memo"}},
 	}}}
 	output, err := runWizardRowPlan(t, plan)
-	if err != nil || !strings.Contains(output, `add-column "notes.memo"`) {
+	if err != nil || !strings.Contains(output, `add column "notes.memo"`) || strings.Contains(output, "close-epoch") || strings.Contains(output, "--schema contract") {
 		t.Fatalf("additive plan changed: %v\n%s", err, output)
 	}
 	if strings.Contains(output, "row-history") {
@@ -206,4 +206,73 @@ func TestMigrationWizardNativeRowHistoryPreview(t *testing.T) {
 			t.Fatalf("source-only preview changed %s: %v", path, err)
 		}
 	}
+}
+
+func TestMigrationWizardSummaryNamesRequiredFollowUps(t *testing.T) {
+	t.Run("transform without Contract source", func(t *testing.T) {
+		plan := wizardRowPlan()
+		step := plan["steps"].([]any)[1].(map[string]any)
+		delete(step, "contract")
+		delete(step, "requiresContractVersion")
+		output, err := runWizardRowPlan(t, plan)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, want := range []string{"Next steps for V2:", "tesl run app.tesl --schema contract V2", "required before the next transforming revision", "Skipped. Generate it later with: tesl migrate contract app.tesl --version 2"} {
+			if !strings.Contains(output, want) {
+				t.Errorf("missing %q in:\n%s", want, output)
+			}
+		}
+		if strings.Contains(output, "close-epoch") {
+			t.Errorf("V2 after V1 needs no epoch closure:\n%s", output)
+		}
+	})
+	t.Run("first transform after additive revisions", func(t *testing.T) {
+		plan := wizardRowPlan()
+		steps := plan["steps"].([]any)
+		transform := steps[1].(map[string]any)
+		transform["version"] = 3
+		delete(transform, "requiresContractVersion")
+		additive := map[string]any{"version": 2, "tables": []any{
+			map[string]any{"entity": "Note", "table": "notes", "generation": 1,
+				"indexes": []any{map[string]any{"name": "notes_title", "columns": []any{"title"}, "unique": false}}},
+			map[string]any{"entity": "Tag", "table": "tags", "generation": 1},
+		}}
+		plan["steps"] = []any{steps[0], additive, transform}
+		app, _ := fakeApp(t)
+		app.Execute = func(_ context.Context, inv Invocation) error { return json.NewEncoder(inv.Stdout).Encode(plan) }
+		err := app.migrationWizardPlan(context.Background(), migrationWizardOptions{entry: "app.tesl", database: "App.Main",
+			selection: migrationWizardSelection{Database: "App.Main", Family: "Schema.Notes"}}, 3)
+		output := app.Stdout.(*bytes.Buffer).String()
+		if err != nil {
+			t.Fatalf("%v\n%s", err, output)
+		}
+		for _, want := range []string{"close-epoch --through V2 --dry-run --json", "close-epoch --through V2 --json", "permanently retires V1;",
+			`stop using index "notes_title" on "notes" (title); a Contract removes it`, `stop using table "tags" (entity "Tag")`} {
+			if !strings.Contains(output, want) {
+				t.Errorf("missing %q in:\n%s", want, output)
+			}
+		}
+	})
+	t.Run("unique index with window risk", func(t *testing.T) {
+		plan := wizardRowPlan()
+		delete(plan, "planType")
+		risk := "unique keys can be written by an admitted schema"
+		plan["steps"] = []any{map[string]any{"version": 2, "epochPreserving": false, "operations": []any{
+			map[string]any{"kind": "build-index-concurrently", "table": "notes", "windowRisk": risk,
+				"index": map[string]any{"name": "notes_email", "columns": []any{"email"}, "unique": true}},
+			map[string]any{"kind": "create-table", "table": "tags"},
+		}}}
+		output, err := runWizardRowPlan(t, plan)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, want := range []string{`build unique index "notes_email" on "notes" (email) concurrently`, `create table "tags"`,
+			"window risk: " + risk, "Existing duplicate keys block the build", "no rows are discarded", "Promoting staged uniqueness",
+			"deploy it only after older application processes have stopped"} {
+			if !strings.Contains(output, want) {
+				t.Errorf("missing %q in:\n%s", want, output)
+			}
+		}
+	})
 }

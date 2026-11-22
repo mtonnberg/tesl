@@ -695,46 +695,7 @@ func (app *App) migrationWizardPlan(ctx context.Context, options migrationWizard
 		args = append(args, "--database", options.database)
 	}
 	err := child.compiler(ctx, append(args, "--", options.entry)...)
-	var plan struct {
-		Version          int
-		Kind             string
-		OK               bool
-		Database, Family string
-		Errors           []migrationWizardDiagnostic
-		PlanType         string
-		Executable       *bool
-		InitialVersion   int
-		Steps            []struct {
-			Version                 int
-			RequiresContractVersion *int
-			Tables                  []struct {
-				Entity, Table string
-				Generation    int
-			}
-			Transforms []struct {
-				Entity, Table, Mode                                   string
-				FromGeneration, ToGeneration, RequiresFinalGeneration int
-				Fields                                                []struct {
-					Target, Kind, TargetColumn             string
-					Source, SourceColumn, ProofEnforcement *string
-				}
-			}
-			CodecChanges []json.RawMessage
-			Contract     *struct {
-				SourceFile, SourceHash string
-				OperationCount         int
-			}
-			EpochPreserving bool
-			Operations      []struct {
-				Kind, Table string
-				Column      struct{ Name string }
-				Index       struct {
-					Name   string
-					Unique bool
-				}
-			}
-		}
-	}
+	var plan migrationPlanPreview
 	if decodeErr := json.Unmarshal(output.Bytes(), &plan); decodeErr != nil {
 		if err != nil {
 			return err
@@ -766,79 +727,5 @@ func (app *App) migrationWizardPlan(ctx context.Context, options migrationWizard
 			}
 		}
 	}
-	if _, err := fmt.Fprintf(app.Stdout, "Application checks passed. PostgreSQL plan for %s V%d:\n", plan.Database, current); err != nil {
-		return err
-	}
-	for _, step := range plan.Steps {
-		if step.Version != current {
-			continue
-		}
-		if plan.PlanType == "row-history" {
-			if step.RequiresContractVersion != nil {
-				if _, err := fmt.Fprintf(app.Stdout, "  Requires the prior Contract for V%d before this revision.\n", *step.RequiresContractVersion); err != nil {
-					return err
-				}
-			}
-			for _, table := range step.Tables {
-				if _, err := fmt.Fprintf(app.Stdout, "  entity %s: table %s, generation %d\n", strconv.Quote(table.Entity), strconv.Quote(table.Table), table.Generation); err != nil {
-					return err
-				}
-			}
-			for _, transform := range step.Transforms {
-				if _, err := fmt.Fprintf(app.Stdout, "  %s %s: generation %d -> %d; required final generation %d\n", transform.Mode, strconv.Quote(transform.Entity), transform.FromGeneration, transform.ToGeneration, transform.RequiresFinalGeneration); err != nil {
-					return err
-				}
-				for _, field := range transform.Fields {
-					source, storage := "<computed>", "<none>"
-					if field.Source != nil {
-						source = strconv.Quote(*field.Source)
-					}
-					if field.SourceColumn != nil {
-						storage = strconv.Quote(*field.SourceColumn)
-					}
-					if _, err := fmt.Fprintf(app.Stdout, "    %s %s -> %s; storage %s -> %s", field.Kind, source, strconv.Quote(field.Target), storage, strconv.Quote(field.TargetColumn)); err != nil {
-						return err
-					}
-					if field.ProofEnforcement != nil {
-						if _, err := fmt.Fprintf(app.Stdout, "; proof enforcement: %s", strconv.Quote(*field.ProofEnforcement)); err != nil {
-							return err
-						}
-					}
-					if _, err := fmt.Fprintln(app.Stdout); err != nil {
-						return err
-					}
-				}
-			}
-			if step.Contract != nil {
-				if _, err := fmt.Fprintf(app.Stdout, "  Checked Contract source: %s (%d operations)\n", strconv.Quote(step.Contract.SourceFile), step.Contract.OperationCount); err != nil {
-					return err
-				}
-			}
-			if len(step.CodecChanges) > 0 {
-				if _, err := fmt.Fprintf(app.Stdout, "  %d stored codec change reports; review the full migrate plan output.\n", len(step.CodecChanges)); err != nil {
-					return err
-				}
-			}
-			continue
-		}
-		for _, operation := range step.Operations {
-			object := operation.Table
-			if operation.Column.Name != "" {
-				object += "." + operation.Column.Name
-			}
-			if operation.Index.Name != "" {
-				object += "." + operation.Index.Name
-			}
-			if _, err := fmt.Fprintf(app.Stdout, "  %s %s\n", operation.Kind, strconv.Quote(object)); err != nil {
-				return err
-			}
-		}
-	}
-	if plan.PlanType == "row-history" {
-		if _, err := fmt.Fprintln(app.Stdout, "This is a source preview, not persisted finality or decoder-removal evidence."); err != nil {
-			return err
-		}
-	}
-	_, err = fmt.Fprintln(app.Stdout, "\nReview the migration and run your application tests, then build the release.\nFor Worker deployments, start the release with --schema worker and wait for\nschema-worker-ready before rolling out request processes. Use installer credentials\nwith --schema install when provisioning or explicitly upgrading control metadata.\nThis session prepared source files; it did not connect to PostgreSQL.")
-	return err
+	return app.migrationWizardSummary(ctx, options, plan, current)
 }

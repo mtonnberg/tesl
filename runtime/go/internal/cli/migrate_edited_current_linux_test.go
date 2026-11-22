@@ -81,7 +81,7 @@ func TestMigrationWizardStartsNextRevisionFromEditedCurrent(t *testing.T) {
 	}
 	migrationAssertStartedWithEdits(t, app)
 	output := app.Stdout.(*bytes.Buffer).String()
-	for _, want := range []string{"restored V2 source from the git index (SHA-256 verified)", "Reapplied your saved edits", "Application checks passed", "add-column"} {
+	for _, want := range []string{"restored V2 source from the git index (SHA-256 verified)", "Reapplied your saved edits", "Application checks passed", "add column"} {
 		if !strings.Contains(output, want) {
 			t.Errorf("missing %q in %s", want, output)
 		}

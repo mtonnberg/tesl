@@ -27,7 +27,12 @@ schema files to edit separately from the newly prepared history. After the user
 saves and presses Enter, it refreshes the migration. Generated decisions and
 other compiler diagnostics remain visible until the user resolves them. The final
 steps check the saved application and produce the read-only PostgreSQL plan.
-Deployment guidance is printed only after both succeed.
+Deployment guidance is printed only after both succeed. It is derived from the
+plan's current step: required prior Contract, additive-epoch closure (the first
+transforming row step after an additive one, or a non-epoch-preserving index
+step), index window risks, and the Contract this revision needs. When that
+Contract's source is missing, the wizard offers the ordinary guarded
+`migrate contract --version N` publication; EOF or `s` skips it.
 
 `tesl migrate app.tesl --resume` continues an existing **undeployed** revision.
 It can reenter the diagnostic loop when a saved edit does not parse or type-check.

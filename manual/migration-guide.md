@@ -32,7 +32,12 @@ application binary with separate Installer, Worker and Request database roles.
    `tesl migrate plan app.tesl`, add application and conversion fixtures covering
    real historical values, and run their tests. Generate the required cleanup
    proposal with `tesl migrate contract app.tesl --version N` and review it before
-   building the deployment artifact.
+   building the deployment artifact. The wizard's final summary lists the table,
+   column and index changes and the exact next steps derived from the plan: a
+   prior Contract that must have run, `--schema close-epoch` before the first
+   transforming revision or a unique index that older versions could violate, the
+   Worker-first deploy order, and the Contract to run after old processes stop.
+   When a Contract is required and its source is missing, it offers to write it.
 5. Choose the deployment route below. Source generation, compilation, a passing
    fixture and runtime readiness are separate checks. None substitutes for the
    others.
