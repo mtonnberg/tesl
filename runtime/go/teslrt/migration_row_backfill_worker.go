@@ -111,7 +111,10 @@ func pgRowBackfillBatch(ctx context.Context, conn *pgx.Conn, b *pgRowBaseline, p
 // can deadlock with it, and PostgreSQL may pick the batch as the victim.
 func pgRowRetryableBatchError(err error) bool {
 	var server *pgconn.PgError
-	return errors.As(err, &server) && (server.Code == "40001" || server.Code == "40P01")
+	if !errors.As(err, &server) || server == nil {
+		return false
+	}
+	return server.Code == "40001" || server.Code == "40P01"
 }
 
 func pgRowBackfillBatchAttempt(ctx context.Context, conn *pgx.Conn, b *pgRowBaseline, plan *pgRowPhysicalPlan, entity *pgRowPhysicalEntity, roles PgMigrationControlRoles, lease pgRowLeaseAdmission, skipRejected bool, size int) (pgRowBatchOutcome, error) {
