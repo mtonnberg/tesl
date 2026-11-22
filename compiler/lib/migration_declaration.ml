@@ -446,7 +446,8 @@ let check_prepared prepared =
   let transforms=match prepared.ptransforms with
     | None -> Ok None
     | Some transforms -> (match prepared.ptrust with
-      | Some evidence -> Ok (Some (T.trusted evidence transforms))
+      | Some evidence when T.deferred_errors transforms=[] -> Ok (Some (T.trusted evidence transforms))
+      | Some _ -> Result.map Option.some (T.check_prepared transforms)
       | None -> Result.map Option.some (T.check_prepared transforms)) in
   Result.map (fun transforms -> {coverage=prepared.pcoverage;additive=prepared.padditive;
     transforms;queue_transforms=prepared.pqueue_transforms;queue_removal=prepared.pqueue_removal;version=prepared.pversion;source_seals=prepared.pseals}) transforms))

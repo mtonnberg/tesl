@@ -21,7 +21,8 @@ type nominal_mapping = { mapping_row : row; mapping_previous : I.stored_field;
   mapping_current : I.stored_field; mapping_spec : nominal_mapping_spec;
   mapping_owner : module_form; mapping_context : Migration_proof_context.t }
 type prepared = { rules : R.t; rows : row list; source_inputs : (string * string) list;
-  sources : (module_form * string) list; root : module_form; context : Migration_proof_context.t; nominal_mappings : nominal_mapping list }
+  sources : (module_form * string) list; root : module_form; context : Migration_proof_context.t; nominal_mappings : nominal_mapping list;
+  deferred : S.error list }
 type t = Checked of prepared
 let rows (Checked t) = t.rows
 let rules (Checked t) = t.rules
@@ -434,6 +435,7 @@ let prepare ~project_root:_ ~source root rules ~functions ~fixtures =
         | _ -> false) mappings) then reject "MIG021" fixture.declaration.loc
         "fixtures must be parameterless functions returning an exact previous entity or Maybe of that entity in this transformation") fixture_functions;
     let used = Hashtbl.create 8 in
+    let deferred = ref [] in
     let accepted_rows=Hashtbl.create 8 in
     let rows = R.entities rules |> List.map (fun mapping ->
       let function_binding = match mapping.R.mode with
@@ -453,8 +455,11 @@ let prepare ~project_root:_ ~source root rules ~functions ~fixtures =
           | RetPlain r -> Option.is_some (fixture_type modules binding.owner mapping.previous.entity_name r.ty)
           | _ -> false) fixture_functions in
       List.iter (fun fixture -> Hashtbl.replace used fixture.identity ()) fixtures;
-      if mapping.mode=R.Migrate && fixtures=[] then reject "MIG003" mapping.previous.entity_loc
-        (Printf.sprintf "%s requires a representative fixture `fn old%s() -> %s`; add it to fixtures" mapping.identity mapping.identity mapping.previous.entity_name);
+      (* A missing fixture does not stop preparation: the row function is still
+         checked under this migration's Same and proof context, so the only
+         reported error is the missing fixture itself. check_prepared reports it. *)
+      if mapping.mode=R.Migrate && fixtures=[] then deferred := {S.code="MIG003";loc=mapping.previous.entity_loc;
+        message=Printf.sprintf "%s requires a representative fixture `fn old%s() -> %s`; add it to fixtures" mapping.identity mapping.identity mapping.previous.entity_name;related=[]} :: !deferred;
       let writebacks=List.map (bind_writeback modules root mapping.current.entity_name) mapping.writebacks in
       let legacies=List.map (bind_legacy modules root mapping.current.entity_name) mapping.legacies in
       let row_change=Option.fold ~none:false ~some:(fun binding->match binding.declaration.return_spec with
@@ -587,7 +592,7 @@ let prepare ~project_root:_ ~source root rules ~functions ~fixtures =
             (mapping_spec row.mapping previous current)
         | _ -> None) row.mapping.values) rows in
     validate ();
-    Ok {rules;rows;source_inputs;sources;root;context;nominal_mappings}
+    Ok {rules;rows;source_inputs;sources;root;context;nominal_mappings;deferred=List.rev !deferred}
   with Invalid errors -> Error errors
     | Sys_error message -> Error [{S.code="MIG010";loc=Location.dummy_loc root.source_file;message;related=[]}]
     | Unix.Unix_error (error,operation,file) -> Error [{S.code="MIG010";loc=Location.dummy_loc file;
@@ -607,15 +612,16 @@ let check_prepared prepared =
         if d.severity<>"error" then None else Some {S.code=d.code;
           loc=Location.make_loc d.file d.start_line d.start_col d.end_line d.end_col;
           message=d.message;related=[]})) prepared.sources) with
-  | Error errors -> Error errors
-  | Ok [] -> Ok (Checked prepared)
-  | Ok errors -> Error errors
+  | Error errors -> Error (prepared.deferred @ errors)
+  | Ok [] when prepared.deferred=[] -> Ok (Checked prepared)
+  | Ok errors -> Error (prepared.deferred @ errors)
 
 (* A completed step whose trust seal verified was fully checked when it was
    frozen by this same compiler over these exact bytes. Its row-function closure
    is not frontend-checked again; preparation (bindings, purity, proof sites and
    source capture) above still ran in this compilation. *)
 let trusted (_ : Migration_trust.evidence) prepared = Checked prepared
+let deferred_errors prepared = prepared.deferred
 
 let check ~project_root ~source root rules ~functions ~fixtures =
   Result.bind (prepare ~project_root ~source root rules ~functions ~fixtures) check_prepared
