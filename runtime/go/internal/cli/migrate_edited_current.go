@@ -127,7 +127,7 @@ func (app *App) migrationRecordedBytes(ctx context.Context, path, digest string)
 }
 
 func migrationReadOptional(path string) ([]byte, bool, error) {
-	contents, err := os.ReadFile(path)
+	contents, err := os.ReadFile(path) // #nosec G304 -- a schema source the compiler named for this project's latest revision.
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, true, nil
 	}
@@ -155,18 +155,15 @@ func migrationReplaceIfUnchanged(path string, expected []byte, expectedMissing b
 		return err
 	}
 	name := temporary.Name()
-	defer os.Remove(name)
+	defer func() { _ = os.Remove(name) }() // Already renamed on success.
 	if _, err := temporary.Write(contents); err != nil {
-		temporary.Close()
-		return err
+		return errors.Join(err, temporary.Close())
 	}
 	if err := temporary.Chmod(mode); err != nil {
-		temporary.Close()
-		return err
+		return errors.Join(err, temporary.Close())
 	}
 	if err := temporary.Sync(); err != nil {
-		temporary.Close()
-		return err
+		return errors.Join(err, temporary.Close())
 	}
 	if err := temporary.Close(); err != nil {
 		return err
@@ -178,17 +175,15 @@ func migrationWriteBackup(path string, contents []byte) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600) // #nosec G304 -- a new backup file under the project's .tesl-stuff/migrate-edits directory.
 	if err != nil {
 		return err
 	}
 	if _, err := file.Write(contents); err != nil {
-		file.Close()
-		return err
+		return errors.Join(err, file.Close())
 	}
 	if err := file.Sync(); err != nil {
-		file.Close()
-		return err
+		return errors.Join(err, file.Close())
 	}
 	return file.Close()
 }
