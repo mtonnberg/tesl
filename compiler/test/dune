@@ -790,3 +790,8 @@
  (name test_migration_choice)
  (modules test_migration_choice)
  (libraries tesl_compiler_lib alcotest str unix yojson))
+
+(test
+ (name test_migration_history_cache)
+ (modules test_migration_history_cache)
+ (libraries tesl_compiler_lib alcotest str unix))
