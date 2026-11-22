@@ -18050,7 +18050,7 @@ let compiled_row_artifacts ~entry ~modules:_ ~exports source =
  let project_path="tesl.generated/" ^ package_name entry.module_name in
  let loc=Location.dummy_loc entry.source_file in
  let require = function Some value -> value | None -> unsupported loc "row companion is missing an exact emitted declaration" in
- let owner name= require (List.find_opt (fun e -> e.ex_module=emitted_owner (Some graph) name) exports) in
+ let owner name= let emitted=emitted_owner (Some graph) name in require (List.find_opt (fun e -> e.ex_module=emitted) exports) in
  let split name=match List.rev (String.split_on_char '.' name) with
   | short::rest -> String.concat "." (List.rev rest),short | _ -> assert false in
  let entity (e:RH.entity)=
