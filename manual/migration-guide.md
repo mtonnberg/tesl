@@ -6,8 +6,15 @@ application binary with separate Installer, Worker and Request database roles.
 
 ## Work through one revision
 
-1. Run `tesl migrate app.tesl` in an interactive terminal. It freezes the previous
-   current schema before asking you to edit the new `v-current.tesl`. Use
+1. Edit `schema/<family>/v-current.tesl` (add, rename or change fields) and save,
+   then run `tesl migrate app.tesl` in an interactive terminal. When your saved
+   edits are newer than the latest revision, the wizard asks once: press Enter to
+   start the next revision with them. It backs your edited files up under
+   `.tesl-stuff/migrate-edits/`, restores the exact source the latest revision
+   recorded (taken from git and checked against the recorded SHA-256), freezes it
+   as before, starts the new revision and puts your edits back. Press `r` instead
+   only when the latest revision is an undeployed draft you meant to change. You
+   can also run the wizard first and edit when it asks. Use
    `tesl migrate app.tesl --resume` to continue an existing undeployed revision.
 2. Save the current schema changes. Refresh produces the compiler's proposed
    migration, preserving user-owned conversion code. Read the overview and work
@@ -38,6 +45,14 @@ tesl migrate generate app.tesl
 tesl agent-context app.tesl
 tesl migrate plan app.tesl
 ```
+
+`tesl migrate generate app.tesl --new-revision` handles already-saved schema edits
+the same way without asking: it starts the next revision, reapplies the edits,
+lists them in `editsReapplied` and reports progress on stderr. Run
+`tesl migrate generate app.tesl` afterwards to refresh the new revision with them.
+Both paths refuse without changing files when the recorded source cannot be found
+in git; then copy your edited schema aside, restore the recorded file, start the
+revision and reapply the edits by hand.
 
 `--manifest-json` is a non-mutating guarded source preview. The guided writer
 requires an interactive terminal and its supported filesystem protections;
@@ -92,10 +107,11 @@ completed with an older extension can still have this marker: continue once and
 choose **Finish and close**, or use **Start a new migration instead** on the welcome
 page. Closing unfinished work retains its draft marker. A draft
 prepared elsewhere can be selected through **Already have a draft?**. If schema
-edits were made before Start, preparation refuses rather than silently changing
-the old revision: keep your intended edits separately, restore the old source,
-then Start and reapply them. Continue the old revision only if that was explicitly
-your intended undeployed draft.
+edits were made before Start, the editor preparation refuses rather than silently
+changing the old revision. Run `tesl migrate app.tesl` in a terminal to keep those
+edits as the next revision automatically (see above), or keep them separately,
+restore the old source, then Start and reapply them. Continue the old revision only
+if that was explicitly your intended undeployed draft.
 
 Application discovery uses `[project].entrypoint` in the nearest `tesl.toml`.
 Opening the whole repository and starting from
@@ -417,9 +433,12 @@ be checked, and keep other writers away from Tesl-owned tables.
 
 ## Current schema edits and recorded hashes
 
-After editing `v-current.tesl`, `MIG001` can mean the pending migration has not yet
-been refreshed to describe those saved changes. That is an expected incomplete
-authoring state: save, refresh the migration, resolve its decisions and recheck.
+After editing `v-current.tesl`, `MIG001` means the latest migration does not yet
+describe those saved changes. It is reported once per changed file. That is an
+expected incomplete authoring state. Run `tesl migrate app.tesl`: it starts the
+next revision with your edits. If the latest revision is an undeployed draft you
+meant to change, run `tesl migrate app.tesl --resume` to refresh it instead. Then
+resolve its decisions and recheck.
 The editor's draft guidance does not make the program deployable; the compiler
 still rejects an inconsistent current schema or unresolved migration.
 

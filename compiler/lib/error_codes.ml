@@ -181,9 +181,11 @@ let registry : entry list = [
       "The migration header records the complete target schema source closure. \
        VCurrent or one of its private dependencies has changed. A byte mismatch \
        is expected while editing an undeployed migration, but builds remain \
-       blocked until its checked preview is refreshed. Refresh the revision if \
-       it has not been deployed, or restore the deployed source and start the \
-       next forward revision. The compiler cannot determine deployment state. \
+       blocked until the edits belong to a revision. The normal path is \
+       `tesl migrate <entry.tesl>`: it saves your edits, starts the next revision \
+       from the recorded source and reapplies them. Use `--resume` only to fold \
+       the edits into an undeployed draft revision. The compiler cannot \
+       determine deployment state. \
        Missing files or invalid paths still require correction; do not dismiss \
        frozen-source or history-metadata changes as draft edits.";
     manual = Some "migration-guide#current-schema-edits-and-recorded-hashes" };

@@ -7,6 +7,20 @@ open Ast
 (* Share the complete frontend judgment with migration inventories. *)
 include Frontend_check
 
+(* An edited current schema is reported by every module that verifies the seal
+   (the entry, the migration and its Contract companions). Keep one diagnostic
+   per changed file: the cause and the remedy are the same for all of them. *)
+let collapse_changed_current (diagnostics : diagnostic list) =
+  let cause (d : diagnostic) =
+    if d.code <> "MIG001" then None
+    else List.find_opt (fun line -> String.starts_with ~prefix:"snapshot source differs from its recorded bytes:" line)
+        (String.split_on_char '\n' d.message) in
+  let seen = Hashtbl.create 4 in
+  List.filter (fun d -> match cause d with
+    | None -> true
+    | Some key when Hashtbl.mem seen key -> false
+    | Some key -> Hashtbl.add seen key (); true) diagnostics
+
 let check_module ?skip_dep_body source m =
   Migration_program.with_compilation_cache (fun () ->
   match Migration_application.with_contexts ~source m (fun () ->
@@ -19,6 +33,7 @@ let check_module ?skip_dep_body source m =
   | Error errors -> Migration_declaration.diagnostics_of_errors errors @
        Migration_proof_context.without_context (fun () -> Frontend_check.check_module ?skip_dep_body source m))
   |> Migration_source_diagnostics.explain_holes ~source m
+  |> collapse_changed_current
 
 
 let source_parse_diagnostics filename source error =

@@ -96,6 +96,9 @@ type migrationWizardDiagnostic struct {
 	Message   string                  `json:"message"`
 	Start     struct{ Line, Col int } `json:"start"`
 	Line, Col int
+	// Present only on a refusal for an edited current schema.
+	Action       string                 `json:"action"`
+	StaleCurrent *migrationStaleCurrent `json:"staleCurrent"`
 }
 
 type migrationWizardReport struct {
@@ -159,6 +162,11 @@ func (app *App) migrationWizardGenerate(ctx context.Context, options migrationWi
 		return report, fmt.Errorf("invalid migration source application response: %w", decodeErr)
 	}
 	if err != nil {
+		if report.Version == 1 && report.Kind == "migration-source-preview" && !report.OK && start {
+			if edited := migrationEditedCurrent(report.Errors); edited != nil {
+				return report, edited
+			}
+		}
 		if displayErr := app.migrationWizardDiagnostics(report.Errors); displayErr != nil {
 			return report, displayErr
 		}
@@ -502,9 +510,31 @@ func (app *App) migrationWizard(ctx context.Context, args []string) error {
 		return err
 	}
 	var report migrationWizardReport
+	var reapplied []string
+	folded := false
 	for {
 		report, err = app.migrationWizardGenerate(ctx, options, !options.resume)
 		if err == nil {
+			break
+		}
+		var edited *migrationEditedCurrentError
+		if errors.As(err, &edited) {
+			choice, err := app.migrationWizardEditedChoice(ctx, edited)
+			if err != nil || choice == "q" {
+				return err
+			}
+			if choice == "r" {
+				options.resume, folded = true, true
+				continue
+			}
+			reapplied, err = app.migrationStartFromEditedCurrent(ctx, edited, app.Stdout, func() error {
+				var startErr error
+				report, startErr = app.migrationWizardGenerate(ctx, options, true)
+				return startErr
+			})
+			if err != nil {
+				return err
+			}
 			break
 		}
 		var diagnostic *migrationWizardDiagnosticError
@@ -541,19 +571,32 @@ func (app *App) migrationWizard(ctx context.Context, args []string) error {
 	if options.resume && !report.Compilable {
 		prompt = "Resolve the diagnostics in your schema or current migration, then save"
 	}
+	refreshNow := len(reapplied) > 0 || folded
+	if len(reapplied) > 0 {
+		if _, err := fmt.Fprintf(app.Stdout, "Reapplied your saved edits to the current schema; reviewing them as V%d now.\n", report.Selection.RevisionAfter); err != nil {
+			return err
+		}
+	} else if folded {
+		if _, err := fmt.Fprintf(app.Stdout, "Reviewing your saved edits as part of V%d now.\n", report.Selection.RevisionAfter); err != nil {
+			return err
+		}
+	}
 	for {
-		if !report.Compilable && len(report.Decisions) > 0 && report.preview == nil {
-			// Publication invalidates its own preconditions. Choices must be bound
-			// to a new read-only preview over the saved files now on disk.
-			report, err = app.migrationWizardPreview(ctx, options)
-			if err != nil {
+		if !refreshNow {
+			if !report.Compilable && len(report.Decisions) > 0 && report.preview == nil {
+				// Publication invalidates its own preconditions. Choices must be bound
+				// to a new read-only preview over the saved files now on disk.
+				report, err = app.migrationWizardPreview(ctx, options)
+				if err != nil {
+					return err
+				}
+			}
+			proceed, err := app.migrationWizardReview(ctx, report, prompt)
+			if err != nil || !proceed {
 				return err
 			}
 		}
-		proceed, err := app.migrationWizardReview(ctx, report, prompt)
-		if err != nil || !proceed {
-			return err
-		}
+		refreshNow = false
 		report, err = app.migrationWizardGenerate(ctx, options, false)
 		if err != nil {
 			var diagnostic *migrationWizardDiagnosticError
@@ -586,6 +629,43 @@ func (app *App) migrationWizard(ctx context.Context, args []string) error {
 			continue
 		}
 		return app.migrationWizardPlan(ctx, options, report.Selection.RevisionAfter)
+	}
+}
+
+// An edited current schema on top of the latest revision usually means the user
+// started the next change before running the wizard. Starting the next revision
+// keeps the recorded revision intact; folding the edits into it is only correct
+// for an undeployed draft, which the compiler cannot detect.
+func (app *App) migrationWizardEditedChoice(ctx context.Context, edited *migrationEditedCurrentError) (string, error) {
+	previous, next := edited.stale.Revision, edited.stale.Revision+1
+	if _, err := fmt.Fprintf(app.Stdout, "The current schema has saved edits that revision V%d does not include:\n", previous); err != nil {
+		return "", err
+	}
+	for _, source := range edited.stale.Sources {
+		if _, err := fmt.Fprintf(app.Stdout, "  %s\n", strconv.Quote(source.File)); err != nil {
+			return "", err
+		}
+	}
+	if _, err := fmt.Fprintf(app.Stdout, "  Enter  start V%d with these edits (V%d stays exactly as recorded; use this if V%d is finished or deployed)\n  r      fold the edits into V%d instead (only for an undeployed draft; same as --resume)\n  q      stop without changing files\n", next, previous, previous, previous); err != nil {
+		return "", err
+	}
+	for {
+		if _, err := fmt.Fprint(app.Stdout, "Choose [Enter/r/q]: "); err != nil {
+			return "", err
+		}
+		line, err := migrationReadLine(ctx, app.Stdin)
+		if err != nil {
+			return "", fmt.Errorf("guided migration stopped before changing files: %w", err)
+		}
+		switch strings.ToLower(strings.TrimSpace(line)) {
+		case "":
+			return "start", nil
+		case "r":
+			return "r", nil
+		case "q":
+			_, err := fmt.Fprintln(app.Stdout, "Stopped. No files were changed.")
+			return "q", err
+		}
 	}
 }
 

@@ -99,12 +99,12 @@ let draft_byte_guidance () = with_project (fun root path file source ->
       let error = match List.find_opt (fun (e : Migration_sparse.error) -> e.code=code) errors with
         | Some error -> error | None -> fail (show errors) in
       check bool "only a current byte mismatch gets draft guidance" draft
-        (Compile.string_contains error.message "expected while preparing an undeployed migration");
+        (Compile.string_contains error.message "To keep these edits as the next revision, run `tesl migrate");
       if draft then begin
         check bool "draft guidance retains deployment caution" true
-          (Compile.string_contains error.message "If this revision has been deployed, restore the deployed source");
-        check bool "draft guidance retains executable precondition" true
-          (Compile.string_contains error.message "before building or running")
+          (Compile.string_contains error.message "The compiler cannot tell whether V2 has been deployed");
+        check bool "draft guidance names the draft route" true
+          (Compile.string_contains error.message "--resume` to refresh V2 instead")
       end in
   let current = path "schema/notes/v-current/notes.tesl" in
   let saved = read current in

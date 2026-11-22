@@ -92,6 +92,34 @@ let replace ~file ~source header =
   | Ok (Some previous) -> Ok (String.sub source 0 previous.start_offset ^ encoded ^
       String.sub source previous.end_offset (String.length source - previous.end_offset))
 
+let changed_current_prefix = "current schema source changed since revision V"
+let changed_current_instruction target = Printf.sprintf
+  "%s%d was generated. To keep these edits as the next revision, run `tesl migrate <entry.tesl>`: it saves your edits, starts V%d from the recorded V%d source and reapplies them. Only if V%d is an undeployed draft you meant to change, run `tesl migrate <entry.tesl> --resume` to refresh V%d instead. The compiler cannot tell whether V%d has been deployed"
+  changed_current_prefix target (target + 1) target target target target
+
+(* Read-only: the current-target sources whose saved bytes no longer match the
+   seal. Used only to describe a refusal; the seal is still verified by every
+   later operation. *)
+let changed_current_sources ~file =
+  match Source_input.read file with
+  | exception _ -> None
+  | source -> match read ~file source with
+    | Ok (Some located) ->
+      (match protect (fun () -> validate located.loc located.header) with
+       | Error _ -> None
+       | Ok (family,target) when String.ends_with ~suffix:".VCurrent" (S.root_module located.header.current) ->
+         let project_root = Filename.dirname (Filename.dirname (Filename.dirname file)) in
+         let changed = List.filter_map (fun (name,digest) ->
+           match Validation_common.schema_module_relative_path name with
+           | None -> None
+           | Some relative ->
+             let path = Filename.concat project_root relative in
+             let actual = try Some (Migration_hash.digest (Source_input.read path)) with _ -> None in
+             if actual = Some digest then None else Some (name,path,digest)) (S.sources located.header.current) in
+         if changed = [] then None else Some (family,target,changed)
+       | Ok _ -> None)
+    | _ -> None
+
 let verify_unchanged checked = protect (fun () ->
   List.iter (fun (role,seal) ->
     match S.verify_sources ~project_root:checked.project_root seal with
@@ -104,7 +132,8 @@ let verify_unchanged checked = protect (fun () ->
       let code = if current && changed_input then "MIG001" else "MIG013" in
       let instruction = match code,error.S.kind with
         | "MIG001",S.Changed_source ->
-          "current schema source changed since migration generation (expected while preparing an undeployed migration); refresh this revision before building or running. If this revision has been deployed, restore the deployed source and start the next forward revision. The compiler cannot determine deployment state"
+          let _,target = validate checked.located.loc checked.located.header in
+          changed_current_instruction target
         | "MIG001",_ -> "schema changed since this migration was generated; refresh this revision if it is undeployed, or start the next revision from the deployed source"
         | _,_ -> "recorded frozen schema source or history metadata changed; restore the recorded source and make a forward revision" in
       reject ~code ~related:[error.loc, role ^ " schema source"] checked.located.loc

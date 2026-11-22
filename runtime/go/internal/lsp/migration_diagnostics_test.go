@@ -437,7 +437,7 @@ func TestFrozenSourceDiagnosticsThroughRealCompilerAndRetainedLSP(t *testing.T) 
 }
 
 func TestCurrentDraftHashMismatchIsWarningOnlyInEditor(t *testing.T) {
-	prefix := "current schema source changed since migration generation (expected while preparing an undeployed migration); refresh this revision before building or running. If this revision has been deployed, restore the deployed source and start the next forward revision. The compiler cannot determine deployment state"
+	prefix := "current schema source changed since revision V2 was generated. To keep these edits as the next revision, run `tesl migrate <entry.tesl>`: it saves your edits, starts V3 from the recorded V2 source and reapplies them"
 	for _, item := range []struct {
 		name, code, message string
 		severity            int
