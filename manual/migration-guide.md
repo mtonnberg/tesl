@@ -23,6 +23,10 @@ application binary with separate Installer, Worker and Request database roles.
    advances, and Enter refreshes and rechecks saved changes. Save editor buffers
    before using the CLI: its choices update saved files.
 3. Fill the typed holes with the business decisions the compiler cannot infer.
+   Each hole is a `todo "..."` that names what to choose; a rejected-row policy is
+   generated as `Reject (todo "Reason to reject ...")`, so replacing the text gives
+   a reason and replacing the whole `Reject` chooses another policy. Generated
+   files keep one import per module and pass `tesl fmt --check` and `--lint`.
    A rename can copy the exact old field; a new default needs a value you choose;
    a changed representation needs a converter; a changed proof may also need a
    reverse converter so old code can keep writing during overlap. Suggested

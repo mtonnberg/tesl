@@ -78,7 +78,7 @@ let options ?(on_unsupported=fun _->()) ~file ~source ~before ~after ~identity ~
           "# Nothing refuses every write from old binaries during the overlap.\n" in
       let body=if optional then "Something Nothing" else
         V.todo ("Return Something with the historical value and proof for removed field " ^ identity ^ "." ^ f.name ^ ", or Nothing to refuse writes until retirement") in
-      helpers:= !helpers @ [comment ^ "fn " ^ function_ ^ "(current: " ^ current.entity_name ^ ") -> " ^ V.result c spec false ^ " =\n  " ^
+      helpers:= !helpers @ [comment ^ "fn " ^ function_ ^ (if optional then "(_current: " else "(current: ") ^ current.entity_name ^ ") -> " ^ V.result c spec false ^ " =\n  " ^
         body ^ "\n"]
    end)removed;
    let entries=List.mapi(fun index(f:field_def)->

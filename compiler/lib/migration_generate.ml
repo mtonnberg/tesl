@@ -229,7 +229,11 @@ let decision_body before after identity (errors : E.error list) =
   let descriptions=(if added=[]then[]else["Choose values for new fields " ^ names added]) @
     (if removed=[]then[]else["Choose an explicit rename or old-writer values for removed fields " ^ names removed]) @
     List.map(fun(p,s)->
-      if p.I.proof_identity<>None || s.I.proof_identity<>None then "stored proof contract changed for " ^ identity ^ "." ^ s.stored_field.name
+      if p.I.proof_identity=None && s.I.proof_identity<>None then
+        "a first proof was added to " ^ identity ^ "." ^ s.stored_field.name ^ "; choose how existing rows are checked and what happens to rows that fail"
+      else if p.I.proof_identity<>None && s.I.proof_identity=None then
+        "the proof on " ^ identity ^ "." ^ s.stored_field.name ^ " was removed; choose what old binaries receive for values the old proof would reject"
+      else if p.I.proof_identity<>None || s.I.proof_identity<>None then "stored proof contract changed for " ^ identity ^ "." ^ s.stored_field.name
       else "Map the changed type or codec of " ^ identity ^ "." ^ s.stored_field.name)changed in
   let reason=if descriptions=[]then String.concat "; "(List.map(fun(e:E.error)->e.message)errors)
     else String.concat ". " descriptions ^ "."in
@@ -484,7 +488,11 @@ and append_plan file chosen (plan:Migration_scaffold.t) =
        (match Migration_form.application declaration.declaration.value with
         | "Migration",[record]->
           let range=source_result file(Syntax.collection_range view record)in
-          range.start_byte+1,"fixtures: [" ^ plan.fixture ^ "], "
+          (* A multiline record keeps one field per line, as the formatter does. *)
+          let multiline=range.start_byte+1<String.length chosen && (chosen.[range.start_byte+1]='\n' || chosen.[range.start_byte+1]='\r') in
+          range.start_byte+1,
+          if multiline then Migration_source.source_fragment ~source:chosen ("\n  fixtures: [" ^ plan.fixture ^ "]")
+          else "fixtures: [" ^ plan.fixture ^ "], "
         | _->reject file "migration declaration changed before fixture insertion")in
     source_result file(Syntax.replace view [({Syntax.start_byte=point;end_byte=point},addition)])end in
     let view,_=syntax file chosen in
@@ -497,28 +505,85 @@ and append_plan file chosen (plan:Migration_scaffold.t) =
          match List.find_opt(fun(m,t,_)->m=home && t=base)Type_system.stdlib_import_ctor_groups with
         | Some(_,_,ctors)->base::ctors | None->[name;base]
       else [name]in
-    let imports=List.filter_map(fun text->
+    (* Collect the names each scaffold import adds, merged per module. *)
+    let additions=ref [] in
+    List.iter(fun text->
       let imported=match Parser.parse_module file("module " ^ form.module_name ^ " exposing []\n" ^ text ^ "\n")with
        | Ok m->List.hd m.imports|Err _->reject file "compiler scaffold import is malformed"in
       match imported.names with
       | Ast.ImportAll->
-        if List.exists(fun(i:Ast.import_decl)->i.module_name=imported.module_name && i.names=Ast.ImportAll)!available
-        then None else(available:=imported::!available;Some text)
+        if not(List.exists(fun(i:Ast.import_decl)->i.module_name=imported.module_name && i.names=Ast.ImportAll)!available)then begin
+          available:=imported::!available;additions:= !additions @ [imported.module_name,None]end
       | Ast.ImportExposing needed->
         let actual=List.concat_map(fun(i:Ast.import_decl)->if i.module_name<>imported.module_name then []else
           match i.names with Ast.ImportAll->[]|Ast.ImportExposing names->List.concat_map(exposed i.module_name)names)!available in
         let missing=List.concat_map(exposed imported.module_name)needed |> List.filter(fun n->not(List.mem n actual)) |> List.sort_uniq compare in
-        if missing=[]then None else begin
+        if missing<>[]then begin
           available:={imported with names=Ast.ImportExposing missing}::!available;
-          Some("import " ^ imported.module_name ^ " exposing [" ^ String.concat ", " missing ^ "]")
-        end)plan.imports in
-    let first=match form.decls with d::_->(Ast.top_decl_loc d).start.line|[]->reject file "migration declaration disappeared"in
+          additions:=(match List.assoc_opt imported.module_name !additions with
+            | Some(Some names)->List.map(fun(m,n)->if m=imported.module_name then m,Some(List.sort_uniq compare(names @ missing))else m,n)!additions
+            | _-> !additions @ [imported.module_name,Some missing])
+        end)plan.imports;
+    let helpers=let rec trim s=if String.ends_with ~suffix:"\n" s then trim(String.sub s 0(String.length s-1))else s in
+      (* Generated helper text joins optional sections; keep one blank line
+         between declarations. Generated strings escape their newlines. *)
+      let collapsed=Str.global_replace(Str.regexp "\n\n\n+")"\n\n"plan.helpers in
+      let rec lead s=if String.starts_with ~prefix:"\n" s then lead(String.sub s 1(String.length s-1))else s in
+      trim(lead collapsed) in
     let lines=String.split_on_char '\n' chosen in
-    let rec line_offset n=function _ when n=0->0|line::rest->String.length line+1+line_offset(n-1)rest|[]->reject file "scaffold import point is outside source"in
-    let point=line_offset first lines in
-    let chosen=if imports=[]then chosen else source_result file(Syntax.replace view
-      [({Syntax.start_byte=point;end_byte=point},Migration_source.source_fragment ~source:chosen(String.concat "\n" imports ^ "\n\n"))])in
-    let complete=chosen ^ Migration_source.source_fragment ~source:chosen("\n" ^ plan.helpers)in
+    let import_lines=List.map(fun(i:Ast.import_decl)->i.loc.start.line)form.imports in
+    (* A scaffold names every import its templates might use; keep only names the
+       resulting source references, so a plain rename does not add unused imports.
+       Names a placeholder suggests (`Reject`, `Something`) stay importable for the
+       value the user writes in its place. *)
+    let text=List.filteri(fun index _->not(List.mem index import_lines))lines |> String.concat "\n" |>
+      fun body->body ^ "\n" ^ helpers ^ "\n" ^ plan.replacement in
+    let suggested=["Reject";"Row";"KeepRow";"DeleteRow";"RejectRow";"Something";"Nothing"] in
+    let words=
+      let tokens=try Lexer.tokenize file text with _->[] in
+      List.concat_map(fun(t:Lexer.full_token)->match t.tok with
+        | Token.STRING text->List.filter(fun w->List.mem w suggested)(Str.split(Str.regexp "[^A-Za-z0-9_]+")text)
+        | tok->[Format.asprintf "%a" Token.pp tok])tokens in
+    let used name=List.mem name words || (String.contains name '.' && Compile.string_contains text name) in
+    let additions=List.filter_map(fun(m,names)->match names with
+      | None->Some(m,None)
+      | Some names->(match List.filter used names with []->None|kept->Some(m,Some kept)))!additions in
+    let crlf line=if String.ends_with ~suffix:"\r" line then "\r" else "" in
+    (* Render each written import exactly as the formatter would (long exposing
+       lists wrap one name per line), so generated source is formatter-clean. *)
+    let render text=
+      let header="module " ^ form.module_name ^ " exposing []\n" in
+      match (try Some(Formatter.format_source(header ^ text ^ "\n"))with _->None)with
+      | Some formatted when String.starts_with ~prefix:header formatted->
+        let body=String.sub formatted(String.length header)(String.length formatted-String.length header)in
+        let rec trim s=if String.ends_with ~suffix:"\n" s then trim(String.sub s 0(String.length s-1))else s in
+        trim body
+      | _->text in
+    let render_line text line=String.split_on_char '\n'(render text)|>List.map(fun l->l ^ crlf line)|>String.concat "\n" in
+    let merged=ref [] and dropped=ref [] in
+    let lines=List.mapi(fun index line->
+      match List.find_opt(fun(i:Ast.import_decl)->i.loc.start.line=index)form.imports with
+      | Some({names=Ast.ImportExposing names;_} as i) when List.mem_assoc i.module_name additions && not(List.mem i.module_name !merged)->
+        (match List.assoc i.module_name additions with
+         | Some extra->merged:=i.module_name:: !merged;
+           (* A wrapped exposing list spans several lines; replace all of them. *)
+           for later=index+1 to i.loc.stop.line do dropped:=later:: !dropped done;
+           render_line("import " ^ i.module_name ^ " exposing [" ^ String.concat ", "(names @ extra) ^ "]")line
+         | None->line)
+      | _->line)lines in
+    let fresh=List.filter_map(fun(m,names)->if List.mem m !merged then None else Some(match names with
+      | None->"import " ^ m
+      | Some names->"import " ^ m ^ " exposing [" ^ String.concat ", " names ^ "]"))additions in
+    let last_import=List.fold_left max(-1)(List.map(fun(i:Ast.import_decl)->i.loc.stop.line)form.imports)in
+    let first=match form.decls with d::_->(Ast.top_decl_loc d).start.line|[]->reject file "migration declaration disappeared"in
+    let insert_at,separator=if last_import>=0 then last_import+1,"" else first,"\n" in
+    let lines=List.concat(List.mapi(fun index line->
+      let kept=if List.mem index !dropped then [] else [line] in
+      if index=insert_at && fresh<>[] then
+        List.map(fun text->render_line text line)fresh @ (if separator="" then [] else [crlf line]) @ kept else kept)lines) in
+    let chosen=String.concat "\n" lines in
+    let chosen=let rec trim s=if String.ends_with ~suffix:"\n" s || String.ends_with ~suffix:"\r" s then trim(String.sub s 0(String.length s-1))else s in trim chosen in
+    let complete=chosen ^ Migration_source.source_fragment ~source:chosen(if helpers="" then "\n" else "\n\n" ^ helpers ^ "\n")in
     ignore(source_result file(Syntax.read ~file ~source:complete));complete
 
 let choose_entry file source before after choice =

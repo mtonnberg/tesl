@@ -38,7 +38,7 @@ func TestWeakerProofGuidanceExplainsBothDirectionsBeforeDetails(t *testing.T) {
 func TestCurrentAndFrozenHashHelpHaveDifferentRecovery(t *testing.T) {
 	draft := ForDiagnostic("MIG001", "changed current hash")
 	frozen := ForDiagnostic("MIG013", "changed source")
-	if !strings.Contains(draft.Summary, "has not been deployed") || len(frozen.Options) != 0 || !strings.Contains(frozen.Summary, "Preserve the recorded bytes") {
+	if !strings.Contains(draft.Summary, "has not been deployed") || !strings.Contains(draft.Summary, "start the next revision") || len(frozen.Options) != 0 || !strings.Contains(frozen.Summary, "Preserve the recorded bytes") {
 		t.Fatalf("draft/frozen recovery conflated: %+v %+v", draft, frozen)
 	}
 }
@@ -86,5 +86,13 @@ func TestRequiredValueChoicesAndHelperHolesStayFocused(t *testing.T) {
 	hole := ForDiagnostic("MIG003", "Migration needs a value: Value to use when Todo.details is missing (String)")
 	if len(hole.Options) != 0 || hole.Summary != "Value to use when Todo.details is missing (String)" {
 		t.Fatalf("domain hole was turned back into a migration choice: %+v", hole)
+	}
+}
+
+func TestFirstProofGuideIsNotDescribedAsAChangedProof(t *testing.T) {
+	guide := ForDecision(Decision{Entity: "Customer", Reason: "a first proof was added to Customer.name; choose how existing rows are checked and what happens to rows that fail",
+		Options: []DecisionOption{{ID: "revalidate:Schema.Shop.VCurrent.tryName", Label: "Revalidate"}}})
+	if strings.Contains(guide.Summary, "Changing an existing proof") || !strings.Contains(guide.Summary, "Existing rows were stored without this check") {
+		t.Fatalf("first proof described as a changed proof: %s", guide.Summary)
 	}
 }

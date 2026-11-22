@@ -220,7 +220,7 @@ let primitive_options ~file ~source ~before ~after ~requirements ~identity ~(pre
     | (field,_,true)::rest->String.make indent ' ' ^ "let converted" ^ String.capitalize_ascii field ^ " = old." ^ field ^ "\n" ^ body indent rest
     | (field,function_,false)::rest->let pad=String.make indent ' 'in
      pad ^ "case " ^ function_ ^ " old." ^ field ^ " of\n" ^
-     pad ^ "  Nothing -> " ^ todo("Choose an explicit Reject reason or other reviewed conversion policy for " ^ identity ^ "." ^ field) ^ "\n" ^
+     pad ^ "  Nothing -> " ^ "Reject (" ^ todo("Reason to reject rows whose " ^ identity ^ "." ^ field ^ " cannot be converted (they stay in the old storage); replace the whole Reject to choose another policy") ^ ")" ^ "\n" ^
      pad ^ "  Something converted" ^ String.capitalize_ascii field ^ " ->\n" ^ body(indent+4)rest in
    [make (if automatic then "migrate-validators" else "migrate-retype")
      (if automatic then "Reuse existing validators for changed field proofs" else "Convert changed primitive fields with an explicit historical write-back") !rules (body 2 conversions)
@@ -255,7 +255,7 @@ let primitive_options ~file ~source ~before ~after ~requirements ~identity ~(pre
       | Ok()->()|Error _->raise Unsupported);
      Some(make ("revalidate:" ^ reference) ("Revalidate using " ^ reference)
        ["Revalidate " ^ field ^ " " ^ reference]
-       (body(todo("Choose the explicit Reject reason or reviewed policy when " ^ reference ^ " returns Nothing"))) "" []
+       (body("Reject (" ^ todo("Reason to reject rows when " ^ reference ^ " returns Nothing (they stay in the old storage); replace the whole Reject to choose another policy") ^ ")")) "" []
        "This existing target-owned establish was checked for the exact primitive field proof and original-value preservation, including all historical Same evidence. The scaffold fills the call, result handling, copied fields, rule and historical fixture. Choose the rejected-row policy and fixture values; these holes remain compile-blocking. Revalidate does not replace changed historical proof meaning.")
     with Unsupported->None)
    | _::_::_->
@@ -283,7 +283,7 @@ let primitive_options ~file ~source ~before ~after ~requirements ~identity ~(pre
      (match Migration_revalidate.check ~resolve ~modules:forms ~root ~owner:root ~declaration ~mapping:mapped with Ok()->()|Error _->raise Unsupported);
      [make "revalidate-fields" "Validate all changed fields without changing their stored values"
        (List.map(fun(field,function_)->"Revalidate " ^ field ^ " " ^ function_)selected)
-       (body(fun field->todo("Choose a Reject reason or reviewed policy when " ^ identity ^ "." ^ field ^ " fails validation"))2 selected) "" []
+       (body(fun field->"Reject (" ^ todo("Reason to reject rows whose " ^ identity ^ "." ^ field ^ " fails validation (they stay in the old storage); replace the whole Reject to choose another policy") ^ ")")2 selected) "" []
        "Each target-owned validator was checked for the exact field proof and preservation of its original input. Tesl fills all validator calls, result branches, copied fields, rules and fixture structure. Supply rejected-row policies and historical examples. Changed historical proof meaning still requires a conversion rather than this same-column route."]
    | _->[] with Unsupported->[]in
   required @ revalidate @ retype true @ retype false
