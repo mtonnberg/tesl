@@ -110,6 +110,62 @@ let test_infrastructure_tests_are_not_silently_skipped () =
   | Compile.MutateErr message ->
     check bool "partial score refused" true (starts_with "mutation testing would skip" message)
 
+(* A module whose tests pass under `tesl test` while it imports a local module must be
+   mutation-testable too: the baseline and each mutant are emitted with their local
+   dependencies, the way `tesl test` emits them. *)
+let page_limits_source = {|module PageLimits exposing [maxPage]
+
+import Tesl.Prelude exposing [Int]
+
+fn maxPage() -> Int =
+  100
+|}
+
+let page_checks_source = {|module PageChecks exposing [InRange, checkPage]
+
+import Tesl.Prelude exposing [Bool(..), Int]
+import PageLimits exposing [maxPage]
+
+fact InRange (n: Int)
+
+check checkPage(n: Int) -> n: Int ::: InRange n =
+  if 1 <= n && n <= maxPage() then
+    ok n ::: InRange n
+  else
+    fail 400 "page out of range"
+
+test "accepts the bounds" {
+  expect check checkPage 1 == 1
+  expect check checkPage 100 == 100
+}
+
+test "refuses outside the bounds" {
+  expectFail check checkPage 0
+  expectFail check checkPage 101
+}
+|}
+
+let test_local_imports_are_emitted () =
+  require_go ();
+  let dir = Filename.temp_dir "tesl-go-mutation-imports" "" in
+  let write name contents =
+    let path = Filename.concat dir name in
+    Out_channel.with_open_bin path (fun channel -> output_string channel contents);
+    path
+  in
+  let limits = write "PageLimits.tesl" page_limits_source in
+  let checks = write "PageChecks.tesl" page_checks_source in
+  Fun.protect
+    ~finally:(fun () -> Sys.remove limits; Sys.remove checks; Unix.rmdir dir)
+    (fun () ->
+      match Compile.mutate_go_file checks with
+      | Compile.MutateErr message -> fail message
+      | Compile.MutateOk report ->
+        check int "mutants over the imported bound" 8 report.Mutate.total;
+        check int "all killed" 8 report.Mutate.killed;
+        check int "no errors" 0 report.Mutate.errors;
+        check int "no invalid" 0 report.Mutate.invalid)
+
 let () =
   run "mutation_go" [
     "backend", [
@@ -117,5 +173,6 @@ let () =
       test_case "red baseline aborts scoring" `Slow test_red_baseline_never_scores_mutants;
       test_case "named wrapper expectFail kills all" `Slow test_named_wrapper_expect_fail_kills_all;
       test_case "infrastructure tests are not skipped" `Quick test_infrastructure_tests_are_not_silently_skipped;
+      test_case "local imports are emitted" `Slow test_local_imports_are_emitted;
     ];
   ]

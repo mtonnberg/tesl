@@ -120,7 +120,14 @@ func (server Server) ServeHTTP(writer http.ResponseWriter, request *http.Request
 	// The methods declared for a path that matched, for the `Allow` header a 405 MUST carry
 	// (RFC 9110 §15.5.6) — the answer to "wrong method" is useless without the right ones.
 	var allowed []string
-	for _, route := range server.Routes {
+	// The MOST SPECIFIC route for the method answers, not the first declared one: a literal
+	// segment beats a `:capture` in the same position. Otherwise `get "/runs/:runId"` answered
+	// `GET /runs/stream` by capturing "stream" — even with `sse "/runs/stream"` declared
+	// first — and the stream was unreachable. Equally specific routes keep
+	// declaration order.
+	var chosen *Route
+	for index := range server.Routes {
+		route := &server.Routes[index]
 		if !pathMatches(route.Path, request.URL.Path) {
 			continue
 		}
@@ -128,6 +135,12 @@ func (server Server) ServeHTTP(writer http.ResponseWriter, request *http.Request
 		if route.Method != request.Method {
 			continue
 		}
+		if chosen == nil || moreSpecific(route.Path, chosen.Path) {
+			chosen = route
+		}
+	}
+	if chosen != nil {
+		route := *chosen
 		if stream, streams := server.Streams[route.Endpoint]; streams {
 			// A stream owns its own response: status, headers and body are written by the
 			// handler over the life of the connection, so nothing is wrapped around it here.
@@ -149,6 +162,22 @@ func (server Server) ServeHTTP(writer http.ResponseWriter, request *http.Request
 		return
 	}
 	writeResponse(writer, nil, Fail(404, "not found"))
+}
+
+// moreSpecific reports whether `left` is a strictly more specific pattern than `right` for a
+// path both match: at the first segment where one is a literal and the other a `:capture`,
+// the literal wins.
+func moreSpecific(left, right string) bool {
+	leftParts := strings.Split(strings.Trim(left, "/"), "/")
+	rightParts := strings.Split(strings.Trim(right, "/"), "/")
+	for index := 0; index < len(leftParts) && index < len(rightParts); index++ {
+		leftCapture := strings.HasPrefix(leftParts[index], ":")
+		rightCapture := strings.HasPrefix(rightParts[index], ":")
+		if leftCapture != rightCapture {
+			return !leftCapture
+		}
+	}
+	return false
 }
 
 func pathMatches(pattern, path string) bool {

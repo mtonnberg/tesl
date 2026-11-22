@@ -114,13 +114,13 @@ func TestTesl0(teslT *testing.T) {
 //line lesson63-ai-structured-output.tesl:95
 			if !teslrt.Equal(teslLeft1, teslrt.FromInt64(1)) {
 //line lesson63-ai-structured-output.tesl:95
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft1), teslrt.DescribeValue(teslrt.FromInt64(1)))
 			}
 			teslLeft2 := p.Reason
 //line lesson63-ai-structured-output.tesl:96
 			if teslLeft2 != "production outage" {
 //line lesson63-ai-structured-output.tesl:96
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft2, "production outage")
 			}
 		}
 	}
@@ -150,13 +150,13 @@ func TestTesl1(teslT *testing.T) {
 //line lesson63-ai-structured-output.tesl:104
 			if !teslrt.Equal(teslLeft3, teslrt.FromInt64(3)) {
 //line lesson63-ai-structured-output.tesl:104
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft3), teslrt.DescribeValue(teslrt.FromInt64(3)))
 			}
 			teslLeft4 := p.Reason
 //line lesson63-ai-structured-output.tesl:105
 			if teslLeft4 != "cosmetic typo" {
 //line lesson63-ai-structured-output.tesl:105
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft4, "cosmetic typo")
 			}
 		}
 	}
@@ -194,13 +194,13 @@ func TestTesl2(teslT *testing.T) {
 //line lesson63-ai-structured-output.tesl:115
 					if teslLeft5 != "Hello Alice!" {
 //line lesson63-ai-structured-output.tesl:115
-						teslT.Fatal("Tesl expectation failed")
+						teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft5, "Hello Alice!")
 					}
 					teslLeft6 := teslrt.ReplyText(replyB)
 //line lesson63-ai-structured-output.tesl:116
 					if teslLeft6 != "Hello Bob!" {
 //line lesson63-ai-structured-output.tesl:116
-						teslT.Fatal("Tesl expectation failed")
+						teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft6, "Hello Bob!")
 					}
 				}
 			}

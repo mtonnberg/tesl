@@ -317,7 +317,7 @@ func TestTeslApi2(teslT *testing.T) {
 //line lesson32-api-tests.tesl:104
 		if !teslrt.Equal(teslLeft1, teslrt.FromInt64(404)) {
 //line lesson32-api-tests.tesl:104
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft1), teslrt.DescribeValue(teslrt.FromInt64(404)))
 		}
 	}
 }

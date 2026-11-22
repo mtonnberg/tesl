@@ -1,10 +1,12 @@
 package teslrt
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 )
 
@@ -60,8 +62,8 @@ func ApiRequest(server Server, method, path, body string, cookies []string,
 	if body != "" && request.Header.Get("Content-Type") == "" {
 		request.Header.Set("Content-Type", "application/json")
 	}
-	recorder := httptest.NewRecorder()
-	server.ServeHTTP(recorder, request)
+	addressToPublicOrigin(request, headers)
+	recorder := serveRecorded(server, request)
 	result := recorder.Result()
 	raw, _ := io.ReadAll(result.Body)
 	// The RESPONSE headers, as the Dict an api-test reads: last-wins on a repeated name, the
@@ -100,6 +102,28 @@ func ApiRequest(server Server, method, path, body string, cookies []string,
 		Status:  FromInt64(int64(result.StatusCode)),
 		Body:    JsonParseBody(string(raw)),
 		Headers: responseHeaders,
+	}
+}
+
+// addressToPublicOrigin sends a request to the app's own origin unless the test chose a Host.
+//
+// A `publicOrigin` server refuses a request whose Host names another origin (421). A real
+// client of the deployed app always addresses it by that origin, so a request a test writes
+// without a Host means "a request to this app" — and before this every api-test against such a
+// server failed with 421 until each request carried a hand-written Host header.
+// A test that sends its own Host keeps it: that is how the 421 refusal itself is tested.
+func addressToPublicOrigin(request *http.Request, headers []Tuple2[string, string]) {
+	for _, header := range headers {
+		if strings.EqualFold(header.Tuple2First, "Host") {
+			return
+		}
+	}
+	origin := strings.TrimSpace(PublicOrigin())
+	if origin == "" {
+		return
+	}
+	if parsed, err := url.Parse(origin); err == nil && parsed.Host != "" {
+		request.Host = parsed.Host
 	}
 }
 
@@ -143,4 +167,62 @@ func cookieLineSetsAValue(line string) bool {
 	pair = strings.TrimSpace(pair)
 	at := strings.Index(pair, "=")
 	return at >= 0 && len(pair) > at+1
+}
+
+// serveRecorded runs one request against the server and records the response. A plain request
+// to an `sse` route that ACCEPTS it never finishes on its own — the stream stays open — so
+// once the response has started as `text/event-stream` the request is cancelled, the way a
+// client hanging up ends it, and the test gets the status and headers with an empty body.
+// `subscribe` is how a test reads the events; a plain request answers whether the
+// subscription would be accepted, which is how a refused one (a 401) is asserted.
+func serveRecorded(server Server, request *http.Request) *httptest.ResponseRecorder {
+	ctx, cancel := context.WithCancel(request.Context())
+	defer cancel()
+	recorder := &streamAwareRecorder{ResponseRecorder: httptest.NewRecorder(), started: make(chan struct{})}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		server.ServeHTTP(recorder, request.WithContext(ctx))
+	}()
+	select {
+	case <-done:
+	case <-recorder.started:
+		cancel()
+		<-done
+		recorder.Body.Reset()
+	}
+	return recorder.ResponseRecorder
+}
+
+// streamAwareRecorder reports when the response has begun as an event stream.
+type streamAwareRecorder struct {
+	*httptest.ResponseRecorder
+	started  chan struct{}
+	signaled bool
+}
+
+func (recorder *streamAwareRecorder) noteStart() {
+	if recorder.signaled {
+		return
+	}
+	if strings.HasPrefix(recorder.Header().Get("Content-Type"), "text/event-stream") {
+		recorder.signaled = true
+		close(recorder.started)
+	}
+}
+
+func (recorder *streamAwareRecorder) WriteHeader(status int) {
+	recorder.ResponseRecorder.WriteHeader(status)
+	recorder.noteStart()
+}
+
+func (recorder *streamAwareRecorder) Write(data []byte) (int, error) {
+	written, err := recorder.ResponseRecorder.Write(data)
+	recorder.noteStart()
+	return written, err
+}
+
+func (recorder *streamAwareRecorder) Flush() {
+	recorder.ResponseRecorder.Flush()
+	recorder.noteStart()
 }

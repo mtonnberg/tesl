@@ -2712,7 +2712,7 @@ let compile_go_source_internal ?(debug=false) ?(path="") ~queue_conversions file
                 contents="package teslrt\n\nconst teslGeneratedMigrationHistoryJSON = " ^ Emit_go.go_quote json ^
                   "\nconst teslGeneratedQueueHistoryJSON = " ^ Emit_go.go_quote queue_json ^
                   "\n\nfunc init() {\n" ^ String.concat "" registrations ^ "\tregisterCompiledQueueHistory(teslGeneratedQueueHistoryJSON)\n}\n"}] in
-             GoSuccess (artifacts @ metadata)
+             GoSuccess (Emit_go.relocate_migration_history_by_go_mod (artifacts @ metadata))
            | Error errors -> GoFailure (List.map diag_of_go_emit_error errors)in
           with_literal_source_graph filename captured_sources emit_captured)))) in
     match result with Ok result -> result | Error es -> GoFailure (Migration_declaration.diagnostics_of_errors es))
@@ -2948,6 +2948,58 @@ let check_file ?skip_dep_body filename =
   let source = Source_input.read_text filename in
   check_source ?skip_dep_body filename source
 
+(* The frontend judgment and the Go emitter used to be two gates: a program could pass
+   `tesl check` and then be refused by the emitter (`V001: Go backend …`) the first time
+   `tesl test`/`run`/`build` ran.  Go is the only backend, so a refusal there is a property
+   of the program, not of a later step, and every `check` entry point reports it.  The
+   emitter runs only when the frontend found no error: its refusals are about programs the
+   checker accepted, and a frontend error already says what to fix first. *)
+let with_backend_diagnostics ~path source diagnostics =
+  (* Schema snapshots and migration declarations are not programs: the migration machinery
+     consumes them through its own checked paths, never by emitting them on their own. *)
+  let migration_owned =
+    try Migration_source_diagnostics.owned_scopes "schema" path <> []
+        || Migration_source_diagnostics.owned_scopes "migrations" path <> []
+    with _ -> false in
+  (* Only a program ENTRY is emitted on its own: a module that declares `main` (what
+     `tesl run`/`build` compile) or a test block (what `tesl test` compiles).  A library is
+     emitted as part of the entries that import it — checking it alone would judge it out of
+     context (a library that enqueues onto a queue its importer declares cannot be emitted by
+     itself), so its emitter errors surface when an entry that imports it is checked. *)
+  let is_entry () =
+    match parse_module path source with
+    | Ok m -> List.exists (function
+        | Ast.DFunc (fd : Ast.func_decl) -> fd.kind = Ast.MainKind
+        | Ast.DTest _ | Ast.DApiTest _ | Ast.DLoadTest _ -> true
+        | _ -> false) m.decls
+    | Err _ -> false in
+  if migration_owned
+     || List.exists (fun (d : diagnostic) -> d.severity = "error") diagnostics
+     || not (is_entry ()) then diagnostics
+  else
+    match (try Some (compile_go_source ~path path source) with _ -> None) with
+    | Some (GoFailure backend) ->
+      diagnostics @ List.filter (fun (d : diagnostic) ->
+        d.severity = "error" && not (List.mem d diagnostics)) backend
+    | Some (GoSuccess _) | None -> diagnostics
+
+let check_source_with_backend ?skip_dep_body filename source =
+  let diagnostics =
+    with_backend_diagnostics ~path:filename source (check_source ?skip_dep_body filename source) in
+  (* A dependency that is ITSELF an argument of the same invocation owns its diagnostics:
+     the emitter's re-check must not attribute them to the importer as well. *)
+  match skip_dep_body with
+  | None -> diagnostics
+  | Some skip ->
+    let own = canonical_import_path filename in
+    List.filter (fun (d : diagnostic) ->
+      let file = canonical_import_path d.file in
+      file = own || not (skip file)) diagnostics
+
+let check_file_with_backend ?skip_dep_body filename =
+  let source = Source_input.read_text filename in
+  check_source_with_backend ?skip_dep_body filename source
+
 (** Canonical-path membership predicate over a CLI file list.  Used by every
     multi-file check driver so the whole-program dep walk skips the body
     re-check of any module that is ITSELF an argument of the same invocation:
@@ -2963,7 +3015,14 @@ let cli_skip_predicate (filenames : string list) : string -> bool =
     CLI argument here is reported only under its own entry. *)
 let check_files (filenames : string list) : diagnostic list =
   let skip = cli_skip_predicate filenames in
-  List.concat_map (fun f -> check_file ~skip_dep_body:skip f) filenames
+  (* A dependency that is also an argument reports its own diagnostics; the emitter run for
+     an importer re-checks it and would report them a second time, so identical diagnostics
+     are kept once. *)
+  let seen = Hashtbl.create 16 in
+  List.concat_map (fun f -> check_file_with_backend ~skip_dep_body:skip f) filenames
+  |> List.filter (fun (d : diagnostic) ->
+       let key = (d.file, d.start_line, d.start_col, d.code, d.message) in
+       if Hashtbl.mem seen key then false else (Hashtbl.add seen key (); true))
 
 (* ── Client-generation module merge (#36) ────────────────────────────────── *)
 
@@ -3152,7 +3211,7 @@ let check_files_batch (filenames : string list) : (string * diagnostic list) lis
   let skip = cli_skip_predicate filenames in
   List.map (fun filename ->
     let diags =
-      try check_file ~skip_dep_body:skip filename
+      try check_file_with_backend ~skip_dep_body:skip filename
       with Sys_error msg ->
         [{ file = filename; start_line = 0; start_col = 0;
            end_line = 0; end_col = 0; severity = "error";
@@ -3581,6 +3640,7 @@ let agent_context_result_source ?(extra_diags = []) filename source : agent_cont
         | None -> [] in
       diagnostics, symbols
   in
+  let checked = with_backend_diagnostics ~path:filename source checked in
   let diagnostics = checked @ extra_diags in
   let ok = not (List.exists (fun d -> d.severity = "error") diagnostics) in
   { json = agent_context_to_json ~file:filename ~content_hash ~diagnostics ~symbols;
@@ -3751,12 +3811,23 @@ let mutate_go_file ?(extra_test_files=[]) filename : mutate_result =
                else { module_ with decls = module_.decls @ extra_test_decls }
              in
             let has_tests = List.exists (function DTest _ -> true | _ -> false) baseline.decls in
+            (* The baseline and every mutant are emitted the way `tesl test` emits the file:
+               with the local modules it imports, so a module whose tests run under
+               `tesl test` can be mutation-tested too.  The graph is resolved per module,
+               since the mutated module is the entry the lowering starts from. *)
+            let emit_module (module_ : Ast.module_form) =
+                match local_dependency_modules filename module_ with
+                | GoDepsError message ->
+                  Error [{ Emit_go.loc = Location.dummy_loc filename; message }]
+                | GoDeps { emit; entry_emit; _ } ->
+                  Emit_go.compile_project ~mode:Emit_go.Release ~entry:entry_emit emit
+            in
             if not has_tests then MutateErr "Go mutation baseline has NO TESTS (no runnable tests)"
             else
-              (match Emit_go.compile_module ~mode:Emit_go.Release baseline with
+              (match emit_module baseline with
                | Error (error :: _) -> MutateErr ("Go mutation baseline emit failed: " ^ error.message)
                | Error [] -> MutateErr "Go mutation baseline emit failed"
-               | Ok (artifacts, _exports) ->
+               | Ok artifacts ->
                  (match run_go_test_artifacts artifacts with
                   | GoBuildFailed output -> MutateErr ("Go mutation baseline did not compile:\n" ^ output)
                   | GoTestsFailed output -> MutateErr ("Go mutation baseline tests fail:\n" ^ output)
@@ -3767,10 +3838,10 @@ let mutate_go_file ?(extra_test_files=[]) filename : mutate_result =
                     let results = List.map (fun (mutant : Mutate.mutant) ->
                       let module_ = with_tests mutant.module_ in
                       let result =
-                        match Emit_go.compile_module ~mode:Emit_go.Release module_ with
+                        match emit_module module_ with
                         | Error (error :: _) -> Mutate.Error ("Go emit failed: " ^ error.message)
                         | Error [] -> Mutate.Error "Go emit failed"
-                        | Ok (artifacts, _exports) ->
+                        | Ok artifacts ->
                           (match run_go_test_artifacts artifacts with
                            | GoTestsPassed -> Mutate.Survived
                            | GoTestsFailed _ -> Mutate.Killed

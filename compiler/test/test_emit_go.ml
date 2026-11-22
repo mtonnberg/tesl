@@ -1418,20 +1418,21 @@ let test_string_stdlib_with_go () =
       ())
 
 let test_unsupported_string_exports_fail_closed () =
-  (* `String.split` is supported now that lists are, so the boundary this pins moved:
-     `trimLeft`/`trimRight` are still unimplemented leaves of a supported module. *)
-  let unsupported = {|module StringTrimLeft exposing [tidy]
+  (* The boundary this pins keeps moving as leaves land: the List/Dict/Set callback
+     functions are implemented now.  `uuidV4Codec` is still an unimplemented export of a
+     supported module, and the refusal must come from the frontend, before emission. *)
+  let unsupported = {|module UuidCodecProbe exposing [name_]
 import Tesl.Prelude exposing [String]
-import Tesl.String exposing [String.trimLeft]
-fn tidy(s: String) -> String = String.trimLeft s
+import Tesl.UUID exposing [uuidV4Codec]
+fn name_() -> String = "x"
 |} in
-  match Compile.compile_go_source "<go-string-trimleft>" unsupported with
-  | Compile.GoSuccess _ -> fail "an unsupported Tesl.String export emitted Go artifacts"
+  match Compile.compile_go_source "<go-uuid-codec>" unsupported with
+  | Compile.GoSuccess _ -> fail "an unsupported Tesl.UUID export emitted Go artifacts"
   | Compile.GoFailure diagnostics ->
-    check bool "an unimplemented leaf is rejected before emission" true
+    check bool "an unimplemented export is rejected before emission" true
       (List.exists (fun (d : Compile.diagnostic) ->
          d.source <> "go-emitter"
-         && contains d.message "the Go backend does not implement `String.trimLeft` from `Tesl.String`")
+         && contains d.message "the Go backend does not implement `uuidV4Codec` from `Tesl.UUID`")
         diagnostics)
 
 let list_source = {|module GoLists exposing [size, empty, firstOr, rest, joined, parts, top, dedup, ordered, hasTwo, both, prefix]
@@ -1547,15 +1548,10 @@ let test_unsupported_list_exports_fail_closed () =
         (List.exists (fun (d : Compile.diagnostic) ->
            contains d.message needle) diagnostics)
   in
-  (* `map`/`filter`/`foldl`/`foldr`/`any`/`all` are loops now, so this moved to the next
-     unimplemented higher-order leaf: an unimplemented leaf of a SUPPORTED module must
-     still fail closed rather than emit something plausible. *)
-  expect_go_error "unimplemented higher-order leaf"
-    "the Go backend does not implement `List.partition` from `Tesl.List`" {|module ListPartition exposing [split]
-import Tesl.Prelude exposing [Int, List]
-import Tesl.List exposing [List.partition]
-fn split(xs: List Int) -> List (List Int) = List.partition (fn(x: Int) -> x > 10) xs
-|};
+  (* Every documented higher-order `Tesl.List` function lowers now; the fail-closed rule
+     for an unimplemented export of a supported module is pinned with `uuidV4Codec` in
+     test_unsupported_string_exports_fail_closed. *)
+  ignore expect_go_error;
   (* `List.sum` on a non-Int list never reaches the emitter — the frontend's own
      signature rejects it — so the emitter's guard is containment, and what this pins
      is that the program is refused SOMEWHERE rather than emitted. *)
@@ -4144,6 +4140,117 @@ fn remove(id: String) -> Unit requires [dbWrite Work] =
   delete w from Work where w.id == id
 |}
 
+(* A failed `expect a == b` names both values, so the test output says what differed.  A
+   constructor value prints as its JSON, which names the constructor; a value that can hold a
+   `secret` prints nothing, since a test log is still a log. *)
+let failed_expectation_source = {|module GoExpectMessage exposing [Shape(..), Token, twice]
+
+import Tesl.Prelude exposing [Int, String]
+
+type Shape
+  = Circle radius: Int
+  | Square side: Int
+
+secret Token = String
+
+record Holder { token: Token }
+
+fn twice(n: Int) -> Int =
+  n * 2
+
+test "ints" {
+  expect twice 2 == 4
+}
+
+test "constructors" {
+  expect Circle { radius: 1 } == Circle { radius: 1 }
+}
+
+test "secrets" {
+  expect Holder { token: Token "a" } == Holder { token: Token "a" }
+}
+|}
+
+let test_failed_expectation_names_values () =
+  let emitted = emit_ok "<go-expect-message>" failed_expectation_source in
+  let test_go = artifact "internal/teslmodgoexpectmessage/module_test.go" emitted in
+  let count needle =
+    let rec go from acc =
+      match Str.search_forward (Str.regexp_string needle) test_go from with
+      | index -> go (index + 1) (acc + 1)
+      | exception Not_found -> acc
+    in
+    go 0 0
+  in
+  Alcotest.(check bool) "an Int expectation prints both values" true
+    (contains test_go "teslrt.DescribeValue(");
+  Alcotest.(check bool) "a constructor expectation prints its JSON" true
+    (contains test_go "teslrt.EncodeJSONValue(");
+  Alcotest.(check int) "two expectations name values" 2
+    (count "Tesl expectation failed: %s != %s\"");
+  Alcotest.(check int) "the secret-holding expectation names nothing" 1
+    (count "teslT.Fatal(\"Tesl expectation failed\")")
+
+(* A distroless image has no shell or HTTP client, so the compiled binary answers its own
+   `healthcheck`: it probes `healthProbePath` (under the mount) on the literal port, and it is
+   dispatched before `Main()` so a probe never opens a database or runs a migration.  A server
+   with no probe path gets no subcommand. *)
+let health_probe_source = {|module HealthApp exposing [HealthServer, main]
+
+import Tesl.Prelude exposing [String]
+import Tesl.App exposing [App]
+import Tesl.Database exposing [Database, Memory]
+
+record HealthView { status: String }
+
+entity Note table "notes" primaryKey id {
+  id: String
+}
+
+database HealthDb = Database {
+  schema: "health"
+  entities: [Note]
+  backend: Memory
+}
+
+handler get healthz() -> HealthView =
+  HealthView { status: "ok" }
+
+api HealthApi {
+  get "/healthz"
+    -> HealthView
+}
+
+server HealthServer for HealthApi {
+  healthz
+  healthProbePath "/healthz"
+}
+
+main() -> App =
+  App {
+    database: HealthDb
+    api: HealthServer
+    port: 18777
+    mountPath: "/api"
+  }
+|}
+
+let test_healthcheck_subcommand () =
+  let main_go source =
+    artifact "cmd/app/main.go" (emit_ok "<go-healthcheck>" source) in
+  let with_probe = main_go health_probe_source in
+  Alcotest.(check bool) "probes the mounted path on the literal port" true
+    (contains with_probe
+       "teslrt.RunHealthcheckCommand(os.Args[1:], os.Stderr, \"127.0.0.1\", 18777, \"/api/healthz\")");
+  let dispatch = Str.search_forward (Str.regexp_string "RunHealthcheckCommand") with_probe 0 in
+  let startup = Str.search_forward (Str.regexp_string ".Main()") with_probe 0 in
+  Alcotest.(check bool) "dispatched before the startup chain" true (dispatch < startup);
+  let without_probe =
+    main_go (Str.global_replace (Str.regexp_string "  healthProbePath \"/healthz\"\n") ""
+               health_probe_source) in
+  Alcotest.(check bool) "no probe path, no subcommand" false
+    (contains without_probe "RunHealthcheckCommand")
+
 let test_record_columns_with_go () =
   let emitted = emit_ok "<record-column>" record_column_source in
   let regressions : Emit_go.artifact = {
@@ -4387,7 +4494,7 @@ let test_server_clauses_with_go () =
     [ "publicOrigin", "teslrt.SetPublicOriginValue(\"https://app.example.test\")";
       "sessionPolicy", "teslrt.SetSessionPolicy(teslrt.SessionPolicyTTL(\"ShortSession\"))";
       "sessionPreviousKey",
-        "teslrt.SetPreviousSessionKey(teslrt.SecretPointer(teslrt.RequireSecret(\"GOCLAUSES_PREVIOUS_KEY\")))";
+        "teslrt.SetPreviousSessionKeyEnv(\"GOCLAUSES_PREVIOUS_KEY\")";
       "sessionRevoked", "teslrt.SetSessionRevokedHook(func(teslSubject string, teslIssuedAt int64) bool {";
       "healthProbePath", "teslrt.SetHealthProbePath(\"/healthz\")";
        "contentSecurityPolicy", "teslrt.SetContentSecurityPolicy(\"default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self'\")";
@@ -8284,17 +8391,19 @@ fn depth(c: Chain) -> Int = 0
      instantiation gets, and Go accepts the declaration — the instantiation cycle it rejects
      is the one whose type ARGUMENT grows. See "a recursive generic at another
      instantiation". *)
-  (* A `case` over Int, String or Bool IS supported now; anything with no equality this backend
-     emits — a record here, and a Float, which cannot even be written as a pattern — still fails
-     closed rather than being guessed at. *)
-  expect_go_error "case over a record" "case` over a module ADT or a scalar"
-    {|module CaseOverRecord exposing [classify]
+  (* A `case` over Int, String or Bool IS supported now.  Over a type with no equality this
+     backend emits — a record, a list — the only patterns the checker admits are irrefutable
+     (`_`, a variable), and such a case picks its first arm for every value: it is lowered as
+     the `let` it means rather than refused (refusing it made `tesl check` report a program
+     the checker had accepted). *)
+  let lowered = emit_ok "case over a record" {|module CaseOverRecord exposing [classify]
 import Tesl.Prelude exposing [Int, String]
 record Point { x: Int }
 fn classify(p: Point) -> String =
   case p of
     _ -> "other"
-|}
+|} in
+  gate_emitted "tesl-case-over-record" lowered
   (* A proof-carrying CONSTRUCTOR field is supported now: the annotation is a type-level
      contract with no runtime structure, so the field is its own type and the proof erases —
      the same rule a record field follows. See "proof shapes at the edges of erasure". *)
@@ -9205,7 +9314,7 @@ let test_sse_with_go () =
     (contains module_go "teslrt.SseStreamParam(UserNoticesChannel, \"/events/:userId\", \"userId\")");
   let tests_go = artifact "internal/teslmodgosse/module_test.go" emitted in
   check bool "subscribe opens a stream against the server under test" true
-    (contains tests_go "teslrt.SubscribeStream(MainServer, \"/runs/stream\", nil)");
+    (contains tests_go "teslrt.SubscribeStream(MainServer, \"/runs/stream\", nil, nil)");
   check bool "collect waits for the count it was given" true
     (contains tests_go "teslrt.CollectCount(");
   (* A SUBSCRIPTION is per-block state, preserving the retired Racket api-test cleanup
@@ -13404,7 +13513,7 @@ let emission_tests =
       test_case "Float keys in Dict and Set" `Slow test_float_keys_with_go;
       test_case "unordered dict keys fail closed" `Quick test_unordered_dict_keys_fail_closed;
       test_case "unsupported Tesl.List exports fail closed" `Quick test_unsupported_list_exports_fail_closed;
-      test_case "unsupported Tesl.String exports fail closed" `Quick test_unsupported_string_exports_fail_closed;
+      test_case "unsupported stdlib exports fail closed" `Quick test_unsupported_string_exports_fail_closed;
       test_case "other stdlib ADTs fail closed" `Quick test_other_stdlib_adts_fail_closed;
       test_case "generic limits fail closed" `Quick test_generic_limits_fail_closed;
       test_case "unsupported ADTs fail closed" `Quick test_unsupported_adts_fail_closed;
@@ -13414,6 +13523,8 @@ let emission_tests =
       test_case "fresh module passes Go gates" `Slow test_generated_module_with_go;
       test_case "payload ADT JSON codecs" `Slow test_payload_adt_codecs_with_go;
       test_case "record payload ADT columns" `Slow test_record_columns_with_go;
+      test_case "failed expectation names both values" `Quick test_failed_expectation_names_values;
+      test_case "binary healthcheck subcommand" `Quick test_healthcheck_subcommand;
     ]
 
 let () =

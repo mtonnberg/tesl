@@ -39,32 +39,54 @@ let rec schema_of_ir_type = function
     obj [field "anyOf" (array [schema_of_ir_type ty; obj [field "type" (js "null")]])]
   | Ir.IRDict (Ir.IRString, value) ->
     obj [field "type" (js "object"); field "additionalProperties" (schema_of_ir_type value)]
+  (* A non-String-keyed Dict as a list of `[key, value]` pairs — a JSON array pair, not the
+     tagged tuple ADT. *)
   | Ir.IRDict (key, value) ->
-    schema_of_ir_type (Ir.IRList (Ir.IRTuple [key; value]))
+    obj [field "type" (js "array");
+         field "items" (obj [field "type" (js "array");
+           field "prefixItems" (array [schema_of_ir_type key; schema_of_ir_type value]);
+           field "minItems" "2"; field "maxItems" "2"])]
+  (* Result, Either and tuples are ADTs, and cross the wire as the runtime encodes every ADT:
+     `{"tag": "<Ctor>", "fields": {…}}`.  The document used to describe a flat
+     `{"tag", "value"}` and a JSON array that the server never sends. *)
   | Ir.IRResult (ok, error) ->
     obj [field "oneOf" (array [
       obj [field "type" (js "object");
            field "properties" (obj [field "tag" (obj [field "const" (js "Ok")]);
-                                     field "value" (schema_of_ir_type ok)]);
-           field "required" (array [js "tag"; js "value"]); field "additionalProperties" "false"];
+                                     field "fields" (obj [field "type" (js "object");
+                                       field "properties" (obj [field "value" (schema_of_ir_type ok)]);
+                                       field "required" (array [js "value"]); field "additionalProperties" "false"])]);
+           field "required" (array [js "tag"; js "fields"]); field "additionalProperties" "false"];
       obj [field "type" (js "object");
            field "properties" (obj [field "tag" (obj [field "const" (js "Err")]);
-                                     field "error" (schema_of_ir_type error)]);
-           field "required" (array [js "tag"; js "error"]); field "additionalProperties" "false"]])]
+                                     field "fields" (obj [field "type" (js "object");
+                                       field "properties" (obj [field "error" (schema_of_ir_type error)]);
+                                       field "required" (array [js "error"]); field "additionalProperties" "false"])]);
+           field "required" (array [js "tag"; js "fields"]); field "additionalProperties" "false"]])]
   | Ir.IREither (left, right) ->
     obj [field "oneOf" (array [
       obj [field "type" (js "object");
            field "properties" (obj [field "tag" (obj [field "const" (js "Left")]);
-                                     field "value" (schema_of_ir_type left)]);
-           field "required" (array [js "tag"; js "value"]); field "additionalProperties" "false"];
+                                     field "fields" (obj [field "type" (js "object");
+                                       field "properties" (obj [field "value" (schema_of_ir_type left)]);
+                                       field "required" (array [js "value"]); field "additionalProperties" "false"])]);
+           field "required" (array [js "tag"; js "fields"]); field "additionalProperties" "false"];
       obj [field "type" (js "object");
            field "properties" (obj [field "tag" (obj [field "const" (js "Right")]);
-                                     field "value" (schema_of_ir_type right)]);
-           field "required" (array [js "tag"; js "value"]); field "additionalProperties" "false"]])]
+                                     field "fields" (obj [field "type" (js "object");
+                                       field "properties" (obj [field "value" (schema_of_ir_type right)]);
+                                       field "required" (array [js "value"]); field "additionalProperties" "false"])]);
+           field "required" (array [js "tag"; js "fields"]); field "additionalProperties" "false"]])]
   | Ir.IRTuple elems ->
-    obj [field "type" (js "array"); field "prefixItems" (array (List.map schema_of_ir_type elems));
-         field "minItems" (string_of_int (List.length elems));
-         field "maxItems" (string_of_int (List.length elems))]
+    let names = List.mapi (fun index _ ->
+      match index with 0 -> "first" | 1 -> "second" | 2 -> "third" | n -> Printf.sprintf "item%d" n) elems in
+    obj [field "type" (js "object");
+         field "properties" (obj [
+           field "tag" (obj [field "const" (js (Printf.sprintf "Tuple%d" (List.length elems)))]);
+           field "fields" (obj [field "type" (js "object");
+             field "properties" (obj (List.map2 (fun name elem -> field name (schema_of_ir_type elem)) names elems));
+             field "required" (array (List.map js names)); field "additionalProperties" "false"])]);
+         field "required" (array [js "tag"; js "fields"]); field "additionalProperties" "false"]
   | Ir.IRFun _ -> obj []
 
 let schema_of_type_expr ty = schema_of_ir_type (Ir.ir_type_of_type_expr ty)

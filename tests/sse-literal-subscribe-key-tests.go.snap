@@ -142,7 +142,7 @@ func TestTeslApi0(teslT *testing.T) {
 	}()
 	{
 //line sse-literal-subscribe-key-tests.tesl:72
-		stream := teslrt.SubscribeStream(MainServer, "/runs/stream", nil)
+		stream := teslrt.SubscribeStream(MainServer, "/runs/stream", nil, nil)
 		_ = stream
 		defer teslrt.UnsubscribeStream(stream)
 		{

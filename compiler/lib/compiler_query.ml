@@ -37,7 +37,7 @@ let run ~filename ~logical_path flag position =
       (Compile.json_encode_string formatted) (reason<>None)
       (Option.fold ~none:"null" ~some:Compile.json_encode_string reason))
   | "--check-json" | "--check-json-v2" ->
-    let diags = Compile.check_source path source in
+    let diags = Compile.check_source_with_backend path source in
     let diags = if List.exists (fun (d : Compile.diagnostic) ->
       d.source = "parser" || d.source = "lexer") diags then diags
       else diags @ Linter.lint_file ~logical_path:path filename in

@@ -1,0 +1,177 @@
+module CollectionCallbackTests exposing [double, isEven, add]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The documented List / Dict / Set functions that take a callback (or compare
+# elements): each is exercised with a lambda and, where it reads naturally, with
+# a named function, and asserted against the result the stdlib docs promise.
+# ─────────────────────────────────────────────────────────────────────────────
+
+import Tesl.Prelude exposing [Bool(..), Int, String, List]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.Tuple exposing [Tuple2(..)]
+import Tesl.List exposing [
+  List.zipWith,
+  List.unzip,
+  List.partition,
+  List.groupBy,
+  List.findIndex,
+  List.dedupe,
+  List.intersperse,
+  List.intercalate,
+  List.nth,
+]
+import Tesl.Dict exposing [
+  Dict,
+  Dict.fromList,
+  Dict.toList,
+  Dict.empty,
+  Dict.map,
+  Dict.mapWithKey,
+  Dict.filter,
+  Dict.filterWithKey,
+  Dict.foldl,
+  Dict.foldr,
+  Dict.insertWith,
+  Dict.unionWith,
+  Dict.update,
+  Dict.difference,
+  Dict.intersection,
+]
+import Tesl.Set exposing [
+  Set,
+  Set.fromList,
+  Set.toList,
+  Set.map,
+  Set.filter,
+  Set.foldl,
+  Set.all,
+  Set.any,
+  Set.partition,
+]
+import Tesl.ListPrim exposing [ListPrim.head, ListPrim.tail, ListPrim.append]
+import Tesl.Int exposing [Int.toString]
+import Tesl.String exposing [String.concat]
+
+fn double(n: Int) -> Int =
+  n * 2
+
+fn isEven(n: Int) -> Bool =
+  n % 2 == 0
+
+fn add(a: Int, b: Int) -> Int =
+  a + b
+
+# ── List ──────────────────────────────────────────────────────────────────────
+
+test "zipWith combines positionally and stops at the shorter list" {
+  expect List.zipWith add [1, 2, 3] [10, 20] == [11, 22]
+  expect List.zipWith (fn (a: Int, s: String) -> String.concat (Int.toString a) s) [1, 2] ["a", "b"] == ["1a", "2b"]
+}
+
+test "unzip splits pairs into firsts and seconds" {
+  expect List.unzip [[1, 2], [3, 4], [5, 6]] == [[1, 3, 5], [2, 4, 6]]
+}
+
+test "partition keeps order on both sides" {
+  expect List.partition isEven [1, 2, 3, 4, 5] == [[2, 4], [1, 3, 5]]
+  expect List.partition (fn (n: Int) -> n > 10) [1, 2] == [[], [1, 2]]
+}
+
+test "groupBy groups consecutive equal keys only" {
+  expect List.groupBy isEven [2, 4, 1, 3, 6] == [[2, 4], [1, 3], [6]]
+  expect List.groupBy (fn (n: Int) -> n / 10) [1, 5, 12, 3] == [[1, 5], [12], [3]]
+}
+
+test "findIndex is the 0-based index of the first match" {
+  expect List.findIndex isEven [1, 3, 4, 6] == Something 2
+  expect List.findIndex (fn (n: Int) -> n > 100) [1, 2] == Nothing
+}
+
+test "dedupe removes consecutive duplicates only" {
+  expect List.dedupe [1, 1, 2, 2, 2, 1, 3, 3] == [1, 2, 1, 3]
+  expect List.dedupe ["a", "a", "b"] == ["a", "b"]
+}
+
+test "intersperse and intercalate" {
+  expect List.intersperse 0 [1, 2, 3] == [1, 0, 2, 0, 3]
+  expect List.intersperse 0 [7] == [7]
+  expect List.intercalate [0, 0] [[1], [2, 3], [4]] == [1, 0, 0, 2, 3, 0, 0, 4]
+}
+
+test "nth answers in range and Nothing outside it" {
+  expect List.nth [10, 20, 30] 1 == Something 20
+  expect List.nth [10, 20, 30] 3 == Nothing
+  expect List.nth [10, 20, 30] (0 - 1) == Nothing
+}
+
+# ── Dict ──────────────────────────────────────────────────────────────────────
+
+fn scores() -> Dict String Int =
+  Dict.fromList [Tuple2 "b" 2, Tuple2 "a" 1, Tuple2 "c" 3]
+
+test "map and mapWithKey keep the keys" {
+  expect Dict.toList (Dict.map double (scores())) == [Tuple2 "a" 2, Tuple2 "b" 4, Tuple2 "c" 6]
+  expect Dict.toList (Dict.mapWithKey (fn (k: String, v: Int) -> String.concat k (Int.toString v)) (scores())) == [Tuple2 "a" "a1", Tuple2 "b" "b2", Tuple2 "c" "c3"]
+}
+
+test "filter and filterWithKey" {
+  expect Dict.toList (Dict.filter isEven (scores())) == [Tuple2 "b" 2]
+  expect Dict.toList (Dict.filterWithKey (fn (k: String, v: Int) -> k == "a" || v == 3) (scores())) == [Tuple2 "a" 1, Tuple2 "c" 3]
+}
+
+test "foldl runs in key order and foldr in reverse" {
+  expect Dict.foldl (fn (acc: String, v: Int) -> String.concat acc (Int.toString v)) "" (scores()) == "123"
+  expect Dict.foldr (fn (v: Int, acc: String) -> String.concat acc (Int.toString v)) "" (scores()) == "321"
+}
+
+test "insertWith combines new with old" {
+  let d = Dict.insertWith (fn (new: Int, old: Int) -> new * 100 + old) "a" 9 (scores())
+  expect Dict.toList d == [Tuple2 "a" 901, Tuple2 "b" 2, Tuple2 "c" 3]
+  expect Dict.toList (Dict.insertWith add "z" 5 (scores())) == [Tuple2 "a" 1, Tuple2 "b" 2, Tuple2 "c" 3, Tuple2 "z" 5]
+}
+
+test "unionWith combines the conflicting values, left first" {
+  let other = Dict.fromList [Tuple2 "c" 10, Tuple2 "d" 4]
+  expect Dict.toList (Dict.unionWith (fn (l: Int, r: Int) -> l * 100 + r) (scores()) other) == [Tuple2 "a" 1, Tuple2 "b" 2, Tuple2 "c" 310, Tuple2 "d" 4]
+}
+
+test "update inserts, modifies and removes" {
+  let bump = fn (m: Maybe Int) -> case m of
+    Something v -> Something (v + 1)
+    Nothing -> Something 0
+  expect Dict.toList (Dict.update "a" bump (scores())) == [Tuple2 "a" 2, Tuple2 "b" 2, Tuple2 "c" 3]
+  expect Dict.toList (Dict.update "q" bump (scores())) == [Tuple2 "a" 1, Tuple2 "b" 2, Tuple2 "c" 3, Tuple2 "q" 0]
+  expect Dict.toList (Dict.update "b" (fn (m: Maybe Int) -> Nothing) (scores())) == [Tuple2 "a" 1, Tuple2 "c" 3]
+}
+
+test "difference and intersection keep the left values" {
+  let other = Dict.fromList [Tuple2 "b" 99, Tuple2 "z" 0]
+  expect Dict.toList (Dict.difference (scores()) other) == [Tuple2 "a" 1, Tuple2 "c" 3]
+  expect Dict.toList (Dict.intersection (scores()) other) == [Tuple2 "b" 2]
+}
+
+# ── Set ───────────────────────────────────────────────────────────────────────
+
+test "Set.map collapses results that collide" {
+  expect Set.toList (Set.map (fn (n: Int) -> n / 10) (Set.fromList [1, 5, 12, 31])) == [0, 1, 3]
+  expect Set.toList (Set.map double (Set.fromList [3, 1])) == [2, 6]
+}
+
+test "Set.filter, all, any, partition and foldl" {
+  let s = Set.fromList [4, 1, 3, 2]
+  expect Set.toList (Set.filter isEven s) == [2, 4]
+  expect Set.all (fn (n: Int) -> n > 0) s == True
+  expect Set.any (fn (n: Int) -> n > 3) s == True
+  expect Set.any (fn (n: Int) -> n > 9) s == False
+  expect List.zipWith (fn (a: Set Int, b: List Int) -> Set.toList a == b) (Set.partition isEven s) [[2, 4], [1, 3]] == [True, True]
+  expect Set.foldl (fn (acc: String, n: Int) -> String.concat acc (Int.toString n)) "" s == "1234"
+}
+
+# ── ListPrim: the primitives the lifted List is written over ──────────────────
+
+test "ListPrim.head, tail and append" {
+  expect ListPrim.head [1, 2] == Something 1
+  expect ListPrim.head [] == Nothing
+  expect ListPrim.tail [1, 2] == Something [2]
+  expect ListPrim.append [1] [2, 3] == [1, 2, 3]
+}

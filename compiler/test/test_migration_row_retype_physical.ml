@@ -287,6 +287,7 @@ let export ?(before=old) ?(after=fresh) ?(body=source) ?(application=app) ?(bind
   command output (Filename.concat output "build.log") "timeout 120s go build -race -tags tesl_migration_test -o app ./cmd/access-test";
   if version="v2" && binding_test then (
    write (Filename.concat output "internal/teslrt/physical_binding_test.go") (settled_test path);
+   Option.iter (fun (a:Emit_go.artifact) -> write (Filename.concat output a.path) a.contents) (Emit_go.runtime_history_test_companion artifacts);
    command output (Filename.concat output "binding.log") "timeout 120s go test -race -count=1 ./internal/teslrt") in
  remove path;remove (Filename.concat root "schema/notes/v1.tesl");
  ignore(save "schema/notes/v-current.tesl" (replace "Schema.Notes.V1" "Schema.Notes.VCurrent" before));build "v1";

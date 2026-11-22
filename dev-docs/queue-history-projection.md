@@ -5,7 +5,9 @@
 The compiler emits `queue-history.json` for each build containing a versioned
 PostgreSQL database, including builds whose queue inventory is explicitly empty.
 The identical bytes are linked as a Go constant in
-`internal/teslrt/migration_history_generated.go`. Neither runtime registration nor
+`internal/teslhistory/migration_history_generated.go`, a generated package
+that registers the history with the runtime before any application package
+initializes. Neither runtime registration nor
 inspection reads the loose JSON file or a source checkout. The existing strict
 `compiled-migration-history` v3 envelope remains unchanged for bridge readers.
 

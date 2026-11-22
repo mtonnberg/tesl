@@ -297,6 +297,16 @@ let ir_endpoint_of_api_endpoint (ep : api_endpoint) : ir_endpoint =
     ire_loc = ep.loc;
   }
 
+(* A generated CLIENT is one module of request functions keyed by method and path.  Two `api`
+   blocks in one module may serve the same route — a user-facing and an agent-facing API over
+   shared handlers — and a client gets ONE function for that route, not two top-level
+   bindings of the same name (which Elm and TypeScript both reject). *)
+let client_endpoints (m : ir_module) : ir_endpoint list =
+  let seen = Hashtbl.create 16 in
+  List.filter (fun (ep : ir_endpoint) ->
+    let key = (ep.ire_method, ep.ire_path) in
+    if Hashtbl.mem seen key then false else (Hashtbl.add seen key (); true)) m.irm_endpoints
+
 let module_to_ir (m : module_form) : ir_module =
   let endpoints = List.concat_map (function
     | DApi api -> List.map ir_endpoint_of_api_endpoint api.endpoints

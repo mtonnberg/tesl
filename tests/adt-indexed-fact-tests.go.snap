@@ -261,7 +261,7 @@ func TestTesl0(teslT *testing.T) {
 //line adt-indexed-fact-tests.tesl:155
 			if teslLeft1 != "wrote cost rates" {
 //line adt-indexed-fact-tests.tesl:155
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft1, "wrote cost rates")
 			}
 		}
 	}
@@ -291,7 +291,7 @@ func TestTesl1(teslT *testing.T) {
 //line adt-indexed-fact-tests.tesl:161
 			if teslLeft2 != "read projects" {
 //line adt-indexed-fact-tests.tesl:161
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft2, "read projects")
 			}
 		}
 	}
@@ -317,7 +317,7 @@ func TestTesl2(teslT *testing.T) {
 //line adt-indexed-fact-tests.tesl:166
 		if !teslrt.Equal(teslLeft3, teslrt.FromInt64(3)) {
 //line adt-indexed-fact-tests.tesl:166
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft3), teslrt.DescribeValue(teslrt.FromInt64(3)))
 		}
 		{
 //line adt-indexed-fact-tests.tesl:167
@@ -327,7 +327,7 @@ func TestTesl2(teslT *testing.T) {
 //line adt-indexed-fact-tests.tesl:168
 			if teslLeft4 != "wrote cost rates" {
 //line adt-indexed-fact-tests.tesl:168
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft4, "wrote cost rates")
 			}
 			{
 //line adt-indexed-fact-tests.tesl:169
@@ -337,7 +337,7 @@ func TestTesl2(teslT *testing.T) {
 //line adt-indexed-fact-tests.tesl:170
 				if teslLeft5 != "read projects" {
 //line adt-indexed-fact-tests.tesl:170
-					teslT.Fatal("Tesl expectation failed")
+					teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft5, "read projects")
 				}
 				{
 //line adt-indexed-fact-tests.tesl:171
@@ -347,7 +347,7 @@ func TestTesl2(teslT *testing.T) {
 //line adt-indexed-fact-tests.tesl:172
 					if teslLeft6 != "managed users" {
 //line adt-indexed-fact-tests.tesl:172
-						teslT.Fatal("Tesl expectation failed")
+						teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft6, "managed users")
 					}
 				}
 			}
@@ -379,7 +379,7 @@ func TestTesl3(teslT *testing.T) {
 //line adt-indexed-fact-tests.tesl:178
 			if teslLeft7 != "dave may read projects" {
 //line adt-indexed-fact-tests.tesl:178
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft7, "dave may read projects")
 			}
 		}
 	}
@@ -440,7 +440,7 @@ func TestTeslApi1(teslT *testing.T) {
 //line adt-indexed-fact-tests.tesl:144
 		if !teslrt.Equal(teslLeft8, teslrt.FromInt64(403)) {
 //line adt-indexed-fact-tests.tesl:144
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft8), teslrt.DescribeValue(teslrt.FromInt64(403)))
 		}
 	}
 }
@@ -468,7 +468,7 @@ func TestTeslApi2(teslT *testing.T) {
 //line adt-indexed-fact-tests.tesl:149
 		if !teslrt.Equal(teslLeft9, teslrt.FromInt64(401)) {
 //line adt-indexed-fact-tests.tesl:149
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft9), teslrt.DescribeValue(teslrt.FromInt64(401)))
 		}
 	}
 }

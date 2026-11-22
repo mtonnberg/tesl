@@ -703,7 +703,7 @@ func DecodeUserJSON(teslJSON any) teslrt.Check[User] {
 	return teslrt.Accept(User{Id: teslFieldId, Username: teslFieldUsername, EmailAddress: teslFieldEmailAddress, PasswordHash: teslFieldPasswordHash, Bio: teslFieldBio, AvatarUrl: teslFieldAvatarUrl, CreatedAt: teslFieldCreatedAt})
 }
 
-const teslCacheArtifactIdentity = "17da2eb1ed64904539e0560e711608af797e507abc4a22044af76b55df641c4a"
+const teslCacheArtifactIdentity = "c8c0779e5887633e30eb0d3a7b4a8e13699324a6e11da6050e4f629ce93d754a"
 
 //line user-service-api.tesl:151
 func teslCacheEncodeUserProfileCache(teslValue User) any {
@@ -936,7 +936,7 @@ func TestTesl0(teslT *testing.T) {
 //line user-service-api.tesl:551
 		if teslLeft1 != v4 {
 //line user-service-api.tesl:551
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft1, v4)
 		}
 	}
 }
@@ -962,7 +962,7 @@ func TestTesl1(teslT *testing.T) {
 //line user-service-api.tesl:556
 		if teslLeft2 != v7 {
 //line user-service-api.tesl:556
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft2, v7)
 		}
 	}
 }
@@ -991,7 +991,7 @@ func TestTesl2(teslT *testing.T) {
 //line user-service-api.tesl:563
 			if result != v4 {
 //line user-service-api.tesl:563
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %q != %q", result, v4)
 			}
 		}
 	}
@@ -1021,7 +1021,7 @@ func TestTesl3(teslT *testing.T) {
 //line user-service-api.tesl:569
 			if result != v7 {
 //line user-service-api.tesl:569
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %q != %q", result, v7)
 			}
 		}
 	}
@@ -1052,7 +1052,7 @@ func TestTesl4(teslT *testing.T) {
 //line user-service-api.tesl:576
 			if teslLeft5 != raw {
 //line user-service-api.tesl:576
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft5, raw)
 			}
 		}
 	}
@@ -1157,7 +1157,7 @@ func TestTesl7(teslT *testing.T) {
 //line user-service-api.tesl:604
 			if result != addr {
 //line user-service-api.tesl:604
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %q != %q", result, addr)
 			}
 		}
 	}
@@ -1187,7 +1187,7 @@ func TestTesl8(teslT *testing.T) {
 //line user-service-api.tesl:610
 			if result != name {
 //line user-service-api.tesl:610
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %q != %q", result, name)
 			}
 		}
 	}
@@ -1217,7 +1217,7 @@ func TestTesl9(teslT *testing.T) {
 //line user-service-api.tesl:616
 			if result != pwd {
 //line user-service-api.tesl:616
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %q != %q", result, pwd)
 			}
 		}
 	}

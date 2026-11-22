@@ -188,7 +188,9 @@ let export destination=project(fun root save path->
  let build version =
   let file=save "app.tesl" app in accepts file app;
   let out=Filename.concat destination version in
-  List.iter(fun(a:Emit_go.artifact)->if not(Filename.check_suffix a.path ".json")then write(Filename.concat out a.path)a.contents)(emit ~physical:true file);
+  let artifacts=emit ~physical:true file in
+  List.iter(fun(a:Emit_go.artifact)->if not(Filename.check_suffix a.path ".json")then write(Filename.concat out a.path)a.contents)artifacts;
+  if version="v2" then Option.iter(fun(a:Emit_go.artifact)->write(Filename.concat out a.path)a.contents)(Emit_go.runtime_history_test_companion artifacts);
   if version="v2" then List.iter (fun (name,target) ->
    write (Filename.concat out target) (Source_input.read (Filename.concat (repository ()) ("compiler/test/fixtures/row-derived/" ^ name))))
    ["wire_test.go","internal/teslrt/derived_wire_test.go";"adapter_test.go","internal/teslmodapp/derived_adapter_test.go"];
@@ -223,7 +225,9 @@ entity Note|}
  write path edge;accepts path edge;seal_edge root path;
  let database=String.sub app 0 (Str.search_forward (Str.regexp_string "api NotesApi") app 0) in
  let file=save "app.tesl" database in accepts file database;
- List.iter(fun(a:Emit_go.artifact)->if not(Filename.check_suffix a.path ".json")then write(Filename.concat out a.path)a.contents)(emit ~physical:true file);
+ let artifacts=emit ~physical:true file in
+ List.iter(fun(a:Emit_go.artifact)->if not(Filename.check_suffix a.path ".json")then write(Filename.concat out a.path)a.contents)artifacts;
+ Option.iter(fun(a:Emit_go.artifact)->write(Filename.concat out a.path)a.contents)(Emit_go.runtime_history_test_companion artifacts);
  List.iter(fun(name,target)->write(Filename.concat out target)(Source_input.read(Filename.concat(repository())("compiler/test/fixtures/row-derived/"^name))))
   ["legacy_wire_test.go","internal/teslrt/derived_legacy_wire_test.go";"legacy_adapter_test.go","internal/teslmodapp/derived_legacy_adapter_test.go"]);
  command out (Filename.concat out "native.log") "timeout 120s go test -p 1 -race -tags tesl_migration_test -timeout 90s ./internal/teslmodapp ./internal/teslrt -run '^TestDerivedLegacy' -count=1 -v")

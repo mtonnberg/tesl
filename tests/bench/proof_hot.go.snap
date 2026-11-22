@@ -88,7 +88,7 @@ func TestTesl0(teslT *testing.T) {
 //line proof_hot.tesl:37
 							if !teslrt.Equal(teslLeft1, teslrt.FromInt64(6)) {
 //line proof_hot.tesl:37
-								teslT.Fatal("Tesl expectation failed")
+								teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft1), teslrt.DescribeValue(teslrt.FromInt64(6)))
 							}
 						}
 					}

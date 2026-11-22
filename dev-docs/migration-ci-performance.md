@@ -45,6 +45,9 @@ checks. Construction took 1,807.968s and rollout/cleanup 650.759s, totaling
 2,396s result: those runs were not a controlled A/B comparison. In particular,
 each revision changes `migration_history_generated.go` inside the generated
 runtime package, so different revisions still require recompilation.
+That file now lives in its own generated package (`internal/teslhistory`), so
+a new revision recompiles that package and the packages importing it, not the
+runtime.
 
 Evidence: `.tesl-stuff/ci-speed-20261019-162324/`, including `analysis.json`,
 `final-audit.json`, per-command traces and `full20/rollout.json`.
@@ -95,11 +98,11 @@ must continue to run without competing test workloads.
 
 ## Isolated authoritative shards
 
-The hosted gate partitions its existing checks across three runners. The default `./ci.sh` remains the complete serial local gate. `compiler-integration` owns the 23 parent phases outside the Go gate, including the full Dune suite. `go-runtime` owns the Go gate's static/build/unit/race/fuzz/CLI checks and bootstraps only the compiler executable. `migration` owns the complete shared migration runner, now 61 mandatory phases with private PostgreSQL.
+The hosted gate partitions its existing checks across three runners. The default `./ci.sh` remains the complete serial local gate. `compiler-integration` owns the 23 parent phases outside the Go gate, including the Dune suite. The compiler suites that the shared migration runner runs as its own phases are plain executables, not `dune test` entries, so each runs once per gate; `test_suite_registration` refuses a suite that is in both places or in neither. `go-runtime` owns the Go gate's static/build/unit/race/fuzz/CLI checks and bootstraps only the compiler executable. `migration` owns the complete shared migration runner, now 61 mandatory phases with private PostgreSQL.
 
 The added rolling-workload smoke builds ordinary old/new programs and checks concurrent requests, backfill restart, rejection/repair, managed-index work and Contract. Its processes stop before the existing isolated latency comparison. The smoke establishes correctness on that runner, not production p99 or large-table acceptance. The supported PostgreSQL-major workflow retains the complete shared runner.
 
-Each shard records the exact commit, tree, clean tracked source and phase inventory, with hashes of its evidence. The required job retains the name `Authoritative gate (./ci.sh)`, runs after every upstream outcome and accepts only the exact successful union: all 24 parent phases, both Go parts and all 61 migration phases. Missing, duplicated, reordered, skipped or failed work refuses. The serial gate also verifies its exact completed phase sequence. The final job preserves the existing verified-content export.
+Each shard records the exact commit, tree, clean tracked source and phase inventory, with hashes of its evidence. The required job retains the name `Authoritative gate (./ci.sh)`, runs after every upstream outcome and accepts only the exact successful union: all 25 parent phases, both Go parts and all 61 migration phases. Missing, duplicated, reordered, skipped or failed work refuses. The serial gate also verifies its exact completed phase sequence. The final job preserves the existing verified-content export.
 
 Use `./ci.sh --list-phases` or `./ci.sh --shard migration --list-phases` to inspect the plan. Explicit shard execution requires clean committed source and emits a source-bound receipt; one shard alone is not a green gate. Fresh complete workflow wall times, including startup and final export, are required before assigning any speedup factor. No assertion, timing budget or supported-major check was removed.
 

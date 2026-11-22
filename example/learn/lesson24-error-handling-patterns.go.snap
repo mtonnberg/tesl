@@ -172,7 +172,7 @@ func TestTesl0(teslT *testing.T) {
 //line lesson24-error-handling-patterns.tesl:125
 			if result != "user@example.com" {
 //line lesson24-error-handling-patterns.tesl:125
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %q != %q", result, "user@example.com")
 			}
 		}
 	}
@@ -224,7 +224,7 @@ func TestTesl2(teslT *testing.T) {
 //line lesson24-error-handling-patterns.tesl:136
 			if !teslrt.Equal(result, teslrt.FromInt64(25)) {
 //line lesson24-error-handling-patterns.tesl:136
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(result), teslrt.DescribeValue(teslrt.FromInt64(25)))
 			}
 		}
 	}

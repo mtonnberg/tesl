@@ -45,10 +45,45 @@ type Table[Row any] struct {
 	mutex   sync.RWMutex
 	rows    []Row
 	version uint64
+	// normalize turns a row into the form PostgreSQL would store, applied to every row
+	// written. Today that is a `String @db(jsonb)` column, which PostgreSQL re-renders
+	// (`JsonbText`); without it a test comparing that text passes here and fails against
+	// the real database. Nil when no column needs it.
+	normalize func(Row) Row
 }
 
 func NewTable[Row any]() *Table[Row] {
 	return &Table[Row]{}
+}
+
+// NewTableNormalized is a table whose rows are stored in the form `normalize` gives them.
+func NewTableNormalized[Row any](normalize func(Row) Row) *Table[Row] {
+	return &Table[Row]{normalize: normalize}
+}
+
+func (table *Table[Row]) stored(row Row) Row {
+	if table.normalize == nil {
+		return row
+	}
+	return table.normalize(row)
+}
+
+func (table *Table[Row]) storedAll(rows []Row) []Row {
+	if table.normalize == nil {
+		return rows
+	}
+	normalized := make([]Row, len(rows))
+	for index, row := range rows {
+		normalized[index] = table.normalize(row)
+	}
+	return normalized
+}
+
+func (table *Table[Row]) storing(apply func(Row) Row) func(Row) Row {
+	if table.normalize == nil {
+		return apply
+	}
+	return func(row Row) Row { return table.normalize(apply(row)) }
 }
 
 // snapshot is what a read starts from: the published rows and the version they belong to. The
@@ -111,8 +146,11 @@ func TableInsert[Row any](table *Table[Row], entity string, row Row, conflicts f
 	defer releaseMemoryWrite(acquireMemoryWrite())
 	table.mutex.Lock()
 	defer table.mutex.Unlock()
-	checkUniqueIn(table.rows, entity, row, unique, -1)
-	table.publishLocked(insertInto(table.rows, entity, row, conflicts))
+	// The row is STORED in PostgreSQL's form and answered as given, which is what the
+	// PostgreSQL path does: it executes the insert and returns its argument.
+	stored := table.stored(row)
+	checkUniqueIn(table.rows, entity, stored, unique, -1)
+	table.publishLocked(insertInto(table.rows, entity, stored, conflicts))
 	return row
 }
 
@@ -178,7 +216,7 @@ func TableInsertMany[Row any](table *Table[Row], entity string, rows []Row,
 	defer releaseMemoryWrite(acquireMemoryWrite())
 	table.mutex.Lock()
 	defer table.mutex.Unlock()
-	for _, row := range rows {
+	for _, row := range table.storedAll(rows) {
 		// Published one at a time, so the rows before a conflicting one STAY when it traps —
 		// which is what one insert at a time would have left behind.
 		checkUniqueIn(table.rows, entity, row, unique, -1)
@@ -224,6 +262,7 @@ func TableInsertManyKeyed[Row any](table *Table[Row], entity string, rows []Row,
 	defer releaseMemoryWrite(acquireMemoryWrite())
 	table.mutex.Lock()
 	defer table.mutex.Unlock()
+	rows = table.storedAll(rows)
 	// Keep small batches' original comparisons and publication without allocating
 	// keys, particularly canonical Int strings for a singleton on a large table.
 	if len(rows) <= tableInsertManyScanLimit {
@@ -667,6 +706,7 @@ func (table *Table[Row]) replaceIfUnchanged(version uint64, replacements []rowRe
 // plain `update` is a statement, so nothing is reported back.
 func TableUpdate[Row any](table *Table[Row], match func(Row) bool, apply func(Row) Row,
 	unique ...UniqueIndex[Row]) struct{} {
+	apply = table.storing(apply)
 	for range tableWriteRetries {
 		rows, version := table.snapshot()
 		// `match` and `apply` run on the snapshot with no lock held: a `set` value may query
@@ -710,6 +750,8 @@ const updateReturnOneAmbiguous = "updateAndReturnOne: the predicate matched more
 // now refuse the ambiguous predicate before changing anything.
 func TableUpdateReturnOne[Row any](table *Table[Row], match func(Row) bool, apply func(Row) Row,
 	unique ...UniqueIndex[Row]) Row {
+	// The stored form is also the answer, as PostgreSQL's `returning` reads the stored row.
+	apply = table.storing(apply)
 	for range tableWriteRetries {
 		rows, version := table.snapshot()
 		matched := -1
@@ -831,11 +873,12 @@ func TableUpsert[Row any](
 	// hand, not Tesl expressions, so they carry no query and may run under the lock.
 	table.mutex.Lock()
 	defer table.mutex.Unlock()
+	row = table.stored(row)
 	for position, existing := range table.rows {
 		if !matches(existing, row) {
 			continue
 		}
-		merged := merge(existing, row)
+		merged := table.stored(merge(existing, row))
 		checkUniqueIn(table.rows, entity, merged, unique, position)
 		next := append(make([]Row, 0, len(table.rows)), table.rows...)
 		next[position] = merged
@@ -973,12 +1016,13 @@ func WithMemoryTransaction(body func()) {
 	committed = true
 }
 
-// goroutineID reads the id out of the goroutine's own stack header, which is the only place
-// the runtime exposes it. The header's shape ("goroutine 17 [running]:") is fixed by
+// goroutineIDFromStack reads the id out of the goroutine's own stack header, which is the only
+// place the runtime exposes it. The header's shape ("goroutine 17 [running]:") is fixed by
 // `runtime.Stack` itself; an unreadable one answers 0, which is a key like any other — every
 // goroutine that fails to parse would share one transaction, and none can, because the parse
-// cannot fail for a header this function is looking at.
-func goroutineID() uint64 {
+// cannot fail for a header this function is looking at. It is the reference for the fast path
+// in goroutine_id.go, and the answer wherever that path is unavailable.
+func goroutineIDFromStack() uint64 {
 	var header [64]byte
 	written := runtime.Stack(header[:], false)
 	fields := bytes.Fields(header[:written])

@@ -664,10 +664,14 @@ let collect_decl_names acc (d : Ast.top_decl) =
     let acc = List.fold_left collect_capability_name acc tf.capabilities in
     List.fold_left collect_test_stmt_names acc tf.stmts
   | DApiTest atf ->
+    (* `api-test "…" for S` references S: an import used only there is not unused, and
+       removing it fails the module with "references unknown server". *)
+    let acc = atf.server_name :: acc in
     let acc = List.fold_left collect_capability_name acc atf.capabilities in
     let acc = List.fold_left (fun a e -> collect_expr_names a e) acc atf.seed_stmts in
     List.fold_left collect_test_stmt_names acc atf.stmts
   | DLoadTest ltf ->
+    let acc = ltf.server_name :: acc in
     let acc = List.fold_left collect_capability_name acc ltf.capabilities in
     let acc = List.fold_left (fun a e -> collect_expr_names a e) acc ltf.seed_stmts in
     List.fold_left collect_test_stmt_names acc ltf.request_stmts
@@ -677,6 +681,9 @@ let collect_decl_names acc (d : Ast.top_decl) =
         | Some auth -> collect_binding_names (auth.via_fn :: a) auth.binding
         | None -> a in
       let a = List.fold_left (fun a (cap : Ast.api_capture) ->
+        (* The inline form `capture x: T using codec [via check]` references both. *)
+        let a = Option.fold ~none:a ~some:(fun c -> c :: a) cap.inline_codec in
+        let a = Option.fold ~none:a ~some:(fun c -> c :: a) cap.inline_check in
         collect_binding_names (cap.via_fn :: a) cap.binding
       ) a ep.captures in
       let a = match (Ast.ep_body ep) with Some b -> collect_binding_names a b | None -> a in

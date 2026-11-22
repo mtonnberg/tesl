@@ -83,7 +83,7 @@ func TestTesl0(teslT *testing.T) {
 //line sql-newtype-range-tests.tesl:26
 					if !teslrt.Equal(teslLeft1, teslrt.FromInt64(1)) {
 //line sql-newtype-range-tests.tesl:26
-						teslT.Fatal("Tesl expectation failed")
+						teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft1), teslrt.DescribeValue(teslrt.FromInt64(1)))
 					}
 				}
 			}
@@ -122,7 +122,7 @@ func TestTesl1(teslT *testing.T) {
 //line sql-newtype-range-tests.tesl:34
 					if !teslrt.Equal(teslLeft2, teslrt.FromInt64(0)) {
 //line sql-newtype-range-tests.tesl:34
-						teslT.Fatal("Tesl expectation failed")
+						teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft2), teslrt.DescribeValue(teslrt.FromInt64(0)))
 					}
 				}
 			}

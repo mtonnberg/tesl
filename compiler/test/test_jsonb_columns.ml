@@ -430,7 +430,7 @@ api-test "generic payloads encode through the application" for DocumentsServer {
   expect response.body.text.fields.value == "hello"
   expect response.body.number.fields.value == 123456789012345678901234567890
   expect response.body.nested.fields.value.fields.value == 9
-  expect response.body.optional.fields.value.fields.value == "optional"
+  expect response.body.optional.fields.value == "optional"
 }
 |} prefix prefix prefix prefix prefix in
   let file = write "columns.tesl" source in

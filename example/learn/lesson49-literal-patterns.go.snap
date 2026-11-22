@@ -214,25 +214,25 @@ func TestTesl0(teslT *testing.T) {
 //line lesson49-literal-patterns.tesl:126
 	if teslLeft1 != "zero" {
 //line lesson49-literal-patterns.tesl:126
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft1, "zero")
 	}
 	teslLeft2 := DescribeInt(teslrt.FromInt64(1))
 //line lesson49-literal-patterns.tesl:127
 	if teslLeft2 != "one" {
 //line lesson49-literal-patterns.tesl:127
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft2, "one")
 	}
 	teslLeft3 := DescribeInt(teslrt.FromInt64(2))
 //line lesson49-literal-patterns.tesl:128
 	if teslLeft3 != "two" {
 //line lesson49-literal-patterns.tesl:128
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft3, "two")
 	}
 	teslLeft4 := DescribeInt(teslrt.FromInt64(99))
 //line lesson49-literal-patterns.tesl:129
 	if teslLeft4 != "many (99)" {
 //line lesson49-literal-patterns.tesl:129
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft4, "many (99)")
 	}
 }
 
@@ -252,19 +252,19 @@ func TestTesl1(teslT *testing.T) {
 //line lesson49-literal-patterns.tesl:133
 	if teslLeft5 != "OK" {
 //line lesson49-literal-patterns.tesl:133
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft5, "OK")
 	}
 	teslLeft6 := HttpStatusText(teslrt.FromInt64(404))
 //line lesson49-literal-patterns.tesl:134
 	if teslLeft6 != "Not Found" {
 //line lesson49-literal-patterns.tesl:134
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft6, "Not Found")
 	}
 	teslLeft7 := HttpStatusText(teslrt.FromInt64(999))
 //line lesson49-literal-patterns.tesl:135
 	if teslLeft7 != "Unknown" {
 //line lesson49-literal-patterns.tesl:135
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft7, "Unknown")
 	}
 }
 
@@ -284,19 +284,19 @@ func TestTesl2(teslT *testing.T) {
 //line lesson49-literal-patterns.tesl:139
 	if teslLeft8 != "show help" {
 //line lesson49-literal-patterns.tesl:139
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft8, "show help")
 	}
 	teslLeft9 := ParseCommand("version")
 //line lesson49-literal-patterns.tesl:140
 	if teslLeft9 != "show version" {
 //line lesson49-literal-patterns.tesl:140
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft9, "show version")
 	}
 	teslLeft10 := ParseCommand("deploy")
 //line lesson49-literal-patterns.tesl:141
 	if teslLeft10 != "unknown command: deploy" {
 //line lesson49-literal-patterns.tesl:141
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft10, "unknown command: deploy")
 	}
 }
 
@@ -316,19 +316,19 @@ func TestTesl3(teslT *testing.T) {
 //line lesson49-literal-patterns.tesl:145
 	if teslLeft11 != "vowel" {
 //line lesson49-literal-patterns.tesl:145
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft11, "vowel")
 	}
 	teslLeft12 := ClassifyChar("b")
 //line lesson49-literal-patterns.tesl:146
 	if teslLeft12 != "consonant or other" {
 //line lesson49-literal-patterns.tesl:146
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft12, "consonant or other")
 	}
 	teslLeft13 := ClassifyChar("i")
 //line lesson49-literal-patterns.tesl:147
 	if teslLeft13 != "vowel" {
 //line lesson49-literal-patterns.tesl:147
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft13, "vowel")
 	}
 }
 
@@ -348,30 +348,30 @@ func TestTesl4(teslT *testing.T) {
 //line lesson49-literal-patterns.tesl:151
 	if !teslrt.Equal(teslLeft14, teslrt.FromInt64(40)) {
 //line lesson49-literal-patterns.tesl:151
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft14), teslrt.DescribeValue(teslrt.FromInt64(40)))
 	}
 	teslLeft15 := DiscountForTier(Tier{Tag: TierGold}, "any")
 //line lesson49-literal-patterns.tesl:152
 	if !teslrt.Equal(teslLeft15, teslrt.FromInt64(25)) {
 //line lesson49-literal-patterns.tesl:152
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft15), teslrt.DescribeValue(teslrt.FromInt64(25)))
 	}
 	teslLeft16 := DiscountForTier(Tier{Tag: TierFree}, "WELCOME10")
 //line lesson49-literal-patterns.tesl:153
 	if !teslrt.Equal(teslLeft16, teslrt.FromInt64(10)) {
 //line lesson49-literal-patterns.tesl:153
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft16), teslrt.DescribeValue(teslrt.FromInt64(10)))
 	}
 	teslLeft17 := DiscountForTier(Tier{Tag: TierFree}, "SUMMER20")
 //line lesson49-literal-patterns.tesl:154
 	if !teslrt.Equal(teslLeft17, teslrt.FromInt64(20)) {
 //line lesson49-literal-patterns.tesl:154
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft17), teslrt.DescribeValue(teslrt.FromInt64(20)))
 	}
 	teslLeft18 := DiscountForTier(Tier{Tag: TierFree}, "INVALID")
 //line lesson49-literal-patterns.tesl:155
 	if !teslrt.Equal(teslLeft18, teslrt.FromInt64(0)) {
 //line lesson49-literal-patterns.tesl:155
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft18), teslrt.DescribeValue(teslrt.FromInt64(0)))
 	}
 }

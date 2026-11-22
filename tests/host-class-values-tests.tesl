@@ -1,0 +1,20 @@
+module HostClassValuesTests exposing [classOf]
+
+# A program that only NAMES a host classification — no `Net.classifyHost` call —
+# still needs the runtime type behind it. The runtime file carrying `HostClass`
+# used to be left out of such a program, which then passed `tesl check` and failed
+# to build.
+
+import Tesl.Prelude exposing [Bool(..), String]
+import Tesl.Net exposing [HostClass, Loopback, PublicIp]
+
+fn classOf(local: Bool) -> HostClass =
+  if local then
+    Loopback
+  else
+    PublicIp
+
+test "a classification can be built and compared without classifying anything" {
+  expect classOf True == Loopback
+  expect classOf False == PublicIp
+}

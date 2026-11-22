@@ -99,20 +99,20 @@ func TestTesl0(teslT *testing.T) {
 //line lesson01-basic-types-and-functions.tesl:73
 	if !teslrt.Equal(teslLeft1, teslrt.FromInt64(0)) {
 //line lesson01-basic-types-and-functions.tesl:73
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft1), teslrt.DescribeValue(teslrt.FromInt64(0)))
 	}
 	teslLeft2 := Double(teslrt.FromInt64(5))
 //line lesson01-basic-types-and-functions.tesl:74
 	if !teslrt.Equal(teslLeft2, teslrt.FromInt64(10)) {
 //line lesson01-basic-types-and-functions.tesl:74
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft2), teslrt.DescribeValue(teslrt.FromInt64(10)))
 	}
 	teslLeft3 := Double(teslrt.FromInt64(-2))
 	teslRight3 := teslrt.Neg(teslrt.FromInt64(4))
 //line lesson01-basic-types-and-functions.tesl:75
 	if !teslrt.Equal(teslLeft3, teslRight3) {
 //line lesson01-basic-types-and-functions.tesl:75
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft3), teslrt.DescribeValue(teslRight3))
 	}
 }
 
@@ -133,19 +133,19 @@ func TestTesl1(teslT *testing.T) {
 //line lesson01-basic-types-and-functions.tesl:79
 	if !teslrt.Equal(teslLeft4, teslRight4) {
 //line lesson01-basic-types-and-functions.tesl:79
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft4), teslrt.DescribeValue(teslRight4))
 	}
 	teslLeft5 := Negate(teslrt.FromInt64(0))
 //line lesson01-basic-types-and-functions.tesl:80
 	if !teslrt.Equal(teslLeft5, teslrt.FromInt64(0)) {
 //line lesson01-basic-types-and-functions.tesl:80
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft5), teslrt.DescribeValue(teslrt.FromInt64(0)))
 	}
 	teslLeft6 := Negate(teslrt.FromInt64(-3))
 //line lesson01-basic-types-and-functions.tesl:81
 	if !teslrt.Equal(teslLeft6, teslrt.FromInt64(3)) {
 //line lesson01-basic-types-and-functions.tesl:81
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft6), teslrt.DescribeValue(teslrt.FromInt64(3)))
 	}
 }
 
@@ -165,31 +165,31 @@ func TestTesl2(teslT *testing.T) {
 //line lesson01-basic-types-and-functions.tesl:85
 	if !teslrt.Equal(teslLeft7, teslrt.FromInt64(5)) {
 //line lesson01-basic-types-and-functions.tesl:85
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft7), teslrt.DescribeValue(teslrt.FromInt64(5)))
 	}
 	teslLeft8 := Clamp(teslrt.FromInt64(0), teslrt.FromInt64(10), teslrt.FromInt64(-3))
 //line lesson01-basic-types-and-functions.tesl:86
 	if !teslrt.Equal(teslLeft8, teslrt.FromInt64(0)) {
 //line lesson01-basic-types-and-functions.tesl:86
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft8), teslrt.DescribeValue(teslrt.FromInt64(0)))
 	}
 	teslLeft9 := Clamp(teslrt.FromInt64(0), teslrt.FromInt64(10), teslrt.FromInt64(99))
 //line lesson01-basic-types-and-functions.tesl:87
 	if !teslrt.Equal(teslLeft9, teslrt.FromInt64(10)) {
 //line lesson01-basic-types-and-functions.tesl:87
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft9), teslrt.DescribeValue(teslrt.FromInt64(10)))
 	}
 	teslLeft10 := Clamp(teslrt.FromInt64(0), teslrt.FromInt64(10), teslrt.FromInt64(0))
 //line lesson01-basic-types-and-functions.tesl:88
 	if !teslrt.Equal(teslLeft10, teslrt.FromInt64(0)) {
 //line lesson01-basic-types-and-functions.tesl:88
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft10), teslrt.DescribeValue(teslrt.FromInt64(0)))
 	}
 	teslLeft11 := Clamp(teslrt.FromInt64(0), teslrt.FromInt64(10), teslrt.FromInt64(10))
 //line lesson01-basic-types-and-functions.tesl:89
 	if !teslrt.Equal(teslLeft11, teslrt.FromInt64(10)) {
 //line lesson01-basic-types-and-functions.tesl:89
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft11), teslrt.DescribeValue(teslrt.FromInt64(10)))
 	}
 }
 
@@ -209,13 +209,13 @@ func TestTesl3(teslT *testing.T) {
 //line lesson01-basic-types-and-functions.tesl:93
 	if teslLeft12 != "Hello, Alice! You are an adult." {
 //line lesson01-basic-types-and-functions.tesl:93
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft12, "Hello, Alice! You are an adult.")
 	}
 	teslLeft13 := GreetAge("Bob", teslrt.FromInt64(17))
 //line lesson01-basic-types-and-functions.tesl:94
 	if teslLeft13 != "Hello, Bob! You are a minor." {
 //line lesson01-basic-types-and-functions.tesl:94
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft13, "Hello, Bob! You are a minor.")
 	}
 }
 
@@ -263,13 +263,13 @@ func TestTesl5(teslT *testing.T) {
 //line lesson01-basic-types-and-functions.tesl:1
 	if !teslrt.Equal(teslLeft14, teslrt.FromInt64(0)) {
 //line lesson01-basic-types-and-functions.tesl:1
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft14), teslrt.DescribeValue(teslrt.FromInt64(0)))
 	}
 	teslLeft15 := Double(teslrt.FromInt64(5))
 //line lesson01-basic-types-and-functions.tesl:1
 	if !teslrt.Equal(teslLeft15, teslrt.FromInt64(10)) {
 //line lesson01-basic-types-and-functions.tesl:1
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft15), teslrt.DescribeValue(teslrt.FromInt64(10)))
 	}
 }
 
@@ -290,13 +290,13 @@ func TestTesl6(teslT *testing.T) {
 //line lesson01-basic-types-and-functions.tesl:1
 	if !teslrt.Equal(teslLeft16, teslRight16) {
 //line lesson01-basic-types-and-functions.tesl:1
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft16), teslrt.DescribeValue(teslRight16))
 	}
 	teslLeft17 := Negate(teslrt.FromInt64(0))
 //line lesson01-basic-types-and-functions.tesl:1
 	if !teslrt.Equal(teslLeft17, teslrt.FromInt64(0)) {
 //line lesson01-basic-types-and-functions.tesl:1
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft17), teslrt.DescribeValue(teslrt.FromInt64(0)))
 	}
 }
 
@@ -316,18 +316,18 @@ func TestTesl7(teslT *testing.T) {
 //line lesson01-basic-types-and-functions.tesl:1
 	if !teslrt.Equal(teslLeft18, teslrt.FromInt64(5)) {
 //line lesson01-basic-types-and-functions.tesl:1
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft18), teslrt.DescribeValue(teslrt.FromInt64(5)))
 	}
 	teslLeft19 := Clamp(teslrt.FromInt64(0), teslrt.FromInt64(10), teslrt.FromInt64(-3))
 //line lesson01-basic-types-and-functions.tesl:1
 	if !teslrt.Equal(teslLeft19, teslrt.FromInt64(0)) {
 //line lesson01-basic-types-and-functions.tesl:1
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft19), teslrt.DescribeValue(teslrt.FromInt64(0)))
 	}
 	teslLeft20 := Clamp(teslrt.FromInt64(0), teslrt.FromInt64(10), teslrt.FromInt64(99))
 //line lesson01-basic-types-and-functions.tesl:1
 	if !teslrt.Equal(teslLeft20, teslrt.FromInt64(10)) {
 //line lesson01-basic-types-and-functions.tesl:1
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft20), teslrt.DescribeValue(teslrt.FromInt64(10)))
 	}
 }

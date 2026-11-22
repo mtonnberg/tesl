@@ -117,7 +117,9 @@ func pgTestRowIndexCatchupBuildsIntermediateJobs(t *testing.T, mode string) {
 	v3 := pgRowAdditiveApp(t, f, root, "v3")
 	pgCallRowAccessApp(t, ctx, v3, "POST", "/two", 200)
 	body := pgCallRowAccessApp(t, ctx, v3, "GET", "/all", 200)
-	if !strings.Contains(body, `"active":true`) || !strings.Contains(body, `"Something"`) {
+	// The latest shape's optional `token` is on the wire as its bare value (a Maybe has no
+	// envelope in an HTTP body), so the row written through V3 shows it directly.
+	if !strings.Contains(body, `"active":true`) || !strings.Contains(body, `"token":"two"`) {
 		t.Fatal("catch-up lost old writes or latest row shape", body)
 	}
 }

@@ -12,6 +12,7 @@ func configure(command *exec.Cmd) {
 		command.SysProcAttr = &syscall.SysProcAttr{}
 	}
 	command.SysProcAttr.Setpgid = true
+	stopWithParent(command.SysProcAttr)
 }
 
 func attach(command *exec.Cmd, _ bool) (func(), func(), error) {

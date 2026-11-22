@@ -666,7 +666,7 @@ func TestTeslApi3(teslT *testing.T) {
 //line session-cookie-tests.tesl:272
 		if !teslrt.Equal(teslLeft1, teslrt.FromInt64(401)) {
 //line session-cookie-tests.tesl:272
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft1), teslrt.DescribeValue(teslrt.FromInt64(401)))
 		}
 	}
 }
@@ -694,7 +694,7 @@ func TestTeslApi4(teslT *testing.T) {
 //line session-cookie-tests.tesl:278
 		if !teslrt.Equal(teslLeft2, teslrt.FromInt64(401)) {
 //line session-cookie-tests.tesl:278
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft2), teslrt.DescribeValue(teslrt.FromInt64(401)))
 		}
 	}
 }
@@ -744,7 +744,7 @@ func TestTeslApi5(teslT *testing.T) {
 //line session-cookie-tests.tesl:288
 					if !teslrt.Equal(teslLeft3, teslrt.FromInt64(401)) {
 //line session-cookie-tests.tesl:288
-						teslT.Fatal("Tesl expectation failed")
+						teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft3), teslrt.DescribeValue(teslrt.FromInt64(401)))
 					}
 				}
 			default:
@@ -777,7 +777,7 @@ func TestTeslApi6(teslT *testing.T) {
 //line session-cookie-tests.tesl:295
 		if !teslrt.Equal(teslLeft4, teslrt.FromInt64(403)) {
 //line session-cookie-tests.tesl:295
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft4), teslrt.DescribeValue(teslrt.FromInt64(403)))
 		}
 //line session-cookie-tests.tesl:296
 		{
@@ -1195,7 +1195,7 @@ func TestTeslApi12(teslT *testing.T) {
 //line session-cookie-tests.tesl:388
 		if !teslrt.Equal(teslLeft5, teslrt.FromInt64(401)) {
 //line session-cookie-tests.tesl:388
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft5), teslrt.DescribeValue(teslrt.FromInt64(401)))
 		}
 //line session-cookie-tests.tesl:389
 		{
@@ -1245,7 +1245,7 @@ func TestTeslApi13(teslT *testing.T) {
 //line session-cookie-tests.tesl:431
 		if !teslrt.Equal(teslLeft6, teslrt.FromInt64(500)) {
 //line session-cookie-tests.tesl:431
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft6), teslrt.DescribeValue(teslrt.FromInt64(500)))
 		}
 //line session-cookie-tests.tesl:432
 		if !teslrt.JsonEqual(teslrt.JsonFieldOf(resp.Body, "error"), "Internal server error") {

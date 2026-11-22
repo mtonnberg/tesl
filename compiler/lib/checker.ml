@@ -348,7 +348,12 @@ let type_mismatch_message actual expected note expectation =
     else ""
   in
   let posix_hint =
-    if is_posix_ty actual || is_posix_ty expected
+    (* An Int where a PosixMillis is expected is almost always an epoch-milliseconds
+       literal or column value, not arithmetic — say how to BUILD one. *)
+    if is_posix_ty expected && actual = TCon "Int"
+    then " (hint: a plain Int is not a timestamp; build one from epoch milliseconds with \
+`addMs (Time.secondsToPosix 0) ms`, or from seconds with `Time.secondsToPosix s`)"
+    else if is_posix_ty actual || is_posix_ty expected
     then " (hint: PosixMillis values cannot be used in arithmetic; \
 use `diffMs t1 t2` to get a duration in ms, `addMs t offset` to advance a timestamp, \
 or `subtractMs t offset` to go back in time)"
@@ -2718,7 +2723,7 @@ let rec infer_expr ctx (e : expr) : ty =
          (match apply !(ctx.subst) field_ty with
           | TCon _ -> ()
           | _ -> add_error ctx (expr_loc pattern) "SQL like predicates require a String column")
-       | SqlOr clauses -> List.iter (infer_clause binder entity) clauses
+       | SqlOr clauses | SqlAnd clauses -> List.iter (infer_clause binder entity) clauses
        | SqlIn { field; values } | SqlNotIn { field; values } ->
          let field_ty = field_type entity field in
          List.iter (fun value ->
@@ -2737,6 +2742,11 @@ let rec infer_expr ctx (e : expr) : ty =
      in
      let infer_select (seed : sql_select_seed) dynamic =
        List.iter (infer_clause seed.binder seed.entity) (seed.static_clauses @ dynamic);
+       (* A `limit`/`offset` written as an expression is an Int. *)
+       List.iter (function
+         | Some (BoundExpr bound) ->
+           unify_at ctx (expr_loc bound) (infer_expr ctx bound) t_int
+         | Some (BoundLiteral _) | None -> ()) [seed.limit; seed.offset];
        (match seed.kind, seed.group_by with
         | (SelectCountBy | SelectSumBy _), [] ->
           add_error ctx (expr_loc e) "grouped aggregate requires exactly one `groupBy` clause"
@@ -3047,6 +3057,16 @@ let rec infer_expr ctx (e : expr) : ty =
                 (e.g. `x` instead of `return x`)"
                (Diag_fix.verified_delete ~source_lines:ctx.source_lines loc
                   ~expect:"return")
+           else if List.mem name ["isNothing"; "isSomething"; "isJust"; "isNone"; "isSome"] then
+             (* Idiom transfer from Elm/Haskell/Rust: there is no Maybe predicate, because
+                equality already says it. *)
+             add_error ctx loc
+               (Printf.sprintf
+                  "unknown name: `%s` — Tesl has no Maybe predicate; compare instead: \
+                   `m == Nothing` %s, or `case m of …` to use the value"
+                  name
+                  (if List.mem name ["isNothing"; "isNone"] then "(is empty)"
+                   else "(is empty) / `m != Nothing` (has a value)"))
            else add_unknown_name_error ctx loc ~what:"name" name);
           fresh ()))
 
@@ -7104,6 +7124,15 @@ let pattern_bound_names_helper pat = pattern_var_names pat
     explicitly imported from a Tesl stdlib module.
     This catches "unbound identifier" errors at compile time rather than
     letting them surface as Racket runtime errors. *)
+(* A `seed { insert E { … } }` is "the ordinary `insert` syntax, so entity field names and
+   types are still compile-time checked" (LANGUAGE-SPEC §11.14) — but only the names were:
+   `insert Run { queuedAt: 1700000000300 }` on a `PosixMillis` field passed `tesl check` and was
+   refused only when the Go emitter met it.  Each seed statement is inferred the
+   way the same `insert` in a function body is. *)
+let check_seed_types ctx seed_stmts =
+  let seed_ctx = { ctx with env = make_stdlib_env () @ ctx.env; subst = ref empty_subst } in
+  List.iter (fun stmt -> ignore (infer_expr seed_ctx stmt)) seed_stmts
+
 let check_api_test_scope ctx (m : module_form) seed_stmts stmts =
   let is_tesl_module name =
     String.length name >= 5 && String.sub name 0 5 = "Tesl."
@@ -8164,9 +8193,11 @@ let check_module_with_metadata_uncached ?typed_nodes ?(source_lines = [||]) (m :
       in
       ignore (check_test_stmts test_ctx0 t.stmts)
     | DApiTest t ->
-      check_api_test_scope ctx m t.seed_stmts t.stmts
+      check_api_test_scope ctx m t.seed_stmts t.stmts;
+      check_seed_types ctx t.seed_stmts
     | DLoadTest lt ->
-      check_api_test_scope ctx m lt.seed_stmts lt.request_stmts
+      check_api_test_scope ctx m lt.seed_stmts lt.request_stmts;
+      check_seed_types ctx lt.seed_stmts
     | _ -> ()  (* codecs, databases, etc. — skip for Phase 2 *)
   ) m.decls;
   check_api_decl_types ctx m;

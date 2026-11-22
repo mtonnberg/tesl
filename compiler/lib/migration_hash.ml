@@ -27,7 +27,29 @@ let rotate x n =
 let xor3 a b c = Int32.logxor (Int32.logxor a b) c
 let ( +! ) = Int32.add
 
-let digest source =
+(* Checking one application rehashes the same canonical inputs many times
+   (46,112 calls over 217 MB with 553 distinct inputs for a twenty-revision
+   history). SHA-256 is a pure function of its input, so a bounded memo returns
+   the identical result; OCaml's string hashing and equality are far cheaper
+   than this portable implementation. The memo is cleared when it would retain
+   more than memo_limit bytes, so long-lived sessions stay bounded. *)
+let memo : (string, string) Hashtbl.t = Hashtbl.create 1024
+let memo_bytes = ref 0
+let memo_limit = 256 * 1024 * 1024
+
+let rec digest source =
+  match Hashtbl.find_opt memo source with
+  | Some result -> result
+  | None ->
+    let result = compute source in
+    if !memo_bytes + String.length source > memo_limit then begin
+      Hashtbl.reset memo; memo_bytes := 0
+    end;
+    Hashtbl.replace memo source result;
+    memo_bytes := !memo_bytes + String.length source;
+    result
+
+and compute source =
   let length = String.length source in
   (* One block of scratch space: hashing a large schema must not require another
      whole copy of the input just to append its padding. *)
