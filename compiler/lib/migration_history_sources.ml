@@ -248,12 +248,13 @@ let inspect ~stored_value_compatibility ~include_migrations ~compiler_abi ~proje
 
 
 type history_cache_key = string option * bool * string * string * string * (string * string) list
-type history_cache = { entries : (history_cache_key, t) Hashtbl.t; mutable weight : int }
+type history_cache = { entries : (history_cache_key, t) Hashtbl.t; mutable weight : int;
+  verified : (history_cache_key, Source_input.view_token) Hashtbl.t }
 let active_cache : history_cache option ref = ref None
 let with_cache f = match !active_cache with
  | Some _ -> f ()
  | None ->
-   active_cache := Some {entries=Hashtbl.create 8;weight=0};
+   active_cache := Some {entries=Hashtbl.create 8;weight=0;verified=Hashtbl.create 8};
    Fun.protect ~finally:(fun () -> active_cache := None) f
 let stdlib_inputs () =
  try Some (List.map (fun (name,_) ->
@@ -275,15 +276,26 @@ let inspect ~stored_value_compatibility ~include_migrations ~compiler_abi ~proje
    (* A hit still scans revision/Contract directories, rechecks canonical regular
       files and exact source digests, and resolves every captured import. Changed
       inputs trigger fresh discovery, not a stale result or cached diagnostic. *)
+   (* Every declaration of a history looks up the same entry; re-reading every
+      source on every hit made one command quadratic in history length. A hit
+      already verified under this very source view (same overlay and pinned
+      resources) is reused without re-reading; any other view re-verifies.
+      A disk edit made while one command runs is caught by that command's final
+      source guards (capture validation, preview verification) before it emits
+      or reports success. *)
    let cached = Option.bind (Hashtbl.find_opt cache.entries key) (fun history ->
-     match verify_unchanged history with
-     | Ok () when stdlib_inputs () = Some stdlib -> Some history
-     | _ -> None) in
+     match Hashtbl.find_opt cache.verified key with
+     | Some token when Source_input.same_view token -> Some history
+     | _ ->
+       match verify_unchanged history with
+       | Ok () when stdlib_inputs () = Some stdlib ->
+         Hashtbl.replace cache.verified key (Source_input.view_token ()); Some history
+       | _ -> None) in
    (match cached with
     | Some history -> Ok history
     | None ->
       if Hashtbl.mem cache.entries key then begin
-        Hashtbl.clear cache.entries; cache.weight <- 0
+        Hashtbl.clear cache.entries; Hashtbl.clear cache.verified; cache.weight <- 0
       end;
       let result = compute () in
       (match result with
@@ -291,9 +303,10 @@ let inspect ~stored_value_compatibility ~include_migrations ~compiler_abi ~proje
          let size = String.length (Marshal.to_string (key,history) []) in
          if size <= 256 * 1024 * 1024 then begin
            if Hashtbl.length cache.entries >= 16 || cache.weight + size > 256 * 1024 * 1024 then begin
-             Hashtbl.clear cache.entries; cache.weight <- 0
+             Hashtbl.clear cache.entries; Hashtbl.clear cache.verified; cache.weight <- 0
            end;
-           Hashtbl.replace cache.entries key history; cache.weight <- cache.weight + size
+           Hashtbl.replace cache.entries key history; cache.weight <- cache.weight + size;
+           Hashtbl.replace cache.verified key (Source_input.view_token ())
          end
        | _ -> ());
       result)
