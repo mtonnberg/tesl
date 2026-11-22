@@ -194,6 +194,19 @@ let same_inventory a b = I.snapshot a=I.snapshot b && I.root_module a=I.root_mod
  I.compiler_abi a=I.compiler_abi b
 (* Validation of the whole chain and the complete V1 derivation do not depend on
    the selected origin. They run once per call and are shared by every origin. *)
+let refuse_unsupported edges =
+  let loc = Location.dummy_loc "" in
+   List.iter (fun (edge : D.t) ->
+     if D.queue_transition edge then reject ~code:"MIG028" loc
+       "checked queue conversions cannot be treated as additive physical history";
+     List.iter (fun (entity,kind) -> match kind with
+      | S.Transform | S.Reset -> reject
+          (Location.dummy_loc (match I.source_inputs (snd (S.inventories (D.coverage edge))) with
+            | (file,_)::_ -> file | [] -> ""))
+          (Printf.sprintf "V%d %s: transforming migrations are checked source only; the PostgreSQL transformation executor is not implemented"
+            (D.version edge) entity)
+      | S.Additive | S.New | S.Drop -> ()) (S.entries (D.coverage edge))) edges
+
 let checked_chain ~schemas ~edges =
   let loc = Location.dummy_loc "" in
   if schemas=[] || List.length edges+1<>List.length schemas then
@@ -210,16 +223,7 @@ let checked_chain ~schemas ~edges =
   (* Logical checking is deliberately ahead of runtime transformation support.
      Inspect EVERY retained edge before selecting a fresh installation origin:
      choosing a later origin must not silently skip an unsupported transform. *)
-   List.iter (fun (edge : D.t) ->
-     if D.queue_transition edge then reject ~code:"MIG028" loc
-       "checked queue conversions cannot be treated as additive physical history";
-     List.iter (fun (entity,kind) -> match kind with
-      | S.Transform | S.Reset -> reject
-          (Location.dummy_loc (match I.source_inputs (snd (S.inventories (D.coverage edge))) with
-            | (file,_)::_ -> file | [] -> ""))
-          (Printf.sprintf "V%d %s: transforming migrations are checked source only; the PostgreSQL transformation executor is not implemented"
-            (D.version edge) entity)
-      | S.Additive | S.New | S.Drop -> ()) (S.entries (D.coverage edge))) edges;
+   refuse_unsupported edges;
   derive ~initial_version:1 (List.hd schemas) edges
 let range_check ~initial_version ~schemas =
   if initial_version<1 || initial_version>2147483646 || initial_version>List.length schemas then
@@ -228,6 +232,23 @@ let from_origin ~initial_version ~schemas ~edges complete_steps =
   if initial_version=1 then complete_steps else
     derive ~initial_version (List.nth schemas (initial_version-1))
       (List.filter (fun edge -> D.version edge>initial_version) edges)
+(* The first refusal [refuse_unsupported] raises: it depends only on the
+   earliest offending edge, so a checkpointed prefix containing one fixes the
+   result of every installation origin, whatever later edges add. *)
+let refusal ~edges = try refuse_unsupported edges; None with Invalid errors -> Some errors
+let resumed_origins ~refusal ~through ~schemas ~edges =
+  try
+    let rec check_chain version schemas edges = match schemas,edges with
+     | [_],[] -> ()
+     | a :: (b :: _ as rest),edge :: later ->
+       let before,after = S.inventories (D.coverage edge) in
+       if D.version edge<>version || not (same_inventory before a) || not (same_inventory after b) then
+        reject (Location.dummy_loc "") "physical planning requires the exact complete adjacent schema chain";
+       check_chain (version+1) rest later
+     | _ -> reject ~code:"MIG001" (Location.dummy_loc "") "physical planning requires a complete source history" in
+    check_chain (through+1) schemas edges;
+    Some (List.init (through+List.length edges) (fun _ -> Error refusal))
+  with Invalid _ -> None
 let generate ~initial_version ~schemas ~edges =
  try
   range_check ~initial_version ~schemas;

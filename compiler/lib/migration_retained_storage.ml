@@ -20,7 +20,10 @@ type version = {version:int;entities:entity list;windows:window list;retirements
  promotions:(Migration_canonical.node * S.index) list;
  reliance:(int * (Migration_canonical.node * S.index) list) option;
  cancellations:Migration_canonical.node list}
-type t = {history:RH.t;versions:version list}
+(* A plan over a resumed row history: [boundary] is the prefix's last version
+   rebuilt from its carried entities (no windows); [versions] are later ones.
+   [cleanup] lists every carried version that needs a reviewed Contract. *)
+type t = {history:RH.t;versions:version list;boundary:version option;cleanup:int list;pending:int option}
 type projection = {entity:entity;fields:field list}
 let history t = t.history
 let versions t = t.versions
@@ -49,8 +52,67 @@ let settle_entity (e:entity) =
   indexes=order_indexes e.source.table.indexes;
   marker_default_generation=e.source.generation;rename_dual_writes=[];reverse_writes=[]}
 
+module Carried = struct
+ module C = Migration_canonical
+ let atom s = C.Bytes s
+ let int n = atom (string_of_int n)
+ let bool b = atom (if b then "true" else "false")
+ let scalars = S.[Numeric;Float8;Text;Bool;Int4;Int8;Jsonb]
+ let column (c:column) = C.Seq [atom c.name;atom (S.scalar_name c.scalar);bool c.nullable;bool c.primary_key;
+  (match c.default with E.Null -> C.Seq [atom "null"] | E.Constant n -> C.Seq [atom "constant";n]);int c.introduced_version]
+ let index (i:S.index) = C.Seq [atom i.name;C.Seq (List.map atom i.columns);bool i.unique]
+ let entity (e:entity) = C.Seq [atom e.source.identity;C.Seq (List.map column e.columns);
+  C.Seq (List.map (fun (f:field) -> C.Seq [atom f.logical.field.name;column f.physical]) e.projection);
+  C.Seq (List.map index e.indexes);int e.marker_default_generation;
+  C.Seq (List.map (fun (logical,physical) -> C.Seq [atom logical;column physical]) e.rename_dual_writes)]
+ let encode ~pending ~cleanup entities = C.Seq [atom "tesl-retained-prefix-v1";
+  C.Seq (Option.fold ~none:[] ~some:(fun v -> [int v]) pending);C.Seq (List.map int cleanup);C.Seq (List.map entity entities)]
+ let fail () = invalid_arg "malformed retained-storage prefix"
+ let text = function C.Bytes s -> s | C.Seq _ -> fail ()
+ let number n = match int_of_string_opt (text n) with Some n -> n | None -> fail ()
+ let flag n = match text n with "true" -> true | "false" -> false | _ -> fail ()
+ let items = function C.Seq xs -> xs | C.Bytes _ -> fail ()
+ let decode_column = function
+  | C.Seq [name;scalar;nullable;primary_key;default;introduced] ->
+    let scalar=match List.find_opt (fun x -> S.scalar_name x=text scalar) scalars with Some x -> x | None -> fail () in
+    let default=match default with C.Seq [C.Bytes "null"] -> E.Null | C.Seq [C.Bytes "constant";n] -> E.Constant n | _ -> fail () in
+    {name=text name;scalar;nullable=flag nullable;primary_key=flag primary_key;default;introduced_version=number introduced}
+  | _ -> fail ()
+ let decode_index = function
+  | C.Seq [name;columns;unique] -> {S.name=text name;columns=List.map text (items columns);unique=flag unique}
+  | _ -> fail ()
+ (* Logical columns and the entity source come from the boundary version. *)
+ let decode (boundary:RH.version) = function
+  | C.Seq [C.Bytes "tesl-retained-prefix-v1";pending;cleanup;entities] ->
+    let pending=match items pending with [] -> None | [v] -> Some (number v) | _ -> fail () in
+    let entities=List.map (function
+     | C.Seq [identity;columns;projection;indexes;marker;renames] ->
+       let source=match List.find_opt (fun (e:RH.entity) -> e.identity=text identity) boundary.entities with
+        | Some e -> e | None -> fail () in
+       let projection=List.map (function
+        | C.Seq [name;physical] ->
+          (match List.find_opt (fun (c:S.column) -> c.field.name=text name) source.table.columns with
+           | Some logical -> {logical;physical=decode_column physical}
+           | None -> fail ())
+        | _ -> fail ()) (items projection) in
+       {source;columns=List.map decode_column (items columns);projection;indexes=List.map decode_index (items indexes);
+        marker_default_generation=number marker;reverse_writes=[];
+        rename_dual_writes=List.map (function C.Seq [logical;physical] -> text logical,decode_column physical | _ -> fail ()) (items renames)}
+     | _ -> fail ()) (items entities) in
+    if List.map (fun e -> e.source.identity) entities<>List.map (fun (e:RH.entity) -> e.identity) boundary.entities then fail ();
+    pending,List.map number (items cleanup),entities
+  | _ -> fail ()
+end
+
+let needs_contract (v:version) = v.windows<>[] || v.retirements<>[] || v.promotions<>[]
+
 let plan history = protect (fun () ->
  ignore (get (RH.revalidate history));
+ let carried=Option.map (fun (p:RH.prefix) ->
+  let boundary=match RH.versions history with
+   | first::_ when first.version=p.through -> first
+   | _ -> reject loc "resumed retained storage lost its boundary version" in
+  p.through,(try Carried.decode boundary p.retained with Invalid_argument message -> reject loc message)) (RH.prefix history) in
  let relations=Hashtbl.create 32 in
  let reserve location name =
   if Hashtbl.mem relations name then reject location ("retained PostgreSQL relation name cannot be reused: " ^ name);
@@ -78,7 +140,18 @@ let plan history = protect (fun () ->
   let prior=ref [] in
   let previous_promotions=ref [] and reliance=ref None in
  let pending_contract=ref None and prior_retirements=ref [] in
-  let planned=List.map (fun (revision:RH.version) ->
+ let through=match carried with
+  | None -> 0
+  | Some (through,(pending,_,entities)) ->
+    prior:=entities;pending_contract:=pending;
+    List.iter (fun e ->
+     let location=e.source.table.entity.entity_loc in
+     reserve location e.source.table.name;reserve location (e.source.table.name ^ "_pkey");
+     List.iter (fun (i:S.index) -> reserve location i.name) e.indexes) entities;
+    through in
+ let boundary=Option.map (fun (through,(_,_,entities)) ->
+  {version=through;entities;windows=[];retirements=[];requires_contract_version=None;promotions=[];reliance=None;cancellations=[]}) carried in
+  let planned=List.filter (fun (revision:RH.version) -> revision.version>through) (RH.versions history) |> List.map (fun (revision:RH.version) ->
    let promotions=match List.find_opt (fun (v:RH.version) -> v.version=revision.version-1) (RH.versions history) with
     | None -> [] | Some previous -> S.promotions ~before:previous.storage ~after:revision.storage in
    let cancellations=match List.find_opt(fun(v:RH.version)->v.version=revision.version-1)(RH.versions history) with
@@ -193,8 +266,36 @@ let plan history = protect (fun () ->
   let entities=List.sort (fun a b -> compare a.source.identity b.source.identity) (entities @ retirements) in
   prior:=entities;prior_retirements:=List.map (fun e -> e.source.identity) retirements;
   if transforming || retirements<>[] then pending_contract:=Some revision.version;
-   {version=revision.version;entities;windows=List.rev !windows;retirements;requires_contract_version;promotions;reliance= !reliance;cancellations}) (RH.versions history) in
- {history;versions=planned})
+   {version=revision.version;entities;windows=List.rev !windows;retirements;requires_contract_version;promotions;reliance= !reliance;cancellations}) in
+ let cleanup=Option.fold ~none:[] ~some:(fun (_,(_,cleanup,_)) -> cleanup) carried @
+  List.filter_map (fun v -> if needs_contract v then Some v.version else None) planned in
+ {history;versions=planned;boundary;cleanup;pending= !pending_contract})
+
+(* The carried state after [through]: exactly the inputs the next revision's
+   planning reads (retained entities, a pending Contract prerequisite) plus the
+   versions needing a Contract. Relation names are rebuilt from the entities. *)
+let prefix_state t ~through =
+ let encode (v:version) ~pending =
+  Carried.encode ~pending ~cleanup:(List.filter (fun n -> n<=through) t.cleanup) v.entities in
+ let rec at = function
+  | [] -> None
+  | v::rest when v.version=through ->
+    (* The Contract prerequisite pending after [through] is exactly what the
+       next planned version requires. *)
+    Some (encode v ~pending:(match rest with next::_ -> next.requires_contract_version | [] -> t.pending))
+  | _::rest -> at rest in
+ match at t.versions with
+ | Some node -> Some node
+ | None -> match t.boundary with
+   | Some b when b.version=through ->
+     Some (encode b ~pending:(match t.versions with next::_ -> next.requires_contract_version | [] -> t.pending))
+   | _ -> None
+let cleanup_versions t = t.cleanup
+let find_version t version =
+ match List.find_opt (fun v -> v.version=version) t.versions with
+ | Some v -> Some v
+ | None -> Option.bind t.boundary (fun b -> if b.version=version then Some b else None)
+let resumed t = t.boundary<>None
 
 let project t ~version ~entity ~logical_fields = protect (fun () ->
  let revision=match List.find_opt (fun v -> v.version=version) t.versions with

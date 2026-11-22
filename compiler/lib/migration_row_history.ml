@@ -11,11 +11,19 @@ type entity = {identity:string;generation:int;table:P.table;type_contract:C.node
 type version = {version:int;schema:I.t;storage:P.t;entities:entity list}
 type binding = {version:int;previous:entity;current:entity;link:L.t;row:T.row}
 type retirement = {version:int;previous:entity}
-type t = {retirements:retirement list;versions:version list;bindings:binding list;links:L.t list;edges:D.t list}
+(* A resumed history starts at the last version of a checkpointed prefix: its
+   first version is that boundary, reconstructed from the boundary inventory and
+   the carried generations; bindings, links and edges belong to later versions
+   only. *)
+type prefix = {through:int;generations:(string * int) list;retained:C.node}
+type t = {retirements:retirement list;versions:version list;bindings:binding list;links:L.t list;edges:D.t list;
+  prefix:prefix option}
+exception Not_resumable
 let retirements t = t.retirements
 let versions t = t.versions
 let bindings t = t.bindings
 let declarations t = t.edges
+let prefix t = t.prefix
 let migration_version (b:binding) = b.version
 let previous (b:binding) = b.previous
 let current b = b.current
@@ -55,7 +63,9 @@ let validate_adapter_modes t = protect (fun () ->
     | None when binding.row.mapping.mode=R.Derived -> ()
     | _ -> reject binding.current.table.entity.entity_loc
         "row adapter mode differs from its exact checked source binding") t.bindings)
-let check_internal ~queue_expansion ~schemas ~edges = protect (fun () ->
+let check_internal ~start ~queue_expansion ~schemas ~edges = protect (fun () ->
+  let base=match start with None -> 1 | Some p -> p.through in
+  if start<>None && queue_expansion then raise Not_resumable;
   if schemas=[] || List.length edges+1<>List.length schemas then
     reject ~code:"MIG001" loc "row generations require complete source history from V1";
   let first=List.hd schemas in
@@ -65,7 +75,7 @@ let check_internal ~queue_expansion ~schemas ~edges = protect (fun () ->
   List.iteri (fun i schema ->
     match Validation_common.schema_module_parts (I.root_module schema) with
     | Some (owner,revision,[]) when owner=family &&
-        (revision="V" ^ string_of_int (i+1) || revision="VCurrent" && i=List.length schemas-1) -> ()
+        (revision="V" ^ string_of_int (base+i) || revision="VCurrent" && i=List.length schemas-1) -> ()
     | _ -> reject ~code:"MIG001" loc "row history schemas must be a consecutive V1 family ending in its exact target") schemas;
   let rec adjacent expected schemas edges = match schemas,edges with
     | [_],[] -> ()
@@ -75,11 +85,12 @@ let check_internal ~queue_expansion ~schemas ~edges = protect (fun () ->
         reject ~code:"MIG013" loc "row generations require the exact inventories judged by every adjacent declaration";
       adjacent (expected+1) rest later
     | _ -> reject ~code:"MIG001" loc "incomplete row generation history" in
-  adjacent 2 schemas edges;
+  adjacent (base+1) schemas edges;
    (match I.check_stage_history schemas with
     | Ok () -> () | Error error -> reject ~code:"MIG030" error.loc error.message);
    let has_stages=List.exists(fun schema->I.staged_indexes schema<>[]) schemas in
-   List.iter (fun (stage:I.staged_index) -> reject ~code:"MIG030" stage.stage_loc
+   if start<>None && has_stages then raise Not_resumable;
+   if start=None then List.iter (fun (stage:I.staged_index) -> reject ~code:"MIG030" stage.stage_loc
      "stage preparation on original V1 is not implemented; introduce the preparatory index on an existing table in a later additive revision") (I.staged_indexes first);
    let rec stage_pairs = function
     | before::(after::_ as rest) ->
@@ -143,6 +154,7 @@ let check_internal ~queue_expansion ~schemas ~edges = protect (fun () ->
    if not queue_expansion && List.exists D.queue_transition edges then
     reject ~code:"MIG028" loc "checked queue conversions require protected transformation and repair execution before physical planning";
   let generations=Hashtbl.create 16 and relation_owners=Hashtbl.create 16 in
+  Option.iter (fun p -> List.iter (fun (identity,generation) -> Hashtbl.replace generations identity generation) p.generations) start;
   let describe version schema =
     let storage=checked (P.describe schema) in
     let entities=P.tables storage |> List.map (fun (table:P.table) ->
@@ -154,18 +166,20 @@ let check_internal ~queue_expansion ~schemas ~edges = protect (fun () ->
        | _ -> Hashtbl.replace relation_owners table.name identity);
       let generation=match Hashtbl.find_opt generations identity with
         | Some value -> value
+        | None when start<>None && version=base -> raise Not_resumable
         | None -> Hashtbl.add generations identity 1;1 in
       let type_contract=ir (I.closure schema [Migration_ir.Type,table.entity.entity_name]) in
       {identity;generation;table;type_contract}) |> List.sort (fun a b -> compare a.identity b.identity) in
     {version;schema;storage;entities} in
-  if List.exists (fun (f:I.field_shape) -> f.db_column<>None) (I.field_shapes first) then
+  if start=None && List.exists (fun (f:I.field_shape) -> f.db_column<>None) (I.field_shapes first) then
     reject ~code:"MIG027" loc "baseline fields cannot claim compiler-owned Retype columns";
-  let baseline=describe 1 first in
+  let baseline=describe base first in
   let versions=ref [baseline] and bindings=ref [] and links=ref [] and retirements=ref [] in
   let previous=ref baseline in
   List.iter2 (fun schema edge ->
     let mapping=S.entities (D.coverage edge) in
     let removed=List.filter_map (function S.Removed entity -> Some entity | _ -> None) mapping in
+    if removed<>[] && start<>None then raise Not_resumable;
     if removed<>[] then begin
       if List.length removed<>1 || List.exists (fun (_,kind) -> kind<>S.Drop) (S.entries (D.coverage edge)) then
         reject ~code:"MIG032" loc "table Drop requires exactly one removed entity and unchanged surviving entities: \
@@ -245,11 +259,33 @@ let check_internal ~queue_expansion ~schemas ~edges = protect (fun () ->
         if fresh.generation<>old.generation+1 then reject loc "linked row callback does not advance exactly one entity generation";
         bindings:={version=next.version;previous=old;current=fresh;link;row}::!bindings) rows) checked_link;
     versions:=next::!versions;previous:=next) (List.tl schemas) edges;
-  let result={retirements=List.rev !retirements;versions=List.rev !versions;bindings=List.sort (fun (a:binding) (b:binding) -> compare (a.version,a.current.identity) (b.version,b.current.identity)) !bindings;links=List.rev !links;edges} in
+  let result={retirements=List.rev !retirements;versions=List.rev !versions;bindings=List.sort (fun (a:binding) (b:binding) -> compare (a.version,a.current.identity) (b.version,b.current.identity)) !bindings;links=List.rev !links;edges;prefix=start} in
    if has_stages &&
       (result.retirements<>[] || result.bindings<>[] || List.exists D.queue_transition edges) then
      reject ~code:"MIG030" loc "stage preparation currently requires an additive history; combining stages with transformations, queue conversion, RemoveEmpty or Drop is not implemented";
    ignore (checked (revalidate result));result)
 
-let check = check_internal ~queue_expansion:false
-let check_queue_expansion = check_internal ~queue_expansion:true
+let check = check_internal ~start:None ~queue_expansion:false
+let check_queue_expansion = check_internal ~start:None ~queue_expansion:true
+
+(* Features whose cross-version state a prefix does not carry: table Drop
+   (retirement lineage), staged indexes, queue conversions or removals, and
+   reverse/legacy writes. A history using any of them is always folded from V1. *)
+let carried ?(through=max_int) t =
+  List.for_all (fun (r:retirement) -> r.version>through) t.retirements &&
+  not (List.exists (fun (v:version) -> v.version<=through && I.staged_indexes v.schema<>[]) t.versions) &&
+  not (List.exists (fun d -> D.version d<=through &&
+    (D.queue_transition d || D.queue_removal d<>None || D.queue_transforms d<>[])) t.edges) &&
+  not (List.exists (fun (b:binding) -> b.version<=through && (b.row.writebacks<>[] || b.row.legacies<>[])) t.bindings)
+
+let prefix_state t ~through ~retained =
+  if not (carried ~through t) then None else
+  match List.find_opt (fun (v:version) -> v.version=through) t.versions with
+  | None -> None
+  | Some v -> Some {through;retained;generations=List.map (fun (e:entity) -> e.identity,e.generation) v.entities}
+
+let resume ~prefix ~schemas ~edges =
+  match check_internal ~start:(Some prefix) ~queue_expansion:false ~schemas ~edges with
+  | exception Not_resumable -> None
+  | Ok t when carried t -> Some t
+  | Ok _ | Error _ -> None
