@@ -15,10 +15,9 @@
  (modules test_migration_canonical)
  (libraries tesl_compiler_lib alcotest unix str))
 
-(test
+(executable
  (name test_staged_indexes)
  (modules test_staged_indexes)
- (deps ../bin/main.exe fixtures/stage-memory.tesl)
  (libraries tesl_compiler_lib alcotest unix str))
 
 (test
@@ -255,7 +254,7 @@
 (test
  (name test_suite_registration)
  (modules test_suite_registration)
- (deps dune (glob_files test_*.ml)))
+ (deps dune (glob_files test_*.ml) (universe)))
 
 ; Go test-set completeness meta-test.  The Go runtime and Tesl corpus are the
 ; only shipped execution path, so this guards their gate entry point:
@@ -550,15 +549,17 @@
  (modules test_migration_topology)
  (libraries tesl_compiler_lib alcotest str unix))
 
-(test
+; Suites run by scripts/run-migration-tests.sh as their own migration phases
+; are executables, not (test) stanzas: `dune test` would run their PostgreSQL
+; fixtures a second time. test_suite_registration enforces the split.
+(executable
  (name test_migration_queue)
  (modules test_migration_queue)
  (libraries tesl_compiler_lib alcotest str unix))
 
-(test
+(executable
  (name test_migration_queue_transform)
  (modules test_migration_queue_transform)
- (deps (glob_files fixtures/queue-repair-postgres/*))
  (libraries tesl_compiler_lib alcotest str unix))
 
 (test
@@ -571,10 +572,9 @@
  (modules test_queue_imports)
  (libraries tesl_compiler_lib alcotest str unix))
 
-(test
+(executable
  (name test_queue_candidate_app)
  (modules test_queue_candidate_app)
- (deps (source_tree fixtures/queue-candidate-app))
  (libraries tesl_compiler_lib alcotest str unix))
 
 (test
@@ -597,7 +597,7 @@
  (modules test_migration_transform_link)
  (libraries tesl_compiler_lib alcotest unix str))
 
-(test
+(executable
  (name test_migration_row_companion)
  (modules test_migration_row_companion)
  (libraries tesl_compiler_lib alcotest str unix))
@@ -607,7 +607,7 @@
  (modules test_migration_retained_storage)
  (libraries tesl_compiler_lib alcotest str unix))
 
-(test
+(executable
  (name test_migration_row_storage)
  (modules test_migration_row_storage)
  (libraries tesl_compiler_lib alcotest unix str yojson))
@@ -617,13 +617,12 @@
  (modules test_migration_behavior_multi)
  (libraries tesl_compiler_lib alcotest str unix))
 
-(test
+(executable
  (name test_migration_row_forward)
  (modules test_migration_row_forward)
- (deps (source_tree fixtures/row-forward))
  (libraries tesl_compiler_lib alcotest unix str))
 
-(test
+(executable
  (name test_migration_retype)
  (modules test_migration_retype)
  (libraries tesl_compiler_lib alcotest unix str yojson))
@@ -633,29 +632,27 @@
  (modules test_field_parser_errors)
  (libraries tesl_compiler_lib alcotest))
 
-(test
+(executable
  (name test_migration_row_access)
  (modules test_migration_row_access)
- (deps ../bin/main.exe)
  (libraries tesl_compiler_lib alcotest unix str))
 
-(test
+(executable
  (name test_migration_row_retype_physical)
  (modules test_migration_row_retype_physical)
  (libraries tesl_compiler_lib alcotest unix str))
 
-(test
+(executable
  (name test_migration_contract)
  (modules test_migration_contract)
  (libraries tesl_compiler_lib alcotest unix str))
 
-(test
+(executable
  (name test_migration_row_contract_abi)
  (modules test_migration_row_contract_abi)
- (deps test_migration_row_access.exe)
  (libraries tesl_compiler_lib alcotest unix yojson))
 
-(test
+(executable
  (name test_migration_nominal_pk)
  (modules test_migration_nominal_pk)
  (libraries tesl_compiler_lib alcotest unix str))
@@ -665,67 +662,67 @@
  (modules test_migration_legacy_boundaries)
  (libraries tesl_compiler_lib alcotest unix str))
 
-(test
+(executable
  (name test_migration_row_derived)
  (modules test_migration_row_derived)
  (libraries tesl_compiler_lib alcotest unix str))
 
-(test
+(executable
  (name test_migration_nominal_copy)
  (modules test_migration_nominal_copy)
  (libraries tesl_compiler_lib alcotest unix str))
 
-(test
+(executable
  (name test_migration_nominal_derived)
  (modules test_migration_nominal_derived)
  (libraries tesl_compiler_lib alcotest unix str))
 
-(test
+(executable
  (name test_migration_nominal_optional)
  (modules test_migration_nominal_optional)
  (libraries tesl_compiler_lib alcotest str unix))
 
-(test
+(executable
  (name test_migration_row_scc)
  (modules test_migration_row_scc)
  (libraries tesl_compiler_lib alcotest unix str))
 
-(test
+(executable
  (name test_migration_row_additive)
  (modules test_migration_row_additive)
  (libraries tesl_compiler_lib alcotest unix str))
 
-(test
+(executable
  (name test_migration_row_tables)
  (modules test_migration_row_tables)
  (libraries tesl_compiler_lib alcotest unix str))
 
-(test
+(executable
  (name test_migration_row_civil)
  (modules test_migration_row_civil)
  (libraries tesl_compiler_lib alcotest unix str))
 
-(test
+(executable
  (name test_migration_additive_tail)
  (modules test_migration_additive_tail)
  (libraries tesl_compiler_lib alcotest unix str yojson))
 
-(test
+(executable
  (name test_migration_fixtures)
  (modules test_migration_fixtures)
  (libraries tesl_compiler_lib alcotest str unix))
 
-(test
+(executable
  (name test_migration_row_indexes)
  (modules test_migration_row_indexes)
  (libraries tesl_compiler_lib alcotest unix str))
 
-(test
+(executable
  (name test_migration_delete)
  (modules test_migration_delete)
  (libraries tesl_compiler_lib alcotest unix str))
 
-(test
+(executable
  (name test_migration_revalidate)
  (modules test_migration_revalidate)
  (libraries tesl_compiler_lib alcotest str unix))
@@ -735,7 +732,7 @@
  (modules test_literal_proof)
  (libraries tesl_compiler_lib alcotest str unix))
 
-(test
+(executable
  (name test_migration_revalidate_postgres)
  (modules test_migration_revalidate_postgres)
  (libraries tesl_compiler_lib alcotest str unix))
@@ -745,43 +742,42 @@
  (modules test_migration_codec_changes)
  (libraries tesl_compiler_lib alcotest str unix yojson))
 
-(test
+(executable
  (name test_migration_queue_application)
  (modules test_migration_queue_application)
  (libraries tesl_compiler_lib alcotest unix str))
 
-(test
+(executable
  (name test_migration_queue_removal)
  (modules test_migration_queue_removal)
- (deps (source_tree fixtures/queue-removal))
  (libraries tesl_compiler_lib alcotest unix str))
 
-(test
+(executable
  (name test_migration_proof_retype_postgres)
  (modules test_migration_proof_retype_postgres)
  (libraries tesl_compiler_lib alcotest unix str))
 
-(test
+(executable
  (name test_migration_reverse_proof)
  (modules test_migration_reverse_proof)
  (libraries tesl_compiler_lib alcotest str unix))
 
-(test
+(executable
  (name test_proof_return_field_scope)
  (modules test_proof_return_field_scope)
  (libraries tesl_compiler_lib alcotest))
 
-(test
+(executable
  (name test_migration_proof_removal_postgres)
  (modules test_migration_proof_removal_postgres)
  (libraries tesl_compiler_lib alcotest unix str))
 
-(test
+(executable
  (name test_migration_table_drop)
  (modules test_migration_table_drop)
  (libraries tesl_compiler_lib alcotest unix))
 
-(test
+(executable
  (name test_migration_table_drop_postgres)
  (modules test_migration_table_drop_postgres)
  (libraries tesl_compiler_lib alcotest unix str))

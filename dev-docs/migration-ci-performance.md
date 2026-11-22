@@ -98,7 +98,7 @@ must continue to run without competing test workloads.
 
 ## Isolated authoritative shards
 
-The hosted gate partitions its existing checks across three runners. The default `./ci.sh` remains the complete serial local gate. `compiler-integration` owns the 23 parent phases outside the Go gate, including the full Dune suite. `go-runtime` owns the Go gate's static/build/unit/race/fuzz/CLI checks and bootstraps only the compiler executable. `migration` owns the complete shared migration runner, now 61 mandatory phases with private PostgreSQL.
+The hosted gate partitions its existing checks across three runners. The default `./ci.sh` remains the complete serial local gate. `compiler-integration` owns the 23 parent phases outside the Go gate, including the Dune suite. The compiler suites that the shared migration runner runs as its own phases are plain executables, not `dune test` entries, so each runs once per gate; `test_suite_registration` refuses a suite that is in both places or in neither. `go-runtime` owns the Go gate's static/build/unit/race/fuzz/CLI checks and bootstraps only the compiler executable. `migration` owns the complete shared migration runner, now 61 mandatory phases with private PostgreSQL.
 
 The added rolling-workload smoke builds ordinary old/new programs and checks concurrent requests, backfill restart, rejection/repair, managed-index work and Contract. Its processes stop before the existing isolated latency comparison. The smoke establishes correctness on that runner, not production p99 or large-table acceptance. The supported PostgreSQL-major workflow retains the complete shared runner.
 
