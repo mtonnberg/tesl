@@ -1,7 +1,8 @@
 module Paths = Map.Make (String)
 module Names = Set.Make (String)
 
-type view = { root : string; files : string Paths.t; directories : Names.t }
+type view = { root : string; files : string Paths.t; directories : Names.t;
+              basenames : Names.t (* final components of every file and directory entry *) }
 let active : view option ref = ref None
 let pinned_files : string Paths.t ref = ref Paths.empty
 let project_root () = Option.map (fun view -> view.root) !active
@@ -73,7 +74,11 @@ let with_overlays ~project_root inputs f =
     if Names.mem path !seen then invalid path "duplicate input";
     seen := Names.add path !seen;
     Paths.add path contents files) base inputs in
-  let view = {root; files; directories=directories root files} in
+  let directories = directories root files in
+  let basenames = Names.union
+    (Paths.fold (fun path _ names -> Names.add (Filename.basename path) names) files Names.empty)
+    (Names.map Filename.basename directories) in
+  let view = {root; files; directories; basenames} in
   Query_cache.clear ();
   active := Some view;
   Fun.protect ~finally:(fun () -> active := previous; Query_cache.clear ()) f
@@ -92,6 +97,17 @@ let find_project path = match !active with
     match lookup path with
     | Some _ as found -> found
     | None ->
+      (* The canonical spelling keeps the final component unless that component
+         is itself a symlink (or "." / ".."). When it is not, and no view entry
+         has this final name, the canonical lookup below cannot match: skip the
+         realpath walk. Import resolution probes many absent paths. *)
+      let name = Filename.basename path in
+      let unaliased () = name <> "." && name <> ".." &&
+        (match Unix.lstat path with
+         | info -> info.Unix.st_kind <> Unix.S_LNK
+         | exception Unix.Unix_error (Unix.ENOENT, _, _) -> true
+         | exception Unix.Unix_error _ -> false) in
+      if not (Names.mem name view.basenames) && unaliased () then None else
       let canonical = try proposed_path path with Unix.Unix_error _ | Sys_error _ -> path in
       if canonical = path then None else lookup canonical
 
