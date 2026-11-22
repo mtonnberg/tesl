@@ -25,6 +25,11 @@ let parse file source = match Parser.parse_module file source with
 let check file source =
   let diagnostics = Compile.check_source file source |> List.filter (fun (d : Compile.diagnostic) -> d.severity = "error") in
   if diagnostics <> [] then raise (Invalid (List.map (fun (d : Compile.diagnostic) -> {path=d.file;message=d.code ^ ": " ^ d.message}) diagnostics))
+(* A completed edge whose trust seal verifies was checked when it was frozen
+   (Migration_trust); the edge being frozen now is never trusted. *)
+let trusted_edge root compiler (edge : H.migration_source) =
+  Migration_trust.edge ~project_root:(Source_input.realpath root) ~compiler:(Lazy.force compiler)
+    ~file:edge.path ~source:edge.contents <> None
 let graph file source =
   let m = parse file source in Frontend_check.build_local_import_graph ~entry:m file
 let paths graph = Hashtbl.fold (fun file _ files -> file :: files) graph [] |> List.sort String.compare
@@ -79,6 +84,7 @@ let start_with_compatibility ~stored_value_compatibility ~compiler_abi ~project_
     if n > 1 && existing = None then reject current.root_file "refresh the current migration before starting another revision";
     (* Every existing edge must already be source-sealed and checked. In particular,
        a changed VCurrent is a refresh decision, not a license to freeze wrong bytes. *)
+    let compiler = lazy (Migration_trust.current_compiler ()) in
     let checked_edges = List.map (fun (migration : H.migration_source) ->
       let located = match sparse (Header.read ~file:migration.path migration.contents) with
         | Some located -> located | None -> reject migration.path "record the current migration's source seals before starting another revision" in
@@ -86,9 +92,11 @@ let start_with_compatibility ~stored_value_compatibility ~compiler_abi ~project_
       let checked = sparse (Header.verify ~project_root:root ~migration_module:(family ^ ".Migrate.V" ^ string_of_int migration.version)
         ~previous ~current located) in
       let previous_seal,current_seal = Header.seals checked in
-      List.iter (fun recorded -> ignore (seal (S.verify_semantics ?stored_value_compatibility ~compiler_abi
-        (seal (S.verify_sources ~project_root:root recorded))))) [previous_seal;current_seal];
-      check migration.path migration.contents;
+      if not (trusted_edge root compiler migration) then begin
+        List.iter (fun recorded -> ignore (seal (S.verify_semantics ?stored_value_compatibility ~compiler_abi
+          (seal (S.verify_sources ~project_root:root recorded))))) [previous_seal;current_seal];
+        check migration.path migration.contents
+      end;
       migration,checked) (completed @ Option.to_list existing) in
     let old_target = match existing with
       | None -> None
@@ -659,8 +667,10 @@ let refresh_internal ~choice ~stored_value_compatibility ~compiler_abi ~project_
        public source checker therefore sees both seals. Check completed bodies
        against the proposed refreshed header, after their own frozen seals have
        passed above; otherwise a legitimate VCurrent edit prevents V3+ refresh. *)
+    let compiler = lazy (Migration_trust.current_compiler ()) in
+    let untrusted = List.filter (fun edge -> not (trusted_edge root compiler edge)) (H.completed_migrations h) in
     overlay root (extra_writes @ column_writes @ [migration.path,source]) (fun () ->
-      List.iter (fun (edge : H.migration_source) -> check edge.path edge.contents) (H.completed_migrations h));
+      List.iter (fun (edge : H.migration_source) -> check edge.path edge.contents) untrusted);
     let reads = List.map fst (H.source_inputs h) in
     let imports = List.concat_map (fun file ->
       let m = parse file (Source_input.read file) in

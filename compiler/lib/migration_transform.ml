@@ -611,6 +611,12 @@ let check_prepared prepared =
   | Ok [] -> Ok (Checked prepared)
   | Ok errors -> Error errors
 
+(* A completed step whose trust seal verified was fully checked when it was
+   frozen by this same compiler over these exact bytes. Its row-function closure
+   is not frontend-checked again; preparation (bindings, purity, proof sites and
+   source capture) above still ran in this compilation. *)
+let trusted (_ : Migration_trust.evidence) prepared = Checked prepared
+
 let check ~project_root ~source root rules ~functions ~fixtures =
   Result.bind (prepare ~project_root ~source root rules ~functions ~fixtures) check_prepared
 
