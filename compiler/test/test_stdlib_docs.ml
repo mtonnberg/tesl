@@ -186,7 +186,7 @@ let t_search_metadata () =
   (* Every type variable of `Dict.map`'s scheme is quantified, so its structure is complete. *)
   if contains (Builtin_search.entry_json (entry "Dict.map")) {|"structural_status":"incomplete-scheme"|} then
     Alcotest.fail "Dict.map's scheme is reported incomplete although every variable is quantified";
-  let ids = List.map Builtin_search.id Builtin_search.entries in
+  let ids = List.map Builtin_search.id (Builtin_search.entries ()) in
   Alcotest.(check int) "unique stable IDs" (List.length ids) (List.length (List.sort_uniq compare ids));
   let e = entry "String.length" in
   let timezone = entry "europestockholm" in
