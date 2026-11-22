@@ -250,6 +250,23 @@ let removed_column () = with_project(fun root path->
  let chosen=get(choose root(get(preview root))"map-fields")in
  check bool "old writers get an explicit projection" true(Compile.string_contains(source chosen(path "migrations/notes/v2.tesl"))"LegacyWith amount");
  finish root path chosen(fun reason->if String.starts_with ~prefix:"Return Something" reason then "Something 7" else if Compile.string_contains reason "amount"then "7"else "\"fixture\"") ())
+let removed_optional_column () =
+ let old={|module NotesSchema.VCurrent exposing [Note]
+import Tesl.Prelude exposing [String, Int]
+import Tesl.Maybe exposing [Maybe(..)]
+entity Note table "notes" primaryKey id { id: String, amount: Int, memo: Maybe String }
+|} in
+ with_project ~old (fun root path->
+ write(path "schema/notes/v-current.tesl")(replace ", memo: Maybe String" "" old);
+ let chosen=get(choose root(get(preview root))"map-fields")in
+ let actual=source chosen(path "migrations/notes/v2.tesl")in
+ check bool "old writers store NULL by default" true
+   (Compile.string_contains actual "-> Maybe (Maybe (String)) =\n  Something Nothing\n");
+ check bool "comment states storing NULL" true (Compile.string_contains actual "# Something Nothing stores NULL in the old column");
+ check bool "comment states refusing writes" true (Compile.string_contains actual "# Nothing would instead refuse every write from old binaries");
+ check bool "no placeholder for the removed optional field" false (Compile.string_contains actual "removed field Note.memo");
+ finish root path chosen(fun reason->if Compile.string_contains reason ".amount" then "7"
+   else if Compile.string_contains reason ".memo" then "Nothing" else "\"fixture\"") ())
 let compound_columns () = with_project(fun root path->
  write(path "schema/notes/v-current.tesl")(replace "amount: Int" "amount: String, memo: String" simple);
  let chosen=get(choose root(get(preview root))"map-fields")in
@@ -573,6 +590,7 @@ let () = run "Compiler-owned migration choices" ["complete source workflows",Lis
      "ambiguous validators are not guessed",ambiguous_validator;
      "column rename preserves data without holes",column_rename;
      "removed columns generate old-writer projections",removed_column;
+     "removed optional column stores NULL for old writers",removed_optional_column;
      "new and retyped fields compose",compound_columns;
      "codec-only changes rebuild exact nominal values",codec_choice;
      "stored record shape changes scaffold fields",record_shape_choice;

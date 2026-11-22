@@ -174,7 +174,7 @@ structure. These are the main authoring routes:
 | New required primitive columns | Literal defaults, or a row-dependent mapping | Default values or expressions |
 | Add columns while changing existing fields | One composed row mapping | Added values, conversions and any rejection policy |
 | Rename one or several columns with unchanged contracts | Explicit rename candidates; a pure rename uses `Derived` | Select which old field corresponds to which new field |
-| Remove columns | Retain old storage and generate `LegacyWith` helpers for old writers | Values satisfying the removed fields' historical contracts |
+| Remove columns | Retain old storage and generate `LegacyWith` helpers for old writers | Values satisfying the removed fields' historical contracts. A removed `Maybe` field is filled with `Something Nothing` (old binaries store NULL); `Nothing` would refuse their writes |
 | Optional → required | Preserve present values and handle missing ones | Missing-value policy |
 | Required → optional | Wrap existing values; generate historical write-back | What old writers receive when a new value is missing |
 | Add field-local proofs | Checked revalidation where supported, including multiple primitive fields | Valid fixture values and failure policy |

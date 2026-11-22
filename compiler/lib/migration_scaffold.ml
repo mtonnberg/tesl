@@ -202,7 +202,10 @@ let primitive_options ~file ~source ~before ~after ~requirements ~identity ~(pre
       forward,backward
     end else
       todo("Convert the exact historical value; return Something with the target type/proof, or Nothing"),
-      todo("Return Something with the exact historical type and proof for " ^ previous.entity_name ^ "." ^ field ^ ", or Nothing to refuse incompatible writes") in
+      todo("Return Something with the exact historical type and proof for " ^ previous.entity_name ^ "." ^ field ^ ", or Nothing to refuse incompatible writes" ^
+        (match old_field.type_expr with
+         | TApp {head=TName {name="Maybe";_};_} -> " (Something Nothing stores NULL in the old column; Nothing refuses the old binary's write)"
+         | _ -> "")) in
     let forward_total=automatic && new_field.proof_ann=None in
     helpers:= !helpers @ (if forward_total then []else["fn " ^ function_ ^ "(value: " ^ old_ann ^ ") -> Maybe (" ^
      (if shape.proof_identity=None then snd(require(primitive shape)) else "convertedValue: " ^ target_ann) ^ ") =\n  " ^
