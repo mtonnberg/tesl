@@ -1,8 +1,11 @@
 package teslrt
 
 import (
+	"errors"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // A pass that converts nothing delays the next one, doubling up to the cap; a
@@ -51,5 +54,18 @@ func TestRowNextBatchSizeAdapts(t *testing.T) {
 		if got := pgRowNextBatchSize(step.current, step.took); got != step.want {
 			t.Errorf("next(%d, %s) = %d, want %d", step.current, step.took, got, step.want)
 		}
+	}
+}
+
+// A rolled-back batch is retried after a serialization failure or a deadlock,
+// and only then.
+func TestRowRetryableBatchError(t *testing.T) {
+	for code, want := range map[string]bool{"40001": true, "40P01": true, "23505": false, "55P03": false} {
+		if got := pgRowRetryableBatchError(&pgconn.PgError{Code: code}); got != want {
+			t.Errorf("code %s retryable = %v, want %v", code, got, want)
+		}
+	}
+	if pgRowRetryableBatchError(errors.New("plain")) {
+		t.Error("a non-PostgreSQL error was retryable")
 	}
 }

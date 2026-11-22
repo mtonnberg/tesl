@@ -116,8 +116,10 @@ func pgCompatibilityAcquire(ctx context.Context, conn *pgx.Conn, fence, version 
 	if _, err := conn.Exec(ctx, "select pg_catalog.set_config('lock_timeout',$1,false)", previous); err != nil {
 		return false, errors.Join(lockErr, err)
 	}
+	// A lock timeout or a detected deadlock ends the wait without the key: the
+	// caller releases every key it holds and retries, which breaks any cycle.
 	var server *pgconn.PgError
-	if errors.As(lockErr, &server) && server.Code == "55P03" {
+	if errors.As(lockErr, &server) && (server.Code == "55P03" || server.Code == "40P01") {
 		return false, nil
 	}
 	return lockErr == nil, lockErr
