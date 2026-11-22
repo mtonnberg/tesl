@@ -795,3 +795,8 @@
  (name test_migration_history_cache)
  (modules test_migration_history_cache)
  (libraries tesl_compiler_lib alcotest str unix))
+
+(test
+ (name test_migration_seal_trust)
+ (modules test_migration_seal_trust)
+ (libraries tesl_compiler_lib alcotest unix str))
