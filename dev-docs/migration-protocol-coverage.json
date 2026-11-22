@@ -628,6 +628,7 @@
         "lifecycle_test.go#TestPostgresTemplateAdmissionIgnoresTemporaryLookalikes",
         "model_test.go#TestRetirementExcludesEveryOldWriter",
         "pooler_test.go#TestPostgresPoolerAdmissionTransactions",
+        "pooler_test.go#TestPostgresPoolerPipelinedReadTransactions",
         "postgres_test.go#TestPostgresTemplateFenceOrdersPausedWriterAndRetirement",
         "read_ordering_test.go#TestPostgresTemplateQueryFirstAdmissionAcrossRetirement"
       ]
@@ -843,6 +844,7 @@
         "differential_test.go#TestPostgresTemplateAgainstReferenceTraces",
         "lifecycle_test.go#TestPostgresTemplateAdmissionIgnoresTemporaryLookalikes",
         "pooler_test.go#TestPostgresPoolerAdmissionTransactions",
+        "pooler_test.go#TestPostgresPoolerPipelinedReadTransactions",
         "read_ordering_test.go#TestPostgresTemplateQueryFirstAdmissionAcrossRetirement"
       ]
     },
@@ -2742,6 +2744,19 @@
         "TR-ADMIT",
         "TR-RETIRE",
         "TR-WRITE"
+      ],
+      "named_failpoints": null
+    },
+    {
+      "name": "TestPostgresPoolerPipelinedReadTransactions",
+      "file": "pooler_test.go",
+      "line": 232,
+      "layer": "pooler",
+      "invariants": [
+        "INV-READ"
+      ],
+      "transitions": [
+        "TR-ADMIT"
       ],
       "named_failpoints": null
     },
