@@ -303,7 +303,7 @@ let expansion_chain_boundary () = with_project (fun root path ->
    ~compiler_abi:(P.compiler_abi expected)
    ~project_root:root ~family:"NotesSchema" with Ok h -> h | Error e -> fail e.message in
  let schema_sources = Migration_history_sources.frozen history @ [Migration_history_sources.current history] in
- let schemas = List.map (fun (s : Migration_history_sources.schema) -> s.inventory) schema_sources in
+ let schemas = List.map Migration_history_sources.inventory schema_sources in
  let sources = Migration_history_sources.completed_migrations history @ Option.to_list (Migration_history_sources.current_migration history) in
  let edges = List.map (fun (s : Migration_history_sources.migration_source) ->
    let module_ = match Parser.parse_module s.path s.contents with Ok m -> m | Err e -> fail e.msg in

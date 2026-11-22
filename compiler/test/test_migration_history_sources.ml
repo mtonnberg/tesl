@@ -223,7 +223,7 @@ let byte_guards () = with_project (fun root write ->
   check bool "raw source precondition detects comments and CRLF" true
     (List.assoc path (source_inputs before) <> List.assoc path (source_inputs after));
   check bool "semantic snapshot stays equal" true
-    (Migration_inventory.snapshot (current before).inventory = Migration_inventory.snapshot (current after).inventory))
+    (Migration_inventory.snapshot (inventory (current before)) = Migration_inventory.snapshot (inventory (current after))))
 
 let discovery_scope () = with_project (fun root write ->
   chain write;

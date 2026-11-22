@@ -12,3 +12,9 @@ val capture : project_root:string -> root_file:string -> source:string ->
 val attach : file:string -> source:string -> t -> (string, Migration_sparse.error list) result
 val verify : project_root:string -> root_file:string -> source:string -> located ->
   (unit, Migration_sparse.error list) result
+(** The generated checkpoint beside a completed migration root (v<n>.checkpoint). *)
+val checkpoint_file : string -> string
+(** SHA-256 of the root's checkpoint recorded in this block, if any. [verify]
+    refuses a recorded checkpoint whose bytes differ (MIG013). *)
+val checkpoint : located -> string option
+val with_checkpoint : t -> string option -> t

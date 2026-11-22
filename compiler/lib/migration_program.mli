@@ -23,6 +23,9 @@ val databases : t -> database list
 (** Exact source-authorized contracts, bound separately for each application database. *)
 val contracts : t -> (string * Migration_contract.t list) list
 val compiler_abi : t -> string
+val resumed : t -> bool
+(** Raises Invalid_argument for a [resumed] program. *)
+val unresumed : t -> unit
 val stored_value_compatibility : t -> string
 (** Capture application/history guards before invoking compilation. The supplied
     entry bytes and active overlays are authoritative. Actual stdlib resources
@@ -47,7 +50,11 @@ val queue_codec_records : t -> string list
 (** Internal source-only capture. Unlike [with_history], retains unsupported
     expansion errors, but cannot produce an executable expansion history. *)
 type source_history
-val with_source_history : entry:Ast.module_form -> source:string ->
+(** [resume] (default false) lets the capture continue the newest usable
+    revision checkpoint (Migration_checkpoint) instead of re-deriving every
+    completed revision. Such a capture's program is [resumed]: it holds only
+    the revisions after the checkpoint, and every artifact emitter refuses it. *)
+val with_source_history : ?resume:bool -> entry:Ast.module_form -> source:string ->
   (source_history option -> 'a) -> ('a,Migration_sparse.error list) result
 val source_program : source_history -> t
 val source_modules : source_history -> (Ast.module_form * string) list

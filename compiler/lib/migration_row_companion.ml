@@ -30,6 +30,7 @@ let schema_hash v=C.digest C.Snapshot (I.snapshot v.RH.schema)
 let type_hash e=snd (RH.contract C.Contract e.RH.type_contract)
 let base_json ~quote ~go_type source =
  let p=P.source_program source in
+ P.unresumed p;
  let has_retirements=List.exists (fun (_,h) -> RH.retirements h<>[]) (P.row_histories source) in
  let entity database version (e:RH.entity) =
   let contract,hash=RH.contract C.Contract e.type_contract in
@@ -75,6 +76,7 @@ let current_codecs history =
 
 let rows_json ?projection ~quote source =
  let p=P.source_program source in
+ P.unresumed p;
  let field mapping =
   let target,kind,source,constant=match mapping with
   | R.Copy {previous;current} -> current,"copy",Some previous.name,None

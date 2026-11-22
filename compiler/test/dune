@@ -796,3 +796,8 @@
  (name test_migration_seal_trust)
  (modules test_migration_seal_trust)
  (libraries tesl_compiler_lib alcotest unix str))
+
+(test
+ (name test_migration_checkpoint)
+ (modules test_migration_checkpoint)
+ (libraries tesl_compiler_lib alcotest unix str))

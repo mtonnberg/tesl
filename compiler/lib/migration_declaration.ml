@@ -353,7 +353,7 @@ let prepare ?stored_value_compatibility ~compiler_abi ~source (m : module_form) 
       if holes <> [] then raise (Invalid holes);
       let fixtures = match List.assoc_opt "fixtures" fields with
         | None -> [] | Some expression -> list "MIG020" expression in
-      let before = previous.H.inventory and after = current.H.inventory in
+      let before = H.inventory previous and after = H.inventory current in
       let source_graph=checked (T.capture ~before ~after ~source m) in
       checked (T.with_captured source_graph (fun () ->
       let queue_errors = Migration_queue.historical_capability ~before ~after (Option.map Migration_header.seals source_seals) in

@@ -41,7 +41,10 @@ let describe_row ?(namespace="") plan version =
  if window.windows=[] && window.retirements=[] then reject (Location.dummy_loc "<contract>")
   "this version has no transforming window; an empty additive contract is unnecessary";
  let settled=checked (R.settled_version plan ~version) in
- let previous=find_version plan (version-1) in
+ (* A resumed plan carries its boundary's entities, all this needs from the
+    predecessor; the window itself is always a planned version. *)
+ let previous=match R.find_version plan (version-1) with
+  | Some v -> v | None -> reject (Location.dummy_loc "<contract>") "contract target is outside its checked history" in
  let family=family_of (R.history plan) in
  let schema=List.find (fun (v:H.version) -> v.version=version) (H.versions (R.history plan)) in
  let snapshot=C.digest C.Snapshot (I.snapshot schema.schema) in
@@ -264,10 +267,22 @@ let rec absolute_source_path file =
  let parent=absolute_source_path parent in
  match Filename.basename file with "." -> parent | name -> Filename.concat parent name
 
-let checked_plan_uncached ~compiler_abi ~project_root ~family =
+let checked_plan_uncached ?version ~compiler_abi ~project_root ~family () =
  let h=match Migration_history_sources.discover ~compiler_abi ~project_root ~family with
   | Ok h -> h | Error e -> reject e.loc e.message in
- let schemas=Migration_history_sources.frozen h @ [Migration_history_sources.current h] |> List.map(fun(s:Migration_history_sources.schema)->s.inventory) in
+ (* A Contract for a revision after the newest checkpoint needs only the
+    carried state: resume there instead of re-deriving every revision. *)
+ let current=(Migration_history_sources.current h).version in
+ let resumed=match version with
+  | None -> None
+  | Some version -> match Migration_checkpoint.resumed ~compiler_abi ~project_root ~family h ~through:current with
+    | Some (usable,rows) when version>usable.through -> Some rows
+    | _ -> None
+    | exception Migration_checkpoint.Invalid errors -> raise (Invalid errors) in
+ match resumed with
+ | Some rows -> h,checked(R.plan rows)
+ | None ->
+ let schemas=Migration_history_sources.frozen h @ [Migration_history_sources.current h] |> List.map Migration_history_sources.inventory in
  let edges=Migration_history_sources.completed_migrations h @ Option.to_list(Migration_history_sources.current_migration h) |> List.map(fun(s:Migration_history_sources.migration_source)->
   let ast=match Parser.parse_module s.path s.contents with Ok m -> m | Err e -> reject e.loc e.msg in
   match checked(Migration_declaration.check ~compiler_abi ~source:s.contents ast) with Some d -> d | None -> reject (Location.dummy_loc s.path) "contract requires its checked migration declaration") in
@@ -286,14 +301,14 @@ let checked_plan_uncached ~compiler_abi ~project_root ~family =
    guard rereads every input under the caller's own source view, so an
    application check and its captured emission share one plan. Failures are
    never cached. *)
-let plan_memo : (string * string * string * string,
+let plan_memo : (string * string * string * string * int option,
   Migration_history_sources.t * R.t) Migration_analysis_cache.t = Migration_analysis_cache.create ~limit:8
 let plan_cache_stats () = Migration_analysis_cache.stats plan_memo
-let checked_plan ~compiler_abi ~project_root ~family =
+let checked_plan ?version ~compiler_abi ~project_root ~family () =
  let compute () = Migration_proof_context.without_context (fun () ->
-   checked_plan_uncached ~compiler_abi ~project_root ~family) in
+   checked_plan_uncached ?version ~compiler_abi ~project_root ~family ()) in
  let key = try (match Migration_abi.current () with
-   | Ok abi -> Some (compiler_abi,Migration_abi.id abi,Source_input.realpath project_root,family)
+   | Ok abi -> Some (compiler_abi,Migration_abi.id abi,Source_input.realpath project_root,family,version)
    | Error _ -> None) with Sys_error _ | Unix.Unix_error _ | Invalid_argument _ -> None in
  match key with
  | None -> compute ()
@@ -319,11 +334,12 @@ let check_module_with_plan load_plan ~compiler_abi ~source (m:module_form) = pro
  let relative=Option.get(Validation_common.schema_module_relative_path m.module_name) in
  if Filename.concat project_root relative<>file then reject (Location.dummy_loc m.source_file) "contract source must use its canonical schema-family path";
  Source_input.with_overlays ~project_root:(Option.value(Source_input.project_root()) ~default:project_root) [file,source] (fun () ->
-  let plan=load_plan ~compiler_abi ~project_root ~family in
+  let _,version=root m in
+  let plan=load_plan ~version ~compiler_abi ~project_root ~family in
   Some(checked(check ~plan ~namespace:"contract_validation" ~file ~source))))
 let check_module ~compiler_abi ~source m =
- check_module_with_plan (fun ~compiler_abi ~project_root ~family ->
-  snd(checked_plan ~compiler_abi ~project_root ~family)) ~compiler_abi ~source m
+ check_module_with_plan (fun ~version ~compiler_abi ~project_root ~family ->
+  snd(checked_plan ~version ~compiler_abi ~project_root ~family ())) ~compiler_abi ~source m
 
 let diagnostics_with check_module source m =
  let relevant=List.exists(function DConst c -> Migration_form.is_contract m c | _ -> false) m.decls ||
@@ -342,8 +358,8 @@ let diagnostics_batch sources =
     One slot bounds retention and also isolates interleaved projects/families. *)
  let previous=ref None in
  let check_module abi ~source m =
-  let load_plan ~compiler_abi ~project_root ~family =
-   let key=compiler_abi,Migration_abi.source_inputs abi,project_root,family,Source_input.project_root() in
+  let load_plan ~version ~compiler_abi ~project_root ~family =
+   let key=compiler_abi,Migration_abi.source_inputs abi,project_root,family,Source_input.project_root(),version in
    let unchanged h plan =
     (* Under this Contract's overlay, check directory membership, exact inputs,
        import resolution and captured transforms (including unpinned ABI/source
@@ -354,7 +370,7 @@ let diagnostics_batch sources =
    | Some (old,h,plan) when old=key && unchanged h plan -> plan
    | _ ->
      previous:=None;
-     let h,plan=checked_plan ~compiler_abi ~project_root ~family in
+     let h,plan=checked_plan ~version ~compiler_abi ~project_root ~family () in
      previous:=Some(key,h,plan);plan in
   check_module_with_plan load_plan ~compiler_abi:(Migration_abi.id abi) ~source m in
  List.concat_map (fun (file,source) -> match Parser.parse_module file source with

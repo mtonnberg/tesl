@@ -57,14 +57,13 @@ let cleanup_for (selection:T.selection) diagnostics =
  match Parser.parse_module selection.entry_file source with
  | Err _->[],diagnostics
  | Ok entry->
-   let result=Migration_program.with_source_history ~entry ~source(function
+   let result=Migration_program.with_source_history ~resume:true ~entry ~source(function
     | None->Ok []
     | Some history->match List.assoc_opt selection.database_name(Migration_program.row_histories history)with
       | None->Ok []
-      | Some rows->Result.map(fun plan->Migration_retained_storage.versions plan |>List.filter_map(fun(v:Migration_retained_storage.version)->
-        if v.windows=[] && v.retirements=[] && v.promotions=[]then None else
-        let file=Filename.concat selection.migration_directory(Printf.sprintf "v%d-contract.tesl" v.version)in
-        Some{version=v.version;file;present=Source_input.exists file})) (Migration_retained_storage.plan rows)) |> Result.join in
+      | Some rows->Result.map(fun plan->Migration_retained_storage.cleanup_versions plan |>List.map(fun version->
+        let file=Filename.concat selection.migration_directory(Printf.sprintf "v%d-contract.tesl" version)in
+        {version;file;present=Source_input.exists file})) (Migration_retained_storage.plan rows)) |> Result.join in
    match result with Ok cleanup->cleanup,diagnostics|Error errors->[],diagnostics @ Migration_declaration.diagnostics_of_errors errors
 let verify p ~documents = protect p.selection.entry_file (fun () ->
   abi (A.verify p.abi);
@@ -141,7 +140,7 @@ let generate_contract ~project_root ~entry_file ~database ~version ~documents = 
    | exception Unix.Unix_error(Unix.ENOENT,_,_) -> ());
   let source=Source_input.read entry_file in
   let entry=match Parser.parse_module entry_file source with Ok m -> m | Err e -> raise(Invalid[{loc=e.loc;message=e.msg;candidates=[]}]) in
-  let contents=checked(Migration_program.with_source_history ~entry ~source(function
+  let contents=checked(Migration_program.with_source_history ~resume:(version=selection.current_version) ~entry ~source(function
    | None -> raise(Invalid[{loc=Location.dummy_loc entry_file;message="contract generation requires a PostgreSQL database history";candidates=[]}])
    | Some history ->
      let rows=match List.assoc_opt selection.database_name (Migration_program.row_histories history) with
