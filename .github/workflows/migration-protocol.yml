@@ -16,6 +16,12 @@ on:
 permissions:
   contents: read
 
+# Supersede an older run of the same branch or pull request. Never cancel main
+# (each commit keeps its own run) or a scheduled run.
+concurrency:
+  group: migration-protocol-${{ github.event_name == 'schedule' && github.run_id || (github.ref == 'refs/heads/main' && github.sha || github.ref) }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.event_name != 'schedule' }}
+
 jobs:
   fixtures:
     name: Build shared migration fixtures
