@@ -22,9 +22,11 @@ let find_substring ?(from=0) haystack needle =
     offset = size || (String.unsafe_get haystack (index + offset) = String.unsafe_get needle offset && matches index (offset + 1)) in
   let rec scan index =
     if index + size > length then None
-    else if matches index 0 then Some index
-    else scan (index + 1) in
-  scan from
+    else match String.index_from_opt haystack index (String.unsafe_get needle 0) with
+      | None -> None
+      | Some candidate when candidate + size > length -> None
+      | Some candidate -> if matches candidate 0 then Some candidate else scan (candidate + 1) in
+  if size = 0 then (if from <= length then Some from else None) else scan from
 let replace_substring ~needle ~by haystack =
   if needle = "" then invalid_arg "replace_substring: empty needle" else
   match find_substring haystack needle with
