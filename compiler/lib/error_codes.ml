@@ -305,6 +305,19 @@ let registry : entry list = [
        compile error or permission to change the predicate.";
     manual = Some "best-practices#database-access" };
 
+  { code = "MIG032"; category = Migration;
+    title = "this table Drop is outside the supported shape";
+    explanation =
+      "A table Drop must be the only change in its revision: remove exactly one \
+       entity, leave every other entity and every queue unchanged, and keep at \
+       least one entity. Make other changes in their own revisions. Two histories \
+       cannot be dropped yet: an entity that an earlier revision transformed, and a \
+       table whose history added an index after the table was created (retiring a \
+       concurrently built index is not implemented). Until then keep the entity and \
+       stop using it from handlers. After a supported Drop, generate and deploy its \
+       Contract before the next transforming revision.";
+    manual = Some "migration-guide#supported-changes-and-your-remaining-inputs" };
+
   (* ── Legacy Bool spelling (validation source, dedicated codes) ─────────── *)
   { code = "VBOOL001"; category = Type;
     title = "use `Bool`, not `Boolean`/`bool`";

@@ -80,6 +80,10 @@ let parse args =
    | "generate" :: rest -> loop rest; false
    | "plan" :: rest -> loop rest; true
    | "contract" :: rest -> loop rest; false
+   | file :: _ when Filename.check_suffix file ".tesl" ->
+     reject file "the interactive migration wizard (`tesl migrate app.tesl`) is part of the installed tesl command \
+       (runtime/go/cmd/tesl, or `nix profile install github:mtonnberg/tesl`); this compiler binary only \
+       previews edits: tesl migrate generate|contract|plan <entry.tesl> --manifest-json"
    | _ -> reject "" "expected migration verb generate, contract or plan" in
   let contract=match args with "contract"::_ -> true | _ -> false in
   let choice=match !decision,!option_,!expected_digest with

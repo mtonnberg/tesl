@@ -62,7 +62,8 @@ let usage = {|Usage:
   tesl --semantic-json <file>  emit full module semantic snapshot as JSON (IR-1 foundation)
   tesl agent-context <file>    emit a compact AI-agent snapshot (diagnostics+symbols+obligations) as JSON
   tesl --agent-context-json <file>  alias for `tesl agent-context`
-  tesl migrate generate <file> --manifest-json  preview guarded migration source edits
+  tesl migrate generate|contract|plan <file> --manifest-json  preview migration source edits as JSON
+                               (the interactive `tesl migrate <file>` wizard is in the installed tesl command)
   tesl test [--test-name NAME] [--test-kind KIND] <file> [...]  run all generated test packages
   tesl --mutate [--backend go] <file> [test-file ...]  run Go mutation testing; optionally merge tests from extra files
    tesl --exe <file> [--out <path>]  build a standalone Go executable

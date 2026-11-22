@@ -48,10 +48,11 @@ let note="entity Note table \"notes\" primaryKey id { id: String, title: String 
 let archive="entity Archive table \"archive\" primaryKey id { id: String, title: String }\n"
 let indexed="entity Archive table \"archive\" primaryKey id { id: String, title: String\n index [title] as \"archive_title\" }\n"
 let revision p n=List.find(fun(v:R.version)->v.version=n)(R.versions p)
-let refuses message bodies edges ()=fixture bodies edges(function
+let refuses_with code message bodies edges ()=fixture bodies edges(function
  | Ok _->fail("accepted: "^message)
- | Error es->check bool (String.concat "\n" (List.map(fun(e:S.error)->e.message)es)) true
-   (List.exists(fun(e:S.error)->e.code="MIG016" && Compile.string_contains e.message message)es))
+ | Error es->check bool (String.concat "\n" (List.map(fun(e:S.error)->e.code^" "^e.message)es)) true
+   (List.exists(fun(e:S.error)->e.code=code && Compile.string_contains e.message message)es))
+let refuses = refuses_with "MIG032"
 let queue_refuses before after () = fixture [note^archive^before;note^after] ["Archive: Drop"] (function
  | Ok _ -> fail "accepted changed queue contract alongside Drop"
  | Error errors -> check bool "queue-specific refusal" true
@@ -104,7 +105,7 @@ let ()=run "Table Drop planning" ["boundaries",[
  test_case "payload shape change alongside Drop refused" `Quick (queue_refuses "record Payload { text: String }\nqueueSchema Jobs { jobs: [Payload] }\n" "record Payload { text: Int }\nqueueSchema Jobs { jobs: [Payload] }\n");
  test_case "payload proof dependency change alongside Drop refused" `Quick (queue_refuses (proof_queue "") (proof_queue "blocked"));
  test_case "previously transformed table refused" `Quick (refuses "previously transformed" [note^archive;note^"entity Archive table \"archive\" primaryKey id { id: String, renamed: String }";note] ["Archive: Derived [Rename title renamed]";"Archive: Drop"]);
- test_case "protected concurrent index lifecycle refused" `Quick (refuses "concurrent index" [note^archive;note^indexed;note] ["Archive: Additive []";"Archive: Drop"]);
- test_case "entity identity cannot restart" `Quick (refuses "restart a retained" [note^archive;note;note^archive] ["Archive: Drop";"Archive: New"]);
- test_case "retired table name cannot change owner" `Quick (refuses "reuse a retained table" [note^archive;note;note^"entity Replacement table \"archive\" primaryKey id { id: String }"] ["Archive: Drop";"Replacement: New"])
+ test_case "protected concurrent index lifecycle refused" `Quick (refuses "index archive_title was added in V2" [note^archive;note^indexed;note] ["Archive: Additive []";"Archive: Drop"]);
+ test_case "entity identity cannot restart" `Quick (refuses_with "MIG016" "restart a retained" [note^archive;note;note^archive] ["Archive: Drop";"Archive: New"]);
+ test_case "retired table name cannot change owner" `Quick (refuses_with "MIG016" "reuse a retained table" [note^archive;note;note^"entity Replacement table \"archive\" primaryKey id { id: String }"] ["Archive: Drop";"Replacement: New"])
  ]]
