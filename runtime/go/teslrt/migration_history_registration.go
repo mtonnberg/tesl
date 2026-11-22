@@ -323,7 +323,7 @@ func pgJSONArray(raw string) ([]string, error) {
 	if i >= len(raw) || raw[i] != '[' {
 		return nil, errPgJSONStructure
 	}
-	var elements []string
+	elements := []string{}
 	i = pgJSONSpace(raw, i+1)
 	if i < len(raw) && raw[i] == ']' {
 		i++
@@ -503,7 +503,11 @@ func (source *pgLinkedSource) complete() ([]PgRowSourceInventory, error) {
 // readHeader checks integrity and identity over the whole document without
 // validating any version's contents.
 func (source *pgLinkedSource) readHeader() (*pgLinkedSourceHeader, error) {
-	return source.header.get(source.readHeaderNow)
+	header, err := source.header.get(source.readHeaderNow)
+	if err == nil && header == nil {
+		err = fmt.Errorf("invalid compiled migration history: missing row source header")
+	}
+	return header, err
 }
 
 func (source *pgLinkedSource) readHeaderNow() (*pgLinkedSourceHeader, error) {
@@ -646,6 +650,9 @@ func (source *pgLinkedSource) version(family string, k int) (PgRowSourceVersion,
 		}
 		for _, inventory := range all {
 			if inventory.Family == family {
+				if k > len(inventory.Versions) {
+					break
+				}
 				return inventory.Versions[k-1], nil
 			}
 		}

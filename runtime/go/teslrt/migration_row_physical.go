@@ -97,7 +97,7 @@ func (entry *pgCompiledRowPhysicalHistory) complete() ([]*pgRowPhysicalPlan, err
 					return nil, err
 				}
 			}
-			if plan.version != i+1 {
+			if plan == nil || plan.version != i+1 {
 				return nil, fmt.Errorf("invalid compiled migration history: physical revisions are not complete and ordered")
 			}
 			if err := pgBindRowPhysicalPlan(compiled, previous, plan); err != nil {
@@ -116,6 +116,9 @@ func (entry *pgCompiledRowPhysicalHistory) complete() ([]*pgRowPhysicalPlan, err
 // plan returns version k's bound plan; outside the window it validates the
 // complete physical history first.
 func (entry *pgCompiledRowPhysicalHistory) plan(k int) (*pgRowPhysicalPlan, error) {
+	if entry == nil {
+		return nil, fmt.Errorf("physical plan requires a compiled physical history")
+	}
 	if plan := entry.window[k]; plan != nil {
 		return plan, nil
 	}
@@ -125,6 +128,9 @@ func (entry *pgCompiledRowPhysicalHistory) plan(k int) (*pgRowPhysicalPlan, erro
 	plans, err := entry.complete()
 	if err != nil {
 		return nil, err
+	}
+	if k > len(plans) || plans[k-1] == nil {
+		return nil, fmt.Errorf("physical plan requires a known revision")
 	}
 	return plans[k-1], nil
 }
@@ -1130,8 +1136,8 @@ func registerCompiledRowPhysicalHistory(payload string) {
 				pgHistoryCounters.elements.Add(1)
 				plan, err := pgParseRowPhysicalPlan(entry.raw[k-1].contract, entry.raw[k-1].hash)
 				must(err)
-				if plan.version != k {
-					fail("physical revisions are not complete and ordered")
+				if plan == nil || plan.version != k {
+					panic(fmt.Errorf("invalid compiled migration history: physical revisions are not complete and ordered"))
 				}
 				// V1 binds as the origin; VN binds against V(N-1). V(N-1) itself
 				// is bound against its predecessor by complete validation.
@@ -1151,6 +1157,9 @@ func registerCompiledRowPhysicalHistory(payload string) {
 		if source := pgLinkedSourceOf(pending[0].compiled.history); source != nil && !pgHistoryInWindow(pending[0].compiled.history.CurrentVersion) {
 			header, err := source.readHeader()
 			must(err)
+			if header == nil {
+				panic(fmt.Errorf("invalid compiled migration history: missing row source header"))
+			}
 			for family := range header.databases {
 				families = append(families, family)
 			}
@@ -1258,7 +1267,7 @@ func pgCompiledRowStageCancellations(database *Database, version int) ([]pgStage
 	if err != nil {
 		return nil, err
 	}
-	if plan.version != version {
+	if plan == nil || plan.version != version {
 		return nil, fmt.Errorf("invalid compiled migration history: physical revisions are not complete and ordered")
 	}
 	return plan.stageCancellations, nil

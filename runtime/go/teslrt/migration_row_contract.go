@@ -367,8 +367,9 @@ func registerCompiledRowContractHistory(payload string) {
 		namespace, err := pgJSONValue[string](entry["namespace"])
 		must(err)
 		compiled := compiledRowHistories[family]
-		if compiled == nil || compiled.history.Database != database || compiled.history.Namespace != namespace || compiled.history.SourceCompilerABI != abi || compiledRowPhysicalHistories[compiled] == nil || pgMigrationClosedFamilies[family] {
-			fail("Contract envelope lacks exact open compiled owner")
+		physical := compiledRowPhysicalHistories[compiled]
+		if compiled == nil || physical == nil || compiled.history.Database != database || compiled.history.Namespace != namespace || compiled.history.SourceCompilerABI != abi || pgMigrationClosedFamilies[family] {
+			panic(fmt.Errorf("invalid compiled migration history: Contract envelope lacks exact open compiled owner"))
 		}
 		if pending[compiled] != nil || compiledRowContracts[compiled] != nil {
 			fail("duplicate Contract history")
@@ -390,7 +391,6 @@ func registerCompiledRowContractHistory(payload string) {
 			}
 			history.raw = append(history.raw, text)
 		}
-		physical := compiledRowPhysicalHistories[compiled]
 		current := compiled.history.CurrentVersion
 		contracts := map[int]*pgRowContract{}
 		if pgHistoryInWindow(current) || pgLinkedSourceOf(compiled.history) == nil {
@@ -403,6 +403,9 @@ func registerCompiledRowContractHistory(payload string) {
 				text := history.raw[i]
 				settled, err := pgParseRowSettledPlan(text.settled, text.settledHash)
 				must(err)
+				if settled == nil {
+					panic(fmt.Errorf("invalid compiled migration history: missing settled physical document"))
+				}
 				if settled.version <= 1 || settled.version > current {
 					fail("Contract version inventory is unordered or unavailable")
 				}
@@ -449,6 +452,9 @@ func pgCompiledRowSettledPlan(database *Database, version int) (*pgRowPhysicalPl
 		return nil, fmt.Errorf("missing settled source history")
 	}
 	compiled := compiledRowHistories[history.Family]
+	if compiled == nil {
+		return nil, fmt.Errorf("missing settled compiled source")
+	}
 	if err := pgCheckRowOwner(database, compiled); err != nil {
 		return nil, err
 	}

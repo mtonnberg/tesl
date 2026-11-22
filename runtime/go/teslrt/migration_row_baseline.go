@@ -100,12 +100,18 @@ func pgCompiledRowBaseline(database *Database) (*pgRowBaseline, error) {
 	r := &pgMigrationWireReader{}
 	result := &pgRowBaseline{database: database, history: history, version: v, queues: queues}
 	if physical != nil {
-		if result.physical, err = physical.plan(1); err != nil {
+		origin, err := physical.plan(1)
+		if err != nil {
 			return nil, err
 		}
-		if result.target, err = physical.plan(history.CurrentVersion); err != nil {
+		target, err := physical.plan(history.CurrentVersion)
+		if err != nil {
 			return nil, err
 		}
+		if origin == nil || target == nil {
+			return nil, fmt.Errorf("row baseline lacks its exact compiled physical plans")
+		}
+		result.physical, result.target = origin, target
 		// A process that executes DDL validated the complete history first, so
 		// known() covers every version there; serving processes never execute
 		// RemoveEmpty and need no topology refusal for it.

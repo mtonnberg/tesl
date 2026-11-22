@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
-	"slices"
 )
 
 // All maps and sealing state below are protected by pgMigrationRegistrations.
@@ -199,6 +198,9 @@ func registerCompiledRowHistory(payload string) {
 			continue
 		}
 		compiled := &pgCompiledRowHistory{history: history, payload: payload, format: version, checked: map[int]bool{}}
+		if i >= len(entries) {
+			panic("database: row companion disagrees with linked database history")
+		}
 		if err := pgRowRegistrationWindow(compiled, root, entries[i], len(dbs)); err != nil {
 			panic(err)
 		}
@@ -218,7 +220,7 @@ func pgRowRegistrationWindow(compiled *pgCompiledRowHistory, root, fields map[st
 	var header *pgLinkedSourceHeader
 	if !complete {
 		var err error
-		if header, err = source.readHeader(); err != nil {
+		if header, err = source.readHeader(); err != nil || header == nil {
 			complete = true
 		}
 	}
@@ -227,7 +229,7 @@ func pgRowRegistrationWindow(compiled *pgCompiledRowHistory, root, fields map[st
 		if err != nil {
 			return err
 		}
-		compiled.transforms, compiled.codecs, compiled.retirements = inventory.Transforms, inventory.CurrentCodecs, inventory.Retirements
+		compiled.transforms, compiled.codecs, compiled.retirements = pgCloneSlice(inventory.Transforms), pgCloneSlice(inventory.CurrentCodecs), pgCloneSlice(inventory.Retirements)
 		for i := range compiled.transforms {
 			compiled.checked[i] = true
 		}
@@ -252,7 +254,7 @@ func pgRowRegistrationWindow(compiled *pgCompiledRowHistory, root, fields map[st
 	if (format < 1 || format > 5) || kind != "compiled-row-transform-history" || abi != history.SourceCompilerABI || compatibility != history.StoredValueCompatibility {
 		return fmt.Errorf("invalid compiled migration history: row companion format or linked ABI mismatch")
 	}
-	if len(header.databases) != databases {
+	if header == nil || len(header.databases) != databases {
 		return fmt.Errorf("invalid compiled migration history: row companion database inventory is incomplete")
 	}
 	database, err := pgJSONValue[string](fields["database"])
@@ -368,30 +370,37 @@ func pgCloneRowSourceInventory(inventory PgRowSourceInventory) PgRowSourceInvent
 		return &v
 	}
 	result := inventory
-	result.Versions = slices.Clone(inventory.Versions)
+	result.Versions = pgCloneSlice(inventory.Versions)
 	for i := range result.Versions {
 		v := &result.Versions[i]
-		v.Entities = slices.Clone(v.Entities)
+		v.Entities = pgCloneSlice(v.Entities)
 		for j := range v.Entities {
-			v.Entities[j].Columns = slices.Clone(v.Entities[j].Columns)
+			v.Entities[j].Columns = pgCloneSlice(v.Entities[j].Columns)
 		}
 	}
-	result.Transforms = slices.Clone(inventory.Transforms)
+	result.Transforms = pgCloneSlice(inventory.Transforms)
 	for i := range result.Transforms {
 		d := &result.Transforms[i]
-		d.LegacyWrites, d.WriteBacks = slices.Clone(d.LegacyWrites), slices.Clone(d.WriteBacks)
-		d.SourceSchemaColumns, d.TargetSchemaColumns = slices.Clone(d.SourceSchemaColumns), slices.Clone(d.TargetSchemaColumns)
-		d.SourceProjection, d.TargetProjection = slices.Clone(d.SourceProjection), slices.Clone(d.TargetProjection)
-		d.FieldMapping = slices.Clone(d.FieldMapping)
+		d.LegacyWrites, d.WriteBacks = pgCloneSlice(d.LegacyWrites), pgCloneSlice(d.WriteBacks)
+		d.SourceSchemaColumns, d.TargetSchemaColumns = pgCloneSlice(d.SourceSchemaColumns), pgCloneSlice(d.TargetSchemaColumns)
+		d.SourceProjection, d.TargetProjection = pgCloneSlice(d.SourceProjection), pgCloneSlice(d.TargetProjection)
+		d.FieldMapping = pgCloneSlice(d.FieldMapping)
 		for j := range d.FieldMapping {
 			d.FieldMapping[j].Source, d.FieldMapping[j].Constant = clone(d.FieldMapping[j].Source), clone(d.FieldMapping[j].Constant)
 		}
 	}
-	result.CurrentCodecs = slices.Clone(inventory.CurrentCodecs)
+	result.CurrentCodecs = pgCloneSlice(inventory.CurrentCodecs)
 	for i := range result.CurrentCodecs {
-		result.CurrentCodecs[i].Projection = slices.Clone(result.CurrentCodecs[i].Projection)
+		result.CurrentCodecs[i].Projection = pgCloneSlice(result.CurrentCodecs[i].Projection)
 	}
-	result.Retirements = slices.Clone(inventory.Retirements)
+	result.Retirements = pgCloneSlice(inventory.Retirements)
+	return result
+}
+
+// pgCloneSlice copies a slice into a new, never-nil slice.
+func pgCloneSlice[T any](values []T) []T {
+	result := make([]T, len(values))
+	copy(result, values)
 	return result
 }
 

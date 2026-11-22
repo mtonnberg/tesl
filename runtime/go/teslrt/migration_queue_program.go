@@ -216,7 +216,7 @@ func pgQueueRegistrationWindow(history PgCompiledMigrationHistory, payload strin
 	if err := source.window(history.Family); err != nil {
 		return nil, err
 	}
-	if header, _ := source.readHeader(); len(header.databases) != databases {
+	if header, err := source.readHeader(); err != nil || header == nil || len(header.databases) != databases {
 		return nil, fmt.Errorf("invalid compiled migration history: queue companion omits or adds a linked database")
 	}
 	format, err := pgJSONValue[int](root["version"])
